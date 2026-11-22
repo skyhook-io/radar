@@ -6761,12 +6761,9 @@ function streamHelmProgress(
   onProgress: (event: InstallProgressEvent) => void,
   failureLabel: string,
 ): Promise<InstallProgressEvent> {
-  const headers = new Headers(options.headers);
-  for (const [k, v] of Object.entries(getAuthHeaders())) {
-    if (!headers.has(k)) headers.set(k, v);
-  }
   return new Promise((resolve, reject) => {
-    fetch(url, { credentials: getCredentialsMode(), ...options, headers })
+    // apiFetch adds the auth headers and the tab's connection.
+    apiFetch(url, options)
       .then(async (response) => {
         if (!response.ok) {
           const error = await readErrorBody(response);

@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { getApiBase } from './config'
 
 // Which cluster connection this tab is on, per API base.
@@ -22,6 +23,27 @@ export function observeConnectionStatus(status: { connectionId?: string }, base 
 /** The connection ID to send, or undefined when the server publishes none. */
 export function connectionHeaderValue(base = getApiBase()): string | undefined {
   return ids.get(base)
+}
+
+/** A WebSocket URL naming a connection (a browser can't set headers on one); by default this tab's latest. */
+export function withConnectionParam(url: string, id = connectionHeaderValue()): string {
+  if (!id) return url
+  return `${url}${url.includes('?') ? '&' : '?'}connection=${encodeURIComponent(id)}`
+}
+
+/** Headers naming a connection, for a request that must not follow the tab's latest one. */
+export function connectionHeaders(id: string | undefined): Record<string, string> {
+  return id ? { [CONNECTION_HEADER]: id } : {}
+}
+
+/**
+ * The connection a component opened on, kept for its lifetime. A dock tab
+ * outlives a switch, so its reconnects and actions name the cluster it was
+ * opened on and are refused once that connection retires.
+ */
+export function useOpenedConnection(): string | undefined {
+  const [id] = useState(() => connectionHeaderValue())
+  return id
 }
 
 /** Test hook: forget everything. */

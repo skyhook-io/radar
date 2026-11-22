@@ -29,7 +29,8 @@ type BoundConnection struct {
 }
 
 // CaptureBoundConnection takes the serving connection's ID, clients and
-// discovery in one step. Client installs and the point of no return both run
+// discovery in one step. A missing client stays nil for the handler to report,
+// as it would without binding. Client installs and the point of no return both run
 // under contextOpMu, which CaptureClusterReads holds shared, so the pieces
 // always belong to the same admitted connection.
 func CaptureBoundConnection() (BoundConnection, error) {
@@ -45,7 +46,7 @@ func CaptureBoundConnection() (BoundConnection, error) {
 		// Clients and context change only under the operation lock held here.
 		b.Context = ActiveClusterContext()
 		b.Discovery = GetResourceDiscovery()
-	}) || b.ID == "" || b.Dynamic == nil || b.Config == nil {
+	}) || b.ID == "" {
 		return BoundConnection{}, ErrNoServingConnection
 	}
 	return b, nil
@@ -72,4 +73,14 @@ func discoveryFor(ctx context.Context) *ResourceDiscovery {
 		return b.Discovery
 	}
 	return GetResourceDiscovery()
+}
+
+// StillBound reports whether a request is still on the connection it was
+// admitted to: true when it carries no binding, or when that connection is
+// still serving. Composite services that capture several globals call it
+// inside their CaptureClusterReads callback, so the whole capture belongs to
+// the bound connection.
+func StillBound(ctx context.Context) bool {
+	b, ok := BoundConnectionFrom(ctx)
+	return !ok || ServingConnectionID() == b.ID
 }

@@ -6,8 +6,12 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
-// connectionHeader carries the connection a browser tab is showing.
-const connectionHeader = "X-Radar-Connection"
+// connectionHeader carries the connection a browser tab is on; connectionParam
+// carries it on a WebSocket URL.
+const (
+	connectionHeader = "X-Radar-Connection"
+	connectionParam  = "connection"
+)
 
 const (
 	errCodeContextChanged     = "context_changed"
@@ -23,20 +27,48 @@ const (
 // admitted against the current connection (API and MCP callers, older UIs).
 func (s *Server) bindWrite(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		bound, err := k8s.CaptureBoundConnection()
-		if err != nil {
-			// Nothing serving: a switch, rescope or rebuild in progress, a lost
-			// connection, or shutdown. The caller can retry once one is serving.
-			s.writeErrorCode(w, http.StatusServiceUnavailable, errCodeClusterUnavailable,
-				"Nothing was changed: Radar has no usable cluster connection right now. Try again once it is connected.")
-			return
-		}
-		if want := r.Header.Get(connectionHeader); connectionIdentityPublished() && want != "" && want != bound.ID {
-			s.writeErrorCode(w, http.StatusConflict, errCodeContextChanged,
-				"Nothing was changed: the cluster changed since this view loaded. Check the current cluster and try again.")
+		bound, ok := s.admitWrite(w, r)
+		if !ok {
 			return
 		}
 		next(w, r.WithContext(k8s.WithBoundConnection(r.Context(), bound)))
+	}
+}
+
+// admitWrite is bindWrite's check: it captures the serving connection, or
+// answers the refusal and returns false. For handlers that only learn from
+// the body whether a request writes to the cluster.
+func (s *Server) admitWrite(w http.ResponseWriter, r *http.Request) (k8s.BoundConnection, bool) {
+	bound, err := k8s.CaptureBoundConnection()
+	if err != nil {
+		// Nothing serving: a switch, rescope or rebuild in progress, a lost
+		// connection, or shutdown. The caller can retry once one is serving.
+		s.writeErrorCode(w, http.StatusServiceUnavailable, errCodeClusterUnavailable,
+			"Nothing was changed: Radar has no usable cluster connection right now. Try again once it is connected.")
+		return k8s.BoundConnection{}, false
+	}
+	want := r.Header.Get(connectionHeader)
+	if want == "" {
+		// A browser can't set headers on a WebSocket; it names the connection in the URL.
+		want = r.URL.Query().Get(connectionParam)
+	}
+	if connectionIdentityPublished() && want != "" && want != bound.ID {
+		s.writeErrorCode(w, http.StatusConflict, errCodeContextChanged,
+			"Nothing was changed: the cluster changed since this view loaded. Check the current cluster and try again.")
+		return k8s.BoundConnection{}, false
+	}
+	return bound, true
+}
+
+// execWrite is bindWrite for routes that --disable-exec turns off: that
+// refusal names the setting, so it comes before the connection check.
+func (s *Server) execWrite(next http.HandlerFunc) http.HandlerFunc {
+	bound := s.bindWrite(next)
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.requireExecEnabled(w) {
+			return
+		}
+		bound(w, r)
 	}
 }
 

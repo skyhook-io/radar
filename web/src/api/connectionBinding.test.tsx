@@ -3,9 +3,9 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, expect, it, vi } from 'vitest'
-import { apiFetch, useRestartWorkload } from './client'
+import { apiFetch, rollbackWithProgress, useRestartWorkload } from './client'
 import { getApiBase } from './config'
-import { connectionHeaderValue, observeConnectionStatus, resetConnectionBindingForTest } from './connectionBinding'
+import { connectionHeaderValue, observeConnectionStatus, resetConnectionBindingForTest, withConnectionParam } from './connectionBinding'
 
 vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
 afterEach(() => {
@@ -65,3 +65,18 @@ it("shows the server's refusal when a restart names a connection it no longer se
   expect((error as Error).message).toBe(message)
   act(() => root.unmount())
 })
+
+it('names the connection on a WebSocket URL, which cannot carry headers', () => {
+  expect(withConnectionParam('ws://h/api/pods/ns/p/exec?container=app')).toBe('ws://h/api/pods/ns/p/exec?container=app')
+  observeConnectionStatus({ connectionId: 'n 1' })
+  expect(withConnectionParam('ws://h/api/pods/ns/p/exec?container=app')).toBe('ws://h/api/pods/ns/p/exec?container=app&connection=n%201')
+  expect(withConnectionParam('ws://h/api/x')).toBe('ws://h/api/x?connection=n%201')
+})
+
+it('names the connection on streamed Helm actions', async () => {
+  observeConnectionStatus({ connectionId: 'n-1' })
+  const seen = recordHeaders(200, 'event: complete\ndata: {"type":"complete"}\n\n')
+  await rollbackWithProgress('default', 'web', 2, () => {}).catch(() => {})
+  expect(seen).toEqual(['n-1'])
+})
+

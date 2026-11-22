@@ -567,7 +567,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 		// Streaming endpoints (SSE/WebSocket) - no timeout
 		r.Get("/events/stream", s.handleSSE)
 		r.Get("/pods/{namespace}/{name}/logs/stream", s.handlePodLogsStream)
-		r.Get("/pods/{namespace}/{name}/exec", s.handlePodExec)
+		r.Get("/pods/{namespace}/{name}/exec", s.execWrite(s.handlePodExec))
 		r.Get("/local-terminal", s.handleLocalTerminal)
 		r.Get("/pods/{namespace}/{name}/files/download", s.handlePodFileDownload)
 		// Desktop-only: streams a pod file to disk server-side. Sits outside the
@@ -576,7 +576,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 		r.Post("/pods/{namespace}/{name}/files/save", s.handlePodFileSave)
 		// Outside the 60s timeout group because a large upload over a slow
 		// cluster link takes longer.
-		r.Post("/pods/{namespace}/{name}/files/upload", s.handlePodFileUpload)
+		r.Post("/pods/{namespace}/{name}/files/upload", s.bindWrite(s.handlePodFileUpload))
 		r.Get("/workloads/{kind}/{namespace}/{name}/logs/stream", s.handleWorkloadLogsStream)
 		r.Get("/cnpg/clusters/{namespace}/{name}/logs/stream", s.handleCNPGClusterLogsStream)
 		// AI investigation event stream via SSE — long-lived; lives outside the
@@ -586,7 +586,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 
 		// Node drain — outside the 60s timeout group: it may wait minutes for PDB backoff
 		// and, by default, for the evicted pods to finish terminating.
-		r.Post("/nodes/{name}/drain", s.handleDrainNode)
+		r.Post("/nodes/{name}/drain", s.bindWrite(s.handleDrainNode))
 
 		// Cloud Connect prepare/start — outside the 60s timeout group. prepare
 		// downloads and renders the chart and runs the exact-manifest
@@ -664,7 +664,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/cnpg/clusters/{namespace}/{name}/runtime", s.handleCNPGClusterRuntime)
 			r.Get("/cnpg/clusters/{namespace}/{name}/storage", s.handleCNPGClusterStorage)
 			r.Get("/cnpg/clusters/{namespace}/{name}/recovery", s.handleCNPGClusterRecovery)
-			r.Post("/cnpg/clusters/{namespace}/{name}/restore-validation", s.handleCNPGRestoreValidation)
+			r.Post("/cnpg/clusters/{namespace}/{name}/restore-validation", s.bindWrite(s.handleCNPGRestoreValidation))
 			r.Get("/cnpg/restore/capability", s.handleCNPGRestoreCapability)
 			r.Get("/cnpg/clusters/{namespace}/{name}/report", s.handleCNPGClusterReport)
 			r.Get("/cnpg/clusters/{namespace}/{name}/history", s.handleCNPGClusterHistory)
@@ -673,11 +673,11 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/cnpg/fleet-metrics", s.handleCNPGFleetMetrics)
 			r.Get("/cnpg/poolers/{namespace}/{name}/runtime", s.handleCNPGPoolerRuntime)
 			r.Get("/cnpg/clusters/{namespace}/{name}/capabilities", s.handleCNPGClusterCapabilities)
-			r.Post("/cnpg/clusters/{namespace}/{name}/actions/{action}", s.handleCNPGClusterAction)
+			r.Post("/cnpg/clusters/{namespace}/{name}/actions/{action}", s.bindWrite(s.handleCNPGClusterAction))
 			r.Post("/cnpg/clusters/{namespace}/{name}/protection/preview", s.handleCNPGArchivingPreview)
 			r.Get("/cnpg/clusters/{namespace}/{name}/schedule-preview", s.handleCNPGDraftSchedulePreview)
 			r.Get("/cnpg/scheduledbackups/{namespace}/{name}/capabilities", s.handleCNPGScheduleCapabilities)
-			r.Post("/cnpg/scheduledbackups/{namespace}/{name}/actions/{action}", s.handleCNPGScheduleAction)
+			r.Post("/cnpg/scheduledbackups/{namespace}/{name}/actions/{action}", s.bindWrite(s.handleCNPGScheduleAction))
 			r.Get("/cnpg/scheduledbackups/{namespace}/{name}/schedule-preview", s.handleCNPGSchedulePreview)
 			r.Get("/cnpg/scheduledbackups/{namespace}/{name}/method-preview", s.handleCNPGScheduleMethodPreview)
 			r.Get("/cnpg/clusters/{namespace}/{name}/sessions", s.handleCNPGClusterSessions)
@@ -686,7 +686,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/cnpg/clusters/{namespace}/{name}/instances/{pod}/destroy-plan", s.handleCNPGDestroyPlan)
 			r.Get("/cnpg/poolers/{namespace}/{name}/capabilities", s.handleCNPGPoolerCapabilities)
 			r.Get("/cnpg/poolers/{namespace}/{name}/pgbouncer-state", s.handleCNPGPgBouncerState)
-			r.Post("/cnpg/poolers/{namespace}/{name}/actions/{action}", s.handleCNPGPoolerAction)
+			r.Post("/cnpg/poolers/{namespace}/{name}/actions/{action}", s.bindWrite(s.handleCNPGPoolerAction))
 			r.Get("/velero/workspace", s.handleVeleroWorkspace)
 			r.Get("/velero/schedules/{namespace}/{name}/activity", s.handleVeleroScheduleActivity)
 			r.Get("/velero/backupstoragelocations/{namespace}/{name}/backups", s.handleVeleroStoredBackups)
@@ -699,12 +699,12 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Post("/velero/{kind}/{namespace}/{name}/volumes", s.handleVeleroRunVolumes)
 			r.Get("/velero/{kind}/{namespace}/{name}/volume-operations", s.handleVeleroVolumeOperations)
 			// POST: creates a Backup from the schedule's template, as the caller.
-			r.Post("/velero/schedules/{namespace}/{name}/backup", s.handleVeleroBackupNow)
+			r.Post("/velero/schedules/{namespace}/{name}/backup", s.bindWrite(s.handleVeleroBackupNow))
 			// POST: sets spec.paused as the caller, as `velero schedule pause|unpause` does.
-			r.Post("/velero/schedules/{namespace}/{name}/pause", s.handleVeleroSchedulePause(true))
-			r.Post("/velero/schedules/{namespace}/{name}/resume", s.handleVeleroSchedulePause(false))
+			r.Post("/velero/schedules/{namespace}/{name}/pause", s.bindWrite(s.handleVeleroSchedulePause(true)))
+			r.Post("/velero/schedules/{namespace}/{name}/resume", s.bindWrite(s.handleVeleroSchedulePause(false)))
 			// POST: creates a DeleteBackupRequest, the way Velero deletes a backup.
-			r.Post("/velero/backups/{namespace}/{name}/delete", s.handleVeleroDeleteBackup)
+			r.Post("/velero/backups/{namespace}/{name}/delete", s.bindWrite(s.handleVeleroDeleteBackup))
 			r.Get("/velero/backups/{namespace}/{name}/deletion", s.handleVeleroBackupDeletion)
 
 			r.Get("/namespaces", s.handleNamespaces)
@@ -715,10 +715,10 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Head("/resources/{kind}/{namespace}/{name}", s.handleGetResource)
 			r.Post("/resources/preview", s.handlePreviewResources)
 			r.Post("/resources/schemas", s.handleResourceSchemas)
-			r.Post("/resources/apply", s.handleApplyResource)
-			r.Put("/resources/{kind}/{namespace}/{name}", s.handleUpdateResource)
+			r.Post("/resources/apply", s.bindWrite(s.handleApplyResource))
+			r.Put("/resources/{kind}/{namespace}/{name}", s.bindWrite(s.handleUpdateResource))
 			r.Get("/resources/{kind}/{namespace}/{name}/cascade-preview", s.handleCascadeDeletePreview)
-			r.Delete("/resources/{kind}/{namespace}/{name}", s.handleDeleteResource)
+			r.Delete("/resources/{kind}/{namespace}/{name}", s.bindWrite(s.handleDeleteResource))
 			r.Get("/secrets/certificate-expiry", s.handleSecretCertExpiry)
 			r.Get("/sealedsecrets/controller", s.handleSealedSecretsController)
 			r.Get("/certificates", s.handleCertificates)
@@ -752,7 +752,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// Whole-subject in-cluster test: runs every route's live probe and folds
 			// them in server-side (canonical merge), returning the finalized trace so
 			// the frontend never reimplements a divergent merge.
-			r.Post("/trace/{kind}/{namespace}/{name}/in-cluster", s.handleTraceInCluster)
+			r.Post("/trace/{kind}/{namespace}/{name}/in-cluster", s.bindWrite(s.handleTraceInCluster))
 
 			// Packages — merged "what's installed" view across Helm
 			// releases, workload labels, CRD registrations, and GitOps
@@ -793,16 +793,16 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/services/{namespace}/{name}/endpointslices", s.handleServiceEndpointSlices)
 
 			// Pod debug (ephemeral container)
-			r.Post("/pods/{namespace}/{name}/debug", s.handleCreateDebugContainer)
+			r.Post("/pods/{namespace}/{name}/debug", s.execWrite(s.handleCreateDebugContainer))
 
 			// Node debug (privileged debug pod)
-			r.Post("/nodes/{name}/debug", s.handleNodeDebug)
-			r.Delete("/nodes/{name}/debug", s.handleNodeDebugCleanup)
+			r.Post("/nodes/{name}/debug", s.execWrite(s.handleNodeDebug))
+			r.Delete("/nodes/{name}/debug", s.bindWrite(s.handleNodeDebugCleanup))
 
 			// Node operations (cordon/uncordon) and the read-only drain plan.
 			// The drain itself lives outside this timeout group, see above.
-			r.Post("/nodes/{name}/cordon", s.handleCordonNode)
-			r.Post("/nodes/{name}/uncordon", s.handleUncordonNode)
+			r.Post("/nodes/{name}/cordon", s.bindWrite(s.handleCordonNode))
+			r.Post("/nodes/{name}/uncordon", s.bindWrite(s.handleUncordonNode))
 			r.Post("/nodes/{name}/drain-plan", s.handleDrainPlan)
 
 			// Pod file browser
@@ -820,7 +820,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 
 			// Port forwarding
 			r.Get("/portforwards", s.handleListPortForwards)
-			r.Post("/portforwards", s.handleStartPortForward)
+			r.Post("/portforwards", s.bindWrite(s.handleStartPortForward))
 			r.Delete("/portforwards/{id}", s.handleStopPortForward)
 			r.Get("/portforwards/available/{type}/{namespace}/{name}", s.handleGetAvailablePorts)
 
@@ -832,19 +832,20 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/sessions", s.handleGetSessions)
 
 			// CronJob operations
-			r.Post("/cronjobs/{namespace}/{name}/trigger", s.handleTriggerCronJob)
-			r.Post("/cronjobs/{namespace}/{name}/suspend", s.handleSuspendCronJob)
-			r.Post("/cronjobs/{namespace}/{name}/resume", s.handleResumeCronJob)
+			r.Post("/cronjobs/{namespace}/{name}/trigger", s.bindWrite(s.handleTriggerCronJob))
+			r.Post("/cronjobs/{namespace}/{name}/suspend", s.bindWrite(s.handleSuspendCronJob))
+			r.Post("/cronjobs/{namespace}/{name}/resume", s.bindWrite(s.handleResumeCronJob))
 
-			// Workload restart, scale, rollback
+			// Workload restart, scale, rollback. Writes are bound to the connection
+			// the caller names (bindWrite in connection_binding.go).
 			r.Post("/workloads/{kind}/{namespace}/{name}/restart", s.bindWrite(s.handleRestartWorkload))
-			r.Post("/workloads/{kind}/{namespace}/{name}/pause", s.handlePauseDeployment)
-			r.Post("/workloads/{kind}/{namespace}/{name}/resume", s.handleResumeDeployment)
+			r.Post("/workloads/{kind}/{namespace}/{name}/pause", s.bindWrite(s.handlePauseDeployment))
+			r.Post("/workloads/{kind}/{namespace}/{name}/resume", s.bindWrite(s.handleResumeDeployment))
 			r.Post("/workloads/{kind}/{namespace}/{name}/scale", s.bindWrite(s.handleScaleWorkload))
 			r.Get("/workloads/{kind}/{namespace}/{name}/images", s.handleGetWorkloadImages)
-			r.Post("/workloads/{kind}/{namespace}/{name}/images", s.handleSetWorkloadImages)
+			r.Post("/workloads/{kind}/{namespace}/{name}/images", s.bindWrite(s.handleSetWorkloadImages))
 			r.Get("/workloads/{kind}/{namespace}/{name}/revisions", s.handleWorkloadRevisions)
-			r.Post("/workloads/{kind}/{namespace}/{name}/rollback", s.handleRollbackWorkload)
+			r.Post("/workloads/{kind}/{namespace}/{name}/rollback", s.bindWrite(s.handleRollbackWorkload))
 
 			// Workload logs (non-streaming)
 			r.Get("/workloads/{kind}/{namespace}/{name}/logs", s.handleWorkloadLogs)
@@ -864,6 +865,11 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			helmHandlers.ConfigWriteAllowed = s.requireHelmSourceConfigWrite
 			helmHandlers.ObjectScope = s.helmObjectScope
 			helmHandlers.ResolveStorageNamespaces = s.resolveHelmStorageScope
+			helmHandlers.BindWrite = s.bindWrite
+			helmHandlers.AdmitWrite = func(w http.ResponseWriter, r *http.Request) (func() bool, bool) {
+				bound, ok := s.admitWrite(w, r)
+				return func() bool { return k8s.ServingConnectionID() == bound.ID }, ok
+			}
 			helmHandlers.RegisterRoutes(r)
 
 			// Image inspection routes
@@ -888,26 +894,26 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			opencost.RegisterRoutes(r, s.resolvedOpenCostCurrency, s.openCostRouteScope())
 
 			// FluxCD routes
-			r.Post("/flux/{kind}/{namespace}/{name}/reconcile", s.handleFluxReconcile)
-			r.Post("/flux/{kind}/{namespace}/{name}/sync-with-source", s.handleFluxSyncWithSource)
-			r.Post("/flux/{kind}/{namespace}/{name}/suspend", s.handleFluxSuspend)
-			r.Post("/flux/{kind}/{namespace}/{name}/resume", s.handleFluxResume)
+			r.Post("/flux/{kind}/{namespace}/{name}/reconcile", s.bindWrite(s.handleFluxReconcile))
+			r.Post("/flux/{kind}/{namespace}/{name}/sync-with-source", s.bindWrite(s.handleFluxSyncWithSource))
+			r.Post("/flux/{kind}/{namespace}/{name}/suspend", s.bindWrite(s.handleFluxSuspend))
+			r.Post("/flux/{kind}/{namespace}/{name}/resume", s.bindWrite(s.handleFluxResume))
 
 			// Argo Rollouts progressive-delivery control plane. Rollback and
 			// revision history are served by the /workloads routes above.
 			r.Get("/rollouts/{namespace}/{name}/capabilities", s.handleRolloutCapabilities)
 			r.Get("/rollouts/{namespace}/{name}/analysisruns", s.handleRolloutAnalysisRuns)
-			r.Post("/rollouts/{namespace}/{name}/{action}", s.handleRolloutOperation)
+			r.Post("/rollouts/{namespace}/{name}/{action}", s.bindWrite(s.handleRolloutOperation))
 
 			// ArgoCD routes
 			r.Get("/argo/destinations", s.handleArgoDestinations)
-			r.Post("/argo/applications/{namespace}/{name}/sync", s.handleArgoSync)
-			r.Post("/argo/applications/{namespace}/{name}/validate-resource", s.handleArgoValidateResource)
-			r.Post("/argo/applications/{namespace}/{name}/refresh", s.handleArgoRefresh)
-			r.Post("/argo/applications/{namespace}/{name}/rollback", s.handleArgoRollback)
-			r.Post("/argo/applications/{namespace}/{name}/terminate", s.handleArgoTerminate)
-			r.Post("/argo/applications/{namespace}/{name}/suspend", s.handleArgoSuspend)
-			r.Post("/argo/applications/{namespace}/{name}/resume", s.handleArgoResume)
+			r.Post("/argo/applications/{namespace}/{name}/sync", s.bindWrite(s.handleArgoSync))
+			r.Post("/argo/applications/{namespace}/{name}/validate-resource", s.bindWrite(s.handleArgoValidateResource))
+			r.Post("/argo/applications/{namespace}/{name}/refresh", s.bindWrite(s.handleArgoRefresh))
+			r.Post("/argo/applications/{namespace}/{name}/rollback", s.bindWrite(s.handleArgoRollback))
+			r.Post("/argo/applications/{namespace}/{name}/terminate", s.bindWrite(s.handleArgoTerminate))
+			r.Post("/argo/applications/{namespace}/{name}/suspend", s.bindWrite(s.handleArgoSuspend))
+			r.Post("/argo/applications/{namespace}/{name}/resume", s.bindWrite(s.handleArgoResume))
 			r.Get("/argo/applications/{namespace}/{name}/resource-diff", s.handleArgoResourceDiff)
 			r.Get("/argo/applications/{namespace}/{name}/revision-metadata", s.handleArgoRevisionMetadata)
 
@@ -949,7 +955,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 
 			// CAPI routes
 			r.Get("/capi/clusters/{ns}/{name}/kubeconfig", s.handleCAPIClusterKubeconfig)
-			r.Post("/capi/clusters/{ns}/{name}/connect", s.handleCAPIClusterConnect)
+			r.Post("/capi/clusters/{ns}/{name}/connect", s.bindWrite(s.handleCAPIClusterConnect))
 
 			// Connection status routes (for graceful startup)
 			r.Get("/connection", s.handleConnectionStatus)
@@ -5424,6 +5430,13 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
 		return
 	}
+	// The snapshot reads the current clients: any switch since admission
+	// changed the connection, so a snapshot that isn't the admitted one fails here.
+	if !k8s.StillBound(r.Context()) {
+		s.writeErrorCode(w, http.StatusConflict, errCodeContextChanged,
+			"Nothing was changed: the cluster changed while connecting. Check the current cluster and try again.")
+		return
+	}
 
 	// Fetch the kubeconfig Secret
 	secretName := name + "-kubeconfig"
@@ -5787,7 +5800,7 @@ func (s *Server) getDynamicClientForRequest(r *http.Request) dynamic.Interface {
 
 func (s *Server) getDynamicClientSnapshotForRequest(r *http.Request) (dynamic.Interface, string) {
 	if bound, ok := k8s.BoundConnectionFrom(r.Context()); ok {
-		return s.boundDynamicClient(r, bound), bound.Context
+		return k8s.DynamicClientFromContext(r.Context()), bound.Context
 	}
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		client, contextName, err := k8s.UserDynamicClientSnapshot(user)
@@ -5800,22 +5813,6 @@ func (s *Server) getDynamicClientSnapshotForRequest(r *http.Request) (dynamic.In
 	return k8s.GetDynamicClientSnapshot()
 }
 
-// boundDynamicClient is the request's dynamic client on its bound connection:
-// the shared one, or the caller's built from the bound config (never from a
-// newer connection's). Nil when building the caller's client fails.
-func (s *Server) boundDynamicClient(r *http.Request, bound k8s.BoundConnection) dynamic.Interface {
-	user := auth.UserFromContext(r.Context())
-	if user == nil {
-		return bound.Dynamic
-	}
-	client, err := dynamic.NewForConfig(k8s.UserRESTConfig(bound.Config, user))
-	if err != nil {
-		log.Printf("[auth] Impersonation failed for %s: %v", k8s.SanitizeForLog(user.Username), err)
-		return nil
-	}
-	return client
-}
-
 // getConfigForRequest returns an impersonated REST config when auth is enabled,
 // or the shared config when auth is disabled. Returns nil if impersonation fails
 // (never falls back to the ServiceAccount config). Callers must handle nil.
@@ -5826,7 +5823,7 @@ func (s *Server) getConfigForRequest(r *http.Request) *rest.Config {
 
 func (s *Server) getConfigSnapshotForRequest(r *http.Request) (*rest.Config, string) {
 	if bound, ok := k8s.BoundConnectionFrom(r.Context()); ok {
-		if user := auth.UserFromContext(r.Context()); user != nil {
+		if user := auth.UserFromContext(r.Context()); user != nil && bound.Config != nil {
 			return k8s.UserRESTConfig(bound.Config, user), bound.Context
 		}
 		return bound.Config, bound.Context
@@ -5846,19 +5843,8 @@ func (s *Server) getConfigSnapshotForRequest(r *http.Request) (*rest.Config, str
 // or the shared client when auth is disabled. Returns nil if impersonation fails
 // (never falls back to the ServiceAccount client). Callers must handle nil.
 func (s *Server) getClientForRequest(r *http.Request) kubernetes.Interface {
-	if bound, ok := k8s.BoundConnectionFrom(r.Context()); ok {
-		if user := auth.UserFromContext(r.Context()); user != nil {
-			client, err := kubernetes.NewForConfig(k8s.UserRESTConfig(bound.Config, user))
-			if err != nil {
-				log.Printf("[auth] Impersonation failed for %s: %v", k8s.SanitizeForLog(user.Username), err)
-				return nil
-			}
-			return client
-		}
-		if bound.Client != nil {
-			return bound.Client
-		}
-		return nil
+	if _, ok := k8s.BoundConnectionFrom(r.Context()); ok {
+		return k8s.ClientFromContext(r.Context())
 	}
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		client, err := k8s.UserClient(user)

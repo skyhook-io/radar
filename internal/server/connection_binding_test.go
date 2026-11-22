@@ -215,3 +215,122 @@ func TestUnboundRestartFollowsTheSwitch(t *testing.T) {
 		t.Fatalf("control: writesA=%d writesB=%d, want the unbound restart on B", writes(a), writes(b))
 	}
 }
+
+// Every bound write route refuses a tab still naming a connection Radar no
+// longer serves, before any Kubernetes work, through the real router.
+func TestBoundWriteRoutesRefuseStaleConnection(t *testing.T) {
+	t.Cleanup(k8s.SnapshotTestConnection())
+	t.Cleanup(k8s.SetTestLocalMode())
+	a, b := fakeCluster(t), fakeCluster(t)
+	idA := install(t, "cluster-a", a)
+	install(t, "cluster-b", b)
+	s := &Server{}
+	router := chi.NewRouter()
+	s.setupAppRoutes(router)
+
+	for _, route := range []struct{ method, path string }{
+		{http.MethodPost, "/api/workloads/deployments/default/web/restart"},
+		{http.MethodPost, "/api/workloads/deployments/default/web/scale"},
+		{http.MethodPost, "/api/workloads/deployments/default/web/pause"},
+		{http.MethodPost, "/api/workloads/deployments/default/web/resume"},
+		{http.MethodPost, "/api/workloads/deployments/default/web/images"},
+		{http.MethodPost, "/api/workloads/deployments/default/web/rollback"},
+		{http.MethodPost, "/api/cronjobs/default/nightly/trigger"},
+		{http.MethodPost, "/api/cronjobs/default/nightly/suspend"},
+		{http.MethodPost, "/api/cronjobs/default/nightly/resume"},
+		{http.MethodPost, "/api/rollouts/default/web/promote"},
+		{http.MethodPost, "/api/resources/apply"},
+		{http.MethodPut, "/api/resources/deployments/default/web"},
+		{http.MethodDelete, "/api/resources/deployments/default/web"},
+		{http.MethodPost, "/api/nodes/node-1/cordon"},
+		{http.MethodPost, "/api/nodes/node-1/uncordon"},
+		{http.MethodPost, "/api/nodes/node-1/drain"},
+		{http.MethodPost, "/api/argo/applications/argocd/app/sync"},
+		{http.MethodPost, "/api/argo/applications/argocd/app/refresh"},
+		{http.MethodPost, "/api/argo/applications/argocd/app/rollback"},
+		{http.MethodPost, "/api/argo/applications/argocd/app/terminate"},
+		{http.MethodPost, "/api/argo/applications/argocd/app/suspend"},
+		{http.MethodPost, "/api/argo/applications/argocd/app/resume"},
+		{http.MethodPost, "/api/argo/applications/argocd/app/validate-resource"},
+		{http.MethodPost, "/api/flux/kustomizations/flux-system/app/reconcile"},
+		{http.MethodPost, "/api/flux/kustomizations/flux-system/app/sync-with-source"},
+		{http.MethodPost, "/api/flux/kustomizations/flux-system/app/suspend"},
+		{http.MethodPost, "/api/flux/kustomizations/flux-system/app/resume"},
+		{http.MethodPost, "/api/velero/schedules/velero/daily/backup"},
+		{http.MethodPost, "/api/velero/schedules/velero/daily/pause"},
+		{http.MethodPost, "/api/velero/schedules/velero/daily/resume"},
+		{http.MethodPost, "/api/velero/backups/velero/daily-1/delete"},
+		{http.MethodPost, "/api/cnpg/clusters/db/main/actions/restart"},
+		{http.MethodPost, "/api/cnpg/scheduledbackups/db/nightly/actions/backup-now"},
+		{http.MethodPost, "/api/cnpg/poolers/db/rw/actions/pause"},
+		{http.MethodPost, "/api/pods/default/web-1/files/upload"},
+		{http.MethodPost, "/api/pods/default/web-1/debug"},
+		{http.MethodPost, "/api/nodes/node-1/debug"},
+		{http.MethodDelete, "/api/nodes/node-1/debug"},
+		{http.MethodPost, "/api/portforwards"},
+		{http.MethodPost, "/api/helm/releases"},
+		{http.MethodPost, "/api/helm/releases/install-stream"},
+		{http.MethodPost, "/api/helm/releases/default/web/rollback"},
+		{http.MethodPost, "/api/helm/releases/default/web/rollback-stream"},
+		{http.MethodPost, "/api/helm/releases/default/web/upgrade"},
+		{http.MethodPost, "/api/helm/releases/default/web/upgrade-stream"},
+		{http.MethodPost, "/api/helm/releases/default/web/source/upgrade"},
+		{http.MethodPost, "/api/helm/releases/default/web/source/upgrade-stream"},
+		{http.MethodPut, "/api/helm/releases/default/web/values"},
+		{http.MethodDelete, "/api/helm/releases/default/web"},
+		{http.MethodPut, "/api/helm/releases/default/web/source"},
+		{http.MethodPost, "/api/capi/clusters/default/workload-1/connect"},
+		{http.MethodPost, "/api/trace/services/default/web/in-cluster"},
+		{http.MethodPost, "/api/cnpg/clusters/db/main/restore-validation"},
+	} {
+		req := httptest.NewRequest(route.method, route.path, strings.NewReader("{}"))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set(connectionHeader, idA)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), errCodeContextChanged) {
+			t.Errorf("%s %s: %d %s, want 409 %s", route.method, route.path, rec.Code, rec.Body, errCodeContextChanged)
+		}
+	}
+	if writes(a)+writes(b) != 0 {
+		t.Fatalf("refused writes reached a cluster: A=%d B=%d", writes(a), writes(b))
+	}
+}
+
+// A WebSocket can't carry the header, so exec names the connection in its URL.
+func TestBoundExecRefusesStaleConnectionFromQuery(t *testing.T) {
+	t.Cleanup(k8s.SnapshotTestConnection())
+	t.Cleanup(k8s.SetTestLocalMode())
+	idA := install(t, "cluster-a", fakeCluster(t))
+	install(t, "cluster-b", fakeCluster(t))
+	s := &Server{}
+	router := chi.NewRouter()
+	s.setupAppRoutes(router)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/pods/default/web-1/exec?container=app&connection="+idA, nil))
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), errCodeContextChanged) {
+		t.Fatalf("exec with a stale connection: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// Code that only has a context (MCP tools, reachability probes) gets the bound
+// connection's clients too.
+func TestContextClientsUseTheBoundConnection(t *testing.T) {
+	t.Cleanup(k8s.SnapshotTestConnection())
+	t.Cleanup(k8s.SetTestLocalMode())
+	a := fakeCluster(t)
+	install(t, "cluster-a", a)
+	bound, err := k8s.CaptureBoundConnection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := k8s.WithBoundConnection(context.Background(), bound)
+	b := fakeCluster(t)
+	install(t, "cluster-b", b)
+	if got := k8s.DynamicClientFromContext(ctx); got != a {
+		t.Fatalf("dynamic client from a bound context = %p, want cluster A's %p", got, a)
+	}
+	if got := k8s.DynamicClientFromContext(context.Background()); got != b {
+		t.Fatalf("dynamic client from an unbound context = %p, want the serving cluster B's %p", got, b)
+	}
+}
