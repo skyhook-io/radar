@@ -102,11 +102,13 @@ type Egress struct {
 	SinceKnown               bool
 }
 
-// Finding is one Issue a reading raises.
+// Finding is one Issue a reading raises: Message is the cause, Action the
+// one next step.
 type Finding struct {
 	Severity    Severity
 	Reason      string
 	Message     string
+	Action      string
 	Since       time.Time
 	SinceKnown  bool
 	Fingerprint string
@@ -220,7 +222,8 @@ func notReported(u *unstructured.Unstructured, now time.Time, kind string) Readi
 		if age := now.Sub(created); age > IssueAfter {
 			r.finding = &Finding{
 				Severity: SeverityWarning, Reason: "NotReported", Since: created, SinceKnown: true,
-				Message: "kagent hasn't reported on this " + kind + " in the " + formatAge(age) + " since it was created. Check that kagent's controller is running and watches this namespace.",
+				Message: "kagent hasn't reported on this " + kind + " in the " + formatAge(age) + " since it was created.",
+				Action:  "Check that kagent's controller is running and watches this namespace.",
 			}
 		}
 	}
@@ -259,11 +262,11 @@ func (r Reading) Findings() []Finding {
 		out = append(out, *r.finding)
 	}
 	if r.Egress != nil {
-		message := r.Egress.Summary + ". " + egressStep(r.Egress.Reason)
+		message := sentence(r.Egress.Summary)
 		if r.State == StateStale {
 			message = "Reported for an earlier generation. " + message
 		}
-		out = append(out, Finding{Severity: SeverityWarning, Reason: r.Egress.Reason, Message: message, Since: r.Egress.Since, SinceKnown: r.Egress.SinceKnown, Fingerprint: "egress"})
+		out = append(out, Finding{Severity: SeverityWarning, Reason: r.Egress.Reason, Message: message, Action: egressStep(r.Egress.Reason), Since: r.Egress.Since, SinceKnown: r.Egress.SinceKnown, Fingerprint: "egress"})
 	}
 	return out
 }

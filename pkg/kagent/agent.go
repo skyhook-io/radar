@@ -106,7 +106,7 @@ func agentBlocked(refs condition, rev AgentRevisions) Reading {
 		severity, r.Tone = SeverityWarning, ToneAlert
 	}
 	r.finding = &Finding{Severity: severity, Reason: reasonOr(refs.reason, "ResolvedRefs=False"), Since: refs.since, SinceKnown: refs.sinceKnown,
-		Message: sentence(r.Summary) + " " + referenceStep(refs.message, "agent")}
+		Message: sentence(r.Summary), Action: referenceStep(refs.message, "agent")}
 	return r
 }
 
@@ -120,19 +120,8 @@ func agentFailed(condType string, c condition, rev AgentRevisions, step func(str
 	}
 	r := Reading{State: StateFailed, Tone: ToneUnhealthy, Text: "Failed", Summary: summary, Condition: condType, Reason: c.reason, Message: c.message, Since: c.since, SinceKnown: c.sinceKnown}
 	r.finding = &Finding{Severity: SeverityCritical, Reason: reasonOr(c.reason, condType+"=False"), Since: c.since, SinceKnown: c.sinceKnown,
-		Message: withStep(summary, c.message, step(c.reason))}
+		Message: sentence(summary), Action: step(c.reason)}
 	return r
-}
-
-// kagent's preparation messages often carry their own next step ("check
-// controller logs for details"); Radar adds one only when they don't.
-var namesStep = regexp.MustCompile(`(?i)\b(check|inspect|verify)\b`)
-
-func withStep(summary, kagentMessage, step string) string {
-	if namesStep.MatchString(kagentMessage) {
-		return sentence(summary)
-	}
-	return sentence(summary) + " " + step
 }
 
 func preparing(ready condition, now time.Time, kind, summary, lead string) Reading {
@@ -145,7 +134,7 @@ func preparing(ready condition, now time.Time, kind, summary, lead string) Readi
 				message += ": " + ready.message
 			}
 			r.finding = &Finding{Severity: SeverityWarning, Reason: ready.reason, Since: ready.since, SinceKnown: true,
-				Message: sentence(message) + " Check kagent's controller logs and the " + kind + "'s ActorTemplate in Substrate."}
+				Message: sentence(message), Action: "Check kagent's controller logs and the " + kind + "'s ActorTemplate in Substrate."}
 		}
 	}
 	return r
@@ -162,7 +151,7 @@ func notReady(c condition, kind string) Reading {
 	}
 	r := Reading{State: StateNotReady, Tone: ToneAlert, Text: text, Summary: summary, Condition: "Ready", Reason: c.reason, Message: c.message, Since: c.since, SinceKnown: c.sinceKnown}
 	r.finding = &Finding{Severity: SeverityWarning, Reason: reasonOr(c.reason, "Ready=False"), Since: c.since, SinceKnown: c.sinceKnown,
-		Message: sentence(summary) + " Check kagent's controller logs for this " + kind + "."}
+		Message: sentence(summary), Action: "Check kagent's controller logs for this " + kind + "."}
 	return r
 }
 

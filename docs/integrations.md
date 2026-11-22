@@ -2514,7 +2514,7 @@ One reading per kind in `pkg/kagent` serves Issues and AI summaries; k8s-ui's `r
 | Any other `Ready=False` reason | The reason (orange) | Warning |
 | `EgressPoliciesApplied=False` (`EgressPolicyNotFound`, `InvalidEgressPolicy`, `EgressGrantConflict`) | Egress not applied: kagent's message, which names the policy. On a Ready object the badge says so | Warning, its own Issue beside any other: kagent reports grants apart from readiness and the runtime runs without them |
 
-The generic Ready-condition walk leaves these five kinds to these rules, so one problem is one Issue and a Preparing agent inside its window raises none. The drawer, REST and MCP keep every condition as kagent wrote it.
+Each Issue's `message` is the cause, in kagent's words; its one next step is in `action`. The generic Ready-condition walk leaves these five kinds to these rules, so one problem is one Issue and a Preparing agent inside its window raises none. The drawer, REST and MCP keep every condition as kagent wrote it.
 
 **ModelConfig, ModelProviderConfig, RemoteMCPServer.** Their Issues are warnings: an Agent that uses a broken one reports its own blocked reference, with the severity its sessions warrant.
 

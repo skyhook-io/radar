@@ -72,8 +72,8 @@ func TestKagentAgentIssues(t *testing.T) {
 		t.Errorf("preparing within the grace period raised %+v", issues)
 	}
 	if issues := got["blocked"]; len(issues) != 1 || issues[0].Severity != SeverityCritical || issues[0].Reason != "ReferenceResolutionFailed" ||
-		!strings.Contains(issues[0].Message, "Create ModelConfig agents/gpt or point the agent at an existing one.") {
-		t.Errorf("blocked = %+v, want one critical ReferenceResolutionFailed naming the step", issues)
+		issues[0].Action != "Create ModelConfig agents/gpt or point the agent at an existing one." || strings.Contains(issues[0].Message, "Create ModelConfig") {
+		t.Errorf("blocked = %+v, want one critical ReferenceResolutionFailed with the cause in message and the step in action", issues)
 	}
 	if issues := got["ready-egress"]; len(issues) != 1 || issues[0].Severity != SeverityWarning || issues[0].Reason != "EgressPolicyNotFound" || issues[0].Fingerprint != "egress" {
 		t.Errorf("ready-egress = %+v, want one egress warning", issues)

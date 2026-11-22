@@ -56,7 +56,7 @@ func readSandboxTemplateReady(u *unstructured.Unstructured, ready condition, now
 		if pool != "" {
 			step = "Create WorkerPool " + ref + " or point spec.substrate.workerPoolRef at an existing one."
 		}
-		r.finding = &Finding{Severity: SeverityCritical, Reason: ready.reason, Since: ready.since, SinceKnown: ready.sinceKnown, Message: sentence(summary) + " " + step}
+		r.finding = &Finding{Severity: SeverityCritical, Reason: ready.reason, Since: ready.since, SinceKnown: ready.sinceKnown, Message: sentence(summary), Action: step}
 		return r
 	case ready.reason == "PreparationFailed":
 		summary := "Failed"
@@ -64,7 +64,7 @@ func readSandboxTemplateReady(u *unstructured.Unstructured, ready condition, now
 			summary += ": " + ready.message
 		}
 		r := Reading{State: StateFailed, Tone: ToneUnhealthy, Text: "Failed", Summary: summary, Condition: "Ready", Reason: ready.reason, Message: ready.message, Since: ready.since, SinceKnown: ready.sinceKnown}
-		r.finding = &Finding{Severity: SeverityCritical, Reason: ready.reason, Since: ready.since, SinceKnown: ready.sinceKnown, Message: withStep(summary, ready.message, "Check kagent's controller logs for the cause.")}
+		r.finding = &Finding{Severity: SeverityCritical, Reason: ready.reason, Since: ready.since, SinceKnown: ready.sinceKnown, Message: sentence(summary), Action: "Check kagent's controller logs for the cause."}
 		return r
 	}
 	return notReady(ready, KindSandboxTemplate)
@@ -129,7 +129,7 @@ func configProblem(state State, text, lead, condType string, c condition, step s
 		summary += ": " + c.message
 	}
 	r := Reading{State: state, Tone: ToneAlert, Text: text, Summary: summary, Condition: condType, Reason: c.reason, Message: c.message, Since: c.since, SinceKnown: c.sinceKnown}
-	r.finding = &Finding{Severity: SeverityWarning, Reason: reasonOr(c.reason, condType+"=False"), Since: c.since, SinceKnown: c.sinceKnown, Message: sentence(summary) + " " + step}
+	r.finding = &Finding{Severity: SeverityWarning, Reason: reasonOr(c.reason, condType+"=False"), Since: c.since, SinceKnown: c.sinceKnown, Message: sentence(summary), Action: step}
 	return r
 }
 

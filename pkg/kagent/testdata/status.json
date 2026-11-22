@@ -153,8 +153,9 @@
       "egress": "Egress not applied: agents/github: egresspolicies.api.kagent.dev \"github\" not found",
       "findings": [
         {
+          "action": "Create the EgressPolicy or remove it from egressPolicyRefs.",
           "fingerprint": "egress",
-          "message": "Egress not applied: agents/github: egresspolicies.api.kagent.dev \"github\" not found. Create the EgressPolicy or remove it from egressPolicyRefs.",
+          "message": "Egress not applied: agents/github: egresspolicies.api.kagent.dev \"github\" not found.",
           "reason": "EgressPolicyNotFound",
           "severity": "warning"
         }
@@ -240,8 +241,9 @@
       "egress": "Egress not applied: new grants are held until the conflict is resolved; first conflict: https://api.github.com is granted twice with different credentials",
       "findings": [
         {
+          "action": "Resolve the conflicting grant; kagent holds new grants until then.",
           "fingerprint": "egress",
-          "message": "Egress not applied: new grants are held until the conflict is resolved; first conflict: https://api.github.com is granted twice with different credentials. Resolve the conflicting grant; kagent holds new grants until then.",
+          "message": "Egress not applied: new grants are held until the conflict is resolved; first conflict: https://api.github.com is granted twice with different credentials.",
           "reason": "EgressGrantConflict",
           "severity": "warning"
         }
@@ -404,7 +406,8 @@
     "want": {
       "findings": [
         {
-          "message": "kagent has been preparing revision 0f9e8d7c6b5a for 2h: waiting for the ActorTemplate golden snapshot. Check kagent's controller logs and the Agent's ActorTemplate in Substrate.",
+          "action": "Check kagent's controller logs and the Agent's ActorTemplate in Substrate.",
+          "message": "kagent has been preparing revision 0f9e8d7c6b5a for 2h: waiting for the ActorTemplate golden snapshot.",
           "reason": "ActorTemplatePending",
           "severity": "warning"
         }
@@ -566,7 +569,8 @@
     "want": {
       "findings": [
         {
-          "message": "Latest change blocked: resolve ModelConfig \"agents/gpt-4o\": not found; new sessions still start on revision a1b2c3d4e5f6. Create ModelConfig agents/gpt-4o or point the agent at an existing one.",
+          "action": "Create ModelConfig agents/gpt-4o or point the agent at an existing one.",
+          "message": "Latest change blocked: resolve ModelConfig \"agents/gpt-4o\": not found; new sessions still start on revision a1b2c3d4e5f6.",
           "reason": "ReferenceResolutionFailed",
           "severity": "warning"
         }
@@ -649,7 +653,8 @@
     "want": {
       "findings": [
         {
-          "message": "Latest change blocked: resolve Harness \"agents/default\": not found; no session can start. Create Harness agents/default or point the agent at an existing one.",
+          "action": "Create Harness agents/default or point the agent at an existing one.",
+          "message": "Latest change blocked: resolve Harness \"agents/default\": not found; no session can start.",
           "reason": "ReferenceResolutionFailed",
           "severity": "critical"
         }
@@ -732,7 +737,8 @@
     "want": {
       "findings": [
         {
-          "message": "Latest change blocked: WorkerPool \"agents/pool\" not found; no session can start. Create WorkerPool agents/pool or point the agent at an existing one.",
+          "action": "Create WorkerPool agents/pool or point the agent at an existing one.",
+          "message": "Latest change blocked: WorkerPool \"agents/pool\" not found; no session can start.",
           "reason": "WorkerPoolNotFound",
           "severity": "critical"
         }
@@ -816,7 +822,8 @@
     "want": {
       "findings": [
         {
-          "message": "Latest change blocked: resolve ModelConfig \"shared/gpt-4o\": reference from namespace \"agents\" denied by allowedNamespaces; new sessions still start on revision a1b2c3d4e5f6. Allow namespace agents in ModelConfig shared/gpt-4o's allowedNamespaces, or point the agent at one it may use.",
+          "action": "Allow namespace agents in ModelConfig shared/gpt-4o's allowedNamespaces, or point the agent at one it may use.",
+          "message": "Latest change blocked: resolve ModelConfig \"shared/gpt-4o\": reference from namespace \"agents\" denied by allowedNamespaces; new sessions still start on revision a1b2c3d4e5f6.",
           "reason": "ReferenceResolutionFailed",
           "severity": "warning"
         }
@@ -899,7 +906,8 @@
     "want": {
       "findings": [
         {
-          "message": "Failed: no default image configured. Change the agent, its template or its Harness to a configuration the Harness supports.",
+          "action": "Change the agent, its template or its Harness to a configuration the Harness supports.",
+          "message": "Failed: no default image configured.",
           "reason": "UnsupportedConfiguration",
           "severity": "critical"
         }
@@ -984,6 +992,7 @@
     "want": {
       "findings": [
         {
+          "action": "Fix the agent's configuration; kagent won't retry a revision Substrate rejected.",
           "message": "Failed: Substrate rejected the compiled ActorTemplate (InvalidArgument); verify the Agent configuration against Substrate's validation requirements; new sessions still start on revision a1b2c3d4e5f6.",
           "reason": "ActorTemplateRejected",
           "severity": "critical"
@@ -1068,6 +1077,7 @@
     "want": {
       "findings": [
         {
+          "action": "kagent retries on its own; its controller logs name the cause.",
           "message": "Failed: Runtime preparation failed (Unavailable); check controller logs for details.",
           "reason": "RuntimePreparationFailed",
           "severity": "critical"
@@ -1152,7 +1162,8 @@
     "want": {
       "findings": [
         {
-          "message": "Failed: existing immutable ActorTemplate differs from the compiled revision. Check Substrate for another ActorTemplate with this revision's name; kagent won't replace it.",
+          "action": "Check Substrate for another ActorTemplate with this revision's name; kagent won't replace it.",
+          "message": "Failed: existing immutable ActorTemplate differs from the compiled revision.",
           "reason": "ActorTemplateConflict",
           "severity": "critical"
         }
@@ -1314,7 +1325,8 @@
     "want": {
       "findings": [
         {
-          "message": "Reported for generation 1; the Agent is now at generation 3. Latest change blocked: resolve Harness \"agents/default\": not found; no session can start. Create Harness agents/default or point the agent at an existing one.",
+          "action": "Create Harness agents/default or point the agent at an existing one.",
+          "message": "Reported for generation 1; the Agent is now at generation 3. Latest change blocked: resolve Harness \"agents/default\": not found; no session can start.",
           "reason": "ReferenceResolutionFailed",
           "severity": "warning"
         }
@@ -1467,7 +1479,8 @@
     "want": {
       "findings": [
         {
-          "message": "kagent hasn't reported on this Agent in the 1d since it was created. Check that kagent's controller is running and watches this namespace.",
+          "action": "Check that kagent's controller is running and watches this namespace.",
+          "message": "kagent hasn't reported on this Agent in the 1d since it was created.",
           "reason": "NotReported",
           "severity": "warning"
         }
@@ -1718,7 +1731,8 @@
     "want": {
       "findings": [
         {
-          "message": "kagent has been preparing the sandbox runtime for 2h: rebuilding after golden failure, retry 2; Waiting for the prepared sandbox snapshot. Check kagent's controller logs and the SandboxTemplate's ActorTemplate in Substrate.",
+          "action": "Check kagent's controller logs and the SandboxTemplate's ActorTemplate in Substrate.",
+          "message": "kagent has been preparing the sandbox runtime for 2h: rebuilding after golden failure, retry 2; Waiting for the prepared sandbox snapshot.",
           "reason": "Preparing",
           "severity": "warning"
         }
@@ -1828,7 +1842,8 @@
     "want": {
       "findings": [
         {
-          "message": "Blocked: WorkerPool agents/pool not found. Create WorkerPool agents/pool or point spec.substrate.workerPoolRef at an existing one.",
+          "action": "Create WorkerPool agents/pool or point spec.substrate.workerPoolRef at an existing one.",
+          "message": "Blocked: WorkerPool agents/pool not found.",
           "reason": "WorkerPoolNotFound",
           "severity": "critical"
         }
@@ -1891,13 +1906,15 @@
       "egress": "Egress not applied: agents/github: requires 1 to 64 destinations",
       "findings": [
         {
+          "action": "Check kagent's controller logs for the cause.",
           "message": "Failed: Sandbox preparation failed; inspect controller logs and template configuration.",
           "reason": "PreparationFailed",
           "severity": "critical"
         },
         {
+          "action": "Fix the EgressPolicy kagent names; the other policies' grants still apply.",
           "fingerprint": "egress",
-          "message": "Egress not applied: agents/github: requires 1 to 64 destinations. Fix the EgressPolicy kagent names; the other policies' grants still apply.",
+          "message": "Egress not applied: agents/github: requires 1 to 64 destinations.",
           "reason": "InvalidEgressPolicy",
           "severity": "warning"
         }
@@ -2001,7 +2018,8 @@
     "want": {
       "findings": [
         {
-          "message": "References not resolved: secret \"openai\" not found. Create Secret agents/openai or point apiKeySecret at an existing one.",
+          "action": "Create Secret agents/openai or point apiKeySecret at an existing one.",
+          "message": "References not resolved: secret \"openai\" not found.",
           "reason": "APIKeySecretNotFound",
           "severity": "warning"
         }
@@ -2056,7 +2074,8 @@
     "want": {
       "findings": [
         {
-          "message": "Not accepted: model config is required. Fix the ModelConfig's spec; agents using it stay blocked until kagent accepts it.",
+          "action": "Fix the ModelConfig's spec; agents using it stay blocked until kagent accepts it.",
+          "message": "Not accepted: model config is required.",
           "reason": "ModelConfigMissing",
           "severity": "warning"
         }
@@ -2091,7 +2110,8 @@
     "want": {
       "findings": [
         {
-          "message": "kagent hasn't reported on this ModelConfig in the 1d since it was created. Check that kagent's controller is running and watches this namespace.",
+          "action": "Check that kagent's controller is running and watches this namespace.",
+          "message": "kagent hasn't reported on this ModelConfig in the 1d since it was created.",
           "reason": "NotReported",
           "severity": "warning"
         }
@@ -2201,7 +2221,8 @@
     "want": {
       "findings": [
         {
-          "message": "Not ready: 401 Unauthorized. Check the provider endpoint and the discovery Secret it names.",
+          "action": "Check the provider endpoint and the discovery Secret it names.",
+          "message": "Not ready: 401 Unauthorized.",
           "reason": "DiscoveryFailed",
           "severity": "warning"
         }
@@ -2359,7 +2380,8 @@
     "want": {
       "findings": [
         {
-          "message": "Tool discovery failed: failed to connect: 401 Unauthorized. Agents that use it run without its tools; check its URL and credentials, and that kagent's controller can reach it.",
+          "action": "Agents that use it run without its tools; check its URL and credentials, and that kagent's controller can reach it.",
+          "message": "Tool discovery failed: failed to connect: 401 Unauthorized.",
           "reason": "DiscoveryFailed",
           "severity": "warning"
         }
@@ -2410,7 +2432,8 @@
     "want": {
       "findings": [
         {
-          "message": "Tool discovery failed: duplicate tool name \"search\". Agents that use it run without its tools; check the tool list it returns, which kagent rejected.",
+          "action": "Agents that use it run without its tools; check the tool list it returns, which kagent rejected.",
+          "message": "Tool discovery failed: duplicate tool name \"search\".",
           "reason": "InvalidDiscovery",
           "severity": "warning"
         }
@@ -2546,7 +2569,8 @@
     "want": {
       "findings": [
         {
-          "message": "Latest change blocked: resolve ModelConfig \"kagent/no-such-model\": not found; no session can start. Create ModelConfig kagent/no-such-model or point the agent at an existing one.",
+          "action": "Create ModelConfig kagent/no-such-model or point the agent at an existing one.",
+          "message": "Latest change blocked: resolve ModelConfig \"kagent/no-such-model\": not found; no session can start.",
           "reason": "ReferenceResolutionFailed",
           "severity": "critical"
         }
@@ -2676,7 +2700,8 @@
     "want": {
       "findings": [
         {
-          "message": "Tool discovery failed: Get \"https://[REDACTED]@mcp.example.com/mcp?[REDACTED]\": 401 Unauthorized. Agents that use it run without its tools; check its URL and credentials, and that kagent's controller can reach it.",
+          "action": "Agents that use it run without its tools; check its URL and credentials, and that kagent's controller can reach it.",
+          "message": "Tool discovery failed: Get \"https://[REDACTED]@mcp.example.com/mcp?[REDACTED]\": 401 Unauthorized.",
           "reason": "DiscoveryFailed",
           "severity": "warning"
         }
@@ -2760,7 +2785,8 @@
     "want": {
       "findings": [
         {
-          "message": "Latest change blocked: resolve RemoteMCPServer \"spike-no-such-mcp\": not found; new sessions still start on revision 7ce96403aaaa. Create RemoteMCPServer spike-no-such-mcp or point the agent at an existing one.",
+          "action": "Create RemoteMCPServer spike-no-such-mcp or point the agent at an existing one.",
+          "message": "Latest change blocked: resolve RemoteMCPServer \"spike-no-such-mcp\": not found; new sessions still start on revision 7ce96403aaaa.",
           "reason": "ReferenceResolutionFailed",
           "severity": "warning"
         }
@@ -2815,7 +2841,8 @@
     "want": {
       "findings": [
         {
-          "message": "References not resolved: secret spike-no-such-secret not found. Create Secret agents/spike-no-such-secret or point apiKeySecret at an existing one.",
+          "action": "Create Secret agents/spike-no-such-secret or point apiKeySecret at an existing one.",
+          "message": "References not resolved: secret spike-no-such-secret not found.",
           "reason": "APIKeySecretNotFound",
           "severity": "warning"
         }
@@ -2870,7 +2897,8 @@
     "want": {
       "findings": [
         {
-          "message": "References not resolved: secret spike-stub-key does not contain key \"NO_SUCH_KEY\". Add key NO_SUCH_KEY to Secret agents/spike-stub-key, or point the ModelConfig at a key it has.",
+          "action": "Add key NO_SUCH_KEY to Secret agents/spike-stub-key, or point the ModelConfig at a key it has.",
+          "message": "References not resolved: secret spike-stub-key does not contain key \"NO_SUCH_KEY\".",
           "reason": "APIKeySecretKeyNotFound",
           "severity": "warning"
         }
@@ -2921,7 +2949,8 @@
     "want": {
       "findings": [
         {
-          "message": "Tool discovery failed: Failed to connect to MCP server: failed to connect MCP client: calling \"initialize\": sending \"initialize\": rejected by transport: Post \"http://no-such-mcp.example:9999/mcp\": dial tcp: lookup no-such-mcp.example on 172.20.0.10:53: no such host. Agents that use it run without its tools; check its URL and credentials, and that kagent's controller can reach it.",
+          "action": "Agents that use it run without its tools; check its URL and credentials, and that kagent's controller can reach it.",
+          "message": "Tool discovery failed: Failed to connect to MCP server: failed to connect MCP client: calling \"initialize\": sending \"initialize\": rejected by transport: Post \"http://no-such-mcp.example:9999/mcp\": dial tcp: lookup no-such-mcp.example on 172.20.0.10:53: no such host.",
           "reason": "DiscoveryFailed",
           "severity": "warning"
         }

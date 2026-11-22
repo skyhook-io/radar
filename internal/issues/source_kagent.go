@@ -23,7 +23,9 @@ func detectKagentIssues(gvr schema.GroupVersionResource, kind string, u *unstruc
 		if f.Severity == kagent.SeverityCritical {
 			severity = SeverityCritical
 		}
-		out = append(out, newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), severity, f.Reason, f.Message, f.Since, f.SinceKnown, f.Fingerprint, u.GetCreationTimestamp().Time))
+		iss := newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), severity, f.Reason, f.Message, f.Since, f.SinceKnown, f.Fingerprint, u.GetCreationTimestamp().Time)
+		iss.Action = f.Action
+		out = append(out, iss)
 	}
 	return out
 }

@@ -13,6 +13,7 @@ type vectorFinding struct {
 	Severity    Severity `json:"severity"`
 	Reason      string   `json:"reason"`
 	Message     string   `json:"message"`
+	Action      string   `json:"action"`
 	Fingerprint string   `json:"fingerprint"`
 }
 
@@ -70,7 +71,7 @@ func TestStatusVectors(t *testing.T) {
 			}
 			for i, f := range got {
 				w := v.Want.Findings[i]
-				if f.Severity != w.Severity || f.Reason != w.Reason || f.Message != w.Message || f.Fingerprint != w.Fingerprint {
+				if f.Severity != w.Severity || f.Reason != w.Reason || f.Message != w.Message || f.Action != w.Action || f.Fingerprint != w.Fingerprint {
 					t.Errorf("finding %d = %+v, want %+v", i, f, w)
 				}
 			}
