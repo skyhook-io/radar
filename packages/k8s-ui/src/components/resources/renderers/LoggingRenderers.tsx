@@ -29,7 +29,7 @@ export function LoggingRenderer({ data }: Props) {
       <PropertyList>
         <Property label="Control namespace" value={data.spec?.controlNamespace || 'Not set'} />
         <Property label="Logging ref" value={data.spec?.loggingRef || 'Default'} />
-        <Property label="Fluentd aggregator" value={data.spec?.fluentd ? 'Configured' : 'Not configured'} />
+        <Property label="Aggregator" value={data.spec?.fluentd ? 'Fluentd, configured in this Logging' : data.spec?.syslogNG ? 'syslog-ng, configured in this Logging' : 'Not set in this Logging (may come from a FluentdConfig or SyslogNGConfig)'} />
         <Property label="Fluent Bit collector" value={data.spec?.fluentbit ? 'Configured in this Logging' : 'Not in this Logging (see FluentbitAgents)'} />
         {Object.keys(checks).length > 0 && <Property label="Configuration checks" value={failedChecks > 0 ? `${failedChecks} of ${Object.keys(checks).length} failed` : `${Object.keys(checks).length} passed`} />}
       </PropertyList>
@@ -82,7 +82,7 @@ export function LoggingFlowRenderer({ data, onNavigate, controlNamespaces, loggi
         ? <p className="text-sm text-theme-text-secondary">{Array.isArray(data.spec?.match) ? 'Empty match: the operator selects no pod.' : 'No rules: every pod in scope is selected.'}</p>
         : <ol className="space-y-1 text-sm">
             {rules.map((r, i) => <li key={i} className="flex flex-wrap items-baseline gap-2">
-              <Badge severity={r.exclude ? 'warning' : 'success'} size="sm">{r.exclude ? 'exclude' : 'select'}</Badge>
+              <Badge severity="neutral" size="sm">{r.exclude ? 'exclude' : 'select'}</Badge>
               <span className="text-theme-text-primary">{r.conditions.length > 0 ? r.conditions.join(' and ') : 'everything'}</span>
             </li>)}
           </ol>}
