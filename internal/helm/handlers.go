@@ -119,14 +119,12 @@ type Handlers struct {
 	// them unwrapped.
 	BindWrite func(http.HandlerFunc) http.HandlerFunc
 	// AdmitWrite is BindWrite's check for a handler that learns from the body
-	// whether it writes to the cluster; it answers the refusal itself. The
-	// returned func reports whether the admitted connection is still serving.
-	AdmitWrite func(http.ResponseWriter, *http.Request) (stillAdmitted func() bool, ok bool)
+	// whether it writes to the cluster. It answers the refusal itself.
+	AdmitWrite func(http.ResponseWriter, *http.Request) (k8s.BoundConnection, bool)
 }
 
-// stillAdmitted is checked right before a bound write calls Helm: Helm builds
-// its clients from the serving connection when the action starts, so a switch
-// since admission is refused here instead of landing on the new cluster.
+// The permission preflight reads capabilities from the serving cluster. Its
+// result can authorize a chart download only if it checked the admitted one.
 func stillAdmitted(w http.ResponseWriter, r *http.Request) bool {
 	if k8s.StillBound(r.Context()) {
 		return true
@@ -266,16 +264,7 @@ func (h *Handlers) handleSetSource(w http.ResponseWriter, r *http.Request) {
 	}
 	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
 	selected := ChartSourceCandidate{Type: req.Type, Reference: req.Reference, URL: req.URL}
-	if !stillAdmitted(w, r) {
-		return
-	}
-	var err error
-	if user := auth.UserFromContext(r.Context()); user != nil {
-		err = client.SetSourceAsUser(namespace, name, selected, user)
-	} else {
-		err = client.SetSource(namespace, name, selected)
-	}
-	if err != nil {
+	if err := client.setSourceForWrite(r.Context(), namespace, name, selected); err != nil {
 		writeChartSourceOperationError(w, err, "associate-source", namespace, name)
 		return
 	}
@@ -738,17 +727,12 @@ func (h *Handlers) handleRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !stillAdmitted(w, r) {
-		return
-	}
 	auth.AuditLog(r, namespace, name)
-	var rollbackErr error
-	if user := auth.UserFromContext(r.Context()); user != nil {
-		rollbackErr = client.RollbackAsUser(namespace, name, revision, user)
-	} else {
-		rollbackErr = client.Rollback(namespace, name, revision)
+	cfg, err := client.actionConfigForWrite(r.Context(), namespace)
+	if err == nil {
+		err = client.rollbackWith(cfg, name, revision)
 	}
-	if err := rollbackErr; err != nil {
+	if err != nil {
 		if IsForbiddenError(err) {
 			writeError(w, http.StatusForbidden, "insufficient permissions to rollback Helm release")
 			return
@@ -802,18 +786,14 @@ func (h *Handlers) handleRollbackStream(w http.ResponseWriter, r *http.Request) 
 	progressCh := make(chan InstallProgress, 10)
 	defer close(progressCh)
 
-	if !stillAdmitted(w, r) {
-		return
-	}
 	auth.AuditLog(r, namespace, name)
-	user := auth.UserFromContext(r.Context())
 	resultCh := make(chan error, 1)
 	go func() {
-		if user != nil {
-			resultCh <- client.RollbackWithProgressAsUser(namespace, name, revision, user, progressCh)
-			return
+		cfg, err := client.actionConfigForWrite(r.Context(), namespace)
+		if err == nil {
+			err = client.rollbackWithProgressUsing(cfg, name, revision, progressCh)
 		}
-		resultCh <- client.RollbackWithProgress(namespace, name, revision, progressCh)
+		resultCh <- err
 	}()
 
 	for {
@@ -874,17 +854,12 @@ func (h *Handlers) handleUninstall(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
-	if !stillAdmitted(w, r) {
-		return
-	}
 	auth.AuditLog(r, namespace, name)
-	var uninstallErr error
-	if user := auth.UserFromContext(r.Context()); user != nil {
-		uninstallErr = client.UninstallAsUser(namespace, name, user)
-	} else {
-		uninstallErr = client.Uninstall(namespace, name)
+	cfg, err := client.actionConfigForWrite(r.Context(), namespace)
+	if err == nil {
+		err = client.uninstallWith(cfg, name)
 	}
-	if err := uninstallErr; err != nil {
+	if err != nil {
 		if IsForbiddenError(err) {
 			writeError(w, http.StatusForbidden, "insufficient permissions to uninstall Helm release")
 			return
@@ -926,11 +901,8 @@ func (h *Handlers) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 	if !validSourceUpgradeRoute(w, r, req) {
 		return
 	}
-	if !stillAdmitted(w, r) {
-		return
-	}
 	auth.AuditLog(r, namespace, name)
-	upgradeErr := client.upgradeRequestAsUser(namespace, name, version, repositoryName, req, userCreds(r), func(string, string, string) {})
+	upgradeErr := client.upgradeRequest(r.Context(), namespace, name, version, repositoryName, req, func(string, string, string) {})
 	if err := upgradeErr; err != nil {
 		if IsForbiddenError(err) {
 			writeError(w, http.StatusForbidden, "insufficient permissions to upgrade Helm release")
@@ -989,13 +961,10 @@ func (h *Handlers) handleUpgradeStream(w http.ResponseWriter, r *http.Request) {
 	progressCh := make(chan InstallProgress, 10)
 	// An upgrade may finish after the client disconnects; the receiver must not close the producer's channel.
 
-	if !stillAdmitted(w, r) {
-		return
-	}
 	auth.AuditLog(r, namespace, name)
 	resultCh := make(chan error, 1)
 	go func() {
-		resultCh <- client.upgradeRequestAsUser(namespace, name, version, repositoryName, req, userCreds(r), progressSender(progressCh))
+		resultCh <- client.upgradeRequest(r.Context(), namespace, name, version, repositoryName, req, progressSender(progressCh))
 	}()
 
 	for {
@@ -1111,17 +1080,12 @@ func (h *Handlers) handleApplyValues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !stillAdmitted(w, r) {
-		return
-	}
 	auth.AuditLog(r, namespace, name)
-	var applyErr error
-	if user := auth.UserFromContext(r.Context()); user != nil {
-		applyErr = client.ApplyValuesAsUser(namespace, name, req.Values, user)
-	} else {
-		applyErr = client.ApplyValues(namespace, name, req.Values)
+	cfg, err := client.actionConfigForWrite(r.Context(), namespace)
+	if err == nil {
+		err = client.applyValuesWith(cfg, name, req.Values)
 	}
-	if err := applyErr; err != nil {
+	if err != nil {
 		if IsForbiddenError(err) {
 			writeError(w, http.StatusForbidden, "insufficient permissions to apply Helm values")
 			return
@@ -1167,19 +1131,16 @@ func (h *Handlers) handleAddRepository(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "namespace and releaseName must be supplied together")
 		return
 	}
-	// Before the repository is fetched: see requireHelmWrite. Without a release
-	// this only changes pod-local repository config.
-	if !requireHelmWrite(w, r, req.Namespace) {
-		return
-	}
 	// Associating a release writes its storage Secret on the cluster.
-	associationAdmitted := func() bool { return true }
 	if req.Namespace != "" && h.AdmitWrite != nil {
-		still, ok := h.AdmitWrite(w, r)
+		bound, ok := h.AdmitWrite(w, r)
 		if !ok {
 			return
 		}
-		associationAdmitted = still
+		r = r.WithContext(k8s.WithBoundConnection(r.Context(), bound))
+	}
+	if !requireHelmWrite(w, r, req.Namespace) {
+		return
 	}
 	client := GetClient()
 	if client == nil {
@@ -1197,22 +1158,8 @@ func (h *Handlers) handleAddRepository(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Namespace != "" {
-		// The repository download can take a while: link the release only if
-		// the cluster it was admitted against is still the one serving.
-		if !associationAdmitted() {
-			writeErrorPayload(w, http.StatusConflict, map[string]string{
-				"error":      "The repository was added, but the cluster changed before it could be linked to the release; nothing was changed on the cluster. Check the current cluster and try again.",
-				"error_code": "context_changed",
-			})
-			return
-		}
 		selected := ChartSourceCandidate{Type: "repository", Reference: name, URL: canonicalURL}
-		if user := auth.UserFromContext(r.Context()); user != nil {
-			err = client.SetSourceAsUser(req.Namespace, req.ReleaseName, selected, user)
-		} else {
-			err = client.SetSource(req.Namespace, req.ReleaseName, selected)
-		}
-		if err != nil {
+		if err := client.setSourceForWrite(r.Context(), req.Namespace, req.ReleaseName, selected); err != nil {
 			writeChartSourceOperationError(w, err, "associate-repository", req.Namespace, req.ReleaseName)
 			return
 		}
@@ -1430,18 +1377,13 @@ func (h *Handlers) handleInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !stillAdmitted(w, r) {
-		return
-	}
 	auth.AuditLog(r, req.Namespace, req.ReleaseName)
 	var release *HelmRelease
-	var installErr error
-	if user := auth.UserFromContext(r.Context()); user != nil {
-		release, installErr = client.InstallAsUser(&req, user)
-	} else {
-		release, installErr = client.Install(&req)
+	cfg, err := client.actionConfigForWrite(r.Context(), req.Namespace)
+	if err == nil {
+		release, err = client.installWith(cfg, &req)
 	}
-	if err := installErr; err != nil {
+	if err != nil {
 		log.Printf("[helm] install %q/%q (chart=%q repo=%q) failed: %v", req.Namespace, req.ReleaseName, req.ChartName, req.Repository, err)
 		writeInstallError(w, err)
 		return
@@ -1503,19 +1445,13 @@ func (h *Handlers) handleInstallStream(w http.ResponseWriter, r *http.Request) {
 	defer close(progressCh)
 
 	// Start install in goroutine
-	if !stillAdmitted(w, r) {
-		return
-	}
 	auth.AuditLog(r, req.Namespace, req.ReleaseName)
-	user := auth.UserFromContext(r.Context())
 	resultCh := make(chan installResult, 1)
 	go func() {
 		var release *HelmRelease
-		var err error
-		if user != nil {
-			release, err = client.InstallWithProgressAsUser(&req, progressCh, user)
-		} else {
-			release, err = client.InstallWithProgress(&req, progressCh)
+		cfg, err := client.actionConfigForWrite(r.Context(), req.Namespace)
+		if err == nil {
+			release, err = client.installWithProgressUsing(cfg, &req, progressCh)
 		}
 		resultCh <- installResult{release: release, err: err}
 	}()
@@ -1587,7 +1523,7 @@ func requireHelmWrite(w http.ResponseWriter, r *http.Request, namespace string) 
 		writeError(w, status, err.Error())
 		return false
 	}
-	return true
+	return stillAdmitted(w, r)
 }
 
 func writeJSON(w http.ResponseWriter, data any) {

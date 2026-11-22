@@ -228,13 +228,27 @@ func (c *Client) buildActionConfig(namespace string, user *pkgauth.User) (*actio
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	actionConfig := new(action.Configuration)
-
 	getter, err := c.restClientGetter(namespace, user)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build helm RESTClientGetter: %w", err)
 	}
 
+	return initActionConfig(getter, namespace, user)
+}
+
+func (c *Client) actionConfigForWrite(ctx context.Context, namespace string) (*action.Configuration, error) {
+	user := pkgauth.UserFromContext(ctx)
+	if bound, ok := k8s.BoundConnectionFrom(ctx); ok {
+		if bound.Config == nil {
+			return nil, fmt.Errorf("helm: admitted connection has no REST config")
+		}
+		return initActionConfig(newRESTConfigGetter(bound.Config, namespace, user), namespace, user)
+	}
+	return c.getActionConfigForUser(namespace, user)
+}
+
+func initActionConfig(getter genericclioptions.RESTClientGetter, namespace string, user *pkgauth.User) (*action.Configuration, error) {
+	actionConfig := new(action.Configuration)
 	if err := actionConfig.Init(getter, namespace, "secrets", log.Printf); err != nil {
 		if user != nil {
 			return nil, fmt.Errorf("failed to initialize helm action config for user %s: %w", user.Username, err)
@@ -2486,11 +2500,6 @@ func (c *Client) rollbackWithProgressUsing(actionConfig *action.Configuration, n
 	return nil
 }
 
-// RollbackAsUser performs a rollback with K8s impersonation.
-func (c *Client) RollbackAsUser(namespace, name string, revision int, user *pkgauth.User) error {
-	return c.RollbackWithProgressAsUser(namespace, name, revision, user, nil)
-}
-
 func useReleaseTargetNamespace(cfg *action.Configuration, name string) error {
 	rel, err := cfg.Releases.Last(name)
 	if err != nil {
@@ -2517,15 +2526,6 @@ func (c *Client) rollbackWith(actionConfig *action.Configuration, name string, r
 	}
 
 	return nil
-}
-
-// Uninstall removes a release
-func (c *Client) Uninstall(namespace, name string) error {
-	actionConfig, err := c.getActionConfig(namespace)
-	if err != nil {
-		return err
-	}
-	return c.uninstallWith(actionConfig, name)
 }
 
 // UninstallAsUser removes a release with K8s impersonation.
@@ -3306,24 +3306,6 @@ func (c *Client) previewValuesChangeWith(actionConfig *action.Configuration, nam
 	}, nil
 }
 
-// ApplyValues upgrades a release with new values (same chart version)
-func (c *Client) ApplyValues(namespace, name string, newValues map[string]any) error {
-	actionConfig, err := c.getActionConfig(namespace)
-	if err != nil {
-		return err
-	}
-	return c.applyValuesWith(actionConfig, name, newValues)
-}
-
-// ApplyValuesAsUser applies values with K8s impersonation.
-func (c *Client) ApplyValuesAsUser(namespace, name string, newValues map[string]any, user *pkgauth.User) error {
-	actionConfig, err := c.getActionConfigForUser(namespace, user)
-	if err != nil {
-		return err
-	}
-	return c.applyValuesWith(actionConfig, name, newValues)
-}
-
 func (c *Client) applyValuesWith(actionConfig *action.Configuration, name string, newValues map[string]any) error {
 	// Get the current release and reconstruct its exact installed chart when
 	// Helm storage omitted vendored dependency bodies.
@@ -3693,15 +3675,6 @@ func (c *Client) Install(req *InstallRequest) (*HelmRelease, error) {
 	return c.installWith(actionConfig, req)
 }
 
-// InstallAsUser installs a new Helm release with K8s impersonation.
-func (c *Client) InstallAsUser(req *InstallRequest, user *pkgauth.User) (*HelmRelease, error) {
-	actionConfig, err := c.getActionConfigForUser(req.Namespace, user)
-	if err != nil {
-		return nil, err
-	}
-	return c.installWith(actionConfig, req)
-}
-
 func (c *Client) installWith(actionConfig *action.Configuration, req *InstallRequest) (*HelmRelease, error) {
 	var chartURL string
 	var indexDigest string
@@ -3889,24 +3862,6 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 	}
 
 	return installedHelmRelease(rel), nil
-}
-
-// InstallWithProgress installs a new Helm release and streams progress updates
-func (c *Client) InstallWithProgress(req *InstallRequest, progressCh chan<- InstallProgress) (*HelmRelease, error) {
-	actionConfig, err := c.getActionConfig(req.Namespace)
-	if err != nil {
-		return nil, err
-	}
-	return c.installWithProgressUsing(actionConfig, req, progressCh)
-}
-
-// InstallWithProgressAsUser installs a new Helm release with K8s impersonation and streams progress.
-func (c *Client) InstallWithProgressAsUser(req *InstallRequest, progressCh chan<- InstallProgress, user *pkgauth.User) (*HelmRelease, error) {
-	actionConfig, err := c.getActionConfigForUser(req.Namespace, user)
-	if err != nil {
-		return nil, err
-	}
-	return c.installWithProgressUsing(actionConfig, req, progressCh)
 }
 
 func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, req *InstallRequest, progressCh chan<- InstallProgress) (*HelmRelease, error) {
