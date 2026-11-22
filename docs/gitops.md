@@ -192,7 +192,7 @@ How each operation is written:
 | **Sync with source** (Kustomization / HelmRelease) | Requests the reconciles `flux reconcile --with-source` makes, upstream first: the source, then the resource. For a HelmRelease the source is its chart (the generated HelmChart of an inline `spec.chart`, named from the current spec, or the HelmChart / OCIRepository named by `spec.chartRef`), and a HelmChart's own source is reconciled before it, so a new chart version in the repository is picked up. A suspended or Terminating object anywhere in that chain fails the request with 409 before anything is written. Unlike the CLI, Radar does not wait for each step to finish. An ExternalArtifact comes from another controller, so only the resource is reconciled. Objects are patched at the API version the cluster serves |
 | **Suspend / Resume** | Toggles `spec.suspend` |
 
-## Action permissions
+### Action permissions
 
 `GET /api/gitops/capabilities/{kind}/{namespace}/{name}` reviews named API operations at their served API versions as the caller. Every action needs `patch`; actions with lifecycle preflights also need `get`.
 In user-token mode, people are checked with a `SelfSubjectAccessReview` using
@@ -232,6 +232,11 @@ before focus. Lifecycle restrictions still apply; Refresh and
 Terminate remain available during deletion when permitted.
 A connected Radar without the `gitopsActionCapabilities` feature flag retains
 its existing action controls.
+
+Cloud administrators can also opt in to an owner-only Argo CD Applications grant
+on chart versions that include it. See the
+[chart’s RBAC settings](../deploy/helm/radar/README.md#cloud-owner-integration-writes)
+for the authority it delegates and the upgrade steps.
 
 ### Action errors
 

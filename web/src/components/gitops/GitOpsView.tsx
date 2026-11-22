@@ -73,6 +73,7 @@ import {
   useApplyResource,
   useArgoRefresh,
   useArgoResourceValidation,
+  useCapabilities,
   useArgoResume,
   useArgoRollback,
   useArgoSuspend,
@@ -521,6 +522,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   const [graphFullscreen, setGraphFullscreen] = useState(false)
   const [helmValuesOpen, setHelmValuesOpen] = useState(false)
 
+  const { data: capabilities } = useCapabilities()
   const { permissions: actionPermissions, disabledReasons: actionDisabledReasons, permissionCheckUnavailable } = useGitOpsActionCapabilities(kind, effectiveGroup, namespace, name)
   const argoSync = useArgoSync()
   const remediationSync = useArgoSync({ reportErrors: false })
@@ -873,6 +875,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
       actionDisabledReasons={actionDisabledReasons}
       actionPermissions={actionPermissions}
       permissionCheckUnavailable={permissionCheckUnavailable}
+      isCloudDeployment={capabilities?.deployment?.mode === 'cloud'}
       argo={argoHandlers}
       flux={fluxHandlers}
       activeTab={appView}

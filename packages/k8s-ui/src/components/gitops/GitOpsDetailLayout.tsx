@@ -206,6 +206,7 @@ export interface GitOpsDetailLayoutProps {
    */
   actionDisabledReasons?: Record<string, string | undefined>
   permissionCheckUnavailable?: boolean
+  isCloudDeployment?: boolean
   /**
    * Explanatory data for the restriction panel, keyed like actionDisabledReasons;
    * buttons gate on actionDisabledReasons. Denied lists operations checked and denied;
@@ -586,7 +587,8 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                   <Collapse open={permissionsOpen} id={permissionsDisclosure.panelId}>
                     <div className="mt-1 w-[min(36rem,calc(100vw-2rem))] space-y-2 rounded border border-theme-border bg-theme-surface p-3 text-left text-xs text-theme-text-secondary">
                       {denialReasons.map(reason => <p key={reason}>{reason}</p>)}
-                      <p>An admin can grant the Kubernetes identity access with a RoleBinding{deniedGrants.length > 0 ? ' allowing:' : '.'}</p>
+                      {props.isCloudDeployment && isArgoApp && <p>On charts with the Cloud owner grant, a cluster administrator can opt in through a Helm upgrade. This grants access to patch Applications and delegates the Argo CD controller’s deployment authority.</p>}
+                      <p>{props.isCloudDeployment && isArgoApp ? 'For targeted access, an admin can use' : 'An admin can grant the Kubernetes identity access with'} a RoleBinding{deniedGrants.length > 0 ? ' allowing:' : '.'}</p>
                       {deniedGrants.length > 0 && <ul className="list-disc space-y-1 pl-4">
                         {deniedGrants.slice(0, 4).map(grant => <li key={grant}>{grant.split(' ').map((word, index) => <span key={index}><span className="inline-block max-w-full [overflow-wrap:anywhere]">{word}</span>{' '}</span>)}</li>)}
                         {deniedGrants.length > 4 && <li>And {deniedGrants.length - 4} more denied permission{deniedGrants.length === 5 ? '' : 's'}.</li>}
@@ -594,6 +596,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                       {deniedPermissions.some(denial => denial.name) && <p>Use <code>resourceNames</code> to limit access to the listed objects.</p>}
                       <div className="flex flex-wrap gap-3">
                         <a className="text-accent-text hover:underline" href="https://github.com/skyhook-io/radar/blob/main/docs/gitops.md#action-permissions" target="_blank" rel="noopener noreferrer">Action permissions</a>
+                        {props.isCloudDeployment && isArgoApp && <a className="text-accent-text hover:underline" href="https://github.com/skyhook-io/radar/blob/main/deploy/helm/radar/README.md#cloud-owner-integration-writes" target="_blank" rel="noopener noreferrer">Chart RBAC settings</a>}
                       </div>
                     </div>
                   </Collapse>

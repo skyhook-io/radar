@@ -41,6 +41,40 @@ describe('GitOps permission gates on rendered controls', () => {
       expect(actionButton(html, label)).toContain('aria-disabled="true"')
     }
   })
+  it('explains the optional Cloud owner grant and the authority it delegates', () => {
+    const html = renderToString(<GitOpsDetailLayout {...base} isCloudDeployment
+      actionDisabledReasons={{ sync: reason, refresh: reason, suspend: reason }}
+      actionPermissions={{ sync: argoDenial, refresh: argoDenial, suspend: argoDenial }} />)
+    const doc = new DOMParser().parseFromString(html, 'text/html')
+    expect(doc.body.textContent).toContain("Kubernetes denied permission to sync, refresh or change auto-sync for this Application.")
+    expect(doc.body.textContent).toContain("On charts with the Cloud owner grant, a cluster administrator can opt in through a Helm upgrade. This grants access to patch Applications and delegates the Argo CD controller’s deployment authority.")
+    expect(doc.querySelector('code')?.textContent).toBe('resourceNames')
+    expect(html).toContain('Chart RBAC settings')
+    expect(html).toContain('README.md#cloud-owner-integration-writes')
+    expect(doc.body.textContent).not.toContain('cloud.defaultRbac.integrationWrite.gitops.owner')
+  })
+  it('keeps the Cloud member grant guidance separate from the owner-only chart upgrade', () => {
+    const html = renderToString(<GitOpsDetailLayout {...base} isCloudDeployment
+      actionDisabledReasons={{ refresh: reason }} actionPermissions={{ refresh: argoDenial }} />)
+    const doc = new DOMParser().parseFromString(html, 'text/html')
+    expect(doc.body.textContent).toContain("Kubernetes denied permission to refresh for this Application.")
+    expect(doc.body.textContent).toContain('For targeted access, an admin can use a RoleBinding allowing:')
+    expect([...doc.querySelectorAll('li')].map(item => item.textContent!.trim())).toEqual(['patch applications.argoproj.io named demo in argocd'])
+  })
+  it('does not point Flux denials at the chart setting, which grants Argo CD Applications only', () => {
+    const kustomizationPatch = { verb: 'patch', resource: 'kustomizations', group: 'kustomize.toolkit.fluxcd.io', namespace: 'apps', kind: 'Kustomization', name: 'demo' }
+    const html = renderToString(<GitOpsDetailLayout {...base} isCloudDeployment
+      identity={{ ...base.identity, kind: 'kustomizations', group: 'kustomize.toolkit.fluxcd.io', namespace: 'apps' }}
+      isArgoApp={false} isFlux isFluxWorkload
+      actionDisabledReasons={{ reconcile: reason }}
+      actionPermissions={{ reconcile: { allowed: false, denied: [kustomizationPatch] } }}
+    />)
+    expect(html).toContain('Read-only')
+    expect(html).not.toContain('cloud.defaultRbac.integrationWrite')
+    expect(html).not.toContain('Chart RBAC settings')
+    expect(html).not.toContain('helm upgrade')
+    expect(html).toContain('a RoleBinding')
+  })
   it('names only the denied cross-namespace source grants for partially allowed Flux actions', () => {
     const source = { resource: 'gitrepositories', group: 'source.toolkit.fluxcd.io', namespace: 'gaps-r4-source', kind: 'GitRepository', name: 'repo', source: true }
     const html = renderToString(<GitOpsDetailLayout {...base}
