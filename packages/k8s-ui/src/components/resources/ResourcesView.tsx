@@ -6,6 +6,7 @@ import { getMetalLBColumnValue, getMetalLBSortValue } from './resource-utils-met
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
 import { getAgentRuntimeSortValue } from './resource-utils-agent-runtimes'
+import { getKagentAgentColumnValue } from './resource-utils-kagent'
 import { UPGRADE_PLAN_GROUP, getUpgradePlanColumnValue } from './resource-utils-upgrade-plan'
 import { FLUX_OPERATOR_GROUP, FLUX_OPERATOR_PLURALS, getFluxOperatorColumnValue, getFluxOperatorStatus } from './resource-utils-flux-operator'
 
@@ -214,6 +215,7 @@ import { VolcanoJobCell, VolcanoQueueCell, VolcanoPodGroupCell, JobFlowCell, Job
 import { KaiQueueCell, KaiPodGroupCell } from './renderers/kai-cells'
 import { KaitoWorkspaceCell, RAGEngineCell } from './renderers/kaito-cells'
 import { SandboxCell, SandboxClaimCell, SandboxWarmPoolCell, WorkerPoolCell } from './renderers/agent-runtime-cells'
+import { KagentAgentCell } from './renderers/kagent-cells'
 import { NIMServiceCell, NIMCacheCell, NIMPipelineCell } from './renderers/nim-cells'
 import { AMDDeviceConfigCell } from './renderers/amd-gpu-cells'
 import { PyTorchJobCell, TFJobCell, MPIJobCell, TrainJobCell } from './renderers/kubeflow-training-cells'
@@ -1397,6 +1399,16 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'warmPool', label: 'Warm pool', width: 'w-40' },
     { key: 'claimedSandbox', label: 'Sandbox', width: 'w-44' },
     { key: 'expires', label: 'Expires', width: 'w-28', tooltip: 'lifecycle.shutdownTime: when the claim and its sandbox expire' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  kagentagents: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-40', tooltip: 'Radar’s reading of the conditions kagent reports, egress grants included' },
+    { key: 'kagentTemplate', label: 'Template', width: 'w-40', tooltip: 'The AgentTemplate the agent references, or Inline' },
+    { key: 'kagentHarness', label: 'Harness', width: 'w-36' },
+    { key: 'kagentModel', label: 'Model', width: 'w-40', tooltip: 'ModelConfig an inline template names; a referenced AgentTemplate names its own' },
+    { key: 'kagentRevision', label: 'Revision', width: 'w-32', tooltip: 'Latest successful revision: the one new sessions start on' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   agentsandboxwarmpools: [
@@ -2980,6 +2992,8 @@ const GROUP_QUALIFIED_COLUMN_KEYS: Record<string, Record<string, string>> = {
   sandboxclaims: { 'extensions.agents.x-k8s.io': 'agentsandboxclaims' },
   sandboxwarmpool: { 'extensions.agents.x-k8s.io': 'agentsandboxwarmpools' },
   sandboxwarmpools: { 'extensions.agents.x-k8s.io': 'agentsandboxwarmpools' },
+  agent: { 'api.kagent.dev': 'kagentagents' },
+  agents: { 'api.kagent.dev': 'kagentagents' },
   workspaces: { 'kaito.sh': 'kaitoworkspaces' },
   services: { 'serving.knative.dev': 'knativeservices' },
   configurations: { 'serving.knative.dev': 'knativeconfigurations' },
@@ -3353,6 +3367,7 @@ const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   agentsandboxes: ['agents.x-k8s.io'],
   agentsandboxclaims: ['extensions.agents.x-k8s.io'],
   agentsandboxwarmpools: ['extensions.agents.x-k8s.io'],
+  kagentagents: ['api.kagent.dev'],
   ragengines: ['kaito.sh'],
   admissionchecks: ['kueue.x-k8s.io'],
   clusterqueues: ['kueue.x-k8s.io'],
@@ -5813,6 +5828,8 @@ export function ResourcesView({
     if (flaggerValue !== undefined) return flaggerValue
     const agentRuntimeValue = getAgentRuntimeSortValue(resource, column)
     if (agentRuntimeValue !== undefined) return agentRuntimeValue
+    const kagentValue = getKagentAgentColumnValue(resource, column)
+    if (kagentValue !== undefined) return kagentValue === '-' ? '' : kagentValue
     const planValue = getUpgradePlanColumnValue(resource, column)
     if (planValue !== undefined) return planValue
 
@@ -8563,6 +8580,8 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       return <SandboxClaimCell resource={resource} column={column} />
     case 'agentsandboxwarmpools':
       return <SandboxWarmPoolCell resource={resource} column={column} />
+    case 'kagentagents':
+      return <KagentAgentCell resource={resource} column={column} />
     // KAITO
     case 'kaitoworkspaces':
       return <KaitoWorkspaceCell resource={resource} column={column} />

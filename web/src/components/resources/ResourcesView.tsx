@@ -17,6 +17,7 @@ import { useVeleroSidebarWorkspace } from '../velero/useVeleroSidebarWorkspace'
 import { useSubstrateSidebarWorkspace } from '../substrate/useSubstrateSidebarWorkspace'
 import { isVeleroBackupKind } from '../velero/routes'
 import { useMergedSidebarWorkspaces } from '../workspace/sidebar'
+import { useKagentSidebarWorkspace } from '../kagent/useKagentSidebarWorkspace'
 import { useAgentSandboxSidebarWorkspace } from '../agentsandbox/useAgentSandboxSidebarWorkspace'
 import { renderResourceKindList, resourceKindListMode, useResourceHostFeatures } from '../../integrations/resourceHosts'
 import { useOpenLogs, useOpenWorkloadLogs } from '../dock'
@@ -132,7 +133,8 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const veleroSidebarWorkspace = useVeleroSidebarWorkspace({ apiResources })
   const substrateSidebarWorkspace = useSubstrateSidebarWorkspace({ apiResources })
   const sandboxSidebar = useAgentSandboxSidebarWorkspace({ apiResources, namespaces })
-  const sidebarCategoryWorkspaces = useMergedSidebarWorkspaces(cnpgSidebarWorkspace, veleroSidebarWorkspace, substrateSidebarWorkspace, sandboxSidebar)
+  const kagentSidebar = useKagentSidebarWorkspace({ apiResources })
+  const sidebarCategoryWorkspaces = useMergedSidebarWorkspaces(cnpgSidebarWorkspace, veleroSidebarWorkspace, substrateSidebarWorkspace, sandboxSidebar, kagentSidebar)
   const workloadWrites = namespaces.length === 0
     ? capabilities?.workloadWrites
     : namespaces.length === 1

@@ -7,6 +7,8 @@ import { getVolumeSnapshotStatus, isVolumeSnapshot, isVolumeSnapshotContent, isV
 import { VolumeSnapshotRenderer, VolumeSnapshotContentRenderer, VolumeSnapshotClassRenderer } from '../resources/renderers/VolumeSnapshotRenderers'
 import { getMetalLBPoolStatus, getMetalLBConfigurationStateStatus, isMetalLBIPAddressPool, isMetalLBL2Advertisement, isMetalLBBGPAdvertisement, isMetalLBBGPPeer, isMetalLBConfigurationState } from '../resources/resource-utils-metallb'
 import { MetalLBIPAddressPoolRenderer, MetalLBL2AdvertisementRenderer, MetalLBBGPAdvertisementRenderer, MetalLBBGPPeerRenderer, MetalLBConfigurationStateRenderer } from '../resources/renderers/MetalLBRenderers'
+import { KagentAgentRenderer } from '../resources/renderers/KagentAgentRenderer'
+import { getKagentStatus, isKagentAgent } from '../resources/resource-utils-kagent'
 import { getOpenTelemetryCollectorStatus, getOpenTelemetryInstrumentationStatus } from '../resources/resource-utils-opentelemetry'
 import { OpenTelemetryCollectorRenderer, OpenTelemetryInstrumentationRenderer } from '../resources/renderers/OpenTelemetryRenderers'
 import { FlaggerCanaryRenderer, FlaggerMetricTemplateRenderer } from '../resources/renderers/FlaggerRenderers'
@@ -347,6 +349,9 @@ import type { ScalerDiagnosis } from '../resources/renderers/WorkloadRenderer'
  * When an override is not provided, the base (shared) renderer is used.
  */
 export interface RendererOverrides {
+  // kagent Agent: the host reads the AgentTemplate and Harness it references,
+  // and may add a Sessions section.
+  KagentAgentRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   CustomResourceDefinitionRenderer?: React.ComponentType<{
     data: any
     onNavigate?: (ref: ResourceRef) => void
@@ -519,6 +524,7 @@ const KNOWN_KINDS = new Set([
   'kafkaconnectors', 'kafkas', 'kafkanodepools',
   'volumesnapshots', 'volumesnapshotcontents', 'volumesnapshotclasses',
   'ipaddresspools', 'l2advertisements', 'bgpadvertisements', 'bgppeers', 'configurationstates',
+  'agents',
   'opentelemetrycollectors', 'instrumentations',
   'canaries', 'metrictemplates',
   'plans',
@@ -794,6 +800,7 @@ export function ResourceRendererDispatch({
     kind === 'kafkaconnectors' || kind === 'kafkas' || kind === 'kafkanodepools' ||
     ['volumesnapshots', 'volumesnapshotcontents', 'volumesnapshotclasses'].includes(kind) ||
     ['ipaddresspools', 'l2advertisements', 'bgpadvertisements', 'bgppeers', 'configurationstates'].includes(kind) ||
+    kind === 'agents' ||
     ['opentelemetrycollectors', 'instrumentations'].includes(kind) ||
     ['canaries', 'metrictemplates'].includes(kind) ||
     kind === 'plans' ||
@@ -824,6 +831,7 @@ export function ResourceRendererDispatch({
     (kind === 'bgpadvertisements' && isMetalLBBGPAdvertisement(data)) ||
     (kind === 'bgppeers' && isMetalLBBGPPeer(data)) ||
     (kind === 'configurationstates' && isMetalLBConfigurationState(data)) ||
+    (kind === 'agents' && isKagentAgent(data)) ||
     (['opentelemetrycollectors', 'instrumentations'].includes(kind) && isApiGroup(data?.apiVersion, 'opentelemetry.io')) ||
     (['canaries', 'metrictemplates'].includes(kind) && isApiGroup(data?.apiVersion, 'flagger.app')) ||
     (kind === 'plans' && isApiGroup(data?.apiVersion, UPGRADE_PLAN_GROUP)) ||
@@ -887,6 +895,7 @@ export function ResourceRendererDispatch({
   const isKnownKind = KNOWN_KINDS.has(kind) || isCrossplaneMR || isCrossplaneClaim || isCrossplaneXR
 
   const JobComp = rendererOverrides?.JobRenderer ?? JobRenderer
+  const KagentAgentComp = rendererOverrides?.KagentAgentRenderer ?? KagentAgentRenderer
   const FluxHelmReleaseComp = rendererOverrides?.FluxHelmReleaseRenderer ?? FluxHelmReleaseRenderer
   const JobSetComp = rendererOverrides?.JobSetRenderer ?? JobSetRenderer
   const RayJobComp = rendererOverrides?.RayJobRenderer ?? RayJobRenderer
@@ -1202,6 +1211,7 @@ export function ResourceRendererDispatch({
         {kind === 'bgpadvertisements' && isMetalLBBGPAdvertisement(data) && <MetalLBBGPAdvertisementRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'bgppeers' && isMetalLBBGPPeer(data) && <MetalLBBGPPeerRenderer data={data} />}
         {kind === 'configurationstates' && isMetalLBConfigurationState(data) && <MetalLBConfigurationStateRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'agents' && isKagentAgent(data) && <KagentAgentComp data={data} onNavigate={onNavigate} />}
         {kind === 'instrumentations' && isApiGroup(data?.apiVersion, 'opentelemetry.io') && <OpenTelemetryInstrumentationRenderer data={data} />}
         {kind === 'canaries' && isApiGroup(data?.apiVersion, 'flagger.app') && <FlaggerCanaryRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'metrictemplates' && isApiGroup(data?.apiVersion, 'flagger.app') && <FlaggerMetricTemplateRenderer data={data} onNavigate={onNavigate} />}
@@ -1327,6 +1337,7 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'sandboxes' && isAgentSandboxResource(data)) return getSandboxStatus(data)
   if (k === 'sandboxclaims' && isAgentSandboxExtensionResource(data)) return getSandboxClaimStatus(data)
   if (k === 'sandboxwarmpools' && isAgentSandboxExtensionResource(data)) return getSandboxWarmPoolStatus(data)
+  if (k === 'agents' && isKagentAgent(data)) return getKagentStatus(data)
   if (k === 'workloads' && data?.apiVersion?.startsWith('kueue.x-k8s.io/')) return getKueueWorkloadStatus(data)
   if (k === 'clusterqueues' && data?.apiVersion?.startsWith('kueue.x-k8s.io/')) return getClusterQueueStatus(data)
   if (k === 'localqueues' && data?.apiVersion?.startsWith('kueue.x-k8s.io/')) return getLocalQueueStatus(data)

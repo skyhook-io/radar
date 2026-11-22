@@ -5,6 +5,7 @@ import { AlertBanner, Section, PropertyList, Property, isInvertedPolarityConditi
 import { Collapse, CollapseChevron, useDisclosure } from '../../ui/Collapse'
 import { getGenericResourceStatus } from '../generic-status'
 import { getAgentRuntimeStatus, isAgentSandboxResource } from '../resource-utils-agent-runtimes'
+import { redactKagentLiterals } from '../resource-utils-kagent'
 import { isApiGroup } from '../resource-utils-cnpg'
 import { getInferenceServiceStatus, isInferenceServiceStopRequested } from '../resource-utils-kserve'
 import { getCrossplanePauseState, getCrossplaneIndependentStatus, getCrossplaneConditionTone } from '../resource-utils-crossplane'
@@ -16,7 +17,9 @@ interface GenericRendererProps {
   data: any
 }
 
-export function GenericRenderer({ data }: GenericRendererProps) {
+export function GenericRenderer({ data: raw }: GenericRendererProps) {
+  // Literal kagent header and environment values can be credentials.
+  const data = redactKagentLiterals(raw)
   const spec = data.spec || {}
   const status = data.status || {}
   const conditions = status.conditions

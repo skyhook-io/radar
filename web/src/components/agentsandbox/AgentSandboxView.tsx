@@ -6,6 +6,7 @@ import { useSubstrateSidebarWorkspace } from '../substrate/useSubstrateSidebarWo
 import { useVeleroSidebarWorkspace } from '../velero/useVeleroSidebarWorkspace'
 import { WorkspaceFrame } from '../workspace/WorkspaceFrame'
 import { useMergedSidebarWorkspaces } from '../workspace/sidebar'
+import { useKagentSidebarWorkspace } from '../kagent/useKagentSidebarWorkspace'
 import { useWorkspaceDrawer } from '../workspace/useWorkspaceDrawer'
 import { useAgentSandboxWorkspace } from '../../api/agentSandbox'
 import { AgentSandboxOverview } from './AgentSandboxOverview'
@@ -29,7 +30,8 @@ export function AgentSandboxView({ namespaces, selectedResource, onOpenResource,
   const cnpgSidebar = useCNPGSidebarWorkspace({ apiResources, namespaces })
   const veleroSidebar = useVeleroSidebarWorkspace({ apiResources })
   const substrateSidebar = useSubstrateSidebarWorkspace({ apiResources })
-  const sidebarWorkspace = useMergedSidebarWorkspaces(cnpgSidebar, veleroSidebar, substrateSidebar, sandboxSidebar)
+  const kagentSidebar = useKagentSidebarWorkspace({ apiResources })
+  const sidebarWorkspace = useMergedSidebarWorkspaces(cnpgSidebar, veleroSidebar, substrateSidebar, sandboxSidebar, kagentSidebar)
   const { drawerTarget, inspect } = useWorkspaceDrawer({ selectedResource, onOpenResource, onCloseResource })
 
   return (

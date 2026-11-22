@@ -8,6 +8,7 @@ import { getOpenTelemetryCollectorStatus, getOpenTelemetryInstrumentationStatus 
 import { getFlaggerCanaryStatus } from './resource-utils-flagger'
 import { UPGRADE_PLAN_GROUP, getUpgradePlanStatus } from './resource-utils-upgrade-plan'
 import { isApiGroup } from './resource-utils-cnpg'
+import { getKagentStatus, isKagentResource } from './resource-utils-kagent'
 import type { HealthLevel } from './resource-utils'
 import { getGatewayPolicyStatus } from './gateway-policy-status'
 
@@ -98,6 +99,10 @@ function fromCondition(cond: any, polarityKnown: boolean): GenericStatus | null 
  * callers render their own placeholder rather than inventing one.
  */
 export function getGenericResourceStatus(resource: any): GenericStatus | null {
+  if (isKagentResource(resource)) {
+    const native = getKagentStatus(resource)
+    if (native) return { text: native.text, tone: native.level, reason: native.message }
+  }
   if (resource?.kind === 'ApplicationSet' && isApiGroup(resource.apiVersion, 'argoproj.io')) {
     const native = getArgoApplicationSetStatus(resource)
     const { message } = argoApplicationSetConditionsToGitOpsStatus(resource.status?.conditions ?? [], resource.status?.health)

@@ -9,6 +9,7 @@ import { useCNPGSidebarWorkspace } from '../cnpg/useCNPGSidebarWorkspace'
 import { useSubstrateSidebarWorkspace } from '../substrate/useSubstrateSidebarWorkspace'
 import { WorkspaceFrame } from '../workspace/WorkspaceFrame'
 import { useMergedSidebarWorkspaces } from '../workspace/sidebar'
+import { useKagentSidebarWorkspace } from '../kagent/useKagentSidebarWorkspace'
 import { useAgentSandboxSidebarWorkspace } from '../agentsandbox/useAgentSandboxSidebarWorkspace'
 import { useWorkspaceDrawer } from '../workspace/useWorkspaceDrawer'
 import { VeleroScreenGate, useVeleroInstallation } from './shared'
@@ -42,7 +43,8 @@ export function VeleroView({ namespaces, selectedResource, onOpenResource, onClo
   const cnpgSidebar = useCNPGSidebarWorkspace({ apiResources, namespaces })
   const substrateSidebar = useSubstrateSidebarWorkspace({ apiResources })
   const sandboxSidebar = useAgentSandboxSidebarWorkspace({ apiResources, namespaces })
-  const sidebarWorkspace = useMergedSidebarWorkspaces(cnpgSidebar, veleroSidebar, substrateSidebar, sandboxSidebar)
+  const kagentSidebar = useKagentSidebarWorkspace({ apiResources })
+  const sidebarWorkspace = useMergedSidebarWorkspaces(cnpgSidebar, veleroSidebar, substrateSidebar, sandboxSidebar, kagentSidebar)
   const { drawerTarget, inspect } = useWorkspaceDrawer({ selectedResource, onOpenResource, onCloseResource })
 
   const [installation, setInstallation] = useVeleroInstallation(query.data?.installations)

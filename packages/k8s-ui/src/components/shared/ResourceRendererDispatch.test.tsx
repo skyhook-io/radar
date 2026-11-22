@@ -1441,3 +1441,49 @@ describe('Plan kind collision (upgrade.cattle.io vs other plans CRDs)', () => {
   })
 })
 
+
+describe('kagent collision handling', () => {
+  const kagentAgent = {
+    apiVersion: 'api.kagent.dev/v1alpha3',
+    kind: 'Agent',
+    metadata: { name: 'triage', namespace: 'agents', generation: 1 },
+    spec: { template: { inline: { modelConfig: { name: 'gpt-4o' } } }, harnessRef: { name: 'default' } },
+    status: {
+      observedGeneration: 1,
+      latestSuccessfulRevision: 'a1b2c3d4e5f6a1b2c3d4e5f6',
+      conditions: [{ type: 'Ready', status: 'True', reason: 'Ready', observedGeneration: 1 }],
+    },
+  }
+
+  it('renders kagent’s Agent with its own renderer and status', () => {
+    const html = renderKind('agents', kagentAgent)
+    expect(html).toContain('Conversation outcomes')
+    expect(html).toContain('Not visible to Radar')
+    expect(html).toContain('revision a1b2c3d4e5f6')
+    expect(getResourceStatus('agents', kagentAgent)?.text).toBe('Ready')
+  })
+
+  it('keeps another group’s Agent generic', () => {
+    const elastic = { apiVersion: 'agent.k8s.elastic.co/v1alpha1', kind: 'Agent', metadata: { name: 'fleet', namespace: 'elastic' }, spec: { mode: 'fleet' }, status: { health: 'green' } }
+    const html = renderKind('agents', elastic)
+    expect(html).toContain('Specification')
+    expect(html).not.toContain('Conversation outcomes')
+    expect(getResourceStatus('agents', elastic)?.text).not.toBe('Ready')
+  })
+
+  it('reads a kagent SandboxTemplate’s status and leaves Agent Sandbox’s alone', () => {
+    const conditions = [{ type: 'Ready', status: 'False', reason: 'WorkerPoolNotFound', message: 'The referenced sandbox WorkerPool does not exist', observedGeneration: 1 }]
+    const kagentTemplate = { apiVersion: 'api.kagent.dev/v1alpha3', kind: 'SandboxTemplate', metadata: { name: 'python', namespace: 'agents', generation: 1 }, spec: { substrate: { workerPoolRef: { name: 'pool' } } }, status: { observedGeneration: 1, conditions } }
+    const sandboxTemplate = { ...kagentTemplate, apiVersion: 'extensions.agents.x-k8s.io/v1beta1' }
+    expect(getResourceStatus('sandboxtemplates', kagentTemplate)?.text).toBe('Blocked')
+    expect(getResourceStatus('sandboxtemplates', sandboxTemplate)?.text).toBe('WorkerPoolNotFound')
+  })
+
+  it('never renders a literal header value in a RemoteMCPServer’s generic drawer', () => {
+    const html = renderKind('remotemcpservers', {
+      apiVersion: 'api.kagent.dev/v1alpha3', kind: 'RemoteMCPServer', metadata: { name: 'github', namespace: 'agents' },
+      spec: { url: 'https://mcp.example.com/', headersFrom: [{ name: 'X-Api-Key', value: 'literal-t0ken' }] },
+    })
+    expect(html).not.toContain('literal-t0ken')
+  })
+})
