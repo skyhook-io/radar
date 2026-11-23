@@ -196,7 +196,6 @@ func (s *Server) invalidatePostContextSwitchCaches() {
 	if s.openCostCurrency != nil {
 		s.openCostCurrency.Invalidate()
 	}
-	k8s.InvalidateUserCapabilitiesCache()
 	usagedata.ContextSwitched()
 	clearPackagesCache()
 	clearApplicationsCache()

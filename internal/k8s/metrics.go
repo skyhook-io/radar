@@ -16,7 +16,11 @@ type ContainerMetrics = k8score.ContainerMetrics
 type ResourceUsage = k8score.ResourceUsage
 
 func ResolveMetricsGVR(resource string) (schema.GroupVersionResource, bool) {
-	discovery := GetResourceDiscovery()
+	return Current().resolveMetricsGVR(resource)
+}
+
+func (c *Connection) resolveMetricsGVR(resource string) (schema.GroupVersionResource, bool) {
+	discovery := c.Discovery()
 	if discovery == nil {
 		return schema.GroupVersionResource{}, false
 	}

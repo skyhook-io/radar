@@ -240,7 +240,7 @@ func TestReconnectClearsMarksOfResourcesDeletedDuringTheOutage(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	NoteDeletedWhileUnavailable("ctx", "apps", "Deployment", "shop", "web")
+	CaptureStore().NoteDeletedWhileUnavailable("ctx", "apps", "Deployment", "shop", "web")
 
 	reconnected, err := NewPostgresStore(dsn)
 	if err != nil {
@@ -291,7 +291,7 @@ func TestDeleteNotedAfterTheReconnectStillClearsItsMark(t *testing.T) {
 	}
 	installPostgresStore(reconnected, StoreConfig{})
 	t.Cleanup(ResetStore) // before the test schema is dropped
-	NoteDeletedWhileUnavailable("ctx", "apps", "Deployment", "shop", "late")
+	CaptureStore().NoteDeletedWhileUnavailable("ctx", "apps", "Deployment", "shop", "late")
 
 	if reconnected.IsResourceSeen("ctx", "apps", "Deployment", "shop", "late") {
 		t.Fatal("a delete noted after the reconnect left its mark; recreating it would not be recorded")
@@ -306,9 +306,11 @@ func TestDeleteNotedAfterTheReconnectStillClearsItsMark(t *testing.T) {
 func TestResetStoreDropsDeletesNotedDuringTheOutage(t *testing.T) {
 	ResetStore()
 	t.Cleanup(ResetStore)
-	NoteDeletedWhileUnavailable("old", "apps", "Deployment", "shop", "web")
+	old := CaptureStore()
+	old.NoteDeletedWhileUnavailable("old", "apps", "Deployment", "shop", "web")
 	ResetStore()
-	if keys, _ := takeDeletedWhileUnavailable(); len(keys) != 0 {
+	old.NoteDeletedWhileUnavailable("old", "apps", "Deployment", "shop", "late")
+	if keys, _ := CaptureStore().takeDeletedWhileUnavailable(); len(keys) != 0 {
 		t.Fatalf("ResetStore kept %d delete(s) from the previous context", len(keys))
 	}
 }

@@ -1,6 +1,7 @@
 package vulnerabilities
 
 import (
+	"context"
 	"maps"
 	"slices"
 	"strings"
@@ -36,6 +37,8 @@ type target struct {
 	scannedGroup string
 	workload     WorkloadRef
 	container    string
+	// routes are the routes from outside the cluster to its Pod.
+	routes []Route
 }
 
 // targetKey identifies the scanned object and container; image and digest
@@ -69,9 +72,9 @@ var scannedByOwner = map[string]bool{"ReplicaSet": true, "ReplicationController"
 // a target is listed only when the caller may read both the scanned object
 // and the workload it names. The caller checks that namespaces' Pods have
 // loaded (AssessKindRead); ok is false when Radar has no Pod cache.
-func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(group, kind, namespace string) bool, canListPods func(namespace string) bool) (live liveSet, ok bool) {
+func liveTargets(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, canRead func(group, kind, namespace string) bool, canListPods func(namespace string) bool, exposure exposureIndex) (live liveSet, ok bool, err error) {
 	if cache == nil || cache.Pods() == nil {
-		return liveSet{}, false
+		return liveSet{}, false, nil
 	}
 	var targets []target
 	var podDenied []string
@@ -90,9 +93,24 @@ func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(gro
 		}
 		return allowed
 	}
-	seen := map[targetKey]bool{}
+	// seen is where each kept target sits in targets; unions gather the
+	// routes of a target's replicas once a second replica brings any.
+	seen := map[targetKey]int{}
+	unions := map[int]*routeUnion{}
 	add := func(t target) {
-		if seen[t.key] {
+		if i, ok := seen[t.key]; ok {
+			// Another replica of the same container and build: a Service can
+			// select one replica and not another, so its routes count too.
+			if len(t.routes) == 0 {
+				return
+			}
+			u := unions[i]
+			if u == nil {
+				u = &routeUnion{}
+				u.add(targets[i].routes)
+				unions[i] = u
+			}
+			u.add(t.routes)
 			return
 		}
 		switch {
@@ -101,7 +119,7 @@ func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(gro
 		case !may(t.workload.Group, t.workload.Kind, t.workload.Namespace):
 			denied[resourceapi.KindRef{Kind: t.workload.Kind, Group: t.workload.Group}] = true
 		default:
-			seen[t.key] = true
+			seen[t.key] = len(targets)
 			targets = append(targets, t)
 			return
 		}
@@ -119,12 +137,19 @@ func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(gro
 			continue
 		}
 		for _, pod := range pods {
+			if err := ctx.Err(); err != nil {
+				return liveSet{}, false, err
+			}
 			if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed || !mayPods(pod.Namespace) || trivysOwnJob(cache, pod) {
 				continue
 			}
 			kind, group, name, uid := scannedOwner(cache, pod)
 			workload := podWorkload(cache, pod)
 			running, unresolved := runningDigests(pod)
+			routes, err := exposure.routesFor(ctx, pod)
+			if err != nil {
+				return liveSet{}, false, err
+			}
 			for _, c := range podContainers(pod.Spec) {
 				// What the kubelet reports runs wins over the spec: a Pod's
 				// image can change in place before its container restarts.
@@ -143,6 +168,7 @@ func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(gro
 					scannedGroup: group,
 					workload:     workload,
 					container:    c.Name,
+					routes:       routes,
 				})
 			}
 		}
@@ -173,8 +199,12 @@ func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(gro
 			}
 		}
 	}
+	var merger routeMerger
+	for i, u := range unions {
+		targets[i].routes = merger.routes(u)
+	}
 	slices.Sort(podDenied)
-	return liveSet{targets: targets, podDenied: podDenied, withheld: withheld, deniedKinds: slices.Collect(maps.Keys(denied))}, true
+	return liveSet{targets: targets, podDenied: podDenied, withheld: withheld, deniedKinds: slices.Collect(maps.Keys(denied))}, true, nil
 }
 
 // liveSet is what runs, as far as the caller may see it: podDenied are

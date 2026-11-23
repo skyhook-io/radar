@@ -102,6 +102,7 @@ func TestDiagnosticsDuringConnectionReturnsPartialSnapshot(t *testing.T) {
 }
 
 func TestDiagnosticsClusterUsesOnlyCurrentCacheObservations(t *testing.T) {
+	t.Cleanup(k8s.SwapResourceCacheForTest(nil))
 	var requests atomic.Int32
 	var serveVersion atomic.Bool
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -274,6 +275,7 @@ func TestDiagnosticsConnectionUpdatesDuringCollection(t *testing.T) {
 // can name the previous context while the current cache serves the new one:
 // the cache's observation must not be reported under that context.
 func TestDiagnosticsOmitsClusterObservedForAnotherContext(t *testing.T) {
+	t.Cleanup(k8s.SwapResourceCacheForTest(nil))
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/version" {
 			w.Header().Set("Content-Type", "application/json")
@@ -370,7 +372,9 @@ func TestDiagnosticsWhileKubeconfigWriterIsBusy(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &snap); err != nil {
 		t.Fatal(err)
 	}
-	if snap.Kubeconfig != nil || snap.APIDiscovery != nil || snap.EventPipeline == nil || len(snap.EventPipeline.RecentDrops) != 0 || snap.Runtime == nil {
+	// Discovery lives on the connection, read without the kubeconfig lock, so it
+	// is reported even while a kubeconfig writer holds that lock.
+	if snap.Kubeconfig != nil || snap.APIDiscovery == nil || snap.EventPipeline == nil || len(snap.EventPipeline.RecentDrops) != 0 || snap.Runtime == nil {
 		t.Fatalf("incomplete diagnostics while kubeconfig is busy: %+v", snap)
 	}
 }

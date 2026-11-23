@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/config"
@@ -496,7 +497,7 @@ func TestSlowRecheckThroughAPortForward_ReplacesOnlyAVerifiedForward(t *testing.
 				Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "http", Port: 80}}},
 			}
 			k8sc := fake.NewSimpleClientset(svc)
-			m.k8sClient = func() kubernetes.Interface { return k8sc }
+			m.clusterClients = func() (kubernetes.Interface, *rest.Config) { return k8sc, nil }
 			var stoppedMu sync.Mutex
 			stopped := map[int]bool{}
 			targets := []int{port(oldSrv), port(freshSrv)}

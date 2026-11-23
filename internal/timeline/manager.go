@@ -144,7 +144,7 @@ func NewDegradedMemoryStore(maxSize int, reason string) *pkgtimeline.MemoryStore
 
 var (
 	globalStoreInitMu sync.Mutex
-	globalStore       EventStore
+	globalStore       = &StoreBinding{}
 	globalStoreOnce   sync.Once
 	globalStoreMu     sync.Mutex
 	globalConfig      StoreConfig
@@ -323,19 +323,37 @@ func HistoryEvictedThrough() time.Time {
 	return time.Time{}
 }
 
-// GetStore returns the global event store instance.
-func GetStore() EventStore {
+// StoreBinding belongs to one timeline initialization. PostgreSQL can become
+// available after the informers start, so they capture the binding and resolve
+// its store for each change. ResetStore leaves old bindings on their own store.
+type StoreBinding struct {
+	store                           EventStore
+	deletedWhileUnavailable         map[string]struct{}
+	deletedWhileUnavailableOverflow bool
+}
+
+func CaptureStore() *StoreBinding {
 	globalStoreMu.Lock()
 	defer globalStoreMu.Unlock()
 	return globalStore
 }
 
-// setGlobalStore assigns the global store under the same lock GetStore/ResetStore
-// use. The InitStore write and concurrent GetStore reads (informer callbacks on
-// other goroutines) would otherwise race on the bare global.
+func (b *StoreBinding) Store() EventStore {
+	globalStoreMu.Lock()
+	defer globalStoreMu.Unlock()
+	return b.store
+}
+
+// GetStore returns the global event store instance.
+func GetStore() EventStore {
+	globalStoreMu.Lock()
+	defer globalStoreMu.Unlock()
+	return globalStore.store
+}
+
 func setGlobalStore(s EventStore) {
 	globalStoreMu.Lock()
-	globalStore = s
+	globalStore.store = s
 	globalStoreMu.Unlock()
 }
 
@@ -348,8 +366,8 @@ func ResetStore() {
 	stopPostgresReconnect()
 
 	globalStoreMu.Lock()
-	store := globalStore
-	globalStore = nil
+	store := globalStore.store
+	globalStore = &StoreBinding{}
 	observationStartNanos.Store(0)
 	globalStoreOnce = sync.Once{}
 	globalStoreErr = nil
