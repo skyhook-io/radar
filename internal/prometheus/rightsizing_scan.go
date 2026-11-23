@@ -1270,7 +1270,7 @@ func enrichScanCurrentOOM(ctx context.Context, cache *k8s.ResourceCache, scopes 
 			continue
 		}
 		if collectPodIdentities {
-			workload.workload.observeSizingPodIdentity(pod)
+			workload.workload.observeSizingPodIdentity(ctx, cache, pod)
 		}
 		workload.workload.qos.Observe(pod.Status.QOSClass)
 		collectCurrentPodOOM(workload.workload.currentPodOOM, pod.Status.ContainerStatuses)

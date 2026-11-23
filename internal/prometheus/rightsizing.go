@@ -205,7 +205,11 @@ func RightsizingForWorkload(ctx context.Context, kind, namespace, name string) (
 	}
 	if cloud.IsAuthenticatedTunnelRequest(ctx) && scope.State == ViewScopeUnlabeled && !scope.Withheld {
 		input := scanWorkload{kind: k8s.CanonicalWorkloadKind(kind), namespace: namespace, name: name, replicas: workload.replicas, workload: workload}
-		return currentPodRightsizingDetail(queryCtx, store, input), nil
+		// Range reads for a large cohort run in bounded chunks. Give them
+		// a separate budget after the store and cluster have been verified.
+		rangeCtx, stop := context.WithTimeout(ctx, rightsizingScanQueryTimeout)
+		defer stop()
+		return currentPodRightsizingDetail(rangeCtx, store, input), nil
 	}
 	return computeRightsizing(queryCtx, store, kind, namespace, name, workload, scope), nil
 }
@@ -219,13 +223,19 @@ func currentPodRightsizingDetail(ctx context.Context, store rightsizingScanQueri
 		Rows: measured.Rows, ClusterScope: currentPodUIDScope().Wire(), SampleAvailable: workloadHasData(measured)}
 	for _, key := range []string{"cpu", "memory", "throttle"} {
 		if err := evidence.errors[key]; err != nil {
-			resp.Warnings = append(resp.Warnings, RightsizingScanWarning{Code: key + "_query_failed", Message: boundWarningMessage(err.Error())})
+			warning := RightsizingScanWarning{Code: key + "_query_failed", Message: boundWarningMessage(err.Error())}
+			if errors.Is(err, context.DeadlineExceeded) {
+				warning = RightsizingScanWarning{Code: key + "_query_timed_out", Message: "The " + key + " history read timed out."}
+			}
+			resp.Warnings = append(resp.Warnings, warning)
 		}
 	}
 	if !resp.SampleAvailable {
 		switch {
 		case !hasCurrentPodSizingCohort(input):
 			resp.Reason = "Radar could not verify a complete set of ready Pods matching the current workload template."
+		case errors.Is(evidence.errors["cpu"], context.DeadlineExceeded) || errors.Is(evidence.errors["memory"], context.DeadlineExceeded):
+			resp.Reason = "The rightsizing history read timed out before complete replica measurements were available."
 		case isIncompleteAnswer(evidence.errors["cpu"]) || isIncompleteAnswer(evidence.errors["memory"]):
 			resp.Reason = ReasonRightsizingPartialData
 		case evidence.errors["cpu"] != nil || evidence.errors["memory"] != nil:
@@ -278,6 +288,8 @@ type rightsizingWorkload struct {
 	podNames              []string
 	podIdentities         []prom.WorkloadPodIdentity
 	podIdentityIncomplete bool
+	daemonRevisionMatches map[string]bool
+	admittedImages        []string
 	podRestartEvidence    map[string]sizingPodRestarts
 	qos                   rightsizing.PodQoS
 	currentPodOOM         map[string]bool
@@ -413,7 +425,7 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 		workload.qos.Observe(pod.Status.QOSClass)
 		workload.podNames = append(workload.podNames, pod.Name)
 		if collectPodIdentities {
-			workload.observeSizingPodIdentity(pod)
+			workload.observeSizingPodIdentity(ctx, cache, pod)
 		}
 		collectCurrentPodOOM(workload.currentPodOOM, pod.Status.ContainerStatuses)
 		collectCurrentPodOOM(workload.currentPodOOM, pod.Status.InitContainerStatuses)

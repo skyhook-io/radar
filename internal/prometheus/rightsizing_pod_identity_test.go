@@ -6,15 +6,22 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/prom"
 	"github.com/skyhook-io/radar/pkg/rightsizing"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -67,7 +74,7 @@ func TestSizingPodIdentityChecksAdmittedContainersAndRestartEvidence(t *testing.
 			w := scanWorkload{replicas: 1, workload: rightsizingWorkload{podSpec: &base.Spec}}
 			p := base.DeepCopy()
 			tc.edit(p)
-			w.workload.observeSizingPodIdentity(p)
+			w.workload.observeSizingPodIdentity(context.Background(), nil, p)
 			if hasCurrentPodSizingCohort(w) != tc.eligible || (w.workload.podRestartEvidence["agent"].knownPods == 1) != tc.known {
 				t.Fatalf("identities=%v, incomplete=%v, restart evidence=%v", w.workload.podIdentities, w.workload.podIdentityIncomplete, w.workload.podRestartEvidence)
 			}
@@ -139,5 +146,83 @@ func TestCurrentPodRightsizingDetailAndScanAgreeOnDaemonSetCohort(t *testing.T) 
 		if hasCurrentPodSizingCohort(w) != expected || hasCurrentPodSizingCohort(single) != expected {
 			t.Errorf("wrong cohort eligibility on %s: scan=%v detail=%v", w.name, hasCurrentPodSizingCohort(w), hasCurrentPodSizingCohort(single))
 		}
+	}
+}
+
+func TestSizingRewrittenPodImagesUseControllerRevision(t *testing.T) {
+	pod := sizingIdentityPod()
+	template := *pod.Spec.DeepCopy()
+	pod.Spec.Containers[0].Image = "mirror.internal/prod/agent@sha256:" + strings.Repeat("a", 64)
+	rsOwner, ssOwner, dsOwner := scopeOwner("ReplicaSet", "wrk-123"), scopeOwner("StatefulSet", "db"), scopeOwner("DaemonSet", "collector")
+	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: pod.Namespace, Name: rsOwner.Name, UID: rsOwner.UID, Labels: map[string]string{appsv1.DefaultDeploymentUniqueLabelKey: "123"}}, Spec: appsv1.ReplicaSetSpec{Template: corev1.PodTemplateSpec{Spec: template}}}
+	ss := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: pod.Namespace, Name: ssOwner.Name, UID: ssOwner.UID}, Spec: appsv1.StatefulSetSpec{Template: corev1.PodTemplateSpec{Spec: template}}, Status: appsv1.StatefulSetStatus{UpdateRevision: "db-abc"}}
+	cache := scopeTestCache(t, map[string]bool{k8score.ReplicaSets: true, k8score.StatefulSets: true}, rs, ss)
+	spec, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&template)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "controllerrevisions"}
+	r := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "apps/v1", "kind": "ControllerRevision", "metadata": map[string]any{"namespace": pod.Namespace, "name": "collector-456"}, "data": map[string]any{"spec": map[string]any{"template": map[string]any{"spec": spec}}}}}
+	r.SetOwnerReferences([]metav1.OwnerReference{dsOwner})
+	r.SetLabels(map[string]string{appsv1.ControllerRevisionHashLabelKey: "456"})
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "ControllerRevisionList"}, r)
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: "apps", Version: "v1", Kind: "ControllerRevision", Name: "controllerrevisions", Namespaced: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	for _, tc := range []struct {
+		owner        metav1.OwnerReference
+		label, value string
+	}{{rsOwner, appsv1.DefaultDeploymentUniqueLabelKey, "123"}, {ssOwner, appsv1.ControllerRevisionHashLabelKey, "db-abc"}, {dsOwner, appsv1.ControllerRevisionHashLabelKey, "456"}} {
+		t.Run(tc.owner.Kind, func(t *testing.T) {
+			for _, check := range []string{"current", "old hash", "recreated owner", "different spec", "admission changed requests"} {
+				p := pod.DeepCopy()
+				p.OwnerReferences = []metav1.OwnerReference{tc.owner}
+				p.Labels[tc.label] = tc.value
+				workload := rightsizingWorkload{podSpec: template.DeepCopy()}
+				switch check {
+				case "old hash":
+					p.Labels[tc.label] = "previous"
+				case "recreated owner":
+					p.OwnerReferences[0].UID = "other"
+				case "different spec":
+					workload.podSpec.Containers[0].Command = []string{"other"}
+				case "admission changed requests":
+					p.Spec.Containers[0].Resources.Requests[corev1.ResourceCPU] = resource.MustParse("200m")
+				}
+				workload.observeSizingPodIdentity(context.Background(), cache, p)
+				if check == "current" && len(workload.podIdentities) == 1 {
+					sibling := p.DeepCopy()
+					sibling.Name = "another"
+					sibling.UID = "bbbbbbbb-1111-2222-3333-444444444444"
+					sibling.Spec.Containers[0].Image += "different"
+					workload.observeSizingPodIdentity(context.Background(), cache, sibling)
+					if !workload.podIdentityIncomplete {
+						t.Error("mixed admitted images accepted")
+					}
+				}
+				if got := len(workload.podIdentities) == 1; got != (check == "current") {
+					t.Errorf("%s: eligible %t", check, got)
+				}
+			}
+		})
+	}
+}
+
+func TestUIDHistoryDeadlineHasItsOwnReason(t *testing.T) {
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	result := currentPodRightsizingDetail(ctx, &fakeScanQuerier{}, currentSizingWorkload())
+	if result.SampleAvailable || !strings.Contains(result.Reason, "timed out") {
+		t.Fatalf("unexpected timeout response: %+v", result)
+	}
+	for _, r := range result.Rows {
+		if r.Decision.Status == rightsizing.DecisionActionable {
+			t.Fatalf("timeout produced a recommendation: %+v", r)
+		}
+	}
+	result = currentPodRightsizingDetail(context.Background(), &fakeScanQuerier{rangeFn: func(string) (*prom.QueryResult, error) { return nil, context.DeadlineExceeded }}, currentSizingWorkload())
+	if !strings.Contains(result.Reason, "timed out") || len(result.Warnings) != 3 || result.Warnings[0].Code != "cpu_query_timed_out" {
+		t.Fatalf("upstream timeout: %+v", result)
 	}
 }
