@@ -26,7 +26,8 @@ type DynamicResourceCache struct {
 type connectionDynamicCache struct {
 	mu       sync.Mutex
 	once     sync.Once
-	closed   bool
+	lifetime context.Context
+	cancel   context.CancelFunc
 	promoted atomic.Pointer[DynamicResourceCache]
 	pending  []func()
 }
@@ -41,7 +42,8 @@ func (conn *Connection) dynamicCacheState() *connectionDynamicCache {
 	if state := conn.dynamicCache.Load(); state != nil {
 		return state
 	}
-	state := &connectionDynamicCache{pending: slices.Clone(crdCompleteSubscribers)}
+	lifetime, cancel := context.WithCancel(context.Background())
+	state := &connectionDynamicCache{lifetime: lifetime, cancel: cancel, pending: slices.Clone(crdCompleteSubscribers)}
 	conn.dynamicCache.Store(state)
 	return state
 }
@@ -165,7 +167,7 @@ func (s *connectionDynamicCache) init(build func() (*DynamicResourceCache, error
 		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		if s.closed {
+		if s.lifetime.Err() != nil {
 			dc.Stop()
 			return
 		}
@@ -177,7 +179,7 @@ func (s *connectionDynamicCache) init(build func() (*DynamicResourceCache, error
 	})
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
+	if s.lifetime.Err() != nil {
 		return fmt.Errorf("cluster changed during dynamic cache initialization")
 	}
 	return initErr
@@ -213,7 +215,7 @@ func (conn *Connection) closeDynamicResourceCache() {
 	s := conn.dynamicCacheState()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.closed = true
+	s.cancel()
 	s.pending = nil
 	if dc := s.promoted.Swap(nil); dc != nil {
 		dc.Stop()
@@ -242,7 +244,7 @@ func OnCRDDiscoveryComplete(callback func()) {
 func (s *connectionDynamicCache) onCRDDiscoveryComplete(callback func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
+	if s.lifetime.Err() != nil {
 		return
 	}
 	if dc := s.promoted.Load(); dc != nil {
