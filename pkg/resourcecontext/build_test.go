@@ -2515,3 +2515,33 @@ func (d kindDecider) DecideRead(_ context.Context, _, kind, _ string) ownership.
 	}
 	return ownership.Allowed
 }
+
+// kagent writes a discovery error's URL, query token included, into a
+// RemoteMCPServer's condition message; the status summary MCP get_resource
+// and the REST AI context return carries it redacted. Another group's
+// message is left as written.
+func TestBuild_StatusSummaryRedactsKagentConditionURLs(t *testing.T) {
+	const message = `Failed to connect to MCP server: failed to connect MCP client: calling "initialize": sending "initialize": rejected by transport: Post "http://user:***@no-such-mcp.radar-kagent-spike.svc.cluster.local:9999/mcp?token=FAKEQUERY": dial tcp: lookup no-such-mcp.radar-kagent-spike.svc.cluster.local: no such host`
+	server := func(apiVersion string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]interface{}{
+			"apiVersion": apiVersion,
+			"kind":       "RemoteMCPServer",
+			"metadata":   map[string]interface{}{"name": "spike-literal-header", "namespace": "kagent"},
+			"status": map[string]interface{}{"conditions": []interface{}{
+				map[string]interface{}{"type": "Accepted", "status": "False", "reason": "DiscoveryFailed", "message": message},
+			}},
+		}}
+	}
+	rc := fixtureContext(context.Background(), server("api.kagent.dev/v1alpha3"), nil, Options{Tier: TierBasic, AccessChecker: allowAllChecker{}})
+	if rc.StatusSummary == nil || len(rc.StatusSummary.Conditions) != 1 {
+		t.Fatalf("StatusSummary: %+v", rc.StatusSummary)
+	}
+	got := rc.StatusSummary.Conditions[0].Message
+	if strings.Contains(got, "FAKEQUERY") || strings.Contains(got, "user:") || !strings.Contains(got, "no-such-mcp.radar-kagent-spike.svc.cluster.local:9999/mcp?[REDACTED]") {
+		t.Errorf("kagent message = %q", got)
+	}
+	other := fixtureContext(context.Background(), server("example.com/v1"), nil, Options{Tier: TierBasic, AccessChecker: allowAllChecker{}})
+	if got := other.StatusSummary.Conditions[0].Message; !strings.Contains(got, "user:***@") {
+		t.Errorf("another group's message changed: %q", got)
+	}
+}

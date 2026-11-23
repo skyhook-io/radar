@@ -19,6 +19,7 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/kagent"
 	"github.com/skyhook-io/radar/pkg/rollouts"
 )
 
@@ -903,5 +904,9 @@ func conditionStatus(obj *unstructured.Unstructured, typ string) (string, string
 	s, _ := c["status"].(string)
 	r, _ := c["reason"].(string)
 	m, _ := c["message"].(string)
+	// kagent quotes raw errors, URL and all, into its condition messages.
+	if kagent.IsGroup(obj.GroupVersionKind().Group) {
+		m = kagent.RedactURLsInText(m)
+	}
 	return s, strings.Trim(strings.Join([]string{r, m}, ": "), ": ")
 }
