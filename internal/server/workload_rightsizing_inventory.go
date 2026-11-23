@@ -32,7 +32,7 @@ type sizingInventory struct {
 	Items      []sizingCandidate `json:"items"`
 	Gaps       []readreason.Code `json:"gaps,omitempty"`
 	read       bool
-	listDenied bool
+	retryKinds []prometheus.RightsizingScanKind
 }
 
 func (s *Server) handleWorkloadRightsizingInventory(w http.ResponseWriter, r *http.Request) {
@@ -100,30 +100,40 @@ func (s *Server) sizingInventoryForRequest(r *http.Request, requested []string, 
 		}
 		return sizingInventory{Gaps: []readreason.Code{readreason.RadarNamespaceNotCollected}}
 	}
+	if installed := k8s.RBACNamespaces(); len(installed) > 0 {
+		return readSizingInventory(ctx, client, caller, installed)
+	}
+	inv := readSizingInventory(ctx, client, caller, []string{metav1.NamespaceAll})
+	if len(inv.retryKinds) == 0 || slices.Contains(inv.Gaps, readreason.ListTooLarge) {
+		return inv
+	}
+	if ctx.Err() != nil {
+		inv.addGap(readreason.ReadError)
+		return inv
+	}
+
+	// A caller can list a kind across namespaces even when Radar cannot
+	// enumerate Namespace objects. Only denied kinds need named reads.
+	namespaces, source := k8s.GetAccessibleNamespacesWithSource(ctx)
 	allowed, failed := s.getUserNamespacesWithStatus(r, nil)
 	if failed {
-		return sizingInventory{Gaps: []readreason.Code{readreason.ReadError}}
+		inv.addGap(readreason.ReadError)
 	}
-	if allowed != nil {
-		if len(allowed) == 0 {
-			return sizingInventory{Gaps: []readreason.Code{readreason.UserNoNamespaceAccess}}
-		}
-		slices.Sort(allowed)
-		return readSizingInventory(ctx, client, caller, allowed)
+	if allowed != nil && !failed {
+		namespaces = slices.Clone(allowed)
 	}
-	namespaces, source := k8s.GetAccessibleNamespacesWithSource(ctx)
-	if source == k8s.NamespaceListCluster || source == k8s.NamespaceListCache {
-		// Cluster-wide Pod access does not imply cluster-wide workload or
-		// revision access. Fall back to namespaced reads for mixed grants.
-		inv := readSizingInventory(ctx, client, caller, []string{metav1.NamespaceAll})
-		if !inv.listDenied || ctx.Err() != nil {
-			return inv
-		}
-	}
-	inv := readSizingInventory(ctx, client, caller, namespaces)
 	if !source.Complete() {
 		inv.addGap(readreason.RadarNamespaceNotCollected)
+		for _, item := range inv.Items {
+			namespaces = append(namespaces, item.Namespace)
+		}
 	}
+	slices.Sort(namespaces)
+	namespaces = slices.Compact(namespaces)
+	if len(namespaces) == 0 {
+		inv.addGap(readreason.UserForbidden)
+	}
+	inv.collect(ctx, client, caller, namespaces, inv.retryKinds)
 	return inv
 }
 
@@ -133,9 +143,12 @@ func (i *sizingInventory) addGap(code readreason.Code) {
 	}
 }
 
-func (i *sizingInventory) recordListError(err error) {
+func (i *sizingInventory) recordListError(ns string, kinds []prometheus.RightsizingScanKind, err error) {
 	if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
-		i.listDenied = true
+		if ns == metav1.NamespaceAll {
+			i.retryKinds = append(i.retryKinds, kinds...)
+			return
+		}
 		i.addGap(readreason.UserForbidden)
 	} else {
 		i.addGap(readreason.ReadError)
@@ -143,18 +156,29 @@ func (i *sizingInventory) recordListError(err error) {
 }
 
 func readSizingInventory(ctx context.Context, client dynamic.Interface, caller kubernetes.Interface, namespaces []string) sizingInventory {
-	const itemLimit = 2000
 	out := sizingInventory{Items: []sizingCandidate{}}
+	out.collect(ctx, client, caller, namespaces, prometheus.RightsizingScanKinds)
+	return out
+}
+
+func (out *sizingInventory) collect(ctx context.Context, client dynamic.Interface, caller kubernetes.Interface, namespaces []string, kinds []prometheus.RightsizingScanKind) {
+	const itemLimit = 2000
+	// A later page can be denied after earlier pages succeeded. A named
+	// retry of the same kind must not emit those candidates twice.
+	existing := make(map[sizingCandidate]struct{}, len(out.Items))
+	for _, item := range out.Items {
+		existing[item] = struct{}{}
+	}
 	for _, ns := range namespaces {
 		if ctx.Err() != nil {
 			out.addGap(readreason.ReadError)
 			break
 		}
 		if _, err := client.Resource(corev1.SchemeGroupVersion.WithResource("pods")).Namespace(ns).List(ctx, metav1.ListOptions{Limit: 1}); err != nil {
-			out.recordListError(err)
+			out.recordListError(ns, kinds, err)
 			continue
 		}
-		for _, wk := range prometheus.RightsizingScanKinds {
+		for _, wk := range kinds {
 			var required string
 			switch wk.Kind {
 			case "Deployment":
@@ -164,7 +188,7 @@ func readSizingInventory(ctx context.Context, client dynamic.Interface, caller k
 			}
 			if required != "" {
 				if _, err := client.Resource(appsv1.SchemeGroupVersion.WithResource(required)).Namespace(ns).List(ctx, metav1.ListOptions{Limit: 1}); err != nil {
-					out.recordListError(err)
+					out.recordListError(ns, []prometheus.RightsizingScanKind{wk}, err)
 					continue
 				}
 			}
@@ -175,7 +199,7 @@ func readSizingInventory(ctx context.Context, client dynamic.Interface, caller k
 			for {
 				page, err := res.Namespace(ns).List(ctx, metav1.ListOptions{Limit: 100, Continue: token})
 				if err != nil {
-					out.recordListError(err)
+					out.recordListError(ns, []prometheus.RightsizingScanKind{wk}, err)
 					break
 				}
 				out.read = true
@@ -199,11 +223,15 @@ func readSizingInventory(ctx context.Context, client dynamic.Interface, caller k
 							continue
 						}
 					}
+					item := sizingCandidate{Kind: wk.Kind, Namespace: objNS, Name: obj.GetName()}
+					if _, seen := existing[item]; seen {
+						continue
+					}
 					if len(out.Items) >= itemLimit {
 						out.addGap(readreason.ListTooLarge)
-						return out
+						return
 					}
-					out.Items = append(out.Items, sizingCandidate{Kind: wk.Kind, Namespace: objNS, Name: obj.GetName()})
+					out.Items = append(out.Items, item)
 				}
 				token = page.GetContinue()
 				if token == "" {
@@ -212,7 +240,6 @@ func readSizingInventory(ctx context.Context, client dynamic.Interface, caller k
 			}
 		}
 	}
-	return out
 }
 
 func sizingScaledToZero(kind string, obj *unstructured.Unstructured) bool {

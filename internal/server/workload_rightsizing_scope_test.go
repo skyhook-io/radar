@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/cloud"
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/rightsizing"
@@ -325,6 +326,61 @@ func TestSizingInventoryExplicitNamespaceRechecksAccess(t *testing.T) {
 	})
 	if got := read(); got.read || !slices.Contains(got.Gaps, readreason.ReadError) {
 		t.Fatalf("unavailable = %+v", got)
+	}
+}
+
+func TestSizingInventoryWithoutNamespaceDiscovery(t *testing.T) {
+	previous := k8s.SetTestClient(nil)
+	t.Cleanup(func() { k8s.SetTestClient(previous) })
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	s.permCache.Set("alice", nil, &auth.UserPermissions{AllowedNamespaces: []string{"seed"}})
+	r := requestWithUser("GET", "/api/agent/workload-rightsizing-inventory", &auth.User{Username: "alice"})
+	scheme := runtime.NewScheme()
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	client := dynamicfake.NewSimpleDynamicClient(scheme,
+		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "store", Namespace: "outside-seeds"}},
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "seed"}},
+	)
+	read := func() sizingInventory {
+		return s.sizingInventoryForRequest(r, nil, client, fake.NewSimpleClientset())
+	}
+	if got := read(); !got.read || len(got.Gaps) != 0 || len(got.Items) != 2 {
+		t.Fatalf("cluster-wide grants without namespace discovery = %+v", got)
+	}
+
+	client.ClearActions()
+	client.PrependReactor("list", "replicasets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetNamespace() == metav1.NamespaceAll {
+			return true, nil, apierrors.NewForbidden(a.GetResource().GroupResource(), "", nil)
+		}
+		return false, nil, nil
+	})
+	store := sizingCandidate{Kind: "StatefulSet", Namespace: "outside-seeds", Name: "store"}
+	api := sizingCandidate{Kind: "Deployment", Namespace: "seed", Name: "api"}
+	if got := read(); !slices.Contains(got.Items, store) || !slices.Contains(got.Items, api) || len(got.Items) != 2 ||
+		!slices.Equal(got.Gaps, []readreason.Code{readreason.RadarNamespaceNotCollected}) {
+		t.Fatalf("mixed grants and incomplete namespace discovery = %+v", got)
+	}
+	if slices.ContainsFunc(client.Actions(), func(a k8stesting.Action) bool {
+		return a.Matches("list", "statefulsets") && a.GetNamespace() != metav1.NamespaceAll
+	}) {
+		t.Fatal("named fallback repeated an authorized cluster-wide read")
+	}
+
+	installed := k8s.RBACNamespaces()
+	k8s.SetRBACNamespaces([]string{"seed"})
+	t.Cleanup(func() { k8s.SetRBACNamespaces(installed) })
+	client.ClearActions()
+	if got := read(); !slices.Equal(got.Items, []sizingCandidate{api}) || len(got.Gaps) != 0 {
+		t.Fatalf("namespace-scoped installation = %+v", got)
+	}
+	if slices.ContainsFunc(client.Actions(), func(a k8stesting.Action) bool { return a.GetNamespace() != "seed" }) {
+		t.Fatal("queried outside the installation's declared namespace access")
 	}
 }
 
