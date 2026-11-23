@@ -653,6 +653,27 @@ cloud:
 usageReporting:
   enabled: null
 
+# Checks > Vulnerabilities marks CVEs in CISA's Known Exploited
+# Vulnerabilities catalog (KEV) and can show FIRST's EPSS scores. Radar
+# downloads both public feeds itself, the first time someone opens the page,
+# then daily. Each feed takes an https URL (a mirror inside your network), a
+# file path, or "off"; empty keeps Radar's default public URL. Files over
+# 1 MiB (KEV is about 2 MB) don't fit a ConfigMap: use a mirror, or mount a
+# volume with feedVolume. See docs/integrations.md (Known exploited CVEs and
+# EPSS).
+vulnerabilities:
+  kevFeed: ""
+  epssFeed: ""
+  # false: Radar never downloads a feed; feeds set to a file path still load.
+  feedDownloads: true
+  # A volume source holding feed files, mounted read-only at
+  # /etc/radar/vulnerability-feeds. Example:
+  #   feedVolume:
+  #     persistentVolumeClaim:
+  #       claimName: vulnerability-feeds
+  #   kevFeed: /etc/radar/vulnerability-feeds/known_exploited_vulnerabilities.json
+  feedVolume: {}
+
 # MCP (Model Context Protocol) server for AI tools
 mcp:
   # Opt in to exec_pod; requires pods/exec permission (rbac.podExec for Radar

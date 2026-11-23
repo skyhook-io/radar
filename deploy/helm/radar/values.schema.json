@@ -6,19 +6,43 @@
   "additionalProperties": true,
   "properties": {
     "audit": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "additionalProperties": false,
-      "required": ["ignoredNamespaces", "disabledChecks"],
+      "required": [
+        "ignoredNamespaces",
+        "disabledChecks"
+      ],
       "properties": {
-        "ignoredNamespaces": { "type": "array", "items": { "type": "string", "minLength": 1 } },
-        "disabledChecks": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+        "ignoredNamespaces": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "disabledChecks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
       }
     },
     "helm": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "ociSources": { "type": "array", "items": { "type": "string", "pattern": "^oci://.+" } }
+        "ociSources": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^oci://.+"
+          }
+        }
       }
     },
     "replicaCount": {
@@ -30,9 +54,21 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "repository": { "type": "string" },
-        "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] },
-        "tag": { "type": "string", "description": "Overrides Chart.appVersion when set." }
+        "repository": {
+          "type": "string"
+        },
+        "pullPolicy": {
+          "type": "string",
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ]
+        },
+        "tag": {
+          "type": "string",
+          "description": "Overrides Chart.appVersion when set."
+        }
       }
     },
     "imagePullSecrets": {
@@ -40,116 +76,311 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "properties": { "name": { "type": "string" } },
-        "required": ["name"]
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ]
       }
     },
-    "nameOverride": { "type": "string" },
-    "fullnameOverride": { "type": "string" },
+    "nameOverride": {
+      "type": "string"
+    },
+    "fullnameOverride": {
+      "type": "string"
+    },
     "serviceAccount": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "create": { "type": "boolean" },
-        "annotations": { "type": "object", "additionalProperties": { "type": "string" } },
-        "name": { "type": "string" }
+        "create": {
+          "type": "boolean"
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "name": {
+          "type": "string"
+        }
       }
     },
     "rbac": {
       "type": "object",
       "additionalProperties": true,
       "properties": {
-        "create": { "type": "boolean" },
-        "additionalRules": { "type": "array", "items": { "type": "object" } },
-        "namespaces": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" }, "description": "Limit Radar's ServiceAccount and the Radar Cloud bindings to these namespaces. Leave unset for cluster-wide access." },
-        "helm": { "type": "boolean", "description": "Allow Helm write operations. Grants broad permissions." },
-        "secrets": { "type": "boolean", "description": "Allow reading Secret contents. Also granted by rbac.helm, by auth (auth.mode != none), and in cloud mode, where reads are re-checked per user." },
-        "viewAdmissionPolicies": { "type": "boolean", "description": "Allow reading native ValidatingAdmissionPolicy and ValidatingAdmissionPolicyBinding resources. Auto-enabled under auth or cloud mode." },
-        "podExec": { "type": "boolean", "description": "Allow pod exec (terminal feature)." },
-        "podLogs": { "type": "boolean" },
-        "portForward": { "type": "boolean" },
-        "selfUpgrade": { "type": "boolean", "description": "Allow Radar Cloud organization owners to trigger in-app upgrades." },
-        "traffic": { "type": "boolean", "description": "Read access to hubble-relay-client-certs for Hubble TLS." },
-        "metrics": { "type": "boolean", "description": "Read metrics.k8s.io for CPU/memory widgets." },
+        "create": {
+          "type": "boolean"
+        },
+        "additionalRules": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "namespaces": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$"
+          },
+          "description": "Limit Radar's ServiceAccount and the Radar Cloud bindings to these namespaces. Leave unset for cluster-wide access."
+        },
+        "helm": {
+          "type": "boolean",
+          "description": "Allow Helm write operations. Grants broad permissions."
+        },
+        "secrets": {
+          "type": "boolean",
+          "description": "Allow reading Secret contents. Also granted by rbac.helm, by auth (auth.mode != none), and in cloud mode, where reads are re-checked per user."
+        },
+        "viewAdmissionPolicies": {
+          "type": "boolean",
+          "description": "Allow reading native ValidatingAdmissionPolicy and ValidatingAdmissionPolicyBinding resources. Auto-enabled under auth or cloud mode."
+        },
+        "podExec": {
+          "type": "boolean",
+          "description": "Allow pod exec (terminal feature)."
+        },
+        "podLogs": {
+          "type": "boolean"
+        },
+        "portForward": {
+          "type": "boolean"
+        },
+        "selfUpgrade": {
+          "type": "boolean",
+          "description": "Allow Radar Cloud organization owners to trigger in-app upgrades."
+        },
+        "traffic": {
+          "type": "boolean",
+          "description": "Read access to hubble-relay-client-certs for Hubble TLS."
+        },
+        "metrics": {
+          "type": "boolean",
+          "description": "Read metrics.k8s.io for CPU/memory widgets."
+        },
         "crdGroups": {
           "type": "object",
-          "additionalProperties": { "type": "boolean" },
+          "additionalProperties": {
+            "type": "boolean"
+          },
           "properties": {
-            "all": { "type": "boolean", "description": "Grant get/list/watch on all API groups and resources, including core Secrets and credential-bearing CRDs (overrides individual flags and exclusions)." },
-            "antrea": { "type": "boolean" },
-            "apiRegistration": { "type": "boolean" },
-            "argo": { "type": "boolean" },
-            "awsNetworkPolicy": { "type": "boolean" },
-            "awx": { "type": "boolean" },
-            "calico": { "type": "boolean" },
-            "certManager": { "type": "boolean" },
-            "cloudnativePg": { "type": "boolean" },
-            "clusterApi": { "type": "boolean" },
-            "contour": { "type": "boolean" },
-            "crossplane": { "type": "boolean" },
-            "descheduler": { "type": "boolean" },
-            "envoyGateway": { "type": "boolean" },
-            "externalDns": { "type": "boolean" },
-            "externalSecrets": { "type": "boolean" },
-            "flagger": { "type": "boolean", "description": "Opt-in read collection for flagger.app Canaries and MetricTemplates (default false)." },
-            "systemUpgrade": { "type": "boolean", "description": "Opt-in read collection for upgrade.cattle.io Plans of system-upgrade-controller (default false); their env can hold values." },
-            "flux": { "type": "boolean" },
-            "fluxOperator": { "type": "boolean" },
-            "gatewayApi": { "type": "boolean" },
-            "gcpMonitoring": { "type": "boolean" },
-            "grafana": { "type": "boolean" },
-            "istio": { "type": "boolean" },
-            "karpenter": { "type": "boolean" },
-            "keda": { "type": "boolean" },
-            "knative": { "type": "boolean" },
-            "kubeshark": { "type": "boolean" },
-            "kured": { "type": "boolean" },
-            "kyverno": { "type": "boolean" },
-            "longhorn": { "type": "boolean" },
-            "mariadb": { "type": "boolean" },
-            "metallb": { "type": "boolean" },
-            "multus": { "type": "boolean" },
-            "nginx": { "type": "boolean" },
-            "openshift": { "type": "boolean" },
-            "opentelemetry": { "type": "boolean" },
-            "prometheus": { "type": "boolean" },
-            "reflector": { "type": "boolean" },
-            "reloader": { "type": "boolean" },
-            "sealedSecrets": { "type": "boolean" },
-            "secretsStoreCsi": { "type": "boolean" },
-            "strimzi": { "type": "boolean" },
-            "tekton": { "type": "boolean" },
-            "traefik": { "type": "boolean" },
-            "trivy": { "type": "boolean" },
-            "velero": { "type": "boolean" },
-            "volumeSnapshots": { "type": "boolean" }
+            "all": {
+              "type": "boolean",
+              "description": "Grant get/list/watch on all API groups and resources, including core Secrets and credential-bearing CRDs (overrides individual flags and exclusions)."
+            },
+            "antrea": {
+              "type": "boolean"
+            },
+            "apiRegistration": {
+              "type": "boolean"
+            },
+            "argo": {
+              "type": "boolean"
+            },
+            "awsNetworkPolicy": {
+              "type": "boolean"
+            },
+            "awx": {
+              "type": "boolean"
+            },
+            "calico": {
+              "type": "boolean"
+            },
+            "certManager": {
+              "type": "boolean"
+            },
+            "cloudnativePg": {
+              "type": "boolean"
+            },
+            "clusterApi": {
+              "type": "boolean"
+            },
+            "contour": {
+              "type": "boolean"
+            },
+            "crossplane": {
+              "type": "boolean"
+            },
+            "descheduler": {
+              "type": "boolean"
+            },
+            "envoyGateway": {
+              "type": "boolean"
+            },
+            "externalDns": {
+              "type": "boolean"
+            },
+            "externalSecrets": {
+              "type": "boolean"
+            },
+            "flagger": {
+              "type": "boolean",
+              "description": "Opt-in read collection for flagger.app Canaries and MetricTemplates (default false)."
+            },
+            "systemUpgrade": {
+              "type": "boolean",
+              "description": "Opt-in read collection for upgrade.cattle.io Plans of system-upgrade-controller (default false); their env can hold values."
+            },
+            "flux": {
+              "type": "boolean"
+            },
+            "fluxOperator": {
+              "type": "boolean"
+            },
+            "gatewayApi": {
+              "type": "boolean"
+            },
+            "gcpMonitoring": {
+              "type": "boolean"
+            },
+            "grafana": {
+              "type": "boolean"
+            },
+            "istio": {
+              "type": "boolean"
+            },
+            "karpenter": {
+              "type": "boolean"
+            },
+            "keda": {
+              "type": "boolean"
+            },
+            "knative": {
+              "type": "boolean"
+            },
+            "kubeshark": {
+              "type": "boolean"
+            },
+            "kured": {
+              "type": "boolean"
+            },
+            "kyverno": {
+              "type": "boolean"
+            },
+            "longhorn": {
+              "type": "boolean"
+            },
+            "mariadb": {
+              "type": "boolean"
+            },
+            "metallb": {
+              "type": "boolean"
+            },
+            "multus": {
+              "type": "boolean"
+            },
+            "nginx": {
+              "type": "boolean"
+            },
+            "openshift": {
+              "type": "boolean"
+            },
+            "opentelemetry": {
+              "type": "boolean"
+            },
+            "prometheus": {
+              "type": "boolean"
+            },
+            "reflector": {
+              "type": "boolean"
+            },
+            "reloader": {
+              "type": "boolean"
+            },
+            "sealedSecrets": {
+              "type": "boolean"
+            },
+            "secretsStoreCsi": {
+              "type": "boolean"
+            },
+            "strimzi": {
+              "type": "boolean"
+            },
+            "tekton": {
+              "type": "boolean"
+            },
+            "traefik": {
+              "type": "boolean"
+            },
+            "trivy": {
+              "type": "boolean"
+            },
+            "velero": {
+              "type": "boolean"
+            },
+            "volumeSnapshots": {
+              "type": "boolean"
+            }
           }
         },
         "additionalCrdGroups": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Custom/unlisted CRD API groups, e.g. [\"mycompany.io\"]."
         }
       }
     },
-    "disableExec": { "type": "boolean", "description": "Turn off pod exec through Radar for everyone on this cluster. Wins over rbac.podExec and mcp.execTools." },
-    "podAnnotations": { "type": "object", "additionalProperties": { "type": "string" } },
-    "podLabels": { "type": "object", "additionalProperties": { "type": "string" } },
-    "podSecurityContext": { "type": "object" },
-    "securityContext": { "type": "object" },
+    "disableExec": {
+      "type": "boolean",
+      "description": "Turn off pod exec through Radar for everyone on this cluster. Wins over rbac.podExec and mcp.execTools."
+    },
+    "podAnnotations": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "podLabels": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "podSecurityContext": {
+      "type": "object"
+    },
+    "securityContext": {
+      "type": "object"
+    },
     "service": {
       "type": "object",
       "additionalProperties": true,
       "properties": {
-        "annotations": { "type": "object", "additionalProperties": { "type": "string" } },
-        "type": { "type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
-        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+        "annotations": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "ClusterIP",
+            "NodePort",
+            "LoadBalancer"
+          ]
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        }
       }
     },
     "basePath": {
       "type": "string",
       "pattern": "^$|^/?[A-Za-z0-9._~-]*[A-Za-z0-9_~-][A-Za-z0-9._~-]*(/[A-Za-z0-9._~-]*[A-Za-z0-9_~-][A-Za-z0-9._~-]*)*/?$",
-      "description": "Optional URL path prefix served by Radar itself, e.g. /radar. Use when ingress forwards the subpath without stripping it. Path segments accept letters, digits, '-', '_', '.' and '~', and no segment may be '.' or '..' — matching the server's --base-path validation, so an invalid value fails at install time instead of crash-looping the pod."
+      "description": "Optional URL path prefix served by Radar itself, e.g. /radar. Use when ingress forwards the subpath without stripping it. Path segments accept letters, digits, '-', '_', '.' and '~', and no segment may be '.' or '..' \u2014 matching the server's --base-path validation, so an invalid value fails at install time instead of crash-looping the pod."
     },
     "allowedHosts": {
       "type": "array",
@@ -171,24 +402,44 @@
       "type": "object",
       "additionalProperties": true,
       "properties": {
-        "enabled": { "type": "boolean" },
-        "className": { "type": "string" },
-        "annotations": { "type": "object", "additionalProperties": { "type": "string" } },
+        "enabled": {
+          "type": "boolean"
+        },
+        "className": {
+          "type": "string"
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
         "hosts": {
           "type": "array",
           "items": {
             "type": "object",
             "additionalProperties": true,
             "properties": {
-              "host": { "type": "string" },
+              "host": {
+                "type": "string"
+              },
               "paths": {
                 "type": "array",
                 "items": {
                   "type": "object",
                   "additionalProperties": true,
                   "properties": {
-                    "path": { "type": "string" },
-                    "pathType": { "type": "string", "enum": ["Exact", "Prefix", "ImplementationSpecific"] }
+                    "path": {
+                      "type": "string"
+                    },
+                    "pathType": {
+                      "type": "string",
+                      "enum": [
+                        "Exact",
+                        "Prefix",
+                        "ImplementationSpecific"
+                      ]
+                    }
                   }
                 }
               }
@@ -201,8 +452,15 @@
             "type": "object",
             "additionalProperties": true,
             "properties": {
-              "secretName": { "type": "string" },
-              "hosts": { "type": "array", "items": { "type": "string" } }
+              "secretName": {
+                "type": "string"
+              },
+              "hosts": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
             }
           }
         }
@@ -212,38 +470,81 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enabled": { "type": "boolean" },
-        "apiVersion": { "type": "string", "minLength": 1 },
-        "annotations": { "type": "object", "additionalProperties": { "type": "string" } },
-        "labels": { "type": "object", "additionalProperties": { "type": "string" } },
+        "enabled": {
+          "type": "boolean"
+        },
+        "apiVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
         "parentRefs": {
           "type": "array",
           "items": {
             "type": "object",
             "additionalProperties": true,
-            "required": ["name"],
-            "properties": { "name": { "type": "string", "minLength": 1 } }
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
           }
         },
         "hostnames": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
-        "defaultTimeout": { "type": "string" },
+        "defaultTimeout": {
+          "type": "string"
+        },
         "rules": {
           "type": "array",
-          "items": { "type": "object", "additionalProperties": true }
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
         }
       }
     },
-    "resources": { "type": "object" },
+    "resources": {
+      "type": "object"
+    },
     "timeline": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "storage": { "type": "string", "enum": ["memory", "sqlite", "postgres"] },
-        "dbPath": { "type": "string" },
-        "historyLimit": { "type": "integer", "minimum": 1 },
+        "storage": {
+          "type": "string",
+          "enum": [
+            "memory",
+            "sqlite",
+            "postgres"
+          ]
+        },
+        "dbPath": {
+          "type": "string"
+        },
+        "historyLimit": {
+          "type": "integer",
+          "minimum": 1
+        },
         "retention": {
           "type": "string",
           "description": "Timeline retention as a Go duration (e.g. 168h). Applies to sqlite and postgres. \"0\" disables cleanup."
@@ -256,8 +557,14 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "existingSecret": { "type": "string", "description": "Name of an existing Secret holding the PostgreSQL DSN." },
-            "secretKey": { "type": "string", "description": "Key within existingSecret holding the DSN." }
+            "existingSecret": {
+              "type": "string",
+              "description": "Name of an existing Secret holding the PostgreSQL DSN."
+            },
+            "secretKey": {
+              "type": "string",
+              "description": "Key within existingSecret holding the DSN."
+            }
           }
         }
       }
@@ -266,22 +573,53 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "mode": { "type": "string", "enum": ["none", "proxy", "oidc"] },
-        "secret": { "type": "string" },
-        "existingSecret": { "type": "string" },
-        "existingSecretKey": { "type": "string" },
-        "cookieTTL": { "type": "string", "description": "Go duration string, e.g. \"4h\"." },
-        "kubernetesCredentials": { "type": "string", "enum": ["impersonate", "user-token"] },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "none",
+            "proxy",
+            "oidc"
+          ]
+        },
+        "secret": {
+          "type": "string"
+        },
+        "existingSecret": {
+          "type": "string"
+        },
+        "existingSecretKey": {
+          "type": "string"
+        },
+        "cookieTTL": {
+          "type": "string",
+          "description": "Go duration string, e.g. \"4h\"."
+        },
+        "kubernetesCredentials": {
+          "type": "string",
+          "enum": [
+            "impersonate",
+            "user-token"
+          ]
+        },
         "proxy": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "userHeader": { "type": "string" },
-            "groupsHeader": { "type": "string" },
-            "logoutURL": { "type": "string" },
+            "userHeader": {
+              "type": "string"
+            },
+            "groupsHeader": {
+              "type": "string"
+            },
+            "logoutURL": {
+              "type": "string"
+            },
             "logoutCookies": {
               "type": "array",
-              "items": { "type": "string", "pattern": "^[^,;=\"\\\\\\[\\]\\s]+$" },
+              "items": {
+                "type": "string",
+                "pattern": "^[^,;=\"\\\\\\[\\]\\s]+$"
+              },
               "description": "Names of the auth proxy's session cookies, e.g. _oauth2_proxy* (* matches any characters). Logout deletes every matching cookie the browser sends."
             }
           }
@@ -290,26 +628,68 @@
           "type": "object",
           "additionalProperties": true,
           "properties": {
-            "issuerURL": { "type": "string" },
-            "internalIssuerURL": { "type": "string" },
-            "authorizationURL": { "type": "string" },
-            "tokenURL": { "type": "string" },
-            "userInfoURL": { "type": "string" },
-            "jwksURL": { "type": "string" },
-            "clientID": { "type": "string" },
-            "clientSecret": { "type": "string" },
-            "existingSecret": { "type": "string" },
-            "clientSecretKey": { "type": "string" },
-            "redirectURL": { "type": "string" },
-            "usernameClaim": { "type": "string" },
-            "groupsClaim": { "type": "string" },
-            "postLogoutRedirectURL": { "type": "string" },
-            "usernamePrefix": { "type": "string" },
-            "groupsPrefix": { "type": "string" },
-            "caCert": { "type": "string" },
-            "insecureSkipVerify": { "type": "boolean" },
-            "backchannelLogout": { "type": "boolean", "description": "Single-replica only — revocations are in-memory." },
-            "enablePKCE": { "type": "boolean", "description": "Enable PKCE (S256) for the OIDC authorization-code flow (opt-in, default off)." }
+            "issuerURL": {
+              "type": "string"
+            },
+            "internalIssuerURL": {
+              "type": "string"
+            },
+            "authorizationURL": {
+              "type": "string"
+            },
+            "tokenURL": {
+              "type": "string"
+            },
+            "userInfoURL": {
+              "type": "string"
+            },
+            "jwksURL": {
+              "type": "string"
+            },
+            "clientID": {
+              "type": "string"
+            },
+            "clientSecret": {
+              "type": "string"
+            },
+            "existingSecret": {
+              "type": "string"
+            },
+            "clientSecretKey": {
+              "type": "string"
+            },
+            "redirectURL": {
+              "type": "string"
+            },
+            "usernameClaim": {
+              "type": "string"
+            },
+            "groupsClaim": {
+              "type": "string"
+            },
+            "postLogoutRedirectURL": {
+              "type": "string"
+            },
+            "usernamePrefix": {
+              "type": "string"
+            },
+            "groupsPrefix": {
+              "type": "string"
+            },
+            "caCert": {
+              "type": "string"
+            },
+            "insecureSkipVerify": {
+              "type": "boolean"
+            },
+            "backchannelLogout": {
+              "type": "boolean",
+              "description": "Single-replica only \u2014 revocations are in-memory."
+            },
+            "enablePKCE": {
+              "type": "boolean",
+              "description": "Enable PKCE (S256) for the OIDC authorization-code flow (opt-in, default off)."
+            }
           }
         }
       }
@@ -318,51 +698,95 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enabled": { "type": "boolean" },
+        "enabled": {
+          "type": "boolean"
+        },
         "url": {
           "type": "string",
           "pattern": "^(wss?://.*)?$",
           "description": "Must start with ws:// or wss:// when set."
         },
-        "clusterName": { "type": "string" },
-        "token": { "type": "string" },
-        "existingSecret": { "type": "string" },
-        "existingSecretKey": { "type": "string" },
+        "clusterName": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string"
+        },
+        "existingSecret": {
+          "type": "string"
+        },
+        "existingSecretKey": {
+          "type": "string"
+        },
         "defaultRbac": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "create": { "type": "boolean" },
-            "owner": { "type": "boolean" },
-            "member": { "type": "boolean" },
-            "viewer": { "type": "boolean" },
-            "ownerClusterRole": { "type": "string" },
-            "memberClusterRole": { "type": "string" },
-            "viewerClusterRole": { "type": "string" },
+            "create": {
+              "type": "boolean"
+            },
+            "owner": {
+              "type": "boolean"
+            },
+            "member": {
+              "type": "boolean"
+            },
+            "viewer": {
+              "type": "boolean"
+            },
+            "ownerClusterRole": {
+              "type": "string"
+            },
+            "memberClusterRole": {
+              "type": "string"
+            },
+            "viewerClusterRole": {
+              "type": "string"
+            },
             "clusterScopedRead": {
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "viewer": { "type": "boolean" },
-                "member": { "type": "boolean" },
-                "owner": { "type": "boolean" }
+                "viewer": {
+                  "type": "boolean"
+                },
+                "member": {
+                  "type": "boolean"
+                },
+                "owner": {
+                  "type": "boolean"
+                }
               }
             },
             "integrationRead": {
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "viewer": { "type": "boolean" },
-                "member": { "type": "boolean" },
-                "owner": { "type": "boolean" }
+                "viewer": {
+                  "type": "boolean"
+                },
+                "member": {
+                  "type": "boolean"
+                },
+                "owner": {
+                  "type": "boolean"
+                }
               }
             },
-            "nodeOps": { "type": "boolean" }
+            "nodeOps": {
+              "type": "boolean"
+            }
           }
         },
-        "systemRbac": { "type": "boolean" },
-        "aiRbac": { "type": "boolean" },
-        "insecureSkipVerify": { "type": "boolean" },
+        "systemRbac": {
+          "type": "boolean"
+        },
+        "aiRbac": {
+          "type": "boolean"
+        },
+        "insecureSkipVerify": {
+          "type": "boolean"
+        },
         "hubURL": {
           "type": "string",
           "pattern": "^(https?://.*)?$",
@@ -372,30 +796,71 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "key": { "type": "string" },
-            "existingSecret": { "type": "string" },
-            "existingSecretKey": { "type": "string" }
+            "key": {
+              "type": "string"
+            },
+            "existingSecret": {
+              "type": "string"
+            },
+            "existingSecretKey": {
+              "type": "string"
+            }
           }
         },
-        "clusterNamePrefix": { "type": "string" },
-        "clusterNameSuffix": { "type": "string" },
-        "caBundle": { "type": "string" }
+        "clusterNamePrefix": {
+          "type": "string"
+        },
+        "clusterNameSuffix": {
+          "type": "string"
+        },
+        "caBundle": {
+          "type": "string"
+        }
       }
     },
     "usageReporting": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enabled": { "type": ["boolean", "null"] }
+        "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "vulnerabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kevFeed": {
+          "type": "string"
+        },
+        "epssFeed": {
+          "type": "string"
+        },
+        "feedDownloads": {
+          "type": "boolean"
+        },
+        "feedVolume": {
+          "type": "object"
+        }
       }
     },
     "mcp": {
       "type": "object",
       "additionalProperties": true,
       "properties": {
-        "enabled": { "type": "boolean" },
-        "execTools": { "type": "boolean" },
-        "httpTools": { "type": "boolean" }
+        "enabled": {
+          "type": "boolean"
+        },
+        "execTools": {
+          "type": "boolean"
+        },
+        "httpTools": {
+          "type": "boolean"
+        }
       }
     },
     "cost": {
@@ -404,7 +869,12 @@
       "properties": {
         "source": {
           "type": "string",
-          "enum": ["", "auto", "prometheus", "kubecost"],
+          "enum": [
+            "",
+            "auto",
+            "prometheus",
+            "kubecost"
+          ],
           "description": "Cost source selection. Empty uses Auto; source controls remain editable only when source, kubecost.url, kubecost.clusterId, and kubecost.existingSecret are all empty."
         },
         "currency": {
@@ -442,36 +912,107 @@
       "type": "object",
       "additionalProperties": true,
       "properties": {
-        "prometheusUrl": { "type": "string" },
-        "prometheusSingleCluster": { "type": "boolean", "description": "Optional workload/PVC metrics scope override for a dedicated backend. Replaces automatic matching; does not scope rightsizing, node/HPA or legacy network/storage metrics. Leave false with empty prometheusClusterLabels for automatic matching." },
+        "prometheusUrl": {
+          "type": "string"
+        },
+        "prometheusSingleCluster": {
+          "type": "boolean",
+          "description": "Optional workload/PVC metrics scope override for a dedicated backend. Replaces automatic matching; does not scope rightsizing, node/HPA or legacy network/storage metrics. Leave false with empty prometheusClusterLabels for automatic matching."
+        },
         "prometheusClusterLabels": {
           "type": "object",
           "description": "Optional exact cluster label/value pairs for workload metrics, PVC usage and, when prometheusUrl is set, the Caretta/Beyla/Istio traffic map, combined with AND. Labels must exist on each affected metric source. Alternative to prometheusSingleCluster; does not scope rightsizing, node/HPA or legacy network/storage metrics.",
-          "propertyNames": {"pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$", "not": {"pattern": "^__"}},
-          "additionalProperties": {"type": "string", "minLength": 1}
+          "propertyNames": {
+            "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+            "not": {
+              "pattern": "^__"
+            }
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          }
         },
-        "beylaJobSelector": { "type": "string", "description": "Beyla Live Traffic matcher fragment. Workload charts use it only with an explicit scope override and accept one job equality or regex matcher; automatic workload matching discovers custom jobs without it." },
+        "beylaJobSelector": {
+          "type": "string",
+          "description": "Beyla Live Traffic matcher fragment. Workload charts use it only with an explicit scope override and accept one job equality or regex matcher; automatic workload matching discovers custom jobs without it."
+        },
         "prometheusHeaders": {
           "type": "object",
-          "additionalProperties": { "type": "string" }
+          "additionalProperties": {
+            "type": "string"
+          }
         },
         "prometheusHeadersFromEnv": {
           "type": "object",
-          "additionalProperties": { "type": "string" }
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       },
       "allOf": [
         {
-          "if": {"required": ["prometheusSingleCluster"], "properties": {"prometheusSingleCluster": {"const": true}}},
-          "then": {"properties": {"prometheusClusterLabels": {"maxProperties": 0}}}
+          "if": {
+            "required": [
+              "prometheusSingleCluster"
+            ],
+            "properties": {
+              "prometheusSingleCluster": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "prometheusClusterLabels": {
+                "maxProperties": 0
+              }
+            }
+          }
         },
         {
-          "if": { "properties": { "prometheusHeaders": { "minProperties": 1 } }, "required": ["prometheusHeaders"] },
-          "then": { "properties": { "prometheusUrl": { "pattern": "\\S" } }, "required": ["prometheusUrl"] }
+          "if": {
+            "properties": {
+              "prometheusHeaders": {
+                "minProperties": 1
+              }
+            },
+            "required": [
+              "prometheusHeaders"
+            ]
+          },
+          "then": {
+            "properties": {
+              "prometheusUrl": {
+                "pattern": "\\S"
+              }
+            },
+            "required": [
+              "prometheusUrl"
+            ]
+          }
         },
         {
-          "if": { "properties": { "prometheusHeadersFromEnv": { "minProperties": 1 } }, "required": ["prometheusHeadersFromEnv"] },
-          "then": { "properties": { "prometheusUrl": { "pattern": "\\S" } }, "required": ["prometheusUrl"] }
+          "if": {
+            "properties": {
+              "prometheusHeadersFromEnv": {
+                "minProperties": 1
+              }
+            },
+            "required": [
+              "prometheusHeadersFromEnv"
+            ]
+          },
+          "then": {
+            "properties": {
+              "prometheusUrl": {
+                "pattern": "\\S"
+              }
+            },
+            "required": [
+              "prometheusUrl"
+            ]
+          }
         }
       ]
     },
@@ -479,33 +1020,73 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "token": { "type": "string", "description": "Inline Argo CD API token (prefer existingSecret in production)." },
-        "existingSecret": { "type": "string", "description": "Name of a Secret holding the Argo CD token." },
-        "existingSecretKey": { "type": "string", "description": "Key within existingSecret holding the token." },
-        "url": { "type": "string", "description": "Explicit argocd-server URL; blank auto-discovers in-cluster." },
-        "insecureTls": { "type": "boolean", "description": "Skip TLS verification for a self-signed argocd-server." }
+        "token": {
+          "type": "string",
+          "description": "Inline Argo CD API token (prefer existingSecret in production)."
+        },
+        "existingSecret": {
+          "type": "string",
+          "description": "Name of a Secret holding the Argo CD token."
+        },
+        "existingSecretKey": {
+          "type": "string",
+          "description": "Key within existingSecret holding the token."
+        },
+        "url": {
+          "type": "string",
+          "description": "Explicit argocd-server URL; blank auto-discovers in-cluster."
+        },
+        "insecureTls": {
+          "type": "boolean",
+          "description": "Skip TLS verification for a self-signed argocd-server."
+        }
       }
     },
     "persistence": {
       "type": "object",
       "additionalProperties": true,
       "properties": {
-        "enabled": { "type": "boolean" },
-        "storageClassName": { "type": "string" },
+        "enabled": {
+          "type": "boolean"
+        },
+        "storageClassName": {
+          "type": "string"
+        },
         "accessMode": {
           "type": "string",
-          "enum": ["ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany", "ReadWriteOncePod"]
+          "enum": [
+            "ReadWriteOnce",
+            "ReadOnlyMany",
+            "ReadWriteMany",
+            "ReadWriteOncePod"
+          ]
         },
-        "size": { "type": "string" }
+        "size": {
+          "type": "string"
+        }
       }
     },
-    "nodeSelector": { "type": "object", "additionalProperties": { "type": "string" } },
-    "tolerations": { "type": "array", "items": { "type": "object" } },
-    "affinity": { "type": "object" },
+    "nodeSelector": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "tolerations": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "affinity": {
+      "type": "object"
+    },
     "extraArgs": {
       "type": "array",
       "description": "Additional command-line flags appended to the container args, after the flags the chart derives from other values. A repeated scalar flag wins; a repeatable flag is appended, so do not duplicate a --prometheus-cluster-label key here. Each entry is rendered through tpl.",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
     },
     "env": {
       "type": "array",
@@ -513,34 +1094,52 @@
         "type": "object",
         "additionalProperties": true,
         "properties": {
-          "name": { "type": "string" },
-          "value": { "type": "string" },
-          "valueFrom": { "type": "object" }
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "valueFrom": {
+            "type": "object"
+          }
         },
-        "required": ["name"]
+        "required": [
+          "name"
+        ]
       }
     },
     "initContainers": {
       "type": "array",
       "description": "Init containers to run before the main container.",
-      "items": { "type": "object" }
+      "items": {
+        "type": "object"
+      }
     },
     "extraVolumes": {
       "type": "array",
       "description": "Additional volumes to add to the pod.",
-      "items": { "type": "object" }
+      "items": {
+        "type": "object"
+      }
     },
     "extraVolumeMounts": {
       "type": "array",
       "description": "Additional volume mounts for the main container.",
-      "items": { "type": "object" }
+      "items": {
+        "type": "object"
+      }
     },
     "probes": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "liveness": { "$ref": "#/$defs/probe" },
-        "readiness": { "$ref": "#/$defs/probe" }
+        "liveness": {
+          "$ref": "#/$defs/probe"
+        },
+        "readiness": {
+          "$ref": "#/$defs/probe"
+        }
       }
     }
   },
@@ -549,11 +1148,25 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enabled": { "type": "boolean" },
-        "initialDelaySeconds": { "type": "integer", "minimum": 0 },
-        "periodSeconds": { "type": "integer", "minimum": 1 },
-        "timeoutSeconds": { "type": "integer", "minimum": 1 },
-        "failureThreshold": { "type": "integer", "minimum": 1 }
+        "enabled": {
+          "type": "boolean"
+        },
+        "initialDelaySeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "periodSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "failureThreshold": {
+          "type": "integer",
+          "minimum": 1
+        }
       }
     }
   }

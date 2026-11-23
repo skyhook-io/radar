@@ -223,6 +223,7 @@ export interface FeatureCapabilities {
   vulnerabilitiesExport?: boolean // GET /api/vulnerabilities/export
   runtimeAdvisoryChecks?: boolean
   runtimeAdvisoryProgress?: boolean
+  vulnerabilityFeedRefresh?: boolean
   sealedSecretsController?: boolean // GET /api/sealedsecrets/controller
 }
 

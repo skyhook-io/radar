@@ -3,6 +3,7 @@ package vulnerabilities
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"math"
@@ -14,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/pkg/resourceapi"
+	"github.com/skyhook-io/radar/pkg/vulnintel"
 )
 
 // report is one scan report reduced to what the rollup reads. Findings are
@@ -341,6 +343,54 @@ type rollup struct {
 	// namespace.
 	exposureGaps *Exposure
 	unknownIn    map[string]bool
+	// intel is the exploit-intelligence feeds the rows carry; nil carries
+	// none.
+	intel *vulnintel.Snapshot
+}
+
+// ErrKEVUnavailable: the Known exploited filter was asked for without the
+// KEV catalog, which would read as "no known exploited CVEs".
+var ErrKEVUnavailable = errors.New("KEV data unavailable: Radar couldn't load CISA's Known Exploited Vulnerabilities catalog, so it can't tell which CVEs are known exploited")
+
+// kev is a CVE's KEV entry, nil when it has none or there is no catalog.
+func (j *rollup) kev(id string) *vulnintel.KEV {
+	if j.intel == nil || j.intel.KEV == nil {
+		return nil
+	}
+	if k, ok := j.intel.KEV.Lookup(id); ok {
+		return &k
+	}
+	return nil
+}
+
+func (j *rollup) epss(id string) *vulnintel.EPSS {
+	if j.intel == nil || j.intel.EPSS == nil {
+		return nil
+	}
+	if e, ok := j.intel.EPSS.Lookup(id); ok {
+		return &e
+	}
+	return nil
+}
+
+func (j *rollup) inKEV(id string) bool { return j.kev(id) != nil }
+
+// kevCVEs counts the distinct IDs among findings that KEV lists.
+func (j *rollup) kevCVEs(findings []Finding, seen map[string]bool) int {
+	if j.intel == nil || j.intel.KEV == nil {
+		return 0
+	}
+	if seen == nil {
+		seen = map[string]bool{}
+	}
+	n := 0
+	for _, f := range findings {
+		if !seen[f.ID] && j.inKEV(f.ID) {
+			seen[f.ID] = true
+			n++
+		}
+	}
+	return n
 }
 
 // join matches reports to what runs. A report counts when its scanned object
@@ -548,6 +598,16 @@ func build(ctx context.Context, items []*unstructured.Unstructured, targets []ta
 // sorts above those with none (see exposureTier). Nil reads as every route
 // read.
 func buildWithExposure(ctx context.Context, items []*unstructured.Unstructured, targets []target, view View, f Filter, export bool, exposure *Exposure) (Response, error) {
+	return buildWithIntel(ctx, items, targets, view, f, export, exposure, nil)
+}
+
+// buildWithIntel is buildWithExposure whose rows carry KEV and EPSS from
+// intel. A Known exploited filter without the KEV catalog is
+// ErrKEVUnavailable.
+func buildWithIntel(ctx context.Context, items []*unstructured.Unstructured, targets []target, view View, f Filter, export bool, exposure *Exposure, intel *vulnintel.Snapshot) (Response, error) {
+	if f.KEVOnly && (intel == nil || intel.KEV == nil) {
+		return Response{}, ErrKEVUnavailable
+	}
 	var first func(WorkloadRef) bool
 	if f.Workload != nil {
 		first = newMatcher(f).wanted
@@ -562,6 +622,7 @@ func buildWithExposure(ctx context.Context, items []*unstructured.Unstructured, 
 	}
 	j.refsLeft, j.budgeted = maxExportRefs, export
 	j.exposureGaps, j.unknownIn = exposure, map[string]bool{}
+	j.intel = intel
 	resp := Response{Source: SourceTrivyOperator, View: view, Summary: j.summary(), Exposure: &Exposure{}}
 	extras := &exportExtras{}
 	resp.WorkloadRuns = f.Workload != nil && slices.ContainsFunc(targets, func(t target) bool { return newMatcher(f).wanted(t.workload) })
@@ -630,6 +691,7 @@ func capRows[T any](rows []T, n int) ([]T, int) {
 func (j *rollup) summary() Summary {
 	var s Summary
 	fixableCH := map[string]bool{}
+	kevSeen := map[string]bool{}
 	affected := map[WorkloadRef]bool{}
 	running := map[WorkloadRef]bool{}
 	for _, t := range j.targets {
@@ -649,6 +711,7 @@ func (j *rollup) summary() Summary {
 		if r.osEOL {
 			s.ImagesOSEndOfLife++
 		}
+		s.KEVCVEs += j.kevCVEs(r.findings, kevSeen)
 		for _, f := range r.findings {
 			if (f.Severity == SeverityCritical || f.Severity == SeverityHigh) && f.FixedVersion != "" {
 				fixableCH[f.ID] = true
@@ -685,6 +748,8 @@ type matcher struct {
 	// exposed reports whether a workload has a route from outside the
 	// cluster; nil reads as none.
 	exposed func(WorkloadRef) bool
+	// kev reports whether a CVE is in KEV; nil reads as none.
+	kev func(id string) bool
 }
 
 func newMatcher(f Filter) matcher {
@@ -698,7 +763,7 @@ func newMatcher(f Filter) matcher {
 	return m
 }
 
-func (m matcher) narrowsFindings() bool { return m.severity != nil || m.f.FixableOnly }
+func (m matcher) narrowsFindings() bool { return m.severity != nil || m.f.FixableOnly || m.f.KEVOnly }
 
 func (m matcher) rowMatches(image string, workloads []WorkloadRef) bool {
 	if m.query == "" || strings.Contains(strings.ToLower(image), m.query) {
@@ -717,6 +782,9 @@ func (m matcher) findingMatches(f Finding, rowMatched bool) bool {
 		return false
 	}
 	if m.f.FixableOnly && f.FixedVersion == "" {
+		return false
+	}
+	if m.f.KEVOnly && (m.kev == nil || !m.kev(f.ID)) {
 		return false
 	}
 	return rowMatched || strings.Contains(strings.ToLower(f.ID), m.query) || strings.Contains(strings.ToLower(f.Package), m.query)
@@ -805,8 +873,9 @@ func (j *rollup) exposureUnknown(workloads []WorkloadRef) bool {
 // exposureTier is how a row ranks by exposure, highest first: 2 when one of
 // its workloads has a route from outside the cluster, 1 when none does but
 // one's exposure is unknown (ExposureUnknown), 0 otherwise. Every view sorts
-// most severe first and by this tier within each severity, then by exposed
-// workloads and workloads: among Criticals, the exposed ones lead, then
+// most severe first; within each severity rows with a CVE in CISA's KEV
+// catalog lead, then by this tier, then by exposed workloads and workloads:
+// among Criticals, known exploited ones lead, then the exposed ones, then
 // those Radar couldn't check, then those it found no route to.
 func exposureTier(exposed, unknown bool) int {
 	switch {
@@ -822,6 +891,7 @@ func exposureTier(exposed, unknown bool) int {
 func (j *rollup) match(f Filter) matcher {
 	m := newMatcher(f)
 	m.exposed = j.exposed
+	m.kev = j.inKEV
 	return m
 }
 
@@ -874,6 +944,8 @@ func (j *rollup) imageRows(f Filter) (rows []Image, clean []CleanImage) {
 	m := j.match(f)
 	rows = []Image{}
 	clean = []CleanImage{}
+	// kevKept is whether a row's kept findings include a KEV CVE.
+	kevKept := map[string]bool{}
 	for _, agg := range j.sortedImages() {
 		r := agg.report
 		workloads := sortedWorkloads(agg.workloads)
@@ -921,6 +993,12 @@ func (j *rollup) imageRows(f Filter) (rows []Image, clean []CleanImage) {
 		if row.Findings == nil {
 			row.Findings = []Finding{}
 		}
+		// matching holds copies, so this doesn't reach the parsed reports.
+		for i := range row.Findings {
+			row.Findings[i].KEV, row.Findings[i].EPSS = j.kev(row.Findings[i].ID), j.epss(row.Findings[i].ID)
+		}
+		row.KEVCVEs = j.kevCVEs(r.findings, nil)
+		kevKept[row.ID] = slices.ContainsFunc(matching, func(fd Finding) bool { return j.inKEV(fd.ID) })
 		if !j.charge(len(row.Workloads)) {
 			return rows, clean
 		}
@@ -931,12 +1009,13 @@ func (j *rollup) imageRows(f Filter) (rows []Image, clean []CleanImage) {
 		row.ExposureUnknown = row.ExposedTotal == 0 && j.exposureUnknown(workloads)
 		rows = append(rows, row)
 	}
-	// Most severe first (of what the filters keep), exposed first within
-	// each severity (see exposureTier), then most exposed workloads, then
-	// most workloads; the counts break ties.
+	// Most severe first (of what the filters keep); within each severity
+	// those with a KEV CVE, then exposed first (see exposureTier), then most
+	// exposed workloads, then most workloads; the counts break ties.
 	slices.SortStableFunc(rows, func(a, b Image) int {
 		return cmp.Or(
 			cmp.Compare(worstRank(b.Findings), worstRank(a.Findings)),
+			compareBool(kevKept[b.ID], kevKept[a.ID]),
 			cmp.Compare(exposureTier(b.ExposedTotal > 0, b.ExposureUnknown), exposureTier(a.ExposedTotal > 0, a.ExposureUnknown)),
 			cmp.Compare(b.ExposedTotal, a.ExposedTotal),
 			cmp.Compare(b.WorkloadsTotal, a.WorkloadsTotal),
@@ -1094,7 +1173,7 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 			}
 			c := byID[fd.ID]
 			if c == nil {
-				c = &cveAgg{row: CVE{ID: fd.ID, Severity: fd.Severity}, packages: map[string]bool{}, images: map[string]bool{}, at: map[string]int{}}
+				c = &cveAgg{row: CVE{ID: fd.ID, Severity: fd.Severity, KEV: j.kev(fd.ID), EPSS: j.epss(fd.ID)}, packages: map[string]bool{}, images: map[string]bool{}, at: map[string]int{}}
 				byID[fd.ID] = c
 			}
 			if severityRank(fd.Severity) > severityRank(c.row.Severity) {
@@ -1152,11 +1231,12 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 		c.row.Affected = c.row.Affected[:min(len(c.row.Affected), j.lim.affectedPerCVE)]
 		rows = append(rows, c.row)
 	}
-	// Most severe first, exposed first within each severity (see
-	// exposureTier), then most exposed workloads, then most workloads.
+	// Most severe first; within each severity KEV CVEs, then exposed first
+	// (see exposureTier), then most exposed workloads, then most workloads.
 	slices.SortFunc(rows, func(a, b CVE) int {
 		return cmp.Or(
 			cmp.Compare(severityRank(b.Severity), severityRank(a.Severity)),
+			compareBool(b.KEV != nil, a.KEV != nil),
 			cmp.Compare(exposureTier(b.ExposedTotal > 0, b.ExposureUnknown), exposureTier(a.ExposedTotal > 0, a.ExposureUnknown)),
 			cmp.Compare(b.ExposedTotal, a.ExposedTotal),
 			cmp.Compare(b.Workloads, a.Workloads),
@@ -1228,6 +1308,7 @@ func (j *rollup) workloads(f Filter) (rows, clean, unscanned []Workload) {
 	rows = []Workload{}
 	clean = []Workload{}
 	worst := map[WorkloadRef]int{}
+	kevKept := map[WorkloadRef]bool{}
 	for _, ref := range order {
 		a := byRef[ref]
 		if !m.workloadKept([]WorkloadRef{ref}) {
@@ -1283,7 +1364,12 @@ func (j *rollup) workloads(f Filter) (rows, clean, unscanned []Workload) {
 			}
 			continue
 		}
-		// The worst finding the filters keep, from each image's worst first.
+		kevSeen := map[string]bool{}
+		for id := range a.images {
+			a.row.KEVCVEs += j.kevCVEs(j.images[id].report.findings, kevSeen)
+		}
+		// The worst finding the filters keep, from each image's worst first,
+		// and whether a kept finding is in KEV.
 		worst[ref] = -1
 		for id := range a.images {
 			for _, fd := range j.images[id].report.findings {
@@ -1292,11 +1378,15 @@ func (j *rollup) workloads(f Filter) (rows, clean, unscanned []Workload) {
 					break
 				}
 			}
+			if !kevKept[ref] && a.row.KEVCVEs > 0 {
+				kevKept[ref] = slices.ContainsFunc(j.images[id].report.findings, func(fd Finding) bool { return j.inKEV(fd.ID) && m.findingMatches(fd, rowMatched) })
+			}
 		}
 		rows = append(rows, a.row)
 	}
-	// Most severe first, exposed first within each severity (see
-	// exposureTier); the counts break ties. A workload with no finding read
+	// Most severe first; within each severity those with a KEV CVE, then
+	// exposed first (see exposureTier); the counts break ties. A workload
+	// with no finding read
 	// ranks -1, below Low: an exposed one that isn't scanned yet sorts after
 	// every workload with findings, first among those without.
 	rank := func(w Workload) int {
@@ -1305,6 +1395,7 @@ func (j *rollup) workloads(f Filter) (rows, clean, unscanned []Workload) {
 	slices.SortStableFunc(rows, func(a, b Workload) int {
 		return cmp.Or(
 			cmp.Compare(rank(b), rank(a)),
+			compareBool(kevKept[WorkloadRef{Kind: b.Kind, Group: b.Group, Namespace: b.Namespace, Name: b.Name}], kevKept[WorkloadRef{Kind: a.Kind, Group: a.Group, Namespace: a.Namespace, Name: a.Name}]),
 			cmp.Compare(exposureTier(len(b.Routes) > 0, b.ExposureUnknown), exposureTier(len(a.Routes) > 0, a.ExposureUnknown)),
 			compareCounts(b.Counts, a.Counts), cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name),
 		)

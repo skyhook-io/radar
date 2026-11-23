@@ -26,17 +26,19 @@ type Config struct {
 	NoBrowser                 bool     `json:"noBrowser,omitempty"`
 	Browser                   string   `json:"browser,omitempty"`
 	NoVersionCheck            bool     `json:"noVersionCheck,omitempty"`
-	DisableAutoPortForward    bool     `json:"disableAutoPortForward,omitempty"`
-	TimelineStorage           string   `json:"timelineStorage,omitempty"`
-	TimelineDBPath            string   `json:"timelineDbPath,omitempty"`
-	TimelineRetention         string   `json:"timelineRetention,omitempty"` // Go duration (e.g. "168h" for 7d); "0" disables age cleanup
-	TimelineMaxSize           string   `json:"timelineMaxSize,omitempty"`   // Byte size (e.g. "800Mi", "8Gi"); "0" disables
-	HistoryLimit              int      `json:"historyLimit,omitempty"`
-	PrometheusURL             string   `json:"prometheusUrl,omitempty"`
-	OpenCostCurrency          string   `json:"opencostCurrency,omitempty"`
-	CostSource                string   `json:"costSource,omitempty"`
-	KubecostURL               string   `json:"kubecostUrl,omitempty"`
-	KubecostAPIKey            string   `json:"kubecostApiKey,omitempty"`
+	// NoVulnerabilityFeedDownloads: never download the KEV and EPSS feeds.
+	NoVulnerabilityFeedDownloads bool   `json:"noVulnerabilityFeedDownloads,omitempty"`
+	DisableAutoPortForward       bool   `json:"disableAutoPortForward,omitempty"`
+	TimelineStorage              string `json:"timelineStorage,omitempty"`
+	TimelineDBPath               string `json:"timelineDbPath,omitempty"`
+	TimelineRetention            string `json:"timelineRetention,omitempty"` // Go duration (e.g. "168h" for 7d); "0" disables age cleanup
+	TimelineMaxSize              string `json:"timelineMaxSize,omitempty"`   // Byte size (e.g. "800Mi", "8Gi"); "0" disables
+	HistoryLimit                 int    `json:"historyLimit,omitempty"`
+	PrometheusURL                string `json:"prometheusUrl,omitempty"`
+	OpenCostCurrency             string `json:"opencostCurrency,omitempty"`
+	CostSource                   string `json:"costSource,omitempty"`
+	KubecostURL                  string `json:"kubecostUrl,omitempty"`
+	KubecostAPIKey               string `json:"kubecostApiKey,omitempty"`
 	// KubecostAPIKeyContext binds a credential used with local auto-discovery to
 	// the kubeconfig context where it was configured. Explicit-URL credentials
 	// remain portable because their origin is stable across context switches.

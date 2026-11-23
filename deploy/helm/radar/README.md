@@ -456,6 +456,10 @@ trend charts remain unavailable for Kubecost.
 | `mcp.execTools` | Opt in to `exec_pod` (`--mcp-exec-tools`); requires pods/exec. With auth off, every reachable client shares Radar’s ServiceAccount permissions. Ignored with `--disable-exec` or `--mcp-read-only` | `false` |
 | `mcp.httpTools` | Opt in to in-cluster `curl_service` (`--mcp-http-tools`); requires get services/proxy. With auth off, every reachable client shares Radar’s ServiceAccount permissions. Ignored with disabled or read-only MCP; independent of exec | `false` |
 | `usageReporting.enabled` | Anonymous daily usage stats: views, actions and MCP tools used, plus this cluster's version, platform, node-count range and known integrations. Off unless `true`; Radar never asks in a cluster ([what is sent](https://radarhq.io/docs/configuration/usage-stats)) | unset |
+| `vulnerabilities.kevFeed` | Where Checks > Vulnerabilities reads CISA's Known Exploited Vulnerabilities catalog: an https URL (a mirror inside your network), a file path, or `off`. Empty keeps the public CISA URL ([details](https://github.com/skyhook-io/radar/blob/main/docs/integrations.md#known-exploited-cves-and-epss)) | `""` |
+| `vulnerabilities.epssFeed` | The same for FIRST's EPSS scores | `""` |
+| `vulnerabilities.feedDownloads` | `false`: Radar never downloads either feed; feeds set to a file path still load | `true` |
+| `vulnerabilities.feedVolume` | A volume source (e.g. `persistentVolumeClaim`) holding feed files, mounted read-only at `/etc/radar/vulnerability-feeds`. KEV is about 2 MB, over a ConfigMap's 1 MiB | `{}` |
 | `resources.requests.cpu` | CPU request | `200m` |
 | `resources.requests.memory` | Memory request | `256Mi` |
 | `resources.limits.cpu` | CPU limit | `2` |

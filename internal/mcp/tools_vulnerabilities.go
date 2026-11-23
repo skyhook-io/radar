@@ -21,6 +21,7 @@ type listVulnerabilitiesInput struct {
 	Severity  string `json:"severity,omitempty" jsonschema:"comma-separated: critical, high, medium, low, unknown"`
 	Fixable   bool   `json:"fixable,omitempty" jsonschema:"keep only findings with a fixed version"`
 	Exposed   bool   `json:"exposed,omitempty" jsonschema:"keep only rows with an exposed workload"`
+	KEV       bool   `json:"kev,omitempty" jsonschema:"keep only CISA Known Exploited CVEs"`
 	Query     string `json:"query,omitempty" jsonschema:"image, CVE ID, package or workload substring"`
 	Workload  string `json:"workload,omitempty" jsonschema:"Kind/namespace/name, e.g. Deployment/shop/checkout"`
 	Limit     int    `json:"limit,omitempty" jsonschema:"max rows (default 10, max 100)"`
@@ -46,7 +47,7 @@ func handleListVulnerabilities(ctx context.Context, _ *mcp.CallToolRequest, inpu
 	if err != nil {
 		return nil, nil, err
 	}
-	filter := vulnerabilities.Filter{Severities: severities, FixableOnly: input.Fixable, ExposedOnly: input.Exposed, Query: input.Query}
+	filter := vulnerabilities.Filter{Severities: severities, FixableOnly: input.Fixable, ExposedOnly: input.Exposed, KEVOnly: input.KEV, Query: input.Query}
 	if input.Workload != "" {
 		parts := strings.Split(input.Workload, "/")
 		if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
@@ -94,12 +95,15 @@ func handleListVulnerabilities(ctx context.Context, _ *mcp.CallToolRequest, inpu
 		CanListPods:          canListPods,
 		View:                 view,
 		Filter:               filter,
+		Intel:                vulnerabilities.IntelSnapshot(),
 	})
 	switch {
 	case errors.Is(err, vulnerabilities.ErrNotInstalled):
 		return nil, nil, readErrorf(readreason.KindUnknown, "%s", err.Error())
 	case errors.Is(err, vulnerabilities.ErrNotReady):
 		return nil, nil, readErrorf(readreason.KindSyncPending, "%s", err.Error())
+	case errors.Is(err, vulnerabilities.ErrKEVUnavailable):
+		return nil, nil, err
 	case errors.Is(err, vulnerabilities.ErrConnectionChanged):
 		return nil, nil, readErrorf(readreason.ConnectionChanged, "%s", err.Error())
 	case err != nil:

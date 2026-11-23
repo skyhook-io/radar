@@ -405,13 +405,13 @@ func TestFindingsBudgetReadsExposedImagesFirst(t *testing.T) {
 	}
 }
 
-// The CSV names exposed workloads with their routes in its last column, says
+// The CSV names exposed workloads with their routes in a column, says
 // "unknown" where Radar couldn't read routes, and under the Exposed filter
 // writes those exposure gaps as rows.
 func TestExportExposedWorkloads(t *testing.T) {
 	items, targets := exposureFixture()
 	resp := mustExport(t, items, targets, ViewFix, Filter{})
-	if cols := ExportColumns[ViewFix]; cols[len(cols)-1] != "exposed_workloads" {
+	if cols := ExportColumns[ViewFix]; !slices.Contains(cols, "exposed_workloads") {
 		t.Fatalf("header: %v", cols)
 	}
 	// libxml's Critical sorts first, openssl's exposed High second.

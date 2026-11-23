@@ -739,6 +739,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/vulnerabilities", s.handleVulnerabilities)
 			r.Get("/vulnerabilities/export", s.handleVulnerabilitiesExport)
 			r.Get("/vulnerabilities/java4shell", s.handleJava4Shell)
+			r.Post("/vulnerabilities/feeds/refresh", s.handleVulnerabilityFeedRefresh)
 
 			// Network path trace - path-shaped diagnosis for Service /
 			// Ingress / HTTPRoute / GRPCRoute / Gateway. See internal/trace.
@@ -1573,6 +1574,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		VulnerabilitiesExport:       true,
 		RuntimeAdvisoryChecks:       true,
 		RuntimeAdvisoryProgress:     true,
+		VulnerabilityFeedRefresh:    true,
 	}
 }
 

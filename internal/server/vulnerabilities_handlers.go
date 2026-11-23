@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -13,13 +15,15 @@ import (
 	"github.com/skyhook-io/radar/internal/readplan"
 	"github.com/skyhook-io/radar/internal/vulnerabilities"
 	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/vulnintel"
 )
 
 // handleVulnerabilities serves GET /api/vulnerabilities: scanner findings
 // rolled up to the images that run now, by image, CVE, workload or fix.
 //
 // Query: view=image|cve|workload|fix|summary, severity=critical,high,
-// fixable=1, exposed=1, q=, namespaces=, and workloadKind + workloadNamespace +
+// fixable=1, exposed=1, kev=1 (CISA Known Exploited only; 503
+// kev_unavailable without the catalog, never an empty "none"), q=, namespaces=, and workloadKind + workloadNamespace +
 // workloadName (+ optional workloadGroup) to narrow to one workload (the
 // workload drawer).
 //
@@ -33,6 +37,12 @@ import (
 // for workload kinds (checkedInNamespace). With auth off it reads with
 // Radar's identity, like the resource list; it is a GET, so the shared
 // listener's cross-site read guard applies.
+//
+// KEV and EPSS come from the process's feed store (--kev-feed,
+// --epss-feed), loaded on the first read: public data, the same for every
+// caller, fetched by Radar on its own schedule and never on a URL a request
+// names. Response.intel says whether each feed is ready; until it is, the UI
+// and CSV say "unavailable" rather than reading a missing entry as "no".
 //
 // Exposure (each row's workloads with a route from outside the cluster)
 // reads Services and Ingresses in the answer's namespaces and Gateways and
@@ -134,6 +144,7 @@ func vulnerabilityFilter(r *http.Request) vulnerabilities.Filter {
 		Severities: severities, FixableOnly: q.Get("fixable") == "1" || q.Get("fixable") == "true", Query: q.Get("q"),
 		ExposedOnly:     q.Get("exposed") == "1" || q.Get("exposed") == "true",
 		OSEndOfLifeOnly: q.Get("eol") == "1" || q.Get("eol") == "true",
+		KEVOnly:         q.Get("kev") == "1" || q.Get("kev") == "true",
 	}
 	if kind, ns, name := q.Get("workloadKind"), q.Get("workloadNamespace"), q.Get("workloadName"); kind != "" && ns != "" && name != "" {
 		filter.Workload = &vulnerabilities.WorkloadRef{Kind: kind, Group: q.Get("workloadGroup"), Namespace: ns, Name: name}
@@ -179,6 +190,7 @@ func (s *Server) readVulnerabilities(w http.ResponseWriter, r *http.Request, exp
 		View:                 view,
 		Filter:               vulnerabilityFilter(r),
 		Export:               export,
+		Intel:                vulnerabilities.IntelSnapshot(),
 	})
 	if err != nil {
 		if r.Context().Err() != nil {
@@ -187,6 +199,8 @@ func (s *Server) readVulnerabilities(w http.ResponseWriter, r *http.Request, exp
 		switch {
 		case errors.Is(err, vulnerabilities.ErrNotInstalled):
 			s.writeErrorCode(w, http.StatusNotFound, string(readreason.KindUnknown), err.Error())
+		case errors.Is(err, vulnerabilities.ErrKEVUnavailable):
+			s.writeErrorCode(w, http.StatusServiceUnavailable, "kev_unavailable", err.Error())
 		case errors.Is(err, vulnerabilities.ErrNotReady):
 			s.writeErrorCode(w, http.StatusServiceUnavailable, string(readreason.KindSyncPending), err.Error())
 		case errors.Is(err, vulnerabilities.ErrConnectionChanged):
@@ -231,4 +245,38 @@ func (s *Server) routeNamespacesForUser(r *http.Request) (namespaces []string, f
 func isCollectorRefusal(err error) bool {
 	_, ok := readplan.CollectorErrorCode(err)
 	return ok
+}
+
+// handleVulnerabilityFeedRefresh serves POST /api/vulnerabilities/feeds/refresh:
+// reload CISA KEV and FIRST EPSS now rather than at the next daily load. It
+// answers 202 with the feeds' state as it stands (still the old copy; the
+// reload runs in the background and the next read shows it), 429 with
+// Retry-After when anyone asked within the last 5 minutes, and 409
+// feeds_off when both feeds are turned off.
+//
+// Gate: no Kubernetes access is involved. The feeds are one public copy per
+// process, fetched from the operator's configured URLs or files (never a
+// URL from the request), so any signed-in user may ask, and on a shared
+// listener without authentication anyone who reaches Radar may too: the
+// process-wide rate limit bounds it to one download of each feed per 5
+// minutes. The same-origin middleware keeps a cross-site page from asking.
+func (s *Server) handleVulnerabilityFeedRefresh(w http.ResponseWriter, r *http.Request) {
+	wait, err := vulnerabilities.RefreshIntel()
+	switch {
+	case errors.Is(err, vulnintel.ErrFeedsOff):
+		s.writeErrorCode(w, http.StatusConflict, "feeds_off", "The KEV and EPSS feeds are turned off on this Radar (--kev-feed and --epss-feed are off).")
+		return
+	case errors.Is(err, vulnintel.ErrRefreshTooSoon):
+		secs := int(wait.Round(time.Second) / time.Second)
+		w.Header().Set("Retry-After", strconv.Itoa(max(secs, 1)))
+		s.writeErrorCode(w, http.StatusTooManyRequests, "refresh_too_soon", fmt.Sprintf("The feeds were refreshed less than 5 minutes ago. Try again in %s.", wait.Round(time.Second)))
+		return
+	case err != nil:
+		log.Printf("[vulnerabilities] Failed to refresh the KEV and EPSS feeds: %v", err)
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(map[string]any{"intel": vulnerabilities.IntelStatus()})
 }

@@ -452,6 +452,7 @@ All fields are optional — omitted fields use built-in defaults.
 | `port` | Server port (default 9280) |
 | `noBrowser` | Don't auto-open browser |
 | `noVersionCheck` | Disable automatic version checks; Desktop's manual Check for Updates remains available |
+| `noVulnerabilityFeedDownloads` | Never download the KEV and EPSS feeds for Checks > Vulnerabilities (same as `--no-vulnerability-feed-downloads`); feeds set to a file path still load |
 | `disableAutoPortForward` | Never open a port-forward on Radar's own initiative (same as `--disable-auto-port-forward`) |
 | `browser` | Browser for automatic launch (same as `--browser`; on macOS, app names like `Google Chrome` are supported) |
 | `timelineStorage` | `memory`, `sqlite`, or `postgres` |
@@ -1189,8 +1190,9 @@ output) for plain text. URLs, tokens, and suggested commands remain unstyled.
 
 ### What Radar sends
 
-Until you connect a cluster to Cloud, Radar makes three kinds of outbound
-request, all to Skyhook, none containing your resources, logs or events:
+Until you connect a cluster to Cloud, Radar makes these outbound requests,
+none containing your resources, logs or events. The first three go to
+Skyhook:
 
 - **Update check** — to `releases.skyhook.io`, with the Radar version, OS/arch,
   install method, whether it is running locally or in-cluster, and the
@@ -1201,6 +1203,17 @@ request, all to Skyhook, none containing your resources, logs or events:
 - **Cloud dialog copy** — only when you *open* the Cloud dialog, to fetch the
   current terms shown in it. No identifiers are sent. `RADAR_CLOUD_FUNNEL=off`
   stops this request from ever happening.
+- **Vulnerability feeds** — not to Skyhook: CISA's Known Exploited
+  Vulnerabilities catalog from `www.cisa.gov` and FIRST's EPSS scores from
+  `epss.empiricalsecurity.com`, plain downloads of public files with no
+  identifiers. Only once someone opens **Checks > Vulnerabilities** (or the
+  MCP tool reads vulnerabilities) on a cluster with Trivy Operator, then
+  daily. Turn every feed download off with `--no-vulnerability-feed-downloads`,
+  `RADAR_DISABLE_VULNERABILITY_FEED_DOWNLOADS=1`,
+  `"noVulnerabilityFeedDownloads": true` in `~/.radar/config.json`, or the
+  Helm value `vulnerabilities.feedDownloads: false`; feeds set to a file path
+  still load. One feed alone: `--kev-feed off` or `--epss-feed off`. See
+  [Known exploited CVEs and EPSS](integrations.md#known-exploited-cves-and-epss).
 
 Disable automatic version checks with `--no-version-check`,
 `RADAR_DISABLE_VERSION_CHECK=1` (or `true`), or `"noVersionCheck": true` in
