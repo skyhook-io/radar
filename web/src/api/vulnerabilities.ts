@@ -73,6 +73,14 @@ export interface VulnerabilityFinding {
   packageType?: string
   title?: string
   link?: string
+  /** The scanner's package URL (purl) for this package version. */
+  packageUrl?: string
+}
+
+/** The tool that wrote an image's newest report. */
+export interface VulnerabilityScanner {
+  name: string
+  version?: string
 }
 
 export interface VulnerableImage extends VulnerabilityExposure {
@@ -80,6 +88,9 @@ export interface VulnerableImage extends VulnerabilityExposure {
   image: string
   digest?: string
   os?: string
+  /** The scanner reports the OS release as end of life (Trivy's eosl). */
+  osEndOfLife?: boolean
+  scanner?: VulnerabilityScanner
   scannedAt: string
   counts: VulnerabilityCounts
   fixable: VulnerabilityCounts
@@ -111,6 +122,8 @@ export interface VulnerabilityCVE extends VulnerabilityExposure {
   fixableImages: number
   title?: string
   link?: string
+  /** The earliest publication date among its findings; not when it was found here. */
+  publishedAt?: string
   images: number
   workloads: number
   affected: VulnerabilityCVEImage[]
@@ -163,6 +176,8 @@ export interface VulnerabilitySummary {
   imagesClean: number
   imagesUnscanned: number
   imagesWithCritical: number
+  /** Scanned images whose OS the scanner reports as end of life. Absent from an older Radar, which ignores the eol filter. */
+  imagesOsEndOfLife?: number
   fixableCriticalHighCves: number
   workloadsWithCriticalOrHigh: number
   workloads: number
@@ -183,7 +198,7 @@ export interface VulnerabilitiesResponse {
   workloads?: VulnerabilityWorkload[]
   fixes?: VulnerabilityFix[]
   /** Scanned images with no findings, kept out of the rows unless searched for. */
-  clean?: { id: string; image: string; scannedAt: string; workloads: VulnerabilityWorkloadRef[]; workloadsTotal: number; report: VulnerableImage['report'] }[]
+  clean?: { id: string; image: string; osEndOfLife?: boolean; scannedAt: string; workloads: VulnerabilityWorkloadRef[]; workloadsTotal: number; report: VulnerableImage['report'] }[]
   /** Workloads whose every container is scanned and clean. */
   cleanWorkloads?: VulnerabilityWorkloadRef[]
   /** otherBuildScanned: Trivy's report is of another build of this tag, as after the tag moved. */
@@ -215,6 +230,8 @@ export interface VulnerabilitiesParams {
   fixableOnly?: boolean
   /** Only rows affecting a workload with a route from outside the cluster. */
   exposed?: boolean
+  /** Only images whose OS the scanner reports as end of life. */
+  osEndOfLife?: boolean
   query?: string
   workload?: { kind: string; group?: string; namespace: string; name: string }
 }
@@ -385,6 +402,7 @@ export function vulnerabilitiesPath(p: VulnerabilitiesParams): string {
   if (p.severities && p.severities.length > 0) params.set('severity', p.severities.join(','))
   if (p.fixableOnly) params.set('fixable', '1')
   if (p.exposed) params.set('exposed', '1')
+  if (p.osEndOfLife) params.set('eol', '1')
   if (p.query?.trim()) params.set('q', p.query.trim())
   if (p.workload) {
     params.set('workloadKind', p.workload.kind)

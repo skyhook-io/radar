@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ComponentType } from 'react'
-import { Loader2, MoreVertical } from 'lucide-react'
+import { Check, Loader2, MoreVertical } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Tooltip } from './Tooltip'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
@@ -8,7 +8,8 @@ import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../ut
 export interface RowActionItem {
   key: string
   label: string
-  icon: ComponentType<{ className?: string }>
+  /** Not drawn for a checkbox item, which shows a check mark instead. */
+  icon?: ComponentType<{ className?: string }>
   onClick: () => void
   disabled?: boolean
   disabledReason?: string
@@ -16,7 +17,8 @@ export interface RowActionItem {
   danger?: boolean
   /** Render a horizontal divider above this item. */
   divider?: boolean
-  /** A checked state turns this action into a menu checkbox. */
+  /** A checked state turns this action into a menu checkbox. Clicking it
+   *  leaves the menu open. */
   checked?: boolean
 }
 
@@ -130,7 +132,9 @@ export function RowActionMenu({ items, ariaLabel = 'Row actions', compact = true
                   e.stopPropagation()
                   if (item.disabled || item.pending) return
                   item.onClick()
-                  setOpen(false)
+                  // A checkbox item is a setting: the menu stays open so the
+                  // user sees it change and can set another.
+                  if (item.checked === undefined) setOpen(false)
                 }}
                 className={clsx(
                   'flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors',
@@ -143,8 +147,12 @@ export function RowActionMenu({ items, ariaLabel = 'Row actions', compact = true
               >
                 {item.pending ? (
                   <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
-                ) : (
+                ) : item.checked !== undefined ? (
+                  <Check className={clsx('h-3.5 w-3.5 shrink-0', !item.checked && 'invisible')} aria-hidden />
+                ) : Icon ? (
                   <Icon className="h-3.5 w-3.5 shrink-0" />
+                ) : (
+                  <span className="h-3.5 w-3.5 shrink-0" aria-hidden />
                 )}
                 <span className="truncate">{item.label}</span>
               </button>
