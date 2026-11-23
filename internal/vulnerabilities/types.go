@@ -332,6 +332,8 @@ type Response struct {
 	// the answer's scope, so an empty answer can't pass for "no CVEs". Not
 	// on the wire: the UI and agents learn it differently.
 	WorkloadRuns bool `json:"-"`
+	// export is set on an export read (Request.Export), for WriteCSV.
+	export *exportExtras
 }
 
 // Filter narrows the pivot. The summary is always unfiltered.

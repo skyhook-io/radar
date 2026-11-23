@@ -41,8 +41,8 @@ func TestNarrowToTyped(t *testing.T) {
 	}
 }
 
-// Gaps merge only for the same kind, and never into one that has stopped
-// listing its namespaces.
+// Gaps merge only for the same kind. They name every namespace while the
+// read runs; a list read caps the names at the end, an export keeps them.
 func TestAppendGap(t *testing.T) {
 	gaps := appendGap(nil, reportKind, readreason.UserForbidden, []string{"a"})
 	gaps = appendGap(gaps, podKind, readreason.UserForbidden, []string{"b"})
@@ -55,8 +55,11 @@ func TestAppendGap(t *testing.T) {
 	}
 	gaps = appendGap(nil, reportKind, readreason.KindSyncPending, many)
 	gaps = appendGap(gaps, reportKind, readreason.KindSyncPending, []string{"zz"})
-	if len(gaps) != 2 || gaps[0].Namespaces.Count != 65 {
-		t.Fatalf("a count-only gap keeps its count: %+v", gaps)
+	if len(gaps) != 1 || gaps[0].Namespaces.Count != 66 || len(gaps[0].Namespaces.Names) != 66 {
+		t.Fatalf("a gap past the list cap still names every namespace: %+v", gaps)
+	}
+	if capped := gaps[0].Namespaces.Capped(gapNameLimit); capped.Count != 66 || len(capped.Names) != 0 {
+		t.Fatalf("a list read counts past the cap without naming: %+v", capped)
 	}
 }
 

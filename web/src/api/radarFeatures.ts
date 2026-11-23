@@ -85,6 +85,7 @@ export const RADAR_FEATURES = {
   agentSigninCheck: { label: 'Agent sign-in checks', flag: 'agentSigninCheck', flagShippedWithEndpoint: true },
   podFileUpload: { label: 'Pod file uploads', flag: 'podFileUpload', flagShippedWithEndpoint: true },
   vulnerabilities: { label: 'Vulnerability views', flag: 'vulnerabilities', flagShippedWithEndpoint: true },
+  vulnerabilitiesExport: { label: 'Vulnerability CSV downloads', flag: 'vulnerabilitiesExport', flagShippedWithEndpoint: true },
   runtimeAdvisoryChecks: { label: 'Java4Shell checks', flag: 'runtimeAdvisoryChecks', flagShippedWithEndpoint: true },
   runtimeAdvisoryProgress: { label: 'Java4Shell scan progress', flag: 'runtimeAdvisoryProgress', flagShippedWithEndpoint: true },
   // Never blocks a control: an older Radar ignores the request body and names
