@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	authv1 "k8s.io/api/authorization/v1"
@@ -15,7 +16,61 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/capacityapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/karpenter"
 )
+
+func TestCapabilitiesNodePoolReviewStaysOnRequestConnection(t *testing.T) {
+	initCapacityContractDynamicState(t, true, true)
+	nodePools := authv1.ResourceAttributes{Verb: "list", Group: karpenter.Group, Resource: "nodepools"}
+	var reviewsA, reviewsB atomic.Int32
+	clientB, _ := fakeSARClient(t, func(attrs authv1.ResourceAttributes) bool {
+		if attrs == nodePools {
+			reviewsB.Add(1)
+			return false
+		}
+		return true
+	})
+	switchToB := sync.OnceFunc(func() { t.Cleanup(k8s.ReconnectTestClient(clientB)) })
+	fakeSARServer(t, func(attrs authv1.ResourceAttributes) bool {
+		// Switch before replying to the cold permission lookup: namespace
+		// discovery starts with list pods, a direct check with list nodepools.
+		if attrs == nodePools {
+			reviewsA.Add(1)
+			switchToB()
+		} else if attrs == (authv1.ResourceAttributes{Verb: "list", Resource: "pods"}) {
+			switchToB()
+		}
+		return true
+	})
+	t.Cleanup(k8s.SetTestPermissionResult(&k8s.PermissionCheckResult{Perms: &k8s.ResourcePermissions{}}))
+	connA := k8s.Current()
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	poll := func(conn *k8s.Connection) k8s.IntegrationCapability {
+		t.Helper()
+		r := requestWithUser(http.MethodGet, "/api/capabilities", &auth.User{Username: "alice", Groups: []string{"viewers"}})
+		w := httptest.NewRecorder()
+		s.handleCapabilities(w, r.WithContext(k8s.WithConnection(r.Context(), conn)))
+		var caps k8s.Capabilities
+		assertOK(t, w.Result(), &caps)
+		return caps.Karpenter
+	}
+
+	first := poll(connA)
+	if k8s.Current().Client() != clientB {
+		t.Fatal("request did not switch to B during the permission lookup")
+	}
+	if first.State != capacityapi.IntegrationAvailable || reviewsA.Load() != 1 || reviewsB.Load() != 0 {
+		t.Fatalf("first poll = %+v, NodePool reviews A=%d B=%d, want available with A=1 B=0", first, reviewsA.Load(), reviewsB.Load())
+	}
+	if next := poll(connA); next != first || reviewsA.Load() != 1 || reviewsB.Load() != 0 {
+		t.Fatalf("repeat poll = %+v, NodePool reviews A=%d B=%d, want cached grant from A", next, reviewsA.Load(), reviewsB.Load())
+	}
+	for range 2 {
+		if got := poll(k8s.Current()); got.State != capacityapi.IntegrationDenied || reviewsB.Load() != 1 {
+			t.Fatalf("poll B = %+v, NodePool reviews B=%d, want denied with B=1", got, reviewsB.Load())
+		}
+	}
+}
 
 func TestCapabilitiesReportsIntegrationsFromBoundConnection(t *testing.T) {
 	initCapacityContractDynamicState(t, true, true)
@@ -31,7 +86,7 @@ func TestCapabilitiesReportsIntegrationsFromBoundConnection(t *testing.T) {
 	t.Cleanup(k8s.ReconnectTestClient(nil))
 	k8s.ResetTestDynamicState()
 	perms := &auth.UserPermissions{}
-	perms.SetCanI("list", karpenterGroup, karpenterNodePoolResource, "", false)
+	perms.SetCanI("list", karpenter.Group, "nodepools", "", false)
 	s.permCache.Set(user.Username, user.Groups, perms)
 
 	w := httptest.NewRecorder()

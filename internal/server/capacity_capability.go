@@ -1,18 +1,12 @@
 package server
 
 import (
-	"context"
 	"net/http"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/capacityapi"
-)
-
-const (
-	karpenterGroup            = "karpenter.sh"
-	karpenterNodePoolKind     = "NodePool"
-	karpenterNodePoolResource = "nodepools"
+	"github.com/skyhook-io/radar/pkg/karpenter"
 )
 
 func (s *Server) karpenterCapability(r *http.Request, conn *k8s.Connection) k8s.IntegrationCapability {
@@ -31,9 +25,9 @@ func (s *Server) karpenterCapability(r *http.Request, conn *k8s.Connection) k8s.
 	if discovery == nil {
 		return k8s.IntegrationCapability{State: capacityapi.IntegrationSyncing, ReasonCode: "discovery_unavailable"}
 	}
-	gvr, found := discovery.GetGVRWithGroup(karpenterNodePoolKind, karpenterGroup)
+	gvr, found := discovery.GetGVRWithGroup(karpenter.NodePoolKind, karpenter.Group)
 	if !found {
-		if discovery.GroupHadPartialDiscovery(karpenterGroup) {
+		if discovery.GroupHadPartialDiscovery(karpenter.Group) {
 			return k8s.IntegrationCapability{State: capacityapi.IntegrationSyncing, ReasonCode: "karpenter_discovery_partial"}
 		}
 		return k8s.IntegrationCapability{State: capacityapi.IntegrationNotDetected}
@@ -61,17 +55,9 @@ func (s *Server) karpenterCapability(r *http.Request, conn *k8s.Connection) k8s.
 }
 
 func (s *Server) canListNodePools(r *http.Request, conn *k8s.Connection) bool {
-	if conn == k8s.Current() {
-		return s.canRead(r, karpenterGroup, karpenterNodePoolResource, "", "list")
-	}
-	// The server's permission cache and access reviews follow the installed
-	// cluster. A request still bound to a replaced connection asks its own.
 	user := auth.UserFromContext(r.Context())
 	if user == nil || s.permCache == nil {
 		return true
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), accessReviewTimeout)
-	defer cancel()
-	allowed, _ := canReadUserSARWith(ctx, conn.Client(), user, karpenterGroup, karpenterNodePoolResource, "", "list")
-	return allowed
+	return conn.CanListNodePools(r.Context(), user.Username, user.Groups)
 }

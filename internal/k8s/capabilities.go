@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"runtime/debug"
 	"slices"
 	"sort"
 	"strings"
@@ -16,12 +17,14 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/cache"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/capacityapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/karpenter"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -349,16 +352,23 @@ type permissionState struct {
 	userNamespaceCapabilitiesCache sync.Map // map[string]*userNSCapEntry
 	// Each identity's check costs up to two SubjectAccessReviews per capability.
 	userCapabilitiesFlight singleflight.Group
+
+	nodePoolListCache  *cache.Expiring
+	nodePoolListFlight singleflight.Group
+}
+
+func newPermissionState() *permissionState {
+	return &permissionState{nodePoolListCache: cache.NewExpiring()}
 }
 
 func (c *Connection) permissions() *permissionState {
 	if c == nil {
-		return &permissionState{}
+		return newPermissionState()
 	}
 	if s := c.perms.Load(); s != nil {
 		return s
 	}
-	c.perms.CompareAndSwap(nil, &permissionState{})
+	c.perms.CompareAndSwap(nil, newPermissionState())
 	return c.perms.Load()
 }
 
@@ -366,7 +376,7 @@ func (c *Connection) permissions() *permissionState {
 // check keeps the state it took before reading its scope.
 func (c *Connection) ResetPermissions() {
 	if c != nil {
-		c.perms.Store(&permissionState{})
+		c.perms.Store(newPermissionState())
 	}
 }
 
@@ -799,6 +809,41 @@ func (state *permissionState) checkCapabilitiesForUser(conn *Connection, fallbac
 	state.userCapabilitiesCache.Store(identityKey, entry)
 
 	return caps
+}
+
+// CanListNodePools checks the caller's cluster-wide grant after discovery
+// finds Karpenter. Capacity reads share this verdict with capability polls.
+func (c *Connection) CanListNodePools(ctx context.Context, username string, groups []string) bool {
+	state := c.permissions()
+	key := pkgauth.IdentityCacheKey(username, groups)
+	if allowed, ok := state.nodePoolListCache.Get(key); ok {
+		return allowed.(bool)
+	}
+	review := state.nodePoolListFlight.DoChan(key, func() (value any, err error) {
+		defer func() {
+			if p := recover(); p != nil {
+				log.Printf("[auth] NodePool list review panicked: %v\n%s", p, debug.Stack())
+				value = false
+			}
+		}()
+		if allowed, ok := state.nodePoolListCache.Get(key); ok {
+			return allowed, nil
+		}
+		// One caller leaving must not cancel another's review.
+		checkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		allowed, apiErr := canIAs(checkCtx, c.Client(), username, groups, "", karpenter.Group, "nodepools", "list")
+		if !apiErr {
+			state.nodePoolListCache.Set(key, allowed, userCapabilitiesTTL)
+		}
+		return allowed, nil
+	})
+	select {
+	case result := <-review:
+		return result.Val.(bool)
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // CheckNamespaceCapabilitiesForUser runs namespace-scoped SubjectAccessReview

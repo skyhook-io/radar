@@ -92,9 +92,9 @@ func TestNoClusterGlobals(t *testing.T) {
 			return strings.HasSuffix(typeName, "["+strings.TrimPrefix(d, "*")+"]")
 		})
 		_, isMap := typ.Underlying().(*types.Map)
-		cacheType := isMap || typeName == "sync.Map" || typeName == "golang.org/x/sync/singleflight.Group"
+		cacheType := isMap || typeName == "sync.Map" || typeName == "golang.org/x/sync/singleflight.Group" || typeName == "*k8s.io/apimachinery/pkg/util/cache.Expiring"
 		lowerName := strings.ToLower(name)
-		cacheName := strings.Contains(lowerName, "capabilit") || strings.Contains(lowerName, "perm")
+		cacheName := strings.Contains(lowerName, "capabilit") || strings.Contains(lowerName, "perm") || strings.Contains(lowerName, "nodepoollist")
 		policyState := strings.Contains(lowerName, "kyverno") || strings.Contains(lowerName, "policyreport") || strings.Contains(lowerName, "warmup")
 		policyCounter := policyState && (strings.HasSuffix(lowerName, "gen") || strings.HasSuffix(lowerName, "generation"))
 		if policyCounter || strings.Contains(lowerName, "cachegeneration") || strings.Contains(lowerName, "cacheonce") || slices.Contains(denied, typeName) || wrapped || (cacheName && cacheType) {

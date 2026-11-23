@@ -11,7 +11,6 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/capacityapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
-	"github.com/skyhook-io/radar/pkg/karpenter"
 	pkgtimeline "github.com/skyhook-io/radar/pkg/timeline"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -211,7 +210,7 @@ func TestCapacityResponsesFailClosedOnMidRequestContextSwitch(t *testing.T) {
 	t.Run("karpenterless denied overview", func(t *testing.T) {
 		env := newAuthTestServer(t)
 		permissions := &auth.UserPermissions{AllowedNamespaces: nil}
-		permissions.SetCanI("list", karpenter.Group, "nodepools", "", false)
+		fakeNodePoolListPermission(t, false)
 		permissions.SetCanI("list", "", "nodes", "", true)
 		permissions.SetCanI("list", "", "pods", "", false)
 		permissions.SetCanI("list", "", "pods", "default", false)

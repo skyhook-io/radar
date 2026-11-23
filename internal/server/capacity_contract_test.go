@@ -22,6 +22,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/karpenter"
 	"github.com/skyhook-io/radar/pkg/subject"
 	pkgtimeline "github.com/skyhook-io/radar/pkg/timeline"
+	authv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -34,6 +35,13 @@ import (
 
 var capacityContractNodePoolGVR = schema.GroupVersionResource{
 	Group: karpenter.Group, Version: "v1", Resource: "nodepools",
+}
+
+func fakeNodePoolListPermission(t *testing.T, allowed bool) {
+	t.Helper()
+	fakeSARServer(t, func(attrs authv1.ResourceAttributes) bool {
+		return allowed && attrs == (authv1.ResourceAttributes{Verb: "list", Group: karpenter.Group, Resource: "nodepools"})
+	})
 }
 
 func TestCapacityRoutesAreAvailable(t *testing.T) {
@@ -67,7 +75,7 @@ func TestCapacityNotDetectedPrecedesRBACDenial(t *testing.T) {
 
 	env := newAuthTestServer(t)
 	permissions := &auth.UserPermissions{AllowedNamespaces: nil}
-	permissions.SetCanI("list", karpenter.Group, "nodepools", "", false)
+	fakeNodePoolListPermission(t, false)
 	// Node visibility is the page gate; the premise here is that Karpenter
 	// absence (CRD not discovered) is reported as not_detected even though the
 	// caller is also denied NodePools — absence precedes that denial.
@@ -92,7 +100,7 @@ func TestCapacityNodeVisibilityGateDeniesEveryRoute(t *testing.T) {
 	initCapacityContractDynamicState(t, true, true, capacityContractNodePool("general"))
 	env := newAuthTestServer(t)
 	permissions := &auth.UserPermissions{AllowedNamespaces: nil}
-	permissions.SetCanI("list", karpenter.Group, "nodepools", "", true)
+	fakeNodePoolListPermission(t, true)
 	permissions.SetCanI("list", "", "nodes", "", false)
 	env.srv.permCache.Set("alice", nil, permissions)
 
@@ -122,7 +130,7 @@ func TestCapacityOverviewNodePoolsDeniedRendersClusterShape(t *testing.T) {
 	initCapacityContractDynamicState(t, true, true, capacityContractNodePool("general"))
 	env := newAuthTestServer(t)
 	permissions := &auth.UserPermissions{AllowedNamespaces: nil}
-	permissions.SetCanI("list", karpenter.Group, "nodepools", "", false)
+	fakeNodePoolListPermission(t, false)
 	permissions.SetCanI("list", "", "nodes", "", true)
 	permissions.SetCanI("list", "", "pods", "", false)
 	permissions.SetCanI("list", "", "pods", "default", false)
@@ -175,7 +183,7 @@ func TestCapacityAuthorizedStateEnvelopes(t *testing.T) {
 		initCapacityContractDynamicState(t, false, false)
 		env := newAuthTestServer(t)
 		permissions := &auth.UserPermissions{AllowedNamespaces: nil}
-		permissions.SetCanI("list", karpenter.Group, "nodepools", "", true)
+		fakeNodePoolListPermission(t, true)
 		permissions.SetCanI("list", "", "nodes", "", true)
 		permissions.SetCanI("list", "", "pods", "", false)
 		permissions.SetCanI("get", "", "configmaps", "kube-system", false)
@@ -197,7 +205,7 @@ func TestCapacityAuthorizedStateEnvelopes(t *testing.T) {
 		initCapacityContractDynamicState(t, true, false)
 		env := newAuthTestServer(t)
 		permissions := &auth.UserPermissions{AllowedNamespaces: nil}
-		permissions.SetCanI("list", karpenter.Group, "nodepools", "", true)
+		fakeNodePoolListPermission(t, true)
 		permissions.SetCanI("list", "", "nodes", "", true)
 		env.srv.permCache.Set("alice", nil, permissions)
 
@@ -378,7 +386,7 @@ func TestCapacityDemandSummaryOmittedWithoutPodObservations(t *testing.T) {
 	initCapacityContractDynamicState(t, true, true, capacityContractNodePool("general"))
 	env := newAuthTestServer(t)
 	permissions := &auth.UserPermissions{AllowedNamespaces: []string{}}
-	permissions.SetCanI("list", karpenter.Group, "nodepools", "", true)
+	fakeNodePoolListPermission(t, true)
 	permissions.SetCanI("list", karpenter.Group, "nodeclaims", "", false)
 	permissions.SetCanI("list", "", "nodes", "", true)
 	permissions.SetCanI("list", "", "pods", "", false)
@@ -436,7 +444,7 @@ func TestCapacityDemandPoolFilterDoesNotRevealNodePoolExistenceUnderDenial(t *te
 	initCapacityContractDynamicState(t, true, true, capacityContractNodePool("general"))
 	env := newAuthTestServer(t)
 	permissions := &auth.UserPermissions{AllowedNamespaces: nil}
-	permissions.SetCanI("list", karpenter.Group, "nodepools", "", false)
+	fakeNodePoolListPermission(t, false)
 	// Node-visible but NodePool-denied: the demand route must fail closed on the
 	// NodePool denial (not the node gate), identically for every pool name.
 	permissions.SetCanI("list", "", "nodes", "", true)
@@ -472,7 +480,7 @@ func TestCapacityOptionalSourceDenialOmitsCounts(t *testing.T) {
 	initCapacityContractDynamicState(t, true, true, capacityContractNodePool("general"))
 	env := newAuthTestServer(t)
 	permissions := &auth.UserPermissions{AllowedNamespaces: nil}
-	permissions.SetCanI("list", karpenter.Group, "nodepools", "", true)
+	fakeNodePoolListPermission(t, true)
 	permissions.SetCanI("list", karpenter.Group, "nodeclaims", "", false)
 	permissions.SetCanI("list", "", "nodes", "", true)
 	permissions.SetCanI("list", "", "pods", "", true)
@@ -974,7 +982,7 @@ func TestCapacityActivityRBACMetadataUsesOnlyAuthorizedRelevantEvents(t *testing
 
 	env := newAuthTestServer(t)
 	permissions := &auth.UserPermissions{AllowedNamespaces: nil}
-	permissions.SetCanI("list", karpenter.Group, "nodepools", "", true)
+	fakeNodePoolListPermission(t, true)
 	permissions.SetCanI("list", karpenter.Group, "nodeclaims", "", false)
 	// Node visibility is the page gate for Activity, so a caller who reaches it
 	// can always see node events; per-event denial here is exercised through the
@@ -1412,7 +1420,7 @@ func TestCapacityOverviewOmitsPodDerivedCountsUnderPodDenial(t *testing.T) {
 	initCapacityContractDynamicState(t, true, true, capacityContractNodePool("general"))
 	env := newAuthTestServer(t)
 	permissions := &auth.UserPermissions{AllowedNamespaces: []string{}}
-	permissions.SetCanI("list", karpenter.Group, "nodepools", "", true)
+	fakeNodePoolListPermission(t, true)
 	permissions.SetCanI("list", karpenter.Group, "nodeclaims", "", false)
 	permissions.SetCanI("list", "", "nodes", "", true)
 	permissions.SetCanI("list", "", "pods", "", false)

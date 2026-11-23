@@ -84,6 +84,53 @@ func expireUserCapabilities() {
 	})
 }
 
+func TestReadmissionKeepsNodePoolListVerdict(t *testing.T) {
+	t.Cleanup(SnapshotTestConnection())
+	clearTestConnectionIdentity()
+	s := useSARServer(t)
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
+	first := ServingConnectionID()
+	if !Current().CanListNodePools(t.Context(), "alice", []string{"viewers"}) {
+		t.Fatal("initial NodePool list review denied")
+	}
+	RetireServingConnection()
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
+	if second := ServingConnectionID(); second == "" || second == first {
+		t.Fatalf("readmission IDs %q then %q, want a new one", first, second)
+	}
+	if !Current().CanListNodePools(t.Context(), "alice", []string{"viewers"}) || s.reviews.Load() != 1 {
+		t.Fatalf("readmission lost the cached grant, reviews = %d", s.reviews.Load())
+	}
+	s.failing.Store(true)
+	if Current().CanListNodePools(t.Context(), "alice", nil) {
+		t.Fatal("a caller who lost the group reused its cached grant")
+	}
+	s.failing.Store(false)
+	if !Current().CanListNodePools(t.Context(), "alice", nil) {
+		t.Fatal("a failed review was cached as a denial")
+	}
+}
+
+func TestNodePoolListReviewPanicFailsClosedAndRetries(t *testing.T) {
+	var reviews atomic.Int32
+	client := kubernetes.NewForConfigOrDie(&rest.Config{
+		Host: "https://cluster.test",
+		Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+			reviews.Add(1)
+			panic("review transport failed")
+		}),
+	})
+	conn := &Connection{clients: &sharedKubernetesClients{clientset: client}}
+	for range 2 {
+		if conn.CanListNodePools(t.Context(), "alice", nil) {
+			t.Fatal("a panicking review granted NodePool access")
+		}
+	}
+	if got := reviews.Load(); got != 2 {
+		t.Fatalf("reviews = %d, want a retry after the panic", got)
+	}
+}
+
 // Concurrent requests from one identity share one round of reviews.
 func TestCheckCapabilitiesForUserCoalescesConcurrentChecks(t *testing.T) {
 	s := useSARServer(t)

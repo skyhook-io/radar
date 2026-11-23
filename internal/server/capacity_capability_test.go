@@ -11,6 +11,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/capacityapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/karpenter"
+	authv1 "k8s.io/api/authorization/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -28,13 +29,9 @@ func TestKarpenterCapabilityReportsAbsenceBeforeRBACDenial(t *testing.T) {
 	previousConnection := k8s.GetConnectionStatus()
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 	defer k8s.SetConnectionStatus(previousConnection)
-	previousClient := k8s.SetTestClient(&kubernetes.Clientset{})
-	defer k8s.SetTestClient(previousClient)
+	fakeNodePoolListPermission(t, false)
 
 	s := newAuthServer(auth.Config{Mode: "proxy"})
-	perms := &auth.UserPermissions{AllowedNamespaces: nil}
-	perms.SetCanI("list", karpenterGroup, karpenterNodePoolResource, "", false)
-	s.permCache.Set("alice", nil, perms)
 
 	r := requestWithUser(http.MethodGet, "/api/capabilities", &auth.User{Username: "alice"})
 	got := s.karpenterCapability(r, k8s.Current())
@@ -47,25 +44,23 @@ func TestKarpenterCapabilityReportsAbsenceBeforeRBACDenial(t *testing.T) {
 }
 
 func TestKarpenterCapabilityShortCircuitsWithoutUsableConnection(t *testing.T) {
+	deniedClient, _ := fakeSARClient(t, func(authv1.ResourceAttributes) bool { return false })
 	tests := []struct {
 		name       string
 		connection k8s.ConnectionStatus
 		client     *kubernetes.Clientset
-		seedDenied bool
 		wantReason string
 	}{
 		{
 			name:       "connecting",
 			connection: k8s.ConnectionStatus{State: k8s.StateConnecting},
-			client:     &kubernetes.Clientset{},
-			seedDenied: true,
+			client:     deniedClient,
 			wantReason: "cluster_connecting",
 		},
 		{
 			name:       "disconnected",
 			connection: k8s.ConnectionStatus{State: k8s.StateDisconnected},
-			client:     &kubernetes.Clientset{},
-			seedDenied: true,
+			client:     deniedClient,
 			wantReason: "cluster_disconnected",
 		},
 		{
@@ -85,11 +80,6 @@ func TestKarpenterCapabilityShortCircuitsWithoutUsableConnection(t *testing.T) {
 			defer k8s.SetTestClient(previousClient)
 
 			s := newAuthServer(auth.Config{Mode: "proxy"})
-			perms := &auth.UserPermissions{AllowedNamespaces: nil}
-			if tt.seedDenied {
-				perms.SetCanI("list", karpenterGroup, karpenterNodePoolResource, "", false)
-			}
-			s.permCache.Set("alice", nil, perms)
 			r := requestWithUser(http.MethodGet, "/api/capabilities", &auth.User{Username: "alice"})
 
 			got := s.karpenterCapability(r, k8s.Current())
