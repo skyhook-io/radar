@@ -146,9 +146,9 @@ type MetricsHistoryStore struct {
 	// It allows callers to record errors in an external error log.
 	OnError func(subsystem, level, format string, args ...any)
 
-	stopCh    chan struct{}
+	stopCtx   context.Context
+	cancel    context.CancelFunc
 	startOnce sync.Once
-	stopOnce  sync.Once
 	wg        sync.WaitGroup
 }
 
@@ -253,12 +253,14 @@ func NewMetricsHistoryStore(client dynamic.Interface) *MetricsHistoryStore {
 
 // NewMetricsHistoryStoreWithResolver creates a store that follows discovered metrics API versions.
 func NewMetricsHistoryStoreWithResolver(client dynamic.Interface, resolveGVR MetricsGVRResolver) *MetricsHistoryStore {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &MetricsHistoryStore{
 		dynClient:   client,
 		resolveGVR:  resolveGVR,
 		podMetrics:  make(map[string]*podMetricsBuffer),
 		nodeMetrics: make(map[string]*nodeMetricsBuffer),
-		stopCh:      make(chan struct{}),
+		stopCtx:     ctx,
+		cancel:      cancel,
 	}
 }
 
@@ -273,7 +275,7 @@ func (s *MetricsHistoryStore) Start() {
 
 // Stop halts background polling and waits for the goroutine to exit.
 func (s *MetricsHistoryStore) Stop() {
-	s.stopOnce.Do(func() { close(s.stopCh) })
+	s.cancel()
 	s.wg.Wait()
 	log.Println("Metrics history collection stopped")
 }
@@ -285,7 +287,7 @@ func (s *MetricsHistoryStore) pollLoop() {
 	defer ticker.Stop()
 	for {
 		select {
-		case <-s.stopCh:
+		case <-s.stopCtx.Done():
 			return
 		case <-ticker.C:
 			s.collectMetrics()
@@ -294,15 +296,21 @@ func (s *MetricsHistoryStore) pollLoop() {
 }
 
 func (s *MetricsHistoryStore) collectMetrics() {
+	if s.stopCtx.Err() != nil {
+		return
+	}
 	now := time.Now()
 	s.mu.Lock()
 	s.lastCollectionAttempt = now
 	s.totalCollections++
 	s.mu.Unlock()
-	podCtx, cancelPods := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancelPods()
+	podCtx, cancelPods := context.WithTimeout(s.stopCtx, 10*time.Second)
 	s.collectPodMetrics(podCtx, now)
-	nodeCtx, cancelNodes := context.WithTimeout(context.Background(), 10*time.Second)
+	cancelPods()
+	if s.stopCtx.Err() != nil {
+		return
+	}
+	nodeCtx, cancelNodes := context.WithTimeout(s.stopCtx, 10*time.Second)
 	defer cancelNodes()
 	s.collectNodeMetrics(nodeCtx, now)
 }
@@ -391,10 +399,12 @@ func (s *MetricsHistoryStore) collectPodMetrics(ctx context.Context, now time.Ti
 
 	items, listed, err := s.listPodMetrics(ctx, podMetricsGVR)
 	if !listed {
-		s.recordPodCollectionError(err)
+		if s.stopCtx.Err() == nil {
+			s.recordPodCollectionError(err)
+		}
 		return
 	}
-	if err != nil {
+	if err != nil && s.stopCtx.Err() == nil {
 		// Some namespaces failed. The ones that answered are still recorded,
 		// and the failure goes to the Radar log only: the collection error is
 		// shown with any pod's history, and must not name another namespace
@@ -506,7 +516,7 @@ func (s *MetricsHistoryStore) listPodMetrics(ctx context.Context, gvr schema.Gro
 		}
 	}
 	err = errors.Join(errs...)
-	if !listed && err != nil {
+	if !listed && err != nil && s.stopCtx.Err() == nil {
 		// The collection error is shown with any pod's history, so it must
 		// not name namespaces the reader may not see. The detail goes to the
 		// Radar log; the cause is kept for classification.
@@ -572,7 +582,9 @@ func (s *MetricsHistoryStore) collectNodeMetrics(ctx context.Context, now time.T
 
 	result, err := s.dynClient.Resource(nodeMetricsGVR).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		s.recordNodeCollectionError(err)
+		if s.stopCtx.Err() == nil {
+			s.recordNodeCollectionError(err)
+		}
 		return
 	}
 
