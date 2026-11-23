@@ -19,7 +19,7 @@ import (
 // rolled up to the images that run now, by image, CVE, workload or fix.
 //
 // Query: view=image|cve|workload|fix|summary, severity=critical,high,
-// fixable=1, q=, namespaces=, and workloadKind + workloadNamespace +
+// fixable=1, exposed=1, q=, namespaces=, and workloadKind + workloadNamespace +
 // workloadName (+ optional workloadGroup) to narrow to one workload (the
 // workload drawer).
 //
@@ -33,6 +33,12 @@ import (
 // for workload kinds (checkedInNamespace). With auth off it reads with
 // Radar's identity, like the resource list; it is a GET, so the shared
 // listener's cross-site read guard applies.
+//
+// Exposure (each row's workloads with a route from outside the cluster)
+// reads Services and Ingresses in the answer's namespaces and Gateways and
+// Gateway API routes across the caller's whole namespace ceiling, which
+// namespace access covers for those kinds; the view's narrower picker
+// scope would otherwise drop a shared Gateway and change the answer.
 func (s *Server) handleVulnerabilities(w http.ResponseWriter, r *http.Request) {
 	resp, ok := s.readVulnerabilities(w, r, false)
 	if ok {
@@ -44,7 +50,9 @@ func (s *Server) handleVulnerabilities(w http.ResponseWriter, r *http.Request) {
 // view (image, fix, cve or workload) as CSV, with the same query and gate as
 // handleVulnerabilities, but listing every row and every value the list caps
 // (CVE IDs, images, workloads), then rows for running images not scanned
-// yet, images whose findings weren't read and coverage gaps. The findings
+// yet, images whose findings weren't read and coverage gaps. view=findings,
+// for exports only, writes one row per finding, image and workload
+// container (a compliance tracker's shape), read as the image view. The findings
 // budget (MaxFindings) still applies. Radar Cloud fans out to this route and
 // stacks the files, so the columns are a contract (ExportColumns). One export
 // runs at a time (409 for another), a file past 128 MB is refused
@@ -53,8 +61,8 @@ func (s *Server) handleVulnerabilities(w http.ResponseWriter, r *http.Request) {
 // is built whole and sent with its length (or gzipped, whose trailer does the
 // same), so a cut transfer reads as an error, never as a shorter file.
 func (s *Server) handleVulnerabilitiesExport(w http.ResponseWriter, r *http.Request) {
-	if v := r.URL.Query().Get("view"); v == "" || v == string(vulnerabilities.ViewSummary) {
-		s.writeError(w, http.StatusBadRequest, "view must be image, fix, cve or workload")
+	if _, err := vulnerabilities.ParseExportView(r.URL.Query().Get("view")); err != nil || r.URL.Query().Get("view") == "" {
+		s.writeError(w, http.StatusBadRequest, "view must be image, fix, cve, workload or findings")
 		return
 	}
 	// One export at a time: each builds its whole file in memory.
@@ -122,7 +130,10 @@ var (
 func vulnerabilityFilter(r *http.Request) vulnerabilities.Filter {
 	q := r.URL.Query()
 	severities, _ := vulnerabilities.ParseSeverities(q.Get("severity"))
-	filter := vulnerabilities.Filter{Severities: severities, FixableOnly: q.Get("fixable") == "1" || q.Get("fixable") == "true", Query: q.Get("q")}
+	filter := vulnerabilities.Filter{
+		Severities: severities, FixableOnly: q.Get("fixable") == "1" || q.Get("fixable") == "true", Query: q.Get("q"),
+		ExposedOnly: q.Get("exposed") == "1" || q.Get("exposed") == "true",
+	}
 	if kind, ns, name := q.Get("workloadKind"), q.Get("workloadNamespace"), q.Get("workloadName"); kind != "" && ns != "" && name != "" {
 		filter.Workload = &vulnerabilities.WorkloadRef{Kind: kind, Group: q.Get("workloadGroup"), Namespace: ns, Name: name}
 	}
@@ -136,7 +147,11 @@ func (s *Server) readVulnerabilities(w http.ResponseWriter, r *http.Request, exp
 		return vulnerabilities.Response{}, false
 	}
 	q := r.URL.Query()
-	view, err := vulnerabilities.ParseView(q.Get("view"))
+	parse := vulnerabilities.ParseView
+	if export {
+		parse = vulnerabilities.ParseExportView
+	}
+	view, err := parse(q.Get("view"))
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return vulnerabilities.Response{}, false
@@ -153,9 +168,12 @@ func (s *Server) readVulnerabilities(w http.ResponseWriter, r *http.Request, exp
 	}
 
 	namespaces, checkFailed := s.parseNamespacesForUserWithStatus(r)
+	routeNamespaces, routeCheckFailed := s.routeNamespacesForUser(r)
 	resp, err := vulnerabilities.Read(r.Context(), k8s.GetResourceCache(), vulnerabilities.Request{
 		Namespaces:           namespaces,
 		NamespaceCheckFailed: checkFailed,
+		RouteNamespaces:      routeNamespaces,
+		RouteCeiling:         !routeCheckFailed,
 		ReportAccess:         s.searchKindAccess(r, s.computeSearchKindRBAC(r)),
 		View:                 view,
 		Filter:               vulnerabilityFilter(r),
@@ -188,6 +206,22 @@ func (s *Server) readVulnerabilities(w http.ResponseWriter, r *http.Request, exp
 		return vulnerabilities.Response{}, false
 	}
 	return resp, true
+}
+
+// routeNamespacesForUser is where the caller may read Gateways and Gateway
+// API routes for exposure: their whole namespace ceiling, whatever the view
+// is narrowed to, since a route and its Gateway often sit in another
+// namespace than the workload they reach. failed is true when the ceiling
+// couldn't be worked out; the read then uses the view's namespaces.
+func (s *Server) routeNamespacesForUser(r *http.Request) (namespaces []string, failed bool) {
+	if k8s.ForceNamespaceScope {
+		target := k8s.GetNamespaceScopeTarget()
+		if target == "" {
+			return []string{}, false
+		}
+		return []string{target}, false
+	}
+	return s.getUserNamespacesWithStatus(r, nil)
 }
 
 // isCollectorRefusal: Radar's own identity couldn't read the reports
