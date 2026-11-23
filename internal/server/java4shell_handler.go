@@ -73,9 +73,9 @@ func (s *Server) serveJava4Shell(w http.ResponseWriter, r *http.Request, stream 
 		requested = []string{ns}
 	}
 	cache := readCache()
-	_, generation := k8s.GetClientWithGeneration()
+	generation := k8s.Current().ClientGeneration()
 	current := func() bool {
-		_, now := k8s.GetClientWithGeneration()
+		now := k8s.Current().ClientGeneration()
 		return generation == now && readCache() == cache
 	}
 	if auth.UserFromContext(r.Context()) != nil && s.permCache == nil {

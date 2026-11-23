@@ -101,6 +101,12 @@ rules:
   - apiGroups: ["operator.victoriametrics.com"]
     resources: ["vmagents", "vmclusters", "vmsingles"]
     verbs: ["get", "list", "watch"]
+  {{- if .Values.rbac.crdGroups.metallb }}
+  # spec.password can hold the BGP session password inline.
+  - apiGroups: ["metallb.io"]
+    resources: ["bgppeers"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- end }}
 
   # Workload resources (read-only)
@@ -462,6 +468,14 @@ rules:
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
+  {{- if .Values.rbac.crdGroups.metallb }}
+  # The kinds Radar curates and the controller's ConfigurationState reports.
+  # BGPPeers are granted with Secrets, below. BFD profiles, communities and
+  # the per-Service announcement statuses are not read.
+  - apiGroups: ["metallb.io"]
+    resources: ["ipaddresspools", "l2advertisements", "bgpadvertisements", "configurationstates"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.multus }}
   # Pod details link each secondary network to its NetworkAttachmentDefinition;
   # nothing else in the group is read.
@@ -481,6 +495,11 @@ rules:
   # not a CRD, but gated like one since pre-1.32 clusters don't serve it.
   - apiGroups: ["resource.k8s.io"]
     resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.longhorn }}
+  - apiGroups: ["longhorn.io"]
+    resources: ["volumes", "engines", "replicas"]
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.nvidia }}

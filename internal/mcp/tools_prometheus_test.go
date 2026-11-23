@@ -76,6 +76,10 @@ func (f *fakeProm) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	switch {
 	case path == "/api/v1/query":
+		// Instant queries may arrive in a POST body, as the cluster scope
+		// probes do; a real store reads either.
+		_ = r.ParseForm()
+		q = r.Form
 		if q.Get("query") == "up" {
 			f.probeCalls++
 			writeFakeBody(w, 0, probeOKBody)

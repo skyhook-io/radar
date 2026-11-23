@@ -146,9 +146,11 @@ type MetricsHistoryStore struct {
 	// It allows callers to record errors in an external error log.
 	OnError func(subsystem, level, format string, args ...any)
 
-	stopCh    chan struct{}
+	// publishMu orders Stop with local writes and OnError callbacks. Discovery and LIST run outside it.
+	publishMu sync.Mutex
+	stopCtx   context.Context
+	cancel    context.CancelFunc
 	startOnce sync.Once
-	stopOnce  sync.Once
 	wg        sync.WaitGroup
 }
 
@@ -253,12 +255,14 @@ func NewMetricsHistoryStore(client dynamic.Interface) *MetricsHistoryStore {
 
 // NewMetricsHistoryStoreWithResolver creates a store that follows discovered metrics API versions.
 func NewMetricsHistoryStoreWithResolver(client dynamic.Interface, resolveGVR MetricsGVRResolver) *MetricsHistoryStore {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &MetricsHistoryStore{
 		dynClient:   client,
 		resolveGVR:  resolveGVR,
 		podMetrics:  make(map[string]*podMetricsBuffer),
 		nodeMetrics: make(map[string]*nodeMetricsBuffer),
-		stopCh:      make(chan struct{}),
+		stopCtx:     ctx,
+		cancel:      cancel,
 	}
 }
 
@@ -271,21 +275,22 @@ func (s *MetricsHistoryStore) Start() {
 	})
 }
 
-// Stop halts background polling and waits for the goroutine to exit.
+// Stop cancels polling. An in-flight discovery refresh can finish after Stop returns.
 func (s *MetricsHistoryStore) Stop() {
-	s.stopOnce.Do(func() { close(s.stopCh) })
-	s.wg.Wait()
-	log.Println("Metrics history collection stopped")
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
+	s.cancel()
 }
 
 func (s *MetricsHistoryStore) pollLoop() {
 	defer s.wg.Done()
+	defer log.Println("Metrics history collection stopped")
 	s.collectMetrics()
 	ticker := time.NewTicker(MetricsPollInterval)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-s.stopCh:
+		case <-s.stopCtx.Done():
 			return
 		case <-ticker.C:
 			s.collectMetrics()
@@ -294,15 +299,24 @@ func (s *MetricsHistoryStore) pollLoop() {
 }
 
 func (s *MetricsHistoryStore) collectMetrics() {
+	s.publishMu.Lock()
+	if s.stopCtx.Err() != nil {
+		s.publishMu.Unlock()
+		return
+	}
 	now := time.Now()
 	s.mu.Lock()
 	s.lastCollectionAttempt = now
 	s.totalCollections++
 	s.mu.Unlock()
-	podCtx, cancelPods := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancelPods()
+	s.publishMu.Unlock()
+	podCtx, cancelPods := context.WithTimeout(s.stopCtx, 10*time.Second)
 	s.collectPodMetrics(podCtx, now)
-	nodeCtx, cancelNodes := context.WithTimeout(context.Background(), 10*time.Second)
+	cancelPods()
+	if s.stopCtx.Err() != nil {
+		return
+	}
+	nodeCtx, cancelNodes := context.WithTimeout(s.stopCtx, 10*time.Second)
 	defer cancelNodes()
 	s.collectNodeMetrics(nodeCtx, now)
 }
@@ -366,30 +380,12 @@ func (s *MetricsHistoryStore) recordNodeCollectionError(err error) {
 }
 
 func (s *MetricsHistoryStore) collectPodMetrics(ctx context.Context, now time.Time) {
-	if s.dynClient == nil {
-		var shouldReport bool
-		var count int
-		s.mu.Lock()
-		s.consecutivePodErrors++
-		s.lastPodError = "dynamic client not initialized"
-		shouldReport = s.consecutivePodErrors == 1 || s.consecutivePodErrors%20 == 0
-		count = s.consecutivePodErrors
-		s.mu.Unlock()
-		if shouldReport {
-			log.Printf("[metrics] Pod metrics collection failed (count=%d): %s", count, "dynamic client not initialized")
-			if s.OnError != nil {
-				s.OnError("metrics", "error", "pod metrics collection failed (count=%d): %s", count, "dynamic client not initialized")
-			}
-		}
+	items, listed, err := s.listPodMetrics(ctx)
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
+	if s.stopCtx.Err() != nil {
 		return
 	}
-	podMetricsGVR, ok := s.metricsGVR("pods")
-	if !ok {
-		s.recordPodCollectionError(ErrMetricsAPINotDiscovered)
-		return
-	}
-
-	items, listed, err := s.listPodMetrics(ctx, podMetricsGVR)
 	if !listed {
 		s.recordPodCollectionError(err)
 		return
@@ -473,7 +469,11 @@ func (s *MetricsHistoryStore) collectPodMetrics(ctx context.Context, now time.Ti
 // listPodMetrics lists pod metrics cluster-wide, or per namespace when
 // Namespaces is set. listed reports whether any LIST succeeded; err joins the
 // failures.
-func (s *MetricsHistoryStore) listPodMetrics(ctx context.Context, gvr schema.GroupVersionResource) (items []unstructured.Unstructured, listed bool, err error) {
+func (s *MetricsHistoryStore) listPodMetrics(ctx context.Context) (items []unstructured.Unstructured, listed bool, err error) {
+	gvr, err := s.resolvePollGVR("pods")
+	if err != nil {
+		return nil, false, err
+	}
 	var namespaces []string
 	if s.Namespaces != nil {
 		namespaces = s.Namespaces()
@@ -506,7 +506,7 @@ func (s *MetricsHistoryStore) listPodMetrics(ctx context.Context, gvr schema.Gro
 		}
 	}
 	err = errors.Join(errs...)
-	if !listed && err != nil {
+	if !listed && err != nil && s.stopCtx.Err() == nil {
 		// The collection error is shown with any pod's history, so it must
 		// not name namespaces the reader may not see. The detail goes to the
 		// Radar log; the cause is kept for classification.
@@ -546,31 +546,31 @@ func firstError(errs []error) error {
 	return nil
 }
 
-func (s *MetricsHistoryStore) collectNodeMetrics(ctx context.Context, now time.Time) {
+func (s *MetricsHistoryStore) resolvePollGVR(resource string) (schema.GroupVersionResource, error) {
 	if s.dynClient == nil {
-		var shouldReport bool
-		var count int
-		s.mu.Lock()
-		s.consecutiveNodeErrors++
-		s.lastNodeError = "dynamic client not initialized"
-		shouldReport = s.consecutiveNodeErrors == 1 || s.consecutiveNodeErrors%20 == 0
-		count = s.consecutiveNodeErrors
-		s.mu.Unlock()
-		if shouldReport {
-			log.Printf("[metrics] Node metrics collection failed (count=%d): %s", count, "dynamic client not initialized")
-			if s.OnError != nil {
-				s.OnError("metrics", "error", "node metrics collection failed (count=%d): %s", count, "dynamic client not initialized")
-			}
-		}
-		return
+		return schema.GroupVersionResource{}, errors.New("dynamic client not initialized")
 	}
-	nodeMetricsGVR, ok := s.metricsGVR("nodes")
+	gvr, ok := s.metricsGVR(resource)
+	if err := s.stopCtx.Err(); err != nil {
+		return schema.GroupVersionResource{}, err
+	}
 	if !ok {
-		s.recordNodeCollectionError(ErrMetricsAPINotDiscovered)
+		return schema.GroupVersionResource{}, ErrMetricsAPINotDiscovered
+	}
+	return gvr, nil
+}
+
+func (s *MetricsHistoryStore) collectNodeMetrics(ctx context.Context, now time.Time) {
+	gvr, err := s.resolvePollGVR("nodes")
+	var result *unstructured.UnstructuredList
+	if err == nil {
+		result, err = s.dynClient.Resource(gvr).List(ctx, metav1.ListOptions{})
+	}
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
+	if s.stopCtx.Err() != nil {
 		return
 	}
-
-	result, err := s.dynClient.Resource(nodeMetricsGVR).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		s.recordNodeCollectionError(err)
 		return

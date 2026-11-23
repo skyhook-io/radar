@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math"
 	"slices"
+
+	"github.com/skyhook-io/radar/pkg/rightsizing"
 )
 
 // Class ordering and impact mirror web/src/components/rightsizing/model.ts.
@@ -44,6 +46,13 @@ func RightsizingPriority(class RightsizingClass, rows []RightsizingRow, scaledTo
 			}
 		}
 	}
+	if !scaledToZero {
+		for _, row := range rows {
+			if !RowUnevidenced(row) && row.RecommendedReq != nil && (row.Fit == FitUnderRequested || row.Fit == FitMissingRequest) {
+				return 1
+			}
+		}
+	}
 	switch class {
 	case ClassIncrease:
 		return 1
@@ -70,73 +79,22 @@ type RightsizingImpact struct {
 	MemoryChange float64 `json:"-"`
 }
 
-// NeedsManualReview marks a row whose recommendation a human has to weigh:
-// autoscaler involvement, OOM history, a limit that conflicts with the request,
-// or a reduction against bursty or throttled usage. These rows are excluded
-// from impact — counting a reduction nobody should apply unattended as savings
-// would rank the workload by waste it cannot actually give back.
 func NeedsManualReview(row RightsizingRow) bool {
-	return len(ManualReviewReasons(row)) > 0
+	return row.Decision.Status == rightsizing.DecisionReview
 }
-
-// ManualReviewReasons names why a row needs a human, so the verdict travels
-// with the recommendation instead of being re-derived by every consumer from
-// the raw signals. Excluding a row from impact is a silent, negative signal: a
-// reader would have to notice that a row recommending a cut contributed nothing
-// to the total. The verdict and its reasons come from one place so the filter,
-// the impact total and the response cannot disagree about which rows are safe.
-func ManualReviewReasons(row RightsizingRow) []string {
-	var reasons []string
-	if row.HPAManaged {
-		reasons = append(reasons, "hpa_managed")
-	}
-	if row.CurrentPodOOM {
-		reasons = append(reasons, "current_pod_oom")
-	}
-	if row.WindowOOMEvidence {
-		reasons = append(reasons, "oom_in_window")
-	}
-	if row.LimitConflict {
-		reasons = append(reasons, "limit_conflict")
-	}
-	if IsWithheldRecommendationReason(row.RecommendationReason) {
-		reasons = append(reasons, "recommendation_withheld")
-	}
-	// Radar sizes container requests, and this pod's reservation is the
-	// pod-level request it does not size. Left out of review, the workload
-	// would classify in_range: a verdict about a budget nobody evaluated.
-	if row.Fit == FitPodLevelRequest {
-		reasons = append(reasons, "pod_level_request")
-	}
-	// Burst and throttling only matter against a cut: they say the smaller
-	// request would be met by a workload that already wants more.
-	if isReduction(row) {
-		if row.Bursty {
-			reasons = append(reasons, "bursty_reduction")
-		}
-		if row.ThrottleRatio != nil && *row.ThrottleRatio >= throttleReviewRatio {
-			reasons = append(reasons, "throttled_reduction")
-		}
-	}
-	return reasons
-}
+func ManualReviewReasons(row RightsizingRow) []string { return row.Decision.Reasons }
 
 // throttleReviewRatio is the share of throttled CPU periods that makes a row
 // worth a human's attention. Shared so the review rule and the row filter
 // cannot drift apart on the number.
-const throttleReviewRatio = 0.1
+const throttleReviewRatio = rightsizing.ThrottleReviewRatio
 
 // SignificantlyThrottled reports throttling heavy enough that the row should
-// reach a reader whatever its fit says. classifyRightsizingFit settles fit from
+// reach a reader whatever its fit says. rightsizing.ClassifyRightsizingFit settles fit from
 // the request alone, so a container throttled against a too-low limit reads as
 // correctly sized — which is precisely the row worth surfacing.
 func SignificantlyThrottled(row RightsizingRow) bool {
 	return row.ThrottleAvailable && row.ThrottleRatio != nil && *row.ThrottleRatio >= throttleReviewRatio
-}
-
-func isReduction(row RightsizingRow) bool {
-	return row.RecommendedRequestValue != nil && row.CurrentRequestValue != nil &&
-		*row.RecommendedRequestValue < *row.CurrentRequestValue
 }
 
 // ClassifyRows reduces a workload's rows to the one class that decides its
@@ -152,7 +110,7 @@ func ClassifyRows(rows []RightsizingRow, replicas int, scaledToZero bool) Rights
 		return ClassReview
 	}
 	for _, row := range rows {
-		if (row.Fit == FitUnderRequested || row.Fit == FitMissingRequest) && row.RecommendedReq != nil {
+		if (row.Fit == FitUnderRequested || row.Fit == FitMissingRequest) && row.Decision.Status == rightsizing.DecisionActionable {
 			return ClassIncrease
 		}
 	}
@@ -172,14 +130,7 @@ func CalculateImpact(rows []RightsizingRow, replicas int) RightsizingImpact {
 	count := max(replicas, 0)
 	impact := RightsizingImpact{Replicas: count}
 	for _, row := range rows {
-		if row.RecommendedRequestValue == nil || NeedsManualReview(row) {
-			continue
-		}
-		current := 0.0
-		if row.CurrentRequestValue != nil {
-			current = *row.CurrentRequestValue
-		}
-		change := (*row.RecommendedRequestValue - current) * float64(count)
+		change := row.RequestChange(count)
 		if row.Resource == "cpu" {
 			impact.CPUChange += change
 		} else {
@@ -219,7 +170,7 @@ func RightsizingRankLess(aPriority int, aImpact RightsizingImpact, aKey string,
 }
 
 // formatSignedRightsizingValue always spells CPU in millicores and memory in
-// Mi/Gi. formatObservedValue switches CPU to bare cores above 1000m, which
+// Mi/Gi. rightsizing.FormatObservedValue switches CPU to bare cores above 1000m, which
 // reads as an unlabelled number once a sign is prepended to it.
 func formatSignedRightsizingValue(v float64, resourceName string) string {
 	sign := "+"
@@ -231,7 +182,7 @@ func formatSignedRightsizingValue(v float64, resourceName string) string {
 	case "cpu":
 		return fmt.Sprintf("%s%.0fm", sign, magnitude*1000)
 	case "memory":
-		return sign + formatObservedValue(magnitude, "memory")
+		return sign + rightsizing.FormatObservedValue(magnitude, "memory")
 	}
 	return ""
 }

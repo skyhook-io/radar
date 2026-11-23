@@ -228,7 +228,8 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 		return nil, nil, err
 	}
 	operation := k8s.OperationContext()
-	config, clusterContext := k8s.GetConfigSnapshot()
+	conn := k8s.Current()
+	config, clusterContext := conn.ConfigCopy(), k8s.TimelineClusterContext(conn.ContextName())
 	ctx = context.WithValue(ctx, confirmationContextKey{}, clusterContext)
 	if _, err := helm.CheckWritePermission(ctx, in.Namespace); err != nil {
 		return nil, nil, err

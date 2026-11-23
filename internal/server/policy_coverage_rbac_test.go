@@ -64,8 +64,7 @@ func podSubject(name string) map[string]any {
 // publishIndex installs an index for the duration of the test.
 func publishIndex(t *testing.T, reports ...*unstructured.Unstructured) {
 	t.Helper()
-	prev := k8s.SetTestPolicyReportIndex(policyreports.BuildIndex(reports))
-	t.Cleanup(func() { k8s.SetTestPolicyReportIndex(prev) })
+	t.Cleanup(k8s.SetTestPolicyReportIndex(policyreports.BuildIndex(reports)))
 }
 
 // allow seeds the SAR cache so canRead answers from it rather than reaching for

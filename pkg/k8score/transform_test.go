@@ -434,3 +434,47 @@ func TestDropManagedFields_OtherSecretsKeepValues(t *testing.T) {
 		}
 	}
 }
+
+// A Longhorn Engine keeps what Radar reads (replica modes and addresses,
+// rebuild progress) and loses the per-snapshot and per-operation maps that
+// make it large and churn on every snapshot or backup.
+func TestDropUnstructuredManagedFields_LonghornEngine(t *testing.T) {
+	engine := func(apiVersion string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": apiVersion, "kind": "Engine",
+			"metadata": map[string]any{"name": "pvc-1-e-0", "namespace": "longhorn-system"},
+			"spec":     map[string]any{"volumeName": "pvc-1", "active": true},
+			"status": map[string]any{
+				"currentState":             "running",
+				"replicaModeMap":           map[string]any{"r1": "RW"},
+				"currentReplicaAddressMap": map[string]any{"r1": "10.0.0.1:10000"},
+				"rebuildStatus":            map[string]any{"10.0.0.1:10000": map[string]any{"progress": int64(40)}},
+				"snapshots":                map[string]any{"s1": map[string]any{"name": "s1"}},
+				"backupStatus":             map[string]any{"b1": map[string]any{}},
+				"restoreStatus":            map[string]any{"r1": map[string]any{}},
+				"purgeStatus":              map[string]any{"r1": map[string]any{}},
+				"cloneStatus":              map[string]any{"r1": map[string]any{}},
+				"replicaTransitionTimeMap": map[string]any{"r1": "2026-01-01T00:00:00Z"},
+			},
+		}}
+	}
+	out, err := DropUnstructuredManagedFields(engine("longhorn.io/v1beta2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := out.(*unstructured.Unstructured).Object["status"].(map[string]any)
+	for _, kept := range []string{"currentState", "replicaModeMap", "currentReplicaAddressMap", "rebuildStatus"} {
+		if _, ok := status[kept]; !ok {
+			t.Errorf("status.%s was dropped", kept)
+		}
+	}
+	for _, dropped := range []string{"snapshots", "backupStatus", "restoreStatus", "purgeStatus", "cloneStatus", "replicaTransitionTimeMap"} {
+		if _, ok := status[dropped]; ok {
+			t.Errorf("status.%s was kept", dropped)
+		}
+	}
+	other, _ := DropUnstructuredManagedFields(engine("example.com/v1"))
+	if _, ok := other.(*unstructured.Unstructured).Object["status"].(map[string]any)["snapshots"]; !ok {
+		t.Error("an Engine of another group lost its status")
+	}
+}

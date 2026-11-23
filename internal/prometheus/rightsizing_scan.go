@@ -13,11 +13,14 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/prom"
+	"github.com/skyhook-io/radar/pkg/rightsizing"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 	listersappsv1 "k8s.io/client-go/listers/apps/v1"
 )
 
@@ -175,7 +178,13 @@ type RightsizingScanResponse struct {
 	Workloads []RightsizingScanWorkload `json:"workloads"`
 	Warnings  []RightsizingScanWarning  `json:"warnings,omitempty"`
 	Reason    string                    `json:"reason,omitempty"`
+	// ClusterScope is how the scan's queries were kept to this cluster in a
+	// store that may hold several; absent until the scan checked.
+	ClusterScope *ClusterScope `json:"clusterScope,omitempty"`
 }
+
+// scanScopeResolver decides a scan's cluster scope once, for all its batches.
+type scanScopeResolver func(ctx context.Context, workloads []scanWorkload) (ViewScope, error)
 
 type rightsizingScanQuerier interface {
 	Query(context.Context, string) (*prom.QueryResult, error)
@@ -183,6 +192,7 @@ type rightsizingScanQuerier interface {
 }
 
 type scanWorkload struct {
+	uid       types.UID
 	kind      string
 	namespace string
 	name      string
@@ -235,9 +245,10 @@ func runRightsizingScan(ctx context.Context, scope RightsizingScanScope, client 
 		return resp
 	}
 	if len(workloads) == 0 {
-		return computeRightsizingScanProgress(ctx, nil, workloads, resp, publish)
+		return computeRightsizingScanProgress(ctx, nil, nil, workloads, resp, publish)
 	}
-	querier, err := client.newScanQuerier(ctx, resp.ScannedAt.Truncate(rightsizingStep))
+	at := resp.ScannedAt.Truncate(rightsizingStep)
+	querier, err := client.newScanQuerier(ctx, at)
 	if err != nil {
 		resp.Reason = "prometheus_unavailable"
 		if ctx.Err() == nil {
@@ -245,7 +256,12 @@ func runRightsizingScan(ctx context.Context, scope RightsizingScanScope, client 
 		}
 		return resp
 	}
-	return computeRightsizingScanProgress(ctx, querier, workloads, resp, publish)
+	resolve := func(ctx context.Context, workloads []scanWorkload) (ViewScope, error) {
+		return resolveOnConnection(func() bool { return client.ConnectionCurrent(querier.conn) }, func() (ViewScope, error) {
+			return resolveRightsizingScope(ctx, client, scanRightsizingScopeRequest(workloads, cache, at), cache)
+		})
+	}
+	return computeRightsizingScanProgress(ctx, querier, resolve, workloads, resp, publish)
 }
 
 // scanCacheCoverage is the slice of the resource cache the scope clamp needs.
@@ -323,10 +339,12 @@ func newRightsizingScanResponse(now time.Time, scope RightsizingScanScope) Right
 }
 
 func computeRightsizingScan(ctx context.Context, client rightsizingScanQuerier, workloads []scanWorkload, resp RightsizingScanResponse) RightsizingScanResponse {
-	return computeRightsizingScanProgress(ctx, client, workloads, resp, func(RightsizingScanResponse) {})
+	return computeRightsizingScanProgress(ctx, client, nil, workloads, resp, func(RightsizingScanResponse) {})
 }
 
-func computeRightsizingScanProgress(ctx context.Context, client rightsizingScanQuerier, workloads []scanWorkload, resp RightsizingScanResponse, publish func(RightsizingScanResponse)) RightsizingScanResponse {
+// computeRightsizingScanProgress runs a scan's batches. A nil resolve leaves
+// every selector unfiltered.
+func computeRightsizingScanProgress(ctx context.Context, client rightsizingScanQuerier, resolve scanScopeResolver, workloads []scanWorkload, resp RightsizingScanResponse, publish func(RightsizingScanResponse)) RightsizingScanResponse {
 	sortScanWorkloads(workloads)
 	resp.Coverage.WorkloadsDiscovered = len(workloads)
 	if len(workloads) == 0 {
@@ -355,7 +373,23 @@ func computeRightsizingScanProgress(ctx context.Context, client rightsizingScanQ
 		return resp
 	}
 
-	ksm, err := client.Query(ctx, `count(kube_pod_owner)`)
+	var scope ViewScope
+	if resolve != nil {
+		var err error
+		scope, err = resolve(ctx, workloads)
+		if err != nil && ctx.Err() != nil {
+			resp.Reason = "scan_incomplete"
+			appendScanWarning(&resp, ReasonScanDeadlineExceeded, ctx.Err().Error())
+			return resp
+		}
+		resp.ClusterScope = scope.Wire()
+		if scope.Withheld {
+			return withheldRightsizingScan(resp, workloads, scope)
+		}
+	}
+	client = strictQuerier{client}
+
+	ksm, err := client.Query(ctx, "count("+bareScopedSelector(scope, metricPodOwner)+")")
 	if err != nil {
 		resp.Reason = "owner_metrics_query_failed"
 		if ctx.Err() == nil {
@@ -369,7 +403,7 @@ func computeRightsizingScanProgress(ctx context.Context, client rightsizingScanQ
 	}
 	replicaSetOwnersQueryFailed := false
 	if hasScanKind(workloads, "Deployment") {
-		replicaSetOwners, queryErr := client.Query(ctx, `count(kube_replicaset_owner)`)
+		replicaSetOwners, queryErr := client.Query(ctx, "count("+bareScopedSelector(scope, metricReplicaSetOwner)+")")
 		if queryErr != nil && ctx.Err() != nil {
 			return resp
 		}
@@ -400,7 +434,7 @@ func computeRightsizingScanProgress(ctx context.Context, client rightsizingScanQ
 		end := min(start+rightsizingScanBatchSize, len(workloads))
 		batch := workloads[start:end]
 		batchStarted := time.Now()
-		evidence := queryRightsizingScanBatch(ctx, client, batch, resp.ScannedAt)
+		evidence := queryRightsizingScanBatch(ctx, client, batch, resp.ScannedAt, scope)
 		resp.Coverage.AttemptedBatches++
 		log.Printf("[rightsizing] batch=%d workloads=%d duration=%s query_failures=%d", resp.Coverage.AttemptedBatches, len(batch), time.Since(batchStarted).Round(time.Millisecond), len(evidence.errors))
 		if len(evidence.errors) == 0 {
@@ -448,8 +482,8 @@ func computeRightsizingScanProgress(ctx context.Context, client rightsizingScanQ
 	return resp
 }
 
-func queryRightsizingScanBatch(ctx context.Context, client rightsizingScanQuerier, batch []scanWorkload, now time.Time) scanBatchEvidence {
-	queries := buildRightsizingScanQueries(batch)
+func queryRightsizingScanBatch(ctx context.Context, client rightsizingScanQuerier, batch []scanWorkload, now time.Time, scope ViewScope) scanBatchEvidence {
+	queries := buildRightsizingScanQueries(batch, scope)
 	out := scanBatchEvidence{
 		cpu: map[scanKey][]float64{}, memory: map[scanKey][]float64{}, throttle: map[scanKey][]float64{},
 		restarts: map[scanKey]float64{}, terminations: map[scanKey]terminationEvidence{}, errors: map[string]error{},
@@ -532,17 +566,18 @@ func queryRightsizingScanBatch(ctx context.Context, client rightsizingScanQuerie
 	return out
 }
 
-func buildRightsizingScanQueries(batch []scanWorkload) map[string]string {
-	owner := rightsizingScanOwnerVector(batch)
+func buildRightsizingScanQueries(batch []scanWorkload, scope ViewScope) map[string]string {
+	owner := rightsizingScanOwnerVector(batch, scope)
 	namespaces := batchNamespaces(batch)
 	nsMatcher := labelRegexMatcher("namespace", namespaces)
+	f := func(metric string) string { return scopeMatchers(scope, metric) }
 	group := "namespace,workload_kind,workload,container"
-	cpu := fmt.Sprintf(`max by (%s) (rate(container_cpu_usage_seconds_total{%s,container!="",container!="POD"}[5m]) * on (namespace,pod) group_left(workload_kind,workload) (%s))`, group, nsMatcher, owner)
-	memory := fmt.Sprintf(`max by (%s) (container_memory_working_set_bytes{%s,container!="",container!="POD"} * on (namespace,pod) group_left(workload_kind,workload) (%s))`, group, nsMatcher, owner)
-	throttled := fmt.Sprintf(`sum by (%s) (rate(container_cpu_cfs_throttled_periods_total{%s,container!="",container!="POD"}[5m]) * on (namespace,pod) group_left(workload_kind,workload) (%s))`, group, nsMatcher, owner)
-	periods := fmt.Sprintf(`sum by (%s) (rate(container_cpu_cfs_periods_total{%s,container!="",container!="POD"}[5m]) * on (namespace,pod) group_left(workload_kind,workload) (%s))`, group, nsMatcher, owner)
-	restarts := fmt.Sprintf(`max by (%s,pod) (kube_pod_container_status_restarts_total{%s,container!=""} * on (namespace,pod) group_left(workload_kind,workload) (%s))`, group, nsMatcher, owner)
-	terminations := fmt.Sprintf(`max by (%s,pod,reason) (kube_pod_container_status_last_terminated_timestamp{%s,container!=""} * on (namespace,pod,container) group_left(reason) max by (namespace,pod,container,reason) (kube_pod_container_status_last_terminated_reason{%s,container!=""}) * on (namespace,pod) group_left(workload_kind,workload) (%s))`, group, nsMatcher, nsMatcher, owner)
+	cpu := fmt.Sprintf(`max by (%s) (rate(container_cpu_usage_seconds_total{%s,container!="",container!="POD"%s}[5m]) * on (namespace,pod) group_left(workload_kind,workload) (%s))`, group, nsMatcher, f(metricCPUUsage), owner)
+	memory := fmt.Sprintf(`max by (%s) (container_memory_working_set_bytes{%s,container!="",container!="POD"%s} * on (namespace,pod) group_left(workload_kind,workload) (%s))`, group, nsMatcher, f(metricMemoryWorkingSet), owner)
+	throttled := fmt.Sprintf(`sum by (%s) (rate(container_cpu_cfs_throttled_periods_total{%s,container!="",container!="POD"%s}[5m]) * on (namespace,pod) group_left(workload_kind,workload) (%s))`, group, nsMatcher, f(metricThrottledPeriods), owner)
+	periods := fmt.Sprintf(`sum by (%s) (rate(container_cpu_cfs_periods_total{%s,container!="",container!="POD"%s}[5m]) * on (namespace,pod) group_left(workload_kind,workload) (%s))`, group, nsMatcher, f(metricCFSPeriods), owner)
+	restarts := fmt.Sprintf(`max by (%s,pod) (kube_pod_container_status_restarts_total{%s,container!=""%s} * on (namespace,pod) group_left(workload_kind,workload) (%s))`, group, nsMatcher, f(metricRestarts), owner)
+	terminations := fmt.Sprintf(`max by (%s,pod,reason) (kube_pod_container_status_last_terminated_timestamp{%s,container!=""%s} * on (namespace,pod,container) group_left(reason) max by (namespace,pod,container,reason) (kube_pod_container_status_last_terminated_reason{%s,container!=""%s}) * on (namespace,pod) group_left(workload_kind,workload) (%s))`, group, nsMatcher, f(metricTerminatedAt), nsMatcher, f(metricTerminatedReason), owner)
 	return map[string]string{
 		"cpu":                 cpu,
 		"memory":              memory,
@@ -552,7 +587,8 @@ func buildRightsizingScanQueries(batch []scanWorkload) map[string]string {
 	}
 }
 
-func rightsizingScanOwnerVector(batch []scanWorkload) string {
+func rightsizingScanOwnerVector(batch []scanWorkload, scope ViewScope) string {
+	podOwner, replicaSetOwner := scopeMatchers(scope, metricPodOwner), scopeMatchers(scope, metricReplicaSetOwner)
 	byKindNamespace := map[string]map[string][]string{}
 	for _, workload := range batch {
 		if byKindNamespace[workload.kind] == nil {
@@ -574,12 +610,12 @@ func rightsizingScanOwnerVector(batch []scanWorkload) string {
 			ns := prom.SanitizeLabelValue(namespace)
 			namePattern := exactRegex(names)
 			if kind == "Deployment" {
-				right := fmt.Sprintf(`label_replace(max by (namespace,replicaset,owner_name) (kube_replicaset_owner{namespace="%s",owner_kind="Deployment",owner_name=~"%s",owner_is_controller="true"}), "workload", "$1", "owner_name", "(.*)")`, ns, namePattern)
-				joined := fmt.Sprintf(`label_replace(max by (namespace,pod,owner_name) (kube_pod_owner{namespace="%s",owner_kind="ReplicaSet",owner_is_controller="true"}), "replicaset", "$1", "owner_name", "(.*)") * on (namespace,replicaset) group_left(workload) (%s)`, ns, right)
+				right := fmt.Sprintf(`label_replace(max by (namespace,replicaset,owner_name) (kube_replicaset_owner{namespace="%s",owner_kind="Deployment",owner_name=~"%s",owner_is_controller="true"%s}), "workload", "$1", "owner_name", "(.*)")`, ns, namePattern, replicaSetOwner)
+				joined := fmt.Sprintf(`label_replace(max by (namespace,pod,owner_name) (kube_pod_owner{namespace="%s",owner_kind="ReplicaSet",owner_is_controller="true"%s}), "replicaset", "$1", "owner_name", "(.*)") * on (namespace,replicaset) group_left(workload) (%s)`, ns, podOwner, right)
 				terms = append(terms, fmt.Sprintf(`label_replace((%s), "workload_kind", "Deployment", "workload", ".*")`, joined))
 				continue
 			}
-			owner := fmt.Sprintf(`label_replace(max by (namespace,pod,owner_name) (kube_pod_owner{namespace="%s",owner_kind="%s",owner_name=~"%s",owner_is_controller="true"}), "workload", "$1", "owner_name", "(.*)")`, ns, kind, namePattern)
+			owner := fmt.Sprintf(`label_replace(max by (namespace,pod,owner_name) (kube_pod_owner{namespace="%s",owner_kind="%s",owner_name=~"%s",owner_is_controller="true"%s}), "workload", "$1", "owner_name", "(.*)")`, ns, kind, namePattern, podOwner)
 			terms = append(terms, fmt.Sprintf(`label_replace((%s), "workload_kind", "%s", "workload", ".*")`, owner, kind))
 		}
 	}
@@ -677,15 +713,15 @@ func buildScanWorkload(input scanWorkload, evidence scanBatchEvidence) Rightsizi
 			out.Rows = append(out.Rows, row)
 		}
 	}
-	withholdIncreasesAbovePodLimit(out.Rows, input.workload.podSpec)
+	rightsizing.Finalize(out.Rows, input.workload.podSpec, input.workload.qos, out.ScaledToZero)
 	return out
 }
 
 func buildScanRow(container containerSpec, resourceName string, key scanKey, expected int, workload rightsizingWorkload, evidence scanBatchEvidence) (row RightsizingRow) {
-	defer markPodLevelRequest(&row)
+	defer rightsizing.MarkPodLevelRequest(&row)
 	row = RightsizingRow{
 		Container: container.name, Resource: resourceName, Fit: FitInsufficientHistory, Confidence: ConfidenceLow,
-		ExpectedSamples: expected, HPAManaged: workload.hpaManaged[resourceName], HPAEvidenceAvailable: workload.hpaAvailable,
+		ExpectedSamples: expected, HPAManaged: rightsizing.HPATargets(workload.hpaManaged).Controls(container.name, resourceName), HPAEvidenceAvailable: workload.hpaAvailable,
 		LiveInventoryUnavailable: workload.liveInventoryUnavailable,
 	}
 	var request, limit = container.cpuReq, container.cpuLim
@@ -703,7 +739,7 @@ func buildScanRow(container containerSpec, resourceName string, key scanKey, exp
 			row.OOMEvidenceAvailable = termination.OOM || (restartAvailable && (restartActivity <= 0 || termination.Any))
 		}
 	}
-	setCurrentQuantities(&row, request, limit, resourceName)
+	rightsizing.SetCurrentQuantities(&row, request, limit, resourceName)
 	setPodLevelRequest(&row, podLevelRequestFor(container, resourceName), resourceName)
 	if queryErr := evidence.errors[resourceName]; queryErr != nil {
 		row.QueryError = RowUsageQueryFailed
@@ -717,13 +753,13 @@ func buildScanRow(container containerSpec, resourceName string, key scanKey, exp
 		observed = maxFinite(series)
 	} else {
 		peak := percentile(series, 0.99)
-		row.Peak = &ObservedStatistic{Name: "P99", Value: peak, Formatted: formatObservedValue(peak, resourceName)}
-		row.Bursty = isBurstyCPU(observed, peak)
+		row.Peak = &ObservedStatistic{Name: "P99", Value: peak, Formatted: rightsizing.FormatObservedValue(peak, resourceName)}
+		row.Bursty = rightsizing.IsBurstyCPU(observed, peak)
 	}
-	row.Observed = &ObservedStatistic{Name: statistic, Value: observed, Formatted: formatObservedValue(observed, resourceName)}
+	row.Observed = &ObservedStatistic{Name: statistic, Value: observed, Formatted: rightsizing.FormatObservedValue(observed, resourceName)}
 	row.SampleCount = len(series)
 	row.Coverage = math.Min(float64(row.SampleCount)/float64(expected), 1)
-	row.Confidence = confidenceFor(row.SampleCount, row.Coverage, OwnerCoverageKSMHistory)
+	row.Confidence = rightsizing.ConfidenceFor(row.SampleCount, row.Coverage, OwnerCoverageKSMHistory)
 	if resourceName == "cpu" && evidence.errors["throttle"] == nil {
 		if values := evidence.throttle[key]; len(values) > 0 {
 			value := maxFinite(values)
@@ -731,12 +767,30 @@ func buildScanRow(container containerSpec, resourceName string, key scanKey, exp
 			row.ThrottleRatio = &value
 		}
 	}
-	if row.SampleCount < rightsizingMinSamples {
+	if row.SampleCount < rightsizing.RightsizingMinSamples {
 		row.RecommendationReason = "insufficient_history"
 		return row
 	}
-	classifyRightsizingFit(&row, observed, request, limit, resourceName)
+	rightsizing.ClassifyRightsizingFit(&row, observed, request, limit, resourceName)
 	return row
+}
+
+// withheldRightsizingScan lists every workload with no data and the reason,
+// so none reads as measured and found correctly sized.
+func withheldRightsizingScan(resp RightsizingScanResponse, workloads []scanWorkload, scope ViewScope) RightsizingScanResponse {
+	resp.State = RightsizingScanUnavailable
+	resp.Reason = ScanReasonClusterScopeWithheld
+	appendScanWarning(&resp, ScanReasonClusterScopeWithheld, scope.Note)
+	empty := scanBatchEvidence{errors: map[string]error{}}
+	for _, workload := range workloads {
+		out := buildScanWorkload(workload, empty)
+		for i := range out.Rows {
+			out.Rows[i].RecommendationReason = ScanReasonClusterScopeWithheld
+		}
+		resp.Workloads = append(resp.Workloads, out)
+		resp.Coverage.WorkloadsEvaluated++
+	}
+	return resp
 }
 
 func percentile(values []float64, quantile float64) float64 {
@@ -888,9 +942,9 @@ func snapshotScanWorkloads(ctx context.Context, cache *k8s.ResourceCache, scopes
 	var unavailable, skippedDaemonSets []string
 	add := func(obj metav1.Object, kind string, replicas int, podSpec *corev1.PodSpec, scaledToZero bool) {
 		key := workloadIdentity(kind, obj.GetNamespace(), obj.GetName())
-		workloads[key] = &scanWorkload{kind: kind, namespace: obj.GetNamespace(), name: obj.GetName(), replicas: replicas, workload: rightsizingWorkload{
+		workloads[key] = &scanWorkload{uid: obj.GetUID(), kind: kind, namespace: obj.GetNamespace(), name: obj.GetName(), replicas: replicas, workload: rightsizingWorkload{
 			podSpec: podSpec, containers: extractRuntimeContainers(podSpec), currentPodOOM: map[string]bool{}, hpaManaged: map[string]bool{}, scaledToZero: scaledToZero,
-			managedBy: detectWorkloadManager(obj),
+			managedBy: DetectWorkloadManager(obj),
 		}}
 	}
 
@@ -1042,14 +1096,7 @@ func enrichScanHPA(ctx context.Context, cache *k8s.ResourceCache, scopes map[str
 		if workload == nil {
 			continue
 		}
-		for _, metric := range hpa.Spec.Metrics {
-			if metric.Type == autoscalingv2.ResourceMetricSourceType && metric.Resource != nil && metric.Resource.Target.AverageUtilization != nil {
-				resourceName := string(metric.Resource.Name)
-				if resourceName == "cpu" || resourceName == "memory" {
-					workload.workload.hpaManaged[resourceName] = true
-				}
-			}
-		}
+		AddHPATargetResources(workload.workload.hpaManaged, hpa, ref.Kind, ref.Name)
 	}
 }
 
@@ -1149,63 +1196,47 @@ func enrichScanCurrentOOM(ctx context.Context, cache *k8s.ResourceCache, scopes 
 	}
 
 	namespaces := scanScopeNamespaces(scopes)
-	replicaSetOwners, ownersListed := scanReplicaSetOwners(ctx, cache, namespaces, ownersReadable)
 	pods, podsListed := scanPods(cache, namespaces)
 	if !podsListed {
 		markScanLiveInventoryUnavailable(workloads, "")
 		return
-	}
-	if !ownersListed {
-		markScanLiveInventoryUnavailable(workloads, "Deployment")
 	}
 	for _, pod := range pods {
 		owner := metav1.GetControllerOf(pod)
 		if owner == nil {
 			continue
 		}
-		kind, name := owner.Kind, owner.Name
-		if owner.Kind == "ReplicaSet" {
-			kind, name = "Deployment", replicaSetOwners[pod.Namespace+"\x00"+owner.Name]
-		}
-		workload := workloads[workloadIdentity(kind, pod.Namespace, name)]
-		if workload == nil {
+		switch owner.Kind {
+		case "ReplicaSet":
+			if !ownersReadable {
+				continue
+			}
+			rs, err := cache.ReplicaSets().ReplicaSets(pod.Namespace).Get(owner.Name)
+			if err != nil {
+				if !apierrors.IsNotFound(err) {
+					markScanLiveInventoryUnavailable(workloads, "Deployment")
+				}
+				continue
+			}
+			if !k8s.ControllerMatchesIdentity(owner, "ReplicaSet", rs.Name, "apps", rs.UID) {
+				continue
+			}
+			owner = metav1.GetControllerOf(rs)
+			if owner == nil || owner.Kind != "Deployment" {
+				continue
+			}
+		case "DaemonSet", "StatefulSet":
+		default:
 			continue
 		}
+		workload := workloads[workloadIdentity(owner.Kind, pod.Namespace, owner.Name)]
+		if workload == nil || !k8s.ControllerMatchesIdentity(owner, workload.kind, workload.name, "apps", workload.uid) {
+			continue
+		}
+		workload.workload.qos.Observe(pod.Status.QOSClass)
 		collectCurrentPodOOM(workload.workload.currentPodOOM, pod.Status.ContainerStatuses)
 		collectCurrentPodOOM(workload.workload.currentPodOOM, pod.Status.InitContainerStatuses)
 	}
-}
-
-// scanReplicaSetOwners maps each ReplicaSet to its Deployment. It reports false
-// if any list failed, because a partial map silently drops the pods it could
-// not resolve rather than failing loudly.
-func scanReplicaSetOwners(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, readable bool) (map[string]string, bool) {
-	owners := map[string]string{}
-	if !readable || cache.ReplicaSets() == nil {
-		return owners, false
-	}
-	var replicaSets []*appsv1.ReplicaSet
-	if namespaces == nil {
-		list, err := cache.ReplicaSets().List(labels.Everything())
-		if err != nil {
-			return owners, false
-		}
-		replicaSets = list
-	} else {
-		for _, namespace := range namespaces {
-			items, err := cache.ReplicaSets().ReplicaSets(namespace).List(labels.Everything())
-			if err != nil {
-				return owners, false
-			}
-			replicaSets = append(replicaSets, items...)
-		}
-	}
-	for _, replicaSet := range replicaSets {
-		if owner := metav1.GetControllerOf(replicaSet); owner != nil && owner.Kind == "Deployment" {
-			owners[replicaSet.Namespace+"\x00"+replicaSet.Name] = owner.Name
-		}
-	}
-	return owners, true
 }
 
 // scanPods reports false if any list failed: a short pod list reads as pods

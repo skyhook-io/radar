@@ -1,3 +1,4 @@
+import { isCoreNode } from '../resources/resource-utils'
 import { getNodeLifecycle } from '../../utils/node-lifecycle'
 import { resourceRefKey } from '../../utils/resource-refs'
 import { useEffect, useState, useRef, useId } from 'react'
@@ -35,6 +36,9 @@ import { SyncOptionsDialog, type ArgoSyncOpts } from '../gitops/SyncOptionsDialo
 import { radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
 import { SetImageDialog, type SetImageOwnership } from './SetImageDialog'
 import { DrainPlanDialog, DEFAULT_DRAIN_DIALOG_OPTIONS, type DrainDialogOptions, type DrainPlan } from './DrainPlanDialog'
+import { ActionConfirmDialog } from './ActionConfirmDialog'
+import { Input } from '../ui/Input'
+import { jobNameError, manualJobIndexRoom, suggestManualJobName } from '../../utils/job-name'
 import type { WorkloadImageInventory, WorkloadImageUpdate } from '../../types/core'
 import { getGitOpsTool } from '../gitops/detail-helpers'
 import { apiVersionToGroup } from '../../utils/navigation'
@@ -120,8 +124,13 @@ interface ResourceActionsBarProps {
   onRolloutPromoteFull?: (params: { namespace: string; name: string }) => void | Promise<unknown>
 
   // CronJob actions
-  onTriggerCronJob?: (params: { namespace: string; name: string }) => void
+  // May return a promise that settles with the request: the Job name dialog
+  // then closes only once it resolves, and stays open with the name on failure.
+  onTriggerCronJob?: (params: { namespace: string; name: string; jobName?: string }) => void | Promise<unknown>
   isTriggeringCronJob?: boolean
+  // Set when the Radar accepts a Job name (cronJobTriggerJobName): Trigger
+  // then opens a dialog to review it. Without it Trigger runs at once.
+  cronJobTriggerDialog?: boolean
   onSuspendCronJob?: (params: { namespace: string; name: string }) => void
   isSuspendingCronJob?: boolean
   onResumeCronJob?: (params: { namespace: string; name: string }) => void
@@ -197,7 +206,7 @@ export function ResourceActionsBar({
   onLoadImages, onSetImages, isSettingImages, imageOwnership,
   revisions: revisionsList, revisionsLoading, revisionsError, onRollback, isRollingBack,
   onRolloutPromoteFull,
-  onTriggerCronJob, isTriggeringCronJob,
+  onTriggerCronJob, isTriggeringCronJob, cronJobTriggerDialog,
   onSuspendCronJob, isSuspendingCronJob,
   onResumeCronJob, isResumingCronJob,
   onFluxReconcile, isFluxReconciling,
@@ -234,8 +243,9 @@ export function ResourceActionsBar({
     deleteMounted.current = true
     return () => { deleteMounted.current = false }
   }, [])
-  const currentDeleteTarget = useRef({ key: resourceRefKey(resource), uid: data?.metadata?.uid })
-  currentDeleteTarget.current = { key: resourceRefKey(resource), uid: data?.metadata?.uid }
+  const resourceTarget = { key: resourceRefKey(resource), uid: data?.metadata?.uid }
+  const currentDeleteTarget = useRef(resourceTarget)
+  currentDeleteTarget.current = resourceTarget
   useEffect(() => { onDeletePreviewOpenChange?.(showDeleteConfirm) }, [showDeleteConfirm, onDeletePreviewOpenChange])
 
   // Node operation confirmation state
@@ -268,6 +278,24 @@ export function ResourceActionsBar({
   // Rollback dialog state
   const [showRevisions, setShowRevisions] = useState(false)
   const [showSetImage, setShowSetImage] = useState(false)
+  const [triggerDraft, setTriggerDraft] = useState<{ target: typeof resourceTarget; jobName: string } | null>(null)
+  const [triggerPending, setTriggerPending] = useState(false)
+  const triggerJobNameId = useId()
+  const canNameTrigger = kind === 'cronjobs' && Boolean(onTriggerCronJob && cronJobTriggerDialog)
+  if (triggerDraft && (!canNameTrigger || triggerDraft.target.key !== resourceTarget.key || triggerDraft.target.uid !== resourceTarget.uid)) {
+    setTriggerDraft(null)
+  }
+  const cronJobIndexRoom = manualJobIndexRoom(data?.spec?.jobTemplate?.spec)
+  const trimmedTriggerJobName = triggerDraft?.jobName.trim() ?? ''
+  const triggerJobNameError = triggerDraft ? jobNameError(trimmedTriggerJobName, cronJobIndexRoom) : null
+  const confirmTrigger = () => {
+    if (!triggerDraft || !onTriggerCronJob || triggerJobNameError || triggerPending) return
+    setTriggerPending(true)
+    // A rejection keeps the dialog; the host's mutation meta reports the error.
+    Promise.resolve(onTriggerCronJob({ namespace: resource.namespace, name: resource.name, jobName: trimmedTriggerJobName }))
+      .then(() => setTriggerDraft(null), () => {})
+      .finally(() => setTriggerPending(false))
+  }
   const isRollbackKind = ['deployments', 'statefulsets', 'daemonsets', 'rollouts'].includes(kind)
   const hasMultipleRevisions = (revisionsList?.length ?? 0) > 1
 
@@ -395,7 +423,7 @@ export function ResourceActionsBar({
       )}
 
       {/* Node actions */}
-      {kind === 'nodes' && (
+      {kind === 'nodes' && isCoreNode(data) && (
         <>
           {canExec && onOpenNodeTerminal && (
             <button
@@ -526,11 +554,10 @@ export function ResourceActionsBar({
         <>
           {onTriggerCronJob && (
             <button
-              onClick={() => onTriggerCronJob({
-                namespace: resource.namespace,
-                name: resource.name,
-              })}
-              disabled={isTriggeringCronJob}
+              onClick={() => canNameTrigger
+                ? setTriggerDraft({ target: resourceTarget, jobName: suggestManualJobName(resource.name, cronJobIndexRoom) })
+                : void Promise.resolve(onTriggerCronJob({ namespace: resource.namespace, name: resource.name })).catch(() => {})}
+              disabled={isTriggeringCronJob || triggerPending}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
             >
               <Play className={`w-3.5 h-3.5 ${isTriggeringCronJob ? 'animate-pulse' : ''}`} />
@@ -723,7 +750,7 @@ export function ResourceActionsBar({
         </div>
       )}
 
-      {onDelete && !((kind === 'node' || kind === 'nodes') && data?.metadata?.deletionTimestamp) && (
+      {onDelete && !((kind === 'node' || kind === 'nodes') && isCoreNode(data) && data?.metadata?.deletionTimestamp) && (
         <Tooltip content={isDeleting ? 'Deleting resource' : 'Delete resource'}>
           <button
             aria-label={isDeleting ? 'Deleting resource' : 'Delete resource'}
@@ -766,6 +793,43 @@ export function ResourceActionsBar({
           onLoad={() => onLoadImages({ kind: resource.kind, namespace: resource.namespace, name: resource.name })}
           onConfirm={(updates) => onSetImages({ kind: resource.kind, namespace: resource.namespace, name: resource.name, updates })}
         />
+      )}
+
+      {canNameTrigger && (
+        <ActionConfirmDialog
+          open={triggerDraft !== null}
+          onClose={() => setTriggerDraft(null)}
+          onConfirm={confirmTrigger}
+          isLoading={triggerPending}
+          title="Trigger CronJob"
+          subject={{ kind: 'CronJob', namespace: resource.namespace, name: resource.name }}
+          effect="Creates a Job from the CronJob's template now, outside its schedule."
+          confirmLabel="Trigger"
+          incompleteReason={triggerJobNameError ? (trimmedTriggerJobName ? 'Use a valid Job name' : 'Enter a Job name') : undefined}
+        >
+          <label className="block">
+            <span className="text-xs text-theme-text-secondary">Job name</span>
+            <Input
+              aria-label="Job name"
+              value={triggerDraft?.jobName ?? ''}
+              onChange={(e) => {
+                if (triggerDraft) setTriggerDraft({ ...triggerDraft, jobName: e.target.value })
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  confirmTrigger()
+                }
+              }}
+              autoFocus
+              spellCheck={false}
+              aria-invalid={triggerJobNameError !== null}
+              aria-describedby={triggerJobNameError ? triggerJobNameId : undefined}
+              className="mt-1 w-full rounded-lg border border-theme-border bg-theme-base px-3 py-1.5 font-mono text-sm text-theme-text-primary focus:outline-none focus:ring-2 focus:ring-skyhook-500"
+            />
+          </label>
+          {triggerJobNameError && <p id={triggerJobNameId} className="text-xs text-warning-text">{triggerJobNameError}</p>}
+        </ActionConfirmDialog>
       )}
 
       {/* Node cordon confirmation */}

@@ -276,7 +276,7 @@ func TestDenyAllIngressDetectionMessage(t *testing.T) {
 }
 
 func TestDetectProblemsIncludesNetworkPolicyDenyAll(t *testing.T) {
-	defer ResetTestState()
+	t.Cleanup(ResetTestState)
 	client := fake.NewClientset(
 		netpolTestPod("rec-1", map[string]string{"app": "rec"}, true),
 		netpolTestService("recommendation", map[string]string{"app": "rec"}),
@@ -682,7 +682,7 @@ func TestNetworkPolicyIsolationOnset(t *testing.T) {
 // synced, and is gone once the store has evicted anything or another served
 // policy API isn't being watched.
 func TestNetworkPolicyWatchWindow(t *testing.T) {
-	defer ResetTestState()
+	t.Cleanup(ResetTestState)
 	timeline.ResetStore()
 	t.Cleanup(func() { timeline.ResetStore(); timeline.SetObservationStartForTest(time.Time{}) })
 	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 2}); err != nil {
@@ -876,6 +876,7 @@ func TestNetworkPolicyIsolationOnsetQueryCap(t *testing.T) {
 // created moves the isolation's start, so the onset is withheld. Driven
 // through the real recording path: label-only Pod edits must be recorded.
 func TestNetworkPolicyIsolationOnsetSeesPodRelabels(t *testing.T) {
+	state := newConnectionCache()
 	created := time.Now().Add(-time.Hour)
 	np := netpolTestPolicy("deny-all", map[string]string{"app": "rec"}, ingressOnly)
 	np.CreationTimestamp, np.Generation = metav1.NewTime(created), 1
@@ -891,7 +892,7 @@ func TestNetworkPolicyIsolationOnsetSeesPodRelabels(t *testing.T) {
 		oldPod := netpolTestPod("pod-1", from, true)
 		newPod := oldPod.DeepCopy()
 		newPod.Labels = to
-		recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "pod-1", "uid-1", "update", oldPod, newPod, nil, false)
+		state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Pod", "shop", "pod-1", "uid-1", "update", oldPod, newPod, nil, false)
 	}
 	t.Cleanup(timeline.ResetStore)
 
@@ -947,7 +948,7 @@ func installCoreOnlyDiscovery(t *testing.T, client *fake.Clientset) {
 // Without permission to list NetworkPolicies there is no informer, and the
 // detector says nothing rather than guessing.
 func TestDetectNetworkPolicyDenyAllWithoutPolicyAccess(t *testing.T) {
-	defer ResetTestState()
+	t.Cleanup(ResetTestState)
 	pod, svc, np := netpolTestObjects()
 	client := fake.NewClientset(pod, svc, np)
 	scopes := map[string]k8score.ResourceScope{}
@@ -973,7 +974,7 @@ func TestDetectNetworkPolicyDenyAllWithoutPolicyAccess(t *testing.T) {
 // While the NetworkPolicy informer hasn't synced, a partial policy list could
 // hold a deny-all without its allow, so the detector waits.
 func TestDetectNetworkPolicyDenyAllWaitsForSync(t *testing.T) {
-	defer ResetTestState()
+	t.Cleanup(ResetTestState)
 	pod, svc, np := netpolTestObjects()
 	client := fake.NewClientset(pod, svc, np)
 	if err := InitTestPromotedSyncingCache(client, 5*time.Second, 5*time.Second, map[string]time.Duration{"networkpolicies": 2 * time.Second}); err != nil {
