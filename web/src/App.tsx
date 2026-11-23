@@ -49,6 +49,7 @@ import { currentPageLabel } from './utils/page-links'
 import { navigateFromPrimaryRail } from './components/nav/navigation'
 import { useNavRailPinned } from './hooks/useNavRailPinned'
 import { useMediaQuery } from './hooks/useMediaQuery'
+import { useDesktopBlobDownload } from './hooks/useDesktopDownload'
 import { ContextSwitchProvider, useContextSwitch } from './context/ContextSwitchContext'
 import { ConnectionProvider, useConnection, refreshQueriesAfterReconnect } from './context/ConnectionContext'
 import { DisconnectedView, FailedSwitchView } from './components/SwitchAwareConnectionError'
@@ -649,6 +650,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
   // Topology live-update pause state
   const [topologyPaused, setTopologyPaused] = useState(false)
+  const desktopBlobDownload = useDesktopBlobDownload()
   const [displayedTopology, setDisplayedTopology] = useState<typeof topology>(null)
   const pendingTopologyRef = useRef<typeof topology>(null)
 
@@ -2318,6 +2320,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
                     hideGroupHeader={hideGroupHeader}
                     onNodeClick={handleNodeClick}
                     selectedNodeId={selectedNodeId}
+                    onDownloadBlob={desktopBlobDownload}
                     paused={topologyPaused}
                     onTogglePause={handleTogglePause}
                     onMaximizeNamespace={(ns) => setActiveNamespace.mutate({ namespaces: [ns] })}
