@@ -27,7 +27,7 @@ var (
 func everyNamespace(string) bool { return true }
 
 func session(name, template string, state string) Actor {
-	return Actor{Atespace: "kagent", Name: name, Template: Ref{"kagent", template}, State: state, UpdateTime: ago(time.Minute), Kagent: KagentSessionOf(name)}
+	return Actor{Atespace: "kagent", Name: name, Template: Ref{"kagent", template}, State: state, UpdateTime: ago(time.Minute), Kagent: KagentSessionOf(name, template)}
 }
 
 func TestKagentTemplateNames(t *testing.T) {

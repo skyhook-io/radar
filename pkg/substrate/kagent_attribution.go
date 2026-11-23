@@ -62,7 +62,6 @@ const (
 )
 
 var (
-	kagentSandboxTemplate  = regexp.MustCompile(`^sandbox-[0-9a-f]{40}$`)
 	kagentRevisionTemplate = regexp.MustCompile(`^(.+)-([0-9a-f]{12})$`)
 	kagentRevisionDigest   = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
