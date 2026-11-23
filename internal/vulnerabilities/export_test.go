@@ -638,10 +638,10 @@ func TestExportFindings(t *testing.T) {
 		got = append(got, key{r["cve"], r["workload"], r["exposure"], r["status"]})
 	}
 	want := []key{
-		{"CVE-CRIT", "checkout", "none", StatusOK},
+		{"CVE-CRIT", "checkout", "", StatusOK},
 		{"CVE-HIGH", "frontend", "exposed", StatusOK},
-		{"CVE-HIGH", "worker", "none", StatusOK},
-		{"", "pending", "none", StatusNotScanned},
+		{"CVE-HIGH", "worker", "", StatusOK},
+		{"", "pending", "", StatusNotScanned},
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("rows %v, want %v", got, want)

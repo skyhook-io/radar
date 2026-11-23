@@ -39,8 +39,8 @@ var ExportColumns = map[View][]string{
 	ViewCVE:      slices.Concat(exportLead, []string{"cve", "title", "severity", "score", "packages", "installed", "fixed_versions", "fix", "images", "workloads", "image_names", "running_in", "link", "exposed_workloads"}),
 	ViewWorkload: slices.Concat(exportLead, []string{"kind", "namespace", "workload", "critical", "high", "medium", "low", "unrated", "with_a_fix", "containers", "exposed_workloads"}),
 	// One row per finding, image and workload container, for a compliance
-	// tracker (a POA&M): exposure is "exposed", "none" (no route Radar sees)
-	// or "unknown".
+	// tracker (a POA&M): exposure is "exposed", "unknown", or empty when
+	// Radar sees no route.
 	ViewFindings: slices.Concat(exportLead, []string{"cve", "severity", "score", "title", "package", "package_type", "installed_version", "fixed_version", "fix_target", "fix_available", "image", "digest", "namespace", "workload_kind", "workload", "container", "exposure", "routes", "link"}),
 }
 
@@ -419,36 +419,54 @@ func writeFindings(ctx context.Context, resp Response, f Filter, put func(time.T
 		exposure string
 		routes   string
 	}
-	containers := func(workloads []WorkloadRef, exposed []ExposedWorkload) []container {
+	// A workload's routes cell is built once and shared by its containers
+	// and images, so a file's memory grows with its routes, not with
+	// containers times routes.
+	routeCells := map[WorkloadRef]string{}
+	containers := func(workloads []WorkloadRef, exposed []ExposedWorkload) ([]container, error) {
 		routes := make(map[WorkloadRef][]Route, len(exposed))
 		for _, e := range exposed {
 			routes[e.WorkloadRef] = e.Routes
 		}
 		var out []container
 		for _, w := range workloads {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			ref := w
 			ref.Container = ""
 			rs := routes[ref]
 			if (f.Workload != nil && !m.wanted(w)) || (f.ExposedOnly && len(rs) == 0) {
 				continue
 			}
-			c := container{w: w, exposure: "none"}
+			// No route seen leaves exposure empty, as exposed_workloads does:
+			// absence of a route Radar sees is not a finding of "not exposed".
+			c := container{w: w}
 			switch {
 			case len(rs) > 0:
-				cells := make([]string, len(rs))
-				for i, r := range rs {
-					cells[i] = r.Via + " " + r.Namespace + "/" + r.Name
+				cell, ok := routeCells[ref]
+				if !ok {
+					cells := make([]string, len(rs))
+					for i, r := range rs {
+						cells[i] = r.Via + " " + r.Namespace + "/" + r.Name
+					}
+					cell = join(cells)
+					routeCells[ref] = cell
 				}
-				c.exposure, c.routes = "exposed", join(cells)
+				c.exposure, c.routes = "exposed", cell
 			case resp.Exposure == nil || exposureUnknownIn(resp.Exposure, w.Namespace):
 				c.exposure = "unknown"
 			}
 			out = append(out, c)
 		}
-		return out
+		return out, nil
 	}
 	status := func(scanned time.Time, status, image, digest string, workloads []WorkloadRef, exposed []ExposedWorkload) error {
-		for _, c := range containers(workloads, exposed) {
+		kept, err := containers(workloads, exposed)
+		if err != nil {
+			return err
+		}
+		for _, c := range kept {
 			if err := put(scanned, status, named(cols, map[string]string{
 				"image": image, "digest": digest, "namespace": c.w.Namespace, "workload_kind": c.w.Kind, "workload": c.w.Name,
 				"container": c.w.Container, "exposure": c.exposure, "routes": c.routes,
@@ -468,7 +486,10 @@ func writeFindings(ctx context.Context, resp Response, f Filter, put func(time.T
 			}
 			continue
 		}
-		kept := containers(img.Workloads, img.Exposed)
+		kept, err := containers(img.Workloads, img.Exposed)
+		if err != nil {
+			return err
+		}
 		for i := range img.Findings {
 			if err := ctx.Err(); err != nil {
 				return err
