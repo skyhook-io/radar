@@ -876,6 +876,7 @@ func TestNetworkPolicyIsolationOnsetQueryCap(t *testing.T) {
 // created moves the isolation's start, so the onset is withheld. Driven
 // through the real recording path: label-only Pod edits must be recorded.
 func TestNetworkPolicyIsolationOnsetSeesPodRelabels(t *testing.T) {
+	state := newConnectionCache()
 	created := time.Now().Add(-time.Hour)
 	np := netpolTestPolicy("deny-all", map[string]string{"app": "rec"}, ingressOnly)
 	np.CreationTimestamp, np.Generation = metav1.NewTime(created), 1
@@ -891,7 +892,7 @@ func TestNetworkPolicyIsolationOnsetSeesPodRelabels(t *testing.T) {
 		oldPod := netpolTestPod("pod-1", from, true)
 		newPod := oldPod.DeepCopy()
 		newPod.Labels = to
-		recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "pod-1", "uid-1", "update", oldPod, newPod, nil, false)
+		state.recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "pod-1", "uid-1", "update", oldPod, newPod, nil, false)
 	}
 	t.Cleanup(timeline.ResetStore)
 

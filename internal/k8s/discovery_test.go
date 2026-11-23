@@ -108,7 +108,7 @@ func TestGetGVRWithGroup_DisambiguatesSameKind(t *testing.T) {
 // attempt consumed the one initialization, the next call would report success
 // with discovery still nil — a subsystem that never came up, reported as up.
 func TestInitResourceDiscoveryStaysRetryableAfterAMissingClient(t *testing.T) {
-	withCleanDiscoveryGlobals(t)
+	withFreshTestConnection(t)
 
 	if err := InitResourceDiscovery(); err == nil {
 		t.Fatal("expected an error when no discovery client exists")
@@ -158,7 +158,7 @@ func buildFakeDiscoveryCore(t *testing.T) *k8score.ResourceDiscovery {
 	return core
 }
 
-func withCleanDiscoveryGlobals(t *testing.T) {
+func withFreshTestConnection(t *testing.T) {
 	t.Helper()
 	prev := Current()
 	restoreTestConnection(&Connection{})
@@ -166,7 +166,7 @@ func withCleanDiscoveryGlobals(t *testing.T) {
 }
 
 func TestPublishDiscardsABuildWhoseClientWasSwappedOut(t *testing.T) {
-	withCleanDiscoveryGlobals(t)
+	withFreshTestConnection(t)
 	previousClusterClient := &discovery.DiscoveryClient{}
 	newClusterClient := &discovery.DiscoveryClient{}
 
@@ -190,7 +190,7 @@ func TestPublishDiscardsABuildWhoseClientWasSwappedOut(t *testing.T) {
 }
 
 func TestPublishDiscardsABuildFromBeforeAReset(t *testing.T) {
-	withCleanDiscoveryGlobals(t)
+	withFreshTestConnection(t)
 	client := &discovery.DiscoveryClient{}
 	restoreTestConnection(&Connection{clients: &sharedKubernetesClients{discovery: client}})
 	started := Current()
@@ -204,7 +204,7 @@ func TestPublishDiscardsABuildFromBeforeAReset(t *testing.T) {
 }
 
 func TestPublishDoesNotClobberAnAlreadyPublishedSingleton(t *testing.T) {
-	withCleanDiscoveryGlobals(t)
+	withFreshTestConnection(t)
 	client := &discovery.DiscoveryClient{}
 	restoreTestConnection(&Connection{clients: &sharedKubernetesClients{discovery: client}})
 	started := Current()
@@ -222,7 +222,7 @@ func TestPublishDoesNotClobberAnAlreadyPublishedSingleton(t *testing.T) {
 
 // A discovery published between reset and client install belongs to the old clients.
 func TestSingletonPublishedInTheResetSwapGapDiesWithTheSwap(t *testing.T) {
-	withCleanDiscoveryGlobals(t)
+	withFreshTestConnection(t)
 	previousClusterClient := &discovery.DiscoveryClient{}
 	newClusterClient := &discovery.DiscoveryClient{}
 
@@ -256,7 +256,7 @@ func TestSingletonPublishedInTheResetSwapGapDiesWithTheSwap(t *testing.T) {
 // is served at version, with a short TTL so it expires quickly.
 func fluxDiscovery(t *testing.T, version string) (*fakediscovery.FakeDiscovery, *ResourceDiscovery) {
 	t.Helper()
-	withCleanDiscoveryGlobals(t)
+	withFreshTestConnection(t)
 	fakeDisc := fakeclientset.NewSimpleClientset().Discovery().(*fakediscovery.FakeDiscovery)
 	fakeDisc.Resources = servedOCIRepository(version)
 	core, err := k8score.NewResourceDiscovery(fakeDisc, k8score.WithDiscoveryCacheTTL(time.Millisecond))
@@ -449,7 +449,7 @@ func TestLateDiscoveryStaysOnItsConnection(t *testing.T) {
 // A bound write resolves served versions on the connection it was admitted
 // to, even after a switch installed a cluster serving another version.
 func TestServedGVRForUsesTheBoundConnection(t *testing.T) {
-	withCleanDiscoveryGlobals(t)
+	withFreshTestConnection(t)
 	serving := func(version string) *Connection {
 		core := buildFakeDiscoveryCore(t)
 		core.AddAPIResource(APIResource{Group: "kustomize.toolkit.fluxcd.io", Version: version, Kind: "Kustomization", Name: "kustomizations", Namespaced: true, Verbs: []string{"get", "patch"}})

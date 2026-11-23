@@ -102,6 +102,7 @@ func TestDiagnosticsDuringConnectionReturnsPartialSnapshot(t *testing.T) {
 }
 
 func TestDiagnosticsClusterUsesOnlyCurrentCacheObservations(t *testing.T) {
+	t.Cleanup(k8s.SwapResourceCacheForTest(nil))
 	var requests atomic.Int32
 	var serveVersion atomic.Bool
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -274,6 +275,7 @@ func TestDiagnosticsConnectionUpdatesDuringCollection(t *testing.T) {
 // can name the previous context while the current cache serves the new one:
 // the cache's observation must not be reported under that context.
 func TestDiagnosticsOmitsClusterObservedForAnotherContext(t *testing.T) {
+	t.Cleanup(k8s.SwapResourceCacheForTest(nil))
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/version" {
 			w.Header().Set("Content-Type", "application/json")

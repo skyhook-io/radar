@@ -25,6 +25,7 @@ func InitAllSubsystems(ctx context.Context, progress func(string)) error {
 }
 
 func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait time.Duration, tracker *ContextSwitchTracker) error {
+	conn := Current()
 	subsystemStart := time.Now()
 
 	// 1. Timeline — before caches so events during warmup are captured
@@ -61,7 +62,7 @@ func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait
 		go func() {
 			defer close(discoveryDone)
 			dt := time.Now()
-			if err := initResourceDiscovery(ctx); err != nil {
+			if err := conn.initResourceDiscovery(ctx); err != nil {
 				log.Printf("Warning: resource discovery init failed: %v", err)
 			}
 			logTiming("   API resource discovery: %v (parallel)", time.Since(dt))
@@ -71,11 +72,11 @@ func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait
 	}
 
 	// Resource cache init (RBAC checks + informer sync) — the dominant cost
-	if err := InitResourceCache(ctx); err != nil {
+	if err := conn.initResourceCache(ctx); err != nil {
 		return fmt.Errorf("resource cache init failed: %w", err)
 	}
 	logTiming("   Resource cache init: %v", time.Since(t))
-	cache := GetResourceCache()
+	cache := conn.ResourceCache()
 	if cache != nil {
 		log.Printf("Resource cache initialized with %d resources", cache.GetResourceCount())
 	}
@@ -129,13 +130,13 @@ func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait
 				// connectivity check failed), so use the current one.
 				contextOpMu.RLock()
 				defer contextOpMu.RUnlock()
-				if GetResourceCache() == cache {
-					startDynamicResourceCache(OperationContext(), cache)
+				if conn.cacheIsCurrent() {
+					startDynamicResourceCache(OperationContext(), conn, cache)
 				}
 			}()
 		} else {
 			progress("Loading custom resources...")
-			startDynamicResourceCache(lifecycleCtx, cache)
+			startDynamicResourceCache(lifecycleCtx, conn, cache)
 		}
 	}
 
@@ -203,7 +204,7 @@ func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait
 
 // The operation context outlives the switch's init context, which is cancelled
 // on success while the deferred typed informers may still be syncing.
-func startDynamicResourceCache(lifecycleCtx context.Context, cache *ResourceCache) {
+func startDynamicResourceCache(lifecycleCtx context.Context, conn *Connection, cache *ResourceCache) {
 	t := time.Now()
 	if err := InitDynamicResourceCache(cache.ChangesRaw()); err != nil {
 		log.Printf("Warning: dynamic resource cache init failed: %v", err)
@@ -214,7 +215,7 @@ func startDynamicResourceCache(lifecycleCtx context.Context, cache *ResourceCach
 			crdStart := time.Now()
 			deferredDone := cache.DeferredDone()
 			stillCurrent := func() bool {
-				return GetDynamicResourceCache() == dc && GetResourceCache() == cache
+				return GetDynamicResourceCache() == dc && conn.cacheIsCurrent()
 			}
 			runCRDWarmupSequence(lifecycleCtx, nil, stillCurrent, dc.StartWatchReconciler)
 			runCRDWarmupSequence(lifecycleCtx, deferredDone, stillCurrent,
@@ -301,6 +302,10 @@ func runCRDWarmupSequence(ctx context.Context, deferredDone <-chan struct{}, sti
 // Each reset is wrapped in a panic recover so a failure in one subsystem
 // does not prevent remaining subsystems from being torn down.
 func ResetAllSubsystems() {
+	resetAllSubsystems(Current())
+}
+
+func resetAllSubsystems(conn *Connection) {
 	// The point of no return: nothing can be admitted against the connection
 	// whose resources are about to go.
 	RetireServingConnection()
@@ -344,7 +349,7 @@ func ResetAllSubsystems() {
 
 	// Readers use the installed connection's permissions to interpret the
 	// typed cache. Detach that cache before installing the fresh connection.
-	safeReset("resource cache", ResetResourceCache)
+	safeReset("resource cache", conn.closeResourceCache)
 	safeReset("resource discovery", ResetResourceDiscovery)
 
 	// Step 1: timeline

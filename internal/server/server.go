@@ -1674,7 +1674,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	// "no probe data yet" signal; the frontend has separate connection
 	// state to distinguish loading from RBAC restrictions.
 	result := conn.CachedPermissionResult()
-	if result == nil && k8s.GetResourceCache() != nil {
+	if result == nil && conn.ResourceCache() != nil {
 		// A probe superseded by a switch or rescope describes what it probed,
 		// not what is being rendered: leave resources unset instead.
 		if probed, current := conn.CheckResourcePermissions(r.Context()); current {

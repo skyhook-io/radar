@@ -25,7 +25,7 @@ type DynamicResourceCache struct {
 
 var (
 	dynamicResourceCache atomic.Pointer[DynamicResourceCache]
-	dynamicCacheOnce     = new(sync.Once)
+	dynamicCacheInit     = new(sync.Once)
 	dynamicCacheMu       sync.Mutex
 	// dynamicSyncStallAfter and dynamicObjectReadSyncWait override k8score's
 	// thresholds in tests; zero keeps the defaults.
@@ -37,7 +37,7 @@ var (
 // If changeCh is provided, change notifications will be sent to it (for SSE).
 func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 	var initErr error
-	dynamicCacheOnce.Do(func() {
+	dynamicCacheInit.Do(func() {
 		conn := Current()
 		directClient, client := conn.Dynamic(), conn.InformerDynamicClient()
 		if client == nil {
@@ -82,6 +82,7 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 
 		// Wiring-time capture — same rationale as InitResourceCache: a late
 		// callback after a context switch must stamp its own cluster.
+		state := conn.cacheState()
 		recordClusterContext := TimelineClusterContext(conn.ContextName())
 
 		core, err := k8score.NewDynamicResourceCache(k8score.DynamicCacheConfig{
@@ -106,7 +107,7 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 				if u == nil {
 					return
 				}
-				recordToTimelineStore(
+				state.recordToTimelineStore(
 					recordClusterContext,
 					change.Kind,
 					change.Namespace,
@@ -166,7 +167,7 @@ func ResetDynamicResourceCache() {
 	if dc := dynamicResourceCache.Swap(nil); dc != nil {
 		dc.Stop()
 	}
-	dynamicCacheOnce = new(sync.Once)
+	dynamicCacheInit = new(sync.Once)
 }
 
 var (

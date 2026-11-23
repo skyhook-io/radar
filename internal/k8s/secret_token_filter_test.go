@@ -29,6 +29,7 @@ func TestIsNoisyResource_Secrets(t *testing.T) {
 }
 
 func TestRecordToTimelineStore_SecretTokenUpdate(t *testing.T) {
+	state := newConnectionCache()
 	for _, precomputed := range []bool{false, true} {
 		name := "recompute"
 		if precomputed {
@@ -56,7 +57,7 @@ func TestRecordToTimelineStore_SecretTokenUpdate(t *testing.T) {
 			if precomputed {
 				diff = ComputeDiff("Secret", oldSecret, newSecret)
 			}
-			recordToTimelineStore("ctx", "Secret", "shop", newSecret.Name, string(newSecret.UID), "update", oldSecret, newSecret, diff, precomputed)
+			state.recordToTimelineStore("ctx", "Secret", "shop", newSecret.Name, string(newSecret.UID), "update", oldSecret, newSecret, diff, precomputed)
 
 			events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{Kinds: []string{"Secret"}, ClusterContext: "ctx"})
 			if err != nil {
@@ -86,6 +87,7 @@ func TestRecordToTimelineStore_SecretTokenUpdate(t *testing.T) {
 }
 
 func TestRecordToTimelineStore_ServiceAccountTokenUpdateDrop(t *testing.T) {
+	state := newConnectionCache()
 	for _, shape := range []string{"typed", "unstructured"} {
 		for _, storeState := range []string{"available", "unavailable"} {
 			for _, name := range []string{"default-token-abcde", "manual-credential"} {
@@ -121,7 +123,7 @@ func TestRecordToTimelineStore_ServiceAccountTokenUpdateDrop(t *testing.T) {
 						oldObj = &unstructured.Unstructured{Object: oldMap}
 						newObj = &unstructured.Unstructured{Object: newMap}
 					}
-					recordToTimelineStore("ctx", "Secret", "shop", name, string(newSecret.UID), "update", oldObj, newObj, ComputeDiff("Secret", oldObj, newObj), true)
+					state.recordToTimelineStore("ctx", "Secret", "shop", name, string(newSecret.UID), "update", oldObj, newObj, ComputeDiff("Secret", oldObj, newObj), true)
 
 					if store := timeline.GetStore(); store != nil {
 						events, err := store.Query(context.Background(), timeline.QueryOptions{Kinds: []string{"Secret"}})
@@ -132,7 +134,7 @@ func TestRecordToTimelineStore_ServiceAccountTokenUpdateDrop(t *testing.T) {
 							t.Fatalf("recorded %d ServiceAccount token updates, want 0", len(events))
 						}
 						// Later Kubernetes Events about the Secret are enriched from its tombstone.
-						if entry, ok := tombstones.Get(string(newSecret.UID), "v1", "Secret", "shop", name); !ok || entry.Labels["app"] != "rotated" {
+						if entry, ok := state.tombstones.Get(string(newSecret.UID), "v1", "Secret", "shop", name); !ok || entry.Labels["app"] != "rotated" {
 							t.Fatal("tombstone not refreshed from the dropped update")
 						}
 					}

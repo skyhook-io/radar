@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func publishedStatus() ConnectionStatus { return GetConnectionStatus() }
@@ -134,6 +136,26 @@ func TestReadmissionKeepsTheConnectionsPermissionResult(t *testing.T) {
 	}
 	if Current().CachedPermissionResult() == nil {
 		t.Fatal("re-admission dropped the permission result its caches were built from")
+	}
+}
+
+// The typed cache is part of what a re-admitted connection keeps: it is still
+// running, and a copy without it would serve nothing and leak its informers.
+func TestReadmissionKeepsTheConnectionsTypedCache(t *testing.T) {
+	t.Cleanup(SnapshotTestConnection())
+	clearTestConnectionIdentity()
+	if err := InitTestResourceCache(fake.NewClientset()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(ResetResourceCache)
+	built := GetResourceCache()
+
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
+	RetireServingConnection()
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
+
+	if got := GetResourceCache(); got == nil || got != built {
+		t.Fatalf("re-admission served cache %p, want the one built for the connection (%p)", got, built)
 	}
 }
 

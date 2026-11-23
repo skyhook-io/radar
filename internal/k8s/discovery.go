@@ -41,11 +41,10 @@ var isMoreStableVersion = k8score.IsMoreStableVersion
 // so it reaches here before a client exists whenever the cluster is
 // unreachable, and InitAllSubsystems lets that goroutine outlive the failure.
 func InitResourceDiscovery() error {
-	return initResourceDiscovery(context.Background())
+	return Current().initResourceDiscovery(context.Background())
 }
 
-func initResourceDiscovery(ctx context.Context) error {
-	conn := Current()
+func (conn *Connection) initResourceDiscovery(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}

@@ -39,9 +39,9 @@ func TestInitAllSubsystemsPropagatesTimelineInitFailure(t *testing.T) {
 }
 
 func TestTrackedSwitchDiscoveryWaitHasOwnBudget(t *testing.T) {
-	for _, state := range []string{"current", "replaced", "operation cancelled"} {
+	for _, state := range []string{"current", "replaced", "replaced before discovery returns", "operation cancelled"} {
 		t.Run(state, func(t *testing.T) {
-			withCleanDiscoveryGlobals(t)
+			withFreshTestConnection(t)
 			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "serving", Namespace: "default"}}
 			if err := InitTestResourceCache(fake.NewSimpleClientset(pod)); err != nil {
 				t.Fatal(err)
@@ -130,11 +130,13 @@ func TestTrackedSwitchDiscoveryWaitHasOwnBudget(t *testing.T) {
 			}
 			switch state {
 			case "replaced":
-				ResetResourceDiscovery()
 				ResetResourceCache()
+				ResetResourceDiscovery()
 				if err := InitTestResourceCache(fake.NewSimpleClientset()); err != nil {
 					t.Fatal(err)
 				}
+				// The replacement owns its own cache state; close it while installed.
+				t.Cleanup(ResetResourceCache)
 				// Retiring the cache releases the waiter while discovery is still stalled.
 				for deadline := time.Now().Add(3 * time.Second); cache.apiDiscoveryPending.Load(); {
 					if time.Now().After(deadline) {
@@ -142,6 +144,11 @@ func TestTrackedSwitchDiscoveryWaitHasOwnBudget(t *testing.T) {
 					}
 					time.Sleep(time.Millisecond)
 				}
+			case "replaced before discovery returns":
+				// Leave the old core running so discovery completion, rather
+				// than cache.Done(), wakes the waiter after replacement.
+				ResetResourceDiscovery()
+				t.Cleanup(cache.Stop)
 			case "operation cancelled":
 				// A rescope whose connectivity check fails cancels the operation
 				// but leaves this cache serving.
@@ -154,7 +161,7 @@ func TestTrackedSwitchDiscoveryWaitHasOwnBudget(t *testing.T) {
 				}
 				time.Sleep(time.Millisecond)
 			}
-			if state == "replaced" {
+			if state == "replaced" || state == "replaced before discovery returns" {
 				if GetResourceDiscovery() != nil || GetDynamicResourceCache() != nil {
 					t.Fatal("late discovery installed state for a replaced connection")
 				}
