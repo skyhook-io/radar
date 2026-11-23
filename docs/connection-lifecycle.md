@@ -15,7 +15,7 @@ Bound writes are the routes wrapped with `bindWrite` in `internal/server/server.
 - **Velero** checks the Velero server's state in the shared cache, which a switch completing mid-request could replace; the write itself stays on the admitted connection.
 - **Diagnose** (the in-product agent) is fenced by its runs: every switch marks all runs stale (`RunManager.OnContextSwitch`), and a stale run takes no further turns, so an investigation of one cluster can't continue, or apply a fix, on another.
 
-Not bound: external MCP callers name no connection, so each tool call uses the connection serving when it starts. Velero's download requests (run messages, contents, logs) aren't bound. An interrupted Helm action is not recovered.
+External MCP callers name no connection. Each Helm write or preview uses the connection serving when the call starts. An uninstall confirmation also requires the admission that issued its preview, even after a reconnect under the same context name. Velero's download requests (run messages, contents, logs) aren't bound. An interrupted Helm action is not recovered.
 
 **Only when Radar serves from a kubeconfig.** An in-cluster Radar can't change clusters (no kubeconfig contexts; CAPI connect is refused in-cluster), and during a rolling update two of its pods, each with its own IDs, answer the same browser. It publishes no ID and ignores one a request names; its writes still run on one captured set of clients.
 

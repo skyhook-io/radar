@@ -21,6 +21,7 @@ import (
 	"helm.sh/helm/v3/pkg/release"
 	"helm.sh/helm/v3/pkg/storage/driver"
 	authv1 "k8s.io/api/authorization/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/kubernetes"
@@ -191,6 +192,116 @@ func TestManageHelmRefusesBusyReleaseAndChangedPreviewStatus(t *testing.T) {
 	_, _, err = handleManageHelm(ctx, nil, manageHelmInput{Action: "uninstall", Namespace: "team-a", Name: "demo", Confirm: token})
 	if err == nil || !strings.Contains(err.Error(), "already used") {
 		t.Fatalf("a repeated confirm must be refused: %v", err)
+	}
+}
+
+func TestManageHelmUninstallConfirmationRequiresSameAdmission(t *testing.T) {
+	t.Cleanup(k8s.SnapshotTestConnection())
+	helm.Initialize()
+	t.Cleanup(helm.ResetTestClient)
+	in := manageHelmInput{Action: "uninstall", Namespace: "team-a", Name: "demo"}
+	const key = "sh.helm.release.v1.demo.v1"
+	connect := func() *driver.Secrets {
+		t.Helper()
+		cluster := fake.NewClientset()
+		secrets := cluster.CoreV1().Secrets(in.Namespace)
+		storage := driver.NewSecrets(secrets)
+		rel := &release.Release{Name: in.Name, Namespace: in.Namespace, Version: 1,
+			Chart: &chart.Chart{Metadata: &chart.Metadata{Name: "fixture", Version: "1.0.0"}},
+			Info:  &release.Info{Status: release.StatusDeployed}}
+		if err := storage.Create(key, rel); err != nil {
+			t.Fatal(err)
+		}
+		const collection = "/api/v1/namespaces/team-a/secrets"
+		api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			var response any
+			var err error
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/version":
+				response = map[string]string{"gitVersion": "v1.34.0"}
+			case r.Method == http.MethodPost && r.URL.Path == "/apis/authorization.k8s.io/v1/subjectaccessreviews":
+				response = authv1.SubjectAccessReview{TypeMeta: metav1.TypeMeta{APIVersion: "authorization.k8s.io/v1", Kind: "SubjectAccessReview"}, Status: authv1.SubjectAccessReviewStatus{Allowed: true}}
+			case r.Method == http.MethodGet && r.URL.Path == collection:
+				list, listErr := secrets.List(r.Context(), metav1.ListOptions{LabelSelector: r.URL.Query().Get("labelSelector")})
+				if listErr != nil {
+					t.Error(listErr)
+					http.Error(w, "list failed", http.StatusInternalServerError)
+					return
+				}
+				list.TypeMeta = metav1.TypeMeta{APIVersion: "v1", Kind: "SecretList"}
+				response = list
+			case r.Method == http.MethodGet && r.URL.Path == collection+"/"+key:
+				response, err = secrets.Get(r.Context(), key, metav1.GetOptions{})
+			case r.Method == http.MethodPut && r.URL.Path == collection+"/"+key:
+				var secret corev1.Secret
+				if err = json.NewDecoder(r.Body).Decode(&secret); err == nil {
+					response, err = secrets.Update(r.Context(), &secret, metav1.UpdateOptions{})
+				}
+			case r.Method == http.MethodDelete && r.URL.Path == collection+"/"+key:
+				err = secrets.Delete(r.Context(), key, metav1.DeleteOptions{})
+				response = metav1.Status{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Status"}, Status: metav1.StatusSuccess}
+			default:
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				http.NotFound(w, r)
+				return
+			}
+			if err != nil {
+				t.Error(err)
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if secret, ok := response.(*corev1.Secret); ok {
+				secret.TypeMeta = metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"}
+			}
+			json.NewEncoder(w).Encode(response)
+		}))
+		t.Cleanup(api.Close)
+		cfg := &rest.Config{Host: api.URL, QPS: -1, ContentConfig: rest.ContentConfig{ContentType: "application/json"}}
+		if _, err := k8s.InstallTestServingConnection("shared-name", cfg, nil, cluster.Discovery()); err != nil {
+			t.Fatal(err)
+		}
+		client, err := kubernetes.NewForConfig(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		k8s.SetTestClient(client)
+		return storage
+	}
+	ctx := auth.ContextWithUser(t.Context(), &auth.User{Username: "helm-reviewer"})
+	preview := func() string {
+		t.Helper()
+		result, _, err := handleManageHelm(ctx, nil, in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out struct{ Confirm string }
+		if err := json.Unmarshal([]byte(result.Content[0].(*mcp.TextContent).Text), &out); err != nil || out.Confirm == "" {
+			t.Fatalf("missing uninstall confirmation: %v", err)
+		}
+		return out.Confirm
+	}
+
+	a := connect()
+	confirm := in
+	confirm.Confirm = preview()
+	b := connect()
+	_, _, err := handleManageHelm(ctx, nil, confirm)
+	if err == nil || !strings.Contains(err.Error(), "cluster connection changed") || !strings.Contains(err.Error(), "nothing was uninstalled") {
+		t.Fatalf("stale confirmation: %v", err)
+	}
+	if rel, err := b.Get(key); err != nil || rel.Info.Status != release.StatusDeployed {
+		t.Fatalf("stale confirmation changed B's release: %v, %v", rel, err)
+	}
+	confirm.Confirm = preview()
+	if _, _, err := handleManageHelm(ctx, nil, confirm); err != nil {
+		t.Fatalf("fresh confirmation refused: %v", err)
+	}
+	if _, err := b.Get(key); !errors.Is(err, driver.ErrReleaseNotFound) {
+		t.Fatalf("fresh confirmation did not purge B's release: %v", err)
+	}
+	if rel, err := a.Get(key); err != nil || rel.Info.Status != release.StatusDeployed {
+		t.Fatalf("B's confirmation changed A's release: %v, %v", rel, err)
 	}
 }
 

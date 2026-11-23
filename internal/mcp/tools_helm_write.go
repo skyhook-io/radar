@@ -228,14 +228,27 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 		return nil, nil, err
 	}
 	operation := k8s.OperationContext()
-	ctx = k8s.CaptureConnection(ctx)
-	conn := k8s.ConnectionFrom(ctx)
-	clusterContext := k8s.TimelineClusterContext(conn.ContextName())
-	ctx = context.WithValue(ctx, confirmationContextKey{}, clusterContext)
+	admission, err := k8s.CaptureServingConnection()
+	if err != nil {
+		return nil, nil, fmt.Errorf("nothing was changed: %w; retry after reconnecting", err)
+	}
+	ctx = admission.Bind(ctx)
+	ctx = context.WithValue(ctx, confirmationContextKey{}, admission.ID())
+	var confirmed string
+	if in.Confirm != "" {
+		confirmed, err = verifyMutationConfirmation(ctx, "uninstall_helm", in.Confirm)
+		if err != nil {
+			var mismatch *confirmationMismatch
+			if errors.As(err, &mismatch) && mismatch.contextChanged {
+				return nil, nil, fmt.Errorf("Radar's cluster connection changed since the preview; nothing was uninstalled. Check the current cluster, then omit confirm and review a fresh preview")
+			}
+			return nil, nil, fmt.Errorf("uninstall confirmation rejected; omit confirm and review a fresh preview")
+		}
+	}
 	if _, err := helm.CheckWritePermission(ctx, in.Namespace); err != nil {
 		return nil, nil, err
 	}
-	if conn.Config() == nil || operation.Err() != nil || k8s.ActiveClusterContext() != clusterContext {
+	if admission.Connection().Config() == nil || operation.Err() != nil {
 		return nil, nil, fmt.Errorf("cluster connection changed or is unavailable; retry after reconnecting")
 	}
 	// Pin every read and write in this call to the same cluster, even if the
@@ -272,10 +285,6 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 			}
 			binding := string(bindingBytes)
 			if in.Confirm != "" {
-				confirmed, err := verifyMutationConfirmation(ctx, "uninstall_helm", in.Confirm)
-				if err != nil {
-					return nil, nil, fmt.Errorf("uninstall confirmation rejected; omit confirm and review a fresh preview")
-				}
 				if confirmed != binding {
 					return nil, nil, fmt.Errorf("release changed since the preview; omit confirm and review a new preview")
 				}

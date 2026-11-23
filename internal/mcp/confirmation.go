@@ -19,6 +19,14 @@ import (
 
 type confirmationContextKey struct{}
 
+type confirmationMismatch struct {
+	contextChanged bool
+}
+
+func (*confirmationMismatch) Error() string {
+	return "confirm caller or context mismatch; run dry_run=true as the current caller in the intended cluster and review the new preview"
+}
+
 const maxConfirmationBytes = 8192
 
 var confirmationKey = sync.OnceValues(func() ([]byte, error) {
@@ -38,9 +46,9 @@ type mutationConfirmation struct {
 }
 
 func confirmationBinding(ctx context.Context, action, target string) mutationConfirmation {
-	contextName, captured := ctx.Value(confirmationContextKey{}).(string)
+	cluster, captured := ctx.Value(confirmationContextKey{}).(string)
 	if !captured {
-		contextName = k8s.ActiveClusterContext()
+		cluster = k8s.ActiveClusterContext()
 	}
 	caller := struct {
 		Username string
@@ -55,7 +63,7 @@ func confirmationBinding(ctx context.Context, action, target string) mutationCon
 	}
 	raw, _ := json.Marshal(caller)
 	digest := sha256.Sum256(raw)
-	return mutationConfirmation{Action: action, Context: contextName, CallerDigest: base64.RawURLEncoding.EncodeToString(digest[:]), Target: target}
+	return mutationConfirmation{Action: action, Context: cluster, CallerDigest: base64.RawURLEncoding.EncodeToString(digest[:]), Target: target}
 }
 
 func issueMutationConfirmation(ctx context.Context, action, target string) (string, error) {
@@ -119,7 +127,7 @@ func verifyMutationConfirmation(ctx context.Context, action, token string) (stri
 	}
 	expected := confirmationBinding(ctx, action, "")
 	if binding.Context != expected.Context || binding.CallerDigest != expected.CallerDigest {
-		return "", fmt.Errorf("confirm caller or context mismatch; run dry_run=true as the current caller in the intended cluster and review the new preview")
+		return "", &confirmationMismatch{contextChanged: binding.Context != expected.Context && binding.CallerDigest == expected.CallerDigest && binding.Action == action}
 	}
 	if binding.Action != action {
 		return "", malformed
