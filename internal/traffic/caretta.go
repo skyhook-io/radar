@@ -83,6 +83,8 @@ var metricsServiceLocations = []struct {
 type CarettaSource struct {
 	forwards            *portforward.Manager
 	forward             *portforward.Handle
+	reconnectAfter      time.Time // nonzero while recovering a previously bound forward
+	reconnectDelay      time.Duration
 	k8sClient           kubernetes.Interface
 	httpClient          *http.Client
 	prometheusAddr      string
@@ -932,6 +934,8 @@ func (c *CarettaSource) Close() error {
 	c.boundIsCarettaStore = false
 	c.backendVerified = false
 	c.backendWarning = ""
+	c.reconnectAfter = time.Time{}
+	c.reconnectDelay = 0
 	c.closed = true
 	return nil
 }
@@ -951,6 +955,22 @@ func (c *CarettaSource) Connect(ctx context.Context, contextName string) (*portf
 }
 
 func (c *CarettaSource) connectLocked(ctx context.Context, contextName string) *portforward.ConnectionInfo {
+	recovering := c.currentContext == contextName && (c.forward != nil || !c.reconnectAfter.IsZero())
+	info := c.tryConnectLocked(ctx, contextName)
+	if !recovering || info.Connected {
+		c.reconnectAfter = time.Time{}
+		c.reconnectDelay = 0
+		return info
+	}
+	c.reconnectAfter = time.Now()
+	if ctx.Err() == nil {
+		c.reconnectDelay = min(max(5*time.Second, 2*c.reconnectDelay), time.Minute)
+		c.reconnectAfter = c.reconnectAfter.Add(c.reconnectDelay)
+	}
+	return info
+}
+
+func (c *CarettaSource) tryConnectLocked(ctx context.Context, contextName string) *portforward.ConnectionInfo {
 	// A Connect that raced Close (context switch) must not resurrect the
 	// source — its forward would point at the previous cluster and outlive
 	// Reset's cleanup.
@@ -1473,8 +1493,10 @@ func (c *CarettaSource) metricsEndpoint(ctx context.Context) carettaEndpoint {
 	if c.closed || ctx.Err() != nil {
 		return carettaEndpoint{}
 	}
-	if c.forward != nil && !c.forward.Alive() {
-		c.clearBindingLocked()
+	if time.Now().Before(c.reconnectAfter) {
+		return carettaEndpoint{}
+	}
+	if !c.reconnectAfter.IsZero() || (c.forward != nil && !c.forward.Alive()) {
 		info := c.connectLocked(ctx, c.currentContext)
 		if !info.Connected {
 			if ctx.Err() == nil {

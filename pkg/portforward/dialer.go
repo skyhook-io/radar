@@ -40,25 +40,11 @@ func NewDialerWithContext(ctx context.Context, cfg *rest.Config, target *url.URL
 	if err != nil {
 		return nil, err
 	}
-	proxy := cfg.Proxy
-	if proxy == nil {
-		proxy = http.ProxyFromEnvironment
-	}
-	// net/http cancels an in-progress HTTP/1 upgrade, including a proxy
-	// CONNECT. The client-go SPDY transport blocks in http.ReadResponse.
-	transport := &http.Transport{
-		TLSClientConfig:   tlsConfig,
-		Proxy:             proxy,
-		DialContext:       cfg.Dial,
-		Protocols:         new(http.Protocols),
-		DisableKeepAlives: true,
-	}
-	transport.Protocols.SetHTTP1(true)
-	raw, err := rest.HTTPWrappersForConfig(cfg, transport)
+	attempt := upgradeAttempt{ctx: ctx, cfg: cfg, target: target, tls: tlsConfig}
+	attempt.raw, err = rest.HTTPWrappersForConfig(cfg, roundTripFunc(attempt.roundTripSPDY))
 	if err != nil {
 		return nil, err
 	}
-	attempt := upgradeAttempt{ctx: ctx, cfg: cfg, target: target, tls: tlsConfig, raw: raw}
 	return portforward.NewFallbackDialer(upgradeDial(attempt.websocket), upgradeDial(attempt.spdy), func(err error) bool {
 		return ctx.Err() == nil && (errors.Is(err, websocket.ErrBadHandshake) || streamhttp.IsHTTPSProxyError(err))
 	}), nil
@@ -148,6 +134,48 @@ func (a upgradeAttempt) websocket(protocols ...string) (httpstream.Connection, s
 		tunnel.Close()
 	}
 	return conn, strings.TrimPrefix(socket.Subprotocol(), portconstants.WebsocketsSPDYTunnelingPrefix), err
+}
+
+func (a upgradeAttempt) roundTripSPDY(req *http.Request) (*http.Response, error) {
+	// Transport detaches its dial from the request so a later request can reuse it.
+	// This upgrade has a single socket that cancellation must reach during TLS and CONNECT.
+	setup, cancel := context.WithCancel(req.Context())
+	defer cancel()
+	dial := a.cfg.Dial
+	if dial == nil {
+		dial = (&net.Dialer{}).DialContext
+	}
+	proxy := a.cfg.Proxy
+	if proxy == nil {
+		proxy = http.ProxyFromEnvironment
+	}
+	var detach func() bool
+	transport := &http.Transport{
+		DialContext: func(_ context.Context, network, address string) (net.Conn, error) {
+			ctx, cancelDial := context.WithTimeout(setup, 30*time.Second)
+			defer cancelDial()
+			conn, err := dial(ctx, network, address)
+			if err == nil {
+				detach = context.AfterFunc(setup, func() { conn.Close() })
+			}
+			return conn, err
+		},
+		TLSClientConfig:     a.tls,
+		TLSHandshakeTimeout: 10 * time.Second,
+		Proxy:               proxy,
+		Protocols:           new(http.Protocols),
+		DisableKeepAlives:   true,
+	}
+	transport.Protocols.SetHTTP1(true)
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	if !detach() {
+		resp.Body.Close()
+		return nil, setup.Err()
+	}
+	return resp, nil
 }
 
 func (a upgradeAttempt) spdy(protocols ...string) (httpstream.Connection, string, error) {

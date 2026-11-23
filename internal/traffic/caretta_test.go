@@ -152,3 +152,73 @@ func TestCarettaReleasedBorrowedForward(t *testing.T) {
 		})
 	}
 }
+
+func TestCarettaFlowReadRetriesFailedReconnect(t *testing.T) {
+	var restarting, abortRead atomic.Bool
+	readCtx, cancelRead := context.WithCancel(t.Context())
+	defer cancelRead()
+	var refused atomic.Int32
+	cfg := forwardtest.Server(t, func(w http.ResponseWriter, r *http.Request) {
+		if restarting.Load() && r.Method == http.MethodPost {
+			refused.Add(1)
+			if abortRead.Load() {
+				cancelRead()
+			}
+			http.Error(w, "pod restarting", http.StatusServiceUnavailable)
+			return
+		}
+		forwardtest.ServeTunnel(w, r)
+	})
+	manager := portforward.NewManager(kubernetes.NewForConfigOrDie(cfg), cfg)
+	defer manager.Close()
+
+	metrics := promStub(t, promBackend{links: true})
+	c := sourceWithServices(t, "ns", carettaStoreSvc("ns", "svc"))
+	c.forwards, c.isConnected = manager, true
+	defer c.Close()
+	// The fake API upgrades the tunnel. Serve PromQL responses from the store fixture.
+	c.httpClient.Transport = &http.Transport{DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, metrics.Listener.Addr().String())
+	}}
+	defer c.httpClient.CloseIdleConnections()
+	info, err := c.Connect(t.Context(), "ctx")
+	if err != nil || !info.Connected {
+		t.Fatalf("initial connection: %+v, %v", info, err)
+	}
+	lost := c.forward
+	lost.Stop()
+	restarting.Store(true)
+	failedAt := time.Now()
+	response, err := c.GetFlows(t.Context(), FlowOptions{})
+	if err != nil || response.Warning == "" || c.ConnectionInfo().Connected || refused.Load() != 1 {
+		t.Fatalf("expected a failed reconnect during restart: response=%+v err=%v refused=%d", response, err, refused.Load())
+	}
+
+	if c.reconnectAfter.Before(failedAt.Add(5*time.Second)) || c.reconnectDelay != 5*time.Second {
+		t.Fatalf("first failed reconnect scheduled for %v with delay %v", c.reconnectAfter, c.reconnectDelay)
+	}
+	c.reconnectAfter = time.Now().Add(time.Hour)
+	if _, err := c.GetFlows(t.Context(), FlowOptions{}); err != nil || refused.Load() != 1 {
+		t.Fatalf("read during backoff retried: err=%v refused=%d", err, refused.Load())
+	}
+
+	for _, seconds := range []int{10, 20, 40, 60, 60} {
+		wantDelay := time.Duration(seconds) * time.Second
+		c.reconnectAfter = time.Now().Add(-time.Second)
+		if _, err := c.GetFlows(t.Context(), FlowOptions{}); err != nil || c.reconnectDelay != wantDelay {
+			t.Fatalf("retry delay=%v want=%v err=%v", c.reconnectDelay, wantDelay, err)
+		}
+	}
+	c.reconnectAfter = time.Now().Add(-time.Second)
+	abortRead.Store(true)
+	_, _ = c.GetFlows(readCtx, FlowOptions{})
+	if readCtx.Err() == nil {
+		t.Fatal("reconnect never reached the cancelled read")
+	}
+
+	restarting.Store(false)
+	response, err = c.GetFlows(t.Context(), FlowOptions{})
+	if err != nil || len(response.Flows) != 1 || !c.forward.Alive() || c.forward.SameForward(lost) || !c.reconnectAfter.IsZero() || c.reconnectDelay != 0 {
+		t.Fatalf("later flow read did not restore the tunnel: response=%+v err=%v", response, err)
+	}
+}
