@@ -94,6 +94,7 @@ it('shows recovery guidance only for a crashed session and gives this Agent a Re
   expect(calm).not.toContain('Recover crashed sessions')
   expect(calm).not.toContain('kagent Agent</th>')
   expect(calm).toContain('Revision</th>')
+  expect(calm).not.toContain('>kagent</span>')
   state.crashed = true
   const crashed = render(<KagentSessionsTab agent={agent} />)
   expect(crashed).toContain('Recover crashed sessions')

@@ -1,4 +1,4 @@
-import { Badge, PaneLoader } from '@skyhook-io/k8s-ui'
+import { PaneLoader } from '@skyhook-io/k8s-ui'
 import type { WorkloadExtraTab } from '@skyhook-io/k8s-ui'
 import { History, MessagesSquare } from 'lucide-react'
 import type { SelectedResource } from '../../types'
@@ -70,7 +70,7 @@ export function KagentDetailPage({
       expanded
       hideKindBadge
       hideBackButton
-      namespaceDisplay={<Badge kind="Namespace">{target.namespace}</Badge>}
+      namespaceDisplay={<span className="text-sm text-theme-text-secondary">Namespace: <span className="text-theme-text-primary">{target.namespace}</span></span>}
       inlineBadges
       onBack={() => navigate(spec.listPath)}
       onNavigateToResource={onOpenResource}

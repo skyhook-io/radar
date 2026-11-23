@@ -196,7 +196,7 @@ function ReferenceLine({
             )}
             {ref.kind === 'WorkerPool' ? (
               pool ? (
-                poolReading(pool.pool).label
+                pool.pool.capacity === 'free' ? 'Active workers available' : poolReading(pool.pool).label
               ) : poolQuery.isLoading ? (
                 'Reading worker pool…'
               ) : (
@@ -225,7 +225,7 @@ function ReferenceLine({
               ) : (
                 <span className="inline-flex items-center gap-1.5">
                   <StatusDot tone="neutral" />
-                  Present · declaration only
+                  Present
                 </span>
               )
             ) : state === 'absent' ? (
@@ -394,7 +394,7 @@ export function KagentAgentOverview({ resource, onOpen }: { resource: any; onOpe
           <FactRow label="Latest change">
             <DimensionValue
               tone={agent.reading.tone}
-              source="kagent · Agent conditions for the latest change"
+              source="Reported by kagent"
               linkLabel="Revisions"
               onOpen={() => goTab('revisions')}
             >
@@ -404,7 +404,7 @@ export function KagentAgentOverview({ resource, onOpen }: { resource: any; onOpe
           <FactRow label="New sessions run">
             <DimensionValue
               tone={agent.newSessionsRevision ? 'neutral' : 'unknown'}
-              source="Agent status.latestSuccessfulRevision"
+              source="Last revision prepared by kagent"
               linkLabel="Revisions"
               onOpen={() => goTab('revisions')}
             >
@@ -438,7 +438,7 @@ export function KagentAgentOverview({ resource, onOpen }: { resource: any; onOpe
                     ? 'unknown'
                     : 'neutral'
               }
-              source={`Latest change’s declarations · ${agent.mcpServers.unread} unread · ${agent.mcpServers.absent} absent · ${agent.mcpServers.notPermitted} not permitted`}
+              source={[[agent.mcpServers.unread, 'unread'], [agent.mcpServers.absent, 'absent'], [agent.mcpServers.notPermitted, 'not permitted']].filter(([n]) => Number(n) > 0).map(([n, label]) => `${n} ${label}`).join(' · ') || undefined}
               linkLabel="MCP servers"
               onOpen={() => navigate('/kagent/mcpservers')}
             >
@@ -489,7 +489,7 @@ export function KagentAgentOverview({ resource, onOpen }: { resource: any; onOpe
             </FactRow>
           )}
           <FactRow label="Conversation outcomes">
-            <DimensionValue tone="unknown" source="Conversation outcomes are not collected">
+            <DimensionValue tone="unknown">
               Not visible to Radar
             </DimensionValue>
           </FactRow>
@@ -579,13 +579,13 @@ export function KagentDependencyOverview({ resource, onOpen }: { resource: any; 
       <PageSection title="At a glance">
         <FactGrid>
           <FactRow label="Status">
-            <DimensionValue tone={reading?.tone ?? 'unknown'} source={`kagent · ${reading?.condition ?? 'status.conditions'}`}>
+            <DimensionValue tone={reading?.tone ?? 'unknown'} source="Reported by kagent">
               {model ? modelStatus(model.reading) : server ? mcpStatus(server) : (reading?.text ?? 'Not reported')}
             </DimensionValue>
           </FactRow>
           {ref.kind === 'ModelConfig' ? (
             <FactRow label="Credential">
-              <DimensionValue tone={reading?.tone ?? 'unknown'} source="Declared Secret/key coordinates; values are never read">
+              <DimensionValue tone={reading?.tone ?? 'unknown'} source="Model configuration; credential values are never read">
                 {model ? (
                   <CredentialText credential={model.credential} />
                 ) : (
@@ -595,7 +595,7 @@ export function KagentDependencyOverview({ resource, onOpen }: { resource: any; 
             </FactRow>
           ) : (
             <FactRow label="Tools offered">
-              <DimensionValue tone={tools ? 'neutral' : 'unknown'} source="kagent controller discovery">
+              <DimensionValue tone={tools ? 'neutral' : 'unknown'} source="Tools discovered by kagent">
                 {tools ? `${tools.length} tools` : 'Unknown — controller discovery did not publish a tool list'}
               </DimensionValue>
               {tools && (
@@ -608,9 +608,8 @@ export function KagentDependencyOverview({ resource, onOpen }: { resource: any; 
           <FactRow label="Used by">
             <DimensionValue
               tone={object?.usedBy.lowerBound || !object ? 'unknown' : 'neutral'}
-              source="Agents’ current declared references"
               linkLabel="Used by"
-              onOpen={() => document.getElementById('kagent-used-by')?.scrollIntoView({ block: 'start' })}
+              onOpen={object?.usedBy.agents.length ? () => document.getElementById('kagent-used-by')?.scrollIntoView({ block: 'start' }) : undefined}
             >
               {object ? consumersText(object.usedBy) : 'Unknown · Agent inventory not read'}
             </DimensionValue>
@@ -652,7 +651,7 @@ export function KagentDependencyOverview({ resource, onOpen }: { resource: any; 
       </PageSection>
       <div id="kagent-used-by">
         {data && object ? (
-          <UsedBy impact={object.usedBy} data={data} onOpen={onOpen} server={server} />
+          object.usedBy.agents.length > 0 ? <UsedBy impact={object.usedBy} data={data} onOpen={onOpen} server={server} /> : null
         ) : (
           <Notice>
             Used by: unknown. Radar needs list access to this kind and its Agent consumers to compose the inventory; this page’s object was

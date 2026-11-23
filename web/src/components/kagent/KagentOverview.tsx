@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { FoldSection, WorkspaceProblemCallout } from '@skyhook-io/k8s-ui'
+import { FoldSection, WorkspaceProblemCallout, toneTextClass } from '@skyhook-io/k8s-ui'
 import type { KagentRef, KagentWorkspace } from '../../api/kagent'
 import { substrateActorsPath } from '../substrate/routes'
 import { KagentAgentsTable } from './KagentLists'
@@ -69,6 +69,8 @@ export function KagentAttention({ data, onOpen, agent }: { data: KagentWorkspace
         return <WorkspaceProblemCallout
           key={id}
           rootKind="kagent"
+          subjectFirst
+          hideOrigin
           subjectIsSelf={!!agent && refKey(agent) === refKey(finding.subject)}
           onNavigate={r => onOpen({ ...r, group: r.group ?? '' })}
           problem={{ ...problem, rawDetail: messages.join('\n') || undefined }}
@@ -141,63 +143,35 @@ export function KagentOverview({
   const runtimePartial = runtime.lowerBound || !runtime.completePage || rows.some((r) => !r.complete)
   const totalSessions = rows.reduce((n, r) => n + r.sessions.total, 0)
   const sessionsPath = substrateActorsPath({ kagent: 'sessions', namespaces: namespaces.join(',') })
-  const runtimeText = rows.length || runtime.completePage ? (
-    <>
-      <Link to={sessionsPath} className="block text-accent-text hover:underline">
-        {runtimePartial ? '≥' : ''}{totalSessions} {!runtimePartial && totalSessions === 1 ? 'session' : 'sessions'} in Agent Substrate →
-      </Link>
-      <Link to={`${sessionsPath}&state=crashed`} className="block text-accent-text hover:underline" aria-label="Crashed sessions in Agent Substrate">
-        {runtimePartial ? '≥' : ''}{rows.reduce((n, r) => n + r.crashed, 0)} crashed →
-      </Link>
-    </>
-  ) : runtime.unavailable
+  const cardClass = 'block rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm hover:bg-theme-hover'
+  const numberClass = 'block text-2xl font-semibold tabular-nums'
   return (
     <>
-      <div className="grid grid-cols-2 gap-3 text-sm text-theme-text-primary xl:grid-cols-4 [&>span]:rounded-xl [&>span]:border [&>span]:border-theme-border [&>span]:bg-theme-surface [&>span]:px-4 [&>span]:py-3 [&>span]:shadow-theme-sm" aria-label="kagent status">
-        <span>
-          Agents:{' '}
-          {unread('agents') ? (
-            'unknown'
-          ) : (
-            <>
-              {bound ? '≥' : ''}
-              {states.prepared ?? 0} prepared · {bound ? '≥' : ''}
-              {states.blocked ?? 0} blocked
-              {states.failed ? ` · ${bound ? '≥' : ''}${states.failed} failed` : ''}
-              {states.preparing ? ` · ${bound ? '≥' : ''}${states.preparing} processing` : ''}
-              {Object.entries(states)
-                .filter(([state, count]) => !['prepared', 'blocked', 'failed', 'preparing'].includes(state) && count > 0)
-                .map(([state, count]) => ` · ${bound ? '≥' : ''}${count} ${changeText(state).toLowerCase()}`)}
-            </>
-          )}
-        </span>
-        <span>
-          MCP servers:{' '}
-          {unread('mcpServers') ? (
-            'unknown'
-          ) : (
-            <>
-              <Link to="/kagent/mcpservers?status=problems" className="text-accent-text hover:underline">
-                <KagentCountValue count={data.counts.mcpServersFailing} /> failing
-              </Link>
-            </>
-          )}
-        </span>
-        <span>
-          Models:{' '}
-          {unread('models') ? (
-            'unknown'
-          ) : (
-            <>
-              <Link to="/kagent/models?status=problems" className="text-accent-text hover:underline">
-                <KagentCountValue count={credentialProblems} /> with credential problems
-              </Link>
-            </>
-          )}
-        </span>
-        <span className="text-theme-text-secondary">{runtimeText}</span>
+      <div className="grid grid-cols-2 gap-3 text-sm text-theme-text-primary xl:grid-cols-4" aria-label="kagent status">
+        <Link to="/kagent/agents?status=problems" className={cardClass}>
+          <span className={numberClass}>{unread('agents') ? 'Unknown' : `${bound ? '≥' : ''}${states.prepared ?? 0}`}</span>
+          <span className="text-theme-text-secondary">Prepared Agents</span>
+          {!unread('agents') && <span className={`mt-1 block text-xs ${toneTextClass(states.blocked || states.failed ? 'unhealthy' : 'neutral')}`}>{bound ? '≥' : ''}{states.blocked ?? 0} blocked{states.failed ? ` · ${bound ? '≥' : ''}${states.failed} failed` : ''}</span>}
+          {!!states.preparing && <span className="block text-xs text-theme-text-tertiary">{bound ? '≥' : ''}{states.preparing} processing</span>}
+          {Object.entries(states).filter(([state, count]) => !['prepared', 'blocked', 'failed', 'preparing'].includes(state) && count > 0).map(([state, count]) => <span key={state} className="block text-xs text-theme-text-tertiary">{bound ? '≥' : ''}{count} {changeText(state).toLowerCase()}</span>)}
+        </Link>
+        <Link to="/kagent/mcpservers?status=problems" className={cardClass}>
+          <span className={`${numberClass} ${data.counts.mcpServersFailing.n ? toneTextClass('alert') : ''}`}>{unread('mcpServers') ? 'Unknown' : <KagentCountValue count={data.counts.mcpServersFailing} />}</span>
+          <span className="text-theme-text-secondary">Failing MCP servers</span>
+        </Link>
+        <Link to="/kagent/models?status=problems" className={cardClass}>
+          <span className={`${numberClass} ${credentialProblems.n ? toneTextClass('alert') : ''}`}>{unread('models') ? 'Unknown' : <KagentCountValue count={credentialProblems} />}</span>
+          <span className="text-theme-text-secondary">Models with credential problems</span>
+        </Link>
+        <div className={cardClass}>
+          <Link to={sessionsPath} className="block hover:underline" aria-label="Sessions in Agent Substrate">
+            <span className={numberClass}>{rows.length || runtime.completePage ? `${runtimePartial ? '≥' : ''}${totalSessions}` : 'Unknown'}</span>
+            <span className="text-theme-text-secondary">Sessions in Agent Substrate →</span>
+          </Link>
+          {rows.length || runtime.completePage ? <Link to={`${sessionsPath}&state=crashed`} className={`mt-1 block text-xs hover:underline ${rows.some(r => r.crashed) ? toneTextClass('unhealthy') : 'text-theme-text-secondary'}`} aria-label="Crashed sessions in Agent Substrate">{runtimePartial ? '≥' : ''}{rows.reduce((n, r) => n + r.crashed, 0)} crashed →</Link> : <span className="text-xs text-theme-text-tertiary">{runtime.unavailable}</span>}
+          <KagentRuntimeRead runtime={runtime} />
+        </div>
       </div>
-      <KagentRuntimeRead runtime={runtime} />
       <section className="space-y-2">
         <h2 className="text-sm font-semibold text-theme-text-primary">
           Needs attention{' '}

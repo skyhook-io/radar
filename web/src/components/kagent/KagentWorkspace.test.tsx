@@ -118,7 +118,7 @@ describe('Overview evidence and folding', () => {
     r.lowerBound = partial
     r.rows = [{ agent: { namespace: 'team-a', name: 'helper' }, sessions: { total: 26 }, crashed: 2, complete: !partial }] as KagentRuntime['rows']
     const out = html(<KagentOverview data={workspace()} runtime={r} namespaces={['team-a', 'team-b']} onOpen={open} />)
-    expect(out).toContain(`${partial ? '≥' : ''}26 sessions in Agent Substrate →</a>`)
+    expect(out).toContain(`${partial ? '≥' : ''}26</span><span class="text-theme-text-secondary">Sessions in Agent Substrate →</span></a>`)
     expect(out).toContain(`${partial ? '≥' : ''}2 crashed →</a>`)
     expect(out).toContain('href="/substrate/actors?kagent=sessions&amp;namespaces=team-a%2Cteam-b"')
     expect(out).toContain('href="/substrate/actors?kagent=sessions&amp;namespaces=team-a%2Cteam-b&amp;state=crashed"')
@@ -147,7 +147,7 @@ describe('Overview evidence and folding', () => {
     w.groups = []
     w.models[0].reading.state = 'stale'
     const out = html(<KagentOverview data={w} runtime={runtime()} onOpen={open} />)
-    expect(out).toContain('0</span> with credential problems</a>')
+    expect(out).toContain('0</span></span><span class="text-theme-text-secondary">Models with credential problems</span></a>')
   })
   it('keeps a matched Agent beneath the model and presents impact and next step', () => {
     const out = html(<KagentOverview data={blockedWorkspace()} runtime={runtime()} onOpen={open} />)
@@ -155,6 +155,9 @@ describe('Overview evidence and folding', () => {
     expect(out).toContain('blocked-edit')
     expect(out).toContain('Create Secret models/missing')
     expect(out).toContain('2 configuration findings in 1 group')
+    expect(out).not.toContain('Detected by Radar')
+    expect(out.indexOf('Affects ')).toBeLessThan(out.indexOf('Next step:'))
+    expect(out.indexOf('Next step:')).toBeLessThan(out.indexOf('kagent&#x27;s message'))
     expect(out).not.toContain('healthy conversations')
   })
   it('qualifies an empty partial answer and names missing list permission', () => {
@@ -178,7 +181,7 @@ describe('Overview evidence and folding', () => {
     w.counts.agentsByLatestChange = { prepared: 1 }
     const out = html(<KagentOverview data={w} runtime={runtime()} onOpen={open} />)
     expect(out).toContain('Nothing needs attention')
-    expect(out).toContain('1 prepared')
+    expect(out).toContain('1</span><span class="text-theme-text-secondary">Prepared Agents</span>')
     expect(out).toContain('Substrate is not connected')
     expect(out).not.toContain('0 sessions')
   })
@@ -546,4 +549,15 @@ it('does not turn failed tool discovery into zero missing tools in At a glance',
   const tools = out.split('>Tools</dt>')[1].split('<dt')[0]
   expect(tools).toContain('Missing tools unknown')
   expect(tools).not.toContain('0 missing tools')
+})
+
+it('does not repeat an unused dependency in a separate Used by table', () => {
+  const w = blockedWorkspace()
+  w.models[0].usedBy = { ...w.models[0].usedBy, agents: [], count: 0, consumers: 'none', lowerBound: false }
+  state.data = w
+  const model = w.models[0]
+  const out = html(<KagentDependencyOverview resource={{ kind: model.ref.kind, metadata: model.ref }} onOpen={open} />)
+  expect(out).not.toContain('Used by →')
+  expect(out).not.toContain('kagent-used-by"><section')
+  expect(out).toContain('No Agent uses')
 })

@@ -159,16 +159,16 @@ function Line({ children, title, className }: { children: ReactNode; title?: Rea
   return title ? <Tooltip content={title} wrapperClassName="min-w-0 w-full">{line}</Tooltip> : line
 }
 
-function SnapshotCell({ row }: { row: SubstrateActorRow }) {
+function SnapshotCell({ row, session = false }: { row: SubstrateActorRow; session?: boolean }) {
   const s = row.newestSnapshot
   if (!s) return <Line title="No snapshot yet: it boots fresh." className="text-theme-text-tertiary">none yet · boots fresh</Line>
   const d = durableText(s)
   const short = s.durable === 'none' && s.locality ? 'only on its node' : d.text
   // Stored is the expected case; a snapshot at risk says so on a second line, so the warning is never cut off.
   return (
-    <Tooltip content={`Generation ${s.generation}, ${fidelityLabel(s.fidelity)}: ${d.title} ${resumeSentence(row)}`} wrapperClassName="min-w-0 w-full">
+    <Tooltip content={`Generation ${s.generation}, ${session && s.fidelity === 'volumes' ? 'saved files on attached volumes, without process memory' : fidelityLabel(s.fidelity)}: ${d.title} ${resumeSentence(row)}`} wrapperClassName="min-w-0 w-full">
       <span className="block min-w-0 text-[12.5px]">
-        <span className="block whitespace-nowrap">gen {s.generation} · {s.fidelity === 'rootfs' ? 'root fs' : fidelityLabel(s.fidelity)}</span>
+        <span className="block whitespace-nowrap">{session ? `Snapshot generation ${s.generation}` : <>gen {s.generation} · {s.fidelity === 'rootfs' ? 'root fs' : fidelityLabel(s.fidelity)}</>}</span>
         {d.tone !== 'healthy' && <span className={clsx('block text-xs leading-4', toneTextClass(d.tone))}>{short}</span>}
       </span>
     </Tooltip>
@@ -275,12 +275,12 @@ function actorColumns(wide: boolean, agent?: { onAgent?: (agent: KagentAgentRef)
         wide ? (
           <span className="flex min-w-0 flex-wrap items-baseline gap-x-1">
             <ActorName row={r} />
-            <span className="text-[11.5px] text-theme-text-tertiary"><WholeNames text={r.atespace} /></span>
+            {!agent?.revisionOnly && <span className="text-[11.5px] text-theme-text-tertiary"><WholeNames text={r.atespace} /></span>}
           </span>
         ) : (
           <>
             <ActorName row={r} />
-            <Sub><WholeNames text={`${r.atespace} · ${r.template.name}`} /></Sub>
+            {!agent?.revisionOnly && <Sub><WholeNames text={`${r.atespace} · ${r.template.name}`} /></Sub>}
           </>
         )
       ),
@@ -289,7 +289,7 @@ function actorColumns(wide: boolean, agent?: { onAgent?: (agent: KagentAgentRef)
     ...(wide && !agent?.revisionOnly ? [{ header: 'Template', width: w.template, cell: (r: SubstrateActorRow) => <Line title={r.template.name} className="font-mono text-[12px]">{r.template.name}</Line> }] : []),
     ...(agent ? [{ header: agent.revisionOnly ? 'Revision' : 'kagent Agent', width: w.agent, cell: (r: SubstrateActorRow) => agent.revisionOnly ? <span className="text-xs">{r.kagent?.kind === 'agentSession' ? <>{r.kagent.newSessions ? 'Current' : r.kagent.earlierRevision ? 'Earlier' : 'Latest change'}<span className="block font-mono text-theme-text-tertiary">{shortRevision(r.kagent.revision)}</span></> : 'Unattributed'}</span> : <AgentCell row={r} onAgent={agent.onAgent} /> }] : []),
     { header: 'Worker or last node', width: w.worker, cell: (r) => <WorkerCell row={r} /> },
-    { header: agent?.revisionOnly ? 'Saved session state' : 'Newest snapshot', width: w.snapshot, cell: (r) => <SnapshotCell row={r} /> },
+    { header: agent?.revisionOnly ? 'Saved session state' : 'Newest snapshot', width: w.snapshot, cell: (r) => <SnapshotCell row={r} session={agent?.revisionOnly} /> },
     ...(wide
       ? [{
           header: agent?.revisionOnly ? 'Updated' : 'Changed',
