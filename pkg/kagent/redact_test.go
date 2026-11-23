@@ -15,6 +15,7 @@ func TestRedactionVectors(t *testing.T) {
 	}
 	var cases []struct {
 		Fn   string          `json:"fn"`
+		Path string          `json:"path"`
 		In   json.RawMessage `json:"in"`
 		Want json.RawMessage `json:"want"`
 	}
@@ -23,13 +24,16 @@ func TestRedactionVectors(t *testing.T) {
 	}
 	for _, c := range cases {
 		switch c.Fn {
-		case "url", "text":
+		case "url", "text", "cell":
 			var in, want string
 			_ = json.Unmarshal(c.In, &in)
 			_ = json.Unmarshal(c.Want, &want)
 			got := StripURLCredentials(in)
-			if c.Fn == "text" {
+			switch c.Fn {
+			case "text":
 				got = RedactURLsInText(in)
+			case "cell":
+				got = RedactPrinterCell(c.Path, in)
 			}
 			if got != want {
 				t.Errorf("%s(%q) = %q, want %q", c.Fn, in, got, want)

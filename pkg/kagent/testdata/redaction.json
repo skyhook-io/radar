@@ -1,21 +1,211 @@
 [
-  {"fn": "url", "in": "https://api.example.com/v1", "want": "https://api.example.com/v1"},
-  {"fn": "url", "in": "https://user:tok3n@mcp.example.com/mcp", "want": "https://[REDACTED]@mcp.example.com/mcp"},
-  {"fn": "url", "in": "https://TOKEN@git.example.com/org/skills.git", "want": "https://[REDACTED]@git.example.com/org/skills.git"},
-  {"fn": "url", "in": "https://mcp.example.com/sse?api_key=abc&x=1", "want": "https://mcp.example.com/sse?[REDACTED]"},
-  {"fn": "url", "in": "https://s3.example.com/#frag", "want": "https://s3.example.com/#[REDACTED]"},
-  {"fn": "url", "in": "user:pw@ollama:11434", "want": "[REDACTED]@ollama:11434"},
-  {"fn": "url", "in": "ollama:11434", "want": "ollama:11434"},
-  {"fn": "url", "in": "s3://AKIDEXAMPLE:secret@bucket/snapshots", "want": "s3://[REDACTED]@bucket/snapshots"},
-  {"fn": "url", "in": "gs://snapshots/agents", "want": "gs://snapshots/agents"},
-  {"fn": "url", "in": "", "want": ""},
-  {"fn": "text", "in": "failed to connect to https://user:pw@mcp.example.com/mcp?token=abc: 401", "want": "failed to connect to https://[REDACTED]@mcp.example.com/mcp?[REDACTED]: 401"},
-  {"fn": "text", "in": "see https://docs.example.com/page?lang=en for details", "want": "see https://docs.example.com/page?lang=en for details"},
-  {"fn": "text", "in": "Get \"https://mcp.example.com/sse?X-Amz-Signature=deadbeef\": EOF", "want": "Get \"https://mcp.example.com/sse?[REDACTED]\": EOF"},
-  {"fn": "text", "in": "no URL here", "want": "no URL here"},
-  {"fn": "args", "in": ["serve", "--api-key=sk-123", "--port", "8080"], "want": ["serve", "--api-key=[REDACTED]", "--port", "8080"]},
-  {"fn": "args", "in": ["--token", "abc", "--verbose"], "want": ["--token", "[REDACTED]", "--verbose"]},
-  {"fn": "args", "in": ["--auth-file", "--debug"], "want": ["--auth-file", "--debug"]},
-  {"fn": "args", "in": ["OPENAI_API_KEY=sk-123", "MODE=fast"], "want": ["OPENAI_API_KEY=[REDACTED]", "MODE=fast"]},
-  {"fn": "args", "in": ["--endpoint=https://u:p@host/x"], "want": ["--endpoint=https://[REDACTED]@host/x"]}
+ {
+  "fn": "url",
+  "in": "https://api.example.com/v1",
+  "want": "https://api.example.com/v1"
+ },
+ {
+  "fn": "url",
+  "in": "https://user:tok3n@mcp.example.com/mcp",
+  "want": "https://[REDACTED]@mcp.example.com/mcp"
+ },
+ {
+  "fn": "url",
+  "in": "https://TOKEN@git.example.com/org/skills.git",
+  "want": "https://[REDACTED]@git.example.com/org/skills.git"
+ },
+ {
+  "fn": "url",
+  "in": "https://mcp.example.com/sse?api_key=abc&x=1",
+  "want": "https://mcp.example.com/sse?[REDACTED]"
+ },
+ {
+  "fn": "url",
+  "in": "https://s3.example.com/#frag",
+  "want": "https://s3.example.com/#[REDACTED]"
+ },
+ {
+  "fn": "url",
+  "in": "user:pw@ollama:11434",
+  "want": "[REDACTED]@ollama:11434"
+ },
+ {
+  "fn": "url",
+  "in": "ollama:11434",
+  "want": "ollama:11434"
+ },
+ {
+  "fn": "url",
+  "in": "s3://AKIDEXAMPLE:secret@bucket/snapshots",
+  "want": "s3://[REDACTED]@bucket/snapshots"
+ },
+ {
+  "fn": "url",
+  "in": "gs://snapshots/agents",
+  "want": "gs://snapshots/agents"
+ },
+ {
+  "fn": "url",
+  "in": "",
+  "want": ""
+ },
+ {
+  "fn": "text",
+  "in": "failed to connect to https://user:pw@mcp.example.com/mcp?token=abc: 401",
+  "want": "failed to connect to https://[REDACTED]@mcp.example.com/mcp?[REDACTED]: 401"
+ },
+ {
+  "fn": "text",
+  "in": "see https://docs.example.com/page?lang=en for details",
+  "want": "see https://docs.example.com/page?lang=en for details"
+ },
+ {
+  "fn": "text",
+  "in": "Get \"https://mcp.example.com/sse?X-Amz-Signature=deadbeef\": EOF",
+  "want": "Get \"https://mcp.example.com/sse?[REDACTED]\": EOF"
+ },
+ {
+  "fn": "text",
+  "in": "no URL here",
+  "want": "no URL here"
+ },
+ {
+  "fn": "args",
+  "in": [
+   "serve",
+   "--api-key=sk-123",
+   "--port",
+   "8080"
+  ],
+  "want": [
+   "serve",
+   "--api-key=[REDACTED]",
+   "--port",
+   "8080"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "--token",
+   "abc",
+   "--verbose"
+  ],
+  "want": [
+   "--token",
+   "[REDACTED]",
+   "--verbose"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "--auth-file",
+   "--debug"
+  ],
+  "want": [
+   "--auth-file",
+   "--debug"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "OPENAI_API_KEY=sk-123",
+   "MODE=fast"
+  ],
+  "want": [
+   "OPENAI_API_KEY=[REDACTED]",
+   "MODE=fast"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "--endpoint=https://u:p@host/x"
+  ],
+  "want": [
+   "--endpoint=https://[REDACTED]@host/x"
+  ]
+ },
+ {
+  "fn": "url",
+  "in": "http://user:FAKEPASS@no-such-mcp.example:9999/mcp?token=FAKEQUERY",
+  "want": "http://[REDACTED]@no-such-mcp.example:9999/mcp?[REDACTED]"
+ },
+ {
+  "fn": "text",
+  "in": "Failed to connect to MCP server: failed to connect MCP client: calling \"initialize\": sending \"initialize\": rejected by transport: Post \"http://user:***@no-such-mcp.example:9999/mcp?token=FAKEQUERY\": dial tcp: lookup no-such-mcp.example: no such host",
+  "want": "Failed to connect to MCP server: failed to connect MCP client: calling \"initialize\": sending \"initialize\": rejected by transport: Post \"http://[REDACTED]@no-such-mcp.example:9999/mcp?[REDACTED]\": dial tcp: lookup no-such-mcp.example: no such host"
+ },
+ {
+  "fn": "cell",
+  "path": ".spec.url",
+  "in": "http://user:FAKEPASS@no-such-mcp.example:9999/mcp?token=FAKEQUERY",
+  "want": "http://[REDACTED]@no-such-mcp.example:9999/mcp?[REDACTED]"
+ },
+ {
+  "fn": "cell",
+  "path": ".spec.url",
+  "in": "https://mcp.example.com/sse?region=eu",
+  "want": "https://mcp.example.com/sse?[REDACTED]"
+ },
+ {
+  "fn": "cell",
+  "path": ".spec.protocol",
+  "in": "STREAMABLE_HTTP",
+  "want": "STREAMABLE_HTTP"
+ },
+ {
+  "fn": "args",
+  "in": [
+   "env",
+   "TOKEN=opaque-dummy-value",
+   "serve"
+  ],
+  "want": [
+   "env",
+   "TOKEN=[REDACTED]",
+   "serve"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "sh",
+   "-c",
+   "serve --api-key=opaque-dummy-value"
+  ],
+  "want": [
+   "sh",
+   "-c",
+   "serve --api-key=[REDACTED]"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "sh",
+   "-c",
+   "API_KEY=opaque-dummy-value exec serve --token opaque-dummy-value --port 8080"
+  ],
+  "want": [
+   "sh",
+   "-c",
+   "API_KEY=[REDACTED] exec serve --token [REDACTED] --port 8080"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "sh",
+   "-c",
+   "exec serve --mode fast"
+  ],
+  "want": [
+   "sh",
+   "-c",
+   "exec serve --mode fast"
+  ]
+ }
 ]

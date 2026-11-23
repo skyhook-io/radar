@@ -438,7 +438,6 @@ export function stripKagentURLCredentials(raw: string): string {
 const URL_IN_TEXT = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi
 const SENSITIVE_QUERY = /(?:^|[?&#;])[^=&#]*(?:key|token|sig|secret|passw|auth|credential|session)[^=&#]*=/i
 const SENSITIVE_FLAG = /^(--?[a-z0-9_.-]*(?:token|key|secret|passw|credential|auth)[a-z0-9_.-]*)(=.*)?$/i
-const SENSITIVE_ASSIGN = /^([a-z_][a-z0-9_]*(?:token|key|secret|passw|credential|auth)[a-z0-9_]*)=.+$/i
 
 /** Mirrors pkg/kagent RedactURLsInText: user info of every URL in text, and a query that names a credential. */
 export function redactKagentURLsInText(text: string): string {
@@ -456,21 +455,42 @@ export function redactKagentURLsInText(text: string): string {
   })
 }
 
-/** Mirrors pkg/kagent RedactArgs: values passed to a credential-named flag or variable. */
+const ASSIGNMENT = /^([a-z_][a-z0-9_]*)=.+$/i
+const CREDENTIAL_WORD = /token|key|secret|passw|credential|auth/i
+
+function redactArg(a: string): [string, boolean] {
+  const flag = SENSITIVE_FLAG.exec(a)
+  if (flag) return flag[2] ? [`${flag[1]}=${REDACTED}`, false] : [a, true]
+  const assign = ASSIGNMENT.exec(a)
+  if (assign && CREDENTIAL_WORD.test(assign[1])) return [`${assign[1]}=${REDACTED}`, false]
+  return [redactKagentURLsInText(a), false]
+}
+
+function redactWords(words: string[]): string[] {
+  let blankNext = false
+  return words.map((w) => {
+    if (blankNext && !w.startsWith('-')) { blankNext = false; return REDACTED }
+    const [out, next] = redactArg(w)
+    blankNext = next
+    return out
+  })
+}
+
+/** Mirrors pkg/kagent RedactArgs: values passed to a credential-named flag or variable, also inside a shell payload. */
 export function redactKagentArgs(args: string[]): string[] {
   let blankNext = false
   return args.map((a) => {
     if (blankNext && !a.startsWith('-')) { blankNext = false; return REDACTED }
-    const flag = SENSITIVE_FLAG.exec(a)
-    if (flag) {
-      if (flag[2]) { blankNext = false; return `${flag[1]}=${REDACTED}` }
-      blankNext = true
-      return a
-    }
-    blankNext = false
-    if (SENSITIVE_ASSIGN.test(a)) return a.slice(0, a.indexOf('=') + 1) + REDACTED
-    return redactKagentURLsInText(a)
+    if (/[ \t]/.test(a)) { blankNext = false; return redactWords(a.split(/\s+/).filter(Boolean)).join(' ') }
+    const [out, next] = redactArg(a)
+    blankNext = next
+    return out
   })
+}
+
+/** Mirrors pkg/kagent RedactPrinterCell: a URL column loses user info and query; other text the URL rule. */
+export function redactKagentPrinterCell(jsonPath: string, value: string): string {
+  return ['.spec.url', '.spec.endpoint'].includes(jsonPath.trim()) ? stripKagentURLCredentials(value) : redactKagentURLsInText(value)
 }
 
 const URL_FIELDS: Record<string, string[][]> = {

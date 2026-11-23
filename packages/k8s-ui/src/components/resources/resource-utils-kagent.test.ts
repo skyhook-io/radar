@@ -8,6 +8,7 @@ import {
   kagentReference,
   readKagent,
   redactKagentArgs,
+  redactKagentPrinterCell,
   redactKagentLiterals,
   redactKagentURLsInText,
   stripKagentURLCredentials,
@@ -115,7 +116,7 @@ const redaction = JSON.parse(readFileSync(new URL('../../../../../pkg/kagent/tes
 describe('kagent URL and argument redaction match pkg/kagent', () => {
   for (const c of redaction) {
     it(`${c.fn} ${JSON.stringify(c.in)}`, () => {
-      const got = c.fn === 'url' ? stripKagentURLCredentials(c.in) : c.fn === 'text' ? redactKagentURLsInText(c.in) : redactKagentArgs(c.in)
+      const got = c.fn === 'url' ? stripKagentURLCredentials(c.in) : c.fn === 'text' ? redactKagentURLsInText(c.in) : c.fn === 'cell' ? redactKagentPrinterCell(c.path, c.in) : redactKagentArgs(c.in)
       expect(got).toEqual(c.want)
     })
   }

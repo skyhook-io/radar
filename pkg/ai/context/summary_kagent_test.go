@@ -110,3 +110,21 @@ func TestKagentAgentSummaryUsesKagentReading(t *testing.T) {
 		t.Fatalf("another group's Agent got kagent's reading: %+v", s)
 	}
 }
+
+// MCP reads some dynamic objects through the typed path (Minify, not
+// MinifyUnstructured); the CRD redaction applies there too.
+func TestKagentRedactionOnTheTypedMinifyPath(t *testing.T) {
+	server := kagentObj("RemoteMCPServer", map[string]any{"url": "http://user:FAKEPASS@mcp.example:9999/mcp?token=FAKEQUERY"}, map[string]any{"conditions": []any{
+		map[string]any{"type": "Accepted", "status": "False", "reason": "DiscoveryFailed", "message": `Post "http://user:***@mcp.example:9999/mcp?token=FAKEQUERY": dial tcp`},
+	}})
+	for _, level := range []VerbosityLevel{LevelDetail, LevelCompact} {
+		out, err := Minify(server.DeepCopy(), level)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.Marshal(out)
+		if strings.Contains(string(raw), "FAKEPASS") || strings.Contains(string(raw), "FAKEQUERY") {
+			t.Errorf("level %d leaks: %s", level, raw)
+		}
+	}
+}

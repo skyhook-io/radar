@@ -15,6 +15,7 @@ import (
 	"k8s.io/apiserver/pkg/registry/rest"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/kagent"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
 
@@ -222,7 +223,22 @@ func tableFromCRD(ctx context.Context, crd *unstructured.Unstructured, version s
 		}
 		cells[uid] = values
 	}
+	if group, _, _ := unstructured.NestedString(crd.Object, "spec", "group"); kagent.IsGroup(group) {
+		redactKagentCells(columns, cells)
+	}
 	return columns, cells
+}
+
+// redactKagentCells keeps credentials kagent objects can carry in URLs out of
+// the table every client renders (pkg/kagent.RedactPrinterCell).
+func redactKagentCells(columns []printerColumn, cells map[string][]any) {
+	for _, values := range cells {
+		for j, v := range values {
+			if s, ok := v.(string); ok && j < len(columns) {
+				values[j] = kagent.RedactPrinterCell(columns[j].JSONPath, s)
+			}
+		}
+	}
 }
 
 // vendorDescription returns the description the CRD itself declared for the

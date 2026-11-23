@@ -17,6 +17,7 @@ import {
   kagentRefKey,
   readKagentAgent,
   readKagentRemoteMCPServer,
+  redactKagentLiterals,
   shortRevision,
   type KagentReading,
   type KagentRef,
@@ -255,6 +256,6 @@ export function KagentAgentRenderer({ data, onNavigate, related, sessions }: Kag
 
     {sessions}
 
-    <ConditionsSection conditions={data?.status?.conditions} />
+    <ConditionsSection conditions={redactKagentLiterals(data)?.status?.conditions} />
   </>
 }

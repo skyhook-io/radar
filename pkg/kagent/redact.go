@@ -37,10 +37,11 @@ func StripURLCredentials(raw string) string {
 }
 
 var (
-	urlInText       = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s"'<>]+`)
-	sensitiveQuery  = regexp.MustCompile(`(?i)(?:^|[?&#;])[^=&#]*(?:key|token|sig|secret|passw|auth|credential|session)[^=&#]*=`)
-	sensitiveFlag   = regexp.MustCompile(`(?i)^(--?[a-z0-9_.-]*(?:token|key|secret|passw|credential|auth)[a-z0-9_.-]*)(=.*)?$`)
-	sensitiveAssign = regexp.MustCompile(`(?i)^([a-z_][a-z0-9_]*(?:token|key|secret|passw|credential|auth)[a-z0-9_]*)=.+$`)
+	urlInText      = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s"'<>]+`)
+	sensitiveQuery = regexp.MustCompile(`(?i)(?:^|[?&#;])[^=&#]*(?:key|token|sig|secret|passw|auth|credential|session)[^=&#]*=`)
+	sensitiveFlag  = regexp.MustCompile(`(?i)^(--?[a-z0-9_.-]*(?:token|key|secret|passw|credential|auth)[a-z0-9_.-]*)(=.*)?$`)
+	assignment     = regexp.MustCompile(`(?i)^([a-z_][a-z0-9_]*)=.+$`)
+	credentialWord = regexp.MustCompile(`(?i)token|key|secret|passw|credential|auth`)
 )
 
 // RedactURLsInText blanks the user info of every URL in free text, and its
@@ -67,31 +68,65 @@ func RedactURLsInText(text string) string {
 }
 
 // RedactArgs blanks the values a command line passes to a flag or variable
-// that names a credential: --api-key=x, --token x, API_TOKEN=x.
+// that names a credential: --api-key=x, --token x, API_TOKEN=x, TOKEN=x. An
+// argument holding a shell payload (sh -c "serve --api-key=x") is read word by
+// word with the same rules.
 func RedactArgs(args []string) []string {
 	out := make([]string, len(args))
 	blankNext := false
 	for i, a := range args {
-		switch {
-		case blankNext && !strings.HasPrefix(a, "-"):
-			out[i] = Redacted
-			blankNext = false
+		if blankNext && !strings.HasPrefix(a, "-") {
+			out[i], blankNext = Redacted, false
 			continue
-		case sensitiveFlag.MatchString(a):
-			m := sensitiveFlag.FindStringSubmatch(a)
-			if m[2] != "" {
-				out[i] = m[1] + "=" + Redacted
-			} else {
-				out[i] = a
-				blankNext = true
-				continue
-			}
-		case sensitiveAssign.MatchString(a):
-			out[i] = a[:strings.Index(a, "=")+1] + Redacted
-		default:
-			out[i] = RedactURLsInText(a)
 		}
-		blankNext = false
+		out[i], blankNext = redactArg(a)
+		if strings.ContainsAny(a, " \t") {
+			out[i], blankNext = redactShellWords(a), false
+		}
 	}
 	return out
+}
+
+// redactArg redacts one word, and reports whether the word is a credential
+// flag whose value is the next word.
+func redactArg(a string) (string, bool) {
+	if m := sensitiveFlag.FindStringSubmatch(a); m != nil {
+		if m[2] != "" {
+			return m[1] + "=" + Redacted, false
+		}
+		return a, true
+	}
+	if m := assignment.FindStringSubmatch(a); m != nil && credentialWord.MatchString(m[1]) {
+		return m[1] + "=" + Redacted, false
+	}
+	return RedactURLsInText(a), false
+}
+
+func redactShellWords(payload string) string {
+	words := strings.Fields(payload)
+	blankNext := false
+	for i, w := range words {
+		if blankNext && !strings.HasPrefix(w, "-") {
+			words[i], blankNext = Redacted, false
+			continue
+		}
+		words[i], blankNext = redactArg(w)
+	}
+	return strings.Join(words, " ")
+}
+
+// urlColumnPaths are printer-column JSONPaths that read a URL field, whose
+// whole query and user info are suspect.
+var urlColumnPaths = map[string]bool{".spec.url": true, ".spec.endpoint": true}
+
+// RedactPrinterCell redacts one kagent printer-column cell, which the API
+// server's table conversion copies verbatim from the object: a URL column
+// (RemoteMCPServer's URL, ModelProviderConfig's endpoint) loses its user
+// info, query and fragment, and any other text the user info of the URLs in
+// it and a query naming a credential.
+func RedactPrinterCell(jsonPath, value string) string {
+	if urlColumnPaths[strings.TrimSpace(jsonPath)] {
+		return StripURLCredentials(value)
+	}
+	return RedactURLsInText(value)
 }
