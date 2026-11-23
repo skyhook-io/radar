@@ -30,6 +30,7 @@ export interface RadarFeatureSpec {
 }
 
 export const RADAR_FEATURES = {
+  datadogAgentPresence: { label: 'Datadog Agent setup hints', flag: 'datadogAgentPresence', flagShippedWithEndpoint: true },
   resourceReadCoverage: { label: 'Resource read coverage', flag: 'resourceReadCoverage', flagShippedWithEndpoint: true },
   searchCoverage: { label: 'Search coverage and object filters', flag: 'searchCoverage', flagShippedWithEndpoint: true },
   applicationEvidence: { label: 'Application evidence collection', flag: 'applicationEvidence', flagShippedWithEndpoint: true },
