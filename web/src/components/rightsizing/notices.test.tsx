@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { RightsizingRow, RightsizingScanResponse } from '../../api/client'
-import { FitWhy, ScanNotices, ScanSummary, ScanUnavailableState } from './RightsizingScanView'
+import type { RightsizingScanResponse } from '../../api/client'
+import { ScanNotices, ScanSummary, ScanUnavailableState } from './RightsizingScanView'
 
 const scan: RightsizingScanResponse = {
   scanId: 'rs_test', scanStatus: 'finished', deadlineAt: '2026-09-19T10:03:00Z',
@@ -102,33 +102,6 @@ describe('rightsizing scan notices', () => {
     })
     expect(html).toContain('time limit')
     expect(html).not.toContain('<button')
-  })
-})
-
-describe('rightsizing evidence explanation', () => {
-  const row: RightsizingRow = {
-    container: 'app',
-    resource: 'cpu',
-    fit: 'insufficient_history',
-    confidence: 'low',
-    coverage: 0,
-    sampleCount: 0,
-    expectedSamples: 2017,
-    hpaManaged: false,
-    hpaEvidenceAvailable: true,
-    oomEvidenceAvailable: false,
-  }
-
-  it('distinguishes failed queries from successfully measured short history', () => {
-    const failed = renderToStaticMarkup(
-      <FitWhy label="CPU" row={{ ...row, queryError: 'usage query failed' }} />,
-    )
-    expect(failed).toContain('Metrics could not be queried')
-    expect(failed).not.toContain('0.0 days')
-    expect(failed).not.toContain('Wait for more runtime history')
-    const short = renderToStaticMarkup(<FitWhy label="CPU" row={row} />)
-    expect(short).toContain('0.0 days')
-    expect(short).toContain('Wait for more runtime history')
   })
 })
 

@@ -13,11 +13,14 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/prom"
+	"github.com/skyhook-io/radar/pkg/rightsizing"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 	listersappsv1 "k8s.io/client-go/listers/apps/v1"
 )
 
@@ -189,6 +192,7 @@ type rightsizingScanQuerier interface {
 }
 
 type scanWorkload struct {
+	uid       types.UID
 	kind      string
 	namespace string
 	name      string
@@ -709,15 +713,15 @@ func buildScanWorkload(input scanWorkload, evidence scanBatchEvidence) Rightsizi
 			out.Rows = append(out.Rows, row)
 		}
 	}
-	withholdIncreasesAbovePodLimit(out.Rows, input.workload.podSpec)
+	rightsizing.Finalize(out.Rows, input.workload.podSpec, input.workload.qos, out.ScaledToZero)
 	return out
 }
 
 func buildScanRow(container containerSpec, resourceName string, key scanKey, expected int, workload rightsizingWorkload, evidence scanBatchEvidence) (row RightsizingRow) {
-	defer markPodLevelRequest(&row)
+	defer rightsizing.MarkPodLevelRequest(&row)
 	row = RightsizingRow{
 		Container: container.name, Resource: resourceName, Fit: FitInsufficientHistory, Confidence: ConfidenceLow,
-		ExpectedSamples: expected, HPAManaged: workload.hpaManaged[resourceName], HPAEvidenceAvailable: workload.hpaAvailable,
+		ExpectedSamples: expected, HPAManaged: rightsizing.HPATargets(workload.hpaManaged).Controls(container.name, resourceName), HPAEvidenceAvailable: workload.hpaAvailable,
 		LiveInventoryUnavailable: workload.liveInventoryUnavailable,
 	}
 	var request, limit = container.cpuReq, container.cpuLim
@@ -735,7 +739,7 @@ func buildScanRow(container containerSpec, resourceName string, key scanKey, exp
 			row.OOMEvidenceAvailable = termination.OOM || (restartAvailable && (restartActivity <= 0 || termination.Any))
 		}
 	}
-	setCurrentQuantities(&row, request, limit, resourceName)
+	rightsizing.SetCurrentQuantities(&row, request, limit, resourceName)
 	setPodLevelRequest(&row, podLevelRequestFor(container, resourceName), resourceName)
 	if queryErr := evidence.errors[resourceName]; queryErr != nil {
 		row.QueryError = RowUsageQueryFailed
@@ -749,13 +753,13 @@ func buildScanRow(container containerSpec, resourceName string, key scanKey, exp
 		observed = maxFinite(series)
 	} else {
 		peak := percentile(series, 0.99)
-		row.Peak = &ObservedStatistic{Name: "P99", Value: peak, Formatted: formatObservedValue(peak, resourceName)}
-		row.Bursty = isBurstyCPU(observed, peak)
+		row.Peak = &ObservedStatistic{Name: "P99", Value: peak, Formatted: rightsizing.FormatObservedValue(peak, resourceName)}
+		row.Bursty = rightsizing.IsBurstyCPU(observed, peak)
 	}
-	row.Observed = &ObservedStatistic{Name: statistic, Value: observed, Formatted: formatObservedValue(observed, resourceName)}
+	row.Observed = &ObservedStatistic{Name: statistic, Value: observed, Formatted: rightsizing.FormatObservedValue(observed, resourceName)}
 	row.SampleCount = len(series)
 	row.Coverage = math.Min(float64(row.SampleCount)/float64(expected), 1)
-	row.Confidence = confidenceFor(row.SampleCount, row.Coverage, OwnerCoverageKSMHistory)
+	row.Confidence = rightsizing.ConfidenceFor(row.SampleCount, row.Coverage, OwnerCoverageKSMHistory)
 	if resourceName == "cpu" && evidence.errors["throttle"] == nil {
 		if values := evidence.throttle[key]; len(values) > 0 {
 			value := maxFinite(values)
@@ -763,11 +767,11 @@ func buildScanRow(container containerSpec, resourceName string, key scanKey, exp
 			row.ThrottleRatio = &value
 		}
 	}
-	if row.SampleCount < rightsizingMinSamples {
+	if row.SampleCount < rightsizing.RightsizingMinSamples {
 		row.RecommendationReason = "insufficient_history"
 		return row
 	}
-	classifyRightsizingFit(&row, observed, request, limit, resourceName)
+	rightsizing.ClassifyRightsizingFit(&row, observed, request, limit, resourceName)
 	return row
 }
 
@@ -938,9 +942,9 @@ func snapshotScanWorkloads(ctx context.Context, cache *k8s.ResourceCache, scopes
 	var unavailable, skippedDaemonSets []string
 	add := func(obj metav1.Object, kind string, replicas int, podSpec *corev1.PodSpec, scaledToZero bool) {
 		key := workloadIdentity(kind, obj.GetNamespace(), obj.GetName())
-		workloads[key] = &scanWorkload{kind: kind, namespace: obj.GetNamespace(), name: obj.GetName(), replicas: replicas, workload: rightsizingWorkload{
+		workloads[key] = &scanWorkload{uid: obj.GetUID(), kind: kind, namespace: obj.GetNamespace(), name: obj.GetName(), replicas: replicas, workload: rightsizingWorkload{
 			podSpec: podSpec, containers: extractRuntimeContainers(podSpec), currentPodOOM: map[string]bool{}, hpaManaged: map[string]bool{}, scaledToZero: scaledToZero,
-			managedBy: detectWorkloadManager(obj),
+			managedBy: DetectWorkloadManager(obj),
 		}}
 	}
 
@@ -1092,14 +1096,7 @@ func enrichScanHPA(ctx context.Context, cache *k8s.ResourceCache, scopes map[str
 		if workload == nil {
 			continue
 		}
-		for _, metric := range hpa.Spec.Metrics {
-			if metric.Type == autoscalingv2.ResourceMetricSourceType && metric.Resource != nil && metric.Resource.Target.AverageUtilization != nil {
-				resourceName := string(metric.Resource.Name)
-				if resourceName == "cpu" || resourceName == "memory" {
-					workload.workload.hpaManaged[resourceName] = true
-				}
-			}
-		}
+		AddHPATargetResources(workload.workload.hpaManaged, hpa, ref.Kind, ref.Name)
 	}
 }
 
@@ -1199,63 +1196,47 @@ func enrichScanCurrentOOM(ctx context.Context, cache *k8s.ResourceCache, scopes 
 	}
 
 	namespaces := scanScopeNamespaces(scopes)
-	replicaSetOwners, ownersListed := scanReplicaSetOwners(ctx, cache, namespaces, ownersReadable)
 	pods, podsListed := scanPods(cache, namespaces)
 	if !podsListed {
 		markScanLiveInventoryUnavailable(workloads, "")
 		return
-	}
-	if !ownersListed {
-		markScanLiveInventoryUnavailable(workloads, "Deployment")
 	}
 	for _, pod := range pods {
 		owner := metav1.GetControllerOf(pod)
 		if owner == nil {
 			continue
 		}
-		kind, name := owner.Kind, owner.Name
-		if owner.Kind == "ReplicaSet" {
-			kind, name = "Deployment", replicaSetOwners[pod.Namespace+"\x00"+owner.Name]
-		}
-		workload := workloads[workloadIdentity(kind, pod.Namespace, name)]
-		if workload == nil {
+		switch owner.Kind {
+		case "ReplicaSet":
+			if !ownersReadable {
+				continue
+			}
+			rs, err := cache.ReplicaSets().ReplicaSets(pod.Namespace).Get(owner.Name)
+			if err != nil {
+				if !apierrors.IsNotFound(err) {
+					markScanLiveInventoryUnavailable(workloads, "Deployment")
+				}
+				continue
+			}
+			if !k8s.ControllerMatchesIdentity(owner, "ReplicaSet", rs.Name, "apps", rs.UID) {
+				continue
+			}
+			owner = metav1.GetControllerOf(rs)
+			if owner == nil || owner.Kind != "Deployment" {
+				continue
+			}
+		case "DaemonSet", "StatefulSet":
+		default:
 			continue
 		}
+		workload := workloads[workloadIdentity(owner.Kind, pod.Namespace, owner.Name)]
+		if workload == nil || !k8s.ControllerMatchesIdentity(owner, workload.kind, workload.name, "apps", workload.uid) {
+			continue
+		}
+		workload.workload.qos.Observe(pod.Status.QOSClass)
 		collectCurrentPodOOM(workload.workload.currentPodOOM, pod.Status.ContainerStatuses)
 		collectCurrentPodOOM(workload.workload.currentPodOOM, pod.Status.InitContainerStatuses)
 	}
-}
-
-// scanReplicaSetOwners maps each ReplicaSet to its Deployment. It reports false
-// if any list failed, because a partial map silently drops the pods it could
-// not resolve rather than failing loudly.
-func scanReplicaSetOwners(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, readable bool) (map[string]string, bool) {
-	owners := map[string]string{}
-	if !readable || cache.ReplicaSets() == nil {
-		return owners, false
-	}
-	var replicaSets []*appsv1.ReplicaSet
-	if namespaces == nil {
-		list, err := cache.ReplicaSets().List(labels.Everything())
-		if err != nil {
-			return owners, false
-		}
-		replicaSets = list
-	} else {
-		for _, namespace := range namespaces {
-			items, err := cache.ReplicaSets().ReplicaSets(namespace).List(labels.Everything())
-			if err != nil {
-				return owners, false
-			}
-			replicaSets = append(replicaSets, items...)
-		}
-	}
-	for _, replicaSet := range replicaSets {
-		if owner := metav1.GetControllerOf(replicaSet); owner != nil && owner.Kind == "Deployment" {
-			owners[replicaSet.Namespace+"\x00"+replicaSet.Name] = owner.Name
-		}
-	}
-	return owners, true
 }
 
 // scanPods reports false if any list failed: a short pod list reads as pods

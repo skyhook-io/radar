@@ -19,7 +19,7 @@ import type { ELK } from 'elkjs/lib/elk.bundled.js'
 import type { AggregatedFlow } from '../../types'
 import { clsx } from 'clsx'
 import { X, ArrowRight, Globe, Server, Activity, Puzzle, Crosshair } from 'lucide-react'
-import { MiddleEllipsis, PaneLoader } from '@skyhook-io/k8s-ui'
+import { GraphExportButton, MiddleEllipsis, PaneLoader } from '@skyhook-io/k8s-ui'
 import { isClusterAddon, type AddonMode } from './TrafficView'
 import { SEVERITY_BADGE, SEVERITY_DOT, SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { getNamespaceColor } from '../../utils/traffic-colors'
@@ -87,6 +87,8 @@ interface TrafficGraphProps {
   /** Seconds the byte figures cover, so an edge measured only in bytes can be
    *  labelled with its throughput. */
   windowSeconds: number
+  /** Saves an exported image instead of a browser download (desktop app). */
+  onDownloadBlob?: (blob: Blob, filename: string) => void
 }
 
 // Phase 2.1: Calculate edge width based on connection count (log scale)
@@ -372,7 +374,8 @@ export function TrafficNode({ data }: { data: TrafficNodeData }) {
 // Legend component
 function TrafficLegend() {
   return (
-    <div className="absolute bottom-2 left-2 bg-theme-surface border border-theme-border rounded-lg p-2.5 text-xs z-10 shadow-lg max-w-xs">
+    // Clears the graph controls, which sit in the same corner.
+    <div className="absolute bottom-2 left-14 bg-theme-surface border border-theme-border rounded-lg p-2.5 text-xs z-10 shadow-lg max-w-xs">
       <div className="font-medium text-theme-text-primary mb-2">Legend</div>
       <div className="space-y-1.5">
         <div className="flex items-center gap-2">
@@ -1165,7 +1168,7 @@ function trafficEdgeId(sourceId: string, destId: string, flow: AggregatedFlow): 
   return `${sourceId}->${destId}:${flow.port}${flow.directionUnknown ? ':unoriented' : ''}`
 }
 
-export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups = false, serviceCategories, addonMode = 'show', trafficSource = '', selection: viewSelection, onSelectionChange, onFocus, focusedId, onLayoutUnavailable, windowSeconds }: TrafficGraphProps) {
+export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups = false, serviceCategories, addonMode = 'show', trafficSource = '', selection: viewSelection, onSelectionChange, onFocus, focusedId, onLayoutUnavailable, windowSeconds, onDownloadBlob }: TrafficGraphProps) {
   // Beyla is rate-based too: its Connections field carries requests per second,
   // not a connection count, so it needs the same label Istio gets.
   const isRateBased = isRateBasedSource(trafficSource)
@@ -1815,7 +1818,9 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
         nodesConnectable={false}
       >
         <Background />
-        <Controls />
+        <Controls>
+          <GraphExportButton defaultFilename="traffic" title="Export traffic" onDownloadBlob={onDownloadBlob} />
+        </Controls>
         <FitViewOnChange shouldFitViewRef={shouldFitViewRef} layoutedNodes={layoutedNodes} />
       </ReactFlow>
 

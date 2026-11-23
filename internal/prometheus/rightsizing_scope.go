@@ -9,6 +9,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/prom"
+	"github.com/skyhook-io/radar/pkg/rightsizing"
 )
 
 // ReasonClusterScopeWithheld is the single-workload reason when the metrics
@@ -21,7 +22,7 @@ const ReasonRightsizingPartialData = "Prometheus returned partial data for the r
 
 // ScanReasonClusterScopeWithheld is the scan reason, warning code and row
 // recommendationReason for the same situation.
-const ScanReasonClusterScopeWithheld = "cluster_scope_withheld"
+const ScanReasonClusterScopeWithheld = rightsizing.ReasonClusterScopeWithheld
 
 const (
 	metricPodOwner          = "kube_pod_owner"

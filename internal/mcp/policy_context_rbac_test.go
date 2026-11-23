@@ -34,8 +34,7 @@ func policyReport(group, namespace, policy, pod, result string) *unstructured.Un
 
 func withIndex(t *testing.T, reports ...*unstructured.Unstructured) {
 	t.Helper()
-	prev := k8s.SetTestPolicyReportIndex(policyreports.BuildIndex(reports))
-	t.Cleanup(func() { k8s.SetTestPolicyReportIndex(prev) })
+	t.Cleanup(k8s.SetTestPolicyReportIndex(policyreports.BuildIndex(reports)))
 }
 
 // findings the adapter would hand the agent, gated as tools.go gates it.

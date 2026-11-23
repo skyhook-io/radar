@@ -57,7 +57,7 @@ func TestRecordToTimelineStore_SecretTokenUpdate(t *testing.T) {
 			if precomputed {
 				diff = ComputeDiff("Secret", oldSecret, newSecret)
 			}
-			state.recordToTimelineStore("ctx", "Secret", "shop", newSecret.Name, string(newSecret.UID), "update", oldSecret, newSecret, diff, precomputed)
+			state.recordToTimelineStore(timeline.CaptureStore(), "ctx", "Secret", "shop", newSecret.Name, string(newSecret.UID), "update", oldSecret, newSecret, diff, precomputed)
 
 			events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{Kinds: []string{"Secret"}, ClusterContext: "ctx"})
 			if err != nil {
@@ -123,7 +123,7 @@ func TestRecordToTimelineStore_ServiceAccountTokenUpdateDrop(t *testing.T) {
 						oldObj = &unstructured.Unstructured{Object: oldMap}
 						newObj = &unstructured.Unstructured{Object: newMap}
 					}
-					state.recordToTimelineStore("ctx", "Secret", "shop", name, string(newSecret.UID), "update", oldObj, newObj, ComputeDiff("Secret", oldObj, newObj), true)
+					state.recordToTimelineStore(timeline.CaptureStore(), "ctx", "Secret", "shop", name, string(newSecret.UID), "update", oldObj, newObj, ComputeDiff("Secret", oldObj, newObj), true)
 
 					if store := timeline.GetStore(); store != nil {
 						events, err := store.Query(context.Background(), timeline.QueryOptions{Kinds: []string{"Secret"}})

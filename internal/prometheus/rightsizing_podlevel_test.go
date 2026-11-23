@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/skyhook-io/radar/pkg/prom"
+	"github.com/skyhook-io/radar/pkg/rightsizing"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
@@ -78,7 +79,7 @@ func TestFixedPodLevelRequest(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			for name, want := range map[corev1.ResourceName]string{corev1.ResourceCPU: tc.wantCPU, corev1.ResourceMemory: tc.wantMem} {
-				got := fixedPodLevelRequest(&tc.spec, name)
+				got := rightsizing.FixedPodLevelRequest(&tc.spec, name)
 				switch {
 				case want == "" && got != nil:
 					t.Errorf("%s = %s, want none", name, got.String())
@@ -242,12 +243,12 @@ func TestBuildScanRow_PodLevelRequest(t *testing.T) {
 		memory:   map[scanKey][]float64{key: repeatedValues(50 * 1024 * 1024)},
 		restarts: map[scanKey]float64{key: 0}, terminations: map[scanKey]terminationEvidence{}, errors: map[string]error{},
 	}
-	memory := buildScanRow(workload.containers[0], "memory", key, rightsizingMinSamples, workload, evidence)
+	memory := buildScanRow(workload.containers[0], "memory", key, rightsizing.RightsizingMinSamples, workload, evidence)
 	if memory.Fit != FitPodLevelRequest || memory.RecommendedReq != nil || memory.PodLevelRequest == nil || *memory.PodLevelRequest != "128Mi" ||
 		memory.PodLevelRequestValue == nil || *memory.PodLevelRequestValue != 128*1024*1024 {
 		t.Errorf("memory row = %+v", memory)
 	}
-	cpu := buildScanRow(workload.containers[0], "cpu", key, rightsizingMinSamples, workload, evidence)
+	cpu := buildScanRow(workload.containers[0], "cpu", key, rightsizing.RightsizingMinSamples, workload, evidence)
 	if cpu.Fit != FitMissingRequest {
 		t.Errorf("cpu has no pod-level request and must still be judged per container: %+v", cpu)
 	}

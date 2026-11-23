@@ -184,6 +184,7 @@ type FeatureCapabilities struct {
 	// GET /api/helm/inventory and /api/helm/inventory/{namespace}/{name}, and
 	// error_code release_read_denied on a Helm release read.
 	HelmInventory        bool `json:"helmInventory"`
+	DatadogRightsizing   bool `json:"datadogRightsizing"`
 	DatadogAgentPresence bool `json:"datadogAgentPresence"`
 	ResourceReadCoverage bool `json:"resourceReadCoverage"`
 	SearchCoverage       bool `json:"searchCoverage"`
@@ -248,10 +249,14 @@ type FeatureCapabilities struct {
 	KueueQueueWorkloads     bool `json:"kueueQueueWorkloads"`
 	PodFileUpload           bool `json:"podFileUpload"`           // POST /api/pods/{namespace}/{name}/files/upload
 	Vulnerabilities         bool `json:"vulnerabilities"`         // GET /api/vulnerabilities
+	VulnerabilitiesExport   bool `json:"vulnerabilitiesExport"`   // GET /api/vulnerabilities/export
 	RuntimeAdvisoryChecks   bool `json:"runtimeAdvisoryChecks"`   // GET /api/vulnerabilities/java4shell
 	RuntimeAdvisoryProgress bool `json:"runtimeAdvisoryProgress"` // GET /api/vulnerabilities/java4shell/stream
 	// GET /api/sealedsecrets/controller
 	SealedSecretsController bool `json:"sealedSecretsController"`
+	// POST /api/cronjobs/{namespace}/{name}/trigger accepts {"jobName": ...};
+	// an older Radar ignores the body and names the Job itself.
+	CronJobTriggerJobName bool `json:"cronJobTriggerJobName"`
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.
@@ -393,7 +398,7 @@ type nsCapEntry struct {
 // Results are cached for 60 seconds normally, or 5 seconds when API errors
 // caused fail-closed results (to allow rapid retry without long UI disruption).
 func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
-	conn := boundOrCurrent(ctx)
+	conn := BoundOrCurrent(ctx)
 	state := conn.permissions()
 	state.capabilitiesMu.RLock()
 	if state.cachedCapabilities != nil && time.Now().Before(state.capabilitiesExpiry) {
@@ -555,7 +560,7 @@ func CheckNamespaceCapabilities(ctx context.Context, namespace string) (*Namespa
 		return nil, nil
 	}
 
-	conn := boundOrCurrent(ctx)
+	conn := BoundOrCurrent(ctx)
 	state := conn.permissions()
 	// Check namespace cache
 	state.nsCapMu.RLock()
@@ -666,7 +671,7 @@ func userNamespaceCapabilitiesCacheKey(username string, groups []string, namespa
 // Concurrent callers for one identity share a single check; while the
 // re-check after a failed one runs, callers get the last complete result.
 func CheckCapabilitiesForUser(ctx context.Context, username string, groups []string) (*Capabilities, error) {
-	conn := boundOrCurrent(ctx)
+	conn := BoundOrCurrent(ctx)
 	state := conn.permissions()
 	identityKey := pkgauth.IdentityCacheKey(username, groups)
 	var lastGood *Capabilities
@@ -803,7 +808,7 @@ func CheckNamespaceCapabilitiesForUser(ctx context.Context, username string, gro
 		return nil, nil
 	}
 
-	conn := boundOrCurrent(ctx)
+	conn := BoundOrCurrent(ctx)
 	state := conn.permissions()
 	cacheKey := userNamespaceCapabilitiesCacheKey(username, groups, namespace)
 	if entry, ok := state.userNamespaceCapabilitiesCache.Load(cacheKey); ok {
@@ -1140,7 +1145,7 @@ func resolveProbeGVRs(p resourceProbe) []schema.GroupVersionResource {
 // SelfSubjectAccessReview is one indirection too many — it can disagree with
 // reality on clusters using webhook authorizers (e.g. GKE IAM).
 func CheckResourcePermissions(ctx context.Context) (*PermissionCheckResult, bool) {
-	return boundOrCurrent(ctx).CheckResourcePermissions(ctx)
+	return BoundOrCurrent(ctx).CheckResourcePermissions(ctx)
 }
 
 func (c *Connection) CheckResourcePermissions(ctx context.Context) (*PermissionCheckResult, bool) {
@@ -1191,21 +1196,29 @@ func (c *Connection) probeResourcePermissions(ctx context.Context, bypassCache b
 }
 
 func publishResourcePermissions(probe permissionProbe) bool {
-	if probe.unpublished {
-		ttl := resourcePermsTTL
-		if probe.hadErrors {
-			ttl = resourcePermsErrorTTL
-			log.Printf("Warning: resource access probes had API errors, using short cache TTL (%v)", ttl)
-		}
-		state := probe.state
-		state.resourcePermsMu.Lock()
-		state.cachedPermResult = probe.result
-		state.resourcePermsExpiry = time.Now().Add(ttl)
-		state.resourcePermsMu.Unlock()
+	probe.publish()
+	return probe.conn.permissionStateIsCurrent(probe.state)
+}
+
+func (probe permissionProbe) publish() {
+	if !probe.unpublished {
+		return
 	}
-	// Current means the same connection and the same permission state: a scope
-	// change swaps the state, so a probe that read the old scope is superseded.
-	return probe.conn == Current() && probe.conn.perms.Load() == probe.state
+	ttl := resourcePermsTTL
+	if probe.hadErrors {
+		ttl = resourcePermsErrorTTL
+		log.Printf("Warning: resource access probes had API errors, using short cache TTL (%v)", ttl)
+	}
+	state := probe.state
+	state.resourcePermsMu.Lock()
+	state.cachedPermResult = probe.result
+	state.resourcePermsExpiry = time.Now().Add(ttl)
+	state.resourcePermsMu.Unlock()
+}
+
+func (c *Connection) permissionStateIsCurrent(state *permissionState) bool {
+	// A scope change swaps the state, so a probe that read the old scope is superseded.
+	return c == Current() && c.perms.Load() == state
 }
 
 // MaxScopeCandidates was promoted to a package variable in deadlines.go

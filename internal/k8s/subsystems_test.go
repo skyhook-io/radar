@@ -48,8 +48,6 @@ func TestTrackedSwitchDiscoveryWaitHasOwnBudget(t *testing.T) {
 			}
 			cache := GetResourceCache()
 			t.Cleanup(ResetResourceCache)
-			t.Cleanup(ResetDynamicResourceCache)
-			t.Cleanup(ResetPolicyReportIndex)
 			t.Cleanup(InvalidateServerVersionCache)
 
 			release := make(chan struct{})
@@ -82,7 +80,8 @@ func TestTrackedSwitchDiscoveryWaitHasOwnBudget(t *testing.T) {
 				installedConn.Store(prev)
 				clientMu.Unlock()
 			})
-			t.Cleanup(ResetMetricsHistory)
+			t.Cleanup(Current().closeDynamicResourceCache)
+			t.Cleanup(Current().closeMetricsHistory)
 
 			// Registered before the late dynamic cache exists, as the SSE
 			// broadcaster's topology refresh is.

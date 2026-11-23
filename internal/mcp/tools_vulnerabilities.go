@@ -20,6 +20,7 @@ type listVulnerabilitiesInput struct {
 	Namespace string `json:"namespace,omitempty" jsonschema:"limit to one namespace"`
 	Severity  string `json:"severity,omitempty" jsonschema:"comma-separated: critical, high, medium, low, unknown"`
 	Fixable   bool   `json:"fixable,omitempty" jsonschema:"keep only findings with a fixed version"`
+	Exposed   bool   `json:"exposed,omitempty" jsonschema:"keep only rows with an exposed workload"`
 	Query     string `json:"query,omitempty" jsonschema:"image, CVE ID, package or workload substring"`
 	Workload  string `json:"workload,omitempty" jsonschema:"Kind/namespace/name, e.g. Deployment/shop/checkout"`
 	Limit     int    `json:"limit,omitempty" jsonschema:"max rows (default 10, max 100)"`
@@ -45,7 +46,7 @@ func handleListVulnerabilities(ctx context.Context, _ *mcp.CallToolRequest, inpu
 	if err != nil {
 		return nil, nil, err
 	}
-	filter := vulnerabilities.Filter{Severities: severities, FixableOnly: input.Fixable, Query: input.Query}
+	filter := vulnerabilities.Filter{Severities: severities, FixableOnly: input.Fixable, ExposedOnly: input.Exposed, Query: input.Query}
 	if input.Workload != "" {
 		parts := strings.Split(input.Workload, "/")
 		if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
@@ -72,6 +73,10 @@ func handleListVulnerabilities(ctx context.Context, _ *mcp.CallToolRequest, inpu
 		return nil, nil, readErrorf(readreason.OutsideNamespacePin, "namespace %q is outside the namespace Radar is scoped to", input.Namespace)
 	}
 	namespaces, checkFailed := filterNamespacesForUserWithStatus(ctx, requested)
+	// Gateways and routes are read across the caller's whole ceiling: a
+	// shared Gateway sits outside the namespace asked about.
+	routeCeiling, _ := clampToNamespacePin(nil)
+	routeNamespaces, routeCheckFailed := filterNamespacesForUserWithStatus(ctx, routeCeiling)
 	kindRBAC := mcpSearchKindRBAC(ctx)
 	// The inventory of what runs is a Pod list, as get_runtime_versions reads
 	// it; one cluster-wide grant spares a check per namespace.
@@ -83,6 +88,8 @@ func handleListVulnerabilities(ctx context.Context, _ *mcp.CallToolRequest, inpu
 		Namespaces:           namespaces,
 		NamespaceCheckFailed: checkFailed,
 		ReportAccess:         mcpSearchKindAccess(ctx, kindRBAC),
+		RouteNamespaces:      routeNamespaces,
+		RouteCeiling:         !routeCheckFailed,
 		CanRead:              clusterWideFirst(ctx, summaryRefReader(ctx)),
 		CanListPods:          canListPods,
 		View:                 view,
@@ -151,11 +158,13 @@ func trimVulnerabilities(resp vulnerabilities.Response, limit int) vulnerabiliti
 	}
 	for i := range resp.Images {
 		resp.Images[i].Findings = resp.Images[i].Findings[:min(len(resp.Images[i].Findings), vulnerabilityDetailsPerRow)]
+		resp.Images[i].Exposed = resp.Images[i].Exposed[:min(len(resp.Images[i].Exposed), vulnerabilityDetailsPerRow)]
 	}
 	if len(resp.CVEs) > limit {
 		omitted, resp.CVEs = len(resp.CVEs)-limit, resp.CVEs[:limit]
 	}
 	for i := range resp.CVEs {
+		resp.CVEs[i].Exposed = resp.CVEs[i].Exposed[:min(len(resp.CVEs[i].Exposed), vulnerabilityDetailsPerRow)]
 		resp.CVEs[i].Affected = resp.CVEs[i].Affected[:min(len(resp.CVEs[i].Affected), vulnerabilityDetailsPerRow)]
 		for k := range resp.CVEs[i].Affected {
 			a := &resp.CVEs[i].Affected[k]
@@ -166,6 +175,7 @@ func trimVulnerabilities(resp vulnerabilities.Response, limit int) vulnerabiliti
 		omitted, resp.Fixes = len(resp.Fixes)-limit, resp.Fixes[:limit]
 	}
 	for i := range resp.Fixes {
+		resp.Fixes[i].Exposed = resp.Fixes[i].Exposed[:min(len(resp.Fixes[i].Exposed), vulnerabilityDetailsPerRow)]
 		resp.Fixes[i].Affected = resp.Fixes[i].Affected[:min(len(resp.Fixes[i].Affected), vulnerabilityDetailsPerRow)]
 		resp.Fixes[i].CVEs = resp.Fixes[i].CVEs[:min(len(resp.Fixes[i].CVEs), vulnerabilityDetailsPerRow)]
 		for k := range resp.Fixes[i].Affected {
@@ -186,6 +196,7 @@ func trimVulnerabilities(resp vulnerabilities.Response, limit int) vulnerabiliti
 	}
 	for i := range resp.Clean {
 		resp.Clean[i].Workloads = resp.Clean[i].Workloads[:min(len(resp.Clean[i].Workloads), vulnerabilityDetailsPerRow)]
+		resp.Clean[i].Exposed = resp.Clean[i].Exposed[:min(len(resp.Clean[i].Exposed), vulnerabilityDetailsPerRow)]
 	}
 	if len(resp.CleanWorkloads) > limit {
 		resp.Coverage.CleanOmitted += len(resp.CleanWorkloads) - limit
@@ -193,6 +204,7 @@ func trimVulnerabilities(resp vulnerabilities.Response, limit int) vulnerabiliti
 	}
 	for i := range resp.Unscanned {
 		resp.Unscanned[i].Workloads = resp.Unscanned[i].Workloads[:min(len(resp.Unscanned[i].Workloads), vulnerabilityDetailsPerRow)]
+		resp.Unscanned[i].Exposed = resp.Unscanned[i].Exposed[:min(len(resp.Unscanned[i].Exposed), vulnerabilityDetailsPerRow)]
 	}
 	for i := range resp.Images {
 		resp.Images[i].Workloads = resp.Images[i].Workloads[:min(len(resp.Images[i].Workloads), vulnerabilityDetailsPerRow)]

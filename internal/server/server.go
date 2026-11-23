@@ -737,6 +737,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/upgrade-readiness", s.handleUpgradeReadiness)
 			// Scanner findings rolled up to the images that run now.
 			r.Get("/vulnerabilities", s.handleVulnerabilities)
+			r.Get("/vulnerabilities/export", s.handleVulnerabilitiesExport)
 			r.Get("/vulnerabilities/java4shell", s.handleJava4Shell)
 
 			// Network path trace - path-shaped diagnosis for Service /
@@ -884,6 +885,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			prometheuspkg.RegisterRoutes(r)
 			r.Get("/metrics/datadog/agent", s.handleDatadogAgentPresence)
 			r.Get("/agent/metrics-cluster-identity", s.handleMetricsClusterIdentity)
+			r.Get("/agent/workload-rightsizing-inventory", s.handleWorkloadRightsizingInventory)
+			r.Get("/agent/workload-rightsizing-scope/{kind}/{namespace}/{name}", s.handleWorkloadRightsizingScope)
 			r.Get("/agent/workload-metrics-scope/{kind}/{namespace}/{name}", s.handleWorkloadMetricsScope)
 
 			// OpenCost routes
@@ -1536,6 +1539,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 	return k8s.FeatureCapabilities{
 		ApplicationEvidence:         true,
 		DatadogAgentPresence:        true,
+		DatadogRightsizing:          true,
 		SealedSecretsController:     true,
 		ResourceReadCoverage:        true,
 		SearchCoverage:              true,
@@ -1576,8 +1580,10 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		KueueQueueWorkloads:         true,
 		PodFileUpload:               true,
 		Vulnerabilities:             true,
+		VulnerabilitiesExport:       true,
 		RuntimeAdvisoryChecks:       true,
 		RuntimeAdvisoryProgress:     true,
+		CronJobTriggerJobName:       true,
 	}
 }
 
@@ -1689,13 +1695,13 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		caps.Visibility = k8s.BuildVisibilitySummary(result, r.URL.Query().Get("namespace"))
 	}
 
-	caps.Karpenter = s.karpenterCapability(r)
+	caps.Karpenter = s.karpenterCapability(r, conn)
 
 	// Report the PolicyReport index state so the frontend can say WHY a policy
 	// view is empty. Omitted when Kyverno isn't installed at all — there is
 	// nothing for the operator to act on, and a "not installed" note on every
 	// non-Kyverno cluster would be noise.
-	if prStatus := k8s.GetPolicyReportStatus(); prStatus.Status != k8s.KyvernoStatusNotInstalled {
+	if prStatus := conn.PolicyReportStatus(); prStatus.Status != k8s.KyvernoStatusNotInstalled {
 		caps.PolicyReports = &prStatus
 	}
 
@@ -4748,10 +4754,30 @@ func (s *Server) handleCascadeDeletePreview(w http.ResponseWriter, r *http.Reque
 	s.writeJSON(w, preview)
 }
 
-// handleTriggerCronJob creates a Job from a CronJob
+// handleTriggerCronJob creates a Job from a CronJob. The optional body
+// {"jobName": "..."} names the Job; without it the API server generates
+// "<cronjob>-manual-xxxxx" (advertised as features.cronJobTriggerJobName).
 func (s *Server) handleTriggerCronJob(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
+
+	// A pointer so a JSON null, which decodes without error, can be refused.
+	req := &struct {
+		JobName string `json:"jobName"`
+	}{}
+	if err := decodeBoundedJSONBody(w, r, 4096, &req); err != nil && !errors.Is(err, io.EOF) {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			s.writeError(w, http.StatusRequestEntityTooLarge, "trigger request is too large")
+			return
+		}
+		s.writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if req == nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request body: the body must be a JSON object")
+		return
+	}
 
 	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
@@ -4759,12 +4785,29 @@ func (s *Server) handleTriggerCronJob(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
 		return
 	}
-	result, err := k8s.TriggerCronJobWithClient(r.Context(), namespace, name, client)
+	result, err := k8s.TriggerCronJobWithClient(r.Context(), namespace, name, req.JobName, client)
 	if err != nil {
+		if errors.Is(err, k8score.ErrInvalidJobName) {
+			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if apierrors.IsAlreadyExists(err) {
+			s.writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		if apierrors.IsInvalid(err) || apierrors.IsBadRequest(err) {
+			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if apierrors.IsForbidden(err) {
+			s.writeError(w, http.StatusForbidden, err.Error())
+			return
+		}
 		if strings.Contains(err.Error(), "not found") {
 			s.writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
+		log.Printf("[cronjob] Failed to trigger %s/%s: %v", namespace, name, err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

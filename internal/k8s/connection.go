@@ -13,9 +13,9 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-// Connection owns the clients, config, discovery, permissions, typed informer
-// cache and automatic port-forwards for one cluster context. A switch installs
-// a new connection, so a request keeps the same clients and resource mapping
+// Connection owns the clients, config, discovery, permissions, informer
+// caches, metrics history and automatic port-forwards for one cluster context. A switch installs a new
+// connection, so a request that captures one keeps the same clients and resource mapping
 // even if a switch lands mid-request. A rebuild on the same clients (rescope, recovery)
 // also starts from a new one, so state built for the old admission stays there.
 type Connection struct {
@@ -27,7 +27,11 @@ type Connection struct {
 	forwards                                 *portforward.Manager
 	perms                                    atomic.Pointer[permissionState]
 	cache                                    atomic.Pointer[connectionCache]
+	dynamicCache                             atomic.Pointer[connectionDynamicCache]
 	discovery                                atomic.Pointer[ResourceDiscovery]
+	metricsMu                                sync.Mutex
+	metricsHistory                           atomic.Pointer[MetricsHistoryStore]
+	metricsClosed                            bool
 	// id is the ID of the connection's latest admission, written under
 	// connectionStatusMu. Each admission gets a new one, so an ID from before
 	// a retirement is refused even if the same build is admitted again.
@@ -41,7 +45,9 @@ func Current() *Connection {
 	return installedConn.Load()
 }
 
-func boundOrCurrent(ctx context.Context) *Connection {
+// BoundOrCurrent returns the request's connection, falling back to the installed
+// connection for callers that have not bound one.
+func BoundOrCurrent(ctx context.Context) *Connection {
 	if c := ConnectionFrom(ctx); c != nil {
 		return c
 	}
@@ -62,7 +68,7 @@ func replaceConnectionLocked(next *Connection) *Connection {
 }
 
 // fresh returns a new, unadmitted connection on the same clients, with no
-// discovery, permissions or informer cache yet.
+// discovery, permissions, informer caches, metrics history or forwards yet.
 func (c *Connection) fresh() *Connection {
 	if c == nil {
 		return &Connection{}

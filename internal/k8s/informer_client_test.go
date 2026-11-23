@@ -210,7 +210,6 @@ func TestDynamicCacheDirectReadsUseTheRequestClient(t *testing.T) {
 	clientMu.Lock()
 	installedConn.Store(installedConnectionLocked(nil, clients))
 	clientMu.Unlock()
-	ResetDynamicResourceCache()
 	if err := InitDynamicResourceCache(nil); err != nil {
 		t.Fatalf("InitDynamicResourceCache: %v", err)
 	}

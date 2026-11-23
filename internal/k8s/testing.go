@@ -32,6 +32,7 @@ func copyTestConnectionLocked() *Connection {
 	// Partial fixture updates supply another dependency of the same cluster.
 	if prev := Current(); prev != nil {
 		c.cache.Store(prev.cacheState())
+		c.dynamicCache.Store(prev.dynamicCache.Load())
 	}
 	return c
 }
@@ -327,6 +328,7 @@ func installTestDynamicClient(dynClient dynamic.Interface, resources []APIResour
 
 	clientMu.Lock()
 	c := copyTestConnectionLocked()
+	c.dynamicCache.Store(nil)
 	c.clients.dynamic = dynClient
 	c.clients.informerDynamic = nil
 	c.discovery.Store(&ResourceDiscovery{ResourceDiscovery: core})
@@ -341,6 +343,8 @@ func installTestDynamicClient(dynClient dynamic.Interface, resources []APIResour
 		old.resourcePermsMu.RUnlock()
 	}
 	swapTestConnectionLocked(c)
+	// Permission fixtures may temporarily copy this connection while building its cache.
+	c.dynamicCacheState()
 	clientMu.Unlock()
 	return nil
 }
@@ -389,6 +393,7 @@ func ResetTestDynamicState() {
 	clientMu.Lock()
 	next := copyTestConnectionLocked()
 	next.discovery.Store(nil)
+	next.dynamicCache.Store(nil)
 	next.clients.dynamic = nil
 	next.clients.informerDynamic = nil
 	swapTestConnectionLocked(next)
@@ -523,6 +528,7 @@ func ReconnectTestClient(c *kubernetes.Clientset) func() {
 	next.clients.clientset, next.clients.informerClientset = c, nil
 	next.clients.generation = clusterBuildSequence.Add(1)
 	next.cache.Store(nil)
+	next.dynamicCache.Store(nil)
 	clientMu.Unlock()
 	RetireServingConnection()
 	clientMu.Lock()
@@ -536,18 +542,6 @@ func ReconnectTestClient(c *kubernetes.Clientset) func() {
 	return restore
 }
 
-// SetTestPolicyReportIndex publishes a PolicyReport index directly, bypassing
-// CRD discovery and the informer warmup that normally build it.
-//
-// Publishing an index is also what makes GetPolicyReportStatus report Ready, so
-// this is the whole seam: the policy surfaces read exactly these two together.
-// Without it the per-policy handlers return their empty response before any of
-// the authorization logic runs, and a test against them would assert nothing
-// while appearing to cover the endpoint.
-//
-// Returns the previous index so a test can restore it.
-//
-// This is intended for integration tests only.
 // SetTestConfig publishes a rest.Config directly, so a handler that resolves a
 // per-request config can run without a real cluster connection. SetTestClient
 // publishes the clientset but not the config, and a handler that needs both
@@ -599,10 +593,40 @@ func SetTestContextCount(count int) func() {
 	}
 }
 
-func SetTestPolicyReportIndex(idx *policyreports.Index) *policyreports.Index {
-	prev := policyReportIndex.Load()
-	policyReportIndex.Store(idx)
-	return prev
+// SetTestPolicyReportIndex publishes a PolicyReport index directly, bypassing
+// CRD discovery and the informer warmup that normally build it.
+//
+// Publishing an index is also what makes GetPolicyReportStatus report Ready, so
+// this is the whole seam: the policy surfaces read exactly these two together.
+// Without it the per-policy handlers return their empty response before any of
+// the authorization logic runs, and a test against them would assert nothing
+// while appearing to cover the endpoint.
+//
+// Seed after installing the test caches. The returned function restores the fixture.
+func SetTestPolicyReportIndex(idx *policyreports.Index) func() {
+	restore := SnapshotTestConnection()
+	clientMu.Lock()
+	conn := Current()
+	if conn == nil {
+		conn = copyTestConnectionLocked()
+		swapTestConnectionLocked(conn)
+	}
+	clientMu.Unlock()
+
+	s := &conn.dynamicCacheState().reports
+	s.mu.Lock()
+	snapshot := conn.policyReportSnapshot()
+	snapshot.index = idx
+	if idx != nil {
+		snapshot.status.Status = KyvernoStatusReady
+		snapshot.status.ReasonCode = ""
+	}
+	old := s.published.Swap(&snapshot)
+	s.mu.Unlock()
+	return func() {
+		s.published.CompareAndSwap(&snapshot, old)
+		restore()
+	}
 }
 
 // ResetTestState tears down the resource cache and resets all package-level
@@ -628,9 +652,9 @@ func ResetTestState() {
 	default:
 	}
 
-	policyReportIndex.Store(nil)
-
-	// Reset resource cache
+	// Stop the informers before dropping the fixture that owns them.
+	ResetDynamicResourceCache()
+	ResetMetricsHistory()
 	ResetResourceCache()
 
 	// Reset connection state
@@ -842,6 +866,7 @@ func SwapResourceCacheForTest(rc *ResourceCache) (restore func()) {
 func InitTestReplayClients(client dynamic.Interface, catalog discovery.DiscoveryInterface) error {
 	clientMu.Lock()
 	next := copyTestConnectionLocked()
+	next.dynamicCache.Store(nil)
 	next.clients.dynamic, next.clients.informerDynamic = client, nil
 	swapTestConnectionLocked(next)
 	clientMu.Unlock()

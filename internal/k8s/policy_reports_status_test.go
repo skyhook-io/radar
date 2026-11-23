@@ -49,7 +49,7 @@ func coreOnlyList() *metav1.APIResourceList {
 // non-Kyverno cluster, forever, which is the exact noise the silent
 // not-installed path exists to prevent.
 func TestGetPolicyReportStatus_UndecidedWithoutKyvernoStaysSilent(t *testing.T) {
-	ResetPolicyReportIndex()
+	withFreshTestConnection(t)
 	discoveryWith(t, coreOnlyList())
 
 	status := GetPolicyReportStatus()
@@ -67,7 +67,7 @@ func TestGetPolicyReportStatus_UndecidedWithoutKyvernoStaysSilent(t *testing.T) 
 // emptiness this codebase treats as a bug. The reason code separates it from
 // genuine absence, and only genuine absence is silent.
 func TestGetPolicyReportStatus_UndecidedWithoutDiscoveryIsNotSilent(t *testing.T) {
-	ResetPolicyReportIndex()
+	withFreshTestConnection(t)
 	t.Cleanup(setTestDiscovery(nil))
 
 	status := GetPolicyReportStatus()
@@ -94,7 +94,7 @@ func TestGetPolicyReportStatus_GenuineAbsenceStaysSilent(t *testing.T) {
 // The genuinely transient case must still report cold, or a Kyverno cluster
 // mid-warmup would look like it has no violations.
 func TestGetPolicyReportStatus_UndecidedWithKyvernoReportsCold(t *testing.T) {
-	ResetPolicyReportIndex()
+	withFreshTestConnection(t)
 	discoveryWith(t, kyvernoModernList())
 
 	status := GetPolicyReportStatus()

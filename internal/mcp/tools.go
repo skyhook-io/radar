@@ -379,7 +379,8 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"scanner reports (Trivy Operator). view=image ranks images; view=fix ranks package upgrades by what they " +
 			"clear (target version per ecosystem); view=cve ranks CVEs; view=workload lists containers. Only images a Pod " +
 			"or unsuspended CronJob runs count. unscanned: running images with no report yet, unknown not " +
-			"clean. coverage.gaps: what wasn't read (kinds) and where.",
+			"clean. coverage.gaps: what wasn't read (kinds) and where. Rows sort most severe first, then exposed (a route " +
+			"from outside the cluster), then exposureUnknown, then most workloads.",
 		Annotations: readOnly,
 	}, logToolCall("list_vulnerabilities", handleListVulnerabilities))
 
@@ -601,7 +602,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name:        "get_rightsizing",
 		InputSchema: rightsizingInputSchema(),
-		Description: "Recommend CPU/memory requests for Deployments, StatefulSets, and DaemonSets using 7 days of usage. scope=workload is cheap and precise; namespace/cluster scans run in the background for up to 3 minutes. Follow nextCall while scanStatus=running. Results are retained up to 15 minutes; use refresh=true after changes. Scans rank safety risks and increases before reductions. Scan once, then inspect workloads. Check confidence, missing evidence, and manual-review reasons. Request reductions do not directly imply bill savings.",
+		Description: "Recommend CPU/memory requests for Deployments, StatefulSets, and DaemonSets using a 7-day Prometheus lookback. scope=workload is cheap and precise; namespace/cluster scans run in the background for up to 3 minutes. Follow nextCall while scanStatus=running. Results are retained up to 15 minutes; use refresh=true after changes. Scans rank safety risks and increases before reductions. Scan once, then inspect workloads. Check confidence, missing evidence, and manual-review reasons. Request reductions do not directly imply bill savings.",
 		Annotations: readOnly,
 	}, logToolCall("get_rightsizing", handleGetRightsizing))
 
@@ -681,7 +682,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "manage_cronjob",
 		Description: "Operate on a Kubernetes CronJob: " +
-			"'trigger' runs a Job now from the CronJob's template, to check a fix without waiting for the schedule when an extra run is safe; " +
+			"'trigger' runs a Job now from the CronJob's template (job_name optional), to check a fix without waiting for the schedule when an extra run is safe; " +
 			"'suspend' pauses the schedule (no new Jobs are created); " +
 			"'resume' re-enables a suspended schedule.",
 		Annotations: writeTool,

@@ -101,11 +101,11 @@ import {
   fetchYamlSchemas,
 } from '../../api/client'
 import { TIME_RANGES, PrometheusCharts, isPrometheusSupported } from '../resource/PrometheusCharts'
+import { RightsizingStrip } from '../resource/RightsizingStrip'
 import { PrometheusChartsGrid } from '../resource/PrometheusChartsGrid'
-import { DatadogSetupHint, DatadogWorkloadCharts, useDatadogWorkloadCharts } from '../resource/DatadogWorkloadCharts'
+import { DatadogSetupHint, DatadogWorkloadCharts, useDatadogWorkloadCharts, WorkloadCostRightsizing } from '../resource/DatadogWorkloadCharts'
 import { useNavCustomization } from '../../context/NavCustomization'
 import { RestartEventLane } from '../resource/RestartChart'
-import { RightsizingPanel } from '../resource/RightsizingStrip'
 import { WorkloadCostTab } from '../cost/WorkloadCostTab'
 import { isOpenCostWorkloadKind } from '../cost/kinds'
 import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
@@ -401,6 +401,7 @@ function useActionsBarProps(
   const argoResumeMutation = useArgoResume()
   const { upgrade: argoResumeUpgrade, blockedReason: argoResumeBlockedReason } = useRadarFeature('argoAutoSyncEnable')
   const { support: argoInheritanceSupport } = useRadarFeature('argoSyncInheritance')
+  const { support: cronJobJobNameSupport } = useRadarFeature('cronJobTriggerJobName')
 
   const {
     data: cascadePreview,
@@ -498,9 +499,11 @@ function useActionsBarProps(
       ? (params: { namespace: string; name: string }) =>
           rolloutDialogPromote.mutateAsync({ action: 'promote-full', ...params })
       : undefined,
+    // mutateAsync, not mutate: the Job name dialog stays open when this rejects.
     onTriggerCronJob: (params: Parameters<typeof triggerCronJobMutation.mutate>[0]) =>
-      triggerCronJobMutation.mutate(params),
+      triggerCronJobMutation.mutateAsync(params),
     isTriggeringCronJob: triggerCronJobMutation.isPending,
+    cronJobTriggerDialog: cronJobJobNameSupport === 'supported',
     onSuspendCronJob: (params: Parameters<typeof suspendCronJobMutation.mutate>[0]) =>
       suspendCronJobMutation.mutate(params),
     isSuspendingCronJob: suspendCronJobMutation.isPending,
@@ -1362,7 +1365,7 @@ export function WorkloadView({
         )}
         renderCostTab={({ kind, namespace: ns, name: n }) => (
           <div className="space-y-4">
-            <RightsizingPanel kind={kind} namespace={ns} name={n} />
+            <WorkloadCostRightsizing kind={kind} namespace={ns} name={n} />
             <WorkloadCostTab kind={kind} namespace={ns} name={n} />
           </div>
         )}
@@ -2286,32 +2289,43 @@ export function MetricsTabContent({
   const range = TIME_RANGES.find((option) => option.value === params.get('metricsRange'))?.value ?? '1h'
   const workload = { kind, namespace, name }
   const { embedded = false } = useNavCustomization()
-  const { charts, checking, configured, setup } = useDatadogWorkloadCharts(workload, range, embedded)
+  const { charts, rightsizing, checking, configured, setup } = useDatadogWorkloadCharts(workload, range, embedded)
   if (configured) {
     const workloadTotals = (
       <DatadogWorkloadCharts charts={charts.data?.configured ? charts.data.charts : undefined}
         loading={charts.isLoading} error={charts.error} onRetry={() => void charts.refetch()} />
+    )
+    if (rightsizing) return (
+      <div className={fill ? 'h-full overflow-auto' : undefined}>
+        <PrometheusChartsGrid {...workload} resource={resource} workloadTotals={workloadTotals} fill={false} showRightsizing={false} />
+        <div className="px-4 pb-4">{rightsizing}</div>
+      </div>
     )
     return <PrometheusChartsGrid {...workload} resource={resource} workloadTotals={workloadTotals} fill={fill} />
   }
   if (checking) return <p role="status" className="p-4 text-sm text-theme-text-secondary">Loading workload metrics…</p>
 
   const setupHint = setup && <DatadogSetupHint owner={setup === 'owner'} />
-  if (expanded) {
-    if (!fill) return <PrometheusChartsGrid kind={kind} namespace={namespace} name={name} resource={resource} fill={false} />
+  if (rightsizing || !expanded) {
     return (
-      <div className="flex flex-col h-full">
+      <div className={fill ? 'h-full overflow-auto' : undefined}>
         {setupHint}
-        <div className="flex-1 min-h-0">
-          <PrometheusChartsGrid kind={kind} namespace={namespace} name={name} resource={resource} />
-        </div>
+        {expanded
+          ? <PrometheusChartsGrid {...workload} resource={resource} fill={false} showRightsizing={false} />
+          : <DrawerMetricsContent {...workload} resource={resource} />}
+        <div className="px-4 pb-4">{rightsizing ?? <RightsizingStrip {...workload} />}</div>
       </div>
     )
   }
-
-  // Drawer fallback: single chart with tabs + restart lane below. The chart's
-  // time-range selector is mirrored to the restart lane so they stay aligned.
-  return <>{setupHint}<DrawerMetricsContent kind={kind} namespace={namespace} name={name} resource={resource} /></>
+  if (!fill) return <PrometheusChartsGrid {...workload} resource={resource} fill={false} />
+  return (
+    <div className="flex flex-col h-full">
+      {setupHint}
+      <div className="flex-1 min-h-0">
+        <PrometheusChartsGrid {...workload} resource={resource} />
+      </div>
+    </div>
+  )
 }
 
 function DrawerMetricsContent({
