@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ApiError } from '../../api/client'
-import { kagentServersToRead, toRelatedRead } from './KagentAgentRenderer'
+import { kagentModelsToRead, kagentServersToRead, toRelatedRead } from './KagentAgentRenderer'
 
 describe('toRelatedRead', () => {
   it('names why a referenced object was not read, never treating it as absent', () => {
@@ -18,5 +18,12 @@ describe('kagentServersToRead', () => {
     const ref = (name: string, kind = 'RemoteMCPServer', group = 'api.kagent.dev') => ({ kind, group, namespace: 'agents', name })
     expect(kagentServersToRead([ref('a'), ref('a'), ref('b', 'Server', 'example.com'), undefined]).map(r => r.name)).toEqual(['a'])
     expect(kagentServersToRead(Array.from({ length: 12 }, (_, i) => ref(`s${i}`)))).toHaveLength(8)
+  })
+})
+
+describe('kagentModelsToRead', () => {
+  it('reads each kagent ModelConfig once and skips other groups', () => {
+    const ref = (name: string, group = 'api.kagent.dev') => ({ kind: 'ModelConfig', group, namespace: 'agents', name })
+    expect(kagentModelsToRead([ref('gpt'), ref('gpt'), ref('embed'), ref('x', 'models.example.com'), undefined]).map(r => r.name)).toEqual(['gpt', 'embed'])
   })
 })

@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import { OperationalIssuesShownContext } from '../../ui/drawer-components'
 import { KagentAgentRenderer } from './KagentAgentRenderer'
 
 const cond = (type: string, status: string, reason: string, message = '') => ({ type, status, reason, message, observedGeneration: 1 })
@@ -88,10 +89,41 @@ describe('KagentAgentRenderer', () => {
         'agents/secret': { state: 'denied' },
       } }}
     />)
-    expect(html).toContain('MCP server agents/down failed tool discovery')
-    expect(html).toContain('even though it reads Ready')
+    expect(html).toContain('kagent&#x27;s controller could not discover MCP server agents/down&#x27;s tools')
+    expect(html).toContain('omits a server&#x27;s tools when that fails')
+    expect(html).toContain('even though the agent reads Ready')
+    expect(html).not.toContain('runs without them')
     expect(html).toContain('Discovery failed')
-    expect(html).toContain('Not offered by the server, so the agent runs without: no_such_tool')
+    expect(html).toContain('Not among the tools kagent&#x27;s controller discovered: no_such_tool')
     expect(html).toContain('You can’t read this RemoteMCPServer')
+  })
+
+  it('reads the ModelConfigs it names: a status badge, and a missing one named, not linked', () => {
+    const model = (conditions: any[]) => ({ state: 'read' as const, object: { apiVersion: 'api.kagent.dev/v1alpha3', kind: 'ModelConfig', metadata: { name: 'gpt', namespace: 'agents', generation: 1 }, status: { observedGeneration: 1, conditions } } })
+    const html = render(<KagentAgentRenderer
+      data={agent({ template: { inline: { modelConfig: { name: 'gpt' } } } }, [cond('Ready', 'True', 'Ready')])}
+      related={{ modelConfigs: { 'agents/gpt': model([cond('Accepted', 'True', 'Accepted'), cond('ResolvedRefs', 'False', 'APIKeySecretNotFound', 'secret openai not found')]) } }}
+      onNavigate={() => {}}
+    />)
+    expect(html).toContain('Blocked')
+    const missing = render(<KagentAgentRenderer
+      data={agent({ template: { inline: { modelConfig: { name: 'no-such-model' } } } }, [cond('Ready', 'True', 'Ready')])}
+      related={{ modelConfigs: { 'agents/no-such-model': { state: 'notFound' } } }}
+      onNavigate={() => {}}
+    />)
+    expect(missing).toContain('agents/no-such-model<span class="text-theme-text-tertiary"> · not found')
+    expect(missing).not.toMatch(/<button[^>]*>agents\/no-such-model<\/button>/)
+  })
+
+  it('leaves a reading the Issues card states to that card, and shows its Reading row only when Ready', () => {
+    const blocked = agent({ template: { ref: { name: 'base' } } }, [
+      cond('ResolvedRefs', 'False', 'ReferenceResolutionFailed', 'resolve ModelConfig "agents/gpt": not found'),
+      cond('Ready', 'False', 'Blocked', 'blocked by ResolvedRefs'),
+    ])
+    const withIssues = render(<OperationalIssuesShownContext.Provider value={true}><KagentAgentRenderer data={blocked} /></OperationalIssuesShownContext.Provider>)
+    expect(withIssues).not.toContain('Latest change blocked')
+    expect(withIssues).not.toContain('>Reading<')
+    expect(render(<KagentAgentRenderer data={blocked} />)).toContain('Latest change blocked')
+    expect(render(<KagentAgentRenderer data={agent({ template: { ref: { name: 'base' } } }, [cond('Ready', 'True', 'Ready')])} />)).toContain('Ready to start sessions')
   })
 })

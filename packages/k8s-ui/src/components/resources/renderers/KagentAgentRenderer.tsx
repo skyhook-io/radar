@@ -3,7 +3,8 @@ import { Bot, Boxes, Wrench } from 'lucide-react'
 import type { ResourceRef } from '../../../types'
 import { Badge } from '../../ui/Badge'
 import { healthToSeverity } from '../../../utils/badge-colors'
-import { AlertBanner, ConditionsSection, Property, PropertyList, ResourceLink, Section } from '../../ui/drawer-components'
+import { AlertBanner, ConditionsSection, Property, PropertyList, ResourceLink, Section, useOperationalIssuesShown } from '../../ui/drawer-components'
+import { formatRelativeAgeTime } from '../../../utils/format'
 import {
   KAGENT_GROUP,
   getKagentAgentEgressPolicies,
@@ -13,9 +14,11 @@ import {
   getKagentHarnessDeclarations,
   getKagentTemplateDeclarations,
   getKagentDiscoveredTools,
+  isKagentModelRef,
   isKagentServerRef,
   kagentRefKey,
   readKagentAgent,
+  readKagentModelConfig,
   readKagentRemoteMCPServer,
   redactKagentLiterals,
   shortRevision,
@@ -45,6 +48,8 @@ export interface KagentAgentRelated {
    * and still reports the Agent Ready, so their own status is the only sign.
    */
   mcpServers?: Record<string, KagentRelatedRead>
+  /** The ModelConfigs the template and Harness name, keyed by kagentRefKey. */
+  modelConfigs?: Record<string, KagentRelatedRead>
 }
 
 export interface KagentAgentRendererProps {
@@ -113,14 +118,21 @@ function bannerTitle(reading: KagentReading): string {
   }
 }
 
+// Readings Radar's Issues raise: while the drawer shows its Issues section,
+// that card says it, and a banner here would repeat it.
+function raisesIssue(reading: KagentReading): boolean {
+  return reading.state === 'blocked' || reading.state === 'failed' || reading.state === 'notReady' || (reading.state === 'preparing' && reading.reason === 'ActorTemplateRetrying')
+}
+
 function StatusBanners({ reading }: { reading: KagentReading }) {
+  const issuesShown = useOperationalIssuesShown()
   const title = bannerTitle(reading)
   let message = reading.state === 'stale' ? reading.message : reading.summary
   // The summary leads with the same words as the title ("Latest change blocked: …").
   if (message?.startsWith(`${title}: `)) message = message.slice(title.length + 2)
   return <>
-    {reading.state !== 'ready' && <AlertBanner variant={BANNER_VARIANT[reading.tone]} title={title} message={message === title ? undefined : message} />}
-    {reading.egress && <AlertBanner
+    {reading.state !== 'ready' && !(issuesShown && raisesIssue(reading)) && <AlertBanner variant={BANNER_VARIANT[reading.tone]} title={title} message={message === title ? undefined : message} />}
+    {reading.egress && !issuesShown && <AlertBanner
       variant="alert"
       title="Egress not applied"
       message={`${reading.egress.message ?? reading.egress.reason}. The runtime runs without these grants; kagent reports this apart from readiness.`}
@@ -128,9 +140,19 @@ function StatusBanners({ reading }: { reading: KagentReading }) {
   </>
 }
 
-function ModelRow({ label, model, from, onNavigate }: { label: string; model: KagentRef | undefined; from?: string; onNavigate?: Navigate }) {
+function ModelRow({ label, model, from, reads, onNavigate }: { label: string; model: KagentRef | undefined; from?: string; reads?: Record<string, KagentRelatedRead>; onNavigate?: Navigate }) {
   if (!model) return <Property label={label} value={from ? <Unread>{from}</Unread> : <Unread>None declared</Unread>} />
-  return <Property label={label} value={<RefValue ref={model} expectedKind="ModelConfig" onNavigate={onNavigate} />} />
+  if (!isKagentModelRef(model)) return <Property label={label} value={<RefValue ref={model} expectedKind="ModelConfig" onNavigate={onNavigate} />} />
+  const read = reads?.[kagentRefKey(model)]
+  // A ModelConfig that isn't there is named, not linked: the link would open nothing.
+  if (read?.state === 'notFound') return <Property label={label} value={<span>{`${model.namespace}/${model.name}`}<Unread> · not found</Unread></span>} />
+  const status = read?.state === 'read' ? readKagentModelConfig(read.object) : undefined
+  const note = read?.state === 'read' ? undefined : readNote(read, 'ModelConfig')
+  return <Property label={label} value={<span>
+    <RefValue ref={model} expectedKind="ModelConfig" onNavigate={onNavigate} />
+    {status && <span> <Badge severity={healthToSeverity(status.tone)} size="sm">{status.text}</Badge></span>}
+    {note && <Unread> · {note}</Unread>}
+  </span>} />
 }
 
 /** A referenced RemoteMCPServer's own status, or why it wasn't read. */
@@ -144,26 +166,41 @@ function ServerStatus({ binding, read }: { binding: KagentToolBinding; read: Kag
   return <span> <Badge severity={healthToSeverity(r.tone)} size="sm">{r.text}</Badge></span>
 }
 
-/** Selected tools the server's discovery doesn't list: kagent drops them without a word. */
+/** Selected tools the controller's discovery doesn't list: kagent omits a tool the server doesn't offer, without a word. */
 function MissingTools({ binding, read }: { binding: KagentToolBinding; read: KagentRelatedRead | undefined }) {
   if (read?.state !== 'read' || binding.tools.length === 0 || readKagentRemoteMCPServer(read.object).state !== 'ready') return null
   const offered = new Set(getKagentDiscoveredTools(read.object))
   const missing = binding.tools.filter(t => !offered.has(t))
   if (missing.length === 0) return null
-  return <div className="text-xs text-theme-text-secondary">Not offered by the server, so the agent runs without: {missing.slice(0, 3).join(', ')}{missing.length > 3 ? ` +${missing.length - 3} more` : ''}</div>
+  return <div className="text-xs text-theme-text-secondary">{`Not among the tools kagent's controller discovered: ${missing.slice(0, 3).join(', ')}${missing.length > 3 ? ` +${missing.length - 3} more` : ''}. kagent omits a selected tool the server doesn't offer.`}</div>
 }
 
-/** The MCP servers whose discovery failed: the agent runs without their tools, though kagent reports it Ready. */
-function failedServers(bindings: KagentToolBinding[], reads: Record<string, KagentRelatedRead> | undefined): string[] {
-  const out: string[] = []
+/**
+ * The MCP servers kagent's controller could not discover tools on, with when
+ * their Accepted condition turned False. That is the controller's discovery;
+ * each agent runtime discovers again on every invocation and omits a
+ * server's tools when its own attempt fails, which Radar can't see.
+ */
+function failedServers(bindings: KagentToolBinding[], reads: Record<string, KagentRelatedRead> | undefined): { name: string; since?: string }[] {
+  const out = new Map<string, string | undefined>()
   for (const b of bindings) {
     if (!b.server || !isKagentServerRef(b.server)) continue
     const read = reads?.[kagentRefKey(b.server)]
     if (read?.state !== 'read') continue
     const state = readKagentRemoteMCPServer(read.object).state
-    if (state === 'failed' || state === 'notReady') out.push(`${b.server.namespace}/${b.server.name}`)
+    if (state !== 'failed' && state !== 'notReady') continue
+    const accepted = (Array.isArray(read.object?.status?.conditions) ? read.object.status.conditions : []).find((c: any) => c?.type === 'Accepted')
+    out.set(`${b.server.namespace}/${b.server.name}`, typeof accepted?.lastTransitionTime === 'string' ? accepted.lastTransitionTime : undefined)
   }
-  return [...new Set(out)]
+  return [...out].map(([name, since]) => ({ name, since }))
+}
+
+function discoveryBanner(failed: { name: string; since?: string }[], ready: boolean): { title: string; message: string } {
+  const one = failed.length === 1 ? failed[0] : undefined
+  const title = one ? `kagent's controller could not discover MCP server ${one.name}'s tools` : `kagent's controller could not discover tools on ${failed.length} MCP servers`
+  const since = one?.since ? `Failing since ${formatRelativeAgeTime(one.since)}. ` : ''
+  const names = one ? '' : ` ${failed.slice(0, 3).map(f => f.name).join(', ')}${failed.length > 3 ? ` +${failed.length - 3} more` : ''}.`
+  return { title, message: `${since}The agent's runtime discovers tools again on each invocation and omits a server's tools when that fails, so while discovery fails it may run without them${ready ? ', even though the agent reads Ready' : ''}.${names}` }
 }
 
 export function KagentAgentRenderer({ data, onNavigate, related, sessions }: KagentAgentRendererProps) {
@@ -187,15 +224,12 @@ export function KagentAgentRenderer({ data, onNavigate, related, sessions }: Kag
 
   return <>
     <StatusBanners reading={reading} />
-    {failed.length > 0 && <AlertBanner
-      variant="alert"
-      title={failed.length === 1 ? `MCP server ${failed[0]} failed tool discovery` : `${failed.length} MCP servers failed tool discovery`}
-      message={`kagent drops the tools it can't discover, so this agent runs without them${reading.state === 'ready' ? ' even though it reads Ready' : ''}.${failed.length > 1 ? ` ${failed.slice(0, 3).join(', ')}${failed.length > 3 ? ` +${failed.length - 3} more` : ''}.` : ''}`}
-    />}
+    {failed.length > 0 && <AlertBanner variant="alert" {...discoveryBanner(failed, reading.state === 'ready')} />}
     <Section title="Agent" icon={Bot} defaultExpanded>
       <PropertyList>
         <Property label="Status" value={<Badge severity={healthToSeverity(reading.tone)}>{reading.text}</Badge>} />
-        <Property label="Reading" value={reading.summary} />
+        {/* Otherwise the banner, or the Issue card above, says it. */}
+        {reading.state === 'ready' && <Property label="Reading" value={reading.summary} />}
         <Property label="New sessions start on" value={rev.latestSuccessful
           ? <span className="font-mono text-xs" title={rev.latestSuccessful}>{`revision ${shortRevision(rev.latestSuccessful)}`}</span>
           : <Unread>No prepared revision yet, so no session can start</Unread>} />
@@ -220,7 +254,7 @@ export function KagentAgentRenderer({ data, onNavigate, related, sessions }: Kag
           : templateRef
             ? <span><ResourceLink kind="AgentTemplate" group={KAGENT_GROUP} namespace={namespace} name={templateRef} onNavigate={onNavigate} />{templateUnread && <Unread> · {templateUnread}</Unread>}</span>
             : <Unread>None declared</Unread>} />
-        <ModelRow label="Model" model={template?.model} from={templateUnread ? 'From the AgentTemplate, not read' : undefined} onNavigate={onNavigate} />
+        <ModelRow label="Model" model={template?.model} from={templateUnread ? 'From the AgentTemplate, not read' : undefined} reads={related?.modelConfigs} onNavigate={onNavigate} />
         <Property label="Harness" value={harnessName
           ? <span><ResourceLink kind="Harness" group={KAGENT_GROUP} namespace={namespace} name={harnessName} onNavigate={onNavigate} />{harness?.type && <span className="text-theme-text-tertiary"> · {harness.type}</span>}{harnessUnread && <Unread> · {harnessUnread}</Unread>}</span>
           : <Unread>None declared</Unread>} />
@@ -229,8 +263,8 @@ export function KagentAgentRenderer({ data, onNavigate, related, sessions }: Kag
             ? <ResourceLink kind="WorkerPool" group="ate.dev" namespace={namespace} name={harness.workerPool} onNavigate={onNavigate} />
             : <Unread>None declared</Unread>} />
           {harness.image && <Property label="Harness image" value={<span className="font-mono text-xs break-all">{harness.image}</span>} />}
-          {harness.summarizerModel && <ModelRow label="Summarizer model" model={harness.summarizerModel} onNavigate={onNavigate} />}
-          {harness.memoryModel && <ModelRow label="Memory model" model={harness.memoryModel} onNavigate={onNavigate} />}
+          {harness.summarizerModel && <ModelRow label="Summarizer model" model={harness.summarizerModel} reads={related?.modelConfigs} onNavigate={onNavigate} />}
+          {harness.memoryModel && <ModelRow label="Memory model" model={harness.memoryModel} reads={related?.modelConfigs} onNavigate={onNavigate} />}
         </>}
         {egress.length > 0 && <Property label="Egress policies" value={<Bounded items={egress} render={name => <ResourceLink kind="EgressPolicy" group={KAGENT_GROUP} namespace={namespace} name={name} onNavigate={onNavigate} />} />} />}
       </PropertyList>
