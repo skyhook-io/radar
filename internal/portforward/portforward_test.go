@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"testing"
 	"time"
+
+	"github.com/skyhook-io/radar/internal/portforward/forwardtest"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -288,5 +291,66 @@ func TestOwningHandlesReleaseSharedTunnelIndependently(t *testing.T) {
 	second.Stop()
 	if borrowed.Info().Connected {
 		t.Fatal("borrower kept the tunnel alive")
+	}
+}
+
+func TestStalledUpgradeEndsWithAttempt(t *testing.T) {
+	for _, tt := range []struct{ method, end string }{
+		{"GET", "close"}, {"POST", "close"}, {"GET", "timeout"}, {"POST", "caller"},
+	} {
+		t.Run(tt.method+"/"+tt.end, func(t *testing.T) {
+			arrived, disconnected, exited, release := make(chan struct{}), make(chan struct{}), make(chan struct{}), make(chan struct{})
+			cfg := forwardtest.Server(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != tt.method {
+					http.Error(w, "upgrade rejected", http.StatusBadRequest)
+					return
+				}
+				close(arrived)
+				select {
+				case <-r.Context().Done():
+					close(disconnected)
+				case <-release:
+				}
+			})
+			defer close(release)
+			m := NewManager(kubernetes.NewForConfigOrDie(cfg), cfg)
+			defer m.Close()
+			run := m.run
+			m.run = func(ctx context.Context, c kubernetes.Interface, cfg *rest.Config, ns, pod string, local, remote int, stop, ready chan struct{}) error {
+				defer close(exited)
+				return run(ctx, c, cfg, ns, pod, local, remote, stop, ready)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			result := make(chan error, 1)
+			go func() {
+				_, err := m.Start(OwnerTraffic, ctx, "ns", "svc", 8080, "ctx")
+				result <- err
+			}()
+			select {
+			case <-arrived:
+			case err := <-result:
+				t.Fatalf("upgrade never arrived: %v", err)
+			}
+			switch tt.end {
+			case "close":
+				m.Close()
+			case "caller":
+				cancel()
+			}
+			if err := <-result; err == nil {
+				t.Fatal("stalled forward succeeded")
+			}
+			select {
+			case <-disconnected:
+			case <-time.After(time.Second):
+				t.Fatal("upgrade request remained open after Start returned")
+			}
+			select {
+			case <-exited:
+			case <-time.After(time.Second):
+				t.Fatal("runner did not exit")
+			}
+		})
 	}
 }

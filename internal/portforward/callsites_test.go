@@ -17,7 +17,7 @@ import (
 var portForwardCallSites = map[string]string{
 	"pkg/portforward/portforward.go":        "the primitives themselves",
 	"internal/portforward/portforward.go":   "automatic, gated in Manager.Start",
-	"internal/argocd/discovery.go":          "automatic, gated in discover",
+	"pkg/portforward/dialer.go":             "the context-bound upgrade dialer",
 	"internal/runtimeevidence/collector.go": "explicit: evidence collection a user or agent asked for",
 	"internal/server/portforward.go":        "explicit: the Port Forward feature",
 }

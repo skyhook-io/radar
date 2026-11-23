@@ -70,6 +70,11 @@ const maxConcurrentProbes = 4
 // fallback even starts. This bounds that to one probe window plus margin.
 const directProbeBudget = 4 * time.Second
 
+type discoveredEndpoint struct {
+	addr, basePath string
+	forward        *portforward.Handle
+}
+
 // discover finds and connects to Prometheus using a multi-layer approach:
 //  1. Manual URL override (--prometheus-url)
 //  2. Existing traffic system port-forward
@@ -87,7 +92,7 @@ const directProbeBudget = 4 * time.Second
 // through so markConnected commits against *that* generation. Reading the live
 // generation here instead would let a flight keyed at an old generation adopt a
 // newer one after a Reset and commit under it, undoing the reset.
-func (c *Client) discover(ctx context.Context, gen uint64) (string, string, error) {
+func (c *Client) discover(ctx context.Context, gen uint64) (discoveredEndpoint, error) {
 	start := time.Now()
 	startGen := gen
 
@@ -108,15 +113,15 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 		if ok {
 			log.Printf("[prometheus] connected via manual URL %s (%s)", addr, took(start))
 			if !c.markConnected(addr, "", "url:"+addr, startGen) {
-				return "", "", errDiscoverySuperseded
+				return discoveredEndpoint{}, errDiscoverySuperseded
 			}
-			return addr, "", nil
+			return discoveredEndpoint{addr: addr}, nil
 		}
 		// A cancelled probe means the run was superseded (Reset / config change),
 		// not that the operator's URL is bad — don't slander it in errorlog.
 		if err := ctx.Err(); err != nil {
 			logDiscoveryEnded(start, err)
-			return "", "", err
+			return discoveredEndpoint{}, err
 		}
 		message := "The configured Prometheus endpoint could not be reached. Check its address, network access and TLS configuration."
 		switch reason {
@@ -132,7 +137,7 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 		if !discoveryDiagnosticsSuppressed(ctx) {
 			errorlog.Record("prometheus", "error", "%s", message)
 		}
-		return "", "", errors.New(message)
+		return discoveredEndpoint{}, errors.New(message)
 	}
 
 	// Reuse of an existing managed port-forward happens later, per candidate, in
@@ -145,7 +150,7 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 	// candidate ranking the port-forward attempts already follow.
 
 	if k8sClient == nil {
-		return "", "", fmt.Errorf("no Kubernetes client available for discovery")
+		return discoveredEndpoint{}, fmt.Errorf("no Kubernetes client available for discovery")
 	}
 
 	// Layers 3 + 4: Enumerate candidates via the shared pkg/prom discovery
@@ -172,16 +177,16 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 	// empty cluster — surface it instead of recording "no Prometheus found".
 	if err := ctx.Err(); err != nil {
 		logDiscoveryEnded(start, err)
-		return "", "", err
+		return discoveredEndpoint{}, err
 	}
 	if len(candidates) == 0 {
 		if err != nil {
-			return "", "", fmt.Errorf("Prometheus discovery failed: %w", err)
+			return discoveredEndpoint{}, fmt.Errorf("Prometheus discovery failed: %w", err)
 		}
 		if !discoveryDiagnosticsSuppressed(ctx) {
 			errorlog.Record("prometheus", "warning", "no Prometheus service found in cluster")
 		}
-		return "", "", ErrPrometheusNotFound
+		return discoveredEndpoint{}, ErrPrometheusNotFound
 	}
 
 	log.Printf("[prometheus] enumerated %d candidate(s) from %s in %s: %s", len(candidates), enumSource, took(enumStart), summarizeCandidates(candidates))
@@ -201,12 +206,12 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 	if idx >= 0 {
 		cand := candidates[idx]
 		if !c.markConnected(cand.ClusterAddr, cand.BasePath, cand.Key(), startGen) {
-			return "", "", errDiscoverySuperseded
+			return discoveredEndpoint{}, errDiscoverySuperseded
 		}
 		log.Printf("[prometheus] connected to %s/%s via direct probe at %s (source=%s, score=%d, direct %s, total %s)",
 			cand.Namespace, cand.Name, cand.ClusterAddr, cand.Source, cand.Score, took(directStart), took(start))
 		c.setDiscoveryServiceFromCandidate(cand)
-		return cand.ClusterAddr, cand.BasePath, nil
+		return discoveredEndpoint{addr: cand.ClusterAddr, basePath: cand.BasePath}, nil
 	}
 	// A context error here means the run ended before finding anything — either
 	// superseded (Reset / context switch) or timed out (the hang backstop) — not
@@ -214,7 +219,7 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 	// failure.
 	if err := ctx.Err(); err != nil {
 		logDiscoveryEnded(start, err)
-		return "", "", err
+		return discoveredEndpoint{}, err
 	}
 
 	// In-cluster, the direct Service-address probe is the whole story: pods/
@@ -231,19 +236,19 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 		// must end as such, not be recorded as a cluster without Prometheus.
 		if err := ctx.Err(); err != nil {
 			logDiscoveryEnded(start, err)
-			return "", "", err
+			return discoveredEndpoint{}, err
 		}
 		if blocked != nil {
 			log.Printf("[prometheus] %v", blocked)
 			if !discoveryDiagnosticsSuppressed(ctx) {
 				errorlog.Record("prometheus", "warning", "%v", blocked)
 			}
-			return "", "", blocked
+			return discoveredEndpoint{}, blocked
 		}
 		if !discoveryDiagnosticsSuppressed(ctx) {
 			errorlog.Record("prometheus", "warning", "no Prometheus service reachable in cluster")
 		}
-		return "", "", errPrometheusUnreachable
+		return discoveredEndpoint{}, errPrometheusUnreachable
 	}
 
 	// The operator turned automatic port-forwarding off: the direct pass was the
@@ -254,7 +259,7 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 		c.mu.Lock()
 		c.discoveryService = nil
 		c.mu.Unlock()
-		return "", "", errAutoPortForwardDisabled
+		return discoveredEndpoint{}, errAutoPortForwardDisabled
 	}
 
 	log.Printf("[prometheus] no candidate reachable via direct probe (%s); falling back to port-forward", took(directStart))
@@ -270,7 +275,7 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 		// switch) rather than churning the rest of the list while holding the gate.
 		if err := ctx.Err(); err != nil {
 			logDiscoveryEnded(start, err)
-			return "", "", err
+			return discoveredEndpoint{}, err
 		}
 		c.setDiscoveryServiceFromCandidate(cand)
 
@@ -284,17 +289,17 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 			pfAddr := handle.Address()
 			connected, err := c.probeForward(ctx, handle, cand, startGen)
 			if err != nil {
-				return "", "", err
+				return discoveredEndpoint{}, err
 			}
-			if connected {
+			if connected != nil {
 				log.Printf("[prometheus] reusing managed port-forward %s for %s/%s (%s)",
 					pfAddr, cand.Namespace, cand.Name, took(start))
-				return pfAddr, cand.BasePath, nil
+				return discoveredEndpoint{pfAddr, cand.BasePath, connected}, nil
 			}
 			// Cancellation supersedes the run before it opens another tunnel.
 			if err := ctx.Err(); err != nil {
 				logDiscoveryEnded(start, err)
-				return "", "", err
+				return discoveredEndpoint{}, err
 			}
 		}
 
@@ -304,13 +309,13 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 		handle, pfErr := c.forwards.Start(portforward.OwnerPrometheus, ctx, cand.Namespace, cand.Name, cand.TargetPort, contextName)
 		if pfErr != nil {
 			if errors.Is(pfErr, portforward.ErrClosed) {
-				return "", "", pfErr
+				return discoveredEndpoint{}, pfErr
 			}
 			// A cancelled Start means the run was superseded, not that the
 			// port-forward genuinely failed — surface it instead of recording one.
 			if err := ctx.Err(); err != nil {
 				logDiscoveryEnded(start, err)
-				return "", "", err
+				return discoveredEndpoint{}, err
 			}
 			lastErr = unreachableBecause(pfErr, "No working Prometheus endpoint found.\nCandidate %s/%s: port-forward failed: %v", cand.Namespace, cand.Name, pfErr)
 			if strings.Contains(strings.ToLower(pfErr.Error()), "forbidden") {
@@ -326,12 +331,12 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 		connected, err := c.probeForward(ctx, handle, cand, startGen)
 		if err != nil {
 			handle.Stop()
-			return "", "", err
+			return discoveredEndpoint{}, err
 		}
-		if connected {
+		if connected != nil {
 			log.Printf("[prometheus] connected to %s/%s via port-forward at %s (%s)",
 				cand.Namespace, cand.Name, addr, took(start))
-			return addr, cand.BasePath, nil
+			return discoveredEndpoint{addr, cand.BasePath, connected}, nil
 		}
 
 		handle.Stop()
@@ -339,7 +344,7 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 		// Prometheus — don't slander the endpoint in errorlog.
 		if err := ctx.Err(); err != nil {
 			logDiscoveryEnded(start, err)
-			return "", "", err
+			return discoveredEndpoint{}, err
 		}
 		lastErr = prometheusCandidateProbeError(cand.Namespace, cand.Name)
 		if !discoveryDiagnosticsSuppressed(ctx) {
@@ -352,22 +357,22 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 	c.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		logDiscoveryEnded(start, err)
-		return "", "", err
+		return discoveredEndpoint{}, err
 	}
 	log.Printf("[prometheus] discovery failed after %s: no reachable Prometheus among %d candidate(s)", took(start), len(candidates))
 	// With several candidates the last one's failure describes whichever
 	// Service happened to rank last, often not a Prometheus at all.
 	switch {
 	case lastErr == nil:
-		return "", "", errPrometheusUnreachable
+		return discoveredEndpoint{}, errPrometheusUnreachable
 	case len(candidates) == 1 && len(denied) == 1:
-		return "", "", unreachableBecause(lastErr, "No working Prometheus endpoint found.\nCandidate %s/%s: port-forward denied (%s)", candidates[0].Namespace, candidates[0].Name, deniedGrantsPhrase(denied))
+		return discoveredEndpoint{}, unreachableBecause(lastErr, "No working Prometheus endpoint found.\nCandidate %s/%s: port-forward denied (%s)", candidates[0].Namespace, candidates[0].Name, deniedGrantsPhrase(denied))
 	case len(candidates) > 1 && len(denied) == len(candidates):
-		return "", "", unreachableBecause(lastErr, "No working Prometheus endpoint found.\n%d candidates: port-forward denied (%s)", len(candidates), deniedGrantsPhrase(denied))
+		return discoveredEndpoint{}, unreachableBecause(lastErr, "No working Prometheus endpoint found.\n%d candidates: port-forward denied (%s)", len(candidates), deniedGrantsPhrase(denied))
 	case len(candidates) > 1:
-		return "", "", unreachableBecause(lastErr, "No working Prometheus endpoint found.\n%d candidates did not answer through a port-forward", len(candidates))
+		return discoveredEndpoint{}, unreachableBecause(lastErr, "No working Prometheus endpoint found.\n%d candidates did not answer through a port-forward", len(candidates))
 	}
-	return "", "", lastErr
+	return discoveredEndpoint{}, lastErr
 }
 
 // A port-forward can be refused at any of its steps: reading the Service,
@@ -565,21 +570,24 @@ func (c *Client) setDiscoveryServiceFromCandidate(cand prom.Candidate) {
 
 // Check liveness with the publication lock held: a loss callback may already
 // have run while the probe was completing.
-func (c *Client) probeForward(ctx context.Context, forward *portforward.Handle, cand prom.Candidate, gen uint64) (bool, error) {
+func (c *Client) probeForward(ctx context.Context, forward *portforward.Handle, cand prom.Candidate, gen uint64) (*portforward.Handle, error) {
+	if !forward.Alive() {
+		return nil, nil
+	}
 	ok := c.probe(ctx, forward.Address()+cand.BasePath)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.forwards.Closed() {
-		return false, portforward.ErrClosed
+		return nil, portforward.ErrClosed
 	}
 	if !ok || !forward.Alive() {
-		return false, nil
+		return nil, nil
 	}
 	if !c.markConnectedLocked(forward.Address(), cand.BasePath, cand.Key(), gen, forward) {
 		c.discoveryService = nil
-		return false, errDiscoverySuperseded
+		return nil, errDiscoverySuperseded
 	}
-	return true, nil
+	return c.forward, nil
 }
 
 // markConnected records the active connection and marks discovery as

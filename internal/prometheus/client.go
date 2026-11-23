@@ -616,8 +616,6 @@ func (c *Client) EnsureConnected(ctx context.Context) (string, string, error) {
 // of blocking on the detached discovery. Context values (e.g. suppressed
 // discovery diagnostics) are preserved.
 func (c *Client) discoverShared(ctx context.Context) (string, string, error) {
-	type result struct{ addr, basePath string }
-
 	// Loop so a run superseded by a mid-flight config change (Reset /
 	// SetManualURL / SetHeaders) rediscovers under the new generation instead of
 	// returning a spurious failure to callers like opencost. Every supersession
@@ -699,14 +697,15 @@ func (c *Client) discoverShared(ctx context.Context) (string, string, error) {
 
 			// Another discovery may have connected this client while we waited on
 			// the gate; if so, adopt its result instead of rediscovering.
-			c.mu.RLock()
-			addr, basePath := c.baseURL, c.basePath
-			c.mu.RUnlock()
-			if addr != "" {
-				return result{addr, basePath}, nil
+			c.mu.Lock()
+			cached := discoveredEndpoint{c.baseURL, c.basePath, c.forward}
+			live := c.connectionLiveLocked(cached, gen)
+			c.mu.Unlock()
+			if live {
+				return cached, nil
 			}
 
-			addr, basePath, derr := c.discover(dctx, gen)
+			endpoint, derr := c.discover(dctx, gen)
 			flightErr = derr
 			if derr != nil {
 				if !errors.Is(derr, portforward.ErrClosed) && !errors.Is(derr, context.Canceled) && !errors.Is(derr, context.DeadlineExceeded) {
@@ -719,7 +718,14 @@ func (c *Client) discoverShared(ctx context.Context) (string, string, error) {
 				}
 				return nil, derr
 			}
-			return result{addr, basePath}, nil
+			c.mu.Lock()
+			live = c.connectionLiveLocked(endpoint, gen)
+			c.mu.Unlock()
+			if !live {
+				flightErr = errDiscoverySuperseded
+				return nil, flightErr
+			}
+			return endpoint, nil
 		})
 
 		select {
@@ -745,13 +751,16 @@ func (c *Client) discoverShared(ctx context.Context) (string, string, error) {
 				}
 				return "", "", res.Err
 			}
-			r := res.Val.(result)
+			r := res.Val.(discoveredEndpoint)
 			// Guard against a hollow success: between the run committing and our
 			// return, a Reset can clear baseURL, or Reinitialize can retire this
 			// client (leaving baseURL set) — either way the result belongs to a
 			// superseded context. Retry under the new generation while our own
 			// context is live; give up only if the caller itself is done or retired.
-			if !c.connectionLive(r.addr) {
+			c.mu.Lock()
+			live := c.connectionLiveLocked(r, gen)
+			c.mu.Unlock()
+			if !live {
 				if ctx.Err() == nil && !retired {
 					continue
 				}
@@ -762,12 +771,16 @@ func (c *Client) discoverShared(ctx context.Context) (string, string, error) {
 	}
 }
 
-// connectionLive reports whether addr is the client's current, non-retired
-// connection.
-func (c *Client) connectionLive(addr string) bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.baseURL == addr && !c.retired
+func (c *Client) connectionLiveLocked(endpoint discoveredEndpoint, gen uint64) bool {
+	if c.retired || c.discoveryGen != gen || c.baseURL == "" || c.baseURL != endpoint.addr ||
+		c.basePath != endpoint.basePath || c.forward != endpoint.forward {
+		return false
+	}
+	if c.forward != nil && !c.forward.Alive() {
+		c.dropConnectionLocked()
+		return false
+	}
+	return true
 }
 
 // recordOutcomeLocked publishes a run's terminal result for the status

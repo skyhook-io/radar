@@ -470,7 +470,7 @@ func TestLocalDiscoveryDoesNotProbeClusterAddresses(t *testing.T) {
 	c.httpClient = &http.Client{Transport: rec, Timeout: time.Second}
 	c.inCluster = false
 
-	_ = c.discoverPrometheus(context.Background())
+	_ = c.metricsEndpoint(context.Background())
 
 	if rec.probedClusterAddress() {
 		t.Errorf("local discovery probed a cluster address; probed=%v", rec.urls)
@@ -485,7 +485,7 @@ func TestInClusterDiscoveryProbesClusterAddress(t *testing.T) {
 	c.httpClient = &http.Client{Transport: rec, Timeout: time.Second}
 	c.inCluster = true
 
-	_ = c.discoverPrometheus(context.Background())
+	_ = c.metricsEndpoint(context.Background())
 
 	if !rec.probedClusterAddress() {
 		t.Errorf("in-cluster discovery did not probe the cluster address; probed=%v", rec.urls)

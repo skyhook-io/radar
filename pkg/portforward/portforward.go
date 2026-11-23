@@ -15,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/httpstream"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -61,14 +62,19 @@ func RunPortForward(ctx context.Context, client kubernetes.Interface, config *re
 			Ports: []int32{int32(targetPort)},
 		}, scheme.ParameterCodec)
 
-	dialer, err := NewDialer(config, req.URL())
+	attempt, cancel := context.WithCancel(ctx)
+	detach := context.AfterFunc(wait.ContextForChannel(stopCh), cancel)
+	defer detach()
+	defer cancel()
+
+	dialer, err := NewDialerWithContext(attempt, config, req.URL())
 	if err != nil {
 		return err
 	}
 
 	ports := []string{fmt.Sprintf("%d:%d", localPort, targetPort)}
 
-	pf, err := portforward.New(dialer, ports, stopCh, readyCh, io.Discard, io.Discard)
+	pf, err := portforward.New(dialer, ports, attempt.Done(), readyCh, io.Discard, io.Discard)
 	if err != nil {
 		return fmt.Errorf("failed to create port forwarder: %w", err)
 	}

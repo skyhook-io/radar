@@ -2,12 +2,21 @@ package traffic
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/skyhook-io/radar/internal/portforward"
+	"github.com/skyhook-io/radar/internal/portforward/forwardtest"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func TestCarettaRejectsCrossOriginRedirects(t *testing.T) {
@@ -90,5 +99,56 @@ func TestCarettaAppliesHeaders(t *testing.T) {
 	}
 	if got := gotAuth.Load().(string); got != "Bearer caretta-token" {
 		t.Errorf("probe Authorization = %q, want %q", got, "Bearer caretta-token")
+	}
+}
+
+func TestCarettaReleasedBorrowedForward(t *testing.T) {
+	cfg := forwardtest.Server(t, forwardtest.ServeTunnel)
+	manager := portforward.NewManager(kubernetes.NewForConfigOrDie(cfg), cfg)
+	defer manager.Close()
+	for _, path := range []string{"flows", "raw"} {
+		t.Run(path, func(t *testing.T) {
+			owner, err := manager.Start(portforward.OwnerPrometheus, t.Context(), "ns", "svc", 9090, "ctx")
+			if err != nil {
+				t.Fatal(err)
+			}
+			cluster := fake.NewSimpleClientset()
+			c := NewCarettaSource(cluster)
+			c.forwards, c.currentContext, c.isConnected = manager, "ctx", true
+			c.forward = manager.GetAddressForService(portforward.OwnerTraffic, "ctx", "ns", "svc")
+			c.prometheusAddr = c.forward.Address()
+			address := fmt.Sprintf("127.0.0.1:%d", owner.Info().LocalPort)
+			owner.Stop()
+
+			var listener net.Listener
+			for deadline := time.Now().Add(time.Second); ; {
+				listener, err = net.Listen("tcp4", address)
+				if err == nil {
+					break
+				}
+				if !errors.Is(err, syscall.EADDRINUSE) || time.Now().After(deadline) {
+					t.Fatal(err)
+				}
+				time.Sleep(time.Millisecond)
+			}
+			var hits atomic.Int32
+			replacement := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits.Add(1)
+				w.Write([]byte(`{"status":"success","data":{"result":[]}}`))
+			})}
+			defer replacement.Close()
+			go replacement.Serve(listener)
+			if path == "flows" {
+				_, err = c.GetFlows(t.Context(), FlowOptions{})
+			} else {
+				_, err = c.queryPrometheusRaw(t.Context(), "up")
+			}
+			if len(cluster.Actions()) == 0 {
+				t.Error("dead forward did not trigger backend discovery")
+			}
+			if hits.Load() != 0 || c.forward != nil || c.prometheusAddr != "" {
+				t.Fatalf("replacement hits=%d, cached address=%q, query error=%v", hits.Load(), c.prometheusAddr, err)
+			}
+		})
 	}
 }

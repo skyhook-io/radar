@@ -25,6 +25,7 @@ const (
 	OwnerPrometheus Owner = "prometheus"
 	OwnerTraffic    Owner = "traffic"
 	OwnerCost       Owner = "cost"
+	OwnerArgoCD     Owner = "argocd"
 	// EstablishTimeout lets compound discovery flows budget for each managed tunnel attempt.
 	EstablishTimeout = 10 * time.Second
 )
@@ -82,6 +83,7 @@ type forward struct {
 	owner      Owner
 	info       ConnectionInfo
 	targetPort int
+	dedicated  bool
 	owners     int
 	// established wakes callers sharing an in-flight Start for the same target.
 	established chan struct{}
@@ -140,6 +142,11 @@ func (h *Handle) Info() *ConnectionInfo {
 	return &info
 }
 
+// Done closes when the tunnel is removed, including deliberate connection teardown.
+func (h *Handle) Done() <-chan struct{} {
+	return h.f.stopCh
+}
+
 func (h *Handle) Stop() bool {
 	if h == nil || h.f == nil || h.borrowed {
 		return false
@@ -194,6 +201,16 @@ func SetOnForwardLost(fn func(*Handle)) {
 }
 
 func (m *Manager) Start(owner Owner, ctx context.Context, namespace, service string, targetPort int, contextName string) (*Handle, error) {
+	return m.start(owner, ctx, namespace, service, targetPort, contextName, true)
+}
+
+// StartDedicated opens a separate tunnel so a slow connection can keep serving
+// while its replacement is probed and authenticated. Service lookups never borrow it.
+func (m *Manager) StartDedicated(owner Owner, ctx context.Context, namespace, service string, targetPort int, contextName string) (*Handle, error) {
+	return m.start(owner, ctx, namespace, service, targetPort, contextName, false)
+}
+
+func (m *Manager) start(owner Owner, ctx context.Context, namespace, service string, targetPort int, contextName string, reuse bool) (*Handle, error) {
 	if AutoDisabled() {
 		return nil, ErrAutoDisabled
 	}
@@ -206,9 +223,16 @@ func (m *Manager) Start(owner Owner, ctx context.Context, namespace, service str
 			m.mu.Unlock()
 			return nil, ErrClosed
 		}
+		if err := ctx.Err(); err != nil {
+			m.mu.Unlock()
+			return nil, err
+		}
+		if !reuse {
+			break
+		}
 		var pending *forward
 		for f := range m.forwards {
-			if f.owner == owner && f.matches(namespace, service, targetPort, contextName) {
+			if !f.dedicated && f.owner == owner && f.matches(namespace, service, targetPort, contextName) {
 				if f.active {
 					f.owners++
 					m.mu.Unlock()
@@ -233,7 +257,7 @@ func (m *Manager) Start(owner Owner, ctx context.Context, namespace, service str
 		m.mu.Unlock()
 		return nil, fmt.Errorf("K8s client not initialized")
 	}
-	f := &forward{manager: m, owner: owner, targetPort: targetPort, owners: 1,
+	f := &forward{manager: m, owner: owner, targetPort: targetPort, owners: 1, dedicated: !reuse,
 		info:        ConnectionInfo{Namespace: namespace, ServiceName: service, ContextName: contextName},
 		established: make(chan struct{}), stopCh: make(chan struct{})}
 	m.forwards[f] = struct{}{}
@@ -293,6 +317,9 @@ func (m *Manager) establish(ctx context.Context, f *forward) (*Handle, error) {
 		if _, present := m.forwards[f]; !present {
 			return nil, fmt.Errorf("port-forward closed during establishment")
 		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		f.info.LocalPort, f.info.Address, f.info.Connected = port, fmt.Sprintf("http://localhost:%d", port), true
 		f.active = true
 		log.Printf("[portforward] Ready: %s -> %s/%s:%d (owner=%s, context: %s)", f.info.Address, ns, svc, f.targetPort, f.owner, f.info.ContextName)
@@ -318,7 +345,7 @@ func (m *Manager) GetAddressForService(prefer Owner, contextName, namespace, ser
 	defer m.mu.Unlock()
 	var match *forward
 	for f := range m.forwards {
-		if f.active && f.info.ContextName == contextName && f.info.Namespace == namespace && f.info.ServiceName == service {
+		if f.active && !f.dedicated && f.info.ContextName == contextName && f.info.Namespace == namespace && f.info.ServiceName == service {
 			match = f
 			if f.owner == prefer {
 				break

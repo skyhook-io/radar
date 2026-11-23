@@ -21,8 +21,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/portforward"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/connections"
@@ -186,7 +186,7 @@ type Manager struct {
 
 	baseURL string
 	client  *argoapi.Client
-	forward *activeForward
+	forward activeForward
 	// clientAnonymous marks a client built without a token. It counts as a
 	// connection only once a read has actually succeeded through it: a
 	// reachable argocd-server that answers 401 is not an integration, and
@@ -232,13 +232,13 @@ type Manager struct {
 	tokenContext string
 	tokenBinding string
 
-	clusterClients func() (kubernetes.Interface, *rest.Config)
+	clusterClients func() probeCluster
 	inCluster      func() bool
 	contextName    func() string
 	contextBinding func(context.Context) string
 	loadConfig     func() config.Config
 	// portForward replaces startPortForward in tests.
-	portForward func(ctx context.Context, snap probeSnapshot, namespace, service string, targetPort int) (*activeForward, error)
+	portForward func(ctx context.Context, snap probeSnapshot, namespace, service string, targetPort int) (activeForward, error)
 }
 
 // NewManager builds a Manager wired to the live internal/k8s connection.
@@ -246,9 +246,9 @@ type Manager struct {
 // kubeconfig context switches without a reinit step.
 func NewManager() *Manager {
 	return &Manager{
-		clusterClients: func() (kubernetes.Interface, *rest.Config) {
+		clusterClients: func() probeCluster {
 			conn := k8s.Current()
-			return conn.ClientInterface(), conn.Config()
+			return probeCluster{conn.ClientInterface(), conn.PortForwards(), conn.ContextName()}
 		},
 		inCluster:      k8s.IsInCluster,
 		contextName:    k8s.GetContextName,
@@ -703,7 +703,7 @@ func (m *Manager) bumpAndReset() {
 	fwd := m.dropConnectionLocked()
 	m.mu.Unlock()
 	if fwd != nil {
-		fwd.stop()
+		fwd.Stop()
 	}
 }
 
@@ -715,7 +715,7 @@ func (m *Manager) Reset() {
 	m.bumpAndReset()
 }
 
-func (m *Manager) dropConnectionLocked() *activeForward {
+func (m *Manager) dropConnectionLocked() activeForward {
 	m.baseURL = ""
 	m.client = nil
 	m.cache = nil
@@ -1158,31 +1158,44 @@ func (m *Manager) probeHoldingSlot(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	usedForward := newForward
+	if usedForward == nil && snap.baseURL == url {
+		usedForward = snap.forward
+	}
+	if usedForward != nil && !usedForward.Alive() {
+		if newForward != nil {
+			newForward.Stop()
+		}
+		return snap.forwardExitError()
+	}
 	if err := m.verifyAuth(ctx, url, snap); err != nil {
 		// The new forward resolve reached the server through won't be used.
 		if newForward != nil {
-			newForward.stop()
+			newForward.Stop()
+		}
+		if usedForward != nil && snap.forwards.Closed() {
+			return errStaleProbe
 		}
 		// Nor will the connection in place, unless it was only slow to
 		// answer: reads go on using it. Skip when a config change already
 		// superseded this probe; that SetConfig/Reset owns the cleanup.
 		m.mu.Lock()
-		var fwd *activeForward
+		var fwd activeForward
 		if !m.staleLocked(snap) && !(errors.Is(err, errNoAnswerInTime) && m.client != nil) {
 			fwd = m.dropConnectionLocked()
 		}
 		m.mu.Unlock()
 		if fwd != nil {
-			fwd.stop()
+			fwd.Stop()
 		}
 		return err
 	}
 
 	// Forwards this commit leaves unused, stopped once mu is released.
-	var unused *activeForward
+	var unused activeForward
 	defer func() {
 		if unused != nil {
-			unused.stop()
+			unused.Stop()
 		}
 	}()
 	m.mu.Lock()
@@ -1193,16 +1206,17 @@ func (m *Manager) probeHoldingSlot(ctx context.Context) error {
 		unused = newForward
 		return errStaleProbe
 	}
-	if newForward != nil && newForward.exited.Load() {
+	if usedForward != nil && !usedForward.Alive() {
 		// The new tunnel died after the server answered through it; the
 		// connection in place, if any, is still the better one.
 		unused = newForward
-		return fmt.Errorf("%w: the port-forward to argocd-server exited", ErrUnreachable)
+		return snap.forwardExitError()
 	}
 	// A re-check that confirms the connection in place keeps it, so reads
 	// in flight still belong to it.
-	newConnection := m.client == nil || m.baseURL != url
-	if m.baseURL != url {
+	replaceEndpoint := m.baseURL != url || (newForward != nil && newForward != m.forward)
+	newConnection := m.client == nil || replaceEndpoint
+	if replaceEndpoint {
 		// A forward serves one address: a new address replaces it with the
 		// forward resolve reached the server through, or none.
 		unused = m.forward
@@ -1244,21 +1258,28 @@ type probeSnapshot struct {
 	insecureTLS  bool
 	tokenContext string
 	tokenBinding string
-	// k8sClient + k8sConfig are captured at snapshot time so BOTH candidate
-	// discovery and the port-forward dial target the SAME cluster the token was
-	// captured against. If a context switch swaps the live client/config
-	// mid-probe, these frozen handles keep the token pointed at its own
-	// cluster's Argo — never the new one — and the generation check then
-	// discards the superseded result.
-	k8sClient kubernetes.Interface
-	k8sConfig *rest.Config
+	probeCluster
+	baseURL string
+	forward activeForward
+}
+
+func (snap probeSnapshot) forwardExitError() error {
+	if snap.forwards.Closed() {
+		return errStaleProbe
+	}
+	return fmt.Errorf("%w: the port-forward to argocd-server exited", ErrUnreachable)
+}
+
+type probeCluster struct {
+	k8sClient   kubernetes.Interface
+	forwards    *portforward.Manager
+	contextName string
 }
 
 func (m *Manager) snapshotLocked() probeSnapshot {
-	var k8sc kubernetes.Interface
-	var cfg *rest.Config
+	var cluster probeCluster
 	if m.clusterClients != nil {
-		k8sc, cfg = m.clusterClients()
+		cluster = m.clusterClients()
 	}
 	return probeSnapshot{
 		generation:   m.generation,
@@ -1267,8 +1288,9 @@ func (m *Manager) snapshotLocked() probeSnapshot {
 		insecureTLS:  m.insecureTLS,
 		tokenContext: m.tokenContext,
 		tokenBinding: m.tokenBinding,
-		k8sClient:    k8sc,
-		k8sConfig:    cfg,
+		probeCluster: cluster,
+		baseURL:      m.baseURL,
+		forward:      m.forward,
 	}
 }
 
@@ -1706,13 +1728,10 @@ func (m *Manager) refreshRepositoriesAsync() {
 // uninstalled; the caller installs it with the client or stops it. All
 // reachability clients use the snapshot's credentials. Errors wrap
 // ErrUnreachable.
-func (m *Manager) resolve(ctx context.Context, snap probeSnapshot) (string, *activeForward, error) {
-	m.mu.Lock()
-	baseURL := m.baseURL
-	forwarded := m.forward != nil
-	m.mu.Unlock()
-
-	if baseURL != "" {
+func (m *Manager) resolve(ctx context.Context, snap probeSnapshot) (string, activeForward, error) {
+	baseURL := snap.baseURL
+	forwarded := snap.forward != nil
+	if baseURL != "" && (!forwarded || snap.forward.Alive()) {
 		err := m.probeEndpoint(ctx, baseURL, snap)
 		if err == nil {
 			return baseURL, nil, nil
@@ -1728,6 +1747,9 @@ func (m *Manager) resolve(ctx context.Context, snap probeSnapshot) (string, *act
 			// the connection stays in place; if nothing answers, the server
 			// is slow.
 			url, fwd, derr := m.discover(ctx, snap)
+			if errors.Is(derr, errStaleProbe) {
+				return "", nil, derr
+			}
 			if derr != nil {
 				return "", nil, slow
 			}
@@ -1737,11 +1759,11 @@ func (m *Manager) resolve(ctx context.Context, snap probeSnapshot) (string, *act
 			return "", nil, slow
 		}
 		m.mu.Lock()
-		if m.baseURL == baseURL {
+		if m.baseURL == baseURL && m.forward == snap.forward {
 			fwd := m.dropConnectionLocked()
 			m.mu.Unlock()
 			if fwd != nil {
-				fwd.stop()
+				fwd.Stop()
 			}
 		} else {
 			m.mu.Unlock()
