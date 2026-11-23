@@ -1,7 +1,14 @@
 import type { RightsizingRow } from '../../types/rightsizing'
 
+export function currentPodEvidenceLabel(reason?: string): string | undefined {
+  if (reason === 'current_replicas_unverified') return 'Current replicas unverified'
+  if (reason === 'current_pod_samples_missing') return 'Current Pod samples missing'
+}
+
 const reasonText: Record<string, string> = {
   request_within_fit_range: 'Keep the current request. Radar suggests a reduction only when the demand-based target is at least 30% below the current request and the rounded recommendation is lower.',
+  current_replicas_unverified: 'Radar could not verify every current replica. Check that the Pods are Ready and match the workload template, then scan again.',
+  current_pod_samples_missing: 'No interval matched all current replicas by Pod UID. Check that cAdvisor retains Pod UIDs in its id label, or configure the Prometheus cluster scope to use workload history.',
   insufficient_history: 'At least six hours of samples are required before suggesting a request.',
   hpa_managed: 'This request affects the horizontal autoscaler.',
   hpa_evidence_unavailable:

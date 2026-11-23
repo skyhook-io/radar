@@ -37,9 +37,9 @@ func sizingIdentityPod() corev1.Pod {
 func TestSizingPodIdentityChecksAdmittedContainersAndRestartEvidence(t *testing.T) {
 	base := sizingIdentityPod()
 	for _, tc := range []struct {
-		name           string
-		edit           func(*corev1.Pod)
-		eligible, zero bool
+		name            string
+		edit            func(*corev1.Pod)
+		eligible, known bool
 	}{
 		{"running", func(*corev1.Pod) {}, true, true},
 		{"admission changed request", func(p *corev1.Pod) {
@@ -51,6 +51,14 @@ func TestSizingPodIdentityChecksAdmittedContainersAndRestartEvidence(t *testing.
 		{"terminating", func(p *corev1.Pod) { now := metav1.Now(); p.DeletionTimestamp = &now }, false, false},
 		{"status not reported", func(p *corev1.Pod) { p.Status.ContainerStatuses = nil }, true, false},
 		{"container restarted", func(p *corev1.Pod) { p.Status.ContainerStatuses[0].RestartCount = 1 }, true, false},
+		{"single clean restart", func(p *corev1.Pod) {
+			p.Status.ContainerStatuses[0].RestartCount = 1
+			p.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{Reason: "Completed"}
+		}, true, true},
+		{"earlier termination lost", func(p *corev1.Pod) {
+			p.Status.ContainerStatuses[0].RestartCount = 2
+			p.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{Reason: "Completed"}
+		}, true, false},
 		{"termination retained", func(p *corev1.Pod) {
 			p.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{Reason: "OOMKilled"}
 		}, true, false},
@@ -60,8 +68,8 @@ func TestSizingPodIdentityChecksAdmittedContainersAndRestartEvidence(t *testing.
 			p := base.DeepCopy()
 			tc.edit(p)
 			w.workload.observeSizingPodIdentity(p)
-			if hasCurrentPodSizingCohort(w) != tc.eligible || (w.workload.podZeroRestarts["agent"] == 1) != tc.zero {
-				t.Fatalf("identities=%v, incomplete=%v, restart evidence=%v", w.workload.podIdentities, w.workload.podIdentityIncomplete, w.workload.podZeroRestarts)
+			if hasCurrentPodSizingCohort(w) != tc.eligible || (w.workload.podRestartEvidence["agent"].knownPods == 1) != tc.known {
+				t.Fatalf("identities=%v, incomplete=%v, restart evidence=%v", w.workload.podIdentities, w.workload.podIdentityIncomplete, w.workload.podRestartEvidence)
 			}
 		})
 	}

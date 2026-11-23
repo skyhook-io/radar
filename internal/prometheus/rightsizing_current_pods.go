@@ -2,7 +2,9 @@ package prometheus
 
 import (
 	"context"
+	"errors"
 	"math"
+	"net/url"
 	"slices"
 	"strconv"
 	"sync"
@@ -11,9 +13,16 @@ import (
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
-// Limit both the PromQL sent through proxies and the range matrix returned for
-// one read. A workload larger than one chunk still needs every Pod in a bucket.
-const sizingPodQueryChunk = 8
+const (
+	sizingPodQueryChunk = 24
+	// At a 5m step, 64 container series carry at most 129,088 sample pairs
+	// over seven days. Leave space below the transport's 10 MiB limit for
+	// additional cgroups, sidecars and scrape history.
+	sizingQueryContainers = 64
+	// Leave room for the range parameters and a proxied API path on an
+	// HTTP server with an 8 KiB request-line limit.
+	sizingQueryEncodedBytes = 7 * 1024
+)
 
 func hasCurrentPodSizingCohort(w scanWorkload) bool {
 	pods := w.workload.podIdentities
@@ -45,7 +54,7 @@ type sizingBucket struct {
 }
 
 func queryCurrentPodBatch(ctx context.Context, client rightsizingScanQuerier, workloads []scanWorkload, now time.Time) scanBatchEvidence {
-	out := scanBatchEvidence{ownerCoverage: OwnerCoverageCurrentPods, restarts: map[scanKey]float64{}, errors: map[string]error{}}
+	out := scanBatchEvidence{ownerCoverage: OwnerCoverageCurrentPods, restarts: map[scanKey]float64{}, terminations: map[scanKey]terminationEvidence{}, errors: map[string]error{}}
 	var targets []sizingPodTarget
 	expected := map[scanKey]int{}
 	for i := range workloads {
@@ -59,8 +68,9 @@ func queryCurrentPodBatch(ctx context.Context, client rightsizingScanQuerier, wo
 		for _, c := range w.workload.containers {
 			k := scanKey{w.namespace, w.kind, w.name, c.name}
 			expected[k] = w.replicas
-			if w.workload.podZeroRestarts[c.name] == w.replicas {
-				out.restarts[k] = 0
+			if history := w.workload.podRestartEvidence[c.name]; history.knownPods == w.replicas {
+				out.restarts[k] = float64(history.restarts)
+				out.terminations[k] = terminationEvidence{Any: history.restarts > 0}
 			}
 		}
 	}
@@ -92,16 +102,40 @@ func queryCurrentPodBatch(ctx context.Context, client rightsizingScanQuerier, wo
 
 func currentPodRangeValues(ctx context.Context, client rightsizingScanQuerier, family string, targets []sizingPodTarget, expected map[scanKey]int, start, end time.Time) (map[scanKey][]float64, error) {
 	buckets := map[scanKey]map[int64]sizingBucket{}
-	for group := range slices.Chunk(targets, sizingPodQueryChunk) {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+	for len(targets) > 0 {
+		groupSize, containers := 0, 0
+		for _, target := range targets[:min(len(targets), sizingPodQueryChunk)] {
+			containers += len(target.workload.workload.containers)
+			if containers > sizingQueryContainers && groupSize > 0 {
+				break
+			}
+			groupSize++
 		}
-		query := sizingPodRangeQuery(family, group)
-		result, err := requireComplete(client.QueryRange(ctx, query, start, end, rightsizingStep))
-		if err != nil {
-			return nil, err
+		for {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			group := targets[:groupSize]
+			query := sizingPodRangeQuery(family, group)
+			if len(url.QueryEscape(query)) > sizingQueryEncodedBytes {
+				if groupSize == 1 {
+					return nil, prom.ErrWorkloadQueryTooLarge
+				}
+				groupSize = (groupSize + 1) / 2
+				continue
+			}
+			result, err := requireComplete(client.QueryRange(ctx, query, start, end, rightsizingStep))
+			if errors.Is(err, prom.ErrResponseTooLarge) && groupSize > 1 {
+				groupSize = (groupSize + 1) / 2
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			addSizingPodBuckets(buckets, expected, group, result, start, end, family)
+			targets = targets[groupSize:]
+			break
 		}
-		addSizingPodBuckets(buckets, expected, group, result, start, end, family)
 	}
 	values := map[scanKey][]float64{}
 	for key, times := range buckets {
@@ -127,16 +161,25 @@ func sizingPodRangeQuery(family string, targets []sizingPodTarget) string {
 	slices.Sort(ns)
 	slices.Sort(uids)
 	pattern, _ := prom.PodCgroupPatternForUIDs(uids)
-	matcher := "{" + labelRegexMatcher("namespace", ns) + ",id=~" + strconv.Quote(pattern) + `,container!="",container!="POD"}`
+	matcher := "{" + labelRegexMatcher("namespace", ns) + ",id=~" + strconv.Quote(pattern) + `,container!="",container!="POD"`
+	if family == "cpu" {
+		// Per-core counters are shards, not duplicate scrapes of the full container.
+		matcher += `,cpu=~"total|"`
+	}
+	matcher += "}"
 	rate := func(metric string) string { return "rate(" + metric + matcher + "[5m])" }
+	var usage string
 	switch family {
 	case "memory":
-		return metricMemoryWorkingSet + matcher
+		usage = metricMemoryWorkingSet + matcher
 	case "throttle":
-		return rate(metricThrottledPeriods) + " / " + rate(metricCFSPeriods)
+		usage = rate(metricThrottledPeriods) + " / " + rate(metricCFSPeriods)
 	default:
-		return rate(metricCPUUsage)
+		usage = rate(metricCPUUsage)
 	}
+	// Merge scrapes of one cgroup after computing each observer's rate or
+	// ratio. Keeping id separates overlapping container incarnations.
+	return "max by (namespace,pod,container,id) (" + usage + ")"
 }
 
 // For each timestamp keep the hottest Pod, only if all replicas have exactly

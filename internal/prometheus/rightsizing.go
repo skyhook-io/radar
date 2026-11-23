@@ -278,7 +278,7 @@ type rightsizingWorkload struct {
 	podNames              []string
 	podIdentities         []prom.WorkloadPodIdentity
 	podIdentityIncomplete bool
-	podZeroRestarts       map[string]int
+	podRestartEvidence    map[string]sizingPodRestarts
 	qos                   rightsizing.PodQoS
 	currentPodOOM         map[string]bool
 	hpaManaged            map[string]bool

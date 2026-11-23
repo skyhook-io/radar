@@ -18,6 +18,11 @@ func sizingControllerCohortReady(owner metav1.Object, observed int64, desired, t
 		desired > 0 && total == desired && updated == desired && ready == desired
 }
 
+type sizingPodRestarts struct {
+	knownPods int
+	restarts  int
+}
+
 // Only Pods already resolved through this workload's controller UID reach this method.
 func (w *rightsizingWorkload) observeSizingPodIdentity(p *corev1.Pod) {
 	if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
@@ -44,13 +49,26 @@ func (w *rightsizingWorkload) observeSizingPodIdentity(p *corev1.Pod) {
 		return
 	}
 	w.podIdentities = append(w.podIdentities, prom.WorkloadPodIdentity{Name: p.Name, UID: string(p.UID)})
-	if w.podZeroRestarts == nil {
-		w.podZeroRestarts = map[string]int{}
+	if w.podRestartEvidence == nil {
+		w.podRestartEvidence = map[string]sizingPodRestarts{}
 	}
 	for _, statuses := range [][]corev1.ContainerStatus{p.Status.ContainerStatuses, p.Status.InitContainerStatuses} {
 		for _, c := range statuses {
-			if c.Ready && c.State.Running != nil && c.RestartCount == 0 && c.LastTerminationState.Terminated == nil {
-				w.podZeroRestarts[c.Name]++
+			if !c.Ready || c.State.Running == nil {
+				continue
+			}
+			// Kubernetes retains only the last termination. A single successful
+			// completion accounts for the whole restart history of this Pod.
+			// For other terminations keep the existing positive OOM signal and
+			// avoid ruling out OOM when an earlier or ambiguous exit is unknown.
+			last := c.LastTerminationState.Terminated
+			noRestarts := c.RestartCount == 0 && last == nil
+			restartedCleanly := c.RestartCount == 1 && last != nil && last.Reason == "Completed" && last.ExitCode == 0 && last.Signal == 0
+			if noRestarts || restartedCleanly {
+				r := w.podRestartEvidence[c.Name]
+				r.knownPods++
+				r.restarts += int(c.RestartCount)
+				w.podRestartEvidence[c.Name] = r
 			}
 		}
 	}

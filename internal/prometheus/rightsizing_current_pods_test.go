@@ -3,6 +3,7 @@ package prometheus
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -21,7 +22,7 @@ func currentSizingWorkload() scanWorkload {
 		{Name: "api-b", UID: "bbbbbbbb-1111-2222-3333-444444444444"},
 	}
 	w.workload.qos.Observe(corev1.PodQOSBurstable)
-	w.workload.podZeroRestarts = map[string]int{"app": 2}
+	w.workload.podRestartEvidence = map[string]sizingPodRestarts{"app": {knownPods: 2}}
 	return w
 }
 
@@ -39,8 +40,11 @@ func TestCurrentPodRightsizingRequiresUniqueCompleteBuckets(t *testing.T) {
 	now := time.Unix(60000000, 0)
 	start := now.Add(-rightsizingWindow)
 	client := &fakeScanQuerier{rangeFn: func(q string) (*prom.QueryResult, error) {
-		if !strings.Contains(q, a.UID) || !strings.Contains(q, b.UID) || !strings.Contains(q, "id=~") || strings.Contains(q, "kube_pod_owner") {
+		if !strings.HasPrefix(q, "max by (namespace,pod,container,id) (") || !strings.Contains(q, a.UID) || !strings.Contains(q, b.UID) || !strings.Contains(q, "id=~") || strings.Contains(q, "kube_pod_owner") {
 			t.Errorf("query missing UID constraint: %s", q)
+		}
+		if strings.Contains(q, metricCPUUsage) && !strings.Contains(q, `cpu=~"total|"`) {
+			t.Errorf("CPU query admits partial per-core series: %s", q)
 		}
 		both := []prom.Series{currentSizingSeries(a, start, 4, .05), currentSizingSeries(b, start.Add(rightsizingStep), 3, .2)}
 		// Same-named foreign Pod, another namespace, duplicate scrape, old
@@ -73,7 +77,7 @@ func TestCurrentPodScanClassifiesOnlyVerifiedCohorts(t *testing.T) {
 	incomplete.workload.podIdentityIncomplete = true
 	client := &fakeScanQuerier{rangeFn: func(q string) (*prom.QueryResult, error) {
 		v := .05
-		if strings.HasPrefix(q, metricMemoryWorkingSet) {
+		if strings.Contains(q, metricMemoryWorkingSet) {
 			v = 80 * 1024 * 1024
 		}
 		if strings.Contains(q, metricThrottledPeriods) {
@@ -101,7 +105,7 @@ func TestCurrentPodScanClassifiesOnlyVerifiedCohorts(t *testing.T) {
 			t.Fatalf("incomplete cohort: %+v", row)
 		}
 	}
-	w.workload.podZeroRestarts["app"] = 1
+	w.workload.podRestartEvidence["app"] = sizingPodRestarts{knownPods: 1}
 	rows := buildScanWorkload(w, queryCurrentPodRightsizing(context.Background(), client, w, now)).Rows
 	if rows[1].OOMEvidenceAvailable || rows[1].Decision.Status == rightsizing.DecisionActionable {
 		t.Fatalf("unverified restart history: %+v", rows[1])
@@ -115,7 +119,7 @@ func TestCurrentPodSizingBatchesLargeCohortsAndRejectsPartialAnswers(t *testing.
 	}
 	w.replicas = len(w.workload.podIdentities)
 	client := &fakeScanQuerier{rangeFn: func(q string) (*prom.QueryResult, error) {
-		if len(q) > prom.MaxWorkloadQueryBytes {
+		if len(url.QueryEscape(q)) > sizingQueryEncodedBytes {
 			t.Fatalf("unbounded query: %d", len(q))
 		}
 		return &prom.QueryResult{Annotations: prom.QueryAnnotations{Partial: strings.Contains(q, metricCPUUsage)}}, nil
@@ -143,7 +147,7 @@ func TestCurrentPodDetailReportsCoverageAndQueryFailures(t *testing.T) {
 				if strings.Contains(q, metricThrottledPeriods) {
 					v = 0
 				}
-				if strings.HasPrefix(q, metricMemoryWorkingSet) {
+				if strings.Contains(q, metricMemoryWorkingSet) {
 					v = 80 * 1024 * 1024
 				}
 				// Keep all samples strictly inside the requested week even if the
@@ -206,6 +210,24 @@ func TestFleetAttributionPreservesStandaloneAndVerifiedHistory(t *testing.T) {
 	}
 }
 
+func TestCurrentPodRowReasons(t *testing.T) {
+	input := currentSizingWorkload()
+	key := scanKey{input.namespace, input.kind, input.name, input.workload.containers[0].name}
+	evidence := scanBatchEvidence{ownerCoverage: OwnerCoverageCurrentPods, cpu: map[scanKey][]float64{key: {.05}}}
+	rows := buildScanWorkload(input, evidence).Rows
+	if rows[0].RecommendationReason != "insufficient_history" || rows[1].RecommendationReason != "current_pod_samples_missing" {
+		t.Fatalf("short CPU history and missing memory samples should be distinct: %+v", rows)
+	}
+	input.workload.podIdentityIncomplete = true
+	evidence.cpu = nil
+	rows = buildScanWorkload(input, evidence).Rows
+	for _, row := range rows {
+		if row.RecommendationReason != "current_replicas_unverified" {
+			t.Fatalf("missing Pod verification reason: %+v", row)
+		}
+	}
+}
+
 func TestTunnelScanWithNoReadyCohortReportsWhyWithoutReadingUnattributedHistory(t *testing.T) {
 	w := currentSizingWorkload()
 	w.workload.podIdentityIncomplete = true
@@ -220,5 +242,63 @@ func TestTunnelScanWithNoReadyCohortReportsWhyWithoutReadingUnattributedHistory(
 	detail := currentPodRightsizingDetail(ctx, client, w)
 	if detail.SampleAvailable || !strings.Contains(detail.Reason, "ready Pods") || len(client.queries)+len(client.rangeQueries) != 0 {
 		t.Fatalf("unexpected detail or store reads: %+v, %+v", detail, client)
+	}
+}
+
+func TestCurrentPodRangeSplitsOversizedReplyWithoutLosingReplicas(t *testing.T) {
+	w := currentSizingWorkload()
+	now := time.Unix(60000000, 0)
+	a, b := w.workload.podIdentities[0], w.workload.podIdentities[1]
+	store := &fakeScanQuerier{rangeFn: func(q string) (*prom.QueryResult, error) {
+		if strings.Contains(q, a.UID) && strings.Contains(q, b.UID) {
+			return nil, fmt.Errorf("transport bound: %w", prom.ErrResponseTooLarge)
+		}
+		p, v := a, .1
+		if strings.Contains(q, b.UID) {
+			p, v = b, .2
+		}
+		return &prom.QueryResult{ResultType: "matrix", Series: []prom.Series{currentSizingSeries(p, now, 1, v)}}, nil
+	}}
+	e := queryCurrentPodRightsizing(context.Background(), store, w, now)
+	key := scanKey{w.namespace, w.kind, w.name, "app"}
+	if len(e.errors) != 0 || !slices.Equal(e.cpu[key], []float64{.2}) || len(store.rangeQueries) != 9 {
+		t.Fatalf("split reads %d: %+v", len(store.rangeQueries), e)
+	}
+}
+
+func TestCurrentPodRangeBudgetsLongNamespaceQueriesAndWidePods(t *testing.T) {
+	var targets []sizingPodTarget
+	for i := 0; i < sizingPodQueryChunk; i++ {
+		w := currentSizingWorkload()
+		w.namespace = strings.Repeat("n", 60) + fmt.Sprintf("%03d", i)
+		pod := prom.WorkloadPodIdentity{Name: fmt.Sprintf("pod-%d", i), UID: fmt.Sprintf("%08x-1111-2222-3333-444444444444", i)}
+		targets = append(targets, sizingPodTarget{identity: pod, workload: &w})
+	}
+	if len(url.QueryEscape(sizingPodRangeQuery("throttle", targets))) <= sizingQueryEncodedBytes {
+		t.Fatal("fixture must exceed the encoded request budget")
+	}
+	client := &fakeScanQuerier{rangeFn: func(q string) (*prom.QueryResult, error) {
+		if len(url.QueryEscape(q)) > sizingQueryEncodedBytes {
+			t.Errorf("encoded request size %d", len(url.QueryEscape(q)))
+		}
+		return &prom.QueryResult{ResultType: "matrix"}, nil
+	}}
+	ctx := context.Background()
+	now := time.Unix(60000000, 0)
+	if _, err := currentPodRangeValues(ctx, client, "throttle", targets, nil, now.Add(-rightsizingWindow), now); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.rangeQueries) < 2 {
+		t.Fatal("oversized URI was not split")
+	}
+	for _, tgt := range targets {
+		tgt.workload.workload.containers = make([]containerSpec, 20)
+	}
+	client.rangeQueries = nil
+	if _, err := currentPodRangeValues(ctx, client, "memory", targets, nil, now.Add(-rightsizingWindow), now); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.rangeQueries) != (len(targets)+2)/3 {
+		t.Fatalf("expected <=3 wide Pods per range, got %d requests", len(client.rangeQueries))
 	}
 }

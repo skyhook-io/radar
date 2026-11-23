@@ -465,9 +465,9 @@ func computeRightsizingScanProgress(ctx context.Context, client rightsizingScanQ
 				resp.Coverage.WorkloadsWithData++
 			} else if scope.State == ViewScopeCurrentPodUIDs && len(evidence.errors) == 0 {
 				if !hasCurrentPodSizingCohort(workload) {
-					appendScanWarning(&resp, "current_replicas_unverified", "Some workloads could not be measured because Radar could not verify a complete set of ready Pods matching their current template.")
+					appendScanWarning(&resp, reasonCurrentReplicasUnverified, "Some workloads could not be measured because Radar could not verify a complete set of ready Pods matching their current template.")
 				} else {
-					appendScanWarning(&resp, "current_pod_samples_missing", "For some workloads, no CPU or memory interval matched every current replica. Check that cAdvisor retains Pod UIDs in the id label, or configure the scope of your Prometheus store to use workload history.")
+					appendScanWarning(&resp, reasonCurrentPodSamplesMissing, "For some workloads, no CPU or memory interval matched every current replica. Check that cAdvisor retains Pod UIDs in the id label, or configure the scope of your Prometheus store to use workload history.")
 				}
 			}
 			if workloadHasUnavailableOOMEvidence(out) {
@@ -719,13 +719,28 @@ func scanSeriesKey(labels map[string]string) (scanKey, bool) {
 	return key, key.namespace != "" && key.kind != "" && key.workload != "" && key.container != ""
 }
 
+const (
+	reasonCurrentReplicasUnverified = "current_replicas_unverified"
+	reasonCurrentPodSamplesMissing  = "current_pod_samples_missing"
+)
+
 func buildScanWorkload(input scanWorkload, evidence scanBatchEvidence) RightsizingScanWorkload {
 	out := RightsizingScanWorkload{Kind: input.kind, Namespace: input.namespace, Name: input.name, Replicas: input.replicas, ScaledToZero: input.workload.scaledToZero, ManagedBy: input.workload.managedBy, Rows: make([]RightsizingRow, 0, len(input.workload.containers)*2)}
 	expected := int(rightsizingWindow/rightsizingStep) + 1
+	missingReason := ""
+	if evidence.ownerCoverage == OwnerCoverageCurrentPods {
+		missingReason = reasonCurrentPodSamplesMissing
+		if !hasCurrentPodSizingCohort(input) {
+			missingReason = reasonCurrentReplicasUnverified
+		}
+	}
 	for _, container := range input.workload.containers {
 		key := scanKey{namespace: input.namespace, kind: input.kind, workload: input.name, container: container.name}
 		for _, resourceName := range []string{"cpu", "memory"} {
 			row := buildScanRow(container, resourceName, key, expected, input.workload, evidence)
+			if row.Observed == nil && row.QueryError == "" {
+				row.RecommendationReason = missingReason
+			}
 			out.Rows = append(out.Rows, row)
 		}
 	}
@@ -762,9 +777,6 @@ func buildScanRow(container containerSpec, resourceName string, key scanKey, exp
 		return row
 	}
 	if len(series) == 0 {
-		if evidence.ownerCoverage == OwnerCoverageCurrentPods {
-			row.RecommendationReason = "insufficient_history"
-		}
 		return row
 	}
 	observed := percentile(series, 0.95)
