@@ -101,7 +101,7 @@ func TestKagentAgentSummaryUsesKagentReading(t *testing.T) {
 		},
 	})
 	s := summarizeUnstructured(agent)
-	if s.Status != "Egress not applied" || s.Ready != "Ready to start sessions" || s.Issue != "EgressPolicyNotFound" || s.Version != "a1b2c3d4e5f6" {
+	if s.Status != "Egress not applied" || s.Ready != "Ready to start sessions" || s.Issue != "KagentEgressNotApplied" || s.Version != "a1b2c3d4e5f6" {
 		t.Fatalf("summary = %+v", s)
 	}
 	elastic := agent.DeepCopy()

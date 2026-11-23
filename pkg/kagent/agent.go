@@ -76,7 +76,7 @@ func readAgentReady(u *unstructured.Unstructured, ready condition, now time.Time
 		if ready.reason == "ActorTemplateRetrying" {
 			lead = "Retrying a failed build of "
 		}
-		return preparing(ready, now, KindAgent, lead+what+agentSessions(rev, "until it is ready"), "kagent has been preparing "+what)
+		return preparing(ready, KindAgent, lead+what+agentSessions(rev, "until it is ready"), what)
 	}
 	if preparationFailedReasons[ready.reason] {
 		return agentFailed("Ready", ready, rev, preparationStep)
@@ -105,7 +105,11 @@ func agentBlocked(refs condition, rev AgentRevisions) Reading {
 	if rev.LatestSuccessful != "" {
 		severity, r.Tone = SeverityWarning, ToneAlert
 	}
-	r.finding = &Finding{Severity: severity, Reason: reasonOr(refs.reason, "ResolvedRefs=False"), Since: refs.since, SinceKnown: refs.sinceKnown,
+	reason := ReasonNoPreparedRevision
+	if rev.LatestSuccessful != "" {
+		reason = ReasonChangeBlocked
+	}
+	r.finding = &Finding{Severity: severity, Reason: reason, KagentReason: refs.reason, Since: refs.since, SinceKnown: refs.sinceKnown,
 		Message: sentence(r.Summary), Action: referenceStep(refs.message, "agent")}
 	return r
 }
@@ -120,27 +124,31 @@ func agentFailed(condType string, c condition, rev AgentRevisions, step func(str
 	}
 	summary += agentSessions(rev, "")
 	r := Reading{State: StateFailed, Tone: ToneUnhealthy, Text: "Failed", Summary: summary, Condition: condType, Reason: c.reason, Message: c.message, Since: c.since, SinceKnown: c.sinceKnown}
-	severity := SeverityCritical
+	severity, reason := SeverityCritical, ReasonNoPreparedRevision
 	if rev.LatestSuccessful != "" {
-		severity, r.Tone = SeverityWarning, ToneAlert
+		severity, reason, r.Tone = SeverityWarning, ReasonChangeFailed, ToneAlert
 	}
-	r.finding = &Finding{Severity: severity, Reason: reasonOr(c.reason, condType+"=False"), Since: c.since, SinceKnown: c.sinceKnown,
+	r.finding = &Finding{Severity: severity, Reason: reason, KagentReason: c.reason, Since: c.since, SinceKnown: c.sinceKnown,
 		Message: sentence(summary), Action: step(c.reason)}
 	return r
 }
 
-func preparing(ready condition, now time.Time, kind, summary, lead string) Reading {
+// preparing reads a revision kagent is building. Kubernetes keeps Ready's
+// transition time when only the reason changes, so an Agent blocked for an
+// hour and then fixed reads ActorTemplatePending with an hour-old time: that
+// time is when Ready last turned False, not when preparation began, so a
+// pending build claims no duration and raises no Issue. A retrying one is
+// kagent saying a golden build failed: a warning at once.
+func preparing(ready condition, kind, summary, what string) Reading {
 	r := Reading{State: StatePreparing, Tone: ToneDegraded, Text: "Preparing", Summary: summary, Condition: "Ready", Reason: ready.reason, Message: ready.message, Since: ready.since, SinceKnown: ready.sinceKnown}
-	if ready.sinceKnown {
-		if age := now.Sub(ready.since); age > IssueAfter {
-			r.Tone = ToneAlert
-			message := lead + " for " + formatAge(age)
-			if ready.message != "" {
-				message += ": " + ready.message
-			}
-			r.finding = &Finding{Severity: SeverityWarning, Reason: ready.reason, Since: ready.since, SinceKnown: true,
-				Message: sentence(message), Action: "Check kagent's controller logs and the " + kind + "'s ActorTemplate in Substrate."}
+	if ready.reason == "ActorTemplateRetrying" {
+		r.Tone = ToneAlert
+		message := "A golden build of " + what + " failed and kagent is retrying it"
+		if ready.message != "" {
+			message += ": " + ready.message
 		}
+		r.finding = &Finding{Severity: SeverityWarning, Reason: ReasonPreparationRetrying, KagentReason: ready.reason, Since: ready.since, SinceKnown: ready.sinceKnown,
+			Message: sentence(message), Action: "Check kagent's controller logs and the " + kind + "'s ActorTemplate in Substrate for why the build fails."}
 	}
 	return r
 }
@@ -155,7 +163,7 @@ func notReady(c condition, kind string) Reading {
 		text = "Not ready"
 	}
 	r := Reading{State: StateNotReady, Tone: ToneAlert, Text: text, Summary: summary, Condition: "Ready", Reason: c.reason, Message: c.message, Since: c.since, SinceKnown: c.sinceKnown}
-	r.finding = &Finding{Severity: SeverityWarning, Reason: reasonOr(c.reason, "Ready=False"), Since: c.since, SinceKnown: c.sinceKnown,
+	r.finding = &Finding{Severity: SeverityWarning, Reason: ReasonNotReady, KagentReason: c.reason, Since: c.since, SinceKnown: c.sinceKnown,
 		Message: sentence(summary), Action: "Check kagent's controller logs for this " + kind + "."}
 	return r
 }

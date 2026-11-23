@@ -31,11 +31,30 @@ const (
 	KindEgressPolicy        = "EgressPolicy"
 )
 
-// IssueAfter is how long an Agent or SandboxTemplate may stay Preparing, or
-// any kind may go unreported, before Radar's Issues raise it. Preparing builds
-// a golden snapshot, which pulls images and boots the runtime, so a shorter
-// window would make every cold image pull an incident.
+// IssueAfter is how long a kagent object may go unreported after it is
+// created before Radar's Issues raise it.
 const IssueAfter = 30 * time.Minute
+
+// Issue reasons. Radar names them rather than passing kagent's condition
+// reasons through: kagent's are generic words other operators use too
+// (DiscoveryFailed, ReferenceResolutionFailed), and the Issue's title and
+// category follow the reason. kagent's own reason stays on the condition,
+// which every surface keeps.
+const (
+	ReasonNoPreparedRevision     = "KagentNoPreparedRevision"
+	ReasonChangeBlocked          = "KagentChangeBlocked"
+	ReasonChangeFailed           = "KagentChangeFailed"
+	ReasonPreparationRetrying    = "KagentPreparationRetrying"
+	ReasonPreparationFailed      = "KagentPreparationFailed"
+	ReasonWorkerPoolMissing      = "KagentWorkerPoolMissing"
+	ReasonNotReady               = "KagentNotReady"
+	ReasonNotReported            = "KagentNotReported"
+	ReasonEgressNotApplied       = "KagentEgressNotApplied"
+	ReasonModelConfigRejected    = "KagentModelConfigRejected"
+	ReasonAPIKeySecretMissing    = "KagentAPIKeySecretMissing"
+	ReasonModelConfigRefsMissing = "KagentModelConfigReferenceMissing"
+	ReasonToolDiscoveryFailed    = "KagentToolDiscoveryFailed"
+)
 
 // Tone is the k8s-ui HealthLevel a reading presents with.
 type Tone string
@@ -105,13 +124,16 @@ type Egress struct {
 // Finding is one Issue a reading raises: Message is the cause, Action the
 // one next step.
 type Finding struct {
-	Severity    Severity
-	Reason      string
-	Message     string
-	Action      string
-	Since       time.Time
-	SinceKnown  bool
-	Fingerprint string
+	Severity Severity
+	// Reason is Radar's Issue reason (Reason* above); KagentReason is the
+	// condition reason kagent reported, when one did.
+	Reason       string
+	KagentReason string
+	Message      string
+	Action       string
+	Since        time.Time
+	SinceKnown   bool
+	Fingerprint  string
 }
 
 // IsGroup reports whether group is kagent's.
@@ -221,7 +243,7 @@ func notReported(u *unstructured.Unstructured, now time.Time, kind string) Readi
 		r.Since, r.SinceKnown = created, true
 		if age := now.Sub(created); age > IssueAfter {
 			r.finding = &Finding{
-				Severity: SeverityWarning, Reason: "NotReported", Since: created, SinceKnown: true,
+				Severity: SeverityWarning, Reason: ReasonNotReported, Since: created, SinceKnown: true,
 				Message: "kagent hasn't reported on this " + kind + " in the " + formatAge(age) + " since it was created.",
 				Action:  "Check that kagent's controller is running and watches this namespace.",
 			}
@@ -266,7 +288,7 @@ func (r Reading) Findings() []Finding {
 		if r.State == StateStale {
 			message = "Reported for an earlier generation. " + message
 		}
-		out = append(out, Finding{Severity: SeverityWarning, Reason: r.Egress.Reason, Message: message, Action: egressStep(r.Egress.Reason), Since: r.Egress.Since, SinceKnown: r.Egress.SinceKnown, Fingerprint: "egress"})
+		out = append(out, Finding{Severity: SeverityWarning, Reason: ReasonEgressNotApplied, KagentReason: r.Egress.Reason, Message: message, Action: egressStep(r.Egress.Reason), Since: r.Egress.Since, SinceKnown: r.Egress.SinceKnown, Fingerprint: "egress"})
 	}
 	return out
 }

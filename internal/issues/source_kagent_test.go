@@ -8,6 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/kagent"
 )
 
@@ -71,11 +72,11 @@ func TestKagentAgentIssues(t *testing.T) {
 	if issues := got["preparing"]; len(issues) != 0 {
 		t.Errorf("preparing within the grace period raised %+v", issues)
 	}
-	if issues := got["blocked"]; len(issues) != 1 || issues[0].Severity != SeverityCritical || issues[0].Reason != "ReferenceResolutionFailed" ||
+	if issues := got["blocked"]; len(issues) != 1 || issues[0].Severity != SeverityCritical || issues[0].Reason != kagent.ReasonNoPreparedRevision || issues[0].Category != issuesapi.CategoryAgentConfiguration ||
 		issues[0].Action != "Create ModelConfig agents/gpt or point the agent at an existing one." || strings.Contains(issues[0].Message, "Create ModelConfig") {
-		t.Errorf("blocked = %+v, want one critical ReferenceResolutionFailed with the cause in message and the step in action", issues)
+		t.Errorf("blocked = %+v, want one critical KagentNoPreparedRevision (agent configuration) with the cause in message and the step in action", issues)
 	}
-	if issues := got["ready-egress"]; len(issues) != 1 || issues[0].Severity != SeverityWarning || issues[0].Reason != "EgressPolicyNotFound" || issues[0].Fingerprint != "egress" {
+	if issues := got["ready-egress"]; len(issues) != 1 || issues[0].Severity != SeverityWarning || issues[0].Reason != kagent.ReasonEgressNotApplied || issues[0].Fingerprint != "egress" {
 		t.Errorf("ready-egress = %+v, want one egress warning", issues)
 	}
 	if issues := got["blocked-egress"]; len(issues) != 2 || issues[0].ID == issues[1].ID {
@@ -99,7 +100,7 @@ func TestKagentRemoteMCPServerIssues(t *testing.T) {
 	if issues := got["off"]; len(issues) != 0 {
 		t.Errorf("discovery off raised %+v", issues)
 	}
-	if issues := got["failed"]; len(issues) != 1 || issues[0].Reason != "DiscoveryFailed" || issues[0].Severity != SeverityWarning {
-		t.Errorf("failed = %+v, want one DiscoveryFailed warning", issues)
+	if issues := got["failed"]; len(issues) != 1 || issues[0].Reason != kagent.ReasonToolDiscoveryFailed || issues[0].Severity != SeverityWarning {
+		t.Errorf("failed = %+v, want one KagentToolDiscoveryFailed warning", issues)
 	}
 }

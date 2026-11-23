@@ -73,6 +73,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   missing_config_ref: 'Missing reference',
   pdb_blocks_evictions: 'Evictions blocked',
   secret_sync_failed: 'Secret sync failed',
+  agent_configuration: 'Agent configuration',
   service_no_endpoints: 'No endpoints',
   service_mixed_backends: 'Mixed Service backends',
   ingress_backend_missing: 'Ingress backend missing',
@@ -192,6 +193,20 @@ const REASON_TITLE: Record<string, string> = {
   KueueInvalidWorkload: "Kueue can't admit the run's spec",
   AgentSandboxTemplateNotFound: 'Warm pool template not found',
   AgentSandboxNotReported: 'Controller has not reported on it',
+  // kagent (pkg/kagent Reason*): each names what it means for sessions.
+  KagentNoPreparedRevision: 'No session can start',
+  KagentChangeBlocked: 'Latest change blocked',
+  KagentChangeFailed: 'Latest change failed',
+  KagentPreparationRetrying: 'Golden build failing, kagent retrying',
+  KagentPreparationFailed: 'Sandbox preparation failed',
+  KagentWorkerPoolMissing: 'WorkerPool not found',
+  KagentNotReady: 'kagent reports it not ready',
+  KagentNotReported: 'kagent has not reported on it',
+  KagentEgressNotApplied: 'Egress grants not applied',
+  KagentModelConfigRejected: 'ModelConfig not accepted',
+  KagentAPIKeySecretMissing: 'API key Secret missing',
+  KagentModelConfigReferenceMissing: 'ModelConfig reference missing',
+  KagentToolDiscoveryFailed: 'Tool discovery failed',
 };
 
 /** The title a reason has wherever it is shown, when its category's label would name the wrong operation. */

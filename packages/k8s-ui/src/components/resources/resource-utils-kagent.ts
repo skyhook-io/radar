@@ -8,9 +8,6 @@ import { isApiGroup } from './resource-utils-cnpg'
 
 export const KAGENT_GROUP = 'api.kagent.dev'
 
-/** Mirrors pkg/kagent IssueAfter: how long Preparing reads as in progress before it reads as late. */
-export const KAGENT_ISSUE_AFTER_MS = 30 * 60 * 1000
-
 export type KagentState =
   | 'deleting' | 'notReported' | 'stale' | 'ready' | 'preparing' | 'blocked' | 'failed' | 'notReady' | 'unknown' | 'discoveryOff'
 
@@ -126,9 +123,11 @@ function fromCondition(condition: string, c: Condition) {
 const PREPARING_REASONS = new Set(['ActorTemplatePending', 'ActorTemplateRetrying'])
 const PREPARATION_FAILED_REASONS = new Set(['ActorTemplateRejected', 'ActorTemplateConflict', 'RuntimePreparationFailed'])
 
-function preparing(ready: Condition & { since?: number }, summary: string, now: number): KagentReading {
-  const late = ready.since !== undefined && now - ready.since > KAGENT_ISSUE_AFTER_MS
-  return { state: 'preparing', tone: late ? 'alert' : 'degraded', text: 'Preparing', summary, ...fromCondition('Ready', ready) }
+// Mirrors pkg/kagent preparing: Ready's transition time survives a reason
+// change, so a pending build claims no duration; a retrying one (a golden
+// build failed) reads orange at once.
+function preparing(ready: Condition & { since?: number }, summary: string): KagentReading {
+  return { state: 'preparing', tone: ready.reason === 'ActorTemplateRetrying' ? 'alert' : 'degraded', text: 'Preparing', summary, ...fromCondition('Ready', ready) }
 }
 
 function notReady(c: Condition): KagentReading {
@@ -159,7 +158,7 @@ function agentSessions(rev: KagentAgentRevisions, otherwise: string): string {
   return `; no session can start${otherwise ? ` ${otherwise}` : ''}`
 }
 
-function readAgentReady(agent: any, ready: Condition & { since?: number }, now: number): KagentReading {
+function readAgentReady(agent: any, ready: Condition & { since?: number }): KagentReading {
   const rev = getKagentAgentRevisions(agent)
   if (ready.status === 'True') return { state: 'ready', tone: 'healthy', text: 'Ready', summary: 'Ready to start sessions', ...fromCondition('Ready', ready) }
   if (ready.status !== 'False') return { state: 'unknown', tone: 'unknown', text: 'Unknown', summary: "kagent can't tell whether the agent is ready", ...fromCondition('Ready', ready) }
@@ -173,7 +172,7 @@ function readAgentReady(agent: any, ready: Condition & { since?: number }, now: 
   if (PREPARING_REASONS.has(ready.reason)) {
     const what = rev.desired ? `revision ${shortRevision(rev.desired)}` : 'the next revision'
     const lead = ready.reason === 'ActorTemplateRetrying' ? 'Retrying a failed build of ' : 'Preparing '
-    return preparing(ready, `${lead}${what}${agentSessions(rev, 'until it is ready')}`, now)
+    return preparing(ready, `${lead}${what}${agentSessions(rev, 'until it is ready')}`)
   }
   if (PREPARATION_FAILED_REASONS.has(ready.reason)) return agentFailed('Ready', ready, rev)
   return notReady(ready)
@@ -185,11 +184,12 @@ function agentFailed(condition: string, c: Condition, rev: KagentAgentRevisions)
   return { state: 'failed', tone: rev.latestSuccessful ? 'alert' : 'unhealthy', text: 'Failed', summary, ...fromCondition(condition, c) }
 }
 
-export function readKagentAgent(agent: any, now = Date.now()): KagentReading {
+// `_now` is kept for callers: no reading depends on the clock today.
+export function readKagentAgent(agent: any, _now = Date.now()): KagentReading {
   if (agent?.metadata?.deletionTimestamp) return DELETING
   const ready = findCondition(agent, 'Ready')
   if (!ready.found) return NOT_REPORTED
-  const current = withEgress(readAgentReady(agent, ready, now), readEgress(agent))
+  const current = withEgress(readAgentReady(agent, ready), readEgress(agent))
   const observed = staleGeneration(agent, ready)
   return observed !== undefined ? staleOf(current, observed) : current
 }
@@ -198,7 +198,7 @@ export function readKagentAgent(agent: any, now = Date.now()): KagentReading {
 // SANDBOX TEMPLATE
 // ============================================================================
 
-export function readKagentSandboxTemplate(template: any, now = Date.now()): KagentReading {
+export function readKagentSandboxTemplate(template: any, _now = Date.now()): KagentReading {
   if (template?.metadata?.deletionTimestamp) return DELETING
   const ready = findCondition(template, 'Ready')
   if (!ready.found) return NOT_REPORTED
@@ -206,7 +206,7 @@ export function readKagentSandboxTemplate(template: any, now = Date.now()): Kage
   if (ready.status === 'True') current = { state: 'ready', tone: 'healthy', text: 'Ready', summary: 'Ready to start sandboxes', ...fromCondition('Ready', ready) }
   else if (ready.status !== 'False') current = { state: 'unknown', tone: 'unknown', text: 'Unknown', summary: "kagent can't tell whether the template is ready", ...fromCondition('Ready', ready) }
   else if (ready.reason === 'Preparing' || PREPARING_REASONS.has(ready.reason)) {
-    current = preparing(ready, ready.reason === 'ActorTemplateRetrying' ? 'Retrying a failed build of the sandbox runtime' : 'Preparing the sandbox runtime', now)
+    current = preparing(ready, ready.reason === 'ActorTemplateRetrying' ? 'Retrying a failed build of the sandbox runtime' : 'Preparing the sandbox runtime')
   } else if (ready.reason === 'WorkerPoolNotFound') {
     const pool = str(template?.spec?.substrate?.workerPoolRef?.name)
     const summary = pool ? `Blocked: WorkerPool ${template?.metadata?.namespace ?? ''}/${pool} not found` : `Blocked: ${ready.message}`
@@ -271,7 +271,7 @@ export function readKagentRemoteMCPServer(server: any): KagentReading {
     const n = getKagentDiscoveredTools(server).length
     current = { state: 'ready', tone: 'healthy', text: 'Ready', summary: `Discovered ${n === 1 ? '1 tool' : `${n} tools`}`, ...fromCondition('Accepted', accepted) }
   } else if (accepted.status === 'False' && (accepted.reason === 'DiscoveryFailed' || accepted.reason === 'InvalidDiscovery')) {
-    current = configProblem('failed', 'Discovery failed', 'Tool discovery failed', 'Accepted', accepted)
+    current = configProblem('failed', 'Discovery failed', "kagent's controller could not discover its tools", 'Accepted', accepted)
   } else if (accepted.status === 'False') {
     current = configProblem('notReady', accepted.reason || 'Not accepted', 'Not accepted', 'Accepted', accepted)
   } else current = { state: 'unknown', tone: 'unknown', text: 'Unknown', summary: "kagent can't tell whether discovery works", ...fromCondition('Accepted', accepted) }
@@ -337,6 +337,11 @@ export function kagentReference(ref: any, defaultKind: string, ownerNamespace: s
 /** A reference's key for a host's map of reads: namespace/name. */
 export function kagentRefKey(ref: KagentRef): string {
   return `${ref.namespace}/${ref.name}`
+}
+
+/** Whether a model reference names a kagent ModelConfig, the only kind Radar reads for it. */
+export function isKagentModelRef(ref: KagentRef | undefined): boolean {
+  return !!ref && ref.group === KAGENT_GROUP && ref.kind === 'ModelConfig'
 }
 
 /** Whether a tool binding's server reference names a kagent RemoteMCPServer, the only kind Radar reads for it. */

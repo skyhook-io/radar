@@ -3,6 +3,7 @@ package kagent
 import (
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -43,7 +44,7 @@ func readSandboxTemplateReady(u *unstructured.Unstructured, ready condition, now
 		if ready.reason == "ActorTemplateRetrying" {
 			summary = "Retrying a failed build of the sandbox runtime"
 		}
-		return preparing(ready, now, KindSandboxTemplate, summary, "kagent has been preparing the sandbox runtime")
+		return preparing(ready, KindSandboxTemplate, summary, "the sandbox runtime")
 	case ready.reason == "WorkerPoolNotFound":
 		pool, _, _ := unstructured.NestedString(u.Object, "spec", "substrate", "workerPoolRef", "name")
 		ref := u.GetNamespace() + "/" + pool
@@ -56,7 +57,7 @@ func readSandboxTemplateReady(u *unstructured.Unstructured, ready condition, now
 		if pool != "" {
 			step = "Create WorkerPool " + ref + " or point spec.substrate.workerPoolRef at an existing one."
 		}
-		r.finding = &Finding{Severity: SeverityCritical, Reason: ready.reason, Since: ready.since, SinceKnown: ready.sinceKnown, Message: sentence(summary), Action: step}
+		r.finding = &Finding{Severity: SeverityCritical, Reason: ReasonWorkerPoolMissing, KagentReason: ready.reason, Since: ready.since, SinceKnown: ready.sinceKnown, Message: sentence(summary), Action: step}
 		return r
 	case ready.reason == "PreparationFailed":
 		summary := "Failed"
@@ -64,7 +65,7 @@ func readSandboxTemplateReady(u *unstructured.Unstructured, ready condition, now
 			summary += ": " + ready.message
 		}
 		r := Reading{State: StateFailed, Tone: ToneUnhealthy, Text: "Failed", Summary: summary, Condition: "Ready", Reason: ready.reason, Message: ready.message, Since: ready.since, SinceKnown: ready.sinceKnown}
-		r.finding = &Finding{Severity: SeverityCritical, Reason: ready.reason, Since: ready.since, SinceKnown: ready.sinceKnown, Message: sentence(summary), Action: "Check kagent's controller logs for the cause."}
+		r.finding = &Finding{Severity: SeverityCritical, Reason: ReasonPreparationFailed, KagentReason: ready.reason, Since: ready.since, SinceKnown: ready.sinceKnown, Message: sentence(summary), Action: "Check kagent's controller logs for the cause."}
 		return r
 	}
 	return notReady(ready, KindSandboxTemplate)
@@ -86,9 +87,13 @@ func ReadModelConfig(u *unstructured.Unstructured, now time.Time) Reading {
 	var current Reading
 	switch {
 	case accepted.status == "False":
-		current = configProblem(StateFailed, "Rejected", "Not accepted", "Accepted", accepted, "Fix the ModelConfig's spec; agents using it stay blocked until kagent accepts it.")
+		current = configProblem(StateFailed, "Rejected", "Not accepted", "Accepted", accepted, ReasonModelConfigRejected, "Fix the ModelConfig's spec; agents using it stay blocked until kagent accepts it.")
 	case refs.status == "False":
-		current = configProblem(StateBlocked, "Blocked", "References not resolved", "ResolvedRefs", refs, modelConfigStep(u, refs))
+		reason := ReasonModelConfigRefsMissing
+		if strings.HasPrefix(refs.reason, "APIKeySecret") {
+			reason = ReasonAPIKeySecretMissing
+		}
+		current = configProblem(StateBlocked, "Blocked", "References not resolved", "ResolvedRefs", refs, reason, modelConfigStep(u, refs))
 	case accepted.status == "True" && refs.status == "True":
 		current = Reading{State: StateReady, Tone: ToneHealthy, Text: "Accepted", Summary: "Accepted; its Secrets and ConfigMaps resolve", Condition: "ResolvedRefs", Reason: refs.reason, Message: refs.message, Since: refs.since, SinceKnown: refs.sinceKnown}
 	default:
@@ -123,13 +128,13 @@ func modelConfigStep(u *unstructured.Unstructured, refs condition) string {
 	return "Create the Secret or ConfigMap kagent names, or change the reference."
 }
 
-func configProblem(state State, text, lead, condType string, c condition, step string) Reading {
+func configProblem(state State, text, lead, condType string, c condition, reason, step string) Reading {
 	summary := lead
 	if c.message != "" {
 		summary += ": " + c.message
 	}
 	r := Reading{State: state, Tone: ToneAlert, Text: text, Summary: summary, Condition: condType, Reason: c.reason, Message: c.message, Since: c.since, SinceKnown: c.sinceKnown}
-	r.finding = &Finding{Severity: SeverityWarning, Reason: reasonOr(c.reason, condType+"=False"), Since: c.since, SinceKnown: c.sinceKnown, Message: sentence(summary), Action: step}
+	r.finding = &Finding{Severity: SeverityWarning, Reason: reason, KagentReason: c.reason, Since: c.since, SinceKnown: c.sinceKnown, Message: sentence(summary), Action: step}
 	return r
 }
 
@@ -149,7 +154,7 @@ func ReadModelProviderConfig(u *unstructured.Unstructured, _ time.Time) Reading 
 	case "True":
 		current = Reading{State: StateReady, Tone: ToneHealthy, Text: "Ready", Summary: "Ready for model discovery", Condition: "Ready", Reason: ready.reason, Message: ready.message, Since: ready.since, SinceKnown: ready.sinceKnown}
 	case "False":
-		current = configProblem(StateNotReady, reasonOr(ready.reason, "Not ready"), "Not ready", "Ready", ready, "Check the provider endpoint and the discovery Secret it names.")
+		current = configProblem(StateNotReady, reasonOr(ready.reason, "Not ready"), "Not ready", "Ready", ready, ReasonNotReady, "Check the provider endpoint and the discovery Secret it names.")
 	default:
 		current = Reading{State: StateUnknown, Tone: ToneUnknown, Text: "Unknown", Summary: "kagent can't tell whether the provider is ready", Condition: "Ready", Reason: ready.reason, Message: ready.message}
 	}
@@ -181,15 +186,17 @@ func ReadRemoteMCPServer(u *unstructured.Unstructured, now time.Time) Reading {
 	case accepted.status == "True":
 		current = Reading{State: StateReady, Tone: ToneHealthy, Text: "Ready", Summary: "Discovered " + toolCount(DiscoveredTools(u)), Condition: "Accepted", Reason: accepted.reason, Message: accepted.message, Since: accepted.since, SinceKnown: accepted.sinceKnown}
 	case accepted.status == "False" && (accepted.reason == "DiscoveryFailed" || accepted.reason == "InvalidDiscovery"):
-		// An Agent that uses it still reads Ready: kagent drops the tools it
-		// can't discover, so this Issue is where the failure shows.
-		step := "Agents that use it run without its tools; check its URL and credentials, and that kagent's controller can reach it."
+		// An Agent that uses it still reads Ready, so this Issue is where the
+		// failure shows. This is the controller's discovery; each agent
+		// runtime discovers on every invocation and omits the server's tools
+		// when its own attempt fails, which Radar can't see.
+		step := "Check its URL and credentials, and that kagent can reach it. While discovery fails, agents' runtimes omit its tools."
 		if accepted.reason == "InvalidDiscovery" {
-			step = "Agents that use it run without its tools; check the tool list it returns, which kagent rejected."
+			step = "Check the tool list it returns; kagent's controller rejected it and publishes no tools for this server."
 		}
-		current = configProblem(StateFailed, "Discovery failed", "Tool discovery failed", "Accepted", accepted, step)
+		current = configProblem(StateFailed, "Discovery failed", "kagent's controller could not discover its tools", "Accepted", accepted, ReasonToolDiscoveryFailed, step)
 	case accepted.status == "False":
-		current = configProblem(StateNotReady, reasonOr(accepted.reason, "Not accepted"), "Not accepted", "Accepted", accepted, "Check kagent's controller logs for this RemoteMCPServer.")
+		current = configProblem(StateNotReady, reasonOr(accepted.reason, "Not accepted"), "Not accepted", "Accepted", accepted, ReasonNotReady, "Check kagent's controller logs for this RemoteMCPServer.")
 	default:
 		current = Reading{State: StateUnknown, Tone: ToneUnknown, Text: "Unknown", Summary: "kagent can't tell whether discovery works", Condition: "Accepted", Reason: accepted.reason, Message: accepted.message}
 	}

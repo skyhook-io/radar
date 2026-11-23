@@ -10,11 +10,12 @@ import (
 )
 
 type vectorFinding struct {
-	Severity    Severity `json:"severity"`
-	Reason      string   `json:"reason"`
-	Message     string   `json:"message"`
-	Action      string   `json:"action"`
-	Fingerprint string   `json:"fingerprint"`
+	Severity     Severity `json:"severity"`
+	Reason       string   `json:"reason"`
+	Message      string   `json:"message"`
+	Action       string   `json:"action"`
+	KagentReason string   `json:"kagentReason"`
+	Fingerprint  string   `json:"fingerprint"`
 }
 
 type vector struct {
@@ -71,7 +72,7 @@ func TestStatusVectors(t *testing.T) {
 			}
 			for i, f := range got {
 				w := v.Want.Findings[i]
-				if f.Severity != w.Severity || f.Reason != w.Reason || f.Message != w.Message || f.Action != w.Action || f.Fingerprint != w.Fingerprint {
+				if f.Severity != w.Severity || f.Reason != w.Reason || f.Message != w.Message || f.Action != w.Action || f.KagentReason != w.KagentReason || f.Fingerprint != w.Fingerprint {
 					t.Errorf("finding %d = %+v, want %+v", i, f, w)
 				}
 			}
@@ -79,23 +80,25 @@ func TestStatusVectors(t *testing.T) {
 	}
 }
 
-// The grace period counts from Ready's transition, the time kagent began
-// preparing; just inside it there is no Issue, just past it a warning.
-func TestPreparingGraceBoundary(t *testing.T) {
-	since := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
-	u := &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": "api.kagent.dev/v1alpha3", "kind": "Agent",
-		"metadata": map[string]any{"name": "a", "namespace": "agents", "generation": int64(1)},
-		"status": map[string]any{"observedGeneration": int64(1), "desiredRevision": "abc", "conditions": []any{
-			map[string]any{"type": "Ready", "status": "False", "reason": "ActorTemplatePending", "observedGeneration": int64(1), "lastTransitionTime": since.Format(time.RFC3339)},
-		}},
-	}}
-	if f := ReadAgent(u, since.Add(IssueAfter)).Findings(); len(f) != 0 {
-		t.Fatalf("at the grace period: %+v, want no finding", f)
+// Kubernetes keeps Ready's transition time across a reason change, so a
+// pending build's time is not when preparation began: however old, it is no
+// Issue. A retrying build is one at once.
+func TestPreparingClaimsNoDuration(t *testing.T) {
+	agent := func(reason string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "api.kagent.dev/v1alpha3", "kind": "Agent",
+			"metadata": map[string]any{"name": "a", "namespace": "agents", "generation": int64(1)},
+			"status": map[string]any{"observedGeneration": int64(1), "desiredRevision": "abc", "conditions": []any{
+				map[string]any{"type": "Ready", "status": "False", "reason": reason, "observedGeneration": int64(1), "lastTransitionTime": "2026-11-01T00:00:00Z"},
+			}},
+		}}
 	}
-	f := ReadAgent(u, since.Add(IssueAfter+time.Minute)).Findings()
-	if len(f) != 1 || f[0].Severity != SeverityWarning || !f[0].SinceKnown || !f[0].Since.Equal(since) {
-		t.Fatalf("past the grace period: %+v, want one warning since %v", f, since)
+	now := time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC)
+	if r := ReadAgent(agent("ActorTemplatePending"), now); len(r.Findings()) != 0 || r.Tone != ToneDegraded {
+		t.Fatalf("pending: %+v, want no finding", r.Findings())
+	}
+	if f := ReadAgent(agent("ActorTemplateRetrying"), now).Findings(); len(f) != 1 || f[0].Reason != ReasonPreparationRetrying || f[0].Severity != SeverityWarning {
+		t.Fatalf("retrying: %+v, want one warning", f)
 	}
 }
 
