@@ -1560,4 +1560,3 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
     </DialogPortal>
   )
 }
-

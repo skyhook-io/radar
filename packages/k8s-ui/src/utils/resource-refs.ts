@@ -40,4 +40,3 @@ export function collectServingRefs(relationships: Relationships | undefined): Re
     ...(relationships.routedFrom ?? []),
   ])
 }
-
