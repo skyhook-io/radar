@@ -17,7 +17,6 @@ import (
 	"github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/k8score"
-	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/rightsizing"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -30,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/kubernetes"
+	resourcehelper "k8s.io/component-helpers/resource"
 	"k8s.io/utils/ptr"
 )
 
@@ -245,11 +245,11 @@ var (
 
 // Status describes an earlier observation. Check the live Pods and revision identities too.
 func verifiedSizingPods(ctx context.Context, client kubernetes.Interface, owner *unstructured.Unstructured, scope rightsizing.Scope, template corev1.PodTemplateSpec, selector labels.Selector) ([]corev1.Pod, error) {
-	opts := metav1.ListOptions{Limit: 513, LabelSelector: selector.String()}
+	opts := metav1.ListOptions{LabelSelector: selector.String()}
 	podOpts := opts
 	podOpts.FieldSelector = "status.phase!=Failed,status.phase!=Succeeded"
 	ns := owner.GetNamespace()
-	list, err := client.CoreV1().Pods(ns).List(ctx, podOpts)
+	candidates, err := listSizingCandidates(ctx, podOpts, client.CoreV1().Pods(ns).List, func(l *corev1.PodList) []corev1.Pod { return l.Items })
 	if err != nil {
 		return nil, err
 	}
@@ -257,19 +257,16 @@ func verifiedSizingPods(ctx context.Context, client kubernetes.Interface, owner 
 	setUIDs := map[types.UID]string{}
 	switch scope.Kind {
 	case "Deployment":
-		sets, err := client.AppsV1().ReplicaSets(ns).List(ctx, opts)
+		sets, err := listSizingCandidates(ctx, opts, client.AppsV1().ReplicaSets(ns).List, func(l *appsv1.ReplicaSetList) []appsv1.ReplicaSet { return l.Items })
 		if err != nil {
 			return nil, err
-		}
-		if sets.Continue != "" || len(sets.Items) > 512 {
-			return nil, errSizingLimit
 		}
 		desired := template.DeepCopy()
 		delete(desired.Labels, appsv1.DefaultDeploymentUniqueLabelKey)
 		var current []*appsv1.ReplicaSet
-		for i := range sets.Items {
-			rs := &sets.Items[i]
-			if !sizingControllerRef(metav1.GetControllerOf(rs), owner.GetUID(), scope.Kind, scope.Name) {
+		for i := range sets {
+			rs := &sets[i]
+			if !k8s.ControllerMatchesIdentity(metav1.GetControllerOf(rs), scope.Kind, scope.Name, "apps", owner.GetUID()) {
 				continue
 			}
 			setUIDs[rs.UID] = rs.Name
@@ -295,15 +292,12 @@ func verifiedSizingPods(ctx context.Context, client kubernetes.Interface, owner 
 			return nil, err
 		}
 	}
-	if list.Continue != "" || len(list.Items) > 512 {
-		return nil, errSizingLimit
-	}
 	if !sizingControllerReady(owner, scope.Kind, scope.Replicas) {
 		return nil, errSizingRollout
 	}
 	pods := make([]corev1.Pod, 0)
-	for i := range list.Items {
-		p := &list.Items[i]
+	for i := range candidates {
+		p := &candidates[i]
 		if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
 			continue
 		}
@@ -312,10 +306,10 @@ func verifiedSizingPods(ctx context.Context, client kubernetes.Interface, owner 
 			continue
 		}
 		if scope.Kind == "Deployment" {
-			if rsName, ok := setUIDs[ref.UID]; !ok || !sizingControllerRef(ref, ref.UID, "ReplicaSet", rsName) {
+			if rsName, ok := setUIDs[ref.UID]; !ok || !k8s.ControllerMatchesIdentity(ref, "ReplicaSet", rsName, "apps", ref.UID) {
 				continue
 			}
-		} else if !sizingControllerRef(ref, owner.GetUID(), scope.Kind, scope.Name) {
+		} else if !k8s.ControllerMatchesIdentity(ref, scope.Kind, scope.Name, "apps", owner.GetUID()) {
 			continue
 		}
 		if revision == "" || p.Labels[revisionLabel] != revision || p.DeletionTimestamp != nil || p.Status.Phase != corev1.PodRunning ||
@@ -333,6 +327,29 @@ func verifiedSizingPods(ctx context.Context, client kubernetes.Interface, owner 
 	return pods, nil
 }
 
+// A filtered Kubernetes page can be empty and still carry a continuation token.
+func listSizingCandidates[T any, L metav1.ListInterface](ctx context.Context, opts metav1.ListOptions, list func(context.Context, metav1.ListOptions) (L, error), items func(L) []T) ([]T, error) {
+	const maxItems = 512
+	opts.Limit = maxItems + 1
+	var candidates []T
+	for range 64 {
+		page, err := list(ctx, opts)
+		if err != nil {
+			return nil, err
+		}
+		batch := items(page)
+		if len(candidates)+len(batch) > maxItems {
+			return nil, errSizingLimit
+		}
+		candidates = append(candidates, batch...)
+		opts.Continue = page.GetContinue()
+		if opts.Continue == "" {
+			return candidates, nil
+		}
+	}
+	return nil, errors.New("candidate inventory did not finish within the page budget")
+}
+
 // A controller can retain revisions whose labels changed. Page through the
 // namespace as the caller and keep only identity metadata for this DaemonSet.
 func sizingDaemonRevision(ctx context.Context, client kubernetes.Interface, owner *unstructured.Unstructured) (string, error) {
@@ -347,7 +364,7 @@ func sizingDaemonRevision(ctx context.Context, client kubernetes.Interface, owne
 		for i := range revisions.Items {
 			r := &revisions.Items[i]
 			ref := metav1.GetControllerOf(r)
-			if !sizingControllerRef(ref, owner.GetUID(), "DaemonSet", owner.GetName()) {
+			if !k8s.ControllerMatchesIdentity(ref, "DaemonSet", owner.GetName(), "apps", owner.GetUID()) {
 				continue
 			}
 			if len(records) >= 512 {
@@ -364,10 +381,6 @@ func sizingDaemonRevision(ctx context.Context, client kubernetes.Interface, owne
 		}
 	}
 	return "", errSizingLimit
-}
-
-func sizingControllerRef(ref *metav1.OwnerReference, uid types.UID, kind, name string) bool {
-	return ref != nil && uid != "" && ref.UID == uid && ref.Kind == kind && ref.Name == name && resourceid.GroupFromAPIVersion(ref.APIVersion) == "apps"
 }
 
 func sizingControllerReady(owner *unstructured.Unstructured, kind string, desired int) bool {
@@ -389,9 +402,6 @@ func sizingControllerReady(owner *unstructured.Unstructured, kind string, desire
 }
 
 func sizingPodMatches(p *corev1.Pod, spec corev1.PodSpec) bool {
-	if !equality.Semantic.DeepEqual(sizingResources(p.Spec.Resources), sizingResources(spec.Resources)) {
-		return false
-	}
 	match := func(desired, actual []corev1.Container) bool {
 		// With a shared Pod limit, admission-injected containers can use the
 		// budget the sizing policy would otherwise assign to a template container.
@@ -412,7 +422,35 @@ func sizingPodMatches(p *corev1.Pod, spec corev1.PodSpec) bool {
 		}
 		return true
 	}
-	return match(spec.Containers, p.Spec.Containers) && match(spec.InitContainers, p.Spec.InitContainers)
+	return match(spec.Containers, p.Spec.Containers) && match(spec.InitContainers, p.Spec.InitContainers) && sizingPodResourcesMatch(p, spec.Resources)
+}
+
+func sizingPodResourcesMatch(p *corev1.Pod, template *corev1.ResourceRequirements) bool {
+	actual, expected := sizingResources(p.Spec.Resources), sizingResources(template)
+	if equality.Semantic.DeepEqual(actual, expected) {
+		return true
+	}
+	if expected == nil || len(expected.Limits) == 0 {
+		return false
+	}
+	// With a Pod limit, Kubernetes defaults missing Pod requests from admitted
+	// container requests, then from the Pod limit. Other Pod defaults vary by
+	// API server feature gate, so leave those differences unverified.
+	containerRequests := resourcehelper.AggregateContainerRequests(p, resourcehelper.PodResourcesOptions{})
+	if expected.Requests == nil {
+		expected.Requests = corev1.ResourceList{}
+	}
+	for _, name := range []corev1.ResourceName{corev1.ResourceCPU, corev1.ResourceMemory} {
+		if _, exists := expected.Requests[name]; exists {
+			continue
+		}
+		if q, ok := containerRequests[name]; ok {
+			expected.Requests[name] = q
+		} else if q, ok := expected.Limits[name]; ok {
+			expected.Requests[name] = q
+		}
+	}
+	return equality.Semantic.DeepEqual(actual, expected)
 }
 
 func readSizingHPA(ctx context.Context, client kubernetes.Interface, scope *rightsizing.Scope) {

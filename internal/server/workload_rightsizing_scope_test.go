@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -215,7 +216,19 @@ func TestRightsizingScopeDeploymentRejectsStaleReplicaSet(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		pods, err := verifiedSizingPods(t.Context(), fake.NewSimpleClientset(rs, pod), obj, scope, tmpl, selector)
+		client := fake.NewSimpleClientset(rs, pod)
+		client.PrependReactor("list", "*", func(a k8stesting.Action) (bool, runtime.Object, error) {
+			opts := a.(k8stesting.ListActionImpl).GetListOptions()
+			if opts.Continue == "next" {
+				return false, nil, nil
+			}
+			first := metav1.ListMeta{Continue: "next"}
+			if a.Matches("list", "pods") {
+				return true, &corev1.PodList{ListMeta: first}, nil
+			}
+			return true, &appsv1.ReplicaSetList{ListMeta: first}, nil
+		})
+		pods, err := verifiedSizingPods(t.Context(), client, obj, scope, tmpl, selector)
 		if changed && !errors.Is(err, errSizingRollout) {
 			t.Fatalf("stale ReplicaSet accepted: %#v %v", pods, err)
 		}
@@ -302,4 +315,89 @@ func TestSizingPodMatchesDefaultedContainerRequest(t *testing.T) {
 	if sizingPodMatches(&pod, template) {
 		t.Fatal("admission override must invalidate scope")
 	}
+}
+
+func TestSizingPodMatchesDefaultedPodRequests(t *testing.T) {
+	cpu := func(q string) corev1.ResourceList {
+		return corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(q)}
+	}
+	template := corev1.PodSpec{
+		Resources: &corev1.ResourceRequirements{Limits: corev1.ResourceList{
+			corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("64Mi"),
+		}},
+		Containers: []corev1.Container{{Name: "app", Resources: corev1.ResourceRequirements{Requests: cpu("100m")}}},
+		InitContainers: []corev1.Container{
+			{Name: "proxy", RestartPolicy: ptr.To(corev1.ContainerRestartPolicyAlways), Resources: corev1.ResourceRequirements{Requests: cpu("50m")}},
+			{Name: "setup", Resources: corev1.ResourceRequirements{Requests: cpu("200m")}},
+		},
+	}
+	pod := corev1.Pod{Spec: *template.DeepCopy()}
+	pod.Spec.Resources.Requests = corev1.ResourceList{
+		corev1.ResourceCPU: resource.MustParse("250m"), corev1.ResourceMemory: resource.MustParse("64Mi"),
+	}
+	if !sizingPodMatches(&pod, template) {
+		t.Fatal("expected the larger init cohort for CPU and the Pod limit for memory")
+	}
+	if template.Resources.Requests != nil {
+		t.Fatal("a derived request must not become a fixed template request")
+	}
+	t.Run("changed Pod request", func(t *testing.T) {
+		changed := pod.DeepCopy()
+		changed.Spec.Resources.Requests[corev1.ResourceCPU] = resource.MustParse("300m")
+		if sizingPodMatches(changed, template) {
+			t.Fatal("accepted an admission override")
+		}
+	})
+	t.Run("changed Pod limit", func(t *testing.T) {
+		changed := pod.DeepCopy()
+		changed.Spec.Resources.Limits[corev1.ResourceCPU] = resource.MustParse("2")
+		if sizingPodMatches(changed, template) {
+			t.Fatal("accepted a different shared budget")
+		}
+	})
+	t.Run("explicit Pod request", func(t *testing.T) {
+		explicit := template.DeepCopy()
+		explicit.Resources.Requests = cpu("0")
+		if sizingPodMatches(&pod, *explicit) {
+			t.Fatal("ignored the explicit zero in the template")
+		}
+	})
+	t.Run("changed container consistent with changed Pod request", func(t *testing.T) {
+		changed := pod.DeepCopy()
+		changed.Spec.Containers[0].Resources.Requests = cpu("300m")
+		changed.Spec.Resources.Requests[corev1.ResourceCPU] = resource.MustParse("350m")
+		if sizingPodMatches(changed, template) {
+			t.Fatal("accepted a changed app container")
+		}
+	})
+}
+
+func TestSizingCandidateListBudgets(t *testing.T) {
+	items := func(l *corev1.PodList) []corev1.Pod { return l.Items }
+	t.Run("cap across pages", func(t *testing.T) {
+		list := func(_ context.Context, opts metav1.ListOptions) (*corev1.PodList, error) {
+			if opts.Continue == "" {
+				return &corev1.PodList{Items: make([]corev1.Pod, 512), ListMeta: metav1.ListMeta{Continue: "next"}}, nil
+			}
+			if opts.Limit != 513 {
+				t.Fatalf("initial query parameters changed for the final page: limit = %d", opts.Limit)
+			}
+			return &corev1.PodList{Items: []corev1.Pod{{}}}, nil
+		}
+		got, err := listSizingCandidates(t.Context(), metav1.ListOptions{}, list, items)
+		if !errors.Is(err, errSizingLimit) || got != nil {
+			t.Fatalf("oversized list returned items=%d, error=%v", len(got), err)
+		}
+	})
+	t.Run("empty pages exhaust read budget", func(t *testing.T) {
+		calls := 0
+		list := func(context.Context, metav1.ListOptions) (*corev1.PodList, error) {
+			calls++
+			return &corev1.PodList{ListMeta: metav1.ListMeta{Continue: "more"}}, nil
+		}
+		got, err := listSizingCandidates(t.Context(), metav1.ListOptions{}, list, items)
+		if calls != 64 || got != nil || err == nil || errors.Is(err, errSizingLimit) {
+			t.Fatalf("incomplete list returned items=%d, calls=%d, error=%v", len(got), calls, err)
+		}
+	})
 }
