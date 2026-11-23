@@ -39,6 +39,30 @@ func TestResetMetricsForContextSwitch(t *testing.T) {
 	}
 }
 
+func TestRetiredBindingDiagnostics(t *testing.T) {
+	ResetStore()
+	t.Cleanup(ResetStore)
+	t.Cleanup(ResetMetricsForContextSwitch)
+	retired := CaptureStore()
+	ResetStore()
+	ResetMetricsForContextSwitch()
+	current := CaptureStore()
+
+	for _, b := range []*StoreBinding{current, retired} {
+		b.IncrementReceived("Pod")
+		b.IncrementRecorded("Pod")
+		b.RecordDrop("Pod", "shop", "web", DropReasonChannelFull, "update", "same-name")
+	}
+	retired.RecordDrop("Pod", "shop", "web", DropReasonStoreFailed, "delete", "same-name")
+
+	snap := GetMetrics().GetSnapshot()
+	if snap.Counters.Received["Pod"] != 1 || snap.Counters.Recorded["Pod"] != 1 ||
+		snap.Counters.Dropped[DropReasonChannelFull] != 1 || len(snap.Counters.Dropped) != 1 ||
+		len(snap.RecentDrops) != 1 || !LastStoreFailure("Pod").IsZero() {
+		t.Fatalf("expected only the current binding's diagnostics, got %+v, last store failure %v", snap, LastStoreFailure("Pod"))
+	}
+}
+
 // Drops are stamped with the cluster they came from (captured at wiring time,
 // not read live), and read paths keep only the active cluster's — so a straggler
 // drop recorded after a switch, stamped with the OLD cluster, is filtered out

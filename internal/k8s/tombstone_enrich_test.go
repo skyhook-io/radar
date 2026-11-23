@@ -99,7 +99,7 @@ func TestK8sEvent_TombstoneEnrichesAfterDelete(t *testing.T) {
 
 	// Late K8s event; live cache is empty (GetResourceCache()==nil), so
 	// enrichment must come from the tombstone.
-	state.recordK8sEventToTimeline(timeline.GetStore(), ActiveClusterContext(), k8sEventPod("web-abc", "Killing"))
+	state.recordK8sEventToTimeline(timeline.CaptureStore(), ActiveClusterContext(), k8sEventPod("web-abc", "Killing"))
 
 	got := k8sEventFromStore(t)
 	if got.Owner == nil || got.Owner.Kind != "ReplicaSet" || got.Owner.Name != "web-rs" {
@@ -119,7 +119,7 @@ func TestK8sEvent_MissStaysSilentNull(t *testing.T) {
 	state := newConnectionCache()
 	initMemoryTimeline(t)
 
-	state.recordK8sEventToTimeline(timeline.GetStore(), ActiveClusterContext(), k8sEventPod("ghost", "Killing"))
+	state.recordK8sEventToTimeline(timeline.CaptureStore(), ActiveClusterContext(), k8sEventPod("ghost", "Killing"))
 
 	got := k8sEventFromStore(t)
 	if got.Owner != nil {
@@ -144,7 +144,7 @@ func TestK8sEvent_TombstoneFedOnAdd(t *testing.T) {
 	pod := tombstoneTestPod("web-new", created)
 	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Pod", "shop", "web-new", string(pod.UID), "add", nil, pod, nil, false)
 
-	state.recordK8sEventToTimeline(timeline.GetStore(), ActiveClusterContext(), k8sEventPod("web-new", "Started"))
+	state.recordK8sEventToTimeline(timeline.CaptureStore(), ActiveClusterContext(), k8sEventPod("web-new", "Started"))
 
 	got := k8sEventFromStore(t)
 	if got.Owner == nil || got.Owner.Name != "web-rs" {
@@ -170,7 +170,7 @@ func TestK8sEvent_FailedExtractDoesNotClobberTombstone(t *testing.T) {
 	// unwrap (not a metav1.Object, not a DeletedFinalStateUnknown).
 	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Pod", "shop", "web-abc", string(pod.UID), "delete", nil, "not-an-object", nil, false)
 
-	state.recordK8sEventToTimeline(timeline.GetStore(), ActiveClusterContext(), k8sEventPod("web-abc", "Killing"))
+	state.recordK8sEventToTimeline(timeline.CaptureStore(), ActiveClusterContext(), k8sEventPod("web-abc", "Killing"))
 
 	got := k8sEventFromStore(t)
 	if got.Owner == nil || got.Owner.Kind != "ReplicaSet" || got.Owner.Name != "web-rs" {

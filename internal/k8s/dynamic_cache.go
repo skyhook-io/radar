@@ -138,7 +138,7 @@ func (conn *Connection) configureDynamicCallbacks(cfg *k8score.DynamicCacheConfi
 	}
 	cfg.OnReceived = func(kind string) {
 		if lifetime.Err() == nil {
-			timeline.IncrementReceived(kind)
+			binding.IncrementReceived(kind)
 		}
 	}
 	cfg.OnChange = func(change ResourceChange, obj, oldObj any) {
@@ -148,7 +148,7 @@ func (conn *Connection) configureDynamicCallbacks(cfg *k8score.DynamicCacheConfi
 	}
 	cfg.OnDrop = func(kind, ns, name, reason, op string) {
 		if lifetime.Err() == nil {
-			timeline.RecordDrop(kind, ns, name, reason, op, cluster)
+			binding.RecordDrop(kind, ns, name, reason, op, cluster)
 		}
 	}
 }

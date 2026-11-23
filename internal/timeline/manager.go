@@ -327,6 +327,7 @@ func HistoryEvictedThrough() time.Time {
 // available after the informers start, so they capture the binding and resolve
 // its store for each change. ResetStore leaves old bindings on their own store.
 type StoreBinding struct {
+	retired                         atomic.Bool
 	store                           EventStore
 	deletedWhileUnavailable         map[string]struct{}
 	deletedWhileUnavailableOverflow bool
@@ -336,6 +337,10 @@ func CaptureStore() *StoreBinding {
 	globalStoreMu.Lock()
 	defer globalStoreMu.Unlock()
 	return globalStore
+}
+
+func (b *StoreBinding) Retired() bool {
+	return b.retired.Load()
 }
 
 func (b *StoreBinding) Store() EventStore {
@@ -366,6 +371,7 @@ func ResetStore() {
 	stopPostgresReconnect()
 
 	globalStoreMu.Lock()
+	globalStore.retired.Store(true)
 	store := globalStore.store
 	globalStore = &StoreBinding{}
 	observationStartNanos.Store(0)

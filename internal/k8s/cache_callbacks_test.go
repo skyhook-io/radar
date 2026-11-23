@@ -1,6 +1,8 @@
 package k8s
 
 import (
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -124,58 +126,96 @@ func (o *pausedInformerObject) GetResourceVersion() string {
 }
 
 func TestAdmittedInformerWriteAcrossSameNameSwitch(t *testing.T) {
-	for _, kind := range []string{"Pod", "Widget"} {
-		t.Run(kind, func(t *testing.T) {
-			t.Cleanup(SnapshotTestConnection())
-			a := &Connection{contextName: "shared-name"}
-			restoreTestConnection(a)
-			initMemoryTimeline(t)
-			t.Cleanup(timeline.ResetMetricsForContextSwitch)
-
-			storeA := timeline.GetStore()
-			var resource metav1.Object
-			var onChange func(ResourceChange, any, any)
-			if kind == "Pod" {
-				resource = tombstoneTestPod("from-a", time.Now())
-				var cfg k8score.CacheConfig
-				a.configureTypedCallbacks(&cfg, nil)
-				onChange = cfg.OnChange
-			} else {
-				resource = &unstructured.Unstructured{}
-				var cfg k8score.DynamicCacheConfig
-				a.configureDynamicCallbacks(&cfg)
-				onChange = cfg.OnChange
+	for _, backend := range []timeline.StoreType{timeline.StoreTypeMemory, timeline.StoreTypeSQLite, timeline.StoreTypePostgres} {
+		t.Run(string(backend), func(t *testing.T) {
+			cfg := timeline.StoreConfig{Type: backend}
+			switch backend {
+			case timeline.StoreTypeSQLite:
+				cfg.Path = filepath.Join(t.TempDir(), "timeline.db")
+			case timeline.StoreTypePostgres:
+				cfg.DSN = testPostgresDSN(t)
 			}
-			obj := &pausedInformerObject{Object: resource, admitted: make(chan struct{}), resume: make(chan struct{})}
-			obj.SetName("from-a")
-			obj.SetNamespace("shop")
-			done := make(chan struct{})
-			go func() {
-				defer close(done)
-				onChange(ResourceChange{Kind: kind, Operation: "delete", Namespace: "shop", Name: "from-a"}, obj, nil)
-			}()
-			<-obj.admitted
-			a.closeDynamicResourceCache()
-			a.closeResourceCache()
-			ResetResourceDiscovery()
-			initMemoryTimeline(t)
-			close(obj.resume)
-			<-done
-
-			if b := Current(); b == a || b.ContextName() != a.ContextName() {
-				t.Fatal("expected a replacement connection with the same context name")
-			}
-			if n := timeline.GetStore().Stats().TotalEvents; n != 0 {
-				t.Fatalf("replacement timeline contains %d row(s) from A", n)
-			}
-			if n := storeA.Stats().TotalEvents; n != 0 {
-				t.Fatalf("closed timeline accepted %d late row(s)", n)
-			}
-			// A write rejected by the retired store lost nothing for B, so it
-			// must not count against B's coverage.
-			if snap := timeline.GetMetrics().GetSnapshot(); len(snap.RecentDrops) != 0 || !timeline.LastStoreFailure(kind).IsZero() {
-				t.Fatalf("the retired write was recorded as a drop for the replacement: %+v", snap.RecentDrops)
+			for _, tc := range []struct{ kind, op string }{{"Pod", "delete"}, {"Widget", "delete"}, {"Pod", "update"}} {
+				t.Run(tc.kind+"/"+tc.op, func(t *testing.T) {
+					testAdmittedInformerWrite(t, cfg, tc.kind, tc.op)
+				})
 			}
 		})
+	}
+}
+
+func testAdmittedInformerWrite(t *testing.T, cfg timeline.StoreConfig, kind, op string) {
+	t.Cleanup(SnapshotTestConnection())
+	a := &Connection{contextName: "shared-name"}
+	restoreTestConnection(a)
+	resetStore := func() {
+		t.Helper()
+		timeline.ResetStore()
+		timeline.ResetMetricsForContextSwitch()
+		if err := timeline.InitStore(cfg); err != nil {
+			t.Fatal(err)
+		}
+		store := timeline.GetStore()
+		if store == nil || store.Stats().Degraded {
+			t.Fatalf("could not initialize %s timeline", cfg.Type)
+		}
+	}
+	t.Cleanup(timeline.ResetStore)
+	t.Cleanup(timeline.ResetMetricsForContextSwitch)
+	resetStore()
+
+	storeA := timeline.GetStore()
+	var resource metav1.Object
+	var onChange func(ResourceChange, any, any)
+	if kind == "Pod" {
+		resource = tombstoneTestPod("from-a", time.Now())
+		var cfg k8score.CacheConfig
+		a.configureTypedCallbacks(&cfg, nil)
+		onChange = cfg.OnChange
+	} else {
+		resource = &unstructured.Unstructured{}
+		var cfg k8score.DynamicCacheConfig
+		a.configureDynamicCallbacks(&cfg)
+		onChange = cfg.OnChange
+	}
+	obj := &pausedInformerObject{Object: resource, admitted: make(chan struct{}), resume: make(chan struct{})}
+	obj.SetName("from-a")
+	obj.SetNamespace("shop")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		var oldObj any
+		if op == "update" {
+			oldObj = resource
+		}
+		onChange(ResourceChange{Kind: kind, Operation: op, Namespace: "shop", Name: "from-a"}, obj, oldObj)
+	}()
+	<-obj.admitted
+	resume := sync.OnceFunc(func() {
+		close(obj.resume)
+		<-done
+	})
+	t.Cleanup(resume)
+	a.closeDynamicResourceCache()
+	a.closeResourceCache()
+	ResetResourceDiscovery()
+	resetStore()
+	resume()
+
+	if b := Current(); b == a || b.ContextName() != a.ContextName() {
+		t.Fatal("expected a replacement connection with the same context name")
+	}
+	if n := timeline.GetStore().Stats().TotalEvents; n != 0 {
+		t.Fatalf("replacement timeline contains %d row(s) from A", n)
+	}
+	if n := storeA.Stats().TotalEvents; n != 0 {
+		t.Fatalf("closed timeline accepted %d late row(s)", n)
+	}
+	// A write rejected by the retired store lost nothing for B, so it
+	// must not count against B's coverage.
+	snap := timeline.GetMetrics().GetSnapshot()
+	failure := timeline.LastStoreFailure(kind)
+	if len(snap.RecentDrops) != 0 || len(snap.Counters.Dropped) != 0 || len(snap.Counters.Recorded) != 0 || len(snap.Counters.Received) != 0 || !failure.IsZero() {
+		t.Fatalf("retired callback changed replacement diagnostics: %+v, last store failure: %v", snap, failure)
 	}
 }

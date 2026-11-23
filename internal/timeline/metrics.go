@@ -91,11 +91,15 @@ func GetMetrics() *EventMetrics {
 }
 
 // IncrementReceived increments the counter for received events by kind
-func IncrementReceived(kind string) {
+func (b *StoreBinding) IncrementReceived(kind string) {
 	m := GetMetrics()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.EventsReceived[kind]++
+	// Check under the metrics lock so a writer cannot pass the check, pause
+	// through ResetMetricsForContextSwitch, then increment the new counters.
+	if !b.Retired() {
+		m.EventsReceived[kind]++
+	}
 }
 
 // IncrementDropped increments the counter for dropped events by reason
@@ -107,11 +111,13 @@ func IncrementDropped(reason string) {
 }
 
 // IncrementRecorded increments the counter for recorded events by kind
-func IncrementRecorded(kind string) {
+func (b *StoreBinding) IncrementRecorded(kind string) {
 	m := GetMetrics()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.EventsRecorded[kind]++
+	if !b.Retired() {
+		m.EventsRecorded[kind]++
+	}
 }
 
 // GetStoreErrorCount returns the number of store write failures
@@ -136,9 +142,16 @@ func GetTotalDropCount() int64 {
 
 // RecordDrop records a dropped event with details for debugging
 func RecordDrop(kind, namespace, name, reason, operation, clusterContext string) {
+	CaptureStore().RecordDrop(kind, namespace, name, reason, operation, clusterContext)
+}
+
+func (b *StoreBinding) RecordDrop(kind, namespace, name, reason, operation, clusterContext string) {
 	m := GetMetrics()
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if b.Retired() {
+		return
+	}
 
 	m.EventsDropped[reason]++
 	if reason == DropReasonStoreFailed {
