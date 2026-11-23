@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
 import { MarkerType, Position, type Edge } from '@xyflow/react'
-import { collectGraphModel, frameGraphModel, labelText, type FlowNodeInput, type GraphNodeMapper } from './graph-model'
+import { collectGraphModel, frameGraphModel, labelText, lineLabelBox, type FlowNodeInput, type GraphNodeMapper } from './graph-model'
 import { writeSvg } from './graph-svg'
 
 const describeNode: GraphNodeMapper = ({ type, data }) => {
@@ -77,6 +77,16 @@ describe('collectGraphModel', () => {
     expect(model.boxes.map(b => b.id)).not.toContain('d')
     expect(model.boxes.map(b => b.id)).not.toContain('e')
     expect(model.lines.map(l => l.id)).toEqual(['a-b', 'b-c'])
+  })
+
+  it('covers a long edge label in the bounds', () => {
+    const stacked: FlowNodeInput[] = [node('top', 0, 0), node('bottom', 0, 400)]
+    const label = 'a label much wider than the nodes it sits between'
+    const model = collectGraphModel({ nodes: stacked, edges: [{ id: 'down', source: 'top', target: 'bottom', label }], describeNode, renderIcon })
+    const box = lineLabelBox(model.lines[0])!
+
+    expect(model.bounds.x).toBeLessThanOrEqual(box.x)
+    expect(model.bounds.x + model.bounds.width).toBeGreaterThanOrEqual(box.x + box.width)
   })
 
   it('renders each icon once and covers boxes and lines in the bounds', () => {

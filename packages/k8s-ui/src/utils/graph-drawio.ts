@@ -1,5 +1,5 @@
 import { midTruncate } from './format'
-import type { GraphBox, GraphGroupTone, GraphLine, GraphModel } from './graph-model'
+import { XML_FORBIDDEN, type GraphBox, type GraphGroupTone, type GraphLine, type GraphModel } from './graph-model'
 
 // draw.io's Kubernetes icon set: shape=mxgraph.kubernetes.icon2;prIcon=<name>.
 const K8S_ICON_STYLE = 'aspect=fixed;sketch=0;html=1;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;fillColor=#2875E2;strokeColor=#ffffff;points=[[0.005,0.63,0],[0.1,0.2,0],[0.9,0.2,0],[0.5,0,0],[0.995,0.63,0],[0.72,0.99,0],[0.5,1,0],[0.28,0.99,0]];shape=mxgraph.kubernetes.icon2;'
@@ -45,6 +45,7 @@ const CHAR_W = 6.5
 
 function attr(value: string): string {
   return value
+    .replace(XML_FORBIDDEN, '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -99,7 +100,8 @@ function vertexStyle(box: GraphBox, hasChildren: boolean): { style: string; x: n
   // A short box (a workload card) gets a smaller icon and no detail line, so its label stays inside it.
   const small = box.h < SMALL_BOX_H
   const scale = small ? SMALL_ICON_SCALE : 1
-  const value = htmlLabel([fit(box.name, box.w), fit(box.kindLabel, box.w), small ? undefined : fit(box.detail, box.w)])
+  const kindLine = box.kindLabel && box.count !== undefined ? `${box.kindLabel} (${box.count})` : box.kindLabel
+  const value = htmlLabel([fit(box.name, box.w), fit(kindLine, box.w), small ? undefined : fit(box.detail, box.w)])
   const x = box.x + (box.w - ICON_W * scale) / 2
   const network = box.category === 'database' && NETWORK_SHAPES[box.kind] ? 'storage' : NETWORK_SHAPES[box.kind]
   if (network) {
@@ -113,7 +115,7 @@ function vertexStyle(box: GraphBox, hasChildren: boolean): { style: string; x: n
 
 function edgeStyle(line: GraphLine): string {
   const arrow = line.arrow === null ? 'endArrow=none;' : 'endArrow=block;endFill=1;'
-  return `edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=${styleValue(line.color)};strokeWidth=${line.width};${line.dash ? 'dashed=1;' : ''}${arrow}fontSize=10;labelBackgroundColor=#FFFFFF;`
+  return `edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=${styleValue(line.color)};strokeWidth=${line.width};${line.dash ? 'dashed=1;' : ''}${arrow}fontSize=${line.labelStyle?.fontSize ?? 10};${line.labelStyle?.fontWeight && line.labelStyle.fontWeight >= 600 ? 'fontStyle=1;' : ''}labelBackgroundColor=${styleValue(line.labelStyle?.background ?? '#FFFFFF')};${line.labelStyle?.color ? `fontColor=${styleValue(line.labelStyle.color)};` : ''}`
 }
 
 /** Writes a graph as an uncompressed draw.io (.drawio) file. */

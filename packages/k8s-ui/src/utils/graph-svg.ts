@@ -1,5 +1,5 @@
 import { midTruncate } from './format'
-import type { GraphBox, GraphGroupTone, GraphLine, GraphModel, GraphRect, GraphStatus } from './graph-model'
+import { CHAR_RATIO, lineLabelBox, XML_FORBIDDEN, type GraphBox, type GraphGroupTone, type GraphLine, type GraphModel, type GraphRect, type GraphStatus } from './graph-model'
 
 export type GraphSvgTheme = 'light' | 'dark'
 
@@ -89,12 +89,11 @@ const STATUS_OUTLINE: Partial<Record<GraphStatus, { stroke: Paint; wash: Paint }
 
 const FONT = `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif`
 const PADDING = 24
-// Average glyph width as a share of the font size. Generous, so text stays inside its box.
-const CHAR_RATIO = 0.6
 const UPPER_RATIO = 0.72
 
 function esc(value: string): string {
   return value
+    .replace(XML_FORBIDDEN, '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -215,8 +214,12 @@ function drawResource(box: GraphBox, p: Palette): string {
     parts.push(icon(box.icon, kindX, kindY - 10, 13, tertiary))
     kindX += 19
   }
+  const countText = box.count !== undefined ? String(box.count) : ''
+  const countRight = x + w - padX - (box.status ? 12 : 0)
+  if (countText) parts.push(text(countRight, kindY, countText, `font-size="10" text-anchor="end" fill="${tertiary}"${dim}`))
   if (box.kindLabel) {
-    parts.push(text(kindX, kindY, fit(box.kindLabel.toUpperCase(), x + w - padX - kindX - (box.status ? 12 : 0), 10, UPPER_RATIO), `font-size="10" font-weight="500" letter-spacing="0.4" fill="${tertiary}"${dim}`))
+    const countW = countText ? countText.length * 10 * CHAR_RATIO + 6 : 0
+    parts.push(text(kindX, kindY, fit(box.kindLabel.toUpperCase(), countRight - kindX - countW, 10, UPPER_RATIO), `font-size="10" font-weight="500" letter-spacing="0.4" fill="${tertiary}"${dim}`))
   }
   parts.push(text(x + padX, nameY, fit(box.name, textW, compact ? 13 : 14), `font-size="${compact ? 13 : 14}" font-weight="500" fill="${primary}"`))
   if (box.detail && detailY + 4 <= y + h) {
@@ -276,13 +279,12 @@ function drawLine(line: GraphLine, markerId: string | null): string {
 }
 
 function drawLineLabel(line: GraphLine, p: Palette): string {
-  if (!line.label) return ''
+  const box = lineLabelBox(line)
+  if (!line.label || !box) return ''
   const s = line.labelStyle ?? {}
   const size = s.fontSize ?? 10
-  const width = line.label.length * size * CHAR_RATIO + 8
-  const height = size + 6
   const bg = s.background ?? p.surface
-  return `<g><rect x="${n(line.labelX - width / 2)}" y="${n(line.labelY - height / 2)}" width="${n(width)}" height="${n(height)}" rx="2" fill="${esc(bg)}" fill-opacity="${s.backgroundOpacity ?? 0.9}"/>` +
+  return `<g><rect x="${n(box.x)}" y="${n(box.y)}" width="${n(box.width)}" height="${n(box.height)}" rx="2" fill="${esc(bg)}" fill-opacity="${s.backgroundOpacity ?? 0.9}"/>` +
     text(line.labelX, line.labelY + size * 0.35, line.label, `font-size="${size}" text-anchor="middle"${s.fontWeight ? ` font-weight="${s.fontWeight}"` : ''} fill="${esc(s.color ?? p.textSecondary)}"`) +
     '</g>'
 }

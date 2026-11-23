@@ -36,7 +36,7 @@ export interface GraphBoxSpec {
   status?: GraphStatus
   /** Color family of a group or collapsed group. */
   tone?: GraphGroupTone
-  /** Count badge next to a group name. */
+  /** Count badge next to a group name, or a workload card's resource count beside its kind. */
   count?: number
   /** Left bar color of a resource box, or the color of an internet box. Overrides status. */
   accent?: string
@@ -168,6 +168,21 @@ const DEFAULT_EDGE_COLOR = '#b1b1b7'
 const DEFAULT_ARROW_SIZE = 12.5
 // smoothstep edges leave a node this far before turning.
 const EDGE_OFFSET = 20
+
+/** Average glyph width as a share of the font size. Generous, so text stays inside its box. */
+export const CHAR_RATIO = 0.6
+
+/** Characters XML 1.0 does not allow, even escaped. Both writers drop them. */
+export const XML_FORBIDDEN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g
+
+/** The rectangle an edge label is drawn in, centered on the label point. */
+export function lineLabelBox(line: Pick<GraphLine, 'label' | 'labelX' | 'labelY' | 'labelStyle'>): GraphRect | null {
+  if (!line.label) return null
+  const size = line.labelStyle?.fontSize ?? 10
+  const width = line.label.length * size * CHAR_RATIO + 8
+  const height = size + 6
+  return { x: line.labelX - width / 2, y: line.labelY - height / 2, width, height }
+}
 
 function intersects(a: GraphRect, b: GraphRect): boolean {
   return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y
@@ -393,7 +408,7 @@ export function collectGraphModel({ nodes, edges, describeNode, renderIcon }: Co
     const t = handlePoint(target, target.handles?.target, edge.targetHandle, Position.Left)
     const [path, labelX, labelY] = edgePath(edge.type, s, t)
     const label = labelText(edge.label)
-    lines.push({
+    const line: GraphLine = {
       id: edge.id,
       from: edge.source,
       to: edge.target,
@@ -403,8 +418,11 @@ export function collectGraphModel({ nodes, edges, describeNode, renderIcon }: Co
       bends: stepBends(edge.type, path),
       labelX,
       labelY,
-    })
+    }
+    lines.push(line)
     grow(Math.min(s.x, t.x) - EDGE_OFFSET, Math.min(s.y, t.y) - EDGE_OFFSET, Math.max(s.x, t.x) + EDGE_OFFSET, Math.max(s.y, t.y) + EDGE_OFFSET)
+    const labelBox = lineLabelBox(line)
+    if (labelBox) grow(labelBox.x, labelBox.y, labelBox.x + labelBox.width, labelBox.y + labelBox.height)
   }
 
   const bounds = boxes.length === 0

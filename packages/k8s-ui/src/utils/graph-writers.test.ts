@@ -136,6 +136,12 @@ describe('writeSvg', () => {
     expect(doc.querySelector('rect[fill="#3B82F6"]')?.getAttribute('fill-opacity')).toBe('0.2')
   })
 
+  it('drops characters XML does not allow, so the file still parses', () => {
+    const bad = { ...model, boxes: [{ ...model.boxes[1], name: 'web\u0001\u001Fapi' }] }
+    expect(parse(writeSvg(bad, { name: 'x\u0002', theme: 'light', background: null }), 'image/svg+xml').documentElement.textContent).toContain('webapi')
+    parse(writeDrawio(bad, { name: 'x\u0002' }), 'application/xml')
+  })
+
   it('omits the background when transparent and adds one arrowhead per color', () => {
     const clear = parse(writeSvg(model, { name: 'Topology', theme: 'light', background: null }), 'image/svg+xml')
     expect(clear.querySelector('svg > rect')).toBeNull()

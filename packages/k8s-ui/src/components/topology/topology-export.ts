@@ -6,7 +6,6 @@ import { getSubtitle } from './K8sResourceNode'
 import { GRID_CARD_H, GRID_CARD_W, GRID_GAP, GRID_PAD } from './layout'
 
 const STATUSES: readonly HealthStatus[] = ['healthy', 'degraded', 'unhealthy', 'neutral', 'unknown']
-const MAX_KINDS_IN_CHIP = 3
 
 function isStatus(value: unknown): value is HealthStatus {
   return typeof value === 'string' && STATUSES.some(s => s === value)
@@ -24,14 +23,20 @@ function groupTone(value: unknown): GraphGroupTone {
   return value === 'app' || value === 'label' ? value : 'namespace'
 }
 
-function kindSummary(kindCounts: unknown): string | undefined {
+// Kinds a collapsed chip lists by its size tier (0-9, 10-99, 100-999, 1000+ resources), as GroupNode does.
+function kindsShown(nodeCount: number): number {
+  const tier = nodeCount <= 0 ? 0 : Math.min(3, Math.floor(Math.log10(nodeCount)))
+  return [2, 5, 8, 12][tier]
+}
+
+function kindSummary(kindCounts: unknown, max: number): string | undefined {
   if (!isRecord(kindCounts)) return undefined
   const entries = Object.entries(kindCounts)
     .filter((e): e is [string, number] => typeof e[1] === 'number')
     .sort(([, a], [, b]) => b - a)
   if (entries.length === 0) return undefined
-  const shown = entries.slice(0, MAX_KINDS_IN_CHIP).map(([kind, count]) => pluralize(count, kind))
-  const rest = entries.length - MAX_KINDS_IN_CHIP
+  const shown = entries.slice(0, max).map(([kind, count]) => pluralize(count, kind))
+  const rest = entries.length - max
   return rest > 0 ? `${shown.join(', ')} +${rest} more` : shown.join(', ')
 }
 
@@ -43,6 +48,7 @@ function workloadCards(data: Record<string, unknown>): GraphInnerBoxSpec[] {
   return cards.map((card, i) => {
     const kind = str(card.kind)
     const detail = str(card.subtitle)
+    const resources = typeof card.resourceCount === 'number' ? card.resourceCount : undefined
     return {
       shape: 'resource',
       kind,
@@ -50,6 +56,7 @@ function workloadCards(data: Record<string, unknown>): GraphInnerBoxSpec[] {
       kindLabel: displayKind(kind),
       ...(detail ? { detail } : {}),
       ...(isStatus(card.status) ? { status: card.status } : {}),
+      ...(resources !== undefined ? { count: resources } : {}),
       x: GRID_PAD.left + (i % columns) * (GRID_CARD_W + GRID_GAP),
       y: GRID_PAD.top + Math.floor(i / columns) * (GRID_CARD_H + GRID_GAP),
       w: GRID_CARD_W,
@@ -60,7 +67,10 @@ function workloadCards(data: Record<string, unknown>): GraphInnerBoxSpec[] {
 
 function describeGroup(data: Record<string, unknown>): GraphBoxSpec {
   const tone = groupTone(data.type)
-  const count = typeof data.nodeCount === 'number' ? data.nodeCount : undefined
+  const nodeCount = typeof data.nodeCount === 'number' ? data.nodeCount : undefined
+  const cards = data.displayLevel === 'cardGrid' ? workloadCards(data) : undefined
+  // A card grid's badge counts its workload cards, as on screen; other groups count resources.
+  const count = cards ? cards.length : nodeCount
   const base = {
     kind: 'Namespace',
     name: str(data.name),
@@ -75,7 +85,7 @@ function describeGroup(data: Record<string, unknown>): GraphBoxSpec {
     ...base,
     ...(hasProblems && isStatus(worst) ? { status: worst } : {}),
     shape: 'collapsed-group',
-    ...(data.displayLevel === 'cardGrid' ? { inner: workloadCards(data) } : { detail: kindSummary(data.kindCounts) }),
+    ...(cards ? { inner: cards } : { detail: kindSummary(data.kindCounts, kindsShown(nodeCount ?? 0)) }),
   }
 }
 

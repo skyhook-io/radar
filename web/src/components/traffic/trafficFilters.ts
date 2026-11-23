@@ -877,7 +877,6 @@ export function emptyWarningHeadline(kind: TrafficWarningKind | undefined): stri
   }
 }
 
-// Connection counts for display.
 export function formatConnections(count: number): string {
   if (count >= 1_000_000_000) return `${(count / 1_000_000_000).toFixed(1)}B`
   if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`

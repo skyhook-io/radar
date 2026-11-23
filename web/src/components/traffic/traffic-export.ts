@@ -92,7 +92,9 @@ export const describeTrafficNode: GraphNodeMapper = ({ type, data }) => {
         ? category === 'database' ? Database : Server
         : getTopologyIcon(shownKind)
   const detail = namespace ?? (category ? capitalize(category) : kind === 'Addon' ? 'Monitoring, logging, etc.' : undefined)
-  const rows = trafficRows(data, data.isHotPath === true)
+  const workload = str(data.workload)
+  // The card lists the workload under the namespace when it differs from the endpoint name.
+  const rows = [...(workload && workload !== name ? [{ text: workload }] : []), ...trafficRows(data, data.isHotPath === true)]
   // External cards are washed in their category color (yellow without one), as on screen.
   const tint = external ? (category && CATEGORY_COLORS[category] ? { color: CATEGORY_COLORS[category], opacity: 0.2 } : { color: EXTERNAL, opacity: 0.1 }) : undefined
   return {

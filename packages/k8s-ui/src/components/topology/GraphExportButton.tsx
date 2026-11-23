@@ -31,8 +31,8 @@ export interface GraphExportButtonProps {
   defaultFilename: string
   /** Dialog heading. */
   title: string
-  /** True while an entire-graph capture runs. A graph that renders only
-   *  visible elements must render all of them for that time. */
+  /** True while an entire-graph capture or an SVG / draw.io export runs. A graph
+   *  that renders only visible elements must render all of them for that time. */
   onExportingChange?: (exporting: boolean) => void
   /** Saves the file instead of a browser download (the desktop app's native
    *  save dialog). It owns its own success and failure messages. */
@@ -172,7 +172,9 @@ export function GraphExportButton({ defaultFilename, title, onExportingChange, o
 
     setExporting(true)
 
-    const isFullCapture = capture === 'full'
+    // Vector formats read every node's measured size and handles, even for the visible area,
+    // so off-screen nodes are rendered for them too.
+    const isFullCapture = capture === 'full' || !isGraphImageFormat(format)
     if (isFullCapture && onExportingChange) {
       onExportingChange(true)
       // Wait for React to render all off-screen nodes

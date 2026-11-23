@@ -33,6 +33,9 @@ describe('describeTrafficNode', () => {
     const client = describeTrafficNode({ id: 'demo/client', type: 'traffic', data: { kind: 'Pod', label: 'client', ports: [{ port: 0, connections: 5 }], totalConnections: 540, connLabel: 'conn' } })
     expect(client?.rows).toEqual([{ text: '540 conn', hot: false }])
     expect(describeTrafficNode({ id: 'idle', type: 'traffic', data: { kind: 'Pod', label: 'idle' } })?.rows).toBeUndefined()
+
+    const pod = describeTrafficNode({ id: 'shop/api-7d9', type: 'traffic', data: { kind: 'Pod', label: 'api-7d9', workload: 'api', totalConnections: 3 } })
+    expect(pod?.rows).toEqual([{ text: 'api' }, { text: '3 conn', hot: false }])
   })
 
   it('washes an external card in its category color', () => {
