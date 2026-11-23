@@ -82,7 +82,7 @@ func TestTrackedSwitchDiscoveryWaitHasOwnBudget(t *testing.T) {
 				installedConn.Store(prev)
 				clientMu.Unlock()
 			})
-			t.Cleanup(ResetMetricsHistory)
+			t.Cleanup(Current().closeMetricsHistory)
 
 			// Registered before the late dynamic cache exists, as the SSE
 			// broadcaster's topology refresh is.

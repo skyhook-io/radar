@@ -630,7 +630,7 @@ func ResetTestState() {
 
 	policyReportIndex.Store(nil)
 
-	// Reset resource cache
+	ResetMetricsHistory()
 	ResetResourceCache()
 
 	// Reset connection state
