@@ -1556,9 +1556,8 @@ func (c *Connection) accessibleNamespaces(ctx context.Context, inputs namespaceL
 		// After a context switch the LIST can time out behind informer and
 		// discovery traffic on the shared client; the synced cluster-wide
 		// namespace informer holds the same list.
-		// Only while the client that failed is still current: a LIST that
-		// outlived a context switch must not borrow the new cluster's cache.
-		if names, ok := cachedNamespaceNames(); ok && Current() == c {
+		// A LIST that outlived a context switch still falls back to its seeds.
+		if names, ok := cachedNamespaceNames(c.ResourceCache()); ok && Current() == c {
 			log.Printf("[k8s] GetAccessibleNamespaces: listing namespaces failed: %v (using the synced namespace cache)", err)
 			return names, NamespaceListCache
 		}
@@ -1581,8 +1580,7 @@ func (c *Connection) accessibleNamespaces(ctx context.Context, inputs namespaceL
 
 // cachedNamespaceNames lists namespaces from the informer cache when it is
 // synced and cluster-wide, so it holds what a successful LIST would return.
-func cachedNamespaceNames() ([]string, bool) {
-	rc := GetResourceCache()
+func cachedNamespaceNames(rc *ResourceCache) ([]string, bool) {
 	if rc == nil || rc.Namespaces() == nil || !rc.IsKindReady(k8score.Namespaces) || !rc.IsKindClusterWide(k8score.Namespaces) {
 		return nil, false
 	}
