@@ -112,6 +112,18 @@ describe('workspace loading, empty and version states', () => {
   })
 })
 describe('Overview evidence and folding', () => {
+  it('qualifies failed, processing and per-role consumer counts over a partial read', () => {
+    const w = blockedWorkspace()
+    w.counts.agents.lowerBound = true
+    w.coverage.agents.state = 'partial'
+    w.counts.agentsByLatestChange = { failed: 2, preparing: 3 }
+    w.models[0].usedBy.lowerBound = true
+    w.models[0].usedBy.byRole = { model: 1 }
+    const overview = html(<KagentOverview data={w} runtime={runtime()} onOpen={open} />)
+    expect(overview).toContain('≥2 failed')
+    expect(overview).toContain('≥3 processing')
+    expect(html(<KagentModels data={w} onOpen={open} />)).toContain('Agent model: ≥1')
+  })
   it('does not count stale credential conditions as current findings', () => {
     const w = blockedWorkspace()
     w.findings = []

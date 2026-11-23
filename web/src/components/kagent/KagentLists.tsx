@@ -279,7 +279,7 @@ export function KagentModels({ data, onOpen }: { data: KagentWorkspace; onOpen: 
                       {consumersText(m.usedBy)}
                       <Sub>
                         {Object.entries(m.usedBy.byRole ?? {})
-                          .map(([r, n]) => `${roleText(r)}: ${n}`)
+                          .map(([r, n]) => `${roleText(r)}: ${m.usedBy.lowerBound ? '≥' : ''}${n}`)
                           .join(' · ')}
                       </Sub>
                     </>

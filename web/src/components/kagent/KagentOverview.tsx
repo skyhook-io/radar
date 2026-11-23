@@ -184,8 +184,8 @@ export function KagentOverview({
               {bound ? '≥' : ''}
               {states.prepared ?? 0} prepared · {bound ? '≥' : ''}
               {states.blocked ?? 0} blocked
-              {states.failed ? ` · ${states.failed} failed` : ''}
-              {states.preparing ? ` · ${states.preparing} processing` : ''}
+              {states.failed ? ` · ${bound ? '≥' : ''}${states.failed} failed` : ''}
+              {states.preparing ? ` · ${bound ? '≥' : ''}${states.preparing} processing` : ''}
             </>
           )}
         </span>
