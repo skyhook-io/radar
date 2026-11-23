@@ -1162,7 +1162,7 @@ func rightsizingGuidance(in rightsizingGuidanceInput) []string {
 		parts = append(parts, "Rows with reductionLimited=true were clamped: recommendedRequest is a bounded step, not the full cut: at most half for memory, for CPU of 1 core or more, and for bursty or throttled CPU; up to three quarters for smaller CPU requests. demandTarget is the demand-based end state, not a value to apply: apply recommendedRequest, observe a full 7-day window, then re-check. For memory, demandTarget comes from the 7-day max, so a monthly or batch peak outside the window is not seen and jumping straight to it risks OOM.")
 	}
 	if in.needsManualReview {
-		parts = append(parts, "Rows with needsManualReview=true are excluded from the workload's requestDelta, and reviewReasons says why — an autoscaler owns the request, the container has OOM history, its limit conflicts with the recommendation, the cut runs against bursty or throttled usage, or (pod_level_request) the pod sets a fixed pod-level request in spec.resources, which the scheduler reserves instead of container requests and which Radar does not size; podLevelRequest gives its value, and observed usage is still reported per container. Most of those rows carry no recommendedRequest at all, because the same signal withheld it; where one is present, weigh it against the reason instead of applying it unattended. The flag marks a row that needs judgement, not one that must never change: raising a request on a container with OOM history is often exactly what the evidence asks for.")
+		parts = append(parts, "Rows with needsManualReview=true are excluded from requestDelta. Read reviewReasons for the safety or evidence check. A row with no recommendedRequest at all can still show measured demand. A proposed increase that needs judgement remains a priority even though its delta is excluded. With pod_level_request the scheduler uses the shared reservation in podLevelRequest.")
 	}
 	if in.workloadsShown {
 		parts = append(parts, "requestDelta is replica-weighted request capacity, not bill savings. An absent cpu or memory delta means zero net change or no eligible evidence; read rows to distinguish them. Rows lacking evidence or needing manual review are excluded. If liveInventoryUnavailable=true, currentPodOOM being absent does not establish that no pod has OOMed.")
@@ -1182,7 +1182,7 @@ func rightsizingGuidance(in rightsizingGuidanceInput) []string {
 func partialGuidance(in rightsizingGuidanceInput) []string {
 	if in.scope == "workload" {
 		if in.reason == prometheuspkg.ReasonSomeEvidenceUnavailable {
-			return []string{"State is partial because a supporting query did not answer, not because a row is missing evidence — warnings names which one. The rows are intact and their recommendations stand, but a signal that would have qualified them is absent: a lost throttle or peak reading leaves needsManualReview clear and the clamp looser than it would otherwise have been."}
+			return []string{"State is partial because a supporting query did not answer, not because a row is missing evidence — warnings names which one. The rows are intact and their recommendations stand, but a signal that would have qualified them is absent: a missing CPU peak requires review for a proposed cut. Check the reviewReasons on each affected row."}
 		}
 		return []string{"State is partial — some of this workload's containers had no usable evidence. Do not treat their rows as a verdict that the container is correctly sized."}
 	}

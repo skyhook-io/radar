@@ -13,6 +13,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/prom"
+	"github.com/skyhook-io/radar/pkg/rightsizing"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
@@ -709,15 +710,15 @@ func buildScanWorkload(input scanWorkload, evidence scanBatchEvidence) Rightsizi
 			out.Rows = append(out.Rows, row)
 		}
 	}
-	withholdIncreasesAbovePodLimit(out.Rows, input.workload.podSpec)
+	rightsizing.Finalize(out.Rows, input.workload.podSpec, input.workload.qos, out.ScaledToZero)
 	return out
 }
 
 func buildScanRow(container containerSpec, resourceName string, key scanKey, expected int, workload rightsizingWorkload, evidence scanBatchEvidence) (row RightsizingRow) {
-	defer markPodLevelRequest(&row)
+	defer rightsizing.MarkPodLevelRequest(&row)
 	row = RightsizingRow{
 		Container: container.name, Resource: resourceName, Fit: FitInsufficientHistory, Confidence: ConfidenceLow,
-		ExpectedSamples: expected, HPAManaged: workload.hpaManaged[resourceName], HPAEvidenceAvailable: workload.hpaAvailable,
+		ExpectedSamples: expected, HPAManaged: rightsizing.HPATargets(workload.hpaManaged).Controls(container.name, resourceName), HPAEvidenceAvailable: workload.hpaAvailable,
 		LiveInventoryUnavailable: workload.liveInventoryUnavailable,
 	}
 	var request, limit = container.cpuReq, container.cpuLim
@@ -735,7 +736,7 @@ func buildScanRow(container containerSpec, resourceName string, key scanKey, exp
 			row.OOMEvidenceAvailable = termination.OOM || (restartAvailable && (restartActivity <= 0 || termination.Any))
 		}
 	}
-	setCurrentQuantities(&row, request, limit, resourceName)
+	rightsizing.SetCurrentQuantities(&row, request, limit, resourceName)
 	setPodLevelRequest(&row, podLevelRequestFor(container, resourceName), resourceName)
 	if queryErr := evidence.errors[resourceName]; queryErr != nil {
 		row.QueryError = RowUsageQueryFailed
@@ -749,13 +750,13 @@ func buildScanRow(container containerSpec, resourceName string, key scanKey, exp
 		observed = maxFinite(series)
 	} else {
 		peak := percentile(series, 0.99)
-		row.Peak = &ObservedStatistic{Name: "P99", Value: peak, Formatted: formatObservedValue(peak, resourceName)}
-		row.Bursty = isBurstyCPU(observed, peak)
+		row.Peak = &ObservedStatistic{Name: "P99", Value: peak, Formatted: rightsizing.FormatObservedValue(peak, resourceName)}
+		row.Bursty = rightsizing.IsBurstyCPU(observed, peak)
 	}
-	row.Observed = &ObservedStatistic{Name: statistic, Value: observed, Formatted: formatObservedValue(observed, resourceName)}
+	row.Observed = &ObservedStatistic{Name: statistic, Value: observed, Formatted: rightsizing.FormatObservedValue(observed, resourceName)}
 	row.SampleCount = len(series)
 	row.Coverage = math.Min(float64(row.SampleCount)/float64(expected), 1)
-	row.Confidence = confidenceFor(row.SampleCount, row.Coverage, OwnerCoverageKSMHistory)
+	row.Confidence = rightsizing.ConfidenceFor(row.SampleCount, row.Coverage, OwnerCoverageKSMHistory)
 	if resourceName == "cpu" && evidence.errors["throttle"] == nil {
 		if values := evidence.throttle[key]; len(values) > 0 {
 			value := maxFinite(values)
@@ -763,11 +764,11 @@ func buildScanRow(container containerSpec, resourceName string, key scanKey, exp
 			row.ThrottleRatio = &value
 		}
 	}
-	if row.SampleCount < rightsizingMinSamples {
+	if row.SampleCount < rightsizing.RightsizingMinSamples {
 		row.RecommendationReason = "insufficient_history"
 		return row
 	}
-	classifyRightsizingFit(&row, observed, request, limit, resourceName)
+	rightsizing.ClassifyRightsizingFit(&row, observed, request, limit, resourceName)
 	return row
 }
 
@@ -940,7 +941,7 @@ func snapshotScanWorkloads(ctx context.Context, cache *k8s.ResourceCache, scopes
 		key := workloadIdentity(kind, obj.GetNamespace(), obj.GetName())
 		workloads[key] = &scanWorkload{kind: kind, namespace: obj.GetNamespace(), name: obj.GetName(), replicas: replicas, workload: rightsizingWorkload{
 			podSpec: podSpec, containers: extractRuntimeContainers(podSpec), currentPodOOM: map[string]bool{}, hpaManaged: map[string]bool{}, scaledToZero: scaledToZero,
-			managedBy: detectWorkloadManager(obj),
+			managedBy: DetectWorkloadManager(obj),
 		}}
 	}
 
@@ -1092,14 +1093,7 @@ func enrichScanHPA(ctx context.Context, cache *k8s.ResourceCache, scopes map[str
 		if workload == nil {
 			continue
 		}
-		for _, metric := range hpa.Spec.Metrics {
-			if metric.Type == autoscalingv2.ResourceMetricSourceType && metric.Resource != nil && metric.Resource.Target.AverageUtilization != nil {
-				resourceName := string(metric.Resource.Name)
-				if resourceName == "cpu" || resourceName == "memory" {
-					workload.workload.hpaManaged[resourceName] = true
-				}
-			}
-		}
+		AddHPATargetResources(workload.workload.hpaManaged, hpa, ref.Kind, ref.Name)
 	}
 }
 
@@ -1221,6 +1215,7 @@ func enrichScanCurrentOOM(ctx context.Context, cache *k8s.ResourceCache, scopes 
 		if workload == nil {
 			continue
 		}
+		workload.workload.qos.Observe(pod.Status.QOSClass)
 		collectCurrentPodOOM(workload.workload.currentPodOOM, pod.Status.ContainerStatuses)
 		collectCurrentPodOOM(workload.workload.currentPodOOM, pod.Status.InitContainerStatuses)
 	}
