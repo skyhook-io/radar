@@ -142,7 +142,7 @@ func TestRecordToTimelineStore_NodeExcludedMetadata(t *testing.T) {
 					t.Fatal(err)
 				}
 				for _, precomputed := range []bool{false, true} {
-					state.recordToTimelineStore(ActiveClusterContext(), "Node", "", "worker", "node-uid", "update", oldNode, newNode, nil, precomputed)
+					state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Node", "", "worker", "node-uid", "update", oldNode, newNode, nil, precomputed)
 				}
 				events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{Kinds: []string{"Node"}})
 				if err != nil || len(events) != 0 {
@@ -348,7 +348,7 @@ func TestRecordToTimelineStore_NodeConfiguration(t *testing.T) {
 				if want == nil {
 					t.Fatal("expected configuration diff with no generation")
 				}
-				state.recordToTimelineStore(ActiveClusterContext(), "Node", "", "worker", "node-uid", "update", oldNode, newNode, want, precomputed)
+				state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Node", "", "worker", "node-uid", "update", oldNode, newNode, want, precomputed)
 				events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{Kinds: []string{"Node"}})
 				if err != nil || len(events) != 1 || !reflect.DeepEqual(events[0].Diff, want) {
 					t.Fatalf("recorded events = %+v, err=%v, want diff %+v", events, err, want)
@@ -368,7 +368,7 @@ func TestRecordToTimelineStore_NodeCreationHasNoMetadataDiff(t *testing.T) {
 	state.initialSyncComplete.Store(true)
 	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "fresh-node", UID: "fresh-uid", CreationTimestamp: metav1.Now(),
 		Labels: map[string]string{"topology.kubernetes.io/zone": "east"}, Annotations: map[string]string{"projectcalico.org/IPv4Address": "10.0.0.1/24"}}}
-	state.recordToTimelineStore(ActiveClusterContext(), "Node", "", node.Name, string(node.UID), "add", nil, node, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Node", "", node.Name, string(node.UID), "add", nil, node, nil, false)
 	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{Kinds: []string{"Node"}})
 	if err != nil || len(events) != 1 || events[0].EventType != timeline.EventTypeAdd || events[0].Diff != nil {
 		t.Fatalf("creation produced metadata changes: %+v, err=%v", events, err)

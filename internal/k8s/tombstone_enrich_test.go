@@ -95,11 +95,11 @@ func TestK8sEvent_TombstoneEnrichesAfterDelete(t *testing.T) {
 	pod := tombstoneTestPod("web-abc", created)
 
 	// Informer delete: production passes the deleted object as newObj, oldObj=nil.
-	state.recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "web-abc", string(pod.UID), "delete", nil, pod, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Pod", "shop", "web-abc", string(pod.UID), "delete", nil, pod, nil, false)
 
 	// Late K8s event; live cache is empty (GetResourceCache()==nil), so
 	// enrichment must come from the tombstone.
-	state.recordK8sEventToTimeline(ActiveClusterContext(), k8sEventPod("web-abc", "Killing"))
+	state.recordK8sEventToTimeline(timeline.GetStore(), ActiveClusterContext(), k8sEventPod("web-abc", "Killing"))
 
 	got := k8sEventFromStore(t)
 	if got.Owner == nil || got.Owner.Kind != "ReplicaSet" || got.Owner.Name != "web-rs" {
@@ -119,7 +119,7 @@ func TestK8sEvent_MissStaysSilentNull(t *testing.T) {
 	state := newConnectionCache()
 	initMemoryTimeline(t)
 
-	state.recordK8sEventToTimeline(ActiveClusterContext(), k8sEventPod("ghost", "Killing"))
+	state.recordK8sEventToTimeline(timeline.GetStore(), ActiveClusterContext(), k8sEventPod("ghost", "Killing"))
 
 	got := k8sEventFromStore(t)
 	if got.Owner != nil {
@@ -142,9 +142,9 @@ func TestK8sEvent_TombstoneFedOnAdd(t *testing.T) {
 
 	created := time.Now() // fresh add (age <= 30s so it is recorded, not treated as sync)
 	pod := tombstoneTestPod("web-new", created)
-	state.recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "web-new", string(pod.UID), "add", nil, pod, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Pod", "shop", "web-new", string(pod.UID), "add", nil, pod, nil, false)
 
-	state.recordK8sEventToTimeline(ActiveClusterContext(), k8sEventPod("web-new", "Started"))
+	state.recordK8sEventToTimeline(timeline.GetStore(), ActiveClusterContext(), k8sEventPod("web-new", "Started"))
 
 	got := k8sEventFromStore(t)
 	if got.Owner == nil || got.Owner.Name != "web-rs" {
@@ -164,13 +164,13 @@ func TestK8sEvent_FailedExtractDoesNotClobberTombstone(t *testing.T) {
 
 	created := time.Now().Add(-45 * time.Minute)
 	pod := tombstoneTestPod("web-abc", created)
-	state.recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "web-abc", string(pod.UID), "delete", nil, pod, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Pod", "shop", "web-abc", string(pod.UID), "delete", nil, pod, nil, false)
 
 	// Same resource identity, but a payload ExtractTombstoneEntry can't
 	// unwrap (not a metav1.Object, not a DeletedFinalStateUnknown).
-	state.recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "web-abc", string(pod.UID), "delete", nil, "not-an-object", nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Pod", "shop", "web-abc", string(pod.UID), "delete", nil, "not-an-object", nil, false)
 
-	state.recordK8sEventToTimeline(ActiveClusterContext(), k8sEventPod("web-abc", "Killing"))
+	state.recordK8sEventToTimeline(timeline.GetStore(), ActiveClusterContext(), k8sEventPod("web-abc", "Killing"))
 
 	got := k8sEventFromStore(t)
 	if got.Owner == nil || got.Owner.Kind != "ReplicaSet" || got.Owner.Name != "web-rs" {
@@ -243,7 +243,7 @@ func TestInformerAdd_RecordsOwnerEvidence(t *testing.T) {
 	pod := tombstoneTestPod("web-ev", time.Now())
 	pod.OwnerReferences[0].APIVersion = "apps/v1"
 	pod.OwnerReferences[0].UID = types.UID("rs-uid")
-	state.recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "web-ev", string(pod.UID), "add", nil, pod, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Pod", "shop", "web-ev", string(pod.UID), "add", nil, pod, nil, false)
 
 	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{
 		Kinds: []string{"Pod"}, IncludeManaged: true,
@@ -280,7 +280,7 @@ func TestRetiredCacheTimelineCallbacksStayOnTheirConnection(t *testing.T) {
 	old := Current().cacheState()
 	dep := testDeployment("old-uid", "nginx", time.Now())
 	recordDelete := func() {
-		old.recordToTimelineStore("a", "Deployment", "shop", "web", "old-uid", "delete", nil, dep, nil, false)
+		old.recordToTimelineStore(timeline.CaptureStore(), "a", "Deployment", "shop", "web", "old-uid", "delete", nil, dep, nil, false)
 	}
 	recordDelete()
 	if old.tombstones.Len() != 1 {
