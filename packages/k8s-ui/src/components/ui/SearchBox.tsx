@@ -15,6 +15,7 @@ export function SearchBox({
   scope,
   shortcutId,
   placeholder = 'Search... (press /)',
+  ariaLabel,
   className,
   onEnter,
   onArrowDown,
@@ -29,6 +30,7 @@ export function SearchBox({
   /** Unique shortcut id, e.g. 'applications-search'. */
   shortcutId: string
   placeholder?: string
+  ariaLabel?: string
   /** Width/layout overrides — the box itself stays themed. */
   className?: string
   /** Enter in the box — e.g. open the first filtered row. */
@@ -62,6 +64,7 @@ export function SearchBox({
       <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-theme-text-tertiary" />
       <Input
         ref={inputRef}
+        aria-label={ariaLabel}
         value={value}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}

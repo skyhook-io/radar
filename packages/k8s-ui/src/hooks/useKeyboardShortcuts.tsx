@@ -298,7 +298,7 @@ export function useRegisterShortcut(shortcut: KeyboardShortcut) {
 
   useEffect(() => {
     if (!register) {
-      if (import.meta.env.DEV) {
+      if (import.meta.env.DEV && shortcut.enabled !== false) {
         console.warn(`[useRegisterShortcut] Shortcut "${shortcut.id}" registered outside KeyboardShortcutProvider — it will not work.`)
       }
       return

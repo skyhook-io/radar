@@ -147,13 +147,6 @@ func (o *rightsizingOmissions) add(other rightsizingOmissions) {
 	o.QueryError += other.QueryError
 }
 
-func rowHasIncompleteEvidence(row prometheuspkg.RightsizingRow) bool {
-	// A withheld recommendation is not a clean bill of health: the reason is
-	// set only when absent evidence actually suppressed one.
-	return prometheuspkg.RowUnevidenced(row) ||
-		prometheuspkg.IsWithheldRecommendationReason(row.RecommendationReason)
-}
-
 type rightsizingCoverage struct {
 	AttemptedBatches       int      `json:"attemptedBatches"`
 	WorkloadsDiscovered    int      `json:"workloadsDiscovered"`
@@ -826,11 +819,12 @@ func filterRightsizingRows(rows []prometheuspkg.RightsizingRow, includeAll, keep
 	containerKept := map[string]bool{}
 	for i, row := range rows {
 		result.liveInventoryUnavailable = result.liveInventoryUnavailable || row.LiveInventoryUnavailable
-		if rowHasIncompleteEvidence(row) {
+		if row.HasIncompleteEvidence() {
 			result.incompleteEvidence = true
 		}
 		keep[i] = keepAll || includeAll || scaledToZero || rightsizingRowActionable(row.Fit) ||
-			prometheuspkg.NeedsManualReview(row) || prometheuspkg.SignificantlyThrottled(row)
+			prometheuspkg.NeedsManualReview(row) || row.CurrentPodOOM || row.WindowOOMEvidence ||
+			row.LimitConflict || row.HPAManaged || prometheuspkg.SignificantlyThrottled(row)
 		if keep[i] {
 			containerKept[row.Container] = true
 		}
@@ -1048,7 +1042,7 @@ func rightsizingRemediation(scope, reason string) string {
 	case "workload_kinds_unavailable":
 		return "Deployments, StatefulSets, and DaemonSets are all unreadable in the requested scope — either this identity cannot list them, or the informer cache has not synced them. coverage.restrictedKinds and coverage.unavailableKinds separate the two."
 	case reasonRowEvidenceIncomplete:
-		return "The scan completed but some rows had no usable evidence, or had a recommendation withheld for missing HPA or OOM history. The omitted counts and each row's recommendationReason say which; treat those containers as unjudged, not as correctly sized."
+		return "Some rows lack usage or supporting evidence for a request change. Check omitted counts, recommendationReason and reviewReasons before acting on a proposal."
 	case "limited_scope_no_workloads":
 		return "No workloads were found, and the scan did not cover everything asked for — coverage.restrictedKinds, unavailableKinds and partiallyCachedKinds say which kinds were narrowed. An empty result here is not evidence the cluster has no workloads."
 	case reasonOnlyDaemonSetsWithoutNodes:
@@ -1125,7 +1119,7 @@ type rightsizingGuidanceInput struct {
 
 func rightsizingGuidance(in rightsizingGuidanceInput) []string {
 	parts := []string{
-		"Recommendations come from 7 days of observed usage, not live metrics. Check confidence and sampleCoverage before acting: low confidence means short or sparse history, not correctly sized.",
+		"Radar queries the last 7 days. Check confidence and sampleCoverage to see how much usage was observed.",
 	}
 
 	// An unavailable response has no rows, no omitted counts and no coverage to
@@ -1159,10 +1153,10 @@ func rightsizingGuidance(in rightsizingGuidanceInput) []string {
 		parts = append(parts, "A workload whose rows carry queryError can still hold a valid recommendation on its other resource: its classification retains known increase or review signals while state=partial reports the missing evidence.")
 	}
 	if in.reductionLimited {
-		parts = append(parts, "Rows with reductionLimited=true were clamped: recommendedRequest is a bounded step, not the full cut: at most half for memory, for CPU of 1 core or more, and for bursty or throttled CPU; up to three quarters for smaller CPU requests. demandTarget is the demand-based end state, not a value to apply: apply recommendedRequest, observe a full 7-day window, then re-check. For memory, demandTarget comes from the 7-day max, so a monthly or batch peak outside the window is not seen and jumping straight to it risks OOM.")
+		parts = append(parts, "Rows with reductionLimited=true show a bounded step in recommendedRequest. The cut is at most half for memory, CPU of 1 core or more, and bursty or throttled CPU. The same half-step applies when a CPU limit exists and throttle data is missing. For other CPU requests from 100m to below one core the cut is at most three quarters. If needsManualReview=true, resolve reviewReasons before considering that step. After changing a request, observe a full 7-day window and re-check. demandTarget explains the calculation. Applying it directly risks OOM when a memory peak falls outside the window.")
 	}
 	if in.needsManualReview {
-		parts = append(parts, "Rows with needsManualReview=true are excluded from the workload's requestDelta, and reviewReasons says why — an autoscaler owns the request, the container has OOM history, its limit conflicts with the recommendation, the cut runs against bursty or throttled usage, or (pod_level_request) the pod sets a fixed pod-level request in spec.resources, which the scheduler reserves instead of container requests and which Radar does not size; podLevelRequest gives its value, and observed usage is still reported per container. Most of those rows carry no recommendedRequest at all, because the same signal withheld it; where one is present, weigh it against the reason instead of applying it unattended. The flag marks a row that needs judgement, not one that must never change: raising a request on a container with OOM history is often exactly what the evidence asks for.")
+		parts = append(parts, "Rows with needsManualReview=true are excluded from requestDelta. Read reviewReasons for the safety or evidence check. A row with no recommendedRequest at all can still show measured demand. A proposed increase that needs judgement remains a priority even though its delta is excluded. With pod_level_request the scheduler uses the shared reservation in podLevelRequest.")
 	}
 	if in.workloadsShown {
 		parts = append(parts, "requestDelta is replica-weighted request capacity, not bill savings. An absent cpu or memory delta means zero net change or no eligible evidence; read rows to distinguish them. Rows lacking evidence or needing manual review are excluded. If liveInventoryUnavailable=true, currentPodOOM being absent does not establish that no pod has OOMed.")
@@ -1182,9 +1176,9 @@ func rightsizingGuidance(in rightsizingGuidanceInput) []string {
 func partialGuidance(in rightsizingGuidanceInput) []string {
 	if in.scope == "workload" {
 		if in.reason == prometheuspkg.ReasonSomeEvidenceUnavailable {
-			return []string{"State is partial because a supporting query did not answer, not because a row is missing evidence — warnings names which one. The rows are intact and their recommendations stand, but a signal that would have qualified them is absent: a lost throttle or peak reading leaves needsManualReview clear and the clamp looser than it would otherwise have been."}
+			return []string{"A supporting query failed. Read warnings to identify the missing signal and reviewReasons on any proposal that needs review."}
 		}
-		return []string{"State is partial — some of this workload's containers had no usable evidence. Do not treat their rows as a verdict that the container is correctly sized."}
+		return []string{"Some rows lack usage or supporting evidence. Check recommendationReason and reviewReasons to see which request changes could be evaluated."}
 	}
 
 	var causes []string
@@ -1247,7 +1241,7 @@ func partialGuidance(in rightsizingGuidanceInput) []string {
 	if in.reason == reasonRowEvidenceIncomplete {
 		// This reason also covers short history, which is counted above, so the
 		// sentence must not assert that a withheld recommendation exists.
-		causes = append(causes, "any row whose recommendationReason names missing HPA or OOM evidence had its recommendation withheld")
+		causes = append(causes, "check recommendationReason and reviewReasons for missing evidence on proposed or withheld changes")
 	}
 
 	if len(causes) == 0 {

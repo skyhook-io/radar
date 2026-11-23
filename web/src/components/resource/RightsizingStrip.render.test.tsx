@@ -10,6 +10,7 @@ const withheld: PrometheusRightsizing = {
   window: '7d',
   source: 'radar',
   ownerCoverage: 'ksm_history',
+  replicas: 2,
   scaledToZero: false,
   sampleAvailable: false,
   rows: [],

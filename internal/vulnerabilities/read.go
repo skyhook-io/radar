@@ -3,6 +3,7 @@ package vulnerabilities
 import (
 	"context"
 	"errors"
+	"math"
 	"reflect"
 	"slices"
 	"sync"
@@ -57,6 +58,10 @@ type Request struct {
 	CanListPods func(namespace string) bool
 	View        View
 	Filter      Filter
+	// Export lists everything: no row or per-row list caps, and gaps name
+	// every namespace. MaxFindings still applies. The Response then carries
+	// what WriteCSV needs.
+	Export bool
 }
 
 // Served is whether the connected cluster serves the report kind the rollup
@@ -114,10 +119,10 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 	}
 
 	if req.NamespaceCheckFailed {
-		return empty(req.View, resourceapi.Gap{Code: readreason.UserPermissionCheckFailed, Namespaces: resourceapi.UnknownNames()}), nil
+		return empty(req, resourceapi.Gap{Code: readreason.UserPermissionCheckFailed, Namespaces: resourceapi.UnknownNames()}), nil
 	}
 	if req.Namespaces != nil && len(req.Namespaces) == 0 {
-		return empty(req.View, resourceapi.Gap{Code: readreason.UserNoNamespaceAccess}), nil
+		return empty(req, resourceapi.Gap{Code: readreason.UserNoNamespaceAccess}), nil
 	}
 
 	namespaces, namespacesKnown := clusterNamespaces(cache)
@@ -201,7 +206,7 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 	if podRead.Readiness == k8score.KindUnavailable {
 		// Without Pods nothing is known to run: every report would read as
 		// inactive. Say so instead of retrying a cache that won't load.
-		return empty(req.View, resourceapi.Gap{Code: readreason.RadarKindNotCollected, Kinds: podKind, Namespaces: resourceapi.UnknownNames()}), nil
+		return empty(req, resourceapi.Gap{Code: readreason.RadarKindNotCollected, Kinds: podKind, Namespaces: resourceapi.UnknownNames()}), nil
 	}
 	readable, gaps, ok = narrowToTyped(podKind, podRead, readable, gaps)
 	if !ok {
@@ -325,12 +330,18 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 		slices.Sort(namespaces)
 		gaps = appendGap(gaps, resourceapi.Kinds(live.deniedKinds, 64), readreason.UserForbidden, namespaces)
 	}
-	resp, err := build(ctx, items, targets, req.View, req.Filter)
+	resp, err := build(ctx, items, targets, req.View, req.Filter, req.Export)
 	if err != nil {
 		return Response{}, err
 	}
 	if cache != k8s.GetResourceCache() || dynamic != k8s.GetDynamicResourceCache() || discovery != k8s.GetResourceDiscovery() {
 		return Response{}, ErrConnectionChanged
+	}
+	// Gaps are built with every namespace named; a list read caps them.
+	if !req.Export {
+		for i := range gaps {
+			gaps[i].Namespaces = gaps[i].Namespaces.Capped(gapNameLimit)
+		}
 	}
 	resp.Coverage.Gaps = append([]resourceapi.Gap{}, gaps...)
 	c := resp.Coverage
@@ -495,6 +506,9 @@ var (
 
 func kinds(k ...resourceapi.KindRef) *resourceapi.KindSet { return resourceapi.Kinds(k, 64) }
 
+// gapNameLimit caps the namespaces a list read's gap names.
+const gapNameLimit = 64
+
 // appendGap adds a gap for namespaces, merging into an existing gap with the
 // same code and kinds.
 func appendGap(gaps []resourceapi.Gap, kind *resourceapi.KindSet, code readreason.Code, namespaces []string) []resourceapi.Gap {
@@ -507,7 +521,7 @@ func appendGap(gaps []resourceapi.Gap, kind *resourceapi.KindSet, code readreaso
 		if gaps[i].Code == code && gaps[i].Namespaces != nil && gaps[i].Namespaces.Extent == "" &&
 			len(gaps[i].Namespaces.Names) == gaps[i].Namespaces.Count && reflect.DeepEqual(gaps[i].Kinds, kind) {
 			merged := slices.Compact(slices.Sorted(slices.Values(slices.Concat(gaps[i].Namespaces.Names, namespaces))))
-			gaps[i].Namespaces = resourceapi.Names(merged, 64)
+			gaps[i].Namespaces = resourceapi.Names(merged, math.MaxInt)
 			return gaps
 		}
 	}
@@ -515,18 +529,20 @@ func appendGap(gaps []resourceapi.Gap, kind *resourceapi.KindSet, code readreaso
 }
 
 func gap(kind *resourceapi.KindSet, code readreason.Code, namespaces []string) resourceapi.Gap {
-	g := resourceapi.Gap{Code: code, Kinds: kind, Namespaces: resourceapi.Names(namespaces, 64)}
+	g := resourceapi.Gap{Code: code, Kinds: kind, Namespaces: resourceapi.Names(namespaces, math.MaxInt)}
 	if action, ok := readreason.ActionFor(code); ok {
 		g.Action = action
 	}
 	return g
 }
 
-func empty(view View, g resourceapi.Gap) Response {
+// empty is the answer when nothing could be read: no rows, one gap. An
+// export still gets the extras WriteCSV needs, so the gap is its one row.
+func empty(req Request, g resourceapi.Gap) Response {
 	if action, ok := readreason.ActionFor(g.Code); ok {
 		g.Action = action
 	}
-	resp, _ := build(context.Background(), nil, nil, view, Filter{})
+	resp, _ := build(context.Background(), nil, nil, req.View, Filter{}, req.Export)
 	resp.Coverage = Coverage{Gaps: []resourceapi.Gap{g}}
 	return resp
 }
