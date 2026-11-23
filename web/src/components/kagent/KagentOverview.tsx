@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import { FoldSection, WorkspaceProblemCallout, toneTextClass } from '@skyhook-io/k8s-ui'
 import type { KagentRef, KagentWorkspace } from '../../api/kagent'
+import { useRadarFeature } from '../../api/client'
 import { substrateActorsPath } from '../substrate/routes'
 import { KagentAgentsTable } from './KagentLists'
 import {
@@ -132,6 +133,7 @@ export function KagentOverview({
   runtime: KagentRuntime
   onOpen: (ref: KagentRef) => void
 }) {
+  const sessionFeature = useRadarFeature('kagentSessionSummary')
   const states = data.counts.agentsByLatestChange
   const bound = data.counts.agents.lowerBound
   const unread = (key: 'agents' | 'models' | 'mcpServers') => ['denied', 'uncached', 'syncing', 'error'].includes(data.coverage[key].state)
@@ -145,6 +147,10 @@ export function KagentOverview({
   const sessionsPath = substrateActorsPath({ kagent: 'sessions', namespaces: namespaces.join(',') })
   const cardClass = 'block rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm hover:bg-theme-hover'
   const numberClass = 'block text-2xl font-semibold tabular-nums'
+  const sessionCount = <>
+    <span className={numberClass}>{rows.length || runtime.completePage ? `${runtimePartial ? '≥' : ''}${totalSessions}` : 'Unknown'}</span>
+    <span className="text-theme-text-secondary">Sessions in Agent Substrate{sessionFeature.support === 'supported' ? ' →' : ''}</span>
+  </>
   return (
     <>
       <div className="grid grid-cols-2 gap-3 text-sm text-theme-text-primary xl:grid-cols-4" aria-label="kagent status">
@@ -164,11 +170,8 @@ export function KagentOverview({
           <span className="text-theme-text-secondary">Models with credential problems</span>
         </Link>
         <div className={cardClass}>
-          <Link to={sessionsPath} className="block hover:underline" aria-label="Sessions in Agent Substrate">
-            <span className={numberClass}>{rows.length || runtime.completePage ? `${runtimePartial ? '≥' : ''}${totalSessions}` : 'Unknown'}</span>
-            <span className="text-theme-text-secondary">Sessions in Agent Substrate →</span>
-          </Link>
-          {rows.length || runtime.completePage ? <Link to={`${sessionsPath}&state=crashed`} className={`mt-1 block text-xs hover:underline ${rows.some(r => r.crashed) ? toneTextClass('unhealthy') : 'text-theme-text-secondary'}`} aria-label="Crashed sessions in Agent Substrate">{runtimePartial ? '≥' : ''}{rows.reduce((n, r) => n + r.crashed, 0)} crashed →</Link> : <span className="text-xs text-theme-text-tertiary">{runtime.unavailable}</span>}
+          {sessionFeature.support === 'supported' ? <Link to={sessionsPath} className="block hover:underline" aria-label="Sessions in Agent Substrate">{sessionCount}</Link> : <div>{sessionCount}</div>}
+          {sessionFeature.support === 'supported' && (rows.length || runtime.completePage) ? <Link to={`${sessionsPath}&state=crashed`} className={`mt-1 block text-xs hover:underline ${rows.some(r => r.crashed) ? toneTextClass('unhealthy') : 'text-theme-text-secondary'}`} aria-label="Crashed sessions in Agent Substrate">{runtimePartial ? '≥' : ''}{rows.reduce((n, r) => n + r.crashed, 0)} crashed →</Link> : <span className="text-xs text-theme-text-tertiary">{runtime.unavailable}</span>}
           <KagentRuntimeRead runtime={runtime} />
         </div>
       </div>

@@ -90,9 +90,7 @@ export function KagentName({ object, onOpen }: { object: KagentRef; onOpen?: (re
 export function Reading({
   reading,
   text,
-  stateOnly = false,
 }: {
-  stateOnly?: boolean
   reading: Pick<KagentReading, 'state' | 'text' | 'tone' | 'condition' | 'summary'>
   text?: string
 }) {
@@ -100,7 +98,7 @@ export function Reading({
     text: text ?? reading.text,
     tone: reading.tone,
     source: `kagent${reading.condition ? ` · ${reading.condition}` : ''}`,
-    detail: stateOnly ? undefined : reading.summary,
+    detail: reading.summary,
   }
   return (
     <div className="inline-flex max-w-full items-baseline gap-1.5">

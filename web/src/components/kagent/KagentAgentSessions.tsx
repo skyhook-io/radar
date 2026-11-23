@@ -65,7 +65,7 @@ export function KagentAgentSessions({ agent, onOpenActor, onOpenSessions, framed
           )}
           {data.needAttention > 0 && <span className="text-theme-text-secondary"> · {count(data.needAttention, lower)} {data.needAttention === 1 ? 'needs' : 'need'} attention</span>}
         </p>
-        {total > 0 && !framed && (
+        {total > 0 && (
           <button type="button" onClick={() => openSessions(agent)} className="text-sm text-accent-text hover:underline">List its sessions in Agent Substrate →</button>
         )}
       </div>

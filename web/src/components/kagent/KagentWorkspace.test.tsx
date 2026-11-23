@@ -17,6 +17,8 @@ const state = vi.hoisted(() => ({
   resourceData: undefined as any,
   resourceEnabled: [] as boolean[],
   wide: true,
+  sessionSupport: 'supported',
+  substrateSupport: 'supported',
 }))
 vi.mock('../../api/kagent', async (original) => ({
   ...(await original<typeof import('../../api/kagent')>()),
@@ -37,7 +39,7 @@ vi.mock('../../api/client', async (original) => ({
     state.resourceEnabled.push(options.enabled)
     return { data: state.resourceData, error: state.resourceError, isLoading: false }
   },
-  useRadarFeature: () => ({ support: 'supported' }),
+  useRadarFeature: (feature: string) => ({ support: feature === 'kagentSessionSummary' ? state.sessionSupport : feature === 'substrateWorkspace' ? state.substrateSupport : 'supported' }),
 }))
 vi.mock('../../context/ConnectionContext', () => ({
   useConnection: () => ({ connection: { context: 'test' } }),
@@ -71,6 +73,8 @@ beforeEach(() => {
   state.resourceData = undefined
   state.resourceEnabled = []
   state.wide = true
+  state.sessionSupport = 'supported'
+  state.substrateSupport = 'supported'
 })
 
 describe('workspace loading, empty and version states', () => {
@@ -112,6 +116,13 @@ describe('workspace loading, empty and version states', () => {
   })
 })
 describe('Overview evidence and folding', () => {
+  it.each(['unknown', 'unsupported'])('does not link to the Sessions filter when its capability is %s', (support) => {
+    state.sessionSupport = support
+    const out = html(<KagentOverview data={workspace()} runtime={runtime()} onOpen={open} />)
+    expect(out).not.toContain('href="/substrate/')
+    expect(out).toContain('Unknown')
+    expect(out).toContain('Substrate is not connected')
+  })
   it.each([false, true])('links session counts to Substrate with namespace and crash filters (partial=%s)', (partial) => {
     const r = runtime()
     r.completePage = true
@@ -231,6 +242,56 @@ describe.each([true, false])('inventory tables, wide=%s', (wide) => {
   })
 })
 describe('object pages', () => {
+  it.each(['unknown', 'unsupported'])('does not link a declared pool to an unavailable Substrate workspace (%s)', (support) => {
+    state.substrateSupport = support
+    state.data = workspace()
+    const a = agent()
+    a.references = [{ from: a.ref, target: { ...ref('WorkerPool', 'pool'), group: 'ate.dev' }, role: 'workerPool', field: 'workerPool', state: 'declared' }]
+    state.data.agents = [a]
+    const out = html(<KagentAgentOverview resource={{ metadata: a.ref }} onOpen={open} />)
+    expect(out).not.toContain('href="/substrate/')
+    expect(out).toContain('WorkerPool agents/pool')
+  })
+  it.each(['outside_namespace_pin', 'forbidden', 'notFound'])('does not reuse a withheld Harness image in About (%s)', (failure) => {
+    state.data = workspace()
+    const a = agent()
+    a.references = [{ from: a.ref, target: ref('Harness', 'harness'), role: 'harness', field: 'spec.harnessRef', state: 'unread', unread: failure === 'outside_namespace_pin' ? failure : 'denied' }]
+    state.data.agents = [a]
+    state.resourceData = { apiVersion: 'api.kagent.dev/v1alpha3', kind: 'Harness', spec: { workload: { image: 'WITHHELD_IMAGE' } } }
+    state.resourceError = failure === 'outside_namespace_pin' ? null : new ApiError(failure, failure === 'forbidden' ? 403 : 404)
+    const out = html(<KagentAgentOverview resource={{ metadata: a.ref }} onOpen={open} />)
+    expect(out).not.toContain('WITHHELD_IMAGE')
+  })
+  it.each(['notReported', 'discoveryOff', 'stale'])('keeps missing-tool counts unknown when discovery is %s', (discovery) => {
+    state.data = workspace()
+    const a = agent()
+    const target = ref('RemoteMCPServer', 'tools')
+    a.references = [{ from: a.ref, target, role: 'mcpServer', field: 'tools', state: 'present' }]
+    a.mcpServers.declared = 1
+    state.data.agents = [a]
+    state.data.mcpServers = [{ ref: target, reading: { state: discovery, text: 'Not reported', summary: 'Not reported', tone: 'unknown' }, toolsOfferedKnown: false, toolsOffered: [], failing: false, usedBy: { count: 1, lowerBound: false, consumers: 'seen', agents: [] } }]
+    const out = html(<KagentAgentOverview resource={{ metadata: a.ref }} onOpen={open} />)
+    expect(out).toContain('Missing tools unknown')
+    expect(out).not.toContain('0 missing tools')
+  })
+  it('qualifies discovery failure totals when the reference chain is incomplete', () => {
+    state.data = workspace()
+    const a = agent()
+    a.incomplete = true
+    a.mcpServers = { declared: 1, failing: 1, absent: 0, unread: 0, notPermitted: 0 }
+    state.data.agents = [a]
+    const out = html(<KagentAgentOverview resource={{ metadata: a.ref }} onOpen={open} />)
+    expect(out).toContain('≥1 failing')
+  })
+  it('keeps cross-namespace reference coordinates visible in the configuration chain', () => {
+    state.data = workspace()
+    const a = agent()
+    a.references = [{ from: ref('AgentTemplate', 'template', 'template-ns'), target: ref('RemoteMCPServer', 'tools', 'tools-ns'), role: 'mcpServer', field: 'tools', state: 'unread', unread: 'denied' }]
+    state.data.agents = [a]
+    const out = html(<KagentAgentOverview resource={{ metadata: a.ref }} onOpen={open} />)
+    expect(out).toContain('tools-ns/tools')
+    expect(out).toContain('via template template · template-ns')
+  })
   it('waits for the dependency workspace before showing a get-only fallback', () => {
     state.loading = true
     const out = html(<KagentDependencyOverview resource={{ kind: 'ModelConfig', metadata: ref('ModelConfig', 'model') }} onOpen={open} />)
@@ -422,6 +483,15 @@ it('keeps a declared dependency’s banner on an Agent beyond the capped impact 
   state.data.groups[0].folded = []
   const out = html(<KagentAgentOverview resource={{ metadata: { namespace: 'agents', name: 'blocked-edit' } }} onOpen={open} />)
   expect(out).toContain('Create Secret models/missing')
+})
+
+it('keeps Agents beyond capped impact links in the Problems filter', () => {
+  const w = blockedWorkspace()
+  w.findings = [w.findings[1]]
+  w.findings[0].affects!.agents = [{ agent: ref('Agent', 'another-agent'), effect: 'usesIt', roles: ['model'] }]
+  w.findings[0].affects!.count = 1000
+  const out = renderToStaticMarkup(<MemoryRouter initialEntries={['/kagent/agents?status=problems']}><KagentAgentsTable data={w} runtime={runtime()} onOpen={open} /></MemoryRouter>)
+  expect(out).toContain('blocked-edit')
 })
 
 it('offers the generic views after a failed capability check instead of loading forever', () => {

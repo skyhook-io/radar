@@ -60,7 +60,7 @@ function reset() {
 }
 
 describe('KagentAgentSessions', () => {
-  it('returns from an attention session to the Agent page that opened it', async () => {
+  it.each([false, true])('returns from an attention session and links the filtered list (framed=%s)', async (framed) => {
     reset()
     state.data = sessions()
     const path = '/kagent/agents/kagent/k8s-helper?ctx=kind-demo&tab=sessions'
@@ -68,7 +68,7 @@ describe('KagentAgentSessions', () => {
     const root = createRoot(host)
     vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
     try {
-      await act(async () => root.render(<MemoryRouter initialEntries={[path]}><KagentAgentSessions agent={agent} /></MemoryRouter>))
+      await act(async () => root.render(<MemoryRouter initialEntries={[path]}><KagentAgentSessions agent={agent} framed={framed} /></MemoryRouter>))
       const list = [...host.querySelectorAll('button')].find(b => b.textContent === 'List its sessions in Agent Substrate →')
       expect(list).toBeDefined()
       act(() => list!.click())

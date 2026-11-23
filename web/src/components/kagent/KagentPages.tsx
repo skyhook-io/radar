@@ -1,4 +1,3 @@
-import type { ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useSubstratePool, substrateErrorCode } from '../../api/substrateWorkspace'
 import { useConnection } from '../../context/ConnectionContext'
@@ -26,7 +25,7 @@ import {
   redactKagentURLsInText,
   redactKagentLiterals,
 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-kagent'
-import { useResource, isForbiddenError, isNotFoundError } from '../../api/client'
+import { useResource, useRadarFeature, isForbiddenError, isNotFoundError } from '../../api/client'
 import {
   useKagentWorkspace,
   type KagentImpact,
@@ -67,10 +66,6 @@ const PLURAL: Record<string, string> = {
   WorkerPool: 'workerpools',
 }
 type Open = (ref: KagentRef) => void
-function PageSection({ title, children }: { title: ReactNode; children: ReactNode }) {
-  return <WorkspaceCard title={title}>{children}</WorkspaceCard>
-}
-
 function UsedBy({ impact, data, onOpen, server }: { impact: KagentImpact; data: KagentWorkspace; onOpen: Open; server?: KagentMCPServer }) {
   const agents = new Map(data.agents.map((a) => [refKey(a.ref), a]))
   return (
@@ -130,12 +125,10 @@ function ReferenceLine({
   reference,
   data,
   onOpen,
-  placement,
 }: {
   reference: KagentReference
   data: KagentWorkspace
   onOpen: Open
-  placement?: string
 }) {
   const ref = reference.target
   const query = useResource<any>(PLURAL[ref.kind] ?? ref.kind.toLowerCase(), ref.namespace, ref.name, ref.group, {
@@ -145,7 +138,8 @@ function ReferenceLine({
       ref.group === 'api.kagent.dev',
   })
   const { connection } = useConnection()
-  const poolQuery = useSubstratePool(ref.kind === 'WorkerPool' ? ref : null)
+  const substrateFeature = useRadarFeature('substrateWorkspace')
+  const poolQuery = useSubstratePool(ref.kind === 'WorkerPool' && substrateFeature.support === 'supported' ? ref : null)
   const poolCode = substrateErrorCode(poolQuery.error)
   const pool = definitiveFailure(poolCode) || poolCode === 'incomplete' ? undefined : poolQuery.data
   const direct =
@@ -173,7 +167,7 @@ function ReferenceLine({
     <FactRow label={roleText(reference.role)}>
       <div className="space-y-1 text-sm">
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-          {ref.kind === 'WorkerPool' ? (
+          {ref.kind === 'WorkerPool' && substrateFeature.support === 'supported' ? (
             <Link className="font-mono text-xs text-accent-text hover:underline" to={substratePoolPath(ref, connection.context)}>
               {ref.name}
             </Link>
@@ -245,9 +239,10 @@ function ReferenceLine({
             )}
           </div>
         </div>
+        <Sub>{ref.kind} {refName(ref)}</Sub>
         {reference.from.kind !== 'Agent' && (
           <Sub>
-            via {reference.from.kind === 'AgentTemplate' ? 'template' : reference.from.kind} {reference.from.name}
+            via {reference.from.kind === 'AgentTemplate' ? 'template' : reference.from.kind} {reference.from.name} · {reference.from.namespace}
           </Sub>
         )}
         {state === 'unread' && (
@@ -332,7 +327,6 @@ function ReferenceLine({
         )}
         {reference.key && <Sub>Key: {reference.key}</Sub>}
         {reference.fallback && <Sub>Falls back to the Agent model for summarization.</Sub>}
-        {placement && <p className="text-xs text-theme-text-secondary">{placement}</p>}
       </div>
     </FactRow>
   )
@@ -342,6 +336,7 @@ export function KagentAgentOverview({ resource, onOpen }: { resource: any; onOpe
   const [params, setParams] = useSearchParams()
   const navigate = useWorkspaceNavigate()
   const { connection } = useConnection()
+  const substrateFeature = useRadarFeature('substrateWorkspace')
   const namespace = resource.metadata.namespace
   const name = resource.metadata.name
   const runtime = useKagentRuntime([namespace])
@@ -369,14 +364,21 @@ export function KagentAgentOverview({ resource, onOpen }: { resource: any; onOpe
     setParams(next, { replace: true })
   }
   const latest = agent.latestChange.state
+  const toolsUnknown =
+    agent.incomplete || agent.mcpServers.unread > 0 || agent.mcpServers.failing > 0 || agent.mcpServers.absent > 0 || agent.mcpServers.notPermitted > 0 ||
+    agent.references.some(r =>
+      (r.role === 'mcpServer' || r.role === 'subagentMcpServer') &&
+      !data.mcpServers.find(s => refKey(s.ref) === refKey(r.target))?.toolsOfferedKnown,
+    )
   const suffix = latest === 'prepared' ? '' : latest === 'notProcessed' ? ' (not yet processed)' : ` (${changeText(latest).toLowerCase()})`
   const model = agent.model
   const modelConfig = model && data.models.find((m) => refKey(m.ref) === refKey(model.ref))
   const pool = session?.placement.pools[0]
-  const navigatePool = pool
   const revision = getKagentAgentRevisions(resource)
   const template = agent.references.find((r) => r.role === 'template')?.target
-  const harnessInfo = harness.data ? getKagentHarnessDeclarations(redactKagentLiterals(harness.data)) : undefined
+  const harnessInfo = harnessRef && harnessReference?.unread !== 'outside_namespace_pin' && !isForbiddenError(harness.error) && !isNotFoundError(harness.error) && harness.data
+    ? getKagentHarnessDeclarations(redactKagentLiterals(harness.data))
+    : undefined
   const snapshot = runtime.tier
   const sessionSource = (
     <>
@@ -389,7 +391,7 @@ export function KagentAgentOverview({ resource, onOpen }: { resource: any; onOpe
     <div className="space-y-4">
       <RefreshFailedNotice queries={[query, runtime.query]} />
       <KagentAttention data={data} agent={agent.ref} onOpen={onOpen} />
-      <PageSection title="At a glance">
+      <WorkspaceCard title="At a glance">
         <FactGrid>
           <FactRow label="Latest change">
             <DimensionValue
@@ -434,7 +436,7 @@ export function KagentAgentOverview({ resource, onOpen }: { resource: any; onOpe
               tone={
                 agent.mcpServers.failing || agent.mcpServers.absent || agent.mcpServers.notPermitted || agent.toolsNotOffered?.length
                   ? 'degraded'
-                  : agent.incomplete || agent.mcpServers.unread
+                  : toolsUnknown
                     ? 'unknown'
                     : 'neutral'
               }
@@ -443,7 +445,7 @@ export function KagentAgentOverview({ resource, onOpen }: { resource: any; onOpe
               onOpen={() => navigate('/kagent/mcpservers')}
             >
               {agent.incomplete ? '≥' : ''}
-              {agent.mcpServers.declared} MCP {agent.mcpServers.declared === 1 && !agent.incomplete ? 'server' : 'servers'} · {agent.mcpServers.failing} failing · {agent.incomplete || agent.mcpServers.unread || agent.mcpServers.failing || agent.mcpServers.absent || agent.mcpServers.notPermitted
+              {agent.mcpServers.declared} MCP {agent.mcpServers.declared === 1 && !agent.incomplete ? 'server' : 'servers'} · {agent.incomplete || agent.mcpServers.unread ? '≥' : ''}{agent.mcpServers.failing} failing · {toolsUnknown
                 ? agent.toolsNotOffered?.length ? `≥${agent.toolsNotOffered.length} missing tools` : 'Missing tools unknown'
                 : `${agent.toolsNotOffered?.length ?? 0} missing tools`}
             </DimensionValue>
@@ -474,7 +476,7 @@ export function KagentAgentOverview({ resource, onOpen }: { resource: any; onOpe
                 }
                 source={session?.placement.reading ?? 'Prepared revision’s Substrate template and active workers were not read'}
                 linkLabel="Worker pool"
-                onOpen={navigatePool ? () => navigate(substratePoolPath(navigatePool, connection.context)) : undefined}
+                onOpen={pool && substrateFeature.support === 'supported' ? () => navigate(substratePoolPath(pool, connection.context)) : undefined}
               >
                 {session
                   ? {
@@ -494,9 +496,9 @@ export function KagentAgentOverview({ resource, onOpen }: { resource: any; onOpe
             </DimensionValue>
           </FactRow>
         </FactGrid>
-      </PageSection>
+      </WorkspaceCard>
       <div id="kagent-configuration">
-        <PageSection title={`Configuration of the latest change${suffix}`}>
+        <WorkspaceCard title={`Configuration of the latest change${suffix}`}>
           {latest !== 'prepared' && agent.newSessionsRevision && (
             <p className="mb-3 text-xs text-theme-text-secondary">
               New sessions still run revision {revisionText(agent.newSessionsRevision)}, prepared before this change. The configuration
@@ -524,9 +526,9 @@ export function KagentAgentOverview({ resource, onOpen }: { resource: any; onOpe
             </FoldSection>
           )}
           {!!agent.cycle?.length && <Notice>Subagent template cycle: {agent.cycle.join(' → ')}</Notice>}
-        </PageSection>
+        </WorkspaceCard>
       </div>
-      <PageSection title="About">
+      <WorkspaceCard title="About">
         <FactGrid>
           <FactRow label="Description">{agent.description || 'No description'}</FactRow>
           <FactRow label="Template">
@@ -545,7 +547,7 @@ export function KagentAgentOverview({ resource, onOpen }: { resource: any; onOpe
           </FactRow>
           <FactRow label="Created">{agent.created ? <TimeValue timestamp={agent.created} /> : 'Not reported'}</FactRow>
         </FactGrid>
-      </PageSection>
+      </WorkspaceCard>
       <WorkspaceConditions title="kagent conditions" conditions={redactKagentLiterals(resource).status?.conditions ?? []} />
     </div>
   )
@@ -576,7 +578,7 @@ export function KagentDependencyOverview({ resource, onOpen }: { resource: any; 
     <div className="space-y-4">
       <RefreshFailedNotice queries={[query]} />
       {data && <KagentAttention data={data} onOpen={onOpen} agent={ref} />}
-      <PageSection title="At a glance">
+      <WorkspaceCard title="At a glance">
         <FactGrid>
           <FactRow label="Status">
             <DimensionValue tone={reading?.tone ?? 'unknown'} source="Reported by kagent">
@@ -615,8 +617,8 @@ export function KagentDependencyOverview({ resource, onOpen }: { resource: any; 
             </DimensionValue>
           </FactRow>
         </FactGrid>
-      </PageSection>
-      <PageSection title="About">
+      </WorkspaceCard>
+      <WorkspaceCard title="About">
         <FactGrid>
           {ref.kind === 'ModelConfig' ? (
             <>
@@ -648,7 +650,7 @@ export function KagentDependencyOverview({ resource, onOpen }: { resource: any; 
           )}
           <FactRow label="Namespace">{ref.namespace}</FactRow>
         </FactGrid>
-      </PageSection>
+      </WorkspaceCard>
       <div id="kagent-used-by">
         {data && object ? (
           object.usedBy.agents.length > 0 ? <UsedBy impact={object.usedBy} data={data} onOpen={onOpen} server={server} /> : null

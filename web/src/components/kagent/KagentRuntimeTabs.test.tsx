@@ -100,3 +100,26 @@ it('shows recovery guidance only for a crashed session and gives this Agent a Re
   expect(crashed).toContain('Recover crashed sessions')
   expect(crashed.indexOf('Recover crashed sessions')).toBeLessThan(crashed.indexOf('<table'))
 })
+
+it.each(['notReported', 'notProcessed', 'unknown', 'deleting', 'preparing'])('does not infer compilation failure from an unreported digest (%s)', (latestChange) => {
+  state.data = {
+    apiTier: connectedTier, agent, revisions: [], sessions: counts({}), complete: true,
+    onEarlierRevisions: 0, needAttention: 0, attention: [], hintedEarlierRevisions: 0, sources: ['snapshot'],
+    coverage: { actors: { state: 'full' }, templates: { state: 'full' }, kagentAgents: { state: 'full' } },
+  }
+  const out = render(<KagentRevisions agent={agent} latestChange={latestChange} />)
+  expect(out).toContain('Not reported')
+  expect(out).not.toContain('Not compiled')
+})
+
+it('includes the latest-change row in the revision display limit and total', () => {
+  state.data = {
+    apiTier: connectedTier, agent, sessions: counts({}), complete: true,
+    revisions: Array.from({ length: 51 }, (_, i) => ({ revision: `revision-${i}`, template: { atespace: 'agents', name: `template-${i}` }, sessions: 0 })),
+    onEarlierRevisions: 0, needAttention: 0, attention: [], hintedEarlierRevisions: 0, sources: ['snapshot'],
+    coverage: { actors: { state: 'full' }, templates: { state: 'full' }, kagentAgents: { state: 'full' } },
+  }
+  const out = render(<KagentRevisions agent={agent} latestChange="blocked" />)
+  expect(out).toContain('Showing 50 of 52 revisions.')
+  expect(out.match(/<tr[ >]/g)).toHaveLength(51)
+})

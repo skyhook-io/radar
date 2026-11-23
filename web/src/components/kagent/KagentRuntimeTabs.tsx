@@ -118,15 +118,17 @@ export function KagentRevisions({ agent, latestChange }: { agent: KagentAgentRef
       ].filter((r): r is string => !!r),
     ),
   ]
-  const rows = digests.slice(0, 50).map((revision) => ({
+  const changeWithoutRevision = !!latestChange && latestChange !== 'prepared' && !data.agent.desiredRevision
+  const rows = digests.slice(0, changeWithoutRevision ? 49 : 50).map((revision) => ({
     revision,
     evidence: revisions.get(revision),
     template: attributed.find((t) => t.kagent?.kind === 'agentSession' && t.kagent.revision === revision),
     current: revision === data.agent.latestSuccessfulRevision,
     desired: revision === data.agent.desiredRevision,
   }))
-  if (latestChange && latestChange !== 'prepared' && !data.agent.desiredRevision)
+  if (changeWithoutRevision)
     rows.unshift({ revision: '', evidence: undefined, template: undefined, current: false, desired: true })
+  const total = digests.length + Number(changeWithoutRevision)
   return (
     <div className="space-y-4 p-5">
       <RefreshFailedNotice queries={[summary, templates]} />
@@ -145,7 +147,7 @@ export function KagentRevisions({ agent, latestChange }: { agent: KagentAgentRef
           {
             header: 'Revision',
             width: '19%',
-            cell: (t) => <span className="font-mono text-xs">{t.revision ? revisionText(t.revision) : 'Not compiled'}</span>,
+            cell: (t) => <span className="font-mono text-xs">{t.revision ? revisionText(t.revision) : latestChange === 'blocked' || latestChange === 'failed' ? 'Not compiled' : 'Not reported'}</span>,
           },
           {
             header: 'Role',
@@ -197,7 +199,7 @@ export function KagentRevisions({ agent, latestChange }: { agent: KagentAgentRef
               ),
           },
         ]}
-        footer={digests.length > rows.length ? `Showing ${rows.length} of ${digests.length} revisions.` : undefined}
+        footer={total > rows.length ? `Showing ${rows.length} of ${total} revisions.` : undefined}
       />
       <p className="text-xs text-theme-text-tertiary">
         A template’s creation time is when Substrate created it. kagent reports no time when a revision became prepared.

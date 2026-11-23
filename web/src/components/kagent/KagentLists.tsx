@@ -30,6 +30,10 @@ export function KagentAgentsTable({
 }) {
   const [params] = useSearchParams()
   const problemAgents = new Set(data.findings.flatMap((f) => [refKey(f.subject), ...(f.affects?.agents.map((a) => refKey(a.agent)) ?? [])]))
+  const subjects = new Set(data.findings.map(f => refKey(f.subject)))
+  for (const agent of data.agents) {
+    if (agent.references.some(r => subjects.has(refKey(r.target)))) problemAgents.add(refKey(agent.ref))
+  }
   const wide = useMediaQuery('(min-width: 1280px)')
   const sessionByAgent = new Map(runtime.rows.map((row) => [`${row.agent.namespace}/${row.agent.name}`, row]))
   const session = (a: KagentAgent) => <SessionValue row={sessionByAgent.get(`${a.ref.namespace}/${a.ref.name}`)} runtime={runtime} />
@@ -142,9 +146,7 @@ export function mcpStatus(server: KagentMCPServer) {
       ? 'Controller discovery OK'
       : server.reading.state === 'discoveryOff'
         ? 'Controller discovery disabled'
-        : server.reading.state === 'stale'
-          ? 'Latest change not processed'
-          : 'Controller discovery not reported'
+        : 'Controller discovery not reported'
 }
 export function modelStatus(reading: Pick<KagentModel['reading'], 'state' | 'reason' | 'condition' | 'text'>) {
   if (reading.state === 'stale') return 'Latest change not processed'
