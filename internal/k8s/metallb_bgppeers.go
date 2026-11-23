@@ -33,10 +33,25 @@ func MetalLBBGPPeerGVR(kind, group string) (schema.GroupVersionResource, bool) {
 }
 
 // ExactAccessCRDGVR reports whether a read resolves to a custom resource that
-// read paths authorize per kind: Trivy Operator reports and MetalLB BGPPeers.
+// read paths authorize per kind: Trivy Operator reports, MetalLB BGPPeers and
+// kagent's RemoteMCPServers and ModelConfigs.
 func ExactAccessCRDGVR(kind, group string) (schema.GroupVersionResource, bool) {
 	if gvr, ok := TrivyReportGVR(kind, group); ok {
 		return gvr, true
 	}
+	if gvr, ok := KagentCredentialGVR(kind, group); ok {
+		return gvr, true
+	}
 	return MetalLBBGPPeerGVR(kind, group)
+}
+
+// ExactAccessCRDResource reports the custom resource an issue or reference of
+// kind in group names when read paths authorize it per kind, so every Issues
+// surface (REST, MCP) gates its rows as the drawer gates the object.
+func ExactAccessCRDResource(kind, group string) (schema.GroupVersionResource, bool) {
+	if group == "" {
+		return schema.GroupVersionResource{}, false
+	}
+	gvr, ok := ExactAccessCRDGVR(kind, group)
+	return gvr, ok && RequiresExactNamespaceAccess(gvr)
 }

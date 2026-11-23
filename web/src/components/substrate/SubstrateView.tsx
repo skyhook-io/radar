@@ -10,11 +10,8 @@ import { refToSelectedResource } from '../../utils/navigation'
 import { encodeDrawerTrail } from '../../utils/drawer-trail'
 import type { SelectedResource } from '../../types'
 import { useCNPGKubectlContext } from '../cnpg/useCNPGKubectlContext'
-import { useCNPGSidebarWorkspace } from '../cnpg/useCNPGSidebarWorkspace'
-import { useVeleroSidebarWorkspace } from '../velero/useVeleroSidebarWorkspace'
+import { useIntegrationSidebars } from '../../integrations/sidebarWorkspaces'
 import { WorkspaceFrame } from '../workspace/WorkspaceFrame'
-import { useMergedSidebarWorkspaces } from '../workspace/sidebar'
-import { useAgentSandboxSidebarWorkspace } from '../agentsandbox/useAgentSandboxSidebarWorkspace'
 import { useWorkspaceDrawer } from '../workspace/useWorkspaceDrawer'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import {
@@ -36,7 +33,7 @@ import { SubstratePoolPage } from './SubstratePoolPage'
 import { SubstrateTemplatePage, SubstrateTemplatesScreen } from './SubstrateTemplates'
 import { SubstrateWorkersScreen } from './SubstrateWorkers'
 import { DEFAULT_INSTALLATION_ENDPOINT, KubectlTargetContext, SubstrateScreenGate, type KubectlTarget } from './shared'
-import { substrateDiscovered, useSubstrateSidebarWorkspace } from './useSubstrateSidebarWorkspace'
+import { substrateDiscovered } from './useSubstrateSidebarWorkspace'
 
 /**
  * One drawer at a time, in one URL update each way: opening an actor's drawer
@@ -84,11 +81,7 @@ export function SubstrateView({ namespaces, selectedResource, onOpenResource, on
   const status = useSubstrateStatus(discovered)
   const workspace = useSubstrateWorkspace(discovered)
 
-  const substrateSidebar = useSubstrateSidebarWorkspace({ apiResources, active: route.pool ? undefined : route.screen })
-  const cnpgSidebar = useCNPGSidebarWorkspace({ apiResources, namespaces })
-  const veleroSidebar = useVeleroSidebarWorkspace({ apiResources })
-  const sandboxSidebar = useAgentSandboxSidebarWorkspace({ apiResources, namespaces })
-  const sidebarWorkspace = useMergedSidebarWorkspaces(cnpgSidebar, veleroSidebar, substrateSidebar, sandboxSidebar)
+  const sidebarWorkspace = useIntegrationSidebars({ apiResources, namespaces, substrate: { active: route.pool ? undefined : route.screen } })
   const selectedKind = route.pool ? SUBSTRATE_WORKERPOOL_KIND : null
   const { drawerTarget, inspect } = useWorkspaceDrawer({ selectedResource, onOpenResource, onCloseResource })
   // On a local Radar, the file and name the context has there, and a saved

@@ -307,4 +307,14 @@ func TestMCPIssueSubjectAccessFollowsTheDrawer(t *testing.T) {
 	if !access(issues.Ref{Kind: "Secret", Namespace: "db", Name: "creds"}) {
 		t.Fatal("Secret access did not open the Secret's issue")
 	}
+	// Custom resources read per kind follow their kind's access too.
+	peer := issues.Ref{Group: "metallb.io", Kind: "BGPPeer", Namespace: "db", Name: "router"}
+	perms.SetCanI("get", "metallb.io", "bgppeers", "db", false)
+	if access(peer) {
+		t.Fatal("a MetalLB BGPPeer's issue authorized without BGPPeer access")
+	}
+	perms.SetCanI("get", "metallb.io", "bgppeers", "db", true)
+	if !access(peer) {
+		t.Fatal("BGPPeer access did not open the peer's issue")
+	}
 }

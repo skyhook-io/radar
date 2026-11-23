@@ -5,8 +5,8 @@ type Workspaces = Record<string, SidebarCategoryWorkspace>
 
 /**
  * The Resources sidebar category the agent runtimes' kinds are listed under
- * (api-resources.ts). Agent Substrate and Agent Sandbox each contribute a
- * workspace to it, merged into one Integrations row.
+ * (api-resources.ts). Agent Substrate, Agent Sandbox and kagent each
+ * contribute a workspace to it, merged into one Integrations row.
  */
 export const AGENTS_SIDEBAR_CATEGORY = 'Agents'
 
@@ -16,8 +16,9 @@ export function useMergedSidebarWorkspaces(
   b?: Workspaces | undefined,
   c?: Workspaces | undefined,
   d?: Workspaces | undefined,
+  e?: Workspaces | undefined,
 ): Workspaces | undefined {
-  return useMemo(() => mergeSidebarWorkspaces([a, b, c, d]), [a, b, c, d])
+  return useMemo(() => mergeSidebarWorkspaces([a, b, c, d, e]), [a, b, c, d, e])
 }
 
 /**

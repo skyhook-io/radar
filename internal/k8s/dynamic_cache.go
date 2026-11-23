@@ -508,6 +508,15 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "extensions.agents.x-k8s.io", Versions: []string{"v1beta1"}, Resource: "sandboxclaims", Kind: "SandboxClaim", Namespaced: true},
 	{Group: "extensions.agents.x-k8s.io", Versions: []string{"v1beta1"}, Resource: "sandboxtemplates", Kind: "SandboxTemplate", Namespaced: true},
 	{Group: "extensions.agents.x-k8s.io", Versions: []string{"v1beta1"}, Resource: "sandboxwarmpools", Kind: "SandboxWarmPool", Namespaced: true},
+	// kagent 1.x. Its 0.x group, kagent.dev, is read generically only.
+	{Group: "api.kagent.dev", Versions: []string{"v1alpha3"}, Resource: "agents", Kind: "Agent", Namespaced: true},
+	{Group: "api.kagent.dev", Versions: []string{"v1alpha3"}, Resource: "agenttemplates", Kind: "AgentTemplate", Namespaced: true},
+	{Group: "api.kagent.dev", Versions: []string{"v1alpha3"}, Resource: "harnesses", Kind: "Harness", Namespaced: true},
+	{Group: "api.kagent.dev", Versions: []string{"v1alpha3"}, Resource: "modelconfigs", Kind: "ModelConfig", Namespaced: true},
+	{Group: "api.kagent.dev", Versions: []string{"v1alpha3"}, Resource: "modelproviderconfigs", Kind: "ModelProviderConfig", Namespaced: true},
+	{Group: "api.kagent.dev", Versions: []string{"v1alpha3"}, Resource: "remotemcpservers", Kind: "RemoteMCPServer", Namespaced: true},
+	{Group: "api.kagent.dev", Versions: []string{"v1alpha3"}, Resource: "sandboxtemplates", Kind: "SandboxTemplate", Namespaced: true},
+	{Group: "api.kagent.dev", Versions: []string{"v1alpha3"}, Resource: "egresspolicies", Kind: "EgressPolicy", Namespaced: true},
 	// NOTE: the wgpolicyk8s.io PolicyReport CRDs are intentionally NOT in
 	// this list. They are warmed up conditionally — only when Kyverno is
 	// detected — via WarmupKyvernoPolicyReports in policy_reports.go. Adding

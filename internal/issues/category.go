@@ -6,6 +6,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/kagent"
 )
 
 // classifyInput is the minimal signal the classifier reads. It mirrors the
@@ -107,6 +108,8 @@ func Classify(in classifyInput) issuesapi.Category {
 		// well-known controller families by API group.
 		g := strings.ToLower(in.APIGroup)
 		switch {
+		case g == kagent.Group:
+			return issuesapi.CategoryAgentConfiguration
 		case strings.Contains(g, "cert-manager.io"):
 			// Only a Certificate is "certificate not ready". Issuer/ClusterIssuer/
 			// Order/Challenge are different objects — a not-ready Issuer is a

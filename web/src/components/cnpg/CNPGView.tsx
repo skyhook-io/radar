@@ -11,14 +11,11 @@ import { CNPGScreenGate } from './shared'
 import { CNPGCreateClusterDialog } from './CNPGCreateClusterDialog'
 import { CNPGDetailPage } from './CNPGDetailPage'
 import { parseCNPGRoute } from './routes'
-import { useCNPGFleet, useCNPGSidebarWorkspace } from './useCNPGSidebarWorkspace'
+import { useIntegrationSidebars } from '../../integrations/sidebarWorkspaces'
+import { useCNPGFleet } from './useCNPGSidebarWorkspace'
 import { useCNPGScreenParams } from './useCNPGScreenParams'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
-import { useVeleroSidebarWorkspace } from '../velero/useVeleroSidebarWorkspace'
-import { useSubstrateSidebarWorkspace } from '../substrate/useSubstrateSidebarWorkspace'
 import { WorkspaceFrame } from '../workspace/WorkspaceFrame'
-import { useMergedSidebarWorkspaces } from '../workspace/sidebar'
-import { useAgentSandboxSidebarWorkspace } from '../agentsandbox/useAgentSandboxSidebarWorkspace'
 import { useWorkspaceDrawer } from '../workspace/useWorkspaceDrawer'
 
 interface CNPGViewProps {
@@ -44,15 +41,11 @@ export function CNPGView({ namespaces, selectedResource, onOpenResource, onClose
   const narrow = useMediaQuery('(max-width: 1100px)')
   const compactNavigation = narrow || (laptop && !!route.detail)
   const { data: apiResources } = useAPIResources()
-  const cnpgSidebar = useCNPGSidebarWorkspace({
+  const sidebarWorkspace = useIntegrationSidebars({
     apiResources,
     namespaces,
-    active: { screen: route.screen, child: route.detail ? { label: route.detail.name, title: `${route.detail.plural} ${route.detail.namespace}/${route.detail.name}` } : undefined },
+    cnpg: { active: { screen: route.screen, child: route.detail ? { label: route.detail.name, title: `${route.detail.plural} ${route.detail.namespace}/${route.detail.name}` } : undefined } },
   })
-  const veleroSidebar = useVeleroSidebarWorkspace({ apiResources })
-  const substrateSidebar = useSubstrateSidebarWorkspace({ apiResources })
-  const sandboxSidebar = useAgentSandboxSidebarWorkspace({ apiResources, namespaces })
-  const sidebarWorkspace = useMergedSidebarWorkspaces(cnpgSidebar, veleroSidebar, substrateSidebar, sandboxSidebar)
   const { query, fleet } = useCNPGFleet(namespaces)
   const { drawerTarget, inspect, searchParams } = useWorkspaceDrawer({ selectedResource, onOpenResource, onCloseResource })
 

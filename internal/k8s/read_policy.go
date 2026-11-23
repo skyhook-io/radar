@@ -12,10 +12,12 @@ import (
 
 // RequiresExactNamespaceAccess reports whether namespace visibility alone is
 // insufficient to read the resolved resource. Trivy findings can quote secrets,
-// and a MetalLB BGPPeer can hold its session password inline.
+// a MetalLB BGPPeer can hold its session password inline, and a kagent
+// RemoteMCPServer or ModelConfig can hold request headers inline.
 func RequiresExactNamespaceAccess(gvr schema.GroupVersionResource) bool {
 	return gvr.Group == aicontext.TrivyGroup ||
 		gvr.Group == metalLBGroup && gvr.Resource == "bgppeers" ||
+		isKagentCredentialResource(gvr) ||
 		gvr.Group == "" && (gvr.Resource == "secrets" || gvr.Resource == "limitranges") ||
 		gvr.Group == "rbac.authorization.k8s.io" && (gvr.Resource == "roles" || gvr.Resource == "rolebindings")
 }
@@ -45,7 +47,7 @@ func ExactNamespaceAccessNode(n *topology.Node) (group, resource string, resolve
 	if resource == "" {
 		kind, _ := n.Data["resourceKind"].(string)
 		b, builtin := resourceid.BuiltinForKind(kind)
-		exact := group == aicontext.TrivyGroup || group == metalLBGroup && strings.EqualFold(kind, "BGPPeer") || builtin && b.Group == group && RequiresExactNamespaceAccess(schema.GroupVersionResource{Group: b.Group, Resource: b.Resource})
+		exact := group == aicontext.TrivyGroup || group == metalLBGroup && strings.EqualFold(kind, "BGPPeer") || isKagentCredentialKind(group, kind) || builtin && b.Group == group && RequiresExactNamespaceAccess(schema.GroupVersionResource{Group: b.Group, Resource: b.Resource})
 		return "", "", !exact
 	}
 	if RequiresExactNamespaceAccess(schema.GroupVersionResource{Group: group, Resource: resource}) {

@@ -107,6 +107,13 @@ rules:
     resources: ["bgppeers"]
     verbs: ["get", "list", "watch"]
   {{- end }}
+  {{- if .Values.rbac.crdGroups.kagent }}
+  # spec.headersFrom[].value and spec.defaultHeaders can hold request
+  # headers, tokens included, inline.
+  - apiGroups: ["api.kagent.dev"]
+    resources: ["remotemcpservers", "modelconfigs"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- end }}
 
   # Workload resources (read-only)
@@ -565,6 +572,13 @@ rules:
   {{- if .Values.rbac.crdGroups.kaiScheduler }}
   - apiGroups: ["scheduling.run.ai", "kai.scheduler"]
     resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.kagent }}
+  # kagent 1.x. RemoteMCPServers and ModelConfigs are granted with Secrets,
+  # above. The 0.x group, kagent.dev, is not read.
+  - apiGroups: ["api.kagent.dev"]
+    resources: ["agents", "agenttemplates", "harnesses", "modelproviderconfigs", "sandboxtemplates", "egresspolicies"]
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.kaito }}

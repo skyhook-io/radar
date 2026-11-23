@@ -215,6 +215,7 @@ rbac:
     grafana: true           # monitoring.grafana.com, tempo/loki/grafana.integreatly.org
     istio: true             # networking.istio.io, security.istio.io
     jobset: true            # jobset.x-k8s.io
+    kagent: true            # api.kagent.dev (Agents, AgentTemplates, Harnesses, ModelProviderConfigs, SandboxTemplates, EgressPolicies; RemoteMCPServers and ModelConfigs only when Secrets are granted, as they can hold request headers inline)
     kaiScheduler: true      # scheduling.run.ai, kai.scheduler (KAI Scheduler queues and pod groups)
     kaito: true             # kaito.sh (Workspaces, RAGEngines)
     karpenter: true         # karpenter.sh, karpenter.k8s.aws, karpenter.azure.com, karpenter.k8s.gcp, eks.amazonaws.com (EKS Auto Mode NodeClasses)

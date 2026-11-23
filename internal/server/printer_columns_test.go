@@ -449,3 +449,34 @@ func TestPrinterColumnResponsePreservesConditionSource(t *testing.T) {
 		t.Fatalf("the converter must preserve raw values: %#v", cells)
 	}
 }
+
+// kagent's RemoteMCPServer prints spec.url as a column; the cell is copied
+// verbatim by the table conversion, so its user info and query are redacted
+// before any client sees it. Another group's URL column is left alone.
+func TestTableFromCRD_RedactsKagentURLCells(t *testing.T) {
+	const url = "http://user:FAKEPASS@no-such-mcp.example:9999/mcp?token=FAKEQUERY"
+	cols := []map[string]any{
+		pcCol("Protocol", ".spec.protocol", "string", 0),
+		pcCol("URL", ".spec.url", "string", 0),
+		pcCol("Accepted", ".status.conditions[?(@.type=='Accepted')].message", "string", 0),
+	}
+	item := pcObj("a", map[string]any{
+		"spec":   map[string]any{"protocol": "STREAMABLE_HTTP", "url": url},
+		"status": map[string]any{"conditions": []any{map[string]any{"type": "Accepted", "message": `Post "http://user:***@no-such-mcp.example:9999/mcp?token=FAKEQUERY": dial tcp`}}},
+	})
+	kagentCRD := crdWith("v1alpha3", cols)
+	kagentCRD.Object["spec"].(map[string]any)["group"] = "api.kagent.dev"
+	_, cells := tableFromCRD(context.Background(), kagentCRD, "v1alpha3", []*unstructured.Unstructured{item})
+	got := cells["a"]
+	if len(got) != 3 || got[1] != "http://[REDACTED]@no-such-mcp.example:9999/mcp?[REDACTED]" {
+		t.Fatalf("URL cell = %#v", got)
+	}
+	if s, _ := got[2].(string); strings.Contains(s, "FAKEQUERY") {
+		t.Errorf("message cell leaks the query: %q", s)
+	}
+	foreign := crdWith("v1alpha3", cols)
+	foreign.Object["spec"].(map[string]any)["group"] = "example.com"
+	if _, cells := tableFromCRD(context.Background(), foreign, "v1alpha3", []*unstructured.Unstructured{item}); cells["a"][1] != url {
+		t.Errorf("another group's cells were changed: %#v", cells["a"])
+	}
+}

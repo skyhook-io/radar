@@ -9,6 +9,7 @@ import { cnpgResourceHost } from '../components/cnpg/host'
 import { veleroResourceHost } from '../components/velero/host'
 import { substrateResourceHost } from '../components/substrate/host'
 import { agentSandboxResourceHost } from '../components/agentsandbox/host'
+import { kagentResourceHost } from '../components/kagent/host'
 import { crdResourceHost } from '../components/resources/crd/host'
 import {
   composeDetailSlots, composeResourceHosts, hostsForResource, hostSupport, resourceHostForSlot,
@@ -74,6 +75,7 @@ export const resourceHosts: readonly ResourceHost[] = [
   { id: 'longhorn', renderers: { LonghornVolumeRenderer } },
   substrateResourceHost,
   agentSandboxResourceHost,
+  kagentResourceHost,
   { id: 'flux', renderers: { FluxHelmReleaseRenderer } },
   { id: 'secrets-store-csi', renderers: { SecretProviderClassRenderer } },
   { id: 'admission-policy', renderers: { ValidatingAdmissionPolicyRenderer, ValidatingAdmissionPolicyBindingRenderer } },

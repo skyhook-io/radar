@@ -33,6 +33,7 @@ import { getInferencePoolStatus as _getInferencePoolStatus, getInferenceObjectiv
 import { getVolcanoJobStatus as _getVolcanoJobStatus, getVolcanoQueueStatus as _getVolcanoQueueStatus, getVolcanoPodGroupStatus as _getVolcanoPodGroupStatus, getJobFlowStatus as _getJobFlowStatus, getJobTemplateStatus as _getJobTemplateStatus } from './resource-utils-volcano'
 import { getKaiQueueStatus as _getKaiQueueStatus, getKaiPodGroupStatus as _getKaiPodGroupStatus } from './resource-utils-kai'
 import { getKaitoWorkspaceStatus as _getKaitoWorkspaceStatus, getRAGEngineStatus as _getRAGEngineStatus } from './resource-utils-kaito'
+import { getKagentAgentColumnValue, getKagentStatus } from './resource-utils-kagent'
 import { getAgentRuntimeColumnValue, getSandboxClaimStatus as _getSandboxClaimStatus, getSandboxStatus as _getSandboxStatus, getSandboxWarmPoolStatus as _getSandboxWarmPoolStatus, getWorkerPoolStatus as _getWorkerPoolStatus } from './resource-utils-agent-runtimes'
 import { getNIMServiceStatus as _getNIMServiceStatus, getNIMCacheStatus as _getNIMCacheStatus, getNIMPipelineStatus as _getNIMPipelineStatus } from './resource-utils-nim'
 import { getAMDDeviceConfigStatus as _getAMDDeviceConfigStatus } from './resource-utils-amd-gpu'
@@ -2603,6 +2604,8 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
   if (flaggerValue !== undefined) return flaggerValue
   const agentRuntimeValue = getAgentRuntimeColumnValue(resource, column)
   if (agentRuntimeValue !== undefined) return agentRuntimeValue
+  const kagentValue = getKagentAgentColumnValue(resource, column)
+  if (kagentValue !== undefined) return kagentValue
   const planValue = getUpgradePlanColumnValue(resource, column)
   if (planValue !== undefined) return planValue
   if (_isApiGroup(resource?.apiVersion, FLUX_OPERATOR_GROUP)) {
@@ -2700,6 +2703,7 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'agentsandboxes') return _getSandboxStatus(resource).text
       if (kindLower === 'agentsandboxclaims') return _getSandboxClaimStatus(resource).text
       if (kindLower === 'agentsandboxwarmpools') return _getSandboxWarmPoolStatus(resource).text
+      if (kindLower === 'kagentagents') return getKagentStatus(resource)?.text ?? ''
       if (kindLower === 'ragengines') return _getRAGEngineStatus(resource).text
       if (kindLower === 'nimservices') return _getNIMServiceStatus(resource).text
       if (kindLower === 'nimcaches') return _getNIMCacheStatus(resource).text

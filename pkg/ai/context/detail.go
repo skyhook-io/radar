@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/pkg/prune"
@@ -17,6 +18,11 @@ func minifyDetail(obj runtime.Object) (map[string]any, error) {
 	// Handle Secrets specially — never include data/stringData
 	if secret, ok := obj.(*corev1.Secret); ok {
 		return minifySecretDetail(secret), nil
+	}
+	// A dynamic object read through the typed path still needs the CRD
+	// redaction, which only the unstructured path runs.
+	if u, ok := obj.(*unstructured.Unstructured); ok {
+		return minifyDetailUnstructured(u.DeepCopy().Object), nil
 	}
 
 	data, err := json.Marshal(obj)
@@ -46,6 +52,7 @@ func minifyDetailUnstructured(obj map[string]any) map[string]any {
 // Middleware basicAuth user) before they go to an LLM.
 func redactUnstructuredSecrets(obj map[string]any) {
 	redactUpgradePlanEnvs(obj)
+	redactKagentLiterals(obj)
 	if spec, ok := obj["spec"]; ok {
 		RedactInlineSecrets(spec)
 	}

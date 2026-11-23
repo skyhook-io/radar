@@ -64,10 +64,14 @@ const (
 	// not establish that the run's Pods ever ran.
 	CategoryBatchRunStopped Category = "batch_run_stopped"
 
-	CategoryMissingConfigRef         Category = "missing_config_ref"
-	CategoryInvalidConfiguration     Category = "invalid_configuration"
-	CategoryPDBBlocksEvictions       Category = "pdb_blocks_evictions"
-	CategorySecretSyncFailed         Category = "secret_sync_failed"
+	CategoryMissingConfigRef     Category = "missing_config_ref"
+	CategoryInvalidConfiguration Category = "invalid_configuration"
+	CategoryPDBBlocksEvictions   Category = "pdb_blocks_evictions"
+	CategorySecretSyncFailed     Category = "secret_sync_failed"
+	// CategoryAgentConfiguration is an AI agent runtime object (kagent's
+	// api.kagent.dev kinds) whose configuration, or a model, MCP server or
+	// egress policy it uses, its controller reports a problem with.
+	CategoryAgentConfiguration       Category = "agent_configuration"
 	CategoryServiceNoEndpoints       Category = "service_no_endpoints"
 	CategoryServiceMixedBackends     Category = "service_mixed_backends"
 	CategoryIngressBackendMissing    Category = "ingress_backend_missing"
@@ -155,6 +159,7 @@ var categoryGroup = map[Category]CategoryGroup{
 	CategoryInvalidConfiguration:     GroupConfiguration,
 	CategoryPDBBlocksEvictions:       GroupConfiguration,
 	CategorySecretSyncFailed:         GroupConfiguration,
+	CategoryAgentConfiguration:       GroupConfiguration,
 	CategoryServiceNoEndpoints:       GroupNetworking,
 	CategoryServiceMixedBackends:     GroupNetworking,
 	CategoryIngressBackendMissing:    GroupNetworking,

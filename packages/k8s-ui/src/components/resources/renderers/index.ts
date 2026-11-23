@@ -210,3 +210,4 @@ export { MetalLBIPAddressPoolRenderer, MetalLBL2AdvertisementRenderer, MetalLBBG
 export { CustomResourceDefinitionRenderer } from './CustomResourceDefinitionRenderer'
 
 export { CRDSchemaBrowser, type CRDSchemaBrowserProps } from './CRDSchemaBrowser'
+export { KagentAgentRenderer, type KagentAgentRendererProps, type KagentAgentRelated, type KagentRelatedRead } from './KagentAgentRenderer'

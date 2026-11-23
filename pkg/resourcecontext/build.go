@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/kagent"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/relations"
@@ -1302,6 +1303,12 @@ func buildStatusSummary(obj runtime.Object) *StatusSummary {
 		return nil
 	}
 	out := &StatusSummary{}
+	// kagent quotes raw errors, the URL they were for included, into its
+	// condition messages; the same rule as its Issues and AI detail applies.
+	message := func(m string) string { return m }
+	if apiVersion, _ := u["apiVersion"].(string); kagent.IsGroup(resourceid.GroupFromAPIVersion(apiVersion)) {
+		message = kagent.RedactURLsInText
+	}
 	if phase, ok, _ := unstructured.NestedString(status, "phase"); ok {
 		out.Phase = phase
 	}
@@ -1319,7 +1326,7 @@ func buildStatusSummary(obj runtime.Object) *StatusSummary {
 				Type:               stringField(cond, "type"),
 				Status:             stringField(cond, "status"),
 				Reason:             stringField(cond, "reason"),
-				Message:            truncateRunes(stringField(cond, "message"), 300),
+				Message:            truncateRunes(message(stringField(cond, "message")), 300),
 				LastTransitionTime: stringField(cond, "lastTransitionTime"),
 			}
 			if observedGeneration, ok, _ := unstructured.NestedInt64(cond, "observedGeneration"); ok {

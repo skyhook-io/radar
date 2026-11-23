@@ -15,6 +15,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/kagent"
 	"github.com/skyhook-io/radar/pkg/longhorn"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -208,7 +209,7 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 			// silent ON PURPOSE — because the object is mid-operation and its
 			// False Ready is expected — has to say so explicitly, or the noise
 			// it just suppressed comes straight back through the generic path.
-			if cnpgSuppressesGenericConditions(gvr.Group, kind, u) || agentSandboxSuppressesGenericConditions(gvr.Group, kind, u) {
+			if cnpgSuppressesGenericConditions(gvr.Group, kind, u) || agentSandboxSuppressesGenericConditions(gvr.Group, kind, u) || kagentSuppressesGenericConditions(gvr.Group, kind) {
 				continue
 			}
 			condTypes := conditions.DefaultFalseConditionTypes
@@ -332,6 +333,8 @@ func detectCuratedConditionIssues(gvr schema.GroupVersionResource, kind string, 
 		if kind == "WorkerPool" {
 			return detectWorkerPoolIssues(gvr, kind, u)
 		}
+	case kagent.Group:
+		return detectKagentIssues(gvr, kind, u, time.Now())
 	}
 	return nil
 }

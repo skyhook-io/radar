@@ -1,0 +1,404 @@
+[
+ {
+  "fn": "url",
+  "in": "https://api.example.com/v1",
+  "want": "https://api.example.com/v1"
+ },
+ {
+  "fn": "url",
+  "in": "https://user:tok3n@mcp.example.com/mcp",
+  "want": "https://[REDACTED]@mcp.example.com/mcp"
+ },
+ {
+  "fn": "url",
+  "in": "https://TOKEN@git.example.com/org/skills.git",
+  "want": "https://[REDACTED]@git.example.com/org/skills.git"
+ },
+ {
+  "fn": "url",
+  "in": "https://mcp.example.com/sse?api_key=abc&x=1",
+  "want": "https://mcp.example.com/sse?[REDACTED]"
+ },
+ {
+  "fn": "url",
+  "in": "https://s3.example.com/#frag",
+  "want": "https://s3.example.com/#[REDACTED]"
+ },
+ {
+  "fn": "url",
+  "in": "user:pw@ollama:11434",
+  "want": "[REDACTED]@ollama:11434"
+ },
+ {
+  "fn": "url",
+  "in": "ollama:11434",
+  "want": "ollama:11434"
+ },
+ {
+  "fn": "url",
+  "in": "s3://AKIDEXAMPLE:secret@bucket/snapshots",
+  "want": "s3://[REDACTED]@bucket/snapshots"
+ },
+ {
+  "fn": "url",
+  "in": "gs://snapshots/agents",
+  "want": "gs://snapshots/agents"
+ },
+ {
+  "fn": "url",
+  "in": "",
+  "want": ""
+ },
+ {
+  "fn": "text",
+  "in": "failed to connect to https://user:pw@mcp.example.com/mcp?token=abc: 401",
+  "want": "failed to connect to https://[REDACTED]@mcp.example.com/mcp?[REDACTED]: 401"
+ },
+ {
+  "fn": "text",
+  "in": "see https://docs.example.com/page?lang=en for details",
+  "want": "see https://docs.example.com/page?lang=en for details"
+ },
+ {
+  "fn": "text",
+  "in": "Get \"https://mcp.example.com/sse?X-Amz-Signature=deadbeef\": EOF",
+  "want": "Get \"https://mcp.example.com/sse?[REDACTED]\": EOF"
+ },
+ {
+  "fn": "text",
+  "in": "no URL here",
+  "want": "no URL here"
+ },
+ {
+  "fn": "url",
+  "in": "http://user:FAKEPASS@no-such-mcp.example:9999/mcp?token=FAKEQUERY",
+  "want": "http://[REDACTED]@no-such-mcp.example:9999/mcp?[REDACTED]"
+ },
+ {
+  "fn": "text",
+  "in": "Failed to connect to MCP server: failed to connect MCP client: calling \"initialize\": sending \"initialize\": rejected by transport: Post \"http://user:***@no-such-mcp.example:9999/mcp?token=FAKEQUERY\": dial tcp: lookup no-such-mcp.example: no such host",
+  "want": "Failed to connect to MCP server: failed to connect MCP client: calling \"initialize\": sending \"initialize\": rejected by transport: Post \"http://[REDACTED]@no-such-mcp.example:9999/mcp?[REDACTED]\": dial tcp: lookup no-such-mcp.example: no such host"
+ },
+ {
+  "fn": "cell",
+  "path": ".spec.url",
+  "in": "http://user:FAKEPASS@no-such-mcp.example:9999/mcp?token=FAKEQUERY",
+  "want": "http://[REDACTED]@no-such-mcp.example:9999/mcp?[REDACTED]"
+ },
+ {
+  "fn": "cell",
+  "path": ".spec.url",
+  "in": "https://mcp.example.com/sse?region=eu",
+  "want": "https://mcp.example.com/sse?[REDACTED]"
+ },
+ {
+  "fn": "cell",
+  "path": ".spec.protocol",
+  "in": "STREAMABLE_HTTP",
+  "want": "STREAMABLE_HTTP"
+ },
+ {
+  "fn": "args",
+  "in": [
+   "serve",
+   "--api-key=sk-123",
+   "--port",
+   "8080"
+  ],
+  "want": [
+   "serve",
+   "[redacted: may hold a credential]",
+   "--port",
+   "8080"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "--token",
+   "abc",
+   "--verbose"
+  ],
+  "want": [
+   "--token",
+   "[redacted: may hold a credential]",
+   "--verbose"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "--auth-file",
+   "/etc/auth",
+   "--debug"
+  ],
+  "want": [
+   "--auth-file",
+   "[redacted: may hold a credential]",
+   "--debug"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "OPENAI_API_KEY=sk-123",
+   "MODE=fast"
+  ],
+  "want": [
+   "[redacted: may hold a credential]",
+   "MODE=fast"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "--endpoint=https://u:p@host/x"
+  ],
+  "want": [
+   "[redacted: may hold a credential]"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "env",
+   "TOKEN=opaque-dummy-value",
+   "serve"
+  ],
+  "want": [
+   "env",
+   "[redacted: may hold a credential]",
+   "serve"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "env",
+   "TOKEN=Bearer FAKESECRET",
+   "serve"
+  ],
+  "want": [
+   "env",
+   "[redacted: may hold a credential]",
+   "serve"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "serve",
+   "--authorization=Bearer FAKESECRET"
+  ],
+  "want": [
+   "serve",
+   "[redacted: may hold a credential]"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "sh",
+   "-c",
+   "serve --api-key=opaque-dummy-value"
+  ],
+  "want": [
+   "sh",
+   "-c",
+   "[redacted: may hold a credential]"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "sh",
+   "-c",
+   "API_KEY=opaque-dummy-value exec serve --token opaque-dummy-value --port 8080"
+  ],
+  "want": [
+   "sh",
+   "-c",
+   "[redacted: may hold a credential]"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "sh",
+   "-c",
+   "exec serve --authorization=\"Bearer FAKESECRET\""
+  ],
+  "want": [
+   "sh",
+   "-c",
+   "[redacted: may hold a credential]"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "sh",
+   "-c",
+   "exec serve --token 'FAKE SECRET' --port 8080"
+  ],
+  "want": [
+   "sh",
+   "-c",
+   "[redacted: may hold a credential]"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "sh",
+   "-c",
+   "serve --authorization=\"Bearer FAKE"
+  ],
+  "want": [
+   "sh",
+   "-c",
+   "[redacted: may hold a credential]"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "bash",
+   "-lc",
+   "exec sh -c 'serve --token FAKESECRET'"
+  ],
+  "want": [
+   "bash",
+   "-lc",
+   "[redacted: may hold a credential]"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "curl",
+   "-H",
+   "Authorization: Bearer FAKESECRET"
+  ],
+  "want": [
+   "curl",
+   "-H",
+   "[redacted: may hold a credential]"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "sh",
+   "-c",
+   "curl https://mcp.example/mcp?token='FAKESECRET'"
+  ],
+  "want": [
+   "sh",
+   "-c",
+   "[redacted: may hold a credential]"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "curl",
+   "https://mcp.example/mcp?token='FAKESECRET'"
+  ],
+  "want": [
+   "curl",
+   "[redacted: may hold a credential]"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "sh",
+   "-c",
+   "true;API_KEY=FAKESECRET exec serve"
+  ],
+  "want": [
+   "sh",
+   "-c",
+   "[redacted: may hold a credential]"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "sh",
+   "-c",
+   "exec serve --mode fast"
+  ],
+  "want": [
+   "sh",
+   "-c",
+   "exec serve --mode fast"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "sh",
+   "-c",
+   "echo \"hello world\" && serve"
+  ],
+  "want": [
+   "sh",
+   "-c",
+   "echo \"hello world\" && serve"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "serve",
+   "--port=8080"
+  ],
+  "want": [
+   "serve",
+   "--port=8080"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "curl",
+   "https://mcp.example/mcp?region=eu"
+  ],
+  "want": [
+   "curl",
+   "https://mcp.example/mcp?[REDACTED]"
+  ]
+ },
+ {
+  "fn": "text",
+  "in": "dial tcp: lookup user:hunter2@ollama.agents.svc:11434: no such host",
+  "want": "dial tcp: lookup [REDACTED]@ollama.agents.svc:11434: no such host"
+ },
+ {
+  "fn": "text",
+  "in": "Post \"user:hunter2@ollama:11434/api/chat\": EOF",
+  "want": "Post \"[REDACTED]@ollama:11434/api/chat\": EOF"
+ },
+ {
+  "fn": "text",
+  "in": "pulling ghcr.io/acme/agent@sha256:0123abcd: not found",
+  "want": "pulling ghcr.io/acme/agent@sha256:0123abcd: not found"
+ },
+ {
+  "fn": "text",
+  "in": "image repo@sha256:0123abcd is pinned",
+  "want": "image repo@sha256:0123abcd is pinned"
+ },
+ {
+  "fn": "text",
+  "in": "ask admin@example.com for access",
+  "want": "ask admin@example.com for access"
+ },
+ {
+  "fn": "text",
+  "in": "registry localhost:5000/agent@sha256:0123 missing",
+  "want": "registry localhost:5000/agent@sha256:0123 missing"
+ }
+]

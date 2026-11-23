@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/pkg/prune"
@@ -16,6 +17,9 @@ func minifyCompact(obj runtime.Object) (map[string]any, error) {
 	// Handle Secrets specially — never include data/stringData
 	if secret, ok := obj.(*corev1.Secret); ok {
 		return minifySecretCompact(secret), nil
+	}
+	if u, ok := obj.(*unstructured.Unstructured); ok {
+		return minifyCompactUnstructured(u.DeepCopy().Object), nil
 	}
 
 	data, err := json.Marshal(obj)
