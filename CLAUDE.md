@@ -131,6 +131,7 @@ After `make <name>-demo`, run `kubectl config use-context kind-radar-<name>-demo
 | Kueue admission | `make kueue-demo` | Real Kueue reconciliation: admitted/running, quota-blocked with no Pod, and held-queue with no Pod |
 | JobSet | `make jobset-demo` | Real JobSet reconciliation: role/index Job-to-Pod lineage, dependency gating, and explicit terminal failure |
 | KubeRay | `make kuberay-demo` | Real RayService reconciliation: healthy active Serve revision plus an intentionally failed pending NewCluster revision |
+| kagent workspace | `make kagent-demo` | Real kagent 1.x configuration, credentials, tools, blocked edits and cross-namespace sharing on an existing test cluster. Read `scripts/kagent-demo/README.md`; no installation changes |
 | Agent Substrate | `make substrate-demo` | The `/substrate` workspace: a fake Substrate API on this machine (real wire protocol, every Needs attention scenario, a denied atespace, injected faults) with real WorkerPools and worker Pods. Runs against an existing cluster (default `radar-test-nonprod`), not kind; connect Radar with the endpoint settings it prints |
 | Workload metrics | `make workload-metrics-demo` | Metrics tab (HTTP rate/errors/latency + CPU/memory/throttling) across Beyla, cAdvisor/KSM and Istio sources. Builds on the Beyla demo; uses its own kubeconfig and the `radar-workload-metrics-demo` context rather than switching yours |
 
