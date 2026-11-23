@@ -211,6 +211,13 @@ describe.each([true, false])('inventory tables, wide=%s', (wide) => {
   })
 })
 describe('object pages', () => {
+  it('waits for the dependency workspace before showing a get-only fallback', () => {
+    state.loading = true
+    const out = html(<KagentDependencyOverview resource={{ kind: 'ModelConfig', metadata: ref('ModelConfig', 'model') }} onOpen={open} />)
+    expect(out).toContain('Reading dependency configuration')
+    expect(out).not.toContain('Used by: unknown')
+    expect(out).not.toContain('No API key Secret declared')
+  })
   it('keeps dependencies outside the namespace pin unread, including after a cached 404', () => {
     state.data = blockedWorkspace()
     const a = state.data.agents[0]
@@ -219,9 +226,12 @@ describe('object pages', () => {
     a.references[0].reading = undefined
     state.data.models = []
     state.resourceError = new ApiError('outside namespace scope', 404)
+    state.resourceData = { apiVersion: 'api.kagent.dev/v1alpha3', kind: 'ModelConfig', spec: { provider: 'OUTSIDE_PROVIDER', apiKeySecret: 'OUTSIDE_SECRET' } }
     const out = html(<KagentAgentOverview resource={{ metadata: a.ref }} onOpen={open} />)
     expect(out).toContain('Not read: outside_namespace_pin')
     expect(out).not.toContain('Absent')
+    expect(out).not.toContain('OUTSIDE_PROVIDER')
+    expect(out).not.toContain('OUTSIDE_SECRET')
     expect(state.resourceEnabled).toEqual([false])
   })
   it('redacts credentials in direct Harness and MCP reads as well as the get-only MCP page', () => {
@@ -323,9 +333,11 @@ describe('object pages', () => {
     a.references[0].unread = 'denied'
     state.data.models = []
     state.resourceError = new ApiError('forbidden', 403)
+    state.resourceData = { apiVersion: 'api.kagent.dev/v1alpha3', kind: 'ModelConfig', spec: { provider: 'WITHHELD_PROVIDER' } }
     const out = html(<KagentAgentOverview resource={{ metadata: { namespace: 'agents', name: a.ref.name } }} onOpen={open} />)
     expect(out).toContain('get modelconfigs (api.kagent.dev)')
     expect(out).toContain('Unread')
+    expect(out).not.toContain('WITHHELD_PROVIDER')
   })
   it('keeps individual reads available when the Agent list is denied', () => {
     state.data = workspace()

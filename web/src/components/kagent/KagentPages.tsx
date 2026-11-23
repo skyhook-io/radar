@@ -135,7 +135,8 @@ function ReferenceLine({
   const poolQuery = useSubstratePool(ref.kind === 'WorkerPool' ? ref : null)
   const poolCode = substrateErrorCode(poolQuery.error)
   const pool = definitiveFailure(poolCode) || poolCode === 'incomplete' ? undefined : poolQuery.data
-  const direct = query.data ? redactKagentLiterals(query.data) : undefined
+  const direct = reference.unread !== 'outside_namespace_pin' && !isForbiddenError(query.error) && !isNotFoundError(query.error) && query.data
+    ? redactKagentLiterals(query.data) : undefined
   const harness = direct && ref.kind === 'Harness' ? getKagentHarnessDeclarations(direct) : undefined
   const directReading = direct ? readKagent(direct) : undefined
   const state = reference.unread === 'outside_namespace_pin' ? 'unread'
@@ -378,6 +379,7 @@ export function KagentAgentOverview({ resource, onOpen }: { resource: any; onOpe
 export function KagentDependencyOverview({ resource, onOpen }: { resource: any; onOpen: Open }) {
   const query = useKagentWorkspace([])
   const data = query.data
+  if (!data && query.isLoading) return <PaneLoader label="Reading dependency configuration…" />
   const ref: KagentRef = {
     kind: resource.kind,
     group: 'api.kagent.dev',
