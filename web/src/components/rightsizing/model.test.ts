@@ -1,12 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { RightsizingScanResponse, RightsizingRow } from '../../api/client'
-import {
-  calculateImpact,
-  classifyRows,
-  flattenScanResults,
-  isActionableClass,
-  scanClassCounts,
-} from './model'
+import { calculateImpact, classifyRows, matchesResultClass, scanClassCounts } from '@skyhook-io/k8s-ui/components/rightsizing/results-model'
+import { flattenScanResults } from './model'
 
 function metric(overrides: Partial<RightsizingRow> = {}): RightsizingRow {
   return {
@@ -29,7 +24,7 @@ function response(
   replicas = 1,
   namespace = 'shop',
   scaledToZero = false,
-): RightsizingScanResponse {
+): RightsizingScanResponse & { workloads: NonNullable<RightsizingScanResponse['workloads']> } {
   return {
     scanId: 'rs_test', scanStatus: 'finished', deadlineAt: '2026-09-19T10:03:00Z',
     state: 'complete',
@@ -57,6 +52,10 @@ function response(
 }
 
 describe('rightsizing scan model', () => {
+  it('can render a retained unavailable scan from a disconnected spoke', () => {
+    expect(flattenScanResults({ ...response([]), state: 'unavailable', workloads: null })).toEqual([])
+  })
+
   it('prioritizes reliability guidance and explicit safety review', () => {
     expect(
       classifyRows([
@@ -193,7 +192,7 @@ describe('rightsizing scan model', () => {
       expect(rows[0].cpu).toBe(cpu)
       expect(rows[0].memory).toBe(memory)
       expect(scanClassCounts(rows)[rows[0].classification]).toBe(1)
-      const actions = rows.filter((row) => isActionableClass(row.classification))
+      const actions = rows.filter((row) => matchesResultClass(row, 'actions'))
       expect(actions).toHaveLength(classification === 'need_data' ? 0 : 1)
     })
   })
@@ -354,3 +353,15 @@ describe('pod-level requests', () => {
     expect(calculateImpact(rows, 2)).toMatchObject({ cpuChange: 0, memoryChange: 0 })
   })
 })
+
+it('finds independent actions on one container without counting a guarded proposal as capacity', () => {
+  const rows = flattenScanResults(response([
+    metric({ fit: 'under_requested', recommendedRequest: '250m', recommendedRequestValue: 0.25,
+      currentRequestValue: 0.1, decision: { status: 'review', reasons: ['hpa_evidence_unavailable'] } }),
+    metric({ resource: 'memory', fit: 'oversized', recommendedRequest: '128Mi',
+      recommendedRequestValue: 128 * 1024 ** 2, currentRequestValue: 256 * 1024 ** 2, decision: { status: 'actionable' } }),
+  ]));
+  expect(scanClassCounts(rows)).toEqual({ increase: 1, review: 1, reduction: 1, in_range: 0, need_data: 0 });
+  expect(matchesResultClass(rows[0], 'actions')).toBe(true);
+  expect(rows[0].impact.cpuChange).toBe(0);
+});

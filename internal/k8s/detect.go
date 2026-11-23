@@ -2420,6 +2420,8 @@ func scaledToZeroBackingWorkload(cache *ResourceCache, svc *corev1.Service) (sca
 				sawUnknownMatching = true
 			}
 		}
+	case errors.Is(err, ErrDynamicNotReady) && cache.CustomResourcesPending():
+		rolloutListOutcome = rolloutLookupTransient
 	case errors.Is(err, ErrUnknownDynamicKind) || errors.Is(err, ErrDynamicNotReady):
 		// Absent CRD or dynamic support not wired = a clean no-match (Rollouts
 		// genuinely aren't in play).

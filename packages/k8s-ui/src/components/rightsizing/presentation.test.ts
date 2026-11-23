@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { RightsizingRow } from '../../api/client'
+import type { RightsizingRow } from '../../types/rightsizing'
 import { getResourceRequestPresentation } from './presentation'
 
 function metric(overrides: Partial<RightsizingRow> = {}): RightsizingRow {
@@ -53,6 +53,19 @@ describe('rightsizing request presentation', () => {
       signals: [],
       tone: 'increase',
     })
+  })
+
+  it('shows an explicit zero as the current request when suggesting an increase', () => {
+    const result = getResourceRequestPresentation(metric({
+      fit: 'missing_request',
+      currentRequest: '0',
+      currentRequestValue: 0,
+      recommendedRequest: '10m',
+      recommendedRequestValue: 0.01,
+      decision: { status: 'actionable' },
+    }))
+    expect(result.primary).toBe('0 → 10m')
+    expect(result.secondary).toBe('Increase request')
   })
 
   it('keeps the configured value visible when safety signals require review', () => {

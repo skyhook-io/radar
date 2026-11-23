@@ -234,11 +234,10 @@ func TestManageHelmDeniesBeforeFetchingChart(t *testing.T) {
 	old := k8s.SetTestClient(client)
 	oldNamespaces := k8s.RBACNamespaces()
 	k8s.SetRBACNamespaces([]string{"team-probe"})
-	k8s.InvalidateCapabilitiesCache()
+
 	defer func() {
 		k8s.SetTestClient(old)
 		k8s.SetRBACNamespaces(oldNamespaces)
-		k8s.InvalidateCapabilitiesCache()
 	}()
 	status := k8s.GetConnectionStatus()
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})

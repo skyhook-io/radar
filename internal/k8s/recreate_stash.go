@@ -81,10 +81,10 @@ type recreateEntry struct {
 	deletedAt time.Time
 }
 
-var (
-	recreateStashMu sync.Mutex
-	recreateStash   = map[string]recreateEntry{}
-)
+type recreateStash struct {
+	mu      sync.Mutex
+	entries map[string]recreateEntry
+}
 
 func recreateKey(group, kind, namespace, name string) string {
 	return resourceid.ResourceKey(group, kind, namespace, name)
@@ -92,16 +92,19 @@ func recreateKey(group, kind, namespace, name string) string {
 
 // stashDeletedForRecreate records a deleted object for a potential
 // recreate-join. No-op for kinds outside the allowlist.
-func stashDeletedForRecreate(group, kind, namespace, name, uid string, obj any) {
+func (s *recreateStash) stashDeletedForRecreate(group, kind, namespace, name, uid string, obj any) {
 	if obj == nil || !recreateStashKinds[kind] {
 		return
 	}
-	recreateStashMu.Lock()
-	defer recreateStashMu.Unlock()
-	if len(recreateStash) >= recreateStashCap {
-		evictRecreateStashLocked()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.entries == nil {
+		s.entries = make(map[string]recreateEntry)
 	}
-	recreateStash[recreateKey(group, kind, namespace, name)] = recreateEntry{
+	if len(s.entries) >= recreateStashCap {
+		s.evictLocked()
+	}
+	s.entries[recreateKey(group, kind, namespace, name)] = recreateEntry{
 		obj:       obj,
 		uid:       uid,
 		deletedAt: time.Now(),
@@ -111,18 +114,18 @@ func stashDeletedForRecreate(group, kind, namespace, name, uid string, obj any) 
 // takeRecreateMatch returns the stashed predecessor of group/kind/ns/name when
 // the new UID differs and the delete is within the join TTL. The entry is
 // consumed (or discarded, if stale or same-UID) either way.
-func takeRecreateMatch(group, kind, namespace, name, newUID string) (any, bool) {
+func (s *recreateStash) takeRecreateMatch(group, kind, namespace, name, newUID string) (any, bool) {
 	if !recreateStashKinds[kind] {
 		return nil, false
 	}
-	recreateStashMu.Lock()
-	defer recreateStashMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	key := recreateKey(group, kind, namespace, name)
-	entry, ok := recreateStash[key]
+	entry, ok := s.entries[key]
 	if !ok {
 		return nil, false
 	}
-	delete(recreateStash, key)
+	delete(s.entries, key)
 	if time.Since(entry.deletedAt) > recreateJoinTTL {
 		return nil, false
 	}
@@ -134,36 +137,34 @@ func takeRecreateMatch(group, kind, namespace, name, newUID string) (any, bool) 
 	return entry.obj, true
 }
 
-// evictRecreateStashLocked drops expired entries, then — if the stash is
+// evictLocked drops expired entries, then — if the stash is
 // still full — the oldest ones, until a quarter of the cap is free. Mass
 // namespace teardowns are the stress case; recreates that matter happen
 // seconds after the delete, so evicting the oldest first is safe.
-func evictRecreateStashLocked() {
+func (s *recreateStash) evictLocked() {
 	now := time.Now()
-	for key, entry := range recreateStash {
+	for key, entry := range s.entries {
 		if now.Sub(entry.deletedAt) > recreateJoinTTL {
-			delete(recreateStash, key)
+			delete(s.entries, key)
 		}
 	}
 	target := recreateStashCap - recreateStashCap/4
-	for len(recreateStash) > target {
+	for len(s.entries) > target {
 		oldestKey := ""
 		var oldest time.Time
-		for key, entry := range recreateStash {
+		for key, entry := range s.entries {
 			if oldestKey == "" || entry.deletedAt.Before(oldest) {
 				oldestKey, oldest = key, entry.deletedAt
 			}
 		}
-		delete(recreateStash, oldestKey)
+		delete(s.entries, oldestKey)
 	}
 }
 
-// resetRecreateStash clears all entries. Called on cluster-context switch:
-// joining objects across clusters would fabricate diffs.
-func resetRecreateStash() {
-	recreateStashMu.Lock()
-	defer recreateStashMu.Unlock()
-	recreateStash = map[string]recreateEntry{}
+func (s *recreateStash) clear() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	clear(s.entries)
 }
 
 // stripStatusForRecreateDiff returns a copy of obj with .status zeroed so the

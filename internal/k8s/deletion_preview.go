@@ -49,8 +49,9 @@ func DeletionClientSnapshot(ctx context.Context) (dynamic.Interface, string, con
 	var config *rest.Config
 	if !CaptureClusterReads(func() {
 		operation = OperationContext()
-		client, name = GetDynamicClientSnapshot()
-		config, _ = GetConfigSnapshot()
+		conn := Current()
+		client, name = conn.Dynamic(), TimelineClusterContext(conn.ContextName())
+		config = conn.Config()
 	}) {
 		return nil, "", nil, ErrContextConfigurationBusy
 	}

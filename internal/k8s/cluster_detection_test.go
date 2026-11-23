@@ -116,8 +116,7 @@ func TestGetClusterPlatformFromMixedCachedNodes(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(core.Stop)
-	previous := resourceCache.Swap(&ResourceCache{ResourceCache: core})
-	t.Cleanup(func() { resourceCache.Store(previous) })
+	t.Cleanup(SwapResourceCacheForTest(&ResourceCache{ResourceCache: core}))
 	for range 32 {
 		if got, err := GetClusterPlatform(context.Background()); err != nil || got != "eks" {
 			t.Fatalf("GetClusterPlatform() = %q, %v; want eks", got, err)

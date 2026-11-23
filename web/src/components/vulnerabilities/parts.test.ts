@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ApiError } from '../../api/client'
 import { hasVulnerabilityReports, isKindUnknown, parseWorkloadParam, vulnerabilitiesPath, workloadParam } from '../../api/vulnerabilities'
-import { findingsCertainty, gapSentence, imageParts, workloadSummary } from './parts'
+import { exposedCountTip, exposureGapSentence, exposureLookup, exposureUnknownIn, findingsCertainty, gapSentence, imageParts, routesTip, summaryNames } from './parts'
 
 describe('vulnerabilities helpers', () => {
   it('builds the request from filters', () => {
@@ -9,6 +9,8 @@ describe('vulnerabilities helpers', () => {
       .toBe('/vulnerabilities?view=cve&namespaces=shop%2Cprod&severity=critical%2Chigh&fixable=1&q=zlib')
     expect(vulnerabilitiesPath({ view: 'image', workload: { kind: 'Deployment', namespace: 'shop', name: 'web' } }))
       .toBe('/vulnerabilities?view=image&workloadKind=Deployment&workloadNamespace=shop&workloadName=web')
+    expect(vulnerabilitiesPath({ view: 'fix', exposed: true })).toBe('/vulnerabilities?view=fix&exposed=1')
+    expect(vulnerabilitiesPath({ view: 'fix', exposed: false })).toBe('/vulnerabilities?view=fix')
   })
 
   it('round-trips the workload filter and rejects anything else', () => {
@@ -65,8 +67,62 @@ describe('vulnerabilities helpers', () => {
     expect(imageParts('ghcr.io/acme/app:1@sha256:abc').name).toBe('app:1')
   })
 
+  const w = (name: string, container = 'app', namespace = 'shop') => ({ kind: 'Deployment', group: 'apps', namespace, name, container })
+  const route = { via: 'LoadBalancer', namespace: 'kube-system', name: 'traefik' }
+
   it('summarizes workloads by distinct name', () => {
-    const w = (name: string, container = 'app') => ({ kind: 'Deployment', group: 'apps', namespace: 'shop', name, container })
-    expect(workloadSummary([w('a'), w('a', 'sidecar'), w('b'), w('c'), w('d')])).toBe('a, b +2')
+    const names = summaryNames([w('a'), w('a', 'sidecar'), w('b'), w('c'), w('d')])
+    expect(names.names.map((n) => n.name)).toEqual(['a', 'b'])
+    expect(names.rest).toBe(2)
+  })
+
+  it('lists exposed workloads first and marks only them, whatever the container', () => {
+    const exposure = exposureLookup([{ kind: 'Deployment', group: 'apps', namespace: 'shop', name: 'c', routes: [route] }])
+    const names = summaryNames([w('a'), w('b'), w('c', 'sidecar')], exposure)
+    expect(names.names.map((n) => [n.name, n.exposed?.routes])).toEqual([['c', [route]], ['a', undefined]])
+    expect(names.rest).toBe(1)
+    // Same name in another namespace is another workload.
+    expect(summaryNames([w('c', 'app', 'other')], exposure).names[0].exposed).toBeUndefined()
+  })
+
+  it('says how many of a count have a route, listing the first few', () => {
+    const exposed = ['a', 'b', 'c', 'd'].map((name) => ({ kind: 'Deployment', group: 'apps', namespace: 'shop', name, routes: [route] }))
+    const tip = exposedCountTip(exposed, 5, 9)
+    expect(tip.startsWith('5 of 9 workloads are exposed')).toBe(true)
+    expect(tip).toContain('a (LoadBalancer kube-system/traefik)')
+    expect(tip).not.toContain('d (')
+    expect(tip.endsWith('and 2 more')).toBe(true)
+    expect(exposedCountTip(exposed.slice(0, 1), 1, 5)).not.toContain('more')
+    // A list read names three routes per workload and counts the rest.
+    const capped = [{ ...exposed[0], routes: [route, route, route], routesTotal: 200 }]
+    expect(exposedCountTip(capped, 1, 5)).toContain('and 197 more)')
+    expect(routesTip(capped[0].routes, 200)).toMatch(/and 197 more$/)
+  })
+
+  it('reads a workload namespace as unknown only where an exposure gap covers it', () => {
+    const ingress = { count: 1, names: [{ kind: 'Ingress', group: 'networking.k8s.io' }] }
+    const listed = { code: 'user_forbidden', kinds: ingress, namespaces: { count: 2, names: ['shop', 'prod'] } }
+    expect(exposureUnknownIn(undefined, 'shop')).toBe(false)
+    expect(exposureUnknownIn([listed], 'shop')).toBe(true)
+    expect(exposureUnknownIn([listed], 'dev')).toBe(false)
+    expect(exposureUnknownIn([{ ...listed, namespaces: { extent: 'all' } }], 'dev')).toBe(true)
+    expect(exposureUnknownIn([{ ...listed, namespaces: { extent: 'unknown' } }], 'dev')).toBe(true)
+    // A capped list names 64 of 65: the 65th may be in it.
+    expect(exposureUnknownIn([{ ...listed, namespaces: { count: 65, names: Array.from({ length: 64 }, (_, i) => `ns-${i}`) } }], 'ns-64')).toBe(true)
+  })
+
+  it('names the route kinds and namespaces exposure could not be read in', () => {
+    const ingress = { count: 1, names: [{ kind: 'Ingress', group: 'networking.k8s.io' }] }
+    expect(exposureGapSentence(undefined)).toBeNull()
+    expect(exposureGapSentence([])).toBeNull()
+    const two = exposureGapSentence([{ code: 'user_forbidden', kinds: ingress, namespaces: { count: 2, names: ['a', 'b'] } }])
+    expect(two).toContain('Ingresses')
+    expect(two).toContain('2 namespaces')
+    expect(exposureGapSentence([{ code: 'radar_kind_not_collected', kinds: { count: 2, names: [{ kind: 'HTTPRoute' }, { kind: 'GRPCRoute' }] }, namespaces: { extent: 'all' } }]))
+      .toContain("couldn't read HTTPRoutes and GRPCRoutes, so")
+    const hidden = exposureGapSentence([{ code: 'user_forbidden', kinds: { count: 1, names: [{ kind: 'HTTPRoute' }] }, namespaces: { count: 1, names: ['shop'] } }])
+    expect(hidden).not.toContain("Radar couldn't read")
+    expect(hidden).toContain('HTTPRoutes')
+    expect(hidden).toContain('1 namespace')
   })
 })

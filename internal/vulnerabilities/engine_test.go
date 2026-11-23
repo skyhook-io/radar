@@ -65,7 +65,7 @@ var (
 
 func mustBuild(t *testing.T, items []*unstructured.Unstructured, targets []target, view View, f Filter) Response {
 	t.Helper()
-	resp, err := build(context.Background(), items, targets, view, f)
+	resp, err := build(context.Background(), items, targets, view, f, false)
 	if err != nil {
 		t.Fatal(err)
 	}

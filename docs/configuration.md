@@ -53,7 +53,7 @@ installed version. Several flags also take a persistent default from `~/.radar/c
 
 In the local cluster picker, Radar checks the target before closing sessions on a connected cluster. You can cancel during that check. Once the switch starts replacing caches, dismissing the progress display or refreshing the tab lets the switch continue. The picker reports its progress. Selecting a cluster during a local reconnect stops that retry. If the retry already closed its connection, cancelling the new selection leaves the picker available.
 
-The local picker and local kubeconfig retries (manual or automatic) give the critical informers their own first-paint budget. Once those informers are ready, pending API discovery gets a fresh wait of the same duration. A discovery timeout names this stage in the error.
+When you switch clusters in the local picker or retry a kubeconfig connection, Radar first waits for the core resource cache to be ready. If Kubernetes API discovery is still running, Radar waits up to another five minutes by default (set by `--first-paint-backstop`). Once that wait expires, the cluster shows as connected and you can browse built-in resources such as Pods and Deployments. Radar continues discovering custom resources in the background and loads them if you are still on that connection.
 
 The defaults (5 s connectivity check, or 11 s with exec credentials, 5 m
 first-paint backstop, 5 s namespace LIST, and 20 scope candidates) are tuned for healthy clusters reached
@@ -898,7 +898,9 @@ launch context, so switching to another context goes back to discovery.
 Workload metrics and PVC usage normally use automatic identity matching.
 `--prometheus-single-cluster` and repeatable `--prometheus-cluster-label` replace
 it for workload request/resource charts, history, Pod comparison and PVC usage.
-They do not scope rightsizing, node/HPA or the workload network/filesystem charts.
+They also scope rightsizing, the overview, namespace, Node and HPA charts, diagnose
+vitals and OpenCost costs from the metrics store; see
+[other views in a shared store](workload-metrics.md#other-views-in-a-shared-metrics-store).
 Leave both unset for automatic matching. Configured labels must exist on each
 affected metric source, including kubelet volume stats. See
 [scope and remedies](workload-metrics.md#pvc-usage-scope).

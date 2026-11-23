@@ -6,6 +6,11 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"k8s.io/client-go/kubernetes/fake"
+
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 func TestArgoDestinations_InventoryWithoutSecretData(t *testing.T) {
@@ -52,5 +57,38 @@ func TestArgoDestinations_InventoryWithoutSecretData(t *testing.T) {
 	}
 	if !got.Completeness.Complete {
 		t.Errorf("completeness = %+v, want complete (fixture cache is cluster-wide)", got.Completeness)
+	}
+}
+
+// With Secrets disabled by this cache's startup probe, the answer is
+// "restricted" even after the connection's live permission state is reset
+// (a rescope or rebuild): the reason comes from the probe the cache was built
+// from, not from whatever the connection holds now.
+func TestArgoDestinationsRestrictedComesFromTheCachesProbe(t *testing.T) {
+	t.Cleanup(func() {
+		k8s.ResetResourceCache()
+		if err := k8s.InitTestResourceCache(testFakeClient); err != nil {
+			t.Fatalf("restore package fixture cache: %v", err)
+		}
+	})
+	disabled := map[string]k8score.ResourceScope{k8score.Secrets: {Enabled: false}}
+	k8s.ResetResourceCache()
+	if err := k8s.InitScopedTestResourceCache(fake.NewSimpleClientset(), disabled); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.SetTestPermissionResult(&k8s.PermissionCheckResult{Perms: &k8s.ResourcePermissions{}, Scopes: disabled}))
+	k8s.Current().ResetPermissions()
+
+	resp, err := http.Get(testServer.URL + "/api/argo/destinations")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	var got ArgoDestinationsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !got.Completeness.Restricted || got.Completeness.Unavailable {
+		t.Fatalf("completeness = %+v, want restricted (this cache's probe denied Secrets)", got.Completeness)
 	}
 }

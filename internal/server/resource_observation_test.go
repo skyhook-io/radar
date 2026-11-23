@@ -235,6 +235,7 @@ func TestAPIResourcesDefinitionNamesRequireObservedReadableCRDs(t *testing.T) {
 func TestAPIResourcesRejectsDiscoveryReplacedDuringAssembly(t *testing.T) {
 	k8s.ResetTestDynamicState()
 	t.Cleanup(k8s.ResetTestDynamicState)
+	t.Cleanup(k8s.SnapshotTestConnection())
 	var replaced atomic.Bool
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		k8s.ResetResourceDiscovery()

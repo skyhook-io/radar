@@ -484,6 +484,64 @@ func TestForeignCheckExportedNamespace(t *testing.T) {
 	}
 }
 
+// A check kept to a namespace looks for other clusters' objects among the
+// metric's series in that namespace only, under each spelling of it.
+func TestForeignCheckNamespace(t *testing.T) {
+	check := PodForeignCheck(true)
+	check.Namespace = "shop"
+	alloc := ViewMetric{Name: foreignAlloc.Name, AnchorLabel: "pod", AnchorValues: []string{"api-0"}, AnchorNamespace: "shop", AnchorNamespaceExported: true, Foreign: check}
+	var got []string
+	for _, p := range viewForeignParts([]ViewMetric{alloc}, `cluster="a"`, time.Hour) {
+		got = append(got, p.String())
+	}
+	if len(got) != 2 || !strings.Contains(got[0], `container_cpu_allocation{exported_namespace="shop"}[3600s]`) || !strings.Contains(got[1], `container_cpu_allocation{exported_namespace="",namespace="shop"}[3600s]`) {
+		t.Fatalf("namespace spellings: %q", got)
+	}
+	plain := PodForeignCheck(false)
+	plain.Namespace = "shop"
+	parts := viewForeignParts([]ViewMetric{{Name: "container_cpu_usage_seconds_total", Foreign: plain}}, `cluster="a"`, time.Hour)
+	if len(parts) != 1 || !strings.Contains(parts[0].String(), `container_cpu_usage_seconds_total{namespace="shop"}[3600s]`) {
+		t.Fatalf("plain namespace: %v", parts)
+	}
+
+	ours := []map[string]string{ksmPod(clusterA, "shop", "api-0"), unlabeledSeries(alloc.Name, "opencost", "api-0", "exported_namespace", "shop")}
+	for _, tc := range []struct {
+		name   string
+		series []map[string]string
+		want   ViewScopeState
+	}{
+		{"another cluster's Pods only in another namespace", []map[string]string{
+			ksmPod(clusterB, "pay", "web-0"),
+			unlabeledSeries(alloc.Name, "opencost-b", "web-0", "exported_namespace", "pay"),
+			ksmPod(clusterB, "billing", "job-0"),
+			unlabeledSeries(alloc.Name, "billing", "job-0"),
+		}, ViewScopeUnlabeled},
+		{"another cluster's Pod in the namespace, renamed", []map[string]string{
+			ksmPod(clusterB, "shop", "web-0"),
+			unlabeledSeries(alloc.Name, "opencost-b", "web-0", "exported_namespace", "shop"),
+		}, ViewScopeLabelMissing},
+		{"another cluster's Pod in the namespace, not renamed", []map[string]string{
+			ksmPod(clusterB, "shop", "web-0"),
+			unlabeledSeries(alloc.Name, "shop", "web-0"),
+		}, ViewScopeLabelMissing},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &evaluatingStore{t: t, series: append(slices.Clone(ours), tc.series...)}
+			scope, err := decideViewScope(context.Background(), store, viewRequest(false, alloc), time.Now(), clusterA, true)
+			if err != nil || scope.State != tc.want {
+				t.Fatalf("scope = %+v, err = %v", scope, err)
+			}
+			// Across the whole store, the other namespace's Pods are found.
+			whole := alloc
+			whole.Foreign.Namespace = ""
+			store = &evaluatingStore{t: t, series: append(slices.Clone(ours), tc.series...)}
+			if scope, err := decideViewScope(context.Background(), store, viewRequest(false, whole), time.Now(), clusterA, true); err != nil || scope.State != ViewScopeLabelMissing {
+				t.Fatalf("whole store: scope = %+v, err = %v", scope, err)
+			}
+		})
+	}
+}
+
 func TestForeignCheckIncompleteAnswerIsUnknown(t *testing.T) {
 	data := []map[string]string{ksmPod(clusterA, "shop", "api-0"), ksmPod(clusterB, "shop", "web-0"), unlabeledSeries(foreignCPU.Name, "shop", "api-0")}
 	for _, tag := range []string{viewScopeReferenceLabel, viewScopeForeignLabel} {
@@ -518,8 +576,10 @@ func TestForeignCheckNormalization(t *testing.T) {
 	exported.Foreign = PodForeignCheck(true)
 	node := foreignCPU
 	node.Foreign = NodeForeignCheck("node")
-	keys := map[string]bool{key(foreignCPU): true, key(plain): true, key(exported): true, key(node): true}
-	if len(keys) != 4 {
+	inNamespace := foreignCPU
+	inNamespace.Foreign.Namespace = "shop"
+	keys := map[string]bool{key(foreignCPU): true, key(plain): true, key(exported): true, key(node): true, key(inNamespace): true}
+	if len(keys) != 5 {
 		t.Fatal("the foreign check must be part of the cache key")
 	}
 	reordered := foreignCPU
@@ -528,13 +588,14 @@ func TestForeignCheckNormalization(t *testing.T) {
 		t.Error("key order changed the cache key")
 	}
 	for name, f := range map[string]ForeignCheck{
-		"no keys":                        {Reference: "kube_pod_info"},
-		"bad reference":                  {Reference: "kube pod", Keys: []ForeignKey{{"pod", "pod"}}},
-		"bad label":                      {Reference: "kube_pod_info", Keys: []ForeignKey{{"__name__", "pod"}}},
-		"repeated label":                 {Reference: "kube_pod_info", Keys: []ForeignKey{{"pod", "pod"}, {"pod", "namespace"}}},
-		"rename onto another key label":  {Reference: "kube_pod_info", Keys: []ForeignKey{{"pod", "namespace"}, {"namespace", "ns"}}},
-		"exported without namespace key": {Reference: "kube_node_info", Keys: []ForeignKey{{"node", "node"}}, NamespaceExported: true},
-		"exported_namespace as a key":    {Reference: "kube_pod_info", Keys: []ForeignKey{{"exported_namespace", "namespace"}}},
+		"no keys":                         {Reference: "kube_pod_info"},
+		"bad reference":                   {Reference: "kube pod", Keys: []ForeignKey{{"pod", "pod"}}},
+		"bad label":                       {Reference: "kube_pod_info", Keys: []ForeignKey{{"__name__", "pod"}}},
+		"repeated label":                  {Reference: "kube_pod_info", Keys: []ForeignKey{{"pod", "pod"}, {"pod", "namespace"}}},
+		"rename onto another key label":   {Reference: "kube_pod_info", Keys: []ForeignKey{{"pod", "namespace"}, {"namespace", "ns"}}},
+		"exported without namespace key":  {Reference: "kube_node_info", Keys: []ForeignKey{{"node", "node"}}, NamespaceExported: true},
+		"exported_namespace as a key":     {Reference: "kube_pod_info", Keys: []ForeignKey{{"exported_namespace", "namespace"}}},
+		"namespace without namespace key": {Reference: "kube_node_info", Keys: []ForeignKey{{"node", "node"}}, Namespace: "shop"},
 	} {
 		m := foreignCPU
 		m.Foreign = f

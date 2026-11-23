@@ -1,5 +1,8 @@
+// @vitest-environment jsdom
+import { act } from 'react'
+import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import { expect, it, vi } from 'vitest'
 import { useAPIResources } from '../../api/apiResources'
 import { useVulnerabilities, type VulnerableImage } from '../../api/vulnerabilities'
@@ -51,4 +54,30 @@ it('discloses missing scans alongside reported findings', () => {
   const html = renderDrawer(true, { images: [image], unscanned: [{ image: 'example.com/sidecar' }] })
   expect(html).toContain('View unscanned images in this workload')
   expect(html).not.toContain('Java4Shell')
+})
+
+it('opens the tab on By image, the view its cards show', () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  renderDrawer(true, { images: [image] })
+  let search = ''
+  function Probe() {
+    search = useLocation().search
+    return null
+  }
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  act(() => root.render(
+    <MemoryRouter initialEntries={['/resources?namespaces=team']}>
+      <WorkloadVulnerabilitiesSection kind={workload.kind} namespace={workload.namespace} name={workload.name} />
+      <Probe />
+    </MemoryRouter>,
+  ))
+  act(() => Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.includes('api:1'))!.click())
+  const params = new URLSearchParams(search)
+  expect(params.get('by')).toBe('image')
+  expect(params.get('workload')).toBe('Deployment/team/api')
+  expect(params.get('namespaces')).toBe('team')
+  act(() => root.unmount())
+  container.remove()
 })
