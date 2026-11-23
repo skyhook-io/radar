@@ -14,9 +14,7 @@ import (
 //
 // The contract:
 //   - It runs on the informer's delivery goroutine, so it must return
-//     quickly. Cache teardown waits for admitted observers, so an observer
-//     must not wait for teardown or the context-switch lock.
-//     Filter on the object first (kind, operation, a cheap
+//     quickly. Filter on the object first (kind, operation, a cheap
 //     predicate) and take locks only for what passes.
 //   - Hand slow work (network calls, discovery, anything that can block) to
 //     a worker of your own.
