@@ -856,6 +856,8 @@ func SnapshotTestConnection() func() {
 	clientMu.RLock()
 	connectionStatusMu.RLock()
 	status, admitted, closed := connectionStatus, serving, admissionsClosed
+	// The ID by value: re-admitting the same connection changes it in place.
+	admittedID := servingIDLocked()
 	previous, name := installedConn.Load(), contextName
 	connectionStatusMu.RUnlock()
 	clientMu.RUnlock()
@@ -863,6 +865,9 @@ func SnapshotTestConnection() func() {
 		clientMu.Lock()
 		connectionStatusMu.Lock()
 		connectionStatus, serving, admissionsClosed = status, admitted, closed
+		if admitted != nil {
+			admitted.id = admittedID
+		}
 		installedConn.Store(previous)
 		contextName = name
 		connectionStatusMu.Unlock()

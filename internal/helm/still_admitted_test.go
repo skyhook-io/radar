@@ -25,7 +25,7 @@ func TestStillAdmittedRefusesAWriteAfterTheConnectionChanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := httptest.NewRequest(http.MethodPost, "/", nil).WithContext(k8s.WithConnection(t.Context(), admitted))
+	r := httptest.NewRequest(http.MethodPost, "/", nil).WithContext(admitted.Bind(t.Context()))
 
 	rec := httptest.NewRecorder()
 	if !stillAdmitted(rec, r) {
@@ -54,7 +54,7 @@ func TestBoundHelmActionConfigStaysOnAdmittedConnectionAcrossSwitch(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := k8s.WithConnection(t.Context(), admitted)
+	ctx := admitted.Bind(t.Context())
 	if _, err := k8s.InstallTestServingConnection("b", &rest.Config{Host: "https://b"}, nil, discovery); err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestBoundHelmActionConfigIgnoresAnEditedKubeconfig(t *testing.T) {
 		t.Fatalf("unbound Helm should follow the file (the case this guards): host %v, err %v", cfg, err)
 	}
 
-	bound, err := client.actionConfigForWrite(k8s.WithConnection(t.Context(), admitted), "default")
+	bound, err := client.actionConfigForWrite(admitted.Bind(t.Context()), "default")
 	if err != nil {
 		t.Fatal(err)
 	}
