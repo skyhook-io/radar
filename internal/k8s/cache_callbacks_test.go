@@ -171,6 +171,11 @@ func TestAdmittedInformerWriteAcrossSameNameSwitch(t *testing.T) {
 			if n := storeA.Stats().TotalEvents; n != 0 {
 				t.Fatalf("closed timeline accepted %d late row(s)", n)
 			}
+			// A write rejected by the retired store lost nothing for B, so it
+			// must not count against B's coverage.
+			if snap := timeline.GetMetrics().GetSnapshot(); len(snap.RecentDrops) != 0 || !timeline.LastStoreFailure(kind).IsZero() {
+				t.Fatalf("the retired write was recorded as a drop for the replacement: %+v", snap.RecentDrops)
+			}
 		})
 	}
 }

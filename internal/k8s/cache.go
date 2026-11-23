@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"reflect"
@@ -764,6 +765,9 @@ func (state *connectionCache) recordK8sEventToTimeline(store timeline.EventStore
 
 	ctx := context.Background()
 	if err := store.Append(ctx, timelineEvent); err != nil {
+		if storeRetired(err) {
+			return
+		}
 		log.Printf("Warning: failed to record K8s event to timeline store: %v", err)
 		timeline.RecordDrop("K8sEvent:"+event.InvolvedObject.Kind, event.InvolvedObject.Namespace, event.InvolvedObject.Name, timeline.DropReasonStoreFailed, "add", clusterContext)
 	} else if DebugEvents {
@@ -1218,6 +1222,9 @@ func (state *connectionCache) recordToTimelineStore(binding *timeline.StoreBindi
 			if len(events) > 0 {
 				ctx := context.Background()
 				if err := store.AppendBatch(ctx, events); err != nil {
+					if storeRetired(err) {
+						return
+					}
 					log.Printf("Warning: failed to record historical events: %v", err)
 					timeline.RecordDrop(kind, namespace, name, timeline.DropReasonStoreFailed, op, clusterContext)
 					return
@@ -1232,6 +1239,9 @@ func (state *connectionCache) recordToTimelineStore(binding *timeline.StoreBindi
 
 	ctx := context.Background()
 	if err := store.AppendBatch(ctx, events); err != nil {
+		if storeRetired(err) {
+			return
+		}
 		log.Printf("Warning: failed to record to timeline store: %v", err)
 		timeline.RecordDrop(kind, namespace, name, timeline.DropReasonStoreFailed, op, clusterContext)
 		return
@@ -1242,6 +1252,14 @@ func (state *connectionCache) recordToTimelineStore(binding *timeline.StoreBindi
 	if op == "add" {
 		store.MarkResourceSeen(clusterContext, apiGroup, kind, namespace, name)
 	}
+}
+
+// storeRetired reports a write rejected because a switch already closed the
+// store this cache was built with. Nothing was lost for the cluster being
+// served, so it isn't a drop: recording one would count against the
+// replacement's coverage.
+func storeRetired(err error) bool {
+	return errors.Is(err, fs.ErrClosed)
 }
 
 func isUnstructuredUpdate(oldObj, newObj any) bool {
