@@ -425,12 +425,12 @@ func TestScanMarksWorkloadsWhenPodInventoryIsUnreadable(t *testing.T) {
 			LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled"}},
 		}}},
 	}
-	replicaSet := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api-7f6", OwnerReferences: []metav1.OwnerReference{scopeOwner("Deployment", "api")}}}
+	replicaSet := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api-7f6", UID: "api-7f6-uid", OwnerReferences: []metav1.OwnerReference{scopeOwner("Deployment", "api")}}}
 
 	newWorkloads := func() map[string]*scanWorkload {
 		return map[string]*scanWorkload{
 			workloadIdentity("Deployment", "shop", "api"): {
-				kind: "Deployment", namespace: "shop", name: "api",
+				uid: "api-uid", kind: "Deployment", namespace: "shop", name: "api",
 				workload: rightsizingWorkload{currentPodOOM: map[string]bool{}},
 			},
 		}

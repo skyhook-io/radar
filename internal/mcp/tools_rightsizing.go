@@ -830,7 +830,8 @@ func filterRightsizingRows(rows []prometheuspkg.RightsizingRow, includeAll, keep
 			result.incompleteEvidence = true
 		}
 		keep[i] = keepAll || includeAll || scaledToZero || rightsizingRowActionable(row.Fit) ||
-			prometheuspkg.NeedsManualReview(row) || prometheuspkg.SignificantlyThrottled(row)
+			prometheuspkg.NeedsManualReview(row) || row.CurrentPodOOM || row.WindowOOMEvidence ||
+			row.LimitConflict || row.HPAManaged || prometheuspkg.SignificantlyThrottled(row)
 		if keep[i] {
 			containerKept[row.Container] = true
 		}
@@ -1125,7 +1126,7 @@ type rightsizingGuidanceInput struct {
 
 func rightsizingGuidance(in rightsizingGuidanceInput) []string {
 	parts := []string{
-		"Recommendations come from 7 days of observed usage, not live metrics. Check confidence and sampleCoverage before acting: low confidence means short or sparse history, not correctly sized.",
+		"Radar queries the last 7 days. Check confidence and sampleCoverage to see how much usage was observed.",
 	}
 
 	// An unavailable response has no rows, no omitted counts and no coverage to
@@ -1159,7 +1160,7 @@ func rightsizingGuidance(in rightsizingGuidanceInput) []string {
 		parts = append(parts, "A workload whose rows carry queryError can still hold a valid recommendation on its other resource: its classification retains known increase or review signals while state=partial reports the missing evidence.")
 	}
 	if in.reductionLimited {
-		parts = append(parts, "Rows with reductionLimited=true were clamped: recommendedRequest is a bounded step, not the full cut: at most half for memory, for CPU of 1 core or more, and for bursty or throttled CPU; up to three quarters for smaller CPU requests. demandTarget is the demand-based end state, not a value to apply: apply recommendedRequest, observe a full 7-day window, then re-check. For memory, demandTarget comes from the 7-day max, so a monthly or batch peak outside the window is not seen and jumping straight to it risks OOM.")
+		parts = append(parts, "Rows with reductionLimited=true show a bounded step in recommendedRequest. The cut is at most half for memory, CPU of 1 core or more, and bursty or throttled CPU, or up to three quarters for smaller CPU requests. If needsManualReview=true, resolve reviewReasons before considering that step. After changing a request, observe a full 7-day window and re-check. demandTarget explains the calculation. Applying it directly risks OOM when a memory peak falls outside the window.")
 	}
 	if in.needsManualReview {
 		parts = append(parts, "Rows with needsManualReview=true are excluded from requestDelta. Read reviewReasons for the safety or evidence check. A row with no recommendedRequest at all can still show measured demand. A proposed increase that needs judgement remains a priority even though its delta is excluded. With pod_level_request the scheduler uses the shared reservation in podLevelRequest.")

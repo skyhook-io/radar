@@ -238,6 +238,37 @@ func TestFilterKeepsOOMEvidenceDespiteBalancedFit(t *testing.T) {
 	}
 }
 
+func TestDefaultScanKeepsRiskSignalsWithoutUsage(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		row  rightsizing.Row
+	}{
+		{"new pod OOM", rightsizing.Row{Resource: "memory", CurrentPodOOM: true}},
+		{"historical OOM", rightsizing.Row{Resource: "memory", WindowOOMEvidence: true}},
+		{"failed CPU query on HPA target", rightsizing.Row{Resource: "cpu", HPAManaged: true, QueryError: prometheuspkg.RowUsageQueryFailed}},
+		{"limit conflict", rightsizing.Row{Resource: "cpu", LimitConflict: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			row := tc.row
+			row.Container, row.Fit = "app", rightsizing.FitInsufficientHistory
+			workloads, omitted, incomplete, _ := selectSizingFixtures([]prometheuspkg.RightsizingScanWorkload{
+				{Name: "checkout", Replicas: 1, Rows: []rightsizing.Row{row}},
+			}, getRightsizingInput{})
+			if len(workloads) != 1 || len(workloads[0].Rows) != 1 || !incomplete || omitted.InsufficientHistory+omitted.QueryError != 0 {
+				t.Fatalf("expected a visible workload and one incomplete row, got %+v, omitted %+v", workloads, omitted)
+			}
+			workload := workloads[0]
+			got := workload.Rows[0]
+			if workload.Classification != prometheuspkg.ClassNeedData || *workload.RequestDelta != (rightsizingRequestDelta{}) || got.RecommendedRequest != nil {
+				t.Fatalf("insufficient usage must produce no request change: %+v", workload)
+			}
+			if got.CurrentPodOOM != row.CurrentPodOOM || got.WindowOOMEvidence != row.WindowOOMEvidence || got.HPAManaged != row.HPAManaged || got.LimitConflict != row.LimitConflict {
+				t.Fatalf("expected the reported signal to survive: %+v", got)
+			}
+		})
+	}
+}
+
 // oomEvidenceAvailable is meaningless on a CPU row; a literal false there reads
 // as an evidence gap the agent should weigh.
 func TestOOMAvailabilityOnlyEmittedForMemoryRows(t *testing.T) {
@@ -975,7 +1006,7 @@ func TestDemandTargetOnlyAccompaniesAClampedRecommendation(t *testing.T) {
 
 func TestGuidanceWarnsAgainstApplyingTheDemandTarget(t *testing.T) {
 	got := strings.Join(rightsizingGuidance(rightsizingGuidanceInput{state: prometheuspkg.RightsizingScanComplete, scope: "cluster", reductionLimited: true}), " ")
-	for _, want := range []string{"demandTarget is the demand-based end state, not a value to apply", "risks OOM"} {
+	for _, want := range []string{"demandTarget explains the calculation", "Applying it directly risks OOM", "If needsManualReview=true, resolve reviewReasons before considering that step"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("clamped guidance missing %q: %q", want, got)
 		}

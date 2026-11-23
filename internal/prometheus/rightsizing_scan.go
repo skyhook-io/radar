@@ -17,8 +17,10 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 	listersappsv1 "k8s.io/client-go/listers/apps/v1"
 )
 
@@ -190,6 +192,7 @@ type rightsizingScanQuerier interface {
 }
 
 type scanWorkload struct {
+	uid       types.UID
 	kind      string
 	namespace string
 	name      string
@@ -939,7 +942,7 @@ func snapshotScanWorkloads(ctx context.Context, cache *k8s.ResourceCache, scopes
 	var unavailable, skippedDaemonSets []string
 	add := func(obj metav1.Object, kind string, replicas int, podSpec *corev1.PodSpec, scaledToZero bool) {
 		key := workloadIdentity(kind, obj.GetNamespace(), obj.GetName())
-		workloads[key] = &scanWorkload{kind: kind, namespace: obj.GetNamespace(), name: obj.GetName(), replicas: replicas, workload: rightsizingWorkload{
+		workloads[key] = &scanWorkload{uid: obj.GetUID(), kind: kind, namespace: obj.GetNamespace(), name: obj.GetName(), replicas: replicas, workload: rightsizingWorkload{
 			podSpec: podSpec, containers: extractRuntimeContainers(podSpec), currentPodOOM: map[string]bool{}, hpaManaged: map[string]bool{}, scaledToZero: scaledToZero,
 			managedBy: DetectWorkloadManager(obj),
 		}}
@@ -1193,64 +1196,47 @@ func enrichScanCurrentOOM(ctx context.Context, cache *k8s.ResourceCache, scopes 
 	}
 
 	namespaces := scanScopeNamespaces(scopes)
-	replicaSetOwners, ownersListed := scanReplicaSetOwners(ctx, cache, namespaces, ownersReadable)
 	pods, podsListed := scanPods(cache, namespaces)
 	if !podsListed {
 		markScanLiveInventoryUnavailable(workloads, "")
 		return
-	}
-	if !ownersListed {
-		markScanLiveInventoryUnavailable(workloads, "Deployment")
 	}
 	for _, pod := range pods {
 		owner := metav1.GetControllerOf(pod)
 		if owner == nil {
 			continue
 		}
-		kind, name := owner.Kind, owner.Name
-		if owner.Kind == "ReplicaSet" {
-			kind, name = "Deployment", replicaSetOwners[pod.Namespace+"\x00"+owner.Name]
+		switch owner.Kind {
+		case "ReplicaSet":
+			if !ownersReadable {
+				continue
+			}
+			rs, err := cache.ReplicaSets().ReplicaSets(pod.Namespace).Get(owner.Name)
+			if err != nil {
+				if !apierrors.IsNotFound(err) {
+					markScanLiveInventoryUnavailable(workloads, "Deployment")
+				}
+				continue
+			}
+			if !k8s.ControllerMatchesIdentity(owner, "ReplicaSet", rs.Name, "apps", rs.UID) {
+				continue
+			}
+			owner = metav1.GetControllerOf(rs)
+			if owner == nil || owner.Kind != "Deployment" {
+				continue
+			}
+		case "DaemonSet", "StatefulSet":
+		default:
+			continue
 		}
-		workload := workloads[workloadIdentity(kind, pod.Namespace, name)]
-		if workload == nil {
+		workload := workloads[workloadIdentity(owner.Kind, pod.Namespace, owner.Name)]
+		if workload == nil || !k8s.ControllerMatchesIdentity(owner, workload.kind, workload.name, "apps", workload.uid) {
 			continue
 		}
 		workload.workload.qos.Observe(pod.Status.QOSClass)
 		collectCurrentPodOOM(workload.workload.currentPodOOM, pod.Status.ContainerStatuses)
 		collectCurrentPodOOM(workload.workload.currentPodOOM, pod.Status.InitContainerStatuses)
 	}
-}
-
-// scanReplicaSetOwners maps each ReplicaSet to its Deployment. It reports false
-// if any list failed, because a partial map silently drops the pods it could
-// not resolve rather than failing loudly.
-func scanReplicaSetOwners(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, readable bool) (map[string]string, bool) {
-	owners := map[string]string{}
-	if !readable || cache.ReplicaSets() == nil {
-		return owners, false
-	}
-	var replicaSets []*appsv1.ReplicaSet
-	if namespaces == nil {
-		list, err := cache.ReplicaSets().List(labels.Everything())
-		if err != nil {
-			return owners, false
-		}
-		replicaSets = list
-	} else {
-		for _, namespace := range namespaces {
-			items, err := cache.ReplicaSets().ReplicaSets(namespace).List(labels.Everything())
-			if err != nil {
-				return owners, false
-			}
-			replicaSets = append(replicaSets, items...)
-		}
-	}
-	for _, replicaSet := range replicaSets {
-		if owner := metav1.GetControllerOf(replicaSet); owner != nil && owner.Kind == "Deployment" {
-			owners[replicaSet.Namespace+"\x00"+replicaSet.Name] = owner.Name
-		}
-	}
-	return owners, true
 }
 
 // scanPods reports false if any list failed: a short pod list reads as pods
