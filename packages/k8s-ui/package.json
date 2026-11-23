@@ -40,8 +40,10 @@
       "./src/components/gitops/*.ts"
     ],
     "./components/rightsizing/results-model": "./src/components/rightsizing/results-model.ts",
-    "./components/rightsizing/presentation": "./src/components/rightsizing/presentation.ts",
-    "./components/rightsizing/*": "./src/components/rightsizing/*.tsx",
+    "./components/rightsizing/RightsizingEvidence": "./src/components/rightsizing/RightsizingEvidence.tsx",
+    "./components/rightsizing/DatadogRightsizingEvidence": "./src/components/rightsizing/DatadogRightsizingEvidence.tsx",
+    "./components/rightsizing/RightsizingResultsTable": "./src/components/rightsizing/RightsizingResultsTable.tsx",
+    "./components/rightsizing/RightsizingFilters": "./src/components/rightsizing/RightsizingFilters.tsx",
     "./components/issues": "./src/components/issues/index.ts",
     "./components/issues/*": [
       "./src/components/issues/*.tsx",

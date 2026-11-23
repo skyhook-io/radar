@@ -8,8 +8,9 @@ Shared, source-distributed Kubernetes UI components used by Radar.
 
 `components/rightsizing/RightsizingResultsTable` displays container rows from
 `workloadResultRows` in `components/rightsizing/results-model`. Pass the cluster
-identity and optional evaluation timestamp for fleet results. Fleet rows label
-the metrics source and use its own coverage and review criteria.
+identity and optional evaluation timestamp for fleet results. Each row identifies the metrics source and its observation coverage. Both sources
+use the shared sizing decision. Current Datadog rows always include it, while
+older Prometheus agents can return evidence from an earlier policy.
 
 
 ## Toast updates

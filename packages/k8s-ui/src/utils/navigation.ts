@@ -2,6 +2,13 @@ import type { SelectedResource, ResourceRef, APIResource } from '../types/core'
 import { englishPlural, englishSingular, isEnglishPlural } from './pluralize'
 import { CORE_RESOURCES, isBuiltinCoreKind } from './api-resources'
 
+/** Read the cluster namespace picker from repeated or comma-separated URL parameters. */
+export function namespacesFromSearch(params: URLSearchParams): string[] {
+  const plural = params.getAll('namespaces')
+  const values = plural.some(value => value.trim()) ? plural : params.getAll('namespace')
+  return [...new Set(values.flatMap(value => value.split(',')).map(name => name.trim()).filter(Boolean))]
+}
+
 /**
  * Canonical callback type for navigating to a resource.
  * All components that trigger resource navigation should use this type.

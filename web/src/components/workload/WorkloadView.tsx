@@ -101,6 +101,7 @@ import {
   fetchYamlSchemas,
 } from '../../api/client'
 import { TIME_RANGES, PrometheusCharts, isPrometheusSupported } from '../resource/PrometheusCharts'
+import { RightsizingStrip } from '../resource/RightsizingStrip'
 import { PrometheusChartsGrid } from '../resource/PrometheusChartsGrid'
 import { DatadogSetupHint, DatadogWorkloadCharts, useDatadogWorkloadCharts, WorkloadCostRightsizing } from '../resource/DatadogWorkloadCharts'
 import { useNavCustomization } from '../../context/NavCustomization'
@@ -2302,32 +2303,26 @@ export function MetricsTabContent({
   if (checking) return <p role="status" className="p-4 text-sm text-theme-text-secondary">Loading workload metrics…</p>
 
   const setupHint = setup && <DatadogSetupHint owner={setup === 'owner'} />
-  if (rightsizing) {
+  if (rightsizing || !expanded) {
     return (
       <div className={fill ? 'h-full overflow-auto' : undefined}>
         {setupHint}
         {expanded
           ? <PrometheusChartsGrid {...workload} resource={resource} fill={false} showRightsizing={false} />
           : <DrawerMetricsContent {...workload} resource={resource} />}
-        <div className="px-4 pb-4">{rightsizing}</div>
+        <div className="px-4 pb-4">{rightsizing ?? <RightsizingStrip {...workload} />}</div>
       </div>
     )
   }
-  if (expanded) {
-    if (!fill) return <PrometheusChartsGrid kind={kind} namespace={namespace} name={name} resource={resource} fill={false} />
-    return (
-      <div className="flex flex-col h-full">
-        {setupHint}
-        <div className="flex-1 min-h-0">
-          <PrometheusChartsGrid kind={kind} namespace={namespace} name={name} resource={resource} />
-        </div>
+  if (!fill) return <PrometheusChartsGrid {...workload} resource={resource} fill={false} />
+  return (
+    <div className="flex flex-col h-full">
+      {setupHint}
+      <div className="flex-1 min-h-0">
+        <PrometheusChartsGrid {...workload} resource={resource} />
       </div>
-    )
-  }
-
-  // Drawer fallback: single chart with tabs + restart lane below. The chart's
-  // time-range selector is mirrored to the restart lane so they stay aligned.
-  return <>{setupHint}<DrawerMetricsContent kind={kind} namespace={namespace} name={name} resource={resource} /></>
+    </div>
+  )
 }
 
 function DrawerMetricsContent({

@@ -27,7 +27,6 @@ const detail = {
     replicas: 1,
     scaledToZero: false,
     rows: [],
-    actionableRequests: [],
     sampleAvailable: false,
     reason: 'Insufficient history',
     window: '7d',

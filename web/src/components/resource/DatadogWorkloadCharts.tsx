@@ -31,8 +31,7 @@ function resolveRightsizingSource(status: DatadogStatus | undefined, error: Erro
   if (error) return !providerRequired && error instanceof ApiError && error.unknownRoute ? 'prometheus' : 'unknown'
   if (!status || (providerRequired && !status.rightsizingProvider)) return 'unknown'
   if (status.rightsizingProvider === 'datadog') return status.rightsizing ? 'datadog' : 'datadog_unavailable'
-  if (status.rightsizingProvider === 'prometheus') return 'prometheus'
-  return status.configured && status.rightsizing ? 'datadog' : 'prometheus'
+  return 'prometheus'
 }
 
 function useDatadogStatus(kind: string, namespace: string, embedded: boolean) {

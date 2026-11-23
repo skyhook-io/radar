@@ -4,7 +4,7 @@ import {
   getRightsizingExplanation,
   getRightsizingPresentation,
   podLevelOverUseNote,
-} from './RightsizingEvidence'
+} from './presentation'
 
 const row = (overrides: Partial<RightsizingRow> = {}): RightsizingRow => ({
   container: 'server',

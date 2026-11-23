@@ -18,7 +18,7 @@ export interface RightsizingRow {
   currentRequestValue?: number
   currentLimit?: string
   currentLimitValue?: number
-  /** The pod's fixed pod-level request (spec.resources), set when fit is pod_level_request. */
+  /** The pod's fixed pod-level request (spec.resources), retained even when usage history is unavailable. */
   podLevelRequest?: string
   podLevelRequestValue?: number
   observed?: {
@@ -78,8 +78,7 @@ export interface WorkloadRightsizingEvidence {
 
 export interface DatadogSizingWorkload extends WorkloadRightsizingEvidence {
   source: 'datadog'
-  reviewReasons?: Record<string, Partial<Record<RightsizingRow['resource'], string[]>>>
-  actionableRequests: { container: string; resource: RightsizingRow['resource'] }[]
+  rows: (RightsizingRow & { decision: NonNullable<RightsizingRow['decision']> })[]
 }
 
 export type DatadogSizingDetail =

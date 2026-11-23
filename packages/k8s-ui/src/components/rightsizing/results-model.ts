@@ -1,5 +1,5 @@
 import type { DatadogSizingWorkload, RightsizingRow } from '../../types/rightsizing'
-import { datadogRowReview, explainRightsizingReasons, isDatadogRequestActionable, rowReviewReasons } from '../../utils/rightsizing-reasons'
+import { explainRightsizingReasons, rowReviewReasons } from './reasons'
 
 export type ScanClass = 'increase' | 'reduction' | 'review' | 'in_range' | 'need_data'
 
@@ -52,9 +52,9 @@ function isMaterialReduction(impact: RightsizingImpact): boolean {
   )
 }
 
-export function rightsizingPolicyCoverage(rows: RightsizingRow[]): 'empty' | 'legacy' | 'current' | 'incomplete' {
+export function rightsizingPolicyCoverage(rows: RightsizingRow[], source: 'radar' | 'datadog' = 'radar'): 'empty' | 'legacy' | 'current' | 'incomplete' {
   if (!rows.length) return 'empty'
-  if (rows.every((row) => row.decision === undefined)) return 'legacy'
+  if (rows.every((row) => row.decision === undefined)) return source === 'radar' ? 'legacy' : 'incomplete'
   const complete = rows.every((row) => {
     const decision = row.decision
     if (!decision) return false
@@ -139,13 +139,12 @@ function isReduction(row: RightsizingRow): boolean {
 export function calculateImpact(
   rows: RightsizingRow[],
   replicas: number,
-  actionable: (row: RightsizingRow) => boolean = (row) => row.decision ? row.decision.status === 'actionable' : !needsManualReview(row),
 ): RightsizingImpact {
   const count = Math.max(replicas, 0)
   let cpuChange = 0
   let memoryChange = 0
   for (const row of rows) {
-    if (row.recommendedRequestValue == null || !actionable(row)) continue
+    if (row.recommendedRequestValue == null || (row.decision ? row.decision.status !== 'actionable' : needsManualReview(row))) continue
     const change = (row.recommendedRequestValue - (row.currentRequestValue ?? 0)) * count
     if (row.resource === 'cpu') cpuChange += change
     else memoryChange += change
@@ -200,31 +199,6 @@ export function workloadResultRows(
       memory: rows.find((row) => row.resource === 'memory'),
     }
     const datadog = 'source' in workload && workload.source === 'datadog' ? workload : undefined
-    if (datadog && !rows[0]?.decision) {
-      const actionable = (row: RightsizingRow) => isDatadogRequestActionable(datadog, row)
-      const impact = calculateImpact(rows, replicas, actionable)
-      const review: RightsizingResultRow['review'] = {}
-      for (const row of rows) {
-        if (actionable(row) || row.queryError || row.fit === 'insufficient_history') continue
-        if (!row.recommendedRequest && !datadog.reviewReasons?.[container]?.[row.resource]?.length) continue
-        const reason = datadogRowReview(datadog, row)
-        if (reason) review[row.resource] = reason
-      }
-      let classification: ScanClass = 'in_range'
-      if (impact.cpuChange > 0 || impact.memoryChange > 0) classification = 'increase'
-      else if (review.cpu || review.memory) classification = 'review'
-      else if (isMaterialReduction(impact)) classification = 'reduction'
-      else if (rows.some((row) => row.queryError || row.fit === 'insufficient_history'))
-        classification = 'need_data'
-      return {
-        ...result,
-        source: datadog.source,
-        classification,
-        impact,
-        review,
-        workloadReason: index === 0 ? datadog.reason : undefined,
-      }
-    }
     return {
       ...result,
       source: datadog ? datadog.source : cluster ? 'prometheus' : undefined,

@@ -36,15 +36,6 @@ function useRightsizingEvidence({ kind, namespace, name }: RightsizingProps) {
   return { connected, supported, statusLoading, ...query }
 }
 
-export function ConnectedPrometheusRightsizingPanel(props: RightsizingProps) {
-  const status = usePrometheusStatus()
-  return status.data?.connected ? (
-    <div className="mt-4">
-      <RightsizingPanel {...props} />
-    </div>
-  ) : null
-}
-
 export function RightsizingPanel(props: RightsizingProps) {
   const state = useRightsizingEvidence(props)
   if (!state.supported) return null

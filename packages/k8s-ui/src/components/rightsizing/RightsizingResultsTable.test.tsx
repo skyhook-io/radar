@@ -1,12 +1,15 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { DatadogSizingWorkload, RightsizingRow } from '../../types/rightsizing'
-import { FitWhy, RightsizingResultsTable } from './RightsizingResultsTable'
+import { RightsizingResultsTable } from './RightsizingResultsTable'
 import vectors from '../../../../../pkg/rightsizing/testdata/decisions.json'
 import { RightsizingEvidence } from './RightsizingEvidence'
 import { rightsizingPolicyCoverage, workloadResultRows } from './results-model'
 
-const cpu: RightsizingRow = {
+type DatadogRow = DatadogSizingWorkload['rows'][number]
+
+const cpu: DatadogRow = {
+  decision: { status: 'actionable' },
   container: 'app',
   resource: 'cpu',
   fit: 'oversized',
@@ -34,7 +37,6 @@ const workload: DatadogSizingWorkload = {
   ownerCoverage: 'current_pods',
   source: 'datadog',
   sampleAvailable: true,
-  actionableRequests: [],
 }
 
 describe('operator rightsizing results across clusters', () => {
@@ -49,7 +51,7 @@ describe('operator rightsizing results across clusters', () => {
   ] as const)('classifies $resource $current → $target across two replicas as $expected for both sources', ({
     resource, current, target, expected,
   }) => {
-    const row: RightsizingRow = {
+    const row: DatadogRow = {
       ...cpu, resource, currentRequestValue: current, recommendedRequestValue: target,
       fit: target > current ? 'under_requested' : 'oversized',
       currentRequest: resource === 'cpu' ? `${Math.round(current * 1000)}m` : `${current / 1024 ** 2}Mi`,
@@ -59,7 +61,7 @@ describe('operator rightsizing results across clusters', () => {
     const { kind, namespace, name, replicas, scaledToZero } = workload
     const prometheus = workloadResultRows({ kind, namespace, name, replicas, scaledToZero, rows: [row] }, cluster)
     const datadog = workloadResultRows({
-      ...workload, rows: [row], actionableRequests: [{ container: row.container, resource }],
+      ...workload, rows: [row],
     }, cluster)
     for (const rows of [prometheus, datadog]) {
       expect(rows[0].classification).toBe(expected)
@@ -72,17 +74,17 @@ describe('operator rightsizing results across clusters', () => {
   })
 
   it('keeps a container in manual review when the other resource qualifies for a reduction', () => {
-    const memory: RightsizingRow = {
+    const memory: DatadogRow = {
       ...cpu, resource: 'memory', currentRequest: '128Mi', currentRequestValue: 128 * 1024 ** 2,
       recommendedRequest: '64Mi', recommendedRequestValue: 64 * 1024 ** 2, hpaManaged: true,
+      decision: { status: 'review', reasons: ['hpa_managed'] },
     }
     const rows = [cpu, memory]
     const cluster = { id: 'east', name: 'East' }
     const { kind, namespace, name, replicas, scaledToZero } = workload
     const prometheus = workloadResultRows({ kind, namespace, name, replicas, scaledToZero, rows }, cluster)
     const datadog = workloadResultRows({
-      ...workload, rows, actionableRequests: [{ container: 'app', resource: 'cpu' }],
-      reviewReasons: { app: { memory: ['hpa_managed'] } },
+      ...workload, rows,
     }, cluster)
     expect(prometheus[0].classification).toBe('review')
     expect(datadog[0].classification).toBe('review')
@@ -128,7 +130,7 @@ describe('operator rightsizing results across clusters', () => {
   })
 
   it('shows withheld resources as review-only and counts only admitted container requests', () => {
-    const memory: RightsizingRow = {
+    const memory: DatadogRow = {
       ...cpu,
       resource: 'memory',
       fit: 'under_requested',
@@ -140,9 +142,10 @@ describe('operator rightsizing results across clusters', () => {
     const rows = workloadResultRows(
       {
         ...workload,
-        rows: [cpu, memory, { ...cpu, container: 'proxy' }],
-        actionableRequests: [{ container: 'app', resource: 'memory' }],
-        reviewReasons: { app: { cpu: ['qos_change'] } },
+        rows: [
+          { ...cpu, decision: { status: 'review', reasons: ['guaranteed_qos'] } }, memory,
+          { ...cpu, container: 'proxy', decision: { status: 'review', reasons: ['qos_unavailable'] } },
+        ],
       },
       { id: 'one', name: 'East' },
       { cpuChange: 0, memoryChange: 128 * 1024 ** 2 },
@@ -168,16 +171,16 @@ describe('operator rightsizing results across clusters', () => {
     expect(html).toContain('64Mi → 128Mi')
     expect(html).toContain('Whole workload · +128Mi memory requested')
     expect(html.match(/Whole workload/g)).toHaveLength(1)
-    expect(html).not.toContain('200m')
+    expect(html).toContain('500m → 200m')
     expect(html).not.toContain('Reduce request')
   })
 
   it('explains which limit blocks a request in the expanded operator row', () => {
-    const row: RightsizingRow = {
+    const row: DatadogRow = {
       ...cpu, fit: 'under_requested', limitConflict: true,
       recommendedRequest: undefined, recommendedRequestValue: undefined,
       recommendationReason: 'requests_exceed_pod_limit',
-      decision: { status: 'review', reasons: ['limit_conflict', 'qos_change'] },
+      decision: { status: 'review', reasons: ['limit_conflict', 'guaranteed_qos'] },
     }
     const rows = workloadResultRows({ ...workload, rows: [row] }, { id: 'east', name: 'East' })
     const html = renderToStaticMarkup(
@@ -190,19 +193,33 @@ describe('operator rightsizing results across clusters', () => {
   })
 
   it('keeps the vendor read error and retry instructions scoped to the host', () => {
-    const row = { ...cpu, queryError: 'usage query failed' }
-    const cloud = renderToStaticMarkup(<FitWhy label="CPU" row={row} source="datadog" />)
+    const measurement: DatadogRow = {
+      ...cpu, fit: 'insufficient_history', coverage: 0, sampleCount: 0,
+      recommendedRequest: undefined, recommendedRequestValue: undefined, decision: { status: 'none' },
+    }
+    function expandedRow(row: DatadogRow, source?: 'datadog') {
+      const { kind, namespace, name, replicas, scaledToZero } = workload
+      const rows = source ? workloadResultRows({ ...workload, rows: [row] }, { id: 'east', name: 'East' })
+        : workloadResultRows({ kind, namespace, name, replicas, scaledToZero, rows: [row] })
+      return renderToStaticMarkup(<RightsizingResultsTable rows={rows} openRowId={rows[0].id}
+        onOpenRowChange={() => {}} renderWorkloadLink={() => null} />)
+    }
+    const failed = { ...measurement, queryError: 'usage query failed' }
+    const cloud = expandedRow(failed, 'datadog')
     expect(cloud).toContain('Open the workload to retry')
     expect(cloud).not.toContain('top bar')
-    expect(cloud).not.toContain('Partial result:')
-    const local = renderToStaticMarkup(<FitWhy label="CPU" row={row} />)
+    const local = expandedRow(failed)
     expect(local).toContain('select fewer namespaces in the top bar')
-    expect(local).not.toContain('Partial result:')
+    expect(local).not.toContain('0.0 days')
+    expect(local).not.toContain('Wait for more runtime history')
+    const short = expandedRow(measurement)
+    expect(short).toContain('0.0 days')
+    expect(short).toContain('Wait for more runtime history')
   })
 
   it('shows the workload measurement gap once even when containers have rows', () => {
-    const missing: RightsizingRow = {
-      ...cpu,
+    const missing: DatadogRow = {
+      ...cpu, decision: { status: 'none' },
       fit: 'insufficient_history',
       sampleCount: 0,
       coverage: 0,
@@ -237,14 +254,14 @@ describe('operator rightsizing results across clusters', () => {
         ...workload,
         rows: [
           {
-            ...cpu,
+            ...cpu, decision: { status: 'none' },
             recommendedRequest: undefined,
             recommendedRequestValue: undefined,
             fit: 'balanced',
             recommendationReason: 'request_within_fit_range',
           },
           {
-            ...cpu,
+            ...cpu, decision: { status: 'none' },
             container: 'worker',
             fit: 'insufficient_history',
             recommendedRequest: undefined,
@@ -261,7 +278,7 @@ describe('operator rightsizing results across clusters', () => {
 describe('shared policy decisions', () => {
   it.each(vectors)('$name has the same impact in both provider views', (v) => {
     const status = v.wantStatus as NonNullable<RightsizingRow['decision']>['status']
-    const row: RightsizingRow = {
+    const row: DatadogRow = {
       ...cpu, fit: v.samples === 4 ? 'insufficient_history' : v.demand > 0.1 ? 'under_requested' : 'oversized',
       currentRequest: '100m', currentRequestValue: 0.1,
       recommendedRequest: v.wantTarget, recommendedRequestValue: v.wantTarget ? parseInt(v.wantTarget) / 1000 : undefined,
@@ -284,9 +301,11 @@ describe('shared policy decisions', () => {
   it('distinguishes older producers, missing decisions and contradictory actionability', () => {
     const current = { ...cpu, decision: { status: 'actionable' as const } }
     expect(rightsizingPolicyCoverage([])).toBe('empty')
-    expect(rightsizingPolicyCoverage([cpu])).toBe('legacy')
+    const older = { ...cpu, decision: undefined }
+    expect(rightsizingPolicyCoverage([older])).toBe('legacy')
+    expect(rightsizingPolicyCoverage([older], 'datadog')).toBe('incomplete')
     expect(rightsizingPolicyCoverage([current])).toBe('current')
-    expect(rightsizingPolicyCoverage([current, cpu])).toBe('incomplete')
+    expect(rightsizingPolicyCoverage([current, older])).toBe('incomplete')
     expect(rightsizingPolicyCoverage([{ ...current, recommendedRequestValue: undefined }])).toBe('incomplete')
   })
 })

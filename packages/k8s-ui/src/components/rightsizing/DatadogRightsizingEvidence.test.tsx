@@ -1,10 +1,10 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { DatadogSizingWorkload, RightsizingRow } from '../../types/rightsizing'
+import type { DatadogSizingWorkload } from '../../types/rightsizing'
 import { DatadogRightsizingEvidence } from './DatadogRightsizingEvidence'
-import { datadogRowReview, isDatadogRequestActionable } from '../../utils/rightsizing-reasons'
 
-const row: RightsizingRow = {
+const row: DatadogSizingWorkload['rows'][number] = {
+  decision: { status: 'review', reasons: ['guaranteed_qos'] },
   container: 'api',
   resource: 'cpu',
   fit: 'oversized',
@@ -12,6 +12,8 @@ const row: RightsizingRow = {
   observed: { name: 'P95', formatted: '20m', value: 0.02 },
   peak: { name: 'P99', formatted: '80m', value: 0.08 },
   currentRequest: '1',
+  currentRequestValue: 1,
+  recommendedRequestValue: 0.5,
   recommendedRequest: '500m',
   coverage: 0.5,
   sampleCount: 1008,
@@ -31,9 +33,7 @@ const sizing: DatadogSizingWorkload = {
   sampleAvailable: true,
   window: '7d',
   replicas: 2,
-  actionableRequests: [],
   rows: [row],
-  reviewReasons: { api: { cpu: ['qos_change'] } },
   managedBy: {
     tool: 'flux',
     kind: 'HelmRelease',
@@ -58,14 +58,11 @@ describe('workload evidence used by embedded and standalone Radar', () => {
     ]) {
       expect(html).toContain(text)
     }
-    expect(isDatadogRequestActionable(sizing, row)).toBe(false)
-    expect(datadogRowReview(sizing, row)).toContain('Guaranteed QoS')
   })
   it('labels an eligible request and keeps the guard decision attached to its row', () => {
     const data: DatadogSizingWorkload = {
       ...sizing,
-      actionableRequests: [{ container: row.container, resource: row.resource }],
-      reviewReasons: {},
+      rows: [{ ...row, decision: { status: 'actionable' } }],
     }
     const html = renderToStaticMarkup(<DatadogRightsizingEvidence data={data} />)
     expect(html).toContain('Current request')

@@ -1,4 +1,4 @@
-import type { DatadogSizingWorkload, RightsizingRow } from '../types/rightsizing'
+import type { RightsizingRow } from '../../types/rightsizing'
 
 const reasonText: Record<string, string> = {
   request_within_fit_range: 'Keep the current request. Radar suggests a reduction only when the demand-based target is at least 30% below the current request and the rounded recommendation is lower.',
@@ -16,7 +16,7 @@ const reasonText: Record<string, string> = {
   scaled_to_zero: 'This workload currently has no replicas.',
   cpu_peak_unavailable: 'CPU peak usage is unavailable. Review bursts before lowering the request.',
   qos_unavailable: 'Radar could not verify the QoS class of the current pods.',
-  qos_change: 'Changing the request could move pods out of the Guaranteed QoS class.',
+  guaranteed_qos: 'At least one current Pod has Guaranteed QoS. Review requests and limits together to preserve that class.',
   low_confidence_reduction:
     'Too few measurements cover this window to recommend reducing the request.',
   bursty_reduction: 'CPU usage has short peaks.',
@@ -47,30 +47,4 @@ export function explainRightsizingReasons(
       return reasonText[reason] ?? reason.replaceAll('_', ' ')
     })
     .join(' ')
-}
-
-export function isDatadogRequestActionable(
-  sizing: DatadogSizingWorkload,
-  row: RightsizingRow,
-): boolean {
-  return sizing.actionableRequests.some(
-    (item) => item.container === row.container && item.resource === row.resource,
-  )
-}
-
-export function datadogRowReview(
-  sizing: DatadogSizingWorkload,
-  row: RightsizingRow,
-): string | undefined {
-  if (row.queryError) return row.queryError
-  const reasons = sizing.reviewReasons?.[row.container]?.[row.resource] ?? []
-  const codes = row.recommendationReason
-    ? [
-        row.recommendationReason,
-        ...reasons.filter((reason) => reason !== 'recommendation_withheld'),
-      ]
-    : reasons
-  if (codes.length) return explainRightsizingReasons(codes, row.resource)
-  if (row.recommendedRequest && !isDatadogRequestActionable(sizing, row))
-    return 'Review this request manually before changing it.'
 }

@@ -3,10 +3,10 @@ import type { RightsizingRow } from '../../types/rightsizing'
 import { formatRelativeAgeTime } from '../../utils/format'
 import { Badge } from '../ui/Badge'
 import { Collapse, CollapseChevron } from '../ui/Collapse'
-import { getRightsizingExplanation } from './RightsizingEvidence'
-import { explainRightsizingReasons } from '../../utils/rightsizing-reasons'
+import { explainRightsizingReasons } from './reasons'
 import {
   getResourceRequestPresentation,
+  getRightsizingExplanation,
   type ResourceSignal,
   type RightsizingActionTone,
 } from './presentation'
@@ -213,7 +213,7 @@ function SignalBadge({ signal }: { signal: ResourceSignal }) {
   )
 }
 
-export function FitWhy({
+function FitWhy({
   label,
   row,
   review,
