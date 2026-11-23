@@ -249,7 +249,8 @@ func (ix *index) permitted(target *unstructured.Unstructured, source string) (ok
 
 // agentWalk is everything one Agent's spec declares, transitively.
 type agentWalk struct {
-	refs []Reference
+	description string
+	refs        []Reference
 	// incomplete: an intermediate object was unread, or the tree was cut, so
 	// what the Agent uses beyond it is not known.
 	incomplete bool
@@ -297,6 +298,10 @@ func (ix *index) walkAgent(a *unstructured.Unstructured) agentWalk {
 		case RefUnread:
 			w.incomplete = true
 		}
+	}
+
+	if root != nil {
+		w.description, _ = root.spec["description"].(string)
 	}
 
 	var harness *unstructured.Unstructured

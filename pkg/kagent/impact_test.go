@@ -567,3 +567,26 @@ func TestCountsIncludeBroaderCoordinateEvidence(t *testing.T) {
 		})
 	}
 }
+
+func TestAgentDescriptionComesFromReadableRootTemplate(t *testing.T) {
+	inline := &unstructured.Unstructured{Object: map[string]any{"apiVersion": Group + "/v1alpha3", "kind": KindAgent,
+		"metadata": map[string]any{"name": "inline", "namespace": "agents"},
+		"spec":     map[string]any{"template": map[string]any{"inline": map[string]any{"description": "See https://user:DESCRIPTION_SECRET@example.com/?token=DESCRIPTION_TOKEN"}}}}}
+	referenced := &unstructured.Unstructured{Object: map[string]any{"apiVersion": Group + "/v1alpha3", "kind": KindAgent,
+		"metadata": map[string]any{"name": "referenced", "namespace": "agents"},
+		"spec":     map[string]any{"template": map[string]any{"ref": map[string]any{"name": "base"}}}}}
+	template := &unstructured.Unstructured{Object: map[string]any{"apiVersion": Group + "/v1alpha3", "kind": KindAgentTemplate,
+		"metadata": map[string]any{"name": "base", "namespace": "agents"}, "spec": map[string]any{"description": "Referenced description"}}}
+	inv := Inventory{Kinds: map[string]Objects{
+		KindAgent:         {Items: []*unstructured.Unstructured{inline, referenced}},
+		KindAgentTemplate: {Items: []*unstructured.Unstructured{template}},
+	}}
+	w := Compose(inv)
+	if len(w.Agents) != 2 || w.Agents[0].Description == "" || strings.Contains(w.Agents[0].Description, "DESCRIPTION_") || w.Agents[1].Description != "Referenced description" {
+		t.Fatalf("descriptions = %+v", w.Agents)
+	}
+	inv.Kinds[KindAgentTemplate] = Objects{State: "denied"}
+	if got := Compose(inv).Agents[1]; got.Description != "" || !got.Incomplete {
+		t.Fatalf("unread template supplied a description: %+v", got)
+	}
+}

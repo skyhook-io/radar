@@ -458,8 +458,7 @@ func (w *Workspace) agentView(a *unstructured.Unstructured, read func(*unstructu
 	view := AgentView{Ref: ref, Reading: reading.View(), LatestChange: latestChangeOf(reading),
 		NewSessionsRevision: rev.LatestSuccessful, DesiredRevision: rev.Desired, Created: a.GetCreationTimestamp().UTC(),
 		InlineTemplate: walk.inline, HarnessType: walk.harnessType, References: walk.refs, Incomplete: walk.incomplete, Cycle: walk.cycle}
-	view.Description, _, _ = unstructured.NestedString(a.Object, "spec", "description")
-	view.Description = RedactURLsInText(view.Description)
+	view.Description = RedactURLsInText(walk.description)
 	if view.References == nil {
 		view.References = []Reference{}
 	}
