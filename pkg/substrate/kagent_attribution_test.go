@@ -293,15 +293,16 @@ func TestKagentEarlierRevisionCreatedAfterTheAgentIsTheAgents(t *testing.T) {
 	}
 }
 
-// An Agent whose normalized name is exactly 50 characters isn't cut, but a
-// deleted Agent named it plus "-old" was cut to the same prefix: a hint. One
-// character shorter, no longer name can share the prefix but by hyphens.
+// An Agent whose normalized name is 50 characters isn't cut, but a deleted
+// Agent named it plus "-old" was cut to the same prefix: a hint. At 49, the
+// same name plus "-old" is cut at its hyphen, which kagent trims: a hint too.
+// At 48, a longer name could share the prefix only through "--".
 func TestKagentEarlierRevisionAtTheCutStaysAHint(t *testing.T) {
 	agentCreated := ago(48 * time.Hour)
 	for _, tc := range []struct {
 		length int
 		want   string
-	}{{kagentPrefixMax, KagentUnattributed}, {kagentPrefixMax - 1, KagentAgentSession}} {
+	}{{kagentPrefixMax, KagentUnattributed}, {kagentPrefixMax - 1, KagentUnattributed}, {kagentPrefixMax - 2, KagentAgentSession}} {
 		a := KagentAgent{Namespace: "kagent", Name: strings.Repeat("a", tc.length), Created: agentCreated, DesiredRevision: spikeRevision, LatestSuccessfulRevision: spikeRevision}
 		if KagentTemplatePrefix(a.Name) != a.Name {
 			t.Fatalf("fixture: %d characters is cut", tc.length)

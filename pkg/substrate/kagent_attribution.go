@@ -315,12 +315,12 @@ const kagentCreationMargin = 2 * time.Second
 // Agent could have named it: a deleted Agent's templates were created before
 // its deletion, so before any Agent that took its name later.
 //
-// The prefix must also be shorter than kagent's 50-character cut. At 50, a
+// The prefix must also stay clear of kagent's 50-character cut. At 50, a
 // deleted Agent whose name only began with this one's (A's name plus "-old")
-// was cut to the same prefix, whether or not this Agent's own name was cut.
-// One case remains: a deleted Agent whose name continued this one's with
-// hyphens alone up to the 50th character, which the cut trims away. Radar
-// does not try to exclude it.
+// was cut to the same prefix, whether or not this Agent's own name was cut;
+// at 49, the same name is cut at its hyphen, which the cut trims away. One
+// case remains: a deleted Agent whose name continued this one's with two or
+// more hyphens up to the 50th character. Radar does not try to exclude it.
 func (ix *KagentIndex) earlier(t Ref, parsed KagentTemplateName, named []AgentRef) KagentAttribution {
 	hint := KagentAttribution{Kind: KagentUnattributed, Reason: KagentEarlierRevision, Candidates: slices.Clone(named)}
 	created, ok := ix.created[t]
@@ -340,7 +340,7 @@ func (ix *KagentIndex) earlier(t Ref, parsed KagentTemplateName, named []AgentRe
 			refs = append(refs, a.Ref())
 		}
 		return KagentAttribution{Kind: KagentUnattributed, Reason: KagentAmbiguous, Candidates: refs}
-	case len(after) == 1 && len(named) == 1 && len(parsed.Prefix) < kagentPrefixMax:
+	case len(after) == 1 && len(named) == 1 && len(parsed.Prefix) < kagentPrefixMax-1:
 		agent := after[0].Ref()
 		return KagentAttribution{Kind: KagentAgentSession, Agent: &agent, Revision: parsed.Revision, EarlierRevision: true}
 	}
