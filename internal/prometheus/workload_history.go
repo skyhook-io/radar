@@ -5,10 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"regexp"
 	"sort"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -148,19 +145,11 @@ func (c *Client) historicalClusterProof(ctx context.Context, scope PodScope, cac
 }
 
 func probeHistoricalPartition(ctx context.Context, client *prom.Client, namespace string, anchors []prom.WorkloadPodIdentity) (workloadPartitionProof, error) {
-	names := make([]string, len(anchors))
-	for i, pod := range anchors {
-		names[i] = regexp.QuoteMeta(pod.Name)
-	}
-	query := "topk(257,count by (namespace,pod,uid," + strings.Join(partitionLabels, ",") + ") (kube_pod_info{namespace=" + strconv.Quote(namespace) + ",pod=~" + strconv.Quote(strings.Join(names, "|")) + "}))"
-	result, err := client.QueryEvidence(ctx, query)
+	inventory, err := queryPodPartitionInventory(ctx, client, namespace, anchors)
 	if err != nil {
 		return workloadPartitionProof{}, err
 	}
-	if result.ResultType != "vector" || len(result.Series) > 256 {
-		return workloadPartitionProof{}, nil
-	}
-	partition, _ := identifyPartitionWithUnlabeled(anchors, result.Series, true)
+	partition, _ := identifyPartitionWithUnlabeled(anchors, inventory, true)
 	proof := workloadPartitionProof{scope: prom.WorkloadMetricsScope{ClusterLabels: partition}}
 	for _, value := range partition {
 		if value == "" {
