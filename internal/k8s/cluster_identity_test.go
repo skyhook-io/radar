@@ -56,18 +56,18 @@ func TestClusterSafetyBindingFailsClosedWithoutInClusterIdentity(t *testing.T) {
 	oldBinding := contextBinding
 	oldMode := kubeconfigMode
 	oldName := contextName
-	oldClient := k8sClient
+	previous := installedConn.Load()
 	contextBinding = ""
 	kubeconfigMode = "in-cluster"
 	contextName = "in-cluster"
-	k8sClient = nil
+	installedConn.Store(installedConnectionLocked(nil, nil))
 	clientMu.Unlock()
 	t.Cleanup(func() {
 		clientMu.Lock()
 		contextBinding = oldBinding
 		kubeconfigMode = oldMode
 		contextName = oldName
-		k8sClient = oldClient
+		installedConn.Store(previous)
 		clientMu.Unlock()
 	})
 
@@ -79,7 +79,7 @@ func TestClusterSafetyBindingFailsClosedWithoutInClusterIdentity(t *testing.T) {
 	clusterUIDMu.Unlock()
 	t.Cleanup(func() { resetClusterUIDCaches("in-cluster") })
 	clientMu.Lock()
-	k8sClient = &kubernetes.Clientset{}
+	installedConn.Store(installedConnectionLocked(nil, &sharedKubernetesClients{clientset: &kubernetes.Clientset{}}))
 	clientMu.Unlock()
 	display, binding := ClusterSafetySnapshot(context.Background())
 	if display != "cluster-uid" || binding != "cluster-uid" {
@@ -102,26 +102,24 @@ func TestClusterSafetyBindingFailsClosedWithoutInClusterIdentity(t *testing.T) {
 func TestClientSafetySnapshotsUseOneBinding(t *testing.T) {
 	sharedClient := &kubernetes.Clientset{}
 	clientMu.Lock()
-	oldClient := k8sClient
-	oldConfig := k8sConfig
+	previous := installedConn.Load()
 	oldBinding := contextBinding
-	k8sClient = sharedClient
-	k8sConfig = &rest.Config{Host: "https://management.example"}
 	contextBinding = "kcb1_management"
+	installedConn.Store(installedConnectionLocked(&rest.Config{Host: "https://management.example"}, &sharedKubernetesClients{clientset: sharedClient}))
 	clientMu.Unlock()
 	t.Cleanup(func() {
 		clientMu.Lock()
-		k8sClient = oldClient
-		k8sConfig = oldConfig
+		installedConn.Store(previous)
 		contextBinding = oldBinding
 		clientMu.Unlock()
 	})
 
-	client, binding := GetClientSafetySnapshot()
+	conn := Current()
+	client, binding := conn.Client(), conn.ContextBinding()
 	if client != sharedClient || binding != "kcb1_management" {
 		t.Fatalf("client safety snapshot = (%p, %q), want (%p, %q)", client, binding, sharedClient, "kcb1_management")
 	}
-	impersonated, impersonatedBinding, err := UserClientSafetySnapshot(&pkgauth.User{Username: "alice", Groups: []string{"operators"}})
+	impersonated, impersonatedBinding, err := Current().UserClientSafetySnapshot(&pkgauth.User{Username: "alice", Groups: []string{"operators"}})
 	if err != nil {
 		t.Fatalf("UserClientSafetySnapshot: %v", err)
 	}

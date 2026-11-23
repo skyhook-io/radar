@@ -22,10 +22,11 @@ func (s *Server) karpenterCapability(r *http.Request) k8s.IntegrationCapability 
 	default:
 		return k8s.IntegrationCapability{State: capacityapi.IntegrationSyncing, ReasonCode: "cluster_disconnected"}
 	}
-	if k8s.GetClient() == nil {
+	conn := k8s.Current()
+	if conn.Client() == nil {
 		return k8s.IntegrationCapability{State: capacityapi.IntegrationSyncing, ReasonCode: "cluster_client_unavailable"}
 	}
-	discovery := k8s.GetResourceDiscovery()
+	discovery := conn.Discovery()
 	if discovery == nil {
 		return k8s.IntegrationCapability{State: capacityapi.IntegrationSyncing, ReasonCode: "discovery_unavailable"}
 	}

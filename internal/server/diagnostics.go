@@ -527,11 +527,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 
 	// API Discovery — read-only stats, no refresh
 	collectClusterSection("apiDiscovery", func() {
-		discovery, ok := k8s.ResourceDiscoveryIfIdle()
-		if !ok {
-			clusterErrors = append(clusterErrors, "API discovery details are temporarily busy.")
-			return
-		}
+		discovery := k8s.GetResourceDiscovery()
 		if discovery == nil {
 			return
 		}

@@ -59,13 +59,15 @@ func useSARServer(t *testing.T) *sarServer {
 		t.Fatal(err)
 	}
 	clientMu.Lock()
-	oldClient, oldNs := k8sClient, contextNamespace
-	k8sClient, contextNamespace = client, ""
+	previous, oldNs := installedConn.Load(), contextNamespace
+	installedConn.Store(installedConnectionLocked(nil, &sharedKubernetesClients{clientset: client}))
+	contextNamespace = ""
 	clientMu.Unlock()
 	InvalidateUserCapabilitiesCache()
 	t.Cleanup(func() {
 		clientMu.Lock()
-		k8sClient, contextNamespace = oldClient, oldNs
+		installedConn.Store(previous)
+		contextNamespace = oldNs
 		clientMu.Unlock()
 		InvalidateUserCapabilitiesCache()
 	})

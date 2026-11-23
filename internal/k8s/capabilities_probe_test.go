@@ -663,8 +663,7 @@ func TestCheckResourcePermissionsDiscardsSupersededProbe(t *testing.T) {
 
 	setProbeClients := func(dyn dynamic.Interface) {
 		clientMu.Lock()
-		k8sClient = typed
-		dynamicClient = dyn
+		installedConn.Store(installedConnectionLocked(nil, &sharedKubernetesClients{clientset: typed, dynamic: dyn}))
 		clientMu.Unlock()
 	}
 
@@ -779,9 +778,7 @@ func testRescopeRetiresInFlightProbe(t *testing.T, previousNs string, rescope fu
 	})
 
 	clientMu.Lock()
-	k8sClient = typed
-	dynamicClient = dyn
-	activeClientGeneration = 5
+	installedConn.Store(installedConnectionLocked(nil, &sharedKubernetesClients{clientset: typed, dynamic: dyn, generation: 5}))
 	clientMu.Unlock()
 	ForceNamespaceScope = true
 	SetNamespaceScopeOverride(previousNs)
