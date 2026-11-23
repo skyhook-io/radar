@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -212,10 +213,69 @@ func TestCRDWarmupSequenceAbortsOnContextCancel(t *testing.T) {
 	}
 }
 
+func TestServingCacheCompletesCRDWarmupAfterOperationCancel(t *testing.T) {
+	withFreshTestConnection(t)
+	if err := installTestDynamicClient(dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), nil); err != nil {
+		t.Fatal(err)
+	}
+	conn := Current()
+	rc, _, release := blockedDeferredCache(t)
+	cache := &ResourceCache{ResourceCache: rc}
+	if err := conn.cacheState().installTestCache(cache, true); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(conn.closeDynamicResourceCache)
+	t.Cleanup(ResetMetricsHistory)
+	t.Cleanup(ResetPolicyReportIndex)
+	if err := InitAllSubsystems(t.Context(), func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	dc := conn.DynamicResourceCache()
+	if dc == nil {
+		t.Fatal("dynamic cache did not start")
+	}
+	complete := make(chan struct{})
+	dc.OnCRDDiscoveryComplete(func() { close(complete) })
+
+	// A failed rescope cancels the operation while the deferred ReplicaSet
+	// LIST is still blocked and leaves both caches serving.
+	CancelOngoingOperations()
+	release()
+	select {
+	case <-complete:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("CRD warmup after operation cancellation: discovery status = %s, want complete", dc.GetDiscoveryStatus())
+	}
+	if GetResourceCache() != cache || GetDynamicResourceCache() != dc || dc.IsStopped() {
+		t.Fatal("CRD discovery completed on a different cache than the one serving")
+	}
+}
+
+func TestClosingDynamicCacheEndsWaitingCRDWarmup(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		conn := &Connection{}
+		lifetime := conn.dynamicCacheState().lifetime
+		gate := make(chan struct{})
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			runCRDWarmupSequence(lifetime, gate, nil, func() { t.Error("closed cache ran a warmup step") })
+		}()
+		synctest.Wait()
+		select {
+		case <-done:
+			t.Fatal("warmup exited before cache close")
+		default:
+		}
+		conn.closeDynamicResourceCache()
+		<-done
+	})
+}
+
 // TestCRDWarmupSequenceSurvivesInitContextCancel pins the lifecycle contract
 // InitAllSubsystems must honor: callers cancel the init ctx as soon as critical
 // sync returns, while deferred sync is still in flight. The sequence must ride
-// a longer-lived lifecycle ctx (OperationContext), not the init ctx — otherwise
+// the dynamic cache's lifetime ctx, not the init ctx — otherwise
 // CRD warmup silently never runs on large clusters.
 func TestCRDWarmupSequenceSurvivesInitContextCancel(t *testing.T) {
 	rc, _, release := blockedDeferredCache(t)

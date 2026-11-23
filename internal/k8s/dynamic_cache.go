@@ -24,7 +24,10 @@ type DynamicResourceCache struct {
 }
 
 type connectionDynamicCache struct {
-	cacheLifecycle
+	mu       sync.Mutex
+	once     sync.Once
+	lifetime context.Context
+	cancel   context.CancelFunc
 	promoted atomic.Pointer[DynamicResourceCache]
 	pending  []func()
 }
@@ -39,7 +42,8 @@ func (conn *Connection) dynamicCacheState() *connectionDynamicCache {
 	if state := conn.dynamicCache.Load(); state != nil {
 		return state
 	}
-	state := &connectionDynamicCache{pending: slices.Clone(crdCompleteSubscribers)}
+	lifetime, cancel := context.WithCancel(context.Background())
+	state := &connectionDynamicCache{lifetime: lifetime, cancel: cancel, pending: slices.Clone(crdCompleteSubscribers)}
 	conn.dynamicCache.Store(state)
 	return state
 }
@@ -121,25 +125,34 @@ func (conn *Connection) initDynamicResourceCache(changeCh chan k8score.ResourceC
 }
 
 func (conn *Connection) configureDynamicCallbacks(cfg *k8score.DynamicCacheConfig) {
-	state := conn.dynamicCacheState()
+	lifetime := conn.dynamicCacheState().lifetime
 	history := conn.cacheState()
 	cluster := TimelineClusterContext(conn.ContextName())
-	cfg.ComputeDiff = state.computeDiff
+	cfg.ComputeDiff = func(kind string, oldObj, newObj any) *DiffInfo {
+		if lifetime.Err() != nil {
+			return nil
+		}
+		return ComputeDiff(kind, oldObj, newObj)
+	}
 	cfg.OnReceived = func(kind string) {
-		state.whileOpen(func() { timeline.IncrementReceived(kind) })
+		if lifetime.Err() == nil {
+			timeline.IncrementReceived(kind)
+		}
 	}
 	cfg.OnChange = func(change ResourceChange, obj, oldObj any) {
-		if extractUnstructured(obj) != nil {
-			state.whileOpen(func() {
-				history.recordToTimelineStore(cluster, change.Kind, change.Namespace, change.Name, change.UID, change.Operation, oldObj, obj, change.Diff, true)
-			})
+		if lifetime.Err() == nil && extractUnstructured(obj) != nil {
+			history.recordToTimelineStore(cluster, change.Kind, change.Namespace, change.Name, change.UID, change.Operation, oldObj, obj, change.Diff, true)
 		}
 	}
 	cfg.OnDrop = func(kind, ns, name, reason, op string) {
-		state.whileOpen(func() { timeline.RecordDrop(kind, ns, name, reason, op, cluster) })
+		if lifetime.Err() == nil {
+			timeline.RecordDrop(kind, ns, name, reason, op, cluster)
+		}
 	}
 	cfg.OnRecorded = func(kind string) {
-		state.whileOpen(func() { timeline.IncrementRecorded(kind) })
+		if lifetime.Err() == nil {
+			timeline.IncrementRecorded(kind)
+		}
 	}
 }
 
@@ -153,7 +166,7 @@ func (s *connectionDynamicCache) init(build func() (*DynamicResourceCache, error
 		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		if s.closed {
+		if s.lifetime.Err() != nil {
 			dc.Stop()
 			return
 		}
@@ -165,7 +178,7 @@ func (s *connectionDynamicCache) init(build func() (*DynamicResourceCache, error
 	})
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
+	if s.lifetime.Err() != nil {
 		return fmt.Errorf("cluster changed during dynamic cache initialization")
 	}
 	return initErr
@@ -199,9 +212,9 @@ func (conn *Connection) closeDynamicResourceCache() {
 		return
 	}
 	s := conn.dynamicCacheState()
-	s.closeCallbacks()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.cancel()
 	s.pending = nil
 	if dc := s.promoted.Swap(nil); dc != nil {
 		dc.Stop()
@@ -230,7 +243,7 @@ func OnCRDDiscoveryComplete(callback func()) {
 func (s *connectionDynamicCache) onCRDDiscoveryComplete(callback func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
+	if s.lifetime.Err() != nil {
 		return
 	}
 	if dc := s.promoted.Load(); dc != nil {
