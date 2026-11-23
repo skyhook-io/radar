@@ -344,14 +344,13 @@ func TestServedGVRDoesNotWaitForASlowRefresh(t *testing.T) {
 		t.Errorf("%d goroutines parked behind one stalled refresh", grew)
 	}
 
+	refresh := d.refreshIfStaleInBackground()
 	stalled.Store(false)
 	close(release)
-	deadline := time.Now().Add(5 * time.Second)
-	for d.backgroundRefresh.Load() {
-		if time.Now().After(deadline) {
-			t.Fatal("the stalled refresh never released its slot")
-		}
-		time.Sleep(time.Millisecond)
+	select {
+	case <-refresh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stalled refresh never released its slot")
 	}
 	fakeDisc.Resources = servedOCIRepository("v2")
 	waitForServedVersion(t, "v2")

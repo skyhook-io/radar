@@ -34,10 +34,10 @@ func TestPublicMetricsEntryPointsUseV1Beta1(t *testing.T) {
 	}
 
 	store := NewMetricsHistoryStore(dyn)
-	if got, ok := store.metricsGVR("pods"); !ok || got != PodMetricsGVR {
+	if got, ok, _ := store.metricsGVR("pods"); !ok || got != PodMetricsGVR {
 		t.Fatalf("default pod metrics GVR = %v, ok=%v", got, ok)
 	}
-	if got, ok := store.metricsGVR("nodes"); !ok || got != NodeMetricsGVR {
+	if got, ok, _ := store.metricsGVR("nodes"); !ok || got != NodeMetricsGVR {
 		t.Fatalf("default node metrics GVR = %v, ok=%v", got, ok)
 	}
 }

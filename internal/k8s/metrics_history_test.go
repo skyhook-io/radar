@@ -5,6 +5,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -158,6 +159,58 @@ func TestMetricsPollWithStalledDiscovery(t *testing.T) {
 	}
 }
 
+func TestMetricsPollReportsConfirmedMissAndRecovers(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		client := fakeclientset.NewSimpleClientset().Discovery().(*fakediscovery.FakeDiscovery)
+		discovery, err := k8score.NewResourceDiscovery(client, k8score.WithDiscoveryCacheTTL(time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var installed atomic.Bool
+		client.PrependReactor("get", "group", func(clienttesting.Action) (bool, runtime.Object, error) {
+			if installed.Load() {
+				client.Resources = []*metav1.APIResourceList{{
+					GroupVersion: "metrics.k8s.io/v1",
+					APIResources: []metav1.APIResource{
+						{Name: "pods", Kind: "PodMetrics", Namespaced: true},
+						{Name: "nodes", Kind: "NodeMetrics"},
+					},
+				}}
+			}
+			return false, nil, nil
+		})
+		c, dyn := metricsTestConnection(t, "v1", "node-a")
+		c.discovery.Store(&ResourceDiscovery{ResourceDiscovery: discovery})
+		c.initMetricsHistory()
+		defer c.closeMetricsHistory()
+		store := c.MetricsHistory()
+		synctest.Wait()
+
+		for count := 1; count <= 2; count++ {
+			time.Sleep(MetricsPollInterval)
+			synctest.Wait()
+			health := store.CollectionHealth()
+			want := MetricsSourceHealth{ConsecutiveErrors: count, LastError: k8score.ErrMetricsAPINotDiscovered.Error()}
+			if health.PodMetrics != want || health.NodeMetrics != want {
+				t.Fatalf("poll after completed miss %d: %+v", count, health)
+			}
+		}
+		if actions := dyn.Actions(); len(actions) != 0 {
+			t.Fatalf("issued metrics requests for absent endpoints: %v", actions)
+		}
+
+		installed.Store(true)
+		// One tick discovers the install, the next can collect both sources.
+		time.Sleep(2 * MetricsPollInterval)
+		synctest.Wait()
+		health := store.CollectionHealth()
+		if !health.PodMetrics.Collecting || !health.NodeMetrics.Collecting ||
+			health.PodMetrics.LastError != "" || health.NodeMetrics.LastError != "" || store.GetNodeMetricsHistory("node-a") == nil {
+			t.Fatalf("collection after metrics-server install: %+v", health)
+		}
+	})
+}
+
 func TestMetricsHistoryAdvancesDuringDiscoveryRefresh(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		client := fakeclientset.NewSimpleClientset().Discovery().(*fakediscovery.FakeDiscovery)
@@ -173,7 +226,8 @@ func TestMetricsHistoryAdvancesDuringDiscoveryRefresh(t *testing.T) {
 			t.Fatal(err)
 		}
 		release := make(chan struct{})
-		defer close(release)
+		unblock := sync.OnceFunc(func() { close(release) })
+		defer unblock()
 		refreshes := 0
 		client.PrependReactor("get", "resource", func(clienttesting.Action) (bool, runtime.Object, error) {
 			refreshes++
@@ -188,6 +242,7 @@ func TestMetricsHistoryAdvancesDuringDiscoveryRefresh(t *testing.T) {
 				"containers": []any{map[string]any{"name": "web", "usage": map[string]any{"cpu": "5m"}}},
 			}}}}, nil
 		})
+		client.Resources = nil
 		c.initMetricsHistory()
 		defer c.closeMetricsHistory()
 		store := c.MetricsHistory()
@@ -206,6 +261,16 @@ func TestMetricsHistoryAdvancesDuringDiscoveryRefresh(t *testing.T) {
 		}
 		if refreshes != 1 {
 			t.Errorf("blocked refreshes = %d, want 1", refreshes)
+		}
+		unblock()
+		synctest.Wait()
+		time.Sleep(MetricsPollInterval)
+		synctest.Wait()
+		health := store.CollectionHealth()
+		for _, source := range []MetricsSourceHealth{health.PodMetrics, health.NodeMetrics} {
+			if source.LastPollDeferred || source.ConsecutiveErrors != 1 || source.LastError != k8score.ErrMetricsAPINotDiscovered.Error() || source.TotalDataPoints != 4 {
+				t.Errorf("completed refresh dropped the metrics group: %+v", source)
+			}
 		}
 	})
 }

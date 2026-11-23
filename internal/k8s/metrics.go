@@ -26,21 +26,39 @@ func ResolveMetricsGVR(resource string) (schema.GroupVersionResource, bool) {
 	})
 }
 
-// A credential plugin can stall discovery indefinitely, so the miss refresh
-// must not retain the poller or its connection.
-func (c *Connection) cachedMetricsGVR(resource string) (schema.GroupVersionResource, bool) {
-	d := c.Discovery()
-	if d == nil || d.ResourceDiscovery == nil {
-		return schema.GroupVersionResource{}, false
+// Each source consumes the result of its previous refresh before requesting the
+// next one. Otherwise a persistent miss starts a refresh on every poll and the
+// poller never reports the absence confirmed by the preceding refresh.
+func (c *Connection) metricsPollResolver() func(string) k8score.MetricsPollDiscovery {
+	previous := make(map[string]<-chan struct{})
+	return func(resource string) k8score.MetricsPollDiscovery {
+		d := c.Discovery()
+		if d == nil || d.ResourceDiscovery == nil {
+			return k8score.MetricsPollDiscovery{RefreshPending: true}
+		}
+		confirmed := false
+		select {
+		case <-previous[resource]:
+			confirmed = true
+		default:
+		}
+		lookup := func(d *ResourceDiscovery) (schema.GroupVersionResource, bool) {
+			return d.GetGVRWithGroup(resource, k8score.MetricsAPIGroup)
+		}
+		gvr, found := lookup(d)
+		if found {
+			refresh := d.refreshIfStaleInBackground()
+			previous[resource] = refresh
+			return k8score.MetricsPollDiscovery{GVR: gvr, RefreshPending: refresh != nil}
+		}
+		pending := !confirmed || d.LastRefreshFailed() || d.GroupHadPartialDiscovery(k8score.MetricsAPIGroup)
+		// A credential plugin can stall discovery indefinitely, so the miss
+		// refresh must not retain the poller or its connection.
+		previous[resource] = d.refreshInBackground(func() {
+			d.LookupRefreshingOnMiss(lookup)
+		})
+		return k8score.MetricsPollDiscovery{RefreshPending: pending}
 	}
-	lookup := func(d *ResourceDiscovery) (schema.GroupVersionResource, bool) {
-		return d.GetGVRWithGroup(resource, k8score.MetricsAPIGroup)
-	}
-	gvr, ok := lookup(d)
-	if !ok {
-		d.refreshInBackground(func() { d.LookupRefreshingOnMiss(lookup) })
-	}
-	return gvr, ok
 }
 
 func MetricsAPIPath(resource string) (string, bool) {

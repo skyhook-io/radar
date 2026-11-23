@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -16,9 +15,8 @@ import (
 // ResourceDiscovery wraps the shared k8score implementation.
 type ResourceDiscovery struct {
 	*k8score.ResourceDiscovery
-	// backgroundRefresh is held while a background refresh runs, so callers
-	// arriving during a slow refresh don't each park another goroutine.
-	backgroundRefresh atomic.Bool
+	backgroundMu      sync.Mutex
+	backgroundRefresh chan struct{} // Closed on completion; concurrent callers share one refresh.
 	// missRefresh serializes LookupRefreshingOnMiss's refreshes; missRefreshAt
 	// is when the last one started.
 	missRefresh   sync.Mutex
@@ -131,29 +129,41 @@ func (c *Connection) ServedGVR(group, kind string) (schema.GroupVersionResource,
 	return d.GetGVRWithGroup(kind, group)
 }
 
-// refreshIfStaleInBackground reports whether a background refresh was pending for this lookup.
-func (d *ResourceDiscovery) refreshIfStaleInBackground() bool {
+// refreshIfStaleInBackground returns the in-flight refresh, or nil for a fresh snapshot.
+func (d *ResourceDiscovery) refreshIfStaleInBackground() <-chan struct{} {
 	if d == nil || d.ResourceDiscovery == nil {
-		return false
+		return nil
 	}
 	if !d.IsStale() {
-		return d.backgroundRefresh.Load()
+		d.backgroundMu.Lock()
+		defer d.backgroundMu.Unlock()
+		return d.backgroundRefresh
 	}
-	d.refreshInBackground(func() {
+	return d.refreshInBackground(func() {
 		if err := d.RefreshIfStale(); err != nil {
 			log.Printf("[discovery] Background refresh failed: %v", err)
 		}
 	})
-	return true
 }
 
-func (d *ResourceDiscovery) refreshInBackground(refresh func()) {
-	if d.backgroundRefresh.CompareAndSwap(false, true) {
-		go func() {
-			defer d.backgroundRefresh.Store(false)
-			refresh()
-		}()
+func (d *ResourceDiscovery) refreshInBackground(refresh func()) <-chan struct{} {
+	d.backgroundMu.Lock()
+	defer d.backgroundMu.Unlock()
+	if d.backgroundRefresh != nil {
+		return d.backgroundRefresh
 	}
+	done := make(chan struct{})
+	d.backgroundRefresh = done
+	go func() {
+		defer func() {
+			d.backgroundMu.Lock()
+			defer d.backgroundMu.Unlock()
+			close(done)
+			d.backgroundRefresh = nil
+		}()
+		refresh()
+	}()
+	return done
 }
 
 // discoveryMissRefreshInterval bounds how often lookups that find nothing

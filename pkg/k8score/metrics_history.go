@@ -124,11 +124,7 @@ type MetricsSourceHealth struct {
 type MetricsHistoryStore struct {
 	mu         sync.RWMutex
 	dynClient  dynamic.Interface
-	resolveGVR MetricsGVRResolver
-
-	// RefreshStaleDiscovery requests a background refresh if needed and reports whether
-	// a refresh is pending. Known metrics endpoints can still serve a LIST.
-	RefreshStaleDiscovery func() bool
+	resolveGVR func(resource string) MetricsPollDiscovery
 
 	// Namespaces, when it returns a non-empty list, limits pod metrics
 	// collection to those namespaces, one LIST each. An install whose RBAC is
@@ -223,7 +219,7 @@ func MetricsAPIUnavailable(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, ErrMetricsAPINotDiscovered) {
+	if errors.Is(err, ErrMetricsAPINotDiscovered) || strings.HasSuffix(err.Error(), ErrMetricsAPINotDiscovered.Error()) {
 		return true
 	}
 	if nf, ok := err.(namespacesFailedError); ok {
@@ -265,6 +261,26 @@ func NewMetricsHistoryStore(client dynamic.Interface) *MetricsHistoryStore {
 
 // NewMetricsHistoryStoreWithResolver creates a store that follows discovered metrics API versions.
 func NewMetricsHistoryStoreWithResolver(client dynamic.Interface, resolveGVR MetricsGVRResolver) *MetricsHistoryStore {
+	return NewMetricsHistoryStoreWithPollResolver(client, func(resource string) MetricsPollDiscovery {
+		if resolveGVR != nil {
+			if gvr, found := resolveGVR(resource); found {
+				return MetricsPollDiscovery{GVR: gvr}
+			}
+		}
+		return MetricsPollDiscovery{}
+	})
+}
+
+// MetricsPollDiscovery identifies the cached endpoint for one source. A zero GVR
+// means the endpoint is missing. While discovery is pending, a miss or a LIST
+// returning 404 defers that source until the next poll.
+type MetricsPollDiscovery struct {
+	GVR            schema.GroupVersionResource
+	RefreshPending bool
+}
+
+// NewMetricsHistoryStoreWithPollResolver looks up each source on the polling goroutine.
+func NewMetricsHistoryStoreWithPollResolver(client dynamic.Interface, resolveGVR func(resource string) MetricsPollDiscovery) *MetricsHistoryStore {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &MetricsHistoryStore{
 		dynClient:   client,
@@ -331,26 +347,26 @@ func (s *MetricsHistoryStore) collectMetrics() {
 	s.collectNodeMetrics(nodeCtx, now)
 }
 
-func (s *MetricsHistoryStore) metricsGVR(resource string) (schema.GroupVersionResource, bool) {
+func (s *MetricsHistoryStore) metricsGVR(resource string) (gvr schema.GroupVersionResource, found, pending bool) {
 	if s.resolveGVR == nil {
-		return schema.GroupVersionResource{}, false
+		return schema.GroupVersionResource{}, false, false
 	}
-	gvr, ok := s.resolveGVR(resource)
-	if !ok || gvr.Group != MetricsAPIGroup || gvr.Version == "" || gvr.Resource != resource {
-		return schema.GroupVersionResource{}, false
+	result := s.resolveGVR(resource)
+	gvr = result.GVR
+	if gvr.Group != MetricsAPIGroup || gvr.Version == "" || gvr.Resource != resource {
+		return schema.GroupVersionResource{}, false, result.RefreshPending
 	}
-	return gvr, true
+	return gvr, true, result.RefreshPending
 }
 
-func (s *MetricsHistoryStore) pollDeferred(err error, refreshPending bool) bool {
-	return (s.RefreshStaleDiscovery != nil && errors.Is(err, ErrMetricsAPINotDiscovered)) ||
-		(refreshPending && apierrors.IsNotFound(err))
+func pollDeferred(err error, refreshPending bool) bool {
+	return refreshPending && (errors.Is(err, ErrMetricsAPINotDiscovered) || apierrors.IsNotFound(err))
 }
 
 func (s *MetricsHistoryStore) recordPodCollectionError(err error, refreshPending bool) {
 	errMsg := err.Error()
 	s.mu.Lock()
-	s.podPollDeferred = s.pollDeferred(err, refreshPending)
+	s.podPollDeferred = pollDeferred(err, refreshPending)
 	if s.podPollDeferred {
 		s.mu.Unlock()
 		return
@@ -386,7 +402,7 @@ func (s *MetricsHistoryStore) recordPartialPodCollectionError(err error) {
 func (s *MetricsHistoryStore) recordNodeCollectionError(err error, refreshPending bool) {
 	errMsg := err.Error()
 	s.mu.Lock()
-	s.nodePollDeferred = s.pollDeferred(err, refreshPending)
+	s.nodePollDeferred = pollDeferred(err, refreshPending)
 	if s.nodePollDeferred {
 		s.mu.Unlock()
 		return
@@ -405,8 +421,12 @@ func (s *MetricsHistoryStore) recordNodeCollectionError(err error, refreshPendin
 }
 
 func (s *MetricsHistoryStore) collectPodMetrics(ctx context.Context, now time.Time) {
-	refreshPending := s.RefreshStaleDiscovery != nil && s.RefreshStaleDiscovery()
-	items, listed, err := s.listPodMetrics(ctx, refreshPending)
+	gvr, refreshPending, err := s.resolvePollGVR("pods")
+	var items []unstructured.Unstructured
+	var listed bool
+	if err == nil {
+		items, listed, err = s.listPodMetrics(ctx, gvr, refreshPending)
+	}
 	s.publishMu.Lock()
 	defer s.publishMu.Unlock()
 	if s.stopCtx.Err() != nil {
@@ -497,11 +517,7 @@ func (s *MetricsHistoryStore) collectPodMetrics(ctx context.Context, now time.Ti
 // listPodMetrics lists pod metrics cluster-wide, or per namespace when
 // Namespaces is set. listed reports whether any LIST succeeded; err joins the
 // failures.
-func (s *MetricsHistoryStore) listPodMetrics(ctx context.Context, refreshPending bool) (items []unstructured.Unstructured, listed bool, err error) {
-	gvr, err := s.resolvePollGVR("pods")
-	if err != nil {
-		return nil, false, err
-	}
+func (s *MetricsHistoryStore) listPodMetrics(ctx context.Context, gvr schema.GroupVersionResource, refreshPending bool) (items []unstructured.Unstructured, listed bool, err error) {
 	var namespaces []string
 	if s.Namespaces != nil {
 		namespaces = s.Namespaces()
@@ -539,7 +555,7 @@ func (s *MetricsHistoryStore) listPodMetrics(ctx context.Context, refreshPending
 		// not name namespaces the reader may not see. The detail goes to the
 		// Radar log; the cause is kept for classification.
 		cause := podListFailure(errs, refreshPending)
-		if !s.pollDeferred(cause, refreshPending) {
+		if !pollDeferred(cause, refreshPending) {
 			log.Printf("[metrics] Pod metrics could not be listed in any namespace: %v", err)
 		}
 		return nil, false, namespacesFailedError{cause: cause}
@@ -583,23 +599,22 @@ func podListFailure(errs []error, refreshPending bool) error {
 	return notFound
 }
 
-func (s *MetricsHistoryStore) resolvePollGVR(resource string) (schema.GroupVersionResource, error) {
+func (s *MetricsHistoryStore) resolvePollGVR(resource string) (schema.GroupVersionResource, bool, error) {
 	if s.dynClient == nil {
-		return schema.GroupVersionResource{}, errors.New("dynamic client not initialized")
+		return schema.GroupVersionResource{}, false, errors.New("dynamic client not initialized")
 	}
-	gvr, ok := s.metricsGVR(resource)
+	gvr, found, pending := s.metricsGVR(resource)
 	if err := s.stopCtx.Err(); err != nil {
-		return schema.GroupVersionResource{}, err
+		return schema.GroupVersionResource{}, false, err
 	}
-	if !ok {
-		return schema.GroupVersionResource{}, ErrMetricsAPINotDiscovered
+	if !found {
+		return schema.GroupVersionResource{}, pending, ErrMetricsAPINotDiscovered
 	}
-	return gvr, nil
+	return gvr, pending, nil
 }
 
 func (s *MetricsHistoryStore) collectNodeMetrics(ctx context.Context, now time.Time) {
-	refreshPending := s.RefreshStaleDiscovery != nil && s.RefreshStaleDiscovery()
-	gvr, err := s.resolvePollGVR("nodes")
+	gvr, refreshPending, err := s.resolvePollGVR("nodes")
 	var result *unstructured.UnstructuredList
 	if err == nil {
 		result, err = s.dynClient.Resource(gvr).List(ctx, metav1.ListOptions{})

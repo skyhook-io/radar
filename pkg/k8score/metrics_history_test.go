@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -120,6 +121,41 @@ func TestMetricsHistoryResolvesServedVersionLazily(t *testing.T) {
 	}
 }
 
+func TestMetricsHistoryWarnsOnConfirmedMiss(t *testing.T) {
+	pending := true
+	store := NewMetricsHistoryStoreWithPollResolver(dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), func(string) MetricsPollDiscovery {
+		return MetricsPollDiscovery{RefreshPending: pending}
+	})
+	defer store.Stop()
+	var warnings []string
+	store.OnError = func(source, level, format string, args ...any) {
+		if source != "metrics" || level != "warning" {
+			t.Errorf("diagnostic source %q, level %q", source, level)
+		}
+		warnings = append(warnings, fmt.Sprintf(format, args...))
+	}
+	store.collectMetrics()
+	if len(warnings) != 0 {
+		t.Fatalf("pending refresh emitted warnings: %v", warnings)
+	}
+	pending = false
+	store.collectMetrics()
+	store.collectMetrics()
+	want := []string{
+		"pod metrics collection failed (count=1): metrics API is not discovered",
+		"node metrics collection failed (count=1): metrics API is not discovered",
+	}
+	if !slices.Equal(warnings, want) {
+		t.Errorf("warnings = %v, want %v", warnings, want)
+	}
+	health := store.CollectionHealth()
+	for _, source := range []MetricsSourceHealth{health.PodMetrics, health.NodeMetrics} {
+		if source.LastPollDeferred || source.ConsecutiveErrors != 2 || !MetricsAPIUnavailable(fmt.Errorf("failed to get metrics: %s", source.LastError)) {
+			t.Errorf("history should report the metrics API as unavailable: %+v", source)
+		}
+	}
+}
+
 func TestMetricsCollectionErrorLevel(t *testing.T) {
 	tests := []struct {
 		name string
@@ -193,13 +229,11 @@ func TestMetricsPollDefersOnlyTheAffectedSource(t *testing.T) {
 			PodMetricsGVR: "PodMetricsList", NodeMetricsGVR: "NodeMetricsList",
 		})
 		known := map[string]schema.GroupVersionResource{"pods": PodMetricsGVR, "nodes": NodeMetricsGVR}
-		store := NewMetricsHistoryStoreWithResolver(dyn, func(resource string) (schema.GroupVersionResource, bool) {
-			gvr, ok := known[resource]
-			return gvr, ok
+		pending := false
+		store := NewMetricsHistoryStoreWithPollResolver(dyn, func(resource string) MetricsPollDiscovery {
+			return MetricsPollDiscovery{GVR: known[resource], RefreshPending: pending}
 		})
 		defer store.Stop()
-		pending := false
-		store.RefreshStaleDiscovery = func() bool { return pending }
 		store.collectMetrics()
 		before := store.CollectionHealth()
 
@@ -415,9 +449,10 @@ func TestMetricsPollDuringRefreshWithNamespaced404s(t *testing.T) {
 		}
 		return true, nil, apierrors.NewNotFound(PodMetricsGVR.GroupResource(), "")
 	})
-	store := NewMetricsHistoryStore(dyn)
+	store := NewMetricsHistoryStoreWithPollResolver(dyn, func(string) MetricsPollDiscovery {
+		return MetricsPollDiscovery{GVR: PodMetricsGVR, RefreshPending: true}
+	})
 	defer store.Stop()
-	store.RefreshStaleDiscovery = func() bool { return true }
 	namespaces := []string{"a", "b"}
 	store.Namespaces = func() []string { return namespaces }
 	store.collectPodMetrics(context.Background(), time.Now())
