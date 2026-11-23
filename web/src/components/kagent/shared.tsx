@@ -292,13 +292,14 @@ export function useKagentRuntime(namespaces: string[], enabled = true) {
                 name: '',
               })
             : 'Reading sessions from Substrate…'
+  const completePage = !!pages && !summary.hasNextPage && !summary.isFetchNextPageError
   return {
     query: summary,
     rows,
     tier,
     unavailable,
-    completePage: !!pages && !summary.hasNextPage && !summary.isFetchNextPageError,
-    lowerBound: !pages || pages.length > 1 || pages.some((p) => p.lowerBound),
+    completePage,
+    lowerBound: !completePage || !!pages?.some((p) => p.lowerBound),
   }
 }
 export type KagentRuntime = ReturnType<typeof useKagentRuntime>
