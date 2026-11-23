@@ -155,3 +155,32 @@ describe('CronJob Trigger', () => {
     expect(document.body.textContent).toContain("cannot contain '.'")
   })
 })
+
+it.each([
+  { name: 'second-cronjob', uid: 'first-uid' },
+  { name: 'first-cronjob', uid: 'replacement-uid' },
+])('discards the draft when the target changes to $name ($uid)', ({ name, uid }) => {
+  const onTriggerCronJob = vi.fn()
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  roots.push(root)
+  const show = (name: string, uid: string) => act(() => root.render(<ResourceActionsBar
+    resource={{ kind: 'cronjobs', name, namespace: 'prod' }}
+    data={{ ...cronJob, metadata: { name, namespace: 'prod', uid } }}
+    onTriggerCronJob={onTriggerCronJob}
+    cronJobTriggerDialog
+  />))
+
+  const open = () => act(() => [...host.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Trigger')!.click())
+
+  show('first-cronjob', 'first-uid')
+  open()
+  type('custom-for-first')
+  show(name, uid)
+  expect(document.querySelector('[role="dialog"]:not([inert] *)')).toBeNull()
+  expect(onTriggerCronJob).not.toHaveBeenCalled()
+
+  open()
+  expect(jobNameInput()?.value).toMatch(new RegExp(`^${name}-manual-`))
+})

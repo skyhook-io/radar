@@ -243,8 +243,9 @@ export function ResourceActionsBar({
     deleteMounted.current = true
     return () => { deleteMounted.current = false }
   }, [])
-  const currentDeleteTarget = useRef({ key: resourceRefKey(resource), uid: data?.metadata?.uid })
-  currentDeleteTarget.current = { key: resourceRefKey(resource), uid: data?.metadata?.uid }
+  const resourceTarget = { key: resourceRefKey(resource), uid: data?.metadata?.uid }
+  const currentDeleteTarget = useRef(resourceTarget)
+  currentDeleteTarget.current = resourceTarget
   useEffect(() => { onDeletePreviewOpenChange?.(showDeleteConfirm) }, [showDeleteConfirm, onDeletePreviewOpenChange])
 
   // Node operation confirmation state
@@ -277,19 +278,22 @@ export function ResourceActionsBar({
   // Rollback dialog state
   const [showRevisions, setShowRevisions] = useState(false)
   const [showSetImage, setShowSetImage] = useState(false)
-  // null while the Trigger dialog is closed.
-  const [triggerJobName, setTriggerJobName] = useState<string | null>(null)
+  const [triggerDraft, setTriggerDraft] = useState<{ target: typeof resourceTarget; jobName: string } | null>(null)
   const [triggerPending, setTriggerPending] = useState(false)
   const triggerJobNameId = useId()
+  const canNameTrigger = kind === 'cronjobs' && Boolean(onTriggerCronJob && cronJobTriggerDialog)
+  if (triggerDraft && (!canNameTrigger || triggerDraft.target.key !== resourceTarget.key || triggerDraft.target.uid !== resourceTarget.uid)) {
+    setTriggerDraft(null)
+  }
   const cronJobIndexRoom = manualJobIndexRoom(data?.spec?.jobTemplate?.spec)
-  const trimmedTriggerJobName = triggerJobName?.trim() ?? ''
-  const triggerJobNameError = triggerJobName === null ? null : jobNameError(trimmedTriggerJobName, cronJobIndexRoom)
+  const trimmedTriggerJobName = triggerDraft?.jobName.trim() ?? ''
+  const triggerJobNameError = triggerDraft ? jobNameError(trimmedTriggerJobName, cronJobIndexRoom) : null
   const confirmTrigger = () => {
-    if (!onTriggerCronJob || triggerJobNameError || triggerPending) return
+    if (!triggerDraft || !onTriggerCronJob || triggerJobNameError || triggerPending) return
     setTriggerPending(true)
     // A rejection keeps the dialog; the host's mutation meta reports the error.
     Promise.resolve(onTriggerCronJob({ namespace: resource.namespace, name: resource.name, jobName: trimmedTriggerJobName }))
-      .then(() => setTriggerJobName(null), () => {})
+      .then(() => setTriggerDraft(null), () => {})
       .finally(() => setTriggerPending(false))
   }
   const isRollbackKind = ['deployments', 'statefulsets', 'daemonsets', 'rollouts'].includes(kind)
@@ -550,10 +554,10 @@ export function ResourceActionsBar({
         <>
           {onTriggerCronJob && (
             <button
-              onClick={() => cronJobTriggerDialog
-                ? setTriggerJobName(suggestManualJobName(resource.name, cronJobIndexRoom))
+              onClick={() => canNameTrigger
+                ? setTriggerDraft({ target: resourceTarget, jobName: suggestManualJobName(resource.name, cronJobIndexRoom) })
                 : void Promise.resolve(onTriggerCronJob({ namespace: resource.namespace, name: resource.name })).catch(() => {})}
-              disabled={isTriggeringCronJob}
+              disabled={isTriggeringCronJob || triggerPending}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
             >
               <Play className={`w-3.5 h-3.5 ${isTriggeringCronJob ? 'animate-pulse' : ''}`} />
@@ -791,10 +795,10 @@ export function ResourceActionsBar({
         />
       )}
 
-      {onTriggerCronJob && cronJobTriggerDialog && (
+      {canNameTrigger && (
         <ActionConfirmDialog
-          open={triggerJobName !== null}
-          onClose={() => setTriggerJobName(null)}
+          open={triggerDraft !== null}
+          onClose={() => setTriggerDraft(null)}
           onConfirm={confirmTrigger}
           isLoading={triggerPending}
           title="Trigger CronJob"
@@ -807,8 +811,10 @@ export function ResourceActionsBar({
             <span className="text-xs text-theme-text-secondary">Job name</span>
             <Input
               aria-label="Job name"
-              value={triggerJobName ?? ''}
-              onChange={(e) => setTriggerJobName(e.target.value)}
+              value={triggerDraft?.jobName ?? ''}
+              onChange={(e) => {
+                if (triggerDraft) setTriggerDraft({ ...triggerDraft, jobName: e.target.value })
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   e.preventDefault()
