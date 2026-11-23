@@ -447,10 +447,17 @@ func TestImpactCapsTheList(t *testing.T) {
 		}
 	}
 	inv.Kinds[KindAgent], inv.Kinds[KindModelConfig] = agents, models
-	got := Compose(inv).Models[0].UsedBy
+	models.Items[0].Object["status"] = map[string]any{"conditions": []any{map[string]any{"type": "Accepted", "status": "False", "reason": "ModelConfigMissing", "message": "model is unavailable"}}}
+	ws := Compose(inv)
+	got := ws.Models[0].UsedBy
 	if got.Count != UsedByCap+5 || len(got.Agents) != UsedByCap || got.LowerBound {
 		t.Errorf("used by count %d listed %d lowerBound %v", got.Count, len(got.Agents), got.LowerBound)
 	}
+	counts := CountsOf(ws, Fold(ws.Findings), func(string) bool { return true })
+	if counts.AgentsAffected.N != UsedByCap+5 || counts.AgentsAffected.LowerBound {
+		t.Fatalf("affected count=%+v", counts.AgentsAffected)
+	}
+
 }
 
 func model(t *testing.T, ns, name string) *unstructured.Unstructured {

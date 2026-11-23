@@ -94,7 +94,8 @@ type Reference struct {
 	Field string    `json:"field"`
 	State string    `json:"state"`
 	// Unread is the target kind's coverage state when State is unread.
-	Unread string `json:"unread,omitempty"`
+	Unread  string       `json:"unread,omitempty"`
+	Reading *ReadingView `json:"reading,omitempty"`
 	// PolicyUnknown: the target's allowedNamespaces selects namespaces by
 	// label and the declaring namespace's labels were not read, so whether
 	// kagent permits the reference is unknown.

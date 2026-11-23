@@ -148,18 +148,27 @@ func CountsOf(w *Workspace, groups []AttentionGroup, complete func(kind string) 
 	for _, k := range statusKinds {
 		findingsComplete = findingsComplete && complete(k)
 	}
+	for _, a := range w.Agents {
+		if a.Incomplete {
+			findingsComplete = false
+		}
+	}
 	c := Counts{AgentsByLatestChange: map[string]int{}}
 	c.Findings = Count{N: len(w.Findings), LowerBound: !findingsComplete}
 	c.Critical.LowerBound = !findingsComplete
 	affected := map[string]bool{}
-	affectedBound := false
+	affectedBound := !findingsComplete
 	for _, f := range w.Findings {
 		if f.Severity == SeverityCritical {
 			c.Critical.N++
 		}
 		if f.Affects != nil {
 			affectedBound = affectedBound || f.Affects.LowerBound
-			for _, a := range f.Affects.Agents {
+			agents := f.Affects.Agents
+			if w.ix != nil {
+				agents = w.AffectedAgents(f.Subject, f.Reason)
+			}
+			for _, a := range agents {
 				affected[a.Agent.Key()] = true
 			}
 		}

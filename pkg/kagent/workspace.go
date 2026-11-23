@@ -340,6 +340,18 @@ func Compose(inv Inventory) *Workspace {
 	for _, a := range ix.items(KindAgent) {
 		ref := refOf(a)
 		walk := ix.walkAgent(a)
+		for i := range walk.refs {
+			ref := &walk.refs[i]
+			for j := range ref.Tools {
+				ref.Tools[j] = RedactURLsInText(ref.Tools[j])
+			}
+			if ReportsStatus(ref.Target.Kind) {
+				if u, _, _ := ix.resolve(ref.Target); u != nil {
+					v := read(u).View()
+					ref.Reading = &v
+				}
+			}
+		}
 		w.walks[ref.Key()] = walk
 		reading := read(a)
 		state := &agentState{reading: reading, prepared: reading.State == StateReady}
@@ -366,7 +378,9 @@ func Compose(inv Inventory) *Workspace {
 		reading := read(m)
 		view := ModelView{Ref: refOf(m), Reading: reading.View(), Credential: credentialOf(m), UsedBy: w.Impact(refOf(m), "")}
 		view.Provider, _, _ = unstructured.NestedString(m.Object, "spec", "provider")
+		view.Provider = RedactURLsInText(view.Provider)
 		view.Model, _, _ = unstructured.NestedString(m.Object, "spec", "model")
+		view.Model = RedactURLsInText(view.Model)
 		w.Models = append(w.Models, view)
 		for _, f := range reading.Findings() {
 			of := objectFinding(view.Ref, f)
@@ -392,6 +406,7 @@ func Compose(inv Inventory) *Workspace {
 	for _, p := range ix.items(KindModelProviderConfig) {
 		view := ProviderView{Ref: refOf(p), Reading: read(p).View()}
 		view.Provider, _, _ = unstructured.NestedString(p.Object, "spec", "type")
+		view.Provider = RedactURLsInText(view.Provider)
 		w.ModelProviders = append(w.ModelProviders, view)
 		for _, f := range read(p).Findings() {
 			w.Findings = append(w.Findings, objectFinding(view.Ref, f))
@@ -487,6 +502,15 @@ func failing(r Reading) bool {
 // means for that Agent: a coordinate's reason (missing, not permitted), or ""
 // and any other reason for the object's own failure.
 func (w *Workspace) Impact(target ObjectRef, reason string) Impact {
+	return w.impact(target, reason, UsedByCap)
+}
+
+// AffectedAgents is every Agent Impact counts, uncapped.
+func (w *Workspace) AffectedAgents(target ObjectRef, reason string) []AffectedAgent {
+	return w.impact(target, reason, -1).Agents
+}
+
+func (w *Workspace) impact(target ObjectRef, reason string, limit int) Impact {
 	out := Impact{Agents: []AffectedAgent{}}
 	byAgent := map[string]*AffectedAgent{}
 	first := map[string]bool{}
@@ -539,7 +563,7 @@ func (w *Workspace) Impact(target ObjectRef, reason string) Impact {
 		for _, role := range a.Roles {
 			out.ByRole[role]++
 		}
-		if len(out.Agents) < UsedByCap {
+		if limit < 0 || len(out.Agents) < limit {
 			out.Agents = append(out.Agents, *a)
 		}
 	}
@@ -654,6 +678,9 @@ func (w *Workspace) serverView(s *unstructured.Unstructured, reading Reading) MC
 	view.Protocol, _, _ = unstructured.NestedString(s.Object, "spec", "protocol")
 	if reading.State == StateReady {
 		view.ToolsOffered, view.ToolsOfferedKnown = DiscoveredTools(s), true
+		for i := range view.ToolsOffered {
+			view.ToolsOffered[i] = RedactURLsInText(view.ToolsOffered[i])
+		}
 	}
 	headers, _, _ := unstructured.NestedSlice(s.Object, "spec", "headersFrom")
 	for _, raw := range headers {
