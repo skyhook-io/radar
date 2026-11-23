@@ -176,7 +176,7 @@ func TestRecordToTimelineStore_SyncAddMarksResourceSeen(t *testing.T) {
 		},
 	}
 
-	state.recordToTimelineStore(ActiveClusterContext(), "Pod", "default", "p", "pod-uid", "add", nil, pod, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Pod", "default", "p", "pod-uid", "add", nil, pod, nil, false)
 
 	store := timeline.GetStore()
 	if store == nil {

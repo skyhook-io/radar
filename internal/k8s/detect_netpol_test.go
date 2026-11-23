@@ -892,7 +892,7 @@ func TestNetworkPolicyIsolationOnsetSeesPodRelabels(t *testing.T) {
 		oldPod := netpolTestPod("pod-1", from, true)
 		newPod := oldPod.DeepCopy()
 		newPod.Labels = to
-		state.recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "pod-1", "uid-1", "update", oldPod, newPod, nil, false)
+		state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Pod", "shop", "pod-1", "uid-1", "update", oldPod, newPod, nil, false)
 	}
 	t.Cleanup(timeline.ResetStore)
 

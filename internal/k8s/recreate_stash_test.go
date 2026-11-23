@@ -49,10 +49,10 @@ func TestRecreateJoin_DeleteThenRecreateCarriesDiff(t *testing.T) {
 	}
 
 	oldDep := testDeployment("uid-1", "nginx:1.0", time.Now().Add(-time.Hour))
-	state.recordToTimelineStore(ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "delete", nil, oldDep, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "delete", nil, oldDep, nil, false)
 
 	newDep := testDeployment("uid-2", "nginx:2.0", time.Now())
-	state.recordToTimelineStore(ActiveClusterContext(), "Deployment", "shop", "web", "uid-2", "add", nil, newDep, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Deployment", "shop", "web", "uid-2", "add", nil, newDep, nil, false)
 
 	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{
 		Kinds: []string{"Deployment"}, Namespaces: []string{"shop"},
@@ -107,8 +107,8 @@ func TestRecreateJoin_SameUIDReAdd_NoJoin(t *testing.T) {
 	}
 
 	dep := testDeployment("uid-1", "nginx:1.0", time.Now())
-	state.recordToTimelineStore(ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "delete", nil, dep, nil, false)
-	state.recordToTimelineStore(ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "add", nil, dep, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "delete", nil, dep, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "add", nil, dep, nil, false)
 
 	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{
 		Kinds: []string{"Deployment"}, EventTypes: []timeline.EventType{timeline.EventTypeAdd},
@@ -139,7 +139,7 @@ func TestRecreateJoin_CrossGroupAddDoesNotConsumeDeletedService(t *testing.T) {
 		UID:               types.UID("core-uid-1"),
 		CreationTimestamp: metav1.NewTime(time.Now().Add(-time.Hour)),
 	}, Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}}}
-	state.recordToTimelineStore(ActiveClusterContext(), "Service", "shop", "api", "core-uid-1", "delete", nil, deletedCore, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Service", "shop", "api", "core-uid-1", "delete", nil, deletedCore, nil, false)
 
 	knative := &unstructured.Unstructured{}
 	knative.SetAPIVersion("serving.knative.dev/v1")
@@ -148,7 +148,7 @@ func TestRecreateJoin_CrossGroupAddDoesNotConsumeDeletedService(t *testing.T) {
 	knative.SetName("api")
 	knative.SetUID(types.UID("knative-uid-1"))
 	knative.SetCreationTimestamp(metav1.Now())
-	state.recordToTimelineStore(ActiveClusterContext(), "Service", "shop", "api", "knative-uid-1", "add", nil, knative, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Service", "shop", "api", "knative-uid-1", "add", nil, knative, nil, false)
 
 	recreatedCore := &corev1.Service{ObjectMeta: metav1.ObjectMeta{
 		Name:              "api",
@@ -156,7 +156,7 @@ func TestRecreateJoin_CrossGroupAddDoesNotConsumeDeletedService(t *testing.T) {
 		UID:               types.UID("core-uid-2"),
 		CreationTimestamp: metav1.Now(),
 	}, Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 8080}}}}
-	state.recordToTimelineStore(ActiveClusterContext(), "Service", "shop", "api", "core-uid-2", "add", nil, recreatedCore, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Service", "shop", "api", "core-uid-2", "add", nil, recreatedCore, nil, false)
 
 	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{
 		Kinds: []string{"Service"}, EventTypes: []timeline.EventType{timeline.EventTypeAdd},
@@ -201,12 +201,12 @@ func TestTimelineSeenIdentity_SameGroupSharesServedVersions(t *testing.T) {
 	first.SetName("api")
 	first.SetUID(types.UID("knative-v1"))
 	first.SetCreationTimestamp(metav1.Now())
-	state.recordToTimelineStore(ActiveClusterContext(), "Service", "shop", "api", "knative-v1", "add", nil, first, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Service", "shop", "api", "knative-v1", "add", nil, first, nil, false)
 
 	second := first.DeepCopy()
 	second.SetAPIVersion("serving.knative.dev/v1beta1")
 	second.SetUID(types.UID("knative-v1beta1"))
-	state.recordToTimelineStore(ActiveClusterContext(), "Service", "shop", "api", "knative-v1beta1", "add", nil, second, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Service", "shop", "api", "knative-v1beta1", "add", nil, second, nil, false)
 
 	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{
 		Kinds: []string{"Service"}, EventTypes: []timeline.EventType{timeline.EventTypeAdd},
@@ -235,7 +235,7 @@ func TestTimelineSeenIdentity_CrossGroupAddsBothRecorded(t *testing.T) {
 	coreService := &corev1.Service{ObjectMeta: metav1.ObjectMeta{
 		Name: "api", Namespace: "shop", UID: types.UID("core-uid"), CreationTimestamp: metav1.Now(),
 	}}
-	state.recordToTimelineStore(ActiveClusterContext(), "Service", "shop", "api", "core-uid", "add", nil, coreService, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Service", "shop", "api", "core-uid", "add", nil, coreService, nil, false)
 
 	knativeService := &unstructured.Unstructured{}
 	knativeService.SetAPIVersion("serving.knative.dev/v1")
@@ -244,7 +244,7 @@ func TestTimelineSeenIdentity_CrossGroupAddsBothRecorded(t *testing.T) {
 	knativeService.SetName("api")
 	knativeService.SetUID(types.UID("knative-uid"))
 	knativeService.SetCreationTimestamp(metav1.Now())
-	state.recordToTimelineStore(ActiveClusterContext(), "Service", "shop", "api", "knative-uid", "add", nil, knativeService, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Service", "shop", "api", "knative-uid", "add", nil, knativeService, nil, false)
 
 	store := timeline.GetStore()
 	events, err := store.Query(context.Background(), timeline.QueryOptions{
@@ -275,7 +275,7 @@ func TestTimelineSeenIdentity_TypedBuiltinUsesCanonicalGroup(t *testing.T) {
 	role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{
 		Name: "reader", Namespace: "shop", UID: types.UID("role-uid"), CreationTimestamp: metav1.Now(),
 	}}
-	state.recordToTimelineStore(ActiveClusterContext(), "Role", "shop", "reader", "role-uid", "add", nil, role, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Role", "shop", "reader", "role-uid", "add", nil, role, nil, false)
 
 	store := timeline.GetStore()
 	if !store.IsResourceSeen(ActiveClusterContext(), "rbac.authorization.k8s.io", "Role", "shop", "reader") {
@@ -313,7 +313,7 @@ func TestRecreateJoin_KnativeDeleteTombstonePreservesGroupAndObject(t *testing.T
 			},
 		},
 	}}
-	state.recordToTimelineStore(
+	state.recordToTimelineStore(timeline.CaptureStore(),
 		ActiveClusterContext(),
 		"Service",
 		"shop",
@@ -332,7 +332,7 @@ func TestRecreateJoin_KnativeDeleteTombstonePreservesGroupAndObject(t *testing.T
 		UID:               types.UID("core-uid-1"),
 		CreationTimestamp: metav1.Now(),
 	}}
-	state.recordToTimelineStore(ActiveClusterContext(), "Service", "shop", "api", "core-uid-1", "add", nil, core, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Service", "shop", "api", "core-uid-1", "add", nil, core, nil, false)
 
 	stashed, ok := state.recreates.takeRecreateMatch("serving.knative.dev", "Service", "shop", "api", "knative-uid-2")
 	if !ok {
@@ -418,10 +418,10 @@ func TestRecreateJoin_SpecIdenticalRecreate_NoJoin(t *testing.T) {
 
 	oldDep := testDeployment("uid-1", "nginx:1.0", time.Now().Add(-time.Hour))
 	oldDep.Status = appsv1.DeploymentStatus{ReadyReplicas: 1, AvailableReplicas: 1}
-	state.recordToTimelineStore(ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "delete", nil, oldDep, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "delete", nil, oldDep, nil, false)
 
 	newDep := testDeployment("uid-2", "nginx:1.0", time.Now()) // same spec, fresh status
-	state.recordToTimelineStore(ActiveClusterContext(), "Deployment", "shop", "web", "uid-2", "add", nil, newDep, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Deployment", "shop", "web", "uid-2", "add", nil, newDep, nil, false)
 
 	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{
 		Kinds: []string{"Deployment"}, EventTypes: []timeline.EventType{timeline.EventTypeAdd},

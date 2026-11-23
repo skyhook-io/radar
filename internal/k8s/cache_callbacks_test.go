@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/skyhook-io/radar/internal/timeline"
@@ -46,7 +47,9 @@ func TestInformerCallbacksAfterCacheClose(t *testing.T) {
 		dynamic.OnReceived("Widget")
 		dynamic.OnChange(dynamicDelete, widget, nil)
 		dynamic.OnDrop("Widget", "shop", "widget", timeline.DropReasonChannelFull, "delete")
-		dynamic.OnRecorded("Widget")
+		if dynamic.OnRecorded != nil {
+			dynamic.OnRecorded("Widget")
+		}
 	}
 
 	SetConnectionStatus(ConnectionStatus{State: StateConnected})
@@ -69,7 +72,7 @@ func TestInformerCallbacksAfterCacheClose(t *testing.T) {
 		}
 	}
 	counts := timeline.GetMetrics().GetSnapshot().Counters
-	if counts.Received["Pod"] != 1 || counts.Received["Widget"] != 1 || counts.Recorded["Pod"] != 1 || counts.Recorded["Widget"] != 2 || counts.Dropped[timeline.DropReasonChannelFull] != 2 {
+	if counts.Received["Pod"] != 1 || counts.Received["Widget"] != 1 || counts.Recorded["Pod"] != 1 || counts.Recorded["Widget"] != 1 || counts.Dropped[timeline.DropReasonChannelFull] != 2 {
 		t.Fatalf("unexpected open-cache counters: %+v", counts)
 	}
 	if observed != 1 || GetConnectionStatus().ProgressMsg == "" {
@@ -80,7 +83,7 @@ func TestInformerCallbacksAfterCacheClose(t *testing.T) {
 	// even while the typed cache that owns the enrichment data is open.
 	conn.closeDynamicResourceCache()
 	fireDynamic()
-	if got := timeline.GetMetrics().GetSnapshot().Counters; got.Received["Widget"] != 1 || got.Recorded["Widget"] != 2 || got.Dropped[timeline.DropReasonChannelFull] != 2 {
+	if got := timeline.GetMetrics().GetSnapshot().Counters; got.Received["Widget"] != 1 || got.Recorded["Widget"] != 1 || got.Dropped[timeline.DropReasonChannelFull] != 2 {
 		t.Fatalf("closed dynamic cache changed counters: %+v", got)
 	}
 
@@ -105,5 +108,69 @@ func TestInformerCallbacksAfterCacheClose(t *testing.T) {
 	}
 	if observed != 1 || GetConnectionStatus().ProgressMsg != "replacement" {
 		t.Fatal("late typed callback published an observation or overwrote replacement progress")
+	}
+}
+
+type pausedInformerObject struct {
+	metav1.Object
+	admitted chan struct{}
+	resume   chan struct{}
+}
+
+func (o *pausedInformerObject) GetResourceVersion() string {
+	close(o.admitted)
+	<-o.resume
+	return o.Object.GetResourceVersion()
+}
+
+func TestAdmittedInformerWriteAcrossSameNameSwitch(t *testing.T) {
+	for _, kind := range []string{"Pod", "Widget"} {
+		t.Run(kind, func(t *testing.T) {
+			t.Cleanup(SnapshotTestConnection())
+			a := &Connection{contextName: "shared-name"}
+			restoreTestConnection(a)
+			initMemoryTimeline(t)
+			t.Cleanup(timeline.ResetMetricsForContextSwitch)
+
+			storeA := timeline.GetStore()
+			var resource metav1.Object
+			var onChange func(ResourceChange, any, any)
+			if kind == "Pod" {
+				resource = tombstoneTestPod("from-a", time.Now())
+				var cfg k8score.CacheConfig
+				a.configureTypedCallbacks(&cfg, nil)
+				onChange = cfg.OnChange
+			} else {
+				resource = &unstructured.Unstructured{}
+				var cfg k8score.DynamicCacheConfig
+				a.configureDynamicCallbacks(&cfg)
+				onChange = cfg.OnChange
+			}
+			obj := &pausedInformerObject{Object: resource, admitted: make(chan struct{}), resume: make(chan struct{})}
+			obj.SetName("from-a")
+			obj.SetNamespace("shop")
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				onChange(ResourceChange{Kind: kind, Operation: "delete", Namespace: "shop", Name: "from-a"}, obj, nil)
+			}()
+			<-obj.admitted
+			a.closeDynamicResourceCache()
+			a.closeResourceCache()
+			ResetResourceDiscovery()
+			initMemoryTimeline(t)
+			close(obj.resume)
+			<-done
+
+			if b := Current(); b == a || b.ContextName() != a.ContextName() {
+				t.Fatal("expected a replacement connection with the same context name")
+			}
+			if n := timeline.GetStore().Stats().TotalEvents; n != 0 {
+				t.Fatalf("replacement timeline contains %d row(s) from A", n)
+			}
+			if n := storeA.Stats().TotalEvents; n != 0 {
+				t.Fatalf("closed timeline accepted %d late row(s)", n)
+			}
+		})
 	}
 }

@@ -534,6 +534,7 @@ func (conn *Connection) initResourceCache(ctx context.Context) error {
 func (conn *Connection) configureTypedCallbacks(cfg *k8score.CacheConfig, observe func(ResourceChange, any, any)) {
 	state := conn.cacheState()
 	cluster := TimelineClusterContext(conn.ContextName())
+	binding := timeline.CaptureStore()
 	cfg.ComputeDiff = state.computeDiff
 	cfg.SyncProgress = func(synced, total int, minimalReady bool) {
 		state.whileOpen(func() { emitSyncProgress(synced, total, minimalReady) })
@@ -550,13 +551,13 @@ func (conn *Connection) configureTypedCallbacks(cfg *k8score.CacheConfig, observ
 				(change.Kind == "Pod" || change.Kind == "Deployment" || change.Kind == "Service") {
 				log.Printf("[DEBUG] enqueueChange: %s add %s/%s", change.Kind, change.Namespace, change.Name)
 			}
-			state.recordToTimelineStore(cluster, change.Kind, change.Namespace, change.Name, change.UID, change.Operation, oldObj, obj, change.Diff, true)
+			state.recordToTimelineStore(binding, cluster, change.Kind, change.Namespace, change.Name, change.UID, change.Operation, oldObj, obj, change.Diff, true)
 		})
 	}
 	cfg.OnEventChange = func(obj any, op string) {
 		// Deleting the Kubernetes Event does not erase the occurrence from history.
 		if op != "delete" {
-			state.whileOpen(func() { state.recordK8sEventToTimeline(cluster, obj) })
+			state.whileOpen(func() { state.recordK8sEventToTimeline(binding.Store(), cluster, obj) })
 		}
 	}
 	cfg.OnDrop = func(kind, ns, name, reason, op string) {
@@ -738,13 +739,12 @@ func (conn *Connection) closeResourceCache() {
 // recordK8sEventToTimeline records a K8s Event to the timeline store.
 // clusterContext is the wiring-time capture (see InitResourceCache), not the
 // live active context — a late callback must stamp the cluster it came from.
-func (state *connectionCache) recordK8sEventToTimeline(clusterContext string, obj any) {
+func (state *connectionCache) recordK8sEventToTimeline(store timeline.EventStore, clusterContext string, obj any) {
 	event, ok := obj.(*corev1.Event)
 	if !ok {
 		return
 	}
 
-	store := timeline.GetStore()
 	if store == nil {
 		timeline.RecordDrop("K8sEvent:"+event.InvolvedObject.Kind, event.InvolvedObject.Namespace, event.InvolvedObject.Name, timeline.DropReasonStoreDown, "add", clusterContext)
 		return
@@ -763,7 +763,7 @@ func (state *connectionCache) recordK8sEventToTimeline(clusterContext string, ob
 	timelineEvent.ClusterContext = clusterContext
 
 	ctx := context.Background()
-	if err := timeline.RecordEvent(ctx, timelineEvent); err != nil {
+	if err := store.Append(ctx, timelineEvent); err != nil {
 		log.Printf("Warning: failed to record K8s event to timeline store: %v", err)
 		timeline.RecordDrop("K8sEvent:"+event.InvolvedObject.Kind, event.InvolvedObject.Namespace, event.InvolvedObject.Name, timeline.DropReasonStoreFailed, "add", clusterContext)
 	} else if DebugEvents {
@@ -1033,7 +1033,7 @@ func timelineUpdateDiff(kind string, oldObj, newObj any, precomputedDiff *DiffIn
 // diffPrecomputed=true so we don't recompute the identical diff on the hottest
 // per-update path; callers without one (tests, non-cache paths) pass nil +
 // false and the diff is computed here.
-func (state *connectionCache) recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string, oldObj, newObj any, precomputedDiff *DiffInfo, diffPrecomputed bool) {
+func (state *connectionCache) recordToTimelineStore(binding *timeline.StoreBinding, clusterContext, kind, namespace, name, uid, op string, oldObj, newObj any, precomputedDiff *DiffInfo, diffPrecomputed bool) {
 	obj := newObj
 	if obj == nil {
 		obj = oldObj
@@ -1065,14 +1065,14 @@ func (state *connectionCache) recordToTimelineStore(clusterContext, kind, namesp
 		serviceAccountTokenUpdate = secretType == string(corev1.SecretTypeServiceAccountToken)
 	}
 
-	store := timeline.GetStore()
+	store := binding.Store()
 	if store == nil {
 		if serviceAccountTokenUpdate {
 			timeline.RecordDrop(kind, namespace, name, timeline.DropReasonNoisyFilter, op, clusterContext)
 			return
 		}
 		if op == "delete" {
-			timeline.NoteDeletedWhileUnavailable(clusterContext, apiGroup, kind, namespace, name)
+			binding.NoteDeletedWhileUnavailable(clusterContext, apiGroup, kind, namespace, name)
 		}
 		// No store means a configured backend could not be opened. Count the
 		// change the same way a failed write is counted, so a timeline that is
@@ -1217,7 +1217,7 @@ func (state *connectionCache) recordToTimelineStore(clusterContext, kind, namesp
 			}
 			if len(events) > 0 {
 				ctx := context.Background()
-				if err := timeline.RecordEvents(ctx, events); err != nil {
+				if err := store.AppendBatch(ctx, events); err != nil {
 					log.Printf("Warning: failed to record historical events: %v", err)
 					timeline.RecordDrop(kind, namespace, name, timeline.DropReasonStoreFailed, op, clusterContext)
 					return
@@ -1231,7 +1231,7 @@ func (state *connectionCache) recordToTimelineStore(clusterContext, kind, namesp
 	events = append(events, event)
 
 	ctx := context.Background()
-	if err := timeline.RecordEvents(ctx, events); err != nil {
+	if err := store.AppendBatch(ctx, events); err != nil {
 		log.Printf("Warning: failed to record to timeline store: %v", err)
 		timeline.RecordDrop(kind, namespace, name, timeline.DropReasonStoreFailed, op, clusterContext)
 		return

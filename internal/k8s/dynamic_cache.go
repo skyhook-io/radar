@@ -128,6 +128,7 @@ func (conn *Connection) configureDynamicCallbacks(cfg *k8score.DynamicCacheConfi
 	lifetime := conn.dynamicCacheState().lifetime
 	history := conn.cacheState()
 	cluster := TimelineClusterContext(conn.ContextName())
+	binding := timeline.CaptureStore()
 	cfg.ComputeDiff = func(kind string, oldObj, newObj any) *DiffInfo {
 		if lifetime.Err() != nil {
 			return nil
@@ -141,17 +142,12 @@ func (conn *Connection) configureDynamicCallbacks(cfg *k8score.DynamicCacheConfi
 	}
 	cfg.OnChange = func(change ResourceChange, obj, oldObj any) {
 		if lifetime.Err() == nil && extractUnstructured(obj) != nil {
-			history.recordToTimelineStore(cluster, change.Kind, change.Namespace, change.Name, change.UID, change.Operation, oldObj, obj, change.Diff, true)
+			history.recordToTimelineStore(binding, cluster, change.Kind, change.Namespace, change.Name, change.UID, change.Operation, oldObj, obj, change.Diff, true)
 		}
 	}
 	cfg.OnDrop = func(kind, ns, name, reason, op string) {
 		if lifetime.Err() == nil {
 			timeline.RecordDrop(kind, ns, name, reason, op, cluster)
-		}
-	}
-	cfg.OnRecorded = func(kind string) {
-		if lifetime.Err() == nil {
-			timeline.IncrementRecorded(kind)
 		}
 	}
 }
