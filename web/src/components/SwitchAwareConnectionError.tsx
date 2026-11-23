@@ -14,7 +14,7 @@ function clusterLabel(contexts: ContextInfo[] | undefined, name: string): string
 
 // A switch Radar refused before leaving the current cluster: the connection
 // error screen for the cluster that didn't answer, with its fix steps. The
-// current cluster is still connected underneath, so Back only closes this.
+// previous connection is still selected, so Back only closes this.
 export function FailedSwitchView({ currentContext }: { currentContext: string }) {
   const { failedSwitch, setFailedSwitch } = useContextSwitch()
   const { data: contexts } = useContexts()
@@ -41,7 +41,7 @@ export function FailedSwitchView({ currentContext }: { currentContext: string })
           void requestSwitch(target).finally(() => setStarting(false))
         }}
         isRetrying={busy}
-        back={{ label: clusterLabel(contexts, currentContext), onBack: () => setFailedSwitch(null), disabled: busy }}
+        back={{ label: currentContext ? clusterLabel(contexts, currentContext) : 'connection status', onBack: () => setFailedSwitch(null), disabled: busy }}
         variant="switch"
       />
       {confirmDialog}

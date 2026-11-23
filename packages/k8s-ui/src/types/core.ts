@@ -174,6 +174,8 @@ export interface CloudConnectCapability {
 export interface FeatureCapabilities {
  helmSourceIdentity?: boolean
   helmInventory?: boolean
+  datadogRightsizing?: boolean
+  datadogAgentPresence?: boolean
   resourceReadCoverage?: boolean
   searchCoverage?: boolean
  applicationEvidence?: boolean
@@ -222,9 +224,11 @@ export interface FeatureCapabilities {
   lokiConnection?: boolean
   lokiPodHistory?: boolean
   vulnerabilities?: boolean
+  vulnerabilitiesExport?: boolean // GET /api/vulnerabilities/export
   runtimeAdvisoryChecks?: boolean
   runtimeAdvisoryProgress?: boolean
   sealedSecretsController?: boolean // GET /api/sealedsecrets/controller
+  cronJobTriggerJobName?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.

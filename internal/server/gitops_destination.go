@@ -167,7 +167,8 @@ func argoClusterServers(appNamespace, name string) []string {
 		return nil
 	}
 	var scopedTo string
-	if perm := k8s.GetCachedPermissionResult(); perm != nil {
+	// The scope comes from the cache that owns the lister.
+	if perm := cache.PermissionResult(); perm != nil {
 		if scope, ok := perm.Scopes[k8score.Secrets]; ok && scope.Enabled {
 			scopedTo = scope.Namespace
 		}

@@ -4,30 +4,20 @@ import (
 	"fmt"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/rightsizing"
 	"github.com/skyhook-io/radar/pkg/subject"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-// WorkloadManager names what owns a workload's spec, so a request change is
-// made at that source rather than patched live where it would be overwritten.
-// Signal says which metadata produced the answer: labels get copied between
-// templates, and a reader weighing a surprising owner needs to know why.
-type WorkloadManager struct {
-	Tool      string `json:"tool"`
-	Kind      string `json:"kind,omitempty"`
-	Group     string `json:"group,omitempty"`
-	Namespace string `json:"namespace,omitempty"`
-	Name      string `json:"name,omitempty"`
-	Signal    string `json:"signal"`
-}
+type WorkloadManager = rightsizing.WorkloadManager
 
 const addonManagerModeLabel = "addonmanager.kubernetes.io/mode"
 
-// detectWorkloadManager returns nil when no signal is present, which is not
+// DetectWorkloadManager returns nil when no signal is present, which is not
 // evidence the workload is unmanaged: Argo CD's default label tracking,
 // Terraform and kubectl apply leave nothing distinguishable to read.
-func detectWorkloadManager(obj metav1.Object) *WorkloadManager {
+func DetectWorkloadManager(obj metav1.Object) *WorkloadManager {
 	if obj == nil {
 		return nil
 	}

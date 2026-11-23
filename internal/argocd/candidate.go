@@ -11,10 +11,9 @@ import (
 
 func PrepareCandidate(connection argoapi.Connection) func(context.Context) error {
 	m := NewManager()
-	client, cfg := k8s.GetClientInterface(), k8s.GetConfig()
-	name, binding, inCluster := k8s.GetContextName(), k8s.ClusterSafetyBinding(context.Background()), k8s.IsInCluster()
-	m.k8sClient = func() kubernetes.Interface { return client }
-	m.k8sConfig = func() *rest.Config { return cfg }
+	conn := k8s.Current()
+	name, binding, inCluster := conn.ContextName(), k8s.ClusterSafetyBinding(context.Background()), k8s.IsInCluster()
+	m.clusterClients = func() (kubernetes.Interface, *rest.Config) { return conn.ClientInterface(), conn.Config() }
 	m.contextName = func() string { return name }
 	m.contextBinding = func(context.Context) string { return binding }
 	m.inCluster = func() bool { return inCluster }

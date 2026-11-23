@@ -7,6 +7,20 @@ import (
 	"time"
 )
 
+func TestBindingReceivesStoreInstalledAfterCapture(t *testing.T) {
+	ResetStore()
+	t.Cleanup(ResetStore)
+	binding := CaptureStore()
+	if binding.Store() != nil {
+		t.Fatal("expected no store before recovery")
+	}
+	store := NewMemoryStore(10)
+	setGlobalStore(store)
+	if binding.Store() != store {
+		t.Fatal("an informer built during a startup outage missed the recovered store")
+	}
+}
+
 func TestInitStoreRejectsPostgresWithoutDSN(t *testing.T) {
 	ResetStore()
 	t.Cleanup(ResetStore)

@@ -37,7 +37,7 @@ func TestKarpenterCapabilityReportsAbsenceBeforeRBACDenial(t *testing.T) {
 	s.permCache.Set("alice", nil, perms)
 
 	r := requestWithUser(http.MethodGet, "/api/capabilities", &auth.User{Username: "alice"})
-	got := s.karpenterCapability(r)
+	got := s.karpenterCapability(r, k8s.Current())
 	if got.State != capacityapi.IntegrationNotDetected {
 		t.Fatalf("state = %q, want %q", got.State, capacityapi.IntegrationNotDetected)
 	}
@@ -92,7 +92,7 @@ func TestKarpenterCapabilityShortCircuitsWithoutUsableConnection(t *testing.T) {
 			s.permCache.Set("alice", nil, perms)
 			r := requestWithUser(http.MethodGet, "/api/capabilities", &auth.User{Username: "alice"})
 
-			got := s.karpenterCapability(r)
+			got := s.karpenterCapability(r, k8s.Current())
 			if got.State != capacityapi.IntegrationSyncing {
 				t.Fatalf("state = %q, want %q", got.State, capacityapi.IntegrationSyncing)
 			}

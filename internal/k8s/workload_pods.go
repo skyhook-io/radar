@@ -262,7 +262,7 @@ func CanonicalWorkloadKind(kind string) string {
 // than a silently empty set.
 func workloadOwnershipTest(cache *ResourceCache, kind, namespace, name string, identity workloadOwnerIdentity) (func(*corev1.Pod) bool, error) {
 	matchesRoot := func(owner *metav1.OwnerReference) bool {
-		return controllerMatchesIdentity(owner, kind, name, identity.group, identity.uid)
+		return ControllerMatchesIdentity(owner, kind, name, identity.group, identity.uid)
 	}
 	direct := func(pod *corev1.Pod) bool { return matchesRoot(metav1.GetControllerOf(pod)) }
 	switch kind {
@@ -283,7 +283,7 @@ func workloadOwnershipTest(cache *ResourceCache, kind, namespace, name string, i
 			if err != nil {
 				return false
 			}
-			if !controllerMatchesIdentity(owner, "ReplicaSet", rs.Name, "apps", rs.UID) {
+			if !ControllerMatchesIdentity(owner, "ReplicaSet", rs.Name, "apps", rs.UID) {
 				return false
 			}
 			return matchesRoot(metav1.GetControllerOf(rs))
@@ -305,7 +305,7 @@ func workloadOwnershipTest(cache *ResourceCache, kind, namespace, name string, i
 			if err != nil {
 				return false
 			}
-			if !controllerMatchesIdentity(owner, "Job", job.Name, "batch", job.UID) {
+			if !ControllerMatchesIdentity(owner, "Job", job.Name, "batch", job.UID) {
 				return false
 			}
 			return matchesRoot(metav1.GetControllerOf(job))
@@ -364,7 +364,7 @@ func DirectlyOwnedPods(cache *ResourceCache, namespace, name, group, kind string
 			continue
 		}
 		owner := metav1.GetControllerOf(pod)
-		if controllerMatchesIdentity(owner, kind, name, group, uid) {
+		if ControllerMatchesIdentity(owner, kind, name, group, uid) {
 			result = append(result, pod)
 		}
 	}
@@ -382,8 +382,8 @@ func EventDescribesIncarnation(eventUID, uid, staticUID types.UID) bool {
 	return eventUID == "" || uid == "" || eventUID == uid || (staticUID != "" && eventUID == staticUID)
 }
 
-// controllerMatchesIdentity is shared by direct and multi-hop ownership checks.
-func controllerMatchesIdentity(owner *metav1.OwnerReference, kind, name, group string, uid types.UID) bool {
+// ControllerMatchesIdentity checks a controller reference against an observed Kubernetes incarnation.
+func ControllerMatchesIdentity(owner *metav1.OwnerReference, kind, name, group string, uid types.UID) bool {
 	if owner == nil || uid == "" || owner.UID != uid || owner.Kind != kind || owner.Name != name {
 		return false
 	}

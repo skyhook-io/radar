@@ -1,5 +1,7 @@
 import { TerminalTab as SharedTerminalTab } from '@skyhook-io/k8s-ui'
 import { apiUrl, getWsUrl } from '../../api/config'
+import { apiFetch } from '../../api/client'
+import { connectionHeaders, useOpenedConnection, withConnectionParam } from '../../api/connectionBinding'
 import { readErrorBody } from '../../api/httpErrors'
 
 interface TerminalTabProps {
@@ -13,15 +15,16 @@ interface TerminalTabProps {
 }
 
 export function TerminalTab({ namespace, podName, containerName, containers, isActive, shell, note }: TerminalTabProps) {
+  const connection = useOpenedConnection()
   const createSession = (container: string) =>
     Promise.resolve({
-      wsUrl: getWsUrl(`/pods/${namespace}/${podName}/exec?container=${container}${shell ? `&shell=${encodeURIComponent(shell)}` : ''}`),
+      wsUrl: withConnectionParam(getWsUrl(`/pods/${namespace}/${podName}/exec?container=${container}${shell ? `&shell=${encodeURIComponent(shell)}` : ''}`), connection),
     })
 
   const createDebugContainer = async (targetContainer: string) => {
-    const response = await fetch(apiUrl(`/pods/${namespace}/${podName}/debug`), {
+    const response = await apiFetch(apiUrl(`/pods/${namespace}/${podName}/debug`), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...connectionHeaders(connection) },
       body: JSON.stringify({ targetContainer }),
     })
     if (!response.ok) {
