@@ -209,6 +209,7 @@ func trimVulnerabilities(resp vulnerabilities.Response, limit int) vulnerabiliti
 	for i := range resp.Images {
 		resp.Images[i].Workloads = resp.Images[i].Workloads[:min(len(resp.Images[i].Workloads), vulnerabilityDetailsPerRow)]
 	}
+	resp.KeepNamedRisks()
 	resp.Coverage.RowsOmitted += omitted
 	if c := resp.Coverage; c.RowsOmitted > 0 || c.CleanOmitted > 0 || c.UnscannedOmitted > 0 {
 		resp.Coverage.Complete = false

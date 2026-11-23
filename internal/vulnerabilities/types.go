@@ -97,6 +97,60 @@ type Finding struct {
 	ecosystem string
 }
 
+// RiskFactor is a Pod setting of a workload that widens what a compromised
+// container reaches, read from the specs of its Pods that run (and a
+// CronJob's template) with the Best practices checks' rules
+// (audit.PodRisks). A row's RiskFactors are its workloads' together.
+type RiskFactor string
+
+const (
+	RiskPrivileged RiskFactor = "privileged"
+	RiskHostAccess RiskFactor = "hostAccess"
+	RiskRunsAsRoot RiskFactor = "runsAsRoot"
+	// RiskMayRunAsRoot: no setting rules root out and none sets a UID, so
+	// the image's USER decides, which Radar doesn't read. A workload that
+	// runs as root doesn't also carry it.
+	RiskMayRunAsRoot RiskFactor = "mayRunAsRoot"
+	// RiskDangerousCapabilities: a container adds a capability the
+	// dangerousCapabilities or insecureCapabilities check flags.
+	RiskDangerousCapabilities RiskFactor = "dangerousCapabilities"
+	// RiskPrivilegeEscalation: a container doesn't set
+	// allowPrivilegeEscalation: false.
+	RiskPrivilegeEscalation RiskFactor = "privilegeEscalation"
+	// RiskHostPort: a container binds a port on the node.
+	RiskHostPort RiskFactor = "hostPort"
+)
+
+// RiskSetting is one setting behind a risk factor: the Best practices check
+// that flags it and that check's message.
+type RiskSetting struct {
+	Factor RiskFactor `json:"factor"`
+	// Check is empty for a setting no Best practices check flags (a host
+	// port).
+	Check   string `json:"check,omitempty"`
+	Message string `json:"message"`
+}
+
+// RiskyWorkload is a workload with a risk factor, without a container: each
+// setting says which container, if it is one's.
+type RiskyWorkload struct {
+	WorkloadRef
+	Factors  []RiskFactor  `json:"factors"`
+	Settings []RiskSetting `json:"settings"`
+}
+
+// PodRisk is set on every answer; an older Radar sends none. Workloads are
+// the workloads the answer's rows name with any factor, each with all its
+// factors but only the settings behind those the screen marks: SeriousRisks,
+// and those the risk filter selects. Rows carry every factor in
+// RiskFactors, and so does the CSV. Counts are the workloads in scope with
+// each factor, before the filters; a workload that runs as root isn't
+// counted as may.
+type PodRisk struct {
+	Workloads []RiskyWorkload    `json:"workloads,omitempty"`
+	Counts    map[RiskFactor]int `json:"counts"`
+}
+
 // Fix is one package upgrade and what it clears: every fixable CVE in that
 // package, in every image that has it at the same versions.
 type Fix struct {
@@ -135,6 +189,8 @@ type Fix struct {
 	// read every route kind (Exposure.Gaps): no route seen there is not
 	// "not exposed".
 	ExposureUnknown bool `json:"exposureUnknown,omitempty"`
+	// RiskFactors are the risk factors of the row's workloads, together.
+	RiskFactors []RiskFactor `json:"riskFactors,omitempty"`
 }
 
 // FixImage is one image a fix applies to.
@@ -193,6 +249,8 @@ type Image struct {
 	// read every route kind (Exposure.Gaps): no route seen there is not
 	// "not exposed".
 	ExposureUnknown bool `json:"exposureUnknown,omitempty"`
+	// RiskFactors are the risk factors of the row's workloads, together.
+	RiskFactors []RiskFactor `json:"riskFactors,omitempty"`
 }
 
 // CVE is one vulnerability across every image that carries it.
@@ -231,6 +289,8 @@ type CVE struct {
 	// read every route kind (Exposure.Gaps): no route seen there is not
 	// "not exposed".
 	ExposureUnknown bool `json:"exposureUnknown,omitempty"`
+	// RiskFactors are the risk factors of the row's workloads, together.
+	RiskFactors []RiskFactor `json:"riskFactors,omitempty"`
 }
 
 // CVEImage is one image a CVE was found in, with each package it was found
@@ -268,6 +328,8 @@ type Workload struct {
 	// ExposureUnknown is true when it has no route Radar sees and runs in a
 	// namespace where Radar couldn't read every route kind (Exposure.Gaps).
 	ExposureUnknown bool `json:"exposureUnknown,omitempty"`
+	// RiskFactors are the risk factors of the row's workloads, together.
+	RiskFactors []RiskFactor `json:"riskFactors,omitempty"`
 }
 
 // WorkloadContainer is one container of a workload and an image it runs:
@@ -305,6 +367,8 @@ type CleanImage struct {
 	// read every route kind (Exposure.Gaps): no route seen there is not
 	// "not exposed".
 	ExposureUnknown bool `json:"exposureUnknown,omitempty"`
+	// RiskFactors are the risk factors of the row's workloads, together.
+	RiskFactors []RiskFactor `json:"riskFactors,omitempty"`
 }
 
 // Scanner names the tool and version that wrote a report.
@@ -335,6 +399,8 @@ type Unscanned struct {
 	// read every route kind (Exposure.Gaps): no route seen there is not
 	// "not exposed".
 	ExposureUnknown bool `json:"exposureUnknown,omitempty"`
+	// RiskFactors are the risk factors of the row's workloads, together.
+	RiskFactors []RiskFactor `json:"riskFactors,omitempty"`
 }
 
 // Summary describes everything in scope, before the request's filters.
@@ -413,6 +479,14 @@ type Response struct {
 	// Exposure says where Radar looked for routes from outside the cluster;
 	// set on every answer.
 	Exposure *Exposure `json:"exposure,omitempty"`
+	// PodRisk says which workloads the rows name run with risky Pod
+	// settings; set on every answer.
+	PodRisk *PodRisk `json:"podRisk,omitempty"`
+	// risk is every workload's in scope, so a caller that trims the rows
+	// can name the risky ones again (KeepNamedRisks); marked are the
+	// factors the risk filter selects, whose settings the answer carries.
+	risk   map[WorkloadRef]*workloadRisk
+	marked riskBits
 	// WorkloadRuns is whether Filter.Workload names something that runs in
 	// the answer's scope, so an empty answer can't pass for "no CVEs". Not
 	// on the wire: the UI and agents learn it differently.
@@ -443,6 +517,11 @@ type Filter struct {
 	// as end of life (By workload: the workloads that run one). Unscanned
 	// images stay, as under a severity filter: their OS is unknown.
 	OSEndOfLifeOnly bool
+	// RiskFactors keeps the images a workload with any of these factors
+	// runs (By workload: those workloads), still listing every workload
+	// that runs them. RiskMayRunAsRoot also keeps those that run as root:
+	// they may too. The risk= query (ParseRiskFactors).
+	RiskFactors []RiskFactor
 }
 
 const (

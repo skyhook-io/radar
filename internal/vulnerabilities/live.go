@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/audit"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
 
@@ -39,6 +40,9 @@ type target struct {
 	container    string
 	// routes are the routes from outside the cluster to its Pod.
 	routes []Route
+	// risks are its Pod's risk factors (audit.PodRisks), shared by the Pod's
+	// containers; replicas merged into one target bring theirs too.
+	risks []audit.PodRisk
 }
 
 // targetKey identifies the scanned object and container; image and digest
@@ -99,8 +103,11 @@ func liveTargets(ctx context.Context, cache *k8s.ResourceCache, namespaces []str
 	unions := map[int]*routeUnion{}
 	add := func(t target) {
 		if i, ok := seen[t.key]; ok {
-			// Another replica of the same container and build: a Service can
-			// select one replica and not another, so its routes count too.
+			// Another replica of the same container and build: a revision of
+			// a StatefulSet or DaemonSet can change only its Pod settings.
+			targets[i].risks = mergeRisks(targets[i].risks, t.risks)
+			// A Service can select one replica and not another, so its
+			// routes count too.
 			if len(t.routes) == 0 {
 				return
 			}
@@ -150,6 +157,7 @@ func liveTargets(ctx context.Context, cache *k8s.ResourceCache, namespaces []str
 			if err != nil {
 				return liveSet{}, false, err
 			}
+			risks := audit.PodRisks(pod.Spec)
 			for _, c := range podContainers(pod.Spec) {
 				// What the kubelet reports runs wins over the spec: a Pod's
 				// image can change in place before its container restarts.
@@ -169,6 +177,7 @@ func liveTargets(ctx context.Context, cache *k8s.ResourceCache, namespaces []str
 					workload:     workload,
 					container:    c.Name,
 					routes:       routes,
+					risks:        risks,
 				})
 			}
 		}
@@ -186,6 +195,7 @@ func liveTargets(ctx context.Context, cache *k8s.ResourceCache, namespaces []str
 				continue
 			}
 			workload := WorkloadRef{Kind: "CronJob", Group: "batch", Namespace: cj.Namespace, Name: cj.Name}
+			risks := audit.PodRisks(cj.Spec.JobTemplate.Spec.Template.Spec)
 			for _, c := range podContainers(cj.Spec.JobTemplate.Spec.Template.Spec) {
 				add(target{
 					key:          targetKey{namespace: cj.Namespace, kind: "CronJob", name: cj.Name, container: c.Name, image: c.Image, digest: pinnedDigest(c.Image)},
@@ -195,6 +205,7 @@ func liveTargets(ctx context.Context, cache *k8s.ResourceCache, namespaces []str
 					scannedGroup: "batch",
 					workload:     workload,
 					container:    c.Name,
+					risks:        risks,
 				})
 			}
 		}
@@ -205,6 +216,21 @@ func liveTargets(ctx context.Context, cache *k8s.ResourceCache, namespaces []str
 	}
 	slices.Sort(podDenied)
 	return liveSet{targets: targets, podDenied: podDenied, withheld: withheld, deniedKinds: slices.Collect(maps.Keys(denied))}, true, nil
+}
+
+// mergeRisks is a's risks with those of b it lacks, in a new slice when it
+// adds any: a is shared by a Pod's containers.
+func mergeRisks(a, b []audit.PodRisk) []audit.PodRisk {
+	var extra []audit.PodRisk
+	for _, r := range b {
+		if !slices.Contains(a, r) && !slices.Contains(extra, r) {
+			extra = append(extra, r)
+		}
+	}
+	if len(extra) == 0 {
+		return a
+	}
+	return slices.Concat(a, extra)
 }
 
 // liveSet is what runs, as far as the caller may see it: podDenied are

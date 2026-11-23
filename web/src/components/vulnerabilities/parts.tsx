@@ -1,11 +1,15 @@
+import { createContext, useContext } from 'react'
 import { clsx } from 'clsx'
 import { Globe } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { WithTooltip } from '../ui/Tooltip'
+import { Badge, type BadgeSeverity } from '@skyhook-io/k8s-ui/components/ui/Badge'
 import { CertaintyGlyph, gapReasonText, VULN_SEVERITY_BADGE, VULN_SEVERITY_BAR, VULN_SEVERITY_TEXT, type Certainty } from '@skyhook-io/k8s-ui'
 import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import type {
   ExposedWorkload,
+  RiskyWorkload,
+  VulnerabilityRiskFactor,
   VulnerabilitiesResponse,
   VulnerabilityCounts,
   VulnerabilityGap,
@@ -275,6 +279,93 @@ export function ExposedCount({ exposed, total, workloads, unknown }: { exposed?:
       </span>
     </WithTooltip>
   )
+}
+
+/**
+ * The words for risky Pod settings, in one place; the CSV uses the same
+ * labels (TestRiskLabelsMatchTheScreen). They follow the Best practices
+ * checks (Privileged container, Run as non-root, Host network/PID/IPC,
+ * sensitive host path, runtime socket, privilege escalation, capabilities)
+ * and claim no more than the Pod spec shows: with no UID set, the image's
+ * USER decides, which Radar doesn't read, so the word is "may". Listed in
+ * the order the risk filter and the marks use.
+ */
+export const RISK_FACTORS: Record<VulnerabilityRiskFactor, { label: string; tip: string; severity: BadgeSeverity }> = {
+  privileged: { label: 'Privileged', severity: 'alert', tip: 'Privileged mode gives a container every host capability, so compromising it reaches the node.' },
+  hostAccess: { label: 'Host access', severity: 'alert', tip: "Sharing the host's network, PID or IPC namespace, or mounting the container runtime socket or a sensitive host path, lets a compromised container reach the node." },
+  runsAsRoot: { label: 'Runs as root', severity: 'warning', tip: 'runAsUser is 0: a compromised process is root in its container.' },
+  mayRunAsRoot: { label: 'May run as root', severity: 'neutral', tip: "Nothing in the Pod spec rules root out (runAsNonRoot, or a non-root runAsUser), so the image's USER decides. Radar doesn't read the image's USER." },
+  dangerousCapabilities: { label: 'Dangerous capabilities', severity: 'warning', tip: 'Added capabilities such as SYS_ADMIN, NET_ADMIN or ALL give near-root powers; NET_RAW, SYS_PTRACE, MKNOD and DAC_OVERRIDE allow packet spoofing, process injection or device access. The same lists the capability checks use.' },
+  privilegeEscalation: { label: 'Allows privilege escalation', severity: 'neutral', tip: "allowPrivilegeEscalation isn't set to false, so a process can gain more privileges than its parent, through a setuid binary for example. Most specs leave it unset." },
+  hostPort: { label: 'Host port', severity: 'neutral', tip: "A container binds a port on the node's own address, so it answers there without a Service. The Exposed mark doesn't count host ports." },
+}
+
+export const RISK_ORDER = Object.keys(RISK_FACTORS) as VulnerabilityRiskFactor[]
+
+/**
+ * The factors that always mark workloads. The others are common, so they
+ * show as marks only while the risk filter selects them, and otherwise sit
+ * behind a "+N" after the marks.
+ */
+export const SERIOUS_RISKS: VulnerabilityRiskFactor[] = ['privileged', 'hostAccess', 'runsAsRoot']
+
+/** The answer's risky workloads by kind/namespace/name; any container of one matches. */
+export type RiskLookup = Map<string, RiskyWorkload>
+
+export function riskLookup(podRisk: VulnerabilitiesResponse['podRisk']): RiskLookup {
+  return new Map((podRisk?.workloads ?? []).map((w) => [exposureKey(w), w]))
+}
+
+/**
+ * The view's risk lookup, so a workload name anywhere in the tables can carry
+ * its marks, and the factors the risk filter selects, which show as marks too.
+ */
+export const RiskContext = createContext<{ lookup: RiskLookup; selected: ReadonlySet<VulnerabilityRiskFactor> } | undefined>(undefined)
+
+export function useWorkloadRisk(w: WorkloadKey): RiskyWorkload | undefined {
+  return useContext(RiskContext)?.lookup.get(exposureKey(w))
+}
+
+/**
+ * A row's or workload's risk factors as small badges, strongest first: the
+ * serious three, and any the risk filter selects. Given the workload's
+ * settings, each badge's tooltip names them in the checks' words; else it
+ * says what the factor means. The rest follow as a quiet "+N" whose tooltip
+ * names them, shown only after a badge: on its own it would sit on nearly
+ * every row.
+ */
+export function RiskMarks({ factors, settings, className }: { factors?: VulnerabilityRiskFactor[]; settings?: RiskyWorkload['settings']; className?: string }) {
+  const selected = useContext(RiskContext)?.selected
+  const present = RISK_ORDER.filter((f) => factors?.includes(f))
+  const shown = present.filter((f) => SERIOUS_RISKS.includes(f) || selected?.has(f))
+  const rest = present.filter((f) => !shown.includes(f))
+  if (shown.length === 0) return null
+  const restTip = `Also: ${rest.map((f) => RISK_FACTORS[f].label).join(', ')}. Select one under Risk factors to mark it.`
+  return (
+    <span className={clsx('inline-flex flex-wrap items-center gap-1', className)}>
+      {shown.map((f) => {
+        const { label, tip, severity } = RISK_FACTORS[f]
+        const said = (settings ?? []).filter((s) => s.factor === f).map((s) => s.message)
+        const text = said.length > 0 ? `${said.join('. ')}. ${tip}` : `${label}: ${tip}`
+        return (
+          <WithTooltip key={f} tip={text}>
+            <span className="inline-flex shrink-0 font-sans" tabIndex={0} aria-label={text}><Badge severity={severity} size="sm">{label}</Badge></span>
+          </WithTooltip>
+        )
+      })}
+      {rest.length > 0 && (
+        <WithTooltip tip={restTip}>
+          <span className="shrink-0 text-xs text-theme-text-tertiary" tabIndex={0} aria-label={restTip}>+{rest.length}</span>
+        </WithTooltip>
+      )}
+    </span>
+  )
+}
+
+/** A workload's marks, from the view's lookup. */
+export function WorkloadRiskMarks({ workload, className }: { workload: WorkloadKey; className?: string }) {
+  const risk = useWorkloadRisk(workload)
+  return risk ? <RiskMarks factors={risk.factors} settings={risk.settings} className={className} /> : null
 }
 
 /** Whether an exposure gap covers this namespace, so its routes are unknown. */

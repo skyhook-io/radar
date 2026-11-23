@@ -341,6 +341,9 @@ type rollup struct {
 	// namespace.
 	exposureGaps *Exposure
 	unknownIn    map[string]bool
+	// risk are the workloads (without a container) with risky Pod
+	// settings, and what they set.
+	risk map[WorkloadRef]*workloadRisk
 }
 
 // join matches reports to what runs. A report counts when its scanned object
@@ -369,6 +372,7 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 		return nil, err
 	}
 	j.exposure = exposure
+	j.risk = risksOf(targets)
 	reports := make([]report, 0, len(items))
 	for _, u := range items {
 		if r, ok := reportHeader(u); ok {
@@ -562,7 +566,10 @@ func buildWithExposure(ctx context.Context, items []*unstructured.Unstructured, 
 	}
 	j.refsLeft, j.budgeted = maxExportRefs, export
 	j.exposureGaps, j.unknownIn = exposure, map[string]bool{}
-	resp := Response{Source: SourceTrivyOperator, View: view, Summary: j.summary(), Exposure: &Exposure{}}
+	resp := Response{Source: SourceTrivyOperator, View: view, Summary: j.summary(), Exposure: &Exposure{},
+		PodRisk: &PodRisk{}, risk: j.risk}
+	resp.PodRisk.Counts = riskCounts(j.risk)
+	resp.marked = riskMask(f.RiskFactors)
 	extras := &exportExtras{}
 	resp.WorkloadRuns = f.Workload != nil && slices.ContainsFunc(targets, func(t target) bool { return newMatcher(f).wanted(t.workload) })
 	if view != ViewSummary {
@@ -617,6 +624,9 @@ func buildWithExposure(ctx context.Context, items []*unstructured.Unstructured, 
 	}
 	resp.Coverage.InactiveReports = j.inactiveReports
 	resp.Coverage.Truncated = j.truncated
+	if !export {
+		resp.KeepNamedRisks()
+	}
 	return resp, nil
 }
 
@@ -685,10 +695,14 @@ type matcher struct {
 	// exposed reports whether a workload has a route from outside the
 	// cluster; nil reads as none.
 	exposed func(WorkloadRef) bool
+	// risk is a workload's risk factors (nil: none), and riskMask the
+	// filter's.
+	risk     func(WorkloadRef) riskBits
+	riskMask riskBits
 }
 
 func newMatcher(f Filter) matcher {
-	m := matcher{f: f, query: strings.ToLower(strings.TrimSpace(f.Query))}
+	m := matcher{f: f, query: strings.ToLower(strings.TrimSpace(f.Query)), riskMask: riskMask(f.RiskFactors)}
 	if len(f.Severities) > 0 {
 		m.severity = map[Severity]bool{}
 		for _, s := range f.Severities {
@@ -724,7 +738,13 @@ func (m matcher) findingMatches(f Finding, rowMatched bool) bool {
 
 func (m matcher) workloadKept(workloads []WorkloadRef) bool {
 	return (m.f.Workload == nil || slices.ContainsFunc(workloads, m.wanted)) &&
-		(!m.f.ExposedOnly || slices.ContainsFunc(workloads, m.isExposed))
+		(!m.f.ExposedOnly || slices.ContainsFunc(workloads, m.isExposed)) &&
+		(m.riskMask == 0 || slices.ContainsFunc(workloads, m.isRisky))
+}
+
+// isRisky is whether a workload has a factor the risk filter names.
+func (m matcher) isRisky(w WorkloadRef) bool {
+	return m.risk != nil && m.risk(w)&m.riskMask != 0
 }
 
 // imageKept is whether an image passes the image filters: the OS end of
@@ -739,12 +759,13 @@ func (m matcher) wanted(w WorkloadRef) bool {
 }
 
 // listed is the first n of a row's workloads. Narrowed to one workload, its
-// own containers come first, then the exposed ones, so no cap, here or a
-// client's, drops the one asked about or the reason the row sorts first.
+// own containers come first, then the exposed ones, then under the risk
+// filter the ones it keeps the row for, so no cap, here or a client's, drops
+// the one asked about or the reason the row sorts first or is kept.
 func (m matcher) listed(workloads []WorkloadRef, n int) []WorkloadRef {
 	workloads = slices.Clone(workloads)
 	slices.SortStableFunc(workloads, func(a, b WorkloadRef) int {
-		return cmp.Or(compareBool(!m.wanted(a), !m.wanted(b)), compareBool(!m.isExposed(a), !m.isExposed(b)))
+		return cmp.Or(compareBool(!m.wanted(a), !m.wanted(b)), compareBool(!m.isExposed(a), !m.isExposed(b)), compareBool(!m.isRisky(a), !m.isRisky(b)))
 	})
 	return workloads[:min(len(workloads), n)]
 }
@@ -822,6 +843,7 @@ func exposureTier(exposed, unknown bool) int {
 func (j *rollup) match(f Filter) matcher {
 	m := newMatcher(f)
 	m.exposed = j.exposed
+	m.risk = j.riskOf
 	return m
 }
 
@@ -895,6 +917,7 @@ func (j *rollup) imageRows(f Filter) (rows []Image, clean []CleanImage) {
 					return rows, clean
 				}
 				c.ExposureUnknown = c.ExposedTotal == 0 && j.exposureUnknown(workloads)
+				c.RiskFactors = j.risksAcross(workloads)
 				clean = append(clean, c)
 			}
 			continue
@@ -929,6 +952,7 @@ func (j *rollup) imageRows(f Filter) (rows []Image, clean []CleanImage) {
 			return rows, clean
 		}
 		row.ExposureUnknown = row.ExposedTotal == 0 && j.exposureUnknown(workloads)
+		row.RiskFactors = j.risksAcross(workloads)
 		rows = append(rows, row)
 	}
 	// Most severe first (of what the filters keep), exposed first within
@@ -1065,6 +1089,7 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 	imageWorkloads := map[string][]WorkloadRef{}
 	imageExposed := map[string]bool{}
 	imageUnknown := map[string]bool{}
+	imageRisk := map[string]riskBits{}
 	exposedImage := func(id string) bool { return imageExposed[id] }
 	for _, agg := range j.sortedImages() {
 		if err := ctx.Err(); err != nil {
@@ -1079,6 +1104,9 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 		distinct := withoutContainers(workloads)
 		imageExposed[r.imageID] = slices.ContainsFunc(distinct, j.exposed)
 		imageUnknown[r.imageID] = j.exposureUnknown(distinct)
+		for _, w := range distinct {
+			imageRisk[r.imageID] |= j.riskOf(w)
+		}
 		listed := m.listed(distinct, j.lim.workloadsPerAffected)
 		rowMatched := m.rowMatches(agg.searchText(), workloads)
 		// Whether an upgrade clears each CVE here: every package it's in has
@@ -1144,6 +1172,7 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 			return nil, j.stopped()
 		}
 		c.row.ExposureUnknown = c.row.ExposedTotal == 0 && slices.ContainsFunc(ids, func(id string) bool { return imageUnknown[id] })
+		c.row.RiskFactors = imageRisks(ids, imageRisk)
 		c.row.Images = len(ids)
 		c.row.Packages = sortedKeys(c.packages)
 		slices.SortStableFunc(c.row.Affected, func(a, b CVEImage) int {
@@ -1239,6 +1268,7 @@ func (j *rollup) workloads(f Filter) (rows, clean, unscanned []Workload) {
 		routes := j.exposure[ref]
 		a.row.Routes, a.row.RoutesTotal = routes[:min(len(routes), j.lim.routesPerWorkload)], len(routes)
 		a.row.ExposureUnknown = len(routes) == 0 && j.exposureUnknownIn(ref.Namespace)
+		a.row.RiskFactors = j.riskOf(ref).factors()
 		images := make([]string, 0, len(a.row.Containers))
 		allClean := true
 		for _, c := range a.row.Containers {
@@ -1351,6 +1381,7 @@ func (j *rollup) unscannedRows(f Filter) []Unscanned {
 			return rows
 		}
 		row.ExposureUnknown = row.ExposedTotal == 0 && j.exposureUnknown(workloads)
+		row.RiskFactors = j.risksAcross(workloads)
 		rows = append(rows, row)
 	}
 	slices.SortFunc(rows, func(a, b Unscanned) int { return cmp.Compare(a.Image, b.Image) })
