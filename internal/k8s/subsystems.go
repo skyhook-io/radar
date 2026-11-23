@@ -324,6 +324,9 @@ func resetAllSubsystems(conn *Connection) {
 		safeReset("prometheus", promResetFn)
 	}
 
+	// Closing a traffic source waits for its in-flight Connect. Interrupt its
+	// tunnel first, including an attempt still waiting to become ready.
+	safeReset("automatic port-forwards", conn.PortForwards().Close)
 	contextSwitchMu.RLock()
 	trResetFn := trafficResetFunc
 	contextSwitchMu.RUnlock()

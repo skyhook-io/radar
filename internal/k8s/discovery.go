@@ -75,7 +75,7 @@ func GetResourceDiscovery() *ResourceDiscovery { return Current().Discovery() }
 // clients. A build still running for the old one lands there, unserved.
 func ResetResourceDiscovery() {
 	clientMu.Lock()
-	installedConn.Store(installedConn.Load().fresh())
+	replaceConnectionLocked(Current().fresh())
 	clientMu.Unlock()
 }
 

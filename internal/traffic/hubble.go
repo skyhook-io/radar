@@ -49,6 +49,8 @@ var allowedHTTPHeaders = map[string]bool{
 
 // HubbleSource implements TrafficSource for Hubble/Cilium
 type HubbleSource struct {
+	forwards       *portforward.Manager
+	forward        *portforward.Handle
 	k8sClient      kubernetes.Interface
 	grpcConn       *grpc.ClientConn
 	observerClient observerpb.ObserverClient
@@ -405,8 +407,7 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 	// If already connected to the same context, verify connection is still valid
 	if h.grpcConn != nil && h.currentContext == contextName {
 		// Test the connection
-		if h.testConnection(ctx) {
-			h.stopOwnStaleForwardLocked(namespace)
+		if (!h.viaPortForward || h.forward.Alive()) && h.testConnection(ctx) {
 			return h.connectionInfoLocked(namespace, contextName), nil
 		}
 		// Connection lost, clean up
@@ -484,13 +485,13 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 	}
 
 	// Fallback lane: managed port-forward, which needs pods/portforward RBAC.
-	var connInfo *portforward.ConnectionInfo
+	var forward *portforward.Handle
 	var err error
 	if portforward.AutoDisabled() {
 		err = portforward.ErrAutoDisabled
 	} else {
 		log.Printf("[hubble] Starting port-forward to %s/%s:%d", namespace, hubbleRelayService, h.relayPort)
-		connInfo, err = portforward.Start(portforward.OwnerTraffic, ctx, namespace, hubbleRelayService, h.relayPort, contextName)
+		forward, err = h.forwards.Start(portforward.OwnerTraffic, ctx, namespace, hubbleRelayService, h.relayPort, contextName)
 	}
 	if err != nil {
 		if info := retryDirectAfterSkip(); info != nil {
@@ -504,14 +505,8 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 		}, nil
 	}
 
-	if !connInfo.Connected {
-		return connInfo, nil
-	}
-
-	h.localPort = connInfo.LocalPort
-	grpcAddr := fmt.Sprintf("localhost:%d", h.localPort)
-	if err := h.connectGRPCLocked(ctx, grpcAddr); err != nil {
-		portforward.Stop(portforward.OwnerTraffic)
+	if err := h.connectForwardLocked(ctx, forward); err != nil {
+		forward.Stop()
 		h.localPort = 0
 		if info := retryDirectAfterSkip(); info != nil {
 			return info, nil
@@ -521,8 +516,24 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 			Error:     fmt.Sprintf("Failed to connect to Hubble Relay via port-forward: %v (direct connection to %s also failed: %v)", err, directAddr, directErr),
 		}, nil
 	}
+	h.forward = forward
 	h.viaPortForward = true
 	return h.connectionInfoLocked(namespace, contextName), nil
+}
+
+func (h *HubbleSource) connectForwardLocked(ctx context.Context, forward *portforward.Handle) error {
+	info := forward.Info()
+	if info.Connected {
+		if err := h.connectGRPCLocked(ctx, fmt.Sprintf("localhost:%d", info.LocalPort)); err != nil {
+			return err
+		}
+		if forward.Alive() {
+			h.localPort = info.LocalPort
+			return nil
+		}
+		h.closeConnectionLocked()
+	}
+	return errors.New("port-forward closed while connecting")
 }
 
 // tryDirectLocked attempts the direct lane: TCP pre-check, then the full
@@ -544,7 +555,6 @@ func (h *HubbleSource) tryDirectLocked(ctx context.Context, directAddr string) e
 func (h *HubbleSource) commitDirectLocked(directAddr, namespace, contextName string) *portforward.ConnectionInfo {
 	h.viaPortForward = false
 	h.localPort = 0
-	h.stopOwnStaleForwardLocked(namespace)
 	log.Printf("[hubble] Connected to Hubble Relay directly at %s", directAddr)
 	return h.connectionInfoLocked(namespace, contextName)
 }
@@ -683,7 +693,7 @@ func (h *HubbleSource) ConnectionInfo() *portforward.ConnectionInfo {
 		namespace = "kube-system"
 	}
 	if h.viaPortForward {
-		pf := portforward.GetConnectionInfo(portforward.OwnerTraffic)
+		pf := h.forward.Info()
 		if !forwardMatches(pf, namespace, hubbleRelayService, h.currentContext) {
 			return &portforward.ConnectionInfo{Connected: false}
 		}
@@ -697,22 +707,6 @@ func (h *HubbleSource) ConnectionInfo() *portforward.ConnectionInfo {
 func forwardMatches(pf *portforward.ConnectionInfo, namespace, serviceName, contextName string) bool {
 	return pf != nil && pf.Connected &&
 		pf.Namespace == namespace && pf.ServiceName == serviceName && pf.ContextName == contextName
-}
-
-// stopOwnStaleForwardLocked drops a traffic-owned forward left from our own
-// earlier port-forward connect once the direct connection is the data path.
-// Deliberately scoped to forwards targeting hubble-relay in our context: a
-// stale Connect can race a source switch, and an unconditional Stop here
-// would kill the forward the newly active source just established. Caller
-// must hold h.mu.
-func (h *HubbleSource) stopOwnStaleForwardLocked(namespace string) {
-	if h.viaPortForward {
-		return
-	}
-	pf := portforward.GetConnectionInfo(portforward.OwnerTraffic)
-	if forwardMatches(pf, namespace, hubbleRelayService, h.currentContext) {
-		portforward.Stop(portforward.OwnerTraffic)
-	}
 }
 
 // connectGRPCLocked runs the plaintext/TLS/SAN-discovery connection sequence
@@ -869,6 +863,8 @@ func (h *HubbleSource) testConnection(ctx context.Context) bool {
 
 // closeConnectionLocked closes the gRPC connection (caller must hold lock)
 func (h *HubbleSource) closeConnectionLocked() {
+	h.forward.Stop()
+	h.forward = nil
 	if h.grpcConn != nil {
 		h.grpcConn.Close()
 		h.grpcConn = nil

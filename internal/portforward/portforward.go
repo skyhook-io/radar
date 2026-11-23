@@ -1,15 +1,6 @@
 // Package portforward provides shared metrics port-forwarding infrastructure.
 // It is used by both the traffic package (for Caretta/Hubble) and the prometheus
 // package (for resource metrics), breaking what would otherwise be an import cycle.
-//
-// The low-level primitives (RunPortForward, FindPodForService, FindFreePort)
-// live in pkg/portforward. This package holds one metrics forward per owner —
-// prometheus discovery and the traffic subsystem each get their own — so that
-// starting or stopping one owner's forward never tears down the other's. (A
-// single shared forward previously let them clobber each other whenever they
-// wanted different services.) Owners may still read each other's forward
-// address (GetAddressForService) to reuse a forward that targets the same
-// service, but only ever stop their own.
 package portforward
 
 import (
@@ -42,6 +33,13 @@ const (
 // turned automatic port-forwarding off (--disable-auto-port-forward).
 var ErrAutoDisabled = errors.New("automatic port-forwarding is turned off")
 
+type managerError string
+
+func (err managerError) Error() string { return string(err) }
+
+// ErrClosed ends work on a connection that is being torn down.
+const ErrClosed managerError = "port-forward manager closed"
+
 var autoDisabled atomic.Bool
 
 // SetAutoDisabled turns automatic port-forwarding off or on for the process.
@@ -51,51 +49,6 @@ func SetAutoDisabled(disabled bool) { autoDisabled.Store(disabled) }
 
 // AutoDisabled reports whether automatic port-forwarding is turned off.
 func AutoDisabled() bool { return autoDisabled.Load() }
-
-// metricsForward is one owner's active port-forward state.
-type metricsForward struct {
-	// establishMu serializes Start for this owner. It is held across the
-	// port-forward establishment (pod lookup + up to a 10s ready wait) so two
-	// concurrent Starts for the same owner can't both bring up a forward and leak
-	// one. It is deliberately NOT reg.mu: establishing one owner's forward must
-	// not block reads (GetAddress/GetConnectionInfo), Stop, or the other owner's
-	// establishment.
-	establishMu sync.Mutex
-
-	// epoch bumps on every teardown (Stop, or Start replacing this owner's
-	// forward). Start captures it before establishing and refuses to publish if it
-	// changed meanwhile — so a Stop that lands while a forward is still coming up
-	// (e.g. a context-switch Reset) is not silently lost when readyCh then wins.
-	epoch uint64
-
-	active      bool
-	localPort   int
-	namespace   string
-	serviceName string
-	podName     string
-	targetPort  int
-	contextName string // K8s context this forward belongs to
-
-	stopCh chan struct{}
-	cancel context.CancelFunc
-}
-
-// info builds the ConnectionInfo for an active forward. Caller must hold reg.mu.
-func (f *metricsForward) info() *ConnectionInfo {
-	return &ConnectionInfo{
-		Connected:   true,
-		LocalPort:   f.localPort,
-		Address:     fmt.Sprintf("http://localhost:%d", f.localPort),
-		Namespace:   f.namespace,
-		ServiceName: f.serviceName,
-		ContextName: f.contextName,
-	}
-}
-
-func (f *metricsForward) matches(namespace, serviceName string, targetPort int, contextName string) bool {
-	return f != nil && f.active && f.namespace == namespace && f.serviceName == serviceName &&
-		f.targetPort == targetPort && f.contextName == contextName
-}
 
 // ConnectionInfo contains info about the metrics connection
 type ConnectionInfo struct {
@@ -108,344 +61,294 @@ type ConnectionInfo struct {
 	Error       string `json:"error,omitempty"`
 }
 
-// registry holds one metrics forward per owner plus the shared K8s clients.
-type registry struct {
-	mu        sync.RWMutex
-	forwards  map[Owner]*metricsForward
-	k8sClient kubernetes.Interface
-	k8sConfig *rest.Config
+// Manager owns all automatic tunnels created with one connection's clients.
+type Manager struct {
+	mu       sync.Mutex
+	client   kubernetes.Interface
+	config   *rest.Config
+	forwards map[*forward]struct{}
+	lifetime context.Context
+	cancel   context.CancelFunc
+	run      func(context.Context, kubernetes.Interface, *rest.Config, string, string, int, int, chan struct{}, chan struct{}) error
 }
 
-var reg = &registry{forwards: map[Owner]*metricsForward{}}
+func NewManager(client kubernetes.Interface, config *rest.Config) *Manager {
+	lifetime, cancel := context.WithCancel(context.Background())
+	return &Manager{lifetime: lifetime, cancel: cancel, client: client, config: config, forwards: make(map[*forward]struct{}), run: pfpkg.RunPortForward}
+}
 
-// forwardFor returns the owner's forward state, creating an empty one on first use.
-// Caller must hold reg.mu.
-func forwardFor(owner Owner) *metricsForward {
-	f := reg.forwards[owner]
-	if f == nil {
-		f = &metricsForward{}
-		reg.forwards[owner] = f
+type forward struct {
+	manager    *Manager
+	owner      Owner
+	info       ConnectionInfo
+	targetPort int
+	owners     int
+	// established wakes callers sharing an in-flight Start for the same target.
+	established chan struct{}
+	active      bool
+	stopCh      chan struct{}
+}
+
+func (f *forward) matches(namespace, service string, port int, contextName string) bool {
+	return f.info.Namespace == namespace && f.info.ServiceName == service && f.targetPort == port && f.info.ContextName == contextName
+}
+
+// Handle identifies one tunnel. Each owning Start releases its own reference.
+// Service lookups borrow the tunnel without prolonging its lifetime.
+type Handle struct {
+	f        *forward
+	borrowed bool
+	released bool // guarded by the manager
+}
+
+func (h *Handle) SameForward(other *Handle) bool {
+	return h != nil && other != nil && (h == other || h.f != nil && h.f == other.f)
+}
+
+func (h *Handle) Address() string {
+	if h == nil || h.f == nil {
+		return ""
 	}
-	return f
+	return h.f.info.Address
 }
 
-// onForwardLost is notified when a published forward ends without being
-// stopped. See SetOnForwardLost.
-var onForwardLost atomic.Pointer[func(owner Owner, address string)]
+// Replace releases the old handle when adopting another. Rediscovering the
+// same tunnel through a service lookup must keep an existing owning handle.
+func (h *Handle) Replace(next *Handle) *Handle {
+	if h == next || (next != nil && next.borrowed && h.SameForward(next)) {
+		return h
+	}
+	h.Stop()
+	return next
+}
 
-// SetOnForwardLost registers fn to run when any owner's published forward
-// ends on its own — the pod it pointed at went away or the stream broke —
-// rather than through Stop or a replacing Start. address is the local address
-// the forward served, so a subscriber can tell whether the loss is a
-// connection it uses (it may be reusing another owner's forward). fn runs on
-// the forward's goroutine after the registry lock is released. Pass nil to
-// unregister.
-func SetOnForwardLost(fn func(owner Owner, address string)) {
-	if fn == nil {
-		onForwardLost.Store(nil)
+func (h *Handle) Alive() bool {
+	if h == nil || h.f == nil {
+		return false
+	}
+	m := h.f.manager
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return !h.released && h.f.active
+}
+
+func (h *Handle) Info() *ConnectionInfo {
+	if !h.Alive() {
+		return &ConnectionInfo{}
+	}
+	info := h.f.info
+	return &info
+}
+
+func (h *Handle) Stop() bool {
+	if h == nil || h.f == nil || h.borrowed {
+		return false
+	}
+	f := h.f
+	m := f.manager
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if h.released || !f.active {
+		return false
+	}
+	h.released = true
+	f.owners--
+	if f.owners == 0 {
+		m.removeLocked(f)
+	}
+	return true
+}
+
+func (m *Manager) removeLocked(f *forward) {
+	delete(m.forwards, f)
+	f.active = false
+	close(f.stopCh)
+}
+
+func (m *Manager) Closed() bool {
+	return m != nil && m.lifetime.Err() != nil
+}
+
+func (m *Manager) Close() {
+	if m == nil {
 		return
 	}
-	onForwardLost.Store(&fn)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cancel()
+	for f := range m.forwards {
+		m.removeLocked(f)
+	}
 }
 
-// SetK8sClients sets the K8s client and config for port-forwarding.
-// Must be called before using port-forward features.
-func SetK8sClients(client kubernetes.Interface, config *rest.Config) {
-	reg.mu.Lock()
-	defer reg.mu.Unlock()
-	reg.k8sClient = client
-	reg.k8sConfig = config
+// The subscriber follows the global integration; the handle identifies the
+// lost tunnel even if its local port has since been reassigned.
+var onForwardLost atomic.Pointer[func(*Handle)]
+
+func SetOnForwardLost(fn func(*Handle)) {
+	if fn == nil {
+		onForwardLost.Store(nil)
+	} else {
+		onForwardLost.Store(&fn)
+	}
 }
 
-// Start starts a port-forward to the specified metrics service for the given
-// owner. It only replaces that owner's own forward — other owners' forwards are
-// left untouched.
-func Start(owner Owner, ctx context.Context, namespace, serviceName string, targetPort int, contextName string) (*ConnectionInfo, error) {
-	reg.mu.RLock()
-	client := reg.k8sClient
-	config := reg.k8sConfig
-	reg.mu.RUnlock()
-	return StartWithClients(owner, ctx, namespace, serviceName, targetPort, contextName, client, config)
-}
-
-// StartWithClients keeps candidate discovery tied to its captured cluster even
-// when the application's active context changes while the forward is starting.
-func StartWithClients(owner Owner, ctx context.Context, namespace, serviceName string, targetPort int, contextName string, client kubernetes.Interface, config *rest.Config) (*ConnectionInfo, error) {
+func (m *Manager) Start(owner Owner, ctx context.Context, namespace, service string, targetPort int, contextName string) (*Handle, error) {
 	if AutoDisabled() {
 		return nil, ErrAutoDisabled
 	}
-	reg.mu.Lock()
-	f := forwardFor(owner)
-	if f.matches(namespace, serviceName, targetPort, contextName) {
-		info := f.info()
-		reg.mu.Unlock()
-		return info, nil
-	}
-	reg.mu.Unlock()
-
-	if client == nil || config == nil {
+	if m == nil {
 		return nil, fmt.Errorf("K8s client not initialized")
 	}
-
-	// Serialize establishment for THIS owner only. Held across the pod lookup and
-	// the up-to-10s ready wait below — but it is not reg.mu, so reads
-	// (GetAddress/GetConnectionInfo), Stop, and the other owner's establishment
-	// all stay unblocked meanwhile.
-	f.establishMu.Lock()
-	defer f.establishMu.Unlock()
-
-	// Re-check under reg.mu: a concurrent establish for this owner may have just
-	// connected to the same target while we waited on establishMu.
-	reg.mu.Lock()
-	if f.matches(namespace, serviceName, targetPort, contextName) {
-		info := f.info()
-		reg.mu.Unlock()
-		return info, nil
+	for {
+		m.mu.Lock()
+		if m.Closed() {
+			m.mu.Unlock()
+			return nil, ErrClosed
+		}
+		var pending *forward
+		for f := range m.forwards {
+			if f.owner == owner && f.matches(namespace, service, targetPort, contextName) {
+				if f.active {
+					f.owners++
+					m.mu.Unlock()
+					return &Handle{f: f}, nil
+				}
+				pending = f
+				break
+			}
+		}
+		if pending == nil {
+			break
+		}
+		m.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-pending.stopCh:
+		case <-pending.established:
+		}
 	}
-	stopForwardLocked(f) // replace only this owner's existing forward
-	startEpoch := f.epoch
-	reg.mu.Unlock()
+	if m.client == nil || m.config == nil {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("K8s client not initialized")
+	}
+	f := &forward{manager: m, owner: owner, targetPort: targetPort, owners: 1,
+		info:        ConnectionInfo{Namespace: namespace, ServiceName: service, ContextName: contextName},
+		established: make(chan struct{}), stopCh: make(chan struct{})}
+	m.forwards[f] = struct{}{}
+	m.mu.Unlock()
+	defer close(f.established)
+	handle, err := m.establish(ctx, f)
+	if err != nil && m.Closed() {
+		return nil, ErrClosed
+	}
+	return handle, err
+}
 
-	// Establish the forward WITHOUT holding reg.mu.
-	podName, err := findPodForService(ctx, client, namespace, serviceName)
+func (m *Manager) establish(ctx context.Context, f *forward) (*Handle, error) {
+	defer func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if _, present := m.forwards[f]; present && !f.active {
+			m.removeLocked(f)
+		}
+	}()
+	ns, svc := f.info.Namespace, f.info.ServiceName
+	lookup, cancel := context.WithCancel(ctx)
+	detach := context.AfterFunc(m.lifetime, cancel)
+	pod, err := pfpkg.FindPodForService(lookup, m.client, ns, svc)
+	detach()
+	cancel()
 	if err != nil {
-		return nil, fmt.Errorf("failed to find pod for service %s: %w", serviceName, err)
+		return nil, fmt.Errorf("failed to find pod for service %s: %w", svc, err)
 	}
-	localPort, err := findFreePort()
+	port, err := pfpkg.FindFreePort()
 	if err != nil {
 		return nil, fmt.Errorf("failed to find free port: %w", err)
 	}
 
-	stopCh := make(chan struct{})
-	pfCtx, cancel := context.WithCancel(context.Background())
-	readyCh := make(chan struct{})
-	errCh := make(chan error, 1)
-
+	ready := make(chan struct{})
+	ended := make(chan error, 1)
 	go func() {
-		err := runPortForward(pfCtx, client, config, namespace, podName, localPort, targetPort, stopCh, readyCh)
-		if err != nil {
-			errCh <- err
+		err := m.run(m.lifetime, m.client, m.config, ns, pod, port, f.targetPort, f.stopCh, ready)
+		m.mu.Lock()
+		lost := f.active
+		if _, present := m.forwards[f]; present {
+			m.removeLocked(f)
 		}
-		close(errCh)
-
-		// A forward still published when its run ends was not stopped by us
-		// (Stop and a replacing Start clear podName first): the tunnel died
-		// under its users, typically because the pod went away.
-		reg.mu.Lock()
-		lost := ""
-		if f.podName == podName && f.localPort == localPort {
-			if f.active {
-				lost = f.info().Address
-			}
-			f.active = false
-		}
-		reg.mu.Unlock()
-		if lost != "" {
-			log.Printf("[portforward] Lost: %s -> %s/%s (owner=%s): %v", lost, namespace, serviceName, owner, err)
+		m.mu.Unlock()
+		ended <- err
+		if lost {
+			log.Printf("[portforward] Lost: %s -> %s/%s (owner=%s): %v", f.info.Address, ns, svc, f.owner, err)
 			if hook := onForwardLost.Load(); hook != nil {
-				(*hook)(owner, lost)
+				(*hook)(&Handle{f: f, borrowed: true})
 			}
 		}
 	}()
-
-	// teardown stops the just-launched forward when establishment fails. The
-	// forward was never committed to f (only the ready path publishes it), so the
-	// goroutine's own cleanup is a no-op and there is nothing to unpublish.
-	teardown := func() {
-		cancel()
-		select {
-		case <-stopCh:
-		default:
-			close(stopCh)
-		}
-	}
-
 	select {
-	case <-readyCh:
-		reg.mu.Lock()
-		// A Stop (or a replacing Start) that landed while we were establishing
-		// bumped the epoch. Honor it: tear this forward down instead of publishing
-		// a connection the caller already asked to stop (e.g. after a context
-		// switch), which would otherwise report the wrong cluster as connected.
-		if f.epoch != startEpoch {
-			reg.mu.Unlock()
-			teardown()
-			return nil, fmt.Errorf("port-forward superseded during establishment")
+	case <-ready:
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if _, present := m.forwards[f]; !present {
+			return nil, fmt.Errorf("port-forward closed during establishment")
 		}
+		f.info.LocalPort, f.info.Address, f.info.Connected = port, fmt.Sprintf("http://localhost:%d", port), true
 		f.active = true
-		f.localPort = localPort
-		f.namespace = namespace
-		f.serviceName = serviceName
-		f.podName = podName
-		f.targetPort = targetPort
-		f.contextName = contextName
-		f.stopCh = stopCh
-		f.cancel = cancel
-		info := f.info()
-		reg.mu.Unlock()
-		log.Printf("[portforward] Ready: localhost:%d -> %s/%s:%d (owner=%s, context: %s)",
-			localPort, namespace, serviceName, targetPort, owner, contextName)
-		return info, nil
-
-	case err := <-errCh:
-		teardown()
+		log.Printf("[portforward] Ready: %s -> %s/%s:%d (owner=%s, context: %s)", f.info.Address, ns, svc, f.targetPort, f.owner, f.info.ContextName)
+		return &Handle{f: f}, nil
+	case err := <-ended:
 		return nil, fmt.Errorf("port-forward failed: %w", err)
-
+	case <-m.lifetime.Done():
+		return nil, ErrClosed
 	case <-time.After(EstablishTimeout):
-		teardown()
 		return nil, fmt.Errorf("port-forward timed out")
-
 	case <-ctx.Done():
-		teardown()
 		return nil, ctx.Err()
 	}
 }
 
-// Stop stops the given owner's metrics port-forward, if any.
-func Stop(owner Owner) {
-	reg.mu.Lock()
-	defer reg.mu.Unlock()
-	if f := reg.forwards[owner]; f != nil {
-		stopForwardLocked(f)
+// GetAddressForService prefers the caller's own tunnel. Only the requested
+// Service can supply the backend's metrics, even if a peer also speaks PromQL.
+func (m *Manager) GetAddressForService(prefer Owner, contextName, namespace, service string) *Handle {
+	if m == nil {
+		return nil
 	}
-}
-
-// StopIfAddress stops the owner's forward only when it is still the connection
-// identified by address. This keeps cleanup for a stale caller from tearing down
-// a replacement that claimed the same owner in the meantime.
-func StopIfAddress(owner Owner, address string) bool {
-	reg.mu.Lock()
-	defer reg.mu.Unlock()
-	f := reg.forwards[owner]
-	if f == nil || !f.active || f.info().Address != address {
-		return false
-	}
-	stopForwardLocked(f)
-	return true
-}
-
-// stopForwardLocked stops one owner's forward (caller must hold reg.mu).
-func stopForwardLocked(f *metricsForward) {
-	if f == nil {
-		return
-	}
-	// Bump before the active check so a Stop that lands while a forward is still
-	// establishing (not yet active) still invalidates it — the in-flight Start
-	// checks this epoch before publishing.
-	f.epoch++
-	if !f.active {
-		return
-	}
-
-	log.Printf("[portforward] Stopping: localhost:%d -> %s/%s", f.localPort, f.namespace, f.serviceName)
-
-	if f.cancel != nil {
-		f.cancel()
-	}
-	if f.stopCh != nil {
-		select {
-		case <-f.stopCh:
-			// Already closed
-		default:
-			close(f.stopCh)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var match *forward
+	for f := range m.forwards {
+		if f.active && f.info.ContextName == contextName && f.info.Namespace == namespace && f.info.ServiceName == service {
+			match = f
+			if f.owner == prefer {
+				break
+			}
 		}
 	}
-
-	f.active = false
-	f.localPort = 0
-	f.namespace = ""
-	f.serviceName = ""
-	f.podName = ""
-	f.targetPort = 0
-	f.contextName = ""
-	f.stopCh = nil
-	f.cancel = nil
+	if match == nil {
+		return nil
+	}
+	return &Handle{f: match, borrowed: true}
 }
 
-// GetAddressForService returns the address of an active forward for the given
-// context ONLY if that forward points at the requested namespace/service,
-// preferring the caller's own forward (preferOwner) before a peer's (read-only
-// reuse — the caller never takes ownership). Matching on the target service means
-// it never surfaces a forward bound to a different backend, so a caller that needs
-// a specific service (e.g. Caretta's caretta-vm) can't adopt an unrelated owner's
-// forward (e.g. the cluster's general Prometheus), which answers the same generic
-// /api/v1/query probe but holds none of the caller's metrics. Empty if no matching
-// forward exists.
-func GetAddressForService(preferOwner Owner, currentContext, namespace, serviceName string) string {
-	reg.mu.RLock()
-	defer reg.mu.RUnlock()
-	matches := func(f *metricsForward) bool {
-		return f != nil && f.active && f.contextName == currentContext &&
-			f.namespace == namespace && f.serviceName == serviceName
-	}
-	if matches(reg.forwards[preferOwner]) {
-		return fmt.Sprintf("http://localhost:%d", reg.forwards[preferOwner].localPort)
-	}
-	for owner, f := range reg.forwards {
-		if owner != preferOwner && matches(f) {
-			return fmt.Sprintf("http://localhost:%d", f.localPort)
-		}
-	}
-	return ""
-}
-
-// GetConnectionInfo returns the given owner's connection info.
-func GetConnectionInfo(owner Owner) *ConnectionInfo {
-	reg.mu.RLock()
-	defer reg.mu.RUnlock()
-
-	f := reg.forwards[owner]
-	if f == nil || !f.active {
-		return &ConnectionInfo{Connected: false}
-	}
-
-	return &ConnectionInfo{
-		Connected:   true,
-		LocalPort:   f.localPort,
-		Address:     fmt.Sprintf("http://localhost:%d", f.localPort),
-		Namespace:   f.namespace,
-		ServiceName: f.serviceName,
-		ContextName: f.contextName,
-	}
-}
-
-// IsActiveAddress reports whether any owner's published forward currently
-// serves address.
-func IsActiveAddress(address string) bool {
-	reg.mu.RLock()
-	defer reg.mu.RUnlock()
-	for _, f := range reg.forwards {
-		if f.active && f.info().Address == address {
+func (m *Manager) IsActiveAddress(address string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for f := range m.forwards {
+		if f.active && f.info.Address == address {
 			return true
 		}
 	}
 	return false
 }
 
-// IsConnectedForContext reports whether any owner has an active forward for the context.
-func IsConnectedForContext(contextName string) bool {
-	reg.mu.RLock()
-	defer reg.mu.RUnlock()
-	for _, f := range reg.forwards {
-		if f.active && f.contextName == contextName {
+func (m *Manager) IsConnectedForContext(contextName string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for f := range m.forwards {
+		if f.active && f.info.ContextName == contextName {
 			return true
 		}
 	}
 	return false
-}
-
-// runPortForward and findPodForService are variables so tests can stand in
-// for a real cluster.
-var runPortForward = func(ctx context.Context, client kubernetes.Interface, config *rest.Config,
-	namespace, podName string, localPort, targetPort int, stopCh chan struct{}, readyCh chan struct{},
-) error {
-	return pfpkg.RunPortForward(ctx, client, config, namespace, podName, localPort, targetPort, stopCh, readyCh)
-}
-
-var findPodForService = func(ctx context.Context, client kubernetes.Interface, namespace, serviceName string) (string, error) {
-	return pfpkg.FindPodForService(ctx, client, namespace, serviceName)
-}
-
-func findFreePort() (int, error) {
-	return pfpkg.FindFreePort()
 }

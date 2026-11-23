@@ -36,7 +36,7 @@ func TestAttributionChurnRetainsOnlyUnchangedPairs(t *testing.T) {
 }
 
 func TestConnectionChangeClearsAttributionTimers(t *testing.T) {
-	Initialize(nil, nil, "test")
+	Initialize(nil, nil, "test", nil)
 	defer Reset()
 	for _, change := range []func(){func() { SetManualURL("http://changed:9090") }, func() { SetHeaders(map[string]string{"X-Scope-OrgID": "changed"}) }, Reset} {
 		ctx, cancel := context.WithCancel(context.Background())

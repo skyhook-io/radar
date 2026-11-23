@@ -375,12 +375,12 @@ func TestAutoSourceSurfacesKubecostContextMismatch(t *testing.T) {
 		}
 		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
 	}))
-	prometheuspkg.Initialize(nil, nil, "test")
+	prometheuspkg.Initialize(nil, nil, "test", nil)
 	prometheuspkg.SetManualURL(promServer.URL)
 	t.Cleanup(func() {
 		promServer.Close()
 		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "")
+		prometheuspkg.Initialize(nil, nil, "", nil)
 	})
 
 	m := &Manager{}
@@ -407,13 +407,13 @@ func TestAutoSourceSurfacesExplicitKubecostFailureAfterPrometheusIsAbsent(t *tes
 	kubecostServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "denied", http.StatusUnauthorized)
 	}))
-	prometheuspkg.Initialize(nil, nil, "test")
+	prometheuspkg.Initialize(nil, nil, "test", nil)
 	prometheuspkg.SetManualURL(promServer.URL)
 	t.Cleanup(func() {
 		promServer.Close()
 		kubecostServer.Close()
 		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "")
+		prometheuspkg.Initialize(nil, nil, "", nil)
 	})
 
 	m := &Manager{}
@@ -475,12 +475,12 @@ func TestInconclusivePrometheusRecheckKeepsProvisionalKubecost(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
 	}))
-	prometheuspkg.Initialize(nil, nil, "test")
+	prometheuspkg.Initialize(nil, nil, "test", nil)
 	prometheuspkg.SetManualURL(server.URL)
 	t.Cleanup(func() {
 		server.Close()
 		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "")
+		prometheuspkg.Initialize(nil, nil, "", nil)
 	})
 
 	releases := 0
@@ -515,12 +515,12 @@ func TestAutoPrometheusErrorUsesTemporaryFallback(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
 	}))
-	prometheuspkg.Initialize(nil, nil, "test")
+	prometheuspkg.Initialize(nil, nil, "test", nil)
 	prometheuspkg.SetManualURL(server.URL)
 	t.Cleanup(func() {
 		server.Close()
 		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "")
+		prometheuspkg.Initialize(nil, nil, "", nil)
 	})
 
 	m := &Manager{config: ManagerConfig{Source: SourceAuto}}
@@ -546,12 +546,12 @@ func TestAutoSourceFailsWhenPrometheusAndKubecostAreAbsent(t *testing.T) {
 		}
 		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
 	}))
-	prometheuspkg.Initialize(nil, nil, "test")
+	prometheuspkg.Initialize(nil, nil, "test", nil)
 	prometheuspkg.SetManualURL(promServer.URL)
 	t.Cleanup(func() {
 		promServer.Close()
 		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "")
+		prometheuspkg.Initialize(nil, nil, "", nil)
 	})
 
 	m := &Manager{config: ManagerConfig{Source: SourceAuto}}
@@ -577,12 +577,12 @@ func TestAutoSourceRetriesQuicklyBeforeKubecostDiscoveryIsReady(t *testing.T) {
 		}
 		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
 	}))
-	prometheuspkg.Initialize(nil, nil, "test")
+	prometheuspkg.Initialize(nil, nil, "test", nil)
 	prometheuspkg.SetManualURL(promServer.URL)
 	t.Cleanup(func() {
 		promServer.Close()
 		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "")
+		prometheuspkg.Initialize(nil, nil, "", nil)
 	})
 
 	m := &Manager{config: ManagerConfig{Source: SourceAuto}}
@@ -887,12 +887,10 @@ func TestCostDetectionCandidateFailuresRemainUnreachable(t *testing.T) {
 					return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "", errors.New(`cannot list resource "pods"`))
 				})
 			}
-			portforward.SetK8sClients(cs, &rest.Config{})
-			prometheuspkg.Initialize(cs, &rest.Config{}, "test")
+			prometheuspkg.Initialize(cs, &rest.Config{}, "test", portforward.NewManager(cs, &rest.Config{}))
 			defer func() {
 				prometheuspkg.Reset()
-				prometheuspkg.Initialize(nil, nil, "")
-				portforward.SetK8sClients(nil, nil)
+				prometheuspkg.Initialize(nil, nil, "", nil)
 			}()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -979,8 +977,8 @@ func TestAutoUnreachablePrometheusUsesProvisionalKubecost(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer k8s.ResetResourceCache()
-			prometheuspkg.Initialize(cs, &rest.Config{}, "cost-scope")
-			defer func() { prometheuspkg.Reset(); prometheuspkg.Initialize(nil, nil, "") }()
+			prometheuspkg.Initialize(cs, &rest.Config{}, "cost-scope", nil)
+			defer func() { prometheuspkg.Reset(); prometheuspkg.Initialize(nil, nil, "", nil) }()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			_, _, probeErr := prometheuspkg.GetClient().EnsureConnected(ctx)

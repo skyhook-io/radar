@@ -580,9 +580,7 @@ func TestDiscoverCandidateFailuresAreNotAbsent(t *testing.T) {
 					return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "", errors.New(`cannot list resource "pods"`))
 				})
 			}
-			portforward.SetK8sClients(cs, &rest.Config{})
-			defer portforward.SetK8sClients(nil, nil)
-			c := &Client{k8sClient: cs, contextName: "test", httpClient: &http.Client{Transport: transport}}
+			c := &Client{forwards: portforward.NewManager(cs, &rest.Config{}), k8sClient: cs, contextName: "test", httpClient: &http.Client{Transport: transport}}
 			_, _, err := c.discover(context.Background(), 0)
 			if err == nil || !errors.Is(err, errPrometheusUnreachable) || errors.Is(err, ErrPrometheusNotFound) {
 				t.Fatalf("failure classification: %v", err)
@@ -635,5 +633,42 @@ func TestDiscover_AutoPortForwardDisabledStopsAfterDirectProbe(t *testing.T) {
 	}
 	if c.GetStatus().Service != nil {
 		t.Fatal("no candidate was connected, so none may be reported as the discovered service")
+	}
+}
+
+func TestEnsureConnectedSkipsAddressOfStoppedForward(t *testing.T) {
+	var requests atomic.Int32
+	reused := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		fmt.Fprint(w, healthyProbeBody)
+	}))
+	t.Cleanup(reused.Close)
+	replacement := healthyServer(t, 0)
+	c := &Client{baseURL: reused.URL, forward: &portforward.Handle{}, manualURL: replacement.URL, httpClient: replacement.Client()}
+	if status := c.GetStatus(); status.Connected || status.Address != "" {
+		t.Fatalf("stopped tunnel still reported: %+v", status)
+	}
+	addr, _, err := c.EnsureConnected(t.Context())
+	if err != nil || addr != replacement.URL || requests.Load() != 0 {
+		t.Fatalf("connected to %q, err=%v, requests to stopped forward=%d", addr, err, requests.Load())
+	}
+}
+
+func TestClosedForwardManagerDoesNotCacheDiscoveryFailure(t *testing.T) {
+	cs := fake.NewSimpleClientset(&corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "monitoring", Name: "prometheus-server"},
+		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "http", Port: 9090}}},
+	})
+	proxy, err := url.Parse(deadURL(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := &http.Transport{Proxy: http.ProxyURL(proxy)}
+	t.Cleanup(tr.CloseIdleConnections)
+	c := &Client{k8sClient: cs, httpClient: &http.Client{Transport: tr}, forwards: portforward.NewManager(cs, &rest.Config{})}
+	c.forwards.Close()
+	_, _, err = c.EnsureConnected(t.Context())
+	if !errors.Is(err, portforward.ErrClosed) || c.recentDiscoveryError(time.Now()) != nil || c.GetStatus().Error != "" {
+		t.Fatalf("teardown recorded as discovery failure: err=%v, status=%+v", err, c.GetStatus())
 	}
 }

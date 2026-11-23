@@ -10,13 +10,22 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 )
 
 func TestNoClusterGlobals(t *testing.T) {
+	for _, dir := range []string{".", "../portforward"} {
+		t.Run(filepath.Base(dir), func(t *testing.T) { checkClusterGlobals(t, dir) })
+	}
+}
+
+func checkClusterGlobals(t *testing.T, dir string) {
 	denied := []string{
+		"github.com/skyhook-io/radar/internal/portforward.Manager", "*github.com/skyhook-io/radar/internal/portforward.Manager",
+		"map[*github.com/skyhook-io/radar/internal/portforward.forward]struct{}",
 		"*k8s.io/client-go/kubernetes.Clientset", "k8s.io/client-go/kubernetes.Interface",
 		"*k8s.io/client-go/rest.Config", "k8s.io/client-go/dynamic.Interface",
 		"*k8s.io/client-go/discovery.DiscoveryClient", "k8s.io/client-go/discovery.DiscoveryInterface",
@@ -25,14 +34,14 @@ func TestNoClusterGlobals(t *testing.T) {
 		"*github.com/skyhook-io/radar/pkg/timeline.TombstoneCache", "github.com/skyhook-io/radar/pkg/timeline.TombstoneCache",
 		"*PermissionCheckResult", "*Capabilities", "userCapEntry", "*userCapEntry", "userNSCapEntry", "*userNSCapEntry",
 	}
-	pkg, err := build.ImportDir(".", 0)
+	pkg, err := build.ImportDir(dir, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fset := token.NewFileSet()
 	var files []*ast.File
 	for _, name := range pkg.GoFiles {
-		f, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
+		f, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, parser.SkipObjectResolution)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -41,7 +50,7 @@ func TestNoClusterGlobals(t *testing.T) {
 
 	// Resolve constructor results (including multi-result initializers) and
 	// import aliases using the same dependency versions the test was built with.
-	out, err := exec.Command("go", "list", "-deps", "-export", "-f", "{{.ImportPath}} {{.Export}}", ".").Output()
+	out, err := exec.Command("go", "list", "-deps", "-export", "-f", "{{.ImportPath}} {{.Export}}", dir).Output()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +64,7 @@ func TestNoClusterGlobals(t *testing.T) {
 	conf := types.Config{IgnoreFuncBodies: true, Importer: importer.ForCompiler(fset, "gc", func(path string) (io.ReadCloser, error) {
 		return os.Open(exports[path])
 	})}
-	checked, err := conf.Check("github.com/skyhook-io/radar/internal/k8s", fset, files, nil)
+	checked, err := conf.Check("github.com/skyhook-io/radar/internal/"+pkg.Name, fset, files, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +84,7 @@ func TestNoClusterGlobals(t *testing.T) {
 			typ = types.NewPointer(types.Unalias(ptr.Elem()))
 		}
 		typeName := types.TypeString(typ, func(p *types.Package) string {
-			if p == checked {
+			if p == checked && pkg.Name == "k8s" {
 				return ""
 			}
 			return p.Path()
@@ -87,8 +96,9 @@ func TestNoClusterGlobals(t *testing.T) {
 		_, isMap := typ.Underlying().(*types.Map)
 		cacheType := isMap || typeName == "sync.Map" || typeName == "golang.org/x/sync/singleflight.Group"
 		lowerName := strings.ToLower(name)
+		forwardMap := isMap && strings.Contains(typeName, "github.com/skyhook-io/radar/internal/portforward.")
 		cacheName := strings.Contains(lowerName, "capabilit") || strings.Contains(lowerName, "perm")
-		if strings.Contains(lowerName, "cachegeneration") || strings.Contains(lowerName, "cacheonce") || slices.Contains(denied, typeName) || wrapped || (cacheName && cacheType) {
+		if forwardMap || strings.Contains(lowerName, "cachegeneration") || strings.Contains(lowerName, "cacheonce") || slices.Contains(denied, typeName) || wrapped || (cacheName && cacheType) {
 			t.Errorf("%s: %s has type %s: cluster state belongs on *Connection", fset.Position(v.Pos()), name, typeName)
 		}
 	}

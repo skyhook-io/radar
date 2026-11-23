@@ -89,7 +89,7 @@ func TestConnectDirectPlaintext(t *testing.T) {
 	if info.LocalPort != 0 {
 		t.Errorf("LocalPort = %d, want 0 (no port-forward in direct mode)", info.LocalPort)
 	}
-	if pf := portforward.GetConnectionInfo(portforward.OwnerTraffic); pf.Connected {
+	if pf := h.forward.Info(); pf.Connected {
 		t.Error("direct connect must not involve the port-forward registry")
 	}
 
@@ -397,6 +397,7 @@ func TestCarettaConnectionInfoModes(t *testing.T) {
 	}
 
 	deadForward := &CarettaSource{
+		forward:          &portforward.Handle{},
 		prometheusAddr:   "http://localhost:54321",
 		metricsNamespace: "caretta",
 		metricsService:   "caretta-vm",

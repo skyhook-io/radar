@@ -280,29 +280,18 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 		// backend — the reason resource metrics could otherwise land on caretta-vm
 		// via a blind cross-owner shortcut. Reuse follows the same per-candidate
 		// order as the port-forward attempts below.
-		if pfAddr := portforward.GetAddressForService(portforward.OwnerPrometheus, contextName, cand.Namespace, cand.Name); pfAddr != "" {
-			if c.probe(ctx, pfAddr+cand.BasePath) {
-				if !c.markConnected(pfAddr, cand.BasePath, cand.Key(), startGen) {
-					// Superseded mid-reuse: drop the stale service metadata we just
-					// published, same as the port-forward path below. The forward
-					// itself is pre-existing (own from a prior run, or a peer's), so
-					// unlike that path we must not Stop it here.
-					c.mu.Lock()
-					c.discoveryService = nil
-					c.mu.Unlock()
-					return "", "", errDiscoverySuperseded
-				}
+		if handle := c.forwards.GetAddressForService(portforward.OwnerPrometheus, contextName, cand.Namespace, cand.Name); handle != nil {
+			pfAddr := handle.Address()
+			connected, err := c.probeForward(ctx, handle, cand, startGen)
+			if err != nil {
+				return "", "", err
+			}
+			if connected {
 				log.Printf("[prometheus] reusing managed port-forward %s for %s/%s (%s)",
 					pfAddr, cand.Namespace, cand.Name, took(start))
 				return pfAddr, cand.BasePath, nil
 			}
-			// The reuse probe failed. If that is because the run was superseded
-			// (ctx cancelled) rather than the reused forward being genuinely
-			// unreachable, bail now instead of falling through to Start: Start
-			// would fast-path this same pre-existing forward and the doomed
-			// re-probe below would then Stop a tunnel we must leave up (a newer
-			// generation may already own it) — the very teardown the reuse
-			// supersession path above deliberately avoids.
+			// Cancellation supersedes the run before it opens another tunnel.
 			if err := ctx.Err(); err != nil {
 				logDiscoveryEnded(start, err)
 				return "", "", err
@@ -312,8 +301,11 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 		log.Printf("[prometheus] port-forward → %s/%s:%d (source=%s, score=%d)...",
 			cand.Namespace, cand.Name, cand.TargetPort, cand.Source, cand.Score)
 
-		connInfo, pfErr := portforward.Start(portforward.OwnerPrometheus, ctx, cand.Namespace, cand.Name, cand.TargetPort, contextName)
+		handle, pfErr := c.forwards.Start(portforward.OwnerPrometheus, ctx, cand.Namespace, cand.Name, cand.TargetPort, contextName)
 		if pfErr != nil {
+			if errors.Is(pfErr, portforward.ErrClosed) {
+				return "", "", pfErr
+			}
 			// A cancelled Start means the run was superseded, not that the
 			// port-forward genuinely failed — surface it instead of recording one.
 			if err := ctx.Err(); err != nil {
@@ -330,23 +322,19 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 			continue
 		}
 
-		addr := connInfo.Address
-		if c.probe(ctx, addr+cand.BasePath) {
-			if !c.markConnected(addr, cand.BasePath, cand.Key(), startGen) {
-				// Superseded: don't leave the shared forward up for an endpoint
-				// we're discarding.
-				portforward.Stop(portforward.OwnerPrometheus)
-				c.mu.Lock()
-				c.discoveryService = nil
-				c.mu.Unlock()
-				return "", "", errDiscoverySuperseded
-			}
+		addr := handle.Address()
+		connected, err := c.probeForward(ctx, handle, cand, startGen)
+		if err != nil {
+			handle.Stop()
+			return "", "", err
+		}
+		if connected {
 			log.Printf("[prometheus] connected to %s/%s via port-forward at %s (%s)",
 				cand.Namespace, cand.Name, addr, took(start))
 			return addr, cand.BasePath, nil
 		}
 
-		portforward.Stop(portforward.OwnerPrometheus)
+		handle.Stop()
 		// A failed probe on a cancelled context is supersession, not a dead
 		// Prometheus — don't slander the endpoint in errorlog.
 		if err := ctx.Err(); err != nil {
@@ -575,6 +563,25 @@ func (c *Client) setDiscoveryServiceFromCandidate(cand prom.Candidate) {
 	c.mu.Unlock()
 }
 
+// Check liveness with the publication lock held: a loss callback may already
+// have run while the probe was completing.
+func (c *Client) probeForward(ctx context.Context, forward *portforward.Handle, cand prom.Candidate, gen uint64) (bool, error) {
+	ok := c.probe(ctx, forward.Address()+cand.BasePath)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.forwards.Closed() {
+		return false, portforward.ErrClosed
+	}
+	if !ok || !forward.Alive() {
+		return false, nil
+	}
+	if !c.markConnectedLocked(forward.Address(), cand.BasePath, cand.Key(), gen, forward) {
+		c.discoveryService = nil
+		return false, errDiscoverySuperseded
+	}
+	return true, nil
+}
+
 // markConnected records the active connection and marks discovery as
 // complete. Also clears any cached pkg/prom.Client so the next
 // getPromClient rebuilds against the (possibly new) address — otherwise
@@ -590,6 +597,10 @@ func (c *Client) setDiscoveryServiceFromCandidate(cand prom.Candidate) {
 func (c *Client) markConnected(addr, basePath, identity string, gen uint64) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.markConnectedLocked(addr, basePath, identity, gen, nil)
+}
+
+func (c *Client) markConnectedLocked(addr, basePath, identity string, gen uint64, forward *portforward.Handle) bool {
 	// A stale generation, or a client retired by Reinitialize, means the result
 	// belongs to a superseded run — don't publish it (and, via the caller's
 	// superseded path, release any port-forward it opened for the old context).
@@ -601,6 +612,7 @@ func (c *Client) markConnected(addr, basePath, identity string, gen uint64) bool
 		c.workloadScope = nil
 		c.cancelWorkloadAttributionsLocked()
 	}
+	c.forward = c.forward.Replace(forward)
 	c.connectedIdentity = identity
 	c.baseURL = addr
 	c.basePath = basePath

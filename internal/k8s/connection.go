@@ -2,7 +2,10 @@ package k8s
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
+
+	"github.com/skyhook-io/radar/internal/portforward"
 
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
@@ -10,9 +13,9 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-// Connection owns the clients, config, discovery, permissions and typed
-// informer cache for one cluster context. A switch installs a new connection,
-// so a request that captures one keeps the same clients and resource mapping
+// Connection owns the clients, config, discovery, permissions, typed informer
+// cache and automatic port-forwards for one cluster context. A switch installs
+// a new connection, so a request keeps the same clients and resource mapping
 // even if a switch lands mid-request. A rebuild on the same clients (rescope, recovery)
 // also starts from a new one, so state built for the old admission stays there.
 type Connection struct {
@@ -20,6 +23,8 @@ type Connection struct {
 	clients                                  *sharedKubernetesClients
 	contextName, contextBinding, clusterName string
 	contextNamespace                         string
+	forwardOnce                              sync.Once
+	forwards                                 *portforward.Manager
 	perms                                    atomic.Pointer[permissionState]
 	cache                                    atomic.Pointer[connectionCache]
 	discovery                                atomic.Pointer[ResourceDiscovery]
@@ -45,6 +50,15 @@ func boundOrCurrent(ctx context.Context) *Connection {
 
 func installedConnectionLocked(config *rest.Config, clients *sharedKubernetesClients) *Connection {
 	return &Connection{config: config, clients: clients, contextName: contextName, contextBinding: contextBinding, clusterName: clusterName, contextNamespace: contextNamespace}
+}
+
+// A switch can displace an intermediate build on the old clients after
+// subsystem teardown. Even an unadmitted build may have a captured probe.
+func replaceConnectionLocked(next *Connection) *Connection {
+	previous := Current()
+	previous.PortForwards().Close()
+	installedConn.Store(next)
+	return previous
 }
 
 // fresh returns a new, unadmitted connection on the same clients, with no
@@ -174,4 +188,12 @@ func (c *Connection) ID() string {
 	connectionStatusMu.RLock()
 	defer connectionStatusMu.RUnlock()
 	return c.id
+}
+
+func (c *Connection) PortForwards() *portforward.Manager {
+	if c == nil {
+		return nil
+	}
+	c.forwardOnce.Do(func() { c.forwards = portforward.NewManager(c.ClientInterface(), c.Config()) })
+	return c.forwards
 }

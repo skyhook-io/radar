@@ -16,13 +16,13 @@ import (
 // automatic, then add it here.
 var portForwardCallSites = map[string]string{
 	"pkg/portforward/portforward.go":        "the primitives themselves",
-	"internal/portforward/portforward.go":   "automatic, gated in StartWithClients",
+	"internal/portforward/portforward.go":   "automatic, gated in Manager.Start",
 	"internal/argocd/discovery.go":          "automatic, gated in discover",
 	"internal/runtimeevidence/collector.go": "explicit: evidence collection a user or agent asked for",
 	"internal/server/portforward.go":        "explicit: the Port Forward feature",
 }
 
-var portForwardPrimitive = regexp.MustCompile(`RunPortForward\(|NewOnAddresses\(|SubResource\("portforward"\)|"k8s.io/client-go/tools/portforward"`)
+var portForwardPrimitive = regexp.MustCompile(`RunPortForward\(|pfpkg\.RunPortForward\b|NewOnAddresses\(|SubResource\("portforward"\)|"k8s.io/client-go/tools/portforward"`)
 
 func TestPortForwardCallSitesAreKnown(t *testing.T) {
 	root, err := filepath.Abs("../..")

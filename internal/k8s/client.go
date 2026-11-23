@@ -368,7 +368,7 @@ func doInit(opts InitOptions) error {
 		return err
 	}
 
-	installedConn.Store(installedConnectionLocked(config, clients))
+	replaceConnectionLocked(installedConnectionLocked(config, clients))
 
 	return nil
 }
@@ -2070,7 +2070,7 @@ func installPreparedContext(p *preparedContext) {
 	activeSourceConfig = p.rawConfig.DeepCopy()
 	clusterName = p.kubeContext.Cluster
 	contextNamespace = p.kubeContext.Namespace
-	installedConn.Store(installedConnectionLocked(p.config, p.clients))
+	replaceConnectionLocked(installedConnectionLocked(p.config, p.clients))
 	contextUsesExec = p.usesExec
 	totalContextCount = totalContexts
 	execPluginCommands = execCmds

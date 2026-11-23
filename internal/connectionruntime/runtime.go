@@ -118,7 +118,7 @@ func (r *Runtime) activate(target k8s.ProfileTarget, selected map[config.Integra
 			} else {
 				if prometheus.GetClient() == nil {
 					conn := k8s.Current()
-					prometheus.Initialize(conn.ClientInterface(), conn.Config(), conn.ContextName())
+					prometheus.Initialize(conn.ClientInterface(), conn.Config(), conn.ContextName(), conn.PortForwards())
 				}
 				url, headers := prometheus.CurrentConfig()
 				metricsChanged = url != strings.TrimRight(s.Settings.Prometheus.URL, "/") || !maps.Equal(headers, s.Settings.Prometheus.Headers)

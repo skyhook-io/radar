@@ -3,52 +3,74 @@ package portforward
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 )
 
+func publishedForward(m *Manager, owner, namespace, service string, port int) *Handle {
+	f := &forward{manager: m, owner: owner, owners: 1, active: true, stopCh: make(chan struct{}),
+		info: ConnectionInfo{Connected: true, Address: fmt.Sprintf("http://localhost:%d", port), LocalPort: port,
+			Namespace: namespace, ServiceName: service, ContextName: "ctxA"}}
+	m.forwards[f] = struct{}{}
+	return &Handle{f: f}
+}
+
+func prometheusManager() *Manager {
+	labels := map[string]string{"app": "prometheus"}
+	return NewManager(fake.NewSimpleClientset(
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "prometheus", Namespace: "monitoring"}, Spec: corev1.ServiceSpec{Selector: labels}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "prometheus-0", Namespace: "monitoring", Labels: labels}, Status: corev1.PodStatus{Phase: corev1.PodRunning}},
+	), &rest.Config{})
+}
+
 // TestOwnerScoping verifies that each owner's forward is independent: stopping
 // one owner never tears down another's, and status/reuse lookups are scoped
 // correctly. This is the invariant that stops prometheus discovery and the
 // traffic subsystem from clobbering each other's metrics tunnel.
 func TestOwnerScoping(t *testing.T) {
-	saved := reg
-	t.Cleanup(func() { reg = saved })
-	reg = &registry{forwards: map[Owner]*metricsForward{}}
+	m := NewManager(nil, nil)
 
 	// Two owners hold live forwards in the same context.
-	reg.forwards[OwnerPrometheus] = &metricsForward{active: true, localPort: 1111, namespace: "monitoring", serviceName: "prometheus", contextName: "ctxA"}
-	reg.forwards[OwnerTraffic] = &metricsForward{active: true, localPort: 2222, namespace: "caretta", serviceName: "caretta-vm", contextName: "ctxA"}
+	prometheus := publishedForward(m, OwnerPrometheus, "monitoring", "prometheus", 1111)
+	traffic := publishedForward(m, OwnerTraffic, "caretta", "caretta-vm", 2222)
 
-	if got := GetConnectionInfo(OwnerPrometheus); !got.Connected || got.LocalPort != 1111 {
+	if got := prometheus.Info(); !got.Connected || got.LocalPort != 1111 {
 		t.Fatalf("prometheus info = %+v", got)
 	}
-	if got := GetConnectionInfo(OwnerTraffic); !got.Connected || got.LocalPort != 2222 {
+	if got := traffic.Info(); !got.Connected || got.LocalPort != 2222 {
 		t.Fatalf("traffic info = %+v", got)
 	}
 
 	// Stopping prometheus's forward must not touch traffic's — the core fix.
-	Stop(OwnerPrometheus)
-	if GetConnectionInfo(OwnerPrometheus).Connected {
+	prometheus.Stop()
+	if prometheus.Info().Connected {
 		t.Fatal("prometheus forward not stopped")
 	}
-	if !GetConnectionInfo(OwnerTraffic).Connected {
+	if !traffic.Info().Connected {
 		t.Fatal("traffic forward was torn down by prometheus Stop (cross-owner clobber)")
 	}
 
 	// GetAddressForService peeks across owners (read-only reuse) and is
 	// context-scoped, matching on the target service.
-	if GetAddressForService(OwnerPrometheus, "ctxA", "caretta", "caretta-vm") == "" {
+	if m.GetAddressForService(OwnerPrometheus, "ctxA", "caretta", "caretta-vm").Address() == "" {
 		t.Fatal("GetAddressForService should surface traffic's caretta-vm forward for ctxA")
 	}
-	if GetAddressForService(OwnerPrometheus, "ctxB", "caretta", "caretta-vm") != "" {
+	if m.GetAddressForService(OwnerPrometheus, "ctxB", "caretta", "caretta-vm").Address() != "" {
 		t.Fatal("GetAddressForService must not match a different context")
 	}
-	if !IsConnectedForContext("ctxA") || IsConnectedForContext("ctxB") {
+	peer := m.GetAddressForService(OwnerPrometheus, "ctxA", "caretta", "caretta-vm")
+	if !peer.SameForward(traffic) || peer.Stop() || !traffic.Info().Connected {
+		t.Fatal("borrower stopped its peer's tunnel")
+	}
+	if !m.IsConnectedForContext("ctxA") || m.IsConnectedForContext("ctxB") {
 		t.Fatal("IsConnectedForContext scoping wrong")
 	}
 }
@@ -60,87 +82,95 @@ func TestOwnerScoping(t *testing.T) {
 // mismatched backend answers the generic probe but holds no caretta metrics. The
 // symmetric case (resource metrics adopting caretta-vm) is guarded the same way.
 func TestGetAddressForServiceIsTargetAware(t *testing.T) {
-	saved := reg
-	t.Cleanup(func() { reg = saved })
-	reg = &registry{forwards: map[Owner]*metricsForward{}}
+	m := NewManager(nil, nil)
 
 	// Only the general-metrics forward is up (owner=prometheus → prometheus-operated).
-	reg.forwards[OwnerPrometheus] = &metricsForward{
-		active: true, localPort: 15329, namespace: "monitoring", serviceName: "prometheus-operated", contextName: "ctxA",
-	}
+	publishedForward(m, OwnerPrometheus, "monitoring", "prometheus-operated", 15329)
 
 	// A Caretta lookup for its own backend must reject the mismatched service
 	// rather than adopt the general Prometheus forward that happens to be live.
-	if got := GetAddressForService(OwnerTraffic, "ctxA", "caretta", "caretta-vm"); got != "" {
+	if got := m.GetAddressForService(OwnerTraffic, "ctxA", "caretta", "caretta-vm").Address(); got != "" {
 		t.Fatalf("target-aware lookup adopted the wrong forward: got %q, want empty", got)
 	}
 	// Conversely, resource metrics may reuse the prometheus-operated forward by
 	// exact match — that is the legitimate cross/own-owner reuse.
-	if got := GetAddressForService(OwnerPrometheus, "ctxA", "monitoring", "prometheus-operated"); got != "http://localhost:15329" {
+	if got := m.GetAddressForService(OwnerPrometheus, "ctxA", "monitoring", "prometheus-operated").Address(); got != "http://localhost:15329" {
 		t.Fatalf("matching own forward: got %q, want :15329", got)
 	}
 
 	// Once Caretta's own dedicated forward exists, it is reused by exact match.
-	reg.forwards[OwnerTraffic] = &metricsForward{
-		active: true, localPort: 22222, namespace: "caretta", serviceName: "caretta-vm", contextName: "ctxA",
-	}
-	if got := GetAddressForService(OwnerTraffic, "ctxA", "caretta", "caretta-vm"); got != "http://localhost:22222" {
+	traffic := publishedForward(m, OwnerTraffic, "caretta", "caretta-vm", 22222)
+	if got := m.GetAddressForService(OwnerTraffic, "ctxA", "caretta", "caretta-vm").Address(); got != "http://localhost:22222" {
 		t.Fatalf("own matching forward: got %q, want :22222", got)
 	}
 	// A peer forward that DOES target the requested service is still reusable.
-	delete(reg.forwards, OwnerTraffic)
-	reg.forwards[OwnerPrometheus] = &metricsForward{
-		active: true, localPort: 33333, namespace: "caretta", serviceName: "caretta-vm", contextName: "ctxA",
-	}
-	if got := GetAddressForService(OwnerTraffic, "ctxA", "caretta", "caretta-vm"); got != "http://localhost:33333" {
+	traffic.Stop()
+	publishedForward(m, OwnerPrometheus, "caretta", "caretta-vm", 33333)
+	if got := m.GetAddressForService(OwnerTraffic, "ctxA", "caretta", "caretta-vm").Address(); got != "http://localhost:33333" {
 		t.Fatalf("matching peer forward: got %q, want :33333", got)
 	}
 	// Context scoping still holds.
-	if got := GetAddressForService(OwnerTraffic, "ctxB", "caretta", "caretta-vm"); got != "" {
+	if got := m.GetAddressForService(OwnerTraffic, "ctxB", "caretta", "caretta-vm").Address(); got != "" {
 		t.Fatalf("must not match a different context, got %q", got)
 	}
 }
 
-// TestStopBumpsEpochWhileEstablishing pins the invariant that a Stop lands even
-// while a forward is still coming up (not yet active): stopForwardLocked must
-// bump epoch for an inactive forward too, so the in-flight Start sees the change
-// and refuses to publish a connection the caller already asked to stop. Reverting
-// to an early-return-when-inactive reintroduces the "Stop misses in-flight
-// establish" bug.
-func TestStopBumpsEpochWhileEstablishing(t *testing.T) {
-	f := &metricsForward{} // establishing: not yet active
-	before := f.epoch
-	stopForwardLocked(f)
-	if f.epoch == before {
-		t.Fatal("epoch not bumped for an inactive forward — a Stop during establishment would be silently lost")
+func TestCloseDuringEstablishmentStopsUnpublishedForward(t *testing.T) {
+	m := prometheusManager()
+	started, release, stopped := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	m.run = func(_ context.Context, _ kubernetes.Interface, _ *rest.Config, _, _ string, _, _ int, stop, ready chan struct{}) error {
+		close(started)
+		<-release
+		close(ready)
+		<-stop
+		close(stopped)
+		return nil
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := m.Start(OwnerPrometheus, t.Context(), "monitoring", "prometheus", 9090, "ctxA")
+		result <- err
+	}()
+	select {
+	case <-started:
+	case err := <-result:
+		t.Fatalf("Start failed before the tunnel ran: %v", err)
+	}
+	m.Close()
+	close(release)
+	if err := <-result; err == nil {
+		t.Fatal("closed manager published a forward")
+	}
+	<-stopped
+	if m.IsConnectedForContext("ctxA") {
+		t.Fatal("forward remained published")
+	}
+	if _, err := m.Start(OwnerPrometheus, t.Context(), "monitoring", "prometheus", 9090, "ctxA"); err == nil {
+		t.Fatal("closed manager accepted Start")
 	}
 }
 
-func TestStopIfAddressDoesNotStopReplacement(t *testing.T) {
-	saved := reg
-	t.Cleanup(func() { reg = saved })
-	reg = &registry{forwards: map[Owner]*metricsForward{
-		OwnerCost: {active: true, localPort: 2222},
-	}}
-
-	if StopIfAddress(OwnerCost, "http://localhost:1111") {
+func TestStaleHandleDoesNotStopReplacement(t *testing.T) {
+	m := NewManager(nil, nil)
+	stale := publishedForward(m, OwnerCost, "ns", "svc", 2222)
+	stale.Stop()
+	replacement := publishedForward(m, OwnerCost, "ns", "svc", 2222)
+	if stale.Stop() {
 		t.Fatal("stale address unexpectedly stopped the current forward")
 	}
-	if !GetConnectionInfo(OwnerCost).Connected {
+	if !replacement.Info().Connected {
 		t.Fatal("stale cleanup stopped the replacement forward")
 	}
-	if !StopIfAddress(OwnerCost, "http://localhost:2222") {
+	if !replacement.Stop() {
 		t.Fatal("current address did not stop its forward")
 	}
-	if GetConnectionInfo(OwnerCost).Connected {
+	if replacement.Info().Connected {
 		t.Fatal("current forward remains connected after address-scoped stop")
 	}
 }
 
 func TestForwardReuseIncludesTargetPort(t *testing.T) {
-	forward := &metricsForward{
-		active: true, namespace: "kubecost", serviceName: "kubecost-aggregator", targetPort: 9004, contextName: "ctxA",
-	}
+	forward := &forward{info: ConnectionInfo{Namespace: "kubecost", ServiceName: "kubecost-aggregator", ContextName: "ctxA"}, targetPort: 9004}
 	if !forward.matches("kubecost", "kubecost-aggregator", 9004, "ctxA") {
 		t.Fatal("matching target was not reusable")
 	}
@@ -153,19 +183,10 @@ func TestForwardReuseIncludesTargetPort(t *testing.T) {
 // forward whose run ends on its own (the pod went away) is reported with the
 // address it served; one ended by Stop is not.
 func TestForwardLostNotifiesOnlyUnexpectedExit(t *testing.T) {
-	saved := reg
-	savedRun, savedFind := runPortForward, findPodForService
-	t.Cleanup(func() {
-		reg = saved
-		runPortForward, findPodForService = savedRun, savedFind
-		SetOnForwardLost(nil)
-	})
-	reg = &registry{forwards: map[Owner]*metricsForward{}}
-	findPodForService = func(context.Context, kubernetes.Interface, string, string) (string, error) {
-		return "prometheus-0", nil
-	}
+	m := prometheusManager()
+	t.Cleanup(func() { SetOnForwardLost(nil) })
 	podGone := make(chan struct{})
-	runPortForward = func(_ context.Context, _ kubernetes.Interface, _ *rest.Config, _, _ string, _, _ int, stopCh chan struct{}, readyCh chan struct{}) error {
+	m.run = func(_ context.Context, _ kubernetes.Interface, _ *rest.Config, _, _ string, _, _ int, stopCh chan struct{}, readyCh chan struct{}) error {
 		close(readyCh)
 		select {
 		case <-stopCh:
@@ -175,19 +196,18 @@ func TestForwardLostNotifiesOnlyUnexpectedExit(t *testing.T) {
 		}
 	}
 	lost := make(chan string, 2)
-	SetOnForwardLost(func(owner Owner, address string) { lost <- owner + " " + address })
+	SetOnForwardLost(func(h *Handle) { lost <- h.f.owner + " " + h.Address() })
 
-	start := func() *ConnectionInfo {
+	start := func() *Handle {
 		t.Helper()
-		info, err := StartWithClients(OwnerPrometheus, context.Background(), "monitoring", "prometheus", 9090, "ctxA", fake.NewSimpleClientset(), &rest.Config{})
+		info, err := m.Start(OwnerPrometheus, context.Background(), "monitoring", "prometheus", 9090, "ctxA")
 		if err != nil {
 			t.Fatalf("Start: %v", err)
 		}
 		return info
 	}
 
-	start()
-	Stop(OwnerPrometheus)
+	start().Stop()
 	select {
 	case got := <-lost:
 		t.Fatalf("Stop reported a lost forward: %s", got)
@@ -198,28 +218,26 @@ func TestForwardLostNotifiesOnlyUnexpectedExit(t *testing.T) {
 	close(podGone)
 	select {
 	case got := <-lost:
-		if want := OwnerPrometheus + " " + info.Address; got != want {
+		if want := OwnerPrometheus + " " + info.Address(); got != want {
 			t.Fatalf("lost = %q, want %q", got, want)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("forward that ended on its own was not reported")
 	}
-	if GetConnectionInfo(OwnerPrometheus).Connected {
+	if info.Info().Connected {
 		t.Fatal("lost forward still reported as connected")
 	}
 }
 
 func TestIsActiveAddress(t *testing.T) {
-	saved := reg
-	t.Cleanup(func() { reg = saved })
-	reg = &registry{forwards: map[Owner]*metricsForward{}}
-	reg.forwards[OwnerTraffic] = &metricsForward{active: true, localPort: 4321}
-	reg.forwards[OwnerPrometheus] = &metricsForward{active: false, localPort: 1234}
+	m := NewManager(nil, nil)
+	publishedForward(m, OwnerTraffic, "", "", 4321)
+	publishedForward(m, OwnerPrometheus, "", "", 1234).Stop()
 
-	if !IsActiveAddress("http://localhost:4321") {
+	if !m.IsActiveAddress("http://localhost:4321") {
 		t.Fatal("another owner's live forward should count")
 	}
-	if IsActiveAddress("http://localhost:1234") {
+	if m.IsActiveAddress("http://localhost:1234") {
 		t.Fatal("an inactive forward should not count")
 	}
 }
@@ -229,11 +247,46 @@ func TestStartRefusesWhenAutoDisabled(t *testing.T) {
 	t.Cleanup(func() { SetAutoDisabled(false) })
 	client := fake.NewClientset()
 
-	info, err := StartWithClients(OwnerCost, context.Background(), "monitoring", "prometheus", 9090, "ctxA", client, &rest.Config{Host: "https://example.invalid"})
+	m := NewManager(client, &rest.Config{Host: "https://example.invalid"})
+	info, err := m.Start(OwnerCost, context.Background(), "monitoring", "prometheus", 9090, "ctxA")
 	if !errors.Is(err, ErrAutoDisabled) || info != nil {
-		t.Fatalf("StartWithClients = %v, %v; want nil, ErrAutoDisabled", info, err)
+		t.Fatalf("Start = %v, %v; want nil, ErrAutoDisabled", info, err)
 	}
 	if actions := client.Actions(); len(actions) != 0 {
 		t.Fatalf("disabled start called the API: %v", actions)
+	}
+}
+
+func TestOwningHandlesReleaseSharedTunnelIndependently(t *testing.T) {
+	m := prometheusManager()
+	t.Cleanup(m.Close)
+	m.run = func(_ context.Context, _ kubernetes.Interface, _ *rest.Config, _, _ string, _, _ int, stop, ready chan struct{}) error {
+		close(ready)
+		<-stop
+		return nil
+	}
+	start := func() *Handle {
+		t.Helper()
+		h, err := m.Start(OwnerPrometheus, t.Context(), "monitoring", "prometheus", 9090, "a")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	first, second := start(), start()
+	if !first.SameForward(second) {
+		t.Fatal("identical starts did not reuse the tunnel")
+	}
+	borrowed := m.GetAddressForService(OwnerTraffic, "a", "monitoring", "prometheus")
+	if second.Replace(borrowed) != second {
+		t.Fatal("service lookup discarded the owning handle")
+	}
+	first.Stop()
+	if first.Stop() || !second.Info().Connected || !borrowed.Info().Connected {
+		t.Fatal("one release closed a shared tunnel")
+	}
+	second.Stop()
+	if borrowed.Info().Connected {
+		t.Fatal("borrower kept the tunnel alive")
 	}
 }

@@ -81,6 +81,8 @@ var metricsServiceLocations = []struct {
 
 // CarettaSource implements TrafficSource for Caretta
 type CarettaSource struct {
+	forwards            *portforward.Manager
+	forward             *portforward.Handle
 	k8sClient           kubernetes.Interface
 	httpClient          *http.Client
 	prometheusAddr      string
@@ -397,8 +399,7 @@ func (c *CarettaSource) discoverPrometheus(ctx context.Context) string {
 			return c.prometheusAddr
 		}
 		// Clear stale address
-		c.prometheusAddr = ""
-		c.metricsBasePath = ""
+		c.clearBindingLocked()
 	}
 
 	if prom.HeadersRequireURL(c.metricsURL, c.headers) {
@@ -444,7 +445,7 @@ func (c *CarettaSource) discoverPrometheus(ctx context.Context) string {
 			switch c.acceptBackendLocked(ctx, info, info.clusterAddr+info.basePath) {
 			case backendAccepted:
 				log.Printf("[caretta] Found metrics service at %s (basePath=%q)", info.clusterAddr, info.basePath)
-				c.bindLocked(info.clusterAddr, info)
+				c.bindLocked(info.clusterAddr, info, nil)
 				return info.clusterAddr
 			case backendNoCarettaData:
 				wrongData = true
@@ -459,11 +460,12 @@ func (c *CarettaSource) discoverPrometheus(ctx context.Context) string {
 			// /api/v1/query), so match on (namespace, service) — otherwise we'd adopt
 			// the general-metrics forward and query it for caretta_links_observed,
 			// which returns 0 flows silently. Starting a new forward is Connect()'s job.
-			if pfAddr := portforward.GetAddressForService(portforward.OwnerTraffic, c.currentContext, info.namespace, info.name); pfAddr != "" {
-				switch c.acceptBackendLocked(ctx, info, pfAddr+info.basePath) {
+			if handle := c.forwards.GetAddressForService(portforward.OwnerTraffic, c.currentContext, info.namespace, info.name); handle != nil {
+				pfAddr := handle.Address()
+				switch c.acceptForwardLocked(ctx, info, handle) {
 				case backendAccepted:
 					log.Printf("[caretta] Using managed port-forward at %s for %s/%s", pfAddr, info.namespace, info.name)
-					c.bindLocked(pfAddr, info)
+					c.bindLocked(pfAddr, info, handle)
 					return pfAddr
 				case backendNoCarettaData:
 					wrongData = true
@@ -701,9 +703,25 @@ func (c *CarettaSource) hasSeriesLocked(ctx context.Context, addr, query string)
 	return promResp.Status == "success" && len(promResp.Data.Result) > 0
 }
 
+func (c *CarettaSource) acceptForwardLocked(ctx context.Context, info *metricsServiceInfo, forward *portforward.Handle) backendVerdict {
+	verdict := c.acceptBackendLocked(ctx, info, forward.Address()+info.basePath)
+	if !forward.Alive() {
+		return backendUnreachable
+	}
+	return verdict
+}
+
+func (c *CarettaSource) clearBindingLocked() {
+	c.forward.Stop()
+	c.forward = nil
+	c.prometheusAddr = ""
+	c.metricsBasePath = ""
+}
+
 // bindLocked records the backend the source will query from now on.
 // Caller must hold lock.
-func (c *CarettaSource) bindLocked(addr string, info *metricsServiceInfo) {
+func (c *CarettaSource) bindLocked(addr string, info *metricsServiceInfo, forward *portforward.Handle) {
+	c.forward = c.forward.Replace(forward)
 	c.prometheusAddr = addr
 	c.backendWarning = ""
 	if info != nil {
@@ -722,6 +740,9 @@ func (c *CarettaSource) bindLocked(addr string, info *metricsServiceInfo) {
 // backendVerified stale would suppress the zero-flow warning and put the silence
 // back. Caller must hold lock.
 func (c *CarettaSource) revalidateBoundLocked(ctx context.Context, addr string) bool {
+	if c.forward != nil && !c.forward.Alive() {
+		return false
+	}
 	if !c.tryMetricsEndpointLocked(ctx, addr) {
 		return false
 	}
@@ -743,31 +764,16 @@ func (c *CarettaSource) ConnectionInfo() *portforward.ConnectionInfo {
 	if addr == "" {
 		return &portforward.ConnectionInfo{Connected: false}
 	}
-	if c.metricsURL == "" && strings.HasPrefix(addr, "http://localhost:") {
-		// Bound through a managed forward (traffic's own, or a reused peer's) —
-		// alive only while the registry still holds that exact address.
-		if live := portforward.GetAddressForService(portforward.OwnerTraffic, c.currentContext, c.metricsNamespace, c.metricsService); live != addr {
-			return &portforward.ConnectionInfo{Connected: false}
-		}
+	if c.forward != nil && !c.forward.Alive() {
+		return &portforward.ConnectionInfo{}
 	}
+
 	return &portforward.ConnectionInfo{
 		Connected:   true,
 		Address:     addr,
 		Namespace:   c.metricsNamespace,
 		ServiceName: c.metricsService,
 		ContextName: c.currentContext,
-	}
-}
-
-// stopStaleTrafficForward drops the traffic-owned forward when it points at a
-// service other than the one being bound. A candidate refused mid-walk can leave
-// its forward running, which would make the reported connection name a different
-// service than the one being queried.
-func stopStaleTrafficForward(namespace, name string) {
-	pf := portforward.GetConnectionInfo(portforward.OwnerTraffic)
-	if pf.Connected && (pf.Namespace != namespace || pf.ServiceName != name) {
-		log.Printf("[caretta] Dropping refused port-forward to %s/%s", pf.Namespace, pf.ServiceName)
-		portforward.Stop(portforward.OwnerTraffic)
 	}
 }
 
@@ -974,8 +980,7 @@ func (c *CarettaSource) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.isConnected = false
-	c.prometheusAddr = ""
-	c.metricsBasePath = ""
+	c.clearBindingLocked()
 	c.currentContext = ""
 	c.detectedNamespace = ""
 	c.detectedInstance = ""
@@ -1020,14 +1025,12 @@ func (c *CarettaSource) Connect(ctx context.Context, contextName string) (*portf
 			}, nil
 		}
 		// Connection lost, clear it
-		c.prometheusAddr = ""
-		c.metricsBasePath = ""
+		c.clearBindingLocked()
 	}
 
 	// Clear stale state if context changed
 	if c.currentContext != contextName {
-		c.prometheusAddr = ""
-		c.metricsBasePath = ""
+		c.clearBindingLocked()
 		c.currentContext = contextName
 	}
 
@@ -1088,12 +1091,7 @@ func (c *CarettaSource) Connect(ctx context.Context, contextName string) (*portf
 			switch c.acceptBackendLocked(ctx, info, info.clusterAddr+info.basePath) {
 			case backendAccepted:
 				log.Printf("[caretta] Connected to metrics service at %s (basePath=%q)", info.clusterAddr, info.basePath)
-				// Queries go to the cluster address from here, so the traffic module needs
-				// no forward of its own. An earlier candidate in this same walk may have
-				// left one up after being refused — keeping it would make the reported
-				// connection name a different service than the one being queried.
-				portforward.Stop(portforward.OwnerTraffic)
-				c.bindLocked(info.clusterAddr, info)
+				c.bindLocked(info.clusterAddr, info, nil)
 				return &portforward.ConnectionInfo{
 					Connected:   true,
 					Address:     info.clusterAddr,
@@ -1119,12 +1117,12 @@ func (c *CarettaSource) Connect(ctx context.Context, contextName string) (*portf
 		// prometheus, e.g. prometheus-operated:9090): it answers the generic probe but
 		// holds no caretta_links_observed, so flows would come back empty. On no match
 		// we fall through and start the dedicated forward below.
-		if pfAddr := portforward.GetAddressForService(portforward.OwnerTraffic, contextName, info.namespace, info.name); pfAddr != "" {
-			switch c.acceptBackendLocked(ctx, info, pfAddr+info.basePath) {
+		if handle := c.forwards.GetAddressForService(portforward.OwnerTraffic, contextName, info.namespace, info.name); handle != nil {
+			pfAddr := handle.Address()
+			switch c.acceptForwardLocked(ctx, info, handle) {
 			case backendAccepted:
 				log.Printf("[caretta] Using existing port-forward at %s", pfAddr)
-				stopStaleTrafficForward(info.namespace, info.name)
-				c.bindLocked(pfAddr, info)
+				c.bindLocked(pfAddr, info, handle)
 				return &portforward.ConnectionInfo{
 					Connected:   true,
 					Address:     pfAddr,
@@ -1146,30 +1144,26 @@ func (c *CarettaSource) Connect(ctx context.Context, contextName string) (*portf
 
 		// Start a new managed port-forward
 		log.Printf("[caretta] Starting port-forward to %s/%s:%d (targetPort=%d)", info.namespace, info.name, info.port, info.targetPort)
-		connInfo, err := portforward.Start(portforward.OwnerTraffic, ctx, info.namespace, info.name, info.targetPort, contextName)
+		forward, err := c.forwards.Start(portforward.OwnerTraffic, ctx, info.namespace, info.name, info.targetPort, contextName)
 		if err != nil {
 			lastErr = fmt.Sprintf("Failed to start port-forward to %s/%s: %v", info.namespace, info.name, err)
 			log.Printf("[caretta] %s", lastErr)
 			continue
 		}
 
-		switch c.acceptBackendLocked(ctx, info, connInfo.Address+info.basePath) {
+		switch c.acceptForwardLocked(ctx, info, forward) {
 		case backendAccepted:
-			c.bindLocked(connInfo.Address, info)
-			log.Printf("[caretta] Connected via port-forward at %s (basePath=%q)", connInfo.Address, info.basePath)
-			return connInfo, nil
+			c.bindLocked(forward.Address(), info, forward)
+			log.Printf("[caretta] Connected via port-forward at %s (basePath=%q)", forward.Address(), info.basePath)
+			return forward.Info(), nil
 		case backendNoCarettaData:
 			noData = append(noData, target)
 		case backendUnreachable:
 			unreachable = append(unreachable, target)
 		}
+		forward.Stop()
 	}
 
-	// Every candidate was rejected. Leaving the last forward up would point the
-	// traffic module at a backend it just refused, so drop it and fail closed with
-	// a message naming what was tried — silently returning zero flows is what made
-	// this class of bug invisible.
-	portforward.Stop(portforward.OwnerTraffic)
 	errMsg := noBackendWarning(noData, unreachable)
 	if portforward.AutoDisabled() && len(noData) == 0 && len(unreachable) == 0 && lastErr != "" {
 		// The turned-off forward is the whole reason; it already says what to do.

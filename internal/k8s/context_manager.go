@@ -440,7 +440,7 @@ func BlockClusterAccess(err error) {
 func dropClusterClients() *Connection {
 	clientMu.Lock()
 	defer clientMu.Unlock()
-	return installedConn.Swap(installedConnectionLocked(nil, &sharedKubernetesClients{generation: clusterBuildSequence.Add(1)}))
+	return replaceConnectionLocked(installedConnectionLocked(nil, &sharedKubernetesClients{generation: clusterBuildSequence.Add(1)}))
 }
 
 func contextOperationsBlockedErr() error {
