@@ -74,24 +74,24 @@ func TestConnectionAdmissionsClosedAtShutdown(t *testing.T) {
 	}
 }
 
-func TestCaptureBoundConnectionRefusesWithoutServingConnection(t *testing.T) {
+func TestCaptureServingConnectionRefusesWithoutServingConnection(t *testing.T) {
 	t.Cleanup(SnapshotTestConnection())
 	clearTestConnectionIdentity()
-	if _, err := CaptureBoundConnection(); err != ErrNoServingConnection {
+	if _, err := CaptureServingConnection(); err != ErrNoServingConnection {
 		t.Fatalf("no serving connection: err=%v", err)
 	}
 	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
 	// Admitted with no clients installed: the capture names the connection and
 	// leaves the missing clients for the handler to report.
-	b, err := CaptureBoundConnection()
-	if err != nil || b.ID != ServingConnectionID() {
-		t.Fatalf("admitted connection: id=%q err=%v", b.ID, err)
+	b, err := CaptureServingConnection()
+	if err != nil || b.ID() != ServingConnectionID() {
+		t.Fatalf("admitted connection: id=%q err=%v", b.ID(), err)
 	}
 }
 
 func clearTestConnectionIdentity() {
 	connectionStatusMu.Lock()
-	servingConnectionID = ""
+	serving = nil
 	admissionsClosed = false
 	connectionStatus = ConnectionStatus{}
 	connectionStatusMu.Unlock()
@@ -101,7 +101,11 @@ func TestStillBoundFollowsTheServingConnection(t *testing.T) {
 	t.Cleanup(SnapshotTestConnection())
 	clearTestConnectionIdentity()
 	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
-	ctx := WithBoundConnection(context.Background(), BoundConnection{ID: ServingConnectionID()})
+	admitted, err := CaptureServingConnection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := admitted.Bind(context.Background())
 	if !StillBound(context.Background()) || !StillBound(ctx) {
 		t.Fatal("an unbound request, or one bound to the serving connection, is still bound")
 	}
@@ -109,5 +113,63 @@ func TestStillBoundFollowsTheServingConnection(t *testing.T) {
 	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
 	if StillBound(ctx) {
 		t.Fatal("a request bound to a retired connection reported still bound")
+	}
+}
+
+// A write admitted under one ID stays bound to it: if the same build is
+// retired and admitted again before the request binds, binding must not pick up
+// the new ID.
+func TestAdmissionKeepsTheIDItWasCapturedUnder(t *testing.T) {
+	t.Cleanup(SnapshotTestConnection())
+	clearTestConnectionIdentity()
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
+	admitted, err := CaptureServingConnection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := admitted.ID()
+	RetireServingConnection()
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
+	if admitted.Connection() != Current() || ServingConnectionID() == first {
+		t.Fatalf("setup: want the same build under a new ID, got conn %p/%p id %q", admitted.Connection(), Current(), ServingConnectionID())
+	}
+	ctx := admitted.Bind(context.Background())
+	if admitted.ID() != first || StillBound(ctx) {
+		t.Fatalf("admission id %q (want %q), still bound %v: a request admitted before the re-admission must not be still bound", admitted.ID(), first, StillBound(ctx))
+	}
+}
+
+// Restoring a snapshot taken before the same connection was admitted again
+// restores the ID it was serving under, so status and serving agree.
+func TestSnapshotRestoresTheAdmissionID(t *testing.T) {
+	t.Cleanup(SnapshotTestConnection())
+	clearTestConnectionIdentity()
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
+	first := ServingConnectionID()
+	restore := SnapshotTestConnection()
+	RetireServingConnection()
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
+	restore()
+	if got, status := ServingConnectionID(), GetConnectionStatus().ConnectionID; got != first || status != first {
+		t.Fatalf("after restore: serving %q, status %q; want both %q", got, status, first)
+	}
+}
+
+// Admitted again after a retirement with no rebuild, a connection is the same
+// build: discovery that lands on it later is served. Only the ID changes.
+func TestReadmissionKeepsTheSameConnection(t *testing.T) {
+	t.Cleanup(SnapshotTestConnection())
+	clearTestConnectionIdentity()
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
+	built, first := Current(), ServingConnectionID()
+	RetireServingConnection()
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
+
+	if Current() != built || ServingConnectionID() == first {
+		t.Fatalf("re-admission: connection replaced=%v, ID %q then %q", Current() != built, first, ServingConnectionID())
+	}
+	built.publishDiscovery(buildFakeDiscoveryCore(t))
+	if GetResourceDiscovery() == nil {
+		t.Fatal("discovery that finished after the re-admission isn't served")
 	}
 }

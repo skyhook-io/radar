@@ -120,7 +120,7 @@ type Handlers struct {
 	BindWrite func(http.HandlerFunc) http.HandlerFunc
 	// AdmitWrite is BindWrite's check for a handler that learns from the body
 	// whether it writes to the cluster. It answers the refusal itself.
-	AdmitWrite func(http.ResponseWriter, *http.Request) (k8s.BoundConnection, bool)
+	AdmitWrite func(http.ResponseWriter, *http.Request) (k8s.Admission, bool)
 }
 
 // The permission preflight reads capabilities from the serving cluster. Its
@@ -1138,11 +1138,11 @@ func (h *Handlers) handleAddRepository(w http.ResponseWriter, r *http.Request) {
 	}
 	// Associating a release writes its storage Secret on the cluster.
 	if req.Namespace != "" && h.AdmitWrite != nil {
-		bound, ok := h.AdmitWrite(w, r)
+		admitted, ok := h.AdmitWrite(w, r)
 		if !ok {
 			return
 		}
-		r = r.WithContext(k8s.WithBoundConnection(r.Context(), bound))
+		r = r.WithContext(admitted.Bind(r.Context()))
 	}
 	if !requireHelmWrite(w, r, req.Namespace) {
 		return

@@ -72,13 +72,14 @@ func TestTrackedSwitchDiscoveryWaitHasOwnBudget(t *testing.T) {
 			t.Cleanup(unblock)
 			cfg := &rest.Config{Host: api.URL}
 			clientMu.Lock()
-			discoveryClient = discovery.NewDiscoveryClientForConfigOrDie(cfg)
-			prev := dynamicClient
-			dynamicClient = dynamic.NewForConfigOrDie(cfg)
+			prev := installedConn.Load()
+			installedConn.Store(copyTestConnectionLocked())
+			installedConn.Load().clients.discovery = discovery.NewDiscoveryClientForConfigOrDie(cfg)
+			installedConn.Load().clients.dynamic = dynamic.NewForConfigOrDie(cfg)
 			clientMu.Unlock()
 			t.Cleanup(func() {
 				clientMu.Lock()
-				dynamicClient = prev
+				installedConn.Store(prev)
 				clientMu.Unlock()
 			})
 			t.Cleanup(ResetMetricsHistory)

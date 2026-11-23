@@ -440,12 +440,7 @@ func BlockClusterAccess(err error) {
 func dropClusterClients() {
 	clientMu.Lock()
 	defer clientMu.Unlock()
-	k8sConfig = nil
-	k8sClient = nil
-	discoveryClient = nil
-	dynamicClient = nil
-	activeClients = nil
-	activeClientGeneration = clientGenerationCounter.Add(1)
+	installedConn.Store(installedConnectionLocked(nil, &sharedKubernetesClients{generation: clientGenerationCounter.Add(1)}))
 }
 
 func contextOperationsBlockedErr() error {

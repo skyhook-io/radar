@@ -9,24 +9,11 @@ import (
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 )
 
-// swapGlobals temporarily sets the package-level k8sClient / k8sConfig /
-// dynamicClient globals for the duration of a test, restoring them on
-// cleanup. Tests run sequentially in the same package, so this is safe.
 func swapGlobals(t *testing.T, cfg *rest.Config) {
 	t.Helper()
-	clientMu.Lock()
-	prevCfg := k8sConfig
-	prevClient := k8sClient
-	k8sConfig = cfg
-	k8sClient = nil
-	clientMu.Unlock()
-
-	t.Cleanup(func() {
-		clientMu.Lock()
-		k8sConfig = prevCfg
-		k8sClient = prevClient
-		clientMu.Unlock()
-	})
+	prev := Current()
+	restoreTestConnection(&Connection{config: cfg})
+	t.Cleanup(func() { restoreTestConnection(prev) })
 }
 
 // TestClientFromContext_Impersonation verifies that a user on the context
@@ -57,20 +44,12 @@ func TestClientFromContext_Impersonation(t *testing.T) {
 }
 
 func TestConfigSnapshotKeepsContextAndConfigTogether(t *testing.T) {
-	clientMu.Lock()
-	previousConfig := k8sConfig
-	previousContext := contextName
-	k8sConfig = &rest.Config{Host: "https://cluster-a.invalid"}
-	contextName = "cluster-a"
-	clientMu.Unlock()
-	t.Cleanup(func() {
-		clientMu.Lock()
-		k8sConfig = previousConfig
-		contextName = previousContext
-		clientMu.Unlock()
-	})
+	prev := Current()
+	restoreTestConnection(&Connection{config: &rest.Config{Host: "https://cluster-a.invalid"}, contextName: "cluster-a"})
+	t.Cleanup(func() { restoreTestConnection(prev) })
 
-	config, snapshotContext := GetConfigSnapshot()
+	conn := Current()
+	config, snapshotContext := conn.ConfigCopy(), conn.ContextName()
 	if config == nil || config.Host != "https://cluster-a.invalid" || snapshotContext != "cluster-a" {
 		t.Fatalf("snapshot = (%+v, %q), want cluster-a config and context", config, snapshotContext)
 	}

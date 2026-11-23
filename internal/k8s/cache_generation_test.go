@@ -20,11 +20,11 @@ func TestInitResourceCache_ReplacementHasNewGeneration(t *testing.T) {
 		t.Fatalf("creating client: %v", err)
 	}
 	clientMu.Lock()
-	k8sClient = client
+	installedConn.Store(installedConnectionLocked(nil, &sharedKubernetesClients{clientset: client}))
 	clientMu.Unlock()
 	defer func() {
 		clientMu.Lock()
-		k8sClient = nil
+		installedConn.Store(nil)
 		clientMu.Unlock()
 	}()
 

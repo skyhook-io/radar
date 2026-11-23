@@ -238,11 +238,11 @@ func (c *Client) buildActionConfig(namespace string, user *pkgauth.User) (*actio
 
 func (c *Client) actionConfigForWrite(ctx context.Context, namespace string) (*action.Configuration, error) {
 	user := pkgauth.UserFromContext(ctx)
-	if bound, ok := k8s.BoundConnectionFrom(ctx); ok {
-		if bound.Config == nil {
+	if bound := k8s.ConnectionFrom(ctx); bound != nil {
+		if bound.Config() == nil {
 			return nil, fmt.Errorf("helm: admitted connection has no REST config")
 		}
-		return initActionConfig(newRESTConfigGetter(bound.Config, namespace, user), namespace, user)
+		return initActionConfig(newRESTConfigGetter(bound.Config(), namespace, user), namespace, user)
 	}
 	return c.getActionConfigForUser(namespace, user)
 }
@@ -267,17 +267,18 @@ func (c *Client) restClientGetter(namespace string, user *pkgauth.User) (generic
 	// An explicit restConfig (CLI install driver) wins and forces the
 	// restConfig getter path (kubeconfig empty), so Helm targets exactly the
 	// cluster the caller resolved.
+	conn := k8s.Current()
 	restConfig := c.restConfig
 	kubeconfig := c.kubeconfig
 	if restConfig != nil {
 		kubeconfig = ""
 	} else {
-		restConfig = k8s.GetConfig()
+		restConfig = conn.Config()
 	}
 	return buildRESTClientGetter(restClientGetterParams{
 		kubeconfig:     kubeconfig,
 		restConfig:     restConfig,
-		currentContext: k8s.GetContextName(),
+		currentContext: conn.ContextName(),
 		namespace:      namespace,
 		user:           user,
 	})

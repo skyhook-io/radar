@@ -20,6 +20,49 @@ import (
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
+// Test fixtures often supply only one client. Copy the bundle as well as the
+// connection so an already captured fixture keeps its original clients.
+func copyTestConnectionLocked() *Connection {
+	var clients sharedKubernetesClients
+	if installedConn.Load() != nil && installedConn.Load().clients != nil {
+		clients = *installedConn.Load().clients
+	}
+	c := installedConnectionLocked(installedConn.Load().Config(), &clients)
+	c.discovery.Store(installedConn.Load().Discovery())
+	return c
+}
+
+// swapTestConnectionLocked installs next in place of the test's connection.
+// Test helpers change one dependency of a connection the test may already
+// have admitted, so an admitted connection's ID and serving status move to the
+// replacement and bound requests see the change. clientMu must be held.
+func swapTestConnectionLocked(next *Connection) {
+	prev := installedConn.Load()
+	installedConn.Store(next)
+	connectionStatusMu.Lock()
+	if serving != nil && serving == prev && next != nil {
+		next.id = prev.id
+		serving = next
+	}
+	connectionStatusMu.Unlock()
+}
+
+func restoreTestConnection(c *Connection) {
+	clientMu.Lock()
+	swapTestConnectionLocked(c)
+	clientMu.Unlock()
+}
+
+func setTestDiscovery(d *ResourceDiscovery) func() {
+	clientMu.Lock()
+	prev := installedConn.Load()
+	next := copyTestConnectionLocked()
+	next.discovery.Store(d)
+	swapTestConnectionLocked(next)
+	clientMu.Unlock()
+	return func() { restoreTestConnection(prev) }
+}
+
 // InitLoadTestResourceCache creates a resource cache from a fake client using
 // the live path's deferred-informer split, so the critical/deferred phases and
 // the warmup window they drive actually exist. InitTestResourceCache syncs
@@ -254,9 +297,6 @@ func waitForInformerStatuses(rc *ResourceCache) {
 //
 // This is intended for integration tests only.
 func InitTestDynamicResourceCache(dynClient dynamic.Interface, resources []APIResource) error {
-	clientMu.Lock()
-	dynamicClient = dynClient
-	clientMu.Unlock()
 
 	// Bootstrap discovery from a fake clientset so NewResourceDiscovery has a
 	// non-nil discovery client; AddAPIResource then registers the test-only
@@ -268,23 +308,19 @@ func InitTestDynamicResourceCache(dynClient dynamic.Interface, resources []APIRe
 	fakeDisc := fake.Discovery()
 	core, err := k8score.NewResourceDiscovery(fakeDisc)
 	if err != nil {
-		clientMu.Lock()
-		dynamicClient = nil
-		clientMu.Unlock()
 		return err
 	}
 	for _, r := range resources {
 		core.AddAPIResource(r)
 	}
 
-	// Installing the singleton directly is what marks discovery initialized —
-	// InitResourceDiscovery returns early when it is already set. The binding
-	// marks it valid for whatever client the test environment has (usually
-	// nil): the singleton is served only while that binding stays current.
-	discoveryMu.Lock()
-	resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: core}
-	resourceDiscoveryClient = GetDiscoveryClient()
-	discoveryMu.Unlock()
+	clientMu.Lock()
+	next := copyTestConnectionLocked()
+	next.clients.dynamic = dynClient
+	next.clients.informerDynamic = nil
+	next.discovery.Store(&ResourceDiscovery{ResourceDiscovery: core})
+	swapTestConnectionLocked(next)
+	clientMu.Unlock()
 
 	return InitDynamicResourceCache(nil)
 }
@@ -330,9 +366,12 @@ func SetTestDynamicObjectReadSyncWait(d time.Duration) func() {
 // and clears the dynamic client. Pairs with InitTestDynamicResourceCache.
 func ResetTestDynamicState() {
 	ResetDynamicResourceCache()
-	ResetResourceDiscovery()
 	clientMu.Lock()
-	dynamicClient = nil
+	next := copyTestConnectionLocked()
+	next.discovery.Store(nil)
+	next.clients.dynamic = nil
+	next.clients.informerDynamic = nil
+	swapTestConnectionLocked(next)
 	clientMu.Unlock()
 }
 
@@ -344,6 +383,7 @@ func SetTestContextName(name string) string {
 	clientMu.Lock()
 	prev := contextName
 	contextName = name
+	swapTestConnectionLocked(copyTestConnectionLocked())
 	clientMu.Unlock()
 	return prev
 }
@@ -361,11 +401,7 @@ func SetTestResourceDiscovery(client discovery.DiscoveryInterface) (func(), erro
 	if err != nil {
 		return nil, err
 	}
-	ResetResourceDiscovery()
-	discoveryMu.Lock()
-	resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: core}
-	discoveryMu.Unlock()
-	return ResetResourceDiscovery, nil
+	return setTestDiscovery(&ResourceDiscovery{ResourceDiscovery: core}), nil
 }
 
 // SetTestLocalMode makes IsInCluster report local mode and returns a restore func.
@@ -433,8 +469,11 @@ func SetTestContextUsesExec(enabled bool) bool {
 // value so tests in other packages can restore it.
 func SetTestClient(c *kubernetes.Clientset) *kubernetes.Clientset {
 	clientMu.Lock()
-	prev := k8sClient
-	k8sClient = c
+	prev := installedConn.Load().Client()
+	next := copyTestConnectionLocked()
+	next.clients.clientset = c
+	next.clients.informerClientset = nil
+	swapTestConnectionLocked(next)
 	clientMu.Unlock()
 	return prev
 }
@@ -444,30 +483,35 @@ func SetTestClient(c *kubernetes.Clientset) *kubernetes.Clientset {
 // production builds, and returns a restore func.
 func SetTestInformerClient(request *kubernetes.Clientset, informer kubernetes.Interface) func() {
 	clientMu.Lock()
-	prevClient, prevActive := k8sClient, activeClients
-	k8sClient = request
-	activeClients = &sharedKubernetesClients{clientset: request, informerClientset: informer}
+	prev := installedConn.Load()
+	next := copyTestConnectionLocked()
+	next.clients.clientset, next.clients.informerClientset = request, informer
+	swapTestConnectionLocked(next)
 	clientMu.Unlock()
-	return func() {
-		clientMu.Lock()
-		k8sClient, activeClients = prevClient, prevActive
-		clientMu.Unlock()
-	}
+	return func() { restoreTestConnection(prev) }
 }
 
 // ReconnectTestClient installs c as a new connection under the current context
-// name, as a reconnect does, and returns a func that restores the previous one.
+// name, as a reconnect does: a connection that was serving is retired and the
+// new one admitted with a new ID. Returns a func that restores the previous state.
 func ReconnectTestClient(c *kubernetes.Clientset) func() {
+	restore := SnapshotTestConnection()
+	wasServing := ServingConnectionID() != ""
 	clientMu.Lock()
-	prevClient, prevGeneration := k8sClient, activeClientGeneration
-	k8sClient = c
-	activeClientGeneration = clientGenerationCounter.Add(1)
+	next := copyTestConnectionLocked()
+	next.clients.clientset, next.clients.informerClientset = c, nil
+	next.clients.generation = clientGenerationCounter.Add(1)
 	clientMu.Unlock()
-	return func() {
-		clientMu.Lock()
-		k8sClient, activeClientGeneration = prevClient, prevGeneration
-		clientMu.Unlock()
+	RetireServingConnection()
+	clientMu.Lock()
+	installedConn.Store(next)
+	clientMu.Unlock()
+	if wasServing {
+		status := GetConnectionStatus()
+		status.State = StateConnected
+		SetConnectionStatus(status)
 	}
+	return restore
 }
 
 // SetTestPolicyReportIndex publishes a PolicyReport index directly, bypassing
@@ -492,8 +536,10 @@ func ReconnectTestClient(c *kubernetes.Clientset) func() {
 // This is intended for integration tests only.
 func SetTestConfig(c *rest.Config) *rest.Config {
 	clientMu.Lock()
-	prev := k8sConfig
-	k8sConfig = c
+	prev := installedConn.Load().Config()
+	next := copyTestConnectionLocked()
+	next.config = c
+	swapTestConnectionLocked(next)
 	clientMu.Unlock()
 	return prev
 }
@@ -502,16 +548,19 @@ func SetTestConfig(c *rest.Config) *rest.Config {
 // handlers. SetTestConfig supplies its matching REST transport separately.
 func SetTestProfileSource(source, name, user string) func() {
 	clientMu.Lock()
-	oldBinding, oldName, oldFile, oldSourceName, oldSourceConfig, oldGeneration := contextBinding, contextName, activeSourceFile, activeSourceName, activeSourceConfig, activeClientGeneration
+	oldBinding, oldName, oldFile, oldSourceName, oldSourceConfig, previous := contextBinding, contextName, activeSourceFile, activeSourceName, activeSourceConfig, installedConn.Load()
 	contextBinding = sourceContextBinding(source, name)
 	contextName, activeSourceFile, activeSourceName = name, source, name
 	activeSourceConfig = clientcmdapi.NewConfig()
 	activeSourceConfig.Contexts[name] = &clientcmdapi.Context{AuthInfo: user}
-	activeClientGeneration++
+	next := copyTestConnectionLocked()
+	next.clients.generation++
+	swapTestConnectionLocked(next)
 	clientMu.Unlock()
 	return func() {
 		clientMu.Lock()
-		contextBinding, contextName, activeSourceFile, activeSourceName, activeSourceConfig, activeClientGeneration = oldBinding, oldName, oldFile, oldSourceName, oldSourceConfig, oldGeneration
+		contextBinding, contextName, activeSourceFile, activeSourceName, activeSourceConfig = oldBinding, oldName, oldFile, oldSourceName, oldSourceConfig
+		swapTestConnectionLocked(previous)
 		clientMu.Unlock()
 	}
 }
@@ -565,6 +614,7 @@ func ResetTestState() {
 	// Reset connection state
 	connectionStatusMu.Lock()
 	connectionStatus = ConnectionStatus{}
+	serving = nil
 	clusterLivenessProbe = defaultClusterLivenessProbe
 	connectionStatusMu.Unlock()
 
@@ -594,12 +644,7 @@ func ResetTestState() {
 	runtimeAuthChecksMu.Unlock()
 	activeContextOperations.Store(0)
 	clientMu.Lock()
-	k8sConfig = nil
-	k8sClient = nil
-	discoveryClient = nil
-	dynamicClient = nil
-	activeClients = nil
-	activeClientGeneration = 0
+	installedConn.Store(nil)
 	kubeconfigMode = ""
 	contextBinding = ""
 	activeSourceFile = ""
@@ -686,14 +731,12 @@ func SetTestPermissionProbeClient(onList func()) func() {
 	})
 
 	clientMu.Lock()
-	prev := dynamicClient
-	dynamicClient = client
+	prev := installedConn.Load()
+	next := copyTestConnectionLocked()
+	next.clients.dynamic, next.clients.informerDynamic = client, nil
+	swapTestConnectionLocked(next)
 	clientMu.Unlock()
-	return func() {
-		clientMu.Lock()
-		dynamicClient = prev
-		clientMu.Unlock()
-	}
+	return func() { restoreTestConnection(prev) }
 }
 
 // SetTestPermissionResult publishes a permission probe result as if a probe had
@@ -779,14 +822,13 @@ func SwapResourceCacheForTest(rc *ResourceCache) (restore func()) {
 // the frozen catalog, rather than reverting to an empty bootstrap catalog.
 func InitTestReplayClients(client dynamic.Interface, catalog discovery.DiscoveryInterface) error {
 	clientMu.Lock()
-	dynamicClient = client
+	next := copyTestConnectionLocked()
+	next.clients.dynamic, next.clients.informerDynamic = client, nil
+	swapTestConnectionLocked(next)
 	clientMu.Unlock()
 	if _, err := SetTestResourceDiscovery(catalog); err != nil {
 		return err
 	}
-	discoveryMu.Lock()
-	resourceDiscoveryClient = GetDiscoveryClient()
-	discoveryMu.Unlock()
 	return InitDynamicResourceCache(nil)
 }
 
@@ -796,7 +838,8 @@ func InitTestReplayClients(client dynamic.Interface, catalog discovery.Discovery
 func InstallTestServingConnection(name string, cfg *rest.Config, dyn dynamic.Interface, disc discovery.DiscoveryInterface) (string, error) {
 	RetireServingConnection()
 	clientMu.Lock()
-	k8sConfig, dynamicClient, contextName = cfg, dyn, name
+	contextName = name
+	installedConn.Store(installedConnectionLocked(cfg, &sharedKubernetesClients{dynamic: dyn}))
 	clientMu.Unlock()
 	if _, err := SetTestResourceDiscovery(disc); err != nil {
 		return "", err
@@ -809,24 +852,25 @@ func InstallTestServingConnection(name string, cfg *rest.Config, dyn dynamic.Int
 // clients and discovery, and returns a func that restores them, so a test
 // that installs or retires connections leaves the package as it found it.
 func SnapshotTestConnection() func() {
-	connectionStatusMu.Lock()
-	status, id, closed := connectionStatus, servingConnectionID, admissionsClosed
-	connectionStatusMu.Unlock()
+	// clientMu before connectionStatusMu, the order swapTestConnectionLocked uses.
 	clientMu.RLock()
-	cfg, dyn, name := k8sConfig, dynamicClient, contextName
+	connectionStatusMu.RLock()
+	status, admitted, closed := connectionStatus, serving, admissionsClosed
+	// The ID by value: re-admitting the same connection changes it in place.
+	admittedID := servingIDLocked()
+	previous, name := installedConn.Load(), contextName
+	connectionStatusMu.RUnlock()
 	clientMu.RUnlock()
-	discoveryMu.Lock()
-	disc := resourceDiscovery
-	discoveryMu.Unlock()
 	return func() {
-		connectionStatusMu.Lock()
-		connectionStatus, servingConnectionID, admissionsClosed = status, id, closed
-		connectionStatusMu.Unlock()
 		clientMu.Lock()
-		k8sConfig, dynamicClient, contextName = cfg, dyn, name
+		connectionStatusMu.Lock()
+		connectionStatus, serving, admissionsClosed = status, admitted, closed
+		if admitted != nil {
+			admitted.id = admittedID
+		}
+		installedConn.Store(previous)
+		contextName = name
+		connectionStatusMu.Unlock()
 		clientMu.Unlock()
-		discoveryMu.Lock()
-		resourceDiscovery = disc
-		discoveryMu.Unlock()
 	}
 }

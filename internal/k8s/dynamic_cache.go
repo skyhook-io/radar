@@ -38,7 +38,8 @@ var (
 func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 	var initErr error
 	dynamicCacheOnce.Do(func() {
-		directClient, client := getDynamicCacheClients()
+		conn := Current()
+		directClient, client := conn.Dynamic(), conn.InformerDynamicClient()
 		if client == nil {
 			initErr = fmt.Errorf("dynamic client not initialized")
 			return
@@ -73,7 +74,7 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 			}
 		}
 
-		discovery := GetResourceDiscovery()
+		discovery := conn.Discovery()
 		var sharedDiscovery *k8score.ResourceDiscovery
 		if discovery != nil {
 			sharedDiscovery = discovery.ResourceDiscovery
@@ -81,7 +82,7 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 
 		// Wiring-time capture — same rationale as InitResourceCache: a late
 		// callback after a context switch must stamp its own cluster.
-		recordClusterContext := ActiveClusterContext()
+		recordClusterContext := TimelineClusterContext(conn.ContextName())
 
 		core, err := k8score.NewDynamicResourceCache(k8score.DynamicCacheConfig{
 			RequiredWatchKinds:          relationshipWatchKinds(),
@@ -531,8 +532,9 @@ var supportedCRDFallbacks = []supportedCRDResource{
 }
 
 func RegisterSupportedCRDFallbacks() {
-	discovery := GetResourceDiscovery()
-	client := GetInformerDynamicClient()
+	conn := Current()
+	discovery := conn.Discovery()
+	client := conn.InformerDynamicClient()
 	if discovery == nil || client == nil {
 		return
 	}

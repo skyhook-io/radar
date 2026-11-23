@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -36,11 +37,9 @@ import (
 )
 
 var (
-	k8sClient                    *kubernetes.Clientset
-	k8sConfig                    *rest.Config
-	discoveryClient              *discovery.DiscoveryClient
-	dynamicClient                dynamic.Interface
-	activeClients                *sharedKubernetesClients
+	// installedConn is the connection whose clients are installed, also while
+	// it is still being built. Written under clientMu; read lock-free.
+	installedConn                atomic.Pointer[Connection]
 	initOnce                     sync.Once
 	initErr                      error
 	kubeconfigPath               string
@@ -192,6 +191,13 @@ func doInit(opts InitOptions) error {
 	// paths, registry, or clients.
 	clientMu.Lock()
 	defer clientMu.Unlock()
+	// A start that fails before its clients exist still names the context it
+	// resolved, as a dropped connection does, for readers that key settings by it.
+	defer func() {
+		if installedConn.Load() == nil {
+			installedConn.Store(installedConnectionLocked(nil, nil))
+		}
+	}()
 	initializationStarted = true
 
 	sources, err := resolveKubeconfigSources(opts, os.Getenv("KUBECONFIG"), homedir.HomeDir())
@@ -362,12 +368,7 @@ func doInit(opts InitOptions) error {
 		return err
 	}
 
-	k8sConfig = config
-	k8sClient = clients.clientset
-	discoveryClient = clients.discovery
-	dynamicClient = clients.dynamic
-	activeClients = clients
-	activeClientGeneration = clients.generation
+	installedConn.Store(installedConnectionLocked(config, clients))
 
 	return nil
 }
@@ -756,150 +757,35 @@ func isValidKubeconfig(path string) bool {
 
 // GetClient returns the K8s clientset
 func GetClient() *kubernetes.Clientset {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	return k8sClient
+	return Current().Client()
 }
 
-// GetClientInterface returns the clientset as kubernetes.Interface, or an
-// untyped nil when no client exists. Callers that store the result in an
-// interface must use this rather than GetClient(): a nil *Clientset wrapped in
-// an interface is non-nil, so "client == nil" guards downstream never fire and
-// the first API call panics.
-func GetClientInterface() kubernetes.Interface {
-	c := GetClient()
-	if c == nil {
-		return nil
-	}
-	return c
-}
+// GetClientInterface returns an untyped nil when no client exists, so callers
+// can safely test a kubernetes.Interface for nil.
+func GetClientInterface() kubernetes.Interface { return Current().ClientInterface() }
 
-// GetClientWithGeneration returns the clientset together with the generation
-// of the connection it belongs to. A reconnect under the same context name can
-// reach a different cluster; the generation still changes.
-func GetClientWithGeneration() (*kubernetes.Clientset, uint64) {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	return k8sClient, activeClientGeneration
-}
+// GetConfig returns the shared REST config. Do not mutate it.
+func GetConfig() *rest.Config { return Current().Config() }
 
-func GetClientSafetySnapshot() (*kubernetes.Clientset, string) {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	return k8sClient, contextBinding
-}
+func GetDiscoveryClient() *discovery.DiscoveryClient { return Current().DiscoveryClient() }
 
-// GetConfig returns the K8s rest config
-func GetConfig() *rest.Config {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	return k8sConfig
-}
+func GetDynamicClient() dynamic.Interface { return Current().Dynamic() }
 
-func GetConfigSnapshot() (*rest.Config, string) {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	if k8sConfig == nil {
-		return nil, TimelineClusterContext(contextName)
-	}
-	return rest.CopyConfig(k8sConfig), TimelineClusterContext(contextName)
-}
+func GetInformerClient() kubernetes.Interface { return Current().InformerClient() }
 
-// GetClusterClientSnapshot reads the active client, config, context name and
-// in-cluster mode together, so a concurrent context switch cannot pair one
-// cluster's API endpoint with another cluster's credentials.
-func GetClusterClientSnapshot() (kubernetes.Interface, *rest.Config, string, bool) {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	var client kubernetes.Interface
-	if k8sClient != nil {
-		client = k8sClient
-	}
-	return client, k8sConfig, contextName, isInClusterLocked()
-}
-
-// GetDiscoveryClient returns the K8s discovery client for API resource discovery
-func GetDiscoveryClient() *discovery.DiscoveryClient {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	return discoveryClient
-}
-
-// GetDynamicClient returns the K8s dynamic client for CRD access
-func GetDynamicClient() dynamic.Interface {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	return dynamicClient
-}
-
-// GetInformerClient returns the clientset the informer cache lists and watches
-// through. It shares GetClient()'s http.Client (transport, auth observer,
-// request deadlines) but has its own client-side rate limiter, so informer
-// LIST/WATCH traffic never delays request handlers. Falls back to GetClient()
-// when the active client set has no informer client, e.g. a test that installed
-// only the request client.
-func GetInformerClient() kubernetes.Interface {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	return informerClientForLocked(k8sClient)
-}
-
-// getCacheClients reads the request and informer clientsets in one critical
-// section, so a context switch between two reads cannot pair one cluster's
-// observer source with another cluster's informers.
-func getCacheClients() (*kubernetes.Clientset, kubernetes.Interface) {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	return k8sClient, informerClientForLocked(k8sClient)
-}
-
-// InformerClientFor maps a request clientset to the informer clientset of the
-// same client set, so a holder of GetClient() can tell whether the resource
-// cache (whose Client() is the informer client) describes its connection.
 func InformerClientFor(client kubernetes.Interface) kubernetes.Interface {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	if c, ok := client.(*kubernetes.Clientset); ok {
-		return informerClientForLocked(c)
+	if typed, ok := client.(*kubernetes.Clientset); ok {
+		if typed == nil {
+			return nil
+		}
+		if c := Current(); c.Client() == typed {
+			return c.InformerClient()
+		}
 	}
 	return client
 }
 
-func informerClientForLocked(client *kubernetes.Clientset) kubernetes.Interface {
-	if client == nil {
-		return nil
-	}
-	// Matching on the request client keeps an informer client from another
-	// client set (a previous cluster) from ever being handed out.
-	if activeClients != nil && activeClients.clientset == client && activeClients.informerClientset != nil {
-		return activeClients.informerClientset
-	}
-	return client
-}
-
-// GetInformerDynamicClient is GetInformerClient for the dynamic informer cache
-// and the startup list probes, falling back to GetDynamicClient().
-func GetInformerDynamicClient() dynamic.Interface {
-	_, informer := getDynamicCacheClients()
-	return informer
-}
-
-// getDynamicCacheClients reads the request and informer dynamic clients in one
-// critical section, for the same reason as getCacheClients.
-func getDynamicCacheClients() (request, informer dynamic.Interface) {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	if dynamicClient != nil && activeClients != nil && activeClients.dynamic == dynamicClient && activeClients.informerDynamic != nil {
-		return dynamicClient, activeClients.informerDynamic
-	}
-	return dynamicClient, dynamicClient
-}
-
-func GetDynamicClientSnapshot() (dynamic.Interface, string) {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	return dynamicClient, TimelineClusterContext(contextName)
-}
+func GetInformerDynamicClient() dynamic.Interface { return Current().InformerDynamicClient() }
 
 // GetKubeconfigPath returns the path to the kubeconfig file used
 func GetKubeconfigPath() string {
@@ -2168,18 +2054,13 @@ func installPreparedContext(p *preparedContext) {
 
 	clientMu.Lock()
 	newContextBinding := sourceSafetyBindingLocked(p.sourceFile, p.inFileName)
-	k8sConfig = p.config
-	k8sClient = p.clients.clientset
-	discoveryClient = p.clients.discovery
-	dynamicClient = p.clients.dynamic
-	activeClients = p.clients
-	activeClientGeneration = p.clients.generation
 	contextName = p.name
 	contextBinding = newContextBinding
 	activeSourceFile = p.sourceFile
 	activeSourceName = p.inFileName
 	activeSourceConfig = p.rawConfig.DeepCopy()
 	clusterName = p.kubeContext.Cluster
+	installedConn.Store(installedConnectionLocked(p.config, p.clients))
 	contextNamespace = p.kubeContext.Namespace
 	contextUsesExec = p.usesExec
 	totalContextCount = totalContexts
