@@ -37,7 +37,7 @@ describe('useIntegrationSidebars', () => {
     expect(calls.velero).toEqual({ apiResources: [], active: true })
     expect(calls.substrate).toEqual({ apiResources: [], active: 'actors' })
     expect(calls.agentSandbox).toEqual({ apiResources: [], namespaces: ['team'], active: true })
-    expect(calls.kagent).toEqual({ apiResources: [] })
+    expect(calls.kagent).toEqual({ apiResources: [], namespaces: ['team'] })
   })
 
   // An integration's sidebar hook added beside the others, or a view that

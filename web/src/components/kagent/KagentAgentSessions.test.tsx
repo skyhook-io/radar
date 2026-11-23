@@ -1,5 +1,8 @@
+// @vitest-environment jsdom
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
+import { act } from 'react'
+import { createRoot } from 'react-dom/client'
 import { describe, expect, it, vi } from 'vitest'
 import type { RadarUpgradeRequirement } from '@skyhook-io/k8s-ui'
 import { ApiError } from '../../api/client'
@@ -13,6 +16,8 @@ const state = vi.hoisted(() => ({
   isLoading: false,
   kagentUpgrade: null as RadarUpgradeRequirement | null,
 }))
+const navigate = vi.hoisted(() => vi.fn())
+vi.mock('../workspace/useWorkspaceNavigate', () => ({ useWorkspaceNavigate: () => navigate }))
 
 vi.mock('../../api/substrateWorkspace', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/substrateWorkspace')>()),
@@ -55,12 +60,32 @@ function reset() {
 }
 
 describe('KagentAgentSessions', () => {
+  it('returns from an attention session to the Agent page that opened it', async () => {
+    reset()
+    state.data = sessions()
+    const path = '/kagent/agents/kagent/k8s-helper?ctx=kind-demo&tab=sessions'
+    const host = document.createElement('div')
+    const root = createRoot(host)
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+    try {
+      await act(async () => root.render(<MemoryRouter initialEntries={[path]}><KagentAgentSessions agent={agent} /></MemoryRouter>))
+      const button = [...host.querySelectorAll('button')].find(b => b.textContent === 'session …c1f90ae7')
+      expect(button).toBeDefined()
+      act(() => button!.click())
+      expect(navigate).toHaveBeenCalledWith(expect.stringContaining('/substrate/actors/'), { state: {
+        returnLabel: 'Agent: k8s-helper', returnPath: path, returnCtx: 'kind-demo',
+      } })
+    } finally {
+      act(() => root.unmount())
+      vi.unstubAllGlobals()
+    }
+  })
   it('leads with every session, broken down by revision, and lists the ones needing attention', () => {
     reset()
     state.data = sessions()
     const html = render()
     expect(html).toContain('Sessions')
-    expect(html).toContain('3 sessions · 3 on the current revision, 0 on earlier ones')
+    expect(html).toContain('3 sessions · 3 on the new-sessions revision, 0 on other revisions')
     expect(html).toContain('1 needs attention')
     expect(html).toContain('session …c1f90ae7')
     expect(html).toContain('List its sessions')
@@ -73,7 +98,7 @@ describe('KagentAgentSessions', () => {
     reset()
     state.data = sessions({ sessions: counts({ suspended: 1 }), onEarlierRevisions: 1, needAttention: 0, attention: [],
       revisions: [{ revision, template: { atespace: 'kagent', name: 'k8s-helper-aa5e9426eb2e' }, newSessions: true, desired: true, sessions: 0 }] })
-    expect(render()).toContain('1 session · 0 on the current revision, 1 on earlier ones')
+    expect(render()).toContain('1 session · 0 on the new-sessions revision, 1 on other revisions')
   })
 
   it('reads counts as lower bounds when Substrate’s actors were not all read', () => {

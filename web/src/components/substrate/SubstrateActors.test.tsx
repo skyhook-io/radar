@@ -67,6 +67,17 @@ describe('Actors list', () => {
     expect(state.lastQuery?.state).toEqual(['resuming', 'suspending', 'reverting', 'deleting'])
   })
 
+  it('sends the kagent sessions union and namespace scope only with its capability', () => {
+    state.kagentSupport = 'supported'
+    state.actors = actors()
+    expect(screen('/substrate/actors?kagent=sessions&namespaces=research')).toContain('kagent sessions')
+    expect(state.lastQuery).toMatchObject({ kagent: 'sessions', namespaces: 'research' })
+    state.kagentSupport = 'unsupported'
+    screen('/substrate/actors?kagent=sessions')
+    expect(state.queryEnabled).toBe(false)
+    state.kagentSupport = 'supported'
+  })
+
   it('shows each actor’s state, reason, worker and what its newest snapshot resumes with', () => {
     state.actors = actors()
     const html = plain(screen())

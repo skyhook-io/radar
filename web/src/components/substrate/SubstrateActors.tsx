@@ -1,3 +1,4 @@
+import { shortRevision } from '@skyhook-io/k8s-ui/components/resources/resource-utils-kagent'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { useSearchParams } from 'react-router-dom'
@@ -77,14 +78,15 @@ export function sourcesNote(sources: ('snapshot' | 'atespace' | 'actor')[]): str
 const SCOPING_PARAMS = ['atespace', 'template', 'pool', 'q', 'worker', 'impact', 'node', 'nodeHas', 'agent', 'kagent'] as const
 
 /** The kagent filter's choices: which kagent sessions to list. */
-const KAGENT_FILTER_LABEL: Record<KagentAttribution['kind'], string> = {
+const KAGENT_FILTER_LABEL: Record<KagentAttribution['kind'] | 'sessions', string> = {
+  sessions: 'kagent sessions',
   agentSession: 'Agent sessions',
   sandbox: 'kagent sandboxes',
   unattributed: 'Not tied to an Agent',
 }
 const KAGENT_OPTIONS: SelectMenuOption[] = [
   { value: '', label: 'Any kagent link' },
-  ...(Object.keys(KAGENT_FILTER_LABEL) as KagentAttribution['kind'][]).map((k) => ({ value: k, label: KAGENT_FILTER_LABEL[k] })),
+  ...(Object.keys(KAGENT_FILTER_LABEL) as (KagentAttribution['kind'] | 'sessions')[]).map((k) => ({ value: k, label: KAGENT_FILTER_LABEL[k] })),
 ]
 
 /**
@@ -124,7 +126,7 @@ function AgentCell({ row, onAgent }: { row: SubstrateActorRow; onAgent?: (agent:
           {onAgent ? (
             <button type="button" onClick={(e) => { e.stopPropagation(); onAgent(agent) }} className="text-left text-accent-text hover:underline">{label}</button>
           ) : label}
-          {k.earlierRevision && <span className="block text-xs leading-4 text-theme-text-tertiary">earlier revision</span>}
+          <span className="block text-xs leading-4 text-theme-text-tertiary">{k.newSessions ? 'new sessions' : k.earlierRevision ? 'earlier revision' : k.desired ? 'desired revision' : 'revision'} · {shortRevision(k.revision) || 'not reported'}</span>
         </span>
       </Tooltip>
     )
@@ -366,9 +368,11 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
   const node = params.get('node') ?? ''
   const agent = params.get('agent') ?? ''
   const rawKagent = params.get('kagent')
-  const kagentKind = rawKagent && rawKagent in KAGENT_FILTER_LABEL ? (rawKagent as KagentAttribution['kind']) : undefined
+  const kagentKind = rawKagent && rawKagent in KAGENT_FILTER_LABEL ? (rawKagent as KagentAttribution['kind'] | 'sessions') : undefined
   // An older Radar ignores the agent and kagent filters and lists every actor, so they are sent only to one that serves them.
-  const kagentFeature = useRadarFeature('kagentAttribution')
+  const attributionFeature = useRadarFeature('kagentAttribution')
+  const summaryFeature = useRadarFeature('kagentSessionSummary')
+  const kagentFeature = kagentKind === 'sessions' ? summaryFeature : attributionFeature
   const kagentFilters = kagentFeature.support === 'supported'
   const kagentRequested = !!(agent || kagentKind)
   const sort = (params.get('sort') as ActorSort | null) ?? 'attention'
@@ -407,6 +411,7 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
     q: q || undefined,
     agent: kagentFilters ? agent || undefined : undefined,
     kagent: kagentFilters ? kagentKind : undefined,
+    namespaces: kagentKind === 'sessions' ? params.get('namespaces') ?? undefined : undefined,
     sort,
     limit: ACTORS_PAGE_SIZE,
     offset: page * ACTORS_PAGE_SIZE,
@@ -532,7 +537,7 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
             spellCheck={false}
           />
           {(showKagent || kagentRequested) && kagentFilters && (
-            <SelectMenu ariaLabel="kagent" value={kagentKind ?? ''} options={KAGENT_OPTIONS} onChange={(v) => update({ kagent: v })} className="min-w-[12rem]" />
+            <SelectMenu ariaLabel="kagent" value={kagentKind ?? ''} options={KAGENT_OPTIONS.filter(o => o.value !== 'sessions' || summaryFeature.support === 'supported')} onChange={(v) => update({ kagent: v })} className="min-w-[12rem]" />
           )}
           <SelectMenu ariaLabel="Sort" value={sort} options={SORT_OPTIONS} onChange={(v) => update({ sort: v === 'attention' ? '' : v })} className="min-w-[11rem]" />
           <FilterChips chips={chips} />

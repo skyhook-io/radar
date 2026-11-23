@@ -57,3 +57,13 @@ it('pages the fleet summary instead of treating its first 1000 Agents as the fle
   expect(next({ offset: 1000, rows: [1], total: 1001 })).toBeUndefined()
   expect(next({ offset: 0, rows: [], total: 1001 })).toBeUndefined()
 })
+
+
+it('negotiates the configuration and runtime capabilities independently', () => {
+  state.workspace = 'unsupported'
+  state.sessions = 'supported'
+  useKagentWorkspace([])
+  useKagentSessionSummary([])
+  expect(vi.mocked(useQuery).mock.calls.at(-1)![0].enabled).toBe(false)
+  expect(vi.mocked(useInfiniteQuery).mock.calls.at(-1)![0].enabled).toBe(true)
+})

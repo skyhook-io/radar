@@ -82,7 +82,7 @@ export function SubstrateView({ namespaces, selectedResource, onOpenResource, on
   const status = useSubstrateStatus(discovered)
   const workspace = useSubstrateWorkspace(discovered)
 
-  const sidebarWorkspace = useIntegrationSidebars({ apiResources, namespaces, substrate: { active: route.pool ? undefined : route.screen } })
+  const sidebarWorkspace = useIntegrationSidebars({ apiResources, namespaces, substrate: { active: route.pool || params.get('kagent') === 'sessions' ? undefined : route.screen } })
   const selectedKind = route.pool ? SUBSTRATE_WORKERPOOL_KIND : null
   const { drawerTarget, inspect } = useWorkspaceDrawer({ selectedResource, onOpenResource, onCloseResource })
   // On a local Radar, the file and name the context has there, and a saved

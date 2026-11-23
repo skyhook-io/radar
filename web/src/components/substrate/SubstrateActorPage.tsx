@@ -316,8 +316,11 @@ export function SubstrateActorPage({ actor, onOpenSubject }: { actor: SubstrateR
     return <NotInContext name={actor.name} what={`actor ${actor.atespace} / ${actor.name}`} pinnedContext={pin.pinned!} activeContext={pin.active} />
   }
 
+  const origin = location.state as { returnLabel?: string; returnPath?: string; returnCtx?: string } | null
+  const agentReturn = origin?.returnPath?.startsWith('/kagent/agents/') && origin.returnCtx === pin.active ? origin : null
   const breadcrumb = (
     <nav aria-label="Location" className="flex flex-wrap items-center gap-1.5 text-sm text-theme-text-tertiary">
+      {agentReturn && <><button type="button" onClick={() => navigate(agentReturn.returnPath!)} className="text-accent-text hover:underline">← {agentReturn.returnLabel}</button><span>/</span></>}
       <Bot className="h-3.5 w-3.5" />
       <button type="button" onClick={() => navigate(SUBSTRATE_PATH)} className="hover:text-theme-text-primary hover:underline">Agent Substrate</button>
       <span>/</span>

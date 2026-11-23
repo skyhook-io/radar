@@ -793,7 +793,8 @@ export interface SubstrateActorsQuery {
   /** namespace/name: the sessions attributed to that kagent Agent. Send only to a Radar with kagentAttribution: an older one ignores it. */
   agent?: string
   /** The kagent sessions of one kind. Send only to a Radar with kagentAttribution. */
-  kagent?: KagentAttribution['kind']
+  kagent?: KagentAttribution['kind'] | 'sessions'
+  namespaces?: string
   limit?: number
   offset?: number
 }

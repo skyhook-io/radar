@@ -1,3 +1,4 @@
+import { KagentView } from '../components/kagent/KagentView'
 import type { ComponentType } from 'react'
 import { AgentSandboxView } from '../components/agentsandbox/AgentSandboxView'
 import { CapacityView } from '../components/capacity/CapacityView'
@@ -7,6 +8,7 @@ import { VeleroView } from '../components/velero/VeleroView'
 import type { WorkspaceRoute, WorkspaceScreenProps } from './workspaceRoute'
 
 const screens: Record<WorkspaceRoute['id'], ComponentType<WorkspaceScreenProps>> = {
+  kagent: KagentView,
   cnpg: CNPGView,
   capacity: ({ onOpenResource }) => <CapacityView onOpenResource={onOpenResource} />,
   velero: VeleroView,

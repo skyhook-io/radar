@@ -169,3 +169,14 @@ it('registers one CRD renderer and one Schema tab for the exact group', () => {
   expect(resourceDetailSlots({ ...resource, kind: 'CustomResourceDefinition' }).extraTabs).toHaveLength(1)
   expect(resourceHosts.filter(host => host.renderers?.CustomResourceDefinitionRenderer).map(host => host.id)).toEqual(['crd'])
 })
+
+
+it('gates kagent destinations and composed summaries while keeping the generic renderer', () => {
+  const agent = { kind: 'Agent', group: 'api.kagent.dev', namespace: 'agents', name: 'helper' }
+  expect(resourceExpandedPath(agent, 'test', undefined, { kagentWorkspace: 'unsupported' })).toBeNull()
+  expect(resourceDetailRedirect(agent, new URLSearchParams(), { kagentWorkspace: 'unsupported' })).toBeNull()
+  expect(resourceDetailSlots(agent, [], { kagentWorkspace: 'unsupported' }).renderSummary).toBeUndefined()
+  expect(resourceDetailSlots(agent, [], { kagentWorkspace: 'supported' }).showYamlTab).toBe(false)
+  expect(resourceExpandedPath(agent, 'test', undefined, { kagentWorkspace: 'supported' })).toBe('/kagent/agents/agents/helper?ctx=test')
+  expect(resourceExpandedPath({ ...agent, group: 'agent.k8s.elastic.co' }, 'test', undefined, { kagentWorkspace: 'supported' })).toBeNull()
+})

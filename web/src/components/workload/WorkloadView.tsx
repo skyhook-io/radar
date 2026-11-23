@@ -1,5 +1,5 @@
 import { RelatedFindingsSection } from './RelatedFindingsSection'
-import { decorateResourceDiagnose, resourceDetailRedirect, resourceDetailSlots, resourceIssueDetail, resourceLogs, resourceRendererOverrides } from '../../integrations/resourceHosts'
+import { useResourceHostFeatures, decorateResourceDiagnose, resourceDetailRedirect, resourceDetailSlots, resourceIssueDetail, resourceLogs, resourceRendererOverrides } from '../../integrations/resourceHosts'
 import { ApplicationEvidenceAction } from '../application-evidence/ApplicationEvidenceAction'
 import { useMemo, useEffect, useCallback, useRef, useState, type ReactNode } from 'react'
 import { useQueries, useQueryClient } from '@tanstack/react-query'
@@ -199,6 +199,7 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
   const location = useLocation()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
+  const hostFeatures = useResourceHostFeatures()
 
   // Parse /workload/:kind/:ns/:name from pathname. Segments are URL-encoded by
   // buildWorkloadPath; names can also contain literal slashes (e.g. some CRD names),
@@ -255,7 +256,7 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
     )
   }
 
-  const detailPath = resourceDetailRedirect({ kind, group, namespace, name }, searchParams)
+  const detailPath = resourceDetailRedirect({ kind, group, namespace, name }, searchParams, hostFeatures)
   if (detailPath) return <Navigate replace to={detailPath} state={location.state} />
 
   return (
@@ -806,6 +807,7 @@ export function WorkloadView({
   // RBAC
   const canUpdateSecrets = useCanUpdateSecrets()
   const { features, karpenter } = useCapabilitiesContext()
+  const hostFeatures = useResourceHostFeatures()
   const { canPortForward } = useNamespacedCapabilities(namespace)
   const isLocalDeployment = useIsLocalDeployment()
   const showServingPortForward = canPortForward || !isLocalDeployment
@@ -1313,7 +1315,7 @@ export function WorkloadView({
             viewNamespaces={viewNamespaces}
           />
         )}
-        {...resourceDetailSlots({ kind: apiKind, group: identityGroup, namespace, name }, rest.extraTabs)}
+        {...resourceDetailSlots({ kind: apiKind, group: identityGroup, namespace, name }, rest.extraTabs, hostFeatures)}
         onSelectTopologyMember={batchExecution && batchKind === 'JobSet' ? handleSelectTopologyMember : undefined}
         renderExpandedOverview={({ kind: k, apiKind, namespace: ns, name: n, resource: res, leadContent }) =>
           supportsBatchExecution(k, apiKind, effectiveGroup, res?.apiVersion) &&
