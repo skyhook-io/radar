@@ -20,8 +20,8 @@ vi.mock('../../api/client', async (importActual) => ({
   useAutoPromConnect: () => undefined,
   usePrometheusStatus: () => ({ data: { connected, error: 'Backend query failed' } }),
   usePrometheusConnect: () => ({ mutate: vi.fn(), isPending: false }),
-  usePrometheusResourceMetrics: (_kind: string, _ns: string, _name: string, category: string, range: string) => {
-    ranges.push(range)
+  usePrometheusResourceMetrics: (_kind: string, _ns: string, _name: string, category: string, range: string, enabled = true) => {
+    if (enabled) ranges.push(range)
     return { data: metricsByCategory[category] ?? resourceMetrics }
   },
 }))
