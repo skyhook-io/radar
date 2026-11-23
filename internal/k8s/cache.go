@@ -407,7 +407,7 @@ func InitResourceCache(ctx context.Context) error {
 		// per-kind namespace scoping (some kinds may be cluster-wide while
 		// others are namespace-scoped to the same fallback namespace).
 		rbacStart := time.Now()
-		probe, probeErr := probeCachePermissions(ctx, freshResourcePermissions)
+		probe, probeErr := probeCachePermissions(ctx, conn.freshResourcePermissions)
 		logTiming("    Resource access probes: %v", time.Since(rbacStart))
 
 		if probeErr != nil {
@@ -420,7 +420,7 @@ func InitResourceCache(ctx context.Context) error {
 			return
 		}
 		// Only the result the informers are built from becomes the
-		// process-wide one; a retry the probe budget cut short is never
+		// connection's cached result; a retry the probe budget cut short is never
 		// published.
 		publishResourcePermissions(probe)
 		permResult := probe.result
@@ -2476,10 +2476,10 @@ func probeCachePermissions(ctx context.Context, probe func(context.Context, bool
 
 // freshResourcePermissions is the startup probe. It publishes nothing: startup
 // publishes the result it picks. A retry bypasses the cached result, which may
-// hold the very rejection being retried, without bumping the generation, so
+// hold the very rejection being retried, without replacing it, so
 // the first result can still be published if the retry is discarded.
-func freshResourcePermissions(ctx context.Context, retry bool) permissionProbe {
-	return probeResourcePermissions(ctx, retry, GetInformerDynamicClient)
+func (c *Connection) freshResourcePermissions(ctx context.Context, retry bool) permissionProbe {
+	return c.probeResourcePermissions(ctx, retry, c.InformerDynamicClient())
 }
 
 // credentialsRejectedEverywhere reports a probe in which no kind

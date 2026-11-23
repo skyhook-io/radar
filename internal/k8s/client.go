@@ -1342,19 +1342,12 @@ func fallbackNamespaceCandidatesLocked() []string {
 func SetNamespaceScopeOverride(ns string) {
 	clientMu.Lock()
 	namespaceScopeOverride = ns
+	Current().ResetPermissions()
 	clientMu.Unlock()
-	// After the write, and outside clientMu: the permissions cache retires a
-	// probe by comparing the generation it captured before reading its inputs,
-	// so retiring first would leave a probe holding the old scope under the new
-	// generation.
-	InvalidateResourcePermissionsCache()
 }
 
 func ClearNamespaceScopeOverride() {
-	clientMu.Lock()
-	namespaceScopeOverride = ""
-	clientMu.Unlock()
-	InvalidateResourcePermissionsCache()
+	SetNamespaceScopeOverride("")
 }
 
 func SetNamespaceScopePreferenceResolver(resolver func(contextName string) (string, bool)) {
@@ -1382,16 +1375,20 @@ func RestoreNamespaceScopePreference(contextName string) {
 func GetNamespaceScopeTarget() string {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
+	return namespaceScopeTargetLocked(contextName, contextNamespace)
+}
+
+func namespaceScopeTargetLocked(name, namespace string) string {
 	if namespaceScopeOverride != "" {
 		return namespaceScopeOverride
 	}
 	// --namespace is an *initial* filter, so it only pins the scope while we're on
 	// the context it was set for. After a cross-cluster switch the new context's own
 	// namespace takes over — the stale startup value must not follow across clusters.
-	if fallbackNamespace != "" && contextName == fallbackNamespaceContext {
+	if fallbackNamespace != "" && name == fallbackNamespaceContext {
 		return fallbackNamespace
 	}
-	return contextNamespace
+	return namespace
 }
 
 // ProspectiveNamespaceScopeTarget resolves what GetNamespaceScopeTarget would
@@ -1441,12 +1438,12 @@ func GetEffectiveNamespace() string {
 // capabilityProbeNamespace is where a capability check that is denied
 // cluster-wide is retried: the effective namespace, or for an install limited
 // by --rbac-namespaces, the first listed namespace.
-func capabilityProbeNamespace() string {
+func (c *Connection) capabilityProbeNamespace() string {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
 	switch {
-	case contextNamespace != "":
-		return contextNamespace
+	case c != nil && c.contextNamespace != "":
+		return c.contextNamespace
 	case fallbackNamespace != "":
 		return fallbackNamespace
 	case len(rbacNamespaces) > 0:
@@ -1511,7 +1508,32 @@ func (s NamespaceListSource) Complete() bool {
 // GetAccessibleNamespacesWithSource is GetAccessibleNamespaces plus the reason
 // the list is or isn't complete.
 func GetAccessibleNamespacesWithSource(ctx context.Context) ([]string, NamespaceListSource) {
-	client := GetClient()
+	c := boundOrCurrent(ctx)
+	return c.accessibleNamespaces(ctx, c.namespaceListInputs())
+}
+
+type namespaceListInputs struct {
+	candidates, granted []string
+	forceNamespace      bool
+	target              string
+}
+
+func (c *Connection) namespaceListInputs() namespaceListInputs {
+	if c == nil {
+		return namespaceListInputs{}
+	}
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	return namespaceListInputs{
+		candidates:     fallbackNamespaceCandidatesLocked(),
+		granted:        slices.Clone(rbacNamespaces),
+		forceNamespace: ForceNamespaceScope,
+		target:         namespaceScopeTargetLocked(c.contextName, c.contextNamespace),
+	}
+}
+
+func (c *Connection) accessibleNamespaces(ctx context.Context, inputs namespaceListInputs) ([]string, NamespaceListSource) {
+	client := c.Client()
 	if client == nil {
 		return nil, NamespaceListFailed
 	}
@@ -1536,36 +1558,23 @@ func GetAccessibleNamespacesWithSource(ctx context.Context) ([]string, Namespace
 		// namespace informer holds the same list.
 		// Only while the client that failed is still current: a LIST that
 		// outlived a context switch must not borrow the new cluster's cache.
-		if names, ok := cachedNamespaceNames(); ok && GetClient() == client {
+		if names, ok := cachedNamespaceNames(); ok && Current() == c {
 			log.Printf("[k8s] GetAccessibleNamespaces: listing namespaces failed: %v (using the synced namespace cache)", err)
 			return names, NamespaceListCache
 		}
 		source = NamespaceListFailed
 		log.Printf("[k8s] GetAccessibleNamespaces: non-auth error listing namespaces: %v (falling back to best-effort short list)", err)
 	}
-	if source == NamespaceListSeeded {
-		clientMu.RLock()
-		granted := slices.Clone(rbacNamespaces)
-		clientMu.RUnlock()
-		if len(granted) > 0 {
-			sort.Strings(granted)
-			return granted, NamespaceListRBAC
-		}
+	if source == NamespaceListSeeded && len(inputs.granted) > 0 {
+		sort.Strings(inputs.granted)
+		return inputs.granted, NamespaceListRBAC
 	}
 
-	// Cluster-wide list denied (or transient). Best-effort fallback so
-	// the picker isn't empty for a namespace-scoped user.
-	seen := map[string]bool{}
-	var fallback []string
-	clientMu.RLock()
-	candidates := append([]string{contextNamespace}, fallbackNamespaceCandidatesLocked()...)
-	for _, ns := range candidates {
-		if ns != "" && !seen[ns] {
-			seen[ns] = true
-			fallback = append(fallback, ns)
-		}
+	// Keep the picker usable when the namespace LIST cannot answer.
+	fallback := slices.Clone(inputs.candidates)
+	if c.contextNamespace != "" && !slices.Contains(fallback, c.contextNamespace) {
+		fallback = append(fallback, c.contextNamespace)
 	}
-	clientMu.RUnlock()
 	sort.Strings(fallback)
 	return fallback, source
 }
@@ -2060,8 +2069,8 @@ func installPreparedContext(p *preparedContext) {
 	activeSourceName = p.inFileName
 	activeSourceConfig = p.rawConfig.DeepCopy()
 	clusterName = p.kubeContext.Cluster
-	installedConn.Store(installedConnectionLocked(p.config, p.clients))
 	contextNamespace = p.kubeContext.Namespace
+	installedConn.Store(installedConnectionLocked(p.config, p.clients))
 	contextUsesExec = p.usesExec
 	totalContextCount = totalContexts
 	execPluginCommands = execCmds

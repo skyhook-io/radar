@@ -1661,24 +1661,20 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	// caps.Resources (resources field omitted from JSON) is the documented
 	// "no probe data yet" signal; the frontend has separate connection
 	// state to distinguish loading from RBAC restrictions.
-	if result := k8s.GetCachedPermissionResult(); result != nil {
+	result := k8s.GetCachedPermissionResult()
+	if result == nil && k8s.GetResourceCache() != nil {
+		conn := k8s.Current()
+		probed, current := conn.CheckResourcePermissions(r.Context())
+		result = k8s.GetCachedPermissionResult()
+		// A scope change can retire the probe's cache on the same connection.
+		// Only the no-client response is intentionally served without caching.
+		if result == nil && current && (conn.Client() == nil || conn.Dynamic() == nil) {
+			result = probed
+		}
+	}
+	if result != nil {
 		caps.Resources = result.Perms
 		caps.Visibility = k8s.BuildVisibilitySummary(result, r.URL.Query().Get("namespace"))
-	} else if k8s.GetResourceCache() != nil {
-		result, isCurrent := k8s.CheckResourcePermissions(r.Context())
-		// Prefer what the cache holds; fall back to the probe's own result only
-		// when it describes the cluster still in effect. A probe superseded by a
-		// context switch describes the cluster it probed, not the one being
-		// rendered, and rendering it would report the previous cluster's
-		// permissions - leaving resources unset is the "no probe data yet"
-		// signal documented above.
-		if cached := k8s.GetCachedPermissionResult(); cached != nil {
-			result, isCurrent = cached, true
-		}
-		if result != nil && isCurrent {
-			caps.Resources = result.Perms
-			caps.Visibility = k8s.BuildVisibilitySummary(result, r.URL.Query().Get("namespace"))
-		}
 	}
 
 	caps.Karpenter = s.karpenterCapability(r)

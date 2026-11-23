@@ -57,9 +57,6 @@ func TestCapabilitiesOmitsSupersededProbeResult(t *testing.T) {
 	if k8s.GetResourceCache() == nil {
 		t.Fatal("the shared fixture has no resource cache; the handler would skip the probe")
 	}
-	k8s.InvalidateResourcePermissionsCache()
-	t.Cleanup(k8s.InvalidateResourcePermissionsCache)
-	t.Cleanup(k8s.InvalidateCapabilitiesCache)
 
 	// Points at a dead port: the probe only needs a non-nil client, and the
 	// namespace discovery and capability checks that use it fail fast.
@@ -70,7 +67,7 @@ func TestCapabilitiesOmitsSupersededProbeResult(t *testing.T) {
 	// The first one invalidates the cache, retiring the probe mid-flight.
 	var invalidateOnce sync.Once
 	t.Cleanup(k8s.SetTestPermissionProbeClient(func() {
-		invalidateOnce.Do(k8s.InvalidateResourcePermissionsCache)
+		invalidateOnce.Do(k8s.Current().ResetPermissions)
 	}))
 
 	resp := get(t, "/api/capabilities")

@@ -296,7 +296,13 @@ func waitForInformerStatuses(rc *ResourceCache) {
 //
 // This is intended for integration tests only.
 func InitTestDynamicResourceCache(dynClient dynamic.Interface, resources []APIResource) error {
+	if err := installTestDynamicClient(dynClient, resources); err != nil {
+		return err
+	}
+	return InitDynamicResourceCache(nil)
+}
 
+func installTestDynamicClient(dynClient dynamic.Interface, resources []APIResource) error {
 	// Bootstrap discovery from a fake clientset so NewResourceDiscovery has a
 	// non-nil discovery client; AddAPIResource then registers the test-only
 	// GVRs (e.g. serving.knative.dev/Service) the test depends on. The fake
@@ -314,13 +320,23 @@ func InitTestDynamicResourceCache(dynClient dynamic.Interface, resources []APIRe
 	}
 
 	clientMu.Lock()
-	swapTestConnectionLocked(copyTestConnectionLocked())
-	installedConn.Load().clients.dynamic = dynClient
-	installedConn.Load().clients.informerDynamic = nil
-	installedConn.Load().discovery.Store(&ResourceDiscovery{ResourceDiscovery: core})
+	c := copyTestConnectionLocked()
+	c.clients.dynamic = dynClient
+	c.clients.informerDynamic = nil
+	c.discovery.Store(&ResourceDiscovery{ResourceDiscovery: core})
+	// A test may seed the same cluster fixture's permissions before adding
+	// its dynamic client. Carry only its published result to the new fixture.
+	if prev := Current(); prev != nil {
+		old := prev.permissions()
+		old.resourcePermsMu.RLock()
+		state := c.permissions()
+		state.cachedPermResult = clonePermissionCheckResult(old.cachedPermResult)
+		state.resourcePermsExpiry = old.resourcePermsExpiry
+		old.resourcePermsMu.RUnlock()
+	}
+	swapTestConnectionLocked(c)
 	clientMu.Unlock()
-
-	return InitDynamicResourceCache(nil)
+	return nil
 }
 
 // servedAPIResources is resources as a discovery endpoint lists them.
@@ -448,6 +464,7 @@ func SetTestContextNamespace(ns string) string {
 	clientMu.Lock()
 	prev := contextNamespace
 	contextNamespace = ns
+	swapTestConnectionLocked(copyTestConnectionLocked())
 	clientMu.Unlock()
 	return prev
 }
@@ -642,15 +659,6 @@ func ResetTestState() {
 	preCapiPromotion = nil
 	clientMu.Unlock()
 
-	// Reset capabilities cache
-	capabilitiesMu.Lock()
-	cachedCapabilities = nil
-	capabilitiesMu.Unlock()
-
-	// Reset resource permissions cache
-	resourcePermsMu.Lock()
-	invalidateResourcePermissionsCacheLocked()
-	resourcePermsMu.Unlock()
 	ForceNamespaceScope = false
 	SetFallbackNamespace("")
 	ClearNamespaceScopeOverride()
@@ -729,11 +737,14 @@ func SetTestPermissionProbeClient(onList func()) func() {
 // handlers fall through to their "no probe data yet" path and assert nothing
 // while appearing to cover the endpoint.
 func SetTestPermissionResult(result *PermissionCheckResult) func() {
-	resourcePermsMu.Lock()
-	prevResult, prevExpiry := cachedPermResult, resourcePermsExpiry
-	cachedPermResult = result
-	resourcePermsExpiry = time.Now().Add(time.Minute)
-	resourcePermsMu.Unlock()
+	clientMu.Lock()
+	prev := Current()
+	conn := copyTestConnectionLocked()
+	state := conn.permissions()
+	state.cachedPermResult = result
+	state.resourcePermsExpiry = time.Now().Add(time.Minute)
+	swapTestConnectionLocked(conn)
+	clientMu.Unlock()
 	cache := GetResourceCache()
 	var previousBound *PermissionCheckResult
 	if cache != nil {
@@ -742,12 +753,10 @@ func SetTestPermissionResult(result *PermissionCheckResult) func() {
 	}
 
 	return func() {
-		resourcePermsMu.Lock()
-		cachedPermResult, resourcePermsExpiry = prevResult, prevExpiry
 		if cache != nil {
 			cache.permissionResult = previousBound
 		}
-		resourcePermsMu.Unlock()
+		restoreTestConnection(prev)
 	}
 }
 
@@ -770,17 +779,11 @@ func SetTestConnectionStatus(status ConnectionStatus) func() {
 // for an identity that may not list CRDs cluster-wide: the dynamic cache then
 // probes fallbacks and watches each kind namespace by namespace.
 func InitTestDynamicResourceCacheWithFallbacks(dynClient dynamic.Interface, resources []APIResource, fallbacks []string) error {
-	resourcePermsMu.Lock()
-	prev, prevExpiry := cachedPermResult, resourcePermsExpiry
-	cachedPermResult = &PermissionCheckResult{Perms: &ResourcePermissions{}, ScopeCandidates: fallbacks}
-	resourcePermsExpiry = time.Now().Add(time.Hour)
-	resourcePermsMu.Unlock()
-	defer func() {
-		resourcePermsMu.Lock()
-		cachedPermResult, resourcePermsExpiry = prev, prevExpiry
-		resourcePermsMu.Unlock()
-	}()
-	return InitTestDynamicResourceCache(dynClient, resources)
+	if err := installTestDynamicClient(dynClient, resources); err != nil {
+		return err
+	}
+	defer SetTestPermissionResult(&PermissionCheckResult{Perms: &ResourcePermissions{}, ScopeCandidates: fallbacks})()
+	return InitDynamicResourceCache(nil)
 }
 
 func SetTestContextOperationInProgress(active bool) func() {
