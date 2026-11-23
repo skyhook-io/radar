@@ -26,6 +26,8 @@ func TestNoClusterGlobals(t *testing.T) {
 		"*github.com/skyhook-io/radar/pkg/k8score.MetricsHistoryStore", "github.com/skyhook-io/radar/pkg/k8score.MetricsHistoryStore",
 		"*ResourceCache", "connectionCache", "*connectionCache", "recreateStash", "*recreateStash", "recreateEntry", "*recreateEntry", "map[string]recreateEntry",
 		"*github.com/skyhook-io/radar/pkg/timeline.TombstoneCache", "github.com/skyhook-io/radar/pkg/timeline.TombstoneCache",
+		"connectionPolicyReports", "*connectionPolicyReports", "policyReportSnapshot", "*policyReportSnapshot", "PolicyReportStatus", "*PolicyReportStatus", "KyvernoStatus", "*KyvernoStatus",
+		"github.com/skyhook-io/radar/pkg/policyreports.Index", "*github.com/skyhook-io/radar/pkg/policyreports.Index",
 		"*PermissionCheckResult", "*Capabilities", "userCapEntry", "*userCapEntry", "userNSCapEntry", "*userNSCapEntry",
 	}
 	pkg, err := build.ImportDir(".", 0)
@@ -93,7 +95,9 @@ func TestNoClusterGlobals(t *testing.T) {
 		cacheType := isMap || typeName == "sync.Map" || typeName == "golang.org/x/sync/singleflight.Group"
 		lowerName := strings.ToLower(name)
 		cacheName := strings.Contains(lowerName, "capabilit") || strings.Contains(lowerName, "perm")
-		if strings.Contains(lowerName, "cachegeneration") || strings.Contains(lowerName, "cacheonce") || slices.Contains(denied, typeName) || wrapped || (cacheName && cacheType) {
+		policyState := strings.Contains(lowerName, "kyverno") || strings.Contains(lowerName, "policyreport") || strings.Contains(lowerName, "warmup")
+		policyCounter := policyState && (strings.HasSuffix(lowerName, "gen") || strings.HasSuffix(lowerName, "generation"))
+		if policyCounter || strings.Contains(lowerName, "cachegeneration") || strings.Contains(lowerName, "cacheonce") || slices.Contains(denied, typeName) || wrapped || (cacheName && cacheType) {
 			t.Errorf("%s: %s has type %s: cluster state belongs on *Connection", fset.Position(v.Pos()), name, typeName)
 		}
 	}
@@ -147,7 +151,7 @@ func checkConnectionMethodGetters(t *testing.T, fset *token.FileSet, files []*as
 	}
 
 	var pending []types.Object
-	for _, name := range []string{"Current", "installedConn", "boundOrCurrent"} {
+	for _, name := range []string{"Current", "installedConn", "BoundOrCurrent"} {
 		obj := scope.Lookup(name)
 		if obj == nil {
 			t.Fatalf("unknown installed-connection source %s", name)

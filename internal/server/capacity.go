@@ -400,7 +400,7 @@ func (s *Server) loadCapacityModel(w http.ResponseWriter, r *http.Request, ident
 	if !s.requireNodeVisibility(w, r) {
 		return capacityLoadResult{}, false
 	}
-	capability := s.karpenterCapability(r)
+	capability := s.karpenterCapability(r, k8s.BoundOrCurrent(r.Context()))
 	result.state = capability.State
 	if capability.State == capacityapi.IntegrationDenied {
 		if !softKarpenterDenial {

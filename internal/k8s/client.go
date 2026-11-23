@@ -1508,7 +1508,7 @@ func (s NamespaceListSource) Complete() bool {
 // GetAccessibleNamespacesWithSource is GetAccessibleNamespaces plus the reason
 // the list is or isn't complete.
 func GetAccessibleNamespacesWithSource(ctx context.Context) ([]string, NamespaceListSource) {
-	c := boundOrCurrent(ctx)
+	c := BoundOrCurrent(ctx)
 	return c.accessibleNamespaces(ctx, c.namespaceListInputs())
 }
 

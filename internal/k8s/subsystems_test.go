@@ -48,7 +48,6 @@ func TestTrackedSwitchDiscoveryWaitHasOwnBudget(t *testing.T) {
 			}
 			cache := GetResourceCache()
 			t.Cleanup(ResetResourceCache)
-			t.Cleanup(ResetPolicyReportIndex)
 			t.Cleanup(InvalidateServerVersionCache)
 
 			release := make(chan struct{})

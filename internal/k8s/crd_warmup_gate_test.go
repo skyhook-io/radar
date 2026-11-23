@@ -226,7 +226,6 @@ func TestServingCacheCompletesCRDWarmupAfterOperationCancel(t *testing.T) {
 	}
 	t.Cleanup(conn.closeDynamicResourceCache)
 	t.Cleanup(ResetMetricsHistory)
-	t.Cleanup(ResetPolicyReportIndex)
 	if err := InitAllSubsystems(t.Context(), func(string) {}); err != nil {
 		t.Fatal(err)
 	}
