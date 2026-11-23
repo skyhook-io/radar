@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 )
@@ -70,5 +71,32 @@ func BenchmarkExport(b *testing.B) {
 				b.ReportMetric(float64(len(body)), "bytes/file")
 			}
 		})
+	}
+}
+
+// BenchmarkExposure is the per-read exposure join on a large namespace: 2,000
+// Services (half exposing), 200 Ingresses and 5,000 Pods.
+func BenchmarkExposure(b *testing.B) {
+	var src routeSources
+	for i := range 2000 {
+		svc := service("big", fmt.Sprintf("svc-%d", i), corev1.ServiceTypeClusterIP, map[string]string{"app": fmt.Sprintf("app-%d", i%1000)})
+		if i%2 == 0 {
+			svc = withNodePort(service("big", fmt.Sprintf("svc-%d", i), corev1.ServiceTypeNodePort, map[string]string{"app": fmt.Sprintf("app-%d", i%1000)}))
+		}
+		src.services = append(src.services, svc)
+	}
+	for i := range 200 {
+		src.ingresses = append(src.ingresses, ingress("big", fmt.Sprintf("ing-%d", i), fmt.Sprintf("svc-%d", i*2+1), true))
+	}
+	pods := make([]*corev1.Pod, 5000)
+	for i := range pods {
+		pods[i] = appPod("big", fmt.Sprintf("app-%d", i%1000))
+	}
+	b.ResetTimer()
+	for b.Loop() {
+		x := mustIndex(src, nil, nil)
+		for _, p := range pods {
+			_ = x.mustRoutes(p)
+		}
 	}
 }

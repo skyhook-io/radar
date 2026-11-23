@@ -280,15 +280,16 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		// and rollback preview plus workload-to-release rollback routing 291 more.
 		// get_helm_chart (chart versions before install) adds 707.
 		// manage_workload pause and resume add 122.
-		// list_vulnerabilities (deployed-image CVE rollup) adds 1,085.
+		// list_vulnerabilities (deployed-image CVE rollup) adds 1,085; its
+		// exposure filter and sort order 218 more.
 		// query_prometheus's warning that Radar adds no cluster filter in a
 		// multi-cluster store adds 83.
 		// manage_cronjob adds 120 for an optional Job name.
-		// Measured 75,260; retain 33 bytes headroom.
+		// Measured 75,478; retain 33 bytes headroom.
 		// Every tool description and schema is sent to each MCP client and spends
 		// its context, so the cap makes any growth a deliberate choice.
 		// Opt-in Service curl and exec remain a separate allowance below.
-		maxCatalogBytes         = 75293
+		maxCatalogBytes         = 75511
 		maxToolDescriptionBytes = 3200
 	)
 
