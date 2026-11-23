@@ -155,14 +155,24 @@ func TestNeedsAttentionPoolNoRoom(t *testing.T) {
 		t.Error("a pool with free slots is not full")
 	}
 
-	// kagent's own memory setting is named only where memory binds and a
-	// kagent session runs on the pool's templates.
-	in.Workers[0].Capacity = &Resources{CPUMillicores: 8000, MemoryBytes: 2 << 30, Actors: 1000}
+	// Where a kagent session runs on the pool's templates, kagent makes them
+	// from its defaults: the step lowers those, not the templates.
 	in.Actors, in.ActorsRead = []Actor{{Atespace: "kagent", Name: "session-1", Template: agentTemplate.Ref(), State: StateSuspended, Kagent: &KagentSession{SessionID: "1"}}}, true
 	r = find(t, NeedsAttention(in), "poolNoRoom:agents/pool")
-	if !strings.Contains(r.Reading, "The most memory unbooked on such a worker is 960Mi; the template asks 1Gi.") || !strings.Contains(r.Reading, "config.runtimeDefaults.memory") {
-		t.Errorf("memory reading = %q", r.Reading)
+	if r.NextStep != "Add workers to the pool, or lower kagent's config.runtimeDefaults.cpu (and .memory), which sets every agent's limits." {
+		t.Errorf("kagent step = %q", r.NextStep)
 	}
+	in.Workers[0].Capacity = &Resources{CPUMillicores: 8000, MemoryBytes: 2 << 30, Actors: 1000}
+	r = find(t, NeedsAttention(in), "poolNoRoom:agents/pool")
+	if !strings.Contains(r.Reading, "The most memory unbooked on such a worker is 960Mi; the template asks 1Gi.") || !strings.Contains(r.NextStep, "config.runtimeDefaults.memory (and .cpu)") || len(strings.Fields(r.NextStep)) > 25 {
+		t.Errorf("memory row = %q / %q", r.Reading, r.NextStep)
+	}
+	// A standalone sandbox's template is not an Agent's: the generic step.
+	in.Actors[0].Kagent.Sandbox = true
+	if r = find(t, NeedsAttention(in), "poolNoRoom:agents/pool"); !strings.Contains(r.NextStep, "recreate them") {
+		t.Errorf("sandbox step = %q", r.NextStep)
+	}
+	in.Actors[0].Kagent.Sandbox = false
 
 	check := func(in Inputs) Check {
 		for _, c := range Checks(in) {

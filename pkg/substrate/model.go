@@ -144,7 +144,7 @@ type Actor struct {
 	// UpdateTime is Substrate's last change to the actor. The current state
 	// has held at least since then.
 	UpdateTime time.Time `json:"updateTime,omitzero"`
-	// Kagent is set when kagent runs this actor's session; see KagentSession.
+	// Kagent is set when kagent runs this actor: a chat session or a standalone sandbox; see KagentSession.
 	Kagent *KagentSession `json:"kagent,omitempty"`
 }
 

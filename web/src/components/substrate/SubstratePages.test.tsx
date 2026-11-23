@@ -207,6 +207,26 @@ describe('a template whose golden actor and actors were both killed over its mem
     expect(w.indexOf('3 of its actors are crashed')).toBeLessThan(w.indexOf('No golden snapshot'))
   })
 
+  it('offers no command, and keeps the server’s step, when kagent runs some of its crashed actors', () => {
+    const t = template('mcp-browser')
+    ;(t.template as any).atespace = 'sandbox-dev'
+    ;(t.template as any).golden = { state: 'failed', error: 'GoldenActorCrashed: golden actor crashed: killed for exceeding its memory limit', cause: 'memoryLimit' }
+    state.template = ok(t)
+    const step = 'Move the actors to a template with more memory, then revert them. A snapshot taken under the old template may restore only its volumes. Recover the kagent sessions among them through kagent instead (RevertSession, or delete the chat).'
+    const row = crashRow(2)
+    row.groups = [{ subject: { kind: 'ActorTemplate', atespace: 'sandbox-dev', name: 'mcp-browser' }, count: 2, cause: 'memoryLimit', nextStep: step, kagent: true } as any]
+    state.workspace = { ...workspace(), needsAttention: [row, goldenRow] } as any
+    try {
+      const w = words(render(<SubstrateTemplatePage template={{ atespace: 'sandbox-dev', name: 'mcp-browser' }} onOpenSubject={() => {}} />, '/substrate/templates/sandbox-dev/mcp-browser?ctx=cluster-B'))
+      expect(w).toContain(`Next step: ${step}`)
+      expect(w).not.toContain(move)
+      expect(w).not.toContain(revert)
+      expect(w).not.toContain('move the crashed actors to it, then revert them')
+    } finally {
+      state.workspace = undefined
+    }
+  })
+
   it('defines the golden snapshot where its banner first names it', () => {
     const t = template('mcp-browser')
     ;(t.template as any).golden = { state: 'failed', error: 'x' }

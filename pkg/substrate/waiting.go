@@ -196,7 +196,8 @@ func WorkerImpactOf(a Actor, w Worker, pods WorkerPods) *WorkerImpact {
 			step, command = "Nothing to do: the revert in progress returns it to its newest stored generation.", ""
 		default:
 			if isKagent(a) {
-				step, command = kagentLostStep, ""
+				sessions, sandboxes := kagentCounts([]Actor{a})
+				step, command = kagentStep(sessions, sandboxes, true), ""
 			}
 		}
 		return &WorkerImpact{Kind: ImpactRestarted,

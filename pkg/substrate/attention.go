@@ -86,8 +86,9 @@ type Tally struct {
 	NextStep    string `json:"nextStep,omitempty"`
 	Command     string `json:"command,omitempty"`
 	ThenCommand string `json:"thenCommand,omitempty"`
-	// Kagent: every actor in the group is a kagent session, which kagent
-	// recovers; NextStep then names kagent and no command is offered.
+	// Kagent: some actor in the group is kagent's (a session or a sandbox),
+	// which kagent recovers itself. No command is offered, since one command
+	// runs for every actor in the group, and NextStep names kagent.
 	Kagent bool `json:"kagent,omitempty"`
 }
 
@@ -363,10 +364,10 @@ func crashedActors(in Inputs) []Attention {
 	messages := map[string]int{}
 	// mixed holds the templates with a crash that is not a memory-limit kill.
 	mixed := map[string]bool{}
-	// kagentCrashed counts each template's crashed kagent sessions, which
+	// kagentCrashed holds each template's crashed actors kagent runs, which
 	// kagent recovers itself.
-	kagentCrashed := map[string]int{}
-	kagentTotal := 0
+	kagentCrashed := map[string][]Actor{}
+	var kagentAll []Actor
 	for _, a := range in.Actors {
 		if a.State != StateCrashed {
 			continue
@@ -388,8 +389,8 @@ func crashedActors(in Inputs) []Attention {
 			mixed[key] = true
 		}
 		if isKagent(a) {
-			kagentCrashed[key]++
-			kagentTotal++
+			kagentCrashed[key] = append(kagentCrashed[key], a)
+			kagentAll = append(kagentAll, a)
 		}
 		if msg == "" {
 			msg = "No crash message"
@@ -414,19 +415,29 @@ func crashedActors(in Inputs) []Attention {
 		} else {
 			groups[i].Cause, groups[i].NextStep, groups[i].Command, groups[i].ThenCommand = CauseMemoryLimit, CrashedMemoryNextStep, retemplateCommand, revertCommand
 		}
-		// kagent names one template per agent revision, so a template's
-		// actors are all kagent sessions or none.
-		if kagentCrashed[key] == groups[i].Count {
+		// A group's command runs for each of its actors, so it is offered
+		// only when kagent runs none of them.
+		if k := kagentCrashed[key]; len(k) > 0 {
+			sessions, sandboxes := kagentCounts(k)
 			groups[i].Kagent = true
-			groups[i].NextStep, groups[i].Command, groups[i].ThenCommand = kagentCrashedStep, "", ""
+			groups[i].Command, groups[i].ThenCommand = "", ""
+			if len(k) == groups[i].Count {
+				groups[i].NextStep = kagentStep(sessions, sandboxes, false)
+			} else {
+				if groups[i].NextStep == "" {
+					groups[i].NextStep = crashedNextStep
+				}
+				groups[i].NextStep += kagentAsideOf(sessions, sandboxes)
+			}
 		}
 	}
 	nextStep, command, then := crashedNextStep, revertCommand, ""
+	sessions, sandboxes := kagentCounts(kagentAll)
 	switch {
-	case kagentTotal == len(crashed):
-		nextStep, command = kagentCrashedStep, ""
-	case kagentTotal > 0:
-		nextStep += kagentAside
+	case len(kagentAll) == len(crashed):
+		nextStep, command = kagentStep(sessions, sandboxes, false), ""
+	case len(kagentAll) > 0:
+		nextStep += kagentAsideOf(sessions, sandboxes)
 	case allMemory:
 		nextStep, command, then = CrashedMemoryNextStep, retemplateCommand, revertCommand
 	}
@@ -969,14 +980,11 @@ func workerRows(in Inputs) []Attention {
 				// kagent recovers its own sessions; of the actors left to
 				// recover, name kagent for its sessions.
 				recoverable := slices.DeleteFunc(slices.Clone(lost), func(a Actor) bool { return a.State == StateDeleting || a.State == StateReverting })
-				if kagent := len(slices.DeleteFunc(slices.Clone(recoverable), func(a Actor) bool { return !isKagent(a) })); row.Command != "" && kagent > 0 {
-					switch {
-					case kagent == len(recoverable) && len(lost) == 1:
-						row.NextStep, row.Command = kagentLostStep, ""
-					case kagent == len(recoverable):
-						row.NextStep, row.Command = kagentLostAllStep, ""
-					default:
-						row.NextStep += kagentAside
+				if sessions, sandboxes := kagentCounts(recoverable); row.Command != "" && sessions+sandboxes > 0 {
+					if sessions+sandboxes == len(recoverable) {
+						row.NextStep, row.Command = kagentStep(sessions, sandboxes, true), ""
+					} else {
+						row.NextStep += kagentAsideOf(sessions, sandboxes)
 					}
 				}
 				row.Subject = workerActors(w, ImpactRestarted)
@@ -1126,21 +1134,27 @@ func noRoomRow(in Inputs, r PoolRow, name string, subject Subject) *Attention {
 	if r.Lacking != LackingCPU && r.room.ask.MemoryBytes > r.room.unbooked.MemoryBytes {
 		reading += fmt.Sprintf(" The most memory unbooked on such a worker is %s; %s %s.", bytesText(r.room.unbooked.MemoryBytes), asks, bytesText(r.room.ask.MemoryBytes))
 	}
-	if in.ActorsRead && r.Lacking != LackingCPU && kagentRunsOn(in, subject) {
-		reading += " kagent sessions run on these templates: kagent sets every agent's memory in its Helm value config.runtimeDefaults.memory."
-	}
 	limits := map[string]string{LackingCPU: "lower CPU limits", LackingMemory: "lower memory limits", LackingCPUAndMemory: "lower CPU and memory limits"}[r.Lacking]
+	step := fmt.Sprintf("Add workers to the pool, or give its templates %s (templates can't be edited: recreate them).", limits)
+	// kagent makes an agent's templates from its Helm values, so lowering
+	// them there is the change that sticks.
+	if in.ActorsRead && kagentSessionsRunOn(in, subject) {
+		values := map[string]string{LackingCPU: "config.runtimeDefaults.cpu (and .memory)", LackingMemory: "config.runtimeDefaults.memory (and .cpu)", LackingCPUAndMemory: "config.runtimeDefaults.cpu and .memory"}[r.Lacking]
+		step = fmt.Sprintf("Add workers to the pool, or lower kagent's %s, which sets every agent's limits.", values)
+	}
 	return &Attention{
 		ID: RulePoolNoRoom + ":" + r.Ref().Key(), Rule: RulePoolNoRoom, Severity: SeverityWarning,
 		Title:    fmt.Sprintf("%s has no %s left for another actor", name, what),
 		Reading:  reading,
-		NextStep: fmt.Sprintf("Add workers to the pool, or give its templates %s (templates can't be edited: recreate them).", limits),
+		NextStep: step,
 		Subject:  subject, Count: r.Placement.Workers.Active,
 	}
 }
 
-// kagentRunsOn reports a kagent session whose template can run on the pool.
-func kagentRunsOn(in Inputs, pool Subject) bool {
+// kagentSessionsRunOn reports a kagent chat session whose template can run
+// on the pool: an Agent's templates take their limits from kagent's
+// config.runtimeDefaults; a standalone sandbox's are not known to.
+func kagentSessionsRunOn(in Inputs, pool Subject) bool {
 	var labels map[string]string
 	for _, p := range KnownPools(in.Pools, in.Workers) {
 		if p.Ref.Namespace == pool.Namespace && p.Ref.Name == pool.Name {
@@ -1152,7 +1166,7 @@ func kagentRunsOn(in Inputs, pool Subject) bool {
 		runs[t.Ref()] = SelectorMatches(t.WorkerSelector, labels)
 	}
 	for _, a := range in.Actors {
-		if isKagent(a) && runs[a.Template] {
+		if isKagent(a) && !isKagentSandbox(a) && runs[a.Template] {
 			return true
 		}
 	}
@@ -1455,10 +1469,8 @@ func ActorAttention(rows []Attention, a Actor, templates []Template, now time.Ti
 		case RuleCrashedActors:
 			r.NextStep, r.Command, r.ThenCommand = crashedActorNextStep, revertCommand, ""
 			switch {
-			case isKagent(a) && IsMemoryLimitCrash(a):
-				r.NextStep, r.Command = kagentMemoryStep, ""
 			case isKagent(a):
-				r.NextStep, r.Command = kagentActorStep, ""
+				r.NextStep, r.Command = KagentActorStep(a, IsMemoryLimitCrash(a)), ""
 			case IsMemoryLimitCrash(a):
 				r.NextStep, r.Command, r.ThenCommand = CrashedMemoryActorStep(a), retemplateCommand, revertCommand
 			}
