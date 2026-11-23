@@ -21,7 +21,7 @@ func ReadSandboxTemplate(u *unstructured.Unstructured, now time.Time) Reading {
 	}
 	ready := findCondition(u, "Ready")
 	if !ready.found {
-		return notReported(u, now, KindSandboxTemplate)
+		return withEgress(notReported(u, now, KindSandboxTemplate), readEgress(u))
 	}
 	current := withEgress(readSandboxTemplateReady(u, ready, now), readEgress(u))
 	if observed, isStale := stale(u, ready); isStale {

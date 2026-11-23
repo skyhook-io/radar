@@ -21,6 +21,7 @@ import {
   readKagentModelConfig,
   readKagentRemoteMCPServer,
   redactKagentLiterals,
+  redactKagentURLsInText,
   shortRevision,
   type KagentReading,
   type KagentRef,
@@ -156,8 +157,10 @@ function ModelRow({ label, model, from, reads, onNavigate }: { label: string; mo
 }
 
 /** A referenced RemoteMCPServer's own status, or why it wasn't read. */
-function ServerStatus({ binding, read }: { binding: KagentToolBinding; read: KagentRelatedRead | undefined }) {
-  if (!binding.server || !isKagentServerRef(binding.server)) return null
+type MCPBinding = Extract<KagentToolBinding, { kind: 'mcp' }>
+
+function ServerStatus({ binding, read }: { binding: MCPBinding; read: KagentRelatedRead | undefined }) {
+  if (!isKagentServerRef(binding.server)) return null
   if (read?.state !== 'read') {
     const note = readNote(read, 'RemoteMCPServer')
     return note ? <Unread> · {note}</Unread> : null
@@ -167,7 +170,7 @@ function ServerStatus({ binding, read }: { binding: KagentToolBinding; read: Kag
 }
 
 /** Selected tools the controller's discovery doesn't list: kagent omits a tool the server doesn't offer, without a word. */
-function MissingTools({ binding, read }: { binding: KagentToolBinding; read: KagentRelatedRead | undefined }) {
+function MissingTools({ binding, read }: { binding: MCPBinding; read: KagentRelatedRead | undefined }) {
   if (read?.state !== 'read' || binding.tools.length === 0 || readKagentRemoteMCPServer(read.object).state !== 'ready') return null
   const offered = new Set(getKagentDiscoveredTools(read.object))
   const missing = binding.tools.filter(t => !offered.has(t))
@@ -181,10 +184,10 @@ function MissingTools({ binding, read }: { binding: KagentToolBinding; read: Kag
  * each agent runtime discovers again on every invocation and omits a
  * server's tools when its own attempt fails, which Radar can't see.
  */
-function failedServers(bindings: KagentToolBinding[], reads: Record<string, KagentRelatedRead> | undefined): { name: string; since?: string }[] {
+function failedServers(bindings: MCPBinding[], reads: Record<string, KagentRelatedRead> | undefined): { name: string; since?: string }[] {
   const out = new Map<string, string | undefined>()
   for (const b of bindings) {
-    if (!b.server || !isKagentServerRef(b.server)) continue
+    if (!isKagentServerRef(b.server)) continue
     const read = reads?.[kagentRefKey(b.server)]
     if (read?.state !== 'read') continue
     const state = readKagentRemoteMCPServer(read.object).state
@@ -217,8 +220,8 @@ export function KagentAgentRenderer({ data, onNavigate, related, sessions }: Kag
   const harness = related?.harness?.state === 'read' ? getKagentHarnessDeclarations(related.harness.object) : undefined
   const harnessUnread = harnessName ? readNote(related?.harness, 'Harness') : undefined
   const egress = getKagentAgentEgressPolicies(data)
-  const mcp = template?.tools.filter(t => t.server) ?? []
-  const subAgents = template?.tools.filter(t => t.subAgent) ?? []
+  const mcp = template?.tools.filter((t): t is MCPBinding => t.kind === 'mcp') ?? []
+  const subAgents = template?.tools.filter((t): t is Extract<KagentToolBinding, { kind: 'subAgent' }> => t.kind === 'subAgent') ?? []
 
   const failed = failedServers(mcp, related?.mcpServers)
 
@@ -239,7 +242,7 @@ export function KagentAgentRenderer({ data, onNavigate, related, sessions }: Kag
         <Property label="Workload image" value={rev.workloadImage
           ? <span className="font-mono text-xs break-all">{rev.workloadImage}</span>
           : <Unread>Not reported</Unread>} />
-        {warnings.length > 0 && <Property label="Warnings" value={<Bounded items={warnings} cap={WARNINGS_CAP} render={w => <span>{w}</span>} />} />}
+        {warnings.length > 0 && <Property label="Warnings" value={<Bounded items={warnings} cap={WARNINGS_CAP} render={w => <span>{redactKagentURLsInText(w)}</span>} />} />}
         <Property label="Conversation outcomes" value={<Unread>Not visible to Radar</Unread>} />
       </PropertyList>
       <p className="mt-3 text-xs text-theme-text-tertiary">
@@ -274,14 +277,14 @@ export function KagentAgentRenderer({ data, onNavigate, related, sessions }: Kag
     {(mcp.length > 0 || subAgents.length > 0 || (template?.skills.length ?? 0) > 0) && <Section title="Tools" icon={Wrench} defaultExpanded>
       <PropertyList>
         {mcp.length > 0 && <Property label="MCP servers" value={<Bounded items={mcp} render={binding => <span>
-          <RefValue ref={binding.server!} expectedKind="RemoteMCPServer" onNavigate={onNavigate} />
-          <ServerStatus binding={binding} read={isKagentServerRef(binding.server) ? related?.mcpServers?.[kagentRefKey(binding.server!)] : undefined} />
+          <RefValue ref={binding.server} expectedKind="RemoteMCPServer" onNavigate={onNavigate} />
+          <ServerStatus binding={binding} read={isKagentServerRef(binding.server) ? related?.mcpServers?.[kagentRefKey(binding.server)] : undefined} />
           <span className="text-theme-text-tertiary"> · {binding.tools.length === 0 ? 'every tool' : binding.tools.length <= 3 ? binding.tools.join(', ') : `${binding.tools.slice(0, 3).join(', ')} +${binding.tools.length - 3} more`}{binding.requireApproval ? ' · approval required' : ''}</span>
-          <MissingTools binding={binding} read={isKagentServerRef(binding.server) ? related?.mcpServers?.[kagentRefKey(binding.server!)] : undefined} />
+          <MissingTools binding={binding} read={isKagentServerRef(binding.server) ? related?.mcpServers?.[kagentRefKey(binding.server)] : undefined} />
         </span>} />} />}
         {subAgents.length > 0 && <Property label="Subagents" value={<Bounded items={subAgents} render={binding => <span>
-          {binding.subAgent!.name}
-          {binding.subAgent!.template && <span className="text-theme-text-tertiary"> · <ResourceLink kind="AgentTemplate" group={KAGENT_GROUP} namespace={namespace} name={binding.subAgent!.template} onNavigate={onNavigate} /></span>}
+          {binding.name}
+          {binding.template && <span className="text-theme-text-tertiary"> · <ResourceLink kind="AgentTemplate" group={KAGENT_GROUP} namespace={namespace} name={binding.template} onNavigate={onNavigate} /></span>}
         </span>} />} />}
         {(template?.skills.length ?? 0) > 0 && <Property label="Skills" value={<Bounded items={template!.skills} render={name => <span>{name}</span>} />} />}
       </PropertyList>

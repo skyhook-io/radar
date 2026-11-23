@@ -42,8 +42,10 @@ func ReadAgent(u *unstructured.Unstructured, now time.Time) Reading {
 		return deleting()
 	}
 	ready := findCondition(u, "Ready")
+	// kagent reports egress grants apart from readiness, so they are read
+	// even before Ready is.
 	if !ready.found {
-		return notReported(u, now, KindAgent)
+		return withEgress(notReported(u, now, KindAgent), readEgress(u))
 	}
 	current := withEgress(readAgentReady(u, ready, now), readEgress(u))
 	if observed, isStale := stale(u, ready); isStale {

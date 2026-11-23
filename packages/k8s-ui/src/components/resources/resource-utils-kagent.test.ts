@@ -68,8 +68,10 @@ describe('declared references', () => {
       skills: [{ name: 'triage', source: { oci: 'x' } }],
     }, 'agents')
     expect(d.model).toMatchObject({ namespace: 'shared', name: 'gpt' })
-    expect(d.tools[0]).toMatchObject({ server: { name: 'github', namespace: 'agents' }, tools: ['list_issues'], requireApproval: true })
-    expect(d.tools[1].subAgent).toEqual({ name: 'reviewer', template: 'reviewer' })
+    expect(d.tools[0]).toMatchObject({ kind: 'mcp', server: { name: 'github', namespace: 'agents' }, tools: ['list_issues'], requireApproval: true })
+    expect(d.tools[1]).toEqual({ kind: 'subAgent', name: 'reviewer', template: 'reviewer' })
+    // A binding that names no server names nothing.
+    expect(getKagentTemplateDeclarations({ tools: [{ mcp: { server: {} } }] }, 'agents').tools).toEqual([])
     expect(d.skills).toEqual(['triage'])
   })
   it('reads a Harness', () => {

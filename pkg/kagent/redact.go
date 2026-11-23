@@ -44,29 +44,38 @@ var (
 	// Words that mark an element as possibly holding a credential.
 	credentialText = regexp.MustCompile(`(?i)token|secret|password|passwd|apikey|api_key|api-key|authorization|bearer|credential|cookie|private_key|access_key`)
 	urlUserInfo    = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^/\s?#]*@`)
+	// user:password@host with no scheme, at the start of a word: the user has
+	// no slash or colon, the password no slash, so a registry path or digest
+	// does not match.
+	schemelessUserInfo = regexp.MustCompile(`(^|[\s"'(=,<])[A-Za-z0-9._~%!$&*+-]+:[^\s@/"']+@`)
 )
 
 // RedactURLsInText blanks the user info of every URL in free text, and its
 // query when the query names a credential (?api_key=, &sig=, ?token=). Free
 // text, such as a condition message quoting a discovery error, keeps
-// ordinary query strings.
+// ordinary query strings. A scheme-less user:password@host (an Ollama host
+// can be written so) loses its user info too; it needs the colon, so an
+// e-mail address or an image digest (repo@sha256:…) is left alone.
 func RedactURLsInText(text string) string {
-	if !strings.Contains(text, "://") {
-		return text
-	}
-	return urlInText.ReplaceAllStringFunc(text, func(match string) string {
-		// Sentence punctuation after a URL is not part of it.
-		u := strings.TrimRight(match, ".,;:!?)]}")
-		trailing := match[len(u):]
-		stripped := StripURLCredentials(u)
-		if q := strings.IndexAny(u, "?#"); q >= 0 && !sensitiveQuery.MatchString(u[q:]) {
-			// Keep an ordinary query: restore it after the user info is gone.
-			if s := strings.IndexAny(stripped, "?#"); s >= 0 {
-				stripped = stripped[:s] + u[q:]
+	if strings.Contains(text, "://") {
+		text = urlInText.ReplaceAllStringFunc(text, func(match string) string {
+			// Sentence punctuation after a URL is not part of it.
+			u := strings.TrimRight(match, ".,;:!?)]}")
+			trailing := match[len(u):]
+			stripped := StripURLCredentials(u)
+			if q := strings.IndexAny(u, "?#"); q >= 0 && !sensitiveQuery.MatchString(u[q:]) {
+				// Keep an ordinary query: restore it after the user info is gone.
+				if s := strings.IndexAny(stripped, "?#"); s >= 0 {
+					stripped = stripped[:s] + u[q:]
+				}
 			}
-		}
-		return stripped + trailing
-	})
+			return stripped + trailing
+		})
+	}
+	if strings.Contains(text, "@") {
+		text = schemelessUserInfo.ReplaceAllString(text, "${1}"+Redacted+"@")
+	}
+	return text
 }
 
 // ArgRedacted replaces a command or argument element that may hold a

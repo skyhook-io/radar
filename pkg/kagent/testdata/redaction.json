@@ -370,5 +370,35 @@
    "curl",
    "https://mcp.example/mcp?[REDACTED]"
   ]
+ },
+ {
+  "fn": "text",
+  "in": "dial tcp: lookup user:hunter2@ollama.agents.svc:11434: no such host",
+  "want": "dial tcp: lookup [REDACTED]@ollama.agents.svc:11434: no such host"
+ },
+ {
+  "fn": "text",
+  "in": "Post \"user:hunter2@ollama:11434/api/chat\": EOF",
+  "want": "Post \"[REDACTED]@ollama:11434/api/chat\": EOF"
+ },
+ {
+  "fn": "text",
+  "in": "pulling ghcr.io/acme/agent@sha256:0123abcd: not found",
+  "want": "pulling ghcr.io/acme/agent@sha256:0123abcd: not found"
+ },
+ {
+  "fn": "text",
+  "in": "image repo@sha256:0123abcd is pinned",
+  "want": "image repo@sha256:0123abcd is pinned"
+ },
+ {
+  "fn": "text",
+  "in": "ask admin@example.com for access",
+  "want": "ask admin@example.com for access"
+ },
+ {
+  "fn": "text",
+  "in": "registry localhost:5000/agent@sha256:0123 missing",
+  "want": "registry localhost:5000/agent@sha256:0123 missing"
  }
 ]

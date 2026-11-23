@@ -188,7 +188,8 @@ function agentFailed(condition: string, c: Condition, rev: KagentAgentRevisions)
 export function readKagentAgent(agent: any, _now = Date.now()): KagentReading {
   if (agent?.metadata?.deletionTimestamp) return DELETING
   const ready = findCondition(agent, 'Ready')
-  if (!ready.found) return NOT_REPORTED
+  // Mirrors pkg/kagent: egress grants are read even before Ready is.
+  if (!ready.found) return withEgress(NOT_REPORTED, readEgress(agent))
   const current = withEgress(readAgentReady(agent, ready), readEgress(agent))
   const observed = staleGeneration(agent, ready)
   return observed !== undefined ? staleOf(current, observed) : current
@@ -201,7 +202,7 @@ export function readKagentAgent(agent: any, _now = Date.now()): KagentReading {
 export function readKagentSandboxTemplate(template: any, _now = Date.now()): KagentReading {
   if (template?.metadata?.deletionTimestamp) return DELETING
   const ready = findCondition(template, 'Ready')
-  if (!ready.found) return NOT_REPORTED
+  if (!ready.found) return withEgress(NOT_REPORTED, readEgress(template))
   let current: KagentReading
   if (ready.status === 'True') current = { state: 'ready', tone: 'healthy', text: 'Ready', summary: 'Ready to start sandboxes', ...fromCondition('Ready', ready) }
   else if (ready.status !== 'False') current = { state: 'unknown', tone: 'unknown', text: 'Unknown', summary: "kagent can't tell whether the template is ready", ...fromCondition('Ready', ready) }
@@ -349,13 +350,16 @@ export function isKagentServerRef(ref: KagentRef | undefined): boolean {
   return !!ref && ref.group === KAGENT_GROUP && ref.kind === 'RemoteMCPServer'
 }
 
-export interface KagentToolBinding {
-  server?: KagentRef
-  /** The selected tools; empty exposes every tool the server has. */
-  tools: string[]
-  requireApproval: boolean
-  subAgent?: { name: string; template: string }
-}
+/** A tool binding: tools from an MCP server, or a subagent compiled from an AgentTemplate. */
+export type KagentToolBinding =
+  | {
+      kind: 'mcp'
+      server: KagentRef
+      /** The selected tools; empty exposes every tool the server has. */
+      tools: string[]
+      requireApproval: boolean
+    }
+  | { kind: 'subAgent'; name: string; template: string }
 
 export interface KagentTemplateDeclarations {
   model?: KagentRef
@@ -369,10 +373,13 @@ export function getKagentTemplateDeclarations(spec: any, namespace: string): Kag
   const tools: any[] = Array.isArray(spec?.tools) ? spec.tools : []
   return {
     model: kagentReference(spec?.modelConfig, 'ModelConfig', namespace),
-    tools: tools.map((t: any): KagentToolBinding => {
-      if (t?.subAgent) return { tools: [], requireApproval: false, subAgent: { name: str(t.subAgent.name), template: str(t.subAgent.templateRef?.name) } }
+    tools: tools.flatMap((t: any): KagentToolBinding[] => {
+      if (t?.subAgent) return [{ kind: 'subAgent', name: str(t.subAgent.name), template: str(t.subAgent.templateRef?.name) }]
+      const server = kagentReference(t?.mcp?.server, 'RemoteMCPServer', namespace)
+      // kagent's schema requires the server's name; a binding without one names nothing.
+      if (!server) return []
       const selected = Array.isArray(t?.mcp?.tools) ? t.mcp.tools.filter((x: unknown) => typeof x === 'string' && x) : []
-      return { server: kagentReference(t?.mcp?.server, 'RemoteMCPServer', namespace), tools: selected, requireApproval: t?.mcp?.requireApproval === true }
+      return [{ kind: 'mcp', server, tools: selected, requireApproval: t?.mcp?.requireApproval === true }]
     }),
     skills: (Array.isArray(spec?.skills) ? spec.skills : []).map((s: any) => str(s?.name)).filter(Boolean),
     plugins: Array.isArray(spec?.plugins) ? spec.plugins.length : 0,
@@ -442,9 +449,15 @@ export function stripKagentURLCredentials(raw: string): string {
 
 const URL_IN_TEXT = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi
 const SENSITIVE_QUERY = /(?:^|[?&#;])[^=&#]*(?:key|token|sig|secret|passw|auth|credential|session)[^=&#]*=/i
-/** Mirrors pkg/kagent RedactURLsInText: user info of every URL in text, and a query that names a credential. */
+const SCHEMELESS_USER_INFO = /(^|[\s"'(=,<])[A-Za-z0-9._~%!$&*+-]+:[^\s@/"']+@/g
+
+/** Mirrors pkg/kagent RedactURLsInText: user info of every URL in text, a query that names a credential, and a scheme-less user:password@host. */
 export function redactKagentURLsInText(text: string): string {
-  if (!text.includes('://')) return text
+  if (text.includes('://')) text = redactURLs(text)
+  return text.includes('@') ? text.replace(SCHEMELESS_USER_INFO, `$1${REDACTED}@`) : text
+}
+
+function redactURLs(text: string): string {
   return text.replace(URL_IN_TEXT, (match) => {
     const u = match.replace(/[.,;:!?)\]}]+$/, '')
     const trailing = match.slice(u.length)

@@ -126,4 +126,13 @@ describe('KagentAgentRenderer', () => {
     expect(render(<KagentAgentRenderer data={blocked} />)).toContain('Latest change blocked')
     expect(render(<KagentAgentRenderer data={agent({ template: { ref: { name: 'base' } } }, [cond('Ready', 'True', 'Ready')])} />)).toContain('Ready to start sessions')
   })
+
+  it('redacts URL credentials in kagent’s warnings', () => {
+    const html = render(<KagentAgentRenderer data={agent({ template: { ref: { name: 'base' } } }, [cond('Ready', 'True', 'Ready')], {
+      warnings: ['tool server https://user:FAKEPASS@mcp.example/mcp?token=FAKEQUERY exposes every tool'],
+    })} />)
+    expect(html).not.toContain('FAKEPASS')
+    expect(html).not.toContain('FAKEQUERY')
+    expect(html).toContain('https://[REDACTED]@mcp.example/mcp?[REDACTED]')
+  })
 })

@@ -66,7 +66,7 @@ export function KagentAgentRenderer({ data, onNavigate }: { data: any; onNavigat
   const templateSpec = data?.spec?.template?.inline ?? template.data?.spec
   const declared = templateSpec ? getKagentTemplateDeclarations(templateSpec, namespace) : undefined
   const harnessModels = harness.data ? getKagentHarnessDeclarations(harness.data) : undefined
-  const mcpServers = useRelatedReads('remotemcpservers', kagentServersToRead(declared?.tools.map(t => t.server) ?? []))
+  const mcpServers = useRelatedReads('remotemcpservers', kagentServersToRead(declared?.tools.flatMap(t => (t.kind === 'mcp' ? [t.server] : [])) ?? []))
   const modelConfigs = useRelatedReads('modelconfigs', kagentModelsToRead([declared?.model, harnessModels?.summarizerModel, harnessModels?.memoryModel]))
   return (
     <BaseKagentAgentRenderer

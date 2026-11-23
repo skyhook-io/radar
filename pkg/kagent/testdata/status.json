@@ -3187,5 +3187,60 @@
       "text": "Failed",
       "tone": "alert"
     }
+  },
+  {
+    "name": "agent egress not applied before Ready is reported",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "Agent",
+      "metadata": {
+        "creationTimestamp": "2026-11-20T11:58:00Z",
+        "generation": 2,
+        "name": "triage",
+        "namespace": "agents"
+      },
+      "spec": {
+        "harnessRef": {
+          "name": "default"
+        },
+        "template": {
+          "ref": {
+            "name": "triage"
+          }
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "agents/github: egresspolicies.api.kagent.dev \"github\" not found",
+            "observedGeneration": 2,
+            "reason": "EgressPolicyNotFound",
+            "status": "False",
+            "type": "EgressPoliciesApplied"
+          }
+        ],
+        "observedGeneration": 2
+      }
+    },
+    "want": {
+      "egress": "Egress not applied: agents/github: egresspolicies.api.kagent.dev \"github\" not found",
+      "findings": [
+        {
+          "action": "Create the EgressPolicy or remove it from egressPolicyRefs.",
+          "fingerprint": "egress",
+          "kagentReason": "EgressPolicyNotFound",
+          "message": "Egress not applied: agents/github: egresspolicies.api.kagent.dev \"github\" not found.",
+          "reason": "KagentEgressNotApplied",
+          "severity": "warning"
+        }
+      ],
+      "reads": true,
+      "state": "notReported",
+      "summary": "kagent hasn't reported status yet",
+      "text": "Not reported",
+      "tone": "unknown"
+    }
   }
 ]
