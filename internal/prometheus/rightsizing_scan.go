@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -532,7 +533,9 @@ func queryRightsizingScanBatch(ctx context.Context, client rightsizingScanQuerie
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			result, err := client.QueryRange(ctx, queries[key], start, end, rightsizingStep)
+			result, err := runScanQuery(ctx, batch, scope, key, queries[key], func(ctx context.Context, query string) (*prom.QueryResult, error) {
+				return client.QueryRange(ctx, query, start, end, rightsizingStep)
+			})
 			<-sem
 			mu.Lock()
 			defer mu.Unlock()
@@ -565,7 +568,7 @@ func queryRightsizingScanBatch(ctx context.Context, client rightsizingScanQuerie
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			result, err := client.Query(ctx, queries[key])
+			result, err := runScanQuery(ctx, batch, scope, key, queries[key], client.Query)
 			<-sem
 			mu.Lock()
 			defer mu.Unlock()
@@ -582,6 +585,33 @@ func queryRightsizingScanBatch(ctx context.Context, client rightsizingScanQuerie
 	}
 	wg.Wait()
 	return out
+}
+
+// Every output series is grouped by workload. Splitting on whole workloads keeps
+// ratios and historical safety evidence intact, and concatenating the disjoint
+// results preserves the original query. Only the oversized family needs splitting.
+func runScanQuery(ctx context.Context, batch []scanWorkload, scope ViewScope, family, query string, run func(context.Context, string) (*prom.QueryResult, error)) (*prom.QueryResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(query) <= prom.MaxWorkloadQueryBytes {
+		return run(ctx, query)
+	}
+	if len(batch) <= 1 {
+		return nil, prom.ErrWorkloadQueryTooLarge
+	}
+	var combined prom.QueryResult
+	for part := range slices.Chunk(batch, (len(batch)+1)/2) {
+		smaller := buildRightsizingScanQueries(part, scope)
+		result, err := runScanQuery(ctx, part, scope, family, smaller[family], run)
+		if err != nil {
+			return nil, err
+		}
+		if result != nil {
+			combined.Series = append(combined.Series, result.Series...)
+		}
+	}
+	return &combined, nil
 }
 
 func buildRightsizingScanQueries(batch []scanWorkload, scope ViewScope) map[string]string {
