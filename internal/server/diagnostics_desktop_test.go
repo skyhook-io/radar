@@ -370,7 +370,9 @@ func TestDiagnosticsWhileKubeconfigWriterIsBusy(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &snap); err != nil {
 		t.Fatal(err)
 	}
-	if snap.Kubeconfig != nil || snap.APIDiscovery != nil || snap.EventPipeline == nil || len(snap.EventPipeline.RecentDrops) != 0 || snap.Runtime == nil {
+	// Discovery lives on the connection, read without the kubeconfig lock, so it
+	// is reported even while a kubeconfig writer holds that lock.
+	if snap.Kubeconfig != nil || snap.APIDiscovery == nil || snap.EventPipeline == nil || len(snap.EventPipeline.RecentDrops) != 0 || snap.Runtime == nil {
 		t.Fatalf("incomplete diagnostics while kubeconfig is busy: %+v", snap)
 	}
 }

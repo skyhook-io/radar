@@ -395,7 +395,8 @@ func InitResourceCache(ctx context.Context) error {
 		return err
 	}
 	once.Do(func() {
-		client, informerClient := getCacheClients()
+		conn := Current()
+		client, informerClient := conn.Client(), conn.InformerClient()
 		if client == nil {
 			initErr = fmt.Errorf("cannot create resource cache: k8s client not initialized")
 			return
@@ -439,7 +440,7 @@ func InitResourceCache(ctx context.Context) error {
 		// cluster's name — permanently, under SQLite storage. Closing over the
 		// wiring-time value keeps late events truthfully attributed to the
 		// cluster they came from.
-		recordClusterContext := ActiveClusterContext()
+		recordClusterContext := TimelineClusterContext(conn.ContextName())
 		secretWriteTimes := newSecretDataManagerWriteIndex()
 		cronJobScheduleObservations := newCronJobScheduleObservationTracker()
 

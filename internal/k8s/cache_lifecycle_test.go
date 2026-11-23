@@ -128,11 +128,11 @@ func TestInitCancelReturnsPromptly(t *testing.T) {
 		t.Fatalf("creating dummy client: %v", err)
 	}
 	clientMu.Lock()
-	k8sClient = dummyClient
+	installedConn.Store(installedConnectionLocked(nil, &sharedKubernetesClients{clientset: dummyClient}))
 	clientMu.Unlock()
 	defer func() {
 		clientMu.Lock()
-		k8sClient = nil
+		installedConn.Store(nil)
 		clientMu.Unlock()
 	}()
 
@@ -188,13 +188,11 @@ func TestConcurrentInvalidateDuringPermissionCheck(t *testing.T) {
 		return gvr.Group == "" && gvr.Resource == "pods"
 	})
 	clientMu.Lock()
-	k8sClient = dummyClient
-	dynamicClient = probeDyn
+	installedConn.Store(installedConnectionLocked(nil, &sharedKubernetesClients{clientset: dummyClient, dynamic: probeDyn}))
 	clientMu.Unlock()
 	defer func() {
 		clientMu.Lock()
-		k8sClient = nil
-		dynamicClient = nil
+		installedConn.Store(nil)
 		clientMu.Unlock()
 	}()
 

@@ -141,7 +141,8 @@ func TestRegisterSupportedCRDFallbacks_RegistersSupportedCRDFromPartialDiscovery
 				ResetDynamicResourceCache()
 				ResetResourceDiscovery()
 				clientMu.Lock()
-				dynamicClient = nil
+				installedConn.Store(copyTestConnectionLocked())
+				installedConn.Load().clients.dynamic = nil
 				clientMu.Unlock()
 			})
 
@@ -182,7 +183,8 @@ func TestRegisterSupportedCRDFallbacks_RegistersSupportedCRDFromPartialDiscovery
 				return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: action.GetResource().Group, Resource: action.GetResource().Resource}, "", nil)
 			})
 			clientMu.Lock()
-			dynamicClient = dyn
+			installedConn.Store(copyTestConnectionLocked())
+			installedConn.Load().clients.dynamic = dyn
 			clientMu.Unlock()
 
 			fakeDisc := fakeclientset.NewSimpleClientset().Discovery().(*fakediscovery.FakeDiscovery)
@@ -210,7 +212,8 @@ func TestRegisterSupportedCRDFallbacks_RegistersSupportedCRDFromPartialDiscovery
 			if err != nil {
 				t.Fatalf("NewResourceDiscovery failed: %v", err)
 			}
-			resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: coreDiscovery}
+			resourceDiscovery := &ResourceDiscovery{ResourceDiscovery: coreDiscovery}
+			setTestDiscovery(resourceDiscovery)
 			if !resourceDiscovery.HasPartialDiscovery() || !resourceDiscovery.GroupHadPartialDiscovery(tt.group) {
 				t.Fatalf("expected fake discovery to record partial %s discovery", tt.group)
 			}
@@ -261,7 +264,8 @@ func TestRegisterSupportedCRDFallbacks_DoesNotProbeOnCleanDiscovery(t *testing.T
 	t.Cleanup(func() {
 		ResetResourceDiscovery()
 		clientMu.Lock()
-		dynamicClient = nil
+		installedConn.Store(copyTestConnectionLocked())
+		installedConn.Load().clients.dynamic = nil
 		clientMu.Unlock()
 	})
 
@@ -276,7 +280,8 @@ func TestRegisterSupportedCRDFallbacks_DoesNotProbeOnCleanDiscovery(t *testing.T
 		return false, nil, nil
 	})
 	clientMu.Lock()
-	dynamicClient = dyn
+	installedConn.Store(copyTestConnectionLocked())
+	installedConn.Load().clients.dynamic = dyn
 	clientMu.Unlock()
 
 	fakeDisc := fakeclientset.NewSimpleClientset().Discovery().(*fakediscovery.FakeDiscovery)
@@ -292,7 +297,8 @@ func TestRegisterSupportedCRDFallbacks_DoesNotProbeOnCleanDiscovery(t *testing.T
 	if err != nil {
 		t.Fatalf("NewResourceDiscovery failed: %v", err)
 	}
-	resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: coreDiscovery}
+	resourceDiscovery := &ResourceDiscovery{ResourceDiscovery: coreDiscovery}
+	setTestDiscovery(resourceDiscovery)
 	if resourceDiscovery.HasPartialDiscovery() {
 		t.Fatal("clean fake discovery should not be partial")
 	}
@@ -312,7 +318,8 @@ func TestRegisterSupportedCRDFallbacks_DoesNotRegisterWhenWatchDenied(t *testing
 	t.Cleanup(func() {
 		ResetResourceDiscovery()
 		clientMu.Lock()
-		dynamicClient = nil
+		installedConn.Store(copyTestConnectionLocked())
+		installedConn.Load().clients.dynamic = nil
 		clientMu.Unlock()
 	})
 
@@ -331,7 +338,8 @@ func TestRegisterSupportedCRDFallbacks_DoesNotRegisterWhenWatchDenied(t *testing
 		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: action.GetResource().Group, Resource: action.GetResource().Resource}, "", nil)
 	})
 	clientMu.Lock()
-	dynamicClient = dyn
+	installedConn.Store(copyTestConnectionLocked())
+	installedConn.Load().clients.dynamic = dyn
 	clientMu.Unlock()
 
 	fakeDisc := fakeDiscoveryWithPartialGroup(t, "keda.sh", "v1alpha1")
@@ -339,7 +347,8 @@ func TestRegisterSupportedCRDFallbacks_DoesNotRegisterWhenWatchDenied(t *testing
 	if err != nil {
 		t.Fatalf("NewResourceDiscovery failed: %v", err)
 	}
-	resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: coreDiscovery}
+	resourceDiscovery := &ResourceDiscovery{ResourceDiscovery: coreDiscovery}
+	setTestDiscovery(resourceDiscovery)
 
 	RegisterSupportedCRDFallbacks()
 
@@ -382,7 +391,8 @@ func TestRegisterSupportedCRDFallbacks_MultiVersionProbeOrder(t *testing.T) {
 				ResetDynamicResourceCache()
 				ResetResourceDiscovery()
 				clientMu.Lock()
-				dynamicClient = nil
+				installedConn.Store(copyTestConnectionLocked())
+				installedConn.Load().clients.dynamic = nil
 				clientMu.Unlock()
 			})
 
@@ -406,7 +416,8 @@ func TestRegisterSupportedCRDFallbacks_MultiVersionProbeOrder(t *testing.T) {
 				return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: action.GetResource().Group, Resource: action.GetResource().Resource}, "", nil)
 			})
 			clientMu.Lock()
-			dynamicClient = dyn
+			installedConn.Store(copyTestConnectionLocked())
+			installedConn.Load().clients.dynamic = dyn
 			clientMu.Unlock()
 
 			fakeDisc := fakeDiscoveryWithPartialGroup(t, "source.toolkit.fluxcd.io", "v1")
@@ -414,7 +425,8 @@ func TestRegisterSupportedCRDFallbacks_MultiVersionProbeOrder(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewResourceDiscovery failed: %v", err)
 			}
-			resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: coreDiscovery}
+			resourceDiscovery := &ResourceDiscovery{ResourceDiscovery: coreDiscovery}
+			setTestDiscovery(resourceDiscovery)
 
 			RegisterSupportedCRDFallbacks()
 
@@ -442,7 +454,8 @@ func TestRegisterSupportedCRDFallbacks_SkipsGroupsWithoutPartialDiscovery(t *tes
 	t.Cleanup(func() {
 		ResetResourceDiscovery()
 		clientMu.Lock()
-		dynamicClient = nil
+		installedConn.Store(copyTestConnectionLocked())
+		installedConn.Load().clients.dynamic = nil
 		clientMu.Unlock()
 	})
 
@@ -459,7 +472,8 @@ func TestRegisterSupportedCRDFallbacks_SkipsGroupsWithoutPartialDiscovery(t *tes
 		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: action.GetResource().Group, Resource: action.GetResource().Resource}, "", nil)
 	})
 	clientMu.Lock()
-	dynamicClient = dyn
+	installedConn.Store(copyTestConnectionLocked())
+	installedConn.Load().clients.dynamic = dyn
 	clientMu.Unlock()
 
 	fakeDisc := fakeDiscoveryWithPartialGroup(t, "networking.istio.io", "v1")
@@ -467,7 +481,8 @@ func TestRegisterSupportedCRDFallbacks_SkipsGroupsWithoutPartialDiscovery(t *tes
 	if err != nil {
 		t.Fatalf("NewResourceDiscovery failed: %v", err)
 	}
-	resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: coreDiscovery}
+	resourceDiscovery := &ResourceDiscovery{ResourceDiscovery: coreDiscovery}
+	setTestDiscovery(resourceDiscovery)
 
 	RegisterSupportedCRDFallbacks()
 

@@ -21,11 +21,11 @@ func TestStillAdmittedRefusesAWriteAfterTheConnectionChanged(t *testing.T) {
 	t.Cleanup(k8s.SnapshotTestConnection())
 	k8s.RetireServingConnection()
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "a"})
-	admitted, err := k8s.CaptureBoundConnection()
+	admitted, err := k8s.CaptureServingConnection()
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := httptest.NewRequest(http.MethodPost, "/", nil).WithContext(k8s.WithBoundConnection(t.Context(), admitted))
+	r := httptest.NewRequest(http.MethodPost, "/", nil).WithContext(k8s.WithConnection(t.Context(), admitted))
 
 	rec := httptest.NewRecorder()
 	if !stillAdmitted(rec, r) {
@@ -50,11 +50,11 @@ func TestBoundHelmActionConfigStaysOnAdmittedConnectionAcrossSwitch(t *testing.T
 	if _, err := k8s.InstallTestServingConnection("a", &rest.Config{Host: "https://a"}, nil, discovery); err != nil {
 		t.Fatal(err)
 	}
-	admitted, err := k8s.CaptureBoundConnection()
+	admitted, err := k8s.CaptureServingConnection()
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := k8s.WithBoundConnection(t.Context(), admitted)
+	ctx := k8s.WithConnection(t.Context(), admitted)
 	if _, err := k8s.InstallTestServingConnection("b", &rest.Config{Host: "https://b"}, nil, discovery); err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestBoundHelmActionConfigIgnoresAnEditedKubeconfig(t *testing.T) {
 	if _, err := k8s.InstallTestServingConnection("a", &rest.Config{Host: "https://a"}, nil, fake.NewSimpleClientset().Discovery()); err != nil {
 		t.Fatal(err)
 	}
-	admitted, err := k8s.CaptureBoundConnection()
+	admitted, err := k8s.CaptureServingConnection()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestBoundHelmActionConfigIgnoresAnEditedKubeconfig(t *testing.T) {
 		t.Fatalf("unbound Helm should follow the file (the case this guards): host %v, err %v", cfg, err)
 	}
 
-	bound, err := client.actionConfigForWrite(k8s.WithBoundConnection(t.Context(), admitted), "default")
+	bound, err := client.actionConfigForWrite(k8s.WithConnection(t.Context(), admitted), "default")
 	if err != nil {
 		t.Fatal(err)
 	}

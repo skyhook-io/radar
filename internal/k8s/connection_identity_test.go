@@ -74,24 +74,24 @@ func TestConnectionAdmissionsClosedAtShutdown(t *testing.T) {
 	}
 }
 
-func TestCaptureBoundConnectionRefusesWithoutServingConnection(t *testing.T) {
+func TestCaptureServingConnectionRefusesWithoutServingConnection(t *testing.T) {
 	t.Cleanup(SnapshotTestConnection())
 	clearTestConnectionIdentity()
-	if _, err := CaptureBoundConnection(); err != ErrNoServingConnection {
+	if _, err := CaptureServingConnection(); err != ErrNoServingConnection {
 		t.Fatalf("no serving connection: err=%v", err)
 	}
 	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
 	// Admitted with no clients installed: the capture names the connection and
 	// leaves the missing clients for the handler to report.
-	b, err := CaptureBoundConnection()
-	if err != nil || b.ID != ServingConnectionID() {
-		t.Fatalf("admitted connection: id=%q err=%v", b.ID, err)
+	b, err := CaptureServingConnection()
+	if err != nil || b.ID() != ServingConnectionID() {
+		t.Fatalf("admitted connection: id=%q err=%v", b.ID(), err)
 	}
 }
 
 func clearTestConnectionIdentity() {
 	connectionStatusMu.Lock()
-	servingConnectionID = ""
+	serving = nil
 	admissionsClosed = false
 	connectionStatus = ConnectionStatus{}
 	connectionStatusMu.Unlock()
@@ -101,7 +101,11 @@ func TestStillBoundFollowsTheServingConnection(t *testing.T) {
 	t.Cleanup(SnapshotTestConnection())
 	clearTestConnectionIdentity()
 	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
-	ctx := WithBoundConnection(context.Background(), BoundConnection{ID: ServingConnectionID()})
+	admitted, err := CaptureServingConnection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithConnection(context.Background(), admitted)
 	if !StillBound(context.Background()) || !StillBound(ctx) {
 		t.Fatal("an unbound request, or one bound to the serving connection, is still bound")
 	}

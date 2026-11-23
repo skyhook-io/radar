@@ -320,11 +320,11 @@ func TestContextClientsUseTheBoundConnection(t *testing.T) {
 	t.Cleanup(k8s.SetTestLocalMode())
 	a := fakeCluster(t)
 	install(t, "cluster-a", a)
-	bound, err := k8s.CaptureBoundConnection()
+	bound, err := k8s.CaptureServingConnection()
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := k8s.WithBoundConnection(context.Background(), bound)
+	ctx := k8s.WithConnection(context.Background(), bound)
 	b := fakeCluster(t)
 	install(t, "cluster-b", b)
 	if got := k8s.DynamicClientFromContext(ctx); got != a {
@@ -333,4 +333,33 @@ func TestContextClientsUseTheBoundConnection(t *testing.T) {
 	if got := k8s.DynamicClientFromContext(context.Background()); got != b {
 		t.Fatalf("dynamic client from an unbound context = %p, want the serving cluster B's %p", got, b)
 	}
+}
+
+// Only A serves deployments. Successful deletion requires both A's dynamic
+// client and A's resource mapping after B has been admitted.
+func TestBoundDeleteUsesAdmittedDiscoveryAcrossSwitch(t *testing.T) {
+	t.Cleanup(k8s.SnapshotTestConnection())
+	a, b := fakeCluster(t), fakeCluster(t)
+	install(t, "cluster-a", a)
+	conn, err := k8s.CaptureServingConnection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := k8s.WithConnection(t.Context(), conn)
+	if _, err := k8s.InstallTestServingConnection("cluster-b", nil, b, fakeclientset.NewSimpleClientset().Discovery()); err != nil {
+		t.Fatal(err)
+	}
+	_, err = k8s.DeleteResourceWithClient(ctx, k8s.DeleteResourceOptions{Kind: "Deployment", Group: "apps", Namespace: "default", Name: "web"}, k8s.DynamicClientFromContext(ctx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b.Actions()) != 0 {
+		t.Fatalf("B received %v", b.Actions())
+	}
+	for _, action := range a.Actions() {
+		if action.GetVerb() == "delete" && action.GetResource() == deploymentsGVR {
+			return
+		}
+	}
+	t.Fatalf("A never received the deployment delete: %v", a.Actions())
 }
