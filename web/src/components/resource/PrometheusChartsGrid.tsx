@@ -54,6 +54,7 @@ export interface PrometheusChartsGridProps {
   /** Fill and scroll its container (default). False lets the parent scroll it with content below. */
   fill?: boolean;
   workloadTotals?: ReactNode;
+  showRightsizing?: boolean;
 }
 
 const SUPPORTED_KINDS = new Set([
@@ -74,6 +75,7 @@ export function PrometheusChartsGrid({
   resource,
   fill = true,
   workloadTotals,
+  showRightsizing = true,
 }: PrometheusChartsGridProps) {
   useAutoPromConnect();
   const { data: status, isLoading: statusLoading } = usePrometheusStatus();
@@ -260,7 +262,7 @@ export function PrometheusChartsGrid({
         timeRange={timeRange}
         category={isWorkload ? "network_rx" : "cpu"}
       />
-      {["Deployment", "StatefulSet", "DaemonSet"].includes(kind) && (
+      {showRightsizing && isWorkload && (
         <div className="px-4 pb-4"><RightsizingStrip kind={kind} namespace={namespace} name={name} /></div>
       )}
     </div>

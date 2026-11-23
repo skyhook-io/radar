@@ -42,11 +42,33 @@ func BenchmarkBuild(b *testing.B) {
 			b.Run(fmt.Sprintf("%dx%d/%s", size.images, size.per, view), func(b *testing.B) {
 				b.ReportAllocs()
 				for range b.N {
-					if _, err := build(context.Background(), items, targets, view, Filter{}); err != nil {
+					if _, err := build(context.Background(), items, targets, view, Filter{}, false); err != nil {
 						b.Fatal(err)
 					}
 				}
 			})
 		}
+	}
+}
+
+// BenchmarkExport is one CSV export of each view at the findings budget:
+// the uncapped rollup plus writing the file.
+func BenchmarkExport(b *testing.B) {
+	items, targets := benchInputs(400, 500)
+	for _, view := range []View{ViewImage, ViewFix, ViewCVE, ViewWorkload} {
+		b.Run(string(view), func(b *testing.B) {
+			b.ReportAllocs()
+			for range b.N {
+				resp, err := build(context.Background(), items, targets, view, Filter{}, true)
+				if err != nil {
+					b.Fatal(err)
+				}
+				body, err := WriteCSV(context.Background(), resp, Filter{}, "bench")
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.ReportMetric(float64(len(body)), "bytes/file")
+			}
+		})
 	}
 }

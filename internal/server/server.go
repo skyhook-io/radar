@@ -737,6 +737,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/upgrade-readiness", s.handleUpgradeReadiness)
 			// Scanner findings rolled up to the images that run now.
 			r.Get("/vulnerabilities", s.handleVulnerabilities)
+			r.Get("/vulnerabilities/export", s.handleVulnerabilitiesExport)
 			r.Get("/vulnerabilities/java4shell", s.handleJava4Shell)
 
 			// Network path trace - path-shaped diagnosis for Service /
@@ -884,6 +885,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			prometheuspkg.RegisterRoutes(r)
 			r.Get("/metrics/datadog/agent", s.handleDatadogAgentPresence)
 			r.Get("/agent/metrics-cluster-identity", s.handleMetricsClusterIdentity)
+			r.Get("/agent/workload-rightsizing-inventory", s.handleWorkloadRightsizingInventory)
+			r.Get("/agent/workload-rightsizing-scope/{kind}/{namespace}/{name}", s.handleWorkloadRightsizingScope)
 			r.Get("/agent/workload-metrics-scope/{kind}/{namespace}/{name}", s.handleWorkloadMetricsScope)
 
 			// OpenCost routes
@@ -1536,6 +1539,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 	return k8s.FeatureCapabilities{
 		ApplicationEvidence:         true,
 		DatadogAgentPresence:        true,
+		DatadogRightsizing:          true,
 		SealedSecretsController:     true,
 		ResourceReadCoverage:        true,
 		SearchCoverage:              true,
@@ -1576,6 +1580,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		KueueQueueWorkloads:         true,
 		PodFileUpload:               true,
 		Vulnerabilities:             true,
+		VulnerabilitiesExport:       true,
 		RuntimeAdvisoryChecks:       true,
 		RuntimeAdvisoryProgress:     true,
 		CronJobTriggerJobName:       true,

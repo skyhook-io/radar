@@ -51,7 +51,7 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 		}
 		imageWorkloads[r.imageID] = workloads
 		distinct := withoutContainers(workloads)
-		shown := m.listed(distinct, MaxWorkloadsPerAffected)
+		shown := m.listed(distinct, j.lim.workloadsPerAffected)
 		rowMatched := m.rowMatches(agg.searchText(), workloads)
 		packages := map[string]*imagePackage{}
 		var order []string
@@ -101,6 +101,9 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 				}
 			}
 			if !a.images[r.imageID] {
+				if !j.charge(len(shown)) {
+					return nil, ErrExportTooLarge
+				}
 				a.images[r.imageID] = true
 				a.row.Affected = append(a.row.Affected, FixImage{
 					ImageID: r.imageID, Image: cmp.Or(r.image, r.digest), InstalledVersions: []string{p.installed},
@@ -143,13 +146,13 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 			return cmp.Or(cmp.Compare(severityRank(a.cves[y]), severityRank(a.cves[x])), cmp.Compare(x, y))
 		})
 		row.CVEsTotal = len(ids)
-		row.CVEs = ids[:min(len(ids), MaxCVEsPerFix)]
+		row.CVEs = ids[:min(len(ids), j.lim.cvesPerFix)]
 		row.Images = len(a.images)
 		row.Workloads = distinctWorkloads(slices.Sorted(maps.Keys(a.images)), imageWorkloads, workloadsBySet)
 		slices.SortStableFunc(row.Affected, func(x, y FixImage) int {
 			return cmp.Or(cmp.Compare(y.WorkloadsTotal, x.WorkloadsTotal), cmp.Compare(x.Image, y.Image))
 		})
-		row.Affected = row.Affected[:min(len(row.Affected), MaxAffectedPerCVE)]
+		row.Affected = row.Affected[:min(len(row.Affected), j.lim.affectedPerCVE)]
 		rows = append(rows, row)
 	}
 	slices.SortFunc(rows, func(x, y Fix) int {
