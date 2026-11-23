@@ -22,7 +22,7 @@ func (s *Server) handleFluxReconcile(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	entry = entry.Served(k8s.ServedGVR)
+	entry = entry.Served(k8s.ServedGVRFor(r.Context()))
 
 	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
@@ -62,7 +62,7 @@ func (s *Server) fluxSetSuspend(w http.ResponseWriter, r *http.Request, suspend 
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	entry = entry.Served(k8s.ServedGVR)
+	entry = entry.Served(k8s.ServedGVRFor(r.Context()))
 
 	action := "suspend"
 	if !suspend {
@@ -106,7 +106,7 @@ func (s *Server) handleFluxSyncWithSource(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	result, err := gitops.SyncFluxWithSource(r.Context(), client, kind, namespace, name, k8s.ServedGVR)
+	result, err := gitops.SyncFluxWithSource(r.Context(), client, kind, namespace, name, k8s.ServedGVRFor(r.Context()))
 	if err != nil {
 		s.writeGitOpsError(w, err, "flux", "sync-with-source", namespace, name)
 		return

@@ -194,7 +194,7 @@ Middleware only in `traefik.containo.us` is a family's answer but not drawn.
 
 Each declared, selector and composition family carries its Related Resources `Projection` disposition beside its extraction rule. It names the fields in both declaration directions and the graph encoding, or explains the direct read / intentional non-projection. `relations_answer.go` generates its edge maps from these declarations. `TestEveryFamilyProjectsExactlyItsDeclaredFields` projects one isolated synthetic edge for every supported kind pair and checks the exact fields after ownership; legacy `ManagedBy` and ownership coverage are checked separately.
 
-The independent 72-family cutover inventory is `pkg/topology/testdata/relationship-family-inventory.tsv`. Each direction names registered or direct producers, or a reason it does not project. Its notes preserve the remaining held-target differences for synthetic AnalysisRun and Secret/ConfigMap nodes; these are not parity claims. `TestRelationshipFamilyInventoryHasBothDirections` rejects an unaccounted family or unknown producer.
+The independent family inventory is `pkg/topology/testdata/relationship-family-inventory.tsv`. Each direction names registered or direct producers, or a reason it does not project. Its notes preserve the remaining held-target differences for synthetic AnalysisRun and Secret/ConfigMap nodes; these are not parity claims. `TestRelationshipFamilyInventoryHasBothDirections` rejects an unaccounted family or unknown producer.
 
 Related Resources and REST/MCP resource context now read these families from a captured cache session through
 `internal/k8s.AnswerRelationships` / `AnswerResourceContextRelationships`. `pkg/topology.RelationsAnswer` projects

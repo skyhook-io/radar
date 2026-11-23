@@ -4,6 +4,7 @@
 // bundler that transpiles TSX and resolves workspace-style peer deps. The
 // same source is consumed by Radar's binary via main.tsx.
 export { RadarApp, type RadarAppProps } from './RadarApp';
+export type { PrometheusRightsizing, RightsizingScanResponse, RightsizingScanWorkload } from './api/client';
 export type { ClusterLoadState } from './types/clusterLoadState';
 export {
   setApiBase,
@@ -67,6 +68,8 @@ export type { ClusterSwitcherProps, ClusterSwitcherItem } from '@skyhook-io/k8s-
 // their own per-cluster scope (Hub via ?namespaces= on the embedded RadarApp).
 export { NamespacePicker } from '@skyhook-io/k8s-ui';
 export type {
+  NamespaceCollection,
+  NamespaceCollectionGroup,
   NamespacePickerProps,
   NamespacePickerHandle,
   NamespaceScopeView,

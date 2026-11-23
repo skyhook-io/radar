@@ -30,6 +30,8 @@ export interface RadarFeatureSpec {
 }
 
 export const RADAR_FEATURES = {
+  datadogRightsizing: { label: 'Datadog-backed rightsizing', flag: 'datadogRightsizing', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
+  datadogAgentPresence: { label: 'Datadog Agent setup hints', flag: 'datadogAgentPresence', flagShippedWithEndpoint: true },
   resourceReadCoverage: { label: 'Resource read coverage', flag: 'resourceReadCoverage', flagShippedWithEndpoint: true },
   searchCoverage: { label: 'Search coverage and object filters', flag: 'searchCoverage', flagShippedWithEndpoint: true },
   applicationEvidence: { label: 'Application evidence collection', flag: 'applicationEvidence', flagShippedWithEndpoint: true },
@@ -84,8 +86,12 @@ export const RADAR_FEATURES = {
   podFileUpload: { label: 'Pod file uploads', flag: 'podFileUpload', flagShippedWithEndpoint: true },
   lokiConnection: { label: 'Loki connection', flag: 'lokiConnection', flagShippedWithEndpoint: true },
   vulnerabilities: { label: 'Vulnerability views', flag: 'vulnerabilities', flagShippedWithEndpoint: true },
+  vulnerabilitiesExport: { label: 'Vulnerability CSV downloads', flag: 'vulnerabilitiesExport', flagShippedWithEndpoint: true },
   runtimeAdvisoryChecks: { label: 'Java4Shell checks', flag: 'runtimeAdvisoryChecks', flagShippedWithEndpoint: true },
   runtimeAdvisoryProgress: { label: 'Java4Shell scan progress', flag: 'runtimeAdvisoryProgress', flagShippedWithEndpoint: true },
+  // Never blocks a control: an older Radar ignores the request body and names
+  // the Job itself, so Trigger stays one click without the Job name dialog.
+  cronJobTriggerJobName: { label: 'Job names for manual CronJob runs', flag: 'cronJobTriggerJobName', flagShippedWithEndpoint: true },
 } as const satisfies Record<string, RadarFeatureSpec>
 
 export type RadarFeature = keyof typeof RADAR_FEATURES

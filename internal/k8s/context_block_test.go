@@ -22,9 +22,7 @@ func TestBlockClusterAccessDropsClientsAndRejectsReconnects(t *testing.T) {
 		t.Fatal(err)
 	}
 	clientMu.Lock()
-	k8sConfig, k8sClient = config, clientset
-	discoveryClient = discovery.NewDiscoveryClientForConfigOrDie(config)
-	dynamicClient = dynamic.NewForConfigOrDie(config)
+	installedConn.Store(installedConnectionLocked(config, &sharedKubernetesClients{clientset: clientset, discovery: discovery.NewDiscoveryClientForConfigOrDie(config), dynamic: dynamic.NewForConfigOrDie(config)}))
 	clientMu.Unlock()
 
 	blocked := errors.New("settings need a change")

@@ -1,15 +1,12 @@
 import { createElement, useState, useEffect, useCallback } from 'react'
 import { FolderOpen } from 'lucide-react'
 import { useToast } from '../components/ui/Toast'
-import { isDesktopApp, desktopSaveFile } from '../utils/desktop-download'
+import { isDesktopApp, desktopSaveFile, desktopSaveBlob } from '../utils/desktop-download'
 import { openFile, openFolder } from '../utils/desktop-open-folder'
 
-/**
- * Returns a download override function when running in the desktop app,
- * or undefined when running in a browser (so the default blob URL approach is used).
- * The returned function shows toast notifications for success/failure and silently handles user cancellation.
- */
-export function useDesktopDownload(): ((content: string, mime: string, filename: string) => void) | undefined {
+// Tracks whether this is the desktop app and reports a native save's outcome as a toast.
+// User cancellation is silent.
+function useDesktopSave(): { isDesktop: boolean; report: (save: Promise<string>) => void } {
   const [isDesktop, setIsDesktop] = useState(false)
   const { showSuccess, showError } = useToast()
 
@@ -17,8 +14,8 @@ export function useDesktopDownload(): ((content: string, mime: string, filename:
     isDesktopApp().then(setIsDesktop)
   }, [])
 
-  const download = useCallback((content: string, _mime: string, filename: string) => {
-    desktopSaveFile(content, filename)
+  const report = useCallback((save: Promise<string>) => {
+    save
       .then((path) => showSuccess(
         'File saved',
         path,
@@ -35,6 +32,31 @@ export function useDesktopDownload(): ((content: string, mime: string, filename:
         }
       })
   }, [showSuccess, showError])
+
+  return { isDesktop, report }
+}
+
+/**
+ * Returns a download override function when running in the desktop app,
+ * or undefined when running in a browser (so the default blob URL approach is used).
+ * The returned function shows toast notifications for success/failure and silently handles user cancellation.
+ */
+export function useDesktopDownload(): ((content: string, mime: string, filename: string) => void) | undefined {
+  const { isDesktop, report } = useDesktopSave()
+  const download = useCallback((content: string, _mime: string, filename: string) => {
+    report(desktopSaveFile(content, filename))
+  }, [report])
+
+  if (!isDesktop) return undefined
+  return download
+}
+
+/** Blob variant of useDesktopDownload, for binary files such as exported images. */
+export function useDesktopBlobDownload(): ((blob: Blob, filename: string) => void) | undefined {
+  const { isDesktop, report } = useDesktopSave()
+  const download = useCallback((blob: Blob, filename: string) => {
+    report(desktopSaveBlob(blob, filename))
+  }, [report])
 
   if (!isDesktop) return undefined
   return download

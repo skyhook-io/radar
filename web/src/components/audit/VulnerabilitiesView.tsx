@@ -1,8 +1,9 @@
 import { useState } from 'react'
+import { useMutation } from '@tanstack/react-query'
 import { WithTooltip } from '../ui/Tooltip'
 import { useSearchParams } from 'react-router-dom'
 import { clsx } from 'clsx'
-import { AlertTriangle, CircleDashed, ExternalLink, Info, Search, ShieldAlert, ShieldCheck, X } from 'lucide-react'
+import { AlertTriangle, ArrowDownWideNarrow, CircleDashed, FileSpreadsheet, ExternalLink, Info, Search, ShieldAlert, ShieldCheck, X } from 'lucide-react'
 import {
   Collapse,
   CollapseChevron,
@@ -22,21 +23,28 @@ import {
   DistributionLegendChip,
   FilterPill,
   Input,
+  RowActionMenu,
 } from '@skyhook-io/k8s-ui'
 import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { formatRelativeAgeTime } from '@skyhook-io/k8s-ui/utils/format'
-import { ApiError, useCapabilities } from '../../api/client'
+import { triggerDownload } from '@skyhook-io/k8s-ui/utils/download'
+import { ApiError, useCapabilities, useRadarFeature } from '../../api/client'
 import { useAPIResources } from '../../api/apiResources'
 import {
+  fetchVulnerabilitiesCSV,
   hasVulnerabilityReports,
+  vulnerabilitiesCSVFilename,
   JAVA4SHELL_CVE,
   useVulnerabilities,
   isKindUnknown,
   parseWorkloadParam,
   workloadParam,
+  type VulnerabilitiesParams,
+  type VulnerabilityExportView,
   type VulnerabilitiesResponse,
   type VulnerabilityCVE,
   type VulnerabilityFix,
+  type VulnerabilityGap,
   type VulnerabilitySeverity,
   type VulnerabilityView,
   type VulnerabilityWorkload,
@@ -45,6 +53,7 @@ import {
 } from '../../api/vulnerabilities'
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
+import { useDesktopDownload } from '../../hooks/useDesktopDownload'
 import { ChecksViewTabs } from './ChecksViewTabs'
 import { Java4ShellPanel } from './Java4ShellPanel'
 import {
@@ -66,7 +75,18 @@ import {
   OTHER_BUILD_TIP,
   imageParts,
   gapSentence,
-  workloadSummary,
+  WorkloadSummary,
+  ExposedMark,
+  exposureLookup,
+  routesFor,
+  routeText,
+  routesTip,
+  ExposedCount,
+  exposureUnknownIn,
+  exposureGapSentence,
+  uncheckedRoutesSentence,
+  EXPOSURE,
+  type ExposureLookup,
 } from '../vulnerabilities/parts'
 
 interface VulnerabilitiesViewProps {
@@ -75,8 +95,8 @@ interface VulnerabilitiesViewProps {
 }
 
 const VIEWS: { key: VulnerabilityView; label: string }[] = [
-  { key: 'image', label: 'By image' },
   { key: 'fix', label: 'By fix' },
+  { key: 'image', label: 'By image' },
   { key: 'cve', label: 'By CVE' },
   { key: 'workload', label: 'By workload' },
 ]
@@ -92,6 +112,8 @@ const IMAGE_COLS = 'grid-cols-[minmax(220px,1.6fr)_minmax(180px,1.2fr)_88px_minm
 const FIX_COLS = 'grid-cols-[minmax(200px,1.2fr)_minmax(220px,1.5fr)_120px_minmax(0,1.6fr)_64px_80px]'
 const CVE_COLS = 'grid-cols-[minmax(260px,1.6fr)_80px_48px_minmax(200px,1.6fr)_56px_64px_80px]'
 const WORKLOAD_COLS = 'grid-cols-[minmax(200px,1.4fr)_minmax(180px,1.2fr)_minmax(0,2.4fr)]'
+// With the route column, shown only when the answer reports exposure.
+const WORKLOAD_ROUTE_COLS = 'grid-cols-[minmax(200px,1.4fr)_minmax(180px,1.2fr)_minmax(180px,1.2fr)_minmax(0,2fr)]'
 const HEAD = 'grid gap-4 border-b border-theme-border py-2 pl-10 pr-3 text-[11px] font-semibold uppercase tracking-wider text-theme-text-tertiary'
 const FOLD_ROW = 'grid grid-cols-[minmax(220px,1.6fr)_minmax(0,4fr)] items-baseline gap-4 py-1.5 pl-10 pr-3 text-xs'
 const SUB = 'grid items-baseline gap-4 py-1.5 pl-10 pr-3 text-xs'
@@ -104,9 +126,10 @@ const toResource = (w: VulnerabilityWorkloadRef): SelectedResource => ({ kind: w
 // describe the unfiltered scope.
 export function VulnerabilitiesView({ namespaces, onNavigateToResource }: VulnerabilitiesViewProps) {
   const [params, setParams] = useSearchParams()
-  const view = (VIEWS.find((v) => v.key === params.get('by'))?.key ?? 'image') as VulnerabilityView
+  const view = (VIEWS.find((v) => v.key === params.get('by'))?.key ?? 'fix') as VulnerabilityView
   const severities = (params.get('severity') ?? '').split(',').filter((s): s is VulnerabilitySeverity => LEGEND.some((x) => x.key === s))
   const fixableOnly = params.get('fixable') === '1'
+  const exposedOnly = params.get('exposed') === '1'
   const queryDraft = params.get('q') ?? ''
   const workload = parseWorkloadParam(params.get('workload'))
   const query = useDebouncedValue(queryDraft.trim(), 300)
@@ -123,7 +146,8 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
     mutate(next)
     setParams(next, { replace: !push })
   }
-  const { data, isLoading, isFetching, isPlaceholderData, error, dataUpdatedAt, refetch } = useVulnerabilities({ view, namespaces, severities, fixableOnly, query, workload }, !reportsAbsent)
+  const tableParams: VulnerabilitiesParams = { view, namespaces, severities, fixableOnly, exposed: exposedOnly, query, workload }
+  const { data, isLoading, isFetching, isPlaceholderData, error, dataUpdatedAt, refetch } = useVulnerabilities(tableParams, !reportsAbsent)
   const hasReports = !reportsAbsent && (hasVulnerabilityReports(resources) || !!data)
   const trivySearch = new URLSearchParams({ by: 'cve', q: JAVA4SHELL_CVE })
   for (const key of ['namespace', 'namespaces']) {
@@ -176,7 +200,9 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   }
 
   // By fix lists only fixable findings, and hides the chip that says so.
-  const filtered = severities.length > 0 || (fixableOnly && view !== 'fix') || query !== '' || !!workload
+  // An older Radar ignores exposed=1 and reports no exposure.
+  const exposure = data.exposure
+  const filtered = severities.length > 0 || (fixableOnly && view !== 'fix') || (exposedOnly && !!exposure) || query !== '' || !!workload
   // Narrowed only to a workload whose images are all clean or unscanned:
   // the folds below list them, so "nothing matches" would mislead.
   const workloadFolds = !!workload && (view === 'image' || view === 'workload') && severities.length === 0 && !fixableOnly && query === '' &&
@@ -186,7 +212,8 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   // With nothing scanned or readable there are no counts to show or filter.
   const known = findingsCertainty(data) !== 'unknown'
   // A new view or filter starts again from the first page of rows.
-  const pageKey = JSON.stringify([view, namespaces, severities, fixableOnly, query, workload])
+  const pageKey = JSON.stringify([view, namespaces, severities, fixableOnly, exposedOnly, query, workload])
+  const fixChip = known && view !== 'fix'
   return (
     <div aria-busy={isFetching} className="flex-1 flex flex-col min-h-0 p-4 gap-4 overflow-auto">
       <ChecksViewTabs />
@@ -194,7 +221,12 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
         icon={ShieldAlert}
         title="Vulnerabilities"
         description="Known CVEs in the images that run now, from Trivy Operator's reports."
-        actions={<FreshnessControl mode="auto" dataUpdatedAt={dataUpdatedAt} isFetching={isFetching} onRefresh={() => refetch()} connectionState={connection.state} />}
+        actions={
+          <div className="flex items-center gap-2">
+            <FreshnessControl mode="auto" dataUpdatedAt={dataUpdatedAt} isFetching={isFetching} onRefresh={() => refetch()} connectionState={connection.state} />
+            <ExportMenu params={tableParams} cluster={connection.clusterName || connection.context} />
+          </div>
+        }
       />
       {advisory}
 
@@ -233,11 +265,16 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
               onClick={() => toggleSeverity(s.key)}
             />
           ))}
-          {known && view !== 'fix' && (
-            <>
-              <span aria-hidden className="mx-1.5 h-5 w-px bg-theme-border" />
-              <FilterPill label="Has a fix" active={fixableOnly} onClick={() => update((p) => (fixableOnly ? p.delete('fixable') : p.set('fixable', '1')))} />
-            </>
+          {(fixChip || exposure) && <span aria-hidden className="mx-1.5 h-5 w-px bg-theme-border" />}
+          {fixChip && <FilterPill label="Fix available" tooltip="Only findings the scanner lists a fixed release for" active={fixableOnly} onClick={() => update((p) => (fixableOnly ? p.delete('fixable') : p.set('fixable', '1')))} />}
+          {exposure && (
+            <FilterPill
+              label={EXPOSURE.chip}
+              icon={EXPOSURE.icon}
+              tooltip={EXPOSURE.chipTip}
+              active={exposedOnly}
+              onClick={() => update((p) => (exposedOnly ? p.delete('exposed') : p.set('exposed', '1')))}
+            />
           )}
           {workload && (
             <>
@@ -257,7 +294,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
                 key={v.key}
                 type="button"
                 aria-pressed={view === v.key}
-                onClick={() => update((p) => (v.key === 'image' ? p.delete('by') : p.set('by', v.key)), true)}
+                onClick={() => update((p) => (v.key === 'fix' ? p.delete('by') : p.set('by', v.key)), true)}
                 className={clsx('min-h-7 rounded px-3 text-xs font-medium transition-colors', view === v.key ? 'bg-theme-hover text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary')}
               >
                 {v.label}
@@ -268,7 +305,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <CoverageNotes data={data} filtered={filtered} />
+        <CoverageNotes data={data} filtered={filtered} view={view} />
         {error && <p className="text-xs text-warning-text">Couldn't refresh: {error instanceof Error ? error.message : 'request failed'}. Showing the last answer.</p>}
       </div>
 
@@ -292,6 +329,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
         ) : view === 'workload' ? (
           <Paged key={pageKey} rows={data.workloads ?? []}>{(rows) => <WorkloadTable
             workloads={rows}
+            exposure={exposure}
             severities={severities}
             query={query}
             namespaces={namespaces}
@@ -317,6 +355,35 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
         </>
       )}
     </div>
+  )
+}
+
+const VIEW_NAMES: Partial<Record<VulnerabilityView, string>> = { fix: 'By fix', image: 'By image', cve: 'By CVE', workload: 'By workload' }
+
+// The page's overflow menu: CSV of the view on screen with its filters, or
+// of every finding (one row per CVE, image and workload, the shape a POA&M
+// or a ticket import wants). Each lists every row and every value the table
+// shortens.
+function ExportMenu({ params, cluster }: { params: VulnerabilitiesParams; cluster: string }) {
+  const { support, guard } = useRadarFeature('vulnerabilitiesExport')
+  const desktopDownload = useDesktopDownload()
+  const download = useMutation({
+    // The file is named for the view and cluster the request was for.
+    mutationFn: ({ params, as }: { params: VulnerabilitiesParams; as: VulnerabilityExportView; cluster: string }) => guard(() => fetchVulnerabilitiesCSV(params, as)),
+    onSuccess: (csv, { as, cluster }) => triggerDownload(csv, 'text/csv;charset=utf-8', vulnerabilitiesCSVFilename(as, cluster), desktopDownload),
+    meta: { errorMessage: 'Could not download the CSV' },
+  })
+  if (support !== 'supported') return null
+  const pending = download.isPending ? download.variables?.as : undefined
+  return (
+    <RowActionMenu
+      compact={false}
+      ariaLabel="More actions"
+      items={[
+        { key: 'view', label: `Download ${VIEW_NAMES[params.view] ?? 'this view'} as CSV`, icon: FileSpreadsheet, pending: pending === params.view, disabled: !!pending, onClick: () => download.mutate({ params, as: params.view, cluster }) },
+        { key: 'findings', label: 'Download all findings as CSV', icon: FileSpreadsheet, pending: pending === 'findings', disabled: !!pending, onClick: () => download.mutate({ params, as: 'findings', cluster }) },
+      ]}
+    />
   )
 }
 
@@ -394,8 +461,16 @@ function SummaryHeadline({ data }: { data: VulnerabilitiesResponse }) {
   )
 }
 
-function CoverageNotes({ data, filtered }: { data: VulnerabilitiesResponse; filtered: boolean }) {
+// How each view orders its rows, for the sort hint's tooltip.
+function sortRule(view: VulnerabilityView): string {
+  const tiebreak = view === 'workload' ? '' : ' Then the most exposed workloads, then the most workloads.'
+  return `Most severe first. Within each severity, exposed rows come first, then those whose exposure is unknown.${tiebreak}`
+}
+
+function CoverageNotes({ data, filtered, view }: { data: VulnerabilitiesResponse; filtered: boolean; view: VulnerabilityView }) {
   const gaps = gapSentence(data.coverage.gaps)
+  const exposureNotes = [exposureGapSentence(data.exposure?.gaps), uncheckedRoutesSentence(data.exposure?.unchecked)].filter(Boolean).join(' ')
+  const unscannedExposed = (data.unscanned ?? []).reduce((n, u) => n + (u.exposedTotal ?? 0), 0)
   const scan = data.summary.newestScan
     ? data.summary.oldestScan && data.summary.oldestScan !== data.summary.newestScan
       ? `Scans from ${formatRelativeAgeTime(data.summary.oldestScan)} to ${formatRelativeAgeTime(data.summary.newestScan)}`
@@ -403,7 +478,7 @@ function CoverageNotes({ data, filtered }: { data: VulnerabilitiesResponse; filt
     : null
   return (
     <div className="flex flex-col gap-1.5 text-xs">
-      <p className="flex items-center gap-1.5 text-theme-text-tertiary">
+      <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-theme-text-tertiary">
         {[scan, filtered ? 'Totals ignore the filters' : null].filter(Boolean).join(' · ')}
         {/* For someone comparing these numbers with Trivy's own: why they can differ. */}
         <WithTooltip tip={[
@@ -413,6 +488,30 @@ function CoverageNotes({ data, filtered }: { data: VulnerabilitiesResponse; filt
         ].filter(Boolean).join(' ')}>
           <Info className="h-3.5 w-3.5" aria-label="How these numbers relate to Trivy's" />
         </WithTooltip>
+        {data.exposure && (
+          <WithTooltip tip={sortRule(view)}>
+            <span className="inline-flex items-center gap-1 rounded px-1 hover:text-theme-text-secondary" tabIndex={0} aria-label={`Sort: ${sortRule(view)}`}>
+              <ArrowDownWideNarrow className="h-3.5 w-3.5" aria-hidden />
+              Severity, then exposure
+            </span>
+          </WithTooltip>
+        )}
+        {exposureNotes && (
+          <WithTooltip tip={exposureNotes}>
+            <span className="inline-flex items-center gap-1 text-warning-text" tabIndex={0} aria-label={exposureNotes}>
+              <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
+              Exposure partly unknown
+            </span>
+          </WithTooltip>
+        )}
+        {unscannedExposed > 0 && (
+          <WithTooltip tip="Exposed workloads whose images Trivy hasn't scanned yet: their findings are unknown. They're listed under the table.">
+            <span className="inline-flex items-center gap-1 text-warning-text" tabIndex={0}>
+              <CircleDashed className="h-3.5 w-3.5" aria-hidden />
+              {unscannedExposed} exposed {unscannedExposed === 1 ? 'workload' : 'workloads'} not scanned
+            </span>
+          </WithTooltip>
+        )}
       </p>
       {gaps && <p className="text-warning-text">{gaps}</p>}
       {data.coverage.truncated && <p className="text-warning-text">This request reached its findings limit, so some images' findings weren't read and are marked unread. Narrow with the namespace picker.</p>}
@@ -455,17 +554,21 @@ function Disclosure({ summary, children, flush = false }: { summary: React.React
   )
 }
 
-function WorkloadLinks({ workloads, onOpen, inline = false }: { workloads: VulnerabilityWorkloadRef[]; onOpen: (w: VulnerabilityWorkloadRef) => void; inline?: boolean }) {
+function WorkloadLinks({ workloads, onOpen, inline = false, exposure }: { workloads: VulnerabilityWorkloadRef[]; onOpen: (w: VulnerabilityWorkloadRef) => void; inline?: boolean; exposure?: ExposureLookup }) {
   return (
     <ul className={clsx('flex min-w-0', inline ? 'flex-wrap gap-x-4 gap-y-0.5' : 'flex-col gap-0.5')}>
-      {workloads.map((w) => (
-        <li key={`${w.namespace}/${w.kind}/${w.name}/${w.container ?? ''}`} className="min-w-0">
+      {workloads.map((w) => {
+        const exposed = routesFor(exposure, w)
+        return (
+        <li key={`${w.namespace}/${w.kind}/${w.name}/${w.container ?? ''}`} className="flex min-w-0 items-baseline gap-1">
+          {exposed && <ExposedMark exposed={exposed} />}
           <button type="button" onClick={() => onOpen(w)} className="group flex min-w-0 items-baseline gap-1.5 text-left text-xs">
             <span className="truncate text-accent-text group-hover:underline">{w.name}</span>
             <span className="shrink-0 text-theme-text-tertiary">{w.kind} · {w.namespace}{w.container ? ` · ${w.container}` : ''}</span>
           </button>
         </li>
-      ))}
+        )
+      })}
     </ul>
   )
 }
@@ -486,6 +589,7 @@ function ImageTable({ images, onOpen, onOpenReport }: { images: VulnerableImage[
           <span>Image</span><span>Findings</span><NumHead>With a fix</NumHead><span>Running in</span><NumHead>Scanned</NumHead>
         </div>
         {images.map((img) => {
+          const exposure = exposureLookup(img.exposed)
           const total = img.counts.critical + img.counts.high + img.counts.medium + img.counts.low + img.counts.unknown
           const fixable = img.fixable.critical + img.fixable.high + img.fixable.medium + img.fixable.low + img.fixable.unknown
           return (
@@ -503,8 +607,11 @@ function ImageTable({ images, onOpen, onOpenReport }: { images: VulnerableImage[
                     <Num>{img.findingsUnread ? '—' : <>{fixable}<span className="text-theme-text-tertiary"> of {total}</span></>}</Num>
                   </WithTooltip>
                   <span className="flex min-w-0 flex-col">
-                    <span className="truncate text-theme-text-secondary">{workloadSummary(img.workloads)}{img.workloadsTotal > img.workloads.length ? ` and ${img.workloadsTotal - img.workloads.length} more` : ''}</span>
-                    <span className="text-xs text-theme-text-tertiary">{namespaceCount(img)}</span>
+                    <WorkloadSummary workloads={img.workloads} exposure={exposure} suffix={img.workloadsTotal > img.workloads.length ? ` and ${img.workloadsTotal - img.workloads.length} more` : ''} />
+                    <span className="flex flex-wrap items-center gap-x-2 text-xs text-theme-text-tertiary">
+                      {namespaceCount(img)}
+                      <ExposedCount exposed={img.exposed} total={img.exposedTotal} unknown={img.exposureUnknown} />
+                    </span>
                   </span>
                   <span className="text-right text-xs text-theme-text-tertiary">{formatRelativeAgeTime(img.scannedAt)}</span>
                 </div>
@@ -523,7 +630,7 @@ function ImageTable({ images, onOpen, onOpenReport }: { images: VulnerableImage[
                 </div>
                 <div className="col-span-2 flex min-w-0 flex-col gap-1.5">
                   <span className="text-xs font-medium text-theme-text-secondary">{img.workloadsTotal} {img.workloadsTotal === 1 ? 'container' : 'containers'}{img.workloadsTotal > img.workloads.length ? ` (first ${img.workloads.length})` : ''}</span>
-                  <WorkloadLinks workloads={img.workloads} onOpen={onOpen} />
+                  <WorkloadLinks workloads={img.workloads} onOpen={onOpen} exposure={exposure} />
                 </div>
               </div>
             </Disclosure>
@@ -569,16 +676,14 @@ function FindingsList({ findings, total, unread }: { findings: VulnerableImage['
 function FixTable({ fixes, onOpen, onShowCVE }: { fixes: VulnerabilityFix[]; onOpen: (w: VulnerabilityWorkloadRef) => void; onShowCVE: (id: string) => void }) {
   return (
     <div className="flex shrink-0 flex-col gap-2">
-      <p className="text-xs text-theme-text-tertiary">
-        Upgrading a package means rebuilding the image that holds it.
-      </p>
       <div className="overflow-x-auto overflow-y-hidden rounded-lg border border-theme-border bg-theme-surface">
         <div className="min-w-[960px]">
           <div className={clsx(HEAD, FIX_COLS)}>
-            <span>Package</span><span>Upgrade</span><span>Clears</span><span>Running in</span><NumHead>Images</NumHead><NumHead>Workloads</NumHead>
+            <span>Package</span><WithTooltip tip="Upgrading a package means rebuilding the image that holds it."><span className="self-start underline decoration-dotted underline-offset-2">Upgrade</span></WithTooltip><span>Clears</span><span>Running in</span><NumHead>Images</NumHead><NumHead>Workloads</NumHead>
           </div>
           {fixes.map((f) => {
             const runners = f.affected.flatMap((a) => a.workloads)
+            const exposure = exposureLookup(f.exposed)
             const several = f.from.length > 1
             return (
               <Disclosure
@@ -601,9 +706,12 @@ function FixTable({ fixes, onOpen, onShowCVE }: { fixes: VulnerabilityFix[]; onO
                       </span>
                     </WithTooltip>
                     <SeverityCounts counts={f.counts} />
-                    <span className="truncate text-theme-text-secondary">{workloadSummary(runners)}</span>
+                    <WorkloadSummary workloads={runners} exposure={exposure} />
                     <Num>{f.images}</Num>
-                    <Num strong>{f.workloads}</Num>
+                    <span className="flex flex-col items-end">
+                      <Num strong>{f.workloads}</Num>
+                      <ExposedCount exposed={f.exposed} total={f.exposedTotal} workloads={f.workloads} unknown={f.exposureUnknown} />
+                    </span>
                   </div>
                 }
               >
@@ -621,7 +729,7 @@ function FixTable({ fixes, onOpen, onShowCVE }: { fixes: VulnerabilityFix[]; onO
                     <ImageName image={a.image} className="text-theme-text-primary" />
                     <span className="truncate font-mono text-theme-text-tertiary">{several ? a.installedVersions.join(', ') : ''}</span>
                     <span />
-                    <WorkloadLinks workloads={a.workloads} onOpen={onOpen} inline />
+                    <WorkloadLinks workloads={a.workloads} onOpen={onOpen} inline exposure={exposure} />
                     <span />
                     <Num>{a.workloadsTotal}</Num>
                   </div>
@@ -644,7 +752,9 @@ function CVETable({ cves, onOpen }: { cves: VulnerabilityCVE[]; onOpen: (w: Vuln
           <div className={clsx(HEAD, CVE_COLS)}>
             <span>CVE</span><span>Severity</span><NumHead>Score</NumHead><span>Package</span><span>Fix</span><NumHead>Images</NumHead><NumHead>Workloads</NumHead>
           </div>
-          {cves.map((c) => (
+          {cves.map((c) => {
+            const exposure = exposureLookup(c.exposed)
+            return (
             <Disclosure
               key={c.id}
               flush
@@ -659,7 +769,10 @@ function CVETable({ cves, onOpen }: { cves: VulnerabilityCVE[]; onOpen: (w: Vuln
                   <span className="truncate font-mono text-xs text-theme-text-secondary">{c.packages.join(', ')}</span>
                   <CVEFix cve={c} />
                   <Num>{c.images}</Num>
-                  <Num strong>{c.workloads}</Num>
+                  <span className="flex flex-col items-end">
+                    <Num strong>{c.workloads}</Num>
+                    <ExposedCount exposed={c.exposed} total={c.exposedTotal} workloads={c.workloads} unknown={c.exposureUnknown} />
+                  </span>
                 </div>
               }
             >
@@ -667,7 +780,7 @@ function CVETable({ cves, onOpen }: { cves: VulnerabilityCVE[]; onOpen: (w: Vuln
                 <div key={a.imageId} className={clsx(SUB, CVE_COLS)}>
                   <span className="flex min-w-0 flex-col gap-0.5">
                     <ImageName image={a.image} className="text-theme-text-primary" />
-                    <WorkloadLinks workloads={a.workloads} onOpen={onOpen} inline />
+                    <WorkloadLinks workloads={a.workloads} onOpen={onOpen} inline exposure={exposure} />
                   </span>
                   <span className="col-span-2" />
                   <span className="col-span-2 flex min-w-0 flex-col">
@@ -687,15 +800,18 @@ function CVETable({ cves, onOpen }: { cves: VulnerabilityCVE[]; onOpen: (w: Vuln
                 {c.link && <a href={c.link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-accent-text hover:underline">Advisory <ExternalLink className="h-3 w-3" aria-hidden /></a>}
               </div>
             </Disclosure>
-          ))}
+            )
+          })}
         </div>
       </div>
     </div>
   )
 }
 
-function WorkloadTable({ workloads, severities, query, namespaces, onOpen, onShow }: {
+function WorkloadTable({ workloads, exposure, severities, query, namespaces, onOpen, onShow }: {
   workloads: VulnerabilityWorkload[]
+  /** Absent from an older Radar: the route column is left out, not shown empty. */
+  exposure: VulnerabilitiesResponse['exposure']
   severities: VulnerabilitySeverity[]
   query: string
   /** The table's namespace scope, so an expanded row reads what the row did. */
@@ -703,23 +819,25 @@ function WorkloadTable({ workloads, severities, query, namespaces, onOpen, onSho
   onOpen: (w: VulnerabilityWorkloadRef) => void
   onShow: (w: VulnerabilityWorkloadRef, by: VulnerabilityView) => void
 }) {
+  const cols = exposure ? WORKLOAD_ROUTE_COLS : WORKLOAD_COLS
   return (
     <div className="shrink-0 overflow-x-auto overflow-y-hidden rounded-lg border border-theme-border bg-theme-surface">
-      <div className="min-w-[760px]">
-        <div className={clsx(HEAD, WORKLOAD_COLS)}>
-          <span>Workload</span><span>Findings across its images</span><span>Containers</span>
+      <div className={exposure ? 'min-w-[920px]' : 'min-w-[760px]'}>
+        <div className={clsx(HEAD, cols)}>
+          <span>Workload</span><span>Findings across its images</span>{exposure && <span>{EXPOSURE.column}</span>}<span>Containers</span>
         </div>
         {workloads.map((w) => (
           <Disclosure
             key={`${w.namespace}/${w.kind}/${w.name}`}
             flush
             summary={
-              <div className={clsx('grid flex-1 items-start gap-4 text-sm', WORKLOAD_COLS)}>
+              <div className={clsx('grid flex-1 items-start gap-4 text-sm', cols)}>
                 <span className="flex min-w-0 flex-col">
                   <span className="truncate text-theme-text-primary">{w.name}</span>
                   <span className="text-xs text-theme-text-tertiary">{w.kind} · {w.namespace}</span>
                 </span>
                 <WorkloadFindings workload={w} />
+                {exposure && <WorkloadRoute workload={w} gaps={exposure.gaps} />}
                 <ul className="flex min-w-0 flex-col gap-1">
                   {w.containers.map((c) => (
                     <li key={`${c.name}/${c.image}`} className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-xs">
@@ -732,12 +850,37 @@ function WorkloadTable({ workloads, severities, query, namespaces, onOpen, onSho
               </div>
             }
           >
-            {(open) => <WorkloadUpgrades workload={w} active={open} severities={severities} query={query} namespaces={namespaces} onOpen={onOpen} onShow={onShow} />}
+            {(open) => <WorkloadUpgrades workload={w} routeColumn={!!exposure} active={open} severities={severities} query={query} namespaces={namespaces} onOpen={onOpen} onShow={onShow} />}
           </Disclosure>
         ))}
       </div>
     </div>
   )
+}
+
+// The workload's routes from outside the cluster; empty when none was seen,
+// Unknown where Radar couldn't read a route kind in its namespace.
+function WorkloadRoute({ workload: w, gaps }: { workload: VulnerabilityWorkload; gaps?: VulnerabilityGap[] }) {
+  const routes = w.routes ?? []
+  const total = w.routesTotal ?? routes.length
+  if (routes.length > 0) {
+    return (
+      <WithTooltip tip={routesTip(routes, total)}>
+        <span className="flex min-w-0 items-center gap-1 truncate text-xs text-theme-text-secondary">
+          <ExposedMark tip={routesTip(routes, total)} />
+          {routeText(routes[0])}{total > 1 && <span className="text-theme-text-tertiary"> and {total - 1} more</span>}
+        </span>
+      </WithTooltip>
+    )
+  }
+  if (w.exposureUnknown || exposureUnknownIn(gaps, w.namespace)) {
+    return (
+      <WithTooltip tip={EXPOSURE.unknownTip}>
+        <span className="text-xs text-theme-text-tertiary">{EXPOSURE.unknown}</span>
+      </WithTooltip>
+    )
+  }
+  return <span />
 }
 
 // Whether an upgrade clears the CVE: in every image, some, or none.
@@ -757,8 +900,10 @@ const MAX_WORKLOAD_UPGRADES = 8
 
 // What a workload's owner changes: the By fix rows narrowed to this
 // workload, read when the row opens.
-function WorkloadUpgrades({ workload: w, active, severities, query, namespaces, onOpen, onShow }: {
+function WorkloadUpgrades({ workload: w, routeColumn, active, severities, query, namespaces, onOpen, onShow }: {
   workload: VulnerabilityWorkload
+  /** The table shows the route column; sub-rows keep a cell for it so detail lines up. */
+  routeColumn: boolean
   /** False once the row closes: its subtree stays mounted, its polling stops. */
   active: boolean
   severities: VulnerabilitySeverity[]
@@ -769,6 +914,8 @@ function WorkloadUpgrades({ workload: w, active, severities, query, namespaces, 
   onShow: (w: VulnerabilityWorkloadRef, by: VulnerabilityView) => void
 }) {
   const ref = { kind: w.kind, group: w.group, namespace: w.namespace, name: w.name }
+  const cols = routeColumn ? WORKLOAD_ROUTE_COLS : WORKLOAD_COLS
+  const routeCell = routeColumn && <span />
   // The row's own scope: the newest report for an image wins across every
   // namespace read, so a narrower read could pick an older one.
   const { data, isLoading, error } = useVulnerabilities({ view: 'fix', namespaces, severities, query, workload: ref }, active)
@@ -804,20 +951,21 @@ function WorkloadUpgrades({ workload: w, active, severities, query, namespaces, 
   )
   return (
     <>
-      <div className={clsx(SUB, WORKLOAD_COLS)}>
-        <span className="col-span-3">{lead}</span>
+      <div className={clsx(SUB, cols)}>
+        <span className="col-span-full">{lead}</span>
       </div>
       {fixes.length > 0 && (
-        <div className={clsx(SUB, WORKLOAD_COLS, 'text-theme-text-tertiary')}>
+        <div className={clsx(SUB, cols, 'text-theme-text-tertiary')}>
           <span />
           <span className="grid min-w-0 grid-cols-[1.75rem_2.25rem_minmax(0,1fr)] gap-2">
             <span className="text-right">C</span><span className="text-right">H</span><span>Upgrade</span>
           </span>
+          {routeCell}
           <span />
         </div>
       )}
       {fixes.slice(0, MAX_WORKLOAD_UPGRADES).map((f) => (
-        <div key={`${f.packageType ?? ''}/${f.package}/${f.to ?? (f.fixedVersions ?? []).join('|')}`} className={clsx(SUB, WORKLOAD_COLS)}>
+        <div key={`${f.packageType ?? ''}/${f.package}/${f.to ?? (f.fixedVersions ?? []).join('|')}`} className={clsx(SUB, cols)}>
           <span className="flex min-w-0 items-baseline gap-2">
             <span className="truncate font-mono text-theme-text-primary">{f.package}</span>
             {f.packageType && <span className="truncate text-theme-text-tertiary">{ecosystemLabel(f.packageType)}</span>}
@@ -830,6 +978,7 @@ function WorkloadUpgrades({ workload: w, active, severities, query, namespaces, 
               ? <WithTooltip tip={`${f.from.join(', ')} → ${f.to}`}><FixVersion installed={installedLabel(f.from)} target={f.to} /></WithTooltip>
               : <span className="truncate font-mono text-theme-text-secondary">fixed in {(f.fixedVersions ?? []).join(', ')}</span>}
           </span>
+          {routeCell}
           <span className="flex min-w-0 flex-wrap gap-x-3">
             {several && f.affected.map((a) => <ImageName key={a.imageId} image={a.image} className="text-theme-text-tertiary" />)}
           </span>
@@ -932,7 +1081,7 @@ function UnscannedList({ data, onOpen }: { data: VulnerabilitiesResponse; onOpen
                 )}
               </span>
               <span className="flex min-w-0 flex-wrap items-baseline gap-x-4">
-                <WorkloadLinks workloads={u.workloads} onOpen={onOpen} inline />
+                <WorkloadLinks workloads={u.workloads} onOpen={onOpen} inline exposure={exposureLookup(u.exposed)} />
                 {u.workloadsTotal > u.workloads.length && <span className="text-theme-text-tertiary">and {u.workloadsTotal - u.workloads.length} more</span>}
               </span>
             </li>

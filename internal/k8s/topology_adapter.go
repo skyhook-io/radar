@@ -31,6 +31,10 @@ func NewTopologyResourceProvider(cache *ResourceCache) topology.ResourceProvider
 	return &topologyResourceProvider{cache: cache}
 }
 
+func (a *topologyResourceProvider) APIDiscoveryPending() bool {
+	return a.cache.apiDiscoveryPending.Load()
+}
+
 func (a *topologyResourceProvider) Pods() ([]*corev1.Pod, error) {
 	lister := a.cache.Pods()
 	if lister == nil {

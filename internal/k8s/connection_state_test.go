@@ -481,3 +481,27 @@ func TestClassifyErrorNil(t *testing.T) {
 		t.Fatalf("ClassifyError(nil) = %q, want empty", got)
 	}
 }
+
+func TestLateConnectionPublicationsPreserveStoppedSwitch(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "previous"})
+	startup := OperationContext()
+	started, release := make(chan struct{}), make(chan struct{})
+	clusterLivenessProbe = func(context.Context) error {
+		close(started)
+		<-release
+		return errors.New("previous cluster is unreachable")
+	}
+	done := make(chan bool, 1)
+	go func() {
+		done <- MarkDisconnectedIfClusterUnreachable("Kubernetes cluster unreachable: dial tcp: connection refused")
+	}()
+	<-started
+	CancelOngoingOperations()
+	SetConnectionStatus(ConnectionStatus{State: StateDisconnected, Context: "target", ErrorType: switchStoppedErrorType})
+	close(release)
+	if <-done || SetConnectionStatusIfCurrent(startup, ConnectionStatus{State: StateConnected, Context: "previous"}) || GetConnectionStatus().ErrorType != switchStoppedErrorType {
+		t.Fatal("old liveness or startup result overwrote a stopped switch")
+	}
+}

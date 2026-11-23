@@ -366,6 +366,12 @@ func charCluster() *charFixture {
 	typed("", "PersistentVolume", "persistentvolumes", pv)
 	addSecret(&corev1.Secret{ObjectMeta: charMeta("team", "db-creds", nil)})
 
+	// A Longhorn Volume and the PV whose CSI handle names it.
+	lhPV := &corev1.PersistentVolume{ObjectMeta: charMeta("", "pv-lh-0", nil), Spec: corev1.PersistentVolumeSpec{PersistentVolumeSource: corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "driver.longhorn.io", VolumeHandle: "vol-lh-0"}}}}
+	p.pvs = append(p.pvs, lhPV)
+	typed("", "PersistentVolume", "persistentvolumes", lhPV)
+	dyn("longhorn.io", "v1beta2", "Volume", "volumes", true, charUnstructured("longhorn.io/v1beta2", "Volume", "longhorn-system", "vol-lh-0", nil, map[string]any{"numberOfReplicas": int64(3)}, nil))
+
 	// infra/agent: DaemonSet Pods on two Nodes.
 	agent := &appsv1.DaemonSet{ObjectMeta: charMeta("infra", "agent", nil), Spec: appsv1.DaemonSetSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "agent"}}}}
 	p.daemonSets = append(p.daemonSets, agent)

@@ -51,7 +51,7 @@ func TestDetectWorkloadManager(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		got := detectWorkloadManager(&appsv1.Deployment{ObjectMeta: tc.meta})
+		got := DetectWorkloadManager(&appsv1.Deployment{ObjectMeta: tc.meta})
 		if got == nil {
 			t.Errorf("%s: no manager detected", tc.name)
 			continue
@@ -74,7 +74,7 @@ func TestDetectWorkloadManagerReportsNothingWithoutAReconcilingSignal(t *testing
 		"instance label only": {Labels: map[string]string{"app.kubernetes.io/instance": "vcs"}},
 		"no metadata":         {},
 	} {
-		if got := detectWorkloadManager(&appsv1.Deployment{ObjectMeta: meta}); got != nil {
+		if got := DetectWorkloadManager(&appsv1.Deployment{ObjectMeta: meta}); got != nil {
 			t.Errorf("%s: got %+v, want nil", name, got)
 		}
 	}
@@ -90,7 +90,7 @@ func TestDemandTargetBasisNamesTheStatistic(t *testing.T) {
 		t.Errorf("memory basis = %q", got)
 	}
 	floor := RightsizingRow{Resource: "memory", Observed: &ObservedStatistic{Name: "Max", Value: 1024 * 1024}}
-	if got := DemandTargetBasis(floor); got != "minimum request "+formatRightsizingValue(rightsizingMemoryMin, "memory") {
+	if got := DemandTargetBasis(floor); got != "minimum request 64Mi" {
 		t.Errorf("a target set by the floor must say so, got %q", got)
 	}
 	if got := DemandTargetBasis(RightsizingRow{Resource: "cpu"}); got != "" {
@@ -201,12 +201,12 @@ func TestClusterScopedControllerOwnerCarriesNoNamespace(t *testing.T) {
 	// discovery; a CRD such as ClusterPolicy takes the same branch through it.
 	obj := &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Namespace: "gpu-operator",
 		OwnerReferences: []metav1.OwnerReference{{APIVersion: "v1", Kind: "Node", Name: "n1", Controller: &controller}}}}
-	if got := detectWorkloadManager(obj); got == nil || got.Namespace != "" {
+	if got := DetectWorkloadManager(obj); got == nil || got.Namespace != "" {
 		t.Errorf("a cluster-scoped owner must not inherit the workload namespace, got %+v", got)
 	}
 	namespaced := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: "monitoring",
 		OwnerReferences: []metav1.OwnerReference{{APIVersion: "monitoring.coreos.com/v1", Kind: "Prometheus", Name: "k8s", Controller: &controller}}}}
-	if got := detectWorkloadManager(namespaced); got == nil || got.Namespace != "monitoring" {
+	if got := DetectWorkloadManager(namespaced); got == nil || got.Namespace != "monitoring" {
 		t.Errorf("a namespaced owner lives beside its workload, got %+v", got)
 	}
 }

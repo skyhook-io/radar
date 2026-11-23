@@ -1,13 +1,16 @@
 import { clsx } from "clsx";
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Loader2, Wifi, WifiOff } from "lucide-react";
 import { Disclosure } from "@skyhook-io/k8s-ui/components/ui/Disclosure";
+import { ClusterScopeNote } from "@skyhook-io/k8s-ui/components/ui/ClusterScopeNote";
+import { isClusterScopeWithheld } from "@skyhook-io/k8s-ui/types/cluster-scope";
 import {
   AreaChart,
   SeriesLegend,
   computeSaturation,
   describePodCoverage,
+  PARTIAL_DATA_NOTE,
   type ReferenceLine,
 } from "@skyhook-io/k8s-ui/components/charts";
 import {
@@ -36,6 +39,7 @@ import { Tooltip } from "../ui/Tooltip";
 import { WorkloadMetricsSection } from "./WorkloadMetricsSection";
 import { RightsizingStrip } from "./RightsizingStrip";
 import { useNavCustomization } from "../../context/NavCustomization";
+import { leastCertainScope, NAME_MATCHED_CLUSTER_NOTE, NAME_MATCHED_SUMMARY } from "./nameMatchedScope";
 import { previousSettingsNote, usePreviousIntegrationSettings } from '../../hooks/usePreviousIntegrationSettings';
 
 // Used when MetricsTabContent is in expanded (full-screen) mode. Drawer mode
@@ -49,6 +53,8 @@ export interface PrometheusChartsGridProps {
   resource?: any;
   /** Fill and scroll its container (default). False lets the parent scroll it with content below. */
   fill?: boolean;
+  workloadTotals?: ReactNode;
+  showRightsizing?: boolean;
 }
 
 const SUPPORTED_KINDS = new Set([
@@ -68,6 +74,8 @@ export function PrometheusChartsGrid({
   name,
   resource,
   fill = true,
+  workloadTotals,
+  showRightsizing = true,
 }: PrometheusChartsGridProps) {
   useAutoPromConnect();
   const { data: status, isLoading: statusLoading } = usePrometheusStatus();
@@ -98,7 +106,41 @@ export function PrometheusChartsGrid({
     [resource, kind],
   );
 
+  // Read from the cache the network and storage charts fill; never fetches itself.
+  const rxScope = usePrometheusResourceMetrics(kind, namespace, name, "network_rx", timeRange, false).data?.clusterScope;
+  const txScope = usePrometheusResourceMetrics(kind, namespace, name, "network_tx", timeRange, false).data?.clusterScope;
+  const diskScope = usePrometheusResourceMetrics(kind, namespace, name, "filesystem", timeRange, false).data?.clusterScope;
+  const nameMatchedScope = leastCertainScope(categories.some((c) => c.key === "filesystem") ? [rxScope, txScope, diskScope] : [rxScope, txScope]);
+  const nameMatchedNote = NAME_MATCHED_CLUSTER_NOTE[nameMatchedScope];
+
   if (!isSupported) return null;
+
+  const rangeControl = <select
+          aria-label="Metrics time range"
+          value={timeRange}
+          onChange={(e) => {
+            const next = new URLSearchParams(searchParams);
+            next.set("metricsRange", e.target.value);
+            setSearchParams(next, { replace: true });
+          }}
+          className="ml-auto rounded-md border border-theme-border bg-theme-elevated px-2 py-1 text-xs text-theme-text-secondary shadow-theme-sm focus:outline-none focus:ring-1 focus:ring-accent/50"
+        >
+          {TIME_RANGES.map((tr) => (
+            <option key={tr.value} value={tr.value}>
+              {tr.label}
+            </option>
+          ))}
+        </select>;
+
+  if (workloadTotals && !isConnected) {
+    return (
+      <div className={clsx("space-y-4 p-4", fill && "h-full overflow-auto")}>
+        <div className="flex">{rangeControl}</div>
+        {workloadTotals}
+        <RestartEventLane kind={kind} namespace={namespace} name={name} range={timeRange} />
+      </div>
+    );
+  }
 
   if (statusLoading) {
     return (
@@ -178,30 +220,13 @@ export function PrometheusChartsGrid({
     <MetricsPanel key={def.key} category={def} kind={kind} namespace={namespace} name={name} timeRange={timeRange} referenceLines={refLines} />
   );
 
-  const rangeControl = <select
-          aria-label="Metrics time range"
-          value={timeRange}
-          onChange={(e) => {
-            const next = new URLSearchParams(searchParams);
-            next.set("metricsRange", e.target.value);
-            setSearchParams(next, { replace: true });
-          }}
-          className="ml-auto rounded-md border border-theme-border bg-theme-elevated px-2 py-1 text-xs text-theme-text-secondary shadow-theme-sm focus:outline-none focus:ring-1 focus:ring-accent/50"
-        >
-          {TIME_RANGES.map((tr) => (
-            <option key={tr.value} value={tr.value}>
-              {tr.label}
-            </option>
-          ))}
-        </select>;
-
   return (
     <div className={clsx("flex flex-col min-w-0 w-full", fill && "h-full overflow-auto")}>
       {!isWorkload && <div className="flex shrink-0 items-center justify-between gap-3 px-4 pt-3">{rangeControl}</div>}
 
       {isWorkload && (
         <WorkloadMetricsSection key={`${kind}/${namespace}/${name}`} kind={kind} namespace={namespace} name={name} range={timeRange}
-          controls={rangeControl}
+          controls={rangeControl} workloadTotals={workloadTotals}
           cpuReferenceLines={cpuRefLines} memoryReferenceLines={memRefLines}
           nameMatchedCharts={{ cpu: cpu && renderPanel({ def: cpu }), memory: mem && renderPanel({ def: mem }) }}
           restartLane={showRestartLane && <div className="mb-3"><RestartEventLane kind={kind} namespace={namespace} name={name} range={timeRange} /></div>} />
@@ -222,8 +247,8 @@ export function PrometheusChartsGrid({
 
       <div className="metrics-layout min-w-0 px-4 pt-4">
         {isWorkload && <h3 className="mb-2 text-sm font-semibold text-theme-text-primary">Network and storage</h3>}
-        {isWorkload && <Disclosure className="mb-2 text-xs text-theme-text-secondary" summary="Pod-name matched · identity unverified">
-          <p className="mt-2 max-w-2xl text-sm leading-relaxed">These charts match current Pod names, independently of the identity-checked charts above. Matching names in a shared backend may include another cluster.</p>
+        {isWorkload && <Disclosure className="mb-2 text-xs text-theme-text-secondary" summary={`Pod-name matched · ${NAME_MATCHED_SUMMARY[nameMatchedScope]}`}>
+          <p className="mt-2 max-w-2xl text-sm leading-relaxed">These charts match current Pod names, independently of the identity-checked charts above. {nameMatchedNote ?? "Matching names in a shared backend may include another cluster."}</p>
         </Disclosure>}
         <div className="metrics-chart-grid">
           {chartPanels.filter(({ def }) => !isWorkload || (def.key !== "cpu" && def.key !== "memory")).map(renderPanel)}
@@ -237,7 +262,7 @@ export function PrometheusChartsGrid({
         timeRange={timeRange}
         category={isWorkload ? "network_rx" : "cpu"}
       />
-      {["Deployment", "StatefulSet", "DaemonSet"].includes(kind) && (
+      {showRightsizing && isWorkload && (
         <div className="px-4 pb-4"><RightsizingStrip kind={kind} namespace={namespace} name={name} /></div>
       )}
     </div>
@@ -334,6 +359,8 @@ function MetricsPanel({
           <PanelLoading />
         ) : error ? (
           <PanelError message={(error as Error).message} />
+        ) : isClusterScopeWithheld(metrics?.clusterScope) ? (
+          <ClusterScopeNote scope={metrics?.clusterScope} />
         ) : hasData && series ? (
           <>
             <AreaChart
@@ -349,9 +376,12 @@ function MetricsPanel({
                 <SeriesLegend series={series} color={category.chartColor} />
               </div>
             )}
+            {metrics?.partial && (
+              <p className="mt-1.5 text-xs text-theme-text-tertiary">{PARTIAL_DATA_NOTE}</p>
+            )}
           </>
         ) : (
-          <PanelNoData hint={metrics?.hint} />
+          <PanelNoData hint={metrics?.hint} partial={metrics?.partial} />
         )}
       </div>
     </section>
@@ -406,10 +436,13 @@ function PanelError({ message }: { message: string }) {
   );
 }
 
-function PanelNoData({ hint }: { hint?: string }) {
+function PanelNoData({ hint, partial }: { hint?: string; partial?: boolean }) {
   return (
     <div className="flex flex-col items-center justify-center h-[240px] text-theme-text-tertiary text-xs px-3 text-center">
-      No data
+      {partial ? "No samples in a partial answer" : "No data"}
+      {partial && (
+        <span className="text-theme-text-quaternary mt-1 max-w-xs">{PARTIAL_DATA_NOTE}</span>
+      )}
       {hint && (
         <span className="text-theme-text-quaternary mt-1 max-w-xs">{hint}</span>
       )}
