@@ -11,6 +11,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/integration"
+	"github.com/skyhook-io/radar/internal/k8s"
 	substrateapi "github.com/skyhook-io/radar/internal/substrate"
 	"github.com/skyhook-io/radar/internal/substrate/ateapi"
 	model "github.com/skyhook-io/radar/pkg/substrate"
@@ -420,5 +421,119 @@ func TestSubstrateKagentAgentSessionsNeedEveryTemplateForHints(t *testing.T) {
 	}
 	if resp.HintedEarlierRevisions != 1 || resp.Complete {
 		t.Errorf("a hint over a partial template read = hinted %d complete %v", resp.HintedEarlierRevisions, resp.Complete)
+	}
+}
+
+func TestSubstrateKagentSessionsUnion(t *testing.T) {
+	s, _ := kagentServer(t, map[string][]string{"": {"kagent"}})
+	for _, tc := range []struct {
+		query string
+		want  int
+	}{
+		{"kagent=sessions", 3},
+		{"kagent=sessions&namespaces=kagent", 3},
+		{"kagent=sessions&namespaces=other", 0},
+		{"kagent=sessions&namespace=other", 0},
+		{"kagent=sessions&atespace=other", 0},
+		{"kagent=sessions&state=crashed", 1},
+		{"kagent=sessions&agent=kagent/k8s-helper", 2},
+	} {
+		var got substrateActorsResponse
+		rec := call(t, s, s.handleSubstrateActors, substrateCall{path: "/api/substrate/actors?" + tc.query}, &got)
+		if rec.Code != http.StatusOK || got.Total == nil || *got.Total != tc.want {
+			t.Fatalf("%s: status %d total=%v", tc.query, rec.Code, got.Total)
+		}
+		for _, row := range got.Rows {
+			if row.Kagent == nil || row.Kagent.Kind == model.KagentSandbox {
+				t.Fatalf("non-session row %+v", row)
+			}
+		}
+	}
+}
+
+func TestSubstrateKagentSummaryPerCallerAndPaging(t *testing.T) {
+	s, _ := kagentServer(t, map[string][]string{"admin": {"kagent"}, "viewer": {}})
+	var got kagentSessionSummaryResponse
+	rec := call(t, s, s.handleSubstrateKagentSummary, substrateCall{path: "/api/substrate/kagent/summary", user: admin}, &got)
+	if rec.Code != http.StatusOK || len(got.Rows) != 1 {
+		t.Fatalf("summary status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	row := got.Rows[0]
+	if row.Sessions.Total != 2 || row.Crashed != 1 || row.OnNewSessionsRevision != 2 || row.OnOtherRevisions != 0 || row.HintedEarlierRevisions != 1 || row.Placement.Template == nil || row.Placement.Template.Name != helperTemplate {
+		t.Fatalf("summary %+v", row)
+	}
+	rec = call(t, s, s.handleSubstrateKagentSummary, substrateCall{path: "/api/substrate/kagent/summary", user: viewer}, nil)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("denied summary=%d", rec.Code)
+	}
+	got = kagentSessionSummaryResponse{}
+	rec = call(t, s, s.handleSubstrateKagentSummary, substrateCall{path: "/api/substrate/kagent/summary?limit=1&offset=1", user: admin}, &got)
+	if rec.Code != http.StatusOK || got.Total != 1 || len(got.Rows) != 0 {
+		t.Fatalf("paged summary %+v", got)
+	}
+}
+
+func TestSubstrateKagentSummarySharesAPITierGate(t *testing.T) {
+	s := substrateTestServer(t, substrateapi.Kube{KagentServed: true})
+	s.listenAddress = "0.0.0.0"
+	for _, handler := range []func(http.ResponseWriter, *http.Request){s.handleSubstrateKagentSummary, s.handleSubstrateActors} {
+		if rec := call(t, s, handler, substrateCall{path: "/api/substrate/kagent/summary?kagent=sessions"}, nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), substrateapi.CodeSharedRadar) {
+			t.Fatalf("shared no-auth: %d %s", rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestSubstrateKagentSummaryRejectsContextSwitch(t *testing.T) {
+	s, _ := kagentServer(t, map[string][]string{"": {"kagent"}})
+	previous := substrateKagentAgents
+	t.Cleanup(func() { substrateKagentAgents = previous })
+	substrateKagentAgents = func(s *Server, r *http.Request, ns []string) substrateKagentRead {
+		got := previous(s, r, ns)
+		k8s.CancelOngoingOperations()
+		return got
+	}
+	rec := call(t, s, s.handleSubstrateKagentSummary, substrateCall{path: "/api/substrate/kagent/summary"}, nil)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), substrateapi.CodeContextChanged) {
+		t.Fatalf("switched summary=%d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSubstrateKagentSummaryPartialActorsRemainLowerBounds(t *testing.T) {
+	old := substrateapi.MaxActors
+	substrateapi.MaxActors = 1
+	t.Cleanup(func() { substrateapi.MaxActors = old })
+	s, _ := kagentServer(t, map[string][]string{"": {"kagent"}})
+	var got kagentSessionSummaryResponse
+	rec := call(t, s, s.handleSubstrateKagentSummary, substrateCall{path: "/api/substrate/kagent/summary"}, &got)
+	if rec.Code != http.StatusOK || len(got.Rows) != 1 || got.Rows[0].Complete || got.Coverage.Actors.Code != substrateapi.CodeCapExceeded {
+		t.Fatalf("partial summary=%d %+v", rec.Code, got)
+	}
+}
+
+func TestSubstrateKagentSummaryAmbiguousTemplateIsNotUnread(t *testing.T) {
+	s := substrateTestServer(t, substrateapi.Kube{KagentServed: true})
+	prefix := strings.Repeat("a", 50)
+	template := prefix + "-" + helperRevision[:12]
+	f := kagentFake()
+	f.templates = append(f.templates, &ateapi.ActorTemplate{Metadata: &ateapi.ResourceMetadata{Atespace: "kagent", Name: template}})
+	connectFake(t, s, f, fullToken)
+	oldServed, oldAgents := substrateKagentServed, substrateKagentAgents
+	t.Cleanup(func() { substrateKagentServed, substrateKagentAgents = oldServed, oldAgents })
+	substrateKagentServed = func() bool { return true }
+	substrateKagentAgents = func(*Server, *http.Request, []string) substrateKagentRead {
+		return substrateKagentRead{Served: true, Access: integration.KindAccess{State: integration.KindCoverageFull, All: true}, Agents: []model.KagentAgent{
+			{Namespace: "kagent", Name: prefix + "-one", LatestSuccessfulRevision: helperRevision},
+			{Namespace: "kagent", Name: prefix + "-two", LatestSuccessfulRevision: helperRevision},
+		}}
+	}
+	var got kagentSessionSummaryResponse
+	rec := call(t, s, s.handleSubstrateKagentSummary, substrateCall{path: "/api/substrate/kagent/summary"}, &got)
+	if rec.Code != http.StatusOK || len(got.Rows) != 2 {
+		t.Fatalf("ambiguous summary %d %+v", rec.Code, got)
+	}
+	for _, row := range got.Rows {
+		if row.Placement.State != "unknown" || row.Placement.Template == nil || !strings.Contains(row.Placement.Reading, "attributed") || !row.Revisions[0].Ambiguous {
+			t.Fatalf("ambiguous template %+v", row)
+		}
 	}
 }

@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
+import { useLocation } from 'react-router-dom'
 import { MessagesSquare } from 'lucide-react'
-import { RadarUpgradeNote, Section } from '@skyhook-io/k8s-ui'
+import { RadarUpgradeNote, Section, WorkspaceCard } from '@skyhook-io/k8s-ui'
 import { ApiError } from '../../api/client'
 import { substrateErrorCode, useKagentAgentSessions, type KagentAgentRef, type SubstrateRef } from '../../api/substrateWorkspace'
 import { useConnection } from '../../context/ConnectionContext'
@@ -18,6 +19,7 @@ function count(n: number, lowerBound: boolean): string {
 
 export interface KagentAgentSessionsProps {
   agent: KagentAgentRef
+  framed?: boolean
   /** Opens one session's actor; defaults to its page in the Agent Substrate workspace. */
   onOpenActor?: (ref: SubstrateRef) => void
   /** Opens the Actors list narrowed to this Agent's sessions; defaults to navigating there. */
@@ -30,13 +32,16 @@ export interface KagentAgentSessionsProps {
  * sessions Radar can't prove are this Agent's are a hint beside them. Where new sessions start and what
  * Radar can't see of a conversation are the drawer's Agent section's to say.
  */
-export function KagentAgentSessions({ agent, onOpenActor, onOpenSessions }: KagentAgentSessionsProps) {
+export function KagentAgentSessions({ agent, onOpenActor, onOpenSessions, framed }: KagentAgentSessionsProps) {
   const navigate = useWorkspaceNavigate()
+  const location = useLocation()
   const { connection } = useConnection()
   const query = useKagentAgentSessions(agent)
-  const openActor = onOpenActor ?? ((ref: SubstrateRef) => navigate(substrateActorPath(ref, connection.context || undefined)))
+  const openActor = onOpenActor ?? ((ref: SubstrateRef) => navigate(substrateActorPath(ref, connection.context || undefined), location.pathname.startsWith('/kagent/agents/') ? {
+    state: { returnLabel: `Agent: ${agent.name}`, returnPath: location.pathname + location.search, returnCtx: connection.context },
+  } : undefined))
   const openSessions = onOpenSessions ?? ((a: KagentAgentRef) => navigate(substrateActorsPath({ agent: agentFilterValue(a) })))
-  const frame = (body: ReactNode) => <Section title="Sessions" icon={MessagesSquare} defaultExpanded><div className="space-y-2">{body}</div></Section>
+  const frame = (body: ReactNode) => framed ? <WorkspaceCard title="Sessions"><div className="space-y-3">{body}</div></WorkspaceCard> : <Section title="Sessions" icon={MessagesSquare} defaultExpanded><div className="space-y-2">{body}</div></Section>
 
   const upgrade = query.kagentUpgrade ?? query.upgrade
   if (upgrade) return frame(<RadarUpgradeNote requirement={upgrade} />)
@@ -48,20 +53,20 @@ export function KagentAgentSessions({ agent, onOpenActor, onOpenSessions }: Kage
 
   const lower = !data.complete
   const total = data.sessions.total
-  const earlier = data.onEarlierRevisions
-  const current = total - earlier
+  const current = data.revisions.filter(r => r.newSessions).reduce((n, r) => n + r.sessions, 0)
+  const other = total - current
   return frame(
     <>
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <p className="text-sm text-theme-text-primary">
           <span className="font-medium">{count(total, lower)}</span> {total === 1 && !lower ? 'session' : 'sessions'}
           {total > 0 && (
-            <span className="text-theme-text-secondary"> · {count(current, lower)} on the current revision, {count(earlier, lower)} on earlier ones</span>
+            <span className="text-theme-text-secondary"> · {count(current, lower)} on the new-sessions revision, {count(other, lower)} on other revisions</span>
           )}
           {data.needAttention > 0 && <span className="text-theme-text-secondary"> · {count(data.needAttention, lower)} {data.needAttention === 1 ? 'needs' : 'need'} attention</span>}
         </p>
         {total > 0 && (
-          <button type="button" onClick={() => openSessions(agent)} className="text-sm text-accent-text hover:underline">List its sessions →</button>
+          <button type="button" onClick={() => openSessions(agent)} className="text-sm text-accent-text hover:underline">List its sessions in Agent Substrate →</button>
         )}
       </div>
       {lower && (

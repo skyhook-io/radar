@@ -142,7 +142,7 @@ const FLEET_MODE_KINDS = new Set<NodeKind>([
 
 // Convert API resource name back to topology node ID prefix
 // Extended MainView type that includes traffic and cost
-type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'cnpg' | 'velero' | 'substrate' | 'agent-sandbox' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications' | 'investigations'
+type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'cnpg' | 'velero' | 'substrate' | 'agent-sandbox' | 'kagent' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications' | 'investigations'
 
 // Views that have been laid out for phone width (640px and below). The rest
 // keep their desktop width on a phone and scroll sideways; add a view here in
@@ -227,7 +227,7 @@ function namespaceFilterDisabled(
     }
   }
   const workspace = workspaceForView(view)
-  if (workspace?.namespaceScope === 'cluster') return { disabled: true, tooltip: workspace.namespaceFilterTooltip }
+  if ((workspace?.namespaceScopeForSearch?.(pathname, new URLSearchParams(search)) ?? workspace?.namespaceScope) === 'cluster') return { disabled: true, tooltip: workspace?.namespaceFilterTooltip }
   if (view === 'checks' && pathname.startsWith('/checks/upgrade')) {
     return {
       disabled: true,
@@ -946,7 +946,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     gitops: 'g o', checks: 'g u', cost: 'g c', capacity: 'g p',
     // Non-rail views (reachable via deep links / actions, not the rail) get no
     // dedicated mnemonic — listed for exhaustiveness so the type stays total.
-    workload: '', compare: '', helmCompare: '', investigations: '', cnpg: '', velero: '', substrate: '', 'agent-sandbox': '',
+    workload: '', compare: '', helmCompare: '', investigations: '', cnpg: '', velero: '', substrate: '', 'agent-sandbox': '', kagent: '',
   }
   const views = Object.keys(VIEW_SHORTCUT_KEYS).filter(
     (v): v is ExtendedMainView => VIEW_SHORTCUT_KEYS[v as ExtendedMainView] !== '',
@@ -1156,6 +1156,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   }>({ changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null })
   const cnpgInvalidationPendingRef = useRef(false)
   const veleroInvalidationPendingRef = useRef(false)
+  const kagentInvalidationPendingRef = useRef(false)
   const slowInvalidationRef = useRef<{
     updatedKinds: Set<string>    // update-only churn → throttled list + dashboard
     gitopsRowsChanged: boolean   // Argo/Flux row and source kinds → GitOps table rows
@@ -1191,6 +1192,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
     if (event.group?.endsWith('.cnpg.io')) cnpgInvalidationPendingRef.current = true
     if (event.group === 'velero.io') veleroInvalidationPendingRef.current = true
+    if (event.group === 'api.kagent.dev' || event.kind === 'Namespace') kagentInvalidationPendingRef.current = true
 
     const fast = fastInvalidationRef.current
     fast.changedKinds.add(kind)
@@ -1252,6 +1254,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           veleroInvalidationPendingRef.current = false
           queryClient.invalidateQueries({ queryKey: ['velero', 'workspace'] })
           queryClient.invalidateQueries({ queryKey: ['velero', 'schedule-activity'] })
+        }
+        if (kagentInvalidationPendingRef.current) {
+          kagentInvalidationPendingRef.current = false
+          queryClient.invalidateQueries({ queryKey: ['kagent', 'workspace'] })
+          queryClient.invalidateQueries({ queryKey: ['substrate', getApiBase()], predicate: q => q.queryKey[3] === 'kagent-summary' })
         }
         fastInvalidationRef.current = { changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
       }, 3000)
@@ -2554,7 +2561,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           onNavigate={(res) => navigateToResource(res)}
           canCollapseToDrawer={!isMobile}
           onExpand={(res, opts) => {
-            const detailPath = resourceExpandedPath(res, connection.context || undefined, opts?.yaml ? 'yaml' : undefined)
+            const detailPath = resourceExpandedPath(res, connection.context || undefined, opts?.yaml ? 'yaml' : undefined, hostFeatures)
             if (detailPath) {
               navigate(
                 detailPath,

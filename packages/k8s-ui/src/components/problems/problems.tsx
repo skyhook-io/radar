@@ -157,6 +157,8 @@ export function WorkspaceProblemCallout({
   onNavigate,
   action,
   subjectIsSelf,
+  subjectFirst = false,
+  hideOrigin,
 }: {
   problem: WorkspaceProblem
   rootKind: string
@@ -165,11 +167,19 @@ export function WorkspaceProblemCallout({
   action?: ReactNode
   /** The callout sits on the subject's own page, so linking to it would loop. */
   subjectIsSelf?: boolean
+  subjectFirst?: boolean
+  hideOrigin?: boolean
 }) {
   const severity = healthToSeverity(problem.tone)
   const variant = severity === 'neutral' ? 'unknown' : severity
   return (
-    <AlertBanner variant={variant} title={problem.title} message={problem.detail}>
+    <AlertBanner variant={variant} title={problem.title} message={subjectFirst ? undefined : problem.detail}>
+      {subjectFirst && <>
+        <ProblemMeta problem={problem} rootKind={rootKind} onNavigate={onNavigate} subjectIsSelf={subjectIsSelf} hideOrigin={hideOrigin} />
+        {problem.detail && <p className="mt-1 text-xs text-theme-text-secondary">{problem.detail}</p>}
+        {action}
+        {more}
+      </>}
       {problem.related && <RelatedRefs related={problem.related} onNavigate={onNavigate} className="mt-1 text-theme-text-secondary" />}
       {problem.nextStep && (
         <div className="mt-1 break-words text-xs text-theme-text-primary">
@@ -178,10 +188,10 @@ export function WorkspaceProblemCallout({
         </div>
       )}
       {problem.rawDetail && <FoldSection title={problem.rawDetailLabel ?? "Original evidence"} summary="" attention={false}><div className="break-words text-xs text-theme-text-secondary">{problem.rawDetail}</div></FoldSection>}
-      <ProblemMeta problem={problem} rootKind={rootKind} onNavigate={onNavigate} subjectIsSelf={subjectIsSelf}>
+      {!subjectFirst && <ProblemMeta problem={problem} rootKind={rootKind} onNavigate={onNavigate} subjectIsSelf={subjectIsSelf} hideOrigin={hideOrigin}>
         {action}
         {more}
-      </ProblemMeta>
+      </ProblemMeta>}
     </AlertBanner>
   )
 }

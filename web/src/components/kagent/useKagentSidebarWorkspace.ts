@@ -1,38 +1,67 @@
 import { useMemo } from 'react'
+import { useLocation } from 'react-router-dom'
 import { Bot } from 'lucide-react'
 import type { SidebarCategoryWorkspace } from '@skyhook-io/k8s-ui'
 import type { APIResource } from '../../types'
+import { useCapabilities, useRadarFeature } from '../../api/client'
+import { useKagentWorkspace } from '../../api/kagent'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { AGENTS_SIDEBAR_CATEGORY } from '../workspace/sidebar'
-import { KAGENT_AGENTS_PATH, KAGENT_AGENT_KIND } from './routes'
+import { KAGENT_AGENTS_PATH, KAGENT_AGENT_KIND, KAGENT_GENERIC_AGENTS_PATH, KAGENT_KINDS } from './routes'
 
-/** kagent's heading among the Agents row's destinations. */
 export const KAGENT_SIDEBAR_SECTION = 'kagent'
-
 export function kagentAgentsServed(apiResources: APIResource[] | undefined): boolean {
   return !!apiResources?.some((r) => r.group === KAGENT_AGENT_KIND.group && r.name === KAGENT_AGENT_KIND.name)
 }
-
-/**
- * kagent in the sidebar's Integrations, as its part of the Agents row: the
- * Agent list, with Radar's status column. kagent's other kinds stay under
- * Other kinds. No count: Radar has no kagent summary endpoint, and the list's
- * statuses are the answer. Undefined when the cluster doesn't serve kagent's
- * Agents.
- */
-export function useKagentSidebarWorkspace({ apiResources }: { apiResources: APIResource[] | undefined }): Record<string, SidebarCategoryWorkspace> | undefined {
+export function useKagentSidebarWorkspace({
+  apiResources,
+  namespaces = [],
+}: {
+  apiResources: APIResource[] | undefined
+  namespaces?: string[]
+}): Record<string, SidebarCategoryWorkspace> | undefined {
   const navigate = useWorkspaceNavigate()
+  const location = useLocation()
   const served = kagentAgentsServed(apiResources)
+  const feature = useRadarFeature('kagentWorkspace')
+  const { isPending: checking } = useCapabilities()
+  const workspace = useKagentWorkspace(namespaces, served)
+  const ready = feature.support === 'supported'
   return useMemo(() => {
-    if (!served) return undefined
+    if (!served || checking && feature.support === 'unknown') return undefined
+    const count = workspace.data?.counts.findings
+    const destination = (id: string, label: string, path: string, kind?: typeof KAGENT_AGENT_KIND) => ({
+      id: `kagent-${id}`,
+      label,
+      section: KAGENT_SIDEBAR_SECTION,
+      active: location.pathname === path,
+      kind,
+      onSelect: () => navigate(path),
+    })
     return {
       [AGENTS_SIDEBAR_CATEGORY]: {
         tools: 'kagent',
         icon: Bot,
-        destinations: [
-          { id: 'kagent-agents', label: 'Agents', section: KAGENT_SIDEBAR_SECTION, kind: KAGENT_AGENT_KIND, onSelect: () => navigate(KAGENT_AGENTS_PATH) },
-        ],
+        count: ready ? (count ? (count.n === 0 && count.lowerBound ? null : count.n) : null) : undefined,
+        countLowerBound: ready ? (count?.lowerBound ?? true) : undefined,
+        countTitle: ready ? 'Configuration findings; runtime crashes and pool capacity are counted by Agent Substrate.' : undefined,
+        destinations: ready
+          ? [
+              destination('overview', 'Overview', '/kagent'),
+              destination('agents', 'Agents', KAGENT_AGENTS_PATH, KAGENT_AGENT_KIND),
+              destination('mcpservers', 'MCP servers', '/kagent/mcpservers', {
+                name: 'remotemcpservers',
+                kind: KAGENT_KINDS.remotemcpservers.kind,
+                group: KAGENT_AGENT_KIND.group,
+              }),
+              destination('models', 'Models', '/kagent/models', {
+                name: 'modelconfigs',
+                kind: KAGENT_KINDS.modelconfigs.kind,
+                group: KAGENT_AGENT_KIND.group,
+              }),
+            ]
+          : [destination('agents', 'Agents', KAGENT_GENERIC_AGENTS_PATH, KAGENT_AGENT_KIND)],
       },
     }
-  }, [served, navigate])
+  }, [served, ready, feature.support, checking, workspace.data, location.pathname, navigate])
 }

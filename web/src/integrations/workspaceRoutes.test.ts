@@ -49,3 +49,10 @@ describe('workspace route ownership', () => {
     expect(search.get('tab')).toBe('storage')
   })
 })
+
+
+it('applies the namespace picker only to Substrate’s kagent sessions union', () => {
+  const substrate = workspaceForPath('/substrate/actors')!
+  expect(substrate.namespaceScopeForSearch?.('/substrate/actors', new URLSearchParams('kagent=sessions'))).toBe('view')
+  expect(substrate.namespaceScopeForSearch?.('/substrate/actors', new URLSearchParams('kagent=sandbox'))).toBe('cluster')
+})

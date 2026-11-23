@@ -85,12 +85,12 @@ export const resourceHosts: readonly ResourceHost[] = [
 
 export const resourceRendererOverrides = composeResourceHosts(resourceHosts)
 
-export function resourceExpandedPath(resource: HostResource, context?: string, tab?: 'yaml'): string | null {
-  return resourceHostForSlot(resourceHosts, resource, 'destination')?.expandedPath?.(resource, context, tab) ?? null
+export function resourceExpandedPath(resource: HostResource, context?: string, tab?: 'yaml', features?: HostFeatures): string | null {
+  return resourceHostForSlot(resourceHosts, resource, 'destination', features)?.expandedPath?.(resource, context, tab) ?? null
 }
 
-export function resourceDetailRedirect(resource: HostResource, search: URLSearchParams): string | null {
-  return resourceHostForSlot(resourceHosts, resource, 'destination')?.detailRedirect?.(resource, search) ?? null
+export function resourceDetailRedirect(resource: HostResource, search: URLSearchParams, features?: HostFeatures): string | null {
+  return resourceHostForSlot(resourceHosts, resource, 'destination', features)?.detailRedirect?.(resource, search) ?? null
 }
 
 export function resourceIssueDetail(resource: HostResource, props: { issue: { kind?: string; reason?: string }; resource: any }) {
@@ -101,9 +101,13 @@ export function resourceIssueDetail(resource: HostResource, props: { issue: { ki
   return null
 }
 
-export function resourceDetailSlots(resource: HostResource, inheritedTabs?: WorkloadExtraTab[]): DetailSlots {
+export function resourceDetailSlots(resource: HostResource, inheritedTabs?: WorkloadExtraTab[], features?: HostFeatures): DetailSlots {
   const slots = hostsForResource(resourceHosts, resource)
-    .map(host => ({ id: host.id, slots: host.detailSlots?.(resource) }))
+    .map(host => {
+      const support = features ? hostSupport(host, features) : 'supported'
+      const slots = support === 'unsupported' ? undefined : host.detailSlots?.(resource)
+      return { id: host.id, slots: support === 'unknown' ? undefined : slots }
+    })
   return composeDetailSlots(slots, inheritedTabs)
 }
 
@@ -128,7 +132,8 @@ export function useResourceHostFeatures(): HostFeatures {
   const { support: cnpgWorkspace } = useRadarFeature('cnpgWorkspace')
   const { support: veleroWorkspace } = useRadarFeature('veleroWorkspace')
   const { support: substrateWorkspace } = useRadarFeature('substrateWorkspace')
-  return useMemo(() => ({ cnpgWorkspace, veleroWorkspace, substrateWorkspace }), [cnpgWorkspace, veleroWorkspace, substrateWorkspace])
+  const { support: kagentWorkspace } = useRadarFeature('kagentWorkspace')
+  return useMemo(() => ({ cnpgWorkspace, veleroWorkspace, substrateWorkspace, kagentWorkspace }), [cnpgWorkspace, veleroWorkspace, substrateWorkspace, kagentWorkspace])
 }
 
 

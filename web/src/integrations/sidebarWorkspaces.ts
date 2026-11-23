@@ -36,6 +36,6 @@ export function useIntegrationSidebars({
   const veleroSidebar = useVeleroSidebarWorkspace({ apiResources, ...velero })
   const substrateSidebar = useSubstrateSidebarWorkspace({ apiResources, ...substrate })
   const sandboxSidebar = useAgentSandboxSidebarWorkspace({ apiResources, namespaces, ...agentSandbox })
-  const kagentSidebar = useKagentSidebarWorkspace({ apiResources })
+  const kagentSidebar = useKagentSidebarWorkspace({ apiResources, namespaces })
   return useMergedSidebarWorkspaces(cnpgSidebar, veleroSidebar, substrateSidebar, sandboxSidebar, kagentSidebar)
 }

@@ -130,6 +130,9 @@ func RelatedIssuesFrom(flat, grouped []Issue, opts RelatedIssueOptions, group, k
 	}
 	matched := make(map[string]bool) // grouped issue IDs the resource touches
 	for _, g := range grouped {      // as the grouped SUBJECT (owner-collapsed)
+		if g.Group == "api.kagent.dev" && g.Degraded != nil && ViewEvidence(g.RequiredReads, g.Degraded, false, opts.CanReadEvidence, opts.AllowUnfilteredEvidence) == EvidenceDegraded {
+			g = stripKagentImpact(g)
+		}
 		if match(g.Group, g.Kind, g.Namespace, g.Name) && canReadSubject(g) && CanReadIssueRelatedRefs(g, opts.CanReadRelated) && canReadEvidence(g) {
 			matched[g.ID] = true
 		}

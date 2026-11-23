@@ -6,6 +6,7 @@
 .PHONY: kubecost-demo kubecost-demo-down kubecost-demo-status
 .PHONY: jobset-demo jobset-demo-down jobset-demo-reset jobset-demo-status jobset-demo-verify
 .PHONY: kuberay-demo kuberay-demo-down kuberay-demo-reset kuberay-demo-status kuberay-demo-verify
+.PHONY: kagent-demo kagent-demo-down kagent-demo-status
 .PHONY: substrate-demo substrate-demo-down substrate-demo-status substrate-demo-restart
 .PHONY: release release-binaries-dry docker docker-test docker-multiarch docker-push
 .PHONY: desktop desktop-binary desktop-dev desktop-package-darwin desktop-package-windows desktop-package-linux
@@ -418,6 +419,15 @@ kuberay-demo-status:
 kuberay-demo-verify:
 	./scripts/kuberay-demo.sh verify
 
+kagent-demo:
+	./scripts/kagent-demo.sh
+
+kagent-demo-down:
+	./scripts/kagent-demo.sh --cleanup
+
+kagent-demo-status:
+	./scripts/kagent-demo.sh --status
+
 # A fake Agent Substrate API server on this machine, serving Substrate's real
 # wire protocol with deterministic actors, plus real WorkerPools and worker Pods
 # in an EXISTING cluster (default context radar-test-nonprod; override with
@@ -585,6 +595,7 @@ help:
 	@echo "  make jobset-demo      - Live JobSet role, dependency, and failure fixtures"
 	@echo "  make kuberay-demo     - Real RayService active/pending revision lifecycle"
 	@echo "  make calico-demo      - Real Calico, both API groups, staged policies"
+	@echo "  make kagent-demo      - kagent workspace scenarios on an existing test cluster"
 	@echo "  make substrate-demo   - Fake Agent Substrate API + worker Pods on an existing cluster"
 	@echo ""
 	@echo "Desktop:"

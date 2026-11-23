@@ -58,6 +58,7 @@ export interface KagentAgentRendererProps {
   onNavigate?: Navigate
   /** Objects the host read for the dependencies an AgentTemplate or Harness declares. Without them those rows say they weren't read. */
   related?: KagentAgentRelated
+  specOnly?: boolean
   /**
    * A host's Sessions section for this Agent. Sessions are not Kubernetes
    * objects, so the host reads them elsewhere; rendered after the declared
@@ -206,7 +207,7 @@ function discoveryBanner(failed: { name: string; since?: string }[], ready: bool
   return { title, message: `${since}The agent's runtime discovers tools again on each invocation and omits a server's tools when that fails, so while discovery fails it may run without them${ready ? ', even though the agent reads Ready' : ''}.${names}` }
 }
 
-export function KagentAgentRenderer({ data, onNavigate, related, sessions }: KagentAgentRendererProps) {
+export function KagentAgentRenderer({ data, onNavigate, related, sessions, specOnly }: KagentAgentRendererProps) {
   const reading = readKagentAgent(data)
   const namespace: string = data?.metadata?.namespace ?? ''
   const rev = getKagentAgentRevisions(data)
@@ -225,6 +226,16 @@ export function KagentAgentRenderer({ data, onNavigate, related, sessions }: Kag
 
   const failed = failedServers(mcp, related?.mcpServers)
 
+  if (specOnly) return <>
+    <Section title="Spec" icon={Bot} defaultExpanded><PropertyList>
+      <Property label="Template" value={inline ? 'Inline' : templateRef || 'None declared'} />
+      <Property label="Harness" value={harnessName || 'None declared'} />
+      {egress.length > 0 && <Property label="Egress policies" value={egress.join(', ')} />}
+    </PropertyList>
+      {inline && <pre className="mt-3 overflow-x-auto whitespace-pre-wrap break-words rounded-lg bg-theme-base p-3 text-xs text-theme-text-secondary">{JSON.stringify(redactKagentLiterals(data).spec.template.inline, null, 2)}</pre>}
+    </Section>
+    <ConditionsSection conditions={redactKagentLiterals(data)?.status?.conditions} />
+  </>
   return <>
     <StatusBanners reading={reading} />
     {failed.length > 0 && <AlertBanner variant="alert" {...discoveryBanner(failed, reading.state === 'ready')} />}

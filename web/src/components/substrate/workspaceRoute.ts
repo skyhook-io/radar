@@ -7,6 +7,7 @@ export const substrateWorkspaceRoute: WorkspaceRoute = {
   label: 'Agent Substrate',
   navView: 'resources',
   namespaceScope: 'cluster',
+  namespaceScopeForSearch: (path, search) => path === '/substrate/actors' && search.get('kagent') === 'sessions' ? 'view' : 'cluster',
   namespaceFilterTooltip: SUBSTRATE_NAMESPACE_FILTER_TOOLTIP,
   pageTitle(pathname) {
     const route = parseSubstrateRoute(pathname)

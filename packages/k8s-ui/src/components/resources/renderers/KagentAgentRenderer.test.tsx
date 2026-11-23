@@ -136,3 +136,14 @@ describe('KagentAgentRenderer', () => {
     expect(html).toContain('https://[REDACTED]@mcp.example/mcp?[REDACTED]')
   })
 })
+
+it('keeps the page Spec tab focused while the drawer retains its full evidence', () => {
+  const data = agent({ template: { inline: { modelConfig: { name: 'llm' }, description: 'Cluster helper' } } }, [cond('Ready', 'True', 'Ready')])
+  const spec = render(<KagentAgentRenderer data={data} specOnly sessions={<p>sessions-slot</p>} />)
+  expect(spec).toContain('Cluster helper')
+  expect(spec).toContain('Conditions')
+  for (const text of ['Dependencies', 'Conversation outcomes', 'sessions-slot', 'Ready to start sessions']) expect(spec).not.toContain(text)
+  const drawer = render(<KagentAgentRenderer data={data} sessions={<p>sessions-slot</p>} />)
+  expect(drawer).toContain('Dependencies')
+  expect(drawer).toContain('sessions-slot')
+})

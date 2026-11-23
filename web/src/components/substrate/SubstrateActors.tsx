@@ -1,3 +1,4 @@
+import { shortRevision } from '@skyhook-io/k8s-ui/components/resources/resource-utils-kagent'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { useSearchParams } from 'react-router-dom'
@@ -77,14 +78,15 @@ export function sourcesNote(sources: ('snapshot' | 'atespace' | 'actor')[]): str
 const SCOPING_PARAMS = ['atespace', 'template', 'pool', 'q', 'worker', 'impact', 'node', 'nodeHas', 'agent', 'kagent'] as const
 
 /** The kagent filter's choices: which kagent sessions to list. */
-const KAGENT_FILTER_LABEL: Record<KagentAttribution['kind'], string> = {
+const KAGENT_FILTER_LABEL: Record<KagentAttribution['kind'] | 'sessions', string> = {
+  sessions: 'kagent sessions',
   agentSession: 'Agent sessions',
   sandbox: 'kagent sandboxes',
   unattributed: 'Not tied to an Agent',
 }
 const KAGENT_OPTIONS: SelectMenuOption[] = [
   { value: '', label: 'Any kagent link' },
-  ...(Object.keys(KAGENT_FILTER_LABEL) as KagentAttribution['kind'][]).map((k) => ({ value: k, label: KAGENT_FILTER_LABEL[k] })),
+  ...(Object.keys(KAGENT_FILTER_LABEL) as (KagentAttribution['kind'] | 'sessions')[]).map((k) => ({ value: k, label: KAGENT_FILTER_LABEL[k] })),
 ]
 
 /**
@@ -124,7 +126,7 @@ function AgentCell({ row, onAgent }: { row: SubstrateActorRow; onAgent?: (agent:
           {onAgent ? (
             <button type="button" onClick={(e) => { e.stopPropagation(); onAgent(agent) }} className="text-left text-accent-text hover:underline">{label}</button>
           ) : label}
-          {k.earlierRevision && <span className="block text-xs leading-4 text-theme-text-tertiary">earlier revision</span>}
+          <span className="block text-xs leading-4 text-theme-text-tertiary">{k.newSessions ? 'new sessions' : k.earlierRevision ? 'earlier revision' : k.desired ? 'desired revision' : 'revision'} · {shortRevision(k.revision) || 'not reported'}</span>
         </span>
       </Tooltip>
     )
@@ -157,16 +159,16 @@ function Line({ children, title, className }: { children: ReactNode; title?: Rea
   return title ? <Tooltip content={title} wrapperClassName="min-w-0 w-full">{line}</Tooltip> : line
 }
 
-function SnapshotCell({ row }: { row: SubstrateActorRow }) {
+function SnapshotCell({ row, session = false }: { row: SubstrateActorRow; session?: boolean }) {
   const s = row.newestSnapshot
   if (!s) return <Line title="No snapshot yet: it boots fresh." className="text-theme-text-tertiary">none yet · boots fresh</Line>
   const d = durableText(s)
   const short = s.durable === 'none' && s.locality ? 'only on its node' : d.text
   // Stored is the expected case; a snapshot at risk says so on a second line, so the warning is never cut off.
   return (
-    <Tooltip content={`Generation ${s.generation}, ${fidelityLabel(s.fidelity)}: ${d.title} ${resumeSentence(row)}`} wrapperClassName="min-w-0 w-full">
+    <Tooltip content={`Generation ${s.generation}, ${session && s.fidelity === 'volumes' ? 'saved files on attached volumes, without process memory' : fidelityLabel(s.fidelity)}: ${d.title} ${resumeSentence(row)}`} wrapperClassName="min-w-0 w-full">
       <span className="block min-w-0 text-[12.5px]">
-        <span className="block whitespace-nowrap">gen {s.generation} · {s.fidelity === 'rootfs' ? 'root fs' : fidelityLabel(s.fidelity)}</span>
+        <span className="block whitespace-nowrap">{session ? `Snapshot generation ${s.generation}` : <>gen {s.generation} · {s.fidelity === 'rootfs' ? 'root fs' : fidelityLabel(s.fidelity)}</>}</span>
         {d.tone !== 'healthy' && <span className={clsx('block text-xs leading-4', toneTextClass(d.tone))}>{short}</span>}
       </span>
     </Tooltip>
@@ -260,37 +262,37 @@ function WorkerCell({ row }: { row: SubstrateActorRow }) {
  * whole: the atespace rides beside the name rather than in a column of its
  * own. Narrow folds the atespace and template under the name.
  */
-function actorColumns(wide: boolean, agent?: { onAgent?: (agent: KagentAgentRef) => void }): TableColumn<SubstrateActorRow>[] {
+function actorColumns(wide: boolean, agent?: { onAgent?: (agent: KagentAgentRef) => void; revisionOnly?: boolean }): TableColumn<SubstrateActorRow>[] {
   // With the Agent column, the others give it room.
-  const w = agent
+  const w = agent?.revisionOnly ? { actor: '18%', state: '22%', template: '0%', agent: '16%', worker: '18%', snapshot: '16%', changed: '10%' } : agent
     ? { actor: wide ? '15%' : '24%', state: wide ? '23%' : '27%', template: '15%', agent: wide ? '13%' : '15%', worker: wide ? '14%' : '17%', snapshot: wide ? '12%' : '17%', changed: '8%' }
     : { actor: wide ? '16%' : '27%', state: wide ? '26%' : '30%', template: '18%', agent: '0%', worker: wide ? '17%' : '21%', snapshot: wide ? '14%' : '22%', changed: '9%' }
   return [
     {
-      header: 'Actor',
+      header: agent?.revisionOnly ? 'Session' : 'Actor',
       width: w.actor,
       cell: (r) => (
         wide ? (
           <span className="flex min-w-0 flex-wrap items-baseline gap-x-1">
             <ActorName row={r} />
-            <span className="text-[11.5px] text-theme-text-tertiary"><WholeNames text={r.atespace} /></span>
+            {!agent?.revisionOnly && <span className="text-[11.5px] text-theme-text-tertiary"><WholeNames text={r.atespace} /></span>}
           </span>
         ) : (
           <>
             <ActorName row={r} />
-            <Sub><WholeNames text={`${r.atespace} · ${r.template.name}`} /></Sub>
+            {!agent?.revisionOnly && <Sub><WholeNames text={`${r.atespace} · ${r.template.name}`} /></Sub>}
           </>
         )
       ),
     },
     { header: 'State', width: w.state, cell: (r) => <StateCell row={r} /> },
-    ...(wide ? [{ header: 'Template', width: w.template, cell: (r: SubstrateActorRow) => <Line title={r.template.name} className="font-mono text-[12px]">{r.template.name}</Line> }] : []),
-    ...(agent ? [{ header: 'kagent Agent', width: w.agent, cell: (r: SubstrateActorRow) => <AgentCell row={r} onAgent={agent.onAgent} /> }] : []),
+    ...(wide && !agent?.revisionOnly ? [{ header: 'Template', width: w.template, cell: (r: SubstrateActorRow) => <Line title={r.template.name} className="font-mono text-[12px]">{r.template.name}</Line> }] : []),
+    ...(agent ? [{ header: agent.revisionOnly ? 'Revision' : 'kagent Agent', width: w.agent, cell: (r: SubstrateActorRow) => agent.revisionOnly ? <span className="text-xs">{r.kagent?.kind === 'agentSession' ? <>{r.kagent.newSessions ? 'Current' : r.kagent.earlierRevision ? 'Earlier' : 'Latest change'}<span className="block font-mono text-theme-text-tertiary">{shortRevision(r.kagent.revision)}</span></> : 'Unattributed'}</span> : <AgentCell row={r} onAgent={agent.onAgent} /> }] : []),
     { header: 'Worker or last node', width: w.worker, cell: (r) => <WorkerCell row={r} /> },
-    { header: 'Newest snapshot', width: w.snapshot, cell: (r) => <SnapshotCell row={r} /> },
+    { header: agent?.revisionOnly ? 'Saved session state' : 'Newest snapshot', width: w.snapshot, cell: (r) => <SnapshotCell row={r} session={agent?.revisionOnly} /> },
     ...(wide
       ? [{
-          header: 'Changed',
+          header: agent?.revisionOnly ? 'Updated' : 'Changed',
           width: w.changed,
           cell: (r: SubstrateActorRow) =>
             r.updateTime ? (
@@ -366,9 +368,11 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
   const node = params.get('node') ?? ''
   const agent = params.get('agent') ?? ''
   const rawKagent = params.get('kagent')
-  const kagentKind = rawKagent && rawKagent in KAGENT_FILTER_LABEL ? (rawKagent as KagentAttribution['kind']) : undefined
+  const kagentKind = rawKagent && rawKagent in KAGENT_FILTER_LABEL ? (rawKagent as KagentAttribution['kind'] | 'sessions') : undefined
   // An older Radar ignores the agent and kagent filters and lists every actor, so they are sent only to one that serves them.
-  const kagentFeature = useRadarFeature('kagentAttribution')
+  const attributionFeature = useRadarFeature('kagentAttribution')
+  const summaryFeature = useRadarFeature('kagentSessionSummary')
+  const kagentFeature = kagentKind === 'sessions' ? summaryFeature : attributionFeature
   const kagentFilters = kagentFeature.support === 'supported'
   const kagentRequested = !!(agent || kagentKind)
   const sort = (params.get('sort') as ActorSort | null) ?? 'attention'
@@ -407,6 +411,7 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
     q: q || undefined,
     agent: kagentFilters ? agent || undefined : undefined,
     kagent: kagentFilters ? kagentKind : undefined,
+    namespaces: kagentKind === 'sessions' ? params.get('namespaces') ?? undefined : undefined,
     sort,
     limit: ACTORS_PAGE_SIZE,
     offset: page * ACTORS_PAGE_SIZE,
@@ -532,7 +537,7 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
             spellCheck={false}
           />
           {(showKagent || kagentRequested) && kagentFilters && (
-            <SelectMenu ariaLabel="kagent" value={kagentKind ?? ''} options={KAGENT_OPTIONS} onChange={(v) => update({ kagent: v })} className="min-w-[12rem]" />
+            <SelectMenu ariaLabel="kagent" value={kagentKind ?? ''} options={KAGENT_OPTIONS.filter(o => o.value !== 'sessions' || summaryFeature.support === 'supported')} onChange={(v) => update({ kagent: v })} className="min-w-[12rem]" />
           )}
           <SelectMenu ariaLabel="Sort" value={sort} options={SORT_OPTIONS} onChange={(v) => update({ sort: v === 'attention' ? '' : v })} className="min-w-[11rem]" />
           <FilterChips chips={chips} />
@@ -589,6 +594,7 @@ export function ActorsTable({
   onOpenActor,
   openActor,
   onAgent,
+  revisionOnly,
 }: {
   sort?: ActorSort
   data?: SubstrateActorsResponse
@@ -601,6 +607,7 @@ export function ActorsTable({
   openActor: SubstrateRef | null
   /** Lists an Agent's sessions; absent where the Radar can't filter by Agent. */
   onAgent?: (agent: KagentAgentRef) => void
+  revisionOnly?: boolean
 }) {
   const wide = useMediaQuery(SUBSTRATE_WIDE)
   const rows = data?.rows ?? []
@@ -625,7 +632,7 @@ export function ActorsTable({
   return (
     <div aria-busy={placeholder || undefined} className={placeholder ? 'opacity-60' : undefined}>
       <SectionTable
-        columns={actorColumns(wide, data?.kagentAgents || rows.some((r) => r.kagent) ? { onAgent } : undefined)}
+        columns={actorColumns(wide, data?.kagentAgents || rows.some((r) => r.kagent) ? { onAgent, revisionOnly } : undefined)}
         rows={rows}
         rowKey={(r) => `${r.atespace}/${r.name}`}
         rowResource={(r) => actorRowResource(r)}

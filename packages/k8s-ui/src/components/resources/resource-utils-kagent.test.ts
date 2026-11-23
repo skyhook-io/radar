@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
   getKagentAgentColumnValue,
+  getKagentAgentRevisions,
+  getKagentDiscoveredTools,
   getKagentHarnessDeclarations,
   getKagentStatus,
   getKagentTemplateDeclarations,
@@ -125,6 +127,16 @@ describe('kagent URL and argument redaction match pkg/kagent', () => {
 })
 
 describe('redactKagentLiterals beyond literal values', () => {
+  it('redacts strings projected from individually read dependencies and compares tool names consistently', () => {
+    const url = 'https://user:PRIVATE_PASSWORD@tools.example.com/path?token=PRIVATE_TOKEN'
+    const discovered = getKagentDiscoveredTools({ status: { discoveredTools: [{ name: url }] } })
+    const declared = getKagentTemplateDeclarations({ tools: [{ mcp: { server: { name: 'server' }, tools: [url] } }] }, 'agents')
+    const harness = getKagentHarnessDeclarations({ spec: { workload: { image: url } } })
+    const revisions = getKagentAgentRevisions({ status: { workloadImage: url } })
+    expect(JSON.stringify({ discovered, declared, harness, revisions })).not.toContain('PRIVATE_PASSWORD')
+    expect(JSON.stringify({ discovered, declared, harness, revisions })).not.toContain('PRIVATE_TOKEN')
+    expect(declared.tools[0]).toMatchObject({ tools: discovered })
+  })
   it('strips URL fields and artifact sources, credential args and secretHash, without touching the original', () => {
     const model = { apiVersion: 'api.kagent.dev/v1alpha3', kind: 'ModelConfig', spec: { openAI: { baseUrl: 'https://u:s3cret@llm.example.com/v1' } }, status: { secretHash: 's3cret' } }
     const out = redactKagentLiterals(model)

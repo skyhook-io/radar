@@ -206,7 +206,9 @@ type FeatureCapabilities struct {
 	// the agent and kagent filters of GET /api/substrate/actors, and GET
 	// /api/substrate/kagent/agents/{namespace}/{name}/sessions. An older
 	// Radar ignores the filters and lists every actor.
-	KagentAttribution bool `json:"kagentAttribution"`
+	KagentAttribution    bool `json:"kagentAttribution"`
+	KagentWorkspace      bool `json:"kagentWorkspace"`
+	KagentSessionSummary bool `json:"kagentSessionSummary"`
 	// The workspace and its read/action surfaces, excluding protection setup.
 	CNPGWorkspace       bool `json:"cnpgWorkspace"`
 	CNPGProtectionSetup bool `json:"cnpgProtectionSetup"`

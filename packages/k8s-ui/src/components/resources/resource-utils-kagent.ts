@@ -149,7 +149,7 @@ export function getKagentAgentRevisions(agent: any): KagentAgentRevisions {
   return {
     desired: str(agent?.status?.desiredRevision) || undefined,
     latestSuccessful: str(agent?.status?.latestSuccessfulRevision) || undefined,
-    workloadImage: str(agent?.status?.workloadImage) || undefined,
+    workloadImage: redactKagentURLsInText(str(agent?.status?.workloadImage)) || undefined,
   }
 }
 
@@ -258,7 +258,7 @@ export function readKagentModelProviderConfig(config: any): KagentReading {
 /** The tool names kagent's discovery published in status. */
 export function getKagentDiscoveredTools(server: any): string[] {
   const tools: any[] = Array.isArray(server?.status?.discoveredTools) ? server.status.discoveredTools : []
-  return tools.map((t: any) => str(t?.name)).filter(Boolean)
+  return tools.map((t: any) => redactKagentURLsInText(str(t?.name))).filter(Boolean)
 }
 
 export function readKagentRemoteMCPServer(server: any): KagentReading {
@@ -379,7 +379,7 @@ export function getKagentTemplateDeclarations(spec: any, namespace: string): Kag
       // kagent's schema requires the server's name; a binding without one names nothing.
       if (!server) return []
       const selected = Array.isArray(t?.mcp?.tools) ? t.mcp.tools.filter((x: unknown) => typeof x === 'string' && x) : []
-      return [{ kind: 'mcp', server, tools: selected, requireApproval: t?.mcp?.requireApproval === true }]
+      return [{ kind: 'mcp', server, tools: selected.map(redactKagentURLsInText), requireApproval: t?.mcp?.requireApproval === true }]
     }),
     skills: (Array.isArray(spec?.skills) ? spec.skills : []).map((s: any) => str(s?.name)).filter(Boolean),
     plugins: Array.isArray(spec?.plugins) ? spec.plugins.length : 0,
@@ -404,7 +404,7 @@ export function getKagentHarnessDeclarations(harness: any): KagentHarnessDeclara
   return {
     type,
     workerPool: str(spec?.substrate?.workerPoolRef?.name) || undefined,
-    image: str(spec?.workload?.image) || undefined,
+    image: redactKagentURLsInText(str(spec?.workload?.image)) || undefined,
     summarizerModel: kagentReference(spec?.kagent?.compaction?.summarizer?.modelConfigRef, 'ModelConfig', namespace),
     memoryModel: kagentReference(spec?.kagent?.memory?.modelConfigRef, 'ModelConfig', namespace),
     env: (Array.isArray(spec?.env) ? spec.env : []).map((e: any) => str(e?.name)).filter(Boolean),

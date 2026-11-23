@@ -1,3 +1,4 @@
+import { kagentWorkspaceRoute } from '../components/kagent/workspaceRoute'
 import { agentSandboxWorkspaceRoute } from '../components/agentsandbox/workspaceRoute'
 import { capacityWorkspaceRoute } from '../components/capacity/workspaceRoute'
 import { cnpgWorkspaceRoute } from '../components/cnpg/workspaceRoute'
@@ -5,7 +6,7 @@ import { substrateWorkspaceRoute } from '../components/substrate/workspaceRoute'
 import { veleroWorkspaceRoute } from '../components/velero/workspaceRoute'
 import type { WorkspaceRoute } from './workspaceRoute'
 
-export const workspaceRoutes = [cnpgWorkspaceRoute, capacityWorkspaceRoute, veleroWorkspaceRoute, substrateWorkspaceRoute, agentSandboxWorkspaceRoute] as const
+export const workspaceRoutes = [cnpgWorkspaceRoute, capacityWorkspaceRoute, veleroWorkspaceRoute, substrateWorkspaceRoute, agentSandboxWorkspaceRoute, kagentWorkspaceRoute] as const
 
 export const workspaceLabels = {
   cnpg: cnpgWorkspaceRoute.label,
@@ -13,6 +14,7 @@ export const workspaceLabels = {
   velero: veleroWorkspaceRoute.label,
   substrate: substrateWorkspaceRoute.label,
   'agent-sandbox': agentSandboxWorkspaceRoute.label,
+  kagent: kagentWorkspaceRoute.label,
 } satisfies Record<WorkspaceRoute['id'], string>
 
 export function workspaceForPath(pathname: string) {

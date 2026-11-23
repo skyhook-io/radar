@@ -164,6 +164,7 @@ interface WorkloadViewProps {
    * than squeezing it.
    */
   inlineBadges?: boolean
+  namespaceDisplay?: ReactNode
   /** A note right after the namespace, e.g. that it is outside the namespace filter. */
   namespaceNote?: ReactNode
   /** Replaces the derived status badge on the title line, e.g. with the controller's own reported phase. */
@@ -473,6 +474,7 @@ export function WorkloadView({
   breadcrumb,
   titlePrefix,
   inlineBadges = false,
+  namespaceDisplay,
   namespaceNote,
   renderStatusBadge,
   statusNote,
@@ -1267,7 +1269,7 @@ export function WorkloadView({
           {titlePrefix}
           <div className="flex min-w-0 max-w-full items-center gap-2">{nameAndCopy}</div>
           {namespace && namespace !== '_' && (
-            <span className="whitespace-nowrap text-sm text-theme-text-secondary">Namespace: <span className="text-theme-text-primary">{namespace}</span></span>
+            <span className="whitespace-nowrap text-sm text-theme-text-secondary">{namespaceDisplay ?? <>Namespace: <span className="text-theme-text-primary">{namespace}</span></>}</span>
           )}
           {namespace && namespace !== '_' && namespaceNote}
         </div>
@@ -1310,7 +1312,7 @@ export function WorkloadView({
             {/* On the title line the kind and status wrap together, never apart. */}
             {inlineBadges ? <span className="inline-flex items-center gap-x-3">{kindAndStatus}</span> : kindAndStatus}
             {namespace && namespace !== '_' && (
-              <span className="whitespace-nowrap">Namespace: <span className="text-theme-text-primary">{namespace}</span></span>
+              <span className="whitespace-nowrap">{namespaceDisplay ?? <>Namespace: <span className="text-theme-text-primary">{namespace}</span></>}</span>
             )}
             {namespace && namespace !== '_' && namespaceNote}
           </>

@@ -58,8 +58,8 @@ export function hostsForResource(hosts: readonly ResourceHost[], resource: HostR
   return hosts.filter(host => host.resources?.some(kind => kind.name === plural && kind.group === resource.group))
 }
 
-export function resourceHostForSlot(hosts: readonly ResourceHost[], resource: HostResource, slot: ExclusiveDetailSlot): ResourceHost | undefined {
-  return hostsForResource(hosts, resource).find(host => host.detailOwnership?.includes(slot))
+export function resourceHostForSlot(hosts: readonly ResourceHost[], resource: HostResource, slot: ExclusiveDetailSlot, features?: HostFeatures): ResourceHost | undefined {
+  return hostsForResource(hosts, resource).find(host => host.detailOwnership?.includes(slot) && (!features || hostSupport(host, features) === 'supported'))
 }
 
 export function composeResourceHosts(hosts: readonly ResourceHost[]): RendererOverrides {
