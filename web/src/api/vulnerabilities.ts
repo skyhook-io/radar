@@ -350,6 +350,25 @@ export function vulnerabilitiesPath(p: VulnerabilitiesParams): string {
   return `/vulnerabilities?${params.toString()}`
 }
 
+// GET /api/vulnerabilities/export: the same view and filters as CSV, listing
+// every row and every value the table shortens.
+export async function fetchVulnerabilitiesCSV(p: VulnerabilitiesParams): Promise<string> {
+  const path = vulnerabilitiesPath(p).replace('/vulnerabilities?', '/vulnerabilities/export?')
+  const response = await apiFetch(`${getApiBase()}${path}`, { cache: 'no-store' })
+  if (!response.ok) {
+    const { body, unknownRoute } = await readErrorResponse(response)
+    throw new ApiError(body.error || httpStatusMessage(response.status, response.statusText), response.status, body, { unknownRoute })
+  }
+  return response.text()
+}
+
+// vulnerabilities-by-<view>-<cluster>-<YYYY-MM-DD>.csv, on the local date.
+export function vulnerabilitiesCSVFilename(view: VulnerabilityView, cluster: string, now = new Date()): string {
+  const safe = cluster.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+|-+$/g, '') || 'cluster'
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `vulnerabilities-by-${view}-${safe}-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}.csv`
+}
+
 // GET /api/vulnerabilities. Filters run server-side so the summary always
 // describes the unfiltered scope and every surface (REST, MCP) filters alike.
 export function useVulnerabilities(p: VulnerabilitiesParams, enabled = true) {

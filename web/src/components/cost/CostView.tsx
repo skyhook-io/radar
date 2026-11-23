@@ -1,3 +1,4 @@
+import { isRightsizingScanPath } from '../../utils/page-links'
 import { useState, useEffect } from 'react'
 import { useLocation } from 'react-router-dom'
 import {
@@ -64,7 +65,7 @@ const STORAGE_UNKNOWN_HINT =
 
 export function CostView(props: CostViewProps) {
   const { pathname } = useLocation()
-  if (pathname.startsWith('/cost/rightsizing')) {
+  if (isRightsizingScanPath(pathname)) {
     return <RightsizingScanView namespaces={props.namespaces} />
   }
   return <CostOverview {...props} />

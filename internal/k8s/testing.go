@@ -654,6 +654,7 @@ func ResetTestState() {
 
 	// Stop the informers before dropping the fixture that owns them.
 	ResetDynamicResourceCache()
+	ResetMetricsHistory()
 	ResetResourceCache()
 
 	// Reset connection state

@@ -1,8 +1,9 @@
 import { useState } from 'react'
+import { useMutation } from '@tanstack/react-query'
 import { WithTooltip } from '../ui/Tooltip'
 import { useSearchParams } from 'react-router-dom'
 import { clsx } from 'clsx'
-import { AlertTriangle, CircleDashed, ExternalLink, Info, Search, ShieldAlert, ShieldCheck, X } from 'lucide-react'
+import { AlertTriangle, CircleDashed, Download, ExternalLink, Info, Search, ShieldAlert, ShieldCheck, X } from 'lucide-react'
 import {
   Collapse,
   CollapseChevron,
@@ -25,15 +26,19 @@ import {
 } from '@skyhook-io/k8s-ui'
 import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { formatRelativeAgeTime } from '@skyhook-io/k8s-ui/utils/format'
-import { ApiError, useCapabilities } from '../../api/client'
+import { triggerDownload } from '@skyhook-io/k8s-ui/utils/download'
+import { ApiError, useCapabilities, useRadarFeature } from '../../api/client'
 import { useAPIResources } from '../../api/apiResources'
 import {
+  fetchVulnerabilitiesCSV,
   hasVulnerabilityReports,
+  vulnerabilitiesCSVFilename,
   JAVA4SHELL_CVE,
   useVulnerabilities,
   isKindUnknown,
   parseWorkloadParam,
   workloadParam,
+  type VulnerabilitiesParams,
   type VulnerabilitiesResponse,
   type VulnerabilityCVE,
   type VulnerabilityFix,
@@ -45,6 +50,7 @@ import {
 } from '../../api/vulnerabilities'
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
+import { useDesktopDownload } from '../../hooks/useDesktopDownload'
 import { ChecksViewTabs } from './ChecksViewTabs'
 import { Java4ShellPanel } from './Java4ShellPanel'
 import {
@@ -123,7 +129,8 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
     mutate(next)
     setParams(next, { replace: !push })
   }
-  const { data, isLoading, isFetching, isPlaceholderData, error, dataUpdatedAt, refetch } = useVulnerabilities({ view, namespaces, severities, fixableOnly, query, workload }, !reportsAbsent)
+  const tableParams: VulnerabilitiesParams = { view, namespaces, severities, fixableOnly, query, workload }
+  const { data, isLoading, isFetching, isPlaceholderData, error, dataUpdatedAt, refetch } = useVulnerabilities(tableParams, !reportsAbsent)
   const hasReports = !reportsAbsent && (hasVulnerabilityReports(resources) || !!data)
   const trivySearch = new URLSearchParams({ by: 'cve', q: JAVA4SHELL_CVE })
   for (const key of ['namespace', 'namespaces']) {
@@ -264,6 +271,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
               </button>
             ))}
           </div>
+          <DownloadCSVButton params={tableParams} cluster={connection.clusterName || connection.context} />
         </div>
       </div>
 
@@ -317,6 +325,30 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
         </>
       )}
     </div>
+  )
+}
+
+// Saves the view on screen, with its filters, as CSV: every row, and every
+// value the table shortens.
+function DownloadCSVButton({ params, cluster }: { params: VulnerabilitiesParams; cluster: string }) {
+  const { support, guard } = useRadarFeature('vulnerabilitiesExport')
+  const desktopDownload = useDesktopDownload()
+  const download = useMutation({
+    // The file is named for the view and cluster the request was for.
+    mutationFn: ({ params }: { params: VulnerabilitiesParams; cluster: string }) => guard(() => fetchVulnerabilitiesCSV(params)),
+    onSuccess: (csv, { params, cluster }) => triggerDownload(csv, 'text/csv;charset=utf-8', vulnerabilitiesCSVFilename(params.view, cluster), desktopDownload),
+    meta: { errorMessage: 'Could not download the CSV' },
+  })
+  if (support !== 'supported') return null
+  return (
+    <button
+      type="button"
+      className="btn-secondary inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium"
+      disabled={download.isPending}
+      onClick={() => download.mutate({ params, cluster })}
+    >
+      <Download className="h-3.5 w-3.5" aria-hidden /> {download.isPending ? 'Preparing CSV…' : 'Download CSV'}
+    </button>
   )
 }
 

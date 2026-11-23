@@ -10,17 +10,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/prom"
+	"github.com/skyhook-io/radar/pkg/rightsizing"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	"k8s.io/client-go/kubernetes/fake"
-
-	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/pkg/k8score"
-	"github.com/skyhook-io/radar/pkg/prom"
 )
 
 type fakeScanQuerier struct {
@@ -82,7 +81,7 @@ func scanMatrixSeries(namespace, kind, workload, container string, values []floa
 }
 
 func repeatedValues(value float64) []float64 {
-	values := make([]float64, rightsizingMinSamples)
+	values := make([]float64, rightsizing.RightsizingMinSamples)
 	for i := range values {
 		values[i] = value
 	}
@@ -218,7 +217,7 @@ func TestScanMemoryReductionRequiresVerifiedRestartHistory(t *testing.T) {
 				memory:   map[scanKey][]float64{key: repeatedValues(50 * 1024 * 1024)},
 				restarts: tc.restarts, terminations: tc.terminations, errors: map[string]error{},
 			}
-			row := buildScanRow(workload.workload.containers[0], "memory", key, rightsizingMinSamples, workload.workload, evidence)
+			row := buildScanRow(workload.workload.containers[0], "memory", key, rightsizing.RightsizingMinSamples, workload.workload, evidence)
 			if row.RecommendationReason != tc.wantReason || row.WindowOOMEvidence != tc.wantOOM || (row.RecommendedReq != nil) != tc.wantRec {
 				t.Fatalf("row = %+v", row)
 			}
@@ -373,13 +372,13 @@ func TestRightsizingScanDoesNotCallRestrictedEmptyScopeComplete(t *testing.T) {
 
 func TestRecommendationSafetySuppressesUnknownHPAAndOOM(t *testing.T) {
 	cpu := RightsizingRow{HPAEvidenceAvailable: false}
-	classifyRightsizingFit(&cpu, 0.05, mustQuantity(t, "200m"), mustQuantity(t, "1"), "cpu")
+	rightsizing.ClassifyRightsizingFit(&cpu, 0.05, mustQuantity(t, "200m"), mustQuantity(t, "1"), "cpu")
 	if cpu.RecommendedReq != nil || cpu.RecommendationReason != "hpa_evidence_unavailable" {
 		t.Fatalf("unknown HPA evidence did not suppress CPU recommendation: %+v", cpu)
 	}
 
 	memory := RightsizingRow{HPAEvidenceAvailable: true, OOMEvidenceAvailable: false}
-	classifyRightsizingFit(&memory, 50*1024*1024, mustQuantity(t, "256Mi"), mustQuantity(t, "1Gi"), "memory")
+	rightsizing.ClassifyRightsizingFit(&memory, 50*1024*1024, mustQuantity(t, "256Mi"), mustQuantity(t, "1Gi"), "memory")
 	if memory.RecommendedReq != nil || memory.RecommendationReason != "oom_evidence_unavailable" {
 		t.Fatalf("unknown OOM evidence did not suppress memory downsize: %+v", memory)
 	}
@@ -396,7 +395,7 @@ func TestUnknownHPAEvidencePermitsIncreaseGuidance(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			row := RightsizingRow{HPAEvidenceAvailable: false}
-			classifyRightsizingFit(&row, 0.2, test.req, nil, "cpu")
+			rightsizing.ClassifyRightsizingFit(&row, 0.2, test.req, nil, "cpu")
 			if row.Fit != test.fit || row.RecommendedReq == nil || row.RecommendationReason != "" {
 				t.Fatalf("unknown HPA evidence suppressed increase guidance: %+v", row)
 			}
@@ -426,12 +425,12 @@ func TestScanMarksWorkloadsWhenPodInventoryIsUnreadable(t *testing.T) {
 			LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled"}},
 		}}},
 	}
-	replicaSet := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api-7f6", OwnerReferences: []metav1.OwnerReference{scopeOwner("Deployment", "api")}}}
+	replicaSet := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api-7f6", UID: "api-7f6-uid", OwnerReferences: []metav1.OwnerReference{scopeOwner("Deployment", "api")}}}
 
 	newWorkloads := func() map[string]*scanWorkload {
 		return map[string]*scanWorkload{
 			workloadIdentity("Deployment", "shop", "api"): {
-				kind: "Deployment", namespace: "shop", name: "api",
+				uid: "api-uid", kind: "Deployment", namespace: "shop", name: "api",
 				workload: rightsizingWorkload{currentPodOOM: map[string]bool{}},
 			},
 		}
@@ -805,7 +804,7 @@ func TestHPAEvidenceUnavailableWhileInformerIsWarming(t *testing.T) {
 				t.Fatalf("a warming informer must not establish HPA evidence: %+v", workload)
 			}
 			row := RightsizingRow{HPAEvidenceAvailable: workload.hpaAvailable, HPAManaged: workload.hpaManaged["cpu"]}
-			classifyRightsizingFit(&row, 0.05, mustQuantity(t, "200m"), mustQuantity(t, "1"), "cpu")
+			rightsizing.ClassifyRightsizingFit(&row, 0.05, mustQuantity(t, "200m"), mustQuantity(t, "1"), "cpu")
 			if row.RecommendedReq != nil || row.RecommendationReason != ReasonHPAEvidenceUnavailable {
 				t.Fatalf("unknown HPA evidence must withhold a reduction: %+v", row)
 			}

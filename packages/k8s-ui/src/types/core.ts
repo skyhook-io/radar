@@ -174,6 +174,7 @@ export interface CloudConnectCapability {
 export interface FeatureCapabilities {
  helmSourceIdentity?: boolean
   helmInventory?: boolean
+  datadogRightsizing?: boolean
   datadogAgentPresence?: boolean
   resourceReadCoverage?: boolean
   searchCoverage?: boolean
@@ -221,6 +222,7 @@ export interface FeatureCapabilities {
   kueueQueueWorkloads?: boolean
   podFileUpload?: boolean
   vulnerabilities?: boolean
+  vulnerabilitiesExport?: boolean // GET /api/vulnerabilities/export
   runtimeAdvisoryChecks?: boolean
   runtimeAdvisoryProgress?: boolean
   sealedSecretsController?: boolean // GET /api/sealedsecrets/controller

@@ -23,6 +23,7 @@ func TestNoClusterGlobals(t *testing.T) {
 		"*sharedKubernetesClients", "*ResourceDiscovery", "*permissionState",
 		"DynamicResourceCache", "*DynamicResourceCache", "connectionDynamicCache", "*connectionDynamicCache",
 		"github.com/skyhook-io/radar/pkg/k8score.DynamicResourceCache", "*github.com/skyhook-io/radar/pkg/k8score.DynamicResourceCache",
+		"*github.com/skyhook-io/radar/pkg/k8score.MetricsHistoryStore", "github.com/skyhook-io/radar/pkg/k8score.MetricsHistoryStore",
 		"*ResourceCache", "connectionCache", "*connectionCache", "recreateStash", "*recreateStash", "recreateEntry", "*recreateEntry", "map[string]recreateEntry",
 		"*github.com/skyhook-io/radar/pkg/timeline.TombstoneCache", "github.com/skyhook-io/radar/pkg/timeline.TombstoneCache",
 		"connectionPolicyReports", "*connectionPolicyReports", "policyReportSnapshot", "*policyReportSnapshot", "PolicyReportStatus", "*PolicyReportStatus", "KyvernoStatus", "*KyvernoStatus",

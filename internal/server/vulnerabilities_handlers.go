@@ -1,10 +1,13 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readplan"
@@ -31,27 +34,122 @@ import (
 // Radar's identity, like the resource list; it is a GET, so the shared
 // listener's cross-site read guard applies.
 func (s *Server) handleVulnerabilities(w http.ResponseWriter, r *http.Request) {
-	if !s.requireConnected(w) {
+	resp, ok := s.readVulnerabilities(w, r, false)
+	if ok {
+		s.writeJSON(w, resp)
+	}
+}
+
+// handleVulnerabilitiesExport serves GET /api/vulnerabilities/export: one
+// view (image, fix, cve or workload) as CSV, with the same query and gate as
+// handleVulnerabilities, but listing every row and every value the list caps
+// (CVE IDs, images, workloads), then rows for running images not scanned
+// yet, images whose findings weren't read and coverage gaps. The findings
+// budget (MaxFindings) still applies. Radar Cloud fans out to this route and
+// stacks the files, so the columns are a contract (ExportColumns). One export
+// runs at a time (409 for another), a file past 128 MB is refused
+// with list_too_large rather than built, and a cancelled request stops
+// building. The body
+// is built whole and sent with its length (or gzipped, whose trailer does the
+// same), so a cut transfer reads as an error, never as a shorter file.
+func (s *Server) handleVulnerabilitiesExport(w http.ResponseWriter, r *http.Request) {
+	if v := r.URL.Query().Get("view"); v == "" || v == string(vulnerabilities.ViewSummary) {
+		s.writeError(w, http.StatusBadRequest, "view must be image, fix, cve or workload")
 		return
+	}
+	// One export at a time: each builds its whole file in memory.
+	select {
+	case vulnerabilityExportSlot <- struct{}{}:
+		defer func() { <-vulnerabilityExportSlot }()
+	default:
+		s.writeError(w, http.StatusConflict, "Another CSV export is running on this Radar. Try again in a moment.")
+		return
+	}
+	// The server has no WriteTimeout: without a deadline of its own, a client
+	// that stops reading would keep the only slot.
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(vulnerabilityExportDeadline)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		log.Printf("[vulnerabilities] Failed to set the export's write deadline: %v", err)
+	}
+	// Reading and building stop at their own deadline, just inside the
+	// route's 60s timeout, so a slow export gets a reason, not a bare 504.
+	ctx, cancel := context.WithTimeout(r.Context(), vulnerabilityExportPrepareTimeout)
+	defer cancel()
+	r = r.WithContext(ctx)
+	timedOut := func() bool {
+		if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return false
+		}
+		s.writeErrorCode(w, http.StatusServiceUnavailable, "export_timed_out", "This export took too long. Narrow it with the namespace picker or the filters, then download again.")
+		return true
+	}
+	resp, ok := s.readVulnerabilities(w, r, true)
+	if !ok {
+		timedOut()
+		return
+	}
+	body, err := vulnerabilities.WriteCSV(ctx, resp, vulnerabilityFilter(r), k8s.GetClusterName())
+	switch {
+	case ctx.Err() != nil:
+		timedOut()
+		return
+	case errors.Is(err, vulnerabilities.ErrExportTooLarge):
+		s.writeErrorCode(w, http.StatusBadRequest, string(readreason.ListTooLarge), exportTooLargeMessage)
+		return
+	case err != nil:
+		log.Printf("[vulnerabilities] Failed to write the %s export: %v", resp.View, err)
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	_, _ = w.Write(body)
+}
+
+const exportTooLargeMessage = "This export is over 128 MB. Narrow it with the namespace picker or the filters, then download again."
+
+// vulnerabilityExportSlot lets one CSV export run at a time on this Radar,
+// for at most vulnerabilityExportDeadline, reading and delivery together.
+var (
+	vulnerabilityExportSlot     = make(chan struct{}, 1)
+	vulnerabilityExportDeadline = 2 * time.Minute
+	// vulnerabilityExportPrepareTimeout bounds reading and building the file;
+	// past it the export answers 503 export_timed_out.
+	vulnerabilityExportPrepareTimeout = 55 * time.Second
+)
+
+// vulnerabilityFilter is the request's filter; readVulnerabilities has
+// already rejected a malformed one.
+func vulnerabilityFilter(r *http.Request) vulnerabilities.Filter {
+	q := r.URL.Query()
+	severities, _ := vulnerabilities.ParseSeverities(q.Get("severity"))
+	filter := vulnerabilities.Filter{Severities: severities, FixableOnly: q.Get("fixable") == "1" || q.Get("fixable") == "true", Query: q.Get("q")}
+	if kind, ns, name := q.Get("workloadKind"), q.Get("workloadNamespace"), q.Get("workloadName"); kind != "" && ns != "" && name != "" {
+		filter.Workload = &vulnerabilities.WorkloadRef{Kind: kind, Group: q.Get("workloadGroup"), Namespace: ns, Name: name}
+	}
+	return filter
+}
+
+// readVulnerabilities parses, gates and reads; on failure it has written the
+// error and returns false.
+func (s *Server) readVulnerabilities(w http.ResponseWriter, r *http.Request, export bool) (vulnerabilities.Response, bool) {
+	if !s.requireConnected(w) {
+		return vulnerabilities.Response{}, false
 	}
 	q := r.URL.Query()
 	view, err := vulnerabilities.ParseView(q.Get("view"))
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
+		return vulnerabilities.Response{}, false
 	}
-	severities, err := vulnerabilities.ParseSeverities(q.Get("severity"))
-	if err != nil {
+	if _, err := vulnerabilities.ParseSeverities(q.Get("severity")); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
+		return vulnerabilities.Response{}, false
 	}
-	filter := vulnerabilities.Filter{Severities: severities, FixableOnly: q.Get("fixable") == "1" || q.Get("fixable") == "true", Query: q.Get("q")}
 	if kind, ns, name := q.Get("workloadKind"), q.Get("workloadNamespace"), q.Get("workloadName"); kind != "" || name != "" {
 		if kind == "" || ns == "" || name == "" {
 			s.writeError(w, http.StatusBadRequest, "workloadKind, workloadNamespace and workloadName go together")
-			return
+			return vulnerabilities.Response{}, false
 		}
-		filter.Workload = &vulnerabilities.WorkloadRef{Kind: kind, Group: q.Get("workloadGroup"), Namespace: ns, Name: name}
 	}
 
 	namespaces, checkFailed := s.parseNamespacesForUserWithStatus(r)
@@ -60,11 +158,12 @@ func (s *Server) handleVulnerabilities(w http.ResponseWriter, r *http.Request) {
 		NamespaceCheckFailed: checkFailed,
 		ReportAccess:         s.searchKindAccess(r, s.computeSearchKindRBAC(r)),
 		View:                 view,
-		Filter:               filter,
+		Filter:               vulnerabilityFilter(r),
+		Export:               export,
 	})
 	if err != nil {
 		if r.Context().Err() != nil {
-			return
+			return vulnerabilities.Response{}, false
 		}
 		switch {
 		case errors.Is(err, vulnerabilities.ErrNotInstalled):
@@ -73,6 +172,8 @@ func (s *Server) handleVulnerabilities(w http.ResponseWriter, r *http.Request) {
 			s.writeErrorCode(w, http.StatusServiceUnavailable, string(readreason.KindSyncPending), err.Error())
 		case errors.Is(err, vulnerabilities.ErrConnectionChanged):
 			s.writeErrorCode(w, http.StatusConflict, string(readreason.ConnectionChanged), err.Error())
+		case errors.Is(err, vulnerabilities.ErrExportTooLarge):
+			s.writeErrorCode(w, http.StatusBadRequest, string(readreason.ListTooLarge), exportTooLargeMessage)
 		case isCollectorRefusal(err):
 			code, _ := readplan.CollectorErrorCode(err)
 			s.writeErrorCode(w, http.StatusServiceUnavailable, string(code), err.Error())
@@ -84,9 +185,9 @@ func (s *Server) handleVulnerabilities(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[vulnerabilities] Failed to read vulnerability reports %s/%s: %v", scope, "vulnerabilityreports", err)
 			s.writeError(w, http.StatusInternalServerError, err.Error())
 		}
-		return
+		return vulnerabilities.Response{}, false
 	}
-	s.writeJSON(w, resp)
+	return resp, true
 }
 
 // isCollectorRefusal: Radar's own identity couldn't read the reports

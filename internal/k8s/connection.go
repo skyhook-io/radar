@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 
 	"k8s.io/client-go/discovery"
@@ -10,9 +11,9 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-// Connection owns the clients, config, discovery, permissions and
-// informer caches for one cluster context. A switch installs a new connection,
-// so a request that captures one keeps the same clients and resource mapping
+// Connection owns the clients, config, discovery, permissions, informer
+// caches and metrics history for one cluster context. A switch installs a new
+// connection, so a request that captures one keeps the same clients and resource mapping
 // even if a switch lands mid-request. A rebuild on the same clients (rescope, recovery)
 // also starts from a new one, so state built for the old admission stays there.
 type Connection struct {
@@ -24,6 +25,9 @@ type Connection struct {
 	cache                                    atomic.Pointer[connectionCache]
 	dynamicCache                             atomic.Pointer[connectionDynamicCache]
 	discovery                                atomic.Pointer[ResourceDiscovery]
+	metricsMu                                sync.Mutex
+	metricsHistory                           atomic.Pointer[MetricsHistoryStore]
+	metricsClosed                            bool
 	// id is the ID of the connection's latest admission, written under
 	// connectionStatusMu. Each admission gets a new one, so an ID from before
 	// a retirement is refused even if the same build is admitted again.
@@ -51,7 +55,7 @@ func installedConnectionLocked(config *rest.Config, clients *sharedKubernetesCli
 }
 
 // fresh returns a new, unadmitted connection on the same clients, with no
-// discovery, permissions or informer cache yet.
+// discovery, permissions, informer cache or metrics history yet.
 func (c *Connection) fresh() *Connection {
 	if c == nil {
 		return &Connection{}

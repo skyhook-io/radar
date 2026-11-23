@@ -1,0 +1,12 @@
+[
+  {"name":"CPU shortage","demand":0.2,"hpaKnown":true,"qos":"Burstable","peak":true,"wantStatus":"actionable","wantTarget":"250m","wantChange":0.3},
+  {"name":"CPU shortage, unknown HPA","demand":0.2,"qos":"Burstable","peak":true,"wantStatus":"review","reason":"hpa_evidence_unavailable","wantTarget":"250m","wantChange":0},
+  {"name":"CPU cut, unknown HPA","demand":0.02,"qos":"Burstable","peak":true,"wantStatus":"review","reason":"recommendation_withheld","wantChange":0},
+  {"name":"CPU shortage, Guaranteed Pod","demand":0.2,"hpaKnown":true,"qos":"Guaranteed","peak":true,"wantStatus":"review","reason":"guaranteed_qos","wantTarget":"250m","wantChange":0},
+  {"name":"CPU shortage, unknown QoS","demand":0.2,"hpaKnown":true,"qos":"","peak":true,"wantStatus":"review","reason":"qos_unavailable","wantTarget":"250m","wantChange":0},
+  {"name":"CPU shortage, missing peak","demand":0.2,"hpaKnown":true,"qos":"Burstable","wantStatus":"actionable","wantTarget":"250m","wantChange":0.3},
+  {"name":"CPU cut, missing peak","demand":0.02,"hpaKnown":true,"qos":"Burstable","wantStatus":"review","reason":"cpu_peak_unavailable","wantTarget":"30m","wantChange":0},
+  {"name":"CPU cut, low coverage","demand":0.02,"hpaKnown":true,"qos":"Burstable","peak":true,"samples":90,"wantStatus":"review","reason":"low_confidence_reduction","wantTarget":"30m","wantChange":0},
+  {"name":"CPU shortage, scaled to zero","demand":0.2,"hpaKnown":true,"qos":"Burstable","peak":true,"idle":true,"wantStatus":"review","reason":"scaled_to_zero","wantTarget":"250m","wantChange":0},
+  {"name":"not enough data","demand":0.2,"hpaKnown":true,"qos":"Burstable","peak":true,"samples":4,"wantStatus":"none","wantChange":0}
+]
