@@ -2069,6 +2069,7 @@ func installPreparedContext(p *preparedContext) {
 	activeSourceName = p.inFileName
 	activeSourceConfig = p.rawConfig.DeepCopy()
 	clusterName = p.kubeContext.Cluster
+	installedConn.Store(installedConnectionLocked(p.config, p.clients))
 	contextNamespace = p.kubeContext.Namespace
 	installedConn.Store(installedConnectionLocked(p.config, p.clients))
 	contextUsesExec = p.usesExec

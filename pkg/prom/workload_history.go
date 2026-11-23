@@ -18,6 +18,13 @@ func (h WorkloadHistory) OwnerQuery() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return h.OwnerQueryFor(func(string) string { return cluster })
+}
+
+// OwnerQueryFor is OwnerQuery with each ownership metric's cluster matchers
+// chosen separately, for stores where metrics from different scrape jobs
+// carry different cluster labels. Scope is not consulted.
+func (h WorkloadHistory) OwnerQueryFor(matchers func(metric string) string) (string, error) {
 	if h.Namespace == "" || h.Name == "" {
 		return "", fmt.Errorf("workload history requires namespace and name")
 	}
@@ -33,7 +40,7 @@ func (h WorkloadHistory) OwnerQuery() (string, error) {
 		return "", fmt.Errorf("unsupported historical workload kind %q", h.Kind)
 	}
 	ns := "namespace=" + strconv.Quote(h.Namespace)
-	metric := func(name, target string) string { return workloadMetricSelector(name, cluster, target) }
+	metric := func(name, target string) string { return workloadMetricSelector(name, matchers(name), target) }
 	if h.Recorded {
 		return "max by (namespace,pod) (" + metric("namespace_workload_pod:kube_pod_owner:relabel", ns+",workload="+strconv.Quote(h.Name)+",workload_type=~"+strconv.Quote(strings.ToLower(kind)+"|"+kind)) + ")", nil
 	}

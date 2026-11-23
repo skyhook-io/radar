@@ -898,7 +898,9 @@ launch context, so switching to another context goes back to discovery.
 Workload metrics and PVC usage normally use automatic identity matching.
 `--prometheus-single-cluster` and repeatable `--prometheus-cluster-label` replace
 it for workload request/resource charts, history, Pod comparison and PVC usage.
-They do not scope rightsizing, node/HPA or the workload network/filesystem charts.
+They also scope rightsizing, the overview, namespace, Node and HPA charts, diagnose
+vitals and OpenCost costs from the metrics store; see
+[other views in a shared store](workload-metrics.md#other-views-in-a-shared-metrics-store).
 Leave both unset for automatic matching. Configured labels must exist on each
 affected metric source, including kubelet volume stats. See
 [scope and remedies](workload-metrics.md#pvc-usage-scope).

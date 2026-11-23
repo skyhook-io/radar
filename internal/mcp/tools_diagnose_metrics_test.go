@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -448,6 +452,23 @@ func TestHandleDiagnoseMetricsDropsSeriesOnTimeBudget(t *testing.T) {
 	}
 }
 
+// A caller that cancels is not told the metrics budget ran out.
+func TestDiagnoseMetricsStoppedNamesTheCause(t *testing.T) {
+	expired, cancelExpired := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancelExpired()
+	<-expired.Done()
+	if got := diagnoseMetricsStopped(expired); !strings.Contains(got, "budget exceeded") {
+		t.Errorf("budget ran out: %q", got)
+	}
+	caller, cancel := context.WithCancel(context.Background())
+	cancelled, cancelBudget := context.WithTimeout(caller, time.Minute)
+	defer cancelBudget()
+	cancel()
+	if got := diagnoseMetricsStopped(cancelled); !strings.Contains(got, "cancelled") || strings.Contains(got, "budget") {
+		t.Errorf("cancelled caller: %q", got)
+	}
+}
+
 func TestHandleDiagnoseMetricsDropsSeriesOnSizeBudget(t *testing.T) {
 	setupFakeCacheForDiagnoseTests(t)
 	timeline.ResetStore()
@@ -520,6 +541,76 @@ func TestHandleDiagnoseMetricsKeepsOtherSeriesWhenOneCategoryFails(t *testing.T)
 	}
 	if !strings.HasPrefix(m.Error, "cpu: ") || !strings.Contains(m.Error, "cpu exploded") {
 		t.Fatalf("metrics.error = %q, want the failed category named with its cause", m.Error)
+	}
+}
+
+// A category the store answered only in part is kept but marked, so an
+// understated value never passes for a complete one.
+func TestHandleDiagnoseMetricsMarksIncompleteCategories(t *testing.T) {
+	setupFakeCacheForDiagnoseTests(t)
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	f := setupFakeProm(t)
+	full := metricsMatrixForRequest("1")
+	f.rangeBodyFunc = func(params url.Values) string {
+		body := full(params)
+		q := params.Get("query")
+		switch {
+		case strings.Contains(q, "container_memory_working_set_bytes"):
+			return strings.Replace(body, `{"status":"success",`, `{"status":"success","warnings":["store shard eu-2 did not answer: http://user:pw@thanos.internal:10901/api"],`, 1)
+		case strings.Contains(q, "kube_pod_container_status_restarts_total"):
+			return strings.Replace(body, `{"status":"success",`, `{"status":"success","isPartial":true,`, 1)
+		}
+		return body
+	}
+	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseRead(t, "admin")
+
+	_, m := diagnoseMetricsResult(t, ctx, testDiagnoseInput("deployment", "alpha", "cart"))
+	if m == nil || m.Error != "" || len(m.Series) != len(diagnoseMetricsCategories) {
+		t.Fatalf("metrics = %+v; want every category kept", m)
+	}
+	byCategory := map[string]diagnoseMetricSeries{}
+	for _, s := range m.Series {
+		byCategory[s.Category] = s
+	}
+	if cpu := byCategory["cpu"]; cpu.Incomplete || cpu.IncompleteNote != "" {
+		t.Errorf("cpu = %+v; a complete answer is not marked", cpu)
+	}
+	mem := byCategory["memory"]
+	if !mem.Incomplete || !strings.Contains(mem.IncompleteNote, "may be understated") || !strings.Contains(mem.IncompleteNote, "eu-2 did not answer") {
+		t.Errorf("memory = %+v; want marked with the store's warning", mem)
+	}
+	if strings.Contains(mem.IncompleteNote, "pw@") || strings.Contains(mem.IncompleteNote, "thanos.internal") {
+		t.Errorf("memory note leaks the backend: %q", mem.IncompleteNote)
+	}
+	if r := byCategory["restarts"]; !r.Incomplete || !strings.Contains(r.IncompleteNote, "answered only in part") {
+		t.Errorf("restarts = %+v; want a partial answer marked", r)
+	}
+	if len(mem.Series) == 0 {
+		t.Error("an incomplete category still carries what the store returned")
+	}
+}
+
+func TestIncompleteNoteIsBounded(t *testing.T) {
+	note := incompleteNote(prom.QueryAnnotations{Warnings: []string{strings.Repeat("w", 2000)}})
+	if len(note) > diagnoseMetricsMaxIncompleteBytes {
+		t.Fatalf("note is %d bytes, over %d", len(note), diagnoseMetricsMaxIncompleteBytes)
+	}
+}
+
+// A cut landing inside a multi-byte character steps back to its start, so
+// the note stays valid UTF-8 and never shows a replacement character.
+func TestIncompleteNoteCutsOnACharacterBoundary(t *testing.T) {
+	for offset := range 4 {
+		warning := strings.Repeat("w", diagnoseMetricsMaxIncompleteBytes-80+offset) + strings.Repeat("é", 100)
+		note := incompleteNote(prom.QueryAnnotations{Warnings: []string{warning}})
+		if !utf8.ValidString(note) || !strings.HasSuffix(note, "…") || len(note) > diagnoseMetricsMaxIncompleteBytes {
+			t.Errorf("offset %d: note %q (%d bytes) is invalid UTF-8, unmarked or over the bound", offset, note, len(note))
+		}
+		if bounded := boundDiagnoseMetricsError(strings.Repeat("e", diagnoseMetricsMaxErrorBytes-2+offset) + "éé"); !utf8.ValidString(bounded) || len(bounded) > diagnoseMetricsMaxErrorBytes {
+			t.Errorf("offset %d: error %q is invalid UTF-8 or over the bound", offset, bounded)
+		}
 	}
 }
 
@@ -819,5 +910,176 @@ func TestDiagnoseMetricsPreservesPodResolutionErrors(t *testing.T) {
 	}
 	if len(f.rangeParams) != 0 {
 		t.Fatalf("queried unresolved Pod membership: %v", f.rangeParams)
+	}
+}
+
+var scopeMetricPattern = regexp.MustCompile(`"radar_metric", "([^"]+)"`)
+
+// scopeRows answers a cluster scope check with the given cluster label values
+// for every metric it asks about.
+func scopeRows(query string, clusters ...string) string {
+	var rows []string
+	for _, m := range scopeMetricPattern.FindAllStringSubmatch(query, -1) {
+		for _, c := range clusters {
+			rows = append(rows, `{"metric":{"radar_metric":"`+m[1]+`","cluster":"`+c+`"},"value":[1700000000,"1"]}`)
+		}
+	}
+	return `{"status":"success","data":{"resultType":"vector","result":[` + strings.Join(rows, ",") + `]}}`
+}
+
+// In a store that holds several clusters and no label proven to be this
+// one, the vitals say why they are missing instead of charting a mix.
+func TestHandleDiagnoseMetricsWithheldInASharedStore(t *testing.T) {
+	setupFakeCacheForDiagnoseTests(t)
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	f := setupFakeProm(t)
+	f.rangeBodyFunc = metricsMatrixForRequest("1")
+	f.queryBodyFunc = func(params url.Values) string {
+		if q := params.Get("query"); strings.HasPrefix(q, "label_replace(topk(2") {
+			return scopeRows(q, "a", "b")
+		}
+		return ""
+	}
+	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseRead(t, "admin")
+
+	_, m := diagnoseMetricsResult(t, ctx, testDiagnoseInput("deployment", "alpha", "cart"))
+	if m == nil {
+		t.Fatal("diagnose omitted metrics")
+	}
+	if len(m.Series) != 0 || !strings.HasPrefix(m.Error, "metrics withheld: ") || !strings.Contains(m.Error, "several clusters") {
+		t.Fatalf("series = %d, error = %q; want none and the reason", len(m.Series), m.Error)
+	}
+	if m.ClusterScope == nil || m.ClusterScope.State != prometheus.ViewScopeSeveralClusters {
+		t.Fatalf("clusterScope = %+v", m.ClusterScope)
+	}
+	if len(f.rangeParams) != 0 {
+		t.Fatalf("withheld vitals sent %d data queries", len(f.rangeParams))
+	}
+}
+
+// A configured cluster label that every vitals metric reads back is on every
+// selector; a store with no labels gets the unfiltered queries unchanged.
+func TestHandleDiagnoseMetricsScopedQueries(t *testing.T) {
+	sel := prom.SelectPods("alpha", []string{"cart-abc123"})
+	for _, tc := range []struct {
+		name      string
+		configure bool
+		want      func(prom.MetricCategory) string
+	}{
+		{name: "configured label", configure: true, want: func(cat prom.MetricCategory) string {
+			return prom.BuildScopedQueryFiltered(sel, cat, prom.AggregateTotal, true, func(string) string { return `cluster="a"` })
+		}},
+		{name: "unlabeled store", want: func(cat prom.MetricCategory) string {
+			return prom.BuildScopedQuery(sel, cat, prom.AggregateTotal, true)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setupFakeCacheForDiagnoseTests(t)
+			timeline.ResetStore()
+			t.Cleanup(timeline.ResetStore)
+			f := setupFakeProm(t)
+			f.rangeBodyFunc = metricsMatrixForRequest("1")
+			if tc.configure {
+				if err := prometheus.SetWorkloadMetricsScope(prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "a"}}, ""); err != nil {
+					t.Fatal(err)
+				}
+				f.queryBodyFunc = func(params url.Values) string {
+					if q := params.Get("query"); strings.HasPrefix(q, "label_replace(count by") {
+						return scopeRows(q, "a")
+					}
+					return ""
+				}
+			}
+			ctx := withClusterAdmin(t, "admin")
+			grantDiagnoseRead(t, "admin")
+
+			_, m := diagnoseMetricsResult(t, ctx, testDiagnoseInput("deployment", "alpha", "cart"))
+			if m == nil || m.Error != "" || len(m.Series) != len(diagnoseMetricsCategories) {
+				t.Fatalf("metrics = %+v", m)
+			}
+			var sent []string
+			for _, p := range f.rangeParams {
+				sent = append(sent, p.Get("query"))
+			}
+			for _, cat := range diagnoseMetricsCategories {
+				if !slices.Contains(sent, tc.want(cat)) {
+					t.Errorf("%s: query not sent: %s\nsent: %q", cat, tc.want(cat), sent)
+				}
+			}
+			if len(sent) != len(diagnoseMetricsCategories) {
+				t.Errorf("sent %d queries, want %d", len(sent), len(diagnoseMetricsCategories))
+			}
+		})
+	}
+}
+
+// The vitals' check and their queries must describe one backend: when the
+// connection moves from store A to store B during the check, B's approval of
+// unfiltered queries must not send them to A, nor mix in B's answers.
+func TestHandleDiagnoseMetricsCheckOnAMovedConnectionWithholds(t *testing.T) {
+	for _, moved := range []bool{true, false} {
+		name := "unmoved"
+		if moved {
+			name = "moved during the check"
+		}
+		t.Run(name, func(t *testing.T) {
+			setupFakeCacheForDiagnoseTests(t)
+			timeline.ResetStore()
+			t.Cleanup(timeline.ResetStore)
+			storeA := setupFakeProm(t)
+			storeA.rangeBodyFunc = metricsMatrixForRequest("1")
+			storeB := &fakeProm{rangeBodyFunc: metricsMatrixForRequest("2")}
+			srvB := httptest.NewServer(storeB)
+			t.Cleanup(srvB.Close)
+			checks := 0
+			prev := diagnoseScopeResolverFor
+			diagnoseScopeResolverFor = func(*prometheus.Client, *k8s.ResourceCache) prometheus.ChartScopeResolver {
+				return func(_ context.Context, req prometheus.ViewScopeRequest) (prometheus.ViewScope, error) {
+					checks++
+					if moved {
+						prometheus.SetManualURL(srvB.URL)
+					}
+					filters := map[string]string{}
+					for _, m := range req.Metrics {
+						filters[m.Name] = ""
+					}
+					return prometheus.ViewScope{State: prometheus.ViewScopeSingleClusterAsserted, Filters: filters, Note: "asserted"}, nil
+				}
+			}
+			t.Cleanup(func() { diagnoseScopeResolverFor = prev })
+			ctx := withClusterAdmin(t, "admin")
+			grantDiagnoseRead(t, "admin")
+
+			_, m := diagnoseMetricsResult(t, ctx, testDiagnoseInput("deployment", "alpha", "cart"))
+			if m == nil {
+				t.Fatal("diagnose omitted metrics")
+			}
+			if checks != 1 {
+				t.Fatalf("checks = %d, want 1", checks)
+			}
+			storeA.mu.Lock()
+			sentA := len(storeA.rangeParams)
+			storeA.mu.Unlock()
+			storeB.mu.Lock()
+			sentB := len(storeB.rangeParams)
+			storeB.mu.Unlock()
+			if !moved {
+				if m.Error != "" || len(m.Series) != len(diagnoseMetricsCategories) || sentA != len(diagnoseMetricsCategories) {
+					t.Fatalf("unmoved vitals = %+v, sent %d queries", m, sentA)
+				}
+				return
+			}
+			if len(m.Series) != 0 || !strings.HasPrefix(m.Error, "metrics withheld: ") {
+				t.Errorf("series = %d, error = %q; want none and the reason", len(m.Series), m.Error)
+			}
+			if m.ClusterScope == nil || m.ClusterScope.State != prometheus.ViewScopeUnknown {
+				t.Errorf("clusterScope = %+v, want the unknown state", m.ClusterScope)
+			}
+			if sentA != 0 || sentB != 0 {
+				t.Errorf("vitals queries sent after the connection moved: old store %d, new store %d", sentA, sentB)
+			}
+		})
 	}
 }
