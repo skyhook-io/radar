@@ -11,6 +11,7 @@ import {
   getKagentDiscoveredTools,
   stripKagentURLCredentials,
   redactKagentURLsInText,
+  redactKagentLiterals,
 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-kagent'
 import { useResource, isForbiddenError, isNotFoundError } from '../../api/client'
 import {
@@ -128,16 +129,17 @@ function ReferenceLine({
 }) {
   const ref = reference.target
   const query = useResource<any>(PLURAL[ref.kind] ?? ref.kind.toLowerCase(), ref.namespace, ref.name, ref.group, {
-    enabled: (reference.state === 'unread' || ref.kind === 'Harness') && ref.group === 'api.kagent.dev',
+    enabled: reference.unread !== 'outside_namespace_pin' && (reference.state === 'unread' || ref.kind === 'Harness') && ref.group === 'api.kagent.dev',
   })
   const { connection } = useConnection()
   const poolQuery = useSubstratePool(ref.kind === 'WorkerPool' ? ref : null)
   const poolCode = substrateErrorCode(poolQuery.error)
   const pool = definitiveFailure(poolCode) || poolCode === 'incomplete' ? undefined : poolQuery.data
-  const direct = query.data
+  const direct = query.data ? redactKagentLiterals(query.data) : undefined
   const harness = direct && ref.kind === 'Harness' ? getKagentHarnessDeclarations(direct) : undefined
   const directReading = direct ? readKagent(direct) : undefined
-  const state = reference.state !== 'unread' ? reference.state : direct ? 'present' : isNotFoundError(query.error) ? 'absent' : 'unread'
+  const state = reference.unread === 'outside_namespace_pin' ? 'unread'
+    : reference.state !== 'unread' ? reference.state : direct ? 'present' : isNotFoundError(query.error) ? 'absent' : 'unread'
   const reading = directReading ?? reference.reading
   const model = data.models.find((m) => refKey(m.ref) === refKey(ref))
   const server = data.mcpServers.find((s) => refKey(s.ref) === refKey(ref))
@@ -447,7 +449,7 @@ export function KagentDependencyOverview({ resource, onOpen }: { resource: any; 
             <FactRow label={urlLabel}>{url || 'Not reported'}</FactRow>
             <FactRow label="Tools offered">
               {reading?.state === 'ready'
-                ? getKagentDiscoveredTools(resource).join(', ') || 'None'
+                ? getKagentDiscoveredTools(redactKagentLiterals(resource)).join(', ') || 'None'
                 : 'Unknown — controller discovery did not publish a tool list'}
             </FactRow>
           </FactGrid>

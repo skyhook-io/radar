@@ -14,6 +14,8 @@ const state = vi.hoisted(() => ({
   data: undefined as KagentWorkspace | undefined,
   loading: false,
   resourceError: null as unknown,
+  resourceData: undefined as any,
+  resourceEnabled: [] as boolean[],
   wide: true,
 }))
 vi.mock('../../api/kagent', async (original) => ({
@@ -31,7 +33,10 @@ vi.mock('../../api/substrateWorkspace', async (original) => ({
 }))
 vi.mock('../../api/client', async (original) => ({
   ...(await original<typeof import('../../api/client')>()),
-  useResource: () => ({ error: state.resourceError, isLoading: false }),
+  useResource: (_kind: string, _namespace: string, _name: string, _group: string, options: { enabled: boolean }) => {
+    state.resourceEnabled.push(options.enabled)
+    return { data: state.resourceData, error: state.resourceError, isLoading: false }
+  },
   useRadarFeature: () => ({ support: 'supported' }),
 }))
 vi.mock('../../context/ConnectionContext', () => ({
@@ -63,6 +68,8 @@ beforeEach(() => {
   state.data = undefined
   state.loading = false
   state.resourceError = null
+  state.resourceData = undefined
+  state.resourceEnabled = []
   state.wide = true
 })
 
@@ -192,6 +199,42 @@ describe.each([true, false])('inventory tables, wide=%s', (wide) => {
   })
 })
 describe('object pages', () => {
+  it('keeps dependencies outside the namespace pin unread, including after a cached 404', () => {
+    state.data = blockedWorkspace()
+    const a = state.data.agents[0]
+    a.references[0].state = 'unread'
+    a.references[0].unread = 'outside_namespace_pin'
+    a.references[0].reading = undefined
+    state.data.models = []
+    state.resourceError = new ApiError('outside namespace scope', 404)
+    const out = html(<KagentAgentOverview resource={{ metadata: a.ref }} onOpen={open} />)
+    expect(out).toContain('Not read: outside_namespace_pin')
+    expect(out).not.toContain('Absent')
+    expect(state.resourceEnabled).toEqual([false])
+  })
+  it('redacts credentials in direct Harness and MCP reads as well as the get-only MCP page', () => {
+    state.data = workspace()
+    const a = agent()
+    a.references = [{ from: a.ref, target: ref('Harness', 'harness'), role: 'harness', field: 'spec.harnessRef', state: 'present' }]
+    state.data.agents = [a]
+    state.resourceData = { apiVersion: 'api.kagent.dev/v1alpha3', kind: 'Harness', spec: { workload: { image: 'https://user:IMAGE_PASSWORD@registry.invalid/image?token=IMAGE_TOKEN' } } }
+    const harness = html(<KagentAgentOverview resource={{ metadata: a.ref }} onOpen={open} />)
+    expect(harness).toContain('[REDACTED]')
+    expect(harness).not.toContain('IMAGE_PASSWORD')
+    expect(harness).not.toContain('IMAGE_TOKEN')
+    const server = { apiVersion: 'api.kagent.dev/v1alpha3', kind: 'RemoteMCPServer', metadata: ref('RemoteMCPServer', 'tools'), status: { conditions: [{ type: 'Accepted', status: 'True' }], discoveredTools: [{ name: 'https://user:TOOL_PASSWORD@tools.invalid?token=TOOL_TOKEN' }] } }
+    a.references = [{ from: a.ref, target: server.metadata, role: 'mcpServer', field: 'tools', state: 'unread', unread: 'denied' }]
+    state.resourceData = server
+    const chain = html(<KagentAgentOverview resource={{ metadata: a.ref }} onOpen={open} />)
+    state.data = undefined
+    const page = html(<KagentDependencyOverview resource={server} onOpen={open} />)
+    for (const out of [chain, page]) {
+      expect(out).toContain('[REDACTED]')
+      expect(out).not.toContain('TOOL_PASSWORD')
+      expect(out).not.toContain('TOOL_TOKEN')
+    }
+    expect(server.status.discoveredTools[0].name).toContain('TOOL_PASSWORD')
+  })
   it('shows the Agent loading state before composing a chain', () => {
     state.loading = true
     const out = html(<KagentAgentOverview resource={{ metadata: { namespace: 'agents', name: 'helper' } }} onOpen={open} />)
@@ -298,6 +341,18 @@ describe('object pages', () => {
     r.completePage = true
     expect(html(<SessionValue runtime={r} />)).toContain('No summary for this Agent')
   })
+})
+
+it('shows a model sharing refusal ahead of its own healthy reading and names a denied list grant', () => {
+  const w = blockedWorkspace()
+  w.agents[0].model!.state = 'notPermitted'
+  w.agents[0].model!.reading = { state: 'ready', tone: 'healthy', text: 'Accepted', summary: 'Resolved' }
+  const refused = html(<KagentAgentsTable data={w} runtime={runtime()} onOpen={open} />)
+  expect(refused).toContain('Not permitted by allowedNamespaces')
+  expect(refused).not.toContain('Resolved')
+  w.agents[0].model!.state = 'unread'
+  w.agents[0].model!.unread = 'denied'
+  expect(html(<KagentAgentsTable data={w} runtime={runtime()} onOpen={open} />)).toContain('list modelconfigs (api.kagent.dev)')
 })
 
 it('keeps a declared dependency’s banner on an Agent beyond the capped impact links', () => {

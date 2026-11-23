@@ -1,5 +1,5 @@
 import { useSearchParams } from 'react-router-dom'
-import { SectionTable, Sub, type TableColumn } from '../workspace/layout'
+import { GrantText, SectionTable, Sub, type TableColumn } from '../workspace/layout'
 import { coverageEmpty } from '../workspace/coverage'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
 import type { KagentAgent, KagentMCPServer, KagentModel, KagentRef, KagentWorkspace } from '../../api/kagent'
@@ -37,15 +37,17 @@ export function KagentAgentsTable({
       <>
         <KagentName object={a.model.ref} onOpen={onOpen} />
         <Sub>
-          {a.model.reading
-            ? modelStatus(a.model.reading)
-            : a.model.state === 'unread'
-              ? `Unread · ${a.model.unread}`
-              : a.model.state === 'notPermitted'
-                ? 'Not permitted'
-                : a.model.state === 'absent'
-                  ? 'Absent'
-                  : 'Present'}
+          {a.model.state === 'notPermitted' ? (
+            'Not permitted by allowedNamespaces'
+          ) : a.model.state === 'unread' ? (
+            a.model.unread === 'denied' ? (
+              <>
+                Unread · needs{' '}
+                <GrantText grant={{ verb: 'list', resource: 'modelconfigs', group: a.model.ref.group, namespace: a.model.ref.namespace }} />
+              </>
+            ) : `Unread · ${a.model.unread}`
+          ) : a.model.reading ? modelStatus(a.model.reading)
+            : a.model.state === 'absent' ? 'Absent' : 'Present'}
         </Sub>
       </>
     ) : (
