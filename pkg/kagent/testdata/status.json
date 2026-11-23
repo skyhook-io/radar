@@ -2399,7 +2399,7 @@
     "want": {
       "findings": [
         {
-          "action": "Check its URL and credentials, and that kagent can reach it. While discovery fails, agents' runtimes omit its tools.",
+          "action": "Check its URL and credentials, and that kagent can reach it. Runtimes discover tools themselves and omit this server's tools when their own discovery fails.",
           "kagentReason": "DiscoveryFailed",
           "message": "kagent's controller could not discover its tools: failed to connect: 401 Unauthorized.",
           "reason": "KagentToolDiscoveryFailed",
@@ -2722,7 +2722,7 @@
     "want": {
       "findings": [
         {
-          "action": "Check its URL and credentials, and that kagent can reach it. While discovery fails, agents' runtimes omit its tools.",
+          "action": "Check its URL and credentials, and that kagent can reach it. Runtimes discover tools themselves and omit this server's tools when their own discovery fails.",
           "kagentReason": "DiscoveryFailed",
           "message": "kagent's controller could not discover its tools: Get \"https://[REDACTED]@mcp.example.com/mcp?[REDACTED]\": 401 Unauthorized.",
           "reason": "KagentToolDiscoveryFailed",
@@ -2975,7 +2975,7 @@
     "want": {
       "findings": [
         {
-          "action": "Check its URL and credentials, and that kagent can reach it. While discovery fails, agents' runtimes omit its tools.",
+          "action": "Check its URL and credentials, and that kagent can reach it. Runtimes discover tools themselves and omit this server's tools when their own discovery fails.",
           "kagentReason": "DiscoveryFailed",
           "message": "kagent's controller could not discover its tools: Failed to connect to MCP server: failed to connect MCP client: calling \"initialize\": sending \"initialize\": rejected by transport: Post \"http://no-such-mcp.example:9999/mcp\": dial tcp: lookup no-such-mcp.example on 172.20.0.10:53: no such host.",
           "reason": "KagentToolDiscoveryFailed",

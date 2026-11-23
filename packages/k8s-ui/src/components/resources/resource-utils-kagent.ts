@@ -463,33 +463,72 @@ export function redactKagentURLsInText(text: string): string {
 const ASSIGNMENT = /^([a-z_][a-z0-9_]*)=.+$/i
 const CREDENTIAL_WORD = /token|key|secret|passw|credential|auth/i
 
-function redactArg(a: string): [string, boolean] {
+const SHELL_COMMAND_FLAG = /^-[a-z]*c$/
+
+/** A credential flag's or assignment's whole value, redacted; `next` marks a flag whose value is the following word. Null for any other argument. */
+function redactCredentialArg(a: string): { red: string; next: boolean } | null {
   const flag = SENSITIVE_FLAG.exec(a)
-  if (flag) return flag[2] ? [`${flag[1]}=${REDACTED}`, false] : [a, true]
+  if (flag) return flag[2] ? { red: `${flag[1]}=${REDACTED}`, next: false } : { red: a, next: true }
   const assign = ASSIGNMENT.exec(a)
-  if (assign && CREDENTIAL_WORD.test(assign[1])) return [`${assign[1]}=${REDACTED}`, false]
-  return [redactKagentURLsInText(a), false]
+  if (assign && CREDENTIAL_WORD.test(assign[1])) return { red: `${assign[1]}=${REDACTED}`, next: false }
+  return null
 }
 
-function redactWords(words: string[]): string[] {
+/** Mirrors pkg/kagent shellWords: POSIX-ish words with quotes and escapes; an unclosed quote runs to the end. */
+function shellWords(s: string): { start: number; end: number; text: string }[] {
+  const out: { start: number; end: number; text: string }[] = []
+  const isSpace = (c: string) => c === ' ' || c === '\t' || c === '\n'
+  let i = 0
+  while (i < s.length) {
+    while (i < s.length && isSpace(s[i])) i++
+    if (i >= s.length) break
+    const start = i
+    let text = ''
+    let quote = ''
+    while (i < s.length) {
+      const c = s[i]
+      if (quote && c === quote) quote = ''
+      else if (quote === '"' && c === '\\' && i + 1 < s.length) text += s[++i]
+      else if (quote) text += c
+      else if (c === "'" || c === '"') quote = c
+      else if (c === '\\' && i + 1 < s.length) text += s[++i]
+      else if (isSpace(c)) break
+      else text += c
+      i++
+    }
+    out.push({ start, end: i, text })
+  }
+  return out
+}
+
+function redactShellPayload(payload: string): string {
+  let out = ''
+  let last = 0
   let blankNext = false
-  return words.map((w) => {
-    if (blankNext && !w.startsWith('-')) { blankNext = false; return REDACTED }
-    const [out, next] = redactArg(w)
-    blankNext = next
-    return out
-  })
+  for (const w of shellWords(payload)) {
+    out += payload.slice(last, w.start)
+    last = w.end
+    const raw = payload.slice(w.start, w.end)
+    if (blankNext && !w.text.startsWith('-')) { out += REDACTED; blankNext = false; continue }
+    blankNext = false
+    const cred = redactCredentialArg(w.text)
+    if (cred) { out += cred.next ? raw : cred.red; blankNext = cred.next; continue }
+    out += redactKagentURLsInText(raw)
+  }
+  return out + payload.slice(last)
 }
 
-/** Mirrors pkg/kagent RedactArgs: values passed to a credential-named flag or variable, also inside a shell payload. */
+/** Mirrors pkg/kagent RedactArgs: a -c payload is read as shell words; any other credential argument loses its whole value. */
 export function redactKagentArgs(args: string[]): string[] {
   let blankNext = false
-  return args.map((a) => {
+  return args.map((a, i) => {
     if (blankNext && !a.startsWith('-')) { blankNext = false; return REDACTED }
-    if (/[ \t]/.test(a)) { blankNext = false; return redactWords(a.split(/\s+/).filter(Boolean)).join(' ') }
-    const [out, next] = redactArg(a)
-    blankNext = next
-    return out
+    blankNext = false
+    if (i > 0 && SHELL_COMMAND_FLAG.test(args[i - 1])) return redactShellPayload(a)
+    const cred = redactCredentialArg(a)
+    if (cred) { blankNext = cred.next; return cred.red }
+    if (/[ \t\n]/.test(a)) return redactShellPayload(a)
+    return redactKagentURLsInText(a)
   })
 }
 

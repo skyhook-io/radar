@@ -207,5 +207,81 @@
    "-c",
    "exec serve --mode fast"
   ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "serve",
+   "--authorization=Bearer FAKESECRET"
+  ],
+  "want": [
+   "serve",
+   "--authorization=[REDACTED]"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "sh",
+   "-c",
+   "exec serve --authorization=\"Bearer FAKESECRET\""
+  ],
+  "want": [
+   "sh",
+   "-c",
+   "exec serve --authorization=[REDACTED]"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "sh",
+   "-c",
+   "exec serve --token 'FAKE SECRET' --port 8080"
+  ],
+  "want": [
+   "sh",
+   "-c",
+   "exec serve --token [REDACTED] --port 8080"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "sh",
+   "-c",
+   "serve --authorization=\"Bearer FAKE"
+  ],
+  "want": [
+   "sh",
+   "-c",
+   "serve --authorization=[REDACTED]"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "sh",
+   "-c",
+   "echo \"hello world\" && serve"
+  ],
+  "want": [
+   "sh",
+   "-c",
+   "echo \"hello world\" && serve"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "env",
+   "TOKEN=Bearer FAKESECRET",
+   "serve"
+  ],
+  "want": [
+   "env",
+   "TOKEN=[REDACTED]",
+   "serve"
+  ]
  }
 ]

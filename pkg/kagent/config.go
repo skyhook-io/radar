@@ -190,7 +190,7 @@ func ReadRemoteMCPServer(u *unstructured.Unstructured, now time.Time) Reading {
 		// failure shows. This is the controller's discovery; each agent
 		// runtime discovers on every invocation and omits the server's tools
 		// when its own attempt fails, which Radar can't see.
-		step := "Check its URL and credentials, and that kagent can reach it. While discovery fails, agents' runtimes omit its tools."
+		step := "Check its URL and credentials, and that kagent can reach it. Runtimes discover tools themselves and omit this server's tools when their own discovery fails."
 		if accepted.reason == "InvalidDiscovery" {
 			step = "Check the tool list it returns; kagent's controller rejected it and publishes no tools for this server."
 		}
