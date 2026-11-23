@@ -184,6 +184,7 @@ type FeatureCapabilities struct {
 	// GET /api/helm/inventory and /api/helm/inventory/{namespace}/{name}, and
 	// error_code release_read_denied on a Helm release read.
 	HelmInventory        bool `json:"helmInventory"`
+	DatadogRightsizing   bool `json:"datadogRightsizing"`
 	DatadogAgentPresence bool `json:"datadogAgentPresence"`
 	ResourceReadCoverage bool `json:"resourceReadCoverage"`
 	SearchCoverage       bool `json:"searchCoverage"`

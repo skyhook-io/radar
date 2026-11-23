@@ -884,6 +884,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			prometheuspkg.RegisterRoutes(r)
 			r.Get("/metrics/datadog/agent", s.handleDatadogAgentPresence)
 			r.Get("/agent/metrics-cluster-identity", s.handleMetricsClusterIdentity)
+			r.Get("/agent/workload-rightsizing-inventory", s.handleWorkloadRightsizingInventory)
+			r.Get("/agent/workload-rightsizing-scope/{kind}/{namespace}/{name}", s.handleWorkloadRightsizingScope)
 			r.Get("/agent/workload-metrics-scope/{kind}/{namespace}/{name}", s.handleWorkloadMetricsScope)
 
 			// OpenCost routes
@@ -1536,6 +1538,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 	return k8s.FeatureCapabilities{
 		ApplicationEvidence:         true,
 		DatadogAgentPresence:        true,
+		DatadogRightsizing:          true,
 		SealedSecretsController:     true,
 		ResourceReadCoverage:        true,
 		SearchCoverage:              true,
