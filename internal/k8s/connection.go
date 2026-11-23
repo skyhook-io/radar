@@ -11,8 +11,8 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-// Connection owns the clients, config, discovery, permissions, typed informer
-// cache and metrics history for one cluster context. A switch installs a new
+// Connection owns the clients, config, discovery, permissions, informer
+// caches and metrics history for one cluster context. A switch installs a new
 // connection, so a request that captures one keeps the same clients and resource mapping
 // even if a switch lands mid-request. A rebuild on the same clients (rescope, recovery)
 // also starts from a new one, so state built for the old admission stays there.
@@ -23,6 +23,7 @@ type Connection struct {
 	contextNamespace                         string
 	perms                                    atomic.Pointer[permissionState]
 	cache                                    atomic.Pointer[connectionCache]
+	dynamicCache                             atomic.Pointer[connectionDynamicCache]
 	discovery                                atomic.Pointer[ResourceDiscovery]
 	metricsMu                                sync.Mutex
 	metricsHistory                           atomic.Pointer[MetricsHistoryStore]

@@ -1196,21 +1196,29 @@ func (c *Connection) probeResourcePermissions(ctx context.Context, bypassCache b
 }
 
 func publishResourcePermissions(probe permissionProbe) bool {
-	if probe.unpublished {
-		ttl := resourcePermsTTL
-		if probe.hadErrors {
-			ttl = resourcePermsErrorTTL
-			log.Printf("Warning: resource access probes had API errors, using short cache TTL (%v)", ttl)
-		}
-		state := probe.state
-		state.resourcePermsMu.Lock()
-		state.cachedPermResult = probe.result
-		state.resourcePermsExpiry = time.Now().Add(ttl)
-		state.resourcePermsMu.Unlock()
+	probe.publish()
+	return probe.conn.permissionStateIsCurrent(probe.state)
+}
+
+func (probe permissionProbe) publish() {
+	if !probe.unpublished {
+		return
 	}
-	// Current means the same connection and the same permission state: a scope
-	// change swaps the state, so a probe that read the old scope is superseded.
-	return probe.conn == Current() && probe.conn.perms.Load() == probe.state
+	ttl := resourcePermsTTL
+	if probe.hadErrors {
+		ttl = resourcePermsErrorTTL
+		log.Printf("Warning: resource access probes had API errors, using short cache TTL (%v)", ttl)
+	}
+	state := probe.state
+	state.resourcePermsMu.Lock()
+	state.cachedPermResult = probe.result
+	state.resourcePermsExpiry = time.Now().Add(ttl)
+	state.resourcePermsMu.Unlock()
+}
+
+func (c *Connection) permissionStateIsCurrent(state *permissionState) bool {
+	// A scope change swaps the state, so a probe that read the old scope is superseded.
+	return c == Current() && c.perms.Load() == state
 }
 
 // MaxScopeCandidates was promoted to a package variable in deadlines.go

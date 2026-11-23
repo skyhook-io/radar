@@ -32,6 +32,7 @@ func copyTestConnectionLocked() *Connection {
 	// Partial fixture updates supply another dependency of the same cluster.
 	if prev := Current(); prev != nil {
 		c.cache.Store(prev.cacheState())
+		c.dynamicCache.Store(prev.dynamicCache.Load())
 	}
 	return c
 }
@@ -327,6 +328,7 @@ func installTestDynamicClient(dynClient dynamic.Interface, resources []APIResour
 
 	clientMu.Lock()
 	c := copyTestConnectionLocked()
+	c.dynamicCache.Store(nil)
 	c.clients.dynamic = dynClient
 	c.clients.informerDynamic = nil
 	c.discovery.Store(&ResourceDiscovery{ResourceDiscovery: core})
@@ -341,6 +343,8 @@ func installTestDynamicClient(dynClient dynamic.Interface, resources []APIResour
 		old.resourcePermsMu.RUnlock()
 	}
 	swapTestConnectionLocked(c)
+	// Permission fixtures may temporarily copy this connection while building its cache.
+	c.dynamicCacheState()
 	clientMu.Unlock()
 	return nil
 }
@@ -389,6 +393,7 @@ func ResetTestDynamicState() {
 	clientMu.Lock()
 	next := copyTestConnectionLocked()
 	next.discovery.Store(nil)
+	next.dynamicCache.Store(nil)
 	next.clients.dynamic = nil
 	next.clients.informerDynamic = nil
 	swapTestConnectionLocked(next)
@@ -523,6 +528,7 @@ func ReconnectTestClient(c *kubernetes.Clientset) func() {
 	next.clients.clientset, next.clients.informerClientset = c, nil
 	next.clients.generation = clusterBuildSequence.Add(1)
 	next.cache.Store(nil)
+	next.dynamicCache.Store(nil)
 	clientMu.Unlock()
 	RetireServingConnection()
 	clientMu.Lock()
@@ -630,6 +636,8 @@ func ResetTestState() {
 
 	policyReportIndex.Store(nil)
 
+	// Stop the informers before dropping the fixture that owns them.
+	ResetDynamicResourceCache()
 	ResetMetricsHistory()
 	ResetResourceCache()
 
@@ -842,6 +850,7 @@ func SwapResourceCacheForTest(rc *ResourceCache) (restore func()) {
 func InitTestReplayClients(client dynamic.Interface, catalog discovery.DiscoveryInterface) error {
 	clientMu.Lock()
 	next := copyTestConnectionLocked()
+	next.dynamicCache.Store(nil)
 	next.clients.dynamic, next.clients.informerDynamic = client, nil
 	swapTestConnectionLocked(next)
 	clientMu.Unlock()

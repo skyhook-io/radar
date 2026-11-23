@@ -417,7 +417,7 @@ func (conn *Connection) initResourceCache(ctx context.Context) error {
 		// Only the result the informers are built from becomes the
 		// connection's cached result; a retry the probe budget cut short is never
 		// published.
-		publishResourcePermissions(probe)
+		probe.publish()
 		permResult := probe.result
 
 		// scopes drives which informers are created and at what scope.
