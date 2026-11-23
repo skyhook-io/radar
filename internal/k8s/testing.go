@@ -852,19 +852,20 @@ func InstallTestServingConnection(name string, cfg *rest.Config, dyn dynamic.Int
 // clients and discovery, and returns a func that restores them, so a test
 // that installs or retires connections leaves the package as it found it.
 func SnapshotTestConnection() func() {
+	// clientMu before connectionStatusMu, the order swapTestConnectionLocked uses.
+	clientMu.RLock()
 	connectionStatusMu.RLock()
 	status, admitted, closed := connectionStatus, serving, admissionsClosed
-	clientMu.RLock()
 	previous, name := installedConn.Load(), contextName
-	clientMu.RUnlock()
 	connectionStatusMu.RUnlock()
+	clientMu.RUnlock()
 	return func() {
-		connectionStatusMu.Lock()
 		clientMu.Lock()
+		connectionStatusMu.Lock()
 		connectionStatus, serving, admissionsClosed = status, admitted, closed
 		installedConn.Store(previous)
 		contextName = name
-		clientMu.Unlock()
 		connectionStatusMu.Unlock()
+		clientMu.Unlock()
 	}
 }
