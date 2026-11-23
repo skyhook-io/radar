@@ -1,6 +1,8 @@
 import { ArrowRight, ExternalLink, Gauge, HelpCircle, Loader2 } from 'lucide-react'
 import { Link, useLocation } from 'react-router-dom'
 import { Badge } from '@skyhook-io/k8s-ui/components/ui/Badge'
+import { ClusterScopeNote } from '@skyhook-io/k8s-ui/components/ui/ClusterScopeNote'
+import { isClusterScopeWithheld } from '@skyhook-io/k8s-ui/types/cluster-scope'
 import {
   usePrometheusRightsizing,
   usePrometheusStatus,
@@ -100,11 +102,16 @@ export function RightsizingStrip(props: RightsizingProps) {
   )
 }
 
-function RightsizingBody({
+type RightsizingBodyState = Pick<
+  ReturnType<typeof useRightsizingEvidence>,
+  'statusLoading' | 'connected' | 'isLoading' | 'error' | 'data'
+>
+
+export function RightsizingBody({
   state,
   compact,
 }: {
-  state: ReturnType<typeof useRightsizingEvidence>
+  state: RightsizingBodyState
   compact: boolean
 }) {
   if (state.statusLoading) {
@@ -121,6 +128,9 @@ function RightsizingBody({
     return <EmptyState text={`Rightsizing unavailable — ${message}`} />
   }
   if (!state.data) return null
+  if (isClusterScopeWithheld(state.data.clusterScope)) {
+    return <ClusterScopeNote scope={state.data.clusterScope} title="Recommendations withheld" />
+  }
   if (!state.data.sampleAvailable || state.data.rows.length === 0) {
     return <EmptyState text={state.data.reason ?? 'No rightsizing evidence is available.'} />
   }

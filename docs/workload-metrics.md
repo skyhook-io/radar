@@ -285,6 +285,56 @@ additional configured labels, even when automatic matching finds a cluster label
 | `scope_mismatch` | Pod-matched labels, or their absence, exclude the available volume stats | Align cluster labels across kube-state-metrics, workload metrics and kubelet stats |
 | `no_series` | No complete used/capacity pair matches the scope | Check kubelet scraping, driver support and configured labels; the volume is not necessarily empty |
 
+## Other views in a shared metrics store
+
+Rightsizing (one workload and scans), the cluster overview, namespace, Pod,
+workload, Node and HPA charts, the AI diagnose vitals, and OpenCost costs read
+from the metrics store keep to this cluster too. Each checks every metric it
+reads on its own, because metrics from different scrape jobs often carry
+different cluster labels:
+
+- An operator label, or the labels proven from this cluster's Pod UIDs, is read
+  back on each metric's series. A store that ignores a filter on a label the
+  metric lacks returns other values, and the view is withheld rather than
+  shown as scoped.
+- A metric without that label is used unfiltered only when it shows one cluster
+  identity and holds this cluster's own live objects (Pods, Nodes, ReplicaSets,
+  volumes or the HPA, depending on the metric). Views that join metrics, like
+  rightsizing and costs, need every input to land on this cluster.
+- Views that add series over a namespace, the whole cluster or a workload's
+  Pods found by owner name (the cluster overview, namespace charts, costs and
+  rightsizing) also check that such a metric holds no
+  object kube-state-metrics lists under another cluster's labels and not this
+  cluster's (Pods, Nodes or volumes); if it does, the view is withheld
+  (`label_missing`), and if kube-state-metrics has no series with this
+  cluster's labels over the view's time range, it is withheld as `unknown`.
+  Another cluster's labels means every one of this cluster's label keys, one
+  of them with another value: a kube-state-metrics job that leaves a label off
+  is not taken for another cluster. A Pod's namespace is read from
+  `exported_namespace` when kube-state-metrics was scraped without
+  `honor_labels`. A namespace's costs check only that namespace's Pods.
+  Objects named alike in both clusters, and history older than
+  kube-state-metrics' retention, can't be told apart this way.
+- With no cluster labels anywhere, a metric showing one identity is used as
+  before; several identities withhold the view.
+- A metric absent for the subject (no terminations this week, for example)
+  never withholds a view. Partial or warning answers do: rightsizing and costs
+  read them as unavailable, charts mark them as partial data (an empty partial
+  answer says so rather than "no data"), and the diagnose vitals mark the
+  category `incomplete`.
+
+A withheld view shows no numbers and says why (`several_clusters`,
+`label_missing` or `unknown` in the `clusterScope` field of its response), with
+the remedy: set the [operator override](#optional-operator-override). Costs keep
+the cost card visible with the reason, and Radar does not switch to Kubecost on
+its own. When only the usage metrics are withheld, costs still show and
+efficiency reads unavailable.
+
+Radar rechecks an unlabeled store about once a minute, so a cluster that newly
+joins it can appear in charts for up to a minute. Two clusters that both send
+unlabeled metrics cannot be told apart; only an operator label separates them.
+An older Radar behind a newer UI (Radar Hub) keeps the old, unscoped behavior.
+
 ## Optional operator override
 
 If automatic matching cannot establish identity, an operator can explicitly
@@ -327,8 +377,8 @@ does not prove single-cluster isolation. Use `--prometheus-header-from-env` for 
 These assertions are process-local, apply to the startup Kubernetes connection,
 and are not saved to the config file. Changing context, endpoint or headers discards
 the assertion and returns to automatic matching. Restart to supply a fresh assertion.
-The assertions also scope PVC usage. They do not scope rightsizing, node/HPA
-or the workload network/filesystem charts.
+The assertions also scope PVC usage and the views listed in
+[Other views in a shared metrics store](#other-views-in-a-shared-metrics-store).
 
 Helm installations can provision the assertion with
 `traffic.prometheusSingleCluster: true` or `traffic.prometheusClusterLabels`,
@@ -375,10 +425,16 @@ shows a matching-in-progress state and refreshes every three seconds.
 
 When identity-checked CPU/memory charts cannot be served, the existing basic charts
 remain in a collapsed **Basic CPU / memory · identity unverified** section
-(the label lists only the affected charts). They do not establish Pod UID,
-historical workload membership, or cluster identity; matching names in a shared
-backend may include another cluster. They never substitute for a verified workload
+(the label lists only the affected charts). They do not establish Pod UID or
+historical workload membership, and they never substitute for a verified workload
 total. Network/storage retain this same older name-matched contract independently.
+Both sections are kept to this cluster like the
+[other views in a shared store](#other-views-in-a-shared-metrics-store): the label
+reads "matched by cluster label" or "operator declared single-cluster" when they
+are, and keeps "identity unverified" (matching names in a shared backend may
+include another cluster) for unlabeled stores and older Radar. It also reads
+"identity unverified" when a chart in the section was withheld because Radar
+couldn't keep it to this cluster; that chart says why in place of its data.
 HTTP error and coverage ratios are calculated from matching timestamps in the
 returned counters; histogram quantiles remain calculated by the metrics backend.
 Warnings or `isPartial: true` withhold the response; informational annotations

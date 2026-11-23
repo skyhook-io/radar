@@ -8,6 +8,7 @@ export {
   NODE_METRIC_CATEGORIES,
   METRIC_TIME_RANGES,
   describePodCoverage,
+  PARTIAL_DATA_NOTE,
 } from './PrometheusChartsView'
 export type {
   PrometheusChartsViewProps,
