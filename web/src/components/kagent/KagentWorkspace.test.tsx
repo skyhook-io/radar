@@ -512,3 +512,27 @@ it('groups Agent facts into ordered cards and shows provenance only for indirect
   expect(out).not.toContain('declared by')
   expect(out).not.toContain('Nothing needs attention')
 })
+
+it('distinguishes a known missing model from an unread model in At a glance', () => {
+  state.data = blockedWorkspace()
+  state.data.agents[0].model!.state = 'absent'
+  const out = html(<KagentAgentOverview resource={{ metadata: state.data.agents[0].ref }} onOpen={open} />)
+  const model = out.split('>Model</dt>')[1].split('<dt')[0]
+  expect(model).toContain('Model missing')
+  expect(model).toContain('bg-rose-500')
+  state.data.agents[0].model!.state = 'unread'
+  const unread = html(<KagentAgentOverview resource={{ metadata: state.data.agents[0].ref }} onOpen={open} />).split('>Model</dt>')[1].split('<dt')[0]
+  expect(unread).toContain('Model unread')
+  expect(unread).not.toContain('bg-rose-500')
+})
+
+it('does not turn failed tool discovery into zero missing tools in At a glance', () => {
+  state.data = workspace()
+  const a = agent()
+  a.mcpServers = { declared: 1, failing: 1, absent: 0, unread: 0, notPermitted: 0 }
+  state.data.agents = [a]
+  const out = html(<KagentAgentOverview resource={{ metadata: a.ref }} onOpen={open} />)
+  const tools = out.split('>Tools</dt>')[1].split('<dt')[0]
+  expect(tools).toContain('Missing tools unknown')
+  expect(tools).not.toContain('0 missing tools')
+})

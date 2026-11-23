@@ -413,7 +413,7 @@ export function KagentAgentOverview({ resource, onOpen }: { resource: any; onOpe
           </FactRow>
           <FactRow label="Model">
             <DimensionValue
-              tone={model?.state === 'present' ? (model.reading?.tone ?? 'unknown') : 'unknown'}
+              tone={model?.state === 'absent' || model?.state === 'notPermitted' ? 'unhealthy' : model?.state === 'present' ? model.reading?.tone ?? 'unknown' : 'unknown'}
               source={
                 modelConfig
                   ? `${modelConfig.provider || 'Provider not reported'} · ${modelConfig.model || 'Model not reported'}`
@@ -443,8 +443,9 @@ export function KagentAgentOverview({ resource, onOpen }: { resource: any; onOpe
               onOpen={() => navigate('/kagent/mcpservers')}
             >
               {agent.incomplete ? '≥' : ''}
-              {agent.mcpServers.declared} MCP {agent.mcpServers.declared === 1 && !agent.incomplete ? 'server' : 'servers'} · {agent.mcpServers.failing} failing · {agent.toolsNotOffered?.length ?? 0} missing
-              tools
+              {agent.mcpServers.declared} MCP {agent.mcpServers.declared === 1 && !agent.incomplete ? 'server' : 'servers'} · {agent.mcpServers.failing} failing · {agent.incomplete || agent.mcpServers.unread || agent.mcpServers.failing || agent.mcpServers.absent || agent.mcpServers.notPermitted
+                ? agent.toolsNotOffered?.length ? `≥${agent.toolsNotOffered.length} missing tools` : 'Missing tools unknown'
+                : `${agent.toolsNotOffered?.length ?? 0} missing tools`}
             </DimensionValue>
           </FactRow>
           <FactRow label="Sessions">
