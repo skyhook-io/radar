@@ -2,6 +2,7 @@ package kagent
 
 import (
 	"regexp"
+	"slices"
 )
 
 // How an Agent's own message says a dependency stopped its latest change
@@ -90,7 +91,7 @@ func matchCause(condition, message string, refs []Reference) *Cause {
 	}
 	named := func(kind, ns, name string, roles ...string) func(Reference) bool {
 		return func(r Reference) bool {
-			return r.Target.Kind == kind && r.Target.Namespace == ns && r.Target.Name == name && hasRole(roles, r.Role)
+			return r.Target.Kind == kind && r.Target.Namespace == ns && r.Target.Name == name && slices.Contains(roles, r.Role)
 		}
 	}
 	if condition == "Compatible" {
@@ -138,15 +139,6 @@ func harnessRole(wrapper string) string {
 		return RoleEmbedding
 	}
 	return RoleSummarizer
-}
-
-func hasRole(roles []string, role string) bool {
-	for _, r := range roles {
-		if r == role {
-			return true
-		}
-	}
-	return false
 }
 
 func containsTarget(refs []Reference, r Reference) bool {

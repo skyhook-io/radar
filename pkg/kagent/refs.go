@@ -254,7 +254,6 @@ type agentWalk struct {
 	// incomplete: an intermediate object was unread, or the tree was cut, so
 	// what the Agent uses beyond it is not known.
 	incomplete bool
-	truncated  bool
 	// cycle names the AgentTemplates of a subagent cycle, as kagent's compiler
 	// reports one.
 	cycle []string
@@ -431,7 +430,7 @@ func (t *treeWalk) visit(node templateNode, depth int) {
 			continue
 		}
 		if depth+1 > MaxDepth || t.visited >= MaxTemplates {
-			t.w.truncated, t.w.incomplete = true, true
+			t.w.incomplete = true
 			continue
 		}
 		t.visited++

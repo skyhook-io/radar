@@ -308,7 +308,6 @@ type use struct {
 	agent   ObjectRef
 	role    string
 	through []string
-	state   string
 }
 
 type agentState struct {
@@ -361,7 +360,7 @@ func Compose(inv Inventory) *Workspace {
 		}
 		w.agents[ref.Key()] = state
 		for _, r := range walk.refs {
-			w.uses[r.Target.Key()] = append(w.uses[r.Target.Key()], use{agent: ref, role: r.Role, through: through(r), state: r.State})
+			w.uses[r.Target.Key()] = append(w.uses[r.Target.Key()], use{agent: ref, role: r.Role, through: through(r)})
 		}
 	}
 
