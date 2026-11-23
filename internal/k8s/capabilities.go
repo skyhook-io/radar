@@ -396,7 +396,7 @@ type nsCapEntry struct {
 // Results are cached for 60 seconds normally, or 5 seconds when API errors
 // caused fail-closed results (to allow rapid retry without long UI disruption).
 func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
-	conn := boundOrCurrent(ctx)
+	conn := BoundOrCurrent(ctx)
 	state := conn.permissions()
 	state.capabilitiesMu.RLock()
 	if state.cachedCapabilities != nil && time.Now().Before(state.capabilitiesExpiry) {
@@ -558,7 +558,7 @@ func CheckNamespaceCapabilities(ctx context.Context, namespace string) (*Namespa
 		return nil, nil
 	}
 
-	conn := boundOrCurrent(ctx)
+	conn := BoundOrCurrent(ctx)
 	state := conn.permissions()
 	// Check namespace cache
 	state.nsCapMu.RLock()
@@ -669,7 +669,7 @@ func userNamespaceCapabilitiesCacheKey(username string, groups []string, namespa
 // Concurrent callers for one identity share a single check; while the
 // re-check after a failed one runs, callers get the last complete result.
 func CheckCapabilitiesForUser(ctx context.Context, username string, groups []string) (*Capabilities, error) {
-	conn := boundOrCurrent(ctx)
+	conn := BoundOrCurrent(ctx)
 	state := conn.permissions()
 	identityKey := pkgauth.IdentityCacheKey(username, groups)
 	var lastGood *Capabilities
@@ -806,7 +806,7 @@ func CheckNamespaceCapabilitiesForUser(ctx context.Context, username string, gro
 		return nil, nil
 	}
 
-	conn := boundOrCurrent(ctx)
+	conn := BoundOrCurrent(ctx)
 	state := conn.permissions()
 	cacheKey := userNamespaceCapabilitiesCacheKey(username, groups, namespace)
 	if entry, ok := state.userNamespaceCapabilitiesCache.Load(cacheKey); ok {
@@ -1143,7 +1143,7 @@ func resolveProbeGVRs(p resourceProbe) []schema.GroupVersionResource {
 // SelfSubjectAccessReview is one indirection too many — it can disagree with
 // reality on clusters using webhook authorizers (e.g. GKE IAM).
 func CheckResourcePermissions(ctx context.Context) (*PermissionCheckResult, bool) {
-	return boundOrCurrent(ctx).CheckResourcePermissions(ctx)
+	return BoundOrCurrent(ctx).CheckResourcePermissions(ctx)
 }
 
 func (c *Connection) CheckResourcePermissions(ctx context.Context) (*PermissionCheckResult, bool) {
