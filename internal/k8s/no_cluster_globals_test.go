@@ -102,18 +102,23 @@ func checkConnectionMethodGetters(t *testing.T, fset *token.FileSet, files []*as
 	t.Helper()
 	scope := pkg.Scope()
 	current := scope.Lookup("Current")
-	installed := scope.Lookup("installedConn")
-	denied := map[types.Object]string{current: "Current", installed: "installedConn"}
-	// These reads lock, check readiness or delegate through another getter.
-	for _, name := range []string{
-		"GetSyncingResourceCache", "SnapshotCaches", "ReadableCacheForKind", "InitialSyncComplete",
-		"GetCachedCapabilities", "CurrentProfileTarget", "boundOrCurrent", "InformerClientFor",
-	} {
-		obj := scope.Lookup(name)
-		if obj == nil {
-			t.Fatalf("unknown installed-connection getter %s", name)
+	referencedObject := func(id *ast.Ident) types.Object {
+		obj := info.Uses[id]
+		if fn, ok := obj.(*types.Func); ok {
+			return fn.Origin()
 		}
-		denied[obj] = name
+		return obj
+	}
+	// References include taking a function or method as a value, even inside a closure.
+	referrers := map[types.Object][]types.Object{}
+	recordReferences := func(owner types.Object, body ast.Node) {
+		for node := range ast.Preorder(body) {
+			if id, ok := node.(*ast.Ident); ok {
+				if obj := referencedObject(id); obj != nil && obj.Pkg() == pkg {
+					referrers[obj] = append(referrers[obj], owner)
+				}
+			}
+		}
 	}
 
 	connPtr := types.NewPointer(scope.Lookup("Connection").Type())
@@ -125,49 +130,36 @@ func checkConnectionMethodGetters(t *testing.T, fset *token.FileSet, files []*as
 				continue
 			}
 			obj := info.Defs[fn.Name].(*types.Func)
-			if recv := obj.Signature().Recv(); recv != nil {
-				if types.Identical(recv.Type(), connPtr) {
-					methods = append(methods, fn)
-				}
+			if recv := obj.Signature().Recv(); recv != nil && types.Identical(recv.Type(), connPtr) {
+				methods = append(methods, fn)
 				continue
 			}
-			if len(fn.Body.List) != 1 {
-				continue
-			}
-			if ret, ok := fn.Body.List[0].(*ast.ReturnStmt); ok {
-				for node := range ast.Preorder(ret) {
-					switch expr := node.(type) {
-					case *ast.Ident:
-						if info.Uses[expr] == current {
-							denied[obj] = obj.Name()
-						}
-					case *ast.SelectorExpr:
-						if id, ok := expr.X.(*ast.Ident); ok && info.Uses[id] == installed && expr.Sel.Name == "Load" {
-							denied[obj] = obj.Name()
-						}
-					}
-				}
+			recordReferences(obj, fn.Body)
+		}
+	}
+	for _, init := range info.InitOrder {
+		for _, v := range init.Lhs {
+			if _, ok := v.Type().Underlying().(*types.Signature); ok {
+				recordReferences(v, init.Rhs)
 			}
 		}
 	}
 
-	// InitOrder puts a package function-value alias after anything it aliases.
-	for _, init := range info.InitOrder {
-		if len(init.Lhs) != 1 {
-			continue
+	var pending []types.Object
+	for _, name := range []string{"Current", "installedConn", "boundOrCurrent"} {
+		obj := scope.Lookup(name)
+		if obj == nil {
+			t.Fatalf("unknown installed-connection source %s", name)
 		}
-		if _, ok := init.Lhs[0].Type().Underlying().(*types.Signature); !ok {
-			continue
-		}
-		switch expr := ast.Unparen(init.Rhs); expr.(type) {
-		case *ast.Ident, *ast.SelectorExpr:
-			for node := range ast.Preorder(expr) {
-				if id, ok := node.(*ast.Ident); ok {
-					if name := denied[info.Uses[id]]; name != "" {
-						denied[init.Lhs[0]] = name
-					}
-				}
-			}
+		pending = append(pending, obj)
+	}
+	denied := map[types.Object]bool{}
+	for len(pending) > 0 {
+		obj := pending[0]
+		pending = pending[1:]
+		if !denied[obj] {
+			denied[obj] = true
+			pending = append(pending, referrers[obj]...)
 		}
 	}
 
@@ -177,8 +169,9 @@ func checkConnectionMethodGetters(t *testing.T, fset *token.FileSet, files []*as
 			switch n := node.(type) {
 			case *ast.BinaryExpr:
 				if n.Op != token.EQL || !slices.Contains([]string{
-					"cacheIsCurrent",       // Publication requires the cache's owner to still be installed.
-					"accessibleNamespaces", // A superseded namespace LIST must still fall back to its seeds.
+					"cacheIsCurrent",           // Publication requires the cache's owner to still be installed.
+					"accessibleNamespaces",     // A superseded namespace LIST must still fall back to its seeds.
+					"permissionStateIsCurrent", // Permission checks report whether their result is still current.
 				}, fn.Name.Name) {
 					return true
 				}
@@ -193,8 +186,8 @@ func checkConnectionMethodGetters(t *testing.T, fset *token.FileSet, files []*as
 					return info.Uses[callee] != current
 				}
 			case *ast.Ident:
-				if name := denied[info.Uses[n]]; name != "" {
-					t.Errorf("%s: (*Connection).%s uses %s: use the connection's own state, not the installed connection's", fset.Position(n.Pos()), fn.Name, name)
+				if obj := referencedObject(n); denied[obj] {
+					t.Errorf("%s: (*Connection).%s uses %s: use the connection's own state, not the installed connection's", fset.Position(n.Pos()), fn.Name, obj.Name())
 				}
 			}
 			return true
