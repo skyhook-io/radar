@@ -1,7 +1,7 @@
 import { shortRevision } from '@skyhook-io/k8s-ui/components/resources/resource-utils-kagent'
 import { useEffect, type ReactNode } from 'react'
 import { Bot } from 'lucide-react'
-import { CertaintyGlyph, FactSource, FactValue, PaneLoader, StatusDot, TruncatedText, type WorkspaceProblem } from '@skyhook-io/k8s-ui'
+import { CertaintyGlyph, FactValue, PaneLoader, StatusDot, TruncatedText, type WorkspaceProblem } from '@skyhook-io/k8s-ui'
 import { useRadarFeature } from '../../api/client'
 import {
   useKagentSessionSummary,
@@ -107,7 +107,6 @@ export function Reading({
       <StatusDot tone={reading.tone} />
       <div>
         <FactValue fact={fact} />
-        <FactSource fact={fact} />
       </div>
     </div>
   )

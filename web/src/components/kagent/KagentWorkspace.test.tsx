@@ -238,7 +238,8 @@ describe('object pages', () => {
     expect(out).not.toContain('Absent')
     expect(out).not.toContain('OUTSIDE_PROVIDER')
     expect(out).not.toContain('OUTSIDE_SECRET')
-    expect(state.resourceEnabled).toEqual([false])
+    expect(state.resourceEnabled.length).toBeGreaterThan(0)
+    expect(state.resourceEnabled.every(enabled => !enabled)).toBe(true)
   })
   it('redacts credentials in direct Harness and MCP reads as well as the get-only MCP page', () => {
     state.data = workspace()
@@ -319,9 +320,9 @@ describe('object pages', () => {
         onOpen={open}
       />,
     )
-    expect(out).toContain('Tools asked: missing-tool')
+    expect(out.replace(/<[^>]+>/g, '')).toContain('Tools asked: missing-tool (missing)')
     expect(out).toContain('Not offered: missing-tool')
-    expect(out).toContain('2 tools')
+    expect(out).toContain('Tools offered (2)')
     expect(out).toContain('aria-expanded="false"')
   })
   it('explains a blocked latest change without reconstructing the prepared configuration', () => {
@@ -329,7 +330,8 @@ describe('object pages', () => {
     const out = html(<KagentAgentOverview resource={{ metadata: { namespace: 'agents', name: 'blocked-edit' } }} onOpen={open} />)
     expect(out).toContain('Configuration of the latest change (blocked)')
     expect(out).toContain('prepared before this change')
-    expect(out).toContain('Conversation outcomes: not visible to Radar')
+    expect(out).toContain('Conversation outcomes</dt>')
+    expect(out).toContain('Not visible to Radar')
     expect(out).not.toContain('prepared 2')
   })
   it('reads a list-denied dependency individually and names its missing get grant', () => {
@@ -492,4 +494,21 @@ it('links overview problems to filtered lists and filters to the matching findin
   )
   expect(filtered).toContain('broken-model')
   expect(filtered).not.toContain('healthy-model')
+})
+
+it('groups Agent facts into ordered cards and shows provenance only for indirect references', () => {
+  state.data = workspace()
+  const a = agent()
+  a.references = [
+    { from: a.ref, target: ref('AgentTemplate', 'base'), role: 'template', field: 'template.ref', state: 'present' },
+    { from: ref('AgentTemplate', 'base'), target: ref('ModelConfig', 'llm'), role: 'model', field: 'modelConfig', state: 'present' },
+  ]
+  state.data.agents = [a]
+  const out = html(<KagentAgentOverview resource={{ metadata: a.ref }} onOpen={open} />)
+  const headings = ['At a glance', 'Configuration of the latest change', 'About', 'kagent conditions'].map(text => out.indexOf(text))
+  expect(headings.every(index => index >= 0)).toBe(true)
+  expect(headings).toEqual([...headings].sort((a, b) => a - b))
+  expect(out).toContain('via template base')
+  expect(out).not.toContain('declared by')
+  expect(out).not.toContain('Nothing needs attention')
 })

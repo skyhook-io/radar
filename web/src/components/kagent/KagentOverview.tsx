@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { FoldSection, ProblemList } from '@skyhook-io/k8s-ui'
+import { FoldSection, WorkspaceProblemCallout } from '@skyhook-io/k8s-ui'
 import type { KagentRef, KagentWorkspace } from '../../api/kagent'
 import { KagentAgentsTable } from './KagentLists'
 import {
@@ -46,14 +46,9 @@ export function KagentAttention({ data, onOpen, agent }: { data: KagentWorkspace
     const priority = (g: typeof a) => (g.severity === 'critical' ? 0 : g.findings.some((id) => byId.get(id)?.affects?.count) ? 1 : 2)
     return priority(a) - priority(b)
   })
-  if (!ordered.length)
-    return (
-      <p className="text-sm text-theme-text-secondary">
-        {data.counts.findings.lowerBound ? 'Nothing in what Radar can read needs attention.' : 'Nothing needs attention.'}
-      </p>
-    )
+  if (!ordered.length) return agent ? null : <p className="text-sm text-theme-text-secondary">{data.counts.findings.lowerBound ? 'Nothing in what Radar can read needs attention.' : 'Nothing needs attention.'}</p>
   const renderGroup = (g: (typeof ordered)[number]) => (
-    <div key={g.id} className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
+    <div key={g.id} className="space-y-2">
       {g.secret && (
         <p className="mb-2 text-sm font-medium text-theme-text-primary">
           {g.findings.length > 1 ? 'Shared API key Secret' : 'API key Secret'}:{' '}
@@ -70,45 +65,18 @@ export function KagentAttention({ data, onOpen, agent }: { data: KagentWorkspace
         const folded = foldedByLead.get(id) ?? []
         const messages = [problem.rawDetail, ...folded.map((f) => readings.get(refKey(f.subject))?.message)].filter(Boolean)
         const impact = finding.affects
-        return (
-          <div key={id} className="space-y-1.5">
-            <ProblemList
-              rootKind="kagent"
-              subjectFirst
-              hideOrigin
-              onNavigate={(r) => onOpen({ ...r, group: r.group ?? '' })}
-              problems={[{ ...problem, nextStep: undefined, rawDetail: undefined }]}
-            />
-            {impact && impact.count > 0 && (
-              <div className="text-xs text-theme-text-secondary">
-                <p>Affects {consumersText(impact)}:</p>
-                <ul className="mt-1 space-y-1">
-                  {impact.agents.slice(0, 8).map((a) => (
-                    <li key={refKey(a.agent)} className="flex flex-wrap items-baseline gap-x-2">
-                      <KagentName object={a.agent} onOpen={onOpen} />
-                      <span>
-                        {a.agent.namespace} · {effectText(a.effect)}
-                        {folded.some((f) => refKey(f.subject) === refKey(a.agent) && f.reason === 'KagentNoPreparedRevision')
-                          ? ' · no session can start'
-                          : ''}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-                {impact.count > 8 && <p className="mt-1">and {impact.count - 8} more Agents.</p>}
-              </div>
-            )}
-            <p className="text-xs text-theme-text-primary">
-              <span className="font-medium">Next step: </span>
-              {finding.action}
-            </p>
-            {messages.length > 0 && (
-              <FoldSection title="kagent's message" summary="" attention={false}>
-                <p className="whitespace-pre-wrap break-words text-xs text-theme-text-secondary">{messages.join('\n')}</p>
-              </FoldSection>
-            )}
-          </div>
-        )
+        return <WorkspaceProblemCallout
+          key={id}
+          rootKind="kagent"
+          subjectIsSelf={!!agent && refKey(agent) === refKey(finding.subject)}
+          onNavigate={r => onOpen({ ...r, group: r.group ?? '' })}
+          problem={{ ...problem, rawDetail: messages.join('\n') || undefined }}
+          action={impact && impact.count > 0 ? <div className="w-full text-xs text-theme-text-secondary">
+            <p>Affects {consumersText(impact)}:</p>
+            <ul className="mt-1 flex flex-wrap gap-x-4 gap-y-1">{impact.agents.slice(0, 8).map(a => <li key={refKey(a.agent)} className="flex flex-wrap items-baseline gap-x-2"><KagentName object={a.agent} onOpen={onOpen} /><span>{a.agent.namespace} · {effectText(a.effect)}{folded.some(f => refKey(f.subject) === refKey(a.agent) && f.reason === 'KagentNoPreparedRevision') ? ' · no session can start' : ''}</span></li>)}</ul>
+            {impact.count > 8 && <p>and {impact.count - 8} more Agents.</p>}
+          </div> : undefined}
+        />
       })}
     </div>
   )
@@ -175,7 +143,7 @@ export function KagentOverview({
       : runtime.unavailable
   return (
     <>
-      <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm text-theme-text-primary" aria-label="kagent status">
+      <div className="grid grid-cols-2 gap-3 text-sm text-theme-text-primary xl:grid-cols-4 [&>span]:rounded-xl [&>span]:border [&>span]:border-theme-border [&>span]:bg-theme-surface [&>span]:px-4 [&>span]:py-3 [&>span]:shadow-theme-sm" aria-label="kagent status">
         <span>
           Agents:{' '}
           {unread('agents') ? (
@@ -232,7 +200,7 @@ export function KagentOverview({
         </h2>
         <KagentAttention data={data} onOpen={onOpen} />
       </section>
-      <KagentAgentsTable data={data} runtime={runtime} onOpen={onOpen} />
+      <KagentAgentsTable overview data={data} runtime={runtime} onOpen={onOpen} />
     </>
   )
 }

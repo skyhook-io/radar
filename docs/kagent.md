@@ -15,19 +15,20 @@ reads); runtime crashes and pool capacity remain in Substrate's badge.
 |---|---|---|
 | Overview | `/kagent` | Prepared/blocked Agents, failing MCP servers, models with credential problems, separate Substrate session context, folded Needs attention groups, then the Agents table. Each finding names its object, Radar's reading, observed affected Agents and their effects, a next step, and kagent's message folded last. Unused broken dependencies follow findings with observed consumers in a folded, lower-priority section. |
 | Agents | `/kagent/agents` | Description from the latest change’s root template (inline or read AgentTemplate), latest-change state, the 12-hex new-sessions revision, model and its reading, MCP declarations/failures, sessions/crashes or the unavailable tier, and namespace. |
-| Agent page | `/kagent/agents/<namespace>/<name>?ctx=` | Its own and folded dependency findings; What new sessions run; Configuration of the latest change, explicitly qualified when blocked or unprocessed; declared model/credential, tools, subagents, Harness/worker-pool, Harness-model and egress chains. Placement describes the prepared template, never a blocked edit's new declarations. Sessions and Revisions tabs supplement Spec & status and the generic history/events. |
+| Agent page | `/kagent/agents/<namespace>/<name>?ctx=` | Its own and folded dependency callouts; At a glance verdicts linking to their details; Configuration of the latest change, explicitly qualified when blocked or unprocessed; About and folded kagent conditions. The compact configuration rows show model/credential, tools, subagents, Harness/worker-pool, Harness-model and egress chains, with provenance only for indirect references. Placement describes the prepared template, never a blocked edit's new declarations. Sessions and Revisions tables supplement Spec & status and the generic history/events. |
 | MCP servers | `/kagent/mcpservers` | Controller discovery state, known offered tools, consumers, requested tools not offered, and namespace. Unknown discovery never reads as zero tools. |
-| MCP server page | `/kagent/remotemcpservers/<namespace>/<name>?ctx=` | Reading, next steps, folded controller message, redacted URL, offered tools and header source coordinates, then Used by with each Agent's tools and latest-change state. |
+| MCP server page | `/kagent/remotemcpservers/<namespace>/<name>?ctx=` | Problem callouts and At a glance verdicts, About with the redacted URL and header source coordinates, Used by with each Agent's tools and latest-change state, then folded conditions. Offered tools are folded. |
 | Models | `/kagent/models` | Resolution or credential failure, provider/model, Secret/key coordinates, consumers and roles, namespace, then ModelProviderConfigs (status not reported in kagent 1.0.1). |
-| Model page | `/kagent/modelconfigs/<namespace>/<name>?ctx=` | Reading, next step, provider/model, credential coordinates and Used by with roles and effects. |
+| Model page | `/kagent/modelconfigs/<namespace>/<name>?ctx=` | Problem callouts and At a glance verdicts, About with provider/model and namespace, Used by with roles and effects, then folded conditions. Credential coordinates never include values. |
 | Sessions | `/substrate/actors?kagent=sessions` | Substrate's paged Actors list, including attributed sessions and unattributed kagent-shaped actors, excluding standalone sandboxes. The namespace view selection narrows their atespaces. |
 
 The namespace picker narrows inventory and findings, while reference and consumer
 evidence may come from outside that selection. Every object page pins `ctx`:
 a changed context cannot silently open a namesake. The three main kinds open
 their own pages; other declared objects open in the ordinary drawer. The drawer
-also leads with the workspace summary; **Spec & status** retains the existing
-renderers and individual get-authorized dependency reads. Get-only access remains
+also leads with the workspace summary. The Agent page’s **Spec & status** contains its declared
+spec and conditions; the drawer retains the full renderer and individual
+get-authorized dependency reads, including against older Radars. Get-only access remains
 useful when the workspace's list reads cannot compose a chain.
 
 Below 1280px tables move secondary facts beneath the name or the fact they

@@ -11,8 +11,8 @@ import { DrawerTrailBack } from '../workspace/DrawerTrailBack'
 import { RefreshFailedNotice, ScreenBody } from '../workspace/layout'
 import { KagentAgentRenderer } from './KagentAgentRenderer'
 import { KagentAgentOverview, KagentDependencyOverview } from './KagentPages'
-import { KagentAgentsTable, KagentMCPServers, KagentModels } from './KagentLists'
-import { CoverageNotice, KagentGate, useKagentRuntime, changeText } from './shared'
+import { KagentAgentsTable, KagentMCPServers, KagentModels, modelStatus } from './KagentLists'
+import { CoverageNotice, KagentGate, useKagentRuntime, changeText, revisionText } from './shared'
 import { KAGENT_GROUP, KAGENT_KINDS, kagentPath } from './routes'
 import { veleroKindListMode } from '../velero/routes'
 
@@ -101,12 +101,12 @@ export const kagentResourceHost: ResourceHost = {
       const label =
         resource.kind === 'Agent'
           ? `Latest change ${r.state === 'ready' ? 'prepared' : changeText(r.state === 'stale' ? 'notProcessed' : r.state).toLowerCase()}`
-          : resource.kind === 'ModelConfig' && r.state === 'ready'
-            ? 'Resolved'
+          : resource.kind === 'ModelConfig'
+            ? modelStatus(r)
             : resource.kind === 'RemoteMCPServer' && r.state === 'ready'
               ? 'Controller discovery OK'
               : r.text
-      return <Badge severity={healthToSeverity(r.tone)}>{label}</Badge>
+      return <><Badge severity={healthToSeverity(r.tone)}>{label}</Badge>{resource.kind === 'Agent' && <Badge tone="structural">New sessions {resource.status?.latestSuccessfulRevision ? `revision ${revisionText(resource.status.latestSuccessfulRevision)}` : 'none prepared'}</Badge>}</>
     },
     renderSummary: (props) => <KagentResourceSummary resource={props.resource} onNavigate={props.onNavigate} />,
   }),
@@ -123,19 +123,19 @@ export const kagentResourceHost: ResourceHost = {
   kindLists: [
     {
       kind: { name: 'agents', kind: 'Agent', group: KAGENT_GROUP },
-      title: 'kagent Agents',
+      title: 'Agents',
       mode: veleroKindListMode,
       Component: (props) => <KagentKindList {...props} screen="agents" />,
     },
     {
       kind: { name: 'remotemcpservers', kind: 'RemoteMCPServer', group: KAGENT_GROUP },
-      title: 'kagent MCP servers',
+      title: 'MCP servers',
       mode: veleroKindListMode,
       Component: (props) => <KagentKindList {...props} screen="mcpservers" />,
     },
     {
       kind: { name: 'modelconfigs', kind: 'ModelConfig', group: KAGENT_GROUP },
-      title: 'kagent models',
+      title: 'Models',
       mode: veleroKindListMode,
       Component: (props) => <KagentKindList {...props} screen="models" />,
     },

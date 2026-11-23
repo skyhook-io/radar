@@ -262,14 +262,14 @@ function WorkerCell({ row }: { row: SubstrateActorRow }) {
  * whole: the atespace rides beside the name rather than in a column of its
  * own. Narrow folds the atespace and template under the name.
  */
-function actorColumns(wide: boolean, agent?: { onAgent?: (agent: KagentAgentRef) => void }): TableColumn<SubstrateActorRow>[] {
+function actorColumns(wide: boolean, agent?: { onAgent?: (agent: KagentAgentRef) => void; revisionOnly?: boolean }): TableColumn<SubstrateActorRow>[] {
   // With the Agent column, the others give it room.
-  const w = agent
+  const w = agent?.revisionOnly ? { actor: '18%', state: '22%', template: '0%', agent: '16%', worker: '18%', snapshot: '16%', changed: '10%' } : agent
     ? { actor: wide ? '15%' : '24%', state: wide ? '23%' : '27%', template: '15%', agent: wide ? '13%' : '15%', worker: wide ? '14%' : '17%', snapshot: wide ? '12%' : '17%', changed: '8%' }
     : { actor: wide ? '16%' : '27%', state: wide ? '26%' : '30%', template: '18%', agent: '0%', worker: wide ? '17%' : '21%', snapshot: wide ? '14%' : '22%', changed: '9%' }
   return [
     {
-      header: 'Actor',
+      header: agent?.revisionOnly ? 'Session' : 'Actor',
       width: w.actor,
       cell: (r) => (
         wide ? (
@@ -286,13 +286,13 @@ function actorColumns(wide: boolean, agent?: { onAgent?: (agent: KagentAgentRef)
       ),
     },
     { header: 'State', width: w.state, cell: (r) => <StateCell row={r} /> },
-    ...(wide ? [{ header: 'Template', width: w.template, cell: (r: SubstrateActorRow) => <Line title={r.template.name} className="font-mono text-[12px]">{r.template.name}</Line> }] : []),
-    ...(agent ? [{ header: 'kagent Agent', width: w.agent, cell: (r: SubstrateActorRow) => <AgentCell row={r} onAgent={agent.onAgent} /> }] : []),
+    ...(wide && !agent?.revisionOnly ? [{ header: 'Template', width: w.template, cell: (r: SubstrateActorRow) => <Line title={r.template.name} className="font-mono text-[12px]">{r.template.name}</Line> }] : []),
+    ...(agent ? [{ header: agent.revisionOnly ? 'Revision' : 'kagent Agent', width: w.agent, cell: (r: SubstrateActorRow) => agent.revisionOnly ? <span className="text-xs">{r.kagent?.kind === 'agentSession' ? <>{r.kagent.newSessions ? 'Current' : r.kagent.earlierRevision ? 'Earlier' : 'Latest change'}<span className="block font-mono text-theme-text-tertiary">{shortRevision(r.kagent.revision)}</span></> : 'Unattributed'}</span> : <AgentCell row={r} onAgent={agent.onAgent} /> }] : []),
     { header: 'Worker or last node', width: w.worker, cell: (r) => <WorkerCell row={r} /> },
-    { header: 'Newest snapshot', width: w.snapshot, cell: (r) => <SnapshotCell row={r} /> },
+    { header: agent?.revisionOnly ? 'Saved session state' : 'Newest snapshot', width: w.snapshot, cell: (r) => <SnapshotCell row={r} /> },
     ...(wide
       ? [{
-          header: 'Changed',
+          header: agent?.revisionOnly ? 'Updated' : 'Changed',
           width: w.changed,
           cell: (r: SubstrateActorRow) =>
             r.updateTime ? (
@@ -594,6 +594,7 @@ export function ActorsTable({
   onOpenActor,
   openActor,
   onAgent,
+  revisionOnly,
 }: {
   sort?: ActorSort
   data?: SubstrateActorsResponse
@@ -606,6 +607,7 @@ export function ActorsTable({
   openActor: SubstrateRef | null
   /** Lists an Agent's sessions; absent where the Radar can't filter by Agent. */
   onAgent?: (agent: KagentAgentRef) => void
+  revisionOnly?: boolean
 }) {
   const wide = useMediaQuery(SUBSTRATE_WIDE)
   const rows = data?.rows ?? []
@@ -630,7 +632,7 @@ export function ActorsTable({
   return (
     <div aria-busy={placeholder || undefined} className={placeholder ? 'opacity-60' : undefined}>
       <SectionTable
-        columns={actorColumns(wide, data?.kagentAgents || rows.some((r) => r.kagent) ? { onAgent } : undefined)}
+        columns={actorColumns(wide, data?.kagentAgents || rows.some((r) => r.kagent) ? { onAgent, revisionOnly } : undefined)}
         rows={rows}
         rowKey={(r) => `${r.atespace}/${r.name}`}
         rowResource={(r) => actorRowResource(r)}

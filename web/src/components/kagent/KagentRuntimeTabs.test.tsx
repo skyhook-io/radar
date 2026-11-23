@@ -3,7 +3,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, expect, it, vi } from 'vitest'
 import type { KagentAgentSessions } from '../../api/substrateWorkspace'
 import { ApiError } from '../../api/client'
-import { connectedTier, counts } from '../substrate/substrate.fixtures'
+import { actorRow, actors, connectedTier, counts } from '../substrate/substrate.fixtures'
 import { KagentRevisions, KagentSessionsTab } from './KagentRuntimeTabs'
 const state = vi.hoisted(() => ({
   support: 'supported',
@@ -11,6 +11,8 @@ const state = vi.hoisted(() => ({
   error: null as unknown,
   data: undefined as KagentAgentSessions | undefined,
   enabled: false,
+  crashed: false,
+  haveActors: false,
 }))
 vi.mock('../../api/client', async (original) => ({
   ...(await original<typeof import('../../api/client')>()),
@@ -21,7 +23,7 @@ vi.mock('../../api/substrateWorkspace', async (original) => ({
   useKagentAgentSessions: () => ({ data: state.data, isLoading: state.loading, error: state.error }),
   useSubstrateActors: (_query: unknown, enabled: boolean) => {
     state.enabled = enabled
-    return { error: state.error, isLoading: state.loading }
+    return { data: state.haveActors ? actors({ rows: [actorRow({ state: state.crashed ? 'crashed' : 'suspended', kagent: { kind: 'agentSession', agent: { namespace: 'agents', name: 'helper' }, sessionId: 'session-123', revision: 'abcdef0123456789', newSessions: true } })] }) : undefined, error: state.error, isLoading: state.loading }
   },
   useSubstrateTemplates: () => ({ data: { templates: [], coverage: { actors: { state: 'full' } } } }),
   useSubstrateTemplate: () => ({ data: undefined }),
@@ -34,6 +36,8 @@ beforeEach(() => {
   state.loading = false
   state.error = null
   state.data = undefined
+  state.haveActors = false
+  state.crashed = false
 })
 it('shows unavailable tiers and never asks an old Radar for filtered actors', () => {
   state.support = 'unsupported'
@@ -72,9 +76,26 @@ it('labels desired and prepared revisions separately and keeps unprovable sessio
     coverage: { actors: { state: 'partial' }, templates: { state: 'partial' }, kagentAgents: { state: 'full' } },
   }
   const out = render(<KagentRevisions agent={agent} />)
+  for (const heading of ['Revision', 'Role', 'Template created', 'Golden snapshot', 'Sessions']) expect(out).toContain(heading)
   expect(out).toContain('111111111111')
   expect(out).toContain('abcdef012345')
   expect(out).toContain('ambiguous attribution')
   expect(out).toContain('unprovable earlier revisions')
   expect(out).not.toContain('prepared 1h')
+  state.data.agent.desiredRevision = undefined
+  const blocked = render(<KagentRevisions agent={agent} latestChange="blocked" />)
+  expect(blocked).toContain('Not compiled')
+  expect(blocked).toContain('Latest change, blocked')
+})
+
+it('shows recovery guidance only for a crashed session and gives this Agent a Revision column', () => {
+  state.haveActors = true
+  const calm = render(<KagentSessionsTab agent={agent} />)
+  expect(calm).not.toContain('Recover crashed sessions')
+  expect(calm).not.toContain('kagent Agent</th>')
+  expect(calm).toContain('Revision</th>')
+  state.crashed = true
+  const crashed = render(<KagentSessionsTab agent={agent} />)
+  expect(crashed).toContain('Recover crashed sessions')
+  expect(crashed.indexOf('Recover crashed sessions')).toBeLessThan(crashed.indexOf('<table'))
 })

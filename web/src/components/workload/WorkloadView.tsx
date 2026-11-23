@@ -305,6 +305,7 @@ interface WorkloadViewProps {
   specTab?: { label?: string; icon?: ReactNode; lead?: ReactNode; render?: () => ReactNode }
   titlePrefix?: ReactNode
   inlineBadges?: boolean
+  namespaceDisplay?: ReactNode
   namespaceNote?: ReactNode
   renderStatusBadge?: (resource: any) => ReactNode
   statusNote?: ReactNode

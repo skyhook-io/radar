@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useLocation } from 'react-router-dom'
-import { FactGrid, FactRow, PaneLoader, TimeValue } from '@skyhook-io/k8s-ui'
+import { PaneLoader, TimeValue } from '@skyhook-io/k8s-ui'
 import { useRadarFeature } from '../../api/client'
 import {
   useKagentAgentSessions,
@@ -16,7 +16,7 @@ import { substrateActorPath, substrateActorsPath } from '../substrate/routes'
 import { Notice, RefreshFailedNotice, SectionTable, Sub } from '../workspace/layout'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { KagentAgentSessions, sessionsFailure } from './KagentAgentSessions'
-import { revisionText } from './shared'
+import { changeText, revisionText } from './shared'
 
 export function KagentSessionsTab({ agent }: { agent: KagentAgentRef }) {
   const [page, setPage] = useState(0)
@@ -35,14 +35,21 @@ export function KagentSessionsTab({ agent }: { agent: KagentAgentRef }) {
       </div>
     )
   return (
-    <div className="space-y-4 p-5">
-      <KagentAgentSessions agent={agent} />
+    <div className="space-y-4 p-4">
+      <KagentAgentSessions framed agent={agent} />
+      {query.data?.rows.some((r) => r.state === 'crashed') && (
+        <Notice>
+          Recover crashed sessions through kagent’s SessionService/RevertSession, or stop active turns and delete the chat in kagent. Moving
+          or reverting the actor directly can lose the session.
+        </Notice>
+      )}
       <RefreshFailedNotice queries={[query]} />
       {query.error && !query.data ? (
         <Notice>{sessionsFailure(query.error, agent)}</Notice>
       ) : (
         <ActorsTable
           data={query.data}
+          revisionOnly
           loading={query.isLoading}
           placeholder={query.isPlaceholderData}
           page={page}
@@ -59,48 +66,25 @@ export function KagentSessionsTab({ agent }: { agent: KagentAgentRef }) {
           openActor={null}
         />
       )}
-      <p className="text-sm text-theme-text-tertiary">
-        Recover crashed sessions through kagent’s SessionService/RevertSession, or stop active turns and delete the chat in kagent. Moving
-        or reverting the actor directly can lose the session.
-      </p>
       <p className="text-sm text-theme-text-tertiary">Conversation outcomes: not visible to Radar.</p>
     </div>
   )
 }
-function RevisionTemplate({
-  template,
-  sessions,
-  lowerBound,
-  label,
-}: {
-  template: SubstrateTemplateRow
-  sessions?: number
-  lowerBound: boolean
-  label: string
-}) {
+function TemplateCreated({ template }: { template: SubstrateTemplateRow }) {
   const query = useSubstrateTemplate(template)
   return (
-    <div className="space-y-1">
-      <span>{label}</span>
-      <Sub>
-        Template {template.atespace}/{template.name}
-      </Sub>
-      <Sub>
-        Template created:{' '}
-        {query.data?.spec?.createTime ? (
-          <TimeValue timestamp={query.data.spec.createTime} />
-        ) : query.isLoading ? (
-          'Reading…'
-        ) : (
-          'Not reported or unread'
-        )}
-      </Sub>
-      <Sub>Golden snapshot: {template.golden.state}</Sub>
-      <Sub>Sessions: {sessions === undefined ? 'Not read' : `${lowerBound ? '≥' : ''}${sessions}`}</Sub>
-    </div>
+    <span className="text-xs">
+      {query.data?.spec?.createTime ? (
+        <TimeValue timestamp={query.data.spec.createTime} />
+      ) : query.isLoading ? (
+        'Reading…'
+      ) : (
+        'Not reported or unread'
+      )}
+    </span>
   )
 }
-export function KagentRevisions({ agent }: { agent: KagentAgentRef }) {
+export function KagentRevisions({ agent, latestChange }: { agent: KagentAgentRef; latestChange?: string }) {
   const summary = useKagentAgentSessions(agent)
   const feature = useRadarFeature('kagentSessionSummary')
   const templates = useSubstrateTemplates(feature.support === 'supported' && !!summary.data)
@@ -123,29 +107,32 @@ export function KagentRevisions({ agent }: { agent: KagentAgentRef }) {
     templates.data?.templates.filter(
       (t) => t.kagent?.kind === 'agentSession' && t.kagent.agent.namespace === agent.namespace && t.kagent.agent.name === agent.name,
     ) ?? []
-  const rows = attributed.slice(0, 50)
+  const revisions = new Map(data.revisions.map((r) => [r.revision, r]))
+  const digests = [
+    ...new Set(
+      [
+        data.agent.latestSuccessfulRevision,
+        data.agent.desiredRevision,
+        ...data.revisions.map((r) => r.revision),
+        ...attributed.map((t) => (t.kagent?.kind === 'agentSession' ? t.kagent.revision : undefined)),
+      ].filter((r): r is string => !!r),
+    ),
+  ]
+  const rows = digests.slice(0, 50).map((revision) => ({
+    revision,
+    evidence: revisions.get(revision),
+    template: attributed.find((t) => t.kagent?.kind === 'agentSession' && t.kagent.revision === revision),
+    current: revision === data.agent.latestSuccessfulRevision,
+    desired: revision === data.agent.desiredRevision,
+  }))
+  if (latestChange && latestChange !== 'prepared' && !data.agent.desiredRevision)
+    rows.unshift({ revision: '', evidence: undefined, template: undefined, current: false, desired: true })
   return (
     <div className="space-y-4 p-5">
       <RefreshFailedNotice queries={[summary, templates]} />
-      <FactGrid>
-        <FactRow label="Desired revision">
-          <span className={data.agent.desiredRevision ? "font-mono text-xs" : "text-xs"}>
-            {revisionText(data.agent.desiredRevision) === 'No revision prepared'
-              ? 'Not reported for the latest change'
-              : revisionText(data.agent.desiredRevision)}
-          </span>
-        </FactRow>
-        <FactRow label="New sessions run">
-          <span className={data.agent.latestSuccessfulRevision ? "font-mono text-xs" : "text-xs"}>{revisionText(data.agent.latestSuccessfulRevision)}</span>
-        </FactRow>
-      </FactGrid>
-      <p className="text-sm text-theme-text-secondary">
-        A template’s creation time is when Substrate created it. kagent reports no time when a revision became prepared.
-      </p>
       <SectionTable
-        title="Attributed templates"
         rows={rows}
-        rowKey={(t) => `${t.atespace}/${t.name}`}
+        rowKey={(r) => r.revision || 'latest-change'}
         minWidth={0}
         empty={
           templates.isLoading
@@ -157,36 +144,64 @@ export function KagentRevisions({ agent }: { agent: KagentAgentRef }) {
         columns={[
           {
             header: 'Revision',
-            width: '35%',
-            cell: (t) => (
-              <span className="font-mono text-xs">{t.kagent?.kind === 'agentSession' ? revisionText(t.kagent.revision) : 'Unknown'}</span>
+            width: '19%',
+            cell: (t) => <span className="font-mono text-xs">{t.revision ? revisionText(t.revision) : 'Not compiled'}</span>,
+          },
+          {
+            header: 'Role',
+            width: '28%',
+            cell: (r) => (
+              <span>
+                {r.evidence?.ambiguous
+                  ? 'Ambiguous — not counted for this Agent'
+                  : r.current
+                    ? 'New sessions start here'
+                    : r.desired
+                      ? `Latest change${latestChange ? `, ${changeText(latestChange).toLowerCase()}` : ''}`
+                      : 'Earlier'}
+                {r.current && r.desired && <Sub>Latest change</Sub>}
+              </span>
             ),
           },
           {
-            header: 'Evidence',
-            cell: (t) => {
-              const rev = data.revisions.find((r) => r.template.atespace === t.atespace && r.template.name === t.name)
-              return (
-                <RevisionTemplate
-                  template={t}
-                  sessions={rev?.sessions ?? t.actors?.total}
-                  lowerBound={!data.complete || templates.data?.coverage.actors.state !== 'full'}
-                  label={
-                    rev?.ambiguous
-                      ? 'Ambiguous — not counted for this Agent'
-                      : rev?.newSessions
-                        ? 'New sessions start here'
-                        : rev?.desired
-                          ? 'Desired revision'
-                          : 'Earlier revision'
-                  }
-                />
-              )
-            },
+            header: 'Template created',
+            width: '20%',
+            cell: (r) =>
+              r.template ? (
+                <TemplateCreated template={r.template} />
+              ) : (
+                <span className="text-xs text-theme-text-tertiary">
+                  {r.desired && !r.current ? 'No prepared template read' : 'Not reported or unread'}
+                </span>
+              ),
+          },
+          { header: 'Golden snapshot', width: '19%', cell: (r) => r.template?.golden.state ?? 'Unknown' },
+          {
+            header: 'Sessions',
+            width: '14%',
+            cell: (r) =>
+              r.evidence?.ambiguous ? (
+                'Not counted'
+              ) : r.evidence ? (
+                <>
+                  {!data.complete ? '≥' : ''}
+                  {r.evidence.sessions}
+                </>
+              ) : r.template?.actors ? (
+                <>
+                  {templates.data?.coverage.actors.state !== 'full' ? '≥' : ''}
+                  {r.template.actors.total}
+                </>
+              ) : (
+                'Not read'
+              ),
           },
         ]}
-        footer={attributed.length > rows.length ? `Showing ${rows.length} of ${attributed.length} attributed templates.` : undefined}
+        footer={digests.length > rows.length ? `Showing ${rows.length} of ${digests.length} revisions.` : undefined}
       />
+      <p className="text-xs text-theme-text-tertiary">
+        A template’s creation time is when Substrate created it. kagent reports no time when a revision became prepared.
+      </p>
       {data.revisions
         .filter((r) => r.ambiguous || !attributed.some((t) => t.atespace === r.template.atespace && t.name === r.template.name))
         .map((r) => (
@@ -201,8 +216,9 @@ export function KagentRevisions({ agent }: { agent: KagentAgentRef }) {
       {data.hintedEarlierRevisions > 0 && (
         <Notice>
           {data.complete ? '' : 'At least '}
-          {data.hintedEarlierRevisions} {data.hintedEarlierRevisions === 1 ? 'session has an unprovable earlier revision' : 'sessions have unprovable earlier revisions'}. They are hints and do not count as this Agent’s
-          sessions.{' '}
+          {data.hintedEarlierRevisions}{' '}
+          {data.hintedEarlierRevisions === 1 ? 'session has an unprovable earlier revision' : 'sessions have unprovable earlier revisions'}.
+          They are hints and do not count as this Agent’s sessions.{' '}
           <button
             type="button"
             onClick={() => navigate(substrateActorsPath({ kagent: 'unattributed', atespace: agent.namespace }))}

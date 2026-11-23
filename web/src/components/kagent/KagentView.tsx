@@ -68,13 +68,13 @@ export function KagentView({ namespaces, onOpenResource }: WorkspaceScreenProps)
             <ScreenBody>
               <header className="flex flex-wrap items-baseline justify-between gap-2">
                 <h1 className="text-lg font-semibold text-theme-text-primary">
-                  kagent{' '}
+                  <span className="font-normal text-theme-text-tertiary">kagent / </span>
                   {route.screen === 'overview'
-                    ? 'overview'
+                    ? 'Overview'
                     : route.screen === 'mcpservers'
                       ? 'MCP servers'
                       : route.screen === 'models'
-                        ? 'models'
+                        ? 'Models'
                         : 'Agents'}
                 </h1>
                 <button
