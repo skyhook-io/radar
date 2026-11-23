@@ -204,10 +204,19 @@ func TestStopCommittedSwitchWhileWaitingForDiscovery(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
+	targetCache := GetResourceCache()
+	if targetCache == nil {
+		t.Fatal("expected a promoted target cache during the discovery wait")
+	}
 	if !tracker.Snapshot().CanStop || tracker.StopSwitch("old", "target") || tracker.StopSwitch(op.ID, "different") || !tracker.StopSwitch(op.ID, "target") {
 		t.Fatalf("could not stop only the matching switch: %+v", tracker.Snapshot())
 	}
 	awaitSwitchPhase(t, &tracker, "stopped")
+	select {
+	case <-targetCache.Done():
+	default:
+		t.Fatal("stopped switch left the displaced cache running")
+	}
 	assertNoSwitchFailureLogged(t, op)
 	status := GetConnectionStatus()
 	if !*sessionsClosed || status.State != StateDisconnected || status.Context != "target" || status.ErrorType != switchStoppedErrorType || RuntimeAuthRecoveryOwed() || completed.Load() != 0 {

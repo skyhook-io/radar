@@ -38,6 +38,7 @@ interface ConnectionStatusResponse extends ConnectionState {
 
 interface PolledConnectionStatus extends ConnectionStatusResponse {
   sseGenerationAtStart: number
+  apiBase: string
 }
 
 interface ConnectionContextValue {
@@ -120,8 +121,7 @@ async function fetchConnectionStatus(sseGenerationAtStart: number): Promise<Poll
     throw new Error('Failed to fetch connection status')
   }
   const status = await response.json() as ConnectionStatusResponse
-  observeConnectionStatus(status, base)
-  return { ...status, sseGenerationAtStart }
+  return { ...status, sseGenerationAtStart, apiBase: base }
 }
 
 async function retryConnection(automatic = false): Promise<ConnectionState> {
@@ -292,6 +292,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       }
       return
     }
+    // Only a poll that wins over newer SSE state names the connection, or a
+    // stale reply would leave the tab sending the previous cluster's ID.
+    observeConnectionStatus(data, data.apiBase)
     // A background tab can miss both the SSE event and the whole operation
     // between polls. Apply the same cache and URL transition as the initiating tab.
     if (current.state === 'connected' && current.context && current.context !== data.context &&

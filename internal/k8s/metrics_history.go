@@ -1,8 +1,6 @@
 package k8s
 
 import (
-	"sync"
-
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
@@ -24,44 +22,60 @@ const (
 	MetricsPollInterval = k8score.MetricsPollInterval
 )
 
-var (
-	metricsHistoryStore *MetricsHistoryStore
-	metricsHistoryOnce  = new(sync.Once)
-	metricsHistoryMu    sync.Mutex
-)
-
 // InitMetricsHistory initializes the metrics history store and starts polling.
 func InitMetricsHistory() {
-	metricsHistoryMu.Lock()
-	defer metricsHistoryMu.Unlock()
-	metricsHistoryOnce.Do(func() {
-		metricsHistoryStore = k8score.NewMetricsHistoryStoreWithResolver(GetDynamicClient(), ResolveMetricsGVR)
-		metricsHistoryStore.Namespaces = RBACNamespaces
-		metricsHistoryStore.OnError = func(subsystem, level, format string, args ...any) {
-			errorlog.Record(subsystem, level, format, args...)
-		}
-		metricsHistoryStore.Start()
-	})
+	Current().initMetricsHistory()
+}
+
+func (c *Connection) initMetricsHistory() {
+	if c == nil {
+		return
+	}
+	c.metricsMu.Lock()
+	defer c.metricsMu.Unlock()
+	if c.metricsClosed || c.metricsHistory.Load() != nil {
+		return
+	}
+	store := k8score.NewMetricsHistoryStoreWithResolver(c.Dynamic(), c.resolveMetricsGVR)
+	store.Namespaces = RBACNamespaces
+	store.OnError = errorlog.Record
+	store.Start()
+	c.metricsHistory.Store(store)
+}
+
+func (c *Connection) MetricsHistory() *MetricsHistoryStore {
+	if c == nil {
+		return nil
+	}
+	return c.metricsHistory.Load()
 }
 
 // GetMetricsHistory returns the metrics history store.
 func GetMetricsHistory() *MetricsHistoryStore {
-	return metricsHistoryStore
+	return Current().MetricsHistory()
 }
 
 // StopMetricsHistory stops the metrics polling.
 func StopMetricsHistory() {
-	if metricsHistoryStore != nil {
-		metricsHistoryStore.Stop()
+	if store := GetMetricsHistory(); store != nil {
+		store.Stop()
 	}
 }
 
-// ResetMetricsHistory stops polling and clears the store so it can be
-// reinitialized for a new cluster after context switch.
+// ResetMetricsHistory closes the installed connection's metrics history.
 func ResetMetricsHistory() {
-	metricsHistoryMu.Lock()
-	defer metricsHistoryMu.Unlock()
-	StopMetricsHistory()
-	metricsHistoryStore = nil
-	metricsHistoryOnce = new(sync.Once)
+	Current().closeMetricsHistory()
+}
+
+func (c *Connection) closeMetricsHistory() {
+	if c == nil {
+		return
+	}
+	c.metricsMu.Lock()
+	defer c.metricsMu.Unlock()
+	if store := c.metricsHistory.Load(); store != nil {
+		store.Stop()
+		c.metricsHistory.Store(nil)
+	}
+	c.metricsClosed = true
 }

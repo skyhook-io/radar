@@ -9,7 +9,7 @@ import {
   formatMetricValue,
   type ReferenceLine,
 } from "@skyhook-io/k8s-ui/components/charts";
-import { type PrometheusTimeRange } from "../../api/client";
+import { usePrometheusResourceMetrics, type PrometheusTimeRange } from "../../api/client";
 import {
   useWorkloadMetrics,
   type WorkloadMetricPanel,
@@ -19,6 +19,7 @@ import {
 import { latestWorkloadValue, workloadPodValues } from "./workloadMetricValues";
 import { WorkloadMetricsHelpDialog } from './WorkloadMetricsHelpDialog';
 import { Disclosure } from '@skyhook-io/k8s-ui/components/ui/Disclosure';
+import { leastCertainScope, NAME_MATCHED_CLUSTER_NOTE, NAME_MATCHED_SUMMARY } from './nameMatchedScope';
 
 interface Props {
   kind: string;
@@ -30,6 +31,7 @@ interface Props {
   restartLane?: ReactNode;
   nameMatchedCharts?: Partial<Record<'cpu' | 'memory', ReactNode>>;
   controls?: ReactNode;
+  workloadTotals?: ReactNode;
 }
 
 export function WorkloadMetricsSection(props: Props) {
@@ -51,6 +53,11 @@ export function WorkloadMetricsSection(props: Props) {
     const panel = data?.panels[key];
     return (data || error) && props.nameMatchedCharts?.[key] && (!panel || ['detecting', 'error', 'unavailable'].includes(panel.state));
   });
+  // Read from the cache the name-matched charts fill; never fetches itself.
+  const cpuNameMatched = usePrometheusResourceMetrics(props.kind, props.namespace, props.name, 'cpu', props.range, false).data;
+  const memoryNameMatched = usePrometheusResourceMetrics(props.kind, props.namespace, props.name, 'memory', props.range, false).data;
+  const nameMatchedScope = leastCertainScope(nameMatchedFallbacks.map((key) => (key === 'cpu' ? cpuNameMatched : memoryNameMatched)?.clusterScope));
+  const nameMatchedNote = NAME_MATCHED_CLUSTER_NOTE[nameMatchedScope];
   const resourceNotice = sameResourceScope ? sharedPanelNotice([data?.panels.cpu, data?.panels.memory, data?.panels.throttling]) : undefined;
   const hasHistoricalTotals = (['cpu', 'memory'] as const).some((key) => data?.history[key]?.mode === 'workload-history');
   const hasResourceDetails = hasHistoricalTotals || data?.history.throttling?.mode === 'workload-history' || resourceNotice?.state === 'stale';
@@ -67,9 +74,10 @@ export function WorkloadMetricsSection(props: Props) {
       {data?.state === 'partial' && data.reason && <p role="status" className={`text-xs ${SEVERITY_TEXT.warning}`}>{data.reason}</p>}
       {isPlaceholderData && <p role="status" className="text-xs text-theme-text-secondary">Loading selected request source… Resources show previous samples.</p>}
       <WorkloadRequests data={data} isLoading={isLoading || isPlaceholderData} error={error} setSource={setSource} />
+      {props.workloadTotals}
       <section aria-label="Workload resource pressure">
         {(data?.panels.cpu || data?.panels.memory || data?.panels.throttling) && <div className="mb-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <h3 className="text-sm font-semibold text-theme-text-primary">Resources</h3>
+          <h3 className="text-sm font-semibold text-theme-text-primary">{props.workloadTotals ? 'Prometheus resources' : 'Resources'}</h3>
           {sameResourceScope && <HistoryNotice scope={data?.history.cpu} omitReason={data?.panels.cpu?.reason} />}
         </div>}
         {props.restartLane}
@@ -97,8 +105,10 @@ export function WorkloadMetricsSection(props: Props) {
         </Disclosure>}
       </section>
       {nameMatchedFallbacks.length > 0 && <details aria-label="Name-matched resource metrics">
-        <summary className="mb-2 cursor-pointer text-xs text-theme-text-secondary">Basic {nameMatchedFallbacks.map((key) => key === 'cpu' ? 'CPU' : 'memory').join(' / ')} · identity unverified</summary>
-        <p className={`mb-2 max-w-2xl text-sm ${SEVERITY_TEXT.warning}`}>These charts match current Pod names, not Pod UIDs or historical workload ownership; matching names in a shared backend may include another cluster.</p>
+        <summary className="mb-2 cursor-pointer text-xs text-theme-text-secondary">Basic {nameMatchedFallbacks.map((key) => key === 'cpu' ? 'CPU' : 'memory').join(' / ')} · {NAME_MATCHED_SUMMARY[nameMatchedScope]}</summary>
+        {nameMatchedNote
+          ? <p className={`mb-2 max-w-2xl text-sm ${nameMatchedScope === 'withheld' ? SEVERITY_TEXT.warning : 'text-theme-text-secondary'}`}>These charts match current Pod names, not Pod UIDs or historical workload ownership. {nameMatchedNote}</p>
+          : <p className={`mb-2 max-w-2xl text-sm ${SEVERITY_TEXT.warning}`}>These charts match current Pod names, not Pod UIDs or historical workload ownership; matching names in a shared backend may include another cluster.</p>}
         <div className="metrics-chart-grid">{nameMatchedFallbacks.map((key) => <div key={key}>{props.nameMatchedCharts?.[key]}</div>)}</div>
       </details>}
       {data && (data.comparison.cpu || data.comparison.memory || data.comparison.throttling) && <PodComparison

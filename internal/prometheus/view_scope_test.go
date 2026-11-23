@@ -361,6 +361,39 @@ func TestViewScopeAnchorNamespace(t *testing.T) {
 	}
 }
 
+// A metric whose namespace a scrape may have renamed to exported_namespace
+// anchors on either spelling, never on a name alone.
+func TestViewScopeAnchorNamespaceExported(t *testing.T) {
+	m := ViewMetric{Name: "container_cpu_allocation", AnchorLabel: "pod", AnchorValues: []string{"agent-0"}, AnchorNamespace: "kube-system", AnchorNamespaceExported: true}
+	got := viewIdentityQuery([]ViewMetric{m}, []string{"cluster"}, time.Hour, true)
+	want := `label_replace(count(count_over_time(container_cpu_allocation{exported_namespace="kube-system",pod=~"agent-0"}[3600s])), "radar_anchor", "container_cpu_allocation", "", "")` +
+		` or label_replace(count(count_over_time(container_cpu_allocation{namespace="kube-system",exported_namespace="",pod=~"agent-0"}[3600s])), "radar_anchor", "container_cpu_allocation", "", "")`
+	if !strings.Contains(got, want) {
+		t.Fatalf("anchor count\n got: %s\nwant: %s", got, want)
+	}
+	// The subject's namespace can name the exporter's own namespace on the
+	// renamed spelling, so the anchor checks keep it.
+	scoped := m
+	scoped.Subject = `namespace="kube-system"`
+	for _, part := range viewIdentityParts([]ViewMetric{scoped}, []string{"cluster"}, time.Hour, true)[1:] {
+		if got := part.String(); !strings.Contains(got, `{namespace="kube-system",`) {
+			t.Errorf("anchor check dropped the subject's namespace: %s", got)
+		}
+	}
+	key := func(m ViewMetric) string {
+		req, err := normalizeViewScopeRequest(ViewScopeRequest{View: "v", Metrics: []ViewMetric{m}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return viewScopeKey(1, 1, prom.WorkloadMetricsScope{}, "", false, req, true, time.Time{})
+	}
+	plain := m
+	plain.AnchorNamespaceExported = false
+	if key(m) == key(plain) {
+		t.Fatal("exported_namespace acceptance must be part of the cache key")
+	}
+}
+
 func TestViewScopeSpanBucketNeverShrinks(t *testing.T) {
 	for span, want := range map[time.Duration]time.Duration{
 		0:                               5 * time.Minute,

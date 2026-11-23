@@ -122,6 +122,7 @@ func TestComputeDiff_DifferentAPIGroupsAreNotDiffed(t *testing.T) {
 }
 
 func TestRecordToTimelineStore_CollidingCRDUpdateSurvives(t *testing.T) {
+	state := newConnectionCache()
 	timeline.ResetStore()
 	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 10}); err != nil {
 		t.Fatalf("InitStore: %v", err)
@@ -137,7 +138,7 @@ func TestRecordToTimelineStore_CollidingCRDUpdateSurvives(t *testing.T) {
 	newJob.SetResourceVersion("2")
 
 	diff := ComputeDiff("Job", oldJob, newJob)
-	recordToTimelineStore(ActiveClusterContext(), "Job", "gpu-demo", "collision-demo", "volcano-job-uid", "update", oldJob, newJob, diff, true)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Job", "gpu-demo", "collision-demo", "volcano-job-uid", "update", oldJob, newJob, diff, true)
 
 	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{
 		Kinds: []string{"Job"}, Namespaces: []string{"gpu-demo"},

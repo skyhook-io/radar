@@ -553,6 +553,13 @@ func detectPrometheusCostState(ctx context.Context) prometheusCostState {
 		}
 		return prometheusCostUnknown
 	}
+	// The probe asks whether the store holds OpenCost metrics at all, so it
+	// runs unscoped and lenient. A store holding several clusters' costs that
+	// the endpoints then withhold for this cluster is still a Prometheus cost
+	// source: it stays selected and the endpoints show why, rather than
+	// switching to Kubecost. Scoping the probe would tie the source choice to
+	// a cluster-scope check that is rechecked every minute and to partial
+	// answers, and the selection would flip with them.
 	resp := pkgopencost.ComputeCostSummaryFromProm(ctx, client.Prom(), pkgopencost.SummaryOptions{Currency: pkgopencost.DefaultCurrency, SkipNodeCost: true})
 	if resp.Available {
 		return prometheusCostAvailable

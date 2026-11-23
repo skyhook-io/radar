@@ -94,7 +94,9 @@ func newRightsizingScanManager() *RightsizingScanManager {
 			}
 			return func(ctx context.Context, scope RightsizingScanScope, publish func(RightsizingScanResponse)) RightsizingScanResponse {
 				if connectionErr != nil {
-					return RightsizingScanResponse{State: RightsizingScanUnavailable, Reason: connectionErr.Error()}
+					result := newRightsizingScanResponse(time.Now().UTC(), scope)
+					result.Reason = connectionErr.Error()
+					return result
 				}
 				return runRightsizingScan(ctx, scope, client, cache, publish)
 			}, valid

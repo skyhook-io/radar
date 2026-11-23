@@ -21,12 +21,6 @@ var (
 const maxDeletedWhileUnavailable = 100_000
 
 var (
-	deletedWhileUnavailableMu       sync.Mutex
-	deletedWhileUnavailable         = map[string]struct{}{}
-	deletedWhileUnavailableOverflow bool
-)
-
-var (
 	// Guards the worker's lifetime. ResetStore retires the current worker before
 	// a new InitStore can start one, so a context switch cannot have the
 	// previous context's connection installed over the new one.
@@ -78,7 +72,8 @@ func installPostgresStore(store *PostgresStore, cfg StoreConfig) {
 	// Clear the marks of resources deleted during the outage before the store
 	// takes events, then once more after: a delete that lands between the two
 	// went to the list, not to the store.
-	forgetDeletedWhileUnavailable(store)
+	binding := CaptureStore()
+	binding.forgetDeletedWhileUnavailable(store)
 	// Observation starts when events begin landing. Marking it at process start
 	// would claim coverage for the window the store was down. It is set before
 	// the store is published so no reader sees a store without its epoch.
@@ -86,7 +81,7 @@ func installPostgresStore(store *PostgresStore, cfg StoreConfig) {
 	wasUnavailable := TimelineUnavailableReason() != ""
 	setGlobalStore(store)
 	postgresUnavailableReason.Store("")
-	forgetDeletedWhileUnavailable(store)
+	binding.forgetDeletedWhileUnavailable(store)
 	if wasUnavailable {
 		log.Printf("[timeline] connected to PostgreSQL (%s); the timeline is recording changes. Changes made while it was unavailable were not recorded", store.target)
 	}
@@ -169,7 +164,6 @@ func stopPostgresReconnect() {
 		postgresReconnectQuit = nil
 	}
 	postgresUnavailableReason.Store("")
-	takeDeletedWhileUnavailable()
 	stopPostgresOutageWatch()
 }
 
@@ -220,48 +214,46 @@ func Unavailable(ctx context.Context) error {
 // installed. Its seen mark is still in the database, and once the store comes
 // back the mark would make a new resource with the same name look already seen,
 // so its creation would be dropped. The reconnected store clears these marks.
-func NoteDeletedWhileUnavailable(clusterContext, group, kind, namespace, name string) {
-	deletedWhileUnavailableMu.Lock()
-	if len(deletedWhileUnavailable) >= maxDeletedWhileUnavailable {
-		deletedWhileUnavailableOverflow = true
+func (b *StoreBinding) NoteDeletedWhileUnavailable(clusterContext, group, kind, namespace, name string) {
+	globalStoreMu.Lock()
+	if b.deletedWhileUnavailable == nil {
+		b.deletedWhileUnavailable = make(map[string]struct{})
+	}
+	if len(b.deletedWhileUnavailable) >= maxDeletedWhileUnavailable {
+		b.deletedWhileUnavailableOverflow = true
 	} else {
-		deletedWhileUnavailable[SeenResourceKey(clusterContext, group, kind, namespace, name)] = struct{}{}
+		b.deletedWhileUnavailable[SeenResourceKey(clusterContext, group, kind, namespace, name)] = struct{}{}
 	}
-	deletedWhileUnavailableMu.Unlock()
-
-	// The caller saw no store, but one may have been installed since, and its
-	// last pass over this list may already have run. installPostgresStore
-	// publishes the store before that pass, so either the pass sees this entry
-	// or this check sees the store.
-	if pg, ok := GetStore().(*PostgresStore); ok {
-		forgetDeletedWhileUnavailable(pg)
+	// The reconnect may have published the store and drained the list since
+	// the caller saw no store. In that case this delete must drain it again.
+	pg, ok := b.store.(*PostgresStore)
+	globalStoreMu.Unlock()
+	if ok {
+		b.forgetDeletedWhileUnavailable(pg)
 	}
 }
 
-// DeletedWhileUnavailableCountForTest reports how many deletes are waiting to
-// have their seen marks cleared.
 func DeletedWhileUnavailableCountForTest() int {
-	deletedWhileUnavailableMu.Lock()
-	defer deletedWhileUnavailableMu.Unlock()
-	return len(deletedWhileUnavailable)
+	globalStoreMu.Lock()
+	defer globalStoreMu.Unlock()
+	return len(globalStore.deletedWhileUnavailable)
 }
 
-// takeDeletedWhileUnavailable empties the list and reports whether it overflowed.
-func takeDeletedWhileUnavailable() ([]string, bool) {
-	deletedWhileUnavailableMu.Lock()
-	defer deletedWhileUnavailableMu.Unlock()
-	keys := make([]string, 0, len(deletedWhileUnavailable))
-	for k := range deletedWhileUnavailable {
+func (b *StoreBinding) takeDeletedWhileUnavailable() ([]string, bool) {
+	globalStoreMu.Lock()
+	defer globalStoreMu.Unlock()
+	keys := make([]string, 0, len(b.deletedWhileUnavailable))
+	for k := range b.deletedWhileUnavailable {
 		keys = append(keys, k)
 	}
-	overflow := deletedWhileUnavailableOverflow
-	deletedWhileUnavailable = map[string]struct{}{}
-	deletedWhileUnavailableOverflow = false
+	overflow := b.deletedWhileUnavailableOverflow
+	b.deletedWhileUnavailable = nil
+	b.deletedWhileUnavailableOverflow = false
 	return keys, overflow
 }
 
-func forgetDeletedWhileUnavailable(store *PostgresStore) {
-	keys, overflow := takeDeletedWhileUnavailable()
+func (b *StoreBinding) forgetDeletedWhileUnavailable(store *PostgresStore) {
+	keys, overflow := b.takeDeletedWhileUnavailable()
 	if overflow {
 		log.Printf("[timeline] more than %d resources were deleted while PostgreSQL was unreachable; "+
 			"one of the others recreated under the same name may not have its creation recorded", maxDeletedWhileUnavailable)

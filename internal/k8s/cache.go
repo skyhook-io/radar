@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"reflect"
@@ -65,13 +66,9 @@ var logTiming = LogTiming
 // InitialSyncComplete reports whether the current cache has finished its
 // initial sync, after which an add is an object Radar had not seen before.
 func InitialSyncComplete() bool {
-	return initialSyncComplete.Load()
+	conn := Current()
+	return conn != nil && conn.cacheState().initialSyncComplete.Load()
 }
-
-// initialSyncComplete is set to true after the initial cache sync completes.
-// During initial sync, "add" events are skipped since they represent existing
-// resources, not new creations. Only adds after sync are recorded.
-var initialSyncComplete atomic.Bool
 
 // deferredResources lists informer keys that are NOT required for the initial
 // dashboard render. These sync in the background after the critical informers
@@ -127,9 +124,10 @@ type ResourceChange = k8score.ResourceChange
 // status, pod workload lookup, timeline integration).
 type ResourceCache struct {
 	*k8score.ResourceCache
-	lastClusterInfo  atomic.Pointer[clusterInfoObservation]
-	permissionResult *PermissionCheckResult
-	secretsEnabled   bool // Whether secrets informer is running (requires RBAC)
+	lastClusterInfo     atomic.Pointer[clusterInfoObservation]
+	apiDiscoveryPending atomic.Bool
+	permissionResult    *PermissionCheckResult
+	secretsEnabled      bool // Whether secrets informer is running (requires RBAC)
 	// argoDrift tracks how long each manual-sync ArgoCD Application has been
 	// continuously OutOfSync. Lives here so its lifecycle is the cache's:
 	// recreated per cluster, dropped on a kubeconfig context switch.
@@ -140,7 +138,7 @@ type ResourceCache struct {
 	// secretWriteTimes preserves verified Secret data-owner write times that
 	// the shared informer transform intentionally strips before caching.
 	secretWriteTimes *secretDataManagerWriteIndex
-	// generation is the cacheGeneration this cache was built under.
+	// generation scopes external memos to this construction, including same-client rebuilds.
 	generation uint64
 }
 
@@ -352,49 +350,79 @@ func (index *secretDataManagerWriteIndex) load(namespace, name string) (secretDa
 	return write, ok
 }
 
-var (
-	// resourceCache is the promoted singleton. Reads are lock-free (handlers
-	// on hot paths call GetResourceCache constantly, and progressive startup
-	// admits them while promotion is still in flight); writes stay under
-	// cacheMu so promotion, retirement of the mid-sync handle, and the
-	// completion flag move as one lifecycle step.
-	resourceCache atomic.Pointer[ResourceCache]
-	cacheOnce     = new(sync.Once)
-	cacheMu       sync.Mutex
-	// syncingCache is the mid-Phase-1 handle published by OnInformersStarted:
-	// structurally complete but not synced — every read through it MUST gate on
-	// KindReadinessFor. Cleared on promotion (resourceCache assigned), on init
-	// failure, and on reset. Guarded by cacheMu.
-	syncingCache *ResourceCache
-	// cacheGeneration invalidates in-flight cache constructions: a context
-	// switch bumps it (via ResetResourceCache), and any publish/promote/clear
-	// from an older generation becomes a no-op — without this, an old
-	// cluster's construction finishing late could republish that cluster's
-	// cache over the new one. Guarded by cacheMu.
-	cacheGeneration uint64
-)
+type cacheLifecycle struct {
+	mu     sync.RWMutex
+	once   sync.Once
+	closed bool
+}
 
-// tombstones retains recently-seen resource enrichment (owner/labels/createdAt)
-// for a short window after objects leave the informer cache, so delete-time and
-// late K8s events (the "Killing" class, processed after the involved object is
-// already gone from cache) carry owner/labels/createdAt as fact instead of
-// shipping anonymous. Fed from informer add/update/delete callbacks (an
-// already-seen relist add returns before recording, so it skips the feed);
-// consulted after the live cache during event enrichment. Bounded + TTL'd so
-// it cannot grow without limit; misses are silent (null enrichment).
-var tombstones = timeline.NewTombstoneCache(15*time.Minute, 4000)
+// whileOpen runs an informer callback only while its cache is open, so a
+// callback that fires after a switch closed the cache records nothing. A
+// callback already running when the cache closes finishes; close doesn't wait
+// for it, so slow timeline storage can't hold up a switch. Observers can call
+// back into the cache, so fn runs outside mu.
+func (s *cacheLifecycle) whileOpen(fn func()) {
+	s.mu.RLock()
+	closed := s.closed
+	s.mu.RUnlock()
+	if !closed {
+		fn()
+	}
+}
+
+func (s *cacheLifecycle) computeDiff(kind string, oldObj, newObj any) *DiffInfo {
+	var diff *DiffInfo
+	s.whileOpen(func() { diff = ComputeDiff(kind, oldObj, newObj) })
+	return diff
+}
+
+func (s *cacheLifecycle) closeCallbacks() {
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
+}
+
+type connectionCache struct {
+	// Hot-path reads of the promoted handle are lock-free. The lock keeps
+	// promotion, retirement of the syncing handle and completion one step.
+	cacheLifecycle
+	promoted            atomic.Pointer[ResourceCache]
+	syncing             *ResourceCache
+	initialSyncComplete atomic.Bool
+
+	// Late events can arrive after the subject has left the live informer.
+	tombstones *timeline.TombstoneCache
+	recreates  recreateStash
+}
+
+func newConnectionCache() *connectionCache {
+	return &connectionCache{tombstones: timeline.NewTombstoneCache(15*time.Minute, 4000)}
+}
+
+func (c *Connection) cacheState() *connectionCache {
+	if state := c.cache.Load(); state != nil {
+		return state
+	}
+	c.cache.CompareAndSwap(nil, newConnectionCache())
+	return c.cache.Load()
+}
 
 // InitResourceCache initializes the resource cache with timeline-wired callbacks.
 func InitResourceCache(ctx context.Context) error {
-	var initErr error
-	once, gen := claimCacheInit()
-	// A cancelled startup that first runs after a switch must not spend the
-	// replacement generation's Once.
+	return Current().initResourceCache(ctx)
+}
+
+func (conn *Connection) initResourceCache(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	once.Do(func() {
-		client, informerClient := getCacheClients()
+	if conn == nil {
+		return fmt.Errorf("cannot create resource cache: k8s client not initialized")
+	}
+	state := conn.cacheState()
+	var initErr error
+	state.once.Do(func() {
+		client, informerClient := conn.Client(), conn.InformerClient()
 		if client == nil {
 			initErr = fmt.Errorf("cannot create resource cache: k8s client not initialized")
 			return
@@ -405,7 +433,7 @@ func InitResourceCache(ctx context.Context) error {
 		// per-kind namespace scoping (some kinds may be cluster-wide while
 		// others are namespace-scoped to the same fallback namespace).
 		rbacStart := time.Now()
-		probe, probeErr := probeCachePermissions(ctx, freshResourcePermissions)
+		probe, probeErr := probeCachePermissions(ctx, conn.freshResourcePermissions)
 		logTiming("    Resource access probes: %v", time.Since(rbacStart))
 
 		if probeErr != nil {
@@ -418,9 +446,9 @@ func InitResourceCache(ctx context.Context) error {
 			return
 		}
 		// Only the result the informers are built from becomes the
-		// process-wide one; a retry the probe budget cut short is never
+		// connection's cached result; a retry the probe budget cut short is never
 		// published.
-		publishResourcePermissions(probe)
+		probe.publish()
 		permResult := probe.result
 
 		// scopes drives which informers are created and at what scope.
@@ -431,14 +459,6 @@ func InitResourceCache(ctx context.Context) error {
 			scopes = map[string]k8score.ResourceScope{}
 		}
 
-		// Captured ONCE at wiring time and closed over by the callbacks below.
-		// Informer shutdown on context switch is asynchronous (up to 5s, then
-		// abandoned), so a late callback reading ActiveClusterContext() at
-		// delivery time would stamp the OLD cluster's event with the NEW
-		// cluster's name — permanently, under SQLite storage. Closing over the
-		// wiring-time value keeps late events truthfully attributed to the
-		// cluster they came from.
-		recordClusterContext := ActiveClusterContext()
 		secretWriteTimes := newSecretDataManagerWriteIndex()
 		cronJobScheduleObservations := newCronJobScheduleObservationTracker()
 
@@ -452,52 +472,13 @@ func InitResourceCache(ctx context.Context) error {
 			PatienceWindow:          firstPaintPatience,
 			MinimalSet:              minimalFirstPaintSet,
 			SyncTimeout:             FirstPaintBackstop,
-			SyncProgress:            emitSyncProgress,
 			DeferredSyncTimeout:     3 * time.Minute,
 			ListPageSize:            ListPageSize,
 
-			OnReceived: func(kind string) {
-				timeline.IncrementReceived(kind)
-			},
-
-			OnTransform: func(obj any) {
-				secretWriteTimes.capture(obj)
-			},
-
-			OnObservedChange: observedChangeHandler(client, secretWriteTimes.observeChange, cronJobScheduleObservations.observeChange),
-
-			OnChange: func(change k8score.ResourceChange, obj, oldObj any) {
-				if DebugEvents && change.Operation == "add" &&
-					(change.Kind == "Pod" || change.Kind == "Deployment" || change.Kind == "Service") {
-					log.Printf("[DEBUG] enqueueChange: %s add %s/%s", change.Kind, change.Namespace, change.Name)
-				}
-
-				// Record to timeline store
-				recordToTimelineStore(recordClusterContext, change.Kind, change.Namespace, change.Name, change.UID, change.Operation, oldObj, obj, change.Diff, true)
-			},
-
-			OnEventChange: func(obj any, op string) {
-				// Event deletes are not recorded to timeline — events represent
-				// things that happened and should remain in history.
-				if op == "delete" {
-					return
-				}
-				recordK8sEventToTimeline(recordClusterContext, obj)
-			},
-
-			OnDrop: func(kind, ns, name, reason, op string) {
-				timeline.RecordDrop(kind, ns, name, reason, op, recordClusterContext)
-				if DebugEvents {
-					log.Printf("[DEBUG] Change dropped: %s/%s/%s reason=%s op=%s", kind, ns, name, reason, op)
-				}
-			},
-
-			ComputeDiff: func(kind string, oldObj, newObj any) *k8score.DiffInfo {
-				return ComputeDiff(kind, oldObj, newObj)
-			},
-
+			OnTransform:     secretWriteTimes.capture,
 			IsNoisyResource: isNoisyResource,
 		}
+		conn.configureTypedCallbacks(&cfg, observedChangeHandler(client, secretWriteTimes.observeChange, cronJobScheduleObservations.observeChange))
 
 		wrapped := &ResourceCache{
 			permissionResult:            clonePermissionCheckResult(permResult),
@@ -505,15 +486,17 @@ func InitResourceCache(ctx context.Context) error {
 			argoDrift:                   newArgoDriftTracker(),
 			cronJobScheduleObservations: cronJobScheduleObservations,
 			secretWriteTimes:            secretWriteTimes,
-			generation:                  gen,
+			generation:                  clusterBuildSequence.Add(1),
 		}
 		// OnInformersStarted runs synchronously inside NewResourceCache, so
-		// wrapped.ResourceCache is visible-before-publication under cacheMu.
+		// wrapped.ResourceCache is visible-before-publication under the lifecycle lock.
 		var stopOnCancel func() bool
 		cfg.OnInformersStarted = func(syncing *k8score.ResourceCache) {
 			stopOnCancel = context.AfterFunc(ctx, syncing.Stop)
 			wrapped.ResourceCache = syncing
-			publishSyncingCache(wrapped, gen)
+			if !state.publishSyncing(wrapped) {
+				syncing.Stop()
+			}
 		}
 		cfg.DebugSyncDelays = parseDebugSyncDelays(os.Getenv("RADAR_DEBUG_SYNC_DELAY"))
 
@@ -528,7 +511,7 @@ func InitResourceCache(ctx context.Context) error {
 			err = ctx.Err()
 		}
 		if err != nil {
-			clearSyncingCacheForGen(gen)
+			state.clearSyncing()
 			initErr = err
 			return
 		}
@@ -541,8 +524,7 @@ func InitResourceCache(ctx context.Context) error {
 			wrapped.ResourceCache = core
 		}
 
-		if !promoteCache(wrapped, gen, core.IsSyncComplete()) {
-			core.Stop()
+		if !state.promote(wrapped, core.IsSyncComplete()) {
 			initErr = fmt.Errorf("cluster changed during cache initialization")
 			return
 		}
@@ -550,54 +532,82 @@ func InitResourceCache(ctx context.Context) error {
 	return initErr
 }
 
-// claimCacheInit snapshots the init Once and the generation it belongs to in
-// one critical section. Sampling the generation inside Do instead would let a
-// context switch landing between the Once load and the snapshot hand an old
-// cluster's construction the NEW generation — it would then pass every guard
-// and could win promotion over the new cluster's cache.
-func claimCacheInit() (*sync.Once, uint64) {
-	cacheMu.Lock()
-	defer cacheMu.Unlock()
-	return cacheOnce, cacheGeneration
-}
-
-// publishSyncingCache installs wrapped as the mid-sync handle unless the
-// cache generation moved (a context switch invalidated this construction).
-func publishSyncingCache(wrapped *ResourceCache, gen uint64) {
-	cacheMu.Lock()
-	defer cacheMu.Unlock()
-	if cacheGeneration == gen {
-		syncingCache = wrapped
+func (conn *Connection) configureTypedCallbacks(cfg *k8score.CacheConfig, observe func(ResourceChange, any, any)) {
+	state := conn.cacheState()
+	cluster := TimelineClusterContext(conn.ContextName())
+	binding := timeline.CaptureStore()
+	cfg.ComputeDiff = state.computeDiff
+	cfg.SyncProgress = func(synced, total int, minimalReady bool) {
+		state.whileOpen(func() { emitSyncProgress(synced, total, minimalReady) })
+	}
+	cfg.OnReceived = func(kind string) {
+		state.whileOpen(func() { timeline.IncrementReceived(kind) })
+	}
+	cfg.OnObservedChange = func(change ResourceChange, obj, oldObj any) {
+		state.whileOpen(func() { observe(change, obj, oldObj) })
+	}
+	cfg.OnChange = func(change ResourceChange, obj, oldObj any) {
+		state.whileOpen(func() {
+			if DebugEvents && change.Operation == "add" &&
+				(change.Kind == "Pod" || change.Kind == "Deployment" || change.Kind == "Service") {
+				log.Printf("[DEBUG] enqueueChange: %s add %s/%s", change.Kind, change.Namespace, change.Name)
+			}
+			state.recordToTimelineStore(binding, cluster, change.Kind, change.Namespace, change.Name, change.UID, change.Operation, oldObj, obj, change.Diff, true)
+		})
+	}
+	cfg.OnEventChange = func(obj any, op string) {
+		// Deleting the Kubernetes Event does not erase the occurrence from history.
+		if op != "delete" {
+			state.whileOpen(func() { state.recordK8sEventToTimeline(binding.Store(), cluster, obj) })
+		}
+	}
+	cfg.OnDrop = func(kind, ns, name, reason, op string) {
+		state.whileOpen(func() {
+			timeline.RecordDrop(kind, ns, name, reason, op, cluster)
+			if DebugEvents {
+				log.Printf("[DEBUG] Change dropped: %s/%s/%s reason=%s op=%s", kind, ns, name, reason, op)
+			}
+		})
 	}
 }
 
-// clearSyncingCacheForGen retires the mid-sync handle after a failed
-// construction — but only for its own generation, so a stale failure can't
-// clear a newer construction's handle.
-func clearSyncingCacheForGen(gen uint64) {
-	cacheMu.Lock()
-	defer cacheMu.Unlock()
-	if cacheGeneration == gen {
-		syncingCache = nil
-	}
-}
-
-// promoteCache installs wrapped as the ready singleton, retires the mid-sync
-// handle, and records the sync-completion flag — all inside the same
-// generation-checked critical section, so a context reset can never interleave
-// between promotion and the completion write and leave a stale flag behind.
-// Returns false when the generation moved — the caller owns stopping the
-// now-orphaned core.
-func promoteCache(wrapped *ResourceCache, gen uint64, syncComplete bool) bool {
-	cacheMu.Lock()
-	defer cacheMu.Unlock()
-	if cacheGeneration != gen {
+func (s *connectionCache) publishSyncing(cache *ResourceCache) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
 		return false
 	}
-	resourceCache.Store(wrapped)
-	syncingCache = nil
-	initialSyncComplete.Store(syncComplete)
+	s.syncing = cache
 	return true
+}
+
+func (s *connectionCache) clearSyncing() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.syncing = nil
+}
+
+func (s *connectionCache) promote(cache *ResourceCache, complete bool) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		cache.Stop()
+		return false
+	}
+	s.promoted.Store(cache)
+	s.syncing = nil
+	s.initialSyncComplete.Store(complete)
+	return true
+}
+
+func (c *Connection) cacheIsCurrent() bool {
+	if c == nil {
+		return false
+	}
+	state := c.cacheState()
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+	return !state.closed && c == Current()
 }
 
 // parseDebugSyncDelays parses RADAR_DEBUG_SYNC_DELAY — a development seam for
@@ -632,9 +642,26 @@ func parseDebugSyncDelays(raw string) map[string]time.Duration {
 	return delays
 }
 
-// GetResourceCache returns the singleton cache instance.
+// GetResourceCache returns the installed connection's promoted cache.
 func GetResourceCache() *ResourceCache {
-	return resourceCache.Load()
+	return Current().ResourceCache()
+}
+
+// ResourceCache returns the connection's promoted typed cache, or nil.
+func (c *Connection) ResourceCache() *ResourceCache {
+	if c == nil {
+		return nil
+	}
+	return c.cacheState().promoted.Load()
+}
+
+// CustomResourcesPending reports the typed-only window after the API discovery wait expires.
+func (c *ResourceCache) CustomResourcesPending() bool {
+	return c.customResourcesPending(GetDynamicResourceCache())
+}
+
+func (c *ResourceCache) customResourcesPending(dynamicCache *DynamicResourceCache) bool {
+	return c != nil && c.apiDiscoveryPending.Load() && dynamicCache == nil
 }
 
 // KindReadiness re-exports the k8score readiness vocabulary for handler use.
@@ -651,9 +678,8 @@ const (
 // OnInformersStarted, or nil when no construction is in flight. Reads through
 // it MUST gate on KindReadinessFor — its listers are incomplete by definition.
 func GetSyncingResourceCache() *ResourceCache {
-	cacheMu.Lock()
-	defer cacheMu.Unlock()
-	return syncingCache
+	_, syncing := SnapshotCaches()
+	return syncing
 }
 
 // SnapshotCaches returns the promoted singleton and the mid-sync handle as
@@ -661,9 +687,14 @@ func GetSyncingResourceCache() *ResourceCache {
 // run concurrently with promotion and reset, so loading the two pointers
 // separately could observe promotion half-applied (both set, or neither).
 func SnapshotCaches() (promoted, syncing *ResourceCache) {
-	cacheMu.Lock()
-	defer cacheMu.Unlock()
-	return resourceCache.Load(), syncingCache
+	conn := Current()
+	if conn == nil {
+		return nil, nil
+	}
+	state := conn.cacheState()
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+	return state.promoted.Load(), state.syncing
 }
 
 // ReadableCacheForKind picks the cache a typed-kind read should serve from:
@@ -683,48 +714,42 @@ func ReadableCacheForKind(key string) (*ResourceCache, KindReadiness) {
 	return nil, KindUnavailable
 }
 
-// ResetResourceCache stops and clears the resource cache so it can be
-// reinitialized for a new cluster after context switch.
+// ResetResourceCache closes the installed connection's cache. A construction
+// still inside NewResourceCache stops its own core when publication is refused.
 func ResetResourceCache() {
-	cacheMu.Lock()
-	defer cacheMu.Unlock()
+	Current().closeResourceCache()
+}
 
-	// Invalidate any in-flight construction: its publishes become no-ops and
-	// its core is stopped on return (see the generation check in
-	// InitResourceCache).
-	cacheGeneration++
-	if syncingCache != nil {
-		syncingCache.Stop()
-		syncingCache = nil
+func (conn *Connection) closeResourceCache() {
+	if conn == nil {
+		return
 	}
-	// Detach before stopping: readers are lock-free, so publishing nil first
-	// shrinks the window where a request can pick up a cache whose informers
-	// are already shutting down. (A handle loaded just before this point can
-	// still serve its one request — listers stay readable after Stop.)
-	if promoted := resourceCache.Swap(nil); promoted != nil {
+	s := conn.cacheState()
+	s.closeCallbacks()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.syncing != nil {
+		s.syncing.Stop()
+		s.syncing = nil
+	}
+	// Detach before stopping so a new reader won't pick up a retiring cache.
+	if promoted := s.promoted.Swap(nil); promoted != nil {
 		promoted.Stop()
 	}
-	cacheOnce = new(sync.Once)
-	initialSyncComplete.Store(false)
-	resetRecreateStash()
-	// Tombstone keys are UID-first, falling back to an apiVersion|kind|ns|name
-	// composite (no cluster context) when a source lacks a UID; a leftover
-	// UID-less entry could mis-enrich a same-named resource on the next cluster.
-	// Drop them all in place (not a var reassignment) so concurrent informer
-	// readers of the stable pointer don't race with the reset.
-	tombstones.Clear()
+	s.initialSyncComplete.Store(false)
+	s.recreates.clear()
+	s.tombstones.Clear()
 }
 
 // recordK8sEventToTimeline records a K8s Event to the timeline store.
 // clusterContext is the wiring-time capture (see InitResourceCache), not the
 // live active context — a late callback must stamp the cluster it came from.
-func recordK8sEventToTimeline(clusterContext string, obj any) {
+func (state *connectionCache) recordK8sEventToTimeline(store timeline.EventStore, clusterContext string, obj any) {
 	event, ok := obj.(*corev1.Event)
 	if !ok {
 		return
 	}
 
-	store := timeline.GetStore()
 	if store == nil {
 		timeline.RecordDrop("K8sEvent:"+event.InvolvedObject.Kind, event.InvolvedObject.Namespace, event.InvolvedObject.Name, timeline.DropReasonStoreDown, "add", clusterContext)
 		return
@@ -734,7 +759,7 @@ func recordK8sEventToTimeline(clusterContext string, obj any) {
 		timeline.IncrementReceived("K8sEvent:" + event.InvolvedObject.Kind)
 	}
 
-	owner, labels, createdAt, ownerEvidence := enrichInvolvedObject(event)
+	owner, labels, createdAt, ownerEvidence := state.enrichInvolvedObject(event)
 
 	timelineEvent := timeline.NewK8sEventTimelineEvent(event, owner)
 	timelineEvent.OwnerEvidence = ownerEvidence
@@ -743,7 +768,10 @@ func recordK8sEventToTimeline(clusterContext string, obj any) {
 	timelineEvent.ClusterContext = clusterContext
 
 	ctx := context.Background()
-	if err := timeline.RecordEvent(ctx, timelineEvent); err != nil {
+	if err := store.Append(ctx, timelineEvent); err != nil {
+		if storeRetired(err) {
+			return
+		}
 		log.Printf("Warning: failed to record K8s event to timeline store: %v", err)
 		timeline.RecordDrop("K8sEvent:"+event.InvolvedObject.Kind, event.InvolvedObject.Namespace, event.InvolvedObject.Name, timeline.DropReasonStoreFailed, "add", clusterContext)
 	} else if DebugEvents {
@@ -758,15 +786,15 @@ func recordK8sEventToTimeline(clusterContext string, obj any) {
 // has already left the cache. The evidence says which happened: the subject
 // was found, missed, or can't be identified at all because the event carries
 // no UID for it.
-func enrichInvolvedObject(event *corev1.Event) (owner *timeline.OwnerInfo, labels map[string]string, createdAt *time.Time, evidence timeline.OwnerEvidence) {
+func (state *connectionCache) enrichInvolvedObject(event *corev1.Event) (owner *timeline.OwnerInfo, labels map[string]string, createdAt *time.Time, evidence timeline.OwnerEvidence) {
 	subject := timeline.K8sEventSubject(event)
 	if subject.UID == "" {
 		return nil, nil, nil, timeline.OwnerUnidentified
 	}
-	if o, l, c, ok := liveInvolvedObject(subject); ok {
+	if o, l, c, ok := liveInvolvedObject(state.promoted.Load(), subject); ok {
 		return o, l, c, timeline.OwnerEnriched
 	}
-	if entry, ok := tombstones.Get(subject.UID, event.InvolvedObject.APIVersion, subject.Kind, subject.Namespace, subject.Name); ok {
+	if entry, ok := state.tombstones.Get(subject.UID, event.InvolvedObject.APIVersion, subject.Kind, subject.Namespace, subject.Name); ok {
 		return entry.Owner, entry.Labels, entry.CreatedAt, timeline.OwnerEnriched
 	}
 	return nil, nil, nil, timeline.OwnerMissed
@@ -780,8 +808,7 @@ func enrichInvolvedObject(event *corev1.Event) (owner *timeline.OwnerInfo, label
 // names that exact object: the built-in group and the object's UID. Otherwise a
 // same-named object of another group, or a replacement incarnation, would lend
 // its owner to an event about something else.
-func liveInvolvedObject(subject resourceid.Reference) (owner *timeline.OwnerInfo, labels map[string]string, createdAt *time.Time, ok bool) {
-	cache := GetResourceCache()
+func liveInvolvedObject(cache *ResourceCache, subject resourceid.Reference) (owner *timeline.OwnerInfo, labels map[string]string, createdAt *time.Time, ok bool) {
 	if cache == nil || subject.UID == "" || !subject.HasGroup() {
 		return nil, nil, nil, false
 	}
@@ -950,8 +977,8 @@ func generationBumpSignalsSpecChange(kind string, oldObj, newObj any) bool {
 // isSyncAdd reports whether an add is an object that already existed rather
 // than one just created: everything listed before the initial sync completes,
 // and adds for objects older than 30s (a relist after a watch gap).
-func isSyncAdd(obj any) bool {
-	if !initialSyncComplete.Load() {
+func (state *connectionCache) isSyncAdd(obj any) bool {
+	if !state.initialSyncComplete.Load() {
 		return true
 	}
 	if meta, ok := obj.(metav1.Object); ok {
@@ -1014,7 +1041,7 @@ func timelineUpdateDiff(kind string, oldObj, newObj any, precomputedDiff *DiffIn
 // diffPrecomputed=true so we don't recompute the identical diff on the hottest
 // per-update path; callers without one (tests, non-cache paths) pass nil +
 // false and the diff is computed here.
-func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string, oldObj, newObj any, precomputedDiff *DiffInfo, diffPrecomputed bool) {
+func (state *connectionCache) recordToTimelineStore(binding *timeline.StoreBinding, clusterContext, kind, namespace, name, uid, op string, oldObj, newObj any, precomputedDiff *DiffInfo, diffPrecomputed bool) {
 	obj := newObj
 	if obj == nil {
 		obj = oldObj
@@ -1046,14 +1073,14 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 		serviceAccountTokenUpdate = secretType == string(corev1.SecretTypeServiceAccountToken)
 	}
 
-	store := timeline.GetStore()
+	store := binding.Store()
 	if store == nil {
 		if serviceAccountTokenUpdate {
 			timeline.RecordDrop(kind, namespace, name, timeline.DropReasonNoisyFilter, op, clusterContext)
 			return
 		}
 		if op == "delete" {
-			timeline.NoteDeletedWhileUnavailable(clusterContext, apiGroup, kind, namespace, name)
+			binding.NoteDeletedWhileUnavailable(clusterContext, apiGroup, kind, namespace, name)
 		}
 		// No store means a configured backend could not be opened. Count the
 		// change the same way a failed write is counted, so a timeline that is
@@ -1061,7 +1088,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 		// watches. Objects listed at startup and updates with nothing to record
 		// (heartbeats) would not have been recorded either, so they are not
 		// counted as lost.
-		if op == "add" && isSyncAdd(obj) {
+		if op == "add" && state.isSyncAdd(obj) {
 			return
 		}
 		if op == "update" && oldObj != nil && newObj != nil {
@@ -1094,7 +1121,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	}
 
 	if op == "delete" {
-		stashDeletedForRecreate(apiGroup, kind, namespace, name, uid, obj)
+		state.recreates.stashDeletedForRecreate(apiGroup, kind, namespace, name, uid, obj)
 	}
 
 	// One extraction of owner/labels/createdAt, reused for both the event and
@@ -1116,7 +1143,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	// empty entry, and storing it would clobber the enrichment a prior good
 	// entry was preserving.
 	if name != "" && extracted {
-		tombstones.Put(uid, apiVersion, kind, namespace, name, entry)
+		state.tombstones.Put(uid, apiVersion, kind, namespace, name, entry)
 	}
 	if serviceAccountTokenUpdate {
 		timeline.RecordDrop(kind, namespace, name, timeline.DropReasonNoisyFilter, op, clusterContext)
@@ -1151,9 +1178,9 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	// (namespace re-apply) would otherwise emit a status-only "recreated
 	// with changes" entry that reads as a config change.
 	recreated := false
-	if op == "add" && newObj != nil && initialSyncComplete.Load() {
+	if op == "add" && newObj != nil && state.initialSyncComplete.Load() {
 		if meta, ok := newObj.(metav1.Object); ok && time.Since(meta.GetCreationTimestamp().Time) <= 30*time.Second {
-			if stashed, ok := takeRecreateMatch(apiGroup, kind, namespace, name, uid); ok {
+			if stashed, ok := state.recreates.takeRecreateMatch(apiGroup, kind, namespace, name, uid); ok {
 				if localDiff := ComputeDiff(kind, stripStatusForRecreateDiff(stashed), stripStatusForRecreateDiff(newObj)); localDiff != nil && len(localDiff.Fields) > 0 {
 					diff = toTimelineDiff(withRecreatedBindingSnapshot(kind, newObj, localDiff))
 					diff.Summary = "recreated with changes: " + localDiff.Summary
@@ -1192,13 +1219,16 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	}
 
 	if op == "add" {
-		if isSyncAdd(obj) {
+		if state.isSyncAdd(obj) {
 			if DebugEvents {
 				log.Printf("[DEBUG] Skipping sync add event: %s/%s/%s (extracted %d historical events)", kind, namespace, name, len(events))
 			}
 			if len(events) > 0 {
 				ctx := context.Background()
-				if err := timeline.RecordEvents(ctx, events); err != nil {
+				if err := store.AppendBatch(ctx, events); err != nil {
+					if storeRetired(err) {
+						return
+					}
 					log.Printf("Warning: failed to record historical events: %v", err)
 					timeline.RecordDrop(kind, namespace, name, timeline.DropReasonStoreFailed, op, clusterContext)
 					return
@@ -1212,7 +1242,10 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	events = append(events, event)
 
 	ctx := context.Background()
-	if err := timeline.RecordEvents(ctx, events); err != nil {
+	if err := store.AppendBatch(ctx, events); err != nil {
+		if storeRetired(err) {
+			return
+		}
 		log.Printf("Warning: failed to record to timeline store: %v", err)
 		timeline.RecordDrop(kind, namespace, name, timeline.DropReasonStoreFailed, op, clusterContext)
 		return
@@ -1223,6 +1256,14 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	if op == "add" {
 		store.MarkResourceSeen(clusterContext, apiGroup, kind, namespace, name)
 	}
+}
+
+// storeRetired reports a write rejected because a switch already closed the
+// store this cache was built with. Nothing was lost for the cluster being
+// served, so it isn't a drop: recording one would count against the
+// replacement's coverage.
+func storeRetired(err error) bool {
+	return errors.Is(err, fs.ErrClosed)
 }
 
 func isUnstructuredUpdate(oldObj, newObj any) bool {
@@ -2469,10 +2510,10 @@ func probeCachePermissions(ctx context.Context, probe func(context.Context, bool
 
 // freshResourcePermissions is the startup probe. It publishes nothing: startup
 // publishes the result it picks. A retry bypasses the cached result, which may
-// hold the very rejection being retried, without bumping the generation, so
+// hold the very rejection being retried, without replacing it, so
 // the first result can still be published if the retry is discarded.
-func freshResourcePermissions(ctx context.Context, retry bool) permissionProbe {
-	return probeResourcePermissions(ctx, retry, GetInformerDynamicClient)
+func (c *Connection) freshResourcePermissions(ctx context.Context, retry bool) permissionProbe {
+	return c.probeResourcePermissions(ctx, retry, c.InformerDynamicClient())
 }
 
 // credentialsRejectedEverywhere reports a probe in which no kind

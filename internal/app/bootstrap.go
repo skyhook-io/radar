@@ -355,7 +355,8 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 	})
 
 	// Initialize Prometheus metrics client (must come before SetManualURL)
-	prometheuspkg.Initialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
+	conn := k8s.Current()
+	prometheuspkg.Initialize(conn.ClientInterface(), conn.Config(), conn.ContextName())
 	prometheuspkg.RegisterRediscoverySignals()
 
 	if cfg.PrometheusURL != "" {
@@ -409,7 +410,8 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 				traffic.SetMetricsConfig(selection.Settings.Prometheus.URL, selection.Settings.Prometheus.Headers)
 			}
 		}
-		return traffic.ReinitializeWithConfig(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
+		conn := k8s.Current()
+		return traffic.ReinitializeWithConfig(conn.ClientInterface(), conn.Config(), conn.ContextName())
 	})
 
 	// Shared installations: Reinitialize carries the current manual URL + headers
@@ -430,14 +432,16 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 			if cfg.LocalConnections.HasLaunchOverride(config.IntegrationMetrics) && selection.View.State != "launch" {
 				log.Printf("[prometheus] --prometheus-url applies only to the context Radar was launched on; %q uses its own metrics settings", k8s.SanitizeForLog(k8s.GetContextName()))
 			}
-			prometheuspkg.Reinitialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
+			conn := k8s.Current()
+			prometheuspkg.Reinitialize(conn.ClientInterface(), conn.Config(), conn.ContextName())
 			url, headers := prometheuspkg.CurrentConfig()
 			if url != strings.TrimRight(selection.Settings.Prometheus.URL, "/") || !maps.Equal(headers, selection.Settings.Prometheus.Headers) {
 				prometheuspkg.Configure(selection.Settings.Prometheus.URL, selection.Settings.Prometheus.Headers)
 			}
 			return nil
 		}
-		prometheuspkg.Reinitialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
+		conn := k8s.Current()
+		prometheuspkg.Reinitialize(conn.ClientInterface(), conn.Config(), conn.ContextName())
 		return nil
 	})
 	k8s.RegisterCostResetFunc(internalopencost.Reset)
