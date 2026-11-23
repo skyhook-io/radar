@@ -136,7 +136,8 @@ describe('VulnerabilitiesView', () => {
 
   it('counts the exposed workloads beside the mark on rows that span workloads', () => {
     render('/checks/vulnerabilities')
-    expect(container.textContent).toMatch(/1 of \d+ exposed/)
+    expect(container.textContent).toContain('1 exposed')
+    expect(container.textContent).not.toMatch(/\d+ of \d+ exposed/)
     render('/checks/vulnerabilities', false)
     expect(container.textContent).not.toContain('exposed')
   })

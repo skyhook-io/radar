@@ -248,8 +248,8 @@ export function exposedCountTip(exposed: ExposedWorkload[], exposedTotal: number
 }
 
 /**
- * "3 of 8 exposed" with the mark, for a row that counts its exposed
- * workloads ("1 exposed workload" where the row counts containers);
+ * "3 exposed" with the mark, under a row's workload count ("1 exposed
+ * workload" where the row counts containers);
  * "Exposure unknown" when none is known exposed but some may be; nothing
  * otherwise.
  */
@@ -264,7 +264,9 @@ export function ExposedCount({ exposed, total, workloads, unknown }: { exposed?:
     )
   }
   const tip = exposedCountTip(exposed ?? [], total, workloads)
-  const text = workloads === undefined ? `${total} exposed ${total === 1 ? 'workload' : 'workloads'}` : `${total} of ${workloads} exposed`
+  // Under a workload count the total is already on screen, so the line
+  // says only how many are exposed; the tooltip says "N of M".
+  const text = workloads === undefined ? `${total} exposed ${total === 1 ? 'workload' : 'workloads'}` : `${total} exposed`
   return (
     <WithTooltip tip={tip}>
       <span className="inline-flex items-center gap-1 whitespace-nowrap text-xs text-theme-text-secondary" aria-label={tip}>

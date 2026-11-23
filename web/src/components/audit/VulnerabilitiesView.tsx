@@ -109,8 +109,8 @@ const TRIVY_INSTALL_URL = 'https://aquasecurity.github.io/trivy-operator/latest/
 // detail lines up under the column it belongs to. Short values get fixed
 // tracks; the text columns take the rest.
 const IMAGE_COLS = 'grid-cols-[minmax(220px,1.6fr)_minmax(180px,1.2fr)_88px_minmax(0,2fr)_72px]'
-const FIX_COLS = 'grid-cols-[minmax(200px,1.2fr)_minmax(220px,1.5fr)_120px_minmax(0,1.6fr)_64px_112px]'
-const CVE_COLS = 'grid-cols-[minmax(260px,1.6fr)_80px_48px_minmax(200px,1.6fr)_56px_64px_112px]'
+const FIX_COLS = 'grid-cols-[minmax(200px,1.2fr)_minmax(220px,1.5fr)_120px_minmax(0,1.6fr)_64px_80px]'
+const CVE_COLS = 'grid-cols-[minmax(260px,1.6fr)_80px_48px_minmax(200px,1.6fr)_56px_64px_80px]'
 const WORKLOAD_COLS = 'grid-cols-[minmax(200px,1.4fr)_minmax(180px,1.2fr)_minmax(0,2.4fr)]'
 // With the route column, shown only when the answer reports exposure.
 const WORKLOAD_ROUTE_COLS = 'grid-cols-[minmax(200px,1.4fr)_minmax(180px,1.2fr)_minmax(180px,1.2fr)_minmax(0,2fr)]'
