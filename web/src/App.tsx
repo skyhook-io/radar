@@ -1156,6 +1156,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   }>({ changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null })
   const cnpgInvalidationPendingRef = useRef(false)
   const veleroInvalidationPendingRef = useRef(false)
+  const kagentInvalidationPendingRef = useRef(false)
   const slowInvalidationRef = useRef<{
     updatedKinds: Set<string>    // update-only churn → throttled list + dashboard
     gitopsRowsChanged: boolean   // Argo/Flux row and source kinds → GitOps table rows
@@ -1191,6 +1192,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
     if (event.group?.endsWith('.cnpg.io')) cnpgInvalidationPendingRef.current = true
     if (event.group === 'velero.io') veleroInvalidationPendingRef.current = true
+    if (event.group === 'api.kagent.dev' || event.kind === 'Namespace') kagentInvalidationPendingRef.current = true
 
     const fast = fastInvalidationRef.current
     fast.changedKinds.add(kind)
@@ -1252,6 +1254,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           veleroInvalidationPendingRef.current = false
           queryClient.invalidateQueries({ queryKey: ['velero', 'workspace'] })
           queryClient.invalidateQueries({ queryKey: ['velero', 'schedule-activity'] })
+        }
+        if (kagentInvalidationPendingRef.current) {
+          kagentInvalidationPendingRef.current = false
+          queryClient.invalidateQueries({ queryKey: ['kagent', 'workspace'] })
+          queryClient.invalidateQueries({ queryKey: ['substrate', getApiBase()], predicate: q => q.queryKey[3] === 'kagent-summary' })
         }
         fastInvalidationRef.current = { changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
       }, 3000)

@@ -1,9 +1,9 @@
 import { beforeEach, expect, it, vi } from 'vitest'
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
+import { QueryClient, useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { fetchJSON } from './client'
 import { useKagentSessionSummary, useKagentWorkspace } from './kagent'
 const state = vi.hoisted(() => ({ workspace: 'supported', sessions: 'supported', context: 'one', base: '/api' }))
-vi.mock('@tanstack/react-query', () => ({ useQuery: vi.fn(() => ({})), useInfiniteQuery: vi.fn(() => ({})) }))
+vi.mock('@tanstack/react-query', async (original) => ({ ...(await original<typeof import('@tanstack/react-query')>()), useQuery: vi.fn(() => ({})), useInfiniteQuery: vi.fn(() => ({})) }))
 vi.mock('./config', () => ({ getApiBase: () => state.base }))
 vi.mock('./client', () => ({
   fetchJSON: vi.fn(),
@@ -56,6 +56,21 @@ it('pages the fleet summary instead of treating its first 1000 Agents as the fle
   expect(next({ offset: 0, rows: Array(1000), total: 1001 })).toBe(1000)
   expect(next({ offset: 1000, rows: [1], total: 1001 })).toBeUndefined()
   expect(next({ offset: 0, rows: [], total: 1001 })).toBeUndefined()
+})
+
+it('invalidates session summaries with the saved Substrate connection, only for that API host', async () => {
+  const client = new QueryClient()
+  useKagentSessionSummary([])
+  const first = vi.mocked(useInfiniteQuery).mock.calls.at(-1)![0].queryKey
+  state.base = '/other'
+  useKagentSessionSummary([])
+  const other = vi.mocked(useInfiniteQuery).mock.calls.at(-1)![0].queryKey
+  client.setQueryData(first, { rows: [] })
+  client.setQueryData(other, { rows: [] })
+  await client.invalidateQueries({ queryKey: ['substrate', '/api'] })
+  expect(client.getQueryState(first)?.isInvalidated).toBe(true)
+  expect(client.getQueryState(other)?.isInvalidated).toBe(false)
+  client.clear()
 })
 
 

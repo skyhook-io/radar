@@ -212,7 +212,7 @@ export function useKagentSessionSummary(namespaces: string[], enabled = true) {
   const { data: cluster } = useClusterInfo()
   const scope = [...namespaces].sort().join(',')
   return useInfiniteQuery({
-    queryKey: ['kagent', 'sessions', getApiBase(), cluster?.context, scope, ...feature.gatedKey],
+    queryKey: ['substrate', getApiBase(), cluster?.context, 'kagent-summary', scope, ...feature.gatedKey],
     initialPageParam: 0,
     queryFn: ({ signal, pageParam }) =>
       feature.guard(() =>
