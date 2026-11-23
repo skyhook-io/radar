@@ -3,7 +3,7 @@ import { useLocation } from 'react-router-dom'
 import { Bot } from 'lucide-react'
 import type { SidebarCategoryWorkspace } from '@skyhook-io/k8s-ui'
 import type { APIResource } from '../../types'
-import { useRadarFeature } from '../../api/client'
+import { useCapabilities, useRadarFeature } from '../../api/client'
 import { useKagentWorkspace } from '../../api/kagent'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { AGENTS_SIDEBAR_CATEGORY } from '../workspace/sidebar'
@@ -25,10 +25,11 @@ export function useKagentSidebarWorkspace({
   const served = kagentAgentsServed(apiResources)
   const feature = useRadarFeature('kagentWorkspace')
   const sessions = useRadarFeature('kagentSessionSummary')
+  const { isPending: checking } = useCapabilities()
   const workspace = useKagentWorkspace(namespaces, served)
   const ready = feature.support === 'supported'
   return useMemo(() => {
-    if (!served) return undefined
+    if (!served || checking && (feature.support === 'unknown' || sessions.support === 'unknown')) return undefined
     const count = workspace.data?.counts.findings
     const destination = (id: string, label: string, path: string, kind?: typeof KAGENT_AGENT_KIND) => ({
       id: `kagent-${id}`,
@@ -75,5 +76,5 @@ export function useKagentSidebarWorkspace({
           : [destination('agents', 'Agents', KAGENT_GENERIC_AGENTS_PATH, KAGENT_AGENT_KIND)],
       },
     }
-  }, [served, ready, workspace.data, location.pathname, location.search, navigate, sessions.support, namespaces.join(',')])
+  }, [served, ready, feature.support, checking, workspace.data, location.pathname, location.search, navigate, sessions.support, namespaces.join(',')])
 }

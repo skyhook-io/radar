@@ -1,4 +1,5 @@
 import { useLocation } from 'react-router-dom'
+import { PaneLoader } from '@skyhook-io/k8s-ui'
 import { useAPIResources } from '../../api/apiResources'
 import { useCapabilities, useRadarFeature } from '../../api/client'
 import { useKagentWorkspace, type KagentRef } from '../../api/kagent'
@@ -44,6 +45,8 @@ export function KagentView({ namespaces, onOpenResource }: WorkspaceScreenProps)
         : route.screen === 'mcpservers'
           ? 'remotemcpservers'
           : undefined)
+  if (feature.support === 'unknown' && checking)
+    return <PaneLoader label="Checking kagent workspace support…" className="flex-1" />
   return (
     <WorkspaceFrame
       namespaces={namespaces}

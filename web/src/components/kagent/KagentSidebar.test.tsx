@@ -10,11 +10,12 @@ import { blockedWorkspace } from './workspace.fixtures'
 import { liveWorkspace } from '../agentsandbox/workspace.fixtures'
 import { useKagentSidebarWorkspace } from './useKagentSidebarWorkspace'
 
-const state = vi.hoisted(() => ({ sandbox: undefined as AgentSandboxWorkspaceResponse | undefined, support: 'supported', sessionsSupport: 'supported' }))
+const state = vi.hoisted(() => ({ sandbox: undefined as AgentSandboxWorkspaceResponse | undefined, support: 'supported', sessionsSupport: 'supported', checking: false }))
 
 vi.mock('../../api/client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/client')>()),
   useRadarFeature: (feature: string) => ({ support: feature === 'kagentSessionSummary' ? state.sessionsSupport : state.support }),
+  useCapabilities: () => ({ isPending: state.checking }),
 }))
 vi.mock('../../api/agentSandbox', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/agentSandbox')>()),
@@ -37,7 +38,7 @@ const SANDBOX_KINDS = [
   crd('extensions.agents.x-k8s.io', 'SandboxTemplate', 'sandboxtemplates'),
 ]
 
-function render(apiResources: APIResource[]) {
+function render(apiResources: APIResource[], path = '/kagent') {
   let workspaces: Record<string, SidebarCategoryWorkspace> | undefined
   function Host() {
     const sandbox = useAgentSandboxSidebarWorkspace({ apiResources, namespaces: [] })
@@ -48,7 +49,7 @@ function render(apiResources: APIResource[]) {
     )
   }
   const html = renderToStaticMarkup(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[path]}>
       <Host />
     </MemoryRouter>,
   ).replace(/<!-- -->/g, '')
@@ -56,6 +57,17 @@ function render(apiResources: APIResource[]) {
 }
 
 describe('kagent in the sidebar', () => {
+  it('waits for capability detection, then exposes the same destinations on Overview and Agent pages', () => {
+    state.checking = true
+    state.support = state.sessionsSupport = 'unknown'
+    expect(render(KAGENT_KINDS).agents).toBeUndefined()
+    state.support = 'supported'
+    expect(render(KAGENT_KINDS).agents).toBeUndefined()
+    state.checking = false
+    state.sessionsSupport = 'supported'
+    for (const path of ['/kagent', '/kagent/agents/agents/helper'])
+      expect(render(KAGENT_KINDS, path).agents?.destinations.map(d => d.label)).toEqual(['Overview', 'Agents', 'MCP servers', 'Models', 'Sessions →'])
+  })
   it('adds an Agents destination for kagent’s Agent list to the Agents row', () => {
     const { html, agents } = render(KAGENT_KINDS)
     expect(agents?.tools).toBe('kagent')
