@@ -31,7 +31,7 @@ func OpenTelemetryAutoInstrumentationForObject(obj runtime.Object, canRead func(
 		return nil, false
 	}
 	conn := Current()
-	typed, dynamic, discovery := conn.resourceCache(), GetDynamicResourceCache(), conn.Discovery()
+	typed, dynamic, discovery := conn.ResourceCache(), GetDynamicResourceCache(), conn.Discovery()
 	if typed == nil || typed.ResourceCache == nil {
 		return nil, true
 	}

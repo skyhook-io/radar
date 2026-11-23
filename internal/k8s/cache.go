@@ -621,10 +621,11 @@ func parseDebugSyncDelays(raw string) map[string]time.Duration {
 
 // GetResourceCache returns the installed connection's promoted cache.
 func GetResourceCache() *ResourceCache {
-	return Current().resourceCache()
+	return Current().ResourceCache()
 }
 
-func (c *Connection) resourceCache() *ResourceCache {
+// ResourceCache returns the connection's promoted typed cache, or nil.
+func (c *Connection) ResourceCache() *ResourceCache {
 	if c == nil {
 		return nil
 	}

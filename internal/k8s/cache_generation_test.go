@@ -95,7 +95,7 @@ func TestInitResourceCacheProbeFinishesAfterClose(t *testing.T) {
 		t.Fatal("closed construction did not finish")
 	}
 	promoted, syncing := SnapshotCaches()
-	if Current() == old || promoted != nil || syncing != nil || InitialSyncComplete() || old.resourceCache() != nil {
+	if Current() == old || promoted != nil || syncing != nil || InitialSyncComplete() || old.ResourceCache() != nil {
 		t.Fatal("late construction published after the connection was replaced")
 	}
 }

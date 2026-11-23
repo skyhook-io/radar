@@ -76,7 +76,7 @@ func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait
 		return fmt.Errorf("resource cache init failed: %w", err)
 	}
 	logTiming("   Resource cache init: %v", time.Since(t))
-	cache := conn.resourceCache()
+	cache := conn.ResourceCache()
 	if cache != nil {
 		log.Printf("Resource cache initialized with %d resources", cache.GetResourceCount())
 	}

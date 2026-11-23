@@ -106,7 +106,7 @@ func nodeCertificateReports(cache *ResourceCache, scope *DetectScope, now time.T
 		empty := nodeCertificateAssessment{}
 		conn := Current()
 		clusterContext := ActiveClusterContext()
-		if cache == nil || cache != conn.resourceCache() || cache.Nodes() == nil || !cache.IsKindReady(k8score.Nodes) {
+		if cache == nil || cache != conn.ResourceCache() || cache.Nodes() == nil || !cache.IsKindReady(k8score.Nodes) {
 			return empty
 		}
 		nodes, err := cache.Nodes().List(labels.Everything())

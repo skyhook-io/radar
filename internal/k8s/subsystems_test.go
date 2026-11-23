@@ -135,6 +135,8 @@ func TestTrackedSwitchDiscoveryWaitHasOwnBudget(t *testing.T) {
 				if err := InitTestResourceCache(fake.NewSimpleClientset()); err != nil {
 					t.Fatal(err)
 				}
+				// The replacement owns its own cache state; close it while installed.
+				t.Cleanup(ResetResourceCache)
 				// Retiring the cache releases the waiter while discovery is still stalled.
 				for deadline := time.Now().Add(3 * time.Second); cache.apiDiscoveryPending.Load(); {
 					if time.Now().After(deadline) {

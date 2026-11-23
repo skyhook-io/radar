@@ -158,7 +158,7 @@ func (cache *ResourceCache) LastClusterInfo() (ClusterInfo, time.Time) {
 // GetClusterInfo returns detected cluster information
 func GetClusterInfo(ctx context.Context) (*ClusterInfo, error) {
 	conn := Current()
-	initialCache := conn.resourceCache()
+	initialCache := conn.ResourceCache()
 	platform, _ := GetClusterPlatform(ctx)
 
 	info := &ClusterInfo{
