@@ -341,6 +341,16 @@ type rollup struct {
 	// namespace.
 	exposureGaps *Exposure
 	unknownIn    map[string]bool
+	// runningSince is, per image and workload container, the earliest
+	// start of a container running that image's own digest (see
+	// runningSinceOf).
+	runningSince map[sinceKey]time.Time
+}
+
+// sinceKey is one image in one workload container.
+type sinceKey struct {
+	imageID  string
+	workload WorkloadRef
 }
 
 // join matches reports to what runs. A report counts when its scanned object
@@ -457,6 +467,7 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 		j.targetImage[t.key] = t.digest
 	}
 	j.inactiveReports = inactive
+	j.runningSince = j.runningSinceOf()
 	read := 0
 	aggs := j.sortedImages()
 	named, exposed := map[*imageAgg]bool{}, map[*imageAgg]bool{}
@@ -535,6 +546,49 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 	return j, nil
 }
 
+// runningSinceOf is how long each scanned image has run in each workload
+// container: the earliest start among containers whose kubelet-reported
+// digest is the digest the report scanned. A container matched by tag, one
+// that hasn't started, and an image whose report names no digest have none:
+// only the digest says it is the exact build the findings describe.
+func (j *rollup) runningSinceOf() map[sinceKey]time.Time {
+	out := map[sinceKey]time.Time{}
+	for i := range j.targets {
+		t := &j.targets[i]
+		if t.runningSince.IsZero() {
+			continue
+		}
+		id, ok := j.targetImage[t.key]
+		if !ok {
+			continue
+		}
+		if r := j.images[id].report; r.digest == "" || !strings.EqualFold(r.digest, t.digest) {
+			continue
+		}
+		w := t.workload
+		w.Container = t.container
+		k := sinceKey{id, w}
+		out[k] = oldest(out[k], t.runningSince)
+	}
+	return out
+}
+
+// imageRunningSince is the earliest an image has run in any of workloads.
+func (j *rollup) imageRunningSince(id string, workloads []WorkloadRef) *time.Time {
+	var since time.Time
+	for _, w := range workloads {
+		since = oldest(since, j.runningSince[sinceKey{id, w}])
+	}
+	return timePtr(since)
+}
+
+func timePtr(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
+}
+
 // build is the response for the readable reports and the containers that
 // run, grouped by view and narrowed by f. An export lists everything and
 // carries what its CSV needs beyond the wire shape (see exportExtras).
@@ -607,6 +661,7 @@ func buildWithExposure(ctx context.Context, items []*unstructured.Unstructured, 
 	if export {
 		extras.images = j.imageMetas()
 		extras.unread = j.unreadRows(f)
+		extras.runningSince = j.runningSince
 		resp.export = extras
 	}
 	if err := ctx.Err(); err != nil {
@@ -915,7 +970,7 @@ func (j *rollup) imageRows(f Filter) (rows []Image, clean []CleanImage) {
 			ID: r.imageID, Image: cmp.Or(r.image, r.digest), Digest: r.digest, OS: r.os, OSEndOfLife: r.osEOL, Scanner: r.wireScanner(), ScannedAt: r.scannedAt,
 			Counts: counts, Fixable: fixable, Matching: len(matching), FindingsUnread: r.unread,
 			Workloads: m.listed(workloads, j.lim.workloadsPerRow), WorkloadsTotal: len(workloads),
-			FindingsTotal: len(r.findings), Report: r.ref,
+			FindingsTotal: len(r.findings), Report: r.ref, RunningSince: j.imageRunningSince(r.imageID, workloads),
 		}
 		row.Findings = matching[:min(len(matching), j.lim.findingsPerImage)]
 		if row.Findings == nil {
@@ -1212,6 +1267,7 @@ func (j *rollup) workloads(f Filter) (rows, clean, unscanned []Workload) {
 		r := j.images[id].report
 		ts := r.scannedAt
 		c.Scanned, c.ImageID, c.ScannedAt, c.FindingsUnread = true, id, &ts, r.unread
+		c.RunningSince = j.imageRunningSince(id, []WorkloadRef{{Kind: ref.Kind, Group: ref.Group, Namespace: ref.Namespace, Name: ref.Name, Container: t.container}})
 		if r.unread {
 			// Kept so a filter can't rule out findings that weren't read.
 			a.images[id] = true
@@ -1241,12 +1297,17 @@ func (j *rollup) workloads(f Filter) (rows, clean, unscanned []Workload) {
 		a.row.ExposureUnknown = len(routes) == 0 && j.exposureUnknownIn(ref.Namespace)
 		images := make([]string, 0, len(a.row.Containers))
 		allClean := true
+		var since time.Time
 		for _, c := range a.row.Containers {
 			images = append(images, c.Image)
 			if !c.Scanned || c.FindingsUnread || c.Counts == nil || totalCount(*c.Counts) > 0 {
 				allClean = false
 			}
+			if c.RunningSince != nil && c.Counts != nil && totalCount(*c.Counts) > 0 {
+				since = oldest(since, *c.RunningSince)
+			}
 		}
+		a.row.RunningSince = timePtr(since)
 		rowMatched := m.rowMatches(strings.Join(images, " "), []WorkloadRef{ref})
 		slices.SortFunc(a.row.Containers, func(x, y WorkloadContainer) int {
 			return cmp.Or(cmp.Compare(x.Name, y.Name), cmp.Compare(x.Image, y.Image))

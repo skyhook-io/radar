@@ -193,6 +193,12 @@ type Image struct {
 	// read every route kind (Exposure.Gaps): no route seen there is not
 	// "not exposed".
 	ExposureUnknown bool `json:"exposureUnknown,omitempty"`
+	// RunningSince is the earliest start of a container, in any of its
+	// workloads, that reports running this image's digest. A restart or a
+	// rescheduled Pod resets it, so the build has run at least this long.
+	// Absent when no running container reports the digest, or the report
+	// names none.
+	RunningSince *time.Time `json:"runningSince,omitempty"`
 }
 
 // CVE is one vulnerability across every image that carries it.
@@ -268,6 +274,9 @@ type Workload struct {
 	// ExposureUnknown is true when it has no route Radar sees and runs in a
 	// namespace where Radar couldn't read every route kind (Exposure.Gaps).
 	ExposureUnknown bool `json:"exposureUnknown,omitempty"`
+	// RunningSince is the earliest RunningSince of its containers that
+	// carry findings.
+	RunningSince *time.Time `json:"runningSince,omitempty"`
 }
 
 // WorkloadContainer is one container of a workload and an image it runs:
@@ -284,6 +293,9 @@ type WorkloadContainer struct {
 	FindingsUnread bool    `json:"findingsUnread,omitempty"`
 	Counts         *Counts `json:"counts,omitempty"`
 	Fixable        *Counts `json:"fixable,omitempty"`
+	// RunningSince is the earliest start of this container, across the
+	// workload's Pods, running the scanned digest (see Image.RunningSince).
+	RunningSince *time.Time `json:"runningSince,omitempty"`
 }
 
 // CleanImage is a running image whose report has no findings.

@@ -38,10 +38,14 @@ function response(view: VulnerabilitiesResponse['view'], eolCount: number | null
     coverage: { complete: true, gaps: [], inactiveReports: 0 },
     images: [{
       id: 'img', image: 'nginx:1.19.0', os: 'debian 10.4', osEndOfLife: true, scanner: { name: 'Trivy', version: '0.76.1' }, scannedAt: '2026-11-20T12:00:00Z',
-      counts: { ...zero, critical: 1 }, fixable: { ...zero, critical: 1 }, matching: 1, workloads: [], workloadsTotal: 0, findingsTotal: 1,
+      counts: { ...zero, critical: 1 }, fixable: { ...zero, critical: 1 }, matching: 1, workloads: [], workloadsTotal: 0, findingsTotal: 1, runningSince: '2026-09-01T08:00:00Z',
       findings: [{ id: 'CVE-1', severity: 'critical', package: 'openssl', installedVersion: '1.1', packageUrl: 'pkg:deb/debian/openssl@1.1' }],
       report: { kind: 'VulnerabilityReport', namespace: 'shop', name: 'r' },
     }],
+    workloads: [
+      { kind: 'Deployment', group: 'apps', namespace: 'shop', name: 'checkout', counts: { ...zero, critical: 1 }, fixable: zero, runningSince: '2026-10-01T08:00:00Z', containers: [{ name: 'app', image: 'nginx:1.19.0', scanned: true, counts: { ...zero, critical: 1 }, runningSince: '2026-10-01T08:00:00Z' }] },
+      { kind: 'CronJob', group: 'batch', namespace: 'shop', name: 'nightly', counts: { ...zero, high: 1 }, fixable: zero, containers: [{ name: 'app', image: 'nginx:1.19.0', scanned: true, counts: { ...zero, high: 1 } }] },
+    ],
     cves: [{ id: 'CVE-1', severity: 'critical', packages: ['openssl'], fixable: true, fixableImages: 1, images: 1, workloads: 1, publishedAt: '2020-12-10T04:15:11Z', affected: [] }],
   }
 }
@@ -145,7 +149,7 @@ describe('Vulnerabilities optional columns', () => {
   it('shows OS and Scanner on By image, the badge moving into the OS column', () => {
     render('/checks/vulnerabilities?by=image')
     act(() => menuButton()!.click())
-    expect(menuItems().map((b) => b.textContent)).toEqual(['Show OS', 'Show Scanner', 'Show Package URL', 'Show OS end of life filter'])
+    expect(menuItems().map((b) => b.textContent)).toEqual(['Show OS', 'Show Running since', 'Show Scanner', 'Show Package URL', 'Show OS end of life filter'])
     act(() => menuItem('Show OS')!.click())
     act(() => menuItem('Show Scanner')!.click())
     expect(heads().some((h) => h.includes('OS') && h.includes('Scanner'))).toBe(true)
@@ -174,6 +178,46 @@ describe('Vulnerabilities optional columns', () => {
     render('/checks/vulnerabilities?by=cve')
     const head = Array.from(container.querySelectorAll('span.underline')).find((h) => h.textContent === 'Published')
     expect(head).toBeTruthy()
+  })
+
+  it('shows Running since as a lower bound, and nothing without a running Pod', () => {
+    render('/checks/vulnerabilities?by=workload')
+    expect(container.textContent).not.toContain('2026-10-01')
+    act(() => menuButton()!.click())
+    act(() => menuItem('Show Running since')!.click())
+    expect(heads().some((h) => h.includes('Running since'))).toBe(true)
+    expect(container.textContent).toContain('at least 2026-10-01')
+    // nightly has no running Pod: one value for two rows.
+    expect(container.textContent!.match(/at least /g)).toHaveLength(1)
+    expect(JSON.parse(localStorage.getItem('radar-vulnerability-columns')!)).toEqual(['workload.runningSince'])
+
+    act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })) })
+    act(() => button('By image')!.click())
+    expect(container.textContent).not.toContain('2026-09-01')
+    act(() => menuButton()!.click())
+    act(() => menuItem('Show Running since')!.click())
+    expect(container.textContent).toContain('at least 2026-09-01')
+  })
+
+  it('offers Running since only when some row has it, and keeps the choice for when one does', () => {
+    // A cluster where no running container reports a scanned digest (images
+    // matched by tag only, say): no row has runningSince.
+    const noRunningSince = (r: VulnerabilitiesResponse): VulnerabilitiesResponse => JSON.parse(JSON.stringify(r, (k, v) => (k === 'runningSince' ? undefined : v)))
+    localStorage.setItem('radar-vulnerability-columns', JSON.stringify(['workload.runningSince', 'image.runningSince']))
+    for (const [path, others] of [['workload', []], ['image', ['Show OS', 'Show Scanner', 'Show Package URL']]] as const) {
+      act(() => root.unmount())
+      root = createRoot(container)
+      render(`/checks/vulnerabilities?by=${path}`, 3, noRunningSince)
+      expect(heads().some((h) => h.includes('Running since'))).toBe(false)
+      act(() => menuButton()!.click())
+      expect(menuItems().map((b) => b.textContent)).toEqual([...others, 'Show OS end of life filter'])
+    }
+    expect(JSON.parse(localStorage.getItem('radar-vulnerability-columns')!)).toEqual(['workload.runningSince', 'image.runningSince'])
+
+    act(() => root.unmount())
+    root = createRoot(container)
+    render('/checks/vulnerabilities?by=workload')
+    expect(container.textContent).toContain('at least 2026-10-01')
   })
 
   it('shows the OS with its end-of-life badge under the image name', () => {
@@ -255,8 +299,8 @@ describe('No data', () => {
 
   it('offers no column the answer has no data for, and draws none a browser had on', () => {
     localStorage.setItem('radar-vulnerability-columns', JSON.stringify(['image.scanner', 'image.os']))
-    // An older Radar: no scanner, no purls, no end-of-life count.
-    render('/checks/vulnerabilities?by=image', null, (r) => ({ ...r, images: r.images!.map(({ scanner: _s, ...i }) => ({ ...i, findings: i.findings.map(({ packageUrl: _p, ...f }) => f) })) }))
+    // An older Radar: no scanner, no purls, no Running since, no end-of-life count.
+    render('/checks/vulnerabilities?by=image', null, (r) => ({ ...r, images: r.images!.map(({ scanner: _s, runningSince: _r, ...i }) => ({ ...i, findings: i.findings.map(({ packageUrl: _p, ...f }) => f) })) }))
     expect(heads().some((h) => h.includes('Scanner'))).toBe(false)
     expect(heads().some((h) => h.includes('OS'))).toBe(true)
     act(() => menuButton()!.click())

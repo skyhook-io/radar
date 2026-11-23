@@ -19,18 +19,24 @@ export interface OptionalColumn {
   hasData: (data: VulnerabilitiesResponse) => boolean
 }
 
+const RUNNING_SINCE_TIP = 'How long this exact image digest has been running: the earliest start of a running container on it. Restarts and rescheduling reset it, so it may have run longer.'
+
 // Each view's optional columns, in the order they appear. Every value is also
 // in that view's CSV, whatever is shown. An entry with no track isn't a grid
 // column of the view's table (Package URL sits in an expanded image).
 export const OPTIONAL_COLUMNS: Partial<Record<VulnerabilityView, OptionalColumn[]>> = {
   image: [
     { key: 'image.os', label: 'OS', tip: "The image's OS release, as Trivy reports it.", track: 'minmax(140px,0.8fr)', hasData: (d) => !!d.images?.some((i) => i.os) },
+    { key: 'image.runningSince', label: 'Running since', tip: RUNNING_SINCE_TIP, track: '136px', hasData: (d) => !!d.images?.some((i) => i.runningSince) },
     { key: 'image.scanner', label: 'Scanner', tip: "The scanner and version that wrote the image's newest report.", track: '112px', hasData: (d) => !!d.images?.some((i) => i.scanner) },
     { key: 'image.packageUrl', label: 'Package URL', tip: "The package URL (purl) Trivy reports for each finding, in an expanded image's findings.", track: '', hasData: (d) => !!d.images?.some((i) => i.findings.some((f) => f.packageUrl)) },
   ],
   cve: [
     { key: 'cve.published', label: 'Published', tip: "When the CVE was published, from Trivy's database. Not when it was found in this cluster.", track: '92px', hasData: (d) => !!d.cves?.some((c) => c.publishedAt) },
     { key: 'cve.age', label: 'Age', tip: 'Days since the CVE was published, not since it was found in this cluster.', track: '76px', hasData: (d) => !!d.cves?.some((c) => c.publishedAt) },
+  ],
+  workload: [
+    { key: 'workload.runningSince', label: 'Running since', tip: `${RUNNING_SINCE_TIP} For a workload, the earliest of its containers with findings.`, track: '136px', hasData: (d) => !!d.workloads?.some((w) => w.runningSince) },
   ],
 }
 
@@ -143,6 +149,22 @@ export function daysSince(iso: string, now = Date.now()): number | undefined {
 export function isoDate(iso: string): string {
   const t = Date.parse(iso)
   return Number.isFinite(t) ? new Date(t).toISOString().slice(0, 10) : iso
+}
+
+/**
+ * A Running since cell: a lower bound, so it reads "at least" a date, and
+ * nothing when no running container reports the scanned digest.
+ */
+export function RunningSince({ since }: { since?: string }) {
+  if (!since) return <span />
+  const date = isoDate(since)
+  return (
+    <WithTooltip tip={`Running since at least ${date}, the earliest start of a running container on this exact image digest. A container restart or a rescheduled Pod resets it, so it may have run longer.`}>
+      <span className="truncate font-mono text-xs tabular-nums text-theme-text-secondary">
+        <span className="font-sans text-theme-text-tertiary">at least </span>{date}
+      </span>
+    </WithTooltip>
+  )
 }
 
 /** Trivy's end-of-life word for an OS, as a small badge. */

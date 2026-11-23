@@ -5,6 +5,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -39,6 +40,10 @@ type target struct {
 	container    string
 	// routes are the routes from outside the cluster to its Pod.
 	routes []Route
+	// runningSince is the earliest start among its replicas' containers
+	// running digest as the kubelet reports it (see runningStarts); zero
+	// when none is running yet.
+	runningSince time.Time
 }
 
 // targetKey identifies the scanned object and container; image and digest
@@ -99,6 +104,7 @@ func liveTargets(ctx context.Context, cache *k8s.ResourceCache, namespaces []str
 	unions := map[int]*routeUnion{}
 	add := func(t target) {
 		if i, ok := seen[t.key]; ok {
+			targets[i].runningSince = oldest(targets[i].runningSince, t.runningSince)
 			// Another replica of the same container and build: a Service can
 			// select one replica and not another, so its routes count too.
 			if len(t.routes) == 0 {
@@ -146,6 +152,7 @@ func liveTargets(ctx context.Context, cache *k8s.ResourceCache, namespaces []str
 			kind, group, name, uid := scannedOwner(cache, pod)
 			workload := podWorkload(cache, pod)
 			running, unresolved := runningDigests(pod)
+			started := runningStarts(pod, running)
 			routes, err := exposure.routesFor(ctx, pod)
 			if err != nil {
 				return liveSet{}, false, err
@@ -169,6 +176,7 @@ func liveTargets(ctx context.Context, cache *k8s.ResourceCache, namespaces []str
 					workload:     workload,
 					container:    c.Name,
 					routes:       routes,
+					runningSince: started[c.Name],
 				})
 			}
 		}
@@ -254,6 +262,24 @@ func runningDigests(pod *corev1.Pod) (digests map[string]string, unresolved map[
 		}
 	}
 	return digests, unresolved
+}
+
+// runningStarts are when a Pod's running containers last started, by name,
+// for those running a registry digest (digests, from runningDigests). A
+// restart or a new Pod resets it, so it is a lower bound on how long that
+// build has run, never a guess from the tag or the ReplicaSet's age: a
+// mutable tag can roll a new build under the same template.
+func runningStarts(pod *corev1.Pod, digests map[string]string) map[string]time.Time {
+	out := map[string]time.Time{}
+	for _, statuses := range [][]corev1.ContainerStatus{pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses} {
+		for _, s := range statuses {
+			if s.State.Running == nil || s.State.Running.StartedAt.IsZero() || digests[s.Name] == "" {
+				continue
+			}
+			out[s.Name] = s.State.Running.StartedAt.UTC()
+		}
+	}
+	return out
 }
 
 // pinnedDigest is the digest an image reference pins, if any.

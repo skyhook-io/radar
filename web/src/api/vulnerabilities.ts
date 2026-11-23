@@ -101,6 +101,8 @@ export interface VulnerableImage extends VulnerabilityExposure {
   workloadsTotal: number
   findings: VulnerabilityFinding[]
   findingsTotal: number
+  /** Earliest start of a running container on this image's scanned digest, in any of its workloads. A lower bound: restarts and rescheduling reset it. Absent when none reports the digest, and from an older Radar. */
+  runningSince?: string
   report: { kind: string; group?: string; namespace?: string; name: string }
 }
 
@@ -155,6 +157,8 @@ export interface VulnerabilityWorkloadContainer {
   findingsUnread?: boolean
   counts?: VulnerabilityCounts
   fixable?: VulnerabilityCounts
+  /** Earliest start of this container, across the workload's Pods, on the scanned digest. */
+  runningSince?: string
 }
 
 export interface VulnerabilityWorkload {
@@ -169,6 +173,8 @@ export interface VulnerabilityWorkload {
   routesTotal?: number
   /** No route seen, but Radar couldn't read every route kind that could reach it. */
   exposureUnknown?: boolean
+  /** The earliest runningSince of its containers that carry findings. */
+  runningSince?: string
 }
 
 export interface VulnerabilitySummary {
