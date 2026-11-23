@@ -67,6 +67,17 @@ Host apps can override Radar's runtime behavior without passing props:
 
 Call these before mounting `<RadarApp>`.
 
+## Fleet rightsizing
+
+An embedded host may return its cluster-scoped fleet URL from
+`navSlots.fleetTakeoverHref('rightsizing', search)`. The search string comes from
+the nested router so the host can carry the current namespace selection. The
+Cost tab link and direct `/cost/rightsizing` bookmarks honor the takeover.
+Standalone Radar keeps its local scan. Set `navSlots.rightsizingProviderStatus` when the host advertises `fleet_rightsizing`, so embedded Metrics and Cost can tell a missing provider response from a Hub version that predates provider selection. `RightsizingScanResponse`,
+`RightsizingScanWorkload`, and `PrometheusRightsizing` are exported types for
+the existing scan and workload reads. A scan starts with an explicit POST;
+GET retrieves a retained scan and returns JSON null before the first scan.
+
 ## Resource list responses
 
 New Radar instances advertise `features.resourceReadCoverage` and return `{items, coverage, kind, group}` for resource lists, with `columns`/`cells` when table mode is requested. `coverage` describes the scope the answer covers, what Radar read of it, and coded gaps; namespace sets are `{count, names?}`, listing every member or none, and a gap's set may instead be `{"extent": "all"}` or `{"extent": "unknown"}`. A failed read answers `{error, error_code, coverage?}`. Lists fail when there is no usable inventory: nothing readable, an oversized result, or a changed connection. Partial lists with loading gaps refetch with 5s, 10s, 20s, then 30s delays; complete coverage or a changed query resets the backoff.

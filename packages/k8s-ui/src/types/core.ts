@@ -174,6 +174,7 @@ export interface CloudConnectCapability {
 export interface FeatureCapabilities {
  helmSourceIdentity?: boolean
   helmInventory?: boolean
+  datadogRightsizing?: boolean
   datadogAgentPresence?: boolean
   resourceReadCoverage?: boolean
   searchCoverage?: boolean

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/skyhook-io/radar/pkg/prom"
+	"github.com/skyhook-io/radar/pkg/rightsizing"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
@@ -79,7 +80,7 @@ func TestClassifyRightsizingFit(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			row := RightsizingRow{HPAManaged: tc.hpa, HPAEvidenceAvailable: true, CurrentPodOOM: tc.oom, OOMEvidenceAvailable: true}
-			classifyRightsizingFit(&row, tc.observed, tc.req, tc.lim, tc.resource)
+			rightsizing.ClassifyRightsizingFit(&row, tc.observed, tc.req, tc.lim, tc.resource)
 			if row.Fit != tc.wantFit {
 				t.Errorf("fit = %s, want %s", row.Fit, tc.wantFit)
 			}
@@ -99,68 +100,14 @@ func TestClassifyRightsizingFit(t *testing.T) {
 	}
 }
 
-func TestCalculatedRequestUsesPracticalScaleAwareSteps(t *testing.T) {
-	tests := []struct {
-		name     string
-		observed float64
-		resKind  string
-		want     string
-	}{
-		{"cpu tiny usage keeps a 10m floor", 0.0001, "cpu", "10m"},
-		{"cpu 100m demand uses a 50m step", 0.100, "cpu", "150m"},
-		{"cpu 1 core demand uses a 500m step", 1.0, "cpu", "1.5"},
-		{"cpu crossing one core rounds to half a core", 0.870, "cpu", "1.5"},
-		{"cpu above four cores uses whole cores", 3.56, "cpu", "5"},
-		{"memory tiny usage keeps a 64Mi floor", 1024, "memory", "64Mi"},
-		{"memory 100Mi demand uses the preferred ladder", 100 * 1024 * 1024, "memory", "128Mi"},
-		{"memory 1Gi demand rounds to 1.5Gi", 1024 * 1024 * 1024, "memory", "1.5Gi"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := calculatedRequest(tc.observed, tc.resKind)
-			if got != tc.want {
-				t.Errorf("calculatedRequest(%g, %q) = %q, want %q", tc.observed, tc.resKind, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestRecommendRequestStagesLargeReductions(t *testing.T) {
-	tests := []struct {
-		name         string
-		observed     float64
-		current      *resource.Quantity
-		resourceName string
-		conservative bool
-		want         string
-		wantLimited  bool
-	}{
-		{"200m CPU reduces no lower than one quarter", 0.001, mustQuantity(t, "200m"), "cpu", false, "50m", true},
-		{"one CPU reduces no lower than one half", 0.001, mustQuantity(t, "1"), "cpu", false, "500m", true},
-		{"small CPU can reduce to the 10m minimum", 0.001, mustQuantity(t, "50m"), "cpu", false, "10m", false},
-		{"bursty CPU uses the one-half floor", 0.001, mustQuantity(t, "200m"), "cpu", true, "100m", true},
-		{"memory reduces no lower than one half", 1024, mustQuantity(t, "1Gi"), "memory", false, "512Mi", true},
-		{"missing request uses the demand target", 0.1, nil, "cpu", false, "150m", false},
-		{"increase uses the demand target", 0.2, mustQuantity(t, "100m"), "cpu", false, "250m", false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got, limited := recommendRequest(tc.observed, tc.current, tc.resourceName, tc.conservative)
-			if got != tc.want || limited != tc.wantLimited {
-				t.Errorf("recommendRequest() = %q, %t; want %q, %t", got, limited, tc.want, tc.wantLimited)
-			}
-		})
-	}
-}
-
 func TestIsBurstyCPURequiresMaterialAbsoluteAndRelativeGap(t *testing.T) {
-	if !isBurstyCPU(0.02, 0.20) {
+	if !rightsizing.IsBurstyCPU(0.02, 0.20) {
 		t.Fatal("expected a material P95-to-P99 jump to be bursty")
 	}
-	if isBurstyCPU(0.10, 0.20) {
+	if rightsizing.IsBurstyCPU(0.10, 0.20) {
 		t.Fatal("a two-fold jump must not be marked bursty")
 	}
-	if isBurstyCPU(0.001, 0.010) {
+	if rightsizing.IsBurstyCPU(0.001, 0.010) {
 		t.Fatal("a tiny absolute jump must not be marked bursty")
 	}
 }
@@ -303,10 +250,10 @@ func TestWorkloadSelectionFallsBackToExactCurrentPods(t *testing.T) {
 	if strings.Contains(selection.podPattern, "api-worker") || strings.Contains(selection.podPattern, `api-.*`) {
 		t.Errorf("selection can collide with sibling workloads: %+v", selection)
 	}
-	if got := confidenceFor(2016, 1, coverage); got != ConfidenceMedium {
+	if got := rightsizing.ConfidenceFor(2016, 1, coverage); got != ConfidenceMedium {
 		t.Errorf("current-pod confidence = %q, want medium", got)
 	}
-	if got := confidenceFor(72, 72.0/2016.0, coverage); got != ConfidenceLow {
+	if got := rightsizing.ConfidenceFor(72, 72.0/2016.0, coverage); got != ConfidenceLow {
 		t.Errorf("sparse current-pod confidence = %q, want low", got)
 	}
 	for key, query := range buildRightsizingQueries("prod", selection) {
@@ -412,35 +359,11 @@ func TestExtractRuntimeContainers(t *testing.T) {
 	}
 }
 
-func TestFormatRightsizingValue(t *testing.T) {
-	tests := []struct {
-		v       float64
-		resKind string
-		want    string
-	}{
-		{0.0005, "cpu", "10m"},
-		{2.0, "cpu", "2"},
-		{1.5, "cpu", "1.5"},
-		{1024, "memory", "64Mi"},
-		{0, "memory", "64Mi"},
-		{float64(2 * 1024 * 1024 * 1024), "memory", "2Gi"},
-		{1.0, "disk", ""},
-	}
-	for _, tc := range tests {
-		t.Run(tc.want, func(t *testing.T) {
-			got := formatRightsizingValue(tc.v, tc.resKind)
-			if got != tc.want {
-				t.Errorf("formatRightsizingValue(%g, %q) = %q, want %q", tc.v, tc.resKind, got, tc.want)
-			}
-		})
-	}
-}
-
 func TestFormatObservedValueDoesNotRoundLikeARecommendation(t *testing.T) {
-	if got := formatObservedValue(0.0022, "cpu"); got != "2m" {
+	if got := rightsizing.FormatObservedValue(0.0022, "cpu"); got != "2m" {
 		t.Errorf("CPU observed = %q, want 2m", got)
 	}
-	if got := formatObservedValue(39.4*1024*1024, "memory"); got != "39Mi" {
+	if got := rightsizing.FormatObservedValue(39.4*1024*1024, "memory"); got != "39Mi" {
 		t.Errorf("memory observed = %q, want 39Mi", got)
 	}
 }
@@ -514,6 +437,17 @@ func TestCPUPeakFailureIsNotSilent(t *testing.T) {
 	}
 }
 
+func measuredDecision(row RightsizingRow) RightsizingRow {
+	row.Confidence = ConfidenceHigh
+	row.HPAEvidenceAvailable = true
+	row.Peak = &rightsizing.ObservedStatistic{Name: "P99"}
+	var qos rightsizing.PodQoS
+	qos.Observe(corev1.PodQOSBurstable)
+	rows := []RightsizingRow{row}
+	rightsizing.Finalize(rows, nil, qos, false)
+	return rows[0]
+}
+
 func TestManualReviewReasonsNameEveryTrigger(t *testing.T) {
 	reduction := func(row RightsizingRow) RightsizingRow {
 		current, recommended := 0.5, 0.3
@@ -533,14 +467,14 @@ func TestManualReviewReasonsNameEveryTrigger(t *testing.T) {
 		{"autoscaler owns it", RightsizingRow{HPAManaged: true}, "hpa_managed"},
 		{"oom in window", RightsizingRow{WindowOOMEvidence: true}, "oom_in_window"},
 		{"limit conflict", RightsizingRow{LimitConflict: true}, "limit_conflict"},
-		{"withheld recommendation", RightsizingRow{RecommendationReason: ReasonOOMEvidenceUnavailable}, "recommendation_withheld"},
+		{"withheld recommendation", RightsizingRow{RecommendationReason: ReasonOOMEvidenceUnavailable}, "recommendation_withheld,oom_evidence_unavailable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			reasons := ManualReviewReasons(tc.row)
+			reasons := ManualReviewReasons(measuredDecision(tc.row))
 			if strings.Join(reasons, ",") != tc.want {
 				t.Errorf("got %v want %q", reasons, tc.want)
 			}
-			if !NeedsManualReview(tc.row) {
+			if !NeedsManualReview(measuredDecision(tc.row)) {
 				t.Error("the verdict must agree with its own reasons")
 			}
 		})
@@ -549,10 +483,10 @@ func TestManualReviewReasonsNameEveryTrigger(t *testing.T) {
 	// Light throttling on a cut, and heavy throttling on a row that is not a
 	// cut, are both fine: the concern is a smaller request meeting a workload
 	// that already wants more.
-	if reasons := ManualReviewReasons(reduction(RightsizingRow{ThrottleRatio: &under})); len(reasons) != 0 {
+	if reasons := ManualReviewReasons(measuredDecision(reduction(RightsizingRow{ThrottleRatio: &under}))); len(reasons) != 0 {
 		t.Errorf("throttling below the threshold is not a review trigger: %v", reasons)
 	}
-	if reasons := ManualReviewReasons(RightsizingRow{ThrottleRatio: &throttled}); len(reasons) != 0 {
+	if reasons := ManualReviewReasons(measuredDecision(RightsizingRow{ThrottleRatio: &throttled})); len(reasons) != 0 {
 		t.Errorf("throttling without a reduction is not a review trigger: %v", reasons)
 	}
 }
@@ -563,11 +497,11 @@ func TestLostThrottleReadingClearsTheReviewReason(t *testing.T) {
 	current, recommended := 0.5, 0.3
 	throttled := 0.307
 	row := RightsizingRow{CurrentRequestValue: &current, RecommendedRequestValue: &recommended, ThrottleRatio: &throttled}
-	if !NeedsManualReview(row) {
+	if !NeedsManualReview(measuredDecision(row)) {
 		t.Fatal("a throttled cut needs review")
 	}
 	row.ThrottleRatio = nil
-	if NeedsManualReview(row) {
+	if NeedsManualReview(measuredDecision(row)) {
 		t.Error("without the ratio the row reads as a clean cut, which is why a failed throttle query has to reach the caller")
 	}
 }
