@@ -85,6 +85,7 @@ func admissionCandidate() *Connection {
 		next.discovery.Store(c.Discovery())
 		if c != nil {
 			next.perms.Store(c.perms.Load())
+			next.cache.Store(c.cache.Load())
 		}
 		if installedConn.CompareAndSwap(c, next) {
 			return next
