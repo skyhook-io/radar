@@ -27,37 +27,37 @@ const (
 // admitted against the current connection (API and MCP callers, older UIs).
 func (s *Server) bindWrite(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		bound, ok := s.admitWrite(w, r)
+		admitted, ok := s.admitWrite(w, r)
 		if !ok {
 			return
 		}
-		next(w, r.WithContext(k8s.WithConnection(r.Context(), bound)))
+		next(w, r.WithContext(admitted.Bind(r.Context())))
 	}
 }
 
 // admitWrite is bindWrite's check: it captures the serving connection, or
 // answers the refusal and returns false. For handlers that only learn from
 // the body whether a request writes to the cluster.
-func (s *Server) admitWrite(w http.ResponseWriter, r *http.Request) (*k8s.Connection, bool) {
-	bound, err := k8s.CaptureServingConnection()
+func (s *Server) admitWrite(w http.ResponseWriter, r *http.Request) (k8s.Admission, bool) {
+	admitted, err := k8s.CaptureServingConnection()
 	if err != nil {
 		// Nothing serving: a switch, rescope or rebuild in progress, a lost
 		// connection, or shutdown. The caller can retry once one is serving.
 		s.writeErrorCode(w, http.StatusServiceUnavailable, errCodeClusterUnavailable,
 			"Nothing was changed: Radar has no usable cluster connection right now. Try again once it is connected.")
-		return nil, false
+		return k8s.Admission{}, false
 	}
 	want := r.Header.Get(connectionHeader)
 	if want == "" {
 		// A browser can't set headers on a WebSocket; it names the connection in the URL.
 		want = r.URL.Query().Get(connectionParam)
 	}
-	if connectionIdentityPublished() && want != "" && want != bound.ID() {
+	if connectionIdentityPublished() && want != "" && want != admitted.ID() {
 		s.writeErrorCode(w, http.StatusConflict, errCodeContextChanged,
 			"Nothing was changed: the cluster changed since this view loaded. Check the current cluster and try again.")
-		return nil, false
+		return k8s.Admission{}, false
 	}
-	return bound, true
+	return admitted, true
 }
 
 // execWrite is bindWrite for routes that --disable-exec turns off: that

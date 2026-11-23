@@ -89,3 +89,44 @@ func TestCapabilitiesOmitsSupersededProbeResult(t *testing.T) {
 		t.Fatalf("the superseded probe was published to the cache: %+v", cached.Perms)
 	}
 }
+
+// A switch while the handler's probe is in flight: the probe lands on the
+// connection it started for, and the response must not report it for the one
+// now installed, which has no result yet.
+func TestCapabilitiesOmitsProbeResultAfterConnectionReplaced(t *testing.T) {
+	if k8s.GetResourceCache() == nil {
+		t.Fatal("the shared fixture has no resource cache; the handler would skip the probe")
+	}
+	t.Cleanup(k8s.SnapshotTestConnection())
+
+	client := kubernetes.NewForConfigOrDie(&rest.Config{Host: "http://127.0.0.1:1"})
+	prevClient := k8s.SetTestClient(client)
+	t.Cleanup(func() { k8s.SetTestClient(prevClient) })
+
+	var replaceOnce sync.Once
+	t.Cleanup(k8s.SetTestPermissionProbeClient(func() {
+		replaceOnce.Do(func() { k8s.SetTestClient(client) })
+	}))
+	started := k8s.Current()
+
+	resp := get(t, "/api/capabilities")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var body struct {
+		Resources map[string]bool `json:"resources"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if k8s.Current() == started {
+		t.Fatal("setup: the probe did not replace the connection")
+	}
+	if body.Resources != nil {
+		t.Fatalf("capabilities reported the replaced connection's probe result: %v", body.Resources)
+	}
+	if cached := k8s.GetCachedPermissionResult(); cached != nil {
+		t.Fatalf("the replacement connection holds a result it never probed: %+v", cached.Perms)
+	}
+}

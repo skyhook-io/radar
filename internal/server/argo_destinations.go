@@ -57,8 +57,7 @@ func sanitizeDestinationServer(server string) (string, bool) {
 	return u.Scheme + "://" + u.Host, true
 }
 
-func secretsScopeDisabled() bool {
-	perm := k8s.GetCachedPermissionResult()
+func secretsScopeDisabled(perm *k8s.PermissionCheckResult) bool {
 	if perm == nil {
 		return false
 	}
@@ -109,11 +108,12 @@ func (s *Server) handleArgoDestinations(w http.ResponseWriter, r *http.Request) 
 	secretLister := cache.Secrets()
 	if secretLister == nil {
 		// Distinguish three nil-lister causes: still syncing (deferred kind),
-		// RBAC-disabled at startup probe, or permitted-but-sync-failed.
+		// RBAC-disabled at startup probe, or permitted-but-sync-failed. The
+		// probe that decided is the one this cache was built from.
 		switch {
 		case cache.IsDeferredPending(k8score.Secrets):
 			resp.Completeness.Syncing = true
-		case secretsScopeDisabled():
+		case secretsScopeDisabled(cache.PermissionResult()):
 			resp.Completeness.Restricted = true
 		default:
 			resp.Completeness.Unavailable = true

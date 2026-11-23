@@ -107,7 +107,7 @@ func TestStillBoundFollowsTheServingConnection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := WithConnection(context.Background(), admitted)
+	ctx := admitted.Bind(context.Background())
 	if !StillBound(context.Background()) || !StillBound(ctx) {
 		t.Fatal("an unbound request, or one bound to the serving connection, is still bound")
 	}
@@ -156,6 +156,45 @@ func TestReadmissionKeepsTheConnectionsTypedCache(t *testing.T) {
 
 	if got := GetResourceCache(); got == nil || got != built {
 		t.Fatalf("re-admission served cache %p, want the one built for the connection (%p)", got, built)
+	}
+}
+
+// A write admitted under one ID stays bound to it: if the same build is
+// retired and admitted again before the request binds, binding must not pick up
+// the new ID.
+func TestAdmissionKeepsTheIDItWasCapturedUnder(t *testing.T) {
+	t.Cleanup(SnapshotTestConnection())
+	clearTestConnectionIdentity()
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
+	admitted, err := CaptureServingConnection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := admitted.ID()
+	RetireServingConnection()
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
+	if admitted.Connection() != Current() || ServingConnectionID() == first {
+		t.Fatalf("setup: want the same build under a new ID, got conn %p/%p id %q", admitted.Connection(), Current(), ServingConnectionID())
+	}
+	ctx := admitted.Bind(context.Background())
+	if admitted.ID() != first || StillBound(ctx) {
+		t.Fatalf("admission id %q (want %q), still bound %v: a request admitted before the re-admission must not be still bound", admitted.ID(), first, StillBound(ctx))
+	}
+}
+
+// Restoring a snapshot taken before the same connection was admitted again
+// restores the ID it was serving under, so status and serving agree.
+func TestSnapshotRestoresTheAdmissionID(t *testing.T) {
+	t.Cleanup(SnapshotTestConnection())
+	clearTestConnectionIdentity()
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
+	first := ServingConnectionID()
+	restore := SnapshotTestConnection()
+	RetireServingConnection()
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
+	restore()
+	if got, status := ServingConnectionID(), GetConnectionStatus().ConnectionID; got != first || status != first {
+		t.Fatalf("after restore: serving %q, status %q; want both %q", got, status, first)
 	}
 }
 

@@ -1670,12 +1670,14 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	// state to distinguish loading from RBAC restrictions.
 	result := conn.CachedPermissionResult()
 	if result == nil && k8s.GetResourceCache() != nil {
-		probed, current := conn.CheckResourcePermissions(r.Context())
-		result = conn.CachedPermissionResult()
-		// A scope change can retire the probe's cache on the same connection.
-		// Only the no-client response is intentionally served without caching.
-		if result == nil && current && (conn.Client() == nil || conn.Dynamic() == nil) {
-			result = probed
+		// A probe superseded by a switch or rescope describes what it probed,
+		// not what is being rendered: leave resources unset instead.
+		if probed, current := conn.CheckResourcePermissions(r.Context()); current {
+			result = conn.CachedPermissionResult()
+			// Only the no-client response is intentionally served without caching.
+			if result == nil && (conn.Client() == nil || conn.Dynamic() == nil) {
+				result = probed
+			}
 		}
 	}
 	if result != nil {
