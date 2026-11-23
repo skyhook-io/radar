@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"context"
 	"sync/atomic"
 
 	"k8s.io/client-go/discovery"
@@ -19,6 +20,8 @@ type Connection struct {
 	config                                   *rest.Config
 	clients                                  *sharedKubernetesClients
 	contextName, contextBinding, clusterName string
+	contextNamespace                         string
+	perms                                    atomic.Pointer[permissionState]
 	discovery                                atomic.Pointer[ResourceDiscovery]
 	// id is the ID of the connection's latest admission, written under
 	// connectionStatusMu. Each admission gets a new one, so an ID from before
@@ -33,17 +36,24 @@ func Current() *Connection {
 	return installedConn.Load()
 }
 
+func boundOrCurrent(ctx context.Context) *Connection {
+	if c := ConnectionFrom(ctx); c != nil {
+		return c
+	}
+	return Current()
+}
+
 func installedConnectionLocked(config *rest.Config, clients *sharedKubernetesClients) *Connection {
-	return &Connection{config: config, clients: clients, contextName: contextName, contextBinding: contextBinding, clusterName: clusterName}
+	return &Connection{config: config, clients: clients, contextName: contextName, contextBinding: contextBinding, clusterName: clusterName, contextNamespace: contextNamespace}
 }
 
 // fresh returns a new, unadmitted connection on the same clients, with no
-// discovery yet.
+// discovery or permission results yet.
 func (c *Connection) fresh() *Connection {
 	if c == nil {
 		return &Connection{}
 	}
-	return &Connection{config: c.config, clients: c.clients, contextName: c.contextName, contextBinding: c.contextBinding, clusterName: c.clusterName}
+	return &Connection{config: c.config, clients: c.clients, contextName: c.contextName, contextBinding: c.contextBinding, clusterName: c.clusterName, contextNamespace: c.contextNamespace}
 }
 
 func (c *Connection) Client() *kubernetes.Clientset {

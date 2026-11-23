@@ -116,6 +116,27 @@ func TestStillBoundFollowsTheServingConnection(t *testing.T) {
 	}
 }
 
+// A connection admitted again without a rebuild gets a new ID but keeps what
+// was built for it: the caches it serves were probed under that result.
+func TestReadmissionKeepsTheConnectionsPermissionResult(t *testing.T) {
+	t.Cleanup(SnapshotTestConnection())
+	clearTestConnectionIdentity()
+	result := &PermissionCheckResult{Perms: &ResourcePermissions{}}
+	t.Cleanup(SetTestPermissionResult(result))
+
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
+	first := ServingConnectionID()
+	RetireServingConnection()
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
+
+	if second := ServingConnectionID(); second == "" || second == first {
+		t.Fatalf("re-admission IDs %q then %q, want a new one", first, second)
+	}
+	if Current().CachedPermissionResult() == nil {
+		t.Fatal("re-admission dropped the permission result its caches were built from")
+	}
+}
+
 // A write admitted under one ID stays bound to it: if the same build is
 // retired and admitted again before the request binds, binding must not pick up
 // the new ID.

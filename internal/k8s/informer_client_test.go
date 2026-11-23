@@ -258,7 +258,6 @@ func TestRequestPermissionCheckUsesTheRequestClient(t *testing.T) {
 	installedConn.Store(installedConnectionLocked(nil, &sharedKubernetesClients{clientset: requestClient, dynamic: requestDyn, informerDynamic: informerDyn}))
 	clientMu.Unlock()
 
-	InvalidateResourcePermissionsCache()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if result, _ := CheckResourcePermissions(ctx); result == nil || !result.Perms.Pods {

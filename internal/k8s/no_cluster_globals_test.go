@@ -20,7 +20,8 @@ func TestNoClusterGlobals(t *testing.T) {
 		"*k8s.io/client-go/kubernetes.Clientset", "k8s.io/client-go/kubernetes.Interface",
 		"*k8s.io/client-go/rest.Config", "k8s.io/client-go/dynamic.Interface",
 		"*k8s.io/client-go/discovery.DiscoveryClient", "k8s.io/client-go/discovery.DiscoveryInterface",
-		"*sharedKubernetesClients", "*ResourceDiscovery",
+		"*sharedKubernetesClients", "*ResourceDiscovery", "*permissionState",
+		"*PermissionCheckResult", "*Capabilities", "userCapEntry", "*userCapEntry", "userNSCapEntry", "*userNSCapEntry",
 	}
 	pkg, err := build.ImportDir(".", 0)
 	if err != nil {
@@ -72,7 +73,10 @@ func TestNoClusterGlobals(t *testing.T) {
 		wrapped := slices.ContainsFunc(denied, func(d string) bool {
 			return strings.HasSuffix(typeName, "["+strings.TrimPrefix(d, "*")+"]")
 		})
-		if slices.Contains(denied, typeName) || wrapped {
+		_, isMap := typ.Underlying().(*types.Map)
+		cacheType := isMap || typeName == "sync.Map" || typeName == "golang.org/x/sync/singleflight.Group"
+		cacheName := strings.Contains(strings.ToLower(name), "capabilit") || strings.Contains(strings.ToLower(name), "perm")
+		if slices.Contains(denied, typeName) || wrapped || (cacheName && cacheType) {
 			t.Errorf("%s: %s has type %s: cluster state belongs on *Connection", fset.Position(v.Pos()), name, typeName)
 		}
 	}

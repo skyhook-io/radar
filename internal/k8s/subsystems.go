@@ -342,9 +342,10 @@ func ResetAllSubsystems() {
 	safeReset("policy report index", ResetPolicyReportIndex)
 	safeReset("dynamic resource cache", ResetDynamicResourceCache)
 
-	// Step 2: resource discovery + resource cache
-	safeReset("resource discovery", ResetResourceDiscovery)
+	// Readers use the installed connection's permissions to interpret the
+	// typed cache. Detach that cache before installing the fresh connection.
 	safeReset("resource cache", ResetResourceCache)
+	safeReset("resource discovery", ResetResourceDiscovery)
 
 	// Step 1: timeline
 	contextSwitchMu.RLock()

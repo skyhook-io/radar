@@ -346,8 +346,7 @@ func TestProbeResourceAccess_FallbackCollectsMultipleNamespaces(t *testing.T) {
 
 func TestCheckResourcePermissionsCacheHitCopiesScopeNamespaces(t *testing.T) {
 	const nsA, nsB = "team-a", "team-b"
-	resourcePermsMu.Lock()
-	cachedPermResult = &PermissionCheckResult{
+	t.Cleanup(SetTestPermissionResult(&PermissionCheckResult{
 		Perms:                    &ResourcePermissions{Pods: true},
 		NamespaceScoped:          true,
 		Namespace:                nsA,
@@ -359,10 +358,7 @@ func TestCheckResourcePermissionsCacheHitCopiesScopeNamespaces(t *testing.T) {
 		ScopeNamespaces: map[string][]string{
 			k8score.Pods: {nsA, nsB},
 		},
-	}
-	resourcePermsExpiry = time.Now().Add(time.Minute)
-	resourcePermsMu.Unlock()
-	t.Cleanup(InvalidateResourcePermissionsCache)
+	}))
 
 	direct := GetCachedPermissionResult()
 	if direct == nil || !direct.ScopeCandidatesTruncated || !reflect.DeepEqual(direct.ScopeCandidates, []string{nsA, nsB}) {
@@ -668,8 +664,8 @@ func TestCheckResourcePermissionsDiscardsSupersededProbe(t *testing.T) {
 	}
 
 	setProbeClients(previousDyn)
+	previous := Current()
 	SetFallbackNamespace(previousNs)
-	InvalidateResourcePermissionsCache()
 
 	type probeReturn struct {
 		result  *PermissionCheckResult
@@ -687,10 +683,9 @@ func TestCheckResourcePermissionsDiscardsSupersededProbe(t *testing.T) {
 	}
 
 	// What a context switch or namespace rescope does: new client, new scope,
-	// cache invalidated, fresh probe published.
+	// fresh probe published.
 	setProbeClients(currentDyn)
 	SetFallbackNamespace(currentNs)
-	InvalidateResourcePermissionsCache()
 
 	current, currentIsCurrent := CheckResourcePermissions(context.Background())
 	if !currentIsCurrent {
@@ -711,6 +706,9 @@ func TestCheckResourcePermissionsDiscardsSupersededProbe(t *testing.T) {
 		stale, staleIsCurrent = r.result, r.current
 	case <-time.After(10 * time.Second):
 		t.Fatal("superseded probe did not return after release")
+	}
+	if got := previous.permissions().cachedPermResult; got != stale {
+		t.Fatal("the previous connection did not retain its own completed probe")
 	}
 	if staleIsCurrent {
 		t.Fatal("superseded probe reported its result as current")
@@ -736,7 +734,7 @@ func TestCheckResourcePermissionsDiscardsSupersededProbe(t *testing.T) {
 
 // TestNamespaceRescopeRetiresInFlightProbe covers a scope change retiring a
 // probe that is already in flight against the previous scope. A rescope keeps
-// the same clients, so the cache generation is the only guard that applies.
+// the same clients, so the scope setter must retire the old permission state.
 //
 // It drives the two scope setters, which is where the retirement lives, so no
 // caller can change the scope without it. A context switch clears the scope
@@ -783,7 +781,6 @@ func testRescopeRetiresInFlightProbe(t *testing.T, previousNs string, rescope fu
 	ForceNamespaceScope = true
 	SetNamespaceScopeOverride(previousNs)
 	SetFallbackNamespace(previousNs)
-	InvalidateResourcePermissionsCache()
 
 	done := make(chan struct{})
 	go func() {
@@ -805,9 +802,7 @@ func testRescopeRetiresInFlightProbe(t *testing.T, previousNs string, rescope fu
 		t.Fatal("probe did not return after release")
 	}
 
-	resourcePermsMu.RLock()
-	published := cachedPermResult
-	resourcePermsMu.RUnlock()
+	published := GetCachedPermissionResult()
 	if published != nil {
 		t.Fatalf("a probe that read scope %q published %q after the rescope",
 			previousNs, published.Namespace)
@@ -821,11 +816,6 @@ func testRescopeRetiresInFlightProbe(t *testing.T, previousNs string, rescope fu
 //
 // The switch is expected to fail - the target cluster does not resolve. What is
 // asserted is the state it leaves behind.
-//
-// The end state is pinned as a property, not a line: the switch path retires
-// the cache three times (after teardown, in ClearNamespaceScopeOverride, and
-// in the invalidation block after it), so removing any single call still
-// passes that assertion. Only removing all of them fails it.
 func TestContextSwitchLeavesNoPreviousClusterPermissions(t *testing.T) {
 	ResetTestState()
 	t.Cleanup(ResetTestState)

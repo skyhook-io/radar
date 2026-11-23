@@ -51,7 +51,7 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 		var nsFallback string
 		var nsFallbacks []string
 		var nsFallbacksTruncated bool
-		if permResult := GetCachedPermissionResult(); permResult != nil {
+		if permResult := conn.cachedPermissionResult(); permResult != nil {
 			if permResult.NamespaceScoped && permResult.Namespace != "" {
 				nsFallback = permResult.Namespace
 			}
@@ -543,7 +543,7 @@ func RegisterSupportedCRDFallbacks() {
 	}
 
 	var nsFallbacks []string
-	if permResult := GetCachedPermissionResult(); permResult != nil {
+	if permResult := conn.cachedPermissionResult(); permResult != nil {
 		nsFallbacks = permResult.ScopeCandidates
 		if len(nsFallbacks) == 0 && permResult.NamespaceScoped && permResult.Namespace != "" {
 			nsFallbacks = []string{permResult.Namespace}
