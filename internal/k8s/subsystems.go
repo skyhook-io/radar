@@ -155,7 +155,7 @@ func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait
 	go func() {
 		defer remainingWg.Done()
 		mt := time.Now()
-		InitMetricsHistory()
+		conn.initMetricsHistory()
 		logTiming("   Metrics history init: %v (parallel)", time.Since(mt))
 	}()
 
@@ -338,7 +338,7 @@ func resetAllSubsystems(conn *Connection) {
 		safeReset("Helm", hResetFn)
 	}
 
-	safeReset("metrics history", ResetMetricsHistory)
+	safeReset("metrics history", conn.closeMetricsHistory)
 
 	// Step 3: dynamic cache. Reset the PolicyReport index first because
 	// it holds references into the dynamic cache's informer indexers —
