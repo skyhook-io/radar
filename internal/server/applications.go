@@ -475,7 +475,8 @@ func (s *Server) gitOpsHistoryAnchors(r *http.Request, source *appSourceRef) ([]
 }
 
 func (s *Server) helmHistoryAnchors(r *http.Request, source *appSourceRef) ([]appHistoryAnchor, []string) {
-	client := helm.GetClient()
+	r = r.WithContext(k8s.CaptureConnection(r.Context()))
+	client := helm.GetClient(r.Context())
 	if client == nil {
 		return nil, []string{"Helm client is not initialized."}
 	}

@@ -46,7 +46,8 @@ type getHelmReleaseInput struct {
 // Helm tool handlers
 
 func handleListHelmReleases(ctx context.Context, req *mcp.CallToolRequest, input listHelmReleasesInput) (*mcp.CallToolResult, any, error) {
-	helmClient := helm.GetClient()
+	ctx = k8s.CaptureConnection(ctx)
+	helmClient := helm.GetClient(ctx)
 	if helmClient == nil {
 		// The Helm client is set up once the cluster has connected; before
 		// that, "no releases found" would be a false absence.
@@ -92,18 +93,20 @@ type partialHelmList struct {
 // mcpHelmObjectScope is Server.helmObjectScope for MCP: the same gates as the
 // search tool.
 func mcpHelmObjectScope(ctx context.Context, namespace string) *helm.ObjectScope {
-	provider := search.NewCacheProvider()
+	conn := k8s.BoundOrCurrent(ctx)
+	provider := search.NewCacheProviderFor(conn)
 	if provider == nil {
 		return nil
 	}
 	ceiling, checkFailed := filterNamespacesForUserWithStatus(ctx, nil)
 	var pin *string
 	if k8s.ForceNamespaceScope {
-		target := k8s.GetNamespaceScopeTarget()
+		target := conn.NamespaceScopeTarget()
 		pin = &target
 	}
 	kindRBAC := mcpSearchKindRBAC(ctx)
 	access := search.ScanAccess{
+		Discovery:            conn.Discovery(),
 		Selection:            search.SelectNamespaces(provider, search.Query{}, readscope.NamespaceAccess{Namespaces: ceiling, Checked: !checkFailed}, pin),
 		NamespaceCheckFailed: checkFailed,
 		TypedKindAccess:      kindRBAC,
@@ -116,7 +119,7 @@ func mcpHelmObjectScope(ctx context.Context, namespace string) *helm.ObjectScope
 	if namespace != "" {
 		named = []string{namespace}
 	}
-	return &helm.ObjectScope{Provider: provider, Access: access, Requested: helm.RequestedNamespaces(named, pin)}
+	return &helm.ObjectScope{Pin: pin, Provider: provider, Access: access, Requested: helm.RequestedNamespaces(named, pin)}
 }
 
 func resolveHelmListNamespaces(ctx context.Context, namespace string) []string {
@@ -168,7 +171,8 @@ func handleGetHelmChart(ctx context.Context, req *mcp.CallToolRequest, input get
 	if input.Repository == "" || input.Chart == "" {
 		return nil, nil, fmt.Errorf("repository and chart are required")
 	}
-	helmClient := helm.GetClient()
+	ctx = k8s.CaptureConnection(ctx)
+	helmClient := helm.GetClient(ctx)
 	if helmClient == nil {
 		if err := requireConnected(); err != nil {
 			return nil, nil, err
@@ -191,7 +195,8 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 	if input.ChartPath != "" && (!parseIncludes(input.Include)["chart"] || !strings.HasPrefix(input.ChartPath, "/")) {
 		return nil, nil, fmt.Errorf("chart_path requires include=chart and a JSON pointer starting with /")
 	}
-	helmClient := helm.GetClient()
+	ctx = k8s.CaptureConnection(ctx)
+	helmClient := helm.GetClient(ctx)
 	if helmClient == nil {
 		// The Helm client is set up once the cluster has connected; before
 		// that, "no releases found" would be a false absence.

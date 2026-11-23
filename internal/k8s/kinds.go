@@ -119,6 +119,10 @@ func ClusterOnlyKindGVR(kind string) (group, resource string, ok bool) {
 // Returns (false, "", "") for namespaced kinds, unknown kinds, or when
 // discovery isn't available.
 func ClassifyKindScope(kind, group string) (clusterScoped bool, gvrGroup, gvrResource string) {
+	return GetResourceDiscovery().ClassifyKindScope(kind, group)
+}
+
+func (disc *ResourceDiscovery) ClassifyKindScope(kind, group string) (clusterScoped bool, gvrGroup, gvrResource string) {
 	if group != "" {
 		key := strings.ToLower(group) + "\x00" + strings.ToLower(kind)
 		if info, ok := clusterOnlyKindsByGroup[key]; ok {
@@ -133,7 +137,6 @@ func ClassifyKindScope(kind, group string) (clusterScoped bool, gvrGroup, gvrRes
 	if g, r, ok := ClusterOnlyKindGVR(kind); ok && (group == "" || group == g) {
 		return true, g, r
 	}
-	disc := GetResourceDiscovery()
 	if disc == nil {
 		return false, "", ""
 	}

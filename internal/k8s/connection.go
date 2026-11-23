@@ -21,6 +21,7 @@ type Connection struct {
 	clients                                  *sharedKubernetesClients
 	contextName, contextBinding, clusterName string
 	contextNamespace                         string
+	scopeOverride                            string // guarded by clientMu
 	perms                                    atomic.Pointer[permissionState]
 	cache                                    atomic.Pointer[connectionCache]
 	dynamicCache                             atomic.Pointer[connectionDynamicCache]
@@ -44,14 +45,14 @@ func Current() *Connection {
 // BoundOrCurrent returns the request's connection, falling back to the installed
 // connection for callers that have not bound one.
 func BoundOrCurrent(ctx context.Context) *Connection {
-	if c := ConnectionFrom(ctx); c != nil {
-		return c
+	if a, bound := ctx.Value(connectionKey{}).(Admission); bound {
+		return a.conn
 	}
 	return Current()
 }
 
 func installedConnectionLocked(config *rest.Config, clients *sharedKubernetesClients) *Connection {
-	return &Connection{config: config, clients: clients, contextName: contextName, contextBinding: contextBinding, clusterName: clusterName, contextNamespace: contextNamespace}
+	return &Connection{config: config, clients: clients, contextName: contextName, contextBinding: contextBinding, clusterName: clusterName, contextNamespace: contextNamespace, scopeOverride: namespaceScopeOverride}
 }
 
 // fresh returns a new, unadmitted connection on the same clients, with no
@@ -60,7 +61,7 @@ func (c *Connection) fresh() *Connection {
 	if c == nil {
 		return &Connection{}
 	}
-	return &Connection{config: c.config, clients: c.clients, contextName: c.contextName, contextBinding: c.contextBinding, clusterName: c.clusterName, contextNamespace: c.contextNamespace}
+	return &Connection{config: c.config, clients: c.clients, contextName: c.contextName, contextBinding: c.contextBinding, clusterName: c.clusterName, contextNamespace: c.contextNamespace, scopeOverride: c.scopeOverride}
 }
 
 func (c *Connection) Client() *kubernetes.Clientset {

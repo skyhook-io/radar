@@ -111,6 +111,8 @@ func TestManageHelmRefusesBusyReleaseAndChangedPreviewStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	helm.Initialize()
+	t.Cleanup(helm.ResetTestClient)
 	oldClient, oldConfig, oldStatus := k8s.SetTestClient(client), k8s.SetTestConfig(cfg), k8s.GetConnectionStatus()
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 	defer func() {
@@ -365,6 +367,8 @@ func TestManageHelmRollbackPreviewReadsLiveObjectsAsCaller(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	helm.Initialize()
+	t.Cleanup(helm.ResetTestClient)
 	oldClient, oldConfig, oldStatus := k8s.SetTestClient(client), k8s.SetTestConfig(cfg), k8s.GetConnectionStatus()
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 	defer func() {
@@ -491,6 +495,8 @@ func TestManageHelmReportsLostRevisionRaceAsNoChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	helm.Initialize()
+	t.Cleanup(helm.ResetTestClient)
 	oldClient, oldConfig, oldStatus := k8s.SetTestClient(client), k8s.SetTestConfig(cfg), k8s.GetConnectionStatus()
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 	defer func() {

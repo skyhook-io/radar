@@ -228,18 +228,22 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 		return nil, nil, err
 	}
 	operation := k8s.OperationContext()
-	conn := k8s.Current()
-	config, clusterContext := conn.ConfigCopy(), k8s.TimelineClusterContext(conn.ContextName())
+	ctx = k8s.CaptureConnection(ctx)
+	conn := k8s.ConnectionFrom(ctx)
+	clusterContext := k8s.TimelineClusterContext(conn.ContextName())
 	ctx = context.WithValue(ctx, confirmationContextKey{}, clusterContext)
 	if _, err := helm.CheckWritePermission(ctx, in.Namespace); err != nil {
 		return nil, nil, err
 	}
-	if config == nil || operation.Err() != nil || k8s.ActiveClusterContext() != clusterContext {
+	if conn.Config() == nil || operation.Err() != nil || k8s.ActiveClusterContext() != clusterContext {
 		return nil, nil, fmt.Errorf("cluster connection changed or is unavailable; retry after reconnecting")
 	}
 	// Pin every read and write in this call to the same cluster, even if the
 	// local operator switches contexts while Helm downloads a chart.
-	client := helm.NewStandaloneClient(config)
+	client := helm.GetClient(ctx)
+	if client == nil {
+		return nil, nil, fmt.Errorf("Helm client not initialized")
+	}
 	user := userFromContext(ctx)
 	if in.Action != "install" {
 		detail, err := client.GetReleaseAsUser(in.Namespace, in.Name, user, mcpHelmObjectScope(ctx, ""))

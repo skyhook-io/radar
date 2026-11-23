@@ -328,7 +328,7 @@ func BuildTimelineStoreConfig(cfg AppConfig) (timeline.StoreConfig, error) {
 	}
 }
 
-// RegisterCallbacks registers Helm, timeline, traffic, and Prometheus reset/reinit
+// RegisterCallbacks initializes Helm repository settings and registers timeline, traffic, and Prometheus reset/reinit
 // functions used for both initial cluster initialization and context switching,
 // and prepares local per-context integration settings. Must be called before
 // InitializeCluster; callers pass the returned config to CreateServer.
@@ -338,7 +338,7 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 	if err != nil {
 		log.Fatalf("Invalid startup configuration: %v", err)
 	}
-	k8s.RegisterHelmFuncs(helm.ResetClient, helm.ReinitClient)
+	helm.Initialize()
 
 	RegisterLastContextMemory(cfg)
 

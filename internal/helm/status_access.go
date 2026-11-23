@@ -19,7 +19,7 @@ type StatusAccess interface {
 	// statusDecision says whether to look the object up. When it shouldn't be,
 	// reason says why the caller can't see it, or is empty when the object is
 	// left as it is without a lookup.
-	statusDecision(kind, group, namespace string) (lookup bool, reason readreason.Code)
+	statusDecision(discovery *k8s.ResourceDiscovery, kind, group, namespace string) (lookup bool, reason readreason.Code)
 	// resolvedFor returns the access with the checks these objects need made
 	// up front, so each kind is checked once across its namespaces rather than
 	// once per object. Its decisions don't change.
@@ -30,22 +30,22 @@ type StatusAccess interface {
 // --namespace-scope pin, an object outside the pinned namespace is left
 // without a lookup and without a marker: Radar doesn't watch that namespace,
 // so there is nothing to withhold.
-func (s *ObjectScope) statusDecision(kind, group, namespace string) (bool, readreason.Code) {
-	if outsidePin(namespace) {
+func (s *ObjectScope) statusDecision(discovery *k8s.ResourceDiscovery, kind, group, namespace string) (bool, readreason.Code) {
+	if s.outsidePin(namespace) {
 		return false, ""
 	}
 	return s.Access.PermitsObject(kind, group, namespace)
 }
 
-func outsidePin(namespace string) bool {
-	return k8s.ForceNamespaceScope && namespace != "" && namespace != k8s.GetNamespaceScopeTarget()
+func (s *ObjectScope) outsidePin(namespace string) bool {
+	return s.Pin != nil && namespace != "" && namespace != *s.Pin
 }
 
 func (s *ObjectScope) resolvedFor(resources []OwnedResource) StatusAccess {
 	var refs []search.ObjectRef
 	for _, r := range resources {
 		group, ok := builtInGroup(r)
-		if !ok || outsidePin(r.Namespace) {
+		if !ok || s.outsidePin(r.Namespace) {
 			continue
 		}
 		refs = append(refs, search.ObjectRef{Kind: r.Kind, Group: group, Namespace: r.Namespace})
@@ -66,8 +66,8 @@ type NamespaceStatusScope struct {
 	Checked    bool
 }
 
-func (s NamespaceStatusScope) statusDecision(kind, group, namespace string) (bool, readreason.Code) {
-	if clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group); clusterScoped {
+func (s NamespaceStatusScope) statusDecision(discovery *k8s.ResourceDiscovery, kind, group, namespace string) (bool, readreason.Code) {
+	if clusterScoped, _, _ := discovery.ClassifyKindScope(kind, group); clusterScoped {
 		return false, ""
 	}
 	if _, resource := k8s.ExactNamespaceAccessResource(kind, group); resource != "" {
@@ -101,7 +101,7 @@ func (s NamespaceStatusScope) CacheKey() string {
 // caller under its gates, so every one may be looked up.
 type scannedObjects struct{}
 
-func (scannedObjects) statusDecision(string, string, string) (bool, readreason.Code) {
+func (scannedObjects) statusDecision(*k8s.ResourceDiscovery, string, string, string) (bool, readreason.Code) {
 	return true, ""
 }
 
@@ -148,22 +148,22 @@ func builtInGroup(r OwnedResource) (string, bool) {
 
 // readReleaseStatus fills in the live status of the objects the caller may
 // see and returns release health over them.
-func readReleaseStatus(resources []OwnedResource, access StatusAccess) (health, issue, summary string) {
+func readReleaseStatus(conn *k8s.Connection, resources []OwnedResource, access StatusAccess) (health, issue, summary string) {
 	if noStatusAccess(access) {
 		return "unknown", "", ""
 	}
-	return readResolvedStatus(resources, access.resolvedFor(resources))
+	return readResolvedStatus(conn, resources, access.resolvedFor(resources))
 }
 
 // readResolvedStatus is readReleaseStatus with access already resolved for
 // resources.
-func readResolvedStatus(resources []OwnedResource, access StatusAccess) (health, issue, summary string) {
-	enrichResourcesWithStatus(resources, access)
+func readResolvedStatus(conn *k8s.Connection, resources []OwnedResource, access StatusAccess) (health, issue, summary string) {
+	enrichResourcesWithStatus(conn, resources, access)
 	return computeResourceHealth(resources)
 }
 
 // addReleasesHealth resolves caller access once across all releases.
-func addReleasesHealth(rows []HelmRelease, rels []*release.Release, access StatusAccess) {
+func addReleasesHealth(conn *k8s.Connection, rows []HelmRelease, rels []*release.Release, access StatusAccess) {
 	if noStatusAccess(access) {
 		for i := range rows {
 			rows[i].ResourceHealth = "unknown"
@@ -173,12 +173,12 @@ func addReleasesHealth(rows []HelmRelease, rels []*release.Release, access Statu
 	resources := make([][]OwnedResource, len(rels))
 	var all []OwnedResource
 	for i, rel := range rels {
-		resources[i] = parseManifestResources(rel.Manifest, rel.Namespace)
+		resources[i] = parseManifestResources(conn, rel.Manifest, rel.Namespace)
 		all = append(all, resources[i]...)
 	}
 	access = access.resolvedFor(all)
 	for i := range rows {
-		rows[i].ResourceHealth, rows[i].HealthIssue, rows[i].HealthSummary = readResolvedStatus(resources[i], access)
+		rows[i].ResourceHealth, rows[i].HealthIssue, rows[i].HealthSummary = readResolvedStatus(conn, resources[i], access)
 		rows[i].StatusUnreadCount = statusUnreadCount(resources[i])
 	}
 }

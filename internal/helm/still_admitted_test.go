@@ -11,6 +11,7 @@ import (
 
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
@@ -81,41 +82,74 @@ func TestBoundHelmActionConfigStaysOnAdmittedConnectionAcrossSwitch(t *testing.T
 	}
 }
 
-// With a single kubeconfig file, unbound Helm reads the file on every action,
-// so an edit that points the context at another server retargets it. A bound
-// write keeps the config Radar admitted.
-func TestBoundHelmActionConfigIgnoresAnEditedKubeconfig(t *testing.T) {
+func TestHelmActionsUseCapturedConnectionAfterKubeconfigEdit(t *testing.T) {
 	t.Cleanup(k8s.SnapshotTestConnection())
 	path := filepath.Join(t.TempDir(), "config")
-	edited := "apiVersion: v1\nkind: Config\ncurrent-context: a\n" +
-		"clusters: [{name: a, cluster: {server: \"https://b\"}}]\n" +
-		"users: [{name: a, user: {token: t}}]\n" +
+	original := "apiVersion: v1\nkind: Config\ncurrent-context: a\n" +
+		"clusters: [{name: a, cluster: {server: \"https://a\"}}]\n" +
+		"users: [{name: a, user: {token: first}}]\n" +
 		"contexts: [{name: a, context: {cluster: a, user: a}}]\n"
-	if err := os.WriteFile(path, []byte(edited), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := k8s.InstallTestServingConnection("a", &rest.Config{Host: "https://a"}, nil, fake.NewSimpleClientset().Discovery()); err != nil {
+	base, err := clientcmd.BuildConfigFromFlags("", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k8s.InstallTestServingConnection("a", base, nil, fake.NewSimpleClientset().Discovery()); err != nil {
 		t.Fatal(err)
 	}
 	admitted, err := k8s.CaptureServingConnection()
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := &Client{kubeconfig: path}
+	edited := strings.NewReplacer("https://a", "https://b", "token: first", "token: second").Replace(original)
+	if err := os.WriteFile(path, []byte(edited), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KUBECONFIG", path)
+	client := &Client{}
 
 	unbound, err := client.actionConfigForWrite(t.Context(), "default")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg, err := unbound.RESTClientGetter.ToRESTConfig(); err != nil || cfg.Host != "https://b" {
-		t.Fatalf("unbound Helm should follow the file (the case this guards): host %v, err %v", cfg, err)
+	if cfg, err := unbound.RESTClientGetter.ToRESTConfig(); err != nil || cfg.Host != "https://a" || cfg.BearerToken != "first" {
+		t.Fatalf("unbound Helm should use the captured config: host %v, err %v", cfg, err)
 	}
 
 	bound, err := client.actionConfigForWrite(admitted.Bind(t.Context()), "default")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg, err := bound.RESTClientGetter.ToRESTConfig(); err != nil || cfg.Host != "https://a" {
+	if cfg, err := bound.RESTClientGetter.ToRESTConfig(); err != nil || cfg.Host != "https://a" || cfg.BearerToken != "first" {
 		t.Fatalf("bound write: host %v, err %v; want https://a", cfg, err)
 	}
+}
+
+// The fixture API serves A's object writes. Any request to B, including discovery, fails the test.
+func boundWriteGetterAfterSwitch(t *testing.T, host, namespace string) *restConfigGetter {
+	t.Helper()
+	t.Cleanup(k8s.SnapshotTestConnection())
+	discovery := fake.NewSimpleClientset().Discovery()
+	if _, err := k8s.InstallTestServingConnection("a", &rest.Config{Host: host}, nil, discovery); err != nil {
+		t.Fatal(err)
+	}
+	admitted, err := k8s.CaptureServingConnection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("Helm contacted B: %s %s", r.Method, r.URL.Path)
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(b.Close)
+	if _, err := k8s.InstallTestServingConnection("b", &rest.Config{Host: b.URL}, nil, discovery); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := (&Client{}).actionConfigForWrite(admitted.Bind(t.Context()), namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg.RESTClientGetter.(*restConfigGetter)
 }

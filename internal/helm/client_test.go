@@ -18,6 +18,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/k8s"
+
 	"github.com/skyhook-io/radar/pkg/helmhistory"
 
 	"helm.sh/helm/v3/pkg/action"
@@ -779,8 +781,8 @@ spec:
             port: 8080
 `
 
-	left, _ := parseManifestResourceObjects(oldManifest, "demo")
-	right, _ := parseManifestResourceObjects(newManifest, "demo")
+	left, _ := parseManifestResourceObjects(k8s.Current(), oldManifest, "demo")
+	right, _ := parseManifestResourceObjects(k8s.Current(), newManifest, "demo")
 	removed, added, common := diffResourceRefs(resourceRefsFromRendered(left), resourceRefsFromRendered(right))
 	modified, unchanged := diffRenderedResourceObjects(common, left, right)
 
@@ -848,8 +850,8 @@ spec:
         image: nginx:1.25
 `
 
-	left, _ := parseManifestResourceObjects(oldManifest, "demo")
-	right, _ := parseManifestResourceObjects(newManifest, "demo")
+	left, _ := parseManifestResourceObjects(k8s.Current(), oldManifest, "demo")
+	right, _ := parseManifestResourceObjects(k8s.Current(), newManifest, "demo")
 	_, _, common := diffResourceRefs(resourceRefsFromRendered(left), resourceRefsFromRendered(right))
 	modified, unchanged := diffRenderedResourceObjects(common, left, right)
 
@@ -883,8 +885,8 @@ spec:
   size: medium
 `
 
-	left, _ := parseManifestResourceObjects(oldManifest, "demo")
-	right, _ := parseManifestResourceObjects(newManifest, "demo")
+	left, _ := parseManifestResourceObjects(k8s.Current(), oldManifest, "demo")
+	right, _ := parseManifestResourceObjects(k8s.Current(), newManifest, "demo")
 	_, _, common := diffResourceRefs(resourceRefsFromRendered(left), resourceRefsFromRendered(right))
 	modified, unchanged := diffRenderedResourceObjects(common, left, right)
 
@@ -916,8 +918,8 @@ spec:
   size: medium
 `
 
-	left, _ := parseManifestResourceObjects(oldManifest, "demo")
-	right, _ := parseManifestResourceObjects(newManifest, "demo")
+	left, _ := parseManifestResourceObjects(k8s.Current(), oldManifest, "demo")
+	right, _ := parseManifestResourceObjects(k8s.Current(), newManifest, "demo")
 	_, _, common := diffResourceRefs(resourceRefsFromRendered(left), resourceRefsFromRendered(right))
 	modified, unchanged := diffRenderedResourceObjects(common, left, right)
 
@@ -930,7 +932,7 @@ spec:
 }
 
 func TestParseManifestResourceObjectsUsesMetadataName(t *testing.T) {
-	resources, parseErrors := parseManifestResourceObjects(`apiVersion: apps/v1
+	resources, parseErrors := parseManifestResourceObjects(k8s.Current(), `apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: cart
@@ -955,7 +957,7 @@ spec:
 }
 
 func TestParseManifestResourceObjectsKeepsClusterScopedNamespaceEmpty(t *testing.T) {
-	resources, parseErrors := parseManifestResourceObjects(`apiVersion: rbac.authorization.k8s.io/v1
+	resources, parseErrors := parseManifestResourceObjects(k8s.Current(), `apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: chart-reader
@@ -975,7 +977,7 @@ rules: []
 }
 
 func TestParseManifestResourceObjectsReportsParseErrors(t *testing.T) {
-	resources, parseErrors := parseManifestResourceObjects(`apiVersion: v1
+	resources, parseErrors := parseManifestResourceObjects(k8s.Current(), `apiVersion: v1
 kind: ConfigMap
 metadata:
   name: good
@@ -1066,7 +1068,7 @@ func TestExtractHookDiagnosticsSurfacesFailedHookDeletePolicy(t *testing.T) {
 		},
 	}
 
-	hooks := extractHooks(rel)
+	hooks := extractHooks(k8s.Current(), rel)
 	diagnostics := extractHookDiagnostics(hooks)
 
 	if len(hooks) != 1 {
@@ -1099,7 +1101,7 @@ func TestExtractHooksOmitsZeroTimes(t *testing.T) {
 		},
 	}
 
-	hooks := extractHooks(rel)
+	hooks := extractHooks(k8s.Current(), rel)
 	if len(hooks) != 1 {
 		t.Fatalf("len(hooks) = %d, want 1", len(hooks))
 	}
@@ -1128,7 +1130,7 @@ metadata:
 			},
 		},
 	}
-	hooks := extractHooks(rel)
+	hooks := extractHooks(k8s.Current(), rel)
 	detail := &HelmReleaseDetail{
 		Name:            rel.Name,
 		Namespace:       rel.Namespace,
@@ -1531,10 +1533,10 @@ generated: "2026-10-16T00:00:00Z"
 		t.Fatal(err)
 	}
 
-	client := &Client{settings: &cli.EnvSettings{
+	client := &Client{repositorySettings: &repositorySettings{settings: &cli.EnvSettings{
 		RepositoryConfig: repoFile,
 		RepositoryCache:  cacheDir,
-	}}
+	}}}
 	rel := &release.Release{
 		Name: "monitoring",
 		Chart: &chart.Chart{Metadata: &chart.Metadata{
@@ -1584,7 +1586,7 @@ generated: "2026-10-14T00:00:00Z"
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	client := &Client{settings: &cli.EnvSettings{RepositoryConfig: repoFile, RepositoryCache: cacheDir}}
+	client := &Client{repositorySettings: &repositorySettings{settings: &cli.EnvSettings{RepositoryConfig: repoFile, RepositoryCache: cacheDir}}}
 
 	rel := &release.Release{
 		Name: "cloudnative-pg",
@@ -1651,10 +1653,10 @@ entries:
 		writeIndex(name, versions)
 	}
 
-	return &Client{settings: &cli.EnvSettings{
+	return &Client{repositorySettings: &repositorySettings{settings: &cli.EnvSettings{
 		RepositoryConfig: repoFile,
 		RepositoryCache:  cacheDir,
-	}}
+	}}}
 }
 
 func testHelmClientWithRepoConfigOnly(t *testing.T) *Client {
@@ -1674,10 +1676,10 @@ repositories:
 		t.Fatal(err)
 	}
 
-	return &Client{settings: &cli.EnvSettings{
+	return &Client{repositorySettings: &repositorySettings{settings: &cli.EnvSettings{
 		RepositoryConfig: repoFile,
 		RepositoryCache:  cacheDir,
-	}}
+	}}}
 }
 
 func TestCompareVersions(t *testing.T) {
@@ -1962,6 +1964,6 @@ func helmReleaseRowsForTest(t *testing.T, snapshot *helmReleaseStorageSnapshot) 
 
 func toHelmRelease(rel *release.Release, storageNamespace string, access StatusAccess) HelmRelease {
 	rows := []HelmRelease{toHelmReleaseSummary(rel, storageNamespace)}
-	addReleasesHealth(rows, []*release.Release{rel}, access)
+	addReleasesHealth(k8s.Current(), rows, []*release.Release{rel}, access)
 	return rows[0]
 }

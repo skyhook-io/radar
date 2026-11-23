@@ -112,6 +112,7 @@ type ObservedReleaseDetail struct {
 // ObjectScope is a caller's view of the cached objects, built by each surface
 // from its own per-user checks.
 type ObjectScope struct {
+	Pin      *string
 	Provider objectProvider
 	Access   search.ScanAccess
 	// Requested is what the caller narrowed to; see RequestedNamespaces.
@@ -157,6 +158,7 @@ func skipScanKind(kind, group string) bool {
 
 // stampScan is the object evidence of one read.
 type stampScan struct {
+	conn     *k8s.Connection
 	stamped  []stampedObject
 	flux     []fluxEvidence
 	coverage resourceapi.SearchCoverage
@@ -199,9 +201,10 @@ func (s *stampScan) add(o search.ScannedObject) {
 // warmed because the scan reads only watched kinds and Radar may not have
 // started this one; the scan still decides whether this caller may read them.
 func scanObservedReleases(ctx context.Context, scope *ObjectScope) (*stampScan, error) {
+	ctx = k8s.CaptureConnection(ctx)
 	warmFluxHelmReleases(ctx, scope.Provider)
 
-	scan := &stampScan{seen: map[string]bool{}}
+	scan := &stampScan{conn: k8s.ConnectionFrom(ctx), seen: map[string]bool{}}
 	coverage, err := search.Scan(ctx, scope.Provider, scope.Access, skipScanKind, scan.add)
 	if errors.Is(err, search.ErrConnectionChanged) {
 		return nil, ErrConnectionChanged
@@ -214,7 +217,7 @@ func scanObservedReleases(ctx context.Context, scope *ObjectScope) (*stampScan, 
 }
 
 func warmFluxHelmReleases(ctx context.Context, provider search.Provider) {
-	discovery := k8s.GetResourceDiscovery()
+	discovery := k8s.ConnectionFrom(ctx).Discovery()
 	if discovery == nil {
 		return
 	}
@@ -439,13 +442,13 @@ func agreed(values []string) (string, []string) {
 // custom kind named like a built-in would read the wrong object. With a gap in
 // what was read, an unread part could be the broken one, so "healthy" isn't
 // claimed.
-func addObservedHealth(row *ObservedRelease, objects []stampedObject, partial bool) []OwnedResource {
+func addObservedHealth(conn *k8s.Connection, row *ObservedRelease, objects []stampedObject, partial bool) []OwnedResource {
 	resources := make([]OwnedResource, 0, len(objects))
 	for _, o := range objects {
 		resource := OwnedResource{Kind: o.kind, APIVersion: objectAPIVersion(o), Name: o.name, Namespace: o.namespace}
 		resources = append(resources, resource)
 	}
-	enrichResourcesWithStatus(resources, scannedObjects{})
+	enrichResourcesWithStatus(conn, resources, scannedObjects{})
 	row.ResourceHealth, row.HealthIssue, row.HealthSummary = computeResourceHealth(resources)
 	if partial && row.ResourceHealth == "healthy" {
 		row.ResourceHealth = "unknown"
@@ -598,8 +601,8 @@ func observedDetail(scope *ObjectScope, scan *stampScan, key releaseKey, flux []
 		return objects[i].name < objects[j].name
 	})
 	detail := &ObservedReleaseDetail{ObservedRelease: observedRow(key, objects, flux), ObjectCoverage: scan.coverage}
-	detail.Resources = addObservedHealth(&detail.ObservedRelease, objects, scan.coverage.Status != resourceapi.CoverageComplete)
-	// Health reads the current cache, so this has to come after it.
+	detail.Resources = addObservedHealth(scan.conn, &detail.ObservedRelease, objects, scan.coverage.Status != resourceapi.CoverageComplete)
+	// Retain the inventory conflict response if the scanned caches were replaced.
 	if !scope.Provider.Current() {
 		return nil, ErrConnectionChanged
 	}

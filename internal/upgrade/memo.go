@@ -335,7 +335,7 @@ func (m *upgradeScanMemo) outcomeLocked(entry *upgradeScanEntry, fromCache bool)
 //
 // Results are shared across callers of the same key — treat the ScanResults
 // as immutable; shape copies, never mutate in place.
-func ScanMemoized(ctx context.Context, authz EvidenceAuthorizer, targetVersion string, refresh bool) (ScanOutcome, error) {
+func ScanMemoized(ctx context.Context, authorizer func(context.Context) EvidenceAuthorizer, targetVersion string, refresh bool) (ScanOutcome, error) {
 	// The generation is captured BEFORE any cluster-dependent read below
 	// (cache, server version, namespace ceiling): a context switch completing
 	// after this line is caught as a mismatch in get, so inputs resolved
@@ -343,7 +343,9 @@ func ScanMemoized(ctx context.Context, authz EvidenceAuthorizer, targetVersion s
 	// generation.
 	memo := getUpgradeScanMemo()
 	gen := memo.currentGeneration()
-	if k8s.GetResourceCache() == nil {
+	ctx = k8s.CaptureConnection(ctx)
+	authz := authorizer(ctx)
+	if k8s.ConnectionFrom(ctx).ResourceCache() == nil {
 		return ScanOutcome{}, ErrScanNotReady
 	}
 	currentVersion := k8s.GetServerVersion()

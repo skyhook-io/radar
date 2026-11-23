@@ -138,7 +138,7 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 	composeFilters.Limit = issues.NoLimit
 	composeFilters.Filter = nil
 	out, stats := issues.ComposeWithStats(provider, composeFilters)
-	helmIssues, helmUnchecked, helmIncomplete := s.nativeHelmIssuesForRequest(r, namespaces, filters)
+	helmIssues, helmUnchecked, helmIncomplete := s.nativeHelmIssuesForRequest(r, filters)
 	out, stats = issues.MergeExternalIssues(out, stats, filters, helmIssues)
 	// Shared base response shape (issues.ListResponse); surfaces add their
 	// own enrichments after this point.
@@ -219,11 +219,12 @@ func (s *Server) issueRelatedResourceAccess(r *http.Request) func(issues.Ref) bo
 // to completion for nobody. incomplete reports a failed read whose answer
 // someone is still waiting for (see helm.IssueReadUnchecked); the issues
 // returned alongside it come from the namespaces that were read.
-func (s *Server) nativeHelmIssuesForRequest(r *http.Request, namespaces []string, filters issues.Filters) (found []issues.Issue, unchecked issuesapi.UncheckedSource, incomplete bool) {
+func (s *Server) nativeHelmIssuesForRequest(r *http.Request, filters issues.Filters) (found []issues.Issue, unchecked issuesapi.UncheckedSource, incomplete bool) {
 	if !issues.KindFilterIncludes(filters.Kinds, "HelmRelease", "helmreleases") {
 		return nil, unchecked, false
 	}
-	helmClient := helm.GetClient()
+	r = r.WithContext(k8s.CaptureConnection(r.Context()))
+	helmClient := helm.GetClient(r.Context())
 	if helmClient == nil {
 		return nil, unchecked, false
 	}
@@ -233,7 +234,7 @@ func (s *Server) nativeHelmIssuesForRequest(r *http.Request, namespaces []string
 	if user != nil {
 		username, groups = user.Username, user.Groups
 	}
-	helmNamespaces := namespaces
+	helmNamespaces := s.parseNamespacesForUser(r)
 	checked := true
 	var unread []string
 	if helmNamespaces == nil {

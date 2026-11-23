@@ -1753,7 +1753,7 @@ func (s *Server) parseNamespacesForUser(r *http.Request) []string {
 func (s *Server) parseNamespacesForUserWithStatus(r *http.Request) ([]string, bool) {
 	namespaces := parseNamespaces(r.URL.Query())
 	if k8s.ForceNamespaceScope {
-		target := k8s.GetNamespaceScopeTarget()
+		target := k8s.BoundOrCurrent(r.Context()).NamespaceScopeTarget()
 		if target == "" {
 			return []string{}, false
 		}
@@ -1809,7 +1809,7 @@ func (s *Server) resolveHelmStorageScope(r *http.Request) ([]string, bool, bool,
 		// explicit filter to the pinned namespace (empty when it's out of scope)
 		// instead of reading releases the cache doesn't cover.
 		if k8s.ForceNamespaceScope {
-			if target := k8s.GetNamespaceScopeTarget(); target != "" && slices.Contains(explicit, target) {
+			if target := k8s.BoundOrCurrent(r.Context()).NamespaceScopeTarget(); target != "" && slices.Contains(explicit, target) {
 				return []string{target}, true, true, nil
 			}
 			return []string{}, true, true, nil
@@ -1925,7 +1925,7 @@ func (s *Server) canReadDecision(r *http.Request, group, resource, namespace, ve
 	if user == nil || s.permCache == nil {
 		return true, true
 	}
-	if s.permCache.Get(user.Username, user.Groups) == nil {
+	if k8s.ReadPermissionCache(r.Context(), s.permCache).Get(user.Username, user.Groups) == nil {
 		// Trigger namespace discovery so SAR cache has a parent UserPermissions
 		// entry. parseNamespacesForUser is the canonical path that populates
 		// this; if it hasn't run yet, canReadUser falls through to a fresh SAR.
@@ -1954,7 +1954,7 @@ func (s *Server) canReadUserDecision(ctx context.Context, user *auth.User, group
 	if user == nil || s.permCache == nil {
 		return true, true
 	}
-	perms := s.permCache.Get(user.Username, user.Groups)
+	perms := k8s.ReadPermissionCache(ctx, s.permCache).Get(user.Username, user.Groups)
 	if perms != nil {
 		if v, ok := perms.CanI(verb, group, resource, namespace); ok {
 			return v, true
@@ -1964,7 +1964,7 @@ func (s *Server) canReadUserDecision(ctx context.Context, user *auth.User, group
 	// Keyed by connection generation, not context name: a reconnect under the
 	// same name can reach a different cluster, and the review must run on the
 	// client its key names.
-	conn := k8s.Current()
+	conn := k8s.BoundOrCurrent(ctx)
 	client, generation := conn.Client(), conn.ClientGeneration()
 	key := pkgauth.IdentityCacheKey(user.Username, user.Groups) + strings.Join([]string{strconv.FormatUint(generation, 10), verb, group, resource, namespace}, "\x00")
 	review := s.accessReviews.DoChan(key, func() (v any, err error) {
@@ -5961,14 +5961,14 @@ func (s *Server) getUserNamespacesWithStatus(r *http.Request, requested []string
 		return requested, false
 	}
 
-	perms := s.permCache.Get(user.Username, user.Groups)
+	perms := k8s.ReadPermissionCache(r.Context(), s.permCache).Get(user.Username, user.Groups)
 	if perms != nil {
 		log.Printf("[auth] Using cached permissions for %s: allowed=%v", user.Username, perms.AllowedNamespaces == nil)
 	}
 	if perms == nil {
 		log.Printf("[auth] No cached permissions for %s — discovering namespaces", user.Username)
 		// Discover namespaces synchronously on first request
-		client := k8s.GetClient()
+		client := k8s.BoundOrCurrent(r.Context()).Client()
 		if client == nil {
 			log.Printf("[auth] K8s client not available for namespace discovery (user=%s) — denying access", k8s.SanitizeForLog(user.Username))
 			return []string{}, true // fail-closed: cannot verify permissions
@@ -5976,7 +5976,7 @@ func (s *Server) getUserNamespacesWithStatus(r *http.Request, requested []string
 
 		// Get all namespace names from cache
 		var allNamespaces []string
-		if cache := k8s.GetResourceCache(); cache != nil {
+		if cache := k8s.BoundOrCurrent(r.Context()).ResourceCache(); cache != nil {
 			if nsLister := cache.Namespaces(); nsLister != nil {
 				nsList, _ := nsLister.List(labels.Everything())
 				for _, ns := range nsList {
@@ -6004,7 +6004,7 @@ func (s *Server) getUserNamespacesWithStatus(r *http.Request, requested []string
 
 		log.Printf("[auth] DiscoverNamespaces result for %s: allowed=%v (nil=all, []=none)", user.Username, allowed)
 		perms = &auth.UserPermissions{AllowedNamespaces: allowed}
-		s.permCache.Set(user.Username, user.Groups, perms)
+		k8s.ReadPermissionCache(r.Context(), s.permCache).Set(user.Username, user.Groups, perms)
 	}
 
 	return auth.FilterNamespacesForUser(requested, user, perms), false

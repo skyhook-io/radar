@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/k8s"
+
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/pkg/helmhistory"
@@ -17,7 +19,8 @@ func helmRecentChangesForContext(ctx context.Context, input getChangesInput, sin
 	if input.Kind != "" && !issues.KindFilterIncludes([]string{input.Kind}, "HelmRelease", "helmreleases") {
 		return nil, nil
 	}
-	helmClient := helm.GetClient()
+	ctx = k8s.CaptureConnection(ctx)
+	helmClient := helm.GetClient(ctx)
 	if helmClient == nil {
 		return nil, nil
 	}

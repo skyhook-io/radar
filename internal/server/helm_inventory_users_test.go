@@ -13,6 +13,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/helm"
+	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 func helmStamped(namespace, name, release string) metav1.ObjectMeta {
@@ -45,8 +46,10 @@ func TestHelmInventoryObservedRowsFollowEachCallersAccess(t *testing.T) {
 	}
 	alice.SetCanI("list", "rbac.authorization.k8s.io", "roles", "team-b", true)
 	bob.SetCanI("list", "rbac.authorization.k8s.io", "roles", "team-b", false)
-	env.srv.permCache.Set("alice", nil, alice)
-	env.srv.permCache.Set("bob", nil, bob)
+
+	k8s.ReadPermissionCache(k8s.CaptureConnection(t.Context()), env.srv.permCache).Set("alice", nil, alice)
+
+	k8s.ReadPermissionCache(k8s.CaptureConnection(t.Context()), env.srv.permCache).Set("bob", nil, bob)
 
 	read := func(user string) map[string]int {
 		t.Helper()

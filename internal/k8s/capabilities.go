@@ -331,6 +331,7 @@ type DeploymentInfo struct {
 }
 
 type permissionState struct {
+	readCaches          sync.Map // host permission cache -> cache for reads bound to this build
 	resourcePermsMu     sync.RWMutex
 	cachedPermResult    *PermissionCheckResult
 	resourcePermsExpiry time.Time
@@ -360,6 +361,20 @@ func (c *Connection) permissions() *permissionState {
 	}
 	c.perms.CompareAndSwap(nil, &permissionState{})
 	return c.perms.Load()
+}
+
+// ReadPermissionCache isolates a bound request's namespace and SAR decisions by build.
+func ReadPermissionCache(ctx context.Context, host *pkgauth.PermissionCache) *pkgauth.PermissionCache {
+	conn := ConnectionFrom(ctx)
+	if conn == nil || host == nil {
+		return host
+	}
+	caches := &conn.permissions().readCaches
+	if found, ok := caches.Load(host); ok {
+		return found.(*pkgauth.PermissionCache)
+	}
+	found, _ := caches.LoadOrStore(host, pkgauth.NewPermissionCache())
+	return found.(*pkgauth.PermissionCache)
 }
 
 // ResetPermissions retires in-flight checks along with their cache. Each

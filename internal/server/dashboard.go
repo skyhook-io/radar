@@ -497,6 +497,7 @@ func (s *Server) handleDashboardHelm(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
+	r = r.WithContext(k8s.CaptureConnection(r.Context()))
 	namespaces, ok, checked, unread := s.resolveHelmStorageScope(r)
 	if !ok {
 		s.writeJSON(w, DashboardHelmSummary{})
@@ -1256,7 +1257,8 @@ func (s *Server) getDashboardTrafficSummary() *DashboardTrafficSummary {
 // can't list Secrets there; checked is false when a permission check behind
 // that went unanswered.
 func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string, checked bool, unread ...string) DashboardHelmSummary {
-	helmClient := helm.GetClient()
+	r = r.WithContext(k8s.CaptureConnection(r.Context()))
+	helmClient := helm.GetClient(r.Context())
 	if helmClient == nil {
 		return DashboardHelmSummary{
 			Releases:  []DashboardHelmRelease{},

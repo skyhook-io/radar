@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"io"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
+
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
@@ -174,6 +175,11 @@ func (h *Handlers) storageNamespaces(r *http.Request) ([]string, bool, bool, []s
 // RegisterRoutes registers Helm routes on the given router
 func (h *Handlers) RegisterRoutes(r chi.Router) {
 	r.Route("/helm", func(r chi.Router) {
+		r.Use(func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				next.ServeHTTP(w, r.WithContext(k8s.CaptureConnection(r.Context())))
+			})
+		})
 		// Release management
 		r.Get("/releases", h.handleListReleases)
 		r.Get("/inventory", h.handleInventory)
@@ -228,7 +234,7 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 }
 
 func (h *Handlers) handleSourceStatus(w http.ResponseWriter, r *http.Request) {
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -257,7 +263,7 @@ func (h *Handlers) handleSetSource(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -273,7 +279,7 @@ func (h *Handlers) handleSetSource(w http.ResponseWriter, r *http.Request) {
 
 // handleListReleases returns all Helm releases
 func (h *Handlers) handleListReleases(w http.ResponseWriter, r *http.Request) {
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -316,7 +322,7 @@ func (h *Handlers) handleListReleases(w http.ResponseWriter, r *http.Request) {
 // exceeds the caller's access. Without authentication the caller is Radar's
 // own identity, and the route shows no more than /api/resources does.
 func (h *Handlers) handleInventory(w http.ResponseWriter, r *http.Request) {
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -382,7 +388,7 @@ func writeInventoryError(w http.ResponseWriter, r *http.Request, err error) {
 
 // handleGetRelease returns details for a specific release
 func (h *Handlers) handleGetRelease(w http.ResponseWriter, r *http.Request) {
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -421,7 +427,7 @@ func writeGetReleaseError(w http.ResponseWriter, err error) {
 // the caller: Helm stores releases as Secrets, so Kubernetes RBAC on Secrets
 // decides who can see it.
 func (h *Handlers) handleGetManifest(w http.ResponseWriter, r *http.Request) {
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -452,7 +458,7 @@ func (h *Handlers) handleGetManifest(w http.ResponseWriter, r *http.Request) {
 
 // handleGetValues returns the values for a release, read as the caller.
 func (h *Handlers) handleGetValues(w http.ResponseWriter, r *http.Request) {
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -483,7 +489,7 @@ func (h *Handlers) handleGetValues(w http.ResponseWriter, r *http.Request) {
 
 // handleGetValuesDiff returns a values diff between two release revisions.
 func (h *Handlers) handleGetValuesDiff(w http.ResponseWriter, r *http.Request) {
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -508,7 +514,7 @@ func (h *Handlers) handleGetValuesDiff(w http.ResponseWriter, r *http.Request) {
 
 // handleGetDiff returns the diff between two revisions.
 func (h *Handlers) handleGetDiff(w http.ResponseWriter, r *http.Request) {
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -534,7 +540,7 @@ func (h *Handlers) handleGetDiff(w http.ResponseWriter, r *http.Request) {
 
 // handleGetNotesDiff returns a release notes diff between two revisions.
 func (h *Handlers) handleGetNotesDiff(w http.ResponseWriter, r *http.Request) {
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -556,7 +562,7 @@ func (h *Handlers) handleGetNotesDiff(w http.ResponseWriter, r *http.Request) {
 
 // handleGetHooksDiff returns a release hook metadata diff between two revisions.
 func (h *Handlers) handleGetHooksDiff(w http.ResponseWriter, r *http.Request) {
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -578,7 +584,7 @@ func (h *Handlers) handleGetHooksDiff(w http.ResponseWriter, r *http.Request) {
 
 // handleGetResourceDiff returns added/removed rendered resources between revisions.
 func (h *Handlers) handleGetResourceDiff(w http.ResponseWriter, r *http.Request) {
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -624,7 +630,7 @@ func parseRevisionPair(w http.ResponseWriter, r *http.Request) (int, int, bool) 
 
 // handleCheckUpgrade checks if a newer version is available
 func (h *Handlers) handleCheckUpgrade(w http.ResponseWriter, r *http.Request) {
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -647,7 +653,7 @@ func (h *Handlers) handleCheckUpgrade(w http.ResponseWriter, r *http.Request) {
 // release could be upgraded/downgraded to, so the upgrade dialog can offer a
 // specific target version. Returns [] when the source can't be resolved.
 func (h *Handlers) handleAvailableVersions(w http.ResponseWriter, r *http.Request) {
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -675,7 +681,7 @@ func (h *Handlers) handleAvailableVersions(w http.ResponseWriter, r *http.Reques
 
 // handleBatchUpgradeCheck checks all releases for upgrades at once
 func (h *Handlers) handleBatchUpgradeCheck(w http.ResponseWriter, r *http.Request) {
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -706,7 +712,7 @@ func (h *Handlers) handleRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -750,7 +756,7 @@ func (h *Handlers) handleRollbackStream(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -850,7 +856,7 @@ func (h *Handlers) handleUninstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -882,7 +888,7 @@ func (h *Handlers) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -926,7 +932,7 @@ func (h *Handlers) handleUpgradeStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -1024,7 +1030,7 @@ func (h *Handlers) handlePreviewValues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -1070,7 +1076,7 @@ func (h *Handlers) handleApplyValues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -1108,7 +1114,7 @@ func (h *Handlers) handleApplyValues(w http.ResponseWriter, r *http.Request) {
 
 // handleListRepositories returns all configured Helm repositories
 func (h *Handlers) handleListRepositories(w http.ResponseWriter, r *http.Request) {
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -1147,7 +1153,7 @@ func (h *Handlers) handleAddRepository(w http.ResponseWriter, r *http.Request) {
 	if !requireHelmWrite(w, r, req.Namespace) {
 		return
 	}
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -1211,7 +1217,7 @@ func (h *Handlers) handleUpdateRepository(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -1287,7 +1293,7 @@ func (h *Handlers) handleRemoveOCISource(w http.ResponseWriter, r *http.Request)
 
 // handleSearchCharts searches for charts across all repositories
 func (h *Handlers) handleSearchCharts(w http.ResponseWriter, r *http.Request) {
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -1307,7 +1313,7 @@ func (h *Handlers) handleSearchCharts(w http.ResponseWriter, r *http.Request) {
 
 // handleGetChartDetail returns detailed info about a chart (latest version)
 func (h *Handlers) handleGetChartDetail(w http.ResponseWriter, r *http.Request) {
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -1327,7 +1333,7 @@ func (h *Handlers) handleGetChartDetail(w http.ResponseWriter, r *http.Request) 
 
 // handleGetChartDetailVersion returns detailed info about a specific chart version
 func (h *Handlers) handleGetChartDetailVersion(w http.ResponseWriter, r *http.Request) {
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -1348,7 +1354,7 @@ func (h *Handlers) handleGetChartDetailVersion(w http.ResponseWriter, r *http.Re
 
 // handleInstall installs a new Helm release (non-streaming version)
 func (h *Handlers) handleInstall(w http.ResponseWriter, r *http.Request) {
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
@@ -1399,7 +1405,7 @@ func (h *Handlers) handleInstall(w http.ResponseWriter, r *http.Request) {
 
 // handleInstallStream installs a Helm release with SSE progress streaming
 func (h *Handlers) handleInstallStream(w http.ResponseWriter, r *http.Request) {
-	client := GetClient()
+	client := GetClient(r.Context())
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return

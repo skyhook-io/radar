@@ -156,12 +156,12 @@ func resolveUserPermsDecision(ctx context.Context) (*pkgauth.User, *pkgauth.User
 	if user == nil {
 		return nil, nil, true
 	}
-	cache := getPermCache()
+	cache := k8s.ReadPermissionCache(ctx, getPermCache())
 	if perms := cache.Get(user.Username, user.Groups); perms != nil {
 		return user, perms, true
 	}
 
-	client := k8s.GetClient()
+	client := k8s.BoundOrCurrent(ctx).Client()
 	if client == nil {
 		log.Printf("[mcp] K8s client unavailable for namespace discovery (user=%s) — denying access", user.Username)
 		// Empty (not nil) AllowedNamespaces means "no access"; nil would mean cluster-admin.
@@ -204,7 +204,7 @@ func mcpAllNamespaceNames(ctx context.Context) []string {
 func mcpAllNamespaceNamesDecision(ctx context.Context) ([]string, bool) {
 	var allNamespaces []string
 	listed := true
-	if rc := k8s.GetResourceCache(); rc != nil {
+	if rc := k8s.BoundOrCurrent(ctx).ResourceCache(); rc != nil {
 		if nsLister := rc.Namespaces(); nsLister != nil {
 			nsList, err := nsLister.List(labels.Everything())
 			if err != nil {
@@ -403,7 +403,7 @@ func canReadInNamespaceDecision(ctx context.Context, group, resource, namespace,
 			return v, true
 		}
 	}
-	client := k8s.GetClient()
+	client := k8s.BoundOrCurrent(ctx).Client()
 	if client == nil {
 		log.Printf("[mcp] canReadInNamespace: no K8s client, denying %s on %s/%s in %q for %s", k8s.SanitizeForLog(verb), k8s.SanitizeForLog(group), k8s.SanitizeForLog(resource), k8s.SanitizeForLog(namespace), k8s.SanitizeForLog(user.Username))
 		return false, false
