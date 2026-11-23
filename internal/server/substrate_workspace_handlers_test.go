@@ -1764,7 +1764,7 @@ func TestSubstrateMemoryKillIsTiedToTheCurrentCrash(t *testing.T) {
 	// template, so a kagent session's kill offers no kubectl ate step.
 	session := crashed
 	session.Name, session.Kagent = "session-01a1faa2-b3e3-7dd3-ae2d-3114122d4291", &model.KagentSession{SessionID: "01a1faa2-b3e3-7dd3-ae2d-3114122d4291"}
-	if got := memoryKillOf(session, []substrateLogLine{kill(crashAt.Add(-5 * time.Second))}); got == nil || !got.Current || got.NextStep != model.KagentMemoryStep() || got.Command != "" || got.ThenCommand != "" {
+	if got := memoryKillOf(session, []substrateLogLine{kill(crashAt.Add(-5 * time.Second))}); got == nil || !got.Current || got.NextStep != model.KagentActorStep(session, true) || !strings.Contains(got.NextStep, "RevertSession") || got.Command != "" || got.ThenCommand != "" {
 		t.Errorf("a kagent session's kill: %+v", got)
 	}
 }
@@ -1930,6 +1930,32 @@ func TestSubstrateKagentSessionActorPage(t *testing.T) {
 	}
 	i := slices.IndexFunc(detail.Attention, func(a model.Attention) bool { return a.Rule == model.RuleCrashedActors })
 	if i < 0 || detail.Attention[i].Command != "" || !strings.Contains(detail.Attention[i].NextStep, "kagent") {
+		t.Errorf("crash step = %+v", detail.Attention)
+	}
+}
+
+// A standalone kagent sandbox read fresh is marked a sandbox from its
+// template's name, so its step deletes it through kagent's SandboxService
+// rather than recovering a chat it does not have.
+func TestSubstrateKagentSandboxActorPage(t *testing.T) {
+	prev := substrateKagentServed
+	substrateKagentServed = func() bool { return true }
+	t.Cleanup(func() { substrateKagentServed = prev })
+	s := substrateTestServer(t, substrateapi.Kube{KagentServed: true})
+	f := defaultFake()
+	const name = "session-01a1faa2-b3e3-7dd3-ae2d-3114122d4291"
+	crashed := fakeActor("research", name, "sandbox-0123456789abcdef0123456789abcdef01234567", ateapi.ActorState_ACTOR_STATE_CRASHED, time.Now().Add(-4*time.Minute))
+	crashed.Status.Crash = &ateapi.ActorCrash{Message: "exit 1", CrashTime: timestamppb.New(time.Now().Add(-4 * time.Minute))}
+	f.actors = append(f.actors, crashed)
+	connectFake(t, s, f, fullToken)
+
+	var detail substrateActorDetail
+	call(t, s, s.handleSubstrateActor, substrateCall{path: "/api/substrate/actors/research/" + name, params: map[string]string{"atespace": "research", "name": name}}, &detail)
+	if detail.Actor.Kagent == nil || !detail.Actor.Kagent.Sandbox {
+		t.Fatalf("actor = %+v", detail.Actor)
+	}
+	i := slices.IndexFunc(detail.Attention, func(a model.Attention) bool { return a.Rule == model.RuleCrashedActors })
+	if i < 0 || detail.Attention[i].Command != "" || !strings.Contains(detail.Attention[i].NextStep, "SandboxService") || strings.Contains(detail.Attention[i].NextStep, "RevertSession") {
 		t.Errorf("crash step = %+v", detail.Attention)
 	}
 }

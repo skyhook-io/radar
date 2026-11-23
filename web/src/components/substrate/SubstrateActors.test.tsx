@@ -264,6 +264,15 @@ describe('Actor overview', () => {
     expect(html).not.toContain('kubectl ate revert')
   })
 
+  it('sends a standalone kagent sandbox to kagent’s SandboxService, never to a chat it doesn’t have', () => {
+    const d = actorDetail()
+    const detail = { ...d, actor: { ...d.actor, kagent: { sessionId: '01a1faa2-b3e3-7dd3-ae2d-3114122d4291', sandbox: true } }, attention: [] }
+    const html = plain(text(renderToStaticMarkup(<MemoryRouter><SubstrateActorOverview detail={detail} onOpenSubject={() => {}} /></MemoryRouter>)))
+    expect(html).toContain('This actor runs a kagent sandbox. kagent manages it: delete the sandbox through kagent (its SandboxService)')
+    expect(html).not.toContain('RevertSession')
+    expect(html).not.toContain('kubectl ate revert')
+  })
+
   it('says how the revert target resumes only where At a glance doesn’t already say it', () => {
     const d = actorDetail()
     const html = plain(text(renderToStaticMarkup(<MemoryRouter><SubstrateActorOverview detail={d} onOpenSubject={() => {}} /></MemoryRouter>)))

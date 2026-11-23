@@ -104,7 +104,7 @@ var substrateKagentServed = kagentServed
 func freshSubstrateActor(raw *ateapi.Actor) model.Actor {
 	a := substrateapi.ActorOf(raw)
 	if substrateKagentServed() {
-		a.Kagent = model.KagentSessionOf(a.Name)
+		a.Kagent = model.KagentSessionOf(a.Name, a.Template.Name)
 	}
 	return a
 }
@@ -1577,7 +1577,7 @@ func memoryKillOf(actor model.Actor, lines []substrateLogLine) *substrateMemoryK
 				return later.Kind == model.LogKindLifecycle && substrateExecutionStarts[later.Message] && !later.Time.After(actor.Crash.Time)
 			})
 		if kill.Current && actor.Kagent != nil {
-			kill.NextStep = model.KagentMemoryStep()
+			kill.NextStep = model.KagentActorStep(actor, true)
 		} else if kill.Current {
 			kill.NextStep, kill.Command, kill.ThenCommand = model.CrashedMemoryActorStep(actor), model.CrashedMemoryCommand(actor), model.RevertCommand(actor)
 		}

@@ -210,7 +210,11 @@ export interface SubstrateActor {
    * session-<uuid>). kagent recovers it from the session's chat; moving it to another template
    * with kubectl ate makes kagent treat the session as lost.
    */
-  kagent?: { sessionId: string }
+  kagent?: {
+    sessionId: string
+    /** A standalone kagent sandbox (template sandbox-<40 hex>): no chat and no RevertSession; kagent's SandboxService deletes it. */
+    sandbox?: boolean
+  }
 }
 
 export type SubstrateResumesWith = 'memory' | 'filesystem' | 'volumes' | 'cold' | 'unknown'
@@ -479,7 +483,7 @@ export interface SubstrateTally {
   nextStep?: string
   command?: string
   thenCommand?: string
-  /** Every actor in the group is a kagent session, which kagent recovers: nextStep names kagent and no command is offered. */
+  /** Some actor in the group is kagent's (a session or a sandbox), which kagent recovers: nextStep names kagent and no command is offered. */
   kagent?: boolean
 }
 
