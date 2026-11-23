@@ -54,13 +54,15 @@ func TestNoClusterGlobals(t *testing.T) {
 			exports[path] = archive
 		}
 	}
-	conf := types.Config{IgnoreFuncBodies: true, Importer: importer.ForCompiler(fset, "gc", func(path string) (io.ReadCloser, error) {
+	conf := types.Config{Importer: importer.ForCompiler(fset, "gc", func(path string) (io.ReadCloser, error) {
 		return os.Open(exports[path])
 	})}
-	checked, err := conf.Check("github.com/skyhook-io/radar/internal/k8s", fset, files, nil)
+	info := &types.Info{Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}}
+	checked, err := conf.Check("github.com/skyhook-io/radar/internal/k8s", fset, files, info)
 	if err != nil {
 		t.Fatal(err)
 	}
+	checkConnectionMethodGetters(t, fset, files, checked, info)
 	for _, name := range checked.Scope().Names() {
 		v, ok := checked.Scope().Lookup(name).(*types.Var)
 		if !ok {
@@ -93,5 +95,109 @@ func TestNoClusterGlobals(t *testing.T) {
 		if strings.Contains(lowerName, "cachegeneration") || strings.Contains(lowerName, "cacheonce") || slices.Contains(denied, typeName) || wrapped || (cacheName && cacheType) {
 			t.Errorf("%s: %s has type %s: cluster state belongs on *Connection", fset.Position(v.Pos()), name, typeName)
 		}
+	}
+}
+
+func checkConnectionMethodGetters(t *testing.T, fset *token.FileSet, files []*ast.File, pkg *types.Package, info *types.Info) {
+	t.Helper()
+	scope := pkg.Scope()
+	current := scope.Lookup("Current")
+	installed := scope.Lookup("installedConn")
+	denied := map[types.Object]string{current: "Current", installed: "installedConn"}
+	// These reads lock, check readiness or delegate through another getter.
+	for _, name := range []string{
+		"GetSyncingResourceCache", "SnapshotCaches", "ReadableCacheForKind", "InitialSyncComplete",
+		"GetCachedCapabilities", "CurrentProfileTarget", "boundOrCurrent", "InformerClientFor",
+	} {
+		obj := scope.Lookup(name)
+		if obj == nil {
+			t.Fatalf("unknown installed-connection getter %s", name)
+		}
+		denied[obj] = name
+	}
+
+	connPtr := types.NewPointer(scope.Lookup("Connection").Type())
+	var methods []*ast.FuncDecl
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			obj := info.Defs[fn.Name].(*types.Func)
+			if recv := obj.Signature().Recv(); recv != nil {
+				if types.Identical(recv.Type(), connPtr) {
+					methods = append(methods, fn)
+				}
+				continue
+			}
+			if len(fn.Body.List) != 1 {
+				continue
+			}
+			if ret, ok := fn.Body.List[0].(*ast.ReturnStmt); ok {
+				for node := range ast.Preorder(ret) {
+					switch expr := node.(type) {
+					case *ast.Ident:
+						if info.Uses[expr] == current {
+							denied[obj] = obj.Name()
+						}
+					case *ast.SelectorExpr:
+						if id, ok := expr.X.(*ast.Ident); ok && info.Uses[id] == installed && expr.Sel.Name == "Load" {
+							denied[obj] = obj.Name()
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// InitOrder puts a package function-value alias after anything it aliases.
+	for _, init := range info.InitOrder {
+		if len(init.Lhs) != 1 {
+			continue
+		}
+		if _, ok := init.Lhs[0].Type().Underlying().(*types.Signature); !ok {
+			continue
+		}
+		switch expr := ast.Unparen(init.Rhs); expr.(type) {
+		case *ast.Ident, *ast.SelectorExpr:
+			for node := range ast.Preorder(expr) {
+				if id, ok := node.(*ast.Ident); ok {
+					if name := denied[info.Uses[id]]; name != "" {
+						denied[init.Lhs[0]] = name
+					}
+				}
+			}
+		}
+	}
+
+	for _, fn := range methods {
+		receiver := info.Defs[fn.Name].(*types.Func).Signature().Recv()
+		ast.Inspect(fn.Body, func(node ast.Node) bool {
+			switch n := node.(type) {
+			case *ast.BinaryExpr:
+				if n.Op != token.EQL || !slices.Contains([]string{
+					"cacheIsCurrent",       // Publication requires the cache's owner to still be installed.
+					"accessibleNamespaces", // A superseded namespace LIST must still fall back to its seeds.
+				}, fn.Name.Name) {
+					return true
+				}
+				left, right := n.X, n.Y
+				if _, ok := right.(*ast.CallExpr); ok {
+					left, right = right, left
+				}
+				call, ok := left.(*ast.CallExpr)
+				recv, _ := right.(*ast.Ident)
+				if ok && info.Uses[recv] == receiver {
+					callee, _ := call.Fun.(*ast.Ident)
+					return info.Uses[callee] != current
+				}
+			case *ast.Ident:
+				if name := denied[info.Uses[n]]; name != "" {
+					t.Errorf("%s: (*Connection).%s uses %s: use the connection's own state, not the installed connection's", fset.Position(n.Pos()), fn.Name, name)
+				}
+			}
+			return true
+		})
 	}
 }
