@@ -1695,13 +1695,13 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		caps.Visibility = k8s.BuildVisibilitySummary(result, r.URL.Query().Get("namespace"))
 	}
 
-	caps.Karpenter = s.karpenterCapability(r)
+	caps.Karpenter = s.karpenterCapability(r, conn)
 
 	// Report the PolicyReport index state so the frontend can say WHY a policy
 	// view is empty. Omitted when Kyverno isn't installed at all — there is
 	// nothing for the operator to act on, and a "not installed" note on every
 	// non-Kyverno cluster would be noise.
-	if prStatus := k8s.GetPolicyReportStatus(); prStatus.Status != k8s.KyvernoStatusNotInstalled {
+	if prStatus := conn.PolicyReportStatus(); prStatus.Status != k8s.KyvernoStatusNotInstalled {
 		caps.PolicyReports = &prStatus
 	}
 

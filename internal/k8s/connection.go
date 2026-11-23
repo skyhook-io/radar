@@ -41,7 +41,9 @@ func Current() *Connection {
 	return installedConn.Load()
 }
 
-func boundOrCurrent(ctx context.Context) *Connection {
+// BoundOrCurrent returns the request's connection, falling back to the installed
+// connection for callers that have not bound one.
+func BoundOrCurrent(ctx context.Context) *Connection {
 	if c := ConnectionFrom(ctx); c != nil {
 		return c
 	}
