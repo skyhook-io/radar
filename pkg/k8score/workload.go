@@ -22,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/yaml"
@@ -735,8 +736,67 @@ func (m *WorkloadManager) DeleteResourceWithResult(ctx context.Context, opts Del
 	return ObserveResourceDeletion(ctx, client, opts.Name, uid), nil
 }
 
-// TriggerCronJob creates a Job from a CronJob.
+// ErrInvalidJobName is returned by TriggerCronJobNamed for a Job name the API
+// server would reject; it is checked before any API call.
+var ErrInvalidJobName = errors.New("invalid job name")
+
+// TriggerCronJob creates a Job from a CronJob, letting the API server pick its
+// name from "<cronjob>-manual-".
 func (m *WorkloadManager) TriggerCronJob(ctx context.Context, namespace, name string) (*unstructured.Unstructured, error) {
+	return m.TriggerCronJobNamed(ctx, namespace, name, "")
+}
+
+// ValidateJobName reports why a Job name is unusable, or nil. Beyond the API
+// server's DNS-1123 subdomain rule, the name is copied into the job-name label
+// on the Job's Pods, which caps it at 63 characters.
+func ValidateJobName(jobName string) error {
+	if len(jobName) > validation.LabelValueMaxLength {
+		return fmt.Errorf("%w %q: must be no more than %d characters", ErrInvalidJobName, jobName, validation.LabelValueMaxLength)
+	}
+	if errs := validation.IsDNS1123Subdomain(jobName); len(errs) > 0 {
+		return fmt.Errorf("%w %q: %s", ErrInvalidJobName, jobName, strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// indexSuffixLength is the room an Indexed Job's widest Pod hostname,
+// <job>-<index>, needs beyond the Job name; 0 for other completion modes.
+func indexSuffixLength(jobSpec map[string]any) int {
+	if mode, _, _ := unstructured.NestedString(jobSpec, "completionMode"); mode != "Indexed" {
+		return 0
+	}
+	completions, found, _ := unstructured.NestedInt64(jobSpec, "completions")
+	if !found || completions < 1 {
+		completions = 1
+	}
+	return len(strconv.FormatInt(completions-1, 10)) + 1
+}
+
+// manualJobGenerateName keeps "-manual-" whole within the 58 characters the
+// API server keeps of a generateName before appending its 5 random ones, less
+// the room an Indexed Job's Pod hostnames need. Those hostnames are DNS
+// labels, so an Indexed Job's name has no dots.
+func manualJobGenerateName(cronJobName string, indexRoom int) string {
+	const suffix = "-manual-"
+	maxBase := validation.LabelValueMaxLength - 5 - indexRoom
+	if indexRoom > 0 {
+		cronJobName = strings.ReplaceAll(cronJobName, ".", "-")
+	}
+	if len(cronJobName)+len(suffix) > maxBase {
+		cronJobName = strings.TrimRight(cronJobName[:maxBase-len(suffix)], "-.")
+	}
+	return cronJobName + suffix
+}
+
+// TriggerCronJobNamed creates a Job from a CronJob. An empty jobName lets the
+// API server generate one from "<cronjob>-manual-".
+func (m *WorkloadManager) TriggerCronJobNamed(ctx context.Context, namespace, name, jobName string) (*unstructured.Unstructured, error) {
+	jobName = strings.TrimSpace(jobName)
+	if jobName != "" {
+		if err := ValidateJobName(jobName); err != nil {
+			return nil, err
+		}
+	}
 	if m.dynClient == nil {
 		return nil, fmt.Errorf("dynamic client not initialized")
 	}
@@ -760,14 +820,20 @@ func (m *WorkloadManager) TriggerCronJob(ctx context.Context, namespace, name st
 	if !found {
 		return nil, fmt.Errorf("cronjob %s/%s has no spec.jobTemplate", namespace, name)
 	}
+	jobSpec, _, _ := unstructured.NestedMap(jobTemplate, "spec")
+	indexRoom := indexSuffixLength(jobSpec)
+	if indexRoom > 0 && strings.Contains(jobName, ".") {
+		return nil, fmt.Errorf("%w %q: an Indexed Job's name becomes its Pods' hostnames, which cannot contain '.'", ErrInvalidJobName, jobName)
+	}
+	if maxLen := validation.LabelValueMaxLength - indexRoom; indexRoom > 0 && len(jobName) > maxLen {
+		return nil, fmt.Errorf("%w %q: must be no more than %d characters, so the Pods' hostnames <job>-<index> fit 63", ErrInvalidJobName, jobName, maxLen)
+	}
 
-	jobName := fmt.Sprintf("%s-manual-%d", name, time.Now().Unix())
 	job := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "batch/v1",
 			"kind":       "Job",
 			"metadata": map[string]any{
-				"name":      jobName,
 				"namespace": namespace,
 				"annotations": map[string]any{
 					"cronjob.kubernetes.io/instantiate": "manual",
@@ -784,6 +850,12 @@ func (m *WorkloadManager) TriggerCronJob(ctx context.Context, namespace, name st
 				},
 			},
 		},
+	}
+
+	if jobName != "" {
+		job.SetName(jobName)
+	} else {
+		job.SetGenerateName(manualJobGenerateName(name, indexRoom))
 	}
 
 	if spec, found, _ := unstructured.NestedMap(jobTemplate, "spec"); found {
