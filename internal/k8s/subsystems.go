@@ -81,7 +81,6 @@ func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait
 		log.Printf("Resource cache initialized with %d resources", cache.GetResourceCount())
 	}
 
-	lifecycleCtx := OperationContext()
 	discoveryPending := false
 	if ctx.Err() == nil {
 		progress("Waiting for Kubernetes API discovery…")
@@ -124,19 +123,13 @@ func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait
 				case <-cache.Done():
 					return
 				}
-				// A failed rescope keeps this build but cancels its operation.
-				// Wait for its decision before choosing the operation context.
-				contextOpMu.RLock()
-				ctx := OperationContext()
-				open := conn.cacheIsCurrent()
-				contextOpMu.RUnlock()
-				if open {
-					startDynamicResourceCache(ctx, conn, cache)
+				if conn.cacheIsCurrent() {
+					startDynamicResourceCache(conn, cache)
 				}
 			}()
 		} else {
 			progress("Loading custom resources...")
-			startDynamicResourceCache(lifecycleCtx, conn, cache)
+			startDynamicResourceCache(conn, cache)
 		}
 	}
 
@@ -202,23 +195,22 @@ func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait
 	return nil
 }
 
-// The operation context outlives the switch's init context, which is cancelled
-// on success while the deferred typed informers may still be syncing.
-func startDynamicResourceCache(lifecycleCtx context.Context, conn *Connection, cache *ResourceCache) {
+func startDynamicResourceCache(conn *Connection, cache *ResourceCache) {
 	t := time.Now()
 	if err := conn.initDynamicResourceCache(cache.ChangesRaw()); err != nil {
 		log.Printf("Warning: dynamic resource cache init failed: %v", err)
 	}
 
 	if dc := conn.DynamicResourceCache(); dc != nil {
+		lifetime := conn.dynamicCacheState().lifetime
 		go func() {
 			crdStart := time.Now()
 			deferredDone := cache.DeferredDone()
 			stillCurrent := func() bool {
 				return !dc.IsStopped()
 			}
-			runCRDWarmupSequence(lifecycleCtx, nil, stillCurrent, dc.StartWatchReconciler)
-			runCRDWarmupSequence(lifecycleCtx, deferredDone, stillCurrent,
+			runCRDWarmupSequence(lifetime, nil, stillCurrent, dc.StartWatchReconciler)
+			runCRDWarmupSequence(lifetime, deferredDone, stillCurrent,
 				func() {
 					wt := time.Now()
 					conn.registerSupportedCRDFallbacks()
@@ -252,8 +244,7 @@ func startDynamicResourceCache(lifecycleCtx context.Context, conn *Connection, c
 // the deferred LISTs — ReplicaSets and Secrets, the heaviest kinds on large
 // clusters — so letting them race starves the sync that resource views block
 // on. deferredDone always closes, even when deferred sync fails or no kinds
-// are deferred, so the gate cannot wedge; ctx cancellation (context switch /
-// CancelOngoingOperations) abandons the wait and any remaining steps.
+// are deferred. Closing the dynamic cache abandons the wait and any remaining steps.
 //
 // stillCurrent, when non-nil, is checked after the gate and between steps so a
 // sequence that outlives a context switch does not run against a replaced
