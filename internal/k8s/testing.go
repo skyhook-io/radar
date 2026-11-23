@@ -56,8 +56,9 @@ func restoreTestConnection(c *Connection) {
 func setTestDiscovery(d *ResourceDiscovery) func() {
 	clientMu.Lock()
 	prev := installedConn.Load()
-	swapTestConnectionLocked(copyTestConnectionLocked())
-	installedConn.Load().discovery.Store(d)
+	next := copyTestConnectionLocked()
+	next.discovery.Store(d)
+	swapTestConnectionLocked(next)
 	clientMu.Unlock()
 	return func() { restoreTestConnection(prev) }
 }
@@ -381,10 +382,11 @@ func SetTestDynamicObjectReadSyncWait(d time.Duration) func() {
 func ResetTestDynamicState() {
 	ResetDynamicResourceCache()
 	clientMu.Lock()
-	swapTestConnectionLocked(copyTestConnectionLocked())
-	installedConn.Load().discovery.Store(nil)
-	installedConn.Load().clients.dynamic = nil
-	installedConn.Load().clients.informerDynamic = nil
+	next := copyTestConnectionLocked()
+	next.discovery.Store(nil)
+	next.clients.dynamic = nil
+	next.clients.informerDynamic = nil
+	swapTestConnectionLocked(next)
 	clientMu.Unlock()
 }
 
@@ -484,9 +486,10 @@ func SetTestContextUsesExec(enabled bool) bool {
 func SetTestClient(c *kubernetes.Clientset) *kubernetes.Clientset {
 	clientMu.Lock()
 	prev := installedConn.Load().Client()
-	swapTestConnectionLocked(copyTestConnectionLocked())
-	installedConn.Load().clients.clientset = c
-	installedConn.Load().clients.informerClientset = nil
+	next := copyTestConnectionLocked()
+	next.clients.clientset = c
+	next.clients.informerClientset = nil
+	swapTestConnectionLocked(next)
 	clientMu.Unlock()
 	return prev
 }
@@ -497,23 +500,34 @@ func SetTestClient(c *kubernetes.Clientset) *kubernetes.Clientset {
 func SetTestInformerClient(request *kubernetes.Clientset, informer kubernetes.Interface) func() {
 	clientMu.Lock()
 	prev := installedConn.Load()
-	swapTestConnectionLocked(copyTestConnectionLocked())
-	installedConn.Load().clients.clientset, installedConn.Load().clients.informerClientset = request, informer
+	next := copyTestConnectionLocked()
+	next.clients.clientset, next.clients.informerClientset = request, informer
+	swapTestConnectionLocked(next)
 	clientMu.Unlock()
 	return func() { restoreTestConnection(prev) }
 }
 
 // ReconnectTestClient installs c as a new connection under the current context
-// name, as a reconnect does, and returns a func that restores the previous one.
+// name, as a reconnect does: a connection that was serving is retired and the
+// new one admitted with a new ID. Returns a func that restores the previous state.
 func ReconnectTestClient(c *kubernetes.Clientset) func() {
+	restore := SnapshotTestConnection()
+	wasServing := ServingConnectionID() != ""
 	clientMu.Lock()
-	prev := installedConn.Load()
-	swapTestConnectionLocked(copyTestConnectionLocked())
-	installedConn.Load().clients.clientset, installedConn.Load().clients.informerClientset = c, nil
-	installedConn.Load().clients.generation = clientGenerationCounter.Add(1)
-	installedConn.Load().discovery.Store(nil)
+	next := copyTestConnectionLocked()
+	next.clients.clientset, next.clients.informerClientset = c, nil
+	next.clients.generation = clientGenerationCounter.Add(1)
 	clientMu.Unlock()
-	return func() { restoreTestConnection(prev) }
+	RetireServingConnection()
+	clientMu.Lock()
+	installedConn.Store(next)
+	clientMu.Unlock()
+	if wasServing {
+		status := GetConnectionStatus()
+		status.State = StateConnected
+		SetConnectionStatus(status)
+	}
+	return restore
 }
 
 // SetTestPolicyReportIndex publishes a PolicyReport index directly, bypassing
@@ -539,8 +553,9 @@ func ReconnectTestClient(c *kubernetes.Clientset) func() {
 func SetTestConfig(c *rest.Config) *rest.Config {
 	clientMu.Lock()
 	prev := installedConn.Load().Config()
-	swapTestConnectionLocked(copyTestConnectionLocked())
-	installedConn.Load().config = c
+	next := copyTestConnectionLocked()
+	next.config = c
+	swapTestConnectionLocked(next)
 	clientMu.Unlock()
 	return prev
 }
@@ -554,8 +569,9 @@ func SetTestProfileSource(source, name, user string) func() {
 	contextName, activeSourceFile, activeSourceName = name, source, name
 	activeSourceConfig = clientcmdapi.NewConfig()
 	activeSourceConfig.Contexts[name] = &clientcmdapi.Context{AuthInfo: user}
-	swapTestConnectionLocked(copyTestConnectionLocked())
-	installedConn.Load().clients.generation++
+	next := copyTestConnectionLocked()
+	next.clients.generation++
+	swapTestConnectionLocked(next)
 	clientMu.Unlock()
 	return func() {
 		clientMu.Lock()
@@ -723,8 +739,9 @@ func SetTestPermissionProbeClient(onList func()) func() {
 
 	clientMu.Lock()
 	prev := installedConn.Load()
-	swapTestConnectionLocked(copyTestConnectionLocked())
-	installedConn.Load().clients.dynamic, installedConn.Load().clients.informerDynamic = client, nil
+	next := copyTestConnectionLocked()
+	next.clients.dynamic, next.clients.informerDynamic = client, nil
+	swapTestConnectionLocked(next)
 	clientMu.Unlock()
 	return func() { restoreTestConnection(prev) }
 }
@@ -807,8 +824,9 @@ func SwapResourceCacheForTest(rc *ResourceCache) (restore func()) {
 // the frozen catalog, rather than reverting to an empty bootstrap catalog.
 func InitTestReplayClients(client dynamic.Interface, catalog discovery.DiscoveryInterface) error {
 	clientMu.Lock()
-	swapTestConnectionLocked(copyTestConnectionLocked())
-	installedConn.Load().clients.dynamic, installedConn.Load().clients.informerDynamic = client, nil
+	next := copyTestConnectionLocked()
+	next.clients.dynamic, next.clients.informerDynamic = client, nil
+	swapTestConnectionLocked(next)
 	clientMu.Unlock()
 	if _, err := SetTestResourceDiscovery(catalog); err != nil {
 		return err
@@ -836,19 +854,20 @@ func InstallTestServingConnection(name string, cfg *rest.Config, dyn dynamic.Int
 // clients and discovery, and returns a func that restores them, so a test
 // that installs or retires connections leaves the package as it found it.
 func SnapshotTestConnection() func() {
+	// clientMu before connectionStatusMu, the order swapTestConnectionLocked uses.
+	clientMu.RLock()
 	connectionStatusMu.RLock()
 	status, admitted, closed := connectionStatus, serving, admissionsClosed
-	clientMu.RLock()
 	previous, name := installedConn.Load(), contextName
-	clientMu.RUnlock()
 	connectionStatusMu.RUnlock()
+	clientMu.RUnlock()
 	return func() {
-		connectionStatusMu.Lock()
 		clientMu.Lock()
+		connectionStatusMu.Lock()
 		connectionStatus, serving, admissionsClosed = status, admitted, closed
 		installedConn.Store(previous)
 		contextName = name
-		clientMu.Unlock()
 		connectionStatusMu.Unlock()
+		clientMu.Unlock()
 	}
 }
