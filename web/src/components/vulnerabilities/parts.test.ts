@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ApiError } from '../../api/client'
 import { hasVulnerabilityReports, isKindUnknown, parseWorkloadParam, vulnerabilitiesPath, workloadParam } from '../../api/vulnerabilities'
-import { exposedCountTip, exposureGapSentence, exposureLookup, exposureUnknownIn, findingsCertainty, gapSentence, imageParts, routesTip, summaryNames } from './parts'
+import { exposedCountTip, exposureGapSentence, exposureLookup, exposureUnknownIn, feedNote, feedStatusText, findingsCertainty, intelNotes, refreshCanHelp, gapSentence, imageParts, routesTip, summaryNames } from './parts'
 
 describe('vulnerabilities helpers', () => {
   it('builds the request from filters', () => {
@@ -124,5 +124,35 @@ describe('vulnerabilities helpers', () => {
     expect(hidden).not.toContain("Radar couldn't read")
     expect(hidden).toContain('HTTPRoutes')
     expect(hidden).toContain('1 namespace')
+  })
+})
+
+describe('feed status', () => {
+  const age = (iso: string) => (iso === '2026-11-24T10:00:00Z' ? '3m ago' : '?')
+  it('says which catalog and score date Radar holds and when it checked', () => {
+    expect(feedStatusText({ kev: { state: 'ready', version: '2026.11.20', checkedAt: '2026-11-24T10:00:00Z' }, epss: { state: 'ready', version: '2026-11-22' } }, age))
+      .toBe('CISA catalog 2026.11.20, checked 3m ago. EPSS scores from 2026-11-22.')
+  })
+  it('says why a stale copy is stale', () => {
+    expect(feedStatusText({ kev: { state: 'ready', version: '2026.11.20', checkedAt: '2026-11-24T10:00:00Z', stale: true, error: 'the feed answered HTTP 503' }, epss: { state: 'unavailable' } }, age))
+      .toBe("CISA catalog 2026.11.20, checked 3m ago. Out of date: Radar couldn't refresh it (the feed answered HTTP 503).")
+  })
+})
+
+describe('without a feed', () => {
+  it('explains what the feed adds and how to provide it, calmly', () => {
+    const air = feedNote('KEV', { state: 'unavailable', origin: 'public', error: 'dial tcp: i/o timeout' })!
+    expect(air).toContain('--kev-feed')
+    expect(air).not.toContain('i/o timeout')
+    expect(air).toContain('vulnerabilities.kevFeed (Helm)')
+    expect(feedNote('KEV', { state: 'disabled' })).toContain('turned off')
+    expect(feedNote('KEV', { state: 'disabled', downloadsOff: true })).toBe("Feed downloads are turned off on this Radar. To mark the CVEs that are known to be exploited, put a copy of CISA's Known Exploited Vulnerabilities catalog in a file and set vulnerabilities.kevFeed (Helm) or --kev-feed to its path.")
+    expect(feedNote('KEV', { state: 'unavailable', origin: 'mirror', error: 'HTTP 404' })).toContain('HTTP 404')
+    expect(intelNotes({ kev: { state: 'unavailable', origin: 'public' }, epss: { state: 'disabled' } })).toEqual([])
+  })
+  it('offers Refresh only where a reload could change something', () => {
+    expect(refreshCanHelp({ kev: { state: 'unavailable', origin: 'public' }, epss: { state: 'disabled' } })).toBe(false)
+    expect(refreshCanHelp({ kev: { state: 'unavailable', origin: 'mirror' }, epss: { state: 'disabled' } })).toBe(true)
+    expect(refreshCanHelp({ kev: { state: 'ready', origin: 'public' }, epss: { state: 'unavailable', origin: 'public' } })).toBe(true)
   })
 })

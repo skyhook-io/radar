@@ -1,9 +1,9 @@
 import { useState } from 'react'
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { WithTooltip } from '../ui/Tooltip'
 import { useSearchParams } from 'react-router-dom'
 import { clsx } from 'clsx'
-import { AlertTriangle, ArrowDownWideNarrow, CircleDashed, FileSpreadsheet, ExternalLink, Info, Search, ShieldAlert, ShieldCheck, X } from 'lucide-react'
+import { AlertTriangle, ArrowDownWideNarrow, CircleDashed, FileSpreadsheet, ExternalLink, Info, RefreshCw, Search, ShieldAlert, ShieldCheck, X } from 'lucide-react'
 import {
   Collapse,
   CollapseChevron,
@@ -33,6 +33,7 @@ import { ApiError, useCapabilities, useRadarFeature } from '../../api/client'
 import { useAPIResources } from '../../api/apiResources'
 import {
   fetchVulnerabilitiesCSV,
+  refreshVulnerabilityFeeds,
   hasVulnerabilityReports,
   vulnerabilitiesCSVFilename,
   JAVA4SHELL_CVE,
@@ -46,6 +47,7 @@ import {
   type VulnerabilityCVE,
   type VulnerabilityFix,
   type VulnerabilityGap,
+  type VulnerabilityIntel,
   type VulnerabilitySeverity,
   type VulnerabilityView,
   type VulnerabilityWorkload,
@@ -88,6 +90,16 @@ import {
   exposureGapSentence,
   uncheckedRoutesSentence,
   EXPOSURE,
+  KEV,
+  KevBadge,
+  KevCount,
+  EpssValue,
+  feedReady,
+  feedNote,
+  feedStatusText,
+  refreshCanHelp,
+  FEEDS_DOCS_URL,
+  intelNotes,
   type ExposureLookup,
 } from '../vulnerabilities/parts'
 
@@ -111,11 +123,12 @@ const TRIVY_INSTALL_URL = 'https://aquasecurity.github.io/trivy-operator/latest/
 // detail lines up under the column it belongs to. Short values get fixed
 // tracks; the text columns take the rest.
 // The image and CVE tables have optional columns (vulnerabilities/columns),
-// so their tracks are built per render rather than fixed classes.
+// so their tracks are built per render rather than fixed classes. EPSS
+// also needs an answer that carries the feeds, whatever the setting.
 const gridOf = (tracks: (string | false | undefined)[]): React.CSSProperties => ({ gridTemplateColumns: tracks.filter(Boolean).join(' ') })
 const trackOf = (view: VulnerabilityView, name: string, on: boolean | undefined) => on && optionalColumn(view, name)?.track
 const imageGrid = (c: Record<string, boolean>) => gridOf(['minmax(220px,1.6fr)', trackOf('image', 'os', c.os), 'minmax(180px,1.2fr)', '88px', 'minmax(0,2fr)', trackOf('image', 'scanner', c.scanner), '72px'])
-const cveGrid = (c: Record<string, boolean>) => gridOf(['minmax(260px,1.6fr)', '80px', '48px', trackOf('cve', 'published', c.published), trackOf('cve', 'age', c.age), 'minmax(200px,1.6fr)', '56px', '64px', '80px'])
+const cveGrid = (c: Record<string, boolean>) => gridOf(['minmax(260px,1.6fr)', '80px', '48px', trackOf('cve', 'epss', c.epss), trackOf('cve', 'published', c.published), trackOf('cve', 'age', c.age), 'minmax(200px,1.6fr)', '56px', '64px', '80px'])
 const FIX_COLS = 'grid-cols-[minmax(200px,1.2fr)_minmax(220px,1.5fr)_120px_minmax(0,1.6fr)_64px_80px]'
 const WORKLOAD_COLS = 'grid-cols-[minmax(200px,1.4fr)_minmax(180px,1.2fr)_minmax(0,2.4fr)]'
 // With the route column, shown only when the answer reports exposure.
@@ -139,6 +152,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   const eolOnly = params.get('eol') === '1'
   const optional = useOptionalColumns()
   const optionalFilters = useOptionalFilters()
+  const kevOnly = params.get('kev') === '1'
   const queryDraft = params.get('q') ?? ''
   const workload = parseWorkloadParam(params.get('workload'))
   const query = useDebouncedValue(queryDraft.trim(), 300)
@@ -155,7 +169,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
     mutate(next)
     setParams(next, { replace: !push })
   }
-  const tableParams: VulnerabilitiesParams = { view, namespaces, severities, fixableOnly, exposed: exposedOnly, osEndOfLife: eolOnly, query, workload }
+  const tableParams: VulnerabilitiesParams = { view, namespaces, severities, fixableOnly, exposed: exposedOnly, osEndOfLife: eolOnly, kev: kevOnly, query, workload }
   const { data, isLoading, isFetching, isPlaceholderData, error, dataUpdatedAt, refetch } = useVulnerabilities(tableParams, !reportsAbsent)
   const hasReports = !reportsAbsent && (hasVulnerabilityReports(resources) || !!data)
   const trivySearch = new URLSearchParams({ by: 'cve', q: JAVA4SHELL_CVE })
@@ -215,7 +229,10 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   const eolChip = eolCount !== undefined && (eolOnly || (optionalFilters.shown('eol') && eolCount > 0))
   // Optional filters this Radar can apply: an older one sends no end-of-life count.
   const filterAvailable = (key: string) => key !== 'eol' || eolCount !== undefined
-  const filtered = severities.length > 0 || (fixableOnly && view !== 'fix') || (exposedOnly && !!exposure) || (eolOnly && eolCount !== undefined) || query !== '' || !!workload
+  // An older Radar carries no intel and ignores kev=1.
+  const intel = data.intel
+  const kevReady = feedReady(intel?.kev)
+  const filtered = severities.length > 0 || (fixableOnly && view !== 'fix') || (exposedOnly && !!exposure) || (eolOnly && eolCount !== undefined) || (kevOnly && !!intel) || query !== '' || !!workload
   // Narrowed only to a workload whose images are all clean or unscanned:
   // the folds below list them, so "nothing matches" would mislead.
   const workloadFolds = !!workload && (view === 'image' || view === 'workload') && severities.length === 0 && !fixableOnly && query === '' &&
@@ -227,7 +244,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   // A new view or filter starts again from the first page of rows.
   // Every filter lives in the URL; the view and the namespace scope aren't filters.
   const clearFilters = () => update((p) => { for (const key of [...p.keys()]) if (!KEEP_ON_CLEAR.has(key)) p.delete(key) }, true)
-  const pageKey = JSON.stringify([view, namespaces, severities, fixableOnly, exposedOnly, eolOnly, query, workload])
+  const pageKey = JSON.stringify([view, namespaces, severities, fixableOnly, exposedOnly, eolOnly, kevOnly, query, workload])
   const fixChip = known && view !== 'fix'
   return (
     <div aria-busy={isFetching} className="flex-1 flex flex-col min-h-0 p-4 gap-4 overflow-auto">
@@ -246,6 +263,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
               onToggleColumn={optional.toggle}
               filters={OPTIONAL_FILTERS.filter((f) => filterAvailable(f.key)).map((f) => ({ key: f.key, label: f.label, shown: optionalFilters.shown(f.key) }))}
               onToggleFilter={optionalFilters.toggle}
+              canRefreshFeeds={!!data.intel && refreshCanHelp(data.intel)}
             />
           </div>
         }
@@ -287,7 +305,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
               onClick={() => toggleSeverity(s.key)}
             />
           ))}
-          {known && (fixChip || exposure || eolChip) && <span aria-hidden className="mx-1.5 h-5 w-px bg-theme-border" />}
+          {known && (fixChip || exposure || eolChip || intel) && <span aria-hidden className="mx-1.5 h-5 w-px bg-theme-border" />}
           {fixChip && <FilterPill label="Fix available" tooltip="Only findings the scanner lists a fixed release for" active={fixableOnly} onClick={() => update((p) => (fixableOnly ? p.delete('fixable') : p.set('fixable', '1')))} />}
           {exposure && (
             <FilterPill
@@ -296,6 +314,14 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
               tooltip={EXPOSURE.chipTip}
               active={exposedOnly}
               onClick={() => update((p) => (exposedOnly ? p.delete('exposed') : p.set('exposed', '1')))}
+            />
+          )}
+          {intel && (
+            <KnownExploitedChip
+              intel={intel}
+              active={kevOnly}
+              count={kevReady ? data.summary.kevCves : undefined}
+              onClick={() => update((p) => (kevOnly ? p.delete('kev') : p.set('kev', '1')))}
             />
           )}
           {eolChip && (
@@ -365,7 +391,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
         ) : view === 'fix' ? (
           <Paged key={pageKey} rows={data.fixes ?? []}>{(rows) => <FixTable fixes={rows} onOpen={(w) => onNavigateToResource(toResource(w))} onShowCVE={(id) => update((p) => { p.set('by', 'cve'); p.set('q', id) }, true)} />}</Paged>
         ) : view === 'cve' ? (
-          <Paged key={pageKey} rows={data.cves ?? []}>{(rows) => <CVETable cves={rows} columns={columnsFor('cve', optional.shown, data)} onOpen={(w) => onNavigateToResource(toResource(w))} />}</Paged>
+          <Paged key={pageKey} rows={data.cves ?? []}>{(rows) => <CVETable cves={rows} columns={columnsFor('cve', optional.shown, data)} intel={intel} onOpen={(w) => onNavigateToResource(toResource(w))} />}</Paged>
         ) : view === 'workload' ? (
           <Paged key={pageKey} rows={data.workloads ?? []}>{(rows) => <WorkloadTable
             workloads={rows}
@@ -406,7 +432,7 @@ const VIEW_NAMES: Partial<Record<VulnerabilityView, string>> = { fix: 'By fix', 
 // or a ticket import wants). Each lists every row and every value the table
 // shortens. Below them, a checkbox for each of the view's optional columns,
 // then one for each optional filter chip, each group after a divider.
-function PageMenu({ params, cluster, columns: columnChoices, onToggleColumn, filters, onToggleFilter }: {
+function PageMenu({ params, cluster, columns: columnChoices, onToggleColumn, filters, onToggleFilter, canRefreshFeeds }: {
   params: VulnerabilitiesParams
   cluster: string
   /** The view's optional columns this answer has data for. */
@@ -414,6 +440,8 @@ function PageMenu({ params, cluster, columns: columnChoices, onToggleColumn, fil
   onToggleColumn: (key: string) => void
   filters: { key: string; label: string; shown: boolean }[]
   onToggleFilter: (key: string) => void
+  /** Refreshing the feeds could change what Radar holds (refreshCanHelp). */
+  canRefreshFeeds: boolean
 }) {
   const { support, guard } = useRadarFeature('vulnerabilitiesExport')
   const desktopDownload = useDesktopDownload()
@@ -435,7 +463,19 @@ function PageMenu({ params, cluster, columns: columnChoices, onToggleColumn, fil
     key: `filter.${f.key}`, label: `Show ${f.label} filter`, checked: f.shown, onClick: () => onToggleFilter(f.key),
   }))
   // Each group after the first opens with a divider.
-  const items = [downloads, columns, filterItems].filter((g) => g.length > 0)
+  const queryClient = useQueryClient()
+  const { support: refreshSupport, guard: refreshGuard } = useRadarFeature('vulnerabilityFeedRefresh')
+  const refresh = useMutation({
+    mutationFn: () => refreshGuard(() => refreshVulnerabilityFeeds()),
+    // The reload runs in the background on Radar; read again once it has
+    // had a moment.
+    onSuccess: () => { window.setTimeout(() => void queryClient.invalidateQueries({ queryKey: ['vulnerabilities'] }), 4000) },
+    meta: { errorMessage: 'Could not refresh the KEV and EPSS data', successMessage: 'Refreshing the KEV and EPSS data' },
+  })
+  const feedItems: RowActionItem[] = refreshSupport === 'supported' && canRefreshFeeds
+    ? [{ key: 'feeds.refresh', label: 'Refresh KEV and EPSS data', icon: RefreshCw, pending: refresh.isPending, disabled: refresh.isPending, onClick: () => refresh.mutate() }]
+    : []
+  const items = [downloads, columns, filterItems, feedItems].filter((g) => g.length > 0)
     .flatMap((g, i) => g.map((item, j) => ({ ...item, divider: i > 0 && j === 0 })))
   return <RowActionMenu compact={false} ariaLabel="More actions" items={items} />
 }
@@ -535,9 +575,10 @@ function SummaryHeadline({ data }: { data: VulnerabilitiesResponse }) {
 }
 
 // How each view orders its rows, for the sort hint's tooltip.
-function sortRule(view: VulnerabilityView): string {
+function sortRule(view: VulnerabilityView, kev: boolean): string {
   const tiebreak = view === 'workload' ? '' : ' Then the most exposed workloads, then the most workloads.'
-  return `Most severe first. Within each severity, exposed rows come first, then those whose exposure is unknown.${tiebreak}`
+  const first = kev ? `rows with a known exploited CVE (CISA KEV) come first, then exposed rows, then` : 'exposed rows come first, then'
+  return `Most severe first. Within each severity, ${first} those whose exposure is unknown.${tiebreak}`
 }
 
 // URL keys that clearing the filters keeps: the view and the namespace scope.
@@ -583,10 +624,10 @@ function CoverageNotes({ data, view, matches }: {
           <Info className="h-3.5 w-3.5" aria-label="How these numbers relate to Trivy's" />
         </WithTooltip>}
         {data.exposure && data.summary.imagesScanned > 0 && (
-          <WithTooltip tip={sortRule(view)}>
-            <span className="inline-flex items-center gap-1 rounded px-1 hover:text-theme-text-secondary" tabIndex={0} aria-label={`Sort: ${sortRule(view)}`}>
+          <WithTooltip tip={sortRule(view, feedReady(data.intel?.kev))}>
+            <span className="inline-flex items-center gap-1 rounded px-1 hover:text-theme-text-secondary" tabIndex={0} aria-label={`Sort: ${sortRule(view, feedReady(data.intel?.kev))}`}>
               <ArrowDownWideNarrow className="h-3.5 w-3.5" aria-hidden />
-              Severity, then exposure
+              {feedReady(data.intel?.kev) ? 'Severity, known exploited, exposure' : 'Severity, then exposure'}
             </span>
           </WithTooltip>
         )}
@@ -598,6 +639,14 @@ function CoverageNotes({ data, view, matches }: {
             </span>
           </WithTooltip>
         )}
+        {intelNotes(data.intel).map((n) => (
+          <WithTooltip key={n.label} tip={n.tip}>
+            <span className={clsx('inline-flex items-center gap-1', n.warn ? 'text-warning-text' : 'text-theme-text-tertiary')} tabIndex={0} aria-label={n.tip}>
+              <KEV.icon className="h-3.5 w-3.5" aria-hidden />
+              {n.label}
+            </span>
+          </WithTooltip>
+        ))}
         {unscannedExposed > 0 && (
           <WithTooltip tip="Exposed workloads whose images Trivy hasn't scanned yet: their findings are unknown. They're listed under the table.">
             <span className="inline-flex items-center gap-1 text-warning-text" tabIndex={0}>
@@ -707,7 +756,12 @@ function ImageTable({ images, columns, onOpen, onOpenReport }: { images: Vulnera
                       {img.osEndOfLife && <EndOfLifeBadge />}
                     </span>
                   )}
-                  {img.findingsUnread ? <span className="text-xs text-warning-text">Findings not read</span> : <SeverityBar counts={img.counts} className="max-w-[280px]" />}
+                  {img.findingsUnread ? <span className="text-xs text-warning-text">Findings not read</span> : (
+                    <span className="flex min-w-0 items-center gap-2">
+                      <SeverityBar counts={img.counts} className="max-w-[280px] flex-1" />
+                      <KevCount count={img.kevCves} what="of its CVEs" />
+                    </span>
+                  )}
                   <WithTooltip tip={img.findingsUnread ? undefined : `${fixable} of ${total} findings have a fixed release`}>
                     <Num>{img.findingsUnread ? '—' : <>{fixable}<span className="text-theme-text-tertiary"> of {total}</span></>}</Num>
                   </WithTooltip>
@@ -770,11 +824,14 @@ function FindingsList({ findings, total, unread, packageUrl }: { findings: Vulne
       )}
       {findings.map((f, i) => (
         <div key={`${f.id}/${f.package}/${f.installedVersion}/${i}`} className={clsx('grid items-center gap-3 py-1 text-xs', packageUrl ? FINDING_COLS_PURL : FINDING_COLS)}>
-          {f.link ? (
-            <WithTooltip tip={f.title}><a href={f.link} target="_blank" rel="noreferrer" className="truncate font-mono text-accent-text hover:underline">{f.id}</a></WithTooltip>
-          ) : (
-            <WithTooltip tip={f.title}><span className="truncate font-mono text-theme-text-primary">{f.id}</span></WithTooltip>
-          )}
+          <span className="flex min-w-0 items-center gap-1">
+            {f.link ? (
+              <WithTooltip tip={f.title}><a href={f.link} target="_blank" rel="noreferrer" className="truncate font-mono text-accent-text hover:underline">{f.id}</a></WithTooltip>
+            ) : (
+              <WithTooltip tip={f.title}><span className="truncate font-mono text-theme-text-primary">{f.id}</span></WithTooltip>
+            )}
+            <KevBadge kev={f.kev} />
+          </span>
           <SeverityBadge severity={f.severity} fromScore={f.severityFromScore} score={f.score} />
           <span className="truncate font-mono text-theme-text-secondary">{f.package}</span>
           <FixVersion installed={f.installedVersion} fixed={f.fixedVersion} target={f.fixTarget} />
@@ -789,8 +846,8 @@ function FindingsList({ findings, total, unread, packageUrl }: { findings: Vulne
   )
 }
 
-const FINDING_COLS = 'grid-cols-[136px_72px_minmax(0,0.8fr)_minmax(0,1.4fr)]'
-const FINDING_COLS_PURL = 'grid-cols-[136px_72px_minmax(0,0.8fr)_minmax(0,1.4fr)_minmax(0,1fr)]'
+const FINDING_COLS = 'grid-cols-[minmax(136px,auto)_72px_minmax(0,0.8fr)_minmax(0,1.4fr)]'
+const FINDING_COLS_PURL = 'grid-cols-[minmax(136px,auto)_72px_minmax(0,0.8fr)_minmax(0,1.4fr)_minmax(0,1fr)]'
 
 function FixTable({ fixes, onOpen, onShowCVE }: { fixes: VulnerabilityFix[]; onOpen: (w: VulnerabilityWorkloadRef) => void; onShowCVE: (id: string) => void }) {
   return (
@@ -824,7 +881,10 @@ function FixTable({ fixes, onOpen, onShowCVE }: { fixes: VulnerabilityFix[]; onO
                           : <span className="min-w-0 truncate text-theme-text-secondary">fixed in {(f.fixedVersions ?? []).join(', ')}</span>}
                       </span>
                     </WithTooltip>
-                    <SeverityCounts counts={f.counts} />
+                    <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+                      <SeverityCounts counts={f.counts} />
+                      <KevCount count={f.kevCves} what="of the CVEs it clears" />
+                    </span>
                     <WorkloadSummary workloads={runners} exposure={exposure} />
                     <Num>{f.images}</Num>
                     <span className="flex flex-col items-end">
@@ -863,16 +923,17 @@ function FixTable({ fixes, onOpen, onShowCVE }: { fixes: VulnerabilityFix[]; onO
   )
 }
 
-function CVETable({ cves, columns, onOpen }: { cves: VulnerabilityCVE[]; columns: Record<string, boolean>; onOpen: (w: VulnerabilityWorkloadRef) => void }) {
+function CVETable({ cves, columns, intel, onOpen }: { cves: VulnerabilityCVE[]; columns: Record<string, boolean>; intel?: VulnerabilityIntel; onOpen: (w: VulnerabilityWorkloadRef) => void }) {
   const grid = cveGrid(columns)
-  const extra = (columns.published ? 1 : 0) + (columns.age ? 1 : 0)
+  const extra = (columns.published ? 1 : 0) + (columns.age ? 1 : 0) + (columns.epss ? 1 : 0)
   const now = Date.now()
   return (
     <div className="flex shrink-0 flex-col gap-2">
       <div className="shrink-0 overflow-x-auto overflow-y-hidden rounded-lg border border-theme-border bg-theme-surface">
-        <div style={{ minWidth: 960 + (columns.published ? 108 : 0) + (columns.age ? 92 : 0) }}>
+        <div style={{ minWidth: 960 + (columns.published ? 108 : 0) + (columns.age ? 92 : 0) + (columns.epss ? 80 : 0) }}>
           <div className={HEAD} style={grid}>
             <span>CVE</span><span>Severity</span><NumHead>Score</NumHead>
+            {columns.epss && <span className="justify-self-end"><OptionalHead column={optionalColumn('cve', 'epss')} /></span>}
             {columns.published && <OptionalHead column={optionalColumn('cve', 'published')} />}
             {columns.age && <OptionalHead column={optionalColumn('cve', 'age')} align="right" />}
             <span>Package</span><span>Fix</span><NumHead>Images</NumHead><NumHead>Workloads</NumHead>
@@ -886,11 +947,15 @@ function CVETable({ cves, columns, onOpen }: { cves: VulnerabilityCVE[]; columns
               summary={
                 <div className="grid flex-1 items-center gap-4 text-sm" style={grid}>
                   <span className="flex min-w-0 flex-col">
-                    <span className="truncate font-mono text-theme-text-primary">{c.id}</span>
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <span className="truncate font-mono text-theme-text-primary">{c.id}</span>
+                      <KevBadge kev={c.kev} />
+                    </span>
                     {c.title && <span className="truncate text-xs text-theme-text-tertiary">{c.title}</span>}
                   </span>
                   <SeverityBadge severity={c.severity} />
                   <Num>{c.score?.toFixed(1) ?? '—'}</Num>
+                  {columns.epss && <span className="text-right text-xs"><EpssValue epss={c.epss} feed={intel?.epss} /></span>}
                   {columns.published && <PublishedDate at={c.publishedAt} now={now} />}
                   {columns.age && <Num>{c.publishedAt ? `${(daysSince(c.publishedAt, now) ?? 0).toLocaleString('en-US')} d` : '—'}</Num>}
                   <span className="truncate font-mono text-xs text-theme-text-secondary">{c.packages.join(', ')}</span>
@@ -963,7 +1028,10 @@ function WorkloadTable({ workloads, exposure, severities, query, namespaces, onO
                   <span className="truncate text-theme-text-primary">{w.name}</span>
                   <span className="text-xs text-theme-text-tertiary">{w.kind} · {w.namespace}</span>
                 </span>
-                <WorkloadFindings workload={w} />
+                <span className="flex min-w-0 flex-col gap-1">
+                  <WorkloadFindings workload={w} />
+                  {w.kevCves ? <span className="flex"><KevCount count={w.kevCves} what="of the CVEs in its images" /></span> : null}
+                </span>
                 {exposure && <WorkloadRoute workload={w} gaps={exposure.gaps} />}
                 <ul className="flex min-w-0 flex-col gap-1">
                   {w.containers.map((c) => (
@@ -1228,5 +1296,47 @@ function UnscannedList({ data, onOpen }: { data: VulnerabilitiesResponse; onOpen
         </ul>
       </Disclosure>
     </div>
+  )
+}
+
+// The Known exploited chip. Without the catalog it can't filter: it stays
+// visible, disabled, and says why, so a cluster without the feed never reads
+// as one with no known exploited CVEs.
+function KnownExploitedChip({ intel, active, count, onClick }: { intel: VulnerabilityIntel; active: boolean; count?: number; onClick: () => void }) {
+  if (!feedReady(intel.kev)) {
+    // No catalog: a quiet, inert chip that says what it would add and how
+    // to provide it, never one that reads as an error or as "none".
+    if (intel.kev.state === 'loading') {
+      return (
+        <span className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-theme-border-light px-2.5 py-1 text-xs font-medium text-theme-text-tertiary">
+          <KEV.icon className="h-3.5 w-3.5" aria-hidden />
+          {KEV.loading}
+        </span>
+      )
+    }
+    // It links to the setup steps: the one thing to do with it.
+    const tip = `${feedNote('KEV', intel.kev) ?? ''} Click for the steps.`
+    return (
+      <WithTooltip tip={tip}>
+        <a href={FEEDS_DOCS_URL} target="_blank" rel="noreferrer" aria-label={`${KEV.chip}: ${tip}`} className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-theme-border-light px-2.5 py-1 text-xs font-medium text-theme-text-tertiary hover:border-theme-border hover:text-theme-text-secondary">
+          <KEV.icon className="h-3.5 w-3.5" aria-hidden />
+          {KEV.chip}<span className="font-normal">· {KEV.noData}</span>
+        </a>
+      </WithTooltip>
+    )
+  }
+  // A copy that couldn't be refreshed for days still filters, with a warning.
+  const status = feedStatusText(intel, (iso) => formatRelativeAgeTime(iso))
+  return (
+    <FilterPill
+      label={KEV.chip}
+      icon={intel.kev.stale ? AlertTriangle : KEV.icon}
+      tone="danger"
+      count={count}
+      tooltip={[KEV.chipTip, status].filter(Boolean).join(' ')}
+      active={active}
+      onClick={onClick}
+      className={intel.kev.stale && !active ? 'text-warning-text' : undefined}
+    />
   )
 }

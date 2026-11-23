@@ -29,6 +29,7 @@ export const OPTIONAL_COLUMNS: Partial<Record<VulnerabilityView, OptionalColumn[
     { key: 'image.packageUrl', label: 'Package URL', tip: "The package URL (purl) Trivy reports for each finding, in an expanded image's findings.", track: '', hasData: (d) => !!d.images?.some((i) => i.findings.some((f) => f.packageUrl)) },
   ],
   cve: [
+    { key: 'cve.epss', label: 'EPSS', tip: 'EPSS by FIRST: the chance of exploitation activity in the next 30 days, and its percentile among scored CVEs.', track: '64px', hasData: (d) => d.intel?.epss.state === 'ready' && !!d.cves?.some((c) => c.epss) },
     { key: 'cve.published', label: 'Published', tip: "When the CVE was published, from Trivy's database. Not when it was found in this cluster.", track: '92px', hasData: (d) => !!d.cves?.some((c) => c.publishedAt) },
     { key: 'cve.age', label: 'Age', tip: 'Days since the CVE was published, not since it was found in this cluster.', track: '76px', hasData: (d) => !!d.cves?.some((c) => c.publishedAt) },
   ],
