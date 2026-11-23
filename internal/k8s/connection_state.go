@@ -70,9 +70,9 @@ func servingIDLocked() string {
 }
 
 // admissionCandidate returns the installed connection if it has never been
-// admitted. A connection that was admitted and then retired without a
-// subsystem reset (auth demotion, then recovery) is replaced by a fresh one on
-// the same clients, so its old ID can never be served again. Lock-free:
+// admitted. A connection admitted again after a retirement without a subsystem
+// rebuild is replaced by a copy carrying what was built for it under a new
+// identity, so its old ID can never be served again. Lock-free:
 // connectionStatusMu is held, and installs take clientMu.
 func admissionCandidate() *Connection {
 	for {
@@ -80,8 +80,12 @@ func admissionCandidate() *Connection {
 		if c != nil && c.id == "" {
 			return c
 		}
+		// Same build, new identity: carry what was built for it.
 		next := c.fresh()
 		next.discovery.Store(c.Discovery())
+		if c != nil {
+			next.perms.Store(c.perms.Load())
+		}
 		if installedConn.CompareAndSwap(c, next) {
 			return next
 		}
