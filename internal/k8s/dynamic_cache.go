@@ -24,6 +24,7 @@ type DynamicResourceCache struct {
 }
 
 type connectionDynamicCache struct {
+	reports  connectionPolicyReports
 	mu       sync.Mutex
 	once     sync.Once
 	closed   bool
@@ -213,6 +214,8 @@ func (conn *Connection) closeDynamicResourceCache() {
 	s := conn.dynamicCacheState()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Report rebuilds read the informer stores. Retire their index first.
+	s.reports.close()
 	s.closed = true
 	s.pending = nil
 	if dc := s.promoted.Swap(nil); dc != nil {

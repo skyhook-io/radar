@@ -26,7 +26,6 @@ func InitAllSubsystems(ctx context.Context, progress func(string)) error {
 
 func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait time.Duration, tracker *ContextSwitchTracker) error {
 	conn := Current()
-	warmupReports := capturePolicyReportWarmup()
 	subsystemStart := time.Now()
 
 	// 1. Timeline — before caches so events during warmup are captured
@@ -132,12 +131,12 @@ func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait
 				open := conn.cacheIsCurrent()
 				contextOpMu.RUnlock()
 				if open {
-					startDynamicResourceCache(ctx, conn, cache, warmupReports)
+					startDynamicResourceCache(ctx, conn, cache)
 				}
 			}()
 		} else {
 			progress("Loading custom resources...")
-			startDynamicResourceCache(lifecycleCtx, conn, cache, warmupReports)
+			startDynamicResourceCache(lifecycleCtx, conn, cache)
 		}
 	}
 
@@ -205,7 +204,7 @@ func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait
 
 // The operation context outlives the switch's init context, which is cancelled
 // on success while the deferred typed informers may still be syncing.
-func startDynamicResourceCache(lifecycleCtx context.Context, conn *Connection, cache *ResourceCache, warmupReports policyReportWarmup) {
+func startDynamicResourceCache(lifecycleCtx context.Context, conn *Connection, cache *ResourceCache) {
 	t := time.Now()
 	if err := conn.initDynamicResourceCache(cache.ChangesRaw()); err != nil {
 		log.Printf("Warning: dynamic resource cache init failed: %v", err)
@@ -237,7 +236,7 @@ func startDynamicResourceCache(lifecycleCtx context.Context, conn *Connection, c
 					// during WarmupCommonCRDs or DiscoverAllCRDs (admin may
 					// have installed Kyverno after Radar started).
 					pt := time.Now()
-					warmupReports.run(conn.Discovery(), dc)
+					conn.warmupPolicyReports()
 					logTiming("   Kyverno PolicyReport warmup: %v (background)", time.Since(pt))
 				},
 			)
@@ -341,11 +340,6 @@ func resetAllSubsystems(conn *Connection) {
 
 	safeReset("metrics history", ResetMetricsHistory)
 
-	// Step 3: dynamic cache. Reset the PolicyReport index first because
-	// it holds references into the dynamic cache's informer indexers —
-	// clearing the index before tearing down the informers avoids using
-	// half-disposed informers on the next event-driven rebuild.
-	safeReset("policy report index", ResetPolicyReportIndex)
 	safeReset("dynamic resource cache", conn.closeDynamicResourceCache)
 
 	// Readers use the installed connection's permissions to interpret the
