@@ -5,6 +5,13 @@
 // resource-utils-kagent.ts mirrors the readings, and testdata/status.json pins
 // both. AgentTemplate, Harness and EgressPolicy carry no status, so Radar makes
 // no health claim about them.
+//
+// Compose (workspace.go) joins one caller's read of every kagent kind: each
+// Agent's declared references with kagent's namespace defaulting and sharing
+// policy (refs.go), the Agents each dependency's finding affects, and the
+// dependency an Agent's own message names as its cause (causes.go); Fold
+// groups the findings a caller receives for display. testdata/impact.json
+// pins them.
 package kagent
 
 import (

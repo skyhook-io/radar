@@ -1,0 +1,3142 @@
+[
+  {
+    "name": "a blocked edit keeps the revision new sessions start on, and two Agents name one missing ModelConfig",
+    "objects": [
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Agent",
+        "metadata": {
+          "name": "broken-model",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "harnessRef": {
+            "name": "kagent-default"
+          },
+          "template": {
+            "inline": {
+              "description": "Radar fixture",
+              "modelConfig": {
+                "name": "no-such-model"
+              },
+              "systemPrompt": "You are a test agent."
+            }
+          }
+        },
+        "status": {
+          "observedGeneration": 1,
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "Agent explicitly selects its template and harness",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "EgressPoliciesApplied",
+              "status": "True",
+              "reason": "Applied",
+              "message": "All requested egress grants are admitted",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "False",
+              "reason": "ReferenceResolutionFailed",
+              "message": "resolve ModelConfig \"kagent/no-such-model\": not found",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Compatible",
+              "status": "False",
+              "reason": "Blocked",
+              "message": "blocked by ResolvedRefs",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Ready",
+              "status": "False",
+              "reason": "Blocked",
+              "message": "blocked by ResolvedRefs",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Agent",
+        "metadata": {
+          "name": "spike-edit-agent",
+          "namespace": "kagent",
+          "generation": 9,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "harnessRef": {
+            "name": "kagent-default"
+          },
+          "template": {
+            "inline": {
+              "description": "Radar fixture",
+              "modelConfig": {
+                "name": "no-such-model"
+              },
+              "systemPrompt": "You are a test agent.",
+              "tools": [
+                {
+                  "mcp": {
+                    "server": {
+                      "kind": "RemoteMCPServer",
+                      "name": "kagent-tool-server"
+                    },
+                    "tools": [
+                      "k8s_get_resources"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "status": {
+          "observedGeneration": 9,
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "Agent explicitly selects its template and harness",
+              "observedGeneration": 9,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "EgressPoliciesApplied",
+              "status": "True",
+              "reason": "Applied",
+              "message": "All requested egress grants are admitted",
+              "observedGeneration": 9,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "False",
+              "reason": "ReferenceResolutionFailed",
+              "message": "resolve ModelConfig \"kagent/no-such-model\": not found",
+              "observedGeneration": 9,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Compatible",
+              "status": "False",
+              "reason": "Blocked",
+              "message": "blocked by ResolvedRefs",
+              "observedGeneration": 9,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Ready",
+              "status": "False",
+              "reason": "Blocked",
+              "message": "blocked by ResolvedRefs",
+              "observedGeneration": 9,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ],
+          "latestSuccessfulRevision": "7ce964032f700d851023e770c45203b2710d4a1d5d9cd3b27afcee83afec48e5"
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Harness",
+        "metadata": {
+          "name": "kagent-default",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "kagent": {},
+          "substrate": {
+            "snapshotPolicy": {
+              "location": "s3://ate-snapshots/kagent/"
+            },
+            "workerPoolRef": {
+              "name": "kagent-default"
+            }
+          }
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "RemoteMCPServer",
+        "metadata": {
+          "name": "kagent-tool-server",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "description": "MCP server",
+          "protocol": "STREAMABLE_HTTP",
+          "terminateOnClose": true,
+          "timeout": "30s",
+          "url": "http://kagent-tools.kagent.svc.cluster.local:8084/mcp"
+        },
+        "status": {
+          "observedGeneration": 1,
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "DiscoverySucceeded",
+              "message": "Discovered 3 MCP tools",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ],
+          "discoveredTools": [
+            {
+              "name": "k8s_get_resources",
+              "description": "k8s_get_resources"
+            },
+            {
+              "name": "k8s_get_pod_logs",
+              "description": "k8s_get_pod_logs"
+            },
+            {
+              "name": "k8s_describe_resource",
+              "description": "k8s_describe_resource"
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "ModelConfig",
+        "metadata": {
+          "name": "default-model-config",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "apiKeySecret": "kagent-anthropic",
+          "apiKeySecretKey": "ANTHROPIC_API_KEY",
+          "model": "claude-haiku-4-5",
+          "provider": "Anthropic",
+          "stream": true
+        },
+        "status": {
+          "observedGeneration": 1,
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "ModelConfig configuration accepted",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "True",
+              "reason": "Resolved",
+              "message": "All referenced secrets and config maps resolved",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ]
+        }
+      }
+    ],
+    "want": {
+      "findings": [
+        {
+          "id": "Agent/kagent/broken-model/KagentNoPreparedRevision",
+          "severity": "critical",
+          "cause": {
+            "target": "ModelConfig/kagent/no-such-model",
+            "role": "model",
+            "form": "notFound"
+          }
+        },
+        {
+          "id": "Agent/kagent/spike-edit-agent/KagentChangeBlocked",
+          "severity": "warning",
+          "cause": {
+            "target": "ModelConfig/kagent/no-such-model",
+            "role": "model",
+            "form": "notFound"
+          }
+        },
+        {
+          "id": "ModelConfig/kagent/no-such-model/KagentDependencyMissing",
+          "severity": "warning",
+          "affects": {
+            "agents": {
+              "kagent/broken-model": "blocked",
+              "kagent/spike-edit-agent": "blocked"
+            },
+            "count": 2,
+            "lowerBound": false,
+            "consumers": "seen"
+          }
+        }
+      ],
+      "groups": [
+        {
+          "findings": [
+            "ModelConfig/kagent/no-such-model/KagentDependencyMissing"
+          ],
+          "severity": "critical",
+          "folded": [
+            [
+              "Agent/kagent/broken-model/KagentNoPreparedRevision",
+              "ModelConfig/kagent/no-such-model/KagentDependencyMissing"
+            ],
+            [
+              "Agent/kagent/spike-edit-agent/KagentChangeBlocked",
+              "ModelConfig/kagent/no-such-model/KagentDependencyMissing"
+            ]
+          ]
+        }
+      ],
+      "agents": {
+        "kagent/spike-edit-agent": {
+          "latestChange": "blocked",
+          "newSessionsRevision": "7ce964032f700d851023e770c45203b2710d4a1d5d9cd3b27afcee83afec48e5",
+          "desiredRevision": ""
+        },
+        "kagent/broken-model": {
+          "latestChange": "blocked",
+          "newSessionsRevision": "",
+          "desiredRevision": ""
+        }
+      },
+      "references": {
+        "kagent/spike-edit-agent": [
+          {
+            "role": "model",
+            "target": "ModelConfig/kagent/no-such-model",
+            "state": "absent"
+          },
+          {
+            "role": "mcpServer",
+            "target": "RemoteMCPServer/kagent/kagent-tool-server",
+            "state": "present"
+          },
+          {
+            "role": "harness",
+            "target": "Harness/kagent/kagent-default",
+            "state": "present"
+          },
+          {
+            "role": "workerPool",
+            "target": "WorkerPool/kagent/kagent-default",
+            "state": "declared"
+          }
+        ]
+      },
+      "models": {
+        "kagent/default-model-config": {
+          "consumers": "none",
+          "count": 0
+        }
+      },
+      "counts": {
+        "findings": {
+          "n": 3,
+          "lowerBound": false
+        },
+        "groups": 1,
+        "agentsAffected": {
+          "n": 2,
+          "lowerBound": false
+        }
+      }
+    },
+    "now": "2026-11-23T12:00:00Z"
+  },
+  {
+    "name": "one missing Secret breaks two ModelConfigs",
+    "objects": [
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "ModelConfig",
+        "metadata": {
+          "name": "spike-missing-secret",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "model": "stub-model",
+          "provider": "OpenAI",
+          "stream": true,
+          "openAI": {
+            "apiFormat": "chatCompletions",
+            "baseUrl": "http://model-stub.radar-kagent-spike.svc.cluster.local:8080/v1"
+          },
+          "apiKeySecret": "spike-no-such-secret",
+          "apiKeySecretKey": "OPENAI_API_KEY"
+        },
+        "status": {
+          "observedGeneration": 1,
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "ModelConfig configuration accepted",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "False",
+              "reason": "APIKeySecretNotFound",
+              "message": "secret spike-no-such-secret not found",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "ModelConfig",
+        "metadata": {
+          "name": "spike-missing-secret-b",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "model": "stub-model",
+          "provider": "OpenAI",
+          "stream": true,
+          "openAI": {
+            "apiFormat": "chatCompletions",
+            "baseUrl": "http://model-stub.radar-kagent-spike.svc.cluster.local:8080/v1"
+          },
+          "apiKeySecret": "spike-no-such-secret",
+          "apiKeySecretKey": "OPENAI_API_KEY"
+        },
+        "status": {
+          "observedGeneration": 1,
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "ModelConfig configuration accepted",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "False",
+              "reason": "APIKeySecretNotFound",
+              "message": "secret spike-no-such-secret not found",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Agent",
+        "metadata": {
+          "name": "secret-agent",
+          "namespace": "kagent",
+          "generation": 2,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "harnessRef": {
+            "name": "kagent-default"
+          },
+          "template": {
+            "inline": {
+              "description": "Radar fixture",
+              "modelConfig": {
+                "name": "spike-missing-secret"
+              },
+              "systemPrompt": "You are a test agent."
+            }
+          }
+        },
+        "status": {
+          "observedGeneration": 2,
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "Agent explicitly selects its template and harness",
+              "observedGeneration": 2,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "EgressPoliciesApplied",
+              "status": "True",
+              "reason": "Applied",
+              "message": "All requested egress grants are admitted",
+              "observedGeneration": 2,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "False",
+              "reason": "ReferenceResolutionFailed",
+              "message": "resolve ModelConfig \"kagent/spike-missing-secret\": secret spike-no-such-secret not found",
+              "observedGeneration": 2,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Compatible",
+              "status": "False",
+              "reason": "Blocked",
+              "message": "blocked by ResolvedRefs",
+              "observedGeneration": 2,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Ready",
+              "status": "False",
+              "reason": "Blocked",
+              "message": "blocked by ResolvedRefs",
+              "observedGeneration": 2,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ],
+          "latestSuccessfulRevision": "84825188790134f61d845b3d14505ed184252476ae5219b07831096d10d00cf3"
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Harness",
+        "metadata": {
+          "name": "kagent-default",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "kagent": {},
+          "substrate": {
+            "snapshotPolicy": {
+              "location": "s3://ate-snapshots/kagent/"
+            },
+            "workerPoolRef": {
+              "name": "kagent-default"
+            }
+          }
+        }
+      }
+    ],
+    "want": {
+      "findings": [
+        {
+          "id": "Agent/kagent/secret-agent/KagentChangeBlocked",
+          "severity": "warning",
+          "cause": {
+            "target": "ModelConfig/kagent/spike-missing-secret",
+            "role": "model",
+            "form": "failed"
+          }
+        },
+        {
+          "id": "ModelConfig/kagent/spike-missing-secret/KagentAPIKeySecretMissing",
+          "severity": "warning",
+          "secret": "kagent/spike-no-such-secret",
+          "affects": {
+            "agents": {
+              "kagent/secret-agent": "blocked"
+            },
+            "count": 1,
+            "lowerBound": false,
+            "consumers": "seen"
+          }
+        },
+        {
+          "id": "ModelConfig/kagent/spike-missing-secret-b/KagentAPIKeySecretMissing",
+          "severity": "warning",
+          "secret": "kagent/spike-no-such-secret",
+          "affects": {
+            "agents": {},
+            "count": 0,
+            "lowerBound": false,
+            "consumers": "none"
+          }
+        }
+      ],
+      "groups": [
+        {
+          "secret": "kagent/spike-no-such-secret",
+          "severity": "warning",
+          "findings": [
+            "ModelConfig/kagent/spike-missing-secret/KagentAPIKeySecretMissing",
+            "ModelConfig/kagent/spike-missing-secret-b/KagentAPIKeySecretMissing"
+          ],
+          "folded": [
+            [
+              "Agent/kagent/secret-agent/KagentChangeBlocked",
+              "ModelConfig/kagent/spike-missing-secret/KagentAPIKeySecretMissing"
+            ]
+          ]
+        }
+      ],
+      "counts": {
+        "findings": {
+          "n": 3,
+          "lowerBound": false
+        },
+        "groups": 1,
+        "agentsAffected": {
+          "n": 1,
+          "lowerBound": false
+        }
+      }
+    },
+    "now": "2026-11-23T12:00:00Z"
+  },
+  {
+    "name": "an Agent's blocked change and its egress grants stay separate findings",
+    "objects": [
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Agent",
+        "metadata": {
+          "name": "egress-agent",
+          "namespace": "kagent",
+          "generation": 3,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "harnessRef": {
+            "name": "kagent-default"
+          },
+          "template": {
+            "ref": {
+              "name": "egress-tpl"
+            }
+          },
+          "egressPolicyRefs": [
+            {
+              "name": "github"
+            }
+          ]
+        },
+        "status": {
+          "observedGeneration": 3,
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "Agent explicitly selects its template and harness",
+              "observedGeneration": 3,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "EgressPoliciesApplied",
+              "status": "False",
+              "reason": "EgressPolicyNotFound",
+              "message": "kagent/github: egresspolicies.api.kagent.dev \"github\" not found",
+              "observedGeneration": 3,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "False",
+              "reason": "ReferenceResolutionFailed",
+              "message": "resolve RemoteMCPServer \"github\": not found",
+              "observedGeneration": 3,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Compatible",
+              "status": "False",
+              "reason": "Blocked",
+              "message": "blocked by ResolvedRefs",
+              "observedGeneration": 3,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Ready",
+              "status": "False",
+              "reason": "Blocked",
+              "message": "blocked by ResolvedRefs",
+              "observedGeneration": 3,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ],
+          "latestSuccessfulRevision": "2bc5b5bda8ce826e84031e6ddfa25787b9f96bf29df8d07bd6a405488dbb882d"
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "AgentTemplate",
+        "metadata": {
+          "name": "egress-tpl",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "description": "uses GitHub",
+          "modelConfig": {
+            "name": "default-model-config"
+          },
+          "systemPrompt": "Help.",
+          "tools": [
+            {
+              "mcp": {
+                "server": {
+                  "kind": "RemoteMCPServer",
+                  "name": "github"
+                },
+                "tools": [
+                  "list_repos"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Harness",
+        "metadata": {
+          "name": "kagent-default",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "kagent": {},
+          "substrate": {
+            "snapshotPolicy": {
+              "location": "s3://ate-snapshots/kagent/"
+            },
+            "workerPoolRef": {
+              "name": "kagent-default"
+            }
+          }
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "ModelConfig",
+        "metadata": {
+          "name": "default-model-config",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "apiKeySecret": "kagent-anthropic",
+          "apiKeySecretKey": "ANTHROPIC_API_KEY",
+          "model": "claude-haiku-4-5",
+          "provider": "Anthropic",
+          "stream": true
+        },
+        "status": {
+          "observedGeneration": 1,
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "ModelConfig configuration accepted",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "True",
+              "reason": "Resolved",
+              "message": "All referenced secrets and config maps resolved",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ]
+        }
+      }
+    ],
+    "want": {
+      "findings": [
+        {
+          "id": "Agent/kagent/egress-agent/KagentChangeBlocked",
+          "severity": "warning",
+          "cause": {
+            "target": "RemoteMCPServer/kagent/github",
+            "role": "mcpServer",
+            "form": "notFound"
+          }
+        },
+        {
+          "id": "Agent/kagent/egress-agent/KagentEgressNotApplied",
+          "severity": "warning"
+        },
+        {
+          "id": "RemoteMCPServer/kagent/github/KagentDependencyMissing",
+          "severity": "warning",
+          "affects": {
+            "agents": {
+              "kagent/egress-agent": "blocked"
+            },
+            "count": 1,
+            "lowerBound": false,
+            "consumers": "seen"
+          },
+          "through": {
+            "kagent/egress-agent": [
+              "AgentTemplate"
+            ]
+          }
+        }
+      ],
+      "groups": [
+        {
+          "findings": [
+            "Agent/kagent/egress-agent/KagentEgressNotApplied"
+          ],
+          "severity": "warning"
+        },
+        {
+          "findings": [
+            "RemoteMCPServer/kagent/github/KagentDependencyMissing"
+          ],
+          "severity": "warning",
+          "folded": [
+            [
+              "Agent/kagent/egress-agent/KagentChangeBlocked",
+              "RemoteMCPServer/kagent/github/KagentDependencyMissing"
+            ]
+          ]
+        }
+      ],
+      "references": {
+        "kagent/egress-agent": [
+          {
+            "role": "template",
+            "target": "AgentTemplate/kagent/egress-tpl",
+            "state": "present"
+          },
+          {
+            "role": "egressPolicy",
+            "target": "EgressPolicy/kagent/github",
+            "state": "absent"
+          },
+          {
+            "role": "mcpServer",
+            "target": "RemoteMCPServer/kagent/github",
+            "state": "absent",
+            "tools": [
+              "list_repos"
+            ]
+          },
+          {
+            "role": "model",
+            "target": "ModelConfig/kagent/default-model-config",
+            "state": "present"
+          }
+        ]
+      },
+      "counts": {
+        "findings": {
+          "n": 3,
+          "lowerBound": false
+        },
+        "groups": 2
+      }
+    },
+    "now": "2026-11-23T12:00:00Z"
+  },
+  {
+    "name": "a cross-namespace reference the target's sharing policy refuses",
+    "objects": [
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "ModelConfig",
+        "metadata": {
+          "name": "shared",
+          "namespace": "team-a",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "model": "stub-model",
+          "provider": "OpenAI",
+          "stream": true,
+          "openAI": {
+            "apiFormat": "chatCompletions",
+            "baseUrl": "http://model-stub.radar-kagent-spike.svc.cluster.local:8080/v1"
+          }
+        },
+        "status": {
+          "observedGeneration": 1,
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "ModelConfig configuration accepted",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "True",
+              "reason": "Resolved",
+              "message": "All referenced secrets and config maps resolved",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "ModelConfig",
+        "metadata": {
+          "name": "by-label",
+          "namespace": "team-a",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "model": "stub-model",
+          "provider": "OpenAI",
+          "stream": true,
+          "openAI": {
+            "apiFormat": "chatCompletions",
+            "baseUrl": "http://model-stub.radar-kagent-spike.svc.cluster.local:8080/v1"
+          },
+          "allowedNamespaces": {
+            "from": "Selector",
+            "selector": {
+              "matchLabels": {
+                "kagent-access": "true"
+              }
+            }
+          }
+        },
+        "status": {
+          "observedGeneration": 1,
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "ModelConfig configuration accepted",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "True",
+              "reason": "Resolved",
+              "message": "All referenced secrets and config maps resolved",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "ModelConfig",
+        "metadata": {
+          "name": "for-all",
+          "namespace": "team-a",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "model": "stub-model",
+          "provider": "OpenAI",
+          "stream": true,
+          "openAI": {
+            "apiFormat": "chatCompletions",
+            "baseUrl": "http://model-stub.radar-kagent-spike.svc.cluster.local:8080/v1"
+          },
+          "allowedNamespaces": {
+            "from": "All"
+          }
+        },
+        "status": {
+          "observedGeneration": 1,
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "ModelConfig configuration accepted",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "True",
+              "reason": "Resolved",
+              "message": "All referenced secrets and config maps resolved",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Agent",
+        "metadata": {
+          "name": "cross",
+          "namespace": "team-b",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "harnessRef": {
+            "name": "default"
+          },
+          "template": {
+            "inline": {
+              "description": "Radar fixture",
+              "modelConfig": {
+                "name": "shared",
+                "namespace": "team-a"
+              },
+              "systemPrompt": "You are a test agent."
+            }
+          }
+        },
+        "status": {
+          "observedGeneration": 1,
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "Agent explicitly selects its template and harness",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "EgressPoliciesApplied",
+              "status": "True",
+              "reason": "Applied",
+              "message": "All requested egress grants are admitted",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "False",
+              "reason": "ReferenceResolutionFailed",
+              "message": "resolve ModelConfig \"team-a/shared\": reference from namespace \"team-b\" denied by allowedNamespaces",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Compatible",
+              "status": "False",
+              "reason": "Blocked",
+              "message": "blocked by ResolvedRefs",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Ready",
+              "status": "False",
+              "reason": "Blocked",
+              "message": "blocked by ResolvedRefs",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Agent",
+        "metadata": {
+          "name": "labelled",
+          "namespace": "team-c",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "harnessRef": {
+            "name": "default"
+          },
+          "template": {
+            "inline": {
+              "description": "Radar fixture",
+              "modelConfig": {
+                "name": "by-label",
+                "namespace": "team-a"
+              },
+              "systemPrompt": "You are a test agent."
+            }
+          }
+        },
+        "status": {
+          "observedGeneration": 1,
+          "desiredRevision": "84825188790134f61d845b3d14505ed184252476ae5219b07831096d10d00cf3",
+          "latestSuccessfulRevision": "84825188790134f61d845b3d14505ed184252476ae5219b07831096d10d00cf3",
+          "workloadImage": "ghcr.io/kagent-dev/kagent/golang-adk@sha256:d3b1151d39c529a6f921a58a995ff699963012001d2e5075f69bf613abebc24d",
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "Agent explicitly selects its template and harness",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "EgressPoliciesApplied",
+              "status": "True",
+              "reason": "Applied",
+              "message": "All requested egress grants are admitted",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "True",
+              "reason": "Resolved",
+              "message": "All runtime references resolved",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Compatible",
+              "status": "True",
+              "reason": "Compatible",
+              "message": "Resolved configuration is compatible with the Harness",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Ready",
+              "status": "True",
+              "reason": "Ready",
+              "message": "ActorTemplate golden snapshot is ready",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Agent",
+        "metadata": {
+          "name": "admitted",
+          "namespace": "team-d",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "harnessRef": {
+            "name": "default"
+          },
+          "template": {
+            "inline": {
+              "description": "Radar fixture",
+              "modelConfig": {
+                "name": "by-label",
+                "namespace": "team-a"
+              },
+              "systemPrompt": "You are a test agent."
+            }
+          }
+        },
+        "status": {
+          "observedGeneration": 1,
+          "desiredRevision": "2bc5b5bda8ce826e84031e6ddfa25787b9f96bf29df8d07bd6a405488dbb882d",
+          "latestSuccessfulRevision": "2bc5b5bda8ce826e84031e6ddfa25787b9f96bf29df8d07bd6a405488dbb882d",
+          "workloadImage": "ghcr.io/kagent-dev/kagent/golang-adk@sha256:d3b1151d39c529a6f921a58a995ff699963012001d2e5075f69bf613abebc24d",
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "Agent explicitly selects its template and harness",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "EgressPoliciesApplied",
+              "status": "True",
+              "reason": "Applied",
+              "message": "All requested egress grants are admitted",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "True",
+              "reason": "Resolved",
+              "message": "All runtime references resolved",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Compatible",
+              "status": "True",
+              "reason": "Compatible",
+              "message": "Resolved configuration is compatible with the Harness",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Ready",
+              "status": "True",
+              "reason": "Ready",
+              "message": "ActorTemplate golden snapshot is ready",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Agent",
+        "metadata": {
+          "name": "anyone",
+          "namespace": "team-e",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "harnessRef": {
+            "name": "default"
+          },
+          "template": {
+            "inline": {
+              "description": "Radar fixture",
+              "modelConfig": {
+                "name": "for-all",
+                "namespace": "team-a"
+              },
+              "systemPrompt": "You are a test agent."
+            }
+          }
+        },
+        "status": {
+          "observedGeneration": 1,
+          "desiredRevision": "7ce964032f700d851023e770c45203b2710d4a1d5d9cd3b27afcee83afec48e5",
+          "latestSuccessfulRevision": "7ce964032f700d851023e770c45203b2710d4a1d5d9cd3b27afcee83afec48e5",
+          "workloadImage": "ghcr.io/kagent-dev/kagent/golang-adk@sha256:d3b1151d39c529a6f921a58a995ff699963012001d2e5075f69bf613abebc24d",
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "Agent explicitly selects its template and harness",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "EgressPoliciesApplied",
+              "status": "True",
+              "reason": "Applied",
+              "message": "All requested egress grants are admitted",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "True",
+              "reason": "Resolved",
+              "message": "All runtime references resolved",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Compatible",
+              "status": "True",
+              "reason": "Compatible",
+              "message": "Resolved configuration is compatible with the Harness",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Ready",
+              "status": "True",
+              "reason": "Ready",
+              "message": "ActorTemplate golden snapshot is ready",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Harness",
+        "metadata": {
+          "name": "default",
+          "namespace": "team-b",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "kagent": {},
+          "substrate": {
+            "snapshotPolicy": {
+              "location": "s3://ate-snapshots/kagent/"
+            },
+            "workerPoolRef": {
+              "name": "kagent-default"
+            }
+          }
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Harness",
+        "metadata": {
+          "name": "default",
+          "namespace": "team-c",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "kagent": {},
+          "substrate": {
+            "snapshotPolicy": {
+              "location": "s3://ate-snapshots/kagent/"
+            },
+            "workerPoolRef": {
+              "name": "kagent-default"
+            }
+          }
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Harness",
+        "metadata": {
+          "name": "default",
+          "namespace": "team-d",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "kagent": {},
+          "substrate": {
+            "snapshotPolicy": {
+              "location": "s3://ate-snapshots/kagent/"
+            },
+            "workerPoolRef": {
+              "name": "kagent-default"
+            }
+          }
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Harness",
+        "metadata": {
+          "name": "default",
+          "namespace": "team-e",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "kagent": {},
+          "substrate": {
+            "snapshotPolicy": {
+              "location": "s3://ate-snapshots/kagent/"
+            },
+            "workerPoolRef": {
+              "name": "kagent-default"
+            }
+          }
+        }
+      }
+    ],
+    "namespaceLabels": {
+      "team-d": {
+        "kagent-access": "true"
+      }
+    },
+    "want": {
+      "findings": [
+        {
+          "id": "Agent/team-b/cross/KagentNoPreparedRevision",
+          "severity": "critical",
+          "cause": {
+            "target": "ModelConfig/team-a/shared",
+            "role": "model",
+            "form": "notPermitted"
+          }
+        },
+        {
+          "id": "ModelConfig/team-a/shared/KagentDependencyNotPermitted",
+          "severity": "warning",
+          "messageContains": "refuses references from namespace team-b",
+          "affects": {
+            "agents": {
+              "team-b/cross": "blocked"
+            },
+            "count": 1,
+            "lowerBound": false,
+            "consumers": "seen"
+          }
+        }
+      ],
+      "groups": [
+        {
+          "findings": [
+            "ModelConfig/team-a/shared/KagentDependencyNotPermitted"
+          ],
+          "severity": "critical",
+          "folded": [
+            [
+              "Agent/team-b/cross/KagentNoPreparedRevision",
+              "ModelConfig/team-a/shared/KagentDependencyNotPermitted"
+            ]
+          ]
+        }
+      ],
+      "references": {
+        "team-b/cross": [
+          {
+            "role": "model",
+            "target": "ModelConfig/team-a/shared",
+            "state": "notPermitted"
+          }
+        ],
+        "team-c/labelled": [
+          {
+            "role": "model",
+            "target": "ModelConfig/team-a/by-label",
+            "state": "present",
+            "policyUnknown": true
+          }
+        ],
+        "team-d/admitted": [
+          {
+            "role": "model",
+            "target": "ModelConfig/team-a/by-label",
+            "state": "present",
+            "policyUnknown": false
+          }
+        ],
+        "team-e/anyone": [
+          {
+            "role": "model",
+            "target": "ModelConfig/team-a/for-all",
+            "state": "present"
+          }
+        ]
+      },
+      "counts": {
+        "findings": {
+          "n": 2,
+          "lowerBound": false
+        },
+        "groups": 1
+      }
+    },
+    "now": "2026-11-23T12:00:00Z"
+  },
+  {
+    "name": "Harness models default to the Harness's namespace, and a Harness without a summarizer summarizes with the Agent's model",
+    "objects": [
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Harness",
+        "metadata": {
+          "name": "mem-harness",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "kagent": {
+            "memory": {
+              "modelConfigRef": {
+                "name": "embedder"
+              },
+              "ttlDays": 30
+            },
+            "compaction": {
+              "compactionInterval": 5,
+              "summarizer": {
+                "modelConfigRef": {
+                  "name": "summarizer-model"
+                }
+              }
+            }
+          },
+          "substrate": {
+            "snapshotPolicy": {
+              "location": "s3://ate-snapshots/kagent/"
+            },
+            "workerPoolRef": {
+              "name": "kagent-default"
+            }
+          }
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Harness",
+        "metadata": {
+          "name": "compact-harness",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "kagent": {
+            "compaction": {
+              "compactionInterval": 5
+            }
+          },
+          "substrate": {
+            "snapshotPolicy": {
+              "location": "s3://ate-snapshots/kagent/"
+            },
+            "workerPoolRef": {
+              "name": "kagent-default"
+            }
+          }
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "ModelConfig",
+        "metadata": {
+          "name": "summarizer-model",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "model": "stub-model",
+          "provider": "OpenAI",
+          "stream": true,
+          "openAI": {
+            "apiFormat": "chatCompletions",
+            "baseUrl": "http://model-stub.radar-kagent-spike.svc.cluster.local:8080/v1"
+          }
+        },
+        "status": {
+          "observedGeneration": 1,
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "ModelConfig configuration accepted",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "True",
+              "reason": "Resolved",
+              "message": "All referenced secrets and config maps resolved",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "ModelConfig",
+        "metadata": {
+          "name": "default-model-config",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "apiKeySecret": "kagent-anthropic",
+          "apiKeySecretKey": "ANTHROPIC_API_KEY",
+          "model": "claude-haiku-4-5",
+          "provider": "Anthropic",
+          "stream": true
+        },
+        "status": {
+          "observedGeneration": 1,
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "ModelConfig configuration accepted",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "True",
+              "reason": "Resolved",
+              "message": "All referenced secrets and config maps resolved",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Agent",
+        "metadata": {
+          "name": "memory-agent",
+          "namespace": "kagent",
+          "generation": 2,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "harnessRef": {
+            "name": "mem-harness"
+          },
+          "template": {
+            "inline": {
+              "description": "Radar fixture",
+              "modelConfig": {
+                "name": "default-model-config"
+              },
+              "systemPrompt": "You are a test agent."
+            }
+          }
+        },
+        "status": {
+          "observedGeneration": 2,
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "Agent explicitly selects its template and harness",
+              "observedGeneration": 2,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "EgressPoliciesApplied",
+              "status": "True",
+              "reason": "Applied",
+              "message": "All requested egress grants are admitted",
+              "observedGeneration": 2,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "False",
+              "reason": "ReferenceResolutionFailed",
+              "message": "resolve memory ModelConfig \"embedder\": resolve ModelConfig \"kagent/embedder\": not found",
+              "observedGeneration": 2,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Compatible",
+              "status": "False",
+              "reason": "Blocked",
+              "message": "blocked by ResolvedRefs",
+              "observedGeneration": 2,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Ready",
+              "status": "False",
+              "reason": "Blocked",
+              "message": "blocked by ResolvedRefs",
+              "observedGeneration": 2,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ],
+          "latestSuccessfulRevision": "2bc5b5bda8ce826e84031e6ddfa25787b9f96bf29df8d07bd6a405488dbb882d"
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Agent",
+        "metadata": {
+          "name": "compact-agent",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "harnessRef": {
+            "name": "compact-harness"
+          },
+          "template": {
+            "inline": {
+              "description": "Radar fixture",
+              "modelConfig": {
+                "name": "default-model-config"
+              },
+              "systemPrompt": "You are a test agent."
+            }
+          }
+        },
+        "status": {
+          "observedGeneration": 1,
+          "desiredRevision": "84825188790134f61d845b3d14505ed184252476ae5219b07831096d10d00cf3",
+          "latestSuccessfulRevision": "84825188790134f61d845b3d14505ed184252476ae5219b07831096d10d00cf3",
+          "workloadImage": "ghcr.io/kagent-dev/kagent/golang-adk@sha256:d3b1151d39c529a6f921a58a995ff699963012001d2e5075f69bf613abebc24d",
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "Agent explicitly selects its template and harness",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "EgressPoliciesApplied",
+              "status": "True",
+              "reason": "Applied",
+              "message": "All requested egress grants are admitted",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "True",
+              "reason": "Resolved",
+              "message": "All runtime references resolved",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Compatible",
+              "status": "True",
+              "reason": "Compatible",
+              "message": "Resolved configuration is compatible with the Harness",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Ready",
+              "status": "True",
+              "reason": "Ready",
+              "message": "ActorTemplate golden snapshot is ready",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ]
+        }
+      }
+    ],
+    "want": {
+      "findings": [
+        {
+          "id": "Agent/kagent/memory-agent/KagentChangeBlocked",
+          "severity": "warning",
+          "cause": {
+            "target": "ModelConfig/kagent/embedder",
+            "role": "embedding",
+            "form": "notFound"
+          }
+        },
+        {
+          "id": "ModelConfig/kagent/embedder/KagentDependencyMissing",
+          "severity": "warning",
+          "affects": {
+            "agents": {
+              "kagent/memory-agent": "blocked"
+            },
+            "count": 1,
+            "lowerBound": false,
+            "consumers": "seen"
+          },
+          "through": {
+            "kagent/memory-agent": [
+              "Harness"
+            ]
+          }
+        }
+      ],
+      "groups": [
+        {
+          "findings": [
+            "ModelConfig/kagent/embedder/KagentDependencyMissing"
+          ],
+          "severity": "warning",
+          "folded": [
+            [
+              "Agent/kagent/memory-agent/KagentChangeBlocked",
+              "ModelConfig/kagent/embedder/KagentDependencyMissing"
+            ]
+          ]
+        }
+      ],
+      "references": {
+        "kagent/memory-agent": [
+          {
+            "role": "embedding",
+            "target": "ModelConfig/kagent/embedder",
+            "state": "absent"
+          },
+          {
+            "role": "summarizer",
+            "target": "ModelConfig/kagent/summarizer-model",
+            "state": "present"
+          },
+          {
+            "role": "model",
+            "target": "ModelConfig/kagent/default-model-config",
+            "state": "present"
+          }
+        ],
+        "kagent/compact-agent": [
+          {
+            "role": "summarizer",
+            "target": "ModelConfig/kagent/default-model-config",
+            "state": "present",
+            "fallback": true
+          }
+        ]
+      },
+      "models": {
+        "kagent/default-model-config": {
+          "consumers": "seen",
+          "count": 2,
+          "byRole": {
+            "model": 2,
+            "summarizer": 1
+          }
+        },
+        "kagent/summarizer-model": {
+          "consumers": "seen",
+          "count": 1,
+          "byRole": {
+            "summarizer": 1
+          }
+        }
+      },
+      "counts": {
+        "findings": {
+          "n": 2,
+          "lowerBound": false
+        },
+        "groups": 1
+      }
+    },
+    "now": "2026-11-23T12:00:00Z"
+  },
+  {
+    "name": "a missing subagent template",
+    "objects": [
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "AgentTemplate",
+        "metadata": {
+          "name": "coordinator",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "description": "routes work",
+          "modelConfig": {
+            "name": "default-model-config"
+          },
+          "systemPrompt": "Route.",
+          "tools": [
+            {
+              "subAgent": {
+                "name": "research",
+                "description": "Researches.",
+                "templateRef": {
+                  "name": "researcher"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Agent",
+        "metadata": {
+          "name": "coordinator-agent",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "harnessRef": {
+            "name": "kagent-default"
+          },
+          "template": {
+            "ref": {
+              "name": "coordinator"
+            }
+          }
+        },
+        "status": {
+          "observedGeneration": 1,
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "Agent explicitly selects its template and harness",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "EgressPoliciesApplied",
+              "status": "True",
+              "reason": "Applied",
+              "message": "All requested egress grants are admitted",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "False",
+              "reason": "ReferenceResolutionFailed",
+              "message": "resolve AgentTemplate \"researcher\": not found",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Compatible",
+              "status": "False",
+              "reason": "Blocked",
+              "message": "blocked by ResolvedRefs",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Ready",
+              "status": "False",
+              "reason": "Blocked",
+              "message": "blocked by ResolvedRefs",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Harness",
+        "metadata": {
+          "name": "kagent-default",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "kagent": {},
+          "substrate": {
+            "snapshotPolicy": {
+              "location": "s3://ate-snapshots/kagent/"
+            },
+            "workerPoolRef": {
+              "name": "kagent-default"
+            }
+          }
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "ModelConfig",
+        "metadata": {
+          "name": "default-model-config",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "apiKeySecret": "kagent-anthropic",
+          "apiKeySecretKey": "ANTHROPIC_API_KEY",
+          "model": "claude-haiku-4-5",
+          "provider": "Anthropic",
+          "stream": true
+        },
+        "status": {
+          "observedGeneration": 1,
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "ModelConfig configuration accepted",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "True",
+              "reason": "Resolved",
+              "message": "All referenced secrets and config maps resolved",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ]
+        }
+      }
+    ],
+    "want": {
+      "findings": [
+        {
+          "id": "Agent/kagent/coordinator-agent/KagentNoPreparedRevision",
+          "severity": "critical",
+          "cause": {
+            "target": "AgentTemplate/kagent/researcher",
+            "role": "subagentTemplate",
+            "form": "notFound"
+          }
+        },
+        {
+          "id": "AgentTemplate/kagent/researcher/KagentDependencyMissing",
+          "severity": "warning",
+          "affects": {
+            "agents": {
+              "kagent/coordinator-agent": "blocked"
+            },
+            "count": 1,
+            "lowerBound": false,
+            "consumers": "seen"
+          },
+          "through": {
+            "kagent/coordinator-agent": [
+              "AgentTemplate"
+            ]
+          }
+        }
+      ],
+      "groups": [
+        {
+          "findings": [
+            "AgentTemplate/kagent/researcher/KagentDependencyMissing"
+          ],
+          "severity": "critical",
+          "folded": [
+            [
+              "Agent/kagent/coordinator-agent/KagentNoPreparedRevision",
+              "AgentTemplate/kagent/researcher/KagentDependencyMissing"
+            ]
+          ]
+        }
+      ],
+      "references": {
+        "kagent/coordinator-agent": [
+          {
+            "role": "template",
+            "target": "AgentTemplate/kagent/coordinator",
+            "state": "present"
+          },
+          {
+            "role": "subagentTemplate",
+            "target": "AgentTemplate/kagent/researcher",
+            "state": "absent"
+          }
+        ]
+      },
+      "counts": {
+        "findings": {
+          "n": 2,
+          "lowerBound": false
+        },
+        "groups": 1
+      }
+    },
+    "now": "2026-11-23T12:00:00Z"
+  },
+  {
+    "name": "an MCP server whose discovery fails, bound by a Ready Agent and by one still preparing",
+    "objects": [
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "RemoteMCPServer",
+        "metadata": {
+          "name": "spike-unreachable-mcp",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z",
+          "labels": {
+            "radar.skyhook.io/fixture": "kagent-spike"
+          }
+        },
+        "spec": {
+          "description": "MCP server",
+          "protocol": "STREAMABLE_HTTP",
+          "terminateOnClose": true,
+          "timeout": "30s",
+          "url": "http://no-such-mcp.radar-kagent-spike.svc.cluster.local:9999/mcp"
+        },
+        "status": {
+          "observedGeneration": 1,
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "False",
+              "reason": "DiscoveryFailed",
+              "message": "Failed to connect to MCP server: failed to connect MCP client: calling \"initialize\": sending \"initialize\": rejected by transport: Post \"http://no-such-mcp.radar-kagent-spike.svc.cluster.local:9999/mcp\": dial tcp: lookup no-such-mcp.radar-kagent-spike.svc.cluster.local on 172.20.0.10:53: no such host",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Agent",
+        "metadata": {
+          "name": "tools-agent",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "harnessRef": {
+            "name": "kagent-default"
+          },
+          "template": {
+            "inline": {
+              "description": "Radar fixture",
+              "modelConfig": {
+                "name": "default-model-config"
+              },
+              "systemPrompt": "You are a test agent.",
+              "tools": [
+                {
+                  "mcp": {
+                    "server": {
+                      "kind": "RemoteMCPServer",
+                      "name": "spike-unreachable-mcp"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "status": {
+          "observedGeneration": 1,
+          "desiredRevision": "84825188790134f61d845b3d14505ed184252476ae5219b07831096d10d00cf3",
+          "latestSuccessfulRevision": "84825188790134f61d845b3d14505ed184252476ae5219b07831096d10d00cf3",
+          "workloadImage": "ghcr.io/kagent-dev/kagent/golang-adk@sha256:d3b1151d39c529a6f921a58a995ff699963012001d2e5075f69bf613abebc24d",
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "Agent explicitly selects its template and harness",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "EgressPoliciesApplied",
+              "status": "True",
+              "reason": "Applied",
+              "message": "All requested egress grants are admitted",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "True",
+              "reason": "Resolved",
+              "message": "All runtime references resolved",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Compatible",
+              "status": "True",
+              "reason": "Compatible",
+              "message": "Resolved configuration is compatible with the Harness",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Ready",
+              "status": "True",
+              "reason": "Ready",
+              "message": "ActorTemplate golden snapshot is ready",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Agent",
+        "metadata": {
+          "name": "preparing-agent",
+          "namespace": "kagent",
+          "generation": 2,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "harnessRef": {
+            "name": "kagent-default"
+          },
+          "template": {
+            "inline": {
+              "description": "Radar fixture",
+              "modelConfig": {
+                "name": "default-model-config"
+              },
+              "systemPrompt": "You are a test agent.",
+              "tools": [
+                {
+                  "mcp": {
+                    "server": {
+                      "kind": "RemoteMCPServer",
+                      "name": "spike-unreachable-mcp"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "status": {
+          "observedGeneration": 2,
+          "desiredRevision": "7ce964032f700d851023e770c45203b2710d4a1d5d9cd3b27afcee83afec48e5",
+          "workloadImage": "ghcr.io/kagent-dev/kagent/golang-adk@sha256:d3b1151d39c529a6f921a58a995ff699963012001d2e5075f69bf613abebc24d",
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "Agent explicitly selects its template and harness",
+              "observedGeneration": 2,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "EgressPoliciesApplied",
+              "status": "True",
+              "reason": "Applied",
+              "message": "All requested egress grants are admitted",
+              "observedGeneration": 2,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "True",
+              "reason": "Resolved",
+              "message": "All runtime references resolved",
+              "observedGeneration": 2,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Compatible",
+              "status": "True",
+              "reason": "Compatible",
+              "message": "Resolved configuration is compatible with the Harness",
+              "observedGeneration": 2,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Ready",
+              "status": "False",
+              "reason": "ActorTemplatePending",
+              "message": "waiting for the ActorTemplate golden snapshot",
+              "observedGeneration": 2,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ],
+          "latestSuccessfulRevision": "2bc5b5bda8ce826e84031e6ddfa25787b9f96bf29df8d07bd6a405488dbb882d"
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Harness",
+        "metadata": {
+          "name": "kagent-default",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "kagent": {},
+          "substrate": {
+            "snapshotPolicy": {
+              "location": "s3://ate-snapshots/kagent/"
+            },
+            "workerPoolRef": {
+              "name": "kagent-default"
+            }
+          }
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "ModelConfig",
+        "metadata": {
+          "name": "default-model-config",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "apiKeySecret": "kagent-anthropic",
+          "apiKeySecretKey": "ANTHROPIC_API_KEY",
+          "model": "claude-haiku-4-5",
+          "provider": "Anthropic",
+          "stream": true
+        },
+        "status": {
+          "observedGeneration": 1,
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "ModelConfig configuration accepted",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "True",
+              "reason": "Resolved",
+              "message": "All referenced secrets and config maps resolved",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ]
+        }
+      }
+    ],
+    "want": {
+      "findings": [
+        {
+          "id": "RemoteMCPServer/kagent/spike-unreachable-mcp/KagentToolDiscoveryFailed",
+          "severity": "warning",
+          "affects": {
+            "agents": {
+              "kagent/tools-agent": "mayRunWithoutTools",
+              "kagent/preparing-agent": "usesIt"
+            },
+            "count": 2,
+            "lowerBound": false,
+            "consumers": "seen"
+          }
+        }
+      ],
+      "groups": [
+        {
+          "findings": [
+            "RemoteMCPServer/kagent/spike-unreachable-mcp/KagentToolDiscoveryFailed"
+          ],
+          "severity": "warning"
+        }
+      ],
+      "agents": {
+        "kagent/tools-agent": {
+          "latestChange": "prepared",
+          "mcpFailing": 1
+        },
+        "kagent/preparing-agent": {
+          "latestChange": "preparing",
+          "mcpFailing": 1
+        }
+      },
+      "mcpServers": {
+        "kagent/spike-unreachable-mcp": {
+          "failing": true,
+          "toolsOfferedKnown": false
+        }
+      },
+      "counts": {
+        "findings": {
+          "n": 1,
+          "lowerBound": false
+        },
+        "groups": 1,
+        "agentsAffected": {
+          "n": 2,
+          "lowerBound": false
+        }
+      }
+    },
+    "now": "2026-11-23T12:00:00Z"
+  },
+  {
+    "name": "a tool an Agent asks for that the server's discovery didn't publish",
+    "objects": [
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "RemoteMCPServer",
+        "metadata": {
+          "name": "kagent-tool-server",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "description": "MCP server",
+          "protocol": "STREAMABLE_HTTP",
+          "terminateOnClose": true,
+          "timeout": "30s",
+          "url": "http://kagent-tools.kagent.svc.cluster.local:8084/mcp"
+        },
+        "status": {
+          "observedGeneration": 1,
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "DiscoverySucceeded",
+              "message": "Discovered 3 MCP tools",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ],
+          "discoveredTools": [
+            {
+              "name": "k8s_get_resources",
+              "description": "k8s_get_resources"
+            },
+            {
+              "name": "k8s_get_pod_logs",
+              "description": "k8s_get_pod_logs"
+            },
+            {
+              "name": "k8s_describe_resource",
+              "description": "k8s_describe_resource"
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Agent",
+        "metadata": {
+          "name": "spike-agent",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "harnessRef": {
+            "name": "kagent-default"
+          },
+          "template": {
+            "inline": {
+              "description": "Radar fixture",
+              "modelConfig": {
+                "name": "default-model-config"
+              },
+              "systemPrompt": "You are a test agent.",
+              "tools": [
+                {
+                  "mcp": {
+                    "server": {
+                      "kind": "RemoteMCPServer",
+                      "name": "kagent-tool-server"
+                    },
+                    "tools": [
+                      "k8s_get_resources",
+                      "k8s_no_such_tool"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "status": {
+          "observedGeneration": 1,
+          "desiredRevision": "84825188790134f61d845b3d14505ed184252476ae5219b07831096d10d00cf3",
+          "latestSuccessfulRevision": "84825188790134f61d845b3d14505ed184252476ae5219b07831096d10d00cf3",
+          "workloadImage": "ghcr.io/kagent-dev/kagent/golang-adk@sha256:d3b1151d39c529a6f921a58a995ff699963012001d2e5075f69bf613abebc24d",
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "Agent explicitly selects its template and harness",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "EgressPoliciesApplied",
+              "status": "True",
+              "reason": "Applied",
+              "message": "All requested egress grants are admitted",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "True",
+              "reason": "Resolved",
+              "message": "All runtime references resolved",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Compatible",
+              "status": "True",
+              "reason": "Compatible",
+              "message": "Resolved configuration is compatible with the Harness",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Ready",
+              "status": "True",
+              "reason": "Ready",
+              "message": "ActorTemplate golden snapshot is ready",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Harness",
+        "metadata": {
+          "name": "kagent-default",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "kagent": {},
+          "substrate": {
+            "snapshotPolicy": {
+              "location": "s3://ate-snapshots/kagent/"
+            },
+            "workerPoolRef": {
+              "name": "kagent-default"
+            }
+          }
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "ModelConfig",
+        "metadata": {
+          "name": "default-model-config",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "apiKeySecret": "kagent-anthropic",
+          "apiKeySecretKey": "ANTHROPIC_API_KEY",
+          "model": "claude-haiku-4-5",
+          "provider": "Anthropic",
+          "stream": true
+        },
+        "status": {
+          "observedGeneration": 1,
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "ModelConfig configuration accepted",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "True",
+              "reason": "Resolved",
+              "message": "All referenced secrets and config maps resolved",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ]
+        }
+      }
+    ],
+    "want": {
+      "findings": [],
+      "groups": [],
+      "agents": {
+        "kagent/spike-agent": {
+          "latestChange": "prepared",
+          "toolsNotOffered": [
+            "RemoteMCPServer/kagent/kagent-tool-server:k8s_no_such_tool"
+          ]
+        }
+      },
+      "mcpServers": {
+        "kagent/kagent-tool-server": {
+          "failing": false,
+          "toolsOfferedKnown": true,
+          "askedNotOffered": {
+            "k8s_no_such_tool": [
+              "kagent/spike-agent"
+            ]
+          }
+        }
+      },
+      "counts": {
+        "findings": {
+          "n": 0,
+          "lowerBound": false
+        },
+        "groups": 0
+      }
+    },
+    "now": "2026-11-23T12:00:00Z"
+  },
+  {
+    "name": "ModelConfigs the caller can't read leave references unread, never absent",
+    "objects": [
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Agent",
+        "metadata": {
+          "name": "k8s-helper",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "harnessRef": {
+            "name": "kagent-default"
+          },
+          "template": {
+            "ref": {
+              "name": "k8s-helper"
+            }
+          }
+        },
+        "status": {
+          "observedGeneration": 1,
+          "desiredRevision": "2bc5b5bda8ce826e84031e6ddfa25787b9f96bf29df8d07bd6a405488dbb882d",
+          "latestSuccessfulRevision": "2bc5b5bda8ce826e84031e6ddfa25787b9f96bf29df8d07bd6a405488dbb882d",
+          "workloadImage": "ghcr.io/kagent-dev/kagent/golang-adk@sha256:d3b1151d39c529a6f921a58a995ff699963012001d2e5075f69bf613abebc24d",
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "Agent explicitly selects its template and harness",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "EgressPoliciesApplied",
+              "status": "True",
+              "reason": "Applied",
+              "message": "All requested egress grants are admitted",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "True",
+              "reason": "Resolved",
+              "message": "All runtime references resolved",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Compatible",
+              "status": "True",
+              "reason": "Compatible",
+              "message": "Resolved configuration is compatible with the Harness",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Ready",
+              "status": "True",
+              "reason": "Ready",
+              "message": "ActorTemplate golden snapshot is ready",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Agent",
+        "metadata": {
+          "name": "broken-model",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "harnessRef": {
+            "name": "kagent-default"
+          },
+          "template": {
+            "inline": {
+              "description": "Radar fixture",
+              "modelConfig": {
+                "name": "no-such-model"
+              },
+              "systemPrompt": "You are a test agent."
+            }
+          }
+        },
+        "status": {
+          "observedGeneration": 1,
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "Agent explicitly selects its template and harness",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "EgressPoliciesApplied",
+              "status": "True",
+              "reason": "Applied",
+              "message": "All requested egress grants are admitted",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "False",
+              "reason": "ReferenceResolutionFailed",
+              "message": "resolve ModelConfig \"kagent/no-such-model\": not found",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Compatible",
+              "status": "False",
+              "reason": "Blocked",
+              "message": "blocked by ResolvedRefs",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Ready",
+              "status": "False",
+              "reason": "Blocked",
+              "message": "blocked by ResolvedRefs",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "AgentTemplate",
+        "metadata": {
+          "name": "k8s-helper",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "description": "Answers questions about the cluster using kagent's Kubernetes tools.",
+          "modelConfig": {
+            "name": "default-model-config"
+          },
+          "systemPrompt": "You are a concise Kubernetes assistant. Use the tools to answer.",
+          "tools": [
+            {
+              "mcp": {
+                "server": {
+                  "kind": "RemoteMCPServer",
+                  "name": "kagent-tool-server"
+                },
+                "tools": [
+                  "k8s_get_resources",
+                  "k8s_get_pod_logs",
+                  "k8s_describe_resource"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Harness",
+        "metadata": {
+          "name": "kagent-default",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "kagent": {},
+          "substrate": {
+            "snapshotPolicy": {
+              "location": "s3://ate-snapshots/kagent/"
+            },
+            "workerPoolRef": {
+              "name": "kagent-default"
+            }
+          }
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "RemoteMCPServer",
+        "metadata": {
+          "name": "kagent-tool-server",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "description": "MCP server",
+          "protocol": "STREAMABLE_HTTP",
+          "terminateOnClose": true,
+          "timeout": "30s",
+          "url": "http://kagent-tools.kagent.svc.cluster.local:8084/mcp"
+        },
+        "status": {
+          "observedGeneration": 1,
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "DiscoverySucceeded",
+              "message": "Discovered 3 MCP tools",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ],
+          "discoveredTools": [
+            {
+              "name": "k8s_get_resources",
+              "description": "k8s_get_resources"
+            },
+            {
+              "name": "k8s_get_pod_logs",
+              "description": "k8s_get_pod_logs"
+            },
+            {
+              "name": "k8s_describe_resource",
+              "description": "k8s_describe_resource"
+            }
+          ]
+        }
+      }
+    ],
+    "unread": {
+      "ModelConfig": "denied"
+    },
+    "want": {
+      "findings": [
+        {
+          "id": "Agent/kagent/broken-model/KagentNoPreparedRevision",
+          "severity": "critical",
+          "cause": {
+            "target": "ModelConfig/kagent/no-such-model",
+            "role": "model",
+            "form": "notFound"
+          }
+        }
+      ],
+      "groups": [
+        {
+          "findings": [
+            "Agent/kagent/broken-model/KagentNoPreparedRevision"
+          ],
+          "severity": "critical"
+        }
+      ],
+      "references": {
+        "kagent/k8s-helper": [
+          {
+            "role": "template",
+            "target": "AgentTemplate/kagent/k8s-helper",
+            "state": "present"
+          },
+          {
+            "role": "model",
+            "target": "ModelConfig/kagent/default-model-config",
+            "state": "unread",
+            "unread": "denied"
+          },
+          {
+            "role": "mcpServer",
+            "target": "RemoteMCPServer/kagent/kagent-tool-server",
+            "state": "present"
+          }
+        ],
+        "kagent/broken-model": [
+          {
+            "role": "model",
+            "target": "ModelConfig/kagent/no-such-model",
+            "state": "unread",
+            "unread": "denied"
+          }
+        ]
+      },
+      "counts": {
+        "findings": {
+          "n": 1,
+          "lowerBound": true
+        },
+        "groups": 1
+      }
+    },
+    "now": "2026-11-23T12:00:00Z"
+  },
+  {
+    "name": "a subagent cycle is walked once and reported",
+    "objects": [
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "AgentTemplate",
+        "metadata": {
+          "name": "loop-a",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "description": "a",
+          "modelConfig": {
+            "name": "default-model-config"
+          },
+          "systemPrompt": "a",
+          "tools": [
+            {
+              "subAgent": {
+                "name": "b",
+                "description": "b",
+                "templateRef": {
+                  "name": "loop-b"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "AgentTemplate",
+        "metadata": {
+          "name": "loop-b",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "description": "b",
+          "modelConfig": {
+            "name": "default-model-config"
+          },
+          "systemPrompt": "b",
+          "tools": [
+            {
+              "subAgent": {
+                "name": "a",
+                "description": "a",
+                "templateRef": {
+                  "name": "loop-a"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Agent",
+        "metadata": {
+          "name": "loop-agent",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "harnessRef": {
+            "name": "kagent-default"
+          },
+          "template": {
+            "ref": {
+              "name": "loop-a"
+            }
+          }
+        },
+        "status": {
+          "observedGeneration": 1,
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "Agent explicitly selects its template and harness",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "EgressPoliciesApplied",
+              "status": "True",
+              "reason": "Applied",
+              "message": "All requested egress grants are admitted",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "True",
+              "reason": "Resolved",
+              "message": "All runtime references resolved",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Compatible",
+              "status": "False",
+              "reason": "UnsupportedConfiguration",
+              "message": "AgentTemplate tool cycle includes \"loop-a\"",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "Ready",
+              "status": "False",
+              "reason": "Blocked",
+              "message": "blocked by Compatible",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "Harness",
+        "metadata": {
+          "name": "kagent-default",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "kagent": {},
+          "substrate": {
+            "snapshotPolicy": {
+              "location": "s3://ate-snapshots/kagent/"
+            },
+            "workerPoolRef": {
+              "name": "kagent-default"
+            }
+          }
+        }
+      },
+      {
+        "apiVersion": "api.kagent.dev/v1alpha3",
+        "kind": "ModelConfig",
+        "metadata": {
+          "name": "default-model-config",
+          "namespace": "kagent",
+          "generation": 1,
+          "creationTimestamp": "2026-11-20T20:24:30Z"
+        },
+        "spec": {
+          "apiKeySecret": "kagent-anthropic",
+          "apiKeySecretKey": "ANTHROPIC_API_KEY",
+          "model": "claude-haiku-4-5",
+          "provider": "Anthropic",
+          "stream": true
+        },
+        "status": {
+          "observedGeneration": 1,
+          "conditions": [
+            {
+              "type": "Accepted",
+              "status": "True",
+              "reason": "Accepted",
+              "message": "ModelConfig configuration accepted",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            },
+            {
+              "type": "ResolvedRefs",
+              "status": "True",
+              "reason": "Resolved",
+              "message": "All referenced secrets and config maps resolved",
+              "observedGeneration": 1,
+              "lastTransitionTime": "2026-11-20T20:24:30Z"
+            }
+          ]
+        }
+      }
+    ],
+    "want": {
+      "findings": [
+        {
+          "id": "Agent/kagent/loop-agent/KagentNoPreparedRevision",
+          "severity": "critical",
+          "cause": null
+        }
+      ],
+      "groups": [
+        {
+          "findings": [
+            "Agent/kagent/loop-agent/KagentNoPreparedRevision"
+          ],
+          "severity": "critical"
+        }
+      ],
+      "agents": {
+        "kagent/loop-agent": {
+          "latestChange": "failed",
+          "cycle": [
+            "loop-a"
+          ]
+        }
+      },
+      "references": {
+        "kagent/loop-agent": [
+          {
+            "role": "template",
+            "target": "AgentTemplate/kagent/loop-a",
+            "state": "present"
+          },
+          {
+            "role": "subagentTemplate",
+            "target": "AgentTemplate/kagent/loop-b",
+            "state": "present"
+          },
+          {
+            "role": "subagentModel",
+            "target": "ModelConfig/kagent/default-model-config",
+            "state": "present"
+          }
+        ]
+      },
+      "counts": {
+        "findings": {
+          "n": 1,
+          "lowerBound": false
+        },
+        "groups": 1
+      }
+    },
+    "now": "2026-11-23T12:00:00Z"
+  }
+]
