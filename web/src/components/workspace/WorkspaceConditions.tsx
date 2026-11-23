@@ -4,9 +4,11 @@ export function WorkspaceConditions({
   conditions,
   title = 'Operator conditions',
   className,
+  emptyMessage = 'No status.conditions reported.',
 }: {
   title?: string
   className?: string
+  emptyMessage?: string
   conditions: { type: string; status: string; reason?: string; message?: string; lastTransitionTime?: string }[]
 }) {
   return (
@@ -44,7 +46,7 @@ export function WorkspaceConditions({
             </FactRow>
           ))}
         </FactGrid>
-        {conditions.length === 0 && <p className="text-sm text-theme-text-tertiary">No status.conditions reported.</p>}
+        {conditions.length === 0 && <p className="text-sm text-theme-text-tertiary">{emptyMessage}</p>}
       </FoldSection>
     </WorkspaceCard>
   )
