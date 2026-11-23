@@ -285,17 +285,20 @@ type unscannedAgg struct {
 // limits bound the lists a response carries. The list endpoint and MCP read
 // with listLimits; an export reads with exportLimits, which lists everything.
 type limits struct {
-	rows, findingsPerImage, affectedPerCVE, cvesPerFix, workloadsPerRow, workloadsPerAffected int
+	rows, findingsPerImage, affectedPerCVE, cvesPerFix, workloadsPerRow, workloadsPerAffected, routesPerWorkload int
 }
 
 var (
-	listLimits   = limits{MaxRows, MaxFindingsPerImage, MaxAffectedPerCVE, MaxCVEsPerFix, MaxWorkloadsPerRow, MaxWorkloadsPerAffected}
-	exportLimits = limits{math.MaxInt, math.MaxInt, math.MaxInt, math.MaxInt, math.MaxInt, math.MaxInt}
+	listLimits   = limits{MaxRows, MaxFindingsPerImage, MaxAffectedPerCVE, MaxCVEsPerFix, MaxWorkloadsPerRow, MaxWorkloadsPerAffected, MaxRoutesPerWorkload}
+	exportLimits = limits{math.MaxInt, math.MaxInt, math.MaxInt, math.MaxInt, math.MaxInt, math.MaxInt, math.MaxInt}
 )
 
 // rollup is the joined state the three pivots read.
 type rollup struct {
 	lim limits
+	// ctx is the request's: every row charges (see charge), so a cancelled
+	// or timed-out request stops building at the next row.
+	ctx context.Context
 	// refsLeft is how many more workload references an export's rows may
 	// keep (see charge); budgeted is false for a list read, which caps its
 	// lists instead.
@@ -308,6 +311,14 @@ type rollup struct {
 	otherBuild      map[targetKey]bool
 	inactiveReports int
 	truncated       bool
+	// exposure are the workloads (without a container) with a route from
+	// outside the cluster, and their routes.
+	exposure map[WorkloadRef][]Route
+	// exposureGaps are where Radar couldn't read every route kind, every
+	// namespace named (see exposureUnknownIn); unknownIn memoizes them per
+	// namespace.
+	exposureGaps *Exposure
+	unknownIn    map[string]bool
 }
 
 // join matches reports to what runs. A report counts when its scanned object
@@ -321,14 +332,21 @@ type rollup struct {
 // marked unread, never shown as clean.
 // join matches reports to targets and reads the chosen reports' findings
 // within MaxFindings. Images run by a workload first() names are read
-// first, so a narrowed view isn't starved by images it doesn't show.
+// first, so a narrowed view isn't starved by images it doesn't show; then
+// images an exposed workload runs, which lead within their severity, so a
+// budget that runs out doesn't leave the exposed ones unread.
 func join(ctx context.Context, items []*unstructured.Unstructured, targets []target, first func(WorkloadRef) bool, lim limits) (*rollup, error) {
 	byOwner := map[ownerKey][]*target{}
 	for i := range targets {
 		o := targets[i].key.owner()
 		byOwner[o] = append(byOwner[o], &targets[i])
 	}
-	j := &rollup{lim: lim, images: map[string]*imageAgg{}, targetImage: map[targetKey]string{}, targets: targets, unscanned: map[string]*unscannedAgg{}, otherBuild: map[targetKey]bool{}}
+	j := &rollup{ctx: ctx, lim: lim, images: map[string]*imageAgg{}, targetImage: map[targetKey]string{}, targets: targets, unscanned: map[string]*unscannedAgg{}, otherBuild: map[targetKey]bool{}}
+	exposure, err := exposureOf(ctx, targets)
+	if err != nil {
+		return nil, err
+	}
+	j.exposure = exposure
 	reports := make([]report, 0, len(items))
 	for _, u := range items {
 		if r, ok := reportHeader(u); ok {
@@ -419,18 +437,16 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 	j.inactiveReports = inactive
 	read := 0
 	aggs := j.sortedImages()
-	if first != nil {
-		runs := map[*imageAgg]bool{}
-		for _, agg := range aggs {
-			for w := range agg.workloads {
-				if first(w) {
-					runs[agg] = true
-					break
-				}
-			}
+	named, exposed := map[*imageAgg]bool{}, map[*imageAgg]bool{}
+	for _, agg := range aggs {
+		for w := range agg.workloads {
+			named[agg] = named[agg] || (first != nil && first(w))
+			exposed[agg] = exposed[agg] || j.exposed(w)
 		}
-		slices.SortStableFunc(aggs, func(a, b *imageAgg) int { return compareBool(!runs[a], !runs[b]) })
 	}
+	slices.SortStableFunc(aggs, func(a, b *imageAgg) int {
+		return cmp.Or(compareBool(!named[a], !named[b]), compareBool(!exposed[a], !exposed[b]))
+	})
 	for _, agg := range aggs {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -501,6 +517,15 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 // run, grouped by view and narrowed by f. An export lists everything and
 // carries what its CSV needs beyond the wire shape (see exportExtras).
 func build(ctx context.Context, items []*unstructured.Unstructured, targets []target, view View, f Filter, export bool) (Response, error) {
+	return buildWithExposure(ctx, items, targets, view, f, export, nil)
+}
+
+// buildWithExposure is build where exposure's gaps (every namespace named)
+// say where routes couldn't be read: a row with no route seen whose
+// workloads run there reads as exposure unknown and, within its severity,
+// sorts above those with none (see exposureTier). Nil reads as every route
+// read.
+func buildWithExposure(ctx context.Context, items []*unstructured.Unstructured, targets []target, view View, f Filter, export bool, exposure *Exposure) (Response, error) {
 	var first func(WorkloadRef) bool
 	if f.Workload != nil {
 		first = newMatcher(f).wanted
@@ -514,7 +539,8 @@ func build(ctx context.Context, items []*unstructured.Unstructured, targets []ta
 		return Response{}, err
 	}
 	j.refsLeft, j.budgeted = maxExportRefs, export
-	resp := Response{Source: SourceTrivyOperator, View: view, Summary: j.summary()}
+	j.exposureGaps, j.unknownIn = exposure, map[string]bool{}
+	resp := Response{Source: SourceTrivyOperator, View: view, Summary: j.summary(), Exposure: &Exposure{}}
 	extras := &exportExtras{}
 	resp.WorkloadRuns = f.Workload != nil && slices.ContainsFunc(targets, func(t target) bool { return newMatcher(f).wanted(t.workload) })
 	if view != ViewSummary {
@@ -547,7 +573,11 @@ func build(ctx context.Context, items []*unstructured.Unstructured, targets []ta
 			extras.cleanWorkloads, extras.unscannedWorkloads = clean, unscanned
 		}
 	default:
-		resp.View = ViewImage
+		// The findings export reads as the image view: its rows are the
+		// image rows' findings, by workload container.
+		if view != ViewFindings || !export {
+			resp.View = ViewImage
+		}
 		rows, clean := j.imageRows(f)
 		resp.Images, resp.Coverage.RowsOmitted = capRows(rows, lim.rows)
 		resp.Clean, resp.Coverage.CleanOmitted = capRows(clean, lim.rows)
@@ -556,6 +586,9 @@ func build(ctx context.Context, items []*unstructured.Unstructured, targets []ta
 		extras.images = j.imageMetas()
 		extras.unread = j.unreadRows(f)
 		resp.export = extras
+	}
+	if err := ctx.Err(); err != nil {
+		return Response{}, err
 	}
 	if j.budgeted && j.refsLeft < 0 {
 		return Response{}, ErrExportTooLarge
@@ -624,6 +657,9 @@ type matcher struct {
 	f        Filter
 	severity map[Severity]bool
 	query    string
+	// exposed reports whether a workload has a route from outside the
+	// cluster; nil reads as none.
+	exposed func(WorkloadRef) bool
 }
 
 func newMatcher(f Filter) matcher {
@@ -662,8 +698,11 @@ func (m matcher) findingMatches(f Finding, rowMatched bool) bool {
 }
 
 func (m matcher) workloadKept(workloads []WorkloadRef) bool {
-	return m.f.Workload == nil || slices.ContainsFunc(workloads, m.wanted)
+	return (m.f.Workload == nil || slices.ContainsFunc(workloads, m.wanted)) &&
+		(!m.f.ExposedOnly || slices.ContainsFunc(workloads, m.isExposed))
 }
+
+func (m matcher) isExposed(w WorkloadRef) bool { return m.exposed != nil && m.exposed(w) }
 
 func (m matcher) wanted(w WorkloadRef) bool {
 	want := m.f.Workload
@@ -671,16 +710,123 @@ func (m matcher) wanted(w WorkloadRef) bool {
 }
 
 // listed is the first n of a row's workloads. Narrowed to one workload, its
-// own containers come first, so no cap, here or a client's, drops the one
-// asked about.
+// own containers come first, then the exposed ones, so no cap, here or a
+// client's, drops the one asked about or the reason the row sorts first.
 func (m matcher) listed(workloads []WorkloadRef, n int) []WorkloadRef {
-	if m.f.Workload != nil {
-		workloads = slices.Clone(workloads)
-		slices.SortStableFunc(workloads, func(a, b WorkloadRef) int {
-			return compareBool(!m.wanted(a), !m.wanted(b))
-		})
-	}
+	workloads = slices.Clone(workloads)
+	slices.SortStableFunc(workloads, func(a, b WorkloadRef) int {
+		return cmp.Or(compareBool(!m.wanted(a), !m.wanted(b)), compareBool(!m.isExposed(a), !m.isExposed(b)))
+	})
 	return workloads[:min(len(workloads), n)]
+}
+
+// exposureOf gathers each workload's routes from outside the cluster across
+// its Pods.
+func exposureOf(ctx context.Context, targets []target) (map[WorkloadRef][]Route, error) {
+	unions := map[WorkloadRef]*routeUnion{}
+	var merger routeMerger
+	for _, t := range targets {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if len(t.routes) == 0 {
+			continue
+		}
+		u := unions[t.workload]
+		if u == nil {
+			u = &routeUnion{}
+			unions[t.workload] = u
+		}
+		u.add(t.routes)
+	}
+	out := make(map[WorkloadRef][]Route, len(unions))
+	for w, u := range unions {
+		out[w] = merger.routes(u)
+	}
+	return out, nil
+}
+
+// exposed is whether a workload has a route from outside the cluster; a
+// reference's container doesn't matter.
+func (j *rollup) exposed(w WorkloadRef) bool {
+	w.Container = ""
+	return len(j.exposure[w]) > 0
+}
+
+// exposureUnknownIn is whether Radar couldn't read every route kind for
+// workloads in a namespace.
+func (j *rollup) exposureUnknownIn(namespace string) bool {
+	if j.exposureGaps == nil || len(j.exposureGaps.Gaps) == 0 {
+		return false
+	}
+	unknown, seen := j.unknownIn[namespace]
+	if !seen {
+		unknown = exposureUnknownIn(j.exposureGaps, namespace)
+		j.unknownIn[namespace] = unknown
+	}
+	return unknown
+}
+
+// exposureUnknown is whether a row with no exposed workload has one in a
+// namespace where its exposure is unknown.
+func (j *rollup) exposureUnknown(workloads []WorkloadRef) bool {
+	return slices.ContainsFunc(workloads, func(w WorkloadRef) bool { return j.exposureUnknownIn(w.Namespace) })
+}
+
+// exposureTier is how a row ranks by exposure, highest first: 2 when one of
+// its workloads has a route from outside the cluster, 1 when none does but
+// one's exposure is unknown (ExposureUnknown), 0 otherwise. Every view sorts
+// most severe first and by this tier within each severity, then by exposed
+// workloads and workloads: among Criticals, the exposed ones lead, then
+// those Radar couldn't check, then those it found no route to.
+func exposureTier(exposed, unknown bool) int {
+	switch {
+	case exposed:
+		return 2
+	case unknown:
+		return 1
+	}
+	return 0
+}
+
+// match is the matcher for f over this rollup's exposure.
+func (j *rollup) match(f Filter) matcher {
+	m := newMatcher(f)
+	m.exposed = j.exposed
+	return m
+}
+
+// exposedWorkloads are the exposed ones among a row's workloads, each once
+// without a container, at most n of the total. ok is false when keeping them
+// passes an export's reference budget (see charge).
+func (j *rollup) exposedWorkloads(workloads []WorkloadRef, n int) (listed []ExposedWorkload, total int, ok bool) {
+	return j.exposedIn([][]WorkloadRef{workloads}, n)
+}
+
+// exposedIn is exposedWorkloads across several workload lists. Only exposed
+// workloads are gathered, so it holds no more than it keeps.
+func (j *rollup) exposedIn(lists [][]WorkloadRef, n int) ([]ExposedWorkload, int, bool) {
+	var out []ExposedWorkload
+	seen := map[WorkloadRef]bool{}
+	for _, list := range lists {
+		for _, w := range list {
+			w.Container = ""
+			routes := j.exposure[w]
+			if len(routes) == 0 || seen[w] {
+				continue
+			}
+			seen[w] = true
+			out = append(out, ExposedWorkload{WorkloadRef: w, Routes: routes[:min(len(routes), j.lim.routesPerWorkload)], RoutesTotal: len(routes)})
+		}
+	}
+	slices.SortFunc(out, func(a, b ExposedWorkload) int {
+		return cmp.Or(cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Name, b.Name))
+	})
+	out = out[:min(len(out), n)]
+	if !j.charge(len(out)) {
+		return nil, 0, false
+	}
+	return out, len(seen), true
 }
 
 func (j *rollup) sortedImages() []*imageAgg {
@@ -696,7 +842,7 @@ func (j *rollup) sortedImages() []*imageAgg {
 // findings are listed apart as clean, so they don't bury the ones that need
 // work, unless a search names them.
 func (j *rollup) imageRows(f Filter) (rows []Image, clean []CleanImage) {
-	m := newMatcher(f)
+	m := j.match(f)
 	rows = []Image{}
 	clean = []CleanImage{}
 	for _, agg := range j.sortedImages() {
@@ -711,10 +857,16 @@ func (j *rollup) imageRows(f Filter) (rows []Image, clean []CleanImage) {
 				if !j.charge(len(workloads)) {
 					return rows, clean
 				}
-				clean = append(clean, CleanImage{
+				c := CleanImage{
 					ID: r.imageID, Image: cmp.Or(r.image, r.digest), ScannedAt: r.scannedAt, Report: r.ref,
 					Workloads: m.listed(workloads, j.lim.workloadsPerRow), WorkloadsTotal: len(workloads),
-				})
+				}
+				var ok bool
+				if c.Exposed, c.ExposedTotal, ok = j.exposedWorkloads(workloads, j.lim.workloadsPerRow); !ok {
+					return rows, clean
+				}
+				c.ExposureUnknown = c.ExposedTotal == 0 && j.exposureUnknown(workloads)
+				clean = append(clean, c)
 			}
 			continue
 		}
@@ -743,10 +895,24 @@ func (j *rollup) imageRows(f Filter) (rows []Image, clean []CleanImage) {
 		if !j.charge(len(row.Workloads)) {
 			return rows, clean
 		}
+		var ok bool
+		if row.Exposed, row.ExposedTotal, ok = j.exposedWorkloads(workloads, j.lim.workloadsPerRow); !ok {
+			return rows, clean
+		}
+		row.ExposureUnknown = row.ExposedTotal == 0 && j.exposureUnknown(workloads)
 		rows = append(rows, row)
 	}
+	// Most severe first (of what the filters keep), exposed first within
+	// each severity (see exposureTier), then most exposed workloads, then
+	// most workloads; the counts break ties.
 	slices.SortStableFunc(rows, func(a, b Image) int {
-		return cmp.Or(compareCounts(b.Counts, a.Counts), cmp.Compare(b.WorkloadsTotal, a.WorkloadsTotal), cmp.Compare(a.Image, b.Image))
+		return cmp.Or(
+			cmp.Compare(worstRank(b.Findings), worstRank(a.Findings)),
+			cmp.Compare(exposureTier(b.ExposedTotal > 0, b.ExposureUnknown), exposureTier(a.ExposedTotal > 0, a.ExposureUnknown)),
+			cmp.Compare(b.ExposedTotal, a.ExposedTotal),
+			cmp.Compare(b.WorkloadsTotal, a.WorkloadsTotal),
+			compareCounts(b.Counts, a.Counts), cmp.Compare(a.Image, b.Image),
+		)
 	})
 	slices.SortFunc(clean, func(a, b CleanImage) int { return cmp.Compare(a.Image, b.Image) })
 	return rows, clean
@@ -763,10 +929,11 @@ type cveAgg struct {
 	at map[string]int
 }
 
-// keepAffected keeps the n most widely run images (MaxAffectedPerCVE for a
-// list read), so a CVE in thousands of images holds a bounded list that
-// still shows where it runs most.
-func (c *cveAgg) keepAffected(a CVEImage, n int) {
+// keepAffected keeps n images (MaxAffectedPerCVE for a list read): those an
+// exposed workload runs, then the most widely run, so a CVE in thousands of
+// images holds a bounded list that still shows why it sorts where it does
+// and where it runs most.
+func (c *cveAgg) keepAffected(a CVEImage, n int, exposed func(imageID string) bool) {
 	// An image's findings arrive together, so a second package of the same
 	// image joins its entry.
 	if n := len(c.row.Affected); n > 0 && c.row.Affected[n-1].ImageID == a.ImageID {
@@ -782,13 +949,16 @@ func (c *cveAgg) keepAffected(a CVEImage, n int) {
 		c.row.Affected = append(c.row.Affected, a)
 		return
 	}
+	wider := func(x, y CVEImage) int {
+		return cmp.Or(compareBool(exposed(x.ImageID), exposed(y.ImageID)), cmp.Compare(x.WorkloadsTotal, y.WorkloadsTotal))
+	}
 	least := 0
 	for i, x := range c.row.Affected {
-		if x.WorkloadsTotal < c.row.Affected[least].WorkloadsTotal {
+		if wider(x, c.row.Affected[least]) < 0 {
 			least = i
 		}
 	}
-	if a.WorkloadsTotal > c.row.Affected[least].WorkloadsTotal {
+	if wider(a, c.row.Affected[least]) > 0 {
 		delete(c.at, c.row.Affected[least].ImageID)
 		c.at[a.ImageID] = least
 		c.row.Affected[least] = a
@@ -829,13 +999,44 @@ func distinctWorkloads(ids []string, imageWorkloads map[string][]WorkloadRef, me
 	return len(distinct)
 }
 
+// exposedSet is a set of images' exposed workloads, as exposedWorkloads
+// lists them.
+type exposedSet struct {
+	listed []ExposedWorkload
+	total  int
+}
+
+// exposedAcross are the exposed workloads across a set of images. Rows from
+// one base image share one image set, so memo works each set out once and
+// the rows share its list; each distinct set is charged once (ok false past
+// an export's budget).
+func (j *rollup) exposedAcross(ids []string, imageWorkloads map[string][]WorkloadRef, memo map[string]exposedSet) ([]ExposedWorkload, int, bool) {
+	key := strings.Join(ids, "\x00")
+	if e, ok := memo[key]; ok {
+		return e.listed, e.total, true
+	}
+	lists := make([][]WorkloadRef, 0, len(ids))
+	for _, id := range ids {
+		lists = append(lists, imageWorkloads[id])
+	}
+	listed, total, ok := j.exposedIn(lists, j.lim.workloadsPerRow)
+	if !ok {
+		return nil, 0, false
+	}
+	memo[key] = exposedSet{listed, total}
+	return listed, total, true
+}
+
 // cves groups findings by CVE ID. A CVE's workload count is the distinct
 // workloads across the images that carry it; CVEs from one base image share
 // one image set, so each distinct set is counted once.
 func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
-	m := newMatcher(f)
+	m := j.match(f)
 	byID := map[string]*cveAgg{}
 	imageWorkloads := map[string][]WorkloadRef{}
+	imageExposed := map[string]bool{}
+	imageUnknown := map[string]bool{}
+	exposedImage := func(id string) bool { return imageExposed[id] }
 	for _, agg := range j.sortedImages() {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -847,6 +1048,8 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 		}
 		imageWorkloads[r.imageID] = workloads
 		distinct := withoutContainers(workloads)
+		imageExposed[r.imageID] = slices.ContainsFunc(distinct, j.exposed)
+		imageUnknown[r.imageID] = j.exposureUnknown(distinct)
 		listed := m.listed(distinct, j.lim.workloadsPerAffected)
 		rowMatched := m.rowMatches(agg.searchText(), workloads)
 		// Whether an upgrade clears each CVE here: every package it's in has
@@ -877,16 +1080,17 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 			c.packages[fd.Package] = true
 			c.images[r.imageID] = fixedHere[fd.ID]
 			if _, kept := c.at[r.imageID]; !kept && !j.charge(len(listed)) {
-				return nil, ErrExportTooLarge
+				return nil, j.stopped()
 			}
 			c.keepAffected(CVEImage{
 				ImageID: r.imageID, Image: cmp.Or(r.image, r.digest),
 				Packages:  []AffectedPackage{{Package: fd.Package, InstalledVersion: fd.InstalledVersion, FixedVersion: fd.FixedVersion, FixTarget: fd.FixTarget}},
 				Workloads: listed, WorkloadsTotal: len(distinct),
-			}, j.lim.affectedPerCVE)
+			}, j.lim.affectedPerCVE, exposedImage)
 		}
 	}
 	workloadsBySet := map[string]int{}
+	exposedBySet := map[string]exposedSet{}
 	rows := make([]CVE, 0, len(byID))
 	for _, c := range byID {
 		if err := ctx.Err(); err != nil {
@@ -899,19 +1103,28 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 			}
 		}
 		c.row.Workloads = distinctWorkloads(ids, imageWorkloads, workloadsBySet)
+		var ok bool
+		if c.row.Exposed, c.row.ExposedTotal, ok = j.exposedAcross(ids, imageWorkloads, exposedBySet); !ok {
+			return nil, j.stopped()
+		}
+		c.row.ExposureUnknown = c.row.ExposedTotal == 0 && slices.ContainsFunc(ids, func(id string) bool { return imageUnknown[id] })
 		c.row.Images = len(ids)
 		c.row.Packages = sortedKeys(c.packages)
 		slices.SortStableFunc(c.row.Affected, func(a, b CVEImage) int {
-			return cmp.Or(cmp.Compare(b.WorkloadsTotal, a.WorkloadsTotal), cmp.Compare(a.Image, b.Image))
+			return cmp.Or(compareBool(imageExposed[b.ImageID], imageExposed[a.ImageID]), cmp.Compare(b.WorkloadsTotal, a.WorkloadsTotal), cmp.Compare(a.Image, b.Image))
 		})
 		c.row.Affected = c.row.Affected[:min(len(c.row.Affected), j.lim.affectedPerCVE)]
 		rows = append(rows, c.row)
 	}
+	// Most severe first, exposed first within each severity (see
+	// exposureTier), then most exposed workloads, then most workloads.
 	slices.SortFunc(rows, func(a, b CVE) int {
 		return cmp.Or(
 			cmp.Compare(severityRank(b.Severity), severityRank(a.Severity)),
-			compareBool(b.Fixable, a.Fixable),
+			cmp.Compare(exposureTier(b.ExposedTotal > 0, b.ExposureUnknown), exposureTier(a.ExposedTotal > 0, a.ExposureUnknown)),
+			cmp.Compare(b.ExposedTotal, a.ExposedTotal),
 			cmp.Compare(b.Workloads, a.Workloads),
+			compareBool(b.Fixable, a.Fixable),
 			compareScore(b.Score, a.Score),
 			cmp.Compare(a.ID, b.ID),
 		)
@@ -927,7 +1140,7 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 // filter's or search's when an image's findings went unread. An export
 // still lists them.
 func (j *rollup) workloads(f Filter) (rows, clean, unscanned []Workload) {
-	m := newMatcher(f)
+	m := j.match(f)
 	type wAgg struct {
 		row    Workload
 		images map[string]bool
@@ -978,11 +1191,15 @@ func (j *rollup) workloads(f Filter) (rows, clean, unscanned []Workload) {
 	}
 	rows = []Workload{}
 	clean = []Workload{}
+	worst := map[WorkloadRef]int{}
 	for _, ref := range order {
 		a := byRef[ref]
 		if !m.workloadKept([]WorkloadRef{ref}) {
 			continue
 		}
+		routes := j.exposure[ref]
+		a.row.Routes, a.row.RoutesTotal = routes[:min(len(routes), j.lim.routesPerWorkload)], len(routes)
+		a.row.ExposureUnknown = len(routes) == 0 && j.exposureUnknownIn(ref.Namespace)
 		images := make([]string, 0, len(a.row.Containers))
 		allClean := true
 		for _, c := range a.row.Containers {
@@ -1027,10 +1244,31 @@ func (j *rollup) workloads(f Filter) (rows, clean, unscanned []Workload) {
 			}
 			continue
 		}
+		// The worst finding the filters keep, from each image's worst first.
+		worst[ref] = -1
+		for id := range a.images {
+			for _, fd := range j.images[id].report.findings {
+				if m.findingMatches(fd, rowMatched) {
+					worst[ref] = max(worst[ref], severityRank(fd.Severity))
+					break
+				}
+			}
+		}
 		rows = append(rows, a.row)
 	}
+	// Most severe first, exposed first within each severity (see
+	// exposureTier); the counts break ties. A workload with no finding read
+	// ranks -1, below Low: an exposed one that isn't scanned yet sorts after
+	// every workload with findings, first among those without.
+	rank := func(w Workload) int {
+		return worst[WorkloadRef{Kind: w.Kind, Group: w.Group, Namespace: w.Namespace, Name: w.Name}]
+	}
 	slices.SortStableFunc(rows, func(a, b Workload) int {
-		return cmp.Or(compareCounts(b.Counts, a.Counts), cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name))
+		return cmp.Or(
+			cmp.Compare(rank(b), rank(a)),
+			cmp.Compare(exposureTier(len(b.Routes) > 0, b.ExposureUnknown), exposureTier(len(a.Routes) > 0, a.ExposureUnknown)),
+			compareCounts(b.Counts, a.Counts), cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name),
+		)
 	})
 	byName := func(a, b Workload) int {
 		return cmp.Or(cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name))
@@ -1040,10 +1278,19 @@ func (j *rollup) workloads(f Filter) (rows, clean, unscanned []Workload) {
 	return rows, clean, unscanned
 }
 
+// worstRank is the severity rank of the worst of findings sorted worst
+// first, or -1 when there are none.
+func worstRank(findings []Finding) int {
+	if len(findings) == 0 {
+		return -1
+	}
+	return severityRank(findings[0].Severity)
+}
+
 func totalCount(c Counts) int { return c.Critical + c.High + c.Medium + c.Low + c.Unknown }
 
 func (j *rollup) unscannedRows(f Filter) []Unscanned {
-	m := newMatcher(f)
+	m := j.match(f)
 	rows := []Unscanned{}
 	for _, u := range j.unscanned {
 		workloads := sortedWorkloads(u.workloads)
@@ -1059,7 +1306,13 @@ func (j *rollup) unscannedRows(f Filter) []Unscanned {
 		if !j.charge(len(workloads)) {
 			return rows
 		}
-		rows = append(rows, Unscanned{Image: u.ref, OtherBuildScanned: otherBuild, Workloads: m.listed(workloads, j.lim.workloadsPerRow), WorkloadsTotal: len(workloads)})
+		row := Unscanned{Image: u.ref, OtherBuildScanned: otherBuild, Workloads: m.listed(workloads, j.lim.workloadsPerRow), WorkloadsTotal: len(workloads)}
+		var ok bool
+		if row.Exposed, row.ExposedTotal, ok = j.exposedWorkloads(workloads, j.lim.workloadsPerRow); !ok {
+			return rows
+		}
+		row.ExposureUnknown = row.ExposedTotal == 0 && j.exposureUnknown(workloads)
+		rows = append(rows, row)
 	}
 	slices.SortFunc(rows, func(a, b Unscanned) int { return cmp.Compare(a.Image, b.Image) })
 	return rows
@@ -1179,6 +1432,19 @@ func ParseView(s string) (View, error) {
 		return v, nil
 	}
 	return "", fmt.Errorf("unknown view %q (want image, cve, workload, fix or summary)", s)
+}
+
+// ParseExportView reads an export's view name: an export view (image, cve,
+// workload, fix or findings); empty is ViewImage.
+func ParseExportView(s string) (View, error) {
+	if v := View(strings.ToLower(strings.TrimSpace(s))); v == ViewFindings {
+		return v, nil
+	}
+	v, err := ParseView(s)
+	if err != nil || v == ViewSummary {
+		return "", fmt.Errorf("unknown export view %q (want image, cve, workload, fix or findings)", s)
+	}
+	return v, nil
 }
 
 // ParseSeverities reads a comma-separated severity list.

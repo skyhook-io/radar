@@ -1,6 +1,7 @@
 package vulnerabilities
 
 import (
+	"context"
 	"slices"
 	"testing"
 	"time"
@@ -74,7 +75,7 @@ func TestLiveTargets(t *testing.T) {
 		pod("done", corev1.PodSucceeded, nil, "acme/once:1"),
 	)
 
-	live, ok := liveTargets(cache, nil, nil, nil)
+	live, ok, _ := liveTargets(context.Background(), cache, nil, nil, nil, exposureIndex{})
 	targets := live.targets
 	if !ok {
 		t.Fatal("cache is ready")
@@ -100,7 +101,7 @@ func TestLiveTargets(t *testing.T) {
 	}
 
 	// The caller sees only what it may read: here, not Deployments.
-	limitedSet, _ := liveTargets(cache, []string{"shop"}, func(group, kind, ns string) bool { return kind != "Deployment" }, nil)
+	limitedSet, _, _ := liveTargets(context.Background(), cache, []string{"shop"}, func(group, kind, ns string) bool { return kind != "Deployment" }, nil, exposureIndex{})
 	limited := limitedSet.targets
 	if !limitedSet.withheld[ownerKey{namespace: "shop", kind: "ReplicaSet", name: "web-1", container: "app"}] {
 		t.Fatalf("a target named by an unreadable workload is withheld: %v", limitedSet.withheld)
@@ -114,7 +115,7 @@ func TestLiveTargets(t *testing.T) {
 	}
 
 	// Without Pod access in a namespace, nothing there is read as running.
-	noneSet, _ := liveTargets(cache, []string{"shop"}, nil, func(ns string) bool { return false })
+	noneSet, _, _ := liveTargets(context.Background(), cache, []string{"shop"}, nil, func(ns string) bool { return false }, exposureIndex{})
 	none, denied := noneSet.targets, noneSet.podDenied
 	for _, tg := range none {
 		if tg.key.kind != "CronJob" {
@@ -125,7 +126,7 @@ func TestLiveTargets(t *testing.T) {
 		t.Fatalf("denied: %v", denied)
 	}
 
-	if _, ok := liveTargets(nil, nil, nil, nil); ok {
+	if _, ok, _ := liveTargets(context.Background(), nil, nil, nil, nil, exposureIndex{}); ok {
 		t.Fatal("no cache: nothing can be said about what runs")
 	}
 }
@@ -133,13 +134,13 @@ func TestLiveTargets(t *testing.T) {
 func TestLiveTargetsCarryTheRunningDigest(t *testing.T) {
 	p := pod("web", corev1.PodRunning, nil, "acme/web:latest")
 	p.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: p.Spec.Containers[0].Name, Image: "acme/web:latest", ImageID: "docker-pullable://acme/web@sha256:NEW"}}
-	live, ok := liveTargets(syncedCache(t, p), []string{p.Namespace}, nil, nil)
+	live, ok, _ := liveTargets(context.Background(), syncedCache(t, p), []string{p.Namespace}, nil, nil, exposureIndex{})
 	if !ok || len(live.targets) != 1 || live.targets[0].digest != "sha256:new" {
 		t.Fatalf("%+v", live.targets)
 	}
 	local := pod("local", corev1.PodRunning, nil, "acme/web:latest")
 	local.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: local.Spec.Containers[0].Name, ImageID: "sha256:abc"}}
-	live, _ = liveTargets(syncedCache(t, local), []string{local.Namespace}, nil, nil)
+	live, _, _ = liveTargets(context.Background(), syncedCache(t, local), []string{local.Namespace}, nil, nil, exposureIndex{})
 	if len(live.targets) != 1 || live.targets[0].digest != "" {
 		t.Fatalf("a local image ID is no registry digest: %+v", live.targets)
 	}
@@ -156,7 +157,7 @@ func TestTrivysOwnJobsAreLeftOut(t *testing.T) {
 		pod("node-collector-1-x", corev1.PodPending, owned("batch/v1", "Job", "node-collector-1"), "aquasec/node-collector:1"),
 		pod("web", corev1.PodRunning, nil, "acme/web:2"),
 	)
-	live, _ := liveTargets(cache, nil, nil, nil)
+	live, _, _ := liveTargets(context.Background(), cache, nil, nil, nil, exposureIndex{})
 	var images []string
 	for _, tg := range live.targets {
 		images = append(images, tg.image)
@@ -177,7 +178,7 @@ func TestUnresolvedRunningBuildStaysUnscanned(t *testing.T) {
 
 	// Alone, against a scan of the tag's registry build.
 	local := started(pod("web", corev1.PodRunning, nil, "acme/web:latest"), "sha256:local-id")
-	live, _ := liveTargets(syncedCache(t, local), []string{"shop"}, nil, nil)
+	live, _, _ := liveTargets(context.Background(), syncedCache(t, local), []string{"shop"}, nil, nil, exposureIndex{})
 	tagScan := vulnReport(reportSpec{name: "tag", ns: "shop", ownerKind: "Pod", ownerName: "web", container: "app", repo: "acme/web", tag: "latest", digest: "sha256:registry"})
 	if got := mustBuild(t, []*unstructured.Unstructured{tagScan}, live.targets, ViewImage, Filter{}); got.Summary.ImagesScanned != 0 || got.Summary.ImagesUnscanned != 1 {
 		t.Errorf("alone: %+v", got.Summary)
@@ -187,7 +188,7 @@ func TestUnresolvedRunningBuildStaysUnscanned(t *testing.T) {
 	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "web-1", Namespace: "shop", UID: "uid-web-1", OwnerReferences: owned("apps/v1", "Deployment", "checkout")}}
 	known := started(pod("web-1-a", corev1.PodRunning, owned("apps/v1", "ReplicaSet", "web-1"), "acme/web:latest"), "acme/web@sha256:d")
 	unknown := started(pod("web-1-b", corev1.PodRunning, owned("apps/v1", "ReplicaSet", "web-1"), "acme/web:latest"), "sha256:local-id")
-	live, _ = liveTargets(syncedCache(t, rs, known, unknown), []string{"shop"}, nil, nil)
+	live, _, _ = liveTargets(context.Background(), syncedCache(t, rs, known, unknown), []string{"shop"}, nil, nil, exposureIndex{})
 	scan := vulnReport(reportSpec{name: "known", ns: "shop", ownerKind: "ReplicaSet", ownerName: "web-1", container: "app", repo: "acme/web", tag: "latest", digest: "sha256:d"})
 	if got := mustBuild(t, []*unstructured.Unstructured{scan}, live.targets, ViewWorkload, Filter{}); got.Summary.ImagesUnscanned != 1 || len(got.CleanWorkloads) != 0 {
 		t.Errorf("beside a scanned sibling: %+v clean=%+v", got.Summary, got.CleanWorkloads)
@@ -195,9 +196,23 @@ func TestUnresolvedRunningBuildStaysUnscanned(t *testing.T) {
 
 	// Its spec edited in place to pin another build before it restarts.
 	edited := started(pod("web", corev1.PodRunning, nil, "acme/web@sha256:new"), "sha256:local-id")
-	live, _ = liveTargets(syncedCache(t, edited), []string{"shop"}, nil, nil)
+	live, _, _ = liveTargets(context.Background(), syncedCache(t, edited), []string{"shop"}, nil, nil, exposureIndex{})
 	newScan := vulnReport(reportSpec{name: "new", ns: "shop", ownerKind: "Pod", ownerName: "web", container: "app", repo: "acme/web", digest: "sha256:new"})
 	if got := mustBuild(t, []*unstructured.Unstructured{newScan}, live.targets, ViewImage, Filter{}); got.Summary.ImagesScanned != 0 {
 		t.Errorf("a pinned spec doesn't say what runs: %+v", got.Summary)
+	}
+}
+
+// Two replicas of one build are one target; a Service that selects only one
+// of them still marks the workload.
+func TestLiveTargetsMergeReplicaRoutes(t *testing.T) {
+	owners := owned("apps/v1", "StatefulSet", "db")
+	first := pod("db-0", corev1.PodRunning, owners, "postgres:16")
+	second := pod("db-1", corev1.PodRunning, owners, "postgres:16")
+	second.Labels = map[string]string{"statefulset.kubernetes.io/pod-name": "db-1"}
+	exposure := mustIndex(routeSources{services: []*corev1.Service{withNodePort(service("shop", "db-1-public", corev1.ServiceTypeNodePort, map[string]string{"statefulset.kubernetes.io/pod-name": "db-1"}))}}, nil, nil)
+	live, _, _ := liveTargets(context.Background(), syncedCache(t, first, second), []string{"shop"}, nil, nil, exposure)
+	if len(live.targets) != 1 || !slices.Equal(live.targets[0].routes, []Route{{Via: "NodePort", Namespace: "shop", Name: "db-1-public"}}) {
+		t.Fatalf("targets: %+v", live.targets)
 	}
 }

@@ -20,6 +20,9 @@ const (
 	ViewFix      View = "fix"
 	// ViewSummary is the totals and coverage without rows.
 	ViewSummary View = "summary"
+	// ViewFindings is an export only: one CSV row per finding, image and
+	// workload container. It reads as the image view.
+	ViewFindings View = "findings"
 )
 
 // Severity is a scanner's severity, lower-cased. Anything a scanner reports
@@ -115,8 +118,18 @@ type Fix struct {
 	// needs it.
 	Images    int `json:"images"`
 	Workloads int `json:"workloads"`
-	// Affected lists at most MaxAffectedPerCVE images, widest first.
+	// Affected lists at most MaxAffectedPerCVE images, those an exposed
+	// workload runs first, then the widest.
 	Affected []FixImage `json:"affected"`
+	// Exposed are the row's workloads with a route from outside the cluster,
+	// at most MaxWorkloadsPerRow of ExposedTotal.
+	Exposed      []ExposedWorkload `json:"exposed,omitempty"`
+	ExposedTotal int               `json:"exposedTotal,omitempty"`
+	// ExposureUnknown is true when none of the row's workloads has a route
+	// Radar sees but one of them runs in a namespace where Radar couldn't
+	// read every route kind (Exposure.Gaps): no route seen there is not
+	// "not exposed".
+	ExposureUnknown bool `json:"exposureUnknown,omitempty"`
 }
 
 // FixImage is one image a fix applies to.
@@ -161,6 +174,15 @@ type Image struct {
 	FindingsTotal int       `json:"findingsTotal"`
 	// Report is the image's newest scan report. Findings merge every current report about the image.
 	Report resourceapi.ObjectRef `json:"report"`
+	// Exposed are the row's workloads with a route from outside the cluster,
+	// at most MaxWorkloadsPerRow of ExposedTotal.
+	Exposed      []ExposedWorkload `json:"exposed,omitempty"`
+	ExposedTotal int               `json:"exposedTotal,omitempty"`
+	// ExposureUnknown is true when none of the row's workloads has a route
+	// Radar sees but one of them runs in a namespace where Radar couldn't
+	// read every route kind (Exposure.Gaps): no route seen there is not
+	// "not exposed".
+	ExposureUnknown bool `json:"exposureUnknown,omitempty"`
 }
 
 // CVE is one vulnerability across every image that carries it.
@@ -181,9 +203,19 @@ type CVE struct {
 	// Images and Workloads count every image and distinct workload with it.
 	Images    int `json:"images"`
 	Workloads int `json:"workloads"`
-	// Affected lists the images, worst exposure first, at most
+	// Affected lists the images, those an exposed workload runs first, then
+	// the widest, at most
 	// MaxAffectedPerCVE of them.
 	Affected []CVEImage `json:"affected"`
+	// Exposed are the row's workloads with a route from outside the cluster,
+	// at most MaxWorkloadsPerRow of ExposedTotal.
+	Exposed      []ExposedWorkload `json:"exposed,omitempty"`
+	ExposedTotal int               `json:"exposedTotal,omitempty"`
+	// ExposureUnknown is true when none of the row's workloads has a route
+	// Radar sees but one of them runs in a namespace where Radar couldn't
+	// read every route kind (Exposure.Gaps): no route seen there is not
+	// "not exposed".
+	ExposureUnknown bool `json:"exposureUnknown,omitempty"`
 }
 
 // CVEImage is one image a CVE was found in, with each package it was found
@@ -214,6 +246,13 @@ type Workload struct {
 	Counts     Counts              `json:"counts"`
 	Fixable    Counts              `json:"fixable"`
 	Containers []WorkloadContainer `json:"containers"`
+	// Routes are its routes from outside the cluster, at most
+	// MaxRoutesPerWorkload of RoutesTotal in a list read.
+	Routes      []Route `json:"routes,omitempty"`
+	RoutesTotal int     `json:"routesTotal,omitempty"`
+	// ExposureUnknown is true when it has no route Radar sees and runs in a
+	// namespace where Radar couldn't read every route kind (Exposure.Gaps).
+	ExposureUnknown bool `json:"exposureUnknown,omitempty"`
 }
 
 // WorkloadContainer is one container of a workload and an image it runs:
@@ -241,6 +280,15 @@ type CleanImage struct {
 	Workloads      []WorkloadRef         `json:"workloads"`
 	WorkloadsTotal int                   `json:"workloadsTotal"`
 	Report         resourceapi.ObjectRef `json:"report"`
+	// Exposed are the row's workloads with a route from outside the cluster,
+	// at most MaxWorkloadsPerRow of ExposedTotal.
+	Exposed      []ExposedWorkload `json:"exposed,omitempty"`
+	ExposedTotal int               `json:"exposedTotal,omitempty"`
+	// ExposureUnknown is true when none of the row's workloads has a route
+	// Radar sees but one of them runs in a namespace where Radar couldn't
+	// read every route kind (Exposure.Gaps): no route seen there is not
+	// "not exposed".
+	ExposureUnknown bool `json:"exposureUnknown,omitempty"`
 }
 
 // Unscanned is a running image no report covers yet. Workloads lists at
@@ -256,6 +304,15 @@ type Unscanned struct {
 	OtherBuildScanned bool          `json:"otherBuildScanned,omitempty"`
 	Workloads         []WorkloadRef `json:"workloads"`
 	WorkloadsTotal    int           `json:"workloadsTotal"`
+	// Exposed are the row's workloads with a route from outside the cluster,
+	// at most MaxWorkloadsPerRow of ExposedTotal.
+	Exposed      []ExposedWorkload `json:"exposed,omitempty"`
+	ExposedTotal int               `json:"exposedTotal,omitempty"`
+	// ExposureUnknown is true when none of the row's workloads has a route
+	// Radar sees but one of them runs in a namespace where Radar couldn't
+	// read every route kind (Exposure.Gaps): no route seen there is not
+	// "not exposed".
+	ExposureUnknown bool `json:"exposureUnknown,omitempty"`
 }
 
 // Summary describes everything in scope, before the request's filters.
@@ -328,6 +385,9 @@ type Response struct {
 	// and fix filters: an unscanned image's findings are unknown.
 	Unscanned []Unscanned `json:"unscanned,omitempty"`
 	Coverage  Coverage    `json:"coverage"`
+	// Exposure says where Radar looked for routes from outside the cluster;
+	// set on every answer.
+	Exposure *Exposure `json:"exposure,omitempty"`
 	// WorkloadRuns is whether Filter.Workload names something that runs in
 	// the answer's scope, so an empty answer can't pass for "no CVEs". Not
 	// on the wire: the UI and agents learn it differently.
@@ -350,6 +410,10 @@ type Filter struct {
 	// workload that runs them. The Kind matches in any case; an empty Group
 	// matches any group.
 	Workload *WorkloadRef
+	// ExposedOnly keeps the images a workload with a route from outside the
+	// cluster runs (By workload: those workloads), still listing every
+	// workload that runs them.
+	ExposedOnly bool
 }
 
 const (
@@ -369,6 +433,9 @@ const (
 	// MaxWorkloadsPerAffected bounds the workloads listed per image of a CVE
 	// or fix row.
 	MaxWorkloadsPerAffected = 10
+	// MaxRoutesPerWorkload bounds the routes listed per exposed workload: a
+	// list read repeats them in every row the workload is in.
+	MaxRoutesPerWorkload = 3
 )
 
 // SourceTrivyOperator is Source for Trivy Operator's VulnerabilityReports.

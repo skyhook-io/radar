@@ -188,7 +188,7 @@ func TestVulnerabilitiesExport(t *testing.T) {
 	env.srv.permCache.Set("carol", nil, carol)
 	resp = env.authGet(t, "/api/vulnerabilities/export?view=workload", "carol", "")
 	body = readBody(t, resp)
-	if resp.StatusCode != http.StatusOK || body != "cluster,scanned,status,kind,namespace,workload,critical,high,medium,low,unrated,with_a_fix,containers\r\n"+k8s.GetClusterName()+",,no access,,*,,,,,,,,\r\n" {
+	if resp.StatusCode != http.StatusOK || body != "cluster,scanned,status,kind,namespace,workload,critical,high,medium,low,unrated,with_a_fix,containers,exposed_workloads\r\n"+k8s.GetClusterName()+",,no access,,*,,,,,,,,,\r\n" {
 		t.Fatalf("carol: %d %q", resp.StatusCode, body)
 	}
 
@@ -208,6 +208,30 @@ func TestVulnerabilitiesExport(t *testing.T) {
 		if resp := env.authGet(t, path, "bob", ""); resp.StatusCode != http.StatusBadRequest {
 			t.Fatalf("%s: %d", path, resp.StatusCode)
 		}
+	}
+
+	// The findings view: a row per finding, image and workload container,
+	// through the same gate. The list endpoint has no such view.
+	resp = env.authGet(t, "/api/vulnerabilities/export?view=findings", "bob", "")
+	body = readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("findings: %d %s", resp.StatusCode, body)
+	}
+	records, err = csv.NewReader(strings.NewReader(body)).ReadAll()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, body)
+	}
+	if !slices.Equal(records[0], vulnerabilities.ExportColumns[vulnerabilities.ViewFindings]) || len(records) != 3 {
+		t.Fatalf("findings records: %q", records)
+	}
+	if col(records[1], "cve") != "CVE-2026-0001" || col(records[1], "workload_kind") != "Pod" || col(records[1], "namespace") != "legacy" || col(records[1], "workload") != "web" {
+		t.Fatalf("findings row: %q", records[1])
+	}
+	if col(records[2], "status") != vulnerabilities.StatusNoAccess || col(records[2], "namespace") != "other" {
+		t.Fatalf("findings gap row: %q", records[2])
+	}
+	if status, _ := getVulnerabilities(t, env, "/api/vulnerabilities?view=findings", "bob"); status != http.StatusBadRequest {
+		t.Fatalf("list endpoint, findings view: %d", status)
 	}
 }
 
