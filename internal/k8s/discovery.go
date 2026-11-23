@@ -248,6 +248,25 @@ func (d *ResourceDiscovery) LookupRefreshingOnMiss(lookup func(*ResourceDiscover
 	return lookup(d)
 }
 
+// RetryFailedRefresh refreshes discovery in the background when its last
+// refresh returned nothing usable, at most once per
+// discoveryMissRefreshInterval, so a catalog that came back empty fills in
+// without waiting for the cache TTL.
+func (d *ResourceDiscovery) RetryFailedRefresh() {
+	if d == nil || d.ResourceDiscovery == nil || !d.LastRefreshFailed() {
+		return
+	}
+	if !d.backgroundRefresh.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer d.backgroundRefresh.Store(false)
+		d.LookupRefreshingOnMiss(func(*ResourceDiscovery) (schema.GroupVersionResource, bool) {
+			return schema.GroupVersionResource{}, false
+		})
+	}()
+}
+
 // SupportsWatchGVR checks if a GVR supports list and watch verbs.
 func (d *ResourceDiscovery) SupportsWatchGVR(gvr schema.GroupVersionResource) bool {
 	if d == nil || d.ResourceDiscovery == nil {

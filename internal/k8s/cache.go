@@ -127,9 +127,10 @@ type ResourceChange = k8score.ResourceChange
 // status, pod workload lookup, timeline integration).
 type ResourceCache struct {
 	*k8score.ResourceCache
-	lastClusterInfo  atomic.Pointer[clusterInfoObservation]
-	permissionResult *PermissionCheckResult
-	secretsEnabled   bool // Whether secrets informer is running (requires RBAC)
+	lastClusterInfo     atomic.Pointer[clusterInfoObservation]
+	apiDiscoveryPending atomic.Bool
+	permissionResult    *PermissionCheckResult
+	secretsEnabled      bool // Whether secrets informer is running (requires RBAC)
 	// argoDrift tracks how long each manual-sync ArgoCD Application has been
 	// continuously OutOfSync. Lives here so its lifecycle is the cache's:
 	// recreated per cluster, dropped on a kubeconfig context switch.
@@ -635,6 +636,11 @@ func parseDebugSyncDelays(raw string) map[string]time.Duration {
 // GetResourceCache returns the singleton cache instance.
 func GetResourceCache() *ResourceCache {
 	return resourceCache.Load()
+}
+
+// CustomResourcesPending reports the typed-only window after the API discovery wait expires.
+func (c *ResourceCache) CustomResourcesPending() bool {
+	return c != nil && c.apiDiscoveryPending.Load() && GetDynamicResourceCache() == nil
 }
 
 // KindReadiness re-exports the k8score readiness vocabulary for handler use.

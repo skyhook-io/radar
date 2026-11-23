@@ -72,8 +72,7 @@ func handleSummaryScoped(w http.ResponseWriter, r *http.Request, resolveCurrency
 		writeJSON(w, http.StatusOK, pkgopencost.CostSummary{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Source: "prometheus"})
 		return
 	}
-	resp := pkgopencost.ComputeCostSummaryFromProm(
-		r.Context(), client.Prom(), pkgopencost.SummaryOptions{Currency: currency, SkipNodeCost: allowedNamespaces != nil})
+	resp := NewPromCost(client).Summary(r.Context(), pkgopencost.SummaryOptions{Currency: currency, SkipNodeCost: allowedNamespaces != nil})
 	resp.Source = "prometheus"
 	if allowedNamespaces != nil {
 		FilterCostSummary(resp, allowedNamespaces)
@@ -127,7 +126,7 @@ func handleWorkloadsScoped(w http.ResponseWriter, r *http.Request, resolveCurren
 		return
 	}
 
-	resp := pkgopencost.ComputeWorkloadsFromProm(r.Context(), client.Prom(), ns, BuildPodOwnerLookup(ns))
+	resp := NewPromCost(client).Workloads(r.Context(), ns, BuildPodOwnerLookup(ns))
 	resp.Currency = currency
 	resp.Source = "prometheus"
 	writeJSON(w, http.StatusOK, resp)
@@ -223,7 +222,7 @@ func handleTrendScoped(w http.ResponseWriter, r *http.Request, resolveCurrency f
 		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Source: "prometheus", Range: r.URL.Query().Get("range")})
 		return
 	}
-	resp := pkgopencost.ComputeCostTrendFromProm(r.Context(), client.Prom(), pkgopencost.TrendPromOptions{
+	resp := NewPromCost(client).Trend(r.Context(), pkgopencost.TrendPromOptions{
 		Range:      r.URL.Query().Get("range"),
 		Namespaces: namespaces,
 	})
@@ -264,7 +263,7 @@ func handleNodesScoped(w http.ResponseWriter, r *http.Request, resolveCurrency f
 		writeJSON(w, http.StatusOK, pkgopencost.NodeCostResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Source: "prometheus"})
 		return
 	}
-	resp := pkgopencost.ComputeNodeCosts(r.Context(), client.Prom())
+	resp := NewPromCost(client).Nodes(r.Context())
 	resp.Currency = currency
 	resp.Source = "prometheus"
 	attachNodeProviderIDs(resp)

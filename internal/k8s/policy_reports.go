@@ -30,9 +30,7 @@ const (
 	// are NOT being indexed.
 	// Callers wanting them must fall back to a direct fetch.
 	KyvernoStatusDeferred KyvernoStatus = "deferred"
-	// KyvernoStatusWarmup — Kyverno is installed and warmup is presumed
-	// in-flight (discovery has named the CRDs but the index hasn't been
-	// published yet). Narrow window; expect to become "ready" shortly.
+	// KyvernoStatusWarmup — discovery or PolicyReport index warmup is still running.
 	KyvernoStatusWarmup KyvernoStatus = "warmup"
 	// KyvernoStatusReady — PolicyReport index is populated and live. Consumers
 	// must inspect its structured coverage fields before treating an empty
@@ -412,19 +410,11 @@ func GetPolicyReportStatus() PolicyReportStatus {
 		return status
 	}
 	if status.Status == "" {
-		// Warmup hasn't recorded a decision. "Undecided" must not be reported
-		// as warmup unconditionally: warmup only runs when the dynamic cache
-		// initialized (subsystems.go), and its init failure is non-fatal — so
-		// on a cluster where it never runs this state is permanent, not
-		// transient. Reporting warmup there makes OmittedReason emit
-		// `policySummary.kyverno: cache_cold` on every resource of every
-		// non-Kyverno cluster, forever, which is exactly the noise the silent
-		// not-installed path exists to avoid.
-		//
-		// Ask discovery the same question warmup would: only claim the index
-		// is cold when Kyverno is actually present. The scan is confined to
-		// this pre-decision branch — once warmup records an outcome the
-		// stored status returns above.
+		// Dynamic cache init can also fail permanently. Only report warmup
+		// while discovery is running or has actually found Kyverno.
+		if GetResourceCache().CustomResourcesPending() {
+			return PolicyReportStatus{Status: KyvernoStatusWarmup, ReasonCode: ReasonNoDiscovery, ObservedCount: -1}
+		}
 		d := GetResourceDiscovery()
 		if d == nil || d.ResourceDiscovery == nil {
 			// No discovery yet — we haven't looked, so we can't claim absence.

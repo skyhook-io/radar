@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, Coins, ExternalLink, Gauge, Loader2, RefreshCw } from 'lucide-react'
+import { ClusterScopeNote } from '@skyhook-io/k8s-ui/components/ui/ClusterScopeNote'
+import { isClusterScopeWithheld } from '@skyhook-io/k8s-ui/types/cluster-scope'
 import {
   Collapse,
   CollapseChevron,
@@ -313,19 +315,7 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
             }
           />
         ) : surfaceState === 'unavailable' && result ? (
-          <CenteredState
-            title="Rightsizing is unavailable"
-            body={unavailableMessage(result.reason)}
-            action={
-              <button
-                type="button"
-                onClick={runScan}
-                className="btn-brand px-3 py-1.5 text-xs font-medium"
-              >
-                Try again
-              </button>
-            }
-          />
+          <ScanUnavailableState result={result} onRun={runScan} />
         ) : result ? (
           <div
             className="flex flex-col gap-4"
@@ -1049,6 +1039,29 @@ function primaryEvidenceNote(row: RightsizingRow) {
       </p>
     )
   return null
+}
+
+// A withheld cluster scope replaces the whole result: no workload was
+// measured, so none may read as needing no change.
+export function ScanUnavailableState({ result, onRun }: { result: ScanResult; onRun: () => void }) {
+  if (isClusterScopeWithheld(result.clusterScope)) {
+    return <ClusterScopeNote scope={result.clusterScope} title="Recommendations withheld for this cluster" />
+  }
+  return (
+    <CenteredState
+      title="Rightsizing is unavailable"
+      body={unavailableMessage(result.reason)}
+      action={
+        <button
+          type="button"
+          onClick={onRun}
+          className="btn-brand px-3 py-1.5 text-xs font-medium"
+        >
+          Try again
+        </button>
+      }
+    />
+  )
 }
 
 function CenteredState({

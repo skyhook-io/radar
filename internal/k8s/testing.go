@@ -114,6 +114,10 @@ func InitTestPromotedSyncingCache(client kubernetes.Interface, syncTimeout, defe
 	return nil
 }
 
+func (c *ResourceCache) SetTestAPIDiscoveryPending(pending bool) {
+	c.apiDiscoveryPending.Store(pending)
+}
+
 // InitTestResourceCache creates a resource cache from a fake or test client,
 // bypassing RBAC checks and the normal Initialize/InitResourceCache flow.
 // All resource types are enabled. Call ResetTestState to clean up.
@@ -310,6 +314,16 @@ func SetTestDynamicSyncStallAfter(d time.Duration) func() {
 	previous := dynamicSyncStallAfter
 	dynamicSyncStallAfter = d
 	return func() { dynamicSyncStallAfter = previous }
+}
+
+// SetTestDynamicObjectReadSyncWait sets how long a read of one object waits
+// for an unsynced dynamic informer, for dynamic caches initialized after the
+// call. The production wait, 2 seconds, is what a test of a read that never
+// loads would otherwise sit through. Returns a restore func.
+func SetTestDynamicObjectReadSyncWait(d time.Duration) func() {
+	previous := dynamicObjectReadSyncWait
+	dynamicObjectReadSyncWait = d
+	return func() { dynamicObjectReadSyncWait = previous }
 }
 
 // ResetTestDynamicState tears down the dynamic cache + discovery singletons
@@ -774,4 +788,45 @@ func InitTestReplayClients(client dynamic.Interface, catalog discovery.Discovery
 	resourceDiscoveryClient = GetDiscoveryClient()
 	discoveryMu.Unlock()
 	return InitDynamicResourceCache(nil)
+}
+
+// InstallTestServingConnection installs a named connection's config, dynamic
+// client and discovery and admits it, the way a switch ends: whatever was
+// serving is retired first. It returns the new connection's ID.
+func InstallTestServingConnection(name string, cfg *rest.Config, dyn dynamic.Interface, disc discovery.DiscoveryInterface) (string, error) {
+	RetireServingConnection()
+	clientMu.Lock()
+	k8sConfig, dynamicClient, contextName = cfg, dyn, name
+	clientMu.Unlock()
+	if _, err := SetTestResourceDiscovery(disc); err != nil {
+		return "", err
+	}
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: name})
+	return ServingConnectionID(), nil
+}
+
+// SnapshotTestConnection records the connection status, serving connection,
+// clients and discovery, and returns a func that restores them, so a test
+// that installs or retires connections leaves the package as it found it.
+func SnapshotTestConnection() func() {
+	connectionStatusMu.Lock()
+	status, id, closed := connectionStatus, servingConnectionID, admissionsClosed
+	connectionStatusMu.Unlock()
+	clientMu.RLock()
+	cfg, dyn, name := k8sConfig, dynamicClient, contextName
+	clientMu.RUnlock()
+	discoveryMu.Lock()
+	disc := resourceDiscovery
+	discoveryMu.Unlock()
+	return func() {
+		connectionStatusMu.Lock()
+		connectionStatus, servingConnectionID, admissionsClosed = status, id, closed
+		connectionStatusMu.Unlock()
+		clientMu.Lock()
+		k8sConfig, dynamicClient, contextName = cfg, dyn, name
+		clientMu.Unlock()
+		discoveryMu.Lock()
+		resourceDiscovery = disc
+		discoveryMu.Unlock()
+	}
 }

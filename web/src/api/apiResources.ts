@@ -1,9 +1,8 @@
 import { useEffect } from "react";
 import { initNavigationMap } from "@skyhook-io/k8s-ui/utils/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { APIResource } from "../types";
-import { apiUrl, getAuthHeaders, getCredentialsMode } from "./config";
-import { readErrorBody } from "./httpErrors";
+import { fetchJSON, isStillLoadingError } from "./client";
 
 const definitionPollDeadlines = new WeakMap<object, number>();
 
@@ -19,19 +18,6 @@ export {
 } from "@skyhook-io/k8s-ui";
 export type { ResourceCategory } from "@skyhook-io/k8s-ui";
 
-async function fetchJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(apiUrl(path), {
-    signal,
-    credentials: getCredentialsMode(),
-    headers: getAuthHeaders(),
-  });
-  if (!response.ok) {
-    const error = await readErrorBody(response);
-    throw new Error(error.error || `HTTP ${response.status}`);
-  }
-  return response.json();
-}
-
 // Known GitOps navigation identities, not installation or CRD-existence evidence.
 export const GITOPS_KINDS: APIResource[] = [
   { name: 'applications', kind: 'Application', group: 'argoproj.io', version: 'v1alpha1', namespaced: true, verbs: ['list', 'get'], isCrd: true },
@@ -46,11 +32,31 @@ export const GITOPS_KINDS: APIResource[] = [
 ]
 
 
+// Pending answers in the catalog's current fetch; there is one catalog query.
+let pendingRetries = 0;
+
 // Fetch all API resources from the cluster
 export function useAPIResources() {
+  // Keep retrying while Radar says discovery is still running; every other
+  // error follows the host's QueryClient retry policy.
+  const queryClient = useQueryClient();
+  const hostRetry = queryClient.getQueryDefaults(["api-resources"]).retry ?? queryClient.getDefaultOptions().queries?.retry;
   const result = useQuery<APIResource[]>({
     queryKey: ["api-resources"],
     queryFn: ({ signal }) => fetchJSON("/api-resources", signal),
+    retry: (count, error) => {
+      // TanStack counts every failure in a fetch; pending answers aren't
+      // failures, so they must not use up the host's budget for real ones.
+      if (count === 0) pendingRetries = 0;
+      if (isStillLoadingError(error)) {
+        pendingRetries++;
+        return true;
+      }
+      const failures = count - pendingRetries;
+      if (typeof hostRetry === "function") return hostRetry(failures, error);
+      if (typeof hostRetry === "number") return failures < hostRetry;
+      return hostRetry ?? failures < 3;
+    },
     staleTime: 5 * 60 * 1000, // 5 minutes - resources don't change often
     refetchInterval: (query) => {
       const state = query.state.data?.find(resource =>
