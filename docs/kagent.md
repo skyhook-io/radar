@@ -7,7 +7,7 @@ revision new sessions run, with Substrate runtime evidence shown separately.
 ## Screens and navigation
 
 The Resources sidebar's **Agents** row contains a **kagent** section:
-**Overview**, **Agents**, **MCP servers**, **Models**, and **Sessions →**. The
+**Overview**, **Agents**, **MCP servers**, and **Models**. The
 badge counts atomic configuration findings before folding (≥ over partial
 reads); runtime crashes and pool capacity remain in Substrate's badge.
 
@@ -20,7 +20,6 @@ reads); runtime crashes and pool capacity remain in Substrate's badge.
 | MCP server page | `/kagent/remotemcpservers/<namespace>/<name>?ctx=` | Problem callouts and At a glance verdicts, About with the redacted URL and header source coordinates, Used by with each Agent's tools and latest-change state, then folded conditions. Offered tools are folded. |
 | Models | `/kagent/models` | Resolution or credential failure, provider/model, Secret/key coordinates, consumers and roles, namespace, then ModelProviderConfigs (status not reported in kagent 1.0.1). |
 | Model page | `/kagent/modelconfigs/<namespace>/<name>?ctx=` | Problem callouts and At a glance verdicts, About with provider/model and namespace, Used by with roles and effects, then folded conditions. Credential coordinates never include values. |
-| Sessions | `/substrate/actors?kagent=sessions` | Substrate's paged Actors list, including attributed sessions and unattributed kagent-shaped actors, excluding standalone sandboxes. The namespace view selection narrows their atespaces. |
 
 The namespace picker narrows inventory and findings, while reference and consumer
 evidence may come from outside that selection. Every object page pins `ctx`:
@@ -38,8 +37,15 @@ get grant. The two capabilities are negotiated independently: older Radars keep
 the generic Agents destination, tables and drawer, and never receive unsupported
 workspace, summary or Sessions-filter requests.
 
+The Overview’s session and crashed counts link explicitly to **Agent Substrate → Actors**
+with `kagent=sessions` (and `state=crashed` for crashes), preserving the namespace
+view selection. This list includes attributed sessions and unattributed kagent-shaped
+actors, excluding standalone sandboxes. Substrate’s Actors entry is highlighted;
+kagent has no cross-workspace sidebar destination.
+
 The Agent Sessions tab pages attributed actors and retains unattributed hints
-without adding them to counts. A session opens its Substrate actor page with an
+without adding them to counts. **List its sessions in Agent Substrate →** opens
+Actors filtered to that Agent. A session opens its Substrate actor page with an
 **Agent: <name>** return link. Recover through kagent, never by moving or reverting
 its actor directly. Revisions distinguish desired, new-sessions, earlier and
 ambiguous/unprovable attribution; template creation and golden-snapshot state are

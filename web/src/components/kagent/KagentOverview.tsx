@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import { FoldSection, WorkspaceProblemCallout } from '@skyhook-io/k8s-ui'
 import type { KagentRef, KagentWorkspace } from '../../api/kagent'
+import { substrateActorsPath } from '../substrate/routes'
 import { KagentAgentsTable } from './KagentLists'
 import {
   countText,
@@ -122,7 +123,9 @@ export function KagentOverview({
   data,
   runtime,
   onOpen,
+  namespaces = [],
 }: {
+  namespaces?: string[]
   data: KagentWorkspace
   runtime: KagentRuntime
   onOpen: (ref: KagentRef) => void
@@ -137,10 +140,17 @@ export function KagentOverview({
   const rows = runtime.rows
   const runtimePartial = runtime.lowerBound || !runtime.completePage || rows.some((r) => !r.complete)
   const totalSessions = rows.reduce((n, r) => n + r.sessions.total, 0)
-  const runtimeText =
-    rows.length || runtime.completePage
-      ? `${runtimePartial ? '≥' : ''}${totalSessions} ${!runtimePartial && totalSessions === 1 ? 'session' : 'sessions'} · ${runtimePartial ? '≥' : ''}${rows.reduce((n, r) => n + r.crashed, 0)} crashed`
-      : runtime.unavailable
+  const sessionsPath = substrateActorsPath({ kagent: 'sessions', namespaces: namespaces.join(',') })
+  const runtimeText = rows.length || runtime.completePage ? (
+    <>
+      <Link to={sessionsPath} className="block text-accent-text hover:underline">
+        {runtimePartial ? '≥' : ''}{totalSessions} {!runtimePartial && totalSessions === 1 ? 'session' : 'sessions'} in Agent Substrate →
+      </Link>
+      <Link to={`${sessionsPath}&state=crashed`} className="block text-accent-text hover:underline" aria-label="Crashed sessions in Agent Substrate">
+        {runtimePartial ? '≥' : ''}{rows.reduce((n, r) => n + r.crashed, 0)} crashed →
+      </Link>
+    </>
+  ) : runtime.unavailable
   return (
     <>
       <div className="grid grid-cols-2 gap-3 text-sm text-theme-text-primary xl:grid-cols-4 [&>span]:rounded-xl [&>span]:border [&>span]:border-theme-border [&>span]:bg-theme-surface [&>span]:px-4 [&>span]:py-3 [&>span]:shadow-theme-sm" aria-label="kagent status">
@@ -185,7 +195,7 @@ export function KagentOverview({
             </>
           )}
         </span>
-        <span className="text-theme-text-secondary">Substrate: {runtimeText}</span>
+        <span className="text-theme-text-secondary">{runtimeText}</span>
       </div>
       <KagentRuntimeRead runtime={runtime} />
       <section className="space-y-2">

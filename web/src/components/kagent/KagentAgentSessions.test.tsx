@@ -69,6 +69,10 @@ describe('KagentAgentSessions', () => {
     vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
     try {
       await act(async () => root.render(<MemoryRouter initialEntries={[path]}><KagentAgentSessions agent={agent} /></MemoryRouter>))
+      const list = [...host.querySelectorAll('button')].find(b => b.textContent === 'List its sessions in Agent Substrate →')
+      expect(list).toBeDefined()
+      act(() => list!.click())
+      expect(navigate).toHaveBeenCalledWith('/substrate/actors?agent=kagent%2Fk8s-helper')
       const button = [...host.querySelectorAll('button')].find(b => b.textContent === 'session …c1f90ae7')
       expect(button).toBeDefined()
       act(() => button!.click())
@@ -88,7 +92,7 @@ describe('KagentAgentSessions', () => {
     expect(html).toContain('3 sessions · 3 on the new-sessions revision, 0 on other revisions')
     expect(html).toContain('1 needs attention')
     expect(html).toContain('session …c1f90ae7')
-    expect(html).toContain('List its sessions')
+    expect(html).toContain('List its sessions in Agent Substrate →')
     // The drawer's Agent section already says where new sessions start and that conversations aren't visible.
     expect(html).not.toContain('New sessions start on')
     expect(html).not.toContain('Conversation outcome')

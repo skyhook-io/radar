@@ -112,6 +112,17 @@ describe('workspace loading, empty and version states', () => {
   })
 })
 describe('Overview evidence and folding', () => {
+  it.each([false, true])('links session counts to Substrate with namespace and crash filters (partial=%s)', (partial) => {
+    const r = runtime()
+    r.completePage = true
+    r.lowerBound = partial
+    r.rows = [{ agent: { namespace: 'team-a', name: 'helper' }, sessions: { total: 26 }, crashed: 2, complete: !partial }] as KagentRuntime['rows']
+    const out = html(<KagentOverview data={workspace()} runtime={r} namespaces={['team-a', 'team-b']} onOpen={open} />)
+    expect(out).toContain(`${partial ? '≥' : ''}26 sessions in Agent Substrate →</a>`)
+    expect(out).toContain(`${partial ? '≥' : ''}2 crashed →</a>`)
+    expect(out).toContain('href="/substrate/actors?kagent=sessions&amp;namespaces=team-a%2Cteam-b"')
+    expect(out).toContain('href="/substrate/actors?kagent=sessions&amp;namespaces=team-a%2Cteam-b&amp;state=crashed"')
+  })
   it('qualifies failed, processing and per-role consumer counts over a partial read', () => {
     const w = blockedWorkspace()
     w.counts.agents.lowerBound = true

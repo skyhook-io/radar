@@ -92,7 +92,7 @@ export function KagentView({ namespaces, onOpenResource }: WorkspaceScreenProps)
               <RefreshFailedNotice queries={[query, runtime.query]} />
               <CoverageNotice coverage={query.data.coverage} />
               {route.screen === 'overview' ? (
-                <KagentOverview data={query.data} runtime={runtime} onOpen={onOpen} />
+                <KagentOverview namespaces={namespaces} data={query.data} runtime={runtime} onOpen={onOpen} />
               ) : route.screen === 'agents' ? (
                 <KagentAgentsTable data={query.data} runtime={runtime} onOpen={onOpen} />
               ) : route.screen === 'mcpservers' ? (

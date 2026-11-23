@@ -10,11 +10,11 @@ import { blockedWorkspace } from './workspace.fixtures'
 import { liveWorkspace } from '../agentsandbox/workspace.fixtures'
 import { useKagentSidebarWorkspace } from './useKagentSidebarWorkspace'
 
-const state = vi.hoisted(() => ({ sandbox: undefined as AgentSandboxWorkspaceResponse | undefined, support: 'supported', sessionsSupport: 'supported', checking: false }))
+const state = vi.hoisted(() => ({ sandbox: undefined as AgentSandboxWorkspaceResponse | undefined, support: 'supported', checking: false }))
 
 vi.mock('../../api/client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/client')>()),
-  useRadarFeature: (feature: string) => ({ support: feature === 'kagentSessionSummary' ? state.sessionsSupport : state.support }),
+  useRadarFeature: () => ({ support: state.support }),
   useCapabilities: () => ({ isPending: state.checking }),
 }))
 vi.mock('../../api/agentSandbox', async (importOriginal) => ({
@@ -59,19 +59,18 @@ function render(apiResources: APIResource[], path = '/kagent') {
 describe('kagent in the sidebar', () => {
   it('waits for capability detection, then exposes the same destinations on Overview and Agent pages', () => {
     state.checking = true
-    state.support = state.sessionsSupport = 'unknown'
+    state.support = 'unknown'
     expect(render(KAGENT_KINDS).agents).toBeUndefined()
     state.support = 'supported'
-    expect(render(KAGENT_KINDS).agents).toBeUndefined()
+    expect(render(KAGENT_KINDS).agents).toBeDefined()
     state.checking = false
-    state.sessionsSupport = 'supported'
     for (const path of ['/kagent', '/kagent/agents/agents/helper'])
-      expect(render(KAGENT_KINDS, path).agents?.destinations.map(d => d.label)).toEqual(['Overview', 'Agents', 'MCP servers', 'Models', 'Sessions →'])
+      expect(render(KAGENT_KINDS, path).agents?.destinations.map(d => d.label)).toEqual(['Overview', 'Agents', 'MCP servers', 'Models'])
   })
   it('adds an Agents destination for kagent’s Agent list to the Agents row', () => {
     const { html, agents } = render(KAGENT_KINDS)
     expect(agents?.tools).toBe('kagent')
-    expect(agents?.destinations.map((d) => d.label)).toEqual(['Overview', 'Agents', 'MCP servers', 'Models', 'Sessions →'])
+    expect(agents?.destinations.map((d) => d.label)).toEqual(['Overview', 'Agents', 'MCP servers', 'Models'])
     expect(agents?.destinations[1]).toMatchObject({ id: 'kagent-agents', kind: { name: 'agents', group: 'api.kagent.dev' } })
     expect(agents?.count).toBe(2)
     expect(html).toMatch(/Other kinds \(1\)/)
@@ -90,7 +89,6 @@ describe('kagent in the sidebar', () => {
       'kagent/Agents',
       'kagent/MCP servers',
       'kagent/Models',
-      'kagent/Sessions →',
     ])
     expect(agents?.count).toBe(7)
   })
@@ -103,12 +101,9 @@ describe('kagent in the sidebar', () => {
     state.support = 'supported'
   })
 
-  it('keeps configuration destinations when only the session-summary capability is missing', () => {
-    state.sessionsSupport = 'unsupported'
-    const { agents } = render(KAGENT_KINDS)
-    expect(agents?.destinations.map(d => d.label)).toEqual(['Overview', 'Agents', 'MCP servers', 'Models'])
-    expect(agents?.count).toBe(2)
-    state.sessionsSupport = 'supported'
+  it('does not highlight kagent on Substrate’s filtered Actors page', () => {
+    const { agents } = render(KAGENT_KINDS, '/substrate/actors?kagent=sessions')
+    expect(agents?.destinations.filter(d => d.active)).toEqual([])
   })
 
   it('is absent when the cluster doesn’t serve kagent’s Agents', () => {
