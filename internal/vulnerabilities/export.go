@@ -38,6 +38,10 @@ var ExportColumns = map[View][]string{
 	ViewFix:      slices.Concat(exportLead, []string{"package", "type", "installed", "upgrade_to", "fixed_versions", "critical", "high", "medium", "low", "unrated", "cves", "images", "workloads", "image_names", "running_in", "exposed_workloads"}),
 	ViewCVE:      slices.Concat(exportLead, []string{"cve", "title", "severity", "score", "packages", "installed", "fixed_versions", "fix", "images", "workloads", "image_names", "running_in", "link", "exposed_workloads"}),
 	ViewWorkload: slices.Concat(exportLead, []string{"kind", "namespace", "workload", "critical", "high", "medium", "low", "unrated", "with_a_fix", "containers", "exposed_workloads"}),
+	// One row per finding, image and workload container, for a compliance
+	// tracker (a POA&M): exposure is "exposed", "none" (no route Radar sees)
+	// or "unknown".
+	ViewFindings: slices.Concat(exportLead, []string{"cve", "severity", "score", "title", "package", "package_type", "installed_version", "fixed_version", "fix_target", "fix_available", "image", "digest", "namespace", "workload_kind", "workload", "container", "exposure", "routes", "link"}),
 }
 
 // exportExtras is what an export's CSV needs beyond the wire shape: scan
@@ -325,6 +329,10 @@ func WriteCSV(ctx context.Context, resp Response, f Filter, cluster string) ([]b
 		if err := writeImageGaps(put, join, exposedCell, cols, resp.Unscanned, x.unread); err != nil {
 			return nil, err
 		}
+	case ViewFindings:
+		if err := writeFindings(ctx, resp, f, put, join, cols); err != nil {
+			return nil, err
+		}
 	case ViewWorkload:
 		// A filter rules out what a workload's scanned images carry, never
 		// what its unscanned ones might: those workloads stay, as not-scanned
@@ -352,7 +360,7 @@ func WriteCSV(ctx context.Context, resp Response, f Filter, cluster string) ([]b
 
 	// A gap's namespaces go where the view says where things run.
 	where := "running_in"
-	if resp.View == ViewWorkload {
+	if resp.View == ViewWorkload || resp.View == ViewFindings {
 		where = "namespace"
 	}
 	gaps := resp.Coverage.Gaps
@@ -389,6 +397,112 @@ func writeImageGaps(put func(time.Time, string, ...string) error, join func([]st
 	}
 	for _, u := range unread {
 		if err := put(u.scanned, StatusNotRead, row(u.image, u.workloads, u.exposed)...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeFindings writes the findings view: each image row's findings, once
+// per workload container that runs the image, worst first, in the image
+// rows' order. A workload filter, or the Exposed filter, keeps only the
+// containers of that workload, or of exposed ones. Images not scanned and
+// images whose findings weren't read are a row per workload container with
+// the finding cells blank, as the image view writes them.
+func writeFindings(ctx context.Context, resp Response, f Filter, put func(time.Time, string, ...string) error, join func([]string) string, cols []string) error {
+	x := resp.export
+	m := newMatcher(f)
+	// containers are a row's workload containers the filters keep, each
+	// with its routes and exposure word.
+	type container struct {
+		w        WorkloadRef
+		exposure string
+		routes   string
+	}
+	containers := func(workloads []WorkloadRef, exposed []ExposedWorkload) []container {
+		routes := make(map[WorkloadRef][]Route, len(exposed))
+		for _, e := range exposed {
+			routes[e.WorkloadRef] = e.Routes
+		}
+		var out []container
+		for _, w := range workloads {
+			ref := w
+			ref.Container = ""
+			rs := routes[ref]
+			if (f.Workload != nil && !m.wanted(w)) || (f.ExposedOnly && len(rs) == 0) {
+				continue
+			}
+			c := container{w: w, exposure: "none"}
+			switch {
+			case len(rs) > 0:
+				cells := make([]string, len(rs))
+				for i, r := range rs {
+					cells[i] = r.Via + " " + r.Namespace + "/" + r.Name
+				}
+				c.exposure, c.routes = "exposed", join(cells)
+			case resp.Exposure == nil || exposureUnknownIn(resp.Exposure, w.Namespace):
+				c.exposure = "unknown"
+			}
+			out = append(out, c)
+		}
+		return out
+	}
+	status := func(scanned time.Time, status, image, digest string, workloads []WorkloadRef, exposed []ExposedWorkload) error {
+		for _, c := range containers(workloads, exposed) {
+			if err := put(scanned, status, named(cols, map[string]string{
+				"image": image, "digest": digest, "namespace": c.w.Namespace, "workload_kind": c.w.Kind, "workload": c.w.Name,
+				"container": c.w.Container, "exposure": c.exposure, "routes": c.routes,
+			})...); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	listed := map[string]bool{}
+	for _, img := range resp.Images {
+		listed[img.ID] = true
+		meta := x.images[img.ID]
+		if img.FindingsUnread {
+			if err := status(meta.scanned, StatusNotRead, img.Image, meta.digest, img.Workloads, img.Exposed); err != nil {
+				return err
+			}
+			continue
+		}
+		kept := containers(img.Workloads, img.Exposed)
+		for i := range img.Findings {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			fd := &img.Findings[i]
+			score, fixAvailable := "", "no"
+			if fd.Score != nil {
+				score = strconv.FormatFloat(*fd.Score, 'f', 1, 64)
+			}
+			if fd.FixedVersion != "" {
+				fixAvailable = "yes"
+			}
+			for _, c := range kept {
+				if err := put(meta.scanned, StatusOK,
+					fd.ID, severityLabel(fd.Severity), score, fd.Title, fd.Package, ecosystemLabel(cmp.Or(fd.PackageType, fd.ecosystem)),
+					fd.InstalledVersion, fd.FixedVersion, fd.FixTarget, fixAvailable,
+					img.Image, meta.digest, c.w.Namespace, c.w.Kind, c.w.Name, c.w.Container, c.exposure, c.routes, fd.Link); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	for _, u := range resp.Unscanned {
+		if err := status(time.Time{}, StatusNotScanned, u.Image, "", u.Workloads, u.Exposed); err != nil {
+			return err
+		}
+	}
+	// Images past the findings budget that a search left out of the rows.
+	for _, u := range x.unread {
+		if listed[u.id] {
+			continue
+		}
+		meta := x.images[u.id]
+		if err := status(meta.scanned, StatusNotRead, u.image, meta.digest, u.workloads, u.exposed); err != nil {
 			return err
 		}
 	}

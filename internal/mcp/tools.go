@@ -379,8 +379,8 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"scanner reports (Trivy Operator). view=image ranks images; view=fix ranks package upgrades by what they " +
 			"clear (target version per ecosystem); view=cve ranks CVEs; view=workload lists containers. Only images a Pod " +
 			"or unsuspended CronJob runs count. unscanned: running images with no report yet, unknown not " +
-			"clean. coverage.gaps: what wasn't read (kinds) and where. Rows sort by most exposed workloads (with a route " +
-			"from outside the cluster), then worst severity, then most workloads.",
+			"clean. coverage.gaps: what wasn't read (kinds) and where. Rows sort most severe first, then exposed (a route " +
+			"from outside the cluster), then exposureUnknown, then most workloads.",
 		Annotations: readOnly,
 	}, logToolCall("list_vulnerabilities", handleListVulnerabilities))
 

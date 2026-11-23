@@ -353,7 +353,9 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 	// Route kinds the caller can't read leave their workloads' exposure
 	// unknown, named by kind and workload namespace only.
 	exposureGaps = append(exposureGaps, exposure.gaps()...)
-	resp, err := build(ctx, items, targets, req.View, req.Filter, req.Export)
+	// Every namespace named, before a list read caps them: a row's exposure
+	// is unknown only where a gap covers its namespace.
+	resp, err := buildWithExposure(ctx, items, targets, req.View, req.Filter, req.Export, &Exposure{Gaps: slices.Clone(exposureGaps)})
 	if err != nil {
 		return Response{}, err
 	}
@@ -374,7 +376,7 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 			exposureGaps[i].Action = action
 		}
 	}
-	resp.Exposure = &Exposure{Gaps: exposureGaps}
+	resp.Exposure = &Exposure{Gaps: exposureGaps, Unchecked: routes.unchecked}
 	resp.Coverage.Gaps = append([]resourceapi.Gap{}, gaps...)
 	c := resp.Coverage
 	resp.Coverage.Complete = len(gaps) == 0 && !c.Truncated && c.RowsOmitted == 0 && c.CleanOmitted == 0 && c.UnscannedOmitted == 0

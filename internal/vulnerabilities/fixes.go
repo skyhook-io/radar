@@ -41,6 +41,7 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 	upgrades := map[string]upgrade{}
 	imageWorkloads := map[string][]WorkloadRef{}
 	imageExposed := map[string]bool{}
+	imageUnknown := map[string]bool{}
 	for _, agg := range j.sortedImages() {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -53,6 +54,7 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 		imageWorkloads[r.imageID] = workloads
 		distinct := withoutContainers(workloads)
 		imageExposed[r.imageID] = slices.ContainsFunc(distinct, j.exposed)
+		imageUnknown[r.imageID] = j.exposureUnknown(distinct)
 		shown := m.listed(distinct, j.lim.workloadsPerAffected)
 		rowMatched := m.rowMatches(agg.searchText(), workloads)
 		packages := map[string]*imagePackage{}
@@ -157,18 +159,20 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 		if row.Exposed, row.ExposedTotal, ok = j.exposedAcross(imageIDs, imageWorkloads, exposedBySet); !ok {
 			return nil, j.stopped()
 		}
+		row.ExposureUnknown = row.ExposedTotal == 0 && slices.ContainsFunc(imageIDs, func(id string) bool { return imageUnknown[id] })
 		slices.SortStableFunc(row.Affected, func(x, y FixImage) int {
 			return cmp.Or(compareBool(imageExposed[y.ImageID], imageExposed[x.ImageID]), cmp.Compare(y.WorkloadsTotal, x.WorkloadsTotal), cmp.Compare(x.Image, y.Image))
 		})
 		row.Affected = row.Affected[:min(len(row.Affected), j.lim.affectedPerCVE)]
 		rows = append(rows, row)
 	}
-	// Most exposed workloads first (none last), then most severe, then most
-	// workloads.
+	// Most severe first, exposed first within each severity (see
+	// exposureTier), then most exposed workloads, then most workloads.
 	slices.SortFunc(rows, func(x, y Fix) int {
 		return cmp.Or(
-			cmp.Compare(y.ExposedTotal, x.ExposedTotal),
 			cmp.Compare(severityRank(y.Severity), severityRank(x.Severity)),
+			cmp.Compare(exposureTier(y.ExposedTotal > 0, y.ExposureUnknown), exposureTier(x.ExposedTotal > 0, x.ExposureUnknown)),
+			cmp.Compare(y.ExposedTotal, x.ExposedTotal),
 			cmp.Compare(y.Workloads, x.Workloads),
 			compareCounts(y.Counts, x.Counts),
 			compareBool(x.To == "", y.To == ""),
