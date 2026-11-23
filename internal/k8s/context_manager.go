@@ -440,12 +440,7 @@ func BlockClusterAccess(err error) {
 func dropClusterClients() {
 	clientMu.Lock()
 	defer clientMu.Unlock()
-	k8sConfig = nil
-	k8sClient = nil
-	discoveryClient = nil
-	dynamicClient = nil
-	activeClients = nil
-	activeClientGeneration = clientGenerationCounter.Add(1)
+	installedConn.Store(installedConnectionLocked(nil, &sharedKubernetesClients{generation: clientGenerationCounter.Add(1)}))
 }
 
 func contextOperationsBlockedErr() error {
@@ -664,8 +659,6 @@ func reinitializeCurrentContextIfOperationCurrent(
 
 	reportProgress("Restoring cluster caches...")
 	ResetAllSubsystems()
-	InvalidateCapabilitiesCache()
-	InvalidateResourcePermissionsCache()
 	InvalidateServerVersionCache()
 	InvalidatePlatformCache()
 
@@ -793,8 +786,6 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 			CancelOngoingOperations()
 			dropClusterClients()
 			ResetAllSubsystems()
-			InvalidateCapabilitiesCache()
-			InvalidateResourcePermissionsCache()
 			InvalidateServerVersionCache()
 			InvalidatePlatformCache()
 			msg := "Cluster switch stopped. The previous connection was closed. Choose a cluster to connect."
@@ -828,14 +819,6 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	t := time.Now()
 	ResetAllSubsystems()
 	logTiming("   [ops] ResetAllSubsystems: %v", time.Since(t))
-	// Drop the previous cluster's permission result before the client swap, so
-	// nothing pairs it with the new client, including when the switch fails
-	// past this point. Not before the reset above: until then the previous
-	// cluster's resource cache is live, and several readers treat a nil
-	// permission result as cluster-wide access. The invalidations right after
-	// SwitchContext retire any probe still in flight against the previous
-	// client.
-	InvalidateResourcePermissionsCache()
 
 	// Step 2: Switch the K8s client to the new context
 	progress("Connecting to cluster...")
@@ -860,9 +843,6 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 		return err
 	}
 
-	// Invalidate caches - permissions and cluster info may differ between clusters
-	InvalidateCapabilitiesCache()
-	InvalidateResourcePermissionsCache()
 	InvalidateServerVersionCache()
 	InvalidatePlatformCache()
 
@@ -1077,7 +1057,6 @@ func reinitializeNamespaceScope(namespace, resetMessage string) error {
 	logTiming("   [ops] ResetAllSubsystems: %v", time.Since(t))
 
 	SetNamespaceScopeOverride(namespace)
-	InvalidateCapabilitiesCache()
 	InvalidateServerVersionCache()
 	InvalidatePlatformCache()
 

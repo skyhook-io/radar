@@ -1538,3 +1538,31 @@ func TestRunningScanGuidanceSuppliesExactContinuation(t *testing.T) {
 		t.Fatalf("invalid continuation: %+v", out.NextCall)
 	}
 }
+
+// A withheld cluster scope has no rows; the answer must still say why, so an
+// agent never reports it as workloads needing no change.
+func TestWorkloadScopeCarriesWithheldClusterScope(t *testing.T) {
+	scope := &prometheuspkg.ClusterScope{State: prometheuspkg.ViewScopeSeveralClusters, Note: "This metrics store holds several clusters"}
+	out := workloadScopeResponse(prometheuspkg.RightsizingResponse{
+		Kind: "Deployment", Namespace: "payments", Name: "api", Window: "7d", Source: "radar",
+		Rows: []prometheuspkg.RightsizingRow{}, Reason: prometheuspkg.ReasonClusterScopeWithheld, ClusterScope: scope,
+	}, getRightsizingInput{Scope: "workload", Kind: "Deployment", Namespace: "payments", Name: "api"})
+	if out.State != prometheuspkg.RightsizingScanUnavailable || out.Reason != prometheuspkg.ScanReasonClusterScopeWithheld {
+		t.Fatalf("state=%s reason=%q", out.State, out.Reason)
+	}
+	if out.ClusterScope != scope || !strings.Contains(out.Remediation, "clusterScope.note") || !strings.Contains(out.Remediation, "never as workloads needing no change") {
+		t.Errorf("clusterScope=%+v remediation=%q", out.ClusterScope, out.Remediation)
+	}
+	raw, err := json.Marshal(out)
+	if err != nil || !strings.Contains(string(raw), `"clusterScope":{"state":"several_clusters"`) {
+		t.Errorf("wire: %s err=%v", raw, err)
+	}
+
+	partial := workloadScopeResponse(prometheuspkg.RightsizingResponse{Rows: []prometheuspkg.RightsizingRow{}, Reason: prometheuspkg.ReasonRightsizingPartialData}, getRightsizingInput{})
+	if partial.Reason != "partial_data" || partial.Remediation == "" {
+		t.Errorf("partial data: reason=%q remediation=%q", partial.Reason, partial.Remediation)
+	}
+	if rightsizingRemediation("cluster", prometheuspkg.ScanReasonClusterScopeWithheld) == "" {
+		t.Error("withheld scan has no remediation")
+	}
+}

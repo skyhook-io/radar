@@ -94,7 +94,7 @@ func TestRightsizingScanQueriesPreserveWorkloadIdentity(t *testing.T) {
 		scanTestWorkload("Deployment", "team-a", "api.v1", "app"),
 		scanTestWorkload("StatefulSet", "team-b", "db", "db"),
 	}
-	queries := buildRightsizingScanQueries(batch)
+	queries := buildRightsizingScanQueries(batch, ViewScope{})
 	for key, query := range queries {
 		for _, want := range []string{"namespace,workload_kind,workload,container", "group_left(workload_kind,workload)"} {
 			if !strings.Contains(query, want) {
@@ -102,7 +102,7 @@ func TestRightsizingScanQueriesPreserveWorkloadIdentity(t *testing.T) {
 			}
 		}
 	}
-	owner := rightsizingScanOwnerVector(batch)
+	owner := rightsizingScanOwnerVector(batch, ViewScope{})
 	for _, want := range []string{`namespace="team-a"`, `owner_name=~"^(api\\.v1)$"`, `"workload_kind", "Deployment"`, `namespace="team-b"`, `"workload_kind", "StatefulSet"`} {
 		if !strings.Contains(owner, want) {
 			t.Errorf("owner vector missing %q: %s", want, owner)
@@ -183,7 +183,7 @@ func TestRightsizingScanBatchesAtFiftyWithConstantQueries(t *testing.T) {
 func TestRightsizingScanSafetyQueriesCoverHistoricalPodsAndReasons(t *testing.T) {
 	queries := buildRightsizingScanQueries([]scanWorkload{
 		scanTestWorkload("Deployment", "prod", "api", "app"),
-	})
+	}, ViewScope{})
 	for _, want := range []string{"increase(", "kube_pod_container_status_restarts_total", "[7d:5m]", "group_left(workload_kind,workload)"} {
 		if !strings.Contains(queries["restart_activity"], want) {
 			t.Errorf("restart query missing %q: %s", want, queries["restart_activity"])
@@ -1003,7 +1003,7 @@ func TestScanRangeWindowIsAlignedToTheSubqueryGrid(t *testing.T) {
 		fake := &fakeScanQuerier{}
 		now := time.Unix(1789513500, 0).UTC().Add(offset)
 		queryRightsizingScanBatch(context.Background(), fake,
-			[]scanWorkload{scanTestWorkload("Deployment", "shop", "checkout", "api")}, now)
+			[]scanWorkload{scanTestWorkload("Deployment", "shop", "checkout", "api")}, now, ViewScope{})
 
 		if len(fake.rangeStarts) == 0 {
 			t.Fatalf("offset %v: no range queries issued", offset)
@@ -1038,7 +1038,7 @@ func TestScansSecondsApartQueryTheSameWindow(t *testing.T) {
 	for _, offset := range []time.Duration{3 * time.Second, 91 * time.Second, 288 * time.Second} {
 		fake := &fakeScanQuerier{}
 		queryRightsizingScanBatch(context.Background(), fake,
-			[]scanWorkload{scanTestWorkload("Deployment", "shop", "checkout", "api")}, base.Add(offset))
+			[]scanWorkload{scanTestWorkload("Deployment", "shop", "checkout", "api")}, base.Add(offset), ViewScope{})
 		windows = append(windows, [2]time.Time{fake.rangeStarts[0], fake.rangeEnds[0]})
 	}
 	for i := 1; i < len(windows); i++ {

@@ -866,10 +866,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			helmHandlers.ObjectScope = s.helmObjectScope
 			helmHandlers.ResolveStorageNamespaces = s.resolveHelmStorageScope
 			helmHandlers.BindWrite = s.bindWrite
-			helmHandlers.AdmitWrite = func(w http.ResponseWriter, r *http.Request) (func() bool, bool) {
-				bound, ok := s.admitWrite(w, r)
-				return func() bool { return k8s.ServingConnectionID() == bound.ID }, ok
-			}
+			helmHandlers.AdmitWrite = s.admitWrite
 			helmHandlers.RegisterRoutes(r)
 
 			// Image inspection routes
@@ -885,6 +882,9 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/prometheus/rightsizing/scan/{scanId}", s.handleRightsizingScan)
 			r.Delete("/prometheus/rightsizing/scan/{scanId}", s.handleRightsizingScan)
 			prometheuspkg.RegisterRoutes(r)
+			r.Get("/metrics/datadog/agent", s.handleDatadogAgentPresence)
+			r.Get("/agent/metrics-cluster-identity", s.handleMetricsClusterIdentity)
+			r.Get("/agent/workload-metrics-scope/{kind}/{namespace}/{name}", s.handleWorkloadMetricsScope)
 
 			// OpenCost routes
 			r.Post("/opencost/application", s.handleOpenCostApplication)
@@ -1535,6 +1535,7 @@ func (s *Server) handleClusterInfo(w http.ResponseWriter, r *http.Request) {
 func advertisedFeatures() k8s.FeatureCapabilities {
 	return k8s.FeatureCapabilities{
 		ApplicationEvidence:         true,
+		DatadogAgentPresence:        true,
 		SealedSecretsController:     true,
 		ResourceReadCoverage:        true,
 		SearchCoverage:              true,
@@ -1582,6 +1583,13 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 }
 
 func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
+	// Every check below reads one connection, so a switch mid-request can't
+	// combine one cluster's grants with another's visibility.
+	conn := k8s.ConnectionFrom(r.Context())
+	if conn == nil {
+		conn = k8s.Current()
+		r = r.WithContext(k8s.WithConnection(r.Context(), conn))
+	}
 	var caps *k8s.Capabilities
 	var err error
 
@@ -1665,24 +1673,21 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	// caps.Resources (resources field omitted from JSON) is the documented
 	// "no probe data yet" signal; the frontend has separate connection
 	// state to distinguish loading from RBAC restrictions.
-	if result := k8s.GetCachedPermissionResult(); result != nil {
+	result := conn.CachedPermissionResult()
+	if result == nil && k8s.GetResourceCache() != nil {
+		// A probe superseded by a switch or rescope describes what it probed,
+		// not what is being rendered: leave resources unset instead.
+		if probed, current := conn.CheckResourcePermissions(r.Context()); current {
+			result = conn.CachedPermissionResult()
+			// Only the no-client response is intentionally served without caching.
+			if result == nil && (conn.Client() == nil || conn.Dynamic() == nil) {
+				result = probed
+			}
+		}
+	}
+	if result != nil {
 		caps.Resources = result.Perms
 		caps.Visibility = k8s.BuildVisibilitySummary(result, r.URL.Query().Get("namespace"))
-	} else if k8s.GetResourceCache() != nil {
-		result, isCurrent := k8s.CheckResourcePermissions(r.Context())
-		// Prefer what the cache holds; fall back to the probe's own result only
-		// when it describes the cluster still in effect. A probe superseded by a
-		// context switch describes the cluster it probed, not the one being
-		// rendered, and rendering it would report the previous cluster's
-		// permissions - leaving resources unset is the "no probe data yet"
-		// signal documented above.
-		if cached := k8s.GetCachedPermissionResult(); cached != nil {
-			result, isCurrent = cached, true
-		}
-		if result != nil && isCurrent {
-			caps.Resources = result.Perms
-			caps.Visibility = k8s.BuildVisibilitySummary(result, r.URL.Query().Get("namespace"))
-		}
 	}
 
 	caps.Karpenter = s.karpenterCapability(r)
@@ -1954,7 +1959,8 @@ func (s *Server) canReadUserDecision(ctx context.Context, user *auth.User, group
 	// Keyed by connection generation, not context name: a reconnect under the
 	// same name can reach a different cluster, and the review must run on the
 	// client its key names.
-	client, generation := k8s.GetClientWithGeneration()
+	conn := k8s.Current()
+	client, generation := conn.Client(), conn.ClientGeneration()
 	key := pkgauth.IdentityCacheKey(user.Username, user.Groups) + strings.Join([]string{strconv.FormatUint(generation, 10), verb, group, resource, namespace}, "\x00")
 	review := s.accessReviews.DoChan(key, func() (v any, err error) {
 		// The review runs on its own goroutine, where a panic would end the
@@ -2337,8 +2343,16 @@ func filterDynamicObservationNamespaces(observation k8score.DynamicResourceObser
 	return observation
 }
 
+func (s *Server) writeIfDiscoveryPending(w http.ResponseWriter) bool {
+	if !k8s.GetResourceCache().CustomResourcesPending() {
+		return false
+	}
+	s.writeErrorCode(w, http.StatusServiceUnavailable, string(readreason.KindSyncPending), "Kubernetes API discovery is still running")
+	return true
+}
+
 func (s *Server) handleAPIResources(w http.ResponseWriter, r *http.Request) {
-	if !s.requireConnected(w) {
+	if !s.requireConnected(w) || s.writeIfDiscoveryPending(w) {
 		return
 	}
 	discovery := k8s.GetResourceDiscovery()
@@ -2350,6 +2364,13 @@ func (s *Server) handleAPIResources(w http.ResponseWriter, r *http.Request) {
 	resources, err := discovery.GetAPIResources()
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// Every cluster serves built-in kinds, so an empty catalog after a failed
+	// refresh means discovery hasn't answered yet, not that nothing exists.
+	if len(resources) == 0 && discovery.LastRefreshFailed() {
+		discovery.RetryFailedRefresh()
+		s.writeErrorCode(w, http.StatusServiceUnavailable, string(readreason.KindSyncPending), "Kubernetes API discovery hasn't answered yet")
 		return
 	}
 
@@ -3625,9 +3646,10 @@ func metricsUnavailableDiagnosis(ctx context.Context, includeAPIServiceCondition
 		return ""
 	}
 
-	contextName := k8s.GetContextName()
+	conn := k8s.Current()
+	contextName := conn.ContextName()
 	metricsVersion := ""
-	if discovery := k8s.GetResourceDiscovery(); discovery != nil {
+	if discovery := conn.Discovery(); discovery != nil {
 		if gvr, ok := discovery.GetGVRWithGroup("nodes", k8score.MetricsAPIGroup); ok {
 			metricsVersion = gvr.Version
 		}
@@ -5837,8 +5859,8 @@ func (s *Server) getDynamicClientForRequest(r *http.Request) dynamic.Interface {
 }
 
 func (s *Server) getDynamicClientSnapshotForRequest(r *http.Request) (dynamic.Interface, string) {
-	if bound, ok := k8s.BoundConnectionFrom(r.Context()); ok {
-		return k8s.DynamicClientFromContext(r.Context()), bound.Context
+	if bound := k8s.ConnectionFrom(r.Context()); bound != nil {
+		return k8s.DynamicClientFromContext(r.Context()), k8s.TimelineClusterContext(bound.ContextName())
 	}
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		client, contextName, err := k8s.UserDynamicClientSnapshot(user)
@@ -5848,7 +5870,8 @@ func (s *Server) getDynamicClientSnapshotForRequest(r *http.Request) (dynamic.In
 		}
 		return client, contextName
 	}
-	return k8s.GetDynamicClientSnapshot()
+	conn := k8s.Current()
+	return conn.Dynamic(), k8s.TimelineClusterContext(conn.ContextName())
 }
 
 // getConfigForRequest returns an impersonated REST config when auth is enabled,
@@ -5860,11 +5883,11 @@ func (s *Server) getConfigForRequest(r *http.Request) *rest.Config {
 }
 
 func (s *Server) getConfigSnapshotForRequest(r *http.Request) (*rest.Config, string) {
-	if bound, ok := k8s.BoundConnectionFrom(r.Context()); ok {
-		if user := auth.UserFromContext(r.Context()); user != nil && bound.Config != nil {
-			return k8s.UserRESTConfig(bound.Config, user), bound.Context
+	if bound := k8s.ConnectionFrom(r.Context()); bound != nil {
+		if user := auth.UserFromContext(r.Context()); user != nil && bound.Config() != nil {
+			return k8s.UserRESTConfig(bound.Config(), user), k8s.TimelineClusterContext(bound.ContextName())
 		}
-		return bound.Config, bound.Context
+		return bound.ConfigCopy(), k8s.TimelineClusterContext(bound.ContextName())
 	}
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		cfg, contextName, err := k8s.UserConfigSnapshot(user)
@@ -5874,14 +5897,15 @@ func (s *Server) getConfigSnapshotForRequest(r *http.Request) (*rest.Config, str
 		}
 		return cfg, contextName
 	}
-	return k8s.GetConfigSnapshot()
+	conn := k8s.Current()
+	return conn.ConfigCopy(), k8s.TimelineClusterContext(conn.ContextName())
 }
 
 // getClientForRequest returns an impersonated typed client when auth is enabled,
 // or the shared client when auth is disabled. Returns nil if impersonation fails
 // (never falls back to the ServiceAccount client). Callers must handle nil.
 func (s *Server) getClientForRequest(r *http.Request) kubernetes.Interface {
-	if _, ok := k8s.BoundConnectionFrom(r.Context()); ok {
+	if k8s.ConnectionFrom(r.Context()) != nil {
 		return k8s.ClientFromContext(r.Context())
 	}
 	if user := auth.UserFromContext(r.Context()); user != nil {
@@ -5904,18 +5928,15 @@ func (s *Server) getClientForRequest(r *http.Request) kubernetes.Interface {
 
 func (s *Server) getClientSafetySnapshotForRequest(r *http.Request) (kubernetes.Interface, string) {
 	if user := auth.UserFromContext(r.Context()); user != nil {
-		client, binding, err := k8s.UserClientSafetySnapshot(user)
+		client, binding, err := k8s.Current().UserClientSafetySnapshot(user)
 		if err != nil {
 			log.Printf("[auth] Impersonation failed for %s: %v", k8s.SanitizeForLog(user.Username), err)
 			return nil, binding
 		}
 		return client, binding
 	}
-	client, binding := k8s.GetClientSafetySnapshot()
-	if client == nil {
-		return nil, binding
-	}
-	return client, binding
+	conn := k8s.Current()
+	return conn.ClientInterface(), conn.ContextBinding()
 }
 
 // getUserNamespaces returns namespace filtering for the current user.

@@ -9,14 +9,11 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/discovery"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 // ResourceDiscovery wraps the shared k8score implementation.
-// The singleton pattern (Init/Get/Reset) stays here because it depends on
-// the package-level GetDiscoveryClient() function.
 type ResourceDiscovery struct {
 	*k8score.ResourceDiscovery
 	// backgroundRefresh is held while ServedGVR's refresh runs, so callers
@@ -31,38 +28,6 @@ type ResourceDiscovery struct {
 // Re-export types so existing callers compile without changes.
 type APIResource = k8score.APIResource
 type DiscoveryStats = k8score.DiscoveryStats
-
-var (
-	resourceDiscovery *ResourceDiscovery
-	// The client the singleton was built against. The singleton is served only
-	// while this is still the active client: a context switch resets discovery
-	// BEFORE it swaps the client, so a build that starts and finishes inside
-	// that gap looks current by every test available at publish time — the
-	// staleness only becomes visible when the swap lands, which is why it is
-	// checked on every read instead.
-	resourceDiscoveryClient *discovery.DiscoveryClient
-	discoveryMu             sync.Mutex
-	// Bumped by every reset. Catches what the client binding cannot: a reset
-	// with no client swap (in-cluster recovery), where a build from before the
-	// reset carries the right client but pre-reset data.
-	discoveryEpoch uint64
-)
-
-// currentResourceDiscoveryLocked returns the singleton only while the client
-// it was built against is still the active one. discoveryMu must be held.
-func currentResourceDiscoveryLocked() *ResourceDiscovery {
-	if resourceDiscovery == nil {
-		return nil
-	}
-	return resourceDiscoveryForClientLocked(GetDiscoveryClient())
-}
-
-func resourceDiscoveryForClientLocked(client *discovery.DiscoveryClient) *ResourceDiscovery {
-	if resourceDiscoveryClient != client {
-		return nil
-	}
-	return resourceDiscovery
-}
 
 // isMoreStableVersion delegates to the shared implementation.
 // Needed by dynamic_cache.go (same package, calls it without qualifier).
@@ -80,99 +45,39 @@ func InitResourceDiscovery() error {
 }
 
 func initResourceDiscovery(ctx context.Context) error {
-	discoveryMu.Lock()
+	conn := Current()
 	if err := ctx.Err(); err != nil {
-		discoveryMu.Unlock()
 		return err
 	}
-	if currentResourceDiscoveryLocked() != nil {
-		discoveryMu.Unlock()
+	if conn.Discovery() != nil {
 		return nil
 	}
-	client := GetDiscoveryClient()
-	epoch := discoveryEpoch
-	discoveryMu.Unlock()
-
-	// Checked while the value is still a *discovery.DiscoveryClient: handing a
-	// nil one to NewResourceDiscovery's discovery.DiscoveryInterface parameter
-	// makes a non-nil interface holding a nil pointer, so its own nil guard does
-	// not fire and the first call on the client dereferences nil.
+	client := conn.DiscoveryClient()
 	if client == nil {
 		return fmt.Errorf("discovery client not initialized")
 	}
-
-	// Built without the lock: NewResourceDiscovery performs an API round-trip,
-	// and holding discoveryMu across it would block a concurrent reset.
 	core, err := k8score.NewResourceDiscovery(client)
 	if err != nil {
 		return err
 	}
-
-	// A discarded build is not an error: it means a newer context switch owns
-	// the singleton now, and that switch runs its own init.
-	publishResourceDiscovery(core, epoch, client)
+	conn.publishDiscovery(core)
 	return nil
 }
 
-// publishResourceDiscovery installs core as the singleton, recording the
-// client it was built against, unless the build is known stale: a reset bumped
-// the epoch since the snapshot, the client was already swapped, or a valid
-// singleton for the current client exists. It cannot catch a build that runs
-// entirely between a context switch's reset and its client swap — at that
-// moment the old client is still the active one and nothing distinguishes the
-// build from a legitimate one. That case is why the binding is recorded: the
-// moment the swap lands, currentResourceDiscoveryLocked stops serving the
-// singleton, and the next init replaces it.
-func publishResourceDiscovery(core *k8score.ResourceDiscovery, epoch uint64, client *discovery.DiscoveryClient) {
-	discoveryMu.Lock()
-	defer discoveryMu.Unlock()
-	if discoveryEpoch != epoch {
-		return
-	}
-	if GetDiscoveryClient() != client {
-		return
-	}
-	if currentResourceDiscoveryLocked() != nil {
-		return
-	}
-	resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: core}
-	resourceDiscoveryClient = client
+func (c *Connection) publishDiscovery(core *k8score.ResourceDiscovery) {
+	c.discovery.CompareAndSwap(nil, &ResourceDiscovery{ResourceDiscovery: core})
 }
 
-// GetResourceDiscovery returns the singleton discovery instance, or nil while
-// none exists for the currently active client.
-func GetResourceDiscovery() *ResourceDiscovery {
-	discoveryMu.Lock()
-	defer discoveryMu.Unlock()
-	return currentResourceDiscoveryLocked()
-}
+// GetResourceDiscovery returns the installed connection's discovery, or nil
+// until its first build finishes. Lock-free, so diagnostics can read it too.
+func GetResourceDiscovery() *ResourceDiscovery { return Current().Discovery() }
 
-// ResourceDiscoveryIfIdle is the diagnostics read. Kubeconfig file I/O can
-// hold clientMu while discovery initialization or publication holds discoveryMu.
-func ResourceDiscoveryIfIdle() (*ResourceDiscovery, bool) {
-	if !discoveryMu.TryLock() {
-		return nil, false
-	}
-	defer discoveryMu.Unlock()
-	if resourceDiscovery == nil {
-		return nil, true
-	}
-	if !clientMu.TryRLock() {
-		return nil, false
-	}
-	defer clientMu.RUnlock()
-	return resourceDiscoveryForClientLocked(discoveryClient), true
-}
-
-// ResetResourceDiscovery clears the resource discovery instance so it can be
-// reinitialized for a new cluster after context switch.
+// ResetResourceDiscovery gives the next build a fresh connection on the same
+// clients. A build still running for the old one lands there, unserved.
 func ResetResourceDiscovery() {
-	discoveryMu.Lock()
-	defer discoveryMu.Unlock()
-
-	resourceDiscovery = nil
-	resourceDiscoveryClient = nil
-	discoveryEpoch++
+	clientMu.Lock()
+	installedConn.Store(installedConn.Load().fresh())
+	clientMu.Unlock()
 }
 
 // Refresh delegates to the embedded implementation.
@@ -204,7 +109,22 @@ func (d *ResourceDiscovery) GetGVRWithGroup(kindOrName string, group string) (sc
 // deadline. Callers get the cached version until a refresh succeeds, so after
 // a CRD upgrade retires a version, actions can still use it until then.
 func ServedGVR(group, kind string) (schema.GroupVersionResource, bool) {
-	d := GetResourceDiscovery()
+	return Current().ServedGVR(group, kind)
+}
+
+// ServedGVRFor returns the served-version resolver for a request: its bound
+// connection's, so a bound write resolves on the cluster it was admitted to,
+// else the installed connection's.
+func ServedGVRFor(ctx context.Context) func(group, kind string) (schema.GroupVersionResource, bool) {
+	if c := ConnectionFrom(ctx); c != nil {
+		return c.ServedGVR
+	}
+	return ServedGVR
+}
+
+// ServedGVR is the package ServedGVR for this connection's discovery.
+func (c *Connection) ServedGVR(group, kind string) (schema.GroupVersionResource, bool) {
+	d := c.Discovery()
 	if d == nil || d.ResourceDiscovery == nil {
 		return schema.GroupVersionResource{}, false
 	}
@@ -246,6 +166,25 @@ func (d *ResourceDiscovery) LookupRefreshingOnMiss(lookup func(*ResourceDiscover
 		log.Printf("[discovery] Refresh after a lookup miss failed: %v", err)
 	}
 	return lookup(d)
+}
+
+// RetryFailedRefresh refreshes discovery in the background when its last
+// refresh returned nothing usable, at most once per
+// discoveryMissRefreshInterval, so a catalog that came back empty fills in
+// without waiting for the cache TTL.
+func (d *ResourceDiscovery) RetryFailedRefresh() {
+	if d == nil || d.ResourceDiscovery == nil || !d.LastRefreshFailed() {
+		return
+	}
+	if !d.backgroundRefresh.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer d.backgroundRefresh.Store(false)
+		d.LookupRefreshingOnMiss(func(*ResourceDiscovery) (schema.GroupVersionResource, bool) {
+			return schema.GroupVersionResource{}, false
+		})
+	}()
 }
 
 // SupportsWatchGVR checks if a GVR supports list and watch verbs.

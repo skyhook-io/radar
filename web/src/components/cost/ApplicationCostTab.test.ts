@@ -260,3 +260,19 @@ describe('getApplicationCostState', () => {
     expect(getApplicationCostState(current, undefined, {})).toBe('configuration_mismatch')
   })
 })
+
+describe('getApplicationCostState cluster scope', () => {
+  it.each(['cluster_scope', 'partial_data'] as const)('reports %s instead of no data', (reason) => {
+    const current: OpenCostApplicationCostResponse = {
+      available: false,
+      reason,
+      totals: {
+        hourlyCost: 0, cpuCost: 0, memoryCost: 0, replicas: 0,
+        cpuUsageAvailable: false, memoryUsageAvailable: false, cpuAllocationUse: 0, memoryAllocationUse: 0,
+      },
+      coverage: { total: 1, included: 0 },
+      clusterScope: { state: 'several_clusters', note: 'several' },
+    }
+    expect(getApplicationCostState(current, undefined, {})).toBe(reason)
+  })
+})

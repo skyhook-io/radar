@@ -87,12 +87,13 @@ func (s *Server) handleOpenCostApplication(w http.ResponseWriter, r *http.Reques
 	}
 
 	namespaceCosts := make(map[string]*pkgopencost.WorkloadCostResponse)
+	promCost := internalopencost.NewPromCost(client)
 	for _, namespace := range applicationInputNamespaces(inputs) {
-		namespaceCosts[namespace] = pkgopencost.ComputeWorkloadsFromProm(
-			r.Context(), client.Prom(), namespace, internalopencost.BuildPodOwnerLookup(namespace))
+		namespaceCosts[namespace] = promCost.Workloads(r.Context(), namespace, internalopencost.BuildPodOwnerLookup(namespace))
 	}
 
 	resp := pkgopencost.BuildApplicationCostResponse(inputs, unavailable, unsupported, namespaceCosts)
+	resp.ClusterScope = internalopencost.ApplicationClusterScope(namespaceCosts)
 	resp.Currency = s.resolvedOpenCostCurrency()
 	resp.Source = "prometheus"
 	s.writeJSON(w, resp)
@@ -157,7 +158,7 @@ func (s *Server) handleOpenCostApplicationTrend(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	resp := pkgopencost.ComputeApplicationCostTrendFromProm(r.Context(), client.Prom(), pkgopencost.ApplicationTrendOptions{
+	resp := internalopencost.NewPromCost(client).ApplicationTrend(r.Context(), pkgopencost.ApplicationTrendOptions{
 		Range:       req.Range,
 		Workloads:   refs,
 		Unavailable: unavailable,

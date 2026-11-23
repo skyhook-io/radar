@@ -73,14 +73,12 @@ func TestResourceCacheIsBuiltFromInformerClients(t *testing.T) {
 	})
 
 	clientMu.Lock()
-	k8sClient = requestClient
-	dynamicClient = requestDyn
-	activeClients = &sharedKubernetesClients{
+	installedConn.Store(installedConnectionLocked(nil, &sharedKubernetesClients{
 		clientset:         requestClient,
 		dynamic:           requestDyn,
 		informerClientset: informerClient,
 		informerDynamic:   informerDyn,
-	}
+	}))
 	clientMu.Unlock()
 
 	// Observers live for the process, so stop recording when the test ends.
@@ -174,9 +172,12 @@ func TestInformerClientsFallBackToRequestClients(t *testing.T) {
 	otherDyn := fakeDyn(t, func(schema.GroupVersionResource, string) bool { return true })
 
 	clientMu.Lock()
-	activeClients = stale
-	k8sClient = other
-	dynamicClient = otherDyn
+	installedConn.Store(installedConnectionLocked(nil, stale))
+	clientMu.Unlock()
+	SetTestClient(other)
+	clientMu.Lock()
+	installedConn.Store(copyTestConnectionLocked())
+	installedConn.Load().clients.dynamic, installedConn.Load().clients.informerDynamic = otherDyn, nil
 	clientMu.Unlock()
 
 	if got := GetInformerClient(); got != kubernetes.Interface(other) {
@@ -207,7 +208,7 @@ func TestDynamicCacheDirectReadsUseTheRequestClient(t *testing.T) {
 		t.Fatalf("newSharedKubernetesClients: %v", err)
 	}
 	clientMu.Lock()
-	k8sClient, dynamicClient, activeClients = clients.clientset, clients.dynamic, clients
+	installedConn.Store(installedConnectionLocked(nil, clients))
 	clientMu.Unlock()
 	ResetDynamicResourceCache()
 	if err := InitDynamicResourceCache(nil); err != nil {
@@ -254,11 +255,9 @@ func TestRequestPermissionCheckUsesTheRequestClient(t *testing.T) {
 		return false
 	})
 	clientMu.Lock()
-	k8sClient, dynamicClient = requestClient, requestDyn
-	activeClients = &sharedKubernetesClients{clientset: requestClient, dynamic: requestDyn, informerDynamic: informerDyn}
+	installedConn.Store(installedConnectionLocked(nil, &sharedKubernetesClients{clientset: requestClient, dynamic: requestDyn, informerDynamic: informerDyn}))
 	clientMu.Unlock()
 
-	InvalidateResourcePermissionsCache()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if result, _ := CheckResourcePermissions(ctx); result == nil || !result.Perms.Pods {

@@ -30,21 +30,41 @@ type PodOwnerLookup func(podName string) (WorkloadOwner, bool)
 // fallback "standalone" workload whose name is the pod name with its hash
 // suffixes stripped — best-effort grouping for orphan pods.
 func ComputeWorkloadsFromProm(ctx context.Context, client *prom.Client, namespace string, ownerLookup PodOwnerLookup) *WorkloadCostResponse {
+	return ComputeWorkloadsFromPromScoped(ctx, client, namespace, ownerLookup, StoreScope{})
+}
+
+// ComputeWorkloadsFromPromScoped is ComputeWorkloadsFromProm with its queries
+// kept to this cluster by scope.
+func ComputeWorkloadsFromPromScoped(ctx context.Context, client *prom.Client, namespace string, ownerLookup PodOwnerLookup, scope StoreScope) *WorkloadCostResponse {
 	if client == nil {
 		return &WorkloadCostResponse{Namespace: namespace, Available: false, Reason: ReasonNoPrometheus}
 	}
 	if namespace == "" {
 		return &WorkloadCostResponse{Available: false, Reason: ReasonQueryError}
 	}
+	q := &costQuerier{client: client}
+	resp := computeWorkloadsFromProm(ctx, q, namespace, ownerLookup, scope)
+	if scope.partial(q) {
+		resp = &WorkloadCostResponse{Namespace: namespace, Available: false, Reason: ReasonPartialData}
+	}
+	resp.ClusterScope = scope.ClusterScope
+	if resp.Available && scope.UsageWithheld {
+		resp.EfficiencyUnavailable = true
+		resp.UsageClusterScope = scope.UsageClusterScope
+	}
+	return resp
+}
 
+func computeWorkloadsFromProm(ctx context.Context, client *costQuerier, namespace string, ownerLookup PodOwnerLookup, scope StoreScope) *WorkloadCostResponse {
+	f := scope.Filter
 	safeNS := prom.SanitizeLabelValue(namespace)
 
 	cpuResult, err := client.Query(ctx,
-		`sum by (pod) (((sum_over_time(container_cpu_allocation{exported_namespace="`+safeNS+`"}[1h:1m]) / 60) or (sum_over_time(container_cpu_allocation{namespace="`+safeNS+`", exported_namespace=""}[1h:1m]) / 60)) * on(node) group_left() `+nodeCPUHourlyCostExpr+`)`)
+		`sum by (pod) (((sum_over_time(`+sel(f, MetricCPUAllocation, `exported_namespace="`+safeNS+`"`)+`[1h:1m]) / 60) or (sum_over_time(`+sel(f, MetricCPUAllocation, `namespace="`+safeNS+`", exported_namespace=""`)+`[1h:1m]) / 60)) * on(node) group_left() `+nodeCPUHourlyCostExpr(f)+`)`)
 	if err != nil {
 		log.Printf("[opencost] workloads CPU query failed for ns=%q, trying opencost_container_cpu_cost_total: %v", namespace, err)
 		cpuResult, err = client.Query(ctx,
-			`sum by (pod) (rate(opencost_container_cpu_cost_total{exported_namespace="`+safeNS+`"}[1h]) or rate(opencost_container_cpu_cost_total{namespace="`+safeNS+`", exported_namespace=""}[1h]))`)
+			`sum by (pod) (rate(`+sel(f, MetricCPUCostTotal, `exported_namespace="`+safeNS+`"`)+`[1h]) or rate(`+sel(f, MetricCPUCostTotal, `namespace="`+safeNS+`", exported_namespace=""`)+`[1h]))`)
 		if err != nil {
 			log.Printf("[opencost] workloads CPU fallback query also failed for ns=%q: %v", namespace, err)
 			return &WorkloadCostResponse{Namespace: namespace, Available: false, Reason: ReasonQueryError}
@@ -52,26 +72,30 @@ func ComputeWorkloadsFromProm(ctx context.Context, client *prom.Client, namespac
 	}
 
 	memResult, err := client.Query(ctx,
-		`sum by (pod) (((sum_over_time(container_memory_allocation_bytes{exported_namespace="`+safeNS+`"}[1h:1m]) / 60) or (sum_over_time(container_memory_allocation_bytes{namespace="`+safeNS+`", exported_namespace=""}[1h:1m]) / 60)) / 1073741824 * on(node) group_left() `+nodeRAMHourlyCostExpr+`)`)
+		`sum by (pod) (((sum_over_time(`+sel(f, MetricMemoryAllocation, `exported_namespace="`+safeNS+`"`)+`[1h:1m]) / 60) or (sum_over_time(`+sel(f, MetricMemoryAllocation, `namespace="`+safeNS+`", exported_namespace=""`)+`[1h:1m]) / 60)) / 1073741824 * on(node) group_left() `+nodeRAMHourlyCostExpr(f)+`)`)
 	if err != nil {
 		log.Printf("[opencost] workloads memory query failed for ns=%q, trying opencost_container_memory_cost_total: %v", namespace, err)
 		memResult, err = client.Query(ctx,
-			`sum by (pod) (rate(opencost_container_memory_cost_total{exported_namespace="`+safeNS+`"}[1h]) or rate(opencost_container_memory_cost_total{namespace="`+safeNS+`", exported_namespace=""}[1h]))`)
+			`sum by (pod) (rate(`+sel(f, MetricMemoryCostTotal, `exported_namespace="`+safeNS+`"`)+`[1h]) or rate(`+sel(f, MetricMemoryCostTotal, `namespace="`+safeNS+`", exported_namespace=""`)+`[1h]))`)
 		if err != nil {
 			log.Printf("[opencost] workloads memory fallback query also failed for ns=%q: %v", namespace, err)
 			return &WorkloadCostResponse{Namespace: namespace, Available: false, Reason: ReasonQueryError}
 		}
 	}
 
-	cpuUsageResult, cpuUsageErr := client.Query(ctx,
-		`sum by (pod) (label_replace(rate(container_cpu_usage_seconds_total{container!="", namespace="`+safeNS+`"}[1h]), "node", "$1", "instance", "(.+?)(?::\\d+)?$") * on(node) group_left() `+nodeCPUHourlyCostExpr+`)`)
-	if cpuUsageErr != nil {
-		log.Printf("[opencost] workloads CPU usage query failed for ns=%q (efficiency will be 0): %v", namespace, cpuUsageErr)
-	}
-	memUsageResult, memUsageErr := client.Query(ctx,
-		`sum by (pod) (label_replace(container_memory_working_set_bytes{container!="", namespace="`+safeNS+`"}, "node", "$1", "instance", "(.+?)(?::\\d+)?$") / 1073741824 * on(node) group_left() `+nodeRAMHourlyCostExpr+`)`)
-	if memUsageErr != nil {
-		log.Printf("[opencost] workloads memory usage query failed for ns=%q (efficiency will be 0): %v", namespace, memUsageErr)
+	var cpuUsageResult, memUsageResult *prom.QueryResult
+	cpuUsageErr, memUsageErr := errUsageWithheld, errUsageWithheld
+	if !scope.UsageWithheld {
+		cpuUsageResult, cpuUsageErr = client.Query(ctx,
+			`sum by (pod) (label_replace(rate(`+sel(f, MetricCPUUsage, `container!="", namespace="`+safeNS+`"`)+`[1h]), "node", "$1", "instance", "(.+?)(?::\\d+)?$") * on(node) group_left() `+nodeCPUHourlyCostExpr(f)+`)`)
+		if cpuUsageErr != nil {
+			log.Printf("[opencost] workloads CPU usage query failed for ns=%q (efficiency will be 0): %v", namespace, cpuUsageErr)
+		}
+		memUsageResult, memUsageErr = client.Query(ctx,
+			`sum by (pod) (label_replace(`+sel(f, MetricMemoryWorkingSet, `container!="", namespace="`+safeNS+`"`)+`, "node", "$1", "instance", "(.+?)(?::\\d+)?$") / 1073741824 * on(node) group_left() `+nodeRAMHourlyCostExpr(f)+`)`)
+		if memUsageErr != nil {
+			log.Printf("[opencost] workloads memory usage query failed for ns=%q (efficiency will be 0): %v", namespace, memUsageErr)
+		}
 	}
 
 	if len(cpuResult.Series) == 0 && len(memResult.Series) == 0 {

@@ -6,6 +6,7 @@ import { renderToString } from 'react-dom/server'
 // pass while the real predicate sent a denial down the silent-hide path, which
 // is the failure this component exists to prevent.
 import { ApiError } from '../../api/client'
+import { PARTIAL_DATA_NOTE } from '@skyhook-io/k8s-ui/components/charts'
 
 const forbidden = new ApiError('forbidden', 403)
 let metricsResult: { data?: unknown; error?: unknown } = {}
@@ -73,5 +74,46 @@ describe('HPACharts — access state', () => {
     connected = false
     metricsResult = { error: forbidden }
     expect(renderToString(<HPACharts data={hpa} />)).toBe('')
+  })
+})
+
+describe('HPACharts — cluster scope', () => {
+  it('says why the replica history is withheld instead of hiding', () => {
+    connected = true
+    metricsResult = {
+      data: {
+        current: { resultType: 'matrix', series: [] },
+        desired: { resultType: 'matrix', series: [] },
+        clusterScope: { state: 'label_missing', note: 'The HPA series lack this cluster\'s label.' },
+      },
+    }
+    const html = renderToString(<HPACharts data={hpa} />)
+    expect(html).toContain('Activity (last 1h)')
+    expect(html).toContain('data-cluster-scope="label_missing"')
+    expect(html).not.toContain('Replicas')
+  })
+
+  it('draws a scoped answer and notes a partial one', () => {
+    connected = true
+    metricsResult = { data: { current: series([2, 3]), desired: series([3, 3]), clusterScope: { state: 'scoped_verified', note: 'Matched.' } } }
+    let html = renderToString(<HPACharts data={hpa} />)
+    expect(html).toContain('Replicas')
+    expect(html).not.toContain('data-cluster-scope')
+    expect(html).not.toContain('Partial data')
+    metricsResult = { data: { current: series([2, 3]), desired: series([3, 3]), partial: true } }
+    html = renderToString(<HPACharts data={hpa} />)
+    expect(html).toContain('Partial data')
+  })
+
+  // A shard that didn't answer may hold all the history, so an empty partial
+  // answer says so instead of hiding like an HPA KSM never reported.
+  it('notes an empty partial answer instead of hiding', () => {
+    connected = true
+    metricsResult = { data: { current: { resultType: 'matrix', series: [] }, desired: { resultType: 'matrix', series: [] }, partial: true } }
+    const html = renderToString(<HPACharts data={hpa} />)
+    expect(html).toContain('Activity (last 1h)')
+    expect(html).toContain('No replica history in a partial answer')
+    expect(html).toContain(PARTIAL_DATA_NOTE)
+    expect(html).not.toContain('Replicas')
   })
 })

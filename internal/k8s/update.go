@@ -24,13 +24,14 @@ type WorkloadImageUpdate = k8score.WorkloadImageUpdate
 type SetWorkloadImagesResult = k8score.SetWorkloadImagesResult
 
 func getWorkloadManager() *k8score.WorkloadManager {
+	conn := Current()
 	var disc *k8score.ResourceDiscovery
-	if d := GetResourceDiscovery(); d != nil {
+	if d := conn.Discovery(); d != nil {
 		disc = d.ResourceDiscovery
 	} else {
 		log.Printf("[k8s] Warning: resource discovery not initialized; workload operations will fail until cluster is ready")
 	}
-	return k8score.NewWorkloadManager(GetDynamicClient(), disc)
+	return k8score.NewWorkloadManager(conn.Dynamic(), disc)
 }
 
 func getWorkloadManagerWithClient(ctx context.Context, client dynamic.Interface) *k8score.WorkloadManager {
@@ -38,7 +39,11 @@ func getWorkloadManagerWithClient(ctx context.Context, client dynamic.Interface)
 		return getWorkloadManager()
 	}
 	var disc *k8score.ResourceDiscovery
-	if d := discoveryFor(ctx); d != nil {
+	conn := ConnectionFrom(ctx)
+	if conn == nil {
+		conn = Current()
+	}
+	if d := conn.Discovery(); d != nil {
 		disc = d.ResourceDiscovery
 	} else {
 		log.Printf("[k8s] Warning: resource discovery not initialized; workload operations will fail until cluster is ready")

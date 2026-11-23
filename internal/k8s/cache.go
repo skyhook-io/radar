@@ -127,9 +127,10 @@ type ResourceChange = k8score.ResourceChange
 // status, pod workload lookup, timeline integration).
 type ResourceCache struct {
 	*k8score.ResourceCache
-	lastClusterInfo  atomic.Pointer[clusterInfoObservation]
-	permissionResult *PermissionCheckResult
-	secretsEnabled   bool // Whether secrets informer is running (requires RBAC)
+	lastClusterInfo     atomic.Pointer[clusterInfoObservation]
+	apiDiscoveryPending atomic.Bool
+	permissionResult    *PermissionCheckResult
+	secretsEnabled      bool // Whether secrets informer is running (requires RBAC)
 	// argoDrift tracks how long each manual-sync ArgoCD Application has been
 	// continuously OutOfSync. Lives here so its lifecycle is the cache's:
 	// recreated per cluster, dropped on a kubeconfig context switch.
@@ -394,7 +395,8 @@ func InitResourceCache(ctx context.Context) error {
 		return err
 	}
 	once.Do(func() {
-		client, informerClient := getCacheClients()
+		conn := Current()
+		client, informerClient := conn.Client(), conn.InformerClient()
 		if client == nil {
 			initErr = fmt.Errorf("cannot create resource cache: k8s client not initialized")
 			return
@@ -405,7 +407,7 @@ func InitResourceCache(ctx context.Context) error {
 		// per-kind namespace scoping (some kinds may be cluster-wide while
 		// others are namespace-scoped to the same fallback namespace).
 		rbacStart := time.Now()
-		probe, probeErr := probeCachePermissions(ctx, freshResourcePermissions)
+		probe, probeErr := probeCachePermissions(ctx, conn.freshResourcePermissions)
 		logTiming("    Resource access probes: %v", time.Since(rbacStart))
 
 		if probeErr != nil {
@@ -418,7 +420,7 @@ func InitResourceCache(ctx context.Context) error {
 			return
 		}
 		// Only the result the informers are built from becomes the
-		// process-wide one; a retry the probe budget cut short is never
+		// connection's cached result; a retry the probe budget cut short is never
 		// published.
 		publishResourcePermissions(probe)
 		permResult := probe.result
@@ -438,7 +440,7 @@ func InitResourceCache(ctx context.Context) error {
 		// cluster's name — permanently, under SQLite storage. Closing over the
 		// wiring-time value keeps late events truthfully attributed to the
 		// cluster they came from.
-		recordClusterContext := ActiveClusterContext()
+		recordClusterContext := TimelineClusterContext(conn.ContextName())
 		secretWriteTimes := newSecretDataManagerWriteIndex()
 		cronJobScheduleObservations := newCronJobScheduleObservationTracker()
 
@@ -635,6 +637,11 @@ func parseDebugSyncDelays(raw string) map[string]time.Duration {
 // GetResourceCache returns the singleton cache instance.
 func GetResourceCache() *ResourceCache {
 	return resourceCache.Load()
+}
+
+// CustomResourcesPending reports the typed-only window after the API discovery wait expires.
+func (c *ResourceCache) CustomResourcesPending() bool {
+	return c != nil && c.apiDiscoveryPending.Load() && GetDynamicResourceCache() == nil
 }
 
 // KindReadiness re-exports the k8score readiness vocabulary for handler use.
@@ -2469,10 +2476,10 @@ func probeCachePermissions(ctx context.Context, probe func(context.Context, bool
 
 // freshResourcePermissions is the startup probe. It publishes nothing: startup
 // publishes the result it picks. A retry bypasses the cached result, which may
-// hold the very rejection being retried, without bumping the generation, so
+// hold the very rejection being retried, without replacing it, so
 // the first result can still be published if the retry is discarded.
-func freshResourcePermissions(ctx context.Context, retry bool) permissionProbe {
-	return probeResourcePermissions(ctx, retry, GetInformerDynamicClient)
+func (c *Connection) freshResourcePermissions(ctx context.Context, retry bool) permissionProbe {
+	return c.probeResourcePermissions(ctx, retry, c.InformerDynamicClient())
 }
 
 // credentialsRejectedEverywhere reports a probe in which no kind

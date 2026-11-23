@@ -48,7 +48,7 @@ var (
 	bootNonce = rand.Text()[:10]
 
 	// Guarded by connectionStatusMu.
-	servingConnectionID  string
+	serving              *Connection
 	connectionAdmissions uint64
 	admissionsClosed     bool
 )
@@ -59,7 +59,28 @@ var (
 func ServingConnectionID() string {
 	connectionStatusMu.RLock()
 	defer connectionStatusMu.RUnlock()
-	return servingConnectionID
+	return servingIDLocked()
+}
+
+func servingIDLocked() string {
+	if serving == nil {
+		return ""
+	}
+	return serving.id
+}
+
+// admissionCandidate returns the installed connection, installing an empty
+// one if none exists yet. A connection admitted again after a retirement with
+// no rebuild in between is the same build, so it keeps its clients and caches
+// and only gets a new ID. Lock-free: connectionStatusMu is held, and installs
+// take clientMu.
+func admissionCandidate() *Connection {
+	for {
+		if c := installedConn.Load(); c != nil {
+			return c
+		}
+		installedConn.CompareAndSwap(nil, &Connection{})
+	}
 }
 
 // RetireServingConnection is the point of no return: called before any
@@ -67,11 +88,11 @@ func ServingConnectionID() string {
 // against a half-retired connection. A connected status becomes connecting.
 func RetireServingConnection() {
 	connectionStatusMu.Lock()
-	if servingConnectionID == "" {
+	if serving == nil {
 		connectionStatusMu.Unlock()
 		return
 	}
-	servingConnectionID = ""
+	serving = nil
 	status := connectionStatus
 	if status.State == StateConnected {
 		status.State = StateConnecting
@@ -139,15 +160,16 @@ func SetConnectionStatusIfCurrent(operation context.Context, status ConnectionSt
 		return false
 	}
 	status.DisconnectedAt = outageStart(connectionStatus, status, time.Now())
-	if status.State == StateConnected && servingConnectionID == "" {
+	if status.State == StateConnected && serving == nil {
 		if admissionsClosed {
 			connectionStatusMu.Unlock()
 			return false
 		}
 		connectionAdmissions++
-		servingConnectionID = bootNonce + "-" + strconv.FormatUint(connectionAdmissions, 10)
+		serving = admissionCandidate()
+		serving.id = bootNonce + "-" + strconv.FormatUint(connectionAdmissions, 10)
 	}
-	status.ConnectionID = servingConnectionID
+	status.ConnectionID = servingIDLocked()
 	if connectionStatus == status {
 		connectionStatusMu.Unlock()
 		return true
@@ -199,9 +221,7 @@ func MarkDisconnectedIfClusterUnreachable(message string) bool {
 		// the teardown AND disarm the pipeline (candidate intake requires
 		// StateConnected), leaving informers hammering the dead credential
 		// for the whole outage.
-		clientMu.RLock()
-		generation := activeClientGeneration
-		clientMu.RUnlock()
+		generation := Current().ClientGeneration()
 		reportRuntimeAuthFailure(generation, errors.New(message))
 		return false
 	}

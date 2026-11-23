@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -23,7 +24,7 @@ type DynamicResourceCache struct {
 }
 
 var (
-	dynamicResourceCache *DynamicResourceCache
+	dynamicResourceCache atomic.Pointer[DynamicResourceCache]
 	dynamicCacheOnce     = new(sync.Once)
 	dynamicCacheMu       sync.Mutex
 	// dynamicSyncStallAfter and dynamicObjectReadSyncWait override k8score's
@@ -37,7 +38,8 @@ var (
 func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 	var initErr error
 	dynamicCacheOnce.Do(func() {
-		directClient, client := getDynamicCacheClients()
+		conn := Current()
+		directClient, client := conn.Dynamic(), conn.InformerDynamicClient()
 		if client == nil {
 			initErr = fmt.Errorf("dynamic client not initialized")
 			return
@@ -49,7 +51,7 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 		var nsFallback string
 		var nsFallbacks []string
 		var nsFallbacksTruncated bool
-		if permResult := GetCachedPermissionResult(); permResult != nil {
+		if permResult := conn.cachedPermissionResult(); permResult != nil {
 			if permResult.NamespaceScoped && permResult.Namespace != "" {
 				nsFallback = permResult.Namespace
 			}
@@ -72,7 +74,7 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 			}
 		}
 
-		discovery := GetResourceDiscovery()
+		discovery := conn.Discovery()
 		var sharedDiscovery *k8score.ResourceDiscovery
 		if discovery != nil {
 			sharedDiscovery = discovery.ResourceDiscovery
@@ -80,7 +82,7 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 
 		// Wiring-time capture — same rationale as InitResourceCache: a late
 		// callback after a context switch must stamp its own cluster.
-		recordClusterContext := ActiveClusterContext()
+		recordClusterContext := TimelineClusterContext(conn.ContextName())
 
 		core, err := k8score.NewDynamicResourceCache(k8score.DynamicCacheConfig{
 			RequiredWatchKinds:          relationshipWatchKinds(),
@@ -132,7 +134,12 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 			return
 		}
 
-		dynamicResourceCache = &DynamicResourceCache{DynamicResourceCache: core}
+		crdCompleteMu.Lock()
+		for _, callback := range crdCompleteCallbacks {
+			core.OnCRDDiscoveryComplete(callback)
+		}
+		dynamicResourceCache.Store(&DynamicResourceCache{DynamicResourceCache: core})
+		crdCompleteMu.Unlock()
 	})
 	return initErr
 }
@@ -148,7 +155,7 @@ func extractUnstructured(obj any) interface{ GetName() string } {
 
 // GetDynamicResourceCache returns the singleton dynamic cache instance.
 func GetDynamicResourceCache() *DynamicResourceCache {
-	return dynamicResourceCache
+	return dynamicResourceCache.Load()
 }
 
 // ResetDynamicResourceCache stops and clears the dynamic resource cache.
@@ -156,18 +163,26 @@ func ResetDynamicResourceCache() {
 	dynamicCacheMu.Lock()
 	defer dynamicCacheMu.Unlock()
 
-	if dynamicResourceCache != nil {
-		dynamicResourceCache.Stop()
-		dynamicResourceCache = nil
+	if dc := dynamicResourceCache.Swap(nil); dc != nil {
+		dc.Stop()
 	}
 	dynamicCacheOnce = new(sync.Once)
 }
 
-// OnCRDDiscoveryComplete registers a callback to be called when CRD discovery completes.
-// This is a package-level function for backward compatibility.
+var (
+	crdCompleteMu        sync.Mutex
+	crdCompleteCallbacks []func()
+)
+
+// OnCRDDiscoveryComplete registers a callback for when CRD discovery completes,
+// on the current dynamic cache and on every one created later (after a switch,
+// or when API discovery finishes late).
 func OnCRDDiscoveryComplete(callback func()) {
-	if dynamicResourceCache != nil && dynamicResourceCache.DynamicResourceCache != nil {
-		dynamicResourceCache.DynamicResourceCache.OnCRDDiscoveryComplete(callback)
+	crdCompleteMu.Lock()
+	defer crdCompleteMu.Unlock()
+	crdCompleteCallbacks = append(crdCompleteCallbacks, callback)
+	if dc := GetDynamicResourceCache(); dc != nil && dc.DynamicResourceCache != nil {
+		dc.OnCRDDiscoveryComplete(callback)
 	}
 }
 
@@ -517,8 +532,9 @@ var supportedCRDFallbacks = []supportedCRDResource{
 }
 
 func RegisterSupportedCRDFallbacks() {
-	discovery := GetResourceDiscovery()
-	client := GetInformerDynamicClient()
+	conn := Current()
+	discovery := conn.Discovery()
+	client := conn.InformerDynamicClient()
 	if discovery == nil || client == nil {
 		return
 	}
@@ -527,7 +543,7 @@ func RegisterSupportedCRDFallbacks() {
 	}
 
 	var nsFallbacks []string
-	if permResult := GetCachedPermissionResult(); permResult != nil {
+	if permResult := conn.cachedPermissionResult(); permResult != nil {
 		nsFallbacks = permResult.ScopeCandidates
 		if len(nsFallbacks) == 0 && permResult.NamespaceScoped && permResult.Namespace != "" {
 			nsFallbacks = []string{permResult.Namespace}

@@ -564,7 +564,8 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"it handles currency, idle attribution, and the Kubecost vs OpenCost source split. " +
 			"Empty results include a bounded list of related active metric names when a metric family can be inferred. " +
 			"High-cardinality queries must be wrapped in topk(5, ...): oversized results return a " +
-			"summary with a suggested rewrite instead of data.",
+			"summary with a suggested rewrite instead of data. " +
+			"No cluster filter is added: in a multi-cluster store, filter by the cluster label.",
 		Annotations: readOnly,
 	}, logToolCall("query_prometheus", handleQueryPrometheus))
 
@@ -2697,10 +2698,11 @@ type mcpMetrics struct {
 }
 
 type mcpClusterInfo struct {
-	Name              string `json:"name"`                        // kubeconfig context, or "in-cluster"
-	KubeconfigCluster string `json:"kubeconfigCluster,omitempty"` // cluster entry the context points at; several contexts can share one
-	Platform          string `json:"platform"`
-	Version           string `json:"version"`
+	Name               string `json:"name"`                        // kubeconfig context, or "in-cluster"
+	KubeconfigCluster  string `json:"kubeconfigCluster,omitempty"` // cluster entry the context points at; several contexts can share one
+	Platform           string `json:"platform"`
+	Version            string `json:"version"`
+	CRDDiscoveryStatus string `json:"crdDiscoveryStatus,omitempty"`
 }
 
 type mcpNodeSummary = health.NodeFleetCounts
@@ -2875,10 +2877,11 @@ func mcpHelmDashboardPriority(r helm.HelmRelease) int {
 
 func mcpClusterInfoFromInfo(info *k8s.ClusterInfo) mcpClusterInfo {
 	return mcpClusterInfo{
-		Name:              info.DisplayName(),
-		KubeconfigCluster: info.KubeconfigCluster(),
-		Platform:          info.Platform,
-		Version:           info.KubernetesVersion,
+		Name:               info.DisplayName(),
+		KubeconfigCluster:  info.KubeconfigCluster(),
+		Platform:           info.Platform,
+		Version:            info.KubernetesVersion,
+		CRDDiscoveryStatus: info.CRDDiscoveryStatus,
 	}
 }
 

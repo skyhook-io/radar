@@ -14,8 +14,6 @@ import (
 // resource lists, and restores the previous one afterwards.
 func discoveryWith(t *testing.T, lists ...*metav1.APIResourceList) {
 	t.Helper()
-	prev := resourceDiscovery
-	t.Cleanup(func() { resourceDiscovery = prev })
 
 	fakeDisc := fakeclientset.NewSimpleClientset().Discovery().(*fakediscovery.FakeDiscovery)
 	fakeDisc.Resources = lists
@@ -23,7 +21,7 @@ func discoveryWith(t *testing.T, lists ...*metav1.APIResourceList) {
 	if err != nil {
 		t.Fatalf("NewResourceDiscovery: %v", err)
 	}
-	resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: core}
+	t.Cleanup(setTestDiscovery(&ResourceDiscovery{ResourceDiscovery: core}))
 }
 
 func kyvernoModernList() *metav1.APIResourceList {
@@ -70,9 +68,7 @@ func TestGetPolicyReportStatus_UndecidedWithoutKyvernoStaysSilent(t *testing.T) 
 // genuine absence, and only genuine absence is silent.
 func TestGetPolicyReportStatus_UndecidedWithoutDiscoveryIsNotSilent(t *testing.T) {
 	ResetPolicyReportIndex()
-	prev := resourceDiscovery
-	resourceDiscovery = nil
-	t.Cleanup(func() { resourceDiscovery = prev })
+	t.Cleanup(setTestDiscovery(nil))
 
 	status := GetPolicyReportStatus()
 	if status.ReasonCode != ReasonNoDiscovery {
