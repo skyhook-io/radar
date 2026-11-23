@@ -19,7 +19,7 @@ import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import type { OpenSubject } from './SubstrateAttentionList'
 import { SubstrateConnectNotice, SubstrateTierBanner } from './SubstrateConnect'
 import { SubstrateStateBar } from './SubstrateStateBar'
-import { attentionBannerVariant, memoryRebuildStep, templateYamlCommand, bytesText, coverageInPart, coverageReason, cpuText, definitiveFailure, withoutReasonCode, fidelityLabel, goldenReading, splitReading, templateFilterValue, tierReading } from './readings'
+import { agentText, attentionBannerVariant, kagentGoldenStep, kagentTemplateText, memoryRebuildStep, templateYamlCommand, bytesText, coverageInPart, coverageReason, cpuText, definitiveFailure, withoutReasonCode, fidelityLabel, goldenReading, splitReading, templateFilterValue, tierReading } from './readings'
 import { SUBSTRATE_PATH, SUBSTRATE_SCREENS, substrateActorsPath, substrateTemplatePath } from './routes'
 import { CommandChip, Name, SUBSTRATE_TERMS, SUBSTRATE_WIDE, SubstrateCoverageNotice, SubstrateHeader, SubstrateSourceLine, Term, Unread, When, WholeNames } from './shared'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
@@ -68,6 +68,7 @@ export function SubstrateTemplatesScreen({ workspace, status }: { workspace?: Su
         <>
           <Name name={t.name} />
           <Sub><WholeNames text={wide ? t.atespace : [t.atespace, resourcesText(t)].filter(Boolean).join(' · ')} /></Sub>
+          {kagentTemplateText(t.kagent) && <Sub><Tooltip content={kagentTemplateText(t.kagent)}><span>{t.kagent?.kind === 'agentSession' ? `kagent Agent ${agentText(t.kagent.agent)}` : 'kagent sandbox'}</span></Tooltip></Sub>}
         </>
       ),
     },
@@ -213,7 +214,9 @@ function TemplateSpec({ spec, unavailable, template }: { spec?: SubstrateTemplat
  * the one plan that also fixes this, so the banner says so instead of a
  * second step.
  */
-function GoldenFailedBanner({ error, row, planAbove }: { error?: string; row?: SubstrateAttention; planAbove?: boolean }) {
+function GoldenFailedBanner({ error, row, planAbove, template }: { error?: string; row?: SubstrateAttention; planAbove?: boolean; template: SubstrateTemplateRow }) {
+  // kagent owns an Agent's templates and rebuilds a failed golden snapshot itself: never "recreate it".
+  const agent = template.kagent?.kind === 'agentSession' ? template.kagent.agent : undefined
   const message = withoutReasonCode(error ?? '')
   const [lead] = row ? splitReading(row.reading) : []
   // The row's reading leads with Substrate's message when it names no cause; then the message is the lead.
@@ -229,7 +232,9 @@ function GoldenFailedBanner({ error, row, planAbove }: { error?: string; row?: S
       ) : (
         <div className="mt-1 text-xs text-theme-text-primary">
           <span className="font-medium">Next step: </span>
-          {row?.nextStep ?? 'Fix the cause in Substrate’s message, then recreate the template: templates can’t be edited, and each new one gets a golden snapshot build.'}
+          {row?.nextStep ?? (agent
+            ? kagentGoldenStep(agent, template.golden.cause === 'memoryLimit')
+            : 'Fix the cause in Substrate’s message, then recreate the template: templates can’t be edited, and each new one gets a golden snapshot build.')}
           {row?.command && <CommandChip command={row.command} />}
         </div>
       )}
@@ -237,7 +242,7 @@ function GoldenFailedBanner({ error, row, planAbove }: { error?: string; row?: S
         <FoldSection title="Details" summary="" attention={false}>
           <div className="break-words text-xs text-theme-text-secondary">
             {cause && <>Substrate’s message: <span className="font-medium text-theme-text-primary">{message}</span>. </>}
-            Substrate does not retry a failed build.
+            Substrate does not retry a failed build{agent ? '; kagent deletes the template and creates it again on a backoff' : ''}.
           </div>
         </FoldSection>
       </div>
@@ -298,6 +303,8 @@ export function SubstrateTemplatePage({ template, onOpenSubject }: { template: S
   // kagent recovers what it runs, so a group with any of its actors keeps the server's step and offers no command.
   const oneMemoryPlan = t.golden.state === 'failed' && t.golden.cause === 'memoryLimit' && !!crashes && crashes.count > 0 && crashes.cause === 'memoryLimit' && !crashes.kagent
   const crashStep = oneMemoryPlan ? memoryRebuildStep(crashes.count) : crashes?.nextStep
+  const kagentAttribution = t.kagent
+  const kagentAgent = kagentAttribution?.kind === 'agentSession' ? kagentAttribution.agent : undefined
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="px-5 pt-4 xl:px-7">
@@ -330,7 +337,7 @@ export function SubstrateTemplatePage({ template, onOpenSubject }: { template: S
             )}
           </AlertBanner>
         )}
-        {t.golden.state === 'failed' && <GoldenFailedBanner error={t.golden.error} row={goldenRow} planAbove={oneMemoryPlan} />}
+        {t.golden.state === 'failed' && <GoldenFailedBanner error={t.golden.error} row={goldenRow} planAbove={oneMemoryPlan} template={t} />}
         {/* At risk, nothing lost yet: the alert of its Needs attention row and its golden-snapshot chip. */}
         {pools.none && (
           <AlertBanner variant="alert" title="No pool can run it" message={`No pool’s labels match its worker selector, so no worker can run its actors${t.golden.state === 'building' ? ', and its golden snapshot can’t be built' : ''}.`} className="">
@@ -340,6 +347,21 @@ export function SubstrateTemplatePage({ template, onOpenSubject }: { template: S
         <section className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
           <SectionHeading>At a glance</SectionHeading>
           <FactGrid>
+            {kagentAttribution && kagentTemplateText(kagentAttribution) && (
+              <FactRow label="kagent">
+                {kagentAgent ? (
+                  <>
+                    Agent{' '}
+                    <button type="button" onClick={() => onOpenSubject({ kind: 'Agent', namespace: kagentAgent.namespace, name: kagentAgent.name })} className="font-mono text-accent-text hover:underline">
+                      {agentText(kagentAgent)}
+                    </button>
+                    <div className="text-xs text-theme-text-secondary">{kagentTemplateText(kagentAttribution)}. kagent creates one template per revision and owns it.</div>
+                  </>
+                ) : (
+                  <span>{kagentTemplateText(kagentAttribution)}</span>
+                )}
+              </FactRow>
+            )}
             <FactRow label={<Term term="golden">Golden snapshot</Term>}>
               <span className="inline-flex flex-wrap items-center gap-x-2">
                 <GoldenBadge template={t} />

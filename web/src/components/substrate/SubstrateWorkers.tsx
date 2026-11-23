@@ -16,7 +16,7 @@ import { ROW_HOVER, TABLE_HEAD, TABLE_WRAP, TBODY, TD, TH } from '../workspace/t
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import type { OpenSubject } from './SubstrateAttentionList'
 import { SubstrateConnectNotice, SubstrateTierBanner } from './SubstrateConnect'
-import { bytesText, coverageInPart, coverageReason, cpuText, poolReading, workerPodText } from './readings'
+import { bytesText, compactActorLabel, coverageInPart, coverageReason, cpuText, poolReading, workerPodText } from './readings'
 import { substrateActorsPath } from './routes'
 import { ActorStateBadge, Name, SUBSTRATE_WIDE, SubstrateHeader, SubstrateSourceLine, Term, Unread, WholeNames, WorkerStateChip } from './shared'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
@@ -204,8 +204,8 @@ function WorkerActors({ w, onOpenSubject }: { w: SubstrateWorkerRow; onOpenSubje
         {w.actors.map((a) => (
           <li key={`${a.atespace}/${a.name}`} className="flex min-w-0 items-center gap-2 text-xs">
             <span className="shrink-0 whitespace-nowrap"><ActorStateBadge state={a.state} impact={a.workerImpact} updateTime={a.updateTime} /></span>
-            <button type="button" onClick={() => onOpenSubject({ kind: 'Actor', atespace: a.atespace, name: a.name })} className="min-w-0 truncate font-mono text-accent-text hover:underline">{a.name}</button>
-            <span className="min-w-0 truncate text-theme-text-tertiary">{a.atespace}</span>
+            <button type="button" title={a.name} onClick={() => onOpenSubject({ kind: 'Actor', atespace: a.atespace, name: a.name })} className="min-w-0 truncate font-mono text-accent-text hover:underline">{compactActorLabel(a).name}</button>
+            <span className="min-w-0 truncate text-theme-text-tertiary">{[a.atespace, compactActorLabel(a).agent].filter(Boolean).join(' · ')}</span>
           </li>
         ))}
       </ul>

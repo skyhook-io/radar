@@ -97,6 +97,10 @@ type ActorRow struct {
 	WorkerImpact *WorkerImpact `json:"workerImpact,omitempty"`
 	CreateTime   time.Time     `json:"createTime,omitzero"`
 	UpdateTime   time.Time     `json:"updateTime,omitzero"`
+	// Kagent is a kagent session's attribution for the caller
+	// (KagentIndex.Actor), set per request; absent for other actors and on a
+	// cluster that doesn't serve kagent's API.
+	Kagent *KagentActor `json:"kagent,omitempty"`
 }
 
 // WorkerPodRef locates a worker by its Pod and pool.
@@ -596,6 +600,10 @@ type TemplateRow struct {
 	StorageLocation       string            `json:"storageLocation,omitempty"`
 	Containers            []string          `json:"containers,omitempty"`
 	UpdateTime            time.Time         `json:"updateTime,omitzero"`
+	// Kagent is set per request when the template is a kagent Agent
+	// revision's (kind agentSession, naming the Agent) or a kagent sandbox's
+	// (KagentIndex.KagentTemplate).
+	Kagent *KagentAttribution `json:"kagent,omitempty"`
 }
 
 // TemplateRows reads templates with their actors and matching pools.

@@ -202,6 +202,11 @@ type FeatureCapabilities struct {
 	// GET /api/substrate/{status,connection,workspace,actors,workers,templates,pools}
 	// and PUT /api/substrate/connection.
 	SubstrateWorkspace bool `json:"substrateWorkspace"`
+	// kagent Agent attribution on Substrate's actors, templates and workers,
+	// the agent and kagent filters of GET /api/substrate/actors, and GET
+	// /api/substrate/kagent/agents/{namespace}/{name}/sessions. An older
+	// Radar ignores the filters and lists every actor.
+	KagentAttribution bool `json:"kagentAttribution"`
 	// The workspace and its read/action surfaces, excluding protection setup.
 	CNPGWorkspace       bool `json:"cnpgWorkspace"`
 	CNPGProtectionSetup bool `json:"cnpgProtectionSetup"`

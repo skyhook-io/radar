@@ -33,6 +33,7 @@ import { SubstratePoolPage } from './SubstratePoolPage'
 import { SubstrateTemplatePage, SubstrateTemplatesScreen } from './SubstrateTemplates'
 import { SubstrateWorkersScreen } from './SubstrateWorkers'
 import { DEFAULT_INSTALLATION_ENDPOINT, KubectlTargetContext, SubstrateScreenGate, type KubectlTarget } from './shared'
+import { KAGENT_GROUP } from './readings'
 import { substrateDiscovered } from './useSubstrateSidebarWorkspace'
 
 /**
@@ -142,6 +143,9 @@ export function SubstrateView({ namespaces, selectedResource, onOpenResource, on
           return
         case 'Node':
           inspectResource(refToSelectedResource({ kind: 'Node', group: '', namespace: '', name: s.name ?? '' }))
+          return
+        case 'Agent':
+          inspectResource(refToSelectedResource({ kind: 'Agent', group: KAGENT_GROUP, namespace: s.namespace ?? '', name: s.name ?? '' }))
       }
     },
     [navigate, route.actor, openFull, setActorDrawer, inspectResource, connection.context],

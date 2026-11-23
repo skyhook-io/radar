@@ -1049,10 +1049,10 @@ func TestSubstrateKnownEmptyVersusUnknown(t *testing.T) {
 		}
 		return m
 	}
-	if got, ok := fields(substrateWorkerRowOf(model.Worker{Name: "empty"}, nil, true, nil))["actors"]; !ok || len(got.([]any)) != 0 {
+	if got, ok := fields(substrateWorkerRowOf(model.Worker{Name: "empty"}, nil, true, nil, nil))["actors"]; !ok || len(got.([]any)) != 0 {
 		t.Errorf("actors read and none assigned must encode as [], got %v (present %v)", got, ok)
 	}
-	if _, ok := fields(substrateWorkerRowOf(model.Worker{Name: "w"}, nil, false, nil))["actors"]; ok {
+	if _, ok := fields(substrateWorkerRowOf(model.Worker{Name: "w"}, nil, false, nil, nil))["actors"]; ok {
 		t.Error("actors not read must be absent")
 	}
 	if got, ok := fields(substratePoolResponse{Templates: []model.Ref{}})["templates"]; !ok || len(got.([]any)) != 0 {
@@ -1110,7 +1110,7 @@ func TestSubstrateEveryAPIRouteRejectsSharedRadar(t *testing.T) {
 				s.cloudConnectCfg.CloudTunnelConfigured = true
 			}
 			for _, h := range []http.HandlerFunc{s.handlePutSubstrateConnection, s.handleSubstrateActors, s.handleSubstrateActor,
-				s.handleSubstrateActorLogs, s.handleSubstrateWorkers, s.handleSubstrateTemplates, s.handleSubstrateTemplate, s.handleSubstratePool} {
+				s.handleSubstrateActorLogs, s.handleSubstrateWorkers, s.handleSubstrateTemplates, s.handleSubstrateTemplate, s.handleSubstratePool, s.handleSubstrateKagentAgentSessions} {
 				if rec := call(t, s, h, substrateCall{path: "/api/substrate/x"}, nil); rec.Code != http.StatusForbidden {
 					t.Errorf("API-tier route = %d %s", rec.Code, rec.Body)
 				}
@@ -1704,10 +1704,10 @@ func TestSubstrateWorkerHeldForAbsentWithoutUpdateTime(t *testing.T) {
 		_ = json.Unmarshal(b, &m)
 		return m
 	}
-	if _, ok := fields(substrateWorkerRowOf(model.Worker{Name: "w"}, nil, false, nil))["heldForSeconds"]; ok {
+	if _, ok := fields(substrateWorkerRowOf(model.Worker{Name: "w"}, nil, false, nil, nil))["heldForSeconds"]; ok {
 		t.Error("no update time: how long the state held is unknown, not 0")
 	}
-	if got := fields(substrateWorkerRowOf(model.Worker{Name: "w", UpdateTime: time.Now().Add(-time.Minute)}, nil, false, nil))["heldForSeconds"]; got == nil {
+	if got := fields(substrateWorkerRowOf(model.Worker{Name: "w", UpdateTime: time.Now().Add(-time.Minute)}, nil, false, nil, nil))["heldForSeconds"]; got == nil {
 		t.Error("with an update time, heldForSeconds is set")
 	}
 }

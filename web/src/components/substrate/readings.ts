@@ -1,5 +1,9 @@
 import { formatDuration, toneFillClass, type BadgeSeverity, type StatusTone } from '@skyhook-io/k8s-ui'
 import type {
+  KagentActor,
+  KagentAgentRef,
+  KagentAttribution,
+  KagentUnattributed,
   SubstrateAPITier,
   SubstrateActorState,
   SubstrateAttention,
@@ -13,6 +17,7 @@ import type {
   SubstrateTemplateRow,
   SubstratePoolRow,
   SubstrateK8sPool,
+  SubstratePoolsCoverage,
   SubstrateLacking,
   SubstrateWorkerImpact,
   SubstrateWorkerRow,
@@ -286,9 +291,131 @@ export const KAGENT_RECOVER_STEP = 'This actor is a kagent session. Recover it t
 /** The step for a standalone kagent sandbox's actor, which has no chat to recover (pkg/substrate kagentSandboxStep). */
 export const KAGENT_SANDBOX_STEP = 'This actor runs a kagent sandbox. kagent manages it: delete the sandbox through kagent (its SandboxService) and create a new one; don’t move or revert it with kubectl ate.'
 
-/** kagent's step for an actor it runs: a sandbox's, else a session's. */
-export function kagentRecoverStep(kagent: { sandbox?: boolean }): string {
-  return kagent.sandbox ? KAGENT_SANDBOX_STEP : KAGENT_RECOVER_STEP
+/**
+ * kagent's step for an actor it runs: a sandbox's, else a session's, naming the Agent when the session
+ * is attributed to one (pkg/substrate KagentStepForAgent).
+ */
+export function kagentRecoverStep(k?: { sandbox?: boolean } & Partial<KagentActor>): string {
+  if (k?.sandbox || k?.kind === 'sandbox') return KAGENT_SANDBOX_STEP
+  return k?.kind === 'agentSession' && k.agent
+    ? KAGENT_RECOVER_STEP.replace('This actor is a kagent session', `This actor is a session of kagent Agent ${agentText(k.agent)}`)
+    : KAGENT_RECOVER_STEP
+}
+
+/** What Radar can't see of a kagent session: its chat. */
+export const KAGENT_OUTCOME = 'Conversation outcome: not visible to Radar. kagent keeps chats in its own database, and a suspended actor can follow a failed model call.'
+
+/** The API group of kagent's Agents. */
+export const KAGENT_GROUP = 'api.kagent.dev'
+
+export function agentText(a: KagentAgentRef): string {
+  return `${a.namespace}/${a.name}`
+}
+
+/** The /actors `agent` parameter for an Agent. */
+export function agentFilterValue(a: KagentAgentRef): string {
+  return agentText(a)
+}
+
+/**
+ * A kagent session id short enough for a row. kagent's ids are UUIDv7, whose
+ * leading digits are a timestamp shared by sessions started together, so the
+ * short form is the random tail.
+ */
+export function shortSessionId(id: string): string {
+  const hex = id.replace(/-/g, '')
+  return hex.length > 8 ? `…${hex.slice(-8)}` : id
+}
+
+function agentList(agents: KagentAgentRef[] | undefined): string {
+  const names = (agents ?? []).map(agentText)
+  return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+}
+
+/**
+ * Why a kagent session is tied to no Agent, in a sentence; atespace is the actor's, which kagent makes
+ * its Agent's namespace.
+ */
+export function kagentUnattributedText(k: KagentUnattributed, atespace: string): string {
+  switch (k.reason) {
+    case 'earlierRevision':
+      return `Not tied to an Agent: its template is named for ${agentList(k.candidates) || 'an Agent'}, but for neither of its current revisions. It may be an earlier session of it, or of a deleted Agent with the same name.`
+    case 'agentNotReadable':
+      return `Not tied to an Agent: Radar can’t read kagent Agents in namespace ${atespace} for you.`
+    case 'noAgent':
+      return `Not tied to an Agent: no kagent Agent in namespace ${atespace} has a revision with this template.`
+    case 'ambiguous':
+      return `Not tied to an Agent: ${agentList(k.candidates)} each make a template with this name.`
+    case 'templateUnknown':
+      return 'Not tied to an Agent: kagent did not name its template.'
+    default:
+      return 'Not tied to an Agent.'
+  }
+}
+
+/** The failed golden snapshot step for a kagent Agent's template, which kagent owns and rebuilds (pkg/substrate KagentGoldenStep). */
+export function kagentGoldenStep(agent: KagentAgentRef, memory: boolean): string {
+  return memory
+    ? `Raise config.runtimeDefaults.memory in kagent’s Helm values; Agent ${agentText(agent)} then gets a new revision and template. Don’t recreate this one.`
+    : `Fix the cause on Agent ${agentText(agent)}: kagent owns this template and rebuilds it itself. The Agent’s Ready condition says when it retries.`
+}
+
+/** What a template is to kagent, in a few words; undefined for a template kagent doesn't own. */
+export function kagentTemplateText(k?: KagentAttribution): string | undefined {
+  if (k?.kind === 'agentSession') {
+    const which = k.earlierRevision
+      ? `an earlier revision${k.revision ? ` (${k.revision})` : ''}, before the one new sessions start on`
+      : k.newSessions ? 'the revision new sessions start on' : k.desired ? 'its desired revision, not yet the one new sessions start on' : 'a current revision'
+    return `kagent Agent ${agentText(k.agent)}’s template for ${which}`
+  }
+  return k?.kind === 'sandbox' ? 'A kagent sandbox’s template' : undefined
+}
+
+/**
+ * An actor as a compact list shows it: a kagent session by its short id, with its Agent's name (or that
+ * it is a sandbox) beside it; anything else by its name.
+ */
+export function compactActorLabel(a: { name: string; kagent?: KagentActor }): { name: string; agent?: string } {
+  if (!a.kagent) return { name: a.name }
+  const k = a.kagent
+  const agent = k.kind === 'agentSession' ? `Agent ${k.agent.name}` : k.kind === 'sandbox' ? 'kagent sandbox' : undefined
+  return { name: `session ${shortSessionId(k.sessionId)}`, agent }
+}
+
+/**
+ * Why Radar couldn't read the kagent Agents in a namespace, from the Agents' coverage: a few words for
+ * "Radar couldn't read kagent Agents in <ns> (…)".
+ */
+export function kagentUnreadWhy(cov: SubstratePoolsCoverage | undefined, namespace: string): string {
+  if (!cov) return 'not read'
+  if (cov.state === 'denied' || cov.deniedNamespaces?.includes(namespace)) return 'you can’t list them'
+  if (cov.state === 'syncing') return 'still syncing'
+  if (cov.state === 'uncached' || cov.uncachedNamespaces?.includes(namespace)) return 'Radar doesn’t collect them there'
+  if (cov.state === 'error') return 'the read failed'
+  return 'not read'
+}
+
+/** What a kagent-filtered list can't say where the Agents weren't read, in a sentence; undefined when they all were. */
+export function kagentUnreadText(unread: string[] | undefined, cov: SubstratePoolsCoverage | undefined): string | undefined {
+  if (!unread?.length) return undefined
+  const where = unread.map((ns) => `${ns} (${kagentUnreadWhy(cov, ns)})`).join(', ')
+  return `Radar couldn’t read kagent Agents in ${where}, so a session there could be any Agent’s: counts of an Agent’s sessions are lower bounds, and a session not tied to an Agent may belong to one.`
+}
+
+/** A short label for a table cell: the Agent, a sandbox, or why neither. */
+export function kagentCellText(k: KagentAttribution): string {
+  if (k.kind === 'agentSession') return agentText(k.agent)
+  if (k.kind === 'sandbox') return 'kagent sandbox'
+  switch (k.reason) {
+    case 'earlierRevision':
+      return 'earlier revision'
+    case 'agentNotReadable':
+      return 'Agent not readable'
+    case 'ambiguous':
+      return 'ambiguous'
+    default:
+      return 'no Agent'
+  }
 }
 
 /** `kubectl ate revert actor`, which returns a crashed actor to suspended at its newest stored snapshot. */
@@ -385,6 +512,7 @@ export function subjectLabel(s: SubstrateSubject, count?: number): string {
     case 'WorkerPool':
     case 'Pod':
     case 'Worker':
+    case 'Agent':
       return `${s.namespace ?? ''} / ${s.name ?? ''}`
     default:
       return s.name ?? ''
@@ -399,6 +527,7 @@ export const SUBJECT_KIND_LABEL: Record<SubstrateSubject['kind'], string> = {
   Node: 'Node',
   Pod: 'Pod',
   Actors: 'Actors',
+  Agent: 'Agent',
 }
 
 /** Coverage that is not a full read: counts over it are lower bounds, and its empty list proves nothing. */

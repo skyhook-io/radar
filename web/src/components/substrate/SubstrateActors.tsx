@@ -2,9 +2,13 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { useSearchParams } from 'react-router-dom'
 import { Input, SelectMenu, Tooltip, toneTextClass, type SelectMenuOption } from '@skyhook-io/k8s-ui'
+import { useRadarFeature } from '../../api/client'
 import {
   useSubstrateActors,
   useSubstrateTemplates,
+  type KagentActor,
+  type KagentAgentRef,
+  type KagentAttribution,
   type SubstrateAPITier,
   type SubstrateActorRow,
   type SubstrateActorState,
@@ -19,6 +23,12 @@ import { FilterChips, Notice, RefreshFailedNotice, ScreenBody, Segments, Section
 import {
   ACTOR_SEGMENTS,
   ACTOR_STATE_LABEL,
+  agentFilterValue,
+  agentText,
+  kagentCellText,
+  kagentUnreadText,
+  kagentUnattributedText,
+  shortSessionId,
   IN_PROGRESS_STATES,
   coverageInPart,
   coverageReason,
@@ -64,7 +74,67 @@ export function sourcesNote(sources: ('snapshot' | 'atespace' | 'actor')[]): str
 }
 
 /** The URL filters that narrow the Actors list to a subset; the state segment and sort are not among them. */
-const SCOPING_PARAMS = ['atespace', 'template', 'pool', 'q', 'worker', 'impact', 'node', 'nodeHas'] as const
+const SCOPING_PARAMS = ['atespace', 'template', 'pool', 'q', 'worker', 'impact', 'node', 'nodeHas', 'agent', 'kagent'] as const
+
+/** The kagent filter's choices: which kagent sessions to list. */
+const KAGENT_FILTER_LABEL: Record<KagentAttribution['kind'], string> = {
+  agentSession: 'Agent sessions',
+  sandbox: 'kagent sandboxes',
+  unattributed: 'Not tied to an Agent',
+}
+const KAGENT_OPTIONS: SelectMenuOption[] = [
+  { value: '', label: 'Any kagent link' },
+  ...(Object.keys(KAGENT_FILTER_LABEL) as KagentAttribution['kind'][]).map((k) => ({ value: k, label: KAGENT_FILTER_LABEL[k] })),
+]
+
+/**
+ * Why a kagent-filtered list isn't asked for: support is still being checked (capabilities loading), the
+ * check failed (support unknown with an upgrade note, as useRadarFeature reports a failed check), or this
+ * Radar is too old. failed: the capabilities read settled without an answer.
+ */
+export function kagentSupportText(support: 'supported' | 'unsupported' | 'unknown', failed: boolean): string {
+  if (support === 'unsupported') return 'Listing actors by kagent Agent needs a newer Radar in this cluster.'
+  return failed
+    ? 'Radar couldn’t check whether this Radar supports kagent filters, so it doesn’t apply them.'
+    : 'Checking whether this Radar supports kagent filters…'
+}
+
+/** The support check is over, so the filters stay unapplied and can only be cleared. */
+export function kagentSupportSettled(support: 'supported' | 'unsupported' | 'unknown', failed: boolean): boolean {
+  return support === 'unsupported' || (support === 'unknown' && failed)
+}
+
+/**
+ * A row's kagent Agent: a button that lists that Agent's sessions, or what the session is instead.
+ * Only exact attributions name an Agent; a hint stays in the hover. The Agent's namespace is the
+ * actor's atespace, shown under its name, so the cell names the Agent alone.
+ */
+function AgentCell({ row, onAgent }: { row: SubstrateActorRow; onAgent?: (agent: KagentAgentRef) => void }) {
+  const k: KagentActor | undefined = row.kagent
+  if (!k) return <span className="text-theme-text-tertiary">—</span>
+  const session = `kagent session ${shortSessionId(k.sessionId)}`
+  if (k.kind === 'agentSession') {
+    const agent = k.agent
+    // Wraps after a hyphen, never mid-word, as the template column does.
+    const label = <Name name={agent.name} className="text-[12px]" />
+    const hover = `${session} of Agent ${agentText(agent)}${k.earlierRevision ? `, on an earlier revision (${k.revision}) than the one new sessions start on` : ''}.${onAgent ? ' Click to list its sessions.' : ''}`
+    return (
+      <Tooltip content={hover} wrapperClassName="min-w-0 w-full">
+        <span className="block min-w-0">
+          {onAgent ? (
+            <button type="button" onClick={(e) => { e.stopPropagation(); onAgent(agent) }} className="text-left text-accent-text hover:underline">{label}</button>
+          ) : label}
+          {k.earlierRevision && <span className="block text-xs leading-4 text-theme-text-tertiary">earlier revision</span>}
+        </span>
+      </Tooltip>
+    )
+  }
+  return (
+    <Line title={k.kind === 'sandbox' ? `${session}: a kagent sandbox, not an Agent’s chat.` : `${session}. ${kagentUnattributedText(k, row.atespace)}`} className="text-xs text-theme-text-tertiary">
+      {kagentCellText(k)}
+    </Line>
+  )
+}
 
 /** An actor as the workspace tables' row identity. Actors are not Kubernetes objects; the drawer this opens is Substrate's own. */
 export const ACTOR_ROW_KIND = 'SubstrateActor'
@@ -101,6 +171,22 @@ function SnapshotCell({ row }: { row: SubstrateActorRow }) {
       </span>
     </Tooltip>
   )
+}
+
+/**
+ * An actor's name in a row. A kagent session's is session-<UUID>, which would wrap over several lines:
+ * it reads "session <random tail>" (shortSessionId), the whole name on hover. Search still matches the
+ * whole name.
+ */
+function ActorName({ row }: { row: SubstrateActorRow }) {
+  if (row.kagent) {
+    return (
+      <Tooltip content={row.name}>
+        <span className="whitespace-nowrap font-mono text-[12.5px]">session {shortSessionId(row.kagent.sessionId)}</span>
+      </Tooltip>
+    )
+  }
+  return <Name name={row.name} className="text-[12.5px]" />
 }
 
 /** The worker-impact filter a link can carry, as its chip reads. */
@@ -174,33 +260,38 @@ function WorkerCell({ row }: { row: SubstrateActorRow }) {
  * whole: the atespace rides beside the name rather than in a column of its
  * own. Narrow folds the atespace and template under the name.
  */
-function actorColumns(wide: boolean): TableColumn<SubstrateActorRow>[] {
+function actorColumns(wide: boolean, agent?: { onAgent?: (agent: KagentAgentRef) => void }): TableColumn<SubstrateActorRow>[] {
+  // With the Agent column, the others give it room.
+  const w = agent
+    ? { actor: wide ? '15%' : '24%', state: wide ? '23%' : '27%', template: '15%', agent: wide ? '13%' : '15%', worker: wide ? '14%' : '17%', snapshot: wide ? '12%' : '17%', changed: '8%' }
+    : { actor: wide ? '16%' : '27%', state: wide ? '26%' : '30%', template: '18%', agent: '0%', worker: wide ? '17%' : '21%', snapshot: wide ? '14%' : '22%', changed: '9%' }
   return [
     {
       header: 'Actor',
-      width: wide ? '16%' : '27%',
+      width: w.actor,
       cell: (r) => (
         wide ? (
           <span className="flex min-w-0 flex-wrap items-baseline gap-x-1">
-            <Name name={r.name} className="text-[12.5px]" />
+            <ActorName row={r} />
             <span className="text-[11.5px] text-theme-text-tertiary"><WholeNames text={r.atespace} /></span>
           </span>
         ) : (
           <>
-            <Name name={r.name} className="text-[12.5px]" />
+            <ActorName row={r} />
             <Sub><WholeNames text={`${r.atespace} · ${r.template.name}`} /></Sub>
           </>
         )
       ),
     },
-    { header: 'State', width: wide ? '26%' : '30%', cell: (r) => <StateCell row={r} /> },
-    ...(wide ? [{ header: 'Template', width: '18%', cell: (r: SubstrateActorRow) => <Line title={r.template.name} className="font-mono text-[12px]">{r.template.name}</Line> }] : []),
-    { header: 'Worker or last node', width: wide ? '17%' : '21%', cell: (r) => <WorkerCell row={r} /> },
-    { header: 'Newest snapshot', width: wide ? '14%' : '22%', cell: (r) => <SnapshotCell row={r} /> },
+    { header: 'State', width: w.state, cell: (r) => <StateCell row={r} /> },
+    ...(wide ? [{ header: 'Template', width: w.template, cell: (r: SubstrateActorRow) => <Line title={r.template.name} className="font-mono text-[12px]">{r.template.name}</Line> }] : []),
+    ...(agent ? [{ header: 'kagent Agent', width: w.agent, cell: (r: SubstrateActorRow) => <AgentCell row={r} onAgent={agent.onAgent} /> }] : []),
+    { header: 'Worker or last node', width: w.worker, cell: (r) => <WorkerCell row={r} /> },
+    { header: 'Newest snapshot', width: w.snapshot, cell: (r) => <SnapshotCell row={r} /> },
     ...(wide
       ? [{
           header: 'Changed',
-          width: '9%',
+          width: w.changed,
           cell: (r: SubstrateActorRow) =>
             r.updateTime ? (
               <span className="text-xs"><When iso={r.updateTime} hint="Substrate’s last change to the actor: the current state has held at least since" /></span>
@@ -273,6 +364,13 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
   const rawImpact = params.get('impact')
   const impact = rawImpact && rawImpact in IMPACT_FILTER_LABEL ? (rawImpact as keyof typeof IMPACT_FILTER_LABEL) : undefined
   const node = params.get('node') ?? ''
+  const agent = params.get('agent') ?? ''
+  const rawKagent = params.get('kagent')
+  const kagentKind = rawKagent && rawKagent in KAGENT_FILTER_LABEL ? (rawKagent as KagentAttribution['kind']) : undefined
+  // An older Radar ignores the agent and kagent filters and lists every actor, so they are sent only to one that serves them.
+  const kagentFeature = useRadarFeature('kagentAttribution')
+  const kagentFilters = kagentFeature.support === 'supported'
+  const kagentRequested = !!(agent || kagentKind)
   const sort = (params.get('sort') as ActorSort | null) ?? 'attention'
   const nodeHas: NodeHas = params.get('nodeHas') === 'localSnapshot' ? 'localSnapshot' : 'running'
   // One write per change: filters reset the page, and the drawer's ?actor= stays.
@@ -307,10 +405,12 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
     nodeHas: node ? nodeHas : undefined,
     state: states,
     q: q || undefined,
+    agent: kagentFilters ? agent || undefined : undefined,
+    kagent: kagentFilters ? kagentKind : undefined,
     sort,
     limit: ACTORS_PAGE_SIZE,
     offset: page * ACTORS_PAGE_SIZE,
-  }, !workspace || workspace.apiTier.state === 'connected')
+  }, (!workspace || workspace.apiTier.state === 'connected') && (!kagentRequested || kagentFilters))
   const connected = (query.data?.apiTier ?? workspace?.apiTier)?.state === 'connected'
   const templates = useSubstrateTemplates(connected)
 
@@ -323,7 +423,7 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
     setParams(p, { replace: true })
   }
   // Every filter but the state segment: the attention count covers all actors, so with any of these set it says so.
-  const filtered = !!(atespace || template || pool || q || worker || impact || node)
+  const filtered = !!(atespace || template || pool || q || worker || impact || node || kagentRequested)
   // Opens the summary's segment over every actor, the set its count is over. Needs attention first puts the stuck ones on top.
   const openAttention = (state: 'crashed' | 'inProgress') => {
     const p = new URLSearchParams(params)
@@ -360,6 +460,8 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
   // A filter from a link that the menus don't list still shows, and can be cleared.
   const extra = (options: SelectMenuOption[], value: string) => (value && !options.some((o) => o.value === value) ? [...options, { value, label: value }] : options)
 
+  // kagent's controls show where its sessions can be: a cluster serving kagent says so with kagentAgents.
+  const showKagent = !!query.data?.kagentAgents || !!query.data?.rows.some((r) => r.kagent)
   const code = substrateErrorCode(query.error)
   // A refused read says why in its code; that wins over the workspace's older tier.
   const tier: SubstrateAPITier | undefined = !query.data && code
@@ -371,6 +473,9 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
     ...(worker ? [{ label: `Worker: ${worker}`, onClear: () => update({ worker: '' }) }] : []),
     ...(impact ? [{ label: IMPACT_FILTER_LABEL[impact], onClear: () => update({ impact: '' }) }] : []),
     ...(node ? [{ label: `Node: ${node}`, onClear: () => update({ node: '', nodeHas: '' }) }] : []),
+    ...(agent ? [{ label: `kagent Agent: ${agent}`, onClear: () => update({ agent: '' }) }] : []),
+    // Also a way out of a link's filter on a Radar that can't apply it, where the menu is hidden.
+    ...(kagentKind ? [{ label: `kagent: ${KAGENT_FILTER_LABEL[kagentKind]}`, onClear: () => update({ kagent: '' }) }] : []),
     ...(linkedState && segment === 'inProgress' && linkedState !== 'inProgress' ? [{ label: `State: ${ACTOR_STATE_LABEL[linkedState as SubstrateActorState]}`, onClear: () => setSegment('inProgress') }] : []),
   ]
 
@@ -426,9 +531,23 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
             className="h-8 min-w-[12rem] rounded-md border border-theme-border bg-theme-elevated px-3 text-sm text-theme-text-primary placeholder:text-theme-text-tertiary focus:border-skyhook-500 focus:outline-none"
             spellCheck={false}
           />
+          {(showKagent || kagentRequested) && kagentFilters && (
+            <SelectMenu ariaLabel="kagent" value={kagentKind ?? ''} options={KAGENT_OPTIONS} onChange={(v) => update({ kagent: v })} className="min-w-[12rem]" />
+          )}
           <SelectMenu ariaLabel="Sort" value={sort} options={SORT_OPTIONS} onChange={(v) => update({ sort: v === 'attention' ? '' : v })} className="min-w-[11rem]" />
           <FilterChips chips={chips} />
         </div>}
+        {kagentRequested && !kagentFilters && (
+          <Notice>
+            {kagentSupportText(kagentFeature.support, !!kagentFeature.upgrade)}
+            {kagentSupportSettled(kagentFeature.support, !!kagentFeature.upgrade) && (
+              <>{' '}<button type="button" onClick={() => update({ agent: '', kagent: '' })} className="text-accent-text hover:underline">Clear kagent filters</button></>
+            )}
+          </Notice>
+        )}
+        {kagentUnreadText(query.data?.kagentUnread, query.data?.kagentAgents) && (
+          <p className="text-xs text-theme-text-secondary">{kagentUnreadText(query.data?.kagentUnread, query.data?.kagentAgents)}</p>
+        )}
         {notConnected && tier ? (
           <>
             <SubstrateTierBanner tier={tier} />
@@ -439,7 +558,17 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
         ) : (
           <>
             <RefreshFailedNotice queries={[query]} />
-            <ActorsTable sort={sort} data={query.data} loading={query.isLoading} placeholder={query.isPlaceholderData} page={page} onPage={setPage} onOpenActor={onOpenActor} openActor={openActor} />
+            <ActorsTable
+              sort={sort}
+              data={query.data}
+              loading={query.isLoading}
+              placeholder={query.isPlaceholderData}
+              page={page}
+              onPage={setPage}
+              onOpenActor={onOpenActor}
+              openActor={openActor}
+              onAgent={kagentFilters ? (a) => update({ agent: agentFilterValue(a), kagent: '' }) : undefined}
+            />
           </>
         )}
         <p className="text-xs text-theme-text-tertiary">
@@ -459,6 +588,7 @@ export function ActorsTable({
   onPage,
   onOpenActor,
   openActor,
+  onAgent,
 }: {
   sort?: ActorSort
   data?: SubstrateActorsResponse
@@ -469,6 +599,8 @@ export function ActorsTable({
   onPage: (page: number) => void
   onOpenActor: (ref: SubstrateRef) => void
   openActor: SubstrateRef | null
+  /** Lists an Agent's sessions; absent where the Radar can't filter by Agent. */
+  onAgent?: (agent: KagentAgentRef) => void
 }) {
   const wide = useMediaQuery(SUBSTRATE_WIDE)
   const rows = data?.rows ?? []
@@ -476,6 +608,8 @@ export function ActorsTable({
   const from = (data?.offset ?? page * ACTORS_PAGE_SIZE) + 1
   const to = (data?.offset ?? 0) + rows.length
   const cov = data?.coverage
+  // A kagent filter judged where the Agents weren't read: an Agent's count is a lower bound.
+  const agentsUnread = !!data?.kagentUnread?.length
   const empty = loading
     ? 'Loading actors…'
     : !data
@@ -484,12 +618,14 @@ export function ActorsTable({
         ? `No actors: ${coverageReason(cov, 'actors')}.`
         : coverageInPart(cov)
           ? `No actors match in what Radar could read (${coverageReason(cov, 'actors')}).`
-          : 'No actors match.'
+          : agentsUnread
+            ? `No actors match where Radar could read kagent’s Agents; it couldn’t read them in ${data!.kagentUnread!.join(', ')}.`
+            : 'No actors match.'
   const pages = total !== undefined ? Math.ceil(total / ACTORS_PAGE_SIZE) : undefined
   return (
     <div aria-busy={placeholder || undefined} className={placeholder ? 'opacity-60' : undefined}>
       <SectionTable
-        columns={actorColumns(wide)}
+        columns={actorColumns(wide, data?.kagentAgents || rows.some((r) => r.kagent) ? { onAgent } : undefined)}
         rows={rows}
         rowKey={(r) => `${r.atespace}/${r.name}`}
         rowResource={(r) => actorRowResource(r)}
@@ -503,7 +639,7 @@ export function ActorsTable({
               <span>
                 {placeholder
                   ? `Loading page ${page + 1}… showing the page before until it arrives`
-                  : <>{from.toLocaleString('en-US')}–{to.toLocaleString('en-US')} of {coverageInPart(cov) ? 'at least ' : ''}{total.toLocaleString('en-US')} · {SORT_LABEL[sort]}</>}
+                  : <>{from.toLocaleString('en-US')}–{to.toLocaleString('en-US')} of {coverageInPart(cov) || agentsUnread ? 'at least ' : ''}{total.toLocaleString('en-US')} · {SORT_LABEL[sort]}</>}
               </span>
               {pages !== undefined && pages > 1 && (
                 <span className="flex items-center gap-1.5">

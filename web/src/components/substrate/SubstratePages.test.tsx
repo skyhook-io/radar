@@ -366,3 +366,24 @@ describe('An in-cluster Radar or Radar Hub whose operator turned the API off', (
     expect(html).toContain('substrate.api.enabled')
   })
 })
+
+describe('a kagent Agent’s template', () => {
+  const words = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
+  it('names its Agent and never says to recreate a template kagent owns and rebuilds', () => {
+    const t = template('k8s-helper-aa5e9426eb2e')
+    ;(t.template as any).atespace = 'kagent'
+    ;(t.template as any).golden = { state: 'failed', error: 'GoldenActorCrashed: exit 1' }
+    ;(t.template as any).kagent = { kind: 'agentSession', agent: { namespace: 'kagent', name: 'k8s-helper' }, newSessions: true, desired: true }
+    state.template = ok(t)
+    state.workspace = { ...workspace(), needsAttention: [] }
+    try {
+      const w = words(render(<SubstrateTemplatePage template={{ atespace: 'kagent', name: 'k8s-helper-aa5e9426eb2e' }} onOpenSubject={() => {}} />, '/substrate/templates/kagent/k8s-helper-aa5e9426eb2e?ctx=cluster-B'))
+      expect(w).toContain('kagent/k8s-helper')
+      expect(w).toContain('template for the revision new sessions start on')
+      expect(w).toContain('Fix the cause on Agent kagent/k8s-helper: kagent owns this template and rebuilds it itself.')
+      expect(w).not.toContain('recreate the template')
+    } finally {
+      state.workspace = undefined
+    }
+  })
+})

@@ -5,6 +5,7 @@ import type { ResourceRef } from '@skyhook-io/k8s-ui'
 import type { ResourceWithRelationships } from '@skyhook-io/k8s-ui/types/core'
 import { isForbiddenError, isNotFoundError, resourceQueryOptions, useResource } from '../../api/client'
 import { KAGENT_GROUP } from './routes'
+import { KagentAgentSessions } from './KagentAgentSessions'
 
 /** How a read of one referenced object came out, as the drawer shows it. */
 export function toRelatedRead(query: { data?: unknown; error: unknown; isLoading: boolean }, requested: boolean): KagentRelatedRead | undefined {
@@ -78,6 +79,7 @@ export function KagentAgentRenderer({ data, onNavigate }: { data: any; onNavigat
         mcpServers,
         modelConfigs,
       }}
+      sessions={namespace && data?.metadata?.name ? <KagentAgentSessions agent={{ namespace, name: data.metadata.name }} /> : undefined}
     />
   )
 }

@@ -18,10 +18,12 @@ import {
   servingEvidence,
   splitReading,
   tierReading,
+  shortSessionId,
 } from './readings'
 import { substrateAttentionCount, substrateScreenCounts } from './attention'
 import { decodeActorParam, encodeActorParam, parseSubstrateRoute, substrateActorPath, substrateActorsPath } from './routes'
 import { segmentStates } from './SubstrateActors'
+import { kagentTemplateText } from './readings'
 import { counts, notConnectedWorkspace, poolShortRow, sharedTier, workspace } from './substrate.fixtures'
 
 describe('actor states', () => {
@@ -450,5 +452,23 @@ describe('a template’s one memory-limit plan', () => {
     }
     expect(memoryRebuildStep(1)).toContain('the crashed actor to it, then revert it.')
     expect(memoryRebuildStep(4)).toContain('the crashed actors to it, then revert them.')
+  })
+})
+
+describe('shortSessionId', () => {
+  it('keeps the random tail, since UUIDv7 sessions started together share their leading digits', () => {
+    const a = shortSessionId('01a20561-c838-7e78-8774-cc8f79f013a8')
+    const b = shortSessionId('01a20561-16ba-7b0d-b4fd-5d664161cb1b')
+    expect(a).toBe('…79f013a8')
+    expect(a).not.toBe(b)
+  })
+})
+
+describe('kagent templates', () => {
+  const agent = { namespace: 'kagent', name: 'k8s-helper' }
+  it('calls an earlier revision’s template earlier, never current', () => {
+    const t = kagentTemplateText({ kind: 'agentSession', agent, earlierRevision: true, revision: 'aa5e9426eb2e' })
+    expect(t).toBe('kagent Agent kagent/k8s-helper’s template for an earlier revision (aa5e9426eb2e), before the one new sessions start on')
+    expect(kagentTemplateText({ kind: 'agentSession', agent, revision: 'aa5e9426eb2e', newSessions: true })).toContain('the revision new sessions start on')
   })
 })

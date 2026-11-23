@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
-import type { SubstrateActorLogs, SubstrateActors, SubstrateActorsQuery } from '../../api/substrateWorkspace'
+import type { KagentAgentAttribution, SubstrateActorLogs, SubstrateActors, SubstrateActorsQuery } from '../../api/substrateWorkspace'
 import { ApiError } from '../../api/client'
 import { ActorsTable, SubstrateActorsScreen, stateCellReading } from './SubstrateActors'
 import { SubstrateActorOverview } from './SubstrateActorOverview'
@@ -12,16 +12,21 @@ const state = vi.hoisted(() => ({
   actorsError: null as unknown,
   lastQuery: undefined as SubstrateActorsQuery | undefined,
   logs: undefined as SubstrateActorLogs | undefined,
+  kagentSupport: 'supported' as 'supported' | 'unsupported' | 'unknown',
+  kagentUpgrade: null as null | { feature: string },
+  queryEnabled: true,
 }))
 
 vi.mock('../../api/client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/client')>()),
   usePrometheusStatus: () => ({ data: { connected: false } }),
+  useRadarFeature: () => ({ support: state.kagentSupport, upgrade: state.kagentUpgrade, gatedKey: [], guard: <T,>(r: () => Promise<T>) => r() }),
 }))
 vi.mock('../../api/substrateWorkspace', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/substrateWorkspace')>()),
-  useSubstrateActors: (q: SubstrateActorsQuery) => {
+  useSubstrateActors: (q: SubstrateActorsQuery, enabled = true) => {
     state.lastQuery = q
+    state.queryEnabled = enabled
     return { data: state.actors, error: state.actorsError, isLoading: false }
   },
   useSubstrateTemplates: () => ({ data: undefined }),
@@ -777,5 +782,151 @@ describe('Needs attention rows', () => {
     expect(html).toContain('Actors on it:')
     expect(html).toContain('>one<')
     expect(html).toContain('4 more →')
+  })
+})
+
+const helper = { namespace: 'kagent', name: 'k8s-helper' }
+const helperSession = (overrides: Partial<KagentAgentAttribution> = {}) =>
+  actorRow({ atespace: 'kagent', name: 'session-01a1faa2-b3e3-7dd3-ae2d-3114122d4291', template: { atespace: 'kagent', name: 'k8s-helper-aa5e9426eb2e' }, state: 'suspended', reason: undefined,
+    kagent: { sessionId: '01a1faa2-b3e3-7dd3-ae2d-3114122d4291', kind: 'agentSession', agent: helper, revision: 'aa5e9426eb2ead1c0f65f5c97cf535a9f41038ecd7f8f2b9a7ecc6d925987f40', newSessions: true, desired: true, ...overrides } })
+
+describe('kagent sessions in the Actors list', () => {
+  it('shows the Agent column only where kagent is served, naming exact Agents and why the others are none', () => {
+    state.kagentSupport = 'supported'
+    state.actors = actors()
+    expect(plain(screen())).not.toContain('kagent Agent')
+    state.actors = actors({ kagentAgents: { state: 'full' }, rows: [
+      helperSession(),
+      actorRow({ atespace: 'kagent', name: 'session-9b2d6c1e-4f3a-4e8b-9c7d-1a2b3c4d5e6f', kagent: { sessionId: '9b2d6c1e-4f3a-4e8b-9c7d-1a2b3c4d5e6f', kind: 'sandbox' } }),
+      actorRow({ atespace: 'kagent', name: 'session-2c4e6a8b-0d1f-4a3b-8c5d-7e9f0a1b2c3d', kagent: { sessionId: '2c4e6a8b-0d1f-4a3b-8c5d-7e9f0a1b2c3d', kind: 'unattributed', reason: 'earlierRevision', candidates: [helper] } }),
+      actorRow({ name: 'lit-0201' }),
+    ] })
+    const raw = screen()
+    const html = plain(raw)
+    expect(html).toContain('kagent Agent')
+    // The Agent's namespace is the atespace under the actor's name, so the cell names the Agent alone.
+    expect(raw).toMatch(/>helper<\/span>/)
+    expect(html).not.toContain('kagent/k8s-helper')
+    expect(html).toContain('kagent sandbox')
+    expect(html).toContain('earlier revision')
+    // A session's actor reads as its short id, not session-<uuid> over four lines.
+    expect(html).toContain('session …122d4291')
+    expect(html).not.toContain('session-01a1faa2-b3e3')
+    // A hint names the Agent only in the hover, never in the cell.
+    state.actors = actors({ kagentAgents: { state: 'full' }, rows: [
+      actorRow({ atespace: 'kagent', name: 'session-2c4e6a8b-0d1f-4a3b-8c5d-7e9f0a1b2c3d', template: { atespace: 'kagent', name: 'k8s-helper-0123456789ab' }, kagent: { sessionId: '2c4e6a8b-0d1f-4a3b-8c5d-7e9f0a1b2c3d', kind: 'unattributed', reason: 'earlierRevision', candidates: [helper] } }),
+    ] })
+    expect(screen()).not.toMatch(/>helper<\/span>/)
+
+    // Proven earlier revisions name the Agent, with a note.
+    state.actors = actors({ kagentAgents: { state: 'full' }, rows: [helperSession({ earlierRevision: true, newSessions: false, desired: false, revision: '0123456789ab' })] })
+    const earlier = screen()
+    expect(earlier).toMatch(/>helper<\/span>/)
+    expect(plain(earlier)).toContain('earlier revision')
+  })
+
+  it('sends the agent and kagent filters only to a Radar that serves them', () => {
+    state.actors = actors({ kagentAgents: { state: 'full' }, rows: [helperSession()] })
+    state.kagentSupport = 'supported'
+    expect(plain(screen())).toContain('Any kagent link')
+    screen('/substrate/actors?agent=kagent%2Fk8s-helper&kagent=unattributed')
+    expect(state.lastQuery).toMatchObject({ agent: 'kagent/k8s-helper', kagent: 'unattributed' })
+    expect(state.queryEnabled).toBe(true)
+
+    // An older Radar would ignore them and list every actor under the filter's name: nothing is asked.
+    state.kagentSupport = 'unsupported'
+    const html = plain(screen('/substrate/actors?agent=kagent%2Fk8s-helper'))
+    expect(state.lastQuery?.agent).toBeUndefined()
+    expect(state.queryEnabled).toBe(false)
+    expect(html).toContain('needs a newer Radar')
+    state.kagentSupport = 'supported'
+  })
+
+  it('names the Agent in the filter chip', () => {
+    state.actors = actors({ kagentAgents: { state: 'full' }, rows: [helperSession()] })
+    expect(plain(screen('/substrate/actors?agent=kagent%2Fk8s-helper'))).toContain('kagent Agent: kagent/k8s-helper')
+  })
+})
+
+describe('kagent session on the actor page', () => {
+  const session = '01a1faa2-b3e3-7dd3-ae2d-3114122d4291'
+  const page = (kagent?: NonNullable<ReturnType<typeof actorRow>['kagent']>) => {
+    const d = actorDetail()
+    const detail = { ...d, actor: { ...d.actor, atespace: 'kagent', name: `session-${session}`, kagent: { sessionId: session } }, row: { ...d.row, kagent }, attention: [] }
+    return plain(text(renderToStaticMarkup(<MemoryRouter><SubstrateActorOverview detail={detail} onOpenSubject={() => {}} /></MemoryRouter>)))
+  }
+
+  it('names the session and its Agent, says the chat isn’t visible, and names the Agent in the recovery step', () => {
+    const html = page({ sessionId: session, kind: 'agentSession', agent: helper, revision: 'aa5e9426eb2e', newSessions: true, desired: true })
+    expect(html).toContain('session …122d4291')
+    expect(html).toContain('kagent/k8s-helper')
+    expect(html).toContain('Conversation outcome: not visible to Radar')
+    expect(html).toContain('This actor is a session of kagent Agent kagent/k8s-helper. Recover it through kagent (its RevertSession API')
+  })
+
+  it('says a session on a proven earlier revision is the Agent’s, on an older revision', () => {
+    const html = page({ sessionId: session, kind: 'agentSession', agent: helper, earlierRevision: true, revision: 'aa5e9426eb2e' })
+    expect(html).toContain('kagent/k8s-helper')
+    expect(html).toContain('on an earlier revision (aa5e9426eb2e) than the one new sessions start on')
+  })
+
+  it('says in words why a session is tied to no Agent', () => {
+    expect(page({ sessionId: session, kind: 'unattributed', reason: 'agentNotReadable' })).toContain('Radar can’t read kagent Agents in namespace kagent for you')
+    expect(page({ sessionId: session, kind: 'unattributed', reason: 'earlierRevision', candidates: [helper] })).toContain('named for kagent/k8s-helper, but for neither of its current revisions')
+    // Without attribution (an older Radar), the session still shows, with kagent's step.
+    const older = page(undefined)
+    expect(older).toContain('session …122d4291')
+    expect(older).toContain('This actor is a kagent session.')
+  })
+})
+
+describe('kagent filters where the Agents weren’t read', () => {
+  it('says the count is a lower bound and why, rather than that nothing matches', () => {
+    state.kagentSupport = 'supported'
+    for (const [agents, why] of [[{ state: 'denied' as const }, 'you can’t list them'], [{ state: 'syncing' as const }, 'still syncing']] as const) {
+      state.actors = actors({ coverage: { state: 'full', count: 4 }, total: 0, counts: undefined, rows: [], kagentAgents: agents, kagentUnread: ['kagent'] })
+      const html = plain(screen('/substrate/actors?agent=kagent%2Fk8s-helper'))
+      expect(html).toContain(`Radar couldn’t read kagent Agents in kagent (${why}), so a session there could be any Agent’s`)
+      expect(html).toContain('No actors match where Radar could read kagent’s Agents; it couldn’t read them in kagent.')
+      expect(html).not.toContain('No actors match.')
+    }
+  })
+
+  it('reads a non-empty total as at least', () => {
+    state.actors = actors({ coverage: { state: 'full', count: 4 }, total: 1, rows: [helperSession()], kagentAgents: { state: 'partial', allowedNamespaces: ['research'] }, kagentUnread: ['kagent'] })
+    expect(plain(screen('/substrate/actors?kagent=agentSession'))).toContain('of at least 1')
+  })
+
+  it('keeps a way to clear a link’s kagent filter on a Radar that can’t apply it', () => {
+    state.kagentSupport = 'unsupported'
+    const html = plain(screen('/substrate/actors?kagent=unattributed'))
+    expect(html).toContain('kagent: Not tied to an Agent')
+    expect(html).toContain('Clear kagent filters')
+    state.kagentSupport = 'supported'
+  })
+
+  it('wraps a long Agent name after its hyphens, never mid-word', () => {
+    state.actors = actors({ kagentAgents: { state: 'full' }, rows: [helperSession({ agent: { namespace: 'kagent', name: 'spike-edit-agent' } })] })
+    const raw = screen()
+    expect(raw).toMatch(/>spike-<\/span>/)
+    expect(raw).toMatch(/>edit-<\/span>/)
+  })
+})
+
+describe('kagent filters while support is unknown', () => {
+  it('says it is checking while capabilities load, and offers to clear once the check fails', () => {
+    state.kagentSupport = 'unknown'
+    state.kagentUpgrade = null
+    let html = plain(screen('/substrate/actors?agent=kagent%2Fk8s-helper'))
+    expect(state.queryEnabled).toBe(false)
+    expect(html).toContain('Checking whether this Radar supports kagent filters…')
+    expect(html).not.toContain('Clear kagent filters')
+
+    state.kagentUpgrade = { feature: 'kagent Agent sessions in Agent Substrate' }
+    html = plain(screen('/substrate/actors?agent=kagent%2Fk8s-helper'))
+    expect(html).toContain('Radar couldn’t check whether this Radar supports kagent filters')
+    expect(html).toContain('Clear kagent filters')
+    state.kagentSupport = 'supported'
+    state.kagentUpgrade = null
   })
 })

@@ -161,6 +161,64 @@ export interface SubstrateRef {
   name: string
 }
 
+/** A kagent Agent (api.kagent.dev), a Kubernetes object. */
+export interface KagentAgentRef {
+  namespace: string
+  name: string
+}
+
+/** Why a kagent session's actor is tied to no Agent; see pkg/substrate KagentAttribution. */
+export type KagentUnattributedReason =
+  /** Its template is named for an Agent the caller reads, for neither current revision, and Radar can't prove it is that Agent's: the template predates the Agent, a time is missing, or the name was cut. */
+  | 'earlierRevision'
+  /** The caller can't read Agents in the template's namespace, or Radar hasn't read them there. */
+  | 'agentNotReadable'
+  /** No Agent read in that namespace produces the template's name. */
+  | 'noAgent'
+  /** Current revisions of more than one Agent produce the template's name. */
+  | 'ambiguous'
+  /** kagent's naming could not have produced the template, or it is in another atespace than the actor. */
+  | 'templateUnknown'
+
+/**
+ * Which kagent Agent an actor or template belongs to, judged against the Agents the caller can read,
+ * per request. agentSession: exactly the template of one Agent's current revision. Only exact matches:
+ * a hint (candidates) is never counted as an Agent's.
+ */
+export type KagentAttribution = KagentAgentAttribution | KagentSandboxAttribution | KagentUnattributed
+
+/** agentSession: the template is one Agent's, so the actors on it are that Agent's sessions. */
+export interface KagentAgentAttribution {
+  kind: 'agentSession'
+  agent: KagentAgentRef
+  /** The Agent revision's full digest; on an earlier revision, the 12 hex its template's name carries. */
+  revision: string
+  /** The revision is the Agent's latestSuccessfulRevision, which kagent starts new sessions on. */
+  newSessions?: boolean
+  /** The revision is the Agent's desiredRevision. */
+  desired?: boolean
+  /**
+   * The template is the Agent's for an earlier revision: Substrate created it at least 2s after the Agent,
+   * and a kagent session runs on it.
+   */
+  earlierRevision?: boolean
+}
+
+/** The template is a kagent sandbox's; no Agent is needed. */
+export interface KagentSandboxAttribution {
+  kind: 'sandbox'
+}
+
+export interface KagentUnattributed {
+  kind: 'unattributed'
+  reason: KagentUnattributedReason
+  /** earlierRevision: the Agents the template is named for; ambiguous: the Agents it matches. A hint only. */
+  candidates?: KagentAgentRef[]
+}
+
+/** A kagent session's actor with its attribution. */
+export type KagentActor = KagentAttribution & { sessionId: string }
+
 export interface SubstratePoolRef {
   namespace: string
   name: string
@@ -264,6 +322,8 @@ export interface SubstrateActorRow {
   waitingOn?: SubstrateWaiting
   /** What its worker's state means for it; absent when the worker means nothing for it or was not read. */
   workerImpact?: SubstrateWorkerImpact
+  /** A kagent session's Agent for this caller; absent for other actors, and from a Radar without kagentAttribution. */
+  kagent?: KagentActor
   createTime?: string
   updateTime?: string
 }
@@ -457,9 +517,12 @@ export interface SubstrateTemplateRow {
   storageLocation?: string
   containers?: string[]
   updateTime?: string
+  /** Set when the template is a kagent Agent revision's (kind agentSession, naming the Agent) or a kagent sandbox's. */
+  kagent?: KagentAttribution
 }
 
-export type SubstrateSubjectKind = 'Actor' | 'ActorTemplate' | 'Worker' | 'WorkerPool' | 'Node' | 'Pod' | 'Actors'
+/** Agent is the UI's own link to a kagent Agent; the server's subjects never name one. */
+export type SubstrateSubjectKind = 'Actor' | 'ActorTemplate' | 'Worker' | 'WorkerPool' | 'Node' | 'Pod' | 'Actors' | 'Agent'
 
 export interface SubstrateSubject {
   kind: SubstrateSubjectKind
@@ -727,6 +790,10 @@ export interface SubstrateActorsQuery {
   /** One state, or several (sent comma-separated); rows match any of them. */
   state?: SubstrateActorState | SubstrateActorState[]
   q?: string
+  /** namespace/name: the sessions attributed to that kagent Agent. Send only to a Radar with kagentAttribution: an older one ignores it. */
+  agent?: string
+  /** The kagent sessions of one kind. Send only to a Radar with kagentAttribution. */
+  kagent?: KagentAttribution['kind']
   limit?: number
   offset?: number
 }
@@ -749,6 +816,14 @@ export interface SubstrateActors {
   rows: SubstrateActorRow[]
   limit: number
   offset: number
+  /** The caller's read of kagent's Agents the rows' kagent and the agent/kagent filters were judged against; absent without kagent. */
+  kagentAgents?: SubstratePoolsCoverage
+  /**
+   * With an agent or kagent filter other than sandbox: the atespaces holding kagent sessions whose Agents
+   * weren't read (kagentAgents says why). There an Agent's counts are lower bounds and an unattributed
+   * session may belong to an Agent.
+   */
+  kagentUnread?: string[]
 }
 
 export interface SubstrateEgress {
@@ -811,6 +886,8 @@ export interface SubstrateAssignedActor {
   updateTime?: string
   /** What this worker's state means for the actor; absent when it means nothing. */
   workerImpact?: SubstrateWorkerImpact
+  /** A kagent session's Agent for this caller; absent for other actors. */
+  kagent?: KagentActor
 }
 
 export interface SubstrateActorDetail {
@@ -837,7 +914,7 @@ export interface SubstrateActorDetail {
   matchingPools: SubstratePoolRef[] | null
   matchingPoolsComplete: boolean
   /** Coverage of the reads the template, worker, pool and attention readings come from. */
-  coverage: { actors: SubstrateCoverage; templates: SubstrateCoverage; workers: SubstrateCoverage; pools: SubstratePoolsCoverage }
+  coverage: { actors: SubstrateCoverage; templates: SubstrateCoverage; workers: SubstrateCoverage; pools: SubstratePoolsCoverage; kagentAgents?: SubstratePoolsCoverage }
 }
 
 export interface SubstrateRecovery {
@@ -992,11 +1069,13 @@ export interface SubstrateWorkers {
   coverage: { workers: SubstrateCoverage; actors: SubstrateCoverage }
   counts?: SubstrateWorkerCounts
   workers: SubstrateWorkerRow[]
+  /** The caller's read of kagent's Agents the assigned actors' kagent comes from; absent without kagent. */
+  kagentAgents?: SubstratePoolsCoverage
 }
 
 export interface SubstrateTemplates {
   apiTier: SubstrateAPITier
-  coverage: { templates: SubstrateCoverage; actors: SubstrateCoverage; pools: SubstratePoolsCoverage }
+  coverage: { templates: SubstrateCoverage; actors: SubstrateCoverage; pools: SubstratePoolsCoverage; kagentAgents?: SubstratePoolsCoverage }
   templates: SubstrateTemplateRow[]
 }
 
@@ -1034,7 +1113,7 @@ export interface SubstrateTemplate {
   spec?: SubstrateTemplateSpec
   specUnavailable?: string
   /** Coverage of the reads its actor counts and eligible pools come from. */
-  coverage: { templates: SubstrateCoverage; actors: SubstrateCoverage; pools: SubstratePoolsCoverage }
+  coverage: { templates: SubstrateCoverage; actors: SubstrateCoverage; pools: SubstratePoolsCoverage; kagentAgents?: SubstratePoolsCoverage }
 }
 
 export interface SubstratePool {
@@ -1043,7 +1122,43 @@ export interface SubstratePool {
   workers: SubstrateWorkerRow[]
   /** Templates whose selector matches this pool; absent when templates were not read, [] when none. */
   templates?: SubstrateRef[]
-  coverage: { workers: SubstrateCoverage; actors: SubstrateCoverage; templates: SubstrateCoverage; pools: SubstratePoolsCoverage }
+  coverage: { workers: SubstrateCoverage; actors: SubstrateCoverage; templates: SubstrateCoverage; pools: SubstratePoolsCoverage; kagentAgents?: SubstratePoolsCoverage }
+}
+
+/** One current revision of a kagent Agent and its template. */
+export interface KagentAgentRevision {
+  revision: string
+  template: SubstrateRef
+  /** The latestSuccessfulRevision: new sessions start on it. */
+  newSessions?: boolean
+  /** The desiredRevision. While it differs from the latest successful one, new sessions still start on that one. */
+  desired?: boolean
+  /** Another Agent's revision produces the same template name, so its actors are counted for neither. */
+  ambiguous?: boolean
+  sessions: number
+}
+
+/** GET /api/substrate/kagent/agents/{namespace}/{name}/sessions. */
+export interface KagentAgentSessions {
+  apiTier: SubstrateAPITier
+  agent: { namespace: string; name: string; uid?: string; desiredRevision?: string; latestSuccessfulRevision?: string; created?: string }
+  revisions: KagentAgentRevision[]
+  /** The attributed session actors by state, on current and earlier revisions. */
+  sessions: SubstrateStateCounts
+  /** How many of sessions run on an earlier revision's template; the rest are on revisions. */
+  onEarlierRevisions: number
+  /** Every actor in the Agent's atespace was read: sessions and earlierRevisions are exact; otherwise lower bounds. */
+  complete: boolean
+  /** Sessions crashed or stuck in a transition past 5 minutes; attention holds the first few, crashed first. */
+  needAttention: number
+  attention: SubstrateActorRow[]
+  /** Sessions on templates named for this Agent, for no current revision, that Radar can't prove are its: a hint, not part of sessions. */
+  hintedEarlierRevisions: number
+  /** Some of those templates' names also fit another Agent. */
+  hintShared?: boolean
+  sources: ('snapshot' | 'atespace')[]
+  /** templates: a partial template read can leave a session a hint, so counts with hints are then lower bounds. */
+  coverage: { actors: SubstrateCoverage; templates: SubstrateCoverage; kagentAgents: SubstratePoolsCoverage }
 }
 
 /** The error_code of a failed substrate request, when it carries one. */
@@ -1147,6 +1262,20 @@ export function useSubstrateActors(query: SubstrateActorsQuery, enabled = true) 
     POLL_MS,
     sameSubstrateActorList,
   )
+}
+
+/**
+ * The sessions summary of one kagent Agent. Needs Substrate's API and kagentAttribution: an older Radar
+ * reads as unsupported (upgrade), never as an error.
+ */
+export function useKagentAgentSessions(agent: KagentAgentRef | null) {
+  const kagent = useRadarFeature('kagentAttribution')
+  const query = useSubstrateQuery<KagentAgentSessions>(
+    ['kagent-agent-sessions', agent?.namespace, agent?.name, ...kagent.gatedKey],
+    `/substrate/kagent/agents/${enc(agent?.namespace ?? '')}/${enc(agent?.name ?? '')}/sessions`,
+    !!agent && kagent.support !== 'unsupported',
+  )
+  return { ...query, kagentSupport: kagent.support, kagentUpgrade: kagent.upgrade }
 }
 
 export function useSubstrateActor(ref: SubstrateRef | null) {

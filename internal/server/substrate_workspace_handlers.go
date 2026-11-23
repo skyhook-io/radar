@@ -871,6 +871,10 @@ type substrateAtespaceRow struct {
 type substrateWorkspaceCoverage struct {
 	*substrateapi.SnapshotCoverage
 	Pools integration.KindCoverage `json:"pools"`
+	// KagentAgents is the caller's read of kagent's Agents, which decides
+	// the steps of rows about templates kagent owns; absent when the cluster
+	// doesn't serve kagent's API.
+	KagentAgents *integration.KindCoverage `json:"kagentAgents,omitempty"`
 }
 
 type substrateWorkspaceResponse struct {
@@ -943,6 +947,10 @@ func (s *Server) handleSubstrateWorkspace(w http.ResponseWriter, r *http.Request
 		return
 	}
 	resp.Coverage.SnapshotCoverage = &snap.Coverage
+	if kagent := s.substrateKagent(r); kagent.Served {
+		resp.Coverage.KagentAgents = kagent.coverage()
+		model.KagentAttention(resp.NeedsAttention, snap.Templates, kagent.index(snap))
+	}
 	if in.WorkersRead {
 		p := model.PlacementOf(snap.Workers)
 		resp.Summary.Workers, resp.Summary.Slots = &p.Workers, &p.Slots
@@ -1061,6 +1069,16 @@ type substrateActorsResponse struct {
 	Rows   []model.ActorRow   `json:"rows"`
 	Limit  int                `json:"limit"`
 	Offset int                `json:"offset"`
+	// KagentAgents is the caller's read of kagent's Agents that rows'
+	// kagent attributions and the agent and kagent filters were judged
+	// against; absent when the cluster doesn't serve kagent's API.
+	KagentAgents *integration.KindCoverage `json:"kagentAgents,omitempty"`
+	// KagentUnread, with an agent or kagent filter other than sandbox, are
+	// the atespaces holding kagent sessions whose Agents were not read for
+	// the caller (kagentAgents says why). There, a session could be any
+	// Agent's: Total and Counts for an Agent's sessions are lower bounds, and
+	// an unattributed session may belong to an Agent. Absent when none.
+	KagentUnread []string `json:"kagentUnread,omitempty"`
 }
 
 func splitRef(value string) (string, string) {
@@ -1117,6 +1135,22 @@ func (s *Server) handleSubstrateActors(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "node needs nodeHas=running or nodeHas=localSnapshot")
 		return
 	}
+	var agentFilter *model.AgentRef
+	if v := q.Get("agent"); v != "" {
+		ns, name, ok := strings.Cut(v, "/")
+		if !ok || ns == "" || name == "" || strings.Contains(name, "/") {
+			s.writeError(w, http.StatusBadRequest, "agent must be <namespace>/<name>")
+			return
+		}
+		agentFilter = &model.AgentRef{Namespace: ns, Name: name}
+	}
+	kagentFilter := q.Get("kagent")
+	switch kagentFilter {
+	case "", model.KagentAgentSession, model.KagentSandbox, model.KagentUnattributed:
+	default:
+		s.writeError(w, http.StatusBadRequest, "kagent must be agentSession, sandbox or unattributed")
+		return
+	}
 	atespace := q.Get("atespace")
 	rawSearch := strings.TrimSpace(q.Get("q"))
 	search := strings.ToLower(rawSearch)
@@ -1137,11 +1171,16 @@ func (s *Server) handleSubstrateActors(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	var kagentIx *model.KagentIndex
+	if kagent := s.substrateKagent(r); kagent.Served {
+		resp.KagentAgents, kagentIx = kagent.coverage(), kagent.index(snap)
+	}
 	if !resp.Coverage.Usable() {
 		s.writeJSON(w, resp)
 		return
 	}
 	counts := model.NewStateCounts()
+	unread := map[string]bool{}
 	var matched []model.Actor
 	for _, a := range actors {
 		if atespace != "" && a.Atespace != atespace {
@@ -1165,6 +1204,19 @@ func (s *Server) handleSubstrateActors(w http.ResponseWriter, r *http.Request) {
 		if search != "" && !strings.Contains(strings.ToLower(a.Name), search) {
 			continue
 		}
+		if agentFilter != nil || kagentFilter != "" {
+			k := kagentRow(kagentIx, a)
+			// Where the Agents were not read, a session could be any Agent's:
+			// an Agent's count is a lower bound there, and an unattributed one
+			// may belong to an Agent. A sandbox needs no Agent.
+			if k != nil && k.Reason == model.KagentAgentNotReadable && kagentFilter != model.KagentSandbox &&
+				(agentFilter == nil || a.Template.Atespace == agentFilter.Namespace) {
+				unread[a.Template.Atespace] = true
+			}
+			if k == nil || kagentFilter != "" && k.Kind != kagentFilter || agentFilter != nil && (k.Agent == nil || *k.Agent != *agentFilter) {
+				continue
+			}
+		}
 		counts.Add(a.State)
 		if len(stateFilter) > 0 && !stateFilter[a.State] {
 			continue
@@ -1176,6 +1228,9 @@ func (s *Server) handleSubstrateActors(w http.ResponseWriter, r *http.Request) {
 	sortActors(matched, sortBy, now, workers)
 	total := len(matched)
 	resp.Total, resp.Counts = &total, &counts
+	if len(unread) > 0 {
+		resp.KagentUnread = slices.Sorted(maps.Keys(unread))
+	}
 	rc := model.NewResumeContext(templateUIDs(snap), snap.Workers, snap.Coverage.Workers.State == substrateapi.CoverageFull)
 	pods := substrateWorkerPods(s.podListableWorkers(r, snap.Workers))
 	for _, a := range matched[min(offset, total):min(offset+limit, total)] {
@@ -1185,6 +1240,7 @@ func (s *Server) handleSubstrateActors(w http.ResponseWriter, r *http.Request) {
 				row.WorkerImpact = model.WorkerImpactOf(a, wk, pods)
 			}
 		}
+		row.Kagent = kagentRow(kagentIx, a)
 		resp.Rows = append(resp.Rows, row)
 	}
 	s.writeJSON(w, resp)
@@ -1326,6 +1382,10 @@ type substrateDetailCoverage struct {
 	Templates substrateapi.Coverage    `json:"templates"`
 	Workers   substrateapi.Coverage    `json:"workers"`
 	Pools     integration.KindCoverage `json:"pools"`
+	// KagentAgents is the caller's read of kagent's Agents the actor's and
+	// template's attributions come from; absent when the cluster doesn't
+	// serve kagent's API.
+	KagentAgents *integration.KindCoverage `json:"kagentAgents,omitempty"`
 }
 
 func (s *Server) readSubstrateActor(w http.ResponseWriter, r *http.Request, target model.Ref) (*ateapi.Actor, substrateapi.APITier, bool) {
@@ -1447,7 +1507,7 @@ func (s *Server) handleSubstrateActor(w http.ResponseWriter, r *http.Request) {
 		if in.WorkersRead {
 			for _, wk := range snap.Workers {
 				if wk.Name == as.Worker {
-					row := substrateWorkerRowOf(wk, nil, false, in.WorkerPods)
+					row := substrateWorkerRowOf(wk, nil, false, in.WorkerPods, nil)
 					resp.Worker = &row
 					resp.WorkerImpact = model.WorkerImpactOf(actor, wk, in.WorkerPods)
 				}
@@ -1458,6 +1518,18 @@ func (s *Server) handleSubstrateActor(w http.ResponseWriter, r *http.Request) {
 		resp.Related = append(resp.Related, model.Subject{Kind: "Node", Name: node})
 	}
 	resp.Attention = model.ActorAttention(model.NeedsAttention(in), actor, in.Templates, now)
+	if kagent := s.substrateKagent(r); kagent.Served {
+		ix := kagent.index(snap)
+		resp.Coverage.KagentAgents = kagent.coverage()
+		resp.Row.Kagent = ix.Actor(actor)
+		if resp.Template != nil {
+			resp.Template.Kagent = ix.KagentTemplate(actor.Template)
+		}
+		model.KagentAttention(resp.Attention, in.Templates, ix)
+		for i := range resp.Attention {
+			resp.Attention[i].NextStep = model.KagentStepForAgent(resp.Attention[i].NextStep, resp.Row.Kagent)
+		}
+	}
 	s.writeJSON(w, resp)
 }
 
@@ -1701,7 +1773,7 @@ func (s *Server) handleSubstrateActorLogs(w http.ResponseWriter, r *http.Request
 		if resp.Lines == nil {
 			resp.Lines = []substrateLogLine{}
 		}
-		resp.MemoryKill = memoryKillOf(actor, read.evidence)
+		resp.MemoryKill = s.kagentMemoryKill(r, actor, memoryKillOf(actor, read.evidence))
 		s.writeJSON(w, resp)
 		return
 	}
@@ -1795,7 +1867,7 @@ func (s *Server) handleSubstrateActorLogs(w http.ResponseWriter, r *http.Request
 	}
 	resp.Lines = append(resp.Lines, all...)
 	slices.SortStableFunc(evidence, byTime)
-	resp.MemoryKill = memoryKillOf(actor, evidence)
+	resp.MemoryKill = s.kagentMemoryKill(r, actor, memoryKillOf(actor, evidence))
 	switch {
 	case readable == 0:
 		resp.ReasonCode = "denied"
@@ -1808,6 +1880,21 @@ func (s *Server) handleSubstrateActorLogs(w http.ResponseWriter, r *http.Request
 		resp.Reason = "This actor has no worker now. These lines come from worker Pods on node " + node + ", where it was last; Substrate does not record which Pod it ran in, so each line names the Pod it was found in."
 	}
 	s.writeJSON(w, resp)
+}
+
+// kagentMemoryKill names the Agent in a kagent session's memory-limit step
+// when the caller can read it. Agents are read only when that step is shown.
+func (s *Server) kagentMemoryKill(r *http.Request, actor model.Actor, kill *substrateMemoryKill) *substrateMemoryKill {
+	if kill == nil || kill.NextStep == "" || actor.Kagent == nil {
+		return kill
+	}
+	if kagent := s.substrateKagent(r); kagent.Served {
+		// The shared read's templates prove an earlier revision; never wait
+		// for one here.
+		snap, _ := s.substrateManager().Peek(r.Context())
+		kill.NextStep = model.KagentStepForAgent(kill.NextStep, kagent.index(snap).Actor(actor))
+	}
+	return kill
 }
 
 func plural(n int, one, many string) string {
@@ -1940,11 +2027,15 @@ type substrateAssignedActor struct {
 	// WorkerImpact is what this worker's state means for the actor; absent
 	// when it means nothing.
 	WorkerImpact *model.WorkerImpact `json:"workerImpact,omitempty"`
+	// Kagent is a kagent session's attribution for the caller; absent for
+	// other actors.
+	Kagent *model.KagentActor `json:"kagent,omitempty"`
 }
 
 // substrateWorkerRowOf reads one worker; assigned is its actors from the
-// snapshot's index, used only when actorsRead.
-func substrateWorkerRowOf(wk model.Worker, assigned []model.Actor, actorsRead bool, pods model.WorkerPods) substrateWorkerRow {
+// snapshot's index, used only when actorsRead. kagent attributes kagent
+// sessions among them; nil when the cluster doesn't serve kagent's API.
+func substrateWorkerRowOf(wk model.Worker, assigned []model.Actor, actorsRead bool, pods model.WorkerPods, kagent *model.KagentIndex) substrateWorkerRow {
 	row := substrateWorkerRow{Worker: wk, HasFreeSlot: model.HasFreeSlot(wk)}
 	if !wk.UpdateTime.IsZero() {
 		held := int64(model.HeldFor(wk.UpdateTime, time.Now()).Seconds())
@@ -1958,7 +2049,8 @@ func substrateWorkerRowOf(wk model.Worker, assigned []model.Actor, actorsRead bo
 	if actorsRead {
 		row.Actors = make([]substrateAssignedActor, 0, len(assigned))
 		for _, a := range assigned {
-			row.Actors = append(row.Actors, substrateAssignedActor{Atespace: a.Atespace, Name: a.Name, State: a.State, Template: a.Template, UpdateTime: a.UpdateTime, WorkerImpact: model.WorkerImpactOf(a, wk, pods)})
+			row.Actors = append(row.Actors, substrateAssignedActor{Atespace: a.Atespace, Name: a.Name, State: a.State, Template: a.Template, UpdateTime: a.UpdateTime,
+				WorkerImpact: model.WorkerImpactOf(a, wk, pods), Kagent: kagentRow(kagent, a)})
 		}
 	}
 	return row
@@ -1983,6 +2075,10 @@ type substrateWorkersResponse struct {
 	// Counts are absent when workers could not be read.
 	Counts  *model.WorkerCounts  `json:"counts,omitempty"`
 	Workers []substrateWorkerRow `json:"workers"`
+	// KagentAgents is the caller's read of kagent's Agents the assigned
+	// actors' attributions come from; absent when the cluster doesn't serve
+	// kagent's API.
+	KagentAgents *integration.KindCoverage `json:"kagentAgents,omitempty"`
 }
 
 func (s *Server) handleSubstrateWorkers(w http.ResponseWriter, r *http.Request) {
@@ -2002,6 +2098,10 @@ func (s *Server) handleSubstrateWorkers(w http.ResponseWriter, r *http.Request) 
 	poolNS, poolName := splitRef(r.URL.Query().Get("pool"))
 	counts := model.WorkerCounts{}
 	resp.Counts = &counts
+	var kagentIx *model.KagentIndex
+	if kagent := s.substrateKagent(r); kagent.Served {
+		resp.KagentAgents, kagentIx = kagent.coverage(), kagent.index(snap)
+	}
 	pods := substrateWorkerPods(s.podListableWorkers(r, snap.Workers))
 	for _, wk := range snap.Workers {
 		if poolName != "" && (wk.Pool != poolName || poolNS != "" && wk.Namespace != poolNS) {
@@ -2016,7 +2116,7 @@ func (s *Server) handleSubstrateWorkers(w http.ResponseWriter, r *http.Request) 
 		case model.WorkerUnavailable:
 			resp.Counts.Unavailable++
 		}
-		resp.Workers = append(resp.Workers, substrateWorkerRowOf(wk, snap.Index().ByWorker[wk.Name], snap.Coverage.Actors.Usable(), pods))
+		resp.Workers = append(resp.Workers, substrateWorkerRowOf(wk, snap.Index().ByWorker[wk.Name], snap.Coverage.Actors.Usable(), pods, kagentIx))
 	}
 	slices.SortFunc(resp.Workers, func(a, b substrateWorkerRow) int {
 		return strings.Compare(a.Namespace+"/"+a.Pool+"/"+a.Pod, b.Namespace+"/"+b.Pool+"/"+b.Pod)
@@ -2030,15 +2130,28 @@ type substrateTemplatesResponse struct {
 		Templates substrateapi.Coverage    `json:"templates"`
 		Actors    substrateapi.Coverage    `json:"actors"`
 		Pools     integration.KindCoverage `json:"pools"`
+		// KagentAgents: the caller's read of kagent's Agents the rows'
+		// kagent attributions come from; absent without kagent.
+		KagentAgents *integration.KindCoverage `json:"kagentAgents,omitempty"`
 	} `json:"coverage"`
 	Templates []model.TemplateRow `json:"templates"`
 }
 
-func (s *Server) substrateTemplateRows(r *http.Request, snap *substrateapi.Snapshot, templates []model.Template) ([]model.TemplateRow, integration.KindCoverage) {
+// substrateTemplateRows reads templates into rows, with the kagent Agent
+// each belongs to for the caller; kagentCov is nil without kagent.
+func (s *Server) substrateTemplateRows(r *http.Request, snap *substrateapi.Snapshot, templates []model.Template) (rows []model.TemplateRow, poolsCov integration.KindCoverage, kagentCov *integration.KindCoverage) {
 	pools, poolsCov, poolsClusterWide := s.substratePools(r)
 	in := s.substrateInputs(r, snap, pools, poolsCov, poolsClusterWide, time.Now())
 	poolRows := model.JoinPools(in)
-	return model.TemplateRows(templates, in.Actors, in.ActorsRead, model.KnownPools(pools, in.Workers), in.PoolsUsable || in.WorkersRead, in.PoolsComplete, poolRows), poolsCov
+	rows = model.TemplateRows(templates, in.Actors, in.ActorsRead, model.KnownPools(pools, in.Workers), in.PoolsUsable || in.WorkersRead, in.PoolsComplete, poolRows)
+	if kagent := s.substrateKagent(r); kagent.Served {
+		ix := kagent.index(snap, templates...)
+		for i := range rows {
+			rows[i].Kagent = ix.KagentTemplate(model.Ref{Atespace: rows[i].Atespace, Name: rows[i].Name})
+		}
+		kagentCov = kagent.coverage()
+	}
+	return rows, poolsCov, kagentCov
 }
 
 func (s *Server) handleSubstrateTemplates(w http.ResponseWriter, r *http.Request) {
@@ -2052,7 +2165,7 @@ func (s *Server) handleSubstrateTemplates(w http.ResponseWriter, r *http.Request
 	resp := substrateTemplatesResponse{APITier: tier, Templates: []model.TemplateRow{}}
 	resp.Coverage.Templates, resp.Coverage.Actors = snap.Coverage.Templates, snap.Coverage.Actors
 	if snap.Coverage.Templates.Usable() {
-		resp.Templates, resp.Coverage.Pools = s.substrateTemplateRows(r, snap, snap.Templates)
+		resp.Templates, resp.Coverage.Pools, resp.Coverage.KagentAgents = s.substrateTemplateRows(r, snap, snap.Templates)
 	} else {
 		_, resp.Coverage.Pools, _ = s.substratePools(r)
 	}
@@ -2071,6 +2184,9 @@ type substrateTemplateResponse struct {
 		Templates substrateapi.Coverage    `json:"templates"`
 		Actors    substrateapi.Coverage    `json:"actors"`
 		Pools     integration.KindCoverage `json:"pools"`
+		// KagentAgents: the caller's read of kagent's Agents the template's
+		// kagent attribution comes from; absent without kagent.
+		KagentAgents *integration.KindCoverage `json:"kagentAgents,omitempty"`
 	} `json:"coverage"`
 }
 
@@ -2114,7 +2230,7 @@ func (s *Server) handleSubstrateTemplate(w http.ResponseWriter, r *http.Request)
 		resp.SpecUnavailable = specMsg
 	}
 	var rows []model.TemplateRow
-	rows, resp.Coverage.Pools = s.substrateTemplateRows(r, snap, []model.Template{t})
+	rows, resp.Coverage.Pools, resp.Coverage.KagentAgents = s.substrateTemplateRows(r, snap, []model.Template{t})
 	resp.Template = rows[0]
 	resp.Coverage.Templates, resp.Coverage.Actors = snap.Coverage.Templates, snap.Coverage.Actors
 	s.writeJSON(w, resp)
@@ -2133,6 +2249,9 @@ type substratePoolResponse struct {
 		Actors    substrateapi.Coverage    `json:"actors"`
 		Templates substrateapi.Coverage    `json:"templates"`
 		Pools     integration.KindCoverage `json:"pools"`
+		// KagentAgents: the caller's read of kagent's Agents the assigned
+		// actors' attributions come from; absent without kagent.
+		KagentAgents *integration.KindCoverage `json:"kagentAgents,omitempty"`
 	} `json:"coverage"`
 }
 
@@ -2193,10 +2312,14 @@ func (s *Server) handleSubstratePool(w http.ResponseWriter, r *http.Request) {
 	resp := substratePoolResponse{APITier: tier, Pool: *row, Workers: []substrateWorkerRow{}}
 	resp.Coverage.Pools = poolsCov
 	resp.Coverage.Workers, resp.Coverage.Actors, resp.Coverage.Templates = snap.Coverage.Workers, snap.Coverage.Actors, snap.Coverage.Templates
+	var kagentIx *model.KagentIndex
+	if kagent := s.substrateKagent(r); kagent.Served {
+		resp.Coverage.KagentAgents, kagentIx = kagent.coverage(), kagent.index(snap)
+	}
 	if in.WorkersRead {
 		for _, wk := range snap.Workers {
 			if wk.PoolRef() == ref {
-				resp.Workers = append(resp.Workers, substrateWorkerRowOf(wk, snap.Index().ByWorker[wk.Name], in.ActorsRead, in.WorkerPods))
+				resp.Workers = append(resp.Workers, substrateWorkerRowOf(wk, snap.Index().ByWorker[wk.Name], in.ActorsRead, in.WorkerPods, kagentIx))
 			}
 		}
 		slices.SortFunc(resp.Workers, func(a, b substrateWorkerRow) int { return strings.Compare(a.Pod, b.Pod) })

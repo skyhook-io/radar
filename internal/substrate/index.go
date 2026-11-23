@@ -23,6 +23,13 @@ type Index struct {
 	ByAtespace map[string]*model.StateCounts
 	// TemplateUIDs is nil unless templates were read.
 	TemplateUIDs model.TemplateUIDs
+	// ByTemplate is the actors on each template, newest change first.
+	ByTemplate map[model.Ref][]model.Actor
+	// KagentTemplates are the templates actors run on that kagent's naming
+	// names for an Agent revision, by atespace and Agent-name prefix
+	// (model.KagentPrefixKey). Names alone: which Agent, if any, is a
+	// per-caller question this shared index never answers.
+	KagentTemplates map[string][]model.Ref
 }
 
 // Index returns the snapshot's projections, built on first use.
@@ -69,6 +76,12 @@ func buildIndex(s *Snapshot) *Index {
 		}
 		return strings.Compare(refKey(a.Atespace, a.Name), refKey(b.Atespace, b.Name))
 	})
+	ix.ByTemplate = model.GroupByTemplate(ix.Newest)
+	refs := make([]model.Ref, 0, len(ix.ByTemplate))
+	for t := range ix.ByTemplate {
+		refs = append(refs, t)
+	}
+	ix.KagentTemplates = model.KagentTemplatesByPrefix(refs)
 	if s.Coverage.Templates.Usable() {
 		ix.TemplateUIDs = make(model.TemplateUIDs, len(s.Templates))
 		for _, t := range s.Templates {
