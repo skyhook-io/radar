@@ -1578,6 +1578,13 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 }
 
 func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
+	// Every check below reads one connection, so a switch mid-request can't
+	// combine one cluster's grants with another's visibility.
+	conn := k8s.ConnectionFrom(r.Context())
+	if conn == nil {
+		conn = k8s.Current()
+		r = r.WithContext(k8s.WithConnection(r.Context(), conn))
+	}
 	var caps *k8s.Capabilities
 	var err error
 
@@ -1661,11 +1668,10 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	// caps.Resources (resources field omitted from JSON) is the documented
 	// "no probe data yet" signal; the frontend has separate connection
 	// state to distinguish loading from RBAC restrictions.
-	result := k8s.GetCachedPermissionResult()
+	result := conn.CachedPermissionResult()
 	if result == nil && k8s.GetResourceCache() != nil {
-		conn := k8s.Current()
 		probed, current := conn.CheckResourcePermissions(r.Context())
-		result = k8s.GetCachedPermissionResult()
+		result = conn.CachedPermissionResult()
 		// A scope change can retire the probe's cache on the same connection.
 		// Only the no-client response is intentionally served without caching.
 		if result == nil && current && (conn.Client() == nil || conn.Dynamic() == nil) {

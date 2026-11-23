@@ -123,8 +123,9 @@ func (s *Server) handleArgoDestinations(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// A non-nil lister can still be namespace-scoped: startup probes fall
-	// back to a single namespace when cluster-wide secret list is denied.
-	if perm := k8s.GetCachedPermissionResult(); perm != nil {
+	// back to a single namespace when cluster-wide secret list is denied. The
+	// scope comes from the cache that owns the lister.
+	if perm := cache.PermissionResult(); perm != nil {
 		if scope, ok := perm.Scopes[k8score.Secrets]; ok && scope.Enabled && scope.Namespace != "" {
 			resp.Completeness.ScopedToNamespace = scope.Namespace
 		}
