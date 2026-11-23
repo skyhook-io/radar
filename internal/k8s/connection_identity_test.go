@@ -136,3 +136,22 @@ func TestReadmissionKeepsTheConnectionsPermissionResult(t *testing.T) {
 		t.Fatal("re-admission dropped the permission result its caches were built from")
 	}
 }
+
+// Admitted again after a retirement with no rebuild, a connection is the same
+// build: discovery that lands on it later is served. Only the ID changes.
+func TestReadmissionKeepsTheSameConnection(t *testing.T) {
+	t.Cleanup(SnapshotTestConnection())
+	clearTestConnectionIdentity()
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
+	built, first := Current(), ServingConnectionID()
+	RetireServingConnection()
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
+
+	if Current() != built || ServingConnectionID() == first {
+		t.Fatalf("re-admission: connection replaced=%v, ID %q then %q", Current() != built, first, ServingConnectionID())
+	}
+	built.publishDiscovery(buildFakeDiscoveryCore(t))
+	if GetResourceDiscovery() == nil {
+		t.Fatal("discovery that finished after the re-admission isn't served")
+	}
+}
