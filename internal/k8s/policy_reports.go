@@ -163,6 +163,10 @@ func (c *Connection) policyReportSnapshot() policyReportSnapshot {
 // Warmup runs once per build. A later Kyverno install or a failed probe is
 // reconsidered on a rebuild (such as a context switch), not on re-admission.
 func (c *Connection) warmupPolicyReports() {
+	c.warmupPolicyReportsWithList((*DynamicResourceCache).listPolicyReports)
+}
+
+func (c *Connection) warmupPolicyReportsWithList(initialList func(*DynamicResourceCache, []schema.GroupVersionResource) []*unstructured.Unstructured) {
 	s := &c.dynamicCacheState().reports
 	s.once.Do(func() {
 		discovery, cache := c.Discovery(), c.DynamicResourceCache()
@@ -222,13 +226,13 @@ func (c *Connection) warmupPolicyReports() {
 		// lookup after warmup is hot — without this, callers would race
 		// with the informer's initial event burst.
 		idx := policyreports.NewIndex()
-		idx.Replace(cache.listPolicyReports(watched))
+		idx.Replace(initialList(cache, watched))
 
 		// Registration replays informer contents. Publish before a replay's
 		// debounced rebuild can read the watched GVRs.
 		s.mu.Lock()
-		defer s.mu.Unlock()
 		if s.closed {
+			s.mu.Unlock()
 			return
 		}
 		schedule := func() { s.scheduleRebuild(cache.listPolicyReports) }
@@ -255,6 +259,9 @@ func (c *Connection) warmupPolicyReports() {
 			DeniedGroups:  selection.deniedGroups,
 			LiveUpdates:   handlersRegistered,
 		}})
+		s.mu.Unlock()
+		// Registration replays existing reports, so a deletion since the initial list can be missed.
+		schedule()
 		log.Printf("[policy-reports] Index initialized with %d subjects", idx.Size())
 	})
 }

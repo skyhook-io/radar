@@ -124,16 +124,11 @@ func TestPolicyReportInformerRebuildsItsOwnCache(t *testing.T) {
 		// Deliver A's informer event with B installed but before A's teardown.
 		b, _ := installPolicyReportCache(t)
 		b.warmupPolicyReports()
+		// Let both warmups reconcile before measuring the effect of A's event on B.
+		time.Sleep(rebuildDebounce)
+		synctest.Wait()
 		replacement := b.PolicyReportIndex()
-		report := &unstructured.Unstructured{Object: map[string]any{
-			"apiVersion": "openreports.io/v1alpha1", "kind": "Report",
-			"metadata": map[string]any{"name": "report", "namespace": "shop"},
-			"scope":    map[string]any{"apiVersion": "v1", "kind": "Pod", "name": "web"},
-			"results":  []any{map[string]any{"policy": "limits", "rule": "cpu", "result": "fail"}},
-		}}
-		if _, err := client.Resource(orReports).Namespace("shop").Create(t.Context(), report, metav1.CreateOptions{}); err != nil {
-			t.Fatal(err)
-		}
+		createPolicyReport(t, client)
 		synctest.Wait()
 		time.Sleep(rebuildDebounce)
 		synctest.Wait()
@@ -143,6 +138,47 @@ func TestPolicyReportInformerRebuildsItsOwnCache(t *testing.T) {
 		}
 		if replacement == nil || GetPolicyReportIndex() != replacement || replacement.Size() != 0 {
 			t.Fatal("A's event changed B's index")
+		}
+	})
+}
+
+func createPolicyReport(t *testing.T, client *dynamicfake.FakeDynamicClient) {
+	t.Helper()
+	report := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "openreports.io/v1alpha1", "kind": "Report",
+		"metadata": map[string]any{"name": "report", "namespace": "shop"},
+		"scope":    map[string]any{"apiVersion": "v1", "kind": "Pod", "name": "web"},
+		"results":  []any{map[string]any{"policy": "limits", "rule": "cpu", "result": "fail"}},
+	}}
+	if _, err := client.Resource(orReports).Namespace("shop").Create(t.Context(), report, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPolicyReportWarmupReconcilesDeletionBeforeHandlerRegistration(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		withFreshTestConnection(t)
+		conn, client := installPolicyReportCache(t)
+		createPolicyReport(t, client)
+		conn.warmupPolicyReportsWithList(func(cache *DynamicResourceCache, watched []schema.GroupVersionResource) []*unstructured.Unstructured {
+			reports := cache.listPolicyReports(watched)
+			synctest.Wait()
+			if err := client.Resource(orReports).Namespace("shop").Delete(t.Context(), "report", metav1.DeleteOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			synctest.Wait()
+			if remaining := cache.listPolicyReports(watched); len(remaining) != 0 {
+				t.Fatal("informer still has the deleted report before handler registration")
+			}
+			return reports
+		})
+		if idx := conn.PolicyReportIndex(); idx == nil || idx.Size() != 1 || !conn.PolicyReportStatus().LiveUpdates {
+			t.Fatal("warmup did not publish the initially listed report with live updates")
+		}
+		time.Sleep(rebuildDebounce)
+		synctest.Wait()
+		if idx := conn.PolicyReportIndex(); idx == nil || idx.Size() != 0 {
+			t.Fatal("live index retained the last report deleted during warmup")
 		}
 	})
 }
