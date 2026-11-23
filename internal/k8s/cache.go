@@ -349,12 +349,42 @@ func (index *secretDataManagerWriteIndex) load(namespace, name string) (secretDa
 	return write, ok
 }
 
+type cacheLifecycle struct {
+	mu     sync.RWMutex
+	once   sync.Once
+	closed bool
+}
+
+// whileOpen runs an informer callback only while its cache is open, so a
+// callback that fires after a switch closed the cache records nothing. A
+// callback already running when the cache closes finishes; close doesn't wait
+// for it, so slow timeline storage can't hold up a switch. Observers can call
+// back into the cache, so fn runs outside mu.
+func (s *cacheLifecycle) whileOpen(fn func()) {
+	s.mu.RLock()
+	closed := s.closed
+	s.mu.RUnlock()
+	if !closed {
+		fn()
+	}
+}
+
+func (s *cacheLifecycle) computeDiff(kind string, oldObj, newObj any) *DiffInfo {
+	var diff *DiffInfo
+	s.whileOpen(func() { diff = ComputeDiff(kind, oldObj, newObj) })
+	return diff
+}
+
+func (s *cacheLifecycle) closeCallbacks() {
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
+}
+
 type connectionCache struct {
 	// Hot-path reads of the promoted handle are lock-free. The lock keeps
 	// promotion, retirement of the syncing handle and completion one step.
-	mu                  sync.Mutex
-	once                sync.Once
-	closed              bool
+	cacheLifecycle
 	promoted            atomic.Pointer[ResourceCache]
 	syncing             *ResourceCache
 	initialSyncComplete atomic.Bool
@@ -428,14 +458,6 @@ func (conn *Connection) initResourceCache(ctx context.Context) error {
 			scopes = map[string]k8score.ResourceScope{}
 		}
 
-		// Captured ONCE at wiring time and closed over by the callbacks below.
-		// Informer shutdown on context switch is asynchronous (up to 5s, then
-		// abandoned), so a late callback reading ActiveClusterContext() at
-		// delivery time would stamp the OLD cluster's event with the NEW
-		// cluster's name — permanently, under SQLite storage. Closing over the
-		// wiring-time value keeps late events truthfully attributed to the
-		// cluster they came from.
-		recordClusterContext := TimelineClusterContext(conn.ContextName())
 		secretWriteTimes := newSecretDataManagerWriteIndex()
 		cronJobScheduleObservations := newCronJobScheduleObservationTracker()
 
@@ -449,52 +471,13 @@ func (conn *Connection) initResourceCache(ctx context.Context) error {
 			PatienceWindow:          firstPaintPatience,
 			MinimalSet:              minimalFirstPaintSet,
 			SyncTimeout:             FirstPaintBackstop,
-			SyncProgress:            emitSyncProgress,
 			DeferredSyncTimeout:     3 * time.Minute,
 			ListPageSize:            ListPageSize,
 
-			OnReceived: func(kind string) {
-				timeline.IncrementReceived(kind)
-			},
-
-			OnTransform: func(obj any) {
-				secretWriteTimes.capture(obj)
-			},
-
-			OnObservedChange: observedChangeHandler(client, secretWriteTimes.observeChange, cronJobScheduleObservations.observeChange),
-
-			OnChange: func(change k8score.ResourceChange, obj, oldObj any) {
-				if DebugEvents && change.Operation == "add" &&
-					(change.Kind == "Pod" || change.Kind == "Deployment" || change.Kind == "Service") {
-					log.Printf("[DEBUG] enqueueChange: %s add %s/%s", change.Kind, change.Namespace, change.Name)
-				}
-
-				// Record to timeline store
-				state.recordToTimelineStore(recordClusterContext, change.Kind, change.Namespace, change.Name, change.UID, change.Operation, oldObj, obj, change.Diff, true)
-			},
-
-			OnEventChange: func(obj any, op string) {
-				// Event deletes are not recorded to timeline — events represent
-				// things that happened and should remain in history.
-				if op == "delete" {
-					return
-				}
-				state.recordK8sEventToTimeline(recordClusterContext, obj)
-			},
-
-			OnDrop: func(kind, ns, name, reason, op string) {
-				timeline.RecordDrop(kind, ns, name, reason, op, recordClusterContext)
-				if DebugEvents {
-					log.Printf("[DEBUG] Change dropped: %s/%s/%s reason=%s op=%s", kind, ns, name, reason, op)
-				}
-			},
-
-			ComputeDiff: func(kind string, oldObj, newObj any) *k8score.DiffInfo {
-				return ComputeDiff(kind, oldObj, newObj)
-			},
-
+			OnTransform:     secretWriteTimes.capture,
 			IsNoisyResource: isNoisyResource,
 		}
+		conn.configureTypedCallbacks(&cfg, observedChangeHandler(client, secretWriteTimes.observeChange, cronJobScheduleObservations.observeChange))
 
 		wrapped := &ResourceCache{
 			permissionResult:            clonePermissionCheckResult(permResult),
@@ -548,6 +531,44 @@ func (conn *Connection) initResourceCache(ctx context.Context) error {
 	return initErr
 }
 
+func (conn *Connection) configureTypedCallbacks(cfg *k8score.CacheConfig, observe func(ResourceChange, any, any)) {
+	state := conn.cacheState()
+	cluster := TimelineClusterContext(conn.ContextName())
+	cfg.ComputeDiff = state.computeDiff
+	cfg.SyncProgress = func(synced, total int, minimalReady bool) {
+		state.whileOpen(func() { emitSyncProgress(synced, total, minimalReady) })
+	}
+	cfg.OnReceived = func(kind string) {
+		state.whileOpen(func() { timeline.IncrementReceived(kind) })
+	}
+	cfg.OnObservedChange = func(change ResourceChange, obj, oldObj any) {
+		state.whileOpen(func() { observe(change, obj, oldObj) })
+	}
+	cfg.OnChange = func(change ResourceChange, obj, oldObj any) {
+		state.whileOpen(func() {
+			if DebugEvents && change.Operation == "add" &&
+				(change.Kind == "Pod" || change.Kind == "Deployment" || change.Kind == "Service") {
+				log.Printf("[DEBUG] enqueueChange: %s add %s/%s", change.Kind, change.Namespace, change.Name)
+			}
+			state.recordToTimelineStore(cluster, change.Kind, change.Namespace, change.Name, change.UID, change.Operation, oldObj, obj, change.Diff, true)
+		})
+	}
+	cfg.OnEventChange = func(obj any, op string) {
+		// Deleting the Kubernetes Event does not erase the occurrence from history.
+		if op != "delete" {
+			state.whileOpen(func() { state.recordK8sEventToTimeline(cluster, obj) })
+		}
+	}
+	cfg.OnDrop = func(kind, ns, name, reason, op string) {
+		state.whileOpen(func() {
+			timeline.RecordDrop(kind, ns, name, reason, op, cluster)
+			if DebugEvents {
+				log.Printf("[DEBUG] Change dropped: %s/%s/%s reason=%s op=%s", kind, ns, name, reason, op)
+			}
+		})
+	}
+}
+
 func (s *connectionCache) publishSyncing(cache *ResourceCache) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -582,8 +603,8 @@ func (c *Connection) cacheIsCurrent() bool {
 		return false
 	}
 	state := c.cacheState()
-	state.mu.Lock()
-	defer state.mu.Unlock()
+	state.mu.RLock()
+	defer state.mu.RUnlock()
 	return !state.closed && c == Current()
 }
 
@@ -665,8 +686,8 @@ func SnapshotCaches() (promoted, syncing *ResourceCache) {
 		return nil, nil
 	}
 	state := conn.cacheState()
-	state.mu.Lock()
-	defer state.mu.Unlock()
+	state.mu.RLock()
+	defer state.mu.RUnlock()
 	return state.promoted.Load(), state.syncing
 }
 
@@ -698,9 +719,9 @@ func (conn *Connection) closeResourceCache() {
 		return
 	}
 	s := conn.cacheState()
+	s.closeCallbacks()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.closed = true
 	if s.syncing != nil {
 		s.syncing.Stop()
 		s.syncing = nil

@@ -24,9 +24,7 @@ type DynamicResourceCache struct {
 }
 
 type connectionDynamicCache struct {
-	mu       sync.Mutex
-	once     sync.Once
-	closed   bool
+	cacheLifecycle
 	promoted atomic.Pointer[DynamicResourceCache]
 	pending  []func()
 }
@@ -97,12 +95,7 @@ func (conn *Connection) initDynamicResourceCache(changeCh chan k8score.ResourceC
 			sharedDiscovery = discovery.ResourceDiscovery
 		}
 
-		// Wiring-time capture — same rationale as InitResourceCache: a late
-		// callback after a context switch must stamp its own cluster.
-		state := conn.cacheState()
-		recordClusterContext := TimelineClusterContext(conn.ContextName())
-
-		core, err := k8score.NewDynamicResourceCache(k8score.DynamicCacheConfig{
+		cfg := k8score.DynamicCacheConfig{
 			RequiredWatchKinds:          relationshipWatchKinds(),
 			DynamicClient:               client,
 			DirectClient:                directClient,
@@ -116,43 +109,38 @@ func (conn *Connection) initDynamicResourceCache(changeCh chan k8score.ResourceC
 			SyncStallAfter:              dynamicSyncStallAfter,
 			ObjectReadSyncWait:          dynamicObjectReadSyncWait,
 			DebugEvents:                 DebugEvents,
-			OnReceived: func(kind string) {
-				timeline.IncrementReceived(kind)
-			},
-			OnChange: func(change k8score.ResourceChange, obj, oldObj any) {
-				u := extractUnstructured(obj)
-				if u == nil {
-					return
-				}
-				state.recordToTimelineStore(
-					recordClusterContext,
-					change.Kind,
-					change.Namespace,
-					change.Name,
-					change.UID,
-					change.Operation,
-					oldObj,
-					obj,
-					change.Diff,
-					true,
-				)
-			},
-			OnDrop: func(kind, ns, name, reason, op string) {
-				timeline.RecordDrop(kind, ns, name, reason, op, recordClusterContext)
-			},
-			OnRecorded: func(kind string) {
-				timeline.IncrementRecorded(kind)
-			},
-			ComputeDiff: func(kind string, oldObj, newObj any) *k8score.DiffInfo {
-				return ComputeDiff(kind, oldObj, newObj)
-			},
-		})
+		}
+		conn.configureDynamicCallbacks(&cfg)
+		core, err := k8score.NewDynamicResourceCache(cfg)
 		if err != nil {
 			return nil, err
 		}
 
 		return &DynamicResourceCache{DynamicResourceCache: core}, nil
 	})
+}
+
+func (conn *Connection) configureDynamicCallbacks(cfg *k8score.DynamicCacheConfig) {
+	state := conn.dynamicCacheState()
+	history := conn.cacheState()
+	cluster := TimelineClusterContext(conn.ContextName())
+	cfg.ComputeDiff = state.computeDiff
+	cfg.OnReceived = func(kind string) {
+		state.whileOpen(func() { timeline.IncrementReceived(kind) })
+	}
+	cfg.OnChange = func(change ResourceChange, obj, oldObj any) {
+		if extractUnstructured(obj) != nil {
+			state.whileOpen(func() {
+				history.recordToTimelineStore(cluster, change.Kind, change.Namespace, change.Name, change.UID, change.Operation, oldObj, obj, change.Diff, true)
+			})
+		}
+	}
+	cfg.OnDrop = func(kind, ns, name, reason, op string) {
+		state.whileOpen(func() { timeline.RecordDrop(kind, ns, name, reason, op, cluster) })
+	}
+	cfg.OnRecorded = func(kind string) {
+		state.whileOpen(func() { timeline.IncrementRecorded(kind) })
+	}
 }
 
 func (s *connectionDynamicCache) init(build func() (*DynamicResourceCache, error)) error {
@@ -211,9 +199,9 @@ func (conn *Connection) closeDynamicResourceCache() {
 		return
 	}
 	s := conn.dynamicCacheState()
+	s.closeCallbacks()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.closed = true
 	s.pending = nil
 	if dc := s.promoted.Swap(nil); dc != nil {
 		dc.Stop()
