@@ -31,6 +31,7 @@ import {
   changeText,
   consumersText,
   CredentialText,
+  ModelCredentialText,
   effectText,
   KagentName,
   Reading,
@@ -252,9 +253,7 @@ function ReferenceLine({
         <p className="text-xs text-theme-text-secondary">
           {direct.spec?.provider ? redactKagentURLsInText(direct.spec.provider) : 'Provider not reported'} →{' '}
           {direct.spec?.model ? redactKagentURLsInText(direct.spec.model) : 'Model not reported'} →{' '}
-          {direct.spec?.apiKeySecret
-            ? `Secret ${ref.namespace}/${direct.spec.apiKeySecret} · key ${direct.spec.apiKeySecretKey || 'not named'}`
-            : 'No API key Secret declared'}
+          <ModelCredentialText spec={direct.spec ?? {}} namespace={ref.namespace} />
         </p>
       )}
       {(reference.role === 'mcpServer' || reference.role === 'subagentMcpServer') && (
@@ -438,9 +437,7 @@ export function KagentDependencyOverview({ resource, onOpen }: { resource: any; 
             <FactRow label="Provider">{resource.spec?.provider ? redactKagentURLsInText(resource.spec.provider) : 'Not reported'}</FactRow>
             <FactRow label="Model">{resource.spec?.model ? redactKagentURLsInText(resource.spec.model) : 'Not reported'}</FactRow>
             <FactRow label="Credential reference">
-              {resource.spec?.apiKeySecret
-                ? `Secret ${ref.namespace}/${resource.spec.apiKeySecret} · key ${resource.spec.apiKeySecretKey || 'not named'}`
-                : 'No API key Secret declared'}
+              <ModelCredentialText spec={resource.spec ?? {}} namespace={ref.namespace} />
             </FactRow>
           </FactGrid>
         </PageSection>

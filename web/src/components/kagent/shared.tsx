@@ -112,6 +112,12 @@ export function Reading({
     </div>
   )
 }
+export function ModelCredentialText({ spec, namespace }: { spec: Record<string, any>; namespace: string }) {
+  const credential: KagentCredential = spec.apiKeySecret
+    ? { mode: 'apiKeySecret', secret: { group: '', kind: 'Secret', namespace, name: spec.apiKeySecret }, key: spec.apiKeySecretKey }
+    : { mode: 'actorJwt' in spec ? 'actorJwt' : spec.tokenPassthrough === true ? 'tokenPassthrough' : 'none' }
+  return <CredentialText credential={credential} />
+}
 export function CredentialText({ credential }: { credential: KagentCredential }) {
   return credential.secret ? (
     <span className="break-words font-mono text-xs">

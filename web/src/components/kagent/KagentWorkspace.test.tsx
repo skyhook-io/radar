@@ -124,6 +124,12 @@ describe('Overview evidence and folding', () => {
     expect(overview).toContain('≥3 processing')
     expect(html(<KagentModels data={w} onOpen={open} />)).toContain('Agent model: ≥1')
   })
+  it('accounts for every remaining Agent state in the headline', () => {
+    const w = workspace()
+    w.counts.agentsByLatestChange = { notProcessed: 1, notReported: 2, notReady: 3, deleting: 4, unknown: 5 }
+    const out = html(<KagentOverview data={w} runtime={runtime()} onOpen={open} />)
+    for (const text of ['1 not yet processed', '2 not reported', '3 not ready', '4 deleting', '5 unknown']) expect(out).toContain(text)
+  })
   it('does not count stale credential conditions as current findings', () => {
     const w = blockedWorkspace()
     w.findings = []
@@ -344,6 +350,14 @@ describe('object pages', () => {
     expect(html(<KagentAgentOverview resource={{ metadata: { namespace: 'agents', name: 'helper' } }} onOpen={open} />)).toContain(
       'Individual dependency reads',
     )
+  })
+  it.each([
+    [{ actorJwt: { audiences: ['demo'] } }, 'Actor identity'],
+    [{ tokenPassthrough: true }, 'Token passthrough'],
+    [{}, 'No credential declared'],
+    [{ apiKeySecret: 'demo-key', apiKeySecretKey: 'KEY', actorJwt: {} }, 'models/demo-key'],
+  ])('uses inventory credential wording for a get-only model: %j', (spec, text) => {
+    expect(html(<KagentDependencyOverview resource={{ kind: 'ModelConfig', metadata: { namespace: 'models', name: 'get-only' }, spec }} onOpen={open} />)).toContain(text)
   })
   it('shows model reading, credential reference and consumers', () => {
     state.data = blockedWorkspace()

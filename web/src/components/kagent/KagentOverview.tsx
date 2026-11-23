@@ -4,6 +4,7 @@ import type { KagentRef, KagentWorkspace } from '../../api/kagent'
 import { KagentAgentsTable } from './KagentLists'
 import {
   countText,
+  changeText,
   findingProblem,
   KagentCountValue,
   KagentName,
@@ -186,6 +187,9 @@ export function KagentOverview({
               {states.blocked ?? 0} blocked
               {states.failed ? ` · ${bound ? '≥' : ''}${states.failed} failed` : ''}
               {states.preparing ? ` · ${bound ? '≥' : ''}${states.preparing} processing` : ''}
+              {Object.entries(states)
+                .filter(([state, count]) => !['prepared', 'blocked', 'failed', 'preparing'].includes(state) && count > 0)
+                .map(([state, count]) => ` · ${bound ? '≥' : ''}${count} ${changeText(state).toLowerCase()}`)}
             </>
           )}
         </span>
