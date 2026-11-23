@@ -176,7 +176,6 @@ it('gates kagent destinations and composed summaries while keeping the generic r
   expect(resourceExpandedPath(agent, 'test', undefined, { kagentWorkspace: 'unsupported' })).toBeNull()
   expect(resourceDetailRedirect(agent, new URLSearchParams(), { kagentWorkspace: 'unsupported' })).toBeNull()
   expect(resourceDetailSlots(agent, [], { kagentWorkspace: 'unsupported' }).renderSummary).toBeUndefined()
-  expect(resourceDetailSlots(agent, [], { kagentWorkspace: 'supported' }).showYamlTab).toBe(false)
   expect(resourceExpandedPath(agent, 'test', undefined, { kagentWorkspace: 'supported' })).toBe('/kagent/agents/agents/helper?ctx=test')
   expect(resourceExpandedPath({ ...agent, group: 'agent.k8s.elastic.co' }, 'test', undefined, { kagentWorkspace: 'supported' })).toBeNull()
 })

@@ -106,7 +106,7 @@ export function resourceDetailSlots(resource: HostResource, inheritedTabs?: Work
     .map(host => {
       const support = features ? hostSupport(host, features) : 'supported'
       const slots = support === 'unsupported' ? undefined : host.detailSlots?.(resource)
-      return { id: host.id, slots: support === 'unknown' ? { showYamlTab: slots?.showYamlTab } : slots }
+      return { id: host.id, slots: support === 'unknown' ? undefined : slots }
     })
   return composeDetailSlots(slots, inheritedTabs)
 }

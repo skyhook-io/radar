@@ -44,9 +44,9 @@ its actor directly. Revisions distinguish desired, new-sessions, earlier and
 ambiguous/unprovable attribution; template creation and golden-snapshot state are
 labelled as Substrate facts, with no invented preparation age.
 
-Workspace pages hide raw YAML, which can contain credential literals; Spec &
-status and the projected chains show only credential names and keys. The
-pre-existing generic views on older Radars retain their existing behavior.
+Spec & status and the projected chains redact credential literals. The YAML
+view shows the object as stored to whoever may read it, under the exact-kind
+read policy for ModelConfigs and RemoteMCPServers.
 **Conversation outcomes: not visible to Radar.** No Prometheus outcome panel is
 included here.
 

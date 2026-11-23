@@ -6,7 +6,7 @@ import type { SelectedResource } from '../types'
 import { kindToPluralWithGroup } from '../utils/navigation'
 
 export type HostResource = Pick<SelectedResource, 'kind' | 'group' | 'namespace' | 'name'>
-export type DetailSlots = Pick<ComponentProps<typeof WorkloadView>, 'renderSummary' | 'renderHeaderActions' | 'extraTabs' | 'renderStatusBadge' | 'showYamlTab'>
+export type DetailSlots = Pick<ComponentProps<typeof WorkloadView>, 'renderSummary' | 'renderHeaderActions' | 'extraTabs' | 'renderStatusBadge'>
 export type HostFeatures = Partial<Record<RadarFeature, RadarFeatureSupport>>
 export type KindListMode = 'table' | 'wait' | 'view'
 export interface HostKind { name: string; kind: string; group: string }
@@ -100,7 +100,6 @@ export function composeDetailSlots(contributions: readonly { id: string; slots: 
   }
   return {
     ...(summary ? { renderSummary: summary } : {}),
-    ...(contributions.some(host => host.slots?.showYamlTab === false) ? { showYamlTab: false } : {}),
     ...(badge ? { renderStatusBadge: badge } : {}),
     ...(actions.length ? { renderHeaderActions: (props: Parameters<NonNullable<DetailSlots['renderHeaderActions']>>[0]) => actions.map(host => createElement(Fragment, { key: host.id }, host.slots!.renderHeaderActions!(props))) } : {}),
     ...(tabs.length ? { extraTabs: tabs } : {}),

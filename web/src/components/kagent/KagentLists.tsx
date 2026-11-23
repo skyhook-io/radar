@@ -1,3 +1,4 @@
+import { useSearchParams } from 'react-router-dom'
 import { SectionTable, Sub, type TableColumn } from '../workspace/layout'
 import { coverageEmpty } from '../workspace/coverage'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
@@ -28,7 +29,9 @@ export function KagentAgentsTable({
   const sessionByAgent = new Map(runtime.rows.map((row) => [`${row.agent.namespace}/${row.agent.name}`, row]))
   const session = (a: KagentAgent) => <SessionValue row={sessionByAgent.get(`${a.ref.namespace}/${a.ref.name}`)} runtime={runtime} />
   const change = (a: KagentAgent) => <Reading reading={a.reading} text={changeText(a.latestChange.state)} />
-  const revision = (a: KagentAgent) => <span className="font-mono text-xs">{revisionText(a.newSessionsRevision)}</span>
+  const revision = (a: KagentAgent) => (
+    <span className={a.newSessionsRevision ? 'font-mono text-xs' : 'text-xs'}>{revisionText(a.newSessionsRevision)}</span>
+  )
   const model = (a: KagentAgent) =>
     a.model ? (
       <>
@@ -52,7 +55,8 @@ export function KagentAgentsTable({
     <>
       <span>
         {a.incomplete ? '≥' : ''}
-        {a.mcpServers.declared} declared{a.mcpServers.failing > 0 ? ` · ${a.mcpServers.failing} failing` : ''}
+        {a.mcpServers.declared} declared
+        {a.mcpServers.failing > 0 ? ` · ${a.mcpServers.failing} failing` : ''}
       </span>
       {a.mcpServers.unread > 0 && <Sub>{a.mcpServers.unread} unread</Sub>}
       {a.mcpServers.absent > 0 && <Sub>{a.mcpServers.absent} absent</Sub>}
@@ -89,7 +93,11 @@ export function KagentAgentsTable({
     ...(wide
       ? [
           { header: 'Sessions', width: '13%', cell: session },
-          { header: 'Namespace', width: '10%', cell: (a: KagentAgent) => <span className="break-words text-xs">{a.ref.namespace}</span> },
+          {
+            header: 'Namespace',
+            width: '10%',
+            cell: (a: KagentAgent) => <span className="break-words text-xs">{a.ref.namespace}</span>,
+          },
         ]
       : []),
   ]
@@ -128,12 +136,16 @@ export function modelStatus(reading: Pick<KagentModel['reading'], 'state' | 'rea
   return reading.state === 'notReported' ? 'Not reported' : reading.text
 }
 export function KagentMCPServers({ data, onOpen }: { data: KagentWorkspace; onOpen: (ref: KagentRef) => void }) {
+  const [params] = useSearchParams()
+  const problems = params.get('status') === 'problems'
   const wide = useMediaQuery('(min-width: 1280px)')
   return (
     <SectionTable
       title="MCP servers"
-      subtitle="Controller discovery is separate from what a running session can reach."
-      rows={data.mcpServers}
+      subtitle={
+        problems ? 'Showing servers with discovery problems.' : 'Controller discovery is separate from what a running session can reach.'
+      }
+      rows={data.mcpServers.filter((s) => !problems || s.failing)}
       rowKey={(s) => refKey(s.ref)}
       rowResource={(s) => s.ref}
       onInspect={(r) => onOpen({ ...r, group: 'api.kagent.dev' })}
@@ -165,27 +177,48 @@ export function KagentMCPServers({ data, onOpen }: { data: KagentWorkspace; onOp
           width: wide ? '10%' : '23%',
           cell: (s) => (s.toolsOfferedKnown ? s.toolsOffered.length : <span className="text-theme-text-tertiary">Unknown</span>),
         },
-        ...(wide ? [{ header: 'Used by', width: '15%', cell: (s: KagentMCPServer) => consumersText(s.usedBy) }] : []),
+        ...(wide
+          ? [
+              {
+                header: 'Used by',
+                width: '15%',
+                cell: (s: KagentMCPServer) => consumersText(s.usedBy),
+              },
+            ]
+          : []),
         {
           header: wide ? 'Asked-for tools not offered' : 'Tools missing',
           width: wide ? '21%' : '23%',
           cell: (s) => (s.toolsOfferedKnown ? s.askedNotOffered?.map((t) => t.tool).join(', ') || 'None seen' : 'Unknown'),
         },
         ...(wide
-          ? [{ header: 'Namespace', width: '12%', cell: (s: KagentMCPServer) => <span className="break-words">{s.ref.namespace}</span> }]
+          ? [
+              {
+                header: 'Namespace',
+                width: '12%',
+                cell: (s: KagentMCPServer) => <span className="break-words">{s.ref.namespace}</span>,
+              },
+            ]
           : []),
       ]}
     />
   )
 }
 export function KagentModels({ data, onOpen }: { data: KagentWorkspace; onOpen: (ref: KagentRef) => void }) {
+  const [params] = useSearchParams()
+  const problems = params.get('status') === 'problems'
+  const credentialProblems = new Set(data.findings.filter((f) => f.reason === 'KagentAPIKeySecretMissing').map((f) => refKey(f.subject)))
   const wide = useMediaQuery('(min-width: 1280px)')
   return (
     <div className="space-y-5">
       <SectionTable
         title="Models"
-        subtitle="Credential references name Secrets and keys; Radar never reads their values."
-        rows={data.models}
+        subtitle={
+          problems
+            ? 'Showing models with credential problems.'
+            : 'Credential references name Secrets and keys; Radar never reads their values.'
+        }
+        rows={data.models.filter((m) => !problems || credentialProblems.has(refKey(m.ref)))}
         rowKey={(m) => refKey(m.ref)}
         rowResource={(m) => m.ref}
         onInspect={(r) => onOpen({ ...r, group: 'api.kagent.dev' })}
@@ -210,7 +243,11 @@ export function KagentModels({ data, onOpen }: { data: KagentWorkspace; onOpen: 
               </>
             ),
           },
-          { header: 'Status', width: wide ? '18%' : '27%', cell: (m) => <Reading reading={m.reading} text={modelStatus(m.reading)} /> },
+          {
+            header: 'Status',
+            width: wide ? '18%' : '27%',
+            cell: (m) => <Reading reading={m.reading} text={modelStatus(m.reading)} />,
+          },
           ...(wide
             ? [
                 {
@@ -225,7 +262,11 @@ export function KagentModels({ data, onOpen }: { data: KagentWorkspace; onOpen: 
                 },
               ]
             : []),
-          { header: 'Credential reference', width: wide ? '20%' : '35%', cell: (m) => <CredentialText credential={m.credential} /> },
+          {
+            header: 'Credential reference',
+            width: wide ? '20%' : '35%',
+            cell: (m) => <CredentialText credential={m.credential} />,
+          },
           ...(wide
             ? [
                 {
@@ -242,7 +283,11 @@ export function KagentModels({ data, onOpen }: { data: KagentWorkspace; onOpen: 
                     </>
                   ),
                 },
-                { header: 'Namespace', width: '10%', cell: (m: KagentModel) => <span className="break-words">{m.ref.namespace}</span> },
+                {
+                  header: 'Namespace',
+                  width: '10%',
+                  cell: (m: KagentModel) => <span className="break-words">{m.ref.namespace}</span>,
+                },
               ]
             : []),
         ]}
@@ -259,7 +304,10 @@ export function KagentModels({ data, onOpen }: { data: KagentWorkspace; onOpen: 
         columns={[
           { header: 'ModelProviderConfig', cell: (p) => p.ref.name },
           { header: 'Provider', cell: (p) => p.provider || 'Not reported' },
-          { header: 'Status', cell: (p) => (p.reading.state === 'notReported' ? 'Not reported' : p.reading.text) },
+          {
+            header: 'Status',
+            cell: (p) => (p.reading.state === 'notReported' ? 'Not reported' : p.reading.text),
+          },
           { header: 'Namespace', cell: (p) => p.ref.namespace },
         ]}
       />

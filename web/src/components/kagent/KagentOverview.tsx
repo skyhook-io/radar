@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import { FoldSection, ProblemList } from '@skyhook-io/k8s-ui'
 import type { KagentRef, KagentWorkspace } from '../../api/kagent'
 import { KagentAgentsTable } from './KagentLists'
@@ -61,7 +62,10 @@ export function KagentAttention({ data, onOpen, agent }: { data: KagentWorkspace
       {g.findings.map((id) => {
         const finding = byId.get(id)
         if (!finding) return null
-        const problem = { ...findingProblem(finding, readings), ...(g.severity === 'critical' ? { tone: 'unhealthy' as const } : {}) }
+        const problem = {
+          ...findingProblem(finding, readings),
+          ...(g.severity === 'critical' ? { tone: 'unhealthy' as const } : {}),
+        }
         const folded = foldedByLead.get(id) ?? []
         const messages = [problem.rawDetail, ...folded.map((f) => readings.get(refKey(f.subject))?.message)].filter(Boolean)
         const impact = finding.affects
@@ -111,13 +115,32 @@ export function KagentAttention({ data, onOpen, agent }: { data: KagentWorkspace
   const unusedIds = new Set(unused.map((g) => g.id))
   const active = ordered.filter((g) => !unusedIds.has(g.id))
   const incomplete = unused.some((g) => g.findings.some((id) => byId.get(id)?.affects?.lowerBound))
+  const unusedSubjects = new Map(
+    unused
+      .flatMap((g) => g.findings)
+      .flatMap((id) => {
+        const f = byId.get(id)
+        return f ? [[refKey(f.subject), f.subject] as const] : []
+      }),
+  )
+  const unusedKinds = [...unusedSubjects.values()]
+  const unusedCounts = [
+    ['RemoteMCPServer', 'MCP server'],
+    ['ModelConfig', 'model'],
+    ['Agent', 'Agent'],
+  ]
+    .flatMap(([kind, label]) => {
+      const n = unusedKinds.filter((ref) => ref.kind === kind).length
+      return n ? [`${n} ${label}${n === 1 ? '' : 's'}`] : []
+    })
+    .join(', ')
   return (
     <div className="space-y-3">
       {active.map(renderGroup)}
       {unused.length > 0 && (
         <FoldSection
-          title={incomplete ? 'No Agent consumers seen' : 'No Agent consumers'}
-          summary={`${unused.length} groups with problems · may be staged`}
+          title={unusedCounts}
+          summary={incomplete ? 'no Agent consumers seen — may be staged' : 'no Agent uses — may be staged'}
           attention={false}
         >
           <div className="space-y-3">{unused.map(renderGroup)}</div>
@@ -144,9 +167,10 @@ export function KagentOverview({
   }
   const rows = runtime.rows
   const runtimePartial = runtime.lowerBound || !runtime.completePage || rows.some((r) => !r.complete)
+  const totalSessions = rows.reduce((n, r) => n + r.sessions.total, 0)
   const runtimeText =
     rows.length || runtime.completePage
-      ? `${runtimePartial ? '≥' : ''}${rows.reduce((n, r) => n + r.sessions.total, 0)} sessions · ${runtimePartial ? '≥' : ''}${rows.reduce((n, r) => n + r.crashed, 0)} crashed`
+      ? `${runtimePartial ? '≥' : ''}${totalSessions} ${!runtimePartial && totalSessions === 1 ? 'session' : 'sessions'} · ${runtimePartial ? '≥' : ''}${rows.reduce((n, r) => n + r.crashed, 0)} crashed`
       : runtime.unavailable
   return (
     <>
@@ -159,7 +183,8 @@ export function KagentOverview({
             <>
               {bound ? '≥' : ''}
               {states.prepared ?? 0} prepared · {bound ? '≥' : ''}
-              {states.blocked ?? 0} blocked{states.failed ? ` · ${states.failed} failed` : ''}
+              {states.blocked ?? 0} blocked
+              {states.failed ? ` · ${states.failed} failed` : ''}
               {states.preparing ? ` · ${states.preparing} processing` : ''}
             </>
           )}
@@ -170,7 +195,9 @@ export function KagentOverview({
             'unknown'
           ) : (
             <>
-              <KagentCountValue count={data.counts.mcpServersFailing} /> failing
+              <Link to="/kagent/mcpservers?status=problems" className="text-accent-text hover:underline">
+                <KagentCountValue count={data.counts.mcpServersFailing} /> failing
+              </Link>
             </>
           )}
         </span>
@@ -180,7 +207,9 @@ export function KagentOverview({
             'unknown'
           ) : (
             <>
-              <KagentCountValue count={credentialProblems} /> with credential problems
+              <Link to="/kagent/models?status=problems" className="text-accent-text hover:underline">
+                <KagentCountValue count={credentialProblems} /> with credential problems
+              </Link>
             </>
           )}
         </span>

@@ -95,7 +95,6 @@ export const kagentResourceHost: ResourceHost = {
     return `${path}${search.size ? `?${search}` : ''}`
   },
   detailSlots: () => ({
-    showYamlTab: false,
     renderStatusBadge: (resource) => {
       const r = readKagent(resource)
       if (!r) return null

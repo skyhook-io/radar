@@ -187,16 +187,3 @@ it('does not carry a picked Pod to a recreated resource with the same name', () 
   expect(seen.slice(before)).not.toContain('pg-1')
   act(() => root.unmount())
 })
-
-it('keeps raw YAML hidden even for a direct YAML-tab request when the host forbids it', () => {
-  const html = renderToStaticMarkup(<WorkloadView {...props} activeTab="yaml" showYamlTab={false} />)
-  expect(html).toContain('Composed Overview')
-  expect(html).not.toMatch(/role="tab"[^>]*>[^<]*YAML/)
-})
-
-
-it('also blocks the drawer YAML toggle and initial YAML view when the host forbids raw YAML', () => {
-  const html = renderToStaticMarkup(<WorkloadView {...props} expanded={false} initialTab="yaml" showYamlTab={false} />)
-  expect(html).toContain('Composed Overview')
-  expect(html).not.toContain('Toggle YAML view')
-})

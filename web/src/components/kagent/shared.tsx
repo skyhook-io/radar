@@ -90,7 +90,9 @@ export function KagentName({ object, onOpen }: { object: KagentRef; onOpen?: (re
 export function Reading({
   reading,
   text,
+  stateOnly = false,
 }: {
+  stateOnly?: boolean
   reading: Pick<KagentReading, 'state' | 'text' | 'tone' | 'condition' | 'summary'>
   text?: string
 }) {
@@ -98,7 +100,7 @@ export function Reading({
     text: text ?? reading.text,
     tone: reading.tone,
     source: `kagent${reading.condition ? ` · ${reading.condition}` : ''}`,
-    detail: reading.summary,
+    detail: stateOnly ? undefined : reading.summary,
   }
   return (
     <div className="inline-flex max-w-full items-baseline gap-1.5">
@@ -118,8 +120,11 @@ export function CredentialText({ credential }: { credential: KagentCredential })
     </span>
   ) : (
     <span>
-      {{ actorJwt: 'Actor identity', tokenPassthrough: 'Token passthrough', none: 'No credential declared' }[credential.mode] ??
-        credential.mode}
+      {{
+        actorJwt: 'Actor identity',
+        tokenPassthrough: 'Token passthrough',
+        none: 'No credential declared',
+      }[credential.mode] ?? credential.mode}
     </span>
   )
 }
@@ -279,7 +284,10 @@ export function useKagentRuntime(namespaces: string[], enabled = true) {
               return `${r.title}${r.detail ? `: ${r.detail}` : ''}`
             })()
           : summary.error || status.error
-            ? sessionsFailure(summary.error ?? status.error, { namespace: namespaces.join(', ') || 'this scope', name: '' })
+            ? sessionsFailure(summary.error ?? status.error, {
+                namespace: namespaces.join(', ') || 'this scope',
+                name: '',
+              })
             : 'Reading sessions from Substrate…'
   return {
     query: summary,
@@ -300,7 +308,8 @@ export function SessionValue({ row, runtime }: { row?: KagentSessionRow; runtime
     )
   return (
     <>
-      <KagentCountValue count={{ n: row.sessions.total, lowerBound: !row.complete }} /> sessions
+      <KagentCountValue count={{ n: row.sessions.total, lowerBound: !row.complete }} />{' '}
+      {row.sessions.total === 1 && row.complete ? 'session' : 'sessions'}
       <Sub>
         <KagentCountValue count={{ n: row.crashed, lowerBound: !row.complete }} /> crashed
       </Sub>

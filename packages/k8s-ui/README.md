@@ -91,5 +91,3 @@ Existing CNPG primitive exports remain available and delegate to these shared im
 `YamlReview.mode` distinguishes Apply, strict Create and Update (default: `apply`). Hosts using strict creation should pass `create` so an unpreviewable new document does not imply unknown live pause state. Crossplane operation context reports what the server preview actually keeps or clears; unsupported dry-run documents retain conditional uncertainty rather than treating submitted YAML as a live baseline.
 
 For a single editor target, `YamlReview.resourceData` may retain its raw condition evidence when the review YAML intentionally omits status. `EditableYamlView` binds that snapshot to its preview. It is not used to classify unrelated documents in a batch. Generic Apply with neither a known Crossplane shape nor raw acknowledged pause does not infer a resource’s controller from the annotation alone.
-
-`WorkloadView.showYamlTab` defaults to true. A host can set it to false for a read-only projection that must not expose raw credential-bearing YAML; a direct YAML tab request then shows Overview.

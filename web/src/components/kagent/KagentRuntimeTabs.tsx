@@ -129,14 +129,14 @@ export function KagentRevisions({ agent }: { agent: KagentAgentRef }) {
       <RefreshFailedNotice queries={[summary, templates]} />
       <FactGrid>
         <FactRow label="Desired revision">
-          <span className="font-mono text-xs">
+          <span className={data.agent.desiredRevision ? "font-mono text-xs" : "text-xs"}>
             {revisionText(data.agent.desiredRevision) === 'No revision prepared'
               ? 'Not reported for the latest change'
               : revisionText(data.agent.desiredRevision)}
           </span>
         </FactRow>
         <FactRow label="New sessions run">
-          <span className="font-mono text-xs">{revisionText(data.agent.latestSuccessfulRevision)}</span>
+          <span className={data.agent.latestSuccessfulRevision ? "font-mono text-xs" : "text-xs"}>{revisionText(data.agent.latestSuccessfulRevision)}</span>
         </FactRow>
       </FactGrid>
       <p className="text-sm text-theme-text-secondary">
@@ -201,7 +201,7 @@ export function KagentRevisions({ agent }: { agent: KagentAgentRef }) {
       {data.hintedEarlierRevisions > 0 && (
         <Notice>
           {data.complete ? '' : 'At least '}
-          {data.hintedEarlierRevisions} sessions have unprovable earlier revisions. They are hints and do not count as this Agent’s
+          {data.hintedEarlierRevisions} {data.hintedEarlierRevisions === 1 ? 'session has an unprovable earlier revision' : 'sessions have unprovable earlier revisions'}. They are hints and do not count as this Agent’s
           sessions.{' '}
           <button
             type="button"

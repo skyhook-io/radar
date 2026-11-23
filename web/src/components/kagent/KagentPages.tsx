@@ -1,7 +1,13 @@
 import type { ReactNode } from 'react'
+import { Link } from 'react-router-dom'
+import { useSubstratePool, substrateErrorCode } from '../../api/substrateWorkspace'
+import { useConnection } from '../../context/ConnectionContext'
+import { substratePoolPath } from '../substrate/routes'
+import { definitiveFailure, poolReadFailure, poolReading, tierReading } from '../substrate/readings'
 import { FactGrid, FactRow, FoldSection, PaneLoader, SectionHeading } from '@skyhook-io/k8s-ui'
 import {
   readKagent,
+  getKagentHarnessDeclarations,
   getKagentDiscoveredTools,
   stripKagentURLCredentials,
   redactKagentURLsInText,
@@ -59,7 +65,7 @@ function UsedBy({ impact, data, onOpen, server }: { impact: KagentImpact; data: 
   return (
     <SectionTable
       title="Used by"
-      subtitle={consumersText(impact)}
+      subtitle={impact.agents.length ? consumersText(impact) : undefined}
       rows={impact.agents}
       rowKey={(a) => refKey(a.agent)}
       minWidth={0}
@@ -122,9 +128,14 @@ function ReferenceLine({
 }) {
   const ref = reference.target
   const query = useResource<any>(PLURAL[ref.kind] ?? ref.kind.toLowerCase(), ref.namespace, ref.name, ref.group, {
-    enabled: reference.state === 'unread' && ref.group === 'api.kagent.dev',
+    enabled: (reference.state === 'unread' || ref.kind === 'Harness') && ref.group === 'api.kagent.dev',
   })
+  const { connection } = useConnection()
+  const poolQuery = useSubstratePool(ref.kind === 'WorkerPool' ? ref : null)
+  const poolCode = substrateErrorCode(poolQuery.error)
+  const pool = definitiveFailure(poolCode) || poolCode === 'incomplete' ? undefined : poolQuery.data
   const direct = query.data
+  const harness = direct && ref.kind === 'Harness' ? getKagentHarnessDeclarations(direct) : undefined
   const directReading = direct ? readKagent(direct) : undefined
   const state = reference.state !== 'unread' ? reference.state : direct ? 'present' : isNotFoundError(query.error) ? 'absent' : 'unread'
   const reading = directReading ?? reference.reading
@@ -136,9 +147,31 @@ function ReferenceLine({
     <div className="card-inner-lg space-y-1 text-sm">
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
         <span className="font-medium text-theme-text-primary">{roleText(reference.role)}</span>
-        <KagentName object={ref} onOpen={onOpen} />
+        {ref.kind === 'WorkerPool' ? (
+          <Link className="font-mono text-xs text-accent-text hover:underline" to={substratePoolPath(ref, connection.context)}>
+            {ref.name}
+          </Link>
+        ) : (
+          <KagentName object={ref} onOpen={onOpen} />
+        )}
         <div className="text-theme-text-secondary">
-          {state === 'present' ? (
+          {ref.kind === 'WorkerPool' ? (
+            pool ? (
+              poolReading(pool.pool).label
+            ) : poolQuery.isLoading ? (
+              'Reading worker pool…'
+            ) : (
+              "Substrate's pools aren't readable with this connection."
+            )
+          ) : ref.kind === 'Harness' && state === 'present' ? (
+            harness?.type ? (
+              `${harness.type} runtime`
+            ) : query.isLoading ? (
+              'Reading runtime…'
+            ) : (
+              'kagent reports no status for Harnesses'
+            )
+          ) : state === 'present' ? (
             reading ? (
               <Reading
                 reading={reading}
@@ -175,7 +208,12 @@ function ReferenceLine({
             <>
               Needs{' '}
               <GrantText
-                grant={{ verb: 'get', group: ref.group, resource: PLURAL[ref.kind] ?? ref.kind.toLowerCase(), namespace: ref.namespace }}
+                grant={{
+                  verb: 'get',
+                  group: ref.group,
+                  resource: PLURAL[ref.kind] ?? ref.kind.toLowerCase(),
+                  namespace: ref.namespace,
+                }}
               />
               .
             </>
@@ -183,6 +221,18 @@ function ReferenceLine({
             `Not read: ${reference.unread ?? 'unknown'}.`
           )}
         </p>
+      )}
+      {harness?.image && <p className="break-all font-mono text-xs text-theme-text-secondary">{harness.image}</p>}
+      {ref.kind === 'WorkerPool' && (
+        <Sub>
+          {pool
+            ? pool.apiTier.state !== 'connected'
+              ? tierReading(pool.apiTier).detail
+              : undefined
+            : poolQuery.isLoading
+              ? undefined
+              : poolReadFailure(poolCode, poolQuery.error instanceof Error ? poolQuery.error.message : undefined)}
+        </Sub>
       )}
       {reference.policyUnknown && (
         <p className="text-xs text-theme-text-secondary">
@@ -255,7 +305,7 @@ export function KagentAgentOverview({ resource, onOpen }: { resource: any; onOpe
       <PageSection title="What new sessions run">
         <FactGrid>
           <FactRow label="Revision">
-            <span className="font-mono">{revisionText(agent.newSessionsRevision)}</span>
+            <span className={agent.newSessionsRevision ? 'font-mono' : undefined}>{revisionText(agent.newSessionsRevision)}</span>
             {!agent.newSessionsRevision && <Sub>No session can start until kagent prepares a revision.</Sub>}
           </FactRow>
           <FactRow label="Latest change">
@@ -264,31 +314,6 @@ export function KagentAgentOverview({ resource, onOpen }: { resource: any; onOpe
               <FoldSection title="kagent's reason" summary="" attention={false}>
                 <p className="break-words text-xs text-theme-text-secondary">{agent.latestChange.message}</p>
               </FoldSection>
-            )}
-          </FactRow>
-          <FactRow label="Placement">
-            {session ? (
-              <>
-                <span>
-                  {session.placement.state === 'mayFit'
-                    ? 'May fit'
-                    : session.placement.state === 'noRoom'
-                      ? 'No room: CPU or memory'
-                      : session.placement.state === 'full'
-                        ? 'No free session slots'
-                        : session.placement.state === 'noActiveWorkers'
-                          ? 'No active workers'
-                          : 'Unknown'}
-                </span>
-                <Sub>{session.placement.reading}</Sub>
-                <Sub>
-                  Prepared template{' '}
-                  {session.placement.template ? `${session.placement.template.atespace}/${session.placement.template.name}` : 'not read'}
-                  {!session.placement.complete ? ' · worker read incomplete' : ''}
-                </Sub>
-              </>
-            ) : (
-              runtime.unavailable
             )}
           </FactRow>
         </FactGrid>
@@ -313,7 +338,7 @@ export function KagentAgentOverview({ resource, onOpen }: { resource: any; onOpe
               data={data}
               onOpen={onOpen}
               placement={
-                r.role === 'workerPool' && latest === 'prepared' && session
+                r.role === 'workerPool' && agent.newSessionsRevision && session
                   ? `Placement of the prepared revision: ${session.placement.reading}`
                   : undefined
               }
@@ -361,18 +386,32 @@ export function KagentDependencyOverview({ resource, onOpen }: { resource: any; 
   const reading = object?.reading ?? readKagent(resource)
   const model = object && ref.kind === 'ModelConfig' ? (object as KagentModel) : undefined
   const server = object && ref.kind === 'RemoteMCPServer' ? (object as KagentMCPServer) : undefined
+  const hasFinding = !!data?.groups.some((g) =>
+    [...g.findings, ...(g.folded?.map((f) => f.finding) ?? [])].some((id) =>
+      data.findings.some((f) => f.id === id && refKey(f.subject) === refKey(ref)),
+    ),
+  )
+  const storedURL = resource.spec?.url
+  const url = storedURL ? stripKagentURLCredentials(storedURL) : undefined
+  const urlLabel = storedURL && storedURL !== url ? 'URL (credentials removed)' : 'URL'
   return (
     <div className="space-y-5">
       <RefreshFailedNotice queries={[query]} />
       {data && <KagentAttention data={data} onOpen={onOpen} agent={ref} />}
       <PageSection title="Reading">
-        {reading && <Reading reading={reading} text={model ? modelStatus(model.reading) : server ? mcpStatus(server) : reading.text} />}
-        {server?.failing && (
+        {reading && (
+          <Reading
+            reading={reading}
+            stateOnly={hasFinding}
+            text={model ? modelStatus(model.reading) : server ? mcpStatus(server) : reading.text}
+          />
+        )}
+        {!hasFinding && server?.failing && (
           <p className="text-sm text-theme-text-secondary">
             kagent's controller can't discover this server's tools; sessions may run without them.
           </p>
         )}
-        {reading?.message && (
+        {!hasFinding && reading?.message && (
           <FoldSection title="kagent's message" summary="" attention={false}>
             <p className="break-words text-xs text-theme-text-secondary">{reading.message}</p>
           </FoldSection>
@@ -405,7 +444,7 @@ export function KagentDependencyOverview({ resource, onOpen }: { resource: any; 
       {!server && ref.kind === 'RemoteMCPServer' && (
         <PageSection title="MCP server">
           <FactGrid>
-            <FactRow label="URL (redacted)">{resource.spec?.url ? stripKagentURLCredentials(resource.spec.url) : 'Not reported'}</FactRow>
+            <FactRow label={urlLabel}>{url || 'Not reported'}</FactRow>
             <FactRow label="Tools offered">
               {reading?.state === 'ready'
                 ? getKagentDiscoveredTools(resource).join(', ') || 'None'
@@ -417,7 +456,7 @@ export function KagentDependencyOverview({ resource, onOpen }: { resource: any; 
       {server && (
         <PageSection title="MCP server">
           <FactGrid>
-            <FactRow label="URL (redacted)">
+            <FactRow label={urlLabel}>
               <span className="break-all font-mono text-xs">{server.url || 'Not reported'}</span>
             </FactRow>
             <FactRow label="Tools offered">

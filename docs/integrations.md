@@ -2533,8 +2533,8 @@ partial. Dependency failures show the Agents they affect and whether each is
 blocked (first reported cause), may run without its tools, or only declares the
 dependency. Object pages pin the context and separate latest-change declarations
 from the revision new sessions run. Sessions and Revisions tabs expose attributed
-runtime evidence; conversation outcomes stay not visible. The new pages hide
-raw YAML to keep credential literals out of the workspace. Older Radars keep the
+runtime evidence; conversation outcomes stay not visible. The new pages retain
+raw YAML under the same read policy as the generic resource views. Older Radars keep the
 existing generic list and drawer. Screen routes, coverage and evidence rules:
 [kagent.md](kagent.md#screens-and-navigation).
 

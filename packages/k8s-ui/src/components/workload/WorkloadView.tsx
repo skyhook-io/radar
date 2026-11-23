@@ -367,7 +367,6 @@ interface WorkloadViewProps {
   subheader?: ReactNode
   /** Expanded view: tab ids in display order; tabs not listed follow in their usual order. */
   tabOrder?: string[]
-  showYamlTab?: boolean
   /** Expanded view: relabel, lead, or replace the whole "Spec & status" body. */
   specTab?: { label?: string; icon?: ReactNode; lead?: ReactNode; render?: () => ReactNode }
   /** Domain actions rendered in the header (drawer and expanded). */
@@ -546,7 +545,6 @@ export function WorkloadView({
   extraTabs,
   tabOrder,
   specTab,
-  showYamlTab = true,
   subheader,
   renderHeaderActions,
   renderRelatedYaml,
@@ -596,8 +594,7 @@ export function WorkloadView({
   }, [onTabChange])
 
   // Collapsed mode state (YAML toggle for drawer mode)
-  const [yamlRequested, setShowYaml] = useState(initialTab === 'yaml')
-  const showYaml = showYamlTab && yamlRequested
+  const [showYaml, setShowYaml] = useState(initialTab === 'yaml')
   const [drawerSpec, setDrawerSpec] = useState(false)
   useEffect(() => {
     setShowYaml(initialTab === 'yaml')
@@ -883,7 +880,7 @@ export function WorkloadView({
       category: 'Drawer' as const,
       scope: 'drawer' as const,
       handler: () => switchView(true),
-      enabled: active && !expanded && showYamlTab,
+      enabled: active && !expanded,
     },
     {
       id: 'drawer-detail',
@@ -894,7 +891,7 @@ export function WorkloadView({
       handler: () => switchView(false),
       enabled: active && !expanded,
     },
-  ], [active, expanded, onBack, onClose, switchView, showYamlTab]))
+  ], [active, expanded, onBack, onClose, switchView]))
 
   const rolloutDisplay = resource && isRolloutStatusKind(apiKind)
     ? getWorkloadDisplayStatus(resource, apiKind, workloadPods)
@@ -1012,7 +1009,7 @@ export function WorkloadView({
       hidden: !(renderDiagnoseTabForState && (isDiagnoseKind(apiKind, group) || (reachableVia?.length ?? 0) > 0)),
     },
     { id: 'cost', label: 'Cost', icon: <Coins className="w-4 h-4" />, hidden: !costTabVisible },
-    { id: 'yaml', label: 'YAML', icon: <FileText className="w-4 h-4" />, hidden: !showYamlTab },
+    { id: 'yaml', label: 'YAML', icon: <FileText className="w-4 h-4" /> },
   ]
   const allTabs = orderTabs(mergeExtraTabs(tabs, expanded ? extraTabsForState : undefined), expanded ? tabOrder : undefined)
   const requestedTabAvailable = allTabs.some((tab) => tab.id === requestedTab && !tab.hidden)
@@ -1022,7 +1019,6 @@ export function WorkloadView({
     requestedTab !== 'overview' &&
     !requestedTabAvailable &&
     (
-      (requestedTab === 'yaml' && !showYamlTab) ||
       (requestedTab === 'spec' && !!resource && !resourceLoading && !expandedSummary) ||
       (requestedTab === 'topology' && topologyTabHidden) ||
       (requestedTab === 'metrics' && (!renderMetricsTab || (!!resource && !resourceLoading && !showMetricsTab))) ||
@@ -1132,7 +1128,7 @@ export function WorkloadView({
           </div>
 
           {/* Actions bar */}
-          <ResourceActionsBar key={actionsBarKey} resource={selectedResource} data={resource} onClose={onClose} showYaml={showYaml} onToggleYaml={showYamlTab ? () => switchView(!showYaml) : undefined} {...actionsBarPropsForState} leadingActions={headerActions} />
+          <ResourceActionsBar key={actionsBarKey} resource={selectedResource} data={resource} onClose={onClose} showYaml={showYaml} onToggleYaml={() => switchView(!showYaml)} {...actionsBarPropsForState} leadingActions={headerActions} />
         </div>
 
         {/* Success animation overlay */}
