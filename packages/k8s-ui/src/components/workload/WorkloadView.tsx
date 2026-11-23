@@ -661,7 +661,6 @@ export function WorkloadView({
       groupByApp: true,
     })
   }, [allEvents, topology, kind, group, namespace, name, historyScoped])
-  const historyNotes = useMemo(() => workloadHistoryNotes(historyCoverage, historyGaps), [historyCoverage, historyGaps])
 
   // Topology tab — the seeded neighborhood around this one workload (its
   // ownership core + attached Services/config/policies), not the whole namespace.
@@ -1513,8 +1512,12 @@ export function WorkloadView({
             loadingOlder={loadingOlderHistory}
             olderError={olderHistoryError}
             scoped={historyScoped}
+            scopeText={isRuntimeWorkloadOverviewKind(apiKind, group) && ['apps', 'batch'].includes(apiVersionToGroup(resource?.apiVersion))
+              ? `This ${displayKindName(apiKind, resource?.kind)}, its recorded children and attached resources.`
+              : `Changes to this ${displayKindName(apiKind, resource?.kind)}.`}
             incomplete={historyIncomplete}
-            notes={historyNotes}
+            historyCoverage={historyCoverage}
+            historyGaps={historyGaps}
             error={historyError}
             onRetry={onRetryHistory}
             selectedEventId={selectedEventId}
@@ -1822,8 +1825,10 @@ function EventsTab({
   loadingOlder,
   olderError,
   scoped,
+  scopeText,
   incomplete,
-  notes = [],
+  historyCoverage,
+  historyGaps,
   error,
   onRetry,
   selectedEventId,
@@ -1839,9 +1844,10 @@ function EventsTab({
   loadingOlder?: boolean
   olderError?: Error | null
   scoped?: boolean
+  scopeText: string
   incomplete?: boolean
-  /** Coverage and access sentences from workloadHistoryNotes. */
-  notes?: string[]
+  historyCoverage?: WorkloadHistoryCoverage | null
+  historyGaps?: ReadGap[] | null
   error?: Error | null
   onRetry?: () => void
   selectedEventId: string | null
@@ -1972,12 +1978,14 @@ function EventsTab({
     )
   }
 
+  const notes = workloadHistoryNotes(historyCoverage, historyGaps)
+  const historySince = historyCoverage?.complete_since
   const historyDetails = (
-    <>
-      {incomplete && <p>Some past runs or related resources may be outside the history Radar can follow.</p>}
-      {notes.map((note) => <p key={note}>{note}</p>)}
+    <ul className="space-y-1">
+      {incomplete && <li>Some past runs or related resources may be missing.</li>}
+      {notes.map((note, index) => <li key={note} title={index === 0 && historySince ? new Date(historySince).toLocaleString() : undefined}>{note}</li>)}
       {truncated && (
-        <p>
+        <li>
           Older history exists.{' '}
           {olderError && <span className="text-[var(--color-error)]" title={olderError.message}>Couldn't load older events. </span>}
           {onLoadOlder && (
@@ -1990,9 +1998,9 @@ function EventsTab({
               {loadingOlder ? 'Loading…' : olderError ? 'Try again' : 'Load older'}
             </button>
           )}
-        </p>
+        </li>
       )}
-    </>
+    </ul>
   )
 
   return (
@@ -2024,20 +2032,25 @@ function EventsTab({
       )}
       {scoped && (
         <div className="shrink-0 border-b border-theme-border bg-theme-surface px-4 py-3 text-sm leading-relaxed text-theme-text-secondary" role="note">
-          This resource, what it runs, and the Services, Ingresses, config and scalers attached to it.
+          {scopeText}
         </div>
       )}
       {cleanEvents.length === 0 ? (
         <div className="min-h-0 flex-1 overflow-auto p-4">
           <EmptyState
             icon={Activity}
+            className="max-w-2xl"
             headline="No recorded activity"
             body={
-              <div className="space-y-3 text-sm leading-relaxed">
+              <div className="space-y-4 text-sm leading-relaxed">
                 <p>{events.length > 0
                   ? 'The recorded events have no usable timestamps to display.'
                   : 'No changes were found in the history Radar holds for this resource.'}</p>
-                {historyDetails}
+                {(truncated || incomplete || notes.length > 0) && (
+                  <div className="space-y-1 border-t border-theme-border pt-3 text-left text-xs leading-relaxed text-theme-text-tertiary" role="note">
+                    {historyDetails}
+                  </div>
+                )}
               </div>
             }
           />

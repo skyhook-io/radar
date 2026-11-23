@@ -3,6 +3,7 @@ import { act, type ComponentProps } from 'react'
 import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { expect, it, vi } from 'vitest'
+import { formatRelativeAgeTime } from '../../utils/format'
 import { WorkloadView } from './WorkloadView'
 
 const props: ComponentProps<typeof WorkloadView> = {
@@ -27,11 +28,18 @@ function expectSingleEmpty(host: HTMLElement) {
   expect([...host.querySelectorAll('span')].some((span) => span.textContent === 'Resource')).toBe(false)
 }
 
-it.each(['ConfigMap', 'Deployment', 'Agent'])('shows one empty state without an axis for a %s', (kind) => {
-  const host = render({ kind: `${kind.toLowerCase()}s`, resource: { ...props.resource, kind } })
+it.each([
+  ['ConfigMap', 'v1', 'Changes to this ConfigMap.'],
+  ['Deployment', 'apps/v1', 'This Deployment, its recorded children and attached resources.'],
+  ['CronJob', 'batch/v1', 'This CronJob, its recorded children and attached resources.'],
+  ['Agent', 'example.io/v1', 'Changes to this Agent.'],
+  ['Deployment', 'example.io/v1', 'Changes to this Deployment.'],
+])('describes the certain history scope for a %s in %s', (kind, apiVersion, scope) => {
+  const host = render({ kind: `${kind.toLowerCase()}s`, resource: { ...props.resource, kind, apiVersion } })
   expectSingleEmpty(host)
   expect(host.textContent).toContain('No changes were found in the history Radar holds for this resource.')
-  expect(host.textContent).toContain('This resource, what it runs, and the Services, Ingresses, config and scalers attached to it.')
+  expect(host.textContent).toContain(scope)
+  expect(host.textContent).not.toContain('what it runs')
   expect(host.textContent).not.toContain('complete history')
   expect(host.textContent).not.toContain('since')
 })
@@ -44,9 +52,12 @@ it('keeps the dated history boundary and both missing-history reasons inside the
   })
   expectSingleEmpty(host)
   const body = [...host.querySelectorAll('p')].find((p) => p.textContent?.startsWith('No changes were found'))!.parentElement!
-  expect(body.textContent).toContain(`Changes before ${new Date(since).toLocaleString()} may be missing`)
-  expect(body.textContent).toContain('Radar began recording part of this history later and older history was deleted')
-  expect(body.textContent).toContain('Some past runs or related resources may be outside the history Radar can follow.')
+  expect(body.textContent).toContain(`Changes before ${formatRelativeAgeTime(since)} may be missing`)
+  expect(body.textContent).toContain('recording started later and older history was deleted')
+  expect(body.querySelector('[title]')?.getAttribute('title')).toBe(new Date(since).toLocaleString())
+  expect(body.querySelector('[role=note]')?.className).toContain('border-t')
+  expect(body.querySelector('[role=note]')?.className).toContain('text-left')
+  expect(body.textContent).toContain('Some past runs or related resources may be missing.')
 })
 
 it('does not invent a history start time when it is withheld, and preserves access gaps', () => {
