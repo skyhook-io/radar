@@ -1611,7 +1611,9 @@ func GetCachedPermissionResult() *PermissionCheckResult {
 }
 
 // CachedPermissionResult is GetCachedPermissionResult for this connection.
-func (c *Connection) CachedPermissionResult() *PermissionCheckResult { return c.cachedPermissionResult() }
+func (c *Connection) CachedPermissionResult() *PermissionCheckResult {
+	return c.cachedPermissionResult()
+}
 
 func (c *Connection) cachedPermissionResult() *PermissionCheckResult {
 	state := c.permissions()
