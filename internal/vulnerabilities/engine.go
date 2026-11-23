@@ -19,15 +19,20 @@ import (
 // report is one scan report reduced to what the rollup reads. Findings are
 // parsed only for the report chosen for an image.
 type report struct {
-	u         *unstructured.Unstructured
-	ref       resourceapi.ObjectRef
-	owner     ownerKey
-	uid       types.UID
-	imageID   string
-	image     string
-	digest    string
-	os        string
-	osFamily  string
+	u        *unstructured.Unstructured
+	ref      resourceapi.ObjectRef
+	owner    ownerKey
+	uid      types.UID
+	imageID  string
+	image    string
+	digest   string
+	os       string
+	osFamily string
+	// osKnown is whether the report has an OS block; osEOL is its eosl,
+	// which Trivy omits when false.
+	osKnown   bool
+	osEOL     bool
+	scanner   Scanner
 	scannedAt time.Time
 	findings  []Finding
 	// unread is true when the findings budget ran out before this report.
@@ -62,6 +67,11 @@ func reportHeader(u *unstructured.Unstructured) (report, bool) {
 	if osInfo, _ := body["os"].(map[string]any); osInfo != nil {
 		r.osFamily = str(osInfo["family"])
 		r.os = strings.TrimSpace(r.osFamily + " " + str(osInfo["name"]))
+		r.osKnown = r.os != ""
+		r.osEOL, _ = osInfo["eosl"].(bool)
+	}
+	if sc, _ := body["scanner"].(map[string]any); sc != nil {
+		r.scanner = Scanner{Name: str(sc["name"]), Version: str(sc["version"])}
 	}
 	if ts, err := time.Parse(time.RFC3339, str(body["updateTimestamp"])); err == nil {
 		r.scannedAt = ts
@@ -69,6 +79,15 @@ func reportHeader(u *unstructured.Unstructured) (report, bool) {
 		r.scannedAt = u.GetCreationTimestamp().Time
 	}
 	return r, true
+}
+
+// wireScanner is the report's scanner for the wire, nil when it names none.
+func (r *report) wireScanner() *Scanner {
+	if r.scanner.Name == "" {
+		return nil
+	}
+	s := r.scanner
+	return &s
 }
 
 // parseFindings reads a report's findings, one per (CVE, package, installed
@@ -89,8 +108,11 @@ func parseFindings(u *unstructured.Unstructured) []Finding {
 			Title:            str(v["title"]),
 			Link:             str(v["primaryLink"]),
 			PackageType:      str(v["packageType"]),
+			PackageURL:       str(v["packagePURL"]),
 		}
-		f.ecosystem = ecosystemOf(f.PackageType, str(v["packagePURL"]))
+		f.ecosystem = ecosystemOf(f.PackageType, f.PackageURL)
+		f.publishedAt, _ = timeOf(v["publishedDate"])
+		f.lastModified, _ = timeOf(v["lastModifiedDate"])
 		if f.ID == "" {
 			continue
 		}
@@ -624,6 +646,9 @@ func (j *rollup) summary() Summary {
 		if counts.Critical > 0 {
 			s.ImagesWithCritical++
 		}
+		if r.osEOL {
+			s.ImagesOSEndOfLife++
+		}
 		for _, f := range r.findings {
 			if (f.Severity == SeverityCritical || f.Severity == SeverityHigh) && f.FixedVersion != "" {
 				fixableCH[f.ID] = true
@@ -701,6 +726,10 @@ func (m matcher) workloadKept(workloads []WorkloadRef) bool {
 	return (m.f.Workload == nil || slices.ContainsFunc(workloads, m.wanted)) &&
 		(!m.f.ExposedOnly || slices.ContainsFunc(workloads, m.isExposed))
 }
+
+// imageKept is whether an image passes the image filters: the OS end of
+// life one.
+func (m matcher) imageKept(r *report) bool { return !m.f.OSEndOfLifeOnly || r.osEOL }
 
 func (m matcher) isExposed(w WorkloadRef) bool { return m.exposed != nil && m.exposed(w) }
 
@@ -848,7 +877,7 @@ func (j *rollup) imageRows(f Filter) (rows []Image, clean []CleanImage) {
 	for _, agg := range j.sortedImages() {
 		r := agg.report
 		workloads := sortedWorkloads(agg.workloads)
-		if !m.workloadKept(workloads) {
+		if !m.workloadKept(workloads) || !m.imageKept(r) {
 			continue
 		}
 		rowMatched := m.rowMatches(agg.searchText(), workloads)
@@ -858,7 +887,7 @@ func (j *rollup) imageRows(f Filter) (rows []Image, clean []CleanImage) {
 					return rows, clean
 				}
 				c := CleanImage{
-					ID: r.imageID, Image: cmp.Or(r.image, r.digest), ScannedAt: r.scannedAt, Report: r.ref,
+					ID: r.imageID, Image: cmp.Or(r.image, r.digest), OSEndOfLife: r.osEOL, ScannedAt: r.scannedAt, Report: r.ref,
 					Workloads: m.listed(workloads, j.lim.workloadsPerRow), WorkloadsTotal: len(workloads),
 				}
 				var ok bool
@@ -883,7 +912,7 @@ func (j *rollup) imageRows(f Filter) (rows []Image, clean []CleanImage) {
 		}
 		counts, fixable := countFindings(r.findings)
 		row := Image{
-			ID: r.imageID, Image: cmp.Or(r.image, r.digest), Digest: r.digest, OS: r.os, ScannedAt: r.scannedAt,
+			ID: r.imageID, Image: cmp.Or(r.image, r.digest), Digest: r.digest, OS: r.os, OSEndOfLife: r.osEOL, Scanner: r.wireScanner(), ScannedAt: r.scannedAt,
 			Counts: counts, Fixable: fixable, Matching: len(matching), FindingsUnread: r.unread,
 			Workloads: m.listed(workloads, j.lim.workloadsPerRow), WorkloadsTotal: len(workloads),
 			FindingsTotal: len(r.findings), Report: r.ref,
@@ -1043,7 +1072,7 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 		}
 		r := agg.report
 		workloads := sortedWorkloads(agg.workloads)
-		if !m.workloadKept(workloads) {
+		if !m.workloadKept(workloads) || !m.imageKept(r) {
 			continue
 		}
 		imageWorkloads[r.imageID] = workloads
@@ -1076,6 +1105,13 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 			}
 			c.row.Title = cmp.Or(c.row.Title, fd.Title)
 			c.row.Link = cmp.Or(c.row.Link, fd.Link)
+			if !fd.publishedAt.IsZero() && (c.row.PublishedAt == nil || fd.publishedAt.Before(*c.row.PublishedAt)) {
+				published := fd.publishedAt
+				c.row.PublishedAt = &published
+			}
+			if fd.lastModified.After(c.row.lastModified) {
+				c.row.lastModified = fd.lastModified
+			}
 			c.row.Fixable = c.row.Fixable || fd.FixedVersion != ""
 			c.packages[fd.Package] = true
 			c.images[r.imageID] = fixedHere[fd.ID]
@@ -1195,6 +1231,9 @@ func (j *rollup) workloads(f Filter) (rows, clean, unscanned []Workload) {
 	for _, ref := range order {
 		a := byRef[ref]
 		if !m.workloadKept([]WorkloadRef{ref}) {
+			continue
+		}
+		if m.f.OSEndOfLifeOnly && !slices.ContainsFunc(slices.Collect(maps.Keys(a.images)), func(id string) bool { return j.images[id].report.osEOL }) {
 			continue
 		}
 		routes := j.exposure[ref]
@@ -1488,6 +1527,12 @@ func sortedKeys(set map[string]bool) []string {
 func asMap(v any) map[string]any {
 	m, _ := v.(map[string]any)
 	return m
+}
+
+// timeOf reads an RFC 3339 timestamp; Trivy omits a date it doesn't know.
+func timeOf(v any) (time.Time, bool) {
+	t, err := time.Parse(time.RFC3339, str(v))
+	return t, err == nil
 }
 
 func str(v any) string {

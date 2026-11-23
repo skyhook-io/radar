@@ -132,7 +132,8 @@ func vulnerabilityFilter(r *http.Request) vulnerabilities.Filter {
 	severities, _ := vulnerabilities.ParseSeverities(q.Get("severity"))
 	filter := vulnerabilities.Filter{
 		Severities: severities, FixableOnly: q.Get("fixable") == "1" || q.Get("fixable") == "true", Query: q.Get("q"),
-		ExposedOnly: q.Get("exposed") == "1" || q.Get("exposed") == "true",
+		ExposedOnly:     q.Get("exposed") == "1" || q.Get("exposed") == "true",
+		OSEndOfLifeOnly: q.Get("eol") == "1" || q.Get("eol") == "true",
 	}
 	if kind, ns, name := q.Get("workloadKind"), q.Get("workloadNamespace"), q.Get("workloadName"); kind != "" && ns != "" && name != "" {
 		filter.Workload = &vulnerabilities.WorkloadRef{Kind: kind, Group: q.Get("workloadGroup"), Namespace: ns, Name: name}
