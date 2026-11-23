@@ -23,8 +23,9 @@ type Connection struct {
 	perms                                    atomic.Pointer[permissionState]
 	cache                                    atomic.Pointer[connectionCache]
 	discovery                                atomic.Pointer[ResourceDiscovery]
-	// id is written once, when the connection is admitted, under
-	// connectionStatusMu; it stays empty for a connection never admitted.
+	// id is the ID of the connection's latest admission, written under
+	// connectionStatusMu. Each admission gets a new one, so an ID from before
+	// a retirement is refused even if the same build is admitted again.
 	id string
 }
 

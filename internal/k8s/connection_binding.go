@@ -28,24 +28,32 @@ func CaptureServingConnection() (*Connection, error) {
 
 type connectionKey struct{}
 
+// boundConnection is a request's binding: the connection, and the admission
+// it was bound in. A build admitted again after a retirement is the same
+// connection under a new ID; a request bound before is no longer "still bound".
+type boundConnection struct {
+	conn *Connection
+	id   string
+}
+
 // WithConnection binds a request to c; ClientFromContext, the Helm write path
 // and kind lookups then use c's clients and discovery, not the installed ones.
 func WithConnection(ctx context.Context, c *Connection) context.Context {
-	return context.WithValue(ctx, connectionKey{}, c)
+	return context.WithValue(ctx, connectionKey{}, boundConnection{conn: c, id: c.ID()})
 }
 
 // ConnectionFrom returns the connection a request was bound to, or nil.
 func ConnectionFrom(ctx context.Context) *Connection {
-	c, _ := ctx.Value(connectionKey{}).(*Connection)
-	return c
+	b, _ := ctx.Value(connectionKey{}).(boundConnection)
+	return b.conn
 }
 
 // StillBound reports whether a request's connection is still serving (true for
 // an unbound request). Composite services that also read state not yet on the
 // Connection (the caches) check it inside their CaptureClusterReads callback.
 func StillBound(ctx context.Context) bool {
-	c := ConnectionFrom(ctx)
+	b, ok := ctx.Value(connectionKey{}).(boundConnection)
 	connectionStatusMu.RLock()
 	defer connectionStatusMu.RUnlock()
-	return c == nil || c == serving
+	return !ok || b.conn == nil || (b.conn == serving && b.id == servingIDLocked())
 }
