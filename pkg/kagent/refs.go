@@ -390,7 +390,11 @@ func (t *treeWalk) visit(node templateNode, depth int) {
 			server, _ := mcp["server"].(map[string]any)
 			name, _ := server["name"].(string)
 			kind, _ := server["kind"].(string)
-			if name == "" || kind != KindRemoteMCPServer {
+			group, _ := server["group"].(string)
+			if group == "" {
+				group, _ = server["apiGroup"].(string)
+			}
+			if name == "" || kind != KindRemoteMCPServer || group != "" && group != Group {
 				continue
 			}
 			namespace, _ := server["namespace"].(string)

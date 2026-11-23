@@ -109,6 +109,46 @@ func inventoryOf(v impactVector) Inventory {
 
 func agentKey(r ObjectRef) string { return r.Namespace + "/" + r.Name }
 
+func TestImpactDoesNotJoinMCPServersFromAnotherAPIGroup(t *testing.T) {
+	for _, field := range []string{"apiGroup", "group"} {
+		t.Run(field, func(t *testing.T) {
+			for _, group := range []string{Group, "other.example.com"} {
+				serverRef := map[string]any{"name": "tools", "kind": KindRemoteMCPServer, field: group}
+				a := unstructured.Unstructured{Object: map[string]any{
+					"apiVersion": Group + "/v1alpha3", "kind": KindAgent,
+					"metadata": map[string]any{"namespace": "agents", "name": "helper"},
+					"spec":     map[string]any{"template": map[string]any{"inline": map[string]any{"tools": []any{map[string]any{"mcp": map[string]any{"server": serverRef}}}}}},
+				}}
+				server := unstructured.Unstructured{Object: map[string]any{
+					"apiVersion": Group + "/v1alpha3", "kind": KindRemoteMCPServer,
+					"metadata": map[string]any{"namespace": "agents", "name": "tools"},
+					"status":   map[string]any{"conditions": []any{map[string]any{"type": "Accepted", "status": "False", "reason": "DiscoveryFailed", "message": "connection refused"}}},
+				}}
+				ws := Compose(inventoryOf(impactVector{Now: time.Now(), Objects: []unstructured.Unstructured{a, server}}))
+				want := 0
+				if group == Group {
+					want = 1
+				}
+				if ws.MCPServers[0].UsedBy.Count != want || ws.Agents[0].MCPServers.Declared != want {
+					t.Fatalf("%s=%s joined the wrong server: Agents=%+v server=%+v findings=%+v", field, group, ws.Agents, ws.MCPServers, ws.Findings)
+				}
+				found := false
+				for _, finding := range ws.Findings {
+					if finding.Subject.Kind == KindRemoteMCPServer {
+						found = true
+						if finding.Affects == nil || finding.Affects.Count != want {
+							t.Fatalf("%s=%s: wrong finding impact %+v", field, group, finding)
+						}
+					}
+				}
+				if !found {
+					t.Fatal("the server's own failure must remain visible")
+				}
+			}
+		})
+	}
+}
+
 // testdata/impact.json is built from kagent 1.0.1's shapes and messages (a
 // live cluster's where it had them), for Go and, later, the UI.
 func TestImpactVectors(t *testing.T) {

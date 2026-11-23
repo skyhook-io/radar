@@ -94,6 +94,7 @@ inventory above 10,000 distinct objects with 503 instead of silently truncating.
 | Model provider | ModelConfig provider/model fields; ModelProviderConfig type | No ModelConfig-to-ModelProviderConfig relationship is inferred. kagent 1.0.1 reports no ModelProviderConfig status. |
 
 Template models and MCP servers default to their declaring template's namespace;
+only RemoteMCPServer references in `api.kagent.dev` enter the MCP inventory and impact.
 Harness summarizer and embedding models default to the Harness namespace. A
 summarizer without its own model falls back to the Agent model. WorkerPool,
 Secret and ConfigMap references are coordinates (`declared`), not health claims.
