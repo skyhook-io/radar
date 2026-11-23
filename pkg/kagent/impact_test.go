@@ -517,3 +517,53 @@ func TestReferenceUnreadDoesNotClaimFullCoverage(t *testing.T) {
 		t.Fatalf("pinned read: %s %s", state, why)
 	}
 }
+
+func TestFoldManyAgentsUnderLastDependency(t *testing.T) {
+	target := kagentRef(KindModelConfig, "models", "missing")
+	dep := ObjectFinding{ID: findingID(target, ReasonDependencyMissing), Subject: target, Severity: SeverityWarning, Reason: ReasonDependencyMissing}
+	findings := make([]ObjectFinding, 10000, 10001)
+	for i := range findings {
+		agent := kagentRef(KindAgent, "agents", itoa(int64(i)))
+		findings[i] = ObjectFinding{ID: findingID(agent, ReasonNoPreparedRevision), Subject: agent, Severity: SeverityCritical,
+			Cause: &Cause{Target: target, Form: FormNotFound}}
+	}
+	groups := Fold(append(findings, dep))
+	if len(groups) != 1 || len(groups[0].Folded) != len(findings) || groups[0].Findings[0] != dep.ID || groups[0].Severity != SeverityCritical {
+		t.Fatalf("groups=%d folded=%d", len(groups), len(groups[0].Folded))
+	}
+}
+
+func TestUnknownModelFailureDoesNotFold(t *testing.T) {
+	target := kagentRef(KindModelConfig, "models", "m")
+	refs := []Reference{{Role: RoleModel, Target: target}, {Role: RoleEmbedding, Target: target}}
+	for _, message := range []string{
+		`resolve ModelConfig "models/m": observe source namespace "agents" for allowedNamespaces.from=Selector: forbidden`,
+		`resolve memory ModelConfig "m": resolve ModelConfig "models/m": observe source namespace "agents" for allowedNamespaces.from=Selector: forbidden`,
+		`resolve ModelConfig "models/m": an unrecognized error`,
+	} {
+		agent := ObjectFinding{ID: "agent", Subject: kagentRef(KindAgent, "agents", "a"), Cause: matchCause("ResolvedRefs", message, refs)}
+		dep := ObjectFinding{ID: "model", Subject: target, Reason: ReasonAPIKeySecretMissing}
+		if agent.Cause != nil || len(Fold([]ObjectFinding{agent, dep})) != 2 {
+			t.Fatalf("unrecognized error folded: %s, %+v", message, agent.Cause)
+		}
+	}
+}
+
+func TestCountsIncludeBroaderCoordinateEvidence(t *testing.T) {
+	for _, kind := range []string{KindAgent, KindAgentTemplate, KindHarness} {
+		t.Run(kind, func(t *testing.T) {
+			inv := Inventory{Kinds: map[string]Objects{}}
+			for _, k := range Kinds {
+				inv.Kinds[k] = Objects{Complete: k != kind, Read: func(string) bool { return true }}
+			}
+			ws := Compose(inv).In([]string{"models"})
+			counts := CountsOf(ws, Fold(ws.Findings), func(string) bool { return true })
+			if !counts.Findings.LowerBound || !counts.Critical.LowerBound || !counts.Groups.Incomplete || !counts.AgentsAffected.LowerBound {
+				t.Fatalf("partial broader %s read certified exact counts: %+v", kind, counts)
+			}
+			if counts.Agents.LowerBound || counts.Models.LowerBound {
+				t.Fatalf("selected inventory counts should remain complete: %+v", counts)
+			}
+		})
+	}
+}

@@ -34,7 +34,8 @@ Every kind is listed as the caller through `readWorkspaceKind`; coverage uses
 broader read used for references and consumers: the namespace picker narrows
 lists, findings and their counts, while references and observed consumers may
 lie outside it, within the caller's RBAC and Radar's `--namespace-scope` pin.
-A connection switch discards the whole answer with 503.
+A connection switch discards the whole answer with 503. Composition refuses an
+inventory above 10,000 distinct objects with 503 instead of silently truncating.
 
 | Value | Source | Unknown / partial / denied |
 |---|---|---|
@@ -135,7 +136,9 @@ and active workers' unbooked resources through `HasRoomFor`. It returns `unknown
 observed pools and completeness. `mayFit` never promises capacity for N sessions:
 runtime memory overhead, snapshot and runtime compatibility can still prevent
 placement. A negative verdict requires a complete worker read. Missing prepared
-templates, no prepared revision and partial workers read as unknown.
+templates and no prepared revision read as unknown. A partial worker read can
+return `mayFit` with `complete:false` when an observed worker has room; without
+that positive evidence it returns `unknown`.
 
 The Sessions filter includes attributed Agent sessions and unattributed
 kagent-shaped actors, excluding standalone sandboxes. `namespace` / `namespaces`

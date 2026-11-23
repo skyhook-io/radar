@@ -35,20 +35,28 @@ type FoldedFinding struct {
 // worst of what it holds, so an Agent that can start no session keeps its
 // critical severity under a dependency's warning.
 func Fold(findings []ObjectFinding) []AttentionGroup {
+	type dependencyKey struct {
+		target ObjectRef
+		form   string
+	}
+	dependencies := make(map[dependencyKey]string, len(findings))
 	byID := make(map[string]ObjectFinding, len(findings))
 	for _, f := range findings {
 		byID[f.ID] = f
+		if f.Cause == nil {
+			key := dependencyKey{f.Subject, formFor(f.Reason)}
+			if _, exists := dependencies[key]; !exists {
+				dependencies[key] = f.ID
+			}
+		}
 	}
 	under := map[string]string{}
 	for _, f := range findings {
 		if f.Cause == nil {
 			continue
 		}
-		for _, dep := range findings {
-			if dep.Subject == f.Cause.Target && dep.ID != f.ID && formFor(dep.Reason) == f.Cause.Form && dep.Cause == nil {
-				under[f.ID] = dep.ID
-				break
-			}
+		if id, ok := dependencies[dependencyKey{f.Cause.Target, f.Cause.Form}]; ok && id != f.ID {
+			under[f.ID] = id
 		}
 	}
 	folded := map[string][]string{}
@@ -147,6 +155,9 @@ func CountsOf(w *Workspace, groups []AttentionGroup, complete func(kind string) 
 	findingsComplete := true
 	for _, k := range statusKinds {
 		findingsComplete = findingsComplete && complete(k)
+	}
+	if w.ix != nil {
+		findingsComplete = findingsComplete && w.consumersComplete(KindModelConfig)
 	}
 	for _, a := range w.Agents {
 		if a.Incomplete {

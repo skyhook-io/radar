@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -160,5 +161,23 @@ func TestKagentWorkspaceSelectedCoverageIsSeparateFromReferences(t *testing.T) {
 	got := getKagentWorkspace(t, env.authGet(t, "/api/kagent/workspace?namespaces=agents", "split-reader", ""))
 	if got.Coverage["models"].State != integration.KindCoverageDenied || got.ReferenceCoverage["models"].State != integration.KindCoveragePartial || got.Agents[0].Model.State != kagent.RefPresent || len(got.Models) != 0 {
 		t.Fatalf("selected=%+v references=%+v Agent=%+v", got.Coverage["models"], got.ReferenceCoverage["models"], got.Agents[0])
+	}
+}
+
+func TestKagentWorkspaceBoundsComposition(t *testing.T) {
+	kind := cnpgTestResource(kagent.Group, kagent.KindAgent, "agents", true)
+	objs := make([]runtime.Object, kagentWorkspaceObjectLimit+1)
+	for i := range objs {
+		objs[i] = agentSandboxObj(kagent.Group, kagent.KindAgent, "agents", fmt.Sprintf("a-%d", i), time.Minute, nil, nil)
+	}
+	seedCNPGWorkspace(t, []k8s.APIResource{kind}, objs...)
+	resp, err := http.Get(testServer.URL + "/api/kagent/workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(raw), "composition limit") {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, raw)
 	}
 }

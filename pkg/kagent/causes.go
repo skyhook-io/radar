@@ -48,7 +48,9 @@ var (
 	// resolve RemoteMCPServer "name": not found (compiler.go:284).
 	causeMCPMissing = regexp.MustCompile(`^resolve RemoteMCPServer "([^"/]+)": not found$`)
 	// resolve RemoteMCPServer "ns/name": reference from namespace … (compiler.go:287).
-	causeMCPRefused = regexp.MustCompile(`^resolve RemoteMCPServer "([^"/]+)/([^"]+)": (.+)$`)
+	causeMCPRefused       = regexp.MustCompile(`^resolve RemoteMCPServer "([^"/]+)/([^"]+)": (.+)$`)
+	modelReferenceFailure = regexp.MustCompile(`^(?:secret \"?[^\"\s]+\"? (?:not found|does not contain key \"[^\"]+\")|config map [^\s]+ (?:not found|does not contain key \"[^\"]+\"|has an empty endpoint at key \"[^\"]+\"))$`)
+	modelSemanticFailure  = regexp.MustCompile(`^(?:(?:AzureOpenAI|GeminiVertexAI|AnthropicVertexAI|ollama|bedrock|sapAICore|foundry) model config is required|unsupported model provider: .+|foundry endpoint could not be resolved: set foundry.endpoint or a foundry.endpointFrom whose ConfigMap key exists)$`)
 	// reference from namespace "ns" denied by allowedNamespaces (translator/references.go:41).
 	refusedByPolicy = regexp.MustCompile(`^reference from namespace "[^"]+" denied by allowedNamespaces$`)
 )
@@ -59,8 +61,10 @@ func formOf(rest string) string {
 		return FormNotFound
 	case refusedByPolicy.MatchString(rest):
 		return FormNotPermitted
+	case modelReferenceFailure.MatchString(rest) || modelSemanticFailure.MatchString(rest):
+		return FormFailed
 	}
-	return FormFailed
+	return ""
 }
 
 // matchCause reads which declared reference an Agent's message names. The
@@ -70,6 +74,9 @@ func formOf(rest string) string {
 func matchCause(condition, message string, refs []Reference) *Cause {
 	var want []Reference
 	pick := func(form string, ok func(Reference) bool) *Cause {
+		if form == "" {
+			return nil
+		}
 		want = want[:0]
 		for _, r := range refs {
 			if ok(r) && !containsTarget(want, r) {
@@ -90,7 +97,7 @@ func matchCause(condition, message string, refs []Reference) *Cause {
 		if m := causeHarnessModel.FindStringSubmatch(message); m != nil && formOf(m[4]) == FormFailed {
 			return pick(FormFailed, named(KindModelConfig, m[2], m[3], harnessRole(m[1])))
 		}
-		if m := causeModelInvalid.FindStringSubmatch(message); m != nil {
+		if m := causeModelInvalid.FindStringSubmatch(message); m != nil && modelSemanticFailure.MatchString(m[3]) {
 			return pick(FormFailed, named(KindModelConfig, m[1], m[2], RoleModel, RoleSubagentModel))
 		}
 		return nil

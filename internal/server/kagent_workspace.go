@@ -13,6 +13,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
+const kagentWorkspaceObjectLimit = 10000
+
 var kagentWorkspaceKinds = []integration.WorkspaceKind{
 	kagentAgentKind,
 	{Key: "agentTemplates", Group: kagent.Group, Kind: kagent.KindAgentTemplate, Resource: "agenttemplates"},
@@ -83,6 +85,7 @@ func (s *Server) handleKagentWorkspace(w http.ResponseWriter, r *http.Request) {
 	budget.bound, budget.discovery, budget.dynamicCache, budget.readOnly = true, discovery, dynamic, true
 	inv := kagent.Inventory{Now: time.Now(), Kinds: map[string]kagent.Objects{}}
 	complete := map[string]bool{}
+	objectCount := 0
 	for _, kind := range kagentWorkspaceKinds {
 		access := integration.KindAccess{State: integration.KindCoverageNotInstalled}
 		selected := access
@@ -109,6 +112,23 @@ func (s *Server) handleKagentWorkspace(w http.ResponseWriter, r *http.Request) {
 					selected = access
 				}
 			}
+		}
+		byName := make(map[string]*unstructured.Unstructured, len(items))
+		for _, item := range items {
+			byName[item.GetNamespace()+"/"+item.GetName()] = item
+		}
+		items = items[:0]
+		for _, item := range byName {
+			items = append(items, item)
+		}
+		objectCount += len(items)
+		if objectCount > kagentWorkspaceObjectLimit {
+			s.writeError(w, http.StatusServiceUnavailable, "kagent workspace exceeds the 10000-object composition limit")
+			return
+		}
+		if r.Context().Err() != nil || operation.Err() != nil {
+			s.writeError(w, http.StatusServiceUnavailable, "kagent workspace read interrupted; try again")
+			return
 		}
 		absentKind := access.State == integration.KindCoverageNotInstalled
 		inv.Kinds[kind.Kind] = kagent.Objects{Items: items, Read: func(ns string) bool { return absentKind || access.Covers(ns) }, State: access.State,

@@ -79,9 +79,6 @@ const (
 	RoleSystemPrompt      = "systemPrompt"
 	RolePromptSource      = "promptSource"
 	RoleOutputSchema      = "outputSchema"
-	RoleAPIKey            = "apiKey"
-	RoleEndpoint          = "endpoint"
-	RoleHeader            = "header"
 )
 
 // Reference is one reference an object declares, resolved with kagent's
