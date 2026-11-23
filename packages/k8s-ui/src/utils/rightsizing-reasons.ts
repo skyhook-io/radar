@@ -28,6 +28,13 @@ const reasonText: Record<string, string> = {
   pod_level_request: 'The pod sets a shared resource request.',
 }
 
+export function rowReviewReasons(row: RightsizingRow, reasons: string[] = []): string[] {
+  const limitReason = row.recommendationReason
+  if (limitReason !== 'requests_exceed_pod_limit' && limitReason !== 'recommended_request_exceeds_limit')
+    return reasons
+  return reasons.map((reason) => reason === 'limit_conflict' ? limitReason : reason)
+}
+
 export function explainRightsizingReasons(
   reasons: string[],
   resource?: RightsizingRow['resource'],

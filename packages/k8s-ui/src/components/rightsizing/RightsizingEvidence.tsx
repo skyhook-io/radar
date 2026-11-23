@@ -5,6 +5,7 @@ import { groupRightsizingRows, needsManualReview, rightsizingPolicyCoverage } fr
 import {
   explainRightsizingReasons,
   isDatadogRequestActionable,
+  rowReviewReasons,
 } from '../../utils/rightsizing-reasons'
 import type {
   RightsizingFit,
@@ -52,6 +53,8 @@ export function RightsizingEvidence({
   const needsReview = (row: RightsizingRow) => row.decision
     ? row.decision.status === 'review'
     : datadog ? !!row.recommendedRequest && !isDatadogRequestActionable(datadog, row) : needsManualReview(row)
+  const reasonsFor = (row: RightsizingRow) =>
+    rowReviewReasons(row, row.decision?.reasons ?? datadog?.reviewReasons?.[row.container]?.[row.resource])
   const byContainer = groupRightsizingRows(data.rows)
 
   if (compact) {
@@ -62,7 +65,7 @@ export function RightsizingEvidence({
             <div className="mb-1 text-xs font-medium text-theme-text-secondary">{container}</div>
             <div className="space-y-1 pl-2">
               {rows.map((row) => (
-                <CompactFitRow key={row.resource} row={row} review={needsReview(row)} reasons={row.decision?.reasons ?? datadog?.reviewReasons?.[row.container]?.[row.resource]} />
+                <CompactFitRow key={row.resource} row={row} review={needsReview(row)} reasons={reasonsFor(row)} />
               ))}
             </div>
           </div>
@@ -98,7 +101,7 @@ export function RightsizingEvidence({
                 key={row.resource}
                 row={row}
                 window={data.window}
-                reasons={row.decision?.reasons ?? datadog?.reviewReasons?.[row.container]?.[row.resource]}
+                reasons={reasonsFor(row)}
                 manualReview={!!row.recommendedRequest && needsReview(row)}
               />
             ))}

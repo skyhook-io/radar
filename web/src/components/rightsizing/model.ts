@@ -13,7 +13,7 @@ export interface RightsizingScanRow extends RightsizingResultRow {
 }
 
 export function flattenScanResults(scan: RightsizingScanResponse): RightsizingScanRow[] {
-  return scan.workloads
+  return (scan.workloads ?? [])
     .flatMap((workload) =>
       workloadResultRows(workload).map((row) => ({
         ...row,

@@ -23,7 +23,7 @@ export function getResourceRequestPresentation(
 ): ResourceRequestPresentation {
   if (!row) return { primary: '—', secondary: 'No result returned', signals: [], tone: 'neutral' }
 
-  const current = row.currentRequest && row.currentRequestValue !== 0 ? row.currentRequest : 'Unset'
+  const current = row.currentRequest ?? 'Unset'
   // A pod-level request is what the pod reserves, whether or not usage evidence arrived.
   const currentOnly = row.podLevelRequest
     ? `${row.podLevelRequest} for the pod`

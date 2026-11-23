@@ -37,11 +37,13 @@ that evidence. A rollout, partition, unready replica or a Pod from another
 revision prevents a recommendation. Pod names alone cannot establish ownership.
 When only Datadog charts are enabled, an existing Prometheus connection still supplies rightsizing. Metrics and Cost use the same selected rightsizing provider. An unavailable Datadog mapping or a failed provider lookup leaves sizing unavailable until it recovers. Usage charts can still come from the connected Prometheus backend. The MCP `get_rightsizing` tool uses the cluster’s Prometheus connection.
 
-Radar Hub can also read the connected cluster’s Prometheus rightsizing scan and
-workload detail. These queries identify workloads by namespace and Kubernetes
-owner names. They require a Prometheus data source isolated to that cluster.
-A federated endpoint that includes another cluster with the same names can
-combine their metrics.
+For Prometheus-backed fleet scans and workload details, Hub shows measurements
+when the agent verifies the cluster, an operator configures exact cluster labels
+for a shared store, or an operator explicitly identifies a dedicated backend as
+single-cluster. If the agent cannot establish which cluster supplied the data,
+Hub withholds the measurements. Upgrade agents that do not report cluster scope.
+See [Prometheus scope configuration](#optional-operator-override) for the shared
+and dedicated backend examples.
 
 The agent returns container requests and limits without transferring literal
 environment variables, command arguments or a raw Pod template.

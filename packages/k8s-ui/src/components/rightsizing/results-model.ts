@@ -1,5 +1,5 @@
 import type { DatadogSizingWorkload, RightsizingRow } from '../../types/rightsizing'
-import { datadogRowReview, explainRightsizingReasons, isDatadogRequestActionable } from '../../utils/rightsizing-reasons'
+import { datadogRowReview, explainRightsizingReasons, isDatadogRequestActionable, rowReviewReasons } from '../../utils/rightsizing-reasons'
 
 export type ScanClass = 'increase' | 'reduction' | 'review' | 'in_range' | 'need_data'
 
@@ -229,7 +229,7 @@ export function workloadResultRows(
       ...result,
       source: datadog ? datadog.source : cluster ? 'prometheus' : undefined,
       review: Object.fromEntries(rows.flatMap((row) => row.decision?.status === 'review'
-        ? [[row.resource, explainRightsizingReasons(row.decision.reasons ?? [], row.resource)]] : [])),
+        ? [[row.resource, explainRightsizingReasons(rowReviewReasons(row, row.decision.reasons), row.resource)]] : [])),
       workloadReason: index === 0 ? datadog?.reason : undefined,
       classification: classifyRows(rows, replicas, scaledToZero),
       impact: calculateImpact(rows, replicas),

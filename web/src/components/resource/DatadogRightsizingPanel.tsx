@@ -13,7 +13,7 @@ export function DatadogRightsizingPanel({
   namespace: string
   name: string
 }) {
-  const { support } = useRadarFeature('datadogRightsizing')
+  const { support, blockedReason } = useRadarFeature('datadogRightsizing')
   const path =
     '/metrics/datadog/rightsizing/' + [kind, namespace, name].map(encodeURIComponent).join('/')
   const queryKey = ['datadog-rightsizing', getApiBase(), path]
@@ -32,7 +32,9 @@ export function DatadogRightsizingPanel({
       </p>
     )
   }
-  if (support === 'unknown') return null
+  if (support === 'unknown') {
+    return <p role="status" className="mt-4 text-sm text-theme-text-secondary">{blockedReason}</p>
+  }
   if (!query.error && query.data?.configured === false) {
     return (
       <p role="status" className="mt-4 text-sm text-theme-text-secondary">

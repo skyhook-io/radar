@@ -24,7 +24,7 @@ function response(
   replicas = 1,
   namespace = 'shop',
   scaledToZero = false,
-): RightsizingScanResponse {
+): RightsizingScanResponse & { workloads: NonNullable<RightsizingScanResponse['workloads']> } {
   return {
     scanId: 'rs_test', scanStatus: 'finished', deadlineAt: '2026-09-19T10:03:00Z',
     state: 'complete',
@@ -52,6 +52,10 @@ function response(
 }
 
 describe('rightsizing scan model', () => {
+  it('can render a retained unavailable scan from a disconnected spoke', () => {
+    expect(flattenScanResults({ ...response([]), state: 'unavailable', workloads: null })).toEqual([])
+  })
+
   it('prioritizes reliability guidance and explicit safety review', () => {
     expect(
       classifyRows([

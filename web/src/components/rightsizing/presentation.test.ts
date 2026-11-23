@@ -55,6 +55,19 @@ describe('rightsizing request presentation', () => {
     })
   })
 
+  it('shows an explicit zero as the current request when suggesting an increase', () => {
+    const result = getResourceRequestPresentation(metric({
+      fit: 'missing_request',
+      currentRequest: '0',
+      currentRequestValue: 0,
+      recommendedRequest: '10m',
+      recommendedRequestValue: 0.01,
+      decision: { status: 'actionable' },
+    }))
+    expect(result.primary).toBe('0 → 10m')
+    expect(result.secondary).toBe('Increase request')
+  })
+
   it('keeps the configured value visible when safety signals require review', () => {
     expect(
       getResourceRequestPresentation(

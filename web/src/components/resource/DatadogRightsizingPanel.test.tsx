@@ -5,12 +5,16 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { DatadogRightsizingPanel } from './DatadogRightsizingPanel'
 import { getApiBase } from '../../api/config'
+import { radarControlBlockedReason } from '../../api/radarFeatures'
 
-const state = vi.hoisted(() => ({ fetch: vi.fn(), support: 'supported' }))
+const state = vi.hoisted(() => ({ fetch: vi.fn(), support: 'supported' as 'supported' | 'unknown' | 'unsupported', capabilitiesFailed: false }))
 vi.mock('../../api/client', () => ({
   fetchJSON: (...args: unknown[]) => state.fetch(...args),
   usePrometheusStatus: () => ({ data: { connected: false } }),
-  useRadarFeature: () => ({ support: state.support }),
+  useRadarFeature: () => ({
+    support: state.support,
+    blockedReason: radarControlBlockedReason('datadogRightsizing', state.support, state.capabilitiesFailed),
+  }),
 }))
 const detail = {
   configured: true,
@@ -35,6 +39,7 @@ let host: HTMLDivElement
 
 beforeEach(() => {
   state.support = 'supported'
+  state.capabilitiesFailed = false
   state.fetch.mockReset()
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -59,6 +64,17 @@ it('skips sizing reads for spokes without the feature', async () => {
   state.support = 'unsupported'
   await render()
   expect(host.textContent).toContain('Upgrade this cluster')
+  expect(state.fetch).not.toHaveBeenCalled()
+})
+
+it.each([
+  { failed: false, message: 'Checking this cluster' },
+  { failed: true, message: 'Refresh to try again' },
+])('explains unknown agent support (failed=$failed) without reading metrics', async ({ failed, message }) => {
+  state.support = 'unknown'
+  state.capabilitiesFailed = failed
+  await render()
+  expect(host.querySelector('[role="status"]')?.textContent).toContain(message)
   expect(state.fetch).not.toHaveBeenCalled()
 })
 

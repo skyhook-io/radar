@@ -172,6 +172,23 @@ describe('operator rightsizing results across clusters', () => {
     expect(html).not.toContain('Reduce request')
   })
 
+  it('explains which limit blocks a request in the expanded operator row', () => {
+    const row: RightsizingRow = {
+      ...cpu, fit: 'under_requested', limitConflict: true,
+      recommendedRequest: undefined, recommendedRequestValue: undefined,
+      recommendationReason: 'requests_exceed_pod_limit',
+      decision: { status: 'review', reasons: ['limit_conflict', 'qos_change'] },
+    }
+    const rows = workloadResultRows({ ...workload, rows: [row] }, { id: 'east', name: 'East' })
+    const html = renderToStaticMarkup(
+      <RightsizingResultsTable rows={rows} openRowId={rows[0].id}
+        onOpenRowChange={() => {}} renderWorkloadLink={() => null} />,
+    )
+    expect(html).toContain('pod-level limit (spec.resources)')
+    expect(html).toContain('Guaranteed QoS')
+    expect(html).not.toContain('The suggestion conflicts with the resource limit.')
+  })
+
   it('keeps the vendor read error and retry instructions scoped to the host', () => {
     const row = { ...cpu, queryError: 'usage query failed' }
     const cloud = renderToStaticMarkup(<FitWhy label="CPU" row={row} source="datadog" />)

@@ -4110,7 +4110,8 @@ export interface RightsizingScanResponse {
   window: string;
   source: "radar";
   coverage: RightsizingScanCoverage;
-  workloads: RightsizingScanWorkload[];
+  /** Older spokes return null when a scan loses its Prometheus connection. */
+  workloads: RightsizingScanWorkload[] | null;
   warnings?: { code: string; message: string }[];
   reason?: string;
   /** Absent from older Radar. A withheld scope means no workload was measured. */
