@@ -580,6 +580,22 @@ it('links overview problems to filtered lists and filters to the matching findin
   expect(filtered).not.toContain('healthy-model')
 })
 
+it('preserves namespace and investigation selection on every overview configuration card', () => {
+  const out = renderToStaticMarkup(
+    <MemoryRouter initialEntries={['/kagent?namespaces=agents,models&ai-run=investigation-1']}>
+      <KagentOverview data={blockedWorkspace()} runtime={runtime()} onOpen={open} />
+    </MemoryRouter>,
+  )
+  const links = [...out.matchAll(/href="([^"]+)"/g)].map((match) => new URL(match[1].replace(/&amp;/g, '&'), 'http://radar.invalid'))
+  for (const path of ['/kagent/agents', '/kagent/mcpservers', '/kagent/models']) {
+    const link = links.find((url) => url.pathname === path)!
+    expect(link).toBeDefined()
+    expect(link.searchParams.get('namespaces')).toBe('agents,models')
+    expect(link.searchParams.get('ai-run')).toBe('investigation-1')
+    if (path !== '/kagent/agents') expect(link.searchParams.get('status')).toBe('problems')
+  }
+})
+
 it('groups Agent facts into ordered cards and shows provenance only for indirect references', () => {
   state.data = workspace()
   const a = agent()

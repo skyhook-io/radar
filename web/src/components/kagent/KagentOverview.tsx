@@ -1,7 +1,8 @@
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { FoldSection, WorkspaceProblemCallout, toneTextClass } from '@skyhook-io/k8s-ui'
 import type { KagentRef, KagentWorkspace } from '../../api/kagent'
 import { useRadarFeature } from '../../api/client'
+import { withCrossViewParams } from '../../utils/navigation'
 import { substrateActorsPath } from '../substrate/routes'
 import { KagentAgentsTable } from './KagentLists'
 import {
@@ -133,6 +134,7 @@ export function KagentOverview({
   runtime: KagentRuntime
   onOpen: (ref: KagentRef) => void
 }) {
+  const { search } = useLocation()
   const sessionFeature = useRadarFeature('kagentSessionSummary')
   const states = data.counts.agentsByLatestChange
   const bound = data.counts.agents.lowerBound
@@ -154,18 +156,18 @@ export function KagentOverview({
   return (
     <>
       <div className="grid grid-cols-2 gap-3 text-sm text-theme-text-primary xl:grid-cols-4" aria-label="kagent status">
-        <Link to="/kagent/agents" className={cardClass}>
+        <Link to={withCrossViewParams('/kagent/agents', search)} className={cardClass}>
           <span className={numberClass}>{unread('agents') ? 'Unknown' : `${bound ? '≥' : ''}${states.prepared ?? 0}`}</span>
           <span className="text-theme-text-secondary">Prepared Agents</span>
           {!unread('agents') && <span className={`mt-1 block text-xs ${toneTextClass(states.blocked || states.failed ? 'unhealthy' : 'neutral')}`}>{bound ? '≥' : ''}{states.blocked ?? 0} blocked{states.failed ? ` · ${bound ? '≥' : ''}${states.failed} failed` : ''}</span>}
           {!!states.preparing && <span className="block text-xs text-theme-text-tertiary">{bound ? '≥' : ''}{states.preparing} processing</span>}
           {Object.entries(states).filter(([state, count]) => !['prepared', 'blocked', 'failed', 'preparing'].includes(state) && count > 0).map(([state, count]) => <span key={state} className="block text-xs text-theme-text-tertiary">{bound ? '≥' : ''}{count} {changeText(state).toLowerCase()}</span>)}
         </Link>
-        <Link to="/kagent/mcpservers?status=problems" className={cardClass}>
+        <Link to={withCrossViewParams('/kagent/mcpservers?status=problems', search)} className={cardClass}>
           <span className={`${numberClass} ${data.counts.mcpServersFailing.n ? toneTextClass('alert') : ''}`}>{unread('mcpServers') ? 'Unknown' : <KagentCountValue count={data.counts.mcpServersFailing} />}</span>
           <span className="text-theme-text-secondary">Failing MCP servers</span>
         </Link>
-        <Link to="/kagent/models?status=problems" className={cardClass}>
+        <Link to={withCrossViewParams('/kagent/models?status=problems', search)} className={cardClass}>
           <span className={`${numberClass} ${credentialProblems.n ? toneTextClass('alert') : ''}`}>{unread('models') ? 'Unknown' : <KagentCountValue count={credentialProblems} />}</span>
           <span className="text-theme-text-secondary">Models with credential problems</span>
         </Link>
