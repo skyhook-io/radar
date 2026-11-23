@@ -37,7 +37,7 @@ func (s *Server) handleDatadogAgentPresence(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	detected := false
-	_, generation := k8s.GetClientWithGeneration()
+	generation := k8s.Current().ClientGeneration()
 	cache := k8s.GetResourceCache()
 	if s.permCache != nil && cache != nil && cache.Pods() != nil {
 		pods, err := cache.Pods().List(labels.SelectorFromSet(labels.Set{"agent.datadoghq.com/component": "agent"}))
@@ -50,7 +50,7 @@ func (s *Server) handleDatadogAgentPresence(w http.ResponseWriter, r *http.Reque
 			}
 		}
 	}
-	if _, current := k8s.GetClientWithGeneration(); current != generation {
+	if k8s.Current().ClientGeneration() != generation {
 		detected = false
 	}
 	s.writeJSON(w, struct {

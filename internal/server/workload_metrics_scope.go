@@ -57,7 +57,7 @@ func (s *Server) handleWorkloadMetricsScope(w http.ResponseWriter, r *http.Reque
 		s.writeError(w, http.StatusForbidden, "Workload is outside Radar's namespace scope")
 		return
 	}
-	_, generation := k8s.GetClientWithGeneration()
+	generation := k8s.Current().ClientGeneration()
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Kubernetes is unavailable")
@@ -70,7 +70,7 @@ func (s *Server) handleWorkloadMetricsScope(w http.ResponseWriter, r *http.Reque
 	if err == nil {
 		uid, identityErr = cloud.DiscoverClusterUID(r.Context(), k8s.GetClientInterface())
 	}
-	if _, current := k8s.GetClientWithGeneration(); generation != current {
+	if k8s.Current().ClientGeneration() != generation {
 		s.writeError(w, http.StatusConflict, "Kubernetes connection changed. Retry the request")
 		return
 	}
