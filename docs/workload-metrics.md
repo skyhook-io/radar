@@ -40,8 +40,13 @@ When only Datadog charts are enabled, an existing Prometheus connection still su
 For Prometheus-backed fleet scans and workload details, Hub shows measurements
 when the agent verifies the cluster, an operator configures exact cluster labels
 for a shared store, or an operator explicitly identifies a dedicated backend as
-single-cluster. If the agent cannot establish which cluster supplied the data,
-Hub withholds the measurements. Upgrade agents that do not report cluster scope.
+single-cluster. Those options include history from replaced Pods. On an unlabeled
+store, agents that support current-Pod attribution can instead match cAdvisor
+measurements to the Kubernetes UIDs of this cluster's live Pods. That path uses
+only intervals with data from every current replica and excludes replaced Pods.
+Recent rollouts or a store that drops the cAdvisor `id` label can therefore
+leave too little history for a recommendation. Hub withholds measurements it
+cannot attribute to the cluster. Upgrade agents that do not report cluster scope.
 See [Prometheus scope configuration](#optional-operator-override) for the shared
 and dedicated backend examples.
 

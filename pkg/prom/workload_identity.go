@@ -37,12 +37,27 @@ func PodUIDFromCgroupID(id string) string {
 
 // PodCgroupPattern matches the Pod segment, never a UID appearing in a container name.
 func PodCgroupPattern(uid string) (string, error) {
-	if !podIdentityUID.MatchString(uid) {
-		return "", fmt.Errorf("invalid Kubernetes Pod UID")
+	return PodCgroupPatternForUIDs([]string{uid})
+}
+
+// PodCgroupPatternForUIDs matches the same exact Pod segments in a bounded
+// batch without repeating the full systemd path expression for each UID.
+func PodCgroupPatternForUIDs(uids []string) (string, error) {
+	if len(uids) == 0 {
+		return "", fmt.Errorf("empty Pod UID selection")
+	}
+	for _, uid := range uids {
+		if !podIdentityUID.MatchString(uid) {
+			return "", fmt.Errorf("invalid Kubernetes Pod UID")
+		}
+	}
+	names := strings.Join(uids, "|")
+	if len(uids) > 1 {
+		names = "(" + names + ")"
 	}
 	patterns := make([]string, 0, len(podCgroupFormats))
 	for _, format := range podCgroupFormats {
-		patterns = append(patterns, format.prefix+strings.ReplaceAll(uid, "-", format.separator)+format.suffix)
+		patterns = append(patterns, format.prefix+strings.ReplaceAll(names, "-", format.separator)+format.suffix)
 	}
 	return "(" + strings.Join(patterns, "|") + ")", nil
 }

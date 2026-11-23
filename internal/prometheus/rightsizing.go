@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -202,7 +203,38 @@ func RightsizingForWorkload(ctx context.Context, kind, namespace, name string) (
 	if err != nil && ctx.Err() != nil {
 		return RightsizingResponse{}, ctx.Err()
 	}
+	if cloud.IsAuthenticatedTunnelRequest(ctx) && scope.State == ViewScopeUnlabeled && !scope.Withheld {
+		input := scanWorkload{kind: k8s.CanonicalWorkloadKind(kind), namespace: namespace, name: name, replicas: workload.replicas, workload: workload}
+		return currentPodRightsizingDetail(queryCtx, store, input), nil
+	}
 	return computeRightsizing(queryCtx, store, kind, namespace, name, workload, scope), nil
+}
+
+// Use the scan's evidence and policy so a drill-down describes the same current replicas.
+func currentPodRightsizingDetail(ctx context.Context, store rightsizingScanQuerier, input scanWorkload) RightsizingResponse {
+	evidence := queryCurrentPodRightsizing(ctx, store, input, time.Now())
+	measured := buildScanWorkload(input, evidence)
+	resp := RightsizingResponse{Kind: input.kind, Namespace: input.namespace, Name: input.name, Window: "7d", Source: "radar",
+		OwnerCoverage: OwnerCoverageCurrentPods, Replicas: input.replicas, ScaledToZero: measured.ScaledToZero, ManagedBy: measured.ManagedBy,
+		Rows: measured.Rows, ClusterScope: currentPodUIDScope().Wire(), SampleAvailable: workloadHasData(measured)}
+	for _, key := range []string{"cpu", "memory", "throttle"} {
+		if err := evidence.errors[key]; err != nil {
+			resp.Warnings = append(resp.Warnings, RightsizingScanWarning{Code: key + "_query_failed", Message: boundWarningMessage(err.Error())})
+		}
+	}
+	if !resp.SampleAvailable {
+		switch {
+		case !hasCurrentPodSizingCohort(input):
+			resp.Reason = "Radar could not verify a complete set of ready Pods matching the current workload template."
+		case isIncompleteAnswer(evidence.errors["cpu"]) || isIncompleteAnswer(evidence.errors["memory"]):
+			resp.Reason = ReasonRightsizingPartialData
+		case evidence.errors["cpu"] != nil || evidence.errors["memory"] != nil:
+			resp.Reason = ReasonRightsizingQueriesFailed
+		default:
+			resp.Reason = "No complete CPU or memory samples matched the current Pods by UID."
+		}
+	}
+	return resp
 }
 
 // resolveRightsizingScope decides rightsizing's cluster scope on the client's
@@ -241,15 +273,18 @@ type containerSpec struct {
 
 type rightsizingWorkload struct {
 	// podSpec is the workload's pod template, for checks that need the whole pod.
-	podSpec       *corev1.PodSpec
-	containers    []containerSpec
-	podNames      []string
-	qos           rightsizing.PodQoS
-	currentPodOOM map[string]bool
-	hpaManaged    map[string]bool
-	hpaAvailable  bool
-	replicas      int
-	scaledToZero  bool
+	podSpec               *corev1.PodSpec
+	containers            []containerSpec
+	podNames              []string
+	podIdentities         []prom.WorkloadPodIdentity
+	podIdentityIncomplete bool
+	podZeroRestarts       map[string]int
+	qos                   rightsizing.PodQoS
+	currentPodOOM         map[string]bool
+	hpaManaged            map[string]bool
+	hpaAvailable          bool
+	replicas              int
+	scaledToZero          bool
 	// The live pod list could not be read, so podNames and currentPodOOM are
 	// empty because nothing answered — not because the workload has no pods.
 	liveInventoryUnavailable bool
@@ -290,6 +325,7 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 	var podTemplate *corev1.PodSpec
 	var managedBy *WorkloadManager
 	var uid types.UID
+	var cohortReady bool
 	scaledToZero := false
 	replicas := 0
 	switch strings.ToLower(kind) {
@@ -305,6 +341,7 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 		uid = d.UID
 		managedBy = DetectWorkloadManager(d)
 		replicas = specReplicas(d.Spec.Replicas)
+		cohortReady = sizingControllerCohortReady(d, d.Status.ObservedGeneration, int32(replicas), d.Status.Replicas, d.Status.UpdatedReplicas, d.Status.ReadyReplicas)
 		scaledToZero = replicas == 0
 	case "statefulset":
 		if cache.StatefulSets() == nil {
@@ -318,6 +355,7 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 		uid = ss.UID
 		managedBy = DetectWorkloadManager(ss)
 		replicas = specReplicas(ss.Spec.Replicas)
+		cohortReady = sizingControllerCohortReady(ss, ss.Status.ObservedGeneration, int32(replicas), ss.Status.Replicas, ss.Status.UpdatedReplicas, ss.Status.ReadyReplicas)
 		scaledToZero = replicas == 0
 	case "daemonset":
 		if cache.DaemonSets() == nil {
@@ -331,6 +369,7 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 		uid = ds.UID
 		managedBy = DetectWorkloadManager(ds)
 		replicas = int(ds.Status.DesiredNumberScheduled)
+		cohortReady = sizingControllerCohortReady(ds, ds.Status.ObservedGeneration, int32(replicas), ds.Status.CurrentNumberScheduled, ds.Status.UpdatedNumberScheduled, ds.Status.NumberReady) && ds.Status.NumberMisscheduled == 0
 		// Scans skip a zero the controller has observed, but a caller naming
 		// one gets its retained history, which is exactly the scaled-to-zero
 		// case: a node pool scaled away.
@@ -343,14 +382,15 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 
 	hpaManaged, hpaAvailable := loadHPAManagedResources(ctx, cache, kind, namespace, name)
 	workload := rightsizingWorkload{
-		podSpec:       podTemplate,
-		containers:    extractRuntimeContainers(podTemplate),
-		currentPodOOM: map[string]bool{},
-		hpaManaged:    hpaManaged,
-		hpaAvailable:  hpaAvailable,
-		replicas:      replicas,
-		scaledToZero:  scaledToZero,
-		managedBy:     managedBy,
+		podSpec:               podTemplate,
+		podIdentityIncomplete: !cohortReady,
+		containers:            extractRuntimeContainers(podTemplate),
+		currentPodOOM:         map[string]bool{},
+		hpaManaged:            hpaManaged,
+		hpaAvailable:          hpaAvailable,
+		replicas:              replicas,
+		scaledToZero:          scaledToZero,
+		managedBy:             managedBy,
 	}
 	pods, err := workloadPodsOnceWarm(ctx, cache, kind, namespace, name, uid)
 	if ctx.Err() != nil {
@@ -371,6 +411,7 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 	for _, pod := range pods {
 		workload.qos.Observe(pod.Status.QOSClass)
 		workload.podNames = append(workload.podNames, pod.Name)
+		workload.observeSizingPodIdentity(pod)
 		collectCurrentPodOOM(workload.currentPodOOM, pod.Status.ContainerStatuses)
 		collectCurrentPodOOM(workload.currentPodOOM, pod.Status.InitContainerStatuses)
 	}
