@@ -16,7 +16,7 @@ import (
 // ResourceDiscovery wraps the shared k8score implementation.
 type ResourceDiscovery struct {
 	*k8score.ResourceDiscovery
-	// backgroundRefresh is held while ServedGVR's refresh runs, so callers
+	// backgroundRefresh is held while a background refresh runs, so callers
 	// arriving during a slow refresh don't each park another goroutine.
 	backgroundRefresh atomic.Bool
 	// missRefresh serializes LookupRefreshingOnMiss's refreshes; missRefreshAt
@@ -127,15 +127,30 @@ func (c *Connection) ServedGVR(group, kind string) (schema.GroupVersionResource,
 	if d == nil || d.ResourceDiscovery == nil {
 		return schema.GroupVersionResource{}, false
 	}
+	d.refreshIfStaleInBackground()
+	return d.GetGVRWithGroup(kind, group)
+}
+
+// refreshIfStaleInBackground reports whether the caller saw an expired snapshot.
+func (d *ResourceDiscovery) refreshIfStaleInBackground() bool {
+	if d == nil || d.ResourceDiscovery == nil || !d.IsStale() {
+		return false
+	}
+	d.refreshInBackground(func() {
+		if err := d.RefreshIfStale(); err != nil {
+			log.Printf("[discovery] Background refresh failed: %v", err)
+		}
+	})
+	return true
+}
+
+func (d *ResourceDiscovery) refreshInBackground(refresh func()) {
 	if d.backgroundRefresh.CompareAndSwap(false, true) {
 		go func() {
 			defer d.backgroundRefresh.Store(false)
-			if err := d.RefreshIfStale(); err != nil {
-				log.Printf("[discovery] Background refresh failed: %v", err)
-			}
+			refresh()
 		}()
 	}
-	return d.GetGVRWithGroup(kind, group)
 }
 
 // discoveryMissRefreshInterval bounds how often lookups that find nothing
@@ -175,15 +190,11 @@ func (d *ResourceDiscovery) RetryFailedRefresh() {
 	if d == nil || d.ResourceDiscovery == nil || !d.LastRefreshFailed() {
 		return
 	}
-	if !d.backgroundRefresh.CompareAndSwap(false, true) {
-		return
-	}
-	go func() {
-		defer d.backgroundRefresh.Store(false)
+	d.refreshInBackground(func() {
 		d.LookupRefreshingOnMiss(func(*ResourceDiscovery) (schema.GroupVersionResource, bool) {
 			return schema.GroupVersionResource{}, false
 		})
-	}()
+	})
 }
 
 // SupportsWatchGVR checks if a GVR supports list and watch verbs.

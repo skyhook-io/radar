@@ -36,7 +36,8 @@ func (c *Connection) initMetricsHistory() {
 	if c.metricsClosed || c.metricsHistory.Load() != nil {
 		return
 	}
-	store := k8score.NewMetricsHistoryStoreWithResolver(c.Dynamic(), c.resolveMetricsGVR)
+	store := k8score.NewMetricsHistoryStoreWithResolver(c.Dynamic(), c.cachedMetricsGVR)
+	store.RefreshStaleDiscovery = func() bool { return c.Discovery().refreshIfStaleInBackground() }
 	store.Namespaces = RBACNamespaces
 	store.OnError = errorlog.Record
 	store.Start()

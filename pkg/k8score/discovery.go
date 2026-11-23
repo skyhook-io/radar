@@ -493,6 +493,16 @@ func (d *ResourceDiscovery) Stats() DiscoveryStats {
 	}
 }
 
+// IsStale reports whether the cached discovery snapshot has expired.
+func (d *ResourceDiscovery) IsStale() bool {
+	if d == nil {
+		return true
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return time.Since(d.lastRefresh) > d.cacheTTL
+}
+
 // RefreshIfStale refreshes discovery when its cache TTL has elapsed. Concurrent
 // callers share one refresh.
 func (d *ResourceDiscovery) RefreshIfStale() error {
@@ -500,20 +510,14 @@ func (d *ResourceDiscovery) RefreshIfStale() error {
 		return fmt.Errorf("resource discovery not initialized")
 	}
 
-	d.mu.RLock()
-	needsRefresh := time.Since(d.lastRefresh) > d.cacheTTL
-	d.mu.RUnlock()
-	if !needsRefresh {
+	if !d.IsStale() {
 		return nil
 	}
 
 	d.refreshMu.Lock()
 	defer d.refreshMu.Unlock()
 
-	d.mu.RLock()
-	needsRefresh = time.Since(d.lastRefresh) > d.cacheTTL
-	d.mu.RUnlock()
-	if !needsRefresh {
+	if !d.IsStale() {
 		return nil
 	}
 	return d.refresh()

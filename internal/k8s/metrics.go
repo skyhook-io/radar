@@ -16,11 +16,7 @@ type ContainerMetrics = k8score.ContainerMetrics
 type ResourceUsage = k8score.ResourceUsage
 
 func ResolveMetricsGVR(resource string) (schema.GroupVersionResource, bool) {
-	return Current().resolveMetricsGVR(resource)
-}
-
-func (c *Connection) resolveMetricsGVR(resource string) (schema.GroupVersionResource, bool) {
-	discovery := c.Discovery()
+	discovery := GetResourceDiscovery()
 	if discovery == nil {
 		return schema.GroupVersionResource{}, false
 	}
@@ -28,6 +24,23 @@ func (c *Connection) resolveMetricsGVR(resource string) (schema.GroupVersionReso
 	return discovery.LookupRefreshingOnMiss(func(d *ResourceDiscovery) (schema.GroupVersionResource, bool) {
 		return d.GetGVRWithGroup(resource, k8score.MetricsAPIGroup)
 	})
+}
+
+// A credential plugin can stall discovery indefinitely, so the miss refresh
+// must not retain the poller or its connection.
+func (c *Connection) cachedMetricsGVR(resource string) (schema.GroupVersionResource, bool) {
+	d := c.Discovery()
+	if d == nil || d.ResourceDiscovery == nil {
+		return schema.GroupVersionResource{}, false
+	}
+	lookup := func(d *ResourceDiscovery) (schema.GroupVersionResource, bool) {
+		return d.GetGVRWithGroup(resource, k8score.MetricsAPIGroup)
+	}
+	gvr, ok := lookup(d)
+	if !ok {
+		d.refreshInBackground(func() { d.LookupRefreshingOnMiss(lookup) })
+	}
+	return gvr, ok
 }
 
 func MetricsAPIPath(resource string) (string, bool) {

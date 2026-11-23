@@ -1,16 +1,22 @@
 package k8s
 
 import (
+	"bytes"
+	"log"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	fakediscovery "k8s.io/client-go/discovery/fake"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	fakeclientset "k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
 )
 
@@ -35,6 +41,100 @@ func metricsTestConnection(t *testing.T, version, node string) (*Connection, *dy
 	c := &Connection{clients: &sharedKubernetesClients{dynamic: dyn}}
 	c.publishDiscovery(d)
 	return c, dyn
+}
+
+func TestMetricsPollWithStalledDiscovery(t *testing.T) {
+	for _, scenario := range []struct {
+		name    string
+		expired bool
+		stop    bool
+	}{
+		{name: "install after miss"},
+		{name: "upgrade after expiry", expired: true},
+		{name: "stop before refresh returns", stop: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				client := fakeclientset.NewSimpleClientset().Discovery().(*fakediscovery.FakeDiscovery)
+				metrics := &metav1.APIResourceList{
+					GroupVersion: "metrics.k8s.io/v1",
+					APIResources: []metav1.APIResource{
+						{Name: "pods", Kind: "PodMetrics", Namespaced: true},
+						{Name: "nodes", Kind: "NodeMetrics"},
+					},
+				}
+				if scenario.expired {
+					beta := metrics.DeepCopy()
+					beta.GroupVersion = "metrics.k8s.io/v1beta1"
+					client.Resources = []*metav1.APIResourceList{beta}
+				}
+				discovery, err := k8score.NewResourceDiscovery(client, k8score.WithDiscoveryCacheTTL(time.Hour))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if scenario.expired {
+					time.Sleep(time.Hour + time.Second)
+				}
+				client.Resources = []*metav1.APIResourceList{metrics}
+				release := make(chan struct{})
+				unblock := sync.OnceFunc(func() { close(release) })
+				defer unblock()
+				refreshes := 0
+				client.PrependReactor("get", "resource", func(clienttesting.Action) (bool, runtime.Object, error) {
+					refreshes++
+					<-release
+					return false, nil, nil
+				})
+
+				c, dyn := metricsTestConnection(t, "v1", "node-a")
+				c.discovery.Store(&ResourceDiscovery{ResourceDiscovery: discovery})
+				c.initMetricsHistory()
+				defer c.closeMetricsHistory()
+				synctest.Wait()
+				if refreshes != 1 {
+					t.Fatalf("blocked discovery refreshes = %d, want 1", refreshes)
+				}
+				time.Sleep(MetricsPollInterval)
+				synctest.Wait()
+				health := c.MetricsHistory().CollectionHealth()
+				if got := health.TotalCollections; got != 2 {
+					t.Errorf("poll attempts during blocked refresh = %d, want 2", got)
+				}
+				if scenario.expired && (health.PodMetrics != (MetricsSourceHealth{}) || health.NodeMetrics != (MetricsSourceHealth{})) {
+					t.Errorf("expired discovery changed source health: %+v", health)
+				}
+				if actions := dyn.Actions(); len(actions) != 0 {
+					t.Fatalf("poll issued metrics requests during refresh: %v", actions)
+				}
+				if scenario.stop {
+					var output bytes.Buffer
+					previous := log.Writer()
+					log.SetOutput(&output)
+					c.MetricsHistory().Stop()
+					synctest.Wait()
+					log.SetOutput(previous)
+					if !strings.Contains(output.String(), "Metrics history collection stopped") {
+						t.Error("poll loop did not exit before discovery was released")
+					}
+				}
+				unblock()
+				synctest.Wait()
+				if refreshes != 1 {
+					t.Errorf("refreshes for two blocked ticks = %d, want 1", refreshes)
+				}
+				if gvr, ok := discovery.GetGVRWithGroup("pods", k8score.MetricsAPIGroup); !ok || gvr.Version != "v1" {
+					t.Fatalf("refreshed pod metrics = %v, found %v", gvr, ok)
+				}
+				if !scenario.stop {
+					time.Sleep(MetricsPollInterval)
+					synctest.Wait()
+					if c.MetricsHistory().GetNodeMetricsHistory("node-a") == nil {
+						t.Fatal("next tick did not collect the newly served metrics version")
+					}
+				}
+			})
+		})
+	}
 }
 
 func TestMetricsHistoryInFlightAcrossClose(t *testing.T) {

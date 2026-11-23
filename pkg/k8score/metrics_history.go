@@ -124,6 +124,10 @@ type MetricsHistoryStore struct {
 	dynClient  dynamic.Interface
 	resolveGVR MetricsGVRResolver
 
+	// RefreshStaleDiscovery requests a background refresh and reports whether
+	// to skip this tick. Expiry alone says nothing about metrics source health.
+	RefreshStaleDiscovery func() bool
+
 	// Namespaces, when it returns a non-empty list, limits pod metrics
 	// collection to those namespaces, one LIST each. An install whose RBAC is
 	// granted per namespace cannot list pod metrics cluster-wide.
@@ -310,6 +314,9 @@ func (s *MetricsHistoryStore) collectMetrics() {
 	s.totalCollections++
 	s.mu.Unlock()
 	s.publishMu.Unlock()
+	if s.RefreshStaleDiscovery != nil && s.RefreshStaleDiscovery() {
+		return
+	}
 	podCtx, cancelPods := context.WithTimeout(s.stopCtx, 10*time.Second)
 	s.collectPodMetrics(podCtx, now)
 	cancelPods()
