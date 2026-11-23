@@ -81,7 +81,7 @@ function render(path: string, withExposure = true) {
 
 const button = (label: string) => Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.trim() === label)
 const lastParams = () => vi.mocked(useVulnerabilities).mock.calls.at(-1)![0]
-const marks = () => container.querySelectorAll('svg[aria-label^="Route"]')
+const marks = () => container.querySelectorAll('svg[aria-label^="Exposed via"]')
 
 beforeEach(() => {
   container = document.createElement('div')
@@ -134,37 +134,44 @@ describe('VulnerabilitiesView', () => {
     expect(marked[0]).not.toContain('worker')
   })
 
-  it('counts the exposed workloads beside the globe on rows that span workloads', () => {
+  it('counts the exposed workloads beside the mark on rows that span workloads', () => {
     render('/checks/vulnerabilities')
     expect(container.textContent).toContain('1 exposed')
+    expect(container.textContent).not.toMatch(/\d+ of \d+ exposed/)
     render('/checks/vulnerabilities', false)
     expect(container.textContent).not.toContain('exposed')
   })
 
-  it('shows the route, nothing, or Unknown per workload', () => {
+  it('shows the route, nothing, or Exposure unknown per workload', () => {
     render('/checks/vulnerabilities?by=workload')
     const rows = Array.from(container.querySelectorAll<HTMLButtonElement>('button[aria-expanded]'))
     const cell = (i: number) => rows[i].querySelector('div.grid')!.children[2].textContent
     expect(cell(0)).toBe('LoadBalancer shop/web and 1 more')
-    expect(cell(1)).toBe('Unknown')
+    expect(cell(1)).toBe('Exposure unknown')
     expect(cell(2)).toBe('')
   })
 
-  it('leaves out the chip, sort line, mark and route column when Radar reports no exposure', () => {
+  it('leaves out the chip, sort hint, mark and route column when Radar reports no exposure', () => {
     render('/checks/vulnerabilities', false)
     expect(button('Exposed')).toBeUndefined()
-    expect(container.textContent).not.toContain('Sorted:')
-    expect(container.textContent).toContain('Upgrading a package')
+    expect(container.textContent).not.toContain('Severity, then exposure')
     expect(marks()).toHaveLength(0)
 
     render('/checks/vulnerabilities?by=workload', false)
-    expect(container.textContent).not.toContain('Route from outside')
-    expect(container.textContent).not.toContain('Unknown')
+    expect(container.textContent).not.toContain('Exposed via')
+    expect(container.textContent).not.toContain('Exposure unknown')
   })
 
-  it('shows the sort line when Radar reports exposure', () => {
+  it('keeps the sort rule in a hint, not a line above the table', () => {
     render('/checks/vulnerabilities')
-    expect(container.textContent).toContain('Sorted:')
-    expect(container.textContent).toContain('Upgrading a package')
+    expect(container.textContent).toContain('Severity, then exposure')
+    expect(container.textContent).not.toContain('Sorted:')
+    expect(container.querySelector('[aria-label^="Sort: Most severe first"]')).not.toBeNull()
   })
+
+  it('names the rebuild caveat on the Upgrade header instead of a line', () => {
+    render('/checks/vulnerabilities')
+    expect(container.textContent).not.toContain('Upgrading a package')
+  })
+
 })

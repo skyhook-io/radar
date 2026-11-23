@@ -88,7 +88,7 @@ describe('vulnerabilities helpers', () => {
   it('says how many of a count have a route, listing the first few', () => {
     const exposed = ['a', 'b', 'c', 'd'].map((name) => ({ kind: 'Deployment', group: 'apps', namespace: 'shop', name, routes: [route] }))
     const tip = exposedCountTip(exposed, 5, 9)
-    expect(tip.startsWith('5 of 9 workloads have')).toBe(true)
+    expect(tip.startsWith('5 of 9 workloads are exposed')).toBe(true)
     expect(tip).toContain('a (LoadBalancer kube-system/traefik)')
     expect(tip).not.toContain('d (')
     expect(tip.endsWith('and 2 more')).toBe(true)

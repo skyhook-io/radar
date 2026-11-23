@@ -55,6 +55,38 @@ type Exposure struct {
 	// workload namespaces for which the caller can't read a route kind; it
 	// follows their access, never what exists.
 	Gaps []resourceapi.Gap `json:"gaps,omitempty"`
+	// Unchecked are route kinds the cluster serves that Radar doesn't follow
+	// (an Istio VirtualService or Gateway, a Traefik IngressRoute, a Contour
+	// HTTPProxy, a Knative Service): a workload reached only through one
+	// reads as having no route. Unlike a gap, they don't make a row's
+	// exposure unknown; they say what the check leaves out.
+	Unchecked []resourceapi.KindRef `json:"unchecked,omitempty"`
+}
+
+// uncheckedRouteKinds are other projects' route kinds Radar doesn't
+// evaluate.
+var uncheckedRouteKinds = []resourceapi.KindRef{
+	{Kind: "VirtualService", Group: "networking.istio.io"},
+	{Kind: "Gateway", Group: "networking.istio.io"},
+	{Kind: "IngressRoute", Group: "traefik.io"},
+	{Kind: "IngressRouteTCP", Group: "traefik.io"},
+	{Kind: "IngressRouteUDP", Group: "traefik.io"},
+	{Kind: "IngressRoute", Group: "traefik.containo.us"},
+	{Kind: "IngressRouteTCP", Group: "traefik.containo.us"},
+	{Kind: "IngressRouteUDP", Group: "traefik.containo.us"},
+	{Kind: "HTTPProxy", Group: "projectcontour.io"},
+	{Kind: "Service", Group: "serving.knative.dev"},
+}
+
+// servedUncheckedKinds are the uncheckedRouteKinds the cluster serves.
+func servedUncheckedKinds(served func(kind, group string) bool) []resourceapi.KindRef {
+	var out []resourceapi.KindRef
+	for _, k := range uncheckedRouteKinds {
+		if served(k.Kind, k.Group) {
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // exposingService is a Service that routes from outside reach, and what
@@ -98,6 +130,9 @@ type routeSources struct {
 	// be read ("" when they were, or the kind isn't served).
 	grants       []*unstructured.Unstructured
 	grantsUnread readreason.Code
+	// unchecked are the route kinds the cluster serves that Radar doesn't
+	// follow (Exposure.Unchecked).
+	unchecked []resourceapi.KindRef
 }
 
 // indexExposure joins routes to the Services they reach. may is what the
@@ -523,6 +558,11 @@ var (
 func readExposure(ctx context.Context, cache *k8s.ResourceCache, dynamic *k8s.DynamicResourceCache, discovery *k8s.ResourceDiscovery, workloadScope []string) (routeSources, []resourceapi.Gap) {
 	var src routeSources
 	var gaps []resourceapi.Gap
+	// What the cluster serves, from discovery: a nil discovery serves none.
+	src.unchecked = servedUncheckedKinds(func(kind, group string) bool {
+		_, ok := discovery.GetGVRWithGroup(kind, group)
+		return ok
+	})
 	if cache == nil || cache.Services() == nil {
 		return src, []resourceapi.Gap{{Code: readreason.RadarKindNotCollected, Kinds: serviceKind, Namespaces: resourceapi.AllNames()}}
 	}

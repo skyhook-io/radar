@@ -233,34 +233,32 @@ func exposureFixture() ([]*unstructured.Unstructured, []target) {
 	return items, targets
 }
 
-// A row is exposed only through a workload it covers, it names only that
-// workload, and it sorts above a Critical with no route.
-func TestExposedRowsSortFirstAndNameOnlyTheirExposedWorkloads(t *testing.T) {
+// A row is exposed only through a workload it covers and names only that
+// workload. Severity leads: the unexposed Critical sorts above the exposed
+// High, and within High the exposed workload leads.
+func TestExposedRowsNameOnlyTheirExposedWorkloads(t *testing.T) {
 	items, targets := exposureFixture()
 	for _, view := range []View{ViewImage, ViewFix, ViewCVE} {
 		resp := mustBuild(t, items, targets, view, Filter{})
-		var first []ExposedWorkload
-		var firstTotal, rows int
+		var exposed []ExposedWorkload
+		var exposedTotal, firstTotal, rows int
 		switch view {
 		case ViewImage:
-			first, firstTotal, rows = resp.Images[0].Exposed, resp.Images[0].ExposedTotal, len(resp.Images)
-			if resp.Images[1].ExposedTotal != 0 {
-				t.Fatalf("image: checkout's image has no exposed workload: %+v", resp.Images[1].Exposed)
-			}
+			exposed, exposedTotal, firstTotal, rows = resp.Images[1].Exposed, resp.Images[1].ExposedTotal, resp.Images[0].ExposedTotal, len(resp.Images)
 		case ViewFix:
-			first, firstTotal, rows = resp.Fixes[0].Exposed, resp.Fixes[0].ExposedTotal, len(resp.Fixes)
+			exposed, exposedTotal, firstTotal, rows = resp.Fixes[1].Exposed, resp.Fixes[1].ExposedTotal, resp.Fixes[0].ExposedTotal, len(resp.Fixes)
 		case ViewCVE:
-			first, firstTotal, rows = resp.CVEs[0].Exposed, resp.CVEs[0].ExposedTotal, len(resp.CVEs)
-			if resp.CVEs[0].ID != "CVE-HIGH" {
-				t.Fatalf("cve: the exposed High sorts above the unexposed Critical: %+v", resp.CVEs)
+			exposed, exposedTotal, firstTotal, rows = resp.CVEs[1].Exposed, resp.CVEs[1].ExposedTotal, resp.CVEs[0].ExposedTotal, len(resp.CVEs)
+			if resp.CVEs[0].ID != "CVE-CRIT" {
+				t.Fatalf("cve: the unexposed Critical sorts above the exposed High: %+v", resp.CVEs)
 			}
 		}
-		if rows != 2 || firstTotal != 1 || len(first) != 1 || first[0].WorkloadRef != frontend || !slices.Equal(first[0].Routes, []Route{lbRoute}) {
-			t.Fatalf("%s: first row's exposed %+v (total %d, rows %d)", view, first, firstTotal, rows)
+		if rows != 2 || firstTotal != 0 || exposedTotal != 1 || len(exposed) != 1 || exposed[0].WorkloadRef != frontend || !slices.Equal(exposed[0].Routes, []Route{lbRoute}) {
+			t.Fatalf("%s: second row's exposed %+v (total %d, first row's %d, rows %d)", view, exposed, exposedTotal, firstTotal, rows)
 		}
 	}
 	workloads := mustBuild(t, items, targets, ViewWorkload, Filter{})
-	if workloads.Workloads[0].Name != "frontend" || !slices.Equal(workloads.Workloads[0].Routes, []Route{lbRoute}) || workloads.Workloads[1].Routes != nil {
+	if got := workloads.Workloads; len(got) != 3 || got[0].Name != "checkout" || got[1].Name != "frontend" || !slices.Equal(got[1].Routes, []Route{lbRoute}) || got[2].Routes != nil {
 		t.Fatalf("workload: %+v", workloads.Workloads)
 	}
 	if workloads.Exposure == nil {
@@ -416,20 +414,21 @@ func TestExportExposedWorkloads(t *testing.T) {
 	if cols := ExportColumns[ViewFix]; cols[len(cols)-1] != "exposed_workloads" {
 		t.Fatalf("header: %v", cols)
 	}
+	// libxml's Critical sorts first, openssl's exposed High second.
 	rows := exportRows(t, resp, Filter{})
-	if got := rows[0]["exposed_workloads"]; got != "Deployment shop/frontend (LoadBalancer shop/frontend)" {
+	if got := rows[1]["exposed_workloads"]; rows[1]["package"] != "openssl" || got != "Deployment shop/frontend (LoadBalancer shop/frontend)" {
 		t.Fatalf("exposed cell: %q", got)
 	}
-	if got := rows[1]["exposed_workloads"]; got != "" {
+	if got := rows[0]["exposed_workloads"]; got != "" {
 		t.Fatalf("no route seen: %q", got)
 	}
 
 	resp.Exposure = &Exposure{Gaps: []resourceapi.Gap{{Code: readreason.KindSyncPending, Kinds: ingressKind, Namespaces: resourceapi.Names([]string{"shop"}, 64)}}}
 	rows = exportRows(t, resp, Filter{})
-	if got := rows[1]["exposed_workloads"]; got != "unknown" {
+	if got := rows[0]["exposed_workloads"]; got != "unknown" {
 		t.Fatalf("routes unread in shop: %q", got)
 	}
-	if got := rows[0]["exposed_workloads"]; !strings.HasPrefix(got, "Deployment shop/frontend") {
+	if got := rows[1]["exposed_workloads"]; !strings.HasPrefix(got, "Deployment shop/frontend") {
 		t.Fatalf("a route seen stays named: %q", got)
 	}
 	filtered := exportRows(t, resp, Filter{ExposedOnly: true})
@@ -441,8 +440,8 @@ func TestExportExposedWorkloads(t *testing.T) {
 	}
 
 	workloads := exportRows(t, mustExport(t, items, targets, ViewWorkload, Filter{}), Filter{})
-	if workloads[0]["workload"] != "frontend" || workloads[0]["exposed_workloads"] != "Deployment shop/frontend (LoadBalancer shop/frontend)" {
-		t.Fatalf("workload view: %v", workloads[0])
+	if workloads[1]["workload"] != "frontend" || workloads[1]["exposed_workloads"] != "Deployment shop/frontend (LoadBalancer shop/frontend)" {
+		t.Fatalf("workload view: %v", workloads[1])
 	}
 }
 
@@ -922,19 +921,20 @@ func TestListReadsCapRoutesPerWorkload(t *testing.T) {
 		many[i] = Route{Via: "HTTPRoute", Namespace: "edge", Name: fmt.Sprintf("r-%03d", i)}
 	}
 	targets[0] = exposedTarget(targets[0], many...)
-	cve := mustBuild(t, items, targets, ViewCVE, Filter{}).CVEs[0]
+	// The exposed High is the second row, below checkout's Critical.
+	cve := mustBuild(t, items, targets, ViewCVE, Filter{}).CVEs[1]
 	if len(cve.Exposed[0].Routes) != MaxRoutesPerWorkload || cve.Exposed[0].RoutesTotal != 200 {
 		t.Fatalf("list read: %d routes of %d", len(cve.Exposed[0].Routes), cve.Exposed[0].RoutesTotal)
 	}
-	wl := mustBuild(t, items, targets, ViewWorkload, Filter{}).Workloads[0]
+	wl := mustBuild(t, items, targets, ViewWorkload, Filter{}).Workloads[1]
 	if len(wl.Routes) != MaxRoutesPerWorkload || wl.RoutesTotal != 200 {
 		t.Fatalf("workload row: %d routes of %d", len(wl.Routes), wl.RoutesTotal)
 	}
 	export := mustExport(t, items, targets, ViewCVE, Filter{})
-	if len(export.CVEs[0].Exposed[0].Routes) != 200 {
-		t.Fatalf("export: %d routes", len(export.CVEs[0].Exposed[0].Routes))
+	if len(export.CVEs[1].Exposed[0].Routes) != 200 {
+		t.Fatalf("export: %d routes", len(export.CVEs[1].Exposed[0].Routes))
 	}
-	if cell := exportRows(t, export, Filter{})[0]["exposed_workloads"]; strings.Count(cell, "HTTPRoute edge/") != 200 {
+	if cell := exportRows(t, export, Filter{})[1]["exposed_workloads"]; strings.Count(cell, "HTTPRoute edge/") != 200 {
 		t.Fatalf("CSV cell names %d routes", strings.Count(cell, "HTTPRoute edge/"))
 	}
 }
@@ -1023,5 +1023,137 @@ func TestExportNotReadRowsCarryExposure(t *testing.T) {
 		if len(rows) != 1 || rows[0]["exposed_workloads"] != "Deployment shop/big (LoadBalancer shop/big)" {
 			t.Fatalf("%s: %v", view, rows)
 		}
+	}
+}
+
+// Severity leads in every view; within a severity, a row with an exposed
+// workload comes first, then one whose exposure is unknown (a workload in a
+// namespace an exposure gap covers, flagged exposureUnknown), then the rest.
+// By workload, an exposed workload with no scan sorts after every workload
+// with findings and first among those without.
+func TestExposureTierWithinSeverity(t *testing.T) {
+	w := func(ns, name string) WorkloadRef {
+		return WorkloadRef{Kind: "Deployment", Group: "apps", Namespace: ns, Name: name}
+	}
+	front, api, work, chk, edge, idle, batch := w("shop", "front"), w("dmz", "api"), w("shop", "work"), w("shop", "chk"), w("shop", "edge"), w("dmz", "idle"), w("dmz", "batch")
+	report := func(name, ns, sev, pkg string) *unstructured.Unstructured {
+		var vulns []vuln
+		if sev != "" {
+			vulns = []vuln{{"CVE-" + name, sev, pkg, "1", "2"}}
+		}
+		return vulnReport(reportSpec{name: "r-" + name, ns: ns, ownerKind: "ReplicaSet", ownerName: name + "-1", container: "app", uid: uidOf(name),
+			repo: "acme/" + name, tag: "1", digest: "sha256:" + name, scanned: "2026-11-01T00:00:00Z", vulns: vulns})
+	}
+	items := []*unstructured.Unstructured{
+		report("front", "shop", "HIGH", "pf"), report("api", "dmz", "HIGH", "pa"), report("work", "shop", "HIGH", "pw"),
+		report("chk", "shop", "CRITICAL", "pc"), report("batch", "dmz", "", ""),
+	}
+	scanned := func(name string, ref WorkloadRef) target {
+		return running(liveTarget(ref.Namespace, "ReplicaSet", name+"-1", "app", "acme/"+name+":1", uidOf(name), ref), "sha256:"+name)
+	}
+	targets := []target{
+		exposedTarget(scanned("front", front), lbRoute), scanned("api", api), scanned("work", work), scanned("chk", chk), scanned("batch", batch),
+		exposedTarget(liveTarget("shop", "ReplicaSet", "edge-1", "app", "acme/edge:1", "u-edge", edge), lbRoute),
+		liveTarget("dmz", "ReplicaSet", "idle-1", "app", "acme/idle:1", "u-idle", idle),
+	}
+	dmzGap := &Exposure{Gaps: []resourceapi.Gap{{Code: readreason.UserForbidden, Kinds: ingressKind, Namespaces: resourceapi.Names([]string{"dmz"}, 64)}}}
+	read := func(view View, exposure *Exposure) Response {
+		resp, err := buildWithExposure(context.Background(), items, targets, view, Filter{}, false, exposure)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+
+	images := read(ViewImage, dmzGap).Images
+	var order []string
+	for _, img := range images {
+		order = append(order, img.Image)
+		if img.ExposureUnknown != (img.Image == "acme/api:1") {
+			t.Fatalf("image %s: exposureUnknown %v", img.Image, img.ExposureUnknown)
+		}
+	}
+	if want := []string{"acme/chk:1", "acme/front:1", "acme/api:1", "acme/work:1"}; !slices.Equal(order, want) {
+		t.Fatalf("image order %v, want %v", order, want)
+	}
+	order = nil
+	for _, c := range read(ViewCVE, dmzGap).CVEs {
+		order = append(order, c.ID)
+		if c.ExposureUnknown != (c.ID == "CVE-api") {
+			t.Fatalf("cve %s: exposureUnknown %v", c.ID, c.ExposureUnknown)
+		}
+	}
+	if want := []string{"CVE-chk", "CVE-front", "CVE-api", "CVE-work"}; !slices.Equal(order, want) {
+		t.Fatalf("cve order %v, want %v", order, want)
+	}
+	order = nil
+	for _, fx := range read(ViewFix, dmzGap).Fixes {
+		order = append(order, fx.Package)
+		if fx.ExposureUnknown != (fx.Package == "pa") {
+			t.Fatalf("fix %s: exposureUnknown %v", fx.Package, fx.ExposureUnknown)
+		}
+	}
+	if want := []string{"pc", "pf", "pa", "pw"}; !slices.Equal(order, want) {
+		t.Fatalf("fix order %v, want %v", order, want)
+	}
+	byWorkload := read(ViewWorkload, dmzGap)
+	order = nil
+	for _, wl := range byWorkload.Workloads {
+		order = append(order, wl.Name)
+		if wl.ExposureUnknown != (wl.Namespace == "dmz") {
+			t.Fatalf("workload %s: exposureUnknown %v", wl.Name, wl.ExposureUnknown)
+		}
+	}
+	if want := []string{"chk", "front", "api", "work", "edge", "idle"}; !slices.Equal(order, want) {
+		t.Fatalf("workload order %v, want %v", order, want)
+	}
+
+	resp := read(ViewImage, dmzGap)
+	for _, u := range resp.Unscanned {
+		if u.ExposureUnknown != (u.Image == "acme/idle:1") {
+			t.Fatalf("unscanned %s: exposureUnknown %v", u.Image, u.ExposureUnknown)
+		}
+	}
+	if len(resp.Clean) != 1 || !resp.Clean[0].ExposureUnknown {
+		t.Fatalf("clean image in dmz: %+v", resp.Clean)
+	}
+
+	// No gap: nothing is unknown, and api is just another High.
+	for _, img := range read(ViewImage, nil).Images {
+		if img.ExposureUnknown {
+			t.Fatalf("no gap, yet %s is unknown", img.Image)
+		}
+	}
+	// A gap over every namespace makes every row with no route unknown.
+	all := &Exposure{Gaps: []resourceapi.Gap{{Code: readreason.KindSyncPending, Kinds: kinds(resourceapi.KindRef{Kind: "HTTPRoute", Group: "gateway.networking.k8s.io"}), Namespaces: resourceapi.AllNames()}}}
+	for _, img := range read(ViewImage, all).Images {
+		if img.ExposureUnknown != (img.ExposedTotal == 0) {
+			t.Fatalf("all-namespace gap: %s exposureUnknown %v", img.Image, img.ExposureUnknown)
+		}
+	}
+}
+
+// Route kinds Radar doesn't follow are listed when, and only when, the
+// cluster serves them.
+func TestUncheckedRouteKinds(t *testing.T) {
+	core, err := k8score.NewResourceDiscovery(fake.NewClientset().Discovery())
+	if err != nil {
+		t.Fatal(err)
+	}
+	core.AddAPIResource(k8score.APIResource{Group: "networking.istio.io", Version: "v1", Kind: "VirtualService", Name: "virtualservices", Namespaced: true, IsCRD: true, Verbs: []string{"list", "watch"}})
+	core.AddAPIResource(k8score.APIResource{Group: "traefik.io", Version: "v1alpha1", Kind: "IngressRoute", Name: "ingressroutes", Namespaced: true, IsCRD: true, Verbs: []string{"list", "watch"}})
+	core.AddAPIResource(k8score.APIResource{Group: "example.com", Version: "v1", Kind: "HTTPProxy", Name: "httpproxies", Namespaced: true, IsCRD: true, Verbs: []string{"list", "watch"}})
+	src, _ := readExposure(context.Background(), nil, nil, &k8s.ResourceDiscovery{ResourceDiscovery: core}, nil)
+	want := []resourceapi.KindRef{{Kind: "VirtualService", Group: "networking.istio.io"}, {Kind: "IngressRoute", Group: "traefik.io"}}
+	if !slices.Equal(src.unchecked, want) {
+		t.Fatalf("unchecked: %+v, want %+v", src.unchecked, want)
+	}
+	if src, _ := readExposure(context.Background(), nil, nil, nil, nil); src.unchecked != nil {
+		t.Fatalf("no discovery, nothing served: %+v", src.unchecked)
+	}
+	every := servedUncheckedKinds(func(string, string) bool { return true })
+	if len(every) != 10 || !slices.Contains(every, resourceapi.KindRef{Kind: "Service", Group: "serving.knative.dev"}) ||
+		!slices.Contains(every, resourceapi.KindRef{Kind: "IngressRouteUDP", Group: "traefik.containo.us"}) || !slices.Contains(every, resourceapi.KindRef{Kind: "HTTPProxy", Group: "projectcontour.io"}) {
+		t.Fatalf("every kind: %+v", every)
 	}
 }

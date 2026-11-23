@@ -55,6 +55,8 @@ export interface ExposedWorkload {
 export interface VulnerabilityExposure {
   exposed?: ExposedWorkload[]
   exposedTotal?: number
+  /** None of the row's workloads is known exposed, but some are where Radar couldn't read every route kind. */
+  exposureUnknown?: boolean
 }
 
 export interface VulnerabilityFinding {
@@ -152,6 +154,8 @@ export interface VulnerabilityWorkload {
   containers: VulnerabilityWorkloadContainer[]
   routes?: VulnerabilityRoute[]
   routesTotal?: number
+  /** No route seen, but Radar couldn't read every route kind that could reach it. */
+  exposureUnknown?: boolean
 }
 
 export interface VulnerabilitySummary {
@@ -188,7 +192,11 @@ export interface VulnerabilitiesResponse {
    * Present when this Radar checks exposure; absent from an older Radar, where
    * exposure is unknown, never none. gaps: route kinds Radar couldn't read.
    */
-  exposure?: { gaps?: VulnerabilityGap[] }
+  exposure?: {
+    gaps?: VulnerabilityGap[]
+    /** Route kinds this cluster serves that Radar doesn't follow (Istio, Traefik IngressRoute, Contour, Knative). */
+    unchecked?: { kind: string; group?: string }[]
+  }
   coverage: {
     complete: boolean
     gaps: VulnerabilityGap[]
@@ -389,8 +397,13 @@ export function vulnerabilitiesPath(p: VulnerabilitiesParams): string {
 
 // GET /api/vulnerabilities/export: the same view and filters as CSV, listing
 // every row and every value the table shortens.
-export async function fetchVulnerabilitiesCSV(p: VulnerabilitiesParams): Promise<string> {
-  const path = vulnerabilitiesPath(p).replace('/vulnerabilities?', '/vulnerabilities/export?')
+/** What a CSV export lists: a view's rows, or every finding (one row per CVE, image and workload). */
+export type VulnerabilityExportView = VulnerabilityView | 'findings'
+
+export async function fetchVulnerabilitiesCSV(p: VulnerabilitiesParams, as: VulnerabilityExportView = p.view): Promise<string> {
+  const query = new URLSearchParams(vulnerabilitiesPath(p).split('?')[1])
+  query.set('view', as)
+  const path = `/vulnerabilities/export?${query.toString()}`
   const response = await apiFetch(`${getApiBase()}${path}`, { cache: 'no-store' })
   if (!response.ok) {
     const { body, unknownRoute } = await readErrorResponse(response)
@@ -400,10 +413,10 @@ export async function fetchVulnerabilitiesCSV(p: VulnerabilitiesParams): Promise
 }
 
 // vulnerabilities-by-<view>-<cluster>-<YYYY-MM-DD>.csv, on the local date.
-export function vulnerabilitiesCSVFilename(view: VulnerabilityView, cluster: string, now = new Date()): string {
+export function vulnerabilitiesCSVFilename(view: VulnerabilityExportView, cluster: string, now = new Date()): string {
   const safe = cluster.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+|-+$/g, '') || 'cluster'
   const pad = (n: number) => String(n).padStart(2, '0')
-  return `vulnerabilities-by-${view}-${safe}-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}.csv`
+  return `vulnerabilities-${view === 'findings' ? 'findings' : `by-${view}`}-${safe}-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}.csv`
 }
 
 // GET /api/vulnerabilities. Filters run server-side so the summary always

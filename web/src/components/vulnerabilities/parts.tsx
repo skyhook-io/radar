@@ -1,5 +1,6 @@
 import { clsx } from 'clsx'
 import { Globe } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { WithTooltip } from '../ui/Tooltip'
 import { CertaintyGlyph, gapReasonText, VULN_SEVERITY_BADGE, VULN_SEVERITY_BAR, VULN_SEVERITY_TEXT, type Certainty } from '@skyhook-io/k8s-ui'
 import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
@@ -167,15 +168,32 @@ export function routeListText(routes: VulnerabilityRoute[], total = routes.lengt
 }
 
 export function routesTip(routes: VulnerabilityRoute[], total = routes.length): string {
-  return `${total === 1 ? 'Route' : 'Routes'} from outside the cluster: ${routeListText(routes, total)}`
+  return `Exposed via ${routeListText(routes, total)}`
+}
+
+/**
+ * The words and mark for exposure, in one place. "Exposed" is the term
+ * container security tools use for a workload reachable from outside the
+ * cluster (Sysdig: "publicly or ingress exposed"); it doesn't claim the
+ * internet, which tools keep for "internet-facing"; the tooltips say it may
+ * be internal only. The globe stays as the mark people recognise for exposure.
+ */
+export const EXPOSURE = {
+  icon: Globe as LucideIcon,
+  chip: 'Exposed',
+  column: 'Exposed via',
+  unknown: 'Exposure unknown',
+  chipTip: "Only rows affecting a workload reachable from outside the cluster: a LoadBalancer or NodePort Service, or an Ingress or Gateway API route with an address. It may be internal only; firewalls, security groups and NetworkPolicies aren't checked. Not counted yet: hostNetwork and hostPort Pods, service meshes and custom routers.",
+  unknownTip: "Radar couldn't read every route kind that could reach this workload, so it may be exposed.",
 }
 
 /** The mark on a workload with a route from outside the cluster; absence gets none. */
 export function ExposedMark({ exposed, tip }: { exposed?: ExposedWorkload; tip?: string }) {
   const text = tip ?? (exposed ? routesTip(exposed.routes, exposed.routesTotal) : undefined)
+  const Icon = EXPOSURE.icon
   return (
     <WithTooltip tip={text}>
-      <Globe className="h-3 w-3 shrink-0 self-center text-theme-text-secondary" role="img" aria-label={text} />
+      <Icon className="h-3 w-3 shrink-0 self-center text-theme-text-secondary" role="img" aria-label={text} />
     </WithTooltip>
   )
 }
@@ -216,28 +234,44 @@ export function WorkloadSummary({ workloads, exposure, suffix }: { workloads: Vu
 }
 
 /**
- * The tooltip for a count of workloads that lists no names: how many have a
- * route from outside the cluster, and the first few with their routes.
+ * The tooltip for a count of workloads that lists no names: how many are
+ * externally exposed, and the first few with their routes.
  */
 export function exposedCountTip(exposed: ExposedWorkload[], exposedTotal: number, workloads?: number, listed = 3): string {
   const shown = exposed.slice(0, listed).map((w) => `${w.name} (${routeListText(w.routes, w.routesTotal)})`)
   const more = exposedTotal - shown.length
   // By image the row counts containers, which can't be set against workloads.
   const lead = workloads === undefined
-    ? `${exposedTotal} ${exposedTotal === 1 ? 'workload running it has' : 'workloads running it have'}`
-    : `${exposedTotal} of ${workloads} ${workloads === 1 ? 'workload' : 'workloads'} ${exposedTotal === 1 ? 'has' : 'have'}`
-  return `${lead} a route from outside the cluster: ${shown.join(', ')}${more > 0 ? ` and ${more} more` : ''}`
+    ? `${exposedTotal} ${exposedTotal === 1 ? 'workload running it is' : 'workloads running it are'}`
+    : `${exposedTotal} of ${workloads} ${workloads === 1 ? 'workload is' : 'workloads are'}`
+  return `${lead} exposed: ${shown.join(', ')}${more > 0 ? ` and ${more} more` : ''}`
 }
 
-/** "3 exposed" with the globe, for a row that counts its exposed workloads; nothing when there are none. */
-export function ExposedCount({ exposed, total, workloads }: { exposed?: ExposedWorkload[]; total?: number; workloads?: number }) {
-  if (!total) return null
+/**
+ * "3 exposed" with the mark, under a row's workload count ("1 exposed
+ * workload" where the row counts containers);
+ * "Exposure unknown" when none is known exposed but some may be; nothing
+ * otherwise.
+ */
+export function ExposedCount({ exposed, total, workloads, unknown }: { exposed?: ExposedWorkload[]; total?: number; workloads?: number; unknown?: boolean }) {
+  const Icon = EXPOSURE.icon
+  if (!total) {
+    if (!unknown) return null
+    return (
+      <WithTooltip tip={EXPOSURE.unknownTip}>
+        <span className="whitespace-nowrap text-xs text-theme-text-tertiary">{EXPOSURE.unknown}</span>
+      </WithTooltip>
+    )
+  }
   const tip = exposedCountTip(exposed ?? [], total, workloads)
+  // Under a workload count the total is already on screen, so the line
+  // says only how many are exposed; the tooltip says "N of M".
+  const text = workloads === undefined ? `${total} exposed ${total === 1 ? 'workload' : 'workloads'}` : `${total} exposed`
   return (
     <WithTooltip tip={tip}>
       <span className="inline-flex items-center gap-1 whitespace-nowrap text-xs text-theme-text-secondary" aria-label={tip}>
-        <Globe className="h-3 w-3 shrink-0" aria-hidden />
-        {total} exposed
+        <Icon className="h-3 w-3 shrink-0" aria-hidden />
+        {text}
       </span>
     </WithTooltip>
   )
@@ -275,12 +309,12 @@ export function exposureGapSentence(gaps: VulnerabilityGap[] | undefined): strin
   const hidden = gaps.filter((g) => g.code === 'user_forbidden')
   const unread = gaps.filter((g) => g.code !== 'user_forbidden')
   const sentences: string[] = []
-  if (unread.length) sentences.push(`Radar couldn't read ${describe(unread)}, so some workloads may have a route from outside the cluster without the mark.`)
+  if (unread.length) sentences.push(`Radar couldn't read ${describe(unread)}, so some workloads may be exposed without the mark.`)
   if (hidden.length) {
     const kinds = listWords([...new Set(hidden.flatMap((g) => (g.kinds?.names ?? []).map((k) => pluralKind(k.kind))))])
     const namespaces = new Set(hidden.flatMap((g) => g.namespaces?.names ?? []))
     const where = namespaces.size ? `workloads in ${namespaces.size} ${namespaces.size === 1 ? 'namespace' : 'namespaces'}` : 'these workloads'
-    sentences.push(`Your access doesn't cover all ${kinds || 'routes'} that could reach ${where}, so those without a route you can see read Unknown.`)
+    sentences.push(`Your access doesn't cover all ${kinds || 'routes'} that could reach ${where}, so those without a route you can see read Exposure unknown.`)
   }
   return sentences.join(' ')
 }
@@ -428,4 +462,24 @@ export function FindingTotal({ value, certainty, className }: { value: number; c
 // full list is in the row's tooltip and expanded detail).
 export function installedLabel(from: string[]): string {
   return from.length > 2 ? `${from.length} versions` : from.join(', ')
+}
+
+const UNCHECKED_NAMES: Record<string, string> = {
+  'networking.istio.io/VirtualService': 'Istio VirtualServices',
+  'networking.istio.io/Gateway': 'Istio Gateways',
+  'traefik.io/IngressRoute': 'Traefik IngressRoutes',
+  'traefik.containo.us/IngressRoute': 'Traefik IngressRoutes',
+  'traefik.io/IngressRouteTCP': 'Traefik IngressRouteTCPs',
+  'traefik.containo.us/IngressRouteTCP': 'Traefik IngressRouteTCPs',
+  'traefik.io/IngressRouteUDP': 'Traefik IngressRouteUDPs',
+  'traefik.containo.us/IngressRouteUDP': 'Traefik IngressRouteUDPs',
+  'projectcontour.io/HTTPProxy': 'Contour HTTPProxies',
+  'serving.knative.dev/Service': 'Knative Services',
+}
+
+/** The sentence for route kinds this cluster serves that Radar doesn't follow, or null. */
+export function uncheckedRoutesSentence(unchecked: { kind: string; group?: string }[] | undefined): string | null {
+  if (!unchecked || unchecked.length === 0) return null
+  const names = [...new Set(unchecked.map((k) => UNCHECKED_NAMES[`${k.group ?? ''}/${k.kind}`] ?? pluralKind(k.kind)))]
+  return `This cluster has ${listWords(names)}, which Radar doesn't follow yet, so workloads they route to aren't marked.`
 }

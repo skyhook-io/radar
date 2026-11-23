@@ -253,6 +253,12 @@ func TestExportNotReadRows(t *testing.T) {
 	if len(rows) != 1 || rows[0]["workload"] != "big" || rows[0]["low"] != "" {
 		t.Fatalf("workload view: %v", rows)
 	}
+	for _, f := range []Filter{{}, {Severities: []Severity{SeverityCritical}}} {
+		rows = withStatus(exportRows(t, mustExport(t, items, targets, ViewFindings, f), f), StatusNotRead)
+		if len(rows) != 1 || rows[0]["image"] != "acme/big:1" || rows[0]["workload"] != "big" || rows[0]["container"] != "app" || rows[0]["cve"] != "" || rows[0]["scanned"] == "" {
+			t.Fatalf("findings view %+v: %v", f, rows)
+		}
+	}
 }
 
 // Clean images and workloads are rows unless a severity or fix filter is on,
@@ -368,13 +374,13 @@ func TestExportGapRows(t *testing.T) {
 		{Code: readreason.ReadError, Kinds: reportKind, Namespaces: resourceapi.UnknownNames()},
 	}
 	want := []struct{ status, where string }{{StatusNoAccess, "a; b"}, {StatusLoading, "*"}, {StatusReadFailed, "unknown"}}
-	for _, view := range []View{ViewImage, ViewFix, ViewCVE, ViewWorkload} {
+	for _, view := range []View{ViewImage, ViewFix, ViewCVE, ViewWorkload, ViewFindings} {
 		resp := mustExport(t, items, targets, view, Filter{})
 		resp.Coverage.Gaps = gaps
 		rows := exportRows(t, resp, Filter{})
 		rows = rows[len(rows)-3:]
 		col := "running_in"
-		if view == ViewWorkload {
+		if view == ViewWorkload || view == ViewFindings {
 			col = "namespace"
 		}
 		for i, w := range want {
@@ -611,5 +617,89 @@ func TestExportSearchKeepsNotReadRows(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// The findings export is one row per finding, image and workload container,
+// in the page's order, with each container's exposure; not-scanned images
+// are a row per container, and the filters narrow the containers too.
+func TestExportFindings(t *testing.T) {
+	items, targets := exposureFixture()
+	pending := WorkloadRef{Kind: "Deployment", Group: "apps", Namespace: "shop", Name: "pending"}
+	targets = append(targets, liveTarget("shop", "ReplicaSet", "pending-1", "app", "acme/pending:1", "", pending))
+	resp := mustExport(t, items, targets, ViewFindings, Filter{})
+	if resp.View != ViewFindings {
+		t.Fatalf("view %s", resp.View)
+	}
+	rows := exportRows(t, resp, Filter{})
+	type key struct{ cve, workload, exposure, status string }
+	var got []key
+	for _, r := range rows {
+		got = append(got, key{r["cve"], r["workload"], r["exposure"], r["status"]})
+	}
+	want := []key{
+		{"CVE-CRIT", "checkout", "", StatusOK},
+		{"CVE-HIGH", "frontend", "exposed", StatusOK},
+		{"CVE-HIGH", "worker", "", StatusOK},
+		{"", "pending", "", StatusNotScanned},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("rows %v, want %v", got, want)
+	}
+	// No package type: the versions can't be ordered, so no fix target.
+	crit := rows[0]
+	for col, v := range map[string]string{
+		"severity": "Critical", "score": "7.5", "package": "libxml", "installed_version": "2.0", "fixed_version": "2.1", "fix_target": "",
+		"fix_available": "yes", "image": "acme/checkout:1", "digest": "sha256:co", "namespace": "shop", "workload_kind": "Deployment",
+		"container": "app", "routes": "", "scanned": "2026-11-01T00:00:00Z",
+	} {
+		if crit[col] != v {
+			t.Fatalf("%s: %q, want %q (%v)", col, crit[col], v, crit)
+		}
+	}
+	if rows[1]["routes"] != "LoadBalancer shop/frontend" {
+		t.Fatalf("routes: %q", rows[1]["routes"])
+	}
+	if p := rows[3]; p["image"] != "acme/pending:1" || p["container"] != "app" || p["scanned"] != "" || p["severity"] != "" {
+		t.Fatalf("not scanned: %v", p)
+	}
+
+	// Where routes couldn't be read, a container with none seen is unknown.
+	resp.Exposure = &Exposure{Gaps: []resourceapi.Gap{{Code: readreason.KindSyncPending, Kinds: ingressKind, Namespaces: resourceapi.Names([]string{"shop"}, 64)}}}
+	if rows := exportRows(t, resp, Filter{}); rows[0]["exposure"] != "unknown" || rows[1]["exposure"] != "exposed" {
+		t.Fatalf("unknown exposure: %v / %v", rows[0], rows[1])
+	}
+
+	// A workload filter and the Exposed filter keep only those containers.
+	for _, f := range []Filter{{Workload: &WorkloadRef{Kind: "Deployment", Namespace: "shop", Name: "frontend"}}, {ExposedOnly: true}} {
+		rows := exportRows(t, mustExport(t, items, targets, ViewFindings, f), f)
+		if len(rows) != 1 || rows[0]["workload"] != "frontend" || rows[0]["cve"] != "CVE-HIGH" {
+			t.Fatalf("%+v: %v", f, rows)
+		}
+	}
+	// A severity filter keeps its findings; not-scanned rows stay.
+	f := Filter{Severities: []Severity{SeverityCritical}}
+	rows = exportRows(t, mustExport(t, items, targets, ViewFindings, f), f)
+	if len(rows) != 2 || rows[0]["cve"] != "CVE-CRIT" || rows[1]["status"] != StatusNotScanned {
+		t.Fatalf("critical only: %v", rows)
+	}
+	if severityLabel(SeverityUnknown) != "Unrated" {
+		t.Fatal("Trivy's UNKNOWN is Unrated in a CSV, as on the screen")
+	}
+}
+
+// The findings view is an export view only.
+func TestParseExportView(t *testing.T) {
+	if v, err := ParseExportView("findings"); err != nil || v != ViewFindings {
+		t.Fatalf("findings: %v %v", v, err)
+	}
+	if _, err := ParseView("findings"); err == nil {
+		t.Fatal("the list endpoint has no findings view")
+	}
+	if _, err := ParseExportView("summary"); err == nil {
+		t.Fatal("no summary export")
+	}
+	if v, err := ParseExportView(""); err != nil || v != ViewImage {
+		t.Fatalf("default: %v %v", v, err)
 	}
 }
