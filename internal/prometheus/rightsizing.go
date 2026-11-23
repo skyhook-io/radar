@@ -57,10 +57,6 @@ const (
 	ReasonPodInventoryUnreadable   = "Radar could not read this workload's pods, and no retained ownership history was available, so there was nothing to measure."
 )
 
-func IsWithheldRecommendationReason(reason string) bool {
-	return rightsizing.IsWithheldRecommendationReason(reason)
-}
-
 type RightsizingFit = rightsizing.RightsizingFit
 type RightsizingConfidence = rightsizing.RightsizingConfidence
 type OwnerCoverage = rightsizing.OwnerCoverage
@@ -450,13 +446,8 @@ func AddHPATargetResources(managed rightsizing.HPATargets, hpa *autoscalingv2.Ho
 // pure init containers run to completion and are excluded.
 func extractRuntimeContainers(podSpec *corev1.PodSpec) []containerSpec {
 	containers := make([]containerSpec, 0, len(podSpec.Containers))
-	for _, c := range podSpec.Containers {
-		containers = append(containers, extractContainerSpec(c))
-	}
-	for _, c := range podSpec.InitContainers {
-		if c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways {
-			containers = append(containers, extractContainerSpec(c))
-		}
+	for c := range rightsizing.RuntimeContainers(podSpec) {
+		containers = append(containers, extractContainerSpec(*c))
 	}
 	podCPU := rightsizing.FixedPodLevelRequest(podSpec, corev1.ResourceCPU)
 	podMem := rightsizing.FixedPodLevelRequest(podSpec, corev1.ResourceMemory)
@@ -594,9 +585,7 @@ func evidenceQueryWarnings(results map[string]queryOutcome) []RightsizingScanWar
 		{"cpu_peak", "cpu_peak_query_failed"},
 		{"cpu_coverage", "cpu_coverage_query_failed"},
 		{"memory_coverage", "memory_coverage_query_failed"},
-		// A lost throttle reading silently loosens the clamp and clears the
-		// throttled_reduction review reason, so a throttled workload reads as a
-		// clean cut. That is a changed answer, not a missing footnote.
+		// A failed read leaves the row unable to report observed throttling.
 		{"throttle", "throttle_query_failed"},
 		{"restart_activity", "restart_activity_query_failed"},
 		{"termination_history", "termination_history_query_failed"},

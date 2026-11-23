@@ -3,19 +3,19 @@ package server
 import (
 	"context"
 	"net/http"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -30,14 +30,17 @@ type sizingCandidate struct {
 type sizingInventory struct {
 	ClusterUID string            `json:"clusterUID"`
 	Items      []sizingCandidate `json:"items"`
-	Partial    bool              `json:"partial"`
+	Gaps       []readreason.Code `json:"gaps,omitempty"`
+	read       bool
+	listDenied bool
 }
 
 func (s *Server) handleWorkloadRightsizingInventory(w http.ResponseWriter, r *http.Request) {
 	if !s.sizingCaller(w, r) {
 		return
 	}
-	if ns := r.URL.Query().Get("namespace"); ns != "" {
+	requested := parseNamespaces(r.URL.Query())
+	for _, ns := range requested {
 		if len(validation.IsDNS1123Label(ns)) > 0 {
 			s.writeError(w, 400, "Invalid Kubernetes namespace")
 			return
@@ -56,36 +59,9 @@ func (s *Server) handleWorkloadRightsizingInventory(w http.ResponseWriter, r *ht
 		s.writeError(w, 503, "Kubernetes is unavailable")
 		return
 	}
-	namespaces, failed := s.parseNamespacesForUserWithStatus(r)
-	if failed {
-		s.writeError(w, 503, "Unable to determine authorized namespaces")
-		return
-	}
-	if namespaces == nil {
-		cache := k8s.GetResourceCache()
-		if cache == nil || cache.Namespaces() == nil {
-			s.writeError(w, 503, "Namespace inventory is unavailable")
-			return
-		}
-		if synced, _ := cache.InformerSynced("namespaces"); !synced {
-			s.writeError(w, 503, "Namespace inventory is unavailable")
-			return
-		}
-		ns, err := cache.Namespaces().List(labels.Everything())
-		if err != nil {
-			s.writeError(w, 503, "Namespace inventory is unavailable")
-			return
-		}
-		for _, n := range ns {
-			if outsideNamespacePin(n.Name) == nil {
-				namespaces = append(namespaces, n.Name)
-			}
-		}
-	}
-	sort.Strings(namespaces)
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
-	out := readSizingInventory(ctx, client, caller, namespaces)
+	out := s.sizingInventoryForRequest(r.WithContext(ctx), requested, client, caller)
 	var err error
 	out.ClusterUID, err = cloud.DiscoverClusterUID(r.Context(), k8s.GetClientInterface())
 	if k8s.Current().ClientGeneration() != gen {
@@ -96,7 +72,74 @@ func (s *Server) handleWorkloadRightsizingInventory(w http.ResponseWriter, r *ht
 		s.writeError(w, 503, "Cluster identity is unavailable")
 		return
 	}
+	if !out.read && len(out.Gaps) > 0 {
+		if slices.Contains(out.Gaps, readreason.ReadError) || slices.Contains(out.Gaps, readreason.RadarNamespaceNotCollected) {
+			code := readreason.ReadError
+			if slices.Contains(out.Gaps, readreason.RadarNamespaceNotCollected) {
+				code = readreason.RadarNamespaceNotCollected
+			}
+			s.writeErrorCode(w, 503, string(code), "Kubernetes workload inventory is unavailable. Try selecting a namespace")
+		} else {
+			s.writeErrorCode(w, 403, string(readreason.Primary(out.Gaps)), "Kubernetes denied the rightsizing inventory read")
+		}
+		return
+	}
 	s.writeJSON(w, out)
+}
+
+func (s *Server) sizingInventoryForRequest(r *http.Request, requested []string, client dynamic.Interface, caller kubernetes.Interface) sizingInventory {
+	ctx := r.Context()
+	// Explicit targets use fresh, impersonated reads. A cached permission ceiling
+	// may predate a new namespace grant or revocation.
+	if len(requested) > 0 {
+		return readSizingInventory(ctx, client, caller, requested)
+	}
+	if k8s.ForceNamespaceScope {
+		if pin := k8s.GetNamespaceScopeTarget(); pin != "" {
+			return readSizingInventory(ctx, client, caller, []string{pin})
+		}
+		return sizingInventory{Gaps: []readreason.Code{readreason.RadarNamespaceNotCollected}}
+	}
+	allowed, failed := s.getUserNamespacesWithStatus(r, nil)
+	if failed {
+		return sizingInventory{Gaps: []readreason.Code{readreason.ReadError}}
+	}
+	if allowed != nil {
+		if len(allowed) == 0 {
+			return sizingInventory{Gaps: []readreason.Code{readreason.UserNoNamespaceAccess}}
+		}
+		slices.Sort(allowed)
+		return readSizingInventory(ctx, client, caller, allowed)
+	}
+	namespaces, source := k8s.GetAccessibleNamespacesWithSource(ctx)
+	if source == k8s.NamespaceListCluster || source == k8s.NamespaceListCache {
+		// Cluster-wide Pod access does not imply cluster-wide workload or
+		// revision access. Fall back to namespaced reads for mixed grants.
+		inv := readSizingInventory(ctx, client, caller, []string{metav1.NamespaceAll})
+		if !inv.listDenied || ctx.Err() != nil {
+			return inv
+		}
+	}
+	inv := readSizingInventory(ctx, client, caller, namespaces)
+	if !source.Complete() {
+		inv.addGap(readreason.RadarNamespaceNotCollected)
+	}
+	return inv
+}
+
+func (i *sizingInventory) addGap(code readreason.Code) {
+	if !slices.Contains(i.Gaps, code) {
+		i.Gaps = append(i.Gaps, code)
+	}
+}
+
+func (i *sizingInventory) recordListError(err error) {
+	if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
+		i.listDenied = true
+		i.addGap(readreason.UserForbidden)
+	} else {
+		i.addGap(readreason.ReadError)
+	}
 }
 
 func readSizingInventory(ctx context.Context, client dynamic.Interface, caller kubernetes.Interface, namespaces []string) sizingInventory {
@@ -104,11 +147,11 @@ func readSizingInventory(ctx context.Context, client dynamic.Interface, caller k
 	out := sizingInventory{Items: []sizingCandidate{}}
 	for _, ns := range namespaces {
 		if ctx.Err() != nil {
-			out.Partial = true
+			out.addGap(readreason.ReadError)
 			break
 		}
 		if _, err := client.Resource(corev1.SchemeGroupVersion.WithResource("pods")).Namespace(ns).List(ctx, metav1.ListOptions{Limit: 1}); err != nil {
-			out.Partial = true
+			out.recordListError(err)
 			continue
 		}
 		for _, wk := range prometheus.RightsizingScanKinds {
@@ -121,40 +164,46 @@ func readSizingInventory(ctx context.Context, client dynamic.Interface, caller k
 			}
 			if required != "" {
 				if _, err := client.Resource(appsv1.SchemeGroupVersion.WithResource(required)).Namespace(ns).List(ctx, metav1.ListOptions{Limit: 1}); err != nil {
-					out.Partial = true
+					out.recordListError(err)
 					continue
 				}
 			}
-			res := client.Resource(appsv1.SchemeGroupVersion.WithResource(wk.Resource)).Namespace(ns)
+			res := client.Resource(appsv1.SchemeGroupVersion.WithResource(wk.Resource))
 			// A fresh self-review runs through the caller's exact token or impersonation.
 			broadGet, _ := k8score.CanI(ctx, caller, ns, "apps", wk.Resource, "get")
 			var token string
 			for {
-				page, err := res.List(ctx, metav1.ListOptions{Limit: 100, Continue: token})
+				page, err := res.Namespace(ns).List(ctx, metav1.ListOptions{Limit: 100, Continue: token})
 				if err != nil {
-					out.Partial = out.Partial || !apierrors.IsForbidden(err)
+					out.recordListError(err)
 					break
 				}
+				out.read = true
 				for i := range page.Items {
 					obj := &page.Items[i]
-					if obj.GetNamespace() != ns || obj.GetName() == "" {
-						out.Partial = true
+					objNS := obj.GetNamespace()
+					if (ns != metav1.NamespaceAll && objNS != ns) || objNS == "" || obj.GetName() == "" {
+						out.addGap(readreason.ReadError)
 						continue
 					}
 					if sizingScaledToZero(wk.Kind, obj) {
 						continue
 					}
 					if !broadGet {
-						if _, err := res.Get(ctx, obj.GetName(), metav1.GetOptions{}); err != nil {
-							out.Partial = out.Partial || !(apierrors.IsForbidden(err) || apierrors.IsNotFound(err))
+						if _, err := res.Namespace(objNS).Get(ctx, obj.GetName(), metav1.GetOptions{}); err != nil {
+							if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
+								out.addGap(readreason.UserForbidden)
+							} else if !apierrors.IsNotFound(err) {
+								out.addGap(readreason.ReadError)
+							}
 							continue
 						}
 					}
 					if len(out.Items) >= itemLimit {
-						out.Partial = true
+						out.addGap(readreason.ListTooLarge)
 						return out
 					}
-					out.Items = append(out.Items, sizingCandidate{Kind: wk.Kind, Namespace: ns, Name: obj.GetName()})
+					out.Items = append(out.Items, sizingCandidate{Kind: wk.Kind, Namespace: objNS, Name: obj.GetName()})
 				}
 				token = page.GetContinue()
 				if token == "" {

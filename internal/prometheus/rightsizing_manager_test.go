@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/pkg/rightsizing"
 	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -91,7 +90,7 @@ func TestDemandTargetBasisNamesTheStatistic(t *testing.T) {
 		t.Errorf("memory basis = %q", got)
 	}
 	floor := RightsizingRow{Resource: "memory", Observed: &ObservedStatistic{Name: "Max", Value: 1024 * 1024}}
-	if got := DemandTargetBasis(floor); got != "minimum request "+rightsizing.FormatRightsizingValue(64*1024*1024, "memory") {
+	if got := DemandTargetBasis(floor); got != "minimum request 64Mi" {
 		t.Errorf("a target set by the floor must say so, got %q", got)
 	}
 	if got := DemandTargetBasis(RightsizingRow{Resource: "cpu"}); got != "" {

@@ -110,23 +110,19 @@ func (s *Server) handleWorkloadRightsizingScope(w http.ResponseWriter, r *http.R
 	}
 	scope.Pods = make([]rightsizing.Pod, 0, len(pods))
 	scope.CurrentOOM = map[string]bool{}
+	containerNames := map[string]bool{}
+	for c := range rightsizing.RuntimeContainers(&scope.PodSpec) {
+		containerNames[c.Name] = true
+	}
 	for _, p := range pods {
 		if p.UID == "" || p.CreationTimestamp.IsZero() {
 			s.writeError(w, 503, "Could not verify owned Pod identity")
 			return
 		}
 		pod := rightsizing.Pod{QOSClass: p.Status.QOSClass, Name: p.Name, UID: string(p.UID), CreatedAt: p.CreationTimestamp.Time, RestartCounts: map[string]int32{}}
-		for _, c := range scope.PodSpec.Containers {
-			pod.Containers = append(pod.Containers, c.Name)
-		}
-		for _, c := range scope.PodSpec.InitContainers {
-			if c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways {
-				pod.Containers = append(pod.Containers, c.Name)
-			}
-		}
 		for _, statuses := range [][]corev1.ContainerStatus{p.Status.ContainerStatuses, p.Status.InitContainerStatuses} {
 			for _, c := range statuses {
-				if !slices.Contains(pod.Containers, c.Name) {
+				if !containerNames[c.Name] {
 					continue
 				}
 				pod.RestartCounts[c.Name] = c.RestartCount

@@ -79,8 +79,10 @@ type RightsizingImpact struct {
 	MemoryChange float64 `json:"-"`
 }
 
-func NeedsManualReview(row RightsizingRow) bool       { return rightsizing.NeedsManualReview(row) }
-func ManualReviewReasons(row RightsizingRow) []string { return rightsizing.ManualReviewReasons(row) }
+func NeedsManualReview(row RightsizingRow) bool {
+	return row.Decision.Status == rightsizing.DecisionReview
+}
+func ManualReviewReasons(row RightsizingRow) []string { return row.Decision.Reasons }
 
 // throttleReviewRatio is the share of throttled CPU periods that makes a row
 // worth a human's attention. Shared so the review rule and the row filter

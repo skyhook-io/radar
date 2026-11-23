@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/pkg/auth"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/rightsizing"
 	appsv1 "k8s.io/api/apps/v1"
 	authv1 "k8s.io/api/authorization/v1"
@@ -64,7 +66,7 @@ func TestSizingInventoryExactReads(t *testing.T) {
 	client.PrependReactor("get", "statefulsets", deny)
 	client.PrependReactor("list", "replicasets", deny)
 	got := readSizingInventory(t.Context(), client, fake.NewSimpleClientset(), []string{"team"})
-	if !got.Partial || len(got.Items) != 1 || got.Items[0].Name != "ok" {
+	if !got.read || !slices.Contains(got.Gaps, readreason.UserForbidden) || len(got.Items) != 1 || got.Items[0].Name != "ok" {
 		t.Fatal(got)
 	}
 	if slices.ContainsFunc(client.Actions(), func(a k8stesting.Action) bool {
@@ -92,7 +94,7 @@ func TestSizingInventoryExactReads(t *testing.T) {
 	}
 	client.PrependReactor("list", "pods", deny)
 	got = readSizingInventory(t.Context(), client, fake.NewSimpleClientset(), []string{"team"})
-	if !got.Partial || len(got.Items) != 0 {
+	if got.read || !slices.Contains(got.Gaps, readreason.UserForbidden) || len(got.Items) != 0 {
 		t.Fatal(got)
 	}
 }
@@ -293,12 +295,108 @@ func TestSizingInjectedSidecarWithSharedLimit(t *testing.T) {
 	}
 }
 
-func TestSizingInventorySingularNamespace(t *testing.T) {
-	s := &Server{}
-	r := httptest.NewRequest(http.MethodGet, "/api/agent/workload-rightsizing-inventory?namespace=team", nil)
-	got, failed := s.parseNamespacesForUserWithStatus(r)
-	if failed || !slices.Equal(got, []string{"team"}) {
-		t.Fatalf("scoped inventory input: %v failure=%t", got, failed)
+func TestSizingInventoryExplicitNamespaceRechecksAccess(t *testing.T) {
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	s.permCache.Set("alice", nil, &auth.UserPermissions{AllowedNamespaces: []string{"old"}})
+	r := requestWithUser("GET", "/api/agent/workload-rightsizing-inventory?namespace=team", &auth.User{Username: "alice"})
+	scheme := runtime.NewScheme()
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	client := dynamicfake.NewSimpleDynamicClient(scheme, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "api"}})
+	read := func() sizingInventory {
+		return s.sizingInventoryForRequest(r, parseNamespaces(r.URL.Query()), client, fake.NewSimpleClientset())
+	}
+	got := read()
+	if !got.read || len(got.Gaps) != 0 || len(got.Items) != 1 || got.Items[0].Namespace != "team" {
+		t.Fatalf("new grant = %+v", got)
+	}
+	client.PrependReactor("list", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(a.GetResource().GroupResource(), "", nil)
+	})
+	if got := read(); got.read || !slices.Contains(got.Gaps, readreason.UserForbidden) {
+		t.Fatalf("revoked access = %+v", got)
+	}
+	client.PrependReactor("list", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewServiceUnavailable("temporarily unavailable")
+	})
+	if got := read(); got.read || !slices.Contains(got.Gaps, readreason.ReadError) {
+		t.Fatalf("unavailable = %+v", got)
+	}
+}
+
+func TestSizingInventoryManyNamespaces(t *testing.T) {
+	const total = 200
+	scheme := runtime.NewScheme()
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	var objects []runtime.Object
+	var namespaces []string
+	for i := range total {
+		ns := fmt.Sprintf("team-%03d", i)
+		namespaces = append(namespaces, ns)
+		objects = append(objects, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "api"}})
+	}
+	client := dynamicfake.NewSimpleDynamicClient(scheme, objects...)
+	// client-go's root LIST fake retains selectors only, so drive the two
+	// response pages in order.
+	page := 0
+	client.PrependReactor("list", "deployments", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetNamespace() != metav1.NamespaceAll {
+			return false, nil, nil
+		}
+		result := &unstructured.UnstructuredList{}
+		result.SetGroupVersionKind(appsv1.SchemeGroupVersion.WithKind("DeploymentList"))
+		start := page * 100
+		page++
+		if page == 1 {
+			result.SetContinue("second")
+		}
+		if page > 2 {
+			return true, nil, fmt.Errorf("unexpected extra page")
+		}
+		for _, ns := range namespaces[start : start+100] {
+			var obj unstructured.Unstructured
+			obj.SetGroupVersionKind(appsv1.SchemeGroupVersion.WithKind("Deployment"))
+			obj.SetNamespace(ns)
+			obj.SetName("api")
+			result.Items = append(result.Items, obj)
+		}
+		return true, result, nil
+	})
+	caller := fake.NewSimpleClientset()
+	caller.PrependReactor("create", "selfsubjectaccessreviews", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &authv1.SelfSubjectAccessReview{Status: authv1.SubjectAccessReviewStatus{Allowed: true}}, nil
+	})
+	for _, tc := range []struct {
+		name  string
+		ns    []string
+		calls int
+	}{
+		{"namespaced", namespaces, 9 * total},
+		{"cluster wide", []string{metav1.NamespaceAll}, 10},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client.ClearActions()
+			caller.ClearActions()
+			got := readSizingInventory(t.Context(), client, caller, tc.ns)
+			distinct := map[string]bool{}
+			for _, obj := range got.Items {
+				distinct[obj.Namespace] = true
+			}
+			calls := len(client.Actions()) + len(caller.Actions())
+			if calls != tc.calls || len(distinct) != total || len(got.Items) != total || len(got.Gaps) != 0 {
+				t.Fatalf("namespaces=%d candidates=%d gaps=%v API calls=%d", len(distinct), len(got.Items), got.Gaps, calls)
+			}
+			t.Logf("namespaces=%d candidates=%d caller API requests=%d", len(distinct), len(got.Items), calls)
+		})
 	}
 }
 

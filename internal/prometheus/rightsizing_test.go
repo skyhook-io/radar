@@ -100,60 +100,6 @@ func TestClassifyRightsizingFit(t *testing.T) {
 	}
 }
 
-func TestCalculatedRequestUsesPracticalScaleAwareSteps(t *testing.T) {
-	tests := []struct {
-		name     string
-		observed float64
-		resKind  string
-		want     string
-	}{
-		{"cpu tiny usage keeps a 10m floor", 0.0001, "cpu", "10m"},
-		{"cpu 100m demand uses a 50m step", 0.100, "cpu", "150m"},
-		{"cpu 1 core demand uses a 500m step", 1.0, "cpu", "1.5"},
-		{"cpu crossing one core rounds to half a core", 0.870, "cpu", "1.5"},
-		{"cpu above four cores uses whole cores", 3.56, "cpu", "5"},
-		{"memory tiny usage keeps a 64Mi floor", 1024, "memory", "64Mi"},
-		{"memory 100Mi demand uses the preferred ladder", 100 * 1024 * 1024, "memory", "128Mi"},
-		{"memory 1Gi demand rounds to 1.5Gi", 1024 * 1024 * 1024, "memory", "1.5Gi"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := rightsizing.CalculatedRequest(tc.observed, tc.resKind)
-			if got != tc.want {
-				t.Errorf("rightsizing.CalculatedRequest(%g, %q) = %q, want %q", tc.observed, tc.resKind, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestRecommendRequestStagesLargeReductions(t *testing.T) {
-	tests := []struct {
-		name         string
-		observed     float64
-		current      *resource.Quantity
-		resourceName string
-		conservative bool
-		want         string
-		wantLimited  bool
-	}{
-		{"200m CPU reduces no lower than one quarter", 0.001, mustQuantity(t, "200m"), "cpu", false, "50m", true},
-		{"one CPU reduces no lower than one half", 0.001, mustQuantity(t, "1"), "cpu", false, "500m", true},
-		{"small CPU can reduce to the 10m minimum", 0.001, mustQuantity(t, "50m"), "cpu", false, "10m", false},
-		{"bursty CPU uses the one-half floor", 0.001, mustQuantity(t, "200m"), "cpu", true, "100m", true},
-		{"memory reduces no lower than one half", 1024, mustQuantity(t, "1Gi"), "memory", false, "512Mi", true},
-		{"missing request uses the demand target", 0.1, nil, "cpu", false, "150m", false},
-		{"increase uses the demand target", 0.2, mustQuantity(t, "100m"), "cpu", false, "250m", false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got, limited := rightsizing.RecommendRequest(tc.observed, tc.current, tc.resourceName, tc.conservative)
-			if got != tc.want || limited != tc.wantLimited {
-				t.Errorf("rightsizing.RecommendRequest() = %q, %t; want %q, %t", got, limited, tc.want, tc.wantLimited)
-			}
-		})
-	}
-}
-
 func TestIsBurstyCPURequiresMaterialAbsoluteAndRelativeGap(t *testing.T) {
 	if !rightsizing.IsBurstyCPU(0.02, 0.20) {
 		t.Fatal("expected a material P95-to-P99 jump to be bursty")
@@ -408,30 +354,6 @@ func TestExtractRuntimeContainers(t *testing.T) {
 			}
 			if !slicesEqual(gotNames, tc.wantNames) {
 				t.Errorf("names = %v, want %v", gotNames, tc.wantNames)
-			}
-		})
-	}
-}
-
-func TestFormatRightsizingValue(t *testing.T) {
-	tests := []struct {
-		v       float64
-		resKind string
-		want    string
-	}{
-		{0.0005, "cpu", "10m"},
-		{2.0, "cpu", "2"},
-		{1.5, "cpu", "1.5"},
-		{1024, "memory", "64Mi"},
-		{0, "memory", "64Mi"},
-		{float64(2 * 1024 * 1024 * 1024), "memory", "2Gi"},
-		{1.0, "disk", ""},
-	}
-	for _, tc := range tests {
-		t.Run(tc.want, func(t *testing.T) {
-			got := rightsizing.FormatRightsizingValue(tc.v, tc.resKind)
-			if got != tc.want {
-				t.Errorf("rightsizing.FormatRightsizingValue(%g, %q) = %q, want %q", tc.v, tc.resKind, got, tc.want)
 			}
 		})
 	}

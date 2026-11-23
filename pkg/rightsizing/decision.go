@@ -2,6 +2,12 @@ package rightsizing
 
 import corev1 "k8s.io/api/core/v1"
 
+const (
+	reasonQoSUnavailable         = "qos_unavailable"
+	reasonCPUPeakUnavailable     = "cpu_peak_unavailable"
+	reasonLowConfidenceReduction = "low_confidence_reduction"
+)
+
 type DecisionStatus string
 
 const (
@@ -10,6 +16,8 @@ const (
 	DecisionNone       DecisionStatus = "none"
 )
 
+// Decision distinguishes an eligible request change from a proposal requiring review.
+// A review row can carry a numeric candidate, but contributes no actionable delta.
 type Decision struct {
 	Status  DecisionStatus `json:"status"`
 	Reasons []string       `json:"reasons,omitempty"`
@@ -34,7 +42,7 @@ func (q *PodQoS) Observe(class corev1.PodQOSClass) {
 }
 
 func Finalize(rows []Row, spec *corev1.PodSpec, qos PodQoS, scaledToZero bool) {
-	WithholdIncreasesAbovePodLimit(rows, spec)
+	withholdIncreasesAbovePodLimit(rows, spec)
 	for i := range rows {
 		row := &rows[i]
 		row.Decision = decide(*row, qos, scaledToZero)
@@ -52,9 +60,9 @@ func decide(row Row, qos PodQoS, scaledToZero bool) Decision {
 	if row.RecommendedReq != nil {
 		switch {
 		case qos.guaranteed:
-			reasons = append(reasons, "qos_change")
+			reasons = append(reasons, "guaranteed_qos")
 		case !scaledToZero && (row.LiveInventoryUnavailable || qos.unknown || !qos.known):
-			reasons = append(reasons, "qos_unavailable")
+			reasons = append(reasons, reasonQoSUnavailable)
 		}
 		if !row.HPAEvidenceAvailable {
 			reasons = append(reasons, ReasonHPAEvidenceUnavailable)
@@ -62,10 +70,10 @@ func decide(row Row, qos PodQoS, scaledToZero bool) Decision {
 	}
 	if isReduction(row) {
 		if row.Confidence != ConfidenceMedium && row.Confidence != ConfidenceHigh {
-			reasons = append(reasons, "low_confidence_reduction")
+			reasons = append(reasons, reasonLowConfidenceReduction)
 		}
 		if row.Resource == "cpu" && row.Peak == nil {
-			reasons = append(reasons, "cpu_peak_unavailable")
+			reasons = append(reasons, reasonCPUPeakUnavailable)
 		}
 	}
 	if len(reasons) > 0 {
@@ -75,6 +83,21 @@ func decide(row Row, qos PodQoS, scaledToZero bool) Decision {
 		return Decision{Status: DecisionActionable}
 	}
 	return Decision{Status: DecisionNone}
+}
+
+// HasIncompleteEvidence reports whether missing observations withheld a verdict
+// or qualified a proposal. Review based on an observed risk alone is complete.
+func (r Row) HasIncompleteEvidence() bool {
+	if r.QueryError != "" || r.Fit == FitInsufficientHistory || isWithheldRecommendationReason(r.RecommendationReason) {
+		return true
+	}
+	for _, reason := range r.Decision.Reasons {
+		switch reason {
+		case ReasonHPAEvidenceUnavailable, reasonQoSUnavailable, reasonCPUPeakUnavailable, reasonLowConfidenceReduction:
+			return true
+		}
+	}
+	return false
 }
 
 func (r Row) RequestChange(replicas int) float64 {

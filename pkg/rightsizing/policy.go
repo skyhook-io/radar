@@ -100,7 +100,7 @@ type Row struct {
 // withheld like one that exceeds the container's own limit.
 const ReasonRequestsExceedPodLimit = "requests_exceed_pod_limit"
 
-// WithholdIncreasesAbovePodLimit checks a workload's suggested increases
+// withholdIncreasesAbovePodLimit checks a workload's suggested increases
 // against the pod-level limit when the pod has one but no fixed pod-level
 // request: the pod request is then derived from the containers' requests and
 // must stay within the limit. All increases for a resource are applied
@@ -108,7 +108,7 @@ const ReasonRequestsExceedPodLimit = "requests_exceed_pod_limit"
 // they hold whether or not any suggested reduction is applied. The pod request
 // is computed the way Kubernetes validates it: container requests default to
 // their limits, and init containers and sidecars are counted by resourcehelper.
-func WithholdIncreasesAbovePodLimit(rows []Row, podSpec *corev1.PodSpec) {
+func withholdIncreasesAbovePodLimit(rows []Row, podSpec *corev1.PodSpec) {
 	if podSpec == nil || podSpec.Resources == nil {
 		return
 	}
@@ -256,7 +256,7 @@ func ClassifyRightsizingFit(row *Row, observed float64, req, lim *resource.Quant
 	if row.PodLevelRequest != nil {
 		return
 	}
-	calculated := CalculatedRequest(observed, resourceName)
+	calculated := calculatedRequest(observed, resourceName)
 	calculatedValue := QuantityToFloat(resource.MustParse(calculated), resourceName)
 	headroomTarget := observed * rightsizingHeadroom
 	minimum := rightsizingMinimum(resourceName)
@@ -268,7 +268,7 @@ func ClassifyRightsizingFit(row *Row, observed float64, req, lim *resource.Quant
 		switch {
 		case candidate <= requestValue*0.7:
 			row.Fit = FitOversized
-		case candidate > requestValue:
+		case headroomTarget > requestValue:
 			row.Fit = FitUnderRequested
 		default:
 			row.Fit = FitBalanced
@@ -278,7 +278,9 @@ func ClassifyRightsizingFit(row *Row, observed float64, req, lim *resource.Quant
 		row.RecommendationReason = "request_within_fit_range"
 		return
 	}
-	recommended, reductionLimited := RecommendRequest(observed, req, resourceName, row.Bursty || (row.ThrottleRatio != nil && *row.ThrottleRatio >= ThrottleReviewRatio))
+	unknownThrottleAtLimit := resourceName == "cpu" && lim != nil && lim.Sign() > 0 && row.ThrottleRatio == nil
+	conservative := row.Bursty || unknownThrottleAtLimit || (row.ThrottleRatio != nil && *row.ThrottleRatio >= ThrottleReviewRatio)
+	recommended, reductionLimited := recommendRequest(observed, req, resourceName, conservative)
 	recommendedValue := QuantityToFloat(resource.MustParse(recommended), resourceName)
 	row.CalculatedReq = &calculated
 	row.CalculatedRequestValue = &calculatedValue
@@ -326,13 +328,13 @@ func DemandTargetBasis(row Row) string {
 	}
 	minimum := rightsizingMinimum(row.Resource)
 	if row.Observed.Value*rightsizingHeadroom < minimum {
-		return "minimum request " + FormatRightsizingValue(minimum, row.Resource)
+		return "minimum request " + formatRightsizingValue(minimum, row.Resource)
 	}
 	return fmt.Sprintf("7d %s x %.2f", row.Observed.Name, rightsizingHeadroom)
 }
 
-func CalculatedRequest(observed float64, resourceName string) string {
-	return FormatRightsizingValue(max(observed*rightsizingHeadroom, rightsizingMinimum(resourceName)), resourceName)
+func calculatedRequest(observed float64, resourceName string) string {
+	return formatRightsizingValue(max(observed*rightsizingHeadroom, rightsizingMinimum(resourceName)), resourceName)
 }
 
 func rightsizingMinimum(resourceName string) float64 {
@@ -342,8 +344,8 @@ func rightsizingMinimum(resourceName string) float64 {
 	return float64(rightsizingMemoryMin)
 }
 
-func RecommendRequest(observed float64, current *resource.Quantity, resourceName string, conservative bool) (string, bool) {
-	calculated := CalculatedRequest(observed, resourceName)
+func recommendRequest(observed float64, current *resource.Quantity, resourceName string, conservative bool) (string, bool) {
+	calculated := calculatedRequest(observed, resourceName)
 	calculatedValue := QuantityToFloat(resource.MustParse(calculated), resourceName)
 	if current == nil {
 		return calculated, false
@@ -356,7 +358,7 @@ func RecommendRequest(observed float64, current *resource.Quantity, resourceName
 	if calculatedValue >= floor {
 		return calculated, false
 	}
-	return FormatRightsizingValue(floor, resourceName), true
+	return formatRightsizingValue(floor, resourceName), true
 }
 
 func reductionFloor(current float64, resourceName string, conservative bool) float64 {
@@ -386,9 +388,9 @@ func QuantityToFloat(q resource.Quantity, resKind string) float64 {
 	return 0
 }
 
-// FormatRightsizingValue formats a Prom-shaped value (cores or bytes) into the
+// formatRightsizingValue formats a Prom-shaped value (cores or bytes) into the
 // human-friendly form that maps back to spec.resources strings.
-func FormatRightsizingValue(v float64, resKind string) string {
+func formatRightsizingValue(v float64, resKind string) string {
 	switch resKind {
 	case "cpu":
 		millis := int64(math.Ceil(v * 1000))
@@ -472,14 +474,6 @@ const ThrottleReviewRatio = 0.1
 const ReasonHPAEvidenceUnavailable = "hpa_evidence_unavailable"
 const ReasonOOMEvidenceUnavailable = "oom_evidence_unavailable"
 
-func NeedsManualReview(row Row) bool {
-	return row.Decision.Status == DecisionReview
-}
-
-func ManualReviewReasons(row Row) []string {
-	return row.Decision.Reasons
-}
-
 func reviewReasons(row Row) []string {
 	var reasons []string
 	if row.HPAManaged {
@@ -494,7 +488,7 @@ func reviewReasons(row Row) []string {
 	if row.LimitConflict {
 		reasons = append(reasons, "limit_conflict")
 	}
-	if IsWithheldRecommendationReason(row.RecommendationReason) {
+	if isWithheldRecommendationReason(row.RecommendationReason) {
 		reasons = append(reasons, "recommendation_withheld", row.RecommendationReason)
 	}
 	// Radar sizes container requests, and this pod's reservation is the
@@ -523,10 +517,10 @@ func isReduction(row Row) bool {
 
 const ReasonClusterScopeWithheld = "cluster_scope_withheld"
 
-// IsWithheldRecommendationReason keeps the withheld set with the code that
+// isWithheldRecommendationReason keeps the withheld set with the code that
 // assigns it: a reason added here without updating every consumer's own copy
 // would be reported as a clean result by whichever one was missed.
-func IsWithheldRecommendationReason(reason string) bool {
+func isWithheldRecommendationReason(reason string) bool {
 	switch reason {
 	case ReasonHPAEvidenceUnavailable, ReasonOOMEvidenceUnavailable, ReasonClusterScopeWithheld:
 		return true

@@ -1,6 +1,7 @@
 package rightsizing
 
 import (
+	"iter"
 	"math"
 	"time"
 
@@ -48,10 +49,29 @@ type Pod struct {
 	Name          string             `json:"name"`
 	UID           string             `json:"uid"`
 	CreatedAt     time.Time          `json:"createdAt"`
-	Containers    []string           `json:"containers"`
 	RestartCounts map[string]int32   `json:"restartCounts"`
 }
 
+// RuntimeContainers yields the app containers and restartable init containers
+// whose long-running resource use can be sized.
+func RuntimeContainers(spec *corev1.PodSpec) iter.Seq[*corev1.Container] {
+	return func(yield func(*corev1.Container) bool) {
+		for i := range spec.Containers {
+			if !yield(&spec.Containers[i]) {
+				return
+			}
+		}
+		for i := range spec.InitContainers {
+			c := &spec.InitContainers[i]
+			if c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways && !yield(c) {
+				return
+			}
+		}
+	}
+}
+
+// ContainerEvidence records CPU in cores, memory in bytes and throttled periods as a ratio from 0 to 1.
+// A nil observation means unknown; a non-nil zero is a measured value.
 type ContainerEvidence struct {
 	CPU95, CPU99, MemoryMax, ThrottleRatio *float64
 	CPUSamples, MemorySamples              int
@@ -110,13 +130,8 @@ func Evaluate(scope Scope, evidence map[string]ContainerEvidence) []Row {
 			rows = append(rows, row)
 		}
 	}
-	for _, c := range scope.PodSpec.Containers {
-		appendContainer(c)
-	}
-	for _, c := range scope.PodSpec.InitContainers {
-		if c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways {
-			appendContainer(c)
-		}
+	for c := range RuntimeContainers(&scope.PodSpec) {
+		appendContainer(*c)
 	}
 	var qos PodQoS
 	for _, pod := range scope.Pods {

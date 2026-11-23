@@ -738,6 +738,55 @@ func TestSuppressedRecommendationsCountAsIncompleteEvidence(t *testing.T) {
 	}
 }
 
+func TestGuardedRequestCompleteness(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		qos         corev1.PodQOSClass
+		hpaKnown    bool
+		peakKnown   bool
+		confidence  rightsizing.RightsizingConfidence
+		fit         rightsizing.RightsizingFit
+		wantPartial bool
+	}{
+		{"increase without HPA evidence", corev1.PodQOSBurstable, false, true, rightsizing.ConfidenceHigh, rightsizing.FitUnderRequested, true},
+		{"increase without QoS evidence", "", true, true, rightsizing.ConfidenceHigh, rightsizing.FitUnderRequested, true},
+		{"cut without CPU peak", corev1.PodQOSBurstable, true, false, rightsizing.ConfidenceHigh, rightsizing.FitOversized, true},
+		{"cut with sparse history", corev1.PodQOSBurstable, true, true, rightsizing.ConfidenceLow, rightsizing.FitOversized, true},
+		{"observed Guaranteed Pod", corev1.PodQOSGuaranteed, true, true, rightsizing.ConfidenceHigh, rightsizing.FitUnderRequested, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			row := rightsizingRow(tc.fit, 1, 2)
+			if tc.fit == rightsizing.FitOversized {
+				row = rightsizingRow(tc.fit, 2, 1)
+			}
+			row.Confidence, row.HPAEvidenceAvailable = tc.confidence, tc.hpaKnown
+			if !tc.peakKnown {
+				row.Peak = nil
+			}
+			rows := []rightsizing.Row{row}
+			var qos rightsizing.PodQoS
+			qos.Observe(tc.qos)
+			rightsizing.Finalize(rows, nil, qos, false)
+			out := workloadScopeResponse(prometheuspkg.RightsizingResponse{Rows: rows, Replicas: 1, SampleAvailable: true}, getRightsizingInput{})
+			expected := prometheuspkg.RightsizingScanComplete
+			if tc.wantPartial {
+				expected = prometheuspkg.RightsizingScanPartial
+			}
+			if out.State != expected || (tc.wantPartial && out.Reason != reasonRowEvidenceIncomplete) {
+				t.Fatalf("workload state=%s reason=%s", out.State, out.Reason)
+			}
+			workload := out.Workloads[0]
+			if !workload.Rows[0].NeedsManualReview || workload.Rows[0].RecommendedRequest == nil || *workload.RequestDelta != (rightsizingRequestDelta{}) {
+				t.Fatalf("expected a review-only proposal: %+v", workload)
+			}
+			_, _, incomplete, _ := selectRightsizingWorkloads([]prometheuspkg.RightsizingScanWorkload{{Rows: rows, Replicas: 1}}, getRightsizingInput{})
+			if incomplete != tc.wantPartial {
+				t.Fatalf("scan incomplete=%t", incomplete)
+			}
+		})
+	}
+}
+
 // docsPath is the operator-facing contract for the rightsizing response.
 const docsPath = "../../docs/mcp.md"
 
@@ -1356,9 +1405,8 @@ func TestWorkloadScopeStateSeparatesRowGapsFromFailedQueries(t *testing.T) {
 		{"everything answered", true, false, nil, prometheuspkg.RightsizingScanComplete, ""},
 		{"row lost its own evidence", true, true, restart, prometheuspkg.RightsizingScanPartial, reasonRowEvidenceIncomplete},
 		{"rows intact, supporting query failed", true, false, restart, prometheuspkg.RightsizingScanPartial, prometheuspkg.ReasonSomeEvidenceUnavailable},
-		// A lost throttle reading clears throttled_reduction and loosens the
-		// clamp, so the row reads as a clean cut. Every failed query degrades
-		// the answer; none of them is only a footnote.
+		// A lost throttle reading clears the observed-risk reason. The warning
+		// still qualifies the answer.
 		{"only throttle failed", true, false, throttle, prometheuspkg.RightsizingScanPartial, prometheuspkg.ReasonSomeEvidenceUnavailable},
 		{"throttle alongside a load-bearing failure", true, false, both, prometheuspkg.RightsizingScanPartial, prometheuspkg.ReasonSomeEvidenceUnavailable},
 		{"row gaps outrank query failures", true, true, both, prometheuspkg.RightsizingScanPartial, reasonRowEvidenceIncomplete},

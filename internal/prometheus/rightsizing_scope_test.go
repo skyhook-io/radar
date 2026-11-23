@@ -462,7 +462,7 @@ func TestRightsizingScanWithheldScope(t *testing.T) {
 	}
 	for _, workload := range resp.Workloads {
 		for _, row := range workload.Rows {
-			if row.Observed != nil || row.RecommendedReq != nil || row.RecommendationReason != ScanReasonClusterScopeWithheld || !IsWithheldRecommendationReason(row.RecommendationReason) {
+			if row.Observed != nil || row.RecommendedReq != nil || row.RecommendationReason != ScanReasonClusterScopeWithheld || !row.HasIncompleteEvidence() {
 				t.Errorf("row = %+v", row)
 			}
 		}
