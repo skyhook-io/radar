@@ -12,6 +12,7 @@ import (
 	"github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/kagent"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -120,7 +121,7 @@ func TestKagentWorkspaceNamespacePinRefusesOutsideDependencies(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := getKagentWorkspace(t, resp)
-	if got.ForcedNamespace != "agents" || got.Agents[0].Model.State != kagent.RefUnread || len(got.Models) != 0 {
+	if got.ForcedNamespace != "agents" || got.Agents[0].Model.State != kagent.RefUnread || got.Agents[0].Model.Unread != string(readreason.OutsideNamespacePin) || len(got.Models) != 0 {
 		t.Fatalf("pin escaped: %+v", got)
 	}
 	resp, err = http.Get(testServer.URL + "/api/kagent/workspace?namespaces=models")

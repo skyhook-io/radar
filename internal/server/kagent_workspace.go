@@ -9,6 +9,7 @@ import (
 	"github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/kagent"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -111,7 +112,19 @@ func (s *Server) handleKagentWorkspace(w http.ResponseWriter, r *http.Request) {
 		}
 		absentKind := access.State == integration.KindCoverageNotInstalled
 		inv.Kinds[kind.Kind] = kagent.Objects{Items: items, Read: func(ns string) bool { return absentKind || access.Covers(ns) }, State: access.State,
-			Complete: absentKind || access.State == integration.KindCoverageFull}
+			Complete: absentKind || access.State == integration.KindCoverageFull,
+			UnreadReason: func(ns string) string {
+				if forced && ns != pin {
+					return string(readreason.OutsideNamespacePin)
+				}
+				if !s.canRead(r, kind.Group, kind.Resource, ns, "list") {
+					return integration.KindCoverageDenied
+				}
+				if access.State == integration.KindCoverageFull {
+					return integration.KindCoverageUncached
+				}
+				return access.State
+			}}
 		resp.ReferenceCoverage[kind.Key] = access.Coverage()
 		resp.Coverage[kind.Key] = selected.Coverage()
 		complete[kind.Kind] = absentKind || selected.State == integration.KindCoverageFull

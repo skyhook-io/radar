@@ -501,3 +501,19 @@ func TestWorkspaceCarriesNoCredential(t *testing.T) {
 		t.Errorf("headers %+v", ws.MCPServers[0].Headers)
 	}
 }
+
+func TestReferenceUnreadDoesNotClaimFullCoverage(t *testing.T) {
+	target := kagentRef(KindModelConfig, "outside", "model")
+	inv := Inventory{Kinds: map[string]Objects{KindModelConfig: {State: "full", Read: func(ns string) bool { return ns == "inside" }}}}
+	_, state, why := newIndex(inv).resolve(target)
+	if state != RefUnread || why != "notRead" {
+		t.Fatalf("scoped read: %s %s", state, why)
+	}
+	objs := inv.Kinds[KindModelConfig]
+	objs.UnreadReason = func(string) string { return "outside_namespace_pin" }
+	inv.Kinds[KindModelConfig] = objs
+	_, state, why = newIndex(inv).resolve(target)
+	if state != RefUnread || why != "outside_namespace_pin" {
+		t.Fatalf("pinned read: %s %s", state, why)
+	}
+}

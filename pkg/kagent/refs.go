@@ -93,7 +93,7 @@ type Reference struct {
 	From  ObjectRef `json:"from"`
 	Field string    `json:"field"`
 	State string    `json:"state"`
-	// Unread is the target kind's coverage state when State is unread.
+	// Unread is the coverage state or read reason for an unread target.
 	Unread  string       `json:"unread,omitempty"`
 	Reading *ReadingView `json:"reading,omitempty"`
 	// PolicyUnknown: the target's allowedNamespaces selects namespaces by
@@ -115,11 +115,13 @@ type Objects struct {
 	// Read reports whether every object of the kind in a namespace was read:
 	// only there is an object missing from Items absent.
 	Read func(namespace string) bool
+	// UnreadReason explains a namespace outside the scope State describes.
+	UnreadReason func(namespace string) string
 	// Complete: every namespace of the request scope was read.
 	Complete bool
 	// State is the read's coverage state, Radar's KindCoverage vocabulary
 	// (full, partial, denied, notInstalled, syncing, uncached, error); a
-	// reference left unread quotes it.
+	// reference left unread quotes it unless UnreadReason refines it.
 	State string
 }
 
@@ -197,8 +199,12 @@ func (ix *index) resolve(target ObjectRef) (u *unstructured.Unstructured, state,
 		return nil, RefAbsent, ""
 	}
 	why := "notRead"
-	if objs, ok := ix.inv.Kinds[target.Kind]; ok && objs.State != "" {
-		why = objs.State
+	if objs, ok := ix.inv.Kinds[target.Kind]; ok {
+		if objs.UnreadReason != nil {
+			why = objs.UnreadReason(target.Namespace)
+		} else if objs.State != "" && objs.State != "full" {
+			why = objs.State
+		}
 	}
 	return nil, RefUnread, why
 }

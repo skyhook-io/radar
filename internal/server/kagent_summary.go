@@ -98,8 +98,14 @@ func (s *Server) handleSubstrateKagentSummary(w http.ResponseWriter, r *http.Req
 		}
 		row.OnOtherRevisions = sessions.Sessions.Total - row.OnNewSessionsRevision
 		ref := model.Ref{Atespace: a.Namespace, Name: model.KagentRevisionTemplate(a.Name, a.LatestSuccessfulRevision)}
-		if t, found := templates[ref]; found && ix.Template(ref).Kind == model.KagentAgentSession {
-			row.Placement = model.KagentTemplatePlacement(t, snap.Workers, snap.Coverage.Workers.State == substrateapi.CoverageFull)
+		if t, found := templates[ref]; found {
+			attr := ix.Template(ref)
+			if attr.Kind == model.KagentAgentSession && attr.Agent != nil && *attr.Agent == a.Ref() {
+				row.Placement = model.KagentTemplatePlacement(t, snap.Workers, snap.Coverage.Workers.State == substrateapi.CoverageFull)
+			} else {
+				row.Placement.Template = &ref
+				row.Placement.Reading = "The prepared template could not be attributed to this Agent."
+			}
 		}
 		resp.Rows = append(resp.Rows, row)
 	}

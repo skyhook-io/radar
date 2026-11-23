@@ -124,7 +124,7 @@ func latestChangeOf(r Reading) LatestChange {
 type DependencyState struct {
 	Ref   ObjectRef `json:"ref"`
 	State string    `json:"state"`
-	// Unread is the kind's coverage state when State is unread.
+	// Unread is the coverage state or read reason for an unread target.
 	Unread  string       `json:"unread,omitempty"`
 	Reading *ReadingView `json:"reading,omitempty"`
 }
