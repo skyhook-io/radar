@@ -187,6 +187,8 @@ export interface FeatureCapabilities {
   substrateWorkspace?: boolean
   /** kagent Agent attribution on Substrate's actors, the actors list's agent and kagent filters, and the per-Agent sessions summary. */
   kagentAttribution?: boolean
+  kagentWorkspace?: boolean
+  kagentSessionSummary?: boolean
   resourceIssues?: boolean
   resourceIssueCoverage?: boolean
   podEnvironment?: boolean

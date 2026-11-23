@@ -683,6 +683,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/substrate/templates/{atespace}/{name}", s.handleSubstrateTemplate)
 			r.Get("/substrate/workerpools/{namespace}/{name}", s.handleSubstratePool)
 			r.Get("/substrate/kagent/agents/{namespace}/{name}/sessions", s.handleSubstrateKagentAgentSessions)
+			r.Get("/substrate/kagent/summary", s.handleSubstrateKagentSummary)
+			r.Get("/kagent/workspace", s.handleKagentWorkspace)
 			r.Get("/cnpg/workspace", s.handleCNPGWorkspace)
 			r.Get("/cnpg/operator", s.handleCNPGOperator)
 			r.Get("/cnpg/operator/status", s.handleCNPGOperatorStatus)
@@ -1573,6 +1575,8 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		SubstrateHealthMetrics:      true,
 		SubstrateWorkspace:          true,
 		KagentAttribution:           true,
+		KagentWorkspace:             true,
+		KagentSessionSummary:        true,
 		ResourceIssues:              true,
 		ResourceIssueCoverage:       true,
 		PodEnvironment:              true,

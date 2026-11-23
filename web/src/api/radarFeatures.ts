@@ -48,6 +48,8 @@ export const RADAR_FEATURES = {
   deploymentPause: { label: 'Deployment rollout pause and resume', flag: 'deploymentPause', flagShippedWithEndpoint: true },
   substrateHealthMetrics: { label: 'Agent Substrate charts', flag: 'substrateHealthMetrics', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
   substrateWorkspace: { label: 'Agent Substrate actors, templates and workers', flag: 'substrateWorkspace', flagShippedWithEndpoint: true },
+  kagentWorkspace: { label: 'kagent workspace', flag: 'kagentWorkspace', flagShippedWithEndpoint: true },
+  kagentSessionSummary: { label: 'kagent session summary and Sessions filter', flag: 'kagentSessionSummary', flagShippedWithEndpoint: true },
   kagentAttribution: { label: 'kagent Agent sessions in Agent Substrate', flag: 'kagentAttribution', flagShippedWithEndpoint: true },
   cnpgWorkspace: { label: 'CloudNativePG views', flag: 'cnpgWorkspace', flagShippedWithEndpoint: true },
   sealedSecretsController: { label: 'Sealed Secrets controller status', flag: 'sealedSecretsController', flagShippedWithEndpoint: true },

@@ -1146,12 +1146,24 @@ func (s *Server) handleSubstrateActors(w http.ResponseWriter, r *http.Request) {
 	}
 	kagentFilter := q.Get("kagent")
 	switch kagentFilter {
-	case "", model.KagentAgentSession, model.KagentSandbox, model.KagentUnattributed:
+	case "", "sessions", model.KagentAgentSession, model.KagentSandbox, model.KagentUnattributed:
 	default:
-		s.writeError(w, http.StatusBadRequest, "kagent must be agentSession, sandbox or unattributed")
+		s.writeError(w, http.StatusBadRequest, "kagent must be sessions, agentSession, sandbox or unattributed")
 		return
 	}
 	atespace := q.Get("atespace")
+	var sessionNamespaces []string
+	if kagentFilter == "sessions" {
+		sessionNamespaces = parseNamespaces(q)
+		if k8s.ForceNamespaceScope {
+			pin := k8s.GetNamespaceScopeTarget()
+			if sessionNamespaces != nil && !slices.Contains(sessionNamespaces, pin) || atespace != "" && atespace != pin {
+				s.writeError(w, http.StatusForbidden, "namespace is outside Radar's namespace scope")
+				return
+			}
+			sessionNamespaces = []string{pin}
+		}
+	}
 	rawSearch := strings.TrimSpace(q.Get("q"))
 	search := strings.ToLower(rawSearch)
 
@@ -1183,6 +1195,9 @@ func (s *Server) handleSubstrateActors(w http.ResponseWriter, r *http.Request) {
 	unread := map[string]bool{}
 	var matched []model.Actor
 	for _, a := range actors {
+		if sessionNamespaces != nil && !slices.Contains(sessionNamespaces, a.Atespace) {
+			continue
+		}
 		if atespace != "" && a.Atespace != atespace {
 			continue
 		}
@@ -1213,7 +1228,17 @@ func (s *Server) handleSubstrateActors(w http.ResponseWriter, r *http.Request) {
 				(agentFilter == nil || a.Template.Atespace == agentFilter.Namespace) {
 				unread[a.Template.Atespace] = true
 			}
-			if k == nil || kagentFilter != "" && k.Kind != kagentFilter || agentFilter != nil && (k.Agent == nil || *k.Agent != *agentFilter) {
+			if k == nil {
+				continue
+			}
+			if kagentFilter == "sessions" {
+				if k.Kind != model.KagentAgentSession && k.Kind != model.KagentUnattributed {
+					continue
+				}
+			} else if kagentFilter != "" && k.Kind != kagentFilter {
+				continue
+			}
+			if agentFilter != nil && (k.Agent == nil || *k.Agent != *agentFilter) {
 				continue
 			}
 		}
