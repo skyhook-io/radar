@@ -402,3 +402,23 @@ func TestSubstrateKagentFiltersSayWhereAgentsWereNotRead(t *testing.T) {
 		t.Errorf("an Agent in a namespace with no kagent sessions = %v", other.KagentUnread)
 	}
 }
+
+// A session left a hint may run on a template a partial template read
+// missed, whose createTime would have proved it the Agent's: the counts are
+// then lower bounds, not complete.
+func TestSubstrateKagentAgentSessionsNeedEveryTemplateForHints(t *testing.T) {
+	prev := substrateapi.MaxListItems
+	substrateapi.MaxListItems = 4
+	t.Cleanup(func() { substrateapi.MaxListItems = prev })
+	s, _ := kagentServer(t, map[string][]string{"": {"kagent"}})
+	var resp substrateKagentSessionsResponse
+	if rec := call(t, s, s.handleSubstrateKagentAgentSessions, substrateCall{path: "/s", params: map[string]string{"namespace": "kagent", "name": "k8s-helper"}}, &resp); rec.Code != http.StatusOK {
+		t.Fatalf("sessions = %d %s", rec.Code, rec.Body)
+	}
+	if resp.Coverage.Templates.State != substrateapi.CoveragePartial || resp.Coverage.Actors.State != substrateapi.CoverageFull {
+		t.Fatalf("fixture: templates %+v actors %+v", resp.Coverage.Templates, resp.Coverage.Actors)
+	}
+	if resp.HintedEarlierRevisions != 1 || resp.Complete {
+		t.Errorf("a hint over a partial template read = hinted %d complete %v", resp.HintedEarlierRevisions, resp.Complete)
+	}
+}

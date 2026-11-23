@@ -279,15 +279,14 @@ export function egressText(e: SubstrateEgress): { text: ReactNode; tone: 'neutra
  * A kagent session: its id, the Agent it belongs to when Radar can say exactly (or why not), and what
  * Radar can't see of it. A Radar without attribution sends no row.kagent; the session id still shows.
  */
-function KagentFact({ detail, onOpenSubject }: { detail: SubstrateActorDetail; onOpenSubject?: OpenSubject }) {
-  const session = detail.actor.kagent!
+function KagentFact({ detail, session, onOpenSubject }: { detail: SubstrateActorDetail; session: NonNullable<SubstrateActorDetail['actor']['kagent']>; onOpenSubject?: OpenSubject }) {
   const k = detail.row.kagent
   return (
     <FactRow label="kagent">
       <Tooltip content={`kagent session ${session.sessionId}`}>
         <span>session <span className="font-mono">{shortSessionId(session.sessionId)}</span></span>
       </Tooltip>
-      {k?.kind === 'agentSession' && k.agent ? (
+      {k?.kind === 'agentSession' ? (
         <div>
           Agent <SubjectLink subject={{ kind: 'Agent', namespace: k.agent.namespace, name: k.agent.name }} label={`${k.agent.namespace}/${k.agent.name}`} onOpen={onOpenSubject} withKind={false} />
           {k.earlierRevision && <span className="text-xs text-theme-text-secondary"> · on an earlier revision ({k.revision}) than the one new sessions start on</span>}
@@ -325,7 +324,7 @@ function AtAGlance({ detail, onOpenSubject }: { detail: SubstrateActorDetail; on
               <div className="text-xs text-theme-text-secondary">{stateExtra(actor.state, row.reason)}</div>
             )}
           </FactRow>
-          {actor.kagent && <KagentFact detail={detail} onOpenSubject={onOpenSubject} />}
+          {actor.kagent && <KagentFact detail={detail} session={actor.kagent} onOpenSubject={onOpenSubject} />}
           <FactRow label={<Term term="template">Template</Term>}>
             <SubjectLink subject={{ kind: 'ActorTemplate', atespace: actor.template.atespace, name: actor.template.name }} onOpen={onOpenSubject} withKind={false} />
             {template && (template.cpuMillicores || template.memoryBytes) ? (

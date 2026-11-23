@@ -3,6 +3,7 @@ import type {
   KagentActor,
   KagentAgentRef,
   KagentAttribution,
+  KagentUnattributed,
   SubstrateAPITier,
   SubstrateActorState,
   SubstrateAttention,
@@ -316,7 +317,6 @@ export function agentFilterValue(a: KagentAgentRef): string {
   return agentText(a)
 }
 
-/** A kagent session's id as a table shows it: the UUID's first group. */
 /**
  * A kagent session id short enough for a row. kagent's ids are UUIDv7, whose
  * leading digits are a timestamp shared by sessions started together, so the
@@ -336,7 +336,7 @@ function agentList(agents: KagentAgentRef[] | undefined): string {
  * Why a kagent session is tied to no Agent, in a sentence; atespace is the actor's, which kagent makes
  * its Agent's namespace.
  */
-export function kagentUnattributedText(k: KagentAttribution, atespace: string): string {
+export function kagentUnattributedText(k: KagentUnattributed, atespace: string): string {
   switch (k.reason) {
     case 'earlierRevision':
       return `Not tied to an Agent: its template is named for ${agentList(k.candidates) || 'an Agent'}, but for neither of its current revisions. It may be an earlier session of it, or of a deleted Agent with the same name.`
@@ -362,7 +362,7 @@ export function kagentGoldenStep(agent: KagentAgentRef, memory: boolean): string
 
 /** What a template is to kagent, in a few words; undefined for a template kagent doesn't own. */
 export function kagentTemplateText(k?: KagentAttribution): string | undefined {
-  if (k?.kind === 'agentSession' && k.agent) {
+  if (k?.kind === 'agentSession') {
     const which = k.earlierRevision
       ? `an earlier revision${k.revision ? ` (${k.revision})` : ''}, before the one new sessions start on`
       : k.newSessions ? 'the revision new sessions start on' : k.desired ? 'its desired revision, not yet the one new sessions start on' : 'a current revision'
@@ -378,7 +378,7 @@ export function kagentTemplateText(k?: KagentAttribution): string | undefined {
 export function compactActorLabel(a: { name: string; kagent?: KagentActor }): { name: string; agent?: string } {
   if (!a.kagent) return { name: a.name }
   const k = a.kagent
-  const agent = k.kind === 'agentSession' && k.agent ? `Agent ${k.agent.name}` : k.kind === 'sandbox' ? 'kagent sandbox' : undefined
+  const agent = k.kind === 'agentSession' ? `Agent ${k.agent.name}` : k.kind === 'sandbox' ? 'kagent sandbox' : undefined
   return { name: `session ${shortSessionId(k.sessionId)}`, agent }
 }
 
@@ -404,7 +404,7 @@ export function kagentUnreadText(unread: string[] | undefined, cov: SubstratePoo
 
 /** A short label for a table cell: the Agent, a sandbox, or why neither. */
 export function kagentCellText(k: KagentAttribution): string {
-  if (k.kind === 'agentSession' && k.agent) return agentText(k.agent)
+  if (k.kind === 'agentSession') return agentText(k.agent)
   if (k.kind === 'sandbox') return 'kagent sandbox'
   switch (k.reason) {
     case 'earlierRevision':

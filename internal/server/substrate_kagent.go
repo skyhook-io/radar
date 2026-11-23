@@ -33,10 +33,21 @@ type substrateKagentRead struct {
 }
 
 // index matches actors against the Agents read; namespaces whose Agents
-// were not all read stay unknown (agentNotReadable). templates are the
-// templates read, whose creation times prove an earlier revision's.
-func (k substrateKagentRead) index(templates []model.Template) *model.KagentIndex {
-	return model.NewKagentIndex(k.Agents, k.Access.Covers, templates)
+// were not all read stay unknown (agentNotReadable). The snapshot's
+// templates (and extra, read on their own) give the creation times that
+// prove an earlier revision's template, and its actors say which templates
+// a kagent session runs on. snap may be nil.
+func (k substrateKagentRead) index(snap *substrateapi.Snapshot, extra ...model.Template) *model.KagentIndex {
+	var templates []model.Template
+	var sessions func(model.Ref) bool
+	if snap != nil {
+		templates = snap.Templates
+		sessions = model.SessionsOn(snap.Index().ByTemplate)
+	}
+	if len(extra) > 0 {
+		templates = append(slices.Clone(templates), extra...)
+	}
+	return model.NewKagentIndex(k.Agents, k.Access.Covers, templates).WithSessions(sessions)
 }
 
 // coverage is the Agents' coverage for a response; nil when kagent is not
@@ -61,9 +72,12 @@ var substrateKagentAgents = func(s *Server, r *http.Request, namespaces []string
 	if cache == nil {
 		return substrateKagentRead{Served: true, Access: integration.KindAccess{State: integration.KindCoverageSyncing}}
 	}
-	budget := newSyncBudget(r.Context())
+	// Attribution is beside every Substrate answer, so it never waits for a
+	// watch: what has synced is read, and a namespace still syncing is
+	// reported so (kagentAgents), its sessions agentNotReadable. The watch
+	// keeps starting in the background, so a later request finds it.
 	// Only the fields below are kept, and the objects are not changed.
-	budget.readOnly = true
+	budget := &syncBudget{ctx: r.Context(), deadline: time.Now(), readOnly: true}
 	access, items := s.readWorkspaceKind(r, cache, kagentAgentKind, namespaces, []string{model.KagentGroup}, budget)
 	agents := make([]model.KagentAgent, 0, len(items))
 	for _, u := range items {
@@ -105,7 +119,10 @@ type substrateKagentSessionsResponse struct {
 	Sources  []string `json:"sources"`
 	Coverage struct {
 		// Actors is the coverage of the source that answered.
-		Actors       substrateapi.Coverage    `json:"actors"`
+		Actors substrateapi.Coverage `json:"actors"`
+		// Templates: an earlier revision is proven by its template's
+		// createTime, so a partial template read leaves some sessions hints.
+		Templates    substrateapi.Coverage    `json:"templates"`
 		KagentAgents integration.KindCoverage `json:"kagentAgents"`
 	} `json:"coverage"`
 }
@@ -148,7 +165,7 @@ func (s *Server) handleSubstrateKagentAgentSessions(w http.ResponseWriter, r *ht
 		s.writeErrorCode(w, http.StatusServiceUnavailable, substrateapi.CodeIncomplete, "Radar has not read kagent's Agents in namespace "+ref.Namespace+" ("+agents.Access.State+")")
 		return
 	}
-	ix := agents.index(snap.Templates)
+	ix := agents.index(snap)
 	agent, found := ix.Agent(ref)
 	if !found {
 		s.writeErrorCode(w, http.StatusNotFound, substrateapi.CodeNotFound, "no kagent Agent "+ref.Key())
@@ -182,5 +199,11 @@ func (s *Server) handleSubstrateKagentAgentSessions(w http.ResponseWriter, r *ht
 	rc := model.NewResumeContext(templateUIDs(snap), snap.Workers, snap.Coverage.Workers.State == substrateapi.CoverageFull)
 	resp.KagentAgentSessions = ix.AgentSessions(agent, func(t model.Ref) []model.Actor { return byTemplate[t] },
 		prefixes[model.KagentPrefixKey(ref.Namespace, model.KagentTemplatePrefix(ref.Name))], complete, now, rc)
+	// A session left a hint may be on a template missing from a partial
+	// template read, with no createTime to prove it the Agent's.
+	if resp.HintedEarlierRevisions > 0 && snap.Coverage.Templates.State != substrateapi.CoverageFull {
+		resp.Complete = false
+	}
+	resp.Coverage.Templates = snap.Coverage.Templates
 	s.writeJSON(w, resp)
 }

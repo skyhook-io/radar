@@ -32,11 +32,11 @@ function sessions(overrides: Partial<Sessions> = {}): Sessions {
     complete: true,
     needAttention: 1,
     attention: [actorRow({ atespace: 'kagent', name: 'session-7c9e6679-7425-40de-944b-e07fc1f90ae7', state: 'crashed', reason: 'exit 1', updateTime: minutesAgo(3),
-      kagent: { sessionId: '7c9e6679-7425-40de-944b-e07fc1f90ae7', kind: 'agentSession', agent, newSessions: true, desired: true } })],
+      kagent: { sessionId: '7c9e6679-7425-40de-944b-e07fc1f90ae7', kind: 'agentSession', agent, revision, newSessions: true, desired: true } })],
     onEarlierRevisions: 0,
     hintedEarlierRevisions: 0,
     sources: ['snapshot'],
-    coverage: { actors: { state: 'full' }, kagentAgents: { state: 'full' } },
+    coverage: { actors: { state: 'full' }, templates: { state: 'full' }, kagentAgents: { state: 'full' } },
     ...overrides,
   }
 }
@@ -78,7 +78,7 @@ describe('KagentAgentSessions', () => {
 
   it('reads counts as lower bounds when Substrate’s actors were not all read', () => {
     reset()
-    state.data = sessions({ complete: false, coverage: { actors: { state: 'partial', code: 'capExceeded' }, kagentAgents: { state: 'full' } } })
+    state.data = sessions({ complete: false, coverage: { actors: { state: 'partial', code: 'capExceeded' }, templates: { state: 'full' }, kagentAgents: { state: 'full' } } })
     const html = render()
     expect(html).toContain('at least 3 sessions')
     expect(html).toContain('Lower bounds')

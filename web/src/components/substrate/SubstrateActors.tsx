@@ -88,6 +88,23 @@ const KAGENT_OPTIONS: SelectMenuOption[] = [
 ]
 
 /**
+ * Why a kagent-filtered list isn't asked for: support is still being checked (capabilities loading), the
+ * check failed (support unknown with an upgrade note, as useRadarFeature reports a failed check), or this
+ * Radar is too old. failed: the capabilities read settled without an answer.
+ */
+export function kagentSupportText(support: 'supported' | 'unsupported' | 'unknown', failed: boolean): string {
+  if (support === 'unsupported') return 'Listing actors by kagent Agent needs a newer Radar in this cluster.'
+  return failed
+    ? 'Radar couldn’t check whether this Radar supports kagent filters, so it doesn’t apply them.'
+    : 'Checking whether this Radar supports kagent filters…'
+}
+
+/** The support check is over, so the filters stay unapplied and can only be cleared. */
+export function kagentSupportSettled(support: 'supported' | 'unsupported' | 'unknown', failed: boolean): boolean {
+  return support === 'unsupported' || (support === 'unknown' && failed)
+}
+
+/**
  * A row's kagent Agent: a button that lists that Agent's sessions, or what the session is instead.
  * Only exact attributions name an Agent; a hint stays in the hover. The Agent's namespace is the
  * actor's atespace, shown under its name, so the cell names the Agent alone.
@@ -96,7 +113,7 @@ function AgentCell({ row, onAgent }: { row: SubstrateActorRow; onAgent?: (agent:
   const k: KagentActor | undefined = row.kagent
   if (!k) return <span className="text-theme-text-tertiary">—</span>
   const session = `kagent session ${shortSessionId(k.sessionId)}`
-  if (k.kind === 'agentSession' && k.agent) {
+  if (k.kind === 'agentSession') {
     const agent = k.agent
     // Wraps after a hyphen, never mid-word, as the template column does.
     const label = <Name name={agent.name} className="text-[12px]" />
@@ -158,7 +175,8 @@ function SnapshotCell({ row }: { row: SubstrateActorRow }) {
 
 /**
  * An actor's name in a row. A kagent session's is session-<UUID>, which would wrap over several lines:
- * it reads "session <first group>", the whole name on hover. Search still matches the whole name.
+ * it reads "session <random tail>" (shortSessionId), the whole name on hover. Search still matches the
+ * whole name.
  */
 function ActorName({ row }: { row: SubstrateActorRow }) {
   if (row.kagent) {
@@ -519,10 +537,12 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
           <SelectMenu ariaLabel="Sort" value={sort} options={SORT_OPTIONS} onChange={(v) => update({ sort: v === 'attention' ? '' : v })} className="min-w-[11rem]" />
           <FilterChips chips={chips} />
         </div>}
-        {kagentRequested && kagentFeature.support === 'unsupported' && (
+        {kagentRequested && !kagentFilters && (
           <Notice>
-            Listing actors by kagent Agent needs a newer Radar in this cluster.{' '}
-            <button type="button" onClick={() => update({ agent: '', kagent: '' })} className="text-accent-text hover:underline">Clear kagent filters</button>
+            {kagentSupportText(kagentFeature.support, !!kagentFeature.upgrade)}
+            {kagentSupportSettled(kagentFeature.support, !!kagentFeature.upgrade) && (
+              <>{' '}<button type="button" onClick={() => update({ agent: '', kagent: '' })} className="text-accent-text hover:underline">Clear kagent filters</button></>
+            )}
           </Notice>
         )}
         {kagentUnreadText(query.data?.kagentUnread, query.data?.kagentAgents) && (

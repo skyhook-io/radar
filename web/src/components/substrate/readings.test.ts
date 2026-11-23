@@ -469,6 +469,6 @@ describe('kagent templates', () => {
   it('calls an earlier revision’s template earlier, never current', () => {
     const t = kagentTemplateText({ kind: 'agentSession', agent, earlierRevision: true, revision: 'aa5e9426eb2e' })
     expect(t).toBe('kagent Agent kagent/k8s-helper’s template for an earlier revision (aa5e9426eb2e), before the one new sessions start on')
-    expect(kagentTemplateText({ kind: 'agentSession', agent, newSessions: true })).toContain('the revision new sessions start on')
+    expect(kagentTemplateText({ kind: 'agentSession', agent, revision: 'aa5e9426eb2e', newSessions: true })).toContain('the revision new sessions start on')
   })
 })

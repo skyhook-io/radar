@@ -949,7 +949,7 @@ func (s *Server) handleSubstrateWorkspace(w http.ResponseWriter, r *http.Request
 	resp.Coverage.SnapshotCoverage = &snap.Coverage
 	if kagent := s.substrateKagent(r); kagent.Served {
 		resp.Coverage.KagentAgents = kagent.coverage()
-		model.KagentAttention(resp.NeedsAttention, snap.Templates, kagent.index(snap.Templates))
+		model.KagentAttention(resp.NeedsAttention, snap.Templates, kagent.index(snap))
 	}
 	if in.WorkersRead {
 		p := model.PlacementOf(snap.Workers)
@@ -1173,7 +1173,7 @@ func (s *Server) handleSubstrateActors(w http.ResponseWriter, r *http.Request) {
 	}
 	var kagentIx *model.KagentIndex
 	if kagent := s.substrateKagent(r); kagent.Served {
-		resp.KagentAgents, kagentIx = kagent.coverage(), kagent.index(snap.Templates)
+		resp.KagentAgents, kagentIx = kagent.coverage(), kagent.index(snap)
 	}
 	if !resp.Coverage.Usable() {
 		s.writeJSON(w, resp)
@@ -1519,7 +1519,7 @@ func (s *Server) handleSubstrateActor(w http.ResponseWriter, r *http.Request) {
 	}
 	resp.Attention = model.ActorAttention(model.NeedsAttention(in), actor, in.Templates, now)
 	if kagent := s.substrateKagent(r); kagent.Served {
-		ix := kagent.index(in.Templates)
+		ix := kagent.index(snap)
 		resp.Coverage.KagentAgents = kagent.coverage()
 		resp.Row.Kagent = ix.Actor(actor)
 		if resp.Template != nil {
@@ -1883,17 +1883,16 @@ func (s *Server) handleSubstrateActorLogs(w http.ResponseWriter, r *http.Request
 }
 
 // kagentMemoryKill names the Agent in a kagent session's memory-limit step
-// when the caller can read it.
+// when the caller can read it. Agents are read only when that step is shown.
 func (s *Server) kagentMemoryKill(r *http.Request, actor model.Actor, kill *substrateMemoryKill) *substrateMemoryKill {
 	if kill == nil || kill.NextStep == "" || actor.Kagent == nil {
 		return kill
 	}
 	if kagent := s.substrateKagent(r); kagent.Served {
-		var templates []model.Template
-		if snap, _ := s.substrateManager().Snapshot(r.Context()); snap != nil {
-			templates = snap.Templates
-		}
-		kill.NextStep = model.KagentStepForAgent(kill.NextStep, kagent.index(templates).Actor(actor))
+		// The shared read's templates prove an earlier revision; never wait
+		// for one here.
+		snap, _ := s.substrateManager().Peek(r.Context())
+		kill.NextStep = model.KagentStepForAgent(kill.NextStep, kagent.index(snap).Actor(actor))
 	}
 	return kill
 }
@@ -2101,7 +2100,7 @@ func (s *Server) handleSubstrateWorkers(w http.ResponseWriter, r *http.Request) 
 	resp.Counts = &counts
 	var kagentIx *model.KagentIndex
 	if kagent := s.substrateKagent(r); kagent.Served {
-		resp.KagentAgents, kagentIx = kagent.coverage(), kagent.index(snap.Templates)
+		resp.KagentAgents, kagentIx = kagent.coverage(), kagent.index(snap)
 	}
 	pods := substrateWorkerPods(s.podListableWorkers(r, snap.Workers))
 	for _, wk := range snap.Workers {
@@ -2146,7 +2145,7 @@ func (s *Server) substrateTemplateRows(r *http.Request, snap *substrateapi.Snaps
 	poolRows := model.JoinPools(in)
 	rows = model.TemplateRows(templates, in.Actors, in.ActorsRead, model.KnownPools(pools, in.Workers), in.PoolsUsable || in.WorkersRead, in.PoolsComplete, poolRows)
 	if kagent := s.substrateKagent(r); kagent.Served {
-		ix := kagent.index(append(slices.Clone(snap.Templates), templates...))
+		ix := kagent.index(snap, templates...)
 		for i := range rows {
 			rows[i].Kagent = ix.KagentTemplate(model.Ref{Atespace: rows[i].Atespace, Name: rows[i].Name})
 		}
@@ -2315,7 +2314,7 @@ func (s *Server) handleSubstratePool(w http.ResponseWriter, r *http.Request) {
 	resp.Coverage.Workers, resp.Coverage.Actors, resp.Coverage.Templates = snap.Coverage.Workers, snap.Coverage.Actors, snap.Coverage.Templates
 	var kagentIx *model.KagentIndex
 	if kagent := s.substrateKagent(r); kagent.Served {
-		resp.Coverage.KagentAgents, kagentIx = kagent.coverage(), kagent.index(snap.Templates)
+		resp.Coverage.KagentAgents, kagentIx = kagent.coverage(), kagent.index(snap)
 	}
 	if in.WorkersRead {
 		for _, wk := range snap.Workers {

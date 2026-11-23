@@ -66,7 +66,7 @@ function ActorCell({ actor, onOpen }: { actor: WorkerActor; onOpen: (ref: Substr
   const lost = actor.workerImpact?.kind === 'restarted'
   const state = actor.workerImpact ? `${ACTOR_STATE_LABEL[actor.state]} · ${IMPACT_LABEL[actor.workerImpact.kind]}` : ACTOR_STATE_LABEL[actor.state]
   const label = compactActorLabel(actor)
-  const agent = actor.kagent?.kind === 'agentSession' && actor.kagent.agent ? ` · kagent Agent ${actor.kagent.agent.name}` : ''
+  const agent = actor.kagent?.kind === 'agentSession' ? ` · kagent Agent ${actor.kagent.agent.name}` : ''
   return (
     <Tooltip content={`${actor.atespace} / ${actor.name}${agent} · ${state} · template ${actor.template.name}${actor.workerImpact ? `. ${actor.workerImpact.reading}` : ''}`}>
       <button

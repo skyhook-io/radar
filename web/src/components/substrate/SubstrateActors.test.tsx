@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
-import type { SubstrateActorLogs, SubstrateActors, SubstrateActorsQuery } from '../../api/substrateWorkspace'
+import type { KagentAgentAttribution, SubstrateActorLogs, SubstrateActors, SubstrateActorsQuery } from '../../api/substrateWorkspace'
 import { ApiError } from '../../api/client'
 import { ActorsTable, SubstrateActorsScreen, stateCellReading } from './SubstrateActors'
 import { SubstrateActorOverview } from './SubstrateActorOverview'
@@ -13,13 +13,14 @@ const state = vi.hoisted(() => ({
   lastQuery: undefined as SubstrateActorsQuery | undefined,
   logs: undefined as SubstrateActorLogs | undefined,
   kagentSupport: 'supported' as 'supported' | 'unsupported' | 'unknown',
+  kagentUpgrade: null as null | { feature: string },
   queryEnabled: true,
 }))
 
 vi.mock('../../api/client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/client')>()),
   usePrometheusStatus: () => ({ data: { connected: false } }),
-  useRadarFeature: () => ({ support: state.kagentSupport, upgrade: null, gatedKey: [], guard: <T,>(r: () => Promise<T>) => r() }),
+  useRadarFeature: () => ({ support: state.kagentSupport, upgrade: state.kagentUpgrade, gatedKey: [], guard: <T,>(r: () => Promise<T>) => r() }),
 }))
 vi.mock('../../api/substrateWorkspace', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/substrateWorkspace')>()),
@@ -785,9 +786,9 @@ describe('Needs attention rows', () => {
 })
 
 const helper = { namespace: 'kagent', name: 'k8s-helper' }
-const helperSession = (overrides: Partial<NonNullable<ReturnType<typeof actorRow>['kagent']>> = {}) =>
+const helperSession = (overrides: Partial<KagentAgentAttribution> = {}) =>
   actorRow({ atespace: 'kagent', name: 'session-01a1faa2-b3e3-7dd3-ae2d-3114122d4291', template: { atespace: 'kagent', name: 'k8s-helper-aa5e9426eb2e' }, state: 'suspended', reason: undefined,
-    kagent: { sessionId: '01a1faa2-b3e3-7dd3-ae2d-3114122d4291', kind: 'agentSession', agent: helper, newSessions: true, desired: true, ...overrides } })
+    kagent: { sessionId: '01a1faa2-b3e3-7dd3-ae2d-3114122d4291', kind: 'agentSession', agent: helper, revision: 'aa5e9426eb2ead1c0f65f5c97cf535a9f41038ecd7f8f2b9a7ecc6d925987f40', newSessions: true, desired: true, ...overrides } })
 
 describe('kagent sessions in the Actors list', () => {
   it('shows the Agent column only where kagent is served, naming exact Agents and why the others are none', () => {
@@ -856,7 +857,7 @@ describe('kagent session on the actor page', () => {
   }
 
   it('names the session and its Agent, says the chat isn’t visible, and names the Agent in the recovery step', () => {
-    const html = page({ sessionId: session, kind: 'agentSession', agent: helper, newSessions: true, desired: true })
+    const html = page({ sessionId: session, kind: 'agentSession', agent: helper, revision: 'aa5e9426eb2e', newSessions: true, desired: true })
     expect(html).toContain('session …122d4291')
     expect(html).toContain('kagent/k8s-helper')
     expect(html).toContain('Conversation outcome: not visible to Radar')
@@ -909,5 +910,23 @@ describe('kagent filters where the Agents weren’t read', () => {
     const raw = screen()
     expect(raw).toMatch(/>spike-<\/span>/)
     expect(raw).toMatch(/>edit-<\/span>/)
+  })
+})
+
+describe('kagent filters while support is unknown', () => {
+  it('says it is checking while capabilities load, and offers to clear once the check fails', () => {
+    state.kagentSupport = 'unknown'
+    state.kagentUpgrade = null
+    let html = plain(screen('/substrate/actors?agent=kagent%2Fk8s-helper'))
+    expect(state.queryEnabled).toBe(false)
+    expect(html).toContain('Checking whether this Radar supports kagent filters…')
+    expect(html).not.toContain('Clear kagent filters')
+
+    state.kagentUpgrade = { feature: 'kagent Agent sessions in Agent Substrate' }
+    html = plain(screen('/substrate/actors?agent=kagent%2Fk8s-helper'))
+    expect(html).toContain('Radar couldn’t check whether this Radar supports kagent filters')
+    expect(html).toContain('Clear kagent filters')
+    state.kagentSupport = 'supported'
+    state.kagentUpgrade = null
   })
 })

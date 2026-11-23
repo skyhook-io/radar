@@ -68,7 +68,7 @@ export function SubstrateTemplatesScreen({ workspace, status }: { workspace?: Su
         <>
           <Name name={t.name} />
           <Sub><WholeNames text={wide ? t.atespace : [t.atespace, resourcesText(t)].filter(Boolean).join(' · ')} /></Sub>
-          {kagentTemplateText(t.kagent) && <Sub><Tooltip content={kagentTemplateText(t.kagent)}><span>{t.kagent?.agent ? `kagent Agent ${agentText(t.kagent.agent)}` : 'kagent sandbox'}</span></Tooltip></Sub>}
+          {kagentTemplateText(t.kagent) && <Sub><Tooltip content={kagentTemplateText(t.kagent)}><span>{t.kagent?.kind === 'agentSession' ? `kagent Agent ${agentText(t.kagent.agent)}` : 'kagent sandbox'}</span></Tooltip></Sub>}
         </>
       ),
     },
@@ -303,6 +303,8 @@ export function SubstrateTemplatePage({ template, onOpenSubject }: { template: S
   // kagent recovers what it runs, so a group with any of its actors keeps the server's step and offers no command.
   const oneMemoryPlan = t.golden.state === 'failed' && t.golden.cause === 'memoryLimit' && !!crashes && crashes.count > 0 && crashes.cause === 'memoryLimit' && !crashes.kagent
   const crashStep = oneMemoryPlan ? memoryRebuildStep(crashes.count) : crashes?.nextStep
+  const kagentAttribution = t.kagent
+  const kagentAgent = kagentAttribution?.kind === 'agentSession' ? kagentAttribution.agent : undefined
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="px-5 pt-4 xl:px-7">
@@ -345,18 +347,18 @@ export function SubstrateTemplatePage({ template, onOpenSubject }: { template: S
         <section className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
           <SectionHeading>At a glance</SectionHeading>
           <FactGrid>
-            {t.kagent && kagentTemplateText(t.kagent) && (
+            {kagentAttribution && kagentTemplateText(kagentAttribution) && (
               <FactRow label="kagent">
-                {t.kagent.agent ? (
+                {kagentAgent ? (
                   <>
                     Agent{' '}
-                    <button type="button" onClick={() => onOpenSubject({ kind: 'Agent', namespace: t.kagent!.agent!.namespace, name: t.kagent!.agent!.name })} className="font-mono text-accent-text hover:underline">
-                      {agentText(t.kagent.agent)}
+                    <button type="button" onClick={() => onOpenSubject({ kind: 'Agent', namespace: kagentAgent.namespace, name: kagentAgent.name })} className="font-mono text-accent-text hover:underline">
+                      {agentText(kagentAgent)}
                     </button>
-                    <div className="text-xs text-theme-text-secondary">{kagentTemplateText(t.kagent)}. kagent creates one template per revision and owns it.</div>
+                    <div className="text-xs text-theme-text-secondary">{kagentTemplateText(kagentAttribution)}. kagent creates one template per revision and owns it.</div>
                   </>
                 ) : (
-                  <span>{kagentTemplateText(t.kagent)}</span>
+                  <span>{kagentTemplateText(kagentAttribution)}</span>
                 )}
               </FactRow>
             )}

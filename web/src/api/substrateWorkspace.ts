@@ -185,29 +185,39 @@ export type KagentUnattributedReason =
  * per request. agentSession: exactly the template of one Agent's current revision. Only exact matches:
  * a hint (candidates) is never counted as an Agent's.
  */
-export interface KagentAttribution {
-  kind: 'agentSession' | 'sandbox' | 'unattributed'
-  agent?: KagentAgentRef
-  /** The Agent revision's full digest (agentSession). */
-  revision?: string
+export type KagentAttribution = KagentAgentAttribution | KagentSandboxAttribution | KagentUnattributed
+
+/** agentSession: the template is one Agent's, so the actors on it are that Agent's sessions. */
+export interface KagentAgentAttribution {
+  kind: 'agentSession'
+  agent: KagentAgentRef
+  /** The Agent revision's full digest; on an earlier revision, the 12 hex its template's name carries. */
+  revision: string
   /** The revision is the Agent's latestSuccessfulRevision, which kagent starts new sessions on. */
   newSessions?: boolean
   /** The revision is the Agent's desiredRevision. */
   desired?: boolean
-  reason?: KagentUnattributedReason
   /**
-   * agentSession on a template the Agent made for an earlier revision, proven by Substrate creating the
-   * template at or after the Agent was created; revision is then the 12 hex its name carries.
+   * The template is the Agent's for an earlier revision: Substrate created it at least 2s after the Agent,
+   * and a kagent session runs on it.
    */
   earlierRevision?: boolean
+}
+
+/** The template is a kagent sandbox's; no Agent is needed. */
+export interface KagentSandboxAttribution {
+  kind: 'sandbox'
+}
+
+export interface KagentUnattributed {
+  kind: 'unattributed'
+  reason: KagentUnattributedReason
   /** earlierRevision: the Agents the template is named for; ambiguous: the Agents it matches. A hint only. */
   candidates?: KagentAgentRef[]
 }
 
 /** A kagent session's actor with its attribution. */
-export interface KagentActor extends KagentAttribution {
-  sessionId: string
-}
+export type KagentActor = KagentAttribution & { sessionId: string }
 
 export interface SubstratePoolRef {
   namespace: string
@@ -1147,7 +1157,8 @@ export interface KagentAgentSessions {
   /** Some of those templates' names also fit another Agent. */
   hintShared?: boolean
   sources: ('snapshot' | 'atespace')[]
-  coverage: { actors: SubstrateCoverage; kagentAgents: SubstratePoolsCoverage }
+  /** templates: a partial template read can leave a session a hint, so counts with hints are then lower bounds. */
+  coverage: { actors: SubstrateCoverage; templates: SubstrateCoverage; kagentAgents: SubstratePoolsCoverage }
 }
 
 /** The error_code of a failed substrate request, when it carries one. */

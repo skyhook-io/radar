@@ -199,6 +199,38 @@ type KagentIndex struct {
 	memo     map[Ref]KagentAttribution
 	// created is each template's Substrate createTime, where known.
 	created map[Ref]time.Time
+	// hasSession reports whether a kagent session's actor runs on a
+	// template; nil when no actors were given (WithSessions).
+	hasSession func(Ref) bool
+}
+
+// WithSessions tells the index which templates a kagent session's actor
+// runs on (hasSession), and returns it. A template on its own proves an
+// earlier revision only with one: anyone can create a template named
+// <agent>-<12 hex> after the Agent, and only kagent runs sessions on its
+// own. Without it, no template is credited with an earlier revision.
+func (ix *KagentIndex) WithSessions(hasSession func(Ref) bool) *KagentIndex {
+	ix.hasSession = hasSession
+	return ix
+}
+
+// SessionsOn is a WithSessions predicate from actors by template: a kagent
+// session's actor runs on the template, in its atespace.
+func SessionsOn(byTemplate map[Ref][]Actor) func(Ref) bool {
+	return func(t Ref) bool {
+		return slices.ContainsFunc(byTemplate[t], func(a Actor) bool { return a.Kagent != nil && a.Atespace == t.Atespace })
+	}
+}
+
+// templateAttribution is Template for a template judged on its own, not
+// through an actor on it: an earlier revision counts only when a kagent
+// session runs on it, else it is a hint at most.
+func (ix *KagentIndex) templateAttribution(t Ref) KagentAttribution {
+	got := ix.Template(t)
+	if got.EarlierRevision && (ix.hasSession == nil || !ix.hasSession(t)) {
+		return KagentAttribution{Kind: KagentUnattributed, Reason: KagentEarlierRevision, Candidates: []AgentRef{*got.Agent}}
+	}
+	return got
 }
 
 // NewKagentIndex indexes agents. readable reports whether every Agent in a
@@ -367,7 +399,7 @@ func (ix *KagentIndex) Actor(a Actor) *KagentActor {
 // is an Agent revision's or a sandbox's, so other templates on a kagent
 // cluster carry nothing.
 func (ix *KagentIndex) KagentTemplate(t Ref) *KagentAttribution {
-	got := ix.Template(t)
+	got := ix.templateAttribution(t)
 	if got.Kind == KagentUnattributed {
 		return nil
 	}
@@ -437,8 +469,10 @@ type KagentAgentSessions struct {
 	// OnEarlierRevisions is how many of Sessions run on an earlier revision's
 	// template; the rest are on the Revisions.
 	OnEarlierRevisions int `json:"onEarlierRevisions"`
-	// Complete: every actor in the Agent's atespace was read, so the counts
-	// are exact; otherwise they are lower bounds.
+	// Complete: the counts are exact; otherwise they are lower bounds. It
+	// needs every actor in the Agent's atespace read, and, where a session
+	// was left a hint, every template: a template missing from the read has
+	// no createTime to prove an earlier revision with.
 	Complete bool `json:"complete"`
 	// NeedAttention counts the attributed sessions crashed or stuck in a
 	// transition past StuckAfter; Attention holds the first few of them,
@@ -570,7 +604,7 @@ func KagentAttention(rows []Attention, templates []Template, ix *KagentIndex) {
 		if r.Rule != RuleGoldenFailed || r.Subject.Kind != "ActorTemplate" {
 			continue
 		}
-		attr := ix.Template(Ref{Atespace: r.Subject.Atespace, Name: r.Subject.Name})
+		attr := ix.templateAttribution(Ref{Atespace: r.Subject.Atespace, Name: r.Subject.Name})
 		if attr.Kind != KagentAgentSession || attr.Agent == nil {
 			continue
 		}

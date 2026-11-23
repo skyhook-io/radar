@@ -274,8 +274,12 @@ func TestKagentEarlierRevisionCreatedAfterTheAgentIsTheAgents(t *testing.T) {
 	if sum.Sessions.Total != 1 || sum.OnEarlierRevisions != 1 || sum.HintedEarlierRevisions != 0 || len(sum.Revisions) != 1 || sum.Revisions[0].Sessions != 0 {
 		t.Errorf("summary = %+v", sum)
 	}
+	if tpl := ix.KagentTemplate(old.Ref()); tpl != nil {
+		t.Errorf("an earlier template with no sessions known = %+v", tpl)
+	}
+	ix.WithSessions(SessionsOn(byTemplate))
 	if tpl := ix.KagentTemplate(old.Ref()); tpl == nil || !tpl.EarlierRevision || tpl.Agent == nil {
-		t.Errorf("the earlier template = %+v", tpl)
+		t.Errorf("the earlier template a session runs on = %+v", tpl)
 	}
 
 	// Within kagentCreationMargin of the Agent's second-precision creation
@@ -349,5 +353,37 @@ func TestKagentEarlierRevisionUnprovenStaysAHint(t *testing.T) {
 	got := NewKagentIndex([]KagentAgent{long, other}, everyNamespace, []Template{{Atespace: "kagent", Name: cut.Template.Name, CreateTime: agentCreated.Add(time.Minute)}}).Actor(cut)
 	if got.Kind != KagentUnattributed || got.Reason != KagentAmbiguous || len(got.Candidates) != 2 {
 		t.Errorf("an earlier template two Agents predate = %+v", got)
+	}
+}
+
+// A template named <agent>-<12 hex>, created after the Agent, that no kagent
+// session runs on could be anyone's: its row names no Agent and its failed
+// golden snapshot keeps the generic step. A current revision's template,
+// matched by the full digest, needs no session.
+func TestKagentTemplateWithoutSessionsIsNotAnEarlierRevision(t *testing.T) {
+	agentCreated := ago(48 * time.Hour)
+	a := helper
+	a.Created = agentCreated
+	mine := Template{Atespace: "kagent", Name: "k8s-helper-0123456789ab", CreateTime: agentCreated.Add(time.Hour), GoldenError: "GoldenActorCrashed: exit 1"}
+	current := Template{Atespace: "kagent", Name: "k8s-helper-aa5e9426eb2e", GoldenError: "GoldenActorCrashed: exit 1"}
+	templates := []Template{mine, current}
+	other := Actor{Atespace: "kagent", Name: "my-job", Template: mine.Ref(), State: StateRunning}
+	ix := NewKagentIndex([]KagentAgent{a}, everyNamespace, templates).WithSessions(SessionsOn(GroupByTemplate([]Actor{other})))
+	if tpl := ix.KagentTemplate(mine.Ref()); tpl != nil {
+		t.Errorf("a user's template = %+v", tpl)
+	}
+	if tpl := ix.KagentTemplate(current.Ref()); tpl == nil || tpl.Agent == nil {
+		t.Errorf("the current revision's template = %+v", tpl)
+	}
+	rows := NeedsAttention(Inputs{Templates: templates, TemplatesRead: true, Now: now})
+	KagentAttention(rows, templates, ix)
+	for _, r := range rows {
+		if r.Rule != RuleGoldenFailed {
+			continue
+		}
+		recreate := strings.Contains(r.NextStep, "recreate the template")
+		if r.Subject.Name == mine.Name && !recreate || r.Subject.Name == current.Name && recreate {
+			t.Errorf("golden row %s = %q", r.Subject.Name, r.NextStep)
+		}
 	}
 }
