@@ -876,3 +876,20 @@ export function emptyWarningHeadline(kind: TrafficWarningKind | undefined): stri
     default: return 'Unable to fetch traffic data'
   }
 }
+
+// Connection counts for display.
+export function formatConnections(count: number): string {
+  if (count >= 1_000_000_000) return `${(count / 1_000_000_000).toFixed(1)}B`
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`
+  if (count >= 1_000) return `${(count / 1_000).toFixed(0)}K`
+  return count.toString()
+}
+
+// A volume in the source's own unit: a rate to two significant places for a
+// rate-based source, a whole count otherwise.
+export function formatVolume(volume: number, isRateBased: boolean): string {
+  return isRateBased ? formatRate(volume) : formatConnections(volume)
+}
+
+/** Ports a traffic card lists before "+N more". */
+export const MAX_VISIBLE_PORTS = 4

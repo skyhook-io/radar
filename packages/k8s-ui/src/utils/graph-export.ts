@@ -1,6 +1,8 @@
 import { toCanvas } from 'html-to-image'
 
 export type GraphImageFormat = 'image/png' | 'image/webp'
+export type GraphVectorFormat = 'image/svg+xml' | 'application/vnd.jgraph.mxfile'
+export type GraphExportFormat = GraphImageFormat | GraphVectorFormat
 export type GraphCaptureMode = 'full' | 'viewport'
 
 export interface GraphBounds {
@@ -11,8 +13,23 @@ export interface GraphBounds {
 }
 
 export const GRAPH_IMAGE_FORMATS: readonly GraphImageFormat[] = ['image/webp', 'image/png']
-export const GRAPH_FORMAT_LABELS: Record<GraphImageFormat, string> = { 'image/png': 'PNG', 'image/webp': 'WebP' }
-export const GRAPH_FORMAT_EXT: Record<GraphImageFormat, string> = { 'image/png': 'png', 'image/webp': 'webp' }
+export const GRAPH_VECTOR_FORMATS: readonly GraphVectorFormat[] = ['image/svg+xml', 'application/vnd.jgraph.mxfile']
+export const GRAPH_FORMAT_LABELS: Record<GraphExportFormat, string> = {
+  'image/png': 'PNG',
+  'image/webp': 'WebP',
+  'image/svg+xml': 'SVG',
+  'application/vnd.jgraph.mxfile': 'draw.io',
+}
+export const GRAPH_FORMAT_EXT: Record<GraphExportFormat, string> = {
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/svg+xml': 'svg',
+  'application/vnd.jgraph.mxfile': 'drawio',
+}
+
+export function isGraphImageFormat(format: GraphExportFormat): format is GraphImageFormat {
+  return GRAPH_IMAGE_FORMATS.some(f => f === format)
+}
 
 const EXPORT_PADDING = 16
 const EXPORT_TIMEOUT_MS = 30_000
@@ -60,6 +77,16 @@ export function paintedBackground(el: HTMLElement): string {
     if (isPainted(bg)) return bg
   }
   return CANVAS_BG
+}
+
+/** True for a dark CSS color in rgb()/rgba() or #rrggbb form. */
+export function isDarkColor(color: string): boolean {
+  const rgb = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/.exec(color)
+  const hex = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(color)
+  const parts = rgb ? rgb.slice(1, 4).map(Number) : hex ? hex.slice(1, 4).map(h => parseInt(h, 16)) : null
+  if (!parts) return false
+  const [r, g, b] = parts
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b < 128
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, msg: string): Promise<T> {
