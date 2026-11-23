@@ -324,7 +324,7 @@ func TestContextClientsUseTheBoundConnection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := k8s.WithConnection(context.Background(), bound)
+	ctx := bound.Bind(context.Background())
 	b := fakeCluster(t)
 	install(t, "cluster-b", b)
 	if got := k8s.DynamicClientFromContext(ctx); got != a {
@@ -345,7 +345,7 @@ func TestBoundDeleteUsesAdmittedDiscoveryAcrossSwitch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := k8s.WithConnection(t.Context(), conn)
+	ctx := conn.Bind(t.Context())
 	if _, err := k8s.InstallTestServingConnection("cluster-b", nil, b, fakeclientset.NewSimpleClientset().Discovery()); err != nil {
 		t.Fatal(err)
 	}
