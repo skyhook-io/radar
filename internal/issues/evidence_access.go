@@ -69,6 +69,9 @@ func ForEvidence(issue Issue, canRead func(EvidenceRead) bool, allowUnfiltered b
 // degradeIssue tells the finding without its evidence. Evidence-derived onset
 // goes too; a detector can retain timing owned by the readable subject itself.
 func degradeIssue(issue Issue) Issue {
+	if issue.Group == "api.kagent.dev" {
+		issue = stripKagentImpact(issue)
+	}
 	d := issue.Degraded
 	issue.Message, issue.Cause, issue.Action = d.Message, d.Cause, d.Action
 	if issue.RawMessage != "" {

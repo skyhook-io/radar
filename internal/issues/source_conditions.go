@@ -77,7 +77,8 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 		// entirely. Match in lowercase (same as applyFilters) so
 		// "Pod"/"pod" and CRD-typed "MyResource"/"myresource" both
 		// compare equal.
-		if len(wantKind) > 0 && !wantKind[strings.ToLower(kind)] && !(gvr.Group == VeleroGroup && veleroInputs[kind]) {
+		kagentImpactInput := gvr.Group == kagent.Group && wantKind["agent"] && (kind == kagent.KindModelConfig || kind == kagent.KindRemoteMCPServer)
+		if len(wantKind) > 0 && !wantKind[strings.ToLower(kind)] && !(gvr.Group == VeleroGroup && veleroInputs[kind]) && !kagentImpactInput {
 			continue
 		}
 		clusterScoped, _, _ := classifyDynamicScope(p, gvr, kind)
@@ -293,7 +294,7 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 			out = append(out, iss)
 		}
 	}
-	return foldVeleroLocationRejections(out)
+	return enrichKagentImpact(foldVeleroLocationRejections(out), p, f)
 }
 
 func detectCuratedConditionIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured) []Issue {
