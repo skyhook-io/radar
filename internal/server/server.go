@@ -3790,7 +3790,7 @@ func podMetricsHistoryResponse(ctx context.Context, history *k8s.PodMetricsHisto
 	}
 	return &podMetricsHistoryWithAvailability{
 		PodMetricsHistory:   history,
-		MetricsAPIReachable: health.PodMetrics.LastSuccess != "" && health.PodMetrics.ConsecutiveErrors == 0,
+		MetricsAPIReachable: health.PodMetrics.Collecting,
 	}
 }
 

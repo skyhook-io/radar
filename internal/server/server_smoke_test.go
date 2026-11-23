@@ -2185,11 +2185,15 @@ func TestSmokeChangesExactGroup(t *testing.T) {
 
 func TestPodMetricsHistoryAPIReachability(t *testing.T) {
 	for _, tc := range []struct {
-		lastSuccess string
-		failures    int
-		reachable   bool
-	}{{"", 0, false}, {"2026-10-06T00:00:00Z", 0, true}, {"2026-10-06T00:00:00Z", 1, false}} {
-		health := k8s.MetricsCollectionHealth{PodMetrics: k8s.MetricsSourceHealth{LastSuccess: tc.lastSuccess, ConsecutiveErrors: tc.failures, LastError: "transport failed"}}
+		source    k8s.MetricsSourceHealth
+		reachable bool
+	}{
+		{k8s.MetricsSourceHealth{}, false},
+		{k8s.MetricsSourceHealth{Collecting: true, LastSuccess: "2026-10-06T00:00:00Z"}, true},
+		{k8s.MetricsSourceHealth{LastSuccess: "2026-10-06T00:00:00Z", ConsecutiveErrors: 1, LastError: "transport failed"}, false},
+		{k8s.MetricsSourceHealth{LastSuccess: "2026-10-06T00:00:00Z", LastPollDeferred: true}, false},
+	} {
+		health := k8s.MetricsCollectionHealth{PodMetrics: tc.source}
 		got := podMetricsHistoryResponse(context.Background(), nil, "default", "nginx", health, false)
 		if got.MetricsAPIReachable != tc.reachable {
 			t.Fatalf("%+v: %+v", tc, got)

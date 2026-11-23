@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -23,7 +24,9 @@ import (
 func metricsTestConnection(t *testing.T, version, node string) (*Connection, *dynamicfake.FakeDynamicClient) {
 	t.Helper()
 	d := buildFakeDiscoveryCore(t)
-	kinds := map[schema.GroupVersionResource]string{}
+	kinds := map[schema.GroupVersionResource]string{
+		k8score.PodMetricsGVR: "PodMetricsList", k8score.NodeMetricsGVR: "NodeMetricsList",
+	}
 	for _, r := range []APIResource{
 		{Group: k8score.MetricsAPIGroup, Version: version, Name: "pods", Kind: "PodMetrics", Namespaced: true},
 		{Group: k8score.MetricsAPIGroup, Version: version, Name: "nodes", Kind: "NodeMetrics"},
@@ -37,6 +40,13 @@ func metricsTestConnection(t *testing.T, version, node string) (*Connection, *dy
 			"metadata": map[string]any{"name": node},
 			"usage":    map[string]any{"cpu": "25m", "memory": "1Mi"},
 		}}}}, nil
+	})
+	dyn.PrependReactor("list", "*", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		gvr := action.GetResource()
+		if gvr.Version != version {
+			return true, nil, apierrors.NewNotFound(gvr.GroupResource(), "")
+		}
+		return false, nil, nil
 	})
 	c := &Connection{clients: &sharedKubernetesClients{dynamic: dyn}}
 	c.publishDiscovery(d)
@@ -100,10 +110,21 @@ func TestMetricsPollWithStalledDiscovery(t *testing.T) {
 				if got := health.TotalCollections; got != 2 {
 					t.Errorf("poll attempts during blocked refresh = %d, want 2", got)
 				}
-				if scenario.expired && (health.PodMetrics != (MetricsSourceHealth{}) || health.NodeMetrics != (MetricsSourceHealth{})) {
-					t.Errorf("expired discovery changed source health: %+v", health)
+				deferred := MetricsSourceHealth{LastPollDeferred: true}
+				if health.PodMetrics != deferred || health.NodeMetrics != deferred {
+					t.Errorf("deferred polls during refresh: %+v", health)
 				}
-				if actions := dyn.Actions(); len(actions) != 0 {
+				if scenario.expired {
+					actions := dyn.Actions()
+					if len(actions) != 4 {
+						t.Fatalf("cached metrics requests during refresh = %d, want 4", len(actions))
+					}
+					for _, action := range actions {
+						if action.GetResource().Version != "v1beta1" {
+							t.Fatalf("unexpected version during refresh: %v", action.GetResource())
+						}
+					}
+				} else if actions := dyn.Actions(); len(actions) != 0 {
 					t.Fatalf("poll issued metrics requests during refresh: %v", actions)
 				}
 				if scenario.stop {
@@ -135,6 +156,58 @@ func TestMetricsPollWithStalledDiscovery(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestMetricsHistoryAdvancesDuringDiscoveryRefresh(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		client := fakeclientset.NewSimpleClientset().Discovery().(*fakediscovery.FakeDiscovery)
+		client.Resources = []*metav1.APIResourceList{{
+			GroupVersion: "metrics.k8s.io/v1",
+			APIResources: []metav1.APIResource{
+				{Name: "pods", Kind: "PodMetrics", Namespaced: true},
+				{Name: "nodes", Kind: "NodeMetrics"},
+			},
+		}}
+		discovery, err := k8score.NewResourceDiscovery(client, k8score.WithDiscoveryCacheTTL(MetricsPollInterval/2))
+		if err != nil {
+			t.Fatal(err)
+		}
+		release := make(chan struct{})
+		defer close(release)
+		refreshes := 0
+		client.PrependReactor("get", "resource", func(clienttesting.Action) (bool, runtime.Object, error) {
+			refreshes++
+			<-release
+			return false, nil, nil
+		})
+		c, dyn := metricsTestConnection(t, "v1", "node-a")
+		c.discovery.Store(&ResourceDiscovery{ResourceDiscovery: discovery})
+		dyn.PrependReactor("list", "pods", func(clienttesting.Action) (bool, runtime.Object, error) {
+			return true, &unstructured.UnstructuredList{Items: []unstructured.Unstructured{{Object: map[string]any{
+				"metadata":   map[string]any{"namespace": "default", "name": "web"},
+				"containers": []any{map[string]any{"name": "web", "usage": map[string]any{"cpu": "5m"}}},
+			}}}}, nil
+		})
+		c.initMetricsHistory()
+		defer c.closeMetricsHistory()
+		store := c.MetricsHistory()
+		synctest.Wait()
+		for want := 1; want <= 4; want++ {
+			if want > 1 {
+				time.Sleep(MetricsPollInterval)
+				synctest.Wait()
+			}
+			pod := store.GetPodMetricsHistory("default", "web")
+			node := store.GetNodeMetricsHistory("node-a")
+			if pod == nil || len(pod.Containers) != 1 || len(pod.Containers[0].DataPoints) != want ||
+				node == nil || len(node.DataPoints) != want {
+				t.Fatalf("poll %d: pod history %+v, node history %+v", want, pod, node)
+			}
+		}
+		if refreshes != 1 {
+			t.Errorf("blocked refreshes = %d, want 1", refreshes)
+		}
+	})
 }
 
 func TestMetricsHistoryInFlightAcrossClose(t *testing.T) {

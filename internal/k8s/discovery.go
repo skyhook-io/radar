@@ -131,10 +131,13 @@ func (c *Connection) ServedGVR(group, kind string) (schema.GroupVersionResource,
 	return d.GetGVRWithGroup(kind, group)
 }
 
-// refreshIfStaleInBackground reports whether the caller saw an expired snapshot.
+// refreshIfStaleInBackground reports whether a background refresh was pending for this lookup.
 func (d *ResourceDiscovery) refreshIfStaleInBackground() bool {
-	if d == nil || d.ResourceDiscovery == nil || !d.IsStale() {
+	if d == nil || d.ResourceDiscovery == nil {
 		return false
+	}
+	if !d.IsStale() {
+		return d.backgroundRefresh.Load()
 	}
 	d.refreshInBackground(func() {
 		if err := d.RefreshIfStale(); err != nil {

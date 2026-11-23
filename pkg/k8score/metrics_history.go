@@ -103,19 +103,21 @@ type MetricsCollectionHealth struct {
 	PodMetrics       MetricsSourceHealth `json:"podMetrics"`
 	NodeMetrics      MetricsSourceHealth `json:"nodeMetrics"`
 	LastAttempt      string              `json:"lastAttempt,omitempty"`
-	TotalCollections int64               `json:"totalCollections"`
+	TotalCollections int64               `json:"totalCollections"` // Poll attempts, including deferred polls.
 	BufferSize       int                 `json:"bufferSize"`
 	PollIntervalSec  int                 `json:"pollIntervalSec"`
 }
 
 // MetricsSourceHealth reports health for a single metrics source.
 type MetricsSourceHealth struct {
-	Collecting        bool   `json:"collecting"`
-	LastSuccess       string `json:"lastSuccess,omitempty"`
-	ConsecutiveErrors int    `json:"consecutiveErrors"`
-	LastError         string `json:"lastError,omitempty"`
-	TrackedCount      int    `json:"trackedCount"`
-	TotalDataPoints   int    `json:"totalDataPoints"`
+	Collecting            bool   `json:"collecting"`
+	LastPollDeferred      bool   `json:"lastPollDeferred,omitempty"`
+	SuccessfulCollections int64  `json:"successfulCollections"`
+	LastSuccess           string `json:"lastSuccess,omitempty"`
+	ConsecutiveErrors     int    `json:"consecutiveErrors"`
+	LastError             string `json:"lastError,omitempty"`
+	TrackedCount          int    `json:"trackedCount"`
+	TotalDataPoints       int    `json:"totalDataPoints"`
 }
 
 // MetricsHistoryStore stores historical metrics data polled from the metrics.k8s.io API.
@@ -124,8 +126,8 @@ type MetricsHistoryStore struct {
 	dynClient  dynamic.Interface
 	resolveGVR MetricsGVRResolver
 
-	// RefreshStaleDiscovery requests a background refresh and reports whether
-	// to skip this tick. Expiry alone says nothing about metrics source health.
+	// RefreshStaleDiscovery requests a background refresh if needed and reports whether
+	// a refresh is pending. Known metrics endpoints can still serve a LIST.
 	RefreshStaleDiscovery func() bool
 
 	// Namespaces, when it returns a non-empty list, limits pod metrics
@@ -140,6 +142,10 @@ type MetricsHistoryStore struct {
 	lastSuccessfulNodeCollection time.Time
 	lastCollectionAttempt        time.Time
 	totalCollections             int64
+	podPollDeferred              bool
+	nodePollDeferred             bool
+	successfulPodCollections     int64
+	successfulNodeCollections    int64
 	consecutivePodErrors         int
 	partialPodErrors             int // collections where some, not all, namespaces failed
 	consecutiveNodeErrors        int
@@ -314,9 +320,6 @@ func (s *MetricsHistoryStore) collectMetrics() {
 	s.totalCollections++
 	s.mu.Unlock()
 	s.publishMu.Unlock()
-	if s.RefreshStaleDiscovery != nil && s.RefreshStaleDiscovery() {
-		return
-	}
 	podCtx, cancelPods := context.WithTimeout(s.stopCtx, 10*time.Second)
 	s.collectPodMetrics(podCtx, now)
 	cancelPods()
@@ -339,9 +342,19 @@ func (s *MetricsHistoryStore) metricsGVR(resource string) (schema.GroupVersionRe
 	return gvr, true
 }
 
-func (s *MetricsHistoryStore) recordPodCollectionError(err error) {
+func (s *MetricsHistoryStore) pollDeferred(err error, refreshPending bool) bool {
+	return (s.RefreshStaleDiscovery != nil && errors.Is(err, ErrMetricsAPINotDiscovered)) ||
+		(refreshPending && apierrors.IsNotFound(err))
+}
+
+func (s *MetricsHistoryStore) recordPodCollectionError(err error, refreshPending bool) {
 	errMsg := err.Error()
 	s.mu.Lock()
+	s.podPollDeferred = s.pollDeferred(err, refreshPending)
+	if s.podPollDeferred {
+		s.mu.Unlock()
+		return
+	}
 	s.consecutivePodErrors++
 	s.lastPodError = errMsg
 	shouldReport := s.consecutivePodErrors == 1 || s.consecutivePodErrors%20 == 0
@@ -370,9 +383,14 @@ func (s *MetricsHistoryStore) recordPartialPodCollectionError(err error) {
 	}
 }
 
-func (s *MetricsHistoryStore) recordNodeCollectionError(err error) {
+func (s *MetricsHistoryStore) recordNodeCollectionError(err error, refreshPending bool) {
 	errMsg := err.Error()
 	s.mu.Lock()
+	s.nodePollDeferred = s.pollDeferred(err, refreshPending)
+	if s.nodePollDeferred {
+		s.mu.Unlock()
+		return
+	}
 	s.consecutiveNodeErrors++
 	s.lastNodeError = errMsg
 	shouldReport := s.consecutiveNodeErrors == 1 || s.consecutiveNodeErrors%20 == 0
@@ -387,14 +405,15 @@ func (s *MetricsHistoryStore) recordNodeCollectionError(err error) {
 }
 
 func (s *MetricsHistoryStore) collectPodMetrics(ctx context.Context, now time.Time) {
-	items, listed, err := s.listPodMetrics(ctx)
+	refreshPending := s.RefreshStaleDiscovery != nil && s.RefreshStaleDiscovery()
+	items, listed, err := s.listPodMetrics(ctx, refreshPending)
 	s.publishMu.Lock()
 	defer s.publishMu.Unlock()
 	if s.stopCtx.Err() != nil {
 		return
 	}
 	if !listed {
-		s.recordPodCollectionError(err)
+		s.recordPodCollectionError(err, refreshPending)
 		return
 	}
 	if err != nil {
@@ -411,6 +430,8 @@ func (s *MetricsHistoryStore) collectPodMetrics(ctx context.Context, now time.Ti
 	if s.consecutivePodErrors > 0 {
 		log.Printf("[metrics] Pod metrics collection recovered after %d failures", s.consecutivePodErrors)
 	}
+	s.podPollDeferred = false
+	s.successfulPodCollections++
 	s.consecutivePodErrors = 0
 	s.lastPodError = ""
 	s.lastSuccessfulPodCollection = now
@@ -476,7 +497,7 @@ func (s *MetricsHistoryStore) collectPodMetrics(ctx context.Context, now time.Ti
 // listPodMetrics lists pod metrics cluster-wide, or per namespace when
 // Namespaces is set. listed reports whether any LIST succeeded; err joins the
 // failures.
-func (s *MetricsHistoryStore) listPodMetrics(ctx context.Context) (items []unstructured.Unstructured, listed bool, err error) {
+func (s *MetricsHistoryStore) listPodMetrics(ctx context.Context, refreshPending bool) (items []unstructured.Unstructured, listed bool, err error) {
 	gvr, err := s.resolvePollGVR("pods")
 	if err != nil {
 		return nil, false, err
@@ -517,8 +538,11 @@ func (s *MetricsHistoryStore) listPodMetrics(ctx context.Context) (items []unstr
 		// The collection error is shown with any pod's history, so it must
 		// not name namespaces the reader may not see. The detail goes to the
 		// Radar log; the cause is kept for classification.
-		log.Printf("[metrics] Pod metrics could not be listed in any namespace: %v", err)
-		return nil, false, namespacesFailedError{cause: firstError(errs)}
+		cause := podListFailure(errs, refreshPending)
+		if !s.pollDeferred(cause, refreshPending) {
+			log.Printf("[metrics] Pod metrics could not be listed in any namespace: %v", err)
+		}
+		return nil, false, namespacesFailedError{cause: cause}
 	}
 	return items, listed, err
 }
@@ -544,13 +568,19 @@ func (e namespacesFailedError) metricsUnavailable() bool {
 
 func (e namespacesFailedError) Unwrap() error { return e.cause }
 
-func firstError(errs []error) error {
+func podListFailure(errs []error, refreshPending bool) error {
+	var notFound error
 	for _, err := range errs {
-		if err != nil {
+		if err == nil {
+			continue
+		}
+		// A stale endpoint can explain a 404, but cannot explain a denial in another namespace.
+		if !refreshPending || !apierrors.IsNotFound(err) {
 			return err
 		}
+		notFound = err
 	}
-	return nil
+	return notFound
 }
 
 func (s *MetricsHistoryStore) resolvePollGVR(resource string) (schema.GroupVersionResource, error) {
@@ -568,6 +598,7 @@ func (s *MetricsHistoryStore) resolvePollGVR(resource string) (schema.GroupVersi
 }
 
 func (s *MetricsHistoryStore) collectNodeMetrics(ctx context.Context, now time.Time) {
+	refreshPending := s.RefreshStaleDiscovery != nil && s.RefreshStaleDiscovery()
 	gvr, err := s.resolvePollGVR("nodes")
 	var result *unstructured.UnstructuredList
 	if err == nil {
@@ -579,7 +610,7 @@ func (s *MetricsHistoryStore) collectNodeMetrics(ctx context.Context, now time.T
 		return
 	}
 	if err != nil {
-		s.recordNodeCollectionError(err)
+		s.recordNodeCollectionError(err, refreshPending)
 		return
 	}
 
@@ -589,6 +620,8 @@ func (s *MetricsHistoryStore) collectNodeMetrics(ctx context.Context, now time.T
 	if s.consecutiveNodeErrors > 0 {
 		log.Printf("[metrics] Node metrics collection recovered after %d failures", s.consecutiveNodeErrors)
 	}
+	s.nodePollDeferred = false
+	s.successfulNodeCollections++
 	s.consecutiveNodeErrors = 0
 	s.lastNodeError = ""
 	s.lastSuccessfulNodeCollection = now
@@ -762,18 +795,22 @@ func (s *MetricsHistoryStore) CollectionHealth() MetricsCollectionHealth {
 
 	health := MetricsCollectionHealth{
 		PodMetrics: MetricsSourceHealth{
-			Collecting:        s.consecutivePodErrors == 0 && !s.lastSuccessfulPodCollection.IsZero(),
-			ConsecutiveErrors: s.consecutivePodErrors,
-			LastError:         s.lastPodError,
-			TrackedCount:      len(s.podMetrics),
-			TotalDataPoints:   podDataPoints,
+			LastPollDeferred:      s.podPollDeferred,
+			SuccessfulCollections: s.successfulPodCollections,
+			Collecting:            !s.podPollDeferred && s.consecutivePodErrors == 0 && !s.lastSuccessfulPodCollection.IsZero(),
+			ConsecutiveErrors:     s.consecutivePodErrors,
+			LastError:             s.lastPodError,
+			TrackedCount:          len(s.podMetrics),
+			TotalDataPoints:       podDataPoints,
 		},
 		NodeMetrics: MetricsSourceHealth{
-			Collecting:        s.consecutiveNodeErrors == 0 && !s.lastSuccessfulNodeCollection.IsZero(),
-			ConsecutiveErrors: s.consecutiveNodeErrors,
-			LastError:         s.lastNodeError,
-			TrackedCount:      len(s.nodeMetrics),
-			TotalDataPoints:   nodeDataPoints,
+			LastPollDeferred:      s.nodePollDeferred,
+			SuccessfulCollections: s.successfulNodeCollections,
+			Collecting:            !s.nodePollDeferred && s.consecutiveNodeErrors == 0 && !s.lastSuccessfulNodeCollection.IsZero(),
+			ConsecutiveErrors:     s.consecutiveNodeErrors,
+			LastError:             s.lastNodeError,
+			TrackedCount:          len(s.nodeMetrics),
+			TotalDataPoints:       nodeDataPoints,
 		},
 		TotalCollections: s.totalCollections,
 		BufferSize:       MetricsHistorySize,

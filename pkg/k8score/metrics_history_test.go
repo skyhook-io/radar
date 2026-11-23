@@ -187,6 +187,58 @@ func TestMetricsCollectionErrorLevel(t *testing.T) {
 	}
 }
 
+func TestMetricsPollDefersOnlyTheAffectedSource(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
+			PodMetricsGVR: "PodMetricsList", NodeMetricsGVR: "NodeMetricsList",
+		})
+		known := map[string]schema.GroupVersionResource{"pods": PodMetricsGVR, "nodes": NodeMetricsGVR}
+		store := NewMetricsHistoryStoreWithResolver(dyn, func(resource string) (schema.GroupVersionResource, bool) {
+			gvr, ok := known[resource]
+			return gvr, ok
+		})
+		defer store.Stop()
+		pending := false
+		store.RefreshStaleDiscovery = func() bool { return pending }
+		store.collectMetrics()
+		before := store.CollectionHealth()
+
+		delete(known, "pods")
+		pending = true
+		time.Sleep(MetricsPollInterval)
+		store.collectMetrics()
+		health := store.CollectionHealth()
+		if !health.PodMetrics.LastPollDeferred || health.PodMetrics.Collecting || health.PodMetrics.ConsecutiveErrors != 0 ||
+			health.PodMetrics.SuccessfulCollections != 1 || health.PodMetrics.LastSuccess != before.PodMetrics.LastSuccess {
+			t.Fatalf("pod GVR missing after success: %+v", health.PodMetrics)
+		}
+		if !health.NodeMetrics.Collecting || health.NodeMetrics.SuccessfulCollections != 2 || health.NodeMetrics.LastSuccess == before.NodeMetrics.LastSuccess {
+			t.Fatalf("known node GVR: %+v", health.NodeMetrics)
+		}
+
+		known["pods"] = PodMetricsGVR
+		dyn.PrependReactor("list", "nodes", func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewNotFound(NodeMetricsGVR.GroupResource(), "")
+		})
+		time.Sleep(MetricsPollInterval)
+		store.collectMetrics()
+		after := store.CollectionHealth()
+		if after.PodMetrics.LastPollDeferred || !after.PodMetrics.Collecting || after.PodMetrics.SuccessfulCollections != 2 {
+			t.Fatalf("resumed pod collection: %+v", after.PodMetrics)
+		}
+		if !after.NodeMetrics.LastPollDeferred || after.NodeMetrics.Collecting || after.NodeMetrics.ConsecutiveErrors != 0 ||
+			after.NodeMetrics.SuccessfulCollections != 2 || after.NodeMetrics.LastSuccess != health.NodeMetrics.LastSuccess {
+			t.Fatalf("node LIST returned 404 during refresh: %+v", after.NodeMetrics)
+		}
+
+		pending = false
+		store.collectMetrics()
+		if node := store.CollectionHealth().NodeMetrics; node.LastPollDeferred || node.ConsecutiveErrors != 1 || node.LastError == "" {
+			t.Fatalf("node LIST returned 404 with fresh discovery: %+v", node)
+		}
+	})
+}
+
 func TestParseCPU(t *testing.T) {
 	tests := []struct {
 		input string
@@ -350,5 +402,31 @@ func TestMetricsHistoryAllNamespacesUnavailableStaysClassified(t *testing.T) {
 	}
 	if !MetricsAPIUnavailable(fmt.Errorf("failed to get pod metrics: %s", store.lastPodError)) {
 		t.Errorf("stored error %q is not recognised as metrics unavailable", store.lastPodError)
+	}
+}
+
+func TestMetricsPollDuringRefreshWithNamespaced404s(t *testing.T) {
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
+		PodMetricsGVR: "PodMetricsList",
+	})
+	dyn.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if action.GetNamespace() == "denied" {
+			return true, nil, apierrors.NewForbidden(PodMetricsGVR.GroupResource(), "", errors.New("list denied"))
+		}
+		return true, nil, apierrors.NewNotFound(PodMetricsGVR.GroupResource(), "")
+	})
+	store := NewMetricsHistoryStore(dyn)
+	defer store.Stop()
+	store.RefreshStaleDiscovery = func() bool { return true }
+	namespaces := []string{"a", "b"}
+	store.Namespaces = func() []string { return namespaces }
+	store.collectPodMetrics(context.Background(), time.Now())
+	if got := store.CollectionHealth().PodMetrics; got != (MetricsSourceHealth{LastPollDeferred: true}) {
+		t.Fatalf("all LISTs returned 404: %+v", got)
+	}
+	namespaces = append(namespaces, "denied")
+	store.collectPodMetrics(context.Background(), time.Now())
+	if got := store.CollectionHealth().PodMetrics; got.LastPollDeferred || got.ConsecutiveErrors != 1 || strings.Contains(got.LastError, "denied") {
+		t.Fatalf("a 404 and a forbidden LIST: %+v", got)
 	}
 }
