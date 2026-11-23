@@ -117,12 +117,12 @@ func TestCurrentPodRightsizingDetailAndScanAgreeOnDaemonSetCohort(t *testing.T) 
 			t.Fatalf("standalone restricted to current UIDs: %s", q)
 		}
 	}
-	workloads, _, _ := snapshotScanWorkloads(ctx, k8s.GetResourceCache(), map[string][]string{"DaemonSet": {"apps"}})
+	workloads, _, _ := snapshotScanWorkloads(sizingTunnelTestContext(ctx), k8s.GetResourceCache(), map[string][]string{"DaemonSet": {"apps"}})
 	if len(workloads) != 2 {
 		t.Fatalf("scan snapshot: %+v", workloads)
 	}
 	for _, w := range workloads {
-		detail, err := loadRightsizingWorkload(ctx, w.kind, w.namespace, w.name)
+		detail, err := loadRightsizingWorkload(sizingTunnelTestContext(ctx), w.kind, w.namespace, w.name)
 		if err != nil {
 			t.Fatal(err)
 		}

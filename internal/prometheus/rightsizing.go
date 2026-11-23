@@ -408,10 +408,13 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 		workload.liveInventoryUnavailable = true
 		return workload, nil
 	}
+	collectPodIdentities := cloud.IsAuthenticatedTunnelRequest(ctx)
 	for _, pod := range pods {
 		workload.qos.Observe(pod.Status.QOSClass)
 		workload.podNames = append(workload.podNames, pod.Name)
-		workload.observeSizingPodIdentity(pod)
+		if collectPodIdentities {
+			workload.observeSizingPodIdentity(pod)
+		}
 		collectCurrentPodOOM(workload.currentPodOOM, pod.Status.ContainerStatuses)
 		collectCurrentPodOOM(workload.currentPodOOM, pod.Status.InitContainerStatuses)
 	}

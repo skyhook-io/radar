@@ -1224,6 +1224,7 @@ func enrichScanCurrentOOM(ctx context.Context, cache *k8s.ResourceCache, scopes 
 		markScanLiveInventoryUnavailable(workloads, "")
 		return
 	}
+	collectPodIdentities := cloud.IsAuthenticatedTunnelRequest(ctx)
 	for _, pod := range pods {
 		owner := metav1.GetControllerOf(pod)
 		if owner == nil {
@@ -1256,7 +1257,9 @@ func enrichScanCurrentOOM(ctx context.Context, cache *k8s.ResourceCache, scopes 
 		if workload == nil || !k8s.ControllerMatchesIdentity(owner, workload.kind, workload.name, "apps", workload.uid) {
 			continue
 		}
-		workload.workload.observeSizingPodIdentity(pod)
+		if collectPodIdentities {
+			workload.workload.observeSizingPodIdentity(pod)
+		}
 		workload.workload.qos.Observe(pod.Status.QOSClass)
 		collectCurrentPodOOM(workload.workload.currentPodOOM, pod.Status.ContainerStatuses)
 		collectCurrentPodOOM(workload.workload.currentPodOOM, pod.Status.InitContainerStatuses)
