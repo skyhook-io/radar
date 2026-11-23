@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	goruntime "runtime"
@@ -442,5 +443,27 @@ func TestLateDiscoveryStaysOnItsConnection(t *testing.T) {
 				t.Fatal("late discovery must fill only the original connection")
 			}
 		})
+	}
+}
+
+// A bound write resolves served versions on the connection it was admitted
+// to, even after a switch installed a cluster serving another version.
+func TestServedGVRForUsesTheBoundConnection(t *testing.T) {
+	withCleanDiscoveryGlobals(t)
+	serving := func(version string) *Connection {
+		core := buildFakeDiscoveryCore(t)
+		core.AddAPIResource(APIResource{Group: "kustomize.toolkit.fluxcd.io", Version: version, Kind: "Kustomization", Name: "kustomizations", Namespaced: true, Verbs: []string{"get", "patch"}})
+		c := &Connection{}
+		c.publishDiscovery(core)
+		return c
+	}
+	admitted, installed := serving("v1beta2"), serving("v1")
+	restoreTestConnection(installed)
+
+	if gvr, ok := ServedGVRFor(WithConnection(context.Background(), admitted))("kustomize.toolkit.fluxcd.io", "Kustomization"); !ok || gvr.Version != "v1beta2" {
+		t.Fatalf("bound request resolved %v (ok %v), want the admitted connection's v1beta2", gvr, ok)
+	}
+	if gvr, ok := ServedGVRFor(context.Background())("kustomize.toolkit.fluxcd.io", "Kustomization"); !ok || gvr.Version != "v1" {
+		t.Fatalf("unbound request resolved %v (ok %v), want the installed connection's v1", gvr, ok)
 	}
 }

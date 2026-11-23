@@ -109,7 +109,22 @@ func (d *ResourceDiscovery) GetGVRWithGroup(kindOrName string, group string) (sc
 // deadline. Callers get the cached version until a refresh succeeds, so after
 // a CRD upgrade retires a version, actions can still use it until then.
 func ServedGVR(group, kind string) (schema.GroupVersionResource, bool) {
-	d := GetResourceDiscovery()
+	return Current().ServedGVR(group, kind)
+}
+
+// ServedGVRFor returns the served-version resolver for a request: its bound
+// connection's, so a bound write resolves on the cluster it was admitted to,
+// else the installed connection's.
+func ServedGVRFor(ctx context.Context) func(group, kind string) (schema.GroupVersionResource, bool) {
+	if c := ConnectionFrom(ctx); c != nil {
+		return c.ServedGVR
+	}
+	return ServedGVR
+}
+
+// ServedGVR is the package ServedGVR for this connection's discovery.
+func (c *Connection) ServedGVR(group, kind string) (schema.GroupVersionResource, bool) {
+	d := c.Discovery()
 	if d == nil || d.ResourceDiscovery == nil {
 		return schema.GroupVersionResource{}, false
 	}

@@ -141,8 +141,9 @@ func TestRegisterSupportedCRDFallbacks_RegistersSupportedCRDFromPartialDiscovery
 				ResetDynamicResourceCache()
 				ResetResourceDiscovery()
 				clientMu.Lock()
-				installedConn.Store(copyTestConnectionLocked())
-				installedConn.Load().clients.dynamic = nil
+				next := copyTestConnectionLocked()
+				next.clients.dynamic = nil
+				installedConn.Store(next)
 				clientMu.Unlock()
 			})
 
@@ -183,8 +184,9 @@ func TestRegisterSupportedCRDFallbacks_RegistersSupportedCRDFromPartialDiscovery
 				return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: action.GetResource().Group, Resource: action.GetResource().Resource}, "", nil)
 			})
 			clientMu.Lock()
-			installedConn.Store(copyTestConnectionLocked())
-			installedConn.Load().clients.dynamic = dyn
+			next := copyTestConnectionLocked()
+			next.clients.dynamic = dyn
+			installedConn.Store(next)
 			clientMu.Unlock()
 
 			fakeDisc := fakeclientset.NewSimpleClientset().Discovery().(*fakediscovery.FakeDiscovery)
@@ -264,8 +266,9 @@ func TestRegisterSupportedCRDFallbacks_DoesNotProbeOnCleanDiscovery(t *testing.T
 	t.Cleanup(func() {
 		ResetResourceDiscovery()
 		clientMu.Lock()
-		installedConn.Store(copyTestConnectionLocked())
-		installedConn.Load().clients.dynamic = nil
+		next := copyTestConnectionLocked()
+		next.clients.dynamic = nil
+		installedConn.Store(next)
 		clientMu.Unlock()
 	})
 
@@ -280,8 +283,9 @@ func TestRegisterSupportedCRDFallbacks_DoesNotProbeOnCleanDiscovery(t *testing.T
 		return false, nil, nil
 	})
 	clientMu.Lock()
-	installedConn.Store(copyTestConnectionLocked())
-	installedConn.Load().clients.dynamic = dyn
+	next := copyTestConnectionLocked()
+	next.clients.dynamic = dyn
+	installedConn.Store(next)
 	clientMu.Unlock()
 
 	fakeDisc := fakeclientset.NewSimpleClientset().Discovery().(*fakediscovery.FakeDiscovery)
@@ -318,8 +322,9 @@ func TestRegisterSupportedCRDFallbacks_DoesNotRegisterWhenWatchDenied(t *testing
 	t.Cleanup(func() {
 		ResetResourceDiscovery()
 		clientMu.Lock()
-		installedConn.Store(copyTestConnectionLocked())
-		installedConn.Load().clients.dynamic = nil
+		next := copyTestConnectionLocked()
+		next.clients.dynamic = nil
+		installedConn.Store(next)
 		clientMu.Unlock()
 	})
 
@@ -338,8 +343,9 @@ func TestRegisterSupportedCRDFallbacks_DoesNotRegisterWhenWatchDenied(t *testing
 		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: action.GetResource().Group, Resource: action.GetResource().Resource}, "", nil)
 	})
 	clientMu.Lock()
-	installedConn.Store(copyTestConnectionLocked())
-	installedConn.Load().clients.dynamic = dyn
+	next := copyTestConnectionLocked()
+	next.clients.dynamic = dyn
+	installedConn.Store(next)
 	clientMu.Unlock()
 
 	fakeDisc := fakeDiscoveryWithPartialGroup(t, "keda.sh", "v1alpha1")
@@ -391,8 +397,9 @@ func TestRegisterSupportedCRDFallbacks_MultiVersionProbeOrder(t *testing.T) {
 				ResetDynamicResourceCache()
 				ResetResourceDiscovery()
 				clientMu.Lock()
-				installedConn.Store(copyTestConnectionLocked())
-				installedConn.Load().clients.dynamic = nil
+				next := copyTestConnectionLocked()
+				next.clients.dynamic = nil
+				installedConn.Store(next)
 				clientMu.Unlock()
 			})
 
@@ -416,8 +423,9 @@ func TestRegisterSupportedCRDFallbacks_MultiVersionProbeOrder(t *testing.T) {
 				return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: action.GetResource().Group, Resource: action.GetResource().Resource}, "", nil)
 			})
 			clientMu.Lock()
-			installedConn.Store(copyTestConnectionLocked())
-			installedConn.Load().clients.dynamic = dyn
+			next := copyTestConnectionLocked()
+			next.clients.dynamic = dyn
+			installedConn.Store(next)
 			clientMu.Unlock()
 
 			fakeDisc := fakeDiscoveryWithPartialGroup(t, "source.toolkit.fluxcd.io", "v1")
@@ -454,8 +462,9 @@ func TestRegisterSupportedCRDFallbacks_SkipsGroupsWithoutPartialDiscovery(t *tes
 	t.Cleanup(func() {
 		ResetResourceDiscovery()
 		clientMu.Lock()
-		installedConn.Store(copyTestConnectionLocked())
-		installedConn.Load().clients.dynamic = nil
+		next := copyTestConnectionLocked()
+		next.clients.dynamic = nil
+		installedConn.Store(next)
 		clientMu.Unlock()
 	})
 
@@ -472,8 +481,9 @@ func TestRegisterSupportedCRDFallbacks_SkipsGroupsWithoutPartialDiscovery(t *tes
 		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: action.GetResource().Group, Resource: action.GetResource().Resource}, "", nil)
 	})
 	clientMu.Lock()
-	installedConn.Store(copyTestConnectionLocked())
-	installedConn.Load().clients.dynamic = dyn
+	next := copyTestConnectionLocked()
+	next.clients.dynamic = dyn
+	installedConn.Store(next)
 	clientMu.Unlock()
 
 	fakeDisc := fakeDiscoveryWithPartialGroup(t, "networking.istio.io", "v1")
