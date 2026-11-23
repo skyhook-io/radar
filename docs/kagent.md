@@ -133,7 +133,8 @@ severity, including a critical Agent that cannot start any session.
 `counts.findings` and `counts.critical` count atomic findings before folding.
 `counts.groups` counts displayed groups, with `incomplete` rather than a
 mathematical lower bound: more evidence can merge groups. `agentsAffected` counts
-distinct Agents, without the 500-link presentation cap. Counts carry
+distinct Agents in the selected view, without the 500-link presentation cap;
+dependency details retain observed consumers outside that selection. Counts carry
 `lowerBound:true` when their supporting inventory or traversal is incomplete.
 Runtime crashes and pool capacity are not added to this configuration badge;
 Substrate already counts them.

@@ -140,7 +140,7 @@ type Counts struct {
 	Agents   Count      `json:"agents"`
 	// AgentsByLatestChange counts Agents by LatestChange.State.
 	AgentsByLatestChange map[string]int `json:"agentsByLatestChange"`
-	// AgentsAffected counts the distinct Agents a dependency finding affects.
+	// AgentsAffected counts the distinct Agents in the view a dependency finding affects.
 	AgentsAffected     Count `json:"agentsAffected"`
 	MCPServers         Count `json:"mcpServers"`
 	MCPServersFailing  Count `json:"mcpServersFailing"`
@@ -167,6 +167,10 @@ func CountsOf(w *Workspace, groups []AttentionGroup, complete func(kind string) 
 	c := Counts{AgentsByLatestChange: map[string]int{}}
 	c.Findings = Count{N: len(w.Findings), LowerBound: !findingsComplete}
 	c.Critical.LowerBound = !findingsComplete
+	viewAgents := make(map[string]bool, len(w.Agents))
+	for _, a := range w.Agents {
+		viewAgents[a.Ref.Key()] = true
+	}
 	affected := map[string]bool{}
 	affectedBound := !findingsComplete
 	for _, f := range w.Findings {
@@ -180,7 +184,9 @@ func CountsOf(w *Workspace, groups []AttentionGroup, complete func(kind string) 
 				agents = w.AffectedAgents(f.Subject, f.Reason)
 			}
 			for _, a := range agents {
-				affected[a.Agent.Key()] = true
+				if viewAgents[a.Agent.Key()] {
+					affected[a.Agent.Key()] = true
+				}
 			}
 		}
 	}

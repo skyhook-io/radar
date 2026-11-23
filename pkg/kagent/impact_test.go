@@ -608,6 +608,43 @@ func TestCountsIncludeBroaderCoordinateEvidence(t *testing.T) {
 	}
 }
 
+func TestCountsAffectedAgentsInSelectedView(t *testing.T) {
+	m := model(t, "team-a", "shared")
+	m.Object["status"] = map[string]any{"conditions": []any{map[string]any{"type": "Accepted", "status": "False", "reason": "ModelConfigMissing", "message": "model is unavailable"}}}
+	objects := []unstructured.Unstructured{*m}
+	for _, ns := range []string{"team-a", "team-b"} {
+		objects = append(objects, unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": Group + "/v1alpha3", "kind": KindAgent,
+			"metadata": map[string]any{"name": "helper", "namespace": ns},
+			"spec": map[string]any{"template": map[string]any{"inline": map[string]any{
+				"modelConfig": map[string]any{"name": "shared", "namespace": "team-a"},
+			}}},
+		}})
+	}
+	ws := Compose(inventoryOf(impactVector{Objects: objects, Now: time.Now()}))
+	for _, tc := range []struct {
+		name       string
+		namespaces []string
+		want       int
+	}{
+		{"all", nil, 2},
+		{"dependency namespace", []string{"team-a"}, 1},
+		{"both namespaces", []string{"team-a", "team-b"}, 2},
+		{"empty", []string{}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			view := ws.In(tc.namespaces)
+			counts := CountsOf(view, Fold(view.Findings), func(string) bool { return true })
+			if counts.AgentsAffected != (Count{N: tc.want}) {
+				t.Fatalf("affected count=%+v, want %d", counts.AgentsAffected, tc.want)
+			}
+			if len(view.Models) > 0 && (view.Models[0].UsedBy.Count != 2 || len(view.AffectedAgents(view.Models[0].Ref, "")) != 2) {
+				t.Fatal("selected view lost cross-namespace consumer evidence")
+			}
+		})
+	}
+}
+
 func TestAgentDescriptionComesFromReadableRootTemplate(t *testing.T) {
 	inline := &unstructured.Unstructured{Object: map[string]any{"apiVersion": Group + "/v1alpha3", "kind": KindAgent,
 		"metadata": map[string]any{"name": "inline", "namespace": "agents"},
