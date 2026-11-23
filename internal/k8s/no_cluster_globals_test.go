@@ -21,6 +21,8 @@ func TestNoClusterGlobals(t *testing.T) {
 		"*k8s.io/client-go/rest.Config", "k8s.io/client-go/dynamic.Interface",
 		"*k8s.io/client-go/discovery.DiscoveryClient", "k8s.io/client-go/discovery.DiscoveryInterface",
 		"*sharedKubernetesClients", "*ResourceDiscovery", "*permissionState",
+		"DynamicResourceCache", "*DynamicResourceCache", "connectionDynamicCache", "*connectionDynamicCache",
+		"github.com/skyhook-io/radar/pkg/k8score.DynamicResourceCache", "*github.com/skyhook-io/radar/pkg/k8score.DynamicResourceCache",
 		"*ResourceCache", "connectionCache", "*connectionCache", "recreateStash", "*recreateStash", "recreateEntry", "*recreateEntry", "map[string]recreateEntry",
 		"*github.com/skyhook-io/radar/pkg/timeline.TombstoneCache", "github.com/skyhook-io/radar/pkg/timeline.TombstoneCache",
 		"*PermissionCheckResult", "*Capabilities", "userCapEntry", "*userCapEntry", "userNSCapEntry", "*userNSCapEntry",

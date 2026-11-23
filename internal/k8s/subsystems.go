@@ -26,6 +26,7 @@ func InitAllSubsystems(ctx context.Context, progress func(string)) error {
 
 func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait time.Duration, tracker *ContextSwitchTracker) error {
 	conn := Current()
+	warmupReports := capturePolicyReportWarmup()
 	subsystemStart := time.Now()
 
 	// 1. Timeline — before caches so events during warmup are captured
@@ -124,19 +125,19 @@ func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait
 				case <-cache.Done():
 					return
 				}
-				// Teardown and replacement hold contextOpMu. Only install the
-				// late cache while this typed cache still serves. An operation
-				// can be cancelled without replacing it (a rescope whose
-				// connectivity check failed), so use the current one.
+				// A failed rescope keeps this build but cancels its operation.
+				// Wait for its decision before choosing the operation context.
 				contextOpMu.RLock()
-				defer contextOpMu.RUnlock()
-				if conn.cacheIsCurrent() {
-					startDynamicResourceCache(OperationContext(), conn, cache)
+				ctx := OperationContext()
+				open := conn.cacheIsCurrent()
+				contextOpMu.RUnlock()
+				if open {
+					startDynamicResourceCache(ctx, conn, cache, warmupReports)
 				}
 			}()
 		} else {
 			progress("Loading custom resources...")
-			startDynamicResourceCache(lifecycleCtx, conn, cache)
+			startDynamicResourceCache(lifecycleCtx, conn, cache, warmupReports)
 		}
 	}
 
@@ -204,25 +205,25 @@ func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait
 
 // The operation context outlives the switch's init context, which is cancelled
 // on success while the deferred typed informers may still be syncing.
-func startDynamicResourceCache(lifecycleCtx context.Context, conn *Connection, cache *ResourceCache) {
+func startDynamicResourceCache(lifecycleCtx context.Context, conn *Connection, cache *ResourceCache, warmupReports policyReportWarmup) {
 	t := time.Now()
-	if err := InitDynamicResourceCache(cache.ChangesRaw()); err != nil {
+	if err := conn.initDynamicResourceCache(cache.ChangesRaw()); err != nil {
 		log.Printf("Warning: dynamic resource cache init failed: %v", err)
 	}
 
-	if dc := GetDynamicResourceCache(); dc != nil {
+	if dc := conn.DynamicResourceCache(); dc != nil {
 		go func() {
 			crdStart := time.Now()
 			deferredDone := cache.DeferredDone()
 			stillCurrent := func() bool {
-				return GetDynamicResourceCache() == dc && conn.cacheIsCurrent()
+				return !dc.IsStopped()
 			}
 			runCRDWarmupSequence(lifecycleCtx, nil, stillCurrent, dc.StartWatchReconciler)
 			runCRDWarmupSequence(lifecycleCtx, deferredDone, stillCurrent,
 				func() {
 					wt := time.Now()
-					RegisterSupportedCRDFallbacks()
-					WarmupCommonCRDs()
+					conn.registerSupportedCRDFallbacks()
+					warmupCommonCRDs(dc, conn.Discovery())
 					logTiming("   CRD warmup: %v (background)", time.Since(wt))
 				},
 				func() {
@@ -236,7 +237,7 @@ func startDynamicResourceCache(lifecycleCtx context.Context, conn *Connection, c
 					// during WarmupCommonCRDs or DiscoverAllCRDs (admin may
 					// have installed Kyverno after Radar started).
 					pt := time.Now()
-					WarmupKyvernoPolicyReports()
+					warmupReports.run(conn.Discovery(), dc)
 					logTiming("   Kyverno PolicyReport warmup: %v (background)", time.Since(pt))
 				},
 			)
@@ -345,7 +346,7 @@ func resetAllSubsystems(conn *Connection) {
 	// clearing the index before tearing down the informers avoids using
 	// half-disposed informers on the next event-driven rebuild.
 	safeReset("policy report index", ResetPolicyReportIndex)
-	safeReset("dynamic resource cache", ResetDynamicResourceCache)
+	safeReset("dynamic resource cache", conn.closeDynamicResourceCache)
 
 	// Readers use the installed connection's permissions to interpret the
 	// typed cache. Detach that cache before installing the fresh connection.

@@ -78,18 +78,18 @@ type PolicyReportStatus struct {
 	LiveUpdates bool `json:"liveUpdates"`
 }
 
-// kyvernoWarmupDecision is set by WarmupKyvernoPolicyReports to record
+// kyvernoWarmupDecision records
 // the outcome of its single decision pass: empty (warmup hasn't run yet)
 // vs not-installed vs deferred vs ready. Read by GetKyvernoStatus so
 // callers can disambiguate a nil GetPolicyReportIndex() return. Writes
-// from WarmupKyvernoPolicyReports go through setDecisionIfCurrent so a
+// check the captured generation under policyReportMu so a
 // pre-Reset warmup goroutine that's still running can't stamp its
 // outcome onto the new cluster's atomic.
 var kyvernoWarmupDecision atomic.Value // holds KyvernoStatus, "" before first decision
 
 // kyvernoWarmupGen serializes "is this warmup still the current one"
 // against context-switch Resets. Each Warmup invocation captures the
-// generation at the start of its lambda; Reset bumps the counter before
+// generation before scheduling its work; Reset bumps the counter before
 // clearing state. Stale warmup completions (e.g. an in-flight Old-cluster
 // warmup that hasn't yet stored ready when Reset fires for the new
 // cluster) see a mismatch and skip their writes, so the new cluster never
@@ -197,7 +197,29 @@ func GetPolicyReportIndex() *policyreports.Index {
 	return policyReportIndex.Load()
 }
 
-// WarmupKyvernoPolicyReports conditionally enables PolicyReport tracking.
+type policyReportWarmup struct {
+	once       *sync.Once
+	generation int64
+}
+
+func capturePolicyReportWarmup() policyReportWarmup {
+	// Snapshot BOTH the *sync.Once and the warmup generation under the
+	// mutex BEFORE entering Do(). If we read policyReportInit unsynchronized
+	// and captured myGen inside the lambda, a Reset interleaving between the
+	// caller's read of policyReportInit and the lambda's Load of
+	// kyvernoWarmupGen would let the lambda capture the POST-Reset gen,
+	// and its subsequent writes (which check gen under the mutex) would
+	// match — stamping the previous cluster's outcome onto the new cluster's
+	// atomics. Capturing both under the same mutex Reset holds closes that
+	// window: either we see the pre-Reset (once, gen) pair and Reset's
+	// bump invalidates our writes, or we see the post-Reset (once', gen')
+	// pair and run cleanly under the new sync.Once.
+	policyReportMu.Lock()
+	defer policyReportMu.Unlock()
+	return policyReportWarmup{once: policyReportInit, generation: kyvernoWarmupGen.Load()}
+}
+
+// run conditionally enables PolicyReport tracking.
 // Called once after CRD discovery completes. Decision tree:
 //
 //  1. If Kyverno is NOT installed (no kyverno.io/Policy or ClusterPolicy
@@ -218,23 +240,9 @@ func GetPolicyReportIndex() *policyreports.Index {
 // the rediscovery path) to re-evaluate IsKyvernoInstalled and warm up
 // lazily. Documented limitation, not blocking — context switches are the
 // dominant lifecycle event in practice.
-func WarmupKyvernoPolicyReports() {
-	// Snapshot BOTH the *sync.Once and the warmup generation under the
-	// mutex BEFORE entering Do(). If we read policyReportInit unsynchronized
-	// and captured myGen inside the lambda, a Reset interleaving between the
-	// caller's read of policyReportInit and the lambda's Load of
-	// kyvernoWarmupGen would let the lambda capture the POST-Reset gen,
-	// and its subsequent writes (which check gen under the mutex) would
-	// match — stamping the previous cluster's outcome onto the new cluster's
-	// atomics. Capturing both under the same mutex Reset holds closes that
-	// window: either we see the pre-Reset (once, gen) pair and Reset's
-	// bump invalidates our writes, or we see the post-Reset (once', gen')
-	// pair and run cleanly under the new sync.Once.
-	policyReportMu.Lock()
-	once := policyReportInit
-	myGen := kyvernoWarmupGen.Load()
-	policyReportMu.Unlock()
-	once.Do(func() {
+func (w policyReportWarmup) run(discovery *ResourceDiscovery, cache *DynamicResourceCache) {
+	myGen := w.generation
+	w.once.Do(func() {
 		setStatus := func(s KyvernoStatus, reason string, observed int, groups []string) {
 			policyReportMu.Lock()
 			defer policyReportMu.Unlock()
@@ -267,7 +275,6 @@ func WarmupKyvernoPolicyReports() {
 			})
 		}
 
-		discovery := GetResourceDiscovery()
 		if discovery == nil || discovery.ResourceDiscovery == nil {
 			log.Printf("[policy-reports] No resource discovery available; skipping Kyverno detection")
 			// Discovery unavailable is operationally indistinguishable from
@@ -282,7 +289,6 @@ func WarmupKyvernoPolicyReports() {
 			return
 		}
 
-		cache := GetDynamicResourceCache()
 		if cache == nil || cache.DynamicResourceCache == nil {
 			log.Printf("[policy-reports] Dynamic resource cache not initialized; cannot warm up PolicyReports")
 			setStatus(KyvernoStatusDeferred, ReasonCacheDown, -1, nil)
@@ -317,7 +323,7 @@ func WarmupKyvernoPolicyReports() {
 		// lookup after warmup is hot — without this, callers would race
 		// with the informer's initial event burst.
 		idx := policyreports.NewIndex()
-		idx.Replace(listPolicyReportsAll(watched))
+		idx.Replace(cache.listPolicyReports(watched))
 
 		// Register event handlers for live updates BEFORE publishing the
 		// index so a debounced rebuild that fires during publishReady's
@@ -370,7 +376,7 @@ func WarmupKyvernoPolicyReports() {
 // Cheap: a single atomic.Value Load. Safe to call from request paths.
 func GetKyvernoStatus() KyvernoStatus {
 	// Ready is authoritative: even if a stale "warmup" decision is in the
-	// atomic (legal during a window in WarmupKyvernoPolicyReports where
+	// atomic (legal during a window in policy report warmup where
 	// the index publishes before the decision flag), the presence of an
 	// index means we are ready.
 	if policyReportIndex.Load() != nil {
@@ -601,10 +607,11 @@ func (s PolicyReportStatus) OmittedReason() (resourcecontext.OmittedReason, bool
 	return resourcecontext.OmittedCacheCold, true
 }
 
-// listPolicyReportsAll concatenates reports from every watched GVR.
-// Used both for the initial index build and for each debounced rebuild.
 func listPolicyReportsAll(gvrs []schema.GroupVersionResource) []*unstructured.Unstructured {
-	cache := GetDynamicResourceCache()
+	return GetDynamicResourceCache().listPolicyReports(gvrs)
+}
+
+func (cache *DynamicResourceCache) listPolicyReports(gvrs []schema.GroupVersionResource) []*unstructured.Unstructured {
 	if cache == nil {
 		return nil
 	}

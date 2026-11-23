@@ -48,7 +48,6 @@ func TestTrackedSwitchDiscoveryWaitHasOwnBudget(t *testing.T) {
 			}
 			cache := GetResourceCache()
 			t.Cleanup(ResetResourceCache)
-			t.Cleanup(ResetDynamicResourceCache)
 			t.Cleanup(ResetPolicyReportIndex)
 			t.Cleanup(InvalidateServerVersionCache)
 
@@ -82,6 +81,7 @@ func TestTrackedSwitchDiscoveryWaitHasOwnBudget(t *testing.T) {
 				installedConn.Store(prev)
 				clientMu.Unlock()
 			})
+			t.Cleanup(Current().closeDynamicResourceCache)
 			t.Cleanup(ResetMetricsHistory)
 
 			// Registered before the late dynamic cache exists, as the SSE
