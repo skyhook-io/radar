@@ -1,4 +1,4 @@
-import type { RightsizingRow } from '../../api/client'
+import type { RightsizingRow } from '../../types/rightsizing'
 
 export type ResourceSignal = 'hpa' | 'oom' | 'bursty' | 'throttling' | 'query_error'
 export type RightsizingActionTone = 'reduction' | 'increase' | 'review' | 'neutral'
@@ -19,6 +19,7 @@ export interface ResourceRequestPresentation {
 export function getResourceRequestPresentation(
   row?: RightsizingRow,
   scaledToZero = false,
+  review?: string,
 ): ResourceRequestPresentation {
   if (!row) return { primary: '—', secondary: 'No result returned', signals: [], tone: 'neutral' }
 
@@ -34,6 +35,26 @@ export function getResourceRequestPresentation(
 
   if (row.queryError)
     return { primary: currentOnly, secondary: 'Metrics query failed', signals, tone: 'neutral' }
+  if (row.decision?.status === 'none') return {
+    primary: currentOnly, secondary: row.fit === 'insufficient_history' ? 'Not enough history' : 'No meaningful change', signals, tone: 'neutral',
+  }
+  if (row.decision?.status === 'review' || review) return {
+    primary: row.decision?.status === 'review' && row.recommendedRequest ? `${current} → ${row.recommendedRequest}` : currentOnly,
+    secondary: 'Review before changing', signals, tone: 'review',
+  }
+  const comparison = row.recommendedRequest ? `${current} → ${row.recommendedRequest}` : currentOnly
+  const proposedRequest = (): ResourceRequestPresentation => {
+    if (current === 'Unset')
+      return { primary: comparison, secondary: 'Add request', signals, tone: 'increase' }
+    const increase = (row.recommendedRequestValue ?? 0) > (row.currentRequestValue ?? 0)
+    return {
+      primary: comparison,
+      secondary: increase ? 'Increase request' : 'Reduce request',
+      signals,
+      tone: increase ? 'increase' : 'reduction',
+    }
+  }
+  if (row.decision?.status === 'actionable') return proposedRequest()
   if (row.fit === 'pod_level_request')
     return {
       primary: currentOnly,
@@ -68,9 +89,7 @@ export function getResourceRequestPresentation(
     row.recommendedRequestValue != null &&
     row.currentRequestValue != null &&
     row.recommendedRequestValue < row.currentRequestValue
-  const comparison = row.recommendedRequest
-    ? `${current} → ${row.recommendedRequest}`
-    : currentOnly
+
 
   if (row.limitConflict)
     return {
@@ -84,17 +103,7 @@ export function getResourceRequestPresentation(
     }
   if (row.resource === 'cpu' && isReduction && (row.bursty || (row.throttleRatio ?? 0) >= 0.1))
     return { primary: currentOnly, secondary: 'Review before reducing', signals, tone: 'review' }
-  if (row.recommendedRequest) {
-    if (current === 'Unset')
-      return { primary: comparison, secondary: 'Add request', signals, tone: 'increase' }
-    const increase = (row.recommendedRequestValue ?? 0) > (row.currentRequestValue ?? 0)
-    return {
-      primary: comparison,
-      secondary: increase ? 'Increase request' : 'Reduce request',
-      signals,
-      tone: increase ? 'increase' : 'reduction',
-    }
-  }
+  if (row.recommendedRequest) return proposedRequest()
   return { primary: currentOnly, secondary: 'No meaningful change', signals, tone: 'neutral' }
 }
 

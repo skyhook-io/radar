@@ -1,7 +1,8 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { RightsizingRow, RightsizingScanResponse } from '../../api/client'
-import { FitWhy, ScanNotices, ScanSummary, ScanUnavailableState } from './RightsizingScanView'
+import { FitWhy } from '@skyhook-io/k8s-ui/components/rightsizing/RightsizingResultsTable'
+import { ScanNotices, ScanSummary, ScanUnavailableState } from './RightsizingScanView'
 
 const scan: RightsizingScanResponse = {
   scanId: 'rs_test', scanStatus: 'finished', deadlineAt: '2026-09-19T10:03:00Z',

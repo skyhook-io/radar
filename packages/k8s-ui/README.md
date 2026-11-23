@@ -2,6 +2,16 @@
 
 Shared, source-distributed Kubernetes UI components used by Radar.
 
+## Workload rightsizing
+
+`components/rightsizing/RightsizingEvidence` renders per-container measurements, request guidance, and the evidence behind each recommendation. `components/rightsizing/DatadogRightsizingEvidence` adds the lookback and current replica count. Both consume the response types in `types/rightsizing`. The host owns data fetching, authorization, and error states.
+
+`components/rightsizing/RightsizingResultsTable` displays container rows from
+`workloadResultRows` in `components/rightsizing/results-model`. Pass the cluster
+identity and optional evaluation timestamp for fleet results. Fleet rows label
+the metrics source and use its own coverage and review criteria.
+
+
 ## Toast updates
 
 `useToast().showToast(message, { id })` updates an existing toast with that ID

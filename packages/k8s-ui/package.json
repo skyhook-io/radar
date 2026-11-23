@@ -39,6 +39,9 @@
       "./src/components/gitops/*.tsx",
       "./src/components/gitops/*.ts"
     ],
+    "./components/rightsizing/results-model": "./src/components/rightsizing/results-model.ts",
+    "./components/rightsizing/presentation": "./src/components/rightsizing/presentation.ts",
+    "./components/rightsizing/*": "./src/components/rightsizing/*.tsx",
     "./components/issues": "./src/components/issues/index.ts",
     "./components/issues/*": [
       "./src/components/issues/*.tsx",

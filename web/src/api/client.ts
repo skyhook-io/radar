@@ -1,3 +1,4 @@
+import type { RightsizingRow, WorkloadRightsizingEvidence } from '@skyhook-io/k8s-ui/types/rightsizing'
 import { followSwitch, switchFinished, switchInProgress, type ContextSwitchOperation } from './contextSwitch'
 import { createListRefetchInterval, normalizeResourceList, type ResourceListBody, type ResourceListResult } from './resourceLists'
 import type { CascadeDetail } from '@skyhook-io/k8s-ui/components/ui/ForceDeleteConfirmDialog'
@@ -4067,73 +4068,9 @@ export interface PrometheusPVCUsage {
   hasData: boolean;
 }
 
-export type RightsizingFit =
-  | "balanced"
-  | "oversized"
-  | "under_requested"
-  | "missing_request"
-  | "insufficient_history"
-  | "pod_level_request";
-export type RightsizingConfidence = "low" | "medium" | "high";
-export type RightsizingOwnerCoverage = "ksm_history" | "current_pods";
-
-export interface RightsizingRow {
-  container: string;
-  resource: "cpu" | "memory";
-  fit: RightsizingFit;
-  confidence: RightsizingConfidence;
-  currentRequest?: string;
-  currentRequestValue?: number;
-  currentLimit?: string;
-  currentLimitValue?: number;
-  /** The pod's fixed pod-level request (spec.resources), set when fit is pod_level_request. */
-  podLevelRequest?: string;
-  podLevelRequestValue?: number;
-  observed?: {
-    name: "P95" | "P99" | "Max";
-    value: number;
-    formatted: string;
-  };
-  peak?: {
-    name: "P99";
-    value: number;
-    formatted: string;
-  };
-  calculatedRequest?: string;
-  calculatedRequestValue?: number;
-  recommendedRequest?: string;
-  recommendedRequestValue?: number;
-  reductionLimited?: boolean;
-  bursty?: boolean;
-  recommendationReason?: string;
-  sampleCount: number;
-  expectedSamples: number;
-  coverage: number;
-  hpaManaged: boolean;
-  hpaEvidenceAvailable: boolean;
-  throttleAvailable?: boolean;
-  throttleRatio?: number;
-  currentPodOOM?: boolean;
-  windowOomEvidence?: boolean;
-  oomEvidenceAvailable: boolean;
-  /** The cluster cache would not list the workload's pods, so currentPodOOM is unknown rather than false. */
-  liveInventoryUnavailable?: boolean;
-  limitConflict?: boolean;
-  queryError?: string;
-}
-
-export interface PrometheusRightsizing {
-  kind: string;
-  namespace: string;
-  name: string;
-  window: string;
-  source: "radar";
-  ownerCoverage: RightsizingOwnerCoverage;
-  scaledToZero: boolean;
-  sampleAvailable: boolean;
-  rows: RightsizingRow[];
-  reason?: string;
-  /** Absent from older Radar. A withheld scope means no recommendation was computed. */
+export type { RightsizingRow, RightsizingFit, RightsizingConfidence, RightsizingOwnerCoverage } from '@skyhook-io/k8s-ui/types/rightsizing'
+export interface PrometheusRightsizing extends WorkloadRightsizingEvidence {
+  source: "radar"
   clusterScope?: ClusterScope;
 }
 
@@ -4145,6 +4082,7 @@ export interface RightsizingScanWorkload {
   name: string;
   replicas: number;
   scaledToZero: boolean;
+  managedBy?: WorkloadRightsizingEvidence["managedBy"];
   rows: RightsizingRow[];
 }
 
@@ -4458,9 +4396,10 @@ export function usePrometheusRightsizing(
   enabled = true,
 ) {
   return useQuery<PrometheusRightsizing>({
-    queryKey: ["prometheus-rightsizing", kind, namespace, name],
-    queryFn: () =>
-      fetchJSON(`/prometheus/rightsizing/${kind}/${namespace}/${name}`),
+    queryKey: ["prometheus-rightsizing", getApiBase(), kind, namespace, name],
+    queryFn: ({ signal }) =>
+      fetchJSON(`/prometheus/rightsizing/${kind}/${namespace}/${name}`, signal),
+    retry: (count, error) => !isForbiddenError(error) && count < 1,
     enabled: enabled && Boolean(kind && namespace && name),
     staleTime: 5 * 60 * 1000,
     refetchInterval: 10 * 60 * 1000,

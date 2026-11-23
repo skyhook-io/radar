@@ -19,3 +19,9 @@ export function issuesPathForSubject(subject: { kind: string; group?: string; na
   params.set('resource', subject.namespace ? `${subject.namespace}/${subject.name}` : subject.name)
   return `/issues?${params}`
 }
+
+export const RIGHTSIZING_SCAN_PATH = '/cost/rightsizing'
+
+export function isRightsizingScanPath(pathname: string): boolean {
+  return pathname === RIGHTSIZING_SCAN_PATH || pathname === `${RIGHTSIZING_SCAN_PATH}/`
+}

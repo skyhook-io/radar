@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { RightsizingRow } from '../../api/client'
-import { getResourceRequestPresentation } from './presentation'
+import { getResourceRequestPresentation } from '@skyhook-io/k8s-ui/components/rightsizing/presentation'
 
 function metric(overrides: Partial<RightsizingRow> = {}): RightsizingRow {
   return {

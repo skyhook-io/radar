@@ -16,6 +16,36 @@ organization owner can open Integrations from an empty Metrics tab when a runnin
 Kubernetes UID. The connected Radar agent checks workload access and cluster
 identity for each chart read. When both sources are connected, Datadog workload totals appear alongside Prometheus traffic, resource, network and storage charts. Request and limit lines stay on the current-Pod charts where their units and scope match.
 
+### Datadog-backed rightsizing in Radar Hub
+
+After an organization owner enables rightsizing for a verified cluster, the
+workload’s Metrics and Cost tabs can compare each container’s CPU and memory requests with
+up to seven days of Datadog usage. Dollar allocations on the Cost tab still require a supported allocation provider. The chart time picker affects the usage charts
+only. Radar uses the hottest current replica in each complete five-minute bucket.
+For a container with a limit and no explicit request, Radar uses the Kubernetes default request equal to that limit. An explicit zero request stays zero. A Datadog-backed workload whose admitted container resources differ from this baseline still requires a new evaluation.
+
+The sizing policy, headroom and staged reductions are shared with Prometheus
+rightsizing. P95 CPU usage supplies the demand estimate. When P99 is unavailable, a proposed CPU cut needs review. Missing restart history can
+withhold a memory reduction. Each container shows its current request, measured demand, coverage and suggested next step when available. Low-confidence reductions, changes that could affect Guaranteed QoS, and proposals without verifiable HPA settings require manual review and are excluded from fleet totals. An evidenced shortage remains a priority even when its proposed increase needs review. The table, workload details and MCP use the same per-resource decision. When Kubernetes metadata identifies a workload manager, Radar displays the tool, its name when available, and the identifying signal.
+
+Radar Hub asks the connected agent for the workload as the signed-in user.
+Access requires a named workload GET and permission to list Pods, plus ReplicaSets
+for Deployments or ControllerRevisions for DaemonSets. Fleet discovery additionally
+requires listing workloads of the corresponding kind. Its fleet inventory excludes controllers confirmed at zero desired replicas. The agent reads HPAs as
+the same user. Unavailable HPA evidence withholds request changes governed by
+that evidence. A rollout, partition, unready replica or a Pod from another
+revision prevents a recommendation. Pod names alone cannot establish ownership.
+When only Datadog charts are enabled, an existing Prometheus connection still supplies rightsizing. Metrics and Cost use the same selected rightsizing provider. An unavailable Datadog mapping or a failed provider lookup leaves sizing unavailable until it recovers. Usage charts can still come from the connected Prometheus backend. The MCP `get_rightsizing` tool uses the cluster’s Prometheus connection.
+
+Radar Hub can also read the connected cluster’s Prometheus rightsizing scan and
+workload detail. These queries identify workloads by namespace and Kubernetes
+owner names. They require a Prometheus data source isolated to that cluster.
+A federated endpoint that includes another cluster with the same names can
+combine their metrics.
+
+The agent returns container requests and limits without transferring literal
+environment variables, command arguments or a raw Pod template.
+
 <p align="center">
   <img src="screenshots/workload-metrics-overview.png" alt="Radar workload metrics showing HTTP requests, 5xx errors and latency above CPU, memory and throttling charts" width="1100" />
   <br /><em>Demo workload with deliberate HTTP errors. Resource charts compare the workload with the highest single-Pod value at each point; each chart identifies its population.</em>
