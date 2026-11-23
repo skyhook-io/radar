@@ -11,6 +11,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/skyhook-io/radar/internal/auth"
@@ -76,7 +78,8 @@ func TestManageHelmErrorsAreRedactedButKeepTheirType(t *testing.T) {
 	}
 }
 
-func TestManageHelmRefusesBusyReleaseAndChangedPreviewStatus(t *testing.T) {
+func setupHelmUninstallPreflight(t *testing.T, readRevision func()) (*driver.Secrets, *release.Release) {
+	t.Helper()
 	secrets := fake.NewClientset().CoreV1().Secrets("team-a")
 	storage := driver.NewSecrets(secrets)
 	rel := &release.Release{Name: "demo", Namespace: "team-a", Version: 1,
@@ -86,7 +89,7 @@ func TestManageHelmRefusesBusyReleaseAndChangedPreviewStatus(t *testing.T) {
 	if err := storage.Create(key, rel); err != nil {
 		t.Fatal(err)
 	}
-	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	serve := func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/version":
@@ -101,26 +104,45 @@ func TestManageHelmRefusesBusyReleaseAndChangedPreviewStatus(t *testing.T) {
 			}
 			list.TypeMeta = metav1.TypeMeta{APIVersion: "v1", Kind: "SecretList"}
 			json.NewEncoder(w).Encode(list)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/team-a/secrets/"+key:
+			if readRevision != nil {
+				readRevision()
+			}
+			secret, err := secrets.Get(r.Context(), key, metav1.GetOptions{})
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			secret.TypeMeta = metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"}
+			json.NewEncoder(w).Encode(secret)
 		default:
 			t.Errorf("unexpected request (must not mutate release): %s %s", r.Method, r.URL.Path)
 			http.NotFound(w, r)
 		}
-	}))
-	defer api.Close()
-	cfg := &rest.Config{Host: api.URL, QPS: -1, ContentConfig: rest.ContentConfig{ContentType: "application/json"}}
+	}
+	cfg := &rest.Config{Host: "https://helm.test", QPS: -1, ContentConfig: rest.ContentConfig{ContentType: "application/json"},
+		Transport: execRoundTripper(func(r *http.Request) (*http.Response, error) {
+			w := httptest.NewRecorder()
+			serve(w, r)
+			return w.Result(), nil
+		}),
+	}
 	client, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	helm.Initialize()
 	t.Cleanup(helm.ResetTestClient)
-	oldClient, oldConfig, oldStatus := k8s.SetTestClient(client), k8s.SetTestConfig(cfg), k8s.GetConnectionStatus()
+	t.Cleanup(k8s.SnapshotTestConnection())
+	k8s.SetTestClient(client)
+	k8s.SetTestConfig(cfg)
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	defer func() {
-		k8s.SetTestClient(oldClient)
-		k8s.SetTestConfig(oldConfig)
-		k8s.SetConnectionStatus(oldStatus)
-	}()
+	return storage, rel
+}
+
+func TestManageHelmRefusesBusyReleaseAndChangedPreviewStatus(t *testing.T) {
+	storage, rel := setupHelmUninstallPreflight(t, nil)
+	const key = "sh.helm.release.v1.demo.v1"
 	ctx := auth.ContextWithUser(t.Context(), &auth.User{Username: "helm-mcp-busy"})
 	for _, status := range []release.Status{release.StatusPendingInstall, release.StatusPendingUpgrade, release.StatusPendingRollback, release.StatusUninstalling} {
 		rel.Info.Status = status
@@ -186,12 +208,61 @@ func TestManageHelmRefusesBusyReleaseAndChangedPreviewStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	token := preview["confirm"].(string)
-	if !consumeMutationConfirmation(token) { // the first confirm, still in flight
+	binding := verifiedUninstallConfirmation(t, context.WithValue(ctx, confirmationContextKey{}, k8s.ServingConnectionID()), token)
+	if err := binding.consumeForUninstall(ctx); err != nil { // the first confirm, still in flight
 		t.Fatal("fresh token reported as used")
 	}
 	_, _, err = handleManageHelm(ctx, nil, manageHelmInput{Action: "uninstall", Namespace: "team-a", Name: "demo", Confirm: token})
 	if err == nil || !strings.Contains(err.Error(), "already used") {
 		t.Fatalf("a repeated confirm must be refused: %v", err)
+	}
+}
+
+func TestManageHelmUninstallConfirmationAfterPreflight(t *testing.T) {
+	for _, scenario := range []string{"expired", "cancelled"} {
+		t.Run(scenario, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				readRevision := false
+				setupHelmUninstallPreflight(t, func() {
+					readRevision = true
+					if scenario == "expired" {
+						time.Sleep(time.Second)
+					} else {
+						cancel()
+					}
+				})
+				ctx = auth.ContextWithUser(ctx, &auth.User{Username: "helm-reviewer"})
+				in := manageHelmInput{Action: "uninstall", Namespace: "team-a", Name: "demo"}
+				result, _, err := handleManageHelm(ctx, nil, in)
+				if err != nil {
+					t.Fatal(err)
+				}
+				in.Confirm = decodeToolResult(t, result)["confirm"].(string)
+				binding := verifiedUninstallConfirmation(t, context.WithValue(ctx, confirmationContextKey{}, k8s.ServingConnectionID()), in.Confirm)
+				if scenario == "expired" {
+					time.Sleep(time.Until(time.Unix(binding.Expires, 0)) - time.Second)
+				}
+				_, _, err = handleManageHelm(ctx, nil, in)
+				if !readRevision {
+					t.Fatal("confirmation did not reach the stored values read")
+				}
+				if scenario == "expired" {
+					if err == nil || !strings.Contains(err.Error(), "uninstall confirmation rejected") {
+						t.Fatalf("want confirmation refusal at expiry, got %v", err)
+					}
+				} else if !errors.Is(err, context.Canceled) {
+					t.Fatalf("want cancellation, got %v", err)
+				}
+				usedConfirmations.Lock()
+				_, used := usedConfirmations.expires[binding.payloadHash]
+				usedConfirmations.Unlock()
+				if used {
+					t.Fatal("refused confirmation was consumed")
+				}
+			})
+		})
 	}
 }
 

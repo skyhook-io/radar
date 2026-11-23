@@ -234,7 +234,7 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 	}
 	ctx = admission.Bind(ctx)
 	ctx = context.WithValue(ctx, confirmationContextKey{}, admission.ID())
-	var confirmed string
+	var confirmed *mutationConfirmation
 	if in.Confirm != "" {
 		confirmed, err = verifyMutationConfirmation(ctx, "uninstall_helm", in.Confirm)
 		if err != nil {
@@ -285,15 +285,8 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 			}
 			binding := string(bindingBytes)
 			if in.Confirm != "" {
-				if confirmed != binding {
+				if confirmed.Target != binding {
 					return nil, nil, fmt.Errorf("release changed since the preview; omit confirm and review a new preview")
-				}
-				// Helm stores the uninstalling status when it records the first hook run
-				// (or after hooks, with none). Until then, or if that write fails, the
-				// release still reads deployed and a retried confirm would pass the
-				// binding and start a second uninstall.
-				if !consumeMutationConfirmation(in.Confirm) {
-					return nil, nil, fmt.Errorf("this confirmation was already used; an uninstall may still be running, so inspect get_helm_release, then omit confirm for a fresh preview if needed")
 				}
 			} else {
 				preview, err := client.UninstallPreviewAsUser(in.Namespace, in.Name, user)
@@ -312,17 +305,21 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 			}
 		}
 	}
+	// Uninstall can purge history before Helm returns an error, so capture the
+	// values needed to redact that error while the revisions still exist.
+	var uninstallSecrets map[string]bool
+	if confirmed != nil {
+		uninstallSecrets = storedSensitiveValues(client, in, user)
+	}
 	if operation.Err() != nil {
 		return nil, nil, fmt.Errorf("cluster connection changed; retry on the intended cluster")
 	}
-	audit.Outcome = "failed_or_unconfirmed"
-	// Only Helm's own errors can echo stored values; Radar's refusals above
-	// can't, so they skip the extra reads. Uninstall can purge history before
-	// it fails, so its values are read first.
-	var uninstallSecrets map[string]bool
-	if in.Action == "uninstall" {
-		uninstallSecrets = storedSensitiveValues(client, in, user)
+	if confirmed != nil {
+		if err := confirmed.consumeForUninstall(ctx); err != nil {
+			return nil, nil, err
+		}
 	}
+	audit.Outcome = "failed_or_unconfirmed"
 	defer func() {
 		if err == nil {
 			return
