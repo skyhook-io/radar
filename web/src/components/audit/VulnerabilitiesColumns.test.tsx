@@ -268,3 +268,63 @@ describe('No data', () => {
     expect(menuButton()).toBeNull()
   })
 })
+
+describe('Owner column', () => {
+  const workload = (name: string) => ({ kind: 'Deployment', group: 'apps', namespace: 'shop', name, counts: { ...zero, high: 1 }, fixable: zero, containers: [] })
+  function renderWorkloads(ownership: boolean, owners = true) {
+    vi.mocked(useVulnerabilities).mockImplementation((p) => ({
+      data: {
+        ...response(p.view, 0),
+        workloads: [workload('web'), workload('plain')],
+        ...(ownership ? {
+          ownership: { teamLabel: 'team' },
+          owners: !owners ? [] : [{ kind: 'Deployment', group: 'apps', namespace: 'shop', name: 'web', manager: { tool: 'helm', kind: 'HelmRelease', namespace: 'shop', name: 'web-release', chart: 'web-1.2.0' }, team: 'payments', teamFrom: 'workload' }],
+        } : {}),
+      },
+      isLoading: false, isFetching: false, isPlaceholderData: false, error: null, dataUpdatedAt: 0, refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useVulnerabilities>))
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } })
+    act(() => root.render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/checks/vulnerabilities?by=workload']}>
+          <VulnerabilitiesView namespaces={[]} onNavigateToResource={vi.fn()} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    ))
+  }
+
+  it('is off by default and shows only what Radar knows when on', () => {
+    renderWorkloads(true)
+    expect(heads().some((h) => h.includes('Owner'))).toBe(false)
+    expect(container.textContent).not.toContain('web-release')
+    act(() => menuButton()!.click())
+    act(() => menuItem('Show Owner')!.click())
+    expect(heads().some((h) => h.includes('Owner'))).toBe(true)
+    expect(container.textContent).toContain('web-release')
+    expect(container.textContent).toContain('Helm · web-1.2.0')
+    expect(container.textContent).toContain('team: payments')
+    // The unmanaged workload's owner cell is empty, not a guess.
+    expect(container.textContent).not.toContain('Unknown')
+  })
+
+  it('says in one line that none was found, instead of a column of blanks', () => {
+    renderWorkloads(true, false)
+    act(() => menuButton()!.click())
+    act(() => menuItem('Show Owner')!.click())
+    expect(heads().some((h) => h.includes('Owner'))).toBe(false)
+    expect(container.textContent).toContain('No owner found for these workloads')
+    act(() => menuItem('Show Owner')!.click())
+    expect(container.textContent).not.toContain('No owner found')
+  })
+
+  it('is not offered by a Radar that reads no owners', () => {
+    renderWorkloads(true)
+    act(() => menuButton()!.click())
+    expect(menuItem('Show Owner')).toBeTruthy()
+    act(() => root.unmount())
+    root = createRoot(container)
+    renderWorkloads(false)
+    act(() => menuButton()?.click())
+    expect(menuItem('Show Owner')).toBeUndefined()
+  })
+})

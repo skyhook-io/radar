@@ -19,6 +19,7 @@ import (
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
@@ -64,8 +65,11 @@ type Request struct {
 	// Without RouteCeiling they are read in Namespaces.
 	RouteNamespaces []string
 	RouteCeiling    bool
-	View            View
-	Filter          Filter
+	// OwnerAccess is what of the ownership caches the caller may read, for
+	// each workload's owner (nil allows all).
+	OwnerAccess func(*ownership.Catalog) ownership.Access
+	View        View
+	Filter      Filter
 	// Export lists everything: no row or per-row list caps, and gaps name
 	// every namespace. MaxFindings still applies. The Response then carries
 	// what WriteCSV needs.
@@ -359,6 +363,12 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 	if err != nil {
 		return Response{}, err
 	}
+	resp.Ownership = &Ownership{TeamLabel: TeamLabel}
+	owners, unavailable, err := resolveOwners(ctx, cache, ownedWorkloads(&resp), req.OwnerAccess, TeamLabel)
+	if err != nil {
+		return Response{}, err
+	}
+	resp.Owners, resp.Ownership.Unavailable = owners, unavailable
 	if cache != k8s.GetResourceCache() || dynamic != k8s.GetDynamicResourceCache() || discovery != k8s.GetResourceDiscovery() {
 		return Response{}, ErrConnectionChanged
 	}
