@@ -70,65 +70,6 @@
   "want": "no URL here"
  },
  {
-  "fn": "args",
-  "in": [
-   "serve",
-   "--api-key=sk-123",
-   "--port",
-   "8080"
-  ],
-  "want": [
-   "serve",
-   "--api-key=[REDACTED]",
-   "--port",
-   "8080"
-  ]
- },
- {
-  "fn": "args",
-  "in": [
-   "--token",
-   "abc",
-   "--verbose"
-  ],
-  "want": [
-   "--token",
-   "[REDACTED]",
-   "--verbose"
-  ]
- },
- {
-  "fn": "args",
-  "in": [
-   "--auth-file",
-   "--debug"
-  ],
-  "want": [
-   "--auth-file",
-   "--debug"
-  ]
- },
- {
-  "fn": "args",
-  "in": [
-   "OPENAI_API_KEY=sk-123",
-   "MODE=fast"
-  ],
-  "want": [
-   "OPENAI_API_KEY=[REDACTED]",
-   "MODE=fast"
-  ]
- },
- {
-  "fn": "args",
-  "in": [
-   "--endpoint=https://u:p@host/x"
-  ],
-  "want": [
-   "--endpoint=https://[REDACTED]@host/x"
-  ]
- },
- {
   "fn": "url",
   "in": "http://user:FAKEPASS@no-such-mcp.example:9999/mcp?token=FAKEQUERY",
   "want": "http://[REDACTED]@no-such-mcp.example:9999/mcp?[REDACTED]"
@@ -159,14 +100,99 @@
  {
   "fn": "args",
   "in": [
+   "serve",
+   "--api-key=sk-123",
+   "--port",
+   "8080"
+  ],
+  "want": [
+   "serve",
+   "[redacted: may hold a credential]",
+   "--port",
+   "8080"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "--token",
+   "abc",
+   "--verbose"
+  ],
+  "want": [
+   "--token",
+   "[redacted: may hold a credential]",
+   "--verbose"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "--auth-file",
+   "/etc/auth",
+   "--debug"
+  ],
+  "want": [
+   "--auth-file",
+   "[redacted: may hold a credential]",
+   "--debug"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "OPENAI_API_KEY=sk-123",
+   "MODE=fast"
+  ],
+  "want": [
+   "[redacted: may hold a credential]",
+   "MODE=fast"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "--endpoint=https://u:p@host/x"
+  ],
+  "want": [
+   "[redacted: may hold a credential]"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
    "env",
    "TOKEN=opaque-dummy-value",
    "serve"
   ],
   "want": [
    "env",
-   "TOKEN=[REDACTED]",
+   "[redacted: may hold a credential]",
    "serve"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "env",
+   "TOKEN=Bearer FAKESECRET",
+   "serve"
+  ],
+  "want": [
+   "env",
+   "[redacted: may hold a credential]",
+   "serve"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "serve",
+   "--authorization=Bearer FAKESECRET"
+  ],
+  "want": [
+   "serve",
+   "[redacted: may hold a credential]"
   ]
  },
  {
@@ -179,7 +205,7 @@
   "want": [
    "sh",
    "-c",
-   "serve --api-key=[REDACTED]"
+   "[redacted: may hold a credential]"
   ]
  },
  {
@@ -192,31 +218,7 @@
   "want": [
    "sh",
    "-c",
-   "API_KEY=[REDACTED] exec serve --token [REDACTED] --port 8080"
-  ]
- },
- {
-  "fn": "args",
-  "in": [
-   "sh",
-   "-c",
-   "exec serve --mode fast"
-  ],
-  "want": [
-   "sh",
-   "-c",
-   "exec serve --mode fast"
-  ]
- },
- {
-  "fn": "args",
-  "in": [
-   "serve",
-   "--authorization=Bearer FAKESECRET"
-  ],
-  "want": [
-   "serve",
-   "--authorization=[REDACTED]"
+   "[redacted: may hold a credential]"
   ]
  },
  {
@@ -229,7 +231,7 @@
   "want": [
    "sh",
    "-c",
-   "exec serve --authorization=[REDACTED]"
+   "[redacted: may hold a credential]"
   ]
  },
  {
@@ -242,7 +244,7 @@
   "want": [
    "sh",
    "-c",
-   "exec serve --token [REDACTED] --port 8080"
+   "[redacted: may hold a credential]"
   ]
  },
  {
@@ -255,7 +257,83 @@
   "want": [
    "sh",
    "-c",
-   "serve --authorization=[REDACTED]"
+   "[redacted: may hold a credential]"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "bash",
+   "-lc",
+   "exec sh -c 'serve --token FAKESECRET'"
+  ],
+  "want": [
+   "bash",
+   "-lc",
+   "[redacted: may hold a credential]"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "curl",
+   "-H",
+   "Authorization: Bearer FAKESECRET"
+  ],
+  "want": [
+   "curl",
+   "-H",
+   "[redacted: may hold a credential]"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "sh",
+   "-c",
+   "curl https://mcp.example/mcp?token='FAKESECRET'"
+  ],
+  "want": [
+   "sh",
+   "-c",
+   "[redacted: may hold a credential]"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "curl",
+   "https://mcp.example/mcp?token='FAKESECRET'"
+  ],
+  "want": [
+   "curl",
+   "[redacted: may hold a credential]"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "sh",
+   "-c",
+   "true;API_KEY=FAKESECRET exec serve"
+  ],
+  "want": [
+   "sh",
+   "-c",
+   "[redacted: may hold a credential]"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "sh",
+   "-c",
+   "exec serve --mode fast"
+  ],
+  "want": [
+   "sh",
+   "-c",
+   "exec serve --mode fast"
   ]
  },
  {
@@ -274,14 +352,23 @@
  {
   "fn": "args",
   "in": [
-   "env",
-   "TOKEN=Bearer FAKESECRET",
-   "serve"
+   "serve",
+   "--port=8080"
   ],
   "want": [
-   "env",
-   "TOKEN=[REDACTED]",
-   "serve"
+   "serve",
+   "--port=8080"
+  ]
+ },
+ {
+  "fn": "args",
+  "in": [
+   "curl",
+   "https://mcp.example/mcp?region=eu"
+  ],
+  "want": [
+   "curl",
+   "https://mcp.example/mcp?[REDACTED]"
   ]
  }
 ]

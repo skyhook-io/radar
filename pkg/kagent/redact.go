@@ -39,11 +39,11 @@ func StripURLCredentials(raw string) string {
 var (
 	urlInText      = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s"'<>]+`)
 	sensitiveQuery = regexp.MustCompile(`(?i)(?:^|[?&#;])[^=&#]*(?:key|token|sig|secret|passw|auth|credential|session)[^=&#]*=`)
-	sensitiveFlag  = regexp.MustCompile(`(?i)^(--?[a-z0-9_.-]*(?:token|key|secret|passw|credential|auth)[a-z0-9_.-]*)(=.*)?$`)
-	assignment     = regexp.MustCompile(`(?i)^([a-z_][a-z0-9_]*)=.+$`)
-	credentialWord = regexp.MustCompile(`(?i)token|key|secret|passw|credential|auth`)
-	// A shell's command-string flag: -c, or combined like -ec or -lc.
-	shellCommandFlag = regexp.MustCompile(`^-[a-z]*c$`)
+	// A bare flag naming a credential, whose value is the next element.
+	credentialFlag = regexp.MustCompile(`(?i)^--?[a-z0-9_.-]*(?:token|key|secret|passw|credential|auth)[a-z0-9_.-]*$`)
+	// Words that mark an element as possibly holding a credential.
+	credentialText = regexp.MustCompile(`(?i)token|secret|password|passwd|apikey|api_key|api-key|authorization|bearer|credential|cookie|private_key|access_key`)
+	urlUserInfo    = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^/\s?#]*@`)
 )
 
 // RedactURLsInText blanks the user info of every URL in free text, and its
@@ -69,132 +69,38 @@ func RedactURLsInText(text string) string {
 	})
 }
 
-// RedactArgs blanks the values a command line passes to a flag or variable
-// that names a credential: --api-key=x, --token x, API_TOKEN=x, TOKEN=x. The
-// argument after a shell's -c (sh -c "serve --api-key=x") is a payload, read
-// as shell words with quotes respected. Any other credential argument loses
-// its whole value, spaces included ("--authorization=Bearer x"); another
-// argument with spaces in it is read as a payload too, which only redacts more.
+// ArgRedacted replaces a command or argument element that may hold a
+// credential.
+const ArgRedacted = "[redacted: may hold a credential]"
+
+// RedactArgs redacts a Harness's or SandboxTemplate's workload command and
+// args, element by element, without parsing shell text: a shell's -c payload
+// can nest, quote and chain commands, and a parser that misses one form leaks
+// it. An element that mentions a credential, or holds a URL with user info,
+// is replaced whole; the element after a bare credential flag (--token x) is
+// too; any other element keeps its text, its URLs without user info or query.
+// Over-redaction is accepted: these elements reach the drawer and AI context
+// only, and the object's YAML still shows them to whoever may read it.
 func RedactArgs(args []string) []string {
 	out := make([]string, len(args))
 	blankNext := false
 	for i, a := range args {
-		if blankNext && !strings.HasPrefix(a, "-") {
-			out[i], blankNext = Redacted, false
-			continue
+		switch {
+		case blankNext:
+			out[i] = ArgRedacted
+		case credentialFlag.MatchString(a):
+			out[i] = a
+		case credentialText.MatchString(a) || urlUserInfo.MatchString(a):
+			out[i] = ArgRedacted
+		default:
+			out[i] = urlInText.ReplaceAllStringFunc(a, func(match string) string {
+				u := strings.TrimRight(match, ".,;:!?)]}")
+				return StripURLCredentials(u) + match[len(u):]
+			})
 		}
-		blankNext = false
-		if i > 0 && shellCommandFlag.MatchString(args[i-1]) {
-			out[i] = redactShellPayload(a)
-			continue
-		}
-		if red, next, ok := redactCredentialArg(a); ok {
-			out[i], blankNext = red, next
-			continue
-		}
-		if strings.ContainsAny(a, " \t\n") {
-			out[i] = redactShellPayload(a)
-			continue
-		}
-		out[i] = RedactURLsInText(a)
+		blankNext = credentialFlag.MatchString(a) && !blankNext
 	}
 	return out
-}
-
-// redactCredentialArg redacts a credential flag's or assignment's whole value.
-// next reports a flag whose value is the following word; ok is false for any
-// other argument.
-func redactCredentialArg(a string) (red string, next, ok bool) {
-	if m := sensitiveFlag.FindStringSubmatch(a); m != nil {
-		if m[2] != "" {
-			return m[1] + "=" + Redacted, false, true
-		}
-		return a, true, true
-	}
-	if m := assignment.FindStringSubmatch(a); m != nil && credentialWord.MatchString(m[1]) {
-		return m[1] + "=" + Redacted, false, true
-	}
-	return "", false, false
-}
-
-// shellWord is one word of a shell payload: where it sits, and its text with
-// quotes and escapes removed.
-type shellWord struct {
-	start, end int
-	text       string
-}
-
-// shellWords splits a payload as a POSIX shell would, closely enough to find
-// a credential's value: whitespace separates words, quotes and backslashes
-// join them. An unclosed quote runs to the end, so its value is redacted in
-// full rather than in part.
-func shellWords(s string) []shellWord {
-	var out []shellWord
-	isSpace := func(c byte) bool { return c == ' ' || c == '\t' || c == '\n' }
-	for i := 0; i < len(s); {
-		for i < len(s) && isSpace(s[i]) {
-			i++
-		}
-		if i >= len(s) {
-			break
-		}
-		start := i
-		var b strings.Builder
-		var quote byte
-		for i < len(s) {
-			c := s[i]
-			switch {
-			case quote != 0 && c == quote:
-				quote = 0
-			case quote == '"' && c == '\\' && i+1 < len(s):
-				i++
-				b.WriteByte(s[i])
-			case quote != 0:
-				b.WriteByte(c)
-			case c == '\'' || c == '"':
-				quote = c
-			case c == '\\' && i+1 < len(s):
-				i++
-				b.WriteByte(s[i])
-			case isSpace(c):
-				goto done
-			default:
-				b.WriteByte(c)
-			}
-			i++
-		}
-	done:
-		out = append(out, shellWord{start: start, end: i, text: b.String()})
-	}
-	return out
-}
-
-func redactShellPayload(payload string) string {
-	var b strings.Builder
-	last := 0
-	blankNext := false
-	for _, w := range shellWords(payload) {
-		b.WriteString(payload[last:w.start])
-		last = w.end
-		raw := payload[w.start:w.end]
-		if blankNext && !strings.HasPrefix(w.text, "-") {
-			b.WriteString(Redacted)
-			blankNext = false
-			continue
-		}
-		blankNext = false
-		if red, next, ok := redactCredentialArg(w.text); ok {
-			if next {
-				red = raw
-			}
-			b.WriteString(red)
-			blankNext = next
-			continue
-		}
-		b.WriteString(RedactURLsInText(raw))
-	}
-	b.WriteString(payload[last:])
-	return b.String()
 }
 
 // urlColumnPaths are printer-column JSONPaths that read a URL field, whose

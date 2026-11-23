@@ -442,8 +442,6 @@ export function stripKagentURLCredentials(raw: string): string {
 
 const URL_IN_TEXT = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi
 const SENSITIVE_QUERY = /(?:^|[?&#;])[^=&#]*(?:key|token|sig|secret|passw|auth|credential|session)[^=&#]*=/i
-const SENSITIVE_FLAG = /^(--?[a-z0-9_.-]*(?:token|key|secret|passw|credential|auth)[a-z0-9_.-]*)(=.*)?$/i
-
 /** Mirrors pkg/kagent RedactURLsInText: user info of every URL in text, and a query that names a credential. */
 export function redactKagentURLsInText(text: string): string {
   if (!text.includes('://')) return text
@@ -460,75 +458,32 @@ export function redactKagentURLsInText(text: string): string {
   })
 }
 
-const ASSIGNMENT = /^([a-z_][a-z0-9_]*)=.+$/i
-const CREDENTIAL_WORD = /token|key|secret|passw|credential|auth/i
 
-const SHELL_COMMAND_FLAG = /^-[a-z]*c$/
+/** Mirrors pkg/kagent ArgRedacted. */
+export const KAGENT_ARG_REDACTED = '[redacted: may hold a credential]'
+const CREDENTIAL_FLAG = /^--?[a-z0-9_.-]*(?:token|key|secret|passw|credential|auth)[a-z0-9_.-]*$/i
+const CREDENTIAL_TEXT = /token|secret|password|passwd|apikey|api_key|api-key|authorization|bearer|credential|cookie|private_key|access_key/i
+const URL_USER_INFO = /\b[a-z][a-z0-9+.-]*:\/\/[^/\s?#]*@/i
 
-/** A credential flag's or assignment's whole value, redacted; `next` marks a flag whose value is the following word. Null for any other argument. */
-function redactCredentialArg(a: string): { red: string; next: boolean } | null {
-  const flag = SENSITIVE_FLAG.exec(a)
-  if (flag) return flag[2] ? { red: `${flag[1]}=${REDACTED}`, next: false } : { red: a, next: true }
-  const assign = ASSIGNMENT.exec(a)
-  if (assign && CREDENTIAL_WORD.test(assign[1])) return { red: `${assign[1]}=${REDACTED}`, next: false }
-  return null
-}
-
-/** Mirrors pkg/kagent shellWords: POSIX-ish words with quotes and escapes; an unclosed quote runs to the end. */
-function shellWords(s: string): { start: number; end: number; text: string }[] {
-  const out: { start: number; end: number; text: string }[] = []
-  const isSpace = (c: string) => c === ' ' || c === '\t' || c === '\n'
-  let i = 0
-  while (i < s.length) {
-    while (i < s.length && isSpace(s[i])) i++
-    if (i >= s.length) break
-    const start = i
-    let text = ''
-    let quote = ''
-    while (i < s.length) {
-      const c = s[i]
-      if (quote && c === quote) quote = ''
-      else if (quote === '"' && c === '\\' && i + 1 < s.length) text += s[++i]
-      else if (quote) text += c
-      else if (c === "'" || c === '"') quote = c
-      else if (c === '\\' && i + 1 < s.length) text += s[++i]
-      else if (isSpace(c)) break
-      else text += c
-      i++
-    }
-    out.push({ start, end: i, text })
-  }
-  return out
-}
-
-function redactShellPayload(payload: string): string {
-  let out = ''
-  let last = 0
-  let blankNext = false
-  for (const w of shellWords(payload)) {
-    out += payload.slice(last, w.start)
-    last = w.end
-    const raw = payload.slice(w.start, w.end)
-    if (blankNext && !w.text.startsWith('-')) { out += REDACTED; blankNext = false; continue }
-    blankNext = false
-    const cred = redactCredentialArg(w.text)
-    if (cred) { out += cred.next ? raw : cred.red; blankNext = cred.next; continue }
-    out += redactKagentURLsInText(raw)
-  }
-  return out + payload.slice(last)
-}
-
-/** Mirrors pkg/kagent RedactArgs: a -c payload is read as shell words; any other credential argument loses its whole value. */
+/**
+ * Mirrors pkg/kagent RedactArgs: element by element, no shell parsing. An
+ * element that mentions a credential or holds a URL with user info is
+ * replaced whole, as is the one after a bare credential flag; any other keeps
+ * its text, its URLs without user info or query.
+ */
 export function redactKagentArgs(args: string[]): string[] {
   let blankNext = false
-  return args.map((a, i) => {
-    if (blankNext && !a.startsWith('-')) { blankNext = false; return REDACTED }
-    blankNext = false
-    if (i > 0 && SHELL_COMMAND_FLAG.test(args[i - 1])) return redactShellPayload(a)
-    const cred = redactCredentialArg(a)
-    if (cred) { blankNext = cred.next; return cred.red }
-    if (/[ \t\n]/.test(a)) return redactShellPayload(a)
-    return redactKagentURLsInText(a)
+  return args.map((a) => {
+    let out: string
+    if (blankNext) out = KAGENT_ARG_REDACTED
+    else if (CREDENTIAL_FLAG.test(a)) out = a
+    else if (CREDENTIAL_TEXT.test(a) || URL_USER_INFO.test(a)) out = KAGENT_ARG_REDACTED
+    else out = a.replace(URL_IN_TEXT, (match) => {
+      const u = match.replace(/[.,;:!?)\]}]+$/, '')
+      return stripKagentURLCredentials(u) + match.slice(u.length)
+    })
+    blankNext = CREDENTIAL_FLAG.test(a) && !blankNext
+    return out
   })
 }
 
