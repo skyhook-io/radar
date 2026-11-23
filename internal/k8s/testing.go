@@ -1,8 +1,8 @@
 package k8s
 
 import (
+	"fmt"
 	"maps"
-	"sync"
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -29,6 +29,10 @@ func copyTestConnectionLocked() *Connection {
 	}
 	c := installedConnectionLocked(installedConn.Load().Config(), &clients)
 	c.discovery.Store(installedConn.Load().Discovery())
+	// Partial fixture updates supply another dependency of the same cluster.
+	if prev := Current(); prev != nil {
+		c.cache.Store(prev.cacheState())
+	}
 	return c
 }
 
@@ -63,6 +67,24 @@ func setTestDiscovery(d *ResourceDiscovery) func() {
 	return func() { restoreTestConnection(prev) }
 }
 
+// Test cache fixtures can start without clients or rebuild after a standalone
+// reset. Production installs the fresh connection in ResetAllSubsystems.
+func testCacheState() *connectionCache {
+	clientMu.Lock()
+	defer clientMu.Unlock()
+	conn := Current()
+	if conn == nil || !conn.cacheIsCurrent() {
+		next := copyTestConnectionLocked()
+		next.cache.Store(nil)
+		if conn != nil {
+			next.perms.Store(conn.perms.Load())
+		}
+		swapTestConnectionLocked(next)
+		conn = next
+	}
+	return conn.cacheState()
+}
+
 // InitLoadTestResourceCache creates a resource cache from a fake client using
 // the live path's deferred-informer split, so the critical/deferred phases and
 // the warmup window they drive actually exist. InitTestResourceCache syncs
@@ -71,8 +93,7 @@ func setTestDiscovery(d *ResourceDiscovery) func() {
 //
 // Intended for load-test harnesses, not unit tests.
 func InitLoadTestResourceCache(client kubernetes.Interface) error {
-	cacheMu.Lock()
-	defer cacheMu.Unlock()
+	state := testCacheState()
 
 	enabled := allTestResourceTypes()
 	deferred := make(map[string]bool, len(deferredResources))
@@ -95,20 +116,12 @@ func InitLoadTestResourceCache(client kubernetes.Interface) error {
 		return err
 	}
 
-	initialSyncComplete.Store(core.IsSyncComplete())
-
-	resourceCache.Store(&ResourceCache{
+	return state.installTestCache(&ResourceCache{
 		ResourceCache:               core,
 		secretsEnabled:              true,
 		cronJobScheduleObservations: cronJobScheduleObservations,
 		secretWriteTimes:            secretWriteTimes,
-		generation:                  cacheGeneration,
-	})
-
-	cacheOnce = new(sync.Once)
-	cacheOnce.Do(func() {})
-
-	return nil
+	}, core.IsSyncComplete())
 }
 
 // InitTestPromotedSyncingCache builds a cache whose Phase-1 wait returns via
@@ -121,8 +134,7 @@ func InitLoadTestResourceCache(client kubernetes.Interface) error {
 //
 // This is intended for integration tests only.
 func InitTestPromotedSyncingCache(client kubernetes.Interface, syncTimeout, deferredSyncTimeout time.Duration, syncDelays map[string]time.Duration) error {
-	cacheMu.Lock()
-	defer cacheMu.Unlock()
+	state := testCacheState()
 
 	secretWriteTimes := newSecretDataManagerWriteIndex()
 	cronJobScheduleObservations := newCronJobScheduleObservationTracker()
@@ -144,17 +156,12 @@ func InitTestPromotedSyncingCache(client kubernetes.Interface, syncTimeout, defe
 		return err
 	}
 
-	initialSyncComplete.Store(core.IsSyncComplete())
-	resourceCache.Store(&ResourceCache{
+	return state.installTestCache(&ResourceCache{
 		ResourceCache:               core,
 		secretsEnabled:              true,
 		cronJobScheduleObservations: cronJobScheduleObservations,
 		secretWriteTimes:            secretWriteTimes,
-		generation:                  cacheGeneration,
-	})
-	cacheOnce = new(sync.Once)
-	cacheOnce.Do(func() {})
-	return nil
+	}, core.IsSyncComplete())
 }
 
 func (c *ResourceCache) SetTestAPIDiscoveryPending(pending bool) {
@@ -185,8 +192,7 @@ func InitScopedTestResourceCacheNamespaces(client kubernetes.Interface, scopes m
 }
 
 func initTestResourceCache(client kubernetes.Interface, scopes map[string]k8score.ResourceScope, scopeNamespaces map[string][]string) error {
-	cacheMu.Lock()
-	defer cacheMu.Unlock()
+	state := testCacheState()
 
 	enabled := allTestResourceTypes()
 	if scopes != nil {
@@ -218,21 +224,16 @@ func initTestResourceCache(client kubernetes.Interface, scopes map[string]k8scor
 		return err
 	}
 
-	initialSyncComplete.Store(true)
-
-	resourceCache.Store(&ResourceCache{
+	cache := &ResourceCache{
 		ResourceCache:               core,
 		secretsEnabled:              true,
 		cronJobScheduleObservations: cronJobScheduleObservations,
 		secretWriteTimes:            secretWriteTimes,
-		generation:                  cacheGeneration,
-	})
-
-	// Mark cacheOnce as "already executed" so InitResourceCache is a no-op.
-	cacheOnce = new(sync.Once)
-	cacheOnce.Do(func() {})
-
-	waitForInformerStatuses(resourceCache.Load())
+	}
+	if err := state.installTestCache(cache, true); err != nil {
+		return err
+	}
+	waitForInformerStatuses(cache)
 
 	return nil
 }
@@ -241,16 +242,20 @@ func initTestResourceCache(client kubernetes.Interface, scopes map[string]k8scor
 // does not wait for it to sync, for tests whose informers must stay loading
 // (a namespace that never answers, a deadline that has to fire).
 func InitTestResourceCacheFromConfig(cfg k8score.CacheConfig) error {
-	cacheMu.Lock()
-	defer cacheMu.Unlock()
+	state := testCacheState()
 	core, err := k8score.NewResourceCache(cfg)
 	if err != nil {
 		return err
 	}
-	initialSyncComplete.Store(true)
-	resourceCache.Store(&ResourceCache{ResourceCache: core, generation: cacheGeneration})
-	cacheOnce = new(sync.Once)
-	cacheOnce.Do(func() {})
+	return state.installTestCache(&ResourceCache{ResourceCache: core}, true)
+}
+
+func (s *connectionCache) installTestCache(cache *ResourceCache, complete bool) error {
+	s.once.Do(func() {})
+	cache.generation = clusterBuildSequence.Add(1)
+	if !s.promote(cache, complete) {
+		return fmt.Errorf("cluster changed during cache initialization")
+	}
 	return nil
 }
 
@@ -516,7 +521,8 @@ func ReconnectTestClient(c *kubernetes.Clientset) func() {
 	clientMu.Lock()
 	next := copyTestConnectionLocked()
 	next.clients.clientset, next.clients.informerClientset = c, nil
-	next.clients.generation = clientGenerationCounter.Add(1)
+	next.clients.generation = clusterBuildSequence.Add(1)
+	next.cache.Store(nil)
 	clientMu.Unlock()
 	RetireServingConnection()
 	clientMu.Lock()
@@ -812,12 +818,23 @@ func SetTestContextOperationInProgress(active bool) func() {
 	return func() { activeContextOperations.Store(previous) }
 }
 
-// SwapResourceCacheForTest publishes rc (nil hides the cache) and returns a
-// func that restores the previous one, without resetting the package state
-// other tests share.
+// SwapResourceCacheForTest installs a fixture with its own cache lifecycle.
+// Tests can hide or rebuild its cache without closing the shared fixture
+// that the restore function reinstalls.
 func SwapResourceCacheForTest(rc *ResourceCache) (restore func()) {
-	prev := resourceCache.Swap(rc)
-	return func() { resourceCache.Store(prev) }
+	clientMu.Lock()
+	previous := Current()
+	next := copyTestConnectionLocked()
+	state := newConnectionCache()
+	state.promoted.Store(rc)
+	if previous != nil {
+		next.perms.Store(previous.perms.Load())
+		state.initialSyncComplete.Store(previous.cacheState().initialSyncComplete.Load())
+	}
+	next.cache.Store(state)
+	swapTestConnectionLocked(next)
+	clientMu.Unlock()
+	return func() { restoreTestConnection(previous) }
 }
 
 // InitTestReplayClients retains the supplied discovery client so refreshes see

@@ -437,10 +437,10 @@ func BlockClusterAccess(err error) {
 	dropClusterClients()
 }
 
-func dropClusterClients() {
+func dropClusterClients() *Connection {
 	clientMu.Lock()
 	defer clientMu.Unlock()
-	installedConn.Store(installedConnectionLocked(nil, &sharedKubernetesClients{generation: clientGenerationCounter.Add(1)}))
+	return installedConn.Swap(installedConnectionLocked(nil, &sharedKubernetesClients{generation: clusterBuildSequence.Add(1)}))
 }
 
 func contextOperationsBlockedErr() error {
@@ -784,8 +784,10 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 		retryInterrupted := localRetry && checked.ctx.Err() != nil
 		if switchErr != nil && (retryInterrupted || (tracker != nil && !tracker.setCanStop(checked.ctx, false))) {
 			CancelOngoingOperations()
-			dropClusterClients()
-			ResetAllSubsystems()
+			// Drop clients immediately, but stop the informers owned by the
+			// connection they belonged to.
+			displaced := dropClusterClients()
+			resetAllSubsystems(displaced)
 			InvalidateServerVersionCache()
 			InvalidatePlatformCache()
 			msg := "Cluster switch stopped. The previous connection was closed. Choose a cluster to connect."

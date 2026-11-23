@@ -116,13 +116,14 @@ func TestDiffRBACUnstructured(t *testing.T) {
 }
 
 func TestRecordBindingDeleteKeepsWhatItGranted(t *testing.T) {
+	state := newConnectionCache()
 	timeline.ResetStore()
 	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 10}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(timeline.ResetStore)
 
-	recordToTimelineStore(ActiveClusterContext(), "RoleBinding", "saleor", "vpa-updater", "rb-1", "delete", testRoleBinding(vpaUpdaterSA), nil, nil, false)
+	state.recordToTimelineStore(ActiveClusterContext(), "RoleBinding", "saleor", "vpa-updater", "rb-1", "delete", testRoleBinding(vpaUpdaterSA), nil, nil, false)
 	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{Kinds: []string{"RoleBinding"}})
 	if err != nil || len(events) != 1 {
 		t.Fatalf("events = %+v, err = %v", events, err)
@@ -139,16 +140,14 @@ func TestRecordBindingDeleteKeepsWhatItGranted(t *testing.T) {
 	}
 
 	// Every create records its grant when it arrives.
-	prevSynced := initialSyncComplete.Load()
-	initialSyncComplete.Store(true)
-	t.Cleanup(func() { initialSyncComplete.Store(prevSynced) })
+	state.initialSyncComplete.Store(true)
 	created := func(name string, subjects ...rbacv1.Subject) *rbacv1.RoleBinding {
 		rb := testRoleBinding(subjects...)
 		rb.Name, rb.CreationTimestamp = name, metav1.Now()
 		return rb
 	}
-	recordToTimelineStore(ActiveClusterContext(), "RoleBinding", "saleor", "vpa-updater", "rb-2", "add", nil, created("vpa-updater", vpaUpdaterSA), nil, false)
-	recordToTimelineStore(ActiveClusterContext(), "RoleBinding", "saleor", "local", "rb-3", "add", nil, created("local", rbacv1.Subject{Kind: rbacv1.ServiceAccountKind, Namespace: "saleor", Name: "app"}), nil, false)
+	state.recordToTimelineStore(ActiveClusterContext(), "RoleBinding", "saleor", "vpa-updater", "rb-2", "add", nil, created("vpa-updater", vpaUpdaterSA), nil, false)
+	state.recordToTimelineStore(ActiveClusterContext(), "RoleBinding", "saleor", "local", "rb-3", "add", nil, created("local", rbacv1.Subject{Kind: rbacv1.ServiceAccountKind, Namespace: "saleor", Name: "app"}), nil, false)
 	events, _ = timeline.GetStore().Query(context.Background(), timeline.QueryOptions{Kinds: []string{"RoleBinding"}, EventTypes: []timeline.EventType{timeline.EventTypeAdd}})
 	if len(events) != 2 {
 		t.Fatalf("creates = %+v", events)
@@ -167,7 +166,7 @@ func TestRecordBindingDeleteKeepsWhatItGranted(t *testing.T) {
 	}
 
 	// Other kinds' deletes stay content-free.
-	recordToTimelineStore(ActiveClusterContext(), "Role", "saleor", "vpa-updater", "role-1", "delete", &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "vpa-updater", Namespace: "saleor"}}, nil, nil, false)
+	state.recordToTimelineStore(ActiveClusterContext(), "Role", "saleor", "vpa-updater", "role-1", "delete", &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "vpa-updater", Namespace: "saleor"}}, nil, nil, false)
 	events, _ = timeline.GetStore().Query(context.Background(), timeline.QueryOptions{Kinds: []string{"Role"}})
 	if len(events) != 1 || events[0].Diff != nil {
 		t.Fatalf("Role delete = %+v, want no diff", events)

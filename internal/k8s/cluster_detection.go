@@ -157,7 +157,8 @@ func (cache *ResourceCache) LastClusterInfo() (ClusterInfo, time.Time) {
 
 // GetClusterInfo returns detected cluster information
 func GetClusterInfo(ctx context.Context) (*ClusterInfo, error) {
-	initialCache := GetResourceCache()
+	conn := Current()
+	initialCache := conn.resourceCache()
 	platform, _ := GetClusterPlatform(ctx)
 
 	info := &ClusterInfo{
@@ -201,9 +202,9 @@ func GetClusterInfo(ctx context.Context) (*ClusterInfo, error) {
 	// The version is cached and the counts come from informers, so a read
 	// during an outage succeeds on stale data: it must not move the
 	// observation (and its time) forward.
-	if cache != nil && cache == initialCache && ctx.Err() == nil && info.KubernetesVersion != "" &&
+	if initialCache != nil && conn.cacheIsCurrent() && ctx.Err() == nil && info.KubernetesVersion != "" &&
 		GetConnectionStatus().State != StateDisconnected {
-		cache.lastClusterInfo.Store(&clusterInfoObservation{info: *info, at: time.Now()})
+		initialCache.lastClusterInfo.Store(&clusterInfoObservation{info: *info, at: time.Now()})
 	}
 	return info, nil
 }

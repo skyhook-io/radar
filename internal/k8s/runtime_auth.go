@@ -52,7 +52,9 @@ const (
 )
 
 var (
-	clientGenerationCounter atomic.Uint64
+	// Client bundles and typed caches each need a unique ID, even when a
+	// rescope reuses the bundle to construct a different cache.
+	clusterBuildSequence    atomic.Uint64
 	discoveryRequestTimeout = 32 * time.Second
 
 	runtimeAuthChecksMu sync.Mutex
@@ -85,7 +87,7 @@ func newSharedKubernetesClients(config *rest.Config) (*sharedKubernetesClients, 
 		return nil, fmt.Errorf("failed to create Kubernetes HTTP client: %w", err)
 	}
 
-	generation := clientGenerationCounter.Add(1)
+	generation := clusterBuildSequence.Add(1)
 	// Struct copy matters: rest.HTTPClientFor returns http.DefaultClient
 	// itself for default transports, and swapping Transport in place would
 	// mutate the process-wide client.

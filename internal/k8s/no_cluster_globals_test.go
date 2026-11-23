@@ -21,6 +21,8 @@ func TestNoClusterGlobals(t *testing.T) {
 		"*k8s.io/client-go/rest.Config", "k8s.io/client-go/dynamic.Interface",
 		"*k8s.io/client-go/discovery.DiscoveryClient", "k8s.io/client-go/discovery.DiscoveryInterface",
 		"*sharedKubernetesClients", "*ResourceDiscovery", "*permissionState",
+		"*ResourceCache", "connectionCache", "*connectionCache", "recreateStash", "*recreateStash", "recreateEntry", "*recreateEntry", "map[string]recreateEntry",
+		"*github.com/skyhook-io/radar/pkg/timeline.TombstoneCache", "github.com/skyhook-io/radar/pkg/timeline.TombstoneCache",
 		"*PermissionCheckResult", "*Capabilities", "userCapEntry", "*userCapEntry", "userNSCapEntry", "*userNSCapEntry",
 	}
 	pkg, err := build.ImportDir(".", 0)
@@ -63,20 +65,30 @@ func TestNoClusterGlobals(t *testing.T) {
 			continue
 		}
 		typ := types.Unalias(v.Type())
+		// A package may re-export the pointee (internal/timeline does).
+		// Resolve it inside both *T and atomic.Pointer[T].
+		if named, ok := typ.(*types.Named); ok && named.Obj().Pkg() != nil &&
+			named.Obj().Pkg().Path() == "sync/atomic" && named.Obj().Name() == "Pointer" {
+			typ = types.NewPointer(named.TypeArgs().At(0))
+		}
+		if ptr, ok := typ.(*types.Pointer); ok {
+			typ = types.NewPointer(types.Unalias(ptr.Elem()))
+		}
 		typeName := types.TypeString(typ, func(p *types.Package) string {
 			if p == checked {
 				return ""
 			}
 			return p.Path()
 		})
-		// Also through atomic.Pointer[T], which holds a *T.
+		// Reject other generic containers of the denied types as well.
 		wrapped := slices.ContainsFunc(denied, func(d string) bool {
 			return strings.HasSuffix(typeName, "["+strings.TrimPrefix(d, "*")+"]")
 		})
 		_, isMap := typ.Underlying().(*types.Map)
 		cacheType := isMap || typeName == "sync.Map" || typeName == "golang.org/x/sync/singleflight.Group"
-		cacheName := strings.Contains(strings.ToLower(name), "capabilit") || strings.Contains(strings.ToLower(name), "perm")
-		if slices.Contains(denied, typeName) || wrapped || (cacheName && cacheType) {
+		lowerName := strings.ToLower(name)
+		cacheName := strings.Contains(lowerName, "capabilit") || strings.Contains(lowerName, "perm")
+		if strings.Contains(lowerName, "cachegeneration") || strings.Contains(lowerName, "cacheonce") || slices.Contains(denied, typeName) || wrapped || (cacheName && cacheType) {
 			t.Errorf("%s: %s has type %s: cluster state belongs on *Connection", fset.Position(v.Pos()), name, typeName)
 		}
 	}

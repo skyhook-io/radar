@@ -1110,7 +1110,7 @@ func TestRuntimeAuthCooldownIsScopedToGeneration(t *testing.T) {
 
 	// A context switch mints a new client generation; the old generation's
 	// cooldown must not suppress the new one's first candidate.
-	newGeneration := clientGenerationCounter.Add(1)
+	newGeneration := clusterBuildSequence.Add(1)
 	clientMu.Lock()
 	installedConn.Store(copyTestConnectionLocked())
 	installedConn.Load().clients.generation = newGeneration
@@ -1461,7 +1461,7 @@ func prepareRuntimeAuthTest(t *testing.T) uint64 {
 	ResetTestState()
 	t.Cleanup(ResetTestState)
 
-	generation := clientGenerationCounter.Add(1)
+	generation := clusterBuildSequence.Add(1)
 	clientMu.Lock()
 	previousPath := kubeconfigPath
 	// Without a kubeconfig path the package reads as in-cluster
