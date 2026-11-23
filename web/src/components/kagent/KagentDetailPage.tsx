@@ -70,7 +70,6 @@ export function KagentDetailPage({
       expanded
       hideKindBadge
       hideBackButton
-      namespaceDisplay={<span className="text-sm text-theme-text-secondary">Namespace: <span className="text-theme-text-primary">{target.namespace}</span></span>}
       inlineBadges
       onBack={() => navigate(spec.listPath)}
       onNavigateToResource={onOpenResource}

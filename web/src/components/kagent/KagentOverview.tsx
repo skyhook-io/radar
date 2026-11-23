@@ -154,7 +154,7 @@ export function KagentOverview({
   return (
     <>
       <div className="grid grid-cols-2 gap-3 text-sm text-theme-text-primary xl:grid-cols-4" aria-label="kagent status">
-        <Link to="/kagent/agents?status=problems" className={cardClass}>
+        <Link to="/kagent/agents" className={cardClass}>
           <span className={numberClass}>{unread('agents') ? 'Unknown' : `${bound ? '≥' : ''}${states.prepared ?? 0}`}</span>
           <span className="text-theme-text-secondary">Prepared Agents</span>
           {!unread('agents') && <span className={`mt-1 block text-xs ${toneTextClass(states.blocked || states.failed ? 'unhealthy' : 'neutral')}`}>{bound ? '≥' : ''}{states.blocked ?? 0} blocked{states.failed ? ` · ${bound ? '≥' : ''}${states.failed} failed` : ''}</span>}
