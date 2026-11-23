@@ -53,5 +53,5 @@ it('offers image export in the graph controls', async () => {
     </ToastProvider>,
   ))
   const controls = container.querySelector('[data-testid="controls"]')!
-  expect(controls.querySelector('button[aria-label="Export as image"]')).not.toBeNull()
+  expect(controls.querySelector('button[aria-label="Export graph"]')).not.toBeNull()
 })
