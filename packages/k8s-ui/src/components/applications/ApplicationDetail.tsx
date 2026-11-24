@@ -888,6 +888,7 @@ export function ApplicationDetail({
             </span>
             <EnvSwitcher
               instances={identityInstances}
+              identityKey={app.identity?.key}
               activeKey={activeInstanceKey ?? app.key}
               onSwitch={onSwitchInstance}
               showVersions={showEnvironmentVersions}
@@ -3697,11 +3698,13 @@ function InstanceTooltip({ instance }: { instance: AppIdentityInstance }) {
 
 function EnvSwitcher({
   instances,
+  identityKey,
   activeKey,
   onSwitch,
   showVersions,
 }: {
   instances: AppIdentityInstance[];
+  identityKey?: string;
   activeKey: string;
   onSwitch?: (appKey: string) => void;
   showVersions: boolean;
@@ -3733,9 +3736,8 @@ function EnvSwitcher({
   const lagChip = lag && (
     <span className={`${CHIP} ${CHIP_TONE.amber}`}>{lag}</span>
   );
-  const hasGroupingEvidence = actualEnvironments.some((inst) => inst.evidence || inst.confidence !== "high");
-  const evidenceChip = hasGroupingEvidence && (
-    <Tooltip content={<AppIdentityTooltip members={actualEnvironments} />} delay={150}>
+  const evidenceChip = actualEnvironments.length > 0 && (
+    <Tooltip content={<AppIdentityTooltip identityKey={identityKey} members={actualEnvironments} />} delay={150}>
       <span className="inline-flex cursor-default items-center rounded-sm bg-theme-hover px-1 py-px ring-1 ring-inset ring-theme-border">
         <Layers className="h-3 w-3 text-theme-text-tertiary" aria-hidden />
       </span>
