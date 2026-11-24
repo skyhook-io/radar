@@ -160,3 +160,19 @@ func TestScanMemoryRecoveryPartitionsInstantFamilies(t *testing.T) {
 		}
 	}
 }
+
+func TestScanMemoryRecoveryShrinksPreviouslySplitInstantQueries(t *testing.T) {
+	var batch []scanWorkload
+	for _, ns := range []string{"a", "b", "c", "d"} {
+		batch = append(batch, scanTestWorkload("Deployment", ns, "api", "api"))
+	}
+	scope := ViewScope{Filters: map[string]string{metricRestarts: `cluster=""`}}
+	base := buildRightsizingScanQueries(batch, scope)["restart_activity"]
+	scope.Filters[metricRestarts] = `cluster="` + strings.Repeat("x", prom.MaxWorkloadQueryBytes-len(base)+1) + `"`
+	now := time.Unix(1800000000, 0)
+	client := &fakeScanQuerier{}
+	_, err := new(scanMemoryBudget).recover(context.Background(), client, batch, scope, "restart_activity", now.Add(-rightsizingWindow), now, vmMemoryRefusal(150))
+	if err != nil || len(client.queries) != 4 {
+		t.Fatalf("expected each original half to be split again: %d queries, error %v", len(client.queries), err)
+	}
+}

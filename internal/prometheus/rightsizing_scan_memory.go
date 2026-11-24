@@ -109,8 +109,20 @@ func (b *scanMemoryBudget) recover(ctx context.Context, client rightsizingScanQu
 	} else {
 		// Counter resets and extrapolation depend on the full window. Split
 		// whole workloads, preferring disjoint namespaces to shrink source reads.
+		// The estimate describes the physical request the store rejected. If
+		// byte splitting already divided the original family, subdivide those
+		// requests further rather than recreating groups of the same size.
+		original := func(group []scanWorkload) string { return buildRightsizingScanQueries(group, scope)[family] }
+		sections := 0
+		_, err := runScanQueryParts(retryCtx, batch, original(batch), original, func(context.Context, string) (*prom.QueryResult, error) {
+			sections++
+			return nil, nil
+		})
+		if err != nil {
+			return nil, err
+		}
 		namespaces := batchNamespaces(batch)
-		parts = min(parts, len(batch))
+		parts = min(parts*sections, maxScanMemoryRecoveryRequests, len(batch))
 		for i := range parts {
 			group := batch[i*len(batch)/parts : (i+1)*len(batch)/parts]
 			if len(namespaces) >= parts {
