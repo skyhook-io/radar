@@ -134,6 +134,12 @@ const STRUCTURED_MODE_DESCRIPTIONS: Record<StructuredMode, string> = {
 const EMPTY_STATE_CLASS = 'flex-1 flex flex-col items-center justify-center gap-2 px-4 text-center'
 
 const isLocalFormat = (format: TimestampFormat) => format === 'time-local' || format === 'iso-local'
+const localTimeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone
+
+function TimestampFormatHint({ format }: { format: TimestampFormat }) {
+  const timeZone = isLocalFormat(format) ? localTimeZone() : undefined
+  return <>Timestamp format: {TIMESTAMP_FORMAT_LABELS[format]}{timeZone && ` · ${timeZone}`}</>
+}
 
 const TIMESTAMP_FORMAT_SHORT_LABELS: Record<TimestampFormat, string> = {
   'time-local': 'Local time',
@@ -254,8 +260,6 @@ export function LogCore({
       return v && TIMESTAMP_FORMAT_ORDER.includes(v) ? v : 'time-local'
     } catch { return 'time-local' }
   })
-  // The IANA zone describes the display rule for old logs across DST changes.
-  const timeZone = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, [])
   const [ansiEnabled, setAnsiEnabled] = useState(() => {
     try { return localStorage.getItem('radar-logs-ansi') !== 'false' } catch { return true }
   })
@@ -276,6 +280,8 @@ export function LogCore({
   })
   const [showTsMenu, setShowTsMenu] = useState(false)
   const tsMenu = useAnimatedUnmount(showTsMenu, overlayExitMs('menu'))
+  // Keep the picker label current as the browser's default zone changes.
+  const timeZone = tsMenu.shouldRender ? localTimeZone() : undefined
   const [showStructuredMenu, setShowStructuredMenu] = useState(false)
   const structuredMenu = useAnimatedUnmount(showStructuredMenu, overlayExitMs('menu'))
   const [structuredMode, setStructuredMode] = useState<StructuredMode>(() => {
@@ -796,7 +802,7 @@ export function LogCore({
             </button>
           </Tooltip>
           <div className="relative" ref={tsMenuRef}>
-            <Tooltip content={`Timestamp format: ${TIMESTAMP_FORMAT_LABELS[tsFormat]}${isLocalFormat(tsFormat) && timeZone ? ` · ${timeZone}` : ''}`} delay={TIP_DELAY} position="bottom">
+            <Tooltip content={<TimestampFormatHint format={tsFormat} />} delay={TIP_DELAY} position="bottom">
               <button
                 onClick={() => setShowTsMenu(prev => !prev)}
                 className={`px-2 py-1.5 rounded-r text-[10px] font-medium transition-colors whitespace-nowrap ${
@@ -826,15 +832,17 @@ export function LogCore({
                   <button
                     key={fmt}
                     onClick={() => pickTsFormat(fmt)}
+                    aria-label={isLocalFormat(fmt) && timeZone ? `${TIMESTAMP_FORMAT_LABELS[fmt]}, ${timeZone}` : undefined}
+                    aria-pressed={tsFormat === fmt}
                     className={`w-full text-left px-3 py-1.5 text-xs ${palette.hoverBg} flex items-center justify-between gap-2 ${
                       tsFormat === fmt ? palette.textPrimary : palette.textSecondary
                     }`}
                   >
                     <span className="min-w-0">
                       {TIMESTAMP_FORMAT_LABELS[fmt]}
-                      {isLocalFormat(fmt) && timeZone && <span className="block break-words text-[10px]">{timeZone}</span>}
+                      {isLocalFormat(fmt) && timeZone && <span className={`block break-words text-[10px] ${palette.textSecondary}`}>{timeZone}</span>}
                     </span>
-                    {tsFormat === fmt && <span className={`shrink-0 text-[10px] ${palette.textAccent}`}>✓</span>}
+                    {tsFormat === fmt && <span aria-hidden className={`shrink-0 text-[10px] ${palette.textAccent}`}>✓</span>}
                   </button>
                 ))}
               </div>
