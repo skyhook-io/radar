@@ -767,11 +767,11 @@ func buildScanRow(container containerSpec, resourceName string, key scanKey, exp
 		statistic = "Max"
 		series = evidence.memory[key]
 		row.CurrentPodOOM = workload.currentPodOOM[container.name]
-		if evidence.errors["restart_activity"] == nil && evidence.errors["termination_history"] == nil {
+		if evidence.errors["termination_history"] == nil {
 			restartActivity, restartAvailable := evidence.restarts[key]
 			termination := evidence.terminations[key]
 			row.WindowOOMEvidence = termination.OOM
-			row.OOMEvidenceAvailable = workload.hasOOMEvidence(container.name, restartActivity, restartAvailable, termination)
+			row.OOMEvidenceAvailable = workload.hasOOMEvidence(container.name, restartActivity, evidence.errors["restart_activity"] == nil && restartAvailable, termination)
 		}
 	}
 	rightsizing.SetCurrentQuantities(&row, request, limit, resourceName)

@@ -227,6 +227,32 @@ func TestMemoryReductionRequiresVerifiedRestartHistory(t *testing.T) {
 	}
 }
 
+func TestHistoricalOOMSurvivesRestartQueryFailure(t *testing.T) {
+	const usage = 50 * 1024 * 1024
+	const keySamples = 2016
+	key := scanKey{namespace: "shop", kind: "Deployment", workload: "api", container: "server"}
+	container := containerSpec{name: key.container, memReq: mustQuantity(t, "256Mi")}
+	workload := rightsizingWorkload{hpaAvailable: true}
+	termination := terminationEvidence{Any: true, OOM: true}
+	err := errors.New("restart counter unavailable")
+	detail := buildRightsizingRow(container, "memory", keySamples, OwnerCoverageKSMHistory, workload, map[string]queryOutcome{
+		"memory_stat":         {values: map[string]float64{key.container: usage}},
+		"memory_coverage":     {values: map[string]float64{key.container: keySamples}},
+		"restart_activity":    {err: err},
+		"termination_history": {terminations: map[string]terminationEvidence{key.container: termination}},
+	})
+	fleet := buildScanRow(container, "memory", key, keySamples, workload, scanBatchEvidence{
+		memory:       map[scanKey][]float64{key: repeatedValues(usage)},
+		errors:       map[string]error{"restart_activity": err},
+		terminations: map[scanKey]terminationEvidence{key: termination},
+	})
+	for _, row := range []RightsizingRow{detail, fleet} {
+		if !row.WindowOOMEvidence || !row.OOMEvidenceAvailable || row.RecommendationReason != "oom_evidence" || row.RecommendedReq != nil {
+			t.Errorf("lost verified OOM on partial safety history: %+v", row)
+		}
+	}
+}
+
 func TestTerminationEvidenceKeepsHistoricalOOMReason(t *testing.T) {
 	evidence := terminationEvidenceByContainer(terminationResult(map[string][]string{"server": {"Error", "OOMKilled"}}))
 	if !evidence["server"].Any || !evidence["server"].OOM {
@@ -576,8 +602,8 @@ func TestMeasuredRestartsAndLivePodExits(t *testing.T) {
 	pod.Status.InitContainerStatuses[0].RestartCount = 2
 	w = rightsizingWorkload{}
 	w.observePodTerminations(pod, now)
-	if !w.hasOOMEvidence("app", 2, true, terminationEvidence{Any: true}) {
-		t.Fatal("discarded measured restart and termination history when the last exit was known")
+	if w.hasOOMEvidence("app", 2, true, terminationEvidence{Any: true}) {
+		t.Fatal("a workload-level non-OOM reason cannot explain a specific Pod’s earlier exit")
 	}
 	if w.hasOOMEvidence("app", 2, true, terminationEvidence{}) {
 		t.Fatal("accepted restarts without termination history")

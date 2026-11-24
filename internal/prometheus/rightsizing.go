@@ -285,11 +285,6 @@ type containerSpec struct {
 	podMemReq *resource.Quantity
 }
 
-type recentPodRestarts struct {
-	unknownLastExit bool
-	hasEarlierExits bool
-}
-
 type rightsizingWorkload struct {
 	// podSpec is the workload's pod template, for checks that need the whole pod.
 	podSpec                *corev1.PodSpec
@@ -302,7 +297,7 @@ type rightsizingWorkload struct {
 	podRestartEvidence     map[string]sizingPodRestarts
 	qos                    rightsizing.PodQoS
 	currentPodOOM          map[string]bool
-	unexplainedPodRestarts map[string]recentPodRestarts
+	unexplainedPodRestarts map[string]bool
 	hpaManaged             map[string]bool
 	hpaAvailable           bool
 	replicas               int
@@ -466,12 +461,9 @@ func (w *rightsizingWorkload) observePodTerminations(pod *corev1.Pod, windowEnd 
 				continue
 			}
 			if w.unexplainedPodRestarts == nil {
-				w.unexplainedPodRestarts = map[string]recentPodRestarts{}
+				w.unexplainedPodRestarts = map[string]bool{}
 			}
-			observed := w.unexplainedPodRestarts[status.Name]
-			observed.unknownLastExit = observed.unknownLastExit || unknownLastExit
-			observed.hasEarlierExits = observed.hasEarlierExits || hasEarlierExits
-			w.unexplainedPodRestarts[status.Name] = observed
+			w.unexplainedPodRestarts[status.Name] = true
 		}
 	}
 }
@@ -480,17 +472,9 @@ func (w rightsizingWorkload) hasOOMEvidence(container string, restartActivity fl
 	if termination.OOM {
 		return true
 	}
-	// Both the historical counter and reason can come from another replica.
-	// They cannot identify an explicitly unknown last exit in a live Pod.
-	recent := w.unexplainedPodRestarts[container]
-	if !restartAvailable || recent.unknownLastExit {
-		return false
-	}
-	if restartActivity > 0 {
-		return termination.Any
-	}
-	// No measured increase accounts for the exits before the known last one.
-	return !recent.hasEarlierExits
+	// The aggregated historical reason could describe another replica or just
+	// the last of several restarts. It cannot clear a known gap in a live Pod.
+	return restartAvailable && !w.unexplainedPodRestarts[container] && (restartActivity <= 0 || termination.Any)
 }
 
 func loadHPAManagedResources(ctx context.Context, cache *k8s.ResourceCache, kind, namespace, name string) (map[string]bool, bool) {
@@ -846,11 +830,11 @@ func buildRightsizingRow(container containerSpec, resourceName string, expected 
 		row.CurrentPodOOM = workload.currentPodOOM[container.name]
 		restarts := results["restart_activity"]
 		terminations := results["termination_history"]
-		if restarts.err == nil && terminations.err == nil {
+		if terminations.err == nil {
 			restartActivity, restartAvailable := restarts.values[container.name]
 			termination := terminations.terminations[container.name]
 			row.WindowOOMEvidence = termination.OOM
-			row.OOMEvidenceAvailable = workload.hasOOMEvidence(container.name, restartActivity, restartAvailable, termination)
+			row.OOMEvidenceAvailable = workload.hasOOMEvidence(container.name, restartActivity, restarts.err == nil && restartAvailable, termination)
 		}
 	}
 	rightsizing.SetCurrentQuantities(&row, req, lim, resourceName)
