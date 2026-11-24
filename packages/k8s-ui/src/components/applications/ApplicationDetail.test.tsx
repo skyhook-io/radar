@@ -132,7 +132,7 @@ describe("ApplicationDetail shell", () => {
     expect(html).toContain('Application views')
     expect(html).toContain('Overview')
     expect(html).toContain('Topology')
-    expect(html).toContain('History')
+    expect(html).toContain('Timeline')
     expect(html).toContain('BackOff on checkout-api')
     expect(html).toContain('Application identity')
     expect(html).toContain('Grouped from Kubernetes ownership')
@@ -160,7 +160,7 @@ describe("ApplicationDetail shell", () => {
     expect(html).toContain("Application views");
     expect(html).toContain("Overview");
     expect(html).toContain("Topology");
-    expect(html).toContain("History");
+    expect(html).toContain("Timeline");
     expect(html).not.toContain("BackOff on checkout-api");
     expect(html).toContain("Application identity");
     expect(html).toContain("Entrypoints");
@@ -194,7 +194,7 @@ describe("ApplicationDetail shell", () => {
     expect(html).not.toContain('Application views')
     expect(html).not.toContain('Overview')
     expect(html).not.toContain('Topology')
-    expect(html).not.toContain('History')
+    expect(html).not.toContain('Timeline')
     expect(html).not.toContain('Application identity')
   })
 
@@ -339,7 +339,7 @@ describe("ApplicationDetail shell", () => {
       onOpenSource: () => {},
     });
 
-    expect(html).toContain("Application history");
+    expect(html).toContain("Application timeline");
     expect(html).toContain("Deployments");
     expect(html).toContain("Changes");
     expect(html).toContain("Problems");
@@ -429,7 +429,7 @@ describe("ApplicationDetail shell", () => {
 
     expect(html).toContain('Application changes could not be loaded.')
     expect(html).not.toContain('Deployment-source history is still shown.')
-    expect(html).not.toContain('No application history in this range.')
+    expect(html).not.toContain('No application activity in this range.')
   })
 
   it('marks retained runtime rows as stale when a refresh fails', () => {
@@ -488,7 +488,7 @@ describe("ApplicationDetail shell", () => {
 
     expect(html).toContain('Latest change')
     expect(html).toContain('Argo CD sync')
-    expect(html).toContain('History')
+    expect(html).toContain('Timeline')
     expect(html).toContain('View Argo CD application')
     expect(html).not.toContain('No application issues detected')
   })
@@ -630,7 +630,7 @@ describe("ApplicationDetail shell", () => {
 
     expect(html).toContain('Latest incident')
     expect(html).toContain('Current incident: FailedScheduling on Pod/checkout-api-abc')
-    expect(html).toContain('View history')
+    expect(html).toContain('View timeline')
   })
 
   it('does not duplicate retained incidents when the host renders current issues', () => {
@@ -834,87 +834,38 @@ describe("ApplicationDetail shell", () => {
     expect(html).toContain("Succeeded");
   });
 
-  describe("Deploys", () => {
-    const deploys = { workloads: [] };
+  describe("application navigation", () => {
+    const renderDeploys = () => <p>Environment deliveries</p>;
 
-    it("has no Deploys tab unless the host provides deploys", () => {
-      expect(renderDetail()).not.toContain(">Deploys<");
-      expect(renderDetail({ deploys: null })).toContain(">Deploys<");
+    it("keeps a plain app on Overview with a Timeline and workload-level revision access", () => {
+      const html = renderDetail({ renderWorkloadRevisions: (workload) => <button>Revisions for {workload.name}</button> });
+      expect(html).toContain(">Timeline<");
+      expect(html).toContain("Revisions for ");
+      expect(html).not.toContain(">Deploys<");
+      expect(renderDetail({ selectedView: "deploys", onSelectView: () => {} })).toContain("Workloads");
     });
 
-    it("falls back to Overview when a host names Deploys but has none", () => {
-      const html = renderDetail({ selectedView: "deploys", onSelectView: () => {} });
-
-      expect(html).toContain("Workloads");
-      expect(html).not.toContain("Loading deploys");
+    it("lets the host supply exactly one inspectable delivery destination", () => {
+      const html = renderDetail({ selectedView: "deploys", onSelectView: () => {}, renderDeploys });
+      expect(html.match(/>Deploys</g)).toHaveLength(1);
+      expect(html).toContain("Environment deliveries");
     });
 
-    it("opens on Overview even when the host has deploys", () => {
-      expect(renderDetail({ deploys })).not.toContain("No deploys to show.");
-    });
-
-    it("gives a workload scope nothing extra unless the host provides deploys", () => {
-      const contexts: unknown[] = [];
-      renderDetail({
-        app: { ...app, workloads: [app.workloads[0]] },
-        renderWorkload: (_, context) => {
-          contexts.push(context);
-          return null;
-        },
+    it("keeps whole-app deliveries out of individual child workloads", () => {
+      const ids: string[] = [];
+      renderDetail({ selectedWorkloadKey: workloadKey(app.workloads[0]), renderDeploys,
+        renderWorkload: (_, context) => { ids.push(...(context.extraTabs ?? []).map(tab => tab.id)); return null; },
       });
-
-      expect(contexts).toEqual([{}]);
+      expect(ids).toEqual([]);
     });
 
-    it("offers no Deploys for an app with nothing that can have them", () => {
-      const cron = { ...app.workloads[0], kind: "CronJob" };
-      const contexts: unknown[] = [];
-
-      expect(renderDetail({ app: { ...app, workloads: [cron, { ...cron, name: "b" }] }, deploys })).not.toContain(">Deploys<");
+    it("uses the same delivery slot for a single workload without adding an app tab bar", () => {
+      const ids: string[] = [];
       renderDetail({
-        app: { ...app, workloads: [cron] },
-        deploys,
-        renderWorkload: (_, context) => {
-          contexts.push(context);
-          return null;
-        },
+        app: { ...app, workloads: [app.workloads[0]] }, renderDeploys,
+        renderWorkload: (_, context) => { ids.push(...(context.extraTabs ?? []).map(t => t.id)); return null; },
       });
-      expect(contexts).toEqual([{}]);
-    });
-
-    it("gives a workload with no revisions the tab only when the app has a source", () => {
-      const cron = { ...app.workloads[0], kind: "CronJob", name: "nightly" };
-      const tabsOf = (sourceRef?: AppRow["sourceRef"]) => {
-        let tabs: unknown;
-        renderDetail({
-          app: { ...app, sourceRef, workloads: [app.workloads[0], cron] },
-          deploys,
-          selectedWorkloadKey: workloadKey(cron),
-          onSelectWorkload: () => {},
-          renderWorkload: (_, context) => {
-            tabs = context.extraTabs;
-            return null;
-          },
-        });
-        return tabs;
-      };
-
-      expect(tabsOf(undefined)).toBeUndefined();
-      expect(tabsOf({ type: "helm", kind: "HelmRelease", namespace: "shop", name: "checkout" })).toHaveLength(1);
-    });
-
-    it("reaches a single-workload app as a tab of the workload", () => {
-      const contexts: Array<{ extraTabs?: Array<{ id: string }> }> = [];
-      renderDetail({
-        app: { ...app, workloads: [app.workloads[0]] },
-        deploys: null,
-        renderWorkload: (_, context) => {
-          contexts.push(context);
-          return null;
-        },
-      });
-
-      expect(contexts[0].extraTabs?.map((tab) => tab.id)).toEqual(["deploys"]);
+      expect(ids).toEqual(["deploys"]);
     });
   });
 });

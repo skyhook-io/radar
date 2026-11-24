@@ -294,6 +294,8 @@ type PlanItem struct {
 }
 
 type HistoryItem struct {
+	// Condition identifies a controller observation rather than a recorded delivery.
+	Condition   bool   `json:"-"`
 	ID          string `json:"id,omitempty"`
 	Revision    string `json:"revision,omitempty"`
 	DeployedAt  string `json:"deployedAt,omitempty"`
@@ -1574,12 +1576,19 @@ func buildHistory(root *unstructured.Unstructured, tool string) []HistoryItem {
 	seen := make(map[string]struct{})
 	revision := firstNonEmpty(nestedString(root.Object, "status", "lastAppliedRevision"), nestedString(root.Object, "status", "lastAttemptedRevision"))
 	recorded := fluxKustomizationHistory(root)
+	for _, snapshot := range gitops.FluxReleaseSnapshots(root) {
+		if snapshot.LastDeployed == "" {
+			continue
+		}
+		revision := strconv.FormatInt(snapshot.Version, 10)
+		recorded = append(recorded, HistoryItem{ID: revision, Revision: revision, Phase: snapshot.Status, Source: snapshot.ChartVersion, DeployedAt: snapshot.LastDeployed})
+	}
 	out = append(out, recorded...)
 	for _, c := range conditions(root) {
 		// A Kustomization's Ready condition moves on every reconcile, so it dates
 		// the last check, not the deploy. Its history dates each revision; only a
 		// failure says something the history doesn't.
-		if len(recorded) > 0 && c.status == "True" {
+		if len(recorded) > 0 && c.status == "True" && (c.typ == "Ready" || c.typ == "Released") {
 			continue
 		}
 		key := c.message + "|" + c.reason
@@ -1588,6 +1597,7 @@ func buildHistory(root *unstructured.Unstructured, tool string) []HistoryItem {
 		}
 		seen[key] = struct{}{}
 		out = append(out, HistoryItem{
+			Condition:  true,
 			ID:         c.typ,
 			Phase:      fluxPhaseLabel(c.status, c.reason),
 			Message:    c.message,
@@ -1619,8 +1629,8 @@ func fluxKustomizationHistory(root *unstructured.Unstructured) []HistoryItem {
 		}
 		out = append(out, HistoryItem{
 			ID:         gitops.StringValue(m["digest"]),
-			Phase:      fluxPhaseLabel("True", gitops.StringValue(m["lastReconciledStatus"])),
-			Message:    "Applied revision: " + revision,
+			Phase:      fluxPhaseLabel("", gitops.StringValue(m["lastReconciledStatus"])),
+			Message:    "Reconciled revision: " + revision,
 			DeployedAt: firstReconciled,
 			Revision:   revision,
 		})

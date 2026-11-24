@@ -3115,3 +3115,18 @@ func TestKustomizationWithoutHistoryFallsBackToConditions(t *testing.T) {
 		t.Fatalf("history = %+v", got)
 	}
 }
+
+func TestFluxHelmReleaseHistoryDistinguishesSnapshotsFromConditions(t *testing.T) {
+	root := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease",
+		"status": map[string]any{
+			"lastAttemptedRevision": "2.1",
+			"history":               []any{map[string]any{"version": int64(14), "chartVersion": "2.1", "status": "failed", "lastDeployed": "2026-11-22T12:00:00Z"}},
+			"conditions":            []any{map[string]any{"type": "Stalled", "status": "True", "reason": "UpgradeFailed", "lastTransitionTime": "2026-11-22T12:01:00Z"}},
+		},
+	}}
+	got := BuildHistory(root)
+	if len(got) != 2 || !got[0].Condition || got[1].Condition || got[1].Revision != "14" || got[1].Phase != "failed" || got[1].Source != "2.1" {
+		t.Fatalf("unexpected records: %+v", got)
+	}
+}

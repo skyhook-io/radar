@@ -7,6 +7,8 @@ export type ApplicationHistoryCategory = 'deployment' | 'change' | 'problem'
 export type ApplicationHistoryRange = '24h' | '7d' | '30d' | 'all'
 
 export interface ApplicationHistoryItem {
+  /** Source record shared by Timeline and Deploys. */
+  delivery?: AppHistoryAnchor;
   id: string
   category: ApplicationHistoryCategory
   title: string
@@ -92,7 +94,8 @@ function anchorItem(anchor: AppHistoryAnchor, sourceRef: AppSourceRef | undefine
   if (!validTimestamp(anchor.timestamp)) return null
   return {
     id: `source:${anchor.type}:${anchor.timestamp}:${anchor.revision ?? index}`,
-    category: 'deployment',
+    category: anchor.type === 'condition' ? 'change' : 'deployment',
+    delivery: anchor.type === sourceRef?.type && anchor.revision ? anchor : undefined,
     title: anchor.title,
     timestamp: anchor.timestamp,
     detail: anchor.source || anchor.message,
@@ -216,6 +219,14 @@ export function coalesceHistoryAnchors(records: AppHistoryAnchor[]): AppHistoryA
     })
   }
   return [...anchorsByChange.values()]
+}
+
+/** Identified releases and syncs for the application's delivery source, newest first. */
+export function applicationDeliveryRecords(history: AppHistory | undefined): AppHistoryAnchor[] {
+  if (!history?.sourceRef) return []
+  return coalesceHistoryAnchors((history.anchors ?? []).filter(record =>
+    record.type === history.sourceRef?.type && Boolean(record.revision) && validTimestamp(record.timestamp),
+  )).sort((a, b) => Date.parse(b.timestamp!) - Date.parse(a.timestamp!))
 }
 
 export function buildApplicationHistoryItems(

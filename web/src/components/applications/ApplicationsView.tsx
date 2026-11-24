@@ -3,6 +3,8 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   ApplicationsList,
   ApplicationDetail,
+  ApplicationDeploys,
+  applicationDeliveryRecords,
   CenteredEmpty,
   getRadarUpgradeRequirement,
   PageHeader,
@@ -55,7 +57,7 @@ import { useTimelineSource } from "../../context/TimelineSource";
 import { apiVersionToGroup, kindToPluralWithGroup, relatedResourcePath, withCrossViewParams } from "../../utils/navigation";
 import { WorkloadView } from "../workload/WorkloadView";
 import { ApplicationCostTab } from "../cost/ApplicationCostTab";
-import { useApplicationDeploys } from "./useApplicationDeploys";
+import { WorkloadRevisionsButton } from "../workload/WorkloadRevisionsButton";
 import { useTimelineRetentionNote } from "../../context/TimelineCustomization";
 import { isOpenCostWorkloadKind } from "../cost/kinds";
 
@@ -79,6 +81,7 @@ const APPLICATION_VIEWS: ReadonlySet<ApplicationRouteView> =
   new Set<ApplicationRouteView>(["overview", "deploys", "topology", "history", "cost"]);
 
 function parseApplicationView(value: string | null): ApplicationRouteView {
+  if (value === "timeline") return "history";
   if (!value || !APPLICATION_VIEWS.has(value as ApplicationRouteView))
     return "overview";
   return value as ApplicationRouteView;
@@ -278,21 +281,15 @@ function AppDetailRoute({
     appWorkloads.some((workload) => isOpenCostWorkloadKind(workload.kind));
   const applicationCostSelected =
     selectedRouteView === "cost" && applicationCostAvailable;
-  const [deploysVisible, setDeploysVisible] = useState(false);
   const historyQuery = useApplicationHistory(app.key, appHistoryNamespaces, {
-    enabled: !selectedWorkloadKey || deploysVisible,
+    enabled: !selectedWorkloadKey || Boolean(app.sourceRef),
   });
-  const deployWorkloads = useMemo(() => {
-    const workloads = app.workloads ?? [];
-    const selected = workloads.find((workload) => workloadKey(workload) === selectedWorkloadKey);
-    return selected ? [selected] : workloads;
-  }, [app.workloads, selectedWorkloadKey]);
-  const deploys = useApplicationDeploys({
-    workloads: deployWorkloads,
-    sourceRef: app.sourceRef,
-    history: historyQuery,
-    visible: deploysVisible,
-  });
+  const readableHistory = historyQuery.isError ? undefined : historyQuery.data;
+  const deliveryRecords = useMemo(() => applicationDeliveryRecords(readableHistory), [readableHistory]);
+  const deliverySource = readableHistory?.sourceRef ?? app.sourceRef;
+  const requestedDeploys = selectedView === "deploys" || searchParams.get("tab") === "deploys";
+  const showDeploys = deliveryRecords.length > 0 || (requestedDeploys && Boolean(deliverySource))
+    || (historyQuery.isError && Boolean(historyQuery.data?.anchors?.length));
   const [retainedHistoryRange, setRetainedHistoryRange] =
     useState<ApplicationHistoryRange>("7d");
   const historyRangeOptions = useMemo(
@@ -368,8 +365,8 @@ function AppDetailRoute({
     [historyMembership, historyTimelineQuery.data, topology],
   );
   const historyItems = useMemo(
-    () => buildApplicationHistoryItems(historyQuery.data, applicationEvents),
-    [applicationEvents, historyQuery.data],
+    () => buildApplicationHistoryItems(readableHistory, applicationEvents),
+    [applicationEvents, readableHistory],
   );
   const sourceInventoryEnabled =
     !selectedWorkloadKey && selectedView === "topology";
@@ -402,7 +399,8 @@ function AppDetailRoute({
     params.delete("view");
     params.delete("run");
     params.set("workload", singleWorkloadKey);
-    if (selectedRouteView === "cost") params.set("tab", "cost");
+    if (selectedRouteView === "cost" || selectedRouteView === "deploys") params.set("tab", selectedRouteView);
+    if (selectedRouteView === "history") params.set("tab", "timeline");
     setSearchParams(params, { replace: true });
   }, [
     searchParams,
@@ -444,7 +442,7 @@ function AppDetailRoute({
         params.delete("view");
         params.delete("workload");
       } else {
-        params.set("view", view);
+        params.set("view", view === "history" ? "timeline" : view);
         params.delete("workload");
       }
       setSearchParams(params);
@@ -666,8 +664,9 @@ function AppDetailRoute({
         discoveredEnvs={discoveredEnvs}
         onNavigateToResource={onOpenResource}
         onSelectWorkloadRun={selectWorkloadRun}
-        history={historyQuery.data}
+        history={readableHistory}
         historyLoading={historyQuery.isLoading}
+        historySourceError={historyQuery.isError}
         historyItems={historyItems}
         historyRuntimeLoading={historyTimelineQuery.isLoading}
         historyRuntimeError={historyTimelineQuery.isError}
@@ -685,8 +684,9 @@ function AppDetailRoute({
         onSelectWorkload={selectWorkload}
         selectedView={selectedView}
         onSelectView={selectView}
-        deploys={deploys}
-        onDeploysVisibleChange={setDeploysVisible}
+        renderDeploys={deliverySource && showDeploys ? () =>
+          <ApplicationDeploys source={deliverySource} records={deliveryRecords} loading={historyQuery.isLoading} unavailable={historyQuery.isError} partialSources={historyQuery.data?.partialSources} onOpenSource={openSource} /> : undefined}
+        renderWorkloadRevisions={(workload) => <WorkloadRevisionsButton {...workload} />}
         costViewSelected={applicationCostSelected}
         onSelectCostView={() => selectView("cost")}
         renderCostView={

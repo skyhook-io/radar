@@ -459,8 +459,13 @@ func (s *Server) gitOpsHistoryAnchors(r *http.Request, source *appSourceRef) ([]
 		if status == "" && item.Message != "" {
 			status = "Recorded"
 		}
+		recordType := "gitops"
+		if item.Condition {
+			recordType = "condition"
+			title = "Flux controller condition"
+		}
 		anchors = append(anchors, appHistoryAnchor{
-			Type:        "gitops",
+			Type:        recordType,
 			Title:       title,
 			Status:      status,
 			Revision:    item.Revision,

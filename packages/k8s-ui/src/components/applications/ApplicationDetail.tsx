@@ -1,4 +1,6 @@
 import {
+  createContext,
+  useContext,
   useMemo,
   useState,
   useCallback,
@@ -63,7 +65,6 @@ import {
   type AppWorkload,
   type AppBatchActivity,
   type AppHealth,
-  type AppRolloutSummary,
   CHIP,
   CHIP_TONE,
   HEALTH_META,
@@ -92,8 +93,8 @@ import {
 } from "../../utils/applications";
 import { PaneLoader } from "../ui/PaneLoader";
 import { formatRelativeAgeTime, midTruncate } from "../../utils/format";
-import { buildAppDeploys, workloadHasRevisions, type AppDeploys, type BuildAppDeploysInput } from "../../utils/app-deploys";
-import { ApplicationDeploys } from "./ApplicationDeploys";
+
+import { DeliveryRecord, historyStatusTone, sourceObjectLabel } from "./ApplicationDeploys";
 import type { WorkloadExtraTab } from "../workload/WorkloadView";
 import { VersionTooltip, AppIdentityTooltip, RolloutSummaryTooltip } from "./AppTooltips";
 import {
@@ -169,7 +170,7 @@ const APPLICATION_VIEWS: Array<{
   { id: "overview", label: "Overview" },
   { id: "deploys", label: "Deploys" },
   { id: "topology", label: "Topology" },
-  { id: "history", label: "History" },
+  { id: "history", label: "Timeline" },
 ];
 
 function canonicalApplicationView(
@@ -255,12 +256,13 @@ export type ApplicationDetailProps = {
    *  must stay the logical app key for provenance) passes the active instance's
    *  key here so the switcher marks it. */
   activeInstanceKey?: string;
-  /** What the Deploys view reads. Undefined hides the view; `null` shows it
-   *  loading, so a host can hold its fetches until `onDeploysVisibleChange`. */
-  deploys?: BuildAppDeploysInput | null;
-  onDeploysVisibleChange?: (visible: boolean) => void;
+  /** One delivery destination for this application instance, supplied by its host. */
+  renderDeploys?: () => ReactNode;
+  /** Read-only inspection of a workload's retained revisions. */
+  renderWorkloadRevisions?: (workload: AppWorkload) => ReactNode;
   history?: AppHistory;
   historyLoading?: boolean;
+  historySourceError?: boolean;
   historyItems?: ApplicationHistoryItem[];
   historyRuntimeLoading?: boolean;
   historyRuntimeError?: boolean;
@@ -344,6 +346,8 @@ function compareDefinedVersions(
   return compareVersions(a, b) ?? 0;
 }
 
+const WorkloadRevisionsContext = createContext<ApplicationDetailProps["renderWorkloadRevisions"]>(undefined);
+
 export function ApplicationDetail({
   app,
   onBack,
@@ -362,10 +366,11 @@ export function ApplicationDetail({
   onSwitchInstance,
   discoveredEnvs,
   activeInstanceKey,
-  deploys,
-  onDeploysVisibleChange,
+  renderDeploys,
+  renderWorkloadRevisions,
   history,
   historyLoading,
+  historySourceError,
   historyItems,
   historyRuntimeLoading,
   historyRuntimeError,
@@ -431,9 +436,7 @@ export function ApplicationDetail({
     DEFAULT_APPLICATION_VIEW,
   );
   const [internalCostSelected, setInternalCostSelected] = useState(false);
-  const deploysAvailable =
-    deploys !== undefined &&
-    (Boolean(app.sourceRef) || workloads.some((w) => workloadHasRevisions(w.kind)));
+  const deploysAvailable = Boolean(renderDeploys);
   const activeView = canonicalApplicationView(
     selectedView ?? internalView,
     deploysAvailable,
@@ -478,39 +481,13 @@ export function ApplicationDetail({
     ? workloads.find((w) => workloadKey(w) === rawSelected)
     : undefined;
   const singleWorkloadScope = workloads.length === 1 && !!selectedWorkload;
-  const shownDeploys = useMemo(() => {
-    if (!deploysAvailable) return undefined;
-    return deploys && buildAppDeploys(deploys, selectedWorkload);
-  }, [deploysAvailable, deploys, selectedWorkload]);
   const workloadContext = useMemo<AppWorkloadRenderContext>(() => {
-    // A source-backed app has a deploy history even when this workload has no
-    // revisions of its own, as a CronJob doesn't.
-    if (!selectedWorkload || shownDeploys === undefined) return {};
-    if (!app.sourceRef && !workloadHasRevisions(selectedWorkload.kind)) return {};
-    return {
-      extraTabs: [
-        {
-          id: "deploys",
-          label: "Deploys",
-          icon: <History className="h-4 w-4" />,
-          after: "overview",
-          render: () => (
-            <div className="flex h-full min-h-0 flex-col">
-              <ApplicationDeploys
-                deploys={shownDeploys}
-                onVisibleChange={onDeploysVisibleChange}
-              />
-            </div>
-          ),
-        },
-      ],
-    };
-  }, [
-    app.sourceRef,
-    selectedWorkload,
-    shownDeploys,
-    onDeploysVisibleChange,
-  ]);
+    if (!singleWorkloadScope || !renderDeploys) return {};
+    return { extraTabs: [{
+      id: "deploys", label: "Deploys", icon: <History className="h-4 w-4" />,
+      after: "overview", render: renderDeploys,
+    }] };
+  }, [singleWorkloadScope, renderDeploys]);
   useEffect(() => {
     if (selectedWorkloadKey !== undefined && hostKeyIsStale) {
       onSelectWorkload?.(null);
@@ -818,54 +795,55 @@ export function ApplicationDetail({
         {selectedWorkload ? (
           renderRuntime(selectedWorkload, renderWorkload, workloadContext)
         ) : (
-          <ApplicationWorkspace
-            app={app}
-            activeView={activeView}
-            costSelected={costSelected}
-            onViewChange={setView}
-            onCostViewChange={selectCostView}
-            renderCostView={renderCostView}
-            workloads={workloads}
-            ready={ready}
-            desired={desired}
-            versions={versions}
-            topology={appTopology}
-            topologyLoading={topologyLoading}
-            deploymentLayer={deploymentLayer}
-            deploymentSource={app.sourceRef}
-            topologyAvailable={appTopologyAvailable}
-            focusNodeId={appGraphFocusId}
-            focusedOwnerId={focusedOwnerId}
-            colorByWorkload={colorByWorkload}
-            onNodeClick={handleAppNodeClick}
-            onNodeHover={handleNodeHover}
-            onFocusWorkload={setFocusedOwnerId}
-            onSelectWorkload={(workload, options) =>
-              setSelected(workloadKey(workload), options)
-            }
-            onNavigateToResource={onNavigateToResource}
-            deploys={shownDeploys}
-            onDeploysVisibleChange={onDeploysVisibleChange}
-            rolloutSummary={rolloutSummary}
-            history={history}
-            historyLoading={historyLoading}
-            historyItems={historyItems}
-            historyRuntimeLoading={historyRuntimeLoading}
-            historyRuntimeError={historyRuntimeError}
-            historyMode={historyMode}
-            historyRange={historyRange}
-            historyRangeOptions={historyRangeOptions}
-            historyCoverageRecordCount={historyCoverageRecordCount}
-            historyRuntimeLimited={historyRuntimeLimited}
-            historyRingTruncated={historyRingTruncated}
-            historyRetentionNote={historyRetentionNote}
-            onHistoryRangeChange={onHistoryRangeChange}
-            onOpenTimeline={onOpenTimeline}
-            onOpenSource={onOpenSource}
-            onToggleReplicaSets={toggleReplicaSets}
-            renderOverviewIssues={renderOverviewIssues}
-            hasOverviewIssues={hasOverviewIssues}
-          />
+          <WorkloadRevisionsContext.Provider value={renderWorkloadRevisions}>
+            <ApplicationWorkspace
+              app={app}
+              activeView={activeView}
+              costSelected={costSelected}
+              onViewChange={setView}
+              onCostViewChange={selectCostView}
+              renderCostView={renderCostView}
+              workloads={workloads}
+              ready={ready}
+              desired={desired}
+              versions={versions}
+              topology={appTopology}
+              topologyLoading={topologyLoading}
+              deploymentLayer={deploymentLayer}
+              deploymentSource={app.sourceRef}
+              topologyAvailable={appTopologyAvailable}
+              focusNodeId={appGraphFocusId}
+              focusedOwnerId={focusedOwnerId}
+              colorByWorkload={colorByWorkload}
+              onNodeClick={handleAppNodeClick}
+              onNodeHover={handleNodeHover}
+              onFocusWorkload={setFocusedOwnerId}
+              onSelectWorkload={(workload, options) =>
+                setSelected(workloadKey(workload), options)
+              }
+              onNavigateToResource={onNavigateToResource}
+              renderDeploys={renderDeploys}
+              history={history}
+              historyLoading={historyLoading}
+              historySourceError={historySourceError}
+              historyItems={historyItems}
+              historyRuntimeLoading={historyRuntimeLoading}
+              historyRuntimeError={historyRuntimeError}
+              historyMode={historyMode}
+              historyRange={historyRange}
+              historyRangeOptions={historyRangeOptions}
+              historyCoverageRecordCount={historyCoverageRecordCount}
+              historyRuntimeLimited={historyRuntimeLimited}
+              historyRingTruncated={historyRingTruncated}
+              historyRetentionNote={historyRetentionNote}
+              onHistoryRangeChange={onHistoryRangeChange}
+              onOpenTimeline={onOpenTimeline}
+              onOpenSource={onOpenSource}
+              onToggleReplicaSets={toggleReplicaSets}
+              renderOverviewIssues={renderOverviewIssues}
+              hasOverviewIssues={hasOverviewIssues}
+            />
+          </WorkloadRevisionsContext.Provider>
         )}
       </div>
     </div>
@@ -896,11 +874,10 @@ function ApplicationWorkspace({
   onFocusWorkload,
   onSelectWorkload,
   onNavigateToResource,
-  deploys,
-  onDeploysVisibleChange,
-  rolloutSummary,
+  renderDeploys,
   history,
   historyLoading,
+  historySourceError,
   historyItems,
   historyRuntimeLoading,
   historyRuntimeError,
@@ -949,11 +926,10 @@ function ApplicationWorkspace({
     name: string;
     group?: string;
   }) => void;
-  deploys?: AppDeploys | null;
-  onDeploysVisibleChange?: (visible: boolean) => void;
-  rolloutSummary: AppRolloutSummary | null;
+  renderDeploys?: () => ReactNode;
   history?: AppHistory;
   historyLoading?: boolean;
+  historySourceError?: boolean;
   historyItems?: ApplicationHistoryItem[];
   historyRuntimeLoading?: boolean;
   historyRuntimeError?: boolean;
@@ -982,7 +958,7 @@ function ApplicationWorkspace({
         activeView={activeView}
         costSelected={costSelected}
         costAvailable={Boolean(renderCostView)}
-        deploysAvailable={deploys !== undefined}
+        deploysAvailable={Boolean(renderDeploys)}
         onChange={onViewChange}
         onCostChange={onCostViewChange}
       />
@@ -1007,13 +983,7 @@ function ApplicationWorkspace({
           hasOverviewIssues={hasOverviewIssues}
         />
       )}
-      {!costSelected && activeView === "deploys" && deploys !== undefined && (
-        <ApplicationDeploys
-          deploys={deploys}
-          rolloutSummary={rolloutSummary}
-          onVisibleChange={onDeploysVisibleChange}
-        />
-      )}
+      {!costSelected && activeView === "deploys" && renderDeploys?.()}
       {!costSelected && activeView === "topology" && (
         <ApplicationTopology
           topology={topology}
@@ -1037,6 +1007,7 @@ function ApplicationWorkspace({
         <ApplicationHistoryView
           history={history}
           sourceLoading={historyLoading}
+          sourceError={historySourceError}
           items={historyItems}
           runtimeLoading={historyRuntimeLoading}
           runtimeError={historyRuntimeError}
@@ -2017,7 +1988,7 @@ function ApplicationLatestHistory({
             onClick={onSelectHistory}
             className="rounded-md px-2.5 py-1.5 text-sm font-medium text-accent-text hover:bg-theme-hover"
           >
-            View history
+            View timeline
           </button>
         </div>
       </div>
@@ -2078,6 +2049,7 @@ function WorkloadsMatrix({
   workloads: AppWorkload[];
   onSelectWorkload: (workload: AppWorkload) => void;
 }) {
+  const revisions = useContext(WorkloadRevisionsContext);
   if (workloads.length === 0) {
     return <EmptyState variant="inline" headline="No inspectable workloads." />;
   }
@@ -2115,6 +2087,7 @@ function WorkloadsMatrix({
                   >
                     {w.name}
                   </button>
+                  {revisions && <div>{revisions(w)}</div>}
                   {reason && (
                     <div className="truncate text-xs text-theme-text-tertiary">
                       {reason}
@@ -2285,6 +2258,7 @@ function ApplicationTopology({
 function ApplicationHistoryView({
   history,
   sourceLoading,
+  sourceError,
   items: suppliedItems,
   runtimeLoading,
   runtimeError,
@@ -2304,6 +2278,7 @@ function ApplicationHistoryView({
 }: {
   history?: AppHistory;
   sourceLoading?: boolean;
+  sourceError?: boolean;
   items?: ApplicationHistoryItem[];
   runtimeLoading?: boolean;
   runtimeError?: boolean;
@@ -2352,7 +2327,7 @@ function ApplicationHistoryView({
     return [...byDate.entries()];
   }, [visibleItems]);
   const loading = sourceLoading || runtimeLoading;
-  const empty = !loading && !runtimeError && items.length === 0;
+  const empty = !loading && !sourceError && !runtimeError && items.length === 0;
   const hasRuntimeItems = items.some((item) => item.category !== "deployment");
 
   return (
@@ -2364,7 +2339,7 @@ function ApplicationHistoryView({
               <div className="flex items-center gap-2">
                 <Clock3 className="h-4 w-4 text-theme-text-secondary" />
                 <h2 className="text-sm font-semibold text-theme-text-primary">
-                  Application history
+                  Application timeline
                 </h2>
                 {loading && items.length > 0 && (
                   <RefreshCw
@@ -2384,7 +2359,7 @@ function ApplicationHistoryView({
                 rangeOptions.length > 1 &&
                 onRangeChange && (
                   <select
-                    aria-label="Application history range"
+                    aria-label="Application timeline range"
                     value={range}
                     onChange={(event) =>
                       onRangeChange(
@@ -2417,7 +2392,7 @@ function ApplicationHistoryView({
             <div
               className="flex flex-wrap gap-1 border-b border-theme-border px-4 py-2"
               role="group"
-              aria-label="Application history categories"
+              aria-label="Application timeline categories"
             >
               {(["all", "deployment", "change", "problem"] as const).map(
                 (value) => {
@@ -2444,13 +2419,14 @@ function ApplicationHistoryView({
             </div>
           )}
 
-          {(runtimeError || (history?.partialSources?.length ?? 0) > 0) && (
+          {(sourceError || runtimeError || (history?.partialSources?.length ?? 0) > 0) && (
             <div
               className={clsx(
                 "border-b border-theme-border bg-theme-elevated px-4 py-2 text-xs",
                 HEALTH_META.degraded.text,
               )}
             >
+              {sourceError && <div>Deployment-source history could not be loaded.</div>}
               {runtimeError && (
                 <div>
                   {hasRuntimeItems
@@ -2470,7 +2446,7 @@ function ApplicationHistoryView({
           {loading && items.length === 0 && (
             <div className="flex items-center gap-2 px-4 py-8 text-sm text-theme-text-tertiary">
               <RefreshCw className="h-4 w-4 animate-spin" />
-              Loading application history...
+              Loading application timeline...
             </div>
           )}
 
@@ -2498,7 +2474,7 @@ function ApplicationHistoryView({
             <div className="px-4 py-8">
               <EmptyState
                 variant="inline"
-                headline="No application history in this range."
+                headline="No application activity in this range."
                 body="Overview still shows the current application state."
               />
             </div>
@@ -2551,6 +2527,10 @@ function ApplicationHistoryLine({
   onNavigateToResource?: (resource: ResourceRef) => void;
   onOpenSource?: (source: AppSourceRef) => void;
 }) {
+  const revisions = useContext(WorkloadRevisionsContext);
+  if (item.delivery && item.sourceRef) {
+    return <DeliveryRecord record={item.delivery} source={item.sourceRef} onOpenSource={onOpenSource} />;
+  }
   const candidates = item.resource
     ? workloads.filter(candidate =>
         candidate.kind.toLowerCase() === item.resource!.kind.toLowerCase() &&
@@ -2630,6 +2610,7 @@ function ApplicationHistoryLine({
             {item.detail}
           </div>
         )}
+        {workload && revisions && <div>{revisions(workload)}</div>}
         {item.resource && (
           <button
             type="button"
@@ -2799,28 +2780,8 @@ function issueTone(severity: AppIssueSeverity): string {
   return CHIP_TONE.blue;
 }
 
-function historyStatusTone(status: string): string {
-  const s = status.toLowerCase();
-  if (s.includes("fail") || s.includes("error")) return CHIP_TONE.rose;
-  if (s.includes("running") || s.includes("pending") || s.includes("progress"))
-    return CHIP_TONE.amber;
-  if (s.includes("succeed") || s.includes("deployed") || s.includes("ready"))
-    return CHIP_TONE.emerald;
-  return CHIP_TONE.muted;
-}
-
 function sourceLinkLabel(source: AppSourceRef): string {
   return `View ${sourceObjectLabel(source)}`;
-}
-
-function sourceObjectLabel(source: AppSourceRef): string {
-  if (source.type === "helm") return "Helm release";
-  if (source.tool === "argocd" || source.kind.toLowerCase() === "application")
-    return "Argo CD application";
-  if (source.kind.toLowerCase() === "helmrelease") return "Flux HelmRelease";
-  if (source.kind.toLowerCase() === "kustomization")
-    return "Flux Kustomization";
-  return "GitOps source";
 }
 
 function sourceInventoryLabel(source: AppSourceRef): string {

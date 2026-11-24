@@ -1177,7 +1177,7 @@ export interface RevisionRoleBadge {
 export function revisionRoleBadges(rev: WorkloadRevision, isRollout: boolean): RevisionRoleBadge[] {
   const badges: RevisionRoleBadge[] = []
   if (rev.isStable && !rev.isCurrent) {
-    badges.push({ label: 'Stable', tone: 'status-healthy', tip: 'Serving stable traffic — an abort reverts here' })
+    badges.push({ label: 'Stable', tone: 'status-healthy', tip: 'The controller identifies this as the stable revision. An abort reverts here.' })
   }
   if (rev.isCurrent) {
     const settled = rev.isStable || !isRollout
@@ -1278,7 +1278,13 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
 
   const currentRevision = revisions?.find(r => r.isCurrent)
   const selectedRevision = revisions?.find(r => r.number === diffRevision)
-  const hasDiffData = currentRevision?.template && selectedRevision?.template
+  // Rollback compares its target to current. Read-only inspection compares each
+  // revision to the closest older snapshot Kubernetes still retains.
+  const previousOf = (revision: WorkloadRevision) => revisions?.reduce<WorkloadRevision | undefined>((previous, candidate) =>
+    candidate.number < revision.number && (!previous || candidate.number > previous.number) ? candidate : previous,
+  undefined)
+  const diffBase = onRollback ? currentRevision : selectedRevision && previousOf(selectedRevision)
+  const hasDiffData = diffBase?.template && selectedRevision?.template
 
   function handleRollback(revision: number) {
     setPromoteError(null)
@@ -1341,11 +1347,11 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
       <div className="flex items-center justify-between p-4 border-b border-theme-border shrink-0">
         <div className="flex items-center gap-2">
           <History className="w-5 h-5 text-amber-500" />
-          <h3 id={titleId} className="text-lg font-semibold text-theme-text-primary">Revision History</h3>
-          {diffRevision && currentRevision && (
+          <h3 id={titleId} className="text-lg font-semibold text-theme-text-primary">Revisions · {name}</h3>
+          {diffRevision && diffBase && (
             <span className="badge ml-2 bg-blue-500/15 text-blue-400">
               <GitCompare className="w-3 h-3" />
-              #{currentRevision.number} vs #{diffRevision}
+              #{diffBase.number} vs #{diffRevision}
             </span>
           )}
         </div>
@@ -1377,7 +1383,7 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
 
           {revisions && revisions.length === 0 && (
             <div className="flex items-center justify-center py-8 text-theme-text-secondary text-sm">
-              No revisions found
+              No retained revisions
             </div>
           )}
 
@@ -1411,14 +1417,18 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
                     </td>
                     <td className="min-w-0 py-2 pr-3 text-theme-text-secondary font-mono">
                       <RevisionImage image={rev.image} displayImage={getImageTag(rev.image)} />
+                      {rev.readyReplicas !== undefined && <div className="text-xs text-theme-text-tertiary">{rev.readyReplicas}/{rev.replicas} ready</div>}
+                      {rev.changeCause && <div className="break-words text-xs text-theme-text-secondary">Change note: {rev.changeCause}</div>}
+                      {rev.matchesDesired && <span className="text-xs text-accent-text">Desired template</span>}
+                      {isRollout && rev.serving === true && <span className="text-xs text-accent-text">Active Service</span>}
                     </td>
                     <td className="py-2 pr-3 text-theme-text-secondary whitespace-nowrap">
                       {formatRelativeAgeTime(rev.createdAt)}
                     </td>
                     <td className="py-2 text-right">
                       <div className="flex items-center gap-1 justify-end">
-                        {!rev.isCurrent && confirmRevision !== rev.number && rev.template && currentRevision?.template && (
-                          <Tooltip content="Compare with current revision" delay={150}>
+                        {(onRollback ? !rev.isCurrent && currentRevision?.template : previousOf(rev)?.template) && confirmRevision !== rev.number && rev.template && (
+                          <Tooltip content={onRollback ? "Compare with current revision" : "Compare with previous retained revision"} delay={150}>
                             <button
                               onClick={() => setDiffRevision(diffRevision === rev.number ? null : rev.number)}
                               className={clsx(
@@ -1433,7 +1443,7 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
                             </button>
                           </Tooltip>
                         )}
-                        {revisionRoleBadges(rev, isRollout).map(({ label, tone, tip }) =>
+                        {(onRollback || isRollout || rev.matchesDesired === undefined ? revisionRoleBadges(rev, isRollout) : []).map(({ label, tone, tip }) =>
                           tip ? (
                             <Tooltip key={label} content={tip} delay={150}>
                               <span className={clsx('badge', tone)}>{label}</span>
@@ -1442,7 +1452,7 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
                             <span key={label} className={clsx('badge', tone)}>{label}</span>
                           )
                         )}
-                        {rev.isCurrent ? null : confirmRevision === rev.number ? (
+                        {!onRollback || rev.isCurrent ? null : confirmRevision === rev.number ? (
                           <>
                             <button
                               onClick={() => handleRollback(rev.number)}
@@ -1482,9 +1492,9 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
 
         {diffRevision && hasDiffData && (
           <RevisionDiffView
-            baseTemplate={currentRevision!.template!}
+            baseTemplate={diffBase!.template!}
             targetTemplate={selectedRevision!.template!}
-            baseLabel={`Revision #${currentRevision!.number} (current)`}
+            baseLabel={`Revision #${diffBase!.number}${onRollback ? " (current)" : ""}`}
             targetLabel={`Revision #${diffRevision}`}
           />
         )}

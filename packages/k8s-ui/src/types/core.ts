@@ -2023,7 +2023,8 @@ export interface WorkloadRevision {
   podHash?: string
   // This revision's own ready pods. Absent when the kind has no per-revision count.
   readyReplicas?: number
-  // Whether this revision's pods are running and ready. Absent means unknown:
+  // For blue-green Rollouts, whether the active Service selects this revision.
+  // For native workloads, whether this revision has ready pods. Absent means unknown:
   // a StatefulSet or DaemonSet mid-update has no per-revision split. A canary
   // Rollout leaves it unset because traffic weights are unknown.
   serving?: boolean

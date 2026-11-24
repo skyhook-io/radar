@@ -81,9 +81,9 @@ func TestBuildRevisionsFollowsTheBlueGreenActiveSelector(t *testing.T) {
 	})
 	v1 := replicaSetForTest("prod", "web-1", "1", "hash-v1", "web:v1", "rollout-uid")
 	v2 := replicaSetForTest("prod", "web-2", "2", "hash-v2", "web:v2", "rollout-uid")
-	for _, rs := range []*unstructured.Unstructured{v1, v2} {
-		_ = unstructured.SetNestedField(rs.Object, int64(1), "status", "readyReplicas")
-	}
+	// The active selector still points at v2 when all its pods are unready.
+	_ = unstructured.SetNestedField(v1.Object, int64(1), "status", "readyReplicas")
+	_ = unstructured.SetNestedField(v2.Object, int64(0), "status", "readyReplicas")
 
 	revisions := BuildRevisions([]unstructured.Unstructured{*v1, *v2}, ro)
 	byNumber := map[int64]Revision{}

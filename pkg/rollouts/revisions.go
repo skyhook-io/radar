@@ -158,7 +158,7 @@ func BuildRevisions(replicaSets []unstructured.Unstructured, ro *unstructured.Un
 
 		var serving *bool
 		if activeSelector != "" {
-			active := podHash == activeSelector && readyReplicas > 0
+			active := podHash == activeSelector
 			serving = &active
 		}
 

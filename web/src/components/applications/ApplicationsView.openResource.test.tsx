@@ -17,11 +17,6 @@ vi.mock('../../api/client', () => ({
   useHelmRelease: () => idle,
   useIssues: () => idle,
   useTopology: () => idle,
-  workloadRevisionsQuery: (kind: string, namespace: string, name: string) => ({
-    queryKey: ['workload-revisions', kind, namespace, name],
-    queryFn: () => Promise.resolve([]),
-    enabled: false,
-  }),
 }))
 vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({ connection: { state: 'connected', context: 'test' } }) }))
 vi.mock('../../context/TimelineSource', () => ({
