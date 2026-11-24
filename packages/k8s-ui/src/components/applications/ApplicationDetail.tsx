@@ -611,7 +611,7 @@ export function ApplicationDetail({
     if (!singleWorkloadScope || !deploysOffered) return {};
     return { extraTabs: [{
       id: "deploys", label: "Deploys", icon: <History className="h-4 w-4" />,
-      after: "overview", render: renderInstanceDeploys,
+      after: "overview", requiresLiveResource: false, render: renderInstanceDeploys,
     }] };
   }, [singleWorkloadScope, deploysOffered, renderInstanceDeploys]);
   useEffect(() => {

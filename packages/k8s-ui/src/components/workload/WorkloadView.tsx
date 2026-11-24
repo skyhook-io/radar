@@ -92,6 +92,7 @@ import { isCoreBatchJob } from '../../utils/api-resources'
 import { formatRelativeAgeTime } from '../../utils/format'
 
 const WORKLOAD_TABS = ['overview', 'spec', 'topology', 'timeline', 'logs', 'metrics', 'reachability', 'cost', 'yaml'] as const
+/** Built-in workload IDs. Hosts with extra tabs use WorkloadDetailTab for selection. */
 export type WorkloadTabType = typeof WORKLOAD_TABS[number]
 /** A built-in tab or a host-supplied tab ID. */
 export type WorkloadDetailTab = WorkloadTabType | (string & {})
@@ -105,7 +106,7 @@ function isBuiltInTab(tab: TabType): tab is WorkloadTabType {
 type WorkloadTabSelection =
   | { extraTabs?: undefined; onTabChange?: (tab: WorkloadTabType, options?: { replace?: boolean }) => void }
   | {
-      /** Additional tabs in the expanded view. */
+      /** Additional tabs in the expanded view, including any tabs supplied by ApplicationDetail. */
       extraTabs?: WorkloadExtraTab[]
       /** Receives built-in and host tab IDs. Replace is set when the requested tab is no longer offered. */
       onTabChange?: (tab: WorkloadDetailTab, options?: { replace?: boolean }) => void
@@ -128,6 +129,7 @@ export interface WorkloadExtraTab {
    * keeps independent tabs available after deletion. Omit to show the tab
    * while loading and suspend it only after deletion is known. */
   requiresLiveResource?: boolean
+  /** Render the content when this tab is selected and its resource requirements are met. */
   render: () => ReactNode
 }
 
@@ -386,8 +388,8 @@ type WorkloadViewProps = WorkloadTabSelection & {
     /** The resource's operational issues, for a summary that shows them itself. */
     leadContent?: ReactNode
   }) => ReactNode
-  /** Loading defers URL repairs. Ready lets the view replace unknown host IDs.
-   * Omit to preserve unknown host IDs for hosts that register tabs independently. */
+  /** Loading defers expanded-view URL repairs. Ready allows replacement of unknown
+   * host IDs once resource loading settles. Omit to preserve unknown host IDs. */
   extraTabsState?: 'loading' | 'ready'
   /** Expanded view: a line under the title, above the tabs, shown on every tab. */
   subheader?: ReactNode
@@ -3390,7 +3392,7 @@ function InlineFact({ label, value }: { label: string; value: ReactNode }) {
 }
 
 /** Runtime facts that restate configuration rather than live state. */
-const CONFIGURED_FACTS = new Set(['Target replicas', 'Target nodes', 'Strategy', 'Partition', 'Min', 'Max'])
+const CONFIGURED_FACTS = new Set(['Target replicas', 'Strategy', 'Partition', 'Min', 'Max'])
 
 function RuntimeCard({
   resource,

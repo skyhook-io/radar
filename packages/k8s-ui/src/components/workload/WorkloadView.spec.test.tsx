@@ -307,6 +307,18 @@ it('keeps serving addresses and pending status when the host supplies configured
   expect(addressed).toContain('address.example')
 })
 
+it('keeps the controller-reported DaemonSet target nodes when hiding configuration', () => {
+  const daemonSet = {
+    apiVersion: 'apps/v1', kind: 'DaemonSet', metadata: { name: 'agent', namespace: 'shop' },
+    spec: { updateStrategy: { type: 'RollingUpdate' } },
+    status: { desiredNumberScheduled: 5, currentNumberScheduled: 5, numberReady: 4, updatedNumberScheduled: 5 },
+  }
+  const html = renderToStaticMarkup(<WorkloadView {...props} kind="daemonsets" group="apps" name="agent"
+    namespace="shop" resource={daemonSet} activeTab="overview" renderSummary={undefined} expanded hideOverviewConfig />)
+  expect(html).toContain('Target nodes')
+  expect(html).not.toContain('>Strategy<')
+})
+
 it("lays the Overview out in the host's one column when asked, and in Radar's grid otherwise", () => {
   const deployment = { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'web', namespace: 'shop' }, spec: { replicas: 1, template: { spec: { containers: [{ name: 'web', image: 'web:1' }] } } }, status: { replicas: 1, readyReplicas: 1 } }
   const base = { ...props, kind: 'deployments', group: 'apps', name: 'web', namespace: 'shop', resource: deployment, activeTab: 'overview' as const, renderSummary: undefined, expanded: true }
