@@ -241,6 +241,8 @@ export type ApplicationDetailProps = {
   /** The built-in views to offer. All are available by default. A removed
    *  selection falls back to the first available non-Cost view in tab order. */
   builtInViews?: ApplicationView[];
+  /** Wait for the available views before replacing a stale controlled selection. */
+  viewsLoading?: boolean;
   /** Show versions inline and keep up to six environment pills. Defaults to four pills without inline versions. */
   showEnvironmentVersions?: boolean;
   /** The active instance has nothing live to show (not deployed, its cluster
@@ -407,6 +409,7 @@ export function ApplicationDetail({
   onSelectCostView,
   extraViews,
   builtInViews,
+  viewsLoading = false,
   showEnvironmentVersions = false,
   unavailable,
   renderOverviewIssues,
@@ -518,8 +521,9 @@ export function ApplicationDetail({
     ? resolvedView
     : DEFAULT_APPLICATION_VIEW;
   const costSelected = Boolean(
-    renderCostView && (costViewSelected ?? internalCostSelected),
+    renderCostView && (!resolvedView || (costViewSelected ?? internalCostSelected)),
   );
+  const instanceKey = activeInstanceKey ?? app.key;
   const setView = useCallback(
     (view: ApplicationDetailView) => {
       setInternalCostSelected(false);
@@ -537,7 +541,7 @@ export function ApplicationDetail({
   useEffect(() => {
     if (selectedView === undefined) setInternalView(DEFAULT_APPLICATION_VIEW);
     setInternalCostSelected(false);
-  }, [app.key, selectedView]);
+  }, [instanceKey, selectedView]);
 
   const [internalSelected, setInternalSelected] = useState<string | null>(null);
   const hostSelected =
@@ -554,7 +558,7 @@ export function ApplicationDetail({
         : setInternalSelected(key),
     [onSelectWorkload],
   );
-  const selectedWorkload = rawSelected
+  const selectedWorkload = unavailable == null && rawSelected
     ? workloads.find((w) => workloadKey(w) === rawSelected)
     : undefined;
   const singleWorkloadScope = workloads.length === 1 && !!selectedWorkload;
@@ -566,10 +570,11 @@ export function ApplicationDetail({
     }] };
   }, [singleWorkloadScope, renderDeploys, builtInViews]);
   useEffect(() => {
-    if (selectedWorkload || costSelected || !resolvedView || resolvedView === requestedView) return;
+    if (viewsLoading || selectedWorkload || costSelected || !resolvedView || resolvedView === requestedView) return;
     if (extraViews && onSelectView) onSelectView(resolvedView, { replace: true });
     else if (onSelectView && isBuiltInApplicationView(resolvedView)) onSelectView(resolvedView, { replace: true });
-  }, [costSelected, extraViews, onSelectView, requestedView, resolvedView, selectedWorkload]);
+    else if (!onSelectView) setInternalView(resolvedView);
+  }, [costSelected, extraViews, onSelectView, requestedView, resolvedView, selectedWorkload, viewsLoading]);
   useEffect(() => {
     if (selectedWorkloadKey !== undefined && hostKeyIsStale) {
       onSelectWorkload?.(null);
@@ -577,7 +582,7 @@ export function ApplicationDetail({
   }, [selectedWorkloadKey, hostKeyIsStale, onSelectWorkload]);
   useEffect(() => {
     if (selectedWorkloadKey === undefined) setInternalSelected(null);
-  }, [app.key, selectedWorkloadKey]);
+  }, [instanceKey, selectedWorkloadKey]);
 
   // Hover-focus: the workload (or NEUTRAL_OWNER) whose nodes should stay lit
   // while the rest of the graph dims. Driven by the rail and, reciprocally, by
@@ -586,7 +591,7 @@ export function ApplicationDetail({
   const [expandedReplicaSetOwners, setExpandedReplicaSetOwners] = useState<
     Set<string>
   >(new Set());
-  useEffect(() => setExpandedReplicaSetOwners(new Set()), [app.key]);
+  useEffect(() => setExpandedReplicaSetOwners(new Set()), [instanceKey]);
   const toggleReplicaSets = useCallback((ownerID: string) => {
     setExpandedReplicaSetOwners((current) => {
       const next = new Set(current);
@@ -738,9 +743,11 @@ export function ApplicationDetail({
           <Boxes className="h-4 w-4" aria-hidden />
         </span>
         <div className="flex min-w-0 flex-1 items-center gap-2">
-          <h1 className="min-w-0 truncate text-xl font-semibold text-theme-text-primary lg:text-2xl">
-            {renderTitle ? renderTitle(app.name) : app.name}
-          </h1>
+          {renderTitle ? (
+            <div className="min-w-0">{renderTitle(app.name)}</div>
+          ) : (
+            <h1 className="min-w-0 truncate text-xl font-semibold text-theme-text-primary lg:text-2xl">{app.name}</h1>
+          )}
           {!singleWorkloadScope && workloads.length > 0 && (
             <>
               <span className="shrink-0 text-theme-text-tertiary">/</span>
@@ -905,7 +912,7 @@ export function ApplicationDetail({
             app={app}
             activeView={activeView}
             activeExtraView={activeExtraView}
-            instanceKey={activeInstanceKey ?? app.key}
+            instanceKey={instanceKey}
             viewOrder={viewOrder}
             viewHeader={viewHeader}
             extraViews={offeredExtraViews}
@@ -3684,7 +3691,7 @@ function EnvSwitcher({
   const lagChip = lag && (
     <span className={`${CHIP} ${CHIP_TONE.amber}`}>{lag}</span>
   );
-  const evidenceChip = !showVersions && (
+  const evidenceChip = (!showVersions || instances.some((inst) => inst.evidence || inst.confidence !== "high")) && (
     <Tooltip content={<AppIdentityTooltip members={instances} />} delay={150}>
       <span className="inline-flex cursor-default items-center rounded-sm bg-theme-hover px-1 py-px ring-1 ring-inset ring-theme-border">
         <Layers className="h-3 w-3 text-theme-text-tertiary" aria-hidden />
@@ -3692,11 +3699,12 @@ function EnvSwitcher({
     </Tooltip>
   );
 
+  const orderedInstances = [...instances.filter((inst) => inst.aggregate), ...instances.filter((inst) => !inst.aggregate)];
   const envCount = envInstances.filter((i) => !i.aggregate).length;
   if (envCount <= (showVersions ? MAX_INLINE_ENVS : 4)) {
     return (
       <span className="flex flex-wrap items-center gap-1">
-        {instances.map((inst) => {
+        {orderedInstances.map((inst) => {
           const isActive = inst.appKey === activeKey;
           const duplicateEnv = (envCounts.get(inst.env) ?? 0) > 1;
           return (
@@ -3745,7 +3753,6 @@ function EnvSwitcher({
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        aria-haspopup="listbox"
         aria-expanded={open}
         className="inline-flex items-center gap-1.5 rounded-md bg-theme-surface px-2 py-0.5 text-xs ring-1 ring-inset ring-theme-border hover:bg-theme-hover"
       >
@@ -3766,7 +3773,8 @@ function EnvSwitcher({
       {lagChip}
       {shouldRender && (
         <div
-          role="listbox"
+          role="group"
+          aria-label="Environments"
           inert={!open}
           className={clsx(
             "absolute left-0 top-full z-50 mt-1 max-h-80 w-80 origin-top-left overflow-y-auto rounded-md border border-theme-border bg-theme-surface p-1 shadow-theme-md",
@@ -3778,7 +3786,7 @@ function EnvSwitcher({
           )}
           style={overlayTransitionStyle(isOpen, "menu")}
         >
-          {instances.map((inst) => {
+          {orderedInstances.map((inst) => {
             const isActive = inst.appKey === activeKey;
             return (
               <Tooltip
@@ -3786,12 +3794,11 @@ function EnvSwitcher({
                 content={<InstanceTooltip instance={inst} />}
                 delay={150}
                 position="right"
-                wrapperClassName="flex w-full"
+                wrapperClassName="w-full"
               >
                 <button
                   type="button"
-                  role="option"
-                  aria-selected={isActive}
+                  aria-current={isActive ? "true" : undefined}
                   onClick={() => {
                     setOpen(false);
                     if (!isActive) onSwitch?.(inst.appKey);
@@ -3804,13 +3811,11 @@ function EnvSwitcher({
                   )}
                 >
                   <StatusDot tone={mapHealthToTone(inst.health)} />
-                  <span className="w-20 shrink-0 font-medium text-theme-text-primary">
+                  <span className={clsx("truncate font-medium text-theme-text-primary", inst.aggregate ? "min-w-0 flex-1" : "w-24 shrink-0")}>
                     {inst.env}
                   </span>
                   {inst.adornment}
-                  <span className="min-w-0 flex-1 truncate text-theme-text-secondary">
-                    {inst.detail || inst.name}
-                  </span>
+                  {!inst.aggregate && <span className="min-w-0 flex-1 truncate text-theme-text-secondary">{inst.detail || inst.name}</span>}
                   {inst.version && (
                     <span className="font-mono text-[10px] text-theme-text-tertiary">
                       {midTruncate(inst.version, 18)}
