@@ -39,7 +39,7 @@ and rightsizing still need their existing sources. A discovered frontend serves
 the curated charts only. When a conventional store is also present, Radar keeps
 its measured resource panels and HTTP instrumentation. Missing CPU and memory
 panels, including the current-Pod comparisons, can use GKE measurements.
-Conventional errors and incomplete panel results keep their diagnostics. See [Metrics connections](configuration.md#local-integration-connections)
+While conventional Pod identity is being checked, the Metrics tab keeps its quick retry. When identity cannot be checked, independently verified native panels retain the conventional diagnostic. Conventional errors and incomplete populated panels keep their diagnostics. See [Metrics connections](configuration.md#local-integration-connections)
 and [Google's frontend setup](https://cloud.google.com/stackdriver/docs/managed-prometheus/query-api-ui).
 
 ### Datadog-backed rightsizing in Radar Hub

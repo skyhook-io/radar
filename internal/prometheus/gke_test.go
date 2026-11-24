@@ -460,8 +460,9 @@ func TestGKEConfiguredWorkloadWithUnverifiedConventionalIdentity(t *testing.T) {
 	SetManualURL(c.k8sConfig.Host + "/api/v1/namespaces/gmp-public/services/frontend:web/proxy")
 	client := GetClient()
 	first := getMetrics(t, metricsRouter(), "/prometheus/workload/Deployment/default/nginx?range=1h")
-	if first.Code != http.StatusOK {
-		t.Fatalf("cold configured workload: %d %s", first.Code, first.Body)
+	var cold workloadMetricsResponse
+	if first.Code != http.StatusOK || json.Unmarshal(first.Body.Bytes(), &cold) != nil || cold.State != "detecting" || len(cold.Panels) != 0 {
+		t.Fatalf("cold conventional attribution must retain its quick poll: %d %s", first.Code, first.Body)
 	}
 	scope, err := ResolvePodScope(t.Context(), k8s.GetResourceCache(), "Deployment", "default", "nginx", 100)
 	if err != nil {
@@ -733,5 +734,60 @@ func TestGKEExplicitOrdinaryEndpointRemainsAuthoritative(t *testing.T) {
 	var queryError errChartQuery
 	if !errors.As(err, &queryError) || nativeProbes.Load() != 1 {
 		t.Fatalf("conventional error triggered native fallback: err=%v probes=%d", err, nativeProbes.Load())
+	}
+}
+
+func TestGKEStaleNativeReaderDoesNotWaitForOrdinaryDiscovery(t *testing.T) {
+	c := gkeFixture(t, fixtureIssuer, 1)
+	c.findGKEChartStore(t.Context(), 0, ErrPrometheusNotFound)
+	if c.cachedNativeCharts() == nil {
+		t.Fatal("native reader not established")
+	}
+	// A background conventional attempt can wait here while a native chart completes.
+	release := make(chan struct{})
+	runs := stubRediscovery(t, func(string) error { <-release; return nil })
+	defer func() { close(release); waitIdle(t, c) }()
+	c.mu.Lock()
+	c.gkeChecked = time.Now().Add(-2 * time.Minute)
+	c.mu.Unlock()
+	if stores := c.chartStores(t.Context()); stores.native == nil || stores.standard.store != nil {
+		t.Fatal("expired native capability failed to refresh directly")
+	}
+	select {
+	case <-runs:
+	case <-time.After(time.Second):
+		t.Fatal("ordinary discovery was not scheduled")
+	}
+}
+
+func TestGKEExplicitConnectRetriesNegativeAutomaticCapability(t *testing.T) {
+	var present atomic.Bool
+	c := gkeFixtureServices(t, fixtureIssuer, 1, func(w http.ResponseWriter, r *http.Request, _ corev1.Service) bool {
+		if !present.Load() && strings.HasSuffix(r.URL.Path, "/api/v1/query") && strings.Contains(r.FormValue("query"), "node_cpu_total_cores") {
+			fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`)
+			return true
+		}
+		return false
+	})
+	Initialize(c.k8sClient, c.k8sConfig, "fixture")
+	GetClient().inCluster = false
+	t.Cleanup(func() { Reset(); Initialize(nil, nil, "") })
+	router := metricsRouter()
+	connect := func(path string) prom.Status {
+		t.Helper()
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, nil))
+		var st prom.Status
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &st) != nil {
+			t.Fatalf("%d %s", w.Code, w.Body)
+		}
+		return st
+	}
+	if st := connect("/prometheus/connect?optional=true"); st.GKESystemMetrics {
+		t.Fatal("negative node probe treated as positive")
+	}
+	present.Store(true)
+	if st := connect("/prometheus/connect"); !st.GKESystemMetrics || st.Connected {
+		t.Fatal("explicit Discover did not retry native capability independently of raw discovery")
 	}
 }

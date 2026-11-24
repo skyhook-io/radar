@@ -76,8 +76,9 @@ func handleConnect(w http.ResponseWriter, r *http.Request) {
 		ctx = withSuppressedDiscoveryDiagnostics(ctx)
 	} else {
 		client.mu.Lock()
-		if client.manualURL != "" && client.gke == nil {
+		if client.gke == nil {
 			client.gkeChecked = time.Time{}
+			client.gkeServices = nil
 		}
 		client.mu.Unlock()
 	}

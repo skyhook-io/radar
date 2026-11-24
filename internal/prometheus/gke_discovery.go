@@ -164,9 +164,8 @@ func (c *Client) gkeReader(ctx context.Context, gen uint64, regularErr error) *g
 }
 
 func (c *Client) connectWithGKE(ctx context.Context) (string, string, error) {
-	gen := c.DiscoveryGeneration()
 	addr, path, err := c.EnsureConnected(ctx)
-	c.gkeReader(ctx, gen, err)
+	c.gkeReader(ctx, c.DiscoveryGeneration(), err)
 	return addr, path, err
 }
 
@@ -182,10 +181,19 @@ func (c *Client) chartStores(ctx context.Context) chartStores {
 	if g := c.cachedNativeCharts(); g != nil {
 		return chartStores{native: g}
 	}
-	gen := c.DiscoveryGeneration()
+	// Revalidate an established native reader independently of ordinary service
+	// reachability. Rediscovery still notices a newly usable regular store.
+	if old := c.gkeChartStore(); old != nil && !old.fallback {
+		gen := c.DiscoveryGeneration()
+		if g := c.gkeReader(ctx, gen, ErrPrometheusNotFound); g != nil && !g.fallback {
+			c.requestRediscovery("", "native chart capability refreshed")
+			return chartStores{native: g}
+		}
+		ctx = withSuppressedDiscoveryDiagnostics(ctx)
+	}
 	standard, err := c.bindStore(ctx)
 	if err != nil {
-		return chartStores{standard: standard, native: c.gkeReader(ctx, gen, err)}
+		return chartStores{standard: standard, native: c.gkeReader(ctx, c.DiscoveryGeneration(), err)}
 	}
 	return chartStores{standard: standard, supplement: func(ctx context.Context) (*gkeMetrics, error) {
 		if !c.ConnectionCurrent(standard.conn) {

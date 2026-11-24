@@ -113,7 +113,10 @@ func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 		if stores.supplement != nil && needsGKEResources(&resp) {
 			var err error
 			g, err = stores.supplement(ctx)
-			if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) && r.Context().Err() == nil {
+				// The optional reader exhausted our budget. Return the conventional answer.
+				g = nil
+			} else if err != nil {
 				writeChartError(w, err)
 				return
 			}

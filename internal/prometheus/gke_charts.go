@@ -227,7 +227,7 @@ func missingResourcePanel(p workloadMetricPanel) bool {
 
 func needsGKEResources(resp *workloadMetricsResponse) bool {
 	if len(resp.Panels) == 0 {
-		return resp.State == "unavailable" || resp.State == "detecting" || resp.State == "error"
+		return resp.State == "unavailable" || resp.State == "error"
 	}
 	return missingResourcePanel(resp.Panels["cpu"]) || missingResourcePanel(resp.Panels["memory"]) || missingResourcePanel(resp.Comparison["cpu"]) || missingResourcePanel(resp.Comparison["memory"])
 }
@@ -244,7 +244,7 @@ func mergeGKEResources(ctx context.Context, g *gkeMetrics, resp *workloadMetrics
 			return
 		}
 		native.ScopeNotice = resp.ScopeNotice
-		if resp.State == "detecting" || resp.State == "error" {
+		if resp.State == "error" {
 			native.State = "partial"
 			native.Reason = strings.TrimSpace(native.Reason + " Conventional Prometheus metrics are incomplete. " + resp.Reason)
 		}
@@ -260,6 +260,9 @@ func mergeGKEResources(ctx context.Context, g *gkeMetrics, resp *workloadMetrics
 		panel := g.workloadPanel(ctx, scope, category, start, end, step)
 		if !hasSample(panel.Series) {
 			continue
+		}
+		if resp.State == "available" && panel.State == "partial" {
+			resp.State, resp.Reason = "partial", "Some current Pods have no GKE resource measurements in this time range."
 		}
 		if comparison {
 			resp.Comparison[key] = panel
