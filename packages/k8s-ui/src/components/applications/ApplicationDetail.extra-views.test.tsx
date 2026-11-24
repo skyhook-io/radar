@@ -364,6 +364,21 @@ describe('ApplicationDetail extra views', () => {
     expect(host.textContent).toContain('Release notes body')
   })
 
+  it('keeps an unavailable controlled Deploys link offline without mounting another host view', () => {
+    const onSelectView = vi.fn()
+    const { host } = show({
+      app: { ...app, workloads: [] },
+      builtInViews: ['deploys'],
+      extraViews,
+      selectedView: 'deploys',
+      onSelectView,
+      liveUnavailableNotice: <p>Offline</p>,
+    })
+    expect(host.textContent).toContain('Offline')
+    expect(host.textContent).not.toContain('Release notes body')
+    expect(onSelectView).not.toHaveBeenCalled()
+  })
+
   it('shows an unavailable workload link before a host-only default view', () => {
     const empty: AppRow = { ...app, workloads: [] }
     const onSelectWorkload = vi.fn()

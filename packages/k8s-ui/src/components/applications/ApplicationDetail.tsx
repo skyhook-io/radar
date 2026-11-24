@@ -357,8 +357,9 @@ export type ApplicationDetailProps = {
   /** Content of the page heading, such as an app switcher. */
   renderTitle?: (name: string) => ReactNode;
   /** Order the visible tabs by ID, including `cost`. A removed view falls back
-   *  to the first offered non-Cost view. While a workload link or view list is
-   *  pending, fallback skips Deploys and extra views. Cost has separate selection props. */
+   *  to the first offered non-Cost view. Fallback skips Deploys and extra views
+   *  while selection is pending or a controlled link is unresolved offline.
+   *  Cost has separate selection props. */
   viewOrder?: string[];
   /** Content directly below the application tabs, including when live data is unavailable. WorkloadView has its own tabHeader. */
   viewHeader?: ReactNode;
