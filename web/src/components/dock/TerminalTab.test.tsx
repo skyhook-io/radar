@@ -26,3 +26,13 @@ it('reconnects on the connection the tab was opened on, not the latest', async (
   expect(new URL(wsUrl).searchParams.get('connection')).toBe('n-1')
   resetConnectionBindingForTest()
 })
+
+it('reconnects an existing debug session to its reviewed connection without offering another container', async () => {
+  const { observeConnectionStatus, resetConnectionBindingForTest } = await import('../../api/connectionBinding')
+  observeConnectionStatus({ connectionId: 'next-cluster' })
+  renderToString(<TerminalTab namespace="demo" podName="api" containerName="debug-1" containers={['debug-1']} debugSession={{ connectionId: 'reviewed-cluster' }} />)
+  const { wsUrl } = await captured.props!.createSession('debug-1')
+  expect(new URL(wsUrl).searchParams.get('connection')).toBe('reviewed-cluster')
+  expect(captured.props!.createDebugContainer).toBeUndefined()
+  resetConnectionBindingForTest()
+})

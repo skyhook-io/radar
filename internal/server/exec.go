@@ -705,8 +705,9 @@ func (s *Server) handleNodeDebugCleanup(w http.ResponseWriter, r *http.Request) 
 
 // DebugContainerRequest is the request body for creating a debug container
 type DebugContainerRequest struct {
-	TargetContainer string `json:"targetContainer,omitempty"`
-	Image           string `json:"image,omitempty"`
+	PodUID          types.UID `json:"uid,omitempty"`
+	TargetContainer string    `json:"targetContainer,omitempty"`
+	Image           string    `json:"image,omitempty"`
 }
 
 // DebugContainerResponse is the response after creating a debug container
@@ -740,17 +741,29 @@ func (s *Server) handleCreateDebugContainer(w http.ResponseWriter, r *http.Reque
 	ec, err := k8s.CreateEphemeralContainerWithClient(r.Context(), k8s.EphemeralContainerOptions{
 		Namespace:       namespace,
 		PodName:         podName,
+		PodUID:          req.PodUID,
 		TargetContainer: req.TargetContainer,
 		Image:           s.resolveDebugImage(req.Image),
 	}, client)
 	if err != nil {
 		errMsg := err.Error()
-		if strings.Contains(errMsg, "not found") {
+		if apierrors.IsForbidden(err) {
+			s.writeError(w, http.StatusForbidden, errMsg)
+			return
+		}
+		if apierrors.IsConflict(err) {
+			s.writeError(w, http.StatusConflict, errMsg)
+			return
+		}
+		if apierrors.IsNotFound(err) {
 			s.writeError(w, http.StatusNotFound, errMsg)
 			return
 		}
-		if strings.Contains(errMsg, "ephemeral containers are disabled") ||
-			strings.Contains(errMsg, "ephemeralcontainers") {
+		if apierrors.IsInvalid(err) || apierrors.IsBadRequest(err) {
+			s.writeError(w, http.StatusBadRequest, errMsg)
+			return
+		}
+		if strings.Contains(errMsg, "ephemeral containers are disabled") {
 			s.writeError(w, http.StatusBadRequest, "ephemeral containers are not enabled on this cluster")
 			return
 		}
@@ -760,7 +773,7 @@ func (s *Server) handleCreateDebugContainer(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Wait for container to be running (with timeout)
-	err = k8s.WaitForEphemeralContainer(r.Context(), namespace, podName, ec.Name, 30*time.Second)
+	err = k8score.WaitForEphemeralContainer(r.Context(), client, namespace, podName, ec.Name, 30*time.Second)
 	status := "running"
 	if err != nil {
 		status = "pending"

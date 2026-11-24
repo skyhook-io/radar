@@ -104,6 +104,7 @@ import { TIME_RANGES, PrometheusCharts, isPrometheusSupported } from '../resourc
 import { RightsizingStrip } from '../resource/RightsizingStrip'
 import { PrometheusChartsGrid } from '../resource/PrometheusChartsGrid'
 import { DatadogSetupHint, DatadogWorkloadCharts, useDatadogWorkloadCharts, WorkloadCostRightsizing } from '../resource/DatadogWorkloadCharts'
+import { PodDebugAction } from '../resources/PodDebugAction'
 import { useNavCustomization } from '../../context/NavCustomization'
 import { RestartEventLane } from '../resource/RestartChart'
 import { WorkloadCostTab } from '../cost/WorkloadCostTab'
@@ -339,7 +340,8 @@ function useActionsBarProps(
   const openLogs = useOpenLogs()
   const openWorkloadLogs = useOpenWorkloadLogs()
   const openNodeTerminal = useOpenNodeTerminal()
-  const { canExec, canViewLogs, canPortForward, workloadWrites, workloadWritesPending } = useNamespacedCapabilities(namespace)
+  const { embedded } = useNavCustomization()
+  const { canExec, canDebugPod, canViewLogs, canPortForward, workloadWrites, workloadWritesPending } = useNamespacedCapabilities(namespace)
   const queryClient = useQueryClient()
   // Live forward when local+RBAC; otherwise (in-cluster/Cloud) still surface the
   // copy-paste kubectl command. The button picks live vs. copy by deployment mode.
@@ -429,6 +431,7 @@ function useActionsBarProps(
     canViewLogs,
     canPortForward: showPortForward,
     onOpenTerminal: openTerminal,
+    renderPodDebug: canDebugPod && !embedded ? (pod: any) => <PodDebugAction key={pod.metadata.uid} pod={pod} /> : undefined,
     onOpenLogs: openLogs,
     onOpenWorkloadLogs: openWorkloadLogs,
     onOpenNodeTerminal: openNodeTerminal,

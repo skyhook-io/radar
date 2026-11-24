@@ -7,7 +7,10 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -20,9 +23,10 @@ const defaultDebugRunAsUser int64 = 65532
 type EphemeralContainerOptions struct {
 	Namespace       string
 	PodName         string
-	TargetContainer string // Container to share process namespace with
-	Image           string // Debug image (default: busybox:latest)
-	ContainerName   string // Name for ephemeral container (auto-generated if empty)
+	TargetContainer string    // Container to share process namespace with
+	Image           string    // Debug image (default: busybox:latest)
+	PodUID          types.UID // When provided, only the reviewed Pod may be updated.
+	ContainerName   string    // Name for ephemeral container (auto-generated if empty)
 }
 
 // CreateEphemeralContainer adds an ephemeral debug container to a pod.
@@ -34,7 +38,7 @@ func CreateEphemeralContainer(ctx context.Context, client kubernetes.Interface, 
 		opts.Image = DefaultDebugImage
 	}
 	if opts.ContainerName == "" {
-		opts.ContainerName = fmt.Sprintf("debug-%d", time.Now().Unix())
+		opts.ContainerName = "debug-" + string(uuid.NewUUID())
 	}
 
 	pod, err := client.CoreV1().Pods(opts.Namespace).Get(ctx, opts.PodName, metav1.GetOptions{})
@@ -43,7 +47,7 @@ func CreateEphemeralContainer(ctx context.Context, client kubernetes.Interface, 
 	}
 
 	ec := newEphemeralContainer(opts, nil)
-	updateErr := updateEphemeralContainer(ctx, client, pod, ec)
+	updateErr := updateEphemeralContainer(ctx, client, pod, ec, opts.PodUID)
 	if updateErr != nil && isRestrictedPodSecurityError(updateErr) {
 		pod, err = client.CoreV1().Pods(opts.Namespace).Get(ctx, opts.PodName, metav1.GetOptions{})
 		if err != nil {
@@ -52,7 +56,7 @@ func CreateEphemeralContainer(ctx context.Context, client kubernetes.Interface, 
 		securityContext := debugContainerSecurityContext(pod, opts.TargetContainer)
 		if securityContext != nil {
 			ec = newEphemeralContainer(opts, securityContext)
-			updateErr = updateEphemeralContainer(ctx, client, pod, ec)
+			updateErr = updateEphemeralContainer(ctx, client, pod, ec, opts.PodUID)
 		}
 	}
 	if updateErr != nil {
@@ -77,7 +81,10 @@ func newEphemeralContainer(opts EphemeralContainerOptions, securityContext *core
 	}
 }
 
-func updateEphemeralContainer(ctx context.Context, client kubernetes.Interface, pod *corev1.Pod, ec corev1.EphemeralContainer) error {
+func updateEphemeralContainer(ctx context.Context, client kubernetes.Interface, pod *corev1.Pod, ec corev1.EphemeralContainer, uid types.UID) error {
+	if uid != "" && pod.UID != uid {
+		return apierrors.NewConflict(corev1.Resource("pods"), pod.Name, fmt.Errorf("the Pod was replaced; reopen its details to debug the new Pod"))
+	}
 	updated := pod.DeepCopy()
 	updated.Spec.EphemeralContainers = append(updated.Spec.EphemeralContainers, ec)
 	_, err := client.CoreV1().Pods(updated.Namespace).UpdateEphemeralContainers(

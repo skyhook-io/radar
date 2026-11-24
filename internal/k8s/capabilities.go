@@ -114,16 +114,17 @@ func (r *PermissionCheckResult) CredentialRejectedNamespaces(resource string, na
 // Capabilities represents the features available based on RBAC permissions
 type Capabilities struct {
 	ConfigManagement       string                   `json:"configManagement"`
-	Exec                   bool                     `json:"exec"`           // Can create pods/exec (terminal feature)
-	LocalTerminal          bool                     `json:"localTerminal"`  // Local terminal available (not in-cluster, not disabled)
-	LocalShell             string                   `json:"localShell"`     // Shell family where a hand-off command runs: "powershell" on Windows, else "posix"
-	Logs                   bool                     `json:"logs"`           // Can get pods/log (log viewer)
-	PortForward            bool                     `json:"portForward"`    // Can create pods/portforward
-	Secrets                bool                     `json:"secrets"`        // Can list secrets
-	SecretsUpdate          bool                     `json:"secretsUpdate"`  // Can update secrets (inline editing)
-	HelmWrite              bool                     `json:"helmWrite"`      // Helm write ops (detected via secrets/create as sentinel RBAC check)
-	NodeWrite              bool                     `json:"nodeWrite"`      // Can patch nodes (cordon/uncordon/drain)
-	WorkloadWrites         WorkloadWritePermissions `json:"workloadWrites"` // Can patch workload kinds (restart/scale controls)
+	Exec                   bool                     `json:"exec"`               // Can create pods/exec (terminal feature)
+	PodDebug               bool                     `json:"podDebug,omitempty"` // Scoped to the requested namespace.
+	LocalTerminal          bool                     `json:"localTerminal"`      // Local terminal available (not in-cluster, not disabled)
+	LocalShell             string                   `json:"localShell"`         // Shell family where a hand-off command runs: "powershell" on Windows, else "posix"
+	Logs                   bool                     `json:"logs"`               // Can get pods/log (log viewer)
+	PortForward            bool                     `json:"portForward"`        // Can create pods/portforward
+	Secrets                bool                     `json:"secrets"`            // Can list secrets
+	SecretsUpdate          bool                     `json:"secretsUpdate"`      // Can update secrets (inline editing)
+	HelmWrite              bool                     `json:"helmWrite"`          // Helm write ops (detected via secrets/create as sentinel RBAC check)
+	NodeWrite              bool                     `json:"nodeWrite"`          // Can patch nodes (cordon/uncordon/drain)
+	WorkloadWrites         WorkloadWritePermissions `json:"workloadWrites"`     // Can patch workload kinds (restart/scale controls)
 	MCPReadOnly            bool                     `json:"mcpReadOnly"`
 	MCPExecTools           bool                     `json:"mcpExecTools"`
 	MCPHelmTools           bool                     `json:"mcpHelmTools"` // Native Helm MCP tool registered; target Kubernetes permissions still required
@@ -277,6 +278,7 @@ type WorkloadWriteCapabilityErrors struct {
 }
 
 type NamespaceCapabilityErrors struct {
+	PodDebug       bool
 	Exec           bool
 	Logs           bool
 	PortForward    bool
@@ -286,6 +288,7 @@ type NamespaceCapabilityErrors struct {
 
 // NamespaceCapabilities holds the effective capabilities for a specific namespace.
 type NamespaceCapabilities struct {
+	PodDebug       bool                      `json:"podDebug"`
 	Exec           bool                      `json:"exec"`
 	Logs           bool                      `json:"logs"`
 	PortForward    bool                      `json:"portForward"`
@@ -594,7 +597,10 @@ func CheckNamespaceCapabilities(ctx context.Context, namespace string) (*Namespa
 
 	var checks []capCheck
 	if !ForceDisableExec {
-		checks = append(checks, capCheck{resource: "pods/exec", verb: "create", result: &result.Exec, apiError: &result.Errors.Exec})
+		checks = append(checks,
+			capCheck{resource: "pods/exec", verb: "create", result: &result.Exec, apiError: &result.Errors.Exec},
+			capCheck{resource: "pods/ephemeralcontainers", verb: "update", result: &result.PodDebug, apiError: &result.Errors.PodDebug},
+		)
 	}
 	checks = append(checks,
 		capCheck{resource: "pods/log", verb: "get", result: &result.Logs, apiError: &result.Errors.Logs},
@@ -845,7 +851,10 @@ func CheckNamespaceCapabilitiesForUser(ctx context.Context, username string, gro
 
 	var checks []capCheck
 	if !ForceDisableExec {
-		checks = append(checks, capCheck{resource: "pods/exec", verb: "create", result: &result.Exec, apiError: &result.Errors.Exec})
+		checks = append(checks,
+			capCheck{resource: "pods/exec", verb: "create", result: &result.Exec, apiError: &result.Errors.Exec},
+			capCheck{resource: "pods/ephemeralcontainers", verb: "update", result: &result.PodDebug, apiError: &result.Errors.PodDebug},
+		)
 	}
 	checks = append(checks,
 		capCheck{resource: "pods/log", verb: "get", result: &result.Logs, apiError: &result.Errors.Logs},

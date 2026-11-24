@@ -82,3 +82,15 @@ func TestMergeNamespaceCapabilitiesHelmWrite(t *testing.T) {
 		t.Fatal("a clean namespace deny should override a global Helm write grant")
 	}
 }
+
+func TestPodDebugNeedsBothNamespacePermissions(t *testing.T) {
+	for _, exec := range []bool{false, true} {
+		for _, update := range []bool{false, true} {
+			caps := &k8s.Capabilities{Exec: true, PodDebug: true}
+			mergeNamespaceCapabilities(caps, &k8s.NamespaceCapabilities{Exec: exec, PodDebug: update})
+			if caps.PodDebug != (exec && update) {
+				t.Errorf("exec=%v, update ephemeralcontainers=%v: podDebug=%v", exec, update, caps.PodDebug)
+			}
+		}
+	}
+}

@@ -369,3 +369,20 @@ func TestCreateEphemeralContainerUsesNativeSidecarUserAndGroupOnRestrictedRetry(
 		t.Fatalf("runAsGroup = %#v, want %d", ec.SecurityContext, sidecarGroup)
 	}
 }
+
+func TestCreateEphemeralContainerRefusesReplacedPod(t *testing.T) {
+	client := fake.NewSimpleClientset(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Namespace: "team-a", Name: "app-0", UID: "new-uid",
+	}})
+	_, err := CreateEphemeralContainer(context.Background(), client, EphemeralContainerOptions{
+		Namespace: "team-a", PodName: "app-0", PodUID: "reviewed-uid",
+	})
+	if !apierrors.IsConflict(err) {
+		t.Fatalf("expected a conflict for a replaced Pod, got %v", err)
+	}
+	for _, action := range client.Actions() {
+		if action.GetVerb() != "get" {
+			t.Fatalf("unexpected %s after Pod replacement", action.GetVerb())
+		}
+	}
+}

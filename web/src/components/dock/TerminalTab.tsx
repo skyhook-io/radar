@@ -1,8 +1,7 @@
-import { TerminalTab as SharedTerminalTab } from '@skyhook-io/k8s-ui'
-import { apiUrl, getWsUrl } from '../../api/config'
-import { apiFetch } from '../../api/client'
-import { connectionHeaders, useOpenedConnection, withConnectionParam } from '../../api/connectionBinding'
-import { readErrorBody } from '../../api/httpErrors'
+import { TerminalTab as SharedTerminalTab, type DockTab } from '@skyhook-io/k8s-ui'
+import { getWsUrl } from '../../api/config'
+import { createPodDebugContainer } from '../../api/podDebug'
+import { useOpenedConnection, withConnectionParam } from '../../api/connectionBinding'
 
 interface TerminalTabProps {
   namespace: string
@@ -12,27 +11,19 @@ interface TerminalTabProps {
   isActive?: boolean
   shell?: string
   note?: string
+  debugSession?: DockTab['debugSession']
 }
 
-export function TerminalTab({ namespace, podName, containerName, containers, isActive, shell, note }: TerminalTabProps) {
-  const connection = useOpenedConnection()
+export function TerminalTab({ namespace, podName, containerName, containers, isActive, shell, note, debugSession }: TerminalTabProps) {
+  const openedConnection = useOpenedConnection()
+  const connection = debugSession ? debugSession.connectionId : openedConnection
   const createSession = (container: string) =>
     Promise.resolve({
       wsUrl: withConnectionParam(getWsUrl(`/pods/${namespace}/${podName}/exec?container=${container}${shell ? `&shell=${encodeURIComponent(shell)}` : ''}`), connection),
     })
 
-  const createDebugContainer = async (targetContainer: string) => {
-    const response = await apiFetch(apiUrl(`/pods/${namespace}/${podName}/debug`), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...connectionHeaders(connection) },
-      body: JSON.stringify({ targetContainer }),
-    })
-    if (!response.ok) {
-      const err = await readErrorBody(response)
-      throw new Error(err.error || `HTTP ${response.status}`)
-    }
-    return response.json()
-  }
+  const createDebugContainer = (targetContainer: string) =>
+    createPodDebugContainer(namespace, podName, connection, { targetContainer })
 
   return (
     <SharedTerminalTab
@@ -42,7 +33,7 @@ export function TerminalTab({ namespace, podName, containerName, containers, isA
       containers={containers}
       isActive={isActive}
       createSession={createSession}
-      createDebugContainer={shell ? undefined : createDebugContainer}
+      createDebugContainer={shell || debugSession ? undefined : createDebugContainer}
       note={note}
       command={shell}
     />

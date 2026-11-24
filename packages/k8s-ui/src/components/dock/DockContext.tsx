@@ -22,6 +22,8 @@ export interface DockTab {
   shell?: string
   /** Terminal: a short line shown in the toolbar, e.g. what the session is connected to. */
   sessionNote?: string
+  /** An already-created debug container. Reconnects use the reviewed connection. */
+  debugSession?: { connectionId?: string }
   // Workload logs props
   workloadKind?: string
   workloadName?: string
@@ -228,6 +230,7 @@ export function useOpenTerminal() {
     clusterName?: string
     shell?: string
     sessionNote?: string
+    debugSession?: DockTab['debugSession']
     title?: string
   }) => {
     const id = addTab({
@@ -239,6 +242,7 @@ export function useOpenTerminal() {
       containers: opts.containers,
       shell: opts.shell,
       sessionNote: opts.sessionNote,
+      debugSession: opts.debugSession,
       orgId: opts.orgId,
       clusterId: opts.clusterId,
       clusterName: opts.clusterName,

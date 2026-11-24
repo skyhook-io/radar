@@ -165,6 +165,7 @@ export function useNamespacedCapabilities(namespace: string | undefined) {
   // the global value is not an answer for this namespace.
   const namespaceUnknown = Boolean(namespace && !nsCaps && (isPending || error))
   return useMemo(() => ({
+    canDebugPod: nsCaps?.podDebug === true,
     canExec: nsCaps?.exec ?? globalCaps.exec,
     canViewLogs: nsCaps?.logs ?? globalCaps.logs,
     canPortForward: nsCaps?.portForward ?? globalCaps.portForward,
