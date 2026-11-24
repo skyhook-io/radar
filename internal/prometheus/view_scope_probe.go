@@ -128,15 +128,16 @@ func joinViewProbeParts(parts []viewProbePart) string {
 
 // viewReadbackParts count each metric's filtered series by the filter's own
 // labels, so a store that ignores a matcher shows itself in the values it
-// returns. Range functions drop metric names, hence the tag.
+// returns. At most one grouped tuple can match every expected label, so two
+// suffice to expose a mismatch. Range functions drop metric names, hence the tag.
 func viewReadbackParts(metrics []ViewMetric, keys []string, matchers string, span time.Duration) []viewProbePart {
 	scope := parseViewMatchers(matchers)
 	parts := make([]viewProbePart, len(metrics))
 	for i, m := range metrics {
 		parts[i] = viewProbePart{
 			tag: viewScopeMetricLabel, metric: m.Name,
-			head:     "count by (" + strings.Join(keys, ",") + ") (count_over_time(",
-			tail:     "[" + promSeconds(span) + "]))",
+			head:     "topk(2, count by (" + strings.Join(keys, ",") + ") (count_over_time(",
+			tail:     "[" + promSeconds(span) + "])))",
 			matchers: append(parseViewMatchers(m.Subject), scope...),
 		}
 	}

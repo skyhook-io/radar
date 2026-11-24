@@ -121,7 +121,7 @@ func TestScanSkipsDaemonSetsThatMatchNoNode(t *testing.T) {
 	var skipped []string
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		workloads, _, skipped = snapshotScanWorkloads(context.Background(), cache, scopes)
+		workloads, _, skipped = snapshotScanWorkloads(context.Background(), cache, scopes, time.Now())
 		if len(workloads)+len(skipped) == 4 {
 			break
 		}

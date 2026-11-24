@@ -92,6 +92,7 @@
             "externalDns": { "type": "boolean" },
             "externalSecrets": { "type": "boolean" },
             "flagger": { "type": "boolean", "description": "Opt-in read collection for flagger.app Canaries and MetricTemplates (default false)." },
+            "k3sHelm": { "type": "boolean", "description": "Opt-in read collection for helm.cattle.io HelmCharts and HelmChartConfigs on k3s/RKE2 (default false); their values can hold credentials." },
             "systemUpgrade": { "type": "boolean", "description": "Opt-in read collection for upgrade.cattle.io Plans of system-upgrade-controller (default false); their env can hold values." },
             "flux": { "type": "boolean" },
             "fluxOperator": { "type": "boolean" },
@@ -443,10 +444,10 @@
       "additionalProperties": true,
       "properties": {
         "prometheusUrl": { "type": "string" },
-        "prometheusSingleCluster": { "type": "boolean", "description": "Optional workload/PVC metrics scope override for a dedicated backend. Replaces automatic matching; does not scope rightsizing, node/HPA or legacy network/storage metrics. Leave false with empty prometheusClusterLabels for automatic matching." },
+        "prometheusSingleCluster": { "type": "boolean", "description": "Optional workload/PVC metrics scope override for a dedicated backend. Replaces automatic matching for views including rightsizing, node/HPA charts and OpenCost costs. Leave false with empty prometheusClusterLabels for automatic matching." },
         "prometheusClusterLabels": {
           "type": "object",
-          "description": "Optional exact cluster label/value pairs for workload metrics, PVC usage and, when prometheusUrl is set, the Caretta/Beyla/Istio traffic map, combined with AND. Labels must exist on each affected metric source. Alternative to prometheusSingleCluster; does not scope rightsizing, node/HPA or legacy network/storage metrics.",
+          "description": "Optional exact cluster label/value pairs for workload metrics, PVC usage and, when prometheusUrl is set, the Caretta/Beyla/Istio traffic map, combined with AND. Labels must exist on each affected metric source. Alternative to prometheusSingleCluster. Also scopes rightsizing, node/HPA charts and OpenCost costs.",
           "propertyNames": {"pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$", "not": {"pattern": "^__"}},
           "additionalProperties": {"type": "string", "minLength": 1}
         },

@@ -3,7 +3,7 @@ import type { RightsizingRow } from '../../types/rightsizing'
 import { formatRelativeAgeTime } from '../../utils/format'
 import { Badge } from '../ui/Badge'
 import { Collapse, CollapseChevron } from '../ui/Collapse'
-import { explainRightsizingReasons } from './reasons'
+import { currentPodEvidenceLabel, explainRightsizingReasons } from './reasons'
 import {
   getResourceRequestPresentation,
   getRightsizingExplanation,
@@ -275,6 +275,7 @@ function EvidenceNote({ row, review }: { row: RightsizingRow; review?: string })
 }
 
 function requestChangeNote(row: RightsizingRow): string | undefined {
+  if (currentPodEvidenceLabel(row.recommendationReason)) return getRightsizingExplanation(row)
   if (row.fit === 'pod_level_request') return
   if (row.hpaManaged) return explainRightsizingReasons(['hpa_managed'], row.resource)
   if (row.limitConflict) {

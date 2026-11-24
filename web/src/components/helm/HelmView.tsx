@@ -1,6 +1,8 @@
 import { useState, useMemo, useRef, useEffect, useCallback, forwardRef } from 'react'
+import { HiddenK3sBadge, ReleaseControllerBadge, managedByOtherController, releaseControllerOf } from './releaseController'
+import type { HelmReleaseController } from '@skyhook-io/k8s-ui'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
-import { Package, Search, ArrowUpCircle, LayoutGrid, List, Shield, GitBranch, ChevronRight, RotateCcw, Clock } from 'lucide-react'
+import { GitBranch, Package, Search, ArrowUpCircle, LayoutGrid, List, Shield, ChevronRight, RotateCcw, Clock } from 'lucide-react'
 import { CertaintyGlyph, PaneLoader, PageHeader, SortableTh, FreshnessControl, type SortDir, Input, usePhoneLayout } from '@skyhook-io/k8s-ui'
 import { useConnection } from '../../context/ConnectionContext'
 import { clsx } from 'clsx'
@@ -617,7 +619,7 @@ const ObservedReleaseRow = forwardRef<HTMLTableRowElement, ObservedReleaseRowPro
           <Package className="w-4 h-4 text-theme-text-tertiary shrink-0" />
           <span className="min-w-0 truncate text-sm font-medium text-theme-text-primary phone:max-w-[calc(100%-1.5rem)] phone:shrink-0">{release.name}</span>
           <ReleaseHealthBadge release={release} observed />
-          {release.managedByFluxHelmRelease && <FluxBadge release={release.managedByFluxHelmRelease} />}
+          <ControllerBadge release={release} />
         </div>
         <span className="hidden truncate pl-6 text-xs text-theme-text-tertiary phone:block">{release.namespace}</span>
       </td>
@@ -670,9 +672,17 @@ const ObservedReleaseRow = forwardRef<HTMLTableRowElement, ObservedReleaseRowPro
   )
 })
 
-function FluxBadge({ release }: { release?: string }) {
+function ControllerBadge({ release }: { release: { controller?: HelmReleaseController; managedByFlux?: boolean; managedByFluxHelmRelease?: string; managedByK3s?: boolean } }) {
+  const controller = releaseControllerOf(release)
+  if (controller) return <ReleaseControllerBadge controller={controller} />
+  if (release.managedByFlux) return <HiddenFluxBadge />
+  return release.managedByK3s ? <HiddenK3sBadge /> : null
+}
+
+// Flux owns the release but the caller can't read its HelmRelease's namespace.
+function HiddenFluxBadge() {
   return (
-    <Tooltip content={release ? `Installed by Flux helm-controller via HelmRelease ${release}. Manage its source in GitOps.` : "The owning Flux HelmRelease's namespace isn't available in this view, or Radar couldn't check your access. Manage this release through Flux; direct Helm changes may be reconciled back."}>
+    <Tooltip content="The owning Flux HelmRelease's namespace isn't available in this view, or Radar couldn't check your access. Manage this release through Flux; direct Helm changes may be reconciled back.">
       <span className="badge-sm shrink-0 border border-theme-border bg-theme-elevated text-theme-text-secondary">
         <GitBranch className="w-3 h-3" />
         Flux
@@ -706,8 +716,8 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
           <ReleaseHealthBadge release={release} />
           <NotCheckedBadge count={release.statusUnreadCount} />
           {listOperation && <HelmOperationChip operation={listOperation} />}
-          {(release.managedByFlux || release.managedByFluxHelmRelease) && <FluxBadge release={release.managedByFluxHelmRelease} />}
-          {upgradeInfo?.updateAvailable && (
+          <ControllerBadge release={release} />
+          {upgradeInfo?.updateAvailable && !managedByOtherController(release) && (
             <Tooltip content={`Upgrade available: ${release.chartVersion} → ${upgradeInfo.latestVersion}`}>
               <span className={clsx('badge-sm shrink-0', SEVERITY_BADGE.warning)}>
                 <ArrowUpCircle className="w-3 h-3" />

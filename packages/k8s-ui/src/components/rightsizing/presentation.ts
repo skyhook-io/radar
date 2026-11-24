@@ -1,4 +1,4 @@
-import { explainRightsizingReasons } from './reasons'
+import { currentPodEvidenceLabel, explainRightsizingReasons } from './reasons'
 import type { RightsizingFit, RightsizingRow } from '../../types/rightsizing'
 
 export type ResourceSignal = 'hpa' | 'oom' | 'bursty' | 'throttling' | 'query_error'
@@ -36,6 +36,8 @@ export function getResourceRequestPresentation(
 
   if (row.queryError)
     return { primary: currentOnly, secondary: 'Metrics query failed', signals, tone: 'neutral' }
+  const missing = currentPodEvidenceLabel(reason)
+  if (missing) return { primary: currentOnly, secondary: missing, signals, tone: 'neutral' }
   if (row.decision?.status === 'none') return {
     primary: currentOnly, secondary: row.fit === 'insufficient_history' ? 'Not enough history' : 'No meaningful change', signals, tone: 'neutral',
   }
@@ -118,14 +120,14 @@ function resourceSignals(row: RightsizingRow): ResourceSignal[] {
   return signals
 }
 
-export function getRightsizingPresentation(fit: RightsizingFit, queryError?: string) {
+export function getRightsizingPresentation(fit: RightsizingFit, queryError?: string, recommendationReason?: string) {
   if (queryError) return { label: 'Query failed', severity: 'error' as const }
   const labels: Record<RightsizingFit, string> = {
     balanced: 'Balanced',
     oversized: 'Oversized',
     under_requested: 'Under-requested',
     missing_request: 'Missing request',
-    insufficient_history: 'Insufficient history',
+    insufficient_history: currentPodEvidenceLabel(recommendationReason) ?? 'Insufficient history',
     pod_level_request: 'Pod-level request',
   }
   const severities: Record<RightsizingFit, 'success' | 'info' | 'warning' | 'neutral'> = {
