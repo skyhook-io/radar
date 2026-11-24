@@ -248,27 +248,38 @@ func TestPodLogs_LogsUnavailableCarriesCode(t *testing.T) {
 
 func TestPodLogsUIDBinding(t *testing.T) {
 	for _, tc := range []struct {
-		name, before, after string
-		code, reads         int
+		name, before, after               string
+		code, logCode, readPods, readLogs int
 	}{
-		{"same Pod", "reviewed", "reviewed", http.StatusOK, 1},
-		{"replaced before fetch", "replacement", "replacement", http.StatusConflict, 0},
-		{"replaced during fetch", "reviewed", "replacement", http.StatusConflict, 1},
+		{"same Pod", "reviewed", "reviewed", http.StatusOK, http.StatusOK, 2, 1},
+		{"replaced before fetch", "replacement", "replacement", http.StatusConflict, http.StatusOK, 1, 0},
+		{"replaced during fetch", "reviewed", "replacement", http.StatusConflict, http.StatusOK, 2, 1},
+		{"deleted during failed fetch", "reviewed", "", http.StatusConflict, http.StatusNotFound, 2, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var logs atomic.Int32
+			var pods, logs atomic.Int32
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
-				case "/api/v1/namespaces/default/pods/nginx-abc-xyz/log":
+				case "/api/v1/namespaces/default/pods/live-only-fixture/log":
 					logs.Add(1)
+					w.WriteHeader(tc.logCode)
 					_, _ = io.WriteString(w, "synthetic log line")
-				case "/api/v1/namespaces/default/pods/nginx-abc-xyz":
+				case "/api/v1/namespaces/default/pods/live-only-fixture":
+					pods.Add(1)
+					if r.URL.Query().Has("resourceVersion") {
+						t.Error("Pod binding requested a cached resource version")
+					}
 					uid := tc.before
 					if logs.Load() > 0 {
 						uid = tc.after
 					}
 					w.Header().Set("Content-Type", "application/json")
-					_, _ = io.WriteString(w, `{"apiVersion":"v1","kind":"Pod","metadata":{"name":"nginx-abc-xyz","namespace":"default","uid":"`+uid+`"},"spec":{"containers":[{"name":"nginx"}]}}`)
+					if uid == "" {
+						w.WriteHeader(http.StatusNotFound)
+						_, _ = io.WriteString(w, `{"apiVersion":"v1","kind":"Status","status":"Failure","reason":"NotFound","code":404}`)
+						return
+					}
+					_, _ = io.WriteString(w, `{"apiVersion":"v1","kind":"Pod","metadata":{"name":"live-only-fixture","namespace":"default","uid":"`+uid+`"},"spec":{"containers":[{"name":"nginx"}]}}`)
 				default:
 					t.Errorf("unexpected Kubernetes request %s", r.URL.Path)
 					http.NotFound(w, r)
@@ -281,14 +292,14 @@ func TestPodLogsUIDBinding(t *testing.T) {
 			}
 			previous := k8s.SetTestClient(client)
 			t.Cleanup(func() { k8s.SetTestClient(previous) })
-			resp, err := http.Get(testServer.URL + "/api/pods/default/nginx-abc-xyz/logs?container=nginx&podUid=reviewed")
+			resp, err := http.Get(testServer.URL + "/api/pods/default/live-only-fixture/logs?container=nginx&podUID=reviewed")
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer resp.Body.Close()
 			body, err := io.ReadAll(resp.Body)
-			if err != nil || resp.StatusCode != tc.code || int(logs.Load()) != tc.reads {
-				t.Fatalf("status=%d reads=%d body=%s err=%v", resp.StatusCode, logs.Load(), body, err)
+			if err != nil || resp.StatusCode != tc.code || int(pods.Load()) != tc.readPods || int(logs.Load()) != tc.readLogs || resp.Header.Get("Cache-Control") != "no-store" {
+				t.Fatalf("status=%d pods=%d logs=%d body=%s err=%v", resp.StatusCode, pods.Load(), logs.Load(), body, err)
 			}
 			if tc.code == http.StatusOK {
 				var reply LogsResponse

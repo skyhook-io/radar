@@ -94,8 +94,9 @@ func stopPodLogStreams(active *sync.Map, cursors map[string]*podlogs.StreamCurso
 
 // LogsResponse is the response for non-streaming logs
 type LogsResponse struct {
-	PodName    string            `json:"podName"`
-	PodUID     types.UID         `json:"podUid,omitempty"`
+	PodName string `json:"podName"`
+	// PodUID is present when the caller requested and Radar verified a live UID binding.
+	PodUID     types.UID         `json:"podUID,omitempty"`
 	Namespace  string            `json:"namespace"`
 	Containers []string          `json:"containers"`
 	Logs       map[string]string `json:"logs"` // container -> logs
@@ -106,10 +107,14 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	podName := chi.URLParam(r, "name")
 	container := r.URL.Query().Get("container")
-	uid := types.UID(r.URL.Query().Get("podUid"))
-	if r.URL.Query().Has("podUid") && (uid == "" || len(uid) > 253 || container == "") {
-		s.writeError(w, http.StatusBadRequest, "podUid requires a Pod UID and a named container")
-		return
+	var uid types.UID
+	if values, present := r.URL.Query()["podUID"]; present {
+		w.Header().Set("Cache-Control", "no-store")
+		if len(values) != 1 || values[0] == "" || strings.TrimSpace(values[0]) != values[0] || len(values[0]) > 253 || container == "" {
+			s.writeError(w, http.StatusBadRequest, "podUID requires one Pod UID and a named container")
+			return
+		}
+		uid = types.UID(values[0])
 	}
 	previous := r.URL.Query().Get("previous") == "true"
 	tailLinesStr := r.URL.Query().Get("tailLines")
@@ -135,7 +140,6 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 
 	var pod *corev1.Pod
 	if uid != "" {
-		w.Header().Set("Cache-Control", "no-store")
 		pod = s.liveLogPod(w, r, client, namespace, podName, uid)
 		if pod == nil {
 			return
@@ -165,10 +169,20 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch logs
 	logs := make(map[string]string)
+	var verifiedUID types.UID
 
 	if container != "" {
 		// Fetch logs for specific container
 		logContent, err := s.fetchContainerLogs(r.Context(), client, namespace, podName, container, tailLines, previous, sinceSeconds)
+		// The log subresource is name-addressed. Validate both text and errors
+		// against the live UID, since either can come from a replacement Pod.
+		if uid != "" {
+			pod = s.liveLogPod(w, r, client, namespace, podName, uid)
+			if pod == nil {
+				return
+			}
+			verifiedUID = pod.UID
+		}
 		// These are answers about the pod, not failures in Radar. The code
 		// lets the viewer show them as such.
 		if errors.Is(err, k8score.ErrLogsUnavailable) {
@@ -206,15 +220,9 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// The log subresource is name-addressed. A replacement Pod can appear
-	// during the download, so return text only when the same live UID still
-	// owns the name after the read.
-	if uid != "" && s.liveLogPod(w, r, client, namespace, podName, uid) == nil {
-		return
-	}
 	response := LogsResponse{
 		PodName:    podName,
-		PodUID:     uid,
+		PodUID:     verifiedUID,
 		Namespace:  namespace,
 		Containers: containers,
 		Logs:       logs,
@@ -228,6 +236,8 @@ func (s *Server) liveLogPod(w http.ResponseWriter, r *http.Request, client kuber
 	switch {
 	case apierrors.IsNotFound(err), err == nil && pod.UID != uid:
 		s.writeErrorCode(w, http.StatusConflict, "pod_changed", "The requested Pod is no longer present.")
+	case err != nil && k8s.IsUserTokenRequired(err.Error()):
+		s.writeError(w, http.StatusForbidden, k8s.UserTokenRequiredMessage)
 	case apierrors.IsForbidden(err), apierrors.IsUnauthorized(err):
 		s.writeError(w, http.StatusForbidden, "Pod access is required to verify its logs.")
 	case err != nil:
@@ -240,6 +250,11 @@ func (s *Server) liveLogPod(w http.ResponseWriter, r *http.Request, client kuber
 
 // handlePodLogsStream streams logs from a pod using SSE
 func (s *Server) handlePodLogsStream(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Has("podUID") {
+		w.Header().Set("Cache-Control", "no-store")
+		s.writeError(w, http.StatusBadRequest, "podUID is supported on log snapshots")
+		return
+	}
 	namespace := chi.URLParam(r, "namespace")
 	podName := chi.URLParam(r, "name")
 	container := r.URL.Query().Get("container")

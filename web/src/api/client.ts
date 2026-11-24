@@ -4530,6 +4530,8 @@ export function usePrometheusHPAMetrics(
 // Pod logs types
 export interface LogsResponse {
   podName: string;
+  /** Present when the server verified a requested Pod UID before and after the log read. */
+  podUID?: string;
   namespace: string;
   containers: string[];
   logs: Record<string, string>; // container -> logs
