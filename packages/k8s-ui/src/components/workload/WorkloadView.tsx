@@ -104,11 +104,16 @@ function isBuiltInTab(tab: TabType): tab is WorkloadTabType {
 
 // Hosts offering only built-in tabs can retain their narrower callback.
 type WorkloadTabSelection =
-  | { extraTabs?: undefined; onTabChange?: (tab: WorkloadTabType, options?: { replace?: boolean }) => void }
   | {
-      /** Additional tabs in the expanded view, including any tabs supplied by ApplicationDetail. */
+      extraTabs?: undefined
+      /** Next tab on user selection or link repair. Replace repairs the current history entry. */
+      onTabChange?: (tab: WorkloadTabType, options?: { replace?: boolean }) => void
+    }
+  | {
+      /** Additional expanded-view tabs, including tabs from ApplicationDetail.
+       * Built-in IDs are reserved. The first registration for each host ID wins. */
       extraTabs?: WorkloadExtraTab[]
-      /** Receives built-in and host tab IDs. Replace is set when the requested tab is no longer offered. */
+      /** Next tab on user selection or link repair. Replace repairs the current history entry. */
       onTabChange?: (tab: WorkloadDetailTab, options?: { replace?: boolean }) => void
     }
 
