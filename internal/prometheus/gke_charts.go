@@ -210,11 +210,10 @@ func (g *gkeMetrics) pvc(ctx context.Context, namespace, name string) PVCUsageRe
 func mergeGKEResources(ctx context.Context, g *gkeMetrics, resp *workloadMetricsResponse, scope PodScope, start, end time.Time, step time.Duration) {
 	needs := func(key string) bool {
 		p := resp.Panels[key]
-		state := p.State
-		if state == "" {
-			state = resp.State
+		if len(resp.Panels) == 0 {
+			return resp.State == "unavailable" || resp.State == "detecting" || resp.State == "error"
 		}
-		return len(p.Series) == 0 && (state == "unavailable" || state == "detecting" || state == "error")
+		return len(p.Series) == 0 && p.State == "unavailable"
 	}
 	if !needs("cpu") && !needs("memory") {
 		return
@@ -227,7 +226,7 @@ func mergeGKEResources(ctx context.Context, g *gkeMetrics, resp *workloadMetrics
 		native.ScopeNotice = resp.ScopeNotice
 		if resp.State == "detecting" || resp.State == "error" {
 			native.State = "partial"
-			native.Reason = strings.TrimSpace(native.Reason + " Conventional Prometheus workload identity is unverified. GKE samples cover current Pods.")
+			native.Reason = strings.TrimSpace(native.Reason + " Conventional Prometheus metrics are incomplete. " + resp.Reason)
 		}
 		*resp = native
 		return

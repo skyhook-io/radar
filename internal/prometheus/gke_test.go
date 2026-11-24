@@ -242,6 +242,14 @@ func TestGKEMetricsCharts(t *testing.T) {
 	if empty.Panels["cpu"].Source != "gke" || empty.Panels["memory"].Source != "gke" || empty.Start != start.Unix() || empty.End != end.Unix() || empty.StepSeconds != 60 || empty.PodsTotal != 2 {
 		t.Fatalf("native panels lost scope/window on an empty configured store: %+v", empty)
 	}
+	mixed := workloadMetricsResponse{
+		State: "partial", Panels: map[string]workloadMetricPanel{"cpu": {State: "error", Reason: "Historical query failed."}, "memory": {State: "unavailable"}},
+		History: map[string]workloadMetricScope{}, Comparison: map[string]workloadMetricPanel{},
+	}
+	mergeGKEResources(t.Context(), g, &mixed, scope, start, end, time.Minute)
+	if mixed.Panels["cpu"].State != "error" || mixed.Panels["cpu"].Reason != "Historical query failed." || mixed.Panels["memory"].Source != "gke" {
+		t.Fatalf("mixed panel diagnostics or native fallback lost: %+v", mixed.Panels)
+	}
 	for _, state := range []string{"detecting", "error"} {
 		original := workloadMetricsResponse{State: state, Reason: "Waiting for conventional identity.", Panels: map[string]workloadMetricPanel{}}
 		unknown := scope
@@ -401,7 +409,7 @@ func TestGKEConfiguredWorkloadWithUnverifiedConventionalIdentity(t *testing.T) {
 	}
 	r := getMetrics(t, metricsRouter(), "/prometheus/workload/Deployment/default/nginx?range=1h")
 	var got workloadMetricsResponse
-	if json.Unmarshal(r.Body.Bytes(), &got) != nil || r.Code != http.StatusOK || got.State != "partial" || got.ResourceSource != "gke" || got.Reason == "" || got.Pods != 1 {
+	if json.Unmarshal(r.Body.Bytes(), &got) != nil || r.Code != http.StatusOK || got.State != "partial" || got.ResourceSource != "gke" || !strings.Contains(got.Reason, "Metrics identity could not be checked. Retrying automatically.") || got.Pods != 1 {
 		t.Fatalf("workload response %d: %s", r.Code, r.Body)
 	}
 	for _, key := range []string{"cpu", "memory"} {
