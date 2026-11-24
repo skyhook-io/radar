@@ -1315,7 +1315,7 @@ export function WorkloadView({
         renderLogsTab={(props) => (
           <LogsTabContent
             {...props}
-            replicaSetLogs={baseActionsBarProps.replicaSetLogTab}
+            replicaSetLogs={baseActionsBarProps.replicaSetLogs || (baseActionsBarProps.replicaSetLogTab && props.pods.length === 0)}
             resourceLoading={resourceLoading}
             resourceError={resourceError}
             group={effectiveGroup}
