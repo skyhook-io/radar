@@ -1312,6 +1312,8 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'kafkaconnectors' && isApiGroup(data.apiVersion, 'kafka.strimzi.io')) return getStrimziConnectorStatus(data)
   if ((k === 'kafkas' && isStrimziKafka(data)) || (k === 'kafkanodepools' && isStrimziKafkaNodePool(data))) return getStrimziClusterStatus(data)
   if ((k === 'volumesnapshots' && isVolumeSnapshot(data)) || (k === 'volumesnapshotcontents' && isVolumeSnapshotContent(data))) return getVolumeSnapshotStatus(data)
+  // Native mutating admission policies and bindings expose only their declared configuration.
+  if ((k === 'mutatingadmissionpolicies' || k === 'mutatingadmissionpolicybindings') && isApiGroup(data.apiVersion, 'admissionregistration.k8s.io')) return null
   // A class is configuration with no status of its own.
   if (k === 'volumesnapshotclasses' && isVolumeSnapshotClass(data)) return null
   if (k === 'ipaddresspools' && isMetalLBIPAddressPool(data)) return getMetalLBPoolStatus(data)

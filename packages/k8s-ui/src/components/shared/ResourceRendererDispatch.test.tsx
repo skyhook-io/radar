@@ -50,6 +50,8 @@ describe('ResourceRendererDispatch', () => {
       expect(html.indexOf('Object.spec{replicas: 2}')).toBeGreaterThan(0)
       expect(html.indexOf('JSONPatch{op:')).toBeGreaterThan(html.indexOf('Object.spec{replicas: 2}'))
       expect(html).toContain('IfNeeded')
+      expect(getResourceStatus('mutatingadmissionpolicies', { apiVersion })).toBeNull()
+      expect(getResourceStatus('mutatingadmissionpolicybindings', { apiVersion })).toBeNull()
       expect(html).not.toContain('Type-check Warnings')
 
       const binding = renderKind('mutatingadmissionpolicybindings', { apiVersion, kind: 'MutatingAdmissionPolicyBinding',

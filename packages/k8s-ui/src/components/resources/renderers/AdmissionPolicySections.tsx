@@ -34,7 +34,7 @@ export function getBindingParameterReference(data: any): BindingParameterReferen
 
 export function Expression({ value }: { value: unknown }) {
   if (typeof value !== 'string' || !value) return null
-  return <pre className="font-mono text-xs text-theme-text-primary whitespace-pre-wrap break-all">{value}</pre>
+  return <pre className="font-mono text-xs text-theme-text-primary whitespace-pre-wrap [overflow-wrap:anywhere]">{value}</pre>
 }
 
 export function ExpressionCards({
@@ -144,7 +144,7 @@ function ParameterReference({ data }: { data: any }) {
             <Property label="Namespace" value={reference.namespace ?? PARAM_NAMESPACE_UNSET} />
           </>
         )}
-        <Property label="Parameter Not Found" value={reference.parameterNotFoundAction ?? 'Not specified'} />
+        <Property label="Parameter Not Found" value={reference.parameterNotFoundAction ?? (data.apiVersion === 'admissionregistration.k8s.io/v1alpha1' ? 'Deny (default)' : 'Not specified')} />
       </PropertyList>
       <div className="mt-2 text-xs text-theme-text-tertiary">
         Parameter availability is not checked; Radar does not discover or enumerate arbitrary parameter resources.

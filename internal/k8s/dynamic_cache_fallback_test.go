@@ -111,6 +111,7 @@ func TestRegisterSupportedCRDFallbacks_RegistersSupportedCRDFromPartialDiscovery
 		objectName string
 		cluster    bool
 	}{
+		{name: "PodTemplate v1", group: "", version: "v1", resource: "podtemplates", kind: "PodTemplate", objectName: "example"},
 		{name: "MutatingAdmissionPolicy v1beta1", group: "admissionregistration.k8s.io", version: "v1beta1", resource: "mutatingadmissionpolicies", kind: "MutatingAdmissionPolicy", objectName: "defaults", cluster: true},
 		{name: "MutatingAdmissionPolicyBinding v1alpha1", group: "admissionregistration.k8s.io", version: "v1alpha1", resource: "mutatingadmissionpolicybindings", kind: "MutatingAdmissionPolicyBinding", objectName: "teams", cluster: true},
 		{name: "StrimziPodSet v1", group: "core.strimzi.io", version: "v1", resource: "strimzipodsets", kind: "StrimziPodSet", objectName: "connect"},
