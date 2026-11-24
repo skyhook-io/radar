@@ -5,6 +5,7 @@ import {
   Section,
   type ResourceRef,
 } from '@skyhook-io/k8s-ui'
+import { isFetchError, isForbiddenError } from '@skyhook-io/k8s-ui/types/fetch-error'
 import { LookupFailureNote } from '@skyhook-io/k8s-ui/components/resources/renderers/LookupFailureNote'
 import {
   ValidatingAdmissionPolicyBindingRenderer as BaseBindingRenderer,
@@ -39,7 +40,7 @@ function PolicyBindings({ data, onNavigate, mutating }: AdmissionProps & { mutat
     ADMISSION_REGISTRATION_GROUP,
     { enabled: Boolean(name), refetchInterval: 30000 },
   )
-  const denied = query.error && 'status' in query.error && query.error.status === 403
+  const denied = isForbiddenError(query.error)
   const bindings = denied ? [] : (query.data ?? []).filter(binding => binding?.spec?.policyName === name)
   const bindingLookupComplete = query.coverage?.status === 'complete' && !query.error
   const bindingTitle = bindingLookupComplete
@@ -101,9 +102,7 @@ function PolicyReference({ data, onNavigate, kind }: AdmissionProps & { kind: st
     policyName,
     ADMISSION_REGISTRATION_GROUP,
   )
-  const status = typeof query.error === 'object' && query.error !== null && 'status' in query.error
-    ? (query.error as { status?: unknown }).status
-    : undefined
+  const status = isFetchError(query.error) ? query.error.status : undefined
   if (!policyName) return <>Not specified</>
   return query.isLoading ? (
     <ReferenceState name={policyName} note="Checking policy availability…" />
