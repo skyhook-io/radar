@@ -119,6 +119,8 @@ type workloadReadTarget struct {
 }
 
 var workloadReadTargets = map[string]workloadReadTarget{
+	"replicaset":   {group: "apps", resource: "replicasets"},
+	"replicasets":  {group: "apps", resource: "replicasets"},
 	"deployment":   {group: "apps", resource: "deployments"},
 	"deployments":  {group: "apps", resource: "deployments"},
 	"statefulset":  {group: "apps", resource: "statefulsets"},
@@ -305,7 +307,7 @@ func (s *Server) readableRunNamespaces(r *http.Request, group, resource string, 
 func (s *Server) authorizeWorkloadPodRead(w http.ResponseWriter, r *http.Request, kind, namespace string) bool {
 	target, ok := workloadReadTargets[kind]
 	if !ok {
-		s.writeError(w, http.StatusBadRequest, "only deployments, statefulsets, daemonsets, rollouts, jobs, and workflows are supported")
+		s.writeError(w, http.StatusBadRequest, "only deployments, replicasets, statefulsets, daemonsets, rollouts, jobs, and workflows are supported")
 		return false
 	}
 	if readscope.NoNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) {
@@ -425,14 +427,18 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	selector, err := k8s.GetWorkloadSelector(cache, kind, namespace, name)
+	listPods, err := k8s.WorkloadLogPodLister(cache, kind, namespace, name)
 	if err != nil {
 		sendSSEError(w, flusher, err.Error())
 		return
 	}
 
 	// Get initial pods
-	pods := cache.GetPodsForWorkload(namespace, selector)
+	pods, awaitingPods, err := listPods()
+	if err != nil {
+		sendSSEError(w, flusher, err.Error())
+		return
+	}
 	podInfos := podlogs.BuildPodInfos(pods)
 
 	// Send connected event with pod list
@@ -449,7 +455,7 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 	}
 	sendSSEEvent(w, flusher, "connected", connected)
 
-	if len(pods) == 0 && !shouldWaitForPodsInLogStream(kind, emptyMetadata) {
+	if len(pods) == 0 && !awaitingPods && !shouldWaitForPodsInLogStream(kind, emptyMetadata) {
 		sendSSEEvent(w, flusher, "end", workloadLogEndPayload(emptyMetadata))
 		return
 	}
@@ -574,10 +580,14 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 		case <-discoveryTicker.C:
 			generation++
 			// Re-discover pods
-			currentPods := cache.GetPodsForWorkload(namespace, selector)
+			currentPods, awaitingPods, err := listPods()
+			if err != nil {
+				sendSSEError(w, flusher, err.Error())
+				return
+			}
 			if len(currentPods) == 0 {
 				metadata := s.describeWorkloadLogEmpty(ctx, kind, namespace, name)
-				if !shouldWaitForPodsInLogStream(kind, metadata) {
+				if !awaitingPods && !shouldWaitForPodsInLogStream(kind, metadata) {
 					sendSSEEvent(w, flusher, "end", workloadLogEndPayload(metadata))
 					return
 				}
@@ -778,7 +788,7 @@ func (e *workloadError) Error() string { return e.message }
 // getWorkloadPods validates the kind, retrieves cache, and returns pods for a workload
 func (s *Server) getWorkloadPods(kind, namespace, name string) ([]*corev1.Pod, *workloadError) {
 	if _, ok := workloadReadTargets[kind]; !ok {
-		return nil, &workloadError{http.StatusBadRequest, "only deployments, statefulsets, daemonsets, rollouts, jobs, and workflows are supported"}
+		return nil, &workloadError{http.StatusBadRequest, "only deployments, replicasets, statefulsets, daemonsets, rollouts, jobs, and workflows are supported"}
 	}
 
 	cache := k8s.GetResourceCache()
@@ -786,12 +796,16 @@ func (s *Server) getWorkloadPods(kind, namespace, name string) ([]*corev1.Pod, *
 		return nil, &workloadError{http.StatusServiceUnavailable, "resource cache not available"}
 	}
 
-	selector, err := k8s.GetWorkloadSelector(cache, kind, namespace, name)
+	listPods, err := k8s.WorkloadLogPodLister(cache, kind, namespace, name)
 	if err != nil {
 		return nil, workloadSelectorGetError(err)
 	}
 
-	return cache.GetPodsForWorkload(namespace, selector), nil
+	pods, _, err := listPods()
+	if err != nil {
+		return nil, workloadSelectorGetError(err)
+	}
+	return pods, nil
 }
 
 type workloadRevisionTarget struct {
@@ -905,6 +919,9 @@ func daemonSetRevisionTarget(ctx context.Context, dynamicClient dynamic.Interfac
 }
 
 func workloadSelectorGetError(err error) *workloadError {
+	if errors.Is(err, k8s.ErrWorkloadCacheWarming) {
+		return &workloadError{http.StatusServiceUnavailable, err.Error()}
+	}
 	if errors.Is(err, k8s.ErrWorkloadAccessDenied) || apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
 		return &workloadError{http.StatusForbidden, err.Error()}
 	}
@@ -1510,6 +1527,8 @@ func addWorkloadLogMetadata(response map[string]any, metadata workloadLogMetadat
 
 func (s *Server) describeWorkloadLogEmpty(ctx context.Context, kind, namespace, name string) workloadLogMetadata {
 	switch kind {
+	case "replicaset", "replicasets":
+		return workloadLogMetadata{EmptyReason: "no-pods", EmptyMessage: "This ReplicaSet currently controls no Pods."}
 	case "job", "jobs":
 		return s.describeJobLogEmpty(namespace, name)
 	case "workflow", "workflows":

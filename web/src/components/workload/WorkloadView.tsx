@@ -113,6 +113,7 @@ import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
 import { useTrafficAvailable } from '../../api/traffic'
 import { isNotFoundError, useResourceAudit, useResourceIssues, useSubjectIssues, useRadarFeature, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
 import { AuditAlerts, getRadarUpgradeRequirement, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows, getDefaultLogContainerName, getLogContainerNames, getInitContainerNames } from '@skyhook-io/k8s-ui'
+import { WorkloadLogsTab } from '../dock/WorkloadLogsTab'
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
 import { ScheduledWorkloadLogsViewer } from '../logs/ScheduledWorkloadLogsViewer'
 import { LogsViewer } from '../logs/LogsViewer'
@@ -373,6 +374,8 @@ function useActionsBarProps(
   const canSetImages = isRolloutShape
     ? imageUpdatesSupported && isRollout && !rolloutCapabilitiesPending && rolloutCapabilities?.setImage === true
     : !workloadWritesPending && canSetWorkloadImages({ name: kind, group }, workloadWrites, imageUpdatesSupported)
+  const { support: replicaSetLogSupport } = useRadarFeature('replicaSetLogs')
+  const isAppsReplicaSet = kind === 'replicasets' && group === 'apps'
   const { support: deploymentPauseSupport } = useRadarFeature('deploymentPause')
   const canPauseDeployments = !workloadWritesPending &&
     canPauseDeployment({ name: kind, group }, workloadWrites, deploymentPauseSupport === 'supported')
@@ -432,6 +435,8 @@ function useActionsBarProps(
     onOpenTerminal: openTerminal,
     onOpenLogs: openLogs,
     onOpenWorkloadLogs: openWorkloadLogs,
+    replicaSetLogs: isAppsReplicaSet && replicaSetLogSupport === 'supported',
+    replicaSetLogTab: isAppsReplicaSet && replicaSetLogSupport !== 'unsupported',
     onOpenNodeTerminal: openNodeTerminal,
     onCopyCommand: (text: string, message: string, event: React.MouseEvent) =>
       showCopied(text, message, event),
@@ -1311,6 +1316,7 @@ export function WorkloadView({
         renderLogsTab={(props) => (
           <LogsTabContent
             {...props}
+            replicaSetLogs={baseActionsBarProps.replicaSetLogs || (baseActionsBarProps.replicaSetLogTab && props.pods.length === 0)}
             resourceLoading={resourceLoading}
             resourceError={resourceError}
             group={effectiveGroup}
@@ -1614,6 +1620,7 @@ const SCHEDULED_LOG_KINDS = new Set([
 ])
 
 function LogsTabContent({
+  replicaSetLogs,
   kind,
   apiKind,
   group,
@@ -1631,6 +1638,7 @@ function LogsTabContent({
   resourceLoading,
   resourceError,
 }: {
+  replicaSetLogs: boolean
   kind: string
   apiKind: string
   group?: string
@@ -1682,7 +1690,8 @@ function LogsTabContent({
     )
   }
 
-  // Workload kinds with stable pod selectors use the aggregated workload logs viewer
+  if (replicaSetLogs) return <WorkloadLogsTab namespace={namespace} workloadKind={apiKind} workloadName={name} />
+
   if (WORKLOAD_LOG_KINDS.has(kind) && (kind !== 'Job' || isCoreBatchJob(apiKind, group))) {
     return (
       <div className="h-full">
@@ -1709,7 +1718,7 @@ function LogsTabContent({
     )
   }
 
-  // Other kinds with associated pods (Jobs, CronJobs, ReplicaSets, etc.) — pod selector + LogsViewer
+  // Other resources with associated Pods offer their individual logs.
   return (
     <MultiPodLogsTab
       pods={pods}

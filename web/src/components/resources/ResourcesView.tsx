@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { fetchJSON, isForbiddenError, isKindSyncFailed, isStillLoadingError, useCapabilities, useNamespaceCapabilities, useResources, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads, useAuditBadges, useIssues, fetchResourceList, isListTooLargeError, isUnretryableReadError } from '../../api/client'
+import { fetchJSON, isForbiddenError, isKindSyncFailed, isStillLoadingError, useCapabilities, useNamespaceCapabilities, useResources, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads, useAuditBadges, useIssues, fetchResourceList, isListTooLargeError, isUnretryableReadError, useRadarFeature } from '../../api/client'
 import { isBadgeWorthy } from '../../utils/auditBadges'
 import { ISSUE_SEVERITY_RANK } from '@skyhook-io/k8s-ui'
 import type { Issue, AuditBadgeMessage } from '@skyhook-io/k8s-ui'
@@ -323,6 +323,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   // Dock actions
   const openLogs = useOpenLogs()
   const openWorkloadLogs = useOpenWorkloadLogs()
+  const { support: replicaSetLogSupport } = useRadarFeature('replicaSetLogs')
 
   // Bulk delete
   const bulkDeleteMutation = useBulkDeleteResources()
@@ -427,6 +428,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       // Dock actions
       onOpenLogs={openLogs}
       onOpenWorkloadLogs={openWorkloadLogs}
+      replicaSetLogs={replicaSetLogSupport === 'supported'}
       // Create resource
       onCreateResource={handleCreateResource}
       renderKindView={renderKindView}

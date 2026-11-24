@@ -241,6 +241,7 @@ type FeatureCapabilities struct {
 	// GET /api/workloads/rayclusters/{namespace}/{name}/pods?ownerUID=. Radars
 	// from v1.15.0 serve the route without advertising this flag.
 	RayClusterPods bool `json:"rayClusterPods"`
+	ReplicaSetLogs bool `json:"replicaSetLogs"`
 	// Workload Pod info marks native sidecars (containerStatuses[].sidecar);
 	// without this, an absent mark doesn't mean "not a sidecar".
 	PodSidecarMarks bool `json:"podSidecarMarks"`
