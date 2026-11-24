@@ -871,6 +871,7 @@ export interface ManagerClaim {
 // Parsed X.509 certificate metadata (from backend cert parsing)
 export interface CertificateInfo {
   subject: string
+  organizations?: string[]
   sans?: string[]
   issuer: string
   selfSigned?: boolean
@@ -884,6 +885,7 @@ export interface CertificateInfo {
 
 export interface SecretCertificateInfo {
   certificates: CertificateInfo[]
+  additionalKeys?: Record<string, CertificateInfo[]>
 }
 
 /** How much of a CertificateSigningRequest payload Radar could read (pkg/csr). */

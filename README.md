@@ -354,9 +354,8 @@ Diff any two Kubernetes resources of the same kind side-by-side — like compari
 
 View TLS certificate details and expiry dates across all namespaces — catch expiring certificates before they cause outages.
 
-- Parses TLS secrets to show certificate subject, issuer, and validity period
+- Open a Secret to inspect the PEM certificates in each data key, including CA bundles in Opaque Secrets
 - Dashboard-level certificate expiry overview
-- Available from the resource detail view for any TLS-type Secret
 
 ### GitOps
 

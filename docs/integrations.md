@@ -683,7 +683,7 @@ TLS references resolve local Secret names and delegated `namespace/name` names c
 
 **Dashboard:** Certificate health card showing healthy/warning/critical/expired certificate counts across all namespaces.
 
-**TLS Secret Parsing:** Click any TLS Secret to see the X.509 certificate details — subject, issuer, validity dates, SANs — parsed directly from the secret data.
+**Secret certificates.** Open a Secret to inspect PEM certificates under any data key. The drawer names the key, preserves certificate order within each bundle, and shows the subject, organization, issuer, DNS and IP alternative names, serial number, key type and validity dates. The dashboard's Secret expiry counts use the serving certificate in a TLS Secret's `tls.crt`.
 
 <p align="center">
   <img src="screenshots/integrations/certmanager-certificate-detail.png" alt="Certificate Detail" width="800">
