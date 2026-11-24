@@ -706,7 +706,7 @@ func buildRightsizingQueries(namespace string, selection metricSelection) map[st
 		podMatcher = fmt.Sprintf(`,pod=~"%s"`, selection.podPattern)
 	}
 	f := func(metric string) string { return scopeMatchers(selection.scope, metric) }
-	cpu := fmt.Sprintf(`max by (container) (rate(container_cpu_usage_seconds_total{namespace="%s"%s,container!="",container!="POD"%s}[5m]) %s)`, ns, podMatcher, f(metricCPUUsage), selection.join)
+	cpu := fmt.Sprintf(`max by (container) (rate(container_cpu_usage_seconds_total{namespace="%s"%s,container!="",container!="POD",cpu=~"total|"%s}[5m]) %s)`, ns, podMatcher, f(metricCPUUsage), selection.join)
 	memory := fmt.Sprintf(`max by (container) (container_memory_working_set_bytes{namespace="%s"%s,container!="",container!="POD"%s} %s)`, ns, podMatcher, f(metricMemoryWorkingSet), selection.join)
 	throttled := fmt.Sprintf(`sum by (container) (rate(container_cpu_cfs_throttled_periods_total{namespace="%s"%s,container!="",container!="POD"%s}[5m]) %s)`, ns, podMatcher, f(metricThrottledPeriods), selection.join)
 	periods := fmt.Sprintf(`sum by (container) (rate(container_cpu_cfs_periods_total{namespace="%s"%s,container!="",container!="POD"%s}[5m]) %s)`, ns, podMatcher, f(metricCFSPeriods), selection.join)
