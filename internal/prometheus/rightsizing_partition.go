@@ -2,7 +2,9 @@ package prometheus
 
 import (
 	"context"
+	"maps"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -223,6 +225,9 @@ func rightsizingSourcesMatchNodes(ctx context.Context, q instantQuerier, at time
 		// Nodes can retire during a history window. They cannot establish
 		// identity. A reused live node name with contrary identity still fails.
 		if span > 0 && node == nil {
+			if providers[l["provider_id"]] {
+				return false, nil
+			}
 			continue
 		}
 		if node == nil || (required[source] || l["provider_id"] != "") && l["provider_id"] != node.Spec.ProviderID || l["system_uuid"] != "" && !strings.EqualFold(l["system_uuid"], node.Status.NodeInfo.SystemUUID) {
@@ -238,5 +243,55 @@ func rightsizingSourcesMatchNodes(ctx context.Context, q instantQuerier, at time
 			return false, nil
 		}
 	}
+	if span > 0 {
+		return rightsizingReportersContinuous(ctx, q, at, span, matchers, slices.Sorted(maps.Keys(providers)))
+	}
 	return true, nil
+}
+
+// A reused scrape address must not connect disjoint Node fleets across time.
+// Every rightsizing interval with UID-less inventory needs a local Node witness
+// on that reporter. One overlap with current hardware allows normal Node churn.
+func rightsizingReportersContinuous(ctx context.Context, q instantQuerier, at time.Time, span time.Duration, matchers string, providers []string) (bool, error) {
+	group := strings.Join(podInventorySourceLabels, ",")
+	step := promSeconds(rightsizingStep)
+	// Align the subquery outwards to include both partial edge intervals.
+	end := at.Truncate(rightsizingStep)
+	if end.Before(at) {
+		end = end.Add(rightsizingStep)
+	}
+	window := "[" + promSeconds(span+rightsizingStep) + ":" + step + "]"
+	observed := func(metric, extra string) string {
+		return "present_over_time(" + metric + "{" + matchers + "," + extra + "}[" + step + "])"
+	}
+	bySource := func(expr string) string { return "count by (" + group + ") (" + expr + ")" }
+	nodes := func(ids []string) string { return observed("kube_node_info", labelRegexMatcher("provider_id", ids)) }
+	query := func(expr string) (*prom.QueryResult, error) {
+		if len(expr) > prom.MaxWorkloadQueryBytes {
+			return nil, prom.ErrWorkloadQueryTooLarge
+		}
+		r, err := requireComplete(q.QueryAtPost(ctx, expr, end))
+		if err != nil || r == nil || r.ResultType != "vector" || len(r.Annotations.Infos) != 0 {
+			return nil, err
+		}
+		return r, nil
+	}
+	allNodes := "count by (" + group + ",provider_id) (" + observed("kube_node_info", `provider_id!=""`) + ")"
+	overlap := allNodes + " and on (" + group + ") " + bySource(nodes(providers))
+	witnesses, err := query("topk(1025,count by (provider_id) (max_over_time((" + overlap + ")" + window + ")))")
+	if err != nil || witnesses == nil || len(witnesses.Series) == 0 || len(witnesses.Series) > 1024 {
+		return false, err
+	}
+	var ids []string
+	for _, row := range witnesses.Series {
+		id := row.Labels["provider_id"]
+		if id == "" {
+			return false, nil
+		}
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	inventory := bySource(observed("kube_pod_info", `uid=""`) + " or " + observed(metricPodOwner, `uid="",owner_is_controller="true"`))
+	missing, err := query("topk(1,max_over_time((" + inventory + " unless " + bySource(nodes(ids)) + ")" + window + "))")
+	return err == nil && missing != nil && len(missing.Series) == 0, err
 }

@@ -150,6 +150,12 @@ func TestRightsizingRetiredInventoryReporters(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			q := &fakeViewQuerier{answer: func(query string) (*prom.QueryResult, error) {
+				if strings.HasPrefix(query, "topk(1025,count by (provider_id)") {
+					return &prom.QueryResult{ResultType: "vector", Series: []prom.Series{{Labels: map[string]string{"provider_id": "provider://live"}}}}, nil
+				}
+				if strings.HasPrefix(query, "topk(1,max_over_time") {
+					return &prom.QueryResult{ResultType: "vector"}, nil
+				}
 				for _, s := range []string{`present_over_time(kube_node_info{cluster="local"}[604800s])`, `present_over_time(kube_pod_info{cluster="local",uid=""}[604800s])`, `present_over_time(kube_pod_owner{cluster="local",uid="",owner_is_controller="true"}[604800s])`} {
 					if !strings.Contains(query, s) {
 						t.Fatalf("missing retained source scope %q", s)
@@ -215,6 +221,9 @@ func TestRightsizingOwnerViewScope(t *testing.T) {
 			store := &viewScopeStore{answer: func(q string) []byte {
 				var out []prom.Series
 				switch {
+				case strings.HasPrefix(q, "topk(1025,count by (provider_id)"):
+					out = []prom.Series{{Labels: map[string]string{"provider_id": "provider://node"}}}
+				case strings.HasPrefix(q, "topk(1,max_over_time"):
 				case strings.HasPrefix(q, "topk(257,"):
 					l := map[string]string{"namespace": "shop", "pod": "api-0", "cluster": "a"}
 					if tc.primary {
