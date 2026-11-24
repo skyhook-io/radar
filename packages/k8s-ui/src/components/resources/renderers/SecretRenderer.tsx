@@ -120,8 +120,8 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
         </PropertyList>
       </Section>
 
-      {certificateInfo && <SecretCertificates key={data.metadata?.uid ?? `${data.metadata?.namespace}/${data.metadata?.name}`} info={certificateInfo} />}
       <ReflectorSummary data={data} reflection={relationships?.reflection} onNavigate={onNavigate} />
+      {certificateInfo && <SecretCertificates key={data.metadata?.uid ?? `${data.metadata?.namespace}/${data.metadata?.name}`} info={certificateInfo} />}
 
       {dataKeys.length > 0 && (
         <div className="flex items-center gap-2 p-3 bg-amber-500/10 border border-amber-500/30 rounded text-amber-400 text-sm">
@@ -322,7 +322,7 @@ function SecretCertificates({ info }: { info: SecretCertificateInfo }) {
         />
       )}
 
-      {certificateCount > 6 ? <Section title={summary} defaultExpanded={false} mountLazily>{certificateSections}</Section> : certificateSections}
+      {certificateCount > 6 ? <Section title={summary} defaultExpanded={false} contentClassName="pl-6 space-y-4" mountLazily>{certificateSections}</Section> : certificateSections}
     </>
   )
 }
