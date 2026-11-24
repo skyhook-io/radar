@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/prom"
@@ -208,12 +209,13 @@ type scanKey struct {
 }
 
 type scanBatchEvidence struct {
-	cpu          map[scanKey][]float64
-	memory       map[scanKey][]float64
-	throttle     map[scanKey][]float64
-	restarts     map[scanKey]float64
-	terminations map[scanKey]terminationEvidence
-	errors       map[string]error
+	ownerCoverage OwnerCoverage
+	cpu           map[scanKey][]float64
+	memory        map[scanKey][]float64
+	throttle      map[scanKey][]float64
+	restarts      map[scanKey]float64
+	terminations  map[scanKey]terminationEvidence
+	errors        map[string]error
 }
 
 func runRightsizingScan(ctx context.Context, scope RightsizingScanScope, client *Client, cache *k8s.ResourceCache, publish func(RightsizingScanResponse)) RightsizingScanResponse {
@@ -387,41 +389,46 @@ func computeRightsizingScanProgress(ctx context.Context, client rightsizingScanQ
 			return withheldRightsizingScan(resp, workloads, scope)
 		}
 	}
-	client = strictQuerier{client}
-
-	ksm, err := client.Query(ctx, "count("+bareScopedSelector(scope, metricPodOwner)+")")
-	if err != nil {
-		resp.Reason = "owner_metrics_query_failed"
-		if ctx.Err() == nil {
-			appendScanWarning(&resp, "owner_metrics_query_failed", err.Error())
-		}
-		return resp
+	if cloud.IsAuthenticatedTunnelRequest(ctx) && scope.State == ViewScopeUnlabeled {
+		scope = currentPodUIDScope()
+		resp.ClusterScope = scope.Wire()
 	}
-	if firstValue(ksm) == nil || *firstValue(ksm) <= 0 {
-		resp.Reason = "owner_metrics_missing"
-		return resp
-	}
-	replicaSetOwnersQueryFailed := false
-	if hasScanKind(workloads, "Deployment") {
-		replicaSetOwners, queryErr := client.Query(ctx, "count("+bareScopedSelector(scope, metricReplicaSetOwner)+")")
-		if queryErr != nil && ctx.Err() != nil {
+	if scope.State != ViewScopeCurrentPodUIDs {
+		client = strictQuerier{client}
+		ksm, err := client.Query(ctx, "count("+bareScopedSelector(scope, metricPodOwner)+")")
+		if err != nil {
+			resp.Reason = "owner_metrics_query_failed"
+			if ctx.Err() == nil {
+				appendScanWarning(&resp, "owner_metrics_query_failed", err.Error())
+			}
 			return resp
 		}
-		if queryErr != nil || firstValue(replicaSetOwners) == nil || *firstValue(replicaSetOwners) <= 0 {
-			resp.Coverage.UnavailableKinds = appendUniqueSorted(resp.Coverage.UnavailableKinds, "Deployment")
-			workloads = withoutScanKind(workloads, "Deployment")
-			if queryErr != nil {
-				replicaSetOwnersQueryFailed = true
-				appendScanWarning(&resp, "deployment_owner_metrics_query_failed", queryErr.Error())
+		if firstValue(ksm) == nil || *firstValue(ksm) <= 0 {
+			resp.Reason = "owner_metrics_missing"
+			return resp
+		}
+		replicaSetOwnersQueryFailed := false
+		if hasScanKind(workloads, "Deployment") {
+			replicaSetOwners, queryErr := client.Query(ctx, "count("+bareScopedSelector(scope, metricReplicaSetOwner)+")")
+			if queryErr != nil && ctx.Err() != nil {
+				return resp
+			}
+			if queryErr != nil || firstValue(replicaSetOwners) == nil || *firstValue(replicaSetOwners) <= 0 {
+				resp.Coverage.UnavailableKinds = appendUniqueSorted(resp.Coverage.UnavailableKinds, "Deployment")
+				workloads = withoutScanKind(workloads, "Deployment")
+				if queryErr != nil {
+					replicaSetOwnersQueryFailed = true
+					appendScanWarning(&resp, "deployment_owner_metrics_query_failed", queryErr.Error())
+				}
 			}
 		}
-	}
-	if len(workloads) == 0 {
-		resp.Reason = "deployment_owner_metrics_missing"
-		if replicaSetOwnersQueryFailed {
-			resp.Reason = "deployment_owner_metrics_query_failed"
+		if len(workloads) == 0 {
+			resp.Reason = "deployment_owner_metrics_missing"
+			if replicaSetOwnersQueryFailed {
+				resp.Reason = "deployment_owner_metrics_query_failed"
+			}
+			return resp
 		}
-		return resp
 	}
 
 	resp.Coverage.Batches = (len(workloads) + rightsizingScanBatchSize - 1) / rightsizingScanBatchSize
@@ -456,6 +463,14 @@ func computeRightsizingScanProgress(ctx context.Context, client rightsizingScanQ
 			resp.Coverage.WorkloadsEvaluated++
 			if workloadHasData(out) {
 				resp.Coverage.WorkloadsWithData++
+			} else if scope.State == ViewScopeCurrentPodUIDs && len(evidence.errors) == 0 {
+				if out.ScaledToZero {
+					appendScanWarning(&resp, "scaled_to_zero", "Some workloads have no current replicas to measure. Configure the Prometheus cluster scope to use retained workload history.")
+				} else if !hasCurrentPodSizingCohort(workload) {
+					appendScanWarning(&resp, reasonCurrentReplicasUnverified, "Some workloads could not be measured because Radar could not verify a complete set of ready Pods matching their current template.")
+				} else {
+					appendScanWarning(&resp, reasonCurrentPodSamplesMissing, "For some workloads, no CPU or memory interval matched every current replica. Check that cAdvisor retains Pod UIDs in the id label, or configure the scope of your Prometheus store to use workload history.")
+				}
 			}
 			if workloadHasUnavailableOOMEvidence(out) {
 				appendScanWarning(&resp, ReasonOOMEvidenceUnavailable, "Restart history was incomplete for some memory recommendations.")
@@ -483,6 +498,9 @@ func computeRightsizingScanProgress(ctx context.Context, client rightsizingScanQ
 }
 
 func queryRightsizingScanBatch(ctx context.Context, client rightsizingScanQuerier, batch []scanWorkload, now time.Time, scope ViewScope) scanBatchEvidence {
+	if scope.State == ViewScopeCurrentPodUIDs {
+		return queryCurrentPodBatch(ctx, client, batch, now)
+	}
 	queries := buildRightsizingScanQueries(batch, scope)
 	out := scanBatchEvidence{
 		cpu: map[scanKey][]float64{}, memory: map[scanKey][]float64{}, throttle: map[scanKey][]float64{},
@@ -703,13 +721,30 @@ func scanSeriesKey(labels map[string]string) (scanKey, bool) {
 	return key, key.namespace != "" && key.kind != "" && key.workload != "" && key.container != ""
 }
 
+const (
+	reasonCurrentReplicasUnverified = "current_replicas_unverified"
+	reasonCurrentPodSamplesMissing  = "current_pod_samples_missing"
+)
+
 func buildScanWorkload(input scanWorkload, evidence scanBatchEvidence) RightsizingScanWorkload {
 	out := RightsizingScanWorkload{Kind: input.kind, Namespace: input.namespace, Name: input.name, Replicas: input.replicas, ScaledToZero: input.workload.scaledToZero, ManagedBy: input.workload.managedBy, Rows: make([]RightsizingRow, 0, len(input.workload.containers)*2)}
 	expected := int(rightsizingWindow/rightsizingStep) + 1
+	missingReason := ""
+	if evidence.ownerCoverage == OwnerCoverageCurrentPods {
+		missingReason = reasonCurrentPodSamplesMissing
+		if out.ScaledToZero {
+			missingReason = "scaled_to_zero"
+		} else if !hasCurrentPodSizingCohort(input) {
+			missingReason = reasonCurrentReplicasUnverified
+		}
+	}
 	for _, container := range input.workload.containers {
 		key := scanKey{namespace: input.namespace, kind: input.kind, workload: input.name, container: container.name}
 		for _, resourceName := range []string{"cpu", "memory"} {
 			row := buildScanRow(container, resourceName, key, expected, input.workload, evidence)
+			if row.Observed == nil && row.QueryError == "" {
+				row.RecommendationReason = missingReason
+			}
 			out.Rows = append(out.Rows, row)
 		}
 	}
@@ -759,7 +794,11 @@ func buildScanRow(container containerSpec, resourceName string, key scanKey, exp
 	row.Observed = &ObservedStatistic{Name: statistic, Value: observed, Formatted: rightsizing.FormatObservedValue(observed, resourceName)}
 	row.SampleCount = len(series)
 	row.Coverage = math.Min(float64(row.SampleCount)/float64(expected), 1)
-	row.Confidence = rightsizing.ConfidenceFor(row.SampleCount, row.Coverage, OwnerCoverageKSMHistory)
+	coverage := evidence.ownerCoverage
+	if coverage == "" {
+		coverage = OwnerCoverageKSMHistory
+	}
+	row.Confidence = rightsizing.ConfidenceFor(row.SampleCount, row.Coverage, coverage)
 	if resourceName == "cpu" && evidence.errors["throttle"] == nil {
 		if values := evidence.throttle[key]; len(values) > 0 {
 			value := maxFinite(values)
@@ -940,11 +979,11 @@ func sortScanWorkloads(workloads []scanWorkload) {
 func snapshotScanWorkloads(ctx context.Context, cache *k8s.ResourceCache, scopes map[string][]string) ([]scanWorkload, []string, []string) {
 	workloads := map[string]*scanWorkload{}
 	var unavailable, skippedDaemonSets []string
-	add := func(obj metav1.Object, kind string, replicas int, podSpec *corev1.PodSpec, scaledToZero bool) {
+	add := func(obj metav1.Object, kind string, replicas int, podSpec *corev1.PodSpec, scaledToZero, cohortReady bool) {
 		key := workloadIdentity(kind, obj.GetNamespace(), obj.GetName())
 		workloads[key] = &scanWorkload{uid: obj.GetUID(), kind: kind, namespace: obj.GetNamespace(), name: obj.GetName(), replicas: replicas, workload: rightsizingWorkload{
 			podSpec: podSpec, containers: extractRuntimeContainers(podSpec), currentPodOOM: map[string]bool{}, hpaManaged: map[string]bool{}, scaledToZero: scaledToZero,
-			managedBy: DetectWorkloadManager(obj),
+			managedBy: DetectWorkloadManager(obj), podIdentityIncomplete: !cohortReady,
 		}}
 	}
 
@@ -957,7 +996,7 @@ func snapshotScanWorkloads(ctx context.Context, cache *k8s.ResourceCache, scopes
 		} else {
 			for _, item := range items {
 				replicas := specReplicas(item.Spec.Replicas)
-				add(item, "Deployment", replicas, &item.Spec.Template.Spec, replicas == 0)
+				add(item, "Deployment", replicas, &item.Spec.Template.Spec, replicas == 0, sizingControllerCohortReady(item, item.Status.ObservedGeneration, int32(replicas), item.Status.Replicas, item.Status.UpdatedReplicas, item.Status.ReadyReplicas))
 			}
 		}
 	}
@@ -970,7 +1009,7 @@ func snapshotScanWorkloads(ctx context.Context, cache *k8s.ResourceCache, scopes
 		} else {
 			for _, item := range items {
 				replicas := specReplicas(item.Spec.Replicas)
-				add(item, "StatefulSet", replicas, &item.Spec.Template.Spec, replicas == 0)
+				add(item, "StatefulSet", replicas, &item.Spec.Template.Spec, replicas == 0, sizingControllerCohortReady(item, item.Status.ObservedGeneration, int32(replicas), item.Status.Replicas, item.Status.UpdatedReplicas, item.Status.ReadyReplicas))
 			}
 		}
 	}
@@ -991,7 +1030,7 @@ func snapshotScanWorkloads(ctx context.Context, cache *k8s.ResourceCache, scopes
 				}
 				// A zero not yet re-observed is scanned, but still has no replica
 				// count to weigh impact by.
-				add(item, "DaemonSet", int(item.Status.DesiredNumberScheduled), &item.Spec.Template.Spec, item.Status.DesiredNumberScheduled == 0)
+				add(item, "DaemonSet", int(item.Status.DesiredNumberScheduled), &item.Spec.Template.Spec, item.Status.DesiredNumberScheduled == 0, sizingControllerCohortReady(item, item.Status.ObservedGeneration, item.Status.DesiredNumberScheduled, item.Status.CurrentNumberScheduled, item.Status.UpdatedNumberScheduled, item.Status.NumberReady) && item.Status.NumberMisscheduled == 0)
 			}
 		}
 	}
@@ -1201,6 +1240,7 @@ func enrichScanCurrentOOM(ctx context.Context, cache *k8s.ResourceCache, scopes 
 		markScanLiveInventoryUnavailable(workloads, "")
 		return
 	}
+	collectPodIdentities := cloud.IsAuthenticatedTunnelRequest(ctx)
 	for _, pod := range pods {
 		owner := metav1.GetControllerOf(pod)
 		if owner == nil {
@@ -1232,6 +1272,9 @@ func enrichScanCurrentOOM(ctx context.Context, cache *k8s.ResourceCache, scopes 
 		workload := workloads[workloadIdentity(owner.Kind, pod.Namespace, owner.Name)]
 		if workload == nil || !k8s.ControllerMatchesIdentity(owner, workload.kind, workload.name, "apps", workload.uid) {
 			continue
+		}
+		if collectPodIdentities {
+			workload.workload.observeSizingPodIdentity(ctx, cache, pod)
 		}
 		workload.workload.qos.Observe(pod.Status.QOSClass)
 		collectCurrentPodOOM(workload.workload.currentPodOOM, pod.Status.ContainerStatuses)

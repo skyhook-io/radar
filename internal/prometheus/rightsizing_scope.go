@@ -156,3 +156,8 @@ func (s strictRightsizingQuerier) Query(ctx context.Context, query string) (*pro
 func isIncompleteAnswer(err error) bool {
 	return errors.Is(err, prom.ErrPartialResponse) || errors.Is(err, prom.ErrQueryWarning)
 }
+
+// This scope applies to the returned measurements, not the entire metrics store.
+func currentPodUIDScope() ViewScope {
+	return ViewScope{State: ViewScopeCurrentPodUIDs, Note: "Only measurements matched to current Kubernetes Pod UIDs are included. Replaced Pods are excluded."}
+}

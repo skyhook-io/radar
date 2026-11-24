@@ -31,6 +31,7 @@ const (
 	ViewScopeConfigured            ViewScopeState = "scoped_configured"
 	ViewScopeSingleClusterAsserted ViewScopeState = "single_cluster_asserted"
 	ViewScopeVerified              ViewScopeState = "scoped_verified"
+	ViewScopeCurrentPodUIDs        ViewScopeState = "current_pod_uids"
 	ViewScopeUnlabeled             ViewScopeState = "unlabeled"
 	ViewScopeSeveralClusters       ViewScopeState = "several_clusters"
 	ViewScopeLabelMissing          ViewScopeState = "label_missing"
