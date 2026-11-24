@@ -1113,6 +1113,7 @@ export function WorkloadView({
   const tabIsVisible = (id: TabType) => allTabs.some((tab) => tab.id === id && !tab.hidden)
   const tabTarget = (id: WorkloadTabType) => tabIsVisible(id) ? id : expanded ? extraTabsForState?.find((tab) => tab.replaces === id)?.id : undefined
   const requestedTabAvailable = tabIsVisible(requestedTab)
+  const requestedHostTabKnown = offeredExtraTabs?.some(({ id }) => id === requestedTab)
   const replacementTab = expanded ? extraTabsForState?.find((tab) => tab.replaces === requestedTab)?.id : undefined
   const extraTabsLoading = extraTabsState === 'loading'
   const awaitingRequestedTab = expanded && !requestedTabAvailable && !replacementTab && (
@@ -1134,7 +1135,7 @@ export function WorkloadView({
     !requestedTabAvailable &&
     (
       (expanded && (replacementTab !== undefined || hiddenTabs?.some((tab) => tab === requestedTab))) ||
-      (expanded && extraTabsState === 'ready' && !resourceLoading && !isBuiltInTab(requestedTab)) ||
+      (expanded && extraTabsState === 'ready' && !resourceLoading && !isBuiltInTab(requestedTab) && !requestedHostTabKnown) ||
       (requestedTab === 'spec' && !!resource && !resourceLoading && !expandedSummary) ||
       (requestedTab === 'topology' && topologyTabHidden) ||
       (requestedTab === 'metrics' && (!renderMetricsTab || (!!resource && !resourceLoading && !showMetricsTab))) ||

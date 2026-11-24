@@ -232,12 +232,18 @@ it('preserves a host tab after a cached 404 and only runs tabs that can work wit
   const extraTabs = [
     { id: 'live', label: 'Live', render: () => <div>Live action</div>, requiresLiveResource: true, replaces: 'timeline' as const },
     { id: 'git', label: 'Git', render: () => <div>Git history</div>, requiresLiveResource: false, replaces: 'spec' as const },
+    { id: 'runs', label: 'Runs', render: () => <div>Run history</div> },
   ]
   const gone = Object.assign(new Error('not found'), { status: 404 })
   const hosted = { ...props, expanded: true, extraTabs, extraTabsState: 'ready' as const, onTabChange, tabHeader: <div>Host header</div> }
   act(() => root.render(<WorkloadView {...hosted} activeTab="timeline" resource={undefined} isLoading />))
   expect(host.querySelector('[role="tab"][aria-selected="true"]')).toBeNull()
   expect(onTabChange).not.toHaveBeenCalled()
+  act(() => root.render(<WorkloadView {...hosted} activeTab="runs" resourceError={gone} />))
+  expect(host.textContent).not.toContain('Run history')
+  expect(onTabChange).not.toHaveBeenCalled()
+  act(() => root.render(<WorkloadView {...hosted} activeTab="runs" />))
+  expect(host.textContent).toContain('Run history')
   act(() => root.render(<WorkloadView {...hosted} activeTab="live" resource={undefined} isLoading />))
   expect(host.textContent).not.toContain('Live action')
   expect(onTabChange).not.toHaveBeenCalled()
