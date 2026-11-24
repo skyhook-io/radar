@@ -1,5 +1,4 @@
 import type { WorkloadPodInfo } from '../types/core'
-import { pluralize } from './pluralize'
 
 /** Every CanaryStep variant Argo defines; raw JSON is unreadable in a step list. */
 export function canaryStepLabel(step: any): string {
@@ -29,7 +28,7 @@ export function canaryStepLabel(step: any): string {
   if (step.setCanaryScale) {
     const { weight, replicas, matchTrafficWeight } = step.setCanaryScale
     if (matchTrafficWeight) return 'Set canary scale: match traffic weight'
-    if (replicas !== undefined) return `Set canary scale: ${pluralize(replicas, 'replica')}`
+    if (replicas !== undefined) return `Set canary scale: ${replicas} replicas`
     if (weight !== undefined) return `Set canary scale: ${weight}%`
     return 'Set canary scale'
   }

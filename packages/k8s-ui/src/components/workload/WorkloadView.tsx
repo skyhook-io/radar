@@ -101,21 +101,33 @@ function isBuiltInTab(tab: TabType): tab is WorkloadTabType {
   return WORKLOAD_TABS.some((id) => id === tab)
 }
 
-// Existing hosts offering only built-in tabs can retain their narrower callback.
-type WorkloadTabChange = {
-  onChange(tab: WorkloadDetailTab, options?: { replace?: boolean }): void
-}['onChange']
+// Hosts offering only built-in tabs can retain their narrower callback.
+type WorkloadTabSelection =
+  | { extraTabs?: undefined; onTabChange?: (tab: WorkloadTabType, options?: { replace?: boolean }) => void }
+  | {
+      /** Additional tabs in the expanded view. */
+      extraTabs?: WorkloadExtraTab[]
+      /** Receives built-in and host tab IDs. Replace is set when the requested tab is no longer offered. */
+      onTabChange?: (tab: WorkloadDetailTab, options?: { replace?: boolean }) => void
+    }
 
-/** A host-provided tab. `after` places it behind a built-in tab; `replaces` hides that built-in tab. */
+/** A host-provided tab in the expanded workload view. */
 export interface WorkloadExtraTab {
-  /** A unique ID outside the built-in tab IDs. */
+  /** Nonempty ID outside the built-in tab IDs. The first registration for an ID wins. */
   id: string
   label: string
   icon?: ReactNode
+  /** Place after this built-in tab before applying tabOrder. Appends if the anchor is absent. */
   after?: WorkloadTabType
+  /** Use this tab for links to the built-in ID. An explicitly live-only
+   * replacement keeps those links while the workload is unavailable. */
   replaces?: WorkloadTabType
   /** Trailing adornment after the label, e.g. a status mark. */
   badge?: ReactNode
+  /** True suspends the tab until the matching workload is available. False
+   * keeps independent tabs available after deletion. Omit to show the tab
+   * while loading and suspend it only after deletion is known. */
+  requiresLiveResource?: boolean
   render: () => ReactNode
 }
 
@@ -138,7 +150,7 @@ export interface ServingResourceDetail {
 // MAIN WORKLOAD VIEW — presentation only, data injected via props
 // ============================================================================
 
-interface WorkloadViewProps {
+type WorkloadViewProps = WorkloadTabSelection & {
   kind: string
   namespace: string
   name: string
@@ -303,10 +315,8 @@ interface WorkloadViewProps {
   /** Load cluster schemas for YAML validation and completion. */
   yamlSchemaLoader?: EditableYamlViewProps['schemaLoader']
 
-  /** Controlled tab ID. Omit for internal selection. */
+  /** Requested tab ID. Omit for internal selection. Pending host tabs keep this ID while their content is unavailable. */
   activeTab?: WorkloadDetailTab
-  /** Called for built-in and any host-supplied tab IDs. */
-  onTabChange?: WorkloadTabChange
 
   // ── GitOps navigation ─────────────────────────────────────────────────────
   /**
@@ -376,24 +386,21 @@ interface WorkloadViewProps {
     /** The resource's operational issues, for a summary that shows them itself. */
     leadContent?: ReactNode
   }) => ReactNode
-  /** Additional tabs in the expanded view. */
-  extraTabs?: WorkloadExtraTab[]
-  /** Wait for the host's extra tabs before rewriting a fallback tab selection. */
-  extraTabsLoading?: boolean
+  /** Loading defers URL repairs. Ready lets the view replace unknown host IDs.
+   * Omit to preserve unknown host IDs for hosts that register tabs independently. */
+  extraTabsState?: 'loading' | 'ready'
   /** Expanded view: a line under the title, above the tabs, shown on every tab. */
   subheader?: ReactNode
   /** Expanded view: tab ids in display order; tabs not listed follow in their usual order. */
   tabOrder?: string[]
-  /** Expanded view: a line the host shows above every tab's content, directly under the tabs. */
+  /** Expanded view: a line directly under the tabs. Hidden if the workload was deleted. */
   tabHeader?: ReactNode
-  /** Expanded view: leave out the Overview's generic state/ready/pods strip for a host whose intro says state and readiness itself; a rollout in progress still shows above the tabs' content. */
+  /** Expanded view: leave out the Overview's generic stats. For replicated workloads, rollout activity still appears above the Overview. */
   hideOverviewStats?: boolean
   /**
-   * Expanded Deployment, StatefulSet, and DaemonSet overview: leave out configured values (the Serving
-   * configuration and Configuration inputs cards, and the Runtime card's
-   * target replicas, strategy and autoscaler bounds) for a host whose own card
-   * says them; live state (readiness, desired and current replicas, pods,
-   * scalers, activity) stays.
+   * Expanded Deployment, StatefulSet, and DaemonSet overview: leave out
+   * Kubernetes configuration already shown by the host. Keeps observed
+   * serving and runtime state, including addresses and replica counts.
    */
   hideOverviewConfig?: boolean
   /**
@@ -401,13 +408,14 @@ interface WorkloadViewProps {
    * container class (e.g. "mx-auto w-full max-w-5xl"), the way a host's own
    * tabs are, instead of Radar's grid with its side columns.
    */
-  overviewColumn?: string
+  overviewColumnClassName?: string
   /**
    * Expanded view: which events the Overview's Recent activity keeps (e.g. a
    * host that drops autoscaler condition churn). The Timeline tab keeps all.
    */
   overviewActivityFilter?: (event: TimelineEvent) => boolean
-  /** Expanded view: leave out these built-in tabs. Overview is the fallback when visible. */
+  /** Expanded view: leave out these built-in tabs. Fallback is the replacement,
+   * then visible Overview, then the first visible tab in tab order. */
   hiddenTabs?: WorkloadTabType[]
   /** Expanded view: relabel, lead, or replace the whole "Spec & status" body. */
   specTab?: { label?: string; icon?: ReactNode; lead?: ReactNode; render?: () => ReactNode }
@@ -587,13 +595,13 @@ export function WorkloadView({
   onSelectTopologyMember,
   renderSummary,
   extraTabs,
-  extraTabsLoading,
+  extraTabsState,
   tabOrder,
   hiddenTabs,
   tabHeader,
   hideOverviewStats,
   hideOverviewConfig,
-  overviewColumn,
+  overviewColumnClassName,
   overviewActivityFilter,
   specTab,
   subheader,
@@ -640,10 +648,11 @@ export function WorkloadView({
   // Tab state — controlled or uncontrolled
   const [internalTab, setInternalTab] = useState<TabType>('overview')
   const activeTab = controlledTab ?? internalTab
-  const handleSetTab = useCallback((tab: TabType) => {
+  const handleSetTab = useCallback((tab: TabType, options?: { replace?: boolean }) => {
     setInternalTab(tab)
-    onTabChange?.(tab)
-  }, [onTabChange])
+    if (extraTabs) onTabChange?.(tab, options)
+    else if (isBuiltInTab(tab)) onTabChange?.(tab, options)
+  }, [extraTabs, onTabChange])
 
   // Collapsed mode state (YAML toggle for drawer mode)
   const [showYaml, setShowYaml] = useState(initialTab === 'yaml')
@@ -989,15 +998,20 @@ export function WorkloadView({
   const renderDiagnoseTabForState = resourceGone ? undefined : renderDiagnoseTab
   // A host's summary, tabs and subheader can hold actions on the live object.
   const renderSummaryForState = resourceGone ? undefined : renderSummary
-  const extraTabsForState = useMemo(() => {
-    if (resourceGone || !extraTabs) return undefined
+  const canRenderLiveTab = resourceMatchesSelection && !resourceGone
+  const offeredExtraTabs = useMemo(() => {
+    if (!extraTabs) return undefined
     const seen = new Set<string>(WORKLOAD_TABS)
     return extraTabs.filter(({ id }) => {
       if (!id || seen.has(id)) return false
       seen.add(id)
       return true
     })
-  }, [extraTabs, resourceGone])
+  }, [extraTabs])
+  const extraTabsForState = offeredExtraTabs?.filter((tab) => {
+    if (tab.requiresLiveResource === true) return canRenderLiveTab
+    return tab.requiresLiveResource === false || !resourceGone
+  })
   // A remount closes any dialog the bar had open: once its actions are gone,
   // a confirm button left on screen would do nothing.
   const actionsBarKey = resourceGone ? 'gone' : 'live'
@@ -1082,21 +1096,37 @@ export function WorkloadView({
     { id: 'yaml', label: 'YAML', icon: <FileText className="w-4 h-4" /> },
   ]
   const shownTabs = expanded && hiddenTabs?.length ? tabs.map((t) => (hiddenTabs.some((id) => id === t.id) ? { ...t, hidden: true } : t)) : tabs
-  const allTabs = orderById(mergeExtraTabs(shownTabs, expanded ? extraTabsForState : undefined), expanded ? tabOrder : undefined)
+  const registeredExtraTabs = expanded
+    ? offeredExtraTabs?.filter((tab) => !resourceGone || tab.requiresLiveResource !== undefined)
+    : undefined
+  const suspendedTabIds = new Set(registeredExtraTabs?.filter(({ id }) => !extraTabsForState?.some((tab) => tab.id === id)).map(({ id }) => id))
+  const mergedTabs = mergeExtraTabs(shownTabs, registeredExtraTabs).map((tab) => suspendedTabIds.has(tab.id) ? { ...tab, hidden: true } : tab)
+  const allTabs = orderById(mergedTabs, expanded ? tabOrder : undefined)
   const tabIsVisible = (id: TabType) => allTabs.some((tab) => tab.id === id && !tab.hidden)
+  const tabTarget = (id: WorkloadTabType) => tabIsVisible(id) ? id : expanded ? extraTabsForState?.find((tab) => tab.replaces === id)?.id : undefined
   const requestedTabAvailable = tabIsVisible(requestedTab)
   const replacementTab = expanded ? extraTabsForState?.find((tab) => tab.replaces === requestedTab)?.id : undefined
+  const extraTabsLoading = extraTabsState === 'loading'
+  const awaitingRequestedTab = expanded && !requestedTabAvailable && !replacementTab && (
+    extraTabsLoading || (!canRenderLiveTab && registeredExtraTabs?.some((tab) =>
+      tab.requiresLiveResource === true && (tab.id === requestedTab || tab.replaces === requestedTab)
+    ))
+  )
   // Honor an explicit replacement. Otherwise prefer Overview or the first visible tab.
   const fallbackTab = replacementTab ?? (allTabs.find((tab) => tab.id === 'overview' && !tab.hidden) ?? allTabs.find((tab) => !tab.hidden))?.id ?? ''
-  const effectiveTab: TabType = requestedTabAvailable ? requestedTab : fallbackTab
+  const effectiveTab: TabType = requestedTabAvailable ? requestedTab : awaitingRequestedTab ? '' : fallbackTab
   const activeExtraTab = expanded ? extraTabsForState?.find((x) => x.id === effectiveTab) : undefined
+  const timelineTarget = tabTarget('timeline')
+  const logsTarget = tabTarget('logs')
+  const topologyTarget = tabTarget('topology')
   const shouldCommitFallback =
     !(expanded && extraTabsLoading) &&
+    !awaitingRequestedTab &&
     requestedTab !== fallbackTab &&
     !requestedTabAvailable &&
     (
       (expanded && (replacementTab !== undefined || hiddenTabs?.some((tab) => tab === requestedTab))) ||
-      (expanded && !resourceLoading && !isBuiltInTab(requestedTab)) ||
+      (expanded && extraTabsState === 'ready' && !resourceLoading && !isBuiltInTab(requestedTab)) ||
       (requestedTab === 'spec' && !!resource && !resourceLoading && !expandedSummary) ||
       (requestedTab === 'topology' && topologyTabHidden) ||
       (requestedTab === 'metrics' && (!renderMetricsTab || (!!resource && !resourceLoading && !showMetricsTab))) ||
@@ -1105,9 +1135,8 @@ export function WorkloadView({
     )
   useEffect(() => {
     if (!fallbackTab || !shouldCommitFallback) return
-    if (controlledTab === undefined) setInternalTab(fallbackTab)
-    onTabChange?.(fallbackTab, { replace: true })
-  }, [controlledTab, onTabChange, shouldCommitFallback, fallbackTab])
+    handleSetTab(fallbackTab, { replace: true })
+  }, [handleSetTab, shouldCommitFallback, fallbackTab, requestedTab])
   const expandedOverview = expanded ? renderExpandedOverview?.({
     kind, apiKind, namespace, name, resource,
     leadContent: (hasOverviewLead ?? hasOperationalIssues) && renderOverviewLeadForState
@@ -1501,16 +1530,33 @@ export function WorkloadView({
     >
       <div className="flex h-full min-h-0 flex-col">
         {deletedNotice && <div className="shrink-0 px-4 pt-4">{deletedNotice}</div>}
-        {expanded && tabHeader && <div className="shrink-0 px-4 pt-4 empty:hidden">{tabHeader}</div>}
+        {expanded && !resourceGone && tabHeader && <div className="shrink-0 px-4 pt-4 empty:hidden">{tabHeader}</div>}
         {/* On the Overview only when its stats strip, which says the same, is left out. */}
-        {!resourceGone && (effectiveTab !== 'overview' || (expanded && hideOverviewStats && !expandedSummary && !expandedOverview)) && rolloutActivity && (rolloutActivity.phase !== 'idle' || recentImageSave) && (
+        {!resourceGone && (effectiveTab !== 'overview' || (expanded && hideOverviewStats && isRuntimeWorkloadOverviewKind(apiKind, group) && runtimeOverviewShape(apiKind) === 'replicated' && !expandedSummary && !expandedOverview)) && rolloutActivity && (rolloutActivity.phase !== 'idle' || recentImageSave) && (
           <div className="shrink-0 px-4 pt-4">
             <WorkloadRolloutNotice activity={rolloutActivity} recentImageSave={recentImageSave} />
           </div>
         )}
         <div className="min-h-0 flex-1">
+        {awaitingRequestedTab && (
+          <div role="tabpanel" className="h-full">
+            <FetchResult
+              loading={extraTabsLoading || resourceLoading}
+              error={extraTabsLoading ? undefined : resourceError}
+              notFoundMessage="Workload unavailable"
+              className="h-full"
+            />
+          </div>
+        )}
         {/* Keyed by tab: another host tab opens at its top, not at the scroll offset the last one was left at. */}
-        {activeExtraTab && <div key={`${selectionScope.generation}:${activeExtraTab.id}`} className="h-full min-h-0 overflow-y-auto">{activeExtraTab.render()}</div>}
+        {activeExtraTab && (
+          <div
+            key={JSON.stringify([activeExtraTab.requiresLiveResource === false ? selectionIdentity : selectionScope.generation, activeExtraTab.id])}
+            className="h-full min-h-0 overflow-y-auto"
+          >
+            {activeExtraTab.render()}
+          </div>
+        )}
         {effectiveTab === 'overview' && expandedSummary ? (
           <div className="h-full min-h-0 overflow-y-auto">{expandedSummary}</div>
         ) : effectiveTab === 'overview' && expandedOverview ? (
@@ -1544,9 +1590,9 @@ export function WorkloadView({
               onSaveSecretValue={canUpdateSecrets && !resourceGone ? handleSaveSecretValue : undefined}
               isSavingSecret={isUpdatingResource}
               onOpenLogs={tabIsVisible('logs') ? handleOpenLogs : undefined}
-              onSwitchToTimeline={tabIsVisible('timeline') ? () => handleSetTab('timeline') : undefined}
-              onSwitchToLogs={tabIsVisible('logs') ? () => handleSetTab('logs') : undefined}
-              onSwitchToTopology={tabIsVisible('topology') ? () => handleSetTab('topology') : undefined}
+              onSwitchToTimeline={timelineTarget ? () => handleSetTab(timelineTarget) : undefined}
+              onSwitchToLogs={logsTarget ? () => handleSetTab(logsTarget) : undefined}
+              onSwitchToTopology={topologyTarget ? () => handleSetTab(topologyTarget) : undefined}
               rendererOverrides={rendererOverridesForState}
               resolvedEnvFrom={resolvedEnvFrom}
               events={effectiveTab === 'overview' ? activityEvents : overviewEvents}
@@ -1559,7 +1605,7 @@ export function WorkloadView({
               introContent={overviewIntro}
               hideStats={effectiveTab === 'overview' && hideOverviewStats}
               hideConfig={effectiveTab === 'overview' && hideOverviewConfig}
-              column={effectiveTab === 'overview' ? overviewColumn : undefined}
+              column={effectiveTab === 'overview' ? overviewColumnClassName : undefined}
               leadContent={
                 // A host's spec lead replaces the operational issues there: its Overview already leads with them.
                 effectiveTab === 'spec' && specTab?.lead
@@ -2535,8 +2581,6 @@ function WorkloadOverviewTab({
   const dependencyRelationshipGroups = buildDependencyRelationshipGroups(relationships)
   const observationGroups = dependencyRelationshipGroups.filter((group) => group.label === 'Monitored By' || group.label === 'Staged Policies')
   const showServingPath = servingRelationshipGroups.length > 0 && overviewShape !== 'job' && overviewShape !== 'cronjob'
-  // The serving card's facts are its Services' configuration: a host saying the configured values leaves it out.
-  const showServingCard = showServingPath && !hideConfig
   const secondaryRelationshipGroups = showServingPath ? dependencyRelationshipGroups : relationshipGroups
   const relationshipCardTitle =
     overviewShape === 'job' || overviewShape === 'cronjob'
@@ -2580,7 +2624,7 @@ function WorkloadOverviewTab({
             <div className="space-y-4">
               <div className={column ? oneColumn : 'grid items-start gap-4 phone:grid-cols-[minmax(0,1fr)] 2xl:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]'}>
                 <div className="space-y-4">
-                  {showServingCard && (
+                  {showServingPath && (
                     <ServingConfigurationCard
                       groups={servingRelationshipGroups}
                       details={servingResources}
@@ -2588,6 +2632,7 @@ function WorkloadOverviewTab({
                       renderPortPanel={renderServicePortPanel}
                       onNavigate={onNavigate}
                       onSwitchToTopology={onSwitchToTopology}
+                      liveOnly={hideConfig}
                     />
                   )}
                   <RuntimeCard
@@ -3651,6 +3696,7 @@ function ServingConfigurationCard({
   renderPortPanel,
   onNavigate,
   onSwitchToTopology,
+  liveOnly = false,
 }: {
   groups: RelationshipGroup[]
   details?: ServingResourceDetail[]
@@ -3658,6 +3704,7 @@ function ServingConfigurationCard({
   renderPortPanel?: (props: ServicePortRenderProps) => ReactNode
   onNavigate?: NavigateToResource
   onSwitchToTopology?: () => void
+  liveOnly?: boolean
 }) {
   const services = groups.find((group) => group.label === 'Services')?.refs ?? []
   const entrypoints = groups.find((group) => group.label === 'Entry points')?.refs ?? []
@@ -3682,7 +3729,7 @@ function ServingConfigurationCard({
 
   return (
     <OverviewCard
-      title="Serving configuration"
+      title={liveOnly ? 'Serving' : 'Serving configuration'}
       icon={Network}
       action={onSwitchToTopology && (
         <button type="button" onClick={onSwitchToTopology} className="inline-flex items-center gap-1 text-xs text-accent-text hover:underline">
@@ -3699,16 +3746,22 @@ function ServingConfigurationCard({
         </div>
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(18rem,0.8fr)]">
           <div className="min-w-0 space-y-3">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <OverviewStat label="Service type" value={serviceTypes} />
-              <OverviewStat label="Services" value={serviceCount} />
-            </div>
-            <ServingPortRows
-              services={serviceResources}
-              loading={serviceDetailsLoading}
-              renderPortAction={renderPortAction}
-              renderPortPanel={renderPortPanel}
-            />
+            {!liveOnly && (
+              <>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <OverviewStat label="Service type" value={serviceTypes} />
+                  <OverviewStat label="Services" value={serviceCount} />
+                </div>
+              </>
+            )}
+            {(!liveOnly || renderPortAction || renderPortPanel) && (
+              <ServingPortRows
+                services={serviceResources}
+                loading={serviceDetailsLoading}
+                renderPortAction={renderPortAction}
+                renderPortPanel={renderPortPanel}
+              />
+            )}
             <ServingRefChips label="Services" refs={services} onNavigate={navigateRef} />
           </div>
           <div className="min-w-0 space-y-3 border-t border-theme-border pt-3 lg:border-l lg:border-t-0 lg:pl-4 lg:pt-0">

@@ -205,15 +205,55 @@ it('keeps an asynchronous deep link and reconciles an explicit built-in replacem
   const root = createRoot(host)
   const onTabChange = vi.fn()
   const extraTabs = [{ id: 'runs', label: 'Runs', replaces: 'spec' as const, render: () => <div>The runs</div> }]
-  act(() => root.render(<WorkloadView {...props} expanded activeTab="runs" extraTabsLoading onTabChange={onTabChange} />))
+  act(() => root.render(<WorkloadView {...props} expanded activeTab="runs" extraTabsState="loading" onTabChange={onTabChange} />))
+  expect(onTabChange).not.toHaveBeenCalled()
+  expect(host.textContent).not.toContain('Composed Overview')
+  act(() => root.render(<WorkloadView {...props} expanded activeTab="runs" onTabChange={onTabChange} />))
   expect(onTabChange).not.toHaveBeenCalled()
   act(() => root.render(<WorkloadView {...props} expanded activeTab="runs" extraTabs={extraTabs} onTabChange={onTabChange} />))
   expect(host.textContent).toContain('The runs')
   expect(onTabChange).not.toHaveBeenCalled()
-  act(() => root.render(<WorkloadView {...props} expanded activeTab="spec" extraTabsLoading hiddenTabs={['spec']} onTabChange={onTabChange} />))
+  act(() => root.render(<WorkloadView {...props} expanded activeTab="spec" extraTabsState="loading" hiddenTabs={['spec']} onTabChange={onTabChange} />))
   expect(onTabChange).not.toHaveBeenCalled()
   act(() => root.render(<WorkloadView {...props} expanded activeTab="spec" extraTabs={extraTabs} onTabChange={onTabChange} />))
   expect(onTabChange).toHaveBeenCalledWith('runs', { replace: true })
+  onTabChange.mockClear()
+  act(() => root.render(<WorkloadView {...props} expanded activeTab="removed" extraTabs={extraTabs} extraTabsState="ready" onTabChange={onTabChange} />))
+  expect(onTabChange).toHaveBeenCalledExactlyOnceWith('overview', { replace: true })
+  act(() => root.render(<WorkloadView {...props} expanded activeTab="also-removed" extraTabs={extraTabs} extraTabsState="ready" onTabChange={onTabChange} />))
+  expect(onTabChange).toHaveBeenCalledTimes(2)
+  act(() => root.unmount())
+})
+
+it('preserves a host tab after a cached 404 and only runs tabs that can work without the workload', () => {
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  const onTabChange = vi.fn()
+  const extraTabs = [
+    { id: 'live', label: 'Live', render: () => <div>Live action</div>, requiresLiveResource: true, replaces: 'timeline' as const },
+    { id: 'git', label: 'Git', render: () => <div>Git history</div>, requiresLiveResource: false, replaces: 'spec' as const },
+  ]
+  const gone = Object.assign(new Error('not found'), { status: 404 })
+  const hosted = { ...props, expanded: true, extraTabs, extraTabsState: 'ready' as const, onTabChange, tabHeader: <div>Host header</div> }
+  act(() => root.render(<WorkloadView {...hosted} activeTab="timeline" resource={undefined} isLoading />))
+  expect(host.querySelector('[role="tab"][aria-selected="true"]')).toBeNull()
+  expect(onTabChange).not.toHaveBeenCalled()
+  act(() => root.render(<WorkloadView {...hosted} activeTab="live" resource={undefined} isLoading />))
+  expect(host.textContent).not.toContain('Live action')
+  expect(onTabChange).not.toHaveBeenCalled()
+  act(() => root.render(<WorkloadView {...hosted} activeTab="live" resourceError={gone} />))
+  expect(host.textContent).not.toContain('Live action')
+  expect(host.textContent).not.toContain('Git history')
+  expect(host.textContent).not.toContain('Host header')
+  expect(onTabChange).not.toHaveBeenCalled()
+  act(() => root.render(<WorkloadView {...hosted} activeTab="live" />))
+  expect(host.textContent).toContain('Live action')
+  act(() => root.render(<WorkloadView {...hosted} activeTab="git" resourceError={gone} />))
+  expect(host.textContent).toContain('Git history')
+  expect(onTabChange).not.toHaveBeenCalled()
+  act(() => root.render(<WorkloadView {...hosted} activeTab="spec" resourceError={gone} />))
+  expect(host.textContent).toContain('Git history')
+  expect(onTabChange).toHaveBeenCalledExactlyOnceWith('git', { replace: true })
   act(() => root.unmount())
 })
 
@@ -254,11 +294,24 @@ it("leaves out the Overview's configured values when the host says them, keeping
   expect(hidden).toContain('Current')
 })
 
+it('keeps serving addresses and pending status when the host supplies configured values', () => {
+  const deployment = { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'web', namespace: 'shop' }, spec: { replicas: 1 }, status: {} }
+  const ref = { kind: 'Service', name: 'web-public', namespace: 'shop' }
+  const service = { apiVersion: 'v1', kind: 'Service', metadata: { name: ref.name, namespace: ref.namespace }, spec: { type: 'LoadBalancer', ports: [{ port: 8765 }] } }
+  const workload = { ...props, kind: 'deployments', group: 'apps', name: 'web', namespace: 'shop', resource: deployment, activeTab: 'overview' as const, renderSummary: undefined, relationships: { services: [ref] }, hideOverviewConfig: true, hideOverviewStats: true }
+  const pending = renderToStaticMarkup(<WorkloadView {...workload} servingResources={[{ ref, resource: service }]} />)
+  expect(pending).toContain('External service pending')
+  expect(pending).not.toContain('8765')
+  const resolved = { ...service, status: { loadBalancer: { ingress: [{ hostname: 'address.example' }] } } }
+  const addressed = renderToStaticMarkup(<WorkloadView {...workload} servingResources={[{ ref, resource: resolved }]} />)
+  expect(addressed).toContain('address.example')
+})
+
 it("lays the Overview out in the host's one column when asked, and in Radar's grid otherwise", () => {
   const deployment = { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'web', namespace: 'shop' }, spec: { replicas: 1, template: { spec: { containers: [{ name: 'web', image: 'web:1' }] } } }, status: { replicas: 1, readyReplicas: 1 } }
   const base = { ...props, kind: 'deployments', group: 'apps', name: 'web', namespace: 'shop', resource: deployment, activeTab: 'overview' as const, renderSummary: undefined, expanded: true }
   const grid = renderToStaticMarkup(<WorkloadView {...base} />)
-  const column = renderToStaticMarkup(<WorkloadView {...base} overviewColumn="mx-auto max-w-5xl" />)
+  const column = renderToStaticMarkup(<WorkloadView {...base} overviewColumnClassName="mx-auto max-w-5xl" />)
   expect(grid).toContain('xl:grid-cols-[minmax(0,1fr)_360px]')
   expect(column).not.toContain('xl:grid-cols-[minmax(0,1fr)_360px]')
   expect(column).toContain('mx-auto max-w-5xl')
