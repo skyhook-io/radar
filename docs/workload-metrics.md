@@ -408,6 +408,11 @@ backend. Without them the map uses the labels automatic matching proves for
 this cluster. `--prometheus-single-cluster` adds no traffic filtering. See
 [Traffic map in a shared metrics store](configuration.md#traffic-map-in-a-shared-metrics-store).
 
+Radar reports the verified project and location alongside the configured cluster
+name and uses them on subsequent queries. If a project or location appears on
+only some of the participating metric families, Radar withholds the view until
+the exporters supply consistent labels.
+
 Labels must exist on each affected metric source. An empty value is rejected
 because it would also match series without that label. A tenant header alone
 does not prove single-cluster isolation. Use `--prometheus-header-from-env` for credentials.

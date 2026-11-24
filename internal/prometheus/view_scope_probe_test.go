@@ -460,6 +460,13 @@ func TestConfiguredSelectorChecksManagedClusterContext(t *testing.T) {
 			if !tt.withheld && scope.Filter(metricMemoryWorkingSet) != `cluster="prod",location="east",project_id="local"` {
 				t.Fatalf("measurement selector = %s", scope.Filter(metricMemoryWorkingSet))
 			}
+			wantLabels := tt.labels
+			if !tt.withheld {
+				wantLabels = map[string]string{"cluster": "prod", "project_id": "local", "location": "east"}
+			}
+			if got := scope.Wire().Labels; !reflect.DeepEqual(got, wantLabels) {
+				t.Fatalf("reported cluster labels = %v, want %v", got, wantLabels)
+			}
 		})
 	}
 }

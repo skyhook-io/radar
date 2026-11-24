@@ -152,7 +152,9 @@ type ViewScopeRequest struct {
 
 // ViewScope is the decision. Filters maps each metric to the matchers to AND
 // into its selectors ("" leaves it unfiltered); a withheld view has none.
-// Labels are the cluster labels the decision checked, when there were any.
+// Labels identify the cluster checked. A configured scope includes the qualified
+// labels pinned on measurement queries. A withheld scope reports the selector
+// that failed verification.
 type ViewScope struct {
 	State    ViewScopeState
 	Withheld bool
@@ -584,7 +586,7 @@ func decideLabeledViewScope(ctx context.Context, q instantQuerier, req ViewScope
 			Note: fmt.Sprintf("None of the %s series carry this cluster's label %s (they have no cluster label, or another cluster's value), so Radar can't tell which of them are this cluster's. Add the label to that metric's scrape, or set --prometheus-cluster-label (Helm traffic.prometheusClusterLabels) to a label every metric carries.", strings.Join(missing, ", "), matchers),
 		}, nil
 	}
-	scope := ViewScope{State: ViewScopeVerified, Labels: maps.Clone(clusterLabels), Filters: filters, Note: viewScopeVerifiedNote}
+	scope := ViewScope{State: ViewScopeVerified, Labels: maps.Clone(queryLabels), Filters: filters, Note: viewScopeVerifiedNote}
 	if configured {
 		scope.State, scope.Note = ViewScopeConfigured, viewScopeConfiguredNote
 	}
