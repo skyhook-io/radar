@@ -58,61 +58,86 @@ func queryScanFamily(ctx context.Context, client rightsizingScanQuerier, family,
 	return client.QueryRange(ctx, query, start, end, rightsizingStep)
 }
 
-func recoverScanQuery(ctx context.Context, client rightsizingScanQuerier, batch []scanWorkload, scope ViewScope, family string, start, end time.Time, refusal error) (*prom.QueryResult, error) {
+// Recoveries run serially between normal query batches. Across a scan they may
+// consume at most one normal query timeout, leaving time for later workloads.
+type scanMemoryBudget struct{ spent time.Duration }
+
+func (b *scanMemoryBudget) recover(ctx context.Context, client rightsizingScanQuerier, batch []scanWorkload, scope ViewScope, family string, start, end time.Time, refusal error) (*prom.QueryResult, error) {
 	parts := scanMemoryParts(refusal)
-	if parts == 0 {
+	allowance := rightsizingScanQueryTimeout - b.spent
+	if deadline, ok := ctx.Deadline(); ok {
+		allowance = min(allowance, time.Until(deadline)-rightsizingScanQueryTimeout)
+	}
+	if parts == 0 || allowance <= 0 {
 		return nil, refusal
 	}
-	var result prom.QueryResult
-	calls := 0
+	started := time.Now()
+	defer func() { b.spent += time.Since(started) }()
+	retryCtx, cancel := context.WithTimeout(ctx, allowance)
+	defer cancel()
+	type request struct {
+		query    string
+		from, to time.Time
+	}
+	var plan []request
 	queryFor := func(workloads []scanWorkload) string { return buildScanQueries(workloads, scope, true)[family] }
-	run := func(workloads []scanWorkload, from, to time.Time) error {
-		part, err := runScanQueryParts(ctx, workloads, queryFor(workloads), queryFor, func(ctx context.Context, q string) (*prom.QueryResult, error) {
-			if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < rightsizingScanQueryTimeout {
+	// Plan the byte-limit splits too: never spend four requests on a family
+	// whose fifth physical request would already exceed our recovery budget.
+	queue := func(group []scanWorkload, from, to time.Time) error {
+		_, err := runScanQueryParts(retryCtx, group, queryFor(group), queryFor, func(_ context.Context, q string) (*prom.QueryResult, error) {
+			if len(plan) >= maxScanMemoryRecoveryRequests {
 				return nil, refusal
 			}
-			if calls >= maxScanMemoryRecoveryRequests {
-				return nil, refusal
-			}
-			calls++
-			return queryScanFamily(ctx, client, family, q, from, to)
+			plan = append(plan, request{q, from, to})
+			return nil, nil
 		})
-		if err == nil && part != nil {
-			result.Series = append(result.Series, part.Series...)
-		}
 		return err
 	}
 	if parts == 1 {
-		if err := run(batch, start, end); err != nil {
+		if err := queue(batch, start, end); err != nil {
 			return nil, err
 		}
 	} else if !instantScanFamily(family) {
 		points := int(end.Sub(start)/rightsizingStep) + 1
-		chunk := (points + parts - 1) / parts
-		for i := 0; i < points; i += chunk {
-			from := start.Add(time.Duration(i) * rightsizingStep)
-			to := start.Add(time.Duration(min(i+chunk, points)-1) * rightsizingStep)
-			if err := run(batch, from, to); err != nil {
+		for i := range parts {
+			first := i * points / parts
+			last := (i+1)*points/parts - 1
+			if err := queue(batch, start.Add(time.Duration(first)*rightsizingStep), start.Add(time.Duration(last)*rightsizingStep)); err != nil {
 				return nil, err
 			}
 		}
 	} else {
-		// Increasing a counter over shorter windows changes its reset and
-		// extrapolation semantics. Keep the full window for safety signals.
+		// Counter resets and extrapolation depend on the full window. Split
+		// whole workloads, preferring disjoint namespaces to shrink source reads.
 		namespaces := batchNamespaces(batch)
-		if len(namespaces) < parts {
-			return nil, refusal
-		}
-		for group := range slices.Chunk(namespaces, (len(namespaces)+parts-1)/parts) {
-			var workloads []scanWorkload
-			for _, w := range batch {
-				if slices.Contains(group, w.namespace) {
-					workloads = append(workloads, w)
+		parts = min(parts, len(batch))
+		for i := range parts {
+			group := batch[i*len(batch)/parts : (i+1)*len(batch)/parts]
+			if len(namespaces) >= parts {
+				selected := namespaces[i*len(namespaces)/parts : (i+1)*len(namespaces)/parts]
+				group = nil
+				for _, w := range batch {
+					if slices.Contains(selected, w.namespace) {
+						group = append(group, w)
+					}
 				}
 			}
-			if err := run(workloads, start, end); err != nil {
+			if err := queue(group, start, end); err != nil {
 				return nil, err
 			}
+		}
+	}
+	var result prom.QueryResult
+	for _, req := range plan {
+		part, err := queryScanFamily(retryCtx, client, family, req.query, req.from, req.to)
+		if err != nil {
+			if retryCtx.Err() != nil && ctx.Err() == nil {
+				return nil, refusal
+			}
+			return nil, err
+		}
+		if part != nil {
+			result.Series = append(result.Series, part.Series...)
 		}
 	}
 	return &result, nil

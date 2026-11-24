@@ -207,7 +207,7 @@ func TestRightsizingScanSplitsOversizedFamiliesByWholeWorkload(t *testing.T) {
 		return &prom.QueryResult{Series: series}, nil
 	}
 	client := &fakeScanQuerier{queryFn: run, rangeFn: run}
-	evidence := queryRightsizingScanBatch(context.Background(), client, batch, time.Now(), ViewScope{})
+	evidence := queryRightsizingScanBatch(context.Background(), client, batch, time.Now(), ViewScope{}, new(scanMemoryBudget))
 	if len(evidence.errors) != 0 {
 		t.Fatalf("incomplete batch: %v", evidence.errors)
 	}
@@ -1077,7 +1077,7 @@ func TestScanRangeWindowIsAlignedToTheSubqueryGrid(t *testing.T) {
 		fake := &fakeScanQuerier{}
 		now := time.Unix(1789513500, 0).UTC().Add(offset)
 		queryRightsizingScanBatch(context.Background(), fake,
-			[]scanWorkload{scanTestWorkload("Deployment", "shop", "checkout", "api")}, now, ViewScope{})
+			[]scanWorkload{scanTestWorkload("Deployment", "shop", "checkout", "api")}, now, ViewScope{}, new(scanMemoryBudget))
 
 		if len(fake.rangeStarts) == 0 {
 			t.Fatalf("offset %v: no range queries issued", offset)
@@ -1112,7 +1112,7 @@ func TestScansSecondsApartQueryTheSameWindow(t *testing.T) {
 	for _, offset := range []time.Duration{3 * time.Second, 91 * time.Second, 288 * time.Second} {
 		fake := &fakeScanQuerier{}
 		queryRightsizingScanBatch(context.Background(), fake,
-			[]scanWorkload{scanTestWorkload("Deployment", "shop", "checkout", "api")}, base.Add(offset), ViewScope{})
+			[]scanWorkload{scanTestWorkload("Deployment", "shop", "checkout", "api")}, base.Add(offset), ViewScope{}, new(scanMemoryBudget))
 		windows = append(windows, [2]time.Time{fake.rangeStarts[0], fake.rangeEnds[0]})
 	}
 	for i := 1; i < len(windows); i++ {

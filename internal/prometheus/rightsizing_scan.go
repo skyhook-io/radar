@@ -435,6 +435,7 @@ func computeRightsizingScanProgress(ctx context.Context, client rightsizingScanQ
 
 	resp.Coverage.Batches = (len(workloads) + rightsizingScanBatchSize - 1) / rightsizingScanBatchSize
 	publish(resp)
+	var memoryBudget scanMemoryBudget
 	for start := 0; start < len(workloads); start += rightsizingScanBatchSize {
 		if err := ctx.Err(); err != nil {
 			appendScanWarning(&resp, ReasonScanDeadlineExceeded, err.Error())
@@ -443,7 +444,7 @@ func computeRightsizingScanProgress(ctx context.Context, client rightsizingScanQ
 		end := min(start+rightsizingScanBatchSize, len(workloads))
 		batch := workloads[start:end]
 		batchStarted := time.Now()
-		evidence := queryRightsizingScanBatch(ctx, client, batch, resp.ScannedAt, scope)
+		evidence := queryRightsizingScanBatch(ctx, client, batch, resp.ScannedAt, scope, &memoryBudget)
 		resp.Coverage.AttemptedBatches++
 		log.Printf("[rightsizing] batch=%d workloads=%d duration=%s query_failures=%d", resp.Coverage.AttemptedBatches, len(batch), time.Since(batchStarted).Round(time.Millisecond), len(evidence.errors))
 		if len(evidence.errors) == 0 {
@@ -499,7 +500,7 @@ func computeRightsizingScanProgress(ctx context.Context, client rightsizingScanQ
 	return resp
 }
 
-func queryRightsizingScanBatch(ctx context.Context, client rightsizingScanQuerier, batch []scanWorkload, now time.Time, scope ViewScope) scanBatchEvidence {
+func queryRightsizingScanBatch(ctx context.Context, client rightsizingScanQuerier, batch []scanWorkload, now time.Time, scope ViewScope, memoryBudget *scanMemoryBudget) scanBatchEvidence {
 	if scope.State == ViewScopeCurrentPodUIDs {
 		return queryCurrentPodBatch(ctx, client, batch, now)
 	}
@@ -525,7 +526,7 @@ func queryRightsizingScanBatch(ctx context.Context, client rightsizingScanQuerie
 		var result *prom.QueryResult
 		var err error
 		if retry != nil {
-			result, err = recoverScanQuery(ctx, client, batch, scope, family, start, end, retry)
+			result, err = memoryBudget.recover(ctx, client, batch, scope, family, start, end, retry)
 		} else {
 			result, err = runScanQuery(ctx, batch, scope, family, queries[family], func(ctx context.Context, query string) (*prom.QueryResult, error) {
 				return queryScanFamily(ctx, client, family, query, start, end)
