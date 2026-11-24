@@ -75,6 +75,18 @@ func postStop(srv *Server, body string, header map[string]string) *httptest.Resp
 }
 
 func TestWorkflowStop(t *testing.T) {
+	t.Run("empty unknown-length body uses the default", func(t *testing.T) {
+		srv, _ := workflowStopServer(t, testWorkflow("Running", ""))
+		req := httptest.NewRequest(http.MethodPost, "/api/workflows/jobs/migrate-abcde/stop", http.NoBody)
+		req.ContentLength = -1
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+
+		var resp WorkflowStopResponse
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &resp) != nil || resp.Shutdown != "Terminate" || !resp.Changed {
+			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+		}
+	})
 	t.Run("terminates by default, bound to the version read, and records when", func(t *testing.T) {
 		srv, dyn := workflowStopServer(t, testWorkflow("Running", ""))
 		rec := postStop(srv, "", nil)
@@ -125,8 +137,8 @@ func TestWorkflowStop(t *testing.T) {
 	})
 	t.Run("finished is 409 and writes nothing", func(t *testing.T) {
 		for _, phase := range []string{"Succeeded", "Failed", "Error"} {
-			srv, dyn := workflowStopServer(t, testWorkflow(phase, ""))
-			if rec := postStop(srv, "", nil); rec.Code != http.StatusConflict || len(workflowPatches(dyn)) != 0 {
+			srv, dyn := workflowStopServer(t, testWorkflow(phase, "Stop"))
+			if rec := postStop(srv, "", nil); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "workflow_finished") || len(workflowPatches(dyn)) != 0 {
 				t.Fatalf("%s: status = %d, patches = %d", phase, rec.Code, len(workflowPatches(dyn)))
 			}
 		}
@@ -145,7 +157,7 @@ func TestWorkflowStop(t *testing.T) {
 		dyn.PrependReactor("patch", "workflows", func(k8stesting.Action) (bool, runtime.Object, error) {
 			return true, nil, apierrors.NewConflict(argoWorkflowGVR.GroupResource(), "migrate-abcde", nil)
 		})
-		if rec := postStop(srv, "", nil); rec.Code != http.StatusConflict {
+		if rec := postStop(srv, "", nil); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "workflow_changed") {
 			t.Fatalf("status = %d", rec.Code)
 		}
 	})

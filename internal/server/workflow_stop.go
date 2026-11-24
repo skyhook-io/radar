@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"time"
@@ -35,8 +36,7 @@ type WorkflowStopRequest struct {
 // WorkflowStopResponse is the Workflow's state after the request.
 type WorkflowStopResponse struct {
 	Shutdown string `json:"shutdown"`
-	// Changed is false when the Workflow was already stopping, which
-	// `argo terminate` also leaves alone.
+	// Changed is false when the Workflow was already stopping.
 	Changed bool `json:"changed"`
 }
 
@@ -56,25 +56,24 @@ var workflowFinishedPhases = map[string]bool{"Succeeded": true, "Failed": true, 
 // when; the caller can't supply annotations. A finished Workflow is 409; one
 // already stopping is a 200 no-op.
 func (s *Server) handleWorkflowStop(w http.ResponseWriter, r *http.Request) {
-	if !s.requireConnected(w) {
-		return
-	}
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
-	req := WorkflowStopRequest{Strategy: "Terminate"}
-	if r.ContentLength != 0 {
-		if err := decodeBoundedJSONBody(w, r, 1<<10, &req); err != nil {
-			var tooLarge *http.MaxBytesError
-			if errors.As(err, &tooLarge) {
-				s.writeError(w, http.StatusRequestEntityTooLarge, "request body is too large")
-				return
-			}
-			s.writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+	req := &WorkflowStopRequest{Strategy: "Terminate"}
+	if err := decodeBoundedJSONBody(w, r, 1<<10, &req); err != nil && !errors.Is(err, io.EOF) {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			s.writeError(w, http.StatusRequestEntityTooLarge, "request body is too large")
 			return
 		}
-		if req.Strategy == "" {
-			req.Strategy = "Terminate"
-		}
+		s.writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if req == nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request body: the body must be a JSON object")
+		return
+	}
+	if req.Strategy == "" {
+		req.Strategy = "Terminate"
 	}
 	if req.Strategy != "Terminate" && req.Strategy != "Stop" {
 		s.writeError(w, http.StatusBadRequest, "strategy must be Terminate or Stop")
@@ -92,12 +91,12 @@ func (s *Server) handleWorkflowStop(w http.ResponseWriter, r *http.Request) {
 		s.writeWorkflowStopError(w, err, namespace, name, "read")
 		return
 	}
-	if current, _, _ := unstructured.NestedString(wf.Object, "spec", "shutdown"); current != "" {
-		s.writeJSON(w, WorkflowStopResponse{Shutdown: current})
+	if phase, _, _ := unstructured.NestedString(wf.Object, "status", "phase"); workflowFinishedPhases[phase] {
+		s.writeErrorCode(w, http.StatusConflict, "workflow_finished", "the workflow has already finished ("+phase+")")
 		return
 	}
-	if phase, _, _ := unstructured.NestedString(wf.Object, "status", "phase"); workflowFinishedPhases[phase] {
-		s.writeError(w, http.StatusConflict, "the workflow has already finished ("+phase+")")
+	if current, _, _ := unstructured.NestedString(wf.Object, "spec", "shutdown"); current != "" {
+		s.writeJSON(w, WorkflowStopResponse{Shutdown: current})
 		return
 	}
 	annotations := map[string]any{workflowStoppedAtAnnotation: time.Now().UTC().Format(time.RFC3339)}
@@ -124,7 +123,7 @@ func (s *Server) writeWorkflowStopError(w http.ResponseWriter, err error, namesp
 	case apierrors.IsForbidden(err):
 		s.writeError(w, http.StatusForbidden, "failed to stop workflow: "+err.Error())
 	case apierrors.IsConflict(err):
-		s.writeError(w, http.StatusConflict, "the workflow changed while stopping it; look again")
+		s.writeErrorCode(w, http.StatusConflict, "workflow_changed", "the workflow changed while stopping it; look again")
 	case step == "read":
 		log.Printf("[workflows] Failed to read workflow %s/%s: %v", sanitizeForLog(namespace), sanitizeForLog(name), err)
 		s.writeError(w, http.StatusServiceUnavailable, "could not read the workflow")
