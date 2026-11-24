@@ -663,14 +663,14 @@ export function WorkloadView({
   // Hosts reuse this view across resources, and a resource can be recreated
   // under the same name: a Pod picked for one must not reach the next, not
   // even for one render. A UID arriving with the first load is not a change.
-  const selectionIdentity = `${kind}\u0000${namespace}\u0000${name}`
+  const selectionIdentity = `${apiKind}\u0000${group ?? ''}\u0000${namespace}\u0000${name}`
   // A host can briefly pass the previous resource with the new name.
   const selectionUID = resource?.metadata?.name === name && (resource?.metadata?.namespace ?? '') === (namespace ?? '') ? resource?.metadata?.uid as string | undefined : undefined
-  const [selectionScope, setSelectionScope] = useState({ identity: selectionIdentity, uid: selectionUID })
+  const [selectionScope, setSelectionScope] = useState({ identity: selectionIdentity, uid: selectionUID, generation: 0 })
   if (selectionScope.identity !== selectionIdentity || (selectionUID && selectionScope.uid !== selectionUID)) {
-    const recreated = selectionScope.identity === selectionIdentity && selectionScope.uid !== undefined
-    setSelectionScope({ identity: selectionIdentity, uid: selectionUID })
-    if (selectionScope.identity !== selectionIdentity || recreated) {
+    const scopeChanged = selectionScope.identity !== selectionIdentity || selectionScope.uid !== undefined
+    setSelectionScope({ identity: selectionIdentity, uid: selectionUID, generation: selectionScope.generation + Number(scopeChanged) })
+    if (scopeChanged) {
       setSelectedPod(null)
       setInitialContainer(null)
     }
@@ -1499,7 +1499,7 @@ export function WorkloadView({
         )}
         <div className="min-h-0 flex-1">
         {/* Keyed by tab: another host tab opens at its top, not at the scroll offset the last one was left at. */}
-        {activeExtraTab && <div key={JSON.stringify([selectionIdentity, selectionUID, activeExtraTab.id])} className="h-full min-h-0 overflow-y-auto">{activeExtraTab.render()}</div>}
+        {activeExtraTab && <div key={`${selectionScope.generation}:${activeExtraTab.id}`} className="h-full min-h-0 overflow-y-auto">{activeExtraTab.render()}</div>}
         {effectiveTab === 'overview' && expandedSummary ? (
           <div className="h-full min-h-0 overflow-y-auto">{expandedSummary}</div>
         ) : effectiveTab === 'overview' && expandedOverview ? (
@@ -2598,7 +2598,7 @@ function WorkloadOverviewTab({
                     liveOnly={hideConfig}
                   />
                 </div>
-                <div className="space-y-4">
+                <div className="space-y-4 empty:hidden">
                   {!hideConfig && (
                     <ConfigurationInputsCard
                       serviceAccountName={serviceAccountName}
