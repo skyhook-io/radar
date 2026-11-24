@@ -276,6 +276,24 @@ it('shows a host line above every tab, in the expanded view only', () => {
   act(() => root.unmount())
 })
 
+it('restores an uncontrolled workload tab when its data becomes available again', () => {
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  const render = (available: boolean) => act(() => root.render(
+    <WorkloadView {...props} activeTab={undefined} isMetricsAvailable={() => available}
+      renderMetricsTab={() => <div>Metrics charts</div>} />,
+  ))
+  render(true)
+  const metrics = [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((tab) => tab.textContent === 'Metrics')!
+  act(() => metrics.click())
+  expect(host.textContent).toContain('Metrics charts')
+  render(false)
+  expect(host.textContent).not.toContain('Metrics charts')
+  render(true)
+  expect(host.textContent).toContain('Metrics charts')
+  act(() => root.unmount())
+})
+
 it("leaves out the Overview's stats strip when the host asks, and only then", () => {
   const deployment = { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'web', namespace: 'shop' }, spec: { replicas: 1, template: { spec: { containers: [{ name: 'web', image: 'web:1' }] } } }, status: { replicas: 1, readyReplicas: 1 } }
   const base = { ...props, kind: 'deployments', group: 'apps', name: 'web', namespace: 'shop', resource: deployment, activeTab: 'overview' as const, renderSummary: undefined, expanded: true }

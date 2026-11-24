@@ -664,11 +664,14 @@ export function WorkloadView({
   const [internalTab, setInternalTab] = useState<TabType>('overview')
   const activeTab = controlledTab ?? internalTab
   const hasExtraTabs = extraTabs !== undefined
-  const handleSetTab = useCallback((tab: TabType, options?: { replace?: boolean }) => {
-    setInternalTab(tab)
+  const notifyTabChange = useCallback((tab: TabType, options?: { replace?: boolean }) => {
     if (hasExtraTabs) onTabChange?.(tab, options)
     else if (isBuiltInTab(tab)) onTabChange?.(tab, options)
   }, [hasExtraTabs, onTabChange])
+  const handleSetTab = useCallback((tab: TabType) => {
+    setInternalTab(tab)
+    notifyTabChange(tab)
+  }, [notifyTabChange])
 
   // Collapsed mode state (YAML toggle for drawer mode)
   const [showYaml, setShowYaml] = useState(initialTab === 'yaml')
@@ -1152,8 +1155,8 @@ export function WorkloadView({
     )
   useEffect(() => {
     if (!fallbackTab || !shouldCommitFallback) return
-    handleSetTab(fallbackTab, { replace: true })
-  }, [handleSetTab, shouldCommitFallback, fallbackTab, requestedTab])
+    notifyTabChange(fallbackTab, { replace: true })
+  }, [notifyTabChange, shouldCommitFallback, fallbackTab, requestedTab])
   const expandedOverview = expanded ? renderExpandedOverview?.({
     kind, apiKind, namespace, name, resource,
     leadContent: (hasOverviewLead ?? hasOperationalIssues) && renderOverviewLeadForState
