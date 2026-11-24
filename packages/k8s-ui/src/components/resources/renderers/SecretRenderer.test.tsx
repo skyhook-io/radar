@@ -40,22 +40,26 @@ function button(label: string): HTMLButtonElement {
 }
 
 describe('SecretRenderer value copy', () => {
-  it.each(['café 🔑', '[binary data]', ''])('copies decoded text without revealing it', async value => {
+  it.each(['café 🔑', '[binary data]', ''])('copies decoded text %j without revealing it', async value => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     const previous = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
     try {
       const encoded = btoa(String.fromCharCode(...new TextEncoder().encode(value)))
       await act(async () => root.render(
-        <SecretRenderer data={{ ...secret, data: { password: encoded, binary: '/w==' } }} />
+        <SecretRenderer data={{ ...secret, data: { password: encoded, binary: '/w==' } }} onSaveSecretValue={vi.fn()} />
       ))
-      expect(element.querySelector('[aria-label="Copy value for binary"]')).toBeNull()
+      expect(element.querySelector('[aria-label="Copy value for binary"], [title="Edit value"]')).toBeNull()
       expect(element.querySelector('pre, textarea')).toBeNull()
       await act(async () => button('Copy value').click())
       expect(writeText).toHaveBeenCalledWith(value)
-      expect(button('Copied').getAttribute('aria-label')).toBe('Copy value for password')
+      expect(button('Copied').getAttribute('aria-label')).toBe('Copied value for password')
       expect(element.querySelector('pre, textarea')).toBeNull()
       expect(button('Reveal')).toBeTruthy()
+      const binaryRow = [...element.querySelectorAll('.card-inner')].find(row => row.textContent?.includes('binary'))!
+      await act(async () => binaryRow.querySelector('button')!.click())
+      expect(binaryRow.querySelector('pre')?.textContent).toBe('[binary data]')
+      expect(binaryRow.querySelector('[title="Edit value"], [title="Copy value"]')).toBeNull()
     } finally {
       if (previous) Object.defineProperty(navigator, 'clipboard', previous)
       else Reflect.deleteProperty(navigator, 'clipboard')
@@ -66,6 +70,7 @@ describe('SecretRenderer value copy', () => {
 async function editAndSave(value: string) {
   await act(async () => button('Reveal').click())
   await act(async () => button('Edit value').click())
+  expect(element.querySelector('[title="Copy value"]')).toBeNull()
   const textarea = element.querySelector('textarea')!
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, value)

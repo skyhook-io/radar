@@ -7,6 +7,8 @@ import { ConfirmDialog } from '../../ui/ConfirmDialog'
 import { ReflectorSummary, ReflectorSection, isReflectorMirror, reflectorEditNotice } from './ReflectorSection'
 import type { SecretCertificateInfo, CertificateInfo, Relationships, ResourceRef } from '../../../types'
 import { pluralize } from '../../../utils/pluralize'
+import { copyText } from '../../../utils/clipboard'
+import { showApiError } from '../../ui/Toast'
 import { cleanResourceForYaml } from '../../../utils/yaml'
 import { isFetchError } from '../../../types/fetch-error'
 
@@ -29,6 +31,8 @@ function formatDate(dateStr: string): string {
 export function SecretRenderer({ data, relationships, onNavigate, certificateInfo, resourceData, onSaveSecretValue, isSaving }: SecretRendererProps) {
   const [revealed, setRevealed] = useState<Set<string>>(new Set())
   const [copied, setCopied] = useState<string | null>(null)
+  const copyTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  useEffect(() => () => clearTimeout(copyTimer.current), [])
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [showSaveConfirm, setShowSaveConfirm] = useState(false)
@@ -58,13 +62,13 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
   }
 
   async function copyValue(key: string, decodedValue: string): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(decodedValue)
-      setCopied(key)
-      setTimeout(() => setCopied(null), 2000)
-    } catch (err) {
-      console.error('Failed to copy:', err)
+    if (!await copyText(decodedValue)) {
+      showApiError("Couldn't copy the value", 'The browser blocked clipboard access.')
+      return
     }
+    setCopied(key)
+    clearTimeout(copyTimer.current)
+    copyTimer.current = setTimeout(() => setCopied(null), 2000)
   }
 
   function startEdit(key: string, decoded: string) {
@@ -201,7 +205,7 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
                         onClick={() => copyValue(key, decoded)}
                         className="p-1 text-theme-text-tertiary hover:text-theme-text-primary transition-colors"
                         title={copied === key ? 'Copied' : 'Copy value'}
-                        aria-label={`Copy value for ${key}`}
+                        aria-label={copied === key ? `Copied value for ${key}` : `Copy value for ${key}`}
                       >
                         {copied === key ? (
                           <Check className="w-3.5 h-3.5 text-green-400" />
