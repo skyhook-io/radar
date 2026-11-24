@@ -14,6 +14,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 let root: Root
 let element: HTMLDivElement
 beforeEach(() => {
+  localStorage.removeItem('radar-logs-ts-format')
   element = document.createElement('div')
   document.body.appendChild(element)
   root = createRoot(element)
@@ -23,9 +24,14 @@ afterEach(async () => {
   element.remove()
 })
 
-it('names the zone beside the local time format', async () => {
+it('names the zone beside local formats in the timestamp menu', async () => {
   const noop = () => {}
   await act(async () => root.render(<LogCore entries={[]} isLoading={false} isStreaming={false} onStopStream={noop} onRefresh={noop} onDownload={noop} />))
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone
-  expect(element.querySelector('button[aria-label="Pick timestamp format"]')?.textContent).toContain(`Local time (${zone})`)
+  const picker = element.querySelector<HTMLButtonElement>('button[aria-label="Pick timestamp format"]')!
+  expect(picker.textContent).toBe('Local time')
+  await act(async () => picker.click())
+  const labels = Array.from(element.querySelectorAll('button'), (button) => button.textContent)
+  expect(labels.filter((label) => label?.includes('(local)'))).toEqual([`Time (local)${zone}✓`, `ISO (local)${zone}`])
+  expect(labels).toContain('Relative')
 })

@@ -133,14 +133,7 @@ const STRUCTURED_MODE_DESCRIPTIONS: Record<StructuredMode, string> = {
 
 const EMPTY_STATE_CLASS = 'flex-1 flex flex-col items-center justify-center gap-2 px-4 text-center'
 
-const LOCAL_FORMATS = new Set<TimestampFormat>(['time-local', 'iso-local'])
-function zoned(label: string, fmt: TimestampFormat): string {
-  // A log can predate a daylight saving change. The IANA zone describes the
-  // display rule without attaching today's offset to older timestamps.
-  const zone = LOCAL_FORMATS.has(fmt) ? Intl.DateTimeFormat().resolvedOptions().timeZone : ''
-  if (!zone) return label
-  return label.endsWith('(local)') ? label.replace(/\(local\)$/, `(local, ${zone})`) : `${label} (${zone})`
-}
+const isLocalFormat = (format: TimestampFormat) => format === 'time-local' || format === 'iso-local'
 
 const TIMESTAMP_FORMAT_SHORT_LABELS: Record<TimestampFormat, string> = {
   'time-local': 'Local time',
@@ -261,6 +254,8 @@ export function LogCore({
       return v && TIMESTAMP_FORMAT_ORDER.includes(v) ? v : 'time-local'
     } catch { return 'time-local' }
   })
+  // The IANA zone describes the display rule for old logs across DST changes.
+  const timeZone = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, [])
   const [ansiEnabled, setAnsiEnabled] = useState(() => {
     try { return localStorage.getItem('radar-logs-ansi') !== 'false' } catch { return true }
   })
@@ -801,16 +796,17 @@ export function LogCore({
             </button>
           </Tooltip>
           <div className="relative" ref={tsMenuRef}>
-            <Tooltip content={`Timestamp format: ${zoned(TIMESTAMP_FORMAT_LABELS[tsFormat], tsFormat)}`} delay={TIP_DELAY} position="bottom">
+            <Tooltip content={`Timestamp format: ${TIMESTAMP_FORMAT_LABELS[tsFormat]}${isLocalFormat(tsFormat) && timeZone ? ` · ${timeZone}` : ''}`} delay={TIP_DELAY} position="bottom">
               <button
                 onClick={() => setShowTsMenu(prev => !prev)}
                 className={`px-2 py-1.5 rounded-r text-[10px] font-medium transition-colors whitespace-nowrap ${
                   showTimestamps ? palette.toolbarActive : iconBtnInactiveTertiary
                 }`}
                 aria-label="Pick timestamp format"
+                aria-expanded={showTsMenu}
               >
                 <span className="inline-flex items-center gap-1">
-                  <span>{zoned(TIMESTAMP_FORMAT_SHORT_LABELS[tsFormat], tsFormat)}</span>
+                  <span>{TIMESTAMP_FORMAT_SHORT_LABELS[tsFormat]}</span>
                   <ChevronDown className="w-3 h-3" />
                 </span>
               </button>
@@ -818,7 +814,7 @@ export function LogCore({
             {tsMenu.shouldRender && (
               <div
                 inert={!showTsMenu}
-                className={`absolute top-full right-0 mt-1 w-max max-w-[75vw] origin-top-right ${palette.menuBg} border ${palette.border} rounded-lg shadow-lg z-50 ${TRANSITION_MENU} ${
+                className={`absolute top-full right-0 mt-1 w-44 origin-top-right ${palette.menuBg} border ${palette.border} rounded-lg shadow-lg z-50 ${TRANSITION_MENU} ${
                   tsMenu.isOpen ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 -translate-y-1 scale-[0.97]'
                 } ${showTsMenu ? '' : 'pointer-events-none'}`}
                 style={overlayTransitionStyle(tsMenu.isOpen, 'menu')}
@@ -830,12 +826,15 @@ export function LogCore({
                   <button
                     key={fmt}
                     onClick={() => pickTsFormat(fmt)}
-                    className={`w-full text-left px-3 py-1.5 text-xs ${palette.hoverBg} flex items-center justify-between ${
+                    className={`w-full text-left px-3 py-1.5 text-xs ${palette.hoverBg} flex items-center justify-between gap-2 ${
                       tsFormat === fmt ? palette.textPrimary : palette.textSecondary
                     }`}
                   >
-                    <span>{zoned(TIMESTAMP_FORMAT_LABELS[fmt], fmt)}</span>
-                    {tsFormat === fmt && <span className={`text-[10px] ${palette.textAccent}`}>✓</span>}
+                    <span className="min-w-0">
+                      {TIMESTAMP_FORMAT_LABELS[fmt]}
+                      {isLocalFormat(fmt) && timeZone && <span className="block break-words text-[10px]">{timeZone}</span>}
+                    </span>
+                    {tsFormat === fmt && <span className={`shrink-0 text-[10px] ${palette.textAccent}`}>✓</span>}
                   </button>
                 ))}
               </div>
