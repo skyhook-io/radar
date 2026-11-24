@@ -363,10 +363,22 @@ func (c *Client) observeResourceChange(source kubernetes.Interface, op string, o
 		}
 		return
 	}
+	lister := c.cachedServiceLister()
+	if lister != nil {
+		for _, name := range gkeFrontendNames {
+			if !prom.IsGMPFrontendLocation(pod.Namespace, name) {
+				continue
+			}
+			frontend, err := lister.Services(pod.Namespace).Get(name)
+			if err == nil && gkeFrontendCandidate(frontend) && labels.SelectorFromSet(frontend.Spec.Selector).Matches(labels.Set(pod.Labels)) {
+				c.invalidateGKECandidate(source, frontend)
+			}
+		}
+	}
 	if base != "" && connected == nil {
 		return
 	}
-	backing := candidateServiceSelecting(c.cachedServiceLister(), pod, connected)
+	backing := candidateServiceSelecting(lister, pod, connected)
 	if backing == nil {
 		return
 	}

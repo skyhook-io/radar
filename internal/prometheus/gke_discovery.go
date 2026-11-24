@@ -189,7 +189,8 @@ func (c *Client) chartStores(ctx context.Context) chartStores {
 	}
 	return chartStores{standard: standard, supplement: func(ctx context.Context) (*gkeMetrics, error) {
 		if !c.ConnectionCurrent(standard.conn) {
-			return nil, errDiscoverySuperseded
+			// A bound conventional check may already have withheld the chart.
+			return nil, nil
 		}
 		g := c.gkeReader(ctx, standard.conn.generation, nil)
 		if !c.ConnectionCurrent(standard.conn) {
@@ -305,6 +306,8 @@ func (g *gkeMetrics) hasNodeMetrics(ctx context.Context, store *prom.Client) boo
 	return v != nil && *v > 0 && !math.IsInf(*v, 0)
 }
 
+var gkeFrontendNames = []string{"gmp-frontend", "frontend"}
+
 func (c *Client) gkeServiceCandidates(ctx context.Context, gen, revision uint64) []*corev1.Service {
 	c.mu.RLock()
 	inventory := c.gkeServices
@@ -321,7 +324,7 @@ func (c *Client) gkeServiceCandidates(ctx context.Context, gen, revision uint64)
 	svcs := slices.Clone(inventory.services)
 	if !inventory.complete {
 		for _, ns := range []string{"gmp-public", "gmp-system", "gke-gmp-system"} {
-			for _, name := range []string{"gmp-frontend", "frontend"} {
+			for _, name := range gkeFrontendNames {
 				if s, err := c.k8sClient.CoreV1().Services(ns).Get(ctx, name, metav1.GetOptions{}); err == nil {
 					svcs = append(svcs, s)
 				}
@@ -381,15 +384,20 @@ func (c *Client) invalidateGKEService(source kubernetes.Interface, op string, sv
 	wasNative, nowNative := gkeFrontendCandidate(old), gkeFrontendCandidate(svc)
 	nativeChange := (wasNative || nowNative) && (op != "update" || wasNative != nowNative || !portsEqual(old.Spec.Ports, svc.Spec.Ports) || !labels.Equals(old.Spec.Selector, svc.Spec.Selector))
 	if nativeChange {
-		c.mu.Lock()
-		if c.k8sClient == source && c.manualURL == "" {
-			c.gkeRevision++
-			c.gkeChecked = time.Time{}
-			if c.gke != nil && c.gke.service.Namespace == svc.Namespace && c.gke.service.Name == svc.Name {
-				c.gke = nil
-			}
-		}
-		c.mu.Unlock()
+		c.invalidateGKECandidate(source, svc)
 	}
 	return nativeChange
+}
+
+func (c *Client) invalidateGKECandidate(source kubernetes.Interface, svc *corev1.Service) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.k8sClient != source || c.manualURL != "" || c.retired {
+		return
+	}
+	c.gkeRevision++
+	c.gkeChecked = time.Time{}
+	if c.gke != nil && c.gke.service.Namespace == svc.Namespace && c.gke.service.Name == svc.Name {
+		c.gke = nil
+	}
 }

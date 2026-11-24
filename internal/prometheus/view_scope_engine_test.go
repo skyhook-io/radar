@@ -690,7 +690,7 @@ func TestEngineRightsizingSameClusterNameAcrossProjects(t *testing.T) {
 	}
 }
 
-func TestGKENativeRestartChartCountsCounterJump(t *testing.T) {
+func TestEngineGKENativeRestartChartCountsCounterJump(t *testing.T) {
 	if os.Getenv("RADAR_PROMENGINE") == "" {
 		t.Skip("set RADAR_PROMENGINE=1 (make test-prom-engine) to run the real-Prometheus tests")
 	}
@@ -706,7 +706,7 @@ func TestGKENativeRestartChartCountsCounterJump(t *testing.T) {
   promql_expr_test:
 `
 	for _, q := range []string{
-		g.chartQuery("Pod", "default", "api", prom.CategoryRestarts, nil),
+		g.chartQuery("Pod", "default", "api", prom.CategoryRestarts, &scope),
 		g.chartQuery("Deployment", "default", "app", prom.CategoryRestarts, &scope),
 	} {
 		rules += fmt.Sprintf(`  - expr: %q

@@ -401,6 +401,47 @@ func TestGKEConfiguredFrontendWithoutScrapeTargets(t *testing.T) {
 	}
 }
 
+func TestGKEConfiguredCapabilityRefresh(t *testing.T) {
+	var present atomic.Bool
+	var probes atomic.Int32
+	c := gkeFixtureServices(t, fixtureIssuer, 1, func(w http.ResponseWriter, r *http.Request, _ corev1.Service) bool {
+		if strings.HasSuffix(r.URL.Path, "/api/v1/query") && strings.Contains(r.FormValue("query"), "node_cpu_total_cores") {
+			probes.Add(1)
+			if !present.Load() {
+				fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`)
+				return true
+			}
+		}
+		return false
+	})
+	c.manualURL = c.k8sConfig.Host + "/api/v1/namespaces/gmp-public/services/frontend:web/proxy"
+	lookup := func(want bool, count int32) {
+		t.Helper()
+		stores := c.chartStores(t.Context())
+		g, err := stores.supplement(t.Context())
+		if err != nil || (g != nil) != want || probes.Load() != count {
+			t.Fatalf("native present=%t probes=%d err=%v, want %t/%d", g != nil, probes.Load(), err, want, count)
+		}
+	}
+	expire := func() {
+		c.mu.Lock()
+		c.gkeChecked = time.Now().Add(-2 * time.Minute)
+		c.mu.Unlock()
+	}
+	lookup(false, 1)
+	present.Store(true)
+	lookup(false, 1)
+	expire()
+	lookup(true, 2)
+	present.Store(false)
+	lookup(true, 2)
+	expire()
+	lookup(false, 3)
+	if !c.GetStatus().Connected {
+		t.Fatal("native capability expiry cleared explicit raw connection")
+	}
+}
+
 func TestGKEConfiguredWorkloadWithUnverifiedConventionalIdentity(t *testing.T) {
 	c := gkeFixture(t, fixtureIssuer, 1)
 	Initialize(c.k8sClient, c.k8sConfig, "fixture")
@@ -609,5 +650,25 @@ func TestGKECoexistsWithDiscoveredPrometheus(t *testing.T) {
 				t.Fatalf("raw connection initiated native refresh")
 			}
 		})
+	}
+}
+
+func TestGKEFrontendPodReadyInvalidatesSupplementWithConventionalConnection(t *testing.T) {
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "gmp-public", Name: "frontend"}, Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "frontend"}, Ports: []corev1.ServicePort{{Port: 9090}}}}
+	cs := fake.NewClientset(svc)
+	if err := k8s.InitScopedTestResourceCache(cs, map[string]k8score.ResourceScope{k8score.Services: {Enabled: true}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetResourceCache)
+	c := &Client{k8sClient: cs, baseURL: "http://ordinary", gkeChecked: time.Now()}
+	pod := readyPod(svc.Namespace, "frontend-0", map[string]string{"app": "unrelated"}, true)
+	c.observeResourceChange(cs, "add", pod, nil)
+	if c.gkeChecked.IsZero() {
+		t.Fatal("unrelated ready Pod invalidated the native cache")
+	}
+	pod.Labels = svc.Spec.Selector
+	c.observeResourceChange(cs, "add", pod, nil)
+	if !c.gkeChecked.IsZero() || c.gkeRevision != 1 || c.baseURL != "http://ordinary" {
+		t.Fatal("frontend readiness failed to invalidate only native discovery")
 	}
 }
