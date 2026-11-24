@@ -59,6 +59,10 @@ func TestSecretGetCertificateKeys(t *testing.T) {
 			if info == nil {
 				t.Fatal("missing certificate metadata")
 			}
+			metadata, err := json.Marshal(info)
+			if err != nil || strings.Contains(string(metadata), "SENTINEL") || strings.Contains(string(metadata), "-----BEGIN") {
+				t.Fatal("unexpected raw data in certificate metadata")
+			}
 			chain := info.AdditionalKeys["trust.pem"]
 			if len(chain) != 2 || !strings.EqualFold(chain[0].SerialNumber, cert.SerialNumber.Text(16)) || !chain[1].Expired {
 				t.Fatalf("unexpected bundle order or expiry: %+v", chain)

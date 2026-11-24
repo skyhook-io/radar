@@ -116,16 +116,32 @@ describe('Secret certificate bundles', () => {
     expect(element.textContent).not.toContain('Certificate · tls.crt')
     expect(element.textContent).not.toContain('Certificate has expired')
   })
-})
 
-it('keeps a large bundle behind one disclosure and leaves the data controls accessible', async () => {
-  const cert = { subject: 'ca', issuer: 'ca', serialNumber: '1', keyType: 'Ed25519',
-    notBefore: '2025-01-01T00:00:00Z', notAfter: '2035-01-01T00:00:00Z', daysLeft: 1000 }
-  const info = { certificates: [], additionalKeys: { 'roots.pem': Array(100).fill(cert) } }
-  await act(async () => root.render(<SecretRenderer data={secret} certificateInfo={info} />))
-  expect(button('Certificates (100)').getAttribute('aria-expanded')).toBe('false')
-  expect(element.textContent).not.toContain('roots.pem')
-  expect(button('Reveal')).toBeTruthy()
-  await act(async () => button('Certificates (100)').click())
-  expect(element.textContent).toContain('Certificate · roots.pem (100/100)')
+  it('keeps a large bundle behind one disclosure and leaves the data controls accessible', async () => {
+    const cert = { subject: 'ca', issuer: 'ca', serialNumber: '1', keyType: 'Ed25519',
+      notBefore: '2025-01-01T00:00:00Z', notAfter: '2035-01-01T00:00:00Z', daysLeft: 1000 }
+    const info = { certificates: [], additionalKeys: { 'roots.pem': Array(100).fill(cert) } }
+    await act(async () => root.render(<SecretRenderer data={secret} certificateInfo={info} />))
+    expect(button('Certificates (100)').getAttribute('aria-expanded')).toBe('false')
+    expect(element.textContent).not.toContain('roots.pem')
+    expect(button('Reveal')).toBeTruthy()
+    await act(async () => button('Certificates (100)').click())
+    expect(element.textContent).toContain('Certificate · roots.pem (100/100)')
+  })
+
+
+  it('updates the expiry of an open bundle when its certificate expires', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2025-12-31T23:59:45Z'))
+      const info = { certificates: [], additionalKeys: { 'client.pem': [leaf] } }
+      await act(async () => root.render(<SecretRenderer data={secret} certificateInfo={info} />))
+      expect(element.textContent).toContain('client.pem · Expires in 15s')
+      await act(async () => { vi.advanceTimersByTime(30_000) })
+      expect(element.textContent).toContain('client.pem · Expired')
+      expect(element.textContent).not.toContain('Certificate has expired')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

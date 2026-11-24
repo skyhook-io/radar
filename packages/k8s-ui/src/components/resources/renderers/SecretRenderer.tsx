@@ -110,40 +110,6 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
     }
   }, [editValue])
 
-  const [now, setNow] = useState(Date.now)
-  const hasCertificates = Boolean(certificateInfo)
-  useEffect(() => {
-    if (!hasCertificates) return
-    setNow(Date.now())
-    const timer = window.setInterval(() => setNow(Date.now()), 30_000)
-    return () => window.clearInterval(timer)
-  }, [hasCertificates])
-
-  const leafCert = certificateInfo?.certificates[0]
-  const leafRemaining = leafCert ? Date.parse(leafCert.notAfter) - now : Infinity
-  const chains = Object.entries(certificateInfo?.additionalKeys ?? {}).sort(([a], [b]) => a.localeCompare(b))
-  if (certificateInfo?.certificates.length) chains.unshift(['tls.crt', certificateInfo.certificates])
-
-  const certificateCount = chains.reduce((total, [, chain]) => total + chain.length, 0)
-  const certificateSections = chains.flatMap(([key, chain], groupIndex) => chain.map((cert, index) => {
-    const remaining = Date.parse(cert.notAfter) - now
-    const position = chain.length > 1 ? ` (${index + 1}/${chain.length})` : ''
-    const status = remaining <= 0 ? ' · Expired' : remaining <= 30 * DAY ? ` · Expires in ${formatDuration(remaining)}` : ''
-    return (
-      <CertificateInfoSection
-        key={`${key}/${index}`}
-        cert={cert}
-        index={index}
-        total={chain.length}
-        expanded={groupIndex === 0 && index === 0}
-        title={`Certificate · ${key}${position}${status}`}
-        remaining={remaining}
-      >
-        {cert.organizations?.length ? <Property label="Organization" value={cert.organizations.join(', ')} /> : null}
-      </CertificateInfoSection>
-    )
-  }))
-
   return (
     <>
       <Section title="Secret">
@@ -154,17 +120,8 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
         </PropertyList>
       </Section>
 
-      {leafCert && leafRemaining <= 30 * DAY && (
-        <AlertBanner
-          variant={leafRemaining <= 7 * DAY ? 'error' : 'warning'}
-          title={leafRemaining <= 0 ? 'Certificate has expired' : `Certificate expires in ${formatDuration(leafRemaining)}`}
-          message={`${leafRemaining <= 0 ? 'Expired' : 'Expires'} ${formatDate(leafCert.notAfter)} · tls.crt`}
-        />
-      )}
-
+      {certificateInfo && <SecretCertificates key={data.metadata?.uid ?? `${data.metadata?.namespace}/${data.metadata?.name}`} info={certificateInfo} />}
       <ReflectorSummary data={data} reflection={relationships?.reflection} onNavigate={onNavigate} />
-
-      {certificateCount > 6 ? <Section title={`Certificates (${certificateCount})`} defaultExpanded={false} mountLazily>{certificateSections}</Section> : certificateSections}
 
       {dataKeys.length > 0 && (
         <div className="flex items-center gap-2 p-3 bg-amber-500/10 border border-amber-500/30 rounded text-amber-400 text-sm">
@@ -317,7 +274,60 @@ function secretSaveErrorMessage(error: unknown): { reason?: string } {
   return { reason: error instanceof Error && error.message ? error.message : undefined }
 }
 
-export function CertificateInfoSection({ cert, index, total, title: titleOverride, expanded = index === 0, remaining = Date.parse(cert.notAfter) - Date.now(), children }: {
+function SecretCertificates({ info }: { info: SecretCertificateInfo }) {
+  const [now, setNow] = useState(Date.now)
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  const primary = info.certificates
+  const leafCert = primary?.[0]
+  const leafRemaining = leafCert ? Date.parse(leafCert.notAfter) - now : Infinity
+  const chains = Object.entries(info.additionalKeys ?? {}).sort(([a], [b]) => a.localeCompare(b))
+  if (primary?.length) chains.unshift(['tls.crt', primary])
+
+  const certificateCount = chains.reduce((total, [, chain]) => total + chain.length, 0)
+  let expiredCount = 0
+  let expiringCount = 0
+  const certificateSections = chains.flatMap(([key, chain], groupIndex) => chain.map((cert, index) => {
+    const remaining = Date.parse(cert.notAfter) - now
+    if (remaining <= 0) expiredCount++
+    else if (remaining <= 30 * DAY) expiringCount++
+    const position = chain.length > 1 ? ` (${index + 1}/${chain.length}) · ${cert.subject}` : ''
+    const status = remaining <= 0 ? ' · Expired' : remaining <= 30 * DAY ? ` · Expires in ${formatDuration(remaining)}` : ''
+    return (
+      <CertificateInfoSection
+        key={`${key}/${index}`}
+        cert={cert}
+        index={index}
+        total={chain.length}
+        expanded={groupIndex === 0 && index === 0}
+        title={`Certificate · ${key}${position}${status}`}
+        remaining={remaining}
+      >
+        {cert.organizations?.length ? <Property label="Organization" value={cert.organizations.join(', ')} /> : null}
+      </CertificateInfoSection>
+    )
+  }))
+
+  const summary = [`Certificates (${certificateCount})`, expiredCount && `${expiredCount} expired`, expiringCount && `${expiringCount} expiring`].filter(Boolean).join(' · ')
+  return (
+    <>
+      {leafCert && leafRemaining <= 30 * DAY && (
+        <AlertBanner
+          variant={leafRemaining <= 7 * DAY ? 'error' : 'warning'}
+          title={leafRemaining <= 0 ? 'Certificate has expired' : `Certificate expires in ${formatDuration(leafRemaining)}`}
+          message={`${leafRemaining <= 0 ? 'Expired' : 'Expires'} ${formatDate(leafCert.notAfter)} · tls.crt`}
+        />
+      )}
+
+      {certificateCount > 6 ? <Section title={summary} defaultExpanded={false} mountLazily>{certificateSections}</Section> : certificateSections}
+    </>
+  )
+}
+
+export function CertificateInfoSection({ cert, index, total, title: titleOverride, expanded, remaining = Date.parse(cert.notAfter) - Date.now(), children }: {
   cert: CertificateInfo
   index: number
   total: number
@@ -339,7 +349,7 @@ export function CertificateInfoSection({ cert, index, total, title: titleOverrid
     : 'Certificate Info')
 
   return (
-    <Section title={title} icon={Shield} defaultExpanded={expanded}>
+    <Section title={title} icon={Shield} defaultExpanded={expanded ?? index === 0} mountLazily={expanded === false}>
       <PropertyList>
         <Property label="Subject (CN)" value={cert.subject} />
         {children}

@@ -354,7 +354,6 @@ View TLS certificate details and expiry dates across all namespaces — catch ex
 
 - Open a Secret to inspect the PEM certificates in each data key, including CA bundles in Opaque Secrets
 - Dashboard-level certificate expiry overview
-- Available from the resource detail view for any TLS-type Secret
 
 ### GitOps
 

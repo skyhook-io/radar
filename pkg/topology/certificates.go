@@ -39,24 +39,29 @@ var certBegin = []byte("-----BEGIN CERTIFICATE-----")
 var certEnd = []byte("-----END CERTIFICATE-----")
 
 func parseCertificateBundle(data []byte) ([]CertificateInfo, bool) {
+	if !bytes.Contains(data, certBegin) {
+		return nil, false
+	}
 	var certs []CertificateInfo
-	first, leafParsed := true, false
-	for part := range bytes.SplitAfterSeq(data, certEnd) {
-		begin := bytes.LastIndex(part, certBegin)
-		if begin < 0 {
-			continue
+	start, firstStart, offset := -1, -1, 0
+	leafParsed := false
+	for line := range bytes.Lines(data) {
+		switch marker := bytes.TrimRight(line, " \t\r\n"); {
+		case bytes.Equal(marker, certBegin):
+			start = offset
+			if firstStart < 0 {
+				firstStart = start
+			}
+		case start >= 0 && bytes.Equal(marker, certEnd):
+			parsed := ParsePEMCertificates(data[start : offset+len(line)])
+			// A malformed first certificate cannot make a later CA the serving leaf.
+			if start == firstStart {
+				leafParsed = len(parsed) > 0
+			}
+			certs = append(certs, parsed...)
+			start = -1
 		}
-		// A malformed first certificate cannot make a later CA the serving leaf.
-		isLeaf := first && !bytes.Contains(part[:begin], certBegin)
-		first = false
-		parsed := ParsePEMCertificates(part[begin:])
-		if len(parsed) == 0 {
-			continue
-		}
-		if isLeaf {
-			leafParsed = true
-		}
-		certs = append(certs, parsed...)
+		offset += len(line)
 	}
 	return certs, leafParsed
 }
@@ -228,7 +233,7 @@ func GetSecretCertificateInfo(provider ResourceProvider, namespace, name string)
 		if info := ParseSecretCertificates(secret); info != nil {
 			return info, nil
 		}
-		return &SecretCertificateInfo{}, nil
+		return &SecretCertificateInfo{Certificates: []CertificateInfo{}}, nil
 	}
 
 	return nil, fmt.Errorf("secret %s/%s not found", namespace, name)
