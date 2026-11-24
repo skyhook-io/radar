@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -171,7 +172,7 @@ func TestCurrentReadersExcludePreviousControllerIncarnations(t *testing.T) {
 		pod("previous-rs", staleOwner, corev1.PodQOSGuaranteed),
 		pod("wrong-group", wrongGroup, corev1.PodQOSGuaranteed),
 	)
-	scan, _, _ := snapshotScanWorkloads(context.Background(), cache, map[string][]string{"Deployment": {"shop"}})
+	scan, _, _ := snapshotScanWorkloads(context.Background(), cache, map[string][]string{"Deployment": {"shop"}}, time.Now())
 	var currentQoS rightsizing.PodQoS
 	currentQoS.Observe(corev1.PodQOSBurstable)
 	if len(scan) != 1 || scan[0].workload.qos != currentQoS || !reflect.DeepEqual(scan[0].workload.currentPodOOM, map[string]bool{"current": true}) {

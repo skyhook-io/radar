@@ -231,7 +231,7 @@ func runRightsizingScan(ctx context.Context, scope RightsizingScanScope, client 
 	effective, partiallyCached := clampScopeToCacheCoverage(cache, scope.NamespacesByKind)
 	resp.Coverage.PartiallyCachedKinds = partiallyCached
 	resp.Coverage.ScannedNamespacesByKind = effective
-	workloads, unavailable, skippedDaemonSets := snapshotScanWorkloads(ctx, cache, effective)
+	workloads, unavailable, skippedDaemonSets := snapshotScanWorkloads(ctx, cache, effective, resp.ScannedAt)
 	resp.Coverage.UnavailableKinds = unavailable
 	resp.Coverage.DaemonSetsWithoutNodes = len(skippedDaemonSets)
 	sort.Strings(skippedDaemonSets)
@@ -767,11 +767,11 @@ func buildScanRow(container containerSpec, resourceName string, key scanKey, exp
 		statistic = "Max"
 		series = evidence.memory[key]
 		row.CurrentPodOOM = workload.currentPodOOM[container.name]
-		if evidence.errors["restart_activity"] == nil && evidence.errors["termination_history"] == nil {
+		if evidence.errors["termination_history"] == nil {
 			restartActivity, restartAvailable := evidence.restarts[key]
 			termination := evidence.terminations[key]
 			row.WindowOOMEvidence = termination.OOM
-			row.OOMEvidenceAvailable = termination.OOM || (restartAvailable && (restartActivity <= 0 || termination.Any))
+			row.OOMEvidenceAvailable = workload.hasOOMEvidence(container.name, restartActivity, evidence.errors["restart_activity"] == nil && restartAvailable, termination)
 		}
 	}
 	rightsizing.SetCurrentQuantities(&row, request, limit, resourceName)
@@ -976,7 +976,7 @@ func sortScanWorkloads(workloads []scanWorkload) {
 
 // snapshotScanWorkloads also returns each DaemonSet it skipped for matching no
 // node, as namespace/name.
-func snapshotScanWorkloads(ctx context.Context, cache *k8s.ResourceCache, scopes map[string][]string) ([]scanWorkload, []string, []string) {
+func snapshotScanWorkloads(ctx context.Context, cache *k8s.ResourceCache, scopes map[string][]string, windowEnd time.Time) ([]scanWorkload, []string, []string) {
 	workloads := map[string]*scanWorkload{}
 	var unavailable, skippedDaemonSets []string
 	add := func(obj metav1.Object, kind string, replicas int, podSpec *corev1.PodSpec, scaledToZero, cohortReady bool) {
@@ -1036,7 +1036,7 @@ func snapshotScanWorkloads(ctx context.Context, cache *k8s.ResourceCache, scopes
 	}
 
 	enrichScanHPA(ctx, cache, scopes, workloads)
-	enrichScanCurrentOOM(ctx, cache, scopes, workloads)
+	enrichScanCurrentOOM(ctx, cache, scopes, workloads, windowEnd)
 	out := make([]scanWorkload, 0, len(workloads))
 	for _, workload := range workloads {
 		out = append(out, *workload)
@@ -1200,7 +1200,7 @@ func scanNeedsReplicaSets(workloads map[string]*scanWorkload) bool {
 	return false
 }
 
-func enrichScanCurrentOOM(ctx context.Context, cache *k8s.ResourceCache, scopes map[string][]string, workloads map[string]*scanWorkload) {
+func enrichScanCurrentOOM(ctx context.Context, cache *k8s.ResourceCache, scopes map[string][]string, workloads map[string]*scanWorkload, windowEnd time.Time) {
 	// A warming informer hands out a non-nil lister that answers nothing, which
 	// would read as a cluster with no OOM-killed pods anywhere. The scan pays
 	// this wait once rather than per workload.
@@ -1277,8 +1277,7 @@ func enrichScanCurrentOOM(ctx context.Context, cache *k8s.ResourceCache, scopes 
 			workload.workload.observeSizingPodIdentity(ctx, cache, pod)
 		}
 		workload.workload.qos.Observe(pod.Status.QOSClass)
-		collectCurrentPodOOM(workload.workload.currentPodOOM, pod.Status.ContainerStatuses)
-		collectCurrentPodOOM(workload.workload.currentPodOOM, pod.Status.InitContainerStatuses)
+		workload.workload.observePodTerminations(pod, windowEnd)
 	}
 }
 

@@ -297,6 +297,7 @@ type rightsizingWorkload struct {
 	podRestartEvidence    map[string]sizingPodRestarts
 	qos                   rightsizing.PodQoS
 	currentPodOOM         map[string]bool
+	unexplainedPodExits   map[string]bool
 	hpaManaged            map[string]bool
 	hpaAvailable          bool
 	replicas              int
@@ -425,28 +426,62 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 		return workload, nil
 	}
 	collectPodIdentities := cloud.IsAuthenticatedTunnelRequest(ctx)
+	windowEnd := time.Now()
 	for _, pod := range pods {
 		workload.qos.Observe(pod.Status.QOSClass)
 		workload.podNames = append(workload.podNames, pod.Name)
 		if collectPodIdentities {
 			workload.observeSizingPodIdentity(ctx, cache, pod)
 		}
-		collectCurrentPodOOM(workload.currentPodOOM, pod.Status.ContainerStatuses)
-		collectCurrentPodOOM(workload.currentPodOOM, pod.Status.InitContainerStatuses)
+		workload.observePodTerminations(pod, windowEnd)
 	}
 	sort.Strings(workload.podNames)
 	return workload, nil
 }
 
-func collectCurrentPodOOM(dst map[string]bool, statuses []corev1.ContainerStatus) {
-	for _, status := range statuses {
-		if status.State.Terminated != nil && status.State.Terminated.Reason == "OOMKilled" {
-			dst[status.Name] = true
-		}
-		if status.LastTerminationState.Terminated != nil && status.LastTerminationState.Terminated.Reason == "OOMKilled" {
-			dst[status.Name] = true
+func (w *rightsizingWorkload) observePodTerminations(pod *corev1.Pod, windowEnd time.Time) {
+	inWindow := func(t time.Time) bool { return !t.Before(windowEnd.Add(-rightsizingWindow)) && !t.After(windowEnd) }
+	bornInWindow := inWindow(pod.CreationTimestamp.Time)
+	// SIGKILL alone cannot distinguish a manual kill from an OOM.
+	unexplained := func(exit *corev1.ContainerStateTerminated) bool {
+		return exit == nil || exit.Reason == "" || exit.Reason == "ContainerStatusUnknown" || exit.Reason == "Unknown" || exit.ExitCode == 137 || exit.Signal == 9
+	}
+	recent := func(exit *corev1.ContainerStateTerminated) bool {
+		return bornInWindow || (exit != nil && inWindow(exit.FinishedAt.Time))
+	}
+	for _, statuses := range [][]corev1.ContainerStatus{pod.Status.ContainerStatuses, pod.Status.InitContainerStatuses} {
+		for _, status := range statuses {
+			current, last := status.State.Terminated, status.LastTerminationState.Terminated
+			if (current != nil && current.Reason == "OOMKilled") || (last != nil && last.Reason == "OOMKilled") {
+				w.currentPodOOM[status.Name] = true
+			}
+			// A counter already positive at its first scrape has no visible increase.
+			// A Pod born inside the window dates its restarts even when the scrape cannot.
+			if pod.UID == "" {
+				continue
+			}
+			// A container can die and the Pod disappear before the kubelet restarts it.
+			currentGap := current != nil && unexplained(current) && recent(current)
+			lastGap := (status.RestartCount > 0 || last != nil) && unexplained(last) && recent(last)
+			earlierGap := bornInWindow && status.RestartCount > 1
+			if !currentGap && !lastGap && !earlierGap {
+				continue
+			}
+			if w.unexplainedPodExits == nil {
+				w.unexplainedPodExits = map[string]bool{}
+			}
+			w.unexplainedPodExits[status.Name] = true
 		}
 	}
+}
+
+func (w rightsizingWorkload) hasOOMEvidence(container string, restartActivity float64, restartAvailable bool, termination terminationEvidence) bool {
+	if termination.OOM {
+		return true
+	}
+	// The aggregated historical reason could describe another replica or just
+	// the last of several restarts. It cannot clear a known gap in a live Pod.
+	return restartAvailable && !w.unexplainedPodExits[container] && (restartActivity <= 0 || termination.Any)
 }
 
 func loadHPAManagedResources(ctx context.Context, cache *k8s.ResourceCache, kind, namespace, name string) (map[string]bool, bool) {
@@ -802,11 +837,11 @@ func buildRightsizingRow(container containerSpec, resourceName string, expected 
 		row.CurrentPodOOM = workload.currentPodOOM[container.name]
 		restarts := results["restart_activity"]
 		terminations := results["termination_history"]
-		if restarts.err == nil && terminations.err == nil {
+		if terminations.err == nil {
 			restartActivity, restartAvailable := restarts.values[container.name]
 			termination := terminations.terminations[container.name]
 			row.WindowOOMEvidence = termination.OOM
-			row.OOMEvidenceAvailable = termination.OOM || (restartAvailable && (restartActivity <= 0 || termination.Any))
+			row.OOMEvidenceAvailable = workload.hasOOMEvidence(container.name, restartActivity, restarts.err == nil && restartAvailable, termination)
 		}
 	}
 	rightsizing.SetCurrentQuantities(&row, req, lim, resourceName)
