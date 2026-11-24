@@ -38,7 +38,7 @@ func viewAnchorRow(metric string) prom.Series {
 	return vec(map[string]string{viewScopeAnchorLabel: metric}, 1)
 }
 
-func isReadback(query string) bool { return !strings.Contains(query, "topk(2") }
+func isReadback(query string) bool { return strings.Contains(query, `cluster="`) }
 
 func rows(series ...prom.Series) (*prom.QueryResult, error) {
 	return &prom.QueryResult{Series: series}, nil
@@ -305,8 +305,8 @@ func TestViewScopeIncompleteAnswersAreUnknown(t *testing.T) {
 func TestViewScopeQueryShape(t *testing.T) {
 	req := viewRequest(true, cpuMetric, ViewMetric{Name: "kube_pod_info"})
 	got := viewReadbackQuery(req.Metrics, []string{"cluster", "region"}, `cluster="a",region="eu"`, req.Span)
-	want := `label_replace(count by (cluster,region) (count_over_time(container_cpu_usage_seconds_total{namespace="shop",pod=~"api-.*",cluster="a",region="eu"}[3600s])), "radar_metric", "container_cpu_usage_seconds_total", "", "")` +
-		` or label_replace(count by (cluster,region) (count_over_time(kube_pod_info{cluster="a",region="eu"}[3600s])), "radar_metric", "kube_pod_info", "", "")`
+	want := `label_replace(topk(2, count by (cluster,region) (count_over_time(container_cpu_usage_seconds_total{namespace="shop",pod=~"api-.*",cluster="a",region="eu"}[3600s]))), "radar_metric", "container_cpu_usage_seconds_total", "", "")` +
+		` or label_replace(topk(2, count by (cluster,region) (count_over_time(kube_pod_info{cluster="a",region="eu"}[3600s]))), "radar_metric", "kube_pod_info", "", "")`
 	if got != want {
 		t.Fatalf("readback query\n got: %s\nwant: %s", got, want)
 	}

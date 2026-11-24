@@ -482,7 +482,11 @@ func decideLabeledViewScope(ctx context.Context, q instantQuerier, req ViewScope
 		return unknownViewScope(), err
 	}
 	keys := slices.Sorted(maps.Keys(clusterLabels))
-	readback, _, err := runViewProbes(ctx, q, at, viewReadbackParts(req.Metrics, keys, matchers, req.Span))
+	readbackKeys := slices.Compact(slices.Sorted(slices.Values(slices.Concat(keys, clusterQualifierLabels))))
+	if !slices.ContainsFunc(keys, func(k string) bool { return !slices.Contains(clusterQualifierLabels, k) }) {
+		return ViewScope{State: ViewScopeLabelMissing, Withheld: true, Labels: maps.Clone(clusterLabels), Note: "A project or location can contain several clusters. Include an exact cluster label."}, nil
+	}
+	readback, _, err := runViewProbes(ctx, q, at, viewReadbackParts(req.Metrics, readbackKeys, matchers, req.Span))
 	if err != nil {
 		return unknownViewScope(), err
 	}
@@ -497,6 +501,11 @@ func decideLabeledViewScope(ctx context.Context, q instantQuerier, req ViewScope
 		}
 		ignored := false
 		for _, row := range rows {
+			for _, qualifier := range clusterQualifierLabels {
+				if value := row[qualifier]; value != "" && value != clusterLabels[qualifier] {
+					return unverifiedClusterQualifier(m.Name, clusterLabels), nil
+				}
+			}
 			for _, k := range keys {
 				ignored = ignored || row[k] != clusterLabels[k]
 			}
@@ -520,7 +529,7 @@ func decideLabeledViewScope(ctx context.Context, q instantQuerier, req ViewScope
 			switch {
 			case len(ids) == 0:
 				filters[m.Name] = matchers
-			case len(ids) == 1 && anchored[m.Name] && !conflictsWithLabels(ids[0], clusterLabels):
+			case len(ids) == 1 && anchored[m.Name] && !hasClusterQualifier(clusterLabels) && !hasClusterQualifier(ids[0]) && !conflictsWithLabels(ids[0], clusterLabels):
 				filters[m.Name] = ""
 				unfiltered = append(unfiltered, m.Name)
 				unfilteredIDs = append(unfilteredIDs, ids[0])
@@ -572,6 +581,15 @@ func decideLabeledViewScope(ctx context.Context, q instantQuerier, req ViewScope
 	return scope, nil
 }
 
+func unverifiedClusterQualifier(metric string, labels map[string]string) ViewScope {
+	return ViewScope{State: ViewScopeLabelMissing, Withheld: true, Labels: maps.Clone(labels),
+		Note: fmt.Sprintf("Radar couldn't verify the project or location of the %s series. Set --prometheus-cluster-label to the cluster and its exact project_id or location labels.", metric)}
+}
+
+func hasClusterQualifier(labels map[string]string) bool {
+	return slices.ContainsFunc(clusterQualifierLabels, func(k string) bool { return labels[k] != "" })
+}
+
 // conflictsWithLabels reports whether an identity names another value for
 // one of this cluster's labels: such series belong to another cluster even
 // when their object names coincide with ours.
@@ -599,6 +617,9 @@ func decideUnlabeledViewScope(ctx context.Context, q instantQuerier, req ViewSco
 		}
 		filters[m.Name] = ""
 		if len(ids) == 1 {
+			if hasClusterQualifier(ids[0]) {
+				return unverifiedClusterQualifier(m.Name, nil), nil
+			}
 			single = append(single, ids[0])
 		}
 	}

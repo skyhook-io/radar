@@ -406,3 +406,26 @@ func TestParseViewMatchers(t *testing.T) {
 		t.Error("quoted value not decoded")
 	}
 }
+
+func TestSharedClusterViewRequiresQualifiersAcrossFamilies(t *testing.T) {
+	owner := probeSeries(metricPodOwner, "api-0", "cluster", "prod", "project_id", "local")
+	usage := probeSeries(metricMemoryWorkingSet, "api-0", "cluster", "prod")
+	req := workloadChartRequest(true, []string{"api-0"}, metricPodOwner, metricMemoryWorkingSet)
+	for _, tt := range []struct {
+		name         string
+		labels       map[string]string
+		owner, usage map[string]string
+	}{
+		{"usage missing inventory qualifier", map[string]string{"cluster": "prod", "project_id": "local"}, owner, usage},
+		{"usage carries an unverified project", map[string]string{"cluster": "prod"}, probeSeries(metricPodOwner, "api-0", "cluster", "prod"), probeSeries(metricMemoryWorkingSet, "api-0", "cluster", "prod", "project_id", "foreign")},
+		{"without verified cluster identity", nil, owner, usage},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &evaluatingStore{t: t, series: []map[string]string{tt.owner, tt.usage}}
+			scope, err := decideViewScope(context.Background(), store, req, time.Now(), tt.labels, false)
+			if err != nil || !scope.Withheld {
+				t.Fatalf("scope=%+v, err=%v", scope, err)
+			}
+		})
+	}
+}

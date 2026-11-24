@@ -202,7 +202,7 @@ func dockerRun(t *testing.T, args ...string) string {
 }
 
 // startEnginePrometheus backfills the data into a fresh TSDB and serves it.
-func startEnginePrometheus(t *testing.T, end time.Time) string {
+func startEnginePrometheus(t *testing.T, families []engineFamily) string {
 	t.Helper()
 	if os.Getenv("RADAR_PROMENGINE") == "" {
 		t.Skip("set RADAR_PROMENGINE=1 (make test-prom-engine) to run the real-Prometheus tests")
@@ -215,7 +215,7 @@ func startEnginePrometheus(t *testing.T, end time.Time) string {
 	if err := os.Mkdir(data, 0o777); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeOpenMetrics(filepath.Join(dir, "series.om"), engineData(end)); err != nil {
+	if err := writeOpenMetrics(filepath.Join(dir, "series.om"), families); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "prometheus.yml"), []byte("global: {}\n"), 0o644); err != nil {
@@ -301,7 +301,7 @@ func scalarAt(t *testing.T, c *Client, query string, at time.Time) float64 {
 
 func TestEngineViewScope(t *testing.T) {
 	end := time.Now().Truncate(30 * time.Second).Add(-90 * time.Second)
-	url := startEnginePrometheus(t, end)
+	url := startEnginePrometheus(t, engineData(end))
 	configuredA := engineClient(url, map[string]string{"cluster": "a"})
 	unconfigured := engineClient(url, nil)
 	podsSubject := `namespace="` + engineNS + `"`
@@ -625,4 +625,67 @@ func TestEngineViewScope(t *testing.T) {
 			t.Fatalf("configured b, 1h: scope = %+v", scope)
 		}
 	})
+}
+
+func TestRightsizingSameClusterNameAcrossProjects(t *testing.T) {
+	ctx := context.Background()
+	end := time.Now().Truncate(30 * time.Second).Add(-90 * time.Second)
+	var info, owners, memory []engineSeries
+	for _, store := range []struct {
+		project, location, pod, uid string
+		memoryMiB                   float64
+	}{
+		{"alpha", "east", "api-0", "local-uid", 100},
+		{"beta", "east", "api-1", "foreign-uid", 1000},
+		{"alpha", "west", "api-0", "other-zone-uid", 2000},
+	} {
+		labels := map[string]string{"namespace": "shop", "cluster": "prod", "project_id": store.project, "location": store.location, "pod": store.pod}
+		sample := engineSeries{labels: maps.Clone(labels), value: 1, start: end.Add(-30 * time.Minute), end: end}
+		sample.labels["uid"] = store.uid
+		info = append(info, sample)
+		sample.labels = maps.Clone(labels)
+		sample.labels["owner_name"], sample.labels["owner_kind"], sample.labels["owner_is_controller"] = "api", "StatefulSet", "true"
+		owners = append(owners, sample)
+		sample.labels = maps.Clone(labels)
+		sample.labels["container"] = "app"
+		sample.value = store.memoryMiB * engineMiB
+		memory = append(memory, sample)
+	}
+	url := startEnginePrometheus(t, []engineFamily{{name: "kube_pod_info", series: info}, {name: metricPodOwner, series: owners}, {name: metricMemoryWorkingSet, series: memory}})
+	c := engineClient(url, nil)
+	proof, err := probeHistoricalPartition(ctx, prom.NewClient(prom.NewHTTPTransport(url, "", http.DefaultClient)), "shop", []prom.WorkloadPodIdentity{{Name: "api-0", UID: "local-uid"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := map[string]string{"cluster": "prod", "project_id": "alpha", "location": "east"}
+	if !maps.Equal(proof.scope.ClusterLabels, local) {
+		t.Fatalf("UID proof = %v, want %v", proof.scope.ClusterLabels, local)
+	}
+	req := rightsizingScopeRequest(`namespace="shop"`, "shop", false, rightsizingAnchors{podNamespace: "shop", pods: []string{"api-0"}}, end)
+	for _, test := range []struct {
+		name                 string
+		labels               map[string]string
+		configured, withheld bool
+	}{
+		{"uid evidence", proof.scope.ClusterLabels, false, false},
+		{"exact configuration", local, true, false},
+		{"cluster only on inventory", map[string]string{"cluster": "prod"}, false, true},
+		{"project without location", map[string]string{"cluster": "prod", "project_id": "alpha"}, true, true},
+		{"project without cluster", map[string]string{"project_id": "alpha", "location": "east"}, true, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			scope, err := decideViewScope(ctx, c, req, end, test.labels, test.configured)
+			if err != nil || scope.Withheld != test.withheld {
+				t.Fatalf("scope=%+v error=%v", scope, err)
+			}
+			if test.withheld {
+				return
+			}
+			workload := scanTestWorkload("StatefulSet", "shop", "api", "app")
+			query := buildRightsizingScanQueries([]scanWorkload{workload}, scope)["memory"]
+			if got := scalarAt(t, c, query, end); got != 100*engineMiB {
+				t.Fatalf("workload memory = %g MiB, want 100 MiB", got/engineMiB)
+			}
+		})
+	}
 }
