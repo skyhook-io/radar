@@ -401,3 +401,37 @@ func TestPodFileDownloadFallsBackToCatWhenTarIsMissing(t *testing.T) {
 		t.Errorf("served %q, want %q", body, payload)
 	}
 }
+
+// Without tar or a shell the bare cat holds the whole file in memory, so it
+// stops at the limit and says so instead of growing without bound.
+func TestPodFileDownloadBareCatStopsAtTheLimit(t *testing.T) {
+	prev := podFileCatMaxBytes
+	podFileCatMaxBytes = 1 << 10
+	t.Cleanup(func() { podFileCatMaxBytes = prev })
+
+	var written int
+	ts := downloadServer(t, &Server{}, func(t *testing.T, req execRequest, opts remotecommand.StreamOptions) error {
+		if !req.isBare() {
+			return fmt.Errorf(`OCI runtime exec failed: exec failed: unable to start container process: exec: "/bin/sh": stat /bin/sh: no such file or directory`)
+		}
+		chunk := bytes.Repeat([]byte("z"), 256)
+		for i := 0; i < 64; i++ {
+			if _, err := opts.Stdout.Write(chunk); err != nil {
+				return err
+			}
+			written += len(chunk)
+		}
+		return nil
+	})
+
+	resp, body := fetchWithin(t, downloadURL(ts, "/dev/zero"), 10*time.Second)
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413 (body %q)", resp.StatusCode, body)
+	}
+	if written > podFileCatMaxBytes {
+		t.Errorf("kept reading past the limit: %d bytes", written)
+	}
+	if !strings.Contains(string(body), "MiB") {
+		t.Errorf("body %q doesn't name the limit", body)
+	}
+}
