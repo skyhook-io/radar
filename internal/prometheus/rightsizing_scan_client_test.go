@@ -19,6 +19,9 @@ func TestRightsizingScanThroughSizeLimitedTenantProxy(t *testing.T) {
 	const prefix = "/gateway/select/42/prometheus"
 	at := time.Unix(1740000000, 0)
 	ctx := context.Background()
+	path := "/api/v1/query"
+	params := url.Values{"query": {""}, "time": {"1740000000"}}
+	longestGET := strings.Repeat("x", scanGETRequestTargetBytes-len(prefix+path)-1-len(params.Encode()))
 	var partial atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if len(r.RequestURI) > 8192 {
@@ -43,7 +46,7 @@ func TestRightsizingScanThroughSizeLimitedTenantProxy(t *testing.T) {
 		}
 		var annotations string
 		switch query {
-		case "vector(1)":
+		case "vector(1)", longestGET:
 			if r.Method != http.MethodGet {
 				t.Errorf("small query used %s", r.Method)
 			}
@@ -93,9 +96,10 @@ func TestRightsizingScanThroughSizeLimitedTenantProxy(t *testing.T) {
 
 	// This expression fits the GET budget until the configured URL path and
 	// tenant base path are included.
-	path := "/api/v1/query"
-	params := url.Values{"query": {""}, "time": {"1740000000"}}
-	query := strings.Repeat("x", scanGETRequestTargetBytes-len(path)-1-len(params.Encode()))
+	if _, err := scan.Query(ctx, longestGET); err != nil {
+		t.Fatal(err)
+	}
+	query := longestGET + "x"
 	partial.Store(true)
 	if _, err := requireComplete(scan.Query(ctx, query)); !errors.Is(err, prom.ErrPartialResponse) {
 		t.Fatalf("partial instant query returned %v", err)

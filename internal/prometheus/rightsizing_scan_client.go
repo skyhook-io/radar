@@ -17,7 +17,8 @@ const scanGETRequestTargetBytes = 7 * 1024
 
 var rightsizingScanHTTPClient = &http.Client{}
 
-// Instant and range queries accept the same parameters in a POST form.
+// Keep ordinary scan reads on GET. For long URLs both query APIs accept
+// the same parameters in a POST form.
 type scanQueryTransport struct{ *prom.HTTPTransport }
 
 func (t scanQueryTransport) Do(ctx context.Context, method, path string, params url.Values) ([]byte, error) {
