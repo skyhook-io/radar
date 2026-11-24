@@ -13,8 +13,10 @@ import (
 // Each selector includes the project, control-plane location and cluster.
 type gkeMetrics struct {
 	owner      *Client
-	service    string
+	service    prom.ServiceInfo
+	portName   string
 	configured bool
+	fallback   bool
 	store      *prom.Client
 	scope      ClusterScope
 	matchers   string
@@ -26,9 +28,14 @@ func (g *gkeMetrics) series(resource, metric string, selectors ...string) string
 	return "kubernetes_io:" + metric + "{" + strings.Join(all, ",") + "}"
 }
 
+const gkeRestartsSinceCreation prom.MetricCategory = "restarts_since_creation"
+
 func (g *gkeMetrics) chartQuery(kind, namespace, name string, category prom.MetricCategory, pods *PodScope) string {
 	kind = strings.ToLower(kind)
 	if kind == "node" {
+		if name == "" {
+			return ""
+		}
 		node := "node_name=" + strconv.Quote(name)
 		switch category {
 		case prom.CategoryCPU:
@@ -41,6 +48,10 @@ func (g *gkeMetrics) chartQuery(kind, namespace, name string, category prom.Metr
 		return ""
 	}
 
+	if (kind != "cluster" && namespace == "") || (kind == "pod" && name == "") ||
+		(pods == nil && kind != "cluster" && kind != "namespace" && kind != "pod") {
+		return ""
+	}
 	var selectors []string
 	if namespace != "" {
 		selectors = append(selectors, "namespace_name="+strconv.Quote(namespace))
@@ -68,12 +79,10 @@ func (g *gkeMetrics) chartQuery(kind, namespace, name string, category prom.Metr
 			// Keep the gauge lookback within the lifetime guard even at coarse evaluation steps.
 			expression = "last_over_time(" + expression + "[5m])"
 		}
+	case gkeRestartsSinceCreation:
+		expression = "last_over_time(" + g.series("k8s_container", "container_restart_count", selectors...) + "[1m])"
 	case prom.CategoryRestarts:
-		op := "changes"
-		if pods != nil {
-			op = "increase"
-		}
-		expression = op + "(" + g.series("k8s_container", "container_restart_count", selectors...) + "[1h])"
+		expression = "round(increase(" + g.series("k8s_container", "container_restart_count", selectors...) + "[1h]))"
 	case prom.CategoryNetworkRX, prom.CategoryNetworkTX:
 		metric := "pod_network_received_bytes_count"
 		if category == prom.CategoryNetworkTX {

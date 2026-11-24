@@ -93,10 +93,12 @@ export function PrometheusCharts({ kind, namespace, name, showEmptyState = false
   const { data: status, isLoading: statusLoading } = usePrometheusStatus()
   const connectMutation = usePrometheusConnect()
 
-  const [activeCategory, setActiveCategory] = useState<PrometheusMetricCategory>('cpu')
+  const [selectedCategory, setActiveCategory] = useState<PrometheusMetricCategory>('cpu')
   const [timeRange, setTimeRange] = useState<PrometheusTimeRange>('1h')
 
   const isConnected = status?.connected === true || status?.gkeSystemMetrics === true
+  const gkeOnly = status?.gkeSystemMetrics && !status.connected
+  const activeCategory = gkeOnly && kind !== 'Node' && selectedCategory === 'filesystem' ? 'cpu' : selectedCategory
   const isSupported = SUPPORTED_KINDS.has(kind)
 
   // Fetch metrics when connected
@@ -119,7 +121,7 @@ export function PrometheusCharts({ kind, namespace, name, showEmptyState = false
       showEmptyState={showEmptyState}
       statusLoading={statusLoading}
       isConnected={isConnected}
-      gkeOnly={status?.gkeSystemMetrics && !status.connected}
+      gkeOnly={gkeOnly}
       statusError={status?.error}
       onConnect={() => connectMutation.mutate()}
       connecting={connectMutation.isPending}

@@ -932,14 +932,16 @@ func handlePVCUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, _, _ = client.EnsureConnected(r.Context())
-	g := client.gkeChartStore()
+	g := client.ensureGKECharts(r.Context())
 	var resp PVCUsageResponse
-	if g == nil || g.configured {
+	if g == nil || g.fallback {
 		resp = standardPVCUsage(r.Context(), client, namespace, name)
 	}
-	if g != nil && (!g.configured || resp.Status == "no_series" || resp.Status == PVCUsageAmbiguous || resp.Status == PVCUsageScopeMismatch) {
-		resp = g.pvc(r.Context(), namespace, name)
+	if g != nil && (!g.fallback || resp.Status == "no_series" || resp.Status == PVCUsageAmbiguous || resp.Status == PVCUsageScopeMismatch) {
+		native := g.pvc(r.Context(), namespace, name)
+		if !g.fallback || native.HasData || resp.Status == "no_series" {
+			resp = native
+		}
 		if g != client.gkeChartStore() {
 			writeError(w, http.StatusConflict, "metrics connection changed; retry the request")
 			return

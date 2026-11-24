@@ -9,7 +9,7 @@ import { Tooltip } from '../ui/Tooltip'
 /**
  * RestartEventLane — vertical markers at each restart event, on a dedicated
  * row below the chart. Markers stay readable when they cluster because they
- * don't overlay the chart waveform. KSM-gated (uses kube_pod_container_status_restarts_total)
+ * don't overlay the chart waveform. Uses KSM or native GKE restart counters
  * — silently hidden when Prom isn't connected or the series doesn't exist,
  * but says why when the metrics store couldn't be kept to this cluster, and
  * notes an answer the store gave only in part.
@@ -117,7 +117,7 @@ function collectRestartEvents(series: PrometheusSeries[] | undefined): RestartEv
   const events: RestartEvent[] = []
   for (const s of series) {
     const pod = s.labels.pod ?? 'pod'
-    // `changes(...[1h])` produces a rolling count, so a single restart shows
+    // The query produces a rolling hourly count, so a single restart shows
     // value=1 for ~60 consecutive samples (the whole 1h window). Emit a marker
     // only when the count increases — that's when a *new* restart entered the
     // window — and use the increase as the marker's restart count.

@@ -637,7 +637,11 @@ discovery. Local CLI and Desktop share `~/.radar/clusters.json`.
 
 On GKE, Radar first tries its usual Prometheus-compatible backends. If it finds
 only a Google Managed Service for Prometheus query frontend, it uses that
-frontend for curated system-metric charts. Locally this uses the Kubernetes
+frontend for curated system-metric charts. Autodiscovery trusts only the
+`frontend` or `gmp-frontend` Service in the operator-managed `gmp-public`,
+`gmp-system` or `gke-gmp-system` namespace. Keep Pod and Service writes in those
+namespaces limited to platform operators. For a frontend in a custom namespace,
+configure its URL explicitly. Locally, automatic detection uses the Kubernetes
 Service proxy (GET on `services/proxy` in the frontend's namespace).
 In-cluster it uses the Service address. Discovery verifies the Service's
 selected Pods and queries for native node data from the connected cluster.

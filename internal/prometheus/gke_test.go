@@ -12,11 +12,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/prom"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 )
 
@@ -98,6 +101,9 @@ func gkeFixture(t *testing.T, issuer string, metricCount int) *Client {
 					}
 					if strings.Contains(query, "container_restart_count") {
 						v = 0
+						if strings.Contains(query, "last_over_time") && ts%3600 >= 15*60 {
+							v = 3
+						}
 					}
 					values = append(values, []any{ts, strconv.FormatFloat(v, 'f', 6, 64)})
 				}
@@ -162,8 +168,12 @@ func TestGKEFrontendChartDiscovery(t *testing.T) {
 func TestGKEFrontendTarget(t *testing.T) {
 	s := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "tools", Name: "metrics", Labels: map[string]string{"app": "frontend"}}, Spec: corev1.ServiceSpec{Selector: map[string]string{"tier": "metrics"}, Ports: []corev1.ServicePort{{Name: "admin", Port: 8080}, {Name: "web", Port: 80, TargetPort: intstr.FromString("http")}}}}
 	p := corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Image: gmpFrontendImage + "@sha256:123", Ports: []corev1.ContainerPort{{Name: "http", ContainerPort: 9090}}}, {Image: "example/sidecar", Ports: []corev1.ContainerPort{{Name: "admin", ContainerPort: 8080}}}}}}
+	if gkeFrontendCandidate(s) {
+		t.Fatal("trusted a tenant namespace on the strength of labels")
+	}
+	s.Namespace, s.Name = "gke-gmp-system", "gmp-frontend"
 	if !gkeFrontendCandidate(s) {
-		t.Fatal("lost custom labelled Service")
+		t.Fatal("missed the managed frontend")
 	}
 	if port, ok := gkeFrontendPort(s, []corev1.Pod{p}); !ok || port.Name != "web" {
 		t.Fatalf("selected %v %v", port, ok)
@@ -201,6 +211,38 @@ func TestGKEMetricsCharts(t *testing.T) {
 			t.Fatalf("%s didn't respect reused Pod lifetime: %+v", k, panel)
 		}
 	}
+	restarts, err := g.chart(t.Context(), scope.Kind, scope.Namespace, scope.Name, prom.CategoryRestarts, &scope, start, end, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observedJump := false
+	for _, series := range restarts.Result.Series {
+		if series.Labels["pod"] != "nginx-abc-222" {
+			continue
+		}
+		for i, point := range series.DataPoints {
+			if point.Timestamp <= scope.Created["nginx-abc-222"].Add(time.Minute).Unix() {
+				t.Fatal("previous Pod restart data escaped")
+			}
+			if i > 0 && point.Value-series.DataPoints[i-1].Value == 3 {
+				observedJump = true
+			}
+		}
+	}
+	if !observedJump {
+		t.Fatal("lost three early restarts in a replacement Pod's first hour")
+	}
+	empty := workloadMetricsResponse{State: "unavailable", Panels: map[string]workloadMetricPanel{}, History: map[string]workloadMetricScope{}, Comparison: map[string]workloadMetricPanel{}}
+	mergeGKEResources(t.Context(), g, &empty, scope, start, end, time.Minute)
+	if empty.Panels["cpu"].Source != "gke" || empty.Panels["memory"].Source != "gke" || empty.Start != start.Unix() || empty.End != end.Unix() || empty.StepSeconds != 60 || empty.PodsTotal != 2 {
+		t.Fatalf("native panels lost scope/window on an empty configured store: %+v", empty)
+	}
+	if q := g.chartQuery("Deployment", "default", "nginx", prom.CategoryCPU, nil); q != "" {
+		t.Fatalf("unresolved workload widened to namespace: %s", q)
+	}
+	if q := g.chartQuery("Pod", "default", "", prom.CategoryMemory, nil); q != "" {
+		t.Fatalf("empty Pod widened: %s", q)
+	}
 	if len(resp.Panels) != 2 || len(resp.Sources) != 0 {
 		t.Fatal("unexpected native request or throttling series")
 	}
@@ -226,7 +268,7 @@ func TestGKEMetricsCharts(t *testing.T) {
 	if v := g.pvc(t.Context(), "default", "data"); !v.HasData || v.Ratio != 0.25 {
 		t.Fatalf("PVC %+v", v)
 	}
-	g.configured = true
+	g.configured, g.fallback = true, true
 	c.manualURL, c.baseURL, c.prom = "http://configured.invalid", "http://configured.invalid", g.store
 	d := chartDeps{gke: g, q: &twoClusterStore{}, resolve: func(context.Context, ViewScopeRequest) (ViewScope, error) { return ViewScope{}, nil }}
 	regular, err := clusterChart(t.Context(), d, prom.CategoryCPU, "10m")
@@ -245,6 +287,12 @@ func TestGKECuratedRoutesKeepRawStoreSeparate(t *testing.T) {
 	Initialize(c.k8sClient, c.k8sConfig, "fixture")
 	GetClient().inCluster = false
 	t.Cleanup(func() { SetAuthGate(nil); Reset(); Initialize(nil, nil, "") })
+	created := time.Now().Add(-20 * time.Minute).Truncate(time.Minute)
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "nginx-abc-111", Namespace: "default", UID: "current-pod", CreationTimestamp: metav1.NewTime(created)}}
+	if err := k8s.InitScopedTestResourceCache(fake.NewClientset(pod), map[string]k8score.ResourceScope{string(k8score.Pods): {Enabled: true}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetResourceCache)
 	router := metricsRouter()
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/prometheus/connect?optional=true", nil))
@@ -257,6 +305,15 @@ func TestGKECuratedRoutesKeepRawStoreSeparate(t *testing.T) {
 		if r.Code != http.StatusOK || !(strings.Contains(r.Body.String(), `"source":"gke"`) || strings.Contains(r.Body.String(), `"hasData":true`)) {
 			t.Errorf("%s: %d %s", path, r.Code, r.Body)
 		}
+	}
+	podChart := getMetrics(t, router, "/prometheus/resources/Pod/default/nginx-abc-111?category=memory")
+	var measured ResourceMetricsResponse
+	if err := json.Unmarshal(podChart.Body.Bytes(), &measured); err != nil || measured.Result == nil || len(measured.Result.Series) != 1 || len(measured.Result.Series[0].DataPoints) == 0 || measured.Result.Series[0].DataPoints[0].Timestamp <= created.Add(5*time.Minute).Unix() {
+		t.Fatalf("current Pod lifetime guard: %d %s", podChart.Code, podChart.Body)
+	}
+	node := getMetrics(t, router, "/prometheus/resources/Node/demo-node?category=filesystem")
+	if !strings.Contains(node.Body.String(), `"unit":"bytes"`) {
+		t.Fatalf("node occupancy units: %s", node.Body)
 	}
 	if r := getMetrics(t, router, "/prometheus/query?query=up"); r.Code == http.StatusOK {
 		t.Errorf("raw query unexpectedly admitted: %s", r.Body)
@@ -291,5 +348,26 @@ func TestGKEConfiguredFrontendWithoutScrapeTargets(t *testing.T) {
 	}
 	if _, _, err = client.EnsureConnected(t.Context()); err != nil || client.GetStatus().GKESystemMetrics || !client.GetStatus().Connected {
 		t.Fatalf("scope conflict affected wrong capability: %+v err=%v", client.GetStatus(), err)
+	}
+}
+
+func TestGKEInvalidatesDroppedOrChangedService(t *testing.T) {
+	for _, op := range []string{"delete", "update"} {
+		t.Run(op, func(t *testing.T) {
+			c := gkeFixture(t, fixtureIssuer, 1)
+			c.findGKEChartStore(t.Context(), 0, ErrPrometheusNotFound)
+			g := c.cachedNativeCharts()
+			if g == nil {
+				t.Fatal("reader missing")
+			}
+			old := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: g.service.Namespace, Name: g.service.Name}, Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 9090}}, Selector: map[string]string{"app": "frontend"}}}
+			next := old.DeepCopy()
+			if op == "update" {
+				next.Spec.Selector = nil
+			}
+			if !c.invalidateGKEService(c.k8sClient, op, next, old) || c.cachedNativeCharts() != nil || c.GetStatus().GKESystemMetrics {
+				t.Fatal("removed frontend still active")
+			}
+		})
 	}
 }

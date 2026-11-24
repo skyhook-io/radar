@@ -303,7 +303,7 @@ func observeResourceChange(source kubernetes.Interface, change k8s.ResourceChang
 	if change.Kind != "Service" && change.Kind != "Pod" {
 		return
 	}
-	if change.Operation != "add" && change.Operation != "update" {
+	if change.Operation != "add" && change.Operation != "update" && !(change.Kind == "Service" && change.Operation == "delete") {
 		return
 	}
 	if change.Operation == "add" && !k8s.InitialSyncComplete() {
@@ -325,7 +325,11 @@ func (c *Client) observeResourceChange(source kubernetes.Interface, op string, o
 	var pod *corev1.Pod
 	switch o := obj.(type) {
 	case *corev1.Service:
-		if !serviceBecameCandidate(op, o, oldObj) {
+		nativeChange := c.invalidateGKEService(source, op, o, oldObj)
+		if op == "delete" && !nativeChange {
+			return
+		}
+		if !nativeChange && !serviceBecameCandidate(op, o, oldObj) {
 			return
 		}
 		svc = o

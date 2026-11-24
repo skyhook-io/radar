@@ -107,10 +107,9 @@ func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 	duration := end.Sub(start)
 	end = end.Truncate(step)
 	start = end.Add(-duration)
-	_, _, _ = client.EnsureConnected(ctx)
-	g := client.gkeChartStore()
+	g := client.ensureGKECharts(ctx)
 	writeMetrics := func(resp workloadMetricsResponse) {
-		if g != nil && g.configured {
+		if g != nil && g.fallback {
 			mergeGKEResources(ctx, g, &resp, scope, start, end, step)
 		}
 		if g != client.gkeChartStore() || client != GetClient() || generation != client.DiscoveryGeneration() || epoch != client.backendEpoch() {
@@ -119,7 +118,7 @@ func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}
-	if g != nil && !g.configured {
+	if g != nil && !g.fallback {
 		writeMetrics(g.workload(ctx, scope, start, end, step))
 		return
 	}

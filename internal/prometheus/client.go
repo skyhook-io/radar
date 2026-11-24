@@ -32,6 +32,7 @@ type Client struct {
 	gkeSF         singleflight.Group
 	gke           *gkeMetrics
 	gkeGeneration uint64
+	gkeRevision   uint64
 	gkeChecked    time.Time
 	mu            sync.RWMutex
 
@@ -574,6 +575,7 @@ func (c *Client) EnsureConnected(ctx context.Context) (string, string, error) {
 	bp := c.basePath
 	gen := c.discoveryGen
 	manual := c.manualURL != ""
+	recheckGKE := manual || c.carettaStoreLocked()
 	c.mu.RUnlock()
 
 	if base != "" {
@@ -598,7 +600,7 @@ func (c *Client) EnsureConnected(ctx context.Context) (string, string, error) {
 			if ok {
 				c.mu.Unlock()
 				if current {
-					if manual {
+					if recheckGKE {
 						c.gkeSF.Do(fmt.Sprint(gen), func() (any, error) {
 							c.findGKEChartStore(ctx, gen, nil)
 							return nil, nil

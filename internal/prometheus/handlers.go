@@ -74,6 +74,12 @@ func handleConnect(w http.ResponseWriter, r *http.Request) {
 	optional := r.URL.Query().Get("optional") == "true"
 	if optional {
 		ctx = withSuppressedDiscoveryDiagnostics(ctx)
+	} else {
+		client.mu.Lock()
+		if client.manualURL != "" && client.gke == nil {
+			client.gkeChecked = time.Time{}
+		}
+		client.mu.Unlock()
 	}
 	_, _, err := client.EnsureConnected(ctx)
 	if err != nil && client.gkeChartStore() == nil {
@@ -191,6 +197,9 @@ func (d chartDeps) unconnected(ctx context.Context) error {
 // check only on the connection that handle was taken from.
 func productionChartDeps(ctx context.Context, client *Client) chartDeps {
 	cache := k8s.GetResourceCache()
+	if g := client.cachedNativeCharts(); g != nil {
+		return chartDeps{gke: g, cache: cache}
+	}
 	store, err := client.bindStore(ctx)
 	return chartDeps{gke: client.gkeChartStore(), q: store, resolve: BoundResolver(client, store.conn, chartResolverFor(client, cache)), cache: cache, connectErr: err}
 }
@@ -370,15 +379,36 @@ func resourceChart(ctx context.Context, d chartDeps, kind, namespace, name strin
 		resp.PodsTotal = scope.CurrentTotal
 	}
 	if d.gke != nil {
-		if d.gke.configured {
+		var regularEmpty *ResourceMetricsResponse
+		if d.gke.fallback {
 			standard := d
 			standard.gke = nil
 			regular, err := resourceChart(ctx, standard, kind, namespace, name, category, rangeStr, scope)
 			if err != nil || regular.Partial || (regular.Result != nil && len(regular.Result.Series) > 0) {
 				return regular, err
 			}
+			regularEmpty = &regular
+		}
+		if strings.EqualFold(kind, "Pod") && scope == nil {
+			if d.cache != nil && d.cache.Pods() != nil {
+				if p, err := d.cache.Pods().Pods(namespace).Get(name); err == nil && !p.CreationTimestamp.IsZero() {
+					current := PodScopeFromPods(kind, namespace, name, []*corev1.Pod{p}, 1)
+					scope = &current
+				}
+			}
+			if scope == nil {
+				if regularEmpty != nil {
+					return *regularEmpty, nil
+				}
+				resp.Source, resp.Result, resp.ClusterScope = "gke", emptyChartResult(), &d.gke.scope
+				resp.Hint = "The current Pod’s creation time is unavailable. Its history could include an earlier Pod with the same name."
+				return resp, nil
+			}
 		}
 		a, err := d.gke.chart(ctx, kind, namespace, name, category, scope, start, end, step)
+		if regularEmpty != nil && err == nil && !a.Partial && len(a.Result.Series) == 0 {
+			return *regularEmpty, nil
+		}
 		resp.Source, resp.Result, resp.Partial, resp.ClusterScope = "gke", a.Result, a.Partial, &d.gke.scope
 		return resp, err
 	}
@@ -517,15 +547,20 @@ func namespaceChart(ctx context.Context, d chartDeps, namespace string, category
 	start, end, step := parseTimeRange(rangeStr)
 	resp := NamespaceMetricsResponse{Namespace: namespace, Category: category, Unit: prom.CategoryUnit(category), Range: rangeStr}
 	if d.gke != nil {
-		if d.gke.configured {
+		var regularEmpty *NamespaceMetricsResponse
+		if d.gke.fallback {
 			standard := d
 			standard.gke = nil
 			regular, err := namespaceChart(ctx, standard, namespace, category, rangeStr)
 			if err != nil || regular.Partial || (regular.Result != nil && len(regular.Result.Series) > 0) {
 				return regular, err
 			}
+			regularEmpty = &regular
 		}
 		a, err := d.gke.chart(ctx, "Namespace", namespace, "", category, nil, start, end, step)
+		if regularEmpty != nil && err == nil && !a.Partial && len(a.Result.Series) == 0 {
+			return *regularEmpty, nil
+		}
 		resp.Source, resp.Result, resp.Partial, resp.ClusterScope = "gke", a.Result, a.Partial, &d.gke.scope
 		return resp, err
 	}
@@ -600,15 +635,20 @@ func clusterChart(ctx context.Context, d chartDeps, category prom.MetricCategory
 	start, end, step := parseTimeRange(rangeStr)
 	resp := ClusterMetricsResponse{Category: category, Unit: prom.CategoryUnit(category), Range: rangeStr}
 	if d.gke != nil {
-		if d.gke.configured {
+		var regularEmpty *ClusterMetricsResponse
+		if d.gke.fallback {
 			standard := d
 			standard.gke = nil
 			regular, err := clusterChart(ctx, standard, category, rangeStr)
 			if err != nil || regular.Partial || (regular.Result != nil && len(regular.Result.Series) > 0) {
 				return regular, err
 			}
+			regularEmpty = &regular
 		}
 		a, err := d.gke.chart(ctx, "Cluster", "", "", category, nil, start, end, step)
+		if regularEmpty != nil && err == nil && !a.Partial && len(a.Result.Series) == 0 {
+			return *regularEmpty, nil
+		}
 		resp.Source, resp.Result, resp.Partial, resp.ClusterScope = "gke", a.Result, a.Partial, &d.gke.scope
 		return resp, err
 	}

@@ -28,8 +28,8 @@ so the last few minutes of charts can be empty.
 Every query selects the project, control-plane location and GKE cluster name.
 Workload charts use current controller-owned Pods and omit the lookback after
 each Pod's creation so reused names cannot include a previous replica's data.
-Network and CPU rates have a five-minute lookback. Restart changes have a
-one-hour window. The PVC gauge uses the claim name and namespace and takes the
+Network and CPU rates have a five-minute lookback. Restart counts use the per-container counter increase over a
+one-hour window. For a new Pod, the native cumulative count covers its time alive after the first one-minute sample lookback. The PVC gauge uses the claim name and namespace and takes the
 maximum across mounts of the same volume.
 
 HTTP request metrics, CPU throttling, workload disk I/O, deleted replica history

@@ -689,3 +689,36 @@ func TestEngineRightsizingSameClusterNameAcrossProjects(t *testing.T) {
 		})
 	}
 }
+
+func TestGKENativeRestartChartCountsCounterJump(t *testing.T) {
+	if os.Getenv("RADAR_PROMENGINE") == "" {
+		t.Skip("set RADAR_PROMENGINE=1 (make test-prom-engine) to run the real-Prometheus tests")
+	}
+	g := gkeMetrics{matchers: `project_id="demo",location="us-east1",cluster_name="a"`}
+	scope := PodScope{CurrentPods: []string{"api"}}
+	rules := `tests:
+- interval: 1m
+  input_series:
+  - series: 'kubernetes_io:container_restart_count{monitored_resource="k8s_container",project_id="demo",location="us-east1",cluster_name="a",namespace_name="default",pod_name="api",container_name="web"}'
+    values: '1+0x30 4+0x30'
+  - series: 'kubernetes_io:container_restart_count{monitored_resource="k8s_container",project_id="demo",location="us-east1",cluster_name="b",namespace_name="default",pod_name="api",container_name="web"}'
+    values: '0+0x30 15+0x30'
+  promql_expr_test:
+`
+	for _, q := range []string{
+		g.chartQuery("Pod", "default", "api", prom.CategoryRestarts, nil),
+		g.chartQuery("Deployment", "default", "app", prom.CategoryRestarts, &scope),
+	} {
+		rules += fmt.Sprintf(`  - expr: %q
+    eval_time: 1h
+    exp_samples:
+    - labels: '{namespace="default",pod="api"}'
+      value: 3
+`, q)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "rules.yml"), []byte(rules), 0644); err != nil {
+		t.Fatal(err)
+	}
+	dockerRun(t, "run", "--rm", "--network=none", "-v", dir+":/work:ro", "--entrypoint", "promtool", engineImage, "test", "rules", "/work/rules.yml")
+}

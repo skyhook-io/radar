@@ -22,13 +22,80 @@ func (g *gkeMetrics) chart(ctx context.Context, kind, namespace, name string, ca
 	if err != nil {
 		return ChartAnswer{}, errChartQuery{err}
 	}
+	if pods != nil {
+		trimGKEPodHistory(r, pods.Created, category)
+		if category == prom.CategoryRestarts {
+			if err := g.addYoungPodRestarts(ctx, r, *pods, start, end, step); err != nil {
+				return ChartAnswer{}, errChartQuery{err}
+			}
+		}
+	}
 	if g.owner != nil && g.owner.gkeChartStore() != g {
 		return ChartAnswer{}, errDiscoverySuperseded
 	}
-	if pods != nil {
-		trimGKEPodHistory(r, pods.Created, category)
-	}
 	return ChartAnswer{Result: r, Query: q, Partial: incompleteResult(r)}, nil
+}
+
+// Before a Pod has lived an hour, its current cumulative counter already
+// covers the entire part of the rolling hour during which it existed. Reading
+// the counter avoids mixing in a previous incarnation and losing early crashes.
+func (g *gkeMetrics) addYoungPodRestarts(ctx context.Context, r *prom.QueryResult, scope PodScope, start, end time.Time, step time.Duration) error {
+	young := scope
+	young.CurrentPods = nil
+	first, last := end, start
+	for _, pod := range scope.CurrentPods {
+		created := scope.Created[pod]
+		if !created.IsZero() && created.Before(end) && !created.Add(time.Hour).Before(start) {
+			young.CurrentPods = append(young.CurrentPods, pod)
+			if created.Before(first) {
+				first = created
+			}
+			if until := created.Add(time.Hour); until.After(last) {
+				last = until
+			}
+		}
+	}
+	if len(young.CurrentPods) == 0 {
+		return nil
+	}
+	q := g.chartQuery(scope.Kind, scope.Namespace, scope.Name, gkeRestartsSinceCreation, &young)
+	if len(q) > prom.MaxWorkloadQueryBytes {
+		return prom.ErrWorkloadQueryTooLarge
+	}
+	if first.After(start) {
+		start = start.Add(first.Sub(start).Truncate(step))
+	}
+	if last.Before(end) {
+		end = last
+	}
+	early, err := g.store.QueryRange(ctx, q, start, end, step)
+	if err != nil {
+		return err
+	}
+	r.Annotations.Partial = incompleteResult(r) || incompleteResult(early)
+	byPod := map[string]int{}
+	for i, s := range r.Series {
+		byPod[s.Labels["pod"]] = i
+	}
+	for _, s := range early.Series {
+		created := young.Created[s.Labels["pod"]]
+		if created.IsZero() {
+			continue
+		}
+		points := slices.DeleteFunc(s.DataPoints, func(p prom.DataPoint) bool {
+			return p.Timestamp <= created.Add(time.Minute).Unix() || p.Timestamp > created.Add(time.Hour).Unix()
+		})
+		if len(points) == 0 {
+			continue
+		}
+		if i, ok := byPod[s.Labels["pod"]]; ok {
+			r.Series[i].DataPoints = append(points, r.Series[i].DataPoints...)
+		} else {
+			s.DataPoints = points
+			r.Series = append(r.Series, s)
+		}
+	}
+	return nil
 }
 
 func (g *gkeMetrics) workload(ctx context.Context, scope PodScope, start, end time.Time, step time.Duration) workloadMetricsResponse {
@@ -148,6 +215,7 @@ func mergeGKEResources(ctx context.Context, g *gkeMetrics, resp *workloadMetrics
 		return
 	}
 	native := g.workload(ctx, scope, start, end, step)
+	filled := false
 	for _, key := range []string{"cpu", "memory"} {
 		if !needs(key) || len(native.Panels[key].Series) == 0 {
 			continue
@@ -159,8 +227,11 @@ func mergeGKEResources(ctx context.Context, g *gkeMetrics, resp *workloadMetrics
 		if len(resp.Comparison[key].Series) == 0 {
 			resp.Comparison[key] = native.Comparison[key]
 		}
-		if resp.State == "unavailable" {
-			resp.State, resp.Reason = native.State, native.Reason
-		}
+		filled = true
+	}
+	if filled && resp.State == "unavailable" {
+		resp.State, resp.Reason = native.State, native.Reason
+		resp.Start, resp.End, resp.StepSeconds, resp.RateWindowSeconds = native.Start, native.End, native.StepSeconds, native.RateWindowSeconds
+		resp.Pods, resp.PodsTotal = native.Pods, native.PodsTotal
 	}
 }

@@ -18,6 +18,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
 	"github.com/skyhook-io/radar/pkg/prom"
@@ -31,11 +32,11 @@ func gkeFrontendCandidate(s *corev1.Service) bool {
 	if s == nil || s.Spec.Type == corev1.ServiceTypeExternalName || len(s.Spec.Selector) == 0 || len(s.Spec.Ports) == 0 {
 		return false
 	}
-	app := s.Labels["app"]
-	if app == "gmp-frontend" || app == "frontend" {
-		return true
-	}
-	return (s.Name == "frontend" || s.Name == "gmp-frontend") && slices.Contains([]string{"gmp-public", "gmp-system", "monitoring", "default"}, s.Namespace)
+	// These namespaces hold Google's managed collection or its operator. An
+	// arbitrary workload namespace is not a trusted source of cluster charts.
+	return (s.Namespace == "gmp-public" || s.Namespace == "gmp-system" || s.Namespace == "gke-gmp-system") &&
+		(s.Name == "frontend" || s.Name == "gmp-frontend")
+
 }
 
 func gkeFrontendPort(s *corev1.Service, pods []corev1.Pod) (corev1.ServicePort, bool) {
@@ -138,8 +139,10 @@ func (c *Client) gkeClusterScope(ctx context.Context) (ClusterScope, string, boo
 func (c *Client) findGKEChartStore(ctx context.Context, gen uint64, regularErr error) {
 	c.mu.RLock()
 	configured, regular := c.manualURL != "", c.baseURL != "" && !c.carettaStoreLocked()
+	fallback := c.baseURL != ""
+	revision := c.gkeRevision
 	operatorScope := c.workloadScope
-	recent := c.gkeGeneration == gen && time.Since(c.gkeChecked) < time.Minute
+	recent := c.gkeGeneration == gen && !c.gkeChecked.IsZero() && (configured || time.Since(c.gkeChecked) < time.Minute)
 	c.mu.RUnlock()
 	if recent || c.k8sClient == nil || c.k8sConfig == nil || ctx.Err() != nil ||
 		(configured && regularErr != nil) || (!configured && (regular || !(regularErr == nil || errors.Is(regularErr, ErrPrometheusNotFound) || IsUnreachable(regularErr)))) {
@@ -151,8 +154,8 @@ func (c *Client) findGKEChartStore(ctx context.Context, gen uint64, regularErr e
 	defer func() {
 		c.mu.Lock()
 		defer c.mu.Unlock()
-		if c.discoveryGen == gen && c.workloadScope == operatorScope && !c.retired && ctx.Err() == nil {
-			if result != nil && c.gkeActiveLocked() && c.gke.matchers == result.matchers && c.gke.service == result.service && (!configured || c.gke.store == result.store) {
+		if c.discoveryGen == gen && c.gkeRevision == revision && c.workloadScope == operatorScope && !c.retired && ctx.Err() == nil {
+			if result != nil && c.gkeActiveLocked() && c.gke.matchers == result.matchers && c.gke.service == result.service && c.gke.portName == result.portName && c.gke.fallback == result.fallback && (!configured || c.gke.store == result.store) {
 				result = c.gke
 			}
 			c.gke, c.gkeGeneration, c.gkeChecked = result, gen, time.Now()
@@ -169,7 +172,7 @@ func (c *Client) findGKEChartStore(ctx context.Context, gen uint64, regularErr e
 	if !ok {
 		return
 	}
-	source := &gkeMetrics{scope: scope, matchers: m, owner: c}
+	source := &gkeMetrics{scope: scope, matchers: m, owner: c, fallback: fallback}
 	if configured {
 		store, snap := c.PromSnapshot()
 		if store == nil || !c.ConnectionCurrent(snap) {
@@ -222,7 +225,8 @@ func (c *Client) findGKEChartStore(ctx context.Context, gen uint64, regularErr e
 		if !source.hasNodeMetrics(ctx, store) {
 			continue
 		}
-		source.service = fmt.Sprintf("%s/%s:%s:%d", s.Namespace, s.Name, port.Name, port.Port)
+		source.service = prom.ServiceInfo{Namespace: s.Namespace, Name: s.Name, Port: int(port.Port)}
+		source.portName = port.Name
 		source.store = store
 		result = source
 		return
@@ -243,7 +247,7 @@ func (c *Client) gkeServiceCandidates(ctx context.Context) []*corev1.Service {
 	if !ok {
 		list, err := c.k8sClient.CoreV1().Services("").List(ctx, metav1.ListOptions{})
 		if err != nil {
-			for _, ns := range []string{"gmp-public", "gmp-system", "monitoring", "default"} {
+			for _, ns := range []string{"gmp-public", "gmp-system", "gke-gmp-system"} {
 				for _, name := range []string{"gmp-frontend", "frontend"} {
 					if s, e := c.k8sClient.CoreV1().Services(ns).Get(ctx, name, metav1.GetOptions{}); e == nil {
 						svcs = append(svcs, s)
@@ -274,6 +278,25 @@ func (c *Client) gkeServiceCandidates(ctx context.Context) []*corev1.Service {
 	return candidates
 }
 
+// A native-only connection has no generic Prometheus base URL. Reuse the
+// verified reader across a chart burst, then periodically retry discovery.
+func (c *Client) cachedNativeCharts() *gkeMetrics {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if !c.gkeActiveLocked() || c.gke.fallback || time.Since(c.gkeChecked) >= time.Minute {
+		return nil
+	}
+	return c.gke
+}
+
+func (c *Client) ensureGKECharts(ctx context.Context) *gkeMetrics {
+	if g := c.cachedNativeCharts(); g != nil {
+		return g
+	}
+	_, _, _ = c.EnsureConnected(ctx)
+	return c.gkeChartStore()
+}
+
 func (c *Client) gkeChartStore() *gkeMetrics {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -295,4 +318,22 @@ func (c *Client) gkeActiveLocked() bool {
 
 func (c *Client) carettaStoreLocked() bool {
 	return c.discoveryService != nil && c.discoveryService.Namespace == "caretta" && c.discoveryService.Name == "caretta-vm"
+}
+
+func (c *Client) invalidateGKEService(source kubernetes.Interface, op string, svc *corev1.Service, oldObj any) bool {
+	old, _ := oldObj.(*corev1.Service)
+	wasNative, nowNative := gkeFrontendCandidate(old), gkeFrontendCandidate(svc)
+	nativeChange := (wasNative || nowNative) && (op != "update" || wasNative != nowNative || !portsEqual(old.Spec.Ports, svc.Spec.Ports) || !labels.Equals(old.Spec.Selector, svc.Spec.Selector))
+	if nativeChange {
+		c.mu.Lock()
+		if c.k8sClient == source && c.manualURL == "" {
+			c.gkeRevision++
+			c.gkeChecked = time.Time{}
+			if c.gke != nil && c.gke.service.Namespace == svc.Namespace && c.gke.service.Name == svc.Name {
+				c.gke = nil
+			}
+		}
+		c.mu.Unlock()
+	}
+	return nativeChange
 }
