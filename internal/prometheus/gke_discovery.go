@@ -142,7 +142,7 @@ func (c *Client) findGKEChartStore(ctx context.Context, gen uint64, regularErr e
 	fallback := c.baseURL != ""
 	revision := c.gkeRevision
 	operatorScope := c.workloadScope
-	recent := c.gkeGeneration == gen && !c.gkeChecked.IsZero() && (configured || time.Since(c.gkeChecked) < time.Minute)
+	recent := c.gkeGeneration == gen && !c.gkeChecked.IsZero() && (c.gke == nil || c.gkeActiveLocked()) && (configured || time.Since(c.gkeChecked) < time.Minute)
 	c.mu.RUnlock()
 	if recent || c.k8sClient == nil || c.k8sConfig == nil || ctx.Err() != nil ||
 		(configured && regularErr != nil) || (!configured && (regular || !(regularErr == nil || errors.Is(regularErr, ErrPrometheusNotFound) || IsUnreachable(regularErr)))) {
@@ -313,7 +313,7 @@ func (c *Client) gkeActiveLocked() bool {
 	if c.gke.configured {
 		return c.manualURL != "" && c.baseURL != "" && c.gke.store == c.prom
 	}
-	return c.manualURL == "" && (c.baseURL == "" || c.carettaStoreLocked())
+	return c.manualURL == "" && c.gke.fallback == (c.baseURL != "") && (c.baseURL == "" || c.carettaStoreLocked())
 }
 
 func (c *Client) carettaStoreLocked() bool {

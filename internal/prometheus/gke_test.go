@@ -371,3 +371,20 @@ func TestGKEInvalidatesDroppedOrChangedService(t *testing.T) {
 		})
 	}
 }
+
+func TestGKEChartStoreTransitionToTrafficBackend(t *testing.T) {
+	c := gkeFixture(t, fixtureIssuer, 1)
+	c.findGKEChartStore(t.Context(), 0, ErrPrometheusNotFound)
+	if c.cachedNativeCharts() == nil {
+		t.Fatal("missing native reader")
+	}
+	c.baseURL = "http://traffic.invalid"
+	c.discoveryService = &prom.ServiceInfo{Namespace: "caretta", Name: "caretta-vm"}
+	if c.cachedNativeCharts() != nil {
+		t.Fatal("native-only shortcut survived a newly available conventional store")
+	}
+	c.findGKEChartStore(t.Context(), 0, nil)
+	if g := c.gkeChartStore(); g == nil || !g.fallback || g.configured {
+		t.Fatalf("expected an independent native fallback alongside Caretta: %+v", g)
+	}
+}
