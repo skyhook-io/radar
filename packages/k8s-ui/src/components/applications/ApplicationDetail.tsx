@@ -97,7 +97,7 @@ import { PaneLoader } from "../ui/PaneLoader";
 import { formatRelativeAgeTime, midTruncate } from "../../utils/format";
 import { DeliveryRecord, historyStatusTone, sourceObjectLabel } from "./ApplicationDeploys";
 import type { WorkloadExtraTab } from "../workload/WorkloadView";
-import { VersionTooltip, RolloutSummaryTooltip } from "./AppTooltips";
+import { AppIdentityTooltip, VersionTooltip, RolloutSummaryTooltip } from "./AppTooltips";
 import {
   ProvenanceBadge,
   ClassBadge,
@@ -164,14 +164,14 @@ export interface AppWorkloadSelectionOptions {
   tab?: string;
 }
 
-export type CanonicalApplicationView = "overview" | "deploys" | "topology" | "history";
+export type ApplicationView = "overview" | "deploys" | "topology" | "history";
 
 /** A built-in view, or the id of one of the host's `extraViews`. */
-export type ApplicationView = CanonicalApplicationView | (string & {});
+export type ApplicationDetailView = ApplicationView | (string & {});
 
 /** An app-level view the host supplies, shown as a tab after the built-in ones. */
 export interface ApplicationExtraView {
-  /** Must not be a built-in view id; a built-in id always selects the built-in view. */
+  /** A unique id. Built-in ids and `cost` are reserved. */
   id: string;
   label: string;
   /** Shown after the tab's label, e.g. a mark for unsaved edits. */
@@ -179,10 +179,10 @@ export interface ApplicationExtraView {
   render: () => ReactNode;
 }
 
-const DEFAULT_APPLICATION_VIEW: CanonicalApplicationView = "overview";
+const DEFAULT_APPLICATION_VIEW: ApplicationView = "overview";
 
 const APPLICATION_VIEWS: Array<{
-  id: CanonicalApplicationView;
+  id: ApplicationView;
   label: string;
 }> = [
   { id: "overview", label: "Overview" },
@@ -193,9 +193,7 @@ const APPLICATION_VIEWS: Array<{
 
 const ALL_BUILT_IN_VIEWS = APPLICATION_VIEWS.map(({ id }) => id);
 
-function isCanonicalApplicationView(
-  view: ApplicationView,
-): view is CanonicalApplicationView {
+function isBuiltInApplicationView(view: ApplicationDetailView): view is ApplicationView {
   return APPLICATION_VIEWS.some((v) => v.id === view);
 }
 
@@ -207,10 +205,18 @@ export interface AppWorkloadRenderContext {
 
 type ViewProps =
   | {
+      extraViews?: undefined;
       selectedView: ApplicationView;
-      onSelectView: (view: ApplicationView) => void;
+      onSelectView: (view: ApplicationView, options?: { replace?: boolean }) => void;
     }
-  | { selectedView?: undefined; onSelectView?: undefined };
+  | {
+      /** Host-supplied app-level views selected by id. Single-workload apps
+       *  open directly on the workload; use WorkloadView `extraTabs` there. */
+      extraViews: ApplicationExtraView[];
+      selectedView: ApplicationDetailView;
+      onSelectView: (view: ApplicationDetailView, options?: { replace?: boolean }) => void;
+    }
+  | { extraViews?: ApplicationExtraView[]; selectedView?: undefined; onSelectView?: undefined };
 
 export type ApplicationDetailProps = {
   app: AppRow;
@@ -232,15 +238,11 @@ export type ApplicationDetailProps = {
   }) => ReactNode;
   costViewSelected?: boolean;
   onSelectCostView?: () => void;
-  /** Host-supplied app-level views, as tabs after the built-in ones. Select one
-   *  with its id through `selectedView`/`onSelectView`; an id that is not in
-   *  the list falls back to the Overview. A single-workload app opens straight
-   *  on its workload, which has no app tabs: a host that wants these there
-   *  passes them to its workload view (WorkloadView `extraTabs`). */
-  extraViews?: ApplicationExtraView[];
-  /** The built-in views to offer, in their usual order; all of them by
-   *  default. With none, the first of `extraViews` is the landing view. */
-  builtInViews?: CanonicalApplicationView[];
+  /** The built-in views to offer. All are available by default. A removed
+   *  selection falls back to the first available non-Cost view in tab order. */
+  builtInViews?: ApplicationView[];
+  /** Show versions inline and keep up to six environment pills. Defaults to four pills without inline versions. */
+  showEnvironmentVersions?: boolean;
   /** The active instance has nothing live to show (not deployed, its cluster
    *  offline, …): the Overview, Topology and History show this instead. Host
    *  views still render. */
@@ -324,7 +326,7 @@ export type ApplicationDetailProps = {
   showWorkloadFact?: boolean;
   /**
    * The host's own status for the app, e.g. how a job's last run went, in
-   * place of the one its workloads give (the header pill and Runtime).
+   * place of the header status pill. For jobs, also hides the duplicate Runtime fact.
    */
   status?: AppHostStatus;
   /** The title, for a host that makes it more than the app's name (e.g. a switcher to its other apps). */
@@ -405,6 +407,7 @@ export function ApplicationDetail({
   onSelectCostView,
   extraViews,
   builtInViews,
+  showEnvironmentVersions = false,
   unavailable,
   renderOverviewIssues,
   hasOverviewIssues,
@@ -489,37 +492,42 @@ export function ApplicationDetail({
   const inferred = app.identity
     ? identityEnvInferred(app.identity)
     : resolvedEnv.inferred;
-  const [internalView, setInternalView] = useState<ApplicationView>(
+  const [internalView, setInternalView] = useState<ApplicationDetailView>(
     DEFAULT_APPLICATION_VIEW,
   );
   const [internalCostSelected, setInternalCostSelected] = useState(false);
   const requestedView = selectedView ?? internalView;
-  const offeredViews = (builtInViews ?? ALL_BUILT_IN_VIEWS).filter(
-    (id) => id !== "deploys" || Boolean(renderDeploys),
+  const offeredViews = ALL_BUILT_IN_VIEWS.filter(
+    (id) => (!builtInViews || builtInViews.includes(id)) && (id !== "deploys" || Boolean(renderDeploys)),
   );
-  const requestedBuiltIn =
-    isCanonicalApplicationView(requestedView) &&
-    offeredViews.includes(requestedView);
-  // A view that isn't offered falls back to the first one that is.
-  const activeExtraView = isCanonicalApplicationView(requestedView)
-    ? requestedBuiltIn || offeredViews.length > 0
-      ? undefined
-      : extraViews?.[0]
-    : (extraViews?.find((view) => view.id === requestedView) ??
-      (offeredViews.length > 0 ? undefined : extraViews?.[0]));
-  const activeView: CanonicalApplicationView = requestedBuiltIn
-    ? (requestedView as CanonicalApplicationView)
-    : (offeredViews[0] ?? DEFAULT_APPLICATION_VIEW);
+  const offeredExtraViews = useMemo(() => {
+    const seen = new Set<string>([...ALL_BUILT_IN_VIEWS, "cost", ""]);
+    return extraViews?.filter(({ id }) => {
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+  }, [extraViews]);
+  const visibleViews = orderById(
+    [...offeredViews.map((id) => ({ id })), ...(offeredExtraViews ?? [])],
+    viewOrder,
+  );
+  const resolvedView = visibleViews.find(({ id }) => id === requestedView)?.id ?? visibleViews[0]?.id;
+  const activeExtraView = offeredExtraViews?.find(({ id }) => id === resolvedView);
+  const activeView = resolvedView && isBuiltInApplicationView(resolvedView)
+    ? resolvedView
+    : DEFAULT_APPLICATION_VIEW;
   const costSelected = Boolean(
     renderCostView && (costViewSelected ?? internalCostSelected),
   );
   const setView = useCallback(
-    (view: ApplicationView) => {
+    (view: ApplicationDetailView) => {
       setInternalCostSelected(false);
-      if (onSelectView) onSelectView(view);
-      else setInternalView(view);
+      if (extraViews && onSelectView) onSelectView(view);
+      else if (onSelectView && isBuiltInApplicationView(view)) onSelectView(view);
+      else if (!onSelectView) setInternalView(view);
     },
-    [onSelectView],
+    [extraViews, onSelectView],
   );
   const selectCostView = useCallback(() => {
     if (!renderCostView) return;
@@ -557,6 +565,11 @@ export function ApplicationDetail({
       after: "overview", render: renderDeploys,
     }] };
   }, [singleWorkloadScope, renderDeploys, builtInViews]);
+  useEffect(() => {
+    if (selectedWorkload || costSelected || !resolvedView || resolvedView === requestedView) return;
+    if (extraViews && onSelectView) onSelectView(resolvedView, { replace: true });
+    else if (onSelectView && isBuiltInApplicationView(resolvedView)) onSelectView(resolvedView, { replace: true });
+  }, [costSelected, extraViews, onSelectView, requestedView, resolvedView, selectedWorkload]);
   useEffect(() => {
     if (selectedWorkloadKey !== undefined && hostKeyIsStale) {
       onSelectWorkload?.(null);
@@ -833,6 +846,7 @@ export function ApplicationDetail({
               instances={identityInstances}
               activeKey={activeInstanceKey ?? app.key}
               onSwitch={onSwitchInstance}
+              showVersions={showEnvironmentVersions}
             />
           </div>
         ) : env ? (
@@ -860,8 +874,8 @@ export function ApplicationDetail({
             </Tooltip>
           </ContextFact>
         ) : null}
-        {status ? null : workloadClass === "job" ? (
-          <ContextFact label="Runtime">{batchRuntime.label}</ContextFact>
+        {workloadClass === "job" ? (
+          status ? null : <ContextFact label="Runtime">{batchRuntime.label}</ContextFact>
         ) : desired > 0 ? (
           <ContextFact label="Ready"><ReadyBar ready={ready} desired={desired} width="w-16" /></ContextFact>
         ) : null}
@@ -894,7 +908,7 @@ export function ApplicationDetail({
             instanceKey={activeInstanceKey ?? app.key}
             viewOrder={viewOrder}
             viewHeader={viewHeader}
-            extraViews={extraViews}
+            extraViews={offeredExtraViews}
             offeredViews={offeredViews}
             unavailable={unavailable}
             costSelected={costSelected}
@@ -1001,17 +1015,17 @@ function ApplicationWorkspace({
   hasOverviewIssues,
 }: {
   app: AppRow;
-  activeView: CanonicalApplicationView;
+  activeView: ApplicationView;
   activeExtraView?: ApplicationExtraView;
   /** The instance shown: a host view's state belongs to one instance, never carried to the next. */
   instanceKey: string;
   viewOrder?: string[];
   viewHeader?: ReactNode;
   extraViews?: ApplicationExtraView[];
-  offeredViews: CanonicalApplicationView[];
+  offeredViews: ApplicationView[];
   unavailable?: ReactNode;
   costSelected: boolean;
-  onViewChange: (view: ApplicationView) => void;
+  onViewChange: (view: ApplicationDetailView) => void;
   onCostViewChange: () => void;
   renderCostView?: ApplicationDetailProps["renderCostView"];
   workloads: AppWorkload[];
@@ -1184,13 +1198,13 @@ function ApplicationViewTabs({
   onCostChange,
   viewOrder,
 }: {
-  activeView: CanonicalApplicationView;
+  activeView: ApplicationView;
   activeExtraViewId?: string;
   extraViews?: ApplicationExtraView[];
-  offeredViews: CanonicalApplicationView[];
+  offeredViews: ApplicationView[];
   costSelected: boolean;
   costAvailable: boolean;
-  onChange: (view: ApplicationView) => void;
+  onChange: (view: ApplicationDetailView) => void;
   onCostChange: () => void;
   viewOrder?: string[];
 }) {
@@ -1231,7 +1245,7 @@ function ApplicationViewTabs({
       ),
     });
   }
-  for (const view of extraViews?.filter((v) => !isCanonicalApplicationView(v.id)) ?? []) {
+  for (const view of extraViews ?? []) {
     const active = !costSelected && view.id === activeExtraViewId;
     tabs.push({
       id: view.id,
@@ -3639,10 +3653,12 @@ function EnvSwitcher({
   instances,
   activeKey,
   onSwitch,
+  showVersions,
 }: {
   instances: AppIdentityInstance[];
   activeKey: string;
   onSwitch?: (appKey: string) => void;
+  showVersions: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const { shouldRender, isOpen } = useAnimatedUnmount(
@@ -3668,9 +3684,16 @@ function EnvSwitcher({
   const lagChip = lag && (
     <span className={`${CHIP} ${CHIP_TONE.amber}`}>{lag}</span>
   );
+  const evidenceChip = !showVersions && (
+    <Tooltip content={<AppIdentityTooltip members={instances} />} delay={150}>
+      <span className="inline-flex cursor-default items-center rounded-sm bg-theme-hover px-1 py-px ring-1 ring-inset ring-theme-border">
+        <Layers className="h-3 w-3 text-theme-text-tertiary" aria-hidden />
+      </span>
+    </Tooltip>
+  );
 
   const envCount = envInstances.filter((i) => !i.aggregate).length;
-  if (envCount <= MAX_INLINE_ENVS) {
+  if (envCount <= (showVersions ? MAX_INLINE_ENVS : 4)) {
     return (
       <span className="flex flex-wrap items-center gap-1">
         {instances.map((inst) => {
@@ -3684,6 +3707,7 @@ function EnvSwitcher({
             >
               <button
                 type="button"
+                disabled={isActive}
                 aria-current={isActive ? "true" : undefined}
                 onClick={() => !isActive && onSwitch?.(inst.appKey)}
                 className={clsx(
@@ -3695,7 +3719,7 @@ function EnvSwitcher({
               >
                 <StatusDot tone={mapHealthToTone(inst.health)} />
                 {inst.env}
-                {inst.version && (
+                {showVersions && inst.version && (
                   <span className="font-mono text-[10px] text-theme-text-secondary">
                     {midTruncate(inst.version, 18)}
                   </span>
@@ -3710,6 +3734,7 @@ function EnvSwitcher({
             </Tooltip>
           );
         })}
+        {evidenceChip}
         {lagChip}
       </span>
     );
@@ -3737,6 +3762,7 @@ function EnvSwitcher({
           aria-hidden
         />
       </button>
+      {evidenceChip}
       {lagChip}
       {shouldRender && (
         <div

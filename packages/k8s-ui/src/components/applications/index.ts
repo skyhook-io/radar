@@ -7,7 +7,7 @@ export { buildSingleAppEntry } from '../../utils/applications'
 // Facet moved to the shared ui/ primitives; re-exported here for compatibility.
 export { Facet } from '../ui/Facet'
 export { ApplicationDetail } from './ApplicationDetail'
-export type { ApplicationDetailProps, SelectedAppWorkload, AppIdentityInstance, ApplicationView, ApplicationExtraView, CanonicalApplicationView, AppWorkloadRenderContext } from './ApplicationDetail'
+export type { ApplicationDetailProps, SelectedAppWorkload, AppIdentityInstance, ApplicationView, ApplicationDetailView, ApplicationExtraView, AppWorkloadRenderContext } from './ApplicationDetail'
 export { ApplicationDeploys, ArgoSyncDetailsContext } from './ApplicationDeploys'
 export type { ApplicationDeploysProps, ArgoSyncDetailsProps } from './ApplicationDeploys'
 export { CenteredEmpty } from '../ui/CenteredEmpty'

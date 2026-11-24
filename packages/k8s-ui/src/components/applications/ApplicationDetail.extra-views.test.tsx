@@ -142,6 +142,26 @@ describe('ApplicationDetail extra views', () => {
     expect(host.querySelector('[data-testid="body"]')).toBeNull()
   })
 
+  it('uses the visible tab order to replace a stale controlled view', () => {
+    const onSelectView = vi.fn()
+    const { host } = show({ extraViews, viewOrder: ['settings', 'history'], selectedView: 'old-view', onSelectView })
+    expect(selected(host)).toEqual(['Settings'])
+    expect(onSelectView).toHaveBeenCalledExactlyOnceWith('settings', { replace: true })
+  })
+
+  it('does not render reserved or duplicate extra views', () => {
+    const reserved = extraViews[0]
+    const { host } = show({
+      builtInViews: [],
+      extraViews: [{ ...reserved, id: 'overview' }, { ...reserved, id: 'cost' }, ...extraViews, reserved],
+      renderCostView: () => <div>Cost body</div>,
+      selectedView: 'overview',
+      onSelectView: () => {},
+    })
+    expect(tabs(host).map((t) => t.textContent?.trim())).toEqual(['Cost', 'Deploys', 'Settings'])
+    expect(selected(host)).toEqual(['Deploys'])
+  })
+
   it('keeps the Cost view ahead of a selected host view', () => {
     const { host } = show({
       extraViews,
@@ -213,6 +233,7 @@ describe('ApplicationDetail extra views', () => {
     const instance = (env: string, extra: object = {}) => ({ appKey: env, name: env, env, version: `${env}-v1`, health: 'healthy' as const, confidence: 'high', evidence: '', ...extra })
     const envs = ['prod', 'prod-internal', 'staging', 'demo', 'qa', 'dev']
     const { host } = show({
+      showEnvironmentVersions: true,
       identityInstances: [instance('All environments', { aggregate: true, version: undefined }), ...envs.map((e) => instance(e))],
       activeInstanceKey: 'prod',
       onSwitchInstance: () => {},
@@ -224,6 +245,7 @@ describe('ApplicationDetail extra views', () => {
 
     // A seventh: the picker, counting environments only.
     const more = show({
+      showEnvironmentVersions: true,
       identityInstances: [instance('All environments', { aggregate: true, version: undefined }), ...[...envs, 'perf'].map((e) => instance(e))],
       activeInstanceKey: 'prod',
       onSwitchInstance: () => {},
@@ -233,10 +255,10 @@ describe('ApplicationDetail extra views', () => {
 
   it('marks the current instance with aria-current and shows each version on its pill', () => {
     const instance = (env: string, version: string) => ({ appKey: env, name: `${env} on nonprod`, env, version, health: 'healthy' as const, confidence: 'high', evidence: `${env} evidence` })
-    const { host } = show({ identityInstances: [instance('prod', '1.2.0'), instance('staging', '1.3.0')], activeInstanceKey: 'prod', onSwitchInstance: () => {} })
+    const { host } = show({ showEnvironmentVersions: true, identityInstances: [instance('prod', '1.2.0'), instance('staging', '1.3.0')], activeInstanceKey: 'prod', onSwitchInstance: () => {} })
     const pills = Array.from(host.querySelectorAll('button')).filter((b) => /^(prod|staging)/.test(b.textContent ?? ''))
     expect(pills.map((b) => [b.textContent, b.getAttribute('aria-current'), b.disabled])).toEqual([
-      ['prod1.2.0', 'true', false],
+      ['prod1.2.0', 'true', true],
       ['staging1.3.0', null, false],
     ])
   })
