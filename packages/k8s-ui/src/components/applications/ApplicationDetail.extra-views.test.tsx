@@ -236,7 +236,6 @@ describe('ApplicationDetail extra views', () => {
       renderCostView: () => <div>Cost body</div>,
       costViewSelected: false,
       onSelectCostView: vi.fn(),
-      liveUnavailableNotice: <p>Offline</p>,
     })
     expect(selected(host)).toEqual(['Cost'])
     expect(host.textContent).toContain('Cost body')
@@ -377,6 +376,21 @@ describe('ApplicationDetail extra views', () => {
     expect(host.textContent).toContain('Offline')
     expect(host.textContent).not.toContain('Release notes body')
     expect(onSelectView).not.toHaveBeenCalled()
+  })
+
+  it('holds the offline notice for a denied Deploys link even when Cost is available', () => {
+    const { host } = show({
+      app: { ...app, workloads: [] },
+      builtInViews: ['deploys'],
+      selectedView: 'deploys',
+      onSelectView: vi.fn(),
+      costViewSelected: false,
+      renderCostView: () => <div>Cost body</div>,
+      liveUnavailableNotice: <p>Offline</p>,
+    })
+    expect(host.textContent).toContain('Offline')
+    expect(tab(host, 'Cost').getAttribute('aria-selected')).toBe('false')
+    expect(host.textContent).not.toContain('Cost body')
   })
 
   it('shows an unavailable workload link before a host-only default view', () => {

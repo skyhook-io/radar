@@ -8,6 +8,7 @@ import {
   useCallback,
   useEffect,
   useRef,
+  type ReactElement,
   type ReactNode,
 } from "react";
 import {
@@ -214,28 +215,30 @@ export interface AppWorkloadRenderContext {
   extraTabs?: WorkloadExtraTab[];
 }
 
-type ViewProps =
-  | {
-      extraViews?: undefined;
-      /** Requested app view. A stale request can display a fallback while selection settles. */
-      selectedView: ApplicationView;
-      /** Called on a tab click or to repair a stale view with history replacement.
-       * A click selects application scope, so a URL host clears the workload key in the same navigation. */
-      onSelectView: (view: ApplicationView, options?: { replace?: boolean }) => void;
-    }
-  | {
-      /** Host-supplied app-level views selected by id. Single-workload apps
-       *  open directly on the workload; use WorkloadView `extraTabs` there. */
-      extraViews?: ApplicationExtraView[];
-      /** Requested app view. A stale request can display a fallback while selection settles. */
-      selectedView: ApplicationDetailView;
-      /** Called on a tab click or to repair a stale view with history replacement.
-       * A click selects application scope, so a URL host clears the workload key in the same navigation. */
-      onSelectView: (view: ApplicationDetailView, options?: { replace?: boolean }) => void;
-    }
-  | { extraViews?: ApplicationExtraView[]; selectedView?: undefined; onSelectView?: undefined };
+type BuiltInViewProps = {
+  extraViews?: undefined;
+  /** Requested app view. A stale request can display a fallback while selection settles. */
+  selectedView: ApplicationView;
+  /** Called on a tab click or to repair a stale view with history replacement.
+   * A click selects application scope, so a URL host clears the workload key in the same navigation. */
+  onSelectView: (view: ApplicationView, options?: { replace?: boolean }) => void;
+};
 
-export type ApplicationDetailProps = {
+type HostViewProps = {
+  /** Host-supplied app-level views selected by id. Single-workload apps
+   *  open directly on the workload; use WorkloadView `extraTabs` there. */
+  extraViews?: ApplicationExtraView[];
+  /** Requested app view. A stale request can display a fallback while selection settles. */
+  selectedView: ApplicationDetailView;
+  /** Called on a tab click or to repair a stale view with history replacement.
+   * A click selects application scope, so a URL host clears the workload key in the same navigation. */
+  onSelectView: (view: ApplicationDetailView, options?: { replace?: boolean }) => void;
+};
+
+type ViewProps = BuiltInViewProps | HostViewProps |
+  { extraViews?: ApplicationExtraView[]; selectedView?: undefined; onSelectView?: undefined };
+
+type ApplicationDetailBaseProps = {
   app: AppRow;
   onBack: () => void;
   /** Render the host's WorkloadView for the chosen workload. Forward
@@ -259,7 +262,8 @@ export type ApplicationDetailProps = {
   onSelectCostView?: () => void;
   /** Allowlist of built-in views. By default all available built-in views are offered.
    *  Deploys requires renderDeploys and this allowlist also controls its single-workload tab.
-   *  A removed view falls back in tab order. Cost is selected if it is the only offered view. */
+   *  A removed view falls back in tab order. Cost alone is the default once
+   *  selection settles, except while a controlled offline link is unresolved. */
   builtInViews?: ApplicationView[];
   /** Delay stale URL repairs while views or workload evidence load. While a
    *  workload link is pending, suppress app-level host content and Deploys content. */
@@ -363,8 +367,9 @@ export type ApplicationDetailProps = {
   viewOrder?: string[];
   /** Content directly below the application tabs, including when live data is unavailable. WorkloadView has its own tabHeader. */
   viewHeader?: ReactNode;
-} & SelectionProps &
-  ViewProps;
+} & SelectionProps;
+
+export type ApplicationDetailProps = ApplicationDetailBaseProps & ViewProps;
 
 function ContextFact({
   label,
@@ -426,6 +431,10 @@ function compareDefinedVersions(
 
 const WorkloadRevisionsContext = createContext<ApplicationDetailProps["renderWorkloadRevisions"]>(undefined);
 
+// Give inline callbacks a contextual type for each tab registration shape.
+export function ApplicationDetail(props: ApplicationDetailBaseProps & BuiltInViewProps): ReactElement;
+export function ApplicationDetail(props: ApplicationDetailBaseProps & HostViewProps & { extraViews: ApplicationExtraView[] | undefined }): ReactElement;
+export function ApplicationDetail(props: ApplicationDetailProps): ReactElement;
 export function ApplicationDetail({
   app,
   onBack,
@@ -562,6 +571,7 @@ export function ApplicationDetail({
   );
   const requestedViewAvailable = visibleViews.some(({ id }) => id === requestedView);
   const waitingForWorkload = Boolean(selectedWorkloadKey) && (selectionLoading || unavailable != null || hostKeyIsStale);
+  const unresolvedOfflineView = unavailable != null && selectedView !== undefined && !requestedViewAvailable;
   const renderInstanceDeploys = useCallback(
     () => waitingForWorkload
       ? <PaneLoader label="Loading application views…" className="h-full" />
@@ -571,7 +581,7 @@ export function ApplicationDetail({
   // An unresolved workload deep link can temporarily land on this shell.
   // While evidence is missing, show the built-in or unavailable state without
   // running an unrelated host tab.
-  const fallbackView = waitingForWorkload || selectionLoading || (unavailable != null && selectedView !== undefined)
+  const fallbackView = waitingForWorkload || selectionLoading || unresolvedOfflineView
     ? visibleViews.find(({ id }) => id !== "deploys" && isBuiltInApplicationView(id))?.id
     : visibleViews[0]?.id;
   const resolvedView = requestedViewAvailable && !waitingForWorkload ? requestedView : fallbackView;
@@ -579,7 +589,7 @@ export function ApplicationDetail({
   const activeView = resolvedView && isBuiltInApplicationView(resolvedView)
     ? resolvedView
     : DEFAULT_APPLICATION_VIEW;
-  const onlyOfferedCost = visibleViews.length === 0 && !selectionLoading;
+  const onlyOfferedCost = visibleViews.length === 0 && !selectionLoading && !unresolvedOfflineView;
   const costSelected = !waitingForWorkload && Boolean(renderCostView) &&
     ((costViewSelected ?? internalCostSelected) || onlyOfferedCost);
   const setView = useCallback(
