@@ -1,4 +1,6 @@
-import { ChevronRight } from "lucide-react";
+import { createContext, useContext, useState, type ComponentType } from "react";
+import { commitURLForRepo, compareSyncURL, gitTreeURL, shortRevisionForCommit } from "../gitops/git-source-links";
+import { ChevronRight, ExternalLink } from "lucide-react";
 import { type AppHistoryAnchor, type AppSourceRef, CHIP, CHIP_TONE } from "../../utils/applications";
 import { AlertBanner } from "../ui/drawer-components";
 
@@ -11,28 +13,67 @@ export interface ApplicationDeploysProps {
   partialSources?: string[];
 }
 
+export interface SyncCommitMetadataProps {
+  source: AppSourceRef;
+  repoURL: string;
+  revision: string;
+}
+
+// The standalone UI package can render Kubernetes records without an Argo API connection.
+export const SyncCommitMetadataContext = createContext<ComponentType<SyncCommitMetadataProps> | null>(null);
+
+function SourceLink({ href, children }: { href: string; children: string }) {
+  return <a href={href} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-medium text-accent-text hover:underline">{children}<ExternalLink aria-hidden className="h-3 w-3" /></a>;
+}
+
 export function DeliveryRecord({ record, source, onOpenSource }: {
   record: AppHistoryAnchor;
   source: AppSourceRef;
   onOpenSource?: (source: AppSourceRef) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const CommitMetadata = useContext(SyncCommitMetadataContext);
+  const git = record.git;
+  const revision = record.revision ?? "";
+  const commit = git && commitURLForRepo(git.repoURL, revision);
+  const compare = git && compareSyncURL(git.repoURL, git.previousRevision, revision);
+  const tree = git && git.path && /^[0-9a-f]{40}$/i.test(revision) && gitTreeURL(`${git.repoURL} · ${git.path}`, revision);
   const revisionInTitle = record.type === "helm" && record.title === `Helm revision ${record.revision}`;
   return (
-    <details className="group border-b border-theme-border last:border-0">
+    <details onToggle={event => setOpen(event.currentTarget.open)} className="group border-b border-theme-border last:border-0">
       <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3 text-sm hover:bg-theme-hover">
         <ChevronRight aria-hidden className="h-4 w-4 shrink-0 text-theme-text-tertiary group-open:rotate-90" />
         <span className="font-medium text-theme-text-primary">{record.title}</span>
-        {!revisionInTitle && <span className="min-w-0 truncate font-mono text-xs text-theme-text-secondary">{record.revision}</span>}
+        {!revisionInTitle && <span className="min-w-0 truncate font-mono text-xs text-theme-text-secondary" title={revision}>{git ? shortRevisionForCommit(revision) : revision}</span>}
         {record.status && <span className={`${CHIP} ${historyStatusTone(record.status)}`}>{record.status}</span>}
         {record.timestamp && <time dateTime={record.timestamp} className="ml-auto text-xs text-theme-text-tertiary">{new Date(record.timestamp).toLocaleString()}</time>}
       </summary>
       <div className="space-y-2 bg-theme-elevated px-5 py-3 text-sm text-theme-text-secondary">
-        <p className="break-words">{sourceObjectLabel(source)} · {[source.namespace, source.name].filter(Boolean).join("/")}</p>
-        {record.revision && <p className="break-all font-mono text-xs">Revision {record.revision}</p>}
-        {record.source && <p className="break-words">{record.source}</p>}
+        {git ? (
+          <>
+            {open && CommitMetadata && <CommitMetadata source={source} revision={revision} repoURL={git.repoURL} />}
+            {git.previousRevision && git.previousRevision !== revision && <p>
+              Previous sync <code title={git.previousRevision}>{shortRevisionForCommit(git.previousRevision)}</code>
+              {" → "}<code title={revision}>{shortRevisionForCommit(revision)}</code>
+            </p>}
+            {git.previousRevision === revision && <p>Same Git revision as the previous sync.</p>}
+            {!commit && <p className="break-all">{git.repoURL}</p>}
+            {git.path && <p className="break-all">Source path <code>{git.path}</code></p>}
+          </>
+        ) : (
+          <>
+            {record.revision && <p className="break-all font-mono text-xs">Revision {record.revision}</p>}
+            {record.source && <p className="break-words">{record.source}</p>}
+          </>
+        )}
         {record.message && <p className="break-words">{record.message}</p>}
-        {record.initiatedBy && <p>Initiated by {record.initiatedBy}</p>}
-        {onOpenSource && <button type="button" className="font-medium text-accent-text hover:underline" onClick={() => onOpenSource(source)}>View {sourceObjectLabel(source)}</button>}
+        {record.initiatedBy && <p>{record.initiatedBy === "automated" ? "Automatic sync" : `Initiated by ${record.initiatedBy}`}</p>}
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+          {compare && <SourceLink href={compare}>Compare synced revisions</SourceLink>}
+          {commit && <SourceLink href={commit}>View commit</SourceLink>}
+          {tree && <SourceLink href={tree}>Browse source at this revision</SourceLink>}
+          {onOpenSource && <button type="button" className="font-medium text-accent-text hover:underline" onClick={() => onOpenSource(source)}>View {sourceObjectLabel(source)}</button>}
+        </div>
       </div>
     </details>
   );

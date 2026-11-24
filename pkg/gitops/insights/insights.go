@@ -293,7 +293,17 @@ type PlanItem struct {
 	Notes        []string `json:"notes,omitempty"`
 }
 
+// SyncGitSource identifies the Git input recorded by a single-source Argo CD sync.
+type SyncGitSource struct {
+	RepoURL string `json:"repoURL"`
+	Path    string `json:"path,omitempty"`
+	// PreviousRevision is from the immediately preceding retained history ID
+	// for this application, only when both syncs used the same repository and path.
+	PreviousRevision string `json:"previousRevision,omitempty"`
+}
+
 type HistoryItem struct {
+	Git *SyncGitSource `json:"-"`
 	// Condition identifies a controller observation rather than a recorded delivery.
 	Condition   bool   `json:"-"`
 	ID          string `json:"id,omitempty"`
@@ -1530,7 +1540,26 @@ func buildHistory(root *unstructured.Unstructured, tool string) []HistoryItem {
 			rollbackable := gitops.ArgoHistoryEntryRollbackable(m)
 			sources, _, _ := unstructured.NestedSlice(m, "sources")
 			revisions, _, _ := unstructured.NestedStringSlice(m, "revisions")
-			out = append(out, HistoryItem{ID: id, Revision: argoRevisionLabel(m), DeployedAt: gitops.StringValue(m["deployedAt"]), Source: argoSourceLabel(m), InitiatedBy: initiatedBy, Rollbackable: &rollbackable, RollbackMultiSourceWarning: len(currentSources) > 0 || len(sources) > 0 || len(revisions) > 0})
+			var gitSource *SyncGitSource
+			if source, ok := m["source"].(map[string]any); ok && len(sources) == 0 && len(revisions) == 0 && gitops.StringValue(source["chart"]) == "" {
+				if repo := gitops.StringValue(source["repoURL"]); repo != "" && gitops.StringValue(m["revision"]) != "" {
+					gitSource = &SyncGitSource{RepoURL: repo, Path: gitops.StringValue(source["path"])}
+				}
+			}
+			out = append(out, HistoryItem{Git: gitSource, ID: id, Revision: argoRevisionLabel(m), DeployedAt: gitops.StringValue(m["deployedAt"]), Source: argoSourceLabel(m), InitiatedBy: initiatedBy, Rollbackable: &rollbackable, RollbackMultiSourceWarning: len(currentSources) > 0 || len(sources) > 0 || len(revisions) > 0})
+		}
+		byID := make(map[int64]HistoryItem, len(out))
+		for _, item := range out {
+			if id, err := strconv.ParseInt(item.ID, 10, 64); err == nil {
+				byID[id] = item
+			}
+		}
+		for _, item := range out {
+			id, err := strconv.ParseInt(item.ID, 10, 64)
+			prev := byID[id-1]
+			if err == nil && id > 0 && item.Git != nil && prev.Git != nil && item.Git.RepoURL == prev.Git.RepoURL && item.Git.Path == prev.Git.Path {
+				item.Git.PreviousRevision = prev.Revision
+			}
 		}
 		if op, ok, _ := unstructured.NestedMap(root.Object, "status", "operationState"); ok {
 			initiatedBy := ""

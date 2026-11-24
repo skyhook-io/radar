@@ -149,6 +149,7 @@ export interface AppHistorySummary {
 }
 
 export interface AppHistoryAnchor {
+  git?: { repoURL: string; path?: string; previousRevision?: string };
   type: "gitops" | "helm" | string;
   title: string;
   status?: string;

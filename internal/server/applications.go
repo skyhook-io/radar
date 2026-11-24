@@ -182,14 +182,15 @@ type appHistorySummary struct {
 }
 
 type appHistoryAnchor struct {
-	Type        string `json:"type"` // gitops | helm
-	Title       string `json:"title"`
-	Status      string `json:"status,omitempty"`
-	Revision    string `json:"revision,omitempty"`
-	Message     string `json:"message,omitempty"`
-	Source      string `json:"source,omitempty"`
-	InitiatedBy string `json:"initiatedBy,omitempty"`
-	Timestamp   string `json:"timestamp,omitempty"`
+	Git         *gitopsinsights.SyncGitSource `json:"git,omitempty"`
+	Type        string                        `json:"type"` // gitops | helm
+	Title       string                        `json:"title"`
+	Status      string                        `json:"status,omitempty"`
+	Revision    string                        `json:"revision,omitempty"`
+	Message     string                        `json:"message,omitempty"`
+	Source      string                        `json:"source,omitempty"`
+	InitiatedBy string                        `json:"initiatedBy,omitempty"`
+	Timestamp   string                        `json:"timestamp,omitempty"`
 }
 
 type appHistoryIncident struct {
@@ -466,6 +467,7 @@ func (s *Server) gitOpsHistoryAnchors(r *http.Request, source *appSourceRef) ([]
 		}
 		anchors = append(anchors, appHistoryAnchor{
 			Type:        recordType,
+			Git:         item.Git,
 			Title:       title,
 			Status:      status,
 			Revision:    item.Revision,

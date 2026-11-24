@@ -214,6 +214,7 @@ export function coalesceHistoryAnchors(records: AppHistoryAnchor[]): AppHistoryA
       ...existing,
       status: anchor.status ?? existing.status,
       source: existing.source ?? anchor.source,
+      git: existing.git ?? anchor.git,
       message: anchor.message ?? existing.message,
       initiatedBy: anchor.initiatedBy ?? existing.initiatedBy,
     })

@@ -3130,3 +3130,30 @@ func TestFluxHelmReleaseHistoryDistinguishesSnapshotsFromConditions(t *testing.T
 		t.Fatalf("unexpected records: %+v", got)
 	}
 }
+
+func TestBuildHistoryArgoCompareOnlyAdjacentSyncsFromSameSource(t *testing.T) {
+	entry := func(id int64, repo, path string) map[string]any {
+		return map[string]any{"id": id, "revision": fmt.Sprint(id), "source": map[string]any{"repoURL": repo, "path": path}}
+	}
+	multi := entry(6, "repo", "prod")
+	multi["sources"] = []any{map[string]any{"repoURL": "other"}}
+	items := BuildHistory(argoApp(map[string]any{"history": []any{
+		entry(2, "repo", "prod"), entry(1, "repo", "prod"), entry(4, "repo", "prod"),
+		entry(5, "other", "prod"), multi, entry(7, "repo", "prod"), entry(8, "repo", "stage"),
+	}}))
+	for _, item := range items {
+		if item.ID == "6" {
+			if item.Git != nil {
+				t.Fatal("unexpected single-source comparison for multi-source sync")
+			}
+			continue
+		}
+		want := ""
+		if item.ID == "2" {
+			want = "1"
+		}
+		if item.Git == nil || item.Git.PreviousRevision != want {
+			t.Errorf("sync %s git = %+v, want previous %q", item.ID, item.Git, want)
+		}
+	}
+}
