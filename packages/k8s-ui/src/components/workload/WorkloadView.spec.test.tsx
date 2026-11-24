@@ -206,7 +206,7 @@ it('shows a host line above every tab, in the expanded view only', () => {
   const extraTabs = [{ id: 'runs', label: 'Runs', render: () => <div>The runs</div> }]
   act(() => root.render(<WorkloadView {...props} activeTab="overview" expanded extraTabs={extraTabs} tabHeader={<div>Host line</div>} />))
   expect(host.textContent).toContain('Host line')
-  act(() => root.render(<WorkloadView {...props} activeTab={'runs' as never} expanded extraTabs={extraTabs} tabHeader={<div>Host line</div>} />))
+  act(() => root.render(<WorkloadView {...props} activeTab="runs" expanded extraTabs={extraTabs} tabHeader={<div>Host line</div>} />))
   expect(host.textContent).toContain('Host line')
   act(() => root.render(<WorkloadView {...props} expanded={false} tabHeader={<div>Host line</div>} />))
   expect(host.textContent).not.toContain('Host line')

@@ -91,11 +91,24 @@ import { WorkloadRolloutNotice } from './WorkloadRolloutNotice'
 import { isCoreBatchJob } from '../../utils/api-resources'
 import { formatRelativeAgeTime } from '../../utils/format'
 
-export type WorkloadTabType = 'overview' | 'spec' | 'topology' | 'timeline' | 'logs' | 'metrics' | 'reachability' | 'cost' | 'yaml'
-type TabType = WorkloadTabType
+const WORKLOAD_TABS = ['overview', 'spec', 'topology', 'timeline', 'logs', 'metrics', 'reachability', 'cost', 'yaml'] as const
+export type WorkloadTabType = typeof WORKLOAD_TABS[number]
+/** A built-in tab or a host-supplied tab ID. */
+export type WorkloadDetailTab = WorkloadTabType | (string & {})
+type TabType = WorkloadDetailTab
+
+function isBuiltInTab(tab: TabType): tab is WorkloadTabType {
+  return WORKLOAD_TABS.some((id) => id === tab)
+}
+
+// Existing hosts offering only built-in tabs can retain their narrower callback.
+type WorkloadTabChange = {
+  onChange(tab: WorkloadDetailTab, options?: { replace?: boolean }): void
+}['onChange']
 
 /** A host-provided tab. `after` places it behind a built-in tab; `replaces` hides that built-in tab. */
 export interface WorkloadExtraTab {
+  /** A unique ID outside the built-in tab IDs. */
   id: string
   label: string
   icon?: ReactNode
@@ -290,11 +303,10 @@ interface WorkloadViewProps {
   /** Load cluster schemas for YAML validation and completion. */
   yamlSchemaLoader?: EditableYamlViewProps['schemaLoader']
 
-  // ── Tab state (optional URL sync) ────────────────────────────────────────
-  /** Controlled active tab. If not provided, managed internally. */
-  activeTab?: TabType
-  /** Called when tab changes (for URL sync etc.) */
-  onTabChange?: (tab: TabType, opts?: { replace?: boolean }) => void
+  /** Controlled tab ID. Omit for internal selection. */
+  activeTab?: WorkloadDetailTab
+  /** Called for built-in and any host-supplied tab IDs. */
+  onTabChange?: WorkloadTabChange
 
   // ── GitOps navigation ─────────────────────────────────────────────────────
   /**
@@ -364,7 +376,7 @@ interface WorkloadViewProps {
     /** The resource's operational issues, for a summary that shows them itself. */
     leadContent?: ReactNode
   }) => ReactNode
-  /** Extra tabs for the expanded view (e.g. a domain's own sections). */
+  /** Additional tabs in the expanded view. */
   extraTabs?: WorkloadExtraTab[]
   /** Expanded view: a line under the title, above the tabs, shown on every tab. */
   subheader?: ReactNode
@@ -968,7 +980,15 @@ export function WorkloadView({
   const renderDiagnoseTabForState = resourceGone ? undefined : renderDiagnoseTab
   // A host's summary, tabs and subheader can hold actions on the live object.
   const renderSummaryForState = resourceGone ? undefined : renderSummary
-  const extraTabsForState = resourceGone ? undefined : extraTabs
+  const extraTabsForState = useMemo(() => {
+    if (resourceGone || !extraTabs) return undefined
+    const seen = new Set<string>(WORKLOAD_TABS)
+    return extraTabs.filter(({ id }) => {
+      if (!id || seen.has(id)) return false
+      seen.add(id)
+      return true
+    })
+  }, [extraTabs, resourceGone])
   // A remount closes any dialog the bar had open: once its actions are gone,
   // a confirm button left on screen would do nothing.
   const actionsBarKey = resourceGone ? 'gone' : 'live'
@@ -1052,20 +1072,20 @@ export function WorkloadView({
     { id: 'cost', label: 'Cost', icon: <Coins className="w-4 h-4" />, hidden: !costTabVisible },
     { id: 'yaml', label: 'YAML', icon: <FileText className="w-4 h-4" /> },
   ]
-  const shownTabs = expanded && hiddenTabs?.length ? tabs.map((t) => (hiddenTabs.includes(t.id) ? { ...t, hidden: true } : t)) : tabs
+  const shownTabs = expanded && hiddenTabs?.length ? tabs.map((t) => (hiddenTabs.some((id) => id === t.id) ? { ...t, hidden: true } : t)) : tabs
   const allTabs = orderById(mergeExtraTabs(shownTabs, expanded ? extraTabsForState : undefined), expanded ? tabOrder : undefined)
   const tabIsVisible = (id: TabType) => allTabs.some((tab) => tab.id === id && !tab.hidden)
   const requestedTabAvailable = tabIsVisible(requestedTab)
   // Overview, unless the host left it out: then the first tab shown.
-  const fallbackTab = (allTabs.find((tab) => tab.id === 'overview' && !tab.hidden) ?? allTabs.find((tab) => !tab.hidden))?.id as TabType ?? 'overview'
+  const fallbackTab = (allTabs.find((tab) => tab.id === 'overview' && !tab.hidden) ?? allTabs.find((tab) => !tab.hidden))?.id ?? ''
   const effectiveTab: TabType = requestedTabAvailable ? requestedTab : fallbackTab
   const activeExtraTab = expanded ? extraTabsForState?.find((x) => x.id === effectiveTab) : undefined
   const shouldCommitFallback =
     requestedTab !== fallbackTab &&
     !requestedTabAvailable &&
     (
-      (expanded && !!hiddenTabs?.includes(requestedTab)) ||
-      (expanded && !tabs.some((tab) => tab.id === requestedTab)) ||
+      (expanded && hiddenTabs?.some((tab) => tab === requestedTab)) ||
+      (expanded && !resourceLoading && !isBuiltInTab(requestedTab)) ||
       (requestedTab === 'spec' && !!resource && !resourceLoading && !expandedSummary) ||
       (requestedTab === 'topology' && topologyTabHidden) ||
       (requestedTab === 'metrics' && (!renderMetricsTab || (!!resource && !resourceLoading && !showMetricsTab))) ||
@@ -1073,7 +1093,7 @@ export function WorkloadView({
       (requestedTab === 'logs' && logsFallbackReady)
     )
   useEffect(() => {
-    if (!shouldCommitFallback) return
+    if (!fallbackTab || !shouldCommitFallback) return
     if (controlledTab === undefined) setInternalTab(fallbackTab)
     onTabChange?.(fallbackTab, { replace: true })
   }, [controlledTab, onTabChange, shouldCommitFallback, fallbackTab])
@@ -1472,14 +1492,14 @@ export function WorkloadView({
         {deletedNotice && <div className="shrink-0 px-4 pt-4">{deletedNotice}</div>}
         {expanded && tabHeader && <div className="shrink-0 px-4 pt-4 empty:hidden">{tabHeader}</div>}
         {/* On the Overview only when its stats strip, which says the same, is left out. */}
-        {!resourceGone && (effectiveTab !== 'overview' || (expanded && hideOverviewStats)) && rolloutActivity && (rolloutActivity.phase !== 'idle' || recentImageSave) && (
+        {!resourceGone && (effectiveTab !== 'overview' || (expanded && hideOverviewStats && !expandedSummary && !expandedOverview)) && rolloutActivity && (rolloutActivity.phase !== 'idle' || recentImageSave) && (
           <div className="shrink-0 px-4 pt-4">
             <WorkloadRolloutNotice activity={rolloutActivity} recentImageSave={recentImageSave} />
           </div>
         )}
         <div className="min-h-0 flex-1">
         {/* Keyed by tab: another host tab opens at its top, not at the scroll offset the last one was left at. */}
-        {activeExtraTab && <div key={activeExtraTab.id} className="h-full min-h-0 overflow-y-auto">{activeExtraTab.render()}</div>}
+        {activeExtraTab && <div key={JSON.stringify([selectionIdentity, selectionUID, activeExtraTab.id])} className="h-full min-h-0 overflow-y-auto">{activeExtraTab.render()}</div>}
         {effectiveTab === 'overview' && expandedSummary ? (
           <div className="h-full min-h-0 overflow-y-auto">{expandedSummary}</div>
         ) : effectiveTab === 'overview' && expandedOverview ? (
@@ -2624,11 +2644,11 @@ function WorkloadOverviewTab({
         {leadContent}
         {introContent}
 
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-4">
+        {!hideStats && <div className="grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-4">
           {summaryMetrics.map((metric) => (
             <SummaryMetric key={metric.label} {...metric} />
           ))}
-        </div>
+        </div>}
 
         {showServingPath && (
           <ServingConfigurationCard
@@ -3505,7 +3525,7 @@ function PodsListContent({
         <div className="text-sm text-theme-text-tertiary">Loading pod readiness…</div>
       ) : workloadPodsError ? (
         <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-600 dark:text-amber-300">
-          Pod readiness unavailable. Use Logs or Timeline for deeper inspection.
+          Pod readiness unavailable.
         </div>
       ) : workloadPods ? (
         visiblePods.length > 0 ? (
@@ -4420,10 +4440,10 @@ function mergeAndRankEvents(events: TimelineEvent[], updates: TimelineEvent[]): 
 
 function mergeExtraTabs(tabs: DetailShellTab<TabType>[], extra: WorkloadExtraTab[] | undefined): DetailShellTab<TabType>[] {
   if (!extra || extra.length === 0) return tabs
-  const replaced = new Set(extra.map((x) => x.replaces).filter(Boolean))
+  const replaced = new Set<TabType | undefined>(extra.map((x) => x.replaces))
   const out = tabs.map((t) => (replaced.has(t.id) ? { ...t, hidden: true } : t))
   for (const x of extra) {
-    const tab: DetailShellTab<TabType> = { id: x.id as TabType, label: x.label, icon: x.icon, badge: x.badge }
+    const tab: DetailShellTab<TabType> = { id: x.id, label: x.label, icon: x.icon, badge: x.badge }
     const anchor = x.after ?? x.replaces
     const idx = anchor ? out.findIndex((t) => t.id === anchor) : -1
     if (idx >= 0) out.splice(idx + 1, 0, tab)
