@@ -25,6 +25,27 @@
 {{- end }}
 {{- end }}
 {{- $basePath := include "radar.basePath" . -}}
+{{- $publicEnrollment := (.Values.cloud.enrollment.publicKey | default dict).existingSecret -}}
+{{- if $publicEnrollment }}
+{{- if not .Values.cloud.enabled }}
+{{- fail "cloud.enabled must be true for public-key enrollment" }}
+{{- end }}
+{{- if or .Values.cloud.token .Values.cloud.existingSecret .Values.cloud.url .Values.cloud.enrollment.key .Values.cloud.enrollment.existingSecret }}
+{{- fail "public-key enrollment cannot be combined with cloud.url, cloud.token, cloud.existingSecret or enrollment secrets" }}
+{{- end }}
+{{- if not .Values.cloud.hubURL }}
+{{- fail "cloud.hubURL is required for public-key enrollment" }}
+{{- end }}
+{{- if not (regexMatch "^[A-Za-z0-9_-]{1,128}$" (toString .Values.cloud.enrollment.organization)) }}
+{{- fail "cloud.enrollment.organization must be the organization ID from Hub setup, or self-hosted for a configured install public key" }}
+{{- end }}
+{{- $tag := .Values.image.tag | default .Chart.AppVersion | toString }}
+{{- if and (regexMatch "^v?[0-9]+\\.[0-9]+\\.[0-9]+" $tag) (ne $tag "0.0.0-dev") (semverCompare "<1.20.3-0" $tag) }}
+{{- fail (printf "public-key enrollment requires a signing-capable Radar release (candidate 1.20.3 or later); image.tag resolves to %s" $tag) }}
+{{- end }}
+{{- else if .Values.cloud.enrollment.organization }}
+{{- fail "cloud.enrollment.organization requires cloud.enrollment.publicKey.existingSecret" }}
+{{- end }}
 {{- $enroll := include "radar.cloudEnrollmentMode" . | eq "true" -}}
 {{- $cloudCA := and $enroll (not (empty .Values.cloud.caBundle)) -}}
 {{- if $enroll }}
@@ -297,7 +318,12 @@ spec:
             {{- end }}
             {{- if $enroll }}
             - {{ printf "--cloud-hub-url=%s" .Values.cloud.hubURL | quote }}
+            {{- if $publicEnrollment }}
+            - --cloud-enrollment-private-key-file=/etc/radar/cloud-enrollment/private-key
+            - {{ printf "--cloud-enrollment-organization=%s" .Values.cloud.enrollment.organization | quote }}
+            {{- else }}
             - --cloud-enrollment-key-file=/etc/radar/cloud-enrollment/key
+            {{- end }}
             {{- with .Values.cloud.clusterName }}
             - {{ printf "--cluster-name=%s" . | quote }}
             {{- end }}
@@ -546,10 +572,18 @@ spec:
         {{- if $enroll }}
         - name: cloud-enrollment-key
           secret:
+            {{- if $publicEnrollment }}
+            secretName: {{ $publicEnrollment | quote }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.cloud.enrollment.publicKey.existingSecretKey | default "private-key" | quote }}
+                path: private-key
+            {{- else }}
             secretName: {{ include "radar.cloudEnrollmentKeySecretName" . }}
             items:
               - key: {{ ternary (.Values.cloud.enrollment.existingSecretKey | default "key") "key" (not (empty .Values.cloud.enrollment.existingSecret)) }}
                 path: key
+            {{- end }}
         {{- end }}
         {{- if $cloudCA }}
         - name: cloud-ca

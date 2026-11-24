@@ -38,17 +38,21 @@ type EnrollRequest struct {
 // EnrollResult is a successful join: the cluster's token for this run and
 // where to open its tunnel.
 type EnrollResult struct {
-	ClusterID string
-	Token     string
-	AgentURL  string
+	ClusterID        string
+	Token            string
+	AgentURL         string
+	OrganizationID   string
+	OrganizationName string
 }
 
 type enrollResponse struct {
-	ClusterID string `json:"cluster_id"`
-	Token     string `json:"token"`
-	AgentURL  string `json:"agent_url"`
-	Error     string `json:"error"`
-	Message   string `json:"message"`
+	ClusterID        string `json:"cluster_id"`
+	Token            string `json:"token"`
+	AgentURL         string `json:"agent_url"`
+	Error            string `json:"error"`
+	Message          string `json:"message"`
+	OrganizationID   string `json:"org_id"`
+	OrganizationName string `json:"org_name"`
 }
 
 // EnrollError is the Hub answering an enroll request with anything but a join.
@@ -75,9 +79,11 @@ func (e *EnrollError) Error() string {
 
 // EnrollClient calls a Hub's enroll endpoint with the key in KeyFile.
 type EnrollClient struct {
-	HubOrigin string
-	KeyFile   string
-	HTTP      *http.Client
+	HubOrigin      string
+	KeyFile        string
+	PrivateKeyFile string
+	Organization   string
+	HTTP           *http.Client
 }
 
 // NewEnrollClient builds a client for hubOrigin. A nil ca means the system
@@ -119,28 +125,32 @@ func ReadEnrollmentKey(path string) (string, error) {
 // with its existing entry and a new token, so a retry after a lost response
 // lands on the same entry.
 func (c *EnrollClient) Enroll(ctx context.Context, req EnrollRequest) (*EnrollResult, error) {
-	key, err := ReadEnrollmentKey(c.KeyFile)
-	if err != nil {
-		return nil, err
-	}
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
+	}
+	if len(body) > maxEnrollBodyBytes {
+		return nil, errors.New("enrollment request exceeds 8 KiB")
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.HubOrigin+enrollPath, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+key)
+	var authorization string
+	if c.PrivateKeyFile != "" {
+		authorization, err = c.signedAuthorization(ctx, body)
+	} else {
+		var key string
+		key, err = ReadEnrollmentKey(c.KeyFile)
+		authorization = "Bearer " + key
+	}
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Authorization", authorization)
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	// Never follow a redirect: it could carry the key somewhere else,
-	// including to plain HTTP.
-	client := *c.HTTP
-	client.CheckRedirect = func(*http.Request, []*http.Request) error {
-		return errors.New("Hub API redirects are not allowed")
-	}
-	resp, err := client.Do(httpReq)
+	resp, err := c.noRedirectClient().Do(httpReq)
 	if err != nil {
 		return nil, &HubUnreachableError{HubBase: c.HubOrigin, Err: err}
 	}
@@ -163,6 +173,10 @@ func (c *EnrollClient) Enroll(ctx context.Context, req EnrollRequest) (*EnrollRe
 			e.Code = truncateRunes(sanitizeConnectErrorText(parsed.Error), 64)
 			e.Message = truncateRunes(sanitizeConnectErrorText(parsed.Message), maxEnrollMessageRunes)
 		}
+		if c.PrivateKeyFile != "" && resp.StatusCode == http.StatusUnauthorized && (e.Code == "" || e.Code == "invalid_proof" || e.Code == "key_unknown") {
+			e.Code = "invalid_proof"
+			e.Message = "Hub rejected this enrollment proof. Check the registered public key, organization and Hub rollout."
+		}
 		return nil, e
 	}
 	if jsonErr != nil {
@@ -174,7 +188,21 @@ func (c *EnrollClient) Enroll(ctx context.Context, req EnrollRequest) (*EnrollRe
 	if err := ValidateWebSocketURL(parsed.AgentURL); err != nil {
 		return nil, fmt.Errorf("enroll: Hub returned an unusable agent_url: %w", err)
 	}
-	return &EnrollResult{ClusterID: parsed.ClusterID, Token: parsed.Token, AgentURL: parsed.AgentURL}, nil
+	if c.PrivateKeyFile != "" {
+		if ValidateEnrollmentOrganization(parsed.OrganizationID) != nil || (c.Organization != "self-hosted" && parsed.OrganizationID != c.Organization) {
+			return nil, errors.New("Hub enrollment response does not match the configured organization")
+		}
+	}
+	return &EnrollResult{ClusterID: parsed.ClusterID, Token: parsed.Token, AgentURL: parsed.AgentURL,
+		OrganizationID: parsed.OrganizationID, OrganizationName: truncateRunes(sanitizeConnectErrorText(parsed.OrganizationName), 80)}, nil
+}
+
+func (c *EnrollClient) noRedirectClient() *http.Client {
+	client := *c.HTTP
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return errors.New("Hub API redirects are not allowed")
+	}
+	return &client
 }
 
 // maxEnrollMessageRunes bounds a Hub message kept for logs.

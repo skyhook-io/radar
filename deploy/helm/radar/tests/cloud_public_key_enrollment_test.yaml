@@ -1,0 +1,124 @@
+suite: public-key enrollment
+templates:
+  - deployment.yaml
+  - cloud-enrollment.yaml
+release:
+  name: radar
+  namespace: radar
+set:
+  image.tag: 1.20.3-rc.1
+  cloud.enabled: true
+  cloud.hubURL: https://hub.example.com
+  cloud.enrollment.organization: org_customer
+  cloud.enrollment.publicKey.existingSecret: radar-private-key
+tests:
+  - it: uses a mounted private key and explicit target organization without a bearer key
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --cloud-enrollment-private-key-file=/etc/radar/cloud-enrollment/private-key
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --cloud-enrollment-organization=org_customer
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --cloud-enrollment-key-file=/etc/radar/cloud-enrollment/key
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: cloud-enrollment-key
+            mountPath: /etc/radar/cloud-enrollment
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: cloud-enrollment-key
+            secret:
+              secretName: radar-private-key
+              defaultMode: 288
+              items:
+                - key: private-key
+                  path: private-key
+      - equal:
+          path: spec.template.spec.securityContext.fsGroup
+          value: 65532
+  - it: never generates a private key Secret from values
+    template: cloud-enrollment.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: supports a caller-managed Secret key name
+    template: deployment.yaml
+    set:
+      cloud.enrollment.publicKey.existingSecretKey: enrollment.pem
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: cloud-enrollment-key
+            secret:
+              secretName: radar-private-key
+              defaultMode: 288
+              items:
+                - key: enrollment.pem
+                  path: private-key
+  - it: rejects a bearer token instead of silently downgrading
+    template: deployment.yaml
+    set:
+      cloud.token: rhc_legacy
+    asserts:
+      - failedTemplate:
+          errorMessage: public-key enrollment cannot be combined with cloud.url, cloud.token, cloud.existingSecret or enrollment secrets
+  - it: rejects a bearer token Secret
+    template: deployment.yaml
+    set:
+      cloud.existingSecret: legacy-token
+    asserts:
+      - failedTemplate:
+          errorMessage: public-key enrollment cannot be combined with cloud.url, cloud.token, cloud.existingSecret or enrollment secrets
+  - it: rejects a shared enrollment secret
+    template: deployment.yaml
+    set:
+      cloud.enrollment.existingSecret: shared-key
+    asserts:
+      - failedTemplate:
+          errorMessage: public-key enrollment cannot be combined with cloud.url, cloud.token, cloud.existingSecret or enrollment secrets
+  - it: requires an intended organization
+    template: deployment.yaml
+    set:
+      cloud.enrollment.organization: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: cloud.enrollment.organization must be the organization ID from Hub setup, or self-hosted for a configured install public key
+  - it: requires a Hub address
+    template: deployment.yaml
+    set:
+      cloud.hubURL: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: cloud.hubURL is required for public-key enrollment
+  - it: refuses TLS verification bypass
+    template: deployment.yaml
+    set:
+      cloud.insecureSkipVerify: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "cloud.insecureSkipVerify cannot be used with cloud.enrollment: the enrollment key would be sent to an unverified server. Give the Hub's CA with cloud.caBundle instead"
+  - it: refuses a published pre-feature agent image
+    template: deployment.yaml
+    set:
+      image.tag: 1.20.2
+    asserts:
+      - failedTemplate:
+          errorMessage: public-key enrollment requires a signing-capable Radar release (candidate 1.20.3 or later); image.tag resolves to 1.20.2
+  - it: keeps the one-connection-per-cluster replica guard
+    template: deployment.yaml
+    set:
+      replicaCount: 2
+    asserts:
+      - failedTemplate:
+          errorMessage: "replicaCount must be 1 when Radar joins with cloud.enrollment: the Hub keeps one connection per cluster, so any other replica would only wait for it"

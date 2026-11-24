@@ -12,8 +12,14 @@
 {{- $routed := or .Values.ingress.enabled .Values.httpRoute.enabled -}}
 {{- $proxyAuth := printf "Authentication: proxy (auth.mode=proxy). Users authenticate through the proxy,\nwhich forwards their identity to Radar via HTTP headers. The auth proxy should\nbe the only path to Radar.\nSetup: %s" $authDocs -}}
 {{- if include "radar.cloudEnrollmentMode" . | eq "true" }}
+{{- if (.Values.cloud.enrollment.publicKey | default dict).existingSecret }}
+The Radar pod proves ownership of its enrollment private key to Radar Hub
+(cloud.hubURL) for the configured organization. The private key stays in its Secret.
+{{- else }}
 The Radar pod joins the Radar Hub (cloud.hubURL) with the enrollment key every time it
-starts. The pod's own listener serves only /api/health; Radar is served over the Cloud tunnel.
+starts.
+{{- end }}
+The pod's own listener serves only /api/health; Radar is served over the Cloud tunnel.
 
 Its log says whether it joined and, if not, why. Radar keeps trying on its own:
 

@@ -1,0 +1,11 @@
+{
+  "Seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "PublicKey": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+  "Origin": "https://hub.example.com",
+  "Organization": "org_customer",
+  "Selector": "rhpk_Vkdap1RjR0wChd9dvyvKtz2mUTWIOem3dIGy6rEHcIw",
+  "Challenge": "eyJ2ZXJzaW9uIjoxLCJpZCI6IklDRWlJeVFsSmljb0tTb3JMQzB1THpBeE1qTTBOVFkzT0RrNk96dzlQajgiLCJpc3N1ZWRfYXQiOjE3MDAwMDAwMDAsImV4cGlyZXNfYXQiOjE3MDAwMDAwNjB9.QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8",
+  "Body": "{\"agent_uid\":\"0b6c7c43-6f0e-4a8e-9d6c-5d2f4f6b7a10\",\"namespace\":\"radar\",\"release\":\"radar\",\"name\":\"prod\",\"name_source\":\"values\"}",
+  "Message": "radar-hub-enrollment-v1\nhttps://hub.example.com\norg_customer\nrhpk_Vkdap1RjR0wChd9dvyvKtz2mUTWIOem3dIGy6rEHcIw\neyJ2ZXJzaW9uIjoxLCJpZCI6IklDRWlJeVFsSmljb0tTb3JMQzB1THpBeE1qTTBOVFkzT0RrNk96dzlQajgiLCJpc3N1ZWRfYXQiOjE3MDAwMDAwMDAsImV4cGlyZXNfYXQiOjE3MDAwMDAwNjB9.QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8\nJYqNDMaOJrVoGgCIHjQEtQo_mPx_FR_uM4sKZwmOxUQ",
+  "Signature": "e328pLtwXdlgB_RIiP2KyuQ7FN961Lpp5QIbP46XX1OzdVrRPWzd6_yFrFidX3WHYdEVLKkJ4zzu2PuxgNj8Aw"
+}
