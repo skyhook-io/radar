@@ -887,7 +887,10 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Delete("/prometheus/rightsizing/scan/{scanId}", s.handleRightsizingScan)
 			prometheuspkg.RegisterRoutes(r)
 			r.Get("/metrics/datadog/agent", s.handleDatadogAgentPresence)
+			r.Get("/metrics/openobserve/collector", s.handleOpenObserveCollectorPresence)
 			r.Get("/agent/metrics-cluster-identity", s.handleMetricsClusterIdentity)
+			r.Get("/agent/metrics-pod-sample", s.handleMetricsPodSample)
+			r.Post("/agent/metrics-source/refresh", s.handleMetricsSourceRefresh)
 			r.Get("/agent/workload-rightsizing-inventory", s.handleWorkloadRightsizingInventory)
 			r.Get("/agent/workload-rightsizing-scope/{kind}/{namespace}/{name}", s.handleWorkloadRightsizingScope)
 			r.Get("/agent/workload-metrics-scope/{kind}/{namespace}/{name}", s.handleWorkloadMetricsScope)
@@ -1596,6 +1599,8 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		CronJobTriggerJobName:        true,
 		WorkflowStop:                 true,
 		WorkflowTemplateSubmit:       true,
+
+		OpenObserveCollectorPresence: true,
 	}
 }
 
@@ -6318,6 +6323,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	tokenSet := file.ArgoCDToken != ""
 	file.ArgoCDToken = ""
+	redactOpenObserveToken(&file)
 	// When the integration is environment-managed, the on-disk URL/TLS are ignored;
 	// surface the effective env values (and the token-set signal) so the read-only
 	// Settings card shows the real endpoint rather than stale disk config. When env
@@ -6370,6 +6376,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		effective.PrometheusHeaders = nil
 		effective.KubecostAPIKey = ""
 		effective.ArgoCDToken = ""
+		redactOpenObserveToken(&effective)
 		resp.Effective = effective
 	}
 	resp.Effective.PrometheusURL = currentURL
@@ -6446,6 +6453,7 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 			kubecostAPIKeyContext    string
 			kubecostClusterID        string
 			kubecostClusterIDContext string
+			openObserve              *config.OpenObserveConfig
 		}{
 			promHeaders:              c.PrometheusHeaders,
 			promHeadersEnv:           c.PrometheusHeadersFromEnv,
@@ -6461,6 +6469,9 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 			kubecostAPIKeyContext:    c.KubecostAPIKeyContext,
 			kubecostClusterID:        c.KubecostClusterID,
 			kubecostClusterIDContext: c.KubecostClusterIDContext,
+			// Owned by `radar openobserve`; the Settings dialog doesn't edit
+			// it, and GET blanks its token.
+			openObserve: c.OpenObserve,
 		}
 		*c = updated
 		c.PrometheusHeaders = preserved.promHeaders
@@ -6477,6 +6488,7 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		c.KubecostAPIKeyContext = preserved.kubecostAPIKeyContext
 		c.KubecostClusterID = preserved.kubecostClusterID
 		c.KubecostClusterIDContext = preserved.kubecostClusterIDContext
+		c.OpenObserve = preserved.openObserve
 	})
 	if err != nil {
 		log.Printf("[config] Failed to save config: %v", err)
@@ -6489,7 +6501,20 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	result.PrometheusHeaders = nil
 	result.ArgoCDToken = ""
 	result.KubecostAPIKey = ""
+	redactOpenObserveToken(&result)
 	s.writeJSON(w, result)
+}
+
+// redactOpenObserveToken blanks the saved OpenObserve token in a config about
+// to be served, on a copy so the loaded config is left alone. TokenEnv names
+// a variable, not a secret, and stays.
+func redactOpenObserveToken(c *config.Config) {
+	if c.OpenObserve == nil {
+		return
+	}
+	oc := c.OpenObserve.Clone()
+	oc.Token = ""
+	c.OpenObserve = &oc
 }
 
 // handleApplyPrometheusURL re-points the running Prometheus client at a new URL

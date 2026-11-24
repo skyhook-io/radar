@@ -807,6 +807,15 @@ func promQueryError(ctx context.Context, query string, timeout time.Duration, er
 		return fmt.Errorf("prometheus query timed out after %s — narrow the time window, add aggregation (sum/avg by), or wrap with topk(5, ...); raise timeout (max 180) only as a last resort: %s",
 			timeout, query)
 	}
+	if msg, ok := prometheus.QueryRefusal(err); ok {
+		var httpErr *prom.HTTPError
+		if errors.As(err, &httpErr) {
+			if hint := promQLHint(string(httpErr.Body)); hint != "" {
+				return fmt.Errorf("%s — hint: %s", msg, hint)
+			}
+		}
+		return errors.New(msg)
+	}
 	if e := promHTTPError(err, "query", query); e != nil {
 		var httpErr *prom.HTTPError
 		if errors.As(err, &httpErr) && (httpErr.StatusCode == 400 || httpErr.StatusCode == 422) {
@@ -824,6 +833,9 @@ func promQueryError(ctx context.Context, query string, timeout time.Duration, er
 func promDiscoverError(ctx context.Context, match string, err error) error {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return fmt.Errorf("prometheus discovery timed out after %s — add or tighten the match selector to reduce the series scanned", promQueryTimeout)
+	}
+	if msg, ok := prometheus.QueryRefusal(err); ok {
+		return errors.New(msg)
 	}
 	if e := promHTTPError(err, "match", match); e != nil {
 		return e

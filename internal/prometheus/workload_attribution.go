@@ -35,7 +35,7 @@ func identitySelection(namespace string, pods []prom.WorkloadPodIdentity) prom.P
 
 var workloadAttributionProbeBudget = 8 * time.Second
 
-var clusterIdentityLabels = []string{"cluster", "cluster_name", "k8s_cluster_name", "kubernetes_cluster", "cluster_id"}
+var clusterIdentityLabels = []string{"cluster", "cluster_name", "k8s_cluster_name", "kubernetes_cluster", "cluster_id", "radar_cluster_uid", "k8s_cluster"}
 
 // Project and location qualify cluster names that can be reused across managed clusters.
 var clusterQualifierLabels = []string{"project_id", "location"}
@@ -466,10 +466,7 @@ func (c *Client) automaticWorkloadAttributions(scope PodScope) (workloadAttribut
 			c.mu.RLock()
 			var evidenceClient *prom.Client
 			if c.baseURL != "" && c.discoveryGen == entry.generation && !c.retired {
-				tr := prom.NewHTTPTransport(c.baseURL, c.basePath, c.httpClient)
-				tr.Headers = copyHeaders(c.headers)
-				tr.MaxResponseBytes = 4 << 20
-				evidenceClient = prom.NewClient(tr)
+				evidenceClient = prom.NewClient(c.newTransportLocked(c.baseURL, c.basePath, c.httpClient, 4<<20))
 			}
 			c.mu.RUnlock()
 			if evidenceClient != nil {

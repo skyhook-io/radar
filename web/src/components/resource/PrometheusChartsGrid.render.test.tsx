@@ -186,6 +186,15 @@ describe('Name-matched chart captions follow the charts\' cluster scope', () => 
     expect(html).toContain('Pod-name matched · operator declared single-cluster')
     expect(html).not.toContain('may include another cluster')
   })
+  it('names OpenObserve, not an operator, when Radar reads metrics through it', () => {
+    resourceMetrics = scoped('single_cluster_asserted', 'Scoped to this cluster through OpenObserve (matched by confirmed name).')
+    const html = renderText()
+    expect(html).toContain('Basic CPU / memory · scoped through OpenObserve')
+    expect(html).toContain('Pod-name matched · scoped through OpenObserve')
+    expect(html).toContain('kept to this cluster through OpenObserve')
+    expect(html).not.toContain('operator declared')
+    expect(html).not.toContain('may include another cluster')
+  })
   it.each([['absent', drawnMetrics], ['unlabeled', scoped('unlabeled')]])('keeps today\'s caveat when clusterScope is %s', (_label, metrics) => {
     resourceMetrics = metrics
     const html = renderText()

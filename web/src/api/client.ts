@@ -4209,6 +4209,26 @@ export interface PrometheusStatus {
   };
   contextName?: string;
   error?: string;
+  /** Set when metrics come from a backend other than plain Prometheus. */
+  source?: MetricsSource;
+}
+
+/**
+ * Where metrics come from when not a plain Prometheus. With `matchedBy`
+ * unset and `unavailable` false, the source is not serving this context and
+ * `error`/`warning` explain why (the cluster's own Prometheus, if any, serves).
+ */
+export interface MetricsSource {
+  kind: "openobserve";
+  via?: "local" | "hub";
+  matchedBy?: "id" | "name";
+  clusterLabel?: { name: string; value: string };
+  dialect?: "standard" | "collector";
+  warning?: string;
+  versionWarning?: string;
+  missingFamilies?: string[];
+  unavailable?: boolean;
+  error?: string;
 }
 
 // Time-series sample types live in @skyhook-io/k8s-ui (shared with library

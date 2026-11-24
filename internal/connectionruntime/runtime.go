@@ -13,6 +13,7 @@ import (
 	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/opencost"
+	"github.com/skyhook-io/radar/internal/openobserve"
 	"github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/traffic"
 	"github.com/skyhook-io/radar/pkg/prom"
@@ -112,6 +113,7 @@ func (r *Runtime) activate(target k8s.ProfileTarget, selected map[config.Integra
 		switch kind {
 		case config.IntegrationMetrics:
 			if s.Err != nil {
+				openobserve.Default.Clear()
 				metricsChanged = prometheus.GetClient() != nil
 				prometheus.Retire()
 				traffic.SetMetricsConfig("", nil)
@@ -120,10 +122,20 @@ func (r *Runtime) activate(target k8s.ProfileTarget, selected map[config.Integra
 					conn := k8s.Current()
 					prometheus.Initialize(conn.ClientInterface(), conn.Config(), conn.ContextName())
 				}
+				// Precedence: a URL set by hand for this context (saved or
+				// --prometheus-url), then the shared OpenObserve connection,
+				// then discovery.
+				handSet := s.Settings.Prometheus.URL != ""
+				if handSet {
+					openobserve.Default.Clear()
+				}
 				url, headers := prometheus.CurrentConfig()
 				metricsChanged = url != strings.TrimRight(s.Settings.Prometheus.URL, "/") || !maps.Equal(headers, s.Settings.Prometheus.Headers)
 				if metricsChanged {
 					prometheus.Configure(s.Settings.Prometheus.URL, s.Settings.Prometheus.Headers)
+				}
+				if !handSet {
+					openobserve.Default.Apply(openobserve.Target{Context: target.Context, Fingerprint: target.Fingerprint, Client: k8s.Current().ClientInterface()})
 				}
 				traffic.SetMetricsConfig(s.Settings.Prometheus.URL, s.Settings.Prometheus.Headers)
 			}

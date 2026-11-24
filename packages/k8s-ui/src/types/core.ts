@@ -184,6 +184,7 @@ export interface FeatureCapabilities {
   helmInventory?: boolean
   datadogRightsizing?: boolean
   datadogAgentPresence?: boolean
+  openobserveCollectorPresence?: boolean
   resourceReadCoverage?: boolean
   searchCoverage?: boolean
  applicationEvidence?: boolean

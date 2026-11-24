@@ -277,6 +277,9 @@ type FeatureCapabilities struct {
 	WorkflowStop bool `json:"workflowStop"`
 	// POST /api/workflowtemplates/{namespace}/{name}/submit
 	WorkflowTemplateSubmit bool `json:"workflowTemplateSubmit"`
+
+	// GET /api/metrics/openobserve/collector.
+	OpenObserveCollectorPresence bool `json:"openobserveCollectorPresence"`
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can

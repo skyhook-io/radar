@@ -661,6 +661,10 @@ func handleRawQuery(w http.ResponseWriter, r *http.Request) {
 	if queryType == "instant" {
 		result, err := client.Query(r.Context(), query)
 		if err != nil {
+			if msg, ok := QueryRefusal(err); ok {
+				writeError(w, http.StatusBadRequest, msg)
+				return
+			}
 			log.Printf("[prometheus] Raw instant query failed: %v", err)
 			errorlog.Record("prometheus", "error", "raw instant query failed: %v", err)
 			writeError(w, http.StatusBadGateway, "Prometheus query failed: "+err.Error())
@@ -676,12 +680,31 @@ func handleRawQuery(w http.ResponseWriter, r *http.Request) {
 
 	result, err := client.QueryRange(r.Context(), query, start, end, step)
 	if err != nil {
+		if msg, ok := QueryRefusal(err); ok {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
 		log.Printf("[prometheus] Raw range query failed: %v", err)
 		errorlog.Record("prometheus", "error", "raw range query failed: %v", err)
 		writeError(w, http.StatusBadGateway, "Prometheus query failed: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, boundRawResult(result, query, true))
+}
+
+// QueryRefusal reports whether err is a query refused as bad input (by
+// OpenObserve, Radar Hub's relay or the scoping in front of OpenObserve), and
+// the message to show the caller. A refusal is the caller's error, not a
+// failed backend.
+func QueryRefusal(err error) (string, bool) {
+	if !errors.Is(err, prom.ErrQueryRefused) {
+		return "", false
+	}
+	msg := strings.TrimPrefix(err.Error(), "openobserve: ")
+	if msg == "" {
+		return "The query was refused", true
+	}
+	return strings.ToUpper(msg[:1]) + msg[1:], true
 }
 
 func boundRawResult(result *prom.QueryResult, query string, isRange bool) RawQueryResponse {

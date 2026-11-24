@@ -933,6 +933,91 @@ or an AI agent, still open port-forwards.
 A placeholder `--prometheus-url` does not do the same job: it applies only to the
 launch context, so switching to another context goes back to discovery.
 
+### OpenObserve (local)
+
+Local Radar can read every context's metrics from one OpenObserve organization
+that many clusters write to. Save the connection once:
+
+```bash
+radar openobserve connect --url https://openobserve.example.com --org default \
+  --user radar@example.com --token-env OPENOBSERVE_TOKEN [--context NAME] [--yes]
+radar openobserve status        # the connection (never the token) and this context's match
+radar openobserve disconnect    # removes the connection and every match
+```
+
+`connect` saves an `openobserve` entry in `~/.radar/config.json` (mode 0600),
+tests it, and matches one context (the current one unless `--context` is
+given). Run it again with `--context` for other contexts; the saved connection
+is reused. Other flags: `--token` (stored in plain text), `--ca-cert FILE` (an
+extra CA bundle to trust), `--cluster-label NAME` (a cluster label Radar
+doesn't already know). `--token-env` wins over a saved token when the variable
+is set and not empty.
+
+```json
+"openobserve": {
+  "baseUrl": "https://openobserve.example.com", "org": "default", "user": "radar@example.com",
+  "tokenEnv": "OPENOBSERVE_TOKEN", "caCertFile": "/path/ca.pem", "clusterLabel": "",
+  "matches": { "<kube-system namespace UID>": { "label": "cluster", "value": "prod-eu", "by": "name", "confirmedAt": "2026-11-23T10:00:00Z" } }
+}
+```
+
+**Matching.** Radar finds each cluster by its kube-system namespace UID. It
+looks for that UID in a `radar_cluster_uid` label (Prometheus remote write) or
+in the OpenObserve collector's `k8s_cluster_uid`. When neither is there,
+`connect` looks up a sample of the cluster's running Pods, suggests the cluster
+name they are stored under and asks you to confirm it (`--yes` accepts it). Only
+a confirmed name is ever used, and never the shared default name `cluster1`. A
+name match carries a standing warning: if another cluster writes under the same
+name, Radar can't tell them apart. ID matches are found again on every
+activation; `matches` also keeps them (`"by": "id"`) so that Radar knows the
+cluster is in OpenObserve while OpenObserve can't be reached.
+
+Add the ID label so the match can't break:
+
+- Prometheus remote write, in `prometheus.yml`'s `global` section:
+  `external_labels: { radar_cluster_uid: "<kube-system UID>" }`
+  (kube-prometheus-stack: `prometheus.prometheusSpec.externalLabels`).
+  `kubectl get namespace kube-system -o jsonpath='{.metadata.uid}'` prints the UID.
+- OpenObserve collector: its agent already sends the UID. Give each cluster a
+  unique cluster name instead of `cluster1` (the `k8s.cluster.name` resource
+  attribute); until then Radar refuses the metrics that carry only the name
+  (kube-state metrics such as restarts and HPA, and scraped disk metrics).
+
+**What changes.** For a matched context the normal metrics views, rightsizing
+and the AI's `query_prometheus` read OpenObserve. Every query gets this
+cluster's filter added, including free-form PromQL (a filter on the cluster
+label in the query is kept alongside it, so it can only narrow the answer:
+`radar_cluster_uid!="<this cluster>"` returns nothing), and series of other
+clusters are dropped from answers. A query that would write a cluster label
+(`label_replace`, `label_join`, `count_values`) is refused as the caller's
+error. A series or label lookup with no time range reads the last hour,
+because OpenObserve refuses one without it. Metric families the source doesn't collect show no data, and Settings →
+Metrics lists them. There is no new settings screen: Settings → Metrics shows
+"OpenObserve · shared connection · matched by cluster ID" (or "matched by
+confirmed name").
+
+**Precedence for each context:** a Prometheus URL set by hand for the context
+(saved in Settings, or `--prometheus-url` on its launch context) wins; then the
+OpenObserve connection, when the context is matched; then auto-detected
+Prometheus. An unmatched context keeps using its own Prometheus, and Settings
+says how to match it. When OpenObserve can't be reached for a matched context,
+metrics show "OpenObserve unavailable" rather than another backend's data. Radar
+matches on startup and on each context switch, remembers the result for five
+minutes, and picks up a new `connect` the next time it switches to the context
+or restarts.
+
+**Version.** OpenObserve before v1.2 ignores a filter on a label a metric doesn't
+have, so Radar detects this, warns, and only shows metrics whose data carries the
+cluster label; others show as not collected. Upgrade to v1.2 or later.
+
+**Service account.** OpenObserve's open-source edition has no read-only role
+(RBAC is an Enterprise feature), so a service account can also write. Use a
+dedicated one for Radar; Radar only reads.
+
+**Local only.** Radar running in a cluster ignores the entry and logs
+`Ignoring the OpenObserve entry in ~/.radar/config.json: OpenObserve connections are local only`.
+For Radar Cloud, connect OpenObserve in Radar Hub instead.
+
 ## Workload metrics overrides by run mode
 
 Workload metrics and PVC usage normally use automatic identity matching.

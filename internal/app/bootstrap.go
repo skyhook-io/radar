@@ -26,6 +26,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
 	internalopencost "github.com/skyhook-io/radar/internal/opencost"
+	"github.com/skyhook-io/radar/internal/openobserve"
 	"github.com/skyhook-io/radar/internal/portforward"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/server"
@@ -440,6 +441,7 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 		return nil
 	})
 	k8s.RegisterCostResetFunc(internalopencost.Reset)
+	openobserve.Default.LogIfIgnored()
 	if cfg.LocalConnections != nil {
 		cfg.LocalRuntime = connectionruntime.New(cfg.LocalConnections, k8s.RestartTrafficSubsystem)
 		argocd.SetConfig("", "", false, true)

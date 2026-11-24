@@ -158,6 +158,9 @@ func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 		automatic = append(automatic, attributions)
 	}
 	resp := collectWorkloadMetricsWithHistory(ctx, workloadRangeClient{client}, scope, config, job, source, start, end, step, automatic, history)
+	if oo := client.relaySourceScopeNote(); oo != "" && resp.Attribution["scope"] != "" {
+		resp.Attribution["scope"] = oo + "."
+	}
 	if attributionState == "detecting" || attributionState == "error" {
 		reason := "Matching metrics to current Pods…"
 		if attributionState == "error" {

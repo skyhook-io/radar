@@ -101,6 +101,11 @@ type Config struct {
 	// Handler is the HTTP handler to serve over tunneled streams — typically
 	// Radar's Server.Handler() (chi router).
 	Handler http.Handler
+
+	// OnMetricsSource, when set, receives the metrics source Hub selects for
+	// this cluster: at start, whenever it changes (checked every 30s), and
+	// after Hub asks for a refresh. It runs on the poller's goroutine.
+	OnMetricsSource func(MetricsSourceDecision)
 }
 
 func (c Config) validate() error {
@@ -128,6 +133,17 @@ func (c Config) validate() error {
 func Run(ctx context.Context, cfg Config) error {
 	if err := cfg.validate(); err != nil {
 		return err
+	}
+
+	if cfg.OnMetricsSource != nil {
+		poller, err := newMetricsSourcePoller(cfg)
+		if err != nil {
+			log.Printf("[cloud] metrics source checks disabled: %v", err)
+		} else {
+			pollCtx, stopPolling := context.WithCancel(ctx)
+			defer stopPolling()
+			go poller.run(pollCtx)
+		}
 	}
 
 	backoff := 1 * time.Second

@@ -52,9 +52,11 @@ func (c *Client) newScanQuerier(ctx context.Context, at time.Time) (*scanQuerier
 	if c.retired || c.baseURL == "" {
 		return nil, errors.New("metrics connection changed")
 	}
-	transport := prom.NewHTTPTransport(c.baseURL, c.basePath, rightsizingScanHTTPClient)
-	transport.Headers = copyHeaders(c.headers)
-	return &scanQuerier{client: prom.NewClient(scanQueryTransport{transport}), at: at, conn: c.snapshotLocked()}, nil
+	transport := c.newTransportLocked(c.baseURL, c.basePath, rightsizingScanHTTPClient, 0)
+	if direct, ok := transport.(*prom.HTTPTransport); ok {
+		transport = scanQueryTransport{direct}
+	}
+	return &scanQuerier{client: prom.NewClient(transport), at: at, conn: c.snapshotLocked()}, nil
 }
 
 func (q *scanQuerier) Query(ctx context.Context, query string) (*prom.QueryResult, error) {
