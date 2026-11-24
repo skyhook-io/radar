@@ -85,7 +85,7 @@ describe('ResourceRendererDispatch', () => {
         spec: { policyName: 'native', validationActions: ['Warn'] },
       })
       expect(nativeBinding).toContain('Validation Actions')
-      expect(nativeBinding).toContain('effective scope')
+      expect(nativeBinding).toContain('This binding adds no filters')
 
       for (const kind of ['validatingadmissionpolicies', 'validatingadmissionpolicybindings']) {
         const foreign = renderKind(kind, {
