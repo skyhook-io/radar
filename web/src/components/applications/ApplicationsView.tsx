@@ -440,7 +440,7 @@ function AppDetailRoute({
     singleWorkloadKey,
   ]);
   const selectView = useCallback(
-    (view: ApplicationRouteView) => {
+    (view: ApplicationRouteView, options?: { replace?: boolean }) => {
       const params = new URLSearchParams(searchParams);
       params.delete("tab");
       params.delete("run");
@@ -457,12 +457,12 @@ function AppDetailRoute({
         params.set("view", view === "history" ? "timeline" : view);
         params.delete("workload");
       }
-      setSearchParams(params);
+      setSearchParams(params, { replace: options?.replace });
     },
     [searchParams, setSearchParams, singleWorkloadKey],
   );
   const selectWorkload = useCallback(
-    (key: string | null, options?: { tab?: string }) => {
+    (key: string | null, options?: { tab?: string; replace?: boolean }) => {
       const params = new URLSearchParams(searchParams);
       params.delete("run");
       if (key) {
@@ -477,9 +477,9 @@ function AppDetailRoute({
       } else {
         params.delete("workload");
         params.delete("tab");
-        params.delete("view");
+        if (!options?.replace) params.delete("view");
       }
-      setSearchParams(params);
+      setSearchParams(params, { replace: options?.replace });
     },
     [searchParams, selectedWorkloadKey, setSearchParams, singleWorkloadKey],
   );

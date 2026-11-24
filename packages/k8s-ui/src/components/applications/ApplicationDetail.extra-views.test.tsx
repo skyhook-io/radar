@@ -94,6 +94,18 @@ describe('ApplicationDetail extra views', () => {
     expect(host.querySelector('[data-testid="body"]')).toBeNull()
   })
 
+  it('resets an uncontrolled view before rendering the next instance', () => {
+    const render = vi.fn(() => <div>Instance settings</div>)
+    const views = [{ id: 'settings', label: 'Settings', render }]
+    const { host, rerender } = show({ extraViews: views, activeInstanceKey: 'prod' })
+    act(() => tab(host, 'Settings').click())
+    expect(host.textContent).toContain('Instance settings')
+    render.mockClear()
+    rerender({ extraViews: views, activeInstanceKey: 'staging' })
+    expect(render).not.toHaveBeenCalled()
+    expect(selected(host)).toEqual(['Overview'])
+  })
+
   it('reports the id through onSelectView and renders the view the host selects', () => {
     const onSelectView = vi.fn()
     const { host, rerender } = show({ extraViews, selectedView: 'overview', onSelectView })
@@ -122,6 +134,9 @@ describe('ApplicationDetail extra views', () => {
     expect(count().textContent).toBe('1')
     rerender({ extraViews: views, selectedView: 'deploys', onSelectView: () => {}, activeInstanceKey: 'staging', selectedWorkloadKey: undefined })
     expect(count().textContent).toBe('0')
+    act(() => count().click())
+    rerender({ app: { ...app, key: 'shop/another' }, extraViews: views, selectedView: 'deploys', onSelectView: () => {}, activeInstanceKey: 'staging', selectedWorkloadKey: undefined })
+    expect(count().textContent).toBe('0')
   })
 
   it("shows the host's line above every view's content", () => {
@@ -147,6 +162,39 @@ describe('ApplicationDetail extra views', () => {
     const { host } = show({ extraViews, viewOrder: ['settings', 'history'], selectedView: 'old-view', onSelectView })
     expect(selected(host)).toEqual(['Settings'])
     expect(onSelectView).toHaveBeenCalledExactlyOnceWith('settings', { replace: true })
+  })
+
+  it('clears a stale workload before asking the host to correct the selected view', () => {
+    const onSelectWorkload = vi.fn()
+    const onSelectView = vi.fn()
+    const props = { extraViews, selectedView: 'removed', onSelectWorkload, onSelectView }
+    const { rerender } = show({ ...props, selectedWorkloadKey: 'removed' })
+    expect(onSelectWorkload).toHaveBeenCalledExactlyOnceWith(null, { replace: true })
+    expect(onSelectView).not.toHaveBeenCalled()
+    rerender({ ...props, selectedWorkloadKey: 'another removed workload' })
+    expect(onSelectWorkload).toHaveBeenCalledTimes(2)
+    expect(onSelectView).not.toHaveBeenCalled()
+    rerender({ ...props, selectedWorkloadKey: null })
+    expect(onSelectView).toHaveBeenCalledExactlyOnceWith('overview', { replace: true })
+  })
+
+  it('preserves workload and tab links while the host cannot see live workloads', () => {
+    const onSelectWorkload = vi.fn()
+    const onSelectView = vi.fn()
+    const props = { extraViews, viewOrder: ['deploys', 'overview'], selectedView: 'yaml', selectedWorkloadKey: 'removed', onSelectWorkload, onSelectView }
+    const empty: AppRow = { ...app, workloads: [] }
+    const { host, rerender } = show({ ...props, app: empty, liveUnavailableNotice: <p>Offline</p> })
+    expect(host.textContent).toContain('Offline')
+    expect(host.textContent).not.toContain('Deploys body')
+    expect(onSelectView).not.toHaveBeenCalled()
+    expect(onSelectWorkload).not.toHaveBeenCalled()
+    rerender({ ...props, app: empty, selectionLoading: true })
+    expect(host.textContent).not.toContain('Deploys body')
+    expect(onSelectView).not.toHaveBeenCalled()
+    expect(onSelectWorkload).not.toHaveBeenCalled()
+    rerender({ ...props, selectedWorkloadKey: null, app: { ...app, workloads: app.workloads?.slice(0, 1) }, liveUnavailableNotice: false })
+    expect(host.textContent).toContain('runtime')
+    expect(onSelectView).not.toHaveBeenCalled()
   })
 
   it('does not render reserved or duplicate extra views', () => {
@@ -189,13 +237,31 @@ describe('ApplicationDetail extra views', () => {
 
   it('shows the host notice in place of the built-in views when the instance has nothing live', () => {
     const empty: AppRow = { ...app, workloads: [] }
-    const { host, rerender } = show({ app: empty, extraViews, selectedView: 'topology', onSelectView: () => {}, unavailable: <p data-testid="notice">Not running</p> })
+    const { host, rerender } = show({ app: empty, extraViews, selectedView: 'topology', onSelectView: () => {}, liveUnavailableNotice: <p data-testid="notice">Not running</p> })
     expect(selected(host)).toEqual(['Topology'])
     expect(host.querySelector('[data-testid="notice"]')?.textContent).toBe('Not running')
 
-    rerender({ app: empty, extraViews, selectedView: 'deploys', onSelectView: () => {}, unavailable: <p data-testid="notice">Not running</p> })
+    rerender({ app: empty, extraViews, selectedView: 'deploys', onSelectView: () => {}, liveUnavailableNotice: <p data-testid="notice">Not running</p> })
     expect(host.querySelector('[data-testid="notice"]')).toBeNull()
     expect(host.querySelector('[data-testid="body"]')?.textContent).toBe('Deploys body')
+  })
+
+  it('uses a host-only default view even without live workload evidence', () => {
+    const empty: AppRow = { ...app, workloads: [] }
+    const { host } = show({ app: empty, extraViews, builtInViews: [], liveUnavailableNotice: <p>Offline</p> })
+    expect(selected(host)).toEqual(['Deploys'])
+    expect(host.textContent).toContain('Deploys body')
+  })
+
+  it('shows an unavailable workload link before a host-only default view', () => {
+    const empty: AppRow = { ...app, workloads: [] }
+    const onSelectWorkload = vi.fn()
+    const { host, rerender } = show({ app: empty, extraViews, builtInViews: [], selectedWorkloadKey: 'missing', onSelectWorkload, liveUnavailableNotice: <p>Offline</p> })
+    expect(host.textContent).toContain('Offline')
+    expect(host.textContent).not.toContain('Deploys body')
+    expect(onSelectWorkload).not.toHaveBeenCalled()
+    rerender({ app: empty, extraViews, builtInViews: [], selectedWorkloadKey: 'missing', onSelectWorkload, liveUnavailableNotice: <p>Offline</p>, selectedView: 'deploys', onSelectView: vi.fn() })
+    expect(host.textContent).not.toContain('Deploys body')
   })
 
   it("shows an instance's detail beside its env in the switcher", () => {
@@ -215,6 +281,13 @@ describe('ApplicationDetail extra views', () => {
     const pills = Array.from(host.querySelectorAll('button')).filter((b) => (b.textContent ?? '').startsWith('prod'))
     expect(pills.map((b) => b.textContent)).toEqual(['proda on nonprod', 'prodb on nonprod•'])
     expect(host.querySelectorAll('[data-testid="mark"]')).toHaveLength(1)
+  })
+
+  it('distinguishes instances that share an environment and cluster label', () => {
+    const instance = (appKey: string) => ({ appKey, name: `${appKey} on nonprod`, env: 'prod', detail: 'nonprod', health: 'healthy' as const, confidence: 'high', evidence: '' })
+    const { host } = show({ identityInstances: [instance('a'), instance('b')], activeInstanceKey: 'a', onSwitchInstance: () => {} })
+    const pills = Array.from(host.querySelectorAll('button')).filter((b) => (b.textContent ?? '').startsWith('prod'))
+    expect(pills.map((b) => b.textContent)).toEqual(['proda on nonprod', 'prodb on nonprod'])
   })
 
   it('offers only the built-in views the host asks for, landing on the first view offered', () => {
@@ -261,5 +334,17 @@ describe('ApplicationDetail extra views', () => {
       ['prod1.2.0', 'true', true],
       ['staging1.3.0', null, false],
     ])
+  })
+
+  it('displays a configured version without using it as evidence of promotion lag', () => {
+    const instance = (env: string) => ({ appKey: env, name: env, env, health: 'healthy' as const, confidence: 'high', evidence: '' })
+    const prod = { ...instance('prod'), version: '1.0.0' }
+    const staging = { ...instance('staging'), declaredVersion: '2.0.0' }
+    const props = { showEnvironmentVersions: true, activeInstanceKey: 'prod', onSwitchInstance: () => {} }
+    const { host, rerender } = show({ ...props, identityInstances: [prod, staging] })
+    expect(host.textContent).toContain('staging2.0.0')
+    expect(host.textContent).not.toContain('behind')
+    rerender({ ...props, identityInstances: [prod, { ...staging, version: '2.0.0' }] })
+    expect(host.textContent).toContain('behind')
   })
 })

@@ -131,12 +131,15 @@ export interface AppIdentityInstance {
   appKey: string;
   name: string;
   env: string;
-  /** Shown dimmed beside the env in the inline switcher, e.g. the cluster. */
+  /** Secondary text beside the environment, such as the cluster. Instances sharing an environment show their names instead. */
   detail?: string;
   /** A mark after the env in the switcher, e.g. that the instance has unsaved edits. */
   adornment?: ReactNode;
   health: AppHealth;
+  /** Observed running version, used to compare promotion across environments. */
   version?: string;
+  /** Configured version shown when the running version is unknown. */
+  declaredVersion?: string;
   confidence: string;
   evidence: string;
   count?: number;
@@ -161,7 +164,10 @@ type SelectionProps =
   | { selectedWorkloadKey?: undefined; onSelectWorkload?: undefined };
 
 export interface AppWorkloadSelectionOptions {
+  /** A WorkloadView tab ID to open as part of selecting the workload. */
   tab?: string;
+  /** Replace the current history entry when clearing a stale workload link. */
+  replace?: boolean;
 }
 
 export type ApplicationView = "overview" | "deploys" | "topology" | "history";
@@ -171,7 +177,7 @@ export type ApplicationDetailView = ApplicationView | (string & {});
 
 /** An app-level view the host supplies, shown as a tab after the built-in ones. */
 export interface ApplicationExtraView {
-  /** A unique id. Built-in ids and `cost` are reserved. */
+  /** A unique, nonempty ID. Built-in IDs and `cost` are reserved. Cost has its own selection props. */
   id: string;
   label: string;
   /** Shown after the tab's label, e.g. a mark for unsaved edits. */
@@ -207,6 +213,7 @@ type ViewProps =
   | {
       extraViews?: undefined;
       selectedView: ApplicationView;
+      /** Called on a tab click or to repair a stale view with history replacement. */
       onSelectView: (view: ApplicationView, options?: { replace?: boolean }) => void;
     }
   | {
@@ -214,6 +221,7 @@ type ViewProps =
        *  open directly on the workload; use WorkloadView `extraTabs` there. */
       extraViews?: ApplicationExtraView[];
       selectedView: ApplicationDetailView;
+      /** Called on a tab click or to repair a stale view with history replacement. */
       onSelectView: (view: ApplicationDetailView, options?: { replace?: boolean }) => void;
     }
   | { extraViews?: ApplicationExtraView[]; selectedView?: undefined; onSelectView?: undefined };
@@ -238,17 +246,18 @@ export type ApplicationDetailProps = {
   }) => ReactNode;
   costViewSelected?: boolean;
   onSelectCostView?: () => void;
-  /** The built-in views to offer. All are available by default. A removed
-   *  selection falls back to the first available non-Cost view in tab order. */
+  /** Built-in views to offer. Defaults to all three. A removed view falls back
+   *  in tab order. Cost is selected by default if it is the only offered view. */
   builtInViews?: ApplicationView[];
-  /** Wait for the available views before replacing a stale controlled selection. */
-  viewsLoading?: boolean;
+  /** Delay stale selection corrections while views or workload evidence are loading. */
+  selectionLoading?: boolean;
   /** Show versions inline and keep up to six environment pills. Defaults to four pills without inline versions. */
   showEnvironmentVersions?: boolean;
   /** The active instance has nothing live to show (not deployed, its cluster
    *  offline, …): the Overview, Topology and History show this instead. Host
-   *  views still render. */
-  unavailable?: ReactNode;
+   *  views still render and stale URL selections are preserved until workload
+   *  evidence is available. Omit it or pass null or false for live instances. */
+  liveUnavailableNotice?: ReactNode;
   /** Render host-scoped operational issues for the app overview. */
   renderOverviewIssues?: () => ReactNode;
   /** Whether the host-scoped issue surface contains current issues. */
@@ -273,10 +282,8 @@ export type ApplicationDetailProps = {
     workload: SelectedAppWorkload,
     run: TopologyNode,
   ) => void;
-  /** App identity siblings (this instance included, ladder-ordered) — turns the
-   *  context strip's Environment fact into a switcher. Identity grouping is
-   *  classification, not an address: it switches between REAL instances, never
-   *  an aggregate page. */
+  /** App identity siblings, including the active instance. An optional
+   *  aggregate entry is offered first and excluded from grouping evidence. */
   identityInstances?: AppIdentityInstance[] | null;
   /** Switch to a sibling instance (host swaps ?app= and, when it can match
    *  the current workload in the target, preserves ?workload= + ?tab=). */
@@ -289,7 +296,8 @@ export type ApplicationDetailProps = {
    *  app row keyed the same way. A host that keys instances on something other
    *  than the app key (e.g. the Cloud fleet keys per cluster, while `app.key`
    *  must stay the logical app key for provenance) passes the active instance's
-   *  key here so the switcher marks it. */
+   *  key here so the switcher marks it. Changing the app or active instance
+   *  resets internal selection and remounts the active host view. */
   activeInstanceKey?: string;
   /** One delivery destination for this application instance, supplied by its host. */
   renderDeploys?: () => ReactNode;
@@ -331,11 +339,12 @@ export type ApplicationDetailProps = {
    * place of the header status pill. For jobs, also hides the duplicate Runtime fact.
    */
   status?: AppHostStatus;
-  /** The title, for a host that makes it more than the app's name (e.g. a switcher to its other apps). */
+  /** Content of the page heading, such as an app switcher. */
   renderTitle?: (name: string) => ReactNode;
-  /** The view tabs' order by id, built-in and extra; unlisted ones follow. Built-in views come first by default. */
+  /** Order the visible tabs by ID, including `cost`. A removed view falls back
+   *  to the first offered non-Cost view. Cost has its own selection props. */
   viewOrder?: string[];
-  /** A line the host shows above every view's content, directly under the tabs (e.g. where its config change is). */
+  /** Content directly below the application tabs, including when live data is unavailable. WorkloadView has its own tabHeader. */
   viewHeader?: ReactNode;
 } & SelectionProps &
   ViewProps;
@@ -409,9 +418,9 @@ export function ApplicationDetail({
   onSelectCostView,
   extraViews,
   builtInViews,
-  viewsLoading = false,
+  selectionLoading = false,
   showEnvironmentVersions = false,
-  unavailable,
+  liveUnavailableNotice,
   renderOverviewIssues,
   hasOverviewIssues,
   topology,
@@ -452,6 +461,7 @@ export function ApplicationDetail({
   selectedView,
   onSelectView,
 }: ApplicationDetailProps) {
+  const unavailable = typeof liveUnavailableNotice === "boolean" ? null : liveUnavailableNotice || null;
   // Stable order regardless of API ordering: rail rows and the per-workload
   // color assignment both follow this array, so an order flap between
   // refetches must not reshuffle rows or reassign a workload's hue.
@@ -471,11 +481,11 @@ export function ApplicationDetail({
     () => rolloutSummaryForApps([{ ...app, workloads }]),
     [app, workloads],
   );
-  const overall = status?.health ?? applicationDisplayHealth(app);
+  const overall = status?.health ?? (unavailable == null ? applicationDisplayHealth(app) : "unknown");
   const verdictTone = HEALTH_META[overall].pill;
   const verdictLabel =
     status?.label ??
-    (workloadClass === "job" && overall === batchRuntime.health
+    (unavailable == null && workloadClass === "job" && overall === batchRuntime.health
       ? batchRuntime.label
       : HEALTH_META[overall].label);
   const versions = useMemo(
@@ -483,8 +493,8 @@ export function ApplicationDetail({
     [app.versions],
   );
   const { ready, desired } = servingReadiness(workloads);
-  const restartSignal = restartWarning(workloads);
-  const batchSignal = workloadClass === "job" ? null : batchSignalForApp(app);
+  const restartSignal = unavailable == null ? restartWarning(workloads) : null;
+  const batchSignal = unavailable != null || workloadClass === "job" ? null : batchSignalForApp(app);
   // Resolve namespace the same way the list does (the workloads' shared
   // namespace) so env/namespace match across list and detail. Multi-namespace
   // apps get the count, never an arbitrary pick.
@@ -499,6 +509,16 @@ export function ApplicationDetail({
     DEFAULT_APPLICATION_VIEW,
   );
   const [internalCostSelected, setInternalCostSelected] = useState(false);
+  const [internalSelected, setInternalSelected] = useState<string | null>(null);
+  const instanceKey = activeInstanceKey ?? app.key;
+  const scopeKey = JSON.stringify([app.key, instanceKey]);
+  const [selectionScope, setSelectionScope] = useState(scopeKey);
+  if (scopeKey !== selectionScope) {
+    setSelectionScope(scopeKey);
+    setInternalView(DEFAULT_APPLICATION_VIEW);
+    setInternalCostSelected(false);
+    setInternalSelected(null);
+  }
   const requestedView = selectedView ?? internalView;
   const offeredViews = ALL_BUILT_IN_VIEWS.filter(
     (id) => (!builtInViews || builtInViews.includes(id)) && (id !== "deploys" || Boolean(renderDeploys)),
@@ -515,15 +535,22 @@ export function ApplicationDetail({
     [...offeredViews.map((id) => ({ id })), ...(offeredExtraViews ?? [])],
     viewOrder,
   );
-  const resolvedView = visibleViews.find(({ id }) => id === requestedView)?.id ?? visibleViews[0]?.id;
+  const requestedViewAvailable = visibleViews.some(({ id }) => id === requestedView);
+  const waitingForWorkload = Boolean(selectedWorkloadKey) && (selectionLoading || unavailable != null);
+  // An unresolved workload deep link can temporarily land on this shell.
+  // While evidence is missing, show the built-in or unavailable state without
+  // running an unrelated host tab.
+  const fallbackView = waitingForWorkload || selectionLoading || (unavailable != null && selectedView !== undefined)
+    ? visibleViews.find(({ id }) => isBuiltInApplicationView(id))?.id
+    : visibleViews[0]?.id;
+  const resolvedView = requestedViewAvailable && !waitingForWorkload ? requestedView : fallbackView;
   const activeExtraView = offeredExtraViews?.find(({ id }) => id === resolvedView);
   const activeView = resolvedView && isBuiltInApplicationView(resolvedView)
     ? resolvedView
     : DEFAULT_APPLICATION_VIEW;
   const costSelected = Boolean(
-    renderCostView && (!resolvedView || (costViewSelected ?? internalCostSelected)),
+    renderCostView && (costViewSelected ?? (internalCostSelected || (!resolvedView && !selectionLoading && unavailable == null))),
   );
-  const instanceKey = activeInstanceKey ?? app.key;
   const setView = useCallback(
     (view: ApplicationDetailView) => {
       setInternalCostSelected(false);
@@ -541,9 +568,8 @@ export function ApplicationDetail({
   useEffect(() => {
     if (selectedView === undefined) setInternalView(DEFAULT_APPLICATION_VIEW);
     setInternalCostSelected(false);
-  }, [instanceKey, selectedView]);
+  }, [selectedView]);
 
-  const [internalSelected, setInternalSelected] = useState<string | null>(null);
   const hostSelected =
     selectedWorkloadKey !== undefined ? selectedWorkloadKey : internalSelected;
   const { selected: rawSelected, hostKeyIsStale } = useMemo(
@@ -570,19 +596,21 @@ export function ApplicationDetail({
     }] };
   }, [singleWorkloadScope, renderDeploys, builtInViews]);
   useEffect(() => {
-    if (viewsLoading || selectedWorkload || costSelected || !resolvedView || resolvedView === requestedView) return;
+    if (selectionLoading || unavailable != null) return;
+    // The two controlled selections can live in one URL. Correct one at a time
+    // so the host can read the updated URL before making the next correction.
+    if (hostKeyIsStale && onSelectWorkload) {
+      onSelectWorkload(null, { replace: true });
+      return;
+    }
+    if (selectedWorkload || costSelected || !resolvedView || resolvedView === requestedView) return;
     if (extraViews && onSelectView) onSelectView(resolvedView, { replace: true });
     else if (onSelectView && isBuiltInApplicationView(resolvedView)) onSelectView(resolvedView, { replace: true });
     else if (!onSelectView) setInternalView(resolvedView);
-  }, [costSelected, extraViews, onSelectView, requestedView, resolvedView, selectedWorkload, viewsLoading]);
-  useEffect(() => {
-    if (selectedWorkloadKey !== undefined && hostKeyIsStale) {
-      onSelectWorkload?.(null);
-    }
-  }, [selectedWorkloadKey, hostKeyIsStale, onSelectWorkload]);
+  }, [costSelected, extraViews, hostKeyIsStale, onSelectView, onSelectWorkload, requestedView, resolvedView, selectedWorkload, selectedWorkloadKey, unavailable, selectionLoading]);
   useEffect(() => {
     if (selectedWorkloadKey === undefined) setInternalSelected(null);
-  }, [instanceKey, selectedWorkloadKey]);
+  }, [selectedWorkloadKey]);
 
   // Hover-focus: the workload (or NEUTRAL_OWNER) whose nodes should stay lit
   // while the rest of the graph dims. Driven by the rail and, reciprocally, by
@@ -591,7 +619,7 @@ export function ApplicationDetail({
   const [expandedReplicaSetOwners, setExpandedReplicaSetOwners] = useState<
     Set<string>
   >(new Set());
-  useEffect(() => setExpandedReplicaSetOwners(new Set()), [instanceKey]);
+  useEffect(() => setExpandedReplicaSetOwners(new Set()), [app.key, instanceKey]);
   const toggleReplicaSets = useCallback((ownerID: string) => {
     setExpandedReplicaSetOwners((current) => {
       const next = new Set(current);
@@ -744,7 +772,7 @@ export function ApplicationDetail({
         </span>
         <div className="flex min-w-0 flex-1 items-center gap-2">
           {renderTitle ? (
-            <div className="min-w-0">{renderTitle(app.name)}</div>
+            <div role="heading" aria-level={1} className="min-w-0">{renderTitle(app.name)}</div>
           ) : (
             <h1 className="min-w-0 truncate text-xl font-semibold text-theme-text-primary lg:text-2xl">{app.name}</h1>
           )}
@@ -764,7 +792,7 @@ export function ApplicationDetail({
           {headerActions}
           {status ? (
             // A host's status can be a sentence: keep it to one line, whole in the tooltip.
-            <Tooltip content={status.detail ?? status.label} delay={150}>
+            <Tooltip content={status.detail && status.detail !== status.label ? `${status.label} · ${status.detail}` : status.label} delay={150}>
               {status.onSelect ? (
                 <button
                   type="button"
@@ -881,12 +909,12 @@ export function ApplicationDetail({
             </Tooltip>
           </ContextFact>
         ) : null}
-        {workloadClass === "job" ? (
+        {unavailable == null && (workloadClass === "job" ? (
           status ? null : <ContextFact label="Runtime">{batchRuntime.label}</ContextFact>
         ) : desired > 0 ? (
           <ContextFact label="Ready"><ReadyBar ready={ready} desired={desired} width="w-16" /></ContextFact>
-        ) : null}
-        {workloadClass !== "job" && rolloutSummary ? (
+        ) : null)}
+        {unavailable == null && workloadClass !== "job" && rolloutSummary ? (
           <ContextFact label="Runtime">
             <Tooltip content={<RolloutSummaryTooltip summary={rolloutSummary} />} delay={150}>
               <span className="inline-flex items-center gap-1.5">
@@ -896,7 +924,7 @@ export function ApplicationDetail({
             </Tooltip>
           </ContextFact>
         ) : null}
-        {(app.appVersion || versions.length > 0) && (
+        {unavailable == null && (app.appVersion || versions.length > 0) && (
           <ContextFact label="Version">
             <VersionInfo app={app} variant="fact" />
           </ContextFact>
@@ -906,6 +934,8 @@ export function ApplicationDetail({
       <div className="min-h-0 flex-1 overflow-hidden bg-theme-base">
         {selectedWorkload ? (
           renderRuntime(selectedWorkload, renderWorkload, workloadContext)
+        ) : selectionLoading && !resolvedView && !costSelected && unavailable == null ? (
+          <PaneLoader label="Loading application views…" className="h-full" />
         ) : (
           <WorkloadRevisionsContext.Provider value={renderWorkloadRevisions}>
           <ApplicationWorkspace
@@ -1110,7 +1140,7 @@ function ApplicationWorkspace({
       )}
       {!costSelected && activeExtraView && (
         <div
-          key={`${instanceKey}/${activeExtraView.id}`}
+          key={JSON.stringify([app.key, instanceKey, activeExtraView.id])}
           role="tabpanel"
           className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6"
         >
@@ -3647,7 +3677,7 @@ function InstanceTooltip({ instance }: { instance: AppIdentityInstance }) {
     <span className="block max-w-xs">
       <span className="block">
         {instance.name}
-        {instance.version ? ` · ${instance.version}` : ""}
+        {instance.version ? ` · ${instance.version}` : instance.declaredVersion ? ` · ${instance.declaredVersion} (configured)` : ""}
       </span>
       {instance.evidence && (
         <span className="mt-0.5 block text-theme-text-tertiary">{instance.evidence}</span>
@@ -3689,11 +3719,12 @@ function EnvSwitcher({
       counts.set(inst.env, (counts.get(inst.env) ?? 0) + 1);
     return counts;
   }, [instances]);
+  const instanceLabel = (inst: AppIdentityInstance) =>
+    (envCounts.get(inst.env) ?? 0) > 1 ? inst.name : inst.detail || inst.name;
   const lagChip = lag && (
     <span className={`${CHIP} ${CHIP_TONE.amber}`}>{lag}</span>
   );
-  const hasGroupingEvidence = actualEnvironments.some((inst) => inst.evidence) ||
-    (actualEnvironments.length > 0 && actualEnvironments.every((inst) => inst.confidence !== "high"));
+  const hasGroupingEvidence = actualEnvironments.some((inst) => inst.evidence || inst.confidence !== "high");
   const evidenceChip = hasGroupingEvidence && (
     <Tooltip content={<AppIdentityTooltip members={actualEnvironments} />} delay={150}>
       <span className="inline-flex cursor-default items-center rounded-sm bg-theme-hover px-1 py-px ring-1 ring-inset ring-theme-border">
@@ -3710,6 +3741,7 @@ function EnvSwitcher({
         {orderedInstances.map((inst) => {
           const isActive = inst.appKey === activeKey;
           const duplicateEnv = (envCounts.get(inst.env) ?? 0) > 1;
+          const version = inst.version ?? inst.declaredVersion;
           return (
             <Tooltip
               key={inst.appKey}
@@ -3730,14 +3762,14 @@ function EnvSwitcher({
               >
                 <StatusDot tone={mapHealthToTone(inst.health)} />
                 {inst.env}
-                {showVersions && inst.version && (
+                {showVersions && version && (
                   <span className="font-mono text-[10px] text-theme-text-secondary">
-                    {midTruncate(inst.version, 18)}
+                    {midTruncate(version, 18)}
                   </span>
                 )}
                 {inst.detail || duplicateEnv ? (
                   <span className="max-w-32 truncate text-theme-text-tertiary">
-                    {inst.detail || inst.name}
+                    {instanceLabel(inst)}
                   </span>
                 ) : null}
                 {inst.adornment}
@@ -3791,6 +3823,7 @@ function EnvSwitcher({
         >
           {orderedInstances.map((inst) => {
             const isActive = inst.appKey === activeKey;
+            const version = inst.version ?? inst.declaredVersion;
             return (
               <Tooltip
                 key={inst.appKey}
@@ -3818,10 +3851,10 @@ function EnvSwitcher({
                     {inst.env}
                   </span>
                   {inst.adornment}
-                  {!inst.aggregate && <span className="min-w-0 flex-1 truncate text-theme-text-secondary">{inst.detail || inst.name}</span>}
-                  {inst.version && (
+                  {!inst.aggregate && <span className="min-w-0 flex-1 truncate text-theme-text-secondary">{instanceLabel(inst)}</span>}
+                  {version && (
                     <span className="font-mono text-[10px] text-theme-text-tertiary">
-                      {midTruncate(inst.version, 18)}
+                      {midTruncate(version, 18)}
                     </span>
                   )}
                 </button>
