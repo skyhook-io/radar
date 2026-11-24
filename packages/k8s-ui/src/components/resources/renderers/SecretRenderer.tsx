@@ -61,12 +61,12 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
     }
   }
 
-  async function copyValue(key: string, decodedValue: string): Promise<void> {
+  async function copyValue(copyId: string, decodedValue: string): Promise<void> {
     if (!await copyText(decodedValue)) {
       showApiError("Couldn't copy the value", 'The browser blocked clipboard access.')
       return
     }
-    setCopied(key)
+    setCopied(copyId)
     clearTimeout(copyTimer.current)
     copyTimer.current = setTimeout(() => setCopied(null), 2000)
   }
@@ -181,6 +181,9 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
           {dataKeys.map((key) => {
             const decoded = decodeBase64(data.data[key])
             const isBinary = decoded === null
+            // A refresh can rotate the value while a clipboard write is pending.
+            const copyId = JSON.stringify([data.metadata?.uid, data.metadata?.resourceVersion, key])
+            const isCopied = copied === copyId
             const canEdit = onSaveSecretValue && !isImmutable && !isBinary
             // Without a save handler (the Secret was deleted, say) an open
             // editor would have a Save button that does nothing.
@@ -202,12 +205,12 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
                     )}
                     {!isBinary && !isEditing && (
                       <button
-                        onClick={() => copyValue(key, decoded)}
+                        onClick={() => copyValue(copyId, decoded)}
                         className="p-1 text-theme-text-tertiary hover:text-theme-text-primary transition-colors"
-                        title={copied === key ? 'Copied' : 'Copy value'}
-                        aria-label={copied === key ? `Copied value for ${key}` : `Copy value for ${key}`}
+                        title={isCopied ? 'Copied' : 'Copy value'}
+                        aria-label={isCopied ? `Copied value for ${key}` : `Copy value for ${key}`}
                       >
-                        {copied === key ? (
+                        {isCopied ? (
                           <Check className="w-3.5 h-3.5 text-green-400" />
                         ) : (
                           <Copy className="w-3.5 h-3.5" />

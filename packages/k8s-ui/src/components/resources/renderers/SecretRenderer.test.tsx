@@ -40,30 +40,49 @@ function button(label: string): HTMLButtonElement {
 }
 
 describe('SecretRenderer value copy', () => {
-  it.each(['café 🔑', '[binary data]', ''])('copies decoded text %j without revealing it', async value => {
-    const writeText = vi.fn().mockResolvedValue(undefined)
-    const previous = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+  const writeText = vi.fn<(value: string) => Promise<void>>()
+  let previous: PropertyDescriptor | undefined
+
+  beforeEach(() => {
+    writeText.mockReset().mockResolvedValue(undefined)
+    previous = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
-    try {
-      const encoded = btoa(String.fromCharCode(...new TextEncoder().encode(value)))
-      await act(async () => root.render(
-        <SecretRenderer data={{ ...secret, data: { password: encoded, binary: '/w==' } }} onSaveSecretValue={vi.fn()} />
-      ))
-      expect(element.querySelector('[aria-label="Copy value for binary"], [title="Edit value"]')).toBeNull()
-      expect(element.querySelector('pre, textarea')).toBeNull()
-      await act(async () => button('Copy value').click())
-      expect(writeText).toHaveBeenCalledWith(value)
-      expect(button('Copied').getAttribute('aria-label')).toBe('Copied value for password')
-      expect(element.querySelector('pre, textarea')).toBeNull()
-      expect(button('Reveal')).toBeTruthy()
-      const binaryRow = [...element.querySelectorAll('.card-inner')].find(row => row.textContent?.includes('binary'))!
-      await act(async () => binaryRow.querySelector('button')!.click())
-      expect(binaryRow.querySelector('pre')?.textContent).toBe('[binary data]')
-      expect(binaryRow.querySelector('[title="Edit value"], [title="Copy value"]')).toBeNull()
-    } finally {
-      if (previous) Object.defineProperty(navigator, 'clipboard', previous)
-      else Reflect.deleteProperty(navigator, 'clipboard')
-    }
+  })
+
+  afterEach(() => {
+    if (previous) Object.defineProperty(navigator, 'clipboard', previous)
+    else Reflect.deleteProperty(navigator, 'clipboard')
+  })
+
+  it('keeps a pending copy confirmation with the revision that was copied', async () => {
+    let finish!: () => void
+    writeText.mockImplementation(() => new Promise<void>(resolve => { finish = resolve }))
+    await render()
+    await act(async () => button('Copy value').click())
+    const rotated = { ...secret, metadata: { ...secret.metadata, resourceVersion: '8' }, data: { password: btoa('new') } }
+    await act(async () => root.render(<SecretRenderer data={rotated} />))
+    await act(async () => finish())
+    expect(writeText).toHaveBeenCalledWith('old')
+    expect(button('Copy value').getAttribute('aria-label')).toBe('Copy value for password')
+    expect(element.querySelector('[title="Copied"], pre')).toBeNull()
+  })
+
+  it.each(['café 🔑', '[binary data]', ''])('copies decoded text %j without revealing it', async value => {
+    const encoded = btoa(String.fromCharCode(...new TextEncoder().encode(value)))
+    await act(async () => root.render(
+      <SecretRenderer data={{ ...secret, data: { password: encoded, binary: '/w==' } }} onSaveSecretValue={vi.fn()} />
+    ))
+    expect(element.querySelector('[aria-label="Copy value for binary"], [title="Edit value"]')).toBeNull()
+    expect(element.querySelector('pre, textarea')).toBeNull()
+    await act(async () => button('Copy value').click())
+    expect(writeText).toHaveBeenCalledWith(value)
+    expect(button('Copied').getAttribute('aria-label')).toBe('Copied value for password')
+    expect(element.querySelector('pre, textarea')).toBeNull()
+    expect(button('Reveal')).toBeTruthy()
+    const binaryRow = [...element.querySelectorAll('.card-inner')].find(row => row.textContent?.includes('binary'))!
+    await act(async () => binaryRow.querySelector('button')!.click())
+    expect(binaryRow.querySelector('pre')?.textContent).toBe('[binary data]')
+    expect(binaryRow.querySelector('[title="Edit value"], [title="Copy value"]')).toBeNull()
   })
 })
 
