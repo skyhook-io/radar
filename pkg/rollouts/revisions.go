@@ -30,11 +30,9 @@ type Revision struct {
 	Template      string `json:"template,omitempty"`
 	PodHash       string `json:"podHash,omitempty"`
 	// IsCurrent marks the revision the Rollout is currently rolling out
-	// (status.currentPodHash), which during a canary is NOT the one serving
-	// stable traffic.
+	// (status.currentPodHash).
 	IsCurrent bool `json:"isCurrent"`
-	// IsStable marks the revision serving stable traffic (status.stableRS) — the
-	// version an abort reverts to.
+	// IsStable marks the abort target (status.stableRS), regardless of traffic weight.
 	IsStable bool `json:"isStable"`
 }
 

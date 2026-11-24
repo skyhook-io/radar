@@ -25,7 +25,7 @@ const WHEN_TIP =
 const SOURCE_TIP =
   "The Helm or GitOps record for this deploy. \"Near\" means a record landed close to when the revision was created, which doesn't prove it created the revision.";
 const UNKNOWN_LIVE_TIP =
-  "Kubernetes doesn't report which revision's pods are serving here. A StatefulSet or DaemonSet mid-update, or a Rollout with no stable revision yet, has no per-revision split.";
+  "Kubernetes doesn't report which revision's pods are serving here. A StatefulSet or DaemonSet mid-update, or a canary Rollout with no traffic signal, has no per-revision split.";
 const OUTDATED_AGENT_NOTE =
   "The Radar agent on this cluster needs upgrading to report which revision's pods are serving.";
 

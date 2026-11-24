@@ -38,8 +38,7 @@ type WorkloadRevision struct {
 	IsCurrent bool      `json:"isCurrent"`
 	Replicas  int64     `json:"replicas"`
 	Template  string    `json:"template,omitempty"` // Pod template spec as YAML (for revision diff)
-	// Rollouts only: mid-canary IsCurrent (rolling out) and IsStable (serving
-	// traffic, what an abort reverts to) are different revisions.
+	// Rollouts only: IsStable identifies the abort target, regardless of traffic weight.
 	IsStable bool   `json:"isStable,omitempty"`
 	PodHash  string `json:"podHash,omitempty"`
 	// ReadyReplicas is this revision's own ready pods. Nil when the kind has no
@@ -47,7 +46,7 @@ type WorkloadRevision struct {
 	ReadyReplicas *int64 `json:"readyReplicas,omitempty"`
 	// Serving says whether this revision's pods are running and ready. Nil means
 	// the API can't tell: a StatefulSet or DaemonSet mid-update reports no split
-	// per revision. Rollouts leave it nil; IsStable is their signal.
+	// per revision. Rollout traffic weights are unknown.
 	Serving *bool `json:"serving,omitempty"`
 	// ChangeCause is the kubernetes.io/change-cause note on this revision, the
 	// one record of why it exists when no Helm or GitOps source does.
