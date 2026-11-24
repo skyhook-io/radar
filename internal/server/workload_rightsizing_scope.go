@@ -29,8 +29,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/kubernetes"
-	resourcehelper "k8s.io/component-helpers/resource"
-	"k8s.io/utils/ptr"
 )
 
 func (s *Server) sizingCaller(w http.ResponseWriter, r *http.Request) bool {
@@ -173,11 +171,11 @@ func sizingTemplate(kind string, obj *unstructured.Unstructured) (rightsizing.Sc
 	}
 	sum := sha256.Sum256(serialized)
 	scope.TemplateHash = hex.EncodeToString(sum[:])
-	scope.PodSpec.Resources = sizingResources(t.Spec.Resources)
+	scope.PodSpec.Resources = prometheus.SizingResources(t.Spec.Resources)
 	project := func(containers []corev1.Container) []corev1.Container {
 		out := make([]corev1.Container, 0, len(containers))
 		for _, c := range containers {
-			out = append(out, corev1.Container{Name: c.Name, Resources: *sizingResources(&c.Resources), RestartPolicy: c.RestartPolicy})
+			out = append(out, corev1.Container{Name: c.Name, Resources: *prometheus.SizingResources(&c.Resources), RestartPolicy: c.RestartPolicy})
 		}
 		return out
 	}
@@ -205,25 +203,6 @@ func sizingTemplate(kind string, obj *unstructured.Unstructured) (rightsizing.Sc
 	}
 	scope.Replicas = int(n)
 	return scope, t, parsed, nil
-}
-
-func sizingResources(r *corev1.ResourceRequirements) *corev1.ResourceRequirements {
-	if r == nil {
-		return nil
-	}
-	project := func(in corev1.ResourceList) corev1.ResourceList {
-		var out corev1.ResourceList
-		for _, key := range []corev1.ResourceName{corev1.ResourceCPU, corev1.ResourceMemory} {
-			if q, ok := in[key]; ok {
-				if out == nil {
-					out = corev1.ResourceList{}
-				}
-				out[key] = q
-			}
-		}
-		return out
-	}
-	return &corev1.ResourceRequirements{Requests: project(r.Requests), Limits: project(r.Limits)}
 }
 
 type sizingGuardError struct {
@@ -312,7 +291,7 @@ func verifiedSizingPods(ctx context.Context, client kubernetes.Interface, owner 
 			!slices.ContainsFunc(p.Status.Conditions, func(c corev1.PodCondition) bool { return c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue }) {
 			return nil, errSizingRollout
 		}
-		if !sizingPodMatches(p, template.Spec) {
+		if !prometheus.SizingPodMatches(p, template.Spec) {
 			return nil, errSizingAdmission
 		}
 		pods = append(pods, *p)
@@ -395,58 +374,6 @@ func sizingControllerReady(owner *unstructured.Unstructured, kind string, desire
 		}
 	}
 	return true
-}
-
-func sizingPodMatches(p *corev1.Pod, spec corev1.PodSpec) bool {
-	match := func(desired, actual []corev1.Container) bool {
-		// With a shared Pod limit, admission-injected containers can use the
-		// budget the sizing policy would otherwise assign to a template container.
-		if spec.Resources != nil && len(spec.Resources.Limits) > 0 && len(actual) != len(desired) {
-			return false
-		}
-		for _, c := range desired {
-			if !slices.ContainsFunc(actual, func(a corev1.Container) bool {
-				if c.Name != a.Name || !ptr.Equal(c.RestartPolicy, a.RestartPolicy) {
-					return false
-				}
-				expected := sizingResources(&c.Resources)
-				expected.Requests = rightsizing.EffectiveContainerRequests(*expected)
-				return equality.Semantic.DeepEqual(sizingResources(&a.Resources), expected)
-			}) {
-				return false
-			}
-		}
-		return true
-	}
-	return match(spec.Containers, p.Spec.Containers) && match(spec.InitContainers, p.Spec.InitContainers) && sizingPodResourcesMatch(p, spec.Resources)
-}
-
-func sizingPodResourcesMatch(p *corev1.Pod, template *corev1.ResourceRequirements) bool {
-	actual, expected := sizingResources(p.Spec.Resources), sizingResources(template)
-	if equality.Semantic.DeepEqual(actual, expected) {
-		return true
-	}
-	if expected == nil || len(expected.Limits) == 0 {
-		return false
-	}
-	// With a Pod limit, Kubernetes defaults missing Pod requests from admitted
-	// container requests, then from the Pod limit. Other Pod defaults vary by
-	// API server feature gate, so leave those differences unverified.
-	containerRequests := resourcehelper.AggregateContainerRequests(p, resourcehelper.PodResourcesOptions{})
-	if expected.Requests == nil {
-		expected.Requests = corev1.ResourceList{}
-	}
-	for _, name := range []corev1.ResourceName{corev1.ResourceCPU, corev1.ResourceMemory} {
-		if _, exists := expected.Requests[name]; exists {
-			continue
-		}
-		if q, ok := containerRequests[name]; ok {
-			expected.Requests[name] = q
-		} else if q, ok := expected.Limits[name]; ok {
-			expected.Requests[name] = q
-		}
-	}
-	return equality.Semantic.DeepEqual(actual, expected)
 }
 
 func readSizingHPA(ctx context.Context, client kubernetes.Interface, scope *rightsizing.Scope) {

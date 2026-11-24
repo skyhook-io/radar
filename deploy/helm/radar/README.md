@@ -444,8 +444,8 @@ trend charts remain unavailable for Kubecost.
 | `traffic.prometheusUrl` | Manual Prometheus/VictoriaMetrics URL (skips auto-discovery) | `""` |
 | `traffic.prometheusHeaders` | HTTP headers sent with every Prometheus request (auth-protected backends). Requires `traffic.prometheusUrl` — credentials are never sent to auto-discovered endpoints | `{}` |
 | `traffic.prometheusHeadersFromEnv` | Prometheus headers sourced from environment variables, for secret-backed auth headers. Requires `traffic.prometheusUrl` | `{}` |
-| `traffic.prometheusSingleCluster` | Assert that the backend is dedicated to this cluster for workload metrics and PVC usage. Replaces automatic matching. [Scope limits](../../../docs/workload-metrics.md#optional-operator-override) | `false` |
-| `traffic.prometheusClusterLabels` | Exact cluster label/value constraints for workload metrics, PVC usage and, when `prometheusUrl` is set, the Caretta/Beyla/Istio traffic map, combined with AND. Labels must exist on each affected metric source. Alternative to `prometheusSingleCluster`; leave both unset for automatic matching | `{}` |
+| `traffic.prometheusSingleCluster` | Assert that the backend is dedicated to this cluster for workload metrics, rightsizing and PVC usage. Replaces automatic matching. [Scope limits](../../../docs/workload-metrics.md#optional-operator-override) | `false` |
+| `traffic.prometheusClusterLabels` | Exact cluster label/value constraints for workload metrics, rightsizing, PVC usage and, when `prometheusUrl` is set, the Caretta/Beyla/Istio traffic map, combined with AND. Labels must exist on each affected metric source. Alternative to `prometheusSingleCluster`; leave both unset for automatic matching | `{}` |
 | `traffic.beylaJobSelector` | Beyla Live Traffic matcher fragment. Workload charts use it only with an explicit scope override and accept one `job` equality or regex matcher; custom workload jobs are normally discovered automatically | `""` |
 | `argocd.existingSecret` | Name of a Secret holding the Argo CD API token (recommended — keeps it out of the release) | `""` |
 | `argocd.existingSecretKey` | Key within `argocd.existingSecret` holding the token | `token` |
@@ -708,7 +708,7 @@ It creates a namespace-scoped Role (not a ClusterRole) with `get` + `patch` on t
 
 ### CRD Access
 
-Radar discovers CRDs in your cluster. Common CRD groups are enabled by default; Flagger and system-upgrade-controller are explicitly opt-in. Granting RBAC for CRDs that don't exist has no effect.
+Radar discovers CRDs in your cluster. Common CRD groups are enabled by default; Flagger, the k3s Helm controller and system-upgrade-controller are explicitly opt-in. Granting RBAC for CRDs that don't exist has no effect.
 
 **Wildcard option:** Grant the collector service account read access to every API group and resource:
 ```bash
@@ -744,6 +744,7 @@ retain their finite grants.
 | `flagger` | `flagger.app` (`canaries`, `metrictemplates` only); **off by default**. Enable `rbac.crdGroups.flagger=true` for native browsing and failed-rollout Issues. |
 | `flux` | `*.toolkit.fluxcd.io` |
 | `fluxOperator` | `fluxcd.controlplane.io` (FluxInstance, FluxReport, ResourceSet, ResourceSetInputProvider) |
+| `k3sHelm` | `helm.cattle.io` (`helmcharts`, `helmchartconfigs` only); **off by default**, because `spec.valuesContent` and `spec.set` can carry credentials. Enable `rbac.crdGroups.k3sHelm=true` on k3s/RKE2 for the HelmChart drawers and the `k3s` badge on the releases they manage. |
 | `gatewayApi` | `gateway.networking.k8s.io` |
 | `gcpMonitoring` | `monitoring.googleapis.com` |
 | `grafana` | `monitoring.grafana.com`, `tempo.grafana.com`, `loki.grafana.com`, `grafana.integreatly.org` |

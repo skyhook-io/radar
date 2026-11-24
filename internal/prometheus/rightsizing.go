@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -80,14 +81,16 @@ const (
 )
 
 type RightsizingResponse struct {
-	Kind            string           `json:"kind"`
-	Namespace       string           `json:"namespace"`
-	Name            string           `json:"name"`
-	Window          string           `json:"window"`
-	Source          string           `json:"source"`
-	OwnerCoverage   OwnerCoverage    `json:"ownerCoverage"`
-	Replicas        int              `json:"replicas"`
-	ScaledToZero    bool             `json:"scaledToZero"`
+	Kind          string        `json:"kind"`
+	Namespace     string        `json:"namespace"`
+	Name          string        `json:"name"`
+	Window        string        `json:"window"`
+	Source        string        `json:"source"`
+	OwnerCoverage OwnerCoverage `json:"ownerCoverage"`
+	Replicas      int           `json:"replicas"`
+	ScaledToZero  bool          `json:"scaledToZero"`
+	// SampleAvailable means at least one CPU or memory row has an observation.
+	// A recommendation additionally requires enough history and safety evidence.
 	SampleAvailable bool             `json:"sampleAvailable"`
 	ManagedBy       *WorkloadManager `json:"managedBy,omitempty"`
 	Rows            []RightsizingRow `json:"rows"`
@@ -202,7 +205,50 @@ func RightsizingForWorkload(ctx context.Context, kind, namespace, name string) (
 	if err != nil && ctx.Err() != nil {
 		return RightsizingResponse{}, ctx.Err()
 	}
+	if cloud.IsAuthenticatedTunnelRequest(ctx) && scope.State == ViewScopeUnlabeled && !scope.Withheld {
+		input := scanWorkload{kind: k8s.CanonicalWorkloadKind(kind), namespace: namespace, name: name, replicas: workload.replicas, workload: workload}
+		// Range reads for a large cohort run in bounded chunks. Give them
+		// a separate budget after the store and cluster have been verified.
+		rangeCtx, stop := context.WithTimeout(ctx, rightsizingScanQueryTimeout)
+		defer stop()
+		return currentPodRightsizingDetail(rangeCtx, store, input), nil
+	}
 	return computeRightsizing(queryCtx, store, kind, namespace, name, workload, scope), nil
+}
+
+// Use the scan's evidence and policy so a drill-down describes the same current replicas.
+func currentPodRightsizingDetail(ctx context.Context, store rightsizingScanQuerier, input scanWorkload) RightsizingResponse {
+	evidence := queryCurrentPodRightsizing(ctx, store, input, time.Now())
+	measured := buildScanWorkload(input, evidence)
+	resp := RightsizingResponse{Kind: input.kind, Namespace: input.namespace, Name: input.name, Window: "7d", Source: "radar",
+		OwnerCoverage: OwnerCoverageCurrentPods, Replicas: input.replicas, ScaledToZero: measured.ScaledToZero, ManagedBy: measured.ManagedBy,
+		Rows: measured.Rows, ClusterScope: currentPodUIDScope().Wire(), SampleAvailable: workloadHasData(measured)}
+	for _, key := range []string{"cpu", "memory", "throttle"} {
+		if err := evidence.errors[key]; err != nil {
+			warning := RightsizingScanWarning{Code: key + "_query_failed", Message: boundWarningMessage(err.Error())}
+			if errors.Is(err, context.DeadlineExceeded) {
+				warning = RightsizingScanWarning{Code: key + "_query_timed_out", Message: "The " + key + " history read timed out."}
+			}
+			resp.Warnings = append(resp.Warnings, warning)
+		}
+	}
+	if !resp.SampleAvailable {
+		switch {
+		case measured.ScaledToZero:
+			resp.Reason = "This workload has no current replicas to measure. Configure the Prometheus cluster scope to use retained workload history."
+		case !hasCurrentPodSizingCohort(input):
+			resp.Reason = "Radar could not verify a complete set of ready Pods matching the current workload template."
+		case errors.Is(evidence.errors["cpu"], context.DeadlineExceeded) || errors.Is(evidence.errors["memory"], context.DeadlineExceeded):
+			resp.Reason = "The rightsizing history read timed out before complete replica measurements were available."
+		case isIncompleteAnswer(evidence.errors["cpu"]) || isIncompleteAnswer(evidence.errors["memory"]):
+			resp.Reason = ReasonRightsizingPartialData
+		case evidence.errors["cpu"] != nil || evidence.errors["memory"] != nil:
+			resp.Reason = ReasonRightsizingQueriesFailed
+		default:
+			resp.Reason = "No complete CPU or memory samples matched the current Pods by UID."
+		}
+	}
+	return resp
 }
 
 // resolveRightsizingScope decides rightsizing's cluster scope on the client's
@@ -241,15 +287,21 @@ type containerSpec struct {
 
 type rightsizingWorkload struct {
 	// podSpec is the workload's pod template, for checks that need the whole pod.
-	podSpec       *corev1.PodSpec
-	containers    []containerSpec
-	podNames      []string
-	qos           rightsizing.PodQoS
-	currentPodOOM map[string]bool
-	hpaManaged    map[string]bool
-	hpaAvailable  bool
-	replicas      int
-	scaledToZero  bool
+	podSpec               *corev1.PodSpec
+	containers            []containerSpec
+	podNames              []string
+	podIdentities         []prom.WorkloadPodIdentity
+	podIdentityIncomplete bool
+	daemonRevisionMatches map[string]bool
+	admittedImages        []string
+	podRestartEvidence    map[string]sizingPodRestarts
+	qos                   rightsizing.PodQoS
+	currentPodOOM         map[string]bool
+	unexplainedPodExits   map[string]bool
+	hpaManaged            map[string]bool
+	hpaAvailable          bool
+	replicas              int
+	scaledToZero          bool
 	// The live pod list could not be read, so podNames and currentPodOOM are
 	// empty because nothing answered — not because the workload has no pods.
 	liveInventoryUnavailable bool
@@ -290,6 +342,7 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 	var podTemplate *corev1.PodSpec
 	var managedBy *WorkloadManager
 	var uid types.UID
+	var cohortReady bool
 	scaledToZero := false
 	replicas := 0
 	switch strings.ToLower(kind) {
@@ -305,6 +358,7 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 		uid = d.UID
 		managedBy = DetectWorkloadManager(d)
 		replicas = specReplicas(d.Spec.Replicas)
+		cohortReady = sizingControllerCohortReady(d, d.Status.ObservedGeneration, int32(replicas), d.Status.Replicas, d.Status.UpdatedReplicas, d.Status.ReadyReplicas)
 		scaledToZero = replicas == 0
 	case "statefulset":
 		if cache.StatefulSets() == nil {
@@ -318,6 +372,7 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 		uid = ss.UID
 		managedBy = DetectWorkloadManager(ss)
 		replicas = specReplicas(ss.Spec.Replicas)
+		cohortReady = sizingControllerCohortReady(ss, ss.Status.ObservedGeneration, int32(replicas), ss.Status.Replicas, ss.Status.UpdatedReplicas, ss.Status.ReadyReplicas)
 		scaledToZero = replicas == 0
 	case "daemonset":
 		if cache.DaemonSets() == nil {
@@ -331,6 +386,7 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 		uid = ds.UID
 		managedBy = DetectWorkloadManager(ds)
 		replicas = int(ds.Status.DesiredNumberScheduled)
+		cohortReady = sizingControllerCohortReady(ds, ds.Status.ObservedGeneration, int32(replicas), ds.Status.CurrentNumberScheduled, ds.Status.UpdatedNumberScheduled, ds.Status.NumberReady) && ds.Status.NumberMisscheduled == 0
 		// Scans skip a zero the controller has observed, but a caller naming
 		// one gets its retained history, which is exactly the scaled-to-zero
 		// case: a node pool scaled away.
@@ -343,14 +399,15 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 
 	hpaManaged, hpaAvailable := loadHPAManagedResources(ctx, cache, kind, namespace, name)
 	workload := rightsizingWorkload{
-		podSpec:       podTemplate,
-		containers:    extractRuntimeContainers(podTemplate),
-		currentPodOOM: map[string]bool{},
-		hpaManaged:    hpaManaged,
-		hpaAvailable:  hpaAvailable,
-		replicas:      replicas,
-		scaledToZero:  scaledToZero,
-		managedBy:     managedBy,
+		podSpec:               podTemplate,
+		podIdentityIncomplete: !cohortReady,
+		containers:            extractRuntimeContainers(podTemplate),
+		currentPodOOM:         map[string]bool{},
+		hpaManaged:            hpaManaged,
+		hpaAvailable:          hpaAvailable,
+		replicas:              replicas,
+		scaledToZero:          scaledToZero,
+		managedBy:             managedBy,
 	}
 	pods, err := workloadPodsOnceWarm(ctx, cache, kind, namespace, name, uid)
 	if ctx.Err() != nil {
@@ -368,25 +425,63 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 		workload.liveInventoryUnavailable = true
 		return workload, nil
 	}
+	collectPodIdentities := cloud.IsAuthenticatedTunnelRequest(ctx)
+	windowEnd := time.Now()
 	for _, pod := range pods {
 		workload.qos.Observe(pod.Status.QOSClass)
 		workload.podNames = append(workload.podNames, pod.Name)
-		collectCurrentPodOOM(workload.currentPodOOM, pod.Status.ContainerStatuses)
-		collectCurrentPodOOM(workload.currentPodOOM, pod.Status.InitContainerStatuses)
+		if collectPodIdentities {
+			workload.observeSizingPodIdentity(ctx, cache, pod)
+		}
+		workload.observePodTerminations(pod, windowEnd)
 	}
 	sort.Strings(workload.podNames)
 	return workload, nil
 }
 
-func collectCurrentPodOOM(dst map[string]bool, statuses []corev1.ContainerStatus) {
-	for _, status := range statuses {
-		if status.State.Terminated != nil && status.State.Terminated.Reason == "OOMKilled" {
-			dst[status.Name] = true
-		}
-		if status.LastTerminationState.Terminated != nil && status.LastTerminationState.Terminated.Reason == "OOMKilled" {
-			dst[status.Name] = true
+func (w *rightsizingWorkload) observePodTerminations(pod *corev1.Pod, windowEnd time.Time) {
+	inWindow := func(t time.Time) bool { return !t.Before(windowEnd.Add(-rightsizingWindow)) && !t.After(windowEnd) }
+	bornInWindow := inWindow(pod.CreationTimestamp.Time)
+	// SIGKILL alone cannot distinguish a manual kill from an OOM.
+	unexplained := func(exit *corev1.ContainerStateTerminated) bool {
+		return exit == nil || exit.Reason == "" || exit.Reason == "ContainerStatusUnknown" || exit.Reason == "Unknown" || exit.ExitCode == 137 || exit.Signal == 9
+	}
+	recent := func(exit *corev1.ContainerStateTerminated) bool {
+		return bornInWindow || (exit != nil && inWindow(exit.FinishedAt.Time))
+	}
+	for _, statuses := range [][]corev1.ContainerStatus{pod.Status.ContainerStatuses, pod.Status.InitContainerStatuses} {
+		for _, status := range statuses {
+			current, last := status.State.Terminated, status.LastTerminationState.Terminated
+			if (current != nil && current.Reason == "OOMKilled") || (last != nil && last.Reason == "OOMKilled") {
+				w.currentPodOOM[status.Name] = true
+			}
+			// A counter already positive at its first scrape has no visible increase.
+			// A Pod born inside the window dates its restarts even when the scrape cannot.
+			if pod.UID == "" {
+				continue
+			}
+			// A container can die and the Pod disappear before the kubelet restarts it.
+			currentGap := current != nil && unexplained(current) && recent(current)
+			lastGap := (status.RestartCount > 0 || last != nil) && unexplained(last) && recent(last)
+			earlierGap := bornInWindow && status.RestartCount > 1
+			if !currentGap && !lastGap && !earlierGap {
+				continue
+			}
+			if w.unexplainedPodExits == nil {
+				w.unexplainedPodExits = map[string]bool{}
+			}
+			w.unexplainedPodExits[status.Name] = true
 		}
 	}
+}
+
+func (w rightsizingWorkload) hasOOMEvidence(container string, restartActivity float64, restartAvailable bool, termination terminationEvidence) bool {
+	if termination.OOM {
+		return true
+	}
+	// The aggregated historical reason could describe another replica or just
+	// the last of several restarts. It cannot clear a known gap in a live Pod.
+	return restartAvailable && !w.unexplainedPodExits[container] && (restartActivity <= 0 || termination.Any)
 }
 
 func loadHPAManagedResources(ctx context.Context, cache *k8s.ResourceCache, kind, namespace, name string) (map[string]bool, bool) {
@@ -646,7 +741,7 @@ func buildRightsizingQueries(namespace string, selection metricSelection) map[st
 		podMatcher = fmt.Sprintf(`,pod=~"%s"`, selection.podPattern)
 	}
 	f := func(metric string) string { return scopeMatchers(selection.scope, metric) }
-	cpu := fmt.Sprintf(`max by (container) (rate(container_cpu_usage_seconds_total{namespace="%s"%s,container!="",container!="POD"%s}[5m]) %s)`, ns, podMatcher, f(metricCPUUsage), selection.join)
+	cpu := fmt.Sprintf(`max by (container) (rate(container_cpu_usage_seconds_total{namespace="%s"%s,container!="",container!="POD",cpu=~"total|"%s}[5m]) %s)`, ns, podMatcher, f(metricCPUUsage), selection.join)
 	memory := fmt.Sprintf(`max by (container) (container_memory_working_set_bytes{namespace="%s"%s,container!="",container!="POD"%s} %s)`, ns, podMatcher, f(metricMemoryWorkingSet), selection.join)
 	throttled := fmt.Sprintf(`sum by (container) (rate(container_cpu_cfs_throttled_periods_total{namespace="%s"%s,container!="",container!="POD"%s}[5m]) %s)`, ns, podMatcher, f(metricThrottledPeriods), selection.join)
 	periods := fmt.Sprintf(`sum by (container) (rate(container_cpu_cfs_periods_total{namespace="%s"%s,container!="",container!="POD"%s}[5m]) %s)`, ns, podMatcher, f(metricCFSPeriods), selection.join)
@@ -742,11 +837,11 @@ func buildRightsizingRow(container containerSpec, resourceName string, expected 
 		row.CurrentPodOOM = workload.currentPodOOM[container.name]
 		restarts := results["restart_activity"]
 		terminations := results["termination_history"]
-		if restarts.err == nil && terminations.err == nil {
+		if terminations.err == nil {
 			restartActivity, restartAvailable := restarts.values[container.name]
 			termination := terminations.terminations[container.name]
 			row.WindowOOMEvidence = termination.OOM
-			row.OOMEvidenceAvailable = termination.OOM || (restartAvailable && (restartActivity <= 0 || termination.Any))
+			row.OOMEvidenceAvailable = workload.hasOOMEvidence(container.name, restartActivity, restarts.err == nil && restartAvailable, termination)
 		}
 	}
 	rightsizing.SetCurrentQuantities(&row, req, lim, resourceName)

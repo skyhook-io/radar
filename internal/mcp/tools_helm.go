@@ -202,7 +202,7 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 	}
 
 	user := userFromContext(ctx)
-	detail, err := helmClient.GetReleaseAsUser(input.Namespace, input.Name, user, mcpHelmObjectScope(ctx, ""))
+	detail, err := helmClient.GetReleaseAsUser(ctx, input.Namespace, input.Name, user, mcpHelmObjectScope(ctx, ""))
 	if helm.ReleaseReadDeniedForCaller(err) {
 		observed, why := observedHelmReleaseResult(ctx, input)
 		if observed != nil {
@@ -254,6 +254,12 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 	}
 	if detail.ManagedByFluxHelmRelease != "" {
 		result["managedByFluxHelmRelease"] = detail.ManagedByFluxHelmRelease
+	}
+	if detail.ManagedByK3s {
+		result["managedByK3s"] = true
+	}
+	if detail.Controller != nil {
+		result["controller"] = detail.Controller
 	}
 
 	if len(detail.History) > 0 {
