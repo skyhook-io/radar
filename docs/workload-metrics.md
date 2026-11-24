@@ -18,12 +18,14 @@ identity for each chart read. When both sources are connected, Datadog workload 
 
 ### Google Kubernetes Engine system metrics
 
-On GKE, Radar can read historical CPU, non-evictable memory, Pod network rates,
-container restarts, node ephemeral storage use and current PVC use through
-Google's Managed Service for Prometheus query frontend. Install that frontend
-and enable GKE system metrics in Cloud Monitoring. These charts need neither
-node-exporter nor kube-state-metrics. Native counters are sampled by Google,
-so the last few minutes of charts can be empty.
+On GKE, enabling system metrics in Cloud Monitoring provides historical CPU,
+non-evictable memory, Pod network rates, container restarts, node ephemeral
+storage use and current PVC use. Radar can query these through an existing
+Managed Service for Prometheus frontend or directly through Google's hosted
+Prometheus API. Both paths work without managed Prometheus collection,
+node-exporter or kube-state-metrics. Google's sampling and ingestion delay can
+leave the last few minutes of a chart empty.
+[Connect Radar to the hosted API or a frontend](configuration.md#gke-system-metric-connections).
 
 Every query selects the project, control-plane location and GKE cluster name.
 Workload charts use current controller-owned Pods and omit the lookback after

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/prom"
@@ -209,12 +210,28 @@ func (g *gkeMetrics) pvc(ctx context.Context, namespace, name string) PVCUsageRe
 func mergeGKEResources(ctx context.Context, g *gkeMetrics, resp *workloadMetricsResponse, scope PodScope, start, end time.Time, step time.Duration) {
 	needs := func(key string) bool {
 		p := resp.Panels[key]
-		return len(p.Series) == 0 && (p.State == "unavailable" || (p.State == "" && resp.State == "unavailable"))
+		state := p.State
+		if state == "" {
+			state = resp.State
+		}
+		return len(p.Series) == 0 && (state == "unavailable" || state == "detecting" || state == "error")
 	}
 	if !needs("cpu") && !needs("memory") {
 		return
 	}
 	native := g.workload(ctx, scope, start, end, step)
+	if len(resp.Panels) == 0 {
+		if len(native.Panels["cpu"].Series) == 0 && len(native.Panels["memory"].Series) == 0 {
+			return
+		}
+		native.ScopeNotice = resp.ScopeNotice
+		if resp.State == "detecting" || resp.State == "error" {
+			native.State = "partial"
+			native.Reason = strings.TrimSpace(native.Reason + " Conventional Prometheus workload identity is unverified. GKE samples cover current Pods.")
+		}
+		*resp = native
+		return
+	}
 	filled := false
 	for _, key := range []string{"cpu", "memory"} {
 		if !needs(key) || len(native.Panels[key].Series) == 0 {

@@ -635,25 +635,6 @@ choose **Save changes**. **Discard** resets the form without changing saved sett
 Switching A → B → A restores A's settings. A context with no saved settings uses
 discovery. Local CLI and Desktop share `~/.radar/clusters.json`.
 
-On GKE, Radar first tries its usual Prometheus-compatible backends. If it finds
-only a Google Managed Service for Prometheus query frontend, it uses that
-frontend for curated system-metric charts. Autodiscovery trusts only the
-`frontend` or `gmp-frontend` Service in the operator-managed `gmp-public`,
-`gmp-system` or `gke-gmp-system` namespace. Keep Pod and Service writes in those
-namespaces limited to platform operators. For a frontend in a custom namespace,
-configure its URL explicitly. Locally, automatic detection uses the Kubernetes
-Service proxy (GET on `services/proxy` in the frontend's namespace).
-In-cluster it uses the Service address. Discovery verifies the Service's
-selected Pods and queries for native node data from the connected cluster.
-GKE managed collection alone does not install the query frontend.
-
-Radar obtains the GKE project, control-plane location and cluster name from
-the connected API server's OpenID issuer. If the issuer cannot identify the
-cluster, those three exact values can be supplied as `project_id`, `location` and
-`cluster_name` in the existing metrics cluster-label setting. Conflicting values
-withhold native charts. A manually configured endpoint keeps priority and can
-supply conventional and native series together. [GKE chart coverage](workload-metrics.md#google-kubernetes-engine-system-metrics)
-
 Local Prometheus discovery can fall back to port-forwarding. If access is denied,
 the error names the missing permission when available, such as `list pods` or
 `create pods/portforward`. Grant it in the Prometheus Service’s namespace, or
@@ -807,6 +788,43 @@ including a saved token or key with no URL. Anonymous discovery without a saved
 mapping needs no confirmation. Token rotation alone does not prompt. Replacing
 a cluster behind identical endpoint, trust and user reference is not detectable
 by this fingerprint.
+
+#### GKE system metric connections
+
+With GKE system metrics enabled, local Radar can read Cloud Monitoring using
+Google's hosted Prometheus API. This path requires neither an in-cluster
+frontend nor managed Prometheus collection. For a local session, replace
+`SCOPING_PROJECT_ID` with the project whose metrics scope includes the cluster.
+Your Google identity needs permission to read time series in that scope.
+
+```sh
+RADAR_GKE_AUTH="Bearer $(gcloud auth print-access-token)" kubectl radar \
+  --prometheus-url='https://monitoring.googleapis.com/v1/projects/SCOPING_PROJECT_ID/location/global/prometheus' \
+  --prometheus-header-from-env=Authorization=RADAR_GKE_AUTH
+```
+
+Radar reads the header at launch. Rerun the command for a fresh token after it
+expires. The explicitly configured URL also serves Radar's raw PromQL queries,
+which can read the token's full metrics scope. [Google's Prometheus HTTP API](https://docs.cloud.google.com/stackdriver/docs/managed-prometheus/query-api-ui#prometheus_http_api)
+
+On GKE, Radar first tries its usual Prometheus-compatible backends. If it finds
+only a Google Managed Service for Prometheus query frontend, it uses that
+frontend for curated system-metric charts. Autodiscovery trusts only the
+`frontend` or `gmp-frontend` Service in the operator-managed `gmp-public`,
+`gmp-system` or `gke-gmp-system` namespace. Keep Pod and Service writes in those
+namespaces limited to platform operators. For a frontend in a custom namespace,
+configure its URL explicitly. Locally, automatic detection uses the Kubernetes
+Service proxy (GET on `services/proxy` in the frontend's namespace).
+In-cluster it uses the Service address. Discovery verifies the Service's
+selected Pods and queries for native node data from the connected cluster.
+GKE managed collection and the query frontend are installed independently.
+
+Radar obtains the GKE project, control-plane location and cluster name from
+the connected API server's OpenID issuer. If the issuer cannot identify the
+cluster, those three exact values can be supplied as `project_id`, `location` and
+`cluster_name` in the existing metrics cluster-label setting. Conflicting values
+withhold native charts. A manually configured endpoint keeps priority and can
+supply conventional and native series together. [GKE chart coverage](workload-metrics.md#google-kubernetes-engine-system-metrics)
 
 #### Startup overrides and older settings
 

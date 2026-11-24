@@ -15,6 +15,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/prom"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -34,7 +35,7 @@ func gkeFixture(t *testing.T, issuer string, metricCount int) *Client {
 	pod := corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Image: gmpFrontendImage + ":v0.14", Ports: []corev1.ContainerPort{{Name: "http", ContainerPort: 9090}}}}}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.Method != http.MethodGet {
+		if r.Method != http.MethodGet && !(r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/proxy/api/v1/")) {
 			t.Errorf("unexpected Kubernetes or proxy method %s", r.Method)
 		}
 		switch r.URL.Path {
@@ -55,6 +56,10 @@ func gkeFixture(t *testing.T, issuer string, metricCount int) *Client {
 			query := r.FormValue("query")
 			if query == "up" {
 				fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`)
+				return
+			}
+			if !strings.Contains(query, "kubernetes_io:") {
+				http.Error(w, `{"status":"error","error":"conventional metric identity unavailable"}`, http.StatusBadRequest)
 				return
 			}
 			for _, m := range []string{`project_id="demo-project"`, `location="us-east1-b"`, `cluster_name="demo"`, `monitored_resource="k8s_`} {
@@ -237,6 +242,15 @@ func TestGKEMetricsCharts(t *testing.T) {
 	if empty.Panels["cpu"].Source != "gke" || empty.Panels["memory"].Source != "gke" || empty.Start != start.Unix() || empty.End != end.Unix() || empty.StepSeconds != 60 || empty.PodsTotal != 2 {
 		t.Fatalf("native panels lost scope/window on an empty configured store: %+v", empty)
 	}
+	for _, state := range []string{"detecting", "error"} {
+		original := workloadMetricsResponse{State: state, Reason: "Waiting for conventional identity.", Panels: map[string]workloadMetricPanel{}}
+		unknown := scope
+		unknown.Created = nil
+		mergeGKEResources(t.Context(), g, &original, unknown, start, end, time.Minute)
+		if original.State != state || original.Reason != "Waiting for conventional identity." || len(original.Panels) != 0 {
+			t.Fatalf("empty native data hid conventional %s: %+v", state, original)
+		}
+	}
 	if q := g.chartQuery("Deployment", "default", "nginx", prom.CategoryCPU, nil); q != "" {
 		t.Fatalf("unresolved workload widened to namespace: %s", q)
 	}
@@ -348,6 +362,52 @@ func TestGKEConfiguredFrontendWithoutScrapeTargets(t *testing.T) {
 	}
 	if _, _, err = client.EnsureConnected(t.Context()); err != nil || client.GetStatus().GKESystemMetrics || !client.GetStatus().Connected {
 		t.Fatalf("scope conflict affected wrong capability: %+v err=%v", client.GetStatus(), err)
+	}
+}
+
+func TestGKEConfiguredWorkloadWithUnverifiedConventionalIdentity(t *testing.T) {
+	c := gkeFixture(t, fixtureIssuer, 1)
+	Initialize(c.k8sClient, c.k8sConfig, "fixture")
+	t.Cleanup(func() { SetAuthGate(nil); Reset(); Initialize(nil, nil, "") })
+	previous := k8s.GetConnectionStatus()
+	t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "nginx", UID: "nginx-uid"}}
+	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "nginx-abc", UID: "nginx-abc-uid", OwnerReferences: []metav1.OwnerReference{scopeOwner("Deployment", "nginx")}}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "nginx-abc-111", UID: "pod-uid", CreationTimestamp: metav1.NewTime(time.Now().Add(-2 * time.Hour)), OwnerReferences: []metav1.OwnerReference{scopeOwner("ReplicaSet", "nginx-abc")}}}
+	if err := k8s.InitScopedTestResourceCache(fake.NewClientset(deployment, rs, pod), map[string]k8score.ResourceScope{k8score.Deployments: {Enabled: true}, k8score.ReplicaSets: {Enabled: true}, k8score.Pods: {Enabled: true}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetResourceCache)
+	SetManualURL(c.k8sConfig.Host + "/api/v1/namespaces/gmp-public/services/frontend:web/proxy")
+	client := GetClient()
+	if _, _, err := client.EnsureConnected(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	scope, err := ResolvePodScope(t.Context(), k8s.GetResourceCache(), "Deployment", "default", "nginx", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		_, state := client.automaticWorkloadAttributions(scope)
+		if state == "error" {
+			break
+		}
+		if state != "detecting" || time.Now().After(deadline) {
+			t.Fatalf("expected failed conventional detection, got %s", state)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	r := getMetrics(t, metricsRouter(), "/prometheus/workload/Deployment/default/nginx?range=1h")
+	var got workloadMetricsResponse
+	if json.Unmarshal(r.Body.Bytes(), &got) != nil || r.Code != http.StatusOK || got.State != "partial" || got.ResourceSource != "gke" || got.Reason == "" || got.Pods != 1 {
+		t.Fatalf("workload response %d: %s", r.Code, r.Body)
+	}
+	for _, key := range []string{"cpu", "memory"} {
+		if p := got.Panels[key]; p.Source != "gke" || len(p.Series) != 1 || len(p.Series[0].DataPoints) == 0 {
+			t.Fatalf("%s missing its current Pod samples", key)
+		}
 	}
 }
 
