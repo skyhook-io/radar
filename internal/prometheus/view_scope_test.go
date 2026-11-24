@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -38,7 +39,17 @@ func viewAnchorRow(metric string) prom.Series {
 	return vec(map[string]string{viewScopeAnchorLabel: metric}, 1)
 }
 
-func isReadback(query string) bool { return strings.Contains(query, `cluster="`) }
+func isReadback(query string) bool {
+	for _, part := range evaluatedPart.FindAllStringSubmatch(query, -1) {
+		grouped := strings.Split(part[2]+part[3], ",")
+		for _, m := range parseViewMatchers(part[5]) {
+			if m.op == "=" && slices.Contains(grouped, m.label) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 func rows(series ...prom.Series) (*prom.QueryResult, error) {
 	return &prom.QueryResult{Series: series}, nil

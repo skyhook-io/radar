@@ -627,7 +627,7 @@ func TestEngineViewScope(t *testing.T) {
 	})
 }
 
-func TestRightsizingSameClusterNameAcrossProjects(t *testing.T) {
+func TestEngineRightsizingSameClusterNameAcrossProjects(t *testing.T) {
 	ctx := context.Background()
 	end := time.Now().Truncate(30 * time.Second).Add(-90 * time.Second)
 	var info, owners, memory []engineSeries
@@ -671,7 +671,7 @@ func TestRightsizingSameClusterNameAcrossProjects(t *testing.T) {
 		{"exact configuration", local, true, false},
 		{"cluster only on inventory", map[string]string{"cluster": "prod"}, false, true},
 		{"project without location", map[string]string{"cluster": "prod", "project_id": "alpha"}, true, true},
-		{"project without cluster", map[string]string{"project_id": "alpha", "location": "east"}, true, true},
+		{"asserted project and location", map[string]string{"project_id": "alpha", "location": "east"}, true, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			scope, err := decideViewScope(ctx, c, req, end, test.labels, test.configured)

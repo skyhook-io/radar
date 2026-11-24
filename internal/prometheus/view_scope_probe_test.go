@@ -429,3 +429,37 @@ func TestSharedClusterViewRequiresQualifiersAcrossFamilies(t *testing.T) {
 		})
 	}
 }
+
+func TestConfiguredSelectorChecksManagedClusterContext(t *testing.T) {
+	owner := probeSeries(metricPodOwner, "api-0", "cluster", "prod", "project_id", "local", "location", "east")
+	usage := probeSeries(metricMemoryWorkingSet, "api-0", "cluster", "prod", "project_id", "local", "location", "east")
+	otherProject := probeSeries(metricMemoryWorkingSet, "api-0", "cluster", "prod", "project_id", "foreign", "location", "east")
+	otherCluster := probeSeries(metricMemoryWorkingSet, "api-0", "cluster", "other", "project_id", "local", "location", "east")
+	noLocation := probeSeries(metricMemoryWorkingSet, "api-0", "cluster", "prod", "project_id", "local")
+	req := workloadChartRequest(true, []string{"api-0"}, metricPodOwner, metricMemoryWorkingSet)
+	for _, tt := range []struct {
+		name     string
+		labels   map[string]string
+		series   []map[string]string
+		withheld bool
+	}{
+		{"cluster in a single project", map[string]string{"cluster": "prod"}, []map[string]string{owner, usage}, false},
+		{"cluster in multiple projects", map[string]string{"cluster": "prod"}, []map[string]string{owner, usage, otherProject}, true},
+		{"different projects across families", map[string]string{"cluster": "prod"}, []map[string]string{owner, otherProject}, true},
+		{"location missing on one family", map[string]string{"cluster": "prod"}, []map[string]string{owner, noLocation}, true},
+		{"complete selector", map[string]string{"cluster": "prod", "project_id": "local", "location": "east"}, []map[string]string{owner, usage, otherProject, otherCluster}, false},
+		{"asserted project holds one cluster", map[string]string{"project_id": "local"}, []map[string]string{owner, usage}, false},
+		{"asserted project holds two clusters", map[string]string{"project_id": "local"}, []map[string]string{owner, usage, otherCluster}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &evaluatingStore{t: t, series: tt.series}
+			scope, err := decideViewScope(context.Background(), store, req, time.Now(), tt.labels, true)
+			if err != nil || scope.Withheld != tt.withheld || (!tt.withheld && scope.State != ViewScopeConfigured) {
+				t.Fatalf("scope=%+v, err=%v", scope, err)
+			}
+			if !tt.withheld && scope.Filter(metricMemoryWorkingSet) != `cluster="prod",location="east",project_id="local"` {
+				t.Fatalf("measurement selector = %s", scope.Filter(metricMemoryWorkingSet))
+			}
+		})
+	}
+}

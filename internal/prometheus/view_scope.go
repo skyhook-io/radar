@@ -482,11 +482,26 @@ func decideLabeledViewScope(ctx context.Context, q instantQuerier, req ViewScope
 		return unknownViewScope(), err
 	}
 	keys := slices.Sorted(maps.Keys(clusterLabels))
-	readbackKeys := slices.Compact(slices.Sorted(slices.Values(slices.Concat(keys, clusterQualifierLabels))))
-	if !slices.ContainsFunc(keys, func(k string) bool { return !slices.Contains(clusterQualifierLabels, k) }) {
-		return ViewScope{State: ViewScopeLabelMissing, Withheld: true, Labels: maps.Clone(clusterLabels), Note: "A project or location can contain several clusters. Include an exact cluster label."}, nil
+	qualifiers := clusterQualifierLabels
+	if configured && !slices.ContainsFunc(keys, func(k string) bool { return !slices.Contains(clusterQualifierLabels, k) }) {
+		// An operator may use a project as the cluster boundary. Check visible cluster names within it.
+		qualifiers = partitionLabels
 	}
+	readbackKeys := slices.Compact(slices.Sorted(slices.Values(slices.Concat(keys, qualifiers))))
 	readback, _, err := runViewProbes(ctx, q, at, viewReadbackParts(req.Metrics, readbackKeys, matchers, req.Span))
+	if err != nil {
+		return unknownViewScope(), err
+	}
+	queryLabels := clusterLabels
+	if configured {
+		var coherent bool
+		queryLabels, coherent = configuredReadbackLabels(readback, readbackKeys, clusterLabels)
+		if !coherent {
+			return ViewScope{State: ViewScopeLabelMissing, Withheld: true, Labels: maps.Clone(clusterLabels),
+				Note: fmt.Sprintf("The configured selector %s matches inconsistent cluster, project or location labels across the measured series. Add exact labels for this cluster to --prometheus-cluster-label.", matchers)}, nil
+		}
+	}
+	queryMatchers, err := prom.WorkloadMetricsScope{ClusterLabels: queryLabels}.Matchers()
 	if err != nil {
 		return unknownViewScope(), err
 	}
@@ -502,7 +517,7 @@ func decideLabeledViewScope(ctx context.Context, q instantQuerier, req ViewScope
 		ignored := false
 		for _, row := range rows {
 			for _, qualifier := range clusterQualifierLabels {
-				if value := row[qualifier]; value != "" && value != clusterLabels[qualifier] {
+				if value := row[qualifier]; value != "" && value != queryLabels[qualifier] {
 					return unverifiedClusterQualifier(m.Name, clusterLabels), nil
 				}
 			}
@@ -514,7 +529,7 @@ func decideLabeledViewScope(ctx context.Context, q instantQuerier, req ViewScope
 			missing = append(missing, m.Name)
 			continue
 		}
-		filters[m.Name] = matchers
+		filters[m.Name] = queryMatchers
 	}
 	if len(pending) > 0 {
 		identityKeys := slices.Compact(slices.Sorted(slices.Values(append(slices.Clone(partitionLabels), keys...))))
@@ -528,8 +543,8 @@ func decideLabeledViewScope(ctx context.Context, q instantQuerier, req ViewScope
 			ids := identities[m.Name]
 			switch {
 			case len(ids) == 0:
-				filters[m.Name] = matchers
-			case len(ids) == 1 && anchored[m.Name] && !hasClusterQualifier(clusterLabels) && !hasClusterQualifier(ids[0]) && !conflictsWithLabels(ids[0], clusterLabels):
+				filters[m.Name] = queryMatchers
+			case len(ids) == 1 && anchored[m.Name] && !hasClusterQualifier(queryLabels) && !hasClusterQualifier(ids[0]) && !conflictsWithLabels(ids[0], clusterLabels):
 				filters[m.Name] = ""
 				unfiltered = append(unfiltered, m.Name)
 				unfilteredIDs = append(unfilteredIDs, ids[0])
@@ -579,6 +594,32 @@ func decideLabeledViewScope(ctx context.Context, q instantQuerier, req ViewScope
 		}
 	}
 	return scope, nil
+}
+
+// A configured selector can stand for one managed-cluster context. Pin that
+// context on later reads, even when the original decision comes from cache.
+func configuredReadbackLabels(readback map[string][]map[string]string, keys []string, configured map[string]string) (map[string]string, bool) {
+	var first map[string]string
+	for _, rows := range readback {
+		for _, row := range rows {
+			if first == nil {
+				first = row
+				continue
+			}
+			for _, k := range keys {
+				if row[k] != first[k] {
+					return nil, false
+				}
+			}
+		}
+	}
+	labels := maps.Clone(configured)
+	for _, k := range keys {
+		if v := first[k]; v != "" && labels[k] == "" {
+			labels[k] = v
+		}
+	}
+	return labels, true
 }
 
 func unverifiedClusterQualifier(metric string, labels map[string]string) ViewScope {
