@@ -329,7 +329,7 @@ func TestEngineViewScope(t *testing.T) {
 		if scope.State != ViewScopeConfigured || scope.Withheld {
 			t.Fatalf("scope = %+v", scope)
 		}
-		wantFilters(t, scope, map[string]string{cpu.Name: `cluster="a"`, mem.Name: `cluster="a"`, info.Name: `cluster="a"`, owner.Name: `cluster="a"`, nodeCPU.Name: `cluster="a"`})
+		wantFilters(t, scope, map[string]string{cpu.Name: checkedClusterAFilter, mem.Name: checkedClusterAFilter, info.Name: checkedClusterAFilter, owner.Name: checkedClusterAFilter, nodeCPU.Name: checkedClusterAFilter})
 
 		memQuery := "sum(" + vectorSelector(mem.Name, withScope(mem.Subject, scope.Filter(mem.Name))) + ")"
 		if got, want := scalarAt(t, configuredA, memQuery, end), 300.0*engineMiB; got != want {
@@ -359,7 +359,7 @@ func TestEngineViewScope(t *testing.T) {
 		if scope.State != ViewScopeUnlabeled || scope.Withheld {
 			t.Fatalf("scope = %+v", scope)
 		}
-		wantFilters(t, scope, map[string]string{ownUnlabeled.Name: "", owner.Name: `cluster="a"`})
+		wantFilters(t, scope, map[string]string{ownUnlabeled.Name: "", owner.Name: checkedClusterAFilter})
 	})
 
 	// Two clusters leaving the label off one scrape job read as one identity
@@ -384,7 +384,7 @@ func TestEngineViewScope(t *testing.T) {
 			if scope.State != ViewScopeUnlabeled || scope.Withheld {
 				t.Fatalf("%s: scope = %+v", m.Name, scope)
 			}
-			wantFilters(t, scope, map[string]string{m.Name: "", owner.Name: `cluster="a"`})
+			wantFilters(t, scope, map[string]string{m.Name: "", owner.Name: checkedClusterAFilter})
 		}
 	})
 
@@ -542,14 +542,14 @@ func TestEngineViewScope(t *testing.T) {
 			if scope.State != ViewScopeVerified || scope.Withheld {
 				t.Fatalf("scope = %+v", scope)
 			}
-			wantFilters(t, scope, map[string]string{cpu.Name: `cluster="a"`, owner.Name: `cluster="a"`})
+			wantFilters(t, scope, map[string]string{cpu.Name: checkedClusterAFilter, owner.Name: checkedClusterAFilter})
 		})
 		t.Run("unlabeled metric holding our Pod names is accepted unfiltered", func(t *testing.T) {
 			scope := decideProven(t, ownUnlabeled, owner)
 			if scope.State != ViewScopeUnlabeled || scope.Withheld {
 				t.Fatalf("scope = %+v", scope)
 			}
-			wantFilters(t, scope, map[string]string{ownUnlabeled.Name: "", owner.Name: `cluster="a"`})
+			wantFilters(t, scope, map[string]string{ownUnlabeled.Name: "", owner.Name: checkedClusterAFilter})
 		})
 		t.Run("foreign-only unlabeled metric is label_missing", func(t *testing.T) {
 			if scope := decideProven(t, foreignUnlabeled); scope.State != ViewScopeLabelMissing || !scope.Withheld {
@@ -595,7 +595,7 @@ func TestEngineViewScope(t *testing.T) {
 		if scope.State != ViewScopeConfigured || scope.Withheld {
 			t.Fatalf("configured: scope = %+v", scope)
 		}
-		wantFilters(t, scope, map[string]string{absent.Name: `cluster="a"`})
+		wantFilters(t, scope, map[string]string{absent.Name: checkedClusterAFilter})
 		scope = resolve(t, unconfigured, time.Hour, false, absent)
 		if scope.State != ViewScopeUnlabeled || scope.Withheld {
 			t.Fatalf("unconfigured: scope = %+v", scope)

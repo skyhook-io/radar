@@ -263,7 +263,7 @@ func TestViewScopeProbesBoundedForMixedLabels(t *testing.T) {
 	ps := &probeServer{store: &evaluatingStore{t: t, series: data}}
 	c := newProbeClient(t, ps)
 	scope, err := decideViewScope(context.Background(), c, req, time.Now(), clusterA, false)
-	if err != nil || scope.State != ViewScopeUnlabeled || scope.Withheld || scope.Filter("kube_pod_owner") != `cluster="a"` {
+	if err != nil || scope.State != ViewScopeUnlabeled || scope.Withheld || scope.Filter("kube_pod_owner") != checkedClusterAFilter {
 		t.Fatalf("scope = %+v err = %v", scope, err)
 	}
 	ps.check(t)
@@ -457,8 +457,11 @@ func TestConfiguredSelectorChecksManagedClusterContext(t *testing.T) {
 			if err != nil || scope.Withheld != tt.withheld || (!tt.withheld && scope.State != ViewScopeConfigured) {
 				t.Fatalf("scope=%+v, err=%v", scope, err)
 			}
-			if !tt.withheld && scope.Filter(metricMemoryWorkingSet) != `cluster="prod",location="east",project_id="local"` {
-				t.Fatalf("measurement selector = %s", scope.Filter(metricMemoryWorkingSet))
+			if !tt.withheld {
+				got := store.selected(metricMemoryWorkingSet, scope.Filter(metricMemoryWorkingSet))
+				if len(got) != 1 || !reflect.DeepEqual(got[0], usage) {
+					t.Fatalf("measurement selector %s selected %v", scope.Filter(metricMemoryWorkingSet), got)
+				}
 			}
 			wantLabels := tt.labels
 			if !tt.withheld {
@@ -468,5 +471,25 @@ func TestConfiguredSelectorChecksManagedClusterContext(t *testing.T) {
 				t.Fatalf("reported cluster labels = %v, want %v", got, wantLabels)
 			}
 		})
+	}
+}
+
+func TestViewMeasurementPinsAbsentIdentityAfterReadback(t *testing.T) {
+	for _, configured := range []bool{false, true} {
+		local := probeSeries(metricMemoryWorkingSet, "api-0", "cluster", "prod")
+		store := &evaluatingStore{t: t, series: []map[string]string{local}}
+		req := workloadChartRequest(true, []string{"api-0"}, metricMemoryWorkingSet)
+		scope, err := decideViewScope(context.Background(), store, req, time.Now(), map[string]string{"cluster": "prod"}, configured)
+		if err != nil || scope.Withheld {
+			t.Fatalf("scope=%+v err=%v", scope, err)
+		}
+		store.series = append(store.series,
+			probeSeries(metricMemoryWorkingSet, "api-0", "cluster", "prod", "project_id", "elsewhere"),
+			probeSeries(metricMemoryWorkingSet, "api-0", "cluster", "prod", "location", "west"),
+			probeSeries(metricMemoryWorkingSet, "api-0", "cluster", "other"),
+		)
+		if got := store.selected(metricMemoryWorkingSet, scope.Filter(metricMemoryWorkingSet)); len(got) != 1 || !reflect.DeepEqual(got[0], local) {
+			t.Fatalf("configured=%t filter=%s selected %v", configured, scope.Filter(metricMemoryWorkingSet), got)
+		}
 	}
 }

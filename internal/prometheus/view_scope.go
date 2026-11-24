@@ -507,6 +507,14 @@ func decideLabeledViewScope(ctx context.Context, q instantQuerier, req ViewScope
 	if err != nil {
 		return unknownViewScope(), err
 	}
+	// Pin absent dimensions too. A source with the same cluster name may
+	// start reporting a different project while this decision is cached.
+	// The selector already contains the positively identified cluster labels.
+	for _, key := range readbackKeys {
+		if queryLabels[key] == "" {
+			queryMatchers += "," + key + `=""`
+		}
+	}
 	filters := map[string]string{}
 	var missing, unfiltered []string
 	var pending []ViewMetric
