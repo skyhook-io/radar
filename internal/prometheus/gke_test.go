@@ -50,6 +50,10 @@ func gkeFixture(t *testing.T, issuer string, metricCount int) *Client {
 				return
 			}
 			query := r.FormValue("query")
+			if query == "up" {
+				fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`)
+				return
+			}
 			for _, m := range []string{`project_id="demo-project"`, `location="us-east1-b"`, `cluster_name="demo"`, `monitored_resource="k8s_`} {
 				if !strings.Contains(query, m) {
 					t.Errorf("native query missing %s: %s", m, query)
@@ -265,5 +269,27 @@ func TestGKECuratedRoutesKeepRawStoreSeparate(t *testing.T) {
 		if r := getMetrics(t, router, path); r.Code != http.StatusForbidden {
 			t.Errorf("%s expected 403, got %d", path, r.Code)
 		}
+	}
+}
+
+func TestGKEConfiguredFrontendWithoutScrapeTargets(t *testing.T) {
+	c := gkeFixture(t, fixtureIssuer, 1)
+	Initialize(c.k8sClient, c.k8sConfig, "fixture")
+	t.Cleanup(func() { Reset(); Initialize(nil, nil, "") })
+	url := c.k8sConfig.Host + "/api/v1/namespaces/gmp-public/services/frontend:web/proxy"
+	SetManualURL(url)
+	client := GetClient()
+	addr, _, err := client.EnsureConnected(t.Context())
+	if err != nil || addr != url || !client.GetStatus().GKESystemMetrics || !client.GetStatus().Connected || !client.gkeChartStore().configured {
+		t.Fatalf("manual endpoint was replaced or not recognized: addr=%s status=%+v err=%v", addr, client.GetStatus(), err)
+	}
+	if err := SetWorkloadMetricsScope(prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "wrong"}}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if client.gkeChartStore() != nil {
+		t.Fatal("new scope retained previous native reader")
+	}
+	if _, _, err = client.EnsureConnected(t.Context()); err != nil || client.GetStatus().GKESystemMetrics || !client.GetStatus().Connected {
+		t.Fatalf("scope conflict affected wrong capability: %+v err=%v", client.GetStatus(), err)
 	}
 }
