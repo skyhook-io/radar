@@ -481,7 +481,7 @@ function AppDetailRoute({
         params.delete("tab");
         if (!options?.replace) {
           params.delete("view");
-        } else if (!params.has("view") && searchParams.get("tab") === "deploys") {
+        } else if (!params.get("view") && searchParams.get("tab") === "deploys") {
           params.set("view", "deploys");
         }
       }

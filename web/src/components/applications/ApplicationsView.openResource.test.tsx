@@ -140,7 +140,7 @@ it.each(['initial fetch', 'background refresh'])('keeps a single-workload Deploy
 
 it('keeps app Deploys after clearing a stale workload, and drops Deploys from a valid child workload', async () => {
   apps = [{ ...app('shop/web', ['web', 'worker']), sourceRef: { type: 'helm', kind: 'HelmRelease', namespace: 'shop', name: 'web' } }]
-  await renderAt('/applications?app=shop%2Fweb&tab=deploys&workload=stale')
+  await renderAt('/applications?app=shop%2Fweb&view=&tab=deploys&workload=stale')
   let params = new URLSearchParams(location.split('?')[1])
   expect(params.get('workload')).toBeNull()
   expect(params.get('tab')).toBeNull()
