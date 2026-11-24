@@ -341,7 +341,9 @@ different cluster labels:
   UID-less Pod info or ownership must report the complete current Kubernetes
   Node inventory with matching cloud provider IDs. Reported system UUIDs must
   also agree. This proof applies only to rightsizing and requires the verified
-  labels on every historical metric it uses.
+  labels on every historical metric it uses. If the additional check fails,
+  Radar keeps the ordinary scope decision, including any unverified result
+  available in standalone Radar.
 - A metric without that label is used unfiltered only when it shows one cluster
   identity and holds this cluster's own live objects (Pods, Nodes, ReplicaSets,
   volumes or the HPA, depending on the metric). Views that join metrics, like

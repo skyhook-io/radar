@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/prom"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -14,6 +15,26 @@ import (
 // A source is a scrape target, including its remote-write identity when present.
 // Matching a job alone could let one cluster's exporter vouch for another's.
 var podInventorySourceLabels = append([]string{"job", "instance", "endpoint", "service", "prometheus", "prometheus_replica", "replica", "__replica__"}, partitionLabels...)
+
+// Only a fully verified result supersedes the ordinary view decision. A
+// mixed-label store can still provide its original unverified local view.
+func (c *Client) verifiedRightsizingOwnerScope(ctx context.Context, req ViewScopeRequest, at time.Time, namespace string, anchors []prom.WorkloadPodIdentity, cache *k8s.ResourceCache) (ViewScope, bool) {
+	if cache == nil || cache.Nodes() == nil {
+		return ViewScope{}, false
+	}
+	nodes, err := cache.Nodes().List(labels.Everything())
+	if err != nil {
+		return ViewScope{}, false
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, historicalPartitionProbeBudget)
+	defer cancel()
+	partition, err := rightsizingOwnerPartition(probeCtx, c, namespace, anchors, nodes, time.Now())
+	if err != nil || len(partition) == 0 {
+		return ViewScope{}, false
+	}
+	scope, err := decideViewScope(probeCtx, c, req, at, partition, false)
+	return scope, err == nil && scope.State == ViewScopeVerified && !scope.Withheld
+}
 
 func rightsizingOwnerPartition(ctx context.Context, q instantQuerier, namespace string, anchors []prom.WorkloadPodIdentity, nodes []*corev1.Node, at time.Time) (map[string]string, error) {
 	if len(nodes) == 0 || len(nodes) > 1024 {

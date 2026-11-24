@@ -170,7 +170,8 @@ func TestRightsizingOwnerViewScope(t *testing.T) {
 		want              ViewScopeState
 		alternate         bool
 	}{
-		{"rightsizing without per-family labels", rightsizingScopeView, false, false, ViewScopeLabelMissing, true},
+		{"rightsizing without per-family labels", rightsizingScopeView, false, false, ViewScopeUnlabeled, true},
+		{"optional query warning", rightsizingScopeView, false, false, ViewScopeUnlabeled, true},
 		{"rightsizing with matching family", rightsizingScopeView, false, true, ViewScopeVerified, true},
 		{"normal historical scope stays independent", rightsizingScopeView, true, true, ViewScopeVerified, false},
 		{"unrelated view cannot obtain owner proof", "other", false, false, ViewScopeUnlabeled, false},
@@ -190,22 +191,36 @@ func TestRightsizingOwnerViewScope(t *testing.T) {
 					out = []prom.Series{viewRow("sources", map[string]string{"cluster": "a", "job": "ksm", "instance": "ksm-1"}), viewRow("nodes", map[string]string{"cluster": "a", "job": "ksm", "instance": "ksm-1", "node": "node", "provider_id": "provider://node"})}
 				case strings.Contains(q, "topk(257,"):
 					alternate.Store(true)
+					if tc.name == "optional query warning" {
+						return attributionEvidence(nil, "warnings")
+					}
 					out = []prom.Series{viewRow("kube_pod_info", map[string]string{"cluster": "a", "namespace": "shop", "pod": "api-0", "job": "ksm", "instance": "ksm-1"}), viewRow(metricPodOwner, map[string]string{"cluster": "a", "namespace": "shop", "pod": "api-0", "uid": "live-uid", "owner_kind": "ReplicaSet", "owner_name": "api"})}
 				case strings.Contains(q, `cluster="a"`):
-					if tc.filtered {
-						out = []prom.Series{viewRow(cpuMetric.Name, clusterA)}
+					if strings.Contains(q, ownerMetric.Name) {
+						out = append(out, viewRow(ownerMetric.Name, clusterA))
+					}
+					if tc.filtered && strings.Contains(q, cpuMetric.Name) {
+						out = append(out, viewRow(cpuMetric.Name, clusterA))
 					}
 				default:
-					out = []prom.Series{viewRow(cpuMetric.Name, nil), viewAnchorRow(cpuMetric.Name)}
+					if strings.Contains(q, cpuMetric.Name) {
+						out = append(out, viewRow(cpuMetric.Name, nil), viewAnchorRow(cpuMetric.Name))
+					}
+					if strings.Contains(q, ownerMetric.Name) {
+						out = append(out, viewRow(ownerMetric.Name, clusterA), viewAnchorRow(ownerMetric.Name))
+					}
 				}
 				return attributionEvidence(out, "")
 			}}
 			c := newViewScopeClient(t, store)
-			req := viewRequest(false, cpuMetric)
+			req := viewRequest(true, cpuMetric, ownerMetric)
 			req.View, req.Namespace = tc.view, "shop"
 			result, err := c.ResolveViewScope(context.Background(), req, k8s.GetResourceCache())
 			if err != nil || result.State != tc.want || alternate.Load() != tc.alternate || result.Withheld != (tc.want == ViewScopeLabelMissing) {
 				t.Fatalf("scope=%+v err=%v alternate=%t", result, err, alternate.Load())
+			}
+			if tc.want == ViewScopeUnlabeled && (result.Withheld || result.Filter(cpuMetric.Name) != "" || len(result.Wire().Labels) > 0 || result.Wire().State != ViewScopeUnlabeled) {
+				t.Fatalf("baseline local result was promoted to fleet evidence: %+v", result)
 			}
 			if tc.alternate && c.workloadPartition != nil {
 				t.Fatalf("rightsizing proof leaked into shared historical memo: %+v", c.workloadPartition)
