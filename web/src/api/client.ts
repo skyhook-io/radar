@@ -4239,6 +4239,7 @@ export function useAutoPromConnect(): void {
   const queryClient = useQueryClient();
   const { data: clusterInfo } = useClusterInfo();
   const { data: status, isLoading: statusLoading } = usePrometheusStatus();
+  const chartsAvailable = hasPrometheusCharts(status);
   const attemptedRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -4247,7 +4248,7 @@ export function useAutoPromConnect(): void {
     if (!context || statusLoading) return;
 
     // Persist the "we've connected here before" signal once a connection lands.
-    if (hasPrometheusCharts(status)) {
+    if (chartsAvailable) {
       try {
         window.localStorage.setItem(promAutoConnectKey(context), "1");
       } catch {
@@ -4308,7 +4309,7 @@ export function useAutoPromConnect(): void {
         });
     }, delay);
     return () => window.clearTimeout(timeout);
-  }, [clusterInfo?.context, status?.connected, status?.gkeSystemMetrics, statusLoading, queryClient]);
+  }, [clusterInfo?.context, chartsAvailable, statusLoading, queryClient]);
 }
 
 // Fetch Prometheus metrics for a resource
