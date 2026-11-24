@@ -198,8 +198,8 @@ func GetCertificateExpiry(provider ResourceProvider, namespaces []string) (map[s
 		if !exists || len(certPEM) == 0 {
 			continue
 		}
-		certs := ParsePEMCertificates(certPEM)
-		if len(certs) == 0 {
+		certs, leafParsed := parseCertificateBundle(certPEM)
+		if !leafParsed {
 			continue
 		}
 		key := secret.Namespace + "/" + secret.Name
