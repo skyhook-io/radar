@@ -556,6 +556,7 @@ func TestRecentPodRestartWithMissingHistory(t *testing.T) {
 		{"unknown runtime reason", birth, "local", 1, &corev1.ContainerStateTerminated{Reason: "ContainerStatusUnknown"}, terminationEvidence{}, ReasonOOMEvidenceUnavailable},
 		{"generic SIGKILL", birth, "local", 1, &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 137}, terminationEvidence{}, ReasonOOMEvidenceUnavailable},
 		{"older Pod with dated ambiguous exit", end.Add(-8 * 24 * time.Hour), "local", 1, &corev1.ContainerStateTerminated{Reason: "Error", Signal: 9, FinishedAt: metav1.NewTime(end.Add(-24 * time.Hour))}, terminationEvidence{}, ReasonOOMEvidenceUnavailable},
+		{"dated last exit survives a reset kubelet counter", end.Add(-8 * 24 * time.Hour), "local", 0, &corev1.ContainerStateTerminated{Reason: "Unknown", FinishedAt: metav1.NewTime(end.Add(-time.Hour))}, terminationEvidence{}, ReasonOOMEvidenceUnavailable},
 		{"older Pod with a dated known final exit", end.Add(-8 * 24 * time.Hour), "local", 2, &corev1.ContainerStateTerminated{Reason: "Completed", FinishedAt: metav1.NewTime(end.Add(-24 * time.Hour))}, terminationEvidence{}, ""},
 		{"missing birth", time.Time{}, "local", 1, nil, terminationEvidence{}, ""},
 		{"future birth", end.Add(time.Minute), "local", 1, nil, terminationEvidence{}, ""},
@@ -610,5 +611,36 @@ func TestMeasuredRestartsAndLivePodExits(t *testing.T) {
 	}
 	if !w.hasOOMEvidence("sidecar", 0, true, terminationEvidence{}) {
 		t.Fatal("one container's restarts affected its sibling")
+	}
+}
+
+func TestRecentTerminatedPodBeforeFirstRestart(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name          string
+		when          time.Time
+		reason        string
+		code          int32
+		wantAvailable bool
+	}{
+		{"killed in window", now.Add(-time.Hour), "Error", 137, false},
+		{"unknown cause in window", now.Add(-time.Hour), "ContainerStatusUnknown", 0, false},
+		{"known clean exit", now.Add(-time.Hour), "Completed", 0, true},
+		{"old kill", now.Add(-8 * 24 * time.Hour), "Error", 137, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{UID: "local", CreationTimestamp: metav1.NewTime(now.Add(-9 * 24 * time.Hour))}}
+			pod.Status.Phase = corev1.PodFailed
+			pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+				Name: "manager", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+					Reason: tc.reason, ExitCode: tc.code, FinishedAt: metav1.NewTime(tc.when),
+				}},
+			}}
+			w := rightsizingWorkload{}
+			w.observePodTerminations(pod, now)
+			if got := w.hasOOMEvidence("manager", 0, true, terminationEvidence{}); got != tc.wantAvailable {
+				t.Fatalf("memory safety evidence available = %t, want %t", got, tc.wantAvailable)
+			}
+		})
 	}
 }

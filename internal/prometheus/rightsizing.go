@@ -287,21 +287,21 @@ type containerSpec struct {
 
 type rightsizingWorkload struct {
 	// podSpec is the workload's pod template, for checks that need the whole pod.
-	podSpec                *corev1.PodSpec
-	containers             []containerSpec
-	podNames               []string
-	podIdentities          []prom.WorkloadPodIdentity
-	podIdentityIncomplete  bool
-	daemonRevisionMatches  map[string]bool
-	admittedImages         []string
-	podRestartEvidence     map[string]sizingPodRestarts
-	qos                    rightsizing.PodQoS
-	currentPodOOM          map[string]bool
-	unexplainedPodRestarts map[string]bool
-	hpaManaged             map[string]bool
-	hpaAvailable           bool
-	replicas               int
-	scaledToZero           bool
+	podSpec               *corev1.PodSpec
+	containers            []containerSpec
+	podNames              []string
+	podIdentities         []prom.WorkloadPodIdentity
+	podIdentityIncomplete bool
+	daemonRevisionMatches map[string]bool
+	admittedImages        []string
+	podRestartEvidence    map[string]sizingPodRestarts
+	qos                   rightsizing.PodQoS
+	currentPodOOM         map[string]bool
+	unexplainedPodExits   map[string]bool
+	hpaManaged            map[string]bool
+	hpaAvailable          bool
+	replicas              int
+	scaledToZero          bool
 	// The live pod list could not be read, so podNames and currentPodOOM are
 	// empty because nothing answered — not because the workload has no pods.
 	liveInventoryUnavailable bool
@@ -425,8 +425,8 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 		workload.liveInventoryUnavailable = true
 		return workload, nil
 	}
-	windowEnd := time.Now()
 	collectPodIdentities := cloud.IsAuthenticatedTunnelRequest(ctx)
+	windowEnd := time.Now()
 	for _, pod := range pods {
 		workload.qos.Observe(pod.Status.QOSClass)
 		workload.podNames = append(workload.podNames, pod.Name)
@@ -442,6 +442,13 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 func (w *rightsizingWorkload) observePodTerminations(pod *corev1.Pod, windowEnd time.Time) {
 	inWindow := func(t time.Time) bool { return !t.Before(windowEnd.Add(-rightsizingWindow)) && !t.After(windowEnd) }
 	bornInWindow := inWindow(pod.CreationTimestamp.Time)
+	// SIGKILL alone cannot distinguish a manual kill from an OOM.
+	unexplained := func(exit *corev1.ContainerStateTerminated) bool {
+		return exit == nil || exit.Reason == "" || exit.Reason == "ContainerStatusUnknown" || exit.Reason == "Unknown" || exit.ExitCode == 137 || exit.Signal == 9
+	}
+	recent := func(exit *corev1.ContainerStateTerminated) bool {
+		return bornInWindow || (exit != nil && inWindow(exit.FinishedAt.Time))
+	}
 	for _, statuses := range [][]corev1.ContainerStatus{pod.Status.ContainerStatuses, pod.Status.InitContainerStatuses} {
 		for _, status := range statuses {
 			current, last := status.State.Terminated, status.LastTerminationState.Terminated
@@ -450,20 +457,20 @@ func (w *rightsizingWorkload) observePodTerminations(pod *corev1.Pod, windowEnd 
 			}
 			// A counter already positive at its first scrape has no visible increase.
 			// A Pod born inside the window dates its restarts even when the scrape cannot.
-			if status.RestartCount <= 0 || pod.UID == "" {
+			if pod.UID == "" {
 				continue
 			}
-			lastInWindow := last != nil && inWindow(last.FinishedAt.Time)
-			unknownExit := last == nil || last.Reason == "" || last.Reason == "ContainerStatusUnknown" || last.Reason == "Unknown" || last.ExitCode == 137 || last.Signal == 9
-			unknownLastExit := unknownExit && (bornInWindow || lastInWindow)
-			hasEarlierExits := bornInWindow && status.RestartCount > 1
-			if !unknownLastExit && !hasEarlierExits {
+			// A container can die and the Pod disappear before the kubelet restarts it.
+			currentGap := current != nil && unexplained(current) && recent(current)
+			lastGap := (status.RestartCount > 0 || last != nil) && unexplained(last) && recent(last)
+			earlierGap := bornInWindow && status.RestartCount > 1
+			if !currentGap && !lastGap && !earlierGap {
 				continue
 			}
-			if w.unexplainedPodRestarts == nil {
-				w.unexplainedPodRestarts = map[string]bool{}
+			if w.unexplainedPodExits == nil {
+				w.unexplainedPodExits = map[string]bool{}
 			}
-			w.unexplainedPodRestarts[status.Name] = true
+			w.unexplainedPodExits[status.Name] = true
 		}
 	}
 }
@@ -474,7 +481,7 @@ func (w rightsizingWorkload) hasOOMEvidence(container string, restartActivity fl
 	}
 	// The aggregated historical reason could describe another replica or just
 	// the last of several restarts. It cannot clear a known gap in a live Pod.
-	return restartAvailable && !w.unexplainedPodRestarts[container] && (restartActivity <= 0 || termination.Any)
+	return restartAvailable && !w.unexplainedPodExits[container] && (restartActivity <= 0 || termination.Any)
 }
 
 func loadHPAManagedResources(ctx context.Context, cache *k8s.ResourceCache, kind, namespace, name string) (map[string]bool, bool) {
