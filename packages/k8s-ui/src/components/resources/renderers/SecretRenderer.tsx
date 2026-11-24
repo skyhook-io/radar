@@ -110,6 +110,7 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
     }
   }, [editValue])
 
+  const reflectionSummary = <ReflectorSummary data={data} reflection={relationships?.reflection} onNavigate={onNavigate} />
   return (
     <>
       <Section title="Secret">
@@ -120,8 +121,11 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
         </PropertyList>
       </Section>
 
-      <ReflectorSummary data={data} reflection={relationships?.reflection} onNavigate={onNavigate} />
-      {certificateInfo && <SecretCertificates key={data.metadata?.uid ?? `${data.metadata?.namespace}/${data.metadata?.name}`} info={certificateInfo} />}
+      {certificateInfo ? (
+        <SecretCertificates key={data.metadata?.uid ?? `${data.metadata?.namespace}/${data.metadata?.name}`} info={certificateInfo}>
+          {reflectionSummary}
+        </SecretCertificates>
+      ) : reflectionSummary}
 
       {dataKeys.length > 0 && (
         <div className="flex items-center gap-2 p-3 bg-amber-500/10 border border-amber-500/30 rounded text-amber-400 text-sm">
@@ -274,7 +278,7 @@ function secretSaveErrorMessage(error: unknown): { reason?: string } {
   return { reason: error instanceof Error && error.message ? error.message : undefined }
 }
 
-function SecretCertificates({ info }: { info: SecretCertificateInfo }) {
+function SecretCertificates({ info, children }: { info: SecretCertificateInfo; children: ReactNode }) {
   const [now, setNow] = useState(Date.now)
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 30_000)
@@ -322,6 +326,7 @@ function SecretCertificates({ info }: { info: SecretCertificateInfo }) {
         />
       )}
 
+      {children}
       {certificateCount > 6 ? <Section title={summary} defaultExpanded={false} contentClassName="pl-6 space-y-4" mountLazily>{certificateSections}</Section> : certificateSections}
     </>
   )
