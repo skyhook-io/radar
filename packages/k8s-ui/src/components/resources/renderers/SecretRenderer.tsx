@@ -4,10 +4,12 @@ import { clsx } from 'clsx'
 import { stringify as yamlStringify } from 'yaml'
 import { Section, PropertyList, Property, AlertBanner } from '../../ui/drawer-components'
 import { ConfirmDialog } from '../../ui/ConfirmDialog'
+import { showApiError } from '../../ui/Toast'
 import { ReflectorSummary, ReflectorSection, isReflectorMirror, reflectorEditNotice } from './ReflectorSection'
 import type { SecretCertificateInfo, CertificateInfo, Relationships, ResourceRef } from '../../../types'
 import { formatDuration } from '../resource-utils'
 import { cleanResourceForYaml } from '../../../utils/yaml'
+import { copyText } from '../../../utils/clipboard'
 import { isFetchError } from '../../../types/fetch-error'
 
 interface SecretRendererProps {
@@ -31,6 +33,8 @@ function formatDate(dateStr: string): string {
 export function SecretRenderer({ data, relationships, onNavigate, certificateInfo, resourceData, onSaveSecretValue, isSaving }: SecretRendererProps) {
   const [revealed, setRevealed] = useState<Set<string>>(new Set())
   const [copied, setCopied] = useState<string | null>(null)
+  const copyTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  useEffect(() => () => clearTimeout(copyTimer.current), [])
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [showSaveConfirm, setShowSaveConfirm] = useState(false)
@@ -51,22 +55,22 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
     })
   }
 
-  function decodeBase64(value: string): string {
+  function decodeBase64(value: string): string | null {
     try {
       return decodeURIComponent(escape(atob(value)))
     } catch {
-      return '[binary data]'
+      return null
     }
   }
 
-  async function copyValue(key: string, decodedValue: string): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(decodedValue)
-      setCopied(key)
-      setTimeout(() => setCopied(null), 2000)
-    } catch (err) {
-      console.error('Failed to copy:', err)
+  async function copyValue(copyId: string, decodedValue: string): Promise<void> {
+    if (!await copyText(decodedValue)) {
+      showApiError("Couldn't copy the value", 'The browser blocked clipboard access.')
+      return
     }
+    setCopied(copyId)
+    clearTimeout(copyTimer.current)
+    copyTimer.current = setTimeout(() => setCopied(null), 2000)
   }
 
   function startEdit(key: string, decoded: string) {
@@ -141,7 +145,10 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
         <div className="space-y-2">
           {dataKeys.map((key) => {
             const decoded = decodeBase64(data.data[key])
-            const isBinary = decoded === '[binary data]'
+            const isBinary = decoded === null
+            // A refresh can rotate the value while a clipboard write is pending.
+            const copyId = JSON.stringify([data.metadata?.uid, data.metadata?.resourceVersion, key])
+            const isCopied = copied === copyId
             const canEdit = onSaveSecretValue && !isImmutable && !isBinary
             // Without a save handler (the Secret was deleted, say) an open
             // editor would have a Save button that does nothing.
@@ -161,13 +168,14 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
                         <Pencil className="w-3.5 h-3.5" />
                       </button>
                     )}
-                    {revealed.has(key) && !isBinary && !isEditing && (
+                    {!isBinary && !isEditing && (
                       <button
-                        onClick={() => copyValue(key, decoded)}
+                        onClick={() => copyValue(copyId, decoded)}
                         className="p-1 text-theme-text-tertiary hover:text-theme-text-primary transition-colors"
-                        title="Copy value"
+                        title={isCopied ? 'Copied' : 'Copy value'}
+                        aria-label={isCopied ? `Copied value for ${key}` : `Copy value for ${key}`}
                       >
-                        {copied === key ? (
+                        {isCopied ? (
                           <Check className="w-3.5 h-3.5 text-green-400" />
                         ) : (
                           <Copy className="w-3.5 h-3.5" />
@@ -234,7 +242,7 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
                   </div>
                 ) : revealed.has(key) ? (
                   <pre className="mt-2 bg-theme-base rounded p-2 text-xs text-theme-text-secondary overflow-x-auto max-h-40 whitespace-pre-wrap">
-                    {decoded}
+                    {decoded ?? '[binary data]'}
                   </pre>
                 ) : null}
               </div>

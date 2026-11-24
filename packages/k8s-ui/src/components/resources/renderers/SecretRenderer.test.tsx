@@ -39,9 +39,57 @@ function button(label: string): HTMLButtonElement {
   return match
 }
 
+describe('SecretRenderer value copy', () => {
+  const writeText = vi.fn<(value: string) => Promise<void>>()
+  let previous: PropertyDescriptor | undefined
+
+  beforeEach(() => {
+    writeText.mockReset().mockResolvedValue(undefined)
+    previous = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+  })
+
+  afterEach(() => {
+    if (previous) Object.defineProperty(navigator, 'clipboard', previous)
+    else Reflect.deleteProperty(navigator, 'clipboard')
+  })
+
+  it('keeps a pending copy confirmation with the revision that was copied', async () => {
+    let finish!: () => void
+    writeText.mockImplementation(() => new Promise<void>(resolve => { finish = resolve }))
+    await render()
+    await act(async () => button('Copy value').click())
+    const rotated = { ...secret, metadata: { ...secret.metadata, resourceVersion: '8' }, data: { password: btoa('new') } }
+    await act(async () => root.render(<SecretRenderer data={rotated} />))
+    await act(async () => finish())
+    expect(writeText).toHaveBeenCalledWith('old')
+    expect(button('Copy value').getAttribute('aria-label')).toBe('Copy value for password')
+    expect(element.querySelector('[title="Copied"], pre')).toBeNull()
+  })
+
+  it.each(['café 🔑', '[binary data]', ''])('copies decoded text %j without revealing it', async value => {
+    const encoded = btoa(String.fromCharCode(...new TextEncoder().encode(value)))
+    await act(async () => root.render(
+      <SecretRenderer data={{ ...secret, data: { password: encoded, binary: '/w==' } }} onSaveSecretValue={vi.fn()} />
+    ))
+    expect(element.querySelector('[aria-label="Copy value for binary"], [title="Edit value"]')).toBeNull()
+    expect(element.querySelector('pre, textarea')).toBeNull()
+    await act(async () => button('Copy value').click())
+    expect(writeText).toHaveBeenCalledWith(value)
+    expect(button('Copied').getAttribute('aria-label')).toBe('Copied value for password')
+    expect(element.querySelector('pre, textarea')).toBeNull()
+    expect(button('Reveal')).toBeTruthy()
+    const binaryRow = [...element.querySelectorAll('.card-inner')].find(row => row.textContent?.includes('binary'))!
+    await act(async () => binaryRow.querySelector('button')!.click())
+    expect(binaryRow.querySelector('pre')?.textContent).toBe('[binary data]')
+    expect(binaryRow.querySelector('[title="Edit value"], [title="Copy value"]')).toBeNull()
+  })
+})
+
 async function editAndSave(value: string) {
   await act(async () => button('Reveal').click())
   await act(async () => button('Edit value').click())
+  expect(element.querySelector('[title="Copy value"]')).toBeNull()
   const textarea = element.querySelector('textarea')!
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, value)
