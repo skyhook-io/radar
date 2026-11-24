@@ -21,7 +21,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	appsv1 "k8s.io/api/apps/v1"
 	authv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -135,7 +137,10 @@ func useFakeAPIServer(t *testing.T, f *fakeCertAPIServer) {
 }
 
 func controllerService(ns, name string, ports ...corev1.ServicePort) *corev1.Service {
-	return &corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}, Spec: corev1.ServiceSpec{Ports: ports}}
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+		Spec:       corev1.ServiceSpec{Ports: ports, Selector: map[string]string{"app.kubernetes.io/name": "sealed-secrets"}},
+	}
 }
 
 // seedSealedSecretsCertFixture: the controller at kubeseal's default location
@@ -230,6 +235,22 @@ func TestSealedSecretsCertInClusterDialsTheService(t *testing.T) {
 	}
 	if reqs[0].Header.Get("Authorization") != "" {
 		t.Errorf("direct dial sent credentials")
+	}
+}
+
+func TestSealedSecretsCertRequiresAUserTokenForLiveRead(t *testing.T) {
+	seedSealedSecretsCertFixture(t)
+	previous := pkgauth.CurrentCredentialMode()
+	pkgauth.SetCredentialMode(pkgauth.CredentialsUserToken)
+	t.Cleanup(func() { pkgauth.SetCredentialMode(previous) })
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sealedsecrets/cert", nil)
+	req = req.WithContext(auth.ContextWithUser(req.Context(), &auth.User{Username: "dana"}))
+	rec := httptest.NewRecorder()
+	(&Server{}).handleSealedSecretsCert(rec, req)
+	_, failure := decodeCert(t, rec.Result(), http.StatusForbidden)
+	if failure["reason"] != pkgauth.UserTokenRequiredReason {
+		t.Fatalf("failure = %v, want user_token_required", failure)
 	}
 }
 

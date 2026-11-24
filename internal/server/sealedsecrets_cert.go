@@ -12,6 +12,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -19,11 +20,14 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
+	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	authv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilnet "k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
 
@@ -78,26 +82,41 @@ func (s *Server) handleSealedSecretsCert(w http.ResponseWriter, r *http.Request)
 	if !s.requireConnected(w) {
 		return
 	}
+	user := auth.UserFromContext(r.Context())
+	if user != nil && pkgauth.UserTokenMode() && !user.System && user.Token == "" {
+		s.writeError(w, http.StatusForbidden, k8s.UserTokenRequiredMessage)
+		return
+	}
 	target := r.URL.Query().Get("sealedSecretNamespace")
 	if target != "" && len(validation.IsDNS1123Label(target)) > 0 {
 		s.writeError(w, http.StatusBadRequest, "invalid namespace")
 		return
 	}
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "Resource cache not available")
+	conn := k8s.Current()
+	cache, discovery, dynamic := conn.ResourceCache(), conn.Discovery(), conn.DynamicResourceCache()
+	if cache == nil || discovery == nil {
+		s.writeErrorCode(w, http.StatusServiceUnavailable, string(readreason.KindSyncPending), "Sealed Secrets discovery is not ready; retry shortly")
 		return
 	}
-	installed := false
-	if d := k8s.GetResourceDiscovery(); d != nil {
-		_, installed = d.GetGVRWithGroup("SealedSecret", "bitnami.com")
-	}
-	if !installed {
-		s.writeErrorCode(w, http.StatusNotFound, "notInstalled", "Sealed Secrets is not installed on this cluster")
+	if _, installed := discovery.GetGVRWithGroup("SealedSecret", "bitnami.com"); !installed {
+		switch {
+		case dynamic == nil || dynamic.GetDiscoveryStatus() != k8score.CRDDiscoveryComplete:
+			s.writeErrorCode(w, http.StatusServiceUnavailable, string(readreason.KindSyncPending), "Sealed Secrets discovery is not ready; retry shortly")
+		case discovery.LastRefreshFailed() || discovery.GroupHadPartialDiscovery("bitnami.com"):
+			discovery.RetryFailedRefresh()
+			s.writeErrorCode(w, http.StatusServiceUnavailable, string(readreason.ReadError), "Sealed Secrets discovery is incomplete; retry shortly")
+		default:
+			s.writeErrorCode(w, http.StatusNotFound, "notInstalled", "Sealed Secrets is not installed on this cluster")
+		}
 		return
 	}
 
-	choice := selectSealedSecretsController(cache, target)
+	coverage := cache.AssessKindRead("deployments", nil)
+	if !coverage.Complete {
+		s.writeErrorCode(w, http.StatusServiceUnavailable, string(readreason.KindSyncPending), "Radar does not have a complete view of Deployments; check its collection scope and permissions")
+		return
+	}
+	choice := selectSealedSecretsController(cache, target, true)
 	if choice.controller == nil {
 		switch {
 		case choice.ambiguousReason == ambiguousOverlap:
@@ -113,52 +132,57 @@ func (s *Server) handleSealedSecretsCert(w http.ResponseWriter, r *http.Request)
 	}
 	ns, name := choice.controller.Namespace, choice.controller.Name
 
-	services := cache.Services()
-	if services == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "Service cache not available")
+	object, found, readable := cache.ReadableObject("services", ns, name)
+	if !readable {
+		s.writeErrorCode(w, http.StatusServiceUnavailable, string(readreason.KindSyncPending), "Radar cannot read the controller's Service; check its collection scope and permissions")
 		return
 	}
-	svc, err := services.Services(ns).Get(name)
-	if apierrors.IsNotFound(err) {
+	if !found {
 		s.writeErrorCode(w, http.StatusNotFound, "serviceNotFound", "The controller has no matching Service")
 		return
-	} else if err != nil {
-		log.Printf("[sealedsecrets] Failed to read Service %s/%s: %v", ns, name, err)
-		s.writeError(w, http.StatusInternalServerError, "Failed to read the controller's Service")
-		return
 	}
+	svc := object.(*corev1.Service)
 	port := sealedSecretsHTTPPort(svc)
 	if port == nil {
 		s.writeErrorCode(w, http.StatusBadGateway, "upstream", "The controller's Service has no port named http and no single TCP port")
 		return
 	}
 	proxyName := utilnet.JoinSchemeNamePort("http", name, port.Name)
-	allowed, authoritative := s.serviceProxyDecision(r, ns, proxyName)
-	if !authoritative {
-		s.writeError(w, http.StatusServiceUnavailable, "Could not check your access to the controller; try again")
+	allowed, err := sealingServiceProxyAllowed(r.Context(), conn, user, ns, proxyName)
+	if err != nil {
+		s.writeErrorCode(w, http.StatusServiceUnavailable, string(readreason.UserPermissionCheckFailed), "Could not check your access to the controller; try again")
 		return
 	}
 	if !allowed {
 		s.writeErrorCode(w, http.StatusForbidden, "denied", "You don't have permission to fetch the controller's certificate (requires get services/proxy on its Service)")
 		return
 	}
-	if svc.Spec.Type == corev1.ServiceTypeExternalName {
-		s.writeErrorCode(w, http.StatusBadGateway, "upstream", "The controller's Service must point to endpoints in this cluster")
+	if svc.Spec.Type == corev1.ServiceTypeExternalName || len(svc.Spec.Selector) == 0 {
+		s.writeErrorCode(w, http.StatusBadGateway, "upstream", "The controller's Service must select pods in its namespace")
 		return
 	}
 
-	client, url, err := sealedSecretsCertUpstream(r.Context(), ns, name, port.Port, proxyName)
+	client, url, err := sealedSecretsCertUpstream(conn, user, ns, name, port.Port, proxyName)
 	if err != nil {
 		log.Printf("[sealedsecrets] Failed to build a client for %s/%s: %v", ns, name, err)
 		s.writeError(w, http.StatusInternalServerError, "Failed to reach the controller")
 		return
 	}
 	certPEM, fingerprint, fetchErr := fetchSealedSecretsCert(r.Context(), client, url)
+	if k8s.Current() != conn {
+		s.writeErrorCode(w, http.StatusConflict, string(readreason.ConnectionChanged), "Cluster connection changed; retry")
+		return
+	}
 	if fetchErr != nil {
+		if fetchErr.forbidden {
+			s.writeErrorCode(w, http.StatusForbidden, "denied", "You don't have permission to fetch the controller's certificate")
+			return
+		}
 		log.Printf("[sealedsecrets] Failed to fetch the certificate of %s/%s: %v", ns, name, fetchErr)
 		s.writeErrorCode(w, http.StatusBadGateway, "upstream", "The controller did not return a usable certificate: "+fetchErr.public)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-store")
 	s.writeJSON(w, sealedSecretsCertResponse{
 		CertPEM:         certPEM,
 		CertFingerprint: fingerprint,
@@ -193,7 +217,7 @@ func sealedSecretsHTTPPort(svc *corev1.Service) *corev1.ServicePort {
 // Kubernetes credentials; otherwise it goes through the API server's
 // services/proxy with the caller's identity (impersonated when signed in,
 // the kubeconfig identity when not), so the API server enforces their RBAC.
-func sealedSecretsCertUpstream(ctx context.Context, namespace, service string, port int32, proxyName string) (*http.Client, string, error) {
+func sealedSecretsCertUpstream(conn *k8s.Connection, user *auth.User, namespace, service string, port int32, proxyName string) (*http.Client, string, error) {
 	noRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	if k8s.IsInCluster() {
 		return &http.Client{
@@ -207,16 +231,12 @@ func sealedSecretsCertUpstream(ctx context.Context, namespace, service string, p
 			},
 		}, sealedSecretsCertDirectURL(namespace, service, port), nil
 	}
-	var cfg *rest.Config
-	if user := auth.UserFromContext(ctx); user != nil {
-		var err error
-		if cfg, err = k8s.UserConfig(user); err != nil {
-			return nil, "", err
-		}
-	} else if base := k8s.GetConfig(); base != nil {
-		cfg = rest.CopyConfig(base)
-	} else {
+	cfg := conn.ConfigCopy()
+	if cfg == nil {
 		return nil, "", fmt.Errorf("K8s config not initialized")
+	}
+	if user != nil {
+		cfg = k8s.UserRESTConfig(cfg, user)
 	}
 	client, err := rest.HTTPClientFor(cfg)
 	if err != nil {
@@ -244,8 +264,9 @@ func sealedSecretsCertProxyURL(cfg *rest.Config, namespace, proxyName string) (s
 // certFetchError keeps what the caller is told apart from the logged cause,
 // so nothing the upstream sent reaches the response.
 type certFetchError struct {
-	public string
-	cause  error
+	public    string
+	cause     error
+	forbidden bool
 }
 
 func (e *certFetchError) Error() string {
@@ -274,6 +295,9 @@ func fetchSealedSecretsCert(ctx context.Context, client *http.Client, url string
 		return "", "", certFetchFailed("unreachable", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusForbidden {
+		return "", "", &certFetchError{public: "access denied", forbidden: true}
+	}
 	if resp.StatusCode != http.StatusOK {
 		return "", "", certFetchFailed(fmt.Sprintf("status %d", resp.StatusCode), nil)
 	}
@@ -303,42 +327,54 @@ func fetchSealedSecretsCert(ctx context.Context, client *http.Client, url string
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: block.Bytes})), hex.EncodeToString(sum[:]), nil
 }
 
-// serviceProxyDecision authorizes get services/proxy on one named Service,
+// sealingServiceProxyAllowed authorizes get services/proxy on one named Service,
 // with the name in the review so grants limited by resourceNames apply.
 // Without auth it allows: the API server or the fixed target bounds the read.
-func (s *Server) serviceProxyDecision(r *http.Request, namespace, name string) (allowed, authoritative bool) {
-	user := auth.UserFromContext(r.Context())
+func sealingServiceProxyAllowed(ctx context.Context, conn *k8s.Connection, user *auth.User, namespace, name string) (bool, error) {
 	if user == nil {
-		return true, true
+		return true, nil
 	}
-	var perms *auth.UserPermissions
-	if s.permCache != nil {
-		perms = s.permCache.Get(user.Username, user.Groups)
+	ctx, cancel := context.WithTimeout(ctx, sealedSecretsCertTimeout)
+	defer cancel()
+	attrs := authv1.ResourceAttributes{
+		Verb: "get", Resource: "services", Subresource: "proxy", Namespace: namespace, Name: name,
 	}
-	key := "services/proxy/" + name
-	if perms != nil {
-		if v, ok := perms.CanI("get", "", key, namespace); ok {
-			return v, true
+	var status authv1.SubjectAccessReviewStatus
+	if pkgauth.UserTokenMode() && !user.System {
+		cfg := conn.Config()
+		if cfg == nil {
+			return false, fmt.Errorf("K8s config not initialized")
+		}
+		client, err := kubernetes.NewForConfig(k8s.UserRESTConfig(cfg, user))
+		if err != nil {
+			return false, err
+		}
+		review, err := client.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, &authv1.SelfSubjectAccessReview{
+			Spec: authv1.SelfSubjectAccessReviewSpec{ResourceAttributes: &attrs},
+		}, metav1.CreateOptions{})
+		if err != nil {
+			return false, err
+		}
+		status = review.Status
+	} else {
+		client := conn.ClientInterface()
+		if client == nil {
+			return false, fmt.Errorf("K8s client not initialized")
+		}
+		groups := user.Groups
+		// Kubernetes includes this group for an impersonated user.
+		if !slices.Contains(groups, "system:authenticated") {
+			groups = append(slices.Clone(groups), "system:authenticated")
+		}
+		var err error
+		status, err = pkgauth.ReviewSubjectAccess(ctx, client, user.Username, groups, attrs)
+		if err != nil {
+			return false, err
 		}
 	}
-	client := k8s.GetClient()
-	if client == nil {
-		return false, false
-	}
-	// The API server includes system:authenticated for impersonated users.
-	// Match the groups that apply to the actual proxy request.
-	groups := append(append([]string(nil), user.Groups...), "system:authenticated")
-	status, err := pkgauth.ReviewSubjectAccess(r.Context(), client, user.Username, groups, authv1.ResourceAttributes{
-		Verb: "get", Resource: "services", Subresource: "proxy", Namespace: namespace, Name: name,
-	})
-	if err != nil {
-		log.Printf("[sealedsecrets] Failed to authorize services/proxy %s/%s: %v", k8s.SanitizeForLog(namespace), k8s.SanitizeForLog(name), err)
-		return false, false
-	}
 	// An authorizer that allowed is final even if another one errored.
-	authoritative = status.Allowed || status.EvaluationError == ""
-	if authoritative && perms != nil {
-		perms.SetCanI("get", "", key, namespace, status.Allowed)
+	if !status.Allowed && status.EvaluationError != "" {
+		return false, fmt.Errorf("Kubernetes authorization evaluation failed")
 	}
-	return status.Allowed, authoritative
+	return status.Allowed, nil
 }

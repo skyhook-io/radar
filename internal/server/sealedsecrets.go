@@ -257,7 +257,7 @@ type sealedSecretsControllerChoice struct {
 // selectSealedSecretsController picks the controller from Radar's Deployment
 // cache: the one serving target (chooseControllerFor), or with target empty
 // the one kubeseal's defaults reach (findSealedSecretsController).
-func selectSealedSecretsController(cache *k8s.ResourceCache, target string) sealedSecretsControllerChoice {
+func selectSealedSecretsController(cache *k8s.ResourceCache, target string, requireUnique bool) sealedSecretsControllerChoice {
 	lister := cache.Deployments()
 	if lister == nil {
 		return sealedSecretsControllerChoice{state: "notCollected"}
@@ -282,6 +282,20 @@ func selectSealedSecretsController(cache *k8s.ResourceCache, target string) seal
 		} else if choice.controller != nil {
 			choice.settings = readSealedSecretsSettings(choice.controller)
 		}
+	} else if requireUnique {
+		for _, d := range candidates {
+			settings := readSealedSecretsSettings(d)
+			switch coverageOf(d, settings, target) {
+			case coverageUnknown:
+				return sealedSecretsControllerChoice{state: "ambiguous", ambiguousReason: ambiguousUnknownScope}
+			case coverageExplicit, coverageAll:
+				if choice.controller != nil {
+					return sealedSecretsControllerChoice{state: "ambiguous", ambiguousReason: ambiguousOverlap}
+				}
+				choice.controller, choice.settings = d, settings
+			}
+		}
+		watched = choice.controller != nil
 	} else {
 		choice.controller, choice.settings, choice.ambiguousReason, watched = chooseControllerFor(candidates, target)
 	}
@@ -356,7 +370,7 @@ func (s *Server) handleSealedSecretsController(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	choice := selectSealedSecretsController(cache, target)
+	choice := selectSealedSecretsController(cache, target, false)
 	resp.AmbiguousReason = choice.ambiguousReason
 	if choice.controller == nil {
 		resp.ControllerState = choice.state
