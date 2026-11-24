@@ -560,7 +560,7 @@ func TestRecentPodRestartWithMissingHistory(t *testing.T) {
 	}
 }
 
-func TestMeasuredRestartsKeepHistoricalEvidencePolicy(t *testing.T) {
+func TestMeasuredRestartsAndLivePodExits(t *testing.T) {
 	now := time.Now()
 	w := rightsizingWorkload{}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{UID: "local", CreationTimestamp: metav1.NewTime(now.Add(-time.Hour))}}
@@ -569,8 +569,15 @@ func TestMeasuredRestartsKeepHistoricalEvidencePolicy(t *testing.T) {
 	if w.hasOOMEvidence("app", 0, true, terminationEvidence{}) {
 		t.Fatal("missed the restart of a native sidecar")
 	}
+	if w.hasOOMEvidence("app", 2, true, terminationEvidence{Any: true}) {
+		t.Fatal("another replica's aggregate history cleared a lost last exit")
+	}
+	pod.Status.InitContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{Reason: "Completed"}
+	pod.Status.InitContainerStatuses[0].RestartCount = 2
+	w = rightsizingWorkload{}
+	w.observePodTerminations(pod, now)
 	if !w.hasOOMEvidence("app", 2, true, terminationEvidence{Any: true}) {
-		t.Fatal("discarded observed restart and termination history")
+		t.Fatal("discarded measured restart and termination history when the last exit was known")
 	}
 	if w.hasOOMEvidence("app", 2, true, terminationEvidence{}) {
 		t.Fatal("accepted restarts without termination history")
