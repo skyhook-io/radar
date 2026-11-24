@@ -440,8 +440,8 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 }
 
 func (w *rightsizingWorkload) observePodTerminations(pod *corev1.Pod, windowEnd time.Time) {
-	created := pod.CreationTimestamp.Time
-	bornInWindow := pod.UID != "" && created.After(windowEnd.Add(-rightsizingWindow)) && !created.After(windowEnd)
+	inWindow := func(t time.Time) bool { return !t.Before(windowEnd.Add(-rightsizingWindow)) && !t.After(windowEnd) }
+	bornInWindow := inWindow(pod.CreationTimestamp.Time)
 	for _, statuses := range [][]corev1.ContainerStatus{pod.Status.ContainerStatuses, pod.Status.InitContainerStatuses} {
 		for _, status := range statuses {
 			current, last := status.State.Terminated, status.LastTerminationState.Terminated
@@ -450,7 +450,12 @@ func (w *rightsizingWorkload) observePodTerminations(pod *corev1.Pod, windowEnd 
 			}
 			// A counter already positive at its first scrape has no visible increase.
 			// A Pod born inside the window dates its restarts even when the scrape cannot.
-			if bornInWindow && status.RestartCount > 0 && (status.RestartCount > 1 || last == nil || last.Reason == "") {
+			if status.RestartCount <= 0 || pod.UID == "" {
+				continue
+			}
+			lastInWindow := last != nil && inWindow(last.FinishedAt.Time)
+			unknownExit := last == nil || last.Reason == "" || last.Reason == "ContainerStatusUnknown" || last.Reason == "Unknown" || last.ExitCode == 137 || last.Signal == 9
+			if (bornInWindow && status.RestartCount > 1) || (unknownExit && (bornInWindow || lastInWindow)) {
 				if w.unexplainedPodRestarts == nil {
 					w.unexplainedPodRestarts = map[string]bool{}
 				}
@@ -461,9 +466,18 @@ func (w *rightsizingWorkload) observePodTerminations(pod *corev1.Pod, windowEnd 
 }
 
 func (w rightsizingWorkload) hasOOMEvidence(container string, restartActivity float64, restartAvailable bool, termination terminationEvidence) bool {
-	// Historical reasons are grouped by container name across replicas. A
-	// non-OOM reason could describe a different Pod from the unexplained exit.
-	return termination.OOM || (!w.unexplainedPodRestarts[container] && restartAvailable && (restartActivity <= 0 || termination.Any))
+	// A zero increase cannot clear a restart that the live Pod dates to this
+	// window. A historical non-OOM reason may belong to a different replica.
+	if termination.OOM {
+		return true
+	}
+	if !restartAvailable {
+		return false
+	}
+	if restartActivity > 0 {
+		return termination.Any
+	}
+	return !w.unexplainedPodRestarts[container]
 }
 
 func loadHPAManagedResources(ctx context.Context, cache *k8s.ResourceCache, kind, namespace, name string) (map[string]bool, bool) {

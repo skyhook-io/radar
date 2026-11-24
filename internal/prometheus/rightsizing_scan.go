@@ -231,7 +231,7 @@ func runRightsizingScan(ctx context.Context, scope RightsizingScanScope, client 
 	effective, partiallyCached := clampScopeToCacheCoverage(cache, scope.NamespacesByKind)
 	resp.Coverage.PartiallyCachedKinds = partiallyCached
 	resp.Coverage.ScannedNamespacesByKind = effective
-	workloads, unavailable, skippedDaemonSets := snapshotScanWorkloads(ctx, cache, effective, resp.ScannedAt.Truncate(rightsizingStep))
+	workloads, unavailable, skippedDaemonSets := snapshotScanWorkloads(ctx, cache, effective, resp.ScannedAt)
 	resp.Coverage.UnavailableKinds = unavailable
 	resp.Coverage.DaemonSetsWithoutNodes = len(skippedDaemonSets)
 	sort.Strings(skippedDaemonSets)

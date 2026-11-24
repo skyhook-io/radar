@@ -510,7 +510,7 @@ func TestLostThrottleReadingClearsTheReviewReason(t *testing.T) {
 }
 
 func TestRecentPodRestartWithMissingHistory(t *testing.T) {
-	end := time.Date(2026, 11, 24, 8, 10, 0, 0, time.UTC)
+	end := time.Date(2026, 11, 24, 8, 12, 30, 0, time.UTC)
 	birth := end.Add(-6 * 24 * time.Hour)
 	key := scanKey{namespace: "lws-system", kind: "Deployment", workload: "lws-controller-manager", container: "manager"}
 	container := containerSpec{name: key.container, memReq: mustQuantity(t, "256Mi")}
@@ -525,7 +525,12 @@ func TestRecentPodRestartWithMissingHistory(t *testing.T) {
 		wantReason string
 	}{
 		{"first sample already one", birth, "local", 1, nil, terminationEvidence{}, ReasonOOMEvidenceUnavailable},
-		{"restart predates possible window", end.Add(-8 * 24 * time.Hour), "local", 1, nil, terminationEvidence{}, ""},
+		{"old Pod count alone cannot date its restart", end.Add(-8 * 24 * time.Hour), "local", 1, nil, terminationEvidence{}, ""},
+		{"born during the latest partial five-minute bucket", end.Add(-time.Minute), "local", 1, nil, terminationEvidence{}, ReasonOOMEvidenceUnavailable},
+		{"unknown runtime reason", birth, "local", 1, &corev1.ContainerStateTerminated{Reason: "ContainerStatusUnknown"}, terminationEvidence{}, ReasonOOMEvidenceUnavailable},
+		{"generic SIGKILL", birth, "local", 1, &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 137}, terminationEvidence{}, ReasonOOMEvidenceUnavailable},
+		{"older Pod with dated ambiguous exit", end.Add(-8 * 24 * time.Hour), "local", 1, &corev1.ContainerStateTerminated{Reason: "Error", Signal: 9, FinishedAt: metav1.NewTime(end.Add(-24 * time.Hour))}, terminationEvidence{}, ReasonOOMEvidenceUnavailable},
+		{"older Pod with a dated known final exit", end.Add(-8 * 24 * time.Hour), "local", 2, &corev1.ContainerStateTerminated{Reason: "Completed", FinishedAt: metav1.NewTime(end.Add(-24 * time.Hour))}, terminationEvidence{}, ""},
 		{"missing birth", time.Time{}, "local", 1, nil, terminationEvidence{}, ""},
 		{"future birth", end.Add(time.Minute), "local", 1, nil, terminationEvidence{}, ""},
 		{"unverified Pod", birth, "", 1, nil, terminationEvidence{}, ""},
@@ -552,5 +557,25 @@ func TestRecentPodRestartWithMissingHistory(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestMeasuredRestartsKeepHistoricalEvidencePolicy(t *testing.T) {
+	now := time.Now()
+	w := rightsizingWorkload{}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{UID: "local", CreationTimestamp: metav1.NewTime(now.Add(-time.Hour))}}
+	pod.Status.InitContainerStatuses = []corev1.ContainerStatus{{Name: "app", RestartCount: 1}}
+	w.observePodTerminations(pod, now)
+	if w.hasOOMEvidence("app", 0, true, terminationEvidence{}) {
+		t.Fatal("missed the restart of a native sidecar")
+	}
+	if !w.hasOOMEvidence("app", 2, true, terminationEvidence{Any: true}) {
+		t.Fatal("discarded observed restart and termination history")
+	}
+	if w.hasOOMEvidence("app", 2, true, terminationEvidence{}) {
+		t.Fatal("accepted restarts without termination history")
+	}
+	if !w.hasOOMEvidence("sidecar", 0, true, terminationEvidence{}) {
+		t.Fatal("one container's restarts affected its sibling")
 	}
 }
