@@ -81,14 +81,16 @@ const (
 )
 
 type RightsizingResponse struct {
-	Kind            string           `json:"kind"`
-	Namespace       string           `json:"namespace"`
-	Name            string           `json:"name"`
-	Window          string           `json:"window"`
-	Source          string           `json:"source"`
-	OwnerCoverage   OwnerCoverage    `json:"ownerCoverage"`
-	Replicas        int              `json:"replicas"`
-	ScaledToZero    bool             `json:"scaledToZero"`
+	Kind          string        `json:"kind"`
+	Namespace     string        `json:"namespace"`
+	Name          string        `json:"name"`
+	Window        string        `json:"window"`
+	Source        string        `json:"source"`
+	OwnerCoverage OwnerCoverage `json:"ownerCoverage"`
+	Replicas      int           `json:"replicas"`
+	ScaledToZero  bool          `json:"scaledToZero"`
+	// SampleAvailable means at least one CPU or memory row has an observation.
+	// A recommendation additionally requires enough history and safety evidence.
 	SampleAvailable bool             `json:"sampleAvailable"`
 	ManagedBy       *WorkloadManager `json:"managedBy,omitempty"`
 	Rows            []RightsizingRow `json:"rows"`
@@ -232,6 +234,8 @@ func currentPodRightsizingDetail(ctx context.Context, store rightsizingScanQueri
 	}
 	if !resp.SampleAvailable {
 		switch {
+		case measured.ScaledToZero:
+			resp.Reason = "This workload has no current replicas to measure. Configure the Prometheus cluster scope to use retained workload history."
 		case !hasCurrentPodSizingCohort(input):
 			resp.Reason = "Radar could not verify a complete set of ready Pods matching the current workload template."
 		case errors.Is(evidence.errors["cpu"], context.DeadlineExceeded) || errors.Is(evidence.errors["memory"], context.DeadlineExceeded):

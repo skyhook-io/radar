@@ -464,7 +464,9 @@ func computeRightsizingScanProgress(ctx context.Context, client rightsizingScanQ
 			if workloadHasData(out) {
 				resp.Coverage.WorkloadsWithData++
 			} else if scope.State == ViewScopeCurrentPodUIDs && len(evidence.errors) == 0 {
-				if !hasCurrentPodSizingCohort(workload) {
+				if out.ScaledToZero {
+					appendScanWarning(&resp, "scaled_to_zero", "Some workloads have no current replicas to measure. Configure the Prometheus cluster scope to use retained workload history.")
+				} else if !hasCurrentPodSizingCohort(workload) {
 					appendScanWarning(&resp, reasonCurrentReplicasUnverified, "Some workloads could not be measured because Radar could not verify a complete set of ready Pods matching their current template.")
 				} else {
 					appendScanWarning(&resp, reasonCurrentPodSamplesMissing, "For some workloads, no CPU or memory interval matched every current replica. Check that cAdvisor retains Pod UIDs in the id label, or configure the scope of your Prometheus store to use workload history.")
@@ -730,7 +732,9 @@ func buildScanWorkload(input scanWorkload, evidence scanBatchEvidence) Rightsizi
 	missingReason := ""
 	if evidence.ownerCoverage == OwnerCoverageCurrentPods {
 		missingReason = reasonCurrentPodSamplesMissing
-		if !hasCurrentPodSizingCohort(input) {
+		if out.ScaledToZero {
+			missingReason = "scaled_to_zero"
+		} else if !hasCurrentPodSizingCohort(input) {
 			missingReason = reasonCurrentReplicasUnverified
 		}
 	}

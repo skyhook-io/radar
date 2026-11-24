@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/prom"
+	"github.com/skyhook-io/radar/pkg/rightsizing"
 )
 
 const (
@@ -140,7 +141,9 @@ func currentPodRangeValues(ctx context.Context, client rightsizingScanQuerier, f
 	values := map[scanKey][]float64{}
 	for key, times := range buckets {
 		for _, b := range times {
-			if b.count == expected[key] {
+			// One verified replica can establish throttling severe enough to
+			// withhold a cut. Quiet or missing siblings cannot negate it.
+			if b.count == expected[key] || (family == "throttle" && b.max >= rightsizing.ThrottleReviewRatio) {
 				values[key] = append(values[key], b.max)
 			}
 		}
@@ -182,9 +185,8 @@ func sizingPodRangeQuery(family string, targets []sizingPodTarget) string {
 	return "max by (namespace,pod,container,id) (" + usage + ")"
 }
 
-// For each timestamp keep the hottest Pod, only if all replicas have exactly
-// one observation. Duplicate scrapes and overlapping container incarnations
-// cannot stand in for a missing replica.
+// Each timestamp records the hottest Pod and the number of replicas with
+// exactly one observation. Overlapping incarnations invalidate that Pod's sample.
 func addSizingPodBuckets(out map[scanKey]map[int64]sizingBucket, expected map[scanKey]int, targets []sizingPodTarget, result *prom.QueryResult, start, end time.Time, family string) {
 	if result == nil {
 		return

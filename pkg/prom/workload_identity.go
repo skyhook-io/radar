@@ -40,8 +40,10 @@ func PodCgroupPattern(uid string) (string, error) {
 	return PodCgroupPatternForUIDs([]string{uid})
 }
 
-// PodCgroupPatternForUIDs matches the same exact Pod segments in a bounded
-// batch without repeating the full systemd path expression for each UID.
+// PodCgroupPatternForUIDs returns an unquoted RE2 pattern matching the cgroup
+// Pod segment of any supplied Kubernetes Pod UID. An empty list or an invalid
+// UID returns an error.
+// Callers bound the number of UIDs to fit their query budget.
 func PodCgroupPatternForUIDs(uids []string) (string, error) {
 	if len(uids) == 0 {
 		return "", fmt.Errorf("empty Pod UID selection")

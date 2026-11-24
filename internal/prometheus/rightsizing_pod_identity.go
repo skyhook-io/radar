@@ -143,7 +143,8 @@ func (w *rightsizingWorkload) podRevisionMatches(ctx context.Context, cache *k8s
 	return false
 }
 
-// SizingResources projects the requests and limits used by the sizing policy.
+// SizingResources selects CPU and memory requests and limits. A nil input
+// stays nil, so callers can distinguish an absent resource budget.
 func SizingResources(r *corev1.ResourceRequirements) *corev1.ResourceRequirements {
 	if r == nil {
 		return nil
@@ -163,7 +164,8 @@ func SizingResources(r *corev1.ResourceRequirements) *corev1.ResourceRequirement
 	return &corev1.ResourceRequirements{Requests: project(r.Requests), Limits: project(r.Limits)}
 }
 
-// SizingPodMatches checks that admitted resources still match the workload template.
+// SizingPodMatches compares admitted container restart policies and CPU and
+// memory resources, including Pod-level resources, against the workload template.
 func SizingPodMatches(p *corev1.Pod, spec corev1.PodSpec) bool {
 	match := func(desired, actual []corev1.Container) bool {
 		// With a shared Pod limit, admission-injected containers can use the

@@ -120,14 +120,14 @@ function resourceSignals(row: RightsizingRow): ResourceSignal[] {
   return signals
 }
 
-export function getRightsizingPresentation(fit: RightsizingFit, queryError?: string, reason?: string) {
+export function getRightsizingPresentation(fit: RightsizingFit, queryError?: string, recommendationReason?: string) {
   if (queryError) return { label: 'Query failed', severity: 'error' as const }
   const labels: Record<RightsizingFit, string> = {
     balanced: 'Balanced',
     oversized: 'Oversized',
     under_requested: 'Under-requested',
     missing_request: 'Missing request',
-    insufficient_history: currentPodEvidenceLabel(reason) ?? 'Insufficient history',
+    insufficient_history: currentPodEvidenceLabel(recommendationReason) ?? 'Insufficient history',
     pod_level_request: 'Pod-level request',
   }
   const severities: Record<RightsizingFit, 'success' | 'info' | 'warning' | 'neutral'> = {

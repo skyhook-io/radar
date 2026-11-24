@@ -3,6 +3,7 @@ package prometheus
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/url"
 	"slices"
 	"strings"
@@ -66,6 +67,44 @@ func TestCurrentPodRightsizingRequiresUniqueCompleteBuckets(t *testing.T) {
 	}
 	if len(client.queries) != 0 || len(client.rangeQueries) != 3 {
 		t.Fatalf("unexpected store reads: %+v", client)
+	}
+}
+
+func TestCurrentPodThrottleEvidenceWithIdleReplica(t *testing.T) {
+	w := currentSizingWorkload()
+	end := time.Unix(60000000, 0)
+	start := end.Add(-rightsizingWindow)
+	for _, ratio := range []float64{0, .05, rightsizing.ThrottleReviewRatio, .8} {
+		client := &fakeScanQuerier{rangeFn: func(string) (*prom.QueryResult, error) {
+			return &prom.QueryResult{ResultType: "matrix", Series: []prom.Series{
+				currentSizingSeries(w.workload.podIdentities[0], start, 1, ratio),
+				currentSizingSeries(w.workload.podIdentities[1], start, 1, math.NaN()),
+			}}, nil
+		}}
+		e := queryCurrentPodRightsizing(context.Background(), client, w, end)
+		key := scanKey{"apps", "Deployment", "api", "app"}
+		var want []float64
+		if ratio >= rightsizing.ThrottleReviewRatio {
+			want = []float64{ratio}
+		}
+		if !slices.Equal(e.throttle[key], want) || len(e.cpu[key]) != 0 || len(e.memory[key]) != 0 {
+			t.Fatalf("ratio=%v throttle=%v cpu=%v memory=%v", ratio, e.throttle, e.cpu, e.memory)
+		}
+	}
+}
+
+func TestCurrentPodRightsizingScaledToZero(t *testing.T) {
+	w := currentSizingWorkload()
+	w.replicas, w.workload.scaledToZero, w.workload.podIdentities = 0, true, nil
+	client := &fakeScanQuerier{}
+	detail := currentPodRightsizingDetail(context.Background(), client, w)
+	if detail.SampleAvailable || !detail.ScaledToZero || !strings.Contains(detail.Reason, "no current replicas") || len(client.rangeQueries) > 0 {
+		t.Fatalf("scaled-to-zero workload: %+v", detail)
+	}
+	for _, row := range detail.Rows {
+		if row.RecommendationReason != "scaled_to_zero" {
+			t.Fatalf("unexpected row reason: %+v", row)
+		}
 	}
 }
 

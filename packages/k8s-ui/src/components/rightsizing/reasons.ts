@@ -1,6 +1,7 @@
 import type { RightsizingRow } from '../../types/rightsizing'
 
 export function currentPodEvidenceLabel(reason?: string): string | undefined {
+  if (reason === 'scaled_to_zero') return 'No current replicas'
   if (reason === 'current_replicas_unverified') return 'Current replicas unverified'
   if (reason === 'current_pod_samples_missing') return 'Current Pod samples missing'
 }
