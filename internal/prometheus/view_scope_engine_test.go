@@ -202,7 +202,7 @@ func dockerRun(t *testing.T, args ...string) string {
 }
 
 // startEnginePrometheus backfills the data into a fresh TSDB and serves it.
-func startEnginePrometheus(t *testing.T, end time.Time) string {
+func startEnginePrometheus(t *testing.T, families []engineFamily) string {
 	t.Helper()
 	if os.Getenv("RADAR_PROMENGINE") == "" {
 		t.Skip("set RADAR_PROMENGINE=1 (make test-prom-engine) to run the real-Prometheus tests")
@@ -215,7 +215,7 @@ func startEnginePrometheus(t *testing.T, end time.Time) string {
 	if err := os.Mkdir(data, 0o777); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeOpenMetrics(filepath.Join(dir, "series.om"), engineData(end)); err != nil {
+	if err := writeOpenMetrics(filepath.Join(dir, "series.om"), families); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "prometheus.yml"), []byte("global: {}\n"), 0o644); err != nil {
@@ -301,7 +301,7 @@ func scalarAt(t *testing.T, c *Client, query string, at time.Time) float64 {
 
 func TestEngineViewScope(t *testing.T) {
 	end := time.Now().Truncate(30 * time.Second).Add(-90 * time.Second)
-	url := startEnginePrometheus(t, end)
+	url := startEnginePrometheus(t, engineData(end))
 	configuredA := engineClient(url, map[string]string{"cluster": "a"})
 	unconfigured := engineClient(url, nil)
 	podsSubject := `namespace="` + engineNS + `"`

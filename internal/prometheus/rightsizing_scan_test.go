@@ -179,6 +179,81 @@ func TestRightsizingScanBatchesAtFiftyWithConstantQueries(t *testing.T) {
 	}
 }
 
+func TestRightsizingScanSplitsOversizedFamiliesByWholeWorkload(t *testing.T) {
+	// A count limit alone cannot bound the repeated owner joins for workloads
+	// in different namespaces or the regexes for long Kubernetes names.
+	var batch []scanWorkload
+	kinds := []string{"Deployment", "DaemonSet", "StatefulSet"}
+	for i := range rightsizingScanBatchSize {
+		name := fmt.Sprintf("%s-%03d", strings.Repeat("w", 249), i)
+		namespace := fmt.Sprintf("%s-%02d", strings.Repeat("n", 60), i)
+		batch = append(batch, scanTestWorkload(kinds[i%len(kinds)], namespace, name, "app"))
+	}
+	for family, query := range buildRightsizingScanQueries(batch, ViewScope{}) {
+		if len(query) <= prom.MaxWorkloadQueryBytes {
+			t.Fatalf("%s fixture only generated %d bytes", family, len(query))
+		}
+	}
+	run := func(query string) (*prom.QueryResult, error) {
+		if len(query) > prom.MaxWorkloadQueryBytes {
+			return nil, fmt.Errorf("store rejected %d-byte query", len(query))
+		}
+		var series []prom.Series
+		for i, workload := range batch {
+			if strings.Contains(query, workload.name) {
+				series = append(series, scanMatrixSeries(workload.namespace, workload.kind, workload.name, "app", []float64{float64(i + 1)}))
+			}
+		}
+		return &prom.QueryResult{Series: series}, nil
+	}
+	client := &fakeScanQuerier{queryFn: run, rangeFn: run}
+	evidence := queryRightsizingScanBatch(context.Background(), client, batch, time.Now(), ViewScope{}, new(scanMemoryBudget))
+	if len(evidence.errors) != 0 {
+		t.Fatalf("incomplete batch: %v", evidence.errors)
+	}
+	for i, w := range batch {
+		k := scanKey{w.namespace, w.kind, w.name, "app"}
+		want := float64(i + 1)
+		for _, measured := range []map[scanKey][]float64{evidence.cpu, evidence.memory, evidence.throttle} {
+			if !slices.Equal(measured[k], []float64{want}) {
+				t.Fatalf("wrong samples for %v: %v", k, measured[k])
+			}
+		}
+		if evidence.restarts[k] != want || !evidence.terminations[k].Any {
+			t.Fatalf("wrong restart/termination evidence for %v", k)
+		}
+	}
+}
+
+func TestRightsizingScanOversizedFamilyWithholdsIncompleteResults(t *testing.T) {
+	batch := []scanWorkload{
+		scanTestWorkload("Deployment", "first", "api", "app"),
+		scanTestWorkload("Deployment", "second", "api", "app"),
+	}
+	filters := map[string]string{metricCPUUsage: `cluster=""`}
+	scope := ViewScope{Filters: filters}
+	original := buildRightsizingScanQueries(batch, scope)["cpu"]
+	filters[metricCPUUsage] = `cluster="` + strings.Repeat("x", prom.MaxWorkloadQueryBytes-len(original)+1) + `"`
+	calls := 0
+	run := func(context.Context, string) (*prom.QueryResult, error) {
+		calls++
+		if calls == 1 {
+			return &prom.QueryResult{Series: []prom.Series{scanMatrixSeries("first", "Deployment", "api", "app", []float64{1})}}, nil
+		}
+		return nil, prom.ErrQueryWarning
+	}
+	result, err := runScanQuery(context.Background(), batch, scope, "cpu", buildRightsizingScanQueries(batch, scope)["cpu"], run)
+	if !errors.Is(err, prom.ErrQueryWarning) || result != nil || calls != 2 {
+		t.Fatalf("partial query exposed evidence: result=%v err=%v calls=%d", result, err, calls)
+	}
+	batch = batch[:1]
+	filters[metricCPUUsage] = `cluster="` + strings.Repeat("x", prom.MaxWorkloadQueryBytes) + `"`
+	result, err = runScanQuery(context.Background(), batch, scope, "cpu", buildRightsizingScanQueries(batch, scope)["cpu"], run)
+	if !errors.Is(err, prom.ErrWorkloadQueryTooLarge) || result != nil || calls != 2 {
+		t.Fatalf("oversized singleton dispatched: result=%v err=%v calls=%d", result, err, calls)
+	}
+}
+
 func TestRightsizingScanSafetyQueriesCoverHistoricalPodsAndReasons(t *testing.T) {
 	queries := buildRightsizingScanQueries([]scanWorkload{
 		scanTestWorkload("Deployment", "prod", "api", "app"),
@@ -1002,7 +1077,7 @@ func TestScanRangeWindowIsAlignedToTheSubqueryGrid(t *testing.T) {
 		fake := &fakeScanQuerier{}
 		now := time.Unix(1789513500, 0).UTC().Add(offset)
 		queryRightsizingScanBatch(context.Background(), fake,
-			[]scanWorkload{scanTestWorkload("Deployment", "shop", "checkout", "api")}, now, ViewScope{})
+			[]scanWorkload{scanTestWorkload("Deployment", "shop", "checkout", "api")}, now, ViewScope{}, new(scanMemoryBudget))
 
 		if len(fake.rangeStarts) == 0 {
 			t.Fatalf("offset %v: no range queries issued", offset)
@@ -1037,7 +1112,7 @@ func TestScansSecondsApartQueryTheSameWindow(t *testing.T) {
 	for _, offset := range []time.Duration{3 * time.Second, 91 * time.Second, 288 * time.Second} {
 		fake := &fakeScanQuerier{}
 		queryRightsizingScanBatch(context.Background(), fake,
-			[]scanWorkload{scanTestWorkload("Deployment", "shop", "checkout", "api")}, base.Add(offset), ViewScope{})
+			[]scanWorkload{scanTestWorkload("Deployment", "shop", "checkout", "api")}, base.Add(offset), ViewScope{}, new(scanMemoryBudget))
 		windows = append(windows, [2]time.Time{fake.rangeStarts[0], fake.rangeEnds[0]})
 	}
 	for i := 1; i < len(windows); i++ {

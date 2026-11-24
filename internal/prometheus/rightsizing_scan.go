@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"maps"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -433,6 +435,7 @@ func computeRightsizingScanProgress(ctx context.Context, client rightsizingScanQ
 
 	resp.Coverage.Batches = (len(workloads) + rightsizingScanBatchSize - 1) / rightsizingScanBatchSize
 	publish(resp)
+	var memoryBudget scanMemoryBudget
 	for start := 0; start < len(workloads); start += rightsizingScanBatchSize {
 		if err := ctx.Err(); err != nil {
 			appendScanWarning(&resp, ReasonScanDeadlineExceeded, err.Error())
@@ -441,7 +444,7 @@ func computeRightsizingScanProgress(ctx context.Context, client rightsizingScanQ
 		end := min(start+rightsizingScanBatchSize, len(workloads))
 		batch := workloads[start:end]
 		batchStarted := time.Now()
-		evidence := queryRightsizingScanBatch(ctx, client, batch, resp.ScannedAt, scope)
+		evidence := queryRightsizingScanBatch(ctx, client, batch, resp.ScannedAt, scope, &memoryBudget)
 		resp.Coverage.AttemptedBatches++
 		log.Printf("[rightsizing] batch=%d workloads=%d duration=%s query_failures=%d", resp.Coverage.AttemptedBatches, len(batch), time.Since(batchStarted).Round(time.Millisecond), len(evidence.errors))
 		if len(evidence.errors) == 0 {
@@ -497,7 +500,7 @@ func computeRightsizingScanProgress(ctx context.Context, client rightsizingScanQ
 	return resp
 }
 
-func queryRightsizingScanBatch(ctx context.Context, client rightsizingScanQuerier, batch []scanWorkload, now time.Time, scope ViewScope) scanBatchEvidence {
+func queryRightsizingScanBatch(ctx context.Context, client rightsizingScanQuerier, batch []scanWorkload, now time.Time, scope ViewScope, memoryBudget *scanMemoryBudget) scanBatchEvidence {
 	if scope.State == ViewScopeCurrentPodUIDs {
 		return queryCurrentPodBatch(ctx, client, batch, now)
 	}
@@ -519,78 +522,118 @@ func queryRightsizingScanBatch(ctx context.Context, client rightsizingScanQuerie
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 2)
-	for _, key := range []string{"cpu", "memory", "throttle"} {
-		key := key
-		select {
-		case sem <- struct{}{}:
-		case <-ctx.Done():
-			mu.Lock()
-			out.errors[key] = ctx.Err()
-			mu.Unlock()
-			continue
+	runFamily := func(family string, retry error) {
+		var result *prom.QueryResult
+		var err error
+		if retry != nil {
+			result, err = memoryBudget.recover(ctx, client, batch, scope, family, start, end, retry)
+		} else {
+			result, err = runScanQuery(ctx, batch, scope, family, queries[family], func(ctx context.Context, query string) (*prom.QueryResult, error) {
+				return queryScanFamily(ctx, client, family, query, start, end)
+			})
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			result, err := client.QueryRange(ctx, queries[key], start, end, rightsizingStep)
-			<-sem
-			mu.Lock()
-			defer mu.Unlock()
-			if err != nil {
-				out.errors[key] = err
-				return
-			}
-			values := scanMatrixValues(result)
-			switch key {
-			case "cpu":
-				out.cpu = values
-			case "memory":
-				out.memory = values
-			case "throttle":
-				out.throttle = values
-			}
-		}()
-	}
-	wg.Wait()
-	for _, key := range []string{"restart_activity", "termination_history"} {
-		key := key
-		select {
-		case sem <- struct{}{}:
-		case <-ctx.Done():
-			mu.Lock()
-			out.errors[key] = ctx.Err()
-			mu.Unlock()
-			continue
+		mu.Lock()
+		defer mu.Unlock()
+		if err != nil {
+			out.errors[family] = err
+			return
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			result, err := client.Query(ctx, queries[key])
-			<-sem
-			mu.Lock()
-			defer mu.Unlock()
-			if err != nil {
-				out.errors[key] = err
-				return
-			}
-			if key == "restart_activity" {
-				out.restarts = scanVectorValues(result)
-			} else {
-				out.terminations = scanTerminationEvidence(result)
-			}
-		}()
+		delete(out.errors, family)
+		switch family {
+		case "cpu":
+			out.cpu = scanMatrixValues(result)
+		case "memory":
+			out.memory = scanMatrixValues(result)
+		case "throttle":
+			out.throttle = scanMatrixValues(result)
+		case "restart_activity":
+			out.restarts = scanVectorValues(result)
+		case "termination_history":
+			out.terminations = scanTerminationEvidence(result)
+		}
 	}
-	wg.Wait()
+	phases := [][]string{{"cpu", "memory", "throttle"}, {"restart_activity", "termination_history"}}
+	for _, phase := range phases {
+		for _, family := range phase {
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				mu.Lock()
+				out.errors[family] = ctx.Err()
+				mu.Unlock()
+				continue
+			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer func() { <-sem }()
+				runFamily(family, nil)
+			}()
+		}
+		wg.Wait()
+	}
+	// A query that fits alone can still lose to a concurrent family. Retry only
+	// rejected families, after all the normal requests have released their memory.
+	for _, family := range slices.Concat(phases...) {
+		if err := out.errors[family]; err != nil && ctx.Err() == nil {
+			runFamily(family, err)
+		}
+	}
 	return out
 }
 
+// Every output series is grouped by workload. Splitting on whole workloads keeps
+// ratios and historical safety evidence intact, and concatenating the disjoint
+// results preserves the original query. Only the oversized family needs splitting.
+func runScanQuery(ctx context.Context, batch []scanWorkload, scope ViewScope, family, query string, run func(context.Context, string) (*prom.QueryResult, error)) (*prom.QueryResult, error) {
+	return runScanQueryParts(ctx, batch, query, func(part []scanWorkload) string { return buildRightsizingScanQueries(part, scope)[family] }, run)
+}
+
+func runScanQueryParts(ctx context.Context, batch []scanWorkload, query string, queryFor func([]scanWorkload) string, run func(context.Context, string) (*prom.QueryResult, error)) (*prom.QueryResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(query) <= prom.MaxWorkloadQueryBytes {
+		return run(ctx, query)
+	}
+	if len(batch) <= 1 {
+		return nil, prom.ErrWorkloadQueryTooLarge
+	}
+	var combined prom.QueryResult
+	for part := range slices.Chunk(batch, (len(batch)+1)/2) {
+		result, err := runScanQueryParts(ctx, part, queryFor(part), queryFor, run)
+		if err != nil {
+			return nil, err
+		}
+		if result != nil {
+			combined.Series = append(combined.Series, result.Series...)
+		}
+	}
+	return &combined, nil
+}
+
 func buildRightsizingScanQueries(batch []scanWorkload, scope ViewScope) map[string]string {
+	return buildScanQueries(batch, scope, false)
+}
+
+func buildScanQueries(batch []scanWorkload, scope ViewScope, restrictContainers bool) map[string]string {
 	owner := rightsizingScanOwnerVector(batch, scope)
 	namespaces := batchNamespaces(batch)
 	nsMatcher := labelRegexMatcher("namespace", namespaces)
+	if restrictContainers {
+		// Fleet rows describe only containers in the current workload spec.
+		// Filter before the owner join so unrelated Job series do not exhaust the store.
+		containers := make(map[string]struct{})
+		for _, w := range batch {
+			for _, c := range w.workload.containers {
+				containers[c.name] = struct{}{}
+			}
+		}
+		nsMatcher += "," + labelRegexMatcher("container", slices.Sorted(maps.Keys(containers)))
+	}
 	f := func(metric string) string { return scopeMatchers(scope, metric) }
 	group := "namespace,workload_kind,workload,container"
-	cpu := fmt.Sprintf(`max by (%s) (rate(container_cpu_usage_seconds_total{%s,container!="",container!="POD"%s}[5m]) * on (namespace,pod) group_left(workload_kind,workload) (%s))`, group, nsMatcher, f(metricCPUUsage), owner)
+	cpu := fmt.Sprintf(`max by (%s) (rate(container_cpu_usage_seconds_total{%s,container!="",container!="POD",cpu=~"total|"%s}[5m]) * on (namespace,pod) group_left(workload_kind,workload) (%s))`, group, nsMatcher, f(metricCPUUsage), owner)
 	memory := fmt.Sprintf(`max by (%s) (container_memory_working_set_bytes{%s,container!="",container!="POD"%s} * on (namespace,pod) group_left(workload_kind,workload) (%s))`, group, nsMatcher, f(metricMemoryWorkingSet), owner)
 	throttled := fmt.Sprintf(`sum by (%s) (rate(container_cpu_cfs_throttled_periods_total{%s,container!="",container!="POD"%s}[5m]) * on (namespace,pod) group_left(workload_kind,workload) (%s))`, group, nsMatcher, f(metricThrottledPeriods), owner)
 	periods := fmt.Sprintf(`sum by (%s) (rate(container_cpu_cfs_periods_total{%s,container!="",container!="POD"%s}[5m]) * on (namespace,pod) group_left(workload_kind,workload) (%s))`, group, nsMatcher, f(metricCFSPeriods), owner)

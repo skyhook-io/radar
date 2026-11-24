@@ -466,6 +466,18 @@ current-Pod comparison and explicitly current-only HTTP observations remain usab
 when the ownership lookup fails. While current attribution is pending, comparison
 shows a matching-in-progress state and refreshes every three seconds.
 
+For a fleet rightsizing scan, a proxy must allow read-only form POST requests
+to `/api/v1/query` and `/api/v1/query_range` when the encoded URL exceeds
+7 KiB. On retained ownership scans, Radar can split a query after
+VictoriaMetrics reports its requested and available memory in HTTP 422.
+Recovery is limited to four requests per failed metric family and batch,
+and 30 seconds across the scan. Other backend errors remain visible in coverage.
+
+Rightsizing CPU measurements require a whole-container counter, identified by
+`cpu="total"` or by an absent or empty `cpu` label. If only per-core counters
+are retained, CPU requests cannot be sized from that source. Memory uses its
+own observations.
+
 When identity-checked CPU/memory charts cannot be served, the existing basic charts
 remain in a collapsed **Basic CPU / memory · identity unverified** section
 (the label lists only the affected charts). They do not establish Pod UID or
