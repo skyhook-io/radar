@@ -201,7 +201,7 @@ export function ResourceActionsBar({
   onCompareAcrossClusters,
   canExec, canViewLogs, canPortForward,
   onOpenTerminal, onOpenLogs: openLogs, onOpenWorkloadLogs: openWorkloadLogs, onCopyCommand,
-  renderPortForward, renderPodDebug,
+  renderPortForward,
   onDelete, isDeleting, onDeletePreviewOpenChange, cascadeDetail, cascadeDependents, cascadeLoading, cascadeRootResolved, cascadePreviewFailed,
   onRestart, isRestarting,
   onPauseDeployment, onResumeDeployment, isPausingDeployment, isResumingDeployment,
@@ -225,6 +225,7 @@ export function ResourceActionsBar({
   onUncordonNode, isUncordoningNode,
   onDrainNode, isDrainingNode,
   onPlanDrain, onPlanDrainReset, drainPlan, isPlanningDrain, drainPlanError, drainPlanUpgrade,
+  renderPodDebug,
 }: ResourceActionsBarProps) {
   const kind = resource.kind.toLowerCase()
   const isFluxAction = FLUX_ACTION_KINDS.has(kind) && getGitOpsTool(kind, apiVersionToGroup(data?.apiVersion)) === 'flux'

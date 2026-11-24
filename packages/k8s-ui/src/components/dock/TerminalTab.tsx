@@ -340,9 +340,9 @@ export function TerminalTab({
                 </div>
               ) : <div className="text-xs text-theme-text-tertiary mb-4 max-w-md">
                 Container <span className="font-mono text-theme-text-secondary">{selectedContainer}</span> doesn&apos;t
-                have a shell (/bin/sh). This is common with distroless or minimal container images
-                {containers.length > 1 ? ' — try another container above, or' : '. You can'} create a
-                debug container to troubleshoot.
+                have a shell (/bin/sh). This is common with distroless or minimal container images.
+                {containers.length > 1 && ' Try another container above.'}
+                {createDebugContainer && ' You can create a debug container to troubleshoot.'}
               </div>}
               <div className="flex gap-2">
                 {!command && createDebugContainerRef.current && (

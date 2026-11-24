@@ -69,12 +69,15 @@ export function PodDebugAction({ pod }: { pod: PodDebugTarget }) {
       })
       setDraft(undefined)
     } catch (error) {
-      if (mounted.current) setResult(actionDialogResult(error instanceof Error ? error : new Error(String(error)), {
+      if (mounted.current && sameConnection()) setResult(actionDialogResult(error instanceof Error ? error : new Error(String(error)), {
         unknown: 'Check the ephemeral containers in the Pod YAML before trying again',
       }))
     } finally {
       submitting.current = false
-      if (mounted.current) setBusy(false)
+      if (mounted.current) {
+        setBusy(false)
+        if (!sameConnection()) setDraft(undefined)
+      }
     }
   }
 
@@ -91,6 +94,8 @@ export function PodDebugAction({ pod }: { pod: PodDebugTarget }) {
         if (result?.state === 'error') setResult(undefined)
       }}
       onConfirm={start} confirmLabel="Start debug container" isLoading={busy} result={result}
+      guard={result?.state === 'unknown' && <button type="button" className="btn-secondary px-3 py-1.5 text-sm"
+        onClick={() => setResult(undefined)}>I checked the Pod YAML</button>}
       incompleteReason={draft && !targets.includes(draft.target) ? 'Select a running container.' : undefined}>
       {draft && <div className="grid gap-3">
         <label className="grid gap-1">Target container

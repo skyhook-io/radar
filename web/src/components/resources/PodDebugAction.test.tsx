@@ -60,3 +60,19 @@ it.each([false, true])('submits the reviewed running target once, keeping the de
   await act(async () => { finish(new Response(JSON.stringify({ containerName: 'debug-1', status: 'pending' }))) })
   expect(document.querySelector('output')!.textContent).toBe(switched ? '' : 'debug-1')
 })
+
+it.each([
+  [503, { error: 'No serving connection', error_code: 'cluster_unavailable' }, false],
+  [502, { error: 'Proxy lost the response' }, true],
+] as const)('distinguishes a retryable refusal from an uncertain write (%s)', async (status, body, unknown) => {
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status })))
+  render()
+  click('Debug')
+  await act(async () => { click('Start debug container') })
+  const start = [...document.querySelectorAll('button')].find(button => button.textContent === 'Start debug container')!
+  expect(start.disabled).toBe(unknown)
+  if (unknown) {
+    click('I checked the Pod YAML')
+    expect(start.disabled).toBe(false)
+  }
+})
