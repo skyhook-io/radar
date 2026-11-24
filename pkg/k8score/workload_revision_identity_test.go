@@ -146,7 +146,7 @@ func TestApplyControllerRevisionServing(t *testing.T) {
 		applyControllerRevisionServing(got, workload(4, map[string]any{
 			"currentRevision": "db-new", "updateRevision": "db-new", "readyReplicas": int64(3), "replicas": int64(3), "currentReplicas": int64(3),
 		}), "statefulsets")
-		if !*got[0].Serving || *got[0].ReadyReplicas != 3 || *got[1].Serving || *got[1].ReadyReplicas != 0 {
+		if got[0].Replicas != 3 || !*got[0].Serving || *got[0].ReadyReplicas != 3 || *got[1].Serving || *got[1].ReadyReplicas != 0 {
 			t.Fatalf("revisions = %+v / %+v", got[0], got[1])
 		}
 	})
@@ -196,7 +196,7 @@ func TestApplyControllerRevisionServing(t *testing.T) {
 		applyControllerRevisionServing(got, workload(1, map[string]any{
 			"desiredNumberScheduled": int64(5), "updatedNumberScheduled": int64(5), "numberReady": int64(4),
 		}), "daemonsets")
-		if !*got[0].Serving || *got[0].ReadyReplicas != 4 || *got[1].Serving {
+		if got[0].Replicas != 5 || !*got[0].Serving || *got[0].ReadyReplicas != 4 || *got[1].Serving {
 			t.Fatalf("revisions = %+v / %+v", got[0], got[1])
 		}
 	})

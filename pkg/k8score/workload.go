@@ -44,7 +44,8 @@ type WorkloadRevision struct {
 	// ReadyReplicas is this revision's own ready pods. Nil when the kind has no
 	// per-revision count and the workload's pods may span revisions.
 	ReadyReplicas *int64 `json:"readyReplicas,omitempty"`
-	// Serving says whether this revision's pods are running and ready. Nil means
+	// Serving reports the active Service selector for a blue-green Rollout, or
+	// whether a native workload revision has ready pods. Nil means
 	// the API can't tell: a StatefulSet or DaemonSet mid-update reports no split
 	// per revision, and canary traffic weights are unknown.
 	Serving *bool `json:"serving,omitempty"`
@@ -1394,7 +1395,7 @@ func applyControllerRevisionServing(revisions []WorkloadRevision, workload *unst
 	}
 
 	settled := -1
-	var ready int64
+	var total, ready int64
 	switch normalizedKind {
 	case "statefulsets":
 		updateRevision, _, _ := unstructured.NestedString(workload.Object, "status", "updateRevision")
@@ -1409,6 +1410,7 @@ func applyControllerRevisionServing(revisions []WorkloadRevision, workload *unst
 		if onRevision != replicas {
 			return
 		}
+		total = replicas
 		ready, _, _ = unstructured.NestedInt64(workload.Object, "status", "readyReplicas")
 		for i := range revisions {
 			if revisions[i].PodHash == updateRevision {
@@ -1424,6 +1426,7 @@ func applyControllerRevisionServing(revisions []WorkloadRevision, workload *unst
 		if updated != desired || misscheduled != 0 {
 			return
 		}
+		total = desired
 		ready, _, _ = unstructured.NestedInt64(workload.Object, "status", "numberReady")
 		for i := range revisions {
 			if revisions[i].IsCurrent {
@@ -1440,6 +1443,7 @@ func applyControllerRevisionServing(revisions []WorkloadRevision, workload *unst
 		revisions[i].Serving = &serving
 		var count int64
 		if i == settled {
+			revisions[i].Replicas = total
 			count = ready
 		}
 		revisions[i].ReadyReplicas = &count

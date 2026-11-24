@@ -1507,7 +1507,7 @@ export function WorkloadView({
         )}
         {effectiveTab === 'timeline' && (
           <div className="flex h-full min-h-0 flex-col">
-            {timelineActions}
+            {!resourceGone && timelineActions}
             <div className="min-h-0 flex-1">
               <EventsTab
                 focusEvent={timelineFocusEvent}

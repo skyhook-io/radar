@@ -285,11 +285,10 @@ function AppDetailRoute({
     enabled: !selectedWorkloadKey || Boolean(app.sourceRef),
   });
   const readableHistory = historyQuery.isError ? undefined : historyQuery.data;
-  const deliveryRecords = useMemo(() => applicationDeliveryRecords(readableHistory), [readableHistory]);
+  const deliveryRecords = useMemo(() => applicationDeliveryRecords(historyQuery.data), [historyQuery.data]);
   const deliverySource = readableHistory?.sourceRef ?? app.sourceRef;
   const requestedDeploys = selectedView === "deploys" || searchParams.get("tab") === "deploys";
-  const showDeploys = deliveryRecords.length > 0 || (requestedDeploys && Boolean(deliverySource))
-    || (historyQuery.isError && Boolean(historyQuery.data?.anchors?.length));
+  const showDeploys = deliveryRecords.length > 0 || (requestedDeploys && Boolean(deliverySource));
   const [retainedHistoryRange, setRetainedHistoryRange] =
     useState<ApplicationHistoryRange>("7d");
   const historyRangeOptions = useMemo(
@@ -393,6 +392,15 @@ function AppDetailRoute({
     [deploymentTreeQuery.data, helmReleaseQuery.data?.resources],
   );
   useEffect(() => {
+    // Deploys belongs to the app scope, including its single-workload shell.
+    if (requestedDeploys && (!deliverySource || (!singleWorkloadKey && selectedWorkloadParam))) {
+      const params = new URLSearchParams(searchParams);
+      if (viewParam === "deploys") params.delete("view");
+      if (params.get("tab") === "deploys") params.delete("tab");
+      if (singleWorkloadKey) params.set("workload", singleWorkloadKey);
+      setSearchParams(params, { replace: true });
+      return;
+    }
     if (!singleWorkloadKey) return;
     if (selectedWorkloadParam === singleWorkloadKey && !viewParam) return;
     const params = new URLSearchParams(searchParams);
@@ -404,6 +412,8 @@ function AppDetailRoute({
     setSearchParams(params, { replace: true });
   }, [
     searchParams,
+    requestedDeploys,
+    deliverySource,
     selectedRouteView,
     selectedWorkloadParam,
     setSearchParams,
@@ -685,7 +695,7 @@ function AppDetailRoute({
         selectedView={selectedView}
         onSelectView={selectView}
         renderDeploys={deliverySource && showDeploys ? () =>
-          <ApplicationDeploys source={deliverySource} records={deliveryRecords} loading={historyQuery.isLoading} unavailable={historyQuery.isError} partialSources={historyQuery.data?.partialSources} onOpenSource={openSource} /> : undefined}
+          <ApplicationDeploys source={deliverySource} records={historyQuery.isError ? [] : deliveryRecords} loading={historyQuery.isLoading} unavailable={historyQuery.isError} partialSources={historyQuery.data?.partialSources} onOpenSource={openSource} /> : undefined}
         renderWorkloadRevisions={(workload) => <WorkloadRevisionsButton {...workload} />}
         costViewSelected={applicationCostSelected}
         onSelectCostView={() => selectView("cost")}
