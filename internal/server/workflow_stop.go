@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log"
@@ -35,8 +36,9 @@ type WorkflowStopRequest struct {
 
 // WorkflowStopResponse is the Workflow's state after the request.
 type WorkflowStopResponse struct {
+	// Shutdown is the resulting value of spec.shutdown.
 	Shutdown string `json:"shutdown"`
-	// Changed is false when the Workflow was already stopping.
+	// Changed reports whether this request patched the Workflow.
 	Changed bool `json:"changed"`
 }
 
@@ -53,8 +55,8 @@ var workflowFinishedPhases = map[string]bool{"Succeeded": true, "Failed": true, 
 // identity, like every other workload action. The patch carries the
 // resourceVersion that was read, so a Workflow that finishes or changes in
 // between is refused (409), not overwritten. Radar records who stopped it and
-// when; the caller can't supply annotations. A finished Workflow is 409; one
-// already stopping is a 200 no-op.
+// when; the caller can't supply annotations. A finished Workflow is 409.
+// Terminate can escalate Stop, never the reverse.
 func (s *Server) handleWorkflowStop(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
@@ -95,11 +97,14 @@ func (s *Server) handleWorkflowStop(w http.ResponseWriter, r *http.Request) {
 		s.writeErrorCode(w, http.StatusConflict, "workflow_finished", "the workflow has already finished ("+phase+")")
 		return
 	}
-	if current, _, _ := unstructured.NestedString(wf.Object, "spec", "shutdown"); current != "" {
+	if current, _, _ := unstructured.NestedString(wf.Object, "spec", "shutdown"); current != "" && !(current == "Stop" && req.Strategy == "Terminate") {
 		s.writeJSON(w, WorkflowStopResponse{Shutdown: current})
 		return
 	}
-	annotations := map[string]any{workflowStoppedAtAnnotation: time.Now().UTC().Format(time.RFC3339)}
+	annotations := map[string]any{
+		workflowStoppedAtAnnotation: time.Now().UTC().Format(time.RFC3339),
+		workflowStoppedByAnnotation: nil,
+	}
 	if u := auth.UserFromContext(r.Context()); u != nil && u.Username != "" {
 		annotations[workflowStoppedByAnnotation] = u.Username
 	}
@@ -126,6 +131,12 @@ func (s *Server) writeWorkflowStopError(w http.ResponseWriter, err error, namesp
 		s.writeError(w, http.StatusForbidden, "failed to stop workflow: "+err.Error())
 	case apierrors.IsConflict(err):
 		s.writeErrorCode(w, http.StatusConflict, "workflow_changed", "the workflow changed while stopping it; look again")
+	case apierrors.IsInvalid(err):
+		s.writeError(w, http.StatusUnprocessableEntity, "Kubernetes rejected the workflow stop: "+err.Error())
+	case apierrors.IsBadRequest(err):
+		s.writeError(w, http.StatusBadRequest, "Kubernetes rejected the workflow stop: "+err.Error())
+	case errors.Is(err, context.DeadlineExceeded), apierrors.IsTimeout(err), apierrors.IsServerTimeout(err):
+		s.writeError(w, http.StatusGatewayTimeout, "Kubernetes timed out; check the workflow before retrying")
 	case step == "read":
 		log.Printf("[workflows] Failed to read workflow %s/%s: %v", sanitizeForLog(namespace), sanitizeForLog(name), err)
 		s.writeError(w, http.StatusServiceUnavailable, "could not read the workflow")

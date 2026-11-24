@@ -105,7 +105,7 @@ func TestWorkflowStop(t *testing.T) {
 			t.Fatalf("patch: %v", body)
 		}
 		// Without authentication there is no caller to name.
-		if _, ok := ann[workflowStoppedByAnnotation]; ok || len(body["spec"].(map[string]any)) != 1 || len(ann) != 1 {
+		if ann[workflowStoppedByAnnotation] != nil || len(body["spec"].(map[string]any)) != 1 || len(ann) != 2 {
 			t.Fatalf("patch writes more than shutdown and stopped-at: %v", body)
 		}
 	})
@@ -145,10 +145,18 @@ func TestWorkflowStop(t *testing.T) {
 	})
 	t.Run("already stopping is a no-op", func(t *testing.T) {
 		srv, dyn := workflowStopServer(t, testWorkflow("Running", "Stop"))
-		rec := postStop(srv, "", nil)
+		rec := postStop(srv, `{"strategy":"Stop"}`, nil)
 		var resp WorkflowStopResponse
 		_ = json.Unmarshal(rec.Body.Bytes(), &resp)
 		if rec.Code != http.StatusOK || resp.Changed || resp.Shutdown != "Stop" || len(workflowPatches(dyn)) != 0 {
+			t.Fatalf("status = %d resp = %+v patches = %d", rec.Code, resp, len(workflowPatches(dyn)))
+		}
+	})
+	t.Run("terminate can escalate a workflow already stopping", func(t *testing.T) {
+		srv, dyn := workflowStopServer(t, testWorkflow("Running", "Stop"))
+		rec := postStop(srv, `{"strategy":"Terminate"}`, nil)
+		var resp WorkflowStopResponse
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &resp) != nil || !resp.Changed || resp.Shutdown != "Terminate" || len(workflowPatches(dyn)) != 1 {
 			t.Fatalf("status = %d resp = %+v patches = %d", rec.Code, resp, len(workflowPatches(dyn)))
 		}
 	})
