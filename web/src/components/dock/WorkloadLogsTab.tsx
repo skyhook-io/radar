@@ -12,9 +12,10 @@ interface WorkloadLogsTabProps {
 }
 
 function ReplicaSetDockLogs({ namespace, name }: { namespace: string; name: string }) {
-  const { support, upgrade } = useRadarFeature('replicaSetLogs')
+  const { support, upgrade, blockedReason } = useRadarFeature('replicaSetLogs')
   const { canViewLogs, logsUnknown } = useNamespacedCapabilities(namespace)
   if (upgrade) return <RadarUpgradeNote requirement={upgrade} />
+  if (blockedReason) return <AlertBanner variant="info" title={blockedReason} />
   if (support !== 'supported') return <PaneLoader label="Checking ReplicaSet log support…" className="h-full" />
   if (!canViewLogs && !logsUnknown) return <AlertBanner variant="warning" title="Pod logs are restricted in this namespace." />
   return <WorkloadLogsViewer kind="replicasets" namespace={namespace} name={name} />

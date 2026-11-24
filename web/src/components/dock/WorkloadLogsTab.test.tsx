@@ -4,9 +4,11 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WorkloadLogsTab } from './WorkloadLogsTab'
 
-const state = vi.hoisted(() => ({ replicaSetSupport: true, targets: [] as Array<{ kind: string; name: string; role?: string; snapshotOnly?: boolean }> }))
+const state = vi.hoisted(() => ({ replicaSetSupport: true, supportCheckFailed: false, targets: [] as Array<{ kind: string; name: string; role?: string; snapshotOnly?: boolean }> }))
 vi.mock('../../api/client', () => ({
-  useRadarFeature: () => state.replicaSetSupport ? { support: 'supported' } : { support: 'unsupported', upgrade: { feature: 'Combined ReplicaSet logs' } },
+  useRadarFeature: () => state.supportCheckFailed
+    ? { support: 'unknown', blockedReason: "Couldn't check this cluster's Radar support. Refresh to try again." }
+    : state.replicaSetSupport ? { support: 'supported' } : { support: 'unsupported', upgrade: { feature: 'Combined ReplicaSet logs' } },
   useResource: (_kind: string, _namespace: string, name: string) => ({
     data: { metadata: { uid: name }, spec: { replicatedJobs: [{ name: name === 'first' ? 'workers' : 'leader' }] } },
   }),
@@ -28,6 +30,7 @@ let element: HTMLDivElement
 beforeEach(() => {
   state.targets = []
   state.replicaSetSupport = true
+  state.supportCheckFailed = false
   element = document.createElement('div')
   document.body.appendChild(element)
   root = createRoot(element)
@@ -77,5 +80,10 @@ describe('dock ReplicaSet logs', () => {
     await render('web-v2', 'replicasets')
     expect(state.targets).toEqual([])
     expect(element.textContent).toContain('newer Radar')
+    state.supportCheckFailed = true
+    await render('web-v2', 'replicasets')
+    expect(state.targets).toEqual([])
+    expect(element.textContent).toContain("Couldn't check")
+    expect(element.textContent).not.toContain('newer Radar')
   })
 })

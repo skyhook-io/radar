@@ -43,7 +43,7 @@ export const RADAR_FEATURES = {
   capacity: { label: 'Capacity views', minimumVersion: 'v1.9.0' },
   // Radars from v1.15.0 serve the route without advertising the flag.
   rayClusterPods: { label: 'RayCluster runtime Pods', minimumVersion: 'v1.15.0', flag: 'rayClusterPods' },
-  replicaSetLogs: { label: 'Combined ReplicaSet logs', flag: 'replicaSetLogs', flagShippedWithEndpoint: true },
+  replicaSetLogs: { label: 'Combined ReplicaSet logs', flag: 'replicaSetLogs', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
   upgradeReadiness: { label: 'Upgrade impact reports', minimumVersion: 'v1.9.0' },
   drainPlan: { label: 'Drain plans', minimumVersion: 'v1.14.0' },
   applications: { label: 'Applications', minimumVersion: 'v1.7.7' },

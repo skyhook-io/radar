@@ -374,7 +374,7 @@ function useActionsBarProps(
     ? imageUpdatesSupported && isRollout && !rolloutCapabilitiesPending && rolloutCapabilities?.setImage === true
     : !workloadWritesPending && canSetWorkloadImages({ name: kind, group }, workloadWrites, imageUpdatesSupported)
   const { support: replicaSetLogSupport } = useRadarFeature('replicaSetLogs')
-  const replicaSetLogs = kind === 'replicasets' && group === 'apps' && replicaSetLogSupport === 'supported'
+  const isAppsReplicaSet = kind === 'replicasets' && group === 'apps'
   const { support: deploymentPauseSupport } = useRadarFeature('deploymentPause')
   const canPauseDeployments = !workloadWritesPending &&
     canPauseDeployment({ name: kind, group }, workloadWrites, deploymentPauseSupport === 'supported')
@@ -434,7 +434,8 @@ function useActionsBarProps(
     onOpenTerminal: openTerminal,
     onOpenLogs: openLogs,
     onOpenWorkloadLogs: openWorkloadLogs,
-    replicaSetLogs,
+    replicaSetLogs: isAppsReplicaSet && replicaSetLogSupport === 'supported',
+    replicaSetLogTab: isAppsReplicaSet && replicaSetLogSupport !== 'unsupported',
     onOpenNodeTerminal: openNodeTerminal,
     onCopyCommand: (text: string, message: string, event: React.MouseEvent) =>
       showCopied(text, message, event),
@@ -1314,7 +1315,7 @@ export function WorkloadView({
         renderLogsTab={(props) => (
           <LogsTabContent
             {...props}
-            replicaSetLogs={baseActionsBarProps.replicaSetLogs}
+            replicaSetLogs={baseActionsBarProps.replicaSetLogTab}
             resourceLoading={resourceLoading}
             resourceError={resourceError}
             group={effectiveGroup}
