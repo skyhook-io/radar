@@ -296,6 +296,25 @@ describe('ApplicationDetail extra views', () => {
     expect(host.textContent).toContain('Deploys')
   })
 
+  it('suspends singleton Deploys content while a controlled workload link is provisional', () => {
+    const single = workload('checkout-api')
+    const renderDeploys = vi.fn(() => <div>Recorded deliveries</div>)
+    const renderWorkload: ApplicationDetailProps['renderWorkload'] = (_, { extraTabs }) =>
+      extraTabs?.find(({ id }) => id === 'deploys')?.render()
+    const props = {
+      app: { ...app, workloads: [single] },
+      selectedWorkloadKey: workloadKey(single),
+      onSelectWorkload: vi.fn(),
+      renderWorkload,
+      renderDeploys,
+    }
+    const { host, rerender } = show({ ...props, selectionLoading: true })
+    expect(host.textContent).toContain('Loading application views')
+    expect(renderDeploys).not.toHaveBeenCalled()
+    rerender(props)
+    expect(host.textContent).toContain('Recorded deliveries')
+  })
+
   it('shows the host notice in place of the built-in views when the instance has nothing live', () => {
     const empty: AppRow = { ...app, workloads: [] }
     const { host, rerender } = show({ app: empty, extraViews, selectedView: 'topology', onSelectView: () => {}, liveUnavailableNotice: <p data-testid="notice">Not running</p> })

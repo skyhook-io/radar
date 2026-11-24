@@ -291,7 +291,7 @@ function AppDetailRoute({
     enabled: !selectedWorkloadKey || Boolean(app.sourceRef) || (requestedDeploys && !deploysInWorkloadScope),
   });
   const readableHistory = historyQuery.isError ? undefined : historyQuery.data;
-  const deliveryRecords = useMemo(() => applicationDeliveryRecords(historyQuery.data), [historyQuery.data]);
+  const deliveryRecords = useMemo(() => applicationDeliveryRecords(readableHistory), [readableHistory]);
   const deliverySource = readableHistory?.sourceRef ?? app.sourceRef;
   const waitingForDeploySource = requestedDeploys && !deploysInWorkloadScope && !deliverySource && historyQuery.isLoading;
   const clearDeploySelection = deploysInWorkloadScope || (requestedDeploys && !deliverySource && !waitingForDeploySource);
@@ -479,7 +479,11 @@ function AppDetailRoute({
       } else {
         params.delete("workload");
         params.delete("tab");
-        if (!options?.replace) params.delete("view");
+        if (!options?.replace) {
+          params.delete("view");
+        } else if (!params.has("view") && searchParams.get("tab") === "deploys") {
+          params.set("view", "deploys");
+        }
       }
       setSearchParams(params, { replace: options?.replace });
     },
@@ -701,7 +705,7 @@ function AppDetailRoute({
         onSelectView={selectView}
         selectionLoading={waitingForDeploySource || clearDeploySelection || clearCostSelection}
         renderDeploys={deliverySource && showDeploys ? () =>
-          <ApplicationDeploys source={deliverySource} records={historyQuery.isError ? [] : deliveryRecords} loading={historyQuery.isLoading} unavailable={historyQuery.isError} partialSources={historyQuery.data?.partialSources} onOpenSource={openSource} /> : undefined}
+          <ApplicationDeploys source={deliverySource} records={deliveryRecords} loading={historyQuery.isLoading} unavailable={historyQuery.isError} partialSources={readableHistory?.partialSources} onOpenSource={openSource} /> : undefined}
         renderWorkloadRevisions={(workload) => <WorkloadRevisionsButton {...workload} />}
         costViewSelected={applicationCostSelected}
         onSelectCostView={() => selectView("cost")}

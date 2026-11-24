@@ -171,6 +171,7 @@ export interface AppWorkloadSelectionOptions {
   replace?: boolean;
 }
 
+/** Built-in application IDs. `history` is displayed as Timeline. Cost has its own selection props. */
 export type ApplicationView = "overview" | "deploys" | "topology" | "history";
 
 /** A built-in view, or the id of one of the host's `extraViews`. */
@@ -178,7 +179,8 @@ export type ApplicationDetailView = ApplicationView | (string & {});
 
 /** An app-level view the host supplies, shown as a tab after the built-in ones. */
 export interface ApplicationExtraView {
-  /** A unique, nonempty ID. `overview`, `deploys`, `topology`, `history`, and `cost` are reserved even when hidden. */
+  /** Empty and reserved IDs are ignored. The first registration of each other ID wins.
+   *  Reserved even when hidden: `overview`, `deploys`, `topology`, `history`, and `cost`. */
   id: string;
   label: string;
   /** Shown after the tab's label, e.g. a mark for unsaved edits. */
@@ -207,12 +209,15 @@ function isBuiltInApplicationView(view: ApplicationDetailView): view is Applicat
 /** Tabs to forward to the host's WorkloadView. This carries the application
  *  Deploys destination for a single-workload app when Deploys is offered. */
 export interface AppWorkloadRenderContext {
+  /** Forward these tabs before distinct host tabs. Contains `deploys` when a
+   *  single-workload app offers Deploys. */
   extraTabs?: WorkloadExtraTab[];
 }
 
 type ViewProps =
   | {
       extraViews?: undefined;
+      /** Requested app view. A stale request can display a fallback while selection settles. */
       selectedView: ApplicationView;
       /** Called on a tab click or to repair a stale view with history replacement.
        * A click selects application scope, so a URL host clears the workload key in the same navigation. */
@@ -222,6 +227,7 @@ type ViewProps =
       /** Host-supplied app-level views selected by id. Single-workload apps
        *  open directly on the workload; use WorkloadView `extraTabs` there. */
       extraViews?: ApplicationExtraView[];
+      /** Requested app view. A stale request can display a fallback while selection settles. */
       selectedView: ApplicationDetailView;
       /** Called on a tab click or to repair a stale view with history replacement.
        * A click selects application scope, so a URL host clears the workload key in the same navigation. */
@@ -232,8 +238,8 @@ type ViewProps =
 export type ApplicationDetailProps = {
   app: AppRow;
   onBack: () => void;
-  /** Render the host's WorkloadView for the chosen workload. Spread `context`
-   *  onto it; it is empty unless the host enabled a view that needs it. */
+  /** Render the host's WorkloadView for the chosen workload. Forward
+   *  `context.extraTabs` alongside any distinct tabs the host already supplies. */
   renderWorkload: (
     workload: SelectedAppWorkload,
     context: AppWorkloadRenderContext,
@@ -254,7 +260,8 @@ export type ApplicationDetailProps = {
    *  Deploys requires renderDeploys and this allowlist also controls its single-workload tab.
    *  A removed view falls back in tab order. Cost is selected if it is the only offered view. */
   builtInViews?: ApplicationView[];
-  /** Delay stale selection corrections while views or workload evidence are loading. */
+  /** Delay stale URL repairs while views or workload evidence load. While a
+   *  workload link is pending, suppress app-level host content and Deploys content. */
   selectionLoading?: boolean;
   /** Show versions inline and keep up to six environment pills. Defaults to four pills without inline versions. */
   showEnvironmentVersions?: boolean;
@@ -305,7 +312,7 @@ export type ApplicationDetailProps = {
    *  resets internal selection and remounts the active host view. */
   activeInstanceKey?: string;
   /** Supplies the content for the single Deploys destination (`deploys`).
-   *  Omit to hide it. This renderer can run without live workload data. */
+   *  Omit to hide it. App-scope Deploys can render without live workload data. */
   renderDeploys?: () => ReactNode;
   /** Read-only inspection of a workload's retained revisions. */
   renderWorkloadRevisions?: (workload: AppWorkload) => ReactNode;
@@ -537,10 +544,6 @@ export function ApplicationDetail({
     (id) => (!builtInViews || builtInViews.includes(id)) && (id !== "deploys" || Boolean(renderDeploys)),
   );
   const deploysOffered = offeredViews.includes("deploys");
-  const renderInstanceDeploys = useCallback(
-    () => <Fragment key={scopeKey}>{renderDeploys?.()}</Fragment>,
-    [renderDeploys, scopeKey],
-  );
   const offeredExtraViews = useMemo(() => {
     const seen = new Set<string>([...ALL_BUILT_IN_VIEWS, "cost", ""]);
     return extraViews?.filter(({ id }) => {
@@ -555,6 +558,12 @@ export function ApplicationDetail({
   );
   const requestedViewAvailable = visibleViews.some(({ id }) => id === requestedView);
   const waitingForWorkload = Boolean(selectedWorkloadKey) && (selectionLoading || unavailable != null || hostKeyIsStale);
+  const renderInstanceDeploys = useCallback(
+    () => waitingForWorkload
+      ? <PaneLoader label="Loading application views…" className="h-full" />
+      : <Fragment key={scopeKey}>{renderDeploys?.()}</Fragment>,
+    [renderDeploys, scopeKey, waitingForWorkload],
+  );
   // An unresolved workload deep link can temporarily land on this shell.
   // While evidence is missing, show the built-in or unavailable state without
   // running an unrelated host tab.
