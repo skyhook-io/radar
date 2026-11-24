@@ -187,3 +187,74 @@ it('does not carry a picked Pod to a recreated resource with the same name', () 
   expect(seen.slice(before)).not.toContain('pg-1')
   act(() => root.unmount())
 })
+
+it('leaves out a built-in tab the host hides, falling back to the first tab shown', () => {
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  const onTabChange = vi.fn()
+  const extraTabs = [{ id: 'runs', label: 'Runs', render: () => <div>The runs</div> }]
+  act(() => root.render(<WorkloadView {...props} activeTab="overview" onTabChange={onTabChange} expanded extraTabs={extraTabs} tabOrder={['runs']} hiddenTabs={['overview']} />))
+  expect([...host.querySelectorAll('[role="tab"]')].map((t) => t.textContent)).not.toContain('Overview')
+  expect(host.textContent).toContain('The runs')
+  expect(onTabChange).toHaveBeenCalledWith('runs', { replace: true })
+  act(() => root.unmount())
+})
+
+it('shows a host line above every tab, in the expanded view only', () => {
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  const extraTabs = [{ id: 'runs', label: 'Runs', render: () => <div>The runs</div> }]
+  act(() => root.render(<WorkloadView {...props} activeTab="overview" expanded extraTabs={extraTabs} tabHeader={<div>Host line</div>} />))
+  expect(host.textContent).toContain('Host line')
+  act(() => root.render(<WorkloadView {...props} activeTab={'runs' as never} expanded extraTabs={extraTabs} tabHeader={<div>Host line</div>} />))
+  expect(host.textContent).toContain('Host line')
+  act(() => root.render(<WorkloadView {...props} expanded={false} tabHeader={<div>Host line</div>} />))
+  expect(host.textContent).not.toContain('Host line')
+  act(() => root.unmount())
+})
+
+it("leaves out the Overview's stats strip when the host asks, and only then", () => {
+  const deployment = { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'web', namespace: 'shop' }, spec: { replicas: 1, template: { spec: { containers: [{ name: 'web', image: 'web:1' }] } } }, status: { replicas: 1, readyReplicas: 1 } }
+  const base = { ...props, kind: 'deployments', group: 'apps', name: 'web', namespace: 'shop', resource: deployment, activeTab: 'overview' as const, renderSummary: undefined, expanded: true }
+  const shown = renderToStaticMarkup(<WorkloadView {...base} />)
+  const hidden = renderToStaticMarkup(<WorkloadView {...base} hideOverviewStats />)
+  // The strip's Pods fact.
+  expect(shown).toContain('no pod refs')
+  expect(hidden).not.toContain('no pod refs')
+})
+
+it("leaves out the Overview's configured values when the host says them, keeping live state", () => {
+  const deployment = { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'web', namespace: 'shop' }, spec: { replicas: 2, strategy: { type: 'RollingUpdate' }, template: { spec: { serviceAccountName: 'web', containers: [{ name: 'web', image: 'web:1' }] } } }, status: { replicas: 1, readyReplicas: 1 } }
+  const base = { ...props, kind: 'deployments', group: 'apps', name: 'web', namespace: 'shop', resource: deployment, activeTab: 'overview' as const, renderSummary: undefined, expanded: true }
+  const shown = renderToStaticMarkup(<WorkloadView {...base} />)
+  const hidden = renderToStaticMarkup(<WorkloadView {...base} hideOverviewConfig />)
+  for (const configured of ['Target replicas', 'Strategy', 'Configuration inputs']) {
+    expect(shown).toContain(configured)
+    expect(hidden).not.toContain(configured)
+  }
+  // Live state stays: the Runtime card, and the replicas running that differ from the target.
+  expect(hidden).toContain('Runtime')
+  expect(hidden).toContain('Current')
+})
+
+it("lays the Overview out in the host's one column when asked, and in Radar's grid otherwise", () => {
+  const deployment = { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'web', namespace: 'shop' }, spec: { replicas: 1, template: { spec: { containers: [{ name: 'web', image: 'web:1' }] } } }, status: { replicas: 1, readyReplicas: 1 } }
+  const base = { ...props, kind: 'deployments', group: 'apps', name: 'web', namespace: 'shop', resource: deployment, activeTab: 'overview' as const, renderSummary: undefined, expanded: true }
+  const grid = renderToStaticMarkup(<WorkloadView {...base} />)
+  const column = renderToStaticMarkup(<WorkloadView {...base} overviewColumn="mx-auto max-w-5xl" />)
+  expect(grid).toContain('xl:grid-cols-[minmax(0,1fr)_360px]')
+  expect(column).not.toContain('xl:grid-cols-[minmax(0,1fr)_360px]')
+  expect(column).toContain('mx-auto max-w-5xl')
+})
+
+it("leaves out Runtime's fact row when no fact is left, and says one replica as one", () => {
+  const deployment = { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'web', namespace: 'shop' }, spec: { replicas: 1, strategy: { type: 'RollingUpdate' }, template: { spec: { containers: [{ name: 'web', image: 'web:1' }] } } }, status: { replicas: 1, readyReplicas: 1, updatedReplicas: 1, availableReplicas: 1 } }
+  const base = { ...props, kind: 'deployments', group: 'apps', name: 'web', namespace: 'shop', resource: deployment, activeTab: 'overview' as const, renderSummary: undefined, expanded: true }
+  const html = renderToStaticMarkup(<WorkloadView {...base} hideOverviewConfig />)
+  expect(html).toContain('1 replica<')
+  expect(html).not.toContain('1 replicas')
+  // Every fact is configured (target, strategy): the row isn't rendered empty.
+  expect(html).not.toContain('flex flex-wrap gap-1.5"></div>')
+  // Without the host's option the facts still show.
+  expect(renderToStaticMarkup(<WorkloadView {...base} />)).toContain('Target replicas')
+})

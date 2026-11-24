@@ -394,6 +394,7 @@ describe('canaryStepLabel', () => {
       ],
       [{ setCanaryScale: { weight: 40 } }, 'Set canary scale: 40%'],
       [{ setCanaryScale: { replicas: 3 } }, 'Set canary scale: 3 replicas'],
+      [{ setCanaryScale: { replicas: 1 } }, 'Set canary scale: 1 replica'],
       [{ setCanaryScale: { matchTrafficWeight: true } }, 'Set canary scale: match traffic weight'],
       [
         { setHeaderRoute: { name: 'canary-hdr', match: [{ headerName: 'x-canary' }] } },
