@@ -9,7 +9,7 @@ export interface ResourceCategory {
 // Known core resource categories
 const WORKLOAD_KINDS = ['Pod', 'Deployment', 'Rollout', 'DaemonSet', 'StatefulSet', 'ReplicaSet', 'Job', 'CronJob']
 const NETWORKING_KINDS = ['Service', 'Ingress', 'IngressClass', 'NetworkPolicy', 'Endpoints', 'EndpointSlice']
-const CONFIG_KINDS = ['ConfigMap', 'Secret', 'HorizontalPodAutoscaler', 'PodDisruptionBudget', 'LimitRange', 'ResourceQuota', 'PriorityClass', 'RuntimeClass', 'Lease', 'MutatingWebhookConfiguration', 'ValidatingWebhookConfiguration', 'ValidatingAdmissionPolicy', 'ValidatingAdmissionPolicyBinding']
+const CONFIG_KINDS = ['ConfigMap', 'Secret', 'HorizontalPodAutoscaler', 'PodDisruptionBudget', 'LimitRange', 'ResourceQuota', 'PriorityClass', 'RuntimeClass', 'Lease', 'MutatingWebhookConfiguration', 'ValidatingWebhookConfiguration', 'ValidatingAdmissionPolicy', 'ValidatingAdmissionPolicyBinding', 'MutatingAdmissionPolicy', 'MutatingAdmissionPolicyBinding']
 const STORAGE_KINDS = ['PersistentVolumeClaim', 'PersistentVolume', 'StorageClass', 'VolumeAttachment']
 const ACCESS_CONTROL_KINDS = ['ServiceAccount', 'Role', 'ClusterRole', 'RoleBinding', 'ClusterRoleBinding']
 const CLUSTER_KINDS = ['Node', 'Namespace', 'Event', 'CustomResourceDefinition']
@@ -57,6 +57,8 @@ export const CORE_RESOURCES: APIResource[] = [
 
 // These identities are built-in but must not become always-present sidebar rows.
 const ADDITIONAL_BUILTIN_IDENTITIES: Record<string, string> = {
+  mutatingadmissionpolicy: 'admissionregistration.k8s.io', mutatingadmissionpolicies: 'admissionregistration.k8s.io',
+  mutatingadmissionpolicybinding: 'admissionregistration.k8s.io', mutatingadmissionpolicybindings: 'admissionregistration.k8s.io',
   endpoints: '',
   controllerrevision: 'apps', controllerrevisions: 'apps',
   resourceclaim: 'resource.k8s.io', resourceclaims: 'resource.k8s.io',

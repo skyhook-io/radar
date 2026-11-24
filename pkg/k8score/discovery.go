@@ -101,6 +101,11 @@ var dynamicallyWatchedBuiltInAPIGroups = map[string]bool{
 	"resource.k8s.io":        true,
 }
 
+// IsDynamicAPIGroup identifies groups classified as IsCRD for dynamic observation.
+func IsDynamicAPIGroup(group string) bool {
+	return !coreAPIGroups[group]
+}
+
 // IsBuiltInAPIGroup reports whether group is shipped by Kubernetes rather than
 // introduced by a CRD. Some built-in groups remain outside coreAPIGroups so the
 // dynamic cache can observe them.
@@ -261,7 +266,7 @@ func (d *ResourceDiscovery) refresh() error {
 				continue
 			}
 
-			isCRD := !coreAPIGroups[gv.Group]
+			isCRD := IsDynamicAPIGroup(gv.Group)
 
 			resource := APIResource{
 				Group:      gv.Group,

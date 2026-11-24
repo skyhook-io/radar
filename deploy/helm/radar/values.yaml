@@ -131,8 +131,8 @@ rbac:
   # plane visibility.
   viewWebhooks: false
 
-  # Allow reading native ValidatingAdmissionPolicy and
-  # ValidatingAdmissionPolicyBinding resources so the resource browser can show
+  # Allow reading native validating and mutating admission policies and
+  # bindings so the resource browser can show
   # their declared rules and binding relationships. Auto-enabled when auth is on
   # (auth.mode != none) or in cloud mode, where every read is re-checked against
   # the requesting user's own permissions. For no-auth installs this stays

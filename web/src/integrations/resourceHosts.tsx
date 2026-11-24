@@ -44,9 +44,11 @@ import { SealedSecretRenderer } from '../components/resources/renderers/SealedSe
 import { K3sHelmChartRenderer } from '../components/resources/renderers/K3sHelmChartRenderer'
 import { UpgradePlanRenderer } from '../components/resources/renderers/UpgradePlanRenderer'
 import {
+  MutatingAdmissionPolicyBindingRenderer,
+  MutatingAdmissionPolicyRenderer,
   ValidatingAdmissionPolicyBindingRenderer,
   ValidatingAdmissionPolicyRenderer,
-} from '../components/resources/renderers/ValidatingAdmissionPolicyRenderer'
+} from '../components/resources/renderers/AdmissionPolicyRenderers'
 
 export const resourceHosts: readonly ResourceHost[] = [
   { id: 'kubernetes', renderers: { PodRenderer, NodeRenderer, ServiceRenderer, WorkloadRenderer, HPARenderer, PVCRenderer } },
@@ -74,7 +76,7 @@ export const resourceHosts: readonly ResourceHost[] = [
   { id: 'longhorn', renderers: { LonghornVolumeRenderer } },
   { id: 'flux', renderers: { FluxHelmReleaseRenderer } },
   { id: 'secrets-store-csi', renderers: { SecretProviderClassRenderer } },
-  { id: 'admission-policy', renderers: { ValidatingAdmissionPolicyRenderer, ValidatingAdmissionPolicyBindingRenderer } },
+  { id: 'admission-policy', renderers: { ValidatingAdmissionPolicyRenderer, ValidatingAdmissionPolicyBindingRenderer, MutatingAdmissionPolicyRenderer, MutatingAdmissionPolicyBindingRenderer } },
   cnpgResourceHost,
   crdResourceHost,
 ]

@@ -214,6 +214,8 @@ rules:
     resources:
       - validatingadmissionpolicies
       - validatingadmissionpolicybindings
+      - mutatingadmissionpolicies
+      - mutatingadmissionpolicybindings
     verbs: ["get", "list", "watch"]
   {{- end }}
 

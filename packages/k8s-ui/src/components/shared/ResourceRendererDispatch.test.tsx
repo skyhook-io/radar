@@ -38,6 +38,33 @@ describe('ResourceRendererDispatch', () => {
     expect(html).not.toContain('VerticalPodAutoscaler')
   })
 
+  describe('native mutating admission policy dispatch', () => {
+    it.each(['v1', 'v1beta1', 'v1alpha1'])('shows both patch forms and the binding for %s', version => {
+      const apiVersion = `admissionregistration.k8s.io/${version}`
+      const html = renderKind('mutatingadmissionpolicies', { apiVersion, kind: 'MutatingAdmissionPolicy', metadata: { name: 'defaults' }, spec: {
+        reinvocationPolicy: 'IfNeeded', mutations: [
+          { patchType: 'ApplyConfiguration', applyConfiguration: { expression: 'Object{spec: Object.spec{replicas: 2}}' } },
+          { patchType: 'JSONPatch', jsonPatch: { expression: '[JSONPatch{op: "add"}]' } },
+        ],
+      } })
+      expect(html.indexOf('Object.spec{replicas: 2}')).toBeGreaterThan(0)
+      expect(html.indexOf('JSONPatch{op:')).toBeGreaterThan(html.indexOf('Object.spec{replicas: 2}'))
+      expect(html).toContain('IfNeeded')
+      expect(html).not.toContain('Type-check Warnings')
+
+      const binding = renderKind('mutatingadmissionpolicybindings', { apiVersion, kind: 'MutatingAdmissionPolicyBinding',
+        metadata: { name: 'teams' }, spec: { policyName: 'defaults', matchResources: { namespaceSelector: { matchLabels: { tier: 'frontend' } } } } })
+      expect(binding).toContain('defaults')
+      expect(binding).toContain('frontend')
+      expect(binding).not.toContain('Validation Actions')
+    })
+
+    it.each(['mutatingadmissionpolicies', 'mutatingadmissionpolicybindings'])('uses the generic renderer for a foreign %s', kind => {
+      expect(renderKind(kind, { apiVersion: 'custom.example/v1', kind: 'ForeignPolicy', metadata: { name: 'foreign' },
+        spec: { collisionProbe: COLLISION_PROBE } })).toContain(COLLISION_PROBE)
+    })
+  })
+
   describe('ValidatingAdmissionPolicy dispatch', () => {
     it('uses dedicated renderers only for the exact native API group', () => {
       const nativePolicy = renderKind('validatingadmissionpolicies', {

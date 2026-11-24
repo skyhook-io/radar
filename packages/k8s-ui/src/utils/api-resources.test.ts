@@ -2,6 +2,17 @@ import { describe, expect, it } from 'vitest'
 import { builtinGroupForKind, canonicalResourceGroup, categorizeResources, findAPIResourceForRoute, formatGroupName, isCoreBatchJob, shortenGroupName } from './api-resources'
 
 describe('canonicalResourceGroup', () => {
+  it('shows native mutating admission kinds in Configuration only when served and listable', () => {
+    const resources = [
+      { kind: 'MutatingAdmissionPolicy', name: 'mutatingadmissionpolicies' },
+      { kind: 'MutatingAdmissionPolicyBinding', name: 'mutatingadmissionpolicybindings' },
+    ].map(kind => ({ ...kind, group: 'admissionregistration.k8s.io', version: 'v1beta1', namespaced: false, isCrd: false, verbs: ['list'] }))
+    const config = (r: typeof resources) => categorizeResources(r).find(c => c.name === 'Configuration')?.resources.map(x => x.kind)
+    expect(config([])).not.toContain(resources[0].kind)
+    expect(config(resources)).toEqual(expect.arrayContaining(resources.map(r => r.kind)))
+    expect(config(resources.map(r => ({ ...r, verbs: ['get'] })))).not.toContain(resources[1].kind)
+  })
+
   it('infers built-in groups from either Kind or resource name', () => {
     expect(builtinGroupForKind('Service')).toBe('')
     expect(builtinGroupForKind('jobs')).toBe('batch')

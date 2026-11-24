@@ -1927,6 +1927,17 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'handler', label: 'Handler', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
+  mutatingadmissionpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'mutationCount', label: 'Mutations', width: 'w-28' },
+    { key: 'reinvocationPolicy', label: 'Reinvocation', width: 'w-36' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  mutatingadmissionpolicybindings: [
+    { key: 'name', label: 'Name' },
+    { key: 'policyName', label: 'Policy', width: 'w-48', sizing: 'grow', growWeight: 1 },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
   mutatingwebhookconfigurations: [
     { key: 'name', label: 'Name' },
     { key: 'webhooks', label: 'Webhooks', width: 'w-28' },
@@ -3368,6 +3379,8 @@ const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   volumesnapshotlocations: ['velero.io'],
   clusterpolicyreports: ['wgpolicyk8s.io'],
   policyreports: ['wgpolicyk8s.io'],
+  mutatingadmissionpolicies: ['admissionregistration.k8s.io'],
+  mutatingadmissionpolicybindings: ['admissionregistration.k8s.io'],
   deviceconfigs: ['amd.com'],
   nimcaches: ['apps.nvidia.com'],
   nimpipelines: ['apps.nvidia.com'],
@@ -8475,6 +8488,9 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       return <PriorityClassCell resource={resource} column={column} />
     case 'runtimeclasses':
       return <RuntimeClassCell resource={resource} column={column} />
+    case 'mutatingadmissionpolicies':
+    case 'mutatingadmissionpolicybindings':
+      return <span className="text-sm text-theme-text-secondary">{getCellFilterValue(resource, column, kind) || '—'}</span>
     case 'mutatingwebhookconfigurations':
     case 'validatingwebhookconfigurations':
       return <WebhookConfigCell resource={resource} column={column} />

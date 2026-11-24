@@ -181,7 +181,7 @@ describe('ValidatingAdmissionPolicy renderers', () => {
     const html = renderToStaticMarkup(<ValidatingAdmissionPolicyBindingRenderer data={{
       apiVersion: policy.apiVersion,
       metadata: { name: 'require-owner-prod' },
-      spec: { policyName: 'require-owner', validationActions: ['Deny'], paramRef: { name: 'strict' } },
+      spec: { policyName: 'require-owner', validationActions: ['Deny'], paramRef: { name: 'strict', parameterNotFoundAction: 'Deny' } },
     }} onNavigate={() => {}} />)
     expect(html).toContain('evaluated object’s namespace')
     expect(html).not.toContain('Not specified')
