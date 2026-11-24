@@ -1713,6 +1713,16 @@ export interface AppEntryBase {
   source: AppSource;
 }
 
+/** A status the host knows better than the workloads say, e.g. how a job's last run went. */
+export interface AppHostStatus {
+  health: AppHealth;
+  label: string;
+  /** The longer story, in a tooltip: e.g. why the run failed. */
+  detail?: string;
+  /** Opens what the status is about (e.g. that run); the header pill becomes a button. */
+  onSelect?: () => void;
+}
+
 export interface SingleAppEntry extends AppEntryBase {
   variant: "single";
   namespace: string;
