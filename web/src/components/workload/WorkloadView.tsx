@@ -1,3 +1,4 @@
+import { supportsWorkloadRevisions, WorkloadRevisionsButton } from './WorkloadRevisionsButton'
 import { RelatedFindingsSection } from './RelatedFindingsSection'
 import { decorateResourceDiagnose, resourceDetailRedirect, resourceDetailSlots, resourceIssueDetail, resourceLogs, resourceRendererOverrides } from '../../integrations/resourceHosts'
 import { ApplicationEvidenceAction } from '../application-evidence/ApplicationEvidenceAction'
@@ -154,7 +155,7 @@ type TabType = WorkloadTabType
 
 // The usage-report view a tab counts under. Timeline holds the resource's
 // events (it replaced the Events tab), so it counts as panel:events.
-const PANEL_USAGE_VIEWS: Partial<Record<TabType, string>> = {
+const PANEL_USAGE_VIEWS: Readonly<Partial<Record<TabType | "deploys", string>>> = {
   logs: 'panel:logs',
   yaml: 'panel:yaml',
   metrics: 'panel:metrics',
@@ -361,7 +362,7 @@ function useActionsBarProps(
 
   const isRolloutShape = isRolloutKind(kind)
   const isRollout = isRolloutShape && group === 'argoproj.io'
-  const isRollbackKind = ['deployments', 'statefulsets', 'daemonsets'].includes(kind.toLowerCase()) || isRollout
+  const isRollbackKind = supportsWorkloadRevisions(kind, group)
   const { data: rolloutCapabilities, isPending: rolloutCapabilitiesPending } = useRolloutCapabilities(namespace, name, isRollout)
   // Restart and Rollback are the generic workload buttons, so a Rollout has to
   // withhold the callback the way promote-full does. Permissive until the probe
@@ -595,7 +596,7 @@ export function WorkloadView({
   // recount the same open tab: the drawer mounts hidden WorkloadView layers
   // for expand-on-hover and crossfades.
   const handleTabChange = useCallback(
-    (tab: TabType, opts?: { replace?: boolean }) => {
+    (tab: TabType | 'deploys', opts?: { replace?: boolean }) => {
       const panel = PANEL_USAGE_VIEWS[tab]
       if (panel && tab !== migratedTab) recordUsageEvent({ type: 'view', name: panel })
       const params = new URLSearchParams(searchParams)
@@ -1408,6 +1409,12 @@ export function WorkloadView({
               </div>
             )
             : undefined}
+        timelineActions={(supportsWorkloadRevisions(apiKind, effectiveGroup) || rest.extraTabs?.some(tab => tab.id === 'deploys')) && (
+          <div className="flex flex-wrap items-center gap-3 border-b border-theme-border px-4 py-2">
+            <WorkloadRevisionsButton kind={apiKind} group={effectiveGroup} namespace={namespace} name={name} />
+            {rest.extraTabs?.some(tab => tab.id === 'deploys') && <button type="button" className="text-xs text-accent-text hover:underline" onClick={() => handleTabChange('deploys')}>View application deploys</button>}
+          </div>
+        )}
         renderOverviewExtra={({ kind: k, namespace: ns, name: n, group: g, context }) => {
           // Network entry kinds (Service/Ingress/Route/Gateway) ARE the diagnosis
           // target: DiagnoseInlineSection renders in the drawer, no hint. Workload
@@ -1423,6 +1430,7 @@ export function WorkloadView({
           ) : null
           return (
           <>
+            <WorkloadRevisionsButton kind={k} group={g} namespace={ns} name={n} />
             {diagnoseInline}
             <ApplicationEvidenceAction kind={k} namespace={ns} name={n} group={g} uid={resource?.metadata?.uid ?? ''} />
             {diagnoseHint}

@@ -2994,6 +2994,40 @@ export function useArgoResourceDiff(
   });
 }
 
+export interface RenderedFieldChange {
+  path: string[];
+  before?: unknown;
+  after?: unknown;
+}
+
+export interface RenderedResourceChange {
+  group?: string;
+  kind: string;
+  namespace?: string;
+  name: string;
+  operation: "added" | "removed" | "modified";
+  fields: RenderedFieldChange[];
+}
+
+export interface RenderedSyncDiff {
+  changes: RenderedResourceChange[];
+  partial?: boolean;
+  secretsMasked?: boolean;
+}
+
+export function useArgoSyncDiff(namespace: string, name: string, syncID: string, previous: string, revision: string) {
+  const params = new URLSearchParams({ syncID, previous, revision });
+  return useQuery<RenderedSyncDiff>({
+    queryKey: ["argo-sync-diff", getApiBase(), namespace, name, syncID, previous, revision],
+    queryFn: ({ signal }) => fetchJSON(`/argo/applications/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/sync-diff?${params}`, signal),
+    // Results depend on today's render settings and the viewer's access.
+    gcTime: 0,
+    staleTime: 0,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+}
+
 // Git commit metadata for one deployed revision of an Argo CD Application.
 // Enabled only when a revision is known and the caller passes `enabled` (gated
 // on capabilities.revisionMetadataAvailable). Cached long — a resolved SHA's
@@ -5729,6 +5763,10 @@ export interface WorkloadRevision {
   // (serving traffic, what an abort reverts to) are different revisions.
   isStable?: boolean;
   podHash?: string;
+  readyReplicas?: number;
+  serving?: boolean;
+  changeCause?: string;
+  matchesDesired?: boolean;
 }
 
 export function useWorkloadRevisions(
@@ -5739,8 +5777,9 @@ export function useWorkloadRevisions(
 ) {
   return useQuery<WorkloadRevision[]>({
     queryKey: ["workload-revisions", kind, namespace, name],
-    queryFn: () =>
-      fetchJSON(`/workloads/${kind}/${namespace}/${name}/revisions`),
+    queryFn: async () => (await fetchJSON<WorkloadRevision[] | null>(
+      `/workloads/${kind}/${namespace}/${name}/revisions`,
+    )) ?? [],
     enabled: Boolean(kind && namespace && name && enabled),
   });
 }

@@ -419,6 +419,8 @@ interface WorkloadViewProps {
    *  belongs inline when there are no tabs (drawer) but would duplicate the
    *  Diagnose tab when it is. */
   renderOverviewExtra?: (props: { kind: string; namespace: string; name: string; group?: string; context: 'drawer' | 'expanded' }) => ReactNode
+  /** Contextual inspection actions for the expanded workload Timeline. */
+  timelineActions?: ReactNode
   /** Render lightweight overview intro content before the default renderer. */
   renderOverviewIntro?: (props: { kind: string; namespace: string; name: string }) => ReactNode
   /** Render content at the TOP of the overview tab, above the renderer (e.g. live
@@ -557,6 +559,7 @@ export function WorkloadView({
   onDuplicate,
   onDownload,
   renderOverviewExtra,
+  timelineActions,
   renderOverviewIntro,
   renderOverviewLead,
   hasOperationalIssues,
@@ -1503,28 +1506,33 @@ export function WorkloadView({
           </div>
         )}
         {effectiveTab === 'timeline' && (
-          <EventsTab
-            focusEvent={timelineFocusEvent}
-            events={resourceEvents}
-            isLoading={eventsLoading}
-            truncated={historyTruncated}
-            onLoadOlder={onLoadOlderHistory}
-            loadingOlder={loadingOlderHistory}
-            olderError={olderHistoryError}
-            scoped={historyScoped}
-            scopeText={isRuntimeWorkloadOverviewKind(apiKind, group) && ['apps', 'batch'].includes(apiVersionToGroup(resource?.apiVersion))
-              ? `This ${displayKindName(apiKind, resource?.kind)}, its recorded children and attached resources.`
-              : `Changes to this ${displayKindName(apiKind, resource?.kind)}.`}
-            incomplete={historyIncomplete}
-            historyCoverage={historyCoverage}
-            historyGaps={historyGaps}
-            error={historyError}
-            onRetry={onRetryHistory}
-            selectedEventId={selectedEventId}
-            onSelectEvent={setSelectedEventId}
-            topology={topology}
-            onResourceClick={onNavigateToResource}
-          />
+          <div className="flex h-full min-h-0 flex-col">
+            {!resourceGone && timelineActions}
+            <div className="min-h-0 flex-1">
+              <EventsTab
+                focusEvent={timelineFocusEvent}
+                events={resourceEvents}
+                isLoading={eventsLoading}
+                truncated={historyTruncated}
+                onLoadOlder={onLoadOlderHistory}
+                loadingOlder={loadingOlderHistory}
+                olderError={olderHistoryError}
+                scoped={historyScoped}
+                scopeText={isRuntimeWorkloadOverviewKind(apiKind, group) && ['apps', 'batch'].includes(apiVersionToGroup(resource?.apiVersion))
+                  ? `This ${displayKindName(apiKind, resource?.kind)}, its recorded children and attached resources.`
+                  : `Changes to this ${displayKindName(apiKind, resource?.kind)}.`}
+                incomplete={historyIncomplete}
+                historyCoverage={historyCoverage}
+                historyGaps={historyGaps}
+                error={historyError}
+                onRetry={onRetryHistory}
+                selectedEventId={selectedEventId}
+                onSelectEvent={setSelectedEventId}
+                topology={topology}
+                onResourceClick={onNavigateToResource}
+              />
+            </div>
+          </div>
         )}
         {effectiveTab === 'logs' && renderLogsTab && (
           renderLogsTab({

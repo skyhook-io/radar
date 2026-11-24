@@ -302,6 +302,7 @@ Table-based resource browser with smart columns per resource kind.
 - Click any resource for YAML manifest, related resources, logs, and events
 - Pod logs list init containers, marked `(init)`, and open on the init container a Pod is stuck on, so a Pod that never starts still shows why
 - Set regular or init-container images on Deployments, StatefulSets, DaemonSets, and Argo Rollouts, with live rollout progress in tables, drawers, workload views, and Applications
+- Investigate app changes in Timeline and compare a workload’s retained revisions from Overview. Apps with identified Helm or GitOps delivery records also offer Deploys, with each recorded revision, outcome, and source.
 
 ### Image Filesystem Viewer
 

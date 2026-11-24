@@ -3,6 +3,9 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   ApplicationsList,
   ApplicationDetail,
+  ArgoSyncDetailsContext,
+  ApplicationDeploys,
+  applicationDeliveryRecords,
   CenteredEmpty,
   getRadarUpgradeRequirement,
   PageHeader,
@@ -55,6 +58,8 @@ import { useTimelineSource } from "../../context/TimelineSource";
 import { apiVersionToGroup, kindToPluralWithGroup, relatedResourcePath, withCrossViewParams } from "../../utils/navigation";
 import { WorkloadView } from "../workload/WorkloadView";
 import { ApplicationCostTab } from "../cost/ApplicationCostTab";
+import { ArgoSyncDetails } from "./ArgoSyncDetails";
+import { WorkloadRevisionsButton } from "../workload/WorkloadRevisionsButton";
 import { useTimelineRetentionNote } from "../../context/TimelineCustomization";
 import { isOpenCostWorkloadKind } from "../cost/kinds";
 
@@ -75,9 +80,10 @@ const APPLICATION_TIMELINE_FOCUS_MS = 60 * 60 * 1000;
 const APPLICATION_TIMELINE_AFTER_MS = 45 * 60 * 1000;
 
 const APPLICATION_VIEWS: ReadonlySet<ApplicationRouteView> =
-  new Set<ApplicationRouteView>(["overview", "topology", "history", "cost"]);
+  new Set<ApplicationRouteView>(["overview", "deploys", "topology", "history", "cost"]);
 
 function parseApplicationView(value: string | null): ApplicationRouteView {
+  if (value === "timeline") return "history";
   if (!value || !APPLICATION_VIEWS.has(value as ApplicationRouteView))
     return "overview";
   return value as ApplicationRouteView;
@@ -278,8 +284,13 @@ function AppDetailRoute({
   const applicationCostSelected =
     selectedRouteView === "cost" && applicationCostAvailable;
   const historyQuery = useApplicationHistory(app.key, appHistoryNamespaces, {
-    enabled: !selectedWorkloadKey,
+    enabled: !selectedWorkloadKey || Boolean(app.sourceRef),
   });
+  const readableHistory = historyQuery.isError ? undefined : historyQuery.data;
+  const deliveryRecords = useMemo(() => applicationDeliveryRecords(historyQuery.data), [historyQuery.data]);
+  const deliverySource = readableHistory?.sourceRef ?? app.sourceRef;
+  const requestedDeploys = selectedView === "deploys" || searchParams.get("tab") === "deploys";
+  const showDeploys = deliveryRecords.length > 0 || (requestedDeploys && Boolean(deliverySource));
   const [retainedHistoryRange, setRetainedHistoryRange] =
     useState<ApplicationHistoryRange>("7d");
   const historyRangeOptions = useMemo(
@@ -355,8 +366,8 @@ function AppDetailRoute({
     [historyMembership, historyTimelineQuery.data, topology],
   );
   const historyItems = useMemo(
-    () => buildApplicationHistoryItems(historyQuery.data, applicationEvents),
-    [applicationEvents, historyQuery.data],
+    () => buildApplicationHistoryItems(readableHistory, applicationEvents),
+    [applicationEvents, readableHistory],
   );
   const sourceInventoryEnabled =
     !selectedWorkloadKey && selectedView === "topology";
@@ -383,16 +394,28 @@ function AppDetailRoute({
     [deploymentTreeQuery.data, helmReleaseQuery.data?.resources],
   );
   useEffect(() => {
+    // Deploys belongs to the app scope, including its single-workload shell.
+    if (requestedDeploys && (!deliverySource || (!singleWorkloadKey && selectedWorkloadParam))) {
+      const params = new URLSearchParams(searchParams);
+      if (viewParam === "deploys") params.delete("view");
+      if (params.get("tab") === "deploys") params.delete("tab");
+      if (singleWorkloadKey) params.set("workload", singleWorkloadKey);
+      setSearchParams(params, { replace: true });
+      return;
+    }
     if (!singleWorkloadKey) return;
     if (selectedWorkloadParam === singleWorkloadKey && !viewParam) return;
     const params = new URLSearchParams(searchParams);
     params.delete("view");
     params.delete("run");
     params.set("workload", singleWorkloadKey);
-    if (selectedRouteView === "cost") params.set("tab", "cost");
+    if (selectedRouteView === "cost" || selectedRouteView === "deploys") params.set("tab", selectedRouteView);
+    if (selectedRouteView === "history") params.set("tab", "timeline");
     setSearchParams(params, { replace: true });
   }, [
     searchParams,
+    requestedDeploys,
+    deliverySource,
     selectedRouteView,
     selectedWorkloadParam,
     setSearchParams,
@@ -431,7 +454,7 @@ function AppDetailRoute({
         params.delete("view");
         params.delete("workload");
       } else {
-        params.set("view", view);
+        params.set("view", view === "history" ? "timeline" : view);
         params.delete("workload");
       }
       setSearchParams(params);
@@ -642,6 +665,7 @@ function AppDetailRoute({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <ArgoSyncDetailsContext.Provider value={ArgoSyncDetails}>
       <ApplicationDetail
         app={app}
         onBack={onBack}
@@ -653,8 +677,9 @@ function AppDetailRoute({
         discoveredEnvs={discoveredEnvs}
         onNavigateToResource={onOpenResource}
         onSelectWorkloadRun={selectWorkloadRun}
-        history={historyQuery.data}
+        history={readableHistory}
         historyLoading={historyQuery.isLoading}
+        historySourceError={historyQuery.isError}
         historyItems={historyItems}
         historyRuntimeLoading={historyTimelineQuery.isLoading}
         historyRuntimeError={historyTimelineQuery.isError}
@@ -672,6 +697,9 @@ function AppDetailRoute({
         onSelectWorkload={selectWorkload}
         selectedView={selectedView}
         onSelectView={selectView}
+        renderDeploys={deliverySource && showDeploys ? () =>
+          <ApplicationDeploys source={deliverySource} records={historyQuery.isError ? [] : deliveryRecords} loading={historyQuery.isLoading} unavailable={historyQuery.isError} partialSources={historyQuery.data?.partialSources} onOpenSource={openSource} /> : undefined}
+        renderWorkloadRevisions={(workload) => <WorkloadRevisionsButton {...workload} />}
         costViewSelected={applicationCostSelected}
         onSelectCostView={() => selectView("cost")}
         renderCostView={
@@ -697,9 +725,10 @@ function AppDetailRoute({
           />
         )}
         hasOverviewIssues={appIssues.length > 0}
-        renderWorkload={(workload: SelectedAppWorkload) => (
+        renderWorkload={(workload: SelectedAppWorkload, context) => (
           <div className="h-full overflow-hidden">
             <WorkloadView
+              {...context}
               kind={kindToPluralWithGroup(workload.kind, workload.group ?? "")}
               group={workload.group}
               namespace={workload.namespace}
@@ -713,6 +742,7 @@ function AppDetailRoute({
           </div>
         )}
       />
+      </ArgoSyncDetailsContext.Provider>
     </div>
   );
 }

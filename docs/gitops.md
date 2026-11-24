@@ -211,6 +211,23 @@ diff**: desired (rendered from Git, with Argo's own normalizations and every
 `ignoreDifferences` rule applied — including jq rules Radar can't evaluate)
 vs live, per managed resource, as a full YAML line diff.
 
+The same connection lets you open a sync in an application's **Deploys** tab
+and compare the Kubernetes resources Argo renders at that Git commit and at
+the previous sync's commit. A Kustomize image override, for example, appears
+as a change to the workload's container image. Expand **Deployment metadata**
+to inspect changes to the `build.run.url`, `deployment-id`, and
+`deployment-timestamp` annotations. Other annotations and labels remain
+with their resource. A change confined to annotations on a pod template can
+still trigger a rollout.
+
+This comparison uses adjacent retained syncs for a single Git source targeting
+the connected cluster. Both history entries must match the Application's
+current rendering options. Changes to the tracked tag or branch are supported
+because Radar requests each commit by SHA. Argo renders the commits on demand using its current
+renderer and dependencies. Use workload **Revisions** to inspect the pod
+templates the controller retained. Without an Argo API connection, the sync
+can still link to the commits and their comparison on supported Git hosts.
+
 Setup (Settings → Argo CD; the API is `PUT /api/integrations/connections` in
 local CLI and Desktop, and `PUT /api/integrations/argocd` in Radar Cloud):
 
