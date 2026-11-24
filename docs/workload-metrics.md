@@ -343,9 +343,13 @@ different cluster labels:
   also agree. Radar also checks every UID-less reporter retained during the
   measurement window, including reporters retired since then. Each must have
   reported a Node that still exists with a matching provider ID. Conflicting
-  identities for live Node names withhold the view. This proof applies only
-  to rightsizing and requires the verified
-  labels on every historical metric it uses. If the additional check fails,
+  identities for live Node names withhold the view. The store must preserve a
+  distinct scrape identity (job, instance and any exporter or replica labels)
+  for independent reporters sharing a cluster label throughout the window. If
+  clusters reuse both the cluster and scrape identities, configure a unique
+  cluster label on ingestion. Historical samples from these sources can be
+  indistinguishable after their Nodes retire. This check applies only to
+  rightsizing and requires the verified labels on each historical metric. If it fails,
   Radar keeps the ordinary scope decision, including any unverified result
   available in standalone Radar.
 - A metric without that label is used unfiltered only when it shows one cluster
