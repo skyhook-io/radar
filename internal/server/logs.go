@@ -106,11 +106,12 @@ type LogsResponse struct {
 func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	podName := chi.URLParam(r, "name")
-	container := r.URL.Query().Get("container")
+	query := r.URL.Query()
+	container := query.Get("container")
 	var uid types.UID
-	if values, present := r.URL.Query()["podUID"]; present {
+	if values, present := query["podUID"]; present {
 		w.Header().Set("Cache-Control", "no-store")
-		if len(values) != 1 || values[0] == "" || strings.TrimSpace(values[0]) != values[0] || len(values[0]) > 253 || container == "" {
+		if len(values) != 1 || values[0] == "" || strings.TrimSpace(values[0]) != values[0] || len(values[0]) > 253 || len(query["container"]) != 1 || container == "" {
 			s.writeError(w, http.StatusBadRequest, "podUID requires one Pod UID and a named container")
 			return
 		}
@@ -182,6 +183,7 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			verifiedUID = pod.UID
+			w.Header().Set("X-Radar-Pod-UID", string(verifiedUID))
 		}
 		// These are answers about the pod, not failures in Radar. The code
 		// lets the viewer show them as such.

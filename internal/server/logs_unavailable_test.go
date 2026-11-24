@@ -303,10 +303,10 @@ func TestPodLogsUIDBinding(t *testing.T) {
 			}
 			if tc.code == http.StatusOK {
 				var reply LogsResponse
-				if json.Unmarshal(body, &reply) != nil || reply.PodUID != "reviewed" || reply.Logs["nginx"] != "synthetic log line" {
+				if json.Unmarshal(body, &reply) != nil || reply.PodUID != "reviewed" || reply.Logs["nginx"] != "synthetic log line" || resp.Header.Get("X-Radar-Pod-UID") != "reviewed" {
 					t.Fatalf("unverified log response: %s", body)
 				}
-			} else if !strings.Contains(string(body), `"error_code":"pod_changed"`) || strings.Contains(string(body), "synthetic log line") {
+			} else if !strings.Contains(string(body), `"error_code":"pod_changed"`) || strings.Contains(string(body), "synthetic log line") || resp.Header.Get("X-Radar-Pod-UID") != "" {
 				t.Fatalf("replacement returned log text or missed conflict code: %s", body)
 			}
 		})
