@@ -287,7 +287,7 @@ func TestForeignCheckDecisions(t *testing.T) {
 				}
 			}
 			if tc.want == ViewScopeUnlabeled {
-				if scope.Withheld || scope.Filter(cpu) != "" || scope.Filter(labeledOwner.Name) != `cluster="a"` {
+				if scope.Withheld || scope.Filter(cpu) != "" || scope.Filter(labeledOwner.Name) != checkedClusterAFilter {
 					t.Errorf("accepted scope = %+v", scope)
 				}
 			} else if !scope.Withheld || len(scope.Filters) != 0 || strings.Contains(scope.Note, labeledOwner.Name) {
