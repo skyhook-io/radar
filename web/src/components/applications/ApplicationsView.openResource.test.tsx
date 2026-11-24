@@ -8,7 +8,7 @@ import { ToastProvider, workloadKey, type AppHistory, type AppRow, type AppWorkl
 import { ApplicationsView } from './ApplicationsView'
 
 let apps: AppRow[] = []
-const idle = { data: undefined, isLoading: false, isError: false, error: null }
+const idle = { data: undefined, isLoading: false, isFetching: false, isError: false, error: null }
 let history: Omit<typeof idle, 'data'> & { data?: AppHistory }
 
 vi.mock('../../api/client', () => ({
@@ -119,9 +119,10 @@ it('keeps the API group, namespace filter and open investigation when opening an
   expect(url.searchParams.get('ai-run')).toBe('run-1')
 })
 
-it('keeps a single-workload Deploys link while discovering the recorded source', async () => {
+it.each(['initial fetch', 'background refresh'])('keeps a single-workload Deploys link during %s', async (phase) => {
   apps = [app('shop/Deployment/web', ['web'])]
-  history = { ...idle, isLoading: true }
+  const initial = phase === 'initial fetch'
+  history = { ...idle, isFetching: true, isLoading: initial, data: initial ? undefined : { appKey: apps[0].key } }
   const url = '/applications?app=shop%2FDeployment%2Fweb&view=deploys&namespaces=shop'
   await renderAt(url)
   expect(new URLSearchParams(location.split('?')[1]).get('view')).toBe('deploys')

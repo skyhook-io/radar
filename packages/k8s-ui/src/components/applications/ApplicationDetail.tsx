@@ -311,8 +311,8 @@ export type ApplicationDetailProps = {
    *  key here so the switcher marks it. Changing the app or active instance
    *  resets internal selection and remounts the active host view. */
   activeInstanceKey?: string;
-  /** Supplies the content for the single Deploys destination (`deploys`).
-   *  Omit to hide it. App-scope Deploys can render without live workload data. */
+  /** Supplies the content for Deploys (`deploys`) in the app shell and the
+   *  singleton workload tab. Omit to hide it. App-scope Deploys can render offline. */
   renderDeploys?: () => ReactNode;
   /** Read-only inspection of a workload's retained revisions. */
   renderWorkloadRevisions?: (workload: AppWorkload) => ReactNode;
@@ -355,7 +355,8 @@ export type ApplicationDetailProps = {
   /** Content of the page heading, such as an app switcher. */
   renderTitle?: (name: string) => ReactNode;
   /** Order the visible tabs by ID, including `cost`. A removed view falls back
-   *  to the first offered non-Cost view. Cost has its own selection props. */
+   *  to the first offered non-Cost view. While a workload link or view list is
+   *  pending, fallback skips Deploys and extra views. Cost has separate selection props. */
   viewOrder?: string[];
   /** Content directly below the application tabs, including when live data is unavailable. WorkloadView has its own tabHeader. */
   viewHeader?: ReactNode;
@@ -575,9 +576,9 @@ export function ApplicationDetail({
   const activeView = resolvedView && isBuiltInApplicationView(resolvedView)
     ? resolvedView
     : DEFAULT_APPLICATION_VIEW;
-  const costSelected = Boolean(
-    !waitingForWorkload && renderCostView && (costViewSelected ?? (internalCostSelected || (!resolvedView && !selectionLoading && unavailable == null))),
-  );
+  const onlyOfferedCost = !resolvedView && !selectionLoading && unavailable == null;
+  const costSelected = !waitingForWorkload && Boolean(renderCostView) &&
+    ((costViewSelected ?? internalCostSelected) || onlyOfferedCost);
   const setView = useCallback(
     (view: ApplicationDetailView) => {
       setInternalCostSelected(false);

@@ -293,7 +293,7 @@ function AppDetailRoute({
   const readableHistory = historyQuery.isError ? undefined : historyQuery.data;
   const deliveryRecords = useMemo(() => applicationDeliveryRecords(readableHistory), [readableHistory]);
   const deliverySource = readableHistory?.sourceRef ?? app.sourceRef;
-  const waitingForDeploySource = requestedDeploys && !deploysInWorkloadScope && !deliverySource && historyQuery.isLoading;
+  const waitingForDeploySource = requestedDeploys && !deploysInWorkloadScope && !deliverySource && historyQuery.isFetching;
   const clearDeploySelection = deploysInWorkloadScope || (requestedDeploys && !deliverySource && !waitingForDeploySource);
   const normalizeSingleWorkload = Boolean(singleWorkloadKey && (selectedWorkloadParam !== singleWorkloadKey || viewParam));
   const clearCostSelection = !singleWorkloadKey && selectedRouteView === "cost" && !applicationCostAvailable;

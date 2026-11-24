@@ -228,6 +228,19 @@ describe('ApplicationDetail extra views', () => {
     expect(host.querySelector('[data-testid="body"]')).toBeNull()
   })
 
+  it('opens Cost when the allowlisted Deploys has no renderer and Cost is the only available view', () => {
+    const { host } = show({
+      builtInViews: ['deploys'],
+      selectedView: 'deploys',
+      onSelectView: vi.fn(),
+      renderCostView: () => <div>Cost body</div>,
+      costViewSelected: false,
+      onSelectCostView: vi.fn(),
+    })
+    expect(selected(host)).toEqual(['Cost'])
+    expect(host.textContent).toContain('Cost body')
+  })
+
   it('never lets a host view replace a built-in one', () => {
     const { host } = show({
       extraViews: [{ id: 'history', label: 'Not history', render: () => <div data-testid="body">shadow</div> }],
