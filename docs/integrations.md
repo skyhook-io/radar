@@ -176,6 +176,23 @@ Issues reports missing declared Flagger targets, analysis MetricTemplates and pr
 Absence is reported only from an already watched, synced inventory covering the referenced namespace. Unwatched, unsynced or unreadable dependencies produce no missing-reference finding; the scan starts no watches and makes no provider requests. Secret checks use metadata existence, never values. Findings depending on another namespace or Secret inventory are withheld unless the caller may read that evidence. Generated primary workloads and Services are not declared prerequisites.
 
 
+## k3s Helm controller
+
+k3s and RKE2 install add-ons (Traefik, CoreDNS and whatever the admin adds) through their Helm controller: a `HelmChart` renders into a `helm-install-<name>` Job that installs a normal Helm release, and a `HelmChartConfig` of the same name and namespace overrides its values.
+
+**Helm view.** The release's `controller` names the HelmChart (tool `k3s`) and the HelmChartConfig, so it carries a `k3s` badge, and its drawer says it is managed by k3s and names the `HelmChart` and the `HelmChartConfig` (or says to create one), with links to each. An upgrade or rollback from Radar is overwritten the next time helm-controller runs the install Job (when the HelmChart or its HelmChartConfig changes), so the upgrade-available hint and "Choose chart source" are hidden; MCP `manage_helm` refuses writes to it (an uninstall is pointed at deleting the HelmChart or, for one k3s applies from a server manifest (`objectset.rio.cattle.io/owner-gvk` is a `k3s.cattle.io` Addon), at the servers' `--disable <name>` flag, since k3s re-applies a deleted one). Flux wins if a Flux `HelmRelease` also matches, and two HelmCharts installing the same release credit neither. Issues still report a failed k3s release, and its Helm revisions stay in recent changes, since k3s keeps no change history of its own.
+
+**Detail views.** The `HelmChart` drawer shows what helm-controller reports (`JobCreated` / `Failed`), the chart (a chart served by k3s itself reads "Bundled with k3s", and one carried only in `spec.chartContent`, as RKE2 packages its add-ons, reads "Inline chart archive"), the target namespace and release with a link to it in the Helm view, the install Job, and who manages the object. The `HelmChartConfig` drawer links its `HelmChart`. **Values stay out of the views**: `spec.valuesContent`, the structured `spec.values` and `spec.set` can carry credentials, so drawers, table cells and the resource bodies sent to AI (`get_resource`, `list_resources`, search result bodies, the AI resource API) show only a line count, the number of top-level `values` keys and the `set` keys (an inline `spec.chartContent` archive and the applied-object copies in the `objectset.rio.cattle.io/applied` and last-applied annotations are omitted from those bodies too). Not filtered yet, as for any custom resource: search match snippets quote the matched value text, an MCP dry-run patch preview shows old and new values, change history shows numeric values, and the `set` values appear in the install Job's arguments. The YAML tab shows the object as stored to whoever can read it.
+
+`HelmChart` shares its kind and plural with Flux's `source.toolkit.fluxcd.io` HelmChart; every view is gated on the `helm.cattle.io` group, and a Flux HelmChart keeps its generic drawer and printer columns.
+
+**In-cluster.** The chart toggle `rbac.crdGroups.k3sHelm` is **off by default** (read-baseline decision `withhold`, because the values can carry credentials). Local runs use your own kubeconfig and are unaffected.
+
+| Resource | Group | Topology | Detail View | AI Summary |
+|----------|-------|----------|-------------|------------|
+| HelmChart | `helm.cattle.io/v1` | — | Yes | Values omitted from resource bodies |
+| HelmChartConfig | `helm.cattle.io/v1` | — | Yes | Values omitted from resource bodies |
+
 ## System Upgrade Controller
 
 Rancher, k3s and RKE2 upgrade nodes with [system-upgrade-controller](https://github.com/rancher/system-upgrade-controller): a `Plan` (`upgrade.cattle.io/v1`) selects Nodes with `spec.nodeSelector` and runs one upgrade Job per Node, `spec.concurrency` at a time.
