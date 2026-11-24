@@ -21,7 +21,7 @@ export function RestartEventLane({ kind, namespace, name, range = '1h' }: {
   range?: PrometheusTimeRange
 }) {
   const { data: status } = usePrometheusStatus()
-  const isConnected = status?.connected === true
+  const isConnected = status?.connected === true || status?.gkeSystemMetrics === true
   const { data: metrics, isLoading, error } = usePrometheusResourceMetrics(kind, namespace, name, 'restarts', range, isConnected)
 
   const restarts = useMemo(() => collectRestartEvents(metrics?.result?.series), [metrics])

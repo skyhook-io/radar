@@ -76,7 +76,7 @@ func handleConnect(w http.ResponseWriter, r *http.Request) {
 		ctx = withSuppressedDiscoveryDiagnostics(ctx)
 	}
 	_, _, err := client.EnsureConnected(ctx)
-	if err != nil {
+	if err != nil && client.gkeChartStore() == nil {
 		log.Printf("[prometheus] Connection failed: %v", err)
 		if optional {
 			status := client.GetStatus()
@@ -133,6 +133,7 @@ func parseTimeRange(rangeStr string) (start, end time.Time, step time.Duration) 
 
 // ResourceMetricsResponse is the response shape for resource metrics.
 type ResourceMetricsResponse struct {
+	Source    string              `json:"source,omitempty"`
 	Kind      string              `json:"kind"`
 	Namespace string              `json:"namespace,omitempty"`
 	Name      string              `json:"name"`
@@ -165,6 +166,7 @@ const restMaxScopePods = 500
 // chartDeps are what a chart needs beyond its request: the store, the scope
 // check and the resource cache that anchors it.
 type chartDeps struct {
+	gke     *gkeMetrics
 	q       RangeQuerier
 	resolve ChartScopeResolver
 	cache   *k8s.ResourceCache
@@ -190,7 +192,7 @@ func (d chartDeps) unconnected(ctx context.Context) error {
 func productionChartDeps(ctx context.Context, client *Client) chartDeps {
 	cache := k8s.GetResourceCache()
 	store, err := client.bindStore(ctx)
-	return chartDeps{q: store, resolve: BoundResolver(client, store.conn, chartResolverFor(client, cache)), cache: cache, connectErr: err}
+	return chartDeps{gke: client.gkeChartStore(), q: store, resolve: BoundResolver(client, store.conn, chartResolverFor(client, cache)), cache: cache, connectErr: err}
 }
 
 // chartResolverFor builds the charts' check on the client's current
@@ -210,6 +212,10 @@ func chartRangeDuration(rangeStr string) time.Duration {
 // writeChartError answers a chart failure: 502 for a failed store query,
 // nothing when the caller left.
 func writeChartError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errDiscoverySuperseded) {
+		writeError(w, http.StatusConflict, "metrics connection changed; retry the request")
+		return
+	}
 	var queryErr errChartQuery
 	if errors.As(err, &queryErr) {
 		writeError(w, http.StatusBadGateway, "Prometheus query failed: "+queryErr.Error())
@@ -363,6 +369,19 @@ func resourceChart(ctx context.Context, d chartDeps, kind, namespace, name strin
 		resp.Pods = &pods
 		resp.PodsTotal = scope.CurrentTotal
 	}
+	if d.gke != nil {
+		if d.gke.configured {
+			standard := d
+			standard.gke = nil
+			regular, err := resourceChart(ctx, standard, kind, namespace, name, category, rangeStr, scope)
+			if err != nil || regular.Partial || (regular.Result != nil && len(regular.Result.Series) > 0) {
+				return regular, err
+			}
+		}
+		a, err := d.gke.chart(ctx, kind, namespace, name, category, scope, start, end, step)
+		resp.Source, resp.Result, resp.Partial, resp.ClusterScope = "gke", a.Result, a.Partial, &d.gke.scope
+		return resp, err
+	}
 	if err := d.unconnected(ctx); err != nil {
 		return resp, err
 	}
@@ -453,6 +472,7 @@ func handleClusterScopedResourceMetrics(w http.ResponseWriter, r *http.Request) 
 
 // NamespaceMetricsResponse is the response shape for namespace-level metrics.
 type NamespaceMetricsResponse struct {
+	Source       string              `json:"source,omitempty"`
 	Namespace    string              `json:"namespace"`
 	Category     prom.MetricCategory `json:"category"`
 	Unit         string              `json:"unit"`
@@ -496,6 +516,19 @@ func handleNamespaceMetrics(w http.ResponseWriter, r *http.Request) {
 func namespaceChart(ctx context.Context, d chartDeps, namespace string, category prom.MetricCategory, rangeStr string) (NamespaceMetricsResponse, error) {
 	start, end, step := parseTimeRange(rangeStr)
 	resp := NamespaceMetricsResponse{Namespace: namespace, Category: category, Unit: prom.CategoryUnit(category), Range: rangeStr}
+	if d.gke != nil {
+		if d.gke.configured {
+			standard := d
+			standard.gke = nil
+			regular, err := namespaceChart(ctx, standard, namespace, category, rangeStr)
+			if err != nil || regular.Partial || (regular.Result != nil && len(regular.Result.Series) > 0) {
+				return regular, err
+			}
+		}
+		a, err := d.gke.chart(ctx, "Namespace", namespace, "", category, nil, start, end, step)
+		resp.Source, resp.Result, resp.Partial, resp.ClusterScope = "gke", a.Result, a.Partial, &d.gke.scope
+		return resp, err
+	}
 	if err := d.unconnected(ctx); err != nil {
 		return resp, err
 	}
@@ -523,6 +556,7 @@ func namespaceChart(ctx context.Context, d chartDeps, namespace string, category
 
 // ClusterMetricsResponse is the response shape for cluster-level metrics.
 type ClusterMetricsResponse struct {
+	Source       string              `json:"source,omitempty"`
 	Category     prom.MetricCategory `json:"category"`
 	Unit         string              `json:"unit"`
 	Range        string              `json:"range"`
@@ -565,6 +599,19 @@ func handleClusterMetrics(w http.ResponseWriter, r *http.Request) {
 func clusterChart(ctx context.Context, d chartDeps, category prom.MetricCategory, rangeStr string) (ClusterMetricsResponse, error) {
 	start, end, step := parseTimeRange(rangeStr)
 	resp := ClusterMetricsResponse{Category: category, Unit: prom.CategoryUnit(category), Range: rangeStr}
+	if d.gke != nil {
+		if d.gke.configured {
+			standard := d
+			standard.gke = nil
+			regular, err := clusterChart(ctx, standard, category, rangeStr)
+			if err != nil || regular.Partial || (regular.Result != nil && len(regular.Result.Series) > 0) {
+				return regular, err
+			}
+		}
+		a, err := d.gke.chart(ctx, "Cluster", "", "", category, nil, start, end, step)
+		resp.Source, resp.Result, resp.Partial, resp.ClusterScope = "gke", a.Result, a.Partial, &d.gke.scope
+		return resp, err
+	}
 	if err := d.unconnected(ctx); err != nil {
 		return resp, err
 	}

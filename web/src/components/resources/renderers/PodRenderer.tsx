@@ -66,7 +66,7 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
 
   // Hide metrics-server section when Prometheus has CPU data
   const { data: prometheusStatus } = usePrometheusStatus()
-  const prometheusConnected = prometheusStatus?.connected === true
+  const prometheusConnected = prometheusStatus?.connected === true || prometheusStatus?.gkeSystemMetrics === true
   const { data: prometheusCPU, isLoading: prometheusCPULoading, error: prometheusCPUError } = usePrometheusResourceMetrics(
     'Pod', namespace ?? '', podName ?? '', 'cpu', '1h', prometheusConnected,
   )

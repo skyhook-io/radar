@@ -26,7 +26,7 @@ export function NodeRenderer({ data, relationships }: NodeRendererProps) {
 
   // Determine whether to hide metrics-server section (Prometheus has data)
   const { data: prometheusStatus } = usePrometheusStatus()
-  const prometheusConnected = prometheusStatus?.connected === true
+  const prometheusConnected = prometheusStatus?.connected === true || prometheusStatus?.gkeSystemMetrics === true
   const { data: prometheusCPU, isLoading: prometheusCPULoading, error: prometheusCPUError } = usePrometheusResourceMetrics(
     'Node', '', nodeName ?? '', 'cpu', '1h', prometheusConnected,
   )

@@ -635,6 +635,21 @@ choose **Save changes**. **Discard** resets the form without changing saved sett
 Switching A → B → A restores A's settings. A context with no saved settings uses
 discovery. Local CLI and Desktop share `~/.radar/clusters.json`.
 
+On GKE, Radar first tries its usual Prometheus-compatible backends. If it finds
+only a Google Managed Service for Prometheus query frontend, it uses that
+frontend for curated system-metric charts. Locally this uses the Kubernetes
+Service proxy (GET on `services/proxy` in the frontend's namespace).
+In-cluster it uses the Service address. Discovery verifies the Service's
+selected Pods and queries for native node data from the connected cluster.
+GKE managed collection alone does not install the query frontend.
+
+Radar obtains the GKE project, control-plane location and cluster name from
+the connected API server's OpenID issuer. If the issuer cannot identify the
+cluster, those three exact values can be supplied as `project_id`, `location` and
+`cluster_name` in the existing metrics cluster-label setting. Conflicting values
+withhold native charts. A manually configured endpoint keeps priority and can
+supply conventional and native series together. [GKE chart coverage](workload-metrics.md#google-kubernetes-engine-system-metrics)
+
 Local Prometheus discovery can fall back to port-forwarding. If access is denied,
 the error names the missing permission when available, such as `list pods` or
 `create pods/portforward`. Grant it in the Prometheus Service’s namespace, or

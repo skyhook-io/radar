@@ -16,6 +16,27 @@ organization owner can open Integrations from an empty Metrics tab when a runnin
 Kubernetes UID. The connected Radar agent checks workload access and cluster
 identity for each chart read. When both sources are connected, Datadog workload totals appear alongside Prometheus traffic, resource, network and storage charts. Request and limit lines stay on the current-Pod charts where their units and scope match.
 
+### Google Kubernetes Engine system metrics
+
+On GKE, Radar can read historical CPU, non-evictable memory, Pod network rates,
+container restarts, node ephemeral storage use and current PVC use through
+Google's Managed Service for Prometheus query frontend. Install that frontend
+and enable GKE system metrics in Cloud Monitoring. These charts need neither
+node-exporter nor kube-state-metrics. Native counters are sampled by Google,
+so the last few minutes of charts can be empty.
+
+Every query selects the project, control-plane location and GKE cluster name.
+Workload charts use current controller-owned Pods and omit the lookback after
+each Pod's creation so reused names cannot include a previous replica's data.
+Network and CPU rates have a five-minute lookback. Restart changes have a
+one-hour window. The PVC gauge uses the claim name and namespace and takes the
+maximum across mounts of the same volume.
+
+HTTP request metrics, CPU throttling, workload disk I/O, deleted replica history
+and rightsizing still need their existing sources. A discovered frontend serves
+the curated charts only. See [Metrics connections](configuration.md#local-integration-connections)
+and [Google's frontend setup](https://cloud.google.com/stackdriver/docs/managed-prometheus/query-api-ui).
+
 ### Datadog-backed rightsizing in Radar Hub
 
 After an organization owner enables rightsizing for a verified cluster, the

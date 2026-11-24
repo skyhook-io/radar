@@ -932,18 +932,34 @@ func handlePVCUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	_, _, _ = client.EnsureConnected(r.Context())
+	g := client.gkeChartStore()
+	var resp PVCUsageResponse
+	if g == nil || g.configured {
+		resp = standardPVCUsage(r.Context(), client, namespace, name)
+	}
+	if g != nil && (!g.configured || resp.Status == "no_series" || resp.Status == PVCUsageAmbiguous || resp.Status == PVCUsageScopeMismatch) {
+		resp = g.pvc(r.Context(), namespace, name)
+		if g != client.gkeChartStore() {
+			writeError(w, http.StatusConflict, "metrics connection changed; retry the request")
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func standardPVCUsage(ctx context.Context, client *Client, namespace, name string) PVCUsageResponse {
 	resp := PVCUsageResponse{Namespace: namespace, Name: name, Status: PVCUsageQueryFailed}
-	matchers, _, err := client.resolveScope(r.Context(), namespace, pvcScopeProbe(namespace, []string{name}, 0), nil, k8s.GetResourceCache())
+	matchers, _, err := client.resolveScope(ctx, namespace, pvcScopeProbe(namespace, []string{name}, 0), nil, k8s.GetResourceCache())
 	if failed, bad := pvcScopeFailure(err); bad {
 		if failed.Status == PVCUsageQueryFailed {
 			errorlog.Record("prometheus", "warning", "pvc usage scope check failed for %s/%s: %v", namespace, name, err)
 		}
 		resp.Status = failed.Status
-		writeJSON(w, http.StatusOK, resp)
-		return
+		return resp
 	}
 
-	batch := queryPVCUsage(r.Context(), client, namespace, []string{name}, matchers)
+	batch := queryPVCUsage(ctx, client, namespace, []string{name}, matchers)
 	if batch.Status != PVCUsageAvailable {
 		errorlog.Record("prometheus", "warning", "pvc usage query failed for %s/%s: %s", namespace, name, batch.Error)
 		resp.Status = batch.Status
@@ -958,7 +974,7 @@ func handlePVCUsage(w http.ResponseWriter, r *http.Request) {
 	} else {
 		resp.Status = "no_series"
 	}
-	writeJSON(w, http.StatusOK, resp)
+	return resp
 }
 
 func firstValue(res *prom.QueryResult) *float64 {

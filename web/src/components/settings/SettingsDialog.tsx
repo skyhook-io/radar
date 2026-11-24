@@ -1207,7 +1207,7 @@ function OperatorSettingsSummary({ section, config }: { section: SettingsSection
       break
     case 'prometheus':
       rows = [
-        ['Status', promError ? 'Status unavailable' : !prom ? 'Checking…' : prom.connected ? 'Connected' : prom.discovering ? 'Discovering…' : 'Not connected'],
+        ['Status', promError ? 'Status unavailable' : !prom ? 'Checking…' : prom.connected ? 'Connected' : prom.gkeSystemMetrics ? 'GKE system metrics' : prom.discovering ? 'Discovering…' : 'Not connected'],
         ['Endpoint', prom?.address || c.prometheusUrl || 'Auto-discovery'],
         ['Headers', config.prometheusHeaderKeys?.join(', ') || 'None configured'],
       ]
@@ -1327,7 +1327,7 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
     {
       id: 'prometheus', icon: Activity, label: 'Metrics',
       tone: prom?.connected ? 'ok' : prom?.discovering ? 'unknown' : prom?.error ? 'warn' : 'off',
-      value: prom?.connected ? 'Connected' : prom?.discovering ? 'Discovering…' : 'Not connected',
+      value: prom?.connected ? 'Connected' : prom?.gkeSystemMetrics ? 'GKE system metrics' : prom?.discovering ? 'Discovering…' : 'Not connected',
       detail: prom?.connected ? prom.address : prom?.discovering ? undefined : prom?.error ? 'Open Metrics for connection details.' : undefined,
     },
     {

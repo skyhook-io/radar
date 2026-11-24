@@ -29,7 +29,11 @@ import (
 // with a pkg/prom.Client that performs the actual HTTP calls once an
 // endpoint has been discovered.
 type Client struct {
-	mu sync.RWMutex
+	gkeSF         singleflight.Group
+	gke           *gkeMetrics
+	gkeGeneration uint64
+	gkeChecked    time.Time
+	mu            sync.RWMutex
 
 	// Effective connection (populated after discover succeeds).
 	baseURL  string
@@ -390,6 +394,9 @@ func (c *Client) connectInBackground(label string) error {
 	switch {
 	case err == nil:
 		log.Printf("[prometheus] %s connected to %s (%s)", label, addr, took(start))
+	case c.gkeChartStore() != nil:
+		log.Printf("[prometheus] %s connected to GKE system metrics (%s)", label, took(start))
+		return nil
 	case errors.Is(err, prom.ErrHeadersRequireURL):
 		log.Printf("[prometheus] %s skipped: %v", label, err)
 	default:
@@ -524,19 +531,21 @@ func (c *Client) GetStatus() prom.Status {
 	}
 
 	connected := c.baseURL != ""
-	discovering := !connected && c.flightActive && c.flightGen == c.discoveryGen
+	gkeConnected := c.gkeActiveLocked()
+	discovering := !gkeConnected && !connected && c.flightActive && c.flightGen == c.discoveryGen
 	st := prom.Status{
-		Available:   connected,
-		Connected:   connected,
-		Discovering: discovering,
-		Address:     prom.SafeAddress(c.baseURL),
-		Service:     svc,
-		ContextName: c.contextName,
+		GKESystemMetrics: gkeConnected,
+		Available:        connected,
+		Connected:        connected,
+		Discovering:      discovering,
+		Address:          prom.SafeAddress(c.baseURL),
+		Service:          svc,
+		ContextName:      c.contextName,
 	}
 	switch {
 	case c.headersRequireURLLocked():
 		st.Error = prom.ErrHeadersRequireURL.Error()
-	case !connected && !discovering && c.lastOutcomeGen == c.discoveryGen:
+	case !gkeConnected && !connected && !discovering && c.lastOutcomeGen == c.discoveryGen:
 		st.Error = prom.RedactURLs(c.lastOutcome)
 	}
 	return st
@@ -589,6 +598,12 @@ func (c *Client) EnsureConnected(ctx context.Context) (string, string, error) {
 			if ok {
 				c.mu.Unlock()
 				if current {
+					if manual {
+						c.gkeSF.Do(fmt.Sprint(gen), func() (any, error) {
+							c.findGKEChartStore(ctx, gen, nil)
+							return nil, nil
+						})
+					}
 					return base, bp, nil
 				}
 				return c.discoverShared(ctx)
@@ -717,6 +732,7 @@ func (c *Client) discoverShared(ctx context.Context) (string, string, error) {
 			}
 
 			addr, basePath, derr := c.discover(dctx, gen)
+			c.findGKEChartStore(dctx, gen, derr)
 			flightErr = derr
 			if derr != nil {
 				if !errors.Is(derr, context.Canceled) && !errors.Is(derr, context.DeadlineExceeded) {

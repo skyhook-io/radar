@@ -11,7 +11,7 @@ export function PVCUsageBar({ namespace, name }: { namespace: string; name: stri
   const settingsAvailable = !useNavCustomization().embedded
   const canConfigure = settingsAvailable && !roleLoading && canAtLeast('owner')
   const { data: status, error: statusError } = usePrometheusStatus()
-  const isConnected = status?.connected === true
+  const isConnected = status?.connected === true || status?.gkeSystemMetrics === true
   const { data: usage, error } = usePrometheusPVCUsage(namespace, name, isConnected)
 
   let unavailable: string | undefined

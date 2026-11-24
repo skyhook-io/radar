@@ -386,14 +386,14 @@ func pastTense(op string) string {
 // candidate whose ports or selector changed. Metadata churn on an existing
 // candidate is not — it would rerun a failing discovery on every write.
 func serviceBecameCandidate(op string, svc *corev1.Service, oldObj any) bool {
-	if !prom.IsCandidateService(svc) {
+	if !prom.IsCandidateService(svc) && !gkeFrontendCandidate(svc) {
 		return false
 	}
 	if op == "add" {
 		return true
 	}
 	old, ok := oldObj.(*corev1.Service)
-	if !ok || !prom.IsCandidateService(old) {
+	if !ok || !(prom.IsCandidateService(old) || gkeFrontendCandidate(old)) {
 		return true
 	}
 	return !portsEqual(old.Spec.Ports, svc.Spec.Ports) || !labels.Equals(old.Spec.Selector, svc.Spec.Selector)
@@ -456,7 +456,7 @@ func candidateServiceSelecting(lister listerscorev1.ServiceLister, pod *corev1.P
 		if len(svc.Spec.Selector) == 0 || !labels.SelectorFromSet(svc.Spec.Selector).Matches(podLabels) {
 			continue
 		}
-		if connected != nil || prom.IsCandidateService(svc) {
+		if connected != nil || prom.IsCandidateService(svc) || gkeFrontendCandidate(svc) {
 			return svc
 		}
 	}

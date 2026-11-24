@@ -3999,6 +3999,7 @@ export function useTopNodeMetrics(options?: { enabled?: boolean }) {
 
 // Prometheus types
 export interface PrometheusStatus {
+  gkeSystemMetrics?: boolean;
   available: boolean;
   connected: boolean;
   /** A discovery run is in flight for the current configuration. Never true alongside connected. */
@@ -4032,6 +4033,7 @@ export interface PrometheusQueryResult {
 }
 
 export interface PrometheusResourceMetrics {
+  source?: "gke";
   kind: string;
   namespace?: string;
   name: string;
@@ -4131,7 +4133,7 @@ export function prometheusStatusRefetchInterval(
   status: PrometheusStatus | undefined,
 ): number {
   if (!status) return PROM_STATUS_POLL_IDLE_MS;
-  const settled = status.connected || !!status.error;
+  const settled = status.connected || status.gkeSystemMetrics || !!status.error;
   return status.discovering || !settled
     ? PROM_STATUS_POLL_DISCOVERING_MS
     : PROM_STATUS_POLL_IDLE_MS;
@@ -4244,7 +4246,7 @@ export function useAutoPromConnect(): void {
     if (!context || statusLoading) return;
 
     // Persist the "we've connected here before" signal once a connection lands.
-    if (status?.connected) {
+    if (status?.connected || status?.gkeSystemMetrics) {
       try {
         window.localStorage.setItem(promAutoConnectKey(context), "1");
       } catch {
@@ -4283,7 +4285,7 @@ export function useAutoPromConnect(): void {
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
           const nextStatus = (await resp.json()) as PrometheusStatus;
           queryClient.setQueryData(["prometheus-status"], nextStatus);
-          if (!nextStatus.connected)
+          if (!nextStatus.connected && !nextStatus.gkeSystemMetrics)
             throw new Error(nextStatus.error || "Prometheus unavailable");
           queryClient.invalidateQueries({ queryKey: ["prometheus-status"] });
         })
@@ -4305,7 +4307,7 @@ export function useAutoPromConnect(): void {
         });
     }, delay);
     return () => window.clearTimeout(timeout);
-  }, [clusterInfo?.context, status?.connected, statusLoading, queryClient]);
+  }, [clusterInfo?.context, status?.connected, status?.gkeSystemMetrics, statusLoading, queryClient]);
 }
 
 // Fetch Prometheus metrics for a resource
