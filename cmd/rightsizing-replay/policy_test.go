@@ -156,7 +156,7 @@ func TestProvenanceAndIndependentSafety(t *testing.T) {
 		{"missing fresh replica", "replica_coverage_unverified", func(c *Case) { c.Evidence.Representative = false }},
 		{"evaluation grid", "source_provenance_unverified", func(c *Case) { c.Evidence.DirectSource = false }},
 		{"config unknown", "configuration_unverified", func(c *Case) { c.Evidence.ConfigSince = time.Time{} }},
-		{"provider failure", "source timeout", func(c *Case) { c.Evidence.Issue = "source timeout" }},
+		{"provider failure", "evidence_unavailable", func(c *Case) { c.Evidence.Issue = "source timeout" }},
 		{"no direct samples", "no_source_samples", func(c *Case) { c.Evidence.SourceTimes = nil }},
 		{"zero replicas", "no_positive_replica_count", func(c *Case) { c.Replicas = 0 }},
 		{"finalized safety blocker", "guaranteed_qos", func(c *Case) {
@@ -178,7 +178,7 @@ func TestProvenanceAndIndependentSafety(t *testing.T) {
 	c.Row.Decision = rightsizing.Decision{Status: rightsizing.DecisionNone}
 	c.Evidence = nil
 	r := Evaluate(c, 2)
-	if r.Status != "review" || !slices.Contains(r.Reasons, "current_pod_oom") || !slices.Contains(r.Reasons, c.Row.QueryError) {
+	if r.Status != "review" || !slices.Contains(r.Reasons, "current_pod_oom") || !slices.Contains(r.Reasons, "usage_query_failed") || slices.Contains(r.Reasons, c.Row.QueryError) {
 		t.Fatalf("%+v", r)
 	}
 }
@@ -229,13 +229,13 @@ func TestInvalidQuantityAndUnknownDecision(t *testing.T) {
 		c := shadowCase("cpu", "1", .17, 7)
 		c.Row.CurrentRequestValue = &v
 		r := Evaluate(c, 2)
-		if r.Status != "need_data" || r.Next != nil || r.Current != nil || !slices.Contains(r.Reasons, "invalid_measurement") {
+		if r.Status != "invalid" || r.Next != nil || r.Current != nil || !slices.Contains(r.Reasons, "invalid_measurement") {
 			t.Fatalf("current=%f: %+v", v, r)
 		}
 	}
 	c := shadowCase("cpu", "1", .17, 7)
 	c.Row.Decision = rightsizing.Decision{}
-	if r := Evaluate(c, 2); r.Status != "need_data" || r.Next != nil {
+	if r := Evaluate(c, 2); r.Status != "invalid" || r.Next != nil {
 		t.Fatalf("%+v", r)
 	}
 }
@@ -257,5 +257,100 @@ func TestBalancedAndExpiredDecisions(t *testing.T) {
 	c = shadowCase("cpu", "15m", 0, 1)
 	if r := Evaluate(c, 1); r.Status != "none" || r.Next != nil || !slices.Contains(r.Reasons, "no_whole_unit_cut") {
 		t.Fatalf("zero rounded step: %+v", r)
+	}
+}
+
+func TestSafetyAndEvidencePrecedence(t *testing.T) {
+	for _, tt := range []struct {
+		name, status, reason string
+		change               func(*Case)
+	}{
+		{"fresh but zero replicas", "review", "no_positive_replica_count", func(c *Case) { c.Replicas = 0 }},
+		{"partial replica coverage", "need_data", "replica_coverage_unverified", func(c *Case) { c.Evidence.Representative = false }},
+		{"source failure", "need_data", "evidence_unavailable", func(c *Case) { c.Evidence.Issue = "backend connection timed out" }},
+		{"stale measurements", "need_data", "stale", func(c *Case) { c.Evidence.SourceTimes = []time.Time{c.At.Add(-90 * time.Minute)} }},
+		{"baseline safety review", "review", "guaranteed_qos", func(c *Case) {
+			c.Row.Decision = rightsizing.Decision{Status: rightsizing.DecisionReview, Reasons: []string{"guaranteed_qos"}}
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := shadowCase("cpu", "1", .17, 7)
+			c.Evidence.ConfigSince = c.At.Add(-2 * 24 * time.Hour)
+			tt.change(&c)
+			r := Evaluate(c, 2)
+			if r.Status != tt.status || !slices.Contains(r.Reasons, tt.reason) || slices.Contains(r.Reasons, "target_configuration_unverified") || r.Detail != c.Evidence.Issue || slices.Contains(r.Reasons, r.Detail) {
+				t.Fatalf("%+v", r)
+			}
+		})
+	}
+	c := shadowCase("cpu", "1", .8, 7)
+	c.Evidence.ConfigSince = c.At.Add(-time.Hour)
+	if r := Evaluate(c, 2); r.Status != "none" || len(r.Reasons) > 0 {
+		t.Fatalf("balanced row has no target to check: %+v", r)
+	}
+}
+
+func TestIncreaseWithCPUQuota(t *testing.T) {
+	quiet, throttled := 0.0, 0.3
+	for _, ratio := range []*float64{nil, &quiet, &throttled} {
+		c := shadowCase("cpu", "100m", .2, 7)
+		limit := 1.0
+		c.Row.CurrentLimitValue = &limit
+		c.Row.ThrottleAvailable = ratio != nil
+		c.Row.ThrottleRatio = ratio
+		c.Row.Bursty = true
+		r := Evaluate(c, 2)
+		if r.Status != "increase" || r.Next == nil || *r.Next != 250 || len(r.Reasons) > 0 {
+			t.Fatalf("throttle=%v: %+v", ratio, r)
+		}
+		c.Evidence.ConfigSince = c.At.Add(-48 * time.Hour)
+		if r := Evaluate(c, 2); r.Status != "need_data" || !slices.Contains(r.Reasons, "target_configuration_unverified") {
+			t.Fatalf("mixed-config increase: %+v", r)
+		}
+	}
+	c := shadowCase("cpu", "1", .17, 7)
+	limit := 1.0
+	c.Row.CurrentLimitValue = &limit
+	c.Evidence.SourceTimes = []time.Time{c.At}
+	if r := Evaluate(c, 2); r.Status != "need_data" || slices.Contains(r.Reasons, "throttling_unknown_under_quota") {
+		t.Fatalf("ineligible cut: %+v", r)
+	}
+}
+
+func TestIncompleteUsagePreservesIndependentRisks(t *testing.T) {
+	c := shadowCase("memory", "256Mi", 0, 2)
+	c.Row = rightsizing.Row{Container: "worker", Resource: "memory", Fit: rightsizing.FitInsufficientHistory, HPAManaged: true,
+		CurrentPodOOM: true, WindowOOMEvidence: true, Decision: rightsizing.Decision{Status: rightsizing.DecisionNone}}
+	r := Evaluate(c, 2)
+	if r.Status != "review" || !slices.Equal(r.Reasons, []string{"insufficient_usage", "hpa_managed", "current_pod_oom", "oom_in_window"}) || r.Next != nil {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func TestInconsistentFitAndInvalidQuota(t *testing.T) {
+	for _, tt := range []struct {
+		reason string
+		change func(*rightsizing.Row)
+	}{
+		{"invalid_fit", func(r *rightsizing.Row) { r.Fit = "unknown" }},
+		{"inconsistent_decision", func(r *rightsizing.Row) { r.Decision.Status = rightsizing.DecisionNone }},
+		{"inconsistent_decision", func(r *rightsizing.Row) { r.CalculatedRequestValue = nil }},
+		{"invalid_increase", func(r *rightsizing.Row) { r.Fit = rightsizing.FitUnderRequested }},
+		{"invalid_measurement", func(r *rightsizing.Row) { v := math.Inf(1); r.CurrentLimitValue = &v }},
+	} {
+		c := shadowCase("cpu", "1", .17, 7)
+		tt.change(&c.Row)
+		r := Evaluate(c, 2)
+		if r.Status != "invalid" || !slices.Contains(r.Reasons, tt.reason) || slices.Contains(r.Reasons, "throttling_unknown_under_quota") || r.Next != nil {
+			t.Fatalf("%+v", r)
+		}
+	}
+	c := shadowCase("cpu", "1", .17, 7)
+	v := math.NaN()
+	c.Row.CurrentLimitValue = &v
+	c.Row.Decision = rightsizing.Decision{Status: rightsizing.DecisionReview, Reasons: []string{"guaranteed_qos"}}
+	r := Evaluate(c, 2)
+	if r.Status != "invalid" || !slices.Contains(r.Reasons, "guaranteed_qos") {
+		t.Fatalf("original safety decision lost: %+v", r)
 	}
 }

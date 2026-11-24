@@ -37,6 +37,8 @@ func TestReplayInvalidInput(t *testing.T) {
 	}{
 		{"", 2},
 		{"{}", 2},
+		{`{"at":"2026-01-08T00:00:00Z","workload":"w","row":{"container":"c","resource":"cpu"}}`, 2},
+		{`{"at":"2026-01-08T00:00:00Z","workload":"w","row":{"container":"c","resource":"cpu","decision":{"status":"none"}},"evidence":{"source_time":[]}}`, 2},
 		{"{}", 0},
 		{"{}", 8},
 		{`{"at":"2026-01-08T00:00:00Z","workload":"example","row":{"container":"app","resource":"disk"}}`, 2},
@@ -70,10 +72,10 @@ func TestReplayEligibleAlternatives(t *testing.T) {
 		if err := json.NewDecoder(&output).Decode(&got); err != nil {
 			t.Fatal(err)
 		}
-		if got.Candidate.Status != tt.status || got.Direct == nil || *got.Direct != tt.direct || got.FlatHalf == nil || *got.FlatHalf != tt.half || got.BaselineDecision.Status != c.Row.Decision.Status {
+		if got.Candidate.Status != tt.status || got.Direct == nil || *got.Direct != tt.direct || got.FlatHalf == nil || *got.FlatHalf != tt.half || got.BaselineRow.Decision.Status != c.Row.Decision.Status {
 			t.Fatalf("%s D=%d: %+v", tt.req, tt.days, got)
 		}
-		if tt.status == "cut" && (got.Candidate.Next == nil || *got.Candidate.Next != 658) {
+		if tt.status == "cut" && (got.Candidate.Next == nil || *got.Candidate.Next != 658 || got.BaselineVisibleSavings != 500 || got.ConfigSince == nil || got.BaselineRow.Observed == nil) {
 			t.Fatalf("next: %+v", got.Candidate)
 		}
 	}

@@ -15,16 +15,18 @@ import (
 )
 
 type comparison struct {
-	BaselineDecision rightsizing.Decision `json:"baselineDecision"`
-	At               time.Time            `json:"at"`
-	Workload         string               `json:"workload"`
-	Container        string               `json:"container"`
-	Resource         string               `json:"resource"`
-	Replicas         int                  `json:"replicas"`
-	MinDays          int                  `json:"minDays"`
-	Candidate        Result               `json:"candidate"`
-	FlatHalf         *float64             `json:"flatHalf,omitempty"`
-	Direct           *float64             `json:"direct,omitempty"`
+	BaselineRow            rightsizing.Row `json:"baselineRow"`
+	BaselineVisibleSavings float64         `json:"baselineVisibleSavings"`
+	ConfigSince            *time.Time      `json:"configSince,omitempty"`
+	At                     time.Time       `json:"at"`
+	Workload               string          `json:"workload"`
+	Container              string          `json:"container"`
+	Resource               string          `json:"resource"`
+	Replicas               int             `json:"replicas"`
+	MinDays                int             `json:"minDays"`
+	Candidate              Result          `json:"candidate"`
+	FlatHalf               *float64        `json:"flatHalf,omitempty"`
+	Direct                 *float64        `json:"direct,omitempty"`
 }
 
 func replay(in io.Reader, out io.Writer, minDays int) error {
@@ -32,6 +34,7 @@ func replay(in io.Reader, out io.Writer, minDays int) error {
 		return fmt.Errorf("min-days must be between 1 and 7")
 	}
 	dec, enc := json.NewDecoder(in), json.NewEncoder(out)
+	dec.DisallowUnknownFields()
 	for index := 1; ; index++ {
 		var c Case
 		err := dec.Decode(&c)
@@ -50,10 +53,21 @@ func replay(in io.Reader, out io.Writer, minDays int) error {
 		if c.Replicas < 0 || (c.Row.Resource != "cpu" && c.Row.Resource != "memory") {
 			return fmt.Errorf("case %d: invalid replicas or row.resource", index)
 		}
+		switch c.Row.Decision.Status {
+		case rightsizing.DecisionActionable, rightsizing.DecisionReview, rightsizing.DecisionNone:
+		default:
+			return fmt.Errorf("case %d: expected a finalized row.decision.status", index)
+		}
 		result := Evaluate(c, minDays)
 		report := comparison{
 			At: c.At, Workload: c.Workload, Container: c.Row.Container, Resource: c.Row.Resource,
-			Replicas: c.Replicas, MinDays: minDays, BaselineDecision: c.Row.Decision, Candidate: result,
+			Replicas: c.Replicas, MinDays: minDays, BaselineRow: c.Row, Candidate: result,
+		}
+		if c.Evidence != nil && !c.Evidence.ConfigSince.IsZero() {
+			report.ConfigSince = &c.Evidence.ConfigSince
+		}
+		if result.Status != "invalid" && c.Row.Decision.Status == rightsizing.DecisionActionable && result.Current != nil && result.Baseline != nil {
+			report.BaselineVisibleSavings = materialSavings(*result.Current, *result.Baseline, c.Replicas, c.Row.Resource)
 		}
 		// Hold eligibility and the demand target fixed to isolate rollout pace.
 		if result.eligibleReduction {
