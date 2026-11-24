@@ -1,0 +1,202 @@
+package prometheus
+
+import (
+	"context"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/skyhook-io/radar/pkg/prom"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
+)
+
+// A source is a scrape target, including its remote-write identity when present.
+// Matching a job alone could let one cluster's exporter vouch for another's.
+var podInventorySourceLabels = append([]string{"job", "instance", "endpoint", "service", "prometheus", "prometheus_replica", "replica", "__replica__"}, partitionLabels...)
+
+func rightsizingOwnerPartition(ctx context.Context, q instantQuerier, namespace string, anchors []prom.WorkloadPodIdentity, nodes []*corev1.Node, at time.Time) (map[string]string, error) {
+	if len(nodes) == 0 || len(nodes) > 1024 {
+		return nil, nil
+	}
+	names := make([]string, len(anchors))
+	for i, pod := range anchors {
+		names[i] = regexp.QuoteMeta(pod.Name)
+	}
+	matchers := []viewMatcher{{label: "namespace", op: "=", value: namespace}, {label: "pod", op: "=~", value: strings.Join(names, "|")}}
+	group := "namespace,pod,uid," + strings.Join(podInventorySourceLabels, ",")
+	probes, err := planViewProbes([]viewProbePart{
+		{tag: viewScopeMetricLabel, metric: "kube_pod_info", head: "topk(257,count by (" + group + ") (", tail: "))", matchers: matchers},
+		{tag: viewScopeMetricLabel, metric: metricPodOwner, head: "topk(257,count by (" + group + ",owner_kind,owner_name) (", tail: "))",
+			matchers: append(matchers, parseViewMatchers(`owner_is_controller="true",owner_kind!="",owner_name!=""`)...)},
+	}, prom.MaxWorkloadQueryBytes)
+	if err != nil {
+		return nil, err
+	}
+	var rows []prom.Series
+	counts := map[string]int{}
+	for _, probe := range probes {
+		result, err := requireComplete(q.QueryAtPost(ctx, probe.query, at))
+		if err != nil {
+			return nil, err
+		}
+		if result == nil || len(result.Annotations.Infos) != 0 || result.ResultType != "vector" || len(rows)+len(result.Series) > 512 {
+			return nil, nil
+		}
+		for _, row := range result.Series {
+			family := row.Labels[viewScopeMetricLabel]
+			counts[family]++
+			if counts[family] > 256 {
+				return nil, nil
+			}
+		}
+		rows = append(rows, result.Series...)
+	}
+
+	type subject struct{ namespace, pod, partition string }
+	type owner struct {
+		subject
+		kind, name string
+	}
+	ownerOf := func(l map[string]string) owner {
+		return owner{subject{l["namespace"], l["pod"], identityKey(l, partitionLabels)}, l["owner_kind"], l["owner_name"]}
+	}
+	knownOwners := map[owner]bool{}
+	knownPods := map[subject]bool{}
+	var strong []prom.Series
+	for _, row := range rows {
+		l := row.Labels
+		if l["namespace"] != namespace || (l[viewScopeMetricLabel] != metricPodOwner && l[viewScopeMetricLabel] != "kube_pod_info") {
+			return nil, nil
+		}
+		if l["uid"] == "" {
+			continue
+		}
+		// A UID that appeared on Pod info since the primary check must be
+		// handled by that check on retry, including any contradictions.
+		if l[viewScopeMetricLabel] != metricPodOwner || l["owner_name"] == "" || l["owner_kind"] == "" {
+			return nil, nil
+		}
+		o := ownerOf(l)
+		knownOwners[o], knownPods[o.subject] = true, true
+		strong = append(strong, row)
+	}
+	partition, _ := identifyPartition(anchors, strong)
+	if len(partition) == 0 {
+		return nil, nil
+	}
+	selected := labels.SelectorFromSet(partition)
+	sources := map[string]bool{}
+	controllers := map[subject]owner{}
+	for _, row := range rows {
+		l := row.Labels
+		if !selected.Matches(labels.Set(l)) {
+			continue
+		}
+		o := ownerOf(l)
+		if l["uid"] != "" {
+			if prior, ok := controllers[o.subject]; ok && prior != o {
+				return nil, nil
+			}
+			controllers[o.subject] = o
+			continue
+		}
+		if l["job"] == "" || l["instance"] == "" || !knownPods[o.subject] ||
+			(l[viewScopeMetricLabel] == metricPodOwner && !knownOwners[o]) {
+			return nil, nil
+		}
+		sources[identityKey(l, podInventorySourceLabels)] = true
+	}
+	if len(sources) == 0 {
+		return nil, nil
+	}
+	ok, err := rightsizingSourcesMatchNodes(ctx, q, at, partition, sources, nodes)
+	if !ok || err != nil {
+		return nil, err
+	}
+	return partition, nil
+}
+
+func rightsizingSourcesMatchNodes(ctx context.Context, q instantQuerier, at time.Time, partition map[string]string, sources map[string]bool, nodes []*corev1.Node) (bool, error) {
+	matchers, err := (prom.WorkloadMetricsScope{ClusterLabels: partition}).Matchers()
+	if err != nil {
+		return false, err
+	}
+	group := strings.Join(podInventorySourceLabels, ",")
+	// Check all UID-less reporters for this partition, even one whose Pods
+	// were absent from the bounded anchor sample.
+	reporters := `topk(65,count by (` + group + `) (kube_pod_info{` + matchers + `,uid=""} or kube_pod_owner{` + matchers + `,uid="",owner_is_controller="true"}))`
+	identities := `topk(1025,count by (` + group + `,node,system_uuid,provider_id) (kube_node_info{` + matchers + `}))`
+	query := viewTagged(viewScopeMetricLabel, "sources", reporters) + " or " + viewTagged(viewScopeMetricLabel, "nodes", identities)
+	if len(query) > prom.MaxWorkloadQueryBytes {
+		return false, prom.ErrWorkloadQueryTooLarge
+	}
+	result, err := requireComplete(q.QueryAtPost(ctx, query, at))
+	if err != nil {
+		return false, err
+	}
+	if result == nil || len(result.Annotations.Infos) != 0 || result.ResultType != "vector" || len(result.Series) > 1088 {
+		return false, nil
+	}
+	apiNodes := make(map[string]*corev1.Node, len(nodes))
+	providers := map[string]bool{}
+	for _, node := range nodes {
+		if node == nil || node.Spec.ProviderID == "" || providers[node.Spec.ProviderID] {
+			return false, nil
+		}
+		apiNodes[node.Name] = node
+		providers[node.Spec.ProviderID] = true
+	}
+	selected := labels.SelectorFromSet(partition)
+	var nodeRows []prom.Series
+	required := map[string]bool{}
+	sourceRows := 0
+	for _, row := range result.Series {
+		l := row.Labels
+		if !selected.Matches(labels.Set(l)) {
+			return false, nil
+		}
+		switch l[viewScopeMetricLabel] {
+		case "sources":
+			sourceRows++
+			if l["job"] == "" || l["instance"] == "" {
+				return false, nil
+			}
+			required[identityKey(l, podInventorySourceLabels)] = true
+		case "nodes":
+			nodeRows = append(nodeRows, row)
+		default:
+			return false, nil
+		}
+	}
+	if sourceRows > 64 || len(nodeRows) > 1024 {
+		return false, nil
+	}
+	for source := range sources {
+		if !required[source] {
+			return false, nil
+		}
+	}
+	seen := map[string]map[string]bool{}
+	for _, row := range nodeRows {
+		l := row.Labels
+		source := identityKey(l, podInventorySourceLabels)
+		if !required[source] && l["provider_id"] == "" && l["system_uuid"] == "" {
+			continue
+		}
+		node := apiNodes[l["node"]]
+		if node == nil || (required[source] || l["provider_id"] != "") && l["provider_id"] != node.Spec.ProviderID || l["system_uuid"] != "" && !strings.EqualFold(l["system_uuid"], node.Status.NodeInfo.SystemUUID) {
+			return false, nil
+		}
+		if seen[source] == nil {
+			seen[source] = map[string]bool{}
+		}
+		seen[source][node.Name] = true
+	}
+	for source := range required {
+		if len(seen[source]) != len(apiNodes) {
+			return false, nil
+		}
+	}
+	return true, nil
+}

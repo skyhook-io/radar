@@ -254,12 +254,8 @@ scope flag is needed when the evidence is sufficient:
 - Beyla: match application `k8s_pod_name` and `k8s_pod_uid` to current Kubernetes Pods.
 - cAdvisor: match Pod name and an exact Pod UID segment in the `id` cgroup path
   (cgroupfs or systemd). CPU, memory and throttling are checked independently.
-- Otherwise, match live Pod names and UIDs against `kube_pod_info` or a
-  controlling `kube_pod_owner` series to establish a unique one- or two-label
-  cluster partition, then require those same labels on the source. A second
-  exporter can supply a missing UID when the Pod and partition agree. Owner
-  copies must also agree on controller kind and name. Conflicting UIDs in the
-  candidate partition prevent the match.
+- Otherwise, use `kube_pod_info` name/UID pairs to establish a unique one- or
+  two-label cluster partition, then require those same labels on the source.
   Recognized labels are `cluster`, `cluster_name`, `k8s_cluster_name`,
   `kubernetes_cluster`, and `cluster_id`. Istio uses this path, not a guessed UID.
 
@@ -274,8 +270,8 @@ is attempted.
 Current-Pod evidence probes run asynchronously with an eight-second deadline after shared
 Prometheus discovery finishes (discovery has its own 60-second bound), two active workloads
 at most, a bounded 128-entry memo and a 30-second per-workload churn guard.
-Evidence is bounded to 1,024 identities per metric family, 256 rows per KSM identity metric and a
-4 MiB response limit per request. Positive results expire after five minutes and refresh ahead of
+Evidence is bounded to 1,024 identities per metric family, 256 KSM rows and a
+4 MiB response. Positive results expire after five minutes and refresh ahead of
 expiry; negative results retry after 30 seconds. A purely negative explanation
 remains visible while the same identity/connection is rechecked; expired positive
 trust is never extended. During Pod churn, unexpired
@@ -339,6 +335,13 @@ different cluster labels:
   back on each metric's series. A store that ignores a filter on a label the
   metric lacks returns other values, and the view is withheld rather than
   shown as scoped.
+- Rightsizing has an additional check for exporters that omit Pod UIDs from
+  labeled `kube_pod_info` series. It matches controlling `kube_pod_owner`
+  UIDs to live Pods. Within the candidate partition, every exporter reporting
+  UID-less Pod info or ownership must report the complete current Kubernetes
+  Node inventory with matching cloud provider IDs. Reported system UUIDs must
+  also agree. This proof applies only to rightsizing and requires the verified
+  labels on every historical metric it uses.
 - A metric without that label is used unfiltered only when it shows one cluster
   identity and holds this cluster's own live objects (Pods, Nodes, ReplicaSets,
   volumes or the HPA, depending on the metric). Views that join metrics, like

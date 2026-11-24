@@ -111,7 +111,7 @@ func probeWorkloadAttributions(ctx context.Context, client *prom.Client, scope P
 	if !needPartition {
 		return result, nil
 	}
-	inventory, err := queryPodPartitionInventory(ctx, client, scope.Namespace, scope.Identities)
+	inventory, err := client.QueryEvidence(ctx, "topk(257,count by (namespace,pod,uid,"+strings.Join(partitionLabels, ",")+") (kube_pod_info{namespace="+ns+",pod=~"+pattern+"}))")
 	if err != nil {
 		for key, plan := range result {
 			if !plan.UID && len(groups[families[key]]) > 0 {
@@ -124,7 +124,10 @@ func probeWorkloadAttributions(ctx context.Context, client *prom.Client, scope P
 		}
 		return result, nil
 	}
-	labels, pods := identifyPartition(scope.Identities, inventory)
+	if inventory.ResultType != "vector" || len(inventory.Series) > 256 {
+		return result, nil
+	}
+	labels, pods := identifyPartition(scope.Identities, inventory.Series)
 	if len(labels) == 0 {
 		return result, nil
 	}
@@ -240,88 +243,6 @@ func attributionJob(rows []prom.Series, pods []prom.WorkloadPodIdentity, beyla b
 		return "job=" + strconv.Quote(job), true
 	}
 	return "", false
-}
-
-// queryPodPartitionInventory keeps contradictory UIDs visible, including those
-// from other clusters sharing an anchor's Pod name. It never selects by UID.
-func queryPodPartitionInventory(ctx context.Context, client *prom.Client, namespace string, pods []prom.WorkloadPodIdentity) ([]prom.Series, error) {
-	names := make([]string, len(pods))
-	for i, pod := range pods {
-		names[i] = regexp.QuoteMeta(pod.Name)
-	}
-	matchers := []viewMatcher{{label: "namespace", op: "=", value: namespace}, {label: "pod", op: "=~", value: strings.Join(names, "|")}}
-	group := "namespace,pod,uid," + strings.Join(partitionLabels, ",")
-	probes, err := planViewProbes([]viewProbePart{
-		{tag: viewScopeMetricLabel, metric: "kube_pod_info", head: "topk(257,count by (" + group + ") (", tail: "))", matchers: matchers},
-		{tag: viewScopeMetricLabel, metric: "kube_pod_owner", head: "topk(257,count by (" + group + ",owner_kind,owner_name) (", tail: "))",
-			matchers: append(matchers, parseViewMatchers(`owner_is_controller="true",owner_kind!="",owner_name!=""`)...)},
-	}, prom.MaxWorkloadQueryBytes)
-	if err != nil {
-		return nil, err
-	}
-	var rows []prom.Series
-	for _, probe := range probes {
-		result, err := client.QueryEvidence(ctx, probe.query)
-		if err != nil {
-			return nil, err
-		}
-		if result.ResultType != "vector" || len(rows)+len(result.Series) > 512 {
-			return nil, nil
-		}
-		rows = append(rows, result.Series...)
-	}
-
-	// Different scrape jobs can publish the same Pod and controller with and
-	// without a UID. Only the exact same labeled partition may fill that gap.
-	type podKey struct{ namespace, pod, partition string }
-	type ownerKey struct {
-		podKey
-		kind, name string
-	}
-	knownOwners := map[ownerKey]bool{}
-	knownPods := map[podKey]bool{}
-	emptyPartition := identityKey(nil, partitionLabels)
-	var infoRows []prom.Series
-	ownerCount := 0
-	keyFor := func(row prom.Series) ownerKey {
-		l := row.Labels
-		return ownerKey{podKey{l["namespace"], l["pod"], identityKey(l, partitionLabels)}, l["owner_kind"], l["owner_name"]}
-	}
-	for _, row := range rows {
-		key := keyFor(row)
-		if key.kind == "" {
-			infoRows = append(infoRows, row)
-			continue
-		}
-		ownerCount++
-		if row.Labels["uid"] != "" && key.partition != emptyPartition {
-			knownOwners[key], knownPods[key.podKey] = true, true
-		}
-	}
-	if len(infoRows) > 256 || ownerCount > 256 {
-		return nil, nil
-	}
-	if len(knownOwners) == 0 {
-		return infoRows, nil
-	}
-	var inventory []prom.Series
-	for _, row := range rows {
-		key := keyFor(row)
-		if key.kind != "" {
-			// Owner evidence only establishes a positive cluster matcher. Keep
-			// the existing kube_pod_info proof for unlabeled stores.
-			if key.partition == emptyPartition {
-				continue
-			}
-			if row.Labels["uid"] == "" && knownOwners[key] {
-				continue
-			}
-		} else if row.Labels["uid"] == "" && knownPods[key.podKey] {
-			continue
-		}
-		inventory = append(inventory, row)
-	}
-	return inventory, nil
 }
 
 func identifyPartition(pods []prom.WorkloadPodIdentity, rows []prom.Series) (map[string]string, []prom.WorkloadPodIdentity) {

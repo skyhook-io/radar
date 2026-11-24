@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -28,8 +31,9 @@ type workloadPartitionMemo struct {
 }
 
 type workloadPartitionProof struct {
-	scope     prom.WorkloadMetricsScope
-	unlabeled bool
+	uidlessAnchors []prom.WorkloadPodIdentity
+	scope          prom.WorkloadMetricsScope
+	unlabeled      bool
 }
 
 type workloadHistoryPlan struct {
@@ -145,11 +149,19 @@ func (c *Client) historicalClusterProof(ctx context.Context, scope PodScope, cac
 }
 
 func probeHistoricalPartition(ctx context.Context, client *prom.Client, namespace string, anchors []prom.WorkloadPodIdentity) (workloadPartitionProof, error) {
-	inventory, err := queryPodPartitionInventory(ctx, client, namespace, anchors)
+	names := make([]string, len(anchors))
+	for i, pod := range anchors {
+		names[i] = regexp.QuoteMeta(pod.Name)
+	}
+	query := "topk(257,count by (namespace,pod,uid," + strings.Join(partitionLabels, ",") + ") (kube_pod_info{namespace=" + strconv.Quote(namespace) + ",pod=~" + strconv.Quote(strings.Join(names, "|")) + "}))"
+	result, err := client.QueryEvidence(ctx, query)
 	if err != nil {
 		return workloadPartitionProof{}, err
 	}
-	partition, _ := identifyPartitionWithUnlabeled(anchors, inventory, true)
+	if result.ResultType != "vector" || len(result.Series) > 256 {
+		return workloadPartitionProof{}, nil
+	}
+	partition, _ := identifyPartitionWithUnlabeled(anchors, result.Series, true)
 	proof := workloadPartitionProof{scope: prom.WorkloadMetricsScope{ClusterLabels: partition}}
 	for _, value := range partition {
 		if value == "" {
@@ -158,6 +170,18 @@ func probeHistoricalPartition(ctx context.Context, client *prom.Client, namespac
 			proof.scope.ClusterLabels, proof.unlabeled = nil, true
 			break
 		}
+	}
+	// Only a labeled inventory missing UIDs qualifies for the rightsizing
+	// fallback. An ambiguous UID, a truncated answer or an unlabeled store
+	// must retain its original decision.
+	if len(partition) == 0 && len(result.Series) > 0 {
+		emptyPartition := identityKey(nil, partitionLabels)
+		for _, row := range result.Series {
+			if row.Labels["uid"] != "" || identityKey(row.Labels, partitionLabels) == emptyPartition {
+				return proof, nil
+			}
+		}
+		proof.uidlessAnchors = anchors
 	}
 	return proof, nil
 }

@@ -361,6 +361,7 @@ func (c *Client) ResolveViewScope(ctx context.Context, req ViewScopeRequest, cac
 
 func (c *Client) decideViewScopeFor(ctx context.Context, req ViewScopeRequest, at time.Time, config prom.WorkloadMetricsScope, configured bool, cache *k8s.ResourceCache) (ViewScope, error) {
 	clusterLabels := config.ClusterLabels
+	ownerProof := false
 	if !configured {
 		namespace := req.Namespace
 		if namespace == "" {
@@ -371,8 +372,23 @@ func (c *Client) decideViewScopeFor(ctx context.Context, req ViewScopeRequest, a
 			return unknownViewScope(), err
 		}
 		clusterLabels = proof.scope.ClusterLabels
+		if req.View == rightsizingScopeView && len(proof.uidlessAnchors) != 0 && cache != nil && cache.Nodes() != nil {
+			nodes, err := cache.Nodes().List(labels.Everything())
+			if err != nil {
+				return unknownViewScope(), err
+			}
+			clusterLabels, err = rightsizingOwnerPartition(ctx, c, namespace, proof.uidlessAnchors, nodes, time.Now())
+			if err != nil {
+				return unknownViewScope(), err
+			}
+			ownerProof = len(clusterLabels) != 0
+		}
 	}
-	return decideViewScope(ctx, c, req, at, clusterLabels, configured)
+	scope, err := decideViewScope(ctx, c, req, at, clusterLabels, configured)
+	if ownerProof && err == nil && !scope.Withheld && scope.State != ViewScopeVerified {
+		return ViewScope{State: ViewScopeLabelMissing, Withheld: true, Note: "Rightsizing needs the verified cluster labels on every measured metric."}, nil
+	}
+	return scope, err
 }
 
 func viewScopeTTL(scope ViewScope) time.Duration {
