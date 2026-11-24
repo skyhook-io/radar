@@ -378,7 +378,7 @@ interface WorkloadViewProps {
   }) => ReactNode
   /** Additional tabs in the expanded view. */
   extraTabs?: WorkloadExtraTab[]
-  /** Keep unrecognized deep links while the host is loading additional tabs. */
+  /** Wait for the host's extra tabs before rewriting a fallback tab selection. */
   extraTabsLoading?: boolean
   /** Expanded view: a line under the title, above the tabs, shown on every tab. */
   subheader?: ReactNode
@@ -1091,11 +1091,12 @@ export function WorkloadView({
   const effectiveTab: TabType = requestedTabAvailable ? requestedTab : fallbackTab
   const activeExtraTab = expanded ? extraTabsForState?.find((x) => x.id === effectiveTab) : undefined
   const shouldCommitFallback =
+    !(expanded && extraTabsLoading) &&
     requestedTab !== fallbackTab &&
     !requestedTabAvailable &&
     (
       (expanded && (replacementTab !== undefined || hiddenTabs?.some((tab) => tab === requestedTab))) ||
-      (expanded && !resourceLoading && !extraTabsLoading && !isBuiltInTab(requestedTab)) ||
+      (expanded && !resourceLoading && !isBuiltInTab(requestedTab)) ||
       (requestedTab === 'spec' && !!resource && !resourceLoading && !expandedSummary) ||
       (requestedTab === 'topology' && topologyTabHidden) ||
       (requestedTab === 'metrics' && (!renderMetricsTab || (!!resource && !resourceLoading && !showMetricsTab))) ||

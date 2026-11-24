@@ -210,6 +210,8 @@ it('keeps an asynchronous deep link and reconciles an explicit built-in replacem
   act(() => root.render(<WorkloadView {...props} expanded activeTab="runs" extraTabs={extraTabs} onTabChange={onTabChange} />))
   expect(host.textContent).toContain('The runs')
   expect(onTabChange).not.toHaveBeenCalled()
+  act(() => root.render(<WorkloadView {...props} expanded activeTab="spec" extraTabsLoading hiddenTabs={['spec']} onTabChange={onTabChange} />))
+  expect(onTabChange).not.toHaveBeenCalled()
   act(() => root.render(<WorkloadView {...props} expanded activeTab="spec" extraTabs={extraTabs} onTabChange={onTabChange} />))
   expect(onTabChange).toHaveBeenCalledWith('runs', { replace: true })
   act(() => root.unmount())
