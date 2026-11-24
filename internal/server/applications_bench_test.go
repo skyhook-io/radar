@@ -94,23 +94,14 @@ func BenchmarkApplications1000Workloads5000Services(b *testing.B) {
 
 func useApplicationsBenchCache(b *testing.B, objects []runtime.Object) {
 	b.Helper()
-	k8s.ResetResourceCache()
-	if err := k8s.InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
-		b.Fatal(err)
-	}
+	useTestResourceCache(b, fake.NewClientset(objects...))
 	restore, err := k8s.SetTestResourceDiscovery(fake.NewClientset().Discovery())
 	if err != nil {
 		b.Fatal(err)
 	}
 	b.Cleanup(restore)
 	addApplicationTypedDiscovery()
-	b.Cleanup(func() {
-		clearApplicationsCache()
-		k8s.ResetResourceCache()
-		if err := k8s.InitTestResourceCache(testFakeClient); err != nil {
-			b.Fatal(err)
-		}
-	})
+	b.Cleanup(clearApplicationsCache)
 }
 
 // The batch beside what a real cluster also holds: each Deployment's

@@ -37,12 +37,16 @@ type authFakeProm struct {
 	queryCalls  int
 	rangeBody   string
 	queryBody   string // instant-query body; empty falls back to authVectorBody
+	// queryFn renders an instant query's body; "" falls through.
+	queryFn func(query string) string
 }
 
 func (f *authFakeProm) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	q := r.URL.Query()
+	// A real store reads the parameters from the URL or a POST body alike.
+	_ = r.ParseForm()
+	q := r.Form
 	switch r.URL.Path {
 	case "/api/v1/query":
 		if q.Get("query") == "up" {
@@ -53,6 +57,15 @@ func (f *authFakeProm) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		body := f.queryBody
 		if body == "" {
 			body = authVectorBody
+		}
+		// The charts' cluster scope check: a store with no cluster labels.
+		if strings.HasPrefix(q.Get("query"), "label_replace(") {
+			body = `{"status":"success","data":{"resultType":"vector","result":[]}}`
+		}
+		if f.queryFn != nil {
+			if rendered := f.queryFn(q.Get("query")); rendered != "" {
+				body = rendered
+			}
 		}
 		_, _ = w.Write([]byte(body))
 	case "/api/v1/query_range":

@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	listersbatchv1 "k8s.io/client-go/listers/batch/v1"
 
+	"github.com/skyhook-io/radar/internal/audit"
 	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -424,6 +425,7 @@ func (s *Reader) workspaceAudit(clusters, scheduled []*unstructured.Unstructured
 		CNPGClusters:                      clusters,
 		CNPGScheduledBackups:              scheduled,
 		CNPGScheduledBackupsAuthoritative: true,
+		Namespaces:                        audit.CollectNamespaces(s.Observations.Cache),
 	})
 	results = s.Observations.FilterAudit(results)
 	if results == nil {

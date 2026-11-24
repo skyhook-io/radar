@@ -4,6 +4,7 @@ import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getVolumeSnapshotColumnValue } from './resource-utils-volumesnapshot'
 import { getMetalLBColumnValue } from './resource-utils-metallb'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
+import { getK3sHelmChartColumnValue } from './resource-utils-k3s'
 import { getUpgradePlanColumnValue } from './resource-utils-upgrade-plan'
 import { FLUX_OPERATOR_GROUP, getFluxOperatorColumnValue, getFluxOperatorStatus } from './resource-utils-flux-operator'
 // Utility functions for resource display in tables
@@ -2611,6 +2612,8 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
   if (otelValue !== undefined) return otelValue
   const flaggerValue = getFlaggerColumnValue(resource, column)
   if (flaggerValue !== undefined) return flaggerValue
+  const k3sValue = getK3sHelmChartColumnValue(resource, column)
+  if (k3sValue !== undefined) return k3sValue
   const agentRuntimeValue = getAgentRuntimeColumnValue(resource, column)
   if (agentRuntimeValue !== undefined) return agentRuntimeValue
   const planValue = getUpgradePlanColumnValue(resource, column)

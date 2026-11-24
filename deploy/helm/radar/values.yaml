@@ -239,6 +239,7 @@ rbac:
     nvidia: true            # nvidia.com (GPU Operator: ClusterPolicy, NVIDIADriver)
     openshift: true         # observability.openshift.io
     flagger: false         # Opt in to get/list/watch flagger.app Canaries and MetricTemplates. No default collection expansion.
+    k3sHelm: false         # Opt in to get/list/watch helm.cattle.io HelmCharts and HelmChartConfigs (k3s/RKE2). Values can hold credentials.
     systemUpgrade: false   # Opt in to get/list/watch upgrade.cattle.io Plans (system-upgrade-controller). Plans can carry env values.
     opentelemetry: true     # opentelemetry.io
     prometheus: true        # monitoring.coreos.com
@@ -698,7 +699,7 @@ traffic:
   prometheusUrl: ""
   # Optional workload/PVC metrics scope override, not a feature enable switch.
   # Leave both unset for automatic matching; set at most one mode.
-  # Does not scope rightsizing, node/HPA or legacy network/storage queries.
+  # Also scopes rightsizing, node/HPA charts and OpenCost costs from the store.
   # prometheusClusterLabels also scopes the Caretta, Beyla and Istio traffic map
   # when prometheusUrl is set.
   prometheusSingleCluster: false

@@ -1,0 +1,86 @@
+pod/cpu	sum(rate(container_cpu_usage_seconds_total{container!='',namespace='pay-ments',pod='api.x-1'}[5m])) by (pod,namespace)
+pod-nocf/cpu	sum(rate(container_cpu_usage_seconds_total{namespace='pay-ments',pod='api.x-1'}[5m])) by (pod,namespace)
+node/cpu	sum(rate(node_cpu_seconds_total{mode!='idle',instance=~'ip-10-0-0-1\\.ec2\\.internal(:\\d+)?'}[5m]))
+namespace/cpu	sum(rate(container_cpu_usage_seconds_total{container!='',namespace='pay-ments'}[5m]))
+namespace-nocf/cpu	sum(rate(container_cpu_usage_seconds_total{namespace='pay-ments'}[5m]))
+cluster/cpu	sum(rate(container_cpu_usage_seconds_total{container!=''}[5m]))
+cluster-nocf/cpu	sum(rate(container_cpu_usage_seconds_total{}[5m]))
+scoped-perpod/cpu	sum(rate(container_cpu_usage_seconds_total{container!='',namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}[5m])) by (pod,namespace)
+scoped-perpod-nocf/cpu	sum(rate(container_cpu_usage_seconds_total{namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}[5m])) by (pod,namespace)
+scoped-total/cpu	sum(rate(container_cpu_usage_seconds_total{container!='',namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}[5m]))
+scoped-total-nocf/cpu	sum(rate(container_cpu_usage_seconds_total{namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}[5m]))
+scoped-empty/cpu	sum(rate(container_cpu_usage_seconds_total{container!='',namespace='pay-ments',pod=~'a^'}[5m])) by (pod,namespace)
+podset/cpu	sum(rate(container_cpu_usage_seconds_total{container!='',namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}[5m]))
+podset-nocf/cpu	sum(rate(container_cpu_usage_seconds_total{namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}[5m]))
+pod/memory	sum by (pod,namespace) (max by (pod,namespace,container) (container_memory_working_set_bytes{container!='',namespace='pay-ments',pod='api.x-1'}))
+pod-nocf/memory	sum by (pod,namespace) (max by (pod,namespace,container) (container_memory_working_set_bytes{namespace='pay-ments',pod='api.x-1'}))
+node/memory	node_memory_MemTotal_bytes{instance=~'ip-10-0-0-1\\.ec2\\.internal(:\\d+)?'} - node_memory_MemAvailable_bytes{instance=~'ip-10-0-0-1\\.ec2\\.internal(:\\d+)?'}
+namespace/memory	sum(max by (namespace,pod,container) (container_memory_working_set_bytes{container!='',namespace='pay-ments'}))
+namespace-nocf/memory	sum(max by (namespace,pod,container) (container_memory_working_set_bytes{namespace='pay-ments'}))
+cluster/memory	sum(max by (namespace,pod,container) (container_memory_working_set_bytes{container!=''}))
+cluster-nocf/memory	sum(max by (namespace,pod,container) (container_memory_working_set_bytes{}))
+scoped-perpod/memory	sum by (pod,namespace) (max by (pod,namespace,container) (container_memory_working_set_bytes{container!='',namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}))
+scoped-perpod-nocf/memory	sum by (pod,namespace) (max by (pod,namespace,container) (container_memory_working_set_bytes{namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}))
+scoped-total/memory	sum(max by (pod,namespace,container) (container_memory_working_set_bytes{container!='',namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}))
+scoped-total-nocf/memory	sum(max by (pod,namespace,container) (container_memory_working_set_bytes{namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}))
+scoped-empty/memory	sum by (pod,namespace) (max by (pod,namespace,container) (container_memory_working_set_bytes{container!='',namespace='pay-ments',pod=~'a^'}))
+podset/memory	sum(max by (pod,namespace,container) (container_memory_working_set_bytes{container!='',namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}))
+podset-nocf/memory	sum(max by (pod,namespace,container) (container_memory_working_set_bytes{namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}))
+pod/network_rx	sum(rate(container_network_receive_bytes_total{namespace='pay-ments',pod='api.x-1'}[5m])) by (pod,namespace)
+pod-nocf/network_rx	sum(rate(container_network_receive_bytes_total{namespace='pay-ments',pod='api.x-1'}[5m])) by (pod,namespace)
+node/network_rx	
+namespace/network_rx	sum(rate(container_network_receive_bytes_total{namespace='pay-ments'}[5m]))
+namespace-nocf/network_rx	sum(rate(container_network_receive_bytes_total{namespace='pay-ments'}[5m]))
+cluster/network_rx	sum(rate(container_network_receive_bytes_total[5m]))
+cluster-nocf/network_rx	sum(rate(container_network_receive_bytes_total[5m]))
+scoped-perpod/network_rx	sum(rate(container_network_receive_bytes_total{namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}[5m])) by (pod,namespace)
+scoped-perpod-nocf/network_rx	sum(rate(container_network_receive_bytes_total{namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}[5m])) by (pod,namespace)
+scoped-total/network_rx	sum(rate(container_network_receive_bytes_total{namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}[5m]))
+scoped-total-nocf/network_rx	sum(rate(container_network_receive_bytes_total{namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}[5m]))
+scoped-empty/network_rx	sum(rate(container_network_receive_bytes_total{namespace='pay-ments',pod=~'a^'}[5m])) by (pod,namespace)
+podset/network_rx	
+podset-nocf/network_rx	
+pod/network_tx	sum(rate(container_network_transmit_bytes_total{namespace='pay-ments',pod='api.x-1'}[5m])) by (pod,namespace)
+pod-nocf/network_tx	sum(rate(container_network_transmit_bytes_total{namespace='pay-ments',pod='api.x-1'}[5m])) by (pod,namespace)
+node/network_tx	
+namespace/network_tx	sum(rate(container_network_transmit_bytes_total{namespace='pay-ments'}[5m]))
+namespace-nocf/network_tx	sum(rate(container_network_transmit_bytes_total{namespace='pay-ments'}[5m]))
+cluster/network_tx	sum(rate(container_network_transmit_bytes_total[5m]))
+cluster-nocf/network_tx	sum(rate(container_network_transmit_bytes_total[5m]))
+scoped-perpod/network_tx	sum(rate(container_network_transmit_bytes_total{namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}[5m])) by (pod,namespace)
+scoped-perpod-nocf/network_tx	sum(rate(container_network_transmit_bytes_total{namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}[5m])) by (pod,namespace)
+scoped-total/network_tx	sum(rate(container_network_transmit_bytes_total{namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}[5m]))
+scoped-total-nocf/network_tx	sum(rate(container_network_transmit_bytes_total{namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}[5m]))
+scoped-empty/network_tx	sum(rate(container_network_transmit_bytes_total{namespace='pay-ments',pod=~'a^'}[5m])) by (pod,namespace)
+podset/network_tx	
+podset-nocf/network_tx	
+pod/filesystem	sum(rate(container_fs_writes_bytes_total{namespace='pay-ments',pod='api.x-1'}[5m]) + rate(container_fs_reads_bytes_total{namespace='pay-ments',pod='api.x-1'}[5m])) by (pod,namespace)
+pod-nocf/filesystem	sum(rate(container_fs_writes_bytes_total{namespace='pay-ments',pod='api.x-1'}[5m]) + rate(container_fs_reads_bytes_total{namespace='pay-ments',pod='api.x-1'}[5m])) by (pod,namespace)
+node/filesystem	sum(node_filesystem_size_bytes{instance=~'ip-10-0-0-1\\.ec2\\.internal(:\\d+)?',fstype=~'ext4|xfs|btrfs'} - node_filesystem_avail_bytes{instance=~'ip-10-0-0-1\\.ec2\\.internal(:\\d+)?',fstype=~'ext4|xfs|btrfs'})
+namespace/filesystem	
+namespace-nocf/filesystem	
+cluster/filesystem	
+cluster-nocf/filesystem	
+scoped-perpod/filesystem	sum(rate(container_fs_writes_bytes_total{namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}[5m]) + rate(container_fs_reads_bytes_total{namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}[5m])) by (pod,namespace)
+scoped-perpod-nocf/filesystem	sum(rate(container_fs_writes_bytes_total{namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}[5m]) + rate(container_fs_reads_bytes_total{namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}[5m])) by (pod,namespace)
+scoped-total/filesystem	sum(rate(container_fs_writes_bytes_total{namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}[5m]) + rate(container_fs_reads_bytes_total{namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}[5m]))
+scoped-total-nocf/filesystem	sum(rate(container_fs_writes_bytes_total{namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}[5m]) + rate(container_fs_reads_bytes_total{namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}[5m]))
+scoped-empty/filesystem	sum(rate(container_fs_writes_bytes_total{namespace='pay-ments',pod=~'a^'}[5m]) + rate(container_fs_reads_bytes_total{namespace='pay-ments',pod=~'a^'}[5m])) by (pod,namespace)
+podset/filesystem	
+podset-nocf/filesystem	
+pod/restarts	sum by (pod,namespace) (changes(kube_pod_container_status_restarts_total{namespace='pay-ments',pod='api.x-1'}[1h]))
+pod-nocf/restarts	sum by (pod,namespace) (changes(kube_pod_container_status_restarts_total{namespace='pay-ments',pod='api.x-1'}[1h]))
+node/restarts	
+namespace/restarts	
+namespace-nocf/restarts	
+cluster/restarts	
+cluster-nocf/restarts	
+scoped-perpod/restarts	sum by (pod,namespace) (changes(kube_pod_container_status_restarts_total{namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}[1h]))
+scoped-perpod-nocf/restarts	sum by (pod,namespace) (changes(kube_pod_container_status_restarts_total{namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}[1h]))
+scoped-total/restarts	sum(round(increase(kube_pod_container_status_restarts_total{namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}[1h])))
+scoped-total-nocf/restarts	sum(round(increase(kube_pod_container_status_restarts_total{namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}[1h])))
+scoped-empty/restarts	sum by (pod,namespace) (changes(kube_pod_container_status_restarts_total{namespace='pay-ments',pod=~'a^'}[1h]))
+podset/restarts	sum(round(increase(kube_pod_container_status_restarts_total{namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}[1h])))
+podset-nocf/restarts	sum(round(increase(kube_pod_container_status_restarts_total{namespace='pay-ments',pod=~'^(api-2|api\\.x-1)$'}[1h])))
+hpa/current	kube_horizontalpodautoscaler_status_current_replicas{namespace="pay-ments",horizontalpodautoscaler="api-hpa"}
+hpa/desired	kube_horizontalpodautoscaler_status_desired_replicas{namespace="pay-ments",horizontalpodautoscaler="api-hpa"}

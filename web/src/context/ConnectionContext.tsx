@@ -4,6 +4,7 @@ import { automaticRequestHeaders, getApiBase } from '../api/config'
 import { readErrorBody } from '../api/httpErrors'
 import { apiFetch, type SyncStatusSnapshot, type NodeDrainActivity } from '../api/client'
 import { followSwitch, switchInProgress, type ContextSwitchOperation } from '../api/contextSwitch'
+import { observeConnectionStatus } from '../api/connectionBinding'
 import { showApiNotice } from '../components/ui/Toast'
 import { ClusterConnectedContext } from './clusterConnected'
 
@@ -19,6 +20,9 @@ export interface ConnectionState {
   // When this context stopped working (RFC 3339). Set by the server while
   // disconnected; older servers never send it.
   disconnectedAt?: string
+  // The connection Radar is serving (see connectionBinding.ts). Empty while a
+  // switch is between connections; never sent by an in-cluster or older Radar.
+  connectionId?: string
   // Per-kind readiness while the initial informer sync runs ('connecting'
   // with informers started). Drives the progressive app shell — absent once
   // connected or before informers exist.
@@ -34,6 +38,7 @@ interface ConnectionStatusResponse extends ConnectionState {
 
 interface PolledConnectionStatus extends ConnectionStatusResponse {
   sseGenerationAtStart: number
+  apiBase: string
 }
 
 interface ConnectionContextValue {
@@ -110,16 +115,18 @@ async function fetchConnectionStatus(sseGenerationAtStart: number): Promise<Poll
   // ?contexts=0: context enumeration re-reads kubeconfig files under the
   // client write lock on the server — too costly for a perpetual poll, and
   // nothing here consumes the list (ContextSwitcher has its own query).
-  const response = await apiFetch(`${getApiBase()}/connection?contexts=0`)
+  const base = getApiBase()
+  const response = await apiFetch(`${base}/connection?contexts=0`)
   if (!response.ok) {
     throw new Error('Failed to fetch connection status')
   }
   const status = await response.json() as ConnectionStatusResponse
-  return { ...status, sseGenerationAtStart }
+  return { ...status, sseGenerationAtStart, apiBase: base }
 }
 
 async function retryConnection(automatic = false): Promise<ConnectionState> {
-  const response = await apiFetch(`${getApiBase()}/connection/retry`, {
+  const base = getApiBase()
+  const response = await apiFetch(`${base}/connection/retry`, {
     method: 'POST',
     headers: automatic ? automaticRequestHeaders() : undefined,
   })
@@ -127,7 +134,9 @@ async function retryConnection(automatic = false): Promise<ConnectionState> {
     const error = await readErrorBody(response) as { error?: string; errorType?: string; error_code?: string }
     throw new ConnectionRetryError(error.error || `HTTP ${response.status}`, response.status, error.errorType, error.error_code)
   }
-  return response.json()
+  const result = await response.json() as ConnectionState
+  observeConnectionStatus(result, base)
+  return result
 }
 
 export function ConnectionProvider({ children }: { children: ReactNode }) {
@@ -283,6 +292,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       }
       return
     }
+    // Only a poll that wins over newer SSE state names the connection, or a
+    // stale reply would leave the tab sending the previous cluster's ID.
+    observeConnectionStatus(data, data.apiBase)
     // A background tab can miss both the SSE event and the whole operation
     // between polls. Apply the same cache and URL transition as the initiating tab.
     if (current.state === 'connected' && current.context && current.context !== data.context &&
@@ -508,6 +520,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     // in-flight polls detect they raced this frame.
     sseActiveRef.current = true
     sseGenerationRef.current += 1
+    observeConnectionStatus(status)
     setConnection(prev => {
       // Don't transition back to 'connecting' from 'connected'. This happens when the
       // pod restarts and the SSE reconnects while the new pod's K8s cache is still

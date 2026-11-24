@@ -4,17 +4,89 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/rest"
+	restfake "k8s.io/client-go/rest/fake"
 	k8stesting "k8s.io/client-go/testing"
 )
+
+func TestMetricsHistoryStopCancelsPodList(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		podListStarted := make(chan struct{})
+		httpClient := restfake.CreateHTTPClient(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/apis/metrics.k8s.io/v1beta1/pods" {
+				t.Errorf("unexpected request: %s %s", req.Method, req.URL.Path)
+				return nil, errors.New("unexpected request")
+			}
+			close(podListStarted)
+			<-req.Context().Done()
+			return nil, req.Context().Err()
+		})
+		client, err := dynamic.NewForConfigAndClient(&rest.Config{Host: "https://metrics.test"}, httpClient)
+		if err != nil {
+			t.Fatal(err)
+		}
+		store := NewMetricsHistoryStore(client)
+		store.Start()
+		<-podListStarted
+
+		start := time.Now()
+		store.Stop()
+		store.wg.Wait()
+		if elapsed := time.Since(start); elapsed != 0 {
+			t.Errorf("Stop advanced the test clock by %s while the pod LIST was blocked", elapsed)
+		}
+		health := store.CollectionHealth()
+		if health.PodMetrics != (MetricsSourceHealth{}) || health.NodeMetrics != (MetricsSourceHealth{}) {
+			t.Errorf("cancelled poll updated source health: %+v", health)
+		}
+	})
+}
+
+func TestMetricsHistoryStopWhileResolving(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		resolving := make(chan struct{})
+		release := make(chan struct{})
+		client := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
+		store := NewMetricsHistoryStoreWithResolver(client, func(string) (schema.GroupVersionResource, bool) {
+			close(resolving)
+			<-release
+			return schema.GroupVersionResource{}, false
+		})
+		store.OnError = func(_, _, format string, args ...any) { t.Errorf(format, args...) }
+		store.Start()
+		<-resolving
+		before := store.CollectionHealth()
+		stopped := make(chan struct{})
+		go func() {
+			store.Stop()
+			store.Stop()
+			close(stopped)
+		}()
+		synctest.Wait()
+		select {
+		case <-stopped:
+		default:
+			t.Error("Stop waited for the blocked metrics resolver")
+		}
+		close(release)
+		store.wg.Wait()
+		if after := store.CollectionHealth(); after != before {
+			t.Errorf("released resolver changed health from %+v to %+v", before, after)
+		}
+	})
+}
 
 func TestMetricsHistoryResolvesServedVersionLazily(t *testing.T) {
 	gvr := schema.GroupVersionResource{Group: MetricsAPIGroup, Version: "v1", Resource: "pods"}

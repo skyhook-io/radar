@@ -1,5 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react'
 import { flushSync } from 'react-dom'
+import { isRightsizingScanPath } from './utils/page-links'
 import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
 import { englishPlural } from '@skyhook-io/k8s-ui/utils/pluralize'
 import { useQueryClient } from '@tanstack/react-query'
@@ -7,9 +8,8 @@ import { useNavigate, useLocation, useSearchParams, useNavigationType, Navigatio
 import { HomeView } from './components/home/HomeView'
 import { DebugOverlay } from './components/DebugOverlay'
 import { GlobalDiagnoseButton } from './components/diagnose/LocalDiagnoseAction'
-import { followSwitch, followingSwitch, switchInProgress } from './api/contextSwitch'
+import { switchInProgress } from './api/contextSwitch'
 import { ContextSwitchActions } from './components/ContextSwitchActions'
-import { useToast } from './components/ui/Toast'
 import { investigationWorkspaceSearch, isInvestigationWorkspacePath, useDiagnoseLayout } from './components/diagnose/DiagnoseContext'
 import { DiagnoseSurface } from './components/diagnose/DiagnoseSurface'
 import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader, usePhoneLayout, PHONE_MEDIA_QUERY } from '@skyhook-io/k8s-ui'
@@ -37,11 +37,10 @@ import { DockProvider, BottomDock, useDock, useDockReservedHeight, useOpenLocalT
 import { TerminalPreferences } from './components/dock/TerminalPreferences'
 import { DURATION_DOCK, overlayExitMs } from '@skyhook-io/k8s-ui/utils/animation'
 import { ContextSwitcher } from './components/ContextSwitcher'
-import { useContextSwitchFlow } from './components/useContextSwitchFlow'
+import { useContextSwitchFlow, useContextSwitchOutcome } from './components/useContextSwitchFlow'
 import { NamespaceSwitcher, type NamespaceSwitcherHandle } from './components/NamespaceSwitcher'
 import { CloudFunnelButton } from './components/CloudFunnelButton'
 import { useNavCustomization } from './context/NavCustomization'
-import type { FleetTakeoverTarget } from './context/NavCustomization'
 import { PrimaryNavRail } from './components/nav/PrimaryNavRail'
 import { resourceExpandedPath, resourceKindListNamespaceFilterTooltip, resourceKindListTitle, useResourceHostFeatures } from './integrations/resourceHosts'
 import { workspaceContextSwitchSearch, workspaceForPath, workspaceForView, workspaceLabels } from './integrations/workspaceRoutes'
@@ -50,6 +49,7 @@ import { currentPageLabel } from './utils/page-links'
 import { navigateFromPrimaryRail } from './components/nav/navigation'
 import { useNavRailPinned } from './hooks/useNavRailPinned'
 import { useMediaQuery } from './hooks/useMediaQuery'
+import { useDesktopBlobDownload } from './hooks/useDesktopDownload'
 import { ContextSwitchProvider, useContextSwitch } from './context/ContextSwitchContext'
 import { ConnectionProvider, useConnection, refreshQueriesAfterReconnect } from './context/ConnectionContext'
 import { DisconnectedView, FailedSwitchView } from './components/SwitchAwareConnectionError'
@@ -70,6 +70,7 @@ import { useProductHuntRailEntry } from './components/product-hunt/useProductHun
 import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { DiagnosticsOverlay, type DiagnosticsFocus } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
+import { useResetViewsOnContextChange } from './hooks/useResetViewsOnContextChange'
 import { debugNamespaceLog, refetchOnResourceEvents, resourceEventKey, useNamespaces, useNamespaceScope, useSetActiveNamespace, isAppliedNamespaceSwitch, useAuthMe, useAuditBadges, useClusterInfo, useCapabilities } from './api/client'
 import { buildAuditSeverityMap } from './utils/auditBadges'
 import { isInNamespaceScope, scopeNodesToNamespaces } from './utils/topology-namespace'
@@ -217,7 +218,7 @@ function namespaceFilterDisabled(
 ): { disabled: boolean; tooltip?: string } {
   if (
     view === 'cost' &&
-    !pathname.startsWith('/cost/rightsizing')
+    !isRightsizingScanPath(pathname)
   ) {
     return {
       disabled: true,
@@ -396,7 +397,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // callbacks aren't guaranteed idempotent (scope / flags / signed URLs can
   // shift between calls). undefined = not taken over → Radar renders the view
   // itself.
-  const takeover: Record<FleetTakeoverTarget, string | undefined> = useMemo(
+  const takeover = useMemo(
     () => ({
       issues: navCustomization.fleetTakeoverHref?.('issues'),
       gitops: navCustomization.fleetTakeoverHref?.('gitops'),
@@ -404,6 +405,12 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       certs: navCustomization.fleetTakeoverHref?.('certs'),
     }),
     [navCustomization],
+  )
+  const rightsizingTakeover = useMemo(
+    () => isRightsizingScanPath(location.pathname)
+      ? navCustomization.fleetTakeoverHref?.('rightsizing', location.search)
+      : undefined,
+    [navCustomization, location.pathname, location.search],
   )
   const { pinned: navRailPinned, togglePinned: toggleNavRailPinned } = useNavRailPinned()
   const embedded = navCustomization.embedded === true
@@ -609,7 +616,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const viewTakeoverHref =
     (mainView === 'issues' || mainView === 'gitops' || mainView === 'checks') && !localChecksRoute
       ? takeover[mainView]
-      : undefined
+      : rightsizingTakeover
   useEffect(() => {
     if (viewTakeoverHref) {
       window.location.replace(viewTakeoverHref)
@@ -643,6 +650,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
   // Topology live-update pause state
   const [topologyPaused, setTopologyPaused] = useState(false)
+  const desktopBlobDownload = useDesktopBlobDownload()
   const [displayedTopology, setDisplayedTopology] = useState<typeof topology>(null)
   const pendingTopologyRef = useRef<typeof topology>(null)
 
@@ -924,7 +932,6 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const { toggleTheme } = useTheme()
 
   const commandSwitch = useContextSwitchFlow()
-  const { showError } = useToast()
 
   // Refs for dropdown components to trigger them via shortcuts
   const namespaceSwitcherRef = useRef<NamespaceSwitcherHandle>(null)
@@ -1072,7 +1079,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const { data: namespaceScope } = useNamespaceScope()
 
   // Context switch state
-  const { isSwitching, dismissed, setDismissed, failedSwitch, setFailedSwitch, targetContext, progressMessage, updateProgress, endSwitch, takeOpenAfterSwitch, setOpenAfterSwitch } = useContextSwitch()
+  const { isSwitching, dismissed, setDismissed, failedSwitch, setFailedSwitch, targetContext, progressMessage, updateProgress, endSwitch, takeOpenAfterSwitch } = useContextSwitch()
 
   // Connection state (for graceful startup)
   const { connection, contextSwitch, retry: retryConnection, isRetrying, updateFromSSE: updateConnectionFromSSE } = useConnection()
@@ -1292,10 +1299,13 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // forceNamespaceFilter is only set for large clusters that require server-side filtering.
   // Fleet mode uses 'resources' topology on the backend — filtering is client-side
   const sseMode = topologyMode === 'fleet' ? 'resources' : topologyMode
+  // The context this tab's views were last reset for.
+  const shownContextRef = useRef<string | null>(null)
   const { topology, connected: eventStreamConnected, connecting: eventStreamConnecting, reconnect: reconnectEventStream, applyContextChange } = useEventSource(namespaces, sseMode as 'resources' | 'traffic', {
     onContextSwitchComplete: endSwitch,
     onContextSwitchProgress: updateProgress,
     onContextChanged: (context) => {
+      shownContextRef.current = context
       resetNavigationMap()
 
       // Reconnects also emit context_changed. Preserve only this context's drain record.
@@ -1359,33 +1369,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     onK8sEvent: handleK8sEvent,
   }, forceNamespaceFilter, showPolicyEffect)
 
-  useLayoutEffect(() => {
-    if (!contextSwitch) return
-    if (switchInProgress(contextSwitch)) {
-      if (followingSwitch() !== contextSwitch.id) followSwitch(contextSwitch.id)
-      // The accepted POST can arrive before the first connection poll. Keep
-      // local progress until an observed operation takes over the overlay.
-      endSwitch()
-      return
-    }
-    if (followingSwitch() !== contextSwitch.id) return
-    if (contextSwitch.phase === 'failed' && connection.state === 'connecting') return
-    followSwitch('')
-    endSwitch()
-    if (contextSwitch.phase === 'succeeded' && connection.context === contextSwitch.target) {
-      applyContextChange(contextSwitch.target, contextSwitch.id)
-    } else {
-      setOpenAfterSwitch(null)
-      if (contextSwitch.phase === 'failed' && (connection.state === 'connected' || connection.context !== contextSwitch.target)) {
-        const reason = contextSwitch.error || 'Cluster switch failed'
-        if (contextSwitch.errorType) {
-          setFailedSwitch({ context: contextSwitch.target, error: reason, errorType: contextSwitch.errorType })
-        } else {
-          showError('Failed to switch context', reason)
-        }
-      }
-    }
-  }, [contextSwitch, connection.state, connection.context, applyContextChange, endSwitch, setOpenAfterSwitch, setFailedSwitch, showError])
+  useContextSwitchOutcome(applyContextChange)
+  useResetViewsOnContextChange(connection.state, connection.context, shownContextRef, applyContextChange)
 
   // On large clusters (where the server requires namespace filtering), keep
   // SSE's server-side filter in lockstep with the user's namespace pick.
@@ -2335,6 +2320,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
                     hideGroupHeader={hideGroupHeader}
                     onNodeClick={handleNodeClick}
                     selectedNodeId={selectedNodeId}
+                    onDownloadBlob={desktopBlobDownload}
                     paused={topologyPaused}
                     onTogglePause={handleTogglePause}
                     onMaximizeNamespace={(ns) => setActiveNamespace.mutate({ namespaces: [ns] })}
@@ -2490,7 +2476,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         )}
 
         {/* Cost detail view */}
-        {!viewsSyncGated && mainView === 'cost' && (
+        {!viewsSyncGated && mainView === 'cost' && !viewTakeoverHref && (
           <CostView namespaces={namespaces} onBack={() => setMainView('home')} onOpenResource={navigateToResource} />
         )}
 

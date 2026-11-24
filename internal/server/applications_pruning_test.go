@@ -260,8 +260,13 @@ func useAppFixtureCaches(t *testing.T, typed []runtime.Object, dynamicObjects []
 	addApplicationTypedDiscovery()
 	dc := k8s.GetDynamicResourceCache()
 	for gvr := range kinds {
-		if err := dc.EnsureWatching(gvr); err != nil || !dc.WaitForSync(gvr, 5*time.Second) {
+		if err := dc.EnsureWatching(gvr); err != nil {
 			t.Fatalf("watch %v: %v", gvr, err)
+		}
+	}
+	for gvr := range kinds {
+		if !dc.WaitForSync(gvr, 5*time.Second) {
+			t.Fatalf("watch %v did not sync", gvr)
 		}
 	}
 }

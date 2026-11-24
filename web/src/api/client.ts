@@ -1,9 +1,11 @@
-import { followSwitch, switchInProgress, type ContextSwitchOperation } from './contextSwitch'
+import type { RightsizingRow, WorkloadRightsizingEvidence } from '@skyhook-io/k8s-ui/types/rightsizing'
+import { followSwitch, switchFinished, switchInProgress, type ContextSwitchOperation } from './contextSwitch'
 import { createListRefetchInterval, normalizeResourceList, type ResourceListBody, type ResourceListResult } from './resourceLists'
 import type { CascadeDetail } from '@skyhook-io/k8s-ui/components/ui/ForceDeleteConfirmDialog'
 import { canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
 import { pluralize } from '@skyhook-io/k8s-ui/utils/pluralize'
 import type { ReadGap, ReadGapSet } from '@skyhook-io/k8s-ui/types/read-coverage'
+import type { ClusterScope } from '@skyhook-io/k8s-ui/types/cluster-scope'
 import type { WorkloadHistoryCoverage } from '@skyhook-io/k8s-ui/utils/workload-history-notes'
 import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
 import { useEffect, useRef, useCallback, useMemo } from 'react'
@@ -79,6 +81,7 @@ import type {
 } from '../types'
 import type { GitOpsOperationResponse } from '../types/gitops'
 import { apiUrl, automaticRequestHeaders, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
+import { CONNECTION_HEADER, connectionHeaderValue } from './connectionBinding'
 import { httpStatusMessage, markShownInline, readErrorBody, readErrorResponse } from './httpErrors'
 import {
   RadarFeatureUnsupportedError,
@@ -163,6 +166,10 @@ export function apiFetch(
   for (const [k, v] of Object.entries(getAuthHeaders())) {
     if (!headers.has(k)) headers.set(k, v);
   }
+  // Name the connection this tab is on, so the server can refuse a write
+  // meant for a cluster it no longer serves (see connectionBinding.ts).
+  const connection = connectionHeaderValue();
+  if (connection && !headers.has(CONNECTION_HEADER)) headers.set(CONNECTION_HEADER, connection);
   return fetch(input, {
     credentials: getCredentialsMode(),
     ...init,
@@ -582,6 +589,7 @@ export interface AuditResponse {
   missingInputs?: string[];
   // Absent on a Radar that predates the per-resource opt-out.
   ignoreChecksAnnotation?: string;
+  namespaceIgnoreChecks?: boolean;
   // checkID → namespace → resources whose findings the annotation hid.
   annotationIgnoredByNamespace?: Record<string, Record<string, number>>;
   summary: DashboardAudit;
@@ -715,7 +723,7 @@ export interface DashboardResponse {
     maxVersion: string;
   } | null;
   deferredLoading?: boolean; // True while deferred informers (secrets, events, etc.) are still syncing
-  partialData?: string[]; // Critical kinds promoted at first paint that haven't yet finished syncing (live-filtered)
+  partialData?: string[]; // Resources still loading after the initial wait
   accessRestricted?: boolean; // True when user has no namespace access (RBAC)
 }
 
@@ -1237,7 +1245,12 @@ export type CostUnavailableReason =
   | "metrics_settings_error"
   | "cost_settings_error"
   | "history_unsupported"
-  | "insufficient_history";
+  | "insufficient_history"
+  // The metrics store holds several clusters and these costs couldn't be
+  // kept to this one; clusterScope says why.
+  | "cluster_scope"
+  // The metrics store answered partially, so totals could miss series.
+  | "partial_data";
 
 export type CostDataSource = "prometheus" | "kubecost";
 
@@ -1255,6 +1268,11 @@ export interface OpenCostSummary {
   clusterEfficiency?: number;
   namespaceScope?: string[];
   namespaces?: OpenCostNamespaceCost[];
+  /** How a metrics-store answer was kept to this cluster; older Radar omits it. */
+  clusterScope?: ClusterScope;
+  /** Efficiency and idle couldn't be measured (not zero); usageClusterScope says why. */
+  efficiencyUnavailable?: boolean;
+  usageClusterScope?: ClusterScope;
 }
 
 const costDiscoveryFirstSeenAt = new Map<string, number>();
@@ -1333,6 +1351,11 @@ export interface OpenCostWorkloadResponse {
   currency?: string;
   namespace: string;
   workloads: OpenCostWorkloadCost[];
+  /** How a metrics-store answer was kept to this cluster; older Radar omits it. */
+  clusterScope?: ClusterScope;
+  /** Efficiency and idle couldn't be measured (not zero); usageClusterScope says why. */
+  efficiencyUnavailable?: boolean;
+  usageClusterScope?: ClusterScope;
 }
 
 export function useOpenCostWorkloads(
@@ -1366,6 +1389,11 @@ export interface OpenCostWorkloadDetailResponse {
   kind: string;
   name: string;
   current?: OpenCostWorkloadCost;
+  /** How a metrics-store answer was kept to this cluster; older Radar omits it. */
+  clusterScope?: ClusterScope;
+  /** Efficiency and idle couldn't be measured (not zero); usageClusterScope says why. */
+  efficiencyUnavailable?: boolean;
+  usageClusterScope?: ClusterScope;
 }
 
 export function useOpenCostWorkload(
@@ -1413,6 +1441,8 @@ export interface OpenCostTrendResponse {
   windowEnd?: number;
   dataThrough?: string;
   series?: OpenCostTrendSeries[];
+  /** How a metrics-store answer was kept to this cluster; older Radar omits it. */
+  clusterScope?: ClusterScope;
 }
 
 export function useOpenCostTrend(range_: CostTimeRange = "24h") {
@@ -1440,6 +1470,8 @@ export interface OpenCostWorkloadTrendResponse {
   range: string;
   windowTotalCost?: number;
   dataPoints?: OpenCostTrendDataPoint[];
+  /** How a metrics-store answer was kept to this cluster; older Radar omits it. */
+  clusterScope?: ClusterScope;
 }
 
 export function useOpenCostWorkloadTrend(
@@ -1514,6 +1546,8 @@ export interface OpenCostApplicationCostResponse {
   totals: OpenCostApplicationCostTotals;
   coverage: OpenCostApplicationCostCoverage;
   workloads?: OpenCostApplicationWorkloadCost[];
+  /** How a metrics-store answer was kept to this cluster; older Radar omits it. */
+  clusterScope?: ClusterScope;
 }
 
 export interface OpenCostApplicationCostTrendSeries extends OpenCostApplicationWorkloadRef {
@@ -1532,6 +1566,8 @@ export interface OpenCostApplicationCostTrendResponse {
   dataPoints?: OpenCostTrendDataPoint[];
   series?: OpenCostApplicationCostTrendSeries[];
   coverage: OpenCostApplicationCostCoverage;
+  /** How a metrics-store answer was kept to this cluster; older Radar omits it. */
+  clusterScope?: ClusterScope;
 }
 
 function stableOpenCostWorkloadRefs(
@@ -1621,6 +1657,8 @@ export interface OpenCostNodeResponse {
   dataThrough?: string;
   currency?: string;
   nodes?: OpenCostNodeCost[];
+  /** How a metrics-store answer was kept to this cluster; older Radar omits it. */
+  clusterScope?: ClusterScope;
 }
 
 export function useOpenCostNodes() {
@@ -4007,6 +4045,11 @@ export interface PrometheusResourceMetrics {
   // controller ownership. podsTotal is the full set when the cap cut the list.
   pods?: number;
   podsTotal?: number;
+  // How the query was kept to this cluster in a shared metrics store; when it
+  // withholds, result has no series. Older Radar omits it.
+  clusterScope?: ClusterScope;
+  // The store answered only partly: drawn, but samples may be missing.
+  partial?: boolean;
 }
 
 export type PrometheusMetricCategory =
@@ -4026,72 +4069,10 @@ export interface PrometheusPVCUsage {
   hasData: boolean;
 }
 
-export type RightsizingFit =
-  | "balanced"
-  | "oversized"
-  | "under_requested"
-  | "missing_request"
-  | "insufficient_history"
-  | "pod_level_request";
-export type RightsizingConfidence = "low" | "medium" | "high";
-export type RightsizingOwnerCoverage = "ksm_history" | "current_pods";
-
-export interface RightsizingRow {
-  container: string;
-  resource: "cpu" | "memory";
-  fit: RightsizingFit;
-  confidence: RightsizingConfidence;
-  currentRequest?: string;
-  currentRequestValue?: number;
-  currentLimit?: string;
-  currentLimitValue?: number;
-  /** The pod's fixed pod-level request (spec.resources), set when fit is pod_level_request. */
-  podLevelRequest?: string;
-  podLevelRequestValue?: number;
-  observed?: {
-    name: "P95" | "P99" | "Max";
-    value: number;
-    formatted: string;
-  };
-  peak?: {
-    name: "P99";
-    value: number;
-    formatted: string;
-  };
-  calculatedRequest?: string;
-  calculatedRequestValue?: number;
-  recommendedRequest?: string;
-  recommendedRequestValue?: number;
-  reductionLimited?: boolean;
-  bursty?: boolean;
-  recommendationReason?: string;
-  sampleCount: number;
-  expectedSamples: number;
-  coverage: number;
-  hpaManaged: boolean;
-  hpaEvidenceAvailable: boolean;
-  throttleAvailable?: boolean;
-  throttleRatio?: number;
-  currentPodOOM?: boolean;
-  windowOomEvidence?: boolean;
-  oomEvidenceAvailable: boolean;
-  /** The cluster cache would not list the workload's pods, so currentPodOOM is unknown rather than false. */
-  liveInventoryUnavailable?: boolean;
-  limitConflict?: boolean;
-  queryError?: string;
-}
-
-export interface PrometheusRightsizing {
-  kind: string;
-  namespace: string;
-  name: string;
-  window: string;
-  source: "radar";
-  ownerCoverage: RightsizingOwnerCoverage;
-  scaledToZero: boolean;
-  sampleAvailable: boolean;
-  rows: RightsizingRow[];
-  reason?: string;
+export type { RightsizingRow, RightsizingFit, RightsizingConfidence, RightsizingOwnerCoverage } from '@skyhook-io/k8s-ui/types/rightsizing'
+export interface PrometheusRightsizing extends WorkloadRightsizingEvidence {
+  source: "radar"
+  clusterScope?: ClusterScope;
 }
 
 export type RightsizingScanState = "complete" | "partial" | "unavailable";
@@ -4102,6 +4083,7 @@ export interface RightsizingScanWorkload {
   name: string;
   replicas: number;
   scaledToZero: boolean;
+  managedBy?: WorkloadRightsizingEvidence["managedBy"];
   rows: RightsizingRow[];
 }
 
@@ -4129,9 +4111,12 @@ export interface RightsizingScanResponse {
   window: string;
   source: "radar";
   coverage: RightsizingScanCoverage;
-  workloads: RightsizingScanWorkload[];
+  /** Older spokes return null when a scan loses its Prometheus connection. */
+  workloads: RightsizingScanWorkload[] | null;
   warnings?: { code: string; message: string }[];
   reason?: string;
+  /** Absent from older Radar. A withheld scope means no workload was measured. */
+  clusterScope?: ClusterScope;
 }
 
 // Poll quickly while a discovery run is in flight so the flip to connected
@@ -4413,9 +4398,10 @@ export function usePrometheusRightsizing(
   enabled = true,
 ) {
   return useQuery<PrometheusRightsizing>({
-    queryKey: ["prometheus-rightsizing", kind, namespace, name],
-    queryFn: () =>
-      fetchJSON(`/prometheus/rightsizing/${kind}/${namespace}/${name}`),
+    queryKey: ["prometheus-rightsizing", getApiBase(), kind, namespace, name],
+    queryFn: ({ signal }) =>
+      fetchJSON(`/prometheus/rightsizing/${kind}/${namespace}/${name}`, signal),
+    retry: (count, error) => !isForbiddenError(error) && count < 1,
     enabled: enabled && Boolean(kind && namespace && name),
     staleTime: 5 * 60 * 1000,
     refetchInterval: 10 * 60 * 1000,
@@ -4513,6 +4499,8 @@ export interface PrometheusHPAMetrics {
   range: string;
   current: PrometheusQueryResult;
   desired: PrometheusQueryResult;
+  clusterScope?: ClusterScope;
+  partial?: boolean;
 }
 
 export function usePrometheusHPAMetrics(
@@ -5377,15 +5365,23 @@ export function useTriggerCronJob() {
     mutationFn: async ({
       namespace,
       name,
+      jobName,
     }: {
       namespace: string;
       name: string;
+      // Only for a Radar advertising cronJobTriggerJobName; an older one
+      // ignores the body and names the Job itself.
+      jobName?: string;
     }) => {
       const response = await apiFetch(
         `${getApiBase()}/cronjobs/${namespace}/${name}/trigger`,
-        {
-          method: "POST",
-        },
+        jobName
+          ? {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ jobName }),
+            }
+          : { method: "POST" },
       );
       if (!response.ok) {
         const error = await readErrorBody(response);
@@ -6756,12 +6752,9 @@ function streamHelmProgress(
   onProgress: (event: InstallProgressEvent) => void,
   failureLabel: string,
 ): Promise<InstallProgressEvent> {
-  const headers = new Headers(options.headers);
-  for (const [k, v] of Object.entries(getAuthHeaders())) {
-    if (!headers.has(k)) headers.set(k, v);
-  }
   return new Promise((resolve, reject) => {
-    fetch(url, { credentials: getCredentialsMode(), ...options, headers })
+    // apiFetch adds the auth headers and the tab's connection.
+    apiFetch(url, options)
       .then(async (response) => {
         if (!response.ok) {
           const error = await readErrorBody(response);
@@ -7731,6 +7724,9 @@ export function useSwitchContext() {
     },
     onSuccess: async (operation) => {
       if (operation) {
+        // A late acknowledgement of a switch this tab already showed the outcome
+        // of carries an older snapshot; seeding it would reopen the overlay.
+        if (switchFinished(operation.id)) return;
         followSwitch(operation.id);
         await queryClient.cancelQueries({ queryKey: ["connection-status"] });
         if (switchInProgress(operation)) {

@@ -109,6 +109,16 @@ var curatedOwnerGroups = map[string]string{
 	"ScaledJob": "keda.sh",
 }
 
+func (b *Builder) crdDiscoveryStatus() string {
+	if b.dynamic != nil {
+		return string(b.dynamic.GetDiscoveryStatus())
+	}
+	if p, ok := b.provider.(interface{ APIDiscoveryPending() bool }); ok && p.APIDiscoveryPending() {
+		return string(k8score.CRDDiscoveryInProgress)
+	}
+	return ""
+}
+
 // Build constructs a topology based on the given options
 func (b *Builder) Build(opts BuildOptions) (*Topology, error) {
 	if b.provider == nil {
@@ -133,6 +143,7 @@ func (b *Builder) Build(opts BuildOptions) (*Topology, error) {
 			LargeCluster:            true,
 			HiddenKinds:             hiddenKinds,
 			RequiresNamespaceFilter: true,
+			CRDDiscoveryStatus:      b.crdDiscoveryStatus(),
 			EstimatedNodes:          estimatedNodes,
 		}, nil
 	}
@@ -172,6 +183,7 @@ func (b *Builder) Build(opts BuildOptions) (*Topology, error) {
 	}
 	topo.EstimatedNodes = estimatedNodes
 	topo.SummaryMode = opts.SummaryMode
+	topo.CRDDiscoveryStatus = b.crdDiscoveryStatus()
 
 	perfstats.RecordTopologyBuild(time.Since(start), len(topo.Nodes), len(topo.Edges), estimatedNodes)
 	return topo, nil
@@ -5116,11 +5128,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 	topo := &Topology{Nodes: stampAuditKeys(nodes), Edges: edges, Warnings: warnings, podConsumers: podConsumers}
 
-	// Add CRD discovery status
-	if b.dynamic != nil {
-		topo.CRDDiscoveryStatus = string(b.dynamic.GetDiscoveryStatus())
-	}
-
 	return topo, nil
 }
 
@@ -6369,11 +6376,6 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 	}
 
 	topo := &Topology{Nodes: stampAuditKeys(nodes), Edges: edges, Warnings: warnings}
-
-	// Add CRD discovery status
-	if b.dynamic != nil {
-		topo.CRDDiscoveryStatus = string(b.dynamic.GetDiscoveryStatus())
-	}
 
 	return topo, nil
 }

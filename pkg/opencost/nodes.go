@@ -14,11 +14,26 @@ import (
 // cost. Errors map to typed Reason values; never returned to callers because
 // the HTTP layer serves them in-band.
 func ComputeNodeCosts(ctx context.Context, client *prom.Client) *NodeCostResponse {
+	return ComputeNodeCostsScoped(ctx, client, StoreScope{})
+}
+
+// ComputeNodeCostsScoped is ComputeNodeCosts with its queries kept to this
+// cluster by scope.
+func ComputeNodeCostsScoped(ctx context.Context, client *prom.Client, scope StoreScope) *NodeCostResponse {
 	if client == nil {
 		return &NodeCostResponse{Available: false, Reason: ReasonNoPrometheus}
 	}
+	q := &costQuerier{client: client}
+	resp := computeNodeCosts(ctx, q, scope.Filter)
+	if scope.partial(q) {
+		resp = &NodeCostResponse{Available: false, Reason: ReasonPartialData}
+	}
+	resp.ClusterScope = scope.ClusterScope
+	return resp
+}
 
-	totalResult, err := client.Query(ctx, nodeTotalHourlyCostExpr)
+func computeNodeCosts(ctx context.Context, client *costQuerier, f prom.ClusterFilter) *NodeCostResponse {
+	totalResult, err := client.Query(ctx, nodeTotalHourlyCostExpr(f))
 	if err != nil {
 		log.Printf("[opencost] node_total_hourly_cost query failed: %v", err)
 		return &NodeCostResponse{Available: false, Reason: ReasonQueryError}
@@ -27,11 +42,11 @@ func ComputeNodeCosts(ctx context.Context, client *prom.Client) *NodeCostRespons
 		return &NodeCostResponse{Available: false, Reason: ReasonNoMetrics}
 	}
 
-	cpuResult, cpuErr := client.Query(ctx, nodeCPUHourlyCostExpr)
+	cpuResult, cpuErr := client.Query(ctx, nodeCPUHourlyCostExpr(f))
 	cpuMap := lastValuePerLabel(cpuResult, cpuErr, "node")
-	memResult, memErr := client.Query(ctx, nodeRAMHourlyCostExpr)
+	memResult, memErr := client.Query(ctx, nodeRAMHourlyCostExpr(f))
 	memMap := lastValuePerLabel(memResult, memErr, "node")
-	metadataResult, metadataErr := client.Query(ctx, nodeTotalHourlyCostMetadataExpr)
+	metadataResult, metadataErr := client.Query(ctx, nodeTotalHourlyCostMetadataExpr(f))
 	metadataMap := nodeMetadataByNode(metadataResult, metadataErr)
 
 	nodes := make([]NodeCost, 0, len(totalResult.Series))
