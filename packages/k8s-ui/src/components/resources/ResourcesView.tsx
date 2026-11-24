@@ -5,6 +5,7 @@ import { getVolumeSnapshotColumnValue, getVolumeSnapshotSortValue } from './reso
 import { getMetalLBColumnValue, getMetalLBSortValue } from './resource-utils-metallb'
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
+import { K3S_HELM_GROUP, getK3sHelmChartColumnValue } from './resource-utils-k3s'
 import { getAgentRuntimeSortValue } from './resource-utils-agent-runtimes'
 import { UPGRADE_PLAN_GROUP, getUpgradePlanColumnValue } from './resource-utils-upgrade-plan'
 import { FLUX_OPERATOR_GROUP, FLUX_OPERATOR_PLURALS, getFluxOperatorColumnValue, getFluxOperatorStatus } from './resource-utils-flux-operator'
@@ -740,6 +741,15 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'target', label: 'Canary Target', width: 'min-w-40' },
     { key: 'canaryWeight', label: 'Reported Weight', width: 'w-36 shrink-0', tooltip: 'Last reported canary routing weight, not measured traffic. Blue/green and A/B strategies are not weighted.' },
     { key: 'suspended', label: 'Suspend Requested', width: 'w-36 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  helmcharts: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'chart', label: 'Chart', width: 'min-w-48' },
+    { key: 'version', label: 'Version', width: 'w-28 shrink-0' },
+    { key: 'targetNamespace', label: 'Target Namespace', width: 'w-40 shrink-0' },
+    { key: 'status', label: 'Status', width: 'w-32 shrink-0', tooltip: 'What helm-controller reports about its install Job. Whether the release is healthy is in the Helm view.' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   plans: [
@@ -3167,6 +3177,7 @@ const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   instrumentations: ['opentelemetry.io'],
   canaries: ['flagger.app'],
   metrictemplates: ['flagger.app'],
+  helmcharts: ['helm.cattle.io'],
   plans: ['upgrade.cattle.io'],
   challenges: ['acme.cert-manager.io'],
   orders: ['acme.cert-manager.io'],
@@ -5811,6 +5822,8 @@ export function ResourcesView({
     if (otelValue !== undefined) return otelValue
     const flaggerValue = getFlaggerColumnValue(resource, column)
     if (flaggerValue !== undefined) return flaggerValue
+    const k3sValue = getK3sHelmChartColumnValue(resource, column)
+    if (k3sValue !== undefined) return k3sValue
     const agentRuntimeValue = getAgentRuntimeSortValue(resource, column)
     if (agentRuntimeValue !== undefined) return agentRuntimeValue
     const planValue = getUpgradePlanColumnValue(resource, column)
@@ -8309,6 +8322,10 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
   if (isApiGroup(resource.apiVersion, 'flagger.app') && ['canaries', 'metrictemplates'].includes(kindLower)) {
     if (column === 'status') return <GenericCell resource={resource} column={column} />
     return <span className="text-sm text-theme-text-secondary break-all">{getFlaggerColumnValue(resource, column) || '-'}</span>
+  }
+  if (isApiGroup(resource.apiVersion, K3S_HELM_GROUP) && kindLower === 'helmcharts') {
+    if (column === 'status') return <GenericCell resource={resource} column={column} />
+    return <span className="text-sm text-theme-text-secondary break-all">{getK3sHelmChartColumnValue(resource, column) || '-'}</span>
   }
   if (isApiGroup(resource.apiVersion, UPGRADE_PLAN_GROUP) && kindLower === 'plans') {
     if (column === 'status') return <GenericCell resource={resource} column={column} />

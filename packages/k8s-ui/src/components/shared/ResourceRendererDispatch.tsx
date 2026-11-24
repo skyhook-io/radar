@@ -10,6 +10,8 @@ import { MetalLBIPAddressPoolRenderer, MetalLBL2AdvertisementRenderer, MetalLBBG
 import { getOpenTelemetryCollectorStatus, getOpenTelemetryInstrumentationStatus } from '../resources/resource-utils-opentelemetry'
 import { OpenTelemetryCollectorRenderer, OpenTelemetryInstrumentationRenderer } from '../resources/renderers/OpenTelemetryRenderers'
 import { FlaggerCanaryRenderer, FlaggerMetricTemplateRenderer } from '../resources/renderers/FlaggerRenderers'
+import { K3sHelmChartConfigRenderer, K3sHelmChartRenderer } from '../resources/renderers/K3sHelmRenderers'
+import { K3S_HELM_GROUP, getK3sHelmChartStatus } from '../resources/resource-utils-k3s'
 import { UpgradePlanRenderer } from '../resources/renderers/UpgradePlanRenderer'
 import { UPGRADE_PLAN_GROUP, getUpgradePlanStatus } from '../resources/resource-utils-upgrade-plan'
 import { SecretProviderClassRenderer, type SecretProviderClassRendererProps } from '../resources/renderers/SecretsStoreRenderers'
@@ -424,6 +426,11 @@ export interface RendererOverrides {
     data: any
     onNavigate?: (ref: ResourceRef) => void
   }>
+  /** Host-injected: wires the HelmChart drawer's "Open Helm release" link. */
+  K3sHelmChartRenderer?: React.ComponentType<{
+    data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
   /** Host-injected: feeds Nodes to the Plan drawer's per-node progress. */
   UpgradePlanRenderer?: React.ComponentType<{
     data: any
@@ -534,6 +541,7 @@ const KNOWN_KINDS = new Set([
   'ipaddresspools', 'l2advertisements', 'bgpadvertisements', 'bgppeers', 'configurationstates',
   'opentelemetrycollectors', 'instrumentations',
   'canaries', 'metrictemplates',
+  'helmcharts', 'helmchartconfigs',
   'plans',
   'secretproviderclasses',
   'pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets',
@@ -811,6 +819,7 @@ export function ResourceRendererDispatch({
     ['opentelemetrycollectors', 'instrumentations'].includes(kind) ||
     ['canaries', 'metrictemplates'].includes(kind) ||
     TRAEFIK_PLURALS.includes(kind) ||
+    ['helmcharts', 'helmchartconfigs'].includes(kind) ||
     kind === 'plans' ||
     kind === 'secretproviderclasses' ||
     isFluxKind || kind === 'applications' || kind === 'services' || kind === 'ingresses' || kind === 'certificates' || kind === 'gateways'
@@ -842,6 +851,7 @@ export function ResourceRendererDispatch({
     (['opentelemetrycollectors', 'instrumentations'].includes(kind) && isApiGroup(data?.apiVersion, 'opentelemetry.io')) ||
     (['canaries', 'metrictemplates'].includes(kind) && isApiGroup(data?.apiVersion, 'flagger.app')) ||
     (TRAEFIK_PLURALS.includes(kind) && isTraefikResource) ||
+    (['helmcharts', 'helmchartconfigs'].includes(kind) && isApiGroup(data?.apiVersion, K3S_HELM_GROUP)) ||
     (kind === 'plans' && isApiGroup(data?.apiVersion, UPGRADE_PLAN_GROUP)) ||
     (kind === 'secretproviderclasses' && isApiGroup(data?.apiVersion, SECRETS_STORE_GROUP)) ||
     (isFluxKind && isFluxResource)
@@ -929,6 +939,7 @@ export function ResourceRendererDispatch({
   const SecretProviderClassComp = rendererOverrides?.SecretProviderClassRenderer ?? SecretProviderClassRenderer
   const TraefikIngressRouteComp = rendererOverrides?.TraefikIngressRouteRenderer ?? TraefikIngressRouteRenderer
   const TraefikMiddlewareComp = rendererOverrides?.TraefikMiddlewareRenderer ?? TraefikMiddlewareRenderer
+  const K3sHelmChartComp = rendererOverrides?.K3sHelmChartRenderer ?? K3sHelmChartRenderer
   const UpgradePlanComp = rendererOverrides?.UpgradePlanRenderer ?? UpgradePlanRenderer
   const VeleroBackupComp = rendererOverrides?.VeleroBackupRenderer ?? VeleroBackupRenderer
   const VeleroRestoreComp = rendererOverrides?.VeleroRestoreRenderer ?? VeleroRestoreRenderer
@@ -1226,6 +1237,8 @@ export function ResourceRendererDispatch({
         {kind === 'canaries' && isApiGroup(data?.apiVersion, 'flagger.app') && <FlaggerCanaryRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'metrictemplates' && isApiGroup(data?.apiVersion, 'flagger.app') && <FlaggerMetricTemplateRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'secretproviderclasses' && isApiGroup(data?.apiVersion, SECRETS_STORE_GROUP) && <SecretProviderClassComp data={data} onNavigate={onNavigate} />}
+        {kind === 'helmcharts' && isApiGroup(data?.apiVersion, K3S_HELM_GROUP) && <K3sHelmChartComp data={data} onNavigate={onNavigate} />}
+        {kind === 'helmchartconfigs' && isApiGroup(data?.apiVersion, K3S_HELM_GROUP) && <K3sHelmChartConfigRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'plans' && isApiGroup(data?.apiVersion, UPGRADE_PLAN_GROUP) && <UpgradePlanComp data={data} onNavigate={onNavigate} />}
 
         {/* Generic renderer for CRDs and unknown resource types — also fires
@@ -1304,6 +1317,7 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
     if (k === 'instrumentations') return getOpenTelemetryInstrumentationStatus(data)
   }
   if (k === 'canaries' && isApiGroup(data.apiVersion, 'flagger.app')) return getFlaggerCanaryStatus(data)
+  if (k === 'helmcharts' && isApiGroup(data.apiVersion, K3S_HELM_GROUP)) return getK3sHelmChartStatus(data)
   if (k === 'plans' && isApiGroup(data.apiVersion, UPGRADE_PLAN_GROUP)) return getUpgradePlanStatus(data)
   // A SecretProviderClass is configuration with no status of its own; mount
   // state belongs to each Pod and is shown in the Pod drawer.

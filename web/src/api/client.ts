@@ -589,6 +589,7 @@ export interface AuditResponse {
   missingInputs?: string[];
   // Absent on a Radar that predates the per-resource opt-out.
   ignoreChecksAnnotation?: string;
+  namespaceIgnoreChecks?: boolean;
   // checkID → namespace → resources whose findings the annotation hid.
   annotationIgnoredByNamespace?: Record<string, Record<string, number>>;
   summary: DashboardAudit;
