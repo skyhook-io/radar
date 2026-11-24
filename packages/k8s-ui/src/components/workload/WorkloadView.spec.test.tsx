@@ -200,6 +200,21 @@ it('leaves out a built-in tab the host hides, falling back to the first tab show
   act(() => root.unmount())
 })
 
+it('keeps an asynchronous deep link and reconciles an explicit built-in replacement', () => {
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  const onTabChange = vi.fn()
+  const extraTabs = [{ id: 'runs', label: 'Runs', replaces: 'spec' as const, render: () => <div>The runs</div> }]
+  act(() => root.render(<WorkloadView {...props} expanded activeTab="runs" extraTabsLoading onTabChange={onTabChange} />))
+  expect(onTabChange).not.toHaveBeenCalled()
+  act(() => root.render(<WorkloadView {...props} expanded activeTab="runs" extraTabs={extraTabs} onTabChange={onTabChange} />))
+  expect(host.textContent).toContain('The runs')
+  expect(onTabChange).not.toHaveBeenCalled()
+  act(() => root.render(<WorkloadView {...props} expanded activeTab="spec" extraTabs={extraTabs} onTabChange={onTabChange} />))
+  expect(onTabChange).toHaveBeenCalledWith('runs', { replace: true })
+  act(() => root.unmount())
+})
+
 it('shows a host line above every tab, in the expanded view only', () => {
   const host = document.createElement('div')
   const root = createRoot(host)

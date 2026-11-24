@@ -378,6 +378,8 @@ interface WorkloadViewProps {
   }) => ReactNode
   /** Additional tabs in the expanded view. */
   extraTabs?: WorkloadExtraTab[]
+  /** Keep unrecognized deep links while the host is loading additional tabs. */
+  extraTabsLoading?: boolean
   /** Expanded view: a line under the title, above the tabs, shown on every tab. */
   subheader?: ReactNode
   /** Expanded view: tab ids in display order; tabs not listed follow in their usual order. */
@@ -585,6 +587,7 @@ export function WorkloadView({
   onSelectTopologyMember,
   renderSummary,
   extraTabs,
+  extraTabsLoading,
   tabOrder,
   hiddenTabs,
   tabHeader,
@@ -664,8 +667,14 @@ export function WorkloadView({
   // under the same name: a Pod picked for one must not reach the next, not
   // even for one render. A UID arriving with the first load is not a change.
   const selectionIdentity = `${apiKind}\u0000${group ?? ''}\u0000${namespace}\u0000${name}`
-  // A host can briefly pass the previous resource with the new name.
-  const selectionUID = resource?.metadata?.name === name && (resource?.metadata?.namespace ?? '') === (namespace ?? '') ? resource?.metadata?.uid as string | undefined : undefined
+  // A host can briefly pass the previous object after navigation.
+  const resourceGroup = apiVersionToGroup(resource?.apiVersion)
+  const resourceMatchesSelection = resource?.metadata?.name === name &&
+    (resource.metadata.namespace ?? '') === (namespace ?? '') &&
+    (group === undefined || group === resourceGroup) &&
+    typeof resource.kind === 'string' &&
+    kindToPluralWithGroup(resource.kind, resourceGroup) === kindToPluralWithGroup(apiKind, group ?? resourceGroup)
+  const selectionUID = resourceMatchesSelection ? resource.metadata.uid as string | undefined : undefined
   const [selectionScope, setSelectionScope] = useState({ identity: selectionIdentity, uid: selectionUID, generation: 0 })
   if (selectionScope.identity !== selectionIdentity || (selectionUID && selectionScope.uid !== selectionUID)) {
     const scopeChanged = selectionScope.identity !== selectionIdentity || selectionScope.uid !== undefined
@@ -1076,16 +1085,17 @@ export function WorkloadView({
   const allTabs = orderById(mergeExtraTabs(shownTabs, expanded ? extraTabsForState : undefined), expanded ? tabOrder : undefined)
   const tabIsVisible = (id: TabType) => allTabs.some((tab) => tab.id === id && !tab.hidden)
   const requestedTabAvailable = tabIsVisible(requestedTab)
-  // Overview, unless the host left it out: then the first tab shown.
-  const fallbackTab = (allTabs.find((tab) => tab.id === 'overview' && !tab.hidden) ?? allTabs.find((tab) => !tab.hidden))?.id ?? ''
+  const replacementTab = expanded ? extraTabsForState?.find((tab) => tab.replaces === requestedTab)?.id : undefined
+  // Honor an explicit replacement. Otherwise prefer Overview or the first visible tab.
+  const fallbackTab = replacementTab ?? (allTabs.find((tab) => tab.id === 'overview' && !tab.hidden) ?? allTabs.find((tab) => !tab.hidden))?.id ?? ''
   const effectiveTab: TabType = requestedTabAvailable ? requestedTab : fallbackTab
   const activeExtraTab = expanded ? extraTabsForState?.find((x) => x.id === effectiveTab) : undefined
   const shouldCommitFallback =
     requestedTab !== fallbackTab &&
     !requestedTabAvailable &&
     (
-      (expanded && hiddenTabs?.some((tab) => tab === requestedTab)) ||
-      (expanded && !resourceLoading && !isBuiltInTab(requestedTab)) ||
+      (expanded && (replacementTab !== undefined || hiddenTabs?.some((tab) => tab === requestedTab))) ||
+      (expanded && !resourceLoading && !extraTabsLoading && !isBuiltInTab(requestedTab)) ||
       (requestedTab === 'spec' && !!resource && !resourceLoading && !expandedSummary) ||
       (requestedTab === 'topology' && topologyTabHidden) ||
       (requestedTab === 'metrics' && (!renderMetricsTab || (!!resource && !resourceLoading && !showMetricsTab))) ||
