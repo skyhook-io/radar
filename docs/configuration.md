@@ -1095,6 +1095,20 @@ not only on its generated Pods. Unknown check IDs have no effect. The annotation
 travels with the manifest and suppresses the matching findings for every Radar
 reading it; it does not disable those checks for other resources.
 
+The same annotation on a Namespace skips the listed checks for every resource
+in that namespace, while they stay on everywhere else:
+
+```bash
+kubectl annotate namespace batch-jobs radarhq.io/ignore-checks=cpuLimitMissing
+```
+
+It adds to any annotation on the resource itself and does not affect
+cluster-scoped resources such as PersistentVolumes. Radar applies it only when
+it can list Namespaces cluster-wide; otherwise those findings stay visible.
+With authentication on, a user who cannot read Namespace objects can still
+infer from the hidden-findings count that their namespace carries the
+annotation and which check IDs it lists.
+
 ### Storage review checks
 
 Three snapshot checks in **Efficiency**, at **Medium** posture priority
