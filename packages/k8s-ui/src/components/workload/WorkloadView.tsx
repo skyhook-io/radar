@@ -4,7 +4,7 @@ import { pluralize } from '../../utils/pluralize'
 import { isKubeRayClusterIdentity } from '../resources/resource-utils-ray'
 import { PodRow, PodListFrame, PodListToggle, workloadPodDetail } from './PodList'
 export { workloadPodDetail, podStatusLabel, podStatusClass, podDotClass } from './PodList'
-import { useState, useMemo, useEffect, useRef, useCallback, type ComponentType, type ReactNode } from 'react'
+import { useState, useMemo, useEffect, useRef, useCallback, type ComponentType, type ReactElement, type ReactNode } from 'react'
 import { flushSync } from 'react-dom'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { useProgressiveRefresh } from '../../hooks/useProgressiveRefresh'
@@ -103,19 +103,21 @@ function isBuiltInTab(tab: TabType): tab is WorkloadTabType {
 }
 
 // Hosts offering only built-in tabs can retain their narrower callback.
-type WorkloadTabSelection =
-  | {
-      extraTabs?: undefined
-      /** Next tab on user selection or link repair. Replace repairs the current history entry. */
-      onTabChange?: (tab: WorkloadTabType, options?: { replace?: boolean }) => void
-    }
-  | {
-      /** Additional expanded-view tabs, including tabs from ApplicationDetail.
-       * Built-in IDs are reserved. The first registration for each host ID wins. */
-      extraTabs?: WorkloadExtraTab[]
-      /** Next tab on user selection or link repair. Replace repairs the current history entry. */
-      onTabChange?: (tab: WorkloadDetailTab, options?: { replace?: boolean }) => void
-    }
+type BuiltInWorkloadTabSelection = {
+  extraTabs?: undefined
+  /** Next tab on user selection or link repair. Replace repairs the current history entry. */
+  onTabChange?: (tab: WorkloadTabType, options?: { replace?: boolean }) => void
+}
+
+type HostWorkloadTabSelection = {
+  /** Additional expanded-view tabs, including tabs from ApplicationDetail.
+   * Built-in IDs are reserved. The first registration for each host ID wins. */
+  extraTabs?: WorkloadExtraTab[]
+  /** Next tab on user selection or link repair. Replace repairs the current history entry. */
+  onTabChange?: (tab: WorkloadDetailTab, options?: { replace?: boolean }) => void
+}
+
+type WorkloadTabSelection = BuiltInWorkloadTabSelection | HostWorkloadTabSelection
 
 /** A host-provided tab in the expanded workload view. */
 export interface WorkloadExtraTab {
@@ -157,7 +159,7 @@ export interface ServingResourceDetail {
 // MAIN WORKLOAD VIEW — presentation only, data injected via props
 // ============================================================================
 
-type WorkloadViewProps = WorkloadTabSelection & {
+type WorkloadViewBaseProps = {
   kind: string
   namespace: string
   name: string
@@ -514,6 +516,12 @@ type WorkloadViewProps = WorkloadTabSelection & {
   resolvedEnvFrom?: ResolvedEnvFrom
 }
 
+type WorkloadViewProps = WorkloadViewBaseProps & WorkloadTabSelection
+
+// Give inline callbacks a contextual type for each tab registration shape.
+export function WorkloadView(props: WorkloadViewBaseProps & BuiltInWorkloadTabSelection): ReactElement
+export function WorkloadView(props: WorkloadViewBaseProps & HostWorkloadTabSelection & { extraTabs: WorkloadExtraTab[] | undefined }): ReactElement
+export function WorkloadView(props: WorkloadViewProps): ReactElement
 export function WorkloadView({
   kind: kindProp,
   namespace,
