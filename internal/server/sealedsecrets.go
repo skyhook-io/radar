@@ -283,17 +283,22 @@ func selectSealedSecretsController(cache *k8s.ResourceCache, target string, requ
 			choice.settings = readSealedSecretsSettings(choice.controller)
 		}
 	} else if requireUnique {
+		matches, unknown := 0, false
 		for _, d := range candidates {
 			settings := readSealedSecretsSettings(d)
 			switch coverageOf(d, settings, target) {
 			case coverageUnknown:
-				return sealedSecretsControllerChoice{state: "ambiguous", ambiguousReason: ambiguousUnknownScope}
+				unknown = true
 			case coverageExplicit, coverageAll:
-				if choice.controller != nil {
-					return sealedSecretsControllerChoice{state: "ambiguous", ambiguousReason: ambiguousOverlap}
-				}
+				matches++
 				choice.controller, choice.settings = d, settings
 			}
+		}
+		switch {
+		case matches > 1:
+			return sealedSecretsControllerChoice{state: "ambiguous", ambiguousReason: ambiguousOverlap}
+		case unknown:
+			return sealedSecretsControllerChoice{state: "ambiguous", ambiguousReason: ambiguousUnknownScope}
 		}
 		watched = choice.controller != nil
 	} else {

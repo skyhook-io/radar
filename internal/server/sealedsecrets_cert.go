@@ -61,10 +61,9 @@ type sealedSecretsCertResponse struct {
 // without it), so a client can seal values itself, as `kubeseal --fetch-cert`
 // does.
 //
-// The controller is chosen exactly as GET /api/sealedsecrets/controller
-// chooses it, and never guessed: several candidates are 409 "ambiguous", a
-// choice Radar can't make (an unreadable scope, Deployments not collected or
-// failed to load) is 409 "unknown". The Service is the one named like the
+// A named namespace requires a single controller whose scope covers it.
+// Overlapping and unreadable scopes are conflicts. A missing input uses
+// the controller view's default selection. The Service is the one named like the
 // controller Deployment, as the standard installs name it, and the request
 // is always a GET of sealedSecretsCertPath on its HTTP port: nothing in the
 // request picks the Service, port or path. In-cluster Radar dials the
@@ -79,6 +78,7 @@ type sealedSecretsCertResponse struct {
 // returns a public certificate that upstream installs let every
 // authenticated user fetch.
 func (s *Server) handleSealedSecretsCert(w http.ResponseWriter, r *http.Request) {
+	operation := k8s.OperationContext()
 	if !s.requireConnected(w) {
 		return
 	}
@@ -113,7 +113,7 @@ func (s *Server) handleSealedSecretsCert(w http.ResponseWriter, r *http.Request)
 
 	coverage := cache.AssessKindRead("deployments", nil)
 	if !coverage.Complete {
-		s.writeErrorCode(w, http.StatusServiceUnavailable, string(readreason.KindSyncPending), "Radar does not have a complete view of Deployments; check its collection scope and permissions")
+		s.writeSealingCollectionFailure(w, coverage, "Deployments")
 		return
 	}
 	choice := selectSealedSecretsController(cache, target, true)
@@ -121,8 +121,6 @@ func (s *Server) handleSealedSecretsCert(w http.ResponseWriter, r *http.Request)
 		switch {
 		case choice.ambiguousReason == ambiguousOverlap:
 			s.writeErrorCode(w, http.StatusConflict, "ambiguous", "Several Sealed Secrets controllers serve this namespace; Radar can't tell which one unseals it")
-		case choice.state == "loading":
-			s.writeErrorCode(w, http.StatusServiceUnavailable, "loading", "Radar is still loading Deployments; try again shortly")
 		case choice.state == "notFound" || choice.state == "notWatched":
 			s.writeErrorCode(w, http.StatusNotFound, "notFound", "No Sealed Secrets controller serves this namespace")
 		default:
@@ -134,7 +132,7 @@ func (s *Server) handleSealedSecretsCert(w http.ResponseWriter, r *http.Request)
 
 	object, found, readable := cache.ReadableObject("services", ns, name)
 	if !readable {
-		s.writeErrorCode(w, http.StatusServiceUnavailable, string(readreason.KindSyncPending), "Radar cannot read the controller's Service; check its collection scope and permissions")
+		s.writeSealingCollectionFailure(w, cache.AssessKindRead("services", []string{ns}), "Services")
 		return
 	}
 	if !found {
@@ -150,6 +148,7 @@ func (s *Server) handleSealedSecretsCert(w http.ResponseWriter, r *http.Request)
 	proxyName := utilnet.JoinSchemeNamePort("http", name, port.Name)
 	allowed, err := sealingServiceProxyAllowed(r.Context(), conn, user, ns, proxyName)
 	if err != nil {
+		log.Printf("[sealedsecrets] Failed to check proxy access for %s/%s: %v", ns, name, err)
 		s.writeErrorCode(w, http.StatusServiceUnavailable, string(readreason.UserPermissionCheckFailed), "Could not check your access to the controller; try again")
 		return
 	}
@@ -169,12 +168,12 @@ func (s *Server) handleSealedSecretsCert(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	certPEM, fingerprint, fetchErr := fetchSealedSecretsCert(r.Context(), client, url)
-	if k8s.Current() != conn {
+	if operation.Err() != nil || k8s.Current() != conn || !k8s.IsConnected() {
 		s.writeErrorCode(w, http.StatusConflict, string(readreason.ConnectionChanged), "Cluster connection changed; retry")
 		return
 	}
 	if fetchErr != nil {
-		if fetchErr.forbidden {
+		if fetchErr.forbidden && !k8s.IsInCluster() {
 			s.writeErrorCode(w, http.StatusForbidden, "denied", "You don't have permission to fetch the controller's certificate")
 			return
 		}
@@ -188,6 +187,23 @@ func (s *Server) handleSealedSecretsCert(w http.ResponseWriter, r *http.Request)
 		CertFingerprint: fingerprint,
 		Controller:      sealedSecretsCertController{Namespace: ns, Name: name},
 	})
+}
+
+func (s *Server) writeSealingCollectionFailure(w http.ResponseWriter, coverage k8score.KindReadAssessment, kind string) {
+	var failure *resourceReadFailure
+	switch {
+	case len(coverage.Uncovered) != 0:
+		failure = readFailuref(readreason.RadarNamespaceNotCollected, "Radar does not collect %s in the controller namespace", kind)
+	case coverage.TargetReadiness() == k8score.KindPending:
+		failure = readFailuref(readreason.KindSyncPending, "Radar is still loading %s; retry shortly", kind)
+	case coverage.TargetReadiness() == k8score.KindFailed:
+		failure = readFailuref(readreason.KindSyncTimedOut, "Radar's %s inventory did not load; check collection health", kind)
+	case coverage.Readiness == k8score.KindUnavailable || !coverage.AllNamespaces && coverage.Requested == nil:
+		failure = readFailuref(readreason.RadarKindNotCollected, "Radar does not collect all %s needed to find the sealing certificate", kind)
+	default:
+		failure = readFailuref(readreason.ReadError, "Radar could not read %s for the sealing certificate", kind)
+	}
+	s.writeReadFailure(w, kind, failure, nil)
 }
 
 // sealedSecretsHTTPPort is the TCP port named "http" (the charts' name), else
