@@ -246,6 +246,62 @@ func TestPodLogs_LogsUnavailableCarriesCode(t *testing.T) {
 	}
 }
 
+func TestPodLogsUIDBinding(t *testing.T) {
+	for _, tc := range []struct {
+		name, before, after string
+		code, reads         int
+	}{
+		{"same Pod", "reviewed", "reviewed", http.StatusOK, 1},
+		{"replaced before fetch", "replacement", "replacement", http.StatusConflict, 0},
+		{"replaced during fetch", "reviewed", "replacement", http.StatusConflict, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/v1/namespaces/default/pods/nginx-abc-xyz/log":
+					logs.Add(1)
+					_, _ = io.WriteString(w, "synthetic log line")
+				case "/api/v1/namespaces/default/pods/nginx-abc-xyz":
+					uid := tc.before
+					if logs.Load() > 0 {
+						uid = tc.after
+					}
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = io.WriteString(w, `{"apiVersion":"v1","kind":"Pod","metadata":{"name":"nginx-abc-xyz","namespace":"default","uid":"`+uid+`"},"spec":{"containers":[{"name":"nginx"}]}}`)
+				default:
+					t.Errorf("unexpected Kubernetes request %s", r.URL.Path)
+					http.NotFound(w, r)
+				}
+			}))
+			t.Cleanup(upstream.Close)
+			client, err := kubernetes.NewForConfig(&rest.Config{Host: upstream.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			previous := k8s.SetTestClient(client)
+			t.Cleanup(func() { k8s.SetTestClient(previous) })
+			resp, err := http.Get(testServer.URL + "/api/pods/default/nginx-abc-xyz/logs?container=nginx&podUid=reviewed")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil || resp.StatusCode != tc.code || int(logs.Load()) != tc.reads {
+				t.Fatalf("status=%d reads=%d body=%s err=%v", resp.StatusCode, logs.Load(), body, err)
+			}
+			if tc.code == http.StatusOK {
+				var reply LogsResponse
+				if json.Unmarshal(body, &reply) != nil || reply.PodUID != "reviewed" || reply.Logs["nginx"] != "synthetic log line" {
+					t.Fatalf("unverified log response: %s", body)
+				}
+			} else if !strings.Contains(string(body), `"error_code":"pod_changed"`) || strings.Contains(string(body), "synthetic log line") {
+				t.Fatalf("replacement returned log text or missed conflict code: %s", body)
+			}
+		})
+	}
+}
+
 const waitingAnswer = `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"container \"postgres\" in pod \"pulling\" is waiting to start: trying and failing to pull image","reason":"BadRequest","code":400}`
 
 func waitingPod(name string) *corev1.Pod {

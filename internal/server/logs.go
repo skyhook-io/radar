@@ -15,6 +15,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 
@@ -93,6 +95,7 @@ func stopPodLogStreams(active *sync.Map, cursors map[string]*podlogs.StreamCurso
 // LogsResponse is the response for non-streaming logs
 type LogsResponse struct {
 	PodName    string            `json:"podName"`
+	PodUID     types.UID         `json:"podUid,omitempty"`
 	Namespace  string            `json:"namespace"`
 	Containers []string          `json:"containers"`
 	Logs       map[string]string `json:"logs"` // container -> logs
@@ -103,6 +106,11 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	podName := chi.URLParam(r, "name")
 	container := r.URL.Query().Get("container")
+	uid := types.UID(r.URL.Query().Get("podUid"))
+	if r.URL.Query().Has("podUid") && (uid == "" || len(uid) > 253 || container == "") {
+		s.writeError(w, http.StatusBadRequest, "podUid requires a Pod UID and a named container")
+		return
+	}
 	previous := r.URL.Query().Get("previous") == "true"
 	tailLinesStr := r.URL.Query().Get("tailLines")
 	sinceSecondsStr := r.URL.Query().Get("sinceSeconds")
@@ -125,17 +133,25 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get pod to find containers
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "Resource cache not available")
-		return
-	}
-
-	pod, err := cache.Pods().Pods(namespace).Get(podName)
-	if err != nil {
-		s.writeError(w, http.StatusNotFound, fmt.Sprintf("Pod not found: %v", err))
-		return
+	var pod *corev1.Pod
+	if uid != "" {
+		w.Header().Set("Cache-Control", "no-store")
+		pod = s.liveLogPod(w, r, client, namespace, podName, uid)
+		if pod == nil {
+			return
+		}
+	} else {
+		cache := k8s.GetResourceCache()
+		if cache == nil {
+			s.writeError(w, http.StatusServiceUnavailable, "Resource cache not available")
+			return
+		}
+		var err error
+		pod, err = cache.Pods().Pods(namespace).Get(podName)
+		if err != nil {
+			s.writeError(w, http.StatusNotFound, fmt.Sprintf("Pod not found: %v", err))
+			return
+		}
 	}
 
 	// Get container names
@@ -190,14 +206,36 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The log subresource is name-addressed. A replacement Pod can appear
+	// during the download, so return text only when the same live UID still
+	// owns the name after the read.
+	if uid != "" && s.liveLogPod(w, r, client, namespace, podName, uid) == nil {
+		return
+	}
 	response := LogsResponse{
 		PodName:    podName,
+		PodUID:     uid,
 		Namespace:  namespace,
 		Containers: containers,
 		Logs:       logs,
 	}
 
 	s.writeJSON(w, response)
+}
+
+func (s *Server) liveLogPod(w http.ResponseWriter, r *http.Request, client kubernetes.Interface, namespace, name string, uid types.UID) *corev1.Pod {
+	pod, err := client.CoreV1().Pods(namespace).Get(r.Context(), name, metav1.GetOptions{})
+	switch {
+	case apierrors.IsNotFound(err), err == nil && pod.UID != uid:
+		s.writeErrorCode(w, http.StatusConflict, "pod_changed", "The requested Pod is no longer present.")
+	case apierrors.IsForbidden(err), apierrors.IsUnauthorized(err):
+		s.writeError(w, http.StatusForbidden, "Pod access is required to verify its logs.")
+	case err != nil:
+		s.writeError(w, http.StatusServiceUnavailable, "Couldn’t verify the Pod for this log read.")
+	default:
+		return pod
+	}
+	return nil
 }
 
 // handlePodLogsStream streams logs from a pod using SSE
