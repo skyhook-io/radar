@@ -9,6 +9,7 @@ import {
   CenteredEmpty,
   getRadarUpgradeRequirement,
   PageHeader,
+  PaneLoader,
   RadarUpgradeAction,
   radarUpgradeDetail,
   radarUpgradeHeadline,
@@ -283,13 +284,19 @@ function AppDetailRoute({
     appWorkloads.some((workload) => isOpenCostWorkloadKind(workload.kind));
   const applicationCostSelected =
     selectedRouteView === "cost" && applicationCostAvailable;
+  const requestedDeploys = selectedView === "deploys" || searchParams.get("tab") === "deploys";
+  const deploysInWorkloadScope = requestedDeploys && !singleWorkloadKey &&
+    appWorkloads.some((workload) => workloadKey(workload) === selectedWorkloadParam);
   const historyQuery = useApplicationHistory(app.key, appHistoryNamespaces, {
-    enabled: !selectedWorkloadKey || Boolean(app.sourceRef),
+    enabled: !selectedWorkloadKey || Boolean(app.sourceRef) || (requestedDeploys && !deploysInWorkloadScope),
   });
   const readableHistory = historyQuery.isError ? undefined : historyQuery.data;
   const deliveryRecords = useMemo(() => applicationDeliveryRecords(historyQuery.data), [historyQuery.data]);
   const deliverySource = readableHistory?.sourceRef ?? app.sourceRef;
-  const requestedDeploys = selectedView === "deploys" || searchParams.get("tab") === "deploys";
+  const waitingForDeploySource = requestedDeploys && !deploysInWorkloadScope && !deliverySource && historyQuery.isLoading;
+  const clearDeploySelection = deploysInWorkloadScope || (requestedDeploys && !deliverySource && !waitingForDeploySource);
+  const normalizeSingleWorkload = Boolean(singleWorkloadKey && (selectedWorkloadParam !== singleWorkloadKey || viewParam));
+  const clearCostSelection = !singleWorkloadKey && selectedRouteView === "cost" && !applicationCostAvailable;
   const showDeploys = deliveryRecords.length > 0 || (requestedDeploys && Boolean(deliverySource));
   const [retainedHistoryRange, setRetainedHistoryRange] =
     useState<ApplicationHistoryRange>("7d");
@@ -395,7 +402,8 @@ function AppDetailRoute({
   );
   useEffect(() => {
     // Deploys belongs to the app scope, including its single-workload shell.
-    if (requestedDeploys && (!deliverySource || (!singleWorkloadKey && selectedWorkloadParam))) {
+    if (waitingForDeploySource) return;
+    if (clearDeploySelection) {
       const params = new URLSearchParams(searchParams);
       if (viewParam === "deploys") params.delete("view");
       if (params.get("tab") === "deploys") params.delete("tab");
@@ -403,8 +411,7 @@ function AppDetailRoute({
       setSearchParams(params, { replace: true });
       return;
     }
-    if (!singleWorkloadKey) return;
-    if (selectedWorkloadParam === singleWorkloadKey && !viewParam) return;
+    if (!singleWorkloadKey || !normalizeSingleWorkload) return;
     const params = new URLSearchParams(searchParams);
     params.delete("view");
     params.delete("run");
@@ -414,30 +421,25 @@ function AppDetailRoute({
     setSearchParams(params, { replace: true });
   }, [
     searchParams,
-    requestedDeploys,
-    deliverySource,
+    waitingForDeploySource,
+    clearDeploySelection,
+    normalizeSingleWorkload,
     selectedRouteView,
-    selectedWorkloadParam,
     setSearchParams,
     singleWorkloadKey,
     viewParam,
   ]);
   useEffect(() => {
-    if (
-      singleWorkloadKey ||
-      selectedRouteView !== "cost" ||
-      applicationCostAvailable
-    )
-      return;
+    if (waitingForDeploySource || clearDeploySelection || !clearCostSelection) return;
     const params = new URLSearchParams(searchParams);
     params.delete("view");
     setSearchParams(params, { replace: true });
   }, [
-    applicationCostAvailable,
+    clearCostSelection,
+    waitingForDeploySource,
+    clearDeploySelection,
     searchParams,
-    selectedRouteView,
     setSearchParams,
-    singleWorkloadKey,
   ]);
   const selectView = useCallback(
     (view: ApplicationRouteView, options?: { replace?: boolean }) => {
@@ -697,6 +699,7 @@ function AppDetailRoute({
         onSelectWorkload={selectWorkload}
         selectedView={selectedView}
         onSelectView={selectView}
+        selectionLoading={waitingForDeploySource || clearDeploySelection || clearCostSelection}
         renderDeploys={deliverySource && showDeploys ? () =>
           <ApplicationDeploys source={deliverySource} records={historyQuery.isError ? [] : deliveryRecords} loading={historyQuery.isLoading} unavailable={historyQuery.isError} partialSources={historyQuery.data?.partialSources} onOpenSource={openSource} /> : undefined}
         renderWorkloadRevisions={(workload) => <WorkloadRevisionsButton {...workload} />}
@@ -725,7 +728,10 @@ function AppDetailRoute({
           />
         )}
         hasOverviewIssues={appIssues.length > 0}
-        renderWorkload={(workload: SelectedAppWorkload, context) => (
+        renderWorkload={(workload: SelectedAppWorkload, context) => requestedDeploys &&
+          (waitingForDeploySource || clearDeploySelection || normalizeSingleWorkload) ? (
+          <PaneLoader label="Loading workload view…" className="h-full" />
+        ) : (
           <div className="h-full overflow-hidden">
             <WorkloadView
               {...context}

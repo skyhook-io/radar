@@ -7,6 +7,7 @@ import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApplicationDetail, type ApplicationDetailProps, type ApplicationExtraView } from './ApplicationDetail'
+import { workloadKey } from '../../utils/topology-neighborhood'
 import type { AppRow } from '../../utils/applications'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -31,7 +32,7 @@ const app: AppRow = {
 }
 
 const extraViews: ApplicationExtraView[] = [
-  { id: 'deploys', label: 'Deploys', render: () => <div data-testid="body">Deploys body</div> },
+  { id: 'release-notes', label: 'Release notes', render: () => <div data-testid="body">Release notes body</div> },
   { id: 'settings', label: 'Settings', render: () => <div data-testid="body">Settings body</div> },
 ]
 
@@ -75,11 +76,11 @@ const selected = (el: HTMLElement) => tabs(el).filter((t) => t.getAttribute('ari
 describe('ApplicationDetail extra views', () => {
   it('lists host views after the built-in ones and shows no extra tab without them', () => {
     const plain = show({})
-    expect(tabs(plain.host).map((t) => t.textContent?.trim())).toEqual(['Overview', 'Topology', 'History'])
+    expect(tabs(plain.host).map((t) => t.textContent?.trim())).toEqual(['Overview', 'Topology', 'Timeline'])
     act(() => root?.unmount())
 
     const withExtras = show({ extraViews })
-    expect(tabs(withExtras.host).map((t) => t.textContent?.trim())).toEqual(['Overview', 'Topology', 'History', 'Deploys', 'Settings'])
+    expect(tabs(withExtras.host).map((t) => t.textContent?.trim())).toEqual(['Overview', 'Topology', 'Timeline', 'Release notes', 'Settings'])
     expect(selected(withExtras.host)).toEqual(['Overview'])
     expect(withExtras.host.querySelector('[data-testid="body"]')).toBeNull()
   })
@@ -109,13 +110,13 @@ describe('ApplicationDetail extra views', () => {
   it('reports the id through onSelectView and renders the view the host selects', () => {
     const onSelectView = vi.fn()
     const { host, rerender } = show({ extraViews, selectedView: 'overview', onSelectView })
-    act(() => tab(host, 'Deploys').click())
-    expect(onSelectView).toHaveBeenCalledWith('deploys')
+    act(() => tab(host, 'Release notes').click())
+    expect(onSelectView).toHaveBeenCalledWith('release-notes')
     expect(selected(host)).toEqual(['Overview'])
 
-    rerender({ extraViews, selectedView: 'deploys', onSelectView })
-    expect(selected(host)).toEqual(['Deploys'])
-    expect(host.querySelector('[data-testid="body"]')?.textContent).toBe('Deploys body')
+    rerender({ extraViews, selectedView: 'release-notes', onSelectView })
+    expect(selected(host)).toEqual(['Release notes'])
+    expect(host.querySelector('[data-testid="body"]')?.textContent).toBe('Release notes body')
   })
 
   it("starts a host view afresh on another instance, so one instance's state never shows on the next", () => {
@@ -127,32 +128,32 @@ describe('ApplicationDetail extra views', () => {
         </button>
       )
     }
-    const views: ApplicationExtraView[] = [{ id: 'deploys', label: 'Deploys', render: () => <Counter /> }]
-    const { host, rerender } = show({ extraViews: views, selectedView: 'deploys', onSelectView: () => {}, activeInstanceKey: 'prod', selectedWorkloadKey: undefined })
+    const views: ApplicationExtraView[] = [{ id: 'release-notes', label: 'Release notes', render: () => <Counter /> }]
+    const { host, rerender } = show({ extraViews: views, selectedView: 'release-notes', onSelectView: () => {}, activeInstanceKey: 'prod', selectedWorkloadKey: undefined })
     const count = () => host.querySelector<HTMLButtonElement>('[data-testid="count"]')!
     act(() => count().click())
     expect(count().textContent).toBe('1')
-    rerender({ extraViews: views, selectedView: 'deploys', onSelectView: () => {}, activeInstanceKey: 'staging', selectedWorkloadKey: undefined })
+    rerender({ extraViews: views, selectedView: 'release-notes', onSelectView: () => {}, activeInstanceKey: 'staging', selectedWorkloadKey: undefined })
     expect(count().textContent).toBe('0')
     act(() => count().click())
-    rerender({ app: { ...app, key: 'shop/another' }, extraViews: views, selectedView: 'deploys', onSelectView: () => {}, activeInstanceKey: 'staging', selectedWorkloadKey: undefined })
+    rerender({ app: { ...app, key: 'shop/another' }, extraViews: views, selectedView: 'release-notes', onSelectView: () => {}, activeInstanceKey: 'staging', selectedWorkloadKey: undefined })
     expect(count().textContent).toBe('0')
   })
 
   it("shows the host's line above every view's content", () => {
     const { host, rerender } = show({ extraViews, selectedView: 'overview', onSelectView: () => {}, viewHeader: <span data-testid="vh">Pods on old values</span> })
     expect(host.querySelector('[data-testid="vh"]')).not.toBeNull()
-    rerender({ extraViews, selectedView: 'deploys', onSelectView: () => {}, viewHeader: <span data-testid="vh">Pods on old values</span> })
+    rerender({ extraViews, selectedView: 'release-notes', onSelectView: () => {}, viewHeader: <span data-testid="vh">Pods on old values</span> })
     expect(host.querySelector('[data-testid="vh"]')).not.toBeNull()
   })
 
   it("orders the tabs as the host asks, built-in views first otherwise", () => {
-    const { host } = show({ extraViews, viewOrder: ['overview', 'deploys', 'settings', 'topology'] })
-    expect(tabs(host).map((t) => t.textContent?.trim())).toEqual(['Overview', 'Deploys', 'Settings', 'Topology', 'History'])
+    const { host } = show({ extraViews, viewOrder: ['overview', 'release-notes', 'settings', 'topology'] })
+    expect(tabs(host).map((t) => t.textContent?.trim())).toEqual(['Overview', 'Release notes', 'Settings', 'Topology', 'Timeline'])
   })
 
   it('falls back to the Overview when the selected id is not offered', () => {
-    const { host } = show({ extraViews: extraViews.slice(1), selectedView: 'deploys', onSelectView: () => {} })
+    const { host } = show({ extraViews: extraViews.slice(1), selectedView: 'release-notes', onSelectView: () => {} })
     expect(selected(host)).toEqual(['Overview'])
     expect(host.querySelector('[data-testid="body"]')).toBeNull()
   })
@@ -167,8 +168,8 @@ describe('ApplicationDetail extra views', () => {
   it('clears a stale workload before asking the host to correct the selected view', () => {
     const onSelectWorkload = vi.fn()
     const onSelectView = vi.fn()
-    const render = vi.fn(() => <div>Deploys</div>)
-    const props = { extraViews: [{ id: 'deploys', label: 'Deploys', render }], viewOrder: ['deploys', 'overview'], selectedView: 'removed', onSelectWorkload, onSelectView }
+    const render = vi.fn(() => <div>Release notes</div>)
+    const props = { extraViews: [{ id: 'release-notes', label: 'Release notes', render }], viewOrder: ['release-notes', 'overview'], selectedView: 'removed', onSelectWorkload, onSelectView }
     const { rerender } = show({ ...props, selectedWorkloadKey: 'removed' })
     expect(onSelectWorkload).toHaveBeenCalledExactlyOnceWith(null, { replace: true })
     expect(onSelectView).not.toHaveBeenCalled()
@@ -178,21 +179,21 @@ describe('ApplicationDetail extra views', () => {
     expect(onSelectView).not.toHaveBeenCalled()
     expect(render).not.toHaveBeenCalled()
     rerender({ ...props, selectedWorkloadKey: null })
-    expect(onSelectView).toHaveBeenCalledExactlyOnceWith('deploys', { replace: true })
+    expect(onSelectView).toHaveBeenCalledExactlyOnceWith('release-notes', { replace: true })
   })
 
   it('preserves workload and tab links while the host cannot see live workloads', () => {
     const onSelectWorkload = vi.fn()
     const onSelectView = vi.fn()
-    const props = { extraViews, viewOrder: ['deploys', 'overview'], selectedView: 'yaml', selectedWorkloadKey: 'removed', onSelectWorkload, onSelectView }
+    const props = { extraViews, viewOrder: ['release-notes', 'overview'], selectedView: 'yaml', selectedWorkloadKey: 'removed', onSelectWorkload, onSelectView }
     const empty: AppRow = { ...app, workloads: [] }
     const { host, rerender } = show({ ...props, app: empty, liveUnavailableNotice: <p>Offline</p> })
     expect(host.textContent).toContain('Offline')
-    expect(host.textContent).not.toContain('Deploys body')
+    expect(host.textContent).not.toContain('Release notes body')
     expect(onSelectView).not.toHaveBeenCalled()
     expect(onSelectWorkload).not.toHaveBeenCalled()
     rerender({ ...props, app: empty, selectionLoading: true })
-    expect(host.textContent).not.toContain('Deploys body')
+    expect(host.textContent).not.toContain('Release notes body')
     expect(onSelectView).not.toHaveBeenCalled()
     expect(onSelectWorkload).not.toHaveBeenCalled()
     rerender({ ...props, selectedWorkloadKey: null, app: { ...app, workloads: app.workloads?.slice(0, 1) }, liveUnavailableNotice: false })
@@ -209,14 +210,14 @@ describe('ApplicationDetail extra views', () => {
       selectedView: 'overview',
       onSelectView: () => {},
     })
-    expect(tabs(host).map((t) => t.textContent?.trim())).toEqual(['Cost', 'Deploys', 'Settings'])
-    expect(selected(host)).toEqual(['Deploys'])
+    expect(tabs(host).map((t) => t.textContent?.trim())).toEqual(['Cost', 'Release notes', 'Settings'])
+    expect(selected(host)).toEqual(['Release notes'])
   })
 
   it('keeps the Cost view ahead of a selected host view', () => {
     const { host } = show({
       extraViews,
-      selectedView: 'deploys',
+      selectedView: 'release-notes',
       onSelectView: () => {},
       renderCostView: () => <div>Cost body</div>,
       costViewSelected: true,
@@ -233,9 +234,66 @@ describe('ApplicationDetail extra views', () => {
       selectedView: 'history',
       onSelectView: () => {},
     })
-    expect(tabs(host).map((t) => t.textContent?.trim())).toEqual(['Overview', 'Topology', 'History'])
-    expect(selected(host)).toEqual(['History'])
+    expect(tabs(host).map((t) => t.textContent?.trim())).toEqual(['Overview', 'Topology', 'Timeline'])
+    expect(selected(host)).toEqual(['Timeline'])
     expect(host.querySelector('[data-testid="body"]')).toBeNull()
+  })
+
+  it('reserves Deploys even when its renderer is absent or the built-in view is hidden', () => {
+    const shadow = vi.fn(() => <div>Shadow delivery view</div>)
+    const renderDeploys = vi.fn(() => <div>Recorded deliveries</div>)
+    const props = {
+      extraViews: [{ id: 'deploys', label: 'Shadow Deploys', render: shadow }, ...extraViews],
+      selectedView: 'deploys',
+      onSelectView: vi.fn(),
+    }
+    const { host, rerender } = show(props)
+    expect(tabs(host).map((t) => t.textContent)).not.toContain('Shadow Deploys')
+    expect(selected(host)).toEqual(['Overview'])
+    rerender({ ...props, renderDeploys, builtInViews: ['overview'] })
+    expect(selected(host)).toEqual(['Overview'])
+    expect(renderDeploys).not.toHaveBeenCalled()
+    rerender({ ...props, renderDeploys, viewOrder: ['deploys', 'release-notes'] })
+    expect(tabs(host).slice(0, 2).map((t) => t.textContent)).toEqual(['Deploys', 'Release notes'])
+    expect(selected(host)).toEqual(['Deploys'])
+    expect(host.textContent).toContain('Recorded deliveries')
+    expect(shadow).not.toHaveBeenCalled()
+  })
+
+  it('renders explicit Deploys without live workloads and leaves it suspended for an unresolved workload link', () => {
+    const renderDeploys = vi.fn(() => <div>Recorded deliveries</div>)
+    const props = {
+      app: { ...app, workloads: [] },
+      selectedView: 'deploys',
+      onSelectView: vi.fn(),
+      onSelectWorkload: vi.fn(),
+      renderDeploys,
+      viewOrder: ['deploys', 'overview'],
+      liveUnavailableNotice: <p>Offline</p>,
+    } satisfies Partial<ApplicationDetailProps>
+    const { host, rerender } = show({ ...props, selectedWorkloadKey: 'unresolved' })
+    expect(host.textContent).toContain('Offline')
+    expect(renderDeploys).not.toHaveBeenCalled()
+    rerender({ ...props, selectedWorkloadKey: null })
+    expect(host.textContent).toContain('Recorded deliveries')
+    expect(host.textContent).not.toContain('Offline')
+  })
+
+  it('honors the Deploys allowlist in the single-workload tab strip', () => {
+    const single = workload('checkout-api')
+    const renderWorkload: ApplicationDetailProps['renderWorkload'] = (_, { extraTabs }) =>
+      <div>{extraTabs?.map(({ id, label }) => <button key={id}>{label}</button>)}</div>
+    const props = {
+      app: { ...app, workloads: [single] },
+      selectedWorkloadKey: workloadKey(single),
+      onSelectWorkload: vi.fn(),
+      renderWorkload,
+      renderDeploys: () => <div>Recorded deliveries</div>,
+    }
+    const { host, rerender } = show({ ...props, builtInViews: ['overview'] })
+    expect(host.textContent).not.toContain('Deploys')
+    rerender({ ...props, builtInViews: ['deploys'] })
+    expect(host.textContent).toContain('Deploys')
   })
 
   it('shows the host notice in place of the built-in views when the instance has nothing live', () => {
@@ -244,16 +302,16 @@ describe('ApplicationDetail extra views', () => {
     expect(selected(host)).toEqual(['Topology'])
     expect(host.querySelector('[data-testid="notice"]')?.textContent).toBe('Not running')
 
-    rerender({ app: empty, extraViews, selectedView: 'deploys', onSelectView: () => {}, liveUnavailableNotice: <p data-testid="notice">Not running</p> })
+    rerender({ app: empty, extraViews, selectedView: 'release-notes', onSelectView: () => {}, liveUnavailableNotice: <p data-testid="notice">Not running</p> })
     expect(host.querySelector('[data-testid="notice"]')).toBeNull()
-    expect(host.querySelector('[data-testid="body"]')?.textContent).toBe('Deploys body')
+    expect(host.querySelector('[data-testid="body"]')?.textContent).toBe('Release notes body')
   })
 
   it('uses a host-only default view even without live workload evidence', () => {
     const empty: AppRow = { ...app, workloads: [] }
     const { host } = show({ app: empty, extraViews, builtInViews: [], liveUnavailableNotice: <p>Offline</p> })
-    expect(selected(host)).toEqual(['Deploys'])
-    expect(host.textContent).toContain('Deploys body')
+    expect(selected(host)).toEqual(['Release notes'])
+    expect(host.textContent).toContain('Release notes body')
   })
 
   it('shows an unavailable workload link before a host-only default view', () => {
@@ -261,20 +319,20 @@ describe('ApplicationDetail extra views', () => {
     const onSelectWorkload = vi.fn()
     const { host, rerender } = show({ app: empty, extraViews, builtInViews: [], selectedWorkloadKey: 'missing', onSelectWorkload, liveUnavailableNotice: <p>Offline</p> })
     expect(host.textContent).toContain('Offline')
-    expect(host.textContent).not.toContain('Deploys body')
+    expect(host.textContent).not.toContain('Release notes body')
     expect(onSelectWorkload).not.toHaveBeenCalled()
-    rerender({ app: empty, extraViews, builtInViews: [], selectedWorkloadKey: 'missing', onSelectWorkload, liveUnavailableNotice: <p>Offline</p>, selectedView: 'deploys', onSelectView: vi.fn() })
-    expect(host.textContent).not.toContain('Deploys body')
+    rerender({ app: empty, extraViews, builtInViews: [], selectedWorkloadKey: 'missing', onSelectWorkload, liveUnavailableNotice: <p>Offline</p>, selectedView: 'release-notes', onSelectView: vi.fn() })
+    expect(host.textContent).not.toContain('Release notes body')
   })
 
   it('leaves an unresolved workload link on a deliberate app-tab click', () => {
     const onSelectWorkload = vi.fn()
     const props = { app: { ...app, workloads: [] }, extraViews, liveUnavailableNotice: <p>Offline</p>, onSelectWorkload }
     const { host, rerender } = show({ ...props, selectedWorkloadKey: 'missing' })
-    act(() => tab(host, 'Deploys').click())
+    act(() => tab(host, 'Release notes').click())
     expect(onSelectWorkload).toHaveBeenCalledExactlyOnceWith(null)
     rerender({ ...props, selectedWorkloadKey: null })
-    expect(host.textContent).toContain('Deploys body')
+    expect(host.textContent).toContain('Release notes body')
   })
 
   it("shows an instance's detail beside its env in the switcher", () => {
@@ -305,13 +363,13 @@ describe('ApplicationDetail extra views', () => {
 
   it('offers only the built-in views the host asks for, landing on the first view offered', () => {
     const none = show({ extraViews, builtInViews: [], selectedView: 'overview', onSelectView: () => {} })
-    expect(tabs(none.host).map((t) => t.textContent?.trim())).toEqual(['Deploys', 'Settings'])
-    expect(selected(none.host)).toEqual(['Deploys'])
-    expect(none.host.querySelector('[data-testid="body"]')?.textContent).toBe('Deploys body')
+    expect(tabs(none.host).map((t) => t.textContent?.trim())).toEqual(['Release notes', 'Settings'])
+    expect(selected(none.host)).toEqual(['Release notes'])
+    expect(none.host.querySelector('[data-testid="body"]')?.textContent).toBe('Release notes body')
     act(() => root?.unmount())
 
     const some = show({ extraViews, builtInViews: ['topology'], selectedView: 'history', onSelectView: () => {} })
-    expect(tabs(some.host).map((t) => t.textContent?.trim())).toEqual(['Topology', 'Deploys', 'Settings'])
+    expect(tabs(some.host).map((t) => t.textContent?.trim())).toEqual(['Topology', 'Release notes', 'Settings'])
     expect(selected(some.host)).toEqual(['Topology'])
   })
 

@@ -4,15 +4,16 @@ import { createRoot } from 'react-dom/client'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { ToastProvider, type AppRow, type AppWorkload, type SelectedResource } from '@skyhook-io/k8s-ui'
+import { ToastProvider, workloadKey, type AppHistory, type AppRow, type AppWorkload, type SelectedResource } from '@skyhook-io/k8s-ui'
 import { ApplicationsView } from './ApplicationsView'
 
 let apps: AppRow[] = []
 const idle = { data: undefined, isLoading: false, isError: false, error: null }
+let history: Omit<typeof idle, 'data'> & { data?: AppHistory }
 
 vi.mock('../../api/client', () => ({
   useApplications: () => ({ ...idle, data: { applications: apps }, isSuccess: true, dataUpdatedAt: 0, refetch: () => {} }),
-  useApplicationHistory: () => idle,
+  useApplicationHistory: () => history,
   useGitOpsTree: () => idle,
   useHelmRelease: () => idle,
   useIssues: () => idle,
@@ -58,6 +59,7 @@ function LocationProbe({ onChange }: { onChange: (location: string) => void }) {
 }
 
 beforeEach(() => {
+  history = idle
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }))
   container = document.createElement('div')
   document.body.appendChild(container)
@@ -115,4 +117,40 @@ it('keeps the API group, namespace filter and open investigation when opening an
   expect(url.searchParams.get('apiGroup')).toBe('networking.k8s.io')
   expect(url.searchParams.get('namespaces')).toBe('shop')
   expect(url.searchParams.get('ai-run')).toBe('run-1')
+})
+
+it('keeps a single-workload Deploys link while discovering the recorded source', async () => {
+  apps = [app('shop/Deployment/web', ['web'])]
+  history = { ...idle, isLoading: true }
+  const url = '/applications?app=shop%2FDeployment%2Fweb&view=deploys&namespaces=shop'
+  await renderAt(url)
+  expect(new URLSearchParams(location.split('?')[1]).get('view')).toBe('deploys')
+  expect(container.querySelector('[data-testid="workload-view"]')).toBeNull()
+
+  history = { ...idle, data: { appKey: apps[0].key, sourceRef: { type: 'helm', kind: 'HelmRelease', namespace: 'shop', name: 'web' } } }
+  await renderAt(url)
+  const params = new URLSearchParams(location.split('?')[1])
+  expect(params.get('view')).toBeNull()
+  expect(params.get('tab')).toBe('deploys')
+  expect(params.get('workload')).toBe(workloadKey(deployment('web')))
+  expect(params.get('namespaces')).toBe('shop')
+  expect(container.querySelector('[data-testid="workload-view"]')).not.toBeNull()
+})
+
+it('keeps app Deploys after clearing a stale workload, and drops Deploys from a valid child workload', async () => {
+  apps = [{ ...app('shop/web', ['web', 'worker']), sourceRef: { type: 'helm', kind: 'HelmRelease', namespace: 'shop', name: 'web' } }]
+  await renderAt('/applications?app=shop%2Fweb&view=deploys&workload=stale')
+  let params = new URLSearchParams(location.split('?')[1])
+  expect(params.get('workload')).toBeNull()
+  expect(params.get('view')).toBe('deploys')
+  expect(container.textContent).toContain('Recorded deliveries')
+
+  await act(async () => root.unmount())
+  root = createRoot(container)
+  const child = workloadKey(deployment('worker'))
+  await renderAt(`/applications?app=shop%2Fweb&view=deploys&workload=${encodeURIComponent(child)}`)
+  params = new URLSearchParams(location.split('?')[1])
+  expect(params.get('workload')).toBe(child)
+  expect(params.get('view')).toBeNull()
+  expect(container.textContent).not.toContain('Recorded deliveries')
 })

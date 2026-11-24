@@ -1,6 +1,7 @@
 import { orderById } from "../../utils/order-by-id";
 import {
   createContext,
+  Fragment,
   useContext,
   useMemo,
   useState,
@@ -177,7 +178,7 @@ export type ApplicationDetailView = ApplicationView | (string & {});
 
 /** An app-level view the host supplies, shown as a tab after the built-in ones. */
 export interface ApplicationExtraView {
-  /** A unique, nonempty ID. Built-in IDs and `cost` are reserved. Cost has its own selection props. */
+  /** A unique, nonempty ID. `overview`, `deploys`, `topology`, `history`, and `cost` are reserved even when hidden. */
   id: string;
   label: string;
   /** Shown after the tab's label, e.g. a mark for unsaved edits. */
@@ -203,8 +204,8 @@ function isBuiltInApplicationView(view: ApplicationDetailView): view is Applicat
   return APPLICATION_VIEWS.some((v) => v.id === view);
 }
 
-/** What a workload scope can add to the host's WorkloadView. A workload scope
- *  has no application tab row, so app-level views reach it as tabs of its own. */
+/** Tabs to forward to the host's WorkloadView. This carries the application
+ *  Deploys destination for a single-workload app when Deploys is offered. */
 export interface AppWorkloadRenderContext {
   extraTabs?: WorkloadExtraTab[];
 }
@@ -249,16 +250,17 @@ export type ApplicationDetailProps = {
   costViewSelected?: boolean;
   /** Select Cost in application scope. A URL host clears a pending workload key in the same navigation. */
   onSelectCostView?: () => void;
-  /** Built-in views to offer. Defaults to all three. A removed view falls back
-   *  in tab order. Cost is selected by default if it is the only offered view. */
+  /** Allowlist of built-in views. By default all available built-in views are offered.
+   *  Deploys requires renderDeploys and this allowlist also controls its single-workload tab.
+   *  A removed view falls back in tab order. Cost is selected if it is the only offered view. */
   builtInViews?: ApplicationView[];
   /** Delay stale selection corrections while views or workload evidence are loading. */
   selectionLoading?: boolean;
   /** Show versions inline and keep up to six environment pills. Defaults to four pills without inline versions. */
   showEnvironmentVersions?: boolean;
   /** The active instance has nothing live to show (not deployed, its cluster
-   *  offline, …): the Overview, Topology and History show this instead. Host
-   *  views still render and stale URL selections are preserved until workload
+   *  offline, …): Overview, Topology and Timeline show this instead. Deploys
+   *  and extra views still render and stale URL selections are preserved until workload
    *  evidence is available. Omit it or pass null or false for live instances. */
   liveUnavailableNotice?: ReactNode;
   /** Render host-scoped operational issues for the app overview. */
@@ -302,7 +304,8 @@ export type ApplicationDetailProps = {
    *  key here so the switcher marks it. Changing the app or active instance
    *  resets internal selection and remounts the active host view. */
   activeInstanceKey?: string;
-  /** One delivery destination for this application instance, supplied by its host. */
+  /** Supplies the content for the single Deploys destination (`deploys`).
+   *  Omit to hide it. This renderer can run without live workload data. */
   renderDeploys?: () => ReactNode;
   /** Read-only inspection of a workload's retained revisions. */
   renderWorkloadRevisions?: (workload: AppWorkload) => ReactNode;
@@ -533,6 +536,11 @@ export function ApplicationDetail({
   const offeredViews = ALL_BUILT_IN_VIEWS.filter(
     (id) => (!builtInViews || builtInViews.includes(id)) && (id !== "deploys" || Boolean(renderDeploys)),
   );
+  const deploysOffered = offeredViews.includes("deploys");
+  const renderInstanceDeploys = useCallback(
+    () => <Fragment key={scopeKey}>{renderDeploys?.()}</Fragment>,
+    [renderDeploys, scopeKey],
+  );
   const offeredExtraViews = useMemo(() => {
     const seen = new Set<string>([...ALL_BUILT_IN_VIEWS, "cost", ""]);
     return extraViews?.filter(({ id }) => {
@@ -551,7 +559,7 @@ export function ApplicationDetail({
   // While evidence is missing, show the built-in or unavailable state without
   // running an unrelated host tab.
   const fallbackView = waitingForWorkload || selectionLoading || (unavailable != null && selectedView !== undefined)
-    ? visibleViews.find(({ id }) => isBuiltInApplicationView(id))?.id
+    ? visibleViews.find(({ id }) => id !== "deploys" && isBuiltInApplicationView(id))?.id
     : visibleViews[0]?.id;
   const resolvedView = requestedViewAvailable && !waitingForWorkload ? requestedView : fallbackView;
   const activeExtraView = offeredExtraViews?.find(({ id }) => id === resolvedView);
@@ -598,12 +606,12 @@ export function ApplicationDetail({
     : undefined;
   const singleWorkloadScope = workloads.length === 1 && !!selectedWorkload;
   const workloadContext = useMemo<AppWorkloadRenderContext>(() => {
-    if (!singleWorkloadScope || !renderDeploys || builtInViews && !builtInViews.includes("deploys")) return {};
+    if (!singleWorkloadScope || !deploysOffered) return {};
     return { extraTabs: [{
       id: "deploys", label: "Deploys", icon: <History className="h-4 w-4" />,
-      after: "overview", render: renderDeploys,
+      after: "overview", render: renderInstanceDeploys,
     }] };
-  }, [singleWorkloadScope, renderDeploys, builtInViews]);
+  }, [singleWorkloadScope, deploysOffered, renderInstanceDeploys]);
   useEffect(() => {
     if (selectionLoading || unavailable != null) return;
     // The two controlled selections can live in one URL. Correct one at a time
@@ -948,60 +956,60 @@ export function ApplicationDetail({
           <PaneLoader label="Loading application views…" className="h-full" />
         ) : (
           <WorkloadRevisionsContext.Provider value={renderWorkloadRevisions}>
-          <ApplicationWorkspace
-            app={app}
-            activeView={activeView}
-            activeExtraView={activeExtraView}
-            instanceKey={instanceKey}
-            viewOrder={viewOrder}
-            viewHeader={viewHeader}
-            extraViews={offeredExtraViews}
-            offeredViews={offeredViews}
-            unavailable={unavailable}
-            costSelected={costSelected}
-            onViewChange={setView}
-            onCostViewChange={selectCostView}
-            renderCostView={renderCostView}
-            workloads={workloads}
-            ready={ready}
-            desired={desired}
-            versions={versions}
-            topology={appTopology}
-            topologyLoading={topologyLoading}
-            deploymentLayer={deploymentLayer}
-            deploymentSource={app.sourceRef}
-            topologyAvailable={appTopologyAvailable}
-            focusNodeId={appGraphFocusId}
-            focusedOwnerId={focusedOwnerId}
-            colorByWorkload={colorByWorkload}
-            onNodeClick={handleAppNodeClick}
-            onNodeHover={handleNodeHover}
-            onFocusWorkload={setFocusedOwnerId}
-            onSelectWorkload={(workload, options) =>
-              setSelected(workloadKey(workload), options)
-            }
-            onNavigateToResource={onNavigateToResource}
-            renderDeploys={renderDeploys}
-            history={history}
-            historyLoading={historyLoading}
-            historySourceError={historySourceError}
-            historyItems={historyItems}
-            historyRuntimeLoading={historyRuntimeLoading}
-            historyRuntimeError={historyRuntimeError}
-            historyMode={historyMode}
-            historyRange={historyRange}
-            historyRangeOptions={historyRangeOptions}
-            historyCoverageRecordCount={historyCoverageRecordCount}
-            historyRuntimeLimited={historyRuntimeLimited}
-            historyRingTruncated={historyRingTruncated}
-            historyRetentionNote={historyRetentionNote}
-            onHistoryRangeChange={onHistoryRangeChange}
-            onOpenTimeline={onOpenTimeline}
-            onOpenSource={onOpenSource}
-            onToggleReplicaSets={toggleReplicaSets}
-            renderOverviewIssues={renderOverviewIssues}
-            hasOverviewIssues={hasOverviewIssues}
-          />
+            <ApplicationWorkspace
+              app={app}
+              activeView={activeView}
+              activeExtraView={activeExtraView}
+              instanceKey={instanceKey}
+              viewOrder={viewOrder}
+              viewHeader={viewHeader}
+              extraViews={offeredExtraViews}
+              offeredViews={offeredViews}
+              unavailable={unavailable}
+              costSelected={costSelected}
+              onViewChange={setView}
+              onCostViewChange={selectCostView}
+              renderCostView={renderCostView}
+              workloads={workloads}
+              ready={ready}
+              desired={desired}
+              versions={versions}
+              topology={appTopology}
+              topologyLoading={topologyLoading}
+              deploymentLayer={deploymentLayer}
+              deploymentSource={app.sourceRef}
+              topologyAvailable={appTopologyAvailable}
+              focusNodeId={appGraphFocusId}
+              focusedOwnerId={focusedOwnerId}
+              colorByWorkload={colorByWorkload}
+              onNodeClick={handleAppNodeClick}
+              onNodeHover={handleNodeHover}
+              onFocusWorkload={setFocusedOwnerId}
+              onSelectWorkload={(workload, options) =>
+                setSelected(workloadKey(workload), options)
+              }
+              onNavigateToResource={onNavigateToResource}
+              renderDeploys={resolvedView === "deploys" ? renderInstanceDeploys : undefined}
+              history={history}
+              historyLoading={historyLoading}
+              historySourceError={historySourceError}
+              historyItems={historyItems}
+              historyRuntimeLoading={historyRuntimeLoading}
+              historyRuntimeError={historyRuntimeError}
+              historyMode={historyMode}
+              historyRange={historyRange}
+              historyRangeOptions={historyRangeOptions}
+              historyCoverageRecordCount={historyCoverageRecordCount}
+              historyRuntimeLimited={historyRuntimeLimited}
+              historyRingTruncated={historyRingTruncated}
+              historyRetentionNote={historyRetentionNote}
+              onHistoryRangeChange={onHistoryRangeChange}
+              onOpenTimeline={onOpenTimeline}
+              onOpenSource={onOpenSource}
+              onToggleReplicaSets={toggleReplicaSets}
+              renderOverviewIssues={renderOverviewIssues}
+              hasOverviewIssues={hasOverviewIssues}
+            />
           </WorkloadRevisionsContext.Provider>
         )}
       </div>
@@ -1128,6 +1136,7 @@ function ApplicationWorkspace({
 }) {
   const showBuiltIn =
     !costSelected && !activeExtraView && unavailable == null && offeredViews.includes(activeView);
+  const activeDeploys = costSelected ? undefined : renderDeploys;
   return (
     <div className="flex h-full min-h-0 flex-col">
       <ApplicationViewTabs
@@ -1157,7 +1166,7 @@ function ApplicationWorkspace({
           {activeExtraView.render()}
         </div>
       )}
-      {!costSelected && !activeExtraView && unavailable != null && (
+      {!costSelected && !activeExtraView && !activeDeploys && unavailable != null && (
         <div role="tabpanel" className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
           {unavailable}
         </div>
@@ -1178,7 +1187,7 @@ function ApplicationWorkspace({
           hasOverviewIssues={hasOverviewIssues}
         />
       )}
-      {showBuiltIn && activeView === "deploys" && renderDeploys?.()}
+      {activeDeploys?.()}
       {showBuiltIn && activeView === "topology" && (
         <ApplicationTopology
           topology={topology}
