@@ -49,11 +49,11 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
     })
   }
 
-  function decodeBase64(value: string): string {
+  function decodeBase64(value: string): string | null {
     try {
       return decodeURIComponent(escape(atob(value)))
     } catch {
-      return '[binary data]'
+      return null
     }
   }
 
@@ -176,7 +176,7 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
         <div className="space-y-2">
           {dataKeys.map((key) => {
             const decoded = decodeBase64(data.data[key])
-            const isBinary = decoded === '[binary data]'
+            const isBinary = decoded === null
             const canEdit = onSaveSecretValue && !isImmutable && !isBinary
             // Without a save handler (the Secret was deleted, say) an open
             // editor would have a Save button that does nothing.
@@ -196,11 +196,12 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
                         <Pencil className="w-3.5 h-3.5" />
                       </button>
                     )}
-                    {revealed.has(key) && !isBinary && !isEditing && (
+                    {!isBinary && !isEditing && (
                       <button
                         onClick={() => copyValue(key, decoded)}
                         className="p-1 text-theme-text-tertiary hover:text-theme-text-primary transition-colors"
-                        title="Copy value"
+                        title={copied === key ? 'Copied' : 'Copy value'}
+                        aria-label={`Copy value for ${key}`}
                       >
                         {copied === key ? (
                           <Check className="w-3.5 h-3.5 text-green-400" />
@@ -269,7 +270,7 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
                   </div>
                 ) : revealed.has(key) ? (
                   <pre className="mt-2 bg-theme-base rounded p-2 text-xs text-theme-text-secondary overflow-x-auto max-h-40 whitespace-pre-wrap">
-                    {decoded}
+                    {decoded ?? '[binary data]'}
                   </pre>
                 ) : null}
               </div>

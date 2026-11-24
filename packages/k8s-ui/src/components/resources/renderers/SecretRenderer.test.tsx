@@ -39,6 +39,30 @@ function button(label: string): HTMLButtonElement {
   return match
 }
 
+describe('SecretRenderer value copy', () => {
+  it.each(['café 🔑', '[binary data]', ''])('copies decoded text without revealing it', async value => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    const previous = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    try {
+      const encoded = btoa(String.fromCharCode(...new TextEncoder().encode(value)))
+      await act(async () => root.render(
+        <SecretRenderer data={{ ...secret, data: { password: encoded, binary: '/w==' } }} />
+      ))
+      expect(element.querySelector('[aria-label="Copy value for binary"]')).toBeNull()
+      expect(element.querySelector('pre, textarea')).toBeNull()
+      await act(async () => button('Copy value').click())
+      expect(writeText).toHaveBeenCalledWith(value)
+      expect(button('Copied').getAttribute('aria-label')).toBe('Copy value for password')
+      expect(element.querySelector('pre, textarea')).toBeNull()
+      expect(button('Reveal')).toBeTruthy()
+    } finally {
+      if (previous) Object.defineProperty(navigator, 'clipboard', previous)
+      else Reflect.deleteProperty(navigator, 'clipboard')
+    }
+  })
+})
+
 async function editAndSave(value: string) {
   await act(async () => button('Reveal').click())
   await act(async () => button('Edit value').click())
