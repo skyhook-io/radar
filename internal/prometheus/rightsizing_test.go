@@ -6,11 +6,14 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/pkg/prom"
 	"github.com/skyhook-io/radar/pkg/rightsizing"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 type fakeRightsizingQuerier func(string) (*prom.QueryResult, error)
@@ -503,5 +506,51 @@ func TestLostThrottleReadingClearsTheReviewReason(t *testing.T) {
 	row.ThrottleRatio = nil
 	if NeedsManualReview(measuredDecision(row)) {
 		t.Error("without the ratio the row reads as a clean cut, which is why a failed throttle query has to reach the caller")
+	}
+}
+
+func TestRecentPodRestartWithMissingHistory(t *testing.T) {
+	end := time.Date(2026, 11, 24, 8, 10, 0, 0, time.UTC)
+	birth := end.Add(-6 * 24 * time.Hour)
+	key := scanKey{namespace: "lws-system", kind: "Deployment", workload: "lws-controller-manager", container: "manager"}
+	container := containerSpec{name: key.container, memReq: mustQuantity(t, "256Mi")}
+	clean := &corev1.ContainerStateTerminated{Reason: "Completed", ExitCode: 0}
+	for _, tt := range []struct {
+		name       string
+		created    time.Time
+		uid        types.UID
+		restarts   int32
+		last       *corev1.ContainerStateTerminated
+		ksm        terminationEvidence
+		wantReason string
+	}{
+		{"first sample already one", birth, "local", 1, nil, terminationEvidence{}, ReasonOOMEvidenceUnavailable},
+		{"restart predates possible window", end.Add(-8 * 24 * time.Hour), "local", 1, nil, terminationEvidence{}, ""},
+		{"missing birth", time.Time{}, "local", 1, nil, terminationEvidence{}, ""},
+		{"future birth", end.Add(time.Minute), "local", 1, nil, terminationEvidence{}, ""},
+		{"unverified Pod", birth, "", 1, nil, terminationEvidence{}, ""},
+		{"no restart", birth, "local", 0, nil, terminationEvidence{}, ""},
+		{"one known clean exit", birth, "local", 1, clean, terminationEvidence{}, ""},
+		{"two exits with one known reason", birth, "local", 2, clean, terminationEvidence{}, ReasonOOMEvidenceUnavailable},
+		{"another replica can supply a non-OOM reason", birth, "local", 1, nil, terminationEvidence{Any: true}, ReasonOOMEvidenceUnavailable},
+		{"positive OOM evidence wins", birth, "local", 1, nil, terminationEvidence{Any: true, OOM: true}, "oom_evidence"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			w := rightsizingWorkload{hpaAvailable: true, currentPodOOM: map[string]bool{}}
+			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{UID: tt.uid, CreationTimestamp: metav1.NewTime(tt.created)}}
+			pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: key.container, RestartCount: tt.restarts, LastTerminationState: corev1.ContainerState{Terminated: tt.last}}}
+			w.observePodTerminations(pod, end)
+			const usage = 50 * 1024 * 1024
+			detail := buildRightsizingRow(container, "memory", 2016, OwnerCoverageKSMHistory, w, map[string]queryOutcome{
+				"memory_stat": {values: map[string]float64{key.container: usage}}, "memory_coverage": {values: map[string]float64{key.container: 2016}},
+				"restart_activity": {values: map[string]float64{key.container: 0}}, "termination_history": {terminations: map[string]terminationEvidence{key.container: tt.ksm}},
+			})
+			fleet := buildScanRow(container, "memory", key, 2016, w, scanBatchEvidence{memory: map[scanKey][]float64{key: repeatedValues(usage)}, restarts: map[scanKey]float64{key: 0}, terminations: map[scanKey]terminationEvidence{key: tt.ksm}})
+			for _, row := range []RightsizingRow{detail, fleet} {
+				if row.RecommendationReason != tt.wantReason || (row.RecommendedReq != nil) != (tt.wantReason == "") {
+					t.Fatalf("reason=%q recommendation=%v, want reason=%q", row.RecommendationReason, row.RecommendedReq, tt.wantReason)
+				}
+			}
+		})
 	}
 }

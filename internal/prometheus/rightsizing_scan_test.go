@@ -440,7 +440,7 @@ func TestScanMarksWorkloadsWhenPodInventoryIsUnreadable(t *testing.T) {
 	t.Run("pods readable", func(t *testing.T) {
 		cache := scopeTestCache(t, map[string]bool{k8score.Pods: true, k8score.ReplicaSets: true}, replicaSet, oomed)
 		workloads := newWorkloads()
-		enrichScanCurrentOOM(context.Background(), cache, scopes, workloads)
+		enrichScanCurrentOOM(context.Background(), cache, scopes, workloads, time.Now())
 		got := workloads[workloadIdentity("Deployment", "shop", "api")].workload
 		if got.liveInventoryUnavailable {
 			t.Error("pods were readable; the row must not claim the inventory was denied")
@@ -453,7 +453,7 @@ func TestScanMarksWorkloadsWhenPodInventoryIsUnreadable(t *testing.T) {
 	t.Run("pod lister denied", func(t *testing.T) {
 		cache := scopeTestCache(t, map[string]bool{k8score.ReplicaSets: true}, replicaSet)
 		workloads := newWorkloads()
-		enrichScanCurrentOOM(context.Background(), cache, scopes, workloads)
+		enrichScanCurrentOOM(context.Background(), cache, scopes, workloads, time.Now())
 		got := workloads[workloadIdentity("Deployment", "shop", "api")].workload
 		if !got.liveInventoryUnavailable {
 			t.Error("the pod lister was denied, so the empty OOM map must be reported as unanswered")
@@ -487,7 +487,7 @@ func TestScanMarksOnlyDeploymentsWhenReplicaSetOwnershipIsUnreadable(t *testing.
 			workload: rightsizingWorkload{currentPodOOM: map[string]bool{}},
 		},
 	}
-	enrichScanCurrentOOM(context.Background(), cache, map[string][]string{"Deployment": {"shop"}}, workloads)
+	enrichScanCurrentOOM(context.Background(), cache, map[string][]string{"Deployment": {"shop"}}, workloads, time.Now())
 
 	if !workloads[workloadIdentity("Deployment", "shop", "api")].workload.liveInventoryUnavailable {
 		t.Error("no ReplicaSet lister, so the Deployment never sees its pods; that has to be reported")
@@ -528,7 +528,7 @@ func TestScanMarksWorkloadsOutsideTheInformersNamespaces(t *testing.T) {
 			workload: rightsizingWorkload{currentPodOOM: map[string]bool{}},
 		},
 	}
-	enrichScanCurrentOOM(context.Background(), cache, map[string][]string{"StatefulSet": {"team-a", "team-b"}}, workloads)
+	enrichScanCurrentOOM(context.Background(), cache, map[string][]string{"StatefulSet": {"team-a", "team-b"}}, workloads, time.Now())
 
 	if workloads[workloadIdentity("StatefulSet", "team-a", "watched")].workload.liveInventoryUnavailable {
 		t.Error("team-a is watched, so its empty pod list is authoritative and must not be flagged")
@@ -552,7 +552,7 @@ func TestScanSkipsReplicaSetWaitWithoutDeployments(t *testing.T) {
 		t.Fatal("a DaemonSet-only scan reported that it needs ReplicaSet ownership")
 	}
 	start := time.Now()
-	enrichScanCurrentOOM(context.Background(), cache, map[string][]string{"DaemonSet": {"shop"}}, workloads)
+	enrichScanCurrentOOM(context.Background(), cache, map[string][]string{"DaemonSet": {"shop"}}, workloads, time.Now())
 	if elapsed := time.Since(start); elapsed >= warmingRetryBudget {
 		t.Errorf("waited %v on ReplicaSets a DaemonSet-only scan never reads", elapsed)
 	}

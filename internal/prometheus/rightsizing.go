@@ -287,20 +287,21 @@ type containerSpec struct {
 
 type rightsizingWorkload struct {
 	// podSpec is the workload's pod template, for checks that need the whole pod.
-	podSpec               *corev1.PodSpec
-	containers            []containerSpec
-	podNames              []string
-	podIdentities         []prom.WorkloadPodIdentity
-	podIdentityIncomplete bool
-	daemonRevisionMatches map[string]bool
-	admittedImages        []string
-	podRestartEvidence    map[string]sizingPodRestarts
-	qos                   rightsizing.PodQoS
-	currentPodOOM         map[string]bool
-	hpaManaged            map[string]bool
-	hpaAvailable          bool
-	replicas              int
-	scaledToZero          bool
+	podSpec                *corev1.PodSpec
+	containers             []containerSpec
+	podNames               []string
+	podIdentities          []prom.WorkloadPodIdentity
+	podIdentityIncomplete  bool
+	daemonRevisionMatches  map[string]bool
+	admittedImages         []string
+	podRestartEvidence     map[string]sizingPodRestarts
+	qos                    rightsizing.PodQoS
+	currentPodOOM          map[string]bool
+	unexplainedPodRestarts map[string]bool
+	hpaManaged             map[string]bool
+	hpaAvailable           bool
+	replicas               int
+	scaledToZero           bool
 	// The live pod list could not be read, so podNames and currentPodOOM are
 	// empty because nothing answered — not because the workload has no pods.
 	liveInventoryUnavailable bool
@@ -424,6 +425,7 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 		workload.liveInventoryUnavailable = true
 		return workload, nil
 	}
+	windowEnd := time.Now()
 	collectPodIdentities := cloud.IsAuthenticatedTunnelRequest(ctx)
 	for _, pod := range pods {
 		workload.qos.Observe(pod.Status.QOSClass)
@@ -431,22 +433,37 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 		if collectPodIdentities {
 			workload.observeSizingPodIdentity(ctx, cache, pod)
 		}
-		collectCurrentPodOOM(workload.currentPodOOM, pod.Status.ContainerStatuses)
-		collectCurrentPodOOM(workload.currentPodOOM, pod.Status.InitContainerStatuses)
+		workload.observePodTerminations(pod, windowEnd)
 	}
 	sort.Strings(workload.podNames)
 	return workload, nil
 }
 
-func collectCurrentPodOOM(dst map[string]bool, statuses []corev1.ContainerStatus) {
-	for _, status := range statuses {
-		if status.State.Terminated != nil && status.State.Terminated.Reason == "OOMKilled" {
-			dst[status.Name] = true
-		}
-		if status.LastTerminationState.Terminated != nil && status.LastTerminationState.Terminated.Reason == "OOMKilled" {
-			dst[status.Name] = true
+func (w *rightsizingWorkload) observePodTerminations(pod *corev1.Pod, windowEnd time.Time) {
+	created := pod.CreationTimestamp.Time
+	bornInWindow := pod.UID != "" && created.After(windowEnd.Add(-rightsizingWindow)) && !created.After(windowEnd)
+	for _, statuses := range [][]corev1.ContainerStatus{pod.Status.ContainerStatuses, pod.Status.InitContainerStatuses} {
+		for _, status := range statuses {
+			current, last := status.State.Terminated, status.LastTerminationState.Terminated
+			if (current != nil && current.Reason == "OOMKilled") || (last != nil && last.Reason == "OOMKilled") {
+				w.currentPodOOM[status.Name] = true
+			}
+			// A counter already positive at its first scrape has no visible increase.
+			// A Pod born inside the window dates its restarts even when the scrape cannot.
+			if bornInWindow && status.RestartCount > 0 && (status.RestartCount > 1 || last == nil || last.Reason == "") {
+				if w.unexplainedPodRestarts == nil {
+					w.unexplainedPodRestarts = map[string]bool{}
+				}
+				w.unexplainedPodRestarts[status.Name] = true
+			}
 		}
 	}
+}
+
+func (w rightsizingWorkload) hasOOMEvidence(container string, restartActivity float64, restartAvailable bool, termination terminationEvidence) bool {
+	// Historical reasons are grouped by container name across replicas. A
+	// non-OOM reason could describe a different Pod from the unexplained exit.
+	return termination.OOM || (!w.unexplainedPodRestarts[container] && restartAvailable && (restartActivity <= 0 || termination.Any))
 }
 
 func loadHPAManagedResources(ctx context.Context, cache *k8s.ResourceCache, kind, namespace, name string) (map[string]bool, bool) {
@@ -806,7 +823,7 @@ func buildRightsizingRow(container containerSpec, resourceName string, expected 
 			restartActivity, restartAvailable := restarts.values[container.name]
 			termination := terminations.terminations[container.name]
 			row.WindowOOMEvidence = termination.OOM
-			row.OOMEvidenceAvailable = termination.OOM || (restartAvailable && (restartActivity <= 0 || termination.Any))
+			row.OOMEvidenceAvailable = workload.hasOOMEvidence(container.name, restartActivity, restartAvailable, termination)
 		}
 	}
 	rightsizing.SetCurrentQuantities(&row, req, lim, resourceName)
