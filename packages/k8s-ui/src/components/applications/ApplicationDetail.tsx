@@ -212,7 +212,7 @@ type ViewProps =
   | {
       /** Host-supplied app-level views selected by id. Single-workload apps
        *  open directly on the workload; use WorkloadView `extraTabs` there. */
-      extraViews: ApplicationExtraView[];
+      extraViews?: ApplicationExtraView[];
       selectedView: ApplicationDetailView;
       onSelectView: (view: ApplicationDetailView, options?: { replace?: boolean }) => void;
     }
@@ -3673,10 +3673,11 @@ function EnvSwitcher({
     overlayExitMs("menu"),
   );
   const rootRef = useDismissablePopover<HTMLDivElement>(open, setOpen);
+  const actualEnvironments = useMemo(() => instances.filter((inst) => !inst.aggregate), [instances]);
 
   const envInstances = useMemo(
-    () => collapseIdentityInstances(instances, activeKey),
-    [instances, activeKey],
+    () => collapseIdentityInstances(actualEnvironments, activeKey),
+    [actualEnvironments, activeKey],
   );
   const lag = appGroupLagMessage(envInstances);
   const active =
@@ -3691,8 +3692,10 @@ function EnvSwitcher({
   const lagChip = lag && (
     <span className={`${CHIP} ${CHIP_TONE.amber}`}>{lag}</span>
   );
-  const evidenceChip = (!showVersions || instances.some((inst) => inst.evidence || inst.confidence !== "high")) && (
-    <Tooltip content={<AppIdentityTooltip members={instances} />} delay={150}>
+  const hasGroupingEvidence = actualEnvironments.some((inst) => inst.evidence) ||
+    (actualEnvironments.length > 0 && actualEnvironments.every((inst) => inst.confidence !== "high"));
+  const evidenceChip = hasGroupingEvidence && (
+    <Tooltip content={<AppIdentityTooltip members={actualEnvironments} />} delay={150}>
       <span className="inline-flex cursor-default items-center rounded-sm bg-theme-hover px-1 py-px ring-1 ring-inset ring-theme-border">
         <Layers className="h-3 w-3 text-theme-text-tertiary" aria-hidden />
       </span>
@@ -3700,7 +3703,7 @@ function EnvSwitcher({
   );
 
   const orderedInstances = [...instances.filter((inst) => inst.aggregate), ...instances.filter((inst) => !inst.aggregate)];
-  const envCount = envInstances.filter((i) => !i.aggregate).length;
+  const envCount = envInstances.length;
   if (envCount <= (showVersions ? MAX_INLINE_ENVS : 4)) {
     return (
       <span className="flex flex-wrap items-center gap-1">
