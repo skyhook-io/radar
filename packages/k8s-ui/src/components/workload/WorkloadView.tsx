@@ -92,7 +92,7 @@ import { isCoreBatchJob } from '../../utils/api-resources'
 import { formatRelativeAgeTime } from '../../utils/format'
 
 const WORKLOAD_TABS = ['overview', 'spec', 'topology', 'timeline', 'logs', 'metrics', 'reachability', 'cost', 'yaml'] as const
-/** Built-in workload IDs. Hosts with extra tabs use WorkloadDetailTab for selection. */
+/** Built-in workload tab IDs. Hosts with extra tabs use WorkloadDetailTab for selection. */
 export type WorkloadTabType = typeof WORKLOAD_TABS[number]
 /** A built-in tab or a host-supplied tab ID. */
 export type WorkloadDetailTab = WorkloadTabType | (string & {})
@@ -655,11 +655,12 @@ export function WorkloadView({
   // Tab state — controlled or uncontrolled
   const [internalTab, setInternalTab] = useState<TabType>('overview')
   const activeTab = controlledTab ?? internalTab
+  const hasExtraTabs = extraTabs !== undefined
   const handleSetTab = useCallback((tab: TabType, options?: { replace?: boolean }) => {
     setInternalTab(tab)
-    if (extraTabs) onTabChange?.(tab, options)
+    if (hasExtraTabs) onTabChange?.(tab, options)
     else if (isBuiltInTab(tab)) onTabChange?.(tab, options)
-  }, [extraTabs, onTabChange])
+  }, [hasExtraTabs, onTabChange])
 
   // Collapsed mode state (YAML toggle for drawer mode)
   const [showYaml, setShowYaml] = useState(initialTab === 'yaml')
