@@ -49,9 +49,12 @@ describe("rendered resource changes", () => {
       annotation("checksum/config", template), image, { path: ["spec", "replicas"], before: 2, after: 3 },
     ])];
     await render(<RenderedChanges diff={{ changes }} />);
-    expect(container.textContent).toContain("Container image");
+    expect(container.textContent).toContain("Image change");
     expect(container.textContent).toContain("checkout:02");
     expect(container.textContent).toContain("checkout:01");
+    const imageRow = container.querySelector("tbody tr")!;
+    expect(imageRow.querySelector("del")?.textContent).toBe("02");
+    expect(imageRow.querySelector("ins")?.textContent).toBe("01");
     expect(container.textContent).toContain("checksum/config");
     expect(container.textContent).toContain("spec.replicas");
     expect(container.textContent).toContain("Deployment metadata (3 changes)");
@@ -60,6 +63,21 @@ describe("rendered resource changes", () => {
     await open(container.querySelector("details")!);
     expect(container.textContent).toContain("deployment-id");
     expect(container.textContent).toContain("deployment-timestamp");
+  });
+
+  it("preserves the complete values and highlights separated edits and one-sided changes", async () => {
+    await render(<RenderedChanges diff={{ changes: [resource([
+      { path: ["data", "url"], before: "https://old.example/runs/1042", after: "https://new.example/runs/1041" },
+      { path: ["spec", "flag"], before: false },
+    ])] }} />);
+    const [url, flag] = container.querySelectorAll("tbody tr");
+    expect([...url.querySelectorAll("del")].map(mark => mark.textContent)).toEqual(["old", "1042"]);
+    expect([...url.querySelectorAll("ins")].map(mark => mark.textContent)).toEqual(["new", "1041"]);
+    expect([...url.querySelectorAll("code")].map(code => code.textContent)).toEqual([
+      "https://old.example/runs/1042", "https://new.example/runs/1041",
+    ]);
+    expect(flag.querySelector("del")?.textContent).toBe("false");
+    expect(flag.querySelector("ins")).toBeNull();
   });
 
   it("groups only repeated version label transitions and preserves all their resource paths", async () => {
@@ -79,7 +97,7 @@ describe("rendered resource changes", () => {
     expect(container.textContent).toContain('spec.selector.matchLabels["app.kubernetes.io/version"]');
     expect(container.textContent).toContain("v0");
     const group = [...container.querySelectorAll("details")].find(d => d.querySelector("summary")?.textContent?.includes("Version label"))!;
-    expect(group.querySelector("summary")?.textContent).toBe("Version label v1 → v2 on 2 resources");
+    expect(group.querySelector("summary")?.textContent).toBe("Version label Previous sync: v1 → Selected sync: v2 on 2 resources");
     await open(group);
     expect(group.querySelectorAll("li")).toHaveLength(3);
     expect(group.textContent).toContain('spec.template.metadata.labels["app.kubernetes.io/version"]');
@@ -94,8 +112,11 @@ describe("rendered resource changes", () => {
       { path: [...template, "spec", "containers", "[order]"], before: ["checkout"], after: ["proxy", "checkout"] },
     ])] }} />);
     const imageRows = container.querySelectorAll("table")[0].querySelectorAll("tbody tr");
-    expect(imageRows[0].textContent).toBe("checkoutshop:v1shop:v2");
-    expect(imageRows[1].textContent).toBe("proxyImage addedAbsentenvoy:v1");
+    expect(imageRows[0].querySelector("del")?.textContent).toBe("1");
+    expect(imageRows[0].querySelector("ins")?.textContent).toBe("2");
+    expect(imageRows[1].textContent).toContain("Image added");
+    expect(imageRows[1].querySelector("del")).toBeNull();
+    expect(imageRows[1].querySelector("ins")?.textContent).toBe("envoy:v1");
     expect(container.textContent).toContain("spec.template.spec.containers[order]");
   });
 
@@ -109,7 +130,7 @@ describe("rendered resource changes", () => {
     expect(container.textContent).not.toContain("Deployment metadata (");
     expect(container.textContent).toContain('data["deployment-id"]');
     expect(container.textContent).toContain('"3"');
-    expect(container.textContent).toContain("Absent");
+    expect(container.querySelector("del")?.textContent).toBe('"3"');
     expect(container.textContent).toContain("null");
   });
 

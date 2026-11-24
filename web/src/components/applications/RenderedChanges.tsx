@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { diffArrays } from "diff";
 import { ExternalLink } from "lucide-react";
 import type { RenderedFieldChange, RenderedResourceChange, RenderedSyncDiff } from "../../api/client";
 
@@ -47,20 +48,53 @@ function buildURL(value: unknown) {
   } catch { /* Annotation values can be arbitrary strings. */ }
 }
 
-function FieldValue({ value, other }: { value: unknown; other: unknown }) {
-  if (value === undefined) return <span className="italic text-theme-text-tertiary">Absent</span>;
+function displayValue(value: unknown, other: unknown): string | undefined {
+  if (value === undefined) return undefined;
   // Quote strings on a type change so "3" → 3 and "null" → null remain distinguishable.
-  const plain = typeof value === "string" && value !== "" && (other === undefined || typeof other === "string");
-  const display = plain ? value : JSON.stringify(value, null, 2);
-  return <code className="whitespace-pre-wrap break-all">{display}</code>;
+  if (typeof value === "string" && value !== "" && (other === undefined || typeof other === "string")) return value;
+  return JSON.stringify(value, null, 2);
+}
+
+function ValueDiff({ before, after, inline = false }: { before: unknown; after: unknown; inline?: boolean }) {
+  const previous = displayValue(before, after);
+  const selected = displayValue(after, before);
+  // Keep numeric runs together: the useful units in image tags and build URLs are version components and IDs.
+  const tokens = /\p{L}+|\p{N}+|\s+|[^\s]/gu;
+  const parts = typeof before === "string" && typeof after === "string" && previous !== undefined && selected !== undefined &&
+    previous.length + selected.length <= 4096
+    ? diffArrays(previous.match(tokens) ?? [], selected.match(tokens) ?? [], { maxEditLength: 64 })
+    : undefined;
+
+  function side(text: string | undefined, added: boolean) {
+    if (text === undefined) return null;
+    const Mark = added ? "ins" : "del";
+    const highlight = added ? "bg-[var(--color-success)]/20" : "bg-semantic-error/20";
+    const markClass = `${highlight} rounded-sm font-semibold text-theme-text-primary no-underline`;
+    const value = <code className="min-w-0 whitespace-pre-wrap break-all text-theme-text-secondary">{parts ? parts.map((part, i) => {
+      if (added ? part.removed : part.added) return null;
+      const content = part.value.join("");
+      return (added ? part.added : part.removed) ? <Mark className={markClass} key={i}>{content}</Mark> : content;
+    }) : <Mark className={markClass}>{text}</Mark>}</code>;
+    const label = <span className="sr-only">{added ? "Selected sync: " : "Previous sync: "}</span>;
+    if (inline) return <>{label}{value}</>;
+    return <span className="flex items-baseline gap-2">
+      <span aria-hidden="true" className={`w-3 shrink-0 select-none text-center font-mono font-bold ${added ? "text-green-700 dark:text-green-300" : "text-red-700 dark:text-red-300"}`}>{added ? "+" : "−"}</span>
+      {label}{value}
+    </span>;
+  }
+
+  if (inline) return <>{side(previous, false)} → {side(selected, true)}</>;
+  return <div className="space-y-0.5">{side(previous, false)}{side(selected, true)}</div>;
 }
 
 function ChangeValues({ fields, images = false }: { fields: RenderedFieldChange[]; images?: boolean }) {
   return <div className="overflow-x-auto rounded border border-theme-border bg-theme-surface">
     <table className="w-full table-fixed text-left text-xs">
       <thead className="border-b border-theme-border text-theme-text-secondary">
-        <tr>{[images ? "Container image" : "Field", "Previous sync", "Selected sync"].map(label =>
-          <th key={label} scope="col" className="px-3 py-1.5 font-medium">{label}</th>)}</tr>
+        <tr>
+          <th scope="col" className="w-1/3 px-3 py-1.5 font-medium sm:w-64">{images ? "Container" : "Field"}</th>
+          <th scope="col" className="px-3 py-1.5 font-medium">{images ? "Image change" : "Change"}</th>
+        </tr>
       </thead>
       <tbody>{fields.map(field => <tr key={JSON.stringify(field.path)} className="border-b border-theme-border align-top last:border-0">
         <th scope="row" className="break-all px-3 py-2 text-left font-mono font-normal" aria-label={images ? fieldPath(field.path) : undefined}>
@@ -73,8 +107,7 @@ function ChangeValues({ fields, images = false }: { fields: RenderedFieldChange[
             </span>
           </> : fieldPath(field.path)}
         </th>
-        <td className="px-3 py-2 text-theme-text-secondary"><FieldValue value={field.before} other={field.after} /></td>
-        <td className="px-3 py-2 text-theme-text-primary"><FieldValue value={field.after} other={field.before} /></td>
+        <td className="px-3 py-2"><ValueDiff before={field.before} after={field.after} /></td>
       </tr>)}</tbody>
     </table>
   </div>;
@@ -175,7 +208,7 @@ export function RenderedChanges({ diff }: { diff: RenderedSyncDiff }) {
       const { before, after } = entries[0].field;
       const resources = new Set(entries.map(entry => entry.resource)).size;
       return <Disclosure key={JSON.stringify([before, after])} label={<>
-        Version label <FieldValue value={before} other={after} /> → <FieldValue value={after} other={before} /> on {resources} {resources === 1 ? "resource" : "resources"}
+        Version label <ValueDiff before={before} after={after} inline /> on {resources} {resources === 1 ? "resource" : "resources"}
       </>}>
         <ul className="space-y-1">
           {entries.map(({ resource, field }) => <li key={JSON.stringify([resource.kind, resource.group, resource.namespace, resource.name, field.path])} className="text-xs">
