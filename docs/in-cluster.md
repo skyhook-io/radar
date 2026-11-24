@@ -26,6 +26,10 @@ kubectl port-forward svc/radar 9280:9280 -n radar
 open http://localhost:9280
 ```
 
+To verify a chart before installing, use the [OCI chart verification
+instructions](../deploy/helm/radar/README.md#verify-an-oci-chart-before-installing).
+Chart signing is supported for OCI only; the classic Helm repository is unsigned.
+
 ## Installation settings
 
 Shared OSS Radar is configured by the installation operator, not by visitors to
