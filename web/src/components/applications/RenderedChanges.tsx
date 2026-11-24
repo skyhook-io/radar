@@ -63,7 +63,7 @@ function ChangeValues({ fields, images = false }: { fields: RenderedFieldChange[
           <th key={label} scope="col" className="px-3 py-1.5 font-medium">{label}</th>)}</tr>
       </thead>
       <tbody>{fields.map(field => <tr key={JSON.stringify(field.path)} className="border-b border-theme-border align-top last:border-0">
-        <th scope="row" className="break-all px-3 py-2 text-left font-mono font-normal" title={fieldPath(field.path)}>
+        <th scope="row" className="break-all px-3 py-2 text-left font-mono font-normal" aria-label={images ? fieldPath(field.path) : undefined}>
           {images ? <>
             {field.path.at(-2)!.slice("[name=".length, -1)}
             <span className="block font-sans text-theme-text-secondary">
