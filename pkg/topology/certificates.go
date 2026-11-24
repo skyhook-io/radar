@@ -1,6 +1,7 @@
 package topology
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -8,7 +9,6 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
-	"log"
 	"math"
 	"strings"
 	"time"
@@ -18,31 +18,70 @@ import (
 
 // ParsePEMCertificates decodes PEM-encoded certificate data and returns parsed
 // CertificateInfo for each certificate found, in the order they appear in the PEM data.
-// Non-CERTIFICATE PEM blocks are silently skipped; certificates that fail to parse are logged and skipped.
+// Other blocks and malformed certificates are skipped.
 func ParsePEMCertificates(certData []byte) []CertificateInfo {
 	var result []CertificateInfo
-
-	rest := certData
-	for {
-		var block *pem.Block
-		block, rest = pem.Decode(rest)
-		if block == nil {
-			break
-		}
+	for block, rest := pem.Decode(certData); block != nil; block, rest = pem.Decode(rest) {
 		if block.Type != "CERTIFICATE" {
 			continue
 		}
-
 		cert, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			log.Printf("[certificate] Failed to parse certificate block %d in PEM chain: %v", len(result)+1, err)
+		if err == nil {
+			info := NewCertificateInfo(cert, time.Now())
+			info.Organizations = cert.Subject.Organization
+			result = append(result, info)
+		}
+	}
+	return result
+}
+
+var certBegin = []byte("-----BEGIN CERTIFICATE-----")
+var certEnd = []byte("-----END CERTIFICATE-----")
+
+func parseCertificateBundle(data []byte) ([]CertificateInfo, bool) {
+	var certs []CertificateInfo
+	first, leafParsed := true, false
+	for part := range bytes.SplitAfterSeq(data, certEnd) {
+		begin := bytes.LastIndex(part, certBegin)
+		if begin < 0 {
 			continue
 		}
-
-		result = append(result, NewCertificateInfo(cert, time.Now()))
+		// A malformed first certificate cannot make a later CA the serving leaf.
+		isLeaf := first && !bytes.Contains(part[:begin], certBegin)
+		first = false
+		parsed := ParsePEMCertificates(part[begin:])
+		if len(parsed) == 0 {
+			continue
+		}
+		if isLeaf {
+			leafParsed = true
+		}
+		certs = append(certs, parsed...)
 	}
+	return certs, leafParsed
+}
 
-	return result
+// ParseSecretCertificates describes only certificates in the supplied Secret.
+func ParseSecretCertificates(secret *corev1.Secret) *SecretCertificateInfo {
+	info := SecretCertificateInfo{Certificates: []CertificateInfo{}}
+	for key, data := range secret.Data {
+		chain, leafParsed := parseCertificateBundle(data)
+		if len(chain) == 0 {
+			continue
+		}
+		if secret.Type == corev1.SecretTypeTLS && key == corev1.TLSCertKey && leafParsed {
+			info.Certificates = chain
+			continue
+		}
+		if info.AdditionalKeys == nil {
+			info.AdditionalKeys = make(map[string][]CertificateInfo)
+		}
+		info.AdditionalKeys[key] = chain
+	}
+	if len(info.Certificates) == 0 && len(info.AdditionalKeys) == 0 {
+		return nil
+	}
+	return &info
 }
 
 // NewCertificateInfo summarizes one parsed certificate, with its remaining
@@ -186,8 +225,10 @@ func GetSecretCertificateInfo(provider ResourceProvider, namespace, name string)
 		if !exists || len(certPEM) == 0 {
 			return nil, fmt.Errorf("secret %s/%s has no tls.crt data", namespace, name)
 		}
-		certs := ParsePEMCertificates(certPEM)
-		return &SecretCertificateInfo{Certificates: certs}, nil
+		if info := ParseSecretCertificates(secret); info != nil {
+			return info, nil
+		}
+		return &SecretCertificateInfo{}, nil
 	}
 
 	return nil, fmt.Errorf("secret %s/%s not found", namespace, name)

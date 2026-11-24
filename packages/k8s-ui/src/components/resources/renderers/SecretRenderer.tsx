@@ -6,7 +6,7 @@ import { Section, PropertyList, Property, AlertBanner } from '../../ui/drawer-co
 import { ConfirmDialog } from '../../ui/ConfirmDialog'
 import { ReflectorSummary, ReflectorSection, isReflectorMirror, reflectorEditNotice } from './ReflectorSection'
 import type { SecretCertificateInfo, CertificateInfo, Relationships, ResourceRef } from '../../../types'
-import { pluralize } from '../../../utils/pluralize'
+import { formatDuration } from '../resource-utils'
 import { cleanResourceForYaml } from '../../../utils/yaml'
 import { isFetchError } from '../../../types/fetch-error'
 
@@ -20,10 +20,12 @@ interface SecretRendererProps {
   isSaving?: boolean
 }
 
+const DAY = 24 * 60 * 60 * 1000
+
 function formatDate(dateStr: string): string {
   if (!dateStr) return '-'
   const d = new Date(dateStr)
-  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+  return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 }
 
 export function SecretRenderer({ data, relationships, onNavigate, certificateInfo, resourceData, onSaveSecretValue, isSaving }: SecretRendererProps) {
@@ -108,8 +110,39 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
     }
   }, [editValue])
 
-  const certs = certificateInfo?.certificates
-  const leafCert = certs?.[0]
+  const [now, setNow] = useState(Date.now)
+  const hasCertificates = Boolean(certificateInfo)
+  useEffect(() => {
+    if (!hasCertificates) return
+    setNow(Date.now())
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000)
+    return () => window.clearInterval(timer)
+  }, [hasCertificates])
+
+  const leafCert = certificateInfo?.certificates[0]
+  const leafRemaining = leafCert ? Date.parse(leafCert.notAfter) - now : Infinity
+  const chains = Object.entries(certificateInfo?.additionalKeys ?? {}).sort(([a], [b]) => a.localeCompare(b))
+  if (certificateInfo?.certificates.length) chains.unshift(['tls.crt', certificateInfo.certificates])
+
+  const certificateCount = chains.reduce((total, [, chain]) => total + chain.length, 0)
+  const certificateSections = chains.flatMap(([key, chain], groupIndex) => chain.map((cert, index) => {
+    const remaining = Date.parse(cert.notAfter) - now
+    const position = chain.length > 1 ? ` (${index + 1}/${chain.length})` : ''
+    const status = remaining <= 0 ? ' · Expired' : remaining <= 30 * DAY ? ` · Expires in ${formatDuration(remaining)}` : ''
+    return (
+      <CertificateInfoSection
+        key={`${key}/${index}`}
+        cert={cert}
+        index={index}
+        total={chain.length}
+        expanded={groupIndex === 0 && index === 0}
+        title={`Certificate · ${key}${position}${status}`}
+        remaining={remaining}
+      >
+        {cert.organizations?.length ? <Property label="Organization" value={cert.organizations.join(', ')} /> : null}
+      </CertificateInfoSection>
+    )
+  }))
 
   return (
     <>
@@ -121,46 +154,17 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
         </PropertyList>
       </Section>
 
-      {/* Certificate expiry alerts */}
-      {leafCert && leafCert.expired && (
+      {leafCert && leafRemaining <= 30 * DAY && (
         <AlertBanner
-          variant="error"
-          title="Certificate has expired"
-          message={`Expired ${formatDate(leafCert.notAfter)}.${leafCert.daysLeft !== 0 ? ` ${Math.abs(leafCert.daysLeft)}d ago.` : ''}`}
-        />
-      )}
-
-      {leafCert && !leafCert.expired && leafCert.daysLeft <= 7 && (
-        <AlertBanner
-          variant="error"
-          title={`Certificate expires in ${pluralize(leafCert.daysLeft, 'day')}`}
-          message="Check that cert-manager or your CA is renewing this certificate."
-        />
-      )}
-
-      {leafCert && !leafCert.expired && leafCert.daysLeft > 7 && leafCert.daysLeft <= 30 && (
-        <AlertBanner
-          variant="warning"
-          title={`Certificate expires in ${pluralize(leafCert.daysLeft, 'day')}`}
-          message="Renewal should happen automatically before expiry."
+          variant={leafRemaining <= 7 * DAY ? 'error' : 'warning'}
+          title={leafRemaining <= 0 ? 'Certificate has expired' : `Certificate expires in ${formatDuration(leafRemaining)}`}
+          message={`${leafRemaining <= 0 ? 'Expired' : 'Expires'} ${formatDate(leafCert.notAfter)} · tls.crt`}
         />
       )}
 
       <ReflectorSummary data={data} reflection={relationships?.reflection} onNavigate={onNavigate} />
 
-      {/* Certificate info section */}
-      {certs && certs.length > 0 && (
-        <>
-          {certs.map((cert, i) => (
-            <CertificateInfoSection
-              key={cert.serialNumber}
-              cert={cert}
-              index={i}
-              total={certs.length}
-            />
-          ))}
-        </>
-      )}
+      {certificateCount > 6 ? <Section title={`Certificates (${certificateCount})`} defaultExpanded={false} mountLazily>{certificateSections}</Section> : certificateSections}
 
       {dataKeys.length > 0 && (
         <div className="flex items-center gap-2 p-3 bg-amber-500/10 border border-amber-500/30 rounded text-amber-400 text-sm">
@@ -313,26 +317,29 @@ function secretSaveErrorMessage(error: unknown): { reason?: string } {
   return { reason: error instanceof Error && error.message ? error.message : undefined }
 }
 
-export function CertificateInfoSection({ cert, index, total, title: titleOverride, children }: {
+export function CertificateInfoSection({ cert, index, total, title: titleOverride, expanded = index === 0, remaining = Date.parse(cert.notAfter) - Date.now(), children }: {
   cert: CertificateInfo
   index: number
   total: number
   title?: string
+  expanded?: boolean
+  remaining?: number
   /** Extra properties shown after the subject. */
   children?: ReactNode
 }) {
-  const expiryTextColor = cert.expired || cert.daysLeft <= 7
-    ? 'text-red-400'
-    : cert.daysLeft <= 30
-      ? 'text-yellow-400'
-      : 'text-green-400'
+  const expired = remaining <= 0
+  const daysLeft = remaining / DAY
+  const expiryTextColor = expired || daysLeft <= 7
+    ? 'text-semantic-error'
+    : daysLeft <= 30 ? 'text-warning-text' : 'text-theme-text-secondary'
+  const duration = formatDuration(Math.abs(remaining))
 
   const title = titleOverride ?? (total > 1
     ? `Certificate ${index + 1} of ${total}`
     : 'Certificate Info')
 
   return (
-    <Section title={title} icon={Shield} defaultExpanded={index === 0}>
+    <Section title={title} icon={Shield} defaultExpanded={expanded}>
       <PropertyList>
         <Property label="Subject (CN)" value={cert.subject} />
         {children}
@@ -364,9 +371,7 @@ export function CertificateInfoSection({ cert, index, total, title: titleOverrid
           <span>
             {formatDate(cert.notAfter)}
             <span className={clsx('ml-2 text-xs', expiryTextColor)}>
-              {cert.expired
-                ? `(expired ${Math.abs(cert.daysLeft)}d ago)`
-                : `(${cert.daysLeft}d remaining)`}
+              {expired ? `(expired ${duration} ago)` : `(${duration} remaining)`}
             </span>
           </span>
         } />

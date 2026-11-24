@@ -86,3 +86,46 @@ describe('SecretRenderer value edit', () => {
     expect(element.textContent).not.toContain('Save')
   })
 })
+
+describe('Secret certificate bundles', () => {
+  const leaf = {
+    subject: 'demo.example', organizations: ['Demo'], issuer: 'Demo CA', serialNumber: '01', keyType: 'Ed25519',
+    notBefore: '2025-01-01T00:00:00Z', notAfter: '2026-01-01T00:00:00Z', daysLeft: -2, expired: true,
+  }
+
+  it('identifies repeated certificates by key and bundle position while data stays masked', async () => {
+    const info = { certificates: [], additionalKeys: { 'z.pem': [leaf], 'a.pem': [leaf, leaf] } }
+    await act(async () => root.render(<SecretRenderer data={secret} certificateInfo={info} />))
+    const text = element.textContent!
+    expect(text).toContain('Certificate · a.pem (1/2)')
+    expect(text).toContain('Certificate · a.pem (2/2)')
+    expect(text.indexOf('Certificate · a.pem')).toBeLessThan(text.indexOf('Certificate · z.pem'))
+    expect(text).toContain('OrganizationDemo')
+    expect(text).toContain(' · Expired')
+    expect(text).not.toContain('Certificate has expired')
+    expect(button('Reveal')).toBeTruthy()
+    expect(text).not.toContain('old')
+  })
+
+  it('keeps the TLS leaf warning and removes replaced bundle details after a refresh', async () => {
+    const data = { ...secret, type: 'kubernetes.io/tls' }
+    await act(async () => root.render(<SecretRenderer data={data} certificateInfo={{ certificates: [leaf] }} />))
+    expect(element.textContent).toContain('Certificate has expired')
+    expect(element.textContent).toContain('Certificate · tls.crt')
+    await act(async () => root.render(<SecretRenderer data={data} />))
+    expect(element.textContent).not.toContain('Certificate · tls.crt')
+    expect(element.textContent).not.toContain('Certificate has expired')
+  })
+})
+
+it('keeps a large bundle behind one disclosure and leaves the data controls accessible', async () => {
+  const cert = { subject: 'ca', issuer: 'ca', serialNumber: '1', keyType: 'Ed25519',
+    notBefore: '2025-01-01T00:00:00Z', notAfter: '2035-01-01T00:00:00Z', daysLeft: 1000 }
+  const info = { certificates: [], additionalKeys: { 'roots.pem': Array(100).fill(cert) } }
+  await act(async () => root.render(<SecretRenderer data={secret} certificateInfo={info} />))
+  expect(button('Certificates (100)').getAttribute('aria-expanded')).toBe('false')
+  expect(element.textContent).not.toContain('roots.pem')
+  expect(button('Reveal')).toBeTruthy()
+  await act(async () => button('Certificates (100)').click())
+  expect(element.textContent).toContain('Certificate · roots.pem (100/100)')
+})
