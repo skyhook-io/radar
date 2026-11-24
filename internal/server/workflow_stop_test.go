@@ -120,13 +120,24 @@ func TestWorkflowStop(t *testing.T) {
 	})
 	t.Run("refuses anything but Terminate or Stop, and other fields", func(t *testing.T) {
 		srv, dyn := workflowStopServer(t, testWorkflow("Running", ""))
-		for _, b := range []string{`{"strategy":"Suspend"}`, `{"strategy":"Terminate","annotations":{"x":"y"}}`, `not json`} {
+		for _, b := range []string{`{"strategy":"Suspend"}`, `{"strategy":""}`, `{"strategy":null}`, `{"strategy":"Terminate","annotations":{"x":"y"}}`, `not json`} {
 			if rec := postStop(srv, b, nil); rec.Code != http.StatusBadRequest {
 				t.Errorf("%s: status %d", b, rec.Code)
 			}
 		}
 		if len(workflowPatches(dyn)) != 0 {
 			t.Fatal("a refused request patched")
+		}
+	})
+	t.Run("only stops the resource version checked by the caller", func(t *testing.T) {
+		srv, dyn := workflowStopServer(t, testWorkflow("Running", ""))
+		rec := postStop(srv, `{"resourceVersion":"6"}`, nil)
+		if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "workflow_changed") || len(workflowPatches(dyn)) != 0 {
+			t.Fatalf("unexpected stale stop response = %d: %s", rec.Code, rec.Body.String())
+		}
+		rec = postStop(srv, `{"resourceVersion":"7"}`, nil)
+		if rec.Code != http.StatusOK || len(workflowPatches(dyn)) != 1 {
+			t.Fatalf("unexpected current stop response = %d: %s", rec.Code, rec.Body.String())
 		}
 	})
 	t.Run("missing is 404", func(t *testing.T) {
@@ -158,6 +169,23 @@ func TestWorkflowStop(t *testing.T) {
 		var resp WorkflowStopResponse
 		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &resp) != nil || !resp.Changed || resp.Shutdown != "Terminate" || len(workflowPatches(dyn)) != 1 {
 			t.Fatalf("status = %d resp = %+v patches = %d", rec.Code, resp, len(workflowPatches(dyn)))
+		}
+	})
+	t.Run("an invalid stored strategy can be replaced", func(t *testing.T) {
+		srv, dyn := workflowStopServer(t, testWorkflow("Running", "terminate"))
+		rec := postStop(srv, `{"strategy":"Stop"}`, nil)
+		var resp WorkflowStopResponse
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &resp) != nil || !resp.Changed || resp.Shutdown != "Stop" || len(workflowPatches(dyn)) != 1 {
+			t.Fatalf("status = %d resp = %+v patches = %d", rec.Code, resp, len(workflowPatches(dyn)))
+		}
+	})
+	t.Run("reports when admission does not store the requested shutdown", func(t *testing.T) {
+		srv, dyn := workflowStopServer(t, testWorkflow("Running", ""))
+		dyn.PrependReactor("patch", "workflows", func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, testWorkflow("Running", ""), nil
+		})
+		if rec := postStop(srv, "", nil); rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 		}
 	})
 	t.Run("a change racing the patch is 409, not overwritten", func(t *testing.T) {
@@ -210,12 +238,14 @@ func TestWorkflowStopReadsAndPatchesAsTheCaller(t *testing.T) {
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		requests = append(requests, r.Method+" as "+r.Header.Get("Impersonate-User"))
+		workflow := testWorkflow("Running", "")
 		if r.Method == http.MethodPatch {
 			_ = json.NewDecoder(r.Body).Decode(&patched)
+			workflow = testWorkflow("Running", "Terminate")
 		}
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"apiVersion":"argoproj.io/v1alpha1","kind":"Workflow","metadata":{"name":"migrate-abcde","namespace":"jobs","resourceVersion":"7"},"spec":{},"status":{"phase":"Running"}}`))
+		_ = json.NewEncoder(w).Encode(workflow)
 	}))
 	t.Cleanup(api.Close)
 	previous := k8s.SetTestConfig(&rest.Config{Host: api.URL})

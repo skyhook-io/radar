@@ -137,6 +137,13 @@ func DecodeActionParams(raw json.RawMessage, into any) error {
 // rather than applied over. Callers turn the Conflict into "changed"; it is
 // never retried.
 func MergePatchAtVersion(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersionResource, obj *unstructured.Unstructured, body map[string]any, subresources ...string) error {
+	_, err := ApplyVersionedMergePatch(ctx, dyn, gvr, obj, body, subresources...)
+	return err
+}
+
+// ApplyVersionedMergePatch applies the resourceVersion precondition and returns
+// the object Kubernetes stored, including any admission changes.
+func ApplyVersionedMergePatch(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersionResource, obj *unstructured.Unstructured, body map[string]any, subresources ...string) (*unstructured.Unstructured, error) {
 	meta, _ := body["metadata"].(map[string]any)
 	if meta == nil {
 		meta = map[string]any{}
@@ -145,10 +152,9 @@ func MergePatchAtVersion(ctx context.Context, dyn dynamic.Interface, gvr schema.
 	meta["resourceVersion"] = obj.GetResourceVersion()
 	data, err := json.Marshal(body)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	_, err = dyn.Resource(gvr).Namespace(obj.GetNamespace()).Patch(ctx, obj.GetName(), types.MergePatchType, data, metav1.PatchOptions{}, subresources...)
-	return err
+	return dyn.Resource(gvr).Namespace(obj.GetNamespace()).Patch(ctx, obj.GetName(), types.MergePatchType, data, metav1.PatchOptions{}, subresources...)
 }
 
 // GrantText words an optional grant, "" when there is none.
