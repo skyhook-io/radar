@@ -236,9 +236,27 @@ describe('ApplicationDetail extra views', () => {
       renderCostView: () => <div>Cost body</div>,
       costViewSelected: false,
       onSelectCostView: vi.fn(),
+      liveUnavailableNotice: <p>Offline</p>,
     })
     expect(selected(host)).toEqual(['Cost'])
     expect(host.textContent).toContain('Cost body')
+  })
+
+  it('remounts a controlled Cost panel when switching instances', () => {
+    function CostBody({ instance }: { instance: string }) {
+      const [mountedInstance] = useState(instance)
+      return <div>{mountedInstance}</div>
+    }
+    const props = {
+      activeInstanceKey: 'prod',
+      costViewSelected: true,
+      renderCostView: () => <CostBody instance="prod costs" />,
+    }
+    const { host, rerender } = show(props)
+    expect(host.textContent).toContain('prod costs')
+    rerender({ ...props, activeInstanceKey: 'staging', renderCostView: () => <CostBody instance="staging costs" /> })
+    expect(host.textContent).toContain('staging costs')
+    expect(host.textContent).not.toContain('prod costs')
   })
 
   it('never lets a host view replace a built-in one', () => {

@@ -239,7 +239,8 @@ export type ApplicationDetailProps = {
   app: AppRow;
   onBack: () => void;
   /** Render the host's WorkloadView for the chosen workload. Forward
-   *  `context.extraTabs` alongside any distinct tabs the host already supplies. */
+   *  `context.extraTabs` before the host's distinct tabs. A URL host maps an
+   *  active app-level Deploys link to the singleton's `deploys` workload tab. */
   renderWorkload: (
     workload: SelectedAppWorkload,
     context: AppWorkloadRenderContext,
@@ -312,7 +313,8 @@ export type ApplicationDetailProps = {
    *  resets internal selection and remounts the active host view. */
   activeInstanceKey?: string;
   /** Supplies the content for Deploys (`deploys`) in the app shell and the
-   *  singleton workload tab. Omit to hide it. App-scope Deploys can render offline. */
+   *  singleton workload tab. Omit to hide it. In the app shell the renderer
+   *  owns its scroll container and can render offline. */
   renderDeploys?: () => ReactNode;
   /** Read-only inspection of a workload's retained revisions. */
   renderWorkloadRevisions?: (workload: AppWorkload) => ReactNode;
@@ -576,7 +578,7 @@ export function ApplicationDetail({
   const activeView = resolvedView && isBuiltInApplicationView(resolvedView)
     ? resolvedView
     : DEFAULT_APPLICATION_VIEW;
-  const onlyOfferedCost = !resolvedView && !selectionLoading && unavailable == null;
+  const onlyOfferedCost = visibleViews.length === 0 && !selectionLoading;
   const costSelected = !waitingForWorkload && Boolean(renderCostView) &&
     ((costViewSelected ?? internalCostSelected) || onlyOfferedCost);
   const setView = useCallback(
@@ -1163,7 +1165,7 @@ function ApplicationWorkspace({
       {/* Hidden when the host's line renders nothing. */}
       {viewHeader && <div className="shrink-0 px-4 pt-3 empty:hidden sm:px-6">{viewHeader}</div>}
       {costSelected && renderCostView && (
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
+        <div key={JSON.stringify([app.key, instanceKey])} className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
           {renderCostView({ app, workloads, onSelectWorkload })}
         </div>
       )}
