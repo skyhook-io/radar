@@ -227,6 +227,7 @@ export interface FeatureCapabilities {
   runtimeAdvisoryProgress?: boolean
   sealedSecretsController?: boolean // GET /api/sealedsecrets/controller
   cronJobTriggerJobName?: boolean
+  sealedSecretsCert?: boolean // GET /api/sealedsecrets/cert
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.
