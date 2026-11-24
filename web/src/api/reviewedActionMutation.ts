@@ -62,5 +62,11 @@ export function useReviewedActionMutation<Data, Variables extends { request: { r
       }
     },
   })
-  return { ...mutation, isPending: mutation.isPending || retained.pending, outcomeError: retained.error }
+  const acknowledgeOutcome = () => {
+    if (outcomes.entries.get(key)?.error) {
+      publish(key, EMPTY)
+      mutation.reset()
+    }
+  }
+  return { ...mutation, isPending: mutation.isPending || retained.pending, outcomeError: retained.error, acknowledgeOutcome }
 }

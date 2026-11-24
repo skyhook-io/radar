@@ -2,8 +2,10 @@ import { useLayoutEffect, useRef, useState } from 'react'
 import { Bug } from 'lucide-react'
 import { ActionConfirmDialog, getDefaultContainerName, getExecContainerNames, useOpenTerminal, type ActionConfirmResult } from '@skyhook-io/k8s-ui'
 import { actionDialogResult } from '../../api/actions'
+import { ApiError } from '../../api/client'
 import { connectionHeaderValue } from '../../api/connectionBinding'
 import { getApiBase } from '../../api/config'
+import { useReviewedActionMutation } from '../../api/reviewedActionMutation'
 import { createPodDebugContainer } from '../../api/podDebug'
 
 interface PodDebugTarget {
@@ -32,7 +34,6 @@ export function PodDebugAction({ pod }: { pod: PodDebugTarget }) {
   const targets = getExecContainerNames(pod).filter(name => running.some(container => container.name === name))
   const [draft, setDraft] = useState<{ target: string; image: string; base: string; connection?: string }>()
   const [result, setResult] = useState<ActionConfirmResult>()
-  const [busy, setBusy] = useState(false)
   const submitting = useRef(false)
   const mounted = useRef(false)
   useLayoutEffect(() => {
@@ -42,6 +43,23 @@ export function PodDebugAction({ pod }: { pod: PodDebugTarget }) {
 
   const os = pod.spec?.os?.name || pod.spec?.nodeSelector?.['kubernetes.io/os'] || pod.spec?.nodeSelector?.['beta.kubernetes.io/os']
   const { namespace, name, uid } = pod.metadata
+  const connection = connectionHeaderValue()
+  const mutation = useReviewedActionMutation(
+    JSON.stringify([getApiBase(), 'pod-debug', uid]), connection ?? '', {
+      mutationFn: ({ request }: { request: { reviewedContext: string; base: string; targetContainer: string; image?: string } }) => {
+        if (getApiBase() !== request.base || (connectionHeaderValue() ?? '') !== request.reviewedContext) {
+          throw new ApiError('The cluster connection changed. Reopen the Pod to debug it.', 409)
+        }
+        return createPodDebugContainer(namespace, name, request.reviewedContext || undefined, {
+          uid, targetContainer: request.targetContainer, image: request.image,
+        })
+      },
+    },
+  )
+  const busy = mutation.isPending
+  const outcome = result ?? actionDialogResult(mutation.outcomeError, {
+    unknown: 'Check the ephemeral containers in the Pod YAML before trying again',
+  })
   function show() {
     const preferred = getDefaultContainerName(pod)
     setDraft({ target: preferred && targets.includes(preferred) ? preferred : targets[0], image: '', base: getApiBase(), connection: connectionHeaderValue() })
@@ -50,17 +68,12 @@ export function PodDebugAction({ pod }: { pod: PodDebugTarget }) {
   async function start() {
     if (!draft || submitting.current || !targets.includes(draft.target)) return
     const sameConnection = () => getApiBase() === draft.base && connectionHeaderValue() === draft.connection
-    if (!sameConnection()) {
-      setResult({ state: 'error', message: 'The cluster connection changed. Reopen the Pod to debug it.' })
-      return
-    }
     submitting.current = true
-    setBusy(true)
     setResult(undefined)
     try {
-      const { containerName, status } = await createPodDebugContainer(namespace, name, draft.connection, {
-        targetContainer: draft.target, image: draft.image.trim() || undefined, uid,
-      })
+      const { containerName, status } = await mutation.mutateAsync({ request: {
+        base: draft.base, reviewedContext: draft.connection ?? '', targetContainer: draft.target, image: draft.image.trim() || undefined,
+      } })
       if (!mounted.current || !sameConnection()) return
       openTerminal({
         namespace, podName: name, containerName, containers: [containerName],
@@ -74,10 +87,7 @@ export function PodDebugAction({ pod }: { pod: PodDebugTarget }) {
       }))
     } finally {
       submitting.current = false
-      if (mounted.current) {
-        setBusy(false)
-        if (!sameConnection()) setDraft(undefined)
-      }
+      if (mounted.current && !sameConnection()) setDraft(undefined)
     }
   }
 
@@ -93,9 +103,12 @@ export function PodDebugAction({ pod }: { pod: PodDebugTarget }) {
         setDraft(undefined)
         if (result?.state === 'error') setResult(undefined)
       }}
-      onConfirm={start} confirmLabel="Start debug container" isLoading={busy} result={result}
-      guard={result?.state === 'unknown' && <button type="button" className="btn-secondary px-3 py-1.5 text-sm"
-        onClick={() => setResult(undefined)}>I checked the Pod YAML</button>}
+      onConfirm={start} confirmLabel="Start debug container" isLoading={busy} result={outcome}
+      guard={outcome?.state === 'unknown' && <button type="button" className="btn-secondary px-3 py-1.5 text-sm"
+        onClick={() => {
+          mutation.acknowledgeOutcome()
+          setResult(undefined)
+        }}>I checked the Pod YAML</button>}
       incompleteReason={draft && !targets.includes(draft.target) ? 'Select a running container.' : undefined}>
       {draft && <div className="grid gap-3">
         <label className="grid gap-1">Target container

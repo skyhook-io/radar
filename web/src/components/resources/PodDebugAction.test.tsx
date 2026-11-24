@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act } from 'react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, expect, it, vi } from 'vitest'
 import { DockProvider, useDock } from '@skyhook-io/k8s-ui'
@@ -21,11 +22,13 @@ function Tabs() {
   return <output>{tabs.map(t => t.containerName).join(',')}</output>
 }
 let root: Root
-function render() {
+let client: QueryClient
+function render(existing = new QueryClient()) {
+  client = existing
   const host = document.createElement('div')
   document.body.append(host)
   root = createRoot(host)
-  act(() => root.render(<DockProvider><PodDebugAction pod={pod} /><Tabs /></DockProvider>))
+  act(() => root.render(<QueryClientProvider client={client}><DockProvider><PodDebugAction pod={pod} /><Tabs /></DockProvider></QueryClientProvider>))
 }
 afterEach(() => {
   act(() => root.unmount())
@@ -51,6 +54,7 @@ it.each([false, true])('submits the reviewed running target once, keeping the de
   expect(select.value).toBe('worker')
   click('Start debug container')
   click('Start debug container')
+  await act(async () => { await Promise.resolve() })
   expect(fetch).toHaveBeenCalledTimes(1)
   const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit]
   expect(url).toBe('/api/pods/demo/api/debug')
@@ -72,7 +76,12 @@ it.each([
   const start = [...document.querySelectorAll('button')].find(button => button.textContent === 'Start debug container')!
   expect(start.disabled).toBe(unknown)
   if (unknown) {
+    act(() => root.unmount())
+    render(client)
+    click('Debug')
+    const retry = [...document.querySelectorAll('button')].find(button => button.textContent === 'Start debug container')!
+    expect(retry.disabled).toBe(true)
     click('I checked the Pod YAML')
-    expect(start.disabled).toBe(false)
+    expect(retry.disabled).toBe(false)
   }
 })
