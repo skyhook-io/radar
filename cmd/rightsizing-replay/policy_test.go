@@ -173,9 +173,11 @@ func TestProvenanceAndIndependentSafety(t *testing.T) {
 		})
 	}
 	c := shadowCase("memory", "256Mi", 0, 7)
-	c.Row.CurrentPodOOM = true
-	c.Row.QueryError = "usage query failed"
-	c.Row.Decision = rightsizing.Decision{Status: rightsizing.DecisionNone}
+	c.Row = rightsizing.Row{
+		Container: "worker", Resource: "memory", Fit: rightsizing.FitInsufficientHistory,
+		CurrentPodOOM: true, QueryError: "usage query failed",
+		Decision: rightsizing.Decision{Status: rightsizing.DecisionNone},
+	}
 	c.Evidence = nil
 	r := Evaluate(c, 2)
 	if r.Status != "review" || !slices.Contains(r.Reasons, "current_pod_oom") || !slices.Contains(r.Reasons, "usage_query_failed") || slices.Contains(r.Reasons, c.Row.QueryError) {
