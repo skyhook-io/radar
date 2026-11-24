@@ -413,7 +413,7 @@ Proactive best-practices scanner with 48 checks across security, reliability, an
 - Security: privileged containers, privilege escalation, host namespaces, runtime socket mounts, secrets in ConfigMaps, and more
 - Reliability: missing probes, image tag `latest`, single-replica deployments, missing PDB/topology spread, deprecated API versions, CloudNativePG clusters with no backup destination, no WAL archiving, a single instance or the deprecated in-tree Barman backup
 - Efficiency: missing requests and limits, orphan ConfigMaps/Secrets, PVCs with no consumer observed, long-Pending PVCs, and Released or Failed PVs
-- Remediation guidance per finding, NSA/CISA and CIS framework labels, and per-resource opt-out via the `radarhq.io/ignore-checks` annotation
+- Remediation guidance per finding, NSA/CISA and CIS framework labels, and per-resource or per-namespace opt-out via the `radarhq.io/ignore-checks` annotation
 
 See [Cluster audit](https://radarhq.io/docs/features/cluster-audit) and [audit configuration](docs/configuration.md#per-resource-check-suppression).
 
@@ -493,6 +493,7 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets, 
 | **Karpenter** | NodePool, NodeClaim (+ provider-specific NodeClasses via auto-discovery) |
 | **OpenTelemetry Operator** | [OpenTelemetryCollector and Instrumentation](docs/integrations.md#opentelemetry-operator): reconciliation, configured pipelines and injection settings |
 | **Logging operator** | [Logging, Flows and outputs](docs/integrations.md#logging-operator): selection rules, redacted outputs, problem Issues, and "Log shipping" on every Pod |
+| **k3s Helm controller** | [HelmChart and HelmChartConfig](docs/integrations.md#k3s-helm-controller): `k3s` badge and a "change values in HelmChartConfig" note on the releases they install; values kept out of drawers, tables and the resource bodies sent to AI |
 | **System Upgrade Controller** | [Plan](docs/integrations.md#system-upgrade-controller): per-node upgrade progress, an Issue for an invalid Plan, and k3s/RKE2 upgrade Plans on the Upgrade impact page |
 | **Flagger** | [Canary and MetricTemplate](docs/integrations.md#flagger): recorded rollout state, target/autoscaler/template links and failed-rollout Issues |
 | **KEDA** | ScaledObject, ScaledJob, TriggerAuthentication, ClusterTriggerAuthentication |

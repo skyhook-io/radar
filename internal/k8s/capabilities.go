@@ -258,6 +258,8 @@ type FeatureCapabilities struct {
 	// POST /api/cronjobs/{namespace}/{name}/trigger accepts {"jobName": ...};
 	// an older Radar ignores the body and names the Job itself.
 	CronJobTriggerJobName bool `json:"cronJobTriggerJobName"`
+	// GET /api/sealedsecrets/cert
+	SealedSecretsCert bool `json:"sealedSecretsCert"`
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.

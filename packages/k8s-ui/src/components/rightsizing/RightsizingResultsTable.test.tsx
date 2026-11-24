@@ -212,6 +212,15 @@ describe('operator rightsizing results across clusters', () => {
     expect(local).toContain('select fewer namespaces in the top bar')
     expect(local).not.toContain('0.0 days')
     expect(local).not.toContain('Wait for more runtime history')
+    for (const [reason, label, action] of [
+      ['current_replicas_unverified', 'Current replicas unverified', 'Check that the Pods are Ready'],
+      ['current_pod_samples_missing', 'Current Pod samples missing', 'Check that cAdvisor retains Pod UIDs'],
+    ]) {
+      const missing = expandedRow({ ...measurement, recommendationReason: reason })
+      expect(missing).toContain(label)
+      expect(missing).toContain(action)
+      expect(missing).not.toContain('Wait for more runtime history')
+    }
     const short = expandedRow(measurement)
     expect(short).toContain('0.0 days')
     expect(short).toContain('Wait for more runtime history')

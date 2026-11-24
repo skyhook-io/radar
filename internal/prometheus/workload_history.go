@@ -31,8 +31,9 @@ type workloadPartitionMemo struct {
 }
 
 type workloadPartitionProof struct {
-	scope     prom.WorkloadMetricsScope
-	unlabeled bool
+	uidlessAnchors []prom.WorkloadPodIdentity
+	scope          prom.WorkloadMetricsScope
+	unlabeled      bool
 }
 
 type workloadHistoryPlan struct {
@@ -169,6 +170,18 @@ func probeHistoricalPartition(ctx context.Context, client *prom.Client, namespac
 			proof.scope.ClusterLabels, proof.unlabeled = nil, true
 			break
 		}
+	}
+	// Only a labeled inventory missing UIDs qualifies for the rightsizing
+	// fallback. An ambiguous UID, a truncated answer or an unlabeled store
+	// must retain its original decision.
+	if len(partition) == 0 && len(result.Series) > 0 {
+		emptyPartition := identityKey(nil, partitionLabels)
+		for _, row := range result.Series {
+			if row.Labels["uid"] != "" || identityKey(row.Labels, partitionLabels) == emptyPartition {
+				return proof, nil
+			}
+		}
+		proof.uidlessAnchors = anchors
 	}
 	return proof, nil
 }

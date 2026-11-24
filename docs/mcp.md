@@ -920,6 +920,8 @@ By default a scan returns only `oversized`, `under_requested` and `missing_reque
 
 `oomEvidenceAvailable` is emitted on **memory rows only**. It never gates a CPU recommendation, and a literal `false` there would read as an evidence gap. `throttleAvailable` is its CPU counterpart: on CPU rows only, and `false` means throttling was not measured — not that the container is unthrottled.
 
+When a recent container exit has no reliable cause, Radar withholds memory reductions for that container. Check the Pod’s current and last termination state and its events. A generic exit 137 or SIGKILL does not by itself establish an OOM. A verified OOM produces its own review reason.
+
 ### `state: partial` always names its cause
 
 A partial response carries a `reason`, and `guidance` names the causes that are actually present rather than listing every field that could explain one. Causes:

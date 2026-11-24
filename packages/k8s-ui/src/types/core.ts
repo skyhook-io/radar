@@ -228,6 +228,7 @@ export interface FeatureCapabilities {
   runtimeAdvisoryProgress?: boolean
   sealedSecretsController?: boolean // GET /api/sealedsecrets/controller
   cronJobTriggerJobName?: boolean
+  sealedSecretsCert?: boolean // GET /api/sealedsecrets/cert
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.
@@ -617,6 +618,21 @@ export interface TopologyGroup {
 }
 
 // Selected resource (for resources view drawer)
+// What installs and reconciles a Helm release. Tool is "flux", "k3s", or a
+// tool a newer Radar knows; consumers show Kind and the object for any tool.
+export interface HelmReleaseController {
+  tool: string
+  kind: string
+  group: string
+  namespace: string
+  name: string
+  // Where values are changed when that is a separate object. exists: true
+  // it was read, false a complete read found none (create it), absent unknown.
+  valuesRef?: { kind: string; group: string; namespace: string; name: string; exists?: boolean }
+  // k3s: the Addon (server manifest) that applies and re-applies the HelmChart.
+  addon?: string
+}
+
 export interface SelectedResource {
   kind: string
   namespace: string
@@ -1067,6 +1083,12 @@ export interface HelmRelease {
   managedByFlux?: boolean
   // Readable controller reference, in namespace/name form.
   managedByFluxHelmRelease?: string
+  // k3s/RKE2 ownership, kept when the controller (its HelmChart) is withheld.
+  managedByK3s?: boolean
+  // The controller that installs this release from its own definition (Flux,
+  // k3s, …); a Helm change made here can be overwritten by it. Older Radar sends only
+  // managedByFluxHelmRelease.
+  controller?: HelmReleaseController
 }
 
 export interface HelmRevision {
@@ -1147,6 +1169,12 @@ export interface HelmReleaseDetail {
   // Ownership is retained even when the controller reference is withheld.
   managedByFlux?: boolean
   managedByFluxHelmRelease?: string
+  // k3s/RKE2 ownership, kept when the controller (its HelmChart) is withheld.
+  managedByK3s?: boolean
+  // The controller that installs this release from its own definition (Flux,
+  // k3s, …); a Helm change made here can be overwritten by it. Older Radar sends only
+  // managedByFluxHelmRelease.
+  controller?: HelmReleaseController
 }
 
 export interface HelmHook {
@@ -1340,6 +1368,8 @@ export interface ObservedHelmRelease {
   healthSummary?: string
   // Absent doesn't mean Flux isn't managing it: its HelmRelease may be unreadable.
   managedByFluxHelmRelease?: string
+  // From objects the caller can read; absent doesn't mean none.
+  controller?: HelmReleaseController
 }
 
 // One entry of a Flux HelmRelease's status.history.
