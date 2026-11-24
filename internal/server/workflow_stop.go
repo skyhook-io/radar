@@ -118,6 +118,8 @@ func (s *Server) writeWorkflowStopError(w http.ResponseWriter, err error, namesp
 	switch {
 	case apierrors.IsNotFound(err):
 		s.writeError(w, http.StatusNotFound, "workflow not found")
+	case apierrors.IsUnauthorized(err):
+		s.writeError(w, http.StatusForbidden, "Kubernetes rejected the credentials for this request")
 	case apierrors.IsForbidden(err) && step == "read":
 		s.writeError(w, http.StatusForbidden, "failed to read workflow: "+err.Error())
 	case apierrors.IsForbidden(err):

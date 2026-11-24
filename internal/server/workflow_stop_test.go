@@ -171,6 +171,15 @@ func TestWorkflowStop(t *testing.T) {
 			t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
 		}
 	})
+	t.Run("rejected Kubernetes credentials return 403", func(t *testing.T) {
+		srv, dyn := workflowStopServer(t, testWorkflow("Running", ""))
+		dyn.PrependReactor("get", "workflows", func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewUnauthorized("test expired credential")
+		})
+		if rec := postStop(srv, "", nil); rec.Code != http.StatusForbidden || len(workflowPatches(dyn)) != 0 {
+			t.Fatalf("status = %d patches = %d", rec.Code, len(workflowPatches(dyn)))
+		}
+	})
 	// Shared without authentication: anyone who reaches Radar may stop a
 	// workflow as Radar's identity, like any workload action, but a web
 	// page in their browser may not.
@@ -205,7 +214,7 @@ func TestWorkflowStopReadsAndPatchesAsTheCaller(t *testing.T) {
 	t.Cleanup(func() { k8s.SetTestConfig(previous) })
 
 	router := chi.NewRouter()
-	router.Post("/api/workflows/{namespace}/{name}/stop", srv.handleWorkflowStop)
+	router.Post("/api/workflows/{namespace}/{name}/stop", srv.bindWrite(srv.handleWorkflowStop))
 	req := httptest.NewRequest(http.MethodPost, "/api/workflows/jobs/migrate-abcde/stop", nil)
 	req = req.WithContext(auth.ContextWithUser(req.Context(), &auth.User{Username: "alice"}))
 	rec := httptest.NewRecorder()
