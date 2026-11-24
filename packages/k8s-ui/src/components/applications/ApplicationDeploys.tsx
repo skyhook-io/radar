@@ -13,14 +13,14 @@ export interface ApplicationDeploysProps {
   partialSources?: string[];
 }
 
-export interface SyncCommitMetadataProps {
+export interface ArgoSyncDetailsProps {
   source: AppSourceRef;
-  repoURL: string;
+  git: NonNullable<AppHistoryAnchor["git"]>;
   revision: string;
 }
 
 // The standalone UI package can render Kubernetes records without an Argo API connection.
-export const SyncCommitMetadataContext = createContext<ComponentType<SyncCommitMetadataProps> | null>(null);
+export const ArgoSyncDetailsContext = createContext<ComponentType<ArgoSyncDetailsProps> | null>(null);
 
 function SourceLink({ href, children }: { href: string; children: string }) {
   return <a href={href} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-medium text-accent-text hover:underline">{children}<ExternalLink aria-hidden className="h-3 w-3" /></a>;
@@ -32,7 +32,7 @@ export function DeliveryRecord({ record, source, onOpenSource }: {
   onOpenSource?: (source: AppSourceRef) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const CommitMetadata = useContext(SyncCommitMetadataContext);
+  const SyncDetails = useContext(ArgoSyncDetailsContext);
   const git = record.git;
   const revision = record.revision ?? "";
   const commit = git && commitURLForRepo(git.repoURL, revision);
@@ -51,7 +51,7 @@ export function DeliveryRecord({ record, source, onOpenSource }: {
       <div className="space-y-2 bg-theme-elevated px-5 py-3 text-sm text-theme-text-secondary">
         {git ? (
           <>
-            {open && CommitMetadata && <CommitMetadata source={source} revision={revision} repoURL={git.repoURL} />}
+            {open && SyncDetails && <SyncDetails source={source} revision={revision} git={git} />}
             {git.previousRevision && git.previousRevision !== revision && <p>
               Previous sync <code title={git.previousRevision}>{shortRevisionForCommit(git.previousRevision)}</code>
               {" → "}<code title={revision}>{shortRevisionForCommit(revision)}</code>

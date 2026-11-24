@@ -2994,6 +2994,40 @@ export function useArgoResourceDiff(
   });
 }
 
+export interface RenderedFieldChange {
+  path: string[];
+  before?: unknown;
+  after?: unknown;
+}
+
+export interface RenderedResourceChange {
+  group?: string;
+  kind: string;
+  namespace?: string;
+  name: string;
+  operation: "added" | "removed" | "modified";
+  fields: RenderedFieldChange[];
+}
+
+export interface RenderedSyncDiff {
+  changes: RenderedResourceChange[];
+  partial?: boolean;
+  secretsMasked?: boolean;
+}
+
+export function useArgoSyncDiff(namespace: string, name: string, syncID: string, previous: string, revision: string) {
+  const params = new URLSearchParams({ syncID, previous, revision });
+  return useQuery<RenderedSyncDiff>({
+    queryKey: ["argo-sync-diff", getApiBase(), namespace, name, syncID, previous, revision],
+    queryFn: ({ signal }) => fetchJSON(`/argo/applications/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/sync-diff?${params}`, signal),
+    // Results depend on today's render settings and the viewer's access.
+    gcTime: 0,
+    staleTime: 0,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+}
+
 // Git commit metadata for one deployed revision of an Argo CD Application.
 // Enabled only when a revision is known and the caller passes `enabled` (gated
 // on capabilities.revisionMetadataAvailable). Cached long — a resolved SHA's

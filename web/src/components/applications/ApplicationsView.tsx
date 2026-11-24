@@ -3,8 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   ApplicationsList,
   ApplicationDetail,
-  SyncCommitMetadataContext,
-  type SyncCommitMetadataProps,
+  ArgoSyncDetailsContext,
   ApplicationDeploys,
   applicationDeliveryRecords,
   CenteredEmpty,
@@ -49,8 +48,6 @@ import {
   useApplicationHistory,
   useApplications,
   useGitOpsTree,
-  useGitOpsInsights,
-  useArgoStatus,
   useHelmRelease,
   useIssues,
   useTopology,
@@ -61,21 +58,10 @@ import { useTimelineSource } from "../../context/TimelineSource";
 import { apiVersionToGroup, kindToPluralWithGroup, relatedResourcePath, withCrossViewParams } from "../../utils/navigation";
 import { WorkloadView } from "../workload/WorkloadView";
 import { ApplicationCostTab } from "../cost/ApplicationCostTab";
-import { RevisionMetaChip } from "../gitops/RevisionMetaChip";
+import { ArgoSyncDetails } from "./ArgoSyncDetails";
 import { WorkloadRevisionsButton } from "../workload/WorkloadRevisionsButton";
 import { useTimelineRetentionNote } from "../../context/TimelineCustomization";
 import { isOpenCostWorkloadKind } from "../cost/kinds";
-
-// Mount only inside an expanded sync row. Both integration status and the
-// per-application capability are shared queries across expanded records.
-function SyncCommitMetadata({ source, revision, repoURL }: SyncCommitMetadataProps) {
-  const status = useArgoStatus();
-  const insights = useGitOpsInsights("applications", source.namespace, status.data?.connected ? source.name : "", source.group);
-  const insight = insights.data;
-  if (status.isError || insights.isError || !insight?.capabilities?.revisionMetadataAvailable ||
-      insight.summary?.source?.split(" · ")[0] !== repoURL) return null;
-  return <div className="flex flex-wrap items-center gap-2"><RevisionMetaChip appNamespace={source.namespace} appName={source.name} revision={revision} /></div>;
-}
 
 type ApplicationRouteView = ApplicationView | "cost";
 
@@ -679,7 +665,7 @@ function AppDetailRoute({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <SyncCommitMetadataContext.Provider value={SyncCommitMetadata}>
+      <ArgoSyncDetailsContext.Provider value={ArgoSyncDetails}>
       <ApplicationDetail
         app={app}
         onBack={onBack}
@@ -756,7 +742,7 @@ function AppDetailRoute({
           </div>
         )}
       />
-      </SyncCommitMetadataContext.Provider>
+      </ArgoSyncDetailsContext.Provider>
     </div>
   );
 }

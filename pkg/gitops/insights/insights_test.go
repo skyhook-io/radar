@@ -3133,14 +3133,16 @@ func TestFluxHelmReleaseHistoryDistinguishesSnapshotsFromConditions(t *testing.T
 
 func TestBuildHistoryArgoCompareOnlyAdjacentSyncsFromSameSource(t *testing.T) {
 	entry := func(id int64, repo, path string) map[string]any {
-		return map[string]any{"id": id, "revision": fmt.Sprint(id), "source": map[string]any{"repoURL": repo, "path": path}}
+		return map[string]any{"id": id, "revision": fmt.Sprintf("%040x", id), "source": map[string]any{"repoURL": repo, "path": path}}
 	}
 	multi := entry(6, "repo", "prod")
 	multi["sources"] = []any{map[string]any{"repoURL": "other"}}
-	items := BuildHistory(argoApp(map[string]any{"history": []any{
+	root := argoApp(map[string]any{"history": []any{
 		entry(2, "repo", "prod"), entry(1, "repo", "prod"), entry(4, "repo", "prod"),
 		entry(5, "other", "prod"), multi, entry(7, "repo", "prod"), entry(8, "repo", "stage"),
-	}}))
+	}})
+	root.Object["spec"].(map[string]any)["source"] = map[string]any{"repoURL": "repo", "path": "prod"}
+	items := BuildHistory(root)
 	for _, item := range items {
 		if item.ID == "6" {
 			if item.Git != nil {
@@ -3148,12 +3150,12 @@ func TestBuildHistoryArgoCompareOnlyAdjacentSyncsFromSameSource(t *testing.T) {
 			}
 			continue
 		}
-		want := ""
+		want, wantID := "", ""
 		if item.ID == "2" {
-			want = "1"
+			want, wantID = fmt.Sprintf("%040x", 1), "2"
 		}
-		if item.Git == nil || item.Git.PreviousRevision != want {
-			t.Errorf("sync %s git = %+v, want previous %q", item.ID, item.Git, want)
+		if item.Git == nil || item.Git.PreviousRevision != want || item.Git.HistoryID != wantID {
+			t.Errorf("sync %s git = %+v, want previous %q and history ID %q", item.ID, item.Git, want, wantID)
 		}
 	}
 }

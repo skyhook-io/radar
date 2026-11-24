@@ -300,6 +300,8 @@ type SyncGitSource struct {
 	// PreviousRevision is from the immediately preceding retained history ID
 	// for this application, only when both syncs used the same repository and path.
 	PreviousRevision string `json:"previousRevision,omitempty"`
+	// HistoryID identifies a sync eligible for an Argo API render comparison.
+	HistoryID string `json:"historyID,omitempty"`
 }
 
 type HistoryItem struct {
@@ -1548,6 +1550,7 @@ func buildHistory(root *unstructured.Unstructured, tool string) []HistoryItem {
 			}
 			out = append(out, HistoryItem{Git: gitSource, ID: id, Revision: argoRevisionLabel(m), DeployedAt: gitops.StringValue(m["deployedAt"]), Source: argoSourceLabel(m), InitiatedBy: initiatedBy, Rollbackable: &rollbackable, RollbackMultiSourceWarning: len(currentSources) > 0 || len(sources) > 0 || len(revisions) > 0})
 		}
+		renderable := gitops.RenderableArgoSyncPairs(root)
 		byID := make(map[int64]HistoryItem, len(out))
 		for _, item := range out {
 			if id, err := strconv.ParseInt(item.ID, 10, 64); err == nil {
@@ -1559,6 +1562,9 @@ func buildHistory(root *unstructured.Unstructured, tool string) []HistoryItem {
 			prev := byID[id-1]
 			if err == nil && id > 0 && item.Git != nil && prev.Git != nil && item.Git.RepoURL == prev.Git.RepoURL && item.Git.Path == prev.Git.Path {
 				item.Git.PreviousRevision = prev.Revision
+				if _, ok := renderable[id]; ok {
+					item.Git.HistoryID = item.ID
+				}
 			}
 		}
 		if op, ok, _ := unstructured.NestedMap(root.Object, "status", "operationState"); ok {
