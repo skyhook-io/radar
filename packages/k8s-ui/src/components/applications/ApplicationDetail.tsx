@@ -748,7 +748,7 @@ export function ApplicationDetail({
           ) : (
             <h1 className="min-w-0 truncate text-xl font-semibold text-theme-text-primary lg:text-2xl">{app.name}</h1>
           )}
-          {!singleWorkloadScope && workloads.length > 0 && (
+          {unavailable == null && !singleWorkloadScope && workloads.length > 0 && (
             <>
               <span className="shrink-0 text-theme-text-tertiary">/</span>
               <ApplicationScopeSelector
@@ -1132,7 +1132,7 @@ function ApplicationWorkspace({
           onSelectWorkload={onSelectWorkload}
           onNavigateToResource={onNavigateToResource}
           history={history}
-          onSelectHistory={() => onViewChange("history")}
+          onSelectHistory={offeredViews.includes("history") ? () => onViewChange("history") : undefined}
           onOpenSource={onOpenSource}
           renderOverviewIssues={renderOverviewIssues}
           hasOverviewIssues={hasOverviewIssues}
@@ -1322,7 +1322,7 @@ function ApplicationOverview({
     group?: string;
   }) => void;
   history?: AppHistory;
-  onSelectHistory: () => void;
+  onSelectHistory?: () => void;
   onOpenSource?: (source: AppSourceRef) => void;
   renderOverviewIssues?: () => ReactNode;
   hasOverviewIssues?: boolean;
@@ -2127,7 +2127,7 @@ function ApplicationLatestHistory({
   history?: AppHistory;
   sourceRef?: AppSourceRef;
   showIncidentPreview?: boolean;
-  onSelectHistory: () => void;
+  onSelectHistory?: () => void;
   onOpenSource?: (source: AppSourceRef) => void;
 }) {
   const summary = history?.summary;
@@ -2172,13 +2172,13 @@ function ApplicationLatestHistory({
               {sourceLinkLabel(resolvedSource)}
             </button>
           )}
-          <button
+          {onSelectHistory && <button
             type="button"
             onClick={onSelectHistory}
             className="rounded-md px-2.5 py-1.5 text-sm font-medium text-accent-text hover:bg-theme-hover"
           >
             View timeline
-          </button>
+          </button>}
         </div>
       </div>
     </section>
@@ -2193,7 +2193,7 @@ function ApplicationLatestChangeFact({
 }: {
   summary: NonNullable<AppHistory["summary"]>;
   sourceRef?: AppSourceRef;
-  onSelectHistory: () => void;
+  onSelectHistory?: () => void;
   onOpenSource?: (source: AppSourceRef) => void;
 }) {
   return (
@@ -2202,13 +2202,13 @@ function ApplicationLatestChangeFact({
         <div className="text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
           Latest change
         </div>
-        <button
+        {onSelectHistory && <button
           type="button"
           onClick={onSelectHistory}
           className="shrink-0 text-xs font-medium text-accent-text hover:underline"
         >
           History
-        </button>
+        </button>}
       </div>
       <div className="mt-1 truncate text-sm font-semibold text-theme-text-primary">
         {summary.title}
