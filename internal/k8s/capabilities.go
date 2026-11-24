@@ -259,6 +259,8 @@ type FeatureCapabilities struct {
 	CronJobTriggerJobName bool `json:"cronJobTriggerJobName"`
 	// GET /api/sealedsecrets/cert
 	SealedSecretsCert bool `json:"sealedSecretsCert"`
+	// POST /api/workflows/{namespace}/{name}/stop
+	WorkflowStop bool `json:"workflowStop"`
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.

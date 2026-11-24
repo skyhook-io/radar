@@ -985,6 +985,8 @@ are redacted in its column and drawer; the YAML view and MCP show the object as 
 | WorkflowTemplate | `argoproj.io/v1alpha1` | — | Yes | — |
 | CronWorkflow | `argoproj.io/v1alpha1` | — | Generic | — |
 
+**Stop a Workflow:** `POST /api/workflows/{namespace}/{name}/stop` with an optional `{"strategy": "Terminate" | "Stop"}` (default `Terminate`) sets `spec.shutdown`, as `argo terminate` and `argo stop` do: Terminate ends the run now and skips exit handlers; Stop runs them first. The read and the merge patch run as the caller, so Kubernetes RBAC decides (`get` and `patch workflows`); without authentication that is Radar's own identity, like every workload action, while a page on another site is refused. The patch carries the resourceVersion that was read, so a Workflow that changes in between is a 409. Radar records `radar.skyhook.io/stopped-at` and, with authentication, `radar.skyhook.io/stopped-by` (the caller); requests can't add annotations. A Workflow already stopping is a 200 with `changed: false`; a finished one (Succeeded, Failed, Error) is a 409. Capability `workflowStop`.
+
 ---
 
 ## Istio

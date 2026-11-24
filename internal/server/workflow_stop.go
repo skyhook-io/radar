@@ -1,0 +1,135 @@
+package server
+
+import (
+	"errors"
+	"log"
+	"net/http"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/integration"
+)
+
+var argoWorkflowGVR = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "workflows"}
+
+// Annotations Radar sets on a Workflow it stops. stopped-by is the
+// authenticated caller (absent when Radar runs without authentication).
+const (
+	workflowStoppedByAnnotation = "radar.skyhook.io/stopped-by"
+	workflowStoppedAtAnnotation = "radar.skyhook.io/stopped-at"
+)
+
+// WorkflowStopRequest picks how to stop. Terminate (the default) ends the
+// run now, skipping exit handlers; Stop ends it after running them, as
+// `argo terminate` and `argo stop` do.
+type WorkflowStopRequest struct {
+	Strategy string `json:"strategy"`
+}
+
+// WorkflowStopResponse is the Workflow's state after the request.
+type WorkflowStopResponse struct {
+	Shutdown string `json:"shutdown"`
+	// Changed is false when the Workflow was already stopping, which
+	// `argo terminate` also leaves alone.
+	Changed bool `json:"changed"`
+}
+
+// workflowFinishedPhases have nothing left to stop.
+var workflowFinishedPhases = map[string]bool{"Succeeded": true, "Failed": true, "Error": true}
+
+// handleWorkflowStop stops an Argo Workflow by setting spec.shutdown, which
+// the workflow controller acts on.
+//
+//	POST /api/workflows/{namespace}/{name}/stop  {"strategy": "Terminate"|"Stop"}
+//
+// The read and the merge patch run as the caller, so the apiserver decides
+// (`get` and `patch workflows`); without authentication that is Radar's own
+// identity, like every other workload action. The patch carries the
+// resourceVersion that was read, so a Workflow that finishes or changes in
+// between is refused (409), not overwritten. Radar records who stopped it and
+// when; the caller can't supply annotations. A finished Workflow is 409; one
+// already stopping is a 200 no-op.
+func (s *Server) handleWorkflowStop(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
+	namespace := chi.URLParam(r, "namespace")
+	name := chi.URLParam(r, "name")
+	req := WorkflowStopRequest{Strategy: "Terminate"}
+	if r.ContentLength != 0 {
+		if err := decodeBoundedJSONBody(w, r, 1<<10, &req); err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				s.writeError(w, http.StatusRequestEntityTooLarge, "request body is too large")
+				return
+			}
+			s.writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+			return
+		}
+		if req.Strategy == "" {
+			req.Strategy = "Terminate"
+		}
+	}
+	if req.Strategy != "Terminate" && req.Strategy != "Stop" {
+		s.writeError(w, http.StatusBadRequest, "strategy must be Terminate or Stop")
+		return
+	}
+
+	auth.AuditLog(r, namespace, name)
+	client := s.getDynamicClientForRequest(r)
+	if client == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
+		return
+	}
+	wf, err := client.Resource(argoWorkflowGVR).Namespace(namespace).Get(r.Context(), name, metav1.GetOptions{})
+	if err != nil {
+		s.writeWorkflowStopError(w, err, namespace, name, "read")
+		return
+	}
+	if current, _, _ := unstructured.NestedString(wf.Object, "spec", "shutdown"); current != "" {
+		s.writeJSON(w, WorkflowStopResponse{Shutdown: current})
+		return
+	}
+	if phase, _, _ := unstructured.NestedString(wf.Object, "status", "phase"); workflowFinishedPhases[phase] {
+		s.writeError(w, http.StatusConflict, "the workflow has already finished ("+phase+")")
+		return
+	}
+	annotations := map[string]any{workflowStoppedAtAnnotation: time.Now().UTC().Format(time.RFC3339)}
+	if u := auth.UserFromContext(r.Context()); u != nil && u.Username != "" {
+		annotations[workflowStoppedByAnnotation] = u.Username
+	}
+	err = integration.MergePatchAtVersion(r.Context(), client, argoWorkflowGVR, wf, map[string]any{
+		"metadata": map[string]any{"annotations": annotations},
+		"spec":     map[string]any{"shutdown": req.Strategy},
+	})
+	if err != nil {
+		s.writeWorkflowStopError(w, err, namespace, name, "patch")
+		return
+	}
+	s.writeJSON(w, WorkflowStopResponse{Shutdown: req.Strategy, Changed: true})
+}
+
+func (s *Server) writeWorkflowStopError(w http.ResponseWriter, err error, namespace, name, step string) {
+	switch {
+	case apierrors.IsNotFound(err):
+		s.writeError(w, http.StatusNotFound, "workflow not found")
+	case apierrors.IsForbidden(err) && step == "read":
+		s.writeError(w, http.StatusForbidden, "failed to read workflow: "+err.Error())
+	case apierrors.IsForbidden(err):
+		s.writeError(w, http.StatusForbidden, "failed to stop workflow: "+err.Error())
+	case apierrors.IsConflict(err):
+		s.writeError(w, http.StatusConflict, "the workflow changed while stopping it; look again")
+	case step == "read":
+		log.Printf("[workflows] Failed to read workflow %s/%s: %v", sanitizeForLog(namespace), sanitizeForLog(name), err)
+		s.writeError(w, http.StatusServiceUnavailable, "could not read the workflow")
+	default:
+		log.Printf("[workflows] Failed to stop workflow %s/%s: %v", sanitizeForLog(namespace), sanitizeForLog(name), err)
+		s.writeError(w, http.StatusInternalServerError, "could not stop the workflow")
+	}
+}
