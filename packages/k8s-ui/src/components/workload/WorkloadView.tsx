@@ -375,7 +375,7 @@ interface WorkloadViewProps {
   /** Expanded view: leave out the Overview's generic state/ready/pods strip for a host whose intro says state and readiness itself; a rollout in progress still shows above the tabs' content. */
   hideOverviewStats?: boolean
   /**
-   * Expanded view: leave out the Overview's configured values (the Serving
+   * Expanded Deployment, StatefulSet, and DaemonSet overview: leave out configured values (the Serving
    * configuration and Configuration inputs cards, and the Runtime card's
    * target replicas, strategy and autoscaler bounds) for a host whose own card
    * says them; live state (readiness, desired and current replicas, pods,
@@ -383,7 +383,7 @@ interface WorkloadViewProps {
    */
   hideOverviewConfig?: boolean
   /**
-   * Expanded view: lay the Overview out as one column of cards inside this
+   * Expanded Deployment, StatefulSet, and DaemonSet overview: use one column of cards inside this
    * container class (e.g. "mx-auto w-full max-w-5xl"), the way a host's own
    * tabs are, instead of Radar's grid with its side columns.
    */
@@ -393,8 +393,8 @@ interface WorkloadViewProps {
    * host that drops autoscaler condition churn). The Timeline tab keeps all.
    */
   overviewActivityFilter?: (event: TimelineEvent) => boolean
-  /** Built-in tabs the host leaves out (e.g. 'overview' when its own tab says more); the first shown tab is the fallback. */
-  hiddenTabs?: string[]
+  /** Expanded view: leave out these built-in tabs. Overview is the fallback when visible. */
+  hiddenTabs?: WorkloadTabType[]
   /** Expanded view: relabel, lead, or replace the whole "Spec & status" body. */
   specTab?: { label?: string; icon?: ReactNode; lead?: ReactNode; render?: () => ReactNode }
   /** Domain actions rendered in the header (drawer and expanded). */
@@ -1054,7 +1054,8 @@ export function WorkloadView({
   ]
   const shownTabs = expanded && hiddenTabs?.length ? tabs.map((t) => (hiddenTabs.includes(t.id) ? { ...t, hidden: true } : t)) : tabs
   const allTabs = orderById(mergeExtraTabs(shownTabs, expanded ? extraTabsForState : undefined), expanded ? tabOrder : undefined)
-  const requestedTabAvailable = allTabs.some((tab) => tab.id === requestedTab && !tab.hidden)
+  const tabIsVisible = (id: TabType) => allTabs.some((tab) => tab.id === id && !tab.hidden)
+  const requestedTabAvailable = tabIsVisible(requestedTab)
   // Overview, unless the host left it out: then the first tab shown.
   const fallbackTab = (allTabs.find((tab) => tab.id === 'overview' && !tab.hidden) ?? allTabs.find((tab) => !tab.hidden))?.id as TabType ?? 'overview'
   const effectiveTab: TabType = requestedTabAvailable ? requestedTab : fallbackTab
@@ -1064,6 +1065,7 @@ export function WorkloadView({
     !requestedTabAvailable &&
     (
       (expanded && !!hiddenTabs?.includes(requestedTab)) ||
+      (expanded && !tabs.some((tab) => tab.id === requestedTab)) ||
       (requestedTab === 'spec' && !!resource && !resourceLoading && !expandedSummary) ||
       (requestedTab === 'topology' && topologyTabHidden) ||
       (requestedTab === 'metrics' && (!renderMetricsTab || (!!resource && !resourceLoading && !showMetricsTab))) ||
@@ -1071,8 +1073,10 @@ export function WorkloadView({
       (requestedTab === 'logs' && logsFallbackReady)
     )
   useEffect(() => {
-    if (shouldCommitFallback && activeTab !== fallbackTab) onTabChange?.(fallbackTab, { replace: true })
-  }, [activeTab, onTabChange, shouldCommitFallback, fallbackTab])
+    if (!shouldCommitFallback) return
+    if (controlledTab === undefined) setInternalTab(fallbackTab)
+    onTabChange?.(fallbackTab, { replace: true })
+  }, [controlledTab, onTabChange, shouldCommitFallback, fallbackTab])
   const expandedOverview = expanded ? renderExpandedOverview?.({
     kind, apiKind, namespace, name, resource,
     leadContent: (hasOverviewLead ?? hasOperationalIssues) && renderOverviewLeadForState
@@ -1508,23 +1512,23 @@ export function WorkloadView({
               copied={copied}
               onSaveSecretValue={canUpdateSecrets && !resourceGone ? handleSaveSecretValue : undefined}
               isSavingSecret={isUpdatingResource}
-              onOpenLogs={handleOpenLogs}
-              onSwitchToTimeline={() => handleSetTab('timeline')}
-              onSwitchToLogs={logsTabVisible ? () => handleSetTab('logs') : undefined}
-              onSwitchToTopology={!topologyTabHidden ? () => handleSetTab('topology') : undefined}
+              onOpenLogs={tabIsVisible('logs') ? handleOpenLogs : undefined}
+              onSwitchToTimeline={tabIsVisible('timeline') ? () => handleSetTab('timeline') : undefined}
+              onSwitchToLogs={tabIsVisible('logs') ? () => handleSetTab('logs') : undefined}
+              onSwitchToTopology={tabIsVisible('topology') ? () => handleSetTab('topology') : undefined}
               rendererOverrides={rendererOverridesForState}
               resolvedEnvFrom={resolvedEnvFrom}
-              events={activityEvents}
+              events={effectiveTab === 'overview' ? activityEvents : overviewEvents}
               eventsLoading={overviewEventsLoading}
-              updates={activityUpdates}
-              activityHidden={overviewEvents.length - activityEvents.length + (resourceFocusedUpdates?.length ?? 0) - (activityUpdates?.length ?? 0)}
+              updates={effectiveTab === 'overview' ? activityUpdates : resourceFocusedUpdates}
+              activityHidden={effectiveTab === 'overview' ? overviewEvents.length - activityEvents.length + (resourceFocusedUpdates?.length ?? 0) - (activityUpdates?.length ?? 0) : 0}
               eventsError={overviewEventsError}
               updatesError={resourceFocusedUpdatesError}
               extraContent={renderOverviewExtraForState && renderOverviewExtraForState({ kind, namespace, name, group, context: 'expanded' })}
               introContent={overviewIntro}
-              hideStats={expanded && hideOverviewStats}
-              hideConfig={expanded && hideOverviewConfig}
-              column={expanded ? overviewColumn : undefined}
+              hideStats={effectiveTab === 'overview' && hideOverviewStats}
+              hideConfig={effectiveTab === 'overview' && hideOverviewConfig}
+              column={effectiveTab === 'overview' ? overviewColumn : undefined}
               leadContent={
                 // A host's spec lead replaces the operational issues there: its Overview already leads with them.
                 effectiveTab === 'spec' && specTab?.lead
@@ -4269,11 +4273,14 @@ function ActivityCard({
             </div>
           ))}
           {(events.length + updates.length) > EVENT_VISIBLE_LIMIT && (
-            <div className="text-xs text-theme-text-tertiary">Showing highest-signal recent events. Timeline has the full history.</div>
+            <div className="text-xs text-theme-text-tertiary">Showing highest-signal recent events.{onSwitchToTimeline && ' Timeline has the full history.'}</div>
           )}
         </div>
       ) : (
-        <div className="text-sm text-theme-text-tertiary">{hidden > 0 ? 'Nothing here to act on lately. Timeline has the full history.' : 'No recent activity captured.'}</div>
+        <div className="text-sm text-theme-text-tertiary">
+          {hidden > 0 ? 'Nothing here to act on lately.' : 'No recent activity captured.'}
+          {hidden > 0 && onSwitchToTimeline && ' Timeline has the full history.'}
+        </div>
       )}
       {eventsError && <div className="mt-2 text-xs text-red-500">Failed to load events: {eventsError.message}</div>}
       {updatesError && <div className="mt-2 text-xs text-red-500">Failed to load changes: {updatesError.message}</div>}
