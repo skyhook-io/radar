@@ -331,3 +331,22 @@ func TestFluxDependencyBlockerCarriesThePrerequisiteError(t *testing.T) {
 		t.Fatalf("unreadable prerequisite quoted: %+v", denied)
 	}
 }
+
+func TestFluxSourceWarningForGenerator(t *testing.T) {
+	root := fluxIssueObject("helm.toolkit.fluxcd.io", "HelmRelease", "team", "app", map[string]any{"chartRef": map[string]any{"kind": "ExternalArtifact", "name": "app"}}, "True", "Succeeded", "ok")
+	ea := fluxIssueObject("source.toolkit.fluxcd.io", "ExternalArtifact", "team", "app", map[string]any{"sourceRef": map[string]any{"apiVersion": "source.extensions.fluxcd.io/v1beta1", "kind": "ArtifactGenerator", "name": "gen"}}, "True", "Succeeded", "ok")
+	ea.Object["status"].(map[string]any)["artifact"] = map[string]any{"revision": "latest@sha256:abc"}
+	gen := fluxIssueObject("source.extensions.fluxcd.io", "ArtifactGenerator", "team", "gen", map[string]any{}, "False", "BuildFailed", "copy failed")
+	tree := fluxIssueTree(t, root, []*unstructured.Unstructured{ea, gen}, "")
+	issues := fluxSourceWarnings(tree, nil)
+	want := Ref{Group: "source.extensions.fluxcd.io", Kind: "ArtifactGenerator", Namespace: "team", Name: "gen"}
+	if len(issues) != 1 || issues[0].Reason != "SourceNotReady" || !reflect.DeepEqual(issues[0].Refs, []Ref{want}) {
+		t.Fatalf("issues = %+v", issues)
+	}
+	// Paused on purpose: the stale Ready=False is not a failure to fix.
+	gen.SetAnnotations(map[string]string{"source.extensions.fluxcd.io/reconcile": "disabled"})
+	tree = fluxIssueTree(t, root, []*unstructured.Unstructured{ea, gen}, "")
+	if issues := fluxSourceWarnings(tree, nil); len(issues) != 0 {
+		t.Fatalf("paused generator warned: %+v", issues)
+	}
+}

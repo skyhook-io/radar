@@ -195,7 +195,8 @@ import type { Issue } from '../issues/types'
 import { issueTitle } from '../issues/severity'
 import { SEVERITY_TEXT_CLASS } from '../checks/severity'
 // CRD-specific cell components (extracted)
-import { GitRepositoryCell, OCIRepositoryCell, HelmRepositoryCell, KustomizationCell, FluxHelmReleaseCell, FluxAlertCell } from './renderers/flux-cells'
+import { GitRepositoryCell, OCIRepositoryCell, HelmRepositoryCell, KustomizationCell, FluxHelmReleaseCell, FluxAlertCell, ExternalArtifactCell, ArtifactGeneratorCell } from './renderers/flux-cells'
+import { getArtifactGeneratorCount } from './resource-utils-flux'
 import { ArgoApplicationCell, ArgoApplicationSetCell, ArgoAppProjectCell } from './renderers/argo-cells'
 import { VulnerabilityReportCell, ConfigAuditReportCell, ExposedSecretReportCell, RbacAssessmentReportCell, ClusterComplianceReportCell, SbomReportCell } from './renderers/trivy-cells'
 import { CertificateCell, CertificateRequestCell, ClusterIssuerCell, IssuerCell, OrderCell, ChallengeCell } from './renderers/certmanager-cells'
@@ -415,7 +416,7 @@ function phonePinnedLeft(compareMode: boolean | undefined, showCheckbox: boolean
 // Built-in sortable keys. Hoisted so getColumnMinWidth can reserve room for the
 // sort icon without the header render and the width math drifting apart.
 const BUILTIN_SORTABLE_COLUMN_KEYS = new Set([
-  'connectCluster', 'connectorClass', 'connectorTasks',
+  'connectCluster', 'connectorClass', 'connectorTasks', 'artifacts',
   'kafkaVersion', 'kafkaWarnings', 'kafkaPools', 'kafkaListeners', 'poolKafka', 'poolRoles', 'poolReplicas',
   'snapshotSource', 'restoreSize', 'snapshotClass', 'snapshotContent', 'snapshotTaken', 'snapshotRef', 'snapshotDriver', 'deletionPolicy', 'defaultClass',
   'poolAddresses', 'poolAssigned', 'poolAutoAssign', 'poolAvoidBuggyIPs', 'advertisedPools', 'advertisedNodes', 'l2Interfaces', 'bgpPeers', 'bgpCommunities',
@@ -1963,6 +1964,23 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   // ============================================================================
   // FLUXCD GITOPS RESOURCES
   // ============================================================================
+  externalartifacts: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'producer', label: 'Produced by', width: 'w-48', tooltip: 'What produces this artifact: its ArtifactGenerator, or the kind and name its spec.sourceRef names' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'revision', label: 'Revision', width: 'w-48', tooltip: 'Artifact revision (tag and digest)' },
+    { key: 'size', label: 'Size', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  artifactgenerators: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'sources', label: 'Sources', width: 'w-64', tooltip: 'alias→source the generator copies from' },
+    { key: 'artifacts', label: 'Artifacts', width: 'w-24', tooltip: 'ExternalArtifacts it generates' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
   fluxinstances: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
@@ -3320,6 +3338,8 @@ const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   knativeroutes: ['serving.knative.dev'],
   knativeservices: ['serving.knative.dev'],
   gitrepositories: ['source.toolkit.fluxcd.io'],
+  externalartifacts: ['source.toolkit.fluxcd.io'],
+  artifactgenerators: ['source.extensions.fluxcd.io'],
   fluxinstances: ['fluxcd.controlplane.io'],
   fluxreports: ['fluxcd.controlplane.io'],
   resourcesets: ['fluxcd.controlplane.io'],
@@ -5938,6 +5958,8 @@ export function ResourcesView({
         if (kindLower === 'nodes') return getNodeGpuCount(resource)
         return 0
       }
+      case 'artifacts':
+        return kindLower === 'artifactgenerators' ? (getArtifactGeneratorCount(resource) ?? -1) : ''
       default:
         return ''
     }
@@ -8462,6 +8484,12 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
     case 'events':
       return <EventCell resource={resource} column={column} />
     // FluxCD GitOps resources
+    case 'externalartifacts':
+      if (!isApiGroup(resource.apiVersion, 'source.toolkit.fluxcd.io')) return <GenericCell resource={resource} column={column} />
+      return <ExternalArtifactCell resource={resource} column={column} />
+    case 'artifactgenerators':
+      if (!isApiGroup(resource.apiVersion, 'source.extensions.fluxcd.io')) return <GenericCell resource={resource} column={column} />
+      return <ArtifactGeneratorCell resource={resource} column={column} />
     case 'gitrepositories':
       return <GitRepositoryCell resource={resource} column={column} />
     case 'ocirepositories':
