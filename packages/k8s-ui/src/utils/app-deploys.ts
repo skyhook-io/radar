@@ -116,13 +116,9 @@ function predatesRevisionSignals({ ref, revisions = [] }: AppDeployWorkloadInput
   return ref.kind === 'Deployment' && revisions.length > 0 && revisions.every((r) => r.serving === undefined && r.readyReplicas === undefined)
 }
 
-function liveOf(kind: string, revision: WorkloadRevision, revisions: WorkloadRevision[]): boolean | 'unknown' {
-  if (kind === 'Rollout' && revision.serving === undefined) {
-    if (!revisions.some((r) => r.isStable)) return 'unknown'
-    if (revision.readyReplicas === 0) return false
-    // Canary pods can be ready without taking traffic.
-    return revision.isStable && revision.readyReplicas !== undefined ? true : 'unknown'
-  }
+function liveOf(kind: string, revision: WorkloadRevision): boolean | 'unknown' {
+  // Ready canary pods may have zero traffic weight, even on the stable revision.
+  if (kind === 'Rollout' && revision.serving === undefined && revision.readyReplicas === 0) return false
   return revision.serving ?? 'unknown'
 }
 
@@ -267,7 +263,7 @@ function revisionRows(input: AppDeployWorkloadInput, anchors: AppHistoryAnchor[]
       via: pairing ? pairedVia(pairing, version) : ownCause,
       repeatedCause: !pairing && !ownCause ? cause : undefined,
       at: revision.createdAt,
-      live: liveOf(ref.kind, revision, revisions),
+      live: liveOf(ref.kind, revision),
       newest: revision.matchesDesired ?? revision.isCurrent,
       status: folded?.status,
       detail: folded?.message,

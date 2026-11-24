@@ -105,7 +105,7 @@ describe('buildAppDeploys', () => {
     expect(rows[0]).toMatchObject({ ready: 3, desired: 3 })
   })
 
-  it('uses isStable and isCurrent for a canary Rollout', () => {
+  it('keeps traffic unknown for ready canary pods, including the stable revision at zero weight', () => {
     const { rows } = buildAppDeploys({
       workloads: [{
         ref: { kind: 'Rollout', namespace: 'prod', name: 'storefront', group: 'argoproj.io' },
@@ -117,7 +117,7 @@ describe('buildAppDeploys', () => {
       }],
     })
     expect(byRevision(rows).get(3)).toMatchObject({ live: 'unknown', newest: true, ready: 1, desired: 1 })
-    expect(byRevision(rows).get(2)).toMatchObject({ live: true, newest: false, ready: 4 })
+    expect(byRevision(rows).get(2)).toMatchObject({ live: 'unknown', newest: false, ready: 4 })
     expect(byRevision(rows).get(1)).toMatchObject({ live: false, newest: false })
   })
 
