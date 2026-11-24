@@ -6,9 +6,10 @@ describe('canonicalResourceGroup', () => {
     const resources = [
       { kind: 'MutatingAdmissionPolicy', name: 'mutatingadmissionpolicies' },
       { kind: 'MutatingAdmissionPolicyBinding', name: 'mutatingadmissionpolicybindings' },
-    ].map(kind => ({ ...kind, group: 'admissionregistration.k8s.io', version: 'v1beta1', namespaced: false, isCrd: false, verbs: ['list'] }))
+    ].map(kind => ({ ...kind, group: 'admissionregistration.k8s.io', version: 'v1beta1', namespaced: false, isCrd: false, featured: true, verbs: ['list'] }))
     const config = (r: typeof resources) => categorizeResources(r).find(c => c.name === 'Configuration')?.resources.map(x => x.kind)
     expect(config([])).not.toContain(resources[0].kind)
+    expect(categorizeResources(resources).filter(c => c.resources.some(r => r.kind === resources[0].kind)).map(c => c.name)).toEqual(['Configuration'])
     expect(config(resources)).toEqual(expect.arrayContaining(resources.map(r => r.kind)))
     expect(config(resources.map(r => ({ ...r, verbs: ['get'] })))).not.toContain(resources[1].kind)
   })

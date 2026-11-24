@@ -141,7 +141,6 @@ export function categorizeResources(resources: APIResource[]): ResourceCategory[
   const storage = coreResources.filter(r => STORAGE_KINDS.includes(r.kind))
   const accessControl = coreResources.filter(r => ACCESS_CONTROL_KINDS.includes(r.kind))
   const cluster = coreResources.filter(r => CLUSTER_KINDS.includes(r.kind))
-  const otherKubernetesAPIs = coreResources.filter(r => r.featured)
 
   const crds = uniqueResources.filter(r => r.isCrd)
   const crdGroups = new Map<string, APIResource[]>()
@@ -157,7 +156,8 @@ export function categorizeResources(resources: APIResource[]): ResourceCategory[
   addToCategory('Storage', storage)
   addToCategory('Access Control', accessControl)
   addToCategory('Cluster', cluster)
-  addToCategory('Other Kubernetes APIs', otherKubernetesAPIs)
+  const categorized = new Set([...categoryMap.values()].flat())
+  addToCategory('Other Kubernetes APIs', coreResources.filter(r => r.featured && !categorized.has(r)))
 
   for (const [group, groupResources] of crdGroups) {
     addToCategory(formatGroupName(group), groupResources)

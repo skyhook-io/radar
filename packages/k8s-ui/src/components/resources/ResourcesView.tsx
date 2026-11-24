@@ -8490,6 +8490,7 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       return <RuntimeClassCell resource={resource} column={column} />
     case 'mutatingadmissionpolicies':
     case 'mutatingadmissionpolicybindings':
+      if (!isApiGroup(resource.apiVersion, 'admissionregistration.k8s.io')) return <GenericCell resource={resource} column={column} />
       return <span className="text-sm text-theme-text-secondary">{getCellFilterValue(resource, column, kind) || '—'}</span>
     case 'mutatingwebhookconfigurations':
     case 'validatingwebhookconfigurations':

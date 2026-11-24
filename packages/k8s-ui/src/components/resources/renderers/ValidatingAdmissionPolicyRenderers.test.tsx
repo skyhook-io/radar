@@ -191,6 +191,7 @@ describe('ValidatingAdmissionPolicy renderers', () => {
       metadata: { name: 'require-owner-prod' },
       spec: { policyName: 'require-owner', validationActions: ['Deny'], paramRef: { name: 'strict', parameterNotFoundAction: 'Deny' } },
     }} onNavigate={() => {}} />)
+    expect(html).toContain('This binding adds no filters')
     expect(html).toContain('evaluated object’s namespace')
     expect(html).not.toContain('Not specified')
   })

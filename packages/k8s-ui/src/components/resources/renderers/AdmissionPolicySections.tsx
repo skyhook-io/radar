@@ -119,10 +119,16 @@ export function BindingScope({ data }: { data: any }) {
     <Section title="Parameter Reference" icon={Braces} defaultExpanded>
       <ParameterReference data={data} />
     </Section>
-    <MatchConstraints value={data?.spec?.matchResources} title="Binding Match Constraints" />
-    <div className="text-xs text-theme-text-tertiary">
+    {data?.spec?.matchResources ? (
+      <MatchConstraints value={data.spec.matchResources} title="Binding Match Constraints" />
+    ) : (
+      <Section title="Binding Match Constraints" icon={Filter} defaultExpanded>
+        <div className="text-sm text-theme-text-secondary">This binding adds no filters to the policy’s match constraints.</div>
+      </Section>
+    )}
+    {data?.spec?.matchResources && <div className="text-xs text-theme-text-tertiary">
       The effective scope is the intersection of this binding’s match constraints and the policy’s match constraints.
-    </div>
+    </div>}
   </>
 }
 
