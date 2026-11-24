@@ -32,11 +32,7 @@ func gkeFrontendCandidate(s *corev1.Service) bool {
 	if s == nil || s.Spec.Type == corev1.ServiceTypeExternalName || len(s.Spec.Selector) == 0 || len(s.Spec.Ports) == 0 {
 		return false
 	}
-	// These namespaces hold Google's managed collection or its operator. An
-	// arbitrary workload namespace is not a trusted source of cluster charts.
-	return (s.Namespace == "gmp-public" || s.Namespace == "gmp-system" || s.Namespace == "gke-gmp-system") &&
-		(s.Name == "frontend" || s.Name == "gmp-frontend")
-
+	return prom.IsGMPFrontendLocation(s.Namespace, s.Name)
 }
 
 func gkeFrontendPort(s *corev1.Service, pods []corev1.Pod) (corev1.ServicePort, bool) {
@@ -136,16 +132,83 @@ func (c *Client) gkeClusterScope(ctx context.Context) (ClusterScope, string, boo
 	return s, m, true
 }
 
+func (c *Client) gkeCheckFreshLocked(gen uint64) bool {
+	return c.gkeGeneration == gen && !c.gkeChecked.IsZero() && (c.gke == nil || c.gkeActiveLocked()) && time.Since(c.gkeChecked) < time.Minute
+}
+
+func (c *Client) gkeReader(ctx context.Context, gen uint64, regularErr error) *gkeMetrics {
+	if ctx.Err() != nil {
+		return nil
+	}
+	c.mu.RLock()
+	fresh := c.gkeCheckFreshLocked(gen)
+	revision := c.gkeRevision
+	c.mu.RUnlock()
+	if !fresh {
+		ch := c.gkeSF.DoChan(fmt.Sprintf("%d/%d", gen, revision), func() (any, error) {
+			c.findGKEChartStore(context.WithoutCancel(ctx), gen, regularErr)
+			return nil, nil
+		})
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ch:
+		}
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.discoveryGen != gen || !c.gkeActiveLocked() {
+		return nil
+	}
+	return c.gke
+}
+
+func (c *Client) connectWithGKE(ctx context.Context) (string, string, error) {
+	gen := c.DiscoveryGeneration()
+	addr, path, err := c.EnsureConnected(ctx)
+	c.gkeReader(ctx, gen, err)
+	return addr, path, err
+}
+
+type chartStores struct {
+	standard   boundStore
+	native     *gkeMetrics
+	supplement func(context.Context) (*gkeMetrics, error)
+}
+
+// Conventional reads do not wait for an optional native probe. A chart that
+// needs it reuses the same discovery pass's Kubernetes Service inventory.
+func (c *Client) chartStores(ctx context.Context) chartStores {
+	if g := c.cachedNativeCharts(); g != nil {
+		return chartStores{native: g}
+	}
+	gen := c.DiscoveryGeneration()
+	standard, err := c.bindStore(ctx)
+	if err != nil {
+		return chartStores{standard: standard, native: c.gkeReader(ctx, gen, err)}
+	}
+	return chartStores{standard: standard, supplement: func(ctx context.Context) (*gkeMetrics, error) {
+		if !c.ConnectionCurrent(standard.conn) {
+			return nil, errDiscoverySuperseded
+		}
+		g := c.gkeReader(ctx, standard.conn.generation, nil)
+		if !c.ConnectionCurrent(standard.conn) {
+			return nil, errDiscoverySuperseded
+		}
+		return g, ctx.Err()
+	}}
+}
+
 func (c *Client) findGKEChartStore(ctx context.Context, gen uint64, regularErr error) {
 	c.mu.RLock()
-	configured, regular := c.manualURL != "", c.baseURL != "" && !c.carettaStoreLocked()
+	configured := c.manualURL != ""
 	fallback := c.baseURL != ""
 	revision := c.gkeRevision
 	operatorScope := c.workloadScope
-	recent := c.gkeGeneration == gen && !c.gkeChecked.IsZero() && (c.gke == nil || c.gkeActiveLocked()) && (configured || time.Since(c.gkeChecked) < time.Minute)
+	recent := c.retired || c.discoveryGen != gen || c.gkeCheckFreshLocked(gen)
 	c.mu.RUnlock()
 	if recent || c.k8sClient == nil || c.k8sConfig == nil || ctx.Err() != nil ||
-		(configured && regularErr != nil) || (!configured && (regular || !(regularErr == nil || errors.Is(regularErr, ErrPrometheusNotFound) || IsUnreachable(regularErr)))) {
+		(configured && regularErr != nil) || (!configured && regularErr != nil && !errors.Is(regularErr, ErrPrometheusNotFound) && !IsUnreachable(regularErr)) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -154,7 +217,7 @@ func (c *Client) findGKEChartStore(ctx context.Context, gen uint64, regularErr e
 	defer func() {
 		c.mu.Lock()
 		defer c.mu.Unlock()
-		if c.discoveryGen == gen && c.gkeRevision == revision && c.workloadScope == operatorScope && !c.retired && ctx.Err() == nil {
+		if c.discoveryGen == gen && c.gkeRevision == revision && c.workloadScope == operatorScope && !c.retired {
 			if result != nil && c.gkeActiveLocked() && c.gke.matchers == result.matchers && c.gke.service == result.service && c.gke.portName == result.portName && c.gke.fallback == result.fallback && (!configured || c.gke.store == result.store) {
 				result = c.gke
 			}
@@ -163,7 +226,7 @@ func (c *Client) findGKEChartStore(ctx context.Context, gen uint64, regularErr e
 	}()
 	var candidates []*corev1.Service
 	if !configured {
-		candidates = c.gkeServiceCandidates(ctx)
+		candidates = c.gkeServiceCandidates(ctx, gen, revision)
 		if len(candidates) == 0 {
 			return
 		}
@@ -242,21 +305,26 @@ func (g *gkeMetrics) hasNodeMetrics(ctx context.Context, store *prom.Client) boo
 	return v != nil && *v > 0 && !math.IsInf(*v, 0)
 }
 
-func (c *Client) gkeServiceCandidates(ctx context.Context) []*corev1.Service {
-	svcs, ok := c.cachedServices()
-	if !ok {
-		list, err := c.k8sClient.CoreV1().Services("").List(ctx, metav1.ListOptions{})
-		if err != nil {
-			for _, ns := range []string{"gmp-public", "gmp-system", "gke-gmp-system"} {
-				for _, name := range []string{"gmp-frontend", "frontend"} {
-					if s, e := c.k8sClient.CoreV1().Services(ns).Get(ctx, name, metav1.GetOptions{}); e == nil {
-						svcs = append(svcs, s)
-					}
+func (c *Client) gkeServiceCandidates(ctx context.Context, gen, revision uint64) []*corev1.Service {
+	c.mu.RLock()
+	inventory := c.gkeServices
+	c.mu.RUnlock()
+	if inventory == nil || inventory.generation != gen || inventory.revision != revision || time.Since(inventory.at) >= time.Minute {
+		c.discoveryServices(ctx, gen)
+		c.mu.RLock()
+		inventory = c.gkeServices
+		c.mu.RUnlock()
+	}
+	if inventory == nil || inventory.generation != gen || inventory.revision != revision {
+		return nil
+	}
+	svcs := slices.Clone(inventory.services)
+	if !inventory.complete {
+		for _, ns := range []string{"gmp-public", "gmp-system", "gke-gmp-system"} {
+			for _, name := range []string{"gmp-frontend", "frontend"} {
+				if s, err := c.k8sClient.CoreV1().Services(ns).Get(ctx, name, metav1.GetOptions{}); err == nil {
+					svcs = append(svcs, s)
 				}
-			}
-		} else {
-			for i := range list.Items {
-				svcs = append(svcs, &list.Items[i])
 			}
 		}
 	}
@@ -289,14 +357,6 @@ func (c *Client) cachedNativeCharts() *gkeMetrics {
 	return c.gke
 }
 
-func (c *Client) ensureGKECharts(ctx context.Context) *gkeMetrics {
-	if g := c.cachedNativeCharts(); g != nil {
-		return g
-	}
-	_, _, _ = c.EnsureConnected(ctx)
-	return c.gkeChartStore()
-}
-
 func (c *Client) gkeChartStore() *gkeMetrics {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -313,11 +373,7 @@ func (c *Client) gkeActiveLocked() bool {
 	if c.gke.configured {
 		return c.manualURL != "" && c.baseURL != "" && c.gke.store == c.prom
 	}
-	return c.manualURL == "" && c.gke.fallback == (c.baseURL != "") && (c.baseURL == "" || c.carettaStoreLocked())
-}
-
-func (c *Client) carettaStoreLocked() bool {
-	return c.discoveryService != nil && c.discoveryService.Namespace == "caretta" && c.discoveryService.Name == "caretta-vm"
+	return c.manualURL == "" && c.gke.fallback == (c.baseURL != "")
 }
 
 func (c *Client) invalidateGKEService(source kubernetes.Interface, op string, svc *corev1.Service, oldObj any) bool {

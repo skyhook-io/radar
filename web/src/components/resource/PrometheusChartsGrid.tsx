@@ -1,3 +1,4 @@
+import { hasPrometheusCharts } from '../../api/prometheusCharts'
 import { clsx } from "clsx";
 import { useMemo, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -80,7 +81,7 @@ export function PrometheusChartsGrid({
   useAutoPromConnect();
   const { data: status, isLoading: statusLoading } = usePrometheusStatus();
   const connectMutation = usePrometheusConnect();
-  const isConnected = status?.connected === true || status?.gkeSystemMetrics === true;
+  const isConnected = hasPrometheusCharts(status);
   const isSupported = SUPPORTED_KINDS.has(kind);
   const isWorkload = ["Deployment", "StatefulSet", "DaemonSet"].includes(kind);
   const showRestartLane = isSupported && kind !== "Node";

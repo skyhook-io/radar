@@ -81,7 +81,7 @@ func handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 		client.mu.Unlock()
 	}
-	_, _, err := client.EnsureConnected(ctx)
+	_, _, err := client.connectWithGKE(ctx)
 	if err != nil && client.gkeChartStore() == nil {
 		log.Printf("[prometheus] Connection failed: %v", err)
 		if optional {
@@ -137,18 +137,24 @@ func parseTimeRange(rangeStr string) (start, end time.Time, step time.Duration) 
 	return end.Add(-r.duration), end, r.step
 }
 
+type chartMeasurement struct {
+	Source       string            `json:"source,omitempty"`
+	Result       *prom.QueryResult `json:"result"`
+	ClusterScope *ClusterScope     `json:"clusterScope,omitempty"`
+	Partial      bool              `json:"partial,omitempty"`
+	Query        string            `json:"query,omitempty"`
+	Hint         string            `json:"hint,omitempty"`
+}
+
 // ResourceMetricsResponse is the response shape for resource metrics.
 type ResourceMetricsResponse struct {
-	Source    string              `json:"source,omitempty"`
+	chartMeasurement
 	Kind      string              `json:"kind"`
 	Namespace string              `json:"namespace,omitempty"`
 	Name      string              `json:"name"`
 	Category  prom.MetricCategory `json:"category"`
 	Unit      string              `json:"unit"`
 	Range     string              `json:"range"`
-	Result    *prom.QueryResult   `json:"result"`
-	Query     string              `json:"query,omitempty"` // PromQL query used (included when result is empty for diagnostics)
-	Hint      string              `json:"hint,omitempty"`  // Contextual hint when results are empty (e.g. cri-docker label issues)
 	// Workload kinds carry the pods their query named, established by
 	// controller ownership: Pods counts them, PodsTotal the workload's full
 	// set when the cap cut the list. Pods is a pointer because zero is an
@@ -156,13 +162,6 @@ type ResourceMetricsResponse struct {
 	// distinct from a kind that has no pod scope at all, such as a Node.
 	Pods      *int `json:"pods,omitempty"`
 	PodsTotal int  `json:"podsTotal,omitempty"`
-	// ClusterScope is how the query was kept to this cluster in a store that
-	// may hold several; when it withholds, Result has no series and its note
-	// says why.
-	ClusterScope *ClusterScope `json:"clusterScope,omitempty"`
-	// Partial marks an answer the store returned with a partial or warning
-	// flag: drawn, but possibly missing samples.
-	Partial bool `json:"partial,omitempty"`
 }
 
 // restMaxScopePods caps the pod list a chart query names, bounding the regex
@@ -172,10 +171,11 @@ const restMaxScopePods = 500
 // chartDeps are what a chart needs beyond its request: the store, the scope
 // check and the resource cache that anchors it.
 type chartDeps struct {
-	gke     *gkeMetrics
-	q       RangeQuerier
-	resolve ChartScopeResolver
-	cache   *k8s.ResourceCache
+	gke        *gkeMetrics
+	supplement func(context.Context) (*gkeMetrics, error)
+	q          RangeQuerier
+	resolve    ChartScopeResolver
+	cache      *k8s.ResourceCache
 	// connectErr is why the store couldn't be connected; the chart answers
 	// it as a failed query before checking or querying anything.
 	connectErr error
@@ -190,6 +190,9 @@ func (d chartDeps) unconnected(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if errors.Is(d.connectErr, errDiscoverySuperseded) {
+		return errDiscoverySuperseded
+	}
 	return errChartQuery{d.connectErr}
 }
 
@@ -197,11 +200,8 @@ func (d chartDeps) unconnected(ctx context.Context) error {
 // check only on the connection that handle was taken from.
 func productionChartDeps(ctx context.Context, client *Client) chartDeps {
 	cache := k8s.GetResourceCache()
-	if g := client.cachedNativeCharts(); g != nil {
-		return chartDeps{gke: g, cache: cache}
-	}
-	store, err := client.bindStore(ctx)
-	return chartDeps{gke: client.gkeChartStore(), q: store, resolve: BoundResolver(client, store.conn, chartResolverFor(client, cache)), cache: cache, connectErr: err}
+	stores := client.chartStores(ctx)
+	return chartDeps{gke: stores.native, supplement: stores.supplement, q: stores.standard, resolve: BoundResolver(client, stores.standard.conn, chartResolverFor(client, cache)), cache: cache, connectErr: stores.standard.err}
 }
 
 // chartResolverFor builds the charts' check on the client's current
@@ -364,7 +364,6 @@ func resourceChartScopeRequest(kind, namespace, name string, category prom.Metri
 // resourceChart charts one Pod, Node or resolved workload kept to this
 // cluster.
 func resourceChart(ctx context.Context, d chartDeps, kind, namespace, name string, category prom.MetricCategory, rangeStr string, scope *PodScope) (ResourceMetricsResponse, error) {
-	start, end, step := parseTimeRange(rangeStr)
 	resp := ResourceMetricsResponse{
 		Kind:      kind,
 		Namespace: namespace,
@@ -378,47 +377,88 @@ func resourceChart(ctx context.Context, d chartDeps, kind, namespace, name strin
 		resp.Pods = &pods
 		resp.PodsTotal = scope.CurrentTotal
 	}
-	if d.gke != nil {
-		var regularEmpty *ResourceMetricsResponse
-		if d.gke.fallback {
-			standard := d
-			standard.gke = nil
-			regular, err := resourceChart(ctx, standard, kind, namespace, name, category, rangeStr, scope)
-			if err != nil || regular.Partial || (regular.Result != nil && len(regular.Result.Series) > 0) {
-				return regular, err
-			}
-			regularEmpty = &regular
+	var err error
+	resp.chartMeasurement, err = d.readChart(ctx, kind, namespace, name, category, rangeStr, scope)
+	return resp, err
+}
+
+// Each channel supplies one whole chart. Preserve conventional data, partial
+// results and failures; only replace a complete empty answer with native samples.
+func (d chartDeps) readChart(ctx context.Context, kind, namespace, name string, category prom.MetricCategory, rangeStr string, pods *PodScope) (chartMeasurement, error) {
+	start, end, step := parseTimeRange(rangeStr)
+	var conventional chartMeasurement
+	if d.gke == nil || d.gke.fallback {
+		var err error
+		conventional, err = d.readConventionalChart(ctx, kind, namespace, name, category, pods, start, end, step)
+		if (d.gke == nil && d.supplement == nil) || err != nil || conventional.Partial || hasSample(conventional.Result.Series) {
+			return conventional, err
 		}
-		if strings.EqualFold(kind, "Pod") && scope == nil {
-			if d.cache != nil && d.cache.Pods() != nil {
-				if p, err := d.cache.Pods().Pods(namespace).Get(name); err == nil && !p.CreationTimestamp.IsZero() {
-					current := PodScopeFromPods(kind, namespace, name, []*corev1.Pod{p}, 1)
-					scope = &current
-				}
-			}
-			if scope == nil {
-				if regularEmpty != nil {
-					return *regularEmpty, nil
-				}
-				resp.Source, resp.Result, resp.ClusterScope = "gke", emptyChartResult(), &d.gke.scope
-				resp.Hint = "The current Pod’s creation time is unavailable. Its history could include an earlier Pod with the same name."
-				return resp, nil
-			}
-		}
-		a, err := d.gke.chart(ctx, kind, namespace, name, category, scope, start, end, step)
-		if regularEmpty != nil && err == nil && !a.Partial && len(a.Result.Series) == 0 {
-			return *regularEmpty, nil
-		}
-		resp.Source, resp.Result, resp.Partial, resp.ClusterScope = "gke", a.Result, a.Partial, &d.gke.scope
-		return resp, err
 	}
+	if d.supplement != nil {
+		var err error
+		d.gke, err = d.supplement(ctx)
+		if err != nil {
+			return chartMeasurement{}, err
+		}
+		if d.gke == nil {
+			return conventional, nil
+		}
+	}
+	if strings.EqualFold(kind, "Pod") && pods == nil {
+		if d.cache != nil && d.cache.Pods() != nil {
+			if p, err := d.cache.Pods().Pods(namespace).Get(name); err == nil && !p.CreationTimestamp.IsZero() {
+				current := PodScopeFromPods(kind, namespace, name, []*corev1.Pod{p}, 1)
+				pods = &current
+			}
+		}
+		if pods == nil {
+			if d.gke.fallback {
+				return conventional, nil
+			}
+			return chartMeasurement{Source: "gke", ClusterScope: &d.gke.scope, Result: emptyChartResult(), Hint: "The current Pod’s creation time is unavailable. Its history could include an earlier Pod with the same name."}, nil
+		}
+	}
+	a, err := d.gke.chart(ctx, kind, namespace, name, category, pods, start, end, step)
+	if ctx.Err() != nil {
+		return chartMeasurement{}, ctx.Err()
+	}
+	if errors.Is(err, errDiscoverySuperseded) {
+		return chartMeasurement{}, err
+	}
+	if d.gke.fallback && (err != nil || !hasSample(a.Result.Series)) {
+		return conventional, nil
+	}
+	return chartMeasurement{Source: "gke", ClusterScope: &d.gke.scope, Result: a.Result, Partial: a.Partial}, err
+}
+
+func (d chartDeps) readConventionalChart(ctx context.Context, kind, namespace, name string, category prom.MetricCategory, pods *PodScope, start, end time.Time, step time.Duration) (chartMeasurement, error) {
+	var resp chartMeasurement
 	if err := d.unconnected(ctx); err != nil {
 		return resp, err
 	}
+	var req ViewScopeRequest
+	check := true
+	var build func(bool, prom.ClusterFilter) string
+	switch kind {
+	case "Cluster":
+		req = clusterChartScopeRequest(category, end.Sub(start), d.cache)
+		build = func(containers bool, filter prom.ClusterFilter) string {
+			return prom.BuildClusterQueryFiltered(category, containers, filter)
+		}
+	case "Namespace":
+		req = namespaceChartScopeRequest(namespace, category, end.Sub(start), d.cache)
+		build = func(containers bool, filter prom.ClusterFilter) string {
+			return prom.BuildNamespaceQueryFiltered(namespace, category, containers, filter)
+		}
+	default:
+		req, check = resourceChartScopeRequest(kind, namespace, name, category, end.Sub(start), pods, d.cache)
+		build = resourceChartQuery(kind, namespace, name, category, pods)
+	}
 	var view ViewScope
-	if req, ok := resourceChartScopeRequest(kind, namespace, name, category, chartRangeDuration(rangeStr), scope, d.cache); ok {
+	if check {
 		var err error
-		if view, err = ResolveChartScope(ctx, d.resolve, req); err != nil {
+		view, err = ResolveChartScope(ctx, d.resolve, req)
+		if err != nil {
 			return resp, err
 		}
 	}
@@ -427,22 +467,19 @@ func resourceChart(ctx context.Context, d chartDeps, kind, namespace, name strin
 		resp.Result = emptyChartResult()
 		return resp, nil
 	}
-
-	answer, err := QueryScopedChart(ctx, d.q, view, category, resourceChartQuery(kind, namespace, name, category, scope), start, end, step,
-		fmt.Sprintf("Primary query empty for %q/%q/%q (%q)", kind, namespace, name, category))
+	subject := fmt.Sprintf("%q/%q/%q (%q)", kind, namespace, name, category)
+	a, err := QueryScopedChart(ctx, d.q, view, category, build, start, end, step, "Primary query empty for "+subject)
 	if err != nil {
-		log.Printf("[prometheus] Query failed for %q/%q/%q (%q): %v", kind, namespace, name, category, err)
-		errorlog.Record("prometheus", "error", "query failed for %q/%q/%q (%q): %v", kind, namespace, name, category, err)
+		log.Printf("[prometheus] Query failed for %s: %v", subject, err)
+		errorlog.Record("prometheus", "error", "query failed for %s: %v", subject, err)
 		return resp, errChartQuery{err}
 	}
-	resp.Result, resp.Partial = answer.Result, answer.Partial
-	// Include the PromQL query when results are empty so users can diagnose
-	// label mismatches or missing metrics in their Prometheus instance.
-	if len(answer.Result.Series) == 0 {
-		resp.Query = answer.Query
+	resp.Result, resp.Partial = a.Result, a.Partial
+	if kind != "Cluster" && kind != "Namespace" && len(a.Result.Series) == 0 {
+		resp.Query = a.Query
 		resp.Hint = detectCRIDockerHint(kind, namespace, name)
-		log.Printf("[prometheus] Empty result for %q/%q/%q (%q), query: %q", kind, namespace, name, category, answer.Query)
-		errorlog.Record("prometheus", "warning", "empty result for %q/%q/%q (%q), query: %q", kind, namespace, name, category, answer.Query)
+		log.Printf("[prometheus] Empty result for %s, query: %q", subject, a.Query)
+		errorlog.Record("prometheus", "warning", "empty result for %s: %q", subject, a.Query)
 	}
 	return resp, nil
 }
@@ -502,14 +539,11 @@ func handleClusterScopedResourceMetrics(w http.ResponseWriter, r *http.Request) 
 
 // NamespaceMetricsResponse is the response shape for namespace-level metrics.
 type NamespaceMetricsResponse struct {
-	Source       string              `json:"source,omitempty"`
-	Namespace    string              `json:"namespace"`
-	Category     prom.MetricCategory `json:"category"`
-	Unit         string              `json:"unit"`
-	Range        string              `json:"range"`
-	Result       *prom.QueryResult   `json:"result"`
-	ClusterScope *ClusterScope       `json:"clusterScope,omitempty"`
-	Partial      bool                `json:"partial,omitempty"`
+	chartMeasurement
+	Namespace string              `json:"namespace"`
+	Category  prom.MetricCategory `json:"category"`
+	Unit      string              `json:"unit"`
+	Range     string              `json:"range"`
 }
 
 // handleNamespaceMetrics returns aggregate metrics for a namespace.
@@ -544,60 +578,16 @@ func handleNamespaceMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func namespaceChart(ctx context.Context, d chartDeps, namespace string, category prom.MetricCategory, rangeStr string) (NamespaceMetricsResponse, error) {
-	start, end, step := parseTimeRange(rangeStr)
-	resp := NamespaceMetricsResponse{Namespace: namespace, Category: category, Unit: prom.CategoryUnit(category), Range: rangeStr}
-	if d.gke != nil {
-		var regularEmpty *NamespaceMetricsResponse
-		if d.gke.fallback {
-			standard := d
-			standard.gke = nil
-			regular, err := namespaceChart(ctx, standard, namespace, category, rangeStr)
-			if err != nil || regular.Partial || (regular.Result != nil && len(regular.Result.Series) > 0) {
-				return regular, err
-			}
-			regularEmpty = &regular
-		}
-		a, err := d.gke.chart(ctx, "Namespace", namespace, "", category, nil, start, end, step)
-		if regularEmpty != nil && err == nil && !a.Partial && len(a.Result.Series) == 0 {
-			return *regularEmpty, nil
-		}
-		resp.Source, resp.Result, resp.Partial, resp.ClusterScope = "gke", a.Result, a.Partial, &d.gke.scope
-		return resp, err
-	}
-	if err := d.unconnected(ctx); err != nil {
-		return resp, err
-	}
-	view, err := ResolveChartScope(ctx, d.resolve, namespaceChartScopeRequest(namespace, category, chartRangeDuration(rangeStr), d.cache))
-	if err != nil {
-		return resp, err
-	}
-	resp.ClusterScope = ClusterScopeOf(view)
-	if view.Withheld {
-		resp.Result = emptyChartResult()
-		return resp, nil
-	}
-	build := func(filterContainer bool, filter prom.ClusterFilter) string {
-		return prom.BuildNamespaceQueryFiltered(namespace, category, filterContainer, filter)
-	}
-	answer, err := QueryScopedChart(ctx, d.q, view, category, build, start, end, step, fmt.Sprintf("Namespace query empty for %q (%q)", namespace, category))
-	if err != nil {
-		log.Printf("[prometheus] Namespace query failed for %q (%q): %v", namespace, category, err)
-		errorlog.Record("prometheus", "error", "namespace query failed for %q (%q): %v", namespace, category, err)
-		return resp, errChartQuery{err}
-	}
-	resp.Result, resp.Partial = answer.Result, answer.Partial
-	return resp, nil
+	chart, err := d.readChart(ctx, "Namespace", namespace, "", category, rangeStr, nil)
+	return NamespaceMetricsResponse{chartMeasurement: chart, Namespace: namespace, Category: category, Unit: prom.CategoryUnit(category), Range: rangeStr}, err
 }
 
 // ClusterMetricsResponse is the response shape for cluster-level metrics.
 type ClusterMetricsResponse struct {
-	Source       string              `json:"source,omitempty"`
-	Category     prom.MetricCategory `json:"category"`
-	Unit         string              `json:"unit"`
-	Range        string              `json:"range"`
-	Result       *prom.QueryResult   `json:"result"`
-	ClusterScope *ClusterScope       `json:"clusterScope,omitempty"`
-	Partial      bool                `json:"partial,omitempty"`
+	chartMeasurement
+	Category prom.MetricCategory `json:"category"`
+	Unit     string              `json:"unit"`
+	Range    string              `json:"range"`
 }
 
 // handleClusterMetrics returns aggregate metrics for the entire cluster.
@@ -632,49 +622,8 @@ func handleClusterMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func clusterChart(ctx context.Context, d chartDeps, category prom.MetricCategory, rangeStr string) (ClusterMetricsResponse, error) {
-	start, end, step := parseTimeRange(rangeStr)
-	resp := ClusterMetricsResponse{Category: category, Unit: prom.CategoryUnit(category), Range: rangeStr}
-	if d.gke != nil {
-		var regularEmpty *ClusterMetricsResponse
-		if d.gke.fallback {
-			standard := d
-			standard.gke = nil
-			regular, err := clusterChart(ctx, standard, category, rangeStr)
-			if err != nil || regular.Partial || (regular.Result != nil && len(regular.Result.Series) > 0) {
-				return regular, err
-			}
-			regularEmpty = &regular
-		}
-		a, err := d.gke.chart(ctx, "Cluster", "", "", category, nil, start, end, step)
-		if regularEmpty != nil && err == nil && !a.Partial && len(a.Result.Series) == 0 {
-			return *regularEmpty, nil
-		}
-		resp.Source, resp.Result, resp.Partial, resp.ClusterScope = "gke", a.Result, a.Partial, &d.gke.scope
-		return resp, err
-	}
-	if err := d.unconnected(ctx); err != nil {
-		return resp, err
-	}
-	view, err := ResolveChartScope(ctx, d.resolve, clusterChartScopeRequest(category, chartRangeDuration(rangeStr), d.cache))
-	if err != nil {
-		return resp, err
-	}
-	resp.ClusterScope = ClusterScopeOf(view)
-	if view.Withheld {
-		resp.Result = emptyChartResult()
-		return resp, nil
-	}
-	build := func(filterContainer bool, filter prom.ClusterFilter) string {
-		return prom.BuildClusterQueryFiltered(category, filterContainer, filter)
-	}
-	answer, err := QueryScopedChart(ctx, d.q, view, category, build, start, end, step, fmt.Sprintf("Cluster query empty (%q)", category))
-	if err != nil {
-		log.Printf("[prometheus] Cluster query failed (%q): %v", category, err)
-		errorlog.Record("prometheus", "error", "cluster query failed (%q): %v", category, err)
-		return resp, errChartQuery{err}
-	}
-	resp.Result, resp.Partial = answer.Result, answer.Partial
-	return resp, nil
+	chart, err := d.readChart(ctx, "Cluster", "", "", category, rangeStr, nil)
+	return ClusterMetricsResponse{chartMeasurement: chart, Category: category, Unit: prom.CategoryUnit(category), Range: rangeStr}, err
 }
 
 // RawQueryResponse is the response shape for raw PromQL. It carries the

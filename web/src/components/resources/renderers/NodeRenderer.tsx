@@ -1,3 +1,4 @@
+import { hasPrometheusCharts } from '../../../api/prometheusCharts'
 import { NodeRenderer as BaseNodeRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/NodeRenderer'
 import { useNavigate } from 'react-router-dom'
 import { getVisibleLiveMetrics, isLiveMetricsUnavailable, shouldFetchLiveMetrics, useNodeRemovalPlan, useNodeMetrics, useNodeMetricsHistory, usePrometheusResourceMetrics, usePrometheusStatus } from '../../../api/client'
@@ -26,7 +27,7 @@ export function NodeRenderer({ data, relationships }: NodeRendererProps) {
 
   // Determine whether to hide metrics-server section (Prometheus has data)
   const { data: prometheusStatus } = usePrometheusStatus()
-  const prometheusConnected = prometheusStatus?.connected === true || prometheusStatus?.gkeSystemMetrics === true
+  const prometheusConnected = hasPrometheusCharts(prometheusStatus)
   const { data: prometheusCPU, isLoading: prometheusCPULoading, error: prometheusCPUError } = usePrometheusResourceMetrics(
     'Node', '', nodeName ?? '', 'cpu', '1h', prometheusConnected,
   )

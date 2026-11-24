@@ -49,15 +49,14 @@ func (g *gkeMetrics) chartQuery(kind, namespace, name string, category prom.Metr
 	}
 
 	if (kind != "cluster" && namespace == "") || (kind == "pod" && name == "") ||
-		(pods == nil && kind != "cluster" && kind != "namespace" && kind != "pod") {
+		(pods == nil && kind != "cluster" && kind != "namespace") {
 		return ""
 	}
 	var selectors []string
 	if namespace != "" {
 		selectors = append(selectors, "namespace_name="+strconv.Quote(namespace))
 	}
-	switch {
-	case pods != nil:
+	if pods != nil {
 		if len(pods.CurrentPods) == 0 {
 			return ""
 		}
@@ -66,8 +65,6 @@ func (g *gkeMetrics) chartQuery(kind, namespace, name string, category prom.Metr
 			names[i] = regexp.QuoteMeta(p)
 		}
 		selectors = append(selectors, "pod_name=~"+strconv.Quote(strings.Join(names, "|")))
-	case kind == "pod":
-		selectors = append(selectors, "pod_name="+strconv.Quote(name))
 	}
 	var expression string
 	switch category {
@@ -92,7 +89,7 @@ func (g *gkeMetrics) chartQuery(kind, namespace, name string, category prom.Metr
 	default:
 		return ""
 	}
-	if pods != nil || kind == "pod" {
+	if pods != nil {
 		return `sum by (pod,namespace) (label_replace(label_replace(sum by (pod_name,namespace_name) (` + expression + `),"pod","$1","pod_name","(.+)"),"namespace","$1","namespace_name","(.+)"))`
 	}
 	return "sum(" + expression + ")"

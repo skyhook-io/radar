@@ -107,12 +107,21 @@ func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 	duration := end.Sub(start)
 	end = end.Truncate(step)
 	start = end.Add(-duration)
-	g := client.ensureGKECharts(ctx)
+	stores := client.chartStores(ctx)
+	g := stores.native
 	writeMetrics := func(resp workloadMetricsResponse) {
+		if stores.supplement != nil && needsGKEResources(&resp) {
+			var err error
+			g, err = stores.supplement(ctx)
+			if err != nil {
+				writeChartError(w, err)
+				return
+			}
+		}
 		if g != nil && g.fallback {
 			mergeGKEResources(ctx, g, &resp, scope, start, end, step)
 		}
-		if g != client.gkeChartStore() || client != GetClient() || generation != client.DiscoveryGeneration() || epoch != client.backendEpoch() {
+		if (g != nil && g != client.gkeChartStore()) || client != GetClient() || generation != client.DiscoveryGeneration() || epoch != client.backendEpoch() {
 			writeError(w, http.StatusConflict, "metrics connection changed; retry the request")
 			return
 		}

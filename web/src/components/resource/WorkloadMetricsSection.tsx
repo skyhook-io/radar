@@ -72,7 +72,7 @@ export function WorkloadMetricsSection(props: Props) {
       </div>
       {helpOpen && <WorkloadMetricsHelpDialog kind={props.kind} namespace={props.namespace} name={props.name} range={props.range} data={data} pending={isLoading || isPlaceholderData} error={error} onClose={() => setHelpOpen(false)} />}
       {data?.scopeNotice && <p role="status" className={`text-xs ${SEVERITY_TEXT.warning}`}>{data.scopeNotice}</p>}
-      {(data?.state === 'partial' || (gke && data?.state === 'unavailable')) && data.reason && <p role="status" className={`text-xs ${SEVERITY_TEXT.warning}`}>{data.reason}</p>}
+      {(data?.state === 'partial' || (gke && (data?.state === 'unavailable' || data?.state === 'error'))) && data.reason && <p role="status" className={`text-xs ${SEVERITY_TEXT.warning}`}>{data.reason}</p>}
       {isPlaceholderData && <p role="status" className="text-xs text-theme-text-secondary">Loading selected request source… Resources show previous samples.</p>}
       {!gke && <WorkloadRequests data={data} isLoading={isLoading || isPlaceholderData} error={error} setSource={setSource} />}
       {props.workloadTotals}
@@ -412,6 +412,7 @@ function PodComparison({
     const value = values[metric].get(pod);
     return value == null ? "—" : formatMetricValue(value, unit);
   };
+  const memoryLabel = memory?.source === "gke" ? "Non-evictable memory" : "Memory";
   const showThrottle = !!throttle || cpu?.source !== "gke";
   const comparisonPanels = [{ label: 'CPU', panel: cpu }, { label: 'Memory', panel: memory }, { label: 'Throttling', panel: throttle }];
   const pending = comparisonPanels.filter(({ panel }) => panel?.state === 'detecting');
@@ -452,7 +453,7 @@ function PodComparison({
                     {metric === "cpu"
                       ? "CPU"
                       : metric === "memory"
-                        ? "Memory"
+                        ? memoryLabel
                         : "Throttled"}
                     {sort === metric ? " ↓" : ""}
                   </button>

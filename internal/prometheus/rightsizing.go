@@ -932,14 +932,24 @@ func handlePVCUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	g := client.ensureGKECharts(r.Context())
+	stores := client.chartStores(r.Context())
+	g := stores.native
 	var resp PVCUsageResponse
 	if g == nil || g.fallback {
 		resp = standardPVCUsage(r.Context(), client, namespace, name)
 	}
-	if g != nil && (!g.fallback || resp.Status == "no_series" || resp.Status == PVCUsageAmbiguous || resp.Status == PVCUsageScopeMismatch) {
+	missing := resp.Status == "no_series" || resp.Status == PVCUsageAmbiguous || resp.Status == PVCUsageScopeMismatch
+	if stores.supplement != nil && missing {
+		var err error
+		g, err = stores.supplement(r.Context())
+		if err != nil {
+			writeChartError(w, err)
+			return
+		}
+	}
+	if g != nil && (!g.fallback || missing) {
 		native := g.pvc(r.Context(), namespace, name)
-		if !g.fallback || native.HasData || resp.Status == "no_series" {
+		if !g.fallback || native.HasData {
 			resp = native
 		}
 		if g != client.gkeChartStore() {

@@ -24,7 +24,7 @@ export function LocalIntegrationStatus({ kind, profile, argo, busy, changedAt }:
     if (query.isError) status = 'Status unavailable'
     else if (kind === 'metrics' && prom.data) {
       status = prom.data.connected ? 'Connected' : prom.data.gkeSystemMetrics ? 'GKE system metrics' : prom.data.discovering ? 'Discovering…' : 'Not connected'
-      detail = prom.data.connected ? !profile.url ? `Discovered: ${prom.data.address}` : undefined : prom.data.error
+      detail = prom.data.connected ? !profile.url ? `Discovered: ${prom.data.address}` : undefined : prom.data.gkeSystemMetrics ? undefined : prom.data.error
     } else if (kind === 'argocd' && argo.data) {
       status = argo.data.connected ? argo.data.anonymous ? 'Connected · no token needed' : 'Connected' : argo.data.connecting ? 'Connecting…' : 'Not connected'
       detail = argo.data.reason ?? (argo.data.connected && !profile.url ? `Discovered: ${argo.data.address}` : undefined)

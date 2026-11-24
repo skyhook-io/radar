@@ -1,3 +1,4 @@
+import { hasPrometheusCharts } from '../../api/prometheusCharts'
 import { useEffect, useMemo } from 'react'
 import { AlertCircle } from 'lucide-react'
 import { usePrometheusResourceMetrics, usePrometheusStatus, type PrometheusSeries, type PrometheusTimeRange } from '../../api/client'
@@ -21,7 +22,7 @@ export function RestartEventLane({ kind, namespace, name, range = '1h' }: {
   range?: PrometheusTimeRange
 }) {
   const { data: status } = usePrometheusStatus()
-  const isConnected = status?.connected === true || status?.gkeSystemMetrics === true
+  const isConnected = hasPrometheusCharts(status)
   const { data: metrics, isLoading, error } = usePrometheusResourceMetrics(kind, namespace, name, 'restarts', range, isConnected)
 
   const restarts = useMemo(() => collectRestartEvents(metrics?.result?.series), [metrics])

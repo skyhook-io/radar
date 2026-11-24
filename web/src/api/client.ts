@@ -1,3 +1,4 @@
+import { hasPrometheusCharts } from './prometheusCharts'
 import type { RightsizingRow, WorkloadRightsizingEvidence } from '@skyhook-io/k8s-ui/types/rightsizing'
 import { followSwitch, switchFinished, switchInProgress, type ContextSwitchOperation } from './contextSwitch'
 import { createListRefetchInterval, normalizeResourceList, type ResourceListBody, type ResourceListResult } from './resourceLists'
@@ -4133,7 +4134,7 @@ export function prometheusStatusRefetchInterval(
   status: PrometheusStatus | undefined,
 ): number {
   if (!status) return PROM_STATUS_POLL_IDLE_MS;
-  const settled = status.connected || status.gkeSystemMetrics || !!status.error;
+  const settled = hasPrometheusCharts(status) || !!status.error;
   return status.discovering || !settled
     ? PROM_STATUS_POLL_DISCOVERING_MS
     : PROM_STATUS_POLL_IDLE_MS;
@@ -4246,7 +4247,7 @@ export function useAutoPromConnect(): void {
     if (!context || statusLoading) return;
 
     // Persist the "we've connected here before" signal once a connection lands.
-    if (status?.connected || status?.gkeSystemMetrics) {
+    if (hasPrometheusCharts(status)) {
       try {
         window.localStorage.setItem(promAutoConnectKey(context), "1");
       } catch {
@@ -4285,7 +4286,7 @@ export function useAutoPromConnect(): void {
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
           const nextStatus = (await resp.json()) as PrometheusStatus;
           queryClient.setQueryData(["prometheus-status"], nextStatus);
-          if (!nextStatus.connected && !nextStatus.gkeSystemMetrics)
+          if (!hasPrometheusCharts(nextStatus))
             throw new Error(nextStatus.error || "Prometheus unavailable");
           queryClient.invalidateQueries({ queryKey: ["prometheus-status"] });
         })

@@ -30,6 +30,7 @@ import (
 // endpoint has been discovered.
 type Client struct {
 	gkeSF         singleflight.Group
+	gkeServices   *serviceInventory
 	gke           *gkeMetrics
 	gkeGeneration uint64
 	gkeRevision   uint64
@@ -391,7 +392,7 @@ func (c *Client) connectInBackground(label string) error {
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(withSuppressedDiscoveryDiagnostics(context.Background()), discoveryTimeout+5*time.Second)
 	defer cancel()
-	addr, _, err := c.EnsureConnected(ctx)
+	addr, _, err := c.connectWithGKE(ctx)
 	switch {
 	case err == nil:
 		log.Printf("[prometheus] %s connected to %s (%s)", label, addr, took(start))
@@ -575,7 +576,6 @@ func (c *Client) EnsureConnected(ctx context.Context) (string, string, error) {
 	bp := c.basePath
 	gen := c.discoveryGen
 	manual := c.manualURL != ""
-	recheckGKE := manual || c.carettaStoreLocked()
 	c.mu.RUnlock()
 
 	if base != "" {
@@ -600,12 +600,6 @@ func (c *Client) EnsureConnected(ctx context.Context) (string, string, error) {
 			if ok {
 				c.mu.Unlock()
 				if current {
-					if recheckGKE {
-						c.gkeSF.Do(fmt.Sprint(gen), func() (any, error) {
-							c.findGKEChartStore(ctx, gen, nil)
-							return nil, nil
-						})
-					}
 					return base, bp, nil
 				}
 				return c.discoverShared(ctx)
@@ -734,7 +728,6 @@ func (c *Client) discoverShared(ctx context.Context) (string, string, error) {
 			}
 
 			addr, basePath, derr := c.discover(dctx, gen)
-			c.findGKEChartStore(dctx, gen, derr)
 			flightErr = derr
 			if derr != nil {
 				if !errors.Is(derr, context.Canceled) && !errors.Is(derr, context.DeadlineExceeded) {

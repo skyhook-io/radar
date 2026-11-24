@@ -99,13 +99,25 @@ func (g *gkeMetrics) addYoungPodRestarts(ctx context.Context, r *prom.QueryResul
 	return nil
 }
 
+const gkeCurrentPodHistory = "GKE system metrics cover the workload’s current Pods. Samples from before each Pod’s creation and its first five minutes are excluded."
+
+func (g *gkeMetrics) workloadPanel(ctx context.Context, scope PodScope, category prom.MetricCategory, start, end time.Time, step time.Duration) workloadMetricPanel {
+	query := g.chartQuery(scope.Kind, scope.Namespace, scope.Name, category, &scope)
+	panel := queryWorkloadPanel(ctx, gkePodReader{g, scope.Created, category}, query, nil, prom.CategoryUnit(category), start, end, step, true)
+	if panel.State == "available" && len(panel.Series) < scope.CurrentTotal {
+		panel.State = "partial"
+		panel.Reason = fmt.Sprintf("GKE reported %d of %d current Pod names in this time range.", len(panel.Series), scope.CurrentTotal)
+	}
+	panel.Source = "gke"
+	return panel
+}
+
 func (g *gkeMetrics) workload(ctx context.Context, scope PodScope, start, end time.Time, step time.Duration) workloadMetricsResponse {
-	const reason = "GKE system metrics cover the workload’s current Pods. Samples from before each Pod’s creation and its first five minutes are excluded."
 	out := workloadMetricsResponse{
 		ResourceSource: "gke", State: "available", Pods: len(scope.CurrentPods), PodsTotal: scope.CurrentTotal,
 		Start: start.Unix(), End: end.Unix(), StepSeconds: step.Seconds(), RateWindowSeconds: 300,
 		Sources: []workloadRequestSource{}, Panels: map[string]workloadMetricPanel{}, Comparison: map[string]workloadMetricPanel{},
-		Attribution: map[string]string{"cpu": reason, "memory": reason}, History: map[string]workloadMetricScope{},
+		Attribution: map[string]string{"cpu": gkeCurrentPodHistory, "memory": gkeCurrentPodHistory}, History: map[string]workloadMetricScope{},
 	}
 	if len(scope.CurrentPods) == 0 {
 		out.State, out.Reason = "unavailable", "This workload has no current Pods."
@@ -116,15 +128,19 @@ func (g *gkeMetrics) workload(ctx context.Context, scope PodScope, start, end ti
 	}
 	for _, category := range []prom.MetricCategory{prom.CategoryCPU, prom.CategoryMemory} {
 		key := string(category)
-		query := g.chartQuery(scope.Kind, scope.Namespace, scope.Name, category, &scope)
-		panel := queryWorkloadPanel(ctx, gkePodReader{g, scope.Created, category}, query, nil, prom.CategoryUnit(category), start, end, step, true)
-		if panel.State == "available" && len(panel.Series) < scope.CurrentTotal {
-			panel.State = "partial"
-			panel.Reason = fmt.Sprintf("GKE reported %d of %d current Pod names in this time range.", len(panel.Series), scope.CurrentTotal)
-		}
-		panel.Source = "gke"
+		panel := g.workloadPanel(ctx, scope, category, start, end, step)
 		out.Panels[key], out.Comparison[key] = panel, panel
-		out.History[key] = workloadMetricScope{Mode: "current-pods", Reason: reason}
+		out.History[key] = workloadMetricScope{Mode: "current-pods", Reason: gkeCurrentPodHistory}
+	}
+	cpu, memory := out.Panels["cpu"], out.Panels["memory"]
+	switch {
+	case !hasSample(cpu.Series) && !hasSample(memory.Series):
+		out.State, out.Reason = "unavailable", "GKE returned no usable CPU or memory samples for the current Pods in this time range."
+		if cpu.State == "error" || memory.State == "error" {
+			out.State, out.Reason = "error", "GKE resource metrics could not be read for the current Pods."
+		}
+	case out.State != "partial" && (cpu.State != "available" || memory.State != "available"):
+		out.State, out.Reason = "partial", "GKE returned partial resource metrics for the current Pods in this time range."
 	}
 	return out
 }
@@ -205,22 +221,26 @@ func (g *gkeMetrics) pvc(ctx context.Context, namespace, name string) PVCUsageRe
 	return resp
 }
 
+func missingResourcePanel(p workloadMetricPanel) bool {
+	return p.State == "unavailable" && !hasSample(p.Series)
+}
+
+func needsGKEResources(resp *workloadMetricsResponse) bool {
+	if len(resp.Panels) == 0 {
+		return resp.State == "unavailable" || resp.State == "detecting" || resp.State == "error"
+	}
+	return missingResourcePanel(resp.Panels["cpu"]) || missingResourcePanel(resp.Panels["memory"]) || missingResourcePanel(resp.Comparison["cpu"]) || missingResourcePanel(resp.Comparison["memory"])
+}
+
 // A configured store can serve both metric vocabularies. Keep each existing
 // panel with data, including historical ownership and HTTP instrumentation.
 func mergeGKEResources(ctx context.Context, g *gkeMetrics, resp *workloadMetricsResponse, scope PodScope, start, end time.Time, step time.Duration) {
-	needs := func(key string) bool {
-		p := resp.Panels[key]
-		if len(resp.Panels) == 0 {
-			return resp.State == "unavailable" || resp.State == "detecting" || resp.State == "error"
-		}
-		return len(p.Series) == 0 && p.State == "unavailable"
-	}
-	if !needs("cpu") && !needs("memory") {
+	if len(scope.CurrentPods) == 0 || !needsGKEResources(resp) {
 		return
 	}
-	native := g.workload(ctx, scope, start, end, step)
 	if len(resp.Panels) == 0 {
-		if len(native.Panels["cpu"].Series) == 0 && len(native.Panels["memory"].Series) == 0 {
+		native := g.workload(ctx, scope, start, end, step)
+		if !hasSample(native.Panels["cpu"].Series) && !hasSample(native.Panels["memory"].Series) {
 			return
 		}
 		native.ScopeNotice = resp.ScopeNotice
@@ -231,23 +251,26 @@ func mergeGKEResources(ctx context.Context, g *gkeMetrics, resp *workloadMetrics
 		*resp = native
 		return
 	}
-	filled := false
-	for _, key := range []string{"cpu", "memory"} {
-		if !needs(key) || len(native.Panels[key].Series) == 0 {
+	for _, category := range []prom.MetricCategory{prom.CategoryCPU, prom.CategoryMemory} {
+		key := string(category)
+		total, comparison := missingResourcePanel(resp.Panels[key]), missingResourcePanel(resp.Comparison[key])
+		if !total && !comparison {
 			continue
 		}
-		if resp.Attribution == nil {
-			resp.Attribution = make(map[string]string)
+		panel := g.workloadPanel(ctx, scope, category, start, end, step)
+		if !hasSample(panel.Series) {
+			continue
 		}
-		resp.Panels[key], resp.History[key], resp.Attribution[key] = native.Panels[key], native.History[key], native.Attribution[key]
-		if len(resp.Comparison[key].Series) == 0 {
-			resp.Comparison[key] = native.Comparison[key]
+		if comparison {
+			resp.Comparison[key] = panel
 		}
-		filled = true
-	}
-	if filled && resp.State == "unavailable" {
-		resp.State, resp.Reason = native.State, native.Reason
-		resp.Start, resp.End, resp.StepSeconds, resp.RateWindowSeconds = native.Start, native.End, native.StepSeconds, native.RateWindowSeconds
-		resp.Pods, resp.PodsTotal = native.Pods, native.PodsTotal
+		if total {
+			if resp.Attribution == nil {
+				resp.Attribution = make(map[string]string)
+			}
+			resp.Panels[key] = panel
+			resp.History[key] = workloadMetricScope{Mode: "current-pods", Reason: gkeCurrentPodHistory}
+			resp.Attribution[key] = gkeCurrentPodHistory
+		}
 	}
 }

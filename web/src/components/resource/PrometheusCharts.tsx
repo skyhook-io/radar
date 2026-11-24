@@ -1,3 +1,4 @@
+import { hasPrometheusCharts } from '../../api/prometheusCharts'
 import { useState, useMemo } from 'react'
 import {
   PrometheusChartsView,
@@ -96,7 +97,7 @@ export function PrometheusCharts({ kind, namespace, name, showEmptyState = false
   const [selectedCategory, setActiveCategory] = useState<PrometheusMetricCategory>('cpu')
   const [timeRange, setTimeRange] = useState<PrometheusTimeRange>('1h')
 
-  const isConnected = status?.connected === true || status?.gkeSystemMetrics === true
+  const isConnected = hasPrometheusCharts(status)
   const gkeOnly = status?.gkeSystemMetrics && !status.connected
   const activeCategory = gkeOnly && kind !== 'Node' && selectedCategory === 'filesystem' ? 'cpu' : selectedCategory
   const isSupported = SUPPORTED_KINDS.has(kind)

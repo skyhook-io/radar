@@ -22,6 +22,7 @@ func SetWorkloadMetricsScope(scope prom.WorkloadMetricsScope, beylaJobSelector s
 	globalClient.mu.Lock()
 	defer globalClient.mu.Unlock()
 	scope.ClusterLabels = maps.Clone(scope.ClusterLabels)
+	globalClient.gkeRevision++
 	globalClient.gke = nil
 	globalClient.gkeChecked = time.Time{}
 	globalClient.workloadScope = &scope

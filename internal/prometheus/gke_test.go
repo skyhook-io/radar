@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,8 +31,13 @@ const fixtureIssuer = "https://container.googleapis.com/v1/projects/demo-project
 
 func gkeFixture(t *testing.T, issuer string, metricCount int) *Client {
 	t.Helper()
+	return gkeFixtureServices(t, issuer, metricCount, nil)
+}
+
+func gkeFixtureServices(t *testing.T, issuer string, metricCount int, services func(http.ResponseWriter, *http.Request, corev1.Service) bool) *Client {
+	t.Helper()
 	svc := corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "frontend", Namespace: "gmp-public"},
+		ObjectMeta: metav1.ObjectMeta{Name: "frontend", Namespace: "gmp-public", Labels: map[string]string{"app.kubernetes.io/name": "prometheus"}},
 		Spec:       corev1.ServiceSpec{Selector: map[string]string{"app": "frontend"}, Ports: []corev1.ServicePort{{Name: "web", Port: 9090, TargetPort: intstr.FromString("http")}}},
 	}
 	pod := corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Image: gmpFrontendImage + ":v0.14", Ports: []corev1.ContainerPort{{Name: "http", ContainerPort: 9090}}}}}}
@@ -37,6 +45,9 @@ func gkeFixture(t *testing.T, issuer string, metricCount int) *Client {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method != http.MethodGet && !(r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/proxy/api/v1/")) {
 			t.Errorf("unexpected Kubernetes or proxy method %s", r.Method)
+		}
+		if services != nil && services(w, r, svc) {
+			return
 		}
 		switch r.URL.Path {
 		case "/.well-known/openid-configuration":
@@ -143,7 +154,7 @@ func TestGKEFrontendChartDiscovery(t *testing.T) {
 		{"partial assertion", "https://example.org", 1, map[string]string{"cluster": "demo"}, false, false},
 		{"empty probe", fixtureIssuer, -1, nil, false, false},
 		{"zero probe", fixtureIssuer, 0, nil, false, false},
-		{"regular discovered first", fixtureIssuer, 1, nil, true, false},
+		{"supplement regular store", fixtureIssuer, 1, nil, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := gkeFixture(t, tc.issuer, tc.count)
@@ -250,6 +261,19 @@ func TestGKEMetricsCharts(t *testing.T) {
 	if mixed.Panels["cpu"].State != "error" || mixed.Panels["cpu"].Reason != "Historical query failed." || mixed.Panels["memory"].Source != "gke" {
 		t.Fatalf("mixed panel diagnostics or native fallback lost: %+v", mixed.Panels)
 	}
+	knownCPU := resp.Panels["cpu"]
+	knownCPU.Source = "cadvisor"
+	mixed.Panels["cpu"] = knownCPU
+	mixed.Comparison["cpu"] = workloadMetricPanel{State: "unavailable"}
+	mergeGKEResources(t.Context(), g, &mixed, scope, start, end, time.Minute)
+	if mixed.Panels["cpu"].Source != "cadvisor" || mixed.Comparison["cpu"].Source != "gke" {
+		t.Fatal("native comparison overwrote conventional totals or remained missing")
+	}
+	missingLifetime := scope
+	missingLifetime.Created = nil
+	if got := g.workload(t.Context(), missingLifetime, start, end, time.Minute); got.State != "unavailable" {
+		t.Fatalf("native-only workload with no usable samples: %+v", got)
+	}
 	for _, state := range []string{"detecting", "error"} {
 		original := workloadMetricsResponse{State: state, Reason: "Waiting for conventional identity.", Panels: map[string]workloadMetricPanel{}}
 		unknown := scope
@@ -279,7 +303,11 @@ func TestGKEMetricsCharts(t *testing.T) {
 		{"Namespace", "default", "", prom.CategoryMemory, "container_memory_used_bytes"},
 		{"Pod", "default", "demo.pod", prom.CategoryNetworkTX, "pod_network_sent_bytes_count"},
 	} {
-		q := g.chartQuery(tc.kind, tc.ns, tc.name, tc.category, nil)
+		var pods *PodScope
+		if tc.kind == "Pod" {
+			pods = &PodScope{CurrentPods: []string{tc.name}}
+		}
+		q := g.chartQuery(tc.kind, tc.ns, tc.name, tc.category, pods)
 		if !strings.Contains(q, tc.metric) || !strings.Contains(q, g.matchers) || (tc.kind == "Node" && !strings.Contains(q, `node_name="demo-node"`)) || (tc.ns != "" && !strings.Contains(q, `namespace_name="default"`)) {
 			t.Fatalf("unexpected query %s", q)
 		}
@@ -358,7 +386,7 @@ func TestGKEConfiguredFrontendWithoutScrapeTargets(t *testing.T) {
 	url := c.k8sConfig.Host + "/api/v1/namespaces/gmp-public/services/frontend:web/proxy"
 	SetManualURL(url)
 	client := GetClient()
-	addr, _, err := client.EnsureConnected(t.Context())
+	addr, _, err := client.connectWithGKE(t.Context())
 	if err != nil || addr != url || !client.GetStatus().GKESystemMetrics || !client.GetStatus().Connected || !client.gkeChartStore().configured {
 		t.Fatalf("manual endpoint was replaced or not recognized: addr=%s status=%+v err=%v", addr, client.GetStatus(), err)
 	}
@@ -368,7 +396,7 @@ func TestGKEConfiguredFrontendWithoutScrapeTargets(t *testing.T) {
 	if client.gkeChartStore() != nil {
 		t.Fatal("new scope retained previous native reader")
 	}
-	if _, _, err = client.EnsureConnected(t.Context()); err != nil || client.GetStatus().GKESystemMetrics || !client.GetStatus().Connected {
+	if _, _, err = client.connectWithGKE(t.Context()); err != nil || client.GetStatus().GKESystemMetrics || !client.GetStatus().Connected {
 		t.Fatalf("scope conflict affected wrong capability: %+v err=%v", client.GetStatus(), err)
 	}
 }
@@ -389,8 +417,9 @@ func TestGKEConfiguredWorkloadWithUnverifiedConventionalIdentity(t *testing.T) {
 	t.Cleanup(k8s.ResetResourceCache)
 	SetManualURL(c.k8sConfig.Host + "/api/v1/namespaces/gmp-public/services/frontend:web/proxy")
 	client := GetClient()
-	if _, _, err := client.EnsureConnected(t.Context()); err != nil {
-		t.Fatal(err)
+	first := getMetrics(t, metricsRouter(), "/prometheus/workload/Deployment/default/nginx?range=1h")
+	if first.Code != http.StatusOK {
+		t.Fatalf("cold configured workload: %d %s", first.Code, first.Body)
 	}
 	scope, err := ResolvePodScope(t.Context(), k8s.GetResourceCache(), "Deployment", "default", "nginx", 100)
 	if err != nil {
@@ -454,5 +483,131 @@ func TestGKEChartStoreTransitionToTrafficBackend(t *testing.T) {
 	c.findGKEChartStore(t.Context(), 0, nil)
 	if g := c.gkeChartStore(); g == nil || !g.fallback || g.configured {
 		t.Fatalf("expected an independent native fallback alongside Caretta: %+v", g)
+	}
+}
+
+func TestGKECoexistsWithDiscoveredPrometheus(t *testing.T) {
+	for _, listAllowed := range []bool{true, false} {
+		t.Run(fmt.Sprintf("listAllowed=%t", listAllowed), func(t *testing.T) {
+			regular := corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "prometheus-server", Namespace: "monitoring"}, Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 9090}}}}
+			var lists, gets, nativeReads, standardRanges atomic.Int32
+			blocked, release := make(chan struct{}, 1), make(chan struct{})
+			var hold atomic.Bool
+			hold.Store(true)
+			releaseFrontend := sync.OnceFunc(func() { hold.Store(false); close(release) })
+			defer releaseFrontend()
+			c := gkeFixtureServices(t, fixtureIssuer, 1, func(w http.ResponseWriter, r *http.Request, native corev1.Service) bool {
+				switch r.URL.Path {
+				case "/api/v1/services":
+					lists.Add(1)
+					if !listAllowed {
+						http.Error(w, "list denied", http.StatusForbidden)
+					} else {
+						json.NewEncoder(w).Encode(corev1.ServiceList{Items: []corev1.Service{native, regular}})
+					}
+					return true
+				case "/api/v1/namespaces/gmp-public/services/frontend", "/api/v1/namespaces/monitoring/services/prometheus-server":
+					gets.Add(1)
+					if listAllowed {
+						http.Error(w, "get denied", http.StatusForbidden)
+					} else if strings.HasSuffix(r.URL.Path, "/frontend") {
+						json.NewEncoder(w).Encode(native)
+					} else {
+						json.NewEncoder(w).Encode(regular)
+					}
+					return true
+				}
+				if strings.Contains(r.URL.Path, "/proxy/api/v1/") {
+					nativeReads.Add(1)
+					if hold.Load() {
+						select {
+						case blocked <- struct{}{}:
+						default:
+						}
+						select {
+						case <-release:
+						case <-r.Context().Done():
+							return true
+						}
+					}
+				}
+				return false
+			})
+			ordinary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Host != "prometheus-server.monitoring.svc.cluster.local:9090" {
+					t.Errorf("non-conventional endpoint used for generic discovery: %s", r.Host)
+					http.Error(w, "wrong service", 400)
+					return
+				}
+				if strings.HasSuffix(r.URL.Path, "query_range") {
+					standardRanges.Add(1)
+					if strings.Contains(r.FormValue("query"), "memory") {
+						fmt.Fprint(w, `{"status":"success","data":{"resultType":"matrix","result":[]}}`)
+					} else {
+						fmt.Fprint(w, `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1700000000,"2"]]}]}}`)
+					}
+					return
+				}
+				fmt.Fprint(w, healthyProbeBody)
+			}))
+			t.Cleanup(ordinary.Close)
+			tr := &http.Transport{DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+				var dial net.Dialer
+				return dial.DialContext(ctx, network, ordinary.Listener.Addr().String())
+			}}
+			t.Cleanup(tr.CloseIdleConnections)
+			c.httpClient = &http.Client{Transport: tr, Timeout: time.Second}
+			chart := func(category prom.MetricCategory) (ClusterMetricsResponse, error) {
+				d := productionChartDeps(t.Context(), c)
+				d.resolve = func(context.Context, ViewScopeRequest) (ViewScope, error) { return ViewScope{}, nil }
+				return clusterChart(t.Context(), d, category, "1h")
+			}
+			done := make(chan error, 1)
+			go func() {
+				got, err := chart(prom.CategoryCPU)
+				if err == nil && (got.Source != "" || !hasSample(got.Result.Series)) {
+					err = fmt.Errorf("conventional CPU missing: %+v", got)
+				}
+				done <- err
+			}()
+			select {
+			case <-blocked:
+				releaseFrontend()
+				<-done
+				t.Fatal("a chart with conventional data waited for the supplemental frontend")
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			releaseFrontend()
+			if nativeReads.Load() != 0 || c.GetStatus().GKESystemMetrics {
+				t.Fatal("healthy conventional chart probed the supplemental store")
+			}
+			raw, snapshot := c.PromSnapshot()
+			if raw == nil {
+				t.Fatal("no conventional raw store")
+			}
+			if _, err := raw.Query(t.Context(), "up"); err != nil {
+				t.Fatal(err)
+			}
+			mem, err := chart(prom.CategoryMemory)
+			if err != nil || mem.Source != "gke" || !hasSample(mem.Result.Series) || standardRanges.Load() < 2 || !c.ConnectionCurrent(snapshot) || !c.GetStatus().GKESystemMetrics {
+				t.Fatalf("missing family did not fall back without moving raw store: result=%+v err=%v", mem, err)
+			}
+			if lists.Load() != 1 || (gets.Load() > 0) == listAllowed {
+				t.Fatalf("wrong Service enumeration: lists=%d targeted gets=%d", lists.Load(), gets.Load())
+			}
+			c.mu.Lock()
+			c.gkeChecked = time.Now().Add(-2 * time.Minute)
+			c.mu.Unlock()
+			before := nativeReads.Load()
+			if _, err := chart(prom.CategoryCPU); err != nil || nativeReads.Load() != before {
+				t.Fatalf("usable warm chart refreshed optional store: %v", err)
+			}
+			if _, _, err := c.EnsureConnected(t.Context()); err != nil || nativeReads.Load() != before || lists.Load() != 1 {
+				t.Fatalf("raw connection initiated native refresh")
+			}
+		})
 	}
 }
