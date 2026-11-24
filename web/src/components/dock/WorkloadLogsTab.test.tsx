@@ -4,8 +4,9 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WorkloadLogsTab } from './WorkloadLogsTab'
 
-const state = vi.hoisted(() => ({ targets: [] as Array<{ kind: string; name: string; role?: string; snapshotOnly?: boolean }> }))
+const state = vi.hoisted(() => ({ replicaSetSupport: true, targets: [] as Array<{ kind: string; name: string; role?: string; snapshotOnly?: boolean }> }))
 vi.mock('../../api/client', () => ({
+  useRadarFeature: () => state.replicaSetSupport ? { support: 'supported' } : { support: 'unsupported', upgrade: { feature: 'Combined ReplicaSet logs' } },
   useResource: (_kind: string, _namespace: string, name: string) => ({
     data: { metadata: { uid: name }, spec: { replicatedJobs: [{ name: name === 'first' ? 'workers' : 'leader' }] } },
   }),
@@ -13,6 +14,7 @@ vi.mock('../../api/client', () => ({
     data: { collection: 'members', runs: [{ group: 'batch', kind: 'jobs', namespace, name: `${name}-0`, phase: 'Running', active: true }], total: 1 },
   }),
 }))
+vi.mock('../../contexts/CapabilitiesContext', () => ({ useNamespacedCapabilities: () => ({ canViewLogs: true }) }))
 vi.mock('../logs/WorkloadLogsViewer', () => ({
   WorkloadLogsViewer: (props: { kind: string; name: string; role?: string; snapshotOnly?: boolean }) => {
     state.targets.push(props)
@@ -25,6 +27,7 @@ let root: Root
 let element: HTMLDivElement
 beforeEach(() => {
   state.targets = []
+  state.replicaSetSupport = true
   element = document.createElement('div')
   document.body.appendChild(element)
   root = createRoot(element)
@@ -62,5 +65,17 @@ describe('dock JobSet logs', () => {
     expect(element.textContent).not.toContain('workers')
     expect(state.targets.every(target => target.name === 'second-0' && target.role === undefined)).toBe(true)
     expect(element.querySelector('[data-log-target="jobs/second-0"]')).not.toBeNull()
+  })
+})
+
+describe('dock ReplicaSet logs', () => {
+  it('checks the connected Radar before following a ReplicaSet', async () => {
+    await render('web-v2', 'ReplicaSet')
+    expect(state.targets.at(-1)).toMatchObject({ kind: 'replicasets', name: 'web-v2' })
+    state.targets = []
+    state.replicaSetSupport = false
+    await render('web-v2', 'replicasets')
+    expect(state.targets).toEqual([])
+    expect(element.textContent).toContain('newer Radar')
   })
 })

@@ -217,6 +217,7 @@ export interface FeatureCapabilities {
   // GET /api/workloads/rayclusters/{namespace}/{name}/pods. Older Radars that
   // serve the route omit the flag; radarFeatures falls back to v1.15.0.
   rayClusterPods?: boolean
+  replicaSetLogs?: boolean
   // Workload Pod info marks native sidecars (containerStatuses[].sidecar).
   podSidecarMarks?: boolean
   kueueQueueWorkloads?: boolean

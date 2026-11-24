@@ -44,7 +44,7 @@ import { getGitOpsTool } from '../gitops/detail-helpers'
 import { apiVersionToGroup } from '../../utils/navigation'
 import { isApiGroup } from '../resources/resource-utils-cnpg'
 import { isArgoRolloutResource } from '../../utils/workload-rollout'
-import { isCoreBatchJob } from '../../utils/api-resources'
+import { isCoreBatchJob, supportsWorkloadLogAction } from '../../utils/api-resources'
 import { formatRelativeAgeTime } from '../../utils/format'
 
 // ============================================================================
@@ -82,6 +82,7 @@ interface ResourceActionsBarProps {
   // Dock actions (injected by platform)
   onOpenTerminal?: (params: { namespace: string; podName: string; containerName: string; containers: string[] }) => void
   onOpenLogs?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string; initContainers?: string[] }) => void
+  replicaSetLogs?: boolean
   onOpenWorkloadLogs?: (params: { namespace: string; workloadKind: string; workloadName: string }) => void
   onCopyCommand?: (text: string, message: string, event: React.MouseEvent) => void
 
@@ -198,7 +199,7 @@ export function ResourceActionsBar({
   onCompareTo,
   onCompareAcrossClusters,
   canExec, canViewLogs, canPortForward,
-  onOpenTerminal, onOpenLogs: openLogs, onOpenWorkloadLogs: openWorkloadLogs, onCopyCommand,
+  onOpenTerminal, onOpenLogs: openLogs, onOpenWorkloadLogs: openWorkloadLogs, replicaSetLogs, onCopyCommand,
   renderPortForward,
   onDelete, isDeleting, onDeletePreviewOpenChange, cascadeDetail, cascadeDependents, cascadeLoading, cascadeRootResolved, cascadePreviewFailed,
   onRestart, isRestarting,
@@ -233,7 +234,7 @@ export function ResourceActionsBar({
     canViewLogs &&
     !hideLogs &&
     openWorkloadLogs &&
-    (['deployments', 'statefulsets', 'daemonsets', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(kind) || coreBatchJob)
+    supportsWorkloadLogAction(kind, resource.group || apiVersionToGroup(data?.apiVersion), replicaSetLogs)
   )
 
   // Delete confirmation state

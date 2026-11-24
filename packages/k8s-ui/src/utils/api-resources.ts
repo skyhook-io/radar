@@ -100,6 +100,11 @@ export function findAPIResourceForRoute(
     ?? resources?.find(matchesRoute)
 }
 
+export function supportsWorkloadLogAction(plural: string, group?: string, replicaSetLogs = false): boolean {
+  return ['deployments', 'statefulsets', 'daemonsets', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(plural) ||
+    isCoreBatchJob(plural, group) || (replicaSetLogs && plural === 'replicasets' && group === 'apps')
+}
+
 export function isCoreBatchJob(kind: string, group?: string): boolean {
   const normalizedKind = kind.toLowerCase()
   return (normalizedKind === 'job' || normalizedKind === 'jobs') && (!group || group === 'batch')

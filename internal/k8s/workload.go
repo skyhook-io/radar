@@ -27,6 +27,33 @@ var ErrWorkloadCacheWarming = errors.New("workload cache is still loading")
 var ErrWorkloadNotFound = errors.New("workload not found")
 var ErrWorkloadSelectorUnavailable = errors.New("workload selector unavailable")
 
+// WorkloadLogPodLister pins a live log follow to the workload selected at open.
+func WorkloadLogPodLister(cache *ResourceCache, kind, namespace, name string) (func() ([]*corev1.Pod, error), error) {
+	if kind == "replicaset" || kind == "replicasets" {
+		if cache.ReplicaSets() == nil {
+			return nil, fmt.Errorf("%w: list replicasets", ErrWorkloadAccessDenied)
+		}
+		if err := requireCovers(cache, "replicasets", namespace); err != nil {
+			return nil, err
+		}
+		rs, err := cache.ReplicaSets().ReplicaSets(namespace).Get(name)
+		if err != nil {
+			return nil, err
+		}
+		uid := rs.UID
+		return func() ([]*corev1.Pod, error) {
+			return DirectlyOwnedPods(cache, namespace, name, "apps", "ReplicaSet", uid)
+		}, nil
+	}
+	selector, err := GetWorkloadSelector(cache, kind, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+	return func() ([]*corev1.Pod, error) {
+		return cache.GetPodsForWorkload(namespace, selector), nil
+	}, nil
+}
+
 // GetWorkloadSelector returns the label selector for a workload from cache.
 // kind is case-insensitive and accepts either singular ("deployment") or plural
 // ("deployments") — matches K8s canonical Kind or REST-style plural.

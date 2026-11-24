@@ -977,7 +977,7 @@ export function WorkloadView({
   const showMetricsTab = isMetricsAvailable ? isMetricsAvailable(kind, resource) : false
   const showCostTab = isCostAvailable ? isCostAvailable(kind, resource) : false
   const normalizedKind = kindToPlural(kind).toLowerCase()
-  const logsWithoutPods = supportsLogsWithoutPods(normalizedKind, kind, group, resource?.apiVersion)
+  const logsWithoutPods = actionsBarProps?.replicaSetLogs || supportsLogsWithoutPods(normalizedKind, kind, group, resource?.apiVersion)
   const logsTabVisible = Boolean(renderLogsTab) && (allPods.length > 0 || logsWithoutPods)
   const metricsTabVisible = Boolean(showMetricsTab && renderMetricsTab)
   const costTabVisible = Boolean(showCostTab && renderCostTab)

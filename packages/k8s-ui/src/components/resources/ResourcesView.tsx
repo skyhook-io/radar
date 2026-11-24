@@ -58,7 +58,7 @@ import { ResourceBar } from '../ui/ResourceBar'
 import type { SelectedResource, APIResource } from '../../types'
 import { isForbiddenError } from '../../types/fetch-error'
 import type { NavigateToResource } from '../../utils/navigation'
-import { categorizeResources, CORE_RESOURCES, findAPIResourceForRoute, isCoreBatchJob } from '../../utils/api-resources'
+import { categorizeResources, CORE_RESOURCES, findAPIResourceForRoute, supportsWorkloadLogAction } from '../../utils/api-resources'
 import { copyText } from '../../utils/clipboard'
 import {
   getPodStatus,
@@ -3832,6 +3832,7 @@ interface ResourcesViewProps {
   /** URL prefix for this view (default: '/resources'). Must match the route path. */
   basePath?: string
   // Dock actions
+  replicaSetLogs?: boolean
   onOpenLogs?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string; initContainers?: string[] }) => void
   onOpenWorkloadLogs?: (params: { namespace: string; workloadKind: string; workloadName: string }) => void
   // Callback when selected kind changes — used by parent to fetch data for the selected kind
@@ -4133,6 +4134,7 @@ export function ResourcesView({
   basePath = '/resources',
   onOpenLogs,
   onOpenWorkloadLogs,
+  replicaSetLogs,
   onSelectedKindChange,
   hideSidebar = false,
   sidebarCategoryWorkspaces,
@@ -4883,6 +4885,7 @@ export function ResourcesView({
   // Open logs for pod / workload resources — provided via props
   const openLogs = onOpenLogs
   const openWorkloadLogs = onOpenWorkloadLogs
+  const selectedKindHasWorkloadLogs = supportsWorkloadLogAction(selectedKind.name.toLowerCase(), selectedKind.group, replicaSetLogs)
 
   // Helper: get resource at highlighted index
   const getHighlightedResource = useCallback(() => {
@@ -5027,13 +5030,12 @@ export function ResourcesView({
           if (containers.length > 0) {
             openLogs?.({ namespace: ns, podName: name, containers, containerName: getDefaultLogContainerName(res), initContainers: getInitContainerNames(res) })
           }
-        } else if (['deployments', 'statefulsets', 'daemonsets', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(kindLower) || isCoreBatchJob(kindLower, selectedKind.group)) {
-          openWorkloadLogs?.({ namespace: ns, workloadKind: selectedKind.kind, workloadName: name })
+        } else if (selectedKindHasWorkloadLogs) {
+          openWorkloadLogs?.({ namespace: ns, workloadKind: selectedKind.name, workloadName: name })
         }
       },
       enabled: highlightedIndex >= 0 && !compareMode && (
-        ['pods', 'deployments', 'statefulsets', 'daemonsets', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(selectedKind.name.toLowerCase()) ||
-        isCoreBatchJob(selectedKind.name, selectedKind.group)
+        selectedKind.name.toLowerCase() === 'pods' || selectedKindHasWorkloadLogs
       ),
     },
     {

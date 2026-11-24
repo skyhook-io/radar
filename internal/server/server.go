@@ -1580,6 +1580,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		ClusterScopedPlaceholder:    true,
 		KueuePendingPosition:        true,
 		RayClusterPods:              true,
+		ReplicaSetLogs:              true,
 		PodSidecarMarks:             true,
 		KueueQueueWorkloads:         true,
 		PodFileUpload:               true,

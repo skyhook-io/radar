@@ -372,6 +372,8 @@ function useActionsBarProps(
   const canSetImages = isRolloutShape
     ? imageUpdatesSupported && isRollout && !rolloutCapabilitiesPending && rolloutCapabilities?.setImage === true
     : !workloadWritesPending && canSetWorkloadImages({ name: kind, group }, workloadWrites, imageUpdatesSupported)
+  const { support: replicaSetLogSupport } = useRadarFeature('replicaSetLogs')
+  const replicaSetLogs = kind === 'replicasets' && group === 'apps' && replicaSetLogSupport === 'supported'
   const { support: deploymentPauseSupport } = useRadarFeature('deploymentPause')
   const canPauseDeployments = !workloadWritesPending &&
     canPauseDeployment({ name: kind, group }, workloadWrites, deploymentPauseSupport === 'supported')
@@ -431,6 +433,7 @@ function useActionsBarProps(
     onOpenTerminal: openTerminal,
     onOpenLogs: openLogs,
     onOpenWorkloadLogs: openWorkloadLogs,
+    replicaSetLogs,
     onOpenNodeTerminal: openNodeTerminal,
     onCopyCommand: (text: string, message: string, event: React.MouseEvent) =>
       showCopied(text, message, event),
@@ -1310,6 +1313,7 @@ export function WorkloadView({
         renderLogsTab={(props) => (
           <LogsTabContent
             {...props}
+            replicaSetLogs={baseActionsBarProps.replicaSetLogs}
             resourceLoading={resourceLoading}
             resourceError={resourceError}
             group={effectiveGroup}
@@ -1606,6 +1610,7 @@ const SCHEDULED_LOG_KINDS = new Set([
 ])
 
 function LogsTabContent({
+  replicaSetLogs,
   kind,
   apiKind,
   group,
@@ -1623,6 +1628,7 @@ function LogsTabContent({
   resourceLoading,
   resourceError,
 }: {
+  replicaSetLogs: boolean
   kind: string
   apiKind: string
   group?: string
@@ -1674,8 +1680,7 @@ function LogsTabContent({
     )
   }
 
-  // Workload kinds with stable pod selectors use the aggregated workload logs viewer
-  if (WORKLOAD_LOG_KINDS.has(kind) && (kind !== 'Job' || isCoreBatchJob(apiKind, group))) {
+  if (replicaSetLogs || (WORKLOAD_LOG_KINDS.has(kind) && (kind !== 'Job' || isCoreBatchJob(apiKind, group)))) {
     return (
       <div className="h-full">
         <WorkloadLogsViewer
@@ -1701,7 +1706,7 @@ function LogsTabContent({
     )
   }
 
-  // Other kinds with associated pods (Jobs, CronJobs, ReplicaSets, etc.) — pod selector + LogsViewer
+  // Other resources with associated Pods offer their individual logs.
   return (
     <MultiPodLogsTab
       pods={pods}
