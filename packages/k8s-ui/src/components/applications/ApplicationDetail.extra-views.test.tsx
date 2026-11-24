@@ -264,6 +264,16 @@ describe('ApplicationDetail extra views', () => {
     expect(host.textContent).not.toContain('Deploys body')
   })
 
+  it('leaves an unresolved workload link on a deliberate app-tab click', () => {
+    const onSelectWorkload = vi.fn()
+    const props = { app: { ...app, workloads: [] }, extraViews, liveUnavailableNotice: <p>Offline</p>, onSelectWorkload }
+    const { host, rerender } = show({ ...props, selectedWorkloadKey: 'missing' })
+    act(() => tab(host, 'Deploys').click())
+    expect(onSelectWorkload).toHaveBeenCalledExactlyOnceWith(null)
+    rerender({ ...props, selectedWorkloadKey: null })
+    expect(host.textContent).toContain('Deploys body')
+  })
+
   it("shows an instance's detail beside its env in the switcher", () => {
     const instance = (env: string, detail?: string) => ({ appKey: env, name: `${env} on nonprod`, env, detail, health: 'healthy' as const, confidence: 'high', evidence: '' })
     const { host } = show({ identityInstances: [instance('prod', 'nonprod'), instance('staging')], activeInstanceKey: 'prod', onSwitchInstance: () => {} })

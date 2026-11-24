@@ -213,7 +213,8 @@ type ViewProps =
   | {
       extraViews?: undefined;
       selectedView: ApplicationView;
-      /** Called on a tab click or to repair a stale view with history replacement. */
+      /** Called on a tab click or to repair a stale view with history replacement.
+       * A click selects application scope, so a URL host clears the workload key in the same navigation. */
       onSelectView: (view: ApplicationView, options?: { replace?: boolean }) => void;
     }
   | {
@@ -221,7 +222,8 @@ type ViewProps =
        *  open directly on the workload; use WorkloadView `extraTabs` there. */
       extraViews?: ApplicationExtraView[];
       selectedView: ApplicationDetailView;
-      /** Called on a tab click or to repair a stale view with history replacement. */
+      /** Called on a tab click or to repair a stale view with history replacement.
+       * A click selects application scope, so a URL host clears the workload key in the same navigation. */
       onSelectView: (view: ApplicationDetailView, options?: { replace?: boolean }) => void;
     }
   | { extraViews?: ApplicationExtraView[]; selectedView?: undefined; onSelectView?: undefined };
@@ -245,6 +247,7 @@ export type ApplicationDetailProps = {
     ) => void;
   }) => ReactNode;
   costViewSelected?: boolean;
+  /** Select Cost in application scope. A URL host clears a pending workload key in the same navigation. */
   onSelectCostView?: () => void;
   /** Built-in views to offer. Defaults to all three. A removed view falls back
    *  in tab order. Cost is selected by default if it is the only offered view. */
@@ -549,22 +552,28 @@ export function ApplicationDetail({
     ? resolvedView
     : DEFAULT_APPLICATION_VIEW;
   const costSelected = Boolean(
-    renderCostView && (costViewSelected ?? (internalCostSelected || (!resolvedView && !selectionLoading && unavailable == null))),
+    !waitingForWorkload && renderCostView && (costViewSelected ?? (internalCostSelected || (!resolvedView && !selectionLoading && unavailable == null))),
   );
   const setView = useCallback(
     (view: ApplicationDetailView) => {
       setInternalCostSelected(false);
       if (extraViews && onSelectView) onSelectView(view);
       else if (onSelectView && isBuiltInApplicationView(view)) onSelectView(view);
-      else if (!onSelectView) setInternalView(view);
+      else if (!onSelectView) {
+        if (waitingForWorkload) onSelectWorkload?.(null);
+        setInternalView(view);
+      }
     },
-    [extraViews, onSelectView],
+    [extraViews, onSelectView, onSelectWorkload, waitingForWorkload],
   );
   const selectCostView = useCallback(() => {
     if (!renderCostView) return;
     if (onSelectCostView) onSelectCostView();
-    else setInternalCostSelected(true);
-  }, [onSelectCostView, renderCostView]);
+    else {
+      if (waitingForWorkload) onSelectWorkload?.(null);
+      setInternalCostSelected(true);
+    }
+  }, [onSelectCostView, onSelectWorkload, renderCostView, waitingForWorkload]);
   useEffect(() => {
     if (selectedView === undefined) setInternalView(DEFAULT_APPLICATION_VIEW);
     setInternalCostSelected(false);
