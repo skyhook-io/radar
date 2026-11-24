@@ -132,6 +132,40 @@ func TestRightsizingOwnerPartitionChecksEveryUIDLessSource(t *testing.T) {
 	}
 }
 
+func TestRightsizingRetiredInventoryReporters(t *testing.T) {
+	span := 7 * 24 * time.Hour
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "live"}, Spec: corev1.NodeSpec{ProviderID: "provider://live"}}
+	row := func(tag, reporter, nodeName, provider string) prom.Series {
+		return viewRow(tag, map[string]string{"cluster": "local", "job": "ksm", "instance": reporter, "node": nodeName, "provider_id": provider})
+	}
+	for _, tc := range []struct {
+		name    string
+		retired []prom.Series
+		want    bool
+	}{
+		{"retired source reported a live and a deleted node", []prom.Series{row("nodes", "retired", "live", "provider://live"), row("nodes", "retired", "gone", "provider://gone")}, true},
+		{"retired source only reported unrelated nodes", []prom.Series{row("nodes", "retired", "foreign", "provider://foreign")}, false},
+		{"retired source reported a conflicting live node", []prom.Series{row("nodes", "retired", "live", "provider://live"), row("nodes", "retired", "live", "provider://foreign")}, false},
+		{"retired source omitted node identity", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := &fakeViewQuerier{answer: func(query string) (*prom.QueryResult, error) {
+				for _, s := range []string{`present_over_time(kube_node_info{cluster="local"}[604800s])`, `present_over_time(kube_pod_info{cluster="local",uid=""}[604800s])`, `present_over_time(kube_pod_owner{cluster="local",uid="",owner_is_controller="true"}[604800s])`} {
+					if !strings.Contains(query, s) {
+						t.Fatalf("missing retained source scope %q", s)
+					}
+				}
+				rows := []prom.Series{row("sources", "now", "", ""), row("sources", "retired", "", ""), row("nodes", "now", "live", "provider://live")}
+				return &prom.QueryResult{ResultType: "vector", Series: append(rows, tc.retired...)}, nil
+			}}
+			got, err := rightsizingSourcesMatchNodes(context.Background(), q, time.Now(), span, map[string]string{"cluster": "local"}, nil, []*corev1.Node{node})
+			if got != tc.want || err != nil {
+				t.Fatalf("verified=%v err=%v", got, err)
+			}
+		})
+	}
+}
+
 func TestRightsizingOwnerPartitionQueryBound(t *testing.T) {
 	names := podNames(100, 253)
 	anchors := make([]prom.WorkloadPodIdentity, len(names))
@@ -231,7 +265,7 @@ func TestRightsizingOwnerViewScope(t *testing.T) {
 
 func TestRightsizingOwnerAuditQueryBound(t *testing.T) {
 	q := &fakeViewQuerier{answer: func(string) (*prom.QueryResult, error) { t.Fatal("oversize query sent"); return nil, nil }}
-	ok, err := rightsizingSourcesMatchNodes(context.Background(), q, time.Now(), map[string]string{"cluster": strings.Repeat("x", prom.MaxWorkloadQueryBytes)}, nil, nil)
+	ok, err := rightsizingSourcesMatchNodes(context.Background(), q, time.Now(), 0, map[string]string{"cluster": strings.Repeat("x", prom.MaxWorkloadQueryBytes)}, nil, nil)
 	if ok || !errors.Is(err, prom.ErrWorkloadQueryTooLarge) {
 		t.Fatalf("ok=%t err=%v", ok, err)
 	}

@@ -32,6 +32,12 @@ func (c *Client) verifiedRightsizingOwnerScope(ctx context.Context, req ViewScop
 	if err != nil || len(partition) == 0 {
 		return ViewScope{}, false
 	}
+	// A retired scrape target can contribute owner history under the same
+	// cluster label without appearing in today's inventory.
+	ok, err := rightsizingSourcesMatchNodes(probeCtx, c, at, req.Span, partition, nil, nodes)
+	if err != nil || !ok {
+		return ViewScope{}, false
+	}
 	scope, err := decideViewScope(probeCtx, c, req, at, partition, false)
 	return scope, err == nil && scope.State == ViewScopeVerified && !scope.Withheld
 }
@@ -131,23 +137,31 @@ func rightsizingOwnerPartition(ctx context.Context, q instantQuerier, namespace 
 	if len(sources) == 0 {
 		return nil, nil
 	}
-	ok, err := rightsizingSourcesMatchNodes(ctx, q, at, partition, sources, nodes)
+	ok, err := rightsizingSourcesMatchNodes(ctx, q, at, 0, partition, sources, nodes)
 	if !ok || err != nil {
 		return nil, err
 	}
 	return partition, nil
 }
 
-func rightsizingSourcesMatchNodes(ctx context.Context, q instantQuerier, at time.Time, partition map[string]string, sources map[string]bool, nodes []*corev1.Node) (bool, error) {
+func rightsizingSourcesMatchNodes(ctx context.Context, q instantQuerier, at time.Time, span time.Duration, partition map[string]string, sources map[string]bool, nodes []*corev1.Node) (bool, error) {
 	matchers, err := (prom.WorkloadMetricsScope{ClusterLabels: partition}).Matchers()
 	if err != nil {
 		return false, err
 	}
 	group := strings.Join(podInventorySourceLabels, ",")
+	observe := func(selector string) string {
+		if span > 0 {
+			return "present_over_time(" + selector + "[" + promSeconds(span) + "])"
+		}
+		return selector
+	}
 	// Check all UID-less reporters for this partition, even one whose Pods
 	// were absent from the bounded anchor sample.
-	reporters := `topk(65,count by (` + group + `) (kube_pod_info{` + matchers + `,uid=""} or kube_pod_owner{` + matchers + `,uid="",owner_is_controller="true"}))`
-	identities := `topk(1025,count by (` + group + `,node,system_uuid,provider_id) (kube_node_info{` + matchers + `}))`
+	info := observe(`kube_pod_info{` + matchers + `,uid=""}`)
+	owner := observe(`kube_pod_owner{` + matchers + `,uid="",owner_is_controller="true"}`)
+	reporters := `topk(65,count by (` + group + `) (` + info + ` or ` + owner + `))`
+	identities := `topk(1025,count by (` + group + `,node,system_uuid,provider_id) (` + observe(`kube_node_info{`+matchers+`}`) + `))`
 	query := viewTagged(viewScopeMetricLabel, "sources", reporters) + " or " + viewTagged(viewScopeMetricLabel, "nodes", identities)
 	if len(query) > prom.MaxWorkloadQueryBytes {
 		return false, prom.ErrWorkloadQueryTooLarge
@@ -190,7 +204,7 @@ func rightsizingSourcesMatchNodes(ctx context.Context, q instantQuerier, at time
 			return false, nil
 		}
 	}
-	if sourceRows > 64 || len(nodeRows) > 1024 {
+	if sourceRows == 0 || sourceRows > 64 || len(nodeRows) > 1024 {
 		return false, nil
 	}
 	for source := range sources {
@@ -206,6 +220,11 @@ func rightsizingSourcesMatchNodes(ctx context.Context, q instantQuerier, at time
 			continue
 		}
 		node := apiNodes[l["node"]]
+		// Nodes can retire during a history window. They cannot establish
+		// identity. A reused live node name with contrary identity still fails.
+		if span > 0 && node == nil {
+			continue
+		}
 		if node == nil || (required[source] || l["provider_id"] != "") && l["provider_id"] != node.Spec.ProviderID || l["system_uuid"] != "" && !strings.EqualFold(l["system_uuid"], node.Status.NodeInfo.SystemUUID) {
 			return false, nil
 		}
@@ -215,7 +234,7 @@ func rightsizingSourcesMatchNodes(ctx context.Context, q instantQuerier, at time
 		seen[source][node.Name] = true
 	}
 	for source := range required {
-		if len(seen[source]) != len(apiNodes) {
+		if len(seen[source]) == 0 || (span == 0 && len(seen[source]) != len(apiNodes)) {
 			return false, nil
 		}
 	}

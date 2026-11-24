@@ -340,7 +340,11 @@ different cluster labels:
   UIDs to live Pods. Within the candidate partition, every exporter reporting
   UID-less Pod info or ownership must report the complete current Kubernetes
   Node inventory with matching cloud provider IDs. Reported system UUIDs must
-  also agree. This proof applies only to rightsizing and requires the verified
+  also agree. Radar also checks every UID-less reporter retained during the
+  measurement window, including reporters retired since then. Each must have
+  reported a Node that still exists with a matching provider ID. Conflicting
+  identities for live Node names withhold the view. This proof applies only
+  to rightsizing and requires the verified
   labels on every historical metric it uses. If the additional check fails,
   Radar keeps the ordinary scope decision, including any unverified result
   available in standalone Radar.
