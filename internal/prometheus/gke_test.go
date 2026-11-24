@@ -3,6 +3,7 @@ package prometheus
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net"
@@ -533,7 +534,7 @@ func TestGKECoexistsWithDiscoveredPrometheus(t *testing.T) {
 			regular := corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "prometheus-server", Namespace: "monitoring"}, Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 9090}}}}
 			var lists, gets, nativeReads, standardRanges atomic.Int32
 			blocked, release := make(chan struct{}, 1), make(chan struct{})
-			var hold atomic.Bool
+			var hold, failRange atomic.Bool
 			hold.Store(true)
 			releaseFrontend := sync.OnceFunc(func() { hold.Store(false); close(release) })
 			defer releaseFrontend()
@@ -582,6 +583,10 @@ func TestGKECoexistsWithDiscoveredPrometheus(t *testing.T) {
 				}
 				if strings.HasSuffix(r.URL.Path, "query_range") {
 					standardRanges.Add(1)
+					if failRange.Load() {
+						http.Error(w, "conventional query failed", http.StatusInternalServerError)
+						return
+					}
 					if strings.Contains(r.FormValue("query"), "memory") {
 						fmt.Fprint(w, `{"status":"success","data":{"resultType":"matrix","result":[]}}`)
 					} else {
@@ -639,6 +644,14 @@ func TestGKECoexistsWithDiscoveredPrometheus(t *testing.T) {
 			if lists.Load() != 1 || (gets.Load() > 0) == listAllowed {
 				t.Fatalf("wrong Service enumeration: lists=%d targeted gets=%d", lists.Load(), gets.Load())
 			}
+			failRange.Store(true)
+			beforeError := nativeReads.Load()
+			_, err = chart(prom.CategoryMemory)
+			var queryErr errChartQuery
+			if !errors.As(err, &queryErr) || nativeReads.Load() != beforeError {
+				t.Fatalf("available separate frontend masked conventional error: %v", err)
+			}
+			failRange.Store(false)
 			c.mu.Lock()
 			c.gkeChecked = time.Now().Add(-2 * time.Minute)
 			c.mu.Unlock()
@@ -670,5 +683,55 @@ func TestGKEFrontendPodReadyInvalidatesSupplementWithConventionalConnection(t *t
 	c.observeResourceChange(cs, "add", pod, nil)
 	if !c.gkeChecked.IsZero() || c.gkeRevision != 1 || c.baseURL != "http://ordinary" {
 		t.Fatal("frontend readiness failed to invalidate only native discovery")
+	}
+}
+
+func TestGKEExplicitOrdinaryEndpointRemainsAuthoritative(t *testing.T) {
+	var nativeProbes atomic.Int32
+	var failConventional atomic.Bool
+	c := gkeFixtureServices(t, fixtureIssuer, 1, func(_ http.ResponseWriter, r *http.Request, _ corev1.Service) bool {
+		if r.Header.Get("X-Test-Tenant") != "" || strings.Contains(r.URL.Path, "/services") {
+			t.Errorf("configured endpoint's read or header reached Kubernetes Service discovery: %s", r.URL.Path)
+		}
+		return false
+	})
+	ordinary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Test-Tenant") != "ordinary" {
+			t.Error("configured header missing from selected store")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/query_range") {
+			if failConventional.Load() {
+				http.Error(w, "standard range unavailable", http.StatusInternalServerError)
+				return
+			}
+			fmt.Fprint(w, `{"status":"success","data":{"resultType":"matrix","result":[]}}`)
+			return
+		}
+		if strings.Contains(r.FormValue("query"), "kubernetes_io:") {
+			nativeProbes.Add(1)
+		}
+		fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`)
+	}))
+	defer ordinary.Close()
+	c.manualURL = ordinary.URL
+	c.headers = map[string]string{"X-Test-Tenant": "ordinary"}
+	chart := func() (ClusterMetricsResponse, error) {
+		d := productionChartDeps(t.Context(), c)
+		d.resolve = func(context.Context, ViewScopeRequest) (ViewScope, error) { return ViewScope{}, nil }
+		return clusterChart(t.Context(), d, prom.CategoryMemory, "1h")
+	}
+	got, err := chart()
+	if err != nil || hasSample(got.Result.Series) || got.Source != "" || nativeProbes.Load() != 1 || c.GetStatus().GKESystemMetrics {
+		t.Fatalf("explicit ordinary URL escaped: %+v %v", got, err)
+	}
+	failConventional.Store(true)
+	c.mu.Lock()
+	c.gkeChecked = time.Time{}
+	c.mu.Unlock()
+	_, err = chart()
+	var queryError errChartQuery
+	if !errors.As(err, &queryError) || nativeProbes.Load() != 1 {
+		t.Fatalf("conventional error triggered native fallback: err=%v probes=%d", err, nativeProbes.Load())
 	}
 }
