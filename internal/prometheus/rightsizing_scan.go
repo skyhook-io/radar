@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"maps"
 	"math"
 	"slices"
 	"sort"
@@ -520,70 +521,63 @@ func queryRightsizingScanBatch(ctx context.Context, client rightsizingScanQuerie
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 2)
-	for _, key := range []string{"cpu", "memory", "throttle"} {
-		key := key
-		select {
-		case sem <- struct{}{}:
-		case <-ctx.Done():
-			mu.Lock()
-			out.errors[key] = ctx.Err()
-			mu.Unlock()
-			continue
-		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			result, err := runScanQuery(ctx, batch, scope, key, queries[key], func(ctx context.Context, query string) (*prom.QueryResult, error) {
-				return client.QueryRange(ctx, query, start, end, rightsizingStep)
+	runFamily := func(family string, retry error) {
+		var result *prom.QueryResult
+		var err error
+		if retry != nil {
+			result, err = recoverScanQuery(ctx, client, batch, scope, family, start, end, retry)
+		} else {
+			result, err = runScanQuery(ctx, batch, scope, family, queries[family], func(ctx context.Context, query string) (*prom.QueryResult, error) {
+				return queryScanFamily(ctx, client, family, query, start, end)
 			})
-			<-sem
-			mu.Lock()
-			defer mu.Unlock()
-			if err != nil {
-				out.errors[key] = err
-				return
-			}
-			values := scanMatrixValues(result)
-			switch key {
-			case "cpu":
-				out.cpu = values
-			case "memory":
-				out.memory = values
-			case "throttle":
-				out.throttle = values
-			}
-		}()
-	}
-	wg.Wait()
-	for _, key := range []string{"restart_activity", "termination_history"} {
-		key := key
-		select {
-		case sem <- struct{}{}:
-		case <-ctx.Done():
-			mu.Lock()
-			out.errors[key] = ctx.Err()
-			mu.Unlock()
-			continue
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			result, err := runScanQuery(ctx, batch, scope, key, queries[key], client.Query)
-			<-sem
-			mu.Lock()
-			defer mu.Unlock()
-			if err != nil {
-				out.errors[key] = err
-				return
-			}
-			if key == "restart_activity" {
-				out.restarts = scanVectorValues(result)
-			} else {
-				out.terminations = scanTerminationEvidence(result)
-			}
-		}()
+		mu.Lock()
+		defer mu.Unlock()
+		if err != nil {
+			out.errors[family] = err
+			return
+		}
+		delete(out.errors, family)
+		switch family {
+		case "cpu":
+			out.cpu = scanMatrixValues(result)
+		case "memory":
+			out.memory = scanMatrixValues(result)
+		case "throttle":
+			out.throttle = scanMatrixValues(result)
+		case "restart_activity":
+			out.restarts = scanVectorValues(result)
+		case "termination_history":
+			out.terminations = scanTerminationEvidence(result)
+		}
 	}
-	wg.Wait()
+	phases := [][]string{{"cpu", "memory", "throttle"}, {"restart_activity", "termination_history"}}
+	for _, phase := range phases {
+		for _, family := range phase {
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				mu.Lock()
+				out.errors[family] = ctx.Err()
+				mu.Unlock()
+				continue
+			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer func() { <-sem }()
+				runFamily(family, nil)
+			}()
+		}
+		wg.Wait()
+	}
+	// A query that fits alone can still lose to a concurrent family. Retry only
+	// rejected families, after all the normal requests have released their memory.
+	for _, family := range slices.Concat(phases...) {
+		if err := out.errors[family]; err != nil && ctx.Err() == nil {
+			runFamily(family, err)
+		}
+	}
 	return out
 }
 
@@ -591,6 +585,10 @@ func queryRightsizingScanBatch(ctx context.Context, client rightsizingScanQuerie
 // ratios and historical safety evidence intact, and concatenating the disjoint
 // results preserves the original query. Only the oversized family needs splitting.
 func runScanQuery(ctx context.Context, batch []scanWorkload, scope ViewScope, family, query string, run func(context.Context, string) (*prom.QueryResult, error)) (*prom.QueryResult, error) {
+	return runScanQueryParts(ctx, batch, query, func(part []scanWorkload) string { return buildRightsizingScanQueries(part, scope)[family] }, run)
+}
+
+func runScanQueryParts(ctx context.Context, batch []scanWorkload, query string, queryFor func([]scanWorkload) string, run func(context.Context, string) (*prom.QueryResult, error)) (*prom.QueryResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -602,8 +600,7 @@ func runScanQuery(ctx context.Context, batch []scanWorkload, scope ViewScope, fa
 	}
 	var combined prom.QueryResult
 	for part := range slices.Chunk(batch, (len(batch)+1)/2) {
-		smaller := buildRightsizingScanQueries(part, scope)
-		result, err := runScanQuery(ctx, part, scope, family, smaller[family], run)
+		result, err := runScanQueryParts(ctx, part, queryFor(part), queryFor, run)
 		if err != nil {
 			return nil, err
 		}
@@ -615,9 +612,24 @@ func runScanQuery(ctx context.Context, batch []scanWorkload, scope ViewScope, fa
 }
 
 func buildRightsizingScanQueries(batch []scanWorkload, scope ViewScope) map[string]string {
+	return buildScanQueries(batch, scope, false)
+}
+
+func buildScanQueries(batch []scanWorkload, scope ViewScope, restrictContainers bool) map[string]string {
 	owner := rightsizingScanOwnerVector(batch, scope)
 	namespaces := batchNamespaces(batch)
 	nsMatcher := labelRegexMatcher("namespace", namespaces)
+	if restrictContainers {
+		// Fleet rows describe only containers in the current workload spec.
+		// Filter before the owner join so unrelated Job series do not exhaust the store.
+		containers := make(map[string]struct{})
+		for _, w := range batch {
+			for _, c := range w.workload.containers {
+				containers[c.name] = struct{}{}
+			}
+		}
+		nsMatcher += "," + labelRegexMatcher("container", slices.Sorted(maps.Keys(containers)))
+	}
 	f := func(metric string) string { return scopeMatchers(scope, metric) }
 	group := "namespace,workload_kind,workload,container"
 	cpu := fmt.Sprintf(`max by (%s) (rate(container_cpu_usage_seconds_total{%s,container!="",container!="POD"%s}[5m]) * on (namespace,pod) group_left(workload_kind,workload) (%s))`, group, nsMatcher, f(metricCPUUsage), owner)
