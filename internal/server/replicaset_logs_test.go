@@ -43,6 +43,8 @@ func TestReplicaSetLogsStayWithTheSelectedRevision(t *testing.T) {
 	recreated.UID = "new-incarnation"
 	inactive := rs.DeepCopy()
 	inactive.Name, inactive.UID = "checkout-old", "old"
+	zero := int32(0)
+	inactive.Spec.Replicas = &zero
 	objects := []runtime.Object{rs, sibling, inactive, pod("ours", rs), pod("sibling", sibling), pod("bare", nil), pod("other-incarnation", recreated)}
 	cluster := fake.NewClientset(append(testNamespaces(ns), objects...)...)
 	useTestResourceCache(t, cluster)
@@ -77,6 +79,7 @@ func TestReplicaSetLogsStayWithTheSelectedRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer stream.Body.Close()
+	deleted := false
 	added := false
 	scanner := bufio.NewScanner(stream.Body)
 	for scanner.Scan() {
@@ -84,7 +87,13 @@ func TestReplicaSetLogsStayWithTheSelectedRevision(t *testing.T) {
 		if strings.Contains(line, `"sibling"`) || strings.Contains(line, `"bare"`) || strings.Contains(line, `"other-incarnation"`) {
 			t.Fatalf("observed another controller's pod: %s", line)
 		}
-		if !added && strings.Contains(line, `"pod":"ours"`) {
+		if !deleted && strings.Contains(line, `"pod":"ours"`) {
+			deleted = true
+			if err := cluster.CoreV1().Pods(ns).Delete(ctx, "ours", metav1.DeleteOptions{}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if deleted && !added && strings.Contains(line, `"reason":"terminated"`) {
 			added = true
 			if _, err := cluster.CoreV1().Pods(ns).Create(ctx, pod("replacement", rs), metav1.CreateOptions{}); err != nil {
 				t.Fatal(err)

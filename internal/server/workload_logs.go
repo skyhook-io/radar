@@ -434,7 +434,7 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 	}
 
 	// Get initial pods
-	pods, err := listPods()
+	pods, awaitingPods, err := listPods()
 	if err != nil {
 		sendSSEError(w, flusher, err.Error())
 		return
@@ -455,7 +455,7 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 	}
 	sendSSEEvent(w, flusher, "connected", connected)
 
-	if len(pods) == 0 && !shouldWaitForPodsInLogStream(kind, emptyMetadata) {
+	if len(pods) == 0 && !awaitingPods && !shouldWaitForPodsInLogStream(kind, emptyMetadata) {
 		sendSSEEvent(w, flusher, "end", workloadLogEndPayload(emptyMetadata))
 		return
 	}
@@ -580,14 +580,14 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 		case <-discoveryTicker.C:
 			generation++
 			// Re-discover pods
-			currentPods, err := listPods()
+			currentPods, awaitingPods, err := listPods()
 			if err != nil {
 				sendSSEError(w, flusher, err.Error())
 				return
 			}
 			if len(currentPods) == 0 {
 				metadata := s.describeWorkloadLogEmpty(ctx, kind, namespace, name)
-				if !shouldWaitForPodsInLogStream(kind, metadata) {
+				if !awaitingPods && !shouldWaitForPodsInLogStream(kind, metadata) {
 					sendSSEEvent(w, flusher, "end", workloadLogEndPayload(metadata))
 					return
 				}
@@ -801,7 +801,7 @@ func (s *Server) getWorkloadPods(kind, namespace, name string) ([]*corev1.Pod, *
 		return nil, workloadSelectorGetError(err)
 	}
 
-	pods, err := listPods()
+	pods, _, err := listPods()
 	if err != nil {
 		return nil, workloadSelectorGetError(err)
 	}
