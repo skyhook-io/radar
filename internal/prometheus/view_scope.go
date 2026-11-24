@@ -372,6 +372,14 @@ func (c *Client) decideViewScopeFor(ctx context.Context, req ViewScopeRequest, a
 			return unknownViewScope(), err
 		}
 		clusterLabels = proof.scope.ClusterLabels
+		if req.View == rightsizingScopeView && len(proof.uidlessAnchors) != 0 {
+			if scope, verified := c.verifiedRightsizingOwnerScope(ctx, req, at, namespace, proof.uidlessAnchors, cache); verified {
+				return scope, nil
+			}
+			if err := ctx.Err(); err != nil {
+				return unknownViewScope(), err
+			}
+		}
 	}
 	return decideViewScope(ctx, c, req, at, clusterLabels, configured)
 }

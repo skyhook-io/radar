@@ -340,6 +340,23 @@ different cluster labels:
   back on each metric's series. A store that ignores a filter on a label the
   metric lacks returns other values, and the view is withheld rather than
   shown as scoped.
+- Rightsizing has an additional check for exporters that omit Pod UIDs from
+  labeled `kube_pod_info` series. It matches controlling `kube_pod_owner`
+  UIDs to live Pods. Within the candidate partition, every exporter reporting
+  UID-less Pod info or ownership must report the complete current Kubernetes
+  Node inventory with matching cloud provider IDs. Reported system UUIDs must
+  also agree. Radar also checks every UID-less reporter retained during the
+  measurement window, including reporters retired since then. Each must have
+  reported a Node that still exists with a matching provider ID. Conflicting
+  identities for live Node names withhold the view. Every five-minute interval
+  with UID-less Pod inventory must also include a local Node on that reporter.
+  A retired Node qualifies if it overlapped a live Node on the same reporter.
+  If independent clusters emit identical cluster and scrape identities at the
+  same time, the metrics store can merge their series. Give each cluster a
+  unique ingestion label in that setup. This check applies only to
+  rightsizing and requires the verified labels on each historical metric. If it fails,
+  Radar keeps the ordinary scope decision, including any unverified result
+  available in standalone Radar.
 - A metric without that label is used unfiltered only when it shows one cluster
   identity and holds this cluster's own live objects (Pods, Nodes, ReplicaSets,
   volumes or the HPA, depending on the metric). Views that join metrics, like
