@@ -522,6 +522,13 @@ export function ApplicationDetail({
     setInternalCostSelected(false);
     setInternalSelected(null);
   }
+  const hostSelected =
+    selectedWorkloadKey !== undefined ? selectedWorkloadKey : internalSelected;
+  const { selected: rawSelected, hostKeyIsStale } = useMemo(
+    () =>
+      resolveAppWorkloadSelection(workloads.map(workloadKey), hostSelected),
+    [workloads, hostSelected],
+  );
   const requestedView = selectedView ?? internalView;
   const offeredViews = ALL_BUILT_IN_VIEWS.filter(
     (id) => (!builtInViews || builtInViews.includes(id)) && (id !== "deploys" || Boolean(renderDeploys)),
@@ -539,7 +546,7 @@ export function ApplicationDetail({
     viewOrder,
   );
   const requestedViewAvailable = visibleViews.some(({ id }) => id === requestedView);
-  const waitingForWorkload = Boolean(selectedWorkloadKey) && (selectionLoading || unavailable != null);
+  const waitingForWorkload = Boolean(selectedWorkloadKey) && (selectionLoading || unavailable != null || hostKeyIsStale);
   // An unresolved workload deep link can temporarily land on this shell.
   // While evidence is missing, show the built-in or unavailable state without
   // running an unrelated host tab.
@@ -579,13 +586,6 @@ export function ApplicationDetail({
     setInternalCostSelected(false);
   }, [selectedView]);
 
-  const hostSelected =
-    selectedWorkloadKey !== undefined ? selectedWorkloadKey : internalSelected;
-  const { selected: rawSelected, hostKeyIsStale } = useMemo(
-    () =>
-      resolveAppWorkloadSelection(workloads.map(workloadKey), hostSelected),
-    [workloads, hostSelected],
-  );
   const setSelected = useCallback(
     (key: string | null, options?: AppWorkloadSelectionOptions) =>
       onSelectWorkload

@@ -167,15 +167,18 @@ describe('ApplicationDetail extra views', () => {
   it('clears a stale workload before asking the host to correct the selected view', () => {
     const onSelectWorkload = vi.fn()
     const onSelectView = vi.fn()
-    const props = { extraViews, selectedView: 'removed', onSelectWorkload, onSelectView }
+    const render = vi.fn(() => <div>Deploys</div>)
+    const props = { extraViews: [{ id: 'deploys', label: 'Deploys', render }], viewOrder: ['deploys', 'overview'], selectedView: 'removed', onSelectWorkload, onSelectView }
     const { rerender } = show({ ...props, selectedWorkloadKey: 'removed' })
     expect(onSelectWorkload).toHaveBeenCalledExactlyOnceWith(null, { replace: true })
     expect(onSelectView).not.toHaveBeenCalled()
+    expect(render).not.toHaveBeenCalled()
     rerender({ ...props, selectedWorkloadKey: 'another removed workload' })
     expect(onSelectWorkload).toHaveBeenCalledTimes(2)
     expect(onSelectView).not.toHaveBeenCalled()
+    expect(render).not.toHaveBeenCalled()
     rerender({ ...props, selectedWorkloadKey: null })
-    expect(onSelectView).toHaveBeenCalledExactlyOnceWith('overview', { replace: true })
+    expect(onSelectView).toHaveBeenCalledExactlyOnceWith('deploys', { replace: true })
   })
 
   it('preserves workload and tab links while the host cannot see live workloads', () => {
