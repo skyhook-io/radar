@@ -722,7 +722,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/secrets/certificate-expiry", s.handleSecretCertExpiry)
 			r.Get("/sealedsecrets/controller", s.handleSealedSecretsController)
 			// The serving controller's public sealing certificate, from its fixed
-			// /v1/cert.pem; gated on get services/proxy for that Service by name.
+			// /v1/cert.pem; gated on get services/proxy for that Service and port name.
 			r.Get("/sealedsecrets/cert", s.handleSealedSecretsCert)
 			r.Get("/certificates", s.handleCertificates)
 

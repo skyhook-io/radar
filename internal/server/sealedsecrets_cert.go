@@ -22,6 +22,7 @@ import (
 	authv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	utilnet "k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/rest"
 )
@@ -65,11 +66,11 @@ type sealedSecretsCertResponse struct {
 // request picks the Service, port or path. In-cluster Radar dials the
 // Service directly; otherwise it goes through the API server's services/proxy
 // as the caller. No redirects, a 5s timeout, a 64 KiB cap, and the answer
-// must be one PEM CERTIFICATE carrying an RSA key (what kubeseal seals with),
+// must be a current PEM CERTIFICATE carrying an RSA key (what kubeseal seals with),
 // else 502. Only that certificate is returned, re-encoded.
 //
-// With auth enabled the caller needs get services/proxy on that Service by
-// name, the grant kubeseal itself needs. Without auth (local, or a shared
+// With auth enabled the caller needs get services/proxy on the same
+// Service-and-port name that kubeseal uses. Without auth (local, or a shared
 // listener) the route reaches only that one path on that one Service, and
 // returns a public certificate that upstream installs let every
 // authenticated user fetch.
@@ -112,7 +113,27 @@ func (s *Server) handleSealedSecretsCert(w http.ResponseWriter, r *http.Request)
 	}
 	ns, name := choice.controller.Namespace, choice.controller.Name
 
-	allowed, authoritative := s.serviceProxyDecision(r, ns, name)
+	services := cache.Services()
+	if services == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Service cache not available")
+		return
+	}
+	svc, err := services.Services(ns).Get(name)
+	if apierrors.IsNotFound(err) {
+		s.writeErrorCode(w, http.StatusNotFound, "serviceNotFound", "The controller has no matching Service")
+		return
+	} else if err != nil {
+		log.Printf("[sealedsecrets] Failed to read Service %s/%s: %v", ns, name, err)
+		s.writeError(w, http.StatusInternalServerError, "Failed to read the controller's Service")
+		return
+	}
+	port := sealedSecretsHTTPPort(svc)
+	if port == nil {
+		s.writeErrorCode(w, http.StatusBadGateway, "upstream", "The controller's Service has no port named http and no single TCP port")
+		return
+	}
+	proxyName := utilnet.JoinSchemeNamePort("http", name, port.Name)
+	allowed, authoritative := s.serviceProxyDecision(r, ns, proxyName)
 	if !authoritative {
 		s.writeError(w, http.StatusServiceUnavailable, "Could not check your access to the controller; try again")
 		return
@@ -121,28 +142,12 @@ func (s *Server) handleSealedSecretsCert(w http.ResponseWriter, r *http.Request)
 		s.writeErrorCode(w, http.StatusForbidden, "denied", "You don't have permission to fetch the controller's certificate (requires get services/proxy on its Service)")
 		return
 	}
-
-	services := cache.Services()
-	if services == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "Service cache not available")
-		return
-	}
-	svc, err := services.Services(ns).Get(name)
-	if apierrors.IsNotFound(err) {
-		s.writeErrorCode(w, http.StatusNotFound, "serviceNotFound", fmt.Sprintf("The controller has no Service named %s in %s", name, ns))
-		return
-	} else if err != nil {
-		log.Printf("[sealedsecrets] Failed to read Service %s/%s: %v", ns, name, err)
-		s.writeError(w, http.StatusInternalServerError, "Failed to read the controller's Service")
-		return
-	}
-	port := sealedSecretsHTTPPort(svc)
-	if port == 0 {
-		s.writeErrorCode(w, http.StatusBadGateway, "upstream", "The controller's Service has no port named http and no single TCP port")
+	if svc.Spec.Type == corev1.ServiceTypeExternalName {
+		s.writeErrorCode(w, http.StatusBadGateway, "upstream", "The controller's Service must point to endpoints in this cluster")
 		return
 	}
 
-	client, url, err := sealedSecretsCertUpstream(r.Context(), ns, name, port)
+	client, url, err := sealedSecretsCertUpstream(r.Context(), ns, name, port.Port, proxyName)
 	if err != nil {
 		log.Printf("[sealedsecrets] Failed to build a client for %s/%s: %v", ns, name, err)
 		s.writeError(w, http.StatusInternalServerError, "Failed to reach the controller")
@@ -162,22 +167,25 @@ func (s *Server) handleSealedSecretsCert(w http.ResponseWriter, r *http.Request)
 }
 
 // sealedSecretsHTTPPort is the TCP port named "http" (the charts' name), else
-// the only TCP port (the upstream manifest leaves it unnamed); 0 otherwise.
-func sealedSecretsHTTPPort(svc *corev1.Service) int32 {
-	var tcp []int32
-	for _, p := range svc.Spec.Ports {
+// the only TCP port (the upstream manifest leaves it unnamed).
+func sealedSecretsHTTPPort(svc *corev1.Service) *corev1.ServicePort {
+	var onlyTCP *corev1.ServicePort
+	var count int
+	for i := range svc.Spec.Ports {
+		p := &svc.Spec.Ports[i]
 		if p.Protocol != "" && p.Protocol != corev1.ProtocolTCP {
 			continue
 		}
 		if p.Name == "http" {
-			return p.Port
+			return p
 		}
-		tcp = append(tcp, p.Port)
+		onlyTCP = p
+		count++
 	}
-	if len(tcp) == 1 {
-		return tcp[0]
+	if count == 1 {
+		return onlyTCP
 	}
-	return 0
+	return nil
 }
 
 // sealedSecretsCertUpstream builds the client and URL for the certificate.
@@ -185,7 +193,7 @@ func sealedSecretsHTTPPort(svc *corev1.Service) int32 {
 // Kubernetes credentials; otherwise it goes through the API server's
 // services/proxy with the caller's identity (impersonated when signed in,
 // the kubeconfig identity when not), so the API server enforces their RBAC.
-func sealedSecretsCertUpstream(ctx context.Context, namespace, service string, port int32) (*http.Client, string, error) {
+func sealedSecretsCertUpstream(ctx context.Context, namespace, service string, port int32, proxyName string) (*http.Client, string, error) {
 	noRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	if k8s.IsInCluster() {
 		return &http.Client{
@@ -216,7 +224,7 @@ func sealedSecretsCertUpstream(ctx context.Context, namespace, service string, p
 	}
 	client.Timeout = sealedSecretsCertTimeout
 	client.CheckRedirect = noRedirect
-	url, err := sealedSecretsCertProxyURL(cfg, namespace, service, port)
+	url, err := sealedSecretsCertProxyURL(cfg, namespace, proxyName)
 	return client, url, err
 }
 
@@ -224,13 +232,13 @@ func sealedSecretsCertDirectURL(namespace, service string, port int32) string {
 	return "http://" + net.JoinHostPort(service+"."+namespace+".svc", strconv.Itoa(int(port))) + sealedSecretsCertPath
 }
 
-func sealedSecretsCertProxyURL(cfg *rest.Config, namespace, service string, port int32) (string, error) {
+func sealedSecretsCertProxyURL(cfg *rest.Config, namespace, proxyName string) (string, error) {
 	base, _, err := rest.DefaultServerUrlFor(cfg)
 	if err != nil {
 		return "", err
 	}
 	return strings.TrimRight(base.String(), "/") +
-		"/api/v1/namespaces/" + namespace + "/services/http:" + service + ":" + strconv.Itoa(int(port)) + "/proxy" + sealedSecretsCertPath, nil
+		"/api/v1/namespaces/" + namespace + "/services/" + proxyName + "/proxy" + sealedSecretsCertPath, nil
 }
 
 // certFetchError keeps what the caller is told apart from the logged cause,
@@ -287,6 +295,10 @@ func fetchSealedSecretsCert(ctx context.Context, client *http.Client, url string
 	if _, ok := cert.PublicKey.(*rsa.PublicKey); !ok {
 		return "", "", certFetchFailed("not an RSA certificate", nil)
 	}
+	now := time.Now()
+	if now.Before(cert.NotBefore) || now.After(cert.NotAfter) {
+		return "", "", certFetchFailed("certificate is outside its validity period", nil)
+	}
 	sum := sha256.Sum256(block.Bytes)
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: block.Bytes})), hex.EncodeToString(sum[:]), nil
 }
@@ -313,7 +325,10 @@ func (s *Server) serviceProxyDecision(r *http.Request, namespace, name string) (
 	if client == nil {
 		return false, false
 	}
-	status, err := pkgauth.ReviewSubjectAccess(r.Context(), client, user.Username, user.Groups, authv1.ResourceAttributes{
+	// The API server includes system:authenticated for impersonated users.
+	// Match the groups that apply to the actual proxy request.
+	groups := append(append([]string(nil), user.Groups...), "system:authenticated")
+	status, err := pkgauth.ReviewSubjectAccess(r.Context(), client, user.Username, groups, authv1.ResourceAttributes{
 		Verb: "get", Resource: "services", Subresource: "proxy", Namespace: namespace, Name: name,
 	})
 	if err != nil {

@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -31,9 +32,16 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-const certProxyPath = "/api/v1/namespaces/kube-system/services/http:sealed-secrets-controller:8080/proxy/v1/cert.pem"
+const (
+	certProxyName = "http:sealed-secrets-controller:http"
+	certProxyPath = "/api/v1/namespaces/kube-system/services/" + certProxyName + "/proxy/v1/cert.pem"
+)
 
 var sealingCertRSA = sync.OnceValues(func() ([]byte, []byte) {
+	return sealingCertWithValidity(time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+})
+
+func sealingCertWithValidity(notBefore, notAfter time.Time) ([]byte, []byte) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		panic(err)
@@ -41,25 +49,25 @@ var sealingCertRSA = sync.OnceValues(func() ([]byte, []byte) {
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: "sealed-secret"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
+		NotBefore:    notBefore,
+		NotAfter:     notAfter,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
 		panic(err)
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), der
-})
+}
 
 // fakeCertAPIServer stands in for the API server: it answers
-// SubjectAccessReviews with allowSAR and serves body at every other path,
+// SubjectAccessReviews with a name-scoped proxy grant, then serves body,
 // recording each request.
 type fakeCertAPIServer struct {
 	*httptest.Server
-	allowSAR bool
-	body     []byte
-	status   int
-	location string
+	grantProxyName string
+	body           []byte
+	status         int
+	location       string
 
 	mu       sync.Mutex
 	reviews  []authv1.ResourceAttributes
@@ -79,7 +87,9 @@ func newFakeCertAPIServer(t *testing.T, body []byte) *fakeCertAPIServer {
 			}
 			f.mu.Unlock()
 			review.APIVersion, review.Kind = "authorization.k8s.io/v1", "SubjectAccessReview"
-			review.Status.Allowed = f.allowSAR
+			attrs := review.Spec.ResourceAttributes
+			review.Status.Allowed = attrs != nil && f.grantProxyName != "" && attrs.Name == f.grantProxyName &&
+				slices.Contains(review.Spec.Groups, "system:authenticated")
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(review)
 			return
@@ -87,6 +97,10 @@ func newFakeCertAPIServer(t *testing.T, body []byte) *fakeCertAPIServer {
 		f.mu.Lock()
 		f.requests = append(f.requests, r.Clone(context.Background()))
 		f.mu.Unlock()
+		if r.Header.Get("Impersonate-User") != "" && r.URL.Path != "/api/v1/namespaces/kube-system/services/"+f.grantProxyName+"/proxy/v1/cert.pem" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
 		if f.location != "" {
 			w.Header().Set("Location", f.location)
 		}
@@ -276,7 +290,9 @@ func TestSealedSecretsCertPerUser(t *testing.T) {
 			seedSealedSecretsCertFixture(t)
 			certPEM, _ := sealingCertRSA()
 			f := newFakeCertAPIServer(t, certPEM)
-			f.allowSAR = allowed
+			if allowed {
+				f.grantProxyName = certProxyName
+			}
 			useFakeAPIServer(t, f)
 			env := newAuthTestServer(t)
 
@@ -287,7 +303,7 @@ func TestSealedSecretsCertPerUser(t *testing.T) {
 			}
 			_, failure := decodeCert(t, resp, want)
 
-			wantReview := authv1.ResourceAttributes{Namespace: "kube-system", Verb: "get", Resource: "services", Subresource: "proxy", Name: "sealed-secrets-controller"}
+			wantReview := authv1.ResourceAttributes{Namespace: "kube-system", Verb: "get", Resource: "services", Subresource: "proxy", Name: certProxyName}
 			f.mu.Lock()
 			reviews := append([]authv1.ResourceAttributes(nil), f.reviews...)
 			f.mu.Unlock()
@@ -315,6 +331,7 @@ func TestSealedSecretsCertPerUser(t *testing.T) {
 func TestSealedSecretsCertRejectsUnusableUpstream(t *testing.T) {
 	ecdsaPEM := sealingKeyPEM(t, time.Now().Add(-time.Hour))
 	certPEM, _ := sealingCertRSA()
+	expiredPEM, _ := sealingCertWithValidity(time.Now().Add(-48*time.Hour), time.Now().Add(-24*time.Hour))
 	for _, tc := range []struct {
 		name     string
 		body     []byte
@@ -325,6 +342,7 @@ func TestSealedSecretsCertRejectsUnusableUpstream(t *testing.T) {
 		{"PEM but not a certificate", pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: []byte("x")}), http.StatusOK, ""},
 		{"certificate that does not parse", pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("x")}), http.StatusOK, ""},
 		{"not an RSA key", ecdsaPEM, http.StatusOK, ""},
+		{"expired", expiredPEM, http.StatusOK, ""},
 		{"over 64 KiB", append(append([]byte{}, certPEM...), make([]byte, sealedSecretsCertMaxBytes)...), http.StatusOK, ""},
 		{"error status", certPEM, http.StatusServiceUnavailable, ""},
 		{"redirect is not followed", nil, http.StatusFound, "/elsewhere"},
@@ -361,7 +379,12 @@ func TestSealedSecretsHTTPPort(t *testing.T) {
 		{"several unnamed", []corev1.ServicePort{{Name: "a", Port: 8080}, {Name: "b", Port: 9090}}, 0},
 		{"http over UDP is not it", []corev1.ServicePort{{Name: "http", Port: 8080, Protocol: corev1.ProtocolUDP}}, 0},
 	} {
-		if got := sealedSecretsHTTPPort(controllerService("ns", "svc", tc.ports...)); got != tc.want {
+		port := sealedSecretsHTTPPort(controllerService("ns", "svc", tc.ports...))
+		var got int32
+		if port != nil {
+			got = port.Port
+		}
+		if got != tc.want {
 			t.Errorf("%s: %d, want %d", tc.name, got, tc.want)
 		}
 	}
