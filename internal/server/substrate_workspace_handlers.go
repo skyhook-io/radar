@@ -71,7 +71,8 @@ func currentSubstrateKube() (substrateapi.Kube, error) {
 	if !k8s.CaptureClusterReads(func() {
 		operation = k8s.OperationContext()
 		target, targetErr = k8s.CurrentProfileTarget()
-		client, cfg, _, inCluster = k8s.GetClusterClientSnapshot()
+		conn := k8s.Current()
+		client, cfg, inCluster = conn.ClientInterface(), conn.Config(), k8s.IsInCluster()
 	}) {
 		return substrateapi.Kube{}, substrateapi.ErrClusterChanging
 	}
