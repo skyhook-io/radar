@@ -71,14 +71,22 @@ func EnableRelay(cfg RelayConfig) error {
 		return errors.New("metrics relay requires a key, an endpoint and a transport")
 	}
 	cfg.Source.MissingFamilies = slices.Clone(cfg.Source.MissingFamilies)
+	if enableRelay(cfg) {
+		notifyRelayChange()
+	}
+	return nil
+}
 
+// enableRelay applies cfg and reports whether the backend changed; a
+// same-key call only refreshes the source metadata.
+func enableRelay(cfg RelayConfig) bool {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 	if activeRelay != nil && activeRelay.cfg.Key == cfg.Key {
 		activeRelay.mu.Lock()
 		activeRelay.source = cfg.Source
 		activeRelay.mu.Unlock()
-		return nil
+		return false
 	}
 	st := &relayState{cfg: cfg, source: cfg.Source}
 	if activeRelay != nil {
@@ -101,13 +109,21 @@ func EnableRelay(cfg RelayConfig) error {
 		}
 	}
 	log.Printf("[prometheus] Metrics now served through %s", cfg.Address)
-	return nil
+	return true
 }
 
 // DisableRelay ends relay mode and restores the Prometheus configuration and
 // workload scope that were in effect before it. Callers start discovery again
 // (Prewarm) afterwards.
 func DisableRelay() bool {
+	if !disableRelay() {
+		return false
+	}
+	notifyRelayChange()
+	return true
+}
+
+func disableRelay() bool {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 	st := activeRelay
@@ -126,6 +142,30 @@ func DisableRelay() bool {
 	}
 	log.Print("[prometheus] Metrics relay ended; using Prometheus again")
 	return true
+}
+
+var (
+	relayHooksMu sync.Mutex
+	relayHooks   []func()
+)
+
+// OnRelayChange registers f to run, outside the client's locks, each time
+// the relay switches backend: it starts, its key changes, or it ends. A
+// same-key refresh doesn't count. Work chosen against the previous backend,
+// such as the automatic cost source, uses it to choose again.
+func OnRelayChange(f func()) {
+	relayHooksMu.Lock()
+	relayHooks = append(relayHooks, f)
+	relayHooksMu.Unlock()
+}
+
+func notifyRelayChange() {
+	relayHooksMu.Lock()
+	hooks := slices.Clone(relayHooks)
+	relayHooksMu.Unlock()
+	for _, f := range hooks {
+		f()
+	}
 }
 
 // RelayActive reports whether metrics are served through a relay.

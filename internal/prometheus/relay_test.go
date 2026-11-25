@@ -255,6 +255,40 @@ func TestRelaySameKeyRefreshesSourceOnly(t *testing.T) {
 	}
 }
 
+func TestRelayChangeHooksRunOnlyWhenTheBackendSwitches(t *testing.T) {
+	withRelayTestClient(t)
+	relayHooksMu.Lock()
+	savedHooks := relayHooks
+	relayHooks = nil
+	relayHooksMu.Unlock()
+	t.Cleanup(func() {
+		relayHooksMu.Lock()
+		relayHooks = savedHooks
+		relayHooksMu.Unlock()
+	})
+	var calls int
+	OnRelayChange(func() {
+		// Runs outside the client's locks.
+		_ = RelayActive()
+		calls++
+	})
+	cfg := testRelayConfig(&fakeRelayTransport{}, nil)
+	step := func(name string, do func(), want int) {
+		t.Helper()
+		do()
+		if calls != want {
+			t.Fatalf("%s: hook calls = %d, want %d", name, calls, want)
+		}
+	}
+	step("start", func() { _ = EnableRelay(cfg) }, 1)
+	cfg.Source.Warning = "name match"
+	step("same key", func() { _ = EnableRelay(cfg) }, 1)
+	cfg.Key = "key-2"
+	step("new key", func() { _ = EnableRelay(cfg) }, 2)
+	step("end", func() { DisableRelay() }, 3)
+	step("end again", func() { DisableRelay() }, 3)
+}
+
 func TestRelaySurvivesReinitialize(t *testing.T) {
 	withRelayTestClient(t)
 	if err := EnableRelay(testRelayConfig(&fakeRelayTransport{}, nil)); err != nil {

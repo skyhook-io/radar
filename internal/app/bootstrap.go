@@ -441,6 +441,13 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 		return nil
 	})
 	k8s.RegisterCostResetFunc(internalopencost.Reset)
+	// The automatic cost source was chosen against the metrics backend; an
+	// OpenObserve relay starting, changing or ending makes it choose again,
+	// as a metrics settings change does.
+	prometheuspkg.OnRelayChange(func() {
+		internalopencost.Reset()
+		internalopencost.InvalidateCurrency()
+	})
 	openobserve.Default.LogIfIgnored()
 	if cfg.LocalConnections != nil {
 		cfg.LocalRuntime = connectionruntime.New(cfg.LocalConnections, k8s.RestartTrafficSubsystem)
