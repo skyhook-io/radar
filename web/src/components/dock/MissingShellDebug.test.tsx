@@ -156,3 +156,11 @@ it.each(['unknown', 'unavailable'])('rechecks hosted exec access to a running de
   render()
   expect(button('Open debug terminal')).toBeDefined()
 })
+
+it('names other running containers without suggesting a shell or listing stopped siblings', () => {
+  f.pod.spec.containers.push({ name: 'tools' }, { name: 'stopped' })
+  f.pod.status.containerStatuses.push({ name: 'tools', state: { running: {} } }, { name: 'stopped', state: { terminated: {} } })
+  render()
+  expect(host.textContent).toContain('Other running container: tools')
+  expect(host.textContent).not.toContain('stopped')
+})

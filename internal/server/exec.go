@@ -360,7 +360,7 @@ func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if pod.UID != expectedUID {
-				sendWSError(conn, "The original Pod was replaced. Reopen its details to start a terminal.")
+				closeWithWSError(conn, "pod_replaced", "The original Pod was replaced. Open its details to start a new terminal.")
 				return
 			}
 		}
@@ -495,9 +495,13 @@ func sendPodExecError(conn *websocket.Conn, err error, podUID types.UID, executa
 }
 
 func sendWSError(conn *websocket.Conn, msg string) {
+	closeWithWSError(conn, "exec_error", msg)
+}
+
+func closeWithWSError(conn *websocket.Conn, errorType, msg string) {
 	deadline := time.Now().Add(terminalCloseTimeout)
 	conn.SetWriteDeadline(deadline)
-	sendWSErrorWithType(conn, "exec_error", msg, "", "")
+	sendWSErrorWithType(conn, errorType, msg, "", "")
 	if writeTerminalClose(conn, deadline) == nil {
 		conn.SetReadDeadline(deadline)
 		drainTerminalPeer(conn)

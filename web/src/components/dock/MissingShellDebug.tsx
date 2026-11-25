@@ -10,25 +10,16 @@ import { useNavCustomization } from '../../context/NavCustomization'
 import { useCapabilitiesContext, useNamespacedCapabilities } from '../../contexts/CapabilitiesContext'
 import { PodDebugAction, runningPodDebugTargets, type PodDebugTarget } from '../resources/PodDebugAction'
 
-export function MissingShellDebug({ namespace, name, uid, target, connection, base, podDetailsLink }: {
+interface RecoveryTarget {
   namespace: string; name: string; uid: string; target: string; connection?: string; base: string; podDetailsLink?: ReactNode
-}) {
-  const { embedded } = useNavCustomization()
-  const { username, authEnabled, deployment } = useCapabilitiesContext()
-  const { podDebugImage, canOpenEphemeralTerminal } = useNamespacedCapabilities(namespace)
-  const execOnly = !!embedded || deployment?.mode === 'cloud'
-  const current = () => getApiBase() === base && connectionHeaderValue() === connection
+}
+
+export function MissingShellDebug(props: RecoveryTarget) {
+  const { namespace, name, uid, target, connection, base, podDetailsLink } = props
   const currentConnection = useCurrentConnection()
   const sameCluster = currentConnection === connection && getApiBase() === base
-  const enabled = sameCluster
-  const podQuery = useResource<PodDebugTarget>('pods', namespace, name, undefined, { enabled })
+  const podQuery = useResource<PodDebugTarget>('pods', namespace, name, undefined, { enabled: sameCluster })
   const pod = podQuery.data
-  const usable = enabled && !podQuery.error && pod?.metadata.uid === uid && runningPodDebugTargets(pod)?.includes(target)
-  const running = usable ? getRunningEphemeralContainers(pod).filter(c => c.targetContainerName === target) : []
-  const { query, support, recheckSupport } = usePodDebugAccess(namespace, name, uid, !!usable && (execOnly ? !!running.length && !canOpenEphemeralTerminal : !running.length && !podDebugImage), execOnly, usable && !execOnly && !running.length ? podDebugImage : undefined)
-  const openTerminal = useOpenTerminal()
-  const [choice, setChoice] = useState('')
-  const [copied, setCopied] = useState<'copied' | 'manual'>()
   if (!sameCluster) return <p className="text-xs text-theme-text-secondary">The cluster connection changed. Open the Pod on the current cluster to start a terminal.</p>
   if (podQuery.error) return <div className="space-y-2 text-xs text-theme-text-secondary">
     <p>Radar couldn’t read the Pod to check its debug options.</p>
@@ -36,7 +27,30 @@ export function MissingShellDebug({ namespace, name, uid, target, connection, ba
   </div>
   if (!pod) return <p className="text-xs text-theme-text-secondary">Checking debug options…</p>
   if (pod.metadata.uid !== uid) return <p className="text-xs text-theme-text-secondary">This Pod was replaced. Open its details to start a new terminal. {podDetailsLink}</p>
-  if (!usable) return <p className="max-w-md text-xs text-theme-text-secondary">Debug recovery needs a running Linux container. Check the container state in Pod details.</p>
+  const targets = runningPodDebugTargets(pod)
+  if (!targets?.includes(target)) return <p className="max-w-md text-xs text-theme-text-secondary">Debug recovery needs a running Linux container. Check the container state in Pod details.</p>
+  const alternatives = targets.filter(name => name !== target)
+  return <div className="flex w-full min-w-0 max-w-md flex-col items-center gap-2">
+    <DebugOptions {...props} pod={pod}/>
+    {alternatives.length > 0 && <p className="max-w-md text-xs text-theme-text-secondary [overflow-wrap:anywhere]">
+      {alternatives.length === 1 ? 'Other running container' : 'Other running containers'}: <code>{alternatives.join(', ')}</code>
+    </p>}
+  </div>
+}
+
+function DebugOptions({ namespace, name, uid, target, connection, base, pod }: RecoveryTarget & {pod: PodDebugTarget}) {
+  const { embedded } = useNavCustomization()
+  const { username, authEnabled, deployment } = useCapabilitiesContext()
+  const { podDebugImage, canOpenEphemeralTerminal } = useNamespacedCapabilities(namespace)
+  const execOnly = !!embedded || deployment?.mode === 'cloud'
+  const current = () => getApiBase() === base && connectionHeaderValue() === connection
+  const running = getRunningEphemeralContainers(pod).filter(c => c.targetContainerName === target)
+  const { query, support, recheckSupport } = usePodDebugAccess(namespace, name, uid,
+    execOnly ? !!running.length && !canOpenEphemeralTerminal : !running.length && !podDebugImage,
+    execOnly, !execOnly && !running.length ? podDebugImage : undefined)
+  const openTerminal = useOpenTerminal()
+  const [choice, setChoice] = useState('')
+  const [copied, setCopied] = useState<'copied' | 'manual'>()
   if (running.length && support === 'supported' && (!execOnly || canOpenEphemeralTerminal || (!query.error && query.data?.exec))) {
     const selected = running.find(c => c.name === choice) ?? running[0]
     return <div className="flex w-full min-w-0 max-w-md flex-col items-center gap-2">

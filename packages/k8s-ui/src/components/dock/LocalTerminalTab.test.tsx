@@ -241,6 +241,13 @@ it.each(['original', undefined])('keeps Retry on an older shell error and preser
   expect(createSession.mock.lastCall).toEqual(uid ? ['app', uid] : ['app'])
 })
 
+it('leads directly to current Pod details when the server confirms replacement', async () => {
+  await act(async () => root.render(<TerminalTab namespace="test" podName="worker" containerName="app" containers={['app']} createSession={async () => ({ wsUrl: 'ws://localhost' })} podDetailsLink={<a href="/current">Open current Pod details</a>}/>))
+  await act(async () => Socket.instances[0].onmessage?.({ data: JSON.stringify({ type: 'error', errorType: 'pod_replaced', data: 'The original Pod was replaced.' }) }))
+  expect(element.querySelector('a')?.textContent).toBe('Open current Pod details')
+  expect(element.textContent).not.toMatch(/Retry|Reconnect/)
+})
+
 it('keeps the transcript and Reconnect after an interactive shell exits 127', async () => {
   await act(async () => root.render(<TerminalTab namespace="default" podName="pod" containerName="app" containers={['app']} createSession={async () => ({ wsUrl:'ws://localhost' })} />))
   const ws=Socket.instances[0]

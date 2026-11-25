@@ -334,7 +334,7 @@ export function TerminalTab({
           </div>
         )}
 
-        {!isConnected && !isConnecting && (command || errorType !== 'shell_not_found') && (
+        {!isConnected && !isConnecting && errorType !== 'pod_replaced' && (command || errorType !== 'shell_not_found') && (
           <button
             onClick={connect}
             className="flex items-center gap-1 px-2 py-0.5 text-xs text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
@@ -355,8 +355,12 @@ export function TerminalTab({
 
       <div ref={terminalRef} className="absolute top-8 left-0 right-0 bottom-0 bg-[#0f172a] [&_.xterm-viewport]:!bg-[#0f172a]" />
       {error && (
-        <div key="error" className="absolute top-8 left-0 right-0 bottom-0 flex flex-col items-center justify-center overflow-y-auto p-4 text-center bg-theme-base">
-          {errorType === 'shell_not_found' ? (
+        <div key="error" className="absolute top-8 left-0 right-0 bottom-0 flex flex-col items-center justify-center-safe overflow-y-auto p-4 text-center bg-theme-base">
+          {errorType === 'pod_replaced' ? <>
+            <div className="mb-2 text-sm font-medium text-theme-text-primary">The original Pod was replaced</div>
+            <p className="mb-3 text-xs text-theme-text-secondary">This terminal belongs to the previous Pod. Review the current Pod before opening a new terminal.</p>
+            {podDetailsLink || <p className="text-xs text-theme-text-secondary">Close this tab and open the Pod in Resources.</p>}
+          </> : errorType === 'shell_not_found' ? (
             <>
               <div className="text-warning-text mb-2 break-words text-sm font-medium">{command ? 'Command not available' : <>Couldn’t start {failedExecutable ? <code>{failedExecutable}</code> : 'a shell'} in <code>{selectedContainer}</code></>}</div>
               {command ? (
