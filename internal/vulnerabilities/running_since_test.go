@@ -166,3 +166,32 @@ func sameTime(a, b *time.Time) bool {
 	}
 	return a.Equal(*b)
 }
+
+// A CVE runs since the earliest of the images that carry it, in the table
+// and in the CVE CSV; one whose images have no running Pod has none.
+func TestCVERunningSince(t *testing.T) {
+	items, targets := runningSinceFixture()
+	// CVE-B is in both builds: a has run since day1, b since day3.
+	items[0] = vulnReport(reportSpec{name: "a", ns: "shop", ownerKind: "ReplicaSet", ownerName: "checkout-1", container: "app", repo: "acme/checkout", tag: "1", digest: "sha256:a", scanned: "2026-11-20T00:00:00Z", vulns: []vuln{{"CVE-A", "CRITICAL", "zlib", "1", "2"}, {"CVE-B", "HIGH", "zlib", "1", "2"}}})
+	want := map[string]*time.Time{"CVE-A": &day1, "CVE-B": &day1, "CVE-W": nil}
+	for _, c := range mustBuild(t, items, targets, ViewCVE, Filter{}).CVEs {
+		if w, ok := want[c.ID]; !ok || !sameTime(c.RunningSince, w) {
+			t.Fatalf("%s: %v, want %v", c.ID, c.RunningSince, w)
+		}
+	}
+	cell := func(at *time.Time) string {
+		if at == nil {
+			return ""
+		}
+		return at.Format(time.RFC3339)
+	}
+	rows := exportRows(t, mustExport(t, items, targets, ViewCVE, Filter{}), Filter{})
+	if len(rows) != 3 {
+		t.Fatalf("rows %v", rows)
+	}
+	for _, r := range rows {
+		if r["running_since"] != cell(want[r["cve"]]) {
+			t.Fatalf("CVE %s: %q, want %q", r["cve"], r["running_since"], cell(want[r["cve"]]))
+		}
+	}
+}

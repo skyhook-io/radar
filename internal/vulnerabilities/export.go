@@ -37,8 +37,9 @@ var ExportColumns = map[View][]string{
 	ViewImage: slices.Concat(exportLead, []string{"image", "digest", "os", "critical", "high", "medium", "low", "unrated", "with_a_fix", "running_in", "exposed_workloads", "os_end_of_life", "scanner", "scanner_version", "running_since"}),
 	ViewFix:   slices.Concat(exportLead, []string{"package", "type", "installed", "upgrade_to", "fixed_versions", "critical", "high", "medium", "low", "unrated", "cves", "images", "workloads", "image_names", "running_in", "exposed_workloads"}),
 	// published, last_modified and days_since_published are the scanner
-	// database's dates for the CVE, not when it was found here.
-	ViewCVE:      slices.Concat(exportLead, []string{"cve", "title", "severity", "score", "packages", "installed", "fixed_versions", "fix", "images", "workloads", "image_names", "running_in", "link", "exposed_workloads", "published", "last_modified", "days_since_published"}),
+	// database's dates for the CVE, not when it was found here; running_since
+	// is the earliest across its images (see the findings view's note).
+	ViewCVE:      slices.Concat(exportLead, []string{"cve", "title", "severity", "score", "packages", "installed", "fixed_versions", "fix", "images", "workloads", "image_names", "running_in", "link", "exposed_workloads", "published", "last_modified", "days_since_published", "running_since"}),
 	ViewWorkload: slices.Concat(exportLead, []string{"kind", "namespace", "workload", "critical", "high", "medium", "low", "unrated", "with_a_fix", "containers", "exposed_workloads", "running_since"}),
 	// One row per finding, image and workload container, for a compliance
 	// tracker (a POA&M): exposure is "exposed", "unknown", or empty when
@@ -388,7 +389,7 @@ func WriteCSV(ctx context.Context, resp Response, f Filter, cluster string) ([]b
 			if err := put(scanned, StatusOK, slices.Concat([]string{
 				c.ID, c.Title, severityLabel(c.Severity), score, join(c.Packages), join(distinct(installed)), join(distinct(fixed)), cveFix(c),
 				strconv.Itoa(c.Images), strconv.Itoa(c.Workloads), join(images), join(distinctWorkloadCells(workloads)), c.Link, exposedCell(c.Exposed, workloads),
-			}, dateCells(cvePublished(c), c.lastModified))...); err != nil {
+			}, dateCells(cvePublished(c), c.lastModified), []string{timePtrCell(c.RunningSince)})...); err != nil {
 				return nil, err
 			}
 		}

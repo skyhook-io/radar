@@ -116,7 +116,7 @@ const TRIVY_INSTALL_URL = 'https://aquasecurity.github.io/trivy-operator/latest/
 const gridOf = (tracks: (string | false | undefined)[]): React.CSSProperties => ({ gridTemplateColumns: tracks.filter(Boolean).join(' ') })
 const trackOf = (view: VulnerabilityView, name: string, on: boolean | undefined) => on && optionalColumn(view, name)?.track
 const imageGrid = (c: Record<string, boolean>) => gridOf(['minmax(220px,1.6fr)', trackOf('image', 'os', c.os), 'minmax(180px,1.2fr)', '88px', 'minmax(0,2fr)', trackOf('image', 'runningSince', c.runningSince), trackOf('image', 'scanner', c.scanner), '72px'])
-const cveGrid = (c: Record<string, boolean>) => gridOf(['minmax(260px,1.6fr)', '80px', '48px', trackOf('cve', 'published', c.published), trackOf('cve', 'age', c.age), 'minmax(200px,1.6fr)', '56px', '64px', '80px'])
+const cveGrid = (c: Record<string, boolean>) => gridOf(['minmax(260px,1.6fr)', '80px', '48px', trackOf('cve', 'published', c.published), trackOf('cve', 'age', c.age), trackOf('cve', 'runningSince', c.runningSince), 'minmax(200px,1.6fr)', '56px', '64px', '80px'])
 const FIX_COLS = 'grid-cols-[minmax(200px,1.2fr)_minmax(220px,1.5fr)_120px_minmax(0,1.6fr)_64px_80px]'
 // The route column shows only when the answer reports exposure.
 const workloadGrid = (route: boolean, c: Record<string, boolean>) => gridOf(route
@@ -869,16 +869,17 @@ function FixTable({ fixes, onOpen, onShowCVE }: { fixes: VulnerabilityFix[]; onO
 
 function CVETable({ cves, columns, onOpen }: { cves: VulnerabilityCVE[]; columns: Record<string, boolean>; onOpen: (w: VulnerabilityWorkloadRef) => void }) {
   const grid = cveGrid(columns)
-  const extra = (columns.published ? 1 : 0) + (columns.age ? 1 : 0)
+  const extra = (columns.published ? 1 : 0) + (columns.age ? 1 : 0) + (columns.runningSince ? 1 : 0)
   const now = Date.now()
   return (
     <div className="flex shrink-0 flex-col gap-2">
       <div className="shrink-0 overflow-x-auto overflow-y-hidden rounded-lg border border-theme-border bg-theme-surface">
-        <div style={{ minWidth: 960 + (columns.published ? 108 : 0) + (columns.age ? 92 : 0) }}>
+        <div style={{ minWidth: 960 + (columns.published ? 108 : 0) + (columns.age ? 92 : 0) + (columns.runningSince ? 152 : 0) }}>
           <div className={HEAD} style={grid}>
             <span>CVE</span><span>Severity</span><NumHead>Score</NumHead>
             {columns.published && <OptionalHead column={optionalColumn('cve', 'published')} />}
             {columns.age && <OptionalHead column={optionalColumn('cve', 'age')} align="right" />}
+            {columns.runningSince && <OptionalHead column={optionalColumn('cve', 'runningSince')} />}
             <span>Package</span><span>Fix</span><NumHead>Images</NumHead><NumHead>Workloads</NumHead>
           </div>
           {cves.map((c) => {
@@ -897,6 +898,7 @@ function CVETable({ cves, columns, onOpen }: { cves: VulnerabilityCVE[]; columns
                   <Num>{c.score?.toFixed(1) ?? '—'}</Num>
                   {columns.published && <PublishedDate at={c.publishedAt} now={now} />}
                   {columns.age && <Num>{c.publishedAt ? `${(daysSince(c.publishedAt, now) ?? 0).toLocaleString('en-US')} d` : '—'}</Num>}
+                  {columns.runningSince && <RunningSince since={c.runningSince} cve />}
                   <span className="truncate font-mono text-xs text-theme-text-secondary">{c.packages.join(', ')}</span>
                   <CVEFix cve={c} />
                   <Num>{c.images}</Num>

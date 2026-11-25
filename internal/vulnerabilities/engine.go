@@ -1200,6 +1200,13 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 		}
 		c.row.ExposureUnknown = c.row.ExposedTotal == 0 && slices.ContainsFunc(ids, func(id string) bool { return imageUnknown[id] })
 		c.row.Images = len(ids)
+		var since time.Time
+		for _, id := range ids {
+			if t := j.imageRunningSince(id, imageWorkloads[id]); t != nil {
+				since = oldest(since, *t)
+			}
+		}
+		c.row.RunningSince = timePtr(since)
 		c.row.Packages = sortedKeys(c.packages)
 		slices.SortStableFunc(c.row.Affected, func(a, b CVEImage) int {
 			return cmp.Or(compareBool(imageExposed[b.ImageID], imageExposed[a.ImageID]), cmp.Compare(b.WorkloadsTotal, a.WorkloadsTotal), cmp.Compare(a.Image, b.Image))

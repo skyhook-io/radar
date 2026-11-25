@@ -19,6 +19,7 @@ export interface OptionalColumn {
   hasData: (data: VulnerabilitiesResponse) => boolean
 }
 
+const CVE_RUNNING_SINCE_TIP = 'The longest any affected container has been running this exact build, so the vulnerable code has been in the cluster at least that long. A restart resets it.'
 const RUNNING_SINCE_TIP = 'How long this exact image digest has been running: the earliest start of a running container on it. Restarts and rescheduling reset it, so it may have run longer.'
 
 // Each view's optional columns, in the order they appear. Every value is also
@@ -34,6 +35,7 @@ export const OPTIONAL_COLUMNS: Partial<Record<VulnerabilityView, OptionalColumn[
   cve: [
     { key: 'cve.published', label: 'Published', tip: "When the CVE was published, from Trivy's database. Not when it was found in this cluster.", track: '92px', hasData: (d) => !!d.cves?.some((c) => c.publishedAt) },
     { key: 'cve.age', label: 'Age', tip: 'Days since the CVE was published, not since it was found in this cluster.', track: '76px', hasData: (d) => !!d.cves?.some((c) => c.publishedAt) },
+    { key: 'cve.runningSince', label: 'Running since', tip: CVE_RUNNING_SINCE_TIP, track: '136px', hasData: (d) => !!d.cves?.some((c) => c.runningSince) },
   ],
   workload: [
     { key: 'workload.runningSince', label: 'Running since', tip: `${RUNNING_SINCE_TIP} For a workload, the earliest of its containers with findings.`, track: '136px', hasData: (d) => !!d.workloads?.some((w) => w.runningSince) },
@@ -155,11 +157,14 @@ export function isoDate(iso: string): string {
  * A Running since cell: a lower bound, so it reads "at least" a date, and
  * nothing when no running container reports the scanned digest.
  */
-export function RunningSince({ since }: { since?: string }) {
+export function RunningSince({ since, cve = false }: { since?: string; cve?: boolean }) {
   if (!since) return <span />
   const date = isoDate(since)
+  const tip = cve
+    ? `Running since at least ${date}: the longest any affected container has been running this exact build, so the vulnerable code has been in the cluster at least that long. A container restart or a rescheduled Pod resets it.`
+    : `Running since at least ${date}, the earliest start of a running container on this exact image digest. A container restart or a rescheduled Pod resets it, so it may have run longer.`
   return (
-    <WithTooltip tip={`Running since at least ${date}, the earliest start of a running container on this exact image digest. A container restart or a rescheduled Pod resets it, so it may have run longer.`}>
+    <WithTooltip tip={tip}>
       <span className="truncate font-mono text-xs tabular-nums text-theme-text-secondary">
         <span className="font-sans text-theme-text-tertiary">at least </span>{date}
       </span>

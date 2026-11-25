@@ -46,7 +46,7 @@ function response(view: VulnerabilitiesResponse['view'], eolCount: number | null
       { kind: 'Deployment', group: 'apps', namespace: 'shop', name: 'checkout', counts: { ...zero, critical: 1 }, fixable: zero, runningSince: '2026-10-01T08:00:00Z', containers: [{ name: 'app', image: 'nginx:1.19.0', scanned: true, counts: { ...zero, critical: 1 }, runningSince: '2026-10-01T08:00:00Z' }] },
       { kind: 'CronJob', group: 'batch', namespace: 'shop', name: 'nightly', counts: { ...zero, high: 1 }, fixable: zero, containers: [{ name: 'app', image: 'nginx:1.19.0', scanned: true, counts: { ...zero, high: 1 } }] },
     ],
-    cves: [{ id: 'CVE-1', severity: 'critical', packages: ['openssl'], fixable: true, fixableImages: 1, images: 1, workloads: 1, publishedAt: '2020-12-10T04:15:11Z', affected: [] }],
+    cves: [{ id: 'CVE-1', severity: 'critical', packages: ['openssl'], fixable: true, fixableImages: 1, images: 1, workloads: 1, publishedAt: '2020-12-10T04:15:11Z', runningSince: '2026-08-01T08:00:00Z', affected: [] }],
   }
 }
 
@@ -121,7 +121,7 @@ describe('Vulnerabilities optional columns', () => {
     render('/checks/vulnerabilities?by=cve')
     act(() => menuButton()!.click())
     expect(menuItems().map((b) => b.textContent)).toEqual([
-      'Download By CVE as CSV', 'Download all findings as CSV', 'Show Published', 'Show Age', 'Show OS end of life filter',
+      'Download By CVE as CSV', 'Download all findings as CSV', 'Show Published', 'Show Age', 'Show Running since', 'Show OS end of life filter',
     ])
     expect(container.querySelectorAll('[role="menu"] .h-px')).toHaveLength(2)
 
@@ -135,7 +135,7 @@ describe('Vulnerabilities optional columns', () => {
   it('leaves out a group with nothing in it, and the menu when every group is empty', () => {
     render('/checks/vulnerabilities?by=cve')
     act(() => menuButton()!.click())
-    expect(menuItems().map((b) => b.textContent)).toEqual(['Show Published', 'Show Age', 'Show OS end of life filter'])
+    expect(menuItems().map((b) => b.textContent)).toEqual(['Show Published', 'Show Age', 'Show Running since', 'Show OS end of life filter'])
     expect(container.querySelectorAll('[role="menu"] .h-px')).toHaveLength(1)
 
     // An older Radar: no end-of-life count, so no filter to offer, and By fix
@@ -197,14 +197,27 @@ describe('Vulnerabilities optional columns', () => {
     act(() => menuButton()!.click())
     act(() => menuItem('Show Running since')!.click())
     expect(container.textContent).toContain('at least 2026-09-01')
+
+    // By CVE keeps its own choice, after Published and Age.
+    act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })) })
+    act(() => button('By CVE')!.click())
+    expect(container.textContent).not.toContain('2026-08-01')
+    act(() => menuButton()!.click())
+    act(() => menuItem('Show Published')!.click())
+    act(() => menuItem('Show Age')!.click())
+    act(() => menuItem('Show Running since')!.click())
+    expect(container.textContent).toContain('at least 2026-08-01')
+    const cveHeads = Array.from(container.querySelectorAll('span.underline')).map((h) => h.textContent)
+    expect(cveHeads.slice(cveHeads.indexOf('Published'), cveHeads.indexOf('Published') + 3)).toEqual(['Published', 'Age', 'Running since'])
+    expect(JSON.parse(localStorage.getItem('radar-vulnerability-columns')!)).toEqual(['workload.runningSince', 'image.runningSince', 'cve.published', 'cve.age', 'cve.runningSince'])
   })
 
   it('offers Running since only when some row has it, and keeps the choice for when one does', () => {
     // A cluster where no running container reports a scanned digest (images
     // matched by tag only, say): no row has runningSince.
     const noRunningSince = (r: VulnerabilitiesResponse): VulnerabilitiesResponse => JSON.parse(JSON.stringify(r, (k, v) => (k === 'runningSince' ? undefined : v)))
-    localStorage.setItem('radar-vulnerability-columns', JSON.stringify(['workload.runningSince', 'image.runningSince']))
-    for (const [path, others] of [['workload', []], ['image', ['Show OS', 'Show Scanner', 'Show Package URL']]] as const) {
+    localStorage.setItem('radar-vulnerability-columns', JSON.stringify(['workload.runningSince', 'image.runningSince', 'cve.runningSince']))
+    for (const [path, others] of [['workload', []], ['image', ['Show OS', 'Show Scanner', 'Show Package URL']], ['cve', ['Show Published', 'Show Age']]] as const) {
       act(() => root.unmount())
       root = createRoot(container)
       render(`/checks/vulnerabilities?by=${path}`, 3, noRunningSince)
@@ -212,7 +225,7 @@ describe('Vulnerabilities optional columns', () => {
       act(() => menuButton()!.click())
       expect(menuItems().map((b) => b.textContent)).toEqual([...others, 'Show OS end of life filter'])
     }
-    expect(JSON.parse(localStorage.getItem('radar-vulnerability-columns')!)).toEqual(['workload.runningSince', 'image.runningSince'])
+    expect(JSON.parse(localStorage.getItem('radar-vulnerability-columns')!)).toEqual(['workload.runningSince', 'image.runningSince', 'cve.runningSince'])
 
     act(() => root.unmount())
     root = createRoot(container)
@@ -308,7 +321,7 @@ describe('No data', () => {
 
     act(() => root.unmount())
     root = createRoot(container)
-    render('/checks/vulnerabilities?by=cve', null, (r) => ({ ...r, cves: r.cves!.map(({ publishedAt: _d, ...c }) => c) }))
+    render('/checks/vulnerabilities?by=cve', null, (r) => ({ ...r, cves: r.cves!.map(({ publishedAt: _d, runningSince: _r, ...c }) => c) }))
     expect(menuButton()).toBeNull()
   })
 })

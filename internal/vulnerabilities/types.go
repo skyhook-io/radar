@@ -221,6 +221,10 @@ type CVE struct {
 	PublishedAt *time.Time `json:"publishedAt,omitempty"`
 	// lastModified is the latest of its findings', for the CSV.
 	lastModified time.Time
+	// RunningSince is the earliest Image.RunningSince among the images with
+	// it: the longest any affected container has run the exact build, so the
+	// vulnerable code has been in the cluster at least that long.
+	RunningSince *time.Time `json:"runningSince,omitempty"`
 	// Images and Workloads count every image and distinct workload with it.
 	Images    int `json:"images"`
 	Workloads int `json:"workloads"`

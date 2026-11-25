@@ -126,6 +126,8 @@ export interface VulnerabilityCVE extends VulnerabilityExposure {
   link?: string
   /** The earliest publication date among its findings; not when it was found here. */
   publishedAt?: string
+  /** Earliest runningSince among the images with it: the longest any affected container has run the exact build. A lower bound; absent when none reports the digest, and from an older Radar. */
+  runningSince?: string
   images: number
   workloads: number
   affected: VulnerabilityCVEImage[]
