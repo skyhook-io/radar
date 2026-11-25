@@ -19,7 +19,7 @@ import {
 import { latestWorkloadValue, workloadPodValues } from "./workloadMetricValues";
 import { WorkloadMetricsHelpDialog } from './WorkloadMetricsHelpDialog';
 import { Disclosure } from '@skyhook-io/k8s-ui/components/ui/Disclosure';
-import { leastCertainScope, NAME_MATCHED_CLUSTER_NOTE, NAME_MATCHED_SUMMARY } from './nameMatchedScope';
+import { leastCertainScope, NAME_MATCHED_CLUSTER_NOTE, NAME_MATCHED_SUMMARY, OPENOBSERVE_NOTE } from './nameMatchedScope';
 
 interface Props {
   kind: string;
@@ -66,7 +66,7 @@ export function WorkloadMetricsSection(props: Props) {
     <div className="metrics-layout min-w-0 px-4 pt-3 space-y-4">
       <div className="flex items-start justify-between gap-3">
         <button type="button" aria-haspopup="dialog" onClick={() => setHelpOpen(true)} className="min-w-0 rounded py-1 text-left text-xs text-theme-text-secondary hover:text-accent-text focus-visible:outline-accent">
-          <Info aria-hidden="true" className="mr-1 inline h-3.5 w-3.5" />About these metrics{data?.attribution?.scope && ' · operator-asserted scope'}
+          <Info aria-hidden="true" className="mr-1 inline h-3.5 w-3.5" />About these metrics{data?.attribution?.scope && (data.attribution.scope.startsWith(OPENOBSERVE_NOTE) ? ' · scoped through OpenObserve' : ' · operator-asserted scope')}
         </button>
         {props.controls}
       </div>

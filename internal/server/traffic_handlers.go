@@ -254,8 +254,18 @@ func (s *Server) visibleFlows(r *http.Request, flows []traffic.Flow, namespaces 
 	}
 	for i := range kept {
 		kept[i].PolicyVerdict = s.redactPolicyRefs(r, kept[i].PolicyVerdict)
+		withholdServicePort(&kept[i], allowed)
 	}
 	return kept
+}
+
+// withholdServicePort clears a port taken from the destination's Services when
+// the caller cannot read that namespace: a flow is visible through either end,
+// but the port is a read of the destination's Services.
+func withholdServicePort(f *traffic.Flow, allowed map[string]bool) {
+	if allowed != nil && f.PortSource != "" && !allowed[f.Destination.Namespace] {
+		f.Port, f.PortSource = 0, ""
+	}
 }
 
 // newestFlows returns up to limit flows, newest first.
@@ -481,6 +491,7 @@ func (s *Server) handleTrafficFlowsStream(w http.ResponseWriter, r *http.Request
 				continue
 			}
 			flow.PolicyVerdict = s.redactPolicyRefs(r, flow.PolicyVerdict)
+			withholdServicePort(&flow, allowed)
 
 			data, err := json.Marshal(flow)
 			if err != nil {

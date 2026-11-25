@@ -128,3 +128,31 @@ func TestTrafficFlowsPayloadByPod(t *testing.T) {
 		t.Errorf("by pod: %d edges, want one per pod", n)
 	}
 }
+
+func TestVisibleFlowsWithholdsServicePortsFromUnreadableNamespaces(t *testing.T) {
+	s := &Server{}
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	pod := func(ns, name string) traffic.Endpoint {
+		return traffic.Endpoint{Namespace: ns, Name: name, Kind: traffic.EndpointKindWorkload}
+	}
+	flows := []traffic.Flow{
+		// Visible through its source; the port was read from b's Services.
+		{Source: pod("a", "web"), Destination: pod("b", "db"), Port: 5432, PortSource: traffic.PortSourceService},
+		{Source: pod("a", "web"), Destination: pod("b", "cache"), PortSource: traffic.PortSourceServiceMultiple},
+		{Source: pod("a", "web"), Destination: pod("a", "db"), Port: 5432, PortSource: traffic.PortSourceService},
+		{Source: pod("a", "web"), Destination: pod("b", "api"), Port: 8080},
+	}
+	got := s.visibleFlows(r, flows, []string{"a"}, traffic.FlowOptions{})
+	want := []struct {
+		port   int
+		source string
+	}{{0, ""}, {0, ""}, {5432, traffic.PortSourceService}, {8080, ""}}
+	for i, w := range want {
+		if got[i].Port != w.port || got[i].PortSource != w.source {
+			t.Errorf("flow %d (%s): got %d/%q, want %d/%q", i, got[i].Destination.Name, got[i].Port, got[i].PortSource, w.port, w.source)
+		}
+	}
+	if all := s.visibleFlows(r, flows, nil, traffic.FlowOptions{}); all[0].Port != 5432 {
+		t.Errorf("a caller who can read every namespace keeps the port: %+v", all[0])
+	}
+}

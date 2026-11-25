@@ -33,6 +33,8 @@ export const RADAR_FEATURES = {
   datadogRightsizing: { label: 'Datadog-backed rightsizing', flag: 'datadogRightsizing', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
   datadogAgentPresence: { label: 'Datadog Agent setup hints', flag: 'datadogAgentPresence', flagShippedWithEndpoint: true },
   gitopsActionCapabilities: { label: 'GitOps action permission checks', flag: 'gitopsActionCapabilities', flagShippedWithEndpoint: true },
+  openobserveCollectorPresence: { label: 'OpenObserve collector setup hints', flag: 'openobserveCollectorPresence', flagShippedWithEndpoint: true },
+  openobserveLocalSetup: { label: 'OpenObserve connections in Settings', flag: 'openobserveLocalSetup', flagShippedWithEndpoint: true },
   resourceReadCoverage: { label: 'Resource read coverage', flag: 'resourceReadCoverage', flagShippedWithEndpoint: true },
   searchCoverage: { label: 'Search coverage and object filters', flag: 'searchCoverage', flagShippedWithEndpoint: true },
   applicationEvidence: { label: 'Application evidence collection', flag: 'applicationEvidence', flagShippedWithEndpoint: true },

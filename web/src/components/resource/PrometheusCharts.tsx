@@ -1,4 +1,4 @@
-import { hasPrometheusCharts } from '../../api/prometheusCharts'
+import { hasPrometheusCharts, metricsSourceUnavailable } from '../../api/prometheusCharts'
 import { useState, useMemo } from 'react'
 import {
   PrometheusChartsView,
@@ -15,6 +15,7 @@ import {
   type PrometheusTimeRange,
 } from '../../api/client'
 import { parseQuantity } from '@skyhook-io/k8s-ui/utils/format'
+import { MetricsNotConnected, OpenObserveUnavailable } from './MetricsNotConnected'
 
 // ============================================================================
 // Radar-specific category config (lives here, not in k8s-ui, so consumers
@@ -115,6 +116,13 @@ export function PrometheusCharts({ kind, namespace, name, showEmptyState = false
     if (!resource || (activeCategory !== 'cpu' && activeCategory !== 'memory')) return undefined
     return computeRequestLimitLines(resource, kind, activeCategory)
   }, [resource, kind, activeCategory])
+
+  if (showEmptyState && isSupported && status) {
+    if (metricsSourceUnavailable(status)) return <OpenObserveUnavailable status={status} />
+    if (status.openobserve && !isConnected && !status.discovering) {
+      return <MetricsNotConnected status={status} isWorkload={['Deployment', 'StatefulSet', 'DaemonSet'].includes(kind)} />
+    }
+  }
 
   return (
     <PrometheusChartsView

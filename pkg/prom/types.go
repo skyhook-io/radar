@@ -39,6 +39,34 @@ type Status struct {
 	Service     *ServiceInfo `json:"service,omitempty"`
 	ContextName string       `json:"contextName,omitempty"`
 	Error       string       `json:"error,omitempty"`
+	// Source is set when metrics come from a backend other than a plain
+	// Prometheus; absent means Prometheus.
+	Source *MetricsSource `json:"source,omitempty"`
+}
+
+// MetricsSource describes a non-Prometheus metrics backend serving the
+// Prometheus API Radar queries, and how this cluster's series are selected in it.
+type MetricsSource struct {
+	Kind string `json:"kind"`          // "openobserve"
+	Via  string `json:"via,omitempty"` // "local" or "hub"
+	// MatchedBy says how the cluster was identified in the backend: "id"
+	// (a cluster UID label) or "name" (a confirmed cluster name).
+	MatchedBy       string              `json:"matchedBy,omitempty"`
+	ClusterLabel    *MetricsSourceLabel `json:"clusterLabel,omitempty"`
+	Dialect         string              `json:"dialect,omitempty"` // "standard" or "collector"
+	Warning         string              `json:"warning,omitempty"`
+	VersionWarning  string              `json:"versionWarning,omitempty"`
+	MissingFamilies []string            `json:"missingFamilies,omitempty"`
+	Unavailable     bool                `json:"unavailable,omitempty"`
+	// Pending: the match is still running; the note will be replaced.
+	Pending bool   `json:"pending,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+// MetricsSourceLabel is the label and value that select this cluster's series.
+type MetricsSourceLabel struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 // QueryResult is the parsed result of a Prometheus query.

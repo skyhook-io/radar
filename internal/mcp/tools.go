@@ -558,7 +558,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		Description: "Use when the question needs metric values or history: CPU/memory over time, " +
 			"request rates, error ratios, saturation, restarts trend, 'was there a spike?'. Executes " +
 			"PromQL against the cluster's Prometheus (auto-discovered or configured in Radar; also " +
-			"works with PromQL-compatible backends: Thanos, VictoriaMetrics, Mimir). " +
+			"works with PromQL-compatible backends: Thanos, VictoriaMetrics, Mimir, OpenObserve). " +
 			"type=instant returns current values; type=range returns time series for a window " +
 			"(since=1h default). For live top-N snapshots prefer top_resources; for metric/label " +
 			"name discovery use discover_metrics first — do not guess metric names. " +
@@ -567,7 +567,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"Empty results include a bounded list of related active metric names when a metric family can be inferred. " +
 			"High-cardinality queries must be wrapped in topk(5, ...): oversized results return a " +
 			"summary with a suggested rewrite instead of data. " +
-			"No cluster filter is added: in a multi-cluster store, filter by the cluster label.",
+			"OpenObserve is cluster-scoped; elsewhere filter by cluster label.",
 		Annotations: readOnly,
 	}, logToolCall("query_prometheus", handleQueryPrometheus))
 
