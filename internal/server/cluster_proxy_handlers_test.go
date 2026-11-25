@@ -49,15 +49,16 @@ func isolateProxyTest(t *testing.T) *[]string {
 	t.Cleanup(k8s.SetTestRegistryEntry("prod", "/kube/prod.yaml", "prod"))
 	var probed []string
 	orig := testContextProxy
-	testContextProxy = func(_ context.Context, name, proxyURL string) error {
+	testContextProxy = func(_ context.Context, name, proxyURL string) (string, error) {
 		probed = append(probed, name+" via "+proxyURL)
+		binding := k8s.ContextBindingFor(name)
 		if strings.Contains(proxyURL, "dead") {
-			return errors.New("cluster unreachable: proxyconnect tcp: connection refused")
+			return "", errors.New("cluster unreachable: proxyconnect tcp: connection refused")
 		}
 		if strings.Contains(proxyURL, "expired") {
-			return fmt.Errorf("cluster unreachable: %w", apierrors.NewUnauthorized("token expired"))
+			return binding, fmt.Errorf("cluster unreachable: %w", apierrors.NewUnauthorized("token expired"))
 		}
-		return nil
+		return binding, nil
 	}
 	t.Cleanup(func() { testContextProxy = orig })
 	origExists := contextExists
@@ -191,5 +192,25 @@ func TestListContextsReportsSavedProxyWithoutCredentials(t *testing.T) {
 	}
 	if got[0].ProxyURL != "socks5://bastion:1080" || got[1].ProxyURL != "" {
 		t.Fatalf("proxies = %q, %q", got[0].ProxyURL, got[1].ProxyURL)
+	}
+}
+
+// A kubeconfig reload during the probe can point the name at another file:
+// the proxy is never saved for a context it wasn't tested against.
+func TestSetContextProxyRefusesWhenTheContextChangedDuringTheProbe(t *testing.T) {
+	isolateProxyTest(t)
+	orig := testContextProxy
+	testContextProxy = func(ctx context.Context, name, proxyURL string) (string, error) {
+		binding, err := orig(ctx, name, proxyURL)
+		t.Cleanup(k8s.SetTestRegistryEntry("prod", "/kube/other.yaml", "prod"))
+		return binding, err
+	}
+	s := &Server{listenAddress: DefaultListenAddress}
+	w := putContextProxy(t, s, "127.0.0.1:9280", "prod", `{"proxyUrl":"http://proxy:3128"}`)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, body %s", w.Code, w.Body)
+	}
+	if got := savedProxies(t); len(got) != 0 {
+		t.Fatalf("saved %v for a context that wasn't probed", got)
 	}
 }
