@@ -64,6 +64,15 @@ export function canSubmitWorkflowTemplate(
   return supported && kind?.name.toLowerCase() === 'workflowtemplates' && kind.group === 'argoproj.io' && writes?.createWorkflows === true
 }
 
+// Older Radars support both CronJob actions but omit their permission fields.
+export function canTriggerCronJob(writes: WorkloadWritePermissions | undefined): boolean {
+  return writes?.createJobs !== false
+}
+
+export function canSuspendCronJob(writes: WorkloadWritePermissions | undefined): boolean {
+  return writes?.cronJobs !== false
+}
+
 export function isPausedDeployment(
   resource: { apiVersion?: string; kind?: string; spec?: { paused?: unknown } } | null | undefined,
 ): boolean {
