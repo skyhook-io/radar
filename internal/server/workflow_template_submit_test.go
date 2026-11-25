@@ -237,6 +237,43 @@ func TestWorkflowTemplateSubmit(t *testing.T) {
 			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 		}
 	})
+	t.Run("a rendered value: null is no value", func(t *testing.T) {
+		tmpl := submitTemplate("7", nil)
+		_ = unstructured.SetNestedSlice(tmpl.Object, []any{map[string]any{"name": "target", "value": nil}}, "spec", "arguments", "parameters")
+		srv, _ := workflowSubmitServer(t, tmpl)
+		if rec := postSubmit(srv, `{}`, nil); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "required") {
+			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+	t.Run("a long template name keeps the separator in the generated name", func(t *testing.T) {
+		long := strings.Repeat("a", 56) + "-.b" + strings.Repeat("c", 190)
+		tmpl := submitTemplate("7", nil)
+		tmpl.SetName(long)
+		srv, dyn := workflowSubmitServer(t, tmpl)
+		req := httptest.NewRequest(http.MethodPost, "/api/workflowtemplates/jobs/"+long+"/submit", strings.NewReader(`{"parameters":{"target":"x"}}`))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+		}
+		wf := workflowCreates(dyn)[0]
+		if want := strings.Repeat("a", 56) + "-"; wf.GetGenerateName() != want {
+			t.Fatalf("generateName = %q, want %q", wf.GetGenerateName(), want)
+		}
+		if _, found := wf.GetLabels()[argoWorkflowTemplateLabel]; found {
+			t.Fatalf("a name too long for a label value was copied into one: %v", wf.GetLabels())
+		}
+	})
+	t.Run("a create Kubernetes can't place is 404, not 500", func(t *testing.T) {
+		srv, dyn := workflowSubmitServer(t, submitTemplate("7", nil))
+		dyn.PrependReactor("create", "workflows", func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewNotFound(schema.GroupResource{Resource: "namespaces"}, "jobs")
+		})
+		if rec := postSubmit(srv, `{"parameters":{"target":"x"}}`, nil); rec.Code != http.StatusNotFound {
+			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+		}
+	})
 	t.Run("a null value is refused, an empty string is a value", func(t *testing.T) {
 		srv, dyn := workflowSubmitServer(t, submitTemplate("7", nil))
 		if rec := postSubmit(srv, `{"parameters":{"target":null}}`, nil); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "null") {

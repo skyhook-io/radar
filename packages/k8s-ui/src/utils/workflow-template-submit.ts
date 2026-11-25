@@ -80,7 +80,8 @@ export function workflowTemplateParameters(template: unknown): WorkflowTemplateP
       const name = typeof param.name === 'string' ? param.name : ''
       if (!name || seen.has(name)) continue
       seen.add(name)
-      const defaultKey = defaultKeys.find(k => k in param)
+      // A rendered `value: null` is no value.
+      const defaultKey = defaultKeys.find(k => param[k] !== undefined && param[k] !== null)
       // Argo resolves a ConfigMap reference for a submitted run; other
       // sources (supplied, event) have nothing to read from.
       const fromConfigMap = Boolean((param.valueFrom as { configMapKeyRef?: unknown } | undefined)?.configMapKeyRef)

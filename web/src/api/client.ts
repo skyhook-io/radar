@@ -8508,6 +8508,13 @@ export function useSubmitWorkflowTemplate() {
         ),
       ),
     meta: { errorMessage: "Could not submit the workflow template" },
+    onError: (error, variables) => {
+      // Radar read a newer template than the page shows: refresh it, so the
+      // next review starts from the version Radar will check.
+      if (error instanceof ApiError && error.data?.error_code === "workflow_template_changed") {
+        void queryClient.invalidateQueries({ queryKey: ["resource", "workflowtemplates", variables.namespace, variables.name] });
+      }
+    },
     onSuccess: (run, variables) => {
       showApiSuccess("Workflow submitted", `${run.namespace}/${run.name}`);
       void queryClient.invalidateQueries({

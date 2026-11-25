@@ -84,7 +84,8 @@ type WorkflowTemplateSubmitResponse struct {
 //	{"parameters": {"message": "hi"}, "name": "...", "submission": "...", "resourceVersion": "..."}
 //
 // The template read and the create both run as the caller, so Kubernetes
-// decides: `get workflowtemplates` and `create workflows` in the namespace.
+// decides: `get workflowtemplates` and `create workflows` in the namespace,
+// and `get workflows` to answer a repeated request with the run it created.
 // Argo runs it as the template's service account, not the caller's.
 func (s *Server) handleWorkflowTemplateSubmit(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
@@ -245,7 +246,8 @@ func declaredParameters(template *unstructured.Unstructured) []declaredParameter
 			seen[paramName] = true
 			satisfied := false
 			for _, key := range defaultKeys {
-				if _, ok := param[key]; ok {
+				// A rendered `value: null` is no value.
+				if param[key] != nil {
 					satisfied = true
 				}
 			}
@@ -347,7 +349,13 @@ func workflowFromTemplate(template *unstructured.Unstructured, req *WorkflowTemp
 	case req.GenerateName != "":
 		metadata["generateName"] = req.GenerateName
 	default:
-		metadata["generateName"] = template.GetName() + "-"
+		// The API server keeps 58 characters of a generateName, so a long
+		// template name is cut here, where the separator survives.
+		prefix := template.GetName()
+		if len(prefix) > maxGenerateNamePrefix-1 {
+			prefix = strings.TrimRight(prefix[:maxGenerateNamePrefix-1], "-.")
+		}
+		metadata["generateName"] = prefix + "-"
 	}
 	labels := map[string]any{}
 	if len(validation.IsValidLabelValue(template.GetName())) == 0 {
@@ -376,6 +384,8 @@ func (s *Server) writeWorkflowSubmitError(w http.ResponseWriter, err error, name
 	switch {
 	case apierrors.IsNotFound(err) && step == "read":
 		s.writeError(w, http.StatusNotFound, "workflow template not found")
+	case apierrors.IsNotFound(err):
+		s.writeError(w, http.StatusNotFound, "Kubernetes could not create the workflow: "+err.Error())
 	case apierrors.IsUnauthorized(err):
 		s.writeError(w, http.StatusForbidden, "Kubernetes rejected the credentials for this request")
 	case apierrors.IsForbidden(err) && step == "read":

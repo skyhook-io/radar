@@ -13,12 +13,12 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-function Probe({ keys, refetch, select }: { keys: string[]; refetch: () => void; select: (key: string) => void }) {
-  open = useSelectRunWhenListed(keys, refetch, select)
+function Probe({ scope, keys, refetch, select }: { scope: string; keys: string[]; refetch: () => void; select: (key: string) => void }) {
+  open = useSelectRunWhenListed(scope, keys, refetch, select)
   return null
 }
-function render(keys: string[], refetch: () => void, select: (key: string) => void) {
-  act(() => root.render(<Probe keys={keys} refetch={refetch} select={select} />))
+function render(keys: string[], refetch: () => void, select: (key: string) => void, scope = 'workflowtemplates/jobs/migrate') {
+  act(() => root.render(<Probe scope={scope} keys={keys} refetch={refetch} select={select} />))
 }
 
 it('waits for the run to be listed, refetching meanwhile, then selects it once', () => {
@@ -47,6 +47,20 @@ it('gives up after 15 seconds without selecting anything', () => {
   act(() => open('workflows/jobs/migrate-new'))
   act(() => { vi.advanceTimersByTime(30_000) })
   expect(refetch).toHaveBeenCalledTimes(15)
+  render(['workflows/jobs/migrate-new'], refetch, select)
+  expect(select).not.toHaveBeenCalled()
+})
+
+it('drops a waiting run when the view moves to another template', () => {
+  root = createRoot(document.createElement('div'))
+  const refetch = vi.fn()
+  const select = vi.fn()
+  render([], refetch, select)
+  act(() => open('workflows/jobs/migrate-new'))
+  render([], refetch, select, 'workflowtemplates/jobs/other')
+  act(() => { vi.advanceTimersByTime(3000) })
+  expect(refetch).not.toHaveBeenCalled()
+  render(['workflows/jobs/migrate-new'], refetch, select, 'workflowtemplates/jobs/other')
   render(['workflows/jobs/migrate-new'], refetch, select)
   expect(select).not.toHaveBeenCalled()
 })

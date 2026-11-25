@@ -98,7 +98,7 @@ export function WorkflowTemplateSubmitDialog({ open, onClose, template, liveReso
       warnings={changedUnderneath && repeatsAttempt ? ['The template changed since you opened this. Submitting again repeats your last attempt: Radar returns the run it created, or refuses it if it created none.'] : []}
       notes={[
         serviceAccount
-          ? <>This template sets the service account <span className="font-mono">{serviceAccount}</span> for its pods.</>
+          ? <>This template sets the service account <span className="font-mono">{serviceAccount}</span> for its pods; a step can set its own.</>
           : 'This template sets no service account, so Argo uses its configured default.',
         'The run refers to the template by name. Argo reads the template again when it starts the run, so an edit made after you submit can still apply to it.',
       ]}
@@ -135,7 +135,9 @@ export function WorkflowTemplateSubmitDialog({ open, onClose, template, liveReso
             const id = `${fieldId}-${i}`
             const error = errors[p.name]
             const hintId = `${id}-hint`
-            const hint = error && (values[p.name] ?? '') !== '' ? error : p.description
+            // "Required." is already said beside the field and in the footer.
+            const shownError = error && error !== 'Required.' ? error : undefined
+            const hint = shownError ?? p.description
             return (
               <div key={p.name}>
                 <label htmlFor={id} className="flex items-baseline gap-1.5 text-xs text-theme-text-secondary">
@@ -146,7 +148,10 @@ export function WorkflowTemplateSubmitDialog({ open, onClose, template, liveReso
                   <SelectMenu
                     id={id}
                     value={values[p.name] ?? ''}
-                    options={p.enum.map(v => ({ value: v, label: v }))}
+                    options={[
+                      ...(p.valueFromLabel ? [{ value: '', label: `From ${p.valueFromLabel}` }] : []),
+                      ...p.enum.map(v => ({ value: v, label: v })),
+                    ]}
                     onChange={(v) => setValues({ ...values, [p.name]: v })}
                     ariaLabel={p.name}
                     ariaDescribedBy={hint ? hintId : undefined}
@@ -161,14 +166,14 @@ export function WorkflowTemplateSubmitDialog({ open, onClose, template, liveReso
                     autoFocus={i === 0}
                     spellCheck={false}
                     placeholder={p.valueFromLabel ? `From ${p.valueFromLabel}` : undefined}
-                    aria-invalid={Boolean(error && (values[p.name] ?? '') !== '')}
+                    aria-invalid={Boolean(shownError)}
                     aria-required={p.required}
                     aria-describedby={hint ? hintId : undefined}
                     className={FIELD_CLASS}
                   />
                 )}
                 {hint && (
-                  <p id={hintId} className={error && (values[p.name] ?? '') !== '' ? 'mt-1 text-xs text-warning-text' : 'mt-1 text-xs text-theme-text-tertiary'}>
+                  <p id={hintId} className={shownError ? 'mt-1 text-xs text-warning-text' : 'mt-1 text-xs text-theme-text-tertiary'}>
                     {hint}
                   </p>
                 )}

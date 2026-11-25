@@ -1205,13 +1205,19 @@ export function WorkloadView({
     },
     [searchParams, setSearchParams],
   )
-  const selectRunWhenListed = useSelectRunWhenListed(listedRunKeys, batchRunsQuery.refetch, openRunInOverview)
+  const viewIdentity = `${apiKind}/${namespace}/${name}`
+  const currentViewIdentity = useRef(viewIdentity)
+  currentViewIdentity.current = viewIdentity
+  const selectRunWhenListed = useSelectRunWhenListed(viewIdentity, listedRunKeys, batchRunsQuery.refetch, openRunInOverview)
   const submitWorkflowTemplate = baseActionsBarProps.onSubmitWorkflowTemplate
   const navigateToResource = rest.onNavigateToResource
   const submitAndOpenRun = useMemo(
     () => submitWorkflowTemplate
       ? async (submission: WorkflowTemplateSubmission) => {
+          const submittedFrom = currentViewIdentity.current
           const run = await submitWorkflowTemplate(submission)
+          // The user moved on while the request ran: don't pull them back.
+          if (currentViewIdentity.current !== submittedFrom) return run
           if (expanded) selectRunWhenListed(workloadRunKey({ kind: 'workflows', namespace: run.namespace, name: run.name }))
           else navigateToResource?.({ kind: 'workflows', namespace: run.namespace, name: run.name, group: 'argoproj.io' })
           return run
