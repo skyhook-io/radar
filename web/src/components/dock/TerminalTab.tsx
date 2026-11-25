@@ -21,10 +21,11 @@ export function TerminalTab({ namespace, podName, containerName, containers, isA
   const [openedBase] = useState(getApiBase)
   const connection = debugSession ? debugSession.connectionId : openedConnection
   const base = debugSession?.apiBase ?? openedBase
-  const createSession = async (container: string) => {
+  const createSession = async (container: string, failedPodUID?: string) => {
+    const uid = debugSession?.podUID ?? failedPodUID
     if (getApiBase() !== base) throw new Error('The cluster connection changed. Reopen the Pod to start a terminal.')
     return {
-      wsUrl: withConnectionParam(getWsUrl(`/pods/${namespace}/${podName}/exec?container=${encodeURIComponent(container)}${debugSession ? `&uid=${encodeURIComponent(debugSession.podUID)}` : ''}${shell ? `&shell=${encodeURIComponent(shell)}` : ''}`), connection),
+      wsUrl: withConnectionParam(getWsUrl(`/pods/${namespace}/${podName}/exec?container=${encodeURIComponent(container)}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}${shell ? `&shell=${encodeURIComponent(shell)}` : ''}`), connection),
     }
   }
 

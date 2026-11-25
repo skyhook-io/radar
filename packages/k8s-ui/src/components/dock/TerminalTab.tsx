@@ -22,7 +22,7 @@ export interface TerminalTabProps {
   containers: string[]
   isActive?: boolean
   /** Returns the WebSocket URL to connect to for a given container. */
-  createSession: (containerName: string) => Promise<{ wsUrl: string }>
+  createSession: (containerName: string, podUID?: string) => Promise<{ wsUrl: string }>
   /** Optional: creates a debug (ephemeral) container. If omitted, the debug button is hidden. */
   createDebugContainer?: (targetContainer: string) => Promise<{ containerName: string }>
   renderDebugAction?: (targetContainer: string, podUID: string) => ReactNode
@@ -75,7 +75,7 @@ export function TerminalTab({
     if (xtermRef.current) copyTerminalSelection(xtermRef.current)
   }, [])
 
-  const connect = useCallback(() => {
+  const connect = useCallback((podUID?: string) => {
     if (!terminalRef.current) return
 
     cancelledRef.current = false
@@ -189,7 +189,8 @@ export function TerminalTab({
       detachSearch()
     }
 
-    createSessionRef.current(selectedContainer)
+    const session = podUID ? createSessionRef.current(selectedContainer, podUID) : createSessionRef.current(selectedContainer)
+    session
       .then(({ wsUrl }) => {
         if (cancelledRef.current) return
         const ws = new WebSocket(wsUrl)
@@ -327,7 +328,7 @@ export function TerminalTab({
 
         {!isConnected && !isConnecting && (command || errorType !== 'shell_not_found') && (
           <button
-            onClick={connect}
+            onClick={() => connect()}
             className="flex items-center gap-1 px-2 py-0.5 text-xs text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
           >
             <RefreshCw className="w-3 h-3" />
@@ -373,20 +374,24 @@ export function TerminalTab({
                   </button>
                 )}
                 {command && <button
-                  onClick={connect}
+                  onClick={() => connect()}
                   className="flex items-center gap-2 px-3 py-1.5 bg-theme-elevated text-theme-text-primary text-xs rounded hover:bg-theme-hover"
                 >
                   <RefreshCw className="w-3 h-3" />
                   Retry
                 </button>}
               </div>
+              {!command && failedPodUID && failedExecutable && <button
+                type="button" onClick={() => connect(failedPodUID)}
+                className="mt-3 text-xs text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary"
+              >Retry terminal</button>}
             </>
           ) : (
             <>
               <div className={clsx(toneTextClass('unhealthy'), 'mb-2 text-sm')}>Failed to connect</div>
               <div className="text-xs text-theme-text-secondary mb-3">{error}</div>
               <button
-                onClick={connect}
+                onClick={() => connect()}
                 className="flex items-center gap-2 px-3 py-1.5 btn-brand text-xs rounded"
               >
                 <RefreshCw className="w-3 h-3" />

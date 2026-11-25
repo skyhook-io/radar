@@ -66,7 +66,7 @@ export function MissingShellDebug({ namespace, name, uid, target, connection, ba
         {!query.isFetching && <button className="btn-secondary rounded px-2 py-1" onClick={() => void query.refetch()}>Recheck access</button>}
       </div>
     }
-    return <p className="max-w-md text-xs text-theme-text-secondary">To start a debug container, run <code>kubectl debug</code> with an identity permitted to update this Pod, or open the Pod in standalone Radar.</p>
+    return <p className="max-w-md text-xs text-theme-text-secondary">To start a debug container, run <code>kubectl debug</code> with an identity permitted to patch <code>pods/ephemeralcontainers</code> on this Pod, or open the Pod in standalone Radar.</p>
   }
   const access = query.error ? undefined : query.data
   const allowedImage = access?.state === 'allowed' ? access.image :

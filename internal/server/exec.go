@@ -554,8 +554,10 @@ func isShellNotFoundError(errMsg, executable string) bool {
 	// named by the runtime before assigning the error to the command.
 	if executable != "" && strings.Contains(lower, "no such file or directory") {
 		command := strings.ToLower(executable)
-		return strings.Contains(lower, `exec: "`+command+`": stat `+command+`:`) ||
-			strings.Contains(lower, `exec: "`+command+`": no such file or directory`)
+		if strings.Contains(lower, `exec: "`+command+`": stat `+command+`:`) ||
+			strings.Contains(lower, `exec: "`+command+`": no such file or directory`) {
+			return true
+		}
 	}
 	patterns := []string{
 		"executable not found",

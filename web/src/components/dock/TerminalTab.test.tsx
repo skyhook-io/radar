@@ -16,6 +16,8 @@ it.each([undefined, '/bin/custom+command'])('forwards the executable and context
   expect(url.pathname).toBe('/api/pods/app/worker/exec'); expect(url.searchParams.get('container')).toBe('app')
   expect(url.searchParams.get('shell')).toBe(shell ?? null)
   expect(url.searchParams.has('uid')).toBe(false)
+  const retry = await props.createSession('app', 'reviewed-pod')
+  expect(new URL(retry.wsUrl).searchParams.get('uid')).toBe('reviewed-pod')
 })
 
 it('reconnects on the connection the tab was opened on, not the latest', async () => {

@@ -354,6 +354,11 @@ func TestIsShellNotFoundError(t *testing.T) {
 			want:   false,
 		},
 		{
+			name:   "startup exit 127 can follow a runtime missing-file diagnostic",
+			errMsg: `no such file or directory: command terminated with exit code 127`,
+			want:   true,
+		},
+		{
 			name:   "unrelated transport error",
 			errMsg: `unable to upgrade connection: timeout`,
 			want:   false,
