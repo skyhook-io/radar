@@ -46,6 +46,16 @@ export function canPauseDeployment(
   return supported && kind?.name.toLowerCase() === 'deployments' && canPatchWorkloadKind(kind, writes)
 }
 
+// Stop and Terminate patch spec.shutdown on an Argo Workflow. A Radar older
+// than the stop endpoint sends no workflows permission, which reads as denied.
+export function canStopWorkflow(
+  kind: BulkWorkloadKindInfo | null | undefined,
+  writes: WorkloadWritePermissions | undefined,
+  supported: boolean,
+): boolean {
+  return supported && kind?.name.toLowerCase() === 'workflows' && kind.group === 'argoproj.io' && writes?.workflows === true
+}
+
 export function isPausedDeployment(
   resource: { apiVersion?: string; kind?: string; spec?: { paused?: unknown } } | null | undefined,
 ): boolean {

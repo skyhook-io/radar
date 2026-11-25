@@ -5,6 +5,7 @@ import {
   canPatchWorkloadKind,
   canPauseDeployment,
   canSetWorkloadImages,
+  canStopWorkflow,
   intersectWorkloadWrites,
   isPausedDeployment,
 } from './bulk-workload-actions'
@@ -112,6 +113,18 @@ describe('Deployment pause', () => {
     expect(canPauseDeployment({ name: 'statefulsets', group: 'apps' }, canPatch, true)).toBe(false)
     expect(canPauseDeployment({ name: 'daemonsets', group: 'apps' }, canPatch, true)).toBe(false)
     expect(canPauseDeployment({ name: 'rollouts', group: 'argoproj.io' }, canPatch, true)).toBe(false)
+  })
+
+  it('allows Workflow Stop only with the endpoint and an explicit workflows patch grant', () => {
+    const canPatch = writes({ workflows: true })
+    expect(canStopWorkflow({ name: 'workflows', group: 'argoproj.io' }, canPatch, true)).toBe(true)
+    expect(canStopWorkflow({ name: 'workflows', group: 'argoproj.io' }, canPatch, false)).toBe(false)
+    expect(canStopWorkflow({ name: 'workflows', group: 'argoproj.io' }, writes({ workflows: false }), true)).toBe(false)
+    // A Radar that predates the field sends no workflows key.
+    expect(canStopWorkflow({ name: 'workflows', group: 'argoproj.io' }, writes(), true)).toBe(false)
+    expect(canStopWorkflow({ name: 'workflows', group: 'argoproj.io' }, undefined, true)).toBe(false)
+    expect(canStopWorkflow({ name: 'workflows', group: 'example.com' }, canPatch, true)).toBe(false)
+    expect(canStopWorkflow({ name: 'rollouts', group: 'argoproj.io' }, writes({ rollouts: true, workflows: true }), true)).toBe(false)
   })
 
   it('reports paused only for a built-in Deployment with spec.paused true', () => {

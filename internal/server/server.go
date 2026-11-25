@@ -1728,6 +1728,7 @@ func mergeNamespaceCapabilities(caps *k8s.Capabilities, nsCaps *k8s.NamespaceCap
 	caps.WorkloadWrites.DaemonSets = mergeNamespaceCapability(caps.WorkloadWrites.DaemonSets, nsCaps.WorkloadWrites.DaemonSets, nsCaps.Errors.WorkloadWrites.DaemonSets)
 	caps.WorkloadWrites.StatefulSets = mergeNamespaceCapability(caps.WorkloadWrites.StatefulSets, nsCaps.WorkloadWrites.StatefulSets, nsCaps.Errors.WorkloadWrites.StatefulSets)
 	caps.WorkloadWrites.Rollouts = mergeNamespaceCapability(caps.WorkloadWrites.Rollouts, nsCaps.WorkloadWrites.Rollouts, nsCaps.Errors.WorkloadWrites.Rollouts)
+	caps.WorkloadWrites.Workflows = mergeNamespaceCapability(caps.WorkloadWrites.Workflows, nsCaps.WorkloadWrites.Workflows, nsCaps.Errors.WorkloadWrites.Workflows)
 }
 
 func mergeNamespaceCapability(global, namespaced, checkErrored bool) bool {
