@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useSyncExternalStore } from 'react'
 import { getApiBase } from './config'
 
 // Which cluster connection this tab is on, per API base.
@@ -14,15 +14,27 @@ import { getApiBase } from './config'
 export const CONNECTION_HEADER = 'X-Radar-Connection'
 
 const ids = new Map<string, string>()
+const listeners = new Set<() => void>()
+
+function subscribe(listener: () => void) {
+  listeners.add(listener)
+  return () => { listeners.delete(listener) }
+}
 
 /** Record the connection named by a status the tab received (poll, SSE frame, retry result). */
 export function observeConnectionStatus(status: { connectionId?: string }, base = getApiBase()): void {
-  if (status.connectionId) ids.set(base, status.connectionId)
+  if (!status.connectionId || ids.get(base) === status.connectionId) return
+  ids.set(base, status.connectionId)
+  listeners.forEach(listener => listener())
 }
 
 /** The connection ID to send, or undefined when the server publishes none. */
 export function connectionHeaderValue(base = getApiBase()): string | undefined {
   return ids.get(base)
+}
+
+export function useCurrentConnectionId(base = getApiBase()): string | undefined {
+  return useSyncExternalStore(subscribe, () => connectionHeaderValue(base), () => undefined)
 }
 
 /** A WebSocket URL naming a connection (a browser can't set headers on one); by default this tab's latest. */
