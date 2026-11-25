@@ -401,14 +401,16 @@ func namespacesCreatedAfter(namespaces []string, t time.Time) bool {
 }
 
 // HistoryCoverageFor returns coverage as a response carries it: nil when the
-// history covers the window. CompleteSince is store-wide, so it can date
-// events the caller may not read; it is kept only for callers who can read
-// every namespace.
+// history covers the window. When events were evicted, CompleteSince dates
+// the newest deleted event store-wide, which can be one in a namespace the
+// caller may not read, so it is then kept only for callers who can read every
+// namespace. A boundary from a late start alone is when Radar began watching,
+// which says nothing about other namespaces, so every caller gets it.
 func HistoryCoverageFor(coverage issuesapi.HistoryCoverage, readsAllNamespaces bool) *issuesapi.HistoryCoverage {
 	if !coverage.Incomplete {
 		return nil
 	}
-	if !readsAllNamespaces {
+	if !readsAllNamespaces && slices.Contains(coverage.Reasons, issuesapi.HistoryEventsEvicted) {
 		coverage.CompleteSince = time.Time{}
 	}
 	return &coverage
