@@ -10,6 +10,8 @@ import { MetalLBIPAddressPoolRenderer, MetalLBL2AdvertisementRenderer, MetalLBBG
 import { getOpenTelemetryCollectorStatus, getOpenTelemetryInstrumentationStatus } from '../resources/resource-utils-opentelemetry'
 import { OpenTelemetryCollectorRenderer, OpenTelemetryInstrumentationRenderer } from '../resources/renderers/OpenTelemetryRenderers'
 import { FlaggerCanaryRenderer, FlaggerMetricTemplateRenderer } from '../resources/renderers/FlaggerRenderers'
+import { K3sHelmChartConfigRenderer, K3sHelmChartRenderer } from '../resources/renderers/K3sHelmRenderers'
+import { K3S_HELM_GROUP, getK3sHelmChartStatus } from '../resources/resource-utils-k3s'
 import { UpgradePlanRenderer } from '../resources/renderers/UpgradePlanRenderer'
 import { UPGRADE_PLAN_GROUP, getUpgradePlanStatus } from '../resources/resource-utils-upgrade-plan'
 import { SecretProviderClassRenderer, type SecretProviderClassRendererProps } from '../resources/renderers/SecretsStoreRenderers'
@@ -48,6 +50,8 @@ import {
   getSealedSecretStatus,
   getPDBStatus,
   getGitRepositoryStatus,
+  getExternalArtifactStatus,
+  getArtifactGeneratorStatus,
   getOCIRepositoryStatus,
   getHelmRepositoryStatus,
   getKustomizationStatus,
@@ -185,10 +189,14 @@ import {
   WebhookConfigRenderer,
   ValidatingAdmissionPolicyRenderer,
   ValidatingAdmissionPolicyBindingRenderer,
+  MutatingAdmissionPolicyRenderer,
+  MutatingAdmissionPolicyBindingRenderer,
   EventRenderer,
   EndpointSliceRenderer,
   GenericRenderer,
   GitRepositoryRenderer,
+  ExternalArtifactRenderer,
+  ArtifactGeneratorRenderer,
   FluxInstanceRenderer,
   FluxReportRenderer,
   ResourceSetRenderer,
@@ -414,6 +422,11 @@ export interface RendererOverrides {
     data: any
     onNavigate?: (ref: ResourceRef) => void
   }>
+  /** Host-injected: wires the HelmChart drawer's "Open Helm release" link. */
+  K3sHelmChartRenderer?: React.ComponentType<{
+    data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
   /** Host-injected: feeds Nodes to the Plan drawer's per-node progress. */
   UpgradePlanRenderer?: React.ComponentType<{
     data: any
@@ -511,6 +524,14 @@ export interface RendererOverrides {
     data: any
     onNavigate?: (ref: ResourceRef) => void
   }>
+  MutatingAdmissionPolicyRenderer?: React.ComponentType<{
+    data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
+  MutatingAdmissionPolicyBindingRenderer?: React.ComponentType<{
+    data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
 }
 
 // Known resource types with specific renderers (module-level to avoid re-allocation)
@@ -521,6 +542,7 @@ const KNOWN_KINDS = new Set([
   'ipaddresspools', 'l2advertisements', 'bgpadvertisements', 'bgppeers', 'configurationstates',
   'opentelemetrycollectors', 'instrumentations',
   'canaries', 'metrictemplates',
+  'helmcharts', 'helmchartconfigs',
   'plans',
   'secretproviderclasses',
   'pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets',
@@ -541,7 +563,8 @@ const KNOWN_KINDS = new Set([
   'clusternetworkpolicies', 'clusternetworkpolicy',
   'poddisruptionbudgets', 'serviceaccounts', 'namespaces',
   'roles', 'clusterroles', 'rolebindings', 'clusterrolebindings',
-  'events', 'gitrepositories', 'ocirepositories', 'helmrepositories', 'fluxinstances', 'fluxreports', 'resourcesets', 'resourcesetinputproviders',
+  'events', 'gitrepositories', 'ocirepositories', 'helmrepositories', 'externalartifacts', 'artifactgenerators',
+  'fluxinstances', 'fluxreports', 'resourcesets', 'resourcesetinputproviders',
   'kustomizations', 'helmreleases', 'alerts', 'applications',
   'nodepools', 'nodeclaims', 'ec2nodeclasses', 'scaledobjects', 'scaledjobs',
   'triggerauthentications', 'clustertriggerauthentications',
@@ -576,6 +599,7 @@ const KNOWN_KINDS = new Set([
   'peerauthentications', 'authorizationpolicies',
   'mutatingwebhookconfigurations', 'validatingwebhookconfigurations',
   'validatingadmissionpolicies', 'validatingadmissionpolicybindings',
+  'mutatingadmissionpolicies', 'mutatingadmissionpolicybindings',
   'ingressclasses', 'priorityclasses', 'runtimeclasses', 'leases', 'limitranges',
   'knativeservices', 'knativeconfigurations', 'knativerevisions', 'knativeroutes',
   'brokers', 'triggers', 'eventtypes', 'pingsources', 'apiserversources', 'containersources', 'sinkbindings',
@@ -796,6 +820,7 @@ export function ResourceRendererDispatch({
     ['ipaddresspools', 'l2advertisements', 'bgpadvertisements', 'bgppeers', 'configurationstates'].includes(kind) ||
     ['opentelemetrycollectors', 'instrumentations'].includes(kind) ||
     ['canaries', 'metrictemplates'].includes(kind) ||
+    ['helmcharts', 'helmchartconfigs'].includes(kind) ||
     kind === 'plans' ||
     kind === 'secretproviderclasses' ||
     isFluxKind || kind === 'applications' || kind === 'services' || kind === 'ingresses' || kind === 'certificates' || kind === 'gateways'
@@ -807,7 +832,9 @@ export function ResourceRendererDispatch({
     || kind === 'rayjobs' || kind === 'rayclusters' || kind === 'rayservices' || kind === 'admissionchecks' || kind === 'provisioningrequests'
     || kind === 'machines' || kind === 'machinesets' || kind === 'workloads' || kind === 'localqueues' || kind === 'clusterqueues'
     || kind === 'validatingadmissionpolicies' || kind === 'validatingadmissionpolicybindings'
+    || kind === 'mutatingadmissionpolicies' || kind === 'mutatingadmissionpolicybindings'
     || kind === 'certificatesigningrequests'
+    || kind === 'externalartifacts' || kind === 'artifactgenerators'
     || kind === 'nodes' || kind === 'volumes'
     || isFluxOperatorKind
   const isCNPGApiVersion = isApiGroup(data?.apiVersion, CNPG_GROUP)
@@ -826,6 +853,7 @@ export function ResourceRendererDispatch({
     (kind === 'configurationstates' && isMetalLBConfigurationState(data)) ||
     (['opentelemetrycollectors', 'instrumentations'].includes(kind) && isApiGroup(data?.apiVersion, 'opentelemetry.io')) ||
     (['canaries', 'metrictemplates'].includes(kind) && isApiGroup(data?.apiVersion, 'flagger.app')) ||
+    (['helmcharts', 'helmchartconfigs'].includes(kind) && isApiGroup(data?.apiVersion, K3S_HELM_GROUP)) ||
     (kind === 'plans' && isApiGroup(data?.apiVersion, UPGRADE_PLAN_GROUP)) ||
     (kind === 'secretproviderclasses' && isApiGroup(data?.apiVersion, SECRETS_STORE_GROUP)) ||
     (isFluxKind && isFluxResource)
@@ -860,9 +888,12 @@ export function ResourceRendererDispatch({
     || (kind === 'admissionchecks' && isKueueQueueResource(data))
     || (kind === 'provisioningrequests' && ['autoscaling.x-k8s.io/v1', 'autoscaling.x-k8s.io/v1beta1'].includes(data?.apiVersion))
     || ((kind === 'localqueues' || kind === 'clusterqueues') && isKueueQueueResource(data))
-    || ((kind === 'validatingadmissionpolicies' || kind === 'validatingadmissionpolicybindings')
+    || ((kind === 'validatingadmissionpolicies' || kind === 'validatingadmissionpolicybindings'
+    || kind === 'mutatingadmissionpolicies' || kind === 'mutatingadmissionpolicybindings')
       && isApiGroup(data?.apiVersion, 'admissionregistration.k8s.io'))
     || (kind === 'certificatesigningrequests' && isCertificateSigningRequest(data))
+    || (kind === 'externalartifacts' && isApiGroup(data?.apiVersion, 'source.toolkit.fluxcd.io'))
+    || (kind === 'artifactgenerators' && isApiGroup(data?.apiVersion, 'source.extensions.fluxcd.io'))
     || (kind === 'nodes' && isCoreNode(data))
     || (kind === 'volumes' && isApiGroup(data?.apiVersion, LONGHORN_GROUP))
     || isFluxOperatorResource
@@ -911,6 +942,7 @@ export function ResourceRendererDispatch({
   const CNPGObjectStoreComp = rendererOverrides?.CNPGObjectStoreRenderer ?? CNPGObjectStoreRenderer
   const VeleroBSLComp = rendererOverrides?.VeleroBSLRenderer ?? VeleroBSLRenderer
   const SecretProviderClassComp = rendererOverrides?.SecretProviderClassRenderer ?? SecretProviderClassRenderer
+  const K3sHelmChartComp = rendererOverrides?.K3sHelmChartRenderer ?? K3sHelmChartRenderer
   const UpgradePlanComp = rendererOverrides?.UpgradePlanRenderer ?? UpgradePlanRenderer
   const VeleroBackupComp = rendererOverrides?.VeleroBackupRenderer ?? VeleroBackupRenderer
   const VeleroRestoreComp = rendererOverrides?.VeleroRestoreRenderer ?? VeleroRestoreRenderer
@@ -933,7 +965,9 @@ export function ResourceRendererDispatch({
   const HTTPRouteComp = rendererOverrides?.HTTPRouteRenderer ?? HTTPRouteRenderer
   const RolloutComp = rendererOverrides?.RolloutRenderer ?? RolloutRenderer
   const ValidatingAdmissionPolicyComp = rendererOverrides?.ValidatingAdmissionPolicyRenderer ?? ValidatingAdmissionPolicyRenderer
+  const MutatingAdmissionPolicyComp = rendererOverrides?.MutatingAdmissionPolicyRenderer ?? MutatingAdmissionPolicyRenderer
   const ValidatingAdmissionPolicyBindingComp = rendererOverrides?.ValidatingAdmissionPolicyBindingRenderer ?? ValidatingAdmissionPolicyBindingRenderer
+  const MutatingAdmissionPolicyBindingComp = rendererOverrides?.MutatingAdmissionPolicyBindingRenderer ?? MutatingAdmissionPolicyBindingRenderer
   const showsReflection = (kind === 'configmaps' || kind === 'secrets') && hasReflectorDetails(data, relationships?.reflection)
   const reflectionRefs = showsReflection ? [relationships?.reflection?.source, ...(relationships?.reflection?.mirrors ?? [])].filter((ref): ref is ResourceRef => !!ref) : []
   const withoutReflection = (refs: ResourceRef[] | undefined) => refs?.filter(ref => !reflectionRefs.some(mirror => mirror.kind === ref.kind && mirror.namespace === ref.namespace && mirror.name === ref.name && (mirror.group ?? '') === (ref.group ?? '')))
@@ -1023,6 +1057,8 @@ export function ResourceRendererDispatch({
         {(kind === 'rolebindings' || kind === 'clusterrolebindings') && <RoleBindingComp data={data} onNavigate={onNavigate} />}
         {kind === 'events' && <EventRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'gitrepositories' && isFluxResource && <GitRepositoryRenderer data={data} />}
+        {kind === 'externalartifacts' && isApiGroup(data?.apiVersion, 'source.toolkit.fluxcd.io') && <ExternalArtifactRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'artifactgenerators' && isApiGroup(data?.apiVersion, 'source.extensions.fluxcd.io') && <ArtifactGeneratorRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'fluxinstances' && isFluxOperatorResource && <FluxInstanceRenderer data={data} />}
         {kind === 'fluxreports' && isFluxOperatorResource && <FluxReportRenderer data={data} />}
         {kind === 'resourcesets' && isFluxOperatorResource && <ResourceSetRenderer data={data} onNavigate={onNavigate} />}
@@ -1133,7 +1169,9 @@ export function ResourceRendererDispatch({
         {kind === 'mutatingwebhookconfigurations' && <WebhookConfigRenderer data={data} isMutating onNavigate={onNavigate} />}
         {kind === 'validatingwebhookconfigurations' && <WebhookConfigRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'validatingadmissionpolicies' && isApiGroup(data?.apiVersion, 'admissionregistration.k8s.io') && <ValidatingAdmissionPolicyComp data={data} onNavigate={onNavigate} />}
+        {kind === 'mutatingadmissionpolicies' && isApiGroup(data?.apiVersion, 'admissionregistration.k8s.io') && <MutatingAdmissionPolicyComp data={data} onNavigate={onNavigate} />}
         {kind === 'validatingadmissionpolicybindings' && isApiGroup(data?.apiVersion, 'admissionregistration.k8s.io') && <ValidatingAdmissionPolicyBindingComp data={data} onNavigate={onNavigate} />}
+        {kind === 'mutatingadmissionpolicybindings' && isApiGroup(data?.apiVersion, 'admissionregistration.k8s.io') && <MutatingAdmissionPolicyBindingComp data={data} onNavigate={onNavigate} />}
         {kind === 'ingressclasses' && <IngressClassRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'customresourcedefinitions' && isApiGroup(data?.apiVersion, 'apiextensions.k8s.io') && <CRDComp data={data} onNavigate={onNavigate} />}
         {kind === 'priorityclasses' && <PriorityClassRenderer data={data} />}
@@ -1206,6 +1244,8 @@ export function ResourceRendererDispatch({
         {kind === 'canaries' && isApiGroup(data?.apiVersion, 'flagger.app') && <FlaggerCanaryRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'metrictemplates' && isApiGroup(data?.apiVersion, 'flagger.app') && <FlaggerMetricTemplateRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'secretproviderclasses' && isApiGroup(data?.apiVersion, SECRETS_STORE_GROUP) && <SecretProviderClassComp data={data} onNavigate={onNavigate} />}
+        {kind === 'helmcharts' && isApiGroup(data?.apiVersion, K3S_HELM_GROUP) && <K3sHelmChartComp data={data} onNavigate={onNavigate} />}
+        {kind === 'helmchartconfigs' && isApiGroup(data?.apiVersion, K3S_HELM_GROUP) && <K3sHelmChartConfigRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'plans' && isApiGroup(data?.apiVersion, UPGRADE_PLAN_GROUP) && <UpgradePlanComp data={data} onNavigate={onNavigate} />}
 
         {/* Generic renderer for CRDs and unknown resource types — also fires
@@ -1272,6 +1312,8 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'kafkaconnectors' && isApiGroup(data.apiVersion, 'kafka.strimzi.io')) return getStrimziConnectorStatus(data)
   if ((k === 'kafkas' && isStrimziKafka(data)) || (k === 'kafkanodepools' && isStrimziKafkaNodePool(data))) return getStrimziClusterStatus(data)
   if ((k === 'volumesnapshots' && isVolumeSnapshot(data)) || (k === 'volumesnapshotcontents' && isVolumeSnapshotContent(data))) return getVolumeSnapshotStatus(data)
+  // Native mutating admission policies and bindings expose only their declared configuration.
+  if ((k === 'mutatingadmissionpolicies' || k === 'mutatingadmissionpolicybindings') && isApiGroup(data.apiVersion, 'admissionregistration.k8s.io')) return null
   // A class is configuration with no status of its own.
   if (k === 'volumesnapshotclasses' && isVolumeSnapshotClass(data)) return null
   if (k === 'ipaddresspools' && isMetalLBIPAddressPool(data)) return getMetalLBPoolStatus(data)
@@ -1284,6 +1326,7 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
     if (k === 'instrumentations') return getOpenTelemetryInstrumentationStatus(data)
   }
   if (k === 'canaries' && isApiGroup(data.apiVersion, 'flagger.app')) return getFlaggerCanaryStatus(data)
+  if (k === 'helmcharts' && isApiGroup(data.apiVersion, K3S_HELM_GROUP)) return getK3sHelmChartStatus(data)
   if (k === 'plans' && isApiGroup(data.apiVersion, UPGRADE_PLAN_GROUP)) return getUpgradePlanStatus(data)
   // A SecretProviderClass is configuration with no status of its own; mount
   // state belongs to each Pod and is shown in the Pod drawer.
@@ -1400,6 +1443,8 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'poddisruptionbudgets') return getPDBStatus(data)
   const isFluxResource = getGitOpsTool(k, apiVersionToGroup(data.apiVersion)) === 'flux'
   if (k === 'gitrepositories' && isFluxResource) return getGitRepositoryStatus(data)
+  if (k === 'externalartifacts' && isApiGroup(data.apiVersion, 'source.toolkit.fluxcd.io')) return getExternalArtifactStatus(data)
+  if (k === 'artifactgenerators' && isApiGroup(data.apiVersion, 'source.extensions.fluxcd.io')) return getArtifactGeneratorStatus(data)
   if (FLUX_OPERATOR_PLURALS.includes(k) && isApiGroup(data.apiVersion, FLUX_OPERATOR_GROUP)) return getFluxOperatorStatus(data)
   if (k === 'ocirepositories' && isFluxResource) return getOCIRepositoryStatus(data)
   if (k === 'helmrepositories' && isFluxResource) return getHelmRepositoryStatus(data)

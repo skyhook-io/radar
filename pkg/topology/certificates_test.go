@@ -8,6 +8,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,6 +102,16 @@ func TestGetCertificateExpiry_NamespaceFiltering(t *testing.T) {
 	}
 }
 
+func TestGetCertificateExpirySkipsUnreadableServingCertificate(t *testing.T) {
+	secret := genTLSSecret(t, "demo", "gateway", 120)
+	broken := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("invalid DER")})
+	secret.Data[corev1.TLSCertKey] = append(broken, secret.Data[corev1.TLSCertKey]...)
+	got, err := GetCertificateExpiry(&mockProvider{secrets: []*corev1.Secret{secret}}, nil)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("unexpected serving certificate expiry: %v, %v", got, err)
+	}
+}
+
 func TestGetCertificateExpiry_ExpiredFlag(t *testing.T) {
 	prov := &mockProvider{
 		secrets: []*corev1.Secret{
@@ -126,4 +137,27 @@ func keys(m map[string]CertExpiry) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+func TestSecretCertificateBundlePEMBoundaries(t *testing.T) {
+	cert := string(genTLSSecret(t, "demo", "leaf", 30).Data[corev1.TLSCertKey])
+	for _, tc := range []struct {
+		name, data string
+		count      int
+		leaf       bool
+	}{
+		{"normal", cert, 1, true},
+		{"comment", "# expected marker: -----BEGIN CERTIFICATE-----\n" + cert, 1, true},
+		{"unterminated", "-----BEGIN CERTIFICATE-----\nmissing\n" + cert, 1, false},
+		{"inline begin", "example: " + cert, 0, false},
+		{"invalid end", strings.TrimSpace(cert) + "trailing junk\n", 0, false},
+		{"CRLF", strings.ReplaceAll(cert, "\n", "\r\n"), 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			chain, leaf := parseCertificateBundle([]byte(tc.data))
+			if len(chain) != tc.count || leaf != tc.leaf {
+				t.Fatalf("got %d certificates, leaf %v; want %d, %v", len(chain), leaf, tc.count, tc.leaf)
+			}
+		})
+	}
 }

@@ -244,6 +244,84 @@ func (s *Server) answerSealedSecretsController(r *http.Request, cache *k8s.Resou
 	}
 }
 
+// sealedSecretsControllerChoice is the controller serving a namespace, or,
+// with controller nil, why none can be named: state is "ambiguous" (with
+// ambiguousReason), "notWatched", or what absentControllerState says.
+type sealedSecretsControllerChoice struct {
+	controller      *appsv1.Deployment
+	settings        sealedSecretsSettings
+	state           string
+	ambiguousReason string
+}
+
+// selectSealedSecretsController picks the controller from Radar's Deployment
+// cache: the one serving target (chooseControllerFor), or with target empty
+// the one kubeseal's defaults reach (findSealedSecretsController).
+func selectSealedSecretsController(cache *k8s.ResourceCache, target string, requireUnique bool) sealedSecretsControllerChoice {
+	lister := cache.Deployments()
+	if lister == nil {
+		return sealedSecretsControllerChoice{state: "notCollected"}
+	}
+	deployments, err := lister.List(labels.Everything())
+	if err != nil {
+		log.Printf("[sealedsecrets] Failed to list Deployments: %v", err)
+		return sealedSecretsControllerChoice{state: "notCollected"}
+	}
+	var candidates []*appsv1.Deployment
+	for _, d := range deployments {
+		if isSealedSecretsControllerCandidate(d) {
+			candidates = append(candidates, d)
+		}
+	}
+	var choice sealedSecretsControllerChoice
+	watched := true
+	if target == "" {
+		var ambiguous bool
+		if choice.controller, ambiguous = findSealedSecretsController(candidates); ambiguous {
+			choice.ambiguousReason = ambiguousOverlap
+		} else if choice.controller != nil {
+			choice.settings = readSealedSecretsSettings(choice.controller)
+		}
+	} else if requireUnique {
+		matches, unknown := 0, false
+		for _, d := range candidates {
+			settings := readSealedSecretsSettings(d)
+			switch coverageOf(d, settings, target) {
+			case coverageUnknown:
+				unknown = true
+			case coverageExplicit, coverageAll:
+				matches++
+				choice.controller, choice.settings = d, settings
+			}
+		}
+		switch {
+		case matches > 1:
+			return sealedSecretsControllerChoice{state: "ambiguous", ambiguousReason: ambiguousOverlap}
+		case unknown:
+			return sealedSecretsControllerChoice{state: "ambiguous", ambiguousReason: ambiguousUnknownScope}
+		}
+		watched = choice.controller != nil
+	} else {
+		choice.controller, choice.settings, choice.ambiguousReason, watched = chooseControllerFor(candidates, target)
+	}
+	absent := func() string {
+		return absentControllerState(cache.AssessKindRead("deployments", nil), cache.KindNamespaces("deployments") != nil)
+	}
+	switch {
+	case choice.ambiguousReason != "":
+		choice.state = "ambiguous"
+	case choice.controller == nil && len(candidates) > 0 && !watched:
+		// Controllers exist but none serves this namespace; only a complete
+		// cluster-wide read can say that.
+		if choice.state = absent(); choice.state == "notFound" {
+			choice.state = "notWatched"
+		}
+	case choice.controller == nil:
+		choice.state = absent()
+	}
+	return choice
+}
+
 var sealedSecretsKind = integration.WorkspaceKind{Key: "sealedSecrets", Group: "bitnami.com", Kind: "SealedSecret", Resource: "sealedsecrets"}
 
 // handleSealedSecretsController answers what the SealedSecret drawer shows
@@ -297,49 +375,12 @@ func (s *Server) handleSealedSecretsController(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	lister := cache.Deployments()
-	if lister == nil {
-		resp.ControllerState = "notCollected"
-	} else if deployments, err := lister.List(labels.Everything()); err != nil {
-		log.Printf("[sealedsecrets] Failed to list Deployments: %v", err)
-		resp.ControllerState = "notCollected"
+	choice := selectSealedSecretsController(cache, target, false)
+	resp.AmbiguousReason = choice.ambiguousReason
+	if choice.controller == nil {
+		resp.ControllerState = choice.state
 	} else {
-		var candidates []*appsv1.Deployment
-		for _, d := range deployments {
-			if isSealedSecretsControllerCandidate(d) {
-				candidates = append(candidates, d)
-			}
-		}
-		var d *appsv1.Deployment
-		var settings sealedSecretsSettings
-		watched := true
-		if target == "" {
-			var ambiguous bool
-			if d, ambiguous = findSealedSecretsController(candidates); ambiguous {
-				resp.AmbiguousReason = ambiguousOverlap
-			} else if d != nil {
-				settings = readSealedSecretsSettings(d)
-			}
-		} else {
-			d, settings, resp.AmbiguousReason, watched = chooseControllerFor(candidates, target)
-		}
-		absent := func() string {
-			return absentControllerState(cache.AssessKindRead("deployments", nil), cache.KindNamespaces("deployments") != nil)
-		}
-		switch {
-		case resp.AmbiguousReason != "":
-			resp.ControllerState = "ambiguous"
-		case d == nil && len(candidates) > 0 && !watched:
-			// Controllers exist but none serves this namespace; only a complete
-			// cluster-wide read can say that.
-			if resp.ControllerState = absent(); resp.ControllerState == "notFound" {
-				resp.ControllerState = "notWatched"
-			}
-		case d == nil:
-			resp.ControllerState = absent()
-		default:
-			s.answerSealedSecretsController(r, cache, d, settings, &resp)
-		}
+		s.answerSealedSecretsController(r, cache, choice.controller, choice.settings, &resp)
 	}
 
 	// Counting reads only status; the copy would include every encryptedData.

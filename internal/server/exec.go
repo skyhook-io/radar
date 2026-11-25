@@ -337,11 +337,13 @@ func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
 	// kubectl does. Pod-fetch failure is non-fatal: log, assume Linux, and let
 	// the apiserver apply its own containers[0] default.
 	var podOS string
+	var podUID types.UID
 	if overrideShell == "" || container == "" {
 		pod, err := client.CoreV1().Pods(namespace).Get(r.Context(), podName, metav1.GetOptions{})
 		if err != nil {
 			log.Printf("[exec] pod fetch failed for %s/%s (OS detection + container defaulting skipped): %v", k8s.SanitizeForLog(namespace), k8s.SanitizeForLog(podName), err)
 		} else {
+			podUID = pod.UID
 			if overrideShell == "" {
 				podOS = detectPodOS(r.Context(), pod, nodeLabelsLookupFor(client))
 			}
@@ -438,7 +440,7 @@ func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
 					log.Printf("[exec] WARNING: error looks shell-related but isShellNotFoundError did not match — kubelet error text may have drifted; update isShellNotFoundError patterns if this recurs. errMsg=%q", errMsg)
 				}
 				log.Printf("Exec failed (%s): %v", errorType, err)
-				sendWSErrorWithType(conn, errorType, errMsg)
+				sendWSErrorWithType(conn, errorType, errMsg, podUID)
 			}
 			// Give browser time to process the error message before closing.
 			// Without this delay, conn.Close() tears down TCP before the
@@ -493,18 +495,20 @@ cleanup:
 }
 
 func sendWSError(conn *websocket.Conn, msg string) {
-	sendWSErrorWithType(conn, "exec_error", msg)
+	sendWSErrorWithType(conn, "exec_error", msg, "")
 }
 
 // sendWSErrorWithType sends an error with a specific error type to help frontend distinguish error causes
-func sendWSErrorWithType(conn *websocket.Conn, errorType, msg string) {
+func sendWSErrorWithType(conn *websocket.Conn, errorType, msg string, podUID types.UID) {
 	errMsg := struct {
-		Type      string `json:"type"`
-		ErrorType string `json:"errorType,omitempty"`
-		Data      string `json:"data"`
+		Type      string    `json:"type"`
+		ErrorType string    `json:"errorType,omitempty"`
+		PodUID    types.UID `json:"podUID,omitempty"`
+		Data      string    `json:"data"`
 	}{
 		Type:      "error",
 		ErrorType: errorType,
+		PodUID:    podUID,
 		Data:      msg,
 	}
 	data, err := json.Marshal(errMsg)
@@ -705,8 +709,10 @@ func (s *Server) handleNodeDebugCleanup(w http.ResponseWriter, r *http.Request) 
 
 // DebugContainerRequest is the request body for creating a debug container
 type DebugContainerRequest struct {
-	TargetContainer string `json:"targetContainer,omitempty"`
-	Image           string `json:"image,omitempty"`
+	PodUID            types.UID `json:"uid,omitempty"`
+	TargetContainer   string    `json:"targetContainer,omitempty"`
+	Image             string    `json:"image,omitempty"`
+	ReturnImmediately bool      `json:"returnImmediately,omitempty"`
 }
 
 // DebugContainerResponse is the response after creating a debug container
@@ -740,17 +746,29 @@ func (s *Server) handleCreateDebugContainer(w http.ResponseWriter, r *http.Reque
 	ec, err := k8s.CreateEphemeralContainerWithClient(r.Context(), k8s.EphemeralContainerOptions{
 		Namespace:       namespace,
 		PodName:         podName,
+		PodUID:          req.PodUID,
 		TargetContainer: req.TargetContainer,
 		Image:           s.resolveDebugImage(req.Image),
 	}, client)
 	if err != nil {
 		errMsg := err.Error()
-		if strings.Contains(errMsg, "not found") {
+		if apierrors.IsForbidden(err) {
+			s.writeError(w, http.StatusForbidden, errMsg)
+			return
+		}
+		if apierrors.IsConflict(err) {
+			s.writeError(w, http.StatusConflict, errMsg)
+			return
+		}
+		if apierrors.IsNotFound(err) {
 			s.writeError(w, http.StatusNotFound, errMsg)
 			return
 		}
-		if strings.Contains(errMsg, "ephemeral containers are disabled") ||
-			strings.Contains(errMsg, "ephemeralcontainers") {
+		if apierrors.IsInvalid(err) || apierrors.IsBadRequest(err) {
+			s.writeError(w, http.StatusBadRequest, errMsg)
+			return
+		}
+		if strings.Contains(errMsg, "ephemeral containers are disabled") {
 			s.writeError(w, http.StatusBadRequest, "ephemeral containers are not enabled on this cluster")
 			return
 		}
@@ -759,12 +777,13 @@ func (s *Server) handleCreateDebugContainer(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Wait for container to be running (with timeout)
-	err = k8s.WaitForEphemeralContainer(r.Context(), namespace, podName, ec.Name, 30*time.Second)
-	status := "running"
-	if err != nil {
-		status = "pending"
-		log.Printf("[exec] Debug container %s created but not yet running: %v", ec.Name, err)
+	status := "pending"
+	if !req.ReturnImmediately {
+		if err = k8score.WaitForEphemeralContainer(r.Context(), client, namespace, podName, ec.Name, 30*time.Second); err == nil {
+			status = "running"
+		} else {
+			log.Printf("[exec] Debug container %s created but not yet running: %v", ec.Name, err)
+		}
 	}
 
 	s.writeJSON(w, DebugContainerResponse{

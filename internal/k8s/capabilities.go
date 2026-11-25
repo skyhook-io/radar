@@ -114,16 +114,18 @@ func (r *PermissionCheckResult) CredentialRejectedNamespaces(resource string, na
 // Capabilities represents the features available based on RBAC permissions
 type Capabilities struct {
 	ConfigManagement       string                   `json:"configManagement"`
-	Exec                   bool                     `json:"exec"`           // Can create pods/exec (terminal feature)
-	LocalTerminal          bool                     `json:"localTerminal"`  // Local terminal available (not in-cluster, not disabled)
-	LocalShell             string                   `json:"localShell"`     // Shell family where a hand-off command runs: "powershell" on Windows, else "posix"
-	Logs                   bool                     `json:"logs"`           // Can get pods/log (log viewer)
-	PortForward            bool                     `json:"portForward"`    // Can create pods/portforward
-	Secrets                bool                     `json:"secrets"`        // Can list secrets
-	SecretsUpdate          bool                     `json:"secretsUpdate"`  // Can update secrets (inline editing)
-	HelmWrite              bool                     `json:"helmWrite"`      // Helm write ops (detected via secrets/create as sentinel RBAC check)
-	NodeWrite              bool                     `json:"nodeWrite"`      // Can patch nodes (cordon/uncordon/drain)
-	WorkloadWrites         WorkloadWritePermissions `json:"workloadWrites"` // Can patch workload kinds (restart/scale controls)
+	Exec                   bool                     `json:"exec"` // Can create pods/exec (terminal feature)
+	PodDebugImage          string                   `json:"podDebugImage,omitempty"`
+	PodDebug               bool                     `json:"podDebug,omitempty"` // Scoped to the requested namespace.
+	LocalTerminal          bool                     `json:"localTerminal"`      // Local terminal available (not in-cluster, not disabled)
+	LocalShell             string                   `json:"localShell"`         // Shell family where a hand-off command runs: "powershell" on Windows, else "posix"
+	Logs                   bool                     `json:"logs"`               // Can get pods/log (log viewer)
+	PortForward            bool                     `json:"portForward"`        // Can create pods/portforward
+	Secrets                bool                     `json:"secrets"`            // Can list secrets
+	SecretsUpdate          bool                     `json:"secretsUpdate"`      // Can update secrets (inline editing)
+	HelmWrite              bool                     `json:"helmWrite"`          // Helm write ops (detected via secrets/create as sentinel RBAC check)
+	NodeWrite              bool                     `json:"nodeWrite"`          // Can patch nodes (cordon/uncordon/drain)
+	WorkloadWrites         WorkloadWritePermissions `json:"workloadWrites"`     // Can patch workload kinds (restart/scale controls)
 	MCPReadOnly            bool                     `json:"mcpReadOnly"`
 	MCPExecTools           bool                     `json:"mcpExecTools"`
 	MCPHelmTools           bool                     `json:"mcpHelmTools"` // Native Helm MCP tool registered; target Kubernetes permissions still required
@@ -198,9 +200,14 @@ type FeatureCapabilities struct {
 	SubstrateHealthMetrics bool `json:"substrateHealthMetrics"`
 	ResourceIssues         bool `json:"resourceIssues"`        // GET /api/issues/resource/{kind}/{namespace}/{name}
 	ResourceIssueCoverage  bool `json:"resourceIssueCoverage"` // Resource issues with ?coverage=1
-	PodEnvironment         bool `json:"podEnvironment"`        // GET /api/pods/{namespace}/{name}/environment
-	PolicyResource         bool `json:"policyResource"`        // GET /api/policy/resource/{kind}/{namespace}/{name}
-	WorkloadHistory        bool `json:"workloadHistory"`       // GET /api/workloads/{kind}/{namespace}/{name}/history
+	// Resource issues with ?correlate=<issueID>: that issue's correlated
+	// changes over a window anchored on when it was first seen; and
+	// GET /api/issues/recent-changes, the one change each listed issue row
+	// names.
+	IssueCorrelation bool `json:"issueCorrelation"`
+	PodEnvironment   bool `json:"podEnvironment"`  // GET /api/pods/{namespace}/{name}/environment
+	PolicyResource   bool `json:"policyResource"`  // GET /api/policy/resource/{kind}/{namespace}/{name}
+	WorkloadHistory  bool `json:"workloadHistory"` // GET /api/workloads/{kind}/{namespace}/{name}/history
 	// The workspace and its read/action surfaces, excluding protection setup.
 	CNPGWorkspace       bool `json:"cnpgWorkspace"`
 	CNPGProtectionSetup bool `json:"cnpgProtectionSetup"`
@@ -241,6 +248,7 @@ type FeatureCapabilities struct {
 	// GET /api/workloads/rayclusters/{namespace}/{name}/pods?ownerUID=. Radars
 	// from v1.15.0 serve the route without advertising this flag.
 	RayClusterPods bool `json:"rayClusterPods"`
+	ReplicaSetLogs bool `json:"replicaSetLogs"`
 	// Workload Pod info marks native sidecars (containerStatuses[].sidecar);
 	// without this, an absent mark doesn't mean "not a sidecar".
 	PodSidecarMarks bool `json:"podSidecarMarks"`
@@ -257,6 +265,8 @@ type FeatureCapabilities struct {
 	// POST /api/cronjobs/{namespace}/{name}/trigger accepts {"jobName": ...};
 	// an older Radar ignores the body and names the Job itself.
 	CronJobTriggerJobName bool `json:"cronJobTriggerJobName"`
+	// GET /api/sealedsecrets/cert
+	SealedSecretsCert bool `json:"sealedSecretsCert"`
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.
@@ -275,6 +285,7 @@ type WorkloadWriteCapabilityErrors struct {
 }
 
 type NamespaceCapabilityErrors struct {
+	PodDebug       bool
 	Exec           bool
 	Logs           bool
 	PortForward    bool
@@ -284,6 +295,7 @@ type NamespaceCapabilityErrors struct {
 
 // NamespaceCapabilities holds the effective capabilities for a specific namespace.
 type NamespaceCapabilities struct {
+	PodDebug       bool                      `json:"podDebug"`
 	Exec           bool                      `json:"exec"`
 	Logs           bool                      `json:"logs"`
 	PortForward    bool                      `json:"portForward"`
@@ -592,7 +604,10 @@ func CheckNamespaceCapabilities(ctx context.Context, namespace string) (*Namespa
 
 	var checks []capCheck
 	if !ForceDisableExec {
-		checks = append(checks, capCheck{resource: "pods/exec", verb: "create", result: &result.Exec, apiError: &result.Errors.Exec})
+		checks = append(checks,
+			capCheck{resource: "pods/exec", verb: "create", result: &result.Exec, apiError: &result.Errors.Exec},
+			capCheck{resource: "pods/ephemeralcontainers", verb: "update", result: &result.PodDebug, apiError: &result.Errors.PodDebug},
+		)
 	}
 	checks = append(checks,
 		capCheck{resource: "pods/log", verb: "get", result: &result.Logs, apiError: &result.Errors.Logs},
@@ -843,7 +858,10 @@ func CheckNamespaceCapabilitiesForUser(ctx context.Context, username string, gro
 
 	var checks []capCheck
 	if !ForceDisableExec {
-		checks = append(checks, capCheck{resource: "pods/exec", verb: "create", result: &result.Exec, apiError: &result.Errors.Exec})
+		checks = append(checks,
+			capCheck{resource: "pods/exec", verb: "create", result: &result.Exec, apiError: &result.Errors.Exec},
+			capCheck{resource: "pods/ephemeralcontainers", verb: "update", result: &result.PodDebug, apiError: &result.Errors.PodDebug},
+		)
 	}
 	checks = append(checks,
 		capCheck{resource: "pods/log", verb: "get", result: &result.Logs, apiError: &result.Errors.Logs},

@@ -8,7 +8,6 @@ import {
   rowReviewReasons,
 } from './reasons'
 import type {
-  RightsizingFit,
   RightsizingRow,
   WorkloadRightsizingEvidence,
   DatadogSizingWorkload,
@@ -129,7 +128,7 @@ function FitCard({
           {row.resource}
         </span>
         <div className="flex flex-wrap items-center justify-end gap-1.5">
-          <FitBadge fit={row.fit} queryError={row.queryError} />
+          <FitBadge row={row} />
           {row.hpaManaged && (
             <Badge severity="info" size="sm">
               HPA-managed
@@ -218,14 +217,14 @@ function CompactFitRow({ row, review, reasons }: { row: RightsizingRow; review: 
       )}
       {review && <span className="text-warning-text">Needs review{reasons?.length ? ' · ' + explainRightsizingReasons(reasons, row.resource) : ''}</span>}
       <span className="ml-auto">
-        <FitBadge fit={row.fit} queryError={row.queryError} />
+        <FitBadge row={row} />
       </span>
     </div>
   )
 }
 
-function FitBadge({ fit, queryError }: { fit: RightsizingFit; queryError?: string }) {
-  const presentation = getRightsizingPresentation(fit, queryError)
+function FitBadge({ row }: { row: RightsizingRow }) {
+  const presentation = getRightsizingPresentation(row.fit, row.queryError, row.recommendationReason)
   return (
     <Badge severity={presentation.severity} size="sm">
       {presentation.label}

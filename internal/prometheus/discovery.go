@@ -13,6 +13,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -73,6 +74,43 @@ const directProbeBudget = 4 * time.Second
 type discoveredEndpoint struct {
 	addr, basePath string
 	forward        *portforward.Handle
+}
+
+// A cold scan feeds conventional ranking and the much smaller native candidate
+// list. Only those native candidates are retained for subsequent chart requests.
+type serviceInventory struct {
+	services             []*corev1.Service
+	complete             bool
+	generation, revision uint64
+	at                   time.Time
+}
+
+func (c *Client) discoveryServices(ctx context.Context, gen uint64) ([]*corev1.Service, bool) {
+	c.mu.RLock()
+	revision := c.gkeRevision
+	c.mu.RUnlock()
+	svcs, complete := c.cachedServices()
+	if !complete {
+		if list, err := c.k8sClient.CoreV1().Services("").List(ctx, metav1.ListOptions{}); err == nil {
+			complete = true
+			svcs = make([]*corev1.Service, len(list.Items))
+			for i := range list.Items {
+				svcs[i] = &list.Items[i]
+			}
+		}
+	}
+	inventory := &serviceInventory{complete: complete, at: time.Now(), generation: gen, revision: revision}
+	for _, s := range svcs {
+		if gkeFrontendCandidate(s) {
+			inventory.services = append(inventory.services, s)
+		}
+	}
+	c.mu.Lock()
+	if !c.retired && c.discoveryGen == gen && c.gkeRevision == revision {
+		c.gkeServices = inventory
+	}
+	c.mu.Unlock()
+	return svcs, complete
 }
 
 // discover finds and connects to Prometheus using a multi-layer approach:
@@ -156,19 +194,11 @@ func (c *Client) discover(ctx context.Context, gen uint64) (discoveredEndpoint, 
 	// Layers 3 + 4: Enumerate candidates via the shared pkg/prom discovery
 	// logic. Well-known first, then dynamic fallbacks.
 	enumStart := time.Now()
-	enumSource := "API"
+	services, complete := c.discoveryServices(ctx, gen)
 	candidates, err := prom.Discover(ctx, k8sClient, prom.DiscoverOptions{
-		IncludeDynamic: true,
-		Logger: func(format string, args ...interface{}) {
-			log.Printf("[prometheus] "+format, args...)
-		},
-		Services: func() ([]*corev1.Service, bool) {
-			svcs, ok := c.cachedServices()
-			if ok {
-				enumSource = "informer cache"
-			}
-			return svcs, ok
-		},
+		IncludeDynamic: complete,
+		Logger:         func(format string, args ...interface{}) { log.Printf("[prometheus] "+format, args...) },
+		Services:       func() ([]*corev1.Service, bool) { return services, complete },
 	})
 	if err != nil {
 		log.Printf("[prometheus] Discover error: %v", err)
@@ -189,7 +219,7 @@ func (c *Client) discover(ctx context.Context, gen uint64) (discoveredEndpoint, 
 		return discoveredEndpoint{}, ErrPrometheusNotFound
 	}
 
-	log.Printf("[prometheus] enumerated %d candidate(s) from %s in %s: %s", len(candidates), enumSource, took(enumStart), summarizeCandidates(candidates))
+	log.Printf("[prometheus] enumerated %d candidate(s) in %s: %s", len(candidates), took(enumStart), summarizeCandidates(candidates))
 
 	// Direct pass: probe each candidate at its in-cluster Service address, with
 	// bounded concurrency. This connects immediately when Radar runs in-cluster,
@@ -617,6 +647,9 @@ func (c *Client) markConnectedLocked(addr, basePath, identity string, gen uint64
 	}
 	if c.connectedIdentity != "" && c.connectedIdentity != identity {
 		c.connectionEpoch++
+		c.gkeRevision++
+		c.gke = nil
+		c.gkeChecked = time.Time{}
 		c.workloadScope = nil
 		c.cancelWorkloadAttributionsLocked()
 	}

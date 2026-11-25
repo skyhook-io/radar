@@ -65,7 +65,7 @@ func (s *unlabeledCostStore) serve(t *testing.T) *httptest.Server {
 				case "radar_metric":
 					// A readback finds no series with this cluster's
 					// label; an identity check finds one, with none.
-					if strings.Contains(q, "topk(2") {
+					if !strings.Contains(part, `cluster="a"`) {
 						row(tag, metric)
 					}
 				case "radar_foreign":

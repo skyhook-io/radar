@@ -15,13 +15,11 @@ import {
   ChevronDown,
   History,
   GitCompare,
-  Code,
   FileCode2,
   X,
 } from 'lucide-react'
-import { createTwoFilesPatch } from 'diff'
 import { clsx } from 'clsx'
-import { classifyDiffLine } from './UnifiedDiff'
+import { RevisionDiffView } from './RevisionDiffView'
 import { Tooltip } from '../ui/Tooltip'
 import { ForceDeleteConfirmDialog, type CascadeDependent, type CascadeDetail } from '../ui/ForceDeleteConfirmDialog'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
@@ -44,7 +42,7 @@ import { getGitOpsTool } from '../gitops/detail-helpers'
 import { apiVersionToGroup } from '../../utils/navigation'
 import { isApiGroup } from '../resources/resource-utils-cnpg'
 import { isArgoRolloutResource } from '../../utils/workload-rollout'
-import { isCoreBatchJob } from '../../utils/api-resources'
+import { isCoreBatchJob, supportsWorkloadLogAction } from '../../utils/api-resources'
 import { formatRelativeAgeTime } from '../../utils/format'
 
 // ============================================================================
@@ -82,8 +80,11 @@ interface ResourceActionsBarProps {
   // Dock actions (injected by platform)
   onOpenTerminal?: (params: { namespace: string; podName: string; containerName: string; containers: string[] }) => void
   onOpenLogs?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string; initContainers?: string[] }) => void
+  replicaSetLogs?: boolean
   onOpenWorkloadLogs?: (params: { namespace: string; workloadKind: string; workloadName: string }) => void
   onCopyCommand?: (text: string, message: string, event: React.MouseEvent) => void
+
+  renderPodDebug?: (pod: any) => React.ReactNode
 
   // Port forward render prop (injected by platform)
   renderPortForward?: (props: { type: 'pod' | 'service'; namespace: string; name: string; className?: string }) => React.ReactNode
@@ -198,7 +199,7 @@ export function ResourceActionsBar({
   onCompareTo,
   onCompareAcrossClusters,
   canExec, canViewLogs, canPortForward,
-  onOpenTerminal, onOpenLogs: openLogs, onOpenWorkloadLogs: openWorkloadLogs, onCopyCommand,
+  onOpenTerminal, onOpenLogs: openLogs, onOpenWorkloadLogs: openWorkloadLogs, replicaSetLogs, onCopyCommand,
   renderPortForward,
   onDelete, isDeleting, onDeletePreviewOpenChange, cascadeDetail, cascadeDependents, cascadeLoading, cascadeRootResolved, cascadePreviewFailed,
   onRestart, isRestarting,
@@ -223,6 +224,7 @@ export function ResourceActionsBar({
   onUncordonNode, isUncordoningNode,
   onDrainNode, isDrainingNode,
   onPlanDrain, onPlanDrainReset, drainPlan, isPlanningDrain, drainPlanError, drainPlanUpgrade,
+  renderPodDebug,
 }: ResourceActionsBarProps) {
   const kind = resource.kind.toLowerCase()
   const isFluxAction = FLUX_ACTION_KINDS.has(kind) && getGitOpsTool(kind, apiVersionToGroup(data?.apiVersion)) === 'flux'
@@ -233,7 +235,7 @@ export function ResourceActionsBar({
     canViewLogs &&
     !hideLogs &&
     openWorkloadLogs &&
-    (['deployments', 'statefulsets', 'daemonsets', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(kind) || coreBatchJob)
+    supportsWorkloadLogAction(kind, resource.group || apiVersionToGroup(data?.apiVersion), replicaSetLogs)
   )
 
   // Delete confirmation state
@@ -377,6 +379,7 @@ export function ResourceActionsBar({
               Terminal
             </button>
           )}
+          {isRunning && canExec && data?.apiVersion === 'v1' && data?.kind === 'Pod' && !data.metadata?.deletionTimestamp && renderPodDebug?.(data)}
           {canViewLogs && !hideLogs && openLogs && (
             <div
               className="relative"
@@ -1179,7 +1182,7 @@ export interface RevisionRoleBadge {
 export function revisionRoleBadges(rev: WorkloadRevision, isRollout: boolean): RevisionRoleBadge[] {
   const badges: RevisionRoleBadge[] = []
   if (rev.isStable && !rev.isCurrent) {
-    badges.push({ label: 'Stable', tone: 'status-healthy', tip: 'Serving stable traffic — an abort reverts here' })
+    badges.push({ label: 'Stable', tone: 'status-healthy', tip: 'The controller identifies this as the stable revision. An abort reverts here.' })
   }
   if (rev.isCurrent) {
     const settled = rev.isStable || !isRollout
@@ -1280,7 +1283,13 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
 
   const currentRevision = revisions?.find(r => r.isCurrent)
   const selectedRevision = revisions?.find(r => r.number === diffRevision)
-  const hasDiffData = currentRevision?.template && selectedRevision?.template
+  // Rollback compares its target to current. Read-only inspection compares each
+  // revision to the closest older snapshot Kubernetes still retains.
+  const previousOf = (revision: WorkloadRevision) => revisions?.reduce<WorkloadRevision | undefined>((previous, candidate) =>
+    candidate.number < revision.number && (!previous || candidate.number > previous.number) ? candidate : previous,
+  undefined)
+  const diffBase = onRollback ? currentRevision : selectedRevision && previousOf(selectedRevision)
+  const hasDiffData = diffBase?.template && selectedRevision?.template
 
   function handleRollback(revision: number) {
     setPromoteError(null)
@@ -1343,11 +1352,11 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
       <div className="flex items-center justify-between p-4 border-b border-theme-border shrink-0">
         <div className="flex items-center gap-2">
           <History className="w-5 h-5 text-amber-500" />
-          <h3 id={titleId} className="text-lg font-semibold text-theme-text-primary">Revision History</h3>
-          {diffRevision && currentRevision && (
+          <h3 id={titleId} className="text-lg font-semibold text-theme-text-primary">Revisions · {name}</h3>
+          {diffRevision && diffBase && (
             <span className="badge ml-2 bg-blue-500/15 text-blue-400">
               <GitCompare className="w-3 h-3" />
-              #{currentRevision.number} vs #{diffRevision}
+              #{diffBase.number} vs #{diffRevision}
             </span>
           )}
         </div>
@@ -1379,7 +1388,7 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
 
           {revisions && revisions.length === 0 && (
             <div className="flex items-center justify-center py-8 text-theme-text-secondary text-sm">
-              No revisions found
+              No retained revisions
             </div>
           )}
 
@@ -1413,14 +1422,18 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
                     </td>
                     <td className="min-w-0 py-2 pr-3 text-theme-text-secondary font-mono">
                       <RevisionImage image={rev.image} displayImage={getImageTag(rev.image)} />
+                      {rev.readyReplicas !== undefined && <div className="text-xs text-theme-text-tertiary">{rev.readyReplicas}/{rev.replicas} ready</div>}
+                      {rev.changeCause && <div className="break-words text-xs text-theme-text-secondary">Change note: {rev.changeCause}</div>}
+                      {rev.matchesDesired && <span className="text-xs text-accent-text">Desired template</span>}
+                      {isRollout && rev.serving === true && <span className="text-xs text-accent-text">Active Service</span>}
                     </td>
                     <td className="py-2 pr-3 text-theme-text-secondary whitespace-nowrap">
                       {formatRelativeAgeTime(rev.createdAt)}
                     </td>
                     <td className="py-2 text-right">
                       <div className="flex items-center gap-1 justify-end">
-                        {!rev.isCurrent && confirmRevision !== rev.number && rev.template && currentRevision?.template && (
-                          <Tooltip content="Compare with current revision" delay={150}>
+                        {(onRollback ? !rev.isCurrent && currentRevision?.template : previousOf(rev)?.template) && confirmRevision !== rev.number && rev.template && (
+                          <Tooltip content={onRollback ? "Compare with current revision" : "Compare with previous retained revision"} delay={150}>
                             <button
                               onClick={() => setDiffRevision(diffRevision === rev.number ? null : rev.number)}
                               className={clsx(
@@ -1435,7 +1448,7 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
                             </button>
                           </Tooltip>
                         )}
-                        {revisionRoleBadges(rev, isRollout).map(({ label, tone, tip }) =>
+                        {(onRollback || isRollout || rev.matchesDesired === undefined ? revisionRoleBadges(rev, isRollout) : []).map(({ label, tone, tip }) =>
                           tip ? (
                             <Tooltip key={label} content={tip} delay={150}>
                               <span className={clsx('badge', tone)}>{label}</span>
@@ -1444,7 +1457,7 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
                             <span key={label} className={clsx('badge', tone)}>{label}</span>
                           )
                         )}
-                        {rev.isCurrent ? null : confirmRevision === rev.number ? (
+                        {!onRollback || rev.isCurrent ? null : confirmRevision === rev.number ? (
                           <>
                             <button
                               onClick={() => handleRollback(rev.number)}
@@ -1484,10 +1497,10 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
 
         {diffRevision && hasDiffData && (
           <RevisionDiffView
-            currentTemplate={currentRevision!.template!}
-            selectedTemplate={selectedRevision!.template!}
-            currentRevision={currentRevision!.number}
-            selectedRevision={diffRevision}
+            baseTemplate={diffBase!.template!}
+            targetTemplate={selectedRevision!.template!}
+            baseLabel={`Revision #${diffBase!.number}${onRollback ? " (current)" : ""}`}
+            targetLabel={`Revision #${diffRevision}`}
           />
         )}
       </div>
@@ -1542,109 +1555,5 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
         </button>
       </div>
     </DialogPortal>
-  )
-}
-
-// ============================================================================
-// REVISION DIFF VIEW
-// ============================================================================
-
-function stripAutoLabels(templateYaml: string): string {
-  return templateYaml
-    .split('\n')
-    .filter(line => !line.match(/^\s+pod-template-hash:/))
-    .join('\n')
-}
-
-function RevisionDiffView({ currentTemplate, selectedTemplate, currentRevision, selectedRevision }: {
-  currentTemplate: string
-  selectedTemplate: string
-  currentRevision: number
-  selectedRevision: number
-}) {
-  const [expanded, setExpanded] = useState(false)
-
-  const cleanCurrent = stripAutoLabels(currentTemplate)
-  const cleanSelected = stripAutoLabels(selectedTemplate)
-
-  const patch = createTwoFilesPatch(
-    `Revision #${currentRevision} (current)`,
-    `Revision #${selectedRevision}`,
-    cleanCurrent,
-    cleanSelected,
-    '', '',
-    expanded ? { context: 999999 } : { context: 3 }
-  )
-
-  const lines = patch.split('\n')
-  const diffLines = lines.filter(line =>
-    !line.startsWith('===') && !line.startsWith('Index:')
-  )
-
-  const hasChanges = diffLines.some(l => (l.startsWith('+') && !l.startsWith('+++')) || (l.startsWith('-') && !l.startsWith('---')))
-
-  return (
-    <div className="border-t border-theme-border flex flex-col shrink-0">
-      <div className="flex items-center justify-between px-4 py-2 bg-theme-elevated/50 text-xs text-theme-text-secondary shrink-0">
-        <div className="flex items-center gap-4">
-          <span className="flex items-center gap-1">
-            <span className="w-3 h-3 bg-red-500/20 border border-red-500/50 rounded" /> Revision #{currentRevision} (current)
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="w-3 h-3 bg-green-500/20 border border-green-500/50 rounded" /> Revision #{selectedRevision}
-          </span>
-        </div>
-        {hasChanges && (
-          <button
-            onClick={() => setExpanded(!expanded)}
-            className="flex items-center gap-1 px-2 py-0.5 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded transition-colors"
-          >
-            <Code className="w-3 h-3" />
-            {expanded ? 'Show changes only' : 'Show full spec'}
-          </button>
-        )}
-      </div>
-      <div className="overflow-auto max-h-[400px]">
-        {hasChanges ? (
-          <pre className="text-xs font-mono p-0 m-0">
-            {diffLines.map((line, index) => {
-              const { isAddition, isRemoval: isDeletion, isHeader } = classifyDiffLine(line)
-
-              return (
-                <div
-                  key={index}
-                  className={clsx(
-                    'flex',
-                    isAddition && 'bg-green-500/10',
-                    isDeletion && 'bg-red-500/10',
-                    isHeader && 'bg-blue-500/10'
-                  )}
-                >
-                  <span className="w-10 shrink-0 text-right pr-2 py-0.5 text-theme-text-disabled select-none border-r border-theme-border/50">
-                    {index + 1}
-                  </span>
-                  <span
-                    className={clsx(
-                      'flex-1 px-3 py-0.5 whitespace-pre',
-                      isAddition && 'text-green-400',
-                      isDeletion && 'text-red-400',
-                      isHeader && 'text-blue-400 font-medium',
-                      !isAddition && !isDeletion && !isHeader && 'text-theme-text-secondary'
-                    )}
-                  >
-                    {line || ' '}
-                  </span>
-                </div>
-              )
-            })}
-          </pre>
-        ) : (
-          <div className="flex flex-col items-center justify-center py-12 text-theme-text-tertiary">
-            <GitCompare className="w-8 h-8 mb-2 text-theme-text-disabled" />
-            <span className="text-sm">Templates are identical</span>
-          </div>
-        )}
-      </div>
-    </div>
   )
 }

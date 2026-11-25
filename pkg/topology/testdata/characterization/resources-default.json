@@ -2795,6 +2795,26 @@
       }
     },
     {
+      "root": "source.extensions.fluxcd.io|ArtifactGenerator|flux-system|bundle",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "ArtifactGenerator", "namespace": "flux-system", "name": "bundle", "group": "source.extensions.fluxcd.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "source.toolkit.fluxcd.io|ExternalArtifact|flux-system|bundle-app",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "ExternalArtifact", "namespace": "flux-system", "name": "bundle-app", "group": "source.toolkit.fluxcd.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
       "root": "source.toolkit.fluxcd.io|GitRepository|flux-system|repo",
       "relationships": {
         "consumers": [

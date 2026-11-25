@@ -29,7 +29,13 @@ import (
 // with a pkg/prom.Client that performs the actual HTTP calls once an
 // endpoint has been discovered.
 type Client struct {
-	mu sync.RWMutex
+	gkeSF         singleflight.Group
+	gkeServices   *serviceInventory
+	gke           *gkeMetrics
+	gkeGeneration uint64
+	gkeRevision   uint64
+	gkeChecked    time.Time
+	mu            sync.RWMutex
 
 	// Effective connection (populated after discover succeeds).
 	baseURL  string
@@ -368,10 +374,13 @@ func (c *Client) connectInBackground(label string) error {
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(withSuppressedDiscoveryDiagnostics(context.Background()), discoveryTimeout+5*time.Second)
 	defer cancel()
-	addr, _, err := c.EnsureConnected(ctx)
+	addr, _, err := c.connectWithGKE(ctx)
 	switch {
 	case err == nil:
 		log.Printf("[prometheus] %s connected to %s (%s)", label, addr, took(start))
+	case c.gkeChartStore() != nil:
+		log.Printf("[prometheus] %s connected to GKE system metrics (%s)", label, took(start))
+		return nil
 	case errors.Is(err, prom.ErrHeadersRequireURL):
 		log.Printf("[prometheus] %s skipped: %v", label, err)
 	default:
@@ -510,19 +519,21 @@ func (c *Client) GetStatus() prom.Status {
 		address = ""
 	}
 	connected := address != ""
-	discovering := !connected && c.flightActive && c.flightGen == c.discoveryGen
+	gkeConnected := c.gkeActiveLocked()
+	discovering := !gkeConnected && !connected && c.flightActive && c.flightGen == c.discoveryGen
 	st := prom.Status{
-		Available:   connected,
-		Connected:   connected,
-		Discovering: discovering,
-		Address:     prom.SafeAddress(address),
-		Service:     svc,
-		ContextName: c.contextName,
+		GKESystemMetrics: gkeConnected,
+		Available:        connected,
+		Connected:        connected,
+		Discovering:      discovering,
+		Address:          prom.SafeAddress(address),
+		Service:          svc,
+		ContextName:      c.contextName,
 	}
 	switch {
 	case c.headersRequireURLLocked():
 		st.Error = prom.ErrHeadersRequireURL.Error()
-	case !connected && !discovering && c.lastOutcomeGen == c.discoveryGen:
+	case !gkeConnected && !connected && !discovering && c.lastOutcomeGen == c.discoveryGen:
 		st.Error = prom.RedactURLs(c.lastOutcome)
 	}
 	return st

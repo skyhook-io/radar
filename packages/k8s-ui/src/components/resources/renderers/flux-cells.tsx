@@ -2,9 +2,18 @@
 
 import { clsx } from 'clsx'
 import { Tooltip } from '../../ui/Tooltip'
+import { formatBytes } from '../../../utils/format'
 import { TruncatedText } from '../../ui/TruncatedText'
 import { getFluxDeployedRelease, getFluxLastApply } from '../../../utils/flux-history'
 import {
+  getExternalArtifactStatus,
+  getExternalArtifactRevision,
+  getExternalArtifactGenerator,
+  getExternalArtifactProducer,
+  getArtifactGeneratorStatus,
+  getArtifactGeneratorSources,
+  getArtifactGeneratorCount,
+  shortArtifactRevision,
   getGitRepositoryUrl,
   getGitRepositoryRef,
   getGitRepositoryStatus,
@@ -248,6 +257,56 @@ export function FluxAlertCell({ resource, column }: { resource: any; column: str
           {status.text}
         </span>
       )
+    }
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
+export function ExternalArtifactCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'producer': {
+      const producer = getExternalArtifactGenerator(resource) || getExternalArtifactProducer(resource)
+      if (!producer) return <span className="text-sm text-theme-text-tertiary">-</span>
+      return <TruncatedText text={producer} className="text-sm text-theme-text-secondary" />
+    }
+    case 'status': {
+      const status = getExternalArtifactStatus(resource)
+      return <span className={clsx('badge', status.color)}>{status.text}</span>
+    }
+    case 'revision': {
+      const revision = getExternalArtifactRevision(resource)
+      if (!revision) return <span className="text-sm text-theme-text-tertiary">-</span>
+      return (
+        <Tooltip content={revision}>
+          <span className="text-sm text-theme-text-tertiary font-mono truncate block">{shortArtifactRevision(revision)}</span>
+        </Tooltip>
+      )
+    }
+    case 'size': {
+      const size = resource.status?.artifact?.size
+      return <span className="text-sm text-theme-text-secondary">{typeof size === 'number' ? formatBytes(size) : '-'}</span>
+    }
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
+export function ArtifactGeneratorCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'sources': {
+      const sources = getArtifactGeneratorSources(resource)
+      return (
+        <Tooltip content={sources}>
+          <span className="text-sm text-theme-text-secondary truncate block">{sources || '-'}</span>
+        </Tooltip>
+      )
+    }
+    case 'artifacts':
+      return <span className="text-sm text-theme-text-secondary">{getArtifactGeneratorCount(resource) ?? '-'}</span>
+    case 'status': {
+      const status = getArtifactGeneratorStatus(resource)
+      return <span className={clsx('badge', status.color)}>{status.text}</span>
     }
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>

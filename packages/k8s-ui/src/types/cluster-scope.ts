@@ -7,6 +7,7 @@ export type ClusterScopeState =
   | 'scoped_configured'
   | 'single_cluster_asserted'
   | 'scoped_verified'
+  | 'current_pod_uids'
   | 'unlabeled'
   | 'several_clusters'
   | 'label_missing'

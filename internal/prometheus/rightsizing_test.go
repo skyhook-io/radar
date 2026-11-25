@@ -6,11 +6,14 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/pkg/prom"
 	"github.com/skyhook-io/radar/pkg/rightsizing"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 type fakeRightsizingQuerier func(string) (*prom.QueryResult, error)
@@ -221,6 +224,32 @@ func TestMemoryReductionRequiresVerifiedRestartHistory(t *testing.T) {
 				t.Fatalf("row = %+v", row)
 			}
 		})
+	}
+}
+
+func TestHistoricalOOMSurvivesRestartQueryFailure(t *testing.T) {
+	const usage = 50 * 1024 * 1024
+	const keySamples = 2016
+	key := scanKey{namespace: "shop", kind: "Deployment", workload: "api", container: "server"}
+	container := containerSpec{name: key.container, memReq: mustQuantity(t, "256Mi")}
+	workload := rightsizingWorkload{hpaAvailable: true}
+	termination := terminationEvidence{Any: true, OOM: true}
+	err := errors.New("restart counter unavailable")
+	detail := buildRightsizingRow(container, "memory", keySamples, OwnerCoverageKSMHistory, workload, map[string]queryOutcome{
+		"memory_stat":         {values: map[string]float64{key.container: usage}},
+		"memory_coverage":     {values: map[string]float64{key.container: keySamples}},
+		"restart_activity":    {err: err},
+		"termination_history": {terminations: map[string]terminationEvidence{key.container: termination}},
+	})
+	fleet := buildScanRow(container, "memory", key, keySamples, workload, scanBatchEvidence{
+		memory:       map[scanKey][]float64{key: repeatedValues(usage)},
+		errors:       map[string]error{"restart_activity": err},
+		terminations: map[scanKey]terminationEvidence{key: termination},
+	})
+	for _, row := range []RightsizingRow{detail, fleet} {
+		if !row.WindowOOMEvidence || !row.OOMEvidenceAvailable || row.RecommendationReason != "oom_evidence" || row.RecommendedReq != nil {
+			t.Errorf("lost verified OOM on partial safety history: %+v", row)
+		}
 	}
 }
 
@@ -503,5 +532,115 @@ func TestLostThrottleReadingClearsTheReviewReason(t *testing.T) {
 	row.ThrottleRatio = nil
 	if NeedsManualReview(measuredDecision(row)) {
 		t.Error("without the ratio the row reads as a clean cut, which is why a failed throttle query has to reach the caller")
+	}
+}
+
+func TestRecentPodRestartWithMissingHistory(t *testing.T) {
+	end := time.Date(2026, 11, 24, 8, 12, 30, 0, time.UTC)
+	birth := end.Add(-6 * 24 * time.Hour)
+	key := scanKey{namespace: "lws-system", kind: "Deployment", workload: "lws-controller-manager", container: "manager"}
+	container := containerSpec{name: key.container, memReq: mustQuantity(t, "256Mi")}
+	clean := &corev1.ContainerStateTerminated{Reason: "Completed", ExitCode: 0}
+	for _, tt := range []struct {
+		name       string
+		created    time.Time
+		uid        types.UID
+		restarts   int32
+		last       *corev1.ContainerStateTerminated
+		ksm        terminationEvidence
+		wantReason string
+	}{
+		{"first sample already one", birth, "local", 1, nil, terminationEvidence{}, ReasonOOMEvidenceUnavailable},
+		{"old Pod count alone cannot date its restart", end.Add(-8 * 24 * time.Hour), "local", 1, nil, terminationEvidence{}, ""},
+		{"born during the latest partial five-minute bucket", end.Add(-time.Minute), "local", 1, nil, terminationEvidence{}, ReasonOOMEvidenceUnavailable},
+		{"unknown runtime reason", birth, "local", 1, &corev1.ContainerStateTerminated{Reason: "ContainerStatusUnknown"}, terminationEvidence{}, ReasonOOMEvidenceUnavailable},
+		{"generic SIGKILL", birth, "local", 1, &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 137}, terminationEvidence{}, ReasonOOMEvidenceUnavailable},
+		{"older Pod with dated ambiguous exit", end.Add(-8 * 24 * time.Hour), "local", 1, &corev1.ContainerStateTerminated{Reason: "Error", Signal: 9, FinishedAt: metav1.NewTime(end.Add(-24 * time.Hour))}, terminationEvidence{}, ReasonOOMEvidenceUnavailable},
+		{"dated last exit survives a reset kubelet counter", end.Add(-8 * 24 * time.Hour), "local", 0, &corev1.ContainerStateTerminated{Reason: "Unknown", FinishedAt: metav1.NewTime(end.Add(-time.Hour))}, terminationEvidence{}, ReasonOOMEvidenceUnavailable},
+		{"older Pod with a dated known final exit", end.Add(-8 * 24 * time.Hour), "local", 2, &corev1.ContainerStateTerminated{Reason: "Completed", FinishedAt: metav1.NewTime(end.Add(-24 * time.Hour))}, terminationEvidence{}, ""},
+		{"missing birth", time.Time{}, "local", 1, nil, terminationEvidence{}, ""},
+		{"future birth", end.Add(time.Minute), "local", 1, nil, terminationEvidence{}, ""},
+		{"unverified Pod", birth, "", 1, nil, terminationEvidence{}, ""},
+		{"no restart", birth, "local", 0, nil, terminationEvidence{}, ""},
+		{"one known clean exit", birth, "local", 1, clean, terminationEvidence{}, ""},
+		{"two exits with one known reason", birth, "local", 2, clean, terminationEvidence{}, ReasonOOMEvidenceUnavailable},
+		{"another replica can supply a non-OOM reason", birth, "local", 1, nil, terminationEvidence{Any: true}, ReasonOOMEvidenceUnavailable},
+		{"positive OOM evidence wins", birth, "local", 1, nil, terminationEvidence{Any: true, OOM: true}, "oom_evidence"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			w := rightsizingWorkload{hpaAvailable: true, currentPodOOM: map[string]bool{}}
+			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{UID: tt.uid, CreationTimestamp: metav1.NewTime(tt.created)}}
+			pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: key.container, RestartCount: tt.restarts, LastTerminationState: corev1.ContainerState{Terminated: tt.last}}}
+			w.observePodTerminations(pod, end)
+			const usage = 50 * 1024 * 1024
+			detail := buildRightsizingRow(container, "memory", 2016, OwnerCoverageKSMHistory, w, map[string]queryOutcome{
+				"memory_stat": {values: map[string]float64{key.container: usage}}, "memory_coverage": {values: map[string]float64{key.container: 2016}},
+				"restart_activity": {values: map[string]float64{key.container: 0}}, "termination_history": {terminations: map[string]terminationEvidence{key.container: tt.ksm}},
+			})
+			fleet := buildScanRow(container, "memory", key, 2016, w, scanBatchEvidence{memory: map[scanKey][]float64{key: repeatedValues(usage)}, restarts: map[scanKey]float64{key: 0}, terminations: map[scanKey]terminationEvidence{key: tt.ksm}})
+			for _, row := range []RightsizingRow{detail, fleet} {
+				if row.RecommendationReason != tt.wantReason || (row.RecommendedReq != nil) != (tt.wantReason == "") {
+					t.Fatalf("reason=%q recommendation=%v, want reason=%q", row.RecommendationReason, row.RecommendedReq, tt.wantReason)
+				}
+			}
+		})
+	}
+}
+
+func TestMeasuredRestartsAndLivePodExits(t *testing.T) {
+	now := time.Now()
+	w := rightsizingWorkload{}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{UID: "local", CreationTimestamp: metav1.NewTime(now.Add(-time.Hour))}}
+	pod.Status.InitContainerStatuses = []corev1.ContainerStatus{{Name: "app", RestartCount: 1}}
+	w.observePodTerminations(pod, now)
+	if w.hasOOMEvidence("app", 0, true, terminationEvidence{}) {
+		t.Fatal("missed the restart of a native sidecar")
+	}
+	if w.hasOOMEvidence("app", 2, true, terminationEvidence{Any: true}) {
+		t.Fatal("another replica's aggregate history cleared a lost last exit")
+	}
+	pod.Status.InitContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{Reason: "Completed"}
+	pod.Status.InitContainerStatuses[0].RestartCount = 2
+	w = rightsizingWorkload{}
+	w.observePodTerminations(pod, now)
+	if w.hasOOMEvidence("app", 2, true, terminationEvidence{Any: true}) {
+		t.Fatal("a workload-level non-OOM reason cannot explain a specific Pod’s earlier exit")
+	}
+	if w.hasOOMEvidence("app", 2, true, terminationEvidence{}) {
+		t.Fatal("accepted restarts without termination history")
+	}
+	if !w.hasOOMEvidence("sidecar", 0, true, terminationEvidence{}) {
+		t.Fatal("one container's restarts affected its sibling")
+	}
+}
+
+func TestRecentTerminatedPodBeforeFirstRestart(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name          string
+		when          time.Time
+		reason        string
+		code          int32
+		wantAvailable bool
+	}{
+		{"killed in window", now.Add(-time.Hour), "Error", 137, false},
+		{"unknown cause in window", now.Add(-time.Hour), "ContainerStatusUnknown", 0, false},
+		{"known clean exit", now.Add(-time.Hour), "Completed", 0, true},
+		{"old kill", now.Add(-8 * 24 * time.Hour), "Error", 137, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{UID: "local", CreationTimestamp: metav1.NewTime(now.Add(-9 * 24 * time.Hour))}}
+			pod.Status.Phase = corev1.PodFailed
+			pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+				Name: "manager", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+					Reason: tc.reason, ExitCode: tc.code, FinishedAt: metav1.NewTime(tc.when),
+				}},
+			}}
+			w := rightsizingWorkload{}
+			w.observePodTerminations(pod, now)
+			if got := w.hasOOMEvidence("manager", 0, true, terminationEvidence{}); got != tc.wantAvailable {
+				t.Fatalf("memory safety evidence available = %t, want %t", got, tc.wantAvailable)
+			}
+		})
 	}
 }
