@@ -157,8 +157,8 @@ func TestAgentSandboxWorkspace_AuthDisabledReadsEverything(t *testing.T) {
 	if got.Counts.Sandboxes == nil || got.Counts.Sandboxes.Failed != 1 || got.Counts.Sandboxes.LowerBound {
 		t.Errorf("sandbox counts %+v", got.Counts.Sandboxes)
 	}
-	if got.Sidebar.Total.Count == nil || *got.Sidebar.Total.Count != 2 {
-		t.Errorf("sidebar %+v", got.Sidebar)
+	if got.Sidebar.Total.Count == nil || *got.Sidebar.Total.Count != 3 || got.Sidebar.Total.LowerBound {
+		t.Errorf("sidebar %+v, want an exact count of the failed Sandbox and both claims", got.Sidebar)
 	}
 	// Nothing at the controller's place in this fixture: not found, never stopped.
 	if got.Controller.State != agentsandbox.ControllerNotFound {
