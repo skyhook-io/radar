@@ -53,6 +53,42 @@ function mockSystemZone() {
 const rowTime = (timestamp = entry.timestamp) => element.querySelector(`[title="${timestamp}"]`)?.textContent
 const tooltipText = () => document.querySelector('[role="tooltip"]')?.textContent
 
+it('moves focus and selection with the arrow keys and returns focus on confirmation or Escape', async () => {
+  localStorage.setItem('radar-logs-ts-format', 'iso-local')
+  const picker = await render()
+  const press = (key: string) => act(() => {
+    document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+  })
+  act(() => picker.focus())
+  press('Enter')
+  const radios = element.querySelectorAll<HTMLButtonElement>('[role="radio"]')
+  const expectSelected = (index: number) => {
+    expect(document.activeElement).toBe(radios[index])
+    expect(Array.from(radios).filter(radio => radio.getAttribute('aria-checked') === 'true')).toEqual([radios[index]])
+    expect(Array.from(radios).filter(radio => radio.tabIndex === 0)).toEqual([radios[index]])
+  }
+  expectSelected(2)
+  press('ArrowUp')
+  expectSelected(1)
+  press('ArrowLeft')
+  expectSelected(0)
+  press('ArrowUp')
+  expectSelected(5)
+  press('ArrowRight')
+  expectSelected(0)
+  press('ArrowDown')
+  expectSelected(1)
+  press(' ')
+  expect(picker.getAttribute('aria-expanded')).toBe('false')
+  expect(document.activeElement).toBe(picker)
+  expect(picker.getAttribute('aria-label')).toBe('Pick timestamp format: UTC time')
+  press('ArrowDown')
+  expectSelected(1)
+  press('Escape')
+  expect(picker.getAttribute('aria-expanded')).toBe('false')
+  expect(document.activeElement).toBe(picker)
+})
+
 it('keeps the last option in a scrollable menu bounded by the short dock and viewport', async () => {
   const picker = await render()
   const viewer = element.firstElementChild!
@@ -70,10 +106,10 @@ it('keeps the last option in a scrollable menu bounded by the short dock and vie
 })
 
 it.each(['', undefined])('omits an unknown zone (%s) from local choices and the tooltip', async timeZone => {
-  vi.useFakeTimers()
-  mockSystemZone()
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
   const resolved = Intl.DateTimeFormat().resolvedOptions()
-  vi.spyOn(Object.getPrototypeOf(Intl.DateTimeFormat()), 'resolvedOptions').mockReturnValue({ ...resolved, timeZone })
+  vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue(Object.defineProperty(resolved, 'timeZone', { value: timeZone }))
+  mockSystemZone()
   const picker = await render()
   expect(rowTime()).toBe('05:30:00')
   expect(picker.getAttribute('aria-label')).toBe('Pick timestamp format: Local time')
@@ -103,9 +139,9 @@ it.each([
 })
 
 it('labels all six timestamp choices and exposes the selected format when closed', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
   mockSystemZone()
   systemZone = 'Asia/Tokyo'
-  vi.useFakeTimers()
   const picker = await render()
   expect(picker.textContent).toBe('Local time')
   expect(picker.getAttribute('aria-label')).toBe('Pick timestamp format: Local time · Asia/Tokyo')

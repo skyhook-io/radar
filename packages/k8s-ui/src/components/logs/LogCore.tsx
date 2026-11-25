@@ -442,8 +442,20 @@ export function LogCore({
     if (exportHasGap) showApiSuccess('Some logs were unavailable', gapNotice)
   }, [closeExportMenu, onDownload, exportEntries, exportOptions, exportHasGap])
 
-  // Same close-on-outside-click for the timestamp format menu.
   const tsMenuRef = useRef<HTMLDivElement>(null)
+  const tsTriggerRef = useRef<HTMLButtonElement>(null)
+  const focusRadioOnOpen = useRef(false)
+  const focusSelectedFormat = () => tsMenuRef.current?.querySelector<HTMLButtonElement>('[role="radio"][aria-checked="true"]')?.focus()
+  useLayoutEffect(() => {
+    if (showTsMenu && tsMenu.shouldRender && focusRadioOnOpen.current) {
+      focusRadioOnOpen.current = false
+      focusSelectedFormat()
+    }
+  }, [showTsMenu, tsMenu.shouldRender])
+  const closeTsMenu = () => {
+    setShowTsMenu(false)
+    tsTriggerRef.current?.focus()
+  }
   const viewerRef = useRef<HTMLDivElement>(null)
   const [tsMenuBounds, setTsMenuBounds] = useState<{ maxHeight: number; maxWidth: number }>()
   useLayoutEffect(() => {
@@ -558,7 +570,6 @@ export function LogCore({
     // Auto-show timestamps when user picks a format — otherwise the change isn't visible.
     setShowTimestamps(true)
     try { localStorage.setItem('radar-logs-timestamps', 'true') } catch {}
-    setShowTsMenu(false)
   }, [])
 
   const toggleAnsi = useCallback(() => {
@@ -834,7 +845,19 @@ export function LogCore({
               <Clock className="w-4 h-4" />
             </button>
           </Tooltip>
-          <div className="relative" ref={tsMenuRef}>
+          <div
+            className="relative"
+            ref={tsMenuRef}
+            onKeyDown={event => {
+              if (event.key !== 'Escape' || !showTsMenu) return
+              event.preventDefault()
+              event.stopPropagation()
+              closeTsMenu()
+            }}
+            onBlur={event => {
+              if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) setShowTsMenu(false)
+            }}
+          >
             <Tooltip
               content={`Timestamp format: ${TIMESTAMP_FORMAT_LABELS[tsFormat]}${zoneSuffix}`}
               delay={TIP_DELAY}
@@ -843,8 +866,21 @@ export function LogCore({
               preserveWrapperWhenDisabled
             >
               <button
+                ref={tsTriggerRef}
                 onMouseEnter={refreshTimeZone}
                 onFocus={refreshTimeZone}
+                onKeyDown={event => {
+                  const arrow = event.key === 'ArrowDown' || event.key === 'ArrowUp'
+                  if (!arrow && (showTsMenu || (event.key !== 'Enter' && event.key !== ' '))) return
+                  event.preventDefault()
+                  if (showTsMenu) {
+                    focusSelectedFormat()
+                  } else {
+                    refreshTimeZone()
+                    focusRadioOnOpen.current = true
+                    setShowTsMenu(true)
+                  }
+                }}
                 onClick={() => {
                   if (!showTsMenu) refreshTimeZone()
                   setShowTsMenu(!showTsMenu)
@@ -874,10 +910,29 @@ export function LogCore({
                 <div className={`px-3 py-1.5 text-[10px] uppercase tracking-wide ${palette.textTertiary} border-b ${palette.border}`}>
                   Timestamp format
                 </div>
-                {TIMESTAMP_FORMAT_ORDER.map(fmt => (
+                {TIMESTAMP_FORMAT_ORDER.map((fmt, index) => (
                   <button
                     key={fmt}
-                    onClick={() => pickTsFormat(fmt)}
+                    tabIndex={tsFormat === fmt ? 0 : -1}
+                    onClick={() => {
+                      pickTsFormat(fmt)
+                      closeTsMenu()
+                    }}
+                    onKeyDown={event => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        pickTsFormat(fmt)
+                        closeTsMenu()
+                        return
+                      }
+                      const forward = event.key === 'ArrowDown' || event.key === 'ArrowRight'
+                      if (!forward && event.key !== 'ArrowUp' && event.key !== 'ArrowLeft') return
+                      event.preventDefault()
+                      const count = TIMESTAMP_FORMAT_ORDER.length
+                      const next = (index + (forward ? 1 : -1) + count) % count
+                      pickTsFormat(TIMESTAMP_FORMAT_ORDER[next])
+                      tsMenuRef.current?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[next].focus()
+                    }}
                     aria-label={isLocalFormat(fmt) && timeZone ? `${TIMESTAMP_FORMAT_LABELS[fmt]}, ${timeZone}` : undefined}
                     role="radio"
                     aria-checked={tsFormat === fmt}
