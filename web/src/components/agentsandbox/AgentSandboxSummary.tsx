@@ -2,11 +2,9 @@ import { Fragment, useMemo, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { useSearchParams } from 'react-router-dom'
 import {
-  Badge,
   DimensionValue,
   FactGrid,
   FactRow,
-  FoldSection,
   OpenIssueContext,
   RefLink,
   SectionHeading,
@@ -22,12 +20,11 @@ import {
   type StatusBadge,
   type WorkspaceProblem,
 } from '@skyhook-io/k8s-ui'
-import type { Relationships } from '@skyhook-io/k8s-ui/types/core'
 import { genericConditionTone } from '@skyhook-io/k8s-ui/components/resources/renderers/GenericRenderer'
 import { FATAL_WAITING_REASONS } from '@skyhook-io/k8s-ui/components/resources/resource-utils'
 import {
   getAgentRuntimeStatus,
-  getReadyOfDesired,
+  getSandboxWarmPoolReadyOfDesired,
   getSandboxClaimStatus,
   getSandboxClaimWarmPool,
   getSandboxOperatingMode,
@@ -35,21 +32,24 @@ import {
   getSandboxWarmPoolStatus,
   getSandboxWarmPoolTemplate,
   sandboxPodImagePullNextStep,
+  sandboxPodName,
+  podOwnersCommand,
 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-agent-runtimes'
 import type { AgentSandboxAttention, AgentSandboxWorkspaceResponse } from '../../api/agentSandbox'
 import { useAgentSandboxWorkspace } from '../../api/agentSandbox'
 import { useRadarFeature, useResource, useResourceEvents, useResourceWithRelationships } from '../../api/client'
 import { useNavCustomization } from '../../context/NavCustomization'
-import { useCanViewLogs } from '../../contexts/CapabilitiesContext'
+import { useNamespacedCapabilities } from '../../contexts/CapabilitiesContext'
 import { buildWorkloadPath, refToSelectedResource } from '../../utils/navigation'
 import { issuesPathForSubject } from '../../utils/page-links'
 import { CommandChip } from '../substrate/shared'
+import { SectionTable } from '../workspace/layout'
 import { WorkspaceConditions } from '../workspace/WorkspaceConditions'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { poolClaimsPath, poolNotReadyPath, stateMessage } from './AgentSandboxTables'
 import { readInNamespace, readItems, useAgentSandboxLists } from './data'
 import { objectKey, readingLabel, schedulerReason, serverReadings, warmPoolBadge } from './labels'
-import { claimSandboxName, poolClaims, sandboxController } from './lists'
+import { claimSandboxName, poolClaims, sandboxController, sandboxPod, type PodAnswer } from './lists'
 import { AGENT_SANDBOX_EXTENSIONS_GROUP, AGENT_SANDBOX_GROUP, SANDBOXES_PATH, SANDBOX_WARM_POOLS_PATH } from './routes'
 import { Absent, ExpiryCell, KIND_LIST_PERMISSION, ReadingBadge, SourceText } from './shared'
 import { attentionProblem } from './workspace'
@@ -72,15 +72,6 @@ const LOG_FAILURE_REASONS = new Set(['PodFailed', 'CrashLoopBackOff'])
 function findCondition(resource: any, type: string): any | undefined {
   const conditions = resource?.status?.conditions
   return Array.isArray(conditions) ? conditions.find((c: any) => c?.type === type) : undefined
-}
-
-function sandboxConflictingPodName(resource: any): string {
-  const annotated = resource?.metadata?.annotations?.['agents.x-k8s.io/pod-name']
-  return typeof annotated === 'string' && annotated ? annotated : resource?.metadata?.name ?? ''
-}
-
-function podOwnersCommand(namespace: string, name: string): string {
-  return `kubectl get pod ${name}${namespace ? ` -n ${namespace}` : ''} -o jsonpath='{.metadata.ownerReferences}'`
 }
 
 /** First non-zero terminated container exit summary from a read Pod, if any. */
@@ -138,21 +129,6 @@ export function drawerProblem(a: AgentSandboxAttention, pod?: any): WorkspacePro
   const exit = a.subject.kind === 'Sandbox' && a.rule === 'failed' && a.reason && LOG_FAILURE_REASONS.has(a.reason) ? podExitSummary(pod) : undefined
   const detail = [exit, p.detail].filter(Boolean).join(' ') || undefined
   return { ...p, detail, nextStep, related: p.related && refs.length > 0 ? { ...p.related, refs } : undefined }
-}
-
-export type PodAnswer =
-  | { state: 'loading' }
-  | { state: 'found'; pods: ResourceRef[] }
-  /** Every Pod the viewer may read was checked, and none names this Sandbox as its owner. */
-  | { state: 'none' }
-  | { state: 'unknown' }
-
-/** The Sandbox's Pod from its owner-reference children, never from its name. */
-export function sandboxPod(relationships: Relationships | undefined, loading: boolean): PodAnswer {
-  if (!relationships) return loading ? { state: 'loading' } : { state: 'unknown' }
-  const pods = (relationships.children ?? []).filter((r) => r.kind === 'Pod' && !r.group)
-  if (pods.length > 0) return { state: 'found', pods }
-  return relationships.ownership?.children.complete ? { state: 'none' } : { state: 'unknown' }
 }
 
 function statusOf(kind: AgentSandboxSummaryKind, resource: any): StatusBadge {
@@ -269,7 +245,7 @@ export function containerState(pod: any, name: string, init: boolean): Container
 
 function StateLine({ s }: { s: ContainerState }) {
   if (s.state === 'running') return <div className="text-xs text-theme-text-secondary">Running</div>
-  const bad = s.state === 'waiting' ? !!s.reason && FATAL_WAITING_REASONS.has(s.reason) : s.exitCode !== 0
+  const bad = s.state === 'waiting' ? !!s.reason && FATAL_WAITING_REASONS.has(s.reason) : s.exitCode !== undefined && s.exitCode !== 0
   const head =
     s.state === 'waiting'
       ? `Waiting${s.reason ? `: ${s.reason}` : ''}`
@@ -282,12 +258,11 @@ function StateLine({ s }: { s: ContainerState }) {
   )
 }
 
-function ContainersFact({ containers, pod }: { containers: TemplateContainer[]; pod?: any }) {
+function ContainersFact({ containers }: { containers: TemplateContainer[] }) {
   const one = containers.length === 1
   return (
     <ul className="space-y-1.5">
       {containers.map((c) => {
-        const s = pod ? containerState(pod, c.name, c.init) : undefined
         return (
           <li key={`${c.init ? 'init/' : ''}${c.name}`} className="min-w-0">
             {!one && (
@@ -297,7 +272,6 @@ function ContainersFact({ containers, pod }: { containers: TemplateContainer[]; 
               </div>
             )}
             {c.image ? <div className="break-all font-mono text-[12.5px]">{c.image}</div> : <Absent>no image set</Absent>}
-            {s && <StateLine s={s} />}
           </li>
         )
       })}
@@ -327,79 +301,6 @@ function CreatedValue({ timestamp }: { timestamp?: string }) {
         {formatAge(timestamp)} ago
       </time>
     </Tooltip>
-  )
-}
-
-function MemberPill({
-  name,
-  namespace,
-  tone,
-  label,
-  onNavigate,
-}: {
-  name: string
-  namespace: string
-  tone: HealthLevel
-  label?: string
-  onNavigate: (ref: ResourceRef) => void
-}) {
-  return (
-    <Tooltip content={label ? `${name} · ${label}` : name} position="top">
-      <button
-        type="button"
-        onClick={() => onNavigate({ kind: 'Sandbox', group: AGENT_SANDBOX_GROUP, namespace, name })}
-        className="inline-flex items-center gap-1.5 rounded-md border border-theme-border bg-theme-base px-2 py-0.5 text-xs hover:border-accent"
-      >
-        <StatusDot tone={tone} />
-        <span className="font-mono text-theme-text-primary">{name}</span>
-        {label && <span className="text-theme-text-tertiary">{label}</span>}
-      </button>
-    </Tooltip>
-  )
-}
-
-function DrawerConditions({ conditions }: { conditions: { type: string; status: string; reason?: string; message?: string; lastTransitionTime?: string }[] }) {
-  return (
-    <div className="border-t border-theme-border-subtle pt-3">
-      <FoldSection
-        title="Controller conditions"
-        summary={conditions.length > 0 ? `${conditions.length} reported · status.conditions` : 'No conditions reported'}
-        attention={false}
-      >
-        {conditions.length > 0 ? (
-          <FactGrid>
-            {conditions.map((c) => (
-              <FactRow
-                key={c.type}
-                label={
-                  <span className="inline-flex flex-wrap items-center gap-2">
-                    {c.type}
-                    <Badge severity="neutral" size="sm">
-                      {c.status}
-                    </Badge>
-                  </span>
-                }
-              >
-                <div className="text-xs text-theme-text-secondary">Reason: {c.reason || 'Not reported'}</div>
-                <div className="break-words text-xs text-theme-text-secondary">{c.message || 'No message reported'}</div>
-                <div className="text-xs text-theme-text-tertiary">
-                  Last transition:{' '}
-                  {c.lastTransitionTime ? (
-                    <Tooltip content={c.lastTransitionTime}>
-                      <time dateTime={c.lastTransitionTime}>{formatAge(c.lastTransitionTime)} ago</time>
-                    </Tooltip>
-                  ) : (
-                    'Not reported'
-                  )}
-                </div>
-              </FactRow>
-            ))}
-          </FactGrid>
-        ) : (
-          <p className="text-sm text-theme-text-tertiary">The controller has not reported status.conditions.</p>
-        )}
-      </FoldSection>
-    </div>
   )
 }
 
@@ -441,13 +342,15 @@ export function AgentSandboxSummary({
   // Warm pools fetch namespace Sandboxes & Claims to list members (failures first) and referencing claims.
   const lists = useAgentSandboxLists({ namespaces: [namespace], apiResources: undefined, enabled: kind === 'SandboxWarmPool' })
   const events = useResourceEvents(apiKind, namespace, name, group)
-  const canViewLogs = useCanViewLogs()
+  const logs = useNamespacedCapabilities(onePod?.namespace)
+  const canViewLogs = logs.canViewLogs && !logs.logsUnknown
   const navigateTo = useWorkspaceNavigate()
   const [params] = useSearchParams()
   const issuesTakenOver = !!useNavCustomization().fleetTakeoverHref?.('issues')
   const navigate = (ref: ResourceRef) => onNavigate?.(refToSelectedResource(ref))
   const openPodLogs = (p: ResourceRef) => navigateTo(buildWorkloadPath({ kind: 'pods', namespace: p.namespace || namespace, name: p.name, tab: 'logs' }))
 
+  const containers = kind === 'Sandbox' ? templateContainers(resource) : []
   const subject = { kind, namespace, name }
   const status = statusOf(kind, resource)
   const server = useMemo(() => serverReadings(query.data), [query.data])
@@ -457,18 +360,22 @@ export function AgentSandboxSummary({
   const pending = support !== 'unsupported' && query.isLoading
   const showIssues = own.length === 0 && !pending
 
+  const waitingContainers = containers.flatMap((container) => {
+    const state = containerState(podRead, container.name, container.init)
+    return state?.state === 'waiting' && state.message ? [{ container, state }] : []
+  })
   const effectiveLevel: HealthLevel = server.tones.get(objectKey(kind, namespace, name)) ?? status.level
   const suspensionBlocked = own.some((a) => a.rule === 'suspensionBlocked') || (own.length === 0 && status.text === 'Suspension blocked')
   const suspendedCond = kind === 'Sandbox' ? findCondition(resource, 'Suspended') : undefined
   const suspendedConfirmed = kind === 'Sandbox' && status.text === 'Suspended' && suspendedCond?.status === 'True'
-  const conflictingPodName = suspensionBlocked ? sandboxConflictingPodName(resource) : ''
+  const conflictingPodName = suspensionBlocked ? sandboxPodName(resource) : ''
   const conflictingCommand =
     own.find((a) => a.rule === 'suspensionBlocked')?.command ??
     (conflictingPodName ? podOwnersCommand(namespace, conflictingPodName) : '')
 
   const callout = (a: AgentSandboxAttention) => {
     const isSelf = sameRef(a.subject, subject)
-    const showLogsBtn = isSelf && kind === 'Sandbox' && a.rule === 'failed' && !!a.reason && LOG_FAILURE_REASONS.has(a.reason) && !!onePod && canViewLogs
+    const showLogsBtn = framed && isSelf && kind === 'Sandbox' && a.rule === 'failed' && !!a.reason && LOG_FAILURE_REASONS.has(a.reason) && !!onePod && canViewLogs
     return (
       <WorkspaceProblemCallout
         key={a.id}
@@ -579,7 +486,6 @@ export function AgentSandboxSummary({
   }, [framed, kind, apiKind, group, namespace, name, suspensionBlocked, conflictingPodName, onePod, canViewLogs, resource])
 
   const Frame = framed ? WorkspaceCard : FlatSection
-  const frameClass = framed ? undefined : undefined
 
   const claimPoolInfo = useMemo(() => {
     if (kind !== 'SandboxClaim') return undefined
@@ -589,15 +495,18 @@ export function AgentSandboxSummary({
     const poolRow = query.data?.warmPools.find((w) => w.namespace === namespace && w.name === pool)
     let presence: 'present' | 'absent' | 'unread' | 'unknown' = 'unknown'
     if (poolRow) presence = 'present'
-    else if (fromAttention) presence = fromAttention.presence
+    else if (fromAttention?.ref.name === pool) presence = fromAttention.presence
     else if (query.data) {
       const cov = query.data.coverage.warmPools
-      presence = cov?.state === 'full' || cov?.allowedNamespaces?.includes(namespace) ? 'absent' : 'unread'
+      const covered = cov.state === 'notInstalled' || cov.state === 'full' || cov.allowedNamespaces?.includes(namespace)
+      presence = covered && query.data.warmPools.length === query.data.warmPoolsTotal ? 'absent' : 'unread'
     }
     return { pool, presence, poolRow }
   }, [kind, resource, own, query.data, namespace])
 
   const warmPoolSummaryRow = kind === 'SandboxWarmPool' ? query.data?.warmPools.find((w) => w.namespace === namespace && w.name === name) : undefined
+  const cleanupMessage = kind === 'SandboxClaim' && status.text === 'Expired' ? findCondition(resource, 'Ready')?.message : undefined
+  const cleanupInitiated = typeof cleanupMessage === 'string' && /\bcleanup initiated\b/i.test(cleanupMessage)
   const poolBadge = kind === 'SandboxWarmPool' ? warmPoolBadge(resource, server) : undefined
 
   return (
@@ -624,7 +533,7 @@ export function AgentSandboxSummary({
           </div>
         )}
 
-        <Frame title="At a glance" className={frameClass}>
+        <Frame title="At a glance">
           <FactGrid>
             {kind === 'Sandbox' && (
               <>
@@ -634,13 +543,13 @@ export function AgentSandboxSummary({
                       Controller confirms suspension
                     </DimensionValue>
                   ) : suspensionBlocked ? (
-                    <DimensionValue tone="alert" source="Requested: Suspended · Observed: refused (PodNotOwned)">
+                    <DimensionValue tone={effectiveLevel} source="Requested: Suspended · Observed: refused (PodNotOwned)">
                       Suspension blocked
                     </DimensionValue>
                   ) : (
                     <DimensionValue
                       tone={effectiveLevel}
-                      source={stateMessage(resource, status) || 'Ready condition · Sandbox status'}
+                      source="Ready condition · Sandbox status"
                     >
                       {readingLabel(status).label}
                     </DimensionValue>
@@ -669,18 +578,11 @@ export function AgentSandboxSummary({
                       onNavigate={navigate}
                       onOpenLogs={openPodLogs}
                     />
+                    {waitingContainers.map(({ container, state }) => (
+                      <StateLine key={`${container.init ? 'init/' : ''}${container.name}`} s={state} />
+                    ))}
                   </FactRow>
                 )}
-
-                {(() => {
-                  const containers = templateContainers(resource)
-                  if (containers.length === 0) return null
-                  return (
-                    <FactRow label={containers.length === 1 ? 'Image' : 'Images'}>
-                      <ContainersFact containers={containers} pod={podRead} />
-                    </FactRow>
-                  )
-                })()}
 
                 {(() => {
                   const owner = sandboxController(resource)
@@ -704,15 +606,9 @@ export function AgentSandboxSummary({
                   {status.text === 'Expired' ? (
                     <DimensionValue
                       tone="neutral"
-                      source={
-                        findCondition(resource, 'Ready')?.message
-                          ? `${findCondition(resource, 'Ready').message} · cleanup outcome unknown unless observed`
-                          : 'Ready=False (ClaimExpired) · cleanup outcome unknown unless observed'
-                      }
+                      source="Ready condition · SandboxClaim status"
                     >
-                      {String(findCondition(resource, 'Ready')?.message ?? '').toLowerCase().includes('cleanup')
-                        ? 'Expired · controller initiated cleanup'
-                        : 'Expired'}
+                      Expired
                     </DimensionValue>
                   ) : (
                     <DimensionValue
@@ -730,7 +626,7 @@ export function AgentSandboxSummary({
                   ) : (
                     <div>
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                        {claimPoolInfo.presence === 'absent' || claimPoolInfo.presence === 'unread' ? (
+                        {claimPoolInfo.presence !== 'present' ? (
                           <>
                             <span className="font-mono">{claimPoolInfo.pool}</span>
                             <span className={clsx('text-xs', claimPoolInfo.presence === 'absent' ? toneTextClass('unhealthy') : 'text-theme-text-tertiary')}>
@@ -742,7 +638,7 @@ export function AgentSandboxSummary({
                             <RefLink refTo={{ kind: 'SandboxWarmPool', group: AGENT_SANDBOX_EXTENSIONS_GROUP, ...ns(claimPoolInfo.pool) }} onNavigate={navigate} mono />
                             {claimPoolInfo.poolRow && (
                               <span className="text-xs text-theme-text-secondary">
-                                · {claimPoolInfo.poolRow.ready}/{claimPoolInfo.poolRow.desired ?? '?'} ready
+                                · {claimPoolInfo.poolRow.ready ?? '?'}/{claimPoolInfo.poolRow.desired ?? '?'} ready
                               </span>
                             )}
                           </>
@@ -775,7 +671,7 @@ export function AgentSandboxSummary({
                     <ExpiryCell resource={resource} />
                     {status.text === 'Expired' && (
                       <div className="mt-0.5 text-[11.5px] text-theme-text-tertiary">
-                        Controller initiated cleanup · cleanup outcome unknown unless observed
+                        {cleanupInitiated ? 'Controller initiated cleanup. ' : ''}Cleanup outcome unknown.
                       </div>
                     )}
                   </div>
@@ -796,7 +692,7 @@ export function AgentSandboxSummary({
                     ].filter(Boolean)
                     return (
                       <DimensionValue tone={effectiveLevel} source={sourceParts.join(' · ')}>
-                        {label} · {getReadyOfDesired(resource)} ready
+                        {label} · {getSandboxWarmPoolReadyOfDesired(resource)} ready
                       </DimensionValue>
                     )
                   })()}
@@ -806,8 +702,8 @@ export function AgentSandboxSummary({
                   {(() => {
                     const t = getSandboxWarmPoolTemplate(resource)
                     if (t === '-') return <Absent>no template</Absent>
-                    const presence = warmPoolSummaryRow?.templatePresence ?? own.flatMap((a) => a.relations ?? []).find((r) => r.role === 'template')?.presence
-                    if (presence === 'absent' || presence === 'unread') {
+                    const presence = (warmPoolSummaryRow?.template === t ? warmPoolSummaryRow.templatePresence : undefined) ?? own.flatMap((a) => a.relations ?? []).find((r) => r.role === 'template' && r.ref.name === t)?.presence
+                    if (presence !== 'present') {
                       return (
                         <span className="inline-flex items-center gap-1.5">
                           <span className="font-mono">{t}</span>
@@ -837,11 +733,24 @@ export function AgentSandboxSummary({
                       </span>
                     ) : (
                       <>
-                        <div className="flex flex-wrap gap-1.5">
-                          {poolMembers.slice(0, 12).map((m) => (
-                            <MemberPill key={m.name} name={m.name} namespace={namespace} tone={m.tone} label={m.label} onNavigate={navigate} />
-                          ))}
-                        </div>
+                        <SectionTable
+                          framed={false}
+                          minWidth={0}
+                          rows={poolMembers.slice(0, 12)}
+                          rowKey={(m) => m.name}
+                          empty="No members"
+                          columns={[
+                            {
+                              header: 'Sandbox',
+                              cell: (m) => <RefLink refTo={{ kind: 'Sandbox', group: AGENT_SANDBOX_GROUP, ...ns(m.name) }} onNavigate={navigate} mono />,
+                            },
+                            {
+                              header: 'State',
+                              width: '40%',
+                              cell: (m) => <DimensionValue tone={m.tone}>{m.label}</DimensionValue>,
+                            },
+                          ]}
+                        />
                         <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs">
                           {poolMembers.some((m) => m.tone !== 'healthy') && (
                             <button type="button" onClick={() => navigateTo(poolNotReadyPath(namespace, name))} className="text-accent-text hover:underline">
@@ -853,7 +762,7 @@ export function AgentSandboxSummary({
                             onClick={() => navigateTo(`${SANDBOXES_PATH}&pool=${encodeURIComponent(`${namespace}/${name}`)}`)}
                             className="text-accent-text hover:underline"
                           >
-                            {poolMembers.length > 12 ? `View all ${poolMembers.length} members →` : 'View in Sandboxes →'}
+                            {poolMembers.length > 12 ? 'View all members →' : 'View in Sandboxes →'}
                           </button>
                         </div>
                         {!readInNamespace(lists.data.sandboxes, namespace) && (
@@ -935,10 +844,15 @@ export function AgentSandboxSummary({
           </FactGrid>
         </Frame>
 
-        <Frame title="About" className={frameClass}>
+        <Frame title="About">
           <FactGrid>
             {kind === 'Sandbox' && (
               <>
+                {containers.length > 0 && (
+                  <FactRow label={containers.length === 1 ? 'Image' : 'Images'}>
+                    <ContainersFact containers={containers} />
+                  </FactRow>
+                )}
                 <FactRow label="Operating mode">{getSandboxOperatingMode(resource)}</FactRow>
                 <FactRow label="Shutdown policy">{resource?.spec?.shutdownPolicy || <Absent>not set</Absent>}</FactRow>
                 <FactRow label="Failed pod policy">{resource?.spec?.failedPodPolicy || <Absent>not set</Absent>}</FactRow>
@@ -946,7 +860,7 @@ export function AgentSandboxSummary({
                   {resource?.status?.nodeName ? (
                     <RefLink refTo={{ kind: 'Node', group: '', namespace: '', name: resource.status.nodeName }} onNavigate={navigate} mono />
                   ) : (
-                    <Absent>not scheduled</Absent>
+                    <Absent>not reported</Absent>
                   )}
                 </FactRow>
                 <FactRow label="Created">
@@ -990,7 +904,7 @@ export function AgentSandboxSummary({
         </Frame>
 
         {others.length > 0 && (
-          <Frame title="Also reported" className={frameClass}>
+          <Frame title="Also reported">
             <ul className="space-y-1 text-sm">
               {others.map((c) => (
                 <li key={c.type} className="break-words">
@@ -1006,11 +920,13 @@ export function AgentSandboxSummary({
         )}
 
         {(conditions.length > 0 || kind !== 'SandboxWarmPool') &&
-          (framed ? (
-            <WorkspaceConditions title="Controller conditions" conditions={conditions} emptyMessage="The controller has not reported status.conditions." />
-          ) : (
-            <DrawerConditions conditions={conditions} />
-          ))}
+          <WorkspaceConditions
+            title="Controller conditions"
+            conditions={conditions}
+            emptyMessage="The controller has not reported status.conditions."
+            framed={framed}
+            className={framed ? undefined : 'border-t border-theme-border-subtle pt-3'}
+          />}
       </div>
     </OpenIssueContext.Provider>
   )

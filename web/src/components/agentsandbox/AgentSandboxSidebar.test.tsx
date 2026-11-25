@@ -45,7 +45,7 @@ function render(apiResources: APIResource[], namespaces: string[] = []) {
 
 describe('Agent Sandbox in the sidebar', () => {
   it('is its part of the Agents row, the tool beneath, opening to its Overview and three tables', () => {
-    state.sandbox = liveWorkspace()
+    state.sandbox = liveWorkspace({ namespaces: ['payments'] })
     const { html, agents } = render(SANDBOX_KINDS, ['payments'])
     expect(agents?.tools).toBe('Agent Sandbox')
     expect(agents?.destinations.map((d) => d.label)).toEqual(['Overview', 'Sandboxes', 'Claims', 'Warm pools'])
@@ -59,7 +59,7 @@ describe('Agent Sandbox in the sidebar', () => {
 
 describe('The Agents row with both runtimes', () => {
   it('names the job, lists both tools beneath, heads each runtime’s destinations, and adds up their counts', () => {
-    state.sandbox = liveWorkspace()
+    state.sandbox = liveWorkspace({ namespaces: [] })
     state.substrate = substrateWorkspace()
     const { html, agents } = render([...SUBSTRATE_KINDS, ...SANDBOX_KINDS])
     expect(html).toMatch(/>Agents<\/span><span[^>]*>Agent Substrate · Agent Sandbox</)
@@ -88,7 +88,7 @@ describe('The Agents row with both runtimes', () => {
   })
 
   it('includes namespace scope in the Agents badge hover breakdown when filtered', () => {
-    state.sandbox = liveWorkspace()
+    state.sandbox = liveWorkspace({ namespaces: ['payments'] })
     state.substrate = substrateWorkspace()
     const { agents } = render([...SUBSTRATE_KINDS, ...SANDBOX_KINDS], ['payments'])
     expect(agents?.countTitle).toBe('Attention items — Substrate: 3 · cluster-wide · Sandbox: 5 · namespace payments')

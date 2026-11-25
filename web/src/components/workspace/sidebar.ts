@@ -46,18 +46,17 @@ function scopeOf(w: SidebarCategoryWorkspace): string | undefined {
 
 function runtimeCountBreakdown(w: SidebarCategoryWorkspace): string {
   const label = shortRuntimeName(w.tools)
-  const val = w.count === null ? 'unknown' : `${w.countLowerBound ? '≥' : ''}${w.count}`
+  const val = w.count == null ? 'unknown' : `${w.countLowerBound ? '≥' : ''}${w.count}`
   const scope = scopeOf(w)
   return [label ? `${label}: ${val}` : val, scope].filter(Boolean).join(' · ')
 }
 
 function combine(parts: SidebarCategoryWorkspace[]): SidebarCategoryWorkspace {
   const named = (w: SidebarCategoryWorkspace, text: string) => (w.tools ? `${w.tools}: ${text}` : text)
-  // A part with no count yet adds nothing; an unknown one makes the sum a lower bound.
   const counted = parts.filter((w) => w.count !== undefined)
   const sum = counted.reduce((n, w) => n + (w.count ?? 0), 0)
-  const lowerBound = counted.some((w) => w.count === null || w.countLowerBound)
-  const breakdown = counted.map(runtimeCountBreakdown).join(' · ')
+  const lowerBound = parts.some((w) => w.count == null || w.countLowerBound)
+  const breakdown = parts.map(runtimeCountBreakdown).join(' · ')
   const notes = parts.flatMap((w) => (w.scopeNote ? [named(w, w.scopeNote)] : []))
   if (notes.length > 0) {
     for (const w of parts) {

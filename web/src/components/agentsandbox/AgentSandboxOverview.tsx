@@ -19,7 +19,9 @@ import {
   type StatusTone,
 } from '@skyhook-io/k8s-ui'
 import type { AgentSandboxAttention, AgentSandboxRef, AgentSandboxWorkspaceResponse } from '../../api/agentSandbox'
-import { useCanViewLogs } from '../../contexts/CapabilitiesContext'
+import { useResourceWithRelationships } from '../../api/client'
+import { sandboxPod } from './lists'
+import { useNamespacedCapabilities } from '../../contexts/CapabilitiesContext'
 import type { SelectedResource } from '../../types'
 import { buildWorkloadPath, refToSelectedResource } from '../../utils/navigation'
 import { issuesPathForSubject } from '../../utils/page-links'
@@ -126,7 +128,7 @@ export function overviewFacts(data: AgentSandboxWorkspaceResponse): SummaryFact[
           : otherParts.join(' · ')
     const subParts = problemParts.length > 0 ? otherParts : s.running > 0 ? otherParts.filter((p) => !p.endsWith(' running') && !p.endsWith(' starting')) : []
     const tone: StatusTone =
-      s.failed > 0 ? 'unhealthy' : s.suspensionBlocked > 0 || s.unschedulable > 0 ? 'alert' : s.starting > 0 || s.unknown > 0 ? 'degraded' : s.running > 0 ? 'healthy' : 'neutral'
+      s.failed > 0 ? 'unhealthy' : s.suspensionBlocked > 0 || s.unschedulable > 0 ? 'alert' : s.starting > 0 || s.unknown > 0 ? 'degraded' : lb ? 'unknown' : s.running > 0 ? 'healthy' : 'neutral'
     facts.push({
       label: 'Sandboxes',
       value: headline,
@@ -168,7 +170,7 @@ export function overviewFacts(data: AgentSandboxWorkspaceResponse): SummaryFact[
     facts.push({
       label: 'Claims',
       value: headline,
-      tone: c.waiting > 0 ? 'degraded' : c.bound > 0 ? 'healthy' : 'neutral',
+      tone: c.waiting > 0 ? 'degraded' : lb ? 'unknown' : c.bound > 0 ? 'healthy' : 'neutral',
       linkLabel: 'Claims',
       listPath: SANDBOX_CLAIMS_PATH,
       source: subParts.join(' · '),
@@ -196,6 +198,10 @@ export function overviewFacts(data: AgentSandboxWorkspaceResponse): SummaryFact[
     })
   } else {
     const lb = w.lowerBound
+    const readyLowerBound = lb || !!w.readyLowerBound
+    const desiredLowerBound = lb || !!w.desiredLowerBound
+    const ready = readyLowerBound && w.ready === 0 ? 'unknown' : at(readyLowerBound, w.ready)
+    const target = desiredLowerBound && w.desired === 0 ? 'unknown' : at(desiredLowerBound, w.desired)
     const pools = lb ? `≥${w.total} pools` : plural(w.total, 'pool', 'pools')
     const poolAttention = data.attention.filter((a) => a.category === 'warmPool')
     const worstPoolTone = poolAttention.length > 0 ? severityTone(poolAttention[0].severity) : undefined
@@ -206,8 +212,8 @@ export function overviewFacts(data: AgentSandboxWorkspaceResponse): SummaryFact[
       : 'status.readyReplicas / spec.replicas'
     facts.push({
       label: 'Warm reserve',
-      value: `${at(lb, w.ready)} of ${at(lb, w.desired)} ready in ${pools}`,
-      tone: worstPoolTone ?? (w.ready >= w.desired ? 'healthy' : 'degraded'),
+      value: ready === 'unknown' || target === 'unknown' ? `${ready} ready · target ${target} in ${pools}` : `${ready} of ${target} ready in ${pools}`,
+      tone: worstPoolTone ?? (readyLowerBound || desiredLowerBound ? 'unknown' : w.ready >= w.desired ? 'healthy' : 'degraded'),
       linkLabel: 'Warm pools',
       listPath: SANDBOX_WARM_POOLS_PATH,
       source: `${causeNote} · extensions.agents.x-k8s.io`,
@@ -303,7 +309,7 @@ function RowLinkOut({ a }: { a: AgentSandboxAttention }) {
   if (members.length > 0) {
     return (
       <button type="button" onClick={() => navigateTo(poolNotReadyPath(a.subject.namespace ?? '', a.subject.name))} className="whitespace-nowrap text-accent-text hover:underline">
-        {members.length === 1 ? 'Show the sandbox that isn’t ready' : `Show the ${members.length} sandboxes that aren’t ready`} →
+        Show all members that aren’t ready →
       </button>
     )
   }
@@ -323,13 +329,20 @@ function RowLinkOut({ a }: { a: AgentSandboxAttention }) {
  */
 function AttentionRow({ a, onNavigate }: { a: AgentSandboxAttention; onNavigate: (ref: ResourceRef) => void }) {
   const navigateTo = useWorkspaceNavigate()
-  const canViewLogs = useCanViewLogs()
   const age = attentionAge(a)
   const detail = attentionDetail(a)
+  const nextStep = cleanNextStepText(a)
+  const evidence = detail || nextStep
   const podRef = a.related?.refs.find((r) => r.kind === 'Pod' && !r.group)
-  const inlinePod = podRef && (a.rule === 'suspensionBlocked' || a.rule === 'failed' || a.rule === 'stalled' || a.rule === 'slow') ? podRef : undefined
-  const showPodLogs = !!inlinePod && canViewLogs && a.rule === 'failed' && !!a.reason && LOG_FAILURE_REASONS.has(a.reason)
-  const extraRelated = a.related && !inlinePod ? a.related : undefined
+  const sandboxName = a.subject.kind === 'Sandbox' && a.rule !== 'suspensionBlocked' && podRef ? a.subject.name : ''
+  const detailQuery = useResourceWithRelationships('sandboxes', a.subject.namespace ?? '', sandboxName, a.subject.group)
+  const owned = sandboxPod(detailQuery.data?.relationships, detailQuery.isLoading)
+  const verified = owned.state === 'found' && owned.pods.length === 1 ? owned.pods[0] : undefined
+  const inlinePod = a.rule === 'suspensionBlocked' ? (podRef && toRef(podRef)) : verified
+  const { canViewLogs, logsUnknown } = useNamespacedCapabilities(verified?.namespace)
+
+  const showPodLogs = !!verified && canViewLogs && !logsUnknown && a.rule === 'failed' && !!a.reason && LOG_FAILURE_REASONS.has(a.reason)
+  const extraRelated = a.related?.refs.some((r) => r.kind !== 'Pod') ? a.related : undefined
   const hasDetails = !!detail || !!a.command || !!extraRelated || shownRelations(a).length > 0 || !!a.rawDetail
   const [open, setOpen] = useState(false)
   const tone = severityTone(a.severity)
@@ -354,7 +367,7 @@ function AttentionRow({ a, onNavigate }: { a: AgentSandboxAttention; onNavigate:
         {inlinePod && (
           <span className="min-w-0 break-words">
             {a.rule === 'suspensionBlocked' ? 'Conflicting Pod' : 'Pod'}{' '}
-            <RefLink refTo={toRef(inlinePod)} onNavigate={onNavigate} mono />
+            <RefLink refTo={inlinePod} onNavigate={onNavigate} mono />
           </span>
         )}
         {showPodLogs && inlinePod && (
@@ -371,12 +384,11 @@ function AttentionRow({ a, onNavigate }: { a: AgentSandboxAttention; onNavigate:
       </div>
       {a.caveat && <div className="mt-0.5 break-words text-xs text-theme-text-secondary">{a.caveat}</div>}
       <div className="mt-0.5 break-words text-xs text-theme-text-primary">
-        <span className="font-medium">Next step: </span>
-        {cleanNextStepText(a)}
+        {evidence}
       </div>
       {hasDetails && (
         <RowDetails open={open} onToggle={() => setOpen((v) => !v)}>
-          {detail && <div className="break-words text-xs text-theme-text-secondary">{detail}</div>}
+          {detail && <div className="break-words text-xs text-theme-text-secondary">Next step: {nextStep}</div>}
           {a.command && <CommandChip command={a.command} />}
           {extraRelated && <RefsLine lead={extraRelated.lead} refs={extraRelated.refs} onNavigate={onNavigate} />}
           <RelationsLine a={a} onNavigate={onNavigate} />
@@ -432,20 +444,6 @@ function AttentionList({ rows, onNavigate }: { rows: AgentSandboxAttention[]; on
   )
 }
 
-function singleNamespaceIn(data: AgentSandboxWorkspaceResponse): string | undefined {
-  const seen = new Set<string>()
-  for (const a of data.attention) {
-    if (a.category !== 'controller' && a.subject.namespace) seen.add(a.subject.namespace)
-  }
-  for (const w of data.warmPools) {
-    if (w.namespace) seen.add(w.namespace)
-  }
-  for (const e of data.expired.recent) {
-    if (e.ref.namespace) seen.add(e.ref.namespace)
-  }
-  return seen.size === 1 ? [...seen][0] : undefined
-}
-
 export function AgentSandboxOverview({ data, onClearNamespaces, onInspect }: AgentSandboxOverviewProps) {
   const navigateTo = useWorkspaceNavigate()
   const [params] = useSearchParams()
@@ -455,13 +453,10 @@ export function AgentSandboxOverview({ data, onClearNamespaces, onInspect }: Age
   const attentionRows = controllerProblem ? data.attention.filter((a) => a.id !== controllerProblem.id) : data.attention
   const facts = overviewFacts(data)
   const totalObjects = (data.counts.sandboxes?.total ?? 0) + (data.counts.claims?.total ?? 0) + (data.counts.warmPools?.total ?? 0)
-  const singleNs = data.namespaces.length === 0 ? singleNamespaceIn(data) : undefined
   const scopeSubtitle =
     data.namespaces.length > 0
       ? `Namespace: ${data.namespaces.join(', ')}`
-      : singleNs
-        ? `All namespaces · objects in ${singleNs}`
-        : 'All namespaces'
+      : 'All namespaces'
 
   const expiredTotal = data.expired.recentTotal
   const expiredNote = `Expired in the last 7 days. Sandboxes with shutdownPolicy Retain stay until deleted; Delete removes them on expiry.${data.expired.lowerBound ? ' Some namespaces weren’t read, so there may be more.' : ''}`
@@ -491,7 +486,7 @@ export function AgentSandboxOverview({ data, onClearNamespaces, onInspect }: Age
             {attentionRows.length === 0 ? (
               <div className="flex items-center gap-2 text-sm text-theme-text-secondary">
                 {data.attentionComplete && !controllerProblem && <StatusDot tone="healthy" />}
-                <span className="text-theme-text-tertiary">{data.attentionComplete ? NOTHING_NEEDS_ATTENTION : NOTHING_IN_WHAT_WAS_READ}</span>
+                <span className="text-theme-text-tertiary">{controllerProblem ? 'No other findings in the objects Radar read.' : data.attentionComplete ? NOTHING_NEEDS_ATTENTION : NOTHING_IN_WHAT_WAS_READ}</span>
               </div>
             ) : (
               <AttentionList rows={attentionRows} onNavigate={navigate} />
@@ -520,15 +515,22 @@ export function AgentSandboxOverview({ data, onClearNamespaces, onInspect }: Age
                         <span className="inline-flex flex-wrap items-center gap-x-2">
                           <span>{f.source}</span>
                           <Tooltip content={expiredNote}>
-                            <button
-                              type="button"
-                              onClick={() => navigateTo(`${SANDBOXES_PATH}&state=expired`)}
-                              className="text-accent-text hover:underline"
-                            >
-                              {data.expired.lowerBound ? '≥' : ''}
-                              {expiredTotal} expired this week →
-                            </button>
+                            <span>{at(data.expired.lowerBound, expiredTotal)} sandboxes and claims expired in the last 7 days</span>
                           </Tooltip>
+                          <button
+                            type="button"
+                            onClick={() => navigateTo(`${SANDBOXES_PATH}&state=recentlyExpired`)}
+                            className="text-accent-text hover:underline"
+                          >
+                            Recently expired sandboxes →
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => navigateTo(`${SANDBOX_CLAIMS_PATH}&segment=expired&state=recentlyExpired`)}
+                            className="text-accent-text hover:underline"
+                          >
+                            Recently expired claims →
+                          </button>
                         </span>
                       ) : (
                         f.source

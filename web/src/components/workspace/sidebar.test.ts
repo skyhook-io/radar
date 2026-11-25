@@ -38,8 +38,11 @@ describe('mergeSidebarWorkspaces', () => {
     expect(merge({ count: null, countLowerBound: true }, { count: 2 })).toMatchObject({ count: 2, countLowerBound: true })
     expect(merge({ count: null, countLowerBound: true }, { count: 0 })).toMatchObject({ count: null, countLowerBound: true })
     expect(merge({ count: 0 }, { count: 0 })).toMatchObject({ count: 0, countLowerBound: false })
-    // A part that has not counted yet adds nothing; with neither, the row has no badge.
-    expect(merge({}, { count: 2 })).toMatchObject({ count: 2, countLowerBound: false })
+    expect(merge({}, { count: 2 })).toMatchObject({
+      count: 2,
+      countLowerBound: true,
+      countTitle: 'Attention items — A: unknown · B: 2',
+    })
     expect(merge({}, {}).count).toBeUndefined()
   })
 })

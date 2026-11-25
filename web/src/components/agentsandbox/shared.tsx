@@ -167,7 +167,9 @@ export function AgentSandboxGate({
       <ScreenEmptyState
         icon={Boxes}
         title={denied ? 'No access to Agent Sandbox objects' : 'Agent Sandbox data unavailable'}
-        detail={denied ? 'Your permissions don’t allow listing them in the namespaces you picked.' : failed?.message ?? 'Radar couldn’t load the Agent Sandbox objects.'}
+        detail={denied
+          ? `Missing permission to ${keys.filter((k) => data[k].state === 'failed').map((k) => KIND_LIST_PERMISSION[k]).join(', ')} in this scope.`
+          : failed?.message ?? 'Radar couldn’t load the Agent Sandbox objects.'}
         action={
           denied ? undefined : (
             <button type="button" onClick={refetch} disabled={isFetching} className="btn-secondary mt-3 px-3 py-1.5 text-sm">
@@ -243,10 +245,6 @@ export function Absent({ children, title }: { children: ReactNode; title?: strin
   return title ? <Tooltip content={title}>{text}</Tooltip> : text
 }
 
-/**
- * Words a controller, the scheduler or the kubelet wrote, verbatim and set
- * apart from Radar's own: labelled, in mono, behind a rule.
- */
 /**
  * Text that wraps only at its spaces. Each word is kept whole, since a break at
  * a hyphen inside an image reference or URL ("does-not-" / "exist:1") reads as

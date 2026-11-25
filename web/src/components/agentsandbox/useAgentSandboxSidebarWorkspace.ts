@@ -42,18 +42,19 @@ export function useAgentSandboxSidebarWorkspace({
   const available = agentSandboxDiscovered(apiResources) && support !== 'unsupported'
   const { data } = useAgentSandboxWorkspace(namespaces, { enabled: available })
   const sidebar = data?.installed ? data.sidebar : undefined
-  const nsKey = namespaces.join(', ')
+  const nsKey = (data?.namespaces ?? namespaces).join(', ')
   return useMemo(() => {
     if (!available) return undefined
     const total = sidebar ? sidebarCount(sidebar.total, ['attention item', 'attention items'], sidebar.controller) : undefined
+    const scope = nsKey ? `namespace ${nsKey}` : 'all namespaces'
     return {
       [AGENTS_SIDEBAR_CATEGORY]: {
         tools: 'Agent Sandbox',
         icon: Bot,
         count: total?.count,
         countLowerBound: total?.lowerBound,
-        countTitle: total?.title,
-        countScope: nsKey ? `namespace ${nsKey}` : 'all namespaces',
+        countTitle: total ? `${total.title} Scope: ${scope}.` : undefined,
+        countScope: scope,
         destinations: [
           { id: 'agent-sandbox-overview', label: AGENT_SANDBOX_OVERVIEW.label, section: AGENT_SANDBOX_SIDEBAR_SECTION, active: !!active, onSelect: () => navigate(AGENT_SANDBOX_OVERVIEW.path) },
           ...SCREENS.map(({ kind, key, label, path, noun }) => {

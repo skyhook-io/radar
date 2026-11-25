@@ -3,6 +3,15 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 
+const pods = vi.hoisted(() => ({ verified: true }))
+vi.mock('../../api/client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../api/client')>()),
+  useResourceWithRelationships: (_kind: string, namespace: string, name: string) => ({
+    data: name && pods.verified ? { relationships: { children: [{ kind: 'Pod', namespace, name: `${name}-owned-pod` }] } } : undefined,
+    isLoading: false,
+  }),
+}))
+vi.mock('../../contexts/CapabilitiesContext', () => ({ useNamespacedCapabilities: () => ({ canViewLogs: true, logsUnknown: false }) }))
 vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({ connection: { context: 'kind-demo' } }) }))
 
 import { RadarFeatureUnsupportedError } from '../../api/radarFeatures'
@@ -86,7 +95,7 @@ describe('Agent Sandbox overview, from the server summary', () => {
     expect(html).toContain('Sandboxes →')
     expect(html).toContain('Claims →')
     expect(html).toContain('Warm pools →')
-    expect(html).toContain('3 expired this week →')
+    expect(html).toContain('3 sandboxes and claims expired in the last 7 days')
   })
 
   it('marks counts over a partial read with ≥, and a denied or left-out kind as unknown naming the missing permission, never 0', () => {
@@ -99,6 +108,15 @@ describe('Agent Sandbox overview, from the server summary', () => {
     expect(fact(notInstalled, 'Warm reserve')).toBe('Not installed')
     const html = overview(leftOut)
     expect(html).toContain('SandboxClaims (no access — missing list sandboxclaims.extensions.agents.x-k8s.io)')
+  })
+
+  it('keeps the reserve unknown when the controller has not reported', () => {
+    const data = liveWorkspace()
+    const workspace = { ...data, attention: [], counts: { ...data.counts, warmPools: { ...data.counts.warmPools!, readyLowerBound: true } } }
+    expect(overviewFacts(workspace).find((f) => f.label === 'Warm reserve')).toMatchObject({
+      value: 'unknown ready · target 2 in 1 pool',
+      tone: 'unknown',
+    })
   })
 
   it('reads the controller where it looked, names missing permission when denied, and never calls an unread one stopped', () => {
@@ -136,7 +154,7 @@ describe('Agent Sandbox overview, from the server summary', () => {
     const reversed = liveAttention().reverse()
     const html2 = overview(liveWorkspace({ attention: reversed }))
     expect([...html2.matchAll(/data-rule="(\w+)"/g)].map((m) => m[1])).toEqual(reversed.map((a) => a.rule))
-    expect(attention.match(/Next step: /g)).toHaveLength(5)
+    expect(attention.match(/data-rule=/g)).toHaveLength(5)
     expect(attention).toContain('Controller’s message')
     expect(attention).toContain('Scheduler’s message')
     expect(attention).toContain('data-rule="reserveBelowTarget"')
@@ -150,9 +168,18 @@ describe('Agent Sandbox overview, from the server summary', () => {
   it('links Pod logs directly on failed Pods and "See in Issues" only on rows Radar’s Issues list too', () => {
     const html = overview(liveWorkspace())
     const failedRow = row(html, 'Pod failed')
+    expect(failedRow).toContain('failed-owned-pod')
     expect(failedRow).toContain('Pod logs →')
     expect(failedRow).toContain('See in Issues')
     expect(row(html, 'Warm reserve below target')).not.toContain('See in Issues')
+  })
+
+  it('withholds the ordinary Pod and logs links when the owner reference could not be verified', () => {
+    pods.verified = false
+    onTestFinished(() => { pods.verified = true })
+    const html = overview(liveWorkspace())
+    expect(row(html, 'Pod failed')).not.toContain('Pod logs')
+    expect(row(html, 'Suspension blocked')).toContain('Conflicting Pod')
   })
 
   it('says a relation is not found only where the server read its kind in full, else not read', () => {
@@ -197,7 +224,7 @@ describe('Agent Sandbox overview, from the server summary', () => {
     expect(ceilingDuration(500)).toBe('1s')
   })
 
-  it('shows each row compactly: title, one line, the next step; the reading and the source’s words fold under Details', () => {
+  it('keeps the pool cause on the first view and leaves the remedy and raw evidence under Details', () => {
     const html = overview(liveWorkspace())
     const pool = row(html, 'Warm reserve below target')
     const atPos = (t: string) => {
@@ -206,16 +233,15 @@ describe('Agent Sandbox overview, from the server summary', () => {
       return i
     }
     expect(atPos('SandboxWarmPool')).toBeLessThan(atPos('no claim waits on it'))
-    expect(atPos('no claim waits on it')).toBeLessThan(atPos('Show the 2 sandboxes that aren’t ready'))
-    expect(atPos('Show the 2 sandboxes that aren’t ready')).toBeLessThan(atPos('Next step: '))
-    expect(atPos('Next step: ')).toBeLessThan(atPos('>Details<'))
-    expect(atPos('>Details<')).toBeLessThan(atPos('Its 2 sandboxes can’t be scheduled.'))
+    expect(atPos('no claim waits on it')).toBeLessThan(atPos('Show all members that aren’t ready'))
+    expect(atPos('Its 2 sandboxes can’t be scheduled.')).toBeLessThan(atPos('>Details<'))
+    expect(atPos('>Details<')).toBeLessThan(atPos('Next step: '))
     expect(atPos('>Details<')).toBeLessThan(atPos('Not ready:'))
     expect(atPos('>Details<')).toBeLessThan(atPos('0/4 nodes are available'))
     expect(pool).not.toContain('See in Issues')
     const image = row(html, 'Image can’t be pulled')
     expect(image.indexOf('>Details<')).toBeLessThan(image.indexOf('is waiting: ErrImagePull'))
-    expect(image.indexOf('See in Issues')).toBeLessThan(image.indexOf('Next step: '))
+    expect(image).toContain('Check the image name and the registry credentials')
   })
 
   it('says how long a state has lasted as "up to X ago", never "≤X"', () => {
@@ -250,7 +276,7 @@ describe('Agent Sandbox overview, from the server summary', () => {
     const caveat = 'Radar finds SandboxWarmPool no-such-pool in radar-agents-live, so the controller’s report may predate it.'
     const html = row(overview(liveWorkspace({ attention: [{ ...claim, caveat }], attentionTotal: 1 })), 'Warm pool not found')
     expect(html.indexOf(caveat)).toBeGreaterThan(0)
-    expect(html.indexOf(caveat)).toBeLessThan(html.indexOf('Next step: '))
+    expect(html.indexOf(caveat)).toBeLessThan(html.indexOf('Create SandboxWarmPool'))
     expect(html.indexOf(caveat)).toBeLessThan(html.indexOf('>Details<'))
   })
 
@@ -276,20 +302,21 @@ describe('Agent Sandbox overview, from the server summary', () => {
   })
 
   it('links recent expirations into the Sandboxes inventory and shows nothing when none expired', () => {
-    expect(overview(liveWorkspace())).toContain('3 expired this week →')
-    expect(overview(emptyWorkspace())).not.toContain('expired this week')
+    expect(overview(liveWorkspace())).toContain('Recently expired sandboxes →')
+    expect(overview(liveWorkspace())).toContain('Recently expired claims →')
+    expect(overview(emptyWorkspace())).not.toContain('Recently expired')
   })
 
   it('shows the namespace filter the server applied as a chip and subtitle', () => {
     expect(overview(liveWorkspace())).toContain('Namespace: radar-agents-live')
-    expect(overview(liveWorkspace({ namespaces: [] }))).toContain('All namespaces · objects in radar-agents-live')
+    expect(overview(liveWorkspace({ namespaces: [] }))).toContain('All namespaces')
   })
 })
 
 describe('Agent Sandbox sidebar badges', () => {
   it('take the server’s counts: ≥ for a lower bound, the unknown dash for a lower-bound zero', () => {
-    expect(sidebarCount({ count: 3, lowerBound: false }, ['sandbox', 'sandboxes'])).toEqual({ count: 3, lowerBound: false, title: '3 sandboxes need attention.' })
-    expect(sidebarCount({ count: 2, lowerBound: true }, ['claim', 'claims']).title).toBe('At least 2 claims need attention. Some couldn’t be read, so there may be more.')
+    expect(sidebarCount({ count: 3, lowerBound: false }, ['sandbox', 'sandboxes'])).toEqual({ count: 3, lowerBound: false, title: '3 workspace findings for sandboxes (related objects can share a finding).' })
+    expect(sidebarCount({ count: 2, lowerBound: true }, ['claim', 'claims']).title).toBe('At least 2 workspace findings for claims (related objects can share a finding). Some couldn’t be read, so there may be more.')
     expect(sidebarCount({ count: null, lowerBound: true }, ['warm pool', 'warm pools'])).toMatchObject({ count: null, lowerBound: true })
     expect(sidebarCount({ count: 1, lowerBound: false }, ['attention item', 'attention items'], true).title).toBe('1 attention item. One is the controller’s row, which every namespace shares.')
   })

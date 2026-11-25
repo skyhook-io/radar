@@ -1,10 +1,11 @@
+import { Link, useLocation } from 'react-router-dom'
 import type { DetailSlots, HostResource, ResourceHost } from '../../integrations/resourceHost'
 import type { SelectedResource } from '../../types'
-import { kindToPluralWithGroup } from '../../utils/navigation'
+import { kindToPluralWithGroup, withCrossViewParams } from '../../utils/navigation'
 import { DrawerTrailBack } from '../workspace/DrawerTrailBack'
 import { AgentSandboxStatusBadge, AgentSandboxSummary, type AgentSandboxSummaryKind } from './AgentSandboxSummary'
 import { SandboxClaimsKindList, SandboxWarmPoolsKindList, SandboxesKindList } from './AgentSandboxKindLists'
-import { AGENT_SANDBOX_OVERVIEW, SANDBOX_CLAIM_KIND, SANDBOX_KIND, SANDBOX_TEMPLATE_KIND, SANDBOX_WARM_POOL_KIND, ownsAgentSandboxPath } from './routes'
+import { AGENT_SANDBOX_OVERVIEW, SANDBOX_CLAIM_KIND, SANDBOX_KIND, SANDBOX_TEMPLATE_KIND, SANDBOX_WARM_POOL_KIND, SANDBOXES_PATH, SANDBOX_CLAIMS_PATH, SANDBOX_WARM_POOLS_PATH, ownsAgentSandboxPath } from './routes'
 
 // Read client-side from the generic list endpoint every Radar serves, so no
 // capability gates them.
@@ -16,6 +17,24 @@ const KIND_BY_PLURAL: Record<string, string> = Object.fromEntries(
 
 function AgentSandboxDrawerTrailBack({ resource }: { resource: SelectedResource }) {
   return <DrawerTrailBack resource={resource} pathPrefix={AGENT_SANDBOX_OVERVIEW.path} kindLabel={(plural) => KIND_BY_PLURAL[plural]} />
+}
+
+const DETAIL_LISTS = {
+  Sandbox: { label: 'Sandboxes', path: SANDBOXES_PATH },
+  SandboxClaim: { label: 'Claims', path: SANDBOX_CLAIMS_PATH },
+  SandboxWarmPool: { label: 'Warm pools', path: SANDBOX_WARM_POOLS_PATH },
+}
+
+function AgentSandboxBreadcrumb({ kind }: { kind: AgentSandboxSummaryKind }) {
+  const { search } = useLocation()
+  const list = DETAIL_LISTS[kind]
+  return (
+    <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-sm text-theme-text-tertiary">
+      <Link className="hover:underline" to={withCrossViewParams(AGENT_SANDBOX_OVERVIEW.path, search)}>Agent Sandbox</Link>
+      <span aria-hidden="true">/</span>
+      <Link className="hover:underline" to={withCrossViewParams(list.path, search)}>{list.label}</Link>
+    </nav>
+  )
 }
 
 const SUMMARY_KINDS = [SANDBOX_KIND, SANDBOX_CLAIM_KIND, SANDBOX_WARM_POOL_KIND]
@@ -40,6 +59,7 @@ export const agentSandboxResourceHost: ResourceHost = {
     const kind = summaryKind(resource)
     if (!kind) return {}
     return {
+      breadcrumb: <AgentSandboxBreadcrumb kind={kind} />,
       renderSummary: ({ apiKind, group, namespace, name, resource: data, context, onNavigate, leadContent }) =>
         data?.kind === kind ? (
           <AgentSandboxSummary

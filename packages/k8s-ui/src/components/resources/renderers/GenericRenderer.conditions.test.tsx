@@ -56,19 +56,20 @@ describe('genericConditionTone', () => {
     expect(genericConditionTone(sandbox, { type: 'Suspended', status: 'True', reason: 'Suspended' })).toBe('neutral')
     expect(genericConditionTone(sandbox, { type: 'Suspended', status: 'False', reason: 'PodNotOwned' })).toBe('warning')
     expect(genericConditionTone(sandbox, { type: 'Suspended', status: 'Unknown' })).toBe('unknown')
-    expect(genericConditionTone(sandbox, cond('Ready', 'False'))).toBe('fail')
-    // Settled Ready=False conditions are neutral, not red.
-    expect(genericConditionTone(sandbox, { type: 'Ready', status: 'False', reason: 'SandboxExpired' })).toBe('neutral')
-    expect(genericConditionTone(sandbox, { type: 'Ready', status: 'False', reason: 'PodSucceeded' })).toBe('neutral')
-    const suspendedSandbox = { ...sandbox, status: { conditions: [{ type: 'Suspended', status: 'True', reason: 'PodTerminated' }] } }
-    expect(genericConditionTone(suspendedSandbox, { type: 'Ready', status: 'False', reason: 'SandboxSuspended' })).toBe('neutral')
-    const blockedSandbox = { ...sandbox, status: { conditions: [{ type: 'Suspended', status: 'False', reason: 'PodNotOwned' }] } }
-    expect(genericConditionTone(blockedSandbox, { type: 'Ready', status: 'False', reason: 'SandboxSuspended' })).toBe('warning')
     const claim = { apiVersion: 'extensions.agents.x-k8s.io/v1beta1', kind: 'SandboxClaim', metadata: { name: 'c' } }
-    expect(genericConditionTone(claim, { type: 'Ready', status: 'False', reason: 'ClaimExpired' })).toBe('neutral')
-    expect(genericConditionTone(claim, { type: 'Ready', status: 'False', reason: 'SandboxSuspended' })).toBe('neutral')
-    expect(genericConditionTone(claim, { type: 'Ready', status: 'False', reason: 'WarmPoolNotFound' })).toBe('warning')
-    expect(genericConditionTone(claim, { type: 'Ready', status: 'False', reason: 'TemplateNotFound' })).toBe('warning')
+    const readyTone = (resource: typeof sandbox, reason: string, otherConditions: object[] = []) => {
+      const ready = { ...cond('Ready', 'False'), reason }
+      return genericConditionTone({ ...resource, status: { conditions: [ready, ...otherConditions] } }, ready)
+    }
+    expect(readyTone(sandbox, 'PodFailed')).toBe('fail')
+    expect(readyTone(sandbox, 'SandboxExpired')).toBe('neutral')
+    expect(readyTone(sandbox, 'PodSucceeded')).toBe('neutral')
+    expect(readyTone(sandbox, 'SandboxSuspended', [{ ...cond('Suspended', 'True'), reason: 'PodTerminated' }])).toBe('neutral')
+    expect(readyTone(sandbox, 'SandboxSuspended', [{ ...cond('Suspended', 'False'), reason: 'PodNotOwned' }])).toBe('warning')
+    expect(readyTone(claim, 'ClaimExpired')).toBe('neutral')
+    expect(readyTone(claim, 'SandboxSuspended')).toBe('neutral')
+    expect(readyTone(claim, 'WarmPoolNotFound')).toBe('warning')
+    expect(readyTone(claim, 'TemplateNotFound')).toBe('warning')
     // Only Agent Sandbox's Sandbox: the same condition elsewhere keeps the generic reading.
     expect(genericConditionTone({ ...sandbox, apiVersion: 'example.com/v1' }, cond('Suspended', 'False'))).toBe('unclear')
     expect(genericConditionTone({ ...sandbox, kind: 'SandboxClaim', apiVersion: 'extensions.agents.x-k8s.io/v1beta1' }, cond('Suspended', 'False'))).toBe('unclear')

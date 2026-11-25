@@ -1,3 +1,4 @@
+import type { Relationships, ResourceRef } from '@skyhook-io/k8s-ui/types/core'
 import { getSandboxClaimWarmPool } from '@skyhook-io/k8s-ui/components/resources/resource-utils-agent-runtimes'
 import { AGENT_SANDBOX_EXTENSIONS_GROUP } from './routes'
 
@@ -25,4 +26,19 @@ export function poolClaims(pool: any, claims: any[]): any[] {
 /** The Sandbox a claim is bound to, from status.sandbox.name. */
 export function claimSandboxName(claim: any): string | undefined {
   return trimmed(claim?.status?.sandbox?.name)
+}
+
+export type PodAnswer =
+  | { state: 'loading' }
+  | { state: 'found'; pods: ResourceRef[] }
+  /** Every Pod the viewer may read was checked, and none names this Sandbox as its owner. */
+  | { state: 'none' }
+  | { state: 'unknown' }
+
+/** The Sandbox's Pod from its owner-reference children, never from its name. */
+export function sandboxPod(relationships: Relationships | undefined, loading: boolean): PodAnswer {
+  if (!relationships) return loading ? { state: 'loading' } : { state: 'unknown' }
+  const pods = (relationships.children ?? []).filter((r) => r.kind === 'Pod' && !r.group)
+  if (pods.length > 0) return { state: 'found', pods }
+  return relationships.ownership?.children.complete ? { state: 'none' } : { state: 'unknown' }
 }

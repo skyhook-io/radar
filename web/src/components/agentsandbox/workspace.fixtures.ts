@@ -30,7 +30,7 @@ export function liveAttention(): AgentSandboxAttention[] {
       subject: sandbox('bad-image'), related: { lead: 'Its Pod:', refs: [pod('bad-image')] }, issue: true,
     },
     {
-      id: `sandbox:${NS}/foreign`, category: 'sandbox', rule: 'suspensionBlocked', reason: 'PodNotOwned', severity: 'alert',
+      id: `sandbox:${NS}/foreign`, category: 'sandbox', rule: 'suspensionBlocked', reason: 'PodNotOwned', severity: 'warning',
       title: 'Suspension blocked',
       reading: 'The controller refuses to delete a Pod this Sandbox doesn’t own, so the suspension waits.',
       rawDetail: 'Refused to delete pod because it is not owned by this sandbox', rawDetailLabel: 'Controller’s message', rawDetailSource: 'controller',
