@@ -39,3 +39,23 @@ func TestIndexByResource_NoCrossGroupCollision(t *testing.T) {
 		t.Errorf("knative lookup: got %+v, want 1 finding with CheckID=knative-finding", knative)
 	}
 }
+
+func TestNewNamespaceMatcher(t *testing.T) {
+	if NewNamespaceMatcher(nil)("kube-system") {
+		t.Fatal("empty matcher should not match any namespace")
+	}
+
+	matches := NewNamespaceMatcher([]string{"kube-system", "*-system", "team-*"})
+	cases := map[string]bool{
+		"kube-system":   true,
+		"calico-system": true,
+		"team-alpha":    true,
+		"default":       false,
+		"system":        false,
+	}
+	for ns, want := range cases {
+		if got := matches(ns); got != want {
+			t.Errorf("matches(%q) = %v, want %v", ns, got, want)
+		}
+	}
+}

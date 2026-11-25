@@ -12,10 +12,12 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/settings"
 	"github.com/skyhook-io/radar/pkg/helmhistory"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -508,5 +510,78 @@ func TestDashboardCoverageUnknownUntilPolicyInformerSyncs(t *testing.T) {
 	got := (&Server{}).getDashboardNetworkPolicyCoverage(requestWithUser("GET", "/", nil), cache, nil)
 	if got == nil || got.TotalPolicies != 1 || got.CoveredWorkloads != 1 {
 		t.Fatalf("coverage after sync = %+v, want 1 policy covering 1 workload", got)
+	}
+}
+
+func TestDashboardNetworkPolicyCoverageIgnoresAuditNamespaces(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if _, err := settings.Update(func(s *settings.Settings) {
+		s.Audit = &settings.AuditConfig{
+			IgnoredNamespaces: []string{"kube-system", "*-system", "tigera-operator"},
+		}
+	}); err != nil {
+		t.Fatalf("settings.Update: %v", err)
+	}
+
+	objects := []runtime.Object{
+		// Ignored via exact name ("kube-system") — uncovered.
+		dashboardTestDeployment("kube-system", "coredns", "coredns"),
+		// Ignored via wildcard ("*-system") — covered by a policy, so neither
+		// CoveredWorkloads nor TotalWorkloads may include it.
+		dashboardTestDeployment("calico-system", "calico-node", "calico-node"),
+		// Ignored via custom operator namespace ("tigera-operator") — uncovered.
+		&appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "operator", Namespace: "tigera-operator"},
+			Spec: appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{
+				Labels: map[string]string{"app": "operator"},
+			}}},
+		},
+		// Active namespaces: 1 covered Deployment + 1 uncovered StatefulSet.
+		dashboardTestDeployment("app", "web", "web"),
+		&appsv1.StatefulSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "app"},
+			Spec: appsv1.StatefulSetSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{
+				Labels: map[string]string{"app": "db"},
+			}}},
+		},
+		&networkingv1.NetworkPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "allow-web", Namespace: "app"},
+			Spec: networkingv1.NetworkPolicySpec{
+				PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}},
+			},
+		},
+		&networkingv1.NetworkPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "allow-calico", Namespace: "calico-system"},
+			Spec: networkingv1.NetworkPolicySpec{
+				PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{"app": "calico-node"}},
+			},
+		},
+	}
+
+	core, err := k8score.NewResourceCache(k8score.CacheConfig{
+		Client: kubernetesfake.NewSimpleClientset(objects...),
+		ResourceTypes: map[string]bool{
+			k8score.Deployments:     true,
+			k8score.StatefulSets:    true,
+			k8score.DaemonSets:      true,
+			k8score.NetworkPolicies: true,
+		},
+		DeferredTypes: map[string]bool{},
+		SyncTimeout:   2 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewResourceCache: %v", err)
+	}
+	t.Cleanup(core.Stop)
+	cache := &k8s.ResourceCache{ResourceCache: core}
+
+	got := (&Server{}).getDashboardNetworkPolicyCoverage(requestWithUser("GET", "/", nil), cache, nil)
+	if got == nil {
+		t.Fatal("coverage is nil")
+	}
+	if got.TotalWorkloads != 2 || got.CoveredWorkloads != 1 || got.CoveredWorkloadsIfStaged != 1 {
+		t.Fatalf("coverage = %+v, want TotalWorkloads=2 CoveredWorkloads=1 CoveredWorkloadsIfStaged=1", got)
 	}
 }

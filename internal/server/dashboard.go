@@ -25,6 +25,7 @@ import (
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/traffic"
+	bp "github.com/skyhook-io/radar/pkg/audit"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/netpol"
@@ -1789,8 +1790,13 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 		}
 	}
 
+	isIgnoredNS := bp.NewNamespaceMatcher(getAuditConfig().IgnoredNamespaces)
+
 	workloads := make([]dashboardPolicyWorkload, 0)
 	addWorkload := func(kind, ns, name string, templateLabels map[string]string, serviceAccount string) {
+		if isIgnoredNS(ns) {
+			return
+		}
 		if serviceAccount == "" {
 			serviceAccount = "default"
 		}

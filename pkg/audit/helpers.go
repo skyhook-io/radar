@@ -69,33 +69,26 @@ func GroupByResource(findings []Finding) []ResourceGroup {
 	return groups
 }
 
-// ApplySettings filters audit results based on ignored namespaces (with wildcard
-// patterns like *-system) and disabled checks. This is the shared implementation
-// used by all consumers (HTTP handlers, MCP, skyhook-connector).
-func ApplySettings(results *ScanResults, ignoredNamespaces, disabledChecks []string) *ScanResults {
-	if results == nil || (len(ignoredNamespaces) == 0 && len(disabledChecks) == 0) {
-		return results
+// NewNamespaceMatcher builds a predicate that matches exact namespace names
+// and leading/trailing wildcard patterns (for example "*-system" or "kube-*").
+func NewNamespaceMatcher(ignoredNamespaces []string) func(string) bool {
+	if len(ignoredNamespaces) == 0 {
+		return func(string) bool { return false }
 	}
-
-	ignoreNS := make(map[string]bool, len(ignoredNamespaces))
-	var ignorePatterns []string
+	exact := make(map[string]bool, len(ignoredNamespaces))
+	var patterns []string
 	for _, ns := range ignoredNamespaces {
 		if strings.HasPrefix(ns, "*") || strings.HasSuffix(ns, "*") {
-			ignorePatterns = append(ignorePatterns, ns)
+			patterns = append(patterns, ns)
 		} else {
-			ignoreNS[ns] = true
+			exact[ns] = true
 		}
 	}
-	disabled := make(map[string]bool, len(disabledChecks))
-	for _, c := range disabledChecks {
-		disabled[c] = true
-	}
-
-	matchesIgnoredNS := func(ns string) bool {
-		if ignoreNS[ns] {
+	return func(ns string) bool {
+		if exact[ns] {
 			return true
 		}
-		for _, p := range ignorePatterns {
+		for _, p := range patterns {
 			if strings.HasSuffix(p, "*") && strings.HasPrefix(ns, p[:len(p)-1]) {
 				return true
 			}
@@ -105,6 +98,22 @@ func ApplySettings(results *ScanResults, ignoredNamespaces, disabledChecks []str
 		}
 		return false
 	}
+}
+
+// ApplySettings filters audit results based on ignored namespaces (with wildcard
+// patterns like *-system) and disabled checks. This is the shared implementation
+// used by all consumers (HTTP handlers, MCP, skyhook-connector).
+func ApplySettings(results *ScanResults, ignoredNamespaces, disabledChecks []string) *ScanResults {
+	if results == nil || (len(ignoredNamespaces) == 0 && len(disabledChecks) == 0) {
+		return results
+	}
+
+	disabled := make(map[string]bool, len(disabledChecks))
+	for _, c := range disabledChecks {
+		disabled[c] = true
+	}
+
+	matchesIgnoredNS := NewNamespaceMatcher(ignoredNamespaces)
 
 	var filtered []Finding
 	for _, f := range results.Findings {
