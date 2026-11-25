@@ -12,14 +12,6 @@ import (
 
 var longhornVolumeKind = resourceid.GroupKind{Group: longhorn.Group, Kind: "Volume"}
 
-// longhornHandle is the Longhorn Volume a PV is backed by, or "".
-func longhornHandle(pv *corev1.PersistentVolume) string {
-	if pv == nil || pv.Spec.CSI == nil || pv.Spec.CSI.Driver != longhorn.CSIDriver {
-		return ""
-	}
-	return pv.Spec.CSI.VolumeHandle
-}
-
 // longhornVolumesNamed are the Longhorn Volumes with this name in every
 // namespace, read with Radar's identity: a PV's CSI handle names no
 // namespace, so it identifies a Volume only when no other Volume shares the
@@ -51,7 +43,7 @@ func (n *neighborhood) longhornStorage(session relations.Session, subject resour
 	switch subject.GroupKind() {
 	case resourceid.GroupKind{Kind: "PersistentVolume"}:
 		pv, _ := obj.(*corev1.PersistentVolume)
-		handle := longhornHandle(pv)
+		handle := longhorn.PVHandle(pv)
 		if handle == "" {
 			return
 		}
@@ -76,7 +68,7 @@ func (n *neighborhood) longhornStorage(session relations.Session, subject resour
 			return
 		}
 		for _, pv := range pvs {
-			if longhornHandle(pv) != subject.Name {
+			if longhorn.PVHandle(pv) != subject.Name {
 				continue
 			}
 			if ref := resourceid.NewRef("", "PersistentVolume", "", pv.Name); n.allowed(ref) {

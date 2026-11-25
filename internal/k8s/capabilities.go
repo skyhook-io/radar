@@ -222,6 +222,7 @@ type FeatureCapabilities struct {
 	VeleroRuns          bool `json:"veleroRuns"`          // GET /api/velero/runs/{backups|restores}
 	// POST /api/velero/backups/{namespace}/{name}/delete and GET .../deletion
 	VeleroDeleteBackup bool `json:"veleroDeleteBackup"`
+	LonghornWorkspace  bool `json:"longhornWorkspace"` // GET /api/longhorn/workspace
 	// DELETE /api/resources/... honours ?uid=&resourceVersion= preconditions
 	ResourceDeletePreconditions bool `json:"resourceDeletePreconditions"`
 	// POST /api/workloads/{kind}/{ns}/{name}/restart accepts {uid, resourceVersion};

@@ -39,3 +39,12 @@ func detectLonghornVolumeIssues(gvr schema.GroupVersionResource, kind string, it
 	}
 	return out
 }
+
+// DetectLonghorn returns the rows the Problems surface raises for these
+// Volumes, sorted as it sorts them. It reads nothing, so a caller that read
+// the Volumes with the user's own access gets only rows that access covers.
+func DetectLonghorn(volumes []*unstructured.Unstructured) []Issue {
+	out := detectLonghornVolumeIssues(schema.GroupVersionResource{Group: longhorn.Group}, "Volume", volumes)
+	out, _ = finalizeShapedIssues(out, Filters{}, true, true)
+	return out
+}
