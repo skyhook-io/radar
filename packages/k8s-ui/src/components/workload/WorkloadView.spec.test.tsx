@@ -188,7 +188,10 @@ it('does not carry a picked Pod to a recreated resource with the same name', () 
   act(() => root.unmount())
 })
 
-it('preserves host panel state when the built-in group resolves and resets it for a new identity or tab', () => {
+it.each([
+  ['Deployment', 'deployments', 'apps'],
+  ['Cluster', 'clusters', 'postgresql.cnpg.io'],
+])('preserves %s panel state on first group resolution and resets it for a new identity or tab', (kind, apiKind, group) => {
   function Panel() {
     const [edited, setEdited] = useState(false)
     return <button data-edit onClick={() => setEdited(true)}>{edited ? 'Edited' : 'New'}</button>
@@ -196,17 +199,17 @@ it('preserves host panel state when the built-in group resolves and resets it fo
   const tabs = ['settings', 'runs'].map(id => ({ id, label: id, render: () => <Panel /> }))
   const host = document.createElement('div')
   const root = createRoot(host)
-  function render(group: string | undefined, uid?: string, tab = 'settings') {
+  function render(routeGroup: string | undefined, uid?: string, tab = 'settings') {
     const workload = uid ? {
-      kind: 'Deployment', apiVersion: `${group || 'apps'}/v1`, metadata: { name: 'web', namespace: 'db', uid },
+      kind, apiVersion: `${routeGroup || group}/v1`, metadata: { name: 'web', namespace: 'db', uid },
     } : undefined
-    act(() => root.render(<WorkloadView {...props} name="web" kind="deployments" resource={workload}
-      group={group} activeTab={tab} extraTabs={tabs} />))
+    act(() => root.render(<WorkloadView {...props} name="web" kind={apiKind} resource={workload}
+      group={routeGroup} activeTab={tab} extraTabs={tabs} />))
   }
   const panel = () => host.querySelector<HTMLButtonElement>('[data-edit]')!
   render(undefined)
   act(() => panel().click())
-  render('apps', 'first')
+  render(group, 'first')
   expect(panel().textContent).toBe('Edited')
   render('', 'first')
   expect(panel().textContent).toBe('Edited')

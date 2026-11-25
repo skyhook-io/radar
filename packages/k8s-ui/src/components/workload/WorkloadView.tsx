@@ -662,9 +662,9 @@ export function WorkloadView({
   const [initialContainer, setInitialContainer] = useState<string | null>(null)
   // Hosts reuse this view across resources, and a resource can be recreated
   // under the same name: a Pod picked for one must not reach the next, not
-  // even for one render. A UID arriving with the first load is not a change.
+  // even for one render. The first read can fill in a missing group or UID.
   const selectionGroup = canonicalResourceGroup(apiKind, group)
-  const selectionIdentity = `${apiKind}\u0000${selectionGroup ?? ''}\u0000${namespace}\u0000${name}`
+  const selectionIdentity = `${apiKind}\u0000${namespace}\u0000${name}`
   // A host can briefly pass the previous object after navigation.
   const resourceGroup = apiVersionToGroup(resource?.apiVersion)
   const resourceMatchesSelection = resource?.metadata?.name === name &&
@@ -673,14 +673,18 @@ export function WorkloadView({
     typeof resource.kind === 'string' &&
     kindToPluralWithGroup(resource.kind, resourceGroup) === kindToPluralWithGroup(apiKind, selectionGroup ?? resourceGroup)
   const selectionUID = resourceMatchesSelection ? resource.metadata.uid as string | undefined : undefined
-  const [selectionScope, setSelectionScope] = useState({ identity: selectionIdentity, uid: selectionUID, generation: 0 })
-  if (selectionScope.identity !== selectionIdentity || (selectionUID && selectionScope.uid !== selectionUID)) {
-    const scopeChanged = selectionScope.identity !== selectionIdentity || selectionScope.uid !== undefined
-    setSelectionScope({ identity: selectionIdentity, uid: selectionUID, generation: selectionScope.generation + Number(scopeChanged) })
-    if (scopeChanged) {
-      setSelectedPod(null)
-      setInitialContainer(null)
-    }
+  const resolvedGroup = selectionGroup ?? (resourceMatchesSelection && resource.apiVersion ? resourceGroup : undefined)
+  const [selectionScope, setSelectionScope] = useState({ identity: selectionIdentity, group: resolvedGroup, uid: selectionUID, generation: 0 })
+  const scopeChanged = selectionScope.identity !== selectionIdentity ||
+    (resolvedGroup !== undefined && selectionScope.group !== undefined && resolvedGroup !== selectionScope.group) ||
+    (selectionUID !== undefined && selectionScope.uid !== undefined && selectionUID !== selectionScope.uid)
+  if (scopeChanged) {
+    setSelectionScope({ identity: selectionIdentity, group: resolvedGroup, uid: selectionUID, generation: selectionScope.generation + 1 })
+    setSelectedPod(null)
+    setInitialContainer(null)
+  } else if ((resolvedGroup !== undefined && selectionScope.group === undefined) ||
+    (selectionUID !== undefined && selectionScope.uid === undefined)) {
+    setSelectionScope({ ...selectionScope, group: resolvedGroup ?? selectionScope.group, uid: selectionUID ?? selectionScope.uid })
   }
   const [copied, setCopied] = useState<string | null>(null)
   const [saveSuccess, setSaveSuccess] = useState(false)
