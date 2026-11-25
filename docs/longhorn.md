@@ -5,7 +5,7 @@
 ## Scope and access
 
 - The namespace picker is not applied: Longhorn keeps its objects in its own namespace (usually `longhorn-system`), while the picker selects application namespaces. `--namespace-scope` still bounds the read (`forcedNamespace`).
-- Volumes and Engines are each authorized on the caller's own `list` access. A caller without the cluster-wide list is checked only in the namespaces where Radar holds Longhorn objects, and its read is always `partial`, so the answer never shows whether those namespaces held more. No namespace the caller did not name is reported as denied.
+- Volumes and Engines are each authorized on the caller's own `list` access. A caller without the cluster-wide list is checked only in the namespaces where Radar holds Longhorn objects, and its read is always `partial`, so the answer never shows whether those namespaces held more. Until Radar has read where it holds them, such a caller's kinds read `syncing` (or `uncached` when Radar can't read them), not `denied`. No namespace the caller did not name is reported as denied.
 - PVs are read only when the caller may list them cluster-wide, and only when some Volume was read. A PV's claim is named only to a caller who may list PVCs in the claim's namespace.
 
 ## Values and their sources

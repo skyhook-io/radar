@@ -11,6 +11,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	integration "github.com/skyhook-io/radar/internal/integration"
@@ -260,5 +263,36 @@ func TestLonghornWorkspace_NameSharedOutsideTheCallersRead(t *testing.T) {
 	}
 	if a := lhVolume(got, "longhorn-system", "pvc-a"); a == nil || a.Use.State != longhornpkg.UseBound || a.Use.PersistentVolume != "pv-a" {
 		t.Errorf("pvc-a use %+v, want pv-a", a)
+	}
+}
+
+// While Radar's Longhorn watches haven't synced, a caller limited to
+// namespaces reads syncing, never denied: where Longhorn is installed is not
+// known yet, not empty.
+func TestLonghornWorkspace_NamespaceCallerWhileUnsynced(t *testing.T) {
+	previousWait := dynamicSyncWait
+	dynamicSyncWait = 200 * time.Millisecond
+	t.Cleanup(func() { dynamicSyncWait = previousWait })
+	listKinds := map[schema.GroupVersionResource]string{}
+	for _, k := range longhornWorkspaceTestKinds {
+		listKinds[schema.GroupVersionResource{Group: k.Group, Version: k.Version, Resource: k.Name}] = k.Kind + "List"
+	}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	dyn.PrependReactor("list", "*", func(k8stesting.Action) (bool, runtime.Object, error) {
+		<-release
+		return false, nil, nil
+	})
+	if err := k8s.InitTestDynamicResourceCache(dyn, longhornWorkspaceTestKinds); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	env := newAuthTestServer(t)
+	lhUser(env, "one-ns", false, false, true)
+	allow(env.srv.permCache.Get("one-ns", nil), longhornpkg.Group, "volumes", "longhorn-system", true)
+	got := decodeLonghornWorkspace(t, env.authGet(t, "/api/longhorn/workspace", "one-ns", ""))
+	if cov := got.Coverage["volumes"]; cov.State != integration.KindCoverageSyncing {
+		t.Errorf("volumes coverage %+v, want syncing", cov)
 	}
 }

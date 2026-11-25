@@ -3,8 +3,6 @@ package server
 import (
 	"context"
 	"net/http"
-	"sort"
-	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -72,23 +70,7 @@ func (s *Server) longhornReader(r *http.Request) (*longhornsvc.Reader, bool) {
 
 	// Where Longhorn is installed: every namespace Radar holds a Volume or an
 	// Engine in, checked for a caller without cluster-wide list access.
-	var installationsOnce sync.Once
-	var installationNamespaces []string
-	installations := func(ctx context.Context) []string {
-		installationsOnce.Do(func() {
-			seen := map[string]bool{}
-			for _, k := range longhornsvc.WorkspaceKinds() {
-				for _, ns := range namespacesHeld(ctx, cache, k, budget) {
-					if !seen[ns] {
-						seen[ns] = true
-						installationNamespaces = append(installationNamespaces, ns)
-					}
-				}
-			}
-			sort.Strings(installationNamespaces)
-		})
-		return installationNamespaces
-	}
+	installations := workspaceInstallations(cache, longhornsvc.WorkspaceKinds(), budget)
 
 	return &longhornsvc.Reader{
 		ClusterContext: clusterContext,
@@ -100,8 +82,7 @@ func (s *Server) longhornReader(r *http.Request) (*longhornsvc.Reader, bool) {
 				if !current() {
 					return integration.KindAccess{State: integration.KindCoverageSyncing}, nil
 				}
-				candidates := func() []string { return installations(ctx) }
-				access, items := s.readWorkspaceKindAmong(r.WithContext(ctx), cache, k, namespaces, []string{longhornpkg.Group}, budget, candidates, true)
+				access, items := s.readWorkspaceKindInstalled(r.WithContext(ctx), cache, k, namespaces, []string{longhornpkg.Group}, budget, installations)
 				if !current() {
 					return integration.KindAccess{State: integration.KindCoverageSyncing}, nil
 				}
