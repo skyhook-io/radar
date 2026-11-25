@@ -269,6 +269,30 @@ func TestSuggestNameConflict(t *testing.T) {
 	}
 }
 
+// A Pod replaced under the same name (a StatefulSet's db-0) leaves its old
+// UID in the 15-minute lookback; only Pods still reporting are another
+// cluster writing the name.
+func TestSuggestNameIgnoresReplacedPods(t *testing.T) {
+	const replaced = "ffffffff-0000-0000-0000-000000000000"
+	store := &routeStore{routes: []route{
+		{match: []string{`uid=~`}, rows: []map[string]string{{"uid": cDB, "cluster": "shop"}}},
+		{match: []string{`cluster="shop"`, "[5m]"}, rows: []map[string]string{
+			{"uid": cDB, "pod": "db-0", "cluster": "shop"},
+		}},
+		{match: []string{`cluster="shop"`, "[15m]"}, rows: []map[string]string{
+			{"uid": cDB, "pod": "db-0", "cluster": "shop"},
+			{"uid": replaced, "pod": "db-0", "cluster": "shop"},
+		}},
+	}}
+	got, err := SuggestName(context.Background(), store, samplePods("demo", "db-0", cDB), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Value != "shop" || got.Conflict {
+		t.Fatalf("a replaced Pod counted as another cluster: %+v", got)
+	}
+}
+
 func TestSuggestNameOverrideAndNotFound(t *testing.T) {
 	store := &routeStore{routes: []route{
 		{match: []string{`uid=~`, "team_cluster, cluster,"}, rows: []map[string]string{{"uid": cDB, "cluster": "x", "team_cluster": "payments-eu"}}},

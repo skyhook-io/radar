@@ -133,6 +133,13 @@ const (
 	discoveryRetries     = 2
 	uidBatchSize         = 64
 	lookback             = "15m"
+	// activeWindow is how recently a Pod must have reported to count as
+	// another cluster writing the same name. A Pod replaced under the same
+	// name (a StatefulSet's db-0) stops reporting; a cluster that really
+	// shares the name keeps writing. Five minutes is Prometheus' staleness
+	// window, longer than any scrape interval a collector uses, so a live
+	// clash is never missed.
+	activeWindow = "5m"
 )
 
 var (
@@ -457,7 +464,7 @@ func SuggestName(ctx context.Context, t prom.Transport, sample PodSample, overri
 	}
 
 	conflicts, err := query(ctx, dt, fmt.Sprintf(`count by (uid, pod, %s) (last_over_time(kube_pod_info{namespace=%s,%s=%s}[%s]))`,
-		best.label, ns, best.label, strconv.Quote(best.value), lookback))
+		best.label, ns, best.label, strconv.Quote(best.value), activeWindow))
 	if err != nil {
 		return Suggestion{}, err
 	}
