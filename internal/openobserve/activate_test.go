@@ -94,15 +94,26 @@ func (ta *testActivator) wait(t *testing.T) {
 	}
 }
 
-func entryFor(url string) *config.OpenObserveConfig {
-	return &config.OpenObserveConfig{BaseURL: url, Org: "default", User: "sa@example.com", Token: "secret"}
+// entryFor is a saved connection with an ID match stored for each of uids.
+func entryFor(url string, uids ...string) *config.OpenObserveConfig {
+	cfg := &config.OpenObserveConfig{BaseURL: url, Org: "default", User: "sa@example.com", Token: "secret"}
+	for _, uid := range uids {
+		if cfg.Matches == nil {
+			cfg.Matches = map[string]config.OpenObserveMatch{}
+		}
+		cfg.Matches[uid] = config.OpenObserveMatch{Label: oo.IDLabel, Value: uid, By: config.OpenObserveMatchByID}
+	}
+	return cfg
 }
 
 func TestIDMatchRoutesEveryQueryIncludingFreeFormThroughTheForcedFilter(t *testing.T) {
 	withMetricsClient(t)
 	f := &oofake.Server{IDs: map[string]string{uidB: "oo-b"}}
 	srv := oofake.Start(t, f)
-	ta := newTestActivator(t, entryFor(srv.URL), false)
+	cfg := entryFor(srv.URL, uidB)
+	// A stale cached label is refreshed; the context name stays.
+	cfg.Matches[uidB] = config.OpenObserveMatch{Label: "k8s_cluster_uid", Value: uidB, By: config.OpenObserveMatchByID, Context: "kind-oo-b"}
+	ta := newTestActivator(t, cfg, false)
 
 	ta.Apply(Target{Context: "kind-oo-b", Fingerprint: "fp-b", Client: kubeWithUID(uidB)})
 	ta.wait(t)
@@ -117,8 +128,8 @@ func TestIDMatchRoutesEveryQueryIncludingFreeFormThroughTheForcedFilter(t *testi
 	if !strings.Contains(st.Address, "/api/default/prometheus") || strings.Contains(st.Address, "secret") {
 		t.Fatalf("address = %q", st.Address)
 	}
-	if got := ta.saved[uidB]; got.By != config.OpenObserveMatchByID || got.Value != uidB {
-		t.Fatalf("ID match not remembered: %+v", got)
+	if got := ta.saved[uidB]; got.By != config.OpenObserveMatchByID || got.Label != oo.IDLabel || got.Value != uidB {
+		t.Fatalf("ID match label not refreshed: %+v", got)
 	}
 
 	// The AI's free-form PromQL goes through PromForMCP.
@@ -145,23 +156,89 @@ func TestIDMatchRoutesEveryQueryIncludingFreeFormThroughTheForcedFilter(t *testi
 	}
 }
 
-func TestUnmatchedContextKeepsPrometheusAndSaysHowToFixIt(t *testing.T) {
+// A cluster OpenObserve has data for is never used without a stored match,
+// and gets no source note, not even a passing "checking" one.
+func TestClusterWithoutStoredMatchNeverUsesOpenObserve(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		cfg   func(url string) *config.OpenObserveConfig
+		async bool
+	}{
+		{name: "no matches saved", cfg: func(url string) *config.OpenObserveConfig { return entryFor(url) }},
+		{name: "another cluster matched", cfg: func(url string) *config.OpenObserveConfig { return entryFor(url, uidC) }, async: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withMetricsClient(t)
+			f := &oofake.Server{IDs: map[string]string{uidB: "oo-b"}}
+			srv := oofake.Start(t, f)
+			ta := newTestActivator(t, tc.cfg(srv.URL), false)
+			target := Target{Context: "kind-oo-b", Fingerprint: "fp-b", Client: kubeWithUID(uidB)}
+
+			for range 2 { // UID unknown, then remembered
+				ta.Apply(target)
+				if st := prometheus.GetClient().GetStatus(); st.Source != nil {
+					t.Fatalf("source = %+v, want none", st.Source)
+				}
+				if tc.async {
+					ta.wait(t)
+					tc.async = false // the second Apply knows the UID
+				} else {
+					select {
+					case <-ta.done:
+						t.Fatal("a background match ran for a cluster without a stored match")
+					case <-time.After(200 * time.Millisecond):
+					}
+				}
+				if prometheus.RelayActive() {
+					t.Fatal("a cluster without a stored match must not use OpenObserve")
+				}
+				if st := prometheus.GetClient().GetStatus(); st.Source != nil {
+					t.Fatalf("source = %+v, want none", st.Source)
+				}
+			}
+			if sent := f.Recorded(); len(sent) != 0 {
+				t.Fatalf("OpenObserve was asked about an unmatched cluster: %q", sent)
+			}
+		})
+	}
+}
+
+func TestStoredNameMatchActivates(t *testing.T) {
 	withMetricsClient(t)
-	srv := oofake.Start(t, &oofake.Server{IDs: map[string]string{uidB: "oo-b"}})
-	ta := newTestActivator(t, entryFor(srv.URL), false)
+	srv := oofake.Start(t, &oofake.Server{PodCluster: "oo-c"})
+	cfg := entryFor(srv.URL)
+	cfg.Matches = map[string]config.OpenObserveMatch{uidC: {Label: "cluster", Value: "oo-c", By: config.OpenObserveMatchByName, Context: "kind-oo-c"}}
+	ta := newTestActivator(t, cfg, false)
 
 	ta.Apply(Target{Context: "kind-oo-c", Fingerprint: "fp-c", Client: kubeWithUID(uidC)})
 	ta.wait(t)
 
+	st := prometheus.GetClient().GetStatus()
+	if !prometheus.RelayActive() || st.Source == nil || st.Source.MatchedBy != "name" || st.Source.ClusterLabel == nil || st.Source.ClusterLabel.Value != "oo-c" {
+		t.Fatalf("status source = %+v", st.Source)
+	}
+	if len(ta.saved) != 0 {
+		t.Fatalf("a name match saved an ID entry: %+v", ta.saved)
+	}
+}
+
+func TestStoredIDMatchWithoutDataSaysSo(t *testing.T) {
+	withMetricsClient(t)
+	srv := oofake.Start(t, &oofake.Server{})
+	ta := newTestActivator(t, entryFor(srv.URL, uidC), false)
+
+	ta.Apply(Target{Context: "kind-oo-c", Fingerprint: "fp-c", Client: kubeWithUID(uidC)})
+	if st := prometheus.GetClient().GetStatus(); st.Source != nil {
+		t.Fatalf("source before the UID is read = %+v, want none", st.Source)
+	}
+	ta.wait(t)
+
 	if prometheus.RelayActive() {
-		t.Fatal("an unmatched context must not use OpenObserve")
+		t.Fatal("no data for the ID: OpenObserve must not serve")
 	}
 	st := prometheus.GetClient().GetStatus()
-	if st.Source == nil || st.Source.MatchedBy != "" || st.Source.Unavailable {
+	if st.Source == nil || !strings.Contains(st.Source.Error, "no metrics with this cluster's ID") {
 		t.Fatalf("source = %+v", st.Source)
-	}
-	if want := "Run: radar openobserve connect --context kind-oo-c"; !strings.Contains(st.Source.Error, want) {
-		t.Fatalf("error = %q, want it to contain %q", st.Source.Error, want)
 	}
 }
 
@@ -197,25 +274,48 @@ func TestUnreachableOpenObserveForAMatchedContextNeverFallsBackToPrometheus(t *t
 	}
 }
 
-func TestHandSetURLBeatsOpenObserve(t *testing.T) {
+// A matched cluster uses OpenObserve even with a Prometheus URL set by hand;
+// the URL stays configured underneath and serves again once the match goes.
+func TestMatchedClusterWinsOverHandSetURL(t *testing.T) {
 	withMetricsClient(t)
+	var promHits atomic.Int32
+	promSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		promHits.Add(1)
+		oofake.WriteVector(w, nil)
+	}))
+	t.Cleanup(promSrv.Close)
+	// What local activation does for a context with a URL set by hand.
+	prometheus.Configure(promSrv.URL, map[string]string{"X-Scope-OrgID": "team"})
+
 	srv := oofake.Start(t, &oofake.Server{IDs: map[string]string{uidB: "oo-b"}})
-	ta := newTestActivator(t, entryFor(srv.URL), false)
+	ta := newTestActivator(t, entryFor(srv.URL, uidB), false)
 	ta.Apply(Target{Context: "kind-oo-b", Fingerprint: "fp-b", Client: kubeWithUID(uidB)})
 	ta.wait(t)
 	if !prometheus.RelayActive() {
-		t.Fatal("matched context should use OpenObserve")
+		t.Fatal("matched cluster should use OpenObserve")
+	}
+	if st := prometheus.GetClient().GetStatus(); !strings.Contains(st.Address, "OpenObserve") {
+		t.Fatalf("address = %q", st.Address)
+	}
+	if _, err := prometheus.GetClient().PromForMCP().Query(context.Background(), "up"); err != nil {
+		t.Fatal(err)
 	}
 
-	// What local activation does for a context with a URL set by hand.
+	// A later save of the hand-set URL keeps the relay.
+	prometheus.Configure(promSrv.URL+"/v2", nil)
+	if !prometheus.RelayActive() {
+		t.Fatal("configuring Prometheus ended the OpenObserve relay")
+	}
+	if _, err := prometheus.GetClient().PromForMCP().Query(context.Background(), "up"); err != nil {
+		t.Fatal(err)
+	}
+	if promHits.Load() != 0 {
+		t.Fatal("a query reached the hand-set Prometheus while OpenObserve serves")
+	}
+
 	ta.Clear()
-	prometheus.Configure("http://prometheus.example:9090", nil)
-
-	if prometheus.RelayActive() {
-		t.Fatal("hand-set URL must replace OpenObserve")
-	}
-	if url, _ := prometheus.CurrentConfig(); url != "http://prometheus.example:9090" {
-		t.Fatalf("configured URL = %q", url)
+	if url, _ := prometheus.CurrentConfig(); url != promSrv.URL+"/v2" {
+		t.Fatalf("configured URL after the match went = %q", url)
 	}
 	if st := prometheus.GetClient().GetStatus(); st.Source != nil {
 		t.Fatalf("source = %+v, want none", st.Source)
@@ -226,7 +326,7 @@ func TestCachedDecisionAppliesWithoutAskingOpenObserveAgain(t *testing.T) {
 	withMetricsClient(t)
 	f := &oofake.Server{IDs: map[string]string{uidB: "oo-b"}}
 	srv := oofake.Start(t, f)
-	ta := newTestActivator(t, entryFor(srv.URL), false)
+	ta := newTestActivator(t, entryFor(srv.URL, uidB), false)
 	target := Target{Context: "kind-oo-b", Fingerprint: "fp-b", Client: kubeWithUID(uidB)}
 	ta.Apply(target)
 	ta.wait(t)
@@ -267,7 +367,7 @@ func TestLegacyStoreRefusesUnscopableMetricsAsNotCollected(t *testing.T) {
 	withMetricsClient(t)
 	f := &oofake.Server{IDs: map[string]string{uidB: "oo-b"}, Legacy: true, LegacyUnscoped: []string{"k8s_pod_cpu_usage"}}
 	srv := oofake.Start(t, f)
-	ta := newTestActivator(t, entryFor(srv.URL), false)
+	ta := newTestActivator(t, entryFor(srv.URL, uidB), false)
 
 	ta.Apply(Target{Context: "kind-oo-b", Fingerprint: "fp-b", Client: kubeWithUID(uidB)})
 	ta.wait(t)
@@ -331,7 +431,7 @@ func TestGuardStaysOnWhenVersionUnknown(t *testing.T) {
 				t.Cleanup(front.Close)
 				addr = front.URL
 			}
-			ta := newTestActivator(t, entryFor(addr), false)
+			ta := newTestActivator(t, entryFor(addr, uidB), false)
 			ta.Apply(Target{Context: "kind-oo-b", Fingerprint: "fp-b", Client: kubeWithUID(uidB)})
 			ta.wait(t)
 			st := prometheus.GetClient().GetStatus()
@@ -359,7 +459,7 @@ func TestGuardOffWhenStoreFilters(t *testing.T) {
 	withMetricsClient(t)
 	f := &oofake.Server{IDs: map[string]string{uidB: "oo-b"}, LegacyUnscoped: []string{"k8s_pod_cpu_usage"}}
 	srv := oofake.Start(t, f)
-	ta := newTestActivator(t, entryFor(srv.URL), false)
+	ta := newTestActivator(t, entryFor(srv.URL, uidB), false)
 	ta.Apply(Target{Context: "kind-oo-b", Fingerprint: "fp-b", Client: kubeWithUID(uidB)})
 	ta.wait(t)
 	before := len(f.Recorded())

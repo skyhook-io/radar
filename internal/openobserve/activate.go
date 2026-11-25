@@ -101,17 +101,21 @@ func (a *Activator) LogIfIgnored() bool {
 	return true
 }
 
-// Apply runs when no hand-set Prometheus URL applies to t. A remembered
-// decision applies at once; otherwise OpenObserve stops serving the previous
-// context right away and the match runs in the background, so a context switch
-// never waits on OpenObserve.
+// Apply configures metrics for t. Only a cluster with a stored match uses
+// OpenObserve, and then it does even when a Prometheus URL is set by hand for
+// the context: the relay layers over the configured client and the hand-set
+// URL returns when the match goes. A remembered decision applies at once;
+// otherwise OpenObserve stops serving the previous context right away and the
+// match runs in the background, so a context switch never waits on
+// OpenObserve. A cluster whose UID isn't known yet gets no "checking" note
+// until the UID shows it has a match.
 func (a *Activator) Apply(t Target) {
 	if a.LogIfIgnored() {
 		a.Clear()
 		return
 	}
 	cfg := a.loadConfig()
-	if cfg == nil {
+	if cfg == nil || len(cfg.Matches) == 0 {
 		a.Clear()
 		return
 	}
@@ -119,26 +123,92 @@ func (a *Activator) Apply(t Target) {
 	defer a.mu.Unlock()
 	a.gen++
 	gen := a.gen
-	conn, err := Connection(*cfg)
+	if uid, ok := a.uids[t.Fingerprint]; ok && t.Fingerprint != "" {
+		if match := a.startLocked(gen, t, *cfg, uid); match != nil {
+			go func() {
+				match()
+				a.finished()
+			}()
+		}
+		return
+	}
+	a.disableLocked()
+	prometheus.SetSourceNote(nil)
+	go func() {
+		defer a.finished()
+		uid, err := a.clusterUID(context.Background(), t)
+		a.mu.Lock()
+		if a.gen != gen {
+			a.mu.Unlock()
+			return
+		}
+		var match func()
+		if err != nil {
+			log.Printf("[openobserve] Couldn't read the cluster ID of context %q: %v", k8s.SanitizeForLog(t.Context), err)
+			if savedFromContext(*cfg, t.Context) {
+				prometheus.SetSourceNote(&prom.MetricsSource{Kind: "openobserve", Via: "local", Error: "Couldn't read this cluster's ID to find it in OpenObserve: " + err.Error()})
+			}
+		} else {
+			match = a.startLocked(gen, t, *cfg, uid)
+		}
+		a.mu.Unlock()
+		if match != nil {
+			match()
+		}
+	}()
+}
+
+// startLocked applies what is known for the cluster with UID uid and returns
+// the background match to run, if one is needed. Caller holds a.mu.
+func (a *Activator) startLocked(gen uint64, t Target, cfg config.OpenObserveConfig, uid string) func() {
+	if _, ok := cfg.Matches[uid]; !ok {
+		a.disableLocked()
+		prometheus.SetSourceNote(nil)
+		return nil
+	}
+	conn, err := Connection(cfg)
 	if err != nil {
 		a.disableLocked()
 		prometheus.SetSourceNote(&prom.MetricsSource{Kind: "openobserve", Via: "local", Error: "OpenObserve connection in ~/.radar/config.json can't be used: " + err.Error()})
-		return
+		return nil
 	}
-	key := connKey(conn)
-	if uid, ok := a.uids[t.Fingerprint]; ok && t.Fingerprint != "" {
-		if c, ok := a.cache[cacheKey(uid, key, *cfg)]; ok && a.now().Sub(c.at) < cacheTTL {
-			a.applyLocked(c.d, conn, *cfg, uid)
-			return
-		}
+	if c, ok := a.cache[cacheKey(uid, connKey(conn), cfg)]; ok && a.now().Sub(c.at) < cacheTTL {
+		a.applyLocked(c.d, conn, cfg, uid)
+		return nil
 	}
 	a.disableLocked()
-	prometheus.SetSourceNote(&prom.MetricsSource{Kind: "openobserve", Via: "local", Warning: checkingNote})
-	go a.run(gen, t, conn, *cfg)
+	prometheus.SetSourceNote(&prom.MetricsSource{Kind: "openobserve", Via: "local", Warning: checkingNote, Pending: true})
+	return func() { a.run(gen, t, conn, cfg, uid) }
 }
 
-// Clear stops OpenObserve from serving metrics: a hand-set Prometheus URL
-// applies, metrics are off for the context, or the entry is gone.
+// savedFromContext reports whether a stored match was saved from this
+// context name, the only hint that a cluster whose UID can't be read has one.
+func savedFromContext(cfg config.OpenObserveConfig, contextName string) bool {
+	for _, m := range cfg.Matches {
+		if contextName != "" && m.Context == contextName {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *Activator) finished() {
+	if a.done != nil {
+		a.done()
+	}
+}
+
+// Refresh forgets remembered decisions and applies t again, after the saved
+// connection or a match changed.
+func (a *Activator) Refresh(t Target) {
+	a.mu.Lock()
+	a.cache = map[string]cached{}
+	a.mu.Unlock()
+	a.Apply(t)
+}
+
+// Clear stops OpenObserve from serving metrics: metrics are off for the
+// context, the cluster has no match, or the entry is gone.
 func (a *Activator) Clear() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -147,27 +217,13 @@ func (a *Activator) Clear() {
 	prometheus.SetSourceNote(nil)
 }
 
-func (a *Activator) run(gen uint64, t Target, conn oo.Connection, cfg config.OpenObserveConfig) {
-	defer func() {
-		if a.done != nil {
-			a.done()
-		}
-	}()
-	uid, err := a.clusterUID(t)
-	if err != nil {
-		a.mu.Lock()
-		defer a.mu.Unlock()
-		if a.gen == gen {
-			prometheus.SetSourceNote(&prom.MetricsSource{Kind: "openobserve", Via: "local", Error: "Couldn't read this cluster's ID to find it in OpenObserve: " + err.Error()})
-		}
-		return
-	}
+func (a *Activator) run(gen uint64, t Target, conn oo.Connection, cfg config.OpenObserveConfig, uid string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*matchTimeout)
 	d := a.resolve(ctx, conn, cfg, uid, t.Context)
 	cancel()
 
 	if d.outcome == outcomeMatched && d.match.By == config.OpenObserveMatchByID {
-		if stored, ok := cfg.Matches[uid]; !ok || (stored.By == config.OpenObserveMatchByID && stored.Label != d.match.Label) {
+		if stored := cfg.Matches[uid]; stored.By == config.OpenObserveMatchByID && (stored.Label != d.match.Label || stored.Value != d.match.Value) {
 			a.saveIDMatch(uid, config.OpenObserveMatch{Label: d.match.Label, Value: d.match.Value, By: config.OpenObserveMatchByID})
 		}
 	}
@@ -187,13 +243,20 @@ func (a *Activator) run(gen uint64, t Target, conn oo.Connection, cfg config.Ope
 			current := a.gen == gen
 			a.mu.Unlock()
 			if current {
-				a.run(gen, t, conn, cfg)
+				a.run(gen, t, conn, cfg, uid)
+				a.finished()
 			}
 		})
 	}
 }
 
-func (a *Activator) clusterUID(t Target) (string, error) {
+// ClusterUID returns the kube-system UID of t's cluster, remembered per
+// fingerprint.
+func (a *Activator) ClusterUID(ctx context.Context, t Target) (string, error) {
+	return a.clusterUID(ctx, t)
+}
+
+func (a *Activator) clusterUID(ctx context.Context, t Target) (string, error) {
 	a.mu.Lock()
 	uid, ok := a.uids[t.Fingerprint]
 	a.mu.Unlock()
@@ -203,7 +266,7 @@ func (a *Activator) clusterUID(t Target) (string, error) {
 	if t.Client == nil {
 		return "", errors.New("no Kubernetes client")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), uidReadTimeout)
+	ctx, cancel := context.WithTimeout(ctx, uidReadTimeout)
 	defer cancel()
 	uid, err := ReadClusterUID(ctx, t.Client)
 	if err != nil {
@@ -256,9 +319,10 @@ func (a *Activator) applyLocked(d decision, conn oo.Connection, cfg config.OpenO
 			Health:       h.get,
 		})
 	case outcomeUnreachable:
-		stored, ok := cfg.Matches[uid]
-		if !ok || stored.Value == oo.UnsafeDefaultName {
-			// Never matched: the cluster's own Prometheus, if any, still serves.
+		stored := cfg.Matches[uid]
+		if stored.Value == oo.UnsafeDefaultName {
+			// A stored default name never scoped anything: the cluster's own
+			// Prometheus, if any, still serves.
 			a.disableLocked()
 			prometheus.SetSourceNote(&prom.MetricsSource{Kind: "openobserve", Via: "local", Error: d.reason + " Radar couldn't check whether OpenObserve has this cluster's metrics."})
 			return
@@ -338,19 +402,18 @@ func optionsKey(o oo.RewriteOptions) string {
 	return strings.Join(parts, ",")
 }
 
+// saveIDMatch refreshes the cached label of a stored ID match. It never
+// creates an entry: a match removed meanwhile stays removed.
 func saveIDMatch(uid string, m config.OpenObserveMatch) {
 	if _, err := config.Update(func(c *config.Config) {
 		if c.OpenObserve == nil {
 			return
 		}
-		if existing, ok := c.OpenObserve.Matches[uid]; ok && existing.By == config.OpenObserveMatchByName {
-			// An ID match supersedes a confirmed name, but the user's
-			// confirmation is kept in case the ID label disappears.
+		existing, ok := c.OpenObserve.Matches[uid]
+		if !ok || existing.By != config.OpenObserveMatchByID {
 			return
 		}
-		if c.OpenObserve.Matches == nil {
-			c.OpenObserve.Matches = map[string]config.OpenObserveMatch{}
-		}
+		m.Context = existing.Context
 		c.OpenObserve.Matches[uid] = m
 	}); err != nil {
 		log.Printf("[openobserve] Failed to remember the cluster ID match: %v", err)

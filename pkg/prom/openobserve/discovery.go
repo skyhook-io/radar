@@ -629,3 +629,73 @@ func LegacyFilterBehaviour(ctx context.Context, t prom.Transport) (bool, error) 
 	}
 	return false, ErrNoProbeData
 }
+
+// LabelValue is one cluster name as OpenObserve stores it.
+type LabelValue struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
+}
+
+// MaxClusterNames bounds ListClusterNames.
+const MaxClusterNames = 50
+
+// ListClusterNames lists the cluster names OpenObserve holds data for: the
+// values of the partition labels (and overrideLabel) on kube_pod_info and the
+// collector's cluster name, over the last 15 minutes. It helps a user whose
+// cluster wasn't found pick the right label; nothing here scopes a query.
+func ListClusterNames(ctx context.Context, t prom.Transport, overrideLabel string) ([]LabelValue, error) {
+	labels := append([]string(nil), PartitionLabels...)
+	if overrideLabel != "" {
+		overrideLabel = strings.ToLower(overrideLabel)
+		if !labelNamePattern.MatchString(overrideLabel) || strings.HasPrefix(overrideLabel, "__") {
+			return nil, fmt.Errorf("openobserve: invalid cluster label %q", overrideLabel)
+		}
+		labels = append([]string{overrideLabel}, removeNames(labels, []string{overrideLabel})...)
+	}
+	dt := newDiscoveryTransport(t)
+	queries := []string{
+		fmt.Sprintf(`count by (%s) (last_over_time(kube_pod_info[%s]))`, strings.Join(labels, ", "), lookback),
+		fmt.Sprintf(`count by (k8s_cluster) (last_over_time(k8s_pod_cpu_time[%s]))`, lookback),
+	}
+	results := make([][]prom.Series, len(queries))
+	errs := make([]error, len(queries))
+	var wg sync.WaitGroup
+	for i, q := range queries {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i], errs[i] = query(ctx, dt, q)
+		}()
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		return nil, err
+	}
+	seen := map[LabelValue]bool{}
+	for _, s := range results[0] {
+		for _, l := range labels {
+			if v := s.Labels[l]; v != "" {
+				seen[LabelValue{Label: l, Value: v}] = true
+			}
+		}
+	}
+	for _, s := range results[1] {
+		if v := s.Labels["k8s_cluster"]; v != "" {
+			seen[LabelValue{Label: "k8s_cluster", Value: v}] = true
+		}
+	}
+	out := make([]LabelValue, 0, len(seen))
+	for lv := range seen {
+		out = append(out, lv)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Value != out[j].Value {
+			return out[i].Value < out[j].Value
+		}
+		return out[i].Label < out[j].Label
+	})
+	if len(out) > MaxClusterNames {
+		out = out[:MaxClusterNames]
+	}
+	return out, nil
+}

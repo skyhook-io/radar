@@ -17,7 +17,7 @@ func TestOpenObserveEntryRoundTripsWithPrivateFileMode(t *testing.T) {
 		CACertFile: "/tmp/ca.pem", ClusterLabel: "cluster",
 		Matches: map[string]OpenObserveMatch{
 			"7b930c6c-dcbb-4d1f-9afd-67ea890873d7": {Label: "radar_cluster_uid", Value: "7b930c6c-dcbb-4d1f-9afd-67ea890873d7", By: OpenObserveMatchByID},
-			"dd1bfeff-e60c-4827-b8e0-b822ab22a9e8": {Label: "cluster", Value: "oo-c", By: OpenObserveMatchByName, ConfirmedAt: "2026-11-23T10:00:00Z"},
+			"dd1bfeff-e60c-4827-b8e0-b822ab22a9e8": {Label: "cluster", Value: "oo-c", By: OpenObserveMatchByName, ConfirmedAt: "2026-11-23T10:00:00Z", Context: "kind-oo-c"},
 		},
 	}
 	if err := Save(Config{Port: 9280, OpenObserve: want}); err != nil {

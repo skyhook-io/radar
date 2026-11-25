@@ -1006,6 +1006,10 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/integrations/argocd/status", s.handleArgoCDStatus)
 			r.Get("/integrations/connections", s.handleLocalConnections)
 			r.Put("/integrations/connections", s.handleUpdateLocalConnection)
+			r.Get("/integrations/openobserve", s.handleOpenObserveSetupView)
+			r.Delete("/integrations/openobserve", s.handleOpenObserveRemoveAll)
+			r.Post("/integrations/openobserve/setup", s.handleOpenObserveSetup)
+			r.Delete("/integrations/openobserve/cluster", s.handleOpenObserveRemoveCluster)
 
 			// Desktop routes
 			r.Post("/desktop/open-url", s.handleDesktopOpenURL)
@@ -1601,6 +1605,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		WorkflowTemplateSubmit:       true,
 
 		OpenObserveCollectorPresence: true,
+		OpenObserveLocalSetup:        true,
 	}
 }
 

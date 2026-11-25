@@ -69,7 +69,7 @@ func ooHome(t *testing.T) string {
 
 func TestOpenObserveConnectMatchesByClusterID(t *testing.T) {
 	home := ooHome(t)
-	srv := oofake.Start(t, &oofake.Server{IDs: map[string]string{ooUIDB: "oo-b"}})
+	srv := oofake.Start(t, &oofake.Server{IDs: map[string]string{ooUIDB: "oo-b", ooUIDC: "oo-c"}})
 	r := runOO(t, ooKube(ooUIDB), "", "connect", "--url", srv.URL, "--user", "sa@example.com", "--token", "s3cret", "--context", "kind-oo-b")
 	if r.code != 0 {
 		t.Fatalf("exit %d\nout:\n%s\nerr:\n%s", r.code, r.out, r.err)
@@ -78,7 +78,7 @@ func TestOpenObserveConnectMatchesByClusterID(t *testing.T) {
 		t.Fatalf("out:\n%s", r.out)
 	}
 	entry := config.Load().OpenObserve
-	if entry == nil || entry.Token != "s3cret" || entry.Org != "default" || entry.Matches[ooUIDB].By != config.OpenObserveMatchByID {
+	if entry == nil || entry.Token != "s3cret" || entry.Org != "default" || entry.Matches[ooUIDB].By != config.OpenObserveMatchByID || entry.Matches[ooUIDB].Context != "kind-oo-b" {
 		t.Fatalf("saved = %+v", entry)
 	}
 	info, err := os.Stat(filepath.Join(home, ".radar", "config.json"))
@@ -89,6 +89,12 @@ func TestOpenObserveConnectMatchesByClusterID(t *testing.T) {
 	st := runOO(t, ooKube(ooUIDB), "", "status")
 	if st.code != 0 || !strings.Contains(st.out, "matched by cluster ID") || strings.Contains(st.out, "s3cret") {
 		t.Fatalf("status exit %d:\n%s%s", st.code, st.out, st.err)
+	}
+
+	// Another cluster with data under its ID isn't matched until connected.
+	other := runOO(t, ooKube(ooUIDC), "", "status")
+	if other.code != 0 || !strings.Contains(other.out, "not matched") || !strings.Contains(other.out, "OpenObserve has metrics with this cluster's ID") || !strings.Contains(other.out, "Settings → Metrics") {
+		t.Fatalf("status of an unmatched context exit %d:\n%s%s", other.code, other.out, other.err)
 	}
 
 	d := runOO(t, nil, "", "disconnect")

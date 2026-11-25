@@ -37,18 +37,20 @@ type decision struct {
 	reason string
 }
 
-// UnmatchedFix is the one-line remedy shown for a context with no match.
+// UnmatchedFix says how to match a context: OpenObserve serves only the
+// clusters a user connected.
 func UnmatchedFix(contextName string) string {
-	return fmt.Sprintf("This context isn't matched in OpenObserve. Run: radar openobserve connect --context %s", contextName)
+	return fmt.Sprintf("To use OpenObserve for this context, choose OpenObserve in Settings → Metrics or run: radar openobserve connect --context %s", contextName)
 }
 
 // matchTimeout bounds one match run (ID discovery, family detection, the
 // version probe).
 const matchTimeout = 20 * time.Second
 
-// resolve matches the cluster with kube-system UID uid. The cluster ID label
-// is always tried first; a stored name is used only when the user confirmed
-// it, and never when it is the shared default name.
+// resolve matches the cluster with kube-system UID uid, which has a stored
+// entry in cfg. The cluster ID label is always tried first; a stored name is
+// used only when the user confirmed it, and never when it is the shared
+// default name.
 func resolve(ctx context.Context, conn oo.Connection, cfg config.OpenObserveConfig, uid, contextName string) decision {
 	raw, err := conn.NewHTTPTransport(matchTimeout)
 	if err != nil {
@@ -59,6 +61,7 @@ func resolve(ctx context.Context, conn oo.Connection, cfg config.OpenObserveConf
 		return decision{outcome: outcomeUnreachable, reason: unavailableReason(err)}
 	}
 	var d decision
+	stored := cfg.Matches[uid]
 	if m, ok := ids[uid]; ok {
 		if missing, err := oo.DetectFamilies(ctx, raw, m.Options); err == nil {
 			m.Missing = missing
@@ -66,7 +69,7 @@ func resolve(ctx context.Context, conn oo.Connection, cfg config.OpenObserveConf
 			log.Printf("[openobserve] Checking which metric families have data: %v", prom.RedactURLs(err.Error()))
 		}
 		d = decision{outcome: outcomeMatched, match: m}
-	} else if stored, ok := cfg.Matches[uid]; ok && stored.By == config.OpenObserveMatchByName {
+	} else if stored.By == config.OpenObserveMatchByName {
 		m, err := oo.ConfirmedNameMatch(ctx, raw, stored.Label, stored.Value, uid)
 		switch {
 		case err == nil:
@@ -76,10 +79,8 @@ func resolve(ctx context.Context, conn oo.Connection, cfg config.OpenObserveConf
 		default:
 			return decision{outcome: outcomeUnmatched, reason: fmt.Sprintf("The confirmed name %s=%q no longer matches: %s. %s", stored.Label, stored.Value, trimPkgPrefix(err), UnmatchedFix(contextName))}
 		}
-	} else if ok && stored.By == config.OpenObserveMatchByID {
-		return decision{outcome: outcomeUnmatched, reason: fmt.Sprintf("OpenObserve has had no metrics with this cluster's ID (%s=%s) in the last 15 minutes.", stored.Label, uid)}
 	} else {
-		return decision{outcome: outcomeUnmatched, reason: UnmatchedFix(contextName)}
+		return decision{outcome: outcomeUnmatched, reason: fmt.Sprintf("OpenObserve has had no metrics with this cluster's ID (%s=%s) in the last 15 minutes.", stored.Label, uid)}
 	}
 	// The guard stays on unless the store is positively known to filter
 	// correctly; only a positive detection shows the version warning.

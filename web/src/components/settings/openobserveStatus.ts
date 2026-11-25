@@ -11,6 +11,8 @@ const FAMILY_LABELS: Record<string, string> = {
   filesystem: 'disk I/O', restarts: 'restarts', volumes: 'volumes', nodes: 'nodes', hpa: 'HPA',
 }
 
+export const familyLabel = (family: string) => FAMILY_LABELS[family] ?? family
+
 /**
  * The status line for a metrics source, or undefined when the source is not
  * serving this context (the Prometheus line applies; see `sourceNote`).
@@ -26,7 +28,7 @@ export function metricsSourceLine(source: MetricsSource | undefined): MetricsSou
   if (source.matchedBy === 'name') details.push("Add the cluster ID label so this match can't break.")
   if (source.versionWarning) details.push(source.versionWarning)
   if (source.missingFamilies?.length) {
-    details.push(`Not collected: ${source.missingFamilies.map(f => FAMILY_LABELS[f] ?? f).join(', ')}.`)
+    details.push(`Not collected: ${source.missingFamilies.map(familyLabel).join(', ')}.`)
   }
   return {
     status: `OpenObserve${shared} · matched by ${source.matchedBy === 'id' ? 'cluster ID' : 'confirmed name'}`,

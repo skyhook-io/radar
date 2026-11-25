@@ -477,3 +477,53 @@ func TestDiscoveryRetriesTransportError(t *testing.T) {
 		t.Fatalf("non-retryable: err %v after %d calls", err, bad.calls)
 	}
 }
+
+func TestListClusterNames(t *testing.T) {
+	store := &routeStore{routes: []route{
+		{match: []string{"count by (team, cluster,", "kube_pod_info[15m]"}, rows: []map[string]string{
+			{"cluster": "oo-c"},
+			{"cluster": "oo-b", "cluster_name": "b-name"},
+			{"team": "payments"},
+			{"cluster": "oo-c"},
+			{},
+		}},
+		{match: []string{"count by (k8s_cluster)", "k8s_pod_cpu_time[15m]"}, rows: []map[string]string{
+			{"k8s_cluster": "cluster1"},
+			{"k8s_cluster": ""},
+		}},
+	}}
+	got, err := ListClusterNames(context.Background(), store, "Team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []LabelValue{
+		{"cluster_name", "b-name"},
+		{"k8s_cluster", "cluster1"},
+		{"cluster", "oo-b"},
+		{"cluster", "oo-c"},
+		{"team", "payments"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("names = %+v, want %+v", got, want)
+	}
+
+	var many []map[string]string
+	for i := range MaxClusterNames + 10 {
+		many = append(many, map[string]string{"cluster": fmt.Sprintf("c%03d", i)})
+	}
+	capped, err := ListClusterNames(context.Background(), &routeStore{routes: []route{{match: []string{"kube_pod_info"}, rows: many}}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(capped) != MaxClusterNames || capped[0].Value != "c000" {
+		t.Fatalf("capped = %d names, first %+v", len(capped), capped[0])
+	}
+
+	if _, err := ListClusterNames(context.Background(), &routeStore{}, `bad"label`); err == nil {
+		t.Fatal("bad override label accepted")
+	}
+	failing := &routeStore{routes: []route{{match: []string{"k8s_pod_cpu_time"}, err: errors.New("boom")}}}
+	if _, err := ListClusterNames(context.Background(), failing, ""); err == nil {
+		t.Fatal("query error swallowed")
+	}
+}

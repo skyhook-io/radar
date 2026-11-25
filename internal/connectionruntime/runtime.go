@@ -122,21 +122,17 @@ func (r *Runtime) activate(target k8s.ProfileTarget, selected map[config.Integra
 					conn := k8s.Current()
 					prometheus.Initialize(conn.ClientInterface(), conn.Config(), conn.ContextName())
 				}
-				// Precedence: a URL set by hand for this context (saved or
-				// --prometheus-url), then the shared OpenObserve connection,
-				// then discovery.
-				handSet := s.Settings.Prometheus.URL != ""
-				if handSet {
-					openobserve.Default.Clear()
-				}
+				// Precedence: the shared OpenObserve connection for a cluster
+				// matched to it, then a URL set by hand for this context (saved
+				// or --prometheus-url), then discovery. The OpenObserve relay
+				// layers over the configured client, so the hand-set URL stays
+				// configured and serves again once the match is removed.
 				url, headers := prometheus.CurrentConfig()
 				metricsChanged = url != strings.TrimRight(s.Settings.Prometheus.URL, "/") || !maps.Equal(headers, s.Settings.Prometheus.Headers)
 				if metricsChanged {
 					prometheus.Configure(s.Settings.Prometheus.URL, s.Settings.Prometheus.Headers)
 				}
-				if !handSet {
-					openobserve.Default.Apply(openobserve.Target{Context: target.Context, Fingerprint: target.Fingerprint, Client: k8s.Current().ClientInterface()})
-				}
+				openobserve.Default.Apply(openObserveTarget(target))
 				traffic.SetMetricsConfig(s.Settings.Prometheus.URL, s.Settings.Prometheus.Headers)
 			}
 			opencost.Reset()
@@ -166,6 +162,22 @@ func (r *Runtime) activate(target k8s.ProfileTarget, selected map[config.Integra
 			}
 		}()
 	}
+}
+
+func openObserveTarget(target k8s.ProfileTarget) openobserve.Target {
+	return openobserve.Target{Context: target.Context, Fingerprint: target.Fingerprint, Client: k8s.Current().ClientInterface()}
+}
+
+// RefreshOpenObserve applies the saved OpenObserve connection again for the
+// active context after it or one of its matches changed. It does nothing
+// while the context's metrics are off or failed to resolve.
+func (r *Runtime) RefreshOpenObserve() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if s, ok := r.active[config.IntegrationMetrics]; !ok || s.Err != nil || k8s.GetConnectionStatus().State != k8s.StateConnected {
+		return
+	}
+	openobserve.Default.Refresh(openObserveTarget(r.target))
 }
 
 func CostConfig(s connections.Selection, target k8s.ProfileTarget) opencost.ManagerConfig {

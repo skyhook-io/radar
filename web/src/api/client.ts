@@ -4228,6 +4228,8 @@ export interface MetricsSource {
   versionWarning?: string;
   missingFamilies?: string[];
   unavailable?: boolean;
+  /** The match is still running; poll until it settles. */
+  pending?: boolean;
   error?: string;
 }
 
@@ -4350,7 +4352,7 @@ export function prometheusStatusRefetchInterval(
 ): number {
   if (!status) return PROM_STATUS_POLL_IDLE_MS;
   const settled = hasPrometheusCharts(status) || !!status.error;
-  return status.discovering || !settled
+  return status.discovering || !settled || status.source?.pending
     ? PROM_STATUS_POLL_DISCOVERING_MS
     : PROM_STATUS_POLL_IDLE_MS;
 }

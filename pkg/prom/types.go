@@ -58,7 +58,9 @@ type MetricsSource struct {
 	VersionWarning  string              `json:"versionWarning,omitempty"`
 	MissingFamilies []string            `json:"missingFamilies,omitempty"`
 	Unavailable     bool                `json:"unavailable,omitempty"`
-	Error           string              `json:"error,omitempty"`
+	// Pending: the match is still running; the note will be replaced.
+	Pending bool   `json:"pending,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
 // MetricsSourceLabel is the label and value that select this cluster's series.

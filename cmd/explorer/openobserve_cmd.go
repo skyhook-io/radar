@@ -56,7 +56,8 @@ func localOpenObserveKube(contextName string) (string, kubernetes.Interface, err
 	return name, clients.Kubernetes, nil
 }
 
-const openobserveUsage = `Share one OpenObserve connection across every kubeconfig context of local Radar.
+const openobserveUsage = `Share one OpenObserve connection across the kubeconfig contexts of local Radar.
+Settings → Metrics in Radar does the same.
 
 Usage:
   radar openobserve connect --url URL --user USER (--token TOKEN | --token-env VAR) [flags]
@@ -66,7 +67,9 @@ Usage:
 connect     Save the connection in ~/.radar/config.json, test it, and match one
             context (default: the current one) to its cluster in OpenObserve.
             Run it again with --context to match another context; the saved
-            connection is reused.
+            connection is reused. Only matched contexts use OpenObserve, even
+            when a Prometheus URL is set for them; the others keep their own
+            Prometheus.
 status      Show the connection (never the token) and the current context's match.
 disconnect  Remove the connection and every saved match.
 
@@ -233,12 +236,15 @@ func (c openobserveCmd) matchContext(ctx context.Context, raw prom.Transport, en
 		if missing, err := oo.DetectFamilies(ctx, raw, m.Options); err == nil {
 			m.Missing = missing
 		}
-		if stored, ok := entry.Matches[uid]; !ok || stored.By != config.OpenObserveMatchByName {
-			setMatch(entry, uid, config.OpenObserveMatch{Label: m.Label, Value: m.Value, By: config.OpenObserveMatchByID})
-			if err := saveOpenObserve(entry); err != nil {
-				fmt.Fprintf(c.errOut, "openobserve connect: save: %v\n", err)
-				return 1
-			}
+		stored, ok := entry.Matches[uid]
+		if !ok || stored.By != config.OpenObserveMatchByName {
+			stored = config.OpenObserveMatch{Label: m.Label, Value: m.Value, By: config.OpenObserveMatchByID}
+		}
+		stored.Context = ctxName
+		setMatch(entry, uid, stored)
+		if err := saveOpenObserve(entry); err != nil {
+			fmt.Fprintf(c.errOut, "openobserve connect: save: %v\n", err)
+			return 1
 		}
 		fmt.Fprintf(c.out, "Context %q is matched by cluster ID (%s=%s).\n", ctxName, m.Label, m.Value)
 		c.printMatchDetails(m)
@@ -285,7 +291,7 @@ func (c openobserveCmd) matchContext(ctx context.Context, raw prom.Transport, en
 		fmt.Fprintf(c.errOut, "Couldn't use %s=%q: %s\n", sug.Label, sug.Value, prom.RedactURLs(err.Error()))
 		return 1
 	}
-	setMatch(entry, uid, config.OpenObserveMatch{Label: m.Label, Value: m.Value, By: config.OpenObserveMatchByName, ConfirmedAt: time.Now().UTC().Format(time.RFC3339)})
+	setMatch(entry, uid, config.OpenObserveMatch{Label: m.Label, Value: m.Value, By: config.OpenObserveMatchByName, ConfirmedAt: time.Now().UTC().Format(time.RFC3339), Context: ctxName})
 	if err := saveOpenObserve(entry); err != nil {
 		fmt.Fprintf(c.errOut, "openobserve connect: save: %v\n", err)
 		return 1
@@ -379,6 +385,13 @@ func (c openobserveCmd) status(args []string) int {
 	m, ok := ids[uid]
 	stored, hasStored := entry.Matches[uid]
 	switch {
+	case !hasStored:
+		fmt.Fprintln(c.out, "not matched")
+		if ok {
+			fmt.Fprintf(c.out, "OpenObserve has metrics with this cluster's ID (%s=%s).\n", m.Label, m.Value)
+		}
+		fmt.Fprintln(c.out, openobserve.UnmatchedFix(ctxName))
+		return 0
 	case ok:
 		fmt.Fprintf(c.out, "matched by cluster ID (%s=%s)\n", m.Label, m.Value)
 	case hasStored && stored.By == config.OpenObserveMatchByName:
@@ -389,9 +402,8 @@ func (c openobserveCmd) status(args []string) int {
 		}
 		fmt.Fprintf(c.out, "matched by confirmed name (%s=%s)\n", m.Label, m.Value)
 	default:
-		fmt.Fprintln(c.out, "not matched")
-		fmt.Fprintln(c.out, openobserve.UnmatchedFix(ctxName))
-		return 0
+		fmt.Fprintf(c.out, "matched by cluster ID, but OpenObserve has had no metrics with this ID (%s=%s) in the last 15 minutes\n", stored.Label, uid)
+		return 1
 	}
 	if ok {
 		if missing, err := oo.DetectFamilies(ctx, raw, m.Options); err == nil {

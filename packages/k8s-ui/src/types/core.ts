@@ -185,6 +185,7 @@ export interface FeatureCapabilities {
   datadogRightsizing?: boolean
   datadogAgentPresence?: boolean
   openobserveCollectorPresence?: boolean
+  openobserveLocalSetup?: boolean
   resourceReadCoverage?: boolean
   searchCoverage?: boolean
  applicationEvidence?: boolean

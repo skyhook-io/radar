@@ -7,8 +7,8 @@ import (
 	"strings"
 )
 
-// OpenObserveConfig is the shared OpenObserve connection written by
-// `radar openobserve connect`.
+// OpenObserveConfig is the shared OpenObserve connection, saved from
+// Settings → Metrics or `radar openobserve connect`.
 type OpenObserveConfig struct {
 	BaseURL string `json:"baseUrl"`
 	Org     string `json:"org"`
@@ -24,16 +24,19 @@ type OpenObserveConfig struct {
 	Matches map[string]OpenObserveMatch `json:"matches,omitempty"`
 }
 
-// OpenObserveMatch records how one cluster's series are found. "name"
-// entries are names the user confirmed and are the only way a name is ever
-// used as a filter. "id" entries are a cache of a cluster ID match, which is
-// rediscovered on every activation; the entry only tells Radar that the
-// cluster lives in OpenObserve while OpenObserve can't be reached.
+// OpenObserveMatch records how one cluster's series are found; a cluster
+// without an entry never uses OpenObserve. "name" entries are names the user
+// confirmed and are the only way a name is ever used as a filter. For "id"
+// entries the ID is rediscovered on every activation; the stored label and
+// value are a cache.
 type OpenObserveMatch struct {
 	Label       string `json:"label"`
 	Value       string `json:"value"`
 	By          string `json:"by"`
 	ConfirmedAt string `json:"confirmedAt,omitempty"`
+	// Context is the kubeconfig context name the match was saved from, for
+	// display; the match itself is keyed by cluster UID.
+	Context string `json:"context,omitempty"`
 }
 
 const (
