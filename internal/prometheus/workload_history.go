@@ -109,8 +109,7 @@ func (c *Client) historicalClusterProof(ctx context.Context, scope PodScope, cac
 			c.mu.RUnlock()
 			return nil, fmt.Errorf("metrics connection changed")
 		}
-		tr := prom.NewHTTPTransport(c.baseURL, c.basePath, c.httpClient)
-		tr.Headers, tr.MaxResponseBytes = copyHeaders(c.headers), 4<<20
+		tr := c.newTransportLocked(c.baseURL, c.basePath, c.httpClient, 4<<20)
 		c.mu.RUnlock()
 		probeCtx, probeCancel := context.WithTimeout(flightCtx, probeBudget)
 		defer probeCancel()
