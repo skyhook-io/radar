@@ -7,7 +7,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { KeyboardShortcutProvider } from '../../hooks/useKeyboardShortcuts'
 import { FilterLocationProvider } from '../../filter-state'
-import { buildSingleAppEntry, isHostManagedSource, SOURCE_META, SOURCE_ORDER, type FleetAppEntry, type AppHealth, type AppRow } from '../../utils/applications'
+import { buildSingleAppEntry, isHostManagedSource, SOURCE_META, SOURCE_ORDER, type AppHealth, type AppRow } from '../../utils/applications'
 import { ApplicationsView, type ApplicationsViewProps } from './ApplicationsView'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -201,64 +201,5 @@ describe('ApplicationsView countsFrom', () => {
     expect(option('0Unhealthy').getAttribute('aria-pressed')).toBe('true')
     act(() => option('staging').click())
     expect(option('staging')).toBeUndefined()
-  })
-})
-
-describe('ApplicationsView fleet rows', () => {
-  const entry: FleetAppEntry = {
-    ...buildSingleAppEntry(app('demo-app', 'healthy')),
-    variant: 'fleet',
-    envs: [{ env: 'prod', health: 'healthy', inferred: false }, { env: 'staging', health: 'healthy', inferred: false }],
-    clusters: [{ id: 'east', name: 'east', health: 'healthy' }],
-    versionSkew: false,
-    envVersions: [{ env: 'prod', version: '6.7.0', source: 'observed' }, { env: 'staging', version: '6.8.0', source: 'configured' }],
-  }
-
-  it('labels the observed tags when one cluster reports version skew', () => {
-    vi.useFakeTimers()
-    const { host, render } = mountList()
-    const skewed = { ...entry, versionSkew: true, versions: ['6.7.0', '6.7.1'] }
-    render({ variant: 'fleet', entries: [skewed] })
-    const chip = [...host.querySelectorAll('td span')].find((el) => el.textContent === 'version skew' && el.childElementCount === 0)!
-    act(() => { chip.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })) })
-    act(() => { vi.advanceTimersByTime(150) })
-    expect(document.querySelector('[role="tooltip"]')?.textContent).toBe('Version skew detected. Observed tags: 6.7.0, 6.7.1')
-    expect(host.textContent).toContain('staging 6.8.0 (configured)')
-  })
-
-  it("shows what each environment runs when the host knows it", () => {
-    const { host, render } = mountList()
-    render({ variant: 'fleet', entries: [entry] })
-    expect(host.textContent).toContain('prod 6.7.0·staging 6.8.0 (configured)')
-    vi.useFakeTimers()
-    const shortTag = [...host.querySelectorAll<HTMLElement>('td .font-mono')].find((el) => el.textContent === '6.7.0')!
-    expect(shortTag.tabIndex).toBe(-1)
-    act(() => { shortTag.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })) })
-    act(() => { vi.advanceTimersByTime(150) })
-    expect(shortTag.hasAttribute('title')).toBe(false)
-    expect(document.body.lastElementChild).toBe(host)
-    const configuredOnly = { ...entry, versions: ['6.7.0'], envVersions: entry.envVersions?.slice(1) }
-    render({ variant: 'fleet', entries: [configuredOnly] })
-    expect(host.textContent).toContain('6.7.0')
-    expect(host.textContent).toContain('staging 6.8.0 (configured)')
-  })
-
-  it('exposes the full abbreviated tag to screen readers and on focus or hover', () => {
-    vi.useFakeTimers()
-    const { host, render } = mountList()
-    const longVersion = 'release-2026-11-25-123456789'
-    render({ variant: 'fleet', entries: [{ ...entry, envVersions: [{ env: 'prod', version: longVersion, source: 'observed' }] }] })
-    const truncatedTag = host.querySelector<HTMLElement>('td [tabindex="0"].font-mono')!
-    expect(truncatedTag.querySelector('[aria-hidden="true"]')?.textContent).toContain('…')
-    expect(truncatedTag.querySelector('.sr-only')?.textContent).toBe(longVersion)
-    act(() => truncatedTag.focus())
-    expect(document.activeElement).toBe(truncatedTag)
-    act(() => { vi.advanceTimersByTime(150) })
-    expect(document.querySelector('[role="tooltip"]')?.textContent).toBe(longVersion)
-    act(() => truncatedTag.blur())
-    expect(document.querySelector('[role="tooltip"]')).toBeNull()
-    act(() => { truncatedTag.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })) })
-    act(() => { vi.advanceTimersByTime(150) })
-    expect(document.querySelector('[role="tooltip"]')?.textContent).toBe(longVersion)
   })
 })

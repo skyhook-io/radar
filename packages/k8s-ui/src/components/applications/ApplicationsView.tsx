@@ -4,7 +4,7 @@ import { ChevronRight, Layers, Boxes, HeartPulse, Shapes, Globe, Tag } from 'luc
 import { CollapseChevron } from '../ui/Collapse'
 import { clsx } from 'clsx'
 import { StatusDot, mapHealthToTone } from '../ui/status-tone'
-import { Tooltip, WithTooltip } from '../ui/Tooltip'
+import { Tooltip } from '../ui/Tooltip'
 import { EmptyState } from '../ui/EmptyState'
 import { BoardTableSkeleton, BoardRailSkeleton } from '../ui/BoardSkeleton'
 import { SearchBox } from '../ui/SearchBox'
@@ -17,7 +17,6 @@ import { TABLE_DENSITY } from '../ui/table-density'
 import { DistributionBar } from '../ui/DistributionBar'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { pluralize } from '../../utils/pluralize'
-import { midTruncate } from '../../utils/format'
 import {
   type AppEntry,
   type AppRow,
@@ -25,7 +24,6 @@ import {
   type AppWorkloadClass,
   type AppSource,
   type AppCategory,
-  type FleetAppEntry,
   HEALTH_ORDER,
   HEALTH_RANK,
   HEALTH_META,
@@ -86,56 +84,6 @@ function applicationRuntimeLabel(apps: AppRow[], workloadClass: AppWorkloadClass
   return labels.length === 1 ? labels[0] : 'Multiple batch states'
 }
 
-function FleetVersionCell({ entry }: { entry: FleetAppEntry }) {
-  const { versions, versionSkew, envVersions = [] } = entry
-  const observed = new Set(envVersions.filter(({ source }) => source === 'observed').map(({ version }) => version))
-  const unattributed = versions.filter((version) => !observed.has(version))
-  const plainVersions = unattributed.length === 1 ? (
-    <span className="font-mono text-xs text-theme-text-secondary">{unattributed[0]}</span>
-  ) : unattributed.length > 1 ? (
-    <Tooltip content={unattributed.join(', ')} delay={150}>
-      <span className={`${CHIP} ${CHIP_TONE.neutral}`}>{unattributed.length} versions</span>
-    </Tooltip>
-  ) : null
-  if (!versionSkew && envVersions.length === 0) return plainVersions ?? <span className="text-theme-text-tertiary">—</span>
-  return (
-    <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
-      {versionSkew && (
-        <Tooltip content={`Version skew detected. Observed tags: ${versions.join(', ')}`} delay={150}>
-          <span className={`${CHIP} ${CHIP_TONE.amber}`}>version skew</span>
-        </Tooltip>
-      )}
-      {envVersions.map((v, i) => {
-        const tag = midTruncate(v.version, 20)
-        const truncated = tag !== v.version
-        return (
-          <span key={`${v.env}:${i}`} className="whitespace-nowrap">
-            {i > 0 && <span className="mr-2 text-theme-text-tertiary" aria-hidden>·</span>}
-            <span className="text-theme-text-tertiary">{v.env || 'unlabeled'}</span>{' '}
-            <WithTooltip tip={truncated ? v.version : undefined} delay={150}>
-              <span tabIndex={truncated ? 0 : undefined} className="font-mono text-theme-text-secondary">
-                {truncated ? (
-                  <>
-                    <span aria-hidden="true">{tag}</span>
-                    <span className="sr-only">{v.version}</span>
-                  </>
-                ) : tag}
-              </span>
-            </WithTooltip>
-            {v.source === 'configured' && <span className="text-theme-text-tertiary"> (configured)</span>}
-          </span>
-        )
-      })}
-      {envVersions.length > 0 && plainVersions && (
-        <span className="inline-flex items-center gap-1 whitespace-nowrap">
-          <span className="text-theme-text-tertiary">Environment unknown</span>
-          {plainVersions}
-        </span>
-      )}
-    </span>
-  )
-}
-
 // ApplicationsView — the shared, variant-agnostic core behind the Applications
 // surface. It owns the entire list chassis: a health hero header (PageHeader +
 // SummaryTiles + DistributionBar), a left facet rail (Availability / Class /
@@ -170,13 +118,9 @@ function compareEntries(a: AppEntry, b: AppEntry, key: SortKey): number {
     case 'version': {
       // Sort by distinct-version count first (skewed apps cluster), then the
       // first tag for a stable, human-meaningful order.
-      const aVersions = a.variant === 'fleet' && a.envVersions?.length
-        ? [...new Set([...a.versions, ...a.envVersions.map(({ version }) => version)])].sort() : a.versions
-      const bVersions = b.variant === 'fleet' && b.envVersions?.length
-        ? [...new Set([...b.versions, ...b.envVersions.map(({ version }) => version)])].sort() : b.versions
-      const byCount = aVersions.length - bVersions.length
+      const byCount = a.versions.length - b.versions.length
       if (byCount !== 0) return byCount
-      return (aVersions[0] ?? '').localeCompare(bVersions[0] ?? '')
+      return (a.versions[0] ?? '').localeCompare(b.versions[0] ?? '')
     }
   }
 }
@@ -784,7 +728,23 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                       <td className="px-2 py-2.5"><ClassBadge workloadClass={e.workloadClass} composition={e.classComposition} /></td>
                       <td className="px-2 py-2.5"><ApplicationRuntimeCell apps={[e.row]} workloadClass={e.workloadClass} ready={e.ready} desired={e.desired} /></td>
                       <td className="px-2 py-2.5">
-                        {e.variant === 'fleet' ? <FleetVersionCell entry={e} /> : <VersionInfo app={e.row} variant="cell" />}
+                        {e.variant === 'fleet' ? (
+                          e.versionSkew ? (
+                            <Tooltip content={`Version skew across clusters: ${e.versions.join(', ')}`} delay={150}>
+                              <span className={`${CHIP} ${CHIP_TONE.amber}`}>version skew</span>
+                            </Tooltip>
+                          ) : e.versions.length === 1 ? (
+                            <span className="font-mono text-xs text-theme-text-secondary">{e.versions[0]}</span>
+                          ) : e.versions.length > 1 ? (
+                            <Tooltip content={e.versions.join(', ')} delay={150}>
+                              <span className={`${CHIP} ${CHIP_TONE.neutral}`}>{e.versions.length} versions</span>
+                            </Tooltip>
+                          ) : (
+                            <span className="text-theme-text-tertiary">—</span>
+                          )
+                        ) : (
+                          <VersionInfo app={e.row} variant="cell" />
+                        )}
                       </td>
                       <td className="px-2 py-2.5">
                         {Object.keys(e.kinds).length === 0 ? (
