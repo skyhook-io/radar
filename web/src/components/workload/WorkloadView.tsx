@@ -28,6 +28,10 @@ import {
   isRolloutKind,
   canSetWorkloadImages,
   canPauseDeployment,
+  canSubmitWorkflowTemplate,
+  type WorkflowTemplateSubmission,
+  canSuspendCronJob,
+  canTriggerCronJob,
   isCoreBatchJob,
   type SetImageOwnership,
   SET_IMAGE_WRITES,
@@ -69,6 +73,7 @@ import {
   useTriggerCronJob,
   useSuspendCronJob,
   useResumeCronJob,
+  useSubmitWorkflowTemplate,
   useRestartWorkload,
   usePauseDeployment,
   useResumeDeployment,
@@ -114,6 +119,7 @@ import { WorkloadCostTab } from '../cost/WorkloadCostTab'
 import { isOpenCostWorkloadKind } from '../cost/kinds'
 import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
 import { useTrafficAvailable } from '../../api/traffic'
+import { useIssueExpansion, useIssueRowNotes } from '../issues/useIssueExpansion'
 import { isNotFoundError, useResourceAudit, useResourceIssues, useSubjectIssues, useRadarFeature, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
 import { AuditAlerts, getRadarUpgradeRequirement, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows, getDefaultLogContainerName, getLogContainerNames, getInitContainerNames } from '@skyhook-io/k8s-ui'
 import { WorkloadLogsTab } from '../dock/WorkloadLogsTab'
@@ -123,6 +129,7 @@ import { LogsViewer } from '../logs/LogsViewer'
 import { MultiPodLogsTab } from '../logs/MultiPodLogsTab'
 import { RayClusterLogsTab } from '../logs/RayClusterLogsTab'
 import { isKubeRayCluster } from '../logs/rayClusterPods'
+import { useWorkflowStopAction } from '../../hooks/useWorkflowStopAction'
 import { BatchExecutionFullscreen } from '../execution/BatchExecutionView'
 import { workloadRunTimelineEvents } from '../execution/batch-timeline'
 import {
@@ -366,6 +373,8 @@ function useActionsBarProps(
   const triggerCronJobMutation = useTriggerCronJob()
   const suspendCronJobMutation = useSuspendCronJob()
   const resumeCronJobMutation = useResumeCronJob()
+  const workflowStop = useWorkflowStopAction(kind, group, namespace)
+  const submitWorkflowTemplateMutation = useSubmitWorkflowTemplate()
 
   const isRolloutShape = isRolloutKind(kind)
   const isRollout = isRolloutShape && group === 'argoproj.io'
@@ -385,6 +394,9 @@ function useActionsBarProps(
   const { support: deploymentPauseSupport } = useRadarFeature('deploymentPause')
   const canPauseDeployments = !workloadWritesPending &&
     canPauseDeployment({ name: kind, group }, workloadWrites, deploymentPauseSupport === 'supported')
+  const cronJobPermissionsReady = kind === 'cronjobs' && group === 'batch' && !workloadWritesPending
+  const allowCronJobTrigger = cronJobPermissionsReady && canTriggerCronJob(workloadWrites)
+  const allowCronJobSuspend = cronJobPermissionsReady && canSuspendCronJob(workloadWrites)
   const loadImages = useCallback(
     (params: { kind: string; namespace: string; name: string }) =>
       queryClient.fetchQuery({
@@ -413,6 +425,10 @@ function useActionsBarProps(
   const { upgrade: argoResumeUpgrade, blockedReason: argoResumeBlockedReason } = useRadarFeature('argoAutoSyncEnable')
   const { support: argoInheritanceSupport } = useRadarFeature('argoSyncInheritance')
   const { support: cronJobJobNameSupport } = useRadarFeature('cronJobTriggerJobName')
+  const { support: workflowTemplateSubmitSupport, upgrade: workflowTemplateSubmitUpgrade } = useRadarFeature('workflowTemplateSubmit')
+  const isArgoWorkflowTemplate = kind === 'workflowtemplates' && group === 'argoproj.io'
+  const canSubmitTemplates = !workloadWritesPending &&
+    canSubmitWorkflowTemplate({ name: kind, group }, workloadWrites, workflowTemplateSubmitSupport === 'supported')
 
   const {
     data: cascadePreview,
@@ -514,17 +530,23 @@ function useActionsBarProps(
           rolloutDialogPromote.mutateAsync({ action: 'promote-full', ...params })
       : undefined,
     // mutateAsync, not mutate: the Job name dialog stays open when this rejects.
-    onTriggerCronJob: (params: Parameters<typeof triggerCronJobMutation.mutate>[0]) =>
-      triggerCronJobMutation.mutateAsync(params),
+    onTriggerCronJob: allowCronJobTrigger ? triggerCronJobMutation.mutateAsync : undefined,
     isTriggeringCronJob: triggerCronJobMutation.isPending,
     cronJobTriggerDialog: cronJobJobNameSupport === 'supported',
-    onSuspendCronJob: (params: Parameters<typeof suspendCronJobMutation.mutate>[0]) =>
-      suspendCronJobMutation.mutate(params),
+    onSuspendCronJob: allowCronJobSuspend ? suspendCronJobMutation.mutate : undefined,
     isSuspendingCronJob: suspendCronJobMutation.isPending,
-    onResumeCronJob: (params: Parameters<typeof resumeCronJobMutation.mutate>[0]) =>
-      resumeCronJobMutation.mutate(params),
+    onResumeCronJob: allowCronJobSuspend ? resumeCronJobMutation.mutate : undefined,
     isResumingCronJob: resumeCronJobMutation.isPending,
+    // mutateAsync, not mutate: the submit dialog stays open when this rejects.
+    onSubmitWorkflowTemplate: canSubmitTemplates
+      ? (submission: WorkflowTemplateSubmission) => submitWorkflowTemplateMutation.mutateAsync(submission)
+      : undefined,
+    isSubmittingWorkflowTemplate: submitWorkflowTemplateMutation.isPending,
+    // Only a Radar known to lack the endpoint gets the upgrade note; a failed
+    // capabilities probe is not evidence of an old Radar.
+    workflowTemplateSubmitUpgrade: isArgoWorkflowTemplate && workflowTemplateSubmitSupport === 'unsupported' ? workflowTemplateSubmitUpgrade : null,
     gitOpsActionDisabledReasons,
+    ...workflowStop,
     onFluxReconcile: (params: Parameters<typeof fluxReconcileMutation.mutate>[0]) =>
       fluxReconcileMutation.mutate(params),
     isFluxReconciling: fluxReconcileMutation.isPending,
@@ -649,7 +671,9 @@ export function WorkloadView({
     isFetching: resourceFetching,
     error: resourceError,
     refetch: refetchResource,
-  } = useResourceWithRelationships<any>(apiKind, namespace, name, rest.group)
+  } = useResourceWithRelationships<any>(apiKind, namespace, name, rest.group, {
+    pollPendingOwnership: rest.active !== false,
+  })
   const resource = resourceResponse?.resource
   const relationships = resourceResponse?.relationships
   useRefreshRevisionsOnNewRollout(
@@ -933,6 +957,11 @@ export function WorkloadView({
     rest.active !== false && !useReportCoverage && !isNotFoundError(resourceError), issueObservation)
   const subjectIssues = useSubjectIssues(useReportCoverage ? { kind: isCoreNode ? 'Node' : 'CronJob', group: isCoreNode ? '' : 'batch', namespace, name, uid: resource?.metadata?.uid } : null, useReportCoverage && Boolean(resource))
   const liveIssues = useReportCoverage ? subjectIssues.data?.issues : ordinaryIssues.data
+  const issueExpansion = useIssueExpansion(() => {
+    if (useReportCoverage) void subjectIssues.refetch()
+    else void ordinaryIssues.refetch()
+  })
+  const issueRowNotes = useIssueRowNotes()
   const issuesPending = useReportCoverage ? subjectIssues.isPending : ordinaryIssues.isPending
   const schedulingEvidence = isCronJob && subjectIssues.data?.scheduling_report?.uid === resource?.metadata?.uid ? subjectIssues.data?.scheduling_report : undefined
   const certificateEvidence = isCoreNode && subjectIssues.data?.node_certificate_report?.uid === resource?.metadata?.uid ? subjectIssues.data?.node_certificate_report : undefined
@@ -1171,12 +1200,38 @@ export function WorkloadView({
     imageOwnerVerified,
     imageSelection,
   ])
+  // A submitted run opens as a Workflow, as Argo's UI does: its full page from
+  // the full page (the same run view, with the Workflow's own actions), and the
+  // resource drawer from the drawer.
+  const viewIdentity = `${apiKind}/${namespace}/${name}`
+  const currentViewIdentity = useRef(viewIdentity)
+  currentViewIdentity.current = viewIdentity
+  useEffect(() => () => { currentViewIdentity.current = '' }, [])
+  const navigateToResource = rest.onNavigateToResource
+  const submitWorkflowTemplate = baseActionsBarProps.onSubmitWorkflowTemplate
+  const submitAndOpenRun = useMemo(
+    () => submitWorkflowTemplate
+      ? async (submission: WorkflowTemplateSubmission) => {
+          const submittedFrom = currentViewIdentity.current
+          const run = await submitWorkflowTemplate(submission)
+          // The user moved on while the request ran: don't pull them back.
+          if (currentViewIdentity.current === submittedFrom) {
+            const target = { kind: 'workflows', namespace: run.namespace, name: run.name, group: 'argoproj.io' }
+            if (expanded) navigateRouter(buildWorkloadPath(target))
+            else navigateToResource?.(target)
+          }
+          return run
+        }
+      : undefined,
+    [expanded, navigateRouter, navigateToResource, submitWorkflowTemplate],
+  )
   const actionsBarProps = useMemo(
     () => ({
       ...baseActionsBarProps,
       onLoadImages: baseActionsBarProps.onLoadImages
         ? loadImagesWithTargetOwnership
         : undefined,
+      onSubmitWorkflowTemplate: submitAndOpenRun,
       onCompareTo,
       onCompareAcrossClusters,
       imageOwnership,
@@ -1184,6 +1239,7 @@ export function WorkloadView({
     [
       baseActionsBarProps,
       loadImagesWithTargetOwnership,
+      submitAndOpenRun,
       imageOwnership,
       onCompareTo,
       onCompareAcrossClusters,
@@ -1482,6 +1538,11 @@ export function WorkloadView({
             compact={!expanded}
             subjectResource={{ kind: apiKind, namespace, name, group: identityGroup }}
             onResourceClick={openIssueResource}
+            onOpenIssueChange={issueExpansion.onOpenIssueChange}
+            expandedIssue={issueExpansion.expandedIssue}
+            timelineLinks={issueExpansion.timelineLinks}
+            rowChanges={issueRowNotes.rowChanges}
+            onVisibleIssuesChange={issueRowNotes.onVisibleIssuesChange}
           />
           </div>
         )}

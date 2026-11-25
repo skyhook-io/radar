@@ -357,6 +357,12 @@ func initGoldenCluster(t *testing.T) {
 			}}},
 		},
 	)
+	// The typed informers start outside the fake clock; date their watches
+	// on it, before every window, as for a Radar that has been running. The
+	// webhook configuration kinds keep the real clock: Radar watches them
+	// only when first needed, so their history starts inside the window.
+	restore := k8s.SetTestWatchClock(func() time.Time { return goldenAgo(26 * time.Hour) })
+	defer restore()
 	if err := k8s.InitTestResourceCache(k8sfake.NewSimpleClientset(objs...)); err != nil {
 		t.Fatalf("InitTestResourceCache: %v", err)
 	}

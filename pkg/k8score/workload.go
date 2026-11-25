@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/resourceid"
+	"github.com/skyhook-io/radar/pkg/workloadrestart"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -916,46 +917,52 @@ func (m *WorkloadManager) SetCronJobSuspend(ctx context.Context, namespace, name
 
 // RestartWorkload performs a rolling restart on a Deployment, StatefulSet, or DaemonSet.
 func (m *WorkloadManager) RestartWorkload(ctx context.Context, kind, namespace, name string) error {
+	_, err := m.RestartWorkloadWithResult(ctx, kind, namespace, name)
+	return err
+}
+
+// RestartWorkloadWithResult performs the same unconditional restart and returns its stored marker.
+func (m *WorkloadManager) RestartWorkloadWithResult(ctx context.Context, kind, namespace, name string) (workloadrestart.Result, error) {
 	if m.dynClient == nil {
-		return fmt.Errorf("dynamic client not initialized")
+		return workloadrestart.Result{}, fmt.Errorf("dynamic client not initialized")
 	}
 	normalizedKind := NormalizeWorkloadKind(strings.ToLower(kind))
 	// A Rollout's restart is spec.restartAt; the pod-template annotation below
 	// would change the template hash and re-run every canary step instead.
 	if normalizedKind == "rollouts" {
-		_, err := rollouts.Restart(ctx, m.dynClient, namespace, name)
-		return err
+		return rollouts.RestartWithResult(ctx, m.dynClient, namespace, name)
 	}
 
 	gvr, ok, err := m.workloadGVR(kind)
 	if err != nil {
-		return err
+		return workloadrestart.Result{}, err
 	}
 	if !ok {
-		return fmt.Errorf("unknown resource kind: %s", kind)
+		return workloadrestart.Result{}, fmt.Errorf("unknown resource kind: %s", kind)
 	}
 
+	var deployment *unstructured.Unstructured
 	if normalizedKind == "deployments" {
-		deployment, err := m.dynClient.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+		deployment, err = m.dynClient.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
-			return fmt.Errorf("failed to restart workload: %w", err)
+			return workloadrestart.Result{}, fmt.Errorf("failed to restart workload: %w", err)
 		}
 		if paused, _, _ := unstructured.NestedBool(deployment.Object, "spec", "paused"); paused {
-			return fmt.Errorf("Deployment %s/%s: %w", namespace, name, ErrRestartPaused)
+			return workloadrestart.Result{}, fmt.Errorf("Deployment %s/%s: %w", namespace, name, ErrRestartPaused)
 		}
 	}
 
 	restartTime := time.Now().Format(time.RFC3339)
 	patch := fmt.Sprintf(`{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":"%s"}}}}}`, restartTime)
 
-	_, err = m.dynClient.Resource(gvr).Namespace(namespace).Patch(
+	updated, err := m.dynClient.Resource(gvr).Namespace(namespace).Patch(
 		ctx, name, types.MergePatchType, []byte(patch), metav1.PatchOptions{},
 	)
 	if err != nil {
-		return fmt.Errorf("failed to restart workload: %w", err)
+		return workloadrestart.Result{}, fmt.Errorf("failed to restart workload: %w", err)
 	}
 
-	return nil
+	return workloadrestart.PatchResult(deployment, updated, restartTime, "spec", "template", "metadata", "annotations", "kubectl.kubernetes.io/restartedAt"), nil
 }
 
 // SetDeploymentPaused sets spec.paused on a Deployment, as kubectl rollout pause

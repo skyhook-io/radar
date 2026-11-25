@@ -10,6 +10,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/issuecorrelation"
@@ -43,6 +44,16 @@ func initCorrelationStore(t *testing.T) timeline.EventStore {
 		t.Cleanup(k8s.ResetTestState)
 	}
 	return timeline.GetStore()
+}
+
+// shopDeployments are cached Deployments in namespace shop with an empty pod
+// template: their sources are known to be none.
+func shopDeployments(names ...string) []runtime.Object {
+	objs := make([]runtime.Object, 0, len(names))
+	for _, name := range names {
+		objs = append(objs, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "shop"}})
+	}
+	return objs
 }
 
 func setConnectedForTest(t *testing.T) {
@@ -97,6 +108,10 @@ func warningIssue(kind, name string) issuesapi.Issue {
 // The changed workload gets correlated_changes; the chronic one gets an
 // explicit no_recent_changes marker with the window.
 func TestAttachIssueChangeCorrelation_Markers(t *testing.T) {
+	if err := k8s.InitTestResourceCache(k8sfake.NewSimpleClientset(shopDeployments("web", "quiet", "warn-quiet")...)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	t.Cleanup(k8s.ResetTestState)
 	store := initCorrelationStore(t)
 	if err := store.Append(context.Background(), timeline.TimelineEvent{
 		ID: "web-spec", Timestamp: time.Now().Add(-5 * time.Minute),
@@ -288,6 +303,12 @@ func TestAttachIssueChangeCorrelation_WorkloadConfigMapFanout(t *testing.T) {
 	}
 }
 
+// checked reports whether correlation answered for the issue: with changes,
+// the no_recent_changes marker, or the reason it can't tell.
+func checked(iss issuesapi.Issue) bool {
+	return iss.NoRecentChanges != nil || len(iss.CorrelatedChanges) > 0 || iss.Correlation != nil
+}
+
 // Past the cap, remaining criticals are skipped and the response says so.
 func TestAttachIssueChangeCorrelation_Truncation(t *testing.T) {
 	initCorrelationStore(t)
@@ -304,7 +325,7 @@ func TestAttachIssueChangeCorrelation_Truncation(t *testing.T) {
 	}
 	marked := 0
 	for _, iss := range resp.Issues {
-		if iss.NoRecentChanges != nil || len(iss.CorrelatedChanges) > 0 {
+		if checked(iss) {
 			marked++
 		}
 	}
@@ -314,7 +335,7 @@ func TestAttachIssueChangeCorrelation_Truncation(t *testing.T) {
 	// The issues past the cap carry NO marker — "not checked", never a false
 	// "no changes".
 	last := resp.Issues[len(resp.Issues)-1]
-	if last.NoRecentChanges != nil || len(last.CorrelatedChanges) > 0 {
+	if checked(last) {
 		t.Fatalf("issue past cap must be unmarked: %+v", last)
 	}
 }
@@ -337,7 +358,7 @@ func TestAttachIssueChangeCorrelation_CriticalsPriorityUnderCap(t *testing.T) {
 	}
 	marked := 0
 	for _, iss := range resp.Issues {
-		if iss.NoRecentChanges != nil || len(iss.CorrelatedChanges) > 0 {
+		if checked(iss) {
 			marked++
 			if iss.Severity == issuesapi.SeverityWarning && marked > correlationIssueCap {
 				t.Fatalf("warning %s marked past the cap", iss.Name)
@@ -348,7 +369,7 @@ func TestAttachIssueChangeCorrelation_CriticalsPriorityUnderCap(t *testing.T) {
 		t.Fatalf("marked = %d, want exactly the cap (%d)", marked, correlationIssueCap)
 	}
 	for _, iss := range resp.Issues {
-		if iss.Severity == issuesapi.SeverityCritical && iss.NoRecentChanges == nil && len(iss.CorrelatedChanges) == 0 {
+		if iss.Severity == issuesapi.SeverityCritical && !checked(iss) {
 			t.Fatalf("critical %s lost its slot to an earlier-listed warning", iss.Name)
 		}
 	}
@@ -370,7 +391,7 @@ func TestAttachIssueChangeCorrelation_WarningOnlyTruncation(t *testing.T) {
 	}
 	marked := 0
 	for _, iss := range resp.Issues {
-		if iss.NoRecentChanges != nil || len(iss.CorrelatedChanges) > 0 {
+		if checked(iss) {
 			marked++
 		}
 	}
@@ -562,7 +583,7 @@ func TestAttachIssueChangeCorrelation_DeniedSourceSameAnswerEitherWay(t *testing
 		resp := issues.ListResponse{Issues: []issuesapi.Issue{deploy, svc}}
 		attachIssueChangeCorrelation(ctx, &resp)
 		for _, iss := range resp.Issues {
-			if iss.NoRecentChanges != nil || len(iss.CorrelatedChanges) > 0 {
+			if checked(iss) {
 				t.Fatalf("changed=%v: denied source produced an answer: %+v", changed, iss)
 			}
 		}

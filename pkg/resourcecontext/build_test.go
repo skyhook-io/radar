@@ -2191,6 +2191,13 @@ func TestBuild_ReferencedByCapPreservesTemplateAndPodKinds(t *testing.T) {
 	}
 	kinds := map[string]bool{}
 	for _, ref := range rc.ReferencedBy.Items {
+		path := "spec.template.spec.containers[].envFrom[].configMapRef.name"
+		if ref.Kind == "Pod" {
+			path = "spec.containers[].envFrom[].configMapRef.name"
+		}
+		if !slices.Equal(ref.Paths, []string{path}) {
+			t.Fatalf("sampled %s lost its declaration path: %v", ref.Kind, ref.Paths)
+		}
 		kinds[ref.Kind] = true
 	}
 	for _, kind := range []string{"Deployment", "Pod", "ReplicaSet", "StatefulSet"} {

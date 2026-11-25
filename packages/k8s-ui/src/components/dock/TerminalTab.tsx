@@ -20,6 +20,8 @@ export interface TerminalTabProps {
   podName: string
   containerName: string
   containers: string[]
+  /** When supplied, the host owns the selected container through containerName. */
+  onContainerChange?: (name: string) => void
   isActive?: boolean
   /** Returns the WebSocket URL to connect to for a given container. */
   createSession: (containerName: string, podUID?: string) => Promise<{ wsUrl: string }>
@@ -38,6 +40,7 @@ export function TerminalTab({
   podName,
   containerName,
   containers,
+  onContainerChange,
   isActive = true,
   createSession,
   createDebugContainer,
@@ -53,8 +56,7 @@ export function TerminalTab({
   const reviewedPodUID = useRef<string | undefined>(undefined)
   // Cleanup ref holds the ResizeObserver disconnect from an async setup
   const cleanupRef = useRef<(() => void) | undefined>(undefined)
-  // Prevents stale .then() callbacks from running after unmount or reconnect
-  const cancelledRef = useRef(false)
+  const connectionAttemptRef = useRef(0)
   // Stable refs for callbacks — avoids effect re-runs when consumers pass unstable functions
   const createSessionRef = useRef(createSession)
   const createDebugContainerRef = useRef(createDebugContainer)
@@ -67,7 +69,9 @@ export function TerminalTab({
   const [failedExecutable, setFailedExecutable] = useState<string>()
   const [failedPodUID, setFailedPodUID] = useState<string>()
   const [isCreatingDebug, setIsCreatingDebug] = useState(false)
-  const [selectedContainer, setSelectedContainer] = useState(containerName)
+  const [localContainer, setLocalContainer] = useState(containerName)
+  const selectedContainer = onContainerChange ? containerName : localContainer
+  const selectContainer = onContainerChange ?? setLocalContainer
   const [hasSelection, setHasSelection] = useState(false)
   const { confirmPaste, pasteDialog } = useMultilinePasteConfirm()
   const search = useTerminalSearch(isActive)
@@ -81,7 +85,9 @@ export function TerminalTab({
   const connect = useCallback(() => {
     if (!terminalRef.current) return
 
-    cancelledRef.current = false
+    const attempt = ++connectionAttemptRef.current
+    const isCurrent = () => attempt === connectionAttemptRef.current
+    setIsConnected(false)
     setFailedPodUID(undefined)
     setFailedExecutable(undefined)
     setIsConnecting(true)
@@ -146,6 +152,7 @@ export function TerminalTab({
     attachTerminalKeys(xterm, { onFind: openSearch })
 
     const doFit = (ws?: WebSocket) => {
+      if (!isCurrent()) return
       const dims = fitAddon.proposeDimensions()
       if (dims) xterm.resize(dims.cols, dims.rows)
       const conn = ws ?? wsRef.current
@@ -176,7 +183,7 @@ export function TerminalTab({
       lastHeight = height
       if (resizeTimeout) clearTimeout(resizeTimeout)
       resizeTimeout = setTimeout(() => {
-        if (!fitAddonRef.current || !xtermRef.current) return
+        if (!isCurrent() || !fitAddonRef.current || !xtermRef.current) return
         const dims = fitAddonRef.current.proposeDimensions()
         if (dims) xtermRef.current.resize(dims.cols, dims.rows)
         const conn = wsRef.current
@@ -187,6 +194,7 @@ export function TerminalTab({
     })
     resizeObserver.observe(terminalRef.current)
     cleanupRef.current = () => {
+      if (resizeTimeout) clearTimeout(resizeTimeout)
       resizeObserver.disconnect()
       disposeClipboard()
       detachSearch()
@@ -196,11 +204,12 @@ export function TerminalTab({
     const session = uid ? createSessionRef.current(selectedContainer, uid) : createSessionRef.current(selectedContainer)
     session
       .then(({ wsUrl }) => {
-        if (cancelledRef.current) return
+        if (!isCurrent()) return
         const ws = new WebSocket(wsUrl)
         wsRef.current = ws
 
         ws.onopen = () => {
+          if (!isCurrent()) return
           setIsConnected(true)
           setIsConnecting(false)
           doFit(ws)
@@ -209,6 +218,7 @@ export function TerminalTab({
 
         let receivedOutput = false
         ws.onmessage = (event) => {
+          if (!isCurrent()) return
           let msg: Record<string, string> | null = null
           try {
             msg = JSON.parse(event.data as string) as Record<string, string>
@@ -223,6 +233,7 @@ export function TerminalTab({
           } else if (msg.type === 'exit') {
             xterm.write('\r\n\x1b[2m[Process exited]\x1b[0m\r\n')
           } else if (msg.type === 'error' && msg.data) {
+            setIsConnecting(false)
             // Once the server identifies the Pod, every retry in this tab stays on it,
             // including after a later UID-mismatch error that reports no identifier.
             if (msg.podUID) reviewedPodUID.current ??= msg.podUID
@@ -241,24 +252,28 @@ export function TerminalTab({
         }
 
         ws.onerror = () => {
+          if (!isCurrent()) return
           setError((prev) => prev || 'Connection error')
           setIsConnected(false)
           setIsConnecting(false)
         }
 
         ws.onclose = () => {
+          if (!isCurrent()) return
           setIsConnected(false)
           setIsConnecting(false)
           xterm.write('\r\n\x1b[31mConnection closed\x1b[0m\r\n')
         }
 
         xterm.onData((data: string) => {
+          if (!isCurrent()) return
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'input', data }))
           }
         })
       })
       .catch((err) => {
+        if (!isCurrent()) return
         setError(err instanceof Error ? err.message : 'Failed to connect')
         setErrorType('exec_error')
         setIsConnecting(false)
@@ -268,7 +283,7 @@ export function TerminalTab({
   useEffect(() => {
     connect()
     return () => {
-      cancelledRef.current = true
+      connectionAttemptRef.current++
       cleanupRef.current?.()
       wsRef.current?.close()
       xtermRef.current?.dispose()
@@ -282,14 +297,14 @@ export function TerminalTab({
       const { containerName: newContainer } = await createDebugContainerRef.current(selectedContainer)
       setError(null)
       setErrorType(null)
-      setSelectedContainer(newContainer)
+      selectContainer(newContainer)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create debug container')
       setErrorType('exec_error')
     } finally {
       setIsCreatingDebug(false)
     }
-  }, [selectedContainer])
+  }, [selectedContainer, selectContainer])
 
   // Refit when tab becomes active (may have been resized while hidden)
   useEffect(() => {
@@ -315,15 +330,16 @@ export function TerminalTab({
         <span className="text-xs text-theme-text-tertiary">{podName}</span>
         {note && <span className="truncate text-xs text-theme-text-secondary">{note}</span>}
 
-        {!command && containers.length > 1 && (
+        {!command && containers.some(name => name !== selectedContainer) && (
           <label className="flex min-w-0 items-center gap-1 text-xs text-theme-text-secondary">
             Container
             <span className="relative min-w-0">
               <select aria-label="Terminal container"
                 value={selectedContainer}
-                onChange={(e) => setSelectedContainer(e.target.value)}
+                onChange={(e) => selectContainer(e.target.value)}
                 className="max-w-full appearance-none bg-theme-elevated text-xs text-theme-text-primary px-2 py-0.5 pr-5 rounded border border-theme-border-light focus:outline-none focus:ring-1 focus:ring-blue-500"
               >
+                {!containers.includes(selectedContainer) && <option value={selectedContainer} disabled>{selectedContainer}</option>}
                 {containers.map((c) => (
                   <option key={c} value={c}>{c}</option>
                 ))}

@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { relatedResourcePath } from '../../utils/navigation'
-import { TerminalTab as SharedTerminalTab, type DockTab } from '@skyhook-io/k8s-ui'
+import { getExecContainerNames, TerminalTab as SharedTerminalTab, type DockTab } from '@skyhook-io/k8s-ui'
 import { getApiBase, getWsUrl } from '../../api/config'
+import { useResource } from '../../api/client'
+import type { PodDebugTarget } from '../resources/PodDebugAction'
 import { MissingShellDebug } from './MissingShellDebug'
 import { PodDebugSession } from './PodDebugSession'
 import { useCurrentConnectionId, useOpenedConnection, withConnectionParam } from '../../api/connectionBinding'
@@ -12,6 +14,7 @@ interface TerminalTabProps {
   podName: string
   podUID?: string
   containerName: string
+  onContainerChange?: (name: string) => void
   containers: string[]
   isActive?: boolean
   shell?: string
@@ -20,13 +23,18 @@ interface TerminalTabProps {
   onLeaveTerminal?: () => void
 }
 
-export function TerminalTab({ namespace, podName, podUID, containerName, containers, isActive, shell, note, debugSession, onLeaveTerminal }: TerminalTabProps) {
+export function TerminalTab({ namespace, podName, podUID, containerName, containers, onContainerChange, isActive, shell, note, debugSession, onLeaveTerminal }: TerminalTabProps) {
   const openedConnection = useOpenedConnection()
   const [openedBase] = useState(getApiBase)
   const connection = debugSession ? debugSession.connectionId : openedConnection
   const base = debugSession?.apiBase ?? openedBase
   const currentConnection = useCurrentConnectionId()
-  const podDetailsLink = currentConnection === connection && getApiBase() === base && <Link
+  const sameConnection = currentConnection === connection && getApiBase() === base
+  const checkTargets = !!podUID && !shell && !debugSession && containers.length > 1
+  const pod = useResource<PodDebugTarget>('pods', namespace, podName, undefined, { enabled: checkTargets && sameConnection && isActive !== false })
+  const currentPod = sameConnection && !pod.error && pod.data?.metadata.uid === podUID ? pod.data : undefined
+  const pickerContainers = checkTargets ? getExecContainerNames(currentPod, { runningOnly: true }) : containers
+  const podDetailsLink = sameConnection && <Link
     className="mb-2 inline-block text-xs text-accent underline underline-offset-2"
     title="Close this terminal tab and open the current Pod"
     onClick={event => { if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey && event.button === 0) onLeaveTerminal?.() }}
@@ -45,7 +53,8 @@ export function TerminalTab({ namespace, podName, podUID, containerName, contain
       namespace={namespace}
       podName={podName}
       containerName={containerName}
-      containers={containers}
+      containers={pickerContainers}
+      onContainerChange={onContainerChange}
       isActive={isActive}
       createSession={createSession}
       podDetailsLink={podDetailsLink}

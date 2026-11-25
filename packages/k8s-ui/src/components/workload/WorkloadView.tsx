@@ -42,6 +42,7 @@ import {
   Pause,
 } from 'lucide-react'
 import { isPausedDeployment } from '../../utils/bulk-workload-actions'
+import { WorkflowShutdownBadge } from '../shared/WorkflowStopDialog'
 import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom, Topology, TopologyNode, HPADiagnosis, WorkloadPodInfo, CertificateSigningRequestDetails } from '../../types'
 import type { GitOpsStatus } from '../../types/gitops'
 import type { ReadGap } from '../../types/read-coverage'
@@ -976,6 +977,8 @@ export function WorkloadView({
       </Badge>
     </Tooltip>
   )
+  // spec.shutdown is intent; the phase stays Running until Argo acts, so say so.
+  const workflowShutdownBadge = !resourceGone && <WorkflowShutdownBadge data={resource} />
   const status = resourceGone
     ? { text: 'Deleted', color: 'status-unknown' }
     : rolloutDisplay?.status ?? getResourceStatus(apiKind, resource)
@@ -1143,6 +1146,7 @@ export function WorkloadView({
               )}
               {!resourceGone && crossplaneResource && <CrossplanePauseChip state={getCrossplanePauseState(resource)} />}
               {deploymentPausedBadge}
+              {workflowShutdownBadge}
             </div>
             <div className="flex shrink-0 flex-nowrap items-center justify-end gap-1.5">
               {diagnoseAction}
@@ -1390,6 +1394,7 @@ export function WorkloadView({
             )}
             {!resourceGone && crossplaneResource && <CrossplanePauseChip state={getCrossplanePauseState(resource)} />}
             {deploymentPausedBadge}
+            {workflowShutdownBadge}
             {!resourceGone && statusNote}
           </>
         )

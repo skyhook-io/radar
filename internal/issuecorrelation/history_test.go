@@ -7,6 +7,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
@@ -34,5 +35,19 @@ func TestSecretCorrelationHistoryComplete(t *testing.T) {
 	initCache(t, deployment, fresh)
 	if !historyCoversObjects(deployment, meaningfulchanges.DirectConfigReferences(deployment), "shop", coverage) {
 		t.Fatal("new referenced Secret should cover its whole lifetime")
+	}
+}
+
+// A Rollout that takes its template from another workload changes when that
+// workload does, so its own age doesn't make its history complete.
+func TestRolloutWithWorkloadRefHistoryNotComplete(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	rollout := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "Rollout",
+		"metadata": map[string]any{"name": "roll", "namespace": "shop", "creationTimestamp": now.Format(time.RFC3339)},
+		"spec":     map[string]any{"workloadRef": map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "name": "api"}}}}
+	initCache(t)
+	coverage := issuesapi.HistoryCoverage{Incomplete: true, CompleteSince: now.Add(-time.Minute)}
+	if historyCoversObjects(rollout, nil, "shop", coverage) {
+		t.Fatal("a Rollout templated from another workload treated as complete")
 	}
 }

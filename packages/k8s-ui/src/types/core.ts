@@ -59,6 +59,14 @@ export interface WorkloadWritePermissions {
   daemonSets: boolean
   statefulSets: boolean
   rollouts: boolean
+  /** Absent from a Radar older than Workflow Stop; treat absence as not allowed. */
+  workflows?: boolean
+  /** Can create Argo Workflows (submit a WorkflowTemplate). Absent from an older Radar; treat absence as not allowed. */
+  createWorkflows?: boolean
+  /** Can patch CronJobs (Suspend, Resume). Absent from an older Radar, which showed the actions to everyone. */
+  cronJobs?: boolean
+  /** Can create Jobs (Trigger a CronJob). Absent from an older Radar, which showed the action to everyone. */
+  createJobs?: boolean
 }
 
 export type WorkloadContainerType = 'container' | 'initContainer'
@@ -132,7 +140,7 @@ export interface Capabilities {
   secretsUpdate: boolean  // Update secrets (inline editing)
   helmWrite: boolean      // Helm write operations (install, upgrade, rollback, uninstall, apply values)
   nodeWrite: boolean      // Node write operations (cordon, uncordon, drain)
-  workloadWrites?: WorkloadWritePermissions // Workload patch permissions (restart/scale controls)
+  workloadWrites?: WorkloadWritePermissions
   mcpExecTools?: boolean // Full MCP registration; does not grant the caller exec permission
   mcpHelmTools?: boolean // Native Helm MCP tool registered; target Kubernetes permissions still required
   mcpHttpTools?: boolean // Effective in-cluster HTTP registration; services/proxy permission is still required
@@ -180,6 +188,8 @@ export interface FeatureCapabilities {
   helmInventory?: boolean
   datadogRightsizing?: boolean
   datadogAgentPresence?: boolean
+  openobserveCollectorPresence?: boolean
+  openobserveLocalSetup?: boolean
   resourceReadCoverage?: boolean
   searchCoverage?: boolean
  applicationEvidence?: boolean
@@ -212,6 +222,8 @@ export interface FeatureCapabilities {
   veleroRunVolumes?: boolean
   /** DELETE /api/resources/... honours ?uid=&resourceVersion= preconditions */
   resourceDeletePreconditions?: boolean
+  /** POST /api/workloads/{kind}/{ns}/{name}/restart accepts {uid, resourceVersion}; an older Radar ignores the body and restarts unconditionally. */
+  workloadRestartPreconditions?: boolean
   gitopsWriteEvidence?: boolean
   agentSigninCheck?: boolean
   serviceEndpointSlices?: boolean
@@ -237,6 +249,7 @@ export interface FeatureCapabilities {
   cronJobTriggerJobName?: boolean
   sealedSecretsCert?: boolean // GET /api/sealedsecrets/cert
   workflowStop?: boolean // POST /api/workflows/{namespace}/{name}/stop
+  workflowTemplateSubmit?: boolean // POST /api/workflowtemplates/{namespace}/{name}/submit
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.

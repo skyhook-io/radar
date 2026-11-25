@@ -51,7 +51,7 @@ function sourceFiles(dir: string): string[] {
   })
 }
 
-test('radar-app requires a k8s-ui peer that types the workflowStop flag', () => {
+test('radar-app requires a k8s-ui peer that types workflowStop and workloadRestartPreconditions', () => {
   const manifest = JSON.parse(readFileSync(resolve(here, '../package.json'), 'utf8'))
   const lock = JSON.parse(readFileSync(resolve(here, '../../package-lock.json'), 'utf8'))
   const range = manifest.peerDependencies['@skyhook-io/k8s-ui']

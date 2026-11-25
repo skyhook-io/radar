@@ -214,7 +214,11 @@ Applications builds no graph: its rows come from ownership and one request-local
 The drawer characterization pins the family answer. Its [accepted differences](../pkg/topology/testdata/characterization/drawer-relationships.md)
 explain every changed class, including the hand-made Crossplane claim/XR fixture without a backlink. New relations
 belong in a family with its field disposition and coverage, then in the family inventory and projection tests; adding
-a display edge alone does not add a drawer or agent relationship.
+a display edge alone does not add a drawer or agent relationship. The Topology screen draws a new family's edges
+through `drawFamilies` in `pkg/topology/builder.go` instead of reading the spec again. `TestDisplayEdgesAreFamilyAnswers`
+fails when a drawn edge has no family answer with the same type and direction, or when a family answer on its fixture
+isn't drawn. Older edges are still parsed in the builder, held to the same answers by that test; its `displayOnlyEdges`
+list names the few the screen draws that no family answers.
 
 The cache-source conformance tests check `Indexed` and both answers against the brute-force `Scan` of generated
 worlds whose objects declare references (`ownershiptest.Object.Declares`), and through histories of changes.
@@ -291,7 +295,7 @@ claims need not indicate current reconciliation; native Helm coordinates do not 
 | `rbac_denied` | The subject or a controller ancestor was unreadable. |
 | `cache_cold` | An owner kind is known to be uncollected or unsynced. Ownership starts no watches; `list_resources` for that kind can activate its on-demand cache. |
 | `unavailable` | A controller walk or observed spec source could not be resolved, the required relation source is unavailable, or management evidence has no eligible lead. Retry is not guaranteed to help. |
-| `budget_exceeded` | The list/search enrichment budget elapsed; other causes can coexist. |
+| `budget_exceeded` | In list/search, the enrichment budget elapsed. In detail context, `managedBy` exceeded 20 readable references or left a permission tuple unchecked after 80 distinct checks. Its total is unknown. Other omission reasons can coexist. |
 
 A GitOps fallback may coexist with an incomplete-controller note. Detail can report missing spec evidence after a
 summary already found its controller lead. Family coverage qualifies unread or narrowed context fields without inspecting denied objects to decide whether they exist.

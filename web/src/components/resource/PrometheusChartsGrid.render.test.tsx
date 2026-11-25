@@ -8,6 +8,10 @@ vi.mock('../../hooks/usePreviousIntegrationSettings', () => ({ usePreviousIntegr
 import type { WorkloadMetrics } from '../../api/workloadMetrics'
 
 let connected = false
+let source: Record<string, unknown> | undefined
+let openobserve: 'hub' | 'local' | undefined
+let discoverOutcome: 'connected' | 'collector' | 'none' | undefined
+let discoverError: Error | null = null
 const ranges: string[] = []
 const charts: { seriesLabels?: string[]; referenceLines?: unknown[] }[] = []
 let workload: WorkloadMetrics
@@ -18,8 +22,9 @@ let metricsByCategory: Record<string, Record<string, unknown>> = {}
 vi.mock('../../api/client', async (importActual) => ({
   ...(await importActual<typeof import('../../api/client')>()),
   useAutoPromConnect: () => undefined,
-  usePrometheusStatus: () => ({ data: { connected, error: 'Backend query failed' } }),
+  usePrometheusStatus: () => ({ data: { connected, error: openobserve ? undefined : 'Backend query failed', source, openobserve } }),
   usePrometheusConnect: () => ({ mutate: vi.fn(), isPending: false }),
+  useDiscoverMetrics: () => ({ mutate: vi.fn(), isPending: false, data: discoverOutcome, error: discoverError }),
   usePrometheusResourceMetrics: (_kind: string, _ns: string, _name: string, category: string, range: string, enabled = true) => {
     if (enabled) ranges.push(range)
     return { data: metricsByCategory[category] ?? resourceMetrics }
@@ -44,6 +49,10 @@ const render = (url = '/workloads/Deployment/demo/web?tab=metrics', embedded = f
 
 beforeEach(() => {
   connected = false
+  source = undefined
+  openobserve = undefined
+  discoverOutcome = undefined
+  discoverError = null
   ranges.length = 0
   charts.length = 0
   resourceMetrics = drawnMetrics
@@ -52,12 +61,71 @@ beforeEach(() => {
 })
 
 describe('Expanded metrics recovery and scope', () => {
+  it('shows one unavailable state instead of querying charts when OpenObserve through Hub is down', () => {
+    connected = true
+    source = { kind: 'openobserve', via: 'hub', unavailable: true, error: 'Radar Hub could not reach OpenObserve' }
+    const html = render()
+    expect(html).toContain('OpenObserve unavailable')
+    expect(html).toContain('Radar Hub could not reach OpenObserve')
+    expect(html).toContain('through Radar Hub')
+    expect(html).not.toContain('Discover Prometheus')
+    expect(html).not.toContain('Configure metrics')
+    expect(ranges).toEqual([])
+  })
+
+  it('shows the OpenObserve notice, not Prometheus setup, when newer Radar reports it not connected', () => {
+    source = { kind: 'openobserve', via: 'local', unavailable: true, error: 'OpenObserve unavailable: timeout' }
+    const html = render()
+    expect(html).toContain('OpenObserve unavailable')
+    expect(html).not.toContain('Discover Prometheus')
+    expect(ranges).toEqual([])
+  })
+
+  it('offers metrics settings when the saved local OpenObserve connection is down', () => {
+    connected = true
+    source = { kind: 'openobserve', via: 'local', unavailable: true }
+    const html = render()
+    expect(html).toContain('saved OpenObserve connection')
+    expect(html).toContain('Configure metrics')
+    expect(ranges).toEqual([])
+  })
+
   it('offers standalone setup without losing the backend error or retry', () => {
     const html = render()
     expect(html).toContain('Backend query failed')
     expect(html).toContain('Discover Prometheus')
     expect(html).toContain('Configure metrics')
     expect(html).toContain('workload-metrics.md#what-each-chart-needs')
+  })
+  it.each(['hub', 'local'] as const)('offers metrics discovery when OpenObserve is available through %s', (path) => {
+    openobserve = path
+    const html = render()
+    expect(html).toContain('No metrics source connected')
+    expect(html).toContain('Radar can read metrics from Prometheus or OpenObserve.')
+    expect(html).toContain('Discover metrics')
+    expect(html).not.toContain('Discover Prometheus')
+    expect(html).not.toContain('Prometheus not connected')
+    expect(html).toContain('Configure metrics')
+  })
+  it.each([
+    ['local', 'none', 'No metrics source found.'],
+    ['hub', 'none', 'No metrics source found.'],
+    ['local', 'collector', 'OpenObserve collector found. Connect it in Settings → Metrics.'],
+    ['hub', 'collector', 'OpenObserve collector found. Ask your organization owner to connect OpenObserve in Radar Hub.'],
+  ] as const)('shows the %s discovery outcome %s without offering discovery again', (path, outcome, message) => {
+    openobserve = path
+    discoverOutcome = outcome
+    const html = render()
+    expect(html).toContain(`<p role="status" class="text-sm text-theme-text-secondary mb-4">${message}</p>`)
+    expect(html).not.toContain('Discover metrics')
+    expect(html).not.toContain('Discover Prometheus')
+  })
+  it('shows a failed discovery in place and offers it again', () => {
+    openobserve = 'local'
+    discoverError = new Error('Not connected to a cluster')
+    const html = render()
+    expect(html).toContain('<p role="status" class="text-sm text-theme-text-secondary mb-4">Not connected to a cluster</p>')
+    expect(html).toContain('Discover metrics')
   })
   it('uses operator guidance instead of standalone settings when embedded', () => {
     const html = render(undefined, true)
@@ -154,6 +222,19 @@ describe('Mapped workload Metrics tab', () => {
     ]))
   })
 
+  // Newer Radar reports a down OpenObserve as not connected; older Radar as
+  // connected with an unavailable source. Either way Datadog stays.
+  it.each([false, true])('keeps Datadog totals beside the OpenObserve notice when it is down (connected=%s)', async (wasConnected) => {
+    connected = wasConnected
+    source = { kind: 'openobserve', via: 'hub', unavailable: true, error: 'Radar Hub could not reach OpenObserve' }
+    const html = await renderMapped()
+    expect(html).toContain('OpenObserve unavailable')
+    expect(html).toContain('Datadog workload totals')
+    expect(html).not.toContain('Discover Prometheus')
+    expect(html).not.toContain('Network and storage')
+    expect(ranges).toHaveLength(0)
+  })
+
   it('renders Datadog independently when Prometheus is disconnected', async () => {
     const html = await renderMapped()
     expect(html).toContain('Datadog workload totals')
@@ -184,6 +265,15 @@ describe('Name-matched chart captions follow the charts\' cluster scope', () => 
     const html = renderText()
     expect(html).toContain('Basic CPU / memory · operator declared single-cluster')
     expect(html).toContain('Pod-name matched · operator declared single-cluster')
+    expect(html).not.toContain('may include another cluster')
+  })
+  it('names OpenObserve, not an operator, when Radar reads metrics through it', () => {
+    resourceMetrics = scoped('single_cluster_asserted', 'Scoped to this cluster through OpenObserve (matched by confirmed name).')
+    const html = renderText()
+    expect(html).toContain('Basic CPU / memory · scoped through OpenObserve')
+    expect(html).toContain('Pod-name matched · scoped through OpenObserve')
+    expect(html).toContain('kept to this cluster through OpenObserve')
+    expect(html).not.toContain('operator declared')
     expect(html).not.toContain('may include another cluster')
   })
   it.each([['absent', drawnMetrics], ['unlabeled', scoped('unlabeled')]])('keeps today\'s caveat when clusterScope is %s', (_label, metrics) => {

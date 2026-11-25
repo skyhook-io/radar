@@ -26,6 +26,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
 	internalopencost "github.com/skyhook-io/radar/internal/opencost"
+	"github.com/skyhook-io/radar/internal/openobserve"
 	"github.com/skyhook-io/radar/internal/portforward"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/server"
@@ -101,8 +102,9 @@ type AppConfig struct {
 	Version                     string
 	MCPReadOnly                 bool
 	MCPEnabled                  bool
-	MCPExecTools                bool   // register exec_pod (--mcp-exec-tools)
-	MCPHTTPTools                bool   // register curl_service (--mcp-http-tools)
+	MCPExecTools                bool // register exec_pod (--mcp-exec-tools)
+	MCPHTTPTools                bool // register curl_service (--mcp-http-tools)
+	MCPOAuthEnabled             bool
 	AIHistory                   bool   // persist AI investigations across restarts
 	AIHistoryDBPath             string // "" = ~/.radar/ai-runs.db
 	AuthConfig                  auth.Config
@@ -440,6 +442,14 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 		return nil
 	})
 	k8s.RegisterCostResetFunc(internalopencost.Reset)
+	// The automatic cost source was chosen against the metrics backend; an
+	// OpenObserve relay starting, changing or ending makes it choose again,
+	// as a metrics settings change does.
+	prometheuspkg.OnRelayChange(func() {
+		internalopencost.Reset()
+		internalopencost.InvalidateCurrency()
+	})
+	openobserve.Default.LogIfIgnored()
 	if cfg.LocalConnections != nil {
 		cfg.LocalRuntime = connectionruntime.New(cfg.LocalConnections, k8s.RestartTrafficSubsystem)
 		argocd.SetConfig("", "", false, true)
@@ -602,7 +612,8 @@ func CreateServer(cfg AppConfig) *server.Server {
 			HasPrometheusURL:     cfg.PrometheusURL != "",
 			HasPrometheusHeaders: len(cfg.PrometheusHeaders) > 0,
 		},
-		AuthConfig: cfg.AuthConfig,
+		AuthConfig:      cfg.AuthConfig,
+		MCPOAuthEnabled: cfg.MCPOAuthEnabled,
 		CloudConnect: server.CloudConnectConfig{
 			HubAPIURL:             cfg.HubAPIURL,
 			HubAppURL:             cfg.HubAppURL,

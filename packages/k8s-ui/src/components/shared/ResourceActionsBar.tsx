@@ -35,6 +35,9 @@ import { radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
 import { SetImageDialog, type SetImageOwnership } from './SetImageDialog'
 import { DrainPlanDialog, DEFAULT_DRAIN_DIALOG_OPTIONS, type DrainDialogOptions, type DrainPlan } from './DrainPlanDialog'
 import { ActionConfirmDialog } from './ActionConfirmDialog'
+import { WorkflowStopAction, type WorkflowStopStrategy } from './WorkflowStopDialog'
+import { WorkflowTemplateSubmitDialog } from './WorkflowTemplateSubmitDialog'
+import type { WorkflowTemplateSubmission } from '../../utils/workflow-template-submit'
 import { Input } from '../ui/Input'
 import { jobNameError, manualJobIndexRoom, suggestManualJobName } from '../../utils/job-name'
 import type { WorkloadImageInventory, WorkloadImageUpdate } from '../../types/core'
@@ -109,7 +112,7 @@ interface ResourceActionsBarProps {
   cascadePreviewFailed?: boolean
 
   // Workload restart
-  onRestart?: (params: { kind: string; namespace: string; name: string }, callbacks?: { onSuccess?: () => void; onError?: (err: unknown) => void }) => void
+  onRestart?: (params: { kind: string; namespace: string; name: string; uid?: string }, callbacks?: { onSuccess?: () => void; onError?: (err: unknown) => void }) => void
   isRestarting?: boolean
 
   // Deployment rollout pause. A host passes both callbacks only when the caller may patch Deployments.
@@ -145,6 +148,25 @@ interface ResourceActionsBarProps {
   isSuspendingCronJob?: boolean
   onResumeCronJob?: (params: { namespace: string; name: string }) => void
   isResumingCronJob?: boolean
+
+  // Argo Workflow Stop / Terminate. A host passes the callback only when the
+  // Radar serves the stop endpoint and the caller may patch Workflows, and
+  // reports the outcome. The dialog closes when the promise resolves and stays
+  // open with its choice when it rejects.
+  onStopWorkflow?: (params: { namespace: string; name: string; uid: string; strategy: WorkflowStopStrategy }) => void | Promise<unknown>
+  isStoppingWorkflow?: boolean
+  // Set when the connected Radar predates the stop endpoint: Stop renders
+  // disabled with the upgrade note instead.
+  workflowStopUpgrade?: RadarUpgradeRequirement | null
+  // Argo WorkflowTemplate Submit. A host passes the callback only when the
+  // Radar serves the submit endpoint and the caller may create Workflows. The
+  // dialog closes when the promise resolves and stays open with its values
+  // when it rejects.
+  onSubmitWorkflowTemplate?: (submission: WorkflowTemplateSubmission) => void | Promise<unknown>
+  isSubmittingWorkflowTemplate?: boolean
+  // Set when the connected Radar predates the submit endpoint: Submit renders
+  // disabled with the upgrade note instead.
+  workflowTemplateSubmitUpgrade?: RadarUpgradeRequirement | null
 
   // Flux actions
   onFluxReconcile?: (params: { kind: string; namespace: string; name: string }) => void
@@ -219,7 +241,9 @@ export function ResourceActionsBar({
   onTriggerCronJob, isTriggeringCronJob, cronJobTriggerDialog,
   onSuspendCronJob, isSuspendingCronJob,
   onResumeCronJob, isResumingCronJob,
+  onSubmitWorkflowTemplate, isSubmittingWorkflowTemplate, workflowTemplateSubmitUpgrade,
   gitOpsActionDisabledReasons,
+  onStopWorkflow, isStoppingWorkflow, workflowStopUpgrade,
   onFluxReconcile, isFluxReconciling,
   onFluxSyncWithSource, isFluxSyncing,
   onFluxSuspend, isFluxSuspending,
@@ -307,6 +331,22 @@ export function ResourceActionsBar({
     Promise.resolve(onTriggerCronJob({ namespace: resource.namespace, name: resource.name, jobName: trimmedTriggerJobName }))
       .then(() => setTriggerDraft(null), () => {})
       .finally(() => setTriggerPending(false))
+  }
+  // The dialog reviews the template as it was when opened, and closes if the
+  // page moves to another object.
+  const isWorkflowTemplate = kind === 'workflowtemplates' && (resource.group || apiVersionToGroup(data?.apiVersion)) === 'argoproj.io'
+  const [submitDraft, setSubmitDraft] = useState<{ target: typeof resourceTarget; template: any; opening: number } | null>(null)
+  const [submitOpen, setSubmitOpen] = useState(false)
+  const [submitPending, setSubmitPending] = useState(false)
+  if (submitOpen && !submitPending && (!onSubmitWorkflowTemplate || !submitDraft || submitDraft.target.key !== resourceTarget.key || submitDraft.target.uid !== resourceTarget.uid)) {
+    setSubmitOpen(false)
+  }
+  const confirmSubmit = (submission: WorkflowTemplateSubmission) => {
+    if (!onSubmitWorkflowTemplate || submitPending) return Promise.resolve()
+    setSubmitPending(true)
+    return Promise.resolve(onSubmitWorkflowTemplate(submission))
+      .then(() => setSubmitOpen(false))
+      .finally(() => setSubmitPending(false))
   }
   const isRollbackKind = ['deployments', 'statefulsets', 'daemonsets', 'rollouts'].includes(kind)
   const hasMultipleRevisions = (revisionsList?.length ?? 0) > 1
@@ -519,6 +559,7 @@ export function ResourceActionsBar({
                   kind: resource.kind,
                   namespace: resource.namespace,
                   name: resource.name,
+                  uid: data?.metadata?.uid,
                 })}
                 disabled={isRestarting}
                 aria-busy={isRestarting}
@@ -562,6 +603,30 @@ export function ResourceActionsBar({
           )}
         </>
       )}
+
+      {isWorkflowTemplate && (onSubmitWorkflowTemplate ? (
+        <Tooltip content="Start a run of this template" delay={150}>
+          <button
+            onClick={() => {
+              setSubmitDraft({ target: resourceTarget, template: data, opening: (submitDraft?.opening ?? 0) + 1 })
+              setSubmitOpen(true)
+            }}
+            disabled={isSubmittingWorkflowTemplate || submitPending || !data}
+            aria-busy={isSubmittingWorkflowTemplate || submitPending}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
+          >
+            <Play className={`w-3.5 h-3.5 ${isSubmittingWorkflowTemplate || submitPending ? 'animate-pulse' : ''}`} />
+            Submit…
+          </button>
+        </Tooltip>
+      ) : workflowTemplateSubmitUpgrade && (
+        <Tooltip content={radarUpgradeNoteText(workflowTemplateSubmitUpgrade)} delay={150}>
+          <button disabled className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg disabled:cursor-not-allowed disabled:opacity-50">
+            <Play className="w-3.5 h-3.5" />
+            Submit…
+          </button>
+        </Tooltip>
+      ))}
 
       {/* CronJob actions */}
       {kind === 'cronjobs' && (
@@ -674,6 +739,17 @@ export function ResourceActionsBar({
           <FileText className="w-3.5 h-3.5" />
           Logs
         </button>
+      )}
+
+      {kind === 'workflows' && (
+        <WorkflowStopAction
+          data={data}
+          namespace={resource.namespace}
+          name={resource.name}
+          onStopWorkflow={onStopWorkflow}
+          isStoppingWorkflow={isStoppingWorkflow}
+          workflowStopUpgrade={workflowStopUpgrade}
+        />
       )}
 
       {kind === 'workflows' && onCopyCommand && (!canViewLogs || !openWorkloadLogs) && (
@@ -808,6 +884,17 @@ export function ResourceActionsBar({
           onClose={() => setShowSetImage(false)}
           onLoad={() => onLoadImages({ kind: resource.kind, namespace: resource.namespace, name: resource.name })}
           onConfirm={(updates) => onSetImages({ kind: resource.kind, namespace: resource.namespace, name: resource.name, updates })}
+        />
+      )}
+
+      {onSubmitWorkflowTemplate && isWorkflowTemplate && submitDraft && (
+        <WorkflowTemplateSubmitDialog
+          key={submitDraft.opening}
+          open={submitOpen}
+          onClose={() => setSubmitOpen(false)}
+          template={submitDraft.template}
+          onConfirm={confirmSubmit}
+          isLoading={submitPending}
         />
       )}
 

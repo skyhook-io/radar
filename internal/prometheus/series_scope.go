@@ -236,6 +236,9 @@ func (client *Client) resolveScope(ctx context.Context, namespace string, probe 
 		iso := SeriesIsolation{Mode: SeriesIsolationConfigured, Labels: config.ClusterLabels, Note: "Matched by the cluster labels an operator configured"}
 		if config.SingleCluster {
 			iso.Note = "An operator declared this Prometheus single-cluster"
+			if oo := client.relaySourceScopeNote(); oo != "" {
+				iso.Note = oo
+			}
 		}
 		return m, iso, nil
 	}

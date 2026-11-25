@@ -16,6 +16,9 @@ func TestMergeNamespaceCapabilitiesUsesCleanNamespaceDenies(t *testing.T) {
 			DaemonSets:   true,
 			StatefulSets: true,
 			Rollouts:     true,
+			Workflows:    true,
+			CronJobs:     true,
+			CreateJobs:   true,
 		},
 	}
 	nsCaps := &k8s.NamespaceCapabilities{}
@@ -25,7 +28,7 @@ func TestMergeNamespaceCapabilitiesUsesCleanNamespaceDenies(t *testing.T) {
 	if caps.Exec || caps.Logs || caps.PortForward {
 		t.Fatalf("clean namespace denies should override global exec/log/port-forward grants: %+v", caps)
 	}
-	if caps.WorkloadWrites.Deployments || caps.WorkloadWrites.DaemonSets || caps.WorkloadWrites.StatefulSets || caps.WorkloadWrites.Rollouts {
+	if caps.WorkloadWrites != (k8s.WorkloadWritePermissions{}) {
 		t.Fatalf("clean namespace denies should override global workload write grants: %+v", caps.WorkloadWrites)
 	}
 }
@@ -40,6 +43,9 @@ func TestMergeNamespaceCapabilitiesPreservesGlobalOnErroredChecks(t *testing.T) 
 			DaemonSets:   true,
 			StatefulSets: true,
 			Rollouts:     true,
+			Workflows:    true,
+			CronJobs:     true,
+			CreateJobs:   true,
 		},
 	}
 	nsCaps := &k8s.NamespaceCapabilities{
@@ -47,6 +53,9 @@ func TestMergeNamespaceCapabilitiesPreservesGlobalOnErroredChecks(t *testing.T) 
 			Exec: true,
 			WorkloadWrites: k8s.WorkloadWriteCapabilityErrors{
 				Deployments: true,
+				Workflows:   true,
+				CronJobs:    true,
+				CreateJobs:  true,
 			},
 		},
 	}
@@ -62,8 +71,27 @@ func TestMergeNamespaceCapabilitiesPreservesGlobalOnErroredChecks(t *testing.T) 
 	if !caps.WorkloadWrites.Deployments {
 		t.Fatal("errored deployment write check should preserve existing global grant")
 	}
+	if !caps.WorkloadWrites.Workflows {
+		t.Fatal("errored workflow write check should preserve existing global grant")
+	}
+	if !caps.WorkloadWrites.CronJobs || !caps.WorkloadWrites.CreateJobs {
+		t.Fatalf("errored CronJob action checks should preserve global grants: %+v", caps.WorkloadWrites)
+	}
 	if caps.WorkloadWrites.DaemonSets || caps.WorkloadWrites.StatefulSets || caps.WorkloadWrites.Rollouts {
 		t.Fatalf("clean workload write denies should still override non-errored grants: %+v", caps.WorkloadWrites)
+	}
+}
+
+func TestMergeNamespaceCapabilitiesCronJobActionsAreIndependent(t *testing.T) {
+	for _, patch := range []bool{false, true} {
+		caps := &k8s.Capabilities{
+			WorkloadWrites: k8s.WorkloadWritePermissions{CronJobs: !patch, CreateJobs: patch},
+		}
+		writes := k8s.WorkloadWritePermissions{CronJobs: patch, CreateJobs: !patch}
+		mergeNamespaceCapabilities(caps, &k8s.NamespaceCapabilities{WorkloadWrites: writes})
+		if caps.WorkloadWrites != writes {
+			t.Errorf("got %+v, want namespace grants %+v", caps.WorkloadWrites, writes)
+		}
 	}
 }
 
