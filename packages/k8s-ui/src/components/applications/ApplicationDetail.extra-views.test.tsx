@@ -241,6 +241,20 @@ describe('ApplicationDetail extra views', () => {
     expect(host.textContent).toContain('Cost body')
   })
 
+  it('remounts a singleton workload editor when switching instances', () => {
+    function WorkloadEditor() {
+      const [draft, setDraft] = useState('Clean')
+      return <button onClick={() => setDraft('Staging draft')}>{draft}</button>
+    }
+    const props = { app: { ...app, workloads: [workload('api')] }, renderWorkload: () => <WorkloadEditor /> }
+    const { host, rerender } = show({ ...props, activeInstanceKey: 'staging' })
+    act(() => Array.from(host.querySelectorAll('button')).find(button => button.textContent === 'Clean')!.click())
+    expect(host.textContent).toContain('Staging draft')
+    rerender({ ...props, activeInstanceKey: 'prod' })
+    expect(host.textContent).toContain('Clean')
+    expect(host.textContent).not.toContain('Staging draft')
+  })
+
   it('remounts a controlled Cost panel when switching instances', () => {
     function CostBody({ instance }: { instance: string }) {
       const [mountedInstance] = useState(instance)

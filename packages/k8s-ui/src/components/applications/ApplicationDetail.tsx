@@ -974,7 +974,7 @@ export function ApplicationDetail({
 
       <div className="min-h-0 flex-1 overflow-hidden bg-theme-base">
         {selectedWorkload ? (
-          renderRuntime(selectedWorkload, renderWorkload, workloadContext)
+          renderRuntime(scopeKey, selectedWorkload, renderWorkload, workloadContext)
         ) : selectionLoading && !resolvedView && !costSelected && unavailable == null ? (
           <PaneLoader label="Loading application views…" className="h-full" />
         ) : (
@@ -3664,6 +3664,7 @@ function useDismissablePopover<T extends HTMLElement>(
 }
 
 function renderRuntime(
+  scopeKey: string,
   workload: SelectedAppWorkload | undefined,
   renderWorkload: ApplicationDetailProps["renderWorkload"],
   context: AppWorkloadRenderContext,
@@ -3677,7 +3678,7 @@ function renderRuntime(
   }
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div key={workloadKey(workload)} className="min-h-0 flex-1">
+      <div key={JSON.stringify([scopeKey, workloadKey(workload)])} className="min-h-0 flex-1">
         {renderWorkload(workload, context)}
       </div>
     </div>
