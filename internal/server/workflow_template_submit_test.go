@@ -390,6 +390,38 @@ func TestWorkflowTemplateSubmit(t *testing.T) {
 			})
 		}
 	})
+	t.Run("a changed template with an unreadable earlier attempt is unverified, not 'review again'", func(t *testing.T) {
+		srv, dyn := workflowSubmitServer(t, submitTemplate("8", nil))
+		dyn.PrependReactor("get", "workflows", func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewForbidden(argoWorkflowGVR.GroupResource(), "migrate-k2x9q", errors.New("no get"))
+		})
+		rec := postSubmit(srv, `{"name":"migrate-k2x9q","submission":"confirmation-0001","resourceVersion":"7","parameters":{"target":"x"}}`, nil)
+		if rec.Code != http.StatusConflict || errorCode(t, rec) != "workflow_unverified" || !strings.Contains(rec.Body.String(), "migrate-k2x9q") || len(workflowCreates(dyn)) != 0 {
+			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+	t.Run("an entrypoint input's enum binds the argument of the same name", func(t *testing.T) {
+		tmpl := submitTemplate("7", nil)
+		_ = unstructured.SetNestedSlice(tmpl.Object, []any{map[string]any{"name": "level", "value": "low"}}, "spec", "arguments", "parameters")
+		_ = unstructured.SetNestedSlice(tmpl.Object, []any{map[string]any{"name": "main", "inputs": map[string]any{"parameters": []any{
+			map[string]any{"name": "level", "enum": []any{"low", "high"}},
+		}}}}, "spec", "templates")
+		srv, _ := workflowSubmitServer(t, tmpl)
+		if rec := postSubmit(srv, `{"parameters":{"level":"extreme"}}`, nil); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "must be one of low, high") {
+			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+		}
+		if rec := postSubmit(srv, `{}`, nil); rec.Code != http.StatusOK {
+			t.Fatalf("default: %d %s", rec.Code, rec.Body.String())
+		}
+	})
+	t.Run("an argument with an enum needs a literal value even with a ConfigMap source", func(t *testing.T) {
+		tmpl := submitTemplate("7", nil)
+		_ = unstructured.SetNestedSlice(tmpl.Object, []any{map[string]any{"name": "env", "enum": []any{"dev", "prod"}, "valueFrom": map[string]any{"configMapKeyRef": map[string]any{"name": "c", "key": "k"}}}}, "spec", "arguments", "parameters")
+		srv, _ := workflowSubmitServer(t, tmpl)
+		if rec := postSubmit(srv, `{}`, nil); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `\"env\" is required`) {
+			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+		}
+	})
 	t.Run("a name taken by another run is 409", func(t *testing.T) {
 		for name, existing := range map[string]*unstructured.Unstructured{
 			"no submission":      testWorkflow("Running", ""),

@@ -53,6 +53,33 @@ describe('workflowTemplateParameters', () => {
   })
 })
 
+describe('Argo precedence', () => {
+  it('leaves an input backed by a ConfigMap to it, ahead of its default', () => {
+    const [p] = workflowTemplateParameters({ spec: { entrypoint: 'main', templates: [{ name: 'main', inputs: { parameters: [
+      { name: 'env', default: 'staging', valueFrom: { configMapKeyRef: { name: 'c', key: 'env' } } },
+    ] } }] } })
+    expect(p).toMatchObject({ required: false, defaultValue: undefined, valueFromLabel: 'ConfigMap c, key env' })
+    expect(submittedParameters([p], initialParameterValues([p]))).toEqual({})
+  })
+
+  it('binds an argument with the enum of the entrypoint input it feeds', () => {
+    const params = workflowTemplateParameters({ spec: {
+      entrypoint: 'main',
+      arguments: { parameters: [{ name: 'mode', value: 'dry-run' }] },
+      templates: [{ name: 'main', inputs: { parameters: [{ name: 'mode', enum: ['dry-run', 'apply'] }] } }],
+    } })
+    expect(params).toEqual([expect.objectContaining({ name: 'mode', defaultValue: 'dry-run', enum: ['dry-run', 'apply'], required: false })])
+    expect(parameterErrors(params, { mode: 'destroy' })).toEqual({ mode: 'One of dry-run, apply.' })
+  })
+
+  it('requires a literal value for an argument with an enum, whatever its source', () => {
+    const [p] = workflowTemplateParameters({ spec: { arguments: { parameters: [
+      { name: 'env', enum: ['dev', 'prod'], valueFrom: { configMapKeyRef: { name: 'c', key: 'k' } } },
+    ] } } })
+    expect(p).toMatchObject({ required: true, valueFromLabel: undefined })
+  })
+})
+
 describe('the form', () => {
   const parameters = workflowTemplateParameters(template)
 

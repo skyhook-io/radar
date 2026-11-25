@@ -5,6 +5,7 @@ import { SelectMenu } from '../ui/SelectMenu'
 import {
   initialParameterValues,
   newSubmissionToken,
+  parameterValue,
   parameterErrors,
   submittedParameters,
   suggestWorkflowName,
@@ -48,7 +49,7 @@ export function WorkflowTemplateSubmitDialog({ open, onClose, template, liveReso
   const trimmedName = runName.trim()
   const nameError = workflowNameError(trimmedName)
   const errors = parameterErrors(parameters, values)
-  const missing = parameters.filter(p => errors[p.name] === 'Required.').length
+  const missing = parameters.filter(p => parameterValue(errors, p.name) === 'Required.').length
   const invalid = Object.keys(errors).length - missing
   const sent = submittedParameters(parameters, values)
   const changedUnderneath = Boolean(reviewedVersion && liveResourceVersion && liveResourceVersion !== reviewedVersion)
@@ -60,6 +61,7 @@ export function WorkflowTemplateSubmitDialog({ open, onClose, template, liveReso
   const blockedByChange = changedUnderneath && !repeatsAttempt
   const entrypoint = workflowTemplateEntrypoint(template)
   const serviceAccount: string | undefined = template?.spec?.serviceAccountName || undefined
+  const controllerInstance: string | undefined = template?.metadata?.labels?.['workflows.argoproj.io/controller-instanceid'] || undefined
 
   const confirm = () => {
     if (nameError || Object.keys(errors).length > 0 || blockedByChange || !entrypoint || isLoading) return
@@ -99,7 +101,8 @@ export function WorkflowTemplateSubmitDialog({ open, onClose, template, liveReso
       notes={[
         serviceAccount
           ? <>This template sets the service account <span className="font-mono">{serviceAccount}</span> for its pods; a step can set its own.</>
-          : 'This template sets no service account, so Argo uses its configured default.',
+          : 'This template sets no workflow-level service account: its steps or Argo’s configured default decide which one the pods use.',
+        ...(controllerInstance ? [<>The run is labelled for the Argo controller with instance ID <span className="font-mono">{controllerInstance}</span>, as the template is.</>] : []),
         'The run refers to the template by name. Argo reads the template again when it starts the run, so an edit made after you submit can still apply to it.',
       ]}
       writes={[{
@@ -133,7 +136,7 @@ export function WorkflowTemplateSubmitDialog({ open, onClose, template, liveReso
           <legend className="mb-2 text-xs font-medium text-theme-text-secondary">Parameters</legend>
           {parameters.map((p, i) => {
             const id = `${fieldId}-${i}`
-            const error = errors[p.name]
+            const error = parameterValue(errors, p.name)
             const hintId = `${id}-hint`
             // "Required." is already said beside the field and in the footer.
             const shownError = error && error !== 'Required.' ? error : undefined
@@ -147,7 +150,7 @@ export function WorkflowTemplateSubmitDialog({ open, onClose, template, liveReso
                 {p.enum ? (
                   <SelectMenu
                     id={id}
-                    value={values[p.name] ?? ''}
+                    value={parameterValue(values, p.name)}
                     options={[
                       ...(p.valueFromLabel ? [{ value: '', label: `From ${p.valueFromLabel}` }] : []),
                       ...p.enum.map(v => ({ value: v, label: v })),
@@ -161,7 +164,7 @@ export function WorkflowTemplateSubmitDialog({ open, onClose, template, liveReso
                 ) : (
                   <Input
                     id={id}
-                    value={values[p.name] ?? ''}
+                    value={parameterValue(values, p.name)}
                     onChange={(e) => setValues({ ...values, [p.name]: e.target.value })}
                     autoFocus={i === 0}
                     spellCheck={false}

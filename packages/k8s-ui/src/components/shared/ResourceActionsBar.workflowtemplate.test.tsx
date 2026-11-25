@@ -145,6 +145,27 @@ describe('WorkflowTemplate Submit', () => {
     expect(button('Submit')!.disabled).toBe(true)
   })
 
+  it('renders parameters named like Object.prototype members', () => {
+    const data = template()
+    data.spec.arguments.parameters = [{ name: '__proto__', value: 'a' }, { name: 'constructor', value: 'b' }, { name: 'target' }] as typeof data.spec.arguments.parameters
+    const onSubmitWorkflowTemplate = vi.fn<(s: WorkflowTemplateSubmission) => Promise<unknown>>(() => Promise.resolve({}))
+    render({ onSubmitWorkflowTemplate }, data)
+    act(() => button('Submit…')!.click())
+    expect(input('constructor')!.value).toBe('b')
+    expect(input('constructor')!.getAttribute('aria-invalid')).toBe('false')
+    type('target', 'orders')
+    act(() => button('Submit')!.click())
+    expect(Object.entries(onSubmitWorkflowTemplate.mock.calls[0][0].parameters)).toEqual([['__proto__', 'a'], ['constructor', 'b'], ['target', 'orders']])
+  })
+
+  it('names the controller instance the run is labelled for', () => {
+    const data = template()
+    ;(data.metadata as Record<string, unknown>).labels = { 'workflows.argoproj.io/controller-instanceid': 'ci' }
+    render({ onSubmitWorkflowTemplate: vi.fn() }, data)
+    act(() => button('Submit…')!.click())
+    expect(document.body.textContent).toContain('instance ID ci')
+  })
+
   it('refuses to submit once the template changes under the dialog', () => {
     const onSubmitWorkflowTemplate = vi.fn()
     const props = { onSubmitWorkflowTemplate }

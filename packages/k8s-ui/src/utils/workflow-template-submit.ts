@@ -70,36 +70,48 @@ export function workflowTemplateParameters(template: unknown): WorkflowTemplateP
   const entry = entrypoint && Array.isArray(spec?.templates)
     ? (spec.templates as Array<{ name?: unknown; inputs?: { parameters?: unknown } } | null>).find(t => t?.name === entrypoint)
     : undefined
-  const seen = new Set<string>()
   const out: WorkflowTemplateParameter[] = []
-  const add = (declared: unknown, defaultKeys: string[]) => {
+  const add = (declared: unknown, isArgument: boolean) => {
     if (!Array.isArray(declared)) return
     for (const item of declared) {
       if (!item || typeof item !== 'object') continue
       const param = item as Record<string, unknown>
       const name = typeof param.name === 'string' ? param.name : ''
-      if (!name || seen.has(name)) continue
-      seen.add(name)
-      // A rendered `value: null` is no value.
-      const defaultKey = defaultKeys.find(k => param[k] !== undefined && param[k] !== null)
-      // Argo resolves a ConfigMap reference for a submitted run; other
-      // sources (supplied, event) have nothing to read from.
-      const fromConfigMap = Boolean((param.valueFrom as { configMapKeyRef?: unknown } | undefined)?.configMapKeyRef)
+      if (!name) continue
       const enumValues = Array.isArray(param.enum)
         ? param.enum.map(argoString).filter((v): v is string => v !== undefined)
         : []
+      const known = out.find(p => p.name === name)
+      if (known) {
+        // An argument feeds the entrypoint input of the same name, so the
+        // input's choices bind it too.
+        if (!known.enum && enumValues.length > 0) known.enum = enumValues
+        continue
+      }
+      // A rendered `value: null` is no value.
+      const has = (key: string) => param[key] !== undefined && param[key] !== null
+      // Argo resolves a ConfigMap reference for a submitted run, ahead of an
+      // input's default; other sources (supplied, event) have nothing to read.
+      const fromConfigMap = Boolean((param.valueFrom as { configMapKeyRef?: unknown } | undefined)?.configMapKeyRef)
+      const defaultValue = has('value')
+        ? argoString(param.value) ?? ''
+        : !isArgument && !fromConfigMap && has('default') ? argoString(param.default) ?? '' : undefined
+      // Argo's validation wants a literal value for an argument with an enum.
+      const required = isArgument && enumValues.length > 0
+        ? !has('value')
+        : !has('value') && !(!isArgument && has('default')) && !fromConfigMap
       out.push({
         name,
         description: typeof param.description === 'string' && param.description ? param.description : undefined,
-        defaultValue: defaultKey ? argoString(param[defaultKey]) ?? '' : undefined,
-        valueFromLabel: fromConfigMap ? valueFromLabel(param.valueFrom) : undefined,
-        required: !defaultKey && !fromConfigMap,
+        defaultValue,
+        valueFromLabel: fromConfigMap && !required ? valueFromLabel(param.valueFrom) : undefined,
+        required,
         enum: enumValues.length > 0 ? enumValues : undefined,
       })
     }
   }
-  add(spec?.arguments?.parameters, ['value'])
-  add(entry?.inputs?.parameters, ['value', 'default'])
+  add(spec?.arguments?.parameters, true)
+  add(entry?.inputs?.parameters, false)
   return out
 }
 
@@ -108,17 +120,18 @@ export function initialParameterValues(parameters: WorkflowTemplateParameter[]):
   return Object.fromEntries(parameters.map(p => [p.name, p.defaultValue ?? '']))
 }
 
-/** Why the form can't be submitted, per parameter; empty when it can. */
 // Records keyed by parameter name are built with Object.fromEntries and read
-// with Object.hasOwn: a parameter may be named __proto__.
-function valueOf(values: Record<string, string>, name: string): string {
+// with Object.hasOwn: a parameter may be named __proto__ or constructor.
+/** A record's own entry for a parameter, or ''. */
+export function parameterValue(values: Record<string, string>, name: string): string {
   return Object.hasOwn(values, name) ? values[name] : ''
 }
 
+/** Why the form can't be submitted, per parameter; empty when it can. */
 export function parameterErrors(parameters: WorkflowTemplateParameter[], values: Record<string, string>): Record<string, string> {
   const errors: Array<[string, string]> = []
   for (const p of parameters) {
-    const value = valueOf(values, p.name)
+    const value = parameterValue(values, p.name)
     // Argo accepts an empty value for a required parameter; an empty field
     // here is a value nobody chose, so the form asks for one.
     if (p.required && value === '') errors.push([p.name, 'Required.'])
@@ -134,7 +147,7 @@ export function parameterErrors(parameters: WorkflowTemplateParameter[], values:
  */
 export function submittedParameters(parameters: WorkflowTemplateParameter[], values: Record<string, string>): Record<string, string> {
   return Object.fromEntries(parameters
-    .map(p => [p.name, valueOf(values, p.name), p.defaultValue] as const)
+    .map(p => [p.name, parameterValue(values, p.name), p.defaultValue] as const)
     .filter(([, value, defaultValue]) => value !== '' || defaultValue !== undefined)
     .map(([name, value]) => [name, value]))
 }

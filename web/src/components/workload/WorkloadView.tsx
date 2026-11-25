@@ -1194,7 +1194,8 @@ export function WorkloadView({
     imageSelection,
   ])
   // A submitted run opens once Radar lists it: on the page it is selected in
-  // the run view, on the Overview tab; in the drawer, the drawer moves to it.
+  // the run view, on the Overview tab; in the drawer, or when the list can't
+  // show it, Radar opens the Workflow itself.
   const listedRunKeys = useMemo(() => batchRunsQuery.data?.runs.map(workloadRunKey), [batchRunsQuery.data?.runs])
   const openRunInOverview = useCallback(
     (runKey: string) => {
@@ -1208,9 +1209,17 @@ export function WorkloadView({
   const viewIdentity = `${apiKind}/${namespace}/${name}`
   const currentViewIdentity = useRef(viewIdentity)
   currentViewIdentity.current = viewIdentity
-  const selectRunWhenListed = useSelectRunWhenListed(viewIdentity, listedRunKeys, batchRunsQuery.refetch, openRunInOverview)
-  const submitWorkflowTemplate = baseActionsBarProps.onSubmitWorkflowTemplate
+  useEffect(() => () => { currentViewIdentity.current = '' }, [])
   const navigateToResource = rest.onNavigateToResource
+  const openWorkflow = useCallback(
+    (runKey: string) => {
+      const [, runNamespace, runName] = runKey.split('/')
+      navigateToResource?.({ kind: 'workflows', namespace: runNamespace, name: runName, group: 'argoproj.io' })
+    },
+    [navigateToResource],
+  )
+  const selectRunWhenListed = useSelectRunWhenListed(viewIdentity, listedRunKeys, batchRunsQuery.isError, batchRunsQuery.refetch, openRunInOverview, openWorkflow)
+  const submitWorkflowTemplate = baseActionsBarProps.onSubmitWorkflowTemplate
   const submitAndOpenRun = useMemo(
     () => submitWorkflowTemplate
       ? async (submission: WorkflowTemplateSubmission) => {
@@ -1218,12 +1227,13 @@ export function WorkloadView({
           const run = await submitWorkflowTemplate(submission)
           // The user moved on while the request ran: don't pull them back.
           if (currentViewIdentity.current !== submittedFrom) return run
-          if (expanded) selectRunWhenListed(workloadRunKey({ kind: 'workflows', namespace: run.namespace, name: run.name }))
-          else navigateToResource?.({ kind: 'workflows', namespace: run.namespace, name: run.name, group: 'argoproj.io' })
+          const runKey = workloadRunKey({ kind: 'workflows', namespace: run.namespace, name: run.name })
+          if (expanded) selectRunWhenListed(runKey)
+          else openWorkflow(runKey)
           return run
         }
       : undefined,
-    [expanded, navigateToResource, selectRunWhenListed, submitWorkflowTemplate],
+    [expanded, openWorkflow, selectRunWhenListed, submitWorkflowTemplate],
   )
   const actionsBarProps = useMemo(
     () => ({

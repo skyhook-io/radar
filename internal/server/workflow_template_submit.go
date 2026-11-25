@@ -128,13 +128,22 @@ func (s *Server) handleWorkflowTemplateSubmit(w http.ResponseWriter, r *http.Req
 	workflows := client.Resource(argoWorkflowGVR).Namespace(namespace)
 	// The same request sent again after its answer was lost: the run it asked
 	// for exists, so return it, even if the template has changed since.
+	lookupInconclusive := false
 	if req.Name != "" && req.Submission != "" {
-		if existing, getErr := workflows.Get(r.Context(), req.Name, metav1.GetOptions{}); getErr == nil {
+		existing, getErr := workflows.Get(r.Context(), req.Name, metav1.GetOptions{})
+		if getErr == nil {
 			s.answerExistingWorkflow(w, existing, name, req)
 			return
 		}
+		lookupInconclusive = !apierrors.IsNotFound(getErr)
 	}
 	if req.ResourceVersion != "" && req.ResourceVersion != template.GetResourceVersion() {
+		if lookupInconclusive {
+			// "Review again" would start a second run if the first attempt
+			// did create one; Radar couldn't look.
+			s.writeErrorCode(w, http.StatusConflict, "workflow_unverified", "the workflow template changed, and Radar could not read workflow "+req.Name+" to tell whether an earlier attempt created it; check the template's runs before submitting again")
+			return
+		}
 		s.writeErrorCode(w, http.StatusConflict, "workflow_template_changed", "the workflow template changed since you opened it; review it again before submitting")
 		return
 	}
@@ -232,36 +241,44 @@ type declaredParameter struct {
 // inputs by name, so `argo submit --from` accepts either.
 func declaredParameters(template *unstructured.Unstructured) []declaredParameter {
 	var out []declaredParameter
-	seen := map[string]bool{}
-	add := func(items []any, defaultKeys ...string) {
+	index := map[string]int{}
+	add := func(items []any, isArgument bool) {
 		for _, item := range items {
 			param, ok := item.(map[string]any)
 			if !ok {
 				continue
 			}
 			paramName, _ := param["name"].(string)
-			if paramName == "" || seen[paramName] {
+			if paramName == "" {
 				continue
 			}
-			seen[paramName] = true
-			satisfied := false
-			for _, key := range defaultKeys {
-				// A rendered `value: null` is no value.
-				if param[key] != nil {
-					satisfied = true
+			enum, _ := param["enum"].([]any)
+			if i, seen := index[paramName]; seen {
+				// An argument feeds the entrypoint input of the same name, so
+				// the input's choices bind it too.
+				if len(out[i].enum) == 0 {
+					out[i].enum = enum
 				}
+				continue
 			}
+			index[paramName] = len(out)
+			// A rendered `value: null` is no value.
+			satisfied := param["value"] != nil || (!isArgument && param["default"] != nil)
 			// Argo resolves a ConfigMap reference for a submitted run; other
 			// sources (supplied, event) have nothing to read from.
 			if _, ok, _ := unstructured.NestedMap(param, "valueFrom", "configMapKeyRef"); ok {
 				satisfied = true
 			}
-			enum, _ := param["enum"].([]any)
+			// Argo's validation wants a literal value for an argument with an
+			// enum, whatever its valueFrom says.
+			if isArgument && len(enum) > 0 && param["value"] == nil {
+				satisfied = false
+			}
 			out = append(out, declaredParameter{name: paramName, satisfied: satisfied, enum: enum})
 		}
 	}
 	arguments, _, _ := unstructured.NestedSlice(template.Object, "spec", "arguments", "parameters")
-	add(arguments, "value")
+	add(arguments, true)
 	entrypoint, _, _ := unstructured.NestedString(template.Object, "spec", "entrypoint")
 	templates, _, _ := unstructured.NestedSlice(template.Object, "spec", "templates")
 	for _, item := range templates {
@@ -270,7 +287,7 @@ func declaredParameters(template *unstructured.Unstructured) []declaredParameter
 			continue
 		}
 		inputs, _, _ := unstructured.NestedSlice(t, "inputs", "parameters")
-		add(inputs, "value", "default")
+		add(inputs, false)
 		break
 	}
 	return out
