@@ -13,8 +13,8 @@ import {
   ansiToHtml,
   type TimestampFormat,
   TIMESTAMP_FORMAT_LABELS,
-  createLogTimestampFormatter,
 } from '../../utils/log-format'
+import { createLogTimestampFormatter } from './log-timestamp'
 import { getLogPalette, getLogLevelColor, type LogPalette } from './log-palette'
 import { associateContinuations, groupContinuations, type LogGroup } from '../../utils/log-level'
 import { copyText } from '../../utils/clipboard'
