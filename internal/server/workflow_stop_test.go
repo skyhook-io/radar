@@ -188,17 +188,25 @@ func TestWorkflowStop(t *testing.T) {
 			t.Fatalf("status = %d resp = %+v patches = %d", rec.Code, resp, len(workflowPatches(dyn)))
 		}
 	})
-	t.Run("reports the shutdown stored by admission", func(t *testing.T) {
-		srv, dyn := workflowStopServer(t, testWorkflow("Running", ""))
-		dyn.PrependReactor("patch", "workflows", func(k8stesting.Action) (bool, runtime.Object, error) {
-			return true, testWorkflow("Running", "Stop"), nil
+	for _, tc := range []struct {
+		name, before string
+		wantChanged  bool
+	}{
+		{"admission substitutes Stop for Terminate", "", true},
+		{"admission preserves Stop during escalation", "Stop", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, dyn := workflowStopServer(t, testWorkflow("Running", tc.before))
+			dyn.PrependReactor("patch", "workflows", func(k8stesting.Action) (bool, runtime.Object, error) {
+				return true, testWorkflow("Running", "Stop"), nil
+			})
+			rec := postStop(srv, `{"strategy":"Terminate","uid":"run-1"}`, nil)
+			var resp WorkflowStopResponse
+			if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &resp) != nil || resp.Changed != tc.wantChanged || resp.Shutdown != "Stop" || len(workflowPatches(dyn)) != 1 {
+				t.Fatalf("status = %d: %s, patches = %d", rec.Code, rec.Body.String(), len(workflowPatches(dyn)))
+			}
 		})
-		rec := postStop(srv, `{"strategy":"Terminate","uid":"run-1"}`, nil)
-		var resp WorkflowStopResponse
-		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &resp) != nil || !resp.Changed || resp.Shutdown != "Stop" {
-			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
-		}
-	})
+	}
 	t.Run("retry uses the new version and rechecks the run", func(t *testing.T) {
 		for _, tc := range []struct {
 			name, uid, phase, shutdown string

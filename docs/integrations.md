@@ -996,7 +996,7 @@ Argo reconciles `spec.shutdown` asynchronously. Stop allows exit handlers to run
 
 Radar patches at the version it just read. With a caller-supplied version, a patch conflict returns 409 `workflow_changed` immediately. Otherwise Radar reads the Workflow again and repeats all four checks. If all four patch attempts conflict, it returns 409 `workflow_changed`.
 
-After Kubernetes accepts the patch, Radar returns 200 with `changed: true` and the stored `shutdown`, including a strategy rewritten by admission or an empty string if admission removed it. A patch rejected by Kubernetes as invalid returns 422.
+After Kubernetes accepts the patch, Radar returns 200 with the stored `shutdown`, including a strategy rewritten by admission or an empty string if admission removed it. `changed` is true only if the stored strategy differs from the value Radar read for that patch. A patch rejected by Kubernetes as invalid returns 422.
 
 Kubernetes checks the caller's `get` permission on the Workflow for the read and `patch` for a write. On a shared listener without authentication, anyone who can reach Radar can stop Workflows its Kubernetes identity can read and patch. The stock chart's Argo permissions are read-only. Same-origin and [connection binding](connection-lifecycle.md) checks apply.
 

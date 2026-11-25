@@ -30,7 +30,7 @@ type WorkflowStopRequest struct {
 type WorkflowStopResponse struct {
 	// Shutdown is the resulting value of spec.shutdown.
 	Shutdown string `json:"shutdown"`
-	// Changed reports whether Kubernetes accepted a patch for this request.
+	// Changed reports whether the request changed the stored shutdown strategy.
 	Changed bool `json:"changed"`
 }
 
@@ -81,7 +81,8 @@ func (s *Server) handleWorkflowStop(w http.ResponseWriter, r *http.Request) {
 			s.writeErrorCode(w, http.StatusConflict, "workflow_finished", "the workflow has already finished")
 			return
 		}
-		if current, _, _ := unstructured.NestedString(wf.Object, "spec", "shutdown"); current == "Terminate" || current == req.Strategy {
+		current, _, _ := unstructured.NestedString(wf.Object, "spec", "shutdown")
+		if current == "Terminate" || current == req.Strategy {
 			s.writeJSON(w, WorkflowStopResponse{Shutdown: current})
 			return
 		}
@@ -100,7 +101,7 @@ func (s *Server) handleWorkflowStop(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		shutdown, _, _ := unstructured.NestedString(updated.Object, "spec", "shutdown")
-		s.writeJSON(w, WorkflowStopResponse{Shutdown: shutdown, Changed: true})
+		s.writeJSON(w, WorkflowStopResponse{Shutdown: shutdown, Changed: shutdown != current})
 		return
 	}
 }
