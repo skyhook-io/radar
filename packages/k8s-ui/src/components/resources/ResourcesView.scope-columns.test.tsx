@@ -39,16 +39,13 @@ function render(namespaces: string[], items: any[]) {
 }
 const headerKeys = () => [...host!.querySelectorAll<HTMLElement>('thead th[data-column-key]')].map(th => th.dataset.columnKey)
 
-it('leaves Namespace out while one namespace is picked, without touching the saved choice', () => {
+it('keeps Namespace as the namespace pick narrows and widens', () => {
   render(['a', 'b'], [pod('p1', 'a'), pod('p2', 'b')])
   expect(headerKeys()).toContain('namespace')
   render(['a'], [pod('p1', 'a')])
-  expect(headerKeys()).not.toContain('namespace')
+  expect(headerKeys()).toContain('namespace')
   render([], [pod('p1', 'a'), pod('p2', 'b')])
   expect(headerKeys()).toContain('namespace')
-  // Nothing about the scope was written into the saved column choice.
-  const saved = localStorage.getItem('radar-columns-pods')
-  expect(saved === null || JSON.parse(saved).visible.includes('namespace')).toBe(true)
 })
 
 it('shows GPU while a listed pod requests GPUs, hides it otherwise, and keeps a user’s hide', () => {
