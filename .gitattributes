@@ -1,0 +1,4 @@
+internal/substrate/ateapi/*.pb.go linguist-generated=true
+scripts/substrate-demo/crds/ate.dev_csidriverconfigs.yaml linguist-generated=true
+scripts/substrate-demo/crds/ate.dev_sandboxconfigs.yaml linguist-generated=true
+scripts/substrate-demo/crds/ate.dev_workerpools.yaml linguist-generated=true
