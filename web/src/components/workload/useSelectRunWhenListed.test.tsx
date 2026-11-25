@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react'
+import { act, useEffect } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { useSelectRunWhenListed } from './useSelectRunWhenListed'
@@ -15,12 +15,13 @@ afterEach(() => {
 
 let unlisted = vi.fn()
 let failed = false
-function Probe({ scope, keys, refetch, select }: { scope: string; keys: string[]; refetch: () => void; select: (key: string) => void }) {
-  open = useSelectRunWhenListed(scope, keys, failed, refetch, select, unlisted)
+function Probe({ scope, keys, refetch, select, onOpen }: { scope: string; keys: string[]; refetch: () => void; select: (key: string) => void; onOpen: (open: (key: string) => void) => void }) {
+  const openRun = useSelectRunWhenListed(scope, keys, failed, refetch, select, unlisted)
+  useEffect(() => onOpen(openRun))
   return null
 }
 function render(keys: string[], refetch: () => void, select: (key: string) => void, scope = 'workflowtemplates/jobs/migrate') {
-  act(() => root.render(<Probe scope={scope} keys={keys} refetch={refetch} select={select} />))
+  act(() => root.render(<Probe scope={scope} keys={keys} refetch={refetch} select={select} onOpen={(fn) => { open = fn }} />))
 }
 beforeEach(() => { unlisted = vi.fn(); failed = false })
 
