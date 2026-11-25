@@ -140,6 +140,13 @@ const (
 	// window, longer than any scrape interval a collector uses, so a live
 	// clash is never missed.
 	activeWindow = "5m"
+	// nameHistory is how far back a collector cluster name must have been
+	// sent by this cluster's collector alone before Radar reads the metrics
+	// that carry only that name (kube-state and scraped disk metrics). It
+	// covers the longest span Radar reads (7-day charts and rightsizing):
+	// a cluster rebuilt under the same name leaves the old one's series in
+	// that span, and they would chart as this cluster's.
+	nameHistory = "7d"
 )
 
 var (
@@ -301,7 +308,7 @@ func DiscoverIDs(ctx context.Context, t prom.Transport, uids []string) (map[stri
 	if len(pending) == 0 {
 		return out, nil
 	}
-	usage, err := collectorNameUsage(ctx, dt)
+	usage, err := collectorNameUsage(ctx, dt, "")
 	if err != nil {
 		return nil, err
 	}
@@ -312,9 +319,14 @@ func DiscoverIDs(ctx context.Context, t prom.Transport, uids []string) (map[stri
 }
 
 // collectorNameUsage maps each collector cluster name to the k8s_cluster_uid
-// values (including "" for agents that send none) seen with it.
-func collectorNameUsage(ctx context.Context, t prom.Transport) (map[string]map[string]bool, error) {
-	series, err := query(ctx, t, fmt.Sprintf(`count by (%s, k8s_cluster) (last_over_time(k8s_pod_cpu_time[%s]))`, collectorUIDLabel, lookback))
+// values (including "" for agents that send none) seen with it over
+// nameHistory. name, when set, limits the lookup to that cluster name.
+func collectorNameUsage(ctx context.Context, t prom.Transport, name string) (map[string]map[string]bool, error) {
+	selector := "k8s_pod_cpu_time"
+	if name != "" {
+		selector = fmt.Sprintf("k8s_pod_cpu_time{k8s_cluster=%s}", strconv.Quote(name))
+	}
+	series, err := query(ctx, t, fmt.Sprintf(`count by (%s, k8s_cluster) (last_over_time(%s[%s]))`, collectorUIDLabel, selector, nameHistory))
 	if err != nil {
 		return nil, err
 	}
@@ -330,6 +342,13 @@ func collectorNameUsage(ctx context.Context, t prom.Transport) (map[string]map[s
 		usage[name][s.Labels[collectorUIDLabel]] = true
 	}
 	return usage, nil
+}
+
+// sharedNameWarning explains refused name-only metrics when another collector
+// sent the same cluster name within nameHistory, now or before (a cluster
+// rebuilt under the same name).
+func sharedNameWarning(name string) string {
+	return fmt.Sprintf("More than one OpenObserve collector sent the cluster name %q in the last 7 days. Radar refuses this cluster's kube-state metrics (restarts, HPA, workload ownership) and scraped disk metrics, which carry only the name, until the collector is given a unique cluster name or a radar_cluster_uid label, or the other collector's data is more than 7 days old.", name)
 }
 
 func collectorMatch(uid, name string, usage map[string]map[string]bool) ClusterMatch {
@@ -352,7 +371,7 @@ func collectorMatch(uid, name string, usage map[string]map[string]bool) ClusterM
 		if name == UnsafeDefaultName {
 			m.Warning = fmt.Sprintf("This cluster's OpenObserve collector sends the default cluster name %q, which other clusters can share. Radar refuses its kube-state metrics (restarts, HPA, workload ownership) and scraped disk metrics, which carry only the name, until the collector is given a unique cluster name or a radar_cluster_uid label.", name)
 		} else {
-			m.Warning = fmt.Sprintf("More than one OpenObserve collector sends the cluster name %q. Radar refuses this cluster's kube-state metrics (restarts, HPA, workload ownership) and scraped disk metrics, which carry only the name, until the collector is given a unique cluster name or a radar_cluster_uid label.", name)
+			m.Warning = sharedNameWarning(name)
 		}
 	}
 	return m
@@ -533,10 +552,18 @@ func ConfirmedNameMatch(ctx context.Context, t prom.Transport, label, value, own
 		if uid != "" && uid != ownUID {
 			return ClusterMatch{}, fmt.Errorf("%w: the OpenObserve collector sending %s=%q reports cluster ID %s", ErrNameBelongsToOtherCluster, label, value, uid)
 		}
+		// The name-only metrics also need the name to be this collector's
+		// alone over the span charts read, not only the last 15 minutes.
+		usage, err := collectorNameUsage(ctx, dt, value)
+		if err != nil {
+			return ClusterMatch{}, err
+		}
+		unique := len(usage[value]) == 1 && usage[value][uid]
 		m = ClusterMatch{
 			Dialect: DialectCollector,
-			Options: RewriteOptions{Matchers: []Matcher{{Name: "k8s_cluster", Value: value}}, Dialect: DialectCollector, CollectorUID: uid, GatewayMetricsAllowed: true},
+			Options: RewriteOptions{Matchers: []Matcher{{Name: "k8s_cluster", Value: value}}, Dialect: DialectCollector, CollectorUID: uid, GatewayMetricsAllowed: unique},
 		}
+
 	default:
 		series, err := query(ctx, dt, fmt.Sprintf(`count by (%s) (last_over_time(kube_pod_info{%s=%s}[%s]))`, label, label, qv, lookback))
 		if err != nil {
@@ -559,6 +586,9 @@ func ConfirmedNameMatch(ctx context.Context, t prom.Transport, label, value, own
 	m.By, m.Label, m.Value, m.Name, m.Warning = "name", label, value, value, NameMatchWarning
 	if m.Dialect == DialectCollector && m.Options.CollectorUID == "" {
 		m.Warning += " " + CollectorNoIDWarning
+	}
+	if m.Dialect == DialectCollector && !m.Options.GatewayMetricsAllowed {
+		m.Warning += " " + sharedNameWarning(value)
 	}
 	missing, err := DetectFamilies(ctx, dt, m.Options)
 	if err != nil {

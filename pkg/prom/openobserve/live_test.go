@@ -100,7 +100,7 @@ func TestLiveDiscoverIDs(t *testing.T) {
 	if a.By != "id" || a.Dialect != DialectCollector || a.Label != collectorUIDLabel || a.Value != uidA || a.Options.CollectorUID != uidA || a.Name == "" {
 		t.Fatalf("A = %+v", a)
 	}
-	usage, err := collectorNameUsage(context.Background(), raw)
+	usage, err := collectorNameUsage(context.Background(), raw, "")
 	if err != nil {
 		t.Fatal(err)
 	}

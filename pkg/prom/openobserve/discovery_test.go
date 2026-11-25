@@ -111,7 +111,7 @@ func TestDiscoverIDs(t *testing.T) {
 			{"k8s_cluster": "cluster1"},
 		}},
 		{match: []string{"k8s_pod_cpu_time{k8s_cluster_uid=~"}, rows: []map[string]string{{"k8s_cluster_uid": uidA, "k8s_cluster": "cluster1"}}},
-		{match: []string{"k8s_pod_cpu_time[15m]"}, rows: []map[string]string{{"k8s_cluster_uid": uidA, "k8s_cluster": "cluster1"}}},
+		{match: []string{"k8s_pod_cpu_time[7d]"}, rows: []map[string]string{{"k8s_cluster_uid": uidA, "k8s_cluster": "cluster1"}}},
 	}}
 	got, err := DiscoverIDs(context.Background(), store, []string{uidA, uidB, uidC, uidB})
 	if err != nil {
@@ -165,12 +165,15 @@ func TestDiscoverIDsCollectorNameUniqueness(t *testing.T) {
 		{"unique", []map[string]string{{"k8s_cluster_uid": uidA, "k8s_cluster": "prod-a"}}, true},
 		{"shared with another collector", []map[string]string{{"k8s_cluster_uid": uidA, "k8s_cluster": "prod-a"}, {"k8s_cluster_uid": other, "k8s_cluster": "prod-a"}}, false},
 		{"shared with an agent sending no uid", []map[string]string{{"k8s_cluster_uid": uidA, "k8s_cluster": "prod-a"}, {"k8s_cluster": "prod-a"}}, false},
+		// A cluster rebuilt under the same name: the old collector stopped
+		// within the 7 days charts read, so its name-only series still chart.
+		{"sent by a rebuilt cluster's old collector this week", []map[string]string{{"k8s_cluster_uid": uidA, "k8s_cluster": "prod-a"}, {"k8s_cluster_uid": other, "k8s_cluster": "prod-a"}}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &routeStore{routes: []route{
 				{match: []string{"k8s_pod_cpu_time{k8s_cluster_uid=~"}, rows: []map[string]string{{"k8s_cluster_uid": uidA, "k8s_cluster": "prod-a"}}},
-				{match: []string{"k8s_pod_cpu_time[15m]"}, rows: tc.usage},
+				{match: []string{"k8s_pod_cpu_time[7d]"}, rows: tc.usage},
 			}}
 			got, err := DiscoverIDs(context.Background(), store, []string{uidA})
 			if err != nil {
@@ -379,6 +382,24 @@ func TestConfirmedNameMatchCollector(t *testing.T) {
 	}}
 	if _, err := ConfirmedNameMatch(context.Background(), shared, "k8s_cluster", "prod-a", uidA); err == nil {
 		t.Fatal("name shared by two collectors accepted")
+	}
+
+	// A cluster rebuilt under the same name: only this collector sends it
+	// now, but the old one sent it this week, so its name-only series are
+	// still in the span charts read. The match stands without them.
+	rebuilt := &routeStore{routes: []route{
+		{match: []string{`k8s_pod_cpu_time{k8s_cluster="prod-a"}`, "[15m]"}, rows: []map[string]string{{"k8s_cluster": "prod-a", "k8s_cluster_uid": uidA}}},
+		{match: []string{`k8s_pod_cpu_time{k8s_cluster="prod-a"}`, "[7d]"}, rows: []map[string]string{{"k8s_cluster": "prod-a", "k8s_cluster_uid": uidA}, {"k8s_cluster": "prod-a", "k8s_cluster_uid": uidB}}},
+	}}
+	rm, err := ConfirmedNameMatch(context.Background(), rebuilt, "k8s_cluster", "prod-a", uidA)
+	if err != nil {
+		t.Fatalf("rebuilt cluster's name refused: %v", err)
+	}
+	if rm.Options.GatewayMetricsAllowed || !strings.Contains(rm.Warning, "in the last 7 days") {
+		t.Fatalf("rebuilt cluster's match = %+v", rm)
+	}
+	if strings.Contains(m.Warning, "in the last 7 days") {
+		t.Fatalf("a name only this collector sent warned about sharing: %q", m.Warning)
 	}
 
 	// The name's only collector reports another cluster's ID.

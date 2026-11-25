@@ -1017,6 +1017,9 @@ Add the ID label so the match can't break:
   unique cluster name instead of `cluster1` (the `k8s.cluster.name` resource
   attribute); until then Radar refuses the metrics that carry only the name
   (kube-state metrics such as restarts and HPA, and scraped disk metrics).
+  The name must be this cluster's alone over the last 7 days, the longest span
+  charts and rightsizing read: a cluster rebuilt under the same name gets those
+  metrics once the old collector's data is more than 7 days old.
 
 **What changes.** For a matched context the normal metrics views, rightsizing
 and the AI's `query_prometheus` read OpenObserve. Every query gets this
