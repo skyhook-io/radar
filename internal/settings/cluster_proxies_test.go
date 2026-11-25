@@ -63,3 +63,21 @@ func TestClusterProxiesRefusesADamagedFile(t *testing.T) {
 		t.Fatalf("damaged file was overwritten: %s", data)
 	}
 }
+
+func TestClusterProxiesRefusesANullFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+	t.Setenv("USERPROFILE", tmpDir)
+	if err := SetClusterProxy("prod", "http://proxy:3128"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(clusterProxiesPath(), []byte("null"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ClusterProxies(); err == nil {
+		t.Fatal("a null store must be an error, not an empty one")
+	}
+	if err := SetClusterProxy("staging", "http://other:3128"); err == nil {
+		t.Fatal("saving over a null store must be refused")
+	}
+}

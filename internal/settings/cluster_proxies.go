@@ -46,6 +46,9 @@ func loadClusterProxies() (map[string]string, error) {
 	if err := json.Unmarshal(data, &proxies); err != nil {
 		return nil, fmt.Errorf("%s is not valid JSON; fix or remove it: %w", path, err)
 	}
+	if proxies == nil {
+		return nil, fmt.Errorf("%s holds null instead of an object; fix or remove it", path)
+	}
 	return proxies, nil
 }
 
