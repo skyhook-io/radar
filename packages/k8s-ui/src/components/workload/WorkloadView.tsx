@@ -394,8 +394,8 @@ type WorkloadViewBaseProps = {
     /** The resource's operational issues, for a summary that shows them itself. */
     leadContent?: ReactNode
   }) => ReactNode
-  /** Pass true when extraTabs lists every host tab. The expanded view can then repair
-   * an unknown ?tab= once the workload read settles. Omit or pass false to preserve the ID. */
+  /** Pass true when extraTabs lists every host tab. Otherwise an unknown or hidden tab
+   * keeps its requested ID so a later registration can supply it or its replacement. */
   extraTabsComplete?: boolean
   /** Expanded view: a line under the title, above the tabs, shown on every tab. */
   subheader?: ReactNode
@@ -1092,19 +1092,19 @@ export function WorkloadView({
   const timelineTarget = tabTarget('timeline')
   const logsTarget = tabTarget('logs')
   const topologyTarget = tabTarget('topology')
+  const unavailableTabConfirmed = extraTabsComplete && (
+    (expanded && !resourceLoading && !isBuiltInTab(requestedTab) && !requestedHostTabKnown) ||
+    (requestedTab === 'spec' && !!resource && !resourceLoading && !expandedSummary) ||
+    (requestedTab === 'topology' && topologyTabHidden) ||
+    (requestedTab === 'metrics' && (!renderMetricsTab || (!!resource && !resourceLoading && !showMetricsTab))) ||
+    (requestedTab === 'cost' && (!renderCostTab || (!!resource && !resourceLoading && !showCostTab))) ||
+    (requestedTab === 'logs' && logsFallbackReady)
+  )
   const shouldCommitFallback =
     requestedTab !== fallbackTab &&
     !requestedTabAvailable &&
     !(resourceLoading && activeExtraTab && !activeExtraTab.availableWhenDeleted) &&
-    (
-      replacementTab !== undefined ||
-      (expanded && extraTabsComplete && !resourceLoading && !isBuiltInTab(requestedTab) && !requestedHostTabKnown) ||
-      (requestedTab === 'spec' && !!resource && !resourceLoading && !expandedSummary) ||
-      (requestedTab === 'topology' && topologyTabHidden) ||
-      (requestedTab === 'metrics' && (!renderMetricsTab || (!!resource && !resourceLoading && !showMetricsTab))) ||
-      (requestedTab === 'cost' && (!renderCostTab || (!!resource && !resourceLoading && !showCostTab))) ||
-      (requestedTab === 'logs' && logsFallbackReady)
-    )
+    (replacementTab !== undefined || unavailableTabConfirmed)
   useEffect(() => {
     if (!shouldCommitFallback) return
     notifyTabChange(fallbackTab, { replace: true })

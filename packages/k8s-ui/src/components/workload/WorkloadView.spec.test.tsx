@@ -272,6 +272,23 @@ it.each(['found', 'missing'] as const)('keeps the requested Timeline until the C
   act(() => root.unmount())
 })
 
+it.each([{}, { extraTabsComplete: false }])('keeps a hidden Spec link for a late replacement with %j', completeness => {
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  const onTabChange = vi.fn()
+  const base = { ...props, ...completeness, renderSummary: undefined, onTabChange }
+  act(() => root.render(<WorkloadView {...base} />))
+  expect(host.querySelector('[aria-selected="true"]')?.textContent).toBe('Overview')
+  expect(onTabChange).not.toHaveBeenCalled()
+  act(() => root.render(<WorkloadView {...base}
+    extraTabs={[{ id: 'settings', label: 'Settings', replaces: 'spec', render: () => 'Cluster settings' }]} />))
+  expect(host.textContent).toContain('Cluster settings')
+  expect(onTabChange).toHaveBeenCalledExactlyOnceWith('settings', { replace: true })
+  act(() => root.render(<WorkloadView {...base} extraTabsComplete />))
+  expect(onTabChange).toHaveBeenLastCalledWith('overview', { replace: true })
+  act(() => root.unmount())
+})
+
 it('repairs unknown tab IDs once the host list is complete and the workload read settles', () => {
   const root = createRoot(document.createElement('div'))
   const onTabChange = vi.fn()
