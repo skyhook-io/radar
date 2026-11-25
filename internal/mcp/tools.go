@@ -3835,10 +3835,7 @@ func relationshipPreviewWarning(rc *resourcecontext.ResourceContext) string {
 		if gap.Reason != resourcecontext.OmittedBudgetExceeded {
 			continue
 		}
-		switch gap.Field {
-		case "dependencies", "dependents", "exposedBy", "backends", "exposes", "selectedBy",
-			"protects", "healthChecks", "stagedPolicies", "monitors", "monitorTargets", "scaledBy",
-			"managedBy", "ingressSummary.backendServices", "cronJobSummary.activeJobs":
+		if resourcecontext.IsRelationshipPreviewField(gap.Field) {
 			fields.Insert(gap.Field)
 		}
 	}

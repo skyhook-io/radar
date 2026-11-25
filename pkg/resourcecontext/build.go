@@ -1659,6 +1659,24 @@ func compareRefIdentity(a, b ContextRef) int {
 	return strings.Compare(resourceid.ResourceKey(a.Group, a.Kind, a.Namespace, a.Name), resourceid.ResourceKey(b.Group, b.Kind, b.Namespace, b.Name))
 }
 
+// relationshipPreviewFields are the fields filterBoundedRefs and selectRefs
+// clip to a preview. budget_exceeded on one of them means the preview was cut;
+// on any other field it means something else, such as an enrichment timeout.
+// TestRelationshipPreviewFieldsCoverEveryCappedField keeps this in step with
+// the calls in this package.
+var relationshipPreviewFields = map[string]bool{
+	"dependencies": true, "dependents": true, "exposedBy": true, "backends": true, "exposes": true,
+	"selectedBy": true, "protects": true, "healthChecks": true, "stagedPolicies": true, "monitors": true,
+	"monitorTargets": true, "scaledBy": true, "managedBy": true,
+	"ingressSummary.backendServices": true, "cronJobSummary.activeJobs": true,
+}
+
+// IsRelationshipPreviewField reports whether field is a relationship preview
+// that Build clips to a bounded number of readable references.
+func IsRelationshipPreviewField(field string) bool {
+	return relationshipPreviewFields[field]
+}
+
 func filterBoundedRefs(ctx context.Context, ac RefAccessChecker, refs []ContextRef, field string, omitted *omittedTracker) []ContextRef {
 	access := previewAccess{checker: ac}
 	return access.selectRefs(ctx, refs, nil, field, omitted)
