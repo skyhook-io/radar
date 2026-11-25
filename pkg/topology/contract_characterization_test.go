@@ -404,6 +404,12 @@ func charCluster() *charFixture {
 		charUnstructured("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "flux-system", "platform", nil, map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "repo"}, "path": "./platform"},
 			inventory("flux-system_shop_kustomize.toolkit.fluxcd.io_Kustomization")))
 	dyn("source.toolkit.fluxcd.io", "v1", "GitRepository", "gitrepositories", true, charUnstructured("source.toolkit.fluxcd.io/v1", "GitRepository", "flux-system", "repo", nil, map[string]any{"url": "https://example.com/repo.git"}, nil))
+	// The artifact chain: an ExternalArtifact made by an ArtifactGenerator
+	// that composes the shared repository.
+	dyn("source.extensions.fluxcd.io", "v1beta1", "ArtifactGenerator", "artifactgenerators", true, charUnstructured("source.extensions.fluxcd.io/v1beta1", "ArtifactGenerator", "flux-system", "bundle", nil,
+		map[string]any{"sources": []any{map[string]any{"alias": "repo", "kind": "GitRepository", "name": "repo"}}}, nil))
+	dyn("source.toolkit.fluxcd.io", "v1", "ExternalArtifact", "externalartifacts", true, charUnstructured("source.toolkit.fluxcd.io/v1", "ExternalArtifact", "flux-system", "bundle-app", nil,
+		map[string]any{"sourceRef": map[string]any{"apiVersion": "source.extensions.fluxcd.io/v1beta1", "kind": "ArtifactGenerator", "name": "bundle"}}, nil))
 	dyn("helm.toolkit.fluxcd.io", "v2", "HelmRelease", "helmreleases", true, charUnstructured("helm.toolkit.fluxcd.io/v2", "HelmRelease", "shop", "redis",
 		map[string]string{"kustomize.toolkit.fluxcd.io/name": "shop", "kustomize.toolkit.fluxcd.io/namespace": "flux-system"},
 		map[string]any{"chart": map[string]any{"spec": map[string]any{"chart": "redis", "sourceRef": map[string]any{"kind": "HelmRepository", "name": "bitnami", "namespace": "flux-system"}}}}, nil))

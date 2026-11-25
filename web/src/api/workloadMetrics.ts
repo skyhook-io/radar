@@ -8,6 +8,7 @@ export type WorkloadMetricState =
 export type WorkloadRequestSource = "beyla" | "istio";
 
 export interface WorkloadMetricPanel {
+  source?: "gke";
   state: WorkloadMetricState;
   reason?: string;
   unit: string;
@@ -15,6 +16,7 @@ export interface WorkloadMetricPanel {
 }
 
 export interface WorkloadMetrics {
+  resourceSource?: "gke";
 	 history: Partial<Record<"cpu" | "memory" | "throttling" | "requests", { mode: "workload-history" | "current-pods" | "unavailable"; reason?: string }>>;
 	 comparison: Partial<Record<"cpu" | "memory" | "throttling", WorkloadMetricPanel>>;
   scopeNotice?: string;

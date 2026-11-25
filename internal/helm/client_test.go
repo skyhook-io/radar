@@ -1955,7 +1955,7 @@ func TestHelmReleaseDeploymentTimestampPreserved(t *testing.T) {
 
 func helmReleaseRowsForTest(t *testing.T, snapshot *helmReleaseStorageSnapshot) []HelmRelease {
 	t.Helper()
-	rows, err := helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot, nil, "", scannedObjects{})
+	rows, err := helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot, nil, nil, "", scannedObjects{})
 	if err != nil {
 		t.Fatal(err)
 	}

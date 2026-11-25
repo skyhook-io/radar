@@ -369,3 +369,35 @@ func TestCreateEphemeralContainerUsesNativeSidecarUserAndGroupOnRestrictedRetry(
 		t.Fatalf("runAsGroup = %#v, want %d", ec.SecurityContext, sidecarGroup)
 	}
 }
+
+func TestCreateEphemeralContainerRefusesReplacedPod(t *testing.T) {
+	client := fake.NewSimpleClientset(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Namespace: "team-a", Name: "app-0", UID: "new-uid",
+	}})
+	_, err := CreateEphemeralContainer(context.Background(), client, EphemeralContainerOptions{
+		Namespace: "team-a", PodName: "app-0", PodUID: "reviewed-uid",
+	})
+	if !apierrors.IsConflict(err) {
+		t.Fatalf("expected a conflict for a replaced Pod, got %v", err)
+	}
+	for _, action := range client.Actions() {
+		if action.GetVerb() != "get" {
+			t.Fatalf("unexpected %s after Pod replacement", action.GetVerb())
+		}
+	}
+}
+
+func TestReviewedPodDebugTargetStopped(t *testing.T) {
+	client := fake.NewSimpleClientset(&corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "demo", Name: "api", UID: "reviewed"},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{
+			{Name: "api", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}},
+		}},
+	})
+	_, err := CreateEphemeralContainer(context.Background(), client, EphemeralContainerOptions{
+		Namespace: "demo", PodName: "api", PodUID: "reviewed", TargetContainer: "api",
+	})
+	if !apierrors.IsConflict(err) || len(client.Actions()) != 1 {
+		t.Fatalf("expected conflict after one GET; err=%v, actions=%v", err, client.Actions())
+	}
+}

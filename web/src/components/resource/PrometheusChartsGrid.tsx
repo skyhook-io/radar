@@ -1,3 +1,4 @@
+import { hasPrometheusCharts } from '../../api/prometheusCharts'
 import { clsx } from "clsx";
 import { useMemo, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -80,7 +81,7 @@ export function PrometheusChartsGrid({
   useAutoPromConnect();
   const { data: status, isLoading: statusLoading } = usePrometheusStatus();
   const connectMutation = usePrometheusConnect();
-  const isConnected = status?.connected === true;
+  const isConnected = hasPrometheusCharts(status);
   const isSupported = SUPPORTED_KINDS.has(kind);
   const isWorkload = ["Deployment", "StatefulSet", "DaemonSet"].includes(kind);
   const showRestartLane = isSupported && kind !== "Node";
@@ -110,7 +111,8 @@ export function PrometheusChartsGrid({
   const rxScope = usePrometheusResourceMetrics(kind, namespace, name, "network_rx", timeRange, false).data?.clusterScope;
   const txScope = usePrometheusResourceMetrics(kind, namespace, name, "network_tx", timeRange, false).data?.clusterScope;
   const diskScope = usePrometheusResourceMetrics(kind, namespace, name, "filesystem", timeRange, false).data?.clusterScope;
-  const nameMatchedScope = leastCertainScope(categories.some((c) => c.key === "filesystem") ? [rxScope, txScope, diskScope] : [rxScope, txScope]);
+  const hasDisk = kind === "Node" || !status?.gkeSystemMetrics || status.connected;
+  const nameMatchedScope = leastCertainScope(hasDisk ? [rxScope, txScope, diskScope] : [rxScope, txScope]);
   const nameMatchedNote = NAME_MATCHED_CLUSTER_NOTE[nameMatchedScope];
 
   if (!isSupported) return null;
@@ -214,7 +216,7 @@ export function PrometheusChartsGrid({
     const tx = findCategory("network_tx");
     if (tx) primaryCats.push({ def: tx });
   }
-  const disk = findCategory("filesystem");
+  const disk = hasDisk ? findCategory("filesystem") : undefined;
   const chartPanels = disk ? [...primaryCats, { def: disk }] : primaryCats;
   const renderPanel = ({ def, refLines }: { def: CategoryDef; refLines?: ReferenceLine[] }) => (
     <MetricsPanel key={def.key} category={def} kind={kind} namespace={namespace} name={name} timeRange={timeRange} referenceLines={refLines} />
@@ -246,7 +248,7 @@ export function PrometheusChartsGrid({
       )}
 
       <div className="metrics-layout min-w-0 px-4 pt-4">
-        {isWorkload && <h3 className="mb-2 text-sm font-semibold text-theme-text-primary">Network and storage</h3>}
+        {isWorkload && <h3 className="mb-2 text-sm font-semibold text-theme-text-primary">{disk ? "Network and storage" : "Network"}</h3>}
         {isWorkload && <Disclosure className="mb-2 text-xs text-theme-text-secondary" summary={`Pod-name matched · ${NAME_MATCHED_SUMMARY[nameMatchedScope]}`}>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed">These charts match current Pod names, independently of the identity-checked charts above. {nameMatchedNote ?? "Matching names in a shared backend may include another cluster."}</p>
         </Disclosure>}
@@ -262,7 +264,7 @@ export function PrometheusChartsGrid({
         timeRange={timeRange}
         category={isWorkload ? "network_rx" : "cpu"}
       />
-      {showRightsizing && isWorkload && (
+      {showRightsizing && status?.connected && isWorkload && (
         <div className="px-4 pb-4"><RightsizingStrip kind={kind} namespace={namespace} name={name} /></div>
       )}
     </div>
@@ -341,7 +343,7 @@ function MetricsPanel({
       <header className="flex flex-wrap items-center justify-between mb-2 gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="text-xs font-medium text-theme-text-secondary uppercase tracking-wide">
-            {category.label}
+            {metrics?.source === "gke" && category.key === "memory" ? "Non-evictable memory" : metrics?.source === "gke" && category.key === "filesystem" && kind === "Node" ? "Ephemeral storage used" : category.label}
           </h3>
           {saturation && <SaturationChip {...saturation} />}
         </div>

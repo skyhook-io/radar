@@ -61,6 +61,18 @@ var clusterOnlyKinds = map[string]ClusterOnlyKindInfo{
 	"validatingadmissionpolicybinding": {
 		"admissionregistration.k8s.io", "validatingadmissionpolicybindings",
 	},
+	"mutatingadmissionpolicies": {
+		"admissionregistration.k8s.io", "mutatingadmissionpolicies",
+	},
+	"mutatingadmissionpolicy": {
+		"admissionregistration.k8s.io", "mutatingadmissionpolicies",
+	},
+	"mutatingadmissionpolicybindings": {
+		"admissionregistration.k8s.io", "mutatingadmissionpolicybindings",
+	},
+	"mutatingadmissionpolicybinding": {
+		"admissionregistration.k8s.io", "mutatingadmissionpolicybindings",
+	},
 }
 
 var clusterOnlyKindsByGroup = map[string]ClusterOnlyKindInfo{

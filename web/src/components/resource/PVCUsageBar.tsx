@@ -1,3 +1,4 @@
+import { hasPrometheusCharts } from '../../api/prometheusCharts'
 import { formatMemoryBytes } from '@skyhook-io/k8s-ui/utils/format'
 import { isForbiddenError, useAutoPromConnect, useCloudRole, usePrometheusPVCUsage, usePrometheusStatus } from '../../api/client'
 import { useNavCustomization } from '../../context/NavCustomization'
@@ -11,7 +12,7 @@ export function PVCUsageBar({ namespace, name }: { namespace: string; name: stri
   const settingsAvailable = !useNavCustomization().embedded
   const canConfigure = settingsAvailable && !roleLoading && canAtLeast('owner')
   const { data: status, error: statusError } = usePrometheusStatus()
-  const isConnected = status?.connected === true
+  const isConnected = hasPrometheusCharts(status)
   const { data: usage, error } = usePrometheusPVCUsage(namespace, name, isConnected)
 
   let unavailable: string | undefined

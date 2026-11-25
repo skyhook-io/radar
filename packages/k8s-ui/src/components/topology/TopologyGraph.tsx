@@ -26,6 +26,7 @@ import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
 import { TopologyOverlayBar } from './TopologyOverlayBar'
 import { Tooltip } from '../ui/Tooltip'
 import { GraphExportButton } from './GraphExportButton'
+import { describeTopologyNode } from './topology-export'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 
 import { K8sResourceNode } from './K8sResourceNode'
@@ -1287,6 +1288,7 @@ function CustomControlButtons({
           title="Export topology"
           onExportingChange={onExportingChange}
           onDownloadBlob={onDownloadBlob}
+          describeNode={describeTopologyNode}
         />
       )}
       {onTogglePause && (

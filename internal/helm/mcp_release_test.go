@@ -1,6 +1,7 @@
 package helm
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -298,7 +299,7 @@ func TestMCPUpgradePreflightIsNotPartialMutation(t *testing.T) {
 	if !errors.As(err, &preflight) || !strings.Contains(err.Error(), "expected 1") {
 		t.Fatalf("stale refusal not classified: %v", err)
 	}
-	if _, err := getReleaseWith(k8s.Current(), cfg, "", "default", "demo", nil); err == nil || !strings.Contains(err.Error(), "no usable") {
+	if _, err := getReleaseWith(context.Background(), k8s.Current(), cfg, "", "default", "demo", nil); err == nil || !strings.Contains(err.Error(), "no usable") {
 		t.Fatalf("corrupt release not safely refused: %v", err)
 	}
 }

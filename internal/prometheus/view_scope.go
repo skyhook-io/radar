@@ -31,6 +31,7 @@ const (
 	ViewScopeConfigured            ViewScopeState = "scoped_configured"
 	ViewScopeSingleClusterAsserted ViewScopeState = "single_cluster_asserted"
 	ViewScopeVerified              ViewScopeState = "scoped_verified"
+	ViewScopeCurrentPodUIDs        ViewScopeState = "current_pod_uids"
 	ViewScopeUnlabeled             ViewScopeState = "unlabeled"
 	ViewScopeSeveralClusters       ViewScopeState = "several_clusters"
 	ViewScopeLabelMissing          ViewScopeState = "label_missing"
@@ -152,7 +153,9 @@ type ViewScopeRequest struct {
 
 // ViewScope is the decision. Filters maps each metric to the matchers to AND
 // into its selectors ("" leaves it unfiltered); a withheld view has none.
-// Labels are the cluster labels the decision checked, when there were any.
+// Labels identify the cluster checked. A configured scope includes the qualified
+// labels pinned on measurement queries. A withheld scope reports the selector
+// that failed verification.
 type ViewScope struct {
 	State    ViewScopeState
 	Withheld bool
@@ -371,6 +374,14 @@ func (c *Client) decideViewScopeFor(ctx context.Context, req ViewScopeRequest, a
 			return unknownViewScope(), err
 		}
 		clusterLabels = proof.scope.ClusterLabels
+		if req.View == rightsizingScopeView && len(proof.uidlessAnchors) != 0 {
+			if scope, verified := c.verifiedRightsizingOwnerScope(ctx, req, at, namespace, proof.uidlessAnchors, cache); verified {
+				return scope, nil
+			}
+			if err := ctx.Err(); err != nil {
+				return unknownViewScope(), err
+			}
+		}
 	}
 	return decideViewScope(ctx, c, req, at, clusterLabels, configured)
 }
@@ -482,9 +493,36 @@ func decideLabeledViewScope(ctx context.Context, q instantQuerier, req ViewScope
 		return unknownViewScope(), err
 	}
 	keys := slices.Sorted(maps.Keys(clusterLabels))
-	readback, _, err := runViewProbes(ctx, q, at, viewReadbackParts(req.Metrics, keys, matchers, req.Span))
+	qualifiers := clusterQualifierLabels
+	if configured && !slices.ContainsFunc(keys, func(k string) bool { return !slices.Contains(clusterQualifierLabels, k) }) {
+		// An operator may use a project as the cluster boundary. Check visible cluster names within it.
+		qualifiers = partitionLabels
+	}
+	readbackKeys := slices.Compact(slices.Sorted(slices.Values(slices.Concat(keys, qualifiers))))
+	readback, _, err := runViewProbes(ctx, q, at, viewReadbackParts(req.Metrics, readbackKeys, matchers, req.Span))
 	if err != nil {
 		return unknownViewScope(), err
+	}
+	queryLabels := clusterLabels
+	if configured {
+		var coherent bool
+		queryLabels, coherent = configuredReadbackLabels(readback, readbackKeys, clusterLabels)
+		if !coherent {
+			return ViewScope{State: ViewScopeLabelMissing, Withheld: true, Labels: maps.Clone(clusterLabels),
+				Note: fmt.Sprintf("The configured selector %s matches inconsistent cluster, project or location labels across the measured series. Add exact labels for this cluster to --prometheus-cluster-label.", matchers)}, nil
+		}
+	}
+	queryMatchers, err := prom.WorkloadMetricsScope{ClusterLabels: queryLabels}.Matchers()
+	if err != nil {
+		return unknownViewScope(), err
+	}
+	// Pin absent dimensions too. A source with the same cluster name may
+	// start reporting a different project while this decision is cached.
+	// The selector already contains the positively identified cluster labels.
+	for _, key := range readbackKeys {
+		if queryLabels[key] == "" {
+			queryMatchers += "," + key + `=""`
+		}
 	}
 	filters := map[string]string{}
 	var missing, unfiltered []string
@@ -497,6 +535,11 @@ func decideLabeledViewScope(ctx context.Context, q instantQuerier, req ViewScope
 		}
 		ignored := false
 		for _, row := range rows {
+			for _, qualifier := range clusterQualifierLabels {
+				if value := row[qualifier]; value != "" && value != queryLabels[qualifier] {
+					return unverifiedClusterQualifier(m.Name, clusterLabels), nil
+				}
+			}
 			for _, k := range keys {
 				ignored = ignored || row[k] != clusterLabels[k]
 			}
@@ -505,7 +548,7 @@ func decideLabeledViewScope(ctx context.Context, q instantQuerier, req ViewScope
 			missing = append(missing, m.Name)
 			continue
 		}
-		filters[m.Name] = matchers
+		filters[m.Name] = queryMatchers
 	}
 	if len(pending) > 0 {
 		identityKeys := slices.Compact(slices.Sorted(slices.Values(append(slices.Clone(partitionLabels), keys...))))
@@ -519,8 +562,8 @@ func decideLabeledViewScope(ctx context.Context, q instantQuerier, req ViewScope
 			ids := identities[m.Name]
 			switch {
 			case len(ids) == 0:
-				filters[m.Name] = matchers
-			case len(ids) == 1 && anchored[m.Name] && !conflictsWithLabels(ids[0], clusterLabels):
+				filters[m.Name] = queryMatchers
+			case len(ids) == 1 && anchored[m.Name] && !hasClusterQualifier(queryLabels) && !hasClusterQualifier(ids[0]) && !conflictsWithLabels(ids[0], clusterLabels):
 				filters[m.Name] = ""
 				unfiltered = append(unfiltered, m.Name)
 				unfilteredIDs = append(unfilteredIDs, ids[0])
@@ -560,7 +603,7 @@ func decideLabeledViewScope(ctx context.Context, q instantQuerier, req ViewScope
 			Note: fmt.Sprintf("None of the %s series carry this cluster's label %s (they have no cluster label, or another cluster's value), so Radar can't tell which of them are this cluster's. Add the label to that metric's scrape, or set --prometheus-cluster-label (Helm traffic.prometheusClusterLabels) to a label every metric carries.", strings.Join(missing, ", "), matchers),
 		}, nil
 	}
-	scope := ViewScope{State: ViewScopeVerified, Labels: maps.Clone(clusterLabels), Filters: filters, Note: viewScopeVerifiedNote}
+	scope := ViewScope{State: ViewScopeVerified, Labels: maps.Clone(queryLabels), Filters: filters, Note: viewScopeVerifiedNote}
 	if configured {
 		scope.State, scope.Note = ViewScopeConfigured, viewScopeConfiguredNote
 	}
@@ -570,6 +613,41 @@ func decideLabeledViewScope(ctx context.Context, q instantQuerier, req ViewScope
 		}
 	}
 	return scope, nil
+}
+
+// A configured selector can stand for one managed-cluster context. Pin that
+// context on later reads, even when the original decision comes from cache.
+func configuredReadbackLabels(readback map[string][]map[string]string, keys []string, configured map[string]string) (map[string]string, bool) {
+	var first map[string]string
+	for _, rows := range readback {
+		for _, row := range rows {
+			if first == nil {
+				first = row
+				continue
+			}
+			for _, k := range keys {
+				if row[k] != first[k] {
+					return nil, false
+				}
+			}
+		}
+	}
+	labels := maps.Clone(configured)
+	for _, k := range keys {
+		if v := first[k]; v != "" && labels[k] == "" {
+			labels[k] = v
+		}
+	}
+	return labels, true
+}
+
+func unverifiedClusterQualifier(metric string, labels map[string]string) ViewScope {
+	return ViewScope{State: ViewScopeLabelMissing, Withheld: true, Labels: maps.Clone(labels),
+		Note: fmt.Sprintf("Radar couldn't verify the project or location of the %s series. Set --prometheus-cluster-label to the cluster and its exact project_id or location labels.", metric)}
+}
+
+func hasClusterQualifier(labels map[string]string) bool {
+	return slices.ContainsFunc(clusterQualifierLabels, func(k string) bool { return labels[k] != "" })
 }
 
 // conflictsWithLabels reports whether an identity names another value for
@@ -599,6 +677,9 @@ func decideUnlabeledViewScope(ctx context.Context, q instantQuerier, req ViewSco
 		}
 		filters[m.Name] = ""
 		if len(ids) == 1 {
+			if hasClusterQualifier(ids[0]) {
+				return unverifiedClusterQualifier(m.Name, nil), nil
+			}
 			single = append(single, ids[0])
 		}
 	}

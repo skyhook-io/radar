@@ -7162,6 +7162,9 @@ func extractGenericStatus(resource *unstructured.Unstructured) HealthStatus {
 	if resource.GroupVersionKind().Group == "flagger.app" && resource.GetKind() == "MetricTemplate" {
 		return StatusNeutral
 	}
+	if gitops.ArtifactGeneratorPaused(resource) {
+		return StatusNeutral
+	}
 	status, found, _ := unstructured.NestedMap(resource.Object, "status")
 	if !found {
 		return StatusUnknown

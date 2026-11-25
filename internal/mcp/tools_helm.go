@@ -12,6 +12,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/skyhook-io/radar/internal/helm"
+	"github.com/skyhook-io/radar/internal/issuecorrelation"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/search"
@@ -207,7 +208,7 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 	}
 
 	user := userFromContext(ctx)
-	detail, err := helmClient.GetReleaseAsUser(input.Namespace, input.Name, user, mcpHelmObjectScope(ctx, ""))
+	detail, err := helmClient.GetReleaseAsUser(ctx, input.Namespace, input.Name, user, mcpHelmObjectScope(ctx, ""))
 	if helm.ReleaseReadDeniedForCaller(err) {
 		observed, why := observedHelmReleaseResult(ctx, input)
 		if observed != nil {
@@ -259,6 +260,12 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 	}
 	if detail.ManagedByFluxHelmRelease != "" {
 		result["managedByFluxHelmRelease"] = detail.ManagedByFluxHelmRelease
+	}
+	if detail.ManagedByK3s {
+		result["managedByK3s"] = true
+	}
+	if detail.Controller != nil {
+		result["controller"] = detail.Controller
 	}
 
 	if len(detail.History) > 0 {
@@ -320,7 +327,7 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 		result["history"] = detail.History
 	}
 	if includes["operations"] {
-		result["operations"] = mergeHelmOperations(detail.Operations, detail.LastOperation)
+		result["operations"] = issuecorrelation.MergeHelmOperations(detail.Operations, detail.LastOperation)
 	}
 
 	if includes["diff"] {
@@ -436,37 +443,6 @@ func diffRevisions(input getHelmReleaseInput, currentRevision int) (int, int) {
 		rev2 = currentRevision
 	}
 	return input.DiffRev1, rev2
-}
-
-func mergeHelmOperations(operations []helm.HelmOperation, lastOperation *helm.HelmOperation) []helm.HelmOperation {
-	merged := make([]helm.HelmOperation, 0, len(operations)+1)
-	seen := make(map[string]struct{}, len(operations)+1)
-	if lastOperation != nil {
-		key := helmOperationKey(*lastOperation)
-		seen[key] = struct{}{}
-		merged = append(merged, *lastOperation)
-	}
-	for _, op := range operations {
-		key := helmOperationKey(op)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		merged = append(merged, op)
-	}
-	return merged
-}
-
-func helmOperationKey(operation helm.HelmOperation) string {
-	return fmt.Sprintf(
-		"%s:%s:%d:%d:%d:%d",
-		operation.Kind,
-		operation.Status,
-		operation.Revision,
-		operation.FailedRevision,
-		operation.RollbackRevision,
-		operation.TargetRevision,
-	)
 }
 
 func redactedHelmValues(values map[string]any) map[string]any {

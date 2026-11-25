@@ -597,10 +597,10 @@ func TestManageHelmRollbackPreviewReadsLiveObjectsAsCaller(t *testing.T) {
 	// the release: it purges history even when a post-delete hook then fails.
 	helmClient := helm.NewStandaloneClient(cfg)
 	user := userFromContext(ctx)
-	if uninstallPurgedDespiteError(helmClient, manageHelmInput{Namespace: "team-a", Name: "demo"}, user) {
+	if uninstallPurgedDespiteError(context.Background(), helmClient, manageHelmInput{Namespace: "team-a", Name: "demo"}, user) {
 		t.Fatal("a release still in storage must not be reported as purged")
 	}
-	if !uninstallPurgedDespiteError(helmClient, manageHelmInput{Namespace: "team-a", Name: "gone"}, user) {
+	if !uninstallPurgedDespiteError(context.Background(), helmClient, manageHelmInput{Namespace: "team-a", Name: "gone"}, user) {
 		t.Fatal("a release missing from storage after a failed uninstall must be reported as purged")
 	}
 }
@@ -695,7 +695,7 @@ func TestManageHelmReportsLostRevisionRaceAsNoChange(t *testing.T) {
 	// A template's fail or an API error can echo a stored or supplied secret
 	// verbatim; pattern masking alone wouldn't catch these plain values.
 	in := manageHelmInput{Namespace: "team-a", Name: "demo", Values: map[string]any{"db": map[string]any{"password": "Supplied7Pass"}}}
-	failure := error(&knownValuesError{err: errors.New("template: fail: Stored9Pass1 / Stored9Pass2 / Supplied7Pass"), secrets: storedSensitiveValues(helm.NewStandaloneClient(cfg), in, userFromContext(ctx))})
+	failure := error(&knownValuesError{err: errors.New("template: fail: Stored9Pass1 / Stored9Pass2 / Supplied7Pass"), secrets: storedSensitiveValues(ctx, helm.NewStandaloneClient(cfg), in, userFromContext(ctx))})
 	masked := errorMask(in, failure)(failure.Error())
 	for _, secret := range []string{"Stored9Pass1", "Stored9Pass2", "Supplied7Pass"} {
 		if strings.Contains(masked, secret) {

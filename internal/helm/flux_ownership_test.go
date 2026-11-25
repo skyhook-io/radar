@@ -60,7 +60,7 @@ func TestFluxManagerNamespaceScope(t *testing.T) {
 		{"admin", adminCaller(), true}, {"restricted", teamACaller(), false}, {"unchecked", NamespaceStatusScope{}, false}, {"internal", nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			rows, err := helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot, ownership, "", tc.scope)
+			rows, err := helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot, ownership, nil, "", tc.scope)
 			if err != nil || len(rows) != 1 {
 				t.Fatalf("rows=%d err=%v", len(rows), err)
 			}
