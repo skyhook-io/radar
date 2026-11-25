@@ -173,3 +173,14 @@ func TestWorkerPoolDeploymentNeverCreated(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkerPoolIssuesUseStrongestClassOnce(t *testing.T) {
+	u := workerPool("broken", 3, 2, 2, 0, "False", "OldFailure")
+	status := u.Object["status"].(map[string]any)
+	current := workerPool("broken", 3, 3, 2, 0, "False", "SandboxConfigNotFound")
+	status["sandboxClasses"] = append(status["sandboxClasses"].([]any), current.Object["status"].(map[string]any)["sandboxClasses"].([]any)...)
+	issues := detectWorkerPoolIssues(schema.GroupVersionResource{Group: substrateGroup, Version: "v1", Resource: "workerpools"}, "WorkerPool", u)
+	if len(issues) != 1 || issues[0].Severity != SeverityCritical || issues[0].Reason != "SandboxConfigNotFound" || !strings.Contains(issues[0].Message, "Reported for generation 2") {
+		t.Fatalf("want a single issue at the strongest current severity, keeping class evidence: %+v", issues)
+	}
+}
