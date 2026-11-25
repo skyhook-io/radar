@@ -5,12 +5,12 @@ import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { KeyboardShortcutProvider } from '../../hooks/useKeyboardShortcuts'
-import { buildSingleAppEntry, type AppRow } from '../../utils/applications'
+import { buildSingleAppEntry, type AppEntry, type AppRow } from '../../utils/applications'
 import { ApplicationsView } from './ApplicationsView'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
-const app = (name: string, identityKey?: string): AppRow => ({
+const app = (name: string, identityKey?: string) => buildSingleAppEntry({
   key: `shop/${name}`,
   name,
   namespace: 'shop',
@@ -20,14 +20,14 @@ const app = (name: string, identityKey?: string): AppRow => ({
 })
 
 let root: Root | undefined
-function show(rows: AppRow[], props: Partial<Parameters<typeof ApplicationsView>[0]> = {}) {
+function show(entries: AppEntry[], props: Partial<Parameters<typeof ApplicationsView>[0]> = {}) {
   const onSelect = vi.fn()
   const host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
   act(() => root!.render(
     <KeyboardShortcutProvider>
-      <ApplicationsView entries={rows.map((row) => buildSingleAppEntry(row))} variant="single" onSelect={onSelect} {...props} />
+      <ApplicationsView entries={entries} variant="single" onSelect={onSelect} {...props} />
     </KeyboardShortcutProvider>,
   ))
   return { host, onSelect }
@@ -37,7 +37,7 @@ const star = (onPress: (name: string) => void = () => {}) => (entry: { row: AppR
     star
   </button>
 )
-const rowOf = (host: Element, name: string) => [...host.querySelectorAll('tbody tr')].find((tr) => tr.textContent?.includes(name)) as HTMLElement
+const rowOf = (host: Element, name: string) => [...host.querySelectorAll<HTMLTableRowElement>('tbody tr')].find((tr) => tr.textContent?.includes(name))!
 
 beforeEach(() => {
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} unobserve() {} })
@@ -128,6 +128,29 @@ describe('ApplicationsView renderRowLeading', () => {
     document.body.innerHTML = ''
     const { host: plain } = show([app('checkout')])
     expect(withSlot).toBe(rowOf(plain, 'checkout').innerHTML)
+  })
+})
+
+describe('ApplicationsView provenance', () => {
+  it('badges a folded family only when every member is managed, and each expanded member by its own source', () => {
+    const { host } = show([
+      { ...app('billing-dev', 'billing'), source: 'skyhook' },
+      { ...app('billing-prod', 'billing'), source: 'skyhook' },
+      { ...app('checkout-dev', 'checkout'), source: 'skyhook' },
+      app('checkout-prod', 'checkout'),
+      app('orders-dev', 'orders'),
+      app('orders-prod', 'orders'),
+    ])
+    expect(host.querySelectorAll('tbody tr[aria-expanded="false"]')).toHaveLength(3)
+    expect(rowOf(host, 'billing').cells[0].textContent).toContain('Skyhook')
+    expect(rowOf(host, 'orders').cells[0].textContent).not.toMatch(/Skyhook|ungrouped/i)
+    const mixed = rowOf(host, 'checkout')
+    expect(mixed.cells[0].textContent).not.toMatch(/Skyhook|ungrouped/i)
+    act(() => mixed.click())
+    const instances = [...host.querySelectorAll<HTMLTableRowElement>('tbody tr:not([aria-expanded])')]
+    expect(instances).toHaveLength(2)
+    expect(instances.find((row) => row.textContent?.includes('checkout-dev'))?.cells[0].textContent).toContain('Skyhook')
+    expect(instances.find((row) => row.textContent?.includes('checkout-prod'))?.cells[0].textContent).toContain('ungrouped')
   })
 })
 
