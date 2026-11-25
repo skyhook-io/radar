@@ -1089,12 +1089,13 @@ function coverageGapNote(gaps: OwnershipGap[], relation: 'children' | 'managers'
   }
 
   const hint: string[] = []
-  const pressing: string[] = []
+  const warnings = new Map<string, Set<string>>()
   const children = relation === 'children'
   for (const [reason, labels] of byReason) {
     const kinds = [...labels]
     if (reason === 'kind_sync_pending') {
-      const loading = kinds.length <= 2 ? `${boundedKinds(kinds, 'and')} objects` : `${kinds.length} resource kinds`
+      const names = boundedKinds(kinds, 'and')
+      const loading = kinds.length <= 3 ? `${names} objects` : `${kinds.length} resource kinds (${names})`
       const which = kinds.length === 1 ? 'that kind' : 'those kinds'
       hint.push(`Radar is still loading ${loading}, so ${relation} of ${which} aren't ${children ? 'listed yet' : 'checked yet'}.`)
     } else if (reason === 'radar_kind_not_collected' || (!children && reason === 'read_error')) {
@@ -1104,13 +1105,17 @@ function coverageGapNote(gaps: OwnershipGap[], relation: 'children' | 'managers'
     } else if (children && reason === 'radar_namespace_not_collected') {
       hint.push("Radar doesn't collect every namespace, so children in the others aren't listed.")
     } else {
-      pressing.push(`${boundedKinds(kinds, 'and')} (${gapReasonText(reason)})`)
+      const text = gapReasonText(reason)
+      const combined = warnings.get(text) ?? new Set<string>()
+      for (const label of labels) combined.add(label)
+      warnings.set(text, combined)
     }
   }
   // An API group whose discovery fails, often a metrics API with no server
   // behind it, leaves every answer with this gap; most such groups hold no
   // related objects, so it is a hint, not a warning.
   if (undiscovered) hint.push(`Radar's API discovery missed some API groups, so ${relation} of their kinds aren't ${children ? 'listed' : 'checked'}.`)
+  const pressing = Array.from(warnings, ([text, labels]) => `${boundedKinds([...labels], 'and')} (${text})`)
   return { hint, pressing }
 }
 

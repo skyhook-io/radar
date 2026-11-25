@@ -198,8 +198,8 @@ describe('RelatedResourcesSection ownership', () => {
     expect(leaf).not.toContain('Children')
     const parent = renderToString(<RelatedResourcesSection kind="deployments" relationships={{ ownership }} />)
     expect(parent).toContain('No children among the kinds Radar checked.')
-    expect(parent).toContain('aria-label="Radar is still loading 90 resource kinds, so children of those kinds aren&#x27;t listed yet."')
-    expect(parent).not.toContain('Pending0')
+    expect(parent).toContain('aria-label="Radar is still loading 90 resource kinds (Pending0, Pending1, Pending2 and 87 more), so children of those kinds aren&#x27;t listed yet."')
+    expect(parent).not.toContain('Pending3')
   })
 
   it('groups and bounds warnings by reason while keeping uncollected kinds in the hint', () => {
@@ -214,6 +214,18 @@ describe('RelatedResourcesSection ownership', () => {
     const html = renderToString(<RelatedResourcesSection kind="configmaps" relationships={{ ownership: { children: { complete: false, notChecked } } }} />)
     expect(html).toContain('>Couldn&#x27;t check A, B, C and 2 more (Radar may not list it); F and L (loading is overdue); G (its API can&#x27;t be watched).</div>')
     expect(html).toContain('aria-label="Radar doesn&#x27;t collect objects of 4 kinds (H, I, J and 1 more), so none of those are listed."')
+  })
+
+  it('merges warnings with the same wording and preserves distinct reasons for the same kind', () => {
+    const notChecked = [
+      { group: 'apps', kind: 'Deployment', namespace: 'shop', reason: 'radar_forbidden' },
+      { group: 'apps', kind: 'Deployment', namespace: 'ops', reason: 'radar_credentials_rejected' },
+      { group: 'apps', kind: 'StatefulSet', reason: 'radar_credentials_rejected' },
+      { group: 'apps', kind: 'Deployment', namespace: 'dev', reason: 'future_read_code' },
+      { kind: 'Pod', reason: 'read_error' },
+    ]
+    const html = renderToString(<RelatedResourcesSection relationships={{ ownership: { children: { complete: false, notChecked } } }} />)
+    expect(html).toContain('>Couldn&#x27;t check Deployment and StatefulSet (Radar may not list it); Deployment and Pod (the read failed).</div>')
   })
 
   it('distinguishes kinds sharing a name across groups and collapses namespaces', () => {
@@ -302,12 +314,12 @@ describe('RelatedResourcesSection ownership', () => {
     expect(html).toMatch(/aria-label="[^"]*Radar is still loading Application objects, so managers of that kind aren&#x27;t checked yet\./)
   })
 
-  it('does not create a Managed By section during warmup and counts loading kinds beside a listed manager', () => {
+  it('does not create a Managed By section during warmup and names all three loading kinds beside a listed manager', () => {
     const notChecked = ['Application', 'Kustomization', 'HelmRelease'].map(kind => ({ kind, reason: 'kind_sync_pending' }))
     const ownership = { children: { complete: true }, managers: { notChecked } }
     expect(renderToString(<RelatedResourcesSection relationships={{ ownership, owner: rs }} />)).not.toContain('Managed By')
     const listed = renderToString(<RelatedResourcesSection relationships={{ ownership, managers: [app] }} />)
-    expect(listed).toMatch(/aria-label="[^"]*Radar is still loading 3 resource kinds, so managers of those kinds aren&#x27;t checked yet\./)
+    expect(listed).toMatch(/aria-label="[^"]*Radar is still loading Application, Kustomization and HelmRelease objects, so managers of those kinds aren&#x27;t checked yet\./)
   })
 
   it("keeps it to the hint beside a listed manager", () => {

@@ -5,6 +5,7 @@ import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { OwnershipCoverage } from '@skyhook-io/k8s-ui/types'
 import { useResourceWithRelationships } from './client'
+import { getApiBase, setApiBase } from './config'
 
 const pending = 'kind_sync_pending'
 const settled = { children: { complete: true } }
@@ -13,7 +14,8 @@ const loading = { children: { complete: false, notChecked: [{ kind: 'Pod', reaso
 let client: QueryClient
 let host: HTMLDivElement
 let root: ReturnType<typeof createRoot>
-let ownership: OwnershipCoverage
+let originalBase: string
+let ownership: Partial<OwnershipCoverage>
 let requests: number[]
 let status: number
 
@@ -24,32 +26,37 @@ beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { refetchOnWindowFocus: false } } })
   host = document.createElement('div')
   root = createRoot(host)
+  originalBase = getApiBase()
   ownership = loading
   requests = []
   status = 200
-  vi.stubGlobal('fetch', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => {
     requests.push(Date.now())
     if (status !== 200) return Response.json({ error: 'read failed' }, { status })
     return Response.json({ resource: {}, relationships: { ownership } })
-  })
+  }))
 })
 
 afterEach(() => {
   act(() => root.unmount())
   client.clear()
+  setApiBase(originalBase)
   focusManager.setFocused(undefined)
   vi.unstubAllGlobals()
   vi.useRealTimers()
 })
 
-function Probe({ poll, scope }: { poll?: boolean; scope?: string }) {
-  const result = useResourceWithRelationships('pods', 'shop', 'web', undefined, { pollPendingOwnership: poll, cacheScope: scope })
-  return <span>{result.data?.relationships?.ownership?.children.complete ? 'complete' : 'partial'}</span>
+const key = ['resource', 'pods', 'shop', 'web', '']
+const eightPolls = [5000, 15_000, 35_000, 65_000, 95_000, 125_000, 155_000, 185_000]
+
+function Probe({ poll }: { poll?: boolean }) {
+  const result = useResourceWithRelationships('pods', 'shop', 'web', '', { pollPendingOwnership: poll })
+  return <span>{result.data?.relationships?.ownership?.children?.complete ? 'complete' : 'partial'}</span>
 }
 
-async function observe(poll?: boolean, scope?: string) {
+async function observe(poll?: boolean) {
   await act(async () => {
-    root.render(<QueryClientProvider client={client}><Probe poll={poll} scope={scope} /></QueryClientProvider>)
+    root.render(<QueryClientProvider client={client}><Probe poll={poll} /></QueryClientProvider>)
   })
 }
 
@@ -62,6 +69,15 @@ it.each<[string, OwnershipCoverage]>([
   ['owner', { ...settled, ownerReason: pending }],
   ['manages', { ...settled, manages: { membership: 'unreadable', unavailableReason: pending } }],
   ['managers', { ...settled, managers: { notChecked: [{ kind: 'Application', reason: pending }] } }],
+  ['manager chain stop', {
+    ...settled,
+    manager: {
+      state: 'unknown',
+      direct: { object: { kind: 'Pod', namespace: 'shop', name: 'web' } },
+      chainEnd: 'unfollowed',
+      stop: { at: { kind: 'ReplicaSet', namespace: 'shop', name: 'web-rs' }, state: 'unknown', reason: pending },
+    },
+  }],
   ['children', loading],
 ])('polls pending %s coverage and stops on an answer containing only other gaps', async (_, initial) => {
   ownership = initial
@@ -71,13 +87,57 @@ it.each<[string, OwnershipCoverage]>([
   expect(requests).toEqual([0, 5000])
 })
 
-it('backs off per answer, stops at three minutes, and gives another query its own budget', async () => {
-  await observe(true, 'cluster-a')
-  await advance(300_000)
-  expect(requests).toEqual([0, 5000, 15_000, 35_000, 65_000, 95_000, 125_000, 155_000, 180_000])
-  await observe(true, 'cluster-b')
-  await advance(5000)
-  expect(requests.slice(-2)).toEqual([300_000, 305_000])
+it('stops after eight foreground polls and starts again when the cached resource reopens', async () => {
+  await observe(true)
+  const query = client.getQueryCache().find({ queryKey: key, exact: true })
+  expect(query).toBeDefined()
+  await advance(240_000)
+  expect(requests).toEqual([0, ...eightPolls])
+
+  await act(async () => root.render(<QueryClientProvider client={client}>{null}</QueryClientProvider>))
+  await advance(1000)
+  await observe(true)
+  expect(client.getQueryCache().find({ queryKey: key, exact: true })).toBe(query)
+  await advance(240_000)
+  expect(requests).toEqual([0, ...eightPolls, 241_000, ...eightPolls.map(t => t + 241_000)])
+})
+
+it('gives a new cluster a fresh budget on the same mounted observer and query key', async () => {
+  setApiBase('/c/first/api')
+  await observe(true)
+  const query = client.getQueryCache().find({ queryKey: key, exact: true })
+  expect(query).toBeDefined()
+  await advance(240_000)
+  expect(requests).toEqual([0, ...eightPolls])
+
+  expect(fetch).toHaveBeenLastCalledWith('/c/first/api/resources/pods/shop/web', expect.anything())
+  setApiBase('/c/second/api')
+  await observe(true)
+  await act(async () => { await client.invalidateQueries({ queryKey: key, exact: true }) })
+  expect(client.getQueryCache().find({ queryKey: key, exact: true })).toBe(query)
+  await advance(240_000)
+  expect(requests).toEqual([0, ...eightPolls, 240_000, ...eightPolls.map(t => t + 240_000)])
+  expect(fetch).toHaveBeenLastCalledWith('/c/second/api/resources/pods/shop/web', expect.anything())
+})
+
+it('starts a new episode after the pending gap clears and reappears', async () => {
+  await observe(true)
+  await advance(240_000)
+  ownership = settled
+  await act(async () => { await client.invalidateQueries({ queryKey: key }) })
+  await advance(60_000)
+  expect(requests).toEqual([0, ...eightPolls, 240_000])
+  ownership = loading
+  await act(async () => { await client.invalidateQueries({ queryKey: key }) })
+  await advance(240_000)
+  expect(requests).toEqual([0, ...eightPolls, 240_000, 300_000, ...eightPolls.map(t => t + 300_000)])
+})
+
+it('accepts coverage without a children field', async () => {
+  ownership = {}
+  await observe(true)
+  await advance(60_000)
+  expect(requests).toEqual([0])
 })
 
 it('only polls while opted in', async () => {
@@ -90,16 +150,22 @@ it('only polls while opted in', async () => {
   await observe(false)
   await advance(240_000)
   expect(requests).toEqual([0, 245_000])
+  await observe(true)
+  await advance(240_000)
+  expect(requests).toEqual([0, 245_000, ...eightPolls.map(t => t + 485_000)])
 })
 
-it('pauses interval fetches while the tab is in the background', async () => {
+it('keeps the remaining attempts across a long background pause and background refetches', async () => {
   await observe(true)
-  focusManager.setFocused(false)
-  await advance(15_000)
-  expect(requests).toEqual([0])
-  focusManager.setFocused(true)
   await advance(5000)
-  expect(requests).toEqual([0, 20_000])
+  focusManager.setFocused(false)
+  await advance(300_000)
+  expect(requests).toEqual([0, 5000])
+  await act(async () => { await client.invalidateQueries({ queryKey: key }) })
+  await observe(true)
+  focusManager.setFocused(true)
+  await advance(240_000)
+  expect(requests).toEqual([0, 5000, 305_000, ...eightPolls.slice(1).map(t => t + 300_000)])
 })
 
 it('shares warmup answers with a passive observer of the same resource', async () => {
@@ -120,6 +186,8 @@ it.each([403, 404])('drops the stale warmup interval after a %i response', async
   status = 200
   await advance(59_999)
   expect(requests).toEqual([0, 5000, 6000])
-  await advance(5001)
+  await advance(1)
+  expect(requests).toEqual(errorStatus === 404 ? [0, 5000, 6000, 66_000] : [0, 5000, 6000])
+  await advance(5000)
   expect(requests).toEqual(errorStatus === 404 ? [0, 5000, 6000, 66_000, 71_000] : [0, 5000, 6000])
 })

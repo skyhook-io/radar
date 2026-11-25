@@ -37,7 +37,7 @@ import type {
   YamlDocumentIdentity,
   YamlSchemaLoadResult,
 } from '@skyhook-io/k8s-ui'
-import { focusManager, useInfiniteQuery, useQuery, useMutation, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query'
+import { focusManager, onlineManager, useInfiniteQuery, useQuery, useMutation, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query'
 import { showApiError, showApiSuccess, showApiNotice } from '../components/ui/Toast'
 import { useIsAuthEnabled, useNamespacedCapabilities } from '../contexts/CapabilitiesContext'
 import { applyTabPick, cleanPick, ownsTabPick, pruneTabPick, withActives, writeTabPick } from '../utils/namespacePick'
@@ -3219,36 +3219,16 @@ export function useResourceAvailability(kind: string, namespace: string, name: s
   });
 }
 
-// The active drawer can remount or share its query with a passive observer.
-// Both the backoff and its deadline belong to the pending answer sequence.
-const ownershipPolls = new WeakMap<object, { firstUpdate: number; deadline: number }>();
-
-function pendingOwnershipInterval(query: { state: { data?: ResourceWithRelationships; dataUpdateCount: number; error: unknown } }): number | false {
-  const { data, dataUpdateCount } = query.state;
-  // A failed refetch retains the previous response in the cache.
-  const coverage = query.state.error ? undefined : data?.relationships?.ownership;
+function hasPendingOwnership(data?: ResourceWithRelationships): boolean {
+  const coverage = data?.relationships?.ownership;
+  if (!coverage) return false;
   const pending = "kind_sync_pending";
-  const stillLoading = coverage && (
-    coverage.unavailableReason === pending ||
+  return coverage.unavailableReason === pending ||
     coverage.ownerReason === pending ||
+    coverage.manager?.stop?.reason === pending ||
     coverage.manages?.unavailableReason === pending ||
-    coverage.managers?.notChecked?.some(gap => gap.reason === pending) ||
-    coverage.children.notChecked?.some(gap => gap.reason === pending)
-  );
-  if (!stillLoading) {
-    ownershipPolls.delete(query);
-    return false;
-  }
-
-  const now = Date.now();
-  let poll = ownershipPolls.get(query);
-  if (!poll) {
-    poll = { firstUpdate: dataUpdateCount, deadline: now + 3 * 60_000 };
-    ownershipPolls.set(query, poll);
-  }
-  const delay = Math.min(5000 * 2 ** (dataUpdateCount - poll.firstUpdate), 30_000);
-  const remaining = poll.deadline - now;
-  return remaining > 0 ? Math.min(delay, remaining) : false;
+    !!coverage.managers?.notChecked?.some(gap => gap.reason === pending) ||
+    !!coverage.children?.notChecked?.some(gap => gap.reason === pending);
 }
 
 // Hook that returns full response with relationships explicitly
@@ -3259,22 +3239,56 @@ export function useResourceWithRelationships<T>(
   group?: string,
   options?: { cacheScope?: string; pollPendingOwnership?: boolean },
 ) {
-  return useQuery<ResourceWithRelationships<T>>({
-    queryKey: ["resource", kind, namespace, name, group, ...(options?.cacheScope ? [options.cacheScope] : [])],
-    queryFn: () => fetchResourceWithRelationships<T>(kind, namespace, name, group),
-    enabled: Boolean(kind && name),
-    refetchInterval: (query) => goneRecheckInterval(query, options?.pollPendingOwnership ? pendingOwnershipInterval(query) : undefined),
-    refetchIntervalInBackground: false,
-    // Deep-linked detail views can mount while the kind's informer is still
-    // completing its initial sync: keep polling instead of erroring out.
-    retry: (failureCount, error) => {
-      if (isStillLoadingError(error)) return true;
-      if (isKindSyncFailed(error)) return false;
-      return failureCount < 1; // one retry, 4xx included, unlike the QueryClient default
-    },
-    retryDelay: (failureCount, error) =>
-      isStillLoadingError(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
-  });
+  const client = useQueryClient();
+  const cacheScope = options?.cacheScope;
+  const resourceOptions = useMemo(
+    () => resourceQueryOptions<T>(kind, namespace, name, group, { cacheScope }),
+    [kind, namespace, name, group, cacheScope],
+  );
+  const query = useQuery<ResourceWithRelationships<T>>({ ...resourceOptions, refetchIntervalInBackground: false });
+  const { refetch } = query;
+  const poll = options?.pollPendingOwnership;
+  const apiBase = getApiBase();
+
+  useEffect(() => {
+    if (!poll || !resourceOptions.enabled) return;
+    const cache = client.getQueryCache();
+    const { queryHash } = client.defaultQueryOptions(resourceOptions);
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    function schedule() {
+      clearTimeout(timer);
+      const state = cache.get<ResourceWithRelationships<T>>(queryHash)?.state;
+      if (!state || state.error || !hasPendingOwnership(state.data)) {
+        attempts = 0;
+        return;
+      }
+      if (state.fetchStatus !== "idle" || attempts >= 8) return;
+      timer = setTimeout(() => {
+        if (apiBase !== getApiBase()) return;
+        if (!focusManager.isFocused() || !onlineManager.isOnline()) {
+          schedule();
+          return;
+        }
+        attempts++;
+        void refetch({ cancelRefetch: false });
+      }, Math.min(5000 * 2 ** attempts, 30_000));
+    }
+
+    // Other observers and SSE can change this answer, including after the last
+    // poll. Only this view's timer spends attempts; a settled answer resets them.
+    const unsubscribe = cache.subscribe(event => {
+      if ((event.type === "updated" || event.type === "removed") && event.query.queryHash === queryHash) schedule();
+    });
+    schedule();
+    return () => {
+      unsubscribe();
+      clearTimeout(timer);
+    };
+  }, [poll, apiBase, client, resourceOptions, refetch]);
+
+  return query;
 }
 
 export interface ResourceListOptions {
