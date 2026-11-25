@@ -8175,6 +8175,7 @@ export function useSetContextProxy() {
     },
     meta: {
       errorMessage: "Failed to save the cluster proxy",
+      successMessage: "Cluster proxy updated",
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["contexts"] });
