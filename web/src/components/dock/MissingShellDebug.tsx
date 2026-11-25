@@ -1,7 +1,7 @@
 import { type ReactNode, useState } from 'react'
 import { Terminal } from 'lucide-react'
 import { formatAge, getRunningEphemeralContainers, useOpenTerminal } from '@skyhook-io/k8s-ui'
-import { PodDebugAccessRequest } from '../resources/PodDebugAccessRequest'
+import { PodDebugAccessRequest, PodDebugDenialMessage } from '../resources/PodDebugAccessRequest'
 import { useResource } from '../../api/client'
 import { connectionHeaderValue, useCurrentConnectionId } from '../../api/connectionBinding'
 import { getApiBase } from '../../api/config'
@@ -46,7 +46,7 @@ export function MissingShellDebug(props: RecoveryTarget) {
 
 function DebugOptions({ namespace, name, uid, target, connection, base, pod }: RecoveryTarget & {pod: PodDebugTarget}) {
   const { embedded } = useNavCustomization()
-  const { username, authEnabled, deployment } = useCapabilitiesContext()
+  const { deployment } = useCapabilitiesContext()
   const { podDebugImage, canOpenEphemeralTerminal } = useNamespacedCapabilities(namespace)
   const execOnly = !!embedded || deployment?.mode === 'cloud'
   const current = () => getApiBase() === base && connectionHeaderValue() === connection
@@ -107,9 +107,8 @@ function DebugOptions({ namespace, name, uid, target, connection, base, pod }: R
     <button className="btn-secondary rounded px-2 py-1" disabled={query.isFetching} onClick={() => void query.refetch()}>Recheck access</button>
   </div>
   const denied = access?.state === 'denied'
-  const sharedServiceAccount = !username && !authEnabled && deployment?.mode === 'in-cluster'
   return <div className="flex max-w-md flex-col items-center gap-2 text-xs text-theme-text-secondary">
-    <p>{denied ? <>{sharedServiceAccount ? "Radar’s ServiceAccount doesn’t have" : "You don’t have"} permission to add a debug container to this Pod. Copy an access request for your cluster administrator.</>
+    <p>{denied ? <><PodDebugDenialMessage /> Copy an access request for your cluster administrator.</>
       : access?.state === 'check_failed' ? <>You can open terminals in this Pod. Kubernetes couldn’t complete the check for adding a debug container. Recheck access or ask your administrator to verify it.</>
       : query.error ? <>The permission request failed before Radar received a decision for <code>{namespace}/{name}</code>. Recheck access or ask your administrator to verify it.</>
       : unverifiedImage ? <>You can open terminals in this Pod. Whether you can add a debug container is unconfirmed.</>

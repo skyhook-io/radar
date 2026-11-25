@@ -92,6 +92,7 @@ interface ResourceActionsBarProps {
   onOpenWorkloadLogs?: (params: { namespace: string; workloadKind: string; workloadName: string }) => void
   onCopyCommand?: (text: string, message: string, event: React.MouseEvent) => void
 
+  podDebugAction?: React.ReactNode
   renderPodDebug?: (pod: any) => React.ReactNode
 
   // Port forward render prop (injected by platform)
@@ -233,7 +234,7 @@ export function ResourceActionsBar({
   onUncordonNode, isUncordoningNode,
   onDrainNode, isDrainingNode,
   onPlanDrain, onPlanDrainReset, drainPlan, isPlanningDrain, drainPlanError, drainPlanUpgrade,
-  renderPodDebug,
+  renderPodDebug, podDebugAction,
 }: ResourceActionsBarProps) {
   const kind = resource.kind.toLowerCase()
   const isFluxAction = FLUX_ACTION_KINDS.has(kind) && getGitOpsTool(kind, apiVersionToGroup(data?.apiVersion)) === 'flux'
@@ -389,7 +390,7 @@ export function ResourceActionsBar({
               Terminal
             </button>
           )}
-          {isRunning && canExec && data?.apiVersion === 'v1' && data?.kind === 'Pod' && !data.metadata?.deletionTimestamp && renderPodDebug?.(data)}
+          {podDebugAction ?? (isRunning && canExec && data?.apiVersion === 'v1' && data?.kind === 'Pod' && !data.metadata?.deletionTimestamp && renderPodDebug?.(data))}
           {canViewLogs && !hideLogs && openLogs && (
             <div
               className="relative"
