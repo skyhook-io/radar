@@ -13,7 +13,7 @@ import { createPodDebugContainer, usePodDebugAccess } from '../../api/podDebug'
 export interface PodDebugTarget {
   apiVersion: string
   kind: string
-  metadata: { uid: string; name: string; namespace: string; deletionTimestamp?: string; ownerReferences?: {kind: string; name: string; controller?: boolean}[] }
+  metadata: { uid: string; name: string; namespace: string; deletionTimestamp?: string }
   spec: {
     containers: { name: string }[]
     ephemeralContainers?: { name: string; image: string; targetContainerName?: string }[]
@@ -54,7 +54,7 @@ export function usePodDetailAccess(pod: PodDebugTarget | undefined, namespace: {
   const eligible = pod?.apiVersion === 'v1' && pod.kind === 'Pod' && pod.status.phase === 'Running' && !pod.metadata.deletionTimestamp
   const execOnly = !!embedded || deployment?.mode === 'cloud' || !pod || !runningPodDebugTargets(pod)?.length
   const { query } = usePodDebugAccess(pod?.metadata.namespace ?? '', pod?.metadata.name ?? '', pod?.metadata.uid ?? '',
-    !!eligible && (!namespace.canExec || (!execOnly && !namespace.podDebugImage)), execOnly)
+    !!eligible && (!namespace.canExec || (!execOnly && !namespace.podDebugImage)), execOnly, eligible && !execOnly ? namespace.podDebugImage : undefined)
   const named = eligible && !query.error ? query.data : undefined
   return {
     canExec: namespace.canExec || named?.exec === true,

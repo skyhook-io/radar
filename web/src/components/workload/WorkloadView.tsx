@@ -1,3 +1,4 @@
+import { podDebugAccessKey } from '../../api/podDebug'
 import { supportsWorkloadRevisions, WorkloadRevisionsButton } from './WorkloadRevisionsButton'
 import { RelatedFindingsSection } from './RelatedFindingsSection'
 import { decorateResourceDiagnose, resourceDetailRedirect, resourceDetailSlots, resourceIssueDetail, resourceLogs, resourceRendererOverrides } from '../../integrations/resourceHosts'
@@ -697,6 +698,10 @@ export function WorkloadView({
     await Promise.all([
       refetchResource(),
       onRefresh?.(),
+      ...(apiKind === 'pods' && !effectiveGroup && resource?.metadata?.uid ? [
+        queryClient.invalidateQueries({queryKey: ['capabilities', namespace], exact: true}),
+        queryClient.invalidateQueries({queryKey: podDebugAccessKey(namespace, name, resource.metadata.uid)}),
+      ] : []),
       ...(apiKind === 'rayjobs' && effectiveGroup === 'ray.io' ? [
         queryClient.refetchQueries({ queryKey: ['resource', 'jobs', namespace, name, 'batch'], type: 'active' }),
         ...(resource?.spec?.clusterSelector?.['ray.io/cluster'] ? [queryClient.refetchQueries({ queryKey: ['resource', 'rayclusters', namespace, resource.spec.clusterSelector['ray.io/cluster'], 'ray.io'], type: 'active' })] : []),
@@ -710,7 +715,7 @@ export function WorkloadView({
         ...(apiKind === 'rayclusters' ? { type: 'active' as const } : {}),
       }),
     ])
-  }, [apiKind, effectiveGroup, name, namespace, queryClient, refetchResource, resource?.spec?.clusterSelector, onRefresh])
+  }, [apiKind, effectiveGroup, name, namespace, queryClient, refetchResource, resource?.metadata?.uid, resource?.spec?.clusterSelector, onRefresh])
   const podWorkloadOwner = useMemo(
     () => podWorkloadOwnerFromRelationships(apiKind, namespace, relationships, resource),
     [apiKind, namespace, relationships, resource],

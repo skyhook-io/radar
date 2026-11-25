@@ -7,11 +7,11 @@ import { observeConnectionStatus, resetConnectionBindingForTest } from '../../ap
 import { MissingShellDebug } from './MissingShellDebug'
 
 const f = vi.hoisted(() => ({
-  pod: {} as any, namedExec: false, embedded: false, support: 'supported', access: 'denied', image: undefined as string | undefined,
+  pod: {} as any, installation: {} as Record<string, unknown>, namedExec: false, embedded: false, support: 'supported', access: 'denied', image: undefined as string | undefined,
   recheck: vi.fn(), open: vi.fn(), copy: vi.fn(), probe: vi.fn(),
 }))
 vi.mock('../../context/NavCustomization', () => ({ useNavCustomization: () => ({ embedded: f.embedded }) }))
-vi.mock('../../contexts/CapabilitiesContext', () => ({ useCapabilitiesContext: () => ({}), useNamespacedCapabilities: () => ({ podDebugImage: f.image }) }))
+vi.mock('../../contexts/CapabilitiesContext', () => ({ useCapabilitiesContext: () => f.installation, useNamespacedCapabilities: () => ({ podDebugImage: f.image }) }))
 vi.mock('../../api/client', async original => ({ ...await original<typeof import('../../api/client')>(), useResource: () => ({ data: f.pod }) }))
 vi.mock('../../api/podDebug', () => ({ usePodDebugAccess: (...args: unknown[]) => {
   f.probe(...args)
@@ -29,7 +29,7 @@ const button = (label: string) => [...host.querySelectorAll('button')].find(b =>
 beforeEach(() => {
   vi.clearAllMocks()
   resetConnectionBindingForTest()
-  Object.assign(f, { embedded: false, namedExec: false, support: 'supported', access: 'denied', image: undefined,
+  Object.assign(f, { installation: {}, embedded: false, namedExec: false, support: 'supported', access: 'denied', image: undefined,
     pod: { apiVersion: 'v1', kind: 'Pod', metadata: {uid:'uid-1', namespace:'payments', name:'checkout'},
       spec: {containers:[{name:'app'}]}, status:{phase:'Running',containerStatuses:[{name:'app', state:{running:{}}}] } } })
   host = document.createElement('div')
@@ -56,7 +56,7 @@ it('copies the precise access request and rechecks an updated grant', async () =
   render()
   await act(async () => button('Copy access request')!.click())
   expect(button('Copied')).toBeDefined()
-  expect(f.copy).toHaveBeenCalledWith('Could you grant me permission to update pods/ephemeralcontainers for Pod checkout in namespace payments? I need to add a debug container to troubleshoot app.')
+  expect(f.copy).toHaveBeenCalledWith('Could you grant me permission to update pods/ephemeralcontainers for Pod checkout in namespace payments? I need to troubleshoot container app. Please limit the rule to resourceNames: ["checkout"].')
   act(() => button('Recheck access')!.click())
   expect(f.recheck).toHaveBeenCalledOnce()
   f.access='allowed'; render()
@@ -111,4 +111,35 @@ it('supplies named-only exec to the Pod header and existing terminals independen
   act(() => root.render(<Consumer/>))
   expect(host.textContent).toBe('Terminal Reopen ')
   expect(f.probe.mock.lastCall?.[4]).toBe(true)
+})
+
+it('identifies where to find the real ServiceAccount when Radar has no signed-in user', async () => {
+  f.installation = { configManagement: 'operator', deployment: { mode: 'in-cluster' } }
+  render()
+  await act(async () => button('Copy access request')!.click())
+  const [request] = f.copy.mock.lastCall!
+  expect(request).toContain('the ServiceAccount used by this Radar installation')
+  expect(request).toContain('running Radar Pod’s namespace and its spec.serviceAccountName')
+})
+
+it('explains how to start a debugger outside a hosted session without issuing a named check', () => {
+  f.embedded = true
+  render()
+  expect(host.textContent).toContain('standalone Radar')
+  expect(f.probe.mock.lastCall?.[3]).toBe(false)
+})
+
+it.each(['unknown', 'unavailable'])('rechecks hosted exec access to a running debugger when %s', state => {
+  f.embedded = true
+  f.access = state
+  f.pod.spec.ephemeralContainers = [{ name: 'debugger', image: 'tools', targetContainerName: 'app' }]
+  f.pod.status.ephemeralContainerStatuses = [{ name: 'debugger', state: { running: {} } }]
+  render()
+  expect(f.probe.mock.lastCall?.slice(3, 5)).toEqual([true, true])
+  expect(button('Copy access request')).toBeUndefined()
+  act(() => button('Recheck access')!.click())
+  expect(f.recheck).toHaveBeenCalledOnce()
+  f.namedExec = true
+  render()
+  expect(button('Open debug terminal')).toBeDefined()
 })

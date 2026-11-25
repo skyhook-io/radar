@@ -5,7 +5,7 @@ import { PolicySection } from './PolicySection'
 import type { PolicyResourceResponse } from '../../../types/policy'
 import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink, useOperationalIssuesShown, PodAggregateResources } from '../../ui/drawer-components'
 import { SUBSTRATE_GROUP, SUBSTRATE_WORKER_POOL_LABEL } from '../resource-utils-agent-runtimes'
-import { formatResources, formatDuration, getPodProblems, getPodPhaseDisplay, healthColors, SEVERITY_DOT_COLOR, getDefaultContainerName, getExecContainerNames, getRunningEphemeralContainers, getInitContainerNames, getLogContainerNames } from '../resource-utils'
+import { formatResources, formatDuration, getPodProblems, getPodPhaseDisplay, healthColors, SEVERITY_DOT_COLOR, getDefaultContainerName, getExecContainerNames, getRunningEphemeralContainers, formatAge, getInitContainerNames, getLogContainerNames } from '../resource-utils'
 import { getResourceStatusColor, SEVERITY_BORDER } from '../../../utils/badge-colors'
 import {
   rbacVerbBadgeClass,
@@ -700,7 +700,7 @@ export function PodRenderer({
             <div key={container.name} className="card-inner flex items-center gap-2 p-3">
               <div className="min-w-0 flex-1">
                 <div className="break-all font-mono text-sm text-theme-text-primary">{container.name}</div>
-                <div className="break-all text-xs text-theme-text-secondary">{container.image}{container.targetContainerName && <> · Target: {container.targetContainerName}</>}</div>
+                <div className="break-all text-xs text-theme-text-secondary">{container.image}{container.startedAt && <> · started {formatAge(container.startedAt)} ago</>}{container.targetContainerName && <> · Target: {container.targetContainerName}</>}</div>
               </div>
               <button type="button" className="btn-secondary flex shrink-0 items-center gap-1.5 px-2 py-1 text-xs"
                 aria-label={`Open terminal in ${container.name}`} onClick={() => onOpenEphemeralTerminal(container.name, container.image)}>

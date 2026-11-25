@@ -25,7 +25,7 @@ export function MissingShellDebug({ namespace, name, uid, target, connection, ba
   const pod = podQuery.data
   const usable = enabled && !podQuery.error && pod?.metadata.uid === uid && runningPodDebugTargets(pod)?.includes(target)
   const running = usable ? getRunningEphemeralContainers(pod).filter(c => c.targetContainerName === target) : []
-  const { query, support, recheckSupport } = usePodDebugAccess(namespace, name, uid, !!usable && (execOnly ? !!running.length && !canOpenEphemeralTerminal : !running.length && !podDebugImage), execOnly)
+  const { query, support, recheckSupport } = usePodDebugAccess(namespace, name, uid, !!usable && (execOnly ? !!running.length && !canOpenEphemeralTerminal : !running.length && !podDebugImage), execOnly, usable && !execOnly && !running.length ? podDebugImage : undefined)
   const openTerminal = useOpenTerminal()
   const [choice, setChoice] = useState('')
   const [copied, setCopied] = useState<'copied' | 'manual'>()
@@ -39,13 +39,12 @@ export function MissingShellDebug({ namespace, name, uid, target, connection, ba
   if (pod.metadata.uid !== uid) return <p className="text-xs text-theme-text-secondary">This Pod was replaced. Open its details to start a new terminal.</p>
   if (!usable) return null
   if (running.length && support === 'supported' && (!execOnly || canOpenEphemeralTerminal || (!query.error && query.data?.exec))) {
-    const newestFirst = [...running].reverse()
-    const selected = newestFirst.find(c => c.name === choice) ?? newestFirst[0]
+    const selected = running.find(c => c.name === choice) ?? running[0]
     return <div className="flex w-full min-w-0 max-w-md flex-col items-center gap-2">
       <p className="text-xs text-theme-text-secondary">{running.length === 1 ? 'A debug container is already running' : `${running.length} debug containers are running`} for <code>{target}</code>.</p>
       {running.length > 1 && <select aria-label="Running debug container" className="w-full min-w-0 max-w-full rounded border border-theme-border bg-theme-surface px-2 py-1 text-xs"
         value={selected.name} onChange={event => setChoice(event.target.value)}>
-        {newestFirst.map(c => <option key={c.name} value={c.name}>{c.startedAt && `${formatAge(c.startedAt)} ago · `}{c.name}</option>)}
+        {running.map(c => <option key={c.name} value={c.name}>{c.startedAt && `${formatAge(c.startedAt)} ago · `}{c.name}</option>)}
       </select>}
       <div className="max-w-full text-xs text-theme-text-tertiary [overflow-wrap:anywhere]">
         <div><code>{selected.name}</code></div>
@@ -57,7 +56,15 @@ export function MissingShellDebug({ namespace, name, uid, target, connection, ba
       }}><Terminal className="h-3.5 w-3.5"/>Open debug terminal</button>
     </div>
   }
-  if (execOnly) return null
+  if (execOnly) {
+    if (running.length && support === 'supported' && !canOpenEphemeralTerminal) {
+      return <div className="flex flex-col items-center gap-2 text-xs text-theme-text-secondary">
+        <p>{query.isFetching ? 'Checking whether you can open this debugger…' : query.data?.state === 'unavailable' && !query.error ? 'A debugger is already running. Ask your administrator to check your Pod exec access and whether this Radar allows exec.' : 'Radar couldn’t verify terminal access to this running debugger.'}</p>
+        {!query.isFetching && <button className="btn-secondary rounded px-2 py-1" onClick={() => void query.refetch()}>Recheck access</button>}
+      </div>
+    }
+    return <p className="max-w-md text-xs text-theme-text-secondary">To start a new debug container, open this Pod in standalone Radar or use <code>kubectl debug</code> with a Kubernetes identity that can update this Pod.</p>
+  }
   const access = query.error ? undefined : query.data
   const allowedImage = access?.state === 'allowed' ? access.image :
     access?.state === 'denied' || access?.state === 'unavailable' ? undefined : podDebugImage
@@ -72,12 +79,12 @@ export function MissingShellDebug({ namespace, name, uid, target, connection, ba
     </div>
   }
   if (query.isPending && !query.error) return <p className="text-xs text-theme-text-secondary">Checking access for this Pod…</p>
-  if (access?.state === 'unavailable') return null
+  if (access?.state === 'unavailable') return <p className="max-w-md text-xs text-theme-text-secondary">A debug terminal is unavailable for this Pod. Ask your administrator to check Pod exec access and whether exec is enabled on this Radar.</p>
   const denied = access?.state === 'denied'
-  const requester = username ? `Kubernetes user ${username}` : configManagement === 'operator' && deployment?.mode === 'in-cluster' ? 'Radar’s Kubernetes service account' : 'me'
-  const owner = pod.metadata.ownerReferences?.find(ref => ref.controller)
-  const purpose = owner ? `${target} in ${owner.kind} ${owner.name}` : target
-  const request = `Could you grant ${requester} permission to update pods/ephemeralcontainers for Pod ${name} in namespace ${namespace}? I need to add a debug container to troubleshoot ${purpose}.`
+  const sharedServiceAccount = !username && configManagement === 'operator' && deployment?.mode === 'in-cluster'
+  const requester = username ? `Kubernetes user ${username}` : sharedServiceAccount ? 'the ServiceAccount used by this Radar installation' : 'me'
+  const subjectDetails = sharedServiceAccount ? ' For the ServiceAccount subject, use the running Radar Pod’s namespace and its spec.serviceAccountName.' : ''
+  const request = `Could you grant ${requester} permission to update pods/ephemeralcontainers for Pod ${name} in namespace ${namespace}? I need to troubleshoot container ${target}. Please limit the rule to resourceNames: ["${name}"].${subjectDetails}`
   return <div className="flex max-w-md flex-col items-center gap-2 text-xs text-theme-text-secondary">
     <p>{denied ? <>You don’t have permission to add a debug container to this Pod. Copy an access request for your cluster administrator.</>
       : <>Radar couldn’t verify whether you can add a debug container to <code>{namespace}/{name}</code>.</>}</p>
