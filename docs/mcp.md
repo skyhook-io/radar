@@ -1553,13 +1553,38 @@ it does not scale it. These references carry API group and namespace identity,
 are filtered by the caller's reference permissions, and do not establish that
 a controller has successfully reconciled the dependency.
 
+In `get_resource` and REST AI resource context, `dependencies`, `dependents`,
+`exposedBy`, `backends`, `selectedBy`, `protects`, `healthChecks`,
+`stagedPolicies`, `monitors`, `monitorTargets`, `scaledBy`, `managedBy`,
+`ingressSummary.backendServices` and `cronJobSummary.activeJobs` each preview up
+to 20 distinct readable references. Radar samples API groups and kinds in turn.
+A readable top controller has a reserved place in `managedBy`. A field marked
+`budget_exceeded` in `resourceContext.omitted` has an unknown total. Radar
+either found another readable reference or left a permission tuple unchecked
+after 80 distinct (group, kind, namespace) decisions for that field. Relationship
+sources can make additional checks while collecting candidates. Even an empty
+preview can carry this marker. MCP names the clipped fields in one warning. An explicit denial records `rbac_denied`
+and a failed check records `unavailable`. These reasons can appear together.
+Unreadable spec generators leave no individual trace in `managedBy`.
+
+Clipped relationship previews have no pagination. For example, to investigate
+Kustomizations consuming a GitRepository named `platform` in `flux-system`,
+call `search` with `query="kind:Kustomization"` and the CEL filter below.
+Set `namespace` to a known **consumer** namespace to narrow the search.
+Check the search coverage and hit limit (500 maximum).
+
+```cel
+has(spec.sourceRef) && spec.sourceRef.kind == "GitRepository" &&
+spec.sourceRef.name == "platform" &&
+((has(spec.sourceRef.namespace) && spec.sourceRef.namespace != "")
+  ? spec.sourceRef.namespace : metadata.namespace) == "flux-system"
+```
+
 Storage context uses the same caller-scoped Storage family answers as the drawer. A PVC depends on its
 declared PV and StorageClass, including a Pending claim with no volume yet; a PV
 depends on its StorageClass and lists its claim as a dependent; a StorageClass
-lists its PVs and the claims that declare it. For these three kinds the lists
-are deduplicated and capped at 20 readable references, filled round-robin across
-kinds so a StorageClass with hundreds of claims still lists its volumes; a
-capped or partially checked list carries `omitted: budget_exceeded`. When Radar
+lists its PVs and the claims that declare it. Sampling across kinds leaves room
+for volumes even when a StorageClass has hundreds of readable claims. When Radar
 is still loading volumes or claims, or doesn't collect claims in every namespace,
 a StorageClass's `dependents` are marked `cache_cold` or `unavailable`: an empty
 list then doesn't mean the class is unused. These are declarations, not proof
@@ -1572,10 +1597,10 @@ HPA `hpaSummary.metrics` matches current values to targets by source and selecto
 Resource context exposes routing direction through `exposedBy` (upstream
 resources routing to this resource, including entrypoints reached through a
 selecting Service) and `backends` (resources this routes to). The compatibility
-field `exposes` is their union and does not imply a direction. Pod containment
+field `exposes` is the deduplicated union of both displayed previews (up to
+40 references) and inherits omissions from either direction. Pod containment
 shortcuts on Deployments and Nodes are excluded from routing backends. All three
-fields carry exact group/kind/namespace/name references and apply the caller's
-reference permissions independently. Monitoring uses `monitors` and
+fields carry exact group/kind/namespace/name references readable by the caller. Monitoring uses `monitors` and
 `monitorTargets`; policy selections use `protects`, while non-enforcing staged
 policies use `stagedPolicies` rather than `selectedBy`. Cluster API Clusters
 expose their `healthChecks`; a MachineHealthCheck's Cluster is a dependency.

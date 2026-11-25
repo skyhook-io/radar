@@ -1291,6 +1291,9 @@ func readMCPResource(ctx context.Context, input getResourceInput, tier resourcec
 		// a Pod/template divergence note, because a bare Pod whose spec
 		// admission rewrote reads as the template's intent.
 		warnings = objectWarnings(rawObj, resourceCtx)
+		if warning := relationshipPreviewWarning(resourceCtx); warning != "" {
+			warnings = append(warnings, warning)
+		}
 	} else if note := issues.TemplateDivergenceNote(mcpTemplateDivergence(ctx, rawObj)); note != "" {
 		warnings = append(warnings, note)
 	}
@@ -3819,4 +3822,28 @@ func objectWarnings(obj runtime.Object, rc *resourcecontext.ResourceContext) []s
 		return k8score.EnrichRuntimeObjectAnsweredWarnings(obj)
 	}
 	return k8score.EnrichRuntimeObjectWarnings(obj)
+}
+
+func relationshipPreviewWarning(rc *resourcecontext.ResourceContext) string {
+	if rc == nil {
+		return ""
+	}
+	var fields []string
+	for _, gap := range rc.Omitted {
+		if gap.Reason != resourcecontext.OmittedBudgetExceeded {
+			continue
+		}
+		switch gap.Field {
+		case "dependencies", "dependents", "exposedBy", "backends", "exposes", "selectedBy",
+			"protects", "healthChecks", "stagedPolicies", "monitors", "monitorTargets", "scaledBy",
+			"managedBy", "ingressSummary.backendServices", "cronJobSummary.activeJobs":
+			fields = append(fields, gap.Field)
+		}
+	}
+	if len(fields) == 0 {
+		return ""
+	}
+	slices.Sort(fields)
+	return "Partial preview of " + strings.Join(fields, ", ") + ". Radar reached its display or access-check limit. The total is unknown. " +
+		"To list more, use search with kind:<Kind> and a CEL filter on the field that refers to this object."
 }

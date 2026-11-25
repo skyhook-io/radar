@@ -22,3 +22,20 @@ func TestObjectWarningsDeferToTheManagerAnswer(t *testing.T) {
 		t.Fatalf("warnings with a manager answer = %q; want none", got)
 	}
 }
+
+func TestResourceRelationshipPreviewWarning(t *testing.T) {
+	rc := &resourcecontext.ResourceContext{Omitted: []resourcecontext.OmittedField{
+		{Field: "dependents", Reason: resourcecontext.OmittedRBACDenied},
+		{Field: "backends", Reason: resourcecontext.OmittedUnavailable},
+		{Field: "exposes", Reason: resourcecontext.OmittedCacheCold},
+		{Field: "serviceAccountSummary.secretRefs", Reason: resourcecontext.OmittedBudgetExceeded},
+		{Field: "reflection.mirrors", Reason: resourcecontext.OmittedBudgetExceeded},
+	}}
+	if w := relationshipPreviewWarning(rc); w != "" {
+		t.Fatalf("unclipped relationships: %q", w)
+	}
+	rc.Omitted = append(rc.Omitted, resourcecontext.OmittedField{Field: "exposes", Reason: resourcecontext.OmittedBudgetExceeded}, resourcecontext.OmittedField{Field: "backends", Reason: resourcecontext.OmittedBudgetExceeded})
+	if w := relationshipPreviewWarning(rc); w != "Partial preview of backends, exposes. Radar reached its display or access-check limit. The total is unknown. To list more, use search with kind:<Kind> and a CEL filter on the field that refers to this object." {
+		t.Fatalf("empty clipped preview: %q", w)
+	}
+}
