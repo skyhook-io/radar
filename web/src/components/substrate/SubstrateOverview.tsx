@@ -530,8 +530,16 @@ export function SubstrateOverview({ data, status, onOpenSubject }: SubstrateOver
               </DimensionValue>
             </FactRow>
             <FactRow label="Worker capacity">
-              <DimensionValue tone={worseTone(worseTone(pools.tone, workers.tone), slots.tone)} source="Kubernetes WorkerPools and Substrate API" linkLabel="Pools" onOpen={() => navigate(SUBSTRATE_POOLS_PATH)}>
-                <FleetValue fact={pools} /> · <FleetValue fact={workers} /> · <FleetValue fact={slots} />
+              <DimensionValue
+                tone={worseTone(pools.tone, workers.tone)}
+                source={<>
+                  <div className={`text-sm ${toneTextClass(slots.tone)}`}><FleetValue fact={slots} /></div>
+                  <div>Kubernetes WorkerPools and Substrate API</div>
+                </>}
+                linkLabel="Pools"
+                onOpen={() => navigate(SUBSTRATE_POOLS_PATH)}
+              >
+                <FleetValue fact={pools} /> · <FleetValue fact={workers} />
               </DimensionValue>
             </FactRow>
             <FactRow label="Template startup">

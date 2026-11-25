@@ -29,8 +29,10 @@ export function DimensionValue({
   return (
     <div>
       <span className="inline-flex flex-wrap items-center gap-x-2">
-        <StatusDot tone={tone} />
-        <span className={toneTextClass(tone)}>{children}</span>
+        <span className="inline-flex min-w-0 items-baseline gap-x-2">
+          <StatusDot tone={tone} className="shrink-0" />
+          <span className={toneTextClass(tone)}>{children}</span>
+        </span>
         {onOpen && (
           <button type="button" onClick={onOpen} className="text-xs text-accent-text hover:underline">
             {linkLabel} →

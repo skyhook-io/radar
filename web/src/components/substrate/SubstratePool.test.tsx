@@ -155,6 +155,12 @@ describe('WorkerPool Overview', () => {
     data.pool.placement = { workers: { total: 1, active: 1, draining: 0, unavailable: 0 }, slots: { used: 2, total: 4 }, cpuMillicores: { used: 1, total: 2 }, memoryBytes: { used: 1, total: 2 }, complete: false }
     const partial = overview(data).replace(/<[^>]+>/g, '')
     expect(partial).toContain('≥1 registered · ≥1 accepting actors')
+    data.pool.placement.workers = { total: 1, active: 0, draining: 1, unavailable: 0 }
+    data.pool.placement.slots = { used: 0, total: 0 }
+    const zeroObserved = overview(data).replace(/<[^>]+>/g, '')
+    expect(zeroObserved).toContain('≥1 registered · accepting actors unknown')
+    expect(zeroObserved).toContain('Placement capacityUnknown')
+    expect(zeroObserved).not.toMatch(/≥\s*0/)
     const denied = pool([], 3)
     denied.coverage.workers = { state: 'denied', code: 'denied' }
     const unread = overview(denied, 3).replace(/<[^>]+>/g, '')
