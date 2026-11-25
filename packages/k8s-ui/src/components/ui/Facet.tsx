@@ -64,7 +64,7 @@ export function FacetButton({
   tone?: FacetTone
   tooltip?: ReactNode
   onClick: () => void
-  /** Outside what the current filter shows: still pickable, read quietly. */
+  /** Dims an unselected option while keeping it clickable. Active options keep their usual styling. */
   dim?: boolean
 }) {
   const btn = (
@@ -108,7 +108,15 @@ export function Facet<T extends string>({
   title: string
   icon?: ComponentType<{ className?: string }>
   info?: ReactNode
-  options: { value: T; label: string; count: number; tone?: FacetTone; tooltip?: ReactNode; dim?: boolean }[]
+  options: {
+    value: T
+    label: string
+    count: number
+    tone?: FacetTone
+    tooltip?: ReactNode
+    /** Dims an unselected option while keeping it clickable. Active options keep their usual styling. */
+    dim?: boolean
+  }[]
   selected: Set<T>
   onToggle: (v: T) => void
   hideZero?: boolean
