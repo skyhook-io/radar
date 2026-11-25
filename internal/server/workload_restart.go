@@ -53,8 +53,27 @@ func parseRestartPreconditions(body []byte) (workloadrestart.Preconditions, erro
 	return review, nil
 }
 
-// handleRestartWorkload reads and patches as the caller, or as Radar on an
-// unauthenticated listener behind requireSameOrigin. A body opts into preconditions.
+// handleRestartWorkload restarts a Deployment, StatefulSet, DaemonSet or Argo
+// Rollout, reading and patching as the caller (as Radar on an unauthenticated
+// listener, behind requireSameOrigin). Every 200 carries message, restartedAt
+// and changed.
+//
+// An empty body keeps the unconditional restart. A body ({uid, resourceVersion?},
+// advertised as workloadRestartPreconditions; an older Radar ignores it, so
+// callers check the flag first) restarts only the reviewed object: each patch is
+// pinned to the UID and to the version Radar just read. Without resourceVersion,
+// a conflict whose version moved is retried up to three times, so status churn
+// doesn't refuse the restart; with it, any change is final. A missing or blank
+// uid, a null or empty version, or an unknown or repeated field is 400 before any
+// Kubernetes call, and a body over 1 KiB is 413.
+//
+// Reviewed refusals: 404 workload_not_found; 409 workload_changed (UID or pinned
+// version changed, or every retry conflicted), workload_terminating,
+// workload_paused, restart_not_applicable (OnDelete or a positive StatefulSet
+// partition: the marker would not restart every pod), and restart_not_stored
+// (admission rewrote or removed the marker; restartedAt is what was stored).
+// changed:false means an equivalent marker, or a Rollout restartAt in the same
+// second or later, already covers the request.
 func (s *Server) handleRestartWorkload(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<10))
 	if err != nil {

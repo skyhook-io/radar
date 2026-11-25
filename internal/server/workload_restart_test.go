@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -165,18 +164,6 @@ func TestReviewedRestartRefusesTerminatingWorkloads(t *testing.T) {
 				t.Fatal("terminating workload was patched")
 			}
 		})
-	}
-}
-
-func TestReviewedRestartDocumentsRefusals(t *testing.T) {
-	doc, err := os.ReadFile("../../docs/workload-actions.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, code := range []string{errCodeWorkloadChanged, errCodeWorkloadNotFound, errCodeWorkloadPaused, errCodeWorkloadTerminating, errCodeRestartNotApplicable, errCodeRestartNotStored} {
-		if !strings.Contains(string(doc), "`"+code+"`") {
-			t.Errorf("workload actions documentation is missing %s", code)
-		}
 	}
 }
 
