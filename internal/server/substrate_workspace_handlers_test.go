@@ -1458,6 +1458,18 @@ func TestSubstrateRowsCarryWorkerImpact(t *testing.T) {
 		t.Errorf("crashed, then on an unavailable worker, then stuck: %v", order)
 	}
 
+	var filtered substrateActorsResponse
+	rec := call(t, s, s.handleSubstrateActors, substrateCall{path: "/api/substrate/actors?attention=1&sort=attention&limit=1&offset=1"}, &filtered)
+	if rec.Code != http.StatusOK || filtered.AttentionCount == nil || *filtered.AttentionCount != 4 || filtered.Total == nil || *filtered.Total != 4 {
+		t.Fatalf("attention filter and pre-page count: %d %+v", rec.Code, filtered)
+	}
+	if len(filtered.Rows) != 1 || filtered.Rows[0].Name != order[1] {
+		t.Fatalf("attention inventory pages after applying the same order: %+v", filtered.Rows)
+	}
+	if filtered.Counts == nil || filtered.Counts.Total <= *filtered.Total {
+		t.Fatalf("reported phase counts should include actors outside the attention filter: %+v", filtered.Counts)
+	}
+
 	var detail substrateActorDetail
 	call(t, s, s.handleSubstrateActor, substrateCall{path: "/a", params: map[string]string{"atespace": "research", "name": "lit-0201"}}, &detail)
 	if detail.WorkerImpact == nil || detail.WorkerImpact.Reading != list.Rows[slices.Index(order, "lit-0201")].WorkerImpact.Reading {

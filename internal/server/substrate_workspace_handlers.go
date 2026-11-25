@@ -350,14 +350,24 @@ func poolOf(u *unstructured.Unstructured, now time.Time) model.Pool {
 	if desired, ok, _ := unstructured.NestedInt64(u.Object, "spec", "replicas"); ok {
 		p.Desired = &desired
 	}
-	p.Ready, _, _ = unstructured.NestedInt64(u.Object, "status", "readyReplicas")
+	if ready, ok, _ := unstructured.NestedInt64(u.Object, "status", "readyReplicas"); ok {
+		p.Ready, p.ReportedReady = ready, &ready
+	} else {
+		p.ReadinessUnreported = true
+	}
+	v := health.SubstrateWorkerPool(u, now)
+	p.Health, p.HealthReason = string(v.Level), v.Reason
 	for _, c := range health.WorkerPoolClasses(u) {
 		if c.Name != "" {
 			p.SandboxClasses = append(p.SandboxClasses, c.Name)
 		}
+		if c.Status == "False" && c.Reason == v.Reason && p.HealthDetail == "" {
+			p.HealthDetail = c.Message
+		}
 	}
-	v := health.SubstrateWorkerPool(u, now)
-	p.Health, p.HealthReason = string(v.Level), v.Reason
+	if v.Reason == "Provisioning stalled" {
+		p.HealthDetail = "The sandbox classes resolved, but the controller reports neither a worker Deployment selector nor worker replicas."
+	}
 	return p
 }
 
@@ -1057,11 +1067,12 @@ type substrateActorsResponse struct {
 	Sources []string `json:"sources"`
 	// Total and Counts are absent when actors could not be read. Counts are
 	// per state, after every filter but state and before paging.
-	Total  *int               `json:"total,omitempty"`
-	Counts *model.StateCounts `json:"counts,omitempty"`
-	Rows   []model.ActorRow   `json:"rows"`
-	Limit  int                `json:"limit"`
-	Offset int                `json:"offset"`
+	AttentionCount *int               `json:"attentionCount,omitempty"`
+	Total          *int               `json:"total,omitempty"`
+	Counts         *model.StateCounts `json:"counts,omitempty"`
+	Rows           []model.ActorRow   `json:"rows"`
+	Limit          int                `json:"limit"`
+	Offset         int                `json:"offset"`
 }
 
 func splitRef(value string) (string, string) {
@@ -1143,6 +1154,10 @@ func (s *Server) handleSubstrateActors(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	counts := model.NewStateCounts()
+	attention := q.Get("attention") == "1"
+	attentionCount := 0
+	now := time.Now()
+	workers := snap.Index().Workers
 	var matched []model.Actor
 	for _, a := range actors {
 		if atespace != "" && a.Atespace != atespace {
@@ -1167,16 +1182,21 @@ func (s *Server) handleSubstrateActors(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		counts.Add(a.State)
+		needsAttention := actorAttentionRank(a, now, workers) < 3
+		if needsAttention {
+			attentionCount++
+		}
+		if attention && !needsAttention {
+			continue
+		}
 		if len(stateFilter) > 0 && !stateFilter[a.State] {
 			continue
 		}
 		matched = append(matched, a)
 	}
-	now := time.Now()
-	workers := snap.Index().Workers
 	sortActors(matched, sortBy, now, workers)
 	total := len(matched)
-	resp.Total, resp.Counts = &total, &counts
+	resp.Total, resp.Counts, resp.AttentionCount = &total, &counts, &attentionCount
 	rc := model.NewResumeContext(templateUIDs(snap), snap.Workers, snap.Coverage.Workers.State == substrateapi.CoverageFull)
 	pods := substrateWorkerPods(s.podListableWorkers(r, snap.Workers))
 	for _, a := range matched[min(offset, total):min(offset+limit, total)] {
@@ -1207,28 +1227,30 @@ func onNode(a model.Actor, node, has string) bool {
 // which may not be served or have lost their sandbox; then stuck in a
 // transition past StuckAfter; then the rest, each newest first. name: by
 // atespace and name. updated (the default) keeps them.
+func actorAttentionRank(a model.Actor, now time.Time, workers map[string]model.Worker) int {
+	if a.State == model.StateCrashed {
+		return 0
+	}
+	if a.Assignment != nil {
+		if wk, ok := workers[a.Assignment.Worker]; ok {
+			switch model.WorkerImpactKind(a, wk) {
+			case model.ImpactUnavailable, model.ImpactRestarted:
+				return 1
+			}
+		}
+	}
+	if model.IsStuck(a, now) {
+		return 2
+	}
+	return 3
+}
+
 func sortActors(actors []model.Actor, by string, now time.Time, workers map[string]model.Worker) {
 	switch by {
 	case "attention":
-		rank := func(a model.Actor) int {
-			if a.State == model.StateCrashed {
-				return 0
-			}
-			if a.Assignment != nil {
-				if wk, ok := workers[a.Assignment.Worker]; ok {
-					switch model.WorkerImpactKind(a, wk) {
-					case model.ImpactUnavailable, model.ImpactRestarted:
-						return 1
-					}
-				}
-			}
-			if model.IsStuck(a, now) {
-				return 2
-			}
-			return 3
-		}
+
 		slices.SortStableFunc(actors, func(a, b model.Actor) int {
-			ra, rb := rank(a), rank(b)
+			ra, rb := actorAttentionRank(a, now, workers), actorAttentionRank(b, now, workers)
 			if ra != rb {
 				return ra - rb
 			}
@@ -2039,7 +2061,21 @@ func (s *Server) substrateTemplateRows(r *http.Request, snap *substrateapi.Snaps
 	pools, poolsCov, poolsClusterWide := s.substratePools(r)
 	in := s.substrateInputs(r, snap, pools, poolsCov, poolsClusterWide, time.Now())
 	poolRows := model.JoinPools(in)
-	return model.TemplateRows(templates, in.Actors, in.ActorsRead, model.KnownPools(pools, in.Workers), in.PoolsUsable || in.WorkersRead, in.PoolsComplete, poolRows), poolsCov
+	rows := model.TemplateRows(templates, in.Actors, in.ActorsRead, model.KnownPools(pools, in.Workers), in.PoolsUsable || in.WorkersRead, in.PoolsComplete, poolRows)
+	if in.ActorsRead {
+		counts := map[model.Ref]int{}
+		workers := snap.Index().Workers
+		for _, actor := range in.Actors {
+			if actorAttentionRank(actor, in.Now, workers) < 3 {
+				counts[actor.Template]++
+			}
+		}
+		for i := range rows {
+			n := counts[model.Ref{Atespace: rows[i].Atespace, Name: rows[i].Name}]
+			rows[i].AttentionCount = &n
+		}
+	}
+	return rows, poolsCov
 }
 
 func (s *Server) handleSubstrateTemplates(w http.ResponseWriter, r *http.Request) {
@@ -2122,8 +2158,9 @@ func (s *Server) handleSubstrateTemplate(w http.ResponseWriter, r *http.Request)
 }
 
 type substratePoolResponse struct {
-	APITier substrateapi.APITier `json:"apiTier"`
-	Pool    model.PoolRow        `json:"pool"`
+	APITier   substrateapi.APITier `json:"apiTier"`
+	Pool      model.PoolRow        `json:"pool"`
+	Attention *model.Attention     `json:"attention,omitempty"`
 	// Workers are the pool's workers with the actors in their slots.
 	Workers []substrateWorkerRow `json:"workers"`
 	// Templates are those whose selector matches this pool: absent when
@@ -2153,7 +2190,7 @@ func (s *Server) handleSubstratePool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.canRead(r, "ate.dev", "workerpools", ref.Namespace, "get") {
-		s.writeError(w, http.StatusForbidden, "no access to WorkerPools in namespace "+ref.Namespace)
+		s.writeErrorCode(w, http.StatusForbidden, substrateapi.CodeDenied, "this read requires get on workerpools.ate.dev in namespace "+ref.Namespace)
 		return
 	}
 	pools, poolsCov, poolsClusterWide := s.substratePools(r)
@@ -2191,7 +2228,11 @@ func (s *Server) handleSubstratePool(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	resp := substratePoolResponse{APITier: tier, Pool: *row, Workers: []substrateWorkerRow{}}
+	in.Service = s.substrateService(r, model.JoinPools(in), in)
+	if ps, ok := in.Service.Pools[ref.Key()]; ok {
+		row.Service = &ps
+	}
+	resp := substratePoolResponse{APITier: tier, Pool: *row, Attention: model.PoolAttention(in, *row), Workers: []substrateWorkerRow{}}
 	resp.Coverage.Pools = poolsCov
 	resp.Coverage.Workers, resp.Coverage.Actors, resp.Coverage.Templates = snap.Coverage.Workers, snap.Coverage.Actors, snap.Coverage.Templates
 	if in.WorkersRead {

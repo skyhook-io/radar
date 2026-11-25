@@ -91,15 +91,15 @@ func TestCrashedKagentSessionsRecoverInKagent(t *testing.T) {
 	}
 }
 
-// Beside other actors, the fleet row keeps its command for them and names
-// kagent for its sessions; each template group follows its own actors.
+// The fleet row names kagent recovery in a mixed group. Its command would
+// target the whole group, so only safe template groups offer commands.
 func TestCrashedKagentAmongOtherActors(t *testing.T) {
 	actors := []Actor{
 		kagentCrashed(kagentSession, "k8s-helper-aa5e9426eb2e", "exit 1"),
 		{Atespace: "research", Name: "a1", Template: Ref{"research", "lang"}, State: StateCrashed, Crash: &Crash{Message: "exit 1"}},
 	}
 	row := find(t, NeedsAttention(Inputs{Actors: actors, ActorsRead: true, Now: now}), RuleCrashedActors)
-	if row.Command != revertCommand || !strings.HasSuffix(row.NextStep, kagentAside) {
+	if row.Command != "" || row.ThenCommand != "" || !strings.HasSuffix(row.NextStep, kagentAside) {
 		t.Errorf("fleet row = %q / %q", row.NextStep, row.Command)
 	}
 	for _, g := range row.Groups {

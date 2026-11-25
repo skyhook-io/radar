@@ -323,12 +323,14 @@ export interface SubstrateK8sPool {
   desired?: number
   /** status.readyReplicas: Kubernetes' own claim, which can lag the Pods. Prefer pods.ready when present. */
   ready: number
+  reportedReady?: number
   /** The pool's worker Pods in Radar's cache; absent when the caller can't list Pods there or the cache doesn't hold them. */
   pods?: SubstratePoolPods
   sandboxClasses?: string[]
   /** Radar's WorkerPool verdict (pkg/health). */
   health: string
   healthReason: string
+  healthDetail?: string
   createTime?: string
 }
 
@@ -440,6 +442,7 @@ export interface SubstrateTemplateRow {
   golden: SubstrateGolden
   /** Absent when actors were not read. */
   actors?: SubstrateStateCounts
+  attentionCount?: number
   /**
    * Pools the selector matches. null when Radar cannot say (no pool list, or
    * none of a partial list matches); [] only when the list is complete and
@@ -706,6 +709,8 @@ export interface SubstrateWorkspace {
 export type SubstrateAtespaceRead = 'full' | 'partial' | 'denied' | 'unread'
 
 export interface SubstrateActorsQuery {
+  /** 1 selects reported crashes, worker disruptions and stuck transitions. */
+  attention?: 1
   atespace?: string
   /** name, or atespace/name */
   template?: string
@@ -746,6 +751,7 @@ export interface SubstrateActors {
   total?: number
   /** Per state, after every filter but state, before paging. */
   counts?: SubstrateStateCounts
+  attentionCount?: number
   rows: SubstrateActorRow[]
   limit: number
   offset: number
@@ -1040,6 +1046,7 @@ export interface SubstrateTemplate {
 export interface SubstratePool {
   apiTier: SubstrateAPITier
   pool: SubstratePoolRow
+  attention?: SubstrateAttention
   workers: SubstrateWorkerRow[]
   /** Templates whose selector matches this pool; absent when templates were not read, [] when none. */
   templates?: SubstrateRef[]

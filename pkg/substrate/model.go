@@ -289,6 +289,11 @@ type Pool struct {
 	// Ready is status.readyReplicas, the worker Pods Kubernetes calls ready.
 	// It can lag the Pods; Pods is what Radar's cache holds now.
 	Ready int64 `json:"ready"`
+	// ReportedReady preserves whether the controller actually wrote readyReplicas.
+	ReportedReady *int64 `json:"reportedReady,omitempty"`
+	// ReadinessUnreported means status omitted readyReplicas. A collected Pod
+	// count still answers readiness independently.
+	ReadinessUnreported bool `json:"-"`
 	// Pods counts the pool's worker Pods in Radar's cache; absent when the
 	// caller cannot list Pods in the namespace or the cache does not list
 	// them.
@@ -297,6 +302,7 @@ type Pool struct {
 	// Health and HealthReason are Radar's WorkerPool verdict (pkg/health).
 	Health       string    `json:"health"`
 	HealthReason string    `json:"healthReason"`
+	HealthDetail string    `json:"healthDetail,omitempty"`
 	CreateTime   time.Time `json:"createTime,omitzero"`
 }
 

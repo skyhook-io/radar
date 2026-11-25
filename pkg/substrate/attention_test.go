@@ -521,3 +521,24 @@ func TestRestartedWorkerDoesNotRevertDeletingActors(t *testing.T) {
 		t.Errorf("a deleting actor's row = %+v", r)
 	}
 }
+
+func TestPoolFindingUsesControllerDiagnosis(t *testing.T) {
+	broken := Pool{
+		Namespace: "ns", Name: "broken", Desired: i64(3), Health: "unhealthy",
+		HealthReason: "SandboxConfigNotFound", HealthDetail: "SandboxConfig gvisor-v2 was not found.",
+		ReadinessUnreported: true,
+	}
+	in := Inputs{Pools: []Pool{broken}, PoolsUsable: true, Now: now}
+	pools := JoinPools(in)
+	if pools[0].Capacity != "" {
+		t.Fatalf("capacity from unread readiness: %+v", pools[0])
+	}
+	finding := PoolAttention(in, pools[0])
+	if finding == nil || finding.Severity != SeverityCritical || finding.Reading != broken.HealthDetail {
+		t.Fatalf("controller diagnosis: %+v", finding)
+	}
+	fleet := find(t, NeedsAttention(in), finding.ID)
+	if fleet.Severity != finding.Severity || fleet.Reading != finding.Reading {
+		t.Fatalf("fleet and detail differ: %+v vs %+v", fleet, finding)
+	}
+}

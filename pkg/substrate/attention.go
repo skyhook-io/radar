@@ -438,6 +438,7 @@ func crashedActors(in Inputs) []Attention {
 		nextStep, command = kagentStep(sessions, sandboxes, false), ""
 	case len(kagentAll) > 0:
 		nextStep += kagentAsideOf(sessions, sandboxes)
+		command = ""
 	case allMemory:
 		nextStep, command, then = CrashedMemoryNextStep, retemplateCommand, revertCommand
 	}
@@ -881,7 +882,7 @@ func actorsByWorker(actors []Actor) map[string][]Actor {
 
 // workerActors links to the actors on w that its state affects that way.
 func workerActors(w Worker, impact string) Subject {
-	return Subject{Kind: "Actors", Filter: map[string]string{"worker": w.Pod, "impact": impact}}
+	return Subject{Kind: "Actors", Filter: map[string]string{"pool": w.PoolRef().Key(), "worker": w.Pod, "impact": impact}}
 }
 
 // LostActors are the actors assigned to w that ran under an earlier process
@@ -985,6 +986,7 @@ func workerRows(in Inputs) []Attention {
 						row.NextStep, row.Command = kagentStep(sessions, sandboxes, true), ""
 					} else {
 						row.NextStep += kagentAsideOf(sessions, sandboxes)
+						row.Command = ""
 					}
 				}
 				row.Subject = workerActors(w, ImpactRestarted)
@@ -1053,66 +1055,87 @@ func poolConverging(p Pool, now time.Time) (bool, string) {
 // verdict confirms an inventory row or stands alone.
 func poolRows(in Inputs) []Attention {
 	var out []Attention
-	var svc map[string]PoolService
-	if serviceRead(in) {
-		svc = in.Service.Pools
-	}
 	for _, r := range JoinPools(in) {
-		subject := Subject{Kind: "WorkerPool", Namespace: r.Namespace, Name: r.Name}
-		name := r.Namespace + " / " + r.Name
-		ps, hasSvc := svc[r.Ref().Key()]
-		var row *Attention
-		switch r.Capacity {
-		case CapacityShort:
-			desired := *r.Kubernetes.Desired
-			taking := r.Kubernetes.ReadyWorkers()
-			source := "ready"
-			if r.Placement != nil && r.Placement.Complete {
-				taking = int64(r.Placement.Workers.Active)
-				source = "active"
-			}
-			severity := SeverityWarning
-			reading := fmt.Sprintf("%d of %d desired workers are %s.", taking, desired, source)
-			if pods := r.Kubernetes.Pods; pods != nil {
-				if int64(pods.Created) < desired {
-					reading += fmt.Sprintf(" Kubernetes has created %d of %d worker Pods.", pods.Created, desired)
-				}
-				if int64(pods.Ready) != r.Kubernetes.Ready {
-					reading += fmt.Sprintf(" Radar holds %d ready worker Pods; the WorkerPool's status says %d.", pods.Ready, r.Kubernetes.Ready)
-				}
-			}
-			reading += " New and resuming actors may wait or fail to start."
-			if converging, why := poolConverging(*r.Kubernetes, in.Now); converging {
-				reading += " The pool is " + why + ", so this may be temporary."
-			} else if taking == 0 {
-				severity = SeverityCritical
-			}
-			row = &Attention{
-				ID: RulePoolShort + ":" + r.Ref().Key(), Rule: RulePoolShort, Severity: severity,
-				Title:    name + " is short of workers",
-				Reading:  reading,
-				NextStep: "Open the pool: compare its worker Pods with Substrate's worker states to see which side is missing.",
-				Subject:  subject, Count: int(desired - taking),
-			}
-		case CapacityFull:
-			row = &Attention{
-				ID: RulePoolFull + ":" + r.Ref().Key(), Rule: RulePoolFull, Severity: SeverityWarning,
-				Title:    name + " has no free actor slots",
-				Reading:  fmt.Sprintf("None of its %s has a free actor slot, so Substrate places no more actors on it. New actors whose selectors match only this pool cannot start.", plural(r.Placement.Workers.Active, "active worker", "active workers")),
-				NextStep: "Add workers to the pool, or let templates select another pool.",
-				Subject:  subject, Count: r.Placement.Workers.Active,
-			}
-		case CapacityNoRoom:
-			row = noRoomRow(in, r, name, subject)
-		}
-		if hasSvc {
-			row = withPoolVerdict(row, ps, name, subject, r.Ref())
-		}
-		if row != nil {
+		if row := PoolAttention(in, r); row != nil {
 			out = append(out, *row)
 		}
 	}
 	return out
+}
+
+// PoolAttention is the finding for one pool, shared by fleet and detail reads.
+func PoolAttention(in Inputs, r PoolRow) *Attention {
+	subject := Subject{Kind: "WorkerPool", Namespace: r.Namespace, Name: r.Name}
+	name := r.Namespace + " / " + r.Name
+	var ps PoolService
+	var hasSvc bool
+	if serviceRead(in) {
+		ps, hasSvc = in.Service.Pools[r.Ref().Key()]
+	}
+	var row *Attention
+	switch r.Capacity {
+	case CapacityShort:
+		desired := *r.Kubernetes.Desired
+		taking := r.Kubernetes.ReadyWorkers()
+		source := "ready"
+		if r.Placement != nil && r.Placement.Complete {
+			taking = int64(r.Placement.Workers.Active)
+			source = "active"
+		}
+		severity := SeverityWarning
+		reading := fmt.Sprintf("%d of %d desired workers are %s.", taking, desired, source)
+		if pods := r.Kubernetes.Pods; pods != nil {
+			if int64(pods.Created) < desired {
+				reading += fmt.Sprintf(" Kubernetes has created %d of %d worker Pods.", pods.Created, desired)
+			}
+			if !r.Kubernetes.ReadinessUnreported && int64(pods.Ready) != r.Kubernetes.Ready {
+				reading += fmt.Sprintf(" Radar holds %d ready worker Pods; the WorkerPool's status says %d.", pods.Ready, r.Kubernetes.Ready)
+			}
+		}
+		reading += " New and resuming actors may wait or fail to start."
+		if converging, why := poolConverging(*r.Kubernetes, in.Now); converging {
+			reading += " The pool is " + why + ", so this may be temporary."
+		} else if taking == 0 {
+			severity = SeverityCritical
+		}
+		row = &Attention{
+			ID: RulePoolShort + ":" + r.Ref().Key(), Rule: RulePoolShort, Severity: severity,
+			Title:    name + " is short of workers",
+			Reading:  reading,
+			NextStep: "Open the pool: compare its worker Pods with Substrate's worker states to see which side is missing.",
+			Subject:  subject, Count: int(desired - taking),
+		}
+	case CapacityFull:
+		row = &Attention{
+			ID: RulePoolFull + ":" + r.Ref().Key(), Rule: RulePoolFull, Severity: SeverityWarning,
+			Title:    name + " has no free actor slots",
+			Reading:  fmt.Sprintf("None of its %s has a free actor slot, so Substrate places no more actors on it. New actors whose selectors match only this pool cannot start.", plural(r.Placement.Workers.Active, "active worker", "active workers")),
+			NextStep: "Add workers to the pool, or let templates select another pool.",
+			Subject:  subject, Count: r.Placement.Workers.Active,
+		}
+	case CapacityNoRoom:
+		row = noRoomRow(in, r, name, subject)
+	}
+	if hasSvc {
+		row = withPoolVerdict(row, ps, name, subject, r.Ref())
+	}
+	if k := r.Kubernetes; k != nil && k.Health == "unhealthy" {
+		if row == nil {
+			row = &Attention{ID: RulePoolShort + ":" + r.Ref().Key(), Rule: RulePoolShort, Subject: subject}
+		}
+		row.Severity = SeverityCritical
+		row.Title = name + " · " + k.HealthReason
+		if k.HealthDetail != "" {
+			row.Reading = k.HealthDetail
+		}
+		switch k.HealthReason {
+		case "SandboxConfigNotFound":
+			row.NextStep = "Restore the missing SandboxConfig or select an existing configuration for this sandbox class."
+		case "Provisioning stalled":
+			row.NextStep = "Check the Substrate controller logs for worker Deployment creation errors."
+		}
+	}
+	return row
 }
 
 // lackingWords names what a pool's free slots lack, as a reading says it.

@@ -537,7 +537,7 @@ func poolCapacity(r PoolRow) string {
 		}
 		return CapacityFree
 	}
-	if r.Kubernetes != nil && desired >= 0 && r.Kubernetes.ReadyWorkers() < desired {
+	if r.Kubernetes != nil && desired >= 0 && (r.Kubernetes.Pods != nil || !r.Kubernetes.ReadinessUnreported) && r.Kubernetes.ReadyWorkers() < desired {
 		return CapacityShort
 	}
 	return ""
@@ -579,7 +579,8 @@ type TemplateRow struct {
 	Name     string `json:"name"`
 	Golden   Golden `json:"golden"`
 	// Actors is absent when actors were not read.
-	Actors *StateCounts `json:"actors,omitempty"`
+	Actors         *StateCounts `json:"actors,omitempty"`
+	AttentionCount *int         `json:"attentionCount,omitempty"`
 	// MatchingPools are the pools whose labels the template's selector
 	// matches. Null when Radar cannot say: no pool list was read, or none of a
 	// partial list matches. Empty only when the pool list is complete and
