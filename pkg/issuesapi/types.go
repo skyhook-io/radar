@@ -778,8 +778,8 @@ const (
 // history Radar holds, so an empty or short answer does not establish that
 // nothing changed. Present only when Incomplete. CompleteSince is the
 // retained-history boundary, including a later dependent-kind watch when
-// applicable. It can include store-wide activity, so it is sent only to
-// callers who can read the whole cluster.
+// applicable. When events were evicted it dates store-wide activity, so it
+// is then sent only to callers who can read the whole cluster.
 type HistoryCoverage struct {
 	Incomplete    bool               `json:"incomplete"`
 	CompleteSince time.Time          `json:"complete_since,omitzero"`

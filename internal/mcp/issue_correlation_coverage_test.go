@@ -143,8 +143,8 @@ func TestAttachIssueChangeCorrelation_NoOrderForUncachedWorkload(t *testing.T) {
 
 // A kind Radar started watching inside the window holds no record of the
 // changes before that, so "no recent changes" can't be claimed. The reason
-// carries the history, with the point it is complete from only for a caller
-// who can read every namespace.
+// carries the history and the point it is complete from, for a caller limited
+// to some namespaces too: a late watch dates no one's activity.
 func TestAttachIssueChangeCorrelation_KindWatchedLateIsUnknown(t *testing.T) {
 	watchStart := time.Now().Add(-10 * time.Minute).UTC().Truncate(time.Second)
 	t.Cleanup(k8s.SetTestWatchClock(func() time.Time { return watchStart }))
@@ -177,7 +177,7 @@ func TestAttachIssueChangeCorrelation_KindWatchedLateIsUnknown(t *testing.T) {
 		perms.SetCanI("get", group, resource, "shop", true)
 	}
 	assertAnswer(t, answer(restricted),
-		`{"correlation":{"unknown":{"reason":"history_incomplete"},"history":{"incomplete":true,"reasons":["observation_started_late"]}}}`)
+		`{"correlation":{"unknown":{"reason":"history_incomplete"},"history":{"incomplete":true,"complete_since":"`+since+`","reasons":["observation_started_late"]}}}`)
 }
 
 // "The ResourceQuota changed last" rests on the workload's history covering
