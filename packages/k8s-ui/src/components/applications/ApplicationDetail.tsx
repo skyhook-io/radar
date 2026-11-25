@@ -178,12 +178,13 @@ export type ApplicationView = "overview" | "deploys" | "topology" | "history";
 /** A built-in view, or the id of one of the host's `extraViews`. */
 export type ApplicationDetailView = ApplicationView | (string & {});
 
-/** An app-level view the host supplies, shown as a tab after the built-in ones. */
+/** A host-supplied app tab. Extra tabs follow the built-ins and Cost by default, before `viewOrder` is applied. */
 export interface ApplicationExtraView {
   /** Empty and reserved IDs are ignored. The first registration of each other ID wins.
    *  Reserved even when hidden: `overview`, `deploys`, `topology`, `history`, and `cost`. */
   id: string;
   label: string;
+  /** The shell renders this content inside a padded scroll container. */
   render: () => ReactNode;
 }
 
@@ -215,7 +216,8 @@ export interface AppWorkloadRenderContext {
 
 type BuiltInViewProps = {
   extraViews?: undefined;
-  /** Requested app view. A stale request can display a fallback while selection settles. */
+  /** Pair with onSelectView to control the app view. Omit both for internal selection.
+   *  Select Cost through costViewSelected. A pending selection defers the fallback. */
   selectedView: ApplicationView;
   /** Called on a tab click or to repair a stale view with history replacement.
    * A click selects application scope, so a URL host clears the workload key in the same navigation. */
@@ -226,7 +228,8 @@ type HostViewProps = {
   /** Host-supplied app-level views selected by id. Single-workload apps
    *  open directly on the workload; use WorkloadView `extraTabs` there. */
   extraViews?: ApplicationExtraView[];
-  /** Requested app view. A stale request can display a fallback while selection settles. */
+  /** Pair with onSelectView to control the app view. Omit both for internal selection.
+   *  Select Cost through costViewSelected. A pending selection defers the fallback. */
   selectedView: ApplicationDetailView;
   /** Called on a tab click or to repair a stale view with history replacement.
    * A click selects application scope, so a URL host clears the workload key in the same navigation. */
@@ -258,10 +261,10 @@ type ApplicationDetailBaseProps = {
   costViewSelected?: boolean;
   /** Select Cost in application scope. A URL host clears a pending workload key in the same navigation. */
   onSelectCostView?: () => void;
-  /** Allowlist of built-in views. By default all available built-in views are offered.
-   *  Deploys requires renderDeploys and this allowlist also controls its single-workload tab.
-   *  A removed view falls back in tab order. Cost alone is the default once
-   *  selection settles, except while a controlled offline link is unresolved. */
+  /** Allowlist of built-in views, defaulting to all available. Deploys requires renderDeploys
+   *  and this allowlist also controls its single-workload tab. renderCostView controls Cost.
+   *  Once selection settles, an unavailable view falls back to the first visible non-Cost
+   *  tab in display order, or to Cost when it is the only tab. */
   builtInViews?: ApplicationView[];
   /** Delay stale URL repairs while views or workload evidence load. While a
    *  workload link is pending, suppress app-level host content and Deploys content. */
@@ -269,10 +272,10 @@ type ApplicationDetailBaseProps = {
   /** Show versions on inline pills. Up to four distinct environments use pills, excluding the aggregate entry.
    *  With more environments, the picker always includes available versions. */
   showEnvironmentVersions?: boolean;
-  /** The active instance has nothing live to show (not deployed, its cluster
-   *  offline, …): Overview, Topology and Timeline show this instead. Deploys
-   *  and extra views still render and stale URL selections are preserved until workload
-   *  evidence is available. Omit it or pass null or false for live instances. */
+  /** Puts the instance in offline mode. Health is unknown unless the host supplies status.
+   *  Live facts and workload scope are hidden. Overview, Topology and Timeline show this notice.
+   *  Deploys and extra views can still render in app scope. A pending workload link takes
+   *  precedence and shows the notice until it can resolve. Omit or pass null or false for live instances. */
   liveUnavailableNotice?: ReactNode;
   /** Render host-scoped operational issues for the app overview. */
   renderOverviewIssues?: () => ReactNode;
@@ -348,9 +351,8 @@ type ApplicationDetailBaseProps = {
   /** Host-reported health for the header pill, including offline instances.
    *  For jobs, also hides the duplicate Runtime fact. */
   status?: AppHostStatus;
-  /** Order the visible tabs by ID, including `cost`. A removed view falls back
-   *  to the first offered non-Cost view once selection settles.
-   *  Cost has separate selection props. */
+  /** Show the listed tab IDs first, including `cost`. Unlisted tabs follow in their
+   *  default order (built-ins, Cost, then extraViews in host order). */
   viewOrder?: string[];
 } & SelectionProps;
 
