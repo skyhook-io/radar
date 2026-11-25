@@ -2814,6 +2814,11 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       return getStorageClassExpansion(resource)
     case 'automount':
       return getServiceAccountAutomount(resource)
+    case 'mutationCount':
+      return _isApiGroup(resource.apiVersion, 'admissionregistration.k8s.io') && Array.isArray(resource.spec?.mutations) ? String(resource.spec.mutations.length) : ''
+    case 'reinvocationPolicy':
+    case 'policyName':
+      return _isApiGroup(resource.apiVersion, 'admissionregistration.k8s.io') ? resource.spec?.[column] ?? '' : ''
     case 'policyTypes':
       return getNetworkPolicyTypes(resource)
     case 'types':

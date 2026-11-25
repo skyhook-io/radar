@@ -9,7 +9,7 @@ export interface ResourceCategory {
 // Known core resource categories
 const WORKLOAD_KINDS = ['Pod', 'Deployment', 'Rollout', 'DaemonSet', 'StatefulSet', 'ReplicaSet', 'Job', 'CronJob']
 const NETWORKING_KINDS = ['Service', 'Ingress', 'IngressClass', 'NetworkPolicy', 'Endpoints', 'EndpointSlice']
-const CONFIG_KINDS = ['ConfigMap', 'Secret', 'HorizontalPodAutoscaler', 'PodDisruptionBudget', 'LimitRange', 'ResourceQuota', 'PriorityClass', 'RuntimeClass', 'Lease', 'MutatingWebhookConfiguration', 'ValidatingWebhookConfiguration', 'ValidatingAdmissionPolicy', 'ValidatingAdmissionPolicyBinding']
+const CONFIG_KINDS = ['ConfigMap', 'Secret', 'HorizontalPodAutoscaler', 'PodDisruptionBudget', 'LimitRange', 'ResourceQuota', 'PriorityClass', 'RuntimeClass', 'Lease', 'MutatingWebhookConfiguration', 'ValidatingWebhookConfiguration', 'ValidatingAdmissionPolicy', 'ValidatingAdmissionPolicyBinding', 'MutatingAdmissionPolicy', 'MutatingAdmissionPolicyBinding']
 const STORAGE_KINDS = ['PersistentVolumeClaim', 'PersistentVolume', 'StorageClass', 'VolumeAttachment']
 const ACCESS_CONTROL_KINDS = ['ServiceAccount', 'Role', 'ClusterRole', 'RoleBinding', 'ClusterRoleBinding']
 const CLUSTER_KINDS = ['Node', 'Namespace', 'Event', 'CustomResourceDefinition']
@@ -57,6 +57,8 @@ export const CORE_RESOURCES: APIResource[] = [
 
 // These identities are built-in but must not become always-present sidebar rows.
 const ADDITIONAL_BUILTIN_IDENTITIES: Record<string, string> = {
+  mutatingadmissionpolicy: 'admissionregistration.k8s.io', mutatingadmissionpolicies: 'admissionregistration.k8s.io',
+  mutatingadmissionpolicybinding: 'admissionregistration.k8s.io', mutatingadmissionpolicybindings: 'admissionregistration.k8s.io',
   endpoints: '',
   controllerrevision: 'apps', controllerrevisions: 'apps',
   resourceclaim: 'resource.k8s.io', resourceclaims: 'resource.k8s.io',
@@ -144,7 +146,6 @@ export function categorizeResources(resources: APIResource[]): ResourceCategory[
   const storage = coreResources.filter(r => STORAGE_KINDS.includes(r.kind))
   const accessControl = coreResources.filter(r => ACCESS_CONTROL_KINDS.includes(r.kind))
   const cluster = coreResources.filter(r => CLUSTER_KINDS.includes(r.kind))
-  const otherKubernetesAPIs = coreResources.filter(r => r.featured)
 
   const crds = uniqueResources.filter(r => r.isCrd)
   const crdGroups = new Map<string, APIResource[]>()
@@ -160,7 +161,8 @@ export function categorizeResources(resources: APIResource[]): ResourceCategory[
   addToCategory('Storage', storage)
   addToCategory('Access Control', accessControl)
   addToCategory('Cluster', cluster)
-  addToCategory('Other Kubernetes APIs', otherKubernetesAPIs)
+  const categorized = new Set([...categoryMap.values()].flat())
+  addToCategory('Other Kubernetes APIs', coreResources.filter(r => r.featured && !categorized.has(r)))
 
   for (const [group, groupResources] of crdGroups) {
     addToCategory(formatGroupName(group), groupResources)

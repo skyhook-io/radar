@@ -189,6 +189,8 @@ import {
   WebhookConfigRenderer,
   ValidatingAdmissionPolicyRenderer,
   ValidatingAdmissionPolicyBindingRenderer,
+  MutatingAdmissionPolicyRenderer,
+  MutatingAdmissionPolicyBindingRenderer,
   EventRenderer,
   EndpointSliceRenderer,
   GenericRenderer,
@@ -522,6 +524,14 @@ export interface RendererOverrides {
     data: any
     onNavigate?: (ref: ResourceRef) => void
   }>
+  MutatingAdmissionPolicyRenderer?: React.ComponentType<{
+    data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
+  MutatingAdmissionPolicyBindingRenderer?: React.ComponentType<{
+    data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
 }
 
 // Known resource types with specific renderers (module-level to avoid re-allocation)
@@ -589,6 +599,7 @@ const KNOWN_KINDS = new Set([
   'peerauthentications', 'authorizationpolicies',
   'mutatingwebhookconfigurations', 'validatingwebhookconfigurations',
   'validatingadmissionpolicies', 'validatingadmissionpolicybindings',
+  'mutatingadmissionpolicies', 'mutatingadmissionpolicybindings',
   'ingressclasses', 'priorityclasses', 'runtimeclasses', 'leases', 'limitranges',
   'knativeservices', 'knativeconfigurations', 'knativerevisions', 'knativeroutes',
   'brokers', 'triggers', 'eventtypes', 'pingsources', 'apiserversources', 'containersources', 'sinkbindings',
@@ -821,6 +832,7 @@ export function ResourceRendererDispatch({
     || kind === 'rayjobs' || kind === 'rayclusters' || kind === 'rayservices' || kind === 'admissionchecks' || kind === 'provisioningrequests'
     || kind === 'machines' || kind === 'machinesets' || kind === 'workloads' || kind === 'localqueues' || kind === 'clusterqueues'
     || kind === 'validatingadmissionpolicies' || kind === 'validatingadmissionpolicybindings'
+    || kind === 'mutatingadmissionpolicies' || kind === 'mutatingadmissionpolicybindings'
     || kind === 'certificatesigningrequests'
     || kind === 'externalartifacts' || kind === 'artifactgenerators'
     || kind === 'nodes' || kind === 'volumes'
@@ -876,7 +888,8 @@ export function ResourceRendererDispatch({
     || (kind === 'admissionchecks' && isKueueQueueResource(data))
     || (kind === 'provisioningrequests' && ['autoscaling.x-k8s.io/v1', 'autoscaling.x-k8s.io/v1beta1'].includes(data?.apiVersion))
     || ((kind === 'localqueues' || kind === 'clusterqueues') && isKueueQueueResource(data))
-    || ((kind === 'validatingadmissionpolicies' || kind === 'validatingadmissionpolicybindings')
+    || ((kind === 'validatingadmissionpolicies' || kind === 'validatingadmissionpolicybindings'
+    || kind === 'mutatingadmissionpolicies' || kind === 'mutatingadmissionpolicybindings')
       && isApiGroup(data?.apiVersion, 'admissionregistration.k8s.io'))
     || (kind === 'certificatesigningrequests' && isCertificateSigningRequest(data))
     || (kind === 'externalartifacts' && isApiGroup(data?.apiVersion, 'source.toolkit.fluxcd.io'))
@@ -952,7 +965,9 @@ export function ResourceRendererDispatch({
   const HTTPRouteComp = rendererOverrides?.HTTPRouteRenderer ?? HTTPRouteRenderer
   const RolloutComp = rendererOverrides?.RolloutRenderer ?? RolloutRenderer
   const ValidatingAdmissionPolicyComp = rendererOverrides?.ValidatingAdmissionPolicyRenderer ?? ValidatingAdmissionPolicyRenderer
+  const MutatingAdmissionPolicyComp = rendererOverrides?.MutatingAdmissionPolicyRenderer ?? MutatingAdmissionPolicyRenderer
   const ValidatingAdmissionPolicyBindingComp = rendererOverrides?.ValidatingAdmissionPolicyBindingRenderer ?? ValidatingAdmissionPolicyBindingRenderer
+  const MutatingAdmissionPolicyBindingComp = rendererOverrides?.MutatingAdmissionPolicyBindingRenderer ?? MutatingAdmissionPolicyBindingRenderer
   const showsReflection = (kind === 'configmaps' || kind === 'secrets') && hasReflectorDetails(data, relationships?.reflection)
   const reflectionRefs = showsReflection ? [relationships?.reflection?.source, ...(relationships?.reflection?.mirrors ?? [])].filter((ref): ref is ResourceRef => !!ref) : []
   const withoutReflection = (refs: ResourceRef[] | undefined) => refs?.filter(ref => !reflectionRefs.some(mirror => mirror.kind === ref.kind && mirror.namespace === ref.namespace && mirror.name === ref.name && (mirror.group ?? '') === (ref.group ?? '')))
@@ -1154,7 +1169,9 @@ export function ResourceRendererDispatch({
         {kind === 'mutatingwebhookconfigurations' && <WebhookConfigRenderer data={data} isMutating onNavigate={onNavigate} />}
         {kind === 'validatingwebhookconfigurations' && <WebhookConfigRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'validatingadmissionpolicies' && isApiGroup(data?.apiVersion, 'admissionregistration.k8s.io') && <ValidatingAdmissionPolicyComp data={data} onNavigate={onNavigate} />}
+        {kind === 'mutatingadmissionpolicies' && isApiGroup(data?.apiVersion, 'admissionregistration.k8s.io') && <MutatingAdmissionPolicyComp data={data} onNavigate={onNavigate} />}
         {kind === 'validatingadmissionpolicybindings' && isApiGroup(data?.apiVersion, 'admissionregistration.k8s.io') && <ValidatingAdmissionPolicyBindingComp data={data} onNavigate={onNavigate} />}
+        {kind === 'mutatingadmissionpolicybindings' && isApiGroup(data?.apiVersion, 'admissionregistration.k8s.io') && <MutatingAdmissionPolicyBindingComp data={data} onNavigate={onNavigate} />}
         {kind === 'ingressclasses' && <IngressClassRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'customresourcedefinitions' && isApiGroup(data?.apiVersion, 'apiextensions.k8s.io') && <CRDComp data={data} onNavigate={onNavigate} />}
         {kind === 'priorityclasses' && <PriorityClassRenderer data={data} />}
@@ -1295,6 +1312,8 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'kafkaconnectors' && isApiGroup(data.apiVersion, 'kafka.strimzi.io')) return getStrimziConnectorStatus(data)
   if ((k === 'kafkas' && isStrimziKafka(data)) || (k === 'kafkanodepools' && isStrimziKafkaNodePool(data))) return getStrimziClusterStatus(data)
   if ((k === 'volumesnapshots' && isVolumeSnapshot(data)) || (k === 'volumesnapshotcontents' && isVolumeSnapshotContent(data))) return getVolumeSnapshotStatus(data)
+  // Native mutating admission policies and bindings expose only their declared configuration.
+  if ((k === 'mutatingadmissionpolicies' || k === 'mutatingadmissionpolicybindings') && isApiGroup(data.apiVersion, 'admissionregistration.k8s.io')) return null
   // A class is configuration with no status of its own.
   if (k === 'volumesnapshotclasses' && isVolumeSnapshotClass(data)) return null
   if (k === 'ipaddresspools' && isMetalLBIPAddressPool(data)) return getMetalLBPoolStatus(data)

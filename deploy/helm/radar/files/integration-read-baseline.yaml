@@ -165,6 +165,13 @@ entries:
     reason: "Includes ACME challenge spec.key/spec.token proof material; no private-key Secret access."
     source: "https://cert-manager.io/docs/reference/api-docs/#acme.cert-manager.io/v1.Challenge"
   - group: "admissionregistration.k8s.io"
+    resources: ["mutatingadmissionpolicies","mutatingadmissionpolicybindings"]
+    scope: Cluster
+    collection: ""
+    decision: withhold
+    reason: "Mutation expressions and selectors can disclose admission rules. An operator can grant their users explicit read access."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "admissionregistration.k8s.io"
     resources: ["mutatingwebhookconfigurations","validatingwebhookconfigurations"]
     scope: Cluster
     collection: ""
