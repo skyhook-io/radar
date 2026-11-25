@@ -444,6 +444,14 @@ function AttentionList({ rows, onNavigate }: { rows: AgentSandboxAttention[]; on
   )
 }
 
+type FactLink = { linkLabel: string; onOpen: () => void } | { linkLabel?: never; onOpen?: never }
+
+function factLink(f: SummaryFact, navigateTo: (path: string) => void, navigate: (ref: ResourceRef) => void): FactLink {
+  if (f.linkLabel && f.listPath) return { linkLabel: f.linkLabel, onOpen: () => navigateTo(f.listPath!) }
+  if (f.linkLabel && f.refTo) return { linkLabel: f.linkLabel, onOpen: () => navigate(f.refTo!) }
+  return {}
+}
+
 export function AgentSandboxOverview({ data, onClearNamespaces, onInspect }: AgentSandboxOverviewProps) {
   const navigateTo = useWorkspaceNavigate()
   const [params] = useSearchParams()
@@ -504,14 +512,7 @@ export function AgentSandboxOverview({ data, onClearNamespaces, onInspect }: Age
                 <FactRow key={f.label} label={f.label}>
                   <DimensionValue
                     tone={f.tone}
-                    linkLabel={f.linkLabel}
-                    onOpen={
-                      f.listPath
-                        ? () => navigateTo(f.listPath!)
-                        : f.refTo
-                          ? () => navigate(f.refTo!)
-                          : undefined
-                    }
+                    {...factLink(f, navigateTo, navigate)}
                     source={
                       f.label === 'Sandboxes' && expiredTotal > 0 ? (
                         <span className="inline-flex flex-wrap items-center gap-x-2">
