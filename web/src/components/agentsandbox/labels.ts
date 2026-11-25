@@ -91,6 +91,8 @@ export type RowTone = Extract<HealthLevel, 'unhealthy' | 'alert' | 'degraded'>
 
 /** What the server's summary says about the objects the lists show. */
 export interface ServerReadings {
+  attentionObjects?: { sandboxes: Set<string>; claims: Set<string>; warmPools: Set<string> }
+  sidebar?: AgentSandboxWorkspaceResponse['sidebar']
   /** Warm pools short because the scheduler can't place their sandboxes. */
   unschedulable: Set<string>
   /**
@@ -118,7 +120,13 @@ export function serverReadings(workspace: AgentSandboxWorkspaceResponse | undefi
     rows.set(k, a)
   }
   const warmPools = new Map(workspace?.warmPools.map((w) => [objectKey("SandboxWarmPool", w.namespace, w.name), w]))
-  return { unschedulable: unschedulablePools(workspace), tones, rows, warmPools }
+  const objects = workspace?.attentionObjects
+  const attentionObjects = objects && {
+    sandboxes: new Set(objects.sandboxes),
+    claims: new Set(objects.claims),
+    warmPools: new Set(objects.warmPools),
+  }
+  return { attentionObjects, sidebar: workspace?.sidebar, unschedulable: unschedulablePools(workspace), tones, rows, warmPools }
 }
 
 /**

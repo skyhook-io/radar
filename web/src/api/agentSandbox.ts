@@ -178,8 +178,6 @@ export interface AgentSandboxSidebar {
   sandboxes: AgentSandboxCount
   claims: AgentSandboxCount
   warmPools: AgentSandboxCount
-  /** The total includes the controller's row, shared by every namespace. */
-  controller: boolean
 }
 
 export interface AgentSandboxWarmPoolRow {
@@ -226,6 +224,8 @@ export interface AgentSandboxWorkspaceResponse {
   /** One list ordered by severity, then rule, then newest first; never grouped by kind. */
   attention: AgentSandboxAttention[]
   attentionTotal: number
+  /** Namespace/name keys in each Needs attention segment, independent of the findings cap. */
+  attentionObjects?: { [K in Exclude<AgentSandboxWorkspaceKey, 'templates'>]: string[] }
   /** Every kind and the controller were read in full: no rows means nothing needs attention. */
   attentionComplete: boolean
   sidebar: AgentSandboxSidebar

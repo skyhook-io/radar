@@ -451,6 +451,7 @@ export function AgentSandboxOverview({ data, onClearNamespaces, onInspect }: Age
 
   const controllerProblem = data.attention.find((a) => a.rule === 'controllerNotRunning')
   const attentionRows = controllerProblem ? data.attention.filter((a) => a.id !== controllerProblem.id) : data.attention
+  const findingsTotal = data.attentionTotal - (controllerProblem ? 1 : 0)
   const facts = overviewFacts(data)
   const totalObjects = (data.counts.sandboxes?.total ?? 0) + (data.counts.claims?.total ?? 0) + (data.counts.warmPools?.total ?? 0)
   const scopeSubtitle =
@@ -492,8 +493,8 @@ export function AgentSandboxOverview({ data, onClearNamespaces, onInspect }: Age
             ) : (
               <AttentionList rows={attentionRows} onNavigate={navigate} />
             )}
-            {data.attentionTotal > data.attention.length && (
-              <p className="mt-2.5 text-xs text-theme-text-tertiary">Showing {data.attention.length} of {data.attentionTotal}.</p>
+            {findingsTotal > attentionRows.length && (
+              <p className="mt-2.5 text-xs text-theme-text-tertiary">Showing {attentionRows.length} of {findingsTotal} findings.</p>
             )}
           </WorkspaceCard>
 

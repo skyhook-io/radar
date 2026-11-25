@@ -49,7 +49,7 @@ describe('Agent Sandbox in the sidebar', () => {
     const { html, agents } = render(SANDBOX_KINDS, ['payments'])
     expect(agents?.tools).toBe('Agent Sandbox')
     expect(agents?.destinations.map((d) => d.label)).toEqual(['Overview', 'Sandboxes', 'Claims', 'Warm pools'])
-    expect(agents?.count).toBe(5)
+    expect(agents?.count).toBe(7)
     // One runtime: the row reads as before, with no section headings.
     expect(html).toMatch(/>Agents<\/span><span[^>]*>Agent Sandbox</)
     expect(html).not.toMatch(/uppercase[^"]*">Sandbox</)
@@ -73,11 +73,11 @@ describe('The Agents row with both runtimes', () => {
     expect(new Set(agents?.destinations.map((d) => d.id)).size).toBe(9)
     expect(html.indexOf('>Substrate</div>')).toBeGreaterThan(-1)
     expect(html.indexOf('>Substrate</div>')).toBeLessThan(html.indexOf('>Sandbox</div>'))
-    // Substrate's 3 attention items and Sandbox's 5 attention items, with hover breakdown and scope.
+    // Substrate's 3 attention items and Sandbox's 7 objects needing attention, with hover breakdown and scope.
     expect(agents).toMatchObject({
-      count: 8,
+      count: 10,
       countLowerBound: false,
-      countTitle: 'Attention items — Substrate: 3 · cluster-wide · Sandbox: 5 · all namespaces',
+      countTitle: 'Attention items — Substrate: 3 · cluster-wide · Sandbox: 7 · all namespaces',
     })
     // The kinds neither runtime has a table for stay under Other kinds, suffixed with their runtime.
     expect(html).toMatch(/Other kinds \(2\)/)
@@ -91,7 +91,7 @@ describe('The Agents row with both runtimes', () => {
     state.sandbox = liveWorkspace({ namespaces: ['payments'] })
     state.substrate = substrateWorkspace()
     const { agents } = render([...SUBSTRATE_KINDS, ...SANDBOX_KINDS], ['payments'])
-    expect(agents?.countTitle).toBe('Attention items — Substrate: 3 · cluster-wide · Sandbox: 5 · namespace payments')
+    expect(agents?.countTitle).toBe('Attention items — Substrate: 3 · cluster-wide · Sandbox: 7 · namespace payments')
     expect(agents?.scopeNote).toBe('Agent Sandbox: Counts for namespace payments · Agent Substrate: cluster-wide')
   })
 })

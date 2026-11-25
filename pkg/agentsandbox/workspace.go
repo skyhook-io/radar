@@ -2,6 +2,7 @@ package agentsandbox
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -217,15 +218,19 @@ type Count struct {
 	LowerBound bool `json:"lowerBound"`
 }
 
-// Sidebar is the badges: the total and each list's rows.
+// Sidebar counts the distinct objects in each list's Needs attention segment.
 type Sidebar struct {
 	Total     Count `json:"total"`
 	Sandboxes Count `json:"sandboxes"`
 	Claims    Count `json:"claims"`
 	WarmPools Count `json:"warmPools"`
-	// Controller: the total includes the controller's row, which is shared by
-	// every namespace rather than about the selected ones.
-	Controller bool `json:"controller"`
+}
+
+// AttentionObjects holds namespace/name keys for the three inventory segments.
+type AttentionObjects struct {
+	Sandboxes []string `json:"sandboxes"`
+	Claims    []string `json:"claims"`
+	WarmPools []string `json:"warmPools"`
 }
 
 // Reading is one object's state.
@@ -279,7 +284,8 @@ type Summary struct {
 	Counts     Counts      `json:"counts"`
 	Attention  []Attention `json:"attention"`
 	// AttentionTotal counts the rows before the cap.
-	AttentionTotal int `json:"attentionTotal"`
+	AttentionTotal   int              `json:"attentionTotal"`
+	AttentionObjects AttentionObjects `json:"attentionObjects"`
 	// AttentionComplete: every kind and the controller were read in full, so
 	// no rows means nothing needs attention.
 	AttentionComplete bool          `json:"attentionComplete"`
@@ -898,6 +904,24 @@ func badge(n int, lowerBound bool) Count {
 	return Count{Count: &n, LowerBound: lowerBound}
 }
 
+func inventoryAttention(items index, findings []Attention, needsAttention func(*unstructured.Unstructured) bool) []string {
+	objects := make(map[string]bool, len(findings))
+	for _, row := range findings {
+		objects[row.Subject.Namespace+"/"+row.Subject.Name] = true
+	}
+	for k, item := range items {
+		if needsAttention(item) {
+			objects[k] = true
+		}
+	}
+	keys := make([]string, 0, len(objects))
+	for k := range objects {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
 // Summarize builds the workspace from one request's reads.
 func Summarize(in Input) Summary {
 	b := &builder{
@@ -949,21 +973,33 @@ func Summarize(in Input) Summary {
 		rows = rows[:maxAttention]
 	}
 	out.Attention = append(out.Attention, rows...)
+	out.AttentionObjects = AttentionObjects{
+		Sandboxes: inventoryAttention(b.sandboxes, sandboxRows, func(u *unstructured.Unstructured) bool {
+			level := health.ReadAgentSandbox(u).Verdict.Level
+			return level != health.LevelHealthy && level != health.LevelNeutral
+		}),
+		Claims: inventoryAttention(b.claims, claimRows, func(u *unstructured.Unstructured) bool {
+			level := health.ReadAgentSandbox(u).Verdict.Level
+			return level == health.LevelDegraded || level == health.LevelUnhealthy
+		}),
+		WarmPools: inventoryAttention(b.pools, poolRows, func(u *unstructured.Unstructured) bool {
+			level := ReadWarmPool(u).Level
+			return level != health.LevelHealthy && level != health.LevelNeutral
+		}),
+	}
 
 	controllerUnread := in.Controller.State == ControllerUnread
 	out.AttentionComplete = in.Sandboxes.Complete && in.Claims.Complete && in.WarmPools.Complete && in.Templates.Complete && !controllerUnread
 
-	// A list's badge is a lower bound when a kind its rows rest on was read
-	// in part: those reads only ever add rows.
+	// Incomplete inventory reads can leave objects out of these sets.
 	sandboxesPartial := !in.Sandboxes.Complete
 	claimsPartial := !in.Claims.Complete || !in.WarmPools.Complete || !in.Templates.Complete
 	poolsPartial := !in.WarmPools.Complete || !in.Templates.Complete
 	out.Sidebar = Sidebar{
-		Total:      badge(out.AttentionTotal, sandboxesPartial || claimsPartial || poolsPartial || controllerUnread),
-		Sandboxes:  badge(len(sandboxRows), sandboxesPartial),
-		Claims:     badge(len(claimRows), claimsPartial),
-		WarmPools:  badge(len(poolRows), poolsPartial),
-		Controller: controller != nil,
+		Total:     badge(len(out.AttentionObjects.Sandboxes)+len(out.AttentionObjects.Claims)+len(out.AttentionObjects.WarmPools), sandboxesPartial || claimsPartial || poolsPartial || controllerUnread),
+		Sandboxes: badge(len(out.AttentionObjects.Sandboxes), sandboxesPartial),
+		Claims:    badge(len(out.AttentionObjects.Claims), claimsPartial),
+		WarmPools: badge(len(out.AttentionObjects.WarmPools), poolsPartial),
 	}
 
 	out.Counts = counts(in)

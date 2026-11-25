@@ -17,7 +17,7 @@ const SCREENS = [
   { kind: SANDBOX_KIND, key: 'sandboxes', label: 'Sandboxes', path: SANDBOXES_PATH, noun: ['sandbox', 'sandboxes'] },
   { kind: SANDBOX_CLAIM_KIND, key: 'claims', label: 'Claims', path: SANDBOX_CLAIMS_PATH, noun: ['claim', 'claims'] },
   { kind: SANDBOX_WARM_POOL_KIND, key: 'warmPools', label: 'Warm pools', path: SANDBOX_WARM_POOLS_PATH, noun: ['warm pool', 'warm pools'] },
-] as const satisfies readonly { kind: unknown; label: string; path: string; key: keyof Omit<AgentSandboxSidebar, 'total' | 'controller'>; noun: readonly [string, string] }[]
+] as const satisfies readonly { kind: unknown; label: string; path: string; key: keyof Omit<AgentSandboxSidebar, 'total'>; noun: readonly [string, string] }[]
 
 /**
  * Agent Sandbox in the sidebar's Integrations, as its part of the Agents row:
@@ -45,7 +45,7 @@ export function useAgentSandboxSidebarWorkspace({
   const nsKey = (data?.namespaces ?? namespaces).join(', ')
   return useMemo(() => {
     if (!available) return undefined
-    const total = sidebar ? sidebarCount(sidebar.total, ['attention item', 'attention items'], sidebar.controller) : undefined
+    const total = sidebar ? sidebarCount(sidebar.total, ['object', 'objects']) : undefined
     const scope = nsKey ? `namespace ${nsKey}` : 'all namespaces'
     return {
       [AGENTS_SIDEBAR_CATEGORY]: {

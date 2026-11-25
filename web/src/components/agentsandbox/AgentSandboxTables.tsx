@@ -648,10 +648,10 @@ function PoolSelect({
   )
 }
 
-function listSubtitle(count: number, noun: [string, string], partial: boolean, namespaces: string[], items: any[], attentionCount: number): string {
+function listSubtitle(count: number, noun: [string, string], partial: boolean, namespaces: string[], items: any[], attentionCount: number, attentionPartial: boolean): string {
   const prefix = partial ? '≥' : ''
   const parts = [`${prefix}${count} ${count === 1 ? noun[0] : noun[1]}`]
-  if (attentionCount > 0) parts.push(`${prefix}${attentionCount} need attention`)
+  if (attentionCount > 0) parts.push(`${attentionPartial ? '≥' : ''}${attentionCount} need attention`)
   if (namespaces.length > 0) parts.push(`in ${namespaces.join(', ')}`)
   else {
     const single = singleNamespaceOf(items)
@@ -664,6 +664,7 @@ const SANDBOX_SEGMENTS = ['all', 'attention', 'ready', 'settled'] as const
 type SandboxSegment = (typeof SANDBOX_SEGMENTS)[number]
 
 function isSandboxAttention(o: any, server?: ServerReadings): boolean {
+  if (server?.attentionObjects) return server.attentionObjects.sandboxes.has(rowKey(o))
   const level = server?.tones.get(objectKey('Sandbox', ns(o), nm(o))) ?? getSandboxStatus(o).level
   return level !== 'healthy' && level !== 'neutral'
 }
@@ -696,6 +697,7 @@ export function SandboxesScreen({ data, namespaces, onClearNamespaces, onInspect
   const { apply } = listFilters
   const baseItems = readItems(data.sandboxes)
   const partial = isPartialRead(data.sandboxes)
+  const attentionPartial = partial || !!server?.sidebar?.sandboxes.lowerBound
   const poolOptions = useMemo(() => {
     const map = new Map<string, { key: string; namespace: string; name: string }>()
     for (const p of readItems(data.warmPools)) {
@@ -719,9 +721,9 @@ export function SandboxesScreen({ data, namespaces, onClearNamespaces, onInspect
     let settled = 0
     for (const o of baseItems) {
       const level = server?.tones.get(objectKey('Sandbox', ns(o), nm(o))) ?? getSandboxStatus(o).level
-      if (level === 'healthy') ready++
+      if (isSandboxAttention(o, server)) attention++
+      else if (level === 'healthy') ready++
       else if (level === 'neutral') settled++
-      else attention++
     }
     return { all: baseItems.length, attention, ready, settled }
   }, [baseItems, server])
@@ -732,6 +734,7 @@ export function SandboxesScreen({ data, namespaces, onClearNamespaces, onInspect
     return filterItems(base, (o) => {
       const level = server?.tones.get(objectKey('Sandbox', ns(o), nm(o))) ?? getSandboxStatus(o).level
       if (segment === 'attention') return isSandboxAttention(o, server)
+      if (isSandboxAttention(o, server)) return false
       if (segment === 'ready') return level === 'healthy'
       return level === 'neutral'
     })
@@ -741,7 +744,7 @@ export function SandboxesScreen({ data, namespaces, onClearNamespaces, onInspect
   const narrowed = !!pool || !!state || segment !== 'all' || listFilters.narrows
   const empty = noMatchText('Sandboxes', search, narrowed, sandboxes)
   const showSegmentCounts = !(search || pool || state || listFilters.narrows)
-  const subtitle = data.sandboxes.state === 'read' ? listSubtitle(counts.all, ['sandbox', 'sandboxes'], partial, namespaces, baseItems, counts.attention) : undefined
+  const subtitle = data.sandboxes.state === 'read' ? listSubtitle(counts.all, ['sandbox', 'sandboxes'], partial, namespaces, baseItems, counts.attention, attentionPartial) : undefined
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -754,7 +757,7 @@ export function SandboxesScreen({ data, namespaces, onClearNamespaces, onInspect
             onChange={setSegment}
             options={[
               { id: 'all', label: 'All', count: showSegmentCounts ? countBadge(counts.all, partial) : undefined },
-              { id: 'attention', label: 'Needs attention', count: showSegmentCounts ? countBadge(counts.attention, partial) : undefined },
+              { id: 'attention', label: 'Needs attention', count: showSegmentCounts ? countBadge(counts.attention, attentionPartial) : undefined },
               { id: 'ready', label: 'Ready', count: showSegmentCounts ? countBadge(counts.ready, partial) : undefined },
               { id: 'settled', label: 'Settled', count: showSegmentCounts ? countBadge(counts.settled, partial) : undefined },
             ]}
@@ -781,6 +784,7 @@ function classifyClaim(o: any): 'attention' | 'bound' | 'expired' {
 }
 
 function isClaimAttention(o: any, server?: ServerReadings): boolean {
+  if (server?.attentionObjects) return server.attentionObjects.claims.has(rowKey(o))
   const level = server?.tones.get(objectKey('SandboxClaim', ns(o), nm(o))) ?? getSandboxClaimStatus(o).level
   return level === 'unhealthy' || level === 'alert' || level === 'degraded'
 }
@@ -809,6 +813,7 @@ export function ClaimsScreen({ data, namespaces, onClearNamespaces, onInspect, i
   ]
   const baseItems = readItems(data.claims)
   const partial = isPartialRead(data.claims)
+  const attentionPartial = partial || !!server?.sidebar?.claims.lowerBound
   const poolOptions = useMemo(() => {
     const map = new Map<string, { key: string; namespace: string; name: string }>()
     for (const p of readItems(data.warmPools)) {
@@ -854,7 +859,7 @@ export function ClaimsScreen({ data, namespaces, onClearNamespaces, onInspect, i
   const claims = useMemo(() => filterByName(apply(narrowedRead), search), [narrowedRead, search, apply])
   const empty = noMatchText('SandboxClaims', search, narrows || !!pool || recent || segment !== 'all', claims)
   const showSegmentCounts = !(search || pool || recent || narrows)
-  const subtitle = data.claims.state === 'read' ? listSubtitle(counts.all, ['claim', 'claims'], partial, namespaces, baseItems, counts.attention) : undefined
+  const subtitle = data.claims.state === 'read' ? listSubtitle(counts.all, ['claim', 'claims'], partial, namespaces, baseItems, counts.attention, attentionPartial) : undefined
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -867,7 +872,7 @@ export function ClaimsScreen({ data, namespaces, onClearNamespaces, onInspect, i
             onChange={setSegment}
             options={[
               { id: 'all', label: 'All', count: showSegmentCounts ? countBadge(counts.all, partial) : undefined },
-              { id: 'attention', label: 'Needs attention', count: showSegmentCounts ? countBadge(counts.attention, partial) : undefined },
+              { id: 'attention', label: 'Needs attention', count: showSegmentCounts ? countBadge(counts.attention, attentionPartial) : undefined },
               { id: 'bound', label: 'Bound', count: showSegmentCounts ? countBadge(counts.bound, partial) : undefined },
               { id: 'expired', label: 'Expired', count: showSegmentCounts ? countBadge(counts.expired, partial) : undefined },
             ]}
@@ -888,6 +893,7 @@ const WARM_POOL_SEGMENTS = ['all', 'attention', 'ready'] as const
 type WarmPoolSegment = (typeof WARM_POOL_SEGMENTS)[number]
 
 function isWarmPoolAttention(o: any, server?: ServerReadings): boolean {
+  if (server?.attentionObjects) return server.attentionObjects.warmPools.has(rowKey(o))
   const key = objectKey('SandboxWarmPool', ns(o), nm(o))
   if (server?.rows.has(key)) return true
   const level = server?.tones.get(key) ?? getSandboxWarmPoolStatus(o).level
@@ -900,6 +906,7 @@ export function WarmPoolsScreen({ data, namespaces, onClearNamespaces, onInspect
   const { apply, narrows, chips } = useListFilters(SANDBOX_WARM_POOL_KIND)
   const baseItems = readItems(data.warmPools)
   const partial = isPartialRead(data.warmPools)
+  const attentionPartial = partial || !!server?.sidebar?.warmPools.lowerBound
 
   const counts = useMemo(() => {
     let attention = 0
@@ -921,7 +928,7 @@ export function WarmPoolsScreen({ data, namespaces, onClearNamespaces, onInspect
   const pools = useMemo(() => filterByName(apply(bySegment), search), [bySegment, search, apply])
   const empty = noMatchText('SandboxWarmPools', search, narrows || segment !== 'all', pools)
   const showSegmentCounts = !(search || narrows)
-  const subtitle = data.warmPools.state === 'read' ? listSubtitle(counts.all, ['warm pool', 'warm pools'], partial, namespaces, baseItems, counts.attention) : undefined
+  const subtitle = data.warmPools.state === 'read' ? listSubtitle(counts.all, ['warm pool', 'warm pools'], partial, namespaces, baseItems, counts.attention, attentionPartial) : undefined
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -934,7 +941,7 @@ export function WarmPoolsScreen({ data, namespaces, onClearNamespaces, onInspect
             onChange={setSegment}
             options={[
               { id: 'all', label: 'All', count: showSegmentCounts ? countBadge(counts.all, partial) : undefined },
-              { id: 'attention', label: 'Needs attention', count: showSegmentCounts ? countBadge(counts.attention, partial) : undefined },
+              { id: 'attention', label: 'Needs attention', count: showSegmentCounts ? countBadge(counts.attention, attentionPartial) : undefined },
               { id: 'ready', label: 'Ready', count: showSegmentCounts ? countBadge(counts.ready, partial) : undefined },
             ]}
           />
