@@ -101,7 +101,7 @@ function FleetVersionCell({ entry }: { entry: FleetAppEntry }) {
   return (
     <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
       {versionSkew && (
-        <Tooltip content={`Version skew across clusters: ${versions.join(', ')}`} delay={150}>
+        <Tooltip content={`Version skew detected. Observed tags: ${versions.join(', ')}`} delay={150}>
           <span className={`${CHIP} ${CHIP_TONE.amber}`}>version skew</span>
         </Tooltip>
       )}

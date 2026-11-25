@@ -149,26 +149,30 @@ describe('ApplicationsView countsFrom', () => {
 })
 
 describe('ApplicationsView fleet rows', () => {
+  const entry: FleetAppEntry = {
+    ...buildSingleAppEntry(app('demo-app', 'healthy')),
+    variant: 'fleet',
+    envs: [{ env: 'prod', health: 'healthy', inferred: false }, { env: 'staging', health: 'healthy', inferred: false }],
+    clusters: [{ id: 'east', name: 'east', health: 'healthy' }],
+    versionSkew: false,
+    envVersions: [{ env: 'prod', version: '6.7.0', source: 'observed' }, { env: 'staging', version: '6.8.0', source: 'configured' }],
+  }
+
+  it('labels the observed tags when one cluster reports version skew', () => {
+    vi.useFakeTimers()
+    const { host, render } = mountList()
+    const skewed = { ...entry, versionSkew: true, versions: ['6.7.0', '6.7.1'] }
+    render({ variant: 'fleet', entries: [skewed] })
+    const chip = [...host.querySelectorAll('td span')].find((el) => el.textContent === 'version skew' && el.childElementCount === 0)!
+    act(() => { chip.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })) })
+    act(() => { vi.advanceTimersByTime(150) })
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toBe('Version skew detected. Observed tags: 6.7.0, 6.7.1')
+    expect(host.textContent).toContain('staging 6.8.0 (configured)')
+  })
+
   it("shows what each environment runs when the host knows it", () => {
-    const single = buildSingleAppEntry(app('demo-app', 'healthy'))
-    const entry: FleetAppEntry = {
-      ...single,
-      variant: 'fleet',
-      envs: [{ env: 'prod', health: 'healthy', inferred: false }, { env: 'staging', health: 'healthy', inferred: false }],
-      clusters: [],
-      versionSkew: false,
-      envVersions: [{ env: 'prod', version: '6.7.0', source: 'observed' }, { env: 'staging', version: '6.8.0', source: 'configured' }],
-    }
-    const host = document.createElement('div')
-    document.body.appendChild(host)
-    root = createRoot(host)
-    act(() =>
-      root!.render(
-        <KeyboardShortcutProvider>
-          <ApplicationsView entries={[entry]} variant="fleet" onSelect={() => {}} />
-        </KeyboardShortcutProvider>,
-      ),
-    )
+    const { host, render } = mountList()
+    render({ variant: 'fleet', entries: [entry] })
     expect(host.textContent).toContain('prod 6.7.0·staging 6.8.0 (configured)')
     vi.useFakeTimers()
     const shortTag = [...host.querySelectorAll('td .font-mono')].find((el) => el.textContent === '6.7.0')!
@@ -176,34 +180,13 @@ describe('ApplicationsView fleet rows', () => {
     act(() => { vi.advanceTimersByTime(150) })
     expect(shortTag.hasAttribute('title')).toBe(false)
     expect(document.body.lastElementChild).toBe(host)
-    act(() =>
-      root!.render(
-        <KeyboardShortcutProvider>
-          <ApplicationsView entries={[{ ...entry, versionSkew: true, versions: ['6.7.0', '6.8.0'] }]} variant="fleet" onSelect={() => {}} />
-        </KeyboardShortcutProvider>,
-      ),
-    )
-    expect(host.textContent).toContain('version skew')
-    expect(host.textContent).toContain('staging 6.8.0 (configured)')
     const configuredOnly = { ...entry, versions: ['6.7.0'], envVersions: entry.envVersions?.slice(1) }
-    act(() =>
-      root!.render(
-        <KeyboardShortcutProvider>
-          <ApplicationsView entries={[configuredOnly]} variant="fleet" onSelect={() => {}} />
-        </KeyboardShortcutProvider>,
-      ),
-    )
+    render({ variant: 'fleet', entries: [configuredOnly] })
     expect(host.textContent).toContain('6.7.0')
     expect(host.textContent).toContain('staging 6.8.0 (configured)')
 
     const longVersion = 'release-2026-11-25-123456789'
-    act(() =>
-      root!.render(
-        <KeyboardShortcutProvider>
-          <ApplicationsView entries={[{ ...entry, envVersions: [{ env: 'prod', version: longVersion, source: 'observed' }] }]} variant="fleet" onSelect={() => {}} />
-        </KeyboardShortcutProvider>,
-      ),
-    )
+    render({ variant: 'fleet', entries: [{ ...entry, envVersions: [{ env: 'prod', version: longVersion, source: 'observed' }] }] })
     const truncatedTag = [...host.querySelectorAll('td .font-mono')].find((el) => el.textContent?.includes('…'))!
     act(() => { truncatedTag.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })) })
     act(() => { vi.advanceTimersByTime(150) })

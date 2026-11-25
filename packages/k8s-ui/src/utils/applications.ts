@@ -1776,7 +1776,7 @@ export interface FleetAppEntry extends AppEntryBase {
   variant: "fleet";
   envs: EnvSlice[];
   clusters: AppClusterRef[];
-  /** True when the app runs different versions across its clusters/envs. */
+  /** True when version skew is observed within one environment or across environments or clusters. */
   versionSkew: boolean;
   /** Environment-specific tags for display, search and sorting. Keep all
    *  observed tags in versions, including tags without an environment. */
