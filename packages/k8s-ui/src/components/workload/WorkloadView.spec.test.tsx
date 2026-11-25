@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, useEffect } from 'react'
+import { act, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ReactNode } from 'react'
@@ -177,14 +177,49 @@ it('does not carry a picked Pod to a recreated resource with the same name', () 
   const renderLogsTab = (tab: { selectedPod: string | null; onSelectPod: (pod: string | null) => void }) => <Probe {...tab} />
   const host = document.createElement('div')
   const root = createRoot(host)
-  const withUID = (uid: string) => ({ ...resource, metadata: { ...resource.metadata, uid } })
-  act(() => root.render(<WorkloadView {...props} resource={withUID('a')} activeTab="logs" relationships={relationships} renderLogsTab={renderLogsTab} />))
+  const withUID = (uid: string) => ({ ...resource, kind: 'Deployment', apiVersion: 'apps/v1', metadata: { ...resource.metadata, uid } })
+  act(() => root.render(<WorkloadView {...props} kind="deployments" group={undefined} resource={withUID('a')} activeTab="logs" relationships={relationships} renderLogsTab={renderLogsTab} />))
   act(() => host.querySelector<HTMLButtonElement>('[data-pick]')!.click())
-  act(() => root.render(<WorkloadView {...props} resource={withUID('a')} activeTab="logs" relationships={relationships} renderLogsTab={renderLogsTab} />))
+  act(() => root.render(<WorkloadView {...props} kind="deployments" group="apps" resource={withUID('a')} activeTab="logs" relationships={relationships} renderLogsTab={renderLogsTab} />))
   expect(seen.at(-1)).toBe('pg-1')
   const before = seen.length
-  act(() => root.render(<WorkloadView {...props} resource={withUID('b')} activeTab="logs" relationships={relationships} renderLogsTab={renderLogsTab} />))
+  act(() => root.render(<WorkloadView {...props} kind="deployments" group="apps" resource={withUID('b')} activeTab="logs" relationships={relationships} renderLogsTab={renderLogsTab} />))
   expect(seen.slice(before)).not.toContain('pg-1')
+  act(() => root.unmount())
+})
+
+it('preserves host panel state when the built-in group resolves and resets it for a new identity or tab', () => {
+  function Panel() {
+    const [edited, setEdited] = useState(false)
+    return <button data-edit onClick={() => setEdited(true)}>{edited ? 'Edited' : 'New'}</button>
+  }
+  const tabs = ['settings', 'runs'].map(id => ({ id, label: id, render: () => <Panel /> }))
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  function render(group: string | undefined, uid?: string, tab = 'settings') {
+    const workload = uid ? {
+      kind: 'Deployment', apiVersion: `${group || 'apps'}/v1`, metadata: { name: 'web', namespace: 'db', uid },
+    } : undefined
+    act(() => root.render(<WorkloadView {...props} name="web" kind="deployments" resource={workload}
+      group={group} activeTab={tab} extraTabs={tabs} />))
+  }
+  const panel = () => host.querySelector<HTMLButtonElement>('[data-edit]')!
+  render(undefined)
+  act(() => panel().click())
+  render('apps', 'first')
+  expect(panel().textContent).toBe('Edited')
+  render('', 'first')
+  expect(panel().textContent).toBe('Edited')
+  render('', 'recreated')
+  expect(panel().textContent).toBe('New')
+  act(() => panel().click())
+  render('example.io', 'recreated')
+  expect(panel().textContent).toBe('New')
+  act(() => panel().click())
+  const scrollContainer = panel().parentElement
+  render('example.io', 'recreated', 'runs')
+  expect(panel().textContent).toBe('New')
+  expect(panel().parentElement).not.toBe(scrollContainer)
   act(() => root.unmount())
 })
 

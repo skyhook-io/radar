@@ -88,7 +88,7 @@ import {
 import { ServicePortCards, type ServicePortRenderProps } from '../resources/renderers/ServiceRenderer'
 import { isRolloutActivityVisible, rolloutMayAdvanceAutomatically, type WorkloadRolloutActivity } from '../../utils/workload-rollout'
 import { WorkloadRolloutNotice } from './WorkloadRolloutNotice'
-import { isCoreBatchJob } from '../../utils/api-resources'
+import { canonicalResourceGroup, isCoreBatchJob } from '../../utils/api-resources'
 import { formatRelativeAgeTime } from '../../utils/format'
 
 const WORKLOAD_TABS = ['overview', 'spec', 'topology', 'timeline', 'logs', 'metrics', 'reachability', 'cost', 'yaml'] as const
@@ -664,14 +664,15 @@ export function WorkloadView({
   // Hosts reuse this view across resources, and a resource can be recreated
   // under the same name: a Pod picked for one must not reach the next, not
   // even for one render. A UID arriving with the first load is not a change.
-  const selectionIdentity = `${apiKind}\u0000${group ?? ''}\u0000${namespace}\u0000${name}`
+  const selectionGroup = canonicalResourceGroup(apiKind, group)
+  const selectionIdentity = `${apiKind}\u0000${selectionGroup ?? ''}\u0000${namespace}\u0000${name}`
   // A host can briefly pass the previous object after navigation.
   const resourceGroup = apiVersionToGroup(resource?.apiVersion)
   const resourceMatchesSelection = resource?.metadata?.name === name &&
     (resource.metadata.namespace ?? '') === (namespace ?? '') &&
-    (group === undefined || group === resourceGroup) &&
+    (selectionGroup === undefined || selectionGroup === resourceGroup) &&
     typeof resource.kind === 'string' &&
-    kindToPluralWithGroup(resource.kind, resourceGroup) === kindToPluralWithGroup(apiKind, group ?? resourceGroup)
+    kindToPluralWithGroup(resource.kind, resourceGroup) === kindToPluralWithGroup(apiKind, selectionGroup ?? resourceGroup)
   const selectionUID = resourceMatchesSelection ? resource.metadata.uid as string | undefined : undefined
   const [selectionScope, setSelectionScope] = useState({ identity: selectionIdentity, uid: selectionUID, generation: 0 })
   if (selectionScope.identity !== selectionIdentity || (selectionUID && selectionScope.uid !== selectionUID)) {
