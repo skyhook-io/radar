@@ -146,19 +146,38 @@ describe('ApplicationsView countsFrom', () => {
 
   it('counts what the Source filter leaves when asked', () => {
     const host = show('searchAndSource')
+    expect(headerTotal(host)).toBe('3')
     pickManagedSource(host)
-    // No unhealthy app is left: the facet counts none (or hides the empty option).
-    expect(unhealthyFacet(host) ?? 'Unhealthy0').toBe('Unhealthy0')
+    expect(headerTotal(host)).toBe('2')
+    expect(unhealthyFacet(host)).toBeUndefined()
     // The Source facet still counts across every app.
     expect([...host.querySelectorAll('button')].some((b) => b.textContent === `${SOURCE_META[managedSource].label}2`)).toBe(true)
     // Every app left is the same type: the Type facet isn't offered.
     expect([...host.querySelectorAll('h3, [role="heading"], span')].some((el) => el.textContent === 'Type')).toBe(false)
   })
 
+  it('counts search and source matches and shows the filtered empty state at zero', () => {
+    const host = show('searchAndSource')
+    setSearch(host, 'other')
+    expect(headerTotal(host)).toBe('1')
+    expect(unhealthyFacet(host)).toBe('Unhealthy1')
+    expect([...host.querySelectorAll('aside button')].some((button) => button.textContent?.startsWith('Healthy'))).toBe(false)
+
+    pickManagedSource(host)
+    expect(headerTotal(host)).toBe('0')
+    expect(unhealthyFacet(host)).toBeUndefined()
+    expect(host.textContent).toContain('No applications match the filters')
+    expect(host.textContent).not.toContain('No applications detected yet')
+
+    setSearch(host, 'demo')
+    expect(headerTotal(host)).toBe('2')
+    expect([...host.querySelectorAll('aside button')].some((button) => button.textContent === 'Healthy2')).toBe(true)
+  })
+
   it('dims only the alternate source dot and lets both sources be selected', () => {
     const host = show('searchAndSource')
     pickManagedSource(host)
-    const source = (label: string) => [...host.querySelectorAll('aside button')].find((button) => button.textContent?.startsWith(label))!
+    const source = (label: string) => [...host.querySelectorAll<HTMLButtonElement>('aside button')].find((button) => button.textContent?.startsWith(label))!
     const other = source(SOURCE_META.ungrouped.label)
     expect(other.getAttribute('aria-pressed')).toBe('false')
     expect(other.matches('.opacity-60')).toBe(false)
@@ -222,7 +241,6 @@ describe('ApplicationsView fleet rows', () => {
     render({ variant: 'fleet', entries: [configuredOnly] })
     expect(host.textContent).toContain('6.7.0')
     expect(host.textContent).toContain('staging 6.8.0 (configured)')
-
   })
 
   it('exposes the full abbreviated tag to screen readers and on focus or hover', () => {
