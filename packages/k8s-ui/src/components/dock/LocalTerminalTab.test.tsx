@@ -205,12 +205,65 @@ it.each([undefined, 'psql'])('keeps shell defaults and command-specific unavaila
     expect(element.textContent).not.toContain('debug container')
     expect(element.textContent).not.toContain('/bin/sh')
   } else {
-    expect(element.textContent).toContain('Shell not available')
-    expect(element.textContent).toContain('/bin/sh')
+    expect(element.textContent).toContain('Couldn’t start a shell in container app')
+    expect(element.textContent).toContain('This image may not include a shell.')
+    expect(element.textContent).toContain('Retry terminal')
+    expect(element.textContent).not.toContain('Reconnect')
     expect(element.textContent).toContain('Start debug container')
   }
 })
 
+
+it('lets an operator retry just the original shell on the Pod that failed', async () => {
+  const createSession = vi.fn(async () => ({ wsUrl: 'ws://localhost' }))
+  const createDebugContainer = vi.fn()
+  await act(async () => root.render(<TerminalTab namespace="app" podName="worker" containerName="app" containers={['app']} createSession={createSession} createDebugContainer={createDebugContainer}/>))
+  await act(async () => Socket.instances[0].onmessage?.({ data: JSON.stringify({ type: 'error', errorType: 'shell_not_found', podUID: 'original', executable: 'sh', data: 'executable file not found' }) }))
+  expect(element.textContent).toContain('Couldn’t start a shell in container app')
+  expect(element.textContent).toContain('This image may not include sh.')
+  const retry = [...element.querySelectorAll('button')].find(button => button.textContent === 'Retry terminal')
+  expect(retry).toBeDefined()
+  expect(element.textContent).not.toContain('Reconnect')
+  await act(async () => retry!.click())
+  expect(createSession).toHaveBeenLastCalledWith('app', 'original')
+  expect(createDebugContainer).not.toHaveBeenCalled()
+})
+
+it.each(['original', undefined])('keeps Retry on an older shell error and preserves any reviewed UID (%s)', async uid => {
+  const createSession = vi.fn(async () => ({ wsUrl: 'ws://localhost' }))
+  await act(async () => root.render(<TerminalTab namespace="test" podName="worker" containerName="app" containers={['app', 'sidecar']} createSession={createSession}/>))
+  await act(async () => Socket.instances[0].onmessage?.({ data: JSON.stringify({ type: 'error', errorType: 'shell_not_found', data: 'no such file or directory', podUID: uid }) }))
+  const click = (label: string) => act(async () => [...element.querySelectorAll('button')].find(b => b.textContent === label)!.click())
+  await click('Retry terminal')
+  expect(createSession.mock.lastCall).toEqual(uid ? ['app', uid] : ['app'])
+  await act(async () => Socket.instances[1].onmessage?.({ data: JSON.stringify({ type: 'error', errorType: 'exec_error', data: 'The original Pod was replaced' }) }))
+  await click('Retry')
+  expect(createSession.mock.lastCall).toEqual(uid ? ['app', uid] : ['app'])
+  await act(async () => Socket.instances[2].onmessage?.({ data: JSON.stringify({ type: 'error', errorType: 'exec_error', data: 'The original Pod was replaced' }) }))
+  await click('Reconnect')
+  expect(createSession.mock.lastCall).toEqual(uid ? ['app', uid] : ['app'])
+})
+
+it('leads directly to current Pod details when the server confirms replacement', async () => {
+  await act(async () => root.render(<TerminalTab namespace="test" podName="worker" containerName="app" containers={['app']} createSession={async () => ({ wsUrl: 'ws://localhost' })} podDetailsLink={<a href="/current">Open current Pod details</a>}/>))
+  await act(async () => Socket.instances[0].onmessage?.({ data: JSON.stringify({ type: 'error', errorType: 'pod_replaced', data: 'The original Pod was replaced.' }) }))
+  expect(element.querySelector('a')?.textContent).toBe('Open current Pod details')
+  expect(element.textContent).not.toMatch(/Retry|Reconnect/)
+})
+
+it('keeps the transcript and Reconnect after an interactive shell exits 127', async () => {
+  await act(async () => root.render(<TerminalTab namespace="default" podName="pod" containerName="app" containers={['app']} createSession={async () => ({ wsUrl:'ws://localhost' })} />))
+  const ws=Socket.instances[0]
+  await act(async () => ws.onopen?.())
+  await act(async () => {
+    ws.onmessage?.({data:JSON.stringify({type:'output', data:'$ typo\r\ncommand not found'})})
+    ws.onmessage?.({data:JSON.stringify({type:'error', errorType:'shell_not_found',data:'command terminated with exit code 127'})})
+    ws.onclose?.()
+  })
+  expect(element.textContent).toContain('Reconnect')
+  expect(element.textContent).not.toContain('Couldn’t start')
+  expect(element.textContent).not.toContain('Failed to connect')
+})
 
 it('refreshes command session context when reusing its tab without reconnecting', async () => {
   let open!: ReturnType<typeof useOpenTerminal>

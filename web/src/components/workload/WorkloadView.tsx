@@ -1,3 +1,4 @@
+import { podDebugAccessKey } from '../../api/podDebug'
 import { supportsWorkloadRevisions, WorkloadRevisionsButton } from './WorkloadRevisionsButton'
 import { RelatedFindingsSection } from './RelatedFindingsSection'
 import { decorateResourceDiagnose, resourceDetailRedirect, resourceDetailSlots, resourceIssueDetail, resourceLogs, resourceRendererOverrides } from '../../integrations/resourceHosts'
@@ -106,7 +107,7 @@ import { TIME_RANGES, PrometheusCharts, isPrometheusSupported } from '../resourc
 import { RightsizingStrip } from '../resource/RightsizingStrip'
 import { PrometheusChartsGrid } from '../resource/PrometheusChartsGrid'
 import { DatadogSetupHint, DatadogWorkloadCharts, useDatadogWorkloadCharts, WorkloadCostRightsizing } from '../resource/DatadogWorkloadCharts'
-import { PodDebugAction } from '../resources/PodDebugAction'
+import { PodDebugAction, usePodDetailAccess, type PodDebugTarget } from '../resources/PodDebugAction'
 import { useNavCustomization } from '../../context/NavCustomization'
 import { RestartEventLane } from '../resource/RestartChart'
 import { WorkloadCostTab } from '../cost/WorkloadCostTab'
@@ -335,6 +336,7 @@ function useActionsBarProps(
   group: string | undefined,
   cascadeEnabled: boolean,
   nodeUID: string,
+  pod?: PodDebugTarget,
 ) {
   const [deletePreviewOpen, setDeletePreviewOpen] = useState(false)
   const { showCopied } = useToast()
@@ -343,8 +345,9 @@ function useActionsBarProps(
   const openLogs = useOpenLogs()
   const openWorkloadLogs = useOpenWorkloadLogs()
   const openNodeTerminal = useOpenNodeTerminal()
-  const { embedded } = useNavCustomization()
-  const { canExec, podDebugImage, canViewLogs, canPortForward, workloadWrites, workloadWritesPending } = useNamespacedCapabilities(namespace)
+  const nsCaps = useNamespacedCapabilities(namespace)
+  const { canViewLogs, canPortForward, workloadWrites, workloadWritesPending } = nsCaps
+  const { canExec, debugImage, unverifiedReview, debugDenial, reviewStatus } = usePodDetailAccess(pod, nsCaps)
   const queryClient = useQueryClient()
   // Live forward when local+RBAC; otherwise (in-cluster/Cloud) still surface the
   // copy-paste kubectl command. The button picks live vs. copy by deployment mode.
@@ -437,7 +440,7 @@ function useActionsBarProps(
     canViewLogs,
     canPortForward: showPortForward,
     onOpenTerminal: openTerminal,
-    renderPodDebug: podDebugImage && !embedded ? (pod: any) => <PodDebugAction key={pod.metadata.uid} pod={pod} defaultImage={podDebugImage} /> : undefined,
+    podDebugAction: pod && <PodDebugAction key={pod.metadata.uid} pod={pod} defaultImage={debugImage} unverifiedReview={unverifiedReview} debugDenial={debugDenial} reviewStatus={reviewStatus} />,
     onOpenLogs: openLogs,
     onOpenWorkloadLogs: openWorkloadLogs,
     replicaSetLogs: isAppsReplicaSet && replicaSetLogSupport === 'supported',
@@ -698,6 +701,10 @@ export function WorkloadView({
     await Promise.all([
       refetchResource(),
       onRefresh?.(),
+      ...(apiKind === 'pods' && !effectiveGroup && resource?.metadata?.uid ? [
+        queryClient.invalidateQueries({queryKey: ['capabilities', namespace], exact: true}),
+        queryClient.invalidateQueries({queryKey: podDebugAccessKey(namespace, name, resource.metadata.uid)}),
+      ] : []),
       ...(apiKind === 'rayjobs' && effectiveGroup === 'ray.io' ? [
         queryClient.refetchQueries({ queryKey: ['resource', 'jobs', namespace, name, 'batch'], type: 'active' }),
         ...(resource?.spec?.clusterSelector?.['ray.io/cluster'] ? [queryClient.refetchQueries({ queryKey: ['resource', 'rayclusters', namespace, resource.spec.clusterSelector['ray.io/cluster'], 'ray.io'], type: 'active' })] : []),
@@ -711,7 +718,7 @@ export function WorkloadView({
         ...(apiKind === 'rayclusters' ? { type: 'active' as const } : {}),
       }),
     ])
-  }, [apiKind, effectiveGroup, name, namespace, queryClient, refetchResource, resource?.spec?.clusterSelector, onRefresh])
+  }, [apiKind, effectiveGroup, name, namespace, queryClient, refetchResource, resource?.metadata?.uid, resource?.spec?.clusterSelector, onRefresh])
   const podWorkloadOwner = useMemo(
     () => podWorkloadOwnerFromRelationships(apiKind, namespace, relationships, resource),
     [apiKind, namespace, relationships, resource],
@@ -905,6 +912,7 @@ export function WorkloadView({
     effectiveGroup,
     !resourceLoading && Boolean(resource),
     apiKind === 'nodes' && !effectiveGroup ? resource?.metadata?.uid ?? '' : '',
+    apiKind === 'pods' && resource?.apiVersion === 'v1' && resource?.kind === 'Pod' ? resource : undefined,
   )
   const desktopDownload = useDesktopDownload()
 

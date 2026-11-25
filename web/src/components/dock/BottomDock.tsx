@@ -9,18 +9,20 @@ import { TrafficFlowListTab } from './TrafficFlowListTab'
 import { useFlowSearch } from '../traffic/TrafficFlowListContext'
 import { Search } from 'lucide-react'
 
-function renderTabContent(tab: DockTab, isActive: boolean, viewNamespaces: string[]) {
+function renderTabContent(tab: DockTab, isActive: boolean, viewNamespaces: string[], removeTab: (id: string) => void) {
   if (tab.type === 'terminal') {
     return (
       <TerminalTab
         namespace={tab.namespace!}
         podName={tab.podName!}
+        podUID={tab.podUID}
         containerName={tab.containerName!}
         containers={tab.containers!}
         isActive={isActive}
         shell={tab.shell}
         note={tab.sessionNote}
         debugSession={tab.debugSession}
+        onLeaveTerminal={() => removeTab(tab.id)}
       />
     )
   }
@@ -95,8 +97,8 @@ function renderTabHeaderExtra(tab: DockTab) {
 }
 
 export function BottomDock({ viewNamespaces }: { viewNamespaces: string[] }) {
-  const { leftOffset, tabs } = useDock()
+  const { leftOffset, tabs, removeTab } = useDock()
   const hasTrafficFlows = tabs.some(t => t.type === 'traffic-flows')
-  const renderContent = useCallback((tab: DockTab, isActive: boolean) => renderTabContent(tab, isActive, viewNamespaces), [viewNamespaces])
+  const renderContent = useCallback((tab: DockTab, isActive: boolean) => renderTabContent(tab, isActive, viewNamespaces, removeTab), [viewNamespaces, removeTab])
   return <K8sBottomDock renderTabContent={renderContent} renderTabHeaderExtra={renderTabHeaderExtra} leftOffset={leftOffset} defaultHeight={hasTrafficFlows ? 300 : undefined} />
 }

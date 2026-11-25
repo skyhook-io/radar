@@ -1,12 +1,16 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import { Bug } from 'lucide-react'
 import { ActionConfirmDialog, getDefaultContainerName, getExecContainerNames, useOpenTerminal, type ActionConfirmResult } from '@skyhook-io/k8s-ui'
+import { PodDebugPermission, PodDebugPermissionScope, usePodDebugContext } from './PodDebugPermission'
+import { Tooltip } from '../ui/Tooltip'
 import { actionDialogResult } from '../../api/actions'
 import { ApiError } from '../../api/client'
 import { connectionHeaderValue } from '../../api/connectionBinding'
 import { getApiBase } from '../../api/config'
 import { useReviewedActionMutation } from '../../api/reviewedActionMutation'
-import { createPodDebugContainer } from '../../api/podDebug'
+import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
+import { useNavCustomization } from '../../context/NavCustomization'
+import { createPodDebugContainer, usePodDebugAccess } from '../../api/podDebug'
 
 export interface PodDebugTarget {
   apiVersion: string
@@ -14,6 +18,7 @@ export interface PodDebugTarget {
   metadata: { uid: string; name: string; namespace: string; deletionTimestamp?: string }
   spec: {
     containers: { name: string }[]
+    ephemeralContainers?: { name: string; image: string; targetContainerName?: string }[]
     initContainers?: { name: string; restartPolicy?: string }[]
     os?: { name?: string }
     nodeSelector?: Record<string, string>
@@ -21,7 +26,7 @@ export interface PodDebugTarget {
   status: {
     phase?: string
     ephemeralContainerStatuses?: { name: string; state?: {
-      running?: object
+      running?: { startedAt?: string }
       waiting?: { reason?: string; message?: string }
       terminated?: { exitCode: number; reason?: string; message?: string }
     } }[]
@@ -35,12 +40,53 @@ interface ContainerStatus {
   state?: Partial<Record<'running' | 'waiting' | 'terminated', object>>
 }
 
-export function PodDebugAction({ pod, defaultImage, failedContainer }: { pod: PodDebugTarget; defaultImage: string; failedContainer?: string }) {
-  const openTerminal = useOpenTerminal()
+export function runningPodDebugTargets(pod: PodDebugTarget): string[] | undefined {
+  const os = pod.spec?.os?.name || pod.spec?.nodeSelector?.['kubernetes.io/os'] || pod.spec?.nodeSelector?.['beta.kubernetes.io/os']
+  if (!pod.metadata.uid || pod.apiVersion !== 'v1' || pod.kind !== 'Pod' || pod.status.phase !== 'Running' || pod.metadata.deletionTimestamp || os?.toLowerCase() === 'windows') return undefined
   const running = [...(pod.status.containerStatuses ?? []), ...(pod.status.initContainerStatuses ?? [])]
     .filter(container => container.state?.running)
-  const targets = getExecContainerNames(pod).filter(name => running.some(container => container.name === name))
-  const [draft, setDraft] = useState<{ target: string; image: string; base: string; connection?: string }>()
+  return getExecContainerNames(pod).filter(name => running.some(container => container.name === name))
+}
+
+export function debugAccessMessage(readOnly: boolean, error: unknown, state: string | undefined, pod: PodDebugTarget | undefined) {
+  if (readOnly) return 'This view can’t add a debug container.'
+  if (state === 'unavailable' && !error) return 'Debugging is unavailable. Check Pod exec access and whether exec is enabled on this Radar.'
+  const reason = error ? 'Radar couldn’t check' : state === 'check_failed' ? 'Kubernetes couldn’t complete the check for' : 'Kubernetes couldn’t confirm'
+  return <>{reason} permission to <PodDebugPermissionScope pod={pod?.metadata} />.</>
+}
+
+export function usePodDetailAccess(pod: PodDebugTarget | undefined, namespace: {
+  canExec: boolean; canOpenEphemeralTerminal: boolean; podDebugImage?: string
+}) {
+  const { embedded } = useNavCustomization()
+  const { deployment } = useCapabilitiesContext()
+  const eligible = pod?.apiVersion === 'v1' && pod.kind === 'Pod' && pod.status.phase === 'Running' && !pod.metadata.deletionTimestamp
+  const execOnly = !!embedded || deployment?.mode === 'cloud' || !pod || !runningPodDebugTargets(pod)?.length
+  const { query, unverifiedImage, unverifiedReview, recheckAccess } = usePodDebugAccess(pod?.metadata.namespace ?? '', pod?.metadata.name ?? '', pod?.metadata.uid ?? '',
+    !!eligible && (!namespace.canExec || (!execOnly && !namespace.podDebugImage)), execOnly, eligible && !execOnly ? namespace.podDebugImage : undefined)
+  const named = eligible && !query.error ? query.data : undefined
+  const debugImage = execOnly || query.error || named?.state === 'denied' || named?.state === 'unavailable' || named?.state === 'check_failed' ? undefined :
+    named?.state === 'allowed' ? named.image : namespace.podDebugImage || unverifiedImage
+  const readOnly = !!embedded || deployment?.mode === 'cloud'
+  return {
+    canExec: namespace.canExec || named?.exec === true,
+    canOpenEphemeralTerminal: namespace.canOpenEphemeralTerminal || named?.exec === true,
+    debugImage,
+    reviewStatus: { message: debugAccessMessage(readOnly, query.error, named?.state, pod), refusal: readOnly ? undefined : query.data?.refusedAttempt?.message,
+      recheck: readOnly ? undefined : recheckAccess, checking: query.isFetching },
+    debugDenial: !execOnly && named?.state === 'denied' ? { refusal: named.refusedAttempt?.message } : undefined,
+    unverifiedReview: namespace.podDebugImage ? undefined : unverifiedReview,
+  }
+}
+
+export function PodDebugAction({ pod, defaultImage, failedContainer, unverifiedReview, debugDenial, reviewStatus, hideLauncher }: {
+  pod: PodDebugTarget; defaultImage?: string; hideLauncher?: boolean; failedContainer?: string; debugDenial?: { refusal?: string }; unverifiedReview?: ReturnType<typeof usePodDebugAccess>['unverifiedReview']; reviewStatus?: ReturnType<typeof usePodDetailAccess>['reviewStatus']
+}) {
+  const openTerminal = useOpenTerminal()
+  const eligibleTargets = runningPodDebugTargets(pod)
+  const targets = eligibleTargets ?? []
+  const context = usePodDebugContext()
+  const [draft, setDraft] = useState<{ target: string; image: string; base: string; connection?: string; context?: string }>()
   const [result, setResult] = useState<ActionConfirmResult>()
   const submitting = useRef(false)
   const mounted = useRef(false)
@@ -49,7 +95,6 @@ export function PodDebugAction({ pod, defaultImage, failedContainer }: { pod: Po
     return () => { mounted.current = false }
   }, [])
 
-  const os = pod.spec?.os?.name || pod.spec?.nodeSelector?.['kubernetes.io/os'] || pod.spec?.nodeSelector?.['beta.kubernetes.io/os']
   const { namespace, name, uid } = pod.metadata
   const connection = connectionHeaderValue()
   const mutation = useReviewedActionMutation(
@@ -64,17 +109,28 @@ export function PodDebugAction({ pod, defaultImage, failedContainer }: { pod: Po
       },
     }, '',
   )
+  const changedConnection = !!draft && (draft.base !== getApiBase() || draft.connection !== connection)
+  const blockedMessage = changedConnection ? 'The cluster connection changed. Reopen the Pod to debug it.' :
+    !eligibleTargets?.length ? 'This Pod no longer has a running container eligible for debugging.' :
+    !debugDenial && !defaultImage ? reviewStatus?.message : undefined
+  const canReview = !blockedMessage && !debugDenial
+  const previousRefusal = !changedConnection && (debugDenial?.refusal || (blockedMessage && reviewStatus?.refusal))
   const busy = mutation.isPending
+  const refused = unverifiedReview?.refused
+  const refusedNow = result?.state === 'error' && mutation.error instanceof ApiError && mutation.error.status === 403 && !!unverifiedReview
+  const recheckRequired = !!refused && !refused.rechecked
   const outcome = result ?? actionDialogResult(mutation.outcomeError, {
     unknown: 'Radar could not confirm whether the debug container was added',
   })
   function show() {
+    if (!defaultImage && !debugDenial) return
     const preferred = failedContainer || getDefaultContainerName(pod)
-    setDraft({ target: preferred && targets.includes(preferred) ? preferred : targets[0], image: defaultImage, base: getApiBase(), connection: connectionHeaderValue() })
+    const connection = connectionHeaderValue()
+    setDraft({ target: preferred && targets.includes(preferred) ? preferred : targets[0], image: defaultImage ?? '', base: getApiBase(), connection, context })
   }
 
   async function start() {
-    if (!draft || submitting.current || !targets.includes(draft.target)) return
+    if (!draft || !defaultImage || debugDenial || blockedMessage || submitting.current || refusedNow || recheckRequired || !targets.includes(draft.target)) return
     const sameConnection = () => getApiBase() === draft.base && connectionHeaderValue() === draft.connection
     submitting.current = true
     setResult(undefined)
@@ -82,6 +138,7 @@ export function PodDebugAction({ pod, defaultImage, failedContainer }: { pod: Po
       const { containerName, image } = await mutation.mutateAsync({ request: {
         base: draft.base, reviewedContext: draft.connection ?? '', targetContainer: draft.target, image: draft.image.trim() === defaultImage ? undefined : draft.image.trim() || undefined,
       } })
+      unverifiedReview?.clearRefusal()
       if (!sameConnection()) return
       openTerminal({
         namespace, podName: name, containerName, containers: [containerName],
@@ -98,19 +155,22 @@ export function PodDebugAction({ pod, defaultImage, failedContainer }: { pod: Po
     }
   }
 
-  if (!uid || pod.apiVersion !== 'v1' || pod.kind !== 'Pod' || pod.status.phase !== 'Running' || pod.metadata.deletionTimestamp || os?.toLowerCase() === 'windows' || (!draft && !targets.length)) return null
+  if (!draft && (!targets.length || (!defaultImage && !debugDenial))) return null
   return <>
-    <button type="button" className="btn-secondary flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium" onClick={show}>
-      <Bug className="h-3.5 w-3.5" />{failedContainer ? 'Debug with an ephemeral container' : 'Debug'}
-    </button>
-    <ActionConfirmDialog open={!!draft} title="Debug Pod" subject={{ kind: 'Pod', namespace, name }}
-      effect="Start an ephemeral container and open a terminal in it. Its entry stays on the Pod until the Pod is deleted."
+    {!hideLauncher && targets.length > 0 && (debugDenial ? <Tooltip content="View the permission needed to debug this Pod">
+      <button type="button" className="btn-secondary flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium" onClick={show}><Bug className="h-3.5 w-3.5" />Debug</button>
+    </Tooltip> : defaultImage && <button type="button" className={`${failedContainer ? 'btn-brand' : 'btn-secondary'} flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium`} onClick={show}>
+      <Bug className="h-3.5 w-3.5" />{unverifiedReview ? recheckRequired ? 'Review debug refusal' : refused ? 'Review another debug attempt' : 'Review debug container' : failedContainer ? 'Start a debug container' : 'Debug'}
+    </button>)}
+    <ActionConfirmDialog open={!!draft} title="Debug Pod" context={draft?.context} writes={canReview ? [{ summary: `Update pods/ephemeralcontainers on ${namespace}/${name}` }] : []} subject={{ kind: 'Pod', namespace, name }}
+      effect={blockedMessage || (debugDenial ? <PodDebugPermission namespace={namespace} name={name} /> : 'Start an ephemeral container and open a terminal in it. Its entry stays on the Pod until the Pod is deleted.')}
       onClose={() => {
         if (submitting.current) return
         setDraft(undefined)
+        if (refusedNow && mutation.error) unverifiedReview?.rememberRefusal(mutation.error.message)
         if (result?.state === 'error') setResult(undefined)
       }}
-      onConfirm={start} confirmLabel="Start debug container" isLoading={busy} result={outcome}
+      onConfirm={canReview ? start : undefined} confirmLabel="Start debug container" isLoading={busy} result={outcome}
       guard={outcome?.state === 'unknown' && <div className="space-y-2">
         <p>Inspect the Pod YAML for an added ephemeral container before you retry.</p>
         <button type="button" className="btn-secondary px-3 py-1.5 text-sm"
@@ -118,8 +178,15 @@ export function PodDebugAction({ pod, defaultImage, failedContainer }: { pod: Po
           mutation.acknowledgeOutcome()
           setResult(undefined)
         }}>I checked the Pod YAML</button></div>}
-      incompleteReason={draft && !targets.includes(draft.target) ? 'Select a running container.' : undefined}>
-      {draft && <div className="grid gap-3">
+      incompleteReason={!canReview ? undefined : refusedNow ? 'Close to recheck access after the refusal.' : recheckRequired ? 'Recheck access before reviewing another attempt.' : draft && !targets.includes(draft.target) ? 'Select a running container.' : undefined}>
+      {previousRefusal &&
+        <div className="text-warning-text"><p>The last debug request was refused.</p><p className="break-words">{previousRefusal}</p></div>}
+      {!canReview && !changedConnection && reviewStatus?.recheck &&
+        <button type="button" className="btn-secondary px-2 py-1" disabled={reviewStatus.checking} onClick={() => void reviewStatus.recheck?.()}>{reviewStatus.checking ? 'Checking…' : 'Recheck access'}</button>}
+      {draft && canReview && <div className="grid gap-3">
+        {refused && <div className="space-y-1 text-sm text-warning-text"><p>The last debug request was refused.</p><p className="break-words">{refused.message}</p>
+          {recheckRequired && <button type="button" className="btn-secondary px-2 py-1" onClick={() => void unverifiedReview?.recheckAccess()}>Recheck access</button>}</div>}
+        {unverifiedReview && <p className="text-sm text-theme-text-secondary">Radar verified terminal access to this Pod. Kubernetes will decide whether to allow <code className="inline-code">update pods/ephemeralcontainers</code> when you confirm.</p>}
         <label className="grid gap-1">Target container
           <select className="rounded border border-theme-border bg-theme-surface px-2 py-1.5" value={draft.target} disabled={busy}
             onChange={event => setDraft({ ...draft, target: event.target.value })}>
@@ -132,7 +199,7 @@ export function PodDebugAction({ pod, defaultImage, failedContainer }: { pod: Po
             onChange={event => setDraft({ ...draft, image: event.target.value })} />
           <span className="text-xs text-theme-text-tertiary">
             {draft.image.trim() && draft.image.trim() !== defaultImage
-              ? <>Server default: <code>{defaultImage}</code></>
+              ? <>Server default: <code className="inline-code">{defaultImage}</code></>
               : 'Using the server default. Edit to override it for this container.'}
           </span>
         </label>

@@ -793,6 +793,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/services/{namespace}/{name}/endpointslices", s.handleServiceEndpointSlices)
 
 			// Pod debug (ephemeral container)
+			r.Get("/pods/{namespace}/{name}/debug-access", s.bindWrite(s.handlePodDebugAccess))
 			r.Post("/pods/{namespace}/{name}/debug", s.execWrite(s.handleCreateDebugContainer))
 
 			// Node debug (privileged debug pod)
@@ -1555,6 +1556,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		ResourceIssues:              true,
 		ResourceIssueCoverage:       true,
 		IssueCorrelation:            true,
+		PodDebugAccess:              true,
 		PodEnvironment:              true,
 		PolicyResource:              true,
 		WorkloadHistory:             true,
@@ -1719,6 +1721,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 }
 
 func mergeNamespaceCapabilities(caps *k8s.Capabilities, nsCaps *k8s.NamespaceCapabilities) {
+	caps.PodExecUID = nsCaps.Exec && !nsCaps.Errors.Exec
 	caps.PodDebug = !cloudMode() && nsCaps.Exec && nsCaps.PodDebug
 	caps.Exec = mergeNamespaceCapability(caps.Exec, nsCaps.Exec, nsCaps.Errors.Exec)
 	caps.Logs = mergeNamespaceCapability(caps.Logs, nsCaps.Logs, nsCaps.Errors.Logs)
