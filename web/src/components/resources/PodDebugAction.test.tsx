@@ -10,9 +10,11 @@ import { PodDebugAction } from './PodDebugAction'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 const running = { running: {} }
 const pod = {
+  apiVersion: 'v1', kind: 'Pod',
   metadata: { namespace: 'demo', name: 'api', uid: 'reviewed', annotations: { 'kubectl.kubernetes.io/default-container': 'worker' } },
   spec: { containers: [{ name: 'api' }, { name: 'worker' }], initContainers: [{ name: 'mesh', restartPolicy: 'Always' }] },
   status: {
+    phase: 'Running',
     containerStatuses: [{ name: 'api', state: { waiting: {} } }, { name: 'worker', state: running }],
     initContainerStatuses: [{ name: 'mesh', state: running }],
   },
@@ -28,7 +30,7 @@ function render(existing = new QueryClient()) {
   const host = document.createElement('div')
   document.body.append(host)
   root = createRoot(host)
-  act(() => root.render(<QueryClientProvider client={client}><DockProvider><PodDebugAction pod={pod} /><Tabs /></DockProvider></QueryClientProvider>))
+  act(() => root.render(<QueryClientProvider client={client}><DockProvider><PodDebugAction pod={pod} defaultImage="mirror.example/debug" /><Tabs /></DockProvider></QueryClientProvider>))
 }
 afterEach(() => {
   act(() => root.unmount())
@@ -59,7 +61,7 @@ it.each([false, true])('submits the reviewed running target once, keeping the de
   const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit]
   expect(url).toBe('/api/pods/demo/api/debug')
   expect(new Headers(init.headers).get('X-Radar-Connection')).toBe('reviewed-connection')
-  expect(JSON.parse(String(init.body))).toEqual({ uid: 'reviewed', targetContainer: 'worker' })
+  expect(JSON.parse(String(init.body))).toEqual({ uid: 'reviewed', targetContainer: 'worker', returnImmediately: true })
   if (switched) observeConnectionStatus({ connectionId: 'next-cluster' })
   await act(async () => { finish(new Response(JSON.stringify({ containerName: 'debug-1', status: 'pending' }))) })
   expect(document.querySelector('output')!.textContent).toBe(switched ? '' : 'debug-1')

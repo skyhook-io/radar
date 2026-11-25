@@ -114,7 +114,8 @@ func (r *PermissionCheckResult) CredentialRejectedNamespaces(resource string, na
 // Capabilities represents the features available based on RBAC permissions
 type Capabilities struct {
 	ConfigManagement       string                   `json:"configManagement"`
-	Exec                   bool                     `json:"exec"`               // Can create pods/exec (terminal feature)
+	Exec                   bool                     `json:"exec"` // Can create pods/exec (terminal feature)
+	PodDebugImage          string                   `json:"podDebugImage,omitempty"`
 	PodDebug               bool                     `json:"podDebug,omitempty"` // Scoped to the requested namespace.
 	LocalTerminal          bool                     `json:"localTerminal"`      // Local terminal available (not in-cluster, not disabled)
 	LocalShell             string                   `json:"localShell"`         // Shell family where a hand-off command runs: "powershell" on Windows, else "posix"

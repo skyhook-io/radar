@@ -23,7 +23,7 @@ export interface DockTab {
   /** Terminal: a short line shown in the toolbar, e.g. what the session is connected to. */
   sessionNote?: string
   /** An already-created debug container. Reconnects use the reviewed connection. */
-  debugSession?: { connectionId?: string }
+  debugSession?: { connectionId?: string; apiBase: string; podUID: string; image: string }
   // Workload logs props
   workloadKind?: string
   workloadName?: string

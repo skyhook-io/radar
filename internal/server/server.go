@@ -1652,6 +1652,9 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[capabilities] namespace-scoped check for %q failed: %v", ns, err)
 		} else if nsCaps != nil {
 			mergeNamespaceCapabilities(caps, nsCaps)
+			if caps.PodDebug {
+				caps.PodDebugImage = s.resolveDebugImage("")
+			}
 			if nsCaps.Errors != (k8s.NamespaceCapabilityErrors{}) {
 				caps.ChecksIncomplete = true
 			}

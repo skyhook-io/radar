@@ -82,8 +82,13 @@ func newEphemeralContainer(opts EphemeralContainerOptions, securityContext *core
 }
 
 func updateEphemeralContainer(ctx context.Context, client kubernetes.Interface, pod *corev1.Pod, ec corev1.EphemeralContainer, uid types.UID) error {
-	if uid != "" && pod.UID != uid {
-		return apierrors.NewConflict(corev1.Resource("pods"), pod.Name, fmt.Errorf("the Pod was replaced; reopen its details to debug the new Pod"))
+	if uid != "" {
+		if pod.UID != uid {
+			return apierrors.NewConflict(corev1.Resource("pods"), pod.Name, fmt.Errorf("the Pod was replaced; reopen its details to debug the new Pod"))
+		}
+		if pod.DeletionTimestamp != nil || pod.Status.Phase != corev1.PodRunning || !runningDebugTarget(pod, ec.TargetContainerName) {
+			return apierrors.NewConflict(corev1.Resource("pods"), pod.Name, fmt.Errorf("the Pod or target container %q is no longer running", ec.TargetContainerName))
+		}
 	}
 	updated := pod.DeepCopy()
 	updated.Spec.EphemeralContainers = append(updated.Spec.EphemeralContainers, ec)
@@ -94,6 +99,24 @@ func updateEphemeralContainer(ctx context.Context, client kubernetes.Interface, 
 		metav1.UpdateOptions{},
 	)
 	return err
+}
+
+func runningDebugTarget(pod *corev1.Pod, target string) bool {
+	for _, status := range pod.Status.ContainerStatuses {
+		if status.Name == target && status.State.Running != nil {
+			return true
+		}
+	}
+	for _, container := range pod.Spec.InitContainers {
+		if container.Name == target && container.RestartPolicy != nil && *container.RestartPolicy == corev1.ContainerRestartPolicyAlways {
+			for _, status := range pod.Status.InitContainerStatuses {
+				if status.Name == target && status.State.Running != nil {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func isRestrictedPodSecurityError(err error) bool {

@@ -341,7 +341,7 @@ function useActionsBarProps(
   const openWorkloadLogs = useOpenWorkloadLogs()
   const openNodeTerminal = useOpenNodeTerminal()
   const { embedded } = useNavCustomization()
-  const { canExec, canDebugPod, canViewLogs, canPortForward, workloadWrites, workloadWritesPending } = useNamespacedCapabilities(namespace)
+  const { canExec, podDebugImage, canViewLogs, canPortForward, workloadWrites, workloadWritesPending } = useNamespacedCapabilities(namespace)
   const queryClient = useQueryClient()
   // Live forward when local+RBAC; otherwise (in-cluster/Cloud) still surface the
   // copy-paste kubectl command. The button picks live vs. copy by deployment mode.
@@ -431,7 +431,7 @@ function useActionsBarProps(
     canViewLogs,
     canPortForward: showPortForward,
     onOpenTerminal: openTerminal,
-    renderPodDebug: canDebugPod && !embedded ? (pod: any) => <PodDebugAction key={pod.metadata.uid} pod={pod} /> : undefined,
+    renderPodDebug: podDebugImage && !embedded ? (pod: any) => <PodDebugAction key={pod.metadata.uid} pod={pod} defaultImage={podDebugImage} /> : undefined,
     onOpenLogs: openLogs,
     onOpenWorkloadLogs: openWorkloadLogs,
     onOpenNodeTerminal: openNodeTerminal,

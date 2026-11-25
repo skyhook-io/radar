@@ -8,8 +8,10 @@ import { getApiBase } from '../../api/config'
 import { useReviewedActionMutation } from '../../api/reviewedActionMutation'
 import { createPodDebugContainer } from '../../api/podDebug'
 
-interface PodDebugTarget {
-  metadata: { uid: string; name: string; namespace: string }
+export interface PodDebugTarget {
+  apiVersion: string
+  kind: string
+  metadata: { uid: string; name: string; namespace: string; deletionTimestamp?: string }
   spec: {
     containers: { name: string }[]
     initContainers?: { name: string; restartPolicy?: string }[]
@@ -17,6 +19,12 @@ interface PodDebugTarget {
     nodeSelector?: Record<string, string>
   }
   status: {
+    phase?: string
+    ephemeralContainerStatuses?: { name: string; state?: {
+      running?: object
+      waiting?: { reason?: string; message?: string }
+      terminated?: { exitCode: number; reason?: string; message?: string }
+    } }[]
     containerStatuses?: ContainerStatus[]
     initContainerStatuses?: ContainerStatus[]
   }
@@ -27,7 +35,7 @@ interface ContainerStatus {
   state?: Partial<Record<'running' | 'waiting' | 'terminated', object>>
 }
 
-export function PodDebugAction({ pod }: { pod: PodDebugTarget }) {
+export function PodDebugAction({ pod, defaultImage, failedContainer }: { pod: PodDebugTarget; defaultImage: string; failedContainer?: string }) {
   const openTerminal = useOpenTerminal()
   const running = [...(pod.status.containerStatuses ?? []), ...(pod.status.initContainerStatuses ?? [])]
     .filter(container => container.state?.running)
@@ -54,15 +62,15 @@ export function PodDebugAction({ pod }: { pod: PodDebugTarget }) {
           uid, targetContainer: request.targetContainer, image: request.image,
         })
       },
-    },
+    }, 'Check the ephemeral containers in the Pod YAML before trying again.',
   )
   const busy = mutation.isPending
   const outcome = result ?? actionDialogResult(mutation.outcomeError, {
-    unknown: 'Check the ephemeral containers in the Pod YAML before trying again',
+    unknown: 'Radar could not confirm whether the debug container was added',
   })
   function show() {
-    const preferred = getDefaultContainerName(pod)
-    setDraft({ target: preferred && targets.includes(preferred) ? preferred : targets[0], image: '', base: getApiBase(), connection: connectionHeaderValue() })
+    const preferred = failedContainer || getDefaultContainerName(pod)
+    setDraft({ target: preferred && targets.includes(preferred) ? preferred : targets[0], image: defaultImage, base: getApiBase(), connection: connectionHeaderValue() })
   }
 
   async function start() {
@@ -71,19 +79,18 @@ export function PodDebugAction({ pod }: { pod: PodDebugTarget }) {
     submitting.current = true
     setResult(undefined)
     try {
-      const { containerName, status } = await mutation.mutateAsync({ request: {
-        base: draft.base, reviewedContext: draft.connection ?? '', targetContainer: draft.target, image: draft.image.trim() || undefined,
+      const { containerName, image } = await mutation.mutateAsync({ request: {
+        base: draft.base, reviewedContext: draft.connection ?? '', targetContainer: draft.target, image: draft.image.trim() === defaultImage ? undefined : draft.image.trim() || undefined,
       } })
       if (!mounted.current || !sameConnection()) return
       openTerminal({
         namespace, podName: name, containerName, containers: [containerName],
-        debugSession: { connectionId: draft.connection },
-        sessionNote: status === 'pending' ? 'The debug container was added. If it is still starting, reconnect this terminal once it is running.' : undefined,
+        debugSession: { connectionId: draft.connection, apiBase: draft.base, podUID: uid, image },
       })
       setDraft(undefined)
     } catch (error) {
       if (mounted.current && sameConnection()) setResult(actionDialogResult(error instanceof Error ? error : new Error(String(error)), {
-        unknown: 'Check the ephemeral containers in the Pod YAML before trying again',
+        unknown: 'Radar could not confirm whether the debug container was added',
       }))
     } finally {
       submitting.current = false
@@ -91,10 +98,10 @@ export function PodDebugAction({ pod }: { pod: PodDebugTarget }) {
     }
   }
 
-  if (!uid || os?.toLowerCase() === 'windows' || (!draft && !targets.length)) return null
+  if (!uid || pod.apiVersion !== 'v1' || pod.kind !== 'Pod' || pod.status.phase !== 'Running' || pod.metadata.deletionTimestamp || os?.toLowerCase() === 'windows' || (!draft && !targets.length)) return null
   return <>
     <button type="button" className="btn-secondary flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium" onClick={show}>
-      <Bug className="h-3.5 w-3.5" /> Debug
+      <Bug className="h-3.5 w-3.5" />{failedContainer ? 'Debug with an ephemeral container' : 'Debug'}
     </button>
     <ActionConfirmDialog open={!!draft} title="Debug Pod" subject={{ kind: 'Pod', namespace, name }}
       effect="Start an ephemeral container and open a terminal in it. Its entry stays on the Pod until the Pod is deleted."
@@ -118,9 +125,14 @@ export function PodDebugAction({ pod }: { pod: PodDebugTarget }) {
             {targets.map(name => <option key={name} value={name}>{name}</option>)}
           </select>
         </label>
-        <label className="grid gap-1">Debug image (optional)
-          <input className="rounded border border-theme-border bg-theme-surface px-2 py-1.5" placeholder="Server default" value={draft.image} disabled={busy}
+        <label className="grid gap-1">Debug image
+          <input className="rounded border border-theme-border bg-theme-surface px-2 py-1.5" placeholder={defaultImage} value={draft.image} disabled={busy}
             onChange={event => setDraft({ ...draft, image: event.target.value })} />
+          <span className="text-xs text-theme-text-tertiary">
+            {draft.image.trim() && draft.image.trim() !== defaultImage
+              ? <>Server default: <code>{defaultImage}</code></>
+              : 'Using the server default. Edit to override it for this container.'}
+          </span>
         </label>
       </div>}
     </ActionConfirmDialog>

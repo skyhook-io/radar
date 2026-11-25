@@ -15,6 +15,7 @@ export function useReviewedActionMutation<Data, Variables extends { request: { r
   target: string,
   reviewedContext: string | undefined,
   options: Omit<UseMutationOptions<Data, Error, Variables>, 'mutationFn' | 'mutationKey'> & { mutationFn: MutationFunction<Data, Variables> },
+  recoveryInstruction = 'Inspect the current state, then reload this page and review the action again.',
 ) {
   const client = useQueryClient()
   let store = stores.get(client)
@@ -53,7 +54,7 @@ export function useReviewedActionMutation<Data, Variables extends { request: { r
       } catch (error) {
         if (actionOutcomeLocked(error)) {
           const failure = error as Error
-          const message = `${failure.message} Inspect the current state, then reload this page and review the action again.`
+          const message = `${failure.message} ${recoveryInstruction}`
           retainedError = failure instanceof ApiError ? new ApiError(message, failure.status, failure.data) : new Error(message)
         }
         throw error
