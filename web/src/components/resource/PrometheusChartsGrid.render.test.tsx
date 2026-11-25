@@ -66,6 +66,14 @@ describe('Expanded metrics recovery and scope', () => {
     expect(ranges).toEqual([])
   })
 
+  it('shows the OpenObserve notice, not Prometheus setup, when newer Radar reports it not connected', () => {
+    source = { kind: 'openobserve', via: 'local', unavailable: true, error: 'OpenObserve unavailable: timeout' }
+    const html = render()
+    expect(html).toContain('OpenObserve unavailable')
+    expect(html).not.toContain('Discover Prometheus')
+    expect(ranges).toEqual([])
+  })
+
   it('offers metrics settings when the saved local OpenObserve connection is down', () => {
     connected = true
     source = { kind: 'openobserve', via: 'local', unavailable: true }
@@ -175,6 +183,19 @@ describe('Mapped workload Metrics tab', () => {
     expect(charts.flatMap((chart) => chart.referenceLines ?? [])).toEqual(expect.arrayContaining([
       expect.objectContaining({ label: 'Template request 100m' }), expect.objectContaining({ label: 'Template limit 200m' }),
     ]))
+  })
+
+  // Newer Radar reports a down OpenObserve as not connected; older Radar as
+  // connected with an unavailable source. Either way Datadog stays.
+  it.each([false, true])('keeps Datadog totals beside the OpenObserve notice when it is down (connected=%s)', async (wasConnected) => {
+    connected = wasConnected
+    source = { kind: 'openobserve', via: 'hub', unavailable: true, error: 'Radar Hub could not reach OpenObserve' }
+    const html = await renderMapped()
+    expect(html).toContain('OpenObserve unavailable')
+    expect(html).toContain('Datadog workload totals')
+    expect(html).not.toContain('Discover Prometheus')
+    expect(html).not.toContain('Network and storage')
+    expect(ranges).toHaveLength(0)
   })
 
   it('renders Datadog independently when Prometheus is disconnected', async () => {

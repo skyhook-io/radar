@@ -217,6 +217,9 @@ func TestRelayUnavailableIsReportedWithoutFallback(t *testing.T) {
 	if st.Source == nil || !st.Source.Unavailable || !strings.HasPrefix(st.Source.Error, "OpenObserve unavailable") || st.Error != st.Source.Error {
 		t.Fatalf("status = %+v source=%+v", st, st.Source)
 	}
+	if st.Connected || st.Available {
+		t.Fatalf("an unavailable relay reported connected: %+v", st)
+	}
 	if st.Address != "Radar Hub relay" || strings.Contains(st.Address, "hub.example") {
 		t.Fatalf("status address = %q", st.Address)
 	}
@@ -364,6 +367,9 @@ func TestRelayUnavailableClearsThroughHealthProbe(t *testing.T) {
 	time.Sleep(relayHealthProbeInterval)
 	_ = c.GetStatus()
 	waitFor(t, "status available", func() bool { return !c.GetStatus().Source.Unavailable })
+	if st := c.GetStatus(); !st.Connected || !st.Available {
+		t.Fatalf("a recovered relay reported not connected: %+v", st)
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	if len(probes) != 2 || probes[1] != "vector(1)" {

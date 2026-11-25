@@ -1,4 +1,4 @@
-import { hasPrometheusCharts } from './prometheusCharts'
+import { hasPrometheusCharts, metricsSourceUnavailable } from './prometheusCharts'
 import type { RightsizingRow, WorkloadRightsizingEvidence } from '@skyhook-io/k8s-ui/types/rightsizing'
 import { followSwitch, switchFinished, switchInProgress, type ContextSwitchOperation } from './contextSwitch'
 import { createListRefetchInterval, normalizeResourceList, type ResourceListBody, type ResourceListResult } from './resourceLists'
@@ -4457,6 +4457,7 @@ export function useAutoPromConnect(): void {
   const { data: clusterInfo } = useClusterInfo();
   const { data: status, isLoading: statusLoading } = usePrometheusStatus();
   const chartsAvailable = hasPrometheusCharts(status);
+  const sourceUnavailable = metricsSourceUnavailable(status);
   const attemptedRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -4474,6 +4475,9 @@ export function useAutoPromConnect(): void {
       return;
     }
 
+    // An OpenObserve connection that can't answer is the source in use;
+    // discovering Prometheus would not stand in for it.
+    if (sourceUnavailable) return;
     if (attemptedRef.current === context) return;
     let cached: string | null = null;
     try {
@@ -4526,7 +4530,7 @@ export function useAutoPromConnect(): void {
         });
     }, delay);
     return () => window.clearTimeout(timeout);
-  }, [clusterInfo?.context, chartsAvailable, statusLoading, queryClient]);
+  }, [clusterInfo?.context, chartsAvailable, sourceUnavailable, statusLoading, queryClient]);
 }
 
 // Fetch Prometheus metrics for a resource

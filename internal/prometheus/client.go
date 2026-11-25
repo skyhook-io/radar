@@ -556,9 +556,13 @@ func (c *Client) GetStatus() prom.Status {
 
 	if c.relay != nil {
 		src := c.relay.status()
+		// An unavailable relay source reports not connected, so status
+		// never says "Connected" while every chart fails; Address and
+		// Source still say which backend it is and why.
+		up := !src.Unavailable
 		return prom.Status{
-			Available:   true,
-			Connected:   true,
+			Available:   up,
+			Connected:   up,
 			Address:     c.relay.cfg.Address,
 			ContextName: c.contextName,
 			Error:       src.Error,
