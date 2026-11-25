@@ -64,51 +64,75 @@ describe('Agent Sandbox overview gate', () => {
 })
 
 describe('Agent Sandbox overview, from the server summary', () => {
-  it('says what Agent Sandbox is under its title, the sandbox, claim and warm pool model in one line', () => {
-    const html = overview(liveWorkspace())
-    expect(html).toContain('Agent Sandbox gives each agent its own sandboxed Pod; claims take sandboxes from warm pools kept ready ahead of demand.')
-    expect(html.indexOf('Overview</h1>')).toBeLessThan(html.indexOf('Agent Sandbox gives each agent'))
+  it('shows the intro only when the workspace is empty, and leads populated workspaces with Needs attention above At a glance', () => {
+    const empty = overview(emptyWorkspace())
+    expect(empty).toContain('Agent Sandbox gives each agent its own sandboxed Pod')
+    const populated = overview(liveWorkspace())
+    expect(populated).not.toContain('Agent Sandbox gives each agent its own sandboxed Pod')
+    expect(populated.indexOf('Needs attention')).toBeLessThan(populated.indexOf('At a glance'))
+    // Full warm-pool table lives on the Warm pools list, not duplicated on Overview.
+    expect(populated).not.toContain('<table')
   })
 
-  it('answers "is it working?" in one line from the server counts', () => {
+  it('summarizes Controller, Sandboxes, Claims, and Warm reserve in framed At a glance rows', () => {
     const data = liveWorkspace()
-    expect(fact(data, 'Controller')).toBe('running')
-    expect(fact(data, 'Sandboxes')).toBe('9: 0 running, 2 can’t schedule, 1 suspended, 1 suspension blocked, 2 expired, 1 finished, 2 failed')
-    expect(fact(data, 'Claims')).toBe('2: 0 bound, 1 waiting, 1 expired')
-    expect(fact(data, 'Warm pools')).toBe('0 of 2 sandboxes ready in 1 pool')
+    expect(fact(data, 'Controller')).toBe('Running (1/1 ready)')
+    expect(fact(data, 'Sandboxes')).toBe('2 failed · 2 can’t schedule · 1 suspension blocked')
+    expect(fact(data, 'Claims')).toBe('1 waiting · 0 bound')
+    expect(fact(data, 'Warm reserve')).toBe('0 of 2 ready in 1 pool')
+    const html = overview(data)
+    expect(html).toContain('Deployment →')
+    expect(html).toContain('cluster-level check, outside namespace filter')
+    expect(html).toContain('Sandboxes →')
+    expect(html).toContain('Claims →')
+    expect(html).toContain('Warm pools →')
+    expect(html).toContain('3 expired this week →')
   })
 
-  it('marks counts over a partial read with ≥, and a kind the summary left out as unknown, never 0', () => {
+  it('marks counts over a partial read with ≥, and a denied or left-out kind as unknown naming the missing permission, never 0', () => {
     const live = liveWorkspace()
     const partial = liveWorkspace({ counts: { ...live.counts, sandboxes: { ...live.counts.sandboxes!, lowerBound: true } } })
-    expect(fact(partial, 'Sandboxes')).toBe('≥9: ≥0 running, ≥2 can’t schedule, ≥1 suspended, ≥1 suspension blocked, ≥2 expired, ≥1 finished, ≥2 failed')
+    expect(fact(partial, 'Sandboxes')).toBe('≥2 failed · ≥2 can’t schedule · ≥1 suspension blocked')
     const leftOut = liveWorkspace({ counts: { ...live.counts, claims: undefined }, coverage: { ...live.coverage, claims: { state: 'denied' } } })
-    expect(fact(leftOut, 'Claims')).toBe('unknown — no access')
+    expect(fact(leftOut, 'Claims')).toBe('Unknown — no access (missing list sandboxclaims.extensions.agents.x-k8s.io)')
     const notInstalled = liveWorkspace({ counts: { ...live.counts, warmPools: undefined }, coverage: { ...live.coverage, warmPools: { state: 'notInstalled' } } })
-    expect(fact(notInstalled, 'Warm pools')).toBe('not installed')
+    expect(fact(notInstalled, 'Warm reserve')).toBe('Not installed')
     const html = overview(leftOut)
-    expect(html).toContain('SandboxClaims (no access)')
+    expect(html).toContain('SandboxClaims (no access — missing list sandboxclaims.extensions.agents.x-k8s.io)')
   })
 
-  it('reads the controller where it looked, and never calls an unread one stopped', () => {
+  it('reads the controller where it looked, names missing permission when denied, and never calls an unread one stopped', () => {
     const c = liveWorkspace().controller
-    expect(fact(liveWorkspace({ controller: { ...c, state: 'notFound' } }), 'Controller')).toBe('unknown — not found as agent-sandbox-system/agent-sandbox-controller')
-    expect(fact(liveWorkspace({ controller: { ...c, state: 'unread', code: 'user_forbidden' } }), 'Controller')).toBe('unknown — no access')
-    // Loading, overdue and not collected are different reasons; read counts are absent unless the Deployment was read.
+    expect(fact(liveWorkspace({ controller: { ...c, state: 'notFound' } }), 'Controller')).toBe('Unknown — not found as agent-sandbox-system/agent-sandbox-controller')
+    expect(fact(liveWorkspace({ controller: { ...c, state: 'unread', code: 'user_forbidden' } }), 'Controller')).toBe('Unknown — no access (missing get deployments in namespace agent-sandbox-system)')
     const unread = (code: string) => fact(liveWorkspace({ controller: { state: 'unread', namespace: c.namespace, name: c.name, code } }), 'Controller')
-    expect(unread('kind_sync_pending')).toBe('unknown — still loading')
-    expect(unread('kind_sync_timed_out')).toBe('unknown — loading is overdue')
-    expect(unread('radar_kind_not_collected')).toBe('unknown — not collected by Radar')
-    expect(unread('outside_namespace_pin')).toBe('unknown — outside Radar’s namespace scope')
-    expect(fact(liveWorkspace({ controller: { ...c, state: 'scaledToZero', ready: 0, desired: 0 } }), 'Controller')).toBe('scaled to zero')
-    expect(fact(liveWorkspace({ controller: { ...c, state: 'notReady', ready: 0, since: minutesAgo(20) } }), 'Controller')).toBe('not ready for 20m')
+    expect(unread('kind_sync_pending')).toBe('Unknown — still loading')
+    expect(unread('kind_sync_timed_out')).toBe('Unknown — loading is overdue')
+    expect(unread('radar_kind_not_collected')).toBe('Unknown — not collected by Radar')
+    expect(unread('outside_namespace_pin')).toBe('Unknown — outside Radar’s namespace scope')
+    expect(fact(liveWorkspace({ controller: { ...c, state: 'scaledToZero', ready: 0, desired: 0 } }), 'Controller')).toBe('Scaled to zero')
+    expect(fact(liveWorkspace({ controller: { ...c, state: 'notReady', ready: 0, since: minutesAgo(20) } }), 'Controller')).toBe('Not ready for 20m')
+  })
+
+  it('promotes a stopped controller problem callout above Needs attention without duplicating it in the list', () => {
+    const c = liveWorkspace().controller
+    const ctrlRow: AgentSandboxAttention = {
+      id: 'controller', category: 'controller', rule: 'controllerNotRunning', reason: 'AgentSandboxControllerNotReady', severity: 'critical',
+      title: 'Agent Sandbox controller not running',
+      reading: 'No ready replica, so no Sandbox starts.',
+      nextStep: 'Find out why the controller’s Pods aren’t ready, from their events and logs',
+      subject: { kind: 'Deployment', group: 'apps', namespace: c.namespace, name: c.name },
+      issue: false,
+    }
+    const html = overview(liveWorkspace({ controller: { ...c, state: 'notReady', ready: 0 }, attention: [ctrlRow, ...liveAttention()], attentionTotal: 6 }))
+    expect(html.indexOf('Agent Sandbox controller not running')).toBeLessThan(html.indexOf('Needs attention'))
+    expect(html.match(/Agent Sandbox controller not running/g)).toHaveLength(1)
   })
 
   it('lists every row the server sent in the server’s order, each with its next step and the source text folded', () => {
     const html = overview(liveWorkspace())
-    const attention = html.slice(html.indexOf('Needs attention'), html.indexOf('>Warm pools</h2>'))
+    const attention = html.slice(html.indexOf('Needs attention'), html.indexOf('At a glance'))
     expect([...attention.matchAll(/data-rule="(\w+)"/g)].map((m) => m[1])).toEqual(liveAttention().map((a) => a.rule))
-    // The server's order holds even when it doesn't match the kinds' order.
     const reversed = liveAttention().reverse()
     const html2 = overview(liveWorkspace({ attention: reversed }))
     expect([...html2.matchAll(/data-rule="(\w+)"/g)].map((m) => m[1])).toEqual(reversed.map((a) => a.rule))
@@ -123,9 +147,11 @@ describe('Agent Sandbox overview, from the server summary', () => {
     expect(attentionDetail(pool)).toBe('Its 2 sandboxes can’t be scheduled. No sandbox is ready in reserve, so a new claim waits for one to finish starting. Scheduler: all nodes have reached their Pod limit.')
   })
 
-  it('links "See in Issues" only on rows Radar’s Issues list too', () => {
+  it('links Pod logs directly on failed Pods and "See in Issues" only on rows Radar’s Issues list too', () => {
     const html = overview(liveWorkspace())
-    expect(row(html, 'Pod failed')).toContain('See in Issues')
+    const failedRow = row(html, 'Pod failed')
+    expect(failedRow).toContain('Pod logs →')
+    expect(failedRow).toContain('See in Issues')
     expect(row(html, 'Warm reserve below target')).not.toContain('See in Issues')
   })
 
@@ -136,29 +162,24 @@ describe('Agent Sandbox overview, from the server summary', () => {
     const unread: AgentSandboxAttention = { ...claim, relations: [{ ...claim.relations![0], presence: 'unread' }] }
     const html = row(overview(liveWorkspace({ attention: [unread], attentionTotal: 1 })), 'Warm pool not found')
     expect(html).toMatch(/no-such-pool<\/span> <span[^>]*>not read/)
-    // A present relation is a link.
     expect(row(overview(liveWorkspace()), 'Warm reserve below target')).toContain('>tmpl</button>')
   })
 
-  it('branches on the rule: a slow state says how long and that Issues raise it later; a stalled one is the Issue', () => {
-    // The ceiling rounds up, so the clock must not move between the fixture and the reading.
+  it('branches on the rule and renders plain-English "up to" ceilings instead of ≤', () => {
     vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-11-18T12:00:00Z') })
     onTestFinished(() => void vi.useRealTimers())
     const base = liveAttention().find((a) => a.id.endsWith('/bad-image'))!
     const slow: AgentSandboxAttention = { ...base, rule: 'slow', severity: 'warning', title: 'Still starting', reading: 'Pod exists with phase: Pending', rawDetail: undefined, since: minutesAgo(12), issue: false }
     expect(attentionTitle(slow)).toBe('Still starting')
-    expect(attentionAge(slow)?.text).toBe('≤12m')
+    expect(attentionAge(slow)?.text).toBe('up to 12m')
     expect(attentionDetail(slow)).toBe('Pod exists with phase: Pending Radar’s Issues raise it after 30 minutes.')
     const stalled: AgentSandboxAttention = { ...slow, rule: 'stalled', severity: 'alert', since: minutesAgo(45), issue: true }
-    expect(attentionAge(stalled)?.text).toBe('≤45m')
+    expect(attentionAge(stalled)?.text).toBe('up to 45m')
     expect(attentionDetail(stalled)).toBe('Pod exists with phase: Pending')
-    // Any row with a known start says how long; one without says nothing.
-    // A ceiling, said as one and never rounded down: 90 minutes is "≤1h 30m", with why on hover. None without since, never the creation time.
     const aged = attentionAge({ ...base, since: minutesAgo(90) })
-    expect(aged?.text).toBe('≤1h 30m')
-    expect(aged?.tip).toContain('at most 1h 30m ago')
+    expect(aged?.text).toBe('up to 1h 30m')
+    expect(aged?.tip).toContain('up to 1h 30m ago')
     expect(attentionAge(base)).toBeUndefined()
-    // The controller's Available=False is a real flip: exact.
     expect(attentionAge({ ...base, rule: 'controllerNotRunning', since: minutesAgo(20) })?.text).toBe('20m')
   })
 
@@ -179,34 +200,31 @@ describe('Agent Sandbox overview, from the server summary', () => {
   it('shows each row compactly: title, one line, the next step; the reading and the source’s words fold under Details', () => {
     const html = overview(liveWorkspace())
     const pool = row(html, 'Warm reserve below target')
-    const at = (t: string) => {
+    const atPos = (t: string) => {
       const i = pool.indexOf(t)
       expect(i, t).toBeGreaterThanOrEqual(0)
       return i
     }
-    // Visible, in order: the subject, what it holds up, its one link, the next step.
-    expect(at('SandboxWarmPool')).toBeLessThan(at('no claim waits on it'))
-    expect(at('no claim waits on it')).toBeLessThan(at('Show the 2 sandboxes that aren’t ready'))
-    expect(at('Show the 2 sandboxes that aren’t ready')).toBeLessThan(at('Next step: '))
-    // Folded: Radar's fuller reading, the sandboxes it names, the scheduler's own words.
-    expect(at('Next step: ')).toBeLessThan(at('>Details<'))
-    expect(at('>Details<')).toBeLessThan(at('Its 2 sandboxes can’t be scheduled.'))
-    expect(at('>Details<')).toBeLessThan(at('Not ready:'))
-    expect(at('>Details<')).toBeLessThan(at('0/4 nodes are available'))
-    // One link per row: a pool's own sandboxes, not Issues as well.
+    expect(atPos('SandboxWarmPool')).toBeLessThan(atPos('no claim waits on it'))
+    expect(atPos('no claim waits on it')).toBeLessThan(atPos('Show the 2 sandboxes that aren’t ready'))
+    expect(atPos('Show the 2 sandboxes that aren’t ready')).toBeLessThan(atPos('Next step: '))
+    expect(atPos('Next step: ')).toBeLessThan(atPos('>Details<'))
+    expect(atPos('>Details<')).toBeLessThan(atPos('Its 2 sandboxes can’t be scheduled.'))
+    expect(atPos('>Details<')).toBeLessThan(atPos('Not ready:'))
+    expect(atPos('>Details<')).toBeLessThan(atPos('0/4 nodes are available'))
     expect(pool).not.toContain('See in Issues')
-    // The controller's raw message folds too.
     const image = row(html, 'Image can’t be pulled')
     expect(image.indexOf('>Details<')).toBeLessThan(image.indexOf('is waiting: ErrImagePull'))
     expect(image.indexOf('See in Issues')).toBeLessThan(image.indexOf('Next step: '))
   })
 
-  it('says how long a state has lasted as a ceiling, in words', () => {
+  it('says how long a state has lasted as "up to X ago", never "≤X"', () => {
     vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-11-18T12:00:00Z') })
     onTestFinished(() => void vi.useRealTimers())
     const base = liveAttention().find((a) => a.id.endsWith('/bad-image'))!
     const html = overview(liveWorkspace({ attention: [{ ...base, since: minutesAgo(90) }], attentionTotal: 1 }))
-    expect(html).toContain('began ≤1h 30m ago')
+    expect(html).toContain('up to 1h 30m ago')
+    expect(html).not.toContain('≤1h 30m')
   })
 
   it('says how many claims an empty reserve leaves without a warm sandbox, and only what the server counted', () => {
@@ -214,11 +232,9 @@ describe('Agent Sandbox overview, from the server summary', () => {
     const one = (w: AgentSandboxAttention['waitingClaims']) => row(overview(liveWorkspace({ attention: [{ ...pool, waitingClaims: w }], attentionTotal: 1 })), 'Warm reserve below target')
     expect(one({ count: 2, lowerBound: false })).toContain('2 claims waiting with no warm sandbox ready')
     expect(one({ count: 1, lowerBound: true })).toContain('at least 1 claim waiting with no warm sandbox ready')
-    // Not read: nothing said, never "no claim".
     const unread = one(undefined)
     expect(unread).not.toContain('waiting with no warm sandbox ready')
     expect(unread).not.toContain('no claim waits')
-    // From the claim's side: the empty pool it waits on, linked.
     const claim: AgentSandboxAttention = {
       id: 'claim:radar-agents-live/a', category: 'claim', rule: 'stalled', severity: 'alert', title: 'Still binding', nextStep: 'Check the SandboxClaim’s Pod and its events for what it waits on',
       subject: { kind: 'SandboxClaim', group: 'extensions.agents.x-k8s.io', namespace: 'radar-agents-live', name: 'a' },
@@ -226,7 +242,6 @@ describe('Agent Sandbox overview, from the server summary', () => {
     }
     const html = row(overview(liveWorkspace({ attention: [claim], attentionTotal: 1 })), 'Still binding')
     expect(html).toMatch(/waiting: warm pool <button[^>]*>warm<\/button> has no sandbox ready/)
-    // The pool is named once, not again as a relation under Details.
     expect(html.match(/>warm<\/button>/g)).toHaveLength(1)
   })
 
@@ -239,16 +254,16 @@ describe('Agent Sandbox overview, from the server summary', () => {
     expect(html.indexOf(caveat)).toBeLessThan(html.indexOf('>Details<'))
   })
 
-  it('has a blocked suspension’s Pod owner checked first, with the command on its own line under the step', () => {
+  it('links the conflicting Pod directly on Suspension blocked and folds the kubectl command under Details', () => {
     const html = row(overview(liveWorkspace()), 'Suspension blocked')
     const cmd = "kubectl get pod foreign -n radar-agents-live -o jsonpath='{.metadata.ownerReferences}'"
     const plain = html.replace(/<[^>]+>/g, '')
-    expect(html).toContain('Copy command')
-    // The sentence reads whole; the command follows it on its own line.
-    expect(plain).toContain(`Next step: Check who owns Pod foreign before removing it, or recreate the Sandbox under another name${cmd}`)
-    expect(html.slice(html.indexOf('data-command-line'))).toContain(cmd)
-    // The parentheses the text carries for plain readers go with the chip.
+    expect(html).toContain('Conflicting Pod')
+    expect(plain).toContain('Next step: Check who owns Pod foreign before removing it, or recreate the Sandbox under another name')
     expect(plain).not.toContain(`(${cmd})`)
+    // CommandChip lives inside Details, after the Details toggle.
+    expect(html.indexOf('>Details<')).toBeLessThan(html.indexOf('data-command-line'))
+    expect(html.slice(html.indexOf('data-command-line'))).toContain(cmd)
   })
 
   it('says nothing needs attention only when the server read everything', () => {
@@ -260,38 +275,14 @@ describe('Agent Sandbox overview, from the server summary', () => {
     expect(overview(liveWorkspace({ attentionTotal: 240 }))).toContain('Showing 5 of 240.')
   })
 
-  it('shows warm pools with template presence and claims served, unknown where claims were not read', () => {
-    const html = overview(liveWorkspace())
-    const table = html.slice(html.indexOf('>Warm pools</h2>'))
-    expect(table).toContain('0/2')
-    // The server's reserveBelowTarget row names the scheduler: the pool can't schedule, not just warming.
-    expect(table).toContain('>Can’t schedule<')
-    expect(table).not.toContain('>Warming<')
-    const refilling = overview(liveWorkspace({ attention: liveAttention().filter((a) => a.rule !== 'reserveBelowTarget') }))
-    expect(refilling.slice(refilling.indexOf('>Warm pools</h2>'))).toContain('>Warming<')
-    expect(table).toContain('>tmpl</button>')
-    expect(table).toMatch(/>1<\/span><div[^>]*>0 bound/)
-    const w = liveWorkspace().warmPools[0]
-    const unread = overview(liveWorkspace({ warmPools: [{ ...w, claims: undefined, templatePresence: 'unread' }] }))
-    const t2 = unread.slice(unread.indexOf('>Warm pools</h2>'))
-    expect(t2).toContain('unknown')
-    expect(t2).toContain('not read')
-    expect(t2).not.toContain('not found')
-    // A pool that names no template says so, not a dash.
-    const bare = overview(liveWorkspace({ warmPools: [{ ...w, template: undefined, templatePresence: undefined }] }))
-    expect(bare.slice(bare.indexOf('>Warm pools</h2>'))).toContain('no template')
+  it('links recent expirations into the Sandboxes inventory and shows nothing when none expired', () => {
+    expect(overview(liveWorkspace())).toContain('3 expired this week →')
+    expect(overview(emptyWorkspace())).not.toContain('expired this week')
   })
 
-  it('names what expired this week in one line, and nothing when none did', () => {
-    const html = overview(liveWorkspace())
-    const note = html.slice(html.indexOf('Expired this week'), html.indexOf('Needs attention'))
-    for (const name of ['running', 'expired', 'claim-ok']) expect(note).toContain(`>${name}</button>`)
-    expect(overview(emptyWorkspace())).not.toContain('Expired this week')
-  })
-
-  it('shows the namespace filter the server applied as a chip', () => {
+  it('shows the namespace filter the server applied as a chip and subtitle', () => {
     expect(overview(liveWorkspace())).toContain('Namespace: radar-agents-live')
-    expect(overview(liveWorkspace({ namespaces: [] }))).not.toContain('Namespace:')
+    expect(overview(liveWorkspace({ namespaces: [] }))).toContain('All namespaces · objects in radar-agents-live')
   })
 })
 
@@ -300,6 +291,6 @@ describe('Agent Sandbox sidebar badges', () => {
     expect(sidebarCount({ count: 3, lowerBound: false }, ['sandbox', 'sandboxes'])).toEqual({ count: 3, lowerBound: false, title: '3 sandboxes need attention.' })
     expect(sidebarCount({ count: 2, lowerBound: true }, ['claim', 'claims']).title).toBe('At least 2 claims need attention. Some couldn’t be read, so there may be more.')
     expect(sidebarCount({ count: null, lowerBound: true }, ['warm pool', 'warm pools'])).toMatchObject({ count: null, lowerBound: true })
-    expect(sidebarCount({ count: 1, lowerBound: false }, ['row', 'rows'], true).title).toContain('controller’s row')
+    expect(sidebarCount({ count: 1, lowerBound: false }, ['attention item', 'attention items'], true).title).toBe('1 attention item. One is the controller’s row, which every namespace shares.')
   })
 })

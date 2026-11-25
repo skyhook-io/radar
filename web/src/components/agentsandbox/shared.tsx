@@ -7,8 +7,10 @@ import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
 import { refToSelectedResource } from '../../utils/navigation'
 import { FilterChips, Notice, RefreshFailedNotice, ScreenEmptyState, namespaceChip } from '../workspace/layout'
+import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import type { AgentSandboxListKey, AgentSandboxLists, KindRead } from './data'
 import { readingLabel } from './labels'
+import { AGENT_SANDBOX_OVERVIEW } from './routes'
 
 /** A kind list's props: the three kinds as the resource list endpoint read them. */
 export interface AgentSandboxScreenProps {
@@ -29,28 +31,64 @@ export const KIND_LABEL: Record<AgentSandboxListKey | 'templates', string> = {
   templates: 'SandboxTemplates',
 }
 
+export const KIND_LIST_PERMISSION: Record<AgentSandboxListKey | 'templates', string> = {
+  sandboxes: 'list sandboxes.agents.x-k8s.io',
+  claims: 'list sandboxclaims.extensions.agents.x-k8s.io',
+  warmPools: 'list sandboxwarmpools.extensions.agents.x-k8s.io',
+  templates: 'list sandboxtemplates.extensions.agents.x-k8s.io',
+}
+
 export function agentSandboxResource(ref: { kind: string; group: string; namespace: string; name: string }): SelectedResource {
   return refToSelectedResource(ref)
 }
 
-/** What Agent Sandbox is, in one line, at the top of its Overview: the sandbox, claim and warm pool model. */
+/** What Agent Sandbox is, in one line, shown when no objects are present yet. */
 export const AGENT_SANDBOX_WHAT_IT_IS = 'Agent Sandbox gives each agent its own sandboxed Pod; claims take sandboxes from warm pools kept ready ahead of demand.'
 
-/** The title line, an optional intro line under it, and the namespace filter and the screen's own filters as chips when they narrow it. */
-export function AgentSandboxHeader({ title, intro, namespaces, onClearNamespaces, actions, chips: filters = [] }: { title: string; intro?: ReactNode; namespaces: string[]; onClearNamespaces: () => void; actions?: ReactNode; chips?: { label: string; onClear: () => void }[] }) {
+/** The title line, optional subtitle/intro under it, and active filter chips. */
+export function AgentSandboxHeader({
+  title,
+  subtitle,
+  intro,
+  namespaces,
+  onClearNamespaces,
+  actions,
+  chips: filters = [],
+}: {
+  title: string
+  subtitle?: ReactNode
+  intro?: ReactNode
+  namespaces: string[]
+  onClearNamespaces: () => void
+  actions?: ReactNode
+  chips?: { label: string; onClear: () => void }[]
+}) {
+  const navigateTo = useWorkspaceNavigate()
   const chips = [...namespaceChip(namespaces, onClearNamespaces), ...filters]
+  const clickableBreadcrumb = title !== AGENT_SANDBOX_OVERVIEW.label
   return (
     <div className="px-5 pt-4 xl:px-7">
       <div className="flex flex-wrap items-center gap-x-2">
         <span className="flex items-center gap-1.5 text-sm text-theme-text-tertiary">
           <Boxes className="h-3.5 w-3.5" />
-          {AGENT_SANDBOX_LABEL}
+          {clickableBreadcrumb ? (
+            <button
+              type="button"
+              onClick={() => navigateTo(AGENT_SANDBOX_OVERVIEW.path)}
+              className="hover:text-theme-text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded"
+            >
+              {AGENT_SANDBOX_LABEL}
+            </button>
+          ) : (
+            AGENT_SANDBOX_LABEL
+          )}
           <span>/</span>
         </span>
         <h1 className="text-lg font-semibold text-theme-text-primary">{title}</h1>
         {actions && <div className="ml-auto">{actions}</div>}
       </div>
-      {intro && <p className="mt-0.5 text-sm text-theme-text-secondary">{intro}</p>}
+      {subtitle && <div className="mt-0.5 text-xs text-theme-text-tertiary">{subtitle}</div>}
+      {intro && <p className="mt-1 text-sm text-theme-text-secondary">{intro}</p>}
       {chips.length > 0 && (
         <div className="mt-2">
           <FilterChips chips={chips} />
@@ -61,12 +99,16 @@ export function AgentSandboxHeader({ title, intro, namespaces, onClearNamespaces
 }
 
 /** Why a kind was not read in full, in a few words; undefined when it was. */
-export function readGapText(read: KindRead): string | undefined {
+export function readGapText(read: KindRead, kindKey?: AgentSandboxListKey): string | undefined {
   switch (read.state) {
     case 'loading':
       return 'still loading'
     case 'failed':
-      return read.denied ? 'no access' : `couldn’t be read: ${read.message}`
+      return read.denied
+        ? kindKey
+          ? `no access — missing ${KIND_LIST_PERMISSION[kindKey]}`
+          : 'no access'
+        : `couldn’t be read: ${read.message}`
     case 'read':
       return resourceCoverageNotice(read.coverage, 'objects')?.replace(/^Partial results\. /, '') ?? resourceNarrowedNotice(read.coverage)
   }
@@ -76,7 +118,7 @@ export function readGapText(read: KindRead): string | undefined {
 /** Says which kinds this screen reads were not read in full, and why. What wasn't read shows as unknown. */
 export function AgentSandboxCoverageNotice({ data, kinds }: { data: AgentSandboxLists; kinds: readonly AgentSandboxListKey[] }) {
   const gaps = kinds.flatMap((k) => {
-    const text = readGapText(data[k])
+    const text = readGapText(data[k], k)
     return text ? [`${KIND_LABEL[k]} (${text.replace(/\.$/, '')})`] : []
   })
   if (gaps.length === 0) return null
@@ -253,12 +295,16 @@ export function ExpiryCell({ resource, claimed }: { resource: any; claimed?: boo
 }
 
 /** A table's empty text: what was read, so an unread kind never reads as none. */
-export function coverageEmptyText(read: KindRead, kind: string): string {
+export function coverageEmptyText(read: KindRead, kind: string, kindKey?: AgentSandboxListKey): string {
   switch (read.state) {
     case 'loading':
       return `${kind} are still loading.`
     case 'failed':
-      return read.denied ? `Unknown: no access to ${kind} here.` : `Unknown: ${kind} couldn’t be read (${read.message}).`
+      return read.denied
+        ? kindKey
+          ? `Unknown: no access to ${kind} (missing ${KIND_LIST_PERMISSION[kindKey]}).`
+          : `Unknown: no access to ${kind} here.`
+        : `Unknown: ${kind} couldn’t be read (${read.message}).`
     case 'notServed':
       return `${kind} aren’t served in this cluster: their CRD isn’t installed.`
   }
