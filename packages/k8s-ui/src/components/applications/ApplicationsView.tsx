@@ -180,16 +180,6 @@ export interface ApplicationsViewProps {
   /** Lift matching applications above the remaining results, preserving the active sort.
    *  A family moves with all its children when any visible member matches. */
   pinnedSection?: { title: string; predicate: (entry: AppEntry) => boolean }
-  /**
-   * `all` (default) counts the base list after system-app visibility. `searchAndSource`
-   * counts text and Source matches for the header tiles, health distribution, and
-   * Status, Class, Type, and Environment facets before applying other filters.
-   * In either mode, selected health tiles stay visible at zero so they can be cleared.
-   * Source counts always use the base list. In scoped mode, choosing a source dims the dots
-   * beside the other sources. Scoped mode also hides the Type facet when at most one category
-   * matches unless a Type is selected.
-   */
-  countsFrom?: 'all' | 'searchAndSource'
 }
 
 const APPS_FILTER_SCHEMA = defineFilterSchema({
@@ -202,7 +192,7 @@ const APPS_FILTER_SCHEMA = defineFilterSchema({
   system: { param: 'system', type: 'boolean' },
 })
 
-export function ApplicationsView({ entries: allEntries, variant, onSelect, title = 'Applications', description, emptySlot, headerActions, loading, renderRowLeading, pinnedSection, countsFrom = 'all' }: ApplicationsViewProps) {
+export function ApplicationsView({ entries: allEntries, variant, onSelect, title = 'Applications', description, emptySlot, headerActions, loading, renderRowLeading, pinnedSection }: ApplicationsViewProps) {
   // Facets + search + show-system live in the URL (shareable, bookmarkable) via
   // the shared filter-state contract. Sort stays local: it's a compound
   // {key, dir} view-preference, not a result-narrowing filter, so it isn't
@@ -229,17 +219,16 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
     [allEntries, showSystem, variant],
   )
   const systemCount = useMemo(() => (variant === 'single' ? allEntries.filter(isSystemApp).length : 0), [allEntries, variant])
-  const scoped = useMemo(() => {
-    const t = textFilter.trim().toLowerCase()
-    return all.filter((e) => (!fSource.size || fSource.has(e.source)) && (!t || searchTextForEntry(e).includes(t)))
-  }, [all, fSource, textFilter])
 
   const entries = useMemo(() => {
-    const filtered = scoped.filter((e) => {
+    const t = textFilter.trim().toLowerCase()
+    const filtered = all.filter((e) => {
+      if (t && !searchTextForEntry(e).includes(t)) return false
       if (fHealth.size && !fHealth.has(e.health)) return false
       // Inclusive: a mixed app matches the filter of ANY class it contains.
       if (fClass.size && !e.classSet.some((c) => fClass.has(c))) return false
       if (fType.size && !fType.has(e.category)) return false
+      if (fSource.size && !fSource.has(e.source)) return false
       if (fEnv.size && !entryEnvs(e).some((env) => fEnv.has(env))) return false
       return true
     })
@@ -250,7 +239,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
       filtered.sort((a, b) => (HEALTH_RANK[b.health] ?? 0) - (HEALTH_RANK[a.health] ?? 0) || a.row.name.localeCompare(b.row.name))
     }
     return filtered
-  }, [scoped, fHealth, fEnv, fClass, fType, sort])
+  }, [all, textFilter, fHealth, fEnv, fSource, fClass, fType, sort])
 
   // ── App groups ──────────────────────────────────────────────────────────────
   // Instances sharing a wire `identity` fold into one ladder row (foldAppGroups).
@@ -350,22 +339,21 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
     },
   ])
 
-  const countEntries = countsFrom === 'all' ? all : scoped
   const counts = useMemo(() => {
     const health: Record<string, number> = {}
     const env: Record<string, number> = {}
     const source: Record<string, number> = {}
     const workloadClass: Record<string, number> = {}
     const category: Record<string, number> = {}
-    for (const e of all) source[e.source] = (source[e.source] ?? 0) + 1
-    for (const e of countEntries) {
+    for (const e of all) {
       health[e.health] = (health[e.health] ?? 0) + 1
       for (const c of e.classSet) workloadClass[c] = (workloadClass[c] ?? 0) + 1
+      source[e.source] = (source[e.source] ?? 0) + 1
       category[e.category] = (category[e.category] ?? 0) + 1
       for (const en of entryEnvs(e)) env[en] = (env[en] ?? 0) + 1
     }
     return { health, env, source, workloadClass, category }
-  }, [all, countEntries])
+  }, [all])
 
   // asc → desc → off (null = default health-worst-first sort).
   const onSort = (key: SortKey) => {
@@ -376,8 +364,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
     })
   }
 
-  const filteredCounts = countsFrom === 'searchAndSource'
-  const total = countEntries.length
+  const total = all.length
   const envOptions = [...new Set([...Object.keys(counts.env), ...fEnv])]
     .sort((a, b) => (envRank(b === 'none' ? undefined : b) ?? -1) - (envRank(a === 'none' ? undefined : a) ?? -1))
     .map((env) => ({ value: env, label: env === 'none' ? 'unlabeled' : env, count: counts.env[env] ?? 0 }))
@@ -390,13 +377,13 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
   // Clickable status tile wired to the health facet — tap to filter to that tier.
   const healthTile = (h: AppHealth, tone: SummaryTone) => {
     const active = fHealth.has(h)
-    if (initialLoading) {
-      return active || h === 'healthy' || h === 'degraded' || h === 'unhealthy'
+    if (initialLoading && !active) {
+      return h === 'healthy' || h === 'degraded' || h === 'unhealthy'
         ? <SummaryTile key={h} label={HEALTH_META[h].label} value={0} tone={tone} loading />
         : null
     }
     if (!counts.health[h] && !active) return null
-    return <SummaryTile key={h} label={HEALTH_META[h].label} value={counts.health[h] ?? 0} tone={tone} active={active} onClick={() => filters.toggle('health', h)} />
+    return <SummaryTile key={h} label={HEALTH_META[h].label} value={counts.health[h] ?? 0} tone={tone} loading={initialLoading} active={active} onClick={() => filters.toggle('health', h)} />
   }
 
   // showSystem lives in the Filters rail, so Clear resets it too (and its
@@ -453,7 +440,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
               <button type="button" onClick={clearAllFilters} className="text-[10px] font-medium text-blue-500 hover:text-blue-400">Clear</button>
             )}
           >
-            {initialLoading ? (
+            {initialLoading && activeFilterCount === 0 ? (
               <BoardRailSkeleton
                 sections={[
                   ['Status', 5],
@@ -467,12 +454,9 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
               <>
             <Facet icon={HeartPulse} title="Status" options={HEALTH_ORDER.map((h) => ({ value: h, label: HEALTH_META[h].label, count: counts.health[h] ?? 0, tone: HEALTH_TONE[h] }))} selected={fHealth} onToggle={(v) => filters.toggle('health', v)} />
             <Facet icon={Layers} title="Class" options={CLASS_ORDER.map((c) => ({ value: c, label: CLASS_META[c].label, count: counts.workloadClass[c] ?? 0 }))} selected={fClass} onToggle={(v) => filters.toggle('class', v)} />
-            {/* A Type the filtered list has only one of isn't a choice: left out unless picked. */}
-            {(countsFrom === 'all' || fType.size > 0 || CATEGORY_ORDER.filter((c) => (counts.category[c] ?? 0) > 0).length > 1) && (
-              <Facet icon={Shapes} title="Type" options={CATEGORY_ORDER.map((c) => ({ value: c, label: CATEGORY_META[c].label, count: counts.category[c] ?? 0, tooltip: CATEGORY_META[c].tooltip }))} selected={fType} onToggle={(v) => filters.toggle('type', v)} />
-            )}
+            <Facet icon={Shapes} title="Type" options={CATEGORY_ORDER.map((c) => ({ value: c, label: CATEGORY_META[c].label, count: counts.category[c] ?? 0, tooltip: CATEGORY_META[c].tooltip }))} selected={fType} onToggle={(v) => filters.toggle('type', v)} />
             <Facet icon={Globe} title="Environment" info={<EnvHint />} options={envOptions} selected={fEnv} onToggle={(v) => filters.toggle('env', v)} />
-            <Facet icon={Tag} title="Source" options={SOURCE_ORDER.map((s) => ({ value: s, label: SOURCE_META[s].label, count: counts.source[s] ?? 0, dim: filteredCounts && fSource.size > 0 && !fSource.has(s) }))} selected={fSource} onToggle={(v) => filters.toggle('source', v)} />
+            <Facet icon={Tag} title="Source" options={SOURCE_ORDER.map((s) => ({ value: s, label: SOURCE_META[s].label, count: counts.source[s] ?? 0 }))} selected={fSource} onToggle={(v) => filters.toggle('source', v)} />
             {systemCount > 0 && (
               <label className="flex cursor-pointer items-center gap-2 border-b border-theme-border px-3 py-2 text-[11px] text-theme-text-secondary hover:bg-theme-hover">
                 <input type="checkbox" checked={showSystem} onChange={(e) => filters.setBoolean('system', e.target.checked)} className="accent-skyhook-500" />
@@ -519,8 +503,8 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                 <EmptyState
                   tone="filtered"
                   variant="card"
-                  headline={all.length === 0 ? 'No applications detected yet' : 'No applications match the filters'}
-                  body={all.length === 0 ? 'Deploy services, workers, or jobs to this cluster to see them grouped by app.' : 'Clear the filters above.'}
+                  headline={total === 0 ? 'No applications detected yet' : 'No applications match the filters'}
+                  body={total === 0 ? 'Deploy services, workers, or jobs to this cluster to see them grouped by app.' : 'Clear the filters above.'}
                 />
               </div>
             )

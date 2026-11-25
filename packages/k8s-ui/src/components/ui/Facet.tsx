@@ -56,7 +56,6 @@ export function FacetButton({
   tone = 'neutral',
   tooltip,
   onClick,
-  dim,
 }: {
   label: string
   count?: number
@@ -64,8 +63,6 @@ export function FacetButton({
   tone?: FacetTone
   tooltip?: ReactNode
   onClick: () => void
-  /** Dims only the decorative dot of an unselected option. */
-  dim?: boolean
 }) {
   const btn = (
     <button
@@ -79,7 +76,7 @@ export function FacetButton({
           : 'text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary',
       )}
     >
-      <span aria-hidden="true" className={clsx('h-2 w-2 shrink-0 rounded-full', DOT_CLASS[tone], dim && !active && 'opacity-60')} />
+      <span className={clsx('h-2 w-2 shrink-0 rounded-full', DOT_CLASS[tone])} />
       <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
       {count != null && count > 0 && <span className="tabular-nums text-theme-text-tertiary">{count}</span>}
     </button>
@@ -94,7 +91,8 @@ export function FacetButton({
 }
 
 // Convenience wrapper: a FacetSection of multi-select FacetButtons driven by a
-// Set. Selected options stay visible so they can be cleared.
+// Set. Auto-hides zero-count options (quieter than a hard slice cap) unless
+// selected or hideZero is turned off.
 export function Facet<T extends string>({
   title,
   icon,
@@ -107,15 +105,7 @@ export function Facet<T extends string>({
   title: string
   icon?: ComponentType<{ className?: string }>
   info?: ReactNode
-  options: {
-    value: T
-    label: string
-    count: number
-    tone?: FacetTone
-    tooltip?: ReactNode
-    /** Dims only the decorative dot of an unselected option. */
-    dim?: boolean
-  }[]
+  options: { value: T; label: string; count: number; tone?: FacetTone; tooltip?: ReactNode }[]
   selected: Set<T>
   onToggle: (v: T) => void
   hideZero?: boolean
@@ -132,7 +122,6 @@ export function Facet<T extends string>({
           active={selected.has(o.value)}
           tone={o.tone}
           tooltip={o.tooltip}
-          dim={o.dim}
           onClick={() => onToggle(o.value)}
         />
       ))}
