@@ -275,7 +275,10 @@ func (p *metricsSourcePoller) decide(resp MetricsSourceResponse) (MetricsSourceD
 }
 
 // relayKey covers everything the relay connection depends on. The token is
-// hashed in, never stored.
+// hashed in, never stored. Hub's connection revision is in it because Hub
+// can move to another OpenObserve (endpoint or organization) and keep the
+// cluster's matchers: a new key is what invalidates work done against the
+// old store, such as a running rightsizing scan.
 func (p *metricsSourcePoller) relayKey(resp MetricsSourceResponse) string {
 	matchers := make([]string, 0, len(resp.Matchers))
 	for _, m := range resp.Matchers {
@@ -283,7 +286,7 @@ func (p *metricsSourcePoller) relayKey(resp MetricsSourceResponse) string {
 	}
 	slices.Sort(matchers)
 	h := sha256.New()
-	for _, part := range append([]string{p.hubOrigin, p.token, resp.RelayPath}, matchers...) {
+	for _, part := range append([]string{p.hubOrigin, p.token, resp.RelayPath, resp.Revision}, matchers...) {
 		h.Write([]byte(part))
 		h.Write([]byte{0})
 	}

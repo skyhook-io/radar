@@ -145,13 +145,21 @@ func TestMetricsSourcePollerSwitchesToRelayAndBack(t *testing.T) {
 	if len(decisions) != 4 || decisions[3].Key == relay.Key {
 		t.Fatal("matcher change did not replace the relay key")
 	}
+	// Hub moved to another OpenObserve and kept the matchers: a new revision
+	// replaces the key, so work against the old store is invalidated.
+	src["revision"] = "r2"
+	hub.set(src)
+	p.poll(ctx)
+	if len(decisions) != 5 || decisions[4].Key == decisions[3].Key {
+		t.Fatal("a new connection revision did not replace the relay key")
+	}
 
 	// A failed check keeps the relay rather than falling back.
 	hub.mu.Lock()
 	hub.status = http.StatusServiceUnavailable
 	hub.mu.Unlock()
 	p.poll(ctx)
-	if len(decisions) != 4 {
+	if len(decisions) != 5 {
 		t.Fatalf("failed source check applied %+v", decisions[len(decisions)-1])
 	}
 
@@ -160,7 +168,7 @@ func TestMetricsSourcePollerSwitchesToRelayAndBack(t *testing.T) {
 	hub.mu.Unlock()
 	hub.set(map[string]any{"source": "prometheus"})
 	p.poll(ctx)
-	if len(decisions) != 5 || decisions[4].Response.Source != MetricsSourcePrometheus {
+	if len(decisions) != 6 || decisions[5].Response.Source != MetricsSourcePrometheus {
 		t.Fatalf("revert decision = %+v", decisions[len(decisions)-1])
 	}
 }
