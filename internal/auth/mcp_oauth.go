@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/skyhook-io/radar/pkg/urlutil"
 )
@@ -116,6 +117,17 @@ func mcpSecureURL(u *url.URL) bool {
 	return u.Scheme == "http" && (u.Hostname() == "localhost" || (ip != nil && ip.IsLoopback()))
 }
 
+// The consent page shows the host as written, so an international or invisible
+// character could imitate another host; only the encoded (xn--) form is accepted.
+func mcpASCIIHost(host string) bool {
+	for i := 0; i < len(host); i++ {
+		if host[i] <= ' ' || host[i] >= 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
 // Native loopback callbacks may choose a new ephemeral port (RFC 8252 section 7.3).
 func mcpRedirectAllowed(registered []string, raw string) bool {
 	if slices.Contains(registered, raw) {
@@ -202,11 +214,17 @@ func (s *MCPOAuthServer) HandleRegister(w http.ResponseWriter, r *http.Request) 
 	}
 	for _, raw := range client.RedirectURIs {
 		u, err := url.Parse(raw)
-		if err != nil || len(raw) > 2048 || u.Host == "" || u.User != nil || u.Fragment != "" || !mcpSecureURL(u) {
+		if err != nil || len(raw) > 2048 || u.Host == "" || u.User != nil || u.Fragment != "" || !mcpSecureURL(u) || !mcpASCIIHost(u.Hostname()) {
 			mcpError(w, 400, "invalid_redirect_uri")
 			return
 		}
 	}
+	client.Name = strings.Map(func(r rune) rune {
+		if unicode.In(r, unicode.Cc, unicode.Cf) {
+			return -1
+		}
+		return r
+	}, client.Name)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.prune()
