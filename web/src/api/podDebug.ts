@@ -19,7 +19,7 @@ export function createPodDebugContainer(namespace: string, podName: string, conn
 }
 
 interface RefusedAttempt { message: string; rechecked: boolean }
-type PodDebugAccess = { exec?: boolean; refusedAttempt?: RefusedAttempt } & ({ state: 'allowed'; image: string } | { state: 'unknown'; image?: string } | { state: 'denied' | 'unavailable' })
+type PodDebugAccess = { exec?: boolean; refusedAttempt?: RefusedAttempt } & ({ state: 'allowed'; image: string } | { state: 'unknown'; image?: string } | { state: 'denied' | 'unavailable' | 'check_failed' })
 
 function refusesDebug(access?: PodDebugAccess) {
   return access?.state === 'denied' || access?.state === 'unavailable'
@@ -42,7 +42,7 @@ export function usePodDebugAccess(namespace: string, name: string, uid: string, 
         headers: connectionHeaders(connection),
       })
       const refusal = client.getQueryData<PodDebugAccess>(key)?.refusedAttempt
-      return (answer.state === 'unknown' || answer.state === 'denied') && refusal ? { ...answer, refusedAttempt: refusal } : answer
+      return (answer.state === 'unknown' || answer.state === 'denied' || answer.state === 'check_failed') && refusal ? { ...answer, refusedAttempt: refusal } : answer
     },
     enabled: q => support === 'supported' && (enabled || (!!namespaceGrant && refusesDebug(q.state.data))),
     staleTime: 15_000,

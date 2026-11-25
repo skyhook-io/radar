@@ -107,7 +107,7 @@ it('keeps the header chooser open on a confirmed denial after a refused write', 
   render()
   click('Debug')
   act(() => root.render(<QueryClientProvider client={client}><DockProvider>
-    <PodDebugAction pod={pod} deniedAfterRefusal="The image policy refused this request" /><Tabs />
+    <PodDebugAction pod={pod} debugDenial={{ refusal: 'The image policy refused this request' }} /><Tabs />
   </DockProvider></QueryClientProvider>))
   const dialog = document.querySelector('[role="dialog"]')!
   expect(dialog.textContent).toContain('You don’t have permission to add a debug container to this Pod.')
@@ -115,5 +115,6 @@ it('keeps the header chooser open on a confirmed denial after a refused write', 
   click('Start debug container')
   expect(fetch).not.toHaveBeenCalled()
   click('Cancel')
-  expect(document.querySelector('[role="status"]')?.textContent).toBe('Debug access denied for this Pod')
+  click('Debug access denied for this Pod')
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Copy access request')
 })

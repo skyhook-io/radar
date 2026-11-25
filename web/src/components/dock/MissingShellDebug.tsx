@@ -1,7 +1,7 @@
 import { type ReactNode, useState } from 'react'
-import { Copy, RefreshCw, Terminal } from 'lucide-react'
+import { Terminal } from 'lucide-react'
 import { formatAge, getRunningEphemeralContainers, useOpenTerminal } from '@skyhook-io/k8s-ui'
-import { copyText } from '@skyhook-io/k8s-ui/utils/clipboard'
+import { PodDebugAccessRequest } from '../resources/PodDebugAccessRequest'
 import { useResource } from '../../api/client'
 import { connectionHeaderValue, useCurrentConnectionId } from '../../api/connectionBinding'
 import { getApiBase } from '../../api/config'
@@ -56,7 +56,6 @@ function DebugOptions({ namespace, name, uid, target, connection, base, pod }: R
     execOnly, !execOnly && !running.length ? podDebugImage : undefined)
   const openTerminal = useOpenTerminal()
   const [choice, setChoice] = useState('')
-  const [copied, setCopied] = useState<'copied' | 'manual'>()
   if (running.length && support === 'supported' && (!execOnly || canOpenEphemeralTerminal || (!query.error && query.data?.exec))) {
     const selected = running.find(c => c.name === choice) ?? running[0]
     return <div className="flex w-full min-w-0 max-w-md flex-col items-center gap-2">
@@ -91,7 +90,7 @@ function DebugOptions({ namespace, name, uid, target, connection, base, pod }: R
   }
   const access = query.error ? undefined : query.data
   const allowedImage = access?.state === 'allowed' ? access.image :
-    access?.state === 'denied' || access?.state === 'unavailable' ? undefined : podDebugImage
+    access?.state === 'denied' || access?.state === 'unavailable' || access?.state === 'check_failed' ? undefined : podDebugImage
   if (allowedImage) return <div className="flex flex-col items-center gap-2">
     <p className="text-xs text-theme-text-secondary">Open a shell in a separate container in this Pod.</p>
     <PodDebugAction pod={pod} defaultImage={allowedImage} failedContainer={target}/>
@@ -109,13 +108,9 @@ function DebugOptions({ namespace, name, uid, target, connection, base, pod }: R
   </div>
   const denied = access?.state === 'denied'
   const sharedServiceAccount = !username && !authEnabled && deployment?.mode === 'in-cluster'
-  const requester = username ? `Kubernetes user ${username}` : sharedServiceAccount ? 'the ServiceAccount used by this Radar installation' : 'me'
-  const subjectDetails = sharedServiceAccount ? ' For the ServiceAccount subject, use the running Radar Pod’s namespace and its spec.serviceAccountName.'
-    : !username && deployment?.mode === 'local' ? ' I can identify my Kubernetes user with kubectl auth whoami in this context.' : ''
-  const request = denied ? `Could you grant ${requester} permission to update pods/ephemeralcontainers for Pod ${name} in namespace ${namespace}? I need to troubleshoot container ${target}. Please limit the rule to resourceNames: ["${name}"]. A replacement Pod with another name would need its own grant.${subjectDetails}`
-    : `Could you check whether ${username ? `Kubernetes user ${username}` : sharedServiceAccount ? requester : 'my Kubernetes identity'} can update pods/ephemeralcontainers for Pod ${name} in namespace ${namespace}? Radar couldn’t verify access while I was troubleshooting container ${target}.${subjectDetails}`
   return <div className="flex max-w-md flex-col items-center gap-2 text-xs text-theme-text-secondary">
     <p>{denied ? <>{sharedServiceAccount ? "Radar’s ServiceAccount doesn’t have" : "You don’t have"} permission to add a debug container to this Pod. Copy an access request for your cluster administrator.</>
+      : access?.state === 'check_failed' ? <>You can open terminals in this Pod. Kubernetes couldn’t complete the check for adding a debug container. Recheck access or ask your administrator to verify it.</>
       : query.error ? <>The permission request failed before Radar received a decision for <code>{namespace}/{name}</code>. Recheck access or ask your administrator to verify it.</>
       : unverifiedImage ? <>You can open terminals in this Pod. Whether you can add a debug container is unconfirmed.</>
       : <>The cluster access check returned no decision for <code>{namespace}/{name}</code>. Recheck access or ask your administrator to verify it.</>}</p>
@@ -125,12 +120,6 @@ function DebugOptions({ namespace, name, uid, target, connection, base, pod }: R
     </div>}
     {unverifiedImage && (!unverifiedReview?.refused || unverifiedReview.refused.rechecked) && <PodDebugAction pod={pod} defaultImage={unverifiedImage} failedContainer={target} unverifiedReview={unverifiedReview}/>}
     {denied && <p className="text-xs text-theme-text-tertiary">Pod <code>{namespace}/{name}</code></p>}
-    <div className="flex flex-wrap items-center justify-center gap-2">
-      <button className="btn-secondary flex items-center gap-1.5 rounded px-2 py-1" onClick={async () => setCopied(await copyText(request) ? 'copied' : 'manual')}>
-        <Copy className="h-3 w-3"/>{copied === 'copied' ? 'Copied' : denied ? 'Copy access request' : 'Copy verification request'}</button>
-      <button className="btn-secondary flex items-center gap-1.5 rounded px-2 py-1" disabled={query.isFetching}
-        onClick={() => { setCopied(undefined); void recheckAccess() }}><RefreshCw className="h-3 w-3"/>{query.isFetching ? 'Checking…' : 'Recheck access'}</button>
-    </div>
-    {copied === 'manual' && <textarea aria-label={denied ? 'Access request to copy' : 'Verification request to copy'} className="w-full rounded bg-theme-elevated p-2" value={request} readOnly onFocus={event => event.target.select()}/>}
+    <PodDebugAccessRequest key={denied ? 'grant' : 'verify'} namespace={namespace} name={name} target={target} denied={denied} checking={query.isFetching} onRecheck={() => void recheckAccess()} />
   </div>
 }

@@ -202,3 +202,19 @@ it('explains how to find the local effective Kubernetes username before requesti
   await act(async () => button('Copy access request')!.click())
   expect(f.copy.mock.lastCall?.[0]).toContain('kubectl auth whoami in this context')
 })
+
+it('keeps verified named exec when the separate update review failed, with no write preview', async () => {
+  f.access = 'check_failed'
+  f.namedExec = true
+  render()
+  expect(host.textContent).toContain('Kubernetes couldn’t complete the check')
+  expect(button('Copy verification request')).toBeDefined()
+  expect(button('Review debug container')).toBeUndefined()
+  expect(button('Copy access request')).toBeUndefined()
+  function Details() {
+    const access = usePodDetailAccess(f.pod, { canExec: false, canOpenEphemeralTerminal: false })
+    return <output>{String(access.canExec)} {access.debugImage ?? 'no preview'}</output>
+  }
+  act(() => root.render(<Details/>))
+  expect(host.textContent).toBe('true no preview')
+})

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -33,14 +34,18 @@ func (s *Server) handlePodDebugAccess(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	response := reviewPodDebugAccess(ctx, s.getClientForRequest(r), ns, name, cloudMode() || r.URL.Query().Get("execOnly") == "true", s.resolveDebugImage(""))
+	response, err := reviewPodDebugAccess(ctx, s.getClientForRequest(r), ns, name, cloudMode() || r.URL.Query().Get("execOnly") == "true", s.resolveDebugImage(""))
+	if err != nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Kubernetes could not complete the access check for this Pod. Recheck access.")
+		return
+	}
 	s.writeJSON(w, response)
 }
 
-func reviewPodDebugAccess(ctx context.Context, client kubernetes.Interface, ns, name string, execOnly bool, defaultImage string) podDebugAccess {
+func reviewPodDebugAccess(ctx context.Context, client kubernetes.Interface, ns, name string, execOnly bool, defaultImage string) (podDebugAccess, error) {
 	response := podDebugAccess{State: "unknown"}
 	if client == nil {
-		return response
+		return podDebugAccess{}, errors.New("Kubernetes client unavailable")
 	}
 	for _, action := range []struct{ verb, subresource string }{{"create", "exec"}, {"update", "ephemeralcontainers"}} {
 		result, err := client.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, &authv1.SelfSubjectAccessReview{
@@ -49,14 +54,17 @@ func reviewPodDebugAccess(ctx context.Context, client kubernetes.Interface, ns, 
 			}},
 		}, metav1.CreateOptions{})
 		if err != nil {
-			return response
+			if response.Exec {
+				return podDebugAccess{State: "check_failed", Exec: true}, nil
+			}
+			return podDebugAccess{}, err
 		}
 		if result.Status.Allowed {
 			if action.subresource == "exec" {
 				response.Exec = true
 				if execOnly {
 					response.State = "unavailable"
-					return response
+					return response, nil
 				}
 				// The chooser can preview a confirmed attempt when only the update review is inconclusive.
 				response.Image = defaultImage
@@ -64,16 +72,16 @@ func reviewPodDebugAccess(ctx context.Context, client kubernetes.Interface, ns, 
 			continue
 		}
 		if !result.Status.Denied && result.Status.EvaluationError != "" {
-			return response
+			return response, nil
 		}
 		if action.subresource == "exec" {
 			response.State = "unavailable"
-			return response
+			return response, nil
 		}
 		response.State = "denied"
 		response.Image = ""
-		return response
+		return response, nil
 	}
 	response.State = "allowed"
-	return response
+	return response, nil
 }
