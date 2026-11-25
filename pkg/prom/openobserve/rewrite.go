@@ -351,9 +351,10 @@ func (r *rewriter) call(c *parser.Call) (parser.Expr, []rename, error) {
 	if len(pending) > 0 {
 		out = wrapRenames(c, pending)
 	}
-	if c.Func.Name == "vector" {
-		// vector() has no labels; give it the cluster's so `x or vector(0)`
-		// survives FilterResponse.
+	if c.Func.Name == "vector" || absentOverComputed(c) {
+		// vector() has no labels, nor has absent() over anything but a plain
+		// selector; give them the cluster's so `x or vector(0)` and
+		// `absent(sum(x))` survive FilterResponse.
 		for _, f := range r.s.forced {
 			out = labelReplace(out, f.Name, strings.ReplaceAll(f.Value, "$", "$$"), "", "")
 		}
@@ -395,6 +396,33 @@ func stringArg(e parser.Expr) (string, bool) {
 		return "", false
 	}
 	return strings.ToLower(s.Val), true
+}
+
+// absentOverComputed reports whether c is absent or absent_over_time over an
+// expression its result can't take labels from (an aggregation, a function,
+// a subquery): such a result carries no labels at all.
+func absentOverComputed(c *parser.Call) bool {
+	if len(c.Args) != 1 {
+		return false
+	}
+	switch c.Func.Name {
+	case "absent":
+		return !isSelector(c.Args[0])
+	case "absent_over_time":
+		_, ok := unparen(c.Args[0]).(*parser.MatrixSelector)
+		return !ok
+	}
+	return false
+}
+
+func unparen(e parser.Expr) parser.Expr {
+	for {
+		p, ok := e.(*parser.ParenExpr)
+		if !ok {
+			return e
+		}
+		e = p.Expr
+	}
 }
 
 func isSelector(e parser.Expr) bool {
