@@ -28,9 +28,6 @@ type EventMetrics struct {
 	// Query counters
 	EventsQueried  int64
 	EventsFiltered int64
-
-	// Start time for uptime
-	startTime time.Time
 }
 
 // DropRecord records a single dropped event for debugging
@@ -64,60 +61,38 @@ const (
 	DropReasonTypeMismatch = "type_mismatch"
 )
 
-var (
-	globalMetrics *EventMetrics
-	metricsOnce   sync.Once
-)
+var startTime = time.Now()
 
-// initMetrics initializes the global metrics instance
-func initMetrics() {
-	metricsOnce.Do(func() {
-		globalMetrics = &EventMetrics{
-			EventsReceived:   make(map[string]int64),
-			EventsDropped:    make(map[string]int64),
-			EventsRecorded:   make(map[string]int64),
-			RecentDrops:      make([]DropRecord, 0, 100),
-			maxRecentDrops:   100,
-			lastStoreFailure: make(map[string]time.Time),
-			startTime:        time.Now(),
-		}
-	})
+func newEventMetrics() *EventMetrics {
+	return &EventMetrics{
+		EventsReceived:   make(map[string]int64),
+		EventsDropped:    make(map[string]int64),
+		EventsRecorded:   make(map[string]int64),
+		RecentDrops:      make([]DropRecord, 0, 100),
+		maxRecentDrops:   100,
+		lastStoreFailure: make(map[string]time.Time),
+	}
 }
 
-// GetMetrics returns the global metrics instance
+// GetMetrics returns the current store binding's metrics.
 func GetMetrics() *EventMetrics {
-	initMetrics()
-	return globalMetrics
+	return CaptureStore().metrics.Load()
 }
 
 // IncrementReceived increments the counter for received events by kind
 func (b *StoreBinding) IncrementReceived(kind string) {
-	m := GetMetrics()
+	m := b.metrics.Load()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	// Check under the metrics lock so a writer cannot pass the check, pause
-	// through ResetMetricsForContextSwitch, then increment the new counters.
-	if !b.Retired() {
-		m.EventsReceived[kind]++
-	}
-}
-
-// IncrementDropped increments the counter for dropped events by reason
-func IncrementDropped(reason string) {
-	m := GetMetrics()
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.EventsDropped[reason]++
+	m.EventsReceived[kind]++
 }
 
 // IncrementRecorded increments the counter for recorded events by kind
 func (b *StoreBinding) IncrementRecorded(kind string) {
-	m := GetMetrics()
+	m := b.metrics.Load()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !b.Retired() {
-		m.EventsRecorded[kind]++
-	}
+	m.EventsRecorded[kind]++
 }
 
 // GetStoreErrorCount returns the number of store write failures
@@ -146,12 +121,9 @@ func RecordDrop(kind, namespace, name, reason, operation, clusterContext string)
 }
 
 func (b *StoreBinding) RecordDrop(kind, namespace, name, reason, operation, clusterContext string) {
-	m := GetMetrics()
+	m := b.metrics.Load()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if b.Retired() {
-		return
-	}
 
 	m.EventsDropped[reason]++
 	if reason == DropReasonStoreFailed {
@@ -205,6 +177,7 @@ func (m *EventMetrics) GetSnapshot() MetricsSnapshot {
 	recentDrops := make([]DropRecord, len(m.RecentDrops))
 	copy(recentDrops, m.RecentDrops)
 
+	uptime := time.Since(startTime)
 	return MetricsSnapshot{
 		Counters: MetricsCounters{
 			Received: received,
@@ -212,8 +185,8 @@ func (m *EventMetrics) GetSnapshot() MetricsSnapshot {
 			Recorded: recorded,
 		},
 		RecentDrops: recentDrops,
-		Uptime:      time.Since(m.startTime).String(),
-		UptimeSec:   int64(time.Since(m.startTime).Seconds()),
+		Uptime:      uptime.String(),
+		UptimeSec:   int64(uptime.Seconds()),
 	}
 }
 
@@ -229,7 +202,6 @@ func (m *EventMetrics) Reset() {
 	m.lastStoreFailure = make(map[string]time.Time)
 	m.EventsQueried = 0
 	m.EventsFiltered = 0
-	m.startTime = time.Now()
 }
 
 // DropsForCluster returns only the drop records attributed to clusterContext.
@@ -244,26 +216,9 @@ func DropsForCluster(drops []DropRecord, clusterContext string) []DropRecord {
 	return out
 }
 
-// ResetMetricsForContextSwitch clears per-cluster event-pipeline state when the
-// connected cluster changes. RecentDrops name individual resources (kind /
-// namespace / name), and the counters are per-cluster totals, so both must be
-// dropped on a context switch — otherwise the debug/diagnostics drop surfaces
-// expose a previously-connected cluster's resource names to whoever can read
-// the same kind on the NEW cluster. Process uptime (startTime) is preserved:
-// it reports how long the event pipeline has been running, not a per-cluster
-// session, so it must survive the switch.
-func ResetMetricsForContextSwitch() {
-	m := GetMetrics()
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.EventsReceived = make(map[string]int64)
-	m.EventsDropped = make(map[string]int64)
-	m.EventsRecorded = make(map[string]int64)
-	m.RecentDrops = make([]DropRecord, 0, m.maxRecentDrops)
-	m.lastStoreFailure = make(map[string]time.Time)
-	m.EventsQueried = 0
-	m.EventsFiltered = 0
+// ResetMetrics replaces the current binding's metrics while preserving its store for tests.
+func ResetMetrics() {
+	CaptureStore().metrics.Store(newEventMetrics())
 }
 
 // MetricsSnapshot is a JSON-serializable snapshot of metrics

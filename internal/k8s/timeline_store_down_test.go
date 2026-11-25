@@ -18,8 +18,6 @@ func TestTimelineStoreDownCountsLostChangesOnly(t *testing.T) {
 	state := newConnectionCache()
 	timeline.ResetStore()
 	t.Cleanup(timeline.ResetStore)
-	timeline.ResetMetricsForContextSwitch()
-	t.Cleanup(timeline.ResetMetricsForContextSwitch)
 
 	dropped := func(reason string) int64 {
 		return timeline.GetMetrics().GetSnapshot().Counters.Dropped[reason]
@@ -78,8 +76,6 @@ func TestTimelineStoreFailureCountsLostKubernetesEvents(t *testing.T) {
 	}
 	timeline.ResetStore()
 	t.Cleanup(timeline.ResetStore)
-	timeline.ResetMetricsForContextSwitch()
-	t.Cleanup(timeline.ResetMetricsForContextSwitch)
 
 	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypePostgres, DSN: dsn}); err != nil {
 		t.Fatalf("InitStore: %v", err)

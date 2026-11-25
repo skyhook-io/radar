@@ -769,10 +769,9 @@ func (state *connectionCache) recordK8sEventToTimeline(binding *timeline.StoreBi
 
 	ctx := context.Background()
 	if err := store.Append(ctx, timelineEvent); err != nil {
-		if binding.Retired() {
-			return
+		if !binding.Retired() {
+			log.Printf("Warning: failed to record K8s event to timeline store: %v", err)
 		}
-		log.Printf("Warning: failed to record K8s event to timeline store: %v", err)
 		binding.RecordDrop("K8sEvent:"+event.InvolvedObject.Kind, event.InvolvedObject.Namespace, event.InvolvedObject.Name, timeline.DropReasonStoreFailed, "add", clusterContext)
 	} else if DebugEvents {
 		binding.IncrementRecorded("K8sEvent:" + event.InvolvedObject.Kind)
@@ -1226,10 +1225,9 @@ func (state *connectionCache) recordToTimelineStore(binding *timeline.StoreBindi
 			if len(events) > 0 {
 				ctx := context.Background()
 				if err := store.AppendBatch(ctx, events); err != nil {
-					if binding.Retired() {
-						return
+					if !binding.Retired() {
+						log.Printf("Warning: failed to record historical events: %v", err)
 					}
-					log.Printf("Warning: failed to record historical events: %v", err)
 					binding.RecordDrop(kind, namespace, name, timeline.DropReasonStoreFailed, op, clusterContext)
 					return
 				}
@@ -1243,10 +1241,9 @@ func (state *connectionCache) recordToTimelineStore(binding *timeline.StoreBindi
 
 	ctx := context.Background()
 	if err := store.AppendBatch(ctx, events); err != nil {
-		if binding.Retired() {
-			return
+		if !binding.Retired() {
+			log.Printf("Warning: failed to record to timeline store: %v", err)
 		}
-		log.Printf("Warning: failed to record to timeline store: %v", err)
 		binding.RecordDrop(kind, namespace, name, timeline.DropReasonStoreFailed, op, clusterContext)
 		return
 	}

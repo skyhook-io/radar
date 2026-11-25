@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"context"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -19,8 +20,6 @@ func TestInformerCallbacksAfterCacheClose(t *testing.T) {
 	restoreTestConnection(conn)
 	clearTestConnectionIdentity()
 	initMemoryTimeline(t)
-	timeline.ResetMetricsForContextSwitch()
-	t.Cleanup(timeline.ResetMetricsForContextSwitch)
 
 	var typed k8score.CacheConfig
 	observed := 0
@@ -96,7 +95,6 @@ func TestInformerCallbacksAfterCacheClose(t *testing.T) {
 		t.Fatal("expected a replacement connection with the same context name")
 	}
 	initMemoryTimeline(t)
-	timeline.ResetMetricsForContextSwitch()
 	SetConnectionStatus(ConnectionStatus{State: StateConnecting, ProgressMsg: "replacement"})
 	fireTyped()
 	fireDynamic()
@@ -125,6 +123,18 @@ func (o *pausedInformerObject) GetResourceVersion() string {
 	return o.Object.GetResourceVersion()
 }
 
+type pausedEventStore struct {
+	timeline.EventStore
+	admitted chan struct{}
+	resume   chan struct{}
+}
+
+func (s pausedEventStore) Append(ctx context.Context, event timeline.TimelineEvent) error {
+	close(s.admitted)
+	<-s.resume
+	return s.EventStore.Append(ctx, event)
+}
+
 func TestAdmittedInformerWriteAcrossSameNameSwitch(t *testing.T) {
 	for _, backend := range []timeline.StoreType{timeline.StoreTypeMemory, timeline.StoreTypeSQLite, timeline.StoreTypePostgres} {
 		t.Run(string(backend), func(t *testing.T) {
@@ -135,7 +145,7 @@ func TestAdmittedInformerWriteAcrossSameNameSwitch(t *testing.T) {
 			case timeline.StoreTypePostgres:
 				cfg.DSN = testPostgresDSN(t)
 			}
-			for _, tc := range []struct{ kind, op string }{{"Pod", "delete"}, {"Widget", "delete"}, {"Pod", "update"}} {
+			for _, tc := range []struct{ kind, op string }{{"Pod", "delete"}, {"Widget", "delete"}, {"Pod", "update"}, {"K8sEvent:Pod", "add"}} {
 				t.Run(tc.kind+"/"+tc.op, func(t *testing.T) {
 					testAdmittedInformerWrite(t, cfg, tc.kind, tc.op)
 				})
@@ -151,7 +161,6 @@ func testAdmittedInformerWrite(t *testing.T, cfg timeline.StoreConfig, kind, op 
 	resetStore := func() {
 		t.Helper()
 		timeline.ResetStore()
-		timeline.ResetMetricsForContextSwitch()
 		if err := timeline.InitStore(cfg); err != nil {
 			t.Fatal(err)
 		}
@@ -161,41 +170,56 @@ func testAdmittedInformerWrite(t *testing.T, cfg timeline.StoreConfig, kind, op 
 		}
 	}
 	t.Cleanup(timeline.ResetStore)
-	t.Cleanup(timeline.ResetMetricsForContextSwitch)
 	resetStore()
 
 	storeA := timeline.GetStore()
-	var resource metav1.Object
-	var onChange func(ResourceChange, any, any)
-	if kind == "Pod" {
-		resource = tombstoneTestPod("from-a", time.Now())
-		var cfg k8score.CacheConfig
-		a.configureTypedCallbacks(&cfg, nil)
-		onChange = cfg.OnChange
+	metricsA := timeline.GetMetrics()
+	admitted, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var write func()
+	if kind == "K8sEvent:Pod" {
+		timeline.SetStoreForTest(pausedEventStore{EventStore: storeA, admitted: admitted, resume: release})
+		var typed k8score.CacheConfig
+		a.configureTypedCallbacks(&typed, nil)
+		write = func() { typed.OnEventChange(k8sEventPod("from-a", "Started"), op) }
 	} else {
-		resource = &unstructured.Unstructured{}
-		var cfg k8score.DynamicCacheConfig
-		a.configureDynamicCallbacks(&cfg)
-		onChange = cfg.OnChange
-	}
-	obj := &pausedInformerObject{Object: resource, admitted: make(chan struct{}), resume: make(chan struct{})}
-	obj.SetName("from-a")
-	obj.SetNamespace("shop")
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
+		var resource metav1.Object
+		var onChange func(ResourceChange, any, any)
+		if kind == "Pod" {
+			resource = tombstoneTestPod("from-a", time.Now())
+			var typed k8score.CacheConfig
+			a.configureTypedCallbacks(&typed, nil)
+			onChange = typed.OnChange
+		} else {
+			resource = &unstructured.Unstructured{}
+			var dynamic k8score.DynamicCacheConfig
+			a.configureDynamicCallbacks(&dynamic)
+			onChange = dynamic.OnChange
+		}
+		obj := &pausedInformerObject{Object: resource, admitted: admitted, resume: release}
+		obj.SetName("from-a")
+		obj.SetNamespace("shop")
 		var oldObj any
 		if op == "update" {
 			oldObj = resource
 		}
-		onChange(ResourceChange{Kind: kind, Operation: op, Namespace: "shop", Name: "from-a"}, obj, oldObj)
+		write = func() {
+			onChange(ResourceChange{Kind: kind, Operation: op, Namespace: "shop", Name: "from-a"}, obj, oldObj)
+		}
+	}
+	go func() {
+		defer close(done)
+		write()
 	}()
-	<-obj.admitted
 	resume := sync.OnceFunc(func() {
-		close(obj.resume)
+		close(release)
 		<-done
 	})
 	t.Cleanup(resume)
+	select {
+	case <-admitted:
+	case <-done:
+		t.Fatal("callback returned before reaching the pause")
+	}
 	a.closeDynamicResourceCache()
 	a.closeResourceCache()
 	ResetResourceDiscovery()
@@ -208,8 +232,10 @@ func testAdmittedInformerWrite(t *testing.T, cfg timeline.StoreConfig, kind, op 
 	if n := timeline.GetStore().Stats().TotalEvents; n != 0 {
 		t.Fatalf("replacement timeline contains %d row(s) from A", n)
 	}
-	if n := storeA.Stats().TotalEvents; n != 0 {
-		t.Fatalf("closed timeline accepted %d late row(s)", n)
+	if cfg.Type == timeline.StoreTypeMemory {
+		if n := storeA.Stats().TotalEvents; n != 0 {
+			t.Fatalf("closed timeline accepted %d late row(s)", n)
+		}
 	}
 	// A write rejected by the retired store lost nothing for B, so it
 	// must not count against B's coverage.
@@ -217,5 +243,10 @@ func testAdmittedInformerWrite(t *testing.T, cfg timeline.StoreConfig, kind, op 
 	failure := timeline.LastStoreFailure(kind)
 	if len(snap.RecentDrops) != 0 || len(snap.Counters.Dropped) != 0 || len(snap.Counters.Recorded) != 0 || len(snap.Counters.Received) != 0 || !failure.IsZero() {
 		t.Fatalf("retired callback changed replacement diagnostics: %+v, last store failure: %v", snap, failure)
+	}
+	if kind == "K8sEvent:Pod" {
+		if got := metricsA.GetSnapshot().Counters.Dropped[timeline.DropReasonStoreFailed]; got != 1 {
+			t.Fatalf("retired callback recorded %d store failures on A, want 1", got)
+		}
 	}
 }

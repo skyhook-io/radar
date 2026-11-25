@@ -5,55 +5,42 @@ import (
 	"time"
 )
 
-// A context switch must clear the per-cluster drop records + counters (they name
-// resources from the previous cluster) while preserving process uptime.
-func TestResetMetricsForContextSwitch(t *testing.T) {
-	m := GetMetrics()
-	m.Reset() // start from a clean slate for a deterministic test
-	start := m.startTime
-
-	// Simulate activity on "cluster A": a dropped Secret names a resource.
-	RecordDrop("Secret", "team-a", "db-creds", DropReasonNoisyFilter, "update", "cluster-a")
-	RecordDrop("ConfigMap", "team-a", "app-cfg", DropReasonAlreadySeen, "update", "cluster-a")
-	if snap := m.GetSnapshot(); len(snap.RecentDrops) != 2 {
-		t.Fatalf("precondition: want 2 recent drops, got %d", len(snap.RecentDrops))
-	}
-
-	// Let a measurable amount of process time pass so we can assert uptime survives.
-	time.Sleep(5 * time.Millisecond)
-
-	ResetMetricsForContextSwitch()
-
-	snap := m.GetSnapshot()
-	if len(snap.RecentDrops) != 0 {
-		t.Fatalf("RecentDrops must be cleared on context switch, got %d: %+v", len(snap.RecentDrops), snap.RecentDrops)
-	}
-	if len(snap.Counters.Dropped) != 0 {
-		t.Fatalf("dropped counters must reset on context switch, got %+v", snap.Counters.Dropped)
-	}
-	if m.startTime != start {
-		t.Fatalf("startTime (process uptime) must be preserved across a context switch")
-	}
-	if snap.Uptime == "" {
-		t.Fatalf("uptime must still be reported after a context switch")
-	}
-}
-
-func TestRetiredBindingDiagnostics(t *testing.T) {
+func TestStoreBindingMetricsAcrossReset(t *testing.T) {
 	ResetStore()
 	t.Cleanup(ResetStore)
-	t.Cleanup(ResetMetricsForContextSwitch)
-	retired := CaptureStore()
-	ResetStore()
-	ResetMetricsForContextSwitch()
-	current := CaptureStore()
+	old := CaptureStore()
+	oldMetrics := GetMetrics()
+	old.IncrementReceived("Secret")
+	old.IncrementRecorded("Secret")
+	RecordDrop("Secret", "team-a", "db-creds", DropReasonNoisyFilter, "update", "cluster-a")
+	RecordDrop("ConfigMap", "team-a", "app-cfg", DropReasonAlreadySeen, "update", "cluster-a")
+	old.RecordDrop("Secret", "team-a", "db-creds", DropReasonStoreFailed, "delete", "cluster-a")
+	oldMetrics.EventsQueried = 2
+	oldMetrics.EventsFiltered = 1
+	if snap := oldMetrics.GetSnapshot(); len(snap.RecentDrops) != 3 || LastStoreFailure("Secret").IsZero() {
+		t.Fatalf("precondition: want 3 recent drops and a store failure, got %+v", snap)
+	}
 
-	for _, b := range []*StoreBinding{current, retired} {
+	ResetStore()
+	current := CaptureStore()
+	m := GetMetrics()
+	minUptime := time.Since(startTime)
+	fresh := m.GetSnapshot()
+	maxUptime := time.Since(startTime)
+	if len(fresh.RecentDrops) != 0 || len(fresh.Counters.Dropped) != 0 || len(fresh.Counters.Recorded) != 0 || len(fresh.Counters.Received) != 0 ||
+		m.EventsQueried != 0 || m.EventsFiltered != 0 || !LastStoreFailure("Secret").IsZero() {
+		t.Fatalf("expected fresh metrics after ResetStore, got %+v, queried=%d, filtered=%d, last store failure=%v", fresh, m.EventsQueried, m.EventsFiltered, LastStoreFailure("Secret"))
+	}
+	if uptime, err := time.ParseDuration(fresh.Uptime); err != nil || uptime < minUptime || uptime > maxUptime || fresh.UptimeSec != int64(uptime.Seconds()) {
+		t.Fatalf("uptime after ResetStore = %q (%ds), want process uptime between %v and %v", fresh.Uptime, fresh.UptimeSec, minUptime, maxUptime)
+	}
+
+	for _, b := range []*StoreBinding{current, old} {
 		b.IncrementReceived("Pod")
 		b.IncrementRecorded("Pod")
 		b.RecordDrop("Pod", "shop", "web", DropReasonChannelFull, "update", "same-name")
 	}
-	retired.RecordDrop("Pod", "shop", "web", DropReasonStoreFailed, "delete", "same-name")
+	old.RecordDrop("Pod", "shop", "web", DropReasonStoreFailed, "delete", "same-name")
 
 	snap := GetMetrics().GetSnapshot()
 	if snap.Counters.Received["Pod"] != 1 || snap.Counters.Recorded["Pod"] != 1 ||
@@ -61,21 +48,35 @@ func TestRetiredBindingDiagnostics(t *testing.T) {
 		len(snap.RecentDrops) != 1 || !LastStoreFailure("Pod").IsZero() {
 		t.Fatalf("expected only the current binding's diagnostics, got %+v, last store failure %v", snap, LastStoreFailure("Pod"))
 	}
+	if snap := oldMetrics.GetSnapshot(); snap.Counters.Received["Pod"] != 1 || snap.Counters.Recorded["Pod"] != 1 ||
+		snap.Counters.Dropped[DropReasonChannelFull] != 1 || snap.Counters.Dropped[DropReasonStoreFailed] != 2 || len(snap.RecentDrops) != 5 {
+		t.Fatalf("expected the old binding to retain its late writes, got %+v", snap)
+	}
 }
 
-// Drops are stamped with the cluster they came from (captured at wiring time,
-// not read live), and read paths keep only the active cluster's — so a straggler
-// drop recorded after a switch, stamped with the OLD cluster, is filtered out
-// even though ResetMetricsForContextSwitch already ran. This closes the
-// late-callback race that a reset alone leaves open.
+func TestResetMetricsPreservesStore(t *testing.T) {
+	ResetStore()
+	t.Cleanup(ResetStore)
+	if err := InitStore(StoreConfig{Type: StoreTypeMemory}); err != nil {
+		t.Fatal(err)
+	}
+	store, oldMetrics := GetStore(), GetMetrics()
+	CaptureStore().IncrementReceived("Pod")
+	ResetMetrics()
+	if GetStore() != store {
+		t.Fatal("ResetMetrics replaced the store")
+	}
+	if got := GetMetrics(); got == oldMetrics || len(got.GetSnapshot().Counters.Received) != 0 {
+		t.Fatalf("ResetMetrics did not replace the metrics with a fresh instance: %+v", got.GetSnapshot())
+	}
+}
+
 func TestDropsForCluster_FiltersStaleClusterDrops(t *testing.T) {
-	m := GetMetrics()
-	m.Reset()
+	ResetStore()
+	t.Cleanup(ResetStore)
 
 	RecordDrop("Secret", "team-a", "db-creds", DropReasonNoisyFilter, "update", "cluster-a")
-	// Simulate a switch to cluster-b, then a STRAGGLER old-informer callback that
-	// fires after the reset — it is stamped with its wiring-time cluster (a).
-	ResetMetricsForContextSwitch()
+	ResetStore()
 	RecordDrop("Secret", "team-a", "db-creds", DropReasonNoisyFilter, "update", "cluster-a")
 	// And a genuine cluster-b drop.
 	RecordDrop("Pod", "team-b", "web", DropReasonAlreadySeen, "update", "cluster-b")
