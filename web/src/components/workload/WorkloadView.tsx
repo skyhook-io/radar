@@ -28,6 +28,8 @@ import {
   isRolloutKind,
   canSetWorkloadImages,
   canPauseDeployment,
+  canSubmitWorkflowTemplate,
+  type WorkflowTemplateSubmission,
   isCoreBatchJob,
   type SetImageOwnership,
   SET_IMAGE_WRITES,
@@ -69,6 +71,7 @@ import {
   useTriggerCronJob,
   useSuspendCronJob,
   useResumeCronJob,
+  useSubmitWorkflowTemplate,
   useRestartWorkload,
   usePauseDeployment,
   useResumeDeployment,
@@ -124,7 +127,8 @@ import { MultiPodLogsTab } from '../logs/MultiPodLogsTab'
 import { RayClusterLogsTab } from '../logs/RayClusterLogsTab'
 import { isKubeRayCluster } from '../logs/rayClusterPods'
 import { useWorkflowStopAction } from '../../hooks/useWorkflowStopAction'
-import { BatchExecutionFullscreen } from '../execution/BatchExecutionView'
+import { BatchExecutionFullscreen, workloadRunKey } from '../execution/BatchExecutionView'
+import { useSelectRunWhenListed } from './useSelectRunWhenListed'
 import { workloadRunTimelineEvents } from '../execution/batch-timeline'
 import {
   useCanUpdateSecrets,
@@ -368,6 +372,7 @@ function useActionsBarProps(
   const suspendCronJobMutation = useSuspendCronJob()
   const resumeCronJobMutation = useResumeCronJob()
   const workflowStop = useWorkflowStopAction(kind, group, namespace)
+  const submitWorkflowTemplateMutation = useSubmitWorkflowTemplate()
 
   const isRolloutShape = isRolloutKind(kind)
   const isRollout = isRolloutShape && group === 'argoproj.io'
@@ -415,6 +420,10 @@ function useActionsBarProps(
   const { upgrade: argoResumeUpgrade, blockedReason: argoResumeBlockedReason } = useRadarFeature('argoAutoSyncEnable')
   const { support: argoInheritanceSupport } = useRadarFeature('argoSyncInheritance')
   const { support: cronJobJobNameSupport } = useRadarFeature('cronJobTriggerJobName')
+  const { support: workflowTemplateSubmitSupport, upgrade: workflowTemplateSubmitUpgrade } = useRadarFeature('workflowTemplateSubmit')
+  const isArgoWorkflowTemplate = kind === 'workflowtemplates' && group === 'argoproj.io'
+  const canSubmitTemplates = !workloadWritesPending &&
+    canSubmitWorkflowTemplate({ name: kind, group }, workloadWrites, workflowTemplateSubmitSupport === 'supported')
 
   const {
     data: cascadePreview,
@@ -526,6 +535,14 @@ function useActionsBarProps(
     onResumeCronJob: (params: Parameters<typeof resumeCronJobMutation.mutate>[0]) =>
       resumeCronJobMutation.mutate(params),
     isResumingCronJob: resumeCronJobMutation.isPending,
+    // mutateAsync, not mutate: the submit dialog stays open when this rejects.
+    onSubmitWorkflowTemplate: canSubmitTemplates
+      ? (submission: WorkflowTemplateSubmission) => submitWorkflowTemplateMutation.mutateAsync(submission)
+      : undefined,
+    isSubmittingWorkflowTemplate: submitWorkflowTemplateMutation.isPending,
+    // Only a Radar known to lack the endpoint gets the upgrade note; a failed
+    // capabilities probe is not evidence of an old Radar.
+    workflowTemplateSubmitUpgrade: isArgoWorkflowTemplate && workflowTemplateSubmitSupport === 'unsupported' ? workflowTemplateSubmitUpgrade : null,
     gitOpsActionDisabledReasons,
     ...workflowStop,
     onFluxReconcile: (params: Parameters<typeof fluxReconcileMutation.mutate>[0]) =>
@@ -1176,12 +1193,30 @@ export function WorkloadView({
     imageOwnerVerified,
     imageSelection,
   ])
+  // A submitted run opens once Radar lists it: on the page it is selected in
+  // the run view; in the drawer, the drawer moves to it.
+  const listedRunKeys = useMemo(() => batchRunsQuery.data?.runs.map(workloadRunKey), [batchRunsQuery.data?.runs])
+  const selectRunWhenListed = useSelectRunWhenListed(listedRunKeys, batchRunsQuery.refetch, handleSelectedRunChange)
+  const submitWorkflowTemplate = baseActionsBarProps.onSubmitWorkflowTemplate
+  const navigateToResource = rest.onNavigateToResource
+  const submitAndOpenRun = useMemo(
+    () => submitWorkflowTemplate
+      ? async (submission: WorkflowTemplateSubmission) => {
+          const run = await submitWorkflowTemplate(submission)
+          if (expanded) selectRunWhenListed(workloadRunKey({ kind: 'workflows', namespace: run.namespace, name: run.name }))
+          else navigateToResource?.({ kind: 'workflows', namespace: run.namespace, name: run.name, group: 'argoproj.io' })
+          return run
+        }
+      : undefined,
+    [expanded, navigateToResource, selectRunWhenListed, submitWorkflowTemplate],
+  )
   const actionsBarProps = useMemo(
     () => ({
       ...baseActionsBarProps,
       onLoadImages: baseActionsBarProps.onLoadImages
         ? loadImagesWithTargetOwnership
         : undefined,
+      onSubmitWorkflowTemplate: submitAndOpenRun,
       onCompareTo,
       onCompareAcrossClusters,
       imageOwnership,
@@ -1189,6 +1224,7 @@ export function WorkloadView({
     [
       baseActionsBarProps,
       loadImagesWithTargetOwnership,
+      submitAndOpenRun,
       imageOwnership,
       onCompareTo,
       onCompareAcrossClusters,

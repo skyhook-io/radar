@@ -838,6 +838,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Post("/cronjobs/{namespace}/{name}/resume", s.bindWrite(s.handleResumeCronJob))
 
 			r.Post("/workflows/{namespace}/{name}/stop", s.bindWrite(s.handleWorkflowStop))
+			r.Post("/workflowtemplates/{namespace}/{name}/submit", s.bindWrite(s.handleWorkflowTemplateSubmit))
 
 			// Workload restart, scale, rollback. Writes are bound to the connection
 			// the caller names (bindWrite in connection_binding.go).
@@ -1593,6 +1594,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		RuntimeAdvisoryProgress:     true,
 		CronJobTriggerJobName:       true,
 		WorkflowStop:                true,
+		WorkflowTemplateSubmit:      true,
 	}
 }
 
@@ -1732,6 +1734,7 @@ func mergeNamespaceCapabilities(caps *k8s.Capabilities, nsCaps *k8s.NamespaceCap
 	caps.WorkloadWrites.StatefulSets = mergeNamespaceCapability(caps.WorkloadWrites.StatefulSets, nsCaps.WorkloadWrites.StatefulSets, nsCaps.Errors.WorkloadWrites.StatefulSets)
 	caps.WorkloadWrites.Rollouts = mergeNamespaceCapability(caps.WorkloadWrites.Rollouts, nsCaps.WorkloadWrites.Rollouts, nsCaps.Errors.WorkloadWrites.Rollouts)
 	caps.WorkloadWrites.Workflows = mergeNamespaceCapability(caps.WorkloadWrites.Workflows, nsCaps.WorkloadWrites.Workflows, nsCaps.Errors.WorkloadWrites.Workflows)
+	caps.WorkloadWrites.CreateWorkflows = mergeNamespaceCapability(caps.WorkloadWrites.CreateWorkflows, nsCaps.WorkloadWrites.CreateWorkflows, nsCaps.Errors.WorkloadWrites.CreateWorkflows)
 }
 
 func mergeNamespaceCapability(global, namespaced, checkErrored bool) bool {

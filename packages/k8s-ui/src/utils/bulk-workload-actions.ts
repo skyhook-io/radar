@@ -56,6 +56,14 @@ export function canStopWorkflow(
   return supported && kind?.name.toLowerCase() === 'workflows' && kind.group === 'argoproj.io' && writes?.workflows === true
 }
 
+export function canSubmitWorkflowTemplate(
+  kind: BulkWorkloadKindInfo | null | undefined,
+  writes: WorkloadWritePermissions | undefined,
+  supported: boolean,
+): boolean {
+  return supported && kind?.name.toLowerCase() === 'workflowtemplates' && kind.group === 'argoproj.io' && writes?.createWorkflows === true
+}
+
 export function isPausedDeployment(
   resource: { apiVersion?: string; kind?: string; spec?: { paused?: unknown } } | null | undefined,
 ): boolean {

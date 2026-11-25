@@ -272,23 +272,29 @@ type FeatureCapabilities struct {
 	SealedSecretsCert bool `json:"sealedSecretsCert"`
 	// POST /api/workflows/{namespace}/{name}/stop
 	WorkflowStop bool `json:"workflowStop"`
+	// POST /api/workflowtemplates/{namespace}/{name}/submit
+	WorkflowTemplateSubmit bool `json:"workflowTemplateSubmit"`
 }
 
-// WorkloadWritePermissions indicates which workload resources the user can patch.
+// WorkloadWritePermissions indicates which workload resources the user can
+// patch, plus whether they can create Workflows.
 type WorkloadWritePermissions struct {
 	Deployments  bool `json:"deployments"`
 	DaemonSets   bool `json:"daemonSets"`
 	StatefulSets bool `json:"statefulSets"`
 	Rollouts     bool `json:"rollouts"`
 	Workflows    bool `json:"workflows"` // Argo Workflows: Stop and Terminate patch spec.shutdown
+	// Argo Workflows: create, to submit a WorkflowTemplate.
+	CreateWorkflows bool `json:"createWorkflows"`
 }
 
 type WorkloadWriteCapabilityErrors struct {
-	Deployments  bool
-	DaemonSets   bool
-	StatefulSets bool
-	Rollouts     bool
-	Workflows    bool
+	Deployments     bool
+	DaemonSets      bool
+	StatefulSets    bool
+	Rollouts        bool
+	Workflows       bool
+	CreateWorkflows bool
 }
 
 type NamespaceCapabilityErrors struct {
@@ -483,6 +489,7 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 		{group: "apps", resource: "statefulsets", verb: "patch", result: &caps.WorkloadWrites.StatefulSets},
 		{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &caps.WorkloadWrites.Rollouts},
 		{group: "argoproj.io", resource: "workflows", verb: "patch", result: &caps.WorkloadWrites.Workflows},
+		{group: "argoproj.io", resource: "workflows", verb: "create", result: &caps.WorkloadWrites.CreateWorkflows},
 	}
 
 	var wg sync.WaitGroup
@@ -625,6 +632,7 @@ func CheckNamespaceCapabilities(ctx context.Context, namespace string) (*Namespa
 		capCheck{group: "apps", resource: "statefulsets", verb: "patch", result: &result.WorkloadWrites.StatefulSets, apiError: &result.Errors.WorkloadWrites.StatefulSets},
 		capCheck{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &result.WorkloadWrites.Rollouts, apiError: &result.Errors.WorkloadWrites.Rollouts},
 		capCheck{group: "argoproj.io", resource: "workflows", verb: "patch", result: &result.WorkloadWrites.Workflows, apiError: &result.Errors.WorkloadWrites.Workflows},
+		capCheck{group: "argoproj.io", resource: "workflows", verb: "create", result: &result.WorkloadWrites.CreateWorkflows, apiError: &result.Errors.WorkloadWrites.CreateWorkflows},
 	)
 	if !ForceDisableHelmWrite {
 		checks = append(checks, capCheck{resource: "secrets", verb: "create", result: &result.HelmWrite, apiError: &result.Errors.HelmWrite})
@@ -766,6 +774,7 @@ func (state *permissionState) checkCapabilitiesForUser(conn *Connection, fallbac
 		{group: "apps", resource: "statefulsets", verb: "patch", result: &caps.WorkloadWrites.StatefulSets},
 		{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &caps.WorkloadWrites.Rollouts},
 		{group: "argoproj.io", resource: "workflows", verb: "patch", result: &caps.WorkloadWrites.Workflows},
+		{group: "argoproj.io", resource: "workflows", verb: "create", result: &caps.WorkloadWrites.CreateWorkflows},
 	}
 
 	var hadErrors atomic.Bool
@@ -881,6 +890,7 @@ func CheckNamespaceCapabilitiesForUser(ctx context.Context, username string, gro
 		capCheck{group: "apps", resource: "statefulsets", verb: "patch", result: &result.WorkloadWrites.StatefulSets, apiError: &result.Errors.WorkloadWrites.StatefulSets},
 		capCheck{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &result.WorkloadWrites.Rollouts, apiError: &result.Errors.WorkloadWrites.Rollouts},
 		capCheck{group: "argoproj.io", resource: "workflows", verb: "patch", result: &result.WorkloadWrites.Workflows, apiError: &result.Errors.WorkloadWrites.Workflows},
+		capCheck{group: "argoproj.io", resource: "workflows", verb: "create", result: &result.WorkloadWrites.CreateWorkflows, apiError: &result.Errors.WorkloadWrites.CreateWorkflows},
 	)
 	if !ForceDisableHelmWrite {
 		checks = append(checks, capCheck{resource: "secrets", verb: "create", result: &result.HelmWrite, apiError: &result.Errors.HelmWrite})

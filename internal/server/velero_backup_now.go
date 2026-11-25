@@ -20,9 +20,9 @@ import (
 const veleroSubmissionAnnotation = veleropkg.SubmissionAnnotation
 
 var (
-	veleroSubmissionID = regexp.MustCompile(`^[A-Za-z0-9-]{8,64}$`)
-	veleroScheduleGVR  = schema.GroupVersionResource{Group: veleroGroup, Version: "v1", Resource: "schedules"}
-	veleroBackupGVR    = schema.GroupVersionResource{Group: veleroGroup, Version: "v1", Resource: "backups"}
+	submissionToken   = regexp.MustCompile(`^[A-Za-z0-9-]{8,64}$`)
+	veleroScheduleGVR = schema.GroupVersionResource{Group: veleroGroup, Version: "v1", Resource: "schedules"}
+	veleroBackupGVR   = schema.GroupVersionResource{Group: veleroGroup, Version: "v1", Resource: "backups"}
 )
 
 // VeleroBackupNowRequest binds the schedule the caller reviewed.
@@ -78,7 +78,7 @@ func (s *Server) handleVeleroBackupNow(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
-	if !veleroSubmissionID.MatchString(req.Submission) {
+	if !submissionToken.MatchString(req.Submission) {
 		s.writeError(w, http.StatusBadRequest, "submission must be 8–64 letters, digits or hyphens")
 		return
 	}

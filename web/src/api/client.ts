@@ -18,6 +18,7 @@ import { kueueQueueRetryable } from '@skyhook-io/k8s-ui/utils/kueue-queue-worklo
 import { canonicalReadCode, readActionFor } from '@skyhook-io/k8s-ui/utils/read-actions'
 import type { SearchCoverage } from '@skyhook-io/k8s-ui/types/read-coverage'
 import type { GitOpsWriteEvidence } from '@skyhook-io/k8s-ui/utils/gitops-write-guard'
+import type { SubmittedWorkflow, WorkflowTemplateSubmission } from '@skyhook-io/k8s-ui/utils/workflow-template-submit'
 import type {
   AppHistory,
   AppRow,
@@ -8481,6 +8482,40 @@ export function useWorkloadPods(
     staleTime: 10000, // 10 seconds - pods can change
     refetchInterval: (query) => workloadPodsRefetchInterval(query.state.error, options),
     retry: options?.ownerUID ? (count, error) => !isStableClientError(error) && count < 2 : undefined,
+  });
+}
+
+// POST /api/workflowtemplates/{namespace}/{name}/submit
+//
+// Creates a Workflow that runs the template, as the caller. The run name and
+// submission are chosen by the dialog; repeating the same request unchanged
+// returns the Workflow it created. resourceVersion refuses a template changed
+// since review (409), which covers only Radar's read: Argo reads the template
+// again when it starts the run.
+export function useSubmitWorkflowTemplate() {
+  const queryClient = useQueryClient();
+  const { guard } = useRadarFeature("workflowTemplateSubmit");
+  return useMutation({
+    mutationFn: ({ namespace, name, resourceVersion, runName, submission, parameters }: WorkflowTemplateSubmission) =>
+      guard(() =>
+        fetchJSON<SubmittedWorkflow>(
+          `/workflowtemplates/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/submit`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: runName, submission, resourceVersion, parameters }),
+          },
+        ),
+      ),
+    meta: {
+      errorMessage: "Could not submit the workflow template",
+      successMessage: "Workflow submitted",
+    },
+    onSuccess: (_, variables) => {
+      void queryClient.invalidateQueries({
+        queryKey: ["workload-runs", "workflowtemplates", variables.namespace, variables.name],
+      });
+    },
   });
 }
 
