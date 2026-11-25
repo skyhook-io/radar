@@ -4,6 +4,7 @@ import { Collapse } from '@skyhook-io/k8s-ui/components/ui/Collapse'
 import { fetchSessionCounts, useContexts, useSetContextProxy } from '../../api/client'
 import { useConnection } from '../../context/ConnectionContext'
 import { useDock } from '../dock'
+import { Tooltip } from '../ui/Tooltip'
 
 /**
  * Edits the proxy Radar uses to reach one context's API server, without
@@ -113,7 +114,7 @@ export function ClusterProxyList() {
         {sorted.map((c) => (
           <li key={c.name} className="px-3 py-2">
             <div className="flex items-center gap-2 text-sm">
-              <span className="truncate text-theme-text-primary" title={c.name}>{c.name}</span>
+              <Tooltip content={c.name} wrapperClassName="min-w-0"><span className="block truncate text-theme-text-primary">{c.name}</span></Tooltip>
               {c.isCurrent && <span className="shrink-0 text-xs text-theme-text-tertiary">current</span>}
               <span className="ml-auto min-w-0 truncate text-xs text-theme-text-secondary">
                 {c.proxyUrl ? <span className="inline-code">{c.proxyUrl}</span> : 'No proxy saved'}
