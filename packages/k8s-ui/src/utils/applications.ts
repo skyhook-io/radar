@@ -1717,8 +1717,6 @@ export interface AppEntryBase {
 export interface AppHostStatus {
   health: AppHealth;
   label: string;
-  /** The longer story, in a tooltip: e.g. why the run failed. */
-  detail?: string;
 }
 
 export interface SingleAppEntry extends AppEntryBase {

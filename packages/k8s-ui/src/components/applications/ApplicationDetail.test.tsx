@@ -120,7 +120,7 @@ describe("ApplicationDetail shell", () => {
   });
 
   it("shows the host's status in the header pill in place of the workloads'", () => {
-    const html = renderDetail({ status: { health: "unhealthy", label: "Last run failed 38m ago: secret not found", detail: "why" } });
+    const html = renderDetail({ status: { health: "unhealthy", label: "Last run failed 38m ago: secret not found" } });
     expect(html).toMatch(/text-sm font-semibold">Last run failed 38m ago: secret not found</);
     expect(html).not.toMatch(/text-sm font-semibold">Healthy</);
   });

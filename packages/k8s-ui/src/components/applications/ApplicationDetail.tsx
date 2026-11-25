@@ -805,7 +805,7 @@ export function ApplicationDetail({
           {headerActions}
           {status ? (
             // A host's status can be a sentence: keep it to one line, whole in the tooltip.
-            <Tooltip content={status.detail && status.detail !== status.label ? `${status.label} · ${status.detail}` : status.label} delay={150}>
+            <Tooltip content={status.label} delay={150}>
               <span className={`inline-flex max-w-md items-center gap-2 rounded-md px-2.5 py-1 ring-1 ring-inset ${verdictTone}`}>
                 <StatusDot tone={mapHealthToTone(overall)} />
                 <span className="truncate text-sm font-semibold">{verdictLabel}</span>
