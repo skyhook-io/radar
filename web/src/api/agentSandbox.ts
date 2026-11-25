@@ -154,8 +154,10 @@ export interface AgentSandboxWarmPoolCounts {
   total: number
   lowerBound: boolean
   ready: number
+  readyLowerBound?: boolean
   /** Only pools that set spec.replicas. */
   desired: number
+  desiredLowerBound?: boolean
 }
 
 /** A kind is absent when nothing of it was read. */
@@ -184,7 +186,8 @@ export interface AgentSandboxWarmPoolRow {
   namespace: string
   name: string
   state: { text: string; level: HealthLevel }
-  ready: number
+  /** Absent until the pool reports status. */
+  ready?: number
   /** Absent when the pool sets no spec.replicas. */
   desired?: number
   template?: string

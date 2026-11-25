@@ -180,6 +180,15 @@ func poolMembers(pool *unstructured.Unstructured, sandboxes []*unstructured.Unst
 	return out
 }
 
+func warmPoolReady(u *unstructured.Unstructured) (int64, bool) {
+	if ready, reported := nestedCount(u.Object, "status", "readyReplicas"); reported {
+		return ready, true
+	}
+	// The controller omits zero-valued replica fields after reconciliation.
+	generation, _ := nestedCount(u.Object, "status", "observedGeneration")
+	return 0, generation > 0
+}
+
 // ReadWarmPool reads a SandboxWarmPool's ready reserve against its target.
 // Mirrored in k8s-ui's getSandboxWarmPoolStatus.
 func ReadWarmPool(u *unstructured.Unstructured) health.Verdict {
@@ -194,7 +203,10 @@ func ReadWarmPool(u *unstructured.Unstructured) health.Verdict {
 		return health.Verdict{Level: health.LevelDegraded, Reason: "Progressing"}
 	}
 	desired, hasDesired := nestedCount(u.Object, "spec", "replicas")
-	ready, _ := nestedCount(status, "readyReplicas")
+	ready, reported := warmPoolReady(u)
+	if !reported {
+		return health.Verdict{Level: health.LevelUnknown, Reason: "Readiness not reported"}
+	}
 	switch {
 	case hasDesired && desired == 0:
 		if replicas, _ := nestedCount(status, "replicas"); replicas > 0 {
