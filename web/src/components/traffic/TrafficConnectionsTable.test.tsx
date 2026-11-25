@@ -102,3 +102,16 @@ describe('TrafficConnectionsTable protocol data', () => {
     expect(container.textContent).not.toMatch(/674\.9 KB|691,?072/)
   })
 })
+
+describe('TrafficConnectionsTable likely overlay', () => {
+  it('selects the overlay row apart from the other traffic between the same nodes', () => {
+    const other = { ...tcp, source: { name: 'node-a', namespace: '', kind: 'Pod' }, destination: { name: 'node-b', namespace: '', kind: 'Pod' }, port: 0 }
+    const overlay = { ...other, protocol: 'udp', likelyOverlay: true }
+    const onSelect = vi.fn()
+    const props = { flows: [other, overlay], isRateBased: false, onSelect, onFocus: vi.fn() }
+    act(() => root.render(<TrafficConnectionsTable {...props} selection={null} />))
+    act(() => container.querySelectorAll<HTMLElement>('[role="row"]')[1].click())
+    act(() => root.render(<TrafficConnectionsTable {...props} selection={onSelect.mock.calls[0][0]} />))
+    expect([...container.querySelectorAll('[role="row"]')].map(r => r.getAttribute('aria-selected'))).toEqual(['false', 'true'])
+  })
+})

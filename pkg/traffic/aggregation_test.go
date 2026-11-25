@@ -533,3 +533,14 @@ func TestAggregateFlowsReconcilesPortSource(t *testing.T) {
 		}
 	}
 }
+
+func TestFlowMatchKeepsLikelyOverlayApart(t *testing.T) {
+	a := Endpoint{Name: "node-a", Kind: "Pod"}
+	b := Endpoint{Name: "node-b", Kind: "Pod"}
+	other := FlowMatch{Pairs: []EndpointPair{{Source: EndpointRef{Name: "node-a"}, Destination: EndpointRef{Name: "node-b"}}}}
+	overlay := FlowMatch{Pairs: []EndpointPair{{Source: EndpointRef{Name: "node-a"}, Destination: EndpointRef{Name: "node-b"}, LikelyOverlay: true}}}
+	f := Flow{Source: a, Destination: b, Protocol: "udp", LikelyOverlay: true}
+	if other.Matches(f) || !overlay.Matches(f) {
+		t.Errorf("an overlay record belongs to the overlay edge only: other=%t overlay=%t", other.Matches(f), overlay.Matches(f))
+	}
+}

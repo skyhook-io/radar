@@ -202,12 +202,13 @@ func (r EndpointRef) matches(e Endpoint) bool {
 
 // EndpointPair is one edge of the aggregation, keyed as AggregateFlows keys
 // it: the two endpoints, the port (zero when the source reports none), and
-// whether the direction is known.
+// whether the direction is known and the traffic is likely overlay.
 type EndpointPair struct {
 	Source           EndpointRef `json:"source"`
 	Destination      EndpointRef `json:"destination"`
 	Port             int         `json:"port"`
 	DirectionUnknown bool        `json:"directionUnknown,omitempty"`
+	LikelyOverlay    bool        `json:"likelyOverlay,omitempty"`
 }
 
 // FlowMatch selects the flows behind a graph node or edge: those between one
@@ -226,7 +227,7 @@ func (m *FlowMatch) Matches(f Flow) bool {
 	}
 	for _, p := range m.Pairs {
 		if p.Source.matches(f.Source) && p.Destination.matches(f.Destination) &&
-			p.Port == f.Port && p.DirectionUnknown == f.DirectionUnknown {
+			p.Port == f.Port && p.DirectionUnknown == f.DirectionUnknown && p.LikelyOverlay == f.LikelyOverlay {
 			return true
 		}
 	}

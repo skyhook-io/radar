@@ -40,6 +40,7 @@ function rowSelection(flow: AggregatedFlow): TrafficGraphSelection {
     destId: graphEndpointId(flow.destination),
     port: flow.port,
     directionUnknown: !!flow.directionUnknown,
+    ...(flow.likelyOverlay && { likelyOverlay: true }),
   }
 }
 
@@ -47,7 +48,7 @@ function selectedRows(rows: GraphFlow[], selection: TrafficGraphSelection | null
   if (selection?.type !== 'edge' || selection.port === undefined) return new Set()
   const between = rows.filter(flow =>
     graphEndpointId(flow.source) === selection.sourceId && graphEndpointId(flow.destination) === selection.destId &&
-    !!flow.directionUnknown === !!selection.directionUnknown)
+    !!flow.directionUnknown === !!selection.directionUnknown && !!flow.likelyOverlay === !!selection.likelyOverlay)
   return new Set(edgesOnPort(between, f => f, selection.port))
 }
 
