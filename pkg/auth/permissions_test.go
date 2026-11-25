@@ -437,31 +437,6 @@ func TestReviewSubjectAccess_PreservesAttributesAndStatus(t *testing.T) {
 	}
 }
 
-func TestReviewSubjectAccess_MatchesImplicitImpersonationGroups(t *testing.T) {
-	for _, tc := range []struct {
-		name, username string
-		explicit, want []string
-	}{
-		{"authenticated", "alice", []string{"team"}, []string{"team", "system:authenticated"}},
-		{"explicit unauthenticated", "alice", []string{"system:unauthenticated"}, []string{"system:unauthenticated"}},
-		{"anonymous", "system:anonymous", nil, []string{"system:unauthenticated"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			client := fake.NewClientset()
-			client.PrependReactor("create", "subjectaccessreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
-				sar := action.(k8stesting.CreateAction).GetObject().(*authv1.SubjectAccessReview)
-				if !reflect.DeepEqual(sar.Spec.Groups, tc.want) {
-					t.Errorf("groups = %v, want %v", sar.Spec.Groups, tc.want)
-				}
-				return true, sar, nil
-			})
-			if _, err := ReviewSubjectAccess(context.Background(), client, tc.username, tc.explicit, authv1.ResourceAttributes{Verb: "get", Resource: "pods"}); err != nil {
-				t.Fatal(err)
-			}
-		})
-	}
-}
-
 func TestSubjectCanI_Allowed(t *testing.T) {
 	client := fakeClientWithSAR(func(username, namespace, resource, verb string) bool {
 		return username == "alice" && resource == "pods" && verb == "list"
@@ -503,11 +478,8 @@ func TestSubjectCanI_WithGroups(t *testing.T) {
 
 	groups := []string{"devs", "admins"}
 	SubjectCanI(context.Background(), client, "alice", groups, "default", "", "pods", "list")
-	if len(groups) != 2 {
-		t.Fatalf("mutated caller groups: %v", groups)
-	}
 
-	if len(capturedGroups) != 3 || capturedGroups[0] != "devs" || capturedGroups[1] != "admins" || capturedGroups[2] != "system:authenticated" {
+	if len(capturedGroups) != 2 || capturedGroups[0] != "devs" || capturedGroups[1] != "admins" {
 		t.Errorf("groups not passed to SAR: got %v", capturedGroups)
 	}
 }

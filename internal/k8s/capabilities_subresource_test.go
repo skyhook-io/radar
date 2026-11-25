@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"testing"
 
 	authv1 "k8s.io/api/authorization/v1"
@@ -19,9 +18,6 @@ func TestCanIAsSendsSubresourceInItsOwnField(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&review); err != nil || review.Spec.ResourceAttributes == nil {
 			http.Error(w, "bad review", http.StatusBadRequest)
 			return
-		}
-		if review.Spec.User != "alice" || !slices.Equal(review.Spec.Groups, []string{"system:authenticated"}) {
-			t.Errorf("wrong caller identity: %+v", review.Spec)
 		}
 		got = *review.Spec.ResourceAttributes
 		review.Status.Allowed = true

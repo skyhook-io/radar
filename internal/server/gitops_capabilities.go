@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -14,7 +15,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/kubernetes"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -22,7 +22,10 @@ import (
 	"github.com/skyhook-io/radar/pkg/gitops"
 )
 
-const unknownPermissionReason = "Couldn't check your permissions — retrying"
+const (
+	unknownPermissionReason = "Couldn't check your permissions — retrying"
+	systemReadOnlyReason    = "Background identities can only read through Radar without a user token."
+)
 
 // gitOpsPermission is one API operation an action performs.
 type gitOpsPermission struct {
@@ -60,47 +63,42 @@ func (s *Server) handleGitOpsCapabilities(w http.ResponseWriter, r *http.Request
 	if !s.requireConnected(w) {
 		return
 	}
+	conn := k8s.ConnectionFrom(r.Context())
+	if conn == nil {
+		conn = k8s.Current()
+		r = r.WithContext(k8s.WithConnection(r.Context(), conn))
+	}
 	kind := chi.URLParam(r, "kind")
-	argo := strings.EqualFold(kind, "applications") || strings.EqualFold(kind, "application")
+	user := auth.UserFromContext(r.Context())
+	useToken := user != nil && pkgauth.UserTokenMode()
 	var client dynamic.Interface
-	if !argo {
+	if !isArgoPermissionTarget(kind) {
 		if _, err := gitops.ResolveFluxKind(kind); err != nil {
 			s.writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		client = s.getDynamicClientForRequest(r)
-		if client == nil {
-			s.writeError(w, http.StatusServiceUnavailable, "cluster client not available")
-			return
+		if !useToken || user.Token != "" {
+			client = s.getDynamicClientForRequest(r)
 		}
+	}
+	kubeClient := conn.ClientInterface()
+	if useToken && user.Token != "" {
+		kubeClient = k8s.ClientFromContext(r.Context())
 	}
 
 	review := func(ctx context.Context, attrs authv1.ResourceAttributes) (bool, error) {
-		user := auth.UserFromContext(ctx)
-		userTokenMode := user != nil && pkgauth.UserTokenMode()
-		useToken := userTokenMode && (!user.System || user.Token != "")
-		if userTokenMode && !useToken && attrs.Verb == "patch" {
-			return false, fmt.Errorf("system identities have read-only access in user token mode")
-		}
-		var kubeClient kubernetes.Interface
-		if useToken {
-			if user.Token == "" {
-				return false, fmt.Errorf("user token not available")
-			}
-			var err error
-			kubeClient, err = k8s.UserClient(user)
-			if err != nil {
-				return false, err
-			}
-		} else {
-			client := k8s.GetClient()
-			if client == nil {
-				return false, fmt.Errorf("cluster client not available")
-			}
-			kubeClient = client
+		if kubeClient == nil {
+			return false, fmt.Errorf("cluster client not available")
 		}
 		if user != nil && !useToken {
-			status, err := pkgauth.ReviewSubjectAccess(ctx, kubeClient, user.Username, user.Groups, attrs)
+			groups := user.Groups
+			switch {
+			case user.Username == "system:anonymous" && !slices.Contains(groups, "system:unauthenticated"):
+				groups = append(slices.Clone(groups), "system:unauthenticated")
+			case user.Username != "" && !slices.Contains(groups, "system:authenticated") && !slices.Contains(groups, "system:unauthenticated"):
+				groups = append(slices.Clone(groups), "system:authenticated")
+			}
+			status, err := pkgauth.ReviewSubjectAccess(ctx, kubeClient, user.Username, groups, attrs)
 			if err != nil {
 				return false, err
 			}
@@ -118,7 +116,11 @@ func (s *Server) handleGitOpsCapabilities(w http.ResponseWriter, r *http.Request
 		}
 		return result.Status.Allowed, nil
 	}
-	capabilities, err := gitOpsCapabilities(r.Context(), client, chi.URLParam(r, "kind"), chi.URLParam(r, "namespace"), chi.URLParam(r, "name"), review)
+	capabilities, err := gitOpsCapabilities(r.Context(), client, kind, chi.URLParam(r, "namespace"), chi.URLParam(r, "name"), review)
+	if errors.Is(err, errGitOpsCapabilitiesClientUnavailable) {
+		s.writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
 	if err != nil {
 		s.writeGitOpsError(w, err, "gitops", "capabilities", chi.URLParam(r, "namespace"), chi.URLParam(r, "name"))
 		return
@@ -126,8 +128,15 @@ func (s *Server) handleGitOpsCapabilities(w http.ResponseWriter, r *http.Request
 	s.writeJSON(w, map[string]any{"actions": capabilities})
 }
 
+var errGitOpsCapabilitiesClientUnavailable = errors.New("cluster client not available")
+
+func isArgoPermissionTarget(kind string) bool {
+	return strings.EqualFold(kind, "applications") || strings.EqualFold(kind, "application")
+}
+
 func gitOpsCapabilities(ctx context.Context, client dynamic.Interface, kind, namespace, name string, review gitOpsAccessReview) (map[string]gitOpsActionCapability, error) {
-	argo := strings.EqualFold(kind, "applications") || strings.EqualFold(kind, "application")
+	argo := isArgoPermissionTarget(kind)
+	resolve := k8s.ServedGVRFor(ctx)
 	entry := gitops.FluxKindEntry{GVR: schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}, Kind: "Application"}
 	if !argo {
 		var err error
@@ -135,7 +144,7 @@ func gitOpsCapabilities(ctx context.Context, client dynamic.Interface, kind, nam
 		if err != nil {
 			return nil, err
 		}
-		entry = entry.Served(k8s.ServedGVR)
+		entry = entry.Served(resolve)
 	}
 	on := func(verb string, target gitops.FluxKindEntry, ns, targetName string, source bool) gitOpsPermission {
 		return gitOpsPermission{Verb: verb, Group: target.GVR.Group, Version: target.GVR.Version, Resource: target.GVR.Resource, Namespace: ns, Name: targetName, Kind: target.Kind, Source: source}
@@ -155,6 +164,29 @@ func gitOpsCapabilities(ctx context.Context, client dynamic.Interface, kind, nam
 			required[action] = []gitOpsPermission{read, patch}
 		}
 	} else {
+		for _, action := range []string{"reconcile", "suspend", "resume"} {
+			required[action] = []gitOpsPermission{read, patch}
+		}
+		if entry.Kind == "Kustomization" || entry.Kind == "HelmRelease" {
+			required["sync-with-source"] = []gitOpsPermission{read, patch}
+		}
+	}
+
+	if user := auth.UserFromContext(ctx); user != nil && pkgauth.UserTokenMode() && user.Token == "" {
+		result := gitOpsActionCapability{Reason: unknownPermissionReason}
+		if user.System {
+			result = gitOpsActionCapability{Unsupported: true, Reason: systemReadOnlyReason}
+		}
+		for action := range required {
+			actions[action] = result
+		}
+		return actions, nil
+	}
+
+	if !argo {
+		if client == nil {
+			return nil, errGitOpsCapabilitiesClientUnavailable
+		}
 		// Every Flux operation reads its target first, so the GET's own answer
 		// is the read permission. A forbidden read still has patch reviewed,
 		// so the grant guidance names both when both are missing.
@@ -167,50 +199,44 @@ func gitOpsCapabilities(ctx context.Context, client dynamic.Interface, kind, nam
 			obj = nil
 		}
 		reviewed[read] = outcome{allowed: obj != nil}
-		for _, action := range []string{"reconcile", "suspend", "resume"} {
-			required[action] = []gitOpsPermission{read, patch}
-		}
-		if entry.Kind == "Kustomization" || entry.Kind == "HelmRelease" {
-			required["sync-with-source"] = []gitOpsPermission{read, patch}
-			if obj != nil {
-				chain, err := gitops.FluxSyncSources(obj, func(target gitops.FluxSyncTarget) (*unstructured.Unstructured, error) {
-					read := on("get", target.Entry, target.Namespace, target.Name, true)
-					required["sync-with-source"] = append(required["sync-with-source"], read, on("patch", target.Entry, target.Namespace, target.Name, true))
-					if target.Entry.Kind != "HelmChart" {
-						return nil, nil
-					}
-					// Only a HelmChart needs a read to discover another link. Never
-					// use the shared cache to resolve a source the caller can't read.
-					chart, err := client.Resource(target.Entry.GVR).Namespace(target.Namespace).Get(ctx, target.Name, metav1.GetOptions{})
-					err = gitops.ClassifyPermissionError(err, "get", target.Entry.GVR, target.Namespace, target.Name)
-					var denied *gitops.PermissionDenied
-					if errors.As(err, &denied) {
-						reviewed[read] = outcome{allowed: false}
-						return nil, nil
-					}
-					if err == nil {
-						reviewed[read] = outcome{allowed: true}
-					}
-					return chart, err
-				}, k8s.ServedGVR)
-				// A source problem affects only sync-with-source; reconcile, suspend
-				// and resume keep their own answers.
-				switch {
-				case errors.Is(err, gitops.ErrSyncWithSourceUnsupported):
-					delete(required, "sync-with-source")
-					actions["sync-with-source"] = gitOpsActionCapability{Unsupported: true, Reason: err.Error() + "."}
-				case apierrors.IsNotFound(err) && len(chain) > 0:
-					delete(required, "sync-with-source")
-					link := chain[0]
-					reason := fmt.Sprintf("%s %s/%s was not found. Check the chart reference and that the object exists.", link.Entry.Kind, link.Namespace, link.Name)
-					if _, explicit, _ := unstructured.NestedMap(obj.Object, "spec", "chartRef"); !explicit {
-						reason = fmt.Sprintf("Flux hasn't created %s %s/%s yet, so there's no source to reconcile.", link.Entry.Kind, link.Namespace, link.Name)
-					}
-					actions["sync-with-source"] = gitOpsActionCapability{Unsupported: true, Reason: reason}
-				case err != nil:
-					delete(required, "sync-with-source")
-					actions["sync-with-source"] = gitOpsActionCapability{Reason: unknownPermissionReason}
+		if obj != nil && required["sync-with-source"] != nil {
+			chain, err := gitops.FluxSyncSources(obj, func(target gitops.FluxSyncTarget) (*unstructured.Unstructured, error) {
+				read := on("get", target.Entry, target.Namespace, target.Name, true)
+				required["sync-with-source"] = append(required["sync-with-source"], read, on("patch", target.Entry, target.Namespace, target.Name, true))
+				if target.Entry.Kind != "HelmChart" {
+					return nil, nil
 				}
+				// Only a HelmChart needs a read to discover another link. Never
+				// use the shared cache to resolve a source the caller can't read.
+				chart, err := client.Resource(target.Entry.GVR).Namespace(target.Namespace).Get(ctx, target.Name, metav1.GetOptions{})
+				err = gitops.ClassifyPermissionError(err, "get", target.Entry.GVR, target.Namespace, target.Name)
+				var denied *gitops.PermissionDenied
+				if errors.As(err, &denied) {
+					reviewed[read] = outcome{allowed: false}
+					return nil, nil
+				}
+				if err == nil {
+					reviewed[read] = outcome{allowed: true}
+				}
+				return chart, err
+			}, resolve)
+			// A source problem affects only sync-with-source; reconcile, suspend
+			// and resume keep their own answers.
+			switch {
+			case errors.Is(err, gitops.ErrSyncWithSourceUnsupported):
+				delete(required, "sync-with-source")
+				actions["sync-with-source"] = gitOpsActionCapability{Unsupported: true, Reason: err.Error() + "."}
+			case apierrors.IsNotFound(err) && len(chain) > 0:
+				delete(required, "sync-with-source")
+				link := chain[0]
+				reason := fmt.Sprintf("%s %s/%s was not found. Check the chart reference and that the object exists.", link.Entry.Kind, link.Namespace, link.Name)
+				if _, explicit, _ := unstructured.NestedMap(obj.Object, "spec", "chartRef"); !explicit {
+					reason = fmt.Sprintf("Flux hasn't created %s %s/%s yet, so there's no source to reconcile.", link.Entry.Kind, link.Namespace, link.Name)
+				}
+				actions["sync-with-source"] = gitOpsActionCapability{Unsupported: true, Reason: reason}
+			case err != nil:
+				delete(required, "sync-with-source")
+				actions["sync-with-source"] = gitOpsActionCapability{Reason: unknownPermissionReason}
 			}
 		}
 	}

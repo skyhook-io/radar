@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { useGitOpsActionCapabilities } from './client'
+import { observeConnectionStatus, resetConnectionBindingForTest } from './connectionBinding'
 
 vi.mock('../context/RadarUpgradeHost', () => ({ useRadarUpgradeHost: () => ({}) }))
 vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
@@ -26,6 +27,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount())
   client.clear()
+  resetConnectionBindingForTest()
   vi.useRealTimers()
   vi.unstubAllGlobals()
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
@@ -129,4 +131,23 @@ it('marks an unknown first answer as unavailable and clears it after confirmatio
   answer = async () => Response.json({ actions: { sync: { allowed: true } } })
   await refetch()
   expect(query.permissionCheckUnavailable).toBe(false)
+})
+
+it('keeps a pending permission result scoped to its original connection', async () => {
+  let finish!: (response: Response) => void
+  answer = () => new Promise(resolve => { finish = resolve })
+  observeConnectionStatus({ connectionId: 'old-connection' })
+  await render()
+
+  answer = async () => Response.json({ actions: { sync: { allowed: true } } })
+  observeConnectionStatus({ connectionId: 'new-connection' })
+  await render()
+  await refetch()
+
+  await act(async () => {
+    finish(Response.json({ actions: { sync: { allowed: false, denied: [{ verb: 'patch', resource: 'applications', namespace: 'argocd' }] } } }))
+    await new Promise(resolve => setTimeout(resolve, 0))
+  })
+  expect(query.permissions?.sync.allowed).toBe(true)
+  expect(element.querySelector('button')?.disabled).toBe(false)
 })

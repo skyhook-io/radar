@@ -65,13 +65,21 @@ it('names a role denial ahead of the auto-sync advice on Rollback', async () => 
   document.body.appendChild(element)
   const root = createRoot(element)
   const role = "Kubernetes denied permission to patch Argo CD Applications in argocd."
-  await act(async () => { root.render(<GitOpsActivityInsightView insight={insight('Auto · prune')} onRollback={() => {}} rollbackDisabledReason={role} />) })
+  const onRollback = vi.fn()
+  await act(async () => { root.render(<GitOpsActivityInsightView insight={insight('Auto · prune')} onRollback={onRollback} rollbackDisabledReason={role} />) })
   const button = [...element.querySelectorAll('button')].find((b) => b.textContent === 'Rollback')!
+  expect(button.disabled).toBe(false)
+  expect(button.getAttribute('aria-disabled')).toBe('true')
+  expect(document.getElementById(button.getAttribute('aria-describedby')!)?.textContent).toBe(role)
+  expect(element.textContent).not.toContain('Each revision can be rolled back to.')
   await act(async () => {
-    button.parentElement!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+    button.focus()
+    button.click()
     vi.advanceTimersByTime(1000)
   })
+  expect(document.activeElement).toBe(button)
   expect(document.body.querySelector('[role="tooltip"]')?.textContent).toBe(role)
+  expect(onRollback).not.toHaveBeenCalled()
   await act(async () => root.unmount())
   element.remove()
   vi.useRealTimers()

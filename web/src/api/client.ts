@@ -7369,12 +7369,14 @@ export function useGitOpsActionCapabilities(kind: string, group: string | undefi
   const active = enabled && isGitOpsActionTarget(kind, group);
   const queryClient = useQueryClient();
   const { support, guard, gatedKey } = useRadarFeature("gitopsActionCapabilities");
-  const queryKey = ["gitops-action-capabilities", getApiBase(), kind, group, namespace, name, ...gatedKey];
+  const apiBase = getApiBase();
+  const connection = connectionHeaderValue(apiBase) ?? cachedContextName(queryClient);
+  const queryKey = ["gitops-action-capabilities", apiBase, connection, kind, group, namespace, name, ...gatedKey];
   const [, setExpiryTime] = useState(0);
   const query = useQuery<CachedGitOpsActionCapabilities>({
     queryKey,
-    queryFn: () => guard(async () => {
-      const next = await fetchJSON<GitOpsActionCapabilities>(`/gitops/capabilities/${encodeURIComponent(kind)}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`);
+    queryFn: ({ signal }) => guard(async () => {
+      const next = await fetchJSON<GitOpsActionCapabilities>(`/gitops/capabilities/${encodeURIComponent(kind)}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`, signal);
       const previous = queryClient.getQueryData<CachedGitOpsActionCapabilities>(queryKey);
       const now = Date.now();
       const confirmedAt: Record<string, number> = {};

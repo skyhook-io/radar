@@ -147,11 +147,18 @@ func authorizeCurl(ctx context.Context, namespace, name string, requireServiceAc
 	if client == nil {
 		return false, fmt.Errorf("k8s client not initialized")
 	}
-	status, err := pkgauth.ReviewSubjectAccess(ctx, client, user.Username, user.Groups, *attrs)
+	review := &authv1.SubjectAccessReview{
+		Spec: authv1.SubjectAccessReviewSpec{
+			User:               user.Username,
+			Groups:             user.Groups,
+			ResourceAttributes: attrs,
+		},
+	}
+	result, err := client.AuthorizationV1().SubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})
 	if err != nil {
 		return false, err
 	}
-	return status.Allowed, nil
+	return result.Status.Allowed, nil
 }
 
 // Error carries the REST status; MCP renders Message as a tool error.

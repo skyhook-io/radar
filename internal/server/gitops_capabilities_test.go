@@ -177,6 +177,9 @@ func TestHandleGitOpsCapabilitiesReviewsCaller(t *testing.T) {
 		reviewFail bool
 		evaluation string
 		unknown    bool
+		readOnly   bool
+		flux       bool
+		switches   bool
 	}{
 		{name: "impersonation allowed", allowed: true, evaluation: "another authorizer failed"},
 		{name: "impersonation denied"},
@@ -189,8 +192,11 @@ func TestHandleGitOpsCapabilitiesReviewsCaller(t *testing.T) {
 		{name: "token review failed", tokenMode: true, reviewFail: true, unknown: true},
 		{name: "token evaluation failed", tokenMode: true, evaluation: "authorizer unavailable", unknown: true},
 		{name: "token allowed despite evaluation error", tokenMode: true, allowed: true, evaluation: "another authorizer failed"},
-		{name: "system without a token can only read", tokenMode: true, system: true, noToken: true, allowed: true, unknown: true},
+		{name: "Flux human without a token skips the live read", tokenMode: true, noToken: true, flux: true, unknown: true},
+		{name: "background identity without a token can only read", tokenMode: true, system: true, noToken: true, readOnly: true},
+		{name: "Flux background identity skips the live read", tokenMode: true, system: true, noToken: true, flux: true, readOnly: true},
 		{name: "system with a token uses the token", tokenMode: true, system: true, allowed: true},
+		{name: "keeps reviewing the original connection after a switch", local: true, allowed: true, switches: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			previousMode := pkgauth.CurrentCredentialMode()
@@ -226,6 +232,9 @@ func TestHandleGitOpsCapabilitiesReviewsCaller(t *testing.T) {
 					return
 				}
 				reviewCalls++
+				if reviewCalls == 1 && tc.switches {
+					k8s.SetTestClient(nil)
+				}
 				if selfReview && (review.Spec.User != "" || len(review.Spec.Groups) != 0) {
 					t.Errorf("SSAR supplied a subject: %+v", review.Spec)
 				}
@@ -267,9 +276,14 @@ func TestHandleGitOpsCapabilitiesReviewsCaller(t *testing.T) {
 			if !tc.noToken {
 				user.Token = "alice-token"
 			}
-			request := requestWithUser(http.MethodGet, "/gitops/capabilities/applications/argocd/demo", user)
+			kind, wantActions := "applications", 7
+			if tc.flux {
+				kind, wantActions = "kustomizations", 4
+			}
+			path := "/gitops/capabilities/" + kind + "/argocd/demo"
+			request := requestWithUser(http.MethodGet, path, user)
 			if tc.local {
-				request = httptest.NewRequest(http.MethodGet, "/gitops/capabilities/applications/argocd/demo", nil)
+				request = httptest.NewRequest(http.MethodGet, path, nil)
 			}
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, request)
@@ -280,17 +294,19 @@ func TestHandleGitOpsCapabilitiesReviewsCaller(t *testing.T) {
 				t.Fatal(err)
 			}
 			wantCalls := 2
-			if tc.noConfig || (tc.tokenMode && !tc.system && tc.noToken) {
+			if tc.noConfig || tc.tokenMode && tc.noToken {
 				wantCalls = 0
-			} else if tc.tokenMode && tc.system && tc.noToken {
-				wantCalls = 1
 			}
-			if w.Code != 200 || reviewCalls != wantCalls || len(body.Actions) != 7 {
+			if w.Code != 200 || reviewCalls != wantCalls || len(body.Actions) != wantActions {
 				t.Fatalf("response=%d %s review calls=%d, want %d", w.Code, w.Body, reviewCalls, wantCalls)
 			}
 			for name, action := range body.Actions {
-				if tc.unknown {
-					if action.Allowed != nil || len(action.Denied) != 0 || action.Reason != unknownPermissionReason {
+				if tc.readOnly {
+					if !action.Unsupported || action.Allowed != nil || action.Reason != systemReadOnlyReason {
+						t.Errorf("%s should report a read-only identity: %+v", name, action)
+					}
+				} else if tc.unknown {
+					if action.Unsupported || action.Allowed != nil || len(action.Denied) != 0 || action.Reason != unknownPermissionReason {
 						t.Errorf("%s should stay unknown: %+v", name, action)
 					}
 				} else if action.Allowed == nil || *action.Allowed != tc.allowed {

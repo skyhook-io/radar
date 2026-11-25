@@ -197,8 +197,11 @@ How each operation is written:
 `GET /api/gitops/capabilities/{kind}/{namespace}/{name}` reviews named API operations at their served API versions as the caller. Every action needs `patch`; actions with lifecycle preflights also need `get`.
 In user-token mode, people are checked with a `SelfSubjectAccessReview` using
 only their own token, preserving the identity the API server authenticates.
-A missing token, unavailable client, or failed review makes that permission
-check unknown, not denied. Impersonation and system identities use `SubjectAccessReview`.
+An unavailable client or failed review leaves permissions unknown. A person
+without a token also gets unknown answers. Actions are unavailable to
+tokenless background identities, which can only read. Impersonated requests
+use `SubjectAccessReview` with the same implicit authentication group as the
+Kubernetes impersonated request.
 Refresh only needs `patch`, and its capability check does not read the target.
 Flux checks read the target as the caller to resolve any source reference. Flux
 Sync with source also needs `get` and `patch` on every source it reconciles,
@@ -215,10 +218,11 @@ Each action has one of four answer forms:
   can prevent discovering later Flux source hops, so this is not guaranteed to
   list every missing grant. `source:true` marks a Flux source the action also reconciles.
 - `{reason}`: unknown because a check failed or expired; permit an attempt.
-- `{unsupported:true, reason}`: the action cannot run on this object regardless of role.
+- `{unsupported:true, reason}`: the action cannot run on this object or in this session regardless of role.
 
-Each distinct operation is reviewed once per request. A Flux target the caller can't read denies every action on that
-read and still reports a missing `patch`. Sync with source on an object with no source Radar can reconcile
+Each distinct operation is reviewed once per request. A confirmed Kubernetes authorization denial reading a Flux target denies
+every action on that read and still reports a missing `patch`. Unexpected read
+errors leave permissions unavailable. Sync with source on an object with no source Radar can reconcile
 (for example, a Kustomization without `sourceRef`)
 reports `unsupported` with a reason, and the action itself answers 400.
 Disabled controls explain the denied permission. Controls stay enabled while the first check loads or fails. Failed refetches
@@ -232,11 +236,6 @@ before focus. Lifecycle restrictions still apply; Refresh and
 Terminate remain available during deletion when permitted.
 A connected Radar without the `gitopsActionCapabilities` feature flag retains
 its existing action controls.
-
-Cloud administrators can also opt in to an owner-only Argo CD Applications grant
-on chart versions that include it. See the
-[chart’s RBAC settings](../deploy/helm/radar/README.md#cloud-owner-integration-writes)
-for the authority it delegates and the upgrade steps.
 
 ### Action errors
 

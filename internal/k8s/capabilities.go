@@ -923,13 +923,21 @@ func canIAs(ctx context.Context, client *kubernetes.Clientset, username string, 
 	// Split "pods/exec" as k8score.CanI does: webhook authorizers only
 	// recognize a subresource in its own field.
 	baseResource, subresource, _ := strings.Cut(resource, "/")
-	status, err := pkgauth.ReviewSubjectAccess(ctx, client, username, groups, authv1.ResourceAttributes{
-		Namespace:   namespace,
-		Group:       group,
-		Verb:        verb,
-		Resource:    baseResource,
-		Subresource: subresource,
-	})
+	review := &authv1.SubjectAccessReview{
+		Spec: authv1.SubjectAccessReviewSpec{
+			User:   username,
+			Groups: groups,
+			ResourceAttributes: &authv1.ResourceAttributes{
+				Namespace:   namespace,
+				Group:       group,
+				Verb:        verb,
+				Resource:    baseResource,
+				Subresource: subresource,
+			},
+		},
+	}
+
+	result, err := client.AuthorizationV1().SubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})
 	if err != nil {
 		if ctx.Err() == nil {
 			log.Printf("Warning: SubjectAccessReview failed for user=%s %s %s: %v", SanitizeForLog(username), SanitizeForLog(verb), SanitizeForLog(resource), err)
@@ -937,7 +945,7 @@ func canIAs(ctx context.Context, client *kubernetes.Clientset, username string, 
 		return false, true
 	}
 
-	return status.Allowed, false
+	return result.Status.Allowed, false
 }
 
 // resourceProbe describes one typed-resource probe target. The probe issues
