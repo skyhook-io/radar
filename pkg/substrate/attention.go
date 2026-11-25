@@ -914,89 +914,103 @@ func workerRows(in Inputs) []Attention {
 		byWorker = actorsByWorker(in.Actors)
 	}
 	for _, w := range in.Workers {
-		subject, related := workerSubjects(w)
-		held := HeldFor(w.UpdateTime, in.Now)
-		assigned := byWorker[w.Name]
-		switch {
-		case w.State == WorkerUnavailable && held > UnavailableAfter:
-			// At risk, not yet lost: Substrate still records its actors as
-			// assigned. One tone whether or not any are, as on its chip.
-			podState := in.WorkerPods.PodStateOf(w)
-			title := fmt.Sprintf("Worker %s has been unavailable for at least %s", w.Pod, timeutil.FormatAgeShort(held))
-			// The title names the actors; the reading leads with the cause.
-			reading := workerUnavailableCause[podState] + " Substrate places no new actors on it."
-			rowRelated := related
-			if len(assigned) > 0 {
-				title = fmt.Sprintf("%s still assigned to %s, unavailable for at least %s", plural(len(assigned), "actor is", "actors are"), w.Pod, timeutil.FormatAgeShort(held))
-				rowRelated = append([]Subject{workerActors(w, ImpactUnavailable)}, related...)
-			}
-			step := workerUnavailableStep[podState]
-			out = append(out, Attention{
-				ID: RuleWorkerUnavailable + ":" + w.Name, Rule: RuleWorkerUnavailable, Severity: SeverityAlert, key: w.Name,
-				Title:    title,
-				Reading:  reading,
-				NextStep: step.text, Command: step.command(w),
-				Subject: subject, Related: rowRelated, Count: max(len(assigned), 1), Since: w.UpdateTime, Sample: sample(assigned),
-			})
-		case w.State == WorkerDraining && len(assigned) > 0:
-			out = append(out, drainingRow(in, w, held, assigned, subject, related))
-		}
-		if w.RegisteredEpoch > w.ObservedEpoch {
-			lost := LostActors(w, assigned)
-			row := Attention{
-				ID: RuleWorkerRestarting + ":" + w.Name, Rule: RuleWorkerRestarting, Severity: SeverityWarning, key: w.Name, epoch: w.RegisteredEpoch,
-				Title:    fmt.Sprintf("Worker %s's registration is being reconciled", w.Pod),
-				Reading:  fmt.Sprintf("No actor still assigned ran under the worker's earlier process. Substrate has not yet reconciled its registration (registered epoch %d, observed %d).", w.RegisteredEpoch, w.ObservedEpoch),
-				NextStep: "Wait a few minutes for Substrate to reconcile the worker; if it does not, read the Substrate API server's log.",
-				Command:  apiServerLogs,
-				Subject:  subject, Related: related, Count: 1, Since: w.UpdateTime,
-			}
-			if !in.ActorsRead {
-				row.Reading = fmt.Sprintf("Actors were not read, so Radar cannot say which ran under the worker's earlier process. Substrate has not yet reconciled its registration (registered epoch %d, observed %d).", w.RegisteredEpoch, w.ObservedEpoch)
-			}
-			// The actors' sandboxes are already gone; Substrate only records it.
-			if len(lost) > 0 {
-				row.Severity = SeverityCritical
-				row.Title = fmt.Sprintf("%s when %s restarted", plural(len(lost), "actor lost its sandbox", "actors lost their sandboxes"), w.Pod)
-				// The title says they are lost; what the reader sees next is
-				// that the lists may still call them running.
-				lead := "They may still show running until Substrate reconciles the worker and marks them crashed."
-				if len(lost) == 1 {
-					lead = "It may still show running until Substrate reconciles the worker and marks it crashed."
-				}
-				row.Reading = fmt.Sprintf("%s %s under an earlier process of the worker, replaced at epoch %d; Substrate has observed epoch %d.",
-					lead, plural(len(lost), "actor ran", "actors ran"), w.RegisteredEpoch, w.ObservedEpoch)
-				row.NextStep = "Revert each to its newest stored generation now; Substrate marks them crashed when it reconciles the worker anyway."
-				row.Command = revertCommand
-				// Substrate refuses a revert while a delete runs, and a reverting
-				// actor already has one running.
-				if !slices.ContainsFunc(lost, func(a Actor) bool { return a.State != StateDeleting && a.State != StateReverting }) {
-					row.NextStep, row.Command = "Nothing to recover: Substrate is already deleting or reverting them.", ""
-					if len(lost) == 1 {
-						row.NextStep = "Nothing to recover: Substrate is already deleting or reverting it."
-					}
-				} else if slices.ContainsFunc(lost, func(a Actor) bool { return a.State == StateDeleting || a.State == StateReverting }) {
-					row.NextStep = "Revert each that isn't already deleting or reverting to its newest stored generation now; Substrate marks them crashed when it reconciles the worker anyway."
-				}
-				// kagent recovers its own sessions; of the actors left to
-				// recover, name kagent for its sessions.
-				recoverable := slices.DeleteFunc(slices.Clone(lost), func(a Actor) bool { return a.State == StateDeleting || a.State == StateReverting })
-				if sessions, sandboxes := kagentCounts(recoverable); row.Command != "" && sessions+sandboxes > 0 {
-					if sessions+sandboxes == len(recoverable) {
-						row.NextStep, row.Command = kagentStep(sessions, sandboxes, true), ""
-					} else {
-						row.NextStep += kagentAsideOf(sessions, sandboxes)
-						row.Command = ""
-					}
-				}
-				row.Subject = workerActors(w, ImpactRestarted)
-				row.Related = append([]Subject{subject}, related...)
-				row.Count, row.Sample = len(lost), sample(lost)
-			}
-			out = append(out, row)
+		if row := WorkerAttention(in, w, byWorker[w.Name]); row != nil {
+			out = append(out, *row)
 		}
 	}
 	return out
+}
+
+// WorkerAttention returns the strongest finding for a worker and its assignments.
+func WorkerAttention(in Inputs, w Worker, assigned []Actor) *Attention {
+	var out []Attention
+	subject, related := workerSubjects(w)
+	held := HeldFor(w.UpdateTime, in.Now)
+	switch {
+	case w.State == WorkerUnavailable && held > UnavailableAfter:
+		// At risk, not yet lost: Substrate still records its actors as
+		// assigned. One tone whether or not any are, as on its chip.
+		podState := in.WorkerPods.PodStateOf(w)
+		title := fmt.Sprintf("Worker %s has been unavailable for at least %s", w.Pod, timeutil.FormatAgeShort(held))
+		// The title names the actors; the reading leads with the cause.
+		reading := workerUnavailableCause[podState] + " Substrate places no new actors on it."
+		rowRelated := related
+		if len(assigned) > 0 {
+			title = fmt.Sprintf("%s still assigned to %s, unavailable for at least %s", plural(len(assigned), "actor is", "actors are"), w.Pod, timeutil.FormatAgeShort(held))
+			rowRelated = append([]Subject{workerActors(w, ImpactUnavailable)}, related...)
+		}
+		step := workerUnavailableStep[podState]
+		out = append(out, Attention{
+			ID: RuleWorkerUnavailable + ":" + w.Name, Rule: RuleWorkerUnavailable, Severity: SeverityAlert, key: w.Name,
+			Title:    title,
+			Reading:  reading,
+			NextStep: step.text, Command: step.command(w),
+			Subject: subject, Related: rowRelated, Count: max(len(assigned), 1), Since: w.UpdateTime, Sample: sample(assigned),
+		})
+	case w.State == WorkerDraining && len(assigned) > 0:
+		out = append(out, drainingRow(in, w, held, assigned, subject, related))
+	}
+	if w.RegisteredEpoch > w.ObservedEpoch {
+		lost := LostActors(w, assigned)
+		row := Attention{
+			ID: RuleWorkerRestarting + ":" + w.Name, Rule: RuleWorkerRestarting, Severity: SeverityWarning, key: w.Name, epoch: w.RegisteredEpoch,
+			Title:    fmt.Sprintf("Worker %s's registration is being reconciled", w.Pod),
+			Reading:  fmt.Sprintf("No actor still assigned ran under the worker's earlier process. Substrate has not yet reconciled its registration (registered epoch %d, observed %d).", w.RegisteredEpoch, w.ObservedEpoch),
+			NextStep: "Wait a few minutes for Substrate to reconcile the worker; if it does not, read the Substrate API server's log.",
+			Command:  apiServerLogs,
+			Subject:  subject, Related: related, Count: 1, Since: w.UpdateTime,
+		}
+		if !in.ActorsRead {
+			row.Reading = fmt.Sprintf("Actors were not read, so Radar cannot say which ran under the worker's earlier process. Substrate has not yet reconciled its registration (registered epoch %d, observed %d).", w.RegisteredEpoch, w.ObservedEpoch)
+		}
+		// The actors' sandboxes are already gone; Substrate only records it.
+		if len(lost) > 0 {
+			row.Severity = SeverityCritical
+			row.Title = fmt.Sprintf("%s when %s restarted", plural(len(lost), "actor lost its sandbox", "actors lost their sandboxes"), w.Pod)
+			// The title says they are lost; what the reader sees next is
+			// that the lists may still call them running.
+			lead := "They may still show running until Substrate reconciles the worker and marks them crashed."
+			if len(lost) == 1 {
+				lead = "It may still show running until Substrate reconciles the worker and marks it crashed."
+			}
+			row.Reading = fmt.Sprintf("%s %s under an earlier process of the worker, replaced at epoch %d; Substrate has observed epoch %d.",
+				lead, plural(len(lost), "actor ran", "actors ran"), w.RegisteredEpoch, w.ObservedEpoch)
+			row.NextStep = "Revert each to its newest stored generation now; Substrate marks them crashed when it reconciles the worker anyway."
+			row.Command = revertCommand
+			// Substrate refuses a revert while a delete runs, and a reverting
+			// actor already has one running.
+			if !slices.ContainsFunc(lost, func(a Actor) bool { return a.State != StateDeleting && a.State != StateReverting }) {
+				row.NextStep, row.Command = "Nothing to recover: Substrate is already deleting or reverting them.", ""
+				if len(lost) == 1 {
+					row.NextStep = "Nothing to recover: Substrate is already deleting or reverting it."
+				}
+			} else if slices.ContainsFunc(lost, func(a Actor) bool { return a.State == StateDeleting || a.State == StateReverting }) {
+				row.NextStep = "Revert each that isn't already deleting or reverting to its newest stored generation now; Substrate marks them crashed when it reconciles the worker anyway."
+			}
+			// kagent recovers its own sessions; of the actors left to
+			// recover, name kagent for its sessions.
+			recoverable := slices.DeleteFunc(slices.Clone(lost), func(a Actor) bool { return a.State == StateDeleting || a.State == StateReverting })
+			if sessions, sandboxes := kagentCounts(recoverable); row.Command != "" && sessions+sandboxes > 0 {
+				if sessions+sandboxes == len(recoverable) {
+					row.NextStep, row.Command = kagentStep(sessions, sandboxes, true), ""
+				} else {
+					row.NextStep += kagentAsideOf(sessions, sandboxes)
+					row.Command = ""
+				}
+			}
+			row.Subject = workerActors(w, ImpactRestarted)
+			row.Related = append([]Subject{subject}, related...)
+			row.Count, row.Sample = len(lost), sample(lost)
+		}
+		out = append(out, row)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	best := slices.MinFunc(out, func(a, b Attention) int {
+		return cmp.Compare(severityRank[a.Severity], severityRank[b.Severity])
+	})
+	return &best
 }
 
 // workerUnavailableCause says, from the worker's Pod, which side holds an
@@ -1119,19 +1133,29 @@ func PoolAttention(in Inputs, r PoolRow) *Attention {
 	if hasSvc {
 		row = withPoolVerdict(row, ps, name, subject, r.Ref())
 	}
-	if k := r.Kubernetes; k != nil && k.Health == "unhealthy" {
+	if k := r.Kubernetes; k != nil && (k.Health == "unhealthy" || k.Health == "degraded" && k.HealthDetail != "") {
+		severity := SeverityWarning
+		if k.Health == "unhealthy" {
+			severity = SeverityCritical
+		}
+		if row != nil && severityRank[row.Severity] < severityRank[severity] {
+			return row
+		}
 		if row == nil {
 			row = &Attention{ID: RulePoolShort + ":" + r.Ref().Key(), Rule: RulePoolShort, Subject: subject}
 		}
-		row.Severity = SeverityCritical
-		row.Title = name + " · " + k.HealthReason
+		row.Severity = severity
+		row.Title = name + " · Sandbox configuration unresolved"
+		row.NextStep = "Review the sandbox class conditions and check the requested SandboxConfig."
 		if k.HealthDetail != "" {
 			row.Reading = k.HealthDetail
 		}
 		switch k.HealthReason {
 		case "SandboxConfigNotFound":
+			row.Title = name + " · Sandbox configuration missing"
 			row.NextStep = "Restore the missing SandboxConfig or select an existing configuration for this sandbox class."
 		case "Provisioning stalled":
+			row.Title = name + " · Provisioning stalled"
 			row.NextStep = "Check the Substrate controller logs for worker Deployment creation errors."
 		}
 	}

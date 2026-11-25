@@ -1363,7 +1363,7 @@ func TestSubstrateActorLogsFromLastNode(t *testing.T) {
 			t.Errorf("resp = %+v", resp)
 		}
 		setPods(workerPod("hidden", "agent-pool-h", "node-1"))
-		if resp := read(); resp.ReasonCode != "denied" || len(resp.Searched) != 0 || strings.Contains(fmt.Sprint(resp), "agent-pool-h") {
+		if resp := read(); resp.ReasonCode != "podsDenied" || !strings.Contains(resp.Reason, "list on pods") || len(resp.Searched) != 0 || strings.Contains(fmt.Sprint(resp), "agent-pool-h") {
 			t.Errorf("only hidden Pods: %+v", resp)
 		}
 	})
@@ -1397,7 +1397,7 @@ func TestSubstrateActorLogsFromLastNode(t *testing.T) {
 		substratePodLogAllowed = func(*Server, *http.Request, string) bool { return false }
 		t.Cleanup(func() { substratePodLogAllowed = prev })
 		resp := read()
-		if resp.ReasonCode != "denied" || resp.Searched[0].Outcome != "denied" || len(resp.Lines) != 0 {
+		if resp.ReasonCode != "logsDenied" || !strings.Contains(resp.Reason, "get on pods/log") || len(resp.Searched) != 1 || resp.Searched[0].Outcome != "denied" || len(resp.Lines) != 0 {
 			t.Errorf("resp = %+v", resp)
 		}
 	})
@@ -1468,6 +1468,23 @@ func TestSubstrateRowsCarryWorkerImpact(t *testing.T) {
 	}
 	if filtered.Counts == nil || filtered.Counts.Total <= *filtered.Total {
 		t.Fatalf("reported phase counts should include actors outside the attention filter: %+v", filtered.Counts)
+	}
+
+	var fleet substrateWorkspaceResponse
+	call(t, s, s.handleSubstrateWorkspace, substrateCall{path: "/api/substrate/workspace"}, &fleet)
+	if fleet.Summary.Actors == nil || fleet.Summary.Actors.AttentionCount != *filtered.AttentionCount || filtered.WorkerCoverage.State != substrateapi.CoverageFull {
+		t.Fatalf("fleet attention must count the list's actors with the same worker read: %+v / %+v", fleet.Summary.Actors, filtered)
+	}
+	var templates substrateTemplatesResponse
+	call(t, s, s.handleSubstrateTemplates, substrateCall{path: "/api/substrate/templates"}, &templates)
+	attentionTemplates := 0
+	for _, tr := range templates.Templates {
+		if tr.Golden.State == model.GoldenFailed || tr.MatchingPoolsComplete && len(tr.MatchingPools) == 0 || tr.AttentionCount != nil && *tr.AttentionCount > 0 {
+			attentionTemplates++
+		}
+	}
+	if fleet.Summary.Templates == nil || fleet.Summary.Templates.AttentionCount != attentionTemplates || templates.Coverage.Workers.State != substrateapi.CoverageFull {
+		t.Fatalf("fleet attention must count the list's templates with the same worker read: %+v / %+v", fleet.Summary.Templates, templates)
 	}
 
 	var detail substrateActorDetail

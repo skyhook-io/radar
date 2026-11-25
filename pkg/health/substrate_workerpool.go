@@ -76,6 +76,7 @@ func SubstrateWorkerPool(u *unstructured.Unstructured, now time.Time) Verdict {
 	pods, _, _ := unstructured.NestedInt64(u.Object, "status", "replicas")
 	classes := WorkerPoolClasses(u)
 
+	var unresolved Verdict
 	for _, c := range classes {
 		if c.Status != "False" {
 			continue
@@ -84,17 +85,16 @@ func SubstrateWorkerPool(u *unstructured.Unstructured, now time.Time) Verdict {
 		if reason == "" {
 			reason = "Unresolved"
 		}
-		// Reported for an older spec: the controller has not judged the current one.
-		if c.Stale {
-			return Verdict{Level: LevelDegraded, Reason: reason}
+		// A current failure with no ready workers outranks a stale condition.
+		if !c.Stale && hasDesired && desired > 0 && ready == 0 {
+			return Verdict{Level: LevelUnhealthy, Reason: reason}
 		}
-		// With no worker ready, nothing can host the pool's actors. Ready
-		// workers keep running on the last resolved config.
-		level := LevelDegraded
-		if hasDesired && desired > 0 && ready == 0 {
-			level = LevelUnhealthy
+		if unresolved.Reason == "" {
+			unresolved = Verdict{Level: LevelDegraded, Reason: reason}
 		}
-		return Verdict{Level: level, Reason: reason}
+	}
+	if unresolved.Reason != "" {
+		return unresolved
 	}
 
 	switch {

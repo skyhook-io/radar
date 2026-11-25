@@ -534,11 +534,34 @@ func TestPoolFindingUsesControllerDiagnosis(t *testing.T) {
 		t.Fatalf("capacity from unread readiness: %+v", pools[0])
 	}
 	finding := PoolAttention(in, pools[0])
-	if finding == nil || finding.Severity != SeverityCritical || finding.Reading != broken.HealthDetail {
+	if finding == nil || finding.Severity != SeverityCritical || finding.Reading != broken.HealthDetail || finding.Title != "ns / broken · Sandbox configuration missing" {
 		t.Fatalf("controller diagnosis: %+v", finding)
 	}
 	fleet := find(t, NeedsAttention(in), finding.ID)
 	if fleet.Severity != finding.Severity || fleet.Reading != finding.Reading {
 		t.Fatalf("fleet and detail differ: %+v vs %+v", fleet, finding)
+	}
+}
+
+func TestWorkerAttentionUsesStrongestFindingOnce(t *testing.T) {
+	w := Worker{Name: "w", Namespace: "ns", Pool: "p", Pod: "pod", State: WorkerDraining, UpdateTime: now.Add(-time.Minute)}
+	assigned := []Actor{{Name: "a", State: StateRunning, Assignment: &Assignment{Worker: w.Name}}}
+	in := Inputs{Now: now, ActorsRead: true, WorkersRead: true, Actors: assigned, Workers: []Worker{w}}
+	if row := WorkerAttention(in, w, assigned); row == nil || row.Severity != SeverityInfo {
+		t.Fatalf("in-budget drain = %+v", row)
+	}
+	w.UpdateTime = now.Add(-2 * DefaultDrainGrace)
+	if row := WorkerAttention(in, w, assigned); row == nil || row.Severity != SeverityWarning {
+		t.Fatalf("overdue drain = %+v", row)
+	}
+	w.RegisteredEpoch = 2
+	w.ObservedEpoch = 1
+	row := WorkerAttention(in, w, assigned)
+	if row == nil || row.Severity != SeverityCritical || row.Rule != RuleWorkerRestarting {
+		t.Fatalf("lost sandboxes outrank the overdue drain: %+v", row)
+	}
+	in.Workers[0] = w
+	if rows := workerRows(in); len(rows) != 1 || rows[0].ID != row.ID {
+		t.Fatalf("worker emitted multiple findings, or disagreed with detail: %+v", rows)
 	}
 }

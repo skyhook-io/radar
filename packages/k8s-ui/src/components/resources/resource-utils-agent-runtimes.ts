@@ -112,12 +112,11 @@ export function getWorkerPoolStatus(resource: any, now = Date.now()): StatusBadg
   const pods = count(status?.replicas) ?? 0
 
   const desired = count(resource?.spec?.replicas)
-  for (const { condition, stale } of resolved) {
-    if (condition?.status !== 'False') continue
-    // Reported for an older spec: the controller has not judged the current one yet.
-    if (stale) return badge(condition.reason || 'Unresolved', 'degraded')
-    // Nothing can host the pool's actors only when workers are wanted and none is ready.
-    return badge(condition.reason || 'Unresolved', desired !== undefined && desired > 0 && ready === 0 ? 'unhealthy' : 'alert')
+  const unresolved = resolved.filter(({ condition }) => condition?.status === 'False')
+  if (unresolved.length > 0) {
+    const blocking = desired !== undefined && desired > 0 && ready === 0 ? unresolved.find(({ stale }) => !stale) : undefined
+    const { condition, stale } = blocking ?? unresolved[0]
+    return badge(condition.reason || 'Unresolved', blocking ? 'unhealthy' : stale ? 'degraded' : 'alert')
   }
 
   if (desired === 0) return pods > 0 ? badge('Scaling down', 'degraded') : badge('Scaled to zero', 'neutral')

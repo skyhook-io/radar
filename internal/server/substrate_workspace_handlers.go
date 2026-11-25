@@ -361,8 +361,18 @@ func poolOf(u *unstructured.Unstructured, now time.Time) model.Pool {
 		if c.Name != "" {
 			p.SandboxClasses = append(p.SandboxClasses, c.Name)
 		}
-		if c.Status == "False" && c.Reason == v.Reason && p.HealthDetail == "" {
+		reason := c.Reason
+		if reason == "" {
+			reason = "Unresolved"
+		}
+		if c.Status == "False" && reason == v.Reason && p.HealthDetail == "" && (v.Level != health.LevelUnhealthy || !c.Stale) {
 			p.HealthDetail = c.Message
+			if p.HealthDetail == "" {
+				p.HealthDetail = "The controller has not resolved the SandboxConfig for sandbox class " + c.Name + "."
+			}
+			if c.Stale {
+				p.HealthDetail = fmt.Sprintf("Reported for generation %d; the pool is now at generation %d. %s", c.ObservedGeneration, u.GetGeneration(), p.HealthDetail)
+			}
 		}
 	}
 	if v.Reason == "Provisioning stalled" {
@@ -830,12 +840,14 @@ type substrateSummary struct {
 	// FreeSlots is [] when workers were read and no pool has a free slot.
 	FreeSlots []substratePoolFree `json:"freeSlots,omitzero"`
 	Actors    *struct {
-		Total   int `json:"total"`
-		Crashed int `json:"crashed"`
+		Total          int `json:"total"`
+		Crashed        int `json:"crashed"`
+		AttentionCount int `json:"attentionCount"`
 	} `json:"actors,omitempty"`
 	Templates *struct {
-		Total        int `json:"total"`
-		GoldenFailed int `json:"goldenFailed"`
+		Total          int `json:"total"`
+		GoldenFailed   int `json:"goldenFailed"`
+		AttentionCount int `json:"attentionCount"`
 		// NoMatchingPool counts templates whose selector matches no pool;
 		// absent unless the pool list is complete.
 		NoMatchingPool *int `json:"noMatchingPool,omitempty"`
@@ -965,13 +977,17 @@ func (s *Server) handleSubstrateWorkspace(w http.ResponseWriter, r *http.Request
 		}
 		slices.SortStableFunc(resp.Summary.FreeSlots, func(a, b substratePoolFree) int { return int(b.Free - a.Free) })
 	}
+	actorAttentionCount := 0
+	templateAttention := map[model.Ref]int{}
 	if in.ActorsRead {
 		counts := snap.Index().States
 		resp.ActorStates = &counts
+		actorAttentionCount, templateAttention = substrateActorAttention(in.Actors, now, snap.Index().Workers)
 		resp.Summary.Actors = &struct {
-			Total   int `json:"total"`
-			Crashed int `json:"crashed"`
-		}{counts.Total, counts.ByState[model.StateCrashed]}
+			Total          int `json:"total"`
+			Crashed        int `json:"crashed"`
+			AttentionCount int `json:"attentionCount"`
+		}{counts.Total, counts.ByState[model.StateCrashed], actorAttentionCount}
 	}
 	if in.TemplatesRead {
 		known := model.KnownPools(pools, in.Workers)
@@ -979,15 +995,21 @@ func (s *Server) handleSubstrateWorkspace(w http.ResponseWriter, r *http.Request
 		t := &struct {
 			Total          int  `json:"total"`
 			GoldenFailed   int  `json:"goldenFailed"`
+			AttentionCount int  `json:"attentionCount"`
 			NoMatchingPool *int `json:"noMatchingPool,omitempty"`
 		}{Total: len(trows)}
 		noPool := 0
 		for _, tr := range trows {
-			if tr.Golden.State == model.GoldenFailed {
+			failed := tr.Golden.State == model.GoldenFailed
+			unmatched := tr.MatchingPoolsComplete && len(tr.MatchingPools) == 0
+			if failed {
 				t.GoldenFailed++
 			}
-			if tr.MatchingPoolsComplete && len(tr.MatchingPools) == 0 {
+			if unmatched {
 				noPool++
+			}
+			if failed || unmatched || templateAttention[model.Ref{Atespace: tr.Atespace, Name: tr.Name}] > 0 {
+				t.AttentionCount++
 			}
 		}
 		if in.PoolsComplete {
@@ -1060,6 +1082,8 @@ type substrateActorsResponse struct {
 	APITier substrateapi.APITier `json:"apiTier"`
 	// Coverage is the coverage of the source that answered.
 	Coverage substrateapi.Coverage `json:"coverage"`
+	// WorkerCoverage qualifies the attention count and worker impact.
+	WorkerCoverage substrateapi.Coverage `json:"workerCoverage"`
 	// Sources says what answered: snapshot (the shared read), atespace (a
 	// direct read of the atespace filter, when the snapshot does not hold
 	// all of it), and actor (a direct read of the exact name searched, when
@@ -1113,7 +1137,7 @@ func (s *Server) handleSubstrateActors(w http.ResponseWriter, r *http.Request) {
 	}
 	limit := boundedInt(q.Get("limit"), 100, 1, 1000)
 	offset := boundedInt(q.Get("offset"), 0, 0, substrateapi.MaxActors)
-	resp := substrateActorsResponse{APITier: tier, Coverage: snap.Coverage.Actors, Sources: []string{"snapshot"}, Rows: []model.ActorRow{}, Limit: limit, Offset: offset}
+	resp := substrateActorsResponse{APITier: tier, Coverage: snap.Coverage.Actors, WorkerCoverage: snap.Coverage.Workers, Sources: []string{"snapshot"}, Rows: []model.ActorRow{}, Limit: limit, Offset: offset}
 	tplAtespace, tplName := splitRef(q.Get("template"))
 	poolNS, poolName := splitRef(q.Get("pool"))
 	worker := q.Get("worker")
@@ -1470,7 +1494,8 @@ func (s *Server) handleSubstrateActor(w http.ResponseWriter, r *http.Request) {
 		if in.WorkersRead {
 			for _, wk := range snap.Workers {
 				if wk.Name == as.Worker {
-					row := substrateWorkerRowOf(wk, nil, false, in.WorkerPods)
+					row := substrateWorkerRowOf(wk, snap.Index().ByWorker[wk.Name], in.ActorsRead, in.WorkerPods)
+					row.Actors = nil
 					resp.Worker = &row
 					resp.WorkerImpact = model.WorkerImpactOf(actor, wk, in.WorkerPods)
 				}
@@ -1532,8 +1557,8 @@ type substrateLogsResponse struct {
 	Node string `json:"node,omitempty"`
 	// ReasonCode and Reason explain an answer with no lines, or where the
 	// lines came from: noWorker (no worker and no node recorded), nodeGone,
-	// noWorkerPods (no worker Pod on that node now), workerPodGone, denied,
-	// noMatch, candidates (lines from Pods on the last node).
+	// noWorkerPods (no worker Pod on that node now), workerPodGone,
+	// podsDenied (missing list), logsDenied (missing pods/log get), noMatch, candidates (lines from Pods on the last node).
 	ReasonCode string `json:"reasonCode,omitempty"`
 	Reason     string `json:"reason,omitempty"`
 	Source     string `json:"source"`
@@ -1757,8 +1782,8 @@ func (s *Server) handleSubstrateActorLogs(w http.ResponseWriter, r *http.Request
 	}
 	slices.SortFunc(pods, func(a, b *corev1.Pod) int { return strings.Compare(a.Namespace+"/"+a.Name, b.Namespace+"/"+b.Name) })
 	if len(pods) == 0 && len(onNode) > 0 {
-		resp.ReasonCode = "denied"
-		resp.Reason = "This actor has no worker now. Node " + node + ", where it was last, runs worker Pods only in namespaces where you may not list Pods."
+		resp.ReasonCode = "podsDenied"
+		resp.Reason = "This actor has no worker now. Node " + node + ", where it was last, runs worker Pods only in namespaces where you lack list on pods."
 		s.writeJSON(w, resp)
 		return
 	}
@@ -1821,8 +1846,8 @@ func (s *Server) handleSubstrateActorLogs(w http.ResponseWriter, r *http.Request
 	resp.MemoryKill = memoryKillOf(actor, evidence)
 	switch {
 	case readable == 0:
-		resp.ReasonCode = "denied"
-		resp.Reason = "This actor has no worker now. Radar found worker Pods on node " + node + ", where it was last, but may not read their logs."
+		resp.ReasonCode = "logsDenied"
+		resp.Reason = "This actor has no worker now. Radar found worker Pods on node " + node + ", where it was last, but reading them requires get on pods/log in their namespaces."
 	case len(all) == 0:
 		resp.ReasonCode = "noMatch"
 		resp.Reason = fmt.Sprintf("This actor has no worker now. None of the %s on node %s, where it was last, holds its lines in the part of the log read.", plural(readable, "worker Pod", "worker Pods"), node)
@@ -1947,6 +1972,8 @@ type substrateWorkerRow struct {
 	// WorkerState is what its state means for its actors (WorkerReadingOf);
 	// absent for an active worker whose registration Substrate has observed.
 	WorkerState *model.WorkerReading `json:"workerState,omitempty"`
+	// AttentionSeverity is the strongest finding for this worker, including an in-budget drain (info).
+	AttentionSeverity string `json:"attentionSeverity,omitempty"`
 	// Actors are the actors assigned to it: absent when actors were not
 	// read, [] when it has none.
 	Actors []substrateAssignedActor `json:"actors,omitzero"`
@@ -1978,6 +2005,9 @@ func substrateWorkerRowOf(wk model.Worker, assigned []model.Actor, actorsRead bo
 		row.PodTerminating = !pod.Deadline.IsZero()
 	}
 	row.WorkerState = model.WorkerReadingOf(wk, assigned, actorsRead, pods)
+	if finding := model.WorkerAttention(model.Inputs{Now: time.Now(), ActorsRead: actorsRead, WorkerPods: pods}, wk, assigned); finding != nil {
+		row.AttentionSeverity = finding.Severity
+	}
 	if actorsRead {
 		row.Actors = make([]substrateAssignedActor, 0, len(assigned))
 		for _, a := range assigned {
@@ -2052,9 +2082,22 @@ type substrateTemplatesResponse struct {
 	Coverage struct {
 		Templates substrateapi.Coverage    `json:"templates"`
 		Actors    substrateapi.Coverage    `json:"actors"`
+		Workers   substrateapi.Coverage    `json:"workers"`
 		Pools     integration.KindCoverage `json:"pools"`
 	} `json:"coverage"`
 	Templates []model.TemplateRow `json:"templates"`
+}
+
+func substrateActorAttention(actors []model.Actor, now time.Time, workers map[string]model.Worker) (int, map[model.Ref]int) {
+	total := 0
+	counts := map[model.Ref]int{}
+	for _, actor := range actors {
+		if actorAttentionRank(actor, now, workers) < 3 {
+			total++
+			counts[actor.Template]++
+		}
+	}
+	return total, counts
 }
 
 func (s *Server) substrateTemplateRows(r *http.Request, snap *substrateapi.Snapshot, templates []model.Template) ([]model.TemplateRow, integration.KindCoverage) {
@@ -2063,13 +2106,7 @@ func (s *Server) substrateTemplateRows(r *http.Request, snap *substrateapi.Snaps
 	poolRows := model.JoinPools(in)
 	rows := model.TemplateRows(templates, in.Actors, in.ActorsRead, model.KnownPools(pools, in.Workers), in.PoolsUsable || in.WorkersRead, in.PoolsComplete, poolRows)
 	if in.ActorsRead {
-		counts := map[model.Ref]int{}
-		workers := snap.Index().Workers
-		for _, actor := range in.Actors {
-			if actorAttentionRank(actor, in.Now, workers) < 3 {
-				counts[actor.Template]++
-			}
-		}
+		_, counts := substrateActorAttention(in.Actors, in.Now, snap.Index().Workers)
 		for i := range rows {
 			n := counts[model.Ref{Atespace: rows[i].Atespace, Name: rows[i].Name}]
 			rows[i].AttentionCount = &n
@@ -2087,7 +2124,7 @@ func (s *Server) handleSubstrateTemplates(w http.ResponseWriter, r *http.Request
 		return
 	}
 	resp := substrateTemplatesResponse{APITier: tier, Templates: []model.TemplateRow{}}
-	resp.Coverage.Templates, resp.Coverage.Actors = snap.Coverage.Templates, snap.Coverage.Actors
+	resp.Coverage.Templates, resp.Coverage.Actors, resp.Coverage.Workers = snap.Coverage.Templates, snap.Coverage.Actors, snap.Coverage.Workers
 	if snap.Coverage.Templates.Usable() {
 		resp.Templates, resp.Coverage.Pools = s.substrateTemplateRows(r, snap, snap.Templates)
 	} else {
@@ -2107,6 +2144,7 @@ type substrateTemplateResponse struct {
 	Coverage struct {
 		Templates substrateapi.Coverage    `json:"templates"`
 		Actors    substrateapi.Coverage    `json:"actors"`
+		Workers   substrateapi.Coverage    `json:"workers"`
 		Pools     integration.KindCoverage `json:"pools"`
 	} `json:"coverage"`
 }
@@ -2153,7 +2191,7 @@ func (s *Server) handleSubstrateTemplate(w http.ResponseWriter, r *http.Request)
 	var rows []model.TemplateRow
 	rows, resp.Coverage.Pools = s.substrateTemplateRows(r, snap, []model.Template{t})
 	resp.Template = rows[0]
-	resp.Coverage.Templates, resp.Coverage.Actors = snap.Coverage.Templates, snap.Coverage.Actors
+	resp.Coverage.Templates, resp.Coverage.Actors, resp.Coverage.Workers = snap.Coverage.Templates, snap.Coverage.Actors, snap.Coverage.Workers
 	s.writeJSON(w, resp)
 }
 
@@ -2161,6 +2199,7 @@ type substratePoolResponse struct {
 	APITier   substrateapi.APITier `json:"apiTier"`
 	Pool      model.PoolRow        `json:"pool"`
 	Attention *model.Attention     `json:"attention,omitempty"`
+	PodRead   string               `json:"podRead,omitempty"`
 	// Workers are the pool's workers with the actors in their slots.
 	Workers []substrateWorkerRow `json:"workers"`
 	// Templates are those whose selector matches this pool: absent when
@@ -2233,6 +2272,12 @@ func (s *Server) handleSubstratePool(w http.ResponseWriter, r *http.Request) {
 		row.Service = &ps
 	}
 	resp := substratePoolResponse{APITier: tier, Pool: *row, Attention: model.PoolAttention(in, *row), Workers: []substrateWorkerRow{}}
+	if row.Kubernetes != nil && row.Kubernetes.Pods == nil {
+		resp.PodRead = "uncollected"
+		if !substratePodsListable(s, r, ref.Namespace) {
+			resp.PodRead = "denied"
+		}
+	}
 	resp.Coverage.Pools = poolsCov
 	resp.Coverage.Workers, resp.Coverage.Actors, resp.Coverage.Templates = snap.Coverage.Workers, snap.Coverage.Actors, snap.Coverage.Templates
 	if in.WorkersRead {
