@@ -62,17 +62,17 @@ it('shows the exact missing permission and rechecks an updated grant', () => {
 })
 it('offers a recheck when Kubernetes returns no decision', () => {
   f.access='unknown'; render()
-  expect(host.textContent).toContain('cluster access check returned no decision')
+  expect(host.textContent).toContain('Kubernetes couldn’t confirm permission to update pods/ephemeralcontainers for Pod payments/checkout.')
   expect(host.textContent).not.toContain('Ask your cluster admin for access')
   expect(button('Recheck access')).toBeDefined()
 })
 it('distinguishes a failed request from an inconclusive cluster answer', () => {
   f.access = 'unknown'
   render()
-  expect(host.textContent).toContain('cluster access check returned no decision')
+  expect(host.textContent).toContain('Kubernetes couldn’t confirm permission to update pods/ephemeralcontainers for Pod payments/checkout.')
   f.checkError = new Error('request timed out')
   render()
-  expect(host.textContent).toContain('permission request failed')
+  expect(host.textContent).toContain('Radar couldn’t check permission to update pods/ephemeralcontainers for Pod payments/checkout.')
   expect(host.textContent).not.toContain('Ask your cluster admin for access')
 })
 

@@ -48,11 +48,14 @@ export function runningPodDebugTargets(pod: PodDebugTarget): string[] | undefine
   return getExecContainerNames(pod).filter(name => running.some(container => container.name === name))
 }
 
-export function debugAccessMessage(readOnly: boolean, error: unknown, state?: string) {
-  return readOnly ? 'This view can’t add a debug container.' : error ? 'The permission request failed before Radar received a decision.' :
-    state === 'check_failed' ? 'Kubernetes couldn’t complete the check for adding a debug container.' :
-    state === 'unavailable' ? 'Debugging is unavailable. Check Pod exec access and whether exec is enabled on this Radar.' :
-    'Radar hasn’t verified access to add a debug container to this Pod.'
+export function debugAccessMessage(readOnly: boolean, error: unknown, state: string | undefined, pod: PodDebugTarget | undefined) {
+  const subject = pod ? `Pod ${pod.metadata.namespace}/${pod.metadata.name}` : 'this Pod'
+  const permission = `update pods/ephemeralcontainers for ${subject}`
+  if (readOnly) return 'This view can’t add a debug container.'
+  if (error) return `Radar couldn’t check permission to ${permission}.`
+  if (state === 'check_failed') return `Kubernetes couldn’t complete the check for permission to ${permission}.`
+  if (state === 'unavailable') return 'Debugging is unavailable. Check Pod exec access and whether exec is enabled on this Radar.'
+  return `Kubernetes couldn’t confirm permission to ${permission}.`
 }
 
 export function usePodDetailAccess(pod: PodDebugTarget | undefined, namespace: {
@@ -72,7 +75,7 @@ export function usePodDetailAccess(pod: PodDebugTarget | undefined, namespace: {
     canExec: namespace.canExec || named?.exec === true,
     canOpenEphemeralTerminal: namespace.canOpenEphemeralTerminal || named?.exec === true,
     debugImage,
-    reviewStatus: { message: debugAccessMessage(readOnly, query.error, named?.state), refusal: readOnly ? undefined : query.data?.refusedAttempt?.message,
+    reviewStatus: { message: debugAccessMessage(readOnly, query.error, named?.state, pod), refusal: readOnly ? undefined : query.data?.refusedAttempt?.message,
       recheck: readOnly ? undefined : recheckAccess, checking: query.isFetching },
     debugDenial: !execOnly && named?.state === 'denied' ? { refusal: named.refusedAttempt?.message } : undefined,
     unverifiedReview: namespace.podDebugImage ? undefined : unverifiedReview,
@@ -182,11 +185,11 @@ export function PodDebugAction({ pod, defaultImage, failedContainer, unverifiedR
       {previousRefusal &&
         <div className="text-warning-text"><p>The last debug request was refused.</p><p className="break-words">{previousRefusal}</p></div>}
       {!canReview && !changedConnection && reviewStatus?.recheck &&
-        <button type="button" className="btn-secondary px-2 py-1" disabled={reviewStatus.checking} onClick={() => void reviewStatus.recheck?.()}>Recheck access</button>}
+        <button type="button" className="btn-secondary px-2 py-1" disabled={reviewStatus.checking} onClick={() => void reviewStatus.recheck?.()}>{reviewStatus.checking ? 'Checking…' : 'Recheck access'}</button>}
       {draft && canReview && <div className="grid gap-3">
         {refused && <div className="space-y-1 text-sm text-warning-text"><p>The last debug request was refused.</p><p className="break-words">{refused.message}</p>
           {recheckRequired && <button type="button" className="btn-secondary px-2 py-1" onClick={() => void unverifiedReview?.recheckAccess()}>Recheck access</button>}</div>}
-        {unverifiedReview && <p className="text-sm text-theme-text-secondary">Radar verified terminal access to this Pod. Kubernetes will decide whether you can add a debug container when you confirm.</p>}
+        {unverifiedReview && <p className="text-sm text-theme-text-secondary">Radar verified terminal access to this Pod. Kubernetes will decide whether to allow <code>update pods/ephemeralcontainers</code> when you confirm.</p>}
         <label className="grid gap-1">Target container
           <select className="rounded border border-theme-border bg-theme-surface px-2 py-1.5" value={draft.target} disabled={busy}
             onChange={event => setDraft({ ...draft, target: event.target.value })}>

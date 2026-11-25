@@ -61,6 +61,7 @@ function DebugOptions({ namespace, name, uid, target, connection, base, pod }: R
   const access = query.error ? undefined : query.data
   const allowedImage = query.error ? undefined : access?.state === 'allowed' ? access.image :
     access?.state === 'denied' || access?.state === 'unavailable' || access?.state === 'check_failed' ? undefined : podDebugImage
+  const accessMessage = debugAccessMessage(execOnly, query.error, access?.state, pod)
   const denied = access?.state === 'denied'
   const canCreate = !execOnly && !running.length
   const image = canCreate ? allowedImage || unverifiedImage : undefined
@@ -70,9 +71,9 @@ function DebugOptions({ namespace, name, uid, target, connection, base, pod }: R
     <PodDebugAction pod={pod} defaultImage={image} failedContainer={target} unverifiedReview={image ? unverifiedReview : undefined}
       debugDenial={canCreate && denied ? { refusal: access.refusedAttempt?.message } : undefined}
       hideLauncher={!image || (!!unverifiedReview?.refused && !unverifiedReview.refused.rechecked)}
-      reviewStatus={{ message: debugAccessMessage(execOnly, query.error, access?.state), refusal: query.data?.refusedAttempt?.message,
+      reviewStatus={{ message: accessMessage, refusal: query.data?.refusedAttempt?.message,
         recheck: execOnly ? undefined : recheckAccess, checking: query.isFetching }} />
-    {showRecheck && <button className="btn-secondary rounded px-2 py-1" disabled={query.isFetching} onClick={() => void recheckAccess()}>Recheck access</button>}
+    {showRecheck && <button className="btn-secondary rounded px-2 py-1" disabled={query.isFetching} onClick={() => void recheckAccess()}>{query.isFetching ? 'Checking…' : 'Recheck access'}</button>}
   </div>
 
   function renderOptions() {
@@ -117,11 +118,7 @@ function DebugOptions({ namespace, name, uid, target, connection, base, pod }: R
       <button className="btn-secondary rounded px-2 py-1" disabled={query.isFetching} onClick={() => void query.refetch()}>Recheck access</button>
     </div>
     return <div className="flex max-w-md flex-col items-center gap-2 text-xs text-theme-text-secondary">
-      <p>{denied ? <PodDebugPermission namespace={namespace} name={name} />
-        : access?.state === 'check_failed' ? <>You can open terminals in this Pod. Kubernetes couldn’t complete the check for adding a debug container.</>
-        : query.error ? <>The permission request failed before Radar received a decision for <code>{namespace}/{name}</code>.</>
-        : unverifiedImage ? <>You can open terminals in this Pod. Whether you can add a debug container is unconfirmed.</>
-        : <>The cluster access check returned no decision for <code>{namespace}/{name}</code>.</>}</p>
+      <p>{denied ? <PodDebugPermission namespace={namespace} name={name} /> : accessMessage}</p>
       {query.data?.refusedAttempt && !denied && <div role="status" className="max-w-full break-words text-warning-text">
         <p>The last debug request was refused.</p><p>{query.data.refusedAttempt.message}</p>
         {unverifiedImage && !query.data.refusedAttempt.rechecked && <p className="text-theme-text-secondary">Recheck access to review another attempt.</p>}
