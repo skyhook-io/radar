@@ -25,6 +25,7 @@ export interface TerminalTabProps {
   createSession: (containerName: string, podUID?: string) => Promise<{ wsUrl: string }>
   /** Optional: creates a debug (ephemeral) container. If omitted, the debug button is hidden. */
   createDebugContainer?: (targetContainer: string) => Promise<{ containerName: string }>
+  podDetailsLink?: ReactNode
   renderDebugAction?: (targetContainer: string, podUID: string) => ReactNode
   /** Optional: a short line in the toolbar describing the session. */
   note?: string
@@ -41,6 +42,7 @@ export function TerminalTab({
   createSession,
   createDebugContainer,
   renderDebugAction,
+  podDetailsLink,
   note,
   command,
 }: TerminalTabProps) {
@@ -362,7 +364,12 @@ export function TerminalTab({
                   Container <span className="font-mono text-theme-text-secondary">{selectedContainer}</span> could not start <span className="font-mono text-theme-text-secondary">{command}</span>. Check that the executable is installed in this container.
                 </div>
               ) : <div className="text-xs text-theme-text-tertiary mb-4 max-w-md">
-                This container image may have no shell.{containers.length > 1 && <> You can also <button type="button" className="underline underline-offset-2 hover:text-theme-text-primary" onClick={() => containerPicker.current?.focus()}>select another container</button> above.</>}
+                This container image may have no shell.{containers.length > 1 && <> You can also <button type="button" className="underline underline-offset-2 hover:text-theme-text-primary" onClick={() => {
+                  const picker = containerPicker.current
+                  picker?.focus()
+                  // Some embedded browsers disallow opening a native picker programmatically.
+                  try { picker?.showPicker?.() } catch { /* focus preserves keyboard access */ }
+                }}>select another container</button> above.</>}
               </div>}
               <div className="flex w-full min-w-0 max-w-md flex-wrap items-center justify-center gap-2">
                 {!command && failedPodUID && renderDebugAction?.(selectedContainer, failedPodUID)}
@@ -396,6 +403,7 @@ export function TerminalTab({
             <>
               <div className={clsx(toneTextClass('unhealthy'), 'mb-2 text-sm')}>Failed to connect</div>
               <div className="text-xs text-theme-text-secondary mb-3">{error}</div>
+              {reviewedPodUID.current && podDetailsLink}
               <button
                 onClick={connect}
                 className="flex items-center gap-2 px-3 py-1.5 btn-brand text-xs rounded"

@@ -7,6 +7,7 @@ import { connectionHeaderValue } from '../../api/connectionBinding'
 import { getApiBase } from '../../api/config'
 import { useReviewedActionMutation } from '../../api/reviewedActionMutation'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
+import { useConnection } from '../../context/ConnectionContext'
 import { useNavCustomization } from '../../context/NavCustomization'
 import { createPodDebugContainer, usePodDebugAccess } from '../../api/podDebug'
 
@@ -68,7 +69,8 @@ export function PodDebugAction({ pod, defaultImage, failedContainer }: { pod: Po
   const openTerminal = useOpenTerminal()
   const eligibleTargets = runningPodDebugTargets(pod)
   const targets = eligibleTargets ?? []
-  const [draft, setDraft] = useState<{ target: string; image: string; base: string; connection?: string }>()
+  const { connection: cluster } = useConnection()
+  const [draft, setDraft] = useState<{ target: string; image: string; base: string; connection?: string; context?: string }>()
   const [result, setResult] = useState<ActionConfirmResult>()
   const submitting = useRef(false)
   const mounted = useRef(false)
@@ -97,7 +99,9 @@ export function PodDebugAction({ pod, defaultImage, failedContainer }: { pod: Po
   })
   function show() {
     const preferred = failedContainer || getDefaultContainerName(pod)
-    setDraft({ target: preferred && targets.includes(preferred) ? preferred : targets[0], image: defaultImage, base: getApiBase(), connection: connectionHeaderValue() })
+    const connection = connectionHeaderValue()
+    const context = cluster.connectionId === connection ? (cluster.context === 'in-cluster' ? cluster.clusterName || cluster.context : cluster.context) : undefined
+    setDraft({ target: preferred && targets.includes(preferred) ? preferred : targets[0], image: defaultImage, base: getApiBase(), connection, context })
   }
 
   async function start() {
@@ -130,7 +134,7 @@ export function PodDebugAction({ pod, defaultImage, failedContainer }: { pod: Po
     <button type="button" className={`${failedContainer ? 'btn-brand' : 'btn-secondary'} flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium`} onClick={show}>
       <Bug className="h-3.5 w-3.5" />{failedContainer ? 'Start a debug container' : 'Debug'}
     </button>
-    <ActionConfirmDialog open={!!draft} title="Debug Pod" subject={{ kind: 'Pod', namespace, name }}
+    <ActionConfirmDialog open={!!draft} title="Debug Pod" context={draft?.context} writes={[{ summary: `Update pods/ephemeralcontainers on ${namespace}/${name}` }]} subject={{ kind: 'Pod', namespace, name }}
       effect="Start an ephemeral container and open a terminal in it. Its entry stays on the Pod until the Pod is deleted."
       onClose={() => {
         if (submitting.current) return

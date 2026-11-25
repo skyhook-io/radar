@@ -46,8 +46,8 @@ function startup(pod: PodDebugTarget, uid: string, container: string): Startup {
   }
 }
 
-export function PodDebugSession({ namespace, podName, containerName, session, isActive = true, children }: {
-  namespace: string; podName: string; containerName: string; session: Session; isActive?: boolean; children: ReactNode
+export function PodDebugSession({ namespace, podName, containerName, session, isActive = true, children, podDetailsLink }: {
+  namespace: string; podName: string; containerName: string; session: Session; isActive?: boolean; children: ReactNode; podDetailsLink?: ReactNode
 }) {
   const [connected, setConnected] = useState(false)
   const currentConnection = useCurrentConnection()
@@ -87,6 +87,7 @@ export function PodDebugSession({ namespace, podName, containerName, session, is
     {(error || status?.reason || status?.message) && <p className="break-words text-sm text-theme-text-primary">
       {error?.message || [status?.reason, status?.message].filter(Boolean).join(' · ')}
     </p>}
+    {status?.state === 'finished' && podDetailsLink}
     {!error && status?.hint && <p className="text-xs text-theme-text-secondary">{status.hint}</p>}
     {!error && (!status || status.state === 'waiting') && <p className="text-xs text-theme-text-secondary">The terminal opens when Kubernetes reports this container is running.</p>}
     {error && code !== 404 && code !== 409 && <button type="button" className="btn-secondary flex w-fit items-center gap-1.5 px-3 py-1.5 text-xs"

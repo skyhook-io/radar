@@ -7,6 +7,8 @@ import { DockProvider, useDock } from '@skyhook-io/k8s-ui'
 import { observeConnectionStatus, resetConnectionBindingForTest } from '../../api/connectionBinding'
 import { PodDebugAction } from './PodDebugAction'
 
+vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({connection:{context:'test-context'}}) }))
+
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 const running = { running: {} }
 const pod = {

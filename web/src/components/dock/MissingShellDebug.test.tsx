@@ -7,7 +7,7 @@ import { observeConnectionStatus, resetConnectionBindingForTest } from '../../ap
 import { MissingShellDebug } from './MissingShellDebug'
 
 const f = vi.hoisted(() => ({
-  pod: {} as any, installation: {} as Record<string, unknown>, namedExec: false, embedded: false, support: 'supported', access: 'denied', image: undefined as string | undefined,
+  pod: {} as any, installation: {} as Record<string, unknown>, checkError: undefined as Error | undefined, namedExec: false, embedded: false, support: 'supported', access: 'denied', image: undefined as string | undefined,
   recheck: vi.fn(), open: vi.fn(), copy: vi.fn(), probe: vi.fn(),
 }))
 vi.mock('../../context/NavCustomization', () => ({ useNavCustomization: () => ({ embedded: f.embedded }) }))
@@ -15,7 +15,7 @@ vi.mock('../../contexts/CapabilitiesContext', () => ({ useCapabilitiesContext: (
 vi.mock('../../api/client', async original => ({ ...await original<typeof import('../../api/client')>(), useResource: () => ({ data: f.pod }) }))
 vi.mock('../../api/podDebug', () => ({ usePodDebugAccess: (...args: unknown[]) => {
   f.probe(...args)
-  return {support: f.support, query: { data: {state: f.access, image: 'toolbox', exec: f.namedExec}, refetch: f.recheck }}
+  return {support: f.support, query: { error: f.checkError, data: {state: f.access, image: 'toolbox', exec: f.namedExec}, refetch: f.recheck }}
 } }))
 vi.mock('@skyhook-io/k8s-ui', async original => ({ ...await original<typeof import('@skyhook-io/k8s-ui')>(), useOpenTerminal: () => f.open }))
 vi.mock('@skyhook-io/k8s-ui/utils/clipboard', () => ({ copyText: f.copy }))
@@ -29,7 +29,7 @@ const button = (label: string) => [...host.querySelectorAll('button')].find(b =>
 beforeEach(() => {
   vi.clearAllMocks()
   resetConnectionBindingForTest()
-  Object.assign(f, { installation: {}, embedded: false, namedExec: false, support: 'supported', access: 'denied', image: undefined,
+  Object.assign(f, { installation: {}, checkError: undefined, embedded: false, namedExec: false, support: 'supported', access: 'denied', image: undefined,
     pod: { apiVersion: 'v1', kind: 'Pod', metadata: {uid:'uid-1', namespace:'payments', name:'checkout'},
       spec: {containers:[{name:'app'}]}, status:{phase:'Running',containerStatuses:[{name:'app', state:{running:{}}}] } } })
   host = document.createElement('div')
@@ -70,6 +70,16 @@ it('asks for verification on an unknown result without requesting a grant', asyn
   await act(async () => button('Copy verification request')!.click())
   expect(f.copy).toHaveBeenCalledWith('Could you check whether my Kubernetes identity can update pods/ephemeralcontainers for Pod checkout in namespace payments? Radar couldn’t verify access while I was troubleshooting container app.')
 })
+it('distinguishes a failed request from an inconclusive cluster answer', () => {
+  f.access = 'unknown'
+  render()
+  expect(host.textContent).toContain('cluster access check returned no decision')
+  f.checkError = new Error('request timed out')
+  render()
+  expect(host.textContent).toContain('permission request failed')
+  expect(button('Copy access request')).toBeUndefined()
+})
+
 it.each(['embedded', 'replaced', 'windows', 'stopped', 'old', 'disabled'])('suppresses the grant request on %s', mode => {
   if(mode==='embedded')f.embedded=true
   if(mode==='replaced')f.pod.metadata.uid='replacement'
