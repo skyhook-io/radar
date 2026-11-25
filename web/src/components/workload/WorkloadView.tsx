@@ -127,8 +127,7 @@ import { MultiPodLogsTab } from '../logs/MultiPodLogsTab'
 import { RayClusterLogsTab } from '../logs/RayClusterLogsTab'
 import { isKubeRayCluster } from '../logs/rayClusterPods'
 import { useWorkflowStopAction } from '../../hooks/useWorkflowStopAction'
-import { BatchExecutionFullscreen, workloadRunKey } from '../execution/BatchExecutionView'
-import { useSelectRunWhenListed } from './useSelectRunWhenListed'
+import { BatchExecutionFullscreen } from '../execution/BatchExecutionView'
 import { workloadRunTimelineEvents } from '../execution/batch-timeline'
 import {
   useCanUpdateSecrets,
@@ -1193,32 +1192,14 @@ export function WorkloadView({
     imageOwnerVerified,
     imageSelection,
   ])
-  // A submitted run opens once Radar lists it: on the page it is selected in
-  // the run view, on the Overview tab; in the drawer, or when the list can't
-  // show it, Radar opens the Workflow itself.
-  const listedRunKeys = useMemo(() => batchRunsQuery.data?.runs.map(workloadRunKey), [batchRunsQuery.data?.runs])
-  const openRunInOverview = useCallback(
-    (runKey: string) => {
-      const params = new URLSearchParams(searchParams)
-      params.set('run', runKey)
-      params.delete('tab')
-      setSearchParams(params, { replace: true })
-    },
-    [searchParams, setSearchParams],
-  )
+  // A submitted run opens as a Workflow, as Argo's UI does: its full page from
+  // the full page (the same run view, with the Workflow's own actions), and the
+  // resource drawer from the drawer.
   const viewIdentity = `${apiKind}/${namespace}/${name}`
   const currentViewIdentity = useRef(viewIdentity)
   currentViewIdentity.current = viewIdentity
   useEffect(() => () => { currentViewIdentity.current = '' }, [])
   const navigateToResource = rest.onNavigateToResource
-  const openWorkflow = useCallback(
-    (runKey: string) => {
-      const [, runNamespace, runName] = runKey.split('/')
-      navigateToResource?.({ kind: 'workflows', namespace: runNamespace, name: runName, group: 'argoproj.io' })
-    },
-    [navigateToResource],
-  )
-  const selectRunWhenListed = useSelectRunWhenListed(viewIdentity, listedRunKeys, batchRunsQuery.isError, batchRunsQuery.refetch, openRunInOverview, openWorkflow)
   const submitWorkflowTemplate = baseActionsBarProps.onSubmitWorkflowTemplate
   const submitAndOpenRun = useMemo(
     () => submitWorkflowTemplate
@@ -1226,14 +1207,15 @@ export function WorkloadView({
           const submittedFrom = currentViewIdentity.current
           const run = await submitWorkflowTemplate(submission)
           // The user moved on while the request ran: don't pull them back.
-          if (currentViewIdentity.current !== submittedFrom) return run
-          const runKey = workloadRunKey({ kind: 'workflows', namespace: run.namespace, name: run.name })
-          if (expanded) selectRunWhenListed(runKey)
-          else openWorkflow(runKey)
+          if (currentViewIdentity.current === submittedFrom) {
+            const target = { kind: 'workflows', namespace: run.namespace, name: run.name, group: 'argoproj.io' }
+            if (expanded) navigateRouter(buildWorkloadPath(target))
+            else navigateToResource?.(target)
+          }
           return run
         }
       : undefined,
-    [expanded, openWorkflow, selectRunWhenListed, submitWorkflowTemplate],
+    [expanded, navigateRouter, navigateToResource, submitWorkflowTemplate],
   )
   const actionsBarProps = useMemo(
     () => ({
