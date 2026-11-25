@@ -86,42 +86,18 @@ export function SyncCountdown({ interval, lastSyncTime, suspended, compact = fal
   )
 }
 
+const UNIT_SECONDS: Record<string, number> = { h: 3600, m: 60, s: 1, ms: 0.001 }
+
 /**
- * Parses a Kubernetes duration string (e.g., "5m", "1h30m", "30s") into seconds
+ * Parses a Go duration as Flux's interval fields accept it ("5m", "1h30m",
+ * "1.5m", "1500ms") into seconds; null for anything else.
  */
 export function parseInterval(interval: string): number | null {
-  if (!interval) return null
-
+  if (!/^(\d+(\.\d+)?(ms|h|m|s))+$/.test(interval)) return null
   let totalSeconds = 0
-  let index = 0
-
-  while (index < interval.length) {
-    const start = index
-    while (index < interval.length) {
-      const code = interval.charCodeAt(index)
-      if (code < 48 || code > 57) break
-      index += 1
-    }
-    if (start === index) {
-      index += 1
-      continue
-    }
-    const value = parseInt(interval.slice(start, index), 10)
-    const unit = interval[index]
-    if (unit === 'h') {
-      totalSeconds += value * 3600
-      index += 1
-    } else if (unit === 'm') {
-      totalSeconds += value * 60
-      index += 1
-    } else if (unit === 's') {
-      totalSeconds += value
-      index += 1
-    } else if (index < interval.length) {
-      index += 1
-    }
+  for (const [, value, unit] of interval.matchAll(/(\d+(?:\.\d+)?)(ms|h|m|s)/g)) {
+    totalSeconds += Number(value) * UNIT_SECONDS[unit]
   }
-
   return totalSeconds > 0 ? totalSeconds : null
 }
 
