@@ -831,7 +831,7 @@ func TestTopologyCharacterizationKeepsDuplicatePairs(t *testing.T) {
 	if edges != 2 {
 		t.Fatalf("CronJob -> Job with two owner records: %d manages edges, want 2", edges)
 	}
-	rel := GetRelationships("cronjobs", "team", "nightly", topo, f.provider, f.dynamic)
+	rel := graphRelationships("cronjobs", "team", "nightly", topo, f.provider, f.dynamic)
 	children := 0
 	for _, child := range rel.Children {
 		if child.Kind == "Job" && child.Name == "nightly-28999" {

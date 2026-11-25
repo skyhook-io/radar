@@ -156,7 +156,7 @@ func TestCalicoPolicyTopology(t *testing.T) {
 		t.Fatalf("Build() error: %v", err)
 	}
 
-	frontend := GetRelationships("Deployment", "demo", "frontend", topo, provider, nil)
+	frontend := graphRelationships("Deployment", "demo", "frontend", topo, provider, nil)
 	if frontend == nil || len(frontend.NetworkPolicies) != 1 || len(frontend.StagedPolicies) != 2 {
 		t.Fatalf("Calico enforced/staged projections = %+v", frontend)
 	}
@@ -362,7 +362,7 @@ func TestCalicoPolicyResourceRefsCarryGroup(t *testing.T) {
 	}
 	workload := Node{ID: "deployment/demo/web", Kind: KindDeployment, Name: "web", Data: map[string]any{"namespace": "demo"}}
 	topo := &Topology{Nodes: []Node{policy, workload}, Edges: []Edge{{Source: policy.ID, Target: workload.ID, Type: EdgeProtects}}}
-	rel := GetRelationships("Deployment", "demo", "web", topo, nil, nil)
+	rel := graphRelationships("Deployment", "demo", "web", topo, nil, nil)
 	if rel == nil || len(rel.NetworkPolicies) != 1 || rel.NetworkPolicies[0].Group != "projectcalico.org" {
 		t.Fatalf("NetworkPolicies = %+v, want one projectcalico.org ref", rel)
 	}

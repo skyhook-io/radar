@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
-	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -268,53 +267,6 @@ func TestSynthesizeManagedBy_CycleSafe(t *testing.T) {
 	}
 }
 
-// TestGetRelationships_BackCompat_PDBManagedByPreserved pins the regression
-// Bugbot flagged on the original T2 commit: kinds with ResourceProvider
-// methods but absent from the typed switch (PDB, NetworkPolicy, HPA, PVC, PV,
-// Node) dropped the GitOps chip even though the old client-side
-// detectGitOpsOwner worked on any kind. Production callers now pass obj
-// directly via GetRelationshipsWithObject so this only matters for the
-// back-compat path — but the typed switch should still cover them so the
-// back-compat path matches old-UI parity. PDB is the canonical case since it
-// connects via EdgeProtects (not EdgeManages), so the topology-walk fallback
-// also can't recover the chip.
-func TestGetRelationships_BackCompat_PDBManagedByPreserved(t *testing.T) {
-	pdb := &policyv1.PodDisruptionBudget{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "prod",
-			Name:      "api-pdb",
-			Annotations: map[string]string{
-				argoTrackingIDAnnotation: "argocd_storefront:policy/PodDisruptionBudget:prod/api-pdb",
-			},
-		},
-	}
-	provider := &stubProvider{pdbs: []*policyv1.PodDisruptionBudget{pdb}}
-	topo := &Topology{Nodes: []Node{{ID: "poddisruptionbudget/prod/api-pdb", Kind: KindPDB, Name: "api-pdb"}}}
-
-	// Long-form and short-form aliases must both surface the chip; production
-	// callers and back-compat callers can pass either, matching the other
-	// switches in this file (storage chain) and server.go's kind resolution.
-	for _, kind := range []string{"PodDisruptionBudget", "poddisruptionbudgets", "pdb", "pdbs"} {
-		t.Run(kind, func(t *testing.T) {
-			rel := GetRelationships(kind, "prod", "api-pdb", topo, provider, nil)
-			if rel == nil || len(rel.ManagedBy) != 1 {
-				t.Fatalf("want 1 ManagedBy ref for PDB via kind=%q, got %+v", kind, rel)
-			}
-			got := rel.ManagedBy[0]
-			if got.Kind != "Application" || got.Namespace != "argocd" || got.Name != "storefront" {
-				t.Errorf("want Argo Application/argocd/storefront via kind=%q, got %+v", kind, got)
-			}
-		})
-	}
-}
-
-// TestGetRelationshipsWithObject_KindCollision_DisambiguatesByObject pins the
-// reviewer's blocker on PR #720: a CRD whose plural collides with a core
-// resource (Knative serving.knative.dev/Service vs core/v1 Service) MUST
-// surface ManagedBy from the CRD's annotations, not from a co-named core
-// Service that happens to share the namespace/name. The old kind/name-based
-// lookup picked the core Service (no annotation) and silently dropped the
-// chip; the new caller-passes-obj path uses the authoritative resource.
 func TestGetRelationshipsWithObject_KindCollision_DisambiguatesByObject(t *testing.T) {
 	knativeGVR := schema.GroupVersionResource{Group: "serving.knative.dev", Version: "v1", Resource: "services"}
 	knativeSvc := &unstructured.Unstructured{}
@@ -325,11 +277,8 @@ func TestGetRelationshipsWithObject_KindCollision_DisambiguatesByObject(t *testi
 		argoTrackingIDAnnotation: "argocd_storefront:serving.knative.dev/Service:prod/api",
 	})
 
-	// Core Service shares ns/name and has NO managed-by signal. With the
-	// old kind/name-only lookup path this was what lookupTypedMetadata
-	// returned first, masking the Knative annotation.
 	coreSvc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "api"}}
-	provider := &stubProvider{services: []*corev1.Service{coreSvc}}
+	provider := &mockProvider{services: []*corev1.Service{coreSvc}}
 	dp := &stubDP{
 		gvr: map[string]schema.GroupVersionResource{
 			"service":  knativeGVR,
@@ -339,61 +288,9 @@ func TestGetRelationshipsWithObject_KindCollision_DisambiguatesByObject(t *testi
 	}
 	topo := &Topology{Nodes: []Node{{ID: "service/prod/api", Kind: KindService, Name: "api"}}}
 
-	// New canonical path: caller passes the authoritative CRD object.
 	rel := GetRelationshipsWithObject("Service", "prod", "api", knativeSvc, topo, provider, dp, nil)
 	if rel == nil || len(rel.ManagedBy) != 1 {
 		t.Fatalf("want 1 ManagedBy ref via caller-passed CRD obj, got %+v", rel)
-	}
-	got := rel.ManagedBy[0]
-	if got.Kind != "Application" || got.Namespace != "argocd" || got.Name != "storefront" {
-		t.Errorf("want Argo Application/argocd/storefront from CRD annotation, got %+v", got)
-	}
-
-	// Back-compat path (obj=nil): the fallback hits the core Service first
-	// via lookupTypedMetadata and produces no ManagedBy. This pins the
-	// collision behavior — callers that want correctness MUST migrate to
-	// GetRelationshipsWithObject. If this assertion ever flips, the
-	// fallback path has been made group-aware and the migration note in
-	// the back-compat doc should be revisited.
-	relFallback := GetRelationshipsWithIndex("Service", "prod", "api", topo, provider, dp, nil)
-	if relFallback != nil && len(relFallback.ManagedBy) > 0 {
-		t.Errorf("back-compat path unexpectedly produced ManagedBy from CRD annotation: %+v — fallback should still be group-blind; if this now works, update the doc on GetRelationships", relFallback.ManagedBy)
-	}
-}
-
-// TestGetRelationships_CRD_ManagedByPreserved is the regression for the
-// silent-disappear bug the reviewer flagged on #720: a CRD resource (e.g.
-// cert-manager Certificate) with an ArgoCD tracking-id annotation must still
-// surface ManagedBy. Before the lookupObjectMetadata split, CRDs fell off the
-// typed switch and the chip disappeared without an "omitted" trace.
-func TestGetRelationships_CRD_ManagedByPreserved(t *testing.T) {
-	certGVR := schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1", Resource: "certificates"}
-	cert := &unstructured.Unstructured{}
-	cert.SetGroupVersionKind(schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"})
-	cert.SetNamespace("prod")
-	cert.SetName("api-tls")
-	cert.SetAnnotations(map[string]string{
-		argoTrackingIDAnnotation: "argocd_storefront:cert-manager.io/Certificate:prod/api-tls",
-	})
-
-	dp := &stubDP{
-		gvr: map[string]schema.GroupVersionResource{
-			"certificate":  certGVR,
-			"certificates": certGVR,
-		},
-		obj: map[string]*unstructured.Unstructured{
-			"prod/api-tls": cert,
-		},
-	}
-
-	// Topology with the Certificate node only (no owner chain — annotation alone drives the chip).
-	topo := &Topology{
-		Nodes: []Node{{ID: "certificate/prod/api-tls", Kind: KindCertificate, Name: "api-tls"}},
-	}
-
-	rel := GetRelationshipsWithIndex("Certificate", "prod", "api-tls", topo, nil, dp, nil)
-	if rel == nil || len(rel.ManagedBy) != 1 {
-		t.Fatalf("want 1 ManagedBy ref for CRD with Argo tracking-id, got %+v", rel)
 	}
 	got := rel.ManagedBy[0]
 	if got.Kind != "Application" || got.Namespace != "argocd" || got.Name != "storefront" {
