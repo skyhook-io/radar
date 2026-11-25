@@ -72,4 +72,14 @@ describe('ClusterProxyList', () => {
     await act(async () => { state.mutate.mock.calls[0][1].onSuccess({ context: 'prod', current: true }) })
     expect(state.retry).toHaveBeenCalledTimes(1)
   })
+
+  it('wraps a long context name and saved proxy instead of overflowing the card', async () => {
+    act(() => root.render(<ClusterProxyList />))
+    const li = row('prod')
+    await act(async () => { [...li.querySelectorAll('button')].find((b) => b.textContent === 'Change')!.click() })
+    const codes = [...li.querySelectorAll('label .inline-code, p .inline-code')]
+    expect(codes.map((c) => c.textContent)).toEqual(['prod', 'socks5://bastion:1080'])
+    for (const c of codes) expect(c.className).toContain('break-all')
+    expect(li.querySelector('form button[type="button"]')!.className).toContain('btn-secondary')
+  })
 })

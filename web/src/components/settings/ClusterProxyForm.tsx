@@ -35,11 +35,11 @@ export function ClusterProxyForm({ context, savedProxyUrl, onSaved, confirmBefor
   return (
     <div className="space-y-2 text-left">
       <label htmlFor={inputId} className="block text-xs text-theme-text-secondary">
-        HTTP, HTTPS or SOCKS5 proxy for <span className="inline-code">{context}</span>. Used instead of the kubeconfig's proxy-url; your kubeconfig isn't changed. Radar checks the proxy before saving it, then reconnects.
+        HTTP, HTTPS or SOCKS5 proxy for <span className="inline-code break-all">{context}</span>. Used instead of the kubeconfig's proxy-url; your kubeconfig isn't changed. Radar checks the proxy before saving it, then reconnects.
       </label>
       {savedProxyUrl && (
         <p className="text-xs text-theme-text-secondary">
-          Saved: <span className="inline-code">{savedProxyUrl}</span>
+          Saved: <span className="inline-code break-all">{savedProxyUrl}</span>
         </p>
       )}
       <form
@@ -67,7 +67,7 @@ export function ClusterProxyForm({ context, savedProxyUrl, onSaved, confirmBefor
             type="button"
             disabled={save.isPending}
             onClick={() => submit('')}
-            className="px-3 py-1.5 text-xs rounded-md border border-theme-border bg-theme-surface text-theme-text-primary hover:bg-theme-hover disabled:opacity-50"
+            className="btn-secondary px-3 py-1.5 text-xs rounded-md"
           >
             Remove
           </button>
