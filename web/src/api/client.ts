@@ -859,7 +859,8 @@ export interface IssuesResponse {
   recent_changes_guidance?: string
   recent_changes_truncated?: boolean
   // Present when the recent-changes window starts before the history Radar
-  // holds; complete_since is sent only to callers who can read every namespace.
+  // holds; when events were evicted, complete_since is sent only to callers
+  // who can read every namespace.
   recent_changes_history_coverage?: {
     incomplete: boolean
     complete_since?: string
