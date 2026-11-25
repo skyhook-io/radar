@@ -64,7 +64,7 @@ export function FacetButton({
   tone?: FacetTone
   tooltip?: ReactNode
   onClick: () => void
-  /** Dims an unselected option while keeping it clickable. Active options keep their usual styling. */
+  /** Dims only the decorative dot of an unselected option. */
   dim?: boolean
 }) {
   const btn = (
@@ -77,10 +77,9 @@ export function FacetButton({
         active
           ? 'bg-skyhook-500/15 text-skyhook-700 dark:text-skyhook-300'
           : 'text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary',
-        dim && !active && 'opacity-60',
       )}
     >
-      <span className={clsx('h-2 w-2 shrink-0 rounded-full', DOT_CLASS[tone])} />
+      <span aria-hidden="true" className={clsx('h-2 w-2 shrink-0 rounded-full', DOT_CLASS[tone], dim && !active && 'opacity-60')} />
       <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
       {count != null && count > 0 && <span className="tabular-nums text-theme-text-tertiary">{count}</span>}
     </button>
@@ -114,7 +113,7 @@ export function Facet<T extends string>({
     count: number
     tone?: FacetTone
     tooltip?: ReactNode
-    /** Dims an unselected option while keeping it clickable. Active options keep their usual styling. */
+    /** Dims only the decorative dot of an unselected option. */
     dim?: boolean
   }[]
   selected: Set<T>

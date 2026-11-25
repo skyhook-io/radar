@@ -233,8 +233,8 @@ export interface ApplicationsViewProps {
    * counts text and Source matches for the header tiles, health distribution, and
    * Status, Class, Type, and Environment facets before applying other filters.
    * In either mode, selected health tiles stay visible at zero so they can be cleared.
-   * Source counts always use the base list. In scoped mode, choosing a source dims the other
-   * Source options. Scoped mode also hides the Type facet when at most one category
+   * Source counts always use the base list. In scoped mode, choosing a source dims the dots
+   * beside the other sources. Scoped mode also hides the Type facet when at most one category
    * matches unless a Type is selected.
    */
   countsFrom?: 'all' | 'searchAndSource'

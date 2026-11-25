@@ -127,9 +127,20 @@ describe('ApplicationsView countsFrom', () => {
     expect([...host.querySelectorAll('button')].some((b) => b.textContent === `${SOURCE_META[managedSource].label}2`)).toBe(true)
     // Every app left is the same type: the Type facet isn't offered.
     expect([...host.querySelectorAll('h3, [role="heading"], span')].some((el) => el.textContent === 'Type')).toBe(false)
-    // Other sources stay, read dimmed: outside the filter, still pickable.
-    const other = [...host.querySelectorAll('button')].find((b) => b.getAttribute('aria-pressed') === 'false' && /^(Ungrouped|Label|Helm|Argo CD|Flux)/.test(b.textContent ?? '') && b.className.includes('opacity-60'))
-    expect(other).toBeDefined()
+  })
+
+  it('dims only the alternate source dot and lets both sources be selected', () => {
+    const host = show('searchAndSource')
+    pickManagedSource(host)
+    const source = (label: string) => [...host.querySelectorAll('aside button')].find((button) => button.textContent?.startsWith(label))!
+    const other = source(SOURCE_META.ungrouped.label)
+    expect(other.getAttribute('aria-pressed')).toBe('false')
+    expect(other.matches('.opacity-60')).toBe(false)
+    expect([...other.querySelectorAll('.opacity-60')]).toEqual([other.querySelector('[aria-hidden="true"]')])
+    act(() => other.click())
+    expect(other.getAttribute('aria-pressed')).toBe('true')
+    expect(other.querySelector('.opacity-60')).toBeNull()
+    expect(source(SOURCE_META[managedSource].label).getAttribute('aria-pressed')).toBe('true')
   })
 
   it('keeps selected environment and health controls when a source has no matches', () => {
