@@ -1988,7 +1988,7 @@ func TestBeylaSource_GetFlows_UnorientedProtocolBytes(t *testing.T) {
 
 func TestBeylaSource_GetFlows_PortFromServiceWhenDstPortIsNotExported(t *testing.T) {
 	src := &BeylaSource{k8sClient: fake.NewSimpleClientset()}
-	src.servicePorts = func(ns, name, _ string) ([]int, bool) {
+	src.servicePorts = func(ns, name, _, _ string) ([]int, bool) {
 		if ns == "demo" && name == "db" {
 			return []int{5432}, true
 		}

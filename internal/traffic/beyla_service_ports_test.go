@@ -19,7 +19,7 @@ func portFlow(dstNs, dst, kind, proto string) *Flow {
 }
 
 func lookupFrom(m map[string][]int) servicePortLookup {
-	return func(ns, name, proto string) ([]int, bool) {
+	return func(ns, name, _, proto string) ([]int, bool) {
 		ports, ok := m[ns+"/"+name+"|"+proto]
 		return ports, ok
 	}
@@ -32,6 +32,7 @@ func TestInferServicePorts(t *testing.T) {
 		"shop/dns|udp":     {53},
 		"shop/partial|":    {9000},
 		"shop/no-service|": nil,
+		"shop/redis|":      {6379},
 	})
 	single := portFlow("shop", "postgres", "Workload", "tcp")
 	multi := portFlow("shop", "web", "Workload", "tcp")
@@ -39,13 +40,17 @@ func TestInferServicePorts(t *testing.T) {
 	node := portFlow("", "node-a", "Pod", "tcp")
 	unoriented := portFlow("shop", "postgres", "Workload", "tcp")
 	unoriented.DirectionUnknown = true
+	svc := portFlow("shop", "redis", "Service", "tcp")
 	l7 := portFlow("shop", "web", "Workload", "tcp")
 	l7.Destination.Name = "checkout"
 
-	flows := []*Flow{single, multi, none, node, unoriented, l7}
+	flows := []*Flow{single, multi, none, node, unoriented, l7, svc}
 	l7Flows := []Flow{{Destination: Endpoint{Name: "checkout", Namespace: "shop"}, Port: 8080}}
-	if n := inferServicePorts(flows, l7Flows, false, lookup); n != 2 {
-		t.Errorf("inferred = %d, want 2 (postgres and web)", n)
+	if n := inferServicePorts(flows, l7Flows, false, lookup); n != 3 {
+		t.Errorf("inferred = %d, want 3 (postgres, web and the redis Service)", n)
+	}
+	if svc.Port != 6379 || svc.PortSource != PortSourceService {
+		t.Errorf("a Service destination takes its own port: got %d/%q", svc.Port, svc.PortSource)
 	}
 
 	if single.Port != 5432 || single.PortSource != PortSourceService {
@@ -80,7 +85,7 @@ func TestInferServicePortsIncompleteReadsMultiple(t *testing.T) {
 	// One resolved port plus one named targetPort that matches no container port:
 	// the resolved one is not known to be the only one.
 	f := portFlow("shop", "partial", "Workload", "tcp")
-	inferServicePorts([]*Flow{f}, nil, false, func(string, string, string) ([]int, bool) { return []int{9000}, false })
+	inferServicePorts([]*Flow{f}, nil, false, func(string, string, string, string) ([]int, bool) { return []int{9000}, false })
 	if f.Port != 0 || f.PortSource != PortSourceServiceMultiple {
 		t.Errorf("got %d/%q, want multiple", f.Port, f.PortSource)
 	}
@@ -117,6 +122,15 @@ func TestServiceTargetPorts(t *testing.T) {
 	tmpl.Spec.Containers[0].Ports = nil
 	if _, complete := serviceTargetPorts(svcs, &tmpl, "tcp"); complete {
 		t.Error("a named targetPort no container declares must make the answer incomplete")
+	}
+}
+
+func TestServiceOwnPorts(t *testing.T) {
+	svc := &corev1.Service{Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{
+		{Port: 53, Protocol: corev1.ProtocolUDP}, {Port: 53}, {Port: 9153, TargetPort: intstr.FromInt(9999)},
+	}}}
+	if got := servicePorts(svc, "tcp"); len(got) != 2 || got[0] != 53 || got[1] != 9153 {
+		t.Errorf("got %v, want [53 9153]: the Service's own ports, not its targets", got)
 	}
 }
 

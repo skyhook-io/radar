@@ -11,11 +11,12 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
-// servicePortLookup returns the distinct target ports of the Services that
-// select a destination's pods, limited to one protocol when protocol is set.
+// servicePortLookup returns the distinct ports a destination serves according
+// to Services: for a Service destination its own ports, otherwise the target
+// ports of the Services selecting its pods. Limited to one protocol when set.
 // complete is false when some port could not be resolved (a named targetPort no
 // container declares), so the ports returned are not known to be all of them.
-type servicePortLookup func(namespace, workload, protocol string) (ports []int, complete bool)
+type servicePortLookup func(namespace, name, kind, protocol string) (ports []int, complete bool)
 
 // inferServicePorts gives port-0 edges a port when Beyla exports no dst_port.
 // Without dst_port every edge reads as port 0; the destination's Services say
@@ -41,7 +42,7 @@ func inferServicePorts(flows []*Flow, l7Flows []Flow, byTransport bool, lookup s
 		// An unoriented conversation has no known server side, and a Node or
 		// external end has no Service to read.
 		if f.Port != 0 || f.DirectionUnknown || d.Namespace == "" ||
-			(d.Kind != EndpointKindWorkload && d.Kind != EndpointKindPod) {
+			(d.Kind != EndpointKindWorkload && d.Kind != EndpointKindPod && d.Kind != "Service") {
 			continue
 		}
 		if ports := l7Ports[dstKey{d.Namespace, d.Name}]; len(ports) == 1 {
@@ -54,7 +55,7 @@ func inferServicePorts(flows []*Flow, l7Flows []Flow, byTransport bool, lookup s
 		if byTransport {
 			protocol = f.Protocol
 		}
-		ports, complete := lookup(d.Namespace, d.Name, protocol)
+		ports, complete := lookup(d.Namespace, d.Name, d.Kind, protocol)
 		switch {
 		case len(ports) == 0:
 			continue
@@ -71,10 +72,17 @@ func inferServicePorts(flows []*Flow, l7Flows []Flow, byTransport bool, lookup s
 // cachedServicePorts reads the destination's pod template and its namespace's
 // Services from Radar's cache. Beyla names a pod by its top owner, so the name
 // is looked up as a Deployment, StatefulSet, DaemonSet or bare Pod.
-func cachedServicePorts(namespace, workload, protocol string) ([]int, bool) {
+func cachedServicePorts(namespace, workload, kind, protocol string) ([]int, bool) {
 	cache := k8s.GetResourceCache()
 	if cache == nil || cache.Services() == nil {
 		return nil, false
+	}
+	if kind == "Service" {
+		svc, err := cache.Services().Services(namespace).Get(workload)
+		if err != nil {
+			return nil, false
+		}
+		return servicePorts(svc, protocol), true
 	}
 	var found []*corev1.PodTemplateSpec
 	if l := cache.Deployments(); l != nil {
@@ -136,11 +144,7 @@ func serviceTargetPorts(svcs []*corev1.Service, tmpl *corev1.PodTemplateSpec, pr
 			continue
 		}
 		for _, sp := range svc.Spec.Ports {
-			proto := sp.Protocol
-			if proto == "" {
-				proto = corev1.ProtocolTCP
-			}
-			if protocol != "" && !strings.EqualFold(string(proto), protocol) {
+			if !protocolMatches(sp.Protocol, protocol) {
 				continue
 			}
 			if n := targetPortNumber(sp, tmpl.Spec.Containers); n > 0 {
@@ -150,12 +154,35 @@ func serviceTargetPorts(svcs []*corev1.Service, tmpl *corev1.PodTemplateSpec, pr
 			}
 		}
 	}
+	return sortedPorts(set), complete
+}
+
+// servicePorts are a Service's own ports: traffic Beyla attributes to the
+// Service itself was addressed to them, not to the pods' target ports.
+func servicePorts(svc *corev1.Service, protocol string) []int {
+	set := make(map[int]bool)
+	for _, sp := range svc.Spec.Ports {
+		if protocolMatches(sp.Protocol, protocol) {
+			set[int(sp.Port)] = true
+		}
+	}
+	return sortedPorts(set)
+}
+
+func protocolMatches(proto corev1.Protocol, want string) bool {
+	if proto == "" {
+		proto = corev1.ProtocolTCP
+	}
+	return want == "" || strings.EqualFold(string(proto), want)
+}
+
+func sortedPorts(set map[int]bool) []int {
 	ports := make([]int, 0, len(set))
 	for p := range set {
 		ports = append(ports, p)
 	}
 	sort.Ints(ports)
-	return ports, complete
+	return ports
 }
 
 func targetPortNumber(sp corev1.ServicePort, containers []corev1.Container) int {
