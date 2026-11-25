@@ -95,7 +95,7 @@ func TestIstioGatewayBindings(t *testing.T) {
 	vsGVR := schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1", Resource: "virtualservices"}
 	gwGVR := schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1", Resource: "gateways"}
 	vs := genericIdentityObject(vsGVR, "VirtualService", "rules", "route")
-	vs.Object["spec"] = map[string]any{"gateways": []any{"mesh", "edge", "infra/shared"}, "http": []any{map[string]any{"route": []any{map[string]any{"destination": map[string]any{"host": "web"}}}}}}
+	vs.Object["spec"] = map[string]any{"gateways": []any{"mesh", "edge", "rules/edge", "infra/shared"}, "http": []any{map[string]any{"route": []any{map[string]any{"destination": map[string]any{"host": "web"}}}}}}
 	gateways := []*unstructured.Unstructured{genericIdentityObject(gwGVR, "Gateway", "rules", "edge"), genericIdentityObject(gwGVR, "Gateway", "infra", "shared"), genericIdentityObject(gwGVR, "Gateway", "rules", "mesh")}
 	check := func(t *testing.T, vs *unstructured.Unstructured, mode ViewMode, namespaces, want []string) {
 		t.Helper()

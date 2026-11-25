@@ -2067,7 +2067,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	if resourceDiscovery != nil {
 		knativeBrokerGVR, hasKnativeBrokers = resourceDiscovery.GetGVRWithGroup("Broker", "eventing.knative.dev")
 	}
-	knativeBrokerIDs := make(map[string]string) // ns/name -> brokerID
 	if hasKnativeBrokers && dynamicCache != nil {
 		knativeBrokers, brokerErr := dynamicCache.ListNamespaces(knativeBrokerGVR, opts.Namespaces)
 		if brokerErr != nil {
@@ -2082,7 +2081,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			name := broker.GetName()
 
 			brokerID := fmt.Sprintf("broker/%s/%s", ns, name)
-			knativeBrokerIDs[ns+"/"+name] = brokerID
 
 			nodes = append(nodes, Node{
 				ID:     brokerID,
@@ -2104,7 +2102,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	if resourceDiscovery != nil {
 		knativeTriggerGVR, hasKnativeTriggers = resourceDiscovery.GetGVRWithGroup("Trigger", "eventing.knative.dev")
 	}
-	knativeTriggerIDs := make(map[string]string)             // ns/name -> triggerID
 	var knativeTriggerResources []*unstructured.Unstructured // Store for second pass
 	if hasKnativeTriggers && dynamicCache != nil {
 		knativeTriggers, triggerErr := dynamicCache.ListNamespaces(knativeTriggerGVR, opts.Namespaces)
@@ -2120,7 +2117,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			name := trigger.GetName()
 
 			triggerID := fmt.Sprintf("trigger/%s/%s", ns, name)
-			knativeTriggerIDs[ns+"/"+name] = triggerID
 
 			nodes = append(nodes, Node{
 				ID:     triggerID,
@@ -4574,22 +4570,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	// KnativeRoute → KnativeRevision (EdgeExposes, via status.traffic[].revisionName)
 	// Note: spec.traffic may use configurationName instead of revisionName;
 	// status.traffic always has the resolved revisionName.
-	for _, kroute := range knativeRouteResources {
-		krouteNs := kroute.GetNamespace()
-		krouteName := kroute.GetName()
-		krouteID := knativeRouteIDs[krouteNs+"/"+krouteName]
-
-		for _, rev := range configrefs.KnativeRouteRevisions(kroute) {
-			if krevID, ok := knativeRevisionIDs[krouteNs+"/"+rev.Ref.Name]; ok {
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", krouteID, krevID),
-					Source: krouteID,
-					Target: krevID,
-					Type:   EdgeExposes,
-				})
-			}
-		}
-	}
+	edges = drawFamilies(edges, drawn, nodes, unstructuredSources(knativeRouteResources), relations.KnativeRouteRevisions)
 
 	// KnativeService → K8s Services (EdgeExposes)
 	// Connects to: same-name service (ExternalName DNS alias) + per-revision private services (actual pod routing)
@@ -4656,29 +4637,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-	// 14e. Create KNative Eventing edges
-	// Broker → Trigger (EdgeExposes — Broker routes events to Triggers)
-	// Trigger → subscriber target (EdgeExposes, via spec.subscriber.ref)
-	for _, trigger := range knativeTriggerResources {
-		triggerNs := trigger.GetNamespace()
-		triggerName := trigger.GetName()
-		triggerID := knativeTriggerIDs[triggerNs+"/"+triggerName]
-
-		// Broker → Trigger (data flow: Broker dispatches events to matching Triggers)
-		brokerName, _, _ := unstructured.NestedString(trigger.Object, "spec", "broker")
-		_, hasBrokerRef, _ := unstructured.NestedFieldNoCopy(trigger.Object, "spec", "brokerRef")
-		if brokerName != "" && !hasBrokerRef {
-			if brokerID, ok := knativeBrokerIDs[triggerNs+"/"+brokerName]; ok {
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", brokerID, triggerID),
-					Source: brokerID,
-					Target: triggerID,
-					Type:   EdgeExposes,
-				})
-			}
-		}
-
-	}
+	// 14e. Knative Eventing: Broker → Trigger, from spec.brokerRef or the older
+	// same-namespace spec.broker.
+	edges = drawFamilies(edges, drawn, nodes, unstructuredSources(knativeTriggerResources), relations.KnativeTriggerBrokers)
 
 	// 15. Create Gateway API edges (Gateway → Route, Route → Service).
 	routeSources := make([]declaring, 0, len(gatewayRouteResources))
@@ -4687,29 +4648,12 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	}
 	edges = drawFamilies(edges, drawn, nodes, routeSources, relations.GatewayParents, relations.GatewayBackends)
 
-	// 15b. Create cert-manager Certificate → Secret edges (via spec.secretName)
-	secretIDs := make(map[string]bool)
-	for _, node := range nodes {
-		if node.Kind == KindSecret {
-			secretIDs[node.ID] = true
-		}
+	// 15b. cert-manager Certificate → the Secret it writes (spec.secretName).
+	certificateSources := make([]*unstructured.Unstructured, len(certificateResources))
+	for i := range certificateResources {
+		certificateSources[i] = &certificateResources[i]
 	}
-	for _, cert := range certificateResources {
-		ns := cert.GetNamespace()
-		certID := fmt.Sprintf("certificate/%s/%s", ns, cert.GetName())
-		secretName, _, _ := unstructured.NestedString(cert.Object, "spec", "secretName")
-		if secretName != "" {
-			secretID := fmt.Sprintf("secret/%s/%s", ns, secretName)
-			if secretIDs[secretID] {
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", certID, secretID),
-					Source: certID,
-					Target: secretID,
-					Type:   EdgeManages,
-				})
-			}
-		}
-	}
+	edges = drawFamilies(edges, drawn, nodes, unstructuredSources(certificateSources), relations.CertificateSecrets)
 
 	nodes, edges, issuerWarnings := addCertificateIssuerEdges(nodes, edges, certificateResources, dynamicCache, opts)
 	warnings = append(warnings, issuerWarnings...)
@@ -4866,6 +4810,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	// HTTPProxy → HTTPProxy (EdgeExposes, via spec.includes[])
 	// Secret → HTTPProxy (EdgeConfigures, via spec.virtualhost.tls.secretName)
 	// HTTPProxy → Service via tcpproxy (EdgeExposes, via spec.tcpproxy.services[])
+	edges = drawFamilies(edges, drawn, nodes, unstructuredSources(httpProxyResources), relations.ContourBackends)
 	contourEdgeSeen := make(map[string]bool) // dedup: sourceID|targetID
 
 	for _, res := range httpProxyResources {
@@ -4873,19 +4818,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		resID := httpProxyIDs[resNs+"/"+res.GetName()]
 		if resID == "" {
 			continue
-		}
-
-		for _, r := range configrefs.ContourBackendReferences(res) {
-			key := r.Ref.Namespace + "/" + r.Ref.Name
-			targetID := serviceIDs[key]
-			if r.Ref.Kind == "HTTPProxy" {
-				targetID = httpProxyIDs[key]
-			}
-			if targetID == "" || contourEdgeSeen[resID+"|"+targetID] {
-				continue
-			}
-			contourEdgeSeen[resID+"|"+targetID] = true
-			edges = append(edges, Edge{ID: fmt.Sprintf("%s-to-%s", resID, targetID), Source: resID, Target: targetID, Type: EdgeExposes})
 		}
 
 		// Secret → HTTPProxy configuration edges
@@ -5397,8 +5329,10 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		servicesByNS[svc.Namespace][svcKey] = svc
 	}
 
-	// Step 3: Build Ingress nodes and edges
+	// Step 3: Build Ingress nodes. Routing edges are drawn once the Service
+	// nodes they reach are (after Step 5).
 	ingressIDs := make([]string, 0)
+	var trafficIngressSources []declaring
 	for _, ing := range ingresses {
 		if !opts.MatchesNamespaceFilter(ing.Namespace) {
 			continue
@@ -5426,25 +5360,11 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 			},
 		})
 
-		// Connect to backend Services (only if service is included)
-		for _, svcName := range configrefs.IngressBackendServices(ing) {
-			svcKey := ing.Namespace + "/" + svcName
-			if _, ok := servicesToInclude[svcKey]; ok {
-				svcID := fmt.Sprintf("service/%s/%s", ing.Namespace, svcName)
-				serviceIDs[svcKey] = svcID
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", ingID, svcID),
-					Source: ingID,
-					Target: svcID,
-					Type:   EdgeRoutesTo,
-				})
-			}
-		}
+		trafficIngressSources = append(trafficIngressSources, declaring{ref: resourceid.NewRef("networking.k8s.io", "Ingress", ing.Namespace, ing.Name), obj: ing})
 	}
 
 	// Step 3b: Build Gateway and route nodes/edges for traffic view
 	trafficGatewayIDs := make([]string, 0)
-	trafficGwIDMap := make(map[string]string) // ns/name -> gwID
 	for _, gw := range trafficGateways {
 		ns := gw.GetNamespace()
 		if !opts.MatchesNamespaceFilter(ns) {
@@ -5453,7 +5373,6 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		name := gw.GetName()
 		gwID := fmt.Sprintf("gateway/%s/%s", ns, name)
 		trafficGatewayIDs = append(trafficGatewayIDs, gwID)
-		trafficGwIDMap[ns+"/"+name] = gwID
 
 		listeners, _, _ := unstructured.NestedSlice(gw.Object, "spec", "listeners")
 		addresses, _, _ := unstructured.NestedSlice(gw.Object, "status", "addresses")
@@ -5481,7 +5400,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		})
 	}
 
-	trafficGatewayEdgeSeen := make(map[string]bool)
+	var trafficRouteSources []declaring
 	for i, route := range trafficRoutes {
 		ns := route.GetNamespace()
 		if !opts.MatchesNamespaceFilter(ns) {
@@ -5509,45 +5428,12 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 			},
 		})
 
-		// Gateway → Route edges
-		for _, parent := range configrefs.GatewayRouteParents(route) {
-			if gwID, ok := trafficGwIDMap[parent.Ref.Namespace+"/"+parent.Ref.Name]; ok && !trafficGatewayEdgeSeen[gwID+"-to-"+routeID] {
-				trafficGatewayEdgeSeen[gwID+"-to-"+routeID] = true
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", gwID, routeID),
-					Source: gwID,
-					Target: routeID,
-					Type:   EdgeRoutesTo,
-				})
-			}
-		}
-
-		// Route → Service edges
-		for _, backend := range configrefs.GatewayRouteBackendServices(route) {
-			svcKey := backend.Ref.Namespace + "/" + backend.Ref.Name
-			if _, ok := servicesToInclude[svcKey]; !ok {
-				continue
-			}
-			svcID := fmt.Sprintf("service/%s/%s", backend.Ref.Namespace, backend.Ref.Name)
-			serviceIDs[svcKey] = svcID
-			if trafficGatewayEdgeSeen[routeID+"-to-"+svcID] {
-				continue
-			}
-			trafficGatewayEdgeSeen[routeID+"-to-"+svcID] = true
-			edges = append(edges, Edge{
-				ID:     fmt.Sprintf("%s-to-%s", routeID, svcID),
-				Source: routeID,
-				Target: svcID,
-				Type:   EdgeRoutesTo,
-			})
-		}
+		trafficRouteSources = append(trafficRouteSources, declaring{ref: resourceid.NewRef(resourceid.GroupFromAPIVersion(route.GetAPIVersion()), routeKind, ns, name), obj: route})
 	}
 
 	// Step 3c: Build Istio VirtualService + IstioGateway nodes/edges for traffic view
 	trafficIstioGatewayIDs := make([]string, 0)
-	trafficIstioGwIDMap := make(map[string]string) // ns/name -> igwID
-	trafficVsIDMap := make(map[string]string)      // ns/name -> vsID
-	trafficVsToSvcSeen := make(map[string]bool)    // dedup VS→Service edges
+	var trafficVirtualServiceSources []declaring
 
 	for _, igw := range trafficIstioGateways {
 		ns := igw.GetNamespace()
@@ -5557,7 +5443,6 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		name := igw.GetName()
 		igwID := fmt.Sprintf("istiogateway/%s/%s", ns, name)
 		trafficIstioGatewayIDs = append(trafficIstioGatewayIDs, igwID)
-		trafficIstioGwIDMap[ns+"/"+name] = igwID
 
 		servers, _, _ := unstructured.NestedSlice(igw.Object, "spec", "servers")
 		selector, _, _ := unstructured.NestedStringMap(igw.Object, "spec", "selector")
@@ -5589,7 +5474,6 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		}
 		vsName := vs.GetName()
 		vsID := fmt.Sprintf("virtualservice/%s/%s", vsNs, vsName)
-		trafficVsIDMap[vsNs+"/"+vsName] = vsID
 
 		spec, _, _ := unstructured.NestedMap(vs.Object, "spec")
 		if spec == nil {
@@ -5624,38 +5508,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 			},
 		})
 
-		// IstioGateway → VirtualService edges
-		for _, gw := range configrefs.IstioVirtualServiceGateways(vs) {
-			if igwID, ok := trafficIstioGwIDMap[gw.Ref.Namespace+"/"+gw.Ref.Name]; ok {
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", igwID, vsID),
-					Source: igwID,
-					Target: vsID,
-					Type:   EdgeExposes,
-				})
-			}
-		}
-
-		// VirtualService → Service edges (deduped)
-		for _, dest := range configrefs.IstioVirtualServiceDestinations(vs, istioDomain) {
-			svcKey := dest.Ref.Namespace + "/" + dest.Ref.Name
-			if _, ok := servicesToInclude[svcKey]; !ok {
-				continue
-			}
-			svcID := fmt.Sprintf("service/%s/%s", dest.Ref.Namespace, dest.Ref.Name)
-			serviceIDs[svcKey] = svcID
-			dedupeKey := vsID + "|" + svcID
-			if trafficVsToSvcSeen[dedupeKey] {
-				continue
-			}
-			trafficVsToSvcSeen[dedupeKey] = true
-			edges = append(edges, Edge{
-				ID:     fmt.Sprintf("%s-to-%s", vsID, svcID),
-				Source: vsID,
-				Target: svcID,
-				Type:   EdgeExposes,
-			})
-		}
+		trafficVirtualServiceSources = append(trafficVirtualServiceSources, declaring{ref: resourceid.NewRef(resourceid.GroupFromAPIVersion(vs.GetAPIVersion()), "VirtualService", vsNs, vsName), obj: vs})
 	}
 
 	// Step 3d: Build KNative Serving nodes/edges for traffic view
@@ -5954,10 +5807,10 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 	// Step 3f: Build Contour HTTPProxy nodes/edges for traffic view
 	// Traffic flow: Internet → HTTPProxy (root) → HTTPProxy (child) → Service → Pods
 	trafficHTTPProxyIDs := make([]string, 0)
-	trafficHTTPProxyIDMap := make(map[string]string) // ns/name → ID
-	trafficContourEdgeSeen := make(map[string]bool)
+	var trafficHTTPProxySources []declaring
 
-	// Phase 1: Create all HTTPProxy nodes and populate ID map
+	// Create all HTTPProxy nodes; their edges are drawn with the other routing
+	// edges once the Service nodes are.
 	for _, hp := range trafficHTTPProxies {
 		ns := hp.GetNamespace()
 		if !opts.MatchesNamespaceFilter(ns) {
@@ -5965,7 +5818,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		}
 		name := hp.GetName()
 		hpID := fmt.Sprintf("httpproxy/%s/%s", ns, name)
-		trafficHTTPProxyIDMap[ns+"/"+name] = hpID
+		trafficHTTPProxySources = append(trafficHTTPProxySources, declaring{ref: resourceid.NewRef(resourceid.GroupFromAPIVersion(hp.GetAPIVersion()), "HTTPProxy", ns, name), obj: hp})
 
 		fqdn, _, _ := unstructured.NestedString(hp.Object, "spec", "virtualhost", "fqdn")
 		routes, _, _ := unstructured.NestedSlice(hp.Object, "spec", "routes")
@@ -6004,35 +5857,6 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 				"apiVersion":   hp.GetAPIVersion(),
 			},
 		})
-	}
-
-	// Phase 2: Create edges (all IDs populated)
-	for _, hp := range trafficHTTPProxies {
-		ns := hp.GetNamespace()
-		if !opts.MatchesNamespaceFilter(ns) {
-			continue
-		}
-		name := hp.GetName()
-		hpID := trafficHTTPProxyIDMap[ns+"/"+name]
-		if hpID == "" {
-			continue
-		}
-
-		for _, r := range configrefs.ContourBackendReferences(hp) {
-			key := r.Ref.Namespace + "/" + r.Ref.Name
-			var targetID string
-			if r.Ref.Kind == "HTTPProxy" {
-				targetID = trafficHTTPProxyIDMap[key]
-			} else if _, ok := servicesToInclude[key]; ok {
-				targetID = "service/" + key
-				serviceIDs[key] = targetID
-			}
-			if targetID == "" || trafficContourEdgeSeen[hpID+"|"+targetID] {
-				continue
-			}
-			trafficContourEdgeSeen[hpID+"|"+targetID] = true
-			edges = append(edges, Edge{ID: fmt.Sprintf("%s-to-%s", hpID, targetID), Source: hpID, Target: targetID, Type: EdgeExposes})
-		}
 	}
 
 	// Step 4: Add Internet node if we have ingresses, gateways, Istio gateways, or KNative services with URLs
@@ -6114,6 +5938,15 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 			},
 		})
 	}
+
+	// Routing edges, now that the Services they reach are drawn.
+	drawn := newDrawnNodes()
+	edges = drawFamilies(edges, drawn, nodes, trafficIngressSources, relations.IngressBackends)
+	edges = drawFamilies(edges, drawn, nodes, trafficRouteSources, relations.GatewayParents, relations.GatewayBackends)
+	if len(trafficVirtualServiceSources) > 0 {
+		edges = drawFamilies(edges, drawn, nodes, trafficVirtualServiceSources, relations.IstioGateways, relations.IstioServiceHosts(istioDomain))
+	}
+	edges = drawFamilies(edges, drawn, nodes, trafficHTTPProxySources, relations.ContourBackends)
 
 	// Step 6: Aggregate pods by owner and create PodGroup nodes
 	// This prevents cluttering the graph with hundreds of individual pod nodes

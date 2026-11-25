@@ -97,7 +97,11 @@ func VisitKnativeEventDestinations(obj *unstructured.Unstructured, visit func(Pa
 // absent, the older spec.broker in the Trigger's namespace. A brokerRef
 // without a name or namespace names nothing, whatever spec.broker says.
 func KnativeTriggerBroker(trigger *unstructured.Unstructured) (PathRef, bool) {
-	if raw, present, _ := borrowedMap(trigger.Object, "spec", "brokerRef"); present {
+	raw, present, err := borrowedMap(trigger.Object, "spec", "brokerRef")
+	if err != nil {
+		return PathRef{}, false
+	}
+	if present {
 		ref, ok := KnativeTriggerBrokerReference(raw)
 		return PathRef{Ref: ref, Path: "spec.brokerRef"}, ok
 	}
