@@ -14,6 +14,7 @@ import {
   podStatusClass,
   podStatusLabel,
   workloadPodDetail,
+  WorkflowShutdownBadge,
 } from '@skyhook-io/k8s-ui'
 import { buildWorkflowExecutionModel, flattenWorkflowExecution, type WorkflowExecutionActivity, type WorkflowExecutionModel, type WorkflowExecutionNode, type WorkflowExecutionRow, type WorkflowTemplateReference } from '@skyhook-io/k8s-ui/utils/workflow-execution'
 import { midTruncate } from '@skyhook-io/k8s-ui/utils/format'
@@ -257,7 +258,15 @@ function BatchExecutionContent({ leadContent, kind, apiKind, namespace, name, re
   const selectedResource = scheduled ? selectedResourceQuery.data : resource
   // A scheduled parent's selected run is a child Workflow with no action bar
   // of its own here; a standalone Workflow already has Stop in its bar.
-  const selectedRunStoppable = scheduled && selectedRun?.kind === 'workflows' && selectedRun.group === 'argoproj.io'
+  // An older Radar's run rows carry no group; the Workflow object's own
+  // apiVersion still decides, in WorkflowStopAction.
+  const selectedRunStoppable = scheduled && selectedRun?.kind === 'workflows' && (!selectedRun.group || selectedRun.group === 'argoproj.io')
+  // Only the selected run's own, currently readable object: never the previous
+  // selection's, nor a last copy kept after a failed refetch.
+  const selectedWorkflow = selectedRunStoppable && !selectedResourceQuery.error &&
+    selectedResource?.metadata?.name === selectedRun.name && selectedResource?.metadata?.namespace === selectedRun.namespace
+    ? selectedResource
+    : undefined
   const workflowExecution = useMemo(
     () => selectedResource && selectedRun?.kind === 'workflows' ? buildWorkflowExecutionModel(selectedResource) : null,
     [selectedResource, selectedRun?.kind],
@@ -423,9 +432,11 @@ function BatchExecutionContent({ leadContent, kind, apiKind, namespace, name, re
                       </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
-                      {selectedRunStoppable && selectedResource?.metadata?.name === selectedRun.name && selectedResource?.metadata?.namespace === selectedRun.namespace && (
-                        <WorkflowRunStopAction workflow={selectedResource} namespace={selectedRun.namespace} name={selectedRun.name} />
+                      {/* Stays mounted across selections so a request in flight keeps its dialog. */}
+                      {selectedRunStoppable && (
+                        <WorkflowRunStopAction workflow={selectedWorkflow} namespace={selectedRun.namespace} name={selectedRun.name} />
                       )}
+                      {selectedWorkflow && <WorkflowShutdownBadge data={selectedWorkflow} />}
                       <span className={clsx('badge', selectedRunHeldByKueue ? 'status-neutral' : phaseBadgeClass(selectedRun.phase))}>{selectedRunHeldByKueue ? `Held by Kueue until admitted${selectedRun.deleting ? ' · deleting' : ''}` : runStateLabel(selectedRun)}</span>
                     </div>
                   </div>

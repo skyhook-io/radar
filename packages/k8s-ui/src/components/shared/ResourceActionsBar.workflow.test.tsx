@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ResourceActionsBar } from './ResourceActionsBar'
+import { WorkflowStopAction } from './WorkflowStopDialog'
 import { workflowPendingShutdown, workflowStopState } from './WorkflowStopDialog'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -70,6 +71,32 @@ describe('workflowPendingShutdown', () => {
     expect(workflowPendingShutdown(workflow({ shutdown: 'Stop' }))).toBe('Stop')
     expect(workflowPendingShutdown(workflow({ shutdown: 'Terminate' }))).toBe('Terminate')
     expect(workflowPendingShutdown(workflow({ shutdown: 'Terminate', phase: 'Failed' }))).toBeNull()
+  })
+})
+
+describe('WorkflowStopAction on its own, as the run view mounts it', () => {
+  function renderAction(props: Record<string, unknown>) {
+    if (!root) {
+      const host = document.createElement('div')
+      document.body.appendChild(host)
+      root = createRoot(host)
+      roots.push(root)
+    }
+    act(() => root!.render(<WorkflowStopAction namespace="ci" name="build-7" data={undefined} {...props} />))
+  }
+
+  it('keeps an in-flight dialog when the selection moves to a run in a namespace it cannot stop', async () => {
+    let settle: () => void = () => {}
+    const onStopWorkflow = vi.fn(() => new Promise<void>(resolve => { settle = resolve }))
+    renderAction({ data: workflow(), onStopWorkflow })
+    act(() => button('Stop…').click())
+    await act(async () => { button('Stop').click() })
+    // Another run, in another namespace, with no stop permission and its object still loading.
+    act(() => root!.render(<WorkflowStopAction namespace="other" name="run-2" data={undefined} />))
+    expect(openDialog()?.textContent).toContain('ci/build-7')
+    await act(async () => { settle() })
+    await vi.waitFor(() => expect(openDialog()).toBeNull())
+    expect(onStopWorkflow).toHaveBeenCalledOnce()
   })
 })
 

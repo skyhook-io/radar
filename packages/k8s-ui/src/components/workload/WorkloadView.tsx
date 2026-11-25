@@ -40,10 +40,9 @@ import {
   Stethoscope,
   Coins,
   Pause,
-  Square,
 } from 'lucide-react'
 import { isPausedDeployment } from '../../utils/bulk-workload-actions'
-import { workflowPendingShutdown } from '../shared/WorkflowStopDialog'
+import { WorkflowShutdownBadge } from '../shared/WorkflowStopDialog'
 import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom, Topology, TopologyNode, HPADiagnosis, WorkloadPodInfo, CertificateSigningRequestDetails } from '../../types'
 import type { GitOpsStatus } from '../../types/gitops'
 import type { ReadGap } from '../../types/read-coverage'
@@ -979,15 +978,7 @@ export function WorkloadView({
     </Tooltip>
   )
   // spec.shutdown is intent; the phase stays Running until Argo acts, so say so.
-  const pendingShutdown = resourceGone ? null : workflowPendingShutdown(resource)
-  const workflowShutdownBadge = pendingShutdown && (
-    <Tooltip content={pendingShutdown === 'Stop' ? 'A Stop was requested. Argo ends the run after its exit handlers.' : 'A Terminate was requested. Argo ends the running steps, including any exit handler.'}>
-      <Badge severity="warning" className="gap-1 whitespace-nowrap">
-        <Square className="w-3 h-3 shrink-0" aria-hidden />
-        {pendingShutdown === 'Stop' ? 'Stopping' : 'Terminating'}
-      </Badge>
-    </Tooltip>
-  )
+  const workflowShutdownBadge = !resourceGone && <WorkflowShutdownBadge data={resource} />
   const status = resourceGone
     ? { text: 'Deleted', color: 'status-unknown' }
     : rolloutDisplay?.status ?? getResourceStatus(apiKind, resource)

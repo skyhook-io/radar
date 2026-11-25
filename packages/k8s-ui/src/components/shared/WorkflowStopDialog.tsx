@@ -3,6 +3,7 @@ import { Square } from 'lucide-react'
 import { ActionConfirmDialog } from './ActionConfirmDialog'
 import { isApiGroup } from '../resources/resource-utils-cnpg'
 import { Tooltip } from '../ui/Tooltip'
+import { Badge } from '../ui/Badge'
 import { radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
 import type { RadarUpgradeRequirement } from '../../types/fetch-error'
 
@@ -122,6 +123,23 @@ export interface WorkflowStopActionProps {
   workflowStopUpgrade?: RadarUpgradeRequirement | null
 }
 
+/**
+ * Stopping / Terminating while spec.shutdown waits for Argo: the request is
+ * stored at once, but the phase stays Running until the controller acts.
+ */
+export function WorkflowShutdownBadge({ data }: { data: any }) {
+  const shutdown = workflowPendingShutdown(data)
+  if (!shutdown) return null
+  return (
+    <Tooltip content={shutdown === 'Stop' ? 'A Stop was requested. Argo ends the run after its exit handlers.' : 'A Terminate was requested. Argo ends the running steps, including any exit handler.'}>
+      <Badge severity="warning" className="gap-1 whitespace-nowrap">
+        <Square className="w-3 h-3 shrink-0" aria-hidden />
+        {shutdown === 'Stop' ? 'Stopping' : 'Terminating'}
+      </Badge>
+    </Tooltip>
+  )
+}
+
 /** The Stop… / Terminate… button for one Workflow and its confirmation dialog. */
 export function WorkflowStopAction({ data, namespace, name, onStopWorkflow, isStoppingWorkflow, workflowStopUpgrade }: WorkflowStopActionProps) {
   // The dialog targets the run the user opened it on and keeps the mode it
@@ -184,7 +202,7 @@ export function WorkflowStopAction({ data, namespace, name, onStopWorkflow, isSt
           </button>
         </Tooltip>
       ))}
-      {onStopWorkflow && (
+      {(onStopWorkflow || draft) && (
         <WorkflowStopDialog
           open={open}
           onClose={() => setOpen(false)}
