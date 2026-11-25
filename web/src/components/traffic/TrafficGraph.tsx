@@ -1153,7 +1153,8 @@ function isFocusable(id: string, data: TrafficNodeData | undefined): boolean {
 // one would silently replace the other. Only unoriented edges are suffixed, so
 // every id a source that always orients its flows produces is unchanged.
 function trafficEdgeId(sourceId: string, destId: string, flow: AggregatedFlow): string {
-  return `${sourceId}->${destId}:${flow.port}${flow.directionUnknown ? ':unoriented' : ''}`
+  // The server keeps likely-overlay traffic apart from the rest between the same nodes.
+  return `${sourceId}->${destId}:${flow.port}${flow.directionUnknown ? ':unoriented' : ''}${flow.likelyOverlay ? ':overlay' : ''}`
 }
 
 export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups = false, serviceCategories, addonMode = 'show', trafficSource = '', selection: viewSelection, onSelectionChange, onFocus, focusedId, onLayoutUnavailable, windowSeconds, onDownloadBlob }: TrafficGraphProps) {

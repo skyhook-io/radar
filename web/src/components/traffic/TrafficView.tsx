@@ -852,7 +852,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
       // Traffic whose direction is known is kept apart from traffic whose direction
       // is not, the same way the backend aggregation keys it: merging them would
       // give one edge a single arrowhead answer that is wrong for half its bytes.
-      const key = `${sourceKey}->${destKey}|${flow.directionUnknown ? 'u' : 'o'}`
+      const key = `${sourceKey}->${destKey}|${flow.directionUnknown ? 'u' : 'o'}${flow.likelyOverlay ? '|v' : ''}`
 
       const existing = aggregatedMap.get(key)
       if (existing) {
