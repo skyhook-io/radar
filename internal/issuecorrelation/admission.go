@@ -123,8 +123,7 @@ func (c *run) admissionBlocker() (*admissionBlockerEvidence, *admissionReadError
 	blocker, ok := k8s.ParseAdmissionBlocker(iss.Message)
 	if !ok || iss.Namespace == "" {
 		// The message names no policy Radar can look up, so the policy side
-		// is unknown. Only a coverage-checking caller is told; the MCP tool
-		// reads the subject alone.
+		// is unknown.
 		c.addUnknown(issuesapi.CorrelationUnknownSourcesUnresolved, "", "")
 		return nil, nil
 	}
@@ -180,9 +179,7 @@ func (c *run) admissionBlocker() (*admissionBlockerEvidence, *admissionReadError
 		// workload as far as Radar can tell.
 		if _, cached := policyCreatedAt("ResourceQuota", iss.Namespace, blocker.Name); ev.complete && !cached && len(c.visible(changes)) == 0 {
 			c.addUnknown(issuesapi.CorrelationUnknownSourcesUnresolved, "", "ResourceQuota")
-			if c.opts.CheckCoverage {
-				ev.complete = false
-			}
+			ev.complete = false
 		}
 	case blocker.Kind == "LimitRange":
 		ev.complete = collected("LimitRange")

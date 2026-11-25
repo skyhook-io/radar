@@ -18,7 +18,6 @@
       "last_seen": "2000-01-01T00:00:00Z",
       "issue_timing": "started_after_resource_was_healthy",
       "issue_timing_basis": "owner_condition",
-      "timing_summary": "ValidatingWebhookConfiguration pod-policy was created at 1999-12-31T23:55:00Z; Deployment hooked has no recorded change in the last hour: the ValidatingWebhookConfiguration changed last.",
       "correlated_changes": [
         {
           "kind": "ValidatingWebhookConfiguration",

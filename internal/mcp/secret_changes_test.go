@@ -158,6 +158,13 @@ func TestSecretChangesRBACAcrossMCPSurfaces(t *testing.T) {
 	}
 }
 
+// onlyLateWatch accepts no unknown, or the incomplete history of a Rollout
+// kind the test started watching inside the window: the dynamic cache dates
+// its watch at real time.
+func onlyLateWatch(u *issuesapi.CorrelationUnknown) bool {
+	return u == nil || u.Reason == issuesapi.CorrelationUnknownHistoryIncomplete
+}
+
 func TestRolloutIssueCorrelatesReferencedSecret(t *testing.T) {
 	client := fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}})
 	if err := k8s.InitTestResourceCache(client); err != nil {
@@ -185,7 +192,7 @@ func TestRolloutIssueCorrelatesReferencedSecret(t *testing.T) {
 		t.Fatal("Rollout object not resolved")
 	}
 	result := issuecorrelation.Correlate(context.Background(), issuesapi.Issue{Kind: "Rollout", Group: "argoproj.io", Namespace: "shop", Name: "roll"}, correlationOptions(time.Hour), correlationAccess(context.Background()))
-	if result.Unknown != nil || len(result.Changes) != 1 || result.Changes[0].Kind != "Secret" || result.Changes[0].Name != "db" {
+	if !onlyLateWatch(result.Unknown) || len(result.Changes) != 1 || result.Changes[0].Kind != "Secret" || result.Changes[0].Name != "db" {
 		t.Fatalf("Rollout correlation = %+v", result)
 	}
 }
@@ -219,7 +226,7 @@ func TestRolloutWorkloadRefCorrelatesReferencedSecret(t *testing.T) {
 	correlate := func(name string) issuecorrelation.Result {
 		return issuecorrelation.Correlate(context.Background(), issuesapi.Issue{Kind: "Rollout", Group: "argoproj.io", Namespace: "shop", Name: name}, correlationOptions(time.Hour), correlationAccess(context.Background()))
 	}
-	if result := correlate("ref"); result.Unknown != nil || len(result.Changes) != 1 || result.Changes[0].Name != "db" {
+	if result := correlate("ref"); !onlyLateWatch(result.Unknown) || len(result.Changes) != 1 || result.Changes[0].Name != "db" {
 		t.Fatalf("workloadRef Rollout: %+v", result)
 	}
 	// An unresolvable target leaves the sources unknown, so no absence claim.
