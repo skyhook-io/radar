@@ -20,10 +20,38 @@ import (
 // UnavailablePrefix starts every error that means OpenObserve could not answer.
 const UnavailablePrefix = "OpenObserve unavailable"
 
-// health remembers the latest failure talking to OpenObserve, for status.
+// health remembers the latest failure talking to OpenObserve, for status,
+// and how long OpenObserve asked Radar to wait after a 429. It is shared by
+// every transport of one relay, health probes included.
 type health struct {
 	mu      sync.Mutex
 	message string
+	until   time.Time
+	// now is replaced in tests.
+	now func() time.Time
+}
+
+func (h *health) clock() time.Time {
+	if h.now != nil {
+		return h.now()
+	}
+	return time.Now()
+}
+
+// coolingDown reports how much of OpenObserve's requested wait is left.
+func (h *health) coolingDown() (time.Duration, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	left := h.until.Sub(h.clock())
+	return left, left > 0
+}
+
+// coolFor holds every request back for d, at least a second, as Radar Hub's
+// relay does.
+func (h *health) coolFor(d time.Duration) {
+	h.mu.Lock()
+	h.until = h.clock().Add(max(d, time.Second))
+	h.mu.Unlock()
 }
 
 func (h *health) set(msg string) {
@@ -103,6 +131,10 @@ func (t *retryTransport) schemaFetcher(fetch oo.SchemaFetcher) oo.SchemaFetcher 
 // call runs do, retrying once an overload answer, records the outcome in
 // health and turns an upstream failure into an upstreamError.
 func (t *retryTransport) call(ctx context.Context, do func() error) error {
+	if left, ok := t.health.coolingDown(); ok {
+		// OpenObserve asked for a pause: answer as it would, without asking.
+		return oo.ErrRateLimited{RetryAfter: left}
+	}
 	err := do()
 	if err != nil && isOverloaded(err) {
 		sleep := t.sleep
@@ -123,6 +155,7 @@ func (t *retryTransport) call(ctx context.Context, do func() error) error {
 	}
 	var limited oo.ErrRateLimited
 	if errors.As(err, &limited) {
+		t.health.coolFor(limited.RetryAfter)
 		t.health.set(UnavailablePrefix + ": " + limited.Error())
 		return limited
 	}
@@ -144,8 +177,11 @@ func (t *retryTransport) call(ctx context.Context, do func() error) error {
 func failureReason(err error) string {
 	var httpErr *prom.HTTPError
 	switch {
-	case errors.As(err, &httpErr) && (httpErr.StatusCode == http.StatusUnauthorized || httpErr.StatusCode == http.StatusForbidden):
+	case errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusUnauthorized:
 		return "it rejected Radar's user or token"
+	case errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusForbidden:
+		// The login passed setup's check; a 403 now is missing read access.
+		return "it doesn't let this account read metrics; give it a role that can read the metrics streams"
 	case errors.Is(err, oo.ErrSchemaUnreachable):
 		return trimPkgPrefix(oo.ErrSchemaUnreachable)
 	case isOverloaded(err):

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/openobserve/oofake"
+	"github.com/skyhook-io/radar/pkg/prom"
 	oo "github.com/skyhook-io/radar/pkg/prom/openobserve"
 )
 
@@ -114,6 +115,63 @@ func TestRateLimitIsReportedAsUnavailable(t *testing.T) {
 	}
 }
 
+func TestRateLimitHoldsRequestsForRetryAfter(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.Header().Set("Retry-After", "7")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		oofake.WriteVector(w, []map[string]string{{"radar_cluster_uid": uidB}})
+	}))
+	t.Cleanup(srv.Close)
+	now := time.Unix(1_700_000_000, 0)
+	h := &health{now: func() time.Time { return now }}
+	opts := oo.RewriteOptions{Matchers: []oo.Matcher{{Name: "radar_cluster_uid", Value: uidB}}}
+	// Two transports of one relay (a chart query and a health probe) share h.
+	chart := transportFactory(testConn(t, srv.URL), opts, false, h)(5*time.Second, 0)
+	probe := transportFactory(testConn(t, srv.URL), opts, false, h)(5*time.Second, 0)
+	query := func(tr prom.Transport) error {
+		_, err := tr.Do(context.Background(), http.MethodGet, "/api/v1/query", url.Values{"query": {"up"}})
+		return err
+	}
+
+	if err := query(chart); err == nil {
+		t.Fatal("429 answered without an error")
+	}
+	now = now.Add(3 * time.Second)
+	var limited oo.ErrRateLimited
+	if err := query(probe); !asRateLimited(err, &limited) || limited.RetryAfter != 4*time.Second {
+		t.Fatalf("during the wait: %v", err)
+	}
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("OpenObserve called %d times during its requested wait", n)
+	}
+	now = now.Add(4 * time.Second)
+	if err := query(chart); err != nil {
+		t.Fatalf("after the wait: %v", err)
+	}
+	if down, _ := h.get(); down {
+		t.Fatal("a success after the wait must clear the failure")
+	}
+}
+
+func TestForbiddenQuerySaysTheAccountCantReadMetrics(t *testing.T) {
+	for code, want := range map[int]string{
+		http.StatusUnauthorized: "it rejected Radar's user or token",
+		http.StatusForbidden:    "it doesn't let this account read metrics",
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(code) }))
+		tr := transportFactory(testConn(t, srv.URL), oo.RewriteOptions{Matchers: []oo.Matcher{{Name: "radar_cluster_uid", Value: uidB}}}, false, &health{})(5*time.Second, 0)
+		_, err := tr.Do(context.Background(), http.MethodGet, "/api/v1/query", url.Values{"query": {"up"}})
+		srv.Close()
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("%d: err = %v, want %q", code, err, want)
+		}
+	}
+}
+
 func asRateLimited(err error, target *oo.ErrRateLimited) bool {
 	l, ok := err.(oo.ErrRateLimited)
 	if ok {
@@ -141,7 +199,7 @@ func TestLegacySchemaFailureMarksSourceUnavailable(t *testing.T) {
 	opts := oo.RewriteOptions{Matchers: []oo.Matcher{{Name: "radar_cluster_uid", Value: uidB}}}
 	tr := transportFactory(testConn(t, srv.URL), opts, true, h)(5*time.Second, 0)
 	_, err := tr.Do(context.Background(), http.MethodGet, "/api/v1/query", url.Values{"query": {"kube_pod_info"}})
-	want := UnavailablePrefix + ": it rejected Radar's user or token"
+	want := UnavailablePrefix + ": it doesn't let this account read metrics; give it a role that can read the metrics streams"
 	if err == nil || err.Error() != want {
 		t.Fatalf("err = %v, want %q", err, want)
 	}
