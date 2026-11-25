@@ -173,6 +173,14 @@ function FluxRevisionChain({ summary, renderRevisionMeta }: { summary: GitOpsIns
   const applied = summary.appliedRevision || ''
   const nextRun = fluxNextRunMinutes(summary)
   const suspended = summary.autoSyncMode === 'Suspended'
+  // The estimate is computed from the clock, so re-render each minute while it shows.
+  const [, setTick] = useState(0)
+  const counting = nextRun !== null
+  useEffect(() => {
+    if (!counting) return
+    const timer = setInterval(() => setTick((t) => t + 1), 60_000)
+    return () => clearInterval(timer)
+  }, [counting])
   return (
     <span className="inline-flex flex-wrap items-baseline gap-x-1.5 gap-y-1">
       {summary.sourceRevision && (
