@@ -97,6 +97,13 @@ type Options struct {
 	// Service spec already carries selector/ports; this lookup answers
 	// whether that selector currently resolves to ready Pods.
 	ServiceBackends ServiceBackendLookup
+
+	// ExpandRelationship names one relationship preview field
+	// (IsRelationshipPreviewField) to fill with up to
+	// MaxExpandedRelationshipItems readable references instead of the usual
+	// preview, for a caller that needs more of a list it saw clipped.
+	// "exposes" expands both routing directions it joins.
+	ExpandRelationship string
 }
 
 // PolicyReportLookup is the minimal interface Build needs from the
@@ -198,6 +205,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		rc.AutoInstrumentation = &AutoInstrumentationContext{OpenTelemetry: opts.OpenTelemetryAutoInstrumentation}
 	}
 	omitted := newOmittedTracker()
+	omitted.expand = opts.ExpandRelationship
 	// Canonical context references still require Get access, even when a
 	// host's relationship view intentionally exposes namespace-readable names.
 	if opts.Children != nil {
@@ -235,7 +243,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		rc.Manager = managerContext(rel.Ownership.Manager)
 	}
 	if answered && rel.Ownership != nil {
-		access := previewAccess{checker: opts.AccessChecker}
+		access := newPreviewAccess(opts.AccessChecker, omitted.previewLimit("managedBy"))
 		var chainGap OmittedReason
 		chain := rel.ControllerChain.ToManager().Readable(func(r topology.ResourceRef) bool {
 			chainGap = access.check(ctx, toContextRef(r))
@@ -1621,12 +1629,21 @@ func declaredRefs(ctx context.Context, ac RefAccessChecker, extras *topology.Rel
 	return sorted
 }
 
+// MaxExpandedRelationshipItems bounds the field Options.ExpandRelationship
+// names.
+const MaxExpandedRelationshipItems = 200
+
 // Denied namespaces must not make reference authorization unbounded.
-const maxReferenceAccessChecks = 4 * maxReferencedByItems
+const accessChecksPerPreviewItem = 4
 
 type previewAccess struct {
 	checker   RefAccessChecker
+	budget    int
 	decisions map[resourceid.Ref]ownership.Decision
+}
+
+func newPreviewAccess(ac RefAccessChecker, limit int) previewAccess {
+	return previewAccess{checker: ac, budget: accessChecksPerPreviewItem * limit}
 }
 
 func (a *previewAccess) check(ctx context.Context, r ContextRef) OmittedReason {
@@ -1636,7 +1653,7 @@ func (a *previewAccess) check(ctx context.Context, r ContextRef) OmittedReason {
 	key := resourceid.NewRef(r.Group, r.Kind, r.Namespace, "")
 	d, known := a.decisions[key]
 	if !known {
-		if len(a.decisions) == maxReferenceAccessChecks {
+		if len(a.decisions) == a.budget {
 			return OmittedBudgetExceeded
 		}
 		if a.decisions == nil {
@@ -1678,7 +1695,7 @@ func IsRelationshipPreviewField(field string) bool {
 }
 
 func filterBoundedRefs(ctx context.Context, ac RefAccessChecker, refs []ContextRef, field string, omitted *omittedTracker) []ContextRef {
-	access := previewAccess{checker: ac}
+	access := newPreviewAccess(ac, omitted.previewLimit(field))
 	return access.selectRefs(ctx, refs, nil, field, omitted)
 }
 
@@ -1704,6 +1721,7 @@ func (a *previewAccess) selectRefs(ctx context.Context, refs, lead []ContextRef,
 		buckets = append(buckets, order[:n])
 		order = order[n:]
 	}
+	limit := omitted.previewLimit(field)
 	var selected []int
 	clipped := false
 rounds:
@@ -1722,7 +1740,7 @@ rounds:
 				}
 				continue
 			}
-			if len(lead)+len(selected) == maxReferencedByItems {
+			if len(lead)+len(selected) == limit {
 				omitted.add(field, OmittedBudgetExceeded)
 				clipped = true
 				break rounds
@@ -2049,6 +2067,18 @@ func resultRank(r string) int {
 type omittedTracker struct {
 	seen  map[string]bool
 	items []OmittedField
+	// expand is Options.ExpandRelationship. It rides on the tracker because
+	// every call that clips a relationship preview already receives it.
+	expand string
+}
+
+// previewLimit is how many readable references the relationship preview
+// field may hold.
+func (t *omittedTracker) previewLimit(field string) int {
+	if t.expand != "" && (field == t.expand || t.expand == "exposes" && (field == "exposedBy" || field == "backends")) {
+		return MaxExpandedRelationshipItems
+	}
+	return maxReferencedByItems
 }
 
 func newOmittedTracker() *omittedTracker {

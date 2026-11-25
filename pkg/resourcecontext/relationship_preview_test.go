@@ -261,3 +261,55 @@ func TestResourceContextServicePodsAndNamespaceMembership(t *testing.T) {
 		t.Fatalf("namespace invented containment: %s", raw)
 	}
 }
+
+func TestRelationshipPreviewExpansion(t *testing.T) {
+	widgets := func(n int) []topology.ResourceRef {
+		var refs []topology.ResourceRef
+		for i := range n {
+			refs = append(refs, topology.ResourceRef{Group: "example.io", Kind: "Widget", Namespace: "ns", Name: fmt.Sprintf("w-%03d", i)})
+		}
+		return refs
+	}
+	for _, tc := range []struct {
+		count   int
+		clipped bool
+	}{{199, false}, {200, false}, {250, true}} {
+		t.Run(fmt.Sprint(tc.count), func(t *testing.T) {
+			refs := widgets(tc.count)
+			rc := Build(t.Context(), &corev1.ConfigMap{}, Options{
+				Relationships:      &topology.Relationships{Dependents: refs, Dependencies: refs},
+				ExpandRelationship: "dependents",
+			})
+			if len(rc.Dependents) != min(tc.count, MaxExpandedRelationshipItems) ||
+				slices.Contains(rc.Omitted, OmittedField{"dependents", OmittedBudgetExceeded}) != tc.clipped {
+				t.Fatalf("expanded dependents %d omissions %v", len(rc.Dependents), rc.Omitted)
+			}
+			if len(rc.Dependencies) != 20 || !slices.Contains(rc.Omitted, OmittedField{"dependencies", OmittedBudgetExceeded}) {
+				t.Fatalf("a field not asked for was expanded: %d", len(rc.Dependencies))
+			}
+		})
+	}
+
+	routes := widgets(250)
+	var services []topology.ResourceRef
+	for i := range 250 {
+		services = append(services, topology.ResourceRef{Kind: "Service", Namespace: "ns", Name: fmt.Sprintf("svc-%03d", i)})
+	}
+	rc := Build(t.Context(), &corev1.Pod{}, Options{
+		Relationships:      &topology.Relationships{Services: routes, Backends: services},
+		ExpandRelationship: "exposes",
+	})
+	if len(rc.ExposedBy) != 200 || len(rc.Backends) != 200 || len(rc.Exposes) != 400 {
+		t.Fatalf("exposes expanded to exposedBy=%d backends=%d union=%d", len(rc.ExposedBy), len(rc.Backends), len(rc.Exposes))
+	}
+
+	var denied []topology.ResourceRef
+	for i := range 900 {
+		denied = append(denied, topology.ResourceRef{Group: fmt.Sprintf("z%03d.example", i), Kind: "Secret", Namespace: "private-namespace", Name: "hidden"})
+	}
+	checker := &countingRefChecker{deniedKind: "Secret"}
+	Build(t.Context(), &corev1.ConfigMap{}, Options{Relationships: &topology.Relationships{Dependents: denied}, AccessChecker: checker, ExpandRelationship: "dependents"})
+	if checker.calls != accessChecksPerPreviewItem*MaxExpandedRelationshipItems {
+		t.Fatalf("expanded access checks = %d", checker.calls)
+	}
+}

@@ -344,7 +344,7 @@ func TestDiagnoseWorkloadWarnsAboutClippedRelationships(t *testing.T) {
 	if rc == nil || len(rc.ExposedBy) != 20 || !slices.Contains(rc.Omitted, resourcecontext.OmittedField{Field: "exposedBy", Reason: resourcecontext.OmittedBudgetExceeded}) {
 		t.Fatalf("expected a clipped exposedBy preview: %+v", rc)
 	}
-	if !slices.Contains(resp.Warnings, "Partial preview of exposedBy. Radar reached its display or access-check limit. The total is unknown.") {
+	if !slices.Contains(resp.Warnings, "Partial preview of exposedBy. Radar reached its display or access-check limit. The total is unknown. To list up to 200 of one, call get_resource for this resource with relationship=\"exposedBy\".") {
 		t.Fatalf("warnings = %q", resp.Warnings)
 	}
 }

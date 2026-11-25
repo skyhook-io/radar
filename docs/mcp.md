@@ -1564,23 +1564,19 @@ either found another readable reference or left a permission tuple unchecked
 after 80 distinct (group, kind, namespace) decisions for that field. Relationship
 sources can make additional checks while collecting candidates. Even an empty
 preview can carry this marker. In `get_resource` and `diagnose`, one warning
-names the clipped fields. It omits the `exposes` alias when the list includes
-`exposedBy` or `backends`. An explicit denial records `rbac_denied` and a failed
-check records `unavailable`. These reasons can appear together.
-Unreadable spec generators leave no individual trace in `managedBy`.
+names the clipped fields and how to get more of one. It omits the `exposes`
+alias when the list includes `exposedBy` or `backends`. An explicit denial
+records `rbac_denied` and a failed check records `unavailable`. These reasons
+can appear together. Unreadable spec generators leave no individual trace in
+`managedBy`.
 
-Clipped relationship previews have no pagination. For example, to investigate
-Kustomizations consuming a GitRepository named `platform` in `flux-system`,
-call `search` with `query="kind:Kustomization"` and the CEL filter below.
-Set `namespace` to a known **consumer** namespace to narrow the search.
-Check the search coverage and hit limit (500 maximum).
-
-```cel
-has(spec.sourceRef) && spec.sourceRef.kind == "GitRepository" &&
-spec.sourceRef.name == "platform" &&
-((has(spec.sourceRef.namespace) && spec.sourceRef.namespace != "")
-  ? spec.sourceRef.namespace : metadata.namespace) == "flux-system"
-```
+To get more of a clipped field, call `get_resource` for the same resource with
+`relationship` set to the field, for example `relationship="dependents"`. That
+field then holds up to 200 readable references, with an access-check limit of
+800 decisions; every other field keeps its usual preview. `exposes` expands both
+routing directions it joins. If the expanded field is clipped again, the warning
+says the total is unknown and that Radar can't list more. `relationship` needs
+resource context, so it can't be combined with `context=none`.
 
 Storage context uses the same caller-scoped Storage family answers as the drawer. A PVC depends on its
 declared PV and StorageClass, including a Pending claim with no volume yet; a PV

@@ -3,6 +3,7 @@ package server_test
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -13,7 +14,6 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/mcp"
-	"github.com/skyhook-io/radar/internal/search"
 	"github.com/skyhook-io/radar/internal/server"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -102,7 +102,7 @@ func TestResourceRelationshipPreviewAcrossRESTAndMCP(t *testing.T) {
 		!slices.Contains(rest.Context.Omitted, gap) || !slices.Contains(viaMCP.Context.Omitted, gap) {
 		t.Fatalf("REST %+v MCP %+v", rest, viaMCP)
 	}
-	if !slices.Contains(viaMCP.Warnings, "Partial preview of dependents. Radar reached its display or access-check limit. The total is unknown.") {
+	if !slices.Contains(viaMCP.Warnings, "Partial preview of dependents. Radar reached its display or access-check limit. The total is unknown. To list up to 200 of one, call get_resource for this resource with relationship=\"dependents\".") {
 		t.Fatalf("warnings %v", viaMCP.Warnings)
 	}
 	args["context"] = "none"
@@ -111,10 +111,23 @@ func TestResourceRelationshipPreviewAcrossRESTAndMCP(t *testing.T) {
 	if bare["resourceContext"] != nil || bare["warnings"] != nil || bare["kind"] == nil {
 		t.Fatalf("bare read %s", mustJSON(t, bare))
 	}
-	var found search.Result
-	call("search", map[string]any{"query": "kind:Kustomization", "namespace": "default", "context": "none", "include": "none",
-		"filter": `has(spec.sourceRef) && spec.sourceRef.kind == "GitRepository" && spec.sourceRef.name == "platform" && ((has(spec.sourceRef.namespace) && spec.sourceRef.namespace != "") ? spec.sourceRef.namespace : metadata.namespace) == "broken"`}, &found)
-	if len(found.Hits) != 1 || found.Hits[0].Name != omittedConsumer.Name || found.Hits[0].Namespace != omittedConsumer.Namespace {
-		t.Fatalf("scoped recovery %+v", found)
+	delete(args, "context")
+	args["relationship"] = "dependents"
+	var expanded envelope
+	call("get_resource", args, &expanded)
+	if len(expanded.Context.Dependents) != 21 || !slices.Contains(expanded.Context.Dependents, omittedConsumer) ||
+		slices.Contains(expanded.Context.Omitted, gap) || len(expanded.Warnings) != 0 {
+		t.Fatalf("expanded read %+v", expanded)
+	}
+	for _, bad := range []map[string]any{
+		{"relationship": "referencedBy"},
+		{"relationship": "dependents", "context": "none"},
+	} {
+		badArgs := maps.Clone(args)
+		maps.Copy(badArgs, bad)
+		result, err := session.CallTool(t.Context(), &mcpsdk.CallToolParams{Name: "get_resource", Arguments: badArgs})
+		if err != nil || !result.IsError {
+			t.Fatalf("%v accepted: %v %+v", bad, err, result)
+		}
 	}
 }

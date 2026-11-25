@@ -69,7 +69,7 @@ func handleStrimziDiagnose(ctx context.Context, input diagnoseInput, kind string
 	}
 	// Strimzi diagnosis exposes curated evidence only. Derive warnings from
 	// its context without feeding the raw connector object into advisories.
-	resp.Warnings = resourceContextWarnings(nil, resp.ResourceContext)
+	resp.Warnings = resourceContextWarnings(nil, resp.ResourceContext, "")
 	// Generic condition messages may contain credentials or exception traces.
 	resp.ResourceContext.StatusSummary = nil
 	if kind == "KafkaConnector" {
