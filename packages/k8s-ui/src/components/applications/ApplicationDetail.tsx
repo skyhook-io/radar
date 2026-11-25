@@ -349,8 +349,7 @@ type ApplicationDetailBaseProps = {
    */
   status?: AppHostStatus;
   /** Order the visible tabs by ID, including `cost`. A removed view falls back
-   *  to the first offered non-Cost view. Fallback skips Deploys and extra views
-   *  while selection is pending or a controlled link is unresolved offline.
+   *  to the first offered non-Cost view once selection settles.
    *  Cost has separate selection props. */
   viewOrder?: string[];
 } & SelectionProps;
@@ -553,7 +552,7 @@ export function ApplicationDetail({
     viewOrder,
   );
   const requestedViewAvailable = visibleViews.some(({ id }) => id === requestedView);
-  const waitingForWorkload = Boolean(selectedWorkloadKey) && (selectionLoading || unavailable != null || hostKeyIsStale);
+  const waitingForWorkload = selectedWorkloadKey != null && (selectionLoading || unavailable != null || hostKeyIsStale);
   const unresolvedOfflineView = unavailable != null && selectedView !== undefined && !requestedViewAvailable;
   const renderInstanceDeploys = useCallback(
     () => waitingForWorkload
@@ -561,17 +560,12 @@ export function ApplicationDetail({
       : <Fragment key={scopeKey}>{renderDeploys?.()}</Fragment>,
     [renderDeploys, scopeKey, waitingForWorkload],
   );
-  // An unresolved workload deep link can temporarily land on this shell.
-  // While evidence is missing, show the built-in or unavailable state without
-  // running an unrelated host tab.
-  const fallbackView = waitingForWorkload || selectionLoading || unresolvedOfflineView
-    ? visibleViews.find(({ id }) => id !== "deploys" && isBuiltInApplicationView(id))?.id
-    : visibleViews[0]?.id;
-  const resolvedView = requestedViewAvailable && !waitingForWorkload ? requestedView : fallbackView;
+  const fallbackView = selectionLoading || unresolvedOfflineView ? undefined : visibleViews[0]?.id;
+  const resolvedView = waitingForWorkload ? undefined : requestedViewAvailable ? requestedView : fallbackView;
   const activeExtraView = offeredExtraViews?.find(({ id }) => id === resolvedView);
   const activeView = resolvedView && isBuiltInApplicationView(resolvedView)
     ? resolvedView
-    : DEFAULT_APPLICATION_VIEW;
+    : undefined;
   const onlyOfferedCost = visibleViews.length === 0 && !selectionLoading && !unresolvedOfflineView;
   const costSelected = !waitingForWorkload && Boolean(renderCostView) &&
     ((costViewSelected ?? internalCostSelected) || onlyOfferedCost);
@@ -941,8 +935,6 @@ export function ApplicationDetail({
       <div className="min-h-0 flex-1 overflow-hidden bg-theme-base">
         {selectedWorkload ? (
           renderRuntime(scopeKey, selectedWorkload, renderWorkload, workloadContext)
-        ) : selectionLoading && !resolvedView && !costSelected && unavailable == null ? (
-          <PaneLoader label="Loading application views…" className="h-full" />
         ) : (
           <WorkloadRevisionsContext.Provider value={renderWorkloadRevisions}>
             <ApplicationWorkspace
@@ -953,7 +945,7 @@ export function ApplicationDetail({
               viewOrder={viewOrder}
               extraViews={offeredExtraViews}
               offeredViews={offeredViews}
-              unavailable={unavailable}
+              notice={unavailable ?? (selectionLoading && !resolvedView ? <PaneLoader label="Loading application views…" className="h-full" /> : null)}
               costSelected={costSelected}
               onViewChange={setView}
               onCostViewChange={selectCostView}
@@ -1013,7 +1005,7 @@ function ApplicationWorkspace({
   viewOrder,
   extraViews,
   offeredViews,
-  unavailable,
+  notice,
   costSelected,
   onViewChange,
   onCostViewChange,
@@ -1057,14 +1049,14 @@ function ApplicationWorkspace({
   hasOverviewIssues,
 }: {
   app: AppRow;
-  activeView: ApplicationView;
+  activeView?: ApplicationView;
   activeExtraView?: ApplicationExtraView;
   /** The instance shown: a host view's state belongs to one instance, never carried to the next. */
   instanceKey: string;
   viewOrder?: string[];
   extraViews?: ApplicationExtraView[];
   offeredViews: ApplicationView[];
-  unavailable?: ReactNode;
+  notice?: ReactNode;
   costSelected: boolean;
   onViewChange: (view: ApplicationDetailView) => void;
   onCostViewChange: () => void;
@@ -1120,8 +1112,7 @@ function ApplicationWorkspace({
   renderOverviewIssues?: () => ReactNode;
   hasOverviewIssues?: boolean;
 }) {
-  const showBuiltIn =
-    !costSelected && !activeExtraView && unavailable == null && offeredViews.includes(activeView);
+  const showBuiltIn = !costSelected && notice == null;
   const activeDeploys = costSelected ? undefined : renderDeploys;
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -1150,9 +1141,9 @@ function ApplicationWorkspace({
           {activeExtraView.render()}
         </div>
       )}
-      {!costSelected && !activeExtraView && !activeDeploys && unavailable != null && (
+      {!costSelected && !activeExtraView && !activeDeploys && notice != null && (
         <div role="tabpanel" className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
-          {unavailable}
+          {notice}
         </div>
       )}
       {showBuiltIn && activeView === "overview" && (
@@ -1238,7 +1229,7 @@ function ApplicationViewTabs({
   onCostChange,
   viewOrder,
 }: {
-  activeView: ApplicationView;
+  activeView?: ApplicationView;
   activeExtraViewId?: string;
   extraViews?: ApplicationExtraView[];
   offeredViews: ApplicationView[];

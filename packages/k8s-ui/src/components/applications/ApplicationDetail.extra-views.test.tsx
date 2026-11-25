@@ -370,17 +370,43 @@ describe('ApplicationDetail extra views', () => {
     expect(host.textContent).toContain('Release notes body')
   })
 
+  it('shows a loader and leaves every tab unselected until a requested view is available', () => {
+    const renderOverviewIssues = vi.fn(() => null)
+    const props = { selectedView: 'deploys', onSelectView: vi.fn(), renderOverviewIssues }
+    const { host, rerender } = show({ ...props, selectionLoading: true })
+    expect(tab(host, 'Overview')).toBeDefined()
+    expect(selected(host)).toEqual([])
+    expect(host.textContent).toContain('Loading application views')
+    expect(renderOverviewIssues).not.toHaveBeenCalled()
+    expect(props.onSelectView).not.toHaveBeenCalled()
+    rerender({ ...props, renderDeploys: () => <div>Recorded deliveries</div> })
+    expect(selected(host)).toEqual(['Deploys'])
+    expect(host.textContent).toContain('Recorded deliveries')
+  })
+
+  it('holds an empty workload key offline before mounting an available host view', () => {
+    const render = vi.fn(() => <p>Settings body</p>)
+    const props = { selectedView: 'settings', extraViews: [{ id: 'settings', label: 'Settings', render }], onSelectView: vi.fn(), onSelectWorkload: vi.fn() }
+    const { host } = show({ ...props, selectedWorkloadKey: '', liveUnavailableNotice: <p>Offline</p> })
+    expect(host.textContent).toContain('Offline')
+    expect(selected(host)).toEqual([])
+    expect(render).not.toHaveBeenCalled()
+    expect(props.onSelectView).not.toHaveBeenCalled()
+    expect(props.onSelectWorkload).not.toHaveBeenCalled()
+  })
+
   it('keeps an unavailable controlled Deploys link offline without mounting another host view', () => {
     const onSelectView = vi.fn()
     const { host } = show({
       app: { ...app, workloads: [] },
-      builtInViews: ['deploys'],
       extraViews,
       selectedView: 'deploys',
       onSelectView,
       liveUnavailableNotice: <p>Offline</p>,
     })
     expect(host.textContent).toContain('Offline')
+    expect(tab(host, 'Overview')).toBeDefined()
+    expect(selected(host)).toEqual([])
     expect(host.textContent).not.toContain('Release notes body')
     expect(onSelectView).not.toHaveBeenCalled()
   })
