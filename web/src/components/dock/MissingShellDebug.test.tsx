@@ -220,3 +220,13 @@ it('keeps verified named exec when the separate update review failed, with no wr
   act(() => root.render(<Details/>))
   expect(host.textContent).toBe('true no preview')
 })
+
+it.each(['denied', 'unknown'])('keeps the same context and complete permission request when copying %s access manually', async state => {
+  f.access = state
+  f.copy.mockResolvedValue(false)
+  render()
+  await act(async () => button(state === 'denied' ? 'Copy access request' : 'Copy verification request')!.click())
+  const clipboardText = f.copy.mock.calls[0][0]
+  expect(clipboardText).toContain('Radar context: fixture-cluster.')
+  expect(host.querySelector('textarea')?.value).toBe(clipboardText)
+})

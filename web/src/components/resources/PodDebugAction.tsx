@@ -48,6 +48,10 @@ export function runningPodDebugTargets(pod: PodDebugTarget): string[] | undefine
   return getExecContainerNames(pod).filter(name => running.some(container => container.name === name))
 }
 
+export function canRequestDebugVerification(readOnly: boolean, error: unknown, state?: string) {
+  return !readOnly && (!!error || state === 'unknown' || state === 'check_failed')
+}
+
 export function debugAccessMessage(readOnly: boolean, error: unknown, state?: string) {
   return readOnly ? 'This view can’t add a debug container.' : error ? 'The permission request failed before Radar received a decision.' :
     state === 'check_failed' ? 'Kubernetes couldn’t complete the check for adding a debug container.' :
@@ -72,7 +76,7 @@ export function usePodDetailAccess(pod: PodDebugTarget | undefined, namespace: {
     canExec: namespace.canExec || named?.exec === true,
     canOpenEphemeralTerminal: namespace.canOpenEphemeralTerminal || named?.exec === true,
     debugImage,
-    reviewStatus: { message: debugAccessMessage(readOnly, query.error, named?.state), refusal: readOnly ? undefined : query.data?.refusedAttempt?.message,
+    reviewStatus: { message: debugAccessMessage(readOnly, query.error, named?.state), canVerify: canRequestDebugVerification(readOnly, query.error, named?.state), refusal: readOnly ? undefined : query.data?.refusedAttempt?.message,
       recheck: readOnly ? undefined : recheckAccess, checking: query.isFetching },
     debugDenial: !execOnly && named?.state === 'denied' ? { refusal: named.refusedAttempt?.message } : undefined,
     unverifiedReview: namespace.podDebugImage ? undefined : unverifiedReview,
@@ -178,7 +182,9 @@ export function PodDebugAction({ pod, defaultImage, failedContainer, unverifiedR
       incompleteReason={blockedMessage ? 'Creation is unavailable.' : debugDenial ? 'Ask your cluster administrator for access.' : refusedNow ? 'Close to recheck access after the refusal.' : recheckRequired ? 'Recheck access before reviewing another attempt.' : draft && !targets.includes(draft.target) ? 'Select a running container.' : undefined}>
       {blockedMessage && !changedConnection && <>
         {reviewStatus?.refusal && <div className="text-warning-text"><p>The last debug request was refused.</p><p className="break-words">{reviewStatus.refusal}</p></div>}
-        {reviewStatus?.recheck && <button type="button" className="btn-secondary px-2 py-1" disabled={reviewStatus.checking} onClick={() => void reviewStatus.recheck?.()}>Recheck access</button>}
+        {reviewStatus?.canVerify && draft ? <PodDebugAccessRequest namespace={namespace} name={name} target={draft.target} context={draft.context}
+          denied={false} checking={reviewStatus.checking} onRecheck={reviewStatus.recheck} /> :
+          reviewStatus?.recheck && <button type="button" className="btn-secondary px-2 py-1" disabled={reviewStatus.checking} onClick={() => void reviewStatus.recheck?.()}>Recheck access</button>}
       </>}
       {!blockedMessage && debugDenial && draft && <>
         {debugDenial.refusal && <div className="text-warning-text"><p>The last debug request was refused.</p><p className="break-words">{debugDenial.refusal}</p></div>}

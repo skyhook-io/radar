@@ -8,7 +8,7 @@ import { getApiBase } from '../../api/config'
 import { usePodDebugAccess } from '../../api/podDebug'
 import { useNavCustomization } from '../../context/NavCustomization'
 import { useCapabilitiesContext, useNamespacedCapabilities } from '../../contexts/CapabilitiesContext'
-import { PodDebugAction, debugAccessMessage, runningPodDebugTargets, type PodDebugTarget } from '../resources/PodDebugAction'
+import { PodDebugAction, canRequestDebugVerification, debugAccessMessage, runningPodDebugTargets, type PodDebugTarget } from '../resources/PodDebugAction'
 
 interface RecoveryTarget {
   namespace: string; name: string; uid: string; target: string; connection?: string; base: string; podDetailsLink?: ReactNode; switchContainer?: (name: string) => void
@@ -69,7 +69,7 @@ function DebugOptions({ namespace, name, uid, target, connection, base, pod }: R
     <PodDebugAction pod={pod} defaultImage={image} failedContainer={target} unverifiedReview={image ? unverifiedReview : undefined}
       debugDenial={canCreate && denied ? { refusal: access.refusedAttempt?.message } : undefined}
       hideLauncher={!image || (!!unverifiedReview?.refused && !unverifiedReview.refused.rechecked)}
-      reviewStatus={{ message: debugAccessMessage(execOnly, query.error, access?.state), refusal: query.data?.refusedAttempt?.message,
+      reviewStatus={{ message: debugAccessMessage(execOnly, query.error, access?.state), canVerify: canRequestDebugVerification(execOnly, query.error, access?.state), refusal: query.data?.refusedAttempt?.message,
         recheck: execOnly ? undefined : recheckAccess, checking: query.isFetching }} />
     {showRequest && <PodDebugAccessRequest key={denied ? 'grant' : 'verify'} namespace={namespace} name={name} target={target} context={context} denied={denied} checking={query.isFetching} onRecheck={() => void recheckAccess()} />}
   </div>

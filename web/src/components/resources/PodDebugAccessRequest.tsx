@@ -32,13 +32,14 @@ export function PodDebugAccessRequest({ namespace, name, target, denied, checkin
   const [copied, setCopied] = useState<'copied' | 'manual'>()
   const request = denied ? `Could you grant ${requester} permission to update pods/ephemeralcontainers for Pod ${name} in namespace ${namespace}? I need to troubleshoot container ${target}. Please limit the rule to resourceNames: ["${name}"]. A replacement Pod with another name would need its own grant.${subjectDetails}`
     : `Could you check whether ${username ? `Kubernetes user ${username}` : sharedServiceAccount ? requester : 'my Kubernetes identity'} can update pods/ephemeralcontainers for Pod ${name} in namespace ${namespace}? Radar couldn’t verify access while I was troubleshooting container ${target}.${subjectDetails}`
+  const text = context ? `${request} Radar context: ${context}.` : request
   return <>
     <div className="flex flex-wrap items-center justify-center gap-2">
-      <button className="btn-secondary flex items-center gap-1.5 rounded px-2 py-1" onClick={async () => setCopied(await copyText(context ? `${request} Radar context: ${context}.` : request) ? 'copied' : 'manual')}>
+      <button className="btn-secondary flex items-center gap-1.5 rounded px-2 py-1" onClick={async () => setCopied(await copyText(text) ? 'copied' : 'manual')}>
         <Copy className="h-3 w-3"/>{copied === 'copied' ? 'Copied' : denied ? 'Copy access request' : 'Copy verification request'}</button>
       {onRecheck && <button className="btn-secondary flex items-center gap-1.5 rounded px-2 py-1" disabled={checking}
         onClick={() => { setCopied(undefined); onRecheck() }}><RefreshCw className="h-3 w-3"/>{checking ? 'Checking…' : 'Recheck access'}</button>}
     </div>
-    {copied === 'manual' && <textarea aria-label={denied ? 'Access request to copy' : 'Verification request to copy'} className="w-full rounded bg-theme-elevated p-2" value={request} readOnly onFocus={event => event.target.select()}/>}
+    {copied === 'manual' && <textarea aria-label={denied ? 'Access request to copy' : 'Verification request to copy'} className="w-full rounded bg-theme-elevated p-2" value={text} readOnly onFocus={event => event.target.select()}/>}
   </>
 }

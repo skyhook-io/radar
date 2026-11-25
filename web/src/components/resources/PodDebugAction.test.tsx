@@ -141,7 +141,7 @@ it.each([
       <ResourceActionsBar resource={{ kind: 'pods', namespace: 'demo', name: 'api' }} data={pod} canExec={initial || canSubmit}
         podDebugAction={<PodDebugAction pod={pod} defaultImage={initial ? 'mirror.example/debug' : image} debugDenial={initial ? undefined : denial}
           unverifiedReview={unverified ? { refused: undefined, recheckAccess: recheck, rememberRefusal: vi.fn() } : undefined}
-          reviewStatus={{ message, refusal: undefined, checking: false, recheck: state === 'hosted' ? undefined : recheck }} />} />
+          reviewStatus={{ message, canVerify: ['completed undecided review without verified exec', 'failed update review', 'Radar HTTP failure'].includes(state), refusal: undefined, checking: false, recheck: state === 'hosted' ? undefined : recheck }} />} />
     </DockProvider></QueryClientProvider>))
   }
   draw(true)
@@ -153,4 +153,5 @@ it.each([
   const start = [...dialog.querySelectorAll('button')].find(button => button.textContent === 'Start debug container')!
   expect(start.disabled).toBe(!canSubmit)
   expect(dialog.textContent?.includes('Copy access request')).toBe(state === 'named denial')
+  expect(dialog.textContent?.includes('Copy verification request')).toBe(state.includes('undecided') || state === 'failed update review' || state === 'Radar HTTP failure')
 })
