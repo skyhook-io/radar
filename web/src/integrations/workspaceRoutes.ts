@@ -1,14 +1,16 @@
 import { capacityWorkspaceRoute } from '../components/capacity/workspaceRoute'
 import { cnpgWorkspaceRoute } from '../components/cnpg/workspaceRoute'
+import { longhornWorkspaceRoute } from '../components/longhorn/workspaceRoute'
 import { veleroWorkspaceRoute } from '../components/velero/workspaceRoute'
 import type { WorkspaceRoute } from './workspaceRoute'
 
-export const workspaceRoutes = [cnpgWorkspaceRoute, capacityWorkspaceRoute, veleroWorkspaceRoute] as const
+export const workspaceRoutes = [cnpgWorkspaceRoute, capacityWorkspaceRoute, veleroWorkspaceRoute, longhornWorkspaceRoute] as const
 
 export const workspaceLabels = {
   cnpg: cnpgWorkspaceRoute.label,
   capacity: capacityWorkspaceRoute.label,
   velero: veleroWorkspaceRoute.label,
+  longhorn: longhornWorkspaceRoute.label,
 } satisfies Record<WorkspaceRoute['id'], string>
 
 export function workspaceForPath(pathname: string) {

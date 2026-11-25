@@ -25,6 +25,14 @@ describe('workspace route ownership', () => {
     expect(velero.pageTitle('/velero')).toBe('Velero overview')
     expect(velero.pageTitle('/velero/unknown')).toBe('Velero overview')
     expect(workspaceForView('velero')).toBe(velero)
+    const longhorn = workspaceForPath('/longhorn/volumes')!
+    expect(longhorn.id).toBe('longhorn')
+    expect(longhorn.navView).toBe('resources')
+    expect(longhorn.namespaceScope).toBe('cluster')
+    expect(longhorn.namespaceFilterTooltip).toBeTruthy()
+    expect(longhorn.pageTitle('/longhorn')).toBe('Longhorn overview')
+    expect(longhorn.pageTitle('/longhorn/volumes')).toBe('Longhorn volumes')
+    expect(workspaceForView('longhorn')).toBe(longhorn)
   })
 
   it('only owns whole route prefixes inside either OSS or an embedded router basename', () => {
@@ -34,6 +42,7 @@ describe('workspace route ownership', () => {
     expect(workspaceForPath('/capacity-other')).toBeUndefined()
     expect(workspaceForPath('/velero')?.id).toBe('velero')
     expect(workspaceForPath('/velero-other')).toBeUndefined()
+    expect(workspaceForPath('/longhorn-other')).toBeUndefined()
     expect(workspaceForPath('/workload/clusters/db/pg')).toBeUndefined()
     // React Router supplies basename-relative locations to the application.
     expect(workspaceForPath('/c/demo/cnpg')).toBeUndefined()
@@ -45,6 +54,7 @@ describe('workspace route ownership', () => {
     expect(workspaceContextSwitchSearch('/cnpg', search).toString()).toBe('')
     expect(workspaceContextSwitchSearch('/capacity/pools/default', search).toString()).toBe('')
     expect(workspaceContextSwitchSearch('/velero', search).toString()).toBe('')
+    expect(workspaceContextSwitchSearch('/longhorn/volumes', search).toString()).toBe('')
     expect(workspaceContextSwitchSearch('/resources/pods', search).toString()).toBe('')
     expect(search.get('tab')).toBe('storage')
   })

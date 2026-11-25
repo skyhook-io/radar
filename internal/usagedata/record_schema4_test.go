@@ -9,7 +9,7 @@ import (
 )
 
 func TestWorkspaceAndPanelViews(t *testing.T) {
-	for _, v := range []string{"cnpg", "capacity", "panel:logs", "panel:yaml", "panel:metrics", "panel:events"} {
+	for _, v := range []string{"cnpg", "capacity", "velero", "longhorn", "panel:logs", "panel:yaml", "panel:metrics", "panel:events"} {
 		if !IsAllowedView(v) {
 			t.Errorf("%q should be countable", v)
 		}

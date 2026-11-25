@@ -187,6 +187,7 @@ export function formatGroupName(group: string): string {
     'monitoring.coreos.com': 'Prometheus',
     'monitoring.googleapis.com': 'Google Cloud Monitoring',
     'velero.io': 'Velero',
+    'longhorn.io': 'Longhorn',
     'external-secrets.io': 'External Secrets',
     'keda.sh': 'KEDA',
     'gateway.networking.k8s.io': 'Gateway API',

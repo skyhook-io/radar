@@ -26,3 +26,11 @@
 | `issues`, `issueTotal` | the Issues engine's Longhorn rules over the Volumes read: faulted is critical, degraded a warning whose `first_seen` is `lastDegradedAt` | only Volumes the caller read raise rows; `first_seen` is absent when the onset isn't recorded. The first 100 are returned, `issueTotal` counts all |
 
 Degraded is routine while Longhorn rebuilds replicas after a drain or restart; `lastDegradedAt` says how long it has lasted. Detached is not a problem and raises no Issue.
+
+## Screens
+
+`/longhorn` (Overview) and `/longhorn/volumes` live inside Resources, under the sidebar's Integrations as **Block storage / Longhorn**; screens in `web/src/components/longhorn/`, gated on `longhornWorkspace` (an older Radar shows the "needs a newer Radar" note). The namespace picker is disabled there, with a tooltip saying why. Live updates: any `longhorn.io` change refetches the workspace.
+
+- **Overview**: the health counts (faulted, degraded, healthy, detached, unknown). With `counts.complete: false` each carries `≥`; with `counts: null` each reads unknown, never 0. Each count opens Volumes filtered to that health. **Needs attention** lists faulted Volumes (red), then degraded ones (amber), the longest degraded first, each with how long it has been degraded (`lastDegradedAt`, or that Longhorn didn't record it), its healthy replicas when known, its claim (a link; "a claim you can't read" when withheld; "can't tell" when the use is unknown) and a next step. Detached raises no row. An empty list says "No volume Radar can read is faulted or degraded" when the read was partial.
+- **Volumes**: every Volume read, with health, state, robustness, size (and actual size), healthy / requested replicas, and claim; health chips (`?health=`) and a search over Volume, namespace, claim and PV names. Healthy replicas Radar couldn't read show `?`, with `healthyReplicasUnknown` as the reason on hover. A row opens the Volume drawer.
+- **Sidebar badge**: faulted + degraded from `counts`; a lower bound on a partial read, and unknown rather than 0 when a partial read found none.
