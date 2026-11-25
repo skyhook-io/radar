@@ -1,6 +1,9 @@
 package auth
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"net/http/httptest"
 	"net/url"
@@ -63,14 +66,6 @@ func TestMCPOAuthPendingRequestBoundToStartingBrowser(t *testing.T) {
 	}
 }
 
-func TestMCPOAuthConsentSaysThisComputer(t *testing.T) {
-	f := newMCPOAuthFixture(t)
-	page := f.authorize(f.request("/mcp"), f.cookies)
-	if !strings.Contains(page.Body.String(), "An application on this computer.") || strings.Contains(page.Body.String(), "your computer") {
-		t.Fatalf("wording: %s", page.Body)
-	}
-}
-
 func TestMCPOAuthCallbackCarriesIssuer(t *testing.T) {
 	f := newMCPOAuthFixture(t)
 	metadata := httptest.NewRecorder()
@@ -87,5 +82,26 @@ func TestMCPOAuthCallbackCarriesIssuer(t *testing.T) {
 		if w.Code != 303 || u.Query().Get("iss") != f.s.issuer {
 			t.Errorf("%s: callback %s lacks iss=%s", decision, u, f.s.issuer)
 		}
+	}
+}
+
+func TestMCPOAuthConsentSaysThisComputer(t *testing.T) {
+	f := newMCPOAuthFixture(t)
+	page := f.authorize(f.request("/mcp"), f.cookies)
+	if !strings.Contains(page.Body.String(), "An application on this computer.") || strings.Contains(page.Body.String(), "your computer") {
+		t.Fatalf("wording: %s", page.Body)
+	}
+}
+
+func TestMCPReturnSignatureHasItsOwnPurpose(t *testing.T) {
+	h := &OIDCHandler{cfg: Config{Secret: "test-secret"}, mcpOAuth: &MCPOAuthServer{}}
+	w := httptest.NewRecorder()
+	h.setMCPReturnCookie(w, httptest.NewRequest("GET", "/auth/login?return_to="+url.QueryEscape("/auth/mcp/authorize?request=x"), nil), "state")
+	encoded, signature, _ := strings.Cut(w.Result().Cookies()[0].Value, ".")
+	payload, _ := base64.RawURLEncoding.DecodeString(encoded)
+	mac := hmac.New(sha256.New, []byte("test-secret"))
+	mac.Write(payload)
+	if signature == base64.RawURLEncoding.EncodeToString(mac.Sum(nil)) {
+		t.Fatal("continuation cookie is signed over the raw payload with no purpose label")
 	}
 }

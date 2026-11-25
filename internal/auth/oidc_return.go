@@ -34,10 +34,17 @@ func (h *OIDCHandler) setMCPReturnCookie(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	payload, _ := json.Marshal(oidcMCPReturn{state, target, time.Now().Add(10 * time.Minute).Unix()})
-	mac := hmac.New(sha256.New, []byte(h.cfg.Secret))
-	mac.Write(payload)
-	value := base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	value := base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(h.mcpReturnSignature(payload))
 	http.SetCookie(w, h.newFlowCookie(oidcMCPReturnCookieName, value, r))
+}
+
+// The session key also signs session cookies and refresh tokens; the label keeps
+// a continuation from ever verifying as one of those.
+func (h *OIDCHandler) mcpReturnSignature(payload []byte) []byte {
+	mac := hmac.New(sha256.New, []byte(h.cfg.Secret))
+	mac.Write([]byte("radar-mcp-return\x00"))
+	mac.Write(payload)
+	return mac.Sum(nil)
 }
 
 func (h *OIDCHandler) mcpReturnTarget(r *http.Request, state string) string {
@@ -61,9 +68,7 @@ func (h *OIDCHandler) mcpReturnTarget(r *http.Request, state string) string {
 	if err != nil {
 		return fallback
 	}
-	mac := hmac.New(sha256.New, []byte(h.cfg.Secret))
-	mac.Write(payload)
-	if !hmac.Equal(sig, mac.Sum(nil)) {
+	if !hmac.Equal(sig, h.mcpReturnSignature(payload)) {
 		return fallback
 	}
 	var continuation oidcMCPReturn
