@@ -248,7 +248,7 @@ func TestCanReadWorkloadRefSourceFollowsTheDeniedRead(t *testing.T) {
 		{"allowed read keeps it", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := &Server{permCache: auth.NewPermissionCache()}
+			srv := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 			perms := &auth.UserPermissions{AllowedNamespaces: []string{"prod"}}
 			perms.SetCanI("get", "apps", "deployments", "prod", tc.allowed)
 			srv.permCache.Set("alice", nil, perms)

@@ -4,7 +4,7 @@ import { LoaderCircle, RefreshCw } from 'lucide-react'
 import type { DockTab } from '@skyhook-io/k8s-ui'
 import { ApiError, fetchResourceWithRelationships } from '../../api/client'
 import { getApiBase } from '../../api/config'
-import { connectionHeaderValue, useCurrentConnection } from '../../api/connectionBinding'
+import { connectionHeaderValue, useCurrentConnectionId } from '../../api/connectionBinding'
 import type { PodDebugTarget } from '../resources/PodDebugAction'
 
 type Session = NonNullable<DockTab['debugSession']>
@@ -50,7 +50,7 @@ export function PodDebugSession({ namespace, podName, containerName, session, is
   namespace: string; podName: string; containerName: string; session: Session; isActive?: boolean; children: ReactNode; podDetailsLink?: ReactNode
 }) {
   const [connected, setConnected] = useState(false)
-  const currentConnection = useCurrentConnection()
+  const currentConnection = useCurrentConnectionId()
   const current = () => getApiBase() === session.apiBase && connectionHeaderValue() === session.connectionId
   const query = useQuery({
     queryKey: ['pod-debug-startup', session.apiBase, session.connectionId, session.podUID, containerName],

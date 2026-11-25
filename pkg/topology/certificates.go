@@ -211,30 +211,3 @@ func GetCertificateExpiry(provider ResourceProvider, namespaces []string) (map[s
 
 	return result, nil
 }
-
-// GetSecretCertificateInfo returns detailed certificate chain info for a single TLS secret.
-func GetSecretCertificateInfo(provider ResourceProvider, namespace, name string) (*SecretCertificateInfo, error) {
-	secrets, err := provider.Secrets()
-	if err != nil {
-		return nil, fmt.Errorf("list secrets: %w", err)
-	}
-
-	for _, secret := range secrets {
-		if secret.Namespace != namespace || secret.Name != name {
-			continue
-		}
-		if secret.Type != corev1.SecretTypeTLS {
-			return nil, fmt.Errorf("secret %s/%s is not a TLS secret", namespace, name)
-		}
-		certPEM, exists := secret.Data["tls.crt"]
-		if !exists || len(certPEM) == 0 {
-			return nil, fmt.Errorf("secret %s/%s has no tls.crt data", namespace, name)
-		}
-		if info := ParseSecretCertificates(secret); info != nil {
-			return info, nil
-		}
-		return &SecretCertificateInfo{Certificates: []CertificateInfo{}}, nil
-	}
-
-	return nil, fmt.Errorf("secret %s/%s not found", namespace, name)
-}

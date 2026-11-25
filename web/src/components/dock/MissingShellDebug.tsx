@@ -3,7 +3,7 @@ import { Copy, RefreshCw, Terminal } from 'lucide-react'
 import { formatAge, getRunningEphemeralContainers, useOpenTerminal } from '@skyhook-io/k8s-ui'
 import { copyText } from '@skyhook-io/k8s-ui/utils/clipboard'
 import { useResource } from '../../api/client'
-import { connectionHeaderValue, useCurrentConnection } from '../../api/connectionBinding'
+import { connectionHeaderValue, useCurrentConnectionId } from '../../api/connectionBinding'
 import { getApiBase } from '../../api/config'
 import { usePodDebugAccess } from '../../api/podDebug'
 import { useNavCustomization } from '../../context/NavCustomization'
@@ -16,7 +16,7 @@ interface RecoveryTarget {
 
 export function MissingShellDebug(props: RecoveryTarget) {
   const { namespace, name, uid, target, connection, base, podDetailsLink } = props
-  const currentConnection = useCurrentConnection()
+  const currentConnection = useCurrentConnectionId()
   const sameCluster = currentConnection === connection && getApiBase() === base
   const podQuery = useResource<PodDebugTarget>('pods', namespace, name, undefined, { enabled: sameCluster })
   const pod = podQuery.data

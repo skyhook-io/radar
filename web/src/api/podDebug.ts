@@ -2,7 +2,7 @@ import { useEffect, useMemo } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { getApiBase } from './config'
 import { fetchJSON, useRadarFeature } from './client'
-import { connectionHeaders, connectionHeaderValue, useCurrentConnection } from './connectionBinding'
+import { connectionHeaders, connectionHeaderValue, useCurrentConnectionId } from './connectionBinding'
 
 export function createPodDebugContainer(namespace: string, podName: string, connection: string | undefined, request: {
   targetContainer: string
@@ -33,7 +33,7 @@ export function usePodDebugAccess(namespace: string, name: string, uid: string, 
   const { support } = useRadarFeature('podDebugAccess')
   const client = useQueryClient()
   const base = getApiBase()
-  const connection = useCurrentConnection()
+  const connection = useCurrentConnectionId()
   const key = useMemo(() => [...podDebugAccessKey(namespace, name, uid, base, connection), execOnly], [namespace, name, uid, base, connection, execOnly])
   const query = useQuery<PodDebugAccess>({
     queryKey: key,

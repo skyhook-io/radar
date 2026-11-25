@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ComponentType } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, useId, type ComponentType, type ReactNode } from 'react'
 import { Loader2, MoreVertical } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Tooltip } from './Tooltip'
@@ -21,20 +21,24 @@ export interface RowActionItem {
 }
 
 interface RowActionMenuProps {
+  onOpenChange?: (open: boolean) => void
+  renderOpenItems?: (render: (items: RowActionItem[], note?: string) => ReactNode, open: boolean) => ReactNode
   items: RowActionItem[]
+  note?: string
   ariaLabel?: string
   /** Compact button variant (default: true) — sized for table-row anchoring. */
   compact?: boolean
 }
 
-export function RowActionMenu({ items, ariaLabel = 'Row actions', compact = true }: RowActionMenuProps) {
+export function RowActionMenu({ items, note, ariaLabel = 'Row actions', compact = true, onOpenChange, renderOpenItems }: RowActionMenuProps) {
+  const descriptionId = useId()
   const [open, setOpen] = useState(false)
   const { shouldRender, isOpen } = useAnimatedUnmount(open, overlayExitMs('menu'))
   // Flip the menu above the trigger when it would otherwise spill past the
   // viewport bottom. The GitOps table's bottom rows sit at the end of a scroll
   // container with the app's fixed overlay buttons below them, so a
   // downward-opening menu there clips its lowest items with no way to scroll
-  // them into view. Measured once the menu is mounted (useLayoutEffect,
+  // them into view. Measured on mount and when its note changes (useLayoutEffect,
   // pre-paint, no flicker). The last placement is kept through the exit
   // transition — resetting at logical close would snap the menu to the other
   // side mid-fade — and re-measured on the next open.
@@ -44,19 +48,27 @@ export function RowActionMenu({ items, ariaLabel = 'Row actions', compact = true
 
   useLayoutEffect(() => {
     if (!open || !shouldRender) return
-    const trigger = ref.current?.getBoundingClientRect()
-    const menuH = menuRef.current?.offsetHeight ?? 0
-    if (!trigger) return
-    const spaceBelow = window.innerHeight - trigger.bottom
-    // Flip up only when there's not enough room below AND enough room above,
-    // so a tall menu near the top doesn't get clipped at the other end.
-    setOpenUp(menuH + 8 > spaceBelow && trigger.top > menuH + 8)
-  }, [open, shouldRender])
+    const measure = () => {
+      const trigger = ref.current?.getBoundingClientRect()
+      const menuHeight = menuRef.current?.offsetHeight ?? 0
+      if (!trigger) return
+      const spaceBelow = window.innerHeight - trigger.bottom
+      setOpenUp(menuHeight + 8 > spaceBelow && trigger.top > menuHeight + 8)
+    }
+    measure()
+    if (!renderOpenItems || !menuRef.current || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(menuRef.current)
+    return () => observer.disconnect()
+  }, [open, shouldRender, note, renderOpenItems])
 
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false)
+        onOpenChange?.(false)
+      }
     }
     // Capture phase, consumed: Escape that closes the menu must not also run
     // the page's own Escape (close the drawer, leave the full view).
@@ -65,6 +77,7 @@ export function RowActionMenu({ items, ariaLabel = 'Row actions', compact = true
       e.preventDefault()
       e.stopPropagation()
       setOpen(false)
+      onOpenChange?.(false)
     }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey, true)
@@ -72,7 +85,7 @@ export function RowActionMenu({ items, ariaLabel = 'Row actions', compact = true
       document.removeEventListener('mousedown', onDown)
       document.removeEventListener('keydown', onKey, true)
     }
-  }, [open])
+  }, [open, onOpenChange])
 
   const triggerSize = compact ? 'p-1' : 'p-1.5'
   const iconSize = compact ? 'h-4 w-4' : 'h-5 w-5'
@@ -80,6 +93,65 @@ export function RowActionMenu({ items, ariaLabel = 'Row actions', compact = true
   // A trigger that opens an empty menu is a dead end - render nothing and let
   // the cell collapse instead.
   if (items.length === 0) return null
+
+  const renderItems = (menuItems: RowActionItem[], menuNote?: string) => (
+    <>
+      {menuNote && <p className="max-w-56 px-3 py-1.5 text-left text-xs whitespace-normal text-theme-text-secondary">{menuNote}</p>}
+      {menuItems.map((item, index) => {
+        const Icon = item.icon
+        const reasonId = item.disabled && item.disabledReason ? `${descriptionId}-${index}` : undefined
+        const content = (
+          <button
+            type="button"
+            role={item.checked === undefined ? 'menuitem' : 'menuitemcheckbox'}
+            aria-checked={item.checked}
+            disabled={item.pending || (item.disabled && !reasonId)}
+            aria-disabled={item.disabled || item.pending}
+            aria-describedby={reasonId}
+            onClick={(e) => {
+              e.stopPropagation()
+              if (item.disabled || item.pending) return
+              item.onClick()
+              setOpen(false)
+              onOpenChange?.(false)
+            }}
+            className={clsx(
+              'flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors',
+              item.disabled || item.pending
+                ? 'cursor-not-allowed text-theme-text-tertiary'
+                : item.danger
+                ? 'text-red-500 hover:bg-theme-hover hover:text-red-400'
+                : 'text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary',
+            )}
+          >
+            {item.pending ? (
+              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+            ) : (
+              <Icon className="h-3.5 w-3.5 shrink-0" />
+            )}
+            <span className="truncate">{item.label}</span>
+          </button>
+        )
+        return (
+          <Fragment key={item.key}>
+            {reasonId && <span id={reasonId} className="sr-only">{item.disabledReason}</span>}
+            {item.divider && <div className="my-1 h-px bg-theme-border" />}
+            {item.disabled && item.disabledReason ? (
+              // wrapperClassName=w-full so the disabled item fills the menu
+              // like enabled items — the Tooltip wrapper is inline-flex and
+              // would otherwise shrink-wrap, and the menu inherits text-right
+              // from the table's actions cell, shoving the item to the edge.
+              <Tooltip preserveWords content={item.disabledReason} position="left" wrapperClassName="w-full">
+                {content}
+              </Tooltip>
+            ) : (
+              content
+            )}
+          </Fragment>
+        )
+      })}
+    </>
+  )
 
   return (
     <div ref={ref} className="relative inline-block">
@@ -90,7 +162,8 @@ export function RowActionMenu({ items, ariaLabel = 'Row actions', compact = true
         aria-expanded={open}
         onClick={(e) => {
           e.stopPropagation()
-          setOpen((v) => !v)
+          onOpenChange?.(!open)
+          setOpen(!open)
         }}
         className={clsx(
           'rounded text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary',
@@ -118,54 +191,7 @@ export function RowActionMenu({ items, ariaLabel = 'Row actions', compact = true
           style={overlayTransitionStyle(isOpen, 'menu')}
           onClick={(e) => e.stopPropagation()}
         >
-          {items.map((item) => {
-            const Icon = item.icon
-            const content = (
-              <button
-                type="button"
-                role={item.checked === undefined ? 'menuitem' : 'menuitemcheckbox'}
-                aria-checked={item.checked}
-                disabled={item.disabled || item.pending}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  if (item.disabled || item.pending) return
-                  item.onClick()
-                  setOpen(false)
-                }}
-                className={clsx(
-                  'flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors',
-                  item.disabled || item.pending
-                    ? 'cursor-not-allowed text-theme-text-tertiary'
-                    : item.danger
-                    ? 'text-red-500 hover:bg-theme-hover hover:text-red-400'
-                    : 'text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary',
-                )}
-              >
-                {item.pending ? (
-                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
-                ) : (
-                  <Icon className="h-3.5 w-3.5 shrink-0" />
-                )}
-                <span className="truncate">{item.label}</span>
-              </button>
-            )
-            return (
-              <Fragment key={item.key}>
-                {item.divider && <div className="my-1 h-px bg-theme-border" />}
-                {item.disabled && item.disabledReason ? (
-                  // wrapperClassName=w-full so the disabled item fills the menu
-                  // like enabled items — the Tooltip wrapper is inline-flex and
-                  // would otherwise shrink-wrap, and the menu inherits text-right
-                  // from the table's actions cell, shoving the item to the edge.
-                  <Tooltip content={item.disabledReason} position="left" wrapperClassName="w-full">
-                    {content}
-                  </Tooltip>
-                ) : (
-                  content
-                )}
-              </Fragment>
-            )
-          })}
+          {renderOpenItems ? renderOpenItems(renderItems, open) : renderItems(items, note)}
         </div>
       )}
     </div>

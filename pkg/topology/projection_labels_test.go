@@ -79,11 +79,11 @@ func TestProjectionBackendsAreNotPods(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			ingress := GetRelationships("Ingress", "demo", "public", topo, provider, nil)
+			ingress := graphRelationships("Ingress", "demo", "public", topo, provider, nil)
 			if ingress == nil || len(ingress.Backends) != 1 || ingress.Backends[0].Kind != "Service" || len(ingress.Pods) != 0 || len(ingress.Services) != 0 {
 				t.Fatalf("Ingress routes = %+v", ingress)
 			}
-			svc := GetRelationships("Service", "demo", "web", topo, provider, nil)
+			svc := graphRelationships("Service", "demo", "web", topo, provider, nil)
 			if svc == nil {
 				t.Fatal("missing Service relationships")
 			}
@@ -118,7 +118,7 @@ func TestProjectionIncomingExposesGroups(t *testing.T) {
 			if source.group == "" {
 				topo.Nodes[0].Data["apiVersion"] = "v1"
 			}
-			rel := GetRelationships("Service", "demo", "web", topo, nil, nil)
+			rel := graphRelationships("Service", "demo", "web", topo, nil, nil)
 			if rel == nil {
 				t.Fatal("missing incoming exposes")
 			}
@@ -144,7 +144,7 @@ func TestProjectionIncomingGatewayRoutes(t *testing.T) {
 					{ID: "router/demo/upstream", Kind: NodeKind(kind), Name: "upstream", Data: map[string]any{"namespace": "demo", "apiVersion": group + "/v1"}},
 					{ID: "service/demo/web", Kind: KindService, Name: "web", Data: map[string]any{"namespace": "demo"}},
 				}, Edges: []Edge{{Source: "router/demo/upstream", Target: "service/demo/web", Type: EdgeRoutesTo}}}
-				rel := GetRelationships("Service", "demo", "web", topo, nil, nil)
+				rel := graphRelationships("Service", "demo", "web", topo, nil, nil)
 				if rel == nil {
 					t.Fatal("missing route")
 				}
@@ -181,7 +181,7 @@ func TestProjectionEntrypointsExcludeRouterRootAndSiblings(t *testing.T) {
 	if len(rel.Ingresses) != 0 {
 		t.Fatalf("router's backend entrypoints became upstreams: %+v", rel.Ingresses)
 	}
-	workload := GetRelationships("Deployment", "demo", "web", topo, nil, nil)
+	workload := graphRelationships("Deployment", "demo", "web", topo, nil, nil)
 	if workload == nil || len(workload.Ingresses) != 2 {
 		t.Fatalf("workload lost entrypoints: %+v", workload)
 	}
@@ -254,7 +254,7 @@ func TestUDPRouteIsBuiltLikeTheOtherGatewayRoutes(t *testing.T) {
 			t.Errorf("missing routes-to edge %s; edges: %v", want, edges)
 		}
 	}
-	rel := GetRelationships("Service", "demo", "coredns", topo, nil, nil)
+	rel := graphRelationships("Service", "demo", "coredns", topo, nil, nil)
 	if rel == nil || len(rel.Routes) != 1 || rel.Routes[0].Kind != "UDPRoute" {
 		t.Errorf("Service should list the UDPRoute under Routes: %+v", rel)
 	}

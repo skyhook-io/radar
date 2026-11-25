@@ -421,6 +421,11 @@ Set `auth.kubernetesCredentials: user-token` (flag `--auth-k8s-credentials=user-
 - **Without a token, as a person** (for example cross-cluster views): Radar serves its cache, filtered by that person's permissions, and refuses every live call with a 403 (`reason: user_token_required`).
 - **Without a token, as `radar:system:*` (group `radar:system`) or `radar:ai:<org>` (group `radar:ai:reader`)**: Radar reads with its ServiceAccount, after a SubjectAccessReview of every request against that identity's bindings (`cloud.systemRbac`, `cloud.aiRbac`).
 
+GitOps action capability checks use a `SelfSubjectAccessReview` through the
+person's token client. The API server supplies the identity and groups. Without
+a token, capability answers stay unknown for people. Background identities
+without a token can only read and receive an unavailable action result.
+
 **Requirements:**
 
 - Radar Cloud mode (`cloud.enabled: true`), with `cloud.defaultRbac.create=false`. With the default bindings, the API server would apply them to any token whose IdP groups are named `radar:owner`, `radar:member` or `radar:viewer`.

@@ -175,6 +175,7 @@ export interface CloudConnectCapability {
 }
 
 export interface FeatureCapabilities {
+  gitopsActionCapabilities?: boolean
  helmSourceIdentity?: boolean
   helmInventory?: boolean
   datadogRightsizing?: boolean
@@ -235,6 +236,7 @@ export interface FeatureCapabilities {
   sealedSecretsController?: boolean // GET /api/sealedsecrets/controller
   cronJobTriggerJobName?: boolean
   sealedSecretsCert?: boolean // GET /api/sealedsecrets/cert
+  workflowStop?: boolean // POST /api/workflows/{namespace}/{name}/stop
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.

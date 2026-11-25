@@ -762,6 +762,16 @@
       }
     },
     {
+      "root": "kustomize.toolkit.fluxcd.io|Kustomization|flux-system|infra",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Kustomization", "namespace": "flux-system", "name": "infra", "group": "kustomize.toolkit.fluxcd.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
       "root": "kustomize.toolkit.fluxcd.io|Kustomization|flux-system|platform",
       "relationships": null,
       "managedBy": null,

@@ -5,7 +5,7 @@ import { TerminalTab as SharedTerminalTab, type DockTab } from '@skyhook-io/k8s-
 import { getApiBase, getWsUrl } from '../../api/config'
 import { MissingShellDebug } from './MissingShellDebug'
 import { PodDebugSession } from './PodDebugSession'
-import { useCurrentConnection, useOpenedConnection, withConnectionParam } from '../../api/connectionBinding'
+import { useCurrentConnectionId, useOpenedConnection, withConnectionParam } from '../../api/connectionBinding'
 
 interface TerminalTabProps {
   namespace: string
@@ -25,7 +25,7 @@ export function TerminalTab({ namespace, podName, podUID, containerName, contain
   const [openedBase] = useState(getApiBase)
   const connection = debugSession ? debugSession.connectionId : openedConnection
   const base = debugSession?.apiBase ?? openedBase
-  const currentConnection = useCurrentConnection()
+  const currentConnection = useCurrentConnectionId()
   const podDetailsLink = currentConnection === connection && getApiBase() === base && <Link
     className="mb-2 inline-block text-xs text-accent underline underline-offset-2"
     title="Close this terminal tab and open the current Pod"
