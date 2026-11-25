@@ -8,7 +8,7 @@ import { MissingShellDebug } from './MissingShellDebug'
 
 const f = vi.hoisted(() => ({
   pod: {} as any, installation: {} as Record<string, unknown>, checkError: undefined as Error | undefined, namedExec: false, embedded: false, support: 'supported', access: 'denied', image: undefined as string | undefined,
-  recheck: vi.fn(), open: vi.fn(), copy: vi.fn(), probe: vi.fn(),
+  recheck: vi.fn(), open: vi.fn(), probe: vi.fn(),
 }))
 vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({connection:{context:'fixture-cluster'}}) }))
 vi.mock('../../context/NavCustomization', () => ({ useNavCustomization: () => ({ embedded: f.embedded }) }))
@@ -19,7 +19,6 @@ vi.mock('../../api/podDebug', () => ({ usePodDebugAccess: (...args: unknown[]) =
   return {support: f.support, recheckAccess: f.recheck, unverifiedReview: !args[4] && f.access === 'unknown' && f.namedExec && !f.checkError ? {} : undefined, unverifiedImage: !args[4] && f.access === 'unknown' && f.namedExec && !f.checkError ? 'operator-tools' : undefined, query: { error: f.checkError, data: {state: f.access, image: 'toolbox', exec: f.namedExec}, refetch: f.recheck }}
 } }))
 vi.mock('@skyhook-io/k8s-ui', async original => ({ ...await original<typeof import('@skyhook-io/k8s-ui')>(), useOpenTerminal: () => f.open }))
-vi.mock('@skyhook-io/k8s-ui/utils/clipboard', () => ({ copyText: f.copy }))
 vi.mock('../resources/PodDebugAction', async original => ({ ...await original<typeof import('../resources/PodDebugAction')>(),
   PodDebugAction: ({ failedContainer, unverifiedReview, hideLauncher }: { failedContainer: string; unverifiedReview?: object; hideLauncher?: boolean }) => hideLauncher ? null : <button>{unverifiedReview ? 'Review attempt for' : 'Start for'} {failedContainer}</button> }))
 
@@ -52,24 +51,20 @@ it('offers only running debuggers targeting the failed container, with no access
   expect(button('Start for app')).toBeUndefined()
 })
 
-it('copies the precise access request and rechecks an updated grant', async () => {
-  f.copy.mockResolvedValue(true)
+it('shows the exact missing permission and rechecks an updated grant', () => {
   render()
-  await act(async () => button('Copy access request')!.click())
-  expect(button('Copied')).toBeDefined()
-  expect(f.copy).toHaveBeenCalledWith('Could you grant me permission to update pods/ephemeralcontainers for Pod checkout in namespace payments? I need to troubleshoot container app. Please limit the rule to resourceNames: ["checkout"]. A replacement Pod with another name would need its own grant. Radar context: fixture-cluster.')
+  expect(host.textContent).toContain('Ask your cluster admin for access to update pods/ephemeralcontainers for Pod payments/checkout.')
+  expect(host.querySelector('textarea')).toBeNull()
   act(() => button('Recheck access')!.click())
   expect(f.recheck).toHaveBeenCalledOnce()
   f.access='allowed'; render()
   expect(button('Start for app')).toBeDefined()
 })
-it('asks for verification on an unknown result without requesting a grant', async () => {
+it('offers a recheck when Kubernetes returns no decision', () => {
   f.access='unknown'; render()
   expect(host.textContent).toContain('cluster access check returned no decision')
-  expect(button('Copy access request')).toBeUndefined()
+  expect(host.textContent).not.toContain('Ask your cluster admin for access')
   expect(button('Recheck access')).toBeDefined()
-  await act(async () => button('Copy verification request')!.click())
-  expect(f.copy).toHaveBeenCalledWith('Could you check whether my Kubernetes identity can update pods/ephemeralcontainers for Pod checkout in namespace payments? Radar couldn’t verify access while I was troubleshooting container app. Radar context: fixture-cluster.')
 })
 it('distinguishes a failed request from an inconclusive cluster answer', () => {
   f.access = 'unknown'
@@ -78,7 +73,7 @@ it('distinguishes a failed request from an inconclusive cluster answer', () => {
   f.checkError = new Error('request timed out')
   render()
   expect(host.textContent).toContain('permission request failed')
-  expect(button('Copy access request')).toBeUndefined()
+  expect(host.textContent).not.toContain('Ask your cluster admin for access')
 })
 
 it.each(['embedded', 'replaced', 'windows', 'stopped', 'old', 'disabled'])('suppresses the grant request on %s', mode => {
@@ -89,7 +84,7 @@ it.each(['embedded', 'replaced', 'windows', 'stopped', 'old', 'disabled'])('supp
   if(mode==='old')f.support='unsupported'
   if(mode==='disabled')f.access='unavailable'
   render()
-  expect(button('Copy access request')).toBeUndefined()
+  expect(host.textContent).not.toContain('Ask your cluster admin for access')
   expect(button('Start for app')).toBeUndefined()
 })
 
@@ -99,14 +94,14 @@ it('uses a positive namespace grant when named access is unknown, but honors an 
   expect(button('Start for app')).toBeDefined()
   expect(f.probe.mock.lastCall?.[3]).toBe(false)
   f.access = 'denied'; render()
-  expect(button('Copy access request')).toBeDefined()
+  expect(host.textContent).toContain('Ask your cluster admin for access')
 })
 
 it('updates a previously open recovery screen when the connection changes', () => {
   render()
   act(() => observeConnectionStatus({connectionId:'new-cluster'}))
   expect(host.textContent).toContain('Open the Pod on the current cluster')
-  expect(button('Copy access request')).toBeUndefined()
+  expect(host.textContent).not.toContain('Ask your cluster admin for access')
 })
 
 it('supplies named-only exec to the Pod header and existing terminals independently of update', () => {
@@ -126,15 +121,10 @@ it('supplies named-only exec to the Pod header and existing terminals independen
   expect(f.probe.mock.lastCall?.[4]).toBe(true)
 })
 
-it('identifies where to find the real ServiceAccount when Radar has no signed-in user', async () => {
+it('names Radar’s ServiceAccount for a shared installation without authentication', () => {
   f.installation = { deployment: { mode: 'in-cluster' } }
   render()
-  await act(async () => button('Copy access request')!.click())
-  expect(host.textContent).toContain('Radar’s ServiceAccount doesn’t have permission')
-  const [request] = f.copy.mock.lastCall!
-  expect(request).toContain('the ServiceAccount used by this Radar installation')
-  expect(request).toContain('Radar context: fixture-cluster.')
-  expect(request).toContain('running Radar Pod’s namespace and its spec.serviceAccountName')
+  expect(host.textContent).toContain('Ask your cluster admin to grant Radar’s ServiceAccount access to update pods/ephemeralcontainers for Pod payments/checkout.')
 })
 
 it('explains how to start a debugger outside a hosted session without issuing a named check', () => {
@@ -151,7 +141,7 @@ it.each(['unknown', 'unavailable'])('rechecks hosted exec access to a running de
   f.pod.status.ephemeralContainerStatuses = [{ name: 'debugger', state: { running: {} } }]
   render()
   expect(f.probe.mock.lastCall?.slice(3, 5)).toEqual([true, true])
-  expect(button('Copy access request')).toBeUndefined()
+  expect(host.textContent).not.toContain('Ask your cluster admin for access')
   act(() => button('Recheck access')!.click())
   expect(f.recheck).toHaveBeenCalledOnce()
   f.namedExec = true
@@ -163,7 +153,11 @@ it('names other running containers without suggesting a shell or listing stopped
   f.pod.spec.containers.push({ name: 'tools' }, { name: 'stopped' })
   f.pod.status.containerStatuses.push({ name: 'tools', state: { running: {} } }, { name: 'stopped', state: { terminated: {} } })
   render()
-  expect(host.textContent).toContain('Other running container: tools')
+  const other = button('Other containers')!
+  expect(other.getAttribute('aria-expanded')).toBe('false')
+  act(() => other.click())
+  expect(other.getAttribute('aria-expanded')).toBe('true')
+  expect(host.textContent).toContain('Try a terminal in tools')
   expect(host.textContent).not.toContain('stopped')
 })
 
@@ -188,45 +182,29 @@ it('shows no alternative when every sibling has stopped', () => {
   f.pod.spec.containers.push({ name: 'stopped' })
   f.pod.status.containerStatuses.push({ name: 'stopped', state: { terminated: {} } })
   render()
-  expect(host.textContent).not.toContain('Other running')
+  expect(button('Other containers')).toBeUndefined()
 })
 
 it('identifies an untargeted running debugger without offering it as the failed container’s debugger', () => {
   f.pod.spec.ephemeralContainers = [{name:'network-tools', image:'tools'}]
   f.pod.status.ephemeralContainerStatuses = [{name:'network-tools', state:{ running:{} }}]
   render()
-  expect(host.textContent).toContain('Running without a target: network-tools')
+  act(() => button('Other containers')!.click())
+  expect(host.textContent).toContain('Pod-wide debugger: network-tools')
   expect(button('Open debug terminal')).toBeUndefined()
 })
-it('explains how to find the local effective Kubernetes username before requesting a grant', async () => {
-  f.installation = {deployment:{mode:'local'}}
-  render()
-  await act(async () => button('Copy access request')!.click())
-  expect(f.copy.mock.lastCall?.[0]).toContain('kubectl auth whoami in this context')
-})
-
 it('keeps verified named exec when the separate update review failed, with no write preview', async () => {
   f.access = 'check_failed'
   f.namedExec = true
   render()
   expect(host.textContent).toContain('Kubernetes couldn’t complete the check')
-  expect(button('Copy verification request')).toBeDefined()
+  expect(button('Recheck access')).toBeDefined()
   expect(button('Review debug container')).toBeUndefined()
-  expect(button('Copy access request')).toBeUndefined()
+  expect(host.textContent).not.toContain('Ask your cluster admin for access')
   function Details() {
     const access = usePodDetailAccess(f.pod, { canExec: false, canOpenEphemeralTerminal: false })
     return <output>{String(access.canExec)} {access.debugImage ?? 'no preview'}</output>
   }
   act(() => root.render(<Details/>))
   expect(host.textContent).toBe('true no preview')
-})
-
-it.each(['denied', 'unknown'])('keeps the same context and complete permission request when copying %s access manually', async state => {
-  f.access = state
-  f.copy.mockResolvedValue(false)
-  render()
-  await act(async () => button(state === 'denied' ? 'Copy access request' : 'Copy verification request')!.click())
-  const clipboardText = f.copy.mock.calls[0][0]
-  expect(clipboardText).toContain('Radar context: fixture-cluster.')
-  expect(host.querySelector('textarea')?.value).toBe(clipboardText)
 })

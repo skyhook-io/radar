@@ -110,18 +110,18 @@ it('keeps the header chooser open on a confirmed denial after a refused write', 
     <PodDebugAction pod={pod} debugDenial={{ refusal: 'The image policy refused this request' }} /><Tabs />
   </DockProvider></QueryClientProvider>))
   const dialog = document.querySelector('[role="dialog"]')!
-  expect(dialog.textContent).toContain('You don’t have permission to add a debug container to this Pod.')
+  expect(dialog.textContent).toContain('Ask your cluster admin for access to update pods/ephemeralcontainers for Pod demo/api.')
   expect(dialog.textContent).toContain('The image policy refused this request')
-  click('Start debug container')
+  expect(dialog.textContent).not.toContain('Start debug container')
   expect(fetch).not.toHaveBeenCalled()
-  click('Cancel')
+  click('Close')
   click('Debug')
-  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Copy access request')
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Ask your cluster admin for access')
 })
 
 it.each([
   ['allowed', 'mirror.example/debug', undefined, '', true],
-  ['named denial', undefined, {}, 'You don’t have permission', false],
+  ['named denial', undefined, {}, 'Ask your cluster admin for access', false],
   ['completed undecided update with verified exec', 'mirror.example/debug', undefined, '', true],
   ['completed undecided review without verified exec', undefined, undefined, 'Access is unconfirmed', false],
   ['failed update review', undefined, undefined, 'Kubernetes couldn’t complete the check', false],
@@ -141,7 +141,7 @@ it.each([
       <ResourceActionsBar resource={{ kind: 'pods', namespace: 'demo', name: 'api' }} data={pod} canExec={initial || canSubmit}
         podDebugAction={<PodDebugAction pod={pod} defaultImage={initial ? 'mirror.example/debug' : image} debugDenial={initial ? undefined : denial}
           unverifiedReview={unverified ? { refused: undefined, recheckAccess: recheck, rememberRefusal: vi.fn(), clearRefusal: vi.fn() } : undefined}
-          reviewStatus={{ message, canVerify: ['completed undecided review without verified exec', 'failed update review', 'Radar HTTP failure'].includes(state), refusal: undefined, checking: false, recheck: state === 'hosted' ? undefined : recheck }} />} />
+          reviewStatus={{ message, refusal: undefined, checking: false, recheck: state === 'hosted' ? undefined : recheck }} />} />
     </DockProvider></QueryClientProvider>))
   }
   draw(true)
@@ -150,8 +150,8 @@ it.each([
   draw(false)
   const dialog = document.querySelector('[role="dialog"]')!
   expect(dialog.textContent).toContain(message)
-  const start = [...dialog.querySelectorAll('button')].find(button => button.textContent === 'Start debug container')!
-  expect(start.disabled).toBe(!canSubmit)
-  expect(dialog.textContent?.includes('Copy access request')).toBe(state === 'named denial')
-  expect(dialog.textContent?.includes('Copy verification request')).toBe(state.includes('undecided') || state === 'failed update review' || state === 'Radar HTTP failure')
+  const start = [...dialog.querySelectorAll('button')].find(button => button.textContent === 'Start debug container')
+  expect(!!start && !start.disabled).toBe(canSubmit)
+  expect(dialog.textContent?.includes('Ask your cluster admin for access')).toBe(state === 'named denial')
+  expect(dialog.textContent?.includes('Recheck access')).toBe(!canSubmit && state !== 'hosted' && state !== 'changed connection')
 })

@@ -333,13 +333,13 @@ export function TerminalTab({
           </div>
         )}
 
-        {!isConnected && !isConnecting && errorType !== 'pod_replaced' && (command || errorType !== 'shell_not_found') && (
+        {!isConnected && !isConnecting && errorType !== 'pod_replaced' && (
           <button
             onClick={connect}
             className="flex items-center gap-1 px-2 py-0.5 text-xs text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
           >
             <RefreshCw className="w-3 h-3" />
-            Reconnect
+            {!command && errorType === 'shell_not_found' ? 'Retry terminal' : 'Reconnect'}
           </button>
         )}
 
@@ -392,10 +392,6 @@ export function TerminalTab({
                   Retry
                 </button>}
               </div>
-              {!command && <button
-                type="button" onClick={connect}
-                className="mt-3 text-xs text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary"
-              >Retry terminal</button>}
             </>
           ) : (
             <>
