@@ -21,8 +21,9 @@ export function createPodDebugContainer(namespace: string, podName: string, conn
 interface RefusedAttempt { message: string; rechecked: boolean }
 type PodDebugAccess = { exec?: boolean; refusedAttempt?: RefusedAttempt } & ({ state: 'allowed'; image: string } | { state: 'unknown'; image?: string } | { state: 'denied' | 'unavailable' | 'check_failed' })
 
-function refusesDebug(access?: PodDebugAccess) {
-  return access?.state === 'denied' || access?.state === 'unavailable'
+function needsNamedRecheck(state?: { data?: PodDebugAccess; error: unknown }) {
+  const answer = state?.data?.state
+  return !!state?.error || answer === 'denied' || answer === 'unavailable' || answer === 'check_failed'
 }
 
 export function podDebugAccessKey(namespace: string, name: string, uid: string, base = getApiBase(), connection = connectionHeaderValue()) {
@@ -44,7 +45,7 @@ export function usePodDebugAccess(namespace: string, name: string, uid: string, 
       const refusal = client.getQueryData<PodDebugAccess>(key)?.refusedAttempt
       return answer.state !== 'allowed' && refusal ? { ...answer, refusedAttempt: refusal } : answer
     },
-    enabled: q => support === 'supported' && (enabled || (!!namespaceGrant && refusesDebug(q.state.data))),
+    enabled: q => support === 'supported' && (enabled || (!!namespaceGrant && needsNamedRecheck(q.state))),
     staleTime: 15_000,
     retry: false,
     refetchOnWindowFocus: true,
@@ -53,8 +54,8 @@ export function usePodDebugAccess(namespace: string, name: string, uid: string, 
   useEffect(() => {
     // A newly visible namespace grant can disagree with a previous named denial.
     // Ask about this Pod again rather than letting either cached answer outvote the other.
-    const previous = client.getQueryData<PodDebugAccess>(key)
-    if (namespaceGrant && support === 'supported' && refusesDebug(previous)) void recheck({ cancelRefetch: false })
+    const previous = client.getQueryState<PodDebugAccess>(key)
+    if (namespaceGrant && support === 'supported' && needsNamedRecheck(previous)) void recheck({ cancelRefetch: false })
   }, [namespaceGrant, support, client, key, recheck])
   const access = query.data
   const unverifiedImage = support === 'supported' && !execOnly && !query.error && access?.state === 'unknown' && access.exec ? access.image : undefined
@@ -71,6 +72,11 @@ export function usePodDebugAccess(namespace: string, name: string, uid: string, 
       ? { ...answer, refusedAttempt: { message, rechecked: false } } : answer)
     void recheck({ cancelRefetch: false })
   }
-  const unverifiedReview = unverifiedImage ? { refused: access?.refusedAttempt, rememberRefusal, recheckAccess } : undefined
+  function clearRefusal() {
+    if (!access?.refusedAttempt) return
+    client.setQueryData<PodDebugAccess>(key, current => current && current.refusedAttempt === access.refusedAttempt
+      ? { ...current, refusedAttempt: undefined } : current)
+  }
+  const unverifiedReview = unverifiedImage ? { refused: access?.refusedAttempt, rememberRefusal, recheckAccess, clearRefusal } : undefined
   return { unverifiedImage, unverifiedReview, recheckAccess, query, support, recheckSupport: () => client.invalidateQueries({queryKey: ['capabilities'], exact: true}) }
 }

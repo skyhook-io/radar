@@ -140,7 +140,7 @@ it.each([
     act(() => root.render(<QueryClientProvider client={client}><DockProvider>
       <ResourceActionsBar resource={{ kind: 'pods', namespace: 'demo', name: 'api' }} data={pod} canExec={initial || canSubmit}
         podDebugAction={<PodDebugAction pod={pod} defaultImage={initial ? 'mirror.example/debug' : image} debugDenial={initial ? undefined : denial}
-          unverifiedReview={unverified ? { refused: undefined, recheckAccess: recheck, rememberRefusal: vi.fn() } : undefined}
+          unverifiedReview={unverified ? { refused: undefined, recheckAccess: recheck, rememberRefusal: vi.fn(), clearRefusal: vi.fn() } : undefined}
           reviewStatus={{ message, canVerify: ['completed undecided review without verified exec', 'failed update review', 'Radar HTTP failure'].includes(state), refusal: undefined, checking: false, recheck: state === 'hosted' ? undefined : recheck }} />} />
     </DockProvider></QueryClientProvider>))
   }

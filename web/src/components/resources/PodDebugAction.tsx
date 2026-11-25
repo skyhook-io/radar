@@ -140,6 +140,7 @@ export function PodDebugAction({ pod, defaultImage, failedContainer, unverifiedR
       const { containerName, image } = await mutation.mutateAsync({ request: {
         base: draft.base, reviewedContext: draft.connection ?? '', targetContainer: draft.target, image: draft.image.trim() === defaultImage ? undefined : draft.image.trim() || undefined,
       } })
+      unverifiedReview?.clearRefusal()
       if (!sameConnection()) return
       openTerminal({
         namespace, podName: name, containerName, containers: [containerName],

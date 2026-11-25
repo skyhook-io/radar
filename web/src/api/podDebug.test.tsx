@@ -29,13 +29,60 @@ afterEach(() => {
   client.clear()
 })
 
-it.each(['denied', 'unavailable'])('rechecks previously %s named access when a namespace grant appears', async state => {
+it.each(['denied', 'unavailable', 'check_failed'])('rechecks previously %s named access when a namespace grant appears', async state => {
   vi.mocked(fetchJSON).mockResolvedValueOnce({ state }).mockResolvedValueOnce({ state: 'allowed', exec: true, image: 'tools' })
   render()
   await vi.waitFor(() => expect(host.textContent).toBe(state))
   render('tools')
   await vi.waitFor(() => expect(host.textContent).toBe('allowed'))
   expect(fetchJSON).toHaveBeenCalledTimes(2)
+})
+
+it('refreshes an unsuccessful HTTP check when a namespace grant appears', async () => {
+  vi.mocked(fetchJSON).mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ state: 'allowed', exec: true, image: 'tools' })
+  render()
+  const key = [...podDebugAccessKey('demo', 'checkout', 'uid-1'), false]
+  await vi.waitFor(() => expect(client.getQueryState(key)?.status).toBe('error'))
+  render('tools')
+  await vi.waitFor(() => expect(host.textContent).toBe('allowed'))
+  expect(fetchJSON).toHaveBeenCalledTimes(2)
+})
+
+it('still refreshes an unresolved named check after the namespace grant is visible', async () => {
+  const failed = { state: 'check_failed', exec: true }
+  vi.mocked(fetchJSON).mockResolvedValueOnce(failed).mockResolvedValueOnce(failed).mockResolvedValueOnce({ state: 'allowed', exec: true, image: 'tools' })
+  render()
+  await vi.waitFor(() => expect(host.textContent).toBe('check_failed'))
+  render('tools')
+  await vi.waitFor(() => expect(fetchJSON).toHaveBeenCalledTimes(2))
+  await act(async () => { await client.invalidateQueries({ queryKey: podDebugAccessKey('demo', 'checkout', 'uid-1') }) })
+  await vi.waitFor(() => expect(host.textContent).toBe('allowed'))
+})
+
+it('clears only the refusal that preceded a successful retry', async () => {
+  vi.mocked(fetchJSON).mockResolvedValue({ state: 'unknown', exec: true, image: 'tools' })
+  let completeFirstAttempt: (() => void) | undefined
+  function Review() {
+    const { unverifiedReview } = usePodDebugAccess('demo', 'checkout', 'uid-1', true)
+    return <>
+      <button id="start" onClick={() => { completeFirstAttempt = unverifiedReview?.clearRefusal }}/>
+      <button id="later" onClick={() => unverifiedReview?.rememberRefusal('A newer refusal')}/>
+      <button id="refuse" onClick={() => unverifiedReview?.rememberRefusal('Image denied')}/>
+      <button id="succeed" onClick={() => unverifiedReview?.clearRefusal()}/>
+      <output>{unverifiedReview?.refused?.message ?? (unverifiedReview ? 'No previous refusal' : '')}</output>
+    </>
+  }
+  act(() => root.render(<QueryClientProvider client={client}><Review/></QueryClientProvider>))
+  await vi.waitFor(() => expect(host.textContent).toBe('No previous refusal'))
+  act(() => host.querySelector<HTMLButtonElement>('#refuse')!.click())
+  await vi.waitFor(() => expect(host.textContent).toBe('Image denied'))
+  act(() => host.querySelector<HTMLButtonElement>('#start')!.click())
+  act(() => host.querySelector<HTMLButtonElement>('#later')!.click())
+  await vi.waitFor(() => expect(host.textContent).toBe('A newer refusal'))
+  act(() => completeFirstAttempt!())
+  expect(host.textContent).toBe('A newer refusal')
+  act(() => host.querySelector<HTMLButtonElement>('#succeed')!.click())
+  await vi.waitFor(() => expect(host.textContent).toBe('No previous refusal'))
 })
 
 it('keeps a confirmed named denial when the refreshed review still denies access', async () => {
