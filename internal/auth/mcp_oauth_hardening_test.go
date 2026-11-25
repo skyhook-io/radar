@@ -62,3 +62,11 @@ func TestMCPOAuthPendingRequestBoundToStartingBrowser(t *testing.T) {
 		t.Fatalf("starting browser could not resume: %d %s", page.Code, page.Body)
 	}
 }
+
+func TestMCPOAuthConsentSaysThisComputer(t *testing.T) {
+	f := newMCPOAuthFixture(t)
+	page := f.authorize(f.request("/mcp"), f.cookies)
+	if !strings.Contains(page.Body.String(), "An application on this computer.") || strings.Contains(page.Body.String(), "your computer") {
+		t.Fatalf("wording: %s", page.Body)
+	}
+}

@@ -288,7 +288,7 @@ var mcpConsentTemplate = template.Must(template.New("consent").Parse(`<!doctype 
 <dl><dt>Application</dt><dd>{{with .ClientName}}<strong>{{.}}</strong> <span class="muted">(name provided by the application)</span>{{else}}<span class="muted">No name provided</span>{{end}}</dd>
 <dt>Client ID</dt><dd><code>{{.ClientID}}</code></dd>
 <dt>Endpoint</dt><dd><code>{{.Resource}}</code><br><span class="muted">{{.Capability}} Your Kubernetes permissions apply.</span></dd>
-<dt>Access goes to</dt><dd><code>{{.RedirectURI}}</code><br><span class="muted">{{if .ThirdParty}}A server outside your computer.{{else}}An application on your computer.{{end}}</span></dd>
+<dt>Access goes to</dt><dd><code>{{.RedirectURI}}</code><br><span class="muted">{{if .ThirdParty}}A server outside your computer.{{else}}An application on this computer.{{end}}</span></dd>
 <dt>Lasts</dt><dd>Up to {{.Lifetime}}.</dd></dl>
 <form method="post"><input type="hidden" name="request" value="{{.Request}}"><input type="hidden" name="csrf" value="{{.CSRF}}"><div class="actions"><button class="deny" name="decision" value="deny">Deny</button><button class="allow" name="decision" value="allow">Allow</button></div></form></main></body></html>`))
 
