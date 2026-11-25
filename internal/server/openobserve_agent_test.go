@@ -98,7 +98,7 @@ func TestMetricsPodSampleOneListableNamespace(t *testing.T) {
 	terminating.DeletionTimestamp = &now
 	pods = append(pods, pending, terminating)
 
-	s := &Server{permCache: auth.NewPermissionCache()}
+	s := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	permissions := &auth.UserPermissions{AllowedNamespaces: []string{"busy", "small"}}
 	permissions.SetCanI("list", "", "pods", "big-denied", false)
 	permissions.SetCanI("list", "", "pods", "busy", true)
