@@ -108,15 +108,21 @@ namespace RoleBinding does not restrict an existing cluster-wide default binding
 so disable the defaults first. Product organization roles and saved-investigation
 sharing are separate concerns; this chart change does not redefine them.
 
-## Argo CD Application actions
+## Managed Owner permissions
 
-The chart grants `get` and `patch` on `argoproj.io/applications` to
-`radar:owner` and `cloud:owner`. This supports Refresh and Sync on standard
-Cloud installs. The grant follows `rbac.namespaces` when configured and
-defaults on for chart-managed Owners, including with a custom base role.
-Set `cloud.defaultRbac.integrationWrite.argocd.owner=false` to opt out.
-The [chart README](../deploy/helm/radar/README.md#cloud-owner-access-to-argo-cd)
-describes the permission and the Argo CD controller's deployment authority.
+Each chart-approved capability gets an exact role bound to a dedicated
+`radar:owner-access:<capability>` group. Hub attaches the enabled groups to
+eligible Owners on their authenticated requests. Radar admits only the
+groups its installation approved. Grants cover entire resources, and the
+Kubernetes apiserver evaluates all of the caller's roles.
+
+Standard approvals cover Argo CD Applications, CloudNativePG administration,
+and Velero backup runs and schedules. All managed Velero grants require
+unscoped built-in Owner roles. Velero
+backup data and deletion require individual cluster approval and activation
+in Hub. The [chart guide](../deploy/helm/radar/README.md#cloud-owner-permissions)
+covers scope and the configuration. A customer-managed role or vendor
+aggregate can grant the same access independently.
 
 ## Rollout and verification
 

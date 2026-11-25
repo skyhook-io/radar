@@ -1,55 +1,18 @@
-{{- /*
-Owner write add-on for integration actions. A missing setting uses the
-capability's default from files/integration-write-baseline.yaml.
-*/}}
-{{- $rbac := .Values.cloud.defaultRbac -}}
-{{- /* Helm can skip schema validation. Strings must never turn a write gate on. */ -}}
-{{- $writeEnabled := true -}}
-{{- range $gate := list .Values.cloud.enabled .Values.rbac.create $rbac.create $rbac.owner -}}
-{{- $writeEnabled = and $writeEnabled (kindIs "bool" $gate) $gate -}}
-{{- end -}}
-{{- if $writeEnabled -}}
-{{- $root := . -}}
-{{- $policy := .Files.Get "files/integration-write-baseline.yaml" | fromYaml -}}
-{{- $switches := $rbac.integrationWrite -}}
-{{- $enabled := dict -}}
-{{- if or (kindIs "invalid" $switches) (kindIs "map" $switches) -}}
-{{- range $capability, $spec := $policy.capabilities -}}
-{{- $switch := index ($switches | default dict) $capability -}}
-{{- if or (kindIs "invalid" $switch) (kindIs "map" $switch) -}}
-{{- $owner := index ($switch | default dict) "owner" -}}
-{{- if kindIs "invalid" $owner -}}
-{{- $owner = $spec.default -}}
-{{- end -}}
-{{- $_ := set $enabled $capability (and (kindIs "bool" $owner) $owner) -}}
-{{- end -}}
-{{- end -}}
-{{- end -}}
-{{- $rules := list -}}
-{{- $collections := .Values.rbac.crdGroups -}}
-{{- $all := and (kindIs "bool" $collections.all) $collections.all -}}
-{{- range $entry := $policy.entries -}}
-{{- $collection := index $collections $entry.collection -}}
-{{- $collect := or $all (and (kindIs "bool" $collection) $collection) -}}
-{{- if and (index $enabled $entry.capability) $collect -}}
-{{- $rules = append $rules (dict "apiGroups" (list $entry.group) "resources" $entry.resources "verbs" $entry.verbs) -}}
-{{- end -}}
-{{- end -}}
-{{- if $rules }}
-{{- $name := printf "%s-integration-write" (include "radar.fullname" $root) }}
+{{- range $capability, $rules := include "radar.ownerAccessGrants" . | fromJson }}
+{{- $name := printf "%s-owner-access-%s" (include "radar.fullname" $) $capability }}
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: {{ $name }}
   labels:
-    {{- include "radar.labels" $root | nindent 4 }}
+    {{- include "radar.labels" $ | nindent 4 }}
 rules:
   {{- toYaml $rules | nindent 2 }}
 {{- include "radar.binding" (dict
-  "root" $root
-  "name" (printf "%s-cloud-owner-integration-write" (include "radar.fullname" $root))
+  "root" $
+  "name" $name
   "roleRef" $name
-  "groups" (include "radar.tierGroups" "owner" | fromJsonArray)
+  "groups" (list (printf "radar:owner-access:%s" $capability))
 ) }}
-{{- end }}
 {{- end }}

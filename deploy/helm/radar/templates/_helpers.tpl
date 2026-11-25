@@ -194,3 +194,47 @@ rolling hub and chart upgrades stay compatible; remove those in v2.
 {{- list (printf "radar:%s" .) | toJson -}}
 {{- end -}}
 {{- end -}}
+
+{{- /*
+The roles and the agent admission list must come from the same chart gates.
+*/}}
+{{- define "radar.ownerAccessGrants" -}}
+{{- $grants := dict -}}
+{{- $rbac := .Values.cloud.defaultRbac -}}
+{{- /* Helm can skip schema validation. Strings must never turn a write gate on. */ -}}
+{{- $writeEnabled := ne (include "radar.userTokenMode" .) "true" -}}
+{{- range $gate := list .Values.cloud.enabled .Values.rbac.create $rbac.create $rbac.owner -}}
+{{- $writeEnabled = and $writeEnabled (kindIs "bool" $gate) $gate -}}
+{{- end -}}
+{{- if $writeEnabled -}}
+{{- $policy := .Files.Get "files/integration-write-baseline.yaml" | fromYaml -}}
+{{- $switches := $rbac.integrationWrite -}}
+{{- $enabled := dict -}}
+{{- if or (kindIs "invalid" $switches) (kindIs "map" $switches) -}}
+{{- range $capability, $spec := $policy.capabilities -}}
+{{- $switch := index ($switches | default dict) $capability -}}
+{{- if or (kindIs "invalid" $switch) (kindIs "map" $switch) -}}
+{{- $owner := index ($switch | default dict) "owner" -}}
+{{- if kindIs "invalid" $owner -}}
+{{- $owner = $spec.default -}}
+{{- end -}}
+{{- $_ := set $enabled $capability (and (kindIs "bool" $owner) $owner) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $collections := .Values.rbac.crdGroups -}}
+{{- $all := and (kindIs "map" $collections) (kindIs "bool" $collections.all) $collections.all -}}
+{{- if kindIs "map" $collections -}}
+{{- range $entry := $policy.entries -}}
+{{- $collection := index $collections $entry.collection -}}
+{{- $collect := or $all (and (kindIs "bool" $collection) $collection) -}}
+{{- $veleroScope := and (empty $.Values.rbac.namespaces) (has $rbac.ownerClusterRole (list "admin" "cluster-admin")) -}}
+{{- if and (index $enabled $entry.capability) $collect (or (ne $entry.collection "velero") $veleroScope) -}}
+{{- $rule := dict "apiGroups" (list $entry.group) "resources" $entry.resources "verbs" $entry.verbs -}}
+{{- $_ := set $grants $entry.capability (append (index $grants $entry.capability | default list) $rule) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $grants -}}
+{{- end -}}

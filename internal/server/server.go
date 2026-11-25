@@ -1673,6 +1673,10 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.MCPHelmTools = s.mcpHandler != nil && !k8s.ForceDisableHelmWrite
 	caps.MCPApplicationEvidence = s.mcpApplicationEvidenceAvailable(r)
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
+	if cloudMode() && !pkgauth.UserTokenMode() && cloud.OwnerAccessConfigured() {
+		approved := cloud.OwnerAccess()
+		caps.OwnerAccess = &approved
+	}
 	caps.CloudConnect = s.cloudConnectCapability()
 	caps.Features = advertisedFeatures()
 	// handlePodFileUpload refuses in Radar Cloud; hide the control to match.

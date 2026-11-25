@@ -316,69 +316,61 @@ Radar binary (including Radar Cloud self-upgrade) does not update RBAC. Missing 
 on an older `--reuse-values` installation default to enabled; set explicit false
 before upgrading if the added visibility is unwanted.
 
-### Cloud Owner access to Argo CD
+### Cloud Owner permissions
 
-The chart lets Cloud Owners refresh and sync Argo CD Applications on a standard
-install. The [grant](files/integration-write-baseline.yaml) fills the gap in
-the built-in `admin` role.
+Standard Cloud installs approve separate grants for Argo CD Applications,
+existing CloudNativePG clusters, and Velero backup creation and schedule
+management. Hub activates each grant for Cloud Owners in **Settings → Access**.
+The Kubernetes apiserver authorizes each action as the caller. A grant here
+still applies to the whole Kubernetes resource, including through generic
+edits or MCP. Flux, Rollouts, and Workflows continue to use existing roles.
+
+The chart creates a dedicated group for each cluster-approved grant. The
+connected Radar instance accepts those groups from the trusted Hub tunnel
+within the installed approval list. Set `owner: false` to remove a cluster
+approval. Hub can turn an approved grant on or off without changing the
+release. Other Kubernetes bindings still apply. To use your own Kubernetes
+roles, set `cloud.defaultRbac.create=false` and bind your roles to the
+`radar:owner`, `radar:member`, and `radar:viewer` groups you use.
+
+For self-managed deployments, upgrade Radar Hub to a build that supports
+**Settings → Access** before upgrading the Radar chart. The older Hub sends
+the Owner tier group alone, so the dedicated groups in this chart take effect
+only after the Hub upgrade.
 
 ```yaml
 cloud:
   defaultRbac:
     integrationWrite:
       argocd:
-        owner: true  # Set false to opt out
+        owner: true
+      cnpg:
+        owner: true
+      velero:
+        owner: true
+      velero-download:
+        owner: false
+      velero-delete:
+        owner: false
 ```
 
-The switch grants `get` and `patch` on Argo CD Applications
-(`argoproj.io/applications`) through a `*-integration-write` ClusterRole bound
-to `radar:owner` and `cloud:owner`.
+- Argo CD Application patch delegates the controller's deployment authority.
+  Review the controller credentials and eligible AppProjects.
+- CloudNativePG administration covers existing clusters and their status,
+  backups, schedules and poolers. Cluster creation for restore requires a
+  separate Kubernetes grant.
+- Velero backup and schedule changes can direct backups across namespaces.
+  All managed Velero grants require unscoped built-in admin or cluster-admin
+  Owner roles. Supply explicit Velero rights for scoped or custom roles.
+- Velero data access and stored-backup deletion each require cluster approval
+  and activation in Hub. File access includes full backup contents, which can
+  include Secrets.
 
-The grant is on by default for chart-managed Cloud owners, including owners
-with a custom base role. Set `owner: false` to disable the add-on. Kubernetes
-RBAC is additive, so other bindings and vendor aggregation can still grant
-access. An owner bound to `cluster-admin` already has Application patch access.
-
-The add-on also requires `cloud.enabled`, `rbac.create`,
-`cloud.defaultRbac.create`, `cloud.defaultRbac.owner`, and the `argo`
-collection (`rbac.crdGroups.argo` or `all`). If `rbac.namespaces` is set, the
-chart creates a RoleBinding in each listed namespace. Cloud actions use the
-caller’s Kubernetes identity, including MCP clients and confirmed actions in
-Radar Diagnose. `rbac.additionalRules` extends the collector ServiceAccount,
-which is the identity used for in-cluster actions without authentication.
-
-**Authority delegated.** Kubernetes grants access to the entire Application.
-The patch permission applies through any Kubernetes client and covers deployment
-configuration, project assignment, and sync operations. These requests use
-Kubernetes authorization. The Argo CD controller then uses its own deployment
-credentials, which can extend to cluster-scoped resources and to other clusters.
-Review the [controller credentials](https://argo-cd.readthedocs.io/en/stable/operator-manual/security/#cluster-rbac),
-eligible [AppProjects](https://argo-cd.readthedocs.io/en/stable/user-guide/projects/),
-and any Kubernetes admission controls before granting this access.
-
-The namespace setting scopes access to Application objects. Those Applications
-may deploy into different namespaces or clusters. To limit the grant to named
-Applications, leave the add-on off and manage RoleBindings with `resourceNames`.
-Each named Application still delegates controller authority.
-
-**Upgrades.** Upgrading the chart adds this permission to eligible Cloud owners.
-Older values files that omit the key inherit `true`, including with
-`helm upgrade --reuse-values`. A saved `false` continues to disable the grant
-when the upgrade reuses that value. To opt out, set
-`cloud.defaultRbac.integrationWrite.argocd.owner=false` in the release values
-before applying the chart:
-
-```bash
-helm upgrade radar skyhook/radar -n radar --reuse-values \
-  --set cloud.defaultRbac.integrationWrite.argocd.owner=false
-```
-
-For an installation managed by Argo CD or Flux, change the values in Git.
-If Argo CD manages the Radar release, [sync with pruning enabled](https://argo-cd.readthedocs.io/en/stable/user-guide/auto_sync/#automatic-pruning).
-Verify that the `*-cloud-owner-integration-write` ClusterRoleBinding, or the
-RoleBinding in each configured namespace, has been removed. Review other
-bindings, changes made to Applications while the grant was on, and pending
-operations the Argo CD controller can still run.
+Collection flags and chart-managed Cloud RBAC must allow each grant. Where a
+grant has configured `rbac.namespaces`, its RoleBindings scope the objects
+the caller can write. Controller destinations can extend beyond those namespaces.
+The [chart grant table](files/integration-write-baseline.yaml) lists the exact
+Kubernetes permissions.
 
 ### Radar Cloud background services (`radar:system`)
 

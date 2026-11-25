@@ -148,7 +148,7 @@ func assertIntegrationWriteGrant(t *testing.T, policy integrationWritePolicy, do
 		t.Fatalf("rendered %d documents, want role + owner binding", len(docs))
 	}
 	role, binding := docs[0], docs[1]
-	if role.Kind != "ClusterRole" || role.Name != "radar-integration-write" || !reflect.DeepEqual(role.Rules, want) {
+	if role.Kind != "ClusterRole" || role.Name != "radar-owner-access-argocd" || !reflect.DeepEqual(role.Rules, want) {
 		t.Errorf("unexpected write role: %+v", role)
 	}
 	if !reflect.DeepEqual(want, []rbacv1.PolicyRule{{APIGroups: []string{"argoproj.io"}, Resources: []string{"applications"}, Verbs: []string{"get", "patch"}}}) {
@@ -160,11 +160,10 @@ func assertIntegrationWriteGrant(t *testing.T, policy integrationWritePolicy, do
 		}
 	}
 	wantSubjects := []rbacv1.Subject{
-		{Kind: "Group", Name: "radar:owner", APIGroup: rbacv1.GroupName},
-		{Kind: "Group", Name: "cloud:owner", APIGroup: rbacv1.GroupName},
+		{Kind: "Group", Name: "radar:owner-access:argocd", APIGroup: rbacv1.GroupName},
 	}
-	if binding.Kind != "ClusterRoleBinding" || binding.Name != "radar-cloud-owner-integration-write" ||
-		binding.RoleRef != (rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "radar-integration-write"}) ||
+	if binding.Kind != "ClusterRoleBinding" || binding.Name != "radar-owner-access-argocd" ||
+		binding.RoleRef != (rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "radar-owner-access-argocd"}) ||
 		!reflect.DeepEqual(binding.Subjects, wantSubjects) {
 		t.Errorf("unexpected write binding: %+v", binding)
 	}
@@ -206,7 +205,13 @@ func TestIntegrationWriteOwnerSwitch(t *testing.T) {
 		{name: "member and viewer tiers off", overrides: "cloud.defaultRbac.member=false,cloud.defaultRbac.viewer=false,cloud.defaultRbac.integrationWrite.argocd.owner=true", granted: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			docs := renderIntegrationWriteChart(t, tc.overrides, tc.editDefaults)
+			all := renderIntegrationWriteChart(t, tc.overrides, tc.editDefaults)
+			var docs []integrationRBACDocument
+			for _, doc := range all {
+				if doc.Name == "radar-owner-access-argocd" {
+					docs = append(docs, doc)
+				}
+			}
 			if !tc.granted {
 				if len(docs) != 0 {
 					t.Fatalf("expected no write add-on, rendered %+v", docs)
@@ -222,6 +227,13 @@ func TestIntegrationWriteDoesNotChangeExistingManifests(t *testing.T) {
 	on := renderCloudChart(t, "rbac.helm=true,cloud.defaultRbac.integrationWrite.argocd.owner=true", nil)
 	off := renderCloudChart(t, "rbac.helm=true,cloud.defaultRbac.integrationWrite.argocd.owner=false", nil)
 	for name, rendered := range on {
+		if name == "radar/templates/deployment.yaml" {
+			advertised := `value: "argocd,cnpg,velero"`
+			if strings.Count(rendered, advertised) != 1 {
+				t.Fatal("deployment must advertise all three approved default grants")
+			}
+			rendered = strings.Replace(rendered, advertised, `value: "cnpg,velero"`, 1)
+		}
 		if name != "radar/templates/cloud-rbac-integration-write.yaml" && !bytes.Equal([]byte(rendered), []byte(off[name])) {
 			t.Errorf("integration write add-on changed existing manifest %s", name)
 		}
