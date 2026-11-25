@@ -3,13 +3,13 @@ package traffic
 
 import "time"
 
-// Flow represents a single network flow between two endpoints.
 // Flow.PortSource values. Empty means the port was observed.
 const (
 	PortSourceService         = "service"
 	PortSourceServiceMultiple = "serviceMultiple"
 )
 
+// Flow represents a single network flow between two endpoints.
 type Flow struct {
 	Source      Endpoint `json:"source"`
 	Destination Endpoint `json:"destination"`
