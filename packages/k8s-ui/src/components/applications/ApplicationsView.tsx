@@ -232,9 +232,10 @@ export interface ApplicationsViewProps {
    * `all` (default) counts the base list after system-app visibility. `searchAndSource`
    * counts text and Source matches for the header tiles, health distribution, and
    * Status, Class, Type, and Environment facets before applying other filters.
-   * Selected health tiles stay visible at zero. Source counts always use the base
-   * list. In scoped mode, choosing a source dims the other Source options, and
-   * the Type facet is hidden when at most one category matches unless a Type is selected.
+   * In either mode, selected health tiles stay visible at zero so they can be cleared.
+   * Source counts always use the base list. In scoped mode, choosing a source dims the other
+   * Source options. Scoped mode also hides the Type facet when at most one category
+   * matches unless a Type is selected.
    */
   countsFrom?: 'all' | 'searchAndSource'
 }
@@ -438,7 +439,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
   const healthTile = (h: AppHealth, tone: SummaryTone) =>
     initialLoading && (h === 'healthy' || h === 'degraded' || h === 'unhealthy') ? (
       <SummaryTile key={h} label={HEALTH_META[h].label} value={0} tone={tone} loading />
-    ) : counts.health[h] || (filteredCounts && fHealth.has(h)) ? (
+    ) : counts.health[h] || fHealth.has(h) ? (
       <SummaryTile key={h} label={HEALTH_META[h].label} value={counts.health[h] ?? 0} tone={tone} active={fHealth.has(h)} onClick={() => filters.toggle('health', h)} />
     ) : null
 

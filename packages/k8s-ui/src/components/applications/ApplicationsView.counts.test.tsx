@@ -63,6 +63,22 @@ describe('ApplicationsView countsFrom', () => {
     expect(unhealthyFacet(host)).toBe('Unhealthy1')
   })
 
+  it.each(['all', 'searchAndSource'] as const)('keeps a selected health tile clickable at zero in %s mode', (mode) => {
+    const apps = entries()
+    apps[2] = { ...apps[2], namespaces: ['kube-system'] }
+    const host = show(mode, apps)
+    const system = host.querySelector<HTMLInputElement>('input[type="checkbox"]')!
+    const tile = (count: number) => [...host.querySelectorAll('button')].find((button) => button.textContent === `${count}Unhealthy`)
+
+    act(() => system.click())
+    act(() => tile(1)!.click())
+    act(() => system.click())
+    expect(tile(0)?.getAttribute('aria-pressed')).toBe('true')
+
+    act(() => tile(0)!.click())
+    expect(tile(0)).toBeUndefined()
+  })
+
   it('keeps a selected environment removable when its last app is hidden in the default count mode', () => {
     const apps = entries()
     apps[2] = { ...apps[2], namespaces: ['kube-system'], env: 'staging' }
