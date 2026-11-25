@@ -447,3 +447,45 @@ func TestRelayScopeNoteNamesOpenObserve(t *testing.T) {
 		t.Fatalf("note without a relay = %q", note)
 	}
 }
+
+func TestRelayMissingThrottlingNote(t *testing.T) {
+	withRelayTestClient(t)
+	cfg := testRelayConfig(&fakeRelayTransport{}, nil)
+	cfg.Source.Dialect = "collector"
+	cfg.Source.MissingFamilies = []string{"throttling", "volumes"}
+	if err := EnableRelay(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if note := GetClient().relayMissingThrottlingNote(); !strings.Contains(note, "drops CPU throttling by default") {
+		t.Fatalf("collector note = %q", note)
+	}
+
+	cfg.Key = "key-2"
+	cfg.Source.Dialect = "standard"
+	if err := EnableRelay(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if note := GetClient().relayMissingThrottlingNote(); note != "OpenObserve has no CPU throttling data for this cluster." {
+		t.Fatalf("standard note = %q", note)
+	}
+
+	cfg.Key = "key-3"
+	cfg.Source.MissingFamilies = []string{"volumes"}
+	if err := EnableRelay(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if note := GetClient().relayMissingThrottlingNote(); note != "" {
+		t.Fatalf("throttling collected, note = %q", note)
+	}
+	DisableRelay()
+	if note := GetClient().relayMissingThrottlingNote(); note != "" {
+		t.Fatalf("no relay, note = %q", note)
+	}
+
+	if panelHasSamples(workloadMetricPanel{Series: []prom.Series{{}}}) {
+		t.Fatal("a series without points counted as samples")
+	}
+	if !panelHasSamples(workloadMetricPanel{Series: []prom.Series{{DataPoints: []prom.DataPoint{{Value: 1}}}}}) {
+		t.Fatal("a series with points did not count")
+	}
+}

@@ -213,6 +213,27 @@ func relayWorkloadScope() *prom.WorkloadMetricsScope {
 // local one) keeps charts to this cluster, without a trailing period; "" when
 // no OpenObserve relay is active. The scope state stays single-cluster
 // asserted for older UIs, which show this note in its place.
+// relayMissingThrottlingNote explains an empty throttling panel when the
+// active OpenObserve source found no throttling data for this cluster.
+func (c *Client) relayMissingThrottlingNote() string {
+	c.mu.RLock()
+	st := c.relay
+	c.mu.RUnlock()
+	if st == nil {
+		return ""
+	}
+	st.mu.Lock()
+	src := st.source
+	st.mu.Unlock()
+	if src.Kind != "openobserve" || !slices.Contains(src.MissingFamilies, "throttling") {
+		return ""
+	}
+	if src.Dialect == "collector" {
+		return "OpenObserve's collector drops CPU throttling by default. Keep container_cpu_cfs_throttled_periods_total and container_cpu_cfs_periods_total in its cadvisor scrape job to see it here."
+	}
+	return "OpenObserve has no CPU throttling data for this cluster."
+}
+
 func (c *Client) relaySourceScopeNote() string {
 	c.mu.RLock()
 	st := c.relay

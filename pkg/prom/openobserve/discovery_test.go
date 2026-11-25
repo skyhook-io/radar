@@ -181,7 +181,7 @@ func TestDiscoverIDsCollectorNameUniqueness(t *testing.T) {
 				t.Fatalf("GatewayMetricsAllowed = %v", a.Options.GatewayMetricsAllowed)
 			}
 			if tc.allowed {
-				if a.Warning != "" || !reflect.DeepEqual(a.Missing, []Family{FamilyThrottling, FamilyVolumes, FamilyNodes}) {
+				if a.Warning != "" || !reflect.DeepEqual(a.Missing, []Family{FamilyVolumes, FamilyNodes}) {
 					t.Fatalf("A = %+v", a)
 				}
 			} else if !strings.Contains(a.Warning, "More than one") {
@@ -415,6 +415,17 @@ func TestDetectFamiliesCollector(t *testing.T) {
 	}
 	for _, q := range store.sent() {
 		assertEverySelectorScoped(t, q, "k8s_cluster", "cluster1")
+	}
+
+	// A collector configured to keep throttling has it.
+	store = collectorFamilyStore(true)
+	store.routes = append(store.routes, route{match: []string{"container_cpu_cfs_throttled_periods_total{"}, rows: []map[string]string{{"k8s_cluster": "cluster1"}}})
+	got, err = DetectFamilies(context.Background(), store, allowed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []Family{FamilyVolumes, FamilyNodes}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("throttling kept: missing = %v", got)
 	}
 }
 

@@ -158,6 +158,12 @@ func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 		automatic = append(automatic, attributions)
 	}
 	resp := collectWorkloadMetricsWithHistory(ctx, workloadRangeClient{client}, scope, config, job, source, start, end, step, automatic, history)
+	if note := client.relayMissingThrottlingNote(); note != "" {
+		if p, ok := resp.Panels["throttling"]; ok && !panelHasSamples(p) {
+			p.Reason = note
+			resp.Panels["throttling"] = p
+		}
+	}
 	if oo := client.relaySourceScopeNote(); oo != "" && resp.Attribution["scope"] != "" {
 		resp.Attribution["scope"] = oo + "."
 	}
@@ -634,4 +640,13 @@ func withMetricCoverage(panel, coverage workloadMetricPanel, reason string) work
 		panel.Reason += reason
 	}
 	return panel
+}
+
+func panelHasSamples(p workloadMetricPanel) bool {
+	for _, s := range p.Series {
+		if len(s.DataPoints) > 0 {
+			return true
+		}
+	}
+	return false
 }

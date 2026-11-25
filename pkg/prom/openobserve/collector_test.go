@@ -105,7 +105,6 @@ func TestCollectorNotCollected(t *testing.T) {
 	allowed := collectorOptsA
 	allowed.GatewayMetricsAllowed = true
 	for _, in := range []string{
-		`sum(rate(container_cpu_cfs_throttled_periods_total[5m])) / sum(rate(container_cpu_cfs_periods_total[5m]))`,
 		`rate(node_cpu_seconds_total{mode!="idle"}[5m])`,
 		`kubelet_volume_stats_used_bytes`,
 		`rate(container_network_receive_packets_dropped_total[5m])`,
@@ -123,6 +122,7 @@ func TestCollectorGatewayMetrics(t *testing.T) {
 	for _, in := range []string{
 		`kube_pod_info{namespace="demo"}`,
 		`sum(rate(container_fs_writes_bytes_total[5m]))`,
+		`sum(rate(container_cpu_cfs_throttled_periods_total[5m])) / sum(rate(container_cpu_cfs_periods_total[5m]))`,
 		`container_cpu_time * on (pod) group_left kube_pod_owner`,
 		`{__name__=~"container_.*"}`,
 	} {
@@ -139,6 +139,13 @@ func TestCollectorGatewayMetrics(t *testing.T) {
 	// kube_* keep their own label names and get the cluster name only.
 	if got != `kube_pod_info{k8s_cluster="cluster1",k8s_cluster_uid="x",namespace="demo"}` {
 		t.Fatalf("got %s", got)
+	}
+
+	// The collector's cAdvisor job sends throttling under cAdvisor's own
+	// names when it is configured to keep them; it gets the cluster name only.
+	got, err = Rewrite(`rate(container_cpu_cfs_throttled_periods_total{namespace="demo"}[5m])`, allowed)
+	if err != nil || got != `rate(container_cpu_cfs_throttled_periods_total{k8s_cluster="cluster1",namespace="demo"}[5m])` {
+		t.Fatalf("throttling: %s, %v", got, err)
 	}
 
 	noUID := RewriteOptions{Matchers: collectorOptsA.Matchers, Dialect: DialectCollector, GatewayMetricsAllowed: true}

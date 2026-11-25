@@ -76,7 +76,6 @@ var collectorTranslations = map[string]collectorTranslation{
 
 // collectorNotCollected are metric families the collector has no equivalent for.
 var collectorNotCollected = []struct{ prefix, what string }{
-	{"container_cpu_cfs_", "CPU throttling"},
 	{"container_spec_", "cAdvisor container limits"},
 	{"container_network_", "this network counter"},
 	{"node_", "node-exporter metrics"},

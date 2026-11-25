@@ -1030,6 +1030,17 @@ because OpenObserve refuses one without it. Metric families the source doesn't c
 Metrics lists them, under "OpenObserve · shared connection · matched by cluster
 ID" (or "matched by confirmed name").
 
+**CPU throttling from the OpenObserve collector.** The collector's gateway
+scrapes cAdvisor but, by default, keeps only the disk read and write metrics,
+so CPU throttling shows as not collected. To see it, add
+`container_cpu_cfs_(periods_total|throttled_periods_total)` to the `keep`
+regex of the `cadvisor` job in the collector's Helm values
+(`gateway.receivers.prometheus.config.scrape_configs`). Helm replaces lists
+rather than merging them, so copy the whole `scrape_configs` list from
+`helm show values openobserve/openobserve-collector`, change that regex, and
+upgrade with `--reuse-values -f <file>`. Node and volume charts don't read the
+collector's node and volume metrics yet.
+
 **Precedence for each cluster:** OpenObserve, when the cluster is turned on for
 it, wins even over a Prometheus URL set by hand for the context; the hand-set
 URL stays saved and is used again once you switch the cluster back to
