@@ -824,7 +824,7 @@ export function ApplicationDetail({
           )}
           {/* Amber only on real skew (same image, different tags) — the context
               strip already covers the multi-image "N versions" case neutrally. */}
-          {app.versionSkew && versions.length > 1 && (
+          {unavailable == null && app.versionSkew && versions.length > 1 && (
             <Tooltip
               content={<VersionTooltip workloads={workloads} />}
               delay={150}

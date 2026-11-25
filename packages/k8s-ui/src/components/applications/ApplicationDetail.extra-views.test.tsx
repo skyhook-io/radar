@@ -406,6 +406,18 @@ describe('ApplicationDetail extra views', () => {
     expect(host.textContent).toContain('Recorded deliveries')
   })
 
+  it('hides the version-skew badge when the retained instance goes offline', () => {
+    const retained = { ...app, appVersion: 'release-42', versions: ['v1', 'v2'], versionSkew: true }
+    const { host, rerender } = show({ app: retained })
+    expect(host.textContent).toContain('2 versions')
+    expect(host.textContent).toContain('release-42')
+
+    rerender({ app: retained, liveUnavailableNotice: <p>Offline</p> })
+    expect(host.textContent).toContain('Offline')
+    expect(host.textContent).not.toContain('2 versions')
+    expect(host.textContent).not.toContain('release-42')
+  })
+
   it('holds an empty workload key offline before mounting an available host view', () => {
     const render = vi.fn(() => <p>Settings body</p>)
     const props = { selectedView: 'settings', extraViews: [{ id: 'settings', label: 'Settings', render }], onSelectView: vi.fn(), onSelectWorkload: vi.fn() }
