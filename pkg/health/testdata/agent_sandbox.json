@@ -147,7 +147,7 @@
       }
     },
     "level": "degraded",
-    "uiLevel": "alert",
+    "uiLevel": "degraded",
     "text": "Suspension blocked",
     "settled": false,
     "inProgress": false,
@@ -188,7 +188,7 @@
       }
     },
     "level": "degraded",
-    "uiLevel": "alert",
+    "uiLevel": "degraded",
     "text": "ReconcilerError",
     "settled": false,
     "inProgress": false,

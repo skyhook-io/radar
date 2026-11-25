@@ -195,10 +195,12 @@ type ClaimCounts struct {
 // WarmPoolCounts sums ready and desired sandboxes across pools; desired counts
 // only pools that set spec.replicas.
 type WarmPoolCounts struct {
-	Total      int   `json:"total"`
-	LowerBound bool  `json:"lowerBound"`
-	Ready      int64 `json:"ready"`
-	Desired    int64 `json:"desired"`
+	Total             int   `json:"total"`
+	LowerBound        bool  `json:"lowerBound"`
+	Ready             int64 `json:"ready"`
+	Desired           int64 `json:"desired"`
+	ReadyLowerBound   bool  `json:"readyLowerBound,omitempty"`
+	DesiredLowerBound bool  `json:"desiredLowerBound,omitempty"`
 }
 
 // Counts is the status line. A kind is absent when nothing of it was read.
@@ -243,7 +245,8 @@ type WarmPoolRow struct {
 	Namespace string  `json:"namespace"`
 	Name      string  `json:"name"`
 	State     Reading `json:"state"`
-	Ready     int64   `json:"ready"`
+	// Ready is absent until the controller reports its first observation.
+	Ready *int64 `json:"ready,omitempty"`
 	// Desired is absent when the pool sets no spec.replicas.
 	Desired          *int64   `json:"desired,omitempty"`
 	Template         string   `json:"template,omitempty"`
@@ -398,7 +401,7 @@ func schedulerBlocked(u *unstructured.Unstructured, r health.AgentSandboxReadine
 
 func progressRule(p Progress) (Rule, Severity) {
 	if p == ProgressStalled {
-		return RuleStalled, SeverityAlert
+		return RuleStalled, SeverityWarning
 	}
 	return RuleSlow, SeverityWarning
 }
@@ -422,7 +425,9 @@ func progressDetail(a *Attention, u *unstructured.Unstructured, r health.AgentSa
 		a.Reading = "The scheduler can’t place its Pod."
 		a.RawDetail, a.RawDetailLabel, a.RawDetailSource = scheduled.message, schedulerLabel, DetailScheduler
 		a.NextStep = schedulerStep(scheduled.message)
-		a.Severity = SeverityAlert
+		if !a.Issue {
+			a.Severity = SeverityAlert
+		}
 		return
 	}
 	ready, _ := condition(u, "Ready")
@@ -465,7 +470,7 @@ func (b *builder) sandboxRow(u *unstructured.Unstructured) (a *Attention, progre
 	case r.SuspensionRefused:
 		suspended, _ := condition(u, "Suspended")
 		name := health.AgentSandboxPodName(u)
-		row.Rule, row.Severity, row.Reason = RuleSuspensionBlocked, SeverityAlert, "PodNotOwned"
+		row.Rule, row.Severity, row.Reason = RuleSuspensionBlocked, SeverityWarning, "PodNotOwned"
 		row.Title = "Suspension blocked"
 		row.Reading = "The controller refuses to delete a Pod this Sandbox doesn’t own, so the suspension waits."
 		row.RawDetail, row.RawDetailLabel, row.RawDetailSource = suspended.message, controllerLabel, DetailController
@@ -474,7 +479,7 @@ func (b *builder) sandboxRow(u *unstructured.Unstructured) (a *Attention, progre
 		row.Related = &Related{Lead: "The Pod it won’t delete:", Refs: []Ref{podRef(u)}}
 		return &row, false
 	case ready.status == "False" && ready.reason == "ReconcilerError":
-		row.Rule, row.Severity, row.Title = RuleReconcilerError, SeverityAlert, reconcilerTitle
+		row.Rule, row.Severity, row.Title = RuleReconcilerError, SeverityWarning, reconcilerTitle
 		row.RawDetail, row.RawDetailLabel, row.RawDetailSource = ready.message, controllerLabel, DetailController
 		row.NextStep = reconcilerNextStep
 		row.Since = reportedSince(u)
@@ -569,7 +574,7 @@ func (b *builder) claimRow(u *unstructured.Unstructured) *Attention {
 
 	switch {
 	case ready.status == "False" && ready.reason == "ReconcilerError":
-		row.Rule, row.Severity, row.Title = RuleReconcilerError, SeverityAlert, reconcilerTitle
+		row.Rule, row.Severity, row.Title = RuleReconcilerError, SeverityWarning, reconcilerTitle
 		row.RawDetail, row.RawDetailLabel, row.RawDetailSource = ready.message, controllerLabel, DetailController
 		row.NextStep = reconcilerNextStep
 		row.Since = reportedSince(u)
@@ -643,8 +648,8 @@ func (b *builder) reserveEmpty(namespace, name string) bool {
 	if !ok {
 		return false
 	}
-	ready, _ := nestedCount(p.Object, "status", "readyReplicas")
-	return ready == 0
+	ready, reported := warmPoolReady(p)
+	return reported && ready == 0
 }
 
 // waitingClaims counts a pool's unbound claims still in progress, waiting
@@ -724,7 +729,7 @@ func (b *builder) poolRow(u *unstructured.Unstructured) (*Attention, []string) {
 	if refilling && len(notReady) == 0 {
 		return nil, nil
 	}
-	ready, _ := nestedCount(u.Object, "status", "readyReplicas")
+	ready, _ := warmPoolReady(u)
 	desired, _ := nestedCount(u.Object, "spec", "replicas")
 
 	counts := map[string]int{}
@@ -1016,11 +1021,15 @@ func counts(in Input) Counts {
 	if in.WarmPools.Usable {
 		w := &WarmPoolCounts{Total: len(in.WarmPools.Items), LowerBound: !in.WarmPools.Complete}
 		for _, u := range in.WarmPools.Items {
-			if n, ok := nestedCount(u.Object, "status", "readyReplicas"); ok {
+			if n, ok := warmPoolReady(u); ok {
 				w.Ready += n
+			} else {
+				w.ReadyLowerBound = true
 			}
 			if n, ok := nestedCount(u.Object, "spec", "replicas"); ok {
 				w.Desired += n
+			} else {
+				w.DesiredLowerBound = true
 			}
 		}
 		c.WarmPools = w
@@ -1048,7 +1057,9 @@ func (b *builder) warmPoolRows() ([]WarmPoolRow, int) {
 	for _, u := range b.in.WarmPools.Items {
 		v := ReadWarmPool(u)
 		row := WarmPoolRow{Namespace: u.GetNamespace(), Name: u.GetName(), State: Reading{Text: v.Reason, Level: v.Level}, Created: u.GetCreationTimestamp().UTC()}
-		row.Ready, _ = nestedCount(u.Object, "status", "readyReplicas")
+		if ready, reported := warmPoolReady(u); reported {
+			row.Ready = &ready
+		}
 		if d, ok := nestedCount(u.Object, "spec", "replicas"); ok {
 			row.Desired = &d
 		}

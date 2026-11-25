@@ -99,7 +99,7 @@ describe('Agent Sandbox refused suspension', () => {
     }
     expect(getAgentRuntimeStatus(sandbox)).toMatchObject({
       text: 'Suspension blocked',
-      level: 'alert',
+      level: 'degraded',
       message: 'Refused to delete pod because it is not owned by this sandbox. The conflicting Pod is "a". Check who owns it (kubectl get pod a -o jsonpath=\'{.metadata.ownerReferences}\') before removing it, or recreate the Sandbox under another name.',
     })
   })

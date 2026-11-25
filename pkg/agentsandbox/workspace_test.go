@@ -489,20 +489,19 @@ func TestAttentionOrderAcrossKinds(t *testing.T) {
 	for _, a := range s.Attention {
 		got = append(got, a.Subject.Name)
 	}
-	// failed (39h, newest failure) before bad-image (41h); the alert rows
-	// next; the claim the controller can't bind is a warning, so last.
-	want := []string{"failed", "bad-image", "foreign", "warm", "claim-missing-pool"}
+	// failed (39h, newest failure) before bad-image (41h); then the empty reserve alert and the two Issues warnings.
+	want := []string{"failed", "bad-image", "warm", "claim-missing-pool", "foreign"}
 	if !slices.Equal(got, want) {
 		t.Errorf("order %v, want %v", got, want)
 	}
 
-	// A stalled Sandbox is an alert, so a claim forwarding a failure (critical)
+	// A stalled Sandbox is a warning, so a claim forwarding a failure (critical)
 	// outranks it although the Sandbox list would come first by kind.
 	forwarded := claim("forwarded", time.Hour, conds(cnd("Ready", "False", "PodFailed", "Pod failed", time.Hour)))
 	in := Input{Now: now, Claims: full(forwarded), WarmPools: full(), Templates: full(), Controller: running(),
 		Sandboxes: full(sandbox("late", 2*time.Hour, conds(cnd("Ready", "False", "DependenciesNotReady", "", 2*time.Hour))))}
 	s = Summarize(in)
-	if len(s.Attention) != 2 || s.Attention[0].Subject.Kind != "SandboxClaim" || s.Attention[1].Rule != RuleStalled {
+	if len(s.Attention) != 2 || s.Attention[0].Subject.Kind != "SandboxClaim" || s.Attention[1].Rule != RuleStalled || s.Attention[1].Severity != SeverityWarning || !s.Attention[1].Issue {
 		t.Errorf("rows %+v", s.Attention)
 	}
 
@@ -574,7 +573,7 @@ func TestDeletingPoolRaisesNothing(t *testing.T) {
 
 func TestSeverityAndReasons(t *testing.T) {
 	s := Summarize(liveInput())
-	for name, want := range map[string]Severity{"failed": SeverityCritical, "bad-image": SeverityCritical, "claim-missing-pool": SeverityWarning, "foreign": SeverityAlert, "warm": SeverityAlert} {
+	for name, want := range map[string]Severity{"failed": SeverityCritical, "bad-image": SeverityCritical, "claim-missing-pool": SeverityWarning, "foreign": SeverityWarning, "warm": SeverityAlert} {
 		var got Severity
 		for _, a := range s.Attention {
 			if a.Subject.Name == name {
@@ -816,5 +815,28 @@ func TestJustHandedOutIsQuiet(t *testing.T) {
 	)
 	if row := rowFor(Summarize(in), "SandboxWarmPool", "warm"); row != nil {
 		t.Errorf("a refilling pool raised %+v", row)
+	}
+}
+
+func TestUnreportedWarmPoolReserve(t *testing.T) {
+	pending := pool("pending", "tmpl", 2, 0, time.Hour)
+	pending.Object["status"] = map[string]any{}
+	observed := pool("observed", "tmpl", 2, 0, time.Hour)
+	in := Input{Now: now, Sandboxes: full(), Claims: full(), WarmPools: full(pending, observed), Templates: full(template("tmpl")), Controller: running()}
+	s := Summarize(in)
+	if got := s.Counts.WarmPools; got.Ready != 0 || !got.ReadyLowerBound || got.Desired != 4 || got.DesiredLowerBound {
+		t.Fatalf("counts %+v", got)
+	}
+	for _, row := range s.WarmPools {
+		switch row.Name {
+		case "pending":
+			if row.Ready != nil || rowFor(s, "SandboxWarmPool", row.Name) != nil {
+				t.Fatalf("unreported pool %+v turned into empty reserve", row)
+			}
+		case "observed":
+			if row.Ready == nil || *row.Ready != 0 || rowFor(s, "SandboxWarmPool", row.Name) == nil {
+				t.Fatalf("expected controller-reported empty reserve: %+v", row)
+			}
+		}
 	}
 }

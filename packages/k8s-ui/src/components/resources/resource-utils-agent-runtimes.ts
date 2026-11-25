@@ -37,13 +37,13 @@ function findCondition(conditions: unknown, type: string): any | undefined {
 const SUSPENSION_BLOCKED = 'Suspension blocked'
 
 // The Pod the controller looks for; mirrors pkg/health sandboxPodName.
-function sandboxPodName(resource: any): string {
+export function sandboxPodName(resource: any): string {
   const annotated = resource?.metadata?.annotations?.['agents.x-k8s.io/pod-name']
   return typeof annotated === 'string' && annotated ? annotated : resource?.metadata?.name ?? ''
 }
 
 // Mirrors pkg/health PodOwnersCommand.
-function podOwnersCommand(namespace: string, name: string): string {
+export function podOwnersCommand(namespace: string, name: string): string {
   return `kubectl get pod ${name}${namespace ? ` -n ${namespace}` : ''} -o jsonpath='{.metadata.ownerReferences}'`
 }
 
@@ -197,8 +197,7 @@ export function getWorkerPoolSandboxConfig(resource: any): string {
 
 // Mirrors pkg/health ReadAgentSandbox, which the Issues and AI summaries use;
 // pkg/health/testdata/agent_sandbox.json pins both. The UI differs from the Go
-// levels in one place: `alert` for a retried controller error or an
-// unschedulable Pod.
+// levels for an unschedulable Pod until the workspace supplies its severity.
 
 // Ready=False reasons that describe a state someone chose and the controller
 // completed: an expiry, a Pod that ran to completion, a claim whose lifetime
@@ -237,7 +236,7 @@ function sandboxReadyStatus(resource: any, isClaim: boolean): StatusBadge {
     // does not own.
     const suspended = findCondition(conditions, 'Suspended')
     if (isClaim || suspended?.status === 'True') return badge('Suspended', 'neutral')
-    if (suspended?.status === 'False' && suspended?.reason === 'PodNotOwned') return badge(SUSPENSION_BLOCKED, 'alert')
+    if (suspended?.status === 'False' && suspended?.reason === 'PodNotOwned') return badge(SUSPENSION_BLOCKED, 'degraded')
     return badge('Suspending', 'degraded')
   }
   if (SANDBOX_SETTLED_REASONS[reason]) return badge(SANDBOX_SETTLED_REASONS[reason], 'neutral')
@@ -254,7 +253,7 @@ function sandboxReadyStatus(resource: any, isClaim: boolean): StatusBadge {
   }
   if (SANDBOX_PROGRESS_REASONS[reason]) return badge(SANDBOX_PROGRESS_REASONS[reason], 'degraded')
   // The controller retries these; a persistent one still deserves attention.
-  if (reason === 'ReconcilerError') return badge(reason, 'alert')
+  if (reason === 'ReconcilerError') return badge(reason, 'degraded')
   // A claim whose warm pool or template is missing binds once the reference is
   // fixed, so it reads as a warning, as its Issue and the workspace's row do.
   if (isClaim && (reason === 'WarmPoolNotFound' || reason === 'TemplateNotFound')) return badge(reason, 'degraded')
@@ -324,6 +323,15 @@ export function sandboxPodImagePullNextStep(reason: unknown, pod: any): string |
 // AGENT SANDBOX — SandboxWarmPool
 // ============================================================================
 
+function sandboxWarmPoolReady(resource: any): number | undefined {
+  return count(resource?.status?.readyReplicas)
+    ?? ((count(resource?.status?.observedGeneration) ?? 0) > 0 ? 0 : undefined)
+}
+
+export function getSandboxWarmPoolReadyOfDesired(resource: any): string {
+  return `${sandboxWarmPoolReady(resource) ?? '?'}/${count(resource?.spec?.replicas) ?? '?'}`
+}
+
 export function getSandboxWarmPoolStatus(resource: any): StatusBadge {
   if (resource?.metadata?.deletionTimestamp) return badge('Terminating', 'degraded')
   const status = resource?.status
@@ -333,9 +341,10 @@ export function getSandboxWarmPoolStatus(resource: any): StatusBadge {
   if (generation !== undefined && observed !== undefined && observed < generation) {
     return badge('Progressing', 'degraded')
   }
+  const ready = sandboxWarmPoolReady(resource)
+  if (ready === undefined) return badge('Readiness not reported', 'unknown')
   const desired = count(resource?.spec?.replicas)
   if (desired === 0) return (count(status.replicas) ?? 0) > 0 ? badge('Scaling down', 'degraded') : badge('Scaled to zero', 'neutral')
-  const ready = count(status.readyReplicas) ?? 0
   if (desired === undefined) return ready > 0 ? badge('Ready', 'healthy') : badge('Pending', 'degraded')
   return ready >= desired ? badge('Ready', 'healthy') : badge('Warming', 'degraded')
 }
@@ -411,7 +420,7 @@ export function getAgentRuntimeColumnValue(resource: any, column: string): strin
     }
   } else if (kind === 'SandboxWarmPool' && isAgentSandboxExtensionResource(resource)) {
     switch (column) {
-      case 'warmReady': return getReadyOfDesired(resource)
+      case 'warmReady': return getSandboxWarmPoolReadyOfDesired(resource)
       case 'template': return getSandboxWarmPoolTemplate(resource)
     }
   }
