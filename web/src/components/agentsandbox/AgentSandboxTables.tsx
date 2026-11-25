@@ -57,9 +57,15 @@ const countBadge = (n: number, partial: boolean) => (partial ? `≥${n}` : n)
 
 const RANK: Record<StatusBadge['level'], number> = { unhealthy: 0, alert: 1, degraded: 2, unknown: 3, healthy: 4, neutral: 5 }
 
-// These columns stay readable to the left of the overlay drawer at laptop widths.
-const INSPECTED_NAME_WIDTH = '9rem'
-const INSPECTED_STATE_WIDTH = '10.5rem'
+const INSPECTED_NAME_WIDTH = 'clamp(9rem, 11.25vw, 13rem)'
+const INSPECTED_STATE_WIDTH = 'clamp(10.5rem, 13vw, 16rem)'
+
+function useTableLayout(inspected: SelectedResource | null) {
+  const wide = useMediaQuery(AGENT_SANDBOX_WIDE)
+  // A secondary column takes spare width so the fixed columns stay to the left of the overlay.
+  const roomy = useMediaQuery('(min-width: 1600px)')
+  return { wide, compact: !!inspected && !roomy }
+}
 
 /** Rows that need a look first (using the server's escalated tone when present), then by namespace and name. */
 function byReading(rows: any[], levelOf: (row: any) => StatusBadge['level']): any[] {
@@ -122,7 +128,7 @@ export function stateMessage(o: any, status: StatusBadge): string | undefined {
 }
 
 /** The reading, with what explains it under it, unless another column already says it. */
-function StateCell({ o, status, requested, level, hideMessage }: { o: any; status: StatusBadge; requested?: string; level?: StatusBadge['level']; hideMessage?: boolean }) {
+function StateCell({ o, status, requested, level, hideMessage, compact }: { o: any; status: StatusBadge; requested?: string; level?: StatusBadge['level']; hideMessage?: boolean; compact: boolean }) {
   const message = hideMessage ? undefined : stateMessage(o, status)
   const rawMessage = hideMessage ? undefined : getAgentRuntimeStatus(o)?.message
   return (
@@ -133,7 +139,7 @@ function StateCell({ o, status, requested, level, hideMessage }: { o: any; statu
       </span>
       {message && (
         <Sub>
-          <Tooltip content={rawMessage || message}><span className="break-words">{message}</span></Tooltip>
+          <Tooltip content={rawMessage || message}><span className="break-words">{compact && status.text === 'Suspension blocked' ? 'Sandbox doesn’t own the Pod' : message}</span></Tooltip>
         </Sub>
       )}
     </>
@@ -195,7 +201,7 @@ export function SandboxesTable({ read, claims: claimsRead, onInspect, inspected,
     }
     return m
   }, [claimsRead])
-  const wide = useMediaQuery(AGENT_SANDBOX_WIDE)
+  const { wide, compact } = useTableLayout(inspected)
   const ownerOf = (o: any) => {
     const claim = claimFor.get(rowKey(o))
     return claim ? { kind: 'SandboxClaim', group: AGENT_SANDBOX_EXTENSIONS_GROUP, namespace: ns(o), name: nm(claim) } : sandboxController(o)
@@ -205,7 +211,7 @@ export function SandboxesTable({ read, claims: claimsRead, onInspect, inspected,
   const columns: TableColumn<any>[] = [
     {
       header: 'Sandbox',
-      width: inspected ? INSPECTED_NAME_WIDTH : wide ? '21%' : '29%',
+      width: compact ? INSPECTED_NAME_WIDTH : wide ? '21%' : '29%',
       cell: (o) => {
         const owner = wide ? undefined : ownerOf(o)
         return (
@@ -225,12 +231,12 @@ export function SandboxesTable({ read, claims: claimsRead, onInspect, inspected,
         )
       },
     },
-    { header: 'State', width: inspected ? INSPECTED_STATE_WIDTH : wide ? '33%' : '41%', cell: (o) => <StateCell o={o} status={getSandboxStatus(o)} requested={requestedMode(o)} level={server?.tones.get(objectKey('Sandbox', ns(o), nm(o)))} /> },
+    { header: 'State', width: compact ? INSPECTED_STATE_WIDTH : wide ? '33%' : '41%', cell: (o) => <StateCell o={o} status={getSandboxStatus(o)} requested={requestedMode(o)} level={server?.tones.get(objectKey('Sandbox', ns(o), nm(o)))} compact={compact} /> },
     ...(wide
       ? [
           {
             header: 'Claim or pool',
-            width: '17%',
+            width: compact ? undefined : '17%',
             cell: (o: any) => {
               const owner = ownerOf(o)
               if (!owner) return <OwnerAbsent o={o} claims={claimsRead} />
@@ -245,7 +251,7 @@ export function SandboxesTable({ read, claims: claimsRead, onInspect, inspected,
           { header: 'Expiry', width: '14%', cell: (o: any) => <ExpiryCell resource={o} claimed={ownerOf(o)?.kind === 'SandboxClaim'} /> },
           { header: 'Age', width: '8%', cell: (o: any) => <AgeCell o={o} /> },
         ]
-      : [{ header: 'Expiry, age', width: '21%', cell: (o: any) => <ExpiryAgeCell o={o} claimed={ownerOf(o)?.kind === 'SandboxClaim'} /> }]),
+      : [{ header: 'Expiry, age', width: compact ? undefined : '21%', cell: (o: any) => <ExpiryAgeCell o={o} claimed={ownerOf(o)?.kind === 'SandboxClaim'} /> }]),
     { header: '', width: wide ? '7%' : '9%', className: 'text-right', cell: () => <OpenCell /> },
   ]
   return (
@@ -275,7 +281,7 @@ export function ClaimsTable({ read, warmPools, onInspect, inspected, server, emp
   )
   const multi = manyNamespaces(rows)
   const pools = useMemo(() => new Set(readItems(warmPools).map(rowKey)), [warmPools])
-  const wide = useMediaQuery(AGENT_SANDBOX_WIDE)
+  const { wide, compact } = useTableLayout(inspected)
   const sandboxOf = (o: any) => {
     const name = claimSandboxName(o)
     return name ? { kind: 'Sandbox', group: AGENT_SANDBOX_GROUP, namespace: ns(o), name } : undefined
@@ -309,9 +315,9 @@ export function ClaimsTable({ read, warmPools, onInspect, inspected, server, emp
   }
 
   const columns: TableColumn<any>[] = [
-    { header: 'Claim', width: inspected ? INSPECTED_NAME_WIDTH : wide ? '19%' : '20%', cell: (o) => <NameCell o={o} multi={multi} /> },
-    { header: 'State', width: inspected ? INSPECTED_STATE_WIDTH : wide ? '25%' : '30%', cell: (o) => <StateCell o={o} status={getSandboxClaimStatus(o)} level={server?.tones.get(objectKey('SandboxClaim', ns(o), nm(o)))} hideMessage={reportsMissingPool(o)} /> },
-    { header: 'Warm pool & binding', width: wide ? '31%' : '24%', cell: (o) => (
+    { header: 'Claim', width: compact ? INSPECTED_NAME_WIDTH : wide ? '19%' : '20%', cell: (o) => <NameCell o={o} multi={multi} /> },
+    { header: 'State', width: compact ? INSPECTED_STATE_WIDTH : wide ? '25%' : '30%', cell: (o) => <StateCell o={o} status={getSandboxClaimStatus(o)} level={server?.tones.get(objectKey('SandboxClaim', ns(o), nm(o)))} hideMessage={reportsMissingPool(o)} compact={compact} /> },
+    { header: 'Warm pool & binding', width: compact ? undefined : wide ? '31%' : '24%', cell: (o) => (
       <div className="space-y-1">
         {poolCell(o)}
         <Sub>{bindingCell(o)}</Sub>
@@ -370,12 +376,12 @@ export function WarmPoolsTable({
     [read, server],
   )
   const multi = manyNamespaces(rows)
-  const wide = useMediaQuery(AGENT_SANDBOX_WIDE)
+  const { wide, compact } = useTableLayout(inspected)
   // Narrow: ready of desired under the state, the age under the name.
   const columns: TableColumn<any>[] = [
     {
       header: 'Warm pool',
-      width: inspected ? INSPECTED_NAME_WIDTH : wide ? '19%' : '24%',
+      width: compact ? INSPECTED_NAME_WIDTH : wide ? '19%' : '24%',
       cell: (o) => (
         <>
           <NameCell o={o} multi={multi} />
@@ -385,11 +391,11 @@ export function WarmPoolsTable({
     },
     {
       header: 'State',
-      width: inspected ? INSPECTED_STATE_WIDTH : wide ? '24%' : '28%',
+      width: compact ? INSPECTED_STATE_WIDTH : wide ? '24%' : '28%',
       cell: (o) => (
         <>
           <PoolStateBadge o={o} server={server} />
-          <PoolStateDetail o={o} server={server} />
+          <PoolStateDetail o={o} server={server} compact={compact} />
           {!wide && <Sub>{getSandboxWarmPoolReadyOfDesired(o)} ready</Sub>}
         </>
       ),
@@ -410,7 +416,7 @@ export function WarmPoolsTable({
       : []),
     {
       header: 'Template',
-      width: wide ? '17%' : '20%',
+      width: compact ? undefined : wide ? '17%' : '20%',
       cell: (o) => {
         const t = getSandboxWarmPoolTemplate(o)
         if (t === '-') return <Absent>no template</Absent>
@@ -492,7 +498,7 @@ export function poolNotReadyPath(namespace: string, name: string): string {
  * Under a pool's state, from the server's row about it: the cause (e.g.
  * scheduler verdict in plain words) and the sandboxes it names as not ready.
  */
-function PoolStateDetail({ o, server }: { o: any; server?: ServerReadings }) {
+function PoolStateDetail({ o, server, compact }: { o: any; server?: ServerReadings; compact: boolean }) {
   const navigate = useWorkspaceNavigate()
   const row = server?.rows.get(objectKey('SandboxWarmPool', ns(o), nm(o)))
   const reason = schedulerReason(row)
@@ -501,7 +507,7 @@ function PoolStateDetail({ o, server }: { o: any; server?: ServerReadings }) {
     <>
       {reason && (
         <Sub>
-          <Tooltip content={reason.raw}><span>Can’t schedule · {reason.plain}</span></Tooltip>
+          <Tooltip content={reason.raw}><span>{compact ? reason.plain : `Can’t schedule · ${reason.plain}`}</span></Tooltip>
         </Sub>
       )}
       {!reason && row?.rule === 'reserveBelowTarget' && row.reading && (
