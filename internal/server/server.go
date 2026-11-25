@@ -739,6 +739,11 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/vulnerabilities", s.handleVulnerabilities)
 			r.Get("/vulnerabilities/export", s.handleVulnerabilitiesExport)
 			r.Get("/vulnerabilities/java4shell", s.handleJava4Shell)
+			// On-demand in-cluster reachability probe for one exposed
+			// workload's routes: GET is the permission answer and the
+			// requests it would send, POST creates the probe Pods.
+			r.Get("/vulnerabilities/reachability/{kind}/{namespace}/{name}", s.handleVulnerabilityReachabilityPlan)
+			r.Post("/vulnerabilities/reachability/{kind}/{namespace}/{name}", s.handleVulnerabilityReachabilityRun)
 
 			// Network path trace - path-shaped diagnosis for Service /
 			// Ingress / HTTPRoute / GRPCRoute / Gateway. See internal/trace.
@@ -1573,6 +1578,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		VulnerabilitiesExport:       true,
 		RuntimeAdvisoryChecks:       true,
 		RuntimeAdvisoryProgress:     true,
+		VulnerabilityReachability:   true,
 	}
 }
 

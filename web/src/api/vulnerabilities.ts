@@ -471,3 +471,89 @@ export function readSettles(error: unknown): boolean {
   const code = error.data?.error_code
   return error.status === 409 || (error.status === 503 && (code === undefined || readActionFor(code) === 'retry'))
 }
+
+// GET + POST /api/vulnerabilities/reachability/{kind}/{namespace}/{name}:
+// the in-cluster reachability probe for one exposed workload's routes.
+
+export type VulnerabilityReachabilityOutcome = 'answered' | 'degraded' | 'no_answer' | 'not_run'
+
+/** One Service port behind a route, as the trace words it, and on a run what the probe saw. */
+export interface VulnerabilityReachabilityCheck {
+  route: string
+  target?: string
+  benign?: boolean
+  inClusterRequest?: { protocol?: string; scheme?: string; host?: string; path?: string; pathGuessed?: boolean }
+  outcome?: VulnerabilityReachabilityOutcome
+  /** What the probe saw: "HTTP 200", "TCP connection opened", "TCP: connection refused". */
+  detail?: string
+  /** The probe's own explanation when it didn't answer cleanly or didn't run. */
+  reason?: string
+  fallbackCommand?: string
+}
+
+export interface VulnerabilityReachabilityRoute {
+  route: VulnerabilityRoute
+  /** Why the route has no checks. */
+  note?: string
+  checks: VulnerabilityReachabilityCheck[]
+}
+
+/** The in-cluster probe's permission answer for the workload's namespace, the routes' checks, and on a run when it ran. */
+export interface VulnerabilityReachability {
+  allowed: boolean
+  reason?: string
+  cluster?: string
+  clusterKey?: string
+  namespace: string
+  maxProbes: number
+  routes?: VulnerabilityReachabilityRoute[]
+  checkedAt?: string
+}
+
+function reachabilityPath(w: VulnerabilityWorkloadRef): string {
+  return `/vulnerabilities/reachability/${encodeURIComponent(w.kind)}/${encodeURIComponent(w.namespace)}/${encodeURIComponent(w.name)}`
+}
+
+function reachabilityQuery(w: VulnerabilityWorkloadRef, routes: VulnerabilityRoute[], plan: boolean): string {
+  const params = new URLSearchParams()
+  if (w.group) params.set('group', w.group)
+  for (const r of routes) params.append('route', `${r.via}/${r.namespace}/${r.name}`)
+  if (plan) params.set('plan', '1')
+  return `${reachabilityPath(w)}?${params.toString()}`
+}
+
+/** Whether the caller may run the check. Creates nothing and sends no probes. */
+export function useVulnerabilityReachabilityCapability(w: VulnerabilityWorkloadRef, routes: VulnerabilityRoute[], enabled = true) {
+  const { guard, gatedKey, support } = useRadarFeature('vulnerabilityReachability')
+  const path = reachabilityQuery(w, routes, false)
+  const query = useQuery<VulnerabilityReachability>({
+    queryKey: ['vulnerability-reachability', path, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<VulnerabilityReachability>(path, signal)),
+    enabled: enabled && routes.length > 0 && support !== 'unsupported',
+    staleTime: 60_000,
+    retry: shouldRetryRadarQuery,
+  })
+  return { ...query, support }
+}
+
+/**
+ * The requests a run would send, for the consent screen. Creates nothing,
+ * but traces the routes with Radar's own probes, so it is fetched on a click.
+ */
+export function fetchVulnerabilityReachabilityPlan(w: VulnerabilityWorkloadRef, routes: VulnerabilityRoute[]): Promise<VulnerabilityReachability> {
+  return fetchJSON<VulnerabilityReachability>(reachabilityQuery(w, routes, true))
+}
+
+/** Runs the probe: creates up to maxProbes short-lived probe Pods in the workload's namespace. */
+export async function runVulnerabilityReachability(w: VulnerabilityWorkloadRef, routes: VulnerabilityRoute[]): Promise<VulnerabilityReachability> {
+  const response = await apiFetch(`${getApiBase()}${reachabilityPath(w)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ group: w.group || undefined, routes }),
+  })
+  if (!response.ok) {
+    const { body, unknownRoute } = await readErrorResponse(response)
+    throw new ApiError(body.error || httpStatusMessage(response.status, response.statusText), response.status, body, { unknownRoute })
+  }
+  return response.json()
+}

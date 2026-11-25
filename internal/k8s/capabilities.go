@@ -250,6 +250,8 @@ type FeatureCapabilities struct {
 	VulnerabilitiesExport   bool `json:"vulnerabilitiesExport"`   // GET /api/vulnerabilities/export
 	RuntimeAdvisoryChecks   bool `json:"runtimeAdvisoryChecks"`   // GET /api/vulnerabilities/java4shell
 	RuntimeAdvisoryProgress bool `json:"runtimeAdvisoryProgress"` // GET /api/vulnerabilities/java4shell/stream
+	// GET and POST /api/vulnerabilities/reachability/{kind}/{namespace}/{name}
+	VulnerabilityReachability bool `json:"vulnerabilityReachability"`
 	// GET /api/sealedsecrets/controller
 	SealedSecretsController bool `json:"sealedSecretsController"`
 }

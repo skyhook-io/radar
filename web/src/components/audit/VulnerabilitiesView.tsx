@@ -41,6 +41,7 @@ import {
   parseWorkloadParam,
   workloadParam,
   type VulnerabilitiesParams,
+  type ExposedWorkload,
   type VulnerabilityExportView,
   type VulnerabilitiesResponse,
   type VulnerabilityCVE,
@@ -55,6 +56,7 @@ import {
 import type { SelectedResource } from '../../types'
 import { EndOfLifeBadge, OPTIONAL_FILTERS, OptionalHead, availableColumns, columnsFor, daysSince, isoDate, optionalColumn, useOptionalColumns, useOptionalFilters } from '../vulnerabilities/columns'
 import { useConnection } from '../../context/ConnectionContext'
+import { ReachabilityBadge, ReachabilityCheck, ReachabilityScope, REACHABILITY } from '../vulnerabilities/reachability'
 import { useDesktopDownload } from '../../hooks/useDesktopDownload'
 import { ChecksViewTabs } from './ChecksViewTabs'
 import { Java4ShellPanel } from './Java4ShellPanel'
@@ -230,6 +232,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   const pageKey = JSON.stringify([view, namespaces, severities, fixableOnly, exposedOnly, eolOnly, query, workload])
   const fixChip = known && view !== 'fix'
   return (
+    <ReachabilityScope scope={connection.context}>
     <div aria-busy={isFetching} className="flex-1 flex flex-col min-h-0 p-4 gap-4 overflow-auto">
       <ChecksViewTabs />
       <PageHeader
@@ -396,6 +399,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
         </>
       )}
     </div>
+    </ReachabilityScope>
   )
 }
 
@@ -651,19 +655,40 @@ function Disclosure({ summary, children, flush = false }: { summary: React.React
 function WorkloadLinks({ workloads, onOpen, inline = false, exposure }: { workloads: VulnerabilityWorkloadRef[]; onOpen: (w: VulnerabilityWorkloadRef) => void; inline?: boolean; exposure?: ExposureLookup }) {
   return (
     <ul className={clsx('flex min-w-0', inline ? 'flex-wrap gap-x-4 gap-y-0.5' : 'flex-col gap-0.5')}>
-      {workloads.map((w) => {
-        const exposed = routesFor(exposure, w)
-        return (
-        <li key={`${w.namespace}/${w.kind}/${w.name}/${w.container ?? ''}`} className="flex min-w-0 items-baseline gap-1">
-          {exposed && <ExposedMark exposed={exposed} />}
-          <button type="button" onClick={() => onOpen(w)} className="group flex min-w-0 items-baseline gap-1.5 text-left text-xs">
-            <span className="truncate text-accent-text group-hover:underline">{w.name}</span>
-            <span className="shrink-0 text-theme-text-tertiary">{w.kind} · {w.namespace}{w.container ? ` · ${w.container}` : ''}</span>
-          </button>
-        </li>
-        )
-      })}
+      {workloads.map((w) => (
+        <WorkloadLink key={`${w.namespace}/${w.kind}/${w.name}/${w.container ?? ''}`} workload={w} exposed={routesFor(exposure, w)} onOpen={onOpen} />
+      ))}
     </ul>
+  )
+}
+
+// A workload link; an exposed one also offers the reachability check, which
+// opens on a line of its own.
+function WorkloadLink({ workload: w, exposed, onOpen }: { workload: VulnerabilityWorkloadRef; exposed?: ExposedWorkload; onOpen: (w: VulnerabilityWorkloadRef) => void }) {
+  const [checking, setChecking] = useState(false)
+  return (
+    <>
+      <li className="flex min-w-0 items-baseline gap-1">
+        {exposed && <ExposedMark exposed={exposed} />}
+        <button type="button" onClick={() => onOpen(w)} className="group flex min-w-0 items-baseline gap-1.5 text-left text-xs">
+          <span className="truncate text-accent-text group-hover:underline">{w.name}</span>
+          <span className="shrink-0 text-theme-text-tertiary">{w.kind} · {w.namespace}{w.container ? ` · ${w.container}` : ''}</span>
+        </button>
+        {exposed && (
+          <>
+            <span className="ml-1.5"><ReachabilityBadge workload={w} /></span>
+            <button type="button" aria-expanded={checking} onClick={() => setChecking((v) => !v)} className="ml-1.5 shrink-0 text-xs text-theme-text-tertiary hover:text-accent-text hover:underline">
+              {checking ? 'Hide reachability' : REACHABILITY.action}
+            </button>
+          </>
+        )}
+      </li>
+      {exposed && checking && (
+        <li className="basis-full rounded border border-theme-border bg-theme-surface px-2.5 py-2">
+          <ReachabilityCheck workload={w} routes={exposed.routes} routesTotal={exposed.routesTotal} />
+        </li>
+      )}
+    </>
   )
 }
 
@@ -992,12 +1017,15 @@ function WorkloadRoute({ workload: w, gaps }: { workload: VulnerabilityWorkload;
   const total = w.routesTotal ?? routes.length
   if (routes.length > 0) {
     return (
-      <WithTooltip tip={routesTip(routes, total)}>
-        <span className="flex min-w-0 items-center gap-1 truncate text-xs text-theme-text-secondary">
-          <ExposedMark tip={routesTip(routes, total)} />
-          {routeText(routes[0])}{total > 1 && <span className="text-theme-text-tertiary"> and {total - 1} more</span>}
-        </span>
-      </WithTooltip>
+      <span className="flex min-w-0 flex-col gap-0.5">
+        <WithTooltip tip={routesTip(routes, total)}>
+          <span className="flex min-w-0 items-center gap-1 truncate text-xs text-theme-text-secondary">
+            <ExposedMark tip={routesTip(routes, total)} />
+            {routeText(routes[0])}{total > 1 && <span className="text-theme-text-tertiary"> and {total - 1} more</span>}
+          </span>
+        </WithTooltip>
+        <ReachabilityBadge workload={w} />
+      </span>
     )
   }
   if (w.exposureUnknown || exposureUnknownIn(gaps, w.namespace)) {
@@ -1122,6 +1150,11 @@ function WorkloadUpgrades({ workload: w, routeColumn, active, severities, query,
           </span>
         </div>
       ))}
+      {(w.routes?.length ?? 0) > 0 && (
+        <div className={clsx(SUB, 'flex')}>
+          <ReachabilityCheck workload={ref} routes={w.routes ?? []} routesTotal={w.routesTotal} />
+        </div>
+      )}
       <div className={clsx(SUB, 'flex')}>{actions}</div>
     </>
   )

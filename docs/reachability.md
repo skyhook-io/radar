@@ -174,6 +174,15 @@ A real-traffic `reached` non-2xx (e.g. a 404) reads as healthy **coverage** with
 
 The UI shows the verdict at the top of the panel with a one-sentence reason. Treat *unknown* as a pause-and-investigate signal - it means the trace can't honestly answer the question, not that everything is fine.
 
+## From the Vulnerabilities page
+
+An exposed workload (one with a LoadBalancer, NodePort, Ingress or Gateway API route) offers **Check reachability** on the Vulnerabilities page. It runs the same in-cluster probe for the Service ports behind the workload's routes, through `GET|POST /api/vulnerabilities/reachability/{kind}/{namespace}/{name}`:
+
+- Only Services that select the workload's Pods are probed, so an Ingress in front of several workloads probes only this one.
+- Every probe Pod runs in the workload's namespace, at most 5 for the whole check, under the same permission check and consent dialog as the in-cluster test.
+- A result says what it proves: the Service answers from inside the cluster. The load balancer, node port, Ingress controller and access from the internet are not tested.
+- It runs only on a click. The last result stays in the browser tab; it is never stored, shown as a column or exported.
+
 ## MCP
 
 The general-purpose `diagnose` MCP tool collects a bounded, point-in-time evidence bundle for a narrowed target; it does not run an agent or promise a root-cause verdict. For network entry kinds it returns this reachability trace instead of the pod-log fan-out used for workloads. An agent that calls `diagnose(kind=service, ...)` gets the path-shaped answer in one call, along with `relatedIssues` for raw-issue follow-up. Pass `probe: true` to add the active reachability test from Radar's vantage. Pass `in_cluster: true` to run the probe from inside the cluster - Radar creates up to 5 short-lived, self-destructing probe pods (one per intended route) under the active Kubernetes identity's RBAC to test the real dataplane the API-server-proxy vantage can't reach (e.g. to confirm a route that came back `indirect`). This is the only mutating `diagnose` option; it needs `create jobs`, `list pods`, and `get pods/log`, and falls back to a copyable command when any permission is missing.
