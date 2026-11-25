@@ -43,9 +43,7 @@ interface ContainerStatus {
 export function runningPodDebugTargets(pod: PodDebugTarget): string[] | undefined {
   const os = pod.spec?.os?.name || pod.spec?.nodeSelector?.['kubernetes.io/os'] || pod.spec?.nodeSelector?.['beta.kubernetes.io/os']
   if (!pod.metadata.uid || pod.apiVersion !== 'v1' || pod.kind !== 'Pod' || pod.status.phase !== 'Running' || pod.metadata.deletionTimestamp || os?.toLowerCase() === 'windows') return undefined
-  const running = [...(pod.status.containerStatuses ?? []), ...(pod.status.initContainerStatuses ?? [])]
-    .filter(container => container.state?.running)
-  return getExecContainerNames(pod).filter(name => running.some(container => container.name === name))
+  return getExecContainerNames(pod, { runningOnly: true })
 }
 
 export function debugAccessMessage(readOnly: boolean, error: unknown, state: string | undefined, pod: PodDebugTarget | undefined) {

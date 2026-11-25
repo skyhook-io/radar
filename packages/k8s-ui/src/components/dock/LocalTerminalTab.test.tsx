@@ -281,3 +281,51 @@ it('refreshes command session context when reusing its tab without reconnecting'
   expect(element.textContent).toContain('Read-only'); expect(element.textContent).not.toContain('Read-write')
   expect(Socket.instances).toHaveLength(1); expect(createSession).toHaveBeenCalledOnce()
 })
+
+it('keeps the tab, picker, connection and future opens on the selected container', async () => {
+  let open!: ReturnType<typeof useOpenTerminal>
+  let dock!: ReturnType<typeof useDock>
+  const createSession = vi.fn(async (name: string) => ({ wsUrl: 'ws://localhost/' + name }))
+  function Host() {
+    open = useOpenTerminal()
+    dock = useDock()
+    return <>{dock.tabs.map(tab => <TerminalTab key={tab.id} namespace={tab.namespace!} podName={tab.podName!}
+      containerName={tab.containerName!} containers={tab.containers!} createSession={createSession}
+      onContainerChange={name => dock.setTerminalContainer(tab.id, name)} />)}</>
+  }
+  await act(async () => root.render(<DockProvider><Host /></DockProvider>))
+  const base = { namespace: 'demo', podName: 'checkout', podUID: 'same', containerName: 'api', containers: ['api', 'worker'] }
+  await act(async () => open(base))
+  const tabId = dock.activeTabId
+  const old = Socket.instances[0]
+  const select = element.querySelector('select')!
+  await act(async () => { select.value = 'worker'; select.dispatchEvent(new Event('change', { bubbles: true })) })
+  await act(async () => {
+    Socket.instances[1].onopen?.()
+    old.onmessage?.({ data: JSON.stringify({ type: 'error', data: 'stale error' }) })
+    old.onclose?.()
+  })
+  expect(select.value).toBe('worker')
+  expect(dock.tabs[0]).toMatchObject({ id: tabId, containerName: 'worker', title: 'checkout/worker' })
+  expect(createSession.mock.lastCall?.[0]).toBe('worker')
+  expect(element.querySelector('[title="Connected"]')).not.toBeNull()
+  expect(element.textContent).not.toContain('stale error')
+  await act(async () => open({ ...base, containerName: 'worker' }))
+  expect(dock.activeTabId).toBe(tabId)
+  expect(createSession).toHaveBeenCalledTimes(2)
+  await act(async () => open(base))
+  expect(dock.activeTabId).not.toBe(tabId)
+  expect(dock.tabs.map(tab => tab.title)).toEqual(['checkout/worker', 'checkout/api'])
+})
+
+it('ignores a previous Pod session that resolves after switching containers', async () => {
+  let resolveOld!: (session: { wsUrl: string }) => void
+  const createSession = (container: string) => container === 'api'
+    ? new Promise<{ wsUrl: string }>(resolve => { resolveOld = resolve })
+    : Promise.resolve({ wsUrl: 'ws://localhost/worker' })
+  await act(async () => root.render(<TerminalTab namespace="demo" podName="pod" containerName="api" containers={['api', 'worker']} createSession={createSession} />))
+  const select = element.querySelector('select')!
+  await act(async () => { select.value = 'worker'; select.dispatchEvent(new Event('change', { bubbles: true })) })
+  await act(async () => resolveOld({ wsUrl: 'ws://localhost/api' }))
+  expect(Socket.instances).toHaveLength(1)
+})

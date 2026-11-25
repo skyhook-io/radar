@@ -45,6 +45,7 @@ export interface DockContextValue {
   isResizing: boolean
   addTab: (tab: Omit<DockTab, 'id'>) => string
   setTabTitle: (id: string, title: string, titleTooltip?: string) => void
+  setTerminalContainer: (id: string, name: string) => void
   removeTab: (id: string) => void
   setActiveTab: (id: string) => void
   toggleExpanded: () => void
@@ -141,6 +142,14 @@ export function DockProvider({ children }: { children: ReactNode }) {
     setTabs(prev => prev.map(tab => tab.id === id ? { ...tab, title, titleTooltip } : tab))
   }, [])
 
+  const setTerminalContainer = useCallback((id: string, name: string) => {
+    setTabs(prev => prev.map(tab => {
+      if (tab.id !== id || tab.type !== 'terminal' || tab.shell || tab.debugSession || tab.containerName === name) return tab
+      const title = tab.title === `${tab.podName}/${tab.containerName}` ? `${tab.podName}/${name}` : tab.title
+      return { ...tab, containerName: name, title }
+    }))
+  }, [])
+
   const setActiveTab = useCallback((id: string) => {
     setActiveTabId(id)
   }, [])
@@ -166,6 +175,7 @@ export function DockProvider({ children }: { children: ReactNode }) {
       isResizing,
       addTab,
       setTabTitle,
+      setTerminalContainer,
       removeTab,
       setActiveTab,
       toggleExpanded,
