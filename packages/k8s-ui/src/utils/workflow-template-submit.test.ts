@@ -57,9 +57,14 @@ describe('Argo precedence', () => {
   it('leaves an input backed by a ConfigMap to it, ahead of its default', () => {
     const [p] = workflowTemplateParameters({ spec: { entrypoint: 'main', templates: [{ name: 'main', inputs: { parameters: [
       { name: 'env', default: 'staging', valueFrom: { configMapKeyRef: { name: 'c', key: 'env' } } },
+      { name: 'zone', value: 'a', valueFrom: { configMapKeyRef: { name: 'c', key: 'zone' } } },
     ] } }] } })
     expect(p).toMatchObject({ required: false, defaultValue: undefined, valueFromLabel: 'ConfigMap c, key env' })
-    expect(submittedParameters([p], initialParameterValues([p]))).toEqual({})
+    const both = workflowTemplateParameters({ spec: { entrypoint: 'main', templates: [{ name: 'main', inputs: { parameters: [
+      { name: 'env', default: 'staging', valueFrom: { configMapKeyRef: { name: 'c', key: 'env' } } },
+      { name: 'zone', value: 'a', valueFrom: { configMapKeyRef: { name: 'c', key: 'zone' } } },
+    ] } }] } })
+    expect(submittedParameters(both, initialParameterValues(both))).toEqual({})
   })
 
   it('binds an argument with the enum of the entrypoint input it feeds', () => {

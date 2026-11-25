@@ -137,22 +137,35 @@ func (s *Server) handleWorkflowTemplateSubmit(w http.ResponseWriter, r *http.Req
 		}
 		lookupInconclusive = !apierrors.IsNotFound(getErr)
 	}
+	// Every refusal below depends on the template as it is now. When an
+	// earlier attempt may have created its run and Radar couldn't look,
+	// "review again" or "fix the parameters" would start a second one.
+	unverified := func() bool {
+		if !lookupInconclusive {
+			return false
+		}
+		s.writeErrorCode(w, http.StatusConflict, "workflow_unverified", "Radar could not read workflow "+req.Name+" to tell whether an earlier attempt created it, and the template no longer accepts this request as sent; check the template's runs before submitting again")
+		return true
+	}
 	if req.ResourceVersion != "" && req.ResourceVersion != template.GetResourceVersion() {
-		if lookupInconclusive {
-			// "Review again" would start a second run if the first attempt
-			// did create one; Radar couldn't look.
-			s.writeErrorCode(w, http.StatusConflict, "workflow_unverified", "the workflow template changed, and Radar could not read workflow "+req.Name+" to tell whether an earlier attempt created it; check the template's runs before submitting again")
+		if unverified() {
 			return
 		}
 		s.writeErrorCode(w, http.StatusConflict, "workflow_template_changed", "the workflow template changed since you opened it; review it again before submitting")
 		return
 	}
 	if entrypoint, _, _ := unstructured.NestedString(template.Object, "spec", "entrypoint"); entrypoint == "" {
+		if unverified() {
+			return
+		}
 		s.writeErrorCode(w, http.StatusBadRequest, "workflow_template_no_entrypoint", "the workflow template has no entrypoint, so a Workflow that references it cannot start")
 		return
 	}
 	arguments, problems := workflowArguments(template, req.Parameters)
 	if len(problems) > 0 {
+		if unverified() {
+			return
+		}
 		s.writeErrorCode(w, http.StatusBadRequest, "invalid_parameters", strings.Join(problems, "; "))
 		return
 	}
@@ -160,6 +173,10 @@ func (s *Server) handleWorkflowTemplateSubmit(w http.ResponseWriter, r *http.Req
 	created, err := workflows.Create(r.Context(), workflowFromTemplate(template, req, arguments), metav1.CreateOptions{})
 	if apierrors.IsAlreadyExists(err) && req.Name != "" {
 		existing, getErr := workflows.Get(r.Context(), req.Name, metav1.GetOptions{})
+		if getErr != nil && req.Submission == "" {
+			s.writeErrorCode(w, http.StatusConflict, "workflow_name_taken", "a workflow with this name already exists; choose another name")
+			return
+		}
 		if getErr != nil {
 			// Possibly this request's own run, created before its answer was
 			// lost: never advise another name for a Workflow Radar can't see.

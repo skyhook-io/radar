@@ -93,9 +93,13 @@ export function workflowTemplateParameters(template: unknown): WorkflowTemplateP
       // Argo resolves a ConfigMap reference for a submitted run, ahead of an
       // input's default; other sources (supplied, event) have nothing to read.
       const fromConfigMap = Boolean((param.valueFrom as { configMapKeyRef?: unknown } | undefined)?.configMapKeyRef)
-      const defaultValue = has('value')
-        ? argoString(param.value) ?? ''
-        : !isArgument && !fromConfigMap && has('default') ? argoString(param.default) ?? '' : undefined
+      // An entrypoint input backed by a ConfigMap is left to it: any literal
+      // the form sent would replace the reference.
+      const defaultValue = !isArgument && fromConfigMap
+        ? undefined
+        : has('value')
+          ? argoString(param.value) ?? ''
+          : !isArgument && has('default') ? argoString(param.default) ?? '' : undefined
       // Argo's validation wants a literal value for an argument with an enum.
       const required = isArgument && enumValues.length > 0
         ? !has('value')

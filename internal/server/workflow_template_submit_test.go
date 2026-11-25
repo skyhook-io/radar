@@ -395,8 +395,25 @@ func TestWorkflowTemplateSubmit(t *testing.T) {
 		dyn.PrependReactor("get", "workflows", func(k8stesting.Action) (bool, runtime.Object, error) {
 			return true, nil, apierrors.NewForbidden(argoWorkflowGVR.GroupResource(), "migrate-k2x9q", errors.New("no get"))
 		})
-		rec := postSubmit(srv, `{"name":"migrate-k2x9q","submission":"confirmation-0001","resourceVersion":"7","parameters":{"target":"x"}}`, nil)
-		if rec.Code != http.StatusConflict || errorCode(t, rec) != "workflow_unverified" || !strings.Contains(rec.Body.String(), "migrate-k2x9q") || len(workflowCreates(dyn)) != 0 {
+		for _, body := range []string{
+			// The reviewed version is stale.
+			`{"name":"migrate-k2x9q","submission":"confirmation-0001","resourceVersion":"7","parameters":{"target":"x"}}`,
+			// No version, but the template now wants a parameter the request lacks.
+			`{"name":"migrate-k2x9q","submission":"confirmation-0001","parameters":{"mode":"apply"}}`,
+		} {
+			rec := postSubmit(srv, body, nil)
+			if rec.Code != http.StatusConflict || errorCode(t, rec) != "workflow_unverified" || !strings.Contains(rec.Body.String(), "migrate-k2x9q") || len(workflowCreates(dyn)) != 0 {
+				t.Fatalf("%s: status = %d: %s", body, rec.Code, rec.Body.String())
+			}
+		}
+	})
+	t.Run("a tokenless collision Radar can't read is still a taken name", func(t *testing.T) {
+		srv, dyn := workflowSubmitServer(t, submitTemplate("7", nil), testWorkflow("Running", ""))
+		dyn.PrependReactor("get", "workflows", func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewForbidden(argoWorkflowGVR.GroupResource(), "migrate-abcde", errors.New("no get"))
+		})
+		rec := postSubmit(srv, `{"name":"migrate-abcde","parameters":{"target":"x"}}`, nil)
+		if rec.Code != http.StatusConflict || errorCode(t, rec) != "workflow_name_taken" {
 			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 		}
 	})
