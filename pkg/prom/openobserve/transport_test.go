@@ -239,16 +239,22 @@ func TestRewritingTransportRefusesRules(t *testing.T) {
 	}
 }
 
-func TestRewritingTransportPassthrough(t *testing.T) {
-	for _, path := range []string{"/api/v1/metadata"} {
+// Metadata and metric-name listings come from the whole organization, with
+// nothing to narrow them to one cluster.
+func TestRewritingTransportRefusesOrgWideListings(t *testing.T) {
+	for path, want := range map[string]error{
+		"/api/v1/metadata":              ErrMetadataUnscoped,
+		"/api/v1/label/__name__/values": ErrMetricNamesUnscoped,
+		"/api/v1/label/__NAME__/values": ErrMetricNamesUnscoped,
+	} {
 		f := &fakeOO{body: `{"status":"success","data":{}}`}
 		rt, _ := newRewriting(t, f)
-		body, err := rt.Do(context.Background(), http.MethodGet, path, url.Values{"metric": {"Up"}})
-		if err != nil {
-			t.Fatal(err)
+		_, err := rt.Do(context.Background(), http.MethodGet, path, url.Values{"match[]": {`{__name__=~"up.*"}`}})
+		if !errors.Is(err, want) || !errors.Is(err, prom.ErrQueryRefused) {
+			t.Errorf("%s: err = %v, want %v", path, err, want)
 		}
-		if string(body) != f.body || f.last(t).params.Get("metric") != "Up" {
-			t.Fatalf("%s not passed through: %s %v", path, body, f.last(t).params)
+		if len(f.requests) != 0 {
+			t.Errorf("%s reached OpenObserve", path)
 		}
 	}
 }

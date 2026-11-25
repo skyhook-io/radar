@@ -1038,7 +1038,11 @@ clusters are dropped from answers. A query that would write a cluster label
 error, and so is `scalar()`: its bare number carries no cluster label to
 check, so query the vector instead (`sum(x)`, not `scalar(sum(x))`). A series
 or label lookup with no time range reads the last hour,
-because OpenObserve refuses one without it. Metric families the source doesn't collect show no data, and Settings →
+because OpenObserve refuses one without it. Metric metadata and the list of
+metric names aren't available: OpenObserve answers both for the whole
+organization, and no filter narrows them to one cluster. The AI's
+`discover_metrics` says so when asked for metric names; label values for a
+named metric still work. Metric families the source doesn't collect show no data, and Settings →
 Metrics lists them, under "OpenObserve · shared connection · matched by cluster
 ID" (or "matched by confirmed name").
 

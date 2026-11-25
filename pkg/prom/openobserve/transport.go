@@ -78,13 +78,24 @@ const (
 	pathQuery
 	pathSeries
 	pathLabels
-	pathPassthrough
 	pathRules
+	pathMetadata
 )
 
 // ErrRulesUnscoped refuses alerting and recording rules on a shared
 // OpenObserve: they can't be limited to one cluster.
 var ErrRulesUnscoped = errors.New("alerting and recording rules aren't available from a shared OpenObserve: they can't be limited to one cluster")
+
+// ErrMetadataUnscoped refuses metric metadata: OpenObserve answers it with
+// every metric name (and its help text) in the organization, whichever
+// cluster wrote it.
+var ErrMetadataUnscoped = errors.New("metric metadata isn't available from a shared OpenObserve: it lists every cluster's metric names")
+
+// ErrMetricNamesUnscoped refuses listing metric names (label __name__
+// values). OpenObserve answers it from the organization's stream list, which
+// no cluster matcher narrows (OpenObserve v1.2 rejects the matcher instead),
+// and a selector without a metric name can't be scoped either.
+var ErrMetricNamesUnscoped = errors.New("listing metric names isn't available from a shared OpenObserve: it can't be limited to one cluster. Query a metric by its name instead")
 
 func classifyPath(path string) (pathKind, string) {
 	switch path {
@@ -95,7 +106,7 @@ func classifyPath(path string) (pathKind, string) {
 	case "/api/v1/labels":
 		return pathLabels, path
 	case "/api/v1/metadata":
-		return pathPassthrough, path
+		return pathMetadata, path
 	case "/api/v1/rules":
 		return pathRules, path
 	}
@@ -129,6 +140,12 @@ func (t *RewritingTransport) Do(ctx context.Context, method, path string, params
 	// organization, with nothing Radar can filter on reliably.
 	if kind == pathRules {
 		return nil, &prom.RefusedError{Message: ErrRulesUnscoped.Error(), Err: ErrRulesUnscoped}
+	}
+	if kind == pathMetadata {
+		return nil, &prom.RefusedError{Message: ErrMetadataUnscoped.Error(), Err: ErrMetadataUnscoped}
+	}
+	if outPath == "/api/v1/label/__name__/values" {
+		return nil, &prom.RefusedError{Message: ErrMetricNamesUnscoped.Error(), Err: ErrMetricNamesUnscoped}
 	}
 
 	// Old stores answer a label-name listing from every series of the named
