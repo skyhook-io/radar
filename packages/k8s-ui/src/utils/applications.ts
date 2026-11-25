@@ -513,8 +513,8 @@ export function compareVersions(
 
 /** Coarse provenance bucket for the Source facet. Stable ids — display labels
  *  live in SOURCE_META (the house meta-map pattern), so they can be re-worded
- *  without breaking facet state or future URL serialization. */
-export type AppSource = "argocd" | "flux" | "helm" | "label" | "ungrouped";
+ *  without breaking facet state or URL serialization. */
+export type AppSource = "argocd" | "flux" | "helm" | "label" | "ungrouped" | "skyhook";
 
 export const SOURCE_ORDER: AppSource[] = [
   "argocd",
@@ -522,14 +522,16 @@ export const SOURCE_ORDER: AppSource[] = [
   "helm",
   "label",
   "ungrouped",
+  "skyhook",
 ];
 
-export const SOURCE_META: Record<AppSource, { label: string }> = {
+export const SOURCE_META: Record<AppSource, { label: string; hostManaged?: boolean }> = {
   argocd: { label: "Argo CD" },
   flux: { label: "Flux" },
   helm: { label: "Helm" },
   label: { label: "Label" },
   ungrouped: { label: "Ungrouped" },
+  skyhook: { label: "Skyhook", hostManaged: true },
 };
 
 interface TierMeta {
@@ -1743,12 +1745,24 @@ export interface AppClusterRef {
   health: AppHealth;
 }
 
+/** A version with the evidence behind it for one application environment. */
+export interface AppEnvironmentVersion {
+  /** Exact environment key from the entry's env slice. Empty is unlabeled. */
+  env: string;
+  version: string;
+  /** Whether the cluster reports the version or the host's configuration declares it. */
+  source: "observed" | "configured";
+}
+
 export interface FleetAppEntry extends AppEntryBase {
   variant: "fleet";
   envs: EnvSlice[];
   clusters: AppClusterRef[];
   /** True when the app runs different versions across its clusters/envs. */
   versionSkew: boolean;
+  /** Environment-specific tags for display, search and sorting. Keep all
+   *  observed tags in versions, including tags without an environment. */
+  envVersions?: AppEnvironmentVersion[];
 }
 
 export type AppEntry = SingleAppEntry | FleetAppEntry;
@@ -1800,9 +1814,8 @@ export function buildSingleAppEntry(
   };
 }
 
-/** The text an entry matches free-text search against — name, key, namespace,
- *  source/class/category labels, versions, env, workload kinds + identity. Pure
- *  and exported so the list core and tests share one definition. */
+/** Search terms for the application, workload identity and namespaces, facets,
+ *  and version facts (including environment tags). */
 export function searchTextForEntry(e: AppEntry): string {
   const workloadText = (e.row.workloads || []).flatMap((wl) => [
     wl.kind,
@@ -1825,6 +1838,7 @@ export function searchTextForEntry(e: AppEntry): string {
     ...e.classSet.map((c) => CLASS_META[c].label),
     CATEGORY_META[e.category].label,
     ...e.versions,
+    ...(e.variant === "fleet" ? e.envVersions?.flatMap((v) => [v.env, v.version]) ?? [] : []),
     ...envParts,
     ...Object.keys(e.kinds),
     ...workloadText,

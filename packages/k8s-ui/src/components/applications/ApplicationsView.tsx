@@ -4,7 +4,7 @@ import { ChevronRight, Layers, Boxes, HeartPulse, Shapes, Globe, Tag } from 'luc
 import { CollapseChevron } from '../ui/Collapse'
 import { clsx } from 'clsx'
 import { StatusDot, mapHealthToTone } from '../ui/status-tone'
-import { Tooltip } from '../ui/Tooltip'
+import { Tooltip, WithTooltip } from '../ui/Tooltip'
 import { EmptyState } from '../ui/EmptyState'
 import { BoardTableSkeleton, BoardRailSkeleton } from '../ui/BoardSkeleton'
 import { SearchBox } from '../ui/SearchBox'
@@ -17,6 +17,7 @@ import { TABLE_DENSITY } from '../ui/table-density'
 import { DistributionBar } from '../ui/DistributionBar'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { pluralize } from '../../utils/pluralize'
+import { midTruncate } from '../../utils/format'
 import {
   type AppEntry,
   type AppRow,
@@ -24,6 +25,7 @@ import {
   type AppWorkloadClass,
   type AppSource,
   type AppCategory,
+  type FleetAppEntry,
   HEALTH_ORDER,
   HEALTH_RANK,
   HEALTH_META,
@@ -83,6 +85,48 @@ function applicationRuntimeLabel(apps: AppRow[], workloadClass: AppWorkloadClass
   return labels.length === 1 ? labels[0] : 'Multiple batch states'
 }
 
+function FleetVersionCell({ entry }: { entry: FleetAppEntry }) {
+  const { versions, versionSkew, envVersions = [] } = entry
+  const observed = new Set(envVersions.filter(({ source }) => source === 'observed').map(({ version }) => version))
+  const unattributed = versions.filter((version) => !observed.has(version))
+  const plainVersions = unattributed.length === 1 ? (
+    <span className="font-mono text-xs text-theme-text-secondary">{unattributed[0]}</span>
+  ) : unattributed.length > 1 ? (
+    <Tooltip content={unattributed.join(', ')} delay={150}>
+      <span className={`${CHIP} ${CHIP_TONE.neutral}`}>{unattributed.length} versions</span>
+    </Tooltip>
+  ) : null
+  if (!versionSkew && envVersions.length === 0) return plainVersions ?? <span className="text-theme-text-tertiary">—</span>
+  return (
+    <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+      {versionSkew && (
+        <Tooltip content={`Version skew across clusters: ${versions.join(', ')}`} delay={150}>
+          <span className={`${CHIP} ${CHIP_TONE.amber}`}>version skew</span>
+        </Tooltip>
+      )}
+      {envVersions.map((v, i) => {
+        const tag = midTruncate(v.version, 20)
+        return (
+          <span key={`${v.env}:${i}`} className="whitespace-nowrap">
+            {i > 0 && <span className="mr-2 text-theme-text-tertiary" aria-hidden>·</span>}
+            <span className="text-theme-text-tertiary">{v.env || 'unlabeled'}</span>{' '}
+            <WithTooltip tip={tag !== v.version ? v.version : undefined} delay={150}>
+              <span className="font-mono text-theme-text-secondary">{tag}</span>
+            </WithTooltip>
+            {v.source === 'configured' && <span className="text-theme-text-tertiary"> (configured)</span>}
+          </span>
+        )
+      })}
+      {envVersions.length > 0 && plainVersions && (
+        <span className="inline-flex items-center gap-1 whitespace-nowrap">
+          <span className="text-theme-text-tertiary">Environment unknown</span>
+          {plainVersions}
+        </span>
+      )}
+    </span>
+  )
+}
+
 // ApplicationsView — the shared, variant-agnostic core behind the Applications
 // surface. It owns the entire list chassis: a health hero header (PageHeader +
 // SummaryTiles + DistributionBar), a left facet rail (Availability / Class /
@@ -117,9 +161,13 @@ function compareEntries(a: AppEntry, b: AppEntry, key: SortKey): number {
     case 'version': {
       // Sort by distinct-version count first (skewed apps cluster), then the
       // first tag for a stable, human-meaningful order.
-      const byCount = a.versions.length - b.versions.length
+      const aVersions = a.variant === 'fleet' && a.envVersions?.length
+        ? [...new Set([...a.versions, ...a.envVersions.map(({ version }) => version)])].sort() : a.versions
+      const bVersions = b.variant === 'fleet' && b.envVersions?.length
+        ? [...new Set([...b.versions, ...b.envVersions.map(({ version }) => version)])].sort() : b.versions
+      const byCount = aVersions.length - bVersions.length
       if (byCount !== 0) return byCount
-      return (a.versions[0] ?? '').localeCompare(b.versions[0] ?? '')
+      return (aVersions[0] ?? '').localeCompare(bVersions[0] ?? '')
     }
   }
 }
@@ -179,6 +227,15 @@ export interface ApplicationsViewProps {
   /** Lift matching applications above the remaining results, preserving the active sort.
    *  A family moves with all its children when any visible member matches. */
   pinnedSection?: { title: string; predicate: (entry: AppEntry) => boolean }
+  /**
+   * `all` (default) counts the base list after system-app visibility. `searchAndSource`
+   * counts text and Source matches for the header tiles, health distribution, and
+   * Status, Class, Type, and Environment facets before applying other filters.
+   * Selected health tiles stay visible at zero. Source counts always use the base
+   * list. In scoped mode, choosing a source dims the other Source options, and
+   * the Type facet is hidden when at most one category matches unless a Type is selected.
+   */
+  countsFrom?: 'all' | 'searchAndSource'
 }
 
 const APPS_FILTER_SCHEMA = defineFilterSchema({
@@ -191,7 +248,7 @@ const APPS_FILTER_SCHEMA = defineFilterSchema({
   system: { param: 'system', type: 'boolean' },
 })
 
-export function ApplicationsView({ entries: allEntries, variant, onSelect, title = 'Applications', description, emptySlot, headerActions, loading, renderRowLeading, pinnedSection }: ApplicationsViewProps) {
+export function ApplicationsView({ entries: allEntries, variant, onSelect, title = 'Applications', description, emptySlot, headerActions, loading, renderRowLeading, pinnedSection, countsFrom = 'all' }: ApplicationsViewProps) {
   // Facets + search + show-system live in the URL (shareable, bookmarkable) via
   // the shared filter-state contract. Sort stays local: it's a compound
   // {key, dir} view-preference, not a result-narrowing filter, so it isn't
@@ -218,16 +275,17 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
     [allEntries, showSystem, variant],
   )
   const systemCount = useMemo(() => (variant === 'single' ? allEntries.filter(isSystemApp).length : 0), [allEntries, variant])
+  const scoped = useMemo(() => {
+    const t = textFilter.trim().toLowerCase()
+    return all.filter((e) => (!fSource.size || fSource.has(e.source)) && (!t || searchTextForEntry(e).includes(t)))
+  }, [all, fSource, textFilter])
 
   const entries = useMemo(() => {
-    const t = textFilter.trim().toLowerCase()
-    const filtered = all.filter((e) => {
-      if (t && !searchTextForEntry(e).includes(t)) return false
+    const filtered = scoped.filter((e) => {
       if (fHealth.size && !fHealth.has(e.health)) return false
       // Inclusive: a mixed app matches the filter of ANY class it contains.
       if (fClass.size && !e.classSet.some((c) => fClass.has(c))) return false
       if (fType.size && !fType.has(e.category)) return false
-      if (fSource.size && !fSource.has(e.source)) return false
       if (fEnv.size && !entryEnvs(e).some((env) => fEnv.has(env))) return false
       return true
     })
@@ -238,7 +296,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
       filtered.sort((a, b) => (HEALTH_RANK[b.health] ?? 0) - (HEALTH_RANK[a.health] ?? 0) || a.row.name.localeCompare(b.row.name))
     }
     return filtered
-  }, [all, textFilter, fHealth, fEnv, fSource, fClass, fType, sort])
+  }, [scoped, fHealth, fEnv, fClass, fType, sort])
 
   // ── App groups ──────────────────────────────────────────────────────────────
   // Instances sharing a wire `identity` fold into one ladder row (foldAppGroups).
@@ -344,15 +402,16 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
     const source: Record<string, number> = {}
     const workloadClass: Record<string, number> = {}
     const category: Record<string, number> = {}
-    for (const e of all) {
+    for (const e of all) source[e.source] = (source[e.source] ?? 0) + 1
+    for (const e of (countsFrom === 'all' ? all : scoped)) {
       health[e.health] = (health[e.health] ?? 0) + 1
       for (const c of e.classSet) workloadClass[c] = (workloadClass[c] ?? 0) + 1
-      source[e.source] = (source[e.source] ?? 0) + 1
       category[e.category] = (category[e.category] ?? 0) + 1
       for (const en of entryEnvs(e)) env[en] = (env[en] ?? 0) + 1
     }
-    return { health, env, source, workloadClass, category }
-  }, [all])
+    const total = Object.values(health).reduce((a, b) => a + b, 0)
+    return { health, env, source, workloadClass, category, total }
+  }, [all, countsFrom, scoped])
 
   // asc → desc → off (null = default health-worst-first sort).
   const onSort = (key: SortKey) => {
@@ -363,10 +422,11 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
     })
   }
 
-  const total = all.length
-  const envOptions = Object.entries(counts.env)
-    .sort((a, b) => (envRank(b[0] === 'none' ? undefined : b[0]) ?? -1) - (envRank(a[0] === 'none' ? undefined : a[0]) ?? -1))
-    .map(([env, count]) => ({ value: env, label: env === 'none' ? 'unlabeled' : env, count }))
+  const filteredCounts = countsFrom === 'searchAndSource'
+  const total = filteredCounts ? counts.total : all.length
+  const envOptions = [...new Set([...Object.keys(counts.env), ...fEnv])]
+    .sort((a, b) => (envRank(b === 'none' ? undefined : b) ?? -1) - (envRank(a === 'none' ? undefined : a) ?? -1))
+    .map((env) => ({ value: env, label: env === 'none' ? 'unlabeled' : env, count: counts.env[env] ?? 0 }))
 
   // First fetch, nothing to show yet: drive the shape-stable skeleton. The
   // loaded state hides zero-count health tiles, so without this the header
@@ -377,8 +437,8 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
   const healthTile = (h: AppHealth, tone: SummaryTone) =>
     initialLoading && (h === 'healthy' || h === 'degraded' || h === 'unhealthy') ? (
       <SummaryTile key={h} label={HEALTH_META[h].label} value={0} tone={tone} loading />
-    ) : counts.health[h] ? (
-      <SummaryTile key={h} label={HEALTH_META[h].label} value={counts.health[h]} tone={tone} active={fHealth.has(h)} onClick={() => filters.toggle('health', h)} />
+    ) : counts.health[h] || (filteredCounts && fHealth.has(h)) ? (
+      <SummaryTile key={h} label={HEALTH_META[h].label} value={counts.health[h] ?? 0} tone={tone} active={fHealth.has(h)} onClick={() => filters.toggle('health', h)} />
     ) : null
 
   // showSystem lives in the Filters rail, so Clear resets it too (and its
@@ -449,9 +509,12 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
               <>
             <Facet icon={HeartPulse} title="Status" options={HEALTH_ORDER.map((h) => ({ value: h, label: HEALTH_META[h].label, count: counts.health[h] ?? 0, tone: HEALTH_TONE[h] }))} selected={fHealth} onToggle={(v) => filters.toggle('health', v)} />
             <Facet icon={Layers} title="Class" options={CLASS_ORDER.map((c) => ({ value: c, label: CLASS_META[c].label, count: counts.workloadClass[c] ?? 0 }))} selected={fClass} onToggle={(v) => filters.toggle('class', v)} />
-            <Facet icon={Shapes} title="Type" options={CATEGORY_ORDER.map((c) => ({ value: c, label: CATEGORY_META[c].label, count: counts.category[c] ?? 0, tooltip: CATEGORY_META[c].tooltip }))} selected={fType} onToggle={(v) => filters.toggle('type', v)} />
+            {/* A Type the filtered list has only one of isn't a choice: left out unless picked. */}
+            {(countsFrom === 'all' || fType.size > 0 || CATEGORY_ORDER.filter((c) => (counts.category[c] ?? 0) > 0).length > 1) && (
+              <Facet icon={Shapes} title="Type" options={CATEGORY_ORDER.map((c) => ({ value: c, label: CATEGORY_META[c].label, count: counts.category[c] ?? 0, tooltip: CATEGORY_META[c].tooltip }))} selected={fType} onToggle={(v) => filters.toggle('type', v)} />
+            )}
             <Facet icon={Globe} title="Environment" info={<EnvHint />} options={envOptions} selected={fEnv} onToggle={(v) => filters.toggle('env', v)} />
-            <Facet icon={Tag} title="Source" options={SOURCE_ORDER.map((s) => ({ value: s, label: SOURCE_META[s].label, count: counts.source[s] ?? 0 }))} selected={fSource} onToggle={(v) => filters.toggle('source', v)} />
+            <Facet icon={Tag} title="Source" options={SOURCE_ORDER.map((s) => ({ value: s, label: SOURCE_META[s].label, count: counts.source[s] ?? 0, dim: filteredCounts && fSource.size > 0 && !fSource.has(s) }))} selected={fSource} onToggle={(v) => filters.toggle('source', v)} />
             {systemCount > 0 && (
               <label className="flex cursor-pointer items-center gap-2 border-b border-theme-border px-3 py-2 text-[11px] text-theme-text-secondary hover:bg-theme-hover">
                 <input type="checkbox" checked={showSystem} onChange={(e) => filters.setBoolean('system', e.target.checked)} className="accent-skyhook-500" />
@@ -498,8 +561,8 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                 <EmptyState
                   tone="filtered"
                   variant="card"
-                  headline={total === 0 ? 'No applications detected yet' : 'No applications match the filters'}
-                  body={total === 0 ? 'Deploy services, workers, or jobs to this cluster to see them grouped by app.' : 'Clear the filters above.'}
+                  headline={all.length === 0 ? 'No applications detected yet' : 'No applications match the filters'}
+                  body={all.length === 0 ? 'Deploy services, workers, or jobs to this cluster to see them grouped by app.' : 'Clear the filters above.'}
                 />
               </div>
             )
@@ -556,6 +619,9 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                           <CollapseChevron open={r.expanded} className="h-3.5 w-3.5" />
                           {renderRowLeading && <RowLeading>{renderRowLeading(r.members[0], r.members)}</RowLeading>}
                           <span className="truncate font-semibold text-theme-text-primary">{r.label}</span>
+                          {SOURCE_META[r.members[0].source].hostManaged && r.members.every((member) => member.source === r.members[0].source) && (
+                            <ProvenanceBadge appKey={r.members[0].row.key} source={r.members[0].source} />
+                          )}
                           {r.workloadClass !== 'job' && <BatchSignalChip signal={firstBatchSignal(r.members.map((m) => m.row))} />}
                           <Tooltip
                             content={<AppIdentityTooltip identityKey={r.label} source={r.members[0]?.row.identity?.source} portable={r.members[0]?.row.identity?.portable} fleet={variant === 'fleet'} members={r.members.map((m) => ({ name: m.row.name, env: m.row.identity!.env, confidence: m.row.identity!.confidence, evidence: m.row.identity!.evidence }))} />}
@@ -636,7 +702,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                           {renderRowLeading && <RowLeading>{renderRowLeading(e)}</RowLeading>}
                           <span className="truncate font-medium text-theme-text-primary">{e.row.name}</span>
                           {e.workloadClass !== 'job' && <BatchSignalChip signal={batchSignalForApp(e.row)} />}
-                          <ProvenanceBadge tier={e.row.tier} appKey={e.row.key} confidence={e.row.confidence} />
+                          <ProvenanceBadge tier={e.row.tier} appKey={e.row.key} confidence={e.row.confidence} source={e.source} />
                           <CategoryChip category={e.category} addonReason={e.row.addonReason} />
                         </span>
                       </td>
@@ -704,23 +770,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                       <td className="px-2 py-2.5"><ClassBadge workloadClass={e.workloadClass} composition={e.classComposition} /></td>
                       <td className="px-2 py-2.5"><ApplicationRuntimeCell apps={[e.row]} workloadClass={e.workloadClass} ready={e.ready} desired={e.desired} /></td>
                       <td className="px-2 py-2.5">
-                        {e.variant === 'fleet' ? (
-                          e.versionSkew ? (
-                            <Tooltip content={`Version skew across clusters: ${e.versions.join(', ')}`} delay={150}>
-                              <span className={`${CHIP} ${CHIP_TONE.amber}`}>version skew</span>
-                            </Tooltip>
-                          ) : e.versions.length === 1 ? (
-                            <span className="font-mono text-xs text-theme-text-secondary">{e.versions[0]}</span>
-                          ) : e.versions.length > 1 ? (
-                            <Tooltip content={e.versions.join(', ')} delay={150}>
-                              <span className={`${CHIP} ${CHIP_TONE.neutral}`}>{e.versions.length} versions</span>
-                            </Tooltip>
-                          ) : (
-                            <span className="text-theme-text-tertiary">—</span>
-                          )
-                        ) : (
-                          <VersionInfo app={e.row} variant="cell" />
-                        )}
+                        {e.variant === 'fleet' ? <FleetVersionCell entry={e} /> : <VersionInfo app={e.row} variant="cell" />}
                       </td>
                       <td className="px-2 py-2.5">
                         {Object.keys(e.kinds).length === 0 ? (

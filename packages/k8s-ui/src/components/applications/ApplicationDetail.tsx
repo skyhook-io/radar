@@ -65,6 +65,7 @@ import { getKindLabel } from "../../utils/api-resources";
 import {
   type AppRow,
   type AppHistory,
+  type AppSource,
   type AppSourceRef,
   type AppWorkload,
   type AppBatchActivity,
@@ -351,6 +352,8 @@ type ApplicationDetailBaseProps = {
   /** Host-reported health for the header pill, including offline instances.
    *  For jobs, also hides the duplicate Runtime fact. */
   status?: AppHostStatus;
+  /** A host-managed source takes precedence over grouping evidence in the provenance badge. */
+  source?: AppSource;
   /** Show the listed tab IDs first, including `cost`. Unlisted tabs follow in their
    *  default order (built-ins, Cost, then extraViews in host order). */
   viewOrder?: string[];
@@ -465,6 +468,7 @@ export function ApplicationDetail({
   onOpenSource,
   headerActions,
   status,
+  source,
   viewOrder,
   selectedWorkloadKey,
   onSelectWorkload,
@@ -842,6 +846,7 @@ export function ApplicationDetail({
       {/* Context strip */}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-theme-border px-4 py-2 sm:px-6">
         <ProvenanceBadge
+          source={source}
           tier={app.tier}
           appKey={app.key}
           confidence={app.confidence}

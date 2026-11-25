@@ -1,11 +1,13 @@
 import { Tooltip } from '../ui/Tooltip'
 import {
   type AppRow,
+  type AppSource,
   type AppWorkloadClass,
   type BatchSignal,
   CHIP,
   CHIP_TONE,
   CLASS_META,
+  SOURCE_META,
   overlayProvenance,
 } from '../../utils/applications'
 import { midTruncate } from '../../utils/format'
@@ -15,7 +17,15 @@ import { ProvenanceTooltip, CategoryTooltip, VersionTooltip } from './AppTooltip
 // surfaces must render the same chip with the same tooltip for the same fact —
 // defining them once is what keeps that true.
 
-export function ProvenanceBadge({ tier, appKey, confidence }: { tier?: number; appKey: string; confidence?: string }) {
+export function ProvenanceBadge({ tier, appKey, confidence, source }: { tier?: number; appKey: string; confidence?: string; source?: AppSource }) {
+  if (source && SOURCE_META[source].hostManaged) {
+    const { label } = SOURCE_META[source]
+    return (
+      <Tooltip content={`Managed by ${label}.`} delay={150}>
+        <span className={`${CHIP} ${CHIP_TONE.emerald}`}>{label}</span>
+      </Tooltip>
+    )
+  }
   if (!tier) {
     return (
       <Tooltip content="No GitOps, Helm, or app-label grouping signal — shown as the raw workload." delay={150}>
