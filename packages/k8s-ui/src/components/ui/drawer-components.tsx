@@ -507,6 +507,12 @@ export interface Problem {
 export const OperationalIssuesShownContext = createContext(false)
 export const useOperationalIssuesShown = () => useContext(OperationalIssuesShownContext)
 
+// True when a composed Overview summary already owns problem presentation and
+// the current view is the secondary "Spec & status" tab. GenericRenderer reads
+// this so it doesn't repeat or contradict Overview's diagnosis banner.
+export const SummaryOwnsDiagnosisContext = createContext(false)
+export const useSummaryOwnsDiagnosis = () => useContext(SummaryOwnsDiagnosisContext)
+
 export function ProblemAlerts({ problems }: { problems: Problem[] }) {
   if (problems.length === 0) return null
 

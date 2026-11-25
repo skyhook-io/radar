@@ -45,7 +45,7 @@ export function useAgentSandboxSidebarWorkspace({
   const nsKey = namespaces.join(', ')
   return useMemo(() => {
     if (!available) return undefined
-    const total = sidebar ? sidebarCount(sidebar.total, ['row', 'rows'], sidebar.controller) : undefined
+    const total = sidebar ? sidebarCount(sidebar.total, ['attention item', 'attention items'], sidebar.controller) : undefined
     return {
       [AGENTS_SIDEBAR_CATEGORY]: {
         tools: 'Agent Sandbox',
@@ -53,6 +53,7 @@ export function useAgentSandboxSidebarWorkspace({
         count: total?.count,
         countLowerBound: total?.lowerBound,
         countTitle: total?.title,
+        countScope: nsKey ? `namespace ${nsKey}` : 'all namespaces',
         destinations: [
           { id: 'agent-sandbox-overview', label: AGENT_SANDBOX_OVERVIEW.label, section: AGENT_SANDBOX_SIDEBAR_SECTION, active: !!active, onSelect: () => navigate(AGENT_SANDBOX_OVERVIEW.path) },
           ...SCREENS.map(({ kind, key, label, path, noun }) => {

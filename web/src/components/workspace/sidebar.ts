@@ -34,14 +34,38 @@ export function mergeSidebarWorkspaces(list: (Workspaces | undefined)[]): Worksp
   return Object.fromEntries([...byCategory].map(([name, parts]) => [name, parts.length === 1 ? parts[0] : combine(parts)]))
 }
 
+function shortRuntimeName(tools?: string): string | undefined {
+  return tools ? tools.replace(/^Agent /, '') : undefined
+}
+
+function scopeOf(w: SidebarCategoryWorkspace): string | undefined {
+  if (w.countScope) return w.countScope
+  if (w.tools === 'Agent Substrate') return 'cluster-wide'
+  return undefined
+}
+
+function runtimeCountBreakdown(w: SidebarCategoryWorkspace): string {
+  const label = shortRuntimeName(w.tools)
+  const val = w.count === null ? 'unknown' : `${w.countLowerBound ? '≥' : ''}${w.count}`
+  const scope = scopeOf(w)
+  return [label ? `${label}: ${val}` : val, scope].filter(Boolean).join(' · ')
+}
+
 function combine(parts: SidebarCategoryWorkspace[]): SidebarCategoryWorkspace {
   const named = (w: SidebarCategoryWorkspace, text: string) => (w.tools ? `${w.tools}: ${text}` : text)
   // A part with no count yet adds nothing; an unknown one makes the sum a lower bound.
   const counted = parts.filter((w) => w.count !== undefined)
   const sum = counted.reduce((n, w) => n + (w.count ?? 0), 0)
   const lowerBound = counted.some((w) => w.count === null || w.countLowerBound)
-  const titles = counted.flatMap((w) => (w.countTitle ? [named(w, w.countTitle)] : []))
+  const breakdown = counted.map(runtimeCountBreakdown).join(' · ')
   const notes = parts.flatMap((w) => (w.scopeNote ? [named(w, w.scopeNote)] : []))
+  if (notes.length > 0) {
+    for (const w of parts) {
+      if (!w.scopeNote && scopeOf(w) === 'cluster-wide' && w.tools) {
+        notes.push(`${w.tools}: cluster-wide`)
+      }
+    }
+  }
   return {
     label: parts.find((w) => w.label)?.label,
     icon: parts.find((w) => w.icon)?.icon,
@@ -49,7 +73,7 @@ function combine(parts: SidebarCategoryWorkspace[]): SidebarCategoryWorkspace {
     destinations: parts.flatMap((w) => w.destinations),
     count: counted.length === 0 ? undefined : sum === 0 && lowerBound ? null : sum,
     countLowerBound: counted.length === 0 ? undefined : lowerBound,
-    countTitle: titles.length ? titles.join(' ') : undefined,
+    countTitle: counted.length ? `Attention items — ${breakdown}` : undefined,
     scopeNote: notes.length ? notes.join(' · ') : undefined,
   }
 }
