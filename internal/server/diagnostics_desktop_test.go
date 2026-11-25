@@ -195,7 +195,7 @@ func TestDiagnosticsConnectionUpdatesDuringCollection(t *testing.T) {
 	previousName := k8s.SetTestContextName("old")
 	t.Cleanup(func() { k8s.SetTestContextName(previousName) })
 	t.Cleanup(k8s.SetTestContextCount(25))
-	timeline.RecordDrop("Pod", "default", "old-pod", "no_diff", "update", k8s.ActiveClusterContext())
+	timeline.CaptureStore().RecordDrop("Pod", "default", "old-pod", "no_diff", "update", k8s.ActiveClusterContext())
 	t.Cleanup(func() { timeline.GetMetrics().Reset() })
 
 	for _, tc := range []struct {
@@ -349,7 +349,7 @@ func TestDiagnosticsWhileKubeconfigWriterIsBusy(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(restore)
-	timeline.RecordDrop("Pod", "default", "private-pod", "no_diff", "update", k8s.ActiveClusterContext())
+	timeline.CaptureStore().RecordDrop("Pod", "default", "private-pod", "no_diff", "update", k8s.ActiveClusterContext())
 	t.Cleanup(func() { timeline.GetMetrics().Reset() })
 
 	s := &Server{broadcaster: &SSEBroadcaster{}, diagConfig: &DiagConfig{Port: 9280}}

@@ -41,7 +41,7 @@ func TestMetricsReportTimelineOutage(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("InitStore: %v", err)
 	}
-	timeline.RecordDrop("Deployment", "shop", "web", timeline.DropReasonStoreDown, "update", "ctx")
+	timeline.CaptureStore().RecordDrop("Deployment", "shop", "web", timeline.DropReasonStoreDown, "update", "ctx")
 
 	out := scrapeMetrics(t)
 	if !strings.Contains(out, "radar_timeline_available 0") {

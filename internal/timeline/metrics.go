@@ -24,10 +24,6 @@ type EventMetrics struct {
 	// lastStoreFailure is when each kind last failed to store, kept apart
 	// from the RecentDrops ring so routine drops cannot push it out.
 	lastStoreFailure map[string]time.Time
-
-	// Query counters
-	EventsQueried  int64
-	EventsFiltered int64
 }
 
 // DropRecord records a single dropped event for debugging
@@ -115,11 +111,6 @@ func GetTotalDropCount() int64 {
 	return total
 }
 
-// RecordDrop records a dropped event with details for debugging
-func RecordDrop(kind, namespace, name, reason, operation, clusterContext string) {
-	CaptureStore().RecordDrop(kind, namespace, name, reason, operation, clusterContext)
-}
-
 func (b *StoreBinding) RecordDrop(kind, namespace, name, reason, operation, clusterContext string) {
 	m := b.metrics
 	m.mu.Lock()
@@ -200,8 +191,6 @@ func (m *EventMetrics) Reset() {
 	m.EventsRecorded = make(map[string]int64)
 	m.RecentDrops = make([]DropRecord, 0, m.maxRecentDrops)
 	m.lastStoreFailure = make(map[string]time.Time)
-	m.EventsQueried = 0
-	m.EventsFiltered = 0
 }
 
 // DropsForCluster returns only the drop records attributed to clusterContext.

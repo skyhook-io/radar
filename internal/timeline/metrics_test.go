@@ -12,11 +12,9 @@ func TestStoreBindingMetricsAcrossReset(t *testing.T) {
 	oldMetrics := GetMetrics()
 	old.IncrementReceived("Secret")
 	old.IncrementRecorded("Secret")
-	RecordDrop("Secret", "team-a", "db-creds", DropReasonNoisyFilter, "update", "cluster-a")
-	RecordDrop("ConfigMap", "team-a", "app-cfg", DropReasonAlreadySeen, "update", "cluster-a")
+	CaptureStore().RecordDrop("Secret", "team-a", "db-creds", DropReasonNoisyFilter, "update", "cluster-a")
+	CaptureStore().RecordDrop("ConfigMap", "team-a", "app-cfg", DropReasonAlreadySeen, "update", "cluster-a")
 	old.RecordDrop("Secret", "team-a", "db-creds", DropReasonStoreFailed, "delete", "cluster-a")
-	oldMetrics.EventsQueried = 2
-	oldMetrics.EventsFiltered = 1
 	if snap := oldMetrics.GetSnapshot(); len(snap.RecentDrops) != 3 || LastStoreFailure("Secret").IsZero() {
 		t.Fatalf("precondition: want 3 recent drops and a store failure, got %+v", snap)
 	}
@@ -28,8 +26,8 @@ func TestStoreBindingMetricsAcrossReset(t *testing.T) {
 	fresh := m.GetSnapshot()
 	maxUptime := time.Since(startTime)
 	if len(fresh.RecentDrops) != 0 || len(fresh.Counters.Dropped) != 0 || len(fresh.Counters.Recorded) != 0 || len(fresh.Counters.Received) != 0 ||
-		m.EventsQueried != 0 || m.EventsFiltered != 0 || !LastStoreFailure("Secret").IsZero() {
-		t.Fatalf("expected fresh metrics after ResetStore, got %+v, queried=%d, filtered=%d, last store failure=%v", fresh, m.EventsQueried, m.EventsFiltered, LastStoreFailure("Secret"))
+		!LastStoreFailure("Secret").IsZero() {
+		t.Fatalf("expected fresh metrics after ResetStore, got %+v, last store failure=%v", fresh, LastStoreFailure("Secret"))
 	}
 	if uptime, err := time.ParseDuration(fresh.Uptime); err != nil || uptime < minUptime || uptime > maxUptime || fresh.UptimeSec != int64(uptime.Seconds()) {
 		t.Fatalf("uptime after ResetStore = %q (%ds), want process uptime between %v and %v", fresh.Uptime, fresh.UptimeSec, minUptime, maxUptime)
@@ -58,11 +56,11 @@ func TestDropsForCluster_FiltersStaleClusterDrops(t *testing.T) {
 	ResetStore()
 	t.Cleanup(ResetStore)
 
-	RecordDrop("Secret", "team-a", "db-creds", DropReasonNoisyFilter, "update", "cluster-a")
+	CaptureStore().RecordDrop("Secret", "team-a", "db-creds", DropReasonNoisyFilter, "update", "cluster-a")
 	ResetStore()
-	RecordDrop("Secret", "team-a", "db-creds", DropReasonNoisyFilter, "update", "cluster-a")
+	CaptureStore().RecordDrop("Secret", "team-a", "db-creds", DropReasonNoisyFilter, "update", "cluster-a")
 	// And a genuine cluster-b drop.
-	RecordDrop("Pod", "team-b", "web", DropReasonAlreadySeen, "update", "cluster-b")
+	CaptureStore().RecordDrop("Pod", "team-b", "web", DropReasonAlreadySeen, "update", "cluster-b")
 
 	all := GetMetrics().GetSnapshot().RecentDrops
 	active := DropsForCluster(all, "cluster-b")

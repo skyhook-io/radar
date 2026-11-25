@@ -244,9 +244,11 @@ func testAdmittedInformerWrite(t *testing.T, cfg timeline.StoreConfig, kind, op 
 	if len(snap.RecentDrops) != 0 || len(snap.Counters.Dropped) != 0 || len(snap.Counters.Recorded) != 0 || len(snap.Counters.Received) != 0 || !failure.IsZero() {
 		t.Fatalf("retired callback changed replacement diagnostics: %+v, last store failure: %v", snap, failure)
 	}
-	if kind == "K8sEvent:Pod" {
-		if got := metricsA.GetSnapshot().Counters.Dropped[timeline.DropReasonStoreFailed]; got != 1 {
-			t.Fatalf("retired callback recorded %d store failures on A, want 1", got)
-		}
+	wantReason := timeline.DropReasonStoreFailed
+	if op == "update" {
+		wantReason = timeline.DropReasonNoDiff
+	}
+	if got := metricsA.GetSnapshot().Counters.Dropped; got[wantReason] != 1 || len(got) != 1 {
+		t.Fatalf("retired callback recorded drops %v on A, want one %s", got, wantReason)
 	}
 }
