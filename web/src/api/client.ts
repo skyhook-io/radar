@@ -4428,7 +4428,9 @@ export type MetricsDiscoveryOutcome = "connected" | "collector" | "none";
 // Discover metrics on an install that can also read OpenObserve. The connect
 // call asks Radar Hub for the source first (when connected to it), then looks
 // for Prometheus; with nothing found, it reports whether an OpenObserve
-// collector runs. The outcome is shown in place, so there are no toasts.
+// collector runs. The outcome and any failure are shown in place, so there
+// are no toasts. A 502 means discovery found no usable Prometheus, whose
+// reason the status error then shows; any other failure ends discovery.
 export function useDiscoverMetrics() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -4436,6 +4438,10 @@ export function useDiscoverMetrics() {
       const resp = await apiFetch(`${getApiBase()}/prometheus/connect`, {
         method: "POST",
       });
+      if (!resp.ok && resp.status !== 502) {
+        const body = await readErrorBody(resp);
+        throw new Error(body.error || `HTTP ${resp.status}`);
+      }
       if (resp.ok && hasPrometheusCharts((await resp.json()) as PrometheusStatus)) return "connected";
       try {
         const presence = await fetchJSON<{ detected: boolean }>("/metrics/openobserve/collector");

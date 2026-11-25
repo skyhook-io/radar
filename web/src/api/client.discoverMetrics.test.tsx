@@ -11,12 +11,14 @@ afterEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
 })
 
-async function discover(connect: Response, collector: Response) {
+async function discover(connect: Response | Error, collector: Response) {
   const calls: string[] = []
   vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (input, init) => {
     const url = String(input)
     calls.push(`${init?.method ?? 'GET'} ${url}`)
-    return url.includes('/prometheus/connect') ? connect : collector
+    if (!url.includes('/prometheus/connect')) return collector
+    if (connect instanceof Error) throw connect
+    return connect
   }))
   const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
   let mutate: (() => Promise<unknown>) | undefined
@@ -28,7 +30,7 @@ async function discover(connect: Response, collector: Response) {
   const root = createRoot(document.createElement('div'))
   await act(async () => { root.render(<QueryClientProvider client={client}><Probe /></QueryClientProvider>) })
   let outcome: unknown
-  await act(async () => { outcome = await mutate!() })
+  await act(async () => { outcome = await mutate!().catch((e: unknown) => e) })
   act(() => root.unmount())
   return { outcome, calls }
 }
@@ -54,4 +56,14 @@ it.each([
 ])('reports nothing found with %s', async (_, collector) => {
   const { outcome } = await discover(json({ available: true, connected: false }), collector)
   expect(outcome).toBe('none')
+})
+
+it.each([
+  ['the server refuses', json({ error: 'Not connected to a cluster' }, 503), 'Not connected to a cluster'],
+  ['the request fails', new TypeError('Failed to fetch'), 'Failed to fetch'],
+])('reports a failure instead of nothing found when %s', async (_, connect, message) => {
+  const { outcome, calls } = await discover(connect, json({ detected: true }))
+  expect(outcome).toBeInstanceOf(Error)
+  expect((outcome as Error).message).toBe(message)
+  expect(calls).toHaveLength(1)
 })
