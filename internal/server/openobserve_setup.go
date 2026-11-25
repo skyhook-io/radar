@@ -97,6 +97,30 @@ func openObserveTarget(target k8s.ProfileTarget) openobserve.Target {
 	return openobserve.Target{Context: target.Context, Fingerprint: target.Fingerprint, Client: openObserveKubeClient()}
 }
 
+// captureClusterReads is k8s.CaptureClusterReads; tests stand in a context
+// switch in progress.
+var captureClusterReads = k8s.CaptureClusterReads
+
+// currentOpenObserveTarget reads the current context and its Kubernetes
+// client together, while no context switch can run. Read apart, a switch
+// between them would pair one cluster's identity with another's client, and
+// the activator would remember the second cluster's ID under the first one's
+// fingerprint, so the first would use the second's match and metrics.
+func currentOpenObserveTarget() (k8s.ProfileTarget, openobserve.Target, error) {
+	var target k8s.ProfileTarget
+	var t openobserve.Target
+	var err error
+	if !captureClusterReads(func() {
+		target, err = k8s.CurrentProfileTarget()
+		if err == nil {
+			t = openObserveTarget(target)
+		}
+	}) {
+		return k8s.ProfileTarget{}, openobserve.Target{}, k8s.ErrContextConfigurationBusy
+	}
+	return target, t, err
+}
+
 func (s *Server) openObserveView(ctx context.Context) openObserveSetupView {
 	view := openObserveSetupView{}
 	cfg := config.Load().OpenObserve
@@ -128,7 +152,12 @@ func (s *Server) openObserveView(ctx context.Context) openObserveSetupView {
 		})
 		view.Connection = c
 	}
-	uid, err := s.openObserveClusterUID(ctx)
+	_, t, err := currentOpenObserveTarget()
+	if err != nil {
+		view.Cluster.Error = openObserveTargetError(err).Error()
+		return view
+	}
+	uid, err := s.openObserveClusterUID(ctx, t)
 	if err != nil {
 		view.Cluster.Error = err.Error()
 		return view
@@ -142,14 +171,16 @@ func (s *Server) openObserveView(ctx context.Context) openObserveSetupView {
 	return view
 }
 
-// openObserveClusterUID reads the current context's kube-system UID through
-// the activator, which remembers it per cluster.
-func (s *Server) openObserveClusterUID(ctx context.Context) (string, error) {
-	target, err := k8s.CurrentProfileTarget()
-	if err != nil {
-		return "", errors.New("Radar couldn't tell which cluster is current: " + prom.RedactURLs(err.Error()))
+func openObserveTargetError(err error) error {
+	if errors.Is(err, k8s.ErrContextConfigurationBusy) {
+		return errors.New("The current cluster is changing. Try again in a moment.")
 	}
-	t := openObserveTarget(target)
+	return errors.New("Radar couldn't tell which cluster is current: " + prom.RedactURLs(err.Error()))
+}
+
+// openObserveClusterUID reads t's kube-system UID through the activator,
+// which remembers it per cluster. t comes from currentOpenObserveTarget.
+func (s *Server) openObserveClusterUID(ctx context.Context, t openobserve.Target) (string, error) {
 	if t.Client == nil {
 		return "", errors.New("Radar isn't connected to this cluster yet.")
 	}
@@ -183,17 +214,16 @@ func (s *Server) handleOpenObserveSetup(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, http.StatusBadRequest, "The OpenObserve setup request isn't valid.")
 		return
 	}
-	target, err := k8s.CurrentProfileTarget()
+	target, t, err := currentOpenObserveTarget()
 	if err != nil {
 		s.connectionError(w, err)
 		return
 	}
-	t := openObserveTarget(target)
 	if t.Client == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Radar isn't connected to this cluster yet.")
 		return
 	}
-	uid, err := s.openObserveClusterUID(r.Context())
+	uid, err := s.openObserveClusterUID(r.Context(), t)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -244,12 +274,12 @@ func (s *Server) handleOpenObserveRemoveCluster(w http.ResponseWriter, r *http.R
 	if !s.requireOpenObserveWrite(w, r) {
 		return
 	}
-	target, err := k8s.CurrentProfileTarget()
+	target, t, err := currentOpenObserveTarget()
 	if err != nil {
 		s.connectionError(w, err)
 		return
 	}
-	uid, err := s.openObserveClusterUID(r.Context())
+	uid, err := s.openObserveClusterUID(r.Context(), t)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return

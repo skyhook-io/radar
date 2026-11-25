@@ -228,6 +228,37 @@ func TestOpenObserveSetupSavesAndNeverReturnsTheToken(t *testing.T) {
 	}
 }
 
+// TestOpenObserveWaitsOutAContextSwitch: while a context switch runs, the
+// current context and its client can't be read together, so nothing reads
+// the cluster ID (which the activator would remember under the wrong
+// cluster) and nothing is saved.
+func TestOpenObserveWaitsOutAContextSwitch(t *testing.T) {
+	s := setupOpenObserveTest(t)
+	saveOOForSetup(t, config.OpenObserveConfig{BaseURL: "https://oo.example.com", Org: "default", User: "sa@example.com", Token: "secret",
+		Matches: map[string]config.OpenObserveMatch{ooSetupUID: {Label: "radar_cluster_uid", Value: ooSetupUID, By: config.OpenObserveMatchByID}}})
+	previousCapture, previousClient := captureClusterReads, openObserveKubeClient
+	captureClusterReads = func(func()) bool { return false }
+	clientReads := 0
+	openObserveKubeClient = func() kubernetes.Interface { clientReads++; return previousClient() }
+	t.Cleanup(func() { captureClusterReads, openObserveKubeClient = previousCapture, previousClient })
+
+	if v := decodeOOView(t, ooRequest(s, http.MethodGet, "/api/integrations/openobserve", "")); !strings.Contains(v.Cluster.Error, "is changing") || v.Cluster.UID != "" {
+		t.Fatalf("view during a switch = %+v", v.Cluster)
+	}
+	if w := ooRequest(s, http.MethodPost, "/api/integrations/openobserve/setup", `{"baseUrl":"https://oo.example.com","user":"sa@example.com","token":"new"}`); w.Code != http.StatusConflict {
+		t.Fatalf("setup during a switch = %d %s", w.Code, w.Body.String())
+	}
+	if w := ooRequest(s, http.MethodDelete, "/api/integrations/openobserve/cluster", ""); w.Code != http.StatusConflict {
+		t.Fatalf("remove during a switch = %d %s", w.Code, w.Body.String())
+	}
+	if clientReads != 0 {
+		t.Fatalf("the cluster client was read %d times during a switch", clientReads)
+	}
+	if got := config.Load().OpenObserve; got == nil || got.Token != "secret" || len(got.Matches) != 1 {
+		t.Fatalf("a request during a switch changed the saved connection: %+v", got)
+	}
+}
+
 func TestOpenObserveWritesRefuseAClusterThePageDidNotShow(t *testing.T) {
 	s := setupOpenObserveTest(t)
 	entry := config.OpenObserveConfig{BaseURL: "http://oo.example", Org: "default", User: "sa@example.com", Token: "oo-secret",
