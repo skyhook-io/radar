@@ -30,12 +30,17 @@ const (
 	MetricsSourceOpenObserve = "openobserve"
 )
 
-// Hub has no channel to push configuration to the agent, so the agent asks.
-// A refresh nudge over the tunnel shortens the wait after a settings change.
+// The agent asks Hub for its metrics source only when something can have
+// changed it: at start, on each tunnel (re)connect, when Hub nudges it after a
+// settings change, and when the relay answers that this cluster is no longer
+// selected. Hub checks every relay request itself, so a missed change costs
+// chart errors until one of those moments, never another cluster's data. A
+// failed check is retried with backoff until one succeeds.
 var (
-	metricsSourcePollInterval = 30 * time.Second
-	metricsSourceMinPollGap   = 2 * time.Second
-	metricsSourceTimeout      = 10 * time.Second
+	metricsSourceMinPollGap = 2 * time.Second
+	metricsSourceRetryMin   = 30 * time.Second
+	metricsSourceRetryMax   = 5 * time.Minute
+	metricsSourceTimeout    = 10 * time.Second
 )
 
 var relayLabelName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
@@ -79,7 +84,7 @@ var metricsSourceNudges = struct {
 }{set: map[chan struct{}]struct{}{}}
 
 // RequestMetricsSourceRefresh makes every running poller ask Hub for the
-// metrics source now instead of at its next interval.
+// metrics source now.
 func RequestMetricsSourceRefresh() {
 	metricsSourceNudges.Lock()
 	defer metricsSourceNudges.Unlock()
@@ -132,21 +137,35 @@ func (p *metricsSourcePoller) run(ctx context.Context) {
 		metricsSourceNudges.Unlock()
 	}()
 
-	ticker := time.NewTicker(metricsSourcePollInterval)
-	defer ticker.Stop()
-	p.poll(ctx)
+	retry := metricsSourceRetryMin
+	ok := p.poll(ctx)
 	last := time.Now()
 	for {
+		var retryTimer *time.Timer
+		var retryAfter <-chan time.Time
+		if !ok {
+			retryTimer = time.NewTimer(retry)
+			retryAfter = retryTimer.C
+		}
 		select {
 		case <-ctx.Done():
+			if retryTimer != nil {
+				retryTimer.Stop()
+			}
 			return
-		case <-ticker.C:
+		case <-retryAfter:
+			retry = min(retry*2, metricsSourceRetryMax)
 		case <-p.nudge:
+			if retryTimer != nil {
+				retryTimer.Stop()
+			}
 			if wait := metricsSourceMinPollGap - time.Since(last); wait > 0 && !sleep(ctx, wait) {
 				return
 			}
 		}
-		p.poll(ctx)
+		if ok = p.poll(ctx); ok {
+			retry = metricsSourceRetryMin
+		}
 		last = time.Now()
 	}
 }
@@ -158,10 +177,10 @@ func (p *metricsSourcePoller) requestPoll() {
 	}
 }
 
-// poll reads the source and applies it when it changed. A failed read keeps
-// whatever is in effect: in particular it never turns an OpenObserve relay
-// back into the cluster's own Prometheus.
-func (p *metricsSourcePoller) poll(ctx context.Context) {
+// poll reads the source and applies it when it changed, and reports whether
+// the read succeeded. A failed read keeps whatever is in effect: in particular
+// it never turns an OpenObserve relay back into the cluster's own Prometheus.
+func (p *metricsSourcePoller) poll(ctx context.Context) bool {
 	resp, err := p.fetch(ctx)
 	if err == nil {
 		var decision MetricsSourceDecision
@@ -169,20 +188,21 @@ func (p *metricsSourcePoller) poll(ctx context.Context) {
 		if err == nil {
 			p.lastFailure = ""
 			if p.applied != nil && p.appliedKey == decision.Key && reflect.DeepEqual(*p.applied, decision.Response) {
-				return
+				return true
 			}
 			p.applied, p.appliedKey = &decision.Response, decision.Key
 			p.apply(decision)
-			return
+			return true
 		}
 	}
 	if ctx.Err() != nil {
-		return
+		return false
 	}
 	if msg := err.Error(); msg != p.lastFailure {
 		p.lastFailure = msg
 		log.Printf("[cloud] metrics source check failed; keeping the current source: %s", msg)
 	}
+	return false
 }
 
 func (p *metricsSourcePoller) fetch(ctx context.Context) (MetricsSourceResponse, error) {

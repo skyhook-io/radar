@@ -377,9 +377,9 @@ func TestHubRelayTransportRejectsRedirectAndForeignPath(t *testing.T) {
 }
 
 func TestRequestMetricsSourceRefreshPollsNow(t *testing.T) {
-	prevInterval, prevGap := metricsSourcePollInterval, metricsSourceMinPollGap
-	metricsSourcePollInterval, metricsSourceMinPollGap = time.Hour, 0
-	t.Cleanup(func() { metricsSourcePollInterval, metricsSourceMinPollGap = prevInterval, prevGap })
+	prevGap := metricsSourceMinPollGap
+	metricsSourceMinPollGap = 0
+	t.Cleanup(func() { metricsSourceMinPollGap = prevGap })
 
 	hub, srv := newFakeSourceHub(t)
 	p := newTestPoller(t, srv, func(MetricsSourceDecision) {})
@@ -397,6 +397,61 @@ func TestRequestMetricsSourceRefreshPollsNow(t *testing.T) {
 	})
 	RequestMetricsSourceRefresh()
 	waitUntil(t, func() bool { return hub.polls.Load() == 2 })
+}
+
+// Nothing but a start, a reconnect, a nudge or a not-selected relay answer
+// makes the agent ask again: a quiet cluster costs Hub nothing.
+func TestMetricsSourceNotPolledWhileNothingChanges(t *testing.T) {
+	prevGap, prevRetry := metricsSourceMinPollGap, metricsSourceRetryMin
+	metricsSourceMinPollGap, metricsSourceRetryMin = 0, 10*time.Millisecond
+	t.Cleanup(func() { metricsSourceMinPollGap, metricsSourceRetryMin = prevGap, prevRetry })
+
+	hub, srv := newFakeSourceHub(t)
+	p := newTestPoller(t, srv, func(MetricsSourceDecision) {})
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { p.run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+
+	waitUntil(t, func() bool { return hub.polls.Load() == 1 })
+	time.Sleep(100 * time.Millisecond)
+	if n := hub.polls.Load(); n != 1 {
+		t.Fatalf("polled %d times with nothing changed, want 1", n)
+	}
+	p.requestPoll()
+	waitUntil(t, func() bool { return hub.polls.Load() == 2 })
+}
+
+// A failed check (Hub unreachable at start, say) is retried until one
+// succeeds, then the agent goes quiet again.
+func TestMetricsSourceRetriedAfterFailedCheck(t *testing.T) {
+	prevGap, prevRetry, prevMax := metricsSourceMinPollGap, metricsSourceRetryMin, metricsSourceRetryMax
+	metricsSourceMinPollGap, metricsSourceRetryMin, metricsSourceRetryMax = 0, 5*time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() {
+		metricsSourceMinPollGap, metricsSourceRetryMin, metricsSourceRetryMax = prevGap, prevRetry, prevMax
+	})
+
+	hub, srv := newFakeSourceHub(t)
+	hub.mu.Lock()
+	hub.status = http.StatusServiceUnavailable
+	hub.mu.Unlock()
+	var applied atomic.Int32
+	p := newTestPoller(t, srv, func(MetricsSourceDecision) { applied.Add(1) })
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { p.run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+
+	waitUntil(t, func() bool { return hub.polls.Load() >= 3 })
+	hub.mu.Lock()
+	hub.status = 0
+	hub.mu.Unlock()
+	waitUntil(t, func() bool { return applied.Load() == 1 })
+	settled := hub.polls.Load()
+	time.Sleep(100 * time.Millisecond)
+	if n := hub.polls.Load(); n != settled {
+		t.Fatalf("kept polling after a successful check: %d -> %d", settled, n)
+	}
 }
 
 func waitUntil(t *testing.T, cond func() bool) {

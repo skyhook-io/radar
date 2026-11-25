@@ -135,6 +135,7 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 
+	var sourcePoller *metricsSourcePoller
 	if cfg.OnMetricsSource != nil {
 		poller, err := newMetricsSourcePoller(cfg)
 		if err != nil {
@@ -143,6 +144,7 @@ func Run(ctx context.Context, cfg Config) error {
 			pollCtx, stopPolling := context.WithCancel(ctx)
 			defer stopPolling()
 			go poller.run(pollCtx)
+			sourcePoller = poller
 		}
 	}
 
@@ -185,6 +187,11 @@ func Run(ctx context.Context, cfg Config) error {
 		connectedAt := time.Now()
 		if cfg.OnConnected != nil {
 			cfg.OnConnected()
+		}
+		// A settings change made while the tunnel was down sent its nudge to
+		// nobody.
+		if sourcePoller != nil {
+			sourcePoller.requestPoll()
 		}
 
 		if cfg.SelfUpgradeAvailable != nil {
