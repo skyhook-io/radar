@@ -179,6 +179,12 @@ describe('Workload metrics interpretation', () => {
     expect(html).toContain('Scope assertion discarded after reconnect')
     expect(html).not.toContain('Automatic metrics attribution')
   })
+  it('names OpenObserve, not an operator, when the scope comes from OpenObserve', () => {
+    result.data!.attribution = { scope: 'Scoped to this cluster through OpenObserve.' }
+    const html = render()
+    expect(html).toContain('scoped through OpenObserve')
+    expect(html).not.toContain('operator-asserted scope')
+  })
   it('explains withheld populations instead of suggesting instrumentation is absent', () => {
     result.data!.panels.requests = {state:'partial',unit:'requests/s',series:[],reason:'Multiple observation populations'}
     const html = render()

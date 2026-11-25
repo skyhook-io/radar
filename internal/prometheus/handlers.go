@@ -8,9 +8,11 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/portforward"
@@ -48,15 +50,41 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
+var openObservePath atomic.Pointer[func() string]
+
+// SetOpenObservePath installs the check that says how this install can get
+// OpenObserve metrics: "hub" (Radar Hub selects the source), "local" (Settings
+// → Metrics) or "" (it cannot). The server owns the answer; passing it in
+// avoids an import cycle.
+func SetOpenObservePath(fn func() string) {
+	openObservePath.Store(&fn)
+}
+
+type statusResponse struct {
+	prom.Status
+	OpenObserve string `json:"openobserve,omitempty"`
+}
+
 // handleStatus returns the current Prometheus connection status.
 func handleStatus(w http.ResponseWriter, r *http.Request) {
-	client, connectionErr := ClientForOperation()
-	if connectionErr != nil {
-		writeJSON(w, http.StatusOK, prom.Status{Available: false, Error: connectionErr.Error()})
-		return
+	var out statusResponse
+	if client, connectionErr := ClientForOperation(); connectionErr != nil {
+		out.Status = prom.Status{Available: false, Error: connectionErr.Error()}
+	} else {
+		out.Status = client.GetStatus()
 	}
-	writeJSON(w, http.StatusOK, client.GetStatus())
+	if fn := openObservePath.Load(); fn != nil {
+		out.OpenObserve = (*fn)()
+	}
+	writeJSON(w, http.StatusOK, out)
 }
+
+// checkHubMetricsSource is cloud.CheckMetricsSourceNow; a variable for tests.
+var checkHubMetricsSource = cloud.CheckMetricsSourceNow
+
+// hubMetricsSourceCheckWait covers Hub's own request timeout plus the
+// poller's minimum gap between requests.
+const hubMetricsSourceCheckWait = 12 * time.Second
 
 // handleConnect triggers Prometheus discovery and connection. The endpoint
 // has no body or query parameters — the Prometheus URL is configured at
@@ -72,6 +100,18 @@ func handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	optional := r.URL.Query().Get("optional") == "true"
+	if !optional {
+		// A user asking for discovery first gets Radar Hub's current choice:
+		// an OpenObserve source selected since the agent last asked serves
+		// right away. Automatic connects never ask Hub.
+		checkCtx, cancel := context.WithTimeout(ctx, hubMetricsSourceCheckWait)
+		checked := checkHubMetricsSource(checkCtx)
+		cancel()
+		if checked && RelayActive() {
+			writeJSON(w, http.StatusOK, client.GetStatus())
+			return
+		}
+	}
 	if optional {
 		ctx = withSuppressedDiscoveryDiagnostics(ctx)
 	} else {
@@ -661,6 +701,10 @@ func handleRawQuery(w http.ResponseWriter, r *http.Request) {
 	if queryType == "instant" {
 		result, err := client.Query(r.Context(), query)
 		if err != nil {
+			if msg, ok := QueryRefusal(err); ok {
+				writeError(w, http.StatusBadRequest, msg)
+				return
+			}
 			log.Printf("[prometheus] Raw instant query failed: %v", err)
 			errorlog.Record("prometheus", "error", "raw instant query failed: %v", err)
 			writeError(w, http.StatusBadGateway, "Prometheus query failed: "+err.Error())
@@ -676,12 +720,31 @@ func handleRawQuery(w http.ResponseWriter, r *http.Request) {
 
 	result, err := client.QueryRange(r.Context(), query, start, end, step)
 	if err != nil {
+		if msg, ok := QueryRefusal(err); ok {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
 		log.Printf("[prometheus] Raw range query failed: %v", err)
 		errorlog.Record("prometheus", "error", "raw range query failed: %v", err)
 		writeError(w, http.StatusBadGateway, "Prometheus query failed: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, boundRawResult(result, query, true))
+}
+
+// QueryRefusal reports whether err is a query refused as bad input (by
+// OpenObserve, Radar Hub's relay or the scoping in front of OpenObserve), and
+// the message to show the caller. A refusal is the caller's error, not a
+// failed backend.
+func QueryRefusal(err error) (string, bool) {
+	if !errors.Is(err, prom.ErrQueryRefused) {
+		return "", false
+	}
+	msg := strings.TrimPrefix(err.Error(), "openobserve: ")
+	if msg == "" {
+		return "The query was refused", true
+	}
+	return strings.ToUpper(msg[:1]) + msg[1:], true
 }
 
 func boundRawResult(result *prom.QueryResult, query string, isRange bool) RawQueryResponse {

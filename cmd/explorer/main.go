@@ -79,6 +79,10 @@ func main() {
 	if len(os.Args) >= 2 && os.Args[1] == "cloud" {
 		runCloudSubcommand()
 	}
+	// `radar openobserve <sub>` manages local Radar's shared OpenObserve connection.
+	if len(os.Args) >= 2 && os.Args[1] == "openobserve" {
+		runOpenObserveSubcommand()
+	}
 
 	// Load persistent config (~/.radar/config.json) for flag defaults.
 	// CLI flags override config file values.
@@ -647,6 +651,7 @@ func main() {
 				// only the image, leaving an older pod template in place.
 				SelfUpgradeAvailable: func() bool { return canSelfUpgrade(rootCtx, k8s.GetClient(), namespace, deploymentName) },
 				Handler:              srv.Handler(),
+				OnMetricsSource:      app.ApplyHubMetricsSource,
 			}
 			var runErr error
 			if cloudStart.mode == cloudEnrollMode {

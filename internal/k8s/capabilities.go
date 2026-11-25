@@ -277,6 +277,12 @@ type FeatureCapabilities struct {
 	WorkflowStop bool `json:"workflowStop"`
 	// POST /api/workflowtemplates/{namespace}/{name}/submit
 	WorkflowTemplateSubmit bool `json:"workflowTemplateSubmit"`
+
+	// GET /api/metrics/openobserve/collector.
+	OpenObserveCollectorPresence bool `json:"openobserveCollectorPresence"`
+	// GET/DELETE /api/integrations/openobserve, POST .../setup and DELETE
+	// .../cluster: local Radar's OpenObserve setup in Settings → Metrics.
+	OpenObserveLocalSetup bool `json:"openobserveLocalSetup"`
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can
