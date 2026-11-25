@@ -16,9 +16,7 @@ import (
 
 // A source is a scrape target, including its remote-write identity when present.
 // Matching a job alone could let one cluster's exporter vouch for another's.
-func podInventorySourceLabels(ctx context.Context) []string {
-	return append([]string{"job", "instance", "endpoint", "service", "prometheus", "prometheus_replica", "replica", "__replica__"}, partitionLabelsFor(ctx)...)
-}
+var podInventorySourceLabels = append([]string{"job", "instance", "endpoint", "service", "prometheus", "prometheus_replica", "replica", "__replica__"}, partitionLabels...)
 
 // Only a fully verified result supersedes the ordinary view decision. A
 // mixed-label store can still provide its original unverified local view.
@@ -55,8 +53,7 @@ func rightsizingOwnerPartition(ctx context.Context, q instantQuerier, namespace 
 		names[i] = regexp.QuoteMeta(pod.Name)
 	}
 	matchers := []viewMatcher{{label: "namespace", op: "=", value: namespace}, {label: "pod", op: "=~", value: strings.Join(names, "|")}}
-	sourceLabels := podInventorySourceLabels(ctx)
-	group := "namespace,pod,uid," + strings.Join(sourceLabels, ",")
+	group := "namespace,pod,uid," + strings.Join(podInventorySourceLabels, ",")
 	probes, err := planViewProbes([]viewProbePart{
 		{tag: viewScopeMetricLabel, metric: "kube_pod_info", head: "topk(257,count by (" + group + ") (", tail: "))", matchers: matchers},
 		{tag: viewScopeMetricLabel, metric: metricPodOwner, head: "topk(257,count by (" + group + ",owner_kind,owner_name) (", tail: "))",
@@ -91,7 +88,7 @@ func rightsizingOwnerPartition(ctx context.Context, q instantQuerier, namespace 
 		kind, name string
 	}
 	ownerOf := func(l map[string]string) owner {
-		return owner{subject{l["namespace"], l["pod"], identityKey(l, partitionLabelsFor(ctx))}, l["owner_kind"], l["owner_name"]}
+		return owner{subject{l["namespace"], l["pod"], identityKey(l, partitionLabels)}, l["owner_kind"], l["owner_name"]}
 	}
 	knownOwners := map[owner]bool{}
 	knownPods := map[subject]bool{}
@@ -113,7 +110,7 @@ func rightsizingOwnerPartition(ctx context.Context, q instantQuerier, namespace 
 		knownOwners[o], knownPods[o.subject] = true, true
 		strong = append(strong, row)
 	}
-	partition, _ := identifyPartition(ctx, anchors, strong)
+	partition, _ := identifyPartition(anchors, strong)
 	if len(partition) == 0 {
 		return nil, nil
 	}
@@ -137,7 +134,7 @@ func rightsizingOwnerPartition(ctx context.Context, q instantQuerier, namespace 
 			(l[viewScopeMetricLabel] == metricPodOwner && !knownOwners[o]) {
 			return nil, nil
 		}
-		sources[identityKey(l, sourceLabels)] = true
+		sources[identityKey(l, podInventorySourceLabels)] = true
 	}
 	if len(sources) == 0 {
 		return nil, nil
@@ -154,8 +151,7 @@ func rightsizingSourcesMatchNodes(ctx context.Context, q instantQuerier, at time
 	if err != nil {
 		return false, err
 	}
-	sourceLabels := podInventorySourceLabels(ctx)
-	group := strings.Join(sourceLabels, ",")
+	group := strings.Join(podInventorySourceLabels, ",")
 	observe := func(selector string) string {
 		if span > 0 {
 			return "present_over_time(" + selector + "[" + promSeconds(span) + "])"
@@ -203,7 +199,7 @@ func rightsizingSourcesMatchNodes(ctx context.Context, q instantQuerier, at time
 			if l["job"] == "" || l["instance"] == "" {
 				return false, nil
 			}
-			required[identityKey(l, sourceLabels)] = true
+			required[identityKey(l, podInventorySourceLabels)] = true
 		case "nodes":
 			nodeRows = append(nodeRows, row)
 		default:
@@ -221,7 +217,7 @@ func rightsizingSourcesMatchNodes(ctx context.Context, q instantQuerier, at time
 	seen := map[string]map[string]bool{}
 	for _, row := range nodeRows {
 		l := row.Labels
-		source := identityKey(l, sourceLabels)
+		source := identityKey(l, podInventorySourceLabels)
 		if !required[source] && l["provider_id"] == "" && l["system_uuid"] == "" {
 			continue
 		}
@@ -257,7 +253,7 @@ func rightsizingSourcesMatchNodes(ctx context.Context, q instantQuerier, at time
 // Every rightsizing interval with UID-less inventory needs a local Node witness
 // on that reporter. One overlap with current hardware allows normal Node churn.
 func rightsizingReportersContinuous(ctx context.Context, q instantQuerier, at time.Time, span time.Duration, matchers string, providers []string) (bool, error) {
-	group := strings.Join(podInventorySourceLabels(ctx), ",")
+	group := strings.Join(podInventorySourceLabels, ",")
 	step := promSeconds(rightsizingStep)
 	// Align the subquery outwards to include both partial edge intervals.
 	end := at.Truncate(rightsizingStep)

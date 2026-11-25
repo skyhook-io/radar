@@ -525,7 +525,7 @@ func TestUnlabeledPartitionFlightStaysInNamespace(t *testing.T) {
 
 func TestUnlabeledPartitionRequiresPodUID(t *testing.T) {
 	rows := []prom.Series{{Labels: map[string]string{"pod": "api-0"}}}
-	partition, _ := identifyPartitionWithUnlabeled(context.Background(), []prom.WorkloadPodIdentity{{Name: "api-0"}}, rows, true)
+	partition, _ := identifyPartitionWithUnlabeled([]prom.WorkloadPodIdentity{{Name: "api-0"}}, rows, true)
 	if len(partition) != 0 {
 		t.Fatalf("missing Pod UID became an unlabeled proof: %v", partition)
 	}

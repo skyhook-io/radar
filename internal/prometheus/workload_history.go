@@ -58,20 +58,12 @@ func (c *Client) historicalClusterProof(ctx context.Context, scope PodScope, cac
 	c.mu.RLock()
 	generation := c.discoveryGen
 	epoch := c.connectionEpoch
-	relay := c.relay != nil
-	// The memo and the flight are keyed by generation, which a relay change
-	// bumps, so the proof uses the relay state read with it.
-	if chosen, ok := ctx.Value(relayIdentityKey{}).(bool); ok && chosen != relay {
-		c.mu.RUnlock()
-		return workloadPartitionProof{}, fmt.Errorf("metrics connection changed")
-	}
 	if memo := c.workloadPartition; memo != nil && memo.generation == generation && memo.epoch == epoch && time.Now().Before(memo.expires) && !c.retired && len(memo.scope.ClusterLabels) > 0 {
 		proof := workloadPartitionProof{scope: memo.scope, unlabeled: memo.unlabeled}
 		c.mu.RUnlock()
 		return proof, nil
 	}
 	c.mu.RUnlock()
-	ctx = withRelayIdentity(ctx, relay)
 	anchors := append([]prom.WorkloadPodIdentity(nil), scope.Identities...)
 	if len(anchors) == 0 && cache != nil && cache.Pods() != nil {
 		pods, err := cache.Pods().Pods(scope.Namespace).List(labels.Everything())
@@ -160,7 +152,7 @@ func probeHistoricalPartition(ctx context.Context, client *prom.Client, namespac
 	for i, pod := range anchors {
 		names[i] = regexp.QuoteMeta(pod.Name)
 	}
-	query := "topk(257,count by (namespace,pod,uid," + strings.Join(partitionLabelsFor(ctx), ",") + ") (kube_pod_info{namespace=" + strconv.Quote(namespace) + ",pod=~" + strconv.Quote(strings.Join(names, "|")) + "}))"
+	query := "topk(257,count by (namespace,pod,uid," + strings.Join(partitionLabels, ",") + ") (kube_pod_info{namespace=" + strconv.Quote(namespace) + ",pod=~" + strconv.Quote(strings.Join(names, "|")) + "}))"
 	result, err := client.QueryEvidence(ctx, query)
 	if err != nil {
 		return workloadPartitionProof{}, err
@@ -168,7 +160,7 @@ func probeHistoricalPartition(ctx context.Context, client *prom.Client, namespac
 	if result.ResultType != "vector" || len(result.Series) > 256 {
 		return workloadPartitionProof{}, nil
 	}
-	partition, _ := identifyPartitionWithUnlabeled(ctx, anchors, result.Series, true)
+	partition, _ := identifyPartitionWithUnlabeled(anchors, result.Series, true)
 	proof := workloadPartitionProof{scope: prom.WorkloadMetricsScope{ClusterLabels: partition}}
 	for _, value := range partition {
 		if value == "" {
@@ -182,10 +174,9 @@ func probeHistoricalPartition(ctx context.Context, client *prom.Client, namespac
 	// fallback. An ambiguous UID, a truncated answer or an unlabeled store
 	// must retain its original decision.
 	if len(partition) == 0 && len(result.Series) > 0 {
-		labels := partitionLabelsFor(ctx)
-		emptyPartition := identityKey(nil, labels)
+		emptyPartition := identityKey(nil, partitionLabels)
 		for _, row := range result.Series {
-			if row.Labels["uid"] != "" || identityKey(row.Labels, labels) == emptyPartition {
+			if row.Labels["uid"] != "" || identityKey(row.Labels, partitionLabels) == emptyPartition {
 				return proof, nil
 			}
 		}

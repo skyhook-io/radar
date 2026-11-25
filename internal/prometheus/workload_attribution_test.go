@@ -243,7 +243,7 @@ func TestAttributionTwoLabelPartition(t *testing.T) {
 		{Labels: map[string]string{"pod": pod.Name, "uid": "foreign", "cluster": "a", "cluster_id": "2"}},
 		{Labels: map[string]string{"pod": pod.Name, "uid": "foreign", "cluster": "b", "cluster_id": "1"}},
 	}
-	labels, pods := identifyPartition(context.Background(), []prom.WorkloadPodIdentity{pod}, rows)
+	labels, pods := identifyPartition([]prom.WorkloadPodIdentity{pod}, rows)
 	if len(labels) != 2 || len(pods) != 1 {
 		t.Fatalf("two-label partition: %v %v", labels, pods)
 	}
@@ -378,16 +378,16 @@ func TestAttributionPartitionConflicts(t *testing.T) {
 	pods := []prom.WorkloadPodIdentity{{Name: "api-0", UID: "030a7597-c1fc-48b0-9bb4-683489285358"}}
 	local := prom.Series{Labels: map[string]string{"pod": "api-0", "uid": pods[0].UID, "cluster": "local"}}
 	foreign := prom.Series{Labels: map[string]string{"pod": "api-0", "uid": "foreign", "cluster": "foreign"}}
-	labels, matched := identifyPartition(context.Background(), pods, []prom.Series{local, foreign})
+	labels, matched := identifyPartition(pods, []prom.Series{local, foreign})
 	if labels["cluster"] != "local" || len(matched) != 1 {
 		t.Fatalf("failed partition: %v %v", labels, matched)
 	}
 	foreign.Labels["cluster"] = "local"
-	if labels, _ := identifyPartition(context.Background(), pods, []prom.Series{local, foreign}); len(labels) != 0 {
+	if labels, _ := identifyPartition(pods, []prom.Series{local, foreign}); len(labels) != 0 {
 		t.Fatalf("accepted colliding partition %v", labels)
 	}
 	delete(local.Labels, "cluster")
-	if labels, _ := identifyPartition(context.Background(), pods, []prom.Series{local}); len(labels) != 0 {
+	if labels, _ := identifyPartition(pods, []prom.Series{local}); len(labels) != 0 {
 		t.Fatalf("invented local trust %v", labels)
 	}
 }
@@ -435,7 +435,7 @@ func TestPartitionRequiresClusterAlongsideProjectAndLocation(t *testing.T) {
 	pods := []prom.WorkloadPodIdentity{{Name: "api-0", UID: "local"}}
 	local := map[string]string{"pod": "api-0", "uid": "local", "project_id": "alpha", "location": "east"}
 	for _, allowUnlabeled := range []bool{false, true} {
-		if got, _ := identifyPartitionWithUnlabeled(context.Background(), pods, []prom.Series{{Labels: local}}, allowUnlabeled); len(got) > 0 {
+		if got, _ := identifyPartitionWithUnlabeled(pods, []prom.Series{{Labels: local}}, allowUnlabeled); len(got) > 0 {
 			t.Fatalf("qualified an unknown cluster: %v", got)
 		}
 	}
@@ -443,11 +443,11 @@ func TestPartitionRequiresClusterAlongsideProjectAndLocation(t *testing.T) {
 	foreign := maps.Clone(local)
 	foreign["uid"], foreign["location"] = "foreign", "west"
 	want := map[string]string{"cluster": "prod", "project_id": "alpha", "location": "east"}
-	if got, _ := identifyPartition(context.Background(), pods, []prom.Series{{Labels: local}, {Labels: foreign}}); !maps.Equal(got, want) {
+	if got, _ := identifyPartition(pods, []prom.Series{{Labels: local}, {Labels: foreign}}); !maps.Equal(got, want) {
 		t.Fatalf("partition = %v, want %v", got, want)
 	}
 	foreign["uid"] = "local"
-	if got, _ := identifyPartition(context.Background(), pods, []prom.Series{{Labels: local}, {Labels: foreign}}); len(got) > 0 {
+	if got, _ := identifyPartition(pods, []prom.Series{{Labels: local}, {Labels: foreign}}); len(got) > 0 {
 		t.Fatalf("accepted inconsistent qualifier for same local UID: %v", got)
 	}
 }
