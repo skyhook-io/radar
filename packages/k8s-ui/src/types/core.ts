@@ -61,6 +61,8 @@ export interface WorkloadWritePermissions {
   rollouts: boolean
   /** Absent from a Radar older than Workflow Stop; treat absence as not allowed. */
   workflows?: boolean
+  /** Can create Argo Workflows (submit a WorkflowTemplate). Absent from an older Radar; treat absence as not allowed. */
+  createWorkflows?: boolean
 }
 
 export type WorkloadContainerType = 'container' | 'initContainer'
@@ -239,6 +241,7 @@ export interface FeatureCapabilities {
   cronJobTriggerJobName?: boolean
   sealedSecretsCert?: boolean // GET /api/sealedsecrets/cert
   workflowStop?: boolean // POST /api/workflows/{namespace}/{name}/stop
+  workflowTemplateSubmit?: boolean // POST /api/workflowtemplates/{namespace}/{name}/submit
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.

@@ -18,6 +18,7 @@ import { kueueQueueRetryable } from '@skyhook-io/k8s-ui/utils/kueue-queue-worklo
 import { canonicalReadCode, readActionFor } from '@skyhook-io/k8s-ui/utils/read-actions'
 import type { SearchCoverage } from '@skyhook-io/k8s-ui/types/read-coverage'
 import type { GitOpsWriteEvidence } from '@skyhook-io/k8s-ui/utils/gitops-write-guard'
+import { isAmbiguousSubmitError, type SubmittedWorkflow, type WorkflowTemplateSubmission } from '@skyhook-io/k8s-ui/utils/workflow-template-submit'
 import type {
   AppHistory,
   AppRow,
@@ -8575,6 +8576,46 @@ export function useWorkloadPods(
     staleTime: 10000, // 10 seconds - pods can change
     refetchInterval: (query) => workloadPodsRefetchInterval(query.state.error, options),
     retry: options?.ownerUID ? (count, error) => !isStableClientError(error) && count < 2 : undefined,
+  });
+}
+
+// POST /api/workflowtemplates/{namespace}/{name}/submit
+//
+// Creates a Workflow that runs the template, as the caller. When the request
+// fails without a definite answer (network error, timeout or 5xx), refreshes
+// the template's run list so the user can check whether the run started.
+export function useSubmitWorkflowTemplate() {
+  const queryClient = useQueryClient();
+  const { guard } = useRadarFeature("workflowTemplateSubmit");
+  return useMutation({
+    mutationFn: ({ namespace, name, runName, parameters }: WorkflowTemplateSubmission) =>
+      guard(() =>
+        fetchJSON<SubmittedWorkflow>(
+          `/workflowtemplates/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/submit`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              ...(runName ? { name: runName } : {}),
+              ...(Object.keys(parameters).length > 0 ? { parameters } : {}),
+            }),
+          },
+        ),
+      ),
+    meta: { errorMessage: "Could not submit the workflow template" },
+    onError: (error, variables) => {
+      if (isAmbiguousSubmitError(error)) {
+        void queryClient.invalidateQueries({
+          queryKey: ["workload-runs", "workflowtemplates", variables.namespace, variables.name],
+        });
+      }
+    },
+    onSuccess: (run, variables) => {
+      showApiSuccess("Workflow submitted", `${run.namespace}/${run.name}`);
+      void queryClient.invalidateQueries({
+        queryKey: ["workload-runs", "workflowtemplates", variables.namespace, variables.name],
+      });
+    },
   });
 }
 

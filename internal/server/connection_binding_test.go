@@ -239,6 +239,7 @@ func TestBoundWriteRoutesRefuseStaleConnection(t *testing.T) {
 		{http.MethodPost, "/api/cronjobs/default/nightly/suspend"},
 		{http.MethodPost, "/api/cronjobs/default/nightly/resume"},
 		{http.MethodPost, "/api/workflows/default/nightly/stop"},
+		{http.MethodPost, "/api/workflowtemplates/default/nightly/submit"},
 		{http.MethodPost, "/api/rollouts/default/web/promote"},
 		{http.MethodPost, "/api/resources/apply"},
 		{http.MethodPut, "/api/resources/deployments/default/web"},
