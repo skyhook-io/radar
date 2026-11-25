@@ -111,6 +111,8 @@ export function ProblemMeta({
   const openIssue = useContext(OpenIssueContext)
   const origin = problemOriginLabel(problem)
   const aboutChild = !subjectIsSelf && problem.subject.kind !== rootKind
+  const showIssueLink = openIssue && problem.source === 'issue'
+  if (hideOrigin && !aboutChild && !showIssueLink && !children) return null
   return (
     <div className={clsx(className, 'flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-theme-text-tertiary')}>
       {aboutChild && (
@@ -140,7 +142,7 @@ export function ProblemMeta({
           <span>{origin.label}</span>
         </Tooltip>
       )}
-      {openIssue && problem.source === 'issue' && (
+      {showIssueLink && (
         <button type="button" onClick={() => openIssue(problem)} className="whitespace-nowrap text-accent-text hover:underline">
           See in Issues →
         </button>
@@ -157,6 +159,7 @@ export function WorkspaceProblemCallout({
   onNavigate,
   action,
   subjectIsSelf,
+  hideOrigin,
 }: {
   problem: WorkspaceProblem
   rootKind: string
@@ -165,6 +168,7 @@ export function WorkspaceProblemCallout({
   action?: ReactNode
   /** The callout sits on the subject's own page, so linking to it would loop. */
   subjectIsSelf?: boolean
+  hideOrigin?: boolean
 }) {
   const severity = healthToSeverity(problem.tone)
   const variant = severity === 'neutral' ? 'unknown' : severity
@@ -178,9 +182,8 @@ export function WorkspaceProblemCallout({
         </div>
       )}
       {problem.rawDetail && <FoldSection title={problem.rawDetailLabel ?? "Original evidence"} summary="" attention={false}><div className="break-words text-xs text-theme-text-secondary">{problem.rawDetail}</div></FoldSection>}
-      <ProblemMeta problem={problem} rootKind={rootKind} onNavigate={onNavigate} subjectIsSelf={subjectIsSelf}>
-        {action}
-        {more}
+      <ProblemMeta problem={problem} rootKind={rootKind} onNavigate={onNavigate} subjectIsSelf={subjectIsSelf} hideOrigin={hideOrigin}>
+        {action || more ? <>{action}{more}</> : undefined}
       </ProblemMeta>
     </AlertBanner>
   )

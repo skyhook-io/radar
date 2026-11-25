@@ -382,6 +382,7 @@ export function AgentSandboxSummary({
         problem={drawerProblem(a, isSelf ? podRead : undefined)}
         rootKind={kind}
         subjectIsSelf={isSelf}
+        hideOrigin
         onNavigate={navigate}
         action={
           showLogsBtn && onePod ? (
