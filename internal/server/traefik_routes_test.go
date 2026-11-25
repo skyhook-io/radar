@@ -138,6 +138,26 @@ func TestBuildTraefikRoutesRowsAndProblems(t *testing.T) {
 	}
 }
 
+// Traefik v3 also applies Middlewares named on a backend
+// (routes[].services[].middlewares); a route using one only there still
+// uses it, so the Middleware is never read as unused.
+func TestBuildTraefikRoutesCountsServiceLevelMiddlewares(t *testing.T) {
+	rule := map[string]any{"match": "Host(`ui.example.com`)", "kind": "Rule",
+		"services": []any{map[string]any{"name": "ui", "port": int64(80), "middlewares": []any{map[string]any{"name": "auth"}}}}}
+	route := tRoute("shop", "ui", nil, nil, rule)
+	if got := traefikAppliedMiddlewares(route, nil); !slices.Contains(got, [2]string{"shop", "auth"}) {
+		t.Fatalf("applied = %v", got)
+	}
+	in := tFixture{}.input(route)
+	rows, uses, _ := buildTraefikRoutes(in)
+	if len(uses) != 1 || uses[0].Name != "auth" || uses[0].UsedBy != 1 {
+		t.Errorf("uses = %+v", uses)
+	}
+	if !rowUsesMiddleware(rows[0], "shop", "auth") {
+		t.Errorf("the Middleware drawer keeps a rule that uses it on a backend: %+v", rows[0])
+	}
+}
+
 // A chain Middleware that exists but leads to a missing member is not itself
 // missing: the member is named, and the router still fails.
 func TestBuildTraefikRoutesNamesTheMissingChainMember(t *testing.T) {

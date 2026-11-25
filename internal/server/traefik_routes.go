@@ -55,6 +55,9 @@ type traefikRouteRow struct {
 	Services    []traefikBackendFact `json:"services"`
 	TLS         traefikTLSFact       `json:"tls"`
 	Problems    []string             `json:"problems"`
+	// serviceMiddlewares: Middlewares the rule names on a backend, so the
+	// Middleware drawer keeps a rule that uses one only there.
+	serviceMiddlewares [][2]string
 }
 
 // traefikRefFact: Exists is nil when Radar can't tell, never false for
@@ -180,6 +183,9 @@ func buildTraefikRoutes(in traefikRoutesInput) (rows []traefikRouteRow, uses []t
 				}
 				row.Priority = traefikPriority(r["priority"])
 				row.TLS = tls
+				for _, m := range ruleRefs.ServiceMiddlewares {
+					row.serviceMiddlewares = append(row.serviceMiddlewares, [2]string{m.Namespace, m.Name})
+				}
 				row.Middlewares = []traefikRefFact{}
 				row.Services = []traefikBackendFact{}
 				for _, v := range ruleRefs.Middlewares {
@@ -222,7 +228,7 @@ func traefikAppliedMiddlewares(route *unstructured.Unstructured, refuses func(*u
 	var out [][2]string
 	refused := refuses != nil && refuses(route)
 	for _, rule := range k8s.ParseTraefikRuleRefs(route) {
-		for _, m := range rule.Middlewares {
+		for _, m := range append(rule.Middlewares, rule.ServiceMiddlewares...) {
 			if m.Name == "" || strings.Contains(m.Name, "@") || (refused && m.Namespace != route.GetNamespace()) {
 				continue
 			}
@@ -658,7 +664,7 @@ func rowUsesMiddleware(row traefikRouteRow, ns, name string) bool {
 			return true
 		}
 	}
-	return false
+	return slices.Contains(row.serviceMiddlewares, [2]string{ns, name})
 }
 
 type traefikCertAnswer struct {

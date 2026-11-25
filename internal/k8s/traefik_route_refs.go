@@ -39,6 +39,9 @@ type TraefikRefVerdict struct {
 type TraefikRuleRefs struct {
 	Services    []TraefikRefVerdict
 	Middlewares []TraefikRefVerdict
+	// ServiceMiddlewares are named on a backend (services[].middlewares),
+	// which Traefik v3 also applies; parsed for usage only, with no verdict.
+	ServiceMiddlewares []TraefikRefVerdict
 }
 
 // TraefikRouteAssessor shares one detection scope (pod scan and inventories)
@@ -85,6 +88,10 @@ func ParseTraefikRuleRefs(route *unstructured.Unstructured) []TraefikRuleRefs {
 				_, v.PortName = port.(string)
 			}
 			out[i].Services = append(out[i].Services, v)
+			for _, mw := range nestedMaps(svc, "middlewares") {
+				mwName, _ := mw["name"].(string)
+				out[i].ServiceMiddlewares = append(out[i].ServiceMiddlewares, TraefikRefVerdict{Kind: "Middleware", Namespace: refNamespace(mw), Name: mwName})
+			}
 		}
 		for _, mw := range nestedMaps(r, "middlewares") {
 			name, _ := mw["name"].(string)
