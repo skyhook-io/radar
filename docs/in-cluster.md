@@ -451,7 +451,7 @@ rbac:
   helm: false         # Enable Helm write operations (broad permissions)
 ```
 
-Pod **Debug** requires `get pods`, `create pods/exec`, and a separate `update pods/ephemeralcontainers` grant in the Pod’s namespace. The chart’s `rbac.podExec` grants exec only. Use a namespaced Role and RoleBinding for Radar’s ServiceAccount when authentication is off, or for the signed-in user or group when per-user authentication is enabled. The Pod action and the missing-shell recovery action are available in standalone and in-cluster Radar. Both are intentionally disabled in the Radar Hub UI.
+Pod **Debug** requires `get pods`, `create pods/exec`, and a separate `update pods/ephemeralcontainers` grant in the Pod’s namespace. The chart’s `rbac.podExec` grants exec only. Use a namespaced Role and RoleBinding for Radar’s ServiceAccount when authentication is off, or for the signed-in user or group when per-user authentication is enabled. Standalone and in-cluster Radar can start a new debug container from Pod details or missing-shell recovery. Radar Hub keeps debug-container creation disabled. A host that supports Pod exec can still open a shell in an existing running debugger.
 
 For a selected Pod, Radar checks named exec and ephemeral-container update permissions when the namespace-wide grant is insufficient. A Role with `resourceNames` can therefore grant debugging on one Pod. In a shell-less container, the terminal offers a running debugger targeting that container first. If access is denied it can copy a request for the specific Pod, namespace and permission.
 

@@ -74,7 +74,7 @@ export function MissingShellDebug({ namespace, name, uid, target, connection, ba
   if (query.isPending && !query.error) return <p className="text-xs text-theme-text-secondary">Checking access for this Pod…</p>
   if (access?.state === 'unavailable') return null
   const denied = access?.state === 'denied'
-  const requester = username ? `Kubernetes user ${username}` : configManagement === 'operator' ? 'Radar’s Kubernetes service account' : 'me'
+  const requester = username ? `Kubernetes user ${username}` : configManagement === 'operator' && deployment?.mode === 'in-cluster' ? 'Radar’s Kubernetes service account' : 'me'
   const owner = pod.metadata.ownerReferences?.find(ref => ref.controller)
   const purpose = owner ? `${target} in ${owner.kind} ${owner.name}` : target
   const request = `Could you grant ${requester} permission to update pods/ephemeralcontainers for Pod ${name} in namespace ${namespace}? I need to add a debug container to troubleshoot ${purpose}.`
