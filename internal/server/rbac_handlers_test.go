@@ -232,7 +232,7 @@ func assertForbiddenWhenDeniedRBACList(t *testing.T, path, deniedResource string
 	// Wire up a fresh permCache for these tests; the seam still exercises
 	// the production gate (canRead consults permCache when both are set).
 	if testServerSrv.permCache == nil {
-		testServerSrv.permCache = pkgauth.NewPermissionCache()
+		testServerSrv.permCache = pkgauth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)
 	}
 
 	const username = "denied-user"
