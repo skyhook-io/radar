@@ -791,3 +791,30 @@ func TestGKEExplicitConnectRetriesNegativeAutomaticCapability(t *testing.T) {
 		t.Fatal("explicit Discover did not retry native capability independently of raw discovery")
 	}
 }
+
+func TestGKENativeChartsNeverServeWhileRelayActive(t *testing.T) {
+	c := gkeFixture(t, fixtureIssuer, 1)
+	c.findGKEChartStore(t.Context(), 0, ErrPrometheusNotFound)
+	if c.cachedNativeCharts() == nil {
+		t.Fatal("native reader not established")
+	}
+	f := &fakeRelayTransport{}
+	cfg := testRelayConfig(f, nil)
+	c.mu.Lock()
+	c.applyRelayLocked(&relayState{cfg: cfg, source: cfg.Source})
+	c.mu.Unlock()
+
+	if stores := c.chartStores(t.Context()); stores.native != nil || stores.supplement != nil {
+		t.Fatal("chart stores offered GKE's in-cluster store while the relay is active")
+	}
+	c.findGKEChartStore(t.Context(), c.DiscoveryGeneration(), ErrPrometheusNotFound)
+	if c.gkeChartStore() != nil || c.cachedNativeCharts() != nil {
+		t.Fatal("GKE native reader established while the relay is active")
+	}
+	c.mu.RLock()
+	probed := c.gkeGeneration == c.discoveryGen
+	c.mu.RUnlock()
+	if probed {
+		t.Fatal("GKE discovery ran while the relay is active")
+	}
+}

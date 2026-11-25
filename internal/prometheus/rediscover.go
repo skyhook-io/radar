@@ -214,9 +214,10 @@ func (c *Client) runRediscovery(verifyAddr, reason string, gen uint64) bool {
 	base := c.baseURL
 	manual := c.manualURL != ""
 	gated := c.headersRequireURLLocked()
+	relay := c.relay != nil
 	c.mu.RUnlock()
 	switch {
-	case retired, gated:
+	case retired, gated, relay:
 		return false
 	case currentGen != gen:
 		// The configuration changed after the signal (Reset, a new URL or
@@ -344,7 +345,7 @@ func (c *Client) observeResourceChange(source kubernetes.Interface, op string, o
 
 	c.mu.RLock()
 	sameCluster := c.k8sClient != nil && c.k8sClient == source
-	skip := c.retired || c.manualURL != ""
+	skip := c.retired || c.manualURL != "" || c.relay != nil
 	base := c.baseURL
 	var connected *prom.ServiceInfo
 	if base != "" && c.discoveryService != nil {
@@ -520,8 +521,12 @@ func isNoResponseError(err error) bool {
 // newConnectedPromClientLocked builds a prom.Client for the connected endpoint
 // whose transport reports unanswered requests. Caller holds c.mu.
 func (c *Client) newConnectedPromClientLocked(httpClient *http.Client) *prom.Client {
-	tr := prom.NewHTTPTransport(c.baseURL, c.basePath, httpClient)
-	tr.Headers = copyHeaders(c.headers)
+	tr := c.newTransportLocked(c.baseURL, c.basePath, httpClient, 0)
+	if c.relay != nil {
+		// No other endpoint can replace the relay, so a failure has nothing
+		// to rediscover.
+		return prom.NewClient(tr)
+	}
 	return prom.NewClient(failureReportingTransport{Transport: tr, addr: c.baseURL, report: c.noteQueryFailure})
 }
 

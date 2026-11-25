@@ -1,4 +1,4 @@
-import { hasPrometheusCharts } from './prometheusCharts'
+import { hasPrometheusCharts, metricsSourceUnavailable } from './prometheusCharts'
 import type { RightsizingRow, WorkloadRightsizingEvidence } from '@skyhook-io/k8s-ui/types/rightsizing'
 import { followSwitch, switchFinished, switchInProgress, type ContextSwitchOperation } from './contextSwitch'
 import { createListRefetchInterval, normalizeResourceList, type ResourceListBody, type ResourceListResult } from './resourceLists'
@@ -4209,6 +4209,30 @@ export interface PrometheusStatus {
   };
   contextName?: string;
   error?: string;
+  /** Set when metrics come from a backend other than plain Prometheus. */
+  source?: MetricsSource;
+  /** How this install can get OpenObserve metrics: Radar Hub selects the source, or local Settings → Metrics. */
+  openobserve?: "hub" | "local";
+}
+
+/**
+ * Where metrics come from when not a plain Prometheus. With `matchedBy`
+ * unset and `unavailable` false, the source is not serving this context and
+ * `error`/`warning` explain why (the cluster's own Prometheus, if any, serves).
+ */
+export interface MetricsSource {
+  kind: "openobserve";
+  via?: "local" | "hub";
+  matchedBy?: "id" | "name";
+  clusterLabel?: { name: string; value: string };
+  dialect?: "standard" | "collector";
+  warning?: string;
+  versionWarning?: string;
+  missingFamilies?: string[];
+  unavailable?: boolean;
+  /** The match is still running; poll until it settles. */
+  pending?: boolean;
+  error?: string;
 }
 
 // Time-series sample types live in @skyhook-io/k8s-ui (shared with library
@@ -4330,7 +4354,7 @@ export function prometheusStatusRefetchInterval(
 ): number {
   if (!status) return PROM_STATUS_POLL_IDLE_MS;
   const settled = hasPrometheusCharts(status) || !!status.error;
-  return status.discovering || !settled
+  return status.discovering || !settled || status.source?.pending
     ? PROM_STATUS_POLL_DISCOVERING_MS
     : PROM_STATUS_POLL_IDLE_MS;
 }
@@ -4399,6 +4423,39 @@ export function usePrometheusConnect() {
   });
 }
 
+export type MetricsDiscoveryOutcome = "connected" | "collector" | "none";
+
+// Discover metrics on an install that can also read OpenObserve. The connect
+// call asks Radar Hub for the source first (when connected to it), then looks
+// for Prometheus; with nothing found, it reports whether an OpenObserve
+// collector runs. The outcome and any failure are shown in place, so there
+// are no toasts. A 502 means discovery found no usable Prometheus, whose
+// reason the status error then shows; any other failure ends discovery.
+export function useDiscoverMetrics() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (): Promise<MetricsDiscoveryOutcome> => {
+      const resp = await apiFetch(`${getApiBase()}/prometheus/connect`, {
+        method: "POST",
+      });
+      if (!resp.ok && resp.status !== 502) {
+        const body = await readErrorBody(resp);
+        throw new Error(body.error || `HTTP ${resp.status}`);
+      }
+      if (resp.ok && hasPrometheusCharts((await resp.json()) as PrometheusStatus)) return "connected";
+      try {
+        const presence = await fetchJSON<{ detected: boolean }>("/metrics/openobserve/collector");
+        return presence.detected ? "collector" : "none";
+      } catch {
+        return "none";
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["prometheus-status"] });
+    },
+  });
+}
+
 // Auto-discover Prometheus on first mount of any Prom-backed view, and
 // auto-reconnect across radar restarts on subsequent mounts.
 //
@@ -4435,6 +4492,7 @@ export function useAutoPromConnect(): void {
   const { data: clusterInfo } = useClusterInfo();
   const { data: status, isLoading: statusLoading } = usePrometheusStatus();
   const chartsAvailable = hasPrometheusCharts(status);
+  const sourceUnavailable = metricsSourceUnavailable(status);
   const attemptedRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -4452,6 +4510,9 @@ export function useAutoPromConnect(): void {
       return;
     }
 
+    // An OpenObserve connection that can't answer is the source in use;
+    // discovering Prometheus would not stand in for it.
+    if (sourceUnavailable) return;
     if (attemptedRef.current === context) return;
     let cached: string | null = null;
     try {
@@ -4504,7 +4565,7 @@ export function useAutoPromConnect(): void {
         });
     }, delay);
     return () => window.clearTimeout(timeout);
-  }, [clusterInfo?.context, chartsAvailable, statusLoading, queryClient]);
+  }, [clusterInfo?.context, chartsAvailable, sourceUnavailable, statusLoading, queryClient]);
 }
 
 // Fetch Prometheus metrics for a resource

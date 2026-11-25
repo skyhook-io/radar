@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -1603,5 +1604,22 @@ func TestHandleDiscoverMetrics_NearMissesSortedAndCapped(t *testing.T) {
 	}
 	if !reflect.DeepEqual(resp.NearMisses, want) {
 		t.Fatalf("nearMisses=%v want %v", resp.NearMisses, want)
+	}
+}
+
+// TestPromQueryError_Refusal: a query the relay or the OpenObserve scoping
+// refused comes back as the refusal itself, a tool error the model can act
+// on, not as a failed backend.
+func TestPromQueryError_Refusal(t *testing.T) {
+	relay := &prom.RefusedError{Message: "OpenObserve refused the query: parse error", Err: &prom.HTTPError{StatusCode: 400, URL: "https://hub.example/x", Body: []byte(`{"error":"parse error"}`)}}
+	local := &prom.RefusedError{Err: errors.New("openobserve: queries may not write a cluster label")}
+	for err, want := range map[error]string{
+		relay: "OpenObserve refused the query: parse error",
+		local: "Queries may not write a cluster label",
+	} {
+		got := promQueryError(context.Background(), "q", time.Second, err)
+		if got == nil || got.Error() != want {
+			t.Errorf("promQueryError(%v) = %v, want %q", err, got, want)
+		}
 	}
 }
