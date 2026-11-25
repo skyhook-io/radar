@@ -306,10 +306,8 @@ func TestStaleSecretEnvOrderOnlyChanges(t *testing.T) {
 		deployment, replicaSet, pod := ownedStaleSecretEnvPod("catalog", startedAt, secretKeyEnv("BROKERS", "app-config", "BROKERS"))
 		cache := envHistoryTestCache(t, deployment, replicaSet, pod, appSecret.DeepCopy())
 		recordObserved(t, watched, brokersReorder)
-		timeline.RecordDrop("Secret", "shop", "app-config", timeline.DropReasonStoreFailed, "update", ActiveClusterContext())
-		t.Cleanup(timeline.ResetMetricsForContextSwitch)
+		timeline.CaptureStore().RecordDrop("Secret", "shop", "app-config", timeline.DropReasonStoreFailed, "update", ActiveClusterContext())
 		assertRealChangeCopy(t, onlyDetection(t, detectStaleSecretEnv(cache, "shop", now)), "Radar observed that key change at "+reorderAt.Format(time.RFC3339))
-		timeline.ResetMetricsForContextSwitch()
 	})
 
 	t.Run("the per-container cap never hides a real change behind reorders", func(t *testing.T) {
