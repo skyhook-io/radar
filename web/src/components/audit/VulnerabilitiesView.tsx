@@ -305,7 +305,15 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <CoverageNotes data={data} filtered={filtered} view={view} />
+        <CoverageNotes
+          data={data}
+          view={view}
+          matches={filtered && data.view === view ? {
+            count: rows.length + (data.coverage.rowsOmitted ?? 0),
+            // Every filter lives in the URL; the view and the namespace scope aren't filters.
+            onClear: () => update((p) => { for (const key of [...p.keys()]) if (!KEEP_ON_CLEAR.has(key)) p.delete(key) }, true),
+          } : undefined}
+        />
         {error && <p className="text-xs text-warning-text">Couldn't refresh: {error instanceof Error ? error.message : 'request failed'}. Showing the last answer.</p>}
       </div>
 
@@ -467,7 +475,20 @@ function sortRule(view: VulnerabilityView): string {
   return `Most severe first. Within each severity, exposed rows come first, then those whose exposure is unknown.${tiebreak}`
 }
 
-function CoverageNotes({ data, filtered, view }: { data: VulnerabilitiesResponse; filtered: boolean; view: VulnerabilityView }) {
+// URL keys that clearing the filters keeps: the view and the namespace scope.
+const KEEP_ON_CLEAR = new Set(['by', 'namespace', 'namespaces'])
+
+const ROW_NOUNS: Partial<Record<VulnerabilityView, [string, string]>> = {
+  fix: ['fix', 'fixes'], image: ['image', 'images'], cve: ['CVE', 'CVEs'], workload: ['workload', 'workloads'],
+}
+
+function CoverageNotes({ data, view, matches }: {
+  data: VulnerabilitiesResponse
+  view: VulnerabilityView
+  /** Set while filters narrow the table: how many rows match, and how to clear them. */
+  matches?: { count: number; onClear: () => void }
+}) {
+  const [one, many] = ROW_NOUNS[view] ?? ['row', 'rows']
   const gaps = gapSentence(data.coverage.gaps)
   const exposureNotes = [exposureGapSentence(data.exposure?.gaps), uncheckedRoutesSentence(data.exposure?.unchecked)].filter(Boolean).join(' ')
   const unscannedExposed = (data.unscanned ?? []).reduce((n, u) => n + (u.exposedTotal ?? 0), 0)
@@ -479,7 +500,14 @@ function CoverageNotes({ data, filtered, view }: { data: VulnerabilitiesResponse
   return (
     <div className="flex flex-col gap-1.5 text-xs">
       <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-theme-text-tertiary">
-        {[scan, filtered ? 'Totals ignore the filters' : null].filter(Boolean).join(' · ')}
+        {scan}
+        {matches && (
+          <>
+            <span aria-hidden>·</span>
+            <span className="text-theme-text-secondary">{matches.count.toLocaleString('en-US')} {matches.count === 1 ? one : many} match</span>
+            <button type="button" onClick={matches.onClear} className="text-accent-text hover:underline">Clear filters</button>
+          </>
+        )}
         {/* For someone comparing these numbers with Trivy's own: why they can differ. */}
         <WithTooltip tip={[
           "Reports list what was known when each image was scanned, after Trivy's own filters.",

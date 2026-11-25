@@ -162,6 +162,17 @@ describe('VulnerabilitiesView', () => {
     expect(container.textContent).not.toContain('Exposure unknown')
   })
 
+  it('says how many rows match the filters and clears them, keeping the view', () => {
+    render('/checks/vulnerabilities?by=cve&severity=critical&exposed=1')
+    expect(container.textContent).toMatch(/\d+ CVEs? match/)
+    expect(container.textContent).not.toContain('Totals ignore the filters')
+    act(() => button('Clear filters')!.click())
+    expect(urlParams().get('by')).toBe('cve')
+    expect(urlParams().has('severity')).toBe(false)
+    expect(urlParams().has('exposed')).toBe(false)
+    expect(button('Clear filters')).toBeUndefined()
+  })
+
   it('keeps the sort rule in a hint, not a line above the table', () => {
     render('/checks/vulnerabilities')
     expect(container.textContent).toContain('Severity, then exposure')
