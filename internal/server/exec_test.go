@@ -534,6 +534,14 @@ func TestPodTerminalStream(t *testing.T) {
 		cancel()
 		wait(t, done)
 	})
+	t.Run("peer never acknowledges the server close", func(t *testing.T) {
+		_, _, done := run(t, func(context.Context, remotecommand.StreamOptions) error { return nil })
+		select {
+		case <-done:
+		case <-time.After(terminalCloseTimeout + time.Second):
+			t.Fatal("terminal stayed open past the close deadline")
+		}
+	})
 	t.Run("final output and structured error precede close", func(t *testing.T) {
 		conn, _, done := run(t, func(_ context.Context, opts remotecommand.StreamOptions) error {
 			if _, err := io.WriteString(opts.Stdout, "last output"); err != nil {
@@ -542,6 +550,10 @@ func TestPodTerminalStream(t *testing.T) {
 			return errors.New("executable file not found")
 		})
 		conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+		conn.SetCloseHandler(func(int, string) error { return nil })
+		if err := conn.WriteJSON(TerminalMessage{Type: "input", Data: "buffered at stream exit"}); err != nil {
+			t.Fatal(err)
+		}
 		var msg map[string]string
 		if err := conn.ReadJSON(&msg); err != nil || msg["data"] != "last output" {
 			t.Fatalf("last output: %v, %v", msg, err)
@@ -551,6 +563,14 @@ func TestPodTerminalStream(t *testing.T) {
 		}
 		if _, _, err := conn.ReadMessage(); !websocket.IsCloseError(err, websocket.CloseNormalClosure) {
 			t.Fatalf("websocket close: %v", err)
+		}
+		select {
+		case <-done:
+			t.Fatal("server closed the transport before the peer acknowledged the final frame")
+		case <-time.After(20 * time.Millisecond):
+		}
+		if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)); err != nil {
+			t.Fatal(err)
 		}
 		wait(t, done)
 	})

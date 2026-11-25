@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -31,6 +32,7 @@ func (s *Server) upgradeWebSocket(w http.ResponseWriter, r *http.Request) (*webs
 }
 
 const podExecHeartbeatInterval = 30 * time.Second
+const terminalCloseTimeout = time.Second
 
 // defaultShellScript is the built-in fallback command used when no shell is
 // requested explicitly via ?shell= and no override is set via --pod-shell-default.
@@ -398,19 +400,30 @@ func streamPodTerminal(parent context.Context, conn *websocket.Conn, uid types.U
 		defer close(inputDone)
 		defer close(sizes.resizeChan)
 		defer stdinWriter.Close()
+		var reportedMalformed bool
 		for {
 			_, frame, err := conn.ReadMessage()
 			if err != nil {
+				if ctx.Err() == nil && !errors.Is(err, net.ErrClosed) && !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+					log.Printf("[exec] terminal WebSocket read failed: %v", err)
+				}
 				return
 			}
 			var msg TerminalMessage
 			if err := json.Unmarshal(frame, &msg); err != nil {
+				if !reportedMalformed {
+					log.Printf("[exec] malformed terminal WebSocket message")
+					reportedMalformed = true
+				}
 				continue
 			}
 			switch msg.Type {
 			case "input":
 				// A blocked Kubernetes stdin must backpressure the browser, not discard keystrokes.
 				if _, err := io.WriteString(stdinWriter, msg.Data); err != nil {
+					if errors.Is(err, io.ErrClosedPipe) {
+						drainTerminalPeer(conn)
+					}
 					return
 				}
 			case "resize":
@@ -433,12 +446,20 @@ func streamPodTerminal(parent context.Context, conn *websocket.Conn, uid types.U
 	select {
 	case <-streamDone:
 		if ctx.Err() == nil {
-			deadline := time.Now().Add(2 * time.Second)
+			deadline := time.Now().Add(terminalCloseTimeout)
 			if streamErr != nil {
 				conn.SetWriteDeadline(deadline)
 				sendPodExecError(conn, streamErr, uid)
 			}
-			conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), deadline)
+			if writeTerminalClose(conn, deadline) == nil {
+				// Release any blocked input so the sole reader can consume the peer's close reply.
+				stdinReader.Close()
+				select {
+				case <-inputDone:
+				case <-ctx.Done():
+				case <-time.After(time.Until(deadline)):
+				}
+			}
 		}
 	case <-inputDone:
 	case <-ctx.Done():
@@ -469,10 +490,25 @@ func sendPodExecError(conn *websocket.Conn, err error, podUID types.UID) {
 }
 
 func sendWSError(conn *websocket.Conn, msg string) {
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(terminalCloseTimeout)
 	conn.SetWriteDeadline(deadline)
 	sendWSErrorWithType(conn, "exec_error", msg, "")
-	conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), deadline)
+	if writeTerminalClose(conn, deadline) == nil {
+		conn.SetReadDeadline(deadline)
+		drainTerminalPeer(conn)
+	}
+}
+
+func writeTerminalClose(conn *websocket.Conn, deadline time.Time) error {
+	return conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), deadline)
+}
+
+func drainTerminalPeer(conn *websocket.Conn) {
+	for {
+		if _, _, err := conn.NextReader(); err != nil {
+			return
+		}
+	}
 }
 
 // sendWSErrorWithType sends an error with a specific error type to help frontend distinguish error causes

@@ -13,8 +13,8 @@ import (
 // CanI checks if the current user/service account can perform an action using
 // SelfSubjectAccessReview. The group parameter specifies the API group
 // (empty string for core resources like pods, secrets).
-// Returns (allowed, apiErr) where apiErr=true means the API call itself failed
-// (distinct from RBAC denial where allowed=false, apiErr=false).
+// Returns (allowed, apiErr). apiErr means the review request failed, or a
+// namespaced debug-container update review could not reach a decision.
 func CanI(ctx context.Context, client kubernetes.Interface, namespace, group, resource, verb string) (allowed bool, apiErr bool) {
 	if ctx.Err() != nil {
 		return false, true
