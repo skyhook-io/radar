@@ -1,10 +1,8 @@
-import { getAgentRuntimeStatus } from '@skyhook-io/k8s-ui/components/resources/resource-utils-agent-runtimes'
 import type { DetailSlots, HostResource, ResourceHost } from '../../integrations/resourceHost'
 import type { SelectedResource } from '../../types'
 import { kindToPluralWithGroup } from '../../utils/navigation'
 import { DrawerTrailBack } from '../workspace/DrawerTrailBack'
-import { AgentSandboxSummary, type AgentSandboxSummaryKind } from './AgentSandboxSummary'
-import { ReadingBadge } from './shared'
+import { AgentSandboxStatusBadge, AgentSandboxSummary, type AgentSandboxSummaryKind } from './AgentSandboxSummary'
 import { SandboxClaimsKindList, SandboxWarmPoolsKindList, SandboxesKindList } from './AgentSandboxKindLists'
 import { AGENT_SANDBOX_OVERVIEW, SANDBOX_CLAIM_KIND, SANDBOX_KIND, SANDBOX_TEMPLATE_KIND, SANDBOX_WARM_POOL_KIND, ownsAgentSandboxPath } from './routes'
 
@@ -42,12 +40,21 @@ export const agentSandboxResourceHost: ResourceHost = {
     const kind = summaryKind(resource)
     if (!kind) return {}
     return {
-      renderSummary: ({ apiKind, group, namespace, name, resource: data, onNavigate, leadContent }) =>
-        data?.kind === kind ? <AgentSandboxSummary kind={kind} apiKind={apiKind} group={group} namespace={namespace} name={name} resource={data} onNavigate={onNavigate} leadContent={leadContent} /> : null,
-      renderStatusBadge: (data: any) => {
-        const status = getAgentRuntimeStatus(data)
-        return status ? <ReadingBadge status={status} /> : null
-      },
+      renderSummary: ({ apiKind, group, namespace, name, resource: data, context, onNavigate, leadContent }) =>
+        data?.kind === kind ? (
+          <AgentSandboxSummary
+            kind={kind}
+            apiKind={apiKind}
+            group={group}
+            namespace={namespace}
+            name={name}
+            resource={data}
+            framed={context === 'expanded'}
+            onNavigate={onNavigate}
+            leadContent={leadContent}
+          />
+        ) : null,
+      renderStatusBadge: (data: any) => <AgentSandboxStatusBadge data={data} />,
     }
   },
   kindLists: [
