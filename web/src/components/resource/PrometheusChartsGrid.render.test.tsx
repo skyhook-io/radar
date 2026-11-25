@@ -11,6 +11,7 @@ let connected = false
 let source: Record<string, unknown> | undefined
 let openobserve: 'hub' | 'local' | undefined
 let discoverOutcome: 'connected' | 'collector' | 'none' | undefined
+let discoverError: Error | null = null
 const ranges: string[] = []
 const charts: { seriesLabels?: string[]; referenceLines?: unknown[] }[] = []
 let workload: WorkloadMetrics
@@ -23,7 +24,7 @@ vi.mock('../../api/client', async (importActual) => ({
   useAutoPromConnect: () => undefined,
   usePrometheusStatus: () => ({ data: { connected, error: openobserve ? undefined : 'Backend query failed', source, openobserve } }),
   usePrometheusConnect: () => ({ mutate: vi.fn(), isPending: false }),
-  useDiscoverMetrics: () => ({ mutate: vi.fn(), isPending: false, data: discoverOutcome }),
+  useDiscoverMetrics: () => ({ mutate: vi.fn(), isPending: false, data: discoverOutcome, error: discoverError }),
   usePrometheusResourceMetrics: (_kind: string, _ns: string, _name: string, category: string, range: string, enabled = true) => {
     if (enabled) ranges.push(range)
     return { data: metricsByCategory[category] ?? resourceMetrics }
@@ -51,6 +52,7 @@ beforeEach(() => {
   source = undefined
   openobserve = undefined
   discoverOutcome = undefined
+  discoverError = null
   ranges.length = 0
   charts.length = 0
   resourceMetrics = drawnMetrics
@@ -106,17 +108,24 @@ describe('Expanded metrics recovery and scope', () => {
     expect(html).toContain('Configure metrics')
   })
   it.each([
-    ['local', 'none', 'No metrics source found'],
-    ['hub', 'none', 'No metrics source found'],
-    ['local', 'collector', 'OpenObserve collector found. Connect it in Settings → Metrics'],
+    ['local', 'none', 'No metrics source found.'],
+    ['hub', 'none', 'No metrics source found.'],
+    ['local', 'collector', 'OpenObserve collector found. Connect it in Settings → Metrics.'],
     ['hub', 'collector', 'OpenObserve collector found. Ask your organization owner to connect OpenObserve in Radar Hub.'],
   ] as const)('shows the %s discovery outcome %s without offering discovery again', (path, outcome, message) => {
     openobserve = path
     discoverOutcome = outcome
     const html = render()
-    expect(html).toContain(message)
+    expect(html).toContain(`<p role="status" class="text-sm text-theme-text-secondary mb-4">${message}</p>`)
     expect(html).not.toContain('Discover metrics')
     expect(html).not.toContain('Discover Prometheus')
+  })
+  it('shows a failed discovery in place and offers it again', () => {
+    openobserve = 'local'
+    discoverError = new Error('Not connected to a cluster')
+    const html = render()
+    expect(html).toContain('<p role="status" class="text-sm text-theme-text-secondary mb-4">Not connected to a cluster</p>')
+    expect(html).toContain('Discover metrics')
   })
   it('uses operator guidance instead of standalone settings when embedded', () => {
     const html = render(undefined, true)

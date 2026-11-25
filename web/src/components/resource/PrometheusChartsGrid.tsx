@@ -2,7 +2,7 @@ import { hasPrometheusCharts, metricsSourceUnavailable } from '../../api/prometh
 import { clsx } from "clsx";
 import { useMemo, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Loader2, Wifi, WifiOff } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { Disclosure } from "@skyhook-io/k8s-ui/components/ui/Disclosure";
 import { ClusterScopeNote } from "@skyhook-io/k8s-ui/components/ui/ClusterScopeNote";
 import { isClusterScopeWithheld } from "@skyhook-io/k8s-ui/types/cluster-scope";
@@ -21,8 +21,6 @@ import {
 } from "@skyhook-io/k8s-ui/utils/badge-colors";
 import {
   usePrometheusStatus,
-  usePrometheusConnect,
-  useDiscoverMetrics,
   usePrometheusResourceMetrics,
   useAutoPromConnect,
   type PrometheusMetricCategory,
@@ -40,9 +38,8 @@ import { RestartEventLane } from "./RestartChart";
 import { Tooltip } from "../ui/Tooltip";
 import { WorkloadMetricsSection } from "./WorkloadMetricsSection";
 import { RightsizingStrip } from "./RightsizingStrip";
-import { useNavCustomization } from "../../context/NavCustomization";
 import { leastCertainScope, NAME_MATCHED_CLUSTER_NOTE, NAME_MATCHED_SUMMARY } from "./nameMatchedScope";
-import { previousSettingsNote, usePreviousIntegrationSettings } from '../../hooks/usePreviousIntegrationSettings';
+import { MetricsNotConnected, OpenObserveUnavailable } from "./MetricsNotConnected";
 
 // Used when MetricsTabContent is in expanded (full-screen) mode. Drawer mode
 // uses the single-chart tabbed `PrometheusCharts` instead — drawer width
@@ -81,16 +78,11 @@ export function PrometheusChartsGrid({
 }: PrometheusChartsGridProps) {
   useAutoPromConnect();
   const { data: status, isLoading: statusLoading } = usePrometheusStatus();
-  const connectMutation = usePrometheusConnect();
-  const discoverMutation = useDiscoverMetrics();
   const isConnected = hasPrometheusCharts(status);
   const isSupported = SUPPORTED_KINDS.has(kind);
   const isWorkload = ["Deployment", "StatefulSet", "DaemonSet"].includes(kind);
   const showRestartLane = isSupported && kind !== "Node";
 
-  const settingsAvailable = !useNavCustomization().embedded;
-  const offers = usePreviousIntegrationSettings(isSupported && !statusLoading && !!status && !isConnected && !status.discovering);
-  const previousNote = offers.metrics ? previousSettingsNote('metrics', offers.metrics) : undefined;
   const [searchParams, setSearchParams] = useSearchParams();
   const timeRange = TIME_RANGES.find((range) => range.value === searchParams.get("metricsRange"))?.value ?? "1h";
 
@@ -140,12 +132,7 @@ export function PrometheusChartsGrid({
   // source and the restart lane stay, as they do when Prometheus isn't set up.
   if (status && metricsSourceUnavailable(status)) {
     const notice = (
-      <OpenObserveUnavailable
-        viaHub={status.source?.via === "hub"}
-        error={status.source?.error}
-        settingsAvailable={settingsAvailable}
-        compact={!!workloadTotals}
-      />
+      <OpenObserveUnavailable status={status} compact={!!workloadTotals} />
     );
     if (!workloadTotals && !showRestartLane) return notice;
     return (
@@ -186,56 +173,7 @@ export function PrometheusChartsGrid({
     );
   }
 
-  if (!isConnected) {
-    const openObservePath = status?.openobserve;
-    const discovery = openObservePath ? discoverMutation : connectMutation;
-    const outcome = openObservePath ? discoverMutation.data : undefined;
-    const notFound = outcome === "none" || outcome === "collector";
-    return (
-      <div className="flex flex-col items-center justify-center py-12 gap-4">
-        <WifiOff className="w-10 h-10 text-theme-text-quaternary" />
-        <div className="text-center">
-          <p className="text-sm text-theme-text-secondary mb-1">
-            {openObservePath ? "No metrics source connected" : "Prometheus not connected"}
-          </p>
-          <p className="text-xs text-theme-text-tertiary mb-4">
-            {status?.error || (openObservePath
-              ? "Radar can read metrics from Prometheus or OpenObserve."
-              : "Connect to view historical CPU, memory, and network metrics")}
-          </p>
-          {notFound && <p className="text-sm text-theme-text-secondary mb-4">
-            {outcome === "none"
-              ? "No metrics source found"
-              : openObservePath === "hub"
-                ? "OpenObserve collector found. Ask your organization owner to connect OpenObserve in Radar Hub."
-                : "OpenObserve collector found. Connect it in Settings → Metrics"}
-          </p>}
-          <div className="flex flex-wrap items-center justify-center gap-3">
-          {!notFound && <button
-            onClick={() => discovery.mutate()}
-            disabled={discovery.isPending}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg btn-brand"
-          >
-            {discovery.isPending ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Wifi className="w-4 h-4" />
-            )}
-            {openObservePath ? "Discover metrics" : "Discover Prometheus"}
-          </button>}
-          {settingsAvailable && <button
-            type="button"
-            className="text-sm text-accent hover:underline"
-            onClick={() => window.dispatchEvent(new CustomEvent('radar:open-settings', { detail: { section: 'prometheus' } }))}
-          >Configure metrics</button>}
-          </div>
-          {previousNote && <p className="mt-3 text-xs text-theme-text-secondary">{previousNote}</p>}
-          {!settingsAvailable && <p className="mt-3 text-xs text-theme-text-tertiary">Ask your operator to configure the metrics connection for this cluster.</p>}
-          {isWorkload && <a className="mt-3 inline-block text-xs text-accent hover:underline" href="https://github.com/skyhook-io/radar/blob/main/docs/workload-metrics.md#what-each-chart-needs" target="_blank" rel="noopener noreferrer">What each chart needs</a>}
-        </div>
-      </div>
-    );
-  }
+  if (!isConnected) return <MetricsNotConnected status={status} isWorkload={isWorkload} />;
 
   const findCategory = (
     key: PrometheusMetricCategory,
@@ -303,38 +241,6 @@ export function PrometheusChartsGrid({
       {showRightsizing && status?.connected && isWorkload && (
         <div className="px-4 pb-4"><RightsizingStrip kind={kind} namespace={namespace} name={name} /></div>
       )}
-    </div>
-  );
-}
-
-function OpenObserveUnavailable({
-  viaHub,
-  error,
-  settingsAvailable,
-  compact,
-}: {
-  viaHub: boolean;
-  error?: string;
-  settingsAvailable: boolean;
-  compact: boolean;
-}) {
-  return (
-    <div className={clsx("flex flex-col items-center justify-center gap-4", compact ? "py-4" : "py-12")}>
-      <WifiOff className="w-10 h-10 text-theme-text-quaternary" />
-      <div className="text-center">
-        <p className="text-sm text-theme-text-secondary mb-1">OpenObserve unavailable</p>
-        {error && <p className="text-xs text-theme-text-tertiary mb-1">{error}</p>}
-        <p className="text-xs text-theme-text-tertiary">
-          {viaHub
-            ? "This cluster's metrics come from OpenObserve through Radar Hub. Charts come back when it answers again."
-            : "This cluster's metrics come from the saved OpenObserve connection. Charts come back when it answers again."}
-        </p>
-        {!viaHub && settingsAvailable && <button
-          type="button"
-          className="mt-3 text-sm text-accent hover:underline"
-          onClick={() => window.dispatchEvent(new CustomEvent('radar:open-settings', { detail: { section: 'prometheus' } }))}
-        >Configure metrics</button>}
-      </div>
     </div>
   );
 }
