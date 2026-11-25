@@ -126,3 +126,15 @@ current-context: prod
 		})
 	}
 }
+
+func TestResetTestStateClearsTheActiveClusterProxy(t *testing.T) {
+	clientMu.Lock()
+	activeClusterProxy = "socks5://127.0.0.1:1080"
+	clientMu.Unlock()
+	ResetTestState()
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	if activeClusterProxy != "" {
+		t.Fatalf("activeClusterProxy = %q after ResetTestState", activeClusterProxy)
+	}
+}

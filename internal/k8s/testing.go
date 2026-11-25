@@ -724,6 +724,7 @@ func ResetTestState() {
 	activeSourceFile = ""
 	activeSourceName = ""
 	activeSourceConfig = nil
+	activeClusterProxy = ""
 	initializationStarted = false
 	kubeconfigDirectoryFileCount = 0
 	kubeconfigDirectoryPaths = nil

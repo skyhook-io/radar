@@ -2413,3 +2413,43 @@ func TestWriteKubeconfigSnapshotCarriesSavedProxy(t *testing.T) {
 		t.Fatal("the snapshot changed Radar's loaded kubeconfig")
 	}
 }
+
+// Another context of the file sharing the cluster entry must keep reaching it
+// the kubeconfig's way from the local terminal.
+func TestWriteKubeconfigSnapshotProxiesOnlyTheCurrentContext(t *testing.T) {
+	dir := t.TempDir()
+	source := writeKubeconfig(t, dir, "config.yaml", "prod", []kubeEntry{
+		{ctxName: "prod", userName: "u", clusterName: "prod-cluster"},
+		{ctxName: "prod-admin", userName: "admin", clusterName: "prod-cluster"},
+	})
+	loaded, err := clientcmd.LoadFromFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientMu.Lock()
+	oldName, oldFile, oldSourceName, oldConfig, oldProxy, oldPath, oldRegistry := contextName, activeSourceFile, activeSourceName, activeSourceConfig, activeClusterProxy, kubeconfigPath, contextRegistry
+	contextName, activeSourceFile, activeSourceName, activeSourceConfig, activeClusterProxy, kubeconfigPath, contextRegistry = "prod", source, "prod", loaded, "socks5://127.0.0.1:1080", source, nil
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextName, activeSourceFile, activeSourceName, activeSourceConfig, activeClusterProxy, kubeconfigPath, contextRegistry = oldName, oldFile, oldSourceName, oldConfig, oldProxy, oldPath, oldRegistry
+		clientMu.Unlock()
+	})
+
+	snapshot, err := WriteKubeconfigSnapshotForCurrentContext(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(snapshot.Path)
+	written, err := clientcmd.LoadFromFile(snapshot.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := written.Clusters[written.Contexts["prod"].Cluster]
+	if current == nil || current.ProxyURL != "socks5://127.0.0.1:1080" || current.Server != "https://prod-cluster" {
+		t.Fatalf("current context's cluster = %+v", current)
+	}
+	if other := written.Clusters[written.Contexts["prod-admin"].Cluster]; other == nil || other.ProxyURL != "" {
+		t.Fatalf("prod-admin's cluster = %+v, want no proxy", other)
+	}
+}

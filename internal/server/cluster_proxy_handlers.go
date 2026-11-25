@@ -73,6 +73,7 @@ func (s *Server) handleSetContextProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	proxyURL := strings.TrimSpace(req.ProxyURL)
+	var probedBinding string
 	if proxyURL != "" {
 		if _, err := k8s.ParseClusterProxyURL(proxyURL); err != nil {
 			s.writeError(w, http.StatusBadRequest, err.Error())
@@ -80,7 +81,8 @@ func (s *Server) handleSetContextProxy(w http.ResponseWriter, r *http.Request) {
 		}
 		// A 401 or 403 came from the API server, so the proxy got through;
 		// the credentials are a separate problem the connection screen explains.
-		if err := testContextProxy(r.Context(), name, proxyURL); err != nil && !apierrors.IsUnauthorized(err) && !apierrors.IsForbidden(err) {
+		probedBinding, err = testContextProxy(r.Context(), name, proxyURL)
+		if err != nil && !apierrors.IsUnauthorized(err) && !apierrors.IsForbidden(err) {
 			switch {
 			case k8s.IsContextNotFound(err):
 				s.writeError(w, http.StatusNotFound, err.Error())
@@ -96,6 +98,10 @@ func (s *Server) handleSetContextProxy(w http.ResponseWriter, r *http.Request) {
 	binding := k8s.ContextBindingFor(name)
 	if binding == "" || (proxyURL == "" && !contextExists(name)) {
 		s.writeError(w, http.StatusNotFound, fmt.Sprintf("kubeconfig context %q not found", name))
+		return
+	}
+	if proxyURL != "" && binding != probedBinding {
+		s.writeError(w, http.StatusConflict, fmt.Sprintf("kubeconfig context %q changed while Radar tested the proxy; try again", name))
 		return
 	}
 	if err := settings.SetClusterProxy(binding, proxyURL); err != nil {

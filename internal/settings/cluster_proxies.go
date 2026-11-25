@@ -1,11 +1,16 @@
 package settings
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
+
+	"github.com/gofrs/flock"
 )
 
 // Cluster proxies live in their own file, not in Settings: /api/settings
@@ -46,6 +51,9 @@ func loadClusterProxies() (map[string]string, error) {
 	if err := json.Unmarshal(data, &proxies); err != nil {
 		return nil, fmt.Errorf("%s is not valid JSON; fix or remove it: %w", path, err)
 	}
+	if proxies == nil {
+		return nil, fmt.Errorf("%s holds null instead of an object; fix or remove it", path)
+	}
 	return proxies, nil
 }
 
@@ -57,6 +65,19 @@ func SetClusterProxy(binding, proxyURL string) error {
 	if path == "" {
 		return os.ErrNotExist
 	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	// proxiesMu covers this process; the file lock covers another Radar
+	// (Desktop and the CLI) saving to the same store.
+	lock := flock.New(path+".lock", flock.SetPermissions(0o600))
+	defer lock.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if locked, err := lock.TryLockContext(ctx, 10*time.Millisecond); err != nil || !locked {
+		return errors.Join(errors.New("another Radar is saving cluster proxies; try again"), err)
+	}
+	defer lock.Unlock()
 	proxies, err := loadClusterProxies()
 	if err != nil {
 		return err
@@ -66,20 +87,22 @@ func SetClusterProxy(binding, proxyURL string) error {
 	} else {
 		proxies[binding] = proxyURL
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(proxies, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	// CreateTemp makes a new 0600 file, never reusing one left at a fixed path.
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".cluster-proxies-*.json")
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
 		return err
 	}
-	return nil
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }

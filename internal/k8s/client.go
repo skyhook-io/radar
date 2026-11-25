@@ -1061,7 +1061,22 @@ func WriteKubeconfigSnapshotForCurrentContext(expectedContext *string) (Kubeconf
 	if proxy != "" {
 		rawConfig = *rawConfig.DeepCopy()
 		if c := rawConfig.Contexts[rawConfig.CurrentContext]; c != nil && rawConfig.Clusters[c.Cluster] != nil {
-			rawConfig.Clusters[c.Cluster].ProxyURL = proxy
+			cluster := rawConfig.Clusters[c.Cluster]
+			// The proxy is saved for this context only, so a cluster entry
+			// another context shares stays as the kubeconfig has it.
+			for other, oc := range rawConfig.Contexts {
+				if other != rawConfig.CurrentContext && oc != nil && oc.Cluster == c.Cluster {
+					name := c.Cluster + "-radar-proxy"
+					for rawConfig.Clusters[name] != nil {
+						name += "-radar-proxy"
+					}
+					cluster = cluster.DeepCopy()
+					rawConfig.Clusters[name] = cluster
+					c.Cluster = name
+					break
+				}
+			}
+			cluster.ProxyURL = proxy
 		}
 	}
 

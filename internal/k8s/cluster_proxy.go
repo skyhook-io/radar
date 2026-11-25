@@ -83,22 +83,24 @@ func applyClusterProxy(config *rest.Config, binding, contextName string) (string
 }
 
 // TestContextProxy checks that a context's API server answers through
-// proxyURL, without touching the active connection.
-func TestContextProxy(ctx context.Context, name, proxyURL string) error {
+// proxyURL, without touching the active connection. It returns the binding of
+// the context it probed, also alongside an error from the API server.
+func TestContextProxy(ctx context.Context, name, proxyURL string) (string, error) {
 	if IsInCluster() {
-		return errors.New("a cluster proxy can't be set in-cluster")
+		return "", errors.New("a cluster proxy can't be set in-cluster")
 	}
 	u, err := ParseClusterProxyURL(proxyURL)
 	if err != nil {
-		return err
+		return "", err
 	}
-	_, _, kubeConfig, rawConfig, kubeContext, err := loadContextSource(name)
+	loadingRules, inFileName, kubeConfig, rawConfig, kubeContext, err := loadContextSource(name)
 	if err != nil {
-		return err
+		return "", err
 	}
+	binding := sourceContextBinding(loadingRules.ExplicitPath, inFileName)
 	config, err := kubeConfig.ClientConfig()
 	if err != nil {
-		return fmt.Errorf("%w for %q: %s", errKubeconfigClientSetupFailed, name, kubeconfigDiagnosticError(err))
+		return "", fmt.Errorf("%w for %q: %s", errKubeconfigClientSetupFailed, name, kubeconfigDiagnosticError(err))
 	}
 	config.Proxy = http.ProxyURL(u)
 	usesExec := false
@@ -107,7 +109,7 @@ func TestContextProxy(ctx context.Context, name, proxyURL string) error {
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, connectionTestTimeoutFor(usesExec))
 	defer cancel()
-	return testConnection(probeCtx, config, usesExec)
+	return binding, testConnection(probeCtx, config, usesExec)
 }
 
 // ContextExists reports whether a kubeconfig context of this display name exists.
