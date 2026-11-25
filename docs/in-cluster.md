@@ -37,6 +37,7 @@ scaling workloads still follow their existing permissions.
 | Setting | Helm values |
 |---|---|
 | Prometheus-compatible backend | `traffic.prometheusUrl`, `traffic.prometheusHeadersFromEnv` plus Secret-backed `env` entries |
+| Agent Substrate API | `substrate.api.enabled`, `substrate.api.endpoint`, `substrate.api.serverName`, `substrate.api.caConfigMap`, `substrate.api.atespaces` (sign-in and caller token-mint access required) |
 | Argo CD API | `argocd.url`, `argocd.existingSecret`, `argocd.insecureTls` |
 | Cost data | `cost.source`, `cost.kubecost.url`, `cost.kubecost.clusterId`, `cost.kubecost.existingSecret`, `cost.currency` |
 | Audit policy | `audit.ignoredNamespaces`, `audit.disabledChecks` |

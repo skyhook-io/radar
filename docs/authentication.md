@@ -146,6 +146,38 @@ Two consequences worth knowing before you deploy:
 - A Role scoped with `resourceNames` doesn't pass the check, which needs the whole kind. It fails closed, so the user sees less rather than more.
 - Radar queries Prometheus with its own credentials; only the *authorization* is per user. If several tenants share one Prometheus, that backend needs its own isolation — Radar's gate isn't what separates them.
 
+## Agent Substrate API
+
+With sign-in (OSS proxy/OIDC or Radar Hub), any signed-in person whose own
+Kubernetes client can create a token for `ate-system/ate-client` can read
+Substrate through Radar. Hub owner/member/viewer roles do not gate this read.
+Radar mints as that person, never using its ServiceAccount as a fallback, and
+requires each caller's own successful mint before serving a warm API snapshot.
+A successful proof lasts at most 50 minutes. Missing identity/client or a denied
+mint gets `mintDenied`. The shared `ate-client` identity is usually a global owner
+in Substrate; Radar calls only read RPCs.
+
+The operator configures the endpoint/trust via `substrate.api` Helm values;
+`substrate.api.enabled=false` disables managed reads with `apiDisabled`. This integration
+adds no new token-mint permission. A team needs an explicit Role granting `create`
+on `serviceaccounts/token` for `resourceNames: [ate-client]` in `ate-system`, bound
+to the intended people. See [Substrate](substrate.md#connecting-to-substrates-api).
+Settings is read-only on shared installations; private local users configure it
+in **Settings → Agent Substrate**.
+
+
+Kubernetes's built-in `edit` role includes `create serviceaccounts/token`, and
+`admin` inherits it. With Radar Hub's default role bindings, members and owners
+therefore already qualify wherever those bindings cover `ate-system`; a
+separate Role is needed only for people without that existing grant. The default
+`view` role does not grant token creation. Operators can disable the integration
+with `substrate.api.enabled=false`. Check the intended person's actual access:
+
+```bash
+kubectl auth can-i create serviceaccounts/ate-client --subresource=token \
+  -n ate-system --as=alice --as-group=radar:member --as-group=system:authenticated
+```
+
 ## Without authentication
 
 Radar runs without authentication unless you configure it. Where it listens
@@ -170,6 +202,7 @@ Two things still hold on a shared listener without authentication:
    connections and `/mcp`.
 2. **Radar grants no more than its Kubernetes identity.** It gives no access to
    the machine or process it runs in:
+   - Agent Substrate API reads are disabled (`sharedRadar`): without sign-in, Radar cannot tell who is asking and never lends its own token-mint access;
    - the host local terminal is unavailable;
    - profiling is off unless `RADAR_PPROF` turns it on;
    - in a cluster, integration settings are set by the operator (Helm values or
