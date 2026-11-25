@@ -195,6 +195,26 @@ func TestListContextsReportsSavedProxyWithoutCredentials(t *testing.T) {
 	}
 }
 
+// Where the proxy can't be set, the list doesn't say which proxy host Radar
+// reaches a cluster through.
+func TestListContextsOmitsSavedProxyWhereItCantBeSet(t *testing.T) {
+	isolateProxyTest(t)
+	if err := settings.SetClusterProxy(k8s.ContextBindingFor("prod"), "socks5://bastion:1080"); err != nil {
+		t.Fatal(err)
+	}
+	orig := availableContexts
+	availableContexts = func() ([]k8s.ContextInfo, error) { return []k8s.ContextInfo{{Name: "prod"}}, nil }
+	t.Cleanup(func() { availableContexts = orig })
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/contexts", nil)
+	req.Host = "127.0.0.1:9280"
+	(&Server{listenAddress: "0.0.0.0"}).handleListContexts(w, req)
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "bastion") {
+		t.Fatalf("status = %d, body %s", w.Code, w.Body)
+	}
+}
+
 // A kubeconfig reload during the probe can point the name at another file:
 // the proxy is never saved for a context it wasn't tested against.
 func TestSetContextProxyRefusesWhenTheContextChangedDuringTheProbe(t *testing.T) {
