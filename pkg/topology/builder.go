@@ -5943,6 +5943,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 	// Step 3f: Build Contour HTTPProxy nodes/edges for traffic view
 	// Traffic flow: Internet → HTTPProxy (root) → HTTPProxy (child) → Service → Pods
 	trafficHTTPProxyIDs := make([]string, 0)
+	var trafficHTTPProxySources []declaring
 
 	// Create all HTTPProxy nodes; their edges are drawn with the other routing
 	// edges once the Service nodes are.
@@ -5953,6 +5954,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		}
 		name := hp.GetName()
 		hpID := fmt.Sprintf("httpproxy/%s/%s", ns, name)
+		trafficHTTPProxySources = append(trafficHTTPProxySources, declaring{ref: resourceid.NewRef(resourceid.GroupFromAPIVersion(hp.GetAPIVersion()), "HTTPProxy", ns, name), obj: hp})
 
 		fqdn, _, _ := unstructured.NestedString(hp.Object, "spec", "virtualhost", "fqdn")
 		routes, _, _ := unstructured.NestedSlice(hp.Object, "spec", "routes")
@@ -6077,8 +6079,10 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 	drawn := newDrawnNodes()
 	edges = drawFamilies(edges, drawn, nodes, trafficIngressSources, relations.IngressBackends)
 	edges = drawFamilies(edges, drawn, nodes, trafficRouteSources, relations.GatewayParents, relations.GatewayBackends)
-	edges = drawFamilies(edges, drawn, nodes, trafficVirtualServiceSources, relations.IstioGateways, relations.IstioServiceHosts(istioDomain))
-	edges = drawFamilies(edges, drawn, nodes, unstructuredSources(trafficHTTPProxies), relations.ContourBackends)
+	if len(trafficVirtualServiceSources) > 0 {
+		edges = drawFamilies(edges, drawn, nodes, trafficVirtualServiceSources, relations.IstioGateways, relations.IstioServiceHosts(istioDomain))
+	}
+	edges = drawFamilies(edges, drawn, nodes, trafficHTTPProxySources, relations.ContourBackends)
 
 	// Step 6: Aggregate pods by owner and create PodGroup nodes
 	// This prevents cluttering the graph with hundreds of individual pod nodes

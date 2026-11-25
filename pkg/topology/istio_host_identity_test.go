@@ -93,7 +93,7 @@ func TestTrafficViewDrawsTheIstioGatewaysAVirtualServiceBindsTo(t *testing.T) {
 	vsGVR := schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1", Resource: "virtualservices"}
 	gwGVR := schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1", Resource: "gateways"}
 	vs := genericIdentityObject(vsGVR, "VirtualService", "rules", "route")
-	vs.Object["spec"] = map[string]any{"gateways": []any{"mesh", "edge", "infra/shared"}, "http": []any{map[string]any{"route": []any{map[string]any{"destination": map[string]any{"host": "web"}}}}}}
+	vs.Object["spec"] = map[string]any{"gateways": []any{"mesh", "edge", "rules/edge", "infra/shared"}, "http": []any{map[string]any{"route": []any{map[string]any{"destination": map[string]any{"host": "web"}}}}}}
 	gateways := []*unstructured.Unstructured{genericIdentityObject(gwGVR, "Gateway", "rules", "edge"), genericIdentityObject(gwGVR, "Gateway", "infra", "shared"), genericIdentityObject(gwGVR, "Gateway", "rules", "mesh")}
 	d := &genericIdentityDynamic{watched: []schema.GroupVersionResource{vsGVR, gwGVR}, kinds: map[schema.GroupVersionResource]string{vsGVR: "VirtualService", gwGVR: "Gateway"}, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{vsGVR: {vs}, gwGVR: gateways}, listCalls: map[schema.GroupVersionResource]int{}}
 	opts := DefaultBuildOptions()

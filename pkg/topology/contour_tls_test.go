@@ -144,7 +144,7 @@ func TestTrafficViewRoutesHTTPProxiesToServicesAndIncludes(t *testing.T) {
 	root.Object["spec"] = map[string]any{
 		"virtualhost": map[string]any{"fqdn": "shop.example.com"},
 		"routes":      []any{map[string]any{"services": []any{map[string]any{"name": "web", "port": int64(80)}, map[string]any{"name": "absent", "port": int64(80)}}}},
-		"includes":    []any{map[string]any{"name": "api", "namespace": "apps"}},
+		"includes":    []any{map[string]any{"name": "api", "namespace": "apps"}, map[string]any{"name": "root"}},
 	}
 	api := genericIdentityObject(hpGVR, "HTTPProxy", "apps", "api")
 	api.Object["spec"] = map[string]any{"routes": []any{map[string]any{"services": []any{map[string]any{"name": "api", "port": int64(8080)}}}}}
@@ -155,21 +155,38 @@ func TestTrafficViewRoutesHTTPProxiesToServicesAndIncludes(t *testing.T) {
 		listCalls: map[schema.GroupVersionResource]int{},
 	}
 	services := []*corev1.Service{{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web"}}, {ObjectMeta: metav1.ObjectMeta{Namespace: "apps", Name: "api"}}}
-	opts := DefaultBuildOptions()
-	opts.ViewMode = ViewModeTraffic
-	topo, err := NewBuilder(&mockProvider{services: services}).WithDynamic(dynamic).Build(opts)
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
-	var got []string
-	for _, e := range topo.Edges {
-		if e.Type == EdgeExposes && strings.HasPrefix(e.Source, "httpproxy/") {
-			got = append(got, e.ID)
-		}
-	}
-	slices.Sort(got)
-	want := []string{"httpproxy/apps/api-to-service/apps/api", "httpproxy/shop/root-to-httpproxy/apps/api", "httpproxy/shop/root-to-service/shop/web"}
-	if !slices.Equal(got, want) {
-		t.Errorf("HTTPProxy edges = %v, want %v", got, want)
+	for _, tc := range []struct {
+		name       string
+		namespaces []string
+		want       []string
+	}{
+		{"all namespaces", nil, []string{"httpproxy/apps/api-to-service/apps/api", "httpproxy/shop/root-to-httpproxy/apps/api", "httpproxy/shop/root-to-service/shop/web"}},
+		{"shop only", []string{"shop"}, []string{"httpproxy/shop/root-to-service/shop/web"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := DefaultBuildOptions()
+			opts.ViewMode = ViewModeTraffic
+			opts.Namespaces = tc.namespaces
+			topo, err := NewBuilder(&mockProvider{services: services}).WithDynamic(dynamic).Build(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !opts.MatchesNamespaceFilter("apps") {
+				assertTopologyNodeAbsent(t, topo, "httpproxy/apps/api")
+			}
+			var got []string
+			for _, e := range topo.Edges {
+				if strings.HasPrefix(e.Source, "httpproxy/") {
+					if e.Type != EdgeExposes || e.Source == e.Target {
+						t.Errorf("unexpected HTTPProxy edge: %+v", e)
+					}
+					got = append(got, e.ID)
+				}
+			}
+			slices.Sort(got)
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("HTTPProxy edges = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
