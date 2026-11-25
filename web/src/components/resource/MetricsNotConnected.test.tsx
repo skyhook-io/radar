@@ -7,7 +7,7 @@ import type { PrometheusStatus } from '../../api/client'
 import { NavCustomizationProvider } from '../../context/NavCustomization'
 vi.mock('../../hooks/usePreviousIntegrationSettings', () => ({ usePreviousIntegrationSettings: () => ({ metrics: false }) }))
 
-const { MetricsNotConnected } = await import('./MetricsNotConnected')
+const { MetricsNotConnected, OpenObserveUnavailable } = await import('./MetricsNotConnected')
 
 vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
 
@@ -33,6 +33,18 @@ it('drops a discovery result once the metrics source changes', async () => {
   await act(async () => render({ ...before, source: { kind: 'openobserve', via: 'local', warning: 'Checking…', pending: true } }))
   expect(container.querySelector('[role="status"]')).toBeNull()
   expect(discover()).toBeDefined()
+  act(() => root.unmount())
+  vi.unstubAllGlobals()
+})
+
+it('says OpenObserve unavailable once', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  const container = document.createElement('div')
+  const root = createRoot(container)
+  const status: PrometheusStatus = { available: false, connected: true, source: { kind: 'openobserve', via: 'hub', unavailable: true, error: 'OpenObserve unavailable: Radar Hub could not be reached' } }
+  await act(async () => root.render(<NavCustomizationProvider value={{}}><OpenObserveUnavailable status={status} /></NavCustomizationProvider>))
+  expect(container.textContent?.match(/OpenObserve unavailable/g)).toHaveLength(1)
+  expect(container.textContent).toContain('Radar Hub could not be reached')
   act(() => root.unmount())
   vi.unstubAllGlobals()
 })

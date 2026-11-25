@@ -22,7 +22,7 @@ describe('metricsSourceLine', () => {
 
   it('reports unavailable without claiming a connection', () => {
     expect(metricsSourceLine({ kind: 'openobserve', via: 'local', matchedBy: 'id', unavailable: true, error: 'OpenObserve unavailable: refused' }))
-      .toEqual({ status: 'OpenObserve unavailable', detail: 'OpenObserve unavailable: refused', tone: 'warning' })
+      .toEqual({ status: 'OpenObserve unavailable', detail: 'refused', tone: 'warning' })
   })
 
   it('leaves the Prometheus line for an unmatched context and explains why', () => {

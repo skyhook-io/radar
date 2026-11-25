@@ -18,6 +18,9 @@ export const familyLabel = (family: string) => FAMILY_LABELS[family] ?? family
 /** The one phrase for metric families OpenObserve holds no data for. */
 export const missingFamiliesNote = (families: string[]) => `No data in OpenObserve for: ${families.map(familyLabel).join(', ')}.`
 
+/** An unavailable source's error without the "OpenObserve unavailable" its heading already says. */
+export const unavailableReason = (error: string | undefined) => error?.replace(/^OpenObserve unavailable: /, '')
+
 /**
  * The status line for a metrics source, or undefined when the source is not
  * serving this context (the Prometheus line applies; see `sourceNote`).
@@ -26,7 +29,7 @@ export function metricsSourceLine(source: MetricsSource | undefined): MetricsSou
   if (!source || source.kind !== 'openobserve') return undefined
   const shared = source.via === 'local' ? ' · shared connection' : ''
   if (source.unavailable) {
-    return { status: 'OpenObserve unavailable', detail: source.error, tone: 'warning' }
+    return { status: 'OpenObserve unavailable', detail: unavailableReason(source.error), tone: 'warning' }
   }
   if (!source.matchedBy) return undefined
   const details: string[] = []

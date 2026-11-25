@@ -6,6 +6,7 @@ import {
   type PrometheusStatus,
 } from "../../api/client";
 import { useNavCustomization } from "../../context/NavCustomization";
+import { unavailableReason } from '../settings/openobserveStatus';
 import { previousSettingsNote, usePreviousIntegrationSettings } from '../../hooks/usePreviousIntegrationSettings';
 
 const openMetricsSettings = () => window.dispatchEvent(new CustomEvent('radar:open-settings', { detail: { section: 'prometheus' } }));
@@ -89,7 +90,7 @@ export function OpenObserveUnavailable({
   compact?: boolean;
 }) {
   const viaHub = status.source?.via === "hub";
-  const error = status.source?.error;
+  const error = unavailableReason(status.source?.error);
   const settingsAvailable = !useNavCustomization().embedded;
   return (
     <div className={clsx("flex flex-col items-center justify-center gap-4", compact ? "py-4" : "py-12")}>
