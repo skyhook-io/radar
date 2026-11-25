@@ -252,18 +252,25 @@ func (s *Server) visibleFlows(r *http.Request, flows []traffic.Flow, namespaces 
 			kept = append(kept, f)
 		}
 	}
+	readable := s.readableNamespaces(r)
 	for i := range kept {
 		kept[i].PolicyVerdict = s.redactPolicyRefs(r, kept[i].PolicyVerdict)
-		withholdServicePort(&kept[i], allowed)
+		withholdServicePort(&kept[i], readable)
 	}
 	return kept
+}
+
+// readableNamespaces is the caller's namespace access (nil = all), not the
+// namespaces the request is viewing.
+func (s *Server) readableNamespaces(r *http.Request) map[string]bool {
+	return namespaceLookup(s.getUserNamespaces(r, nil))
 }
 
 // withholdServicePort clears a port taken from the destination's Services when
 // the caller cannot read that namespace: a flow is visible through either end,
 // but the port is a read of the destination's Services.
-func withholdServicePort(f *traffic.Flow, allowed map[string]bool) {
-	if allowed != nil && f.PortSource != "" && !allowed[f.Destination.Namespace] {
+func withholdServicePort(f *traffic.Flow, readable map[string]bool) {
+	if readable != nil && f.PortSource != "" && !readable[f.Destination.Namespace] {
 		f.Port, f.PortSource = 0, ""
 	}
 }
@@ -438,6 +445,7 @@ func (s *Server) handleTrafficFlowsStream(w http.ResponseWriter, r *http.Request
 		return
 	}
 	allowed := namespaceLookup(namespaces)
+	readable := s.readableNamespaces(r)
 
 	opts := traffic.FlowOptions{
 		Follow: true,
@@ -491,7 +499,7 @@ func (s *Server) handleTrafficFlowsStream(w http.ResponseWriter, r *http.Request
 				continue
 			}
 			flow.PolicyVerdict = s.redactPolicyRefs(r, flow.PolicyVerdict)
-			withholdServicePort(&flow, allowed)
+			withholdServicePort(&flow, readable)
 
 			data, err := json.Marshal(flow)
 			if err != nil {

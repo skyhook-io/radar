@@ -23,7 +23,7 @@ type servicePortLookup func(namespace, name, kind, protocol string) (ports []int
 // which port it serves, but that is declared, not observed, so the edge is
 // marked as taken from the Service. A workload's HTTP server_port is observed
 // and wins on its TCP edges; with several of them no single port is claimed.
-// Returns how many edges got a Service port, for the warning.
+// Returns how many edges got a port or a marking, for the warning.
 func inferServicePorts(flows []*Flow, l7Flows []Flow, byTransport bool, lookup servicePortLookup) int {
 	l7Ports := make(map[dstKey]map[int]bool)
 	for _, f := range l7Flows {
@@ -60,6 +60,7 @@ func inferServicePorts(flows []*Flow, l7Flows []Flow, byTransport bool, lookup s
 				for p := range ports {
 					f.Port = p
 				}
+				inferred++
 				continue
 			} else if len(ports) > 1 {
 				continue

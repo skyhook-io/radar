@@ -399,9 +399,9 @@ type l4LabelPresence struct {
 	portedDsts map[dstKey]bool
 	port       bool
 	transport  bool
-	// servicePorts counts the edges whose port was taken from their
-	// destination's Services because dst_port is not exported.
-	servicePorts int
+	// portsFilled counts the port-0 edges given a port, from an HTTP server_port
+	// or their destination's Services, because dst_port is not exported.
+	portsFilled int
 	// nodeLabelsMissing is set when the probe answered that no series carries
 	// a node label, so cross-node flows cannot be collapsed and count twice.
 	nodeLabelsMissing bool
@@ -525,12 +525,12 @@ func (p l4LabelPresence) warning(flowCount int) string {
 			// nothing.
 			metric := strings.TrimSuffix(p.metric, "_total")
 			switch {
-			case !p.port && !p.transport && p.servicePorts > 0:
-				parts = append(parts, fmt.Sprintf("Beyla is not exporting dst.port and transport. Ports here are "+
+			case !p.port && !p.transport && p.portsFilled > 0:
+				parts = append(parts, fmt.Sprintf("Beyla is not exporting dst.port and transport. Ports marked \"from Service\" are "+
 					"taken from Service specs, not observed; an edge to a destination without a Service appears "+
 					"as port 0, and UDP is shown as TCP. Both are opt-in, added under attributes.select for %s.", metric))
-			case !p.port && p.servicePorts > 0:
-				parts = append(parts, fmt.Sprintf("Beyla is not exporting dst.port, so ports here are taken from "+
+			case !p.port && p.portsFilled > 0:
+				parts = append(parts, fmt.Sprintf("Beyla is not exporting dst.port, so ports marked \"from Service\" are taken from "+
 					"Service specs, not observed; an edge to a destination without a Service appears as port 0. "+
 					"It is opt-in, added under attributes.select for %s.", metric))
 			case !p.port && !p.transport:
@@ -751,7 +751,7 @@ func (s *BeylaSource) getFlowsInternal(ctx context.Context, opts FlowOptions, sc
 		if lookup == nil {
 			lookup = cachedServicePorts
 		}
-		presence.servicePorts = inferServicePorts(edges, l7Flows, presence.transport, lookup)
+		presence.portsFilled = inferServicePorts(edges, l7Flows, presence.transport, lookup)
 	}
 
 	result := make([]Flow, 0, len(l4Map))
