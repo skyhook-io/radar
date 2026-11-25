@@ -13,6 +13,7 @@ import {
   type PrometheusRightsizing,
 } from '../../api/client'
 import { Tooltip } from '../ui/Tooltip'
+import { metricsSourceLine } from '../settings/openobserveStatus'
 
 const RIGHTSIZING_KINDS = new Set(['Deployment', 'StatefulSet', 'DaemonSet'])
 export const RIGHTSIZING_DOCS_URL = 'https://radarhq.io/docs/features/rightsizing'
@@ -33,7 +34,8 @@ function useRightsizingEvidence({ kind, namespace, name }: RightsizingProps) {
   const connected = status?.connected === true
   const supported = RIGHTSIZING_KINDS.has(kind)
   const query = usePrometheusRightsizing(kind, namespace, name, connected && supported)
-  return { connected, supported, statusLoading, ...query }
+  const sourceName = metricsSourceLine(status?.source) ? 'OpenObserve' : 'Prometheus'
+  return { connected, supported, statusLoading, sourceName, ...query }
 }
 
 export function RightsizingPanel(props: RightsizingProps) {
@@ -48,7 +50,7 @@ export function RightsizingPanel(props: RightsizingProps) {
           <div>
             <div className="flex items-center gap-1.5">
               <h3 className="text-sm font-semibold text-theme-text-primary">
-                Rightsizing · Prometheus
+                Rightsizing · {state.sourceName}
               </h3>
               <Tooltip content={RIGHTSIZING_METHODOLOGY}>
                 <HelpCircle className="h-3.5 w-3.5 text-theme-text-tertiary" />
@@ -91,7 +93,7 @@ export function RightsizingStrip(props: RightsizingProps) {
     <section className="mb-3 rounded-lg border border-theme-border bg-theme-surface/40 p-3">
       <header className="mb-2 flex items-center justify-between gap-3">
         <div className="flex items-center gap-1.5">
-          <h3 className="text-sm font-medium text-theme-text-primary">Rightsizing · Prometheus</h3>
+          <h3 className="text-sm font-medium text-theme-text-primary">Rightsizing · {state.sourceName}</h3>
           <Tooltip content={RIGHTSIZING_METHODOLOGY}>
             <HelpCircle className="h-3.5 w-3.5 text-theme-text-tertiary" />
           </Tooltip>

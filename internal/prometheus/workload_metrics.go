@@ -158,6 +158,15 @@ func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 		automatic = append(automatic, attributions)
 	}
 	resp := collectWorkloadMetricsWithHistory(ctx, workloadRangeClient{client}, scope, config, job, source, start, end, step, automatic, history)
+	if note := client.relayMissingThrottlingNote(); note != "" {
+		if p, ok := resp.Panels["throttling"]; ok && !panelHasSamples(p) {
+			p.Reason = note
+			resp.Panels["throttling"] = p
+		}
+	}
+	if oo := client.relaySourceScopeNote(); oo != "" && resp.Attribution["scope"] != "" {
+		resp.Attribution["scope"] = oo + "."
+	}
 	if attributionState == "detecting" || attributionState == "error" {
 		reason := "Matching metrics to current Pods…"
 		if attributionState == "error" {
@@ -562,7 +571,10 @@ func queryWorkloadPanel(ctx context.Context, client RangeQuerier, query string, 
 		if errors.Is(err, prom.ErrQueryWarning) {
 			panel.Reason = "The metrics backend returned a query warning; samples are withheld because the result may be incomplete or unreliable."
 		}
-		log.Printf("[prometheus] Workload metric query failed: %s", panel.Reason)
+		// A request its caller abandoned (the page moved on) is not a failure.
+		if ctx.Err() == nil {
+			log.Printf("[prometheus] Workload metric query failed: %s", panel.Reason)
+		}
 		return panel
 	}
 	latest := int64(0)
@@ -631,4 +643,13 @@ func withMetricCoverage(panel, coverage workloadMetricPanel, reason string) work
 		panel.Reason += reason
 	}
 	return panel
+}
+
+func panelHasSamples(p workloadMetricPanel) bool {
+	for _, s := range p.Series {
+		if len(s.DataPoints) > 0 {
+			return true
+		}
+	}
+	return false
 }
