@@ -28,8 +28,8 @@ import (
 
 const submitPath = "/api/workflowtemplates/jobs/migrate/submit"
 
-func submitTemplate(resourceVersion string, labels map[string]any) *unstructured.Unstructured {
-	metadata := map[string]any{"name": "migrate", "namespace": "jobs", "uid": "template-1", "resourceVersion": resourceVersion}
+func submitTemplate(labels map[string]any) *unstructured.Unstructured {
+	metadata := map[string]any{"name": "migrate", "namespace": "jobs", "uid": "template-1"}
 	if labels != nil {
 		metadata["labels"] = labels
 	}
@@ -113,7 +113,7 @@ func errorCode(t *testing.T, rec *httptest.ResponseRecorder) string {
 
 func TestWorkflowTemplateSubmit(t *testing.T) {
 	t.Run("creates a Workflow that references the template, with the values in the template's order", func(t *testing.T) {
-		srv, dyn := workflowSubmitServer(t, submitTemplate("7", map[string]any{argoControllerInstanceLabel: "team-a", "app": "db"}))
+		srv, dyn := workflowSubmitServer(t, submitTemplate(map[string]any{argoControllerInstanceLabel: "team-a", "app": "db"}))
 		rec := postSubmit(srv, `{"parameters":{"mode":"apply","target":"orders"}}`, nil)
 		var resp WorkflowTemplateSubmitResponse
 		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &resp) != nil {
@@ -147,7 +147,7 @@ func TestWorkflowTemplateSubmit(t *testing.T) {
 		}
 	})
 	t.Run("an empty body runs a template whose parameters all have defaults", func(t *testing.T) {
-		tmpl := submitTemplate("7", nil)
+		tmpl := submitTemplate(nil)
 		_ = unstructured.SetNestedSlice(tmpl.Object, []any{map[string]any{"name": "mode", "value": "dry-run"}}, "spec", "arguments", "parameters")
 		srv, dyn := workflowSubmitServer(t, tmpl)
 		rec := postSubmit(srv, "", nil)
@@ -163,7 +163,7 @@ func TestWorkflowTemplateSubmit(t *testing.T) {
 		}
 	})
 	t.Run("parameters are checked against the template's declarations", func(t *testing.T) {
-		srv, dyn := workflowSubmitServer(t, submitTemplate("7", nil))
+		srv, dyn := workflowSubmitServer(t, submitTemplate(nil))
 		for body, wants := range map[string][]string{
 			`{}`: {`parameter "target" is required`},
 			`{"parameters":{"target":"x","mode":"destroy"}}`:  {`parameter "mode" must be one of dry-run, apply`},
@@ -187,7 +187,7 @@ func TestWorkflowTemplateSubmit(t *testing.T) {
 		}
 	})
 	t.Run("the entrypoint's inputs are parameters too, as Argo passes arguments to them by name", func(t *testing.T) {
-		tmpl := submitTemplate("7", nil)
+		tmpl := submitTemplate(nil)
 		_ = unstructured.SetNestedSlice(tmpl.Object, []any{
 			map[string]any{"name": "main", "inputs": map[string]any{"parameters": []any{
 				map[string]any{"name": "target"},
@@ -221,7 +221,7 @@ func TestWorkflowTemplateSubmit(t *testing.T) {
 		}
 	})
 	t.Run("a template without an entrypoint is refused", func(t *testing.T) {
-		tmpl := submitTemplate("7", nil)
+		tmpl := submitTemplate(nil)
 		unstructured.RemoveNestedField(tmpl.Object, "spec", "entrypoint")
 		srv, dyn := workflowSubmitServer(t, tmpl)
 		rec := postSubmit(srv, `{"parameters":{"target":"x"}}`, nil)
@@ -230,7 +230,7 @@ func TestWorkflowTemplateSubmit(t *testing.T) {
 		}
 	})
 	t.Run("only a ConfigMap reference stands in for a value", func(t *testing.T) {
-		tmpl := submitTemplate("7", nil)
+		tmpl := submitTemplate(nil)
 		_ = unstructured.SetNestedSlice(tmpl.Object, []any{map[string]any{"name": "approval", "valueFrom": map[string]any{"supplied": map[string]any{}}}}, "spec", "arguments", "parameters")
 		srv, _ := workflowSubmitServer(t, tmpl)
 		if rec := postSubmit(srv, `{}`, nil); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "approval") {
@@ -238,7 +238,7 @@ func TestWorkflowTemplateSubmit(t *testing.T) {
 		}
 	})
 	t.Run("a rendered value: null is no value", func(t *testing.T) {
-		tmpl := submitTemplate("7", nil)
+		tmpl := submitTemplate(nil)
 		_ = unstructured.SetNestedSlice(tmpl.Object, []any{map[string]any{"name": "target", "value": nil}}, "spec", "arguments", "parameters")
 		srv, _ := workflowSubmitServer(t, tmpl)
 		if rec := postSubmit(srv, `{}`, nil); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "required") {
@@ -247,7 +247,7 @@ func TestWorkflowTemplateSubmit(t *testing.T) {
 	})
 	t.Run("a long template name keeps the separator in the generated name", func(t *testing.T) {
 		long := strings.Repeat("a", 56) + "-.b" + strings.Repeat("c", 190)
-		tmpl := submitTemplate("7", nil)
+		tmpl := submitTemplate(nil)
 		tmpl.SetName(long)
 		srv, dyn := workflowSubmitServer(t, tmpl)
 		req := httptest.NewRequest(http.MethodPost, "/api/workflowtemplates/jobs/"+long+"/submit", strings.NewReader(`{"parameters":{"target":"x"}}`))
@@ -266,7 +266,7 @@ func TestWorkflowTemplateSubmit(t *testing.T) {
 		}
 	})
 	t.Run("a create Kubernetes can't place is 404, not 500", func(t *testing.T) {
-		srv, dyn := workflowSubmitServer(t, submitTemplate("7", nil))
+		srv, dyn := workflowSubmitServer(t, submitTemplate(nil))
 		dyn.PrependReactor("create", "workflows", func(k8stesting.Action) (bool, runtime.Object, error) {
 			return true, nil, apierrors.NewNotFound(schema.GroupResource{Resource: "namespaces"}, "jobs")
 		})
@@ -275,7 +275,7 @@ func TestWorkflowTemplateSubmit(t *testing.T) {
 		}
 	})
 	t.Run("a null value is refused, an empty string is a value", func(t *testing.T) {
-		srv, dyn := workflowSubmitServer(t, submitTemplate("7", nil))
+		srv, dyn := workflowSubmitServer(t, submitTemplate(nil))
 		if rec := postSubmit(srv, `{"parameters":{"target":null}}`, nil); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "null") {
 			t.Fatalf("null: %d %s", rec.Code, rec.Body.String())
 		}
@@ -284,7 +284,7 @@ func TestWorkflowTemplateSubmit(t *testing.T) {
 		}
 	})
 	t.Run("an enum accepts a value Argo reads from a YAML number", func(t *testing.T) {
-		tmpl := submitTemplate("7", nil)
+		tmpl := submitTemplate(nil)
 		_ = unstructured.SetNestedSlice(tmpl.Object, []any{map[string]any{"name": "replicas", "value": int64(1), "enum": []any{int64(1), int64(3), 1.5, true}}}, "spec", "arguments", "parameters")
 		srv, _ := workflowSubmitServer(t, tmpl)
 		for _, v := range []string{"3", "1.5", "true"} {
@@ -294,13 +294,12 @@ func TestWorkflowTemplateSubmit(t *testing.T) {
 		}
 	})
 	t.Run("refuses malformed requests before reading the template", func(t *testing.T) {
-		srv, dyn := workflowSubmitServer(t, submitTemplate("7", nil))
+		srv, dyn := workflowSubmitServer(t, submitTemplate(nil))
 		for _, b := range []string{
 			`null`, `not json`, `[]`, `{"unknown":1}`, `{} {}`,
-			`{"name":"a","generateName":"b-"}`,
+			`{"resourceVersion":"7"}`,
 			`{"submission":"confirmation-1"}`,
-			`{"name":"migrate-1","submission":"short"}`,
-			`{"name":"migrate-1","submission":"has spaces in it"}`,
+			`{"name":"a","generateName":"b-"}`,
 			`{"name":"Migrate"}`,
 			`{"name":"` + strings.Repeat("a", 64) + `"}`,
 			`{"generateName":"Bad_"}`,
@@ -316,14 +315,14 @@ func TestWorkflowTemplateSubmit(t *testing.T) {
 		}
 	})
 	t.Run("a body over the limit is 413", func(t *testing.T) {
-		srv, dyn := workflowSubmitServer(t, submitTemplate("7", nil))
+		srv, dyn := workflowSubmitServer(t, submitTemplate(nil))
 		rec := postSubmit(srv, `{"parameters":{"target":"`+strings.Repeat("x", 300<<10)+`"}}`, nil)
 		if rec.Code != http.StatusRequestEntityTooLarge || len(workflowCreates(dyn)) != 0 {
 			t.Fatalf("status = %d", rec.Code)
 		}
 	})
 	t.Run("name and generateName are used as given", func(t *testing.T) {
-		srv, dyn := workflowSubmitServer(t, submitTemplate("7", nil))
+		srv, dyn := workflowSubmitServer(t, submitTemplate(nil))
 		if rec := postSubmit(srv, `{"name":"migrate-orders","parameters":{"target":"x"}}`, nil); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"name":"migrate-orders"`) {
 			t.Fatalf("named: %d %s", rec.Code, rec.Body.String())
 		}
@@ -335,90 +334,25 @@ func TestWorkflowTemplateSubmit(t *testing.T) {
 			t.Fatalf("names = %q/%q, %q", creates[0].GetName(), creates[0].GetGenerateName(), creates[1].GetGenerateName())
 		}
 	})
-	t.Run("a changed template is refused when the caller pinned the version it reviewed", func(t *testing.T) {
-		srv, dyn := workflowSubmitServer(t, submitTemplate("8", nil))
-		rec := postSubmit(srv, `{"resourceVersion":"7","parameters":{"target":"x"}}`, nil)
-		if rec.Code != http.StatusConflict || errorCode(t, rec) != "workflow_template_changed" || len(workflowCreates(dyn)) != 0 {
+	t.Run("an explicit existing name returns 409 workflow_name_taken", func(t *testing.T) {
+		srv, dyn := workflowSubmitServer(t, submitTemplate(nil), testWorkflow("Running", ""))
+		rec := postSubmit(srv, `{"name":"migrate-abcde","parameters":{"target":"x"}}`, nil)
+		var body map[string]string
+		_ = json.Unmarshal(rec.Body.Bytes(), &body)
+		if rec.Code != http.StatusConflict || body["error_code"] != "workflow_name_taken" {
 			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 		}
-		if rec := postSubmit(srv, `{"resourceVersion":"8","parameters":{"target":"x"}}`, nil); rec.Code != http.StatusOK {
-			t.Fatalf("current version: %d %s", rec.Code, rec.Body.String())
+		if body["error"] != "a Workflow named migrate-abcde already exists" {
+			t.Fatalf("error = %q, want %q", body["error"], "a Workflow named migrate-abcde already exists")
 		}
-	})
-	t.Run("repeating a request with its name and submission returns the run it created", func(t *testing.T) {
-		srv, dyn := workflowSubmitServer(t, submitTemplate("7", nil))
-		const body = `{"name":"migrate-k2x9q","submission":"confirmation-0001","resourceVersion":"7","parameters":{"target":"x"}}`
-		first := postSubmit(srv, body, nil)
-		if first.Code != http.StatusOK {
-			t.Fatalf("first = %d: %s", first.Code, first.Body.String())
-		}
-		if got := workflowCreates(dyn)[0].GetAnnotations()[workflowSubmissionAnnotation]; got != "confirmation-0001" {
-			t.Fatalf("submission annotation = %q", got)
-		}
-		// The template changed after the run was created; the repeat still
-		// answers with the run, rather than refusing a version it already used.
-		if err := dyn.Tracker().Update(argoWorkflowTemplateGVR, submitTemplate("8", nil), "jobs"); err != nil {
-			t.Fatal(err)
-		}
-		again := postSubmit(srv, body, nil)
-		if again.Code != http.StatusOK || again.Body.String() != first.Body.String() || len(workflowCreates(dyn)) != 1 {
-			t.Fatalf("again = %d: %s (first %s), creates = %d", again.Code, again.Body.String(), first.Body.String(), len(workflowCreates(dyn)))
-		}
-	})
-	t.Run("a submission repeated with other parameters is refused, not answered with the first run", func(t *testing.T) {
-		srv, dyn := workflowSubmitServer(t, submitTemplate("7", nil))
-		if rec := postSubmit(srv, `{"name":"migrate-k2x9q","submission":"confirmation-0001","parameters":{"target":"orders"}}`, nil); rec.Code != http.StatusOK {
-			t.Fatalf("first = %d: %s", rec.Code, rec.Body.String())
-		}
-		rec := postSubmit(srv, `{"name":"migrate-k2x9q","submission":"confirmation-0001","parameters":{"target":"invoices"}}`, nil)
-		if rec.Code != http.StatusConflict || errorCode(t, rec) != "workflow_submission_reused" || len(workflowCreates(dyn)) != 1 {
-			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
-		}
-	})
-	t.Run("a taken name Radar can't read is not called another run", func(t *testing.T) {
-		for name, readErr := range map[string]error{
-			"denied":    apierrors.NewForbidden(argoWorkflowGVR.GroupResource(), "migrate-k2x9q", errors.New("no get")),
-			"timed out": apierrors.NewTimeoutError("slow", 1),
-		} {
-			t.Run(name, func(t *testing.T) {
-				srv, dyn := workflowSubmitServer(t, submitTemplate("7", nil), withAnnotation(testWorkflow("Running", ""), workflowSubmissionAnnotation, "confirmation-0001"))
-				dyn.PrependReactor("get", "workflows", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, readErr })
-				rec := postSubmit(srv, `{"name":"migrate-abcde","submission":"confirmation-0001","parameters":{"target":"x"}}`, nil)
-				if rec.Code != http.StatusConflict || errorCode(t, rec) != "workflow_unverified" || strings.Contains(rec.Body.String(), "choose another name") {
-					t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
-				}
-			})
-		}
-	})
-	t.Run("a changed template with an unreadable earlier attempt is unverified, not 'review again'", func(t *testing.T) {
-		srv, dyn := workflowSubmitServer(t, submitTemplate("8", nil))
-		dyn.PrependReactor("get", "workflows", func(k8stesting.Action) (bool, runtime.Object, error) {
-			return true, nil, apierrors.NewForbidden(argoWorkflowGVR.GroupResource(), "migrate-k2x9q", errors.New("no get"))
-		})
-		for _, body := range []string{
-			// The reviewed version is stale.
-			`{"name":"migrate-k2x9q","submission":"confirmation-0001","resourceVersion":"7","parameters":{"target":"x"}}`,
-			// No version, but the template now wants a parameter the request lacks.
-			`{"name":"migrate-k2x9q","submission":"confirmation-0001","parameters":{"mode":"apply"}}`,
-		} {
-			rec := postSubmit(srv, body, nil)
-			if rec.Code != http.StatusConflict || errorCode(t, rec) != "workflow_unverified" || !strings.Contains(rec.Body.String(), "migrate-k2x9q") || len(workflowCreates(dyn)) != 0 {
-				t.Fatalf("%s: status = %d: %s", body, rec.Code, rec.Body.String())
+		for _, a := range dyn.Actions() {
+			if a.GetVerb() == "get" && a.GetResource().Resource == "workflows" {
+				t.Fatalf("unexpected get on workflows: %v", a)
 			}
 		}
 	})
-	t.Run("a tokenless collision Radar can't read is still a taken name", func(t *testing.T) {
-		srv, dyn := workflowSubmitServer(t, submitTemplate("7", nil), testWorkflow("Running", ""))
-		dyn.PrependReactor("get", "workflows", func(k8stesting.Action) (bool, runtime.Object, error) {
-			return true, nil, apierrors.NewForbidden(argoWorkflowGVR.GroupResource(), "migrate-abcde", errors.New("no get"))
-		})
-		rec := postSubmit(srv, `{"name":"migrate-abcde","parameters":{"target":"x"}}`, nil)
-		if rec.Code != http.StatusConflict || errorCode(t, rec) != "workflow_name_taken" {
-			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
-		}
-	})
 	t.Run("an entrypoint input's enum binds the argument of the same name", func(t *testing.T) {
-		tmpl := submitTemplate("7", nil)
+		tmpl := submitTemplate(nil)
 		_ = unstructured.SetNestedSlice(tmpl.Object, []any{map[string]any{"name": "level", "value": "low"}}, "spec", "arguments", "parameters")
 		_ = unstructured.SetNestedSlice(tmpl.Object, []any{map[string]any{"name": "main", "inputs": map[string]any{"parameters": []any{
 			map[string]any{"name": "level", "enum": []any{"low", "high"}},
@@ -432,48 +366,10 @@ func TestWorkflowTemplateSubmit(t *testing.T) {
 		}
 	})
 	t.Run("an argument with an enum needs a literal value even with a ConfigMap source", func(t *testing.T) {
-		tmpl := submitTemplate("7", nil)
+		tmpl := submitTemplate(nil)
 		_ = unstructured.SetNestedSlice(tmpl.Object, []any{map[string]any{"name": "env", "enum": []any{"dev", "prod"}, "valueFrom": map[string]any{"configMapKeyRef": map[string]any{"name": "c", "key": "k"}}}}, "spec", "arguments", "parameters")
 		srv, _ := workflowSubmitServer(t, tmpl)
 		if rec := postSubmit(srv, `{}`, nil); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `\"env\" is required`) {
-			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
-		}
-	})
-	t.Run("a name taken by another run is 409", func(t *testing.T) {
-		for name, existing := range map[string]*unstructured.Unstructured{
-			"no submission":      testWorkflow("Running", ""),
-			"another submission": withAnnotation(testWorkflow("Running", ""), workflowSubmissionAnnotation, "confirmation-0002"),
-			"another template":   withTemplateRef(withAnnotation(testWorkflow("Running", ""), workflowSubmissionAnnotation, "confirmation-0001"), "other", false),
-			"a cluster template": withTemplateRef(withAnnotation(testWorkflow("Running", ""), workflowSubmissionAnnotation, "confirmation-0001"), "migrate", true),
-		} {
-			t.Run(name, func(t *testing.T) {
-				srv, dyn := workflowSubmitServer(t, submitTemplate("7", nil), existing)
-				rec := postSubmit(srv, `{"name":"migrate-abcde","submission":"confirmation-0001","parameters":{"target":"x"}}`, nil)
-				if rec.Code != http.StatusConflict || errorCode(t, rec) != "workflow_name_taken" || len(workflowCreates(dyn)) != 0 {
-					t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
-				}
-			})
-		}
-		t.Run("without a submission the create decides", func(t *testing.T) {
-			srv, dyn := workflowSubmitServer(t, submitTemplate("7", nil), withAnnotation(testWorkflow("Running", ""), workflowSubmissionAnnotation, "confirmation-0001"))
-			rec := postSubmit(srv, `{"name":"migrate-abcde","parameters":{"target":"x"}}`, nil)
-			if rec.Code != http.StatusConflict || errorCode(t, rec) != "workflow_name_taken" || len(workflowCreates(dyn)) != 1 {
-				t.Fatalf("status = %d: %s, creates = %d", rec.Code, rec.Body.String(), len(workflowCreates(dyn)))
-			}
-		})
-	})
-	t.Run("a run created between the check and the create answers the repeat", func(t *testing.T) {
-		srv, dyn := workflowSubmitServer(t, submitTemplate("7", nil))
-		dyn.PrependReactor("create", "workflows", func(action k8stesting.Action) (bool, runtime.Object, error) {
-			won := action.(k8stesting.CreateAction).GetObject().(*unstructured.Unstructured).DeepCopy()
-			won.SetUID("run-first")
-			if err := dyn.Tracker().Add(won); err != nil {
-				t.Fatal(err)
-			}
-			return true, nil, apierrors.NewAlreadyExists(argoWorkflowGVR.GroupResource(), won.GetName())
-		})
-		rec := postSubmit(srv, `{"name":"migrate-k2x9q","submission":"confirmation-0001","parameters":{"target":"x"}}`, nil)
-		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"uid":"run-first"`) {
 			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 		}
 	})
@@ -484,7 +380,7 @@ func TestWorkflowTemplateSubmit(t *testing.T) {
 		}
 	})
 	t.Run("a refused create is 403 with Kubernetes' reason", func(t *testing.T) {
-		srv, dyn := workflowSubmitServer(t, submitTemplate("7", nil))
+		srv, dyn := workflowSubmitServer(t, submitTemplate(nil))
 		dyn.PrependReactor("create", "workflows", func(k8stesting.Action) (bool, runtime.Object, error) {
 			return true, nil, apierrors.NewForbidden(argoWorkflowGVR.GroupResource(), "", errors.New(`User "jane" cannot create resource "workflows"`))
 		})
@@ -494,7 +390,7 @@ func TestWorkflowTemplateSubmit(t *testing.T) {
 		}
 	})
 	t.Run("a refused template read is 403 and creates nothing", func(t *testing.T) {
-		srv, dyn := workflowSubmitServer(t, submitTemplate("7", nil))
+		srv, dyn := workflowSubmitServer(t, submitTemplate(nil))
 		dyn.PrependReactor("get", "workflowtemplates", func(k8stesting.Action) (bool, runtime.Object, error) {
 			return true, nil, apierrors.NewForbidden(argoWorkflowTemplateGVR.GroupResource(), "migrate", errors.New("denied"))
 		})
@@ -503,7 +399,7 @@ func TestWorkflowTemplateSubmit(t *testing.T) {
 		}
 	})
 	t.Run("a namespace outside the --namespace-scope pin is refused before any Kubernetes call", func(t *testing.T) {
-		srv, dyn := workflowSubmitServer(t, submitTemplate("7", nil))
+		srv, dyn := workflowSubmitServer(t, submitTemplate(nil))
 		previous := k8s.ForceNamespaceScope
 		k8s.ForceNamespaceScope = true
 		k8s.SetFallbackNamespace("other")
@@ -516,7 +412,7 @@ func TestWorkflowTemplateSubmit(t *testing.T) {
 	// Radar's identity, like any workload action, but a web page in their
 	// browser may not.
 	t.Run("a page on another site can't submit", func(t *testing.T) {
-		srv, dyn := workflowSubmitServer(t, submitTemplate("7", nil))
+		srv, dyn := workflowSubmitServer(t, submitTemplate(nil))
 		rec := postSubmit(srv, `{"parameters":{"target":"x"}}`, map[string]string{"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"})
 		if rec.Code != http.StatusForbidden || len(dyn.Actions()) != 0 {
 			t.Fatalf("status = %d actions = %v", rec.Code, dyn.Actions())
@@ -524,22 +420,8 @@ func TestWorkflowTemplateSubmit(t *testing.T) {
 	})
 }
 
-func withAnnotation(obj *unstructured.Unstructured, key, value string) *unstructured.Unstructured {
-	obj.SetAnnotations(map[string]string{key: value})
-	return obj
-}
-
-func withTemplateRef(obj *unstructured.Unstructured, name string, clusterScope bool) *unstructured.Unstructured {
-	ref := map[string]any{"name": name}
-	if clusterScope {
-		ref["clusterScope"] = true
-	}
-	_ = unstructured.SetNestedMap(obj.Object, ref, "spec", "workflowTemplateRef")
-	return obj
-}
-
 func TestWorkflowTemplateSubmitReadsAndCreatesAsTheCaller(t *testing.T) {
-	srv, dyn := workflowSubmitServer(t, submitTemplate("7", nil))
+	srv, dyn := workflowSubmitServer(t, submitTemplate(nil))
 	var mu sync.Mutex
 	var requests []string
 	groups := []string{"operators", "on-call"}
@@ -552,7 +434,7 @@ func TestWorkflowTemplateSubmitReadsAndCreatesAsTheCaller(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodGet {
-			_ = json.NewEncoder(w).Encode(submitTemplate("7", nil))
+			_ = json.NewEncoder(w).Encode(submitTemplate(nil))
 			return
 		}
 		var wf unstructured.Unstructured

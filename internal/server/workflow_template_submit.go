@@ -24,8 +24,6 @@ import (
 var argoWorkflowTemplateGVR = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "workflowtemplates"}
 
 const (
-	// The same annotation Velero "Back up now" uses for one confirmation.
-	workflowSubmissionAnnotation = "radar.skyhook.io/submission"
 	// Argo's own labels: a controller started with --instanceid only picks up
 	// Workflows carrying its instance ID, and Argo's CLI and UI label a run
 	// with the template it came from.
@@ -54,23 +52,9 @@ type WorkflowTemplateSubmitRequest struct {
 	// GenerateName is the prefix the API server completes. Defaults to
 	// "<template>-", as `argo submit --from` does.
 	GenerateName string `json:"generateName,omitempty"`
-	// Submission identifies one confirmation: 8–64 letters, digits or
-	// hyphens, stored on the Workflow as the radar.skyhook.io/submission
-	// annotation. It needs Name: a request whose answer was lost can be
-	// repeated unchanged, with the same name and submission, and returns the
-	// Workflow it created while that Workflow still exists. Once Argo or
-	// anyone deletes it, the repeat creates a new run. Another Workflow
-	// holding the name is a 409.
-	Submission string `json:"submission,omitempty"`
-	// ResourceVersion of the WorkflowTemplate the caller reviewed. A template
-	// that changed since is refused with 409. This covers only Radar's read:
-	// the Workflow references the template by name, and Argo reads the
-	// template again when it starts the run.
-	ResourceVersion string `json:"resourceVersion,omitempty"`
 }
 
-// WorkflowTemplateSubmitResponse names the Workflow created, or the one an
-// earlier identical request created.
+// WorkflowTemplateSubmitResponse names the Workflow created.
 type WorkflowTemplateSubmitResponse struct {
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
@@ -81,11 +65,10 @@ type WorkflowTemplateSubmitResponse struct {
 // through spec.workflowTemplateRef, as `argo submit --from workflowtemplate/<name>`.
 //
 //	POST /api/workflowtemplates/{namespace}/{name}/submit
-//	{"parameters": {"message": "hi"}, "name": "...", "submission": "...", "resourceVersion": "..."}
+//	{"parameters": {"message": "hi"}, "name": "..."}
 //
 // The template read and the create both run as the caller, so Kubernetes
-// decides: `get workflowtemplates` and `create workflows` in the namespace,
-// and `get workflows` to answer a repeated request with the run it created.
+// decides: `get workflowtemplates` and `create workflows` in the namespace.
 // Argo runs it as the template's service account, not the caller's.
 func (s *Server) handleWorkflowTemplateSubmit(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
@@ -122,120 +105,32 @@ func (s *Server) handleWorkflowTemplateSubmit(w http.ResponseWriter, r *http.Req
 	}
 	template, err := client.Resource(argoWorkflowTemplateGVR).Namespace(namespace).Get(r.Context(), name, metav1.GetOptions{})
 	if err != nil {
-		s.writeWorkflowSubmitError(w, err, namespace, name, "read")
-		return
-	}
-	workflows := client.Resource(argoWorkflowGVR).Namespace(namespace)
-	// The same request sent again after its answer was lost: the run it asked
-	// for exists, so return it, even if the template has changed since.
-	lookupInconclusive := false
-	if req.Name != "" && req.Submission != "" {
-		existing, getErr := workflows.Get(r.Context(), req.Name, metav1.GetOptions{})
-		if getErr == nil {
-			s.answerExistingWorkflow(w, existing, name, req)
-			return
-		}
-		lookupInconclusive = !apierrors.IsNotFound(getErr)
-	}
-	// Every refusal below depends on the template as it is now. When an
-	// earlier attempt may have created its run and Radar couldn't look,
-	// "review again" or "fix the parameters" would start a second one.
-	unverified := func() bool {
-		if !lookupInconclusive {
-			return false
-		}
-		s.writeErrorCode(w, http.StatusConflict, "workflow_unverified", "Radar could not read workflow "+req.Name+" to tell whether an earlier attempt created it, and the template no longer accepts this request as sent; check the template's runs before submitting again")
-		return true
-	}
-	if req.ResourceVersion != "" && req.ResourceVersion != template.GetResourceVersion() {
-		if unverified() {
-			return
-		}
-		s.writeErrorCode(w, http.StatusConflict, "workflow_template_changed", "the workflow template changed since you opened it; review it again before submitting")
+		s.writeWorkflowSubmitError(w, err, namespace, name, "", "read")
 		return
 	}
 	if entrypoint, _, _ := unstructured.NestedString(template.Object, "spec", "entrypoint"); entrypoint == "" {
-		if unverified() {
-			return
-		}
 		s.writeErrorCode(w, http.StatusBadRequest, "workflow_template_no_entrypoint", "the workflow template has no entrypoint, so a Workflow that references it cannot start")
 		return
 	}
 	arguments, problems := workflowArguments(template, req.Parameters)
 	if len(problems) > 0 {
-		if unverified() {
-			return
-		}
 		s.writeErrorCode(w, http.StatusBadRequest, "invalid_parameters", strings.Join(problems, "; "))
 		return
 	}
 
+	workflows := client.Resource(argoWorkflowGVR).Namespace(namespace)
 	created, err := workflows.Create(r.Context(), workflowFromTemplate(template, req, arguments), metav1.CreateOptions{})
-	if apierrors.IsAlreadyExists(err) && req.Name != "" {
-		existing, getErr := workflows.Get(r.Context(), req.Name, metav1.GetOptions{})
-		if getErr != nil && req.Submission == "" {
-			s.writeErrorCode(w, http.StatusConflict, "workflow_name_taken", "a workflow with this name already exists; choose another name")
-			return
-		}
-		if getErr != nil {
-			// Possibly this request's own run, created before its answer was
-			// lost: never advise another name for a Workflow Radar can't see.
-			s.writeErrorCode(w, http.StatusConflict, "workflow_unverified", "a workflow with this name already exists, and Radar could not read it to tell whether this request created it; check the template's runs before submitting again")
-			return
-		}
-		s.answerExistingWorkflow(w, existing, name, req)
-		return
-	}
 	if err != nil {
-		s.writeWorkflowSubmitError(w, err, namespace, name, "create")
+		s.writeWorkflowSubmitError(w, err, namespace, name, req.Name, "create")
 		return
 	}
 	s.writeJSON(w, WorkflowTemplateSubmitResponse{Namespace: created.GetNamespace(), Name: created.GetName(), UID: string(created.GetUID())})
-}
-
-// answerExistingWorkflow answers a request whose name is taken: with that
-// Workflow when this request created it, otherwise 409.
-func (s *Server) answerExistingWorkflow(w http.ResponseWriter, existing *unstructured.Unstructured, template string, req *WorkflowTemplateSubmitRequest) {
-	ref, _, _ := unstructured.NestedString(existing.Object, "spec", "workflowTemplateRef", "name")
-	clusterScope, _, _ := unstructured.NestedBool(existing.Object, "spec", "workflowTemplateRef", "clusterScope")
-	if req.Submission == "" || existing.GetAnnotations()[workflowSubmissionAnnotation] != req.Submission || ref != template || clusterScope {
-		s.writeErrorCode(w, http.StatusConflict, "workflow_name_taken", "a workflow with this name already exists; choose another name")
-		return
-	}
-	if !sameArguments(existing, req.Parameters) {
-		s.writeErrorCode(w, http.StatusConflict, "workflow_submission_reused", "this submission already created a workflow with different parameters; a changed request needs a new submission")
-		return
-	}
-	s.writeJSON(w, WorkflowTemplateSubmitResponse{Namespace: existing.GetNamespace(), Name: existing.GetName(), UID: string(existing.GetUID())})
-}
-
-// sameArguments reports whether a Workflow's arguments are the values a
-// request asks for: what workflowFromTemplate would have written for it.
-func sameArguments(existing *unstructured.Unstructured, values map[string]*string) bool {
-	params, _, _ := unstructured.NestedSlice(existing.Object, "spec", "arguments", "parameters")
-	if len(params) != len(values) {
-		return false
-	}
-	for _, item := range params {
-		param, _ := item.(map[string]any)
-		paramName, _ := param["name"].(string)
-		value, _ := param["value"].(string)
-		want, ok := values[paramName]
-		if !ok || want == nil || *want != value {
-			return false
-		}
-	}
-	return true
 }
 
 func (req *WorkflowTemplateSubmitRequest) problem() string {
 	switch {
 	case req.Name != "" && req.GenerateName != "":
 		return "set name or generateName, not both"
-	case req.Submission != "" && !submissionToken.MatchString(req.Submission):
-		return "submission must be 8–64 letters, digits or hyphens"
-	case req.Submission != "" && req.Name == "":
-		return "submission needs a name: only a named workflow can be found again when the request is repeated"
 	case req.Name != "" && (len(req.Name) > maxArgoWorkflowName || len(validation.IsDNS1123Subdomain(req.Name)) > 0):
 		return fmt.Sprintf("name must be at most %d lowercase letters, digits, '-' or '.', starting and ending with a letter or digit", maxArgoWorkflowName)
 	case req.GenerateName != "" && (len(req.GenerateName) > maxGenerateNamePrefix || len(validation.IsDNS1123Subdomain(req.GenerateName+"x")) > 0):
@@ -399,9 +294,6 @@ func workflowFromTemplate(template *unstructured.Unstructured, req *WorkflowTemp
 		labels[argoControllerInstanceLabel] = instance
 	}
 	metadata["labels"] = labels
-	if req.Submission != "" {
-		metadata["annotations"] = map[string]any{workflowSubmissionAnnotation: req.Submission}
-	}
 	spec := map[string]any{"workflowTemplateRef": map[string]any{"name": template.GetName()}}
 	if len(arguments) > 0 {
 		spec["arguments"] = map[string]any{"parameters": arguments}
@@ -414,7 +306,7 @@ func workflowFromTemplate(template *unstructured.Unstructured, req *WorkflowTemp
 	}}
 }
 
-func (s *Server) writeWorkflowSubmitError(w http.ResponseWriter, err error, namespace, name, step string) {
+func (s *Server) writeWorkflowSubmitError(w http.ResponseWriter, err error, namespace, templateName, workflowName, step string) {
 	switch {
 	case apierrors.IsNotFound(err) && step == "read":
 		s.writeError(w, http.StatusNotFound, "workflow template not found")
@@ -427,7 +319,11 @@ func (s *Server) writeWorkflowSubmitError(w http.ResponseWriter, err error, name
 	case apierrors.IsForbidden(err):
 		s.writeError(w, http.StatusForbidden, "failed to create the workflow: "+err.Error())
 	case apierrors.IsAlreadyExists(err):
-		s.writeErrorCode(w, http.StatusConflict, "workflow_name_taken", "a workflow with this name already exists; choose another name")
+		msg := "a Workflow with that name already exists"
+		if workflowName != "" {
+			msg = fmt.Sprintf("a Workflow named %s already exists", workflowName)
+		}
+		s.writeErrorCode(w, http.StatusConflict, "workflow_name_taken", msg)
 	case apierrors.IsInvalid(err):
 		s.writeError(w, http.StatusUnprocessableEntity, "Kubernetes rejected the workflow: "+err.Error())
 	case apierrors.IsBadRequest(err):
@@ -439,10 +335,10 @@ func (s *Server) writeWorkflowSubmitError(w http.ResponseWriter, err error, name
 		}
 		s.writeError(w, http.StatusGatewayTimeout, "Kubernetes timed out; check the template's runs before submitting again")
 	case step == "read":
-		log.Printf("[workflows] Failed to read workflow template %s/%s: %v", sanitizeForLog(namespace), sanitizeForLog(name), err)
+		log.Printf("[workflows] Failed to read workflow template %s/%s: %v", sanitizeForLog(namespace), sanitizeForLog(templateName), err)
 		s.writeError(w, http.StatusServiceUnavailable, "could not read the workflow template")
 	default:
-		log.Printf("[workflows] Failed to submit workflow template %s/%s: %v", sanitizeForLog(namespace), sanitizeForLog(name), err)
+		log.Printf("[workflows] Failed to submit workflow template %s/%s: %v", sanitizeForLog(namespace), sanitizeForLog(templateName), err)
 		s.writeError(w, http.StatusInternalServerError, "could not create the workflow")
 	}
 }
