@@ -17,6 +17,7 @@ import { getResourceIcon } from '../../utils/resource-icons'
 import { Tooltip } from '../ui/Tooltip'
 import { certaintyGlyph } from '../facts'
 import { Input } from '../ui/Input'
+import { useNavProto, setNavProtoSection, PROTO_CORE_SECTIONS, PROTO_OTHER_SECTION } from '../../proto/navProto'
 
 // Selected resource type info (need both name for API and kind for display)
 export interface SelectedKindInfo {
@@ -92,6 +93,8 @@ export interface ResourcesSidebarProps {
   /** Task destinations keyed by category name (e.g. "CloudNativePG"). A category
    *  with a workspace stays visible even when it has no resources. */
   categoryWorkspaces?: Record<string, SidebarCategoryWorkspace>
+  /** PROTOTYPE (option D): show only this workspace's category, as that app's own sidebar. */
+  protoAppCategory?: string
   /** Called after a destination is chosen, as onSelectedKindChange is after a
    *  kind: a host showing the sidebar in a drawer closes it. */
   onDestinationSelected?: () => void
@@ -286,11 +289,18 @@ export function ResourcesSidebar({
   basePath,
   onKindNavigated,
   onDestinationSelected,
-  categoryWorkspaces,
+  categoryWorkspaces: categoryWorkspacesProp,
+  protoAppCategory,
   displayState,
   onDisplayStateChange,
   containEscape,
 }: ResourcesSidebarProps) {
+  // PROTOTYPE: options A, D (explorer) and E list a workspace's kinds as a plain category.
+  const navProto = useNavProto()
+  const protoMode = navProto.mode
+  const protoPlain = protoMode === 'A' || protoMode === 'E' || (protoMode === 'D' && !protoAppCategory)
+  const categoryWorkspaces = protoPlain ? undefined : categoryWorkspacesProp
+  const protoSectionOf = (name: string) => ((PROTO_CORE_SECTIONS as readonly string[]).includes(name) || categoryWorkspacesProp?.[name] ? name : PROTO_OTHER_SECTION)
   // Wraps kind selection to also navigate when basePath/onNavigate are provided
   const selectKind = (kind: SelectedKindInfo) => {
     onSelectedKindChange(kind)
@@ -518,7 +528,7 @@ export function ResourcesSidebar({
   }, [categories, counts, resourceCoverage, showEmptyKinds, effectiveSelectedKind.name, effectiveSelectedKind.kind, effectiveSelectedKind.group, categoryWorkspaces, activeDestinationCategory])
 
   // Filter sidebar categories/kinds by the kind search term
-  const filteredCategories = useMemo(() => {
+  const filteredCategoriesBase = useMemo(() => {
     if (!sortedCategories || !kindFilter.trim()) return sortedCategories
     const term = kindFilter.toLowerCase()
     return sortedCategories
@@ -538,6 +548,29 @@ export function ResourcesSidebar({
       })
       .filter(Boolean) as typeof sortedCategories
   }, [sortedCategories, kindFilter, categoryWorkspaces])
+
+  // PROTOTYPE option B: the section on screen, from the open workspace or the selected kind's category.
+  const protoSection = useMemo(() => {
+    if (protoMode !== 'B') return null
+    if (activeDestinationCategory) return activeDestinationCategory
+    const sel = selectedKind
+    const cat = sel ? sortedCategories?.find(c => c.resources.some((r: APIResource) => r.name === sel.name && r.group === sel.group)) : undefined
+    return cat ? protoSectionOf(cat.name) : (navProto.section ?? 'Workloads')
+  }, [protoMode, activeDestinationCategory, selectedKind, sortedCategories, navProto.section]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (protoSection) setNavProtoSection(protoSection) }, [protoSection])
+
+  const filteredCategories = useMemo(() => {
+    if (!filteredCategoriesBase) return filteredCategoriesBase
+    if (protoAppCategory) return filteredCategoriesBase.filter(c => c.name === protoAppCategory)
+    if (protoMode === 'C') return filteredCategoriesBase.filter(c => !categoryWorkspacesProp?.[c.name])
+    if (protoMode === 'B' && protoSection) return filteredCategoriesBase.filter(c => protoSectionOf(c.name) === protoSection)
+    return filteredCategoriesBase
+  }, [filteredCategoriesBase, protoAppCategory, protoMode, protoSection, categoryWorkspacesProp]) // eslint-disable-line react-hooks/exhaustive-deps
+  const protoSelectedCategory = selectedKind ? sortedCategories?.find(c => c.resources.some((r: APIResource) => r.name === selectedKind.name && r.group === selectedKind.group))?.name : undefined
+  const protoHideSelf = (protoMode === 'A' || protoMode === 'C') && !protoAppCategory && !!protoSelectedCategory && !!categoryWorkspacesProp?.[protoSelectedCategory]
+  const protoExitRows = protoMode === 'C'
+    ? (sortedCategories ?? []).filter(c => categoryWorkspacesProp?.[c.name]).map(c => ({ name: c.name, ws: categoryWorkspacesProp![c.name] }))
+    : []
 
   // Auto-expand all categories when filtering
   const isKindFiltering = kindFilter.trim().length > 0
@@ -658,6 +691,7 @@ export function ResourcesSidebar({
     })
   }, [effectiveSelectedKind.name, effectiveSelectedKind.group])
 
+  if (protoHideSelf) return null
   return (
     // 224px up to an 1800px window, so the laptop screens between 1536 and
     // 1800 (MacBook Air 15", MacBook Pro 16") keep the room for the table.
@@ -686,8 +720,23 @@ export function ResourcesSidebar({
         </div>
       </div>
       <nav className="p-2">
+        {protoExitRows.length > 0 && (
+          <div className="mb-3 space-y-0.5">
+            {protoExitRows.map(({ name, ws }) => {
+              const Icon = ws.icon
+              return (
+                <button key={name} type="button" onClick={() => ws.destinations[0]?.onSelect()} title={`Opens the ${ws.label ?? name} page`}
+                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm font-medium text-theme-text-primary hover:bg-theme-elevated border border-theme-border">
+                  {Icon && <Icon className="w-4 h-4 shrink-0" />}
+                  <span className="flex-1 min-w-0 text-left leading-tight"><span className="block truncate">{ws.label ?? name}</span><span className="block truncate text-xs font-normal text-theme-text-tertiary">{name} · its own page</span></span>
+                  <span aria-hidden className="text-theme-text-tertiary">↗</span>
+                </button>
+              )
+            })}
+          </div>
+        )}
         {/* Favorites (pinned kinds) section — always visible */}
-        <div className="mb-2">
+        <div className={clsx('mb-2', (protoMode === 'B' || protoAppCategory) && 'hidden')}>
           <button
             {...favoritesDisclosure.buttonProps}
             onClick={() => setDisplayState({ favoritesExpanded: !favoritesExpanded })}
@@ -735,7 +784,7 @@ export function ResourcesSidebar({
         </div>
         {integrationCategories.length > 0 && (
           <div className="mb-2">
-            <div className="px-2 py-1.5 text-xs font-medium text-theme-text-tertiary uppercase tracking-wide">Integrations</div>
+            {!(protoMode === 'B' || protoAppCategory) && <div className="px-2 py-1.5 text-xs font-medium text-theme-text-tertiary uppercase tracking-wide">Integrations</div>}
             <div className="space-y-0.5">
               {integrationCategories.map((category) => {
                 const workspace = categoryWorkspaces![category.name]

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { useLocation } from 'react-router-dom'
-import { DialogPortal, ResourcesSidebar, type SelectedKindInfo, type SidebarCategoryWorkspace } from '@skyhook-io/k8s-ui'
+import { DialogPortal, ResourcesSidebar, useNavProto, type SelectedKindInfo, type SidebarCategoryWorkspace } from '@skyhook-io/k8s-ui'
 import { PanelLeft, X } from 'lucide-react'
 import { useAPIResources } from '../../api/apiResources'
 import { usePinnedKinds } from '../../hooks/useFavorites'
 import { useResourceCounts } from '../../hooks/useResourceCounts'
 import { useWorkspaceNavigate } from './useWorkspaceNavigate'
+import { ProtoOwnPageHeader, ProtoSubTabs, ProtoWorkspaceTabs, protoActiveCategory } from './ProtoNav'
 
 /**
  * A workspace inside Resources: the same Resources sidebar, with the
@@ -33,6 +34,10 @@ export function WorkspaceFrame({
   const { data: apiResources } = useAPIResources()
   const { data: counts } = useResourceCounts(namespaces)
   const { pinned, togglePin, isPinned } = usePinnedKinds()
+  // PROTOTYPE: workspace navigation options A–E.
+  const { mode: protoMode } = useNavProto()
+  const protoCategory = protoActiveCategory(categoryWorkspaces) ?? (selectedKind ? Object.keys(categoryWorkspaces ?? {}).find((n) => categoryWorkspaces![n].destinations.some((d) => d.kind && d.kind.name === selectedKind.name && d.kind.group === selectedKind.group)) ?? null : null)
+  const protoWs = protoCategory ? categoryWorkspaces?.[protoCategory] : undefined
 
   const selectKind = useCallback(
     (kind: SelectedKindInfo) => {
@@ -53,8 +58,26 @@ export function WorkspaceFrame({
         togglePin={togglePin}
         isPinned={(kind: string, group?: string) => isPinned(kind, group ?? '')}
         categoryWorkspaces={categoryWorkspaces}
+        protoAppCategory={protoMode === 'D' && protoCategory ? protoCategory : undefined}
         className={compactNavigation ? '!w-full !border-r-0' : undefined}
       />
+  if ((protoMode === 'A' || protoMode === 'C') && protoWs && protoCategory) {
+    return (
+      <div className="flex h-full min-h-0 w-full flex-col">
+        {protoMode === 'A' ? <ProtoWorkspaceTabs map={categoryWorkspaces} current={protoCategory} /> : <ProtoOwnPageHeader name={protoCategory} ws={protoWs} />}
+        <ProtoSubTabs ws={protoWs} />
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-theme-base">{children}</div>
+      </div>
+    )
+  }
+  if (protoMode === 'E' && protoWs) {
+    return (
+      <div className="flex h-full min-h-0 w-full">
+        {!compactNavigation && sidebar}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-theme-base"><ProtoSubTabs ws={protoWs} />{children}</div>
+      </div>
+    )
+  }
   return (
     <div className="flex h-full min-h-0 w-full">
       {!compactNavigation && sidebar}

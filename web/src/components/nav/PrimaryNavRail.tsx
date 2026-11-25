@@ -87,7 +87,19 @@ const NAV_ITEMS: NavItemDef[] = [
   { view: "cost", icon: Coins, label: "Cost" },
 ];
 
+// PROTOTYPE ONLY (workspace navigation options): extra rail rows the prototype supplies.
+export interface ProtoRailItem {
+  key: string;
+  icon?: ComponentType<{ className?: string }>;
+  label?: string;
+  active?: boolean;
+  onClick?: () => void;
+  divider?: boolean;
+}
+
 interface PrimaryNavRailProps {
+  protoReplaceResources?: ProtoRailItem[];
+  protoExtraItems?: ProtoRailItem[];
   // `string`, not ExtendedMainView: App.tsx's mainView is a superset
   // (adds 'applications'/'workload'/'compare') that isn't in k8s-ui's
   // ExtendedMainView. Active state only needs equality, so accept any
@@ -122,7 +134,15 @@ export function PrimaryNavRail({
   whatsNew,
   productHunt,
   communityUrl,
+  protoReplaceResources,
+  protoExtraItems,
 }: PrimaryNavRailProps) {
+  const protoRow = (p: ProtoRailItem) =>
+    p.divider ? (
+      <div key={p.key} className="mx-2 my-2 h-px bg-theme-border/70" />
+    ) : (
+      <NavRailItem key={p.key} item={{ view: p.key as NavRailView, icon: p.icon!, label: p.label ?? p.key }} active={!!p.active} pinned={pinned} onNavigate={() => p.onClick?.()} />
+    );
   const asideRef = useRef<HTMLElement>(null);
   const communityRef = useRef<HTMLDivElement>(null);
   const navRef = useRef<HTMLElement>(null);
@@ -166,15 +186,20 @@ export function PrimaryNavRail({
           pinned && "flex-1 min-h-0 overflow-y-auto",
         )}
       >
-        {NAV_ITEMS.map((item) => (
-          <NavRailItem
-            key={item.view}
-            item={item}
-            active={activeView === item.view}
-            pinned={pinned}
-            onNavigate={onNavigate}
-          />
-        ))}
+        {NAV_ITEMS.map((item) =>
+          item.view === "resources" && protoReplaceResources ? (
+            protoReplaceResources.map(protoRow)
+          ) : (
+            <NavRailItem
+              key={item.view}
+              item={item}
+              active={activeView === item.view}
+              pinned={pinned}
+              onNavigate={onNavigate}
+            />
+          ),
+        )}
+        {protoExtraItems && protoExtraItems.length > 0 && [<div key="proto-div" className="mx-2 my-2 h-px bg-theme-border/70" />, ...protoExtraItems.map(protoRow)]}
       </nav>
 
       {!pinned && <div data-rail-spacer className="flex-1" />}

@@ -15,6 +15,8 @@ import { useVulnerabilitiesRow } from './useVulnerabilitiesRow'
 import { useAPIResources } from '../../api/apiResources'
 import { hasVulnerabilityReports } from '../../api/vulnerabilities'
 import { CapacityCard } from './CapacityCard'
+import { useNavProto } from '@skyhook-io/k8s-ui'
+import { ProtoHomeCards } from '../workspace/ProtoNav'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
 import { Tooltip } from '../ui/Tooltip'
 import { getNetworkPolicyResourceTarget } from '../../utils/navigation'
@@ -72,6 +74,7 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
   const capacityCardPossible =
     karpenterState === 'available' || karpenterState === 'denied' || karpenterState === 'not_detected'
   const { data, isLoading, error, dataUpdatedAt, refetch } = useDashboard(namespaces)
+  const { mode: protoMode } = useNavProto()
   const vulnerabilitiesRow = useVulnerabilitiesRow(namespaces)
   const { data: apiResources } = useAPIResources()
   const { connection } = useConnection()
@@ -225,6 +228,7 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
               </BandItem>
             </div>
 
+            {protoMode === 'E' && <div className="flex flex-wrap gap-6"><ProtoHomeCards namespaces={namespaces} /></div>}
             {/* Posture band — same flex-grow wrap so any subset of compliance cards
                 fills its row instead of stranding the last one (the old 3-col grid
                 left Cluster Audit alone with two empty cells beside it). */}

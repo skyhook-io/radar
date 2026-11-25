@@ -98,3 +98,6 @@ export {
   type WorkspaceProblem,
   type ProblemOrigin,
 } from './components/problems'
+
+// PROTOTYPE ONLY: workspace navigation options
+export * from './proto/navProto'

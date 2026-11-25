@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { fetchJSON, isForbiddenError, isKindSyncFailed, isStillLoadingError, useCapabilities, useNamespaceCapabilities, useResources, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads, useAuditBadges, useIssues, fetchResourceList, isListTooLargeError, isUnretryableReadError, useRadarFeature } from '../../api/client'
@@ -31,6 +31,14 @@ import type { SelectedResource } from '../../types'
 import { apiVersionToGroup, kindToPluralWithGroup, type NavigateToResource } from '../../utils/navigation'
 import { CreateResourceDialog } from '../shared/CreateResourceDialog'
 import { getSkeletonYaml } from '../../utils/skeleton-yaml'
+import { useNavProto } from '@skyhook-io/k8s-ui'
+import { ProtoOwnPageHeader, ProtoSubTabs, ProtoWorkspaceTabs, protoCategoryForKind, protoDestinationForKind } from '../workspace/ProtoNav'
+import type { ReactNode } from 'react'
+
+function ProtoResourcesFrame({ top, children }: { top: ReactNode; children: ReactNode }) {
+  if (!top) return <>{children}</>
+  return <div className="flex h-full min-h-0 w-full flex-col">{top}<div className="flex min-h-0 flex-1">{children}</div></div>
+}
 
 interface ResourcesViewProps {
   namespaces: string[]
@@ -129,6 +137,20 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const cnpgSidebarWorkspace = useCNPGSidebarWorkspace({ apiResources, namespaces, withMetrics: selectedKind?.group === 'postgresql.cnpg.io' })
   const veleroSidebarWorkspace = useVeleroSidebarWorkspace({ apiResources })
   const sidebarCategoryWorkspaces = useMergedSidebarWorkspaces(cnpgSidebarWorkspace, veleroSidebarWorkspace)
+  // PROTOTYPE: workspace navigation options A–E.
+  const { mode: protoMode } = useNavProto()
+  const protoCat = protoMode === 'A' || protoMode === 'C' ? protoCategoryForKind(sidebarCategoryWorkspaces, selectedKind) : null
+  const protoWs = protoCat ? sidebarCategoryWorkspaces?.[protoCat] : undefined
+  const protoDest = protoCat ? protoDestinationForKind(sidebarCategoryWorkspaces, selectedKind) : null
+  useEffect(() => {
+    // A kind another screen lists (a CNPG Backup is listed on Backups) opens that screen.
+    if (protoDest && !protoDest.kind) protoDest.onSelect()
+  }, [protoDest])
+  const protoTop = protoMode === 'A'
+    ? <><ProtoWorkspaceTabs map={sidebarCategoryWorkspaces} current={protoCat} />{protoWs && <ProtoSubTabs ws={protoWs} activeId={protoDest?.id ?? null} />}</>
+    : protoMode === 'C' && protoCat && protoWs
+      ? <><ProtoOwnPageHeader name={protoCat} ws={protoWs} /><ProtoSubTabs ws={protoWs} activeId={protoDest?.id ?? null} /></>
+      : null
   const workloadWrites = namespaces.length === 0
     ? capabilities?.workloadWrites
     : namespaces.length === 1
@@ -375,6 +397,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
 
   return (
     <>
+    <ProtoResourcesFrame top={protoTop}>
     <BaseResourcesView
       key={connection.context || 'default'}
       namespaces={namespaces}
@@ -441,6 +464,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       onBulkScale={canBulkScaleSelectedKind ? (items, replicas, options) => bulkScaleMutation.mutate({ items, replicas }, { onSuccess: options?.onSuccess }) : undefined}
       isBulkScaling={canBulkScaleSelectedKind && bulkScaleMutation.isPending}
     />
+    </ProtoResourcesFrame>
     <CreateResourceDialog
       open={createDialogOpen}
       onClose={() => setCreateDialogOpen(false)}

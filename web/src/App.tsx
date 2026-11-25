@@ -80,7 +80,10 @@ import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
 import { useDocumentTitle } from './hooks/useDocumentTitle'
 import type { ClusterLoadState } from './types/clusterLoadState'
 import { useClusterLoadState } from './hooks/useClusterLoadState'
-import { Network, Sun, Moon, Star, Bug, SquareTerminal, HelpCircle, Loader2, RefreshCw } from 'lucide-react'
+import { Network, Sun, Moon, Star, Bug, SquareTerminal, HelpCircle, Loader2, RefreshCw, Box, Waypoints, FileCog, HardDrive, KeyRound, Server, Puzzle } from 'lucide-react'
+import { useNavProto } from '@skyhook-io/k8s-ui'
+import { ProtoAppSwitcher, ProtoSwitcher, protoWorkspaceForLocation, useProtoWorkspaces } from './components/workspace/ProtoNav'
+import type { ProtoRailItem } from './components/nav/PrimaryNavRail'
 import { useTheme } from './context/ThemeContext'
 import { Tooltip } from './components/ui/Tooltip'
 import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNamespacePicker'
@@ -1892,7 +1895,42 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     setVisibleKinds(new Set())
   }, [])
 
-  const navActiveView = mainView === 'helmCompare' ? 'helm' : activeWorkspace?.navView ?? mainView
+  // PROTOTYPE: workspace navigation options A–E.
+  const { mode: protoMode, section: protoSection } = useNavProto()
+  const protoMap = useProtoWorkspaces(namespaces)
+  const protoLocWs = protoWorkspaceForLocation(location.pathname, location.search)
+  const protoLocWsWide = protoLocWs ?? (() => {
+    const g = new URLSearchParams(location.search).get('apiGroup')
+    return location.pathname.startsWith('/resources/') && (g === 'postgresql.cnpg.io' || g === 'barmancloud.cnpg.io') ? 'CloudNativePG' : null
+  })()
+  const protoOnResources = mainView === 'resources' || activeWorkspace?.navView === 'resources'
+  const protoOtherPath = (() => {
+    const r = navApiResources?.find((x) => x.isCrd && !['postgresql.cnpg.io', 'barmancloud.cnpg.io', 'velero.io'].includes(x.group))
+    return r ? `/resources/${r.name}?apiGroup=${encodeURIComponent(r.group)}` : '/resources'
+  })()
+  const protoWorkspaceItems: ProtoRailItem[] = Object.entries(protoMap ?? {}).map(([name, ws]) => ({
+    key: `ws:${name}`, icon: ws.icon, label: ws.label ?? name,
+    active: (protoMode === 'B' ? protoOnResources && protoSection === name : protoLocWsWide === name),
+    onClick: () => ws.destinations[0]?.onSelect(),
+  }))
+  const protoReplaceResources: ProtoRailItem[] | undefined = protoMode === 'B'
+    ? [
+        ...([
+          ['Workloads', Box, 'Workloads', '/resources/pods'],
+          ['Networking', Waypoints, 'Networking', '/resources/services'],
+          ['Configuration', FileCog, 'Configuration', '/resources/configmaps'],
+          ['Storage', HardDrive, 'Storage', '/resources/persistentvolumeclaims'],
+          ['Access Control', KeyRound, 'Access control', '/resources/serviceaccounts'],
+          ['Cluster', Server, 'Cluster', '/resources/nodes'],
+          ['Other APIs', Puzzle, 'Other APIs', protoOtherPath],
+        ] as const).map(([key, icon, label, path]) => ({ key: `sec:${key}`, icon, label, active: protoOnResources && protoSection === key, onClick: () => navigate(path) })),
+        ...(protoWorkspaceItems.length ? [{ key: 'sec-div', divider: true }, ...protoWorkspaceItems] : []),
+      ]
+    : undefined
+  const protoExtraItems = protoMode === 'C' ? protoWorkspaceItems : undefined
+  const protoHideRail = protoMode === 'D' && !!protoLocWs
+  const navActiveViewBase = mainView === 'helmCompare' ? 'helm' : activeWorkspace?.navView ?? mainView
+  const navActiveView = protoMode === 'C' && protoLocWsWide ? '__proto' : navActiveViewBase
 
   return (
     <PortForwardProvider>
@@ -1908,8 +1946,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       className={`relative flex bg-theme-base ${navCustomization.embedded ? 'h-full min-h-0' : 'h-screen'}`}
       style={{ minWidth: (isMobile ? 360 : 800) + (showNavRail ? (navRailEffectivePinned ? 176 : 56) : 0) }}
     >
-      {showNavRail && (
+      {showNavRail && !protoHideRail && (
         <PrimaryNavRail
+          protoReplaceResources={protoReplaceResources}
+          protoExtraItems={protoExtraItems}
           activeView={navActiveView}
           onNavigate={handlePrimaryNavigate}
           pinned={navRailEffectivePinned}
@@ -1938,6 +1978,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         {/* Fixed width keeps the omnibar steady as cluster and namespace names change. */}
         <div className="flex items-center gap-4 shrink-0 w-[492px]">
           <div className="flex items-center gap-2 min-w-0 flex-1">
+            {protoMode === 'D' && <ProtoAppSwitcher map={protoMap} />}
             <ScopePill>
               <ContextSwitcher ref={contextSwitcherRef} variant="segment" />
               <NamespaceSwitcher
@@ -2681,6 +2722,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {/* Update notification — hidden in embedded mode (OSS download nudge). */}
       {!navCustomization.embedded && <UpdateNotification />}
       {!navCustomization.embedded && <WhatsNew onNavigate={navigateToPath} usageData={usageData.data} />}
+      {!navCustomization.embedded && <ProtoSwitcher />}
       {!navCustomization.embedded && <UsageDataPrompt status={usageData.data} />}
       {!navCustomization.embedded && <ProductHuntNotice usageData={usageData.data} usageDataPending={usageData.isPending} />}
 
