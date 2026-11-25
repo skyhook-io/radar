@@ -26,7 +26,7 @@ import { getNamespaceColor } from '../../utils/traffic-colors'
 import { Tooltip } from '../ui/Tooltip'
 import { TrafficData } from './TrafficData'
 import { describeTrafficNode } from './traffic-export'
-import { dataByProtocol, protocolsOf, throughputLabel, totalDataByProtocol, protocolName, isRateBasedSource, isExternalKind, requestRateOf, errorRateOf, formatRate, formatConnections, formatVolume, MAX_VISIBLE_PORTS, displayVolume, latencyWeightOf, edgesOnPort, protocolLabel, type TrafficFocus } from './trafficFilters'
+import { dataByProtocol, protocolsOf, throughputLabel, totalDataByProtocol, protocolName, isRateBasedSource, isExternalKind, requestRateOf, errorRateOf, formatRate, formatConnections, formatVolume, MAX_VISIBLE_PORTS, displayVolume, latencyWeightOf, edgesOnPort, protocolLabel, portLabel, type TrafficFocus } from './trafficFilters'
 
 // ELK is 1.5 MB; load it with the first traffic layout, not with the app.
 let elkPromise: Promise<ELK> | null = null
@@ -157,6 +157,8 @@ function StatusDistributionBar({ counts }: { counts: Record<string, number> }) {
 interface PortInfo {
   port: number
   connections: number
+  /** Every edge on this port took it from a Service rather than observing it. */
+  fromService?: boolean
 }
 
 interface TrafficNodeData extends Record<string, unknown> {
@@ -309,7 +311,7 @@ export function TrafficNode({ data }: { data: TrafficNodeData }) {
                 'font-mono',
                 (hasNamespaceColor || isAddonNode) ? 'text-cyan-300' : 'text-blue-600 dark:text-blue-300'
               )}>
-                :{portInfo.port}
+                :{portLabel(portInfo.port, portInfo.fromService ? 'service' : undefined)}
               </span>
               {/* A port serving traffic with no HTTP has no request rate to show, and
                   "0" beside the port reads as an idle port rather than an unmeasured
@@ -754,8 +756,8 @@ function DetailsPanel({
                         ) : (
                           <ArrowRight className="h-3 w-3 text-theme-text-tertiary shrink-0" />
                         )}
-                        {flow.port !== 0 && (
-                          <span className="text-blue-400 font-mono">:{flow.port}</span>
+                        {portLabel(flow.port, flow.portSource) && (
+                          <span className="text-blue-400 font-mono">:{portLabel(flow.port, flow.portSource)}</span>
                         )}
                       </div>
                       <div className="flex items-center gap-2 text-[10px]">
@@ -806,8 +808,8 @@ function DetailsPanel({
                         <span className="text-theme-text-primary truncate flex-1">
                           {flow.destination.name}
                         </span>
-                        {flow.port !== 0 && (
-                          <span className="text-blue-400 font-mono">:{flow.port}</span>
+                        {portLabel(flow.port, flow.portSource) && (
+                          <span className="text-blue-400 font-mono">:{portLabel(flow.port, flow.portSource)}</span>
                         )}
                       </div>
                       <div className="flex items-center gap-2 text-[10px]">
@@ -858,10 +860,10 @@ function DetailsPanel({
               </div>
 
               <div className="grid grid-cols-2 gap-2 text-xs">
-                {edgeData.port !== 0 && (
+                {portLabel(edgeData.port, edgeData.flow?.portSource) && (
                   <div className="p-2 rounded bg-theme-elevated">
                     <div className="text-theme-text-tertiary">Port</div>
-                    <div className="text-theme-text-primary font-medium">{edgeData.port}</div>
+                    <div className="text-theme-text-primary font-medium">{portLabel(edgeData.port, edgeData.flow?.portSource)}</div>
                   </div>
                 )}
                 <div className="p-2 rounded bg-theme-elevated">
@@ -1194,6 +1196,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
 
     // Track primary port for each node (most common destination port)
     const nodePorts = new Map<string, Map<number, number>>() // nodeId -> port -> connection count
+    const observedPorts = new Set<string>() // `${nodeId}|${port}` seen on an edge that observed it
 
     // Count connections per node
     flows.forEach((flow) => {
@@ -1218,6 +1221,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
         if (!nodePorts.has(destId)) nodePorts.set(destId, new Map())
         const portCounts = nodePorts.get(destId)!
         portCounts.set(flow.port, (portCounts.get(flow.port) || 0) + volume)
+        if (!flow.portSource) observedPorts.add(`${destId}|${flow.port}`)
         if (flow.connections >= hotPathThreshold && hotPathThreshold > 0) hotNodes.add(destId)
       }
     })
@@ -1228,7 +1232,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
       if (!ports || ports.size === 0) return []
       const portList: PortInfo[] = []
       ports.forEach((connections, port) => {
-        portList.push({ port, connections })
+        portList.push({ port, connections, ...(!observedPorts.has(`${nodeId}|${port}`) && { fromService: true }) })
       })
       // Sort by connection count descending
       return portList.sort((a, b) => b.connections - a.connections)

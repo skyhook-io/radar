@@ -1985,3 +1985,45 @@ func TestBeylaSource_GetFlows_UnorientedProtocolBytes(t *testing.T) {
 		t.Errorf("protocol buckets: %+v", a.BytesByProtocol)
 	}
 }
+
+func TestBeylaSource_GetFlows_PortFromServiceWhenDstPortIsNotExported(t *testing.T) {
+	src := &BeylaSource{k8sClient: fake.NewSimpleClientset()}
+	src.servicePorts = func(ns, name, _ string) ([]int, bool) {
+		if ns == "demo" && name == "db" {
+			return []int{5432}, true
+		}
+		return nil, false
+	}
+	src.queryFn = func(_ context.Context, query string) (*prom.QueryResult, error) {
+		if strings.Contains(query, `direction="unknown"`) {
+			return emptyResult(), nil
+		}
+		if strings.Contains(query, "beyla_network_flow_bytes_total") {
+			return promResult("vector", promSeries(map[string]string{
+				"k8s_src_owner_name": "api", "k8s_src_namespace": "demo",
+				"k8s_dst_owner_name": "db", "k8s_dst_namespace": "demo",
+				"k8s_dst_owner_type": "Deployment", "transport": "TCP",
+			}, 40.0)), nil
+		}
+		return emptyResult(), nil
+	}
+
+	resp, err := src.GetFlows(context.Background(), FlowOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Flows) != 1 {
+		t.Fatalf("expected 1 flow, got %d", len(resp.Flows))
+	}
+	f := resp.Flows[0]
+	if f.Port != 5432 || f.PortSource != PortSourceService {
+		t.Errorf("got port %d/%q, want 5432 taken from the Service", f.Port, f.PortSource)
+	}
+	if !strings.Contains(resp.Warning, "taken from Service specs, not observed") {
+		t.Errorf("warning must say ports are taken from Services: %s", resp.Warning)
+	}
+	agg := AggregateFlows(resp.Flows)
+	if len(agg) != 1 || agg[0].PortSource != PortSourceService {
+		t.Errorf("the aggregate edge must keep the marking: %+v", agg)
+	}
+}

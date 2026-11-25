@@ -70,6 +70,7 @@ func AggregateFlows(flows []Flow) []AggregatedFlow {
 					Protocol:         f.Protocol,
 					BytesByProtocol:  make(map[string]ProtocolBytes),
 					Port:             f.Port,
+					PortSource:       f.PortSource,
 					LastSeen:         f.LastSeen,
 					DirectionUnknown: f.DirectionUnknown,
 				},

@@ -8,7 +8,7 @@ import { SEVERITY_BADGE, SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-co
 import { pluralize, StatusDot } from '@skyhook-io/k8s-ui'
 import type { StatusTone } from '@skyhook-io/k8s-ui'
 import { useFlowSearch } from './TrafficFlowListContext'
-import { isPolicyDropReason, protocolLabel } from './trafficFilters'
+import { isPolicyDropReason, portLabel, protocolLabel } from './trafficFilters'
 import { useQuery } from '@tanstack/react-query'
 import { fetchJSON } from '../../api/client'
 import { Tooltip } from '../ui/Tooltip'
@@ -208,7 +208,7 @@ export function TrafficFlowList({ flows, responsesCallerOriented }: TrafficFlowL
                       </>
                     )}
                     {!isHTTP && !isDNS && (
-                      <span className="text-theme-text-tertiary uppercase">{flow.port ? `${flow.protocol}:${flow.port}` : flow.protocol}</span>
+                      <span className="text-theme-text-tertiary uppercase">{portLabel(flow.port, flow.portSource) ? `${flow.protocol}:${portLabel(flow.port, flow.portSource)}` : flow.protocol}</span>
                     )}
                   </div>
 
@@ -255,10 +255,10 @@ export function TrafficFlowList({ flows, responsesCallerOriented }: TrafficFlowL
                         <span className="text-theme-text-primary">{protocolLabel(flow.l7Protocol, flow.protocol)}</span>
                         {flow.httpProtocol && <span className="text-theme-text-tertiary"> ({flow.httpProtocol})</span>}
                       </div>
-                      {flow.port !== 0 && (
+                      {portLabel(flow.port, flow.portSource) && (
                         <div>
                           <span className="text-theme-text-tertiary">Port: </span>
-                          <span className="text-theme-text-primary">{flow.port}</span>
+                          <span className="text-theme-text-primary">{portLabel(flow.port, flow.portSource)}</span>
                         </div>
                       )}
                       {flow.trafficDirection && (
@@ -440,7 +440,7 @@ function PolicyCorrelation({ flow }: { flow: TrafficFlow }) {
       if (src?.name) params.set('sourcePodName', src.name)
       if (src?.kind) params.set('sourceKind', src.kind)
       if (src?.ip) params.set('sourceIP', src.ip)
-      if (flow.port) params.set('port', String(flow.port))
+      if (flow.port && !flow.portSource) params.set('port', String(flow.port))
       if (flow.protocol) params.set('protocol', flow.protocol)
       return fetchJSON(`/network-policies/evaluate?${params}`)
     },

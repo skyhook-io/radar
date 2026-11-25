@@ -43,6 +43,9 @@ an inference from Beyla's code.
 `Default: false` in the attribute registry, so configuration A emits neither. A
 consumer grouping by them gets empty strings, which is how a port becomes `0` and
 how UDP becomes TCP. Configuration B is the only one where they appear.
+In configuration A Radar fills a port-0 edge from the destination's Services
+(their target port, marked "from Service"; "multiple (from Service)" when they
+declare several), so a port shown there is declared, not observed.
 
 **`direction` is exported by default, and every conversation is reported twice.**
 Values are `request`, `response` and `unknown`. The response series has source and
