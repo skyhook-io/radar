@@ -341,6 +341,16 @@ func buildRESTClientGetter(p restClientGetterParams) (genericclioptions.RESTClie
 		configFlags.ImpersonateGroup = &p.user.Groups
 	}
 
+	// Radar's config already holds the kubeconfig's proxy-url or the proxy
+	// saved in Radar for this context, which the kubeconfig flags don't know.
+	if p.restConfig != nil {
+		radarProxy := p.restConfig.Proxy
+		configFlags.WrapConfigFn = func(c *rest.Config) *rest.Config {
+			c.Proxy = radarProxy
+			return c
+		}
+	}
+
 	return configFlags, nil
 }
 

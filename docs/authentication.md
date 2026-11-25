@@ -171,6 +171,8 @@ Two things still hold on a shared listener without authentication:
 2. **Radar grants no more than its Kubernetes identity.** It gives no access to
    the machine or process it runs in:
    - the host local terminal is unavailable;
+   - a cluster proxy can't be saved, so no one can send Radar's Kubernetes
+     traffic through a proxy of their choosing;
    - profiling is off unless `RADAR_PPROF` turns it on;
    - in a cluster, integration settings are set by the operator (Helm values or
      flags), not from the UI;

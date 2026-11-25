@@ -73,6 +73,8 @@ var (
 	activeSourceFile   string
 	activeSourceName   string
 	activeSourceConfig *clientcmdapi.Config
+	// activeClusterProxy is the proxy saved in Radar that the active client uses, "" when none.
+	activeClusterProxy string
 	clusterName        string
 	contextNamespace   string   // Default namespace from kubeconfig context
 	fallbackNamespace  string   // Explicit namespace from --namespace flag
@@ -354,6 +356,10 @@ func doInit(opts InitOptions) error {
 				return fmt.Errorf("failed to build kubeconfig from %d files: %w", len(kubeconfigPaths), err)
 			}
 			return fmt.Errorf("failed to build kubeconfig from %s: %w", kubeconfigPath, err)
+		}
+		activeClusterProxy, err = applyClusterProxy(config, sourceContextBinding(activeSourceFile, activeSourceName), contextName)
+		if err != nil {
+			return err
 		}
 	}
 
@@ -988,6 +994,7 @@ func WriteKubeconfigSnapshotForCurrentContext(expectedContext *string) (Kubeconf
 	registry := contextRegistry
 	fileConfigs := perFileConfigs
 	singlePath := kubeconfigPath
+	proxy := activeClusterProxy
 	clientMu.RUnlock()
 
 	if expectedContext != nil && *expectedContext != ctx {
@@ -1048,6 +1055,29 @@ func WriteKubeconfigSnapshotForCurrentContext(expectedContext *string) (Kubeconf
 
 	if currentContextForFile != "" {
 		rawConfig.CurrentContext = currentContextForFile
+	}
+	// kubectl in the local terminal goes through the proxy saved in Radar too.
+	// The loaded config is shared with Radar's caches, so change a copy.
+	if proxy != "" {
+		rawConfig = *rawConfig.DeepCopy()
+		if c := rawConfig.Contexts[rawConfig.CurrentContext]; c != nil && rawConfig.Clusters[c.Cluster] != nil {
+			cluster := rawConfig.Clusters[c.Cluster]
+			// The proxy is saved for this context only, so a cluster entry
+			// another context shares stays as the kubeconfig has it.
+			for other, oc := range rawConfig.Contexts {
+				if other != rawConfig.CurrentContext && oc != nil && oc.Cluster == c.Cluster {
+					name := c.Cluster + "-radar-proxy"
+					for rawConfig.Clusters[name] != nil {
+						name += "-radar-proxy"
+					}
+					cluster = cluster.DeepCopy()
+					rawConfig.Clusters[name] = cluster
+					c.Cluster = name
+					break
+				}
+			}
+			cluster.ProxyURL = proxy
+		}
 	}
 
 	tmpFile, err := os.CreateTemp("", "radar-kubeconfig-*.yaml")
@@ -1638,6 +1668,9 @@ type ContextInfo struct {
 	// extracted from --profile arg or AWS_PROFILE env var. Set only for
 	// EKS-style exec plugins (aws, aws-iam-authenticator).
 	AWSProfile string `json:"awsProfile,omitempty"`
+	// ProxyURL is the proxy saved for this context in Radar, with any
+	// credentials removed.
+	ProxyURL string `json:"proxyUrl,omitempty"`
 }
 
 func extractAWSProfile(ai *clientcmdapi.AuthInfo) string {
@@ -1891,6 +1924,7 @@ type preparedContext struct {
 	clients     *sharedKubernetesClients
 	usesExec    bool
 	fingerprint string
+	proxy       string
 }
 
 // loadContextSource resolves a context name to the one kubeconfig file that
@@ -1999,6 +2033,10 @@ func prepareContext(name string) (*preparedContext, error) {
 		log.Printf("[k8s] Failed to build client config for context %q: %v", name, err)
 		return nil, fmt.Errorf("%w for %q: %s", errKubeconfigClientSetupFailed, name, kubeconfigDiagnosticError(err))
 	}
+	proxy, err := applyClusterProxy(config, sourceContextBinding(loadingRules.ExplicitPath, inFileName), name)
+	if err != nil {
+		return nil, fmt.Errorf("%w for %q: %w", errKubeconfigClientSetupFailed, name, err)
+	}
 
 	// Apply the same QPS/Burst settings as initial client creation.
 	// Without this, new clients use the default 5 QPS / 10 Burst, causing
@@ -2026,6 +2064,7 @@ func prepareContext(name string) (*preparedContext, error) {
 		clients:     clients,
 		usesExec:    usesExec,
 		fingerprint: contextSourceFingerprint(loadingRules.ExplicitPath, inFileName, rawConfig, kubeContext),
+		proxy:       proxy,
 	}, nil
 }
 
@@ -2066,6 +2105,7 @@ func installPreparedContext(p *preparedContext) {
 	activeSourceFile = p.sourceFile
 	activeSourceName = p.inFileName
 	activeSourceConfig = p.rawConfig.DeepCopy()
+	activeClusterProxy = p.proxy
 	clusterName = p.kubeContext.Cluster
 	contextNamespace = p.kubeContext.Namespace
 	installedConn.Store(installedConnectionLocked(p.config, p.clients))

@@ -46,6 +46,9 @@ func CurrentProfileTarget() (ProfileTarget, error) {
 			if cluster := activeSourceConfig.Clusters[ctx.Cluster]; cluster != nil {
 				identity.Proxy = cluster.ProxyURL
 			}
+			if activeClusterProxy != "" {
+				identity.Proxy = activeClusterProxy
+			}
 		}
 		identity.Server = k8sConfig.Host
 		identity.TLSName = k8sConfig.ServerName
