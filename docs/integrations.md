@@ -989,7 +989,9 @@ are redacted in its column and drawer; the YAML view and MCP show the object as 
 
 Radar reads and patches as the caller. Kubernetes checks `get` on the Workflow for the read and `patch` for a write. On a shared listener without authentication, anyone who can reach Radar can stop Workflows its Kubernetes identity can patch and read. The stock chart's Argo permissions are read-only. Same-origin and [connection binding](connection-lifecycle.md) checks apply.
 
-Radar checks the UID first. A same-name replacement returns 409 `workflow_replaced`. A finished run returns 409 `workflow_finished`. If the current shutdown already satisfies the request (including Terminate for a Stop request), Radar returns 200 with the stored `shutdown` and `changed: false`. These checks precede the optional version check. If a patch is still needed and the supplied version is stale, Radar returns 409 `workflow_changed`. Each patch uses the version just read. A conflict during the patch returns 409 `workflow_changed`. If Kubernetes does not store the requested strategy, Radar reports 422. Radar sets `radar.skyhook.io/stopped-at` and, when authenticated, `radar.skyhook.io/stopped-by` using the caller identity. The body limit is 1 KiB. The capability is `workflowStop`.
+Radar checks the UID first. A same-name replacement returns 409 `workflow_replaced`. A finished run returns 409 `workflow_finished`. If the current shutdown already satisfies the request (including Terminate for a Stop request), Radar returns 200 with the stored `shutdown` and `changed: false`. These checks precede the optional version check. If a patch is still needed and the supplied version is stale, Radar returns 409 `workflow_changed`. Each patch uses the version just read. A conflict during the patch returns 409 `workflow_changed`.
+
+After Kubernetes accepts a patch, Radar returns 200 with `changed: true` and the stored `shutdown`, even if admission rewrote the strategy. If admission removed `spec.shutdown`, `shutdown` is the empty string. Kubernetes validation failures return 422. The body limit is 1 KiB. The capability is `workflowStop`.
 
 ---
 

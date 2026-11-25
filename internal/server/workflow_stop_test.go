@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -75,7 +77,7 @@ func postStop(srv *Server, body string, header map[string]string) *httptest.Resp
 }
 
 func TestWorkflowStop(t *testing.T) {
-	t.Run("terminate is bound to the version read and records when", func(t *testing.T) {
+	t.Run("terminate patches only shutdown at the version read", func(t *testing.T) {
 		srv, dyn := workflowStopServer(t, testWorkflow("Running", ""))
 		rec := postStop(srv, `{"strategy":"Terminate","uid":"run-1"}`, nil)
 		var resp WorkflowStopResponse
@@ -87,17 +89,15 @@ func TestWorkflowStop(t *testing.T) {
 			t.Fatalf("patches: %v", ps)
 		}
 		body := patchBody(t, ps[0])
-		md := body["metadata"].(map[string]any)
-		ann := md["annotations"].(map[string]any)
-		if body["spec"].(map[string]any)["shutdown"] != "Terminate" || md["resourceVersion"] != "7" || ann[workflowStoppedAtAnnotation] == nil {
-			t.Fatalf("patch: %v", body)
+		want := map[string]any{
+			"metadata": map[string]any{"resourceVersion": "7"},
+			"spec":     map[string]any{"shutdown": "Terminate"},
 		}
-		// Without authentication there is no caller to name.
-		if ann[workflowStoppedByAnnotation] != nil || len(body["spec"].(map[string]any)) != 1 || len(ann) != 2 {
-			t.Fatalf("patch writes more than shutdown and stopped-at: %v", body)
+		if !reflect.DeepEqual(body, want) {
+			t.Fatalf("patch = %v, want %v", body, want)
 		}
 	})
-	t.Run("stop runs exit handlers", func(t *testing.T) {
+	t.Run("requests graceful shutdown", func(t *testing.T) {
 		srv, dyn := workflowStopServer(t, testWorkflow("Running", ""))
 		if rec := postStop(srv, `{"strategy":"Stop","uid":"run-1"}`, nil); rec.Code != http.StatusOK {
 			t.Fatalf("status = %d", rec.Code)
@@ -183,12 +183,14 @@ func TestWorkflowStop(t *testing.T) {
 			t.Fatalf("status = %d resp = %+v patches = %d", rec.Code, resp, len(workflowPatches(dyn)))
 		}
 	})
-	t.Run("reports when admission does not store the requested shutdown", func(t *testing.T) {
+	t.Run("reports the shutdown stored by admission", func(t *testing.T) {
 		srv, dyn := workflowStopServer(t, testWorkflow("Running", ""))
 		dyn.PrependReactor("patch", "workflows", func(k8stesting.Action) (bool, runtime.Object, error) {
-			return true, testWorkflow("Running", ""), nil
+			return true, testWorkflow("Running", "Stop"), nil
 		})
-		if rec := postStop(srv, `{"strategy":"Terminate","uid":"run-1"}`, nil); rec.Code != http.StatusUnprocessableEntity {
+		rec := postStop(srv, `{"strategy":"Terminate","uid":"run-1"}`, nil)
+		var resp WorkflowStopResponse
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &resp) != nil || !resp.Changed || resp.Shutdown != "Stop" {
 			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 		}
 	})
@@ -232,22 +234,22 @@ func TestWorkflowStop(t *testing.T) {
 	})
 }
 
-// With authentication the read and the patch run as the caller, and the
-// caller is recorded as who stopped it.
 func TestWorkflowStopReadsAndPatchesAsTheCaller(t *testing.T) {
 	srv, dyn := workflowStopServer(t, testWorkflow("Running", ""))
 	var mu sync.Mutex
 	var requests []string
-	var patched map[string]any
+	groups := []string{"operators", "on-call"}
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		requests = append(requests, r.Method+" as "+r.Header.Get("Impersonate-User"))
+		mu.Unlock()
+		if got := r.Header.Values("Impersonate-Group"); !slices.Equal(got, groups) {
+			t.Errorf("%s impersonated groups = %v, want %v", r.Method, got, groups)
+		}
 		workflow := testWorkflow("Running", "")
 		if r.Method == http.MethodPatch {
-			_ = json.NewDecoder(r.Body).Decode(&patched)
 			workflow = testWorkflow("Running", "Terminate")
 		}
-		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(workflow)
 	}))
@@ -258,7 +260,7 @@ func TestWorkflowStopReadsAndPatchesAsTheCaller(t *testing.T) {
 	router := chi.NewRouter()
 	router.Post("/api/workflows/{namespace}/{name}/stop", srv.bindWrite(srv.handleWorkflowStop))
 	req := httptest.NewRequest(http.MethodPost, "/api/workflows/jobs/migrate-abcde/stop", strings.NewReader(`{"strategy":"Terminate","uid":"run-1"}`))
-	req = req.WithContext(auth.ContextWithUser(req.Context(), &auth.User{Username: "alice"}))
+	req = req.WithContext(auth.ContextWithUser(req.Context(), &auth.User{Username: "alice", Groups: groups}))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -268,10 +270,6 @@ func TestWorkflowStopReadsAndPatchesAsTheCaller(t *testing.T) {
 	defer mu.Unlock()
 	if len(requests) != 2 || requests[0] != "GET as alice" || requests[1] != "PATCH as alice" {
 		t.Fatalf("API requests = %v, want a GET and a PATCH as alice", requests)
-	}
-	ann, _ := patched["metadata"].(map[string]any)["annotations"].(map[string]any)
-	if ann[workflowStoppedByAnnotation] != "alice" {
-		t.Fatalf("stopped-by: %v", patched)
 	}
 	if n := len(workflowPatches(dyn)); n != 0 {
 		t.Fatalf("issued %d patches through Radar's own client", n)

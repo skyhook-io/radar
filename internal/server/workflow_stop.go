@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -20,13 +19,6 @@ import (
 
 var argoWorkflowGVR = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "workflows"}
 
-// Annotations Radar sets on a Workflow it stops. stopped-by is the
-// authenticated caller (absent when Radar runs without authentication).
-const (
-	workflowStoppedByAnnotation = "radar.skyhook.io/stopped-by"
-	workflowStoppedAtAnnotation = "radar.skyhook.io/stopped-at"
-)
-
 // WorkflowStopRequest targets the Workflow instance the caller reviewed.
 type WorkflowStopRequest struct {
 	UID             string `json:"uid"`
@@ -38,7 +30,7 @@ type WorkflowStopRequest struct {
 type WorkflowStopResponse struct {
 	// Shutdown is the resulting value of spec.shutdown.
 	Shutdown string `json:"shutdown"`
-	// Changed reports whether this request changed spec.shutdown.
+	// Changed reports whether Kubernetes accepted a patch for this request.
 	Changed bool `json:"changed"`
 }
 
@@ -95,26 +87,14 @@ func (s *Server) handleWorkflowStop(w http.ResponseWriter, r *http.Request) {
 		s.writeErrorCode(w, http.StatusConflict, "workflow_changed", "the workflow changed before stopping it; look again")
 		return
 	}
-	annotations := map[string]any{
-		workflowStoppedAtAnnotation: time.Now().UTC().Format(time.RFC3339),
-		workflowStoppedByAnnotation: nil,
-	}
-	if u := auth.UserFromContext(r.Context()); u != nil && u.Username != "" {
-		annotations[workflowStoppedByAnnotation] = u.Username
-	}
 	updated, err := integration.ApplyVersionedMergePatch(r.Context(), client, argoWorkflowGVR, wf, map[string]any{
-		"metadata": map[string]any{"annotations": annotations},
-		"spec":     map[string]any{"shutdown": req.Strategy},
+		"spec": map[string]any{"shutdown": req.Strategy},
 	})
 	if err != nil {
 		s.writeWorkflowStopError(w, err, namespace, name, "patch")
 		return
 	}
 	shutdown, _, _ := unstructured.NestedString(updated.Object, "spec", "shutdown")
-	if shutdown != req.Strategy {
-		s.writeError(w, http.StatusUnprocessableEntity, "Kubernetes did not store the requested workflow shutdown strategy")
-		return
-	}
 	s.writeJSON(w, WorkflowStopResponse{Shutdown: shutdown, Changed: true})
 }
 
