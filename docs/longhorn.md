@@ -1,28 +1,12 @@
 # Longhorn workspace
 
-`GET /api/longhorn/workspace` is the read behind the Longhorn workspace: every
-Longhorn `Volume` the caller can read, with its health, its healthy replicas and
-the PV it backs now. It is read-only. Rules live in `pkg/longhorn` (pure), the
-service in `internal/longhorn`, the handler in
-`internal/server/longhorn_workspace.go`; the wire types are mirrored in
-k8s-ui's `components/longhorn/types.ts` and fetched by `useLonghornWorkspace`
-(`web/src/api/longhorn.ts`), gated on the `longhornWorkspace` capability. The
-Volume drawer and the Issues themselves are described in
-[integrations.md](integrations.md#longhorn).
+`GET /api/longhorn/workspace` is the read behind the Longhorn workspace: every Longhorn `Volume` the caller can read, with its health, its healthy replicas and the PV it backs now. It is read-only. Rules live in `pkg/longhorn` (pure), the service in `internal/longhorn`, the handler in `internal/server/longhorn_workspace.go`; the wire types are mirrored in k8s-ui's `components/longhorn/types.ts` and fetched by `useLonghornWorkspace` (`web/src/api/longhorn.ts`), gated on the `longhornWorkspace` capability. The Volume drawer and the Issues themselves are described in [integrations.md](integrations.md#longhorn).
 
 ## Scope and access
 
-- The namespace picker is not applied: Longhorn keeps its objects in its own
-  namespace (usually `longhorn-system`), while the picker selects application
-  namespaces. `--namespace-scope` still bounds the read (`forcedNamespace`).
-- Volumes and Engines are each authorized on the caller's own `list` access.
-  A caller without the cluster-wide list is checked only in the namespaces
-  where Radar holds Longhorn objects, and its read is always `partial`, so the
-  answer never shows whether those namespaces held more. No namespace the
-  caller did not name is reported as denied.
-- PVs are read only when the caller may list them cluster-wide, and only when
-  some Volume was read. A PV's claim is named only to a caller who may list
-  PVCs in the claim's namespace.
+- The namespace picker is not applied: Longhorn keeps its objects in its own namespace (usually `longhorn-system`), while the picker selects application namespaces. `--namespace-scope` still bounds the read (`forcedNamespace`).
+- Volumes and Engines are each authorized on the caller's own `list` access. A caller without the cluster-wide list is checked only in the namespaces where Radar holds Longhorn objects, and its read is always `partial`, so the answer never shows whether those namespaces held more. No namespace the caller did not name is reported as denied.
+- PVs are read only when the caller may list them cluster-wide, and only when some Volume was read. A PV's claim is named only to a caller who may list PVCs in the claim's namespace.
 
 ## Values and their sources
 
@@ -41,6 +25,4 @@ Volume drawer and the Issues themselves are described in
 | `use.claim` | the PV's `spec.claimRef`, while the PV is `Bound` | absent when the PV isn't Bound; `claimWithheld: true` when the caller can't list PVCs in its namespace |
 | `issues`, `issueTotal` | the Issues engine's Longhorn rules over the Volumes read: faulted is critical, degraded a warning whose `first_seen` is `lastDegradedAt` | only Volumes the caller read raise rows; `first_seen` is absent when the onset isn't recorded. The first 100 are returned, `issueTotal` counts all |
 
-Degraded is routine while Longhorn rebuilds replicas after a drain or
-restart; `lastDegradedAt` says how long it has lasted. Detached is not a
-problem and raises no Issue.
+Degraded is routine while Longhorn rebuilds replicas after a drain or restart; `lastDegradedAt` says how long it has lasted. Detached is not a problem and raises no Issue.

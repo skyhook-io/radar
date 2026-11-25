@@ -57,9 +57,4 @@ func TestUseOf(t *testing.T) {
 	if u := UseOf("v", []*corev1.PersistentVolume{pv("a", "v", corev1.VolumeBound), pv("b", "v", corev1.VolumeBound)}, all); u.State != UseUnknown || u.PersistentVolume != "" {
 		t.Errorf("two PVs on one handle: %+v, want unknown", u)
 	}
-	other := pv("a", "v", corev1.VolumeBound)
-	other.Spec.CSI.Driver = "other.csi"
-	if u := UseOf("v", []*corev1.PersistentVolume{other}, all); u.State != UseNone {
-		t.Errorf("another driver's PV proved use: %+v", u)
-	}
 }

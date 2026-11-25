@@ -1,11 +1,9 @@
 // Wire types for /api/longhorn/workspace. Go is the source of truth:
 // internal/longhorn/workspace.go and pkg/longhorn/reading.go.
 
-export type LonghornCoverageState = 'full' | 'partial' | 'denied' | 'notInstalled' | 'syncing' | 'uncached' | 'error'
-
 /** integration.KindCoverage */
 export interface LonghornKindCoverage {
-  state: LonghornCoverageState
+  state: 'full' | 'partial' | 'denied' | 'notInstalled' | 'syncing' | 'uncached' | 'error'
   deniedNamespaces?: string[]
   uncachedNamespaces?: string[]
   /** For partial coverage: the namespaces that were read. */
@@ -14,11 +12,7 @@ export interface LonghornKindCoverage {
 
 export type LonghornWorkspaceKey = 'volumes' | 'engines' | 'persistentVolumes'
 
-/** pkg/longhorn Health */
 export type LonghornVolumeHealth = 'healthy' | 'degraded' | 'faulted' | 'detached' | 'unknown'
-
-/** Why healthyReplicas is null. */
-export type LonghornReplicasUnknown = 'engineUnread' | 'engineAmbiguous' | 'noEngine' | 'noModes'
 
 /** pkg/longhorn VolumeUse: the PV a Volume backs now, proven by the live PV. */
 export interface LonghornVolumeUse {
@@ -38,13 +32,14 @@ export interface LonghornVolumeReading {
   health: LonghornVolumeHealth
   state?: string
   robustness?: string
-  /** Bytes. */
+  /** Bytes, as is actualSize. */
   size?: number
   actualSize?: number
   numberOfReplicas?: number
   /** Replicas in mode RW per the Engine; null when unknown, never the requested count. */
   healthyReplicas: number | null
-  healthyReplicasUnknown?: LonghornReplicasUnknown
+  /** Why healthyReplicas is null. */
+  healthyReplicasUnknown?: 'engineUnread' | 'engineAmbiguous' | 'noEngine' | 'noModes'
   lastDegradedAt?: string
   use: LonghornVolumeUse
 }

@@ -86,8 +86,8 @@ func (c *HealthCounts) Add(h Health) {
 	}
 }
 
-// ReadVolume reads v with its namespace's Engines (enginesRead: the caller
-// could read them there). Use is left for the caller, which holds the PVs.
+// ReadVolume reads v with its namespace's Engines, enginesRead when the caller
+// could read them there. Use is left to the caller, which holds the PVs.
 func ReadVolume(v *unstructured.Unstructured, engines []*unstructured.Unstructured, enginesRead bool) VolumeReading {
 	str := func(f ...string) string { s, _, _ := unstructured.NestedString(v.Object, f...); return s }
 	r := VolumeReading{
@@ -125,16 +125,15 @@ func healthyReplicas(volume string, engines []*unstructured.Unstructured, read b
 			active = append(active, e)
 		}
 	}
-	var engine *unstructured.Unstructured
-	switch {
-	case len(candidates) == 0:
+	if len(candidates) == 0 {
 		return nil, ReplicasNoEngine
-	case len(candidates) == 1:
-		engine = candidates[0]
-	case len(active) == 1:
-		engine = active[0]
-	default:
+	}
+	if len(candidates) > 1 && len(active) != 1 {
 		return nil, ReplicasEngineAmbiguous
+	}
+	engine := candidates[0]
+	if len(candidates) > 1 {
+		engine = active[0]
 	}
 	modes, found, err := unstructured.NestedStringMap(engine.Object, "status", "replicaModeMap")
 	if !found || err != nil {

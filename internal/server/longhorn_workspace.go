@@ -17,16 +17,11 @@ import (
 )
 
 // handleLonghornWorkspace serves GET /api/longhorn/workspace: every Longhorn
-// Volume the caller can read, with its health, healthy replicas from its
-// Engine and its current PV.
-//
-// The namespace picker is not applied: Longhorn keeps its objects in its own
-// namespace (longhorn-system) while the picker selects application
-// namespaces. Each kind is still authorized per namespace on the caller's own
-// access, the --namespace-scope clamp still bounds the request, and no
-// namespace the caller did not name is ever reported as denied. PVs are read
-// only with the caller's cluster-wide list of them, and a PV's claim is named
-// only to a caller who may list PVCs in its namespace.
+// Volume the caller can read. The namespace picker is not applied, since
+// Longhorn keeps its objects in longhorn-system; each kind is authorized per
+// namespace on the caller's own access, as for Velero. PVs need the caller's
+// cluster-wide list, and a claim is named only with PVC access in its
+// namespace.
 func (s *Server) handleLonghornWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) || s.writeIfDiscoveryPending(w) {
 		return

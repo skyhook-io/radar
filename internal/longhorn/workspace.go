@@ -62,7 +62,6 @@ type Observations struct {
 type Reader struct {
 	ClusterContext string
 	Observations   Observations
-	Now            func() time.Time
 }
 
 // Issue is the subset of an Issues row the workspace renders.
@@ -99,12 +98,8 @@ type WorkspaceResponse struct {
 
 // Workspace reads every Longhorn Volume the caller can see.
 func (r *Reader) Workspace(ctx context.Context) WorkspaceResponse {
-	now := time.Now().UTC()
-	if r.Now != nil {
-		now = r.Now().UTC()
-	}
 	resp := WorkspaceResponse{
-		ObservedAt: now, Installed: r.Observations.Installed, Context: r.ClusterContext,
+		ObservedAt: time.Now().UTC(), Installed: r.Observations.Installed, Context: r.ClusterContext,
 		ForcedNamespace: r.Observations.ForcedNamespace, Coverage: map[string]integration.KindCoverage{},
 		Volumes: []domain.VolumeReading{}, Issues: []Issue{},
 	}
@@ -158,10 +153,7 @@ func (r *Reader) Workspace(ctx context.Context) WorkspaceResponse {
 	resp.Counts = counts
 	sort.Slice(resp.Volumes, func(i, j int) bool {
 		a, b := resp.Volumes[i], resp.Volumes[j]
-		if a.Namespace != b.Namespace {
-			return a.Namespace < b.Namespace
-		}
-		return a.Name < b.Name
+		return a.Namespace < b.Namespace || (a.Namespace == b.Namespace && a.Name < b.Name)
 	})
 	for _, iss := range issues.DetectLonghorn(volumes) {
 		resp.IssueTotal++

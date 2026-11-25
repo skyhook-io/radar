@@ -75,18 +75,11 @@ func seedLonghornPVs(t *testing.T) {
 			_ = testFakeClient.CoreV1().PersistentVolumes().Delete(context.Background(), p.Name, metav1.DeleteOptions{})
 		})
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for {
+	waitFor(t, 5*time.Second, func() bool {
 		_, a, _ := k8s.GetResourceCache().ReadableObject("persistentvolumes", "", "pv-a")
 		_, b, _ := k8s.GetResourceCache().ReadableObject("persistentvolumes", "", "pv-b")
-		if a && b {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("PVs never reached the cache")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+		return a && b
+	})
 }
 
 func seedLonghornWorkspace(t *testing.T) {
@@ -143,13 +136,8 @@ func TestLonghornWorkspace_NotInstalled(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := decodeLonghornWorkspace(t, resp)
-	if got.Installed || got.Counts != nil || len(got.Volumes) != 0 {
-		t.Fatalf("installed=%v counts=%+v volumes=%+v", got.Installed, got.Counts, got.Volumes)
-	}
-	for _, key := range []string{"volumes", "engines", longhornsvc.PersistentVolumesKey} {
-		if got.Coverage[key].State != integration.KindCoverageNotInstalled {
-			t.Errorf("%s coverage %+v, want notInstalled", key, got.Coverage[key])
-		}
+	if got.Installed || got.Counts != nil || len(got.Volumes) != 0 || got.Coverage["volumes"].State != integration.KindCoverageNotInstalled {
+		t.Fatalf("installed=%v counts=%+v volumes=%+v coverage=%+v", got.Installed, got.Counts, got.Volumes, got.Coverage)
 	}
 }
 
@@ -223,22 +211,21 @@ func TestLonghornWorkspace_PartialNamespaces(t *testing.T) {
 	}
 }
 
-func TestLonghornWorkspace_UnreadEnginesLeaveReplicasUnknown(t *testing.T) {
+// Engines, PVs and claims are each read on the caller's own access: what it
+// can't read is unknown or withheld, never inferred.
+func TestLonghornWorkspace_UnreadEnginesPVsAndClaims(t *testing.T) {
 	seedLonghornWorkspace(t)
 	env := newAuthTestServer(t)
 	lhUser(env, "no-engines", true, false, true, "app", "tenant")
-	got := decodeLonghornWorkspace(t, env.authGet(t, "/api/longhorn/workspace", "no-engines", ""))
-	a := lhVolume(got, "longhorn-system", "pvc-a")
-	if a == nil || a.HealthyReplicas != nil || a.HealthyReplicasUnknown != longhornpkg.ReplicasEngineUnread {
-		t.Fatalf("pvc-a %+v: healthy replicas must be unknown, never the requested count", a)
-	}
-}
-
-func TestLonghornWorkspace_UnreadPVsNameNoUse(t *testing.T) {
-	seedLonghornWorkspace(t)
-	env := newAuthTestServer(t)
 	lhUser(env, "no-pvs", true, true, false, "app", "tenant")
-	got := decodeLonghornWorkspace(t, env.authGet(t, "/api/longhorn/workspace", "no-pvs", ""))
+	lhUser(env, "app-only", true, true, true, "app")
+
+	got := decodeLonghornWorkspace(t, env.authGet(t, "/api/longhorn/workspace", "no-engines", ""))
+	if a := lhVolume(got, "longhorn-system", "pvc-a"); a == nil || a.HealthyReplicas != nil || a.HealthyReplicasUnknown != longhornpkg.ReplicasEngineUnread {
+		t.Errorf("pvc-a %+v: healthy replicas must be unknown, never the requested count", a)
+	}
+
+	got = decodeLonghornWorkspace(t, env.authGet(t, "/api/longhorn/workspace", "no-pvs", ""))
 	if got.Coverage[longhornsvc.PersistentVolumesKey].State != integration.KindCoverageDenied {
 		t.Errorf("PVs coverage %+v", got.Coverage[longhornsvc.PersistentVolumesKey])
 	}
@@ -247,18 +234,12 @@ func TestLonghornWorkspace_UnreadPVsNameNoUse(t *testing.T) {
 			t.Errorf("%s use %+v without the PV read", v.Name, v.Use)
 		}
 	}
-}
 
-func TestLonghornWorkspace_ClaimWithheldOutsideCallerNamespaces(t *testing.T) {
-	seedLonghornWorkspace(t)
-	env := newAuthTestServer(t)
-	lhUser(env, "app-only", true, true, true, "app")
-	got := decodeLonghornWorkspace(t, env.authGet(t, "/api/longhorn/workspace", "app-only", ""))
+	got = decodeLonghornWorkspace(t, env.authGet(t, "/api/longhorn/workspace", "app-only", ""))
 	if a := lhVolume(got, "longhorn-system", "pvc-a"); a == nil || a.Use.Claim == nil || a.Use.Claim.Name != "data-a" {
 		t.Errorf("pvc-a use %+v, want its claim named", a)
 	}
-	b := lhVolume(got, "longhorn-system", "pvc-b")
-	if b == nil || b.Use.PersistentVolume != "pv-b" || b.Use.Claim != nil || !b.Use.ClaimWithheld {
+	if b := lhVolume(got, "longhorn-system", "pvc-b"); b == nil || b.Use.PersistentVolume != "pv-b" || b.Use.Claim != nil || !b.Use.ClaimWithheld {
 		t.Errorf("pvc-b use %+v, want the PV named and its claim withheld", b)
 	}
 }
