@@ -864,6 +864,16 @@ export function getDefaultContainerName(pod: any): string | undefined {
   return containers[0]?.name
 }
 
+interface EphemeralContainerRef { name: string; image: string; targetContainerName?: string }
+
+export function getRunningEphemeralContainers(pod: {
+  spec?: { ephemeralContainers?: EphemeralContainerRef[] }
+  status?: { ephemeralContainerStatuses?: { name: string; state?: { running?: object } }[] }
+}): EphemeralContainerRef[] {
+  return (pod.spec?.ephemeralContainers ?? []).filter(container =>
+    pod.status?.ephemeralContainerStatuses?.some(status => status.name === container.name && status.state?.running))
+}
+
 /**
  * The containers a terminal can target: the regular containers, then native
  * sidecars (init containers with restartPolicy: Always, Kubernetes 1.29+),

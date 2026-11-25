@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Copy, RefreshCw, Terminal } from 'lucide-react'
-import { useOpenTerminal } from '@skyhook-io/k8s-ui'
+import { getRunningEphemeralContainers, useOpenTerminal } from '@skyhook-io/k8s-ui'
 import { copyText } from '@skyhook-io/k8s-ui/utils/clipboard'
 import { useResource } from '../../api/client'
 import { connectionHeaderValue } from '../../api/connectionBinding'
@@ -20,8 +20,7 @@ export function MissingShellDebug({ namespace, name, uid, target, connection, ba
   const podQuery = useResource<PodDebugTarget>('pods', namespace, name, undefined, { enabled })
   const pod = podQuery.data
   const usable = enabled && !podQuery.error && pod?.metadata.uid === uid && runningPodDebugTargets(pod)?.includes(target)
-  const running = usable ? (pod.spec.ephemeralContainers ?? []).filter(c => c.targetContainerName === target &&
-    pod.status.ephemeralContainerStatuses?.some(status => status.name === c.name && status.state?.running)) : []
+  const running = usable ? getRunningEphemeralContainers(pod).filter(c => c.targetContainerName === target) : []
   const { query, support } = usePodDebugAccess(namespace, name, uid, !!usable && !running.length)
   const openTerminal = useOpenTerminal()
   const [choice, setChoice] = useState('')

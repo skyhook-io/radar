@@ -5,7 +5,7 @@ import { PolicySection } from './PolicySection'
 import type { PolicyResourceResponse } from '../../../types/policy'
 import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink, useOperationalIssuesShown, PodAggregateResources } from '../../ui/drawer-components'
 import { SUBSTRATE_GROUP, SUBSTRATE_WORKER_POOL_LABEL } from '../resource-utils-agent-runtimes'
-import { formatResources, formatDuration, getPodProblems, getPodPhaseDisplay, healthColors, SEVERITY_DOT_COLOR, getDefaultContainerName, getExecContainerNames, getInitContainerNames, getLogContainerNames } from '../resource-utils'
+import { formatResources, formatDuration, getPodProblems, getPodPhaseDisplay, healthColors, SEVERITY_DOT_COLOR, getDefaultContainerName, getExecContainerNames, getRunningEphemeralContainers, getInitContainerNames, getLogContainerNames } from '../resource-utils'
 import { getResourceStatusColor, SEVERITY_BORDER } from '../../../utils/badge-colors'
 import {
   rbacVerbBadgeClass,
@@ -326,9 +326,7 @@ export function PodRenderer({
   const containerStatuses = data.status?.containerStatuses || []
   const containers = data.spec?.containers || []
   const initContainers = data.spec?.initContainers || []
-  const runningDebugContainers = (data.spec?.ephemeralContainers ?? []).filter((container: { name: string }) =>
-    data.status?.ephemeralContainerStatuses?.some((status: { name: string; state?: { running?: object } }) =>
-      status.name === container.name && status.state?.running))
+  const runningDebugContainers = getRunningEphemeralContainers(data)
   const podResources = data.spec?.resources
   const initContainerStatuses = data.status?.initContainerStatuses || []
   const hasEnvironmentDeclarations = [...initContainers, ...containers].some(
@@ -698,7 +696,7 @@ export function PodRenderer({
 
       {onOpenEphemeralTerminal && canExec && data.apiVersion === 'v1' && data.kind === 'Pod' && data.metadata?.uid && !data.metadata.deletionTimestamp && data.status?.phase === 'Running' && runningDebugContainers.length > 0 && (
         <Section title="Running debug containers" icon={TerminalIcon} defaultExpanded>
-          <div className="space-y-2">{runningDebugContainers.map((container: { name: string; image: string; targetContainerName?: string }) => (
+          <div className="space-y-2">{runningDebugContainers.map(container => (
             <div key={container.name} className="card-inner flex items-center gap-2 p-3">
               <div className="min-w-0 flex-1">
                 <div className="break-all font-mono text-sm text-theme-text-primary">{container.name}</div>
