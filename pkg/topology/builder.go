@@ -3720,7 +3720,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			}
 			name := gw.GetName()
 			gwID := fmt.Sprintf("gateway/%s/%s", ns, name)
-			gatewaySources = append(gatewaySources, declaring{ref: resourceid.NewRef(gatewayGVR.Group, "Gateway", ns, name), obj: gw})
+			gatewaySources = append(gatewaySources, declaring{ref: resourceid.NewRef(resourceid.GroupFromAPIVersion(gw.GetAPIVersion()), "Gateway", ns, name), obj: gw})
 
 			listeners, _, _ := unstructured.NestedSlice(gw.Object, "spec", "listeners")
 			addresses, _, _ := unstructured.NestedSlice(gw.Object, "status", "addresses")
