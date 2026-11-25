@@ -186,7 +186,8 @@ describe('ApplicationsView fleet rows', () => {
     render({ variant: 'fleet', entries: [entry] })
     expect(host.textContent).toContain('prod 6.7.0·staging 6.8.0 (configured)')
     vi.useFakeTimers()
-    const shortTag = [...host.querySelectorAll('td .font-mono')].find((el) => el.textContent === '6.7.0')!
+    const shortTag = [...host.querySelectorAll<HTMLElement>('td .font-mono')].find((el) => el.textContent === '6.7.0')!
+    expect(shortTag.tabIndex).toBe(-1)
     act(() => { shortTag.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })) })
     act(() => { vi.advanceTimersByTime(150) })
     expect(shortTag.hasAttribute('title')).toBe(false)
@@ -196,11 +197,24 @@ describe('ApplicationsView fleet rows', () => {
     expect(host.textContent).toContain('6.7.0')
     expect(host.textContent).toContain('staging 6.8.0 (configured)')
 
+  })
+
+  it('exposes the full abbreviated tag to screen readers and on focus or hover', () => {
+    vi.useFakeTimers()
+    const { host, render } = mountList()
     const longVersion = 'release-2026-11-25-123456789'
     render({ variant: 'fleet', entries: [{ ...entry, envVersions: [{ env: 'prod', version: longVersion, source: 'observed' }] }] })
-    const truncatedTag = [...host.querySelectorAll('td .font-mono')].find((el) => el.textContent?.includes('…'))!
+    const truncatedTag = host.querySelector<HTMLElement>('td [tabindex="0"].font-mono')!
+    expect(truncatedTag.querySelector('[aria-hidden="true"]')?.textContent).toContain('…')
+    expect(truncatedTag.querySelector('.sr-only')?.textContent).toBe(longVersion)
+    act(() => truncatedTag.focus())
+    expect(document.activeElement).toBe(truncatedTag)
+    act(() => { vi.advanceTimersByTime(150) })
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toBe(longVersion)
+    act(() => truncatedTag.blur())
+    expect(document.querySelector('[role="tooltip"]')).toBeNull()
     act(() => { truncatedTag.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })) })
     act(() => { vi.advanceTimersByTime(150) })
-    expect(document.body.lastElementChild?.textContent).toBe(longVersion)
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toBe(longVersion)
   })
 })

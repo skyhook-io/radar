@@ -107,12 +107,20 @@ function FleetVersionCell({ entry }: { entry: FleetAppEntry }) {
       )}
       {envVersions.map((v, i) => {
         const tag = midTruncate(v.version, 20)
+        const truncated = tag !== v.version
         return (
           <span key={`${v.env}:${i}`} className="whitespace-nowrap">
             {i > 0 && <span className="mr-2 text-theme-text-tertiary" aria-hidden>·</span>}
             <span className="text-theme-text-tertiary">{v.env || 'unlabeled'}</span>{' '}
-            <WithTooltip tip={tag !== v.version ? v.version : undefined} delay={150}>
-              <span className="font-mono text-theme-text-secondary">{tag}</span>
+            <WithTooltip tip={truncated ? v.version : undefined} delay={150}>
+              <span tabIndex={truncated ? 0 : undefined} className="font-mono text-theme-text-secondary">
+                {truncated ? (
+                  <>
+                    <span aria-hidden="true">{tag}</span>
+                    <span className="sr-only">{v.version}</span>
+                  </>
+                ) : tag}
+              </span>
             </WithTooltip>
             {v.source === 'configured' && <span className="text-theme-text-tertiary"> (configured)</span>}
           </span>
