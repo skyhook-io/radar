@@ -327,6 +327,22 @@ func TestSuggestNameOverrideAndNotFound(t *testing.T) {
 	}
 }
 
+// OpenObserve strips the cluster label on remote write by default, so a
+// setup that set it finds the Pods with no cluster label at all.
+func TestSuggestNamePodsWithoutClusterLabel(t *testing.T) {
+	store := &routeStore{routes: []route{
+		{match: []string{`uid=~`}, rows: []map[string]string{{"uid": cDB}}},
+	}}
+	got, err := SuggestName(context.Background(), store, samplePods("demo", "db-0", cDB), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Label != "" || got.Value != "" || !strings.Contains(got.Reason, "carry none of the cluster labels") ||
+		!strings.Contains(got.Reason, "OpenObserve removes it on remote write by default") {
+		t.Fatalf("suggestion = %+v", got)
+	}
+}
+
 func TestConfirmedNameMatch(t *testing.T) {
 	if _, err := ConfirmedNameMatch(context.Background(), &routeStore{}, "cluster", "cluster1", uidC); !errors.Is(err, ErrUnsafeDefault) {
 		t.Fatalf("cluster1 err = %v", err)

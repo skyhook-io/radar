@@ -454,7 +454,9 @@ func SuggestName(ctx context.Context, t prom.Transport, sample PodSample, overri
 		return Suggestion{Reason: fmt.Sprintf("None of the %d sampled Pods from namespace %s were found in OpenObserve's kube_pod_info in the last 15 minutes.", len(uids), sample.Namespace)}, nil
 	}
 	if len(coverage) == 0 {
-		return Suggestion{Reason: fmt.Sprintf("%d sampled Pods from namespace %s are in OpenObserve, but carry none of the cluster labels %s.", len(found), sample.Namespace, strings.Join(candidates, ", "))}, nil
+		// OpenObserve strips its HA dedup label (cluster, by default) on
+		// remote write, so a setup that set it finds it missing here.
+		return Suggestion{Reason: fmt.Sprintf("%d sampled Pods from namespace %s are in OpenObserve, but carry none of the cluster labels %s. If you set a cluster label, OpenObserve removes it on remote write by default. Use the cluster ID label below, or rename yours to cluster_name.", len(found), sample.Namespace, strings.Join(candidates, ", "))}, nil
 	}
 	rank := map[string]int{}
 	for i, l := range candidates {

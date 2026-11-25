@@ -217,6 +217,34 @@ describe('OpenObserve setup', () => {
     expect(calls.map((c) => c.method)).toEqual(['GET', 'POST'])
   })
 
+  it('does not claim OpenObserve is empty when the reason says what it found', async () => {
+    await mount(unmatched)
+    await click(radio('OpenObserve'))
+    type(field('Address'), 'https://oo.example.com')
+    type(field('User or service account email'), 'radar@example.com')
+    type(field('Token'), 'secret')
+    reply('POST /integrations/openobserve/setup', { body: {
+      outcome: 'not_found', clusterUid: 'uid-123', clusterNames: [],
+      reason: '3 sampled Pods from namespace demo are in OpenObserve, but carry none of the cluster labels cluster.',
+    } })
+    await click(button('Test and save'))
+    const text = container.textContent!
+    expect(text).toContain('carry none of the cluster labels')
+    expect(text).not.toContain('OpenObserve has no cluster metrics yet.')
+    expect(text).toContain('radar_cluster_uid=uid-123')
+  })
+
+  it('says OpenObserve has no cluster metrics when there is no reason', async () => {
+    await mount(unmatched)
+    await click(radio('OpenObserve'))
+    type(field('Address'), 'https://oo.example.com')
+    type(field('User or service account email'), 'radar@example.com')
+    type(field('Token'), 'secret')
+    reply('POST /integrations/openobserve/setup', { body: { outcome: 'not_found', clusterUid: 'uid-123', clusterNames: [] } })
+    await click(button('Test and save'))
+    expect(container.textContent).toContain('OpenObserve has no cluster metrics yet.')
+  })
+
   it('shows an HTTP error and keeps the fields', async () => {
     await mount(unmatched)
     await click(radio('OpenObserve'))

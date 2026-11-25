@@ -219,11 +219,10 @@ export function OpenObserveSetup({
     ) : (
       <div role="status" className="space-y-1 text-xs text-theme-text-secondary">
         {result.reason && <p className="text-warning-text">{result.reason}</p>}
-        <p>
-          {result.names.length
-            ? `OpenObserve has metrics for: ${result.names.map(pair).join(', ')}.`
-            : 'OpenObserve has no cluster metrics yet.'}
-        </p>
+        {result.names.length
+          ? <p>{`OpenObserve has metrics for: ${result.names.map(pair).join(', ')}.`}</p>
+          // The reason already says what the Pod sample found in OpenObserve.
+          : !result.reason && <p>OpenObserve has no cluster metrics yet.</p>}
         <p>If OpenObserve names clusters with another label, set it under Advanced.</p>
         {result.uid && <p>To match by ID, add the label radar_cluster_uid={result.uid} to this cluster’s metrics.</p>}
       </div>
