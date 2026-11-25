@@ -258,6 +258,10 @@ type CacheConfig struct {
 	// set in production paths.
 	DebugSyncDelays map[string]time.Duration
 
+	// Clock dates each informer's InformerWatchedSince boundary. time.Now
+	// when nil.
+	Clock func() time.Time
+
 	// ListPageSize, when > 0, makes high-cardinality informers fetch their
 	// initial LIST in pages of this size via a consistent (resourceVersion="")
 	// read instead of one unpaginated response. This mitigates response-read
@@ -417,6 +421,11 @@ type DynamicCacheConfig struct {
 	// observation reports sync_stalled instead of initial_sync. Zero means 30
 	// seconds.
 	SyncStallAfter time.Duration
+
+	// ObjectReadSyncWait is how long a read of one object waits for an
+	// informer that hasn't finished its first list before answering from what
+	// has loaded. Zero means 2 seconds.
+	ObjectReadSyncWait time.Duration
 
 	// DebugEvents enables verbose debug logging.
 	DebugEvents bool

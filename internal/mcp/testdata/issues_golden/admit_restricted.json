@@ -1,0 +1,117 @@
+{
+  "issues": [
+    {
+      "severity": "critical",
+      "source": "scheduling",
+      "category": "admission_webhook_blocking",
+      "category_group": "scheduling",
+      "id": "722e237ea9685313",
+      "grouping_scope": "workload",
+      "kind": "Deployment",
+      "group": "apps",
+      "namespace": "admit",
+      "name": "hooked",
+      "reason": "WebhookDenied",
+      "message": "pod creation blocked: admission webhook \"deny-root.policy.example.com\" denied the request: runAsNonRoot is required",
+      "first_seen": "1999-12-31T23:51:00Z",
+      "resource_created_at": "1999-12-31T21:00:00Z",
+      "last_seen": "2000-01-01T00:00:00Z",
+      "issue_timing": "started_after_resource_was_healthy",
+      "issue_timing_basis": "owner_condition",
+      "no_recent_changes": {
+        "window_seconds": 3600
+      }
+    },
+    {
+      "severity": "critical",
+      "source": "scheduling",
+      "category": "quota_exceeded",
+      "category_group": "scheduling",
+      "id": "bc5d48af35074044",
+      "grouping_scope": "workload",
+      "kind": "Deployment",
+      "group": "apps",
+      "namespace": "admit",
+      "name": "search",
+      "reason": "QuotaExceeded",
+      "message": "pod creation blocked: pods \"search-7d996-j2wkp\" is forbidden: exceeded quota: compute, requested: pods=1, used: pods=2, limited: pods=2",
+      "first_seen": "1999-12-31T23:51:00Z",
+      "resource_created_at": "1999-12-31T21:00:00Z",
+      "last_seen": "2000-01-01T00:00:00Z",
+      "issue_timing": "started_after_resource_was_healthy",
+      "issue_timing_basis": "owner_condition",
+      "correlated_changes": [
+        {
+          "kind": "Deployment",
+          "apiVersion": "apps/v1",
+          "namespace": "admit",
+          "name": "search",
+          "changeType": "update",
+          "summary": "spec.replicas changed",
+          "timestamp": "1999-12-31T23:40:00Z",
+          "change_category": "spec_config",
+          "rank_reason": "desired-state or configuration field changed",
+          "fields": [
+            {
+              "path": "spec.replicas",
+              "oldValue": 2,
+              "newValue": 4
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "severity": "critical",
+      "source": "scheduling",
+      "category": "quota_exceeded",
+      "category_group": "scheduling",
+      "id": "edc2e36a17b250d0",
+      "grouping_scope": "workload",
+      "kind": "ReplicaSet",
+      "group": "apps",
+      "namespace": "admit",
+      "name": "batch-rs",
+      "reason": "LimitRangeViolation",
+      "message": "pod creation blocked: pods \"batch-rs-x\" is forbidden: maximum memory usage per Container is 256Mi, but limit is 1Gi",
+      "first_seen": "1999-12-31T23:49:00Z",
+      "resource_created_at": "1999-12-31T21:00:00Z",
+      "last_seen": "2000-01-01T00:00:00Z"
+    }
+  ],
+  "total": 3,
+  "total_matched": 3,
+  "unchecked_sources": [
+    {
+      "source": "custom_resources",
+      "reason": "kind_sync_pending"
+    },
+    {
+      "source": "kueue",
+      "reason": "kind_sync_pending",
+      "kinds": [
+        {
+          "group": "kueue.x-k8s.io",
+          "kind": "LocalQueue"
+        },
+        {
+          "group": "kueue.x-k8s.io",
+          "kind": "Workload"
+        }
+      ]
+    },
+    {
+      "source": "helm",
+      "reason": "caller_access_denied"
+    }
+  ],
+  "cluster_scoped_changes": {
+    "kinds": [
+      "MutatingWebhookConfiguration",
+      "ValidatingWebhookConfiguration"
+    ],
+    "window_seconds": 3600,
+    "changes": [],
+    "incomplete": "MutatingWebhookConfiguration changes are not readable by the caller. ValidatingWebhookConfiguration changes are not readable by the caller."
+  }
+}

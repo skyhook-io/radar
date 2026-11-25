@@ -160,6 +160,27 @@ func TestProxyAuth_PodBackedReadsRequireExactAccess(t *testing.T) {
 	}
 }
 
+func TestProxyAuth_ReplicaSetLogsRequireEachReadPermission(t *testing.T) {
+	grants := []struct{ verb, group, resource string }{{"get", "apps", "replicasets"}, {"list", "", "pods"}, {"get", "", "pods/log"}}
+	for _, path := range []string{"logs", "logs/stream"} {
+		for denied := range grants {
+			t.Run(path+"/"+grants[denied].resource, func(t *testing.T) {
+				env := newAuthTestServer(t)
+				permissions := &auth.UserPermissions{AllowedNamespaces: []string{"default"}}
+				for i, g := range grants {
+					permissions.SetCanI(g.verb, g.group, g.resource, "default", i != denied)
+				}
+				env.srv.permCache.Set("alice", nil, permissions)
+				resp := env.authGet(t, "/api/workloads/replicasets/default/revision/"+path, "alice", "")
+				defer resp.Body.Close()
+				if resp.StatusCode != http.StatusForbidden {
+					t.Fatalf("status = %d", resp.StatusCode)
+				}
+			})
+		}
+	}
+}
+
 func TestProxyAuth_JobSetMembersRequireParentAndJobsAccess(t *testing.T) {
 	for _, test := range []struct {
 		name         string

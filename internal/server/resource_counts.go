@@ -41,12 +41,14 @@ const (
 )
 
 var featuredKubernetesAPIs = map[string]struct{}{
-	"scheduling.k8s.io/Workload":                    {},
-	"scheduling.k8s.io/PodGroup":                    {},
-	"scheduling.k8s.io/CompositePodGroup":           {},
-	"certificates.k8s.io/CertificateSigningRequest": {},
-	"certificates.k8s.io/PodCertificateRequest":     {},
-	"certificates.k8s.io/ClusterTrustBundle":        {},
+	"admissionregistration.k8s.io/MutatingAdmissionPolicy":        {},
+	"admissionregistration.k8s.io/MutatingAdmissionPolicyBinding": {},
+	"scheduling.k8s.io/Workload":                                  {},
+	"scheduling.k8s.io/PodGroup":                                  {},
+	"scheduling.k8s.io/CompositePodGroup":                         {},
+	"certificates.k8s.io/CertificateSigningRequest":               {},
+	"certificates.k8s.io/PodCertificateRequest":                   {},
+	"certificates.k8s.io/ClusterTrustBundle":                      {},
 }
 
 // CustomResourceDefinition is built in, but Radar watches it through the same

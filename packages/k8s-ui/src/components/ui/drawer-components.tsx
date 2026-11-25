@@ -86,11 +86,12 @@ interface SectionProps {
   icon?: React.ComponentType<{ className?: string }>
   children: React.ReactNode
   defaultExpanded?: boolean
+  mountLazily?: boolean
   contentClassName?: string
   variant?: 'plain' | 'card'
 }
 
-export function Section({ title, icon: Icon, children, defaultExpanded = true, contentClassName, variant = 'plain' }: SectionProps) {
+export function Section({ title, icon: Icon, children, defaultExpanded = true, mountLazily, contentClassName, variant = 'plain' }: SectionProps) {
   const [expanded, setExpanded] = useState(defaultExpanded)
   const { panelId, buttonProps } = useDisclosure(expanded)
 
@@ -105,7 +106,7 @@ export function Section({ title, icon: Icon, children, defaultExpanded = true, c
         {Icon && <Icon className="w-4 h-4 text-theme-text-secondary" />}
         <span className={clsx("font-medium text-theme-text-secondary", variant === 'card' ? 'text-xs uppercase tracking-wider' : 'text-sm')}>{title}</span>
       </button>
-      <Collapse open={expanded} id={panelId}>
+      <Collapse open={expanded} id={panelId} mountLazily={mountLazily}>
         <div className={contentClassName ?? (variant === 'card' ? 'p-3' : 'pl-6')}>{children}</div>
       </Collapse>
     </div>

@@ -12,30 +12,28 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // displayOnlyEdges are edges the Topology screen draws that no relation family
 // answers, each with the reason. A key is a whole class,
 // "<edge type> <source kind> -> <target kind>" with group-qualified kinds, or
-// one edge, "<source key> -> <target key>".
+// one edge, "<edge type> <source key> -> <target key>".
 var displayOnlyEdges = map[string]string{
 	"routes-to Service -> Pod": "the traffic view draws a Service's selected Pods; Related Resources lists a Service's workloads, not its Pods",
 	// The Topology screen matches an owner reference by name, so it still draws
 	// a replaced Deployment as owning the ReplicaSet its predecessor created.
 	// Ownership follows the UID and doesn't.
-	"apps|Deployment|shop|api -> apps|ReplicaSet|shop|api-6b7": "the display builder ignores owner UIDs",
-	"apps|Deployment|shop|api -> |Pod|shop|api-6b7-a":          "the display builder ignores owner UIDs",
+	"manages apps|Deployment|shop|api -> apps|ReplicaSet|shop|api-6b7": "the display builder ignores owner UIDs",
+	"manages apps|Deployment|shop|api -> |Pod|shop|api-6b7-a":          "the display builder ignores owner UIDs",
 }
 
-// The Topology screen draws relationships with the display builder; the drawer
-// and every other reader answer from the relation families. An edge drawn
-// between two objects that neither end's family answer names is drift: the
-// screen and the drawer disagree about the cluster. Every edge is checked but
-// one to a synthetic node; an edge to an object the fixture lacks fails
-// rather than going unchecked.
+// Family projections pin type and direction. Ownership and the drawer's
+// other derived links still have to name the object at the other end.
 func TestDisplayEdgesAreFamilyAnswers(t *testing.T) {
 	f := charCluster()
+	addDisplayFamilyReplicas(f, 1)
 	objects := map[string]runtime.Object{}
 	var session []runtime.Object
 	for _, o := range f.objects {
@@ -54,6 +52,11 @@ func TestDisplayEdgesAreFamilyAnswers(t *testing.T) {
 	objects[resourceid.ResourceKey("argoproj.io", "AnalysisRun", "shop", "checkout-bg-1")] = run
 	session = append(session, run)
 	s := newRecordingProjectionSession(t, session...)
+	projected, required := fixtureFamilyEdges(t, s)
+	paired := map[[2]string]bool{}
+	for e := range projected {
+		paired[[2]string{e.source, e.target}] = true
+	}
 	answers := map[string]map[string]bool{}
 	answer := func(key string) map[string]bool {
 		if got, ok := answers[key]; ok {
@@ -70,9 +73,12 @@ func TestDisplayEdgesAreFamilyAnswers(t *testing.T) {
 	missing := map[string][]string{}
 	for _, c := range charCases() {
 		topo := charBuild(t, f, c.opts())
+		present := map[string]bool{}
+		actual := map[displayProjection]bool{}
 		nodes := map[string]*Node{}
 		for i := range topo.Nodes {
 			nodes[topo.Nodes[i].ID] = &topo.Nodes[i]
+			present[displayNodeKey(&topo.Nodes[i])] = true
 		}
 		for _, e := range topo.Edges {
 			src, dst := nodes[e.Source], nodes[e.Target]
@@ -95,10 +101,15 @@ func TestDisplayEdgesAreFamilyAnswers(t *testing.T) {
 			}
 			class := fmt.Sprintf("%s %s -> %s", e.Type, displayKindKey(src), displayKindKey(dst))
 			drawn[class]++
+			edge := displayProjection{sk, dk, e.Type}
+			actual[edge] = true
+			if (paired[[2]string{sk, dk}] || paired[[2]string{dk, sk}]) && projected[edge] == "" {
+				t.Errorf("%s: %s has a family answer with a different type or direction (%s -> %s)", c.name, class, sk, dk)
+			}
 			if answer(sk)[dk] || answer(dk)[sk] {
 				continue
 			}
-			example := fmt.Sprintf("%s -> %s", sk, dk)
+			example := fmt.Sprintf("%s %s -> %s", e.Type, sk, dk)
 			if _, ok := displayOnlyEdges[class]; ok {
 				used[class] = true
 				continue
@@ -109,6 +120,11 @@ func TestDisplayEdgesAreFamilyAnswers(t *testing.T) {
 			}
 			if !slices.Contains(drift[class], example) {
 				drift[class] = append(drift[class], example)
+			}
+		}
+		for edge, family := range required {
+			if present[edge.source] && present[edge.target] && !actual[edge] {
+				t.Errorf("%s: missing %s projection %s %s -> %s", c.name, family, edge.kind, edge.source, edge.target)
 			}
 		}
 	}
@@ -129,6 +145,69 @@ func TestDisplayEdgesAreFamilyAnswers(t *testing.T) {
 			t.Errorf("display-only entry %q matches no drawn edge; remove it", class)
 		}
 	}
+}
+
+type displayProjection struct {
+	source, target string
+	kind           EdgeType
+}
+
+func fixtureFamilyEdges(t *testing.T, s *projectionSession) (projected, required map[displayProjection]string) {
+	t.Helper()
+	projected = map[displayProjection]string{}
+	required = map[displayProjection]string{}
+	drawnFamilies := map[*relations.Family]bool{
+		relations.IngressBackends: true, relations.GatewayClasses: true,
+		relations.GatewayParents: true, relations.GatewayBackends: true,
+		relations.ClusterClasses: true, relations.ArgoWorkflowTemplates: true,
+	}
+	record := func(name string, d relations.Disposition, from, to resourceid.Ref, mustDraw bool) {
+		for _, rule := range d.Rules {
+			if !rule.Matches(from.GroupKind(), to.GroupKind()) {
+				continue
+			}
+			if rule.Reverse {
+				from, to = to, from
+			}
+			e := displayProjection{from.Key(), to.Key(), EdgeType(rule.Edge)}
+			projected[e] = name
+			if mustDraw {
+				required[e] = name
+			}
+			return
+		}
+		if mustDraw {
+			t.Errorf("%s has no projection for %s -> %s", name, from, to)
+		}
+	}
+	v := relations.NewView(s, ownership.Unrestricted()).WithLimit(0)
+	families := relations.Families("")
+	for subject, obj := range s.objects {
+		for _, f := range families {
+			for _, ref := range v.References(f, subject, obj).Declared {
+				if ref.State == relations.TargetPresent {
+					record(f.Name, f.Projection, subject, ref.Ref, drawnFamilies[f])
+				}
+			}
+		}
+		for _, f := range relations.SelectorFamilies() {
+			for _, target := range v.Selected(f, subject, obj).Matches {
+				record(f.Name, f.Projection, subject, target, false)
+			}
+		}
+		for _, f := range relations.Compositions() {
+			for _, edge := range v.Composed(f, subject, obj).Edges {
+				record(f.Name, f.Projection, edge.Producer, edge.Consumer, false)
+			}
+		}
+	}
+	covered := slices.Collect(maps.Values(required))
+	for f := range drawnFamilies {
+		if !slices.Contains(covered, f.Name) {
+			t.Errorf("fixture has no projected answer for %s", f.Name)
+		}
+	}
+	return projected, required
 }
 
 // syntheticDisplayKinds are the nodes that draw no single object: a group of

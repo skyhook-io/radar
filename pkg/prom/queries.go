@@ -118,26 +118,28 @@ func CategoriesForKind(kind string) []MetricCategory {
 // For Pods it uses exact name matching.
 // For Nodes it matches the node_exporter "instance" label.
 func BuildQuery(kind, namespace, name string, category MetricCategory) string {
-	return buildQueryInner(kind, namespace, name, category, true)
+	return BuildQueryFiltered(kind, namespace, name, category, true, nil)
 }
 
 // BuildQueryNoContainerFilter builds the same query as BuildQuery but without
 // the container!=” filter. This is used as a fallback for clusters where cAdvisor
 // metrics lack the container label (e.g. cri-docker setups).
 func BuildQueryNoContainerFilter(kind, namespace, name string, category MetricCategory) string {
-	return buildQueryInner(kind, namespace, name, category, false)
+	return BuildQueryFiltered(kind, namespace, name, category, false, nil)
 }
 
-func buildQueryInner(kind, namespace, name string, category MetricCategory, filterContainer bool) string {
+// BuildQueryFiltered is BuildQuery (filterContainer true) or its fallback
+// (false) with each metric's selectors narrowed by filter.
+func BuildQueryFiltered(kind, namespace, name string, category MetricCategory, filterContainer bool, filter ClusterFilter) string {
 	switch strings.ToLower(kind) {
 	case "pod":
-		return buildPodQuery(namespace, name, category, filterContainer)
+		return buildPodQuery(namespace, name, category, filterContainer, filter)
 	case "deployment", "statefulset", "daemonset", "replicaset", "job", "cronjob", "rollout", "workflow":
 		// A workload's pods are not a function of its name. Resolve membership
 		// first and build with BuildScopedQuery.
 		return ""
 	case "node":
-		return buildNodeQuery(name, category)
+		return buildNodeQuery(name, category, filter)
 	default:
 		return ""
 	}
@@ -145,15 +147,17 @@ func buildQueryInner(kind, namespace, name string, category MetricCategory, filt
 
 // BuildNamespaceQuery builds a PromQL query for namespace-level aggregation.
 func BuildNamespaceQuery(namespace string, category MetricCategory) string {
-	return buildNamespaceQueryInner(namespace, category, true)
+	return BuildNamespaceQueryFiltered(namespace, category, true, nil)
 }
 
 // BuildNamespaceQueryNoContainerFilter is the fallback variant without container!=” filter.
 func BuildNamespaceQueryNoContainerFilter(namespace string, category MetricCategory) string {
-	return buildNamespaceQueryInner(namespace, category, false)
+	return BuildNamespaceQueryFiltered(namespace, category, false, nil)
 }
 
-func buildNamespaceQueryInner(namespace string, category MetricCategory, filterContainer bool) string {
+// BuildNamespaceQueryFiltered is the namespace query, or its fallback without
+// the container filter, with each metric's selectors narrowed by filter.
+func BuildNamespaceQueryFiltered(namespace string, category MetricCategory, filterContainer bool, filter ClusterFilter) string {
 	ns := SanitizeLabelValue(namespace)
 	cf := ""
 	if filterContainer {
@@ -161,13 +165,13 @@ func buildNamespaceQueryInner(namespace string, category MetricCategory, filterC
 	}
 	switch category {
 	case CategoryCPU:
-		return fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{%snamespace='%s'}[5m]))`, cf, ns)
+		return fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{%snamespace='%s'%s}[5m]))`, cf, ns, filter.and(MetricCPUUsage))
 	case CategoryMemory:
-		return fmt.Sprintf(`sum(max by (namespace,pod,container) (container_memory_working_set_bytes{%snamespace='%s'}))`, cf, ns)
+		return fmt.Sprintf(`sum(max by (namespace,pod,container) (container_memory_working_set_bytes{%snamespace='%s'%s}))`, cf, ns, filter.and(MetricMemoryWorkingSet))
 	case CategoryNetworkRX:
-		return fmt.Sprintf(`sum(rate(container_network_receive_bytes_total{namespace='%s'}[5m]))`, ns)
+		return fmt.Sprintf(`sum(rate(container_network_receive_bytes_total{namespace='%s'%s}[5m]))`, ns, filter.and(MetricNetworkReceive))
 	case CategoryNetworkTX:
-		return fmt.Sprintf(`sum(rate(container_network_transmit_bytes_total{namespace='%s'}[5m]))`, ns)
+		return fmt.Sprintf(`sum(rate(container_network_transmit_bytes_total{namespace='%s'%s}[5m]))`, ns, filter.and(MetricNetworkTransmit))
 	default:
 		return ""
 	}
@@ -175,28 +179,45 @@ func buildNamespaceQueryInner(namespace string, category MetricCategory, filterC
 
 // BuildClusterQuery builds a PromQL query for cluster-level aggregation.
 func BuildClusterQuery(category MetricCategory) string {
-	return buildClusterQueryInner(category, true)
+	return BuildClusterQueryFiltered(category, true, nil)
 }
 
 // BuildClusterQueryNoContainerFilter is the fallback variant without container!=” filter.
 func BuildClusterQueryNoContainerFilter(category MetricCategory) string {
-	return buildClusterQueryInner(category, false)
+	return BuildClusterQueryFiltered(category, false, nil)
 }
 
-func buildClusterQueryInner(category MetricCategory, filterContainer bool) string {
+// BuildClusterQueryFiltered is the cluster query, or its fallback without the
+// container filter, with each metric's selectors narrowed by filter.
+func BuildClusterQueryFiltered(category MetricCategory, filterContainer bool, filter ClusterFilter) string {
 	cf := ""
 	if filterContainer {
 		cf = "container!=''"
 	}
+	// An unfiltered selector keeps its exact historical spelling: "{}" after
+	// the container filter is dropped, and no braces at all on network.
+	matchers := func(metric string) string {
+		m := filter.of(metric)
+		if cf != "" && m != "" {
+			return cf + "," + m
+		}
+		return cf + m
+	}
+	bare := func(metric string) string {
+		if m := filter.of(metric); m != "" {
+			return metric + "{" + m + "}"
+		}
+		return metric
+	}
 	switch category {
 	case CategoryCPU:
-		return fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{%s}[5m]))`, cf)
+		return fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{%s}[5m]))`, matchers(MetricCPUUsage))
 	case CategoryMemory:
-		return fmt.Sprintf(`sum(max by (namespace,pod,container) (container_memory_working_set_bytes{%s}))`, cf)
+		return fmt.Sprintf(`sum(max by (namespace,pod,container) (container_memory_working_set_bytes{%s}))`, matchers(MetricMemoryWorkingSet))
 	case CategoryNetworkRX:
-		return `sum(rate(container_network_receive_bytes_total[5m]))`
+		return `sum(rate(` + bare(MetricNetworkReceive) + `[5m]))`
 	case CategoryNetworkTX:
-		return `sum(rate(container_network_transmit_bytes_total[5m]))`
+		return `sum(rate(` + bare(MetricNetworkTransmit) + `[5m]))`
 	default:
 		return ""
 	}
@@ -208,7 +229,7 @@ func CategoryUsesContainerFilter(category MetricCategory) bool {
 	return category == CategoryCPU || category == CategoryMemory
 }
 
-func buildPodQuery(namespace, podName string, category MetricCategory, filterContainer bool) string {
+func buildPodQuery(namespace, podName string, category MetricCategory, filterContainer bool, filter ClusterFilter) string {
 	ns := SanitizeLabelValue(namespace)
 	pod := SanitizeLabelValue(podName)
 	cf := ""
@@ -225,55 +246,56 @@ func buildPodQuery(namespace, podName string, category MetricCategory, filterCon
 		// since most pods never restart, and the sum across containers gives a
 		// multi-container pod one line.
 		return fmt.Sprintf(
-			`sum by (pod,namespace) (changes(kube_pod_container_status_restarts_total{namespace='%s',pod='%s'}[1h]))`,
-			ns, pod)
+			`sum by (pod,namespace) (changes(kube_pod_container_status_restarts_total{namespace='%s',pod='%s'%s}[1h]))`,
+			ns, pod, filter.and(MetricContainerRestarts))
 	case CategoryCPU:
 		return fmt.Sprintf(
-			`sum(rate(container_cpu_usage_seconds_total{%snamespace='%s',pod='%s'}[5m])) by (pod,namespace)`,
-			cf, ns, pod)
+			`sum(rate(container_cpu_usage_seconds_total{%snamespace='%s',pod='%s'%s}[5m])) by (pod,namespace)`,
+			cf, ns, pod, filter.and(MetricCPUUsage))
 	case CategoryMemory:
 		return fmt.Sprintf(
-			`sum by (pod,namespace) (max by (pod,namespace,container) (container_memory_working_set_bytes{%snamespace='%s',pod='%s'}))`,
-			cf, ns, pod)
+			`sum by (pod,namespace) (max by (pod,namespace,container) (container_memory_working_set_bytes{%snamespace='%s',pod='%s'%s}))`,
+			cf, ns, pod, filter.and(MetricMemoryWorkingSet))
 	case CategoryNetworkRX:
 		return fmt.Sprintf(
-			`sum(rate(container_network_receive_bytes_total{namespace='%s',pod='%s'}[5m])) by (pod,namespace)`,
-			ns, pod)
+			`sum(rate(container_network_receive_bytes_total{namespace='%s',pod='%s'%s}[5m])) by (pod,namespace)`,
+			ns, pod, filter.and(MetricNetworkReceive))
 	case CategoryNetworkTX:
 		return fmt.Sprintf(
-			`sum(rate(container_network_transmit_bytes_total{namespace='%s',pod='%s'}[5m])) by (pod,namespace)`,
-			ns, pod)
+			`sum(rate(container_network_transmit_bytes_total{namespace='%s',pod='%s'%s}[5m])) by (pod,namespace)`,
+			ns, pod, filter.and(MetricNetworkTransmit))
 	case CategoryFilesystem:
 		return fmt.Sprintf(
-			`sum(rate(container_fs_writes_bytes_total{namespace='%s',pod='%s'}[5m]) + rate(container_fs_reads_bytes_total{namespace='%s',pod='%s'}[5m])) by (pod,namespace)`,
-			ns, pod, ns, pod)
+			`sum(rate(container_fs_writes_bytes_total{namespace='%s',pod='%s'%s}[5m]) + rate(container_fs_reads_bytes_total{namespace='%s',pod='%s'%s}[5m])) by (pod,namespace)`,
+			ns, pod, filter.and(MetricFSWrites), ns, pod, filter.and(MetricFSReads))
 	default:
 		return ""
 	}
 }
 
-func buildNodeQuery(nodeName string, category MetricCategory) string {
+func buildNodeQuery(nodeName string, category MetricCategory, filter ClusterFilter) string {
 	// Node exporter metrics use the "instance" label which is typically set to the node
 	// name or IP. The value often includes a port suffix, so we match with an optional port.
 	// This heuristic works for most standard deployments; clusters with custom relabeling
 	// may need the --prometheus-url flag plus adjusted recording rules.
 	sanitized := EscapeRegexMeta(SanitizeLabelValue(nodeName))
 	nodeFilter := fmt.Sprintf(`instance=~'%s(:\\d+)?'`, sanitized)
+	sel := func(metric string) string { return nodeFilter + filter.and(metric) }
 
 	switch category {
 	case CategoryCPU:
 		return fmt.Sprintf(
 			`sum(rate(node_cpu_seconds_total{mode!='idle',%s}[5m]))`,
-			nodeFilter)
+			sel(MetricNodeCPU))
 	case CategoryMemory:
 		return fmt.Sprintf(
 			`node_memory_MemTotal_bytes{%s} - node_memory_MemAvailable_bytes{%s}`,
-			nodeFilter, nodeFilter)
+			sel(MetricNodeMemTotal), sel(MetricNodeMemAvailable))
 	case CategoryFilesystem:
 		// Filter to real filesystems by type (ext4, xfs, btrfs), excluding tmpfs/overlay/proc.
 		return fmt.Sprintf(
-			`sum(node_filesystem_size_bytes{%s,fstype=~'ext4|xfs|btrfs'} - node_filesystem_avail_bytes{%s,fstype=~'ext4|xfs|btrfs'})`,
-			nodeFilter, nodeFilter)
+			`sum(node_filesystem_size_bytes{%s,fstype=~'ext4|xfs|btrfs'%s} - node_filesystem_avail_bytes{%s,fstype=~'ext4|xfs|btrfs'%s})`,
+			nodeFilter, filter.and(MetricNodeFSSize), nodeFilter, filter.and(MetricNodeFSAvail))
 	default:
 		return ""
 	}
@@ -283,10 +305,16 @@ func buildNodeQuery(nodeName string, category MetricCategory) string {
 // HPA's replica history: the replica count it currently observes and the
 // count it has decided on.
 func BuildHPAReplicasQueries(namespace, name string) (current, desired string) {
+	return BuildHPAReplicasQueriesFiltered(namespace, name, nil)
+}
+
+// BuildHPAReplicasQueriesFiltered is BuildHPAReplicasQueries with each
+// metric's selector narrowed by filter.
+func BuildHPAReplicasQueriesFiltered(namespace, name string, filter ClusterFilter) (current, desired string) {
 	ns := SanitizeLabelValue(namespace)
 	n := SanitizeLabelValue(name)
-	current = fmt.Sprintf(`kube_horizontalpodautoscaler_status_current_replicas{namespace="%s",horizontalpodautoscaler="%s"}`, ns, n)
-	desired = fmt.Sprintf(`kube_horizontalpodautoscaler_status_desired_replicas{namespace="%s",horizontalpodautoscaler="%s"}`, ns, n)
+	current = fmt.Sprintf(`kube_horizontalpodautoscaler_status_current_replicas{namespace="%s",horizontalpodautoscaler="%s"%s}`, ns, n, filter.and(MetricHPACurrentReplicas))
+	desired = fmt.Sprintf(`kube_horizontalpodautoscaler_status_desired_replicas{namespace="%s",horizontalpodautoscaler="%s"%s}`, ns, n, filter.and(MetricHPADesiredReplicas))
 	return current, desired
 }
 

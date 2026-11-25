@@ -198,8 +198,8 @@ func TestRelationshipFamilyInventoryHasBothDirections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 73 {
-		t.Fatalf("inventory has %d families; want 72", len(rows)-1)
+	if len(rows) != 74 {
+		t.Fatalf("inventory has %d families; want 73", len(rows)-1)
 	}
 	producers := map[string]bool{}
 	for _, f := range relations.Families("") {
@@ -213,12 +213,13 @@ func TestRelationshipFamilyInventoryHasBothDirections(t *testing.T) {
 	}
 	// Function references make renamed or removed direct producers fail to build.
 	for name := range map[string]any{
-		"ownership":      ApplyOwnership,
-		"olderRevisions": SplitOlderRevisions,
-		"healthChecks":   (*neighborhood).healthChecks,
-		"nodePool":       (*neighborhood).nodePool,
-		"crossplane":     (*neighborhood).crossplane,
-		"knativeServing": (*neighborhood).knativeServing,
+		"ownership":       ApplyOwnership,
+		"olderRevisions":  SplitOlderRevisions,
+		"healthChecks":    (*neighborhood).healthChecks,
+		"nodePool":        (*neighborhood).nodePool,
+		"crossplane":      (*neighborhood).crossplane,
+		"knativeServing":  (*neighborhood).knativeServing,
+		"longhornStorage": (*neighborhood).longhornStorage,
 	} {
 		producers[name] = true
 	}
@@ -253,7 +254,7 @@ func TestRelationshipFamilyInventoryHasBothDirections(t *testing.T) {
 			}
 		}
 	}
-	for i := 1; i <= 72; i++ {
+	for i := 1; i <= 73; i++ {
 		if !seen[fmt.Sprintf("F%02d", i)] {
 			t.Errorf("missing inventory family F%02d", i)
 		}

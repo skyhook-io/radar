@@ -449,6 +449,12 @@ func promPortScore(port int32) int {
 	return 0
 }
 
+// IsGMPFrontendLocation identifies a Google query frontend reserved for curated
+// GKE discovery. Its project-wide PromQL interface is not a generic raw store.
+func IsGMPFrontendLocation(namespace, name string) bool {
+	return (namespace == "gmp-public" || namespace == "gmp-system" || namespace == "gke-gmp-system") && (name == "frontend" || name == "gmp-frontend")
+}
+
 // ScoreService computes a heuristic score for a service being
 // Prometheus-compatible. It returns the ranking score, an inferred BasePath for
 // vmselect-style services, and whether the service carries a Prometheus-family
@@ -459,7 +465,7 @@ func promPortScore(port int32) int {
 // configured Prometheus headers, so a neighbor that merely shares a popular port
 // (9090 is a common gRPC/plugin default too) or a namespace must not be admitted.
 func ScoreService(svc corev1.Service) (score int, basePath string, identity bool) {
-	if svc.Spec.Type == corev1.ServiceTypeExternalName {
+	if IsGMPFrontendLocation(svc.Namespace, svc.Name) || svc.Spec.Type == corev1.ServiceTypeExternalName {
 		return 0, "", false
 	}
 	if skipNamespaces[svc.Namespace] {

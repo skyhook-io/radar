@@ -85,8 +85,7 @@ func TestResolveMetricsGVRIgnoresFailureInAnotherServedVersion(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewResourceDiscovery: %v", err)
 			}
-			resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: core}
-			t.Cleanup(func() { resourceDiscovery = nil })
+			t.Cleanup(setTestDiscovery(&ResourceDiscovery{ResourceDiscovery: core}))
 
 			gvr, ok := ResolveMetricsGVR("pods")
 			if !ok || gvr.Version != tt.healthyVersion {
@@ -102,8 +101,7 @@ func TestResolveMetricsGVRRefreshesExpiredDiscovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewResourceDiscovery: %v", err)
 	}
-	resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: core}
-	t.Cleanup(func() { resourceDiscovery = nil })
+	t.Cleanup(setTestDiscovery(&ResourceDiscovery{ResourceDiscovery: core}))
 
 	fakeDiscovery.Resources = []*metav1.APIResourceList{{
 		GroupVersion: "metrics.k8s.io/v1",
@@ -121,8 +119,7 @@ func TestResolveMetricsGVRRefreshesImmediatelyAfterDiscoveryMiss(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewResourceDiscovery: %v", err)
 	}
-	resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: core}
-	t.Cleanup(func() { resourceDiscovery = nil })
+	t.Cleanup(setTestDiscovery(&ResourceDiscovery{ResourceDiscovery: core}))
 
 	fakeDiscovery.Resources = []*metav1.APIResourceList{{
 		GroupVersion: "metrics.k8s.io/v1",
@@ -145,8 +142,7 @@ func TestResolveMetricsGVRLimitsForcedRefreshesAfterDiscoveryMiss(t *testing.T) 
 	if err != nil {
 		t.Fatalf("NewResourceDiscovery: %v", err)
 	}
-	resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: core}
-	t.Cleanup(func() { resourceDiscovery = nil })
+	t.Cleanup(setTestDiscovery(&ResourceDiscovery{ResourceDiscovery: core}))
 	refreshes = 0
 
 	for range 2 {

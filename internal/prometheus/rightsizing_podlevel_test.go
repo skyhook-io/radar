@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/skyhook-io/radar/pkg/prom"
+	"github.com/skyhook-io/radar/pkg/rightsizing"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
@@ -78,7 +79,7 @@ func TestFixedPodLevelRequest(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			for name, want := range map[corev1.ResourceName]string{corev1.ResourceCPU: tc.wantCPU, corev1.ResourceMemory: tc.wantMem} {
-				got := fixedPodLevelRequest(&tc.spec, name)
+				got := rightsizing.FixedPodLevelRequest(&tc.spec, name)
 				switch {
 				case want == "" && got != nil:
 					t.Errorf("%s = %s, want none", name, got.String())
@@ -137,7 +138,7 @@ func TestComputeRightsizing_PodLevelRequest(t *testing.T) {
 
 	t.Run("pod-level only", func(t *testing.T) {
 		workload := workloadFor(corev1.PodSpec{Resources: podBudget, Containers: []corev1.Container{{Name: "app"}, {Name: "sidecar"}}})
-		resp := computeRightsizing(context.Background(), podLevelQuerier(cpu, mem, 2016), "Deployment", "ns", "api", workload)
+		resp := computeRightsizing(context.Background(), podLevelQuerier(cpu, mem, 2016), "Deployment", "ns", "api", workload, ViewScope{})
 		for _, row := range resp.Rows {
 			if row.Fit != FitPodLevelRequest || row.RecommendationReason != ReasonPodLevelRequest {
 				t.Errorf("%s/%s fit=%s reason=%q, want pod_level_request", row.Container, row.Resource, row.Fit, row.RecommendationReason)
@@ -172,7 +173,7 @@ func TestComputeRightsizing_PodLevelRequest(t *testing.T) {
 
 	t.Run("mixed: a container's own request is not sized against a pod-level request", func(t *testing.T) {
 		workload := workloadFor(corev1.PodSpec{Resources: podBudget, Containers: []corev1.Container{{Name: "app", Resources: own}, {Name: "sidecar"}}})
-		resp := computeRightsizing(context.Background(), podLevelQuerier(cpu, mem, 2016), "Deployment", "ns", "api", workload)
+		resp := computeRightsizing(context.Background(), podLevelQuerier(cpu, mem, 2016), "Deployment", "ns", "api", workload, ViewScope{})
 		app := rowFor(resp.Rows, "app", "cpu")
 		if app.Fit != FitPodLevelRequest || app.CurrentRequest == nil || *app.CurrentRequest != "100m" {
 			t.Errorf("app cpu row = %+v", app)
@@ -181,7 +182,7 @@ func TestComputeRightsizing_PodLevelRequest(t *testing.T) {
 
 	t.Run("short history still names the pod-level request", func(t *testing.T) {
 		workload := workloadFor(corev1.PodSpec{Resources: podBudget, Containers: []corev1.Container{{Name: "app"}, {Name: "sidecar"}}})
-		resp := computeRightsizing(context.Background(), podLevelQuerier(cpu, mem, 10), "Deployment", "ns", "api", workload)
+		resp := computeRightsizing(context.Background(), podLevelQuerier(cpu, mem, 10), "Deployment", "ns", "api", workload, ViewScope{})
 		if row := rowFor(resp.Rows, "app", "memory"); row.Fit != FitPodLevelRequest {
 			t.Errorf("row = %+v, want pod_level_request rather than a promise of a later verdict", row)
 		}
@@ -190,7 +191,7 @@ func TestComputeRightsizing_PodLevelRequest(t *testing.T) {
 	t.Run("a failed usage query keeps its answer", func(t *testing.T) {
 		workload := workloadFor(corev1.PodSpec{Resources: podBudget, Containers: []corev1.Container{{Name: "app"}}})
 		failing := fakeRightsizingQuerier(func(string) (*prom.QueryResult, error) { return nil, errors.New("boom") })
-		resp := computeRightsizing(context.Background(), failing, "Deployment", "ns", "api", workload)
+		resp := computeRightsizing(context.Background(), failing, "Deployment", "ns", "api", workload, ViewScope{})
 		if row := rowFor(resp.Rows, "app", "cpu"); row.QueryError == "" || row.Fit == FitPodLevelRequest {
 			t.Errorf("row = %+v, want the query error to stand", row)
 		}
@@ -198,7 +199,7 @@ func TestComputeRightsizing_PodLevelRequest(t *testing.T) {
 
 	t.Run("container-only is unchanged", func(t *testing.T) {
 		workload := workloadFor(corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}, {Name: "sidecar"}}})
-		resp := computeRightsizing(context.Background(), podLevelQuerier(cpu, mem, 2016), "Deployment", "ns", "api", workload)
+		resp := computeRightsizing(context.Background(), podLevelQuerier(cpu, mem, 2016), "Deployment", "ns", "api", workload, ViewScope{})
 		for _, row := range resp.Rows {
 			if row.Fit != FitMissingRequest || row.RecommendedReq == nil || row.PodLevelRequest != nil {
 				t.Errorf("%s/%s = %+v, want missing_request with a suggestion", row.Container, row.Resource, row)
@@ -209,7 +210,7 @@ func TestComputeRightsizing_PodLevelRequest(t *testing.T) {
 	t.Run("pod limit with container requests: containers still decide the request", func(t *testing.T) {
 		workload := workloadFor(corev1.PodSpec{Resources: &corev1.ResourceRequirements{Limits: resourceList("cpu", "2")},
 			Containers: []corev1.Container{{Name: "app", Resources: own}, {Name: "sidecar"}}})
-		resp := computeRightsizing(context.Background(), podLevelQuerier(cpu, mem, 2016), "Deployment", "ns", "api", workload)
+		resp := computeRightsizing(context.Background(), podLevelQuerier(cpu, mem, 2016), "Deployment", "ns", "api", workload, ViewScope{})
 		if row := rowFor(resp.Rows, "sidecar", "cpu"); row.Fit != FitMissingRequest {
 			t.Errorf("sidecar cpu = %+v, want missing_request", row)
 		}
@@ -224,7 +225,7 @@ func TestComputeRightsizing_PodLimitOnlyStillSizesContainers(t *testing.T) {
 	workload := rightsizingWorkload{podSpec: &spec, containers: extractRuntimeContainers(&spec), currentPodOOM: map[string]bool{}, hpaManaged: map[string]bool{}, hpaAvailable: true}
 	cpu := map[string]float64{"app": 0.44, "sidecar": 0.3}
 	mem := map[string]float64{"app": 66 * 1024 * 1024, "sidecar": 40 * 1024 * 1024}
-	rows := computeRightsizing(context.Background(), podLevelQuerier(cpu, mem, 2016), "Deployment", "ns", "api", workload).Rows
+	rows := computeRightsizing(context.Background(), podLevelQuerier(cpu, mem, 2016), "Deployment", "ns", "api", workload, ViewScope{}).Rows
 	for _, want := range []struct{ container, resource, rec string }{{"app", "cpu", "550m"}, {"sidecar", "cpu", "350m"}, {"app", "memory", "96Mi"}, {"sidecar", "memory", "64Mi"}} {
 		row := rowFor(rows, want.container, want.resource)
 		if row.Fit != FitMissingRequest || row.RecommendedReq == nil || *row.RecommendedReq != want.rec || row.PodLevelRequest != nil {
@@ -242,12 +243,12 @@ func TestBuildScanRow_PodLevelRequest(t *testing.T) {
 		memory:   map[scanKey][]float64{key: repeatedValues(50 * 1024 * 1024)},
 		restarts: map[scanKey]float64{key: 0}, terminations: map[scanKey]terminationEvidence{}, errors: map[string]error{},
 	}
-	memory := buildScanRow(workload.containers[0], "memory", key, rightsizingMinSamples, workload, evidence)
+	memory := buildScanRow(workload.containers[0], "memory", key, rightsizing.RightsizingMinSamples, workload, evidence)
 	if memory.Fit != FitPodLevelRequest || memory.RecommendedReq != nil || memory.PodLevelRequest == nil || *memory.PodLevelRequest != "128Mi" ||
 		memory.PodLevelRequestValue == nil || *memory.PodLevelRequestValue != 128*1024*1024 {
 		t.Errorf("memory row = %+v", memory)
 	}
-	cpu := buildScanRow(workload.containers[0], "cpu", key, rightsizingMinSamples, workload, evidence)
+	cpu := buildScanRow(workload.containers[0], "cpu", key, rightsizing.RightsizingMinSamples, workload, evidence)
 	if cpu.Fit != FitMissingRequest {
 		t.Errorf("cpu has no pod-level request and must still be judged per container: %+v", cpu)
 	}
@@ -257,7 +258,7 @@ func TestComputeRightsizing_PodLevelRowWithoutSamplesStaysUnevidenced(t *testing
 	spec := corev1.PodSpec{Resources: &corev1.ResourceRequirements{Requests: resourceList("cpu", "200m", "memory", "128Mi")}, Containers: []corev1.Container{{Name: "app"}}}
 	workload := rightsizingWorkload{containers: extractRuntimeContainers(&spec), currentPodOOM: map[string]bool{}, hpaManaged: map[string]bool{}, hpaAvailable: true}
 	// CPU has samples, memory has none.
-	resp := computeRightsizing(context.Background(), podLevelQuerier(map[string]float64{"app": 0.1}, map[string]float64{}, 2016), "Deployment", "ns", "api", workload)
+	resp := computeRightsizing(context.Background(), podLevelQuerier(map[string]float64{"app": 0.1}, map[string]float64{}, 2016), "Deployment", "ns", "api", workload, ViewScope{})
 	memory := rowFor(resp.Rows, "app", "memory")
 	if memory.Fit != FitInsufficientHistory || !RowUnevidenced(memory) {
 		t.Fatalf("memory row without samples = %+v, want insufficient_history", memory)
@@ -275,7 +276,7 @@ func TestComputeRightsizing_IncreasesStayWithinPodLimit(t *testing.T) {
 	mem := map[string]float64{"app": 60 * 1024 * 1024, "sidecar": 60 * 1024 * 1024}
 	run := func(spec corev1.PodSpec, usage map[string]float64) []RightsizingRow {
 		workload := rightsizingWorkload{podSpec: &spec, containers: extractRuntimeContainers(&spec), currentPodOOM: map[string]bool{}, hpaManaged: map[string]bool{}, hpaAvailable: true}
-		return computeRightsizing(context.Background(), podLevelQuerier(usage, mem, 2016), "Deployment", "ns", "api", workload).Rows
+		return computeRightsizing(context.Background(), podLevelQuerier(usage, mem, 2016), "Deployment", "ns", "api", workload, ViewScope{}).Rows
 	}
 	podLimit := func(cpu string) *corev1.ResourceRequirements {
 		return &corev1.ResourceRequirements{Limits: resourceList("cpu", cpu)}
