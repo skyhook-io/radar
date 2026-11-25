@@ -339,6 +339,31 @@ describe("the drawer's Sync with an options dialog", () => {
     await close()
   })
 
+  it.each(['success', 'failure'])('ignores a late %s from an earlier dialog for the same Application', async (outcome) => {
+    let finish!: () => void
+    const onArgoSync = vi.fn<OnArgoSync>(() => new Promise<void>((resolve, reject) => {
+      finish = outcome === 'success' ? resolve : () => reject(new Error('earlier Sync denied'))
+    }))
+    const { rerender, close } = await open(onArgoSync)
+    try {
+      await act(async () => dialogButton('Sync now').click())
+      const { isErrorShownInline } = onArgoSync.mock.calls[0][0] as { isErrorShownInline: () => boolean }
+      expect(isErrorShownInline()).toBe(true)
+      await rerender('other')
+      await rerender('guestbook')
+      const reopen = [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Sync…')!
+      await act(async () => reopen.click())
+      expect(isErrorShownInline()).toBe(false)
+
+      await act(async () => finish())
+      expect(dialog().closest('[inert]')).toBeNull()
+      expect(dialogButton('Sync now').disabled).toBe(false)
+      expect(dialog().querySelector('[role="alert"]')).toBeNull()
+    } finally {
+      await close()
+    }
+  })
+
   it("syncs with the dialog's choices and the Application's options", async () => {
     const onArgoSync = vi.fn<OnArgoSync>()
     const { close } = await open(onArgoSync)

@@ -1034,23 +1034,23 @@ function ArgoActions({ resource, data, onSync, isSyncing, syncDialog, onRefresh,
   // The drawer can switch Applications under an open dialog; its choices
   // belong to the one it was opened for, so it closes on any other.
   const appKey = `${resource.namespace}/${resource.name}`
-  const [syncDialogFor, setSyncDialogFor] = useState<string | null>(null)
-  if (syncDialogFor !== null && syncDialogFor !== appKey) setSyncDialogFor(null)
-  const syncDialogOpen = syncDialogFor === appKey
-  const activeSyncDialog = useRef<string | null>(null)
+  const [syncSelection, setSyncSelection] = useState<{ appKey: string } | null>(null)
+  if (syncSelection && syncSelection.appKey !== appKey) setSyncSelection(null)
+  const dialog = syncSelection?.appKey === appKey ? syncSelection : null
+  const activeSyncDialog = useRef<typeof dialog>(null)
   useLayoutEffect(() => {
-    activeSyncDialog.current = syncDialogOpen ? appKey : null
+    activeSyncDialog.current = dialog
     return () => { activeSyncDialog.current = null }
-  }, [appKey, syncDialogOpen])
+  }, [dialog])
   const [syncError, setSyncError] = useState<(Error & { rawDetail?: string }) | null>(null)
   const operationRunning = isArgoOperationInProgress(data)
   const applicationSyncOptions = argoApplicationSyncOptions(data)
-  const sync = (opts?: ArgoSyncOpts) => Promise.resolve(onSync?.({
+  const sync = (opts?: ArgoSyncOpts, isErrorShownInline?: () => boolean) => Promise.resolve(onSync?.({
     namespace: resource.namespace,
     name: resource.name,
     applicationSyncOptions,
     ...opts,
-    ...(opts && { isErrorShownInline: () => activeSyncDialog.current === appKey }),
+    ...(isErrorShownInline && { isErrorShownInline }),
   }))
 
   return (
@@ -1061,7 +1061,7 @@ function ArgoActions({ resource, data, onSync, isSyncing, syncDialog, onRefresh,
             onClick={() => {
               if (!syncDialog) return void sync().catch(() => {})
               setSyncError(null)
-              setSyncDialogFor(appKey)
+              setSyncSelection({ appKey })
             }}
             disabled={isSyncing || operationRunning}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
@@ -1074,7 +1074,7 @@ function ArgoActions({ resource, data, onSync, isSyncing, syncDialog, onRefresh,
       {onSync && syncDialog && (
         <SyncOptionsDialog
           key={appKey}
-          open={syncDialogOpen}
+          open={dialog !== null}
           appLabel={`${resource.namespace}/${resource.name}`}
           multiSource={isArgoMultiSource(data)}
           comparedRevision={data?.status?.sync?.revision}
@@ -1085,10 +1085,17 @@ function ArgoActions({ resource, data, onSync, isSyncing, syncDialog, onRefresh,
           operationInProgress={operationRunning}
           syncError={syncError?.message}
           syncRawError={syncError?.rawDetail}
-          onCancel={() => setSyncDialogFor(null)}
+          onCancel={() => setSyncSelection(null)}
           onConfirm={(opts) => {
+            if (!dialog) return
+            const isCurrentDialog = () => activeSyncDialog.current === dialog
             setSyncError(null)
-            sync(opts).then(() => setSyncDialogFor(null), (error: unknown) => setSyncError(error instanceof Error ? error : new Error('the request was refused')))
+            void sync(opts, isCurrentDialog).then(
+              () => { if (isCurrentDialog()) setSyncSelection(null) },
+              (error: unknown) => {
+                if (isCurrentDialog()) setSyncError(error instanceof Error ? error : new Error('the request was refused'))
+              },
+            )
           }}
         />
       )}
