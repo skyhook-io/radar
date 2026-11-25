@@ -3936,6 +3936,8 @@ interface ResourcesViewProps {
    * promise resolves (a rejection keeps it).
    */
   onApplyNamespacesToAllSections?: (namespaces: string[]) => Promise<unknown> | void
+  /** Host-rendered note in the empty state about what the namespace filter hides. Replaces the "Searching in" line. */
+  emptyScopeHint?: React.ReactNode
   // Bulk operations
   onBulkDelete?: (items: BulkResourceItem[], options?: { force?: boolean; onSuccess?: () => void }) => void
   isBulkDeleting?: boolean
@@ -4151,6 +4153,7 @@ export function ResourcesView({
   rememberedKindSearch,
   onKindFiltersChange,
   onApplyNamespacesToAllSections,
+  emptyScopeHint,
   onBulkDelete,
   isBulkDeleting = false,
   onBulkRestart,
@@ -7500,7 +7503,7 @@ export function ResourcesView({
                     : 'Searched names, namespaces and report findings (CVE, package, check ID, image).'}
                 </p>
               )}
-              {namespaces.length > 0 && <p className="text-sm mt-1 text-theme-text-disabled">Searching in {namespaces.length === 1 ? `namespace: ${namespaces[0]}` : `${namespaces.length} namespaces`}</p>}
+              {emptyScopeHint ?? (namespaces.length > 0 && <p className="text-sm mt-1 text-theme-text-disabled">Searching in {namespaces.length === 1 ? `namespace: ${namespaces[0]}` : `${namespaces.length} namespaces`}</p>)}
               <ActiveFilterBar
                 columnFilters={columnFilters}
                 columnFilterExcludes={columnFilterExcludes}
