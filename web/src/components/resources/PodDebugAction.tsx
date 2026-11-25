@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react'
 import { Bug } from 'lucide-react'
 import { ActionConfirmDialog, getDefaultContainerName, getExecContainerNames, useOpenTerminal, type ActionConfirmResult } from '@skyhook-io/k8s-ui'
 import { PodDebugAccessRequest } from './PodDebugAccessRequest'
+import { Tooltip } from '../ui/Tooltip'
 import { actionDialogResult } from '../../api/actions'
 import { ApiError } from '../../api/client'
 import { connectionHeaderValue } from '../../api/connectionBinding'
@@ -140,7 +141,9 @@ export function PodDebugAction({ pod, defaultImage, failedContainer, unverifiedR
 
   if (!eligibleTargets || (!draft && !targets.length)) return null
   return <>
-    {debugDenial ? <button type="button" className="btn-secondary rounded-lg px-3 py-1.5 text-xs" onClick={show} title="View the permission and copy a request for your administrator">Debug access denied for this Pod</button> : <button type="button" className={`${failedContainer ? 'btn-brand' : 'btn-secondary'} flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium`} onClick={show}>
+    {debugDenial ? <Tooltip content="View the permission and copy a request for your administrator">
+      <button type="button" className="btn-secondary rounded-lg px-3 py-1.5 text-xs" onClick={show}>Debug access denied for this Pod</button>
+    </Tooltip> : <button type="button" className={`${failedContainer ? 'btn-brand' : 'btn-secondary'} flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium`} onClick={show}>
       <Bug className="h-3.5 w-3.5" />{unverifiedReview ? recheckRequired ? 'Review debug refusal' : refused ? 'Review another debug attempt' : 'Review debug container' : failedContainer ? 'Start a debug container' : 'Debug'}
     </button>}
     <ActionConfirmDialog open={!!draft} title="Debug Pod" context={draft?.context} writes={debugDenial ? [] : [{ summary: `Update pods/ephemeralcontainers on ${namespace}/${name}` }]} subject={{ kind: 'Pod', namespace, name }}
