@@ -349,7 +349,7 @@ export function TerminalTab({
                 {containers.length > 1 && ' Try another container above.'}
                 {createDebugContainer && ' You can create a debug container to troubleshoot.'}
               </div>}
-              <div className="flex gap-2">
+              <div className="flex flex-wrap items-center justify-center gap-2">
                 {!command && failedPodUID && renderDebugAction?.(selectedContainer, failedPodUID)}
                 {!command && !renderDebugAction && createDebugContainerRef.current && (
                   <button

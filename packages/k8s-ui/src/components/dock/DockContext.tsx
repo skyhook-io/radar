@@ -93,6 +93,9 @@ export function DockProvider({ children }: { children: ReactNode }) {
       if (t.type === 'traffic-flows') {
         return true // Singleton — always reuse existing tab
       }
+      if (t.debugSession?.podUID !== tabData.debugSession?.podUID ||
+          t.debugSession?.connectionId !== tabData.debugSession?.connectionId ||
+          t.debugSession?.apiBase !== tabData.debugSession?.apiBase) return false
       return t.namespace === tabData.namespace &&
              t.podName === tabData.podName &&
              t.containerName === tabData.containerName &&

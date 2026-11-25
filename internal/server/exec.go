@@ -469,7 +469,10 @@ func sendPodExecError(conn *websocket.Conn, err error, podUID types.UID) {
 }
 
 func sendWSError(conn *websocket.Conn, msg string) {
+	deadline := time.Now().Add(2 * time.Second)
+	conn.SetWriteDeadline(deadline)
 	sendWSErrorWithType(conn, "exec_error", msg, "")
+	conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), deadline)
 }
 
 // sendWSErrorWithType sends an error with a specific error type to help frontend distinguish error causes

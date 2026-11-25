@@ -28,5 +28,13 @@ it('reuses normal terminals and separates explicit executables and cluster ident
     expect(dock.tabs[0].title).toBe('My shell')
     await act(async () => open({ ...base, clusterId: 'second', shell: 'psql' })); expect(dock.tabs).toHaveLength(3)
     await act(async () => open({ ...base, orgId: 'other' })); expect(dock.tabs).toHaveLength(4)
+    const debug = { podUID: 'pod-1', image: 'busybox', connectionId: 'conn-1', apiBase: '/api' }
+    await act(async () => open({ ...base, debugSession: debug }))
+    await act(async () => open({ ...base, debugSession: { ...debug } }))
+    expect(dock.tabs).toHaveLength(5)
+    for (const delta of [{ podUID: 'replacement' }, { connectionId: 'conn-2' }, { apiBase: '/other' }]) {
+      await act(async () => open({ ...base, debugSession: { ...debug, ...delta } }))
+    }
+    expect(dock.tabs).toHaveLength(8)
   } finally { await act(async () => root.unmount()); host.remove() }
 })
