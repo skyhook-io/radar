@@ -99,6 +99,8 @@ export interface ServerReadings {
    * state reads the same color on the Overview and in the lists.
    */
   tones: Map<string, RowTone>
+  /** Template presence from the pool inventory is available even for healthy pools. */
+  warmPools: Map<string, AgentSandboxWorkspaceResponse['warmPools'][number]>
   /** The Needs attention row about an object, keyed by objectKey. */
   rows: Map<string, AgentSandboxAttention>
 }
@@ -115,7 +117,8 @@ export function serverReadings(workspace: AgentSandboxWorkspaceResponse | undefi
     tones.set(k, TONE[a.severity])
     rows.set(k, a)
   }
-  return { unschedulable: unschedulablePools(workspace), tones, rows }
+  const warmPools = new Map(workspace?.warmPools.map((w) => [objectKey("SandboxWarmPool", w.namespace, w.name), w]))
+  return { unschedulable: unschedulablePools(workspace), tones, rows, warmPools }
 }
 
 /**

@@ -175,7 +175,7 @@ export function sidebarCount(c: AgentSandboxCount, noun: [string, string], contr
   const partial = c.lowerBound ? ' Some couldn’t be read, so there may be more.' : ''
   const unit = noun[0] === 'attention item'
     ? (c.count === 1 ? 'attention item' : 'attention items')
-    : (c.count === 1 ? `${noun[0]} needs attention` : `${noun[1]} need attention`)
+    : `${c.count === 1 ? 'workspace finding' : 'workspace findings'} for ${noun[1]} (related objects can share a finding)`
   return {
     count: c.count,
     lowerBound: c.lowerBound,

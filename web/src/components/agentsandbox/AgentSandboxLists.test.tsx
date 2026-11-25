@@ -64,7 +64,7 @@ describe('Agent Sandbox kind list gate', () => {
 
   it('tells a denial from a failure, and offers a retry only for the failure', () => {
     const denied = gate(liveData({ sandboxes: DENIED, claims: DENIED, warmPools: DENIED }))
-    expect(denied).toContain('No access to Agent Sandbox objects')
+    expect(denied).toContain('Missing permission to list sandboxes.agents.x-k8s.io')
     expect(denied).not.toContain('Retry')
     const failed = gate(liveData({ sandboxes: { state: 'failed', message: 'boom', denied: false }, claims: DENIED, warmPools: DENIED }))
     expect(failed).toContain('Agent Sandbox data unavailable')
@@ -106,7 +106,7 @@ describe('Agent Sandbox kind lists', () => {
     const by = Object.fromEntries(liveSandboxes().map((s) => [s.metadata.name, stateMessage(s, getSandboxStatus(s))]))
     expect(by['warm-4xmkm']).toBe('All nodes have reached their Pod limit')
     expect(by['bad-image']).toBe('Container "agent" is waiting: ImagePullBackOff')
-    expect(by['failed']).toContain('Pod retained after exit')
+    expect(by['failed']).toContain('Pod exited with failure')
     expect(by['foreign']).toBe('Conflicting Pod "foreign" is not owned by this Sandbox')
     for (const name of ['expired', 'finished', 'running', 'suspended']) expect(by[name], name).toBeUndefined()
   })
@@ -194,7 +194,7 @@ describe('Agent Sandbox kind lists', () => {
     expect(html).toContain('Can’t schedule · All nodes have reached their Pod limit')
     // The scheduler's own message is on hover and in the drawer, not in the row.
     expect(html).not.toContain('Too many pods')
-    expect(html).toMatch(/<button[^>]*>2 sandboxes not ready<\/button>/)
+    expect(html).toMatch(/<button[^>]*>Show all members that aren’t ready<\/button>/)
     // Without the server's row there is no reason to give and nothing to count.
     const bare = page(<WarmPoolsScreen {...screenProps(liveData())} />)
     expect(bare).not.toContain('Pod limit')
@@ -279,13 +279,18 @@ describe('Agent Sandbox kind lists', () => {
     const claims = page(<ClaimsScreen {...screenProps(liveData())} server={serverReadings(liveWorkspace())} />)
     expect(claims).toMatch(/class="[^"]*amber[^"]*"[^>]*>Warm pool not found</)
     expect(page(<ClaimsScreen {...screenProps(liveData())} />)).toMatch(/class="[^"]*amber[^"]*"[^>]*>Warm pool not found</)
-    // A Sandbox still provisioning reads amber; past 30 minutes the server's row is stalled (alert), and the list follows it.
-    const at = new Date(Date.now() - 45 * 60_000).toISOString()
-    const slow = sandbox('slow', { conditions: [{ type: 'Ready', status: 'False', reason: 'DependenciesNotReady', message: 'Pod exists with phase: Pending', lastTransitionTime: at }] })
+    const slow = sandbox('slow', { conditions: [
+      { type: 'Ready', status: 'False', reason: 'DependenciesNotReady' },
+      { type: 'PodScheduled', status: 'False', reason: 'Unschedulable' },
+    ] })
+    const attention = [{
+      id: 'sandbox:slow', category: 'sandbox', rule: 'stalled', severity: 'warning', issue: true,
+      subject: { kind: 'Sandbox', group: 'agents.x-k8s.io', name: 'slow', namespace: NS },
+      title: 'Pod can’t be scheduled', nextStep: 'Check the scheduler',
+    }] as const
     const data = liveData({ sandboxes: [slow] })
-    expect(page(<SandboxesScreen {...screenProps(data)} />)).toMatch(/class="[^"]*amber[^"]*"[^>]*>Provisioning</)
-    const stalled = { unschedulable: new Set<string>(), tones: new Map([[`Sandbox/${NS}/slow`, 'alert' as const]]), rows: new Map() }
-    expect(page(<SandboxesScreen {...screenProps(data)} server={stalled} />)).toMatch(/class="[^"]*orange[^"]*"[^>]*>Provisioning</)
+    const server = serverReadings(liveWorkspace({ attention: [...attention] }))
+    expect(page(<SandboxesScreen {...screenProps(data)} server={server} />)).toMatch(/class="[^"]*amber[^"]*"[^>]*>Can’t schedule</)
   })
 
   it('says what an empty owner, expiry, warm pool or template means, and only where Radar knows', () => {

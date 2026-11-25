@@ -6,13 +6,15 @@ import { formatAge, summarizeSchedulerMessage } from '@skyhook-io/k8s-ui/compone
 import { useMediaQuery } from '../../hooks/useMediaQuery'
 import {
   getAgentRuntimeStatus,
-  getReadyOfDesired,
+  getSandboxWarmPoolReadyOfDesired,
   getSandboxClaimStatus,
   getSandboxClaimWarmPool,
+  getSandboxExpiry,
   getSandboxOperatingMode,
   getSandboxStatus,
   getSandboxWarmPoolStatus,
   getSandboxWarmPoolTemplate,
+  sandboxPodName,
 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-agent-runtimes'
 import type { SelectedResource } from '../../types'
 import { ScreenBody, SectionTable, Segments, Sub, type TableColumn } from '../workspace/layout'
@@ -102,12 +104,11 @@ export function stateMessage(o: any, status: StatusBadge): string | undefined {
     if (plain) return `${plain[0].toUpperCase()}${plain.slice(1)}`
   }
   if (status.text === 'Suspension blocked') {
-    const annotated = o?.metadata?.annotations?.['agents.x-k8s.io/pod-name']
-    const podName = typeof annotated === 'string' && annotated ? annotated : nm(o)
+    const podName = sandboxPodName(o)
     return podName ? `Conflicting Pod "${podName}" is not owned by this Sandbox` : 'Conflicting Pod is not owned by this Sandbox'
   }
   if (status.text === 'PodFailed') {
-    return o?.spec?.failedPodPolicy === 'Retain' ? 'Pod retained after exit · open for exit code and logs' : 'Pod exited with failure · open for details'
+    return 'Pod exited with failure. Open for available exit details.'
   }
   const message = getAgentRuntimeStatus(o)?.message
   if (!message || letters(message) === letters(status.text)) return undefined
@@ -128,7 +129,7 @@ function StateCell({ o, status, requested, level, hideMessage }: { o: any; statu
       </span>
       {message && (
         <Sub>
-          <Tooltip content={rawMessage || message}><span className="line-clamp-2">{message}</span></Tooltip>
+          <Tooltip content={rawMessage || message}><span className="break-words">{message}</span></Tooltip>
         </Sub>
       )}
     </>
@@ -302,30 +303,18 @@ export function ClaimsTable({ read, warmPools, onInspect, inspected, server, emp
     }
     return <Absent title="The claim’s status names no Sandbox now.">not bound</Absent>
   }
-  // Narrow: the bound Sandbox under the name, the age under the expiry.
+
   const columns: TableColumn<any>[] = [
-    {
-      header: 'Claim',
-      width: wide ? '19%' : '26%',
-      cell: (o) => {
-        const sb = wide ? undefined : sandboxOf(o)
-        return (
-          <>
-            <NameCell o={o} multi={multi} />
-            {sb && (
-              <Sub>
-                sandbox <RowLink refTo={sb} onInspect={onInspect} inline />
-              </Sub>
-            )}
-          </>
-        )
-      },
-    },
+    { header: 'Claim', width: wide ? '19%' : '20%', cell: (o) => <NameCell o={o} multi={multi} /> },
     { header: 'State', width: wide ? '25%' : '30%', cell: (o) => <StateCell o={o} status={getSandboxClaimStatus(o)} level={server?.tones.get(objectKey('SandboxClaim', ns(o), nm(o)))} hideMessage={reportsMissingPool(o)} /> },
-    { header: 'Warm pool', width: wide ? '16%' : '18%', cell: poolCell },
+    { header: 'Warm pool & binding', width: wide ? '31%' : '24%', cell: (o) => (
+      <div className="space-y-1">
+        {poolCell(o)}
+        <Sub>{bindingCell(o)}</Sub>
+      </div>
+    ) },
     ...(wide
       ? [
-          { header: 'Sandbox', width: '15%', cell: bindingCell },
           { header: 'Expiry', width: '11%', cell: (o: any) => <ExpiryCell resource={o} /> },
           { header: 'Age', width: '7%', cell: (o: any) => <AgeCell o={o} /> },
         ]
@@ -382,7 +371,7 @@ export function WarmPoolsTable({
   const columns: TableColumn<any>[] = [
     {
       header: 'Warm pool',
-      width: wide ? '20%' : '25%',
+      width: wide ? '19%' : '24%',
       cell: (o) => (
         <>
           <NameCell o={o} multi={multi} />
@@ -392,12 +381,12 @@ export function WarmPoolsTable({
     },
     {
       header: 'State',
-      width: wide ? '25%' : '29%',
+      width: wide ? '24%' : '28%',
       cell: (o) => (
         <>
           <PoolStateBadge o={o} server={server} />
           <PoolStateDetail o={o} server={server} />
-          {!wide && <Sub>{getReadyOfDesired(o)} ready</Sub>}
+          {!wide && <Sub>{getSandboxWarmPoolReadyOfDesired(o)} ready</Sub>}
         </>
       ),
     },
@@ -408,7 +397,7 @@ export function WarmPoolsTable({
             width: '10%',
             cell: (o: any) => (
               <>
-                <span className="font-mono text-sm">{getReadyOfDesired(o)}</span>
+                <span className="font-mono text-sm">{getSandboxWarmPoolReadyOfDesired(o)}</span>
                 <Sub>of desired</Sub>
               </>
             ),
@@ -417,18 +406,20 @@ export function WarmPoolsTable({
       : []),
     {
       header: 'Template',
-      width: wide ? '14%' : '18%',
+      width: wide ? '17%' : '20%',
       cell: (o) => {
         const t = getSandboxWarmPoolTemplate(o)
         if (t === '-') return <Absent>no template</Absent>
-        const row = server?.rows.get(objectKey('SandboxWarmPool', ns(o), nm(o)))
-        const rel = row?.relations?.find((r) => r.role === 'template')
-        if (rel && rel.presence !== 'present') {
+        const key = objectKey('SandboxWarmPool', ns(o), nm(o))
+        const pool = server?.warmPools.get(key)
+        const rel = server?.rows.get(key)?.relations?.find((r) => r.role === 'template' && r.ref.name === t)
+        const presence = rel?.presence ?? (pool?.template === t ? pool.templatePresence : undefined)
+        if (presence !== 'present') {
           return (
             <>
               <ObjectName name={t} />
               <Sub>
-                <span className={rel.presence === 'absent' ? toneTextClass('unhealthy') : undefined}>{rel.presence === 'absent' ? 'not found' : 'not read'}</span>
+                <span className={presence === 'absent' ? toneTextClass('unhealthy') : undefined}>{presence === 'absent' ? 'not found' : 'not read'}</span>
               </Sub>
             </>
           )
@@ -525,7 +516,7 @@ function PoolStateDetail({ o, server }: { o: any; server?: ServerReadings }) {
             onKeyDown={(e) => e.stopPropagation()}
             className="text-accent-text hover:underline"
           >
-            {members.length} {members.length === 1 ? 'sandbox' : 'sandboxes'} not ready
+            Show all members that aren’t ready
           </button>
         </Sub>
       )}
@@ -549,7 +540,7 @@ function CreateButton({ onCreate, label }: { onCreate?: () => void; label: strin
  * isn't Ready, `state=expired` those whose reading is Expired.
  */
 export function filterSandboxes(read: KindRead, pool: string, state: string): KindRead {
-  if (read.state !== 'read' || (!pool && state !== 'notReady' && state !== 'expired')) return read
+  if (read.state !== 'read' || (!pool && state !== 'notReady' && state !== 'expired' && state !== 'recentlyExpired')) return read
   const items = read.items.filter((o) => {
     if (pool) {
       const owner = sandboxController(o)
@@ -557,12 +548,20 @@ export function filterSandboxes(read: KindRead, pool: string, state: string): Ki
     }
     if (state === 'notReady') return getSandboxStatus(o).level !== 'healthy'
     if (state === 'expired') return getSandboxStatus(o).text === 'Expired'
+    if (state === 'recentlyExpired') return getSandboxStatus(o).text === 'Expired' && recentlyExpired(o)
     return true
   })
   return { ...read, items }
 }
 
 /** Keeps the objects whose name contains `search`, ignoring case. */
+function recentlyExpired(o: any): boolean {
+  const expiry = getSandboxExpiry(o)
+  if (!expiry) return false
+  const elapsed = Date.now() - Date.parse(expiry)
+  return elapsed >= 0 && elapsed <= 7 * 24 * 60 * 60 * 1000
+}
+
 export function filterByName(read: KindRead, search: string): KindRead {
   const q = search.trim().toLowerCase()
   if (read.state !== 'read' || !q) return read
@@ -665,7 +664,7 @@ export function SandboxesScreen({ data, namespaces, onClearNamespaces, onInspect
   const [segment, setSegment] = useUrlParam<SandboxSegment>('segment', SANDBOX_SEGMENTS, 'all')
   const pool = params.get('pool') ?? ''
   const rawState = params.get('state')
-  const state = rawState === 'notReady' || rawState === 'expired' ? rawState : ''
+  const state = rawState === 'notReady' || rawState === 'expired' || rawState === 'recentlyExpired' ? rawState : ''
   const clear = (key: string) => {
     const p = new URLSearchParams(params)
     p.delete(key)
@@ -681,7 +680,7 @@ export function SandboxesScreen({ data, namespaces, onClearNamespaces, onInspect
   const chips = [
     ...(pool ? [{ label: `Warm pool: ${pool.slice(pool.indexOf('/') + 1)}`, onClear: () => clear('pool') }] : []),
     ...(state === 'notReady' ? [{ label: 'Not ready', onClear: () => clear('state') }] : []),
-    ...(state === 'expired' ? [{ label: 'Expired', onClear: () => clear('state') }] : []),
+    ...(state === 'expired' || state === 'recentlyExpired' ? [{ label: state === 'expired' ? 'Expired' : 'Expired in the last 7 days', onClear: () => clear('state') }] : []),
     ...listFilters.chips,
   ]
   const { apply } = listFilters
@@ -731,6 +730,7 @@ export function SandboxesScreen({ data, namespaces, onClearNamespaces, onInspect
   const sandboxes = useMemo(() => filterByName(apply(bySegment), search), [bySegment, search, apply])
   const narrowed = !!pool || !!state || segment !== 'all' || listFilters.narrows
   const empty = noMatchText('Sandboxes', search, narrowed, sandboxes)
+  const showSegmentCounts = !(search || pool || state || listFilters.narrows)
   const subtitle = data.sandboxes.state === 'read' ? listSubtitle(counts.all, ['sandbox', 'sandboxes'], partial, namespaces, baseItems, counts.attention) : undefined
 
   return (
@@ -743,10 +743,10 @@ export function SandboxesScreen({ data, namespaces, onClearNamespaces, onInspect
             value={segment}
             onChange={setSegment}
             options={[
-              { id: 'all', label: 'All', count: countBadge(counts.all, partial) },
-              { id: 'attention', label: 'Needs attention', count: countBadge(counts.attention, partial) },
-              { id: 'ready', label: 'Ready', count: countBadge(counts.ready, partial) },
-              { id: 'settled', label: 'Settled', count: countBadge(counts.settled, partial) },
+              { id: 'all', label: 'All', count: showSegmentCounts ? countBadge(counts.all, partial) : undefined },
+              { id: 'attention', label: 'Needs attention', count: showSegmentCounts ? countBadge(counts.attention, partial) : undefined },
+              { id: 'ready', label: 'Ready', count: showSegmentCounts ? countBadge(counts.ready, partial) : undefined },
+              { id: 'settled', label: 'Settled', count: showSegmentCounts ? countBadge(counts.settled, partial) : undefined },
             ]}
           />
           <PoolSelect pools={poolOptions} value={pool} onChange={setPool} multiNamespace={multiPoolNs} />
@@ -764,19 +764,22 @@ export function SandboxesScreen({ data, namespaces, onClearNamespaces, onInspect
 const CLAIM_SEGMENTS = ['all', 'attention', 'bound', 'expired'] as const
 type ClaimSegment = (typeof CLAIM_SEGMENTS)[number]
 
-function classifyClaim(o: any, server?: ServerReadings): 'attention' | 'bound' | 'expired' {
+function classifyClaim(o: any): 'attention' | 'bound' | 'expired' {
   const status = getSandboxClaimStatus(o)
   if (status.text === 'Expired') return 'expired'
-  const level = server?.tones.get(objectKey('SandboxClaim', ns(o), nm(o))) ?? status.level
-  if (claimSandboxName(o) && level === 'healthy') return 'bound'
-  if (claimSandboxName(o) && level === 'neutral') return 'bound'
-  return 'attention'
+  return claimSandboxName(o) ? 'bound' : 'attention'
+}
+
+function isClaimAttention(o: any, server?: ServerReadings): boolean {
+  const level = server?.tones.get(objectKey('SandboxClaim', ns(o), nm(o))) ?? getSandboxClaimStatus(o).level
+  return level === 'unhealthy' || level === 'alert' || level === 'degraded'
 }
 
 export function ClaimsScreen({ data, namespaces, onClearNamespaces, onInspect, inspected, onCreate, server }: AgentSandboxScreenProps & { onCreate?: () => void; server?: ServerReadings }) {
   const [params, setParams] = useSearchParams()
   const [search, setSearch] = useNameSearch()
   const [segment, setSegment] = useUrlParam<ClaimSegment>('segment', CLAIM_SEGMENTS, 'all')
+  const recent = params.get('state') === 'recentlyExpired'
   const pool = params.get('pool') ?? ''
   const setPool = (value: string) => {
     const p = new URLSearchParams(params)
@@ -787,6 +790,11 @@ export function ClaimsScreen({ data, namespaces, onClearNamespaces, onInspect, i
   const { apply, narrows, chips: listChips } = useListFilters(SANDBOX_CLAIM_KIND)
   const chips = [
     ...(pool ? [{ label: `Warm pool: ${pool.slice(pool.indexOf('/') + 1)}`, onClear: () => setPool('') }] : []),
+    ...(recent ? [{ label: 'Expired in the last 7 days', onClear: () => {
+      const next = new URLSearchParams(params)
+      next.delete('state')
+      setParams(next, { replace: true })
+    } }] : []),
     ...listChips,
   ]
   const baseItems = readItems(data.claims)
@@ -813,10 +821,10 @@ export function ClaimsScreen({ data, namespaces, onClearNamespaces, onInspect, i
     let bound = 0
     let expired = 0
     for (const o of baseItems) {
-      const bucket = classifyClaim(o, server)
-      if (bucket === 'attention') attention++
-      else if (bucket === 'bound') bound++
-      else expired++
+      const bucket = classifyClaim(o)
+      if (isClaimAttention(o, server)) attention++
+      if (bucket === 'bound') bound++
+      if (bucket === 'expired') expired++
     }
     return { all: baseItems.length, attention, bound, expired }
   }, [baseItems, server])
@@ -827,13 +835,15 @@ export function ClaimsScreen({ data, namespaces, onClearNamespaces, onInspect, i
       next = filterItems(next, (c) => `${ns(c)}/${getSandboxClaimWarmPool(c)}` === pool)
     }
     if (segment !== 'all') {
-      next = filterItems(next, (c) => classifyClaim(c, server) === segment)
+      next = filterItems(next, (c) => segment === 'attention' ? isClaimAttention(c, server) : classifyClaim(c) === segment)
     }
+    if (recent) next = filterItems(next, (c) => getSandboxClaimStatus(c).text === 'Expired' && recentlyExpired(c))
     return next
-  }, [data.claims, pool, segment, server])
+  }, [data.claims, pool, segment, server, recent])
 
   const claims = useMemo(() => filterByName(apply(narrowedRead), search), [narrowedRead, search, apply])
-  const empty = noMatchText('SandboxClaims', search, narrows || !!pool || segment !== 'all', claims)
+  const empty = noMatchText('SandboxClaims', search, narrows || !!pool || recent || segment !== 'all', claims)
+  const showSegmentCounts = !(search || pool || recent || narrows)
   const subtitle = data.claims.state === 'read' ? listSubtitle(counts.all, ['claim', 'claims'], partial, namespaces, baseItems, counts.attention) : undefined
 
   return (
@@ -846,10 +856,10 @@ export function ClaimsScreen({ data, namespaces, onClearNamespaces, onInspect, i
             value={segment}
             onChange={setSegment}
             options={[
-              { id: 'all', label: 'All', count: countBadge(counts.all, partial) },
-              { id: 'attention', label: 'Needs attention', count: countBadge(counts.attention, partial) },
-              { id: 'bound', label: 'Bound', count: countBadge(counts.bound, partial) },
-              { id: 'expired', label: 'Expired', count: countBadge(counts.expired, partial) },
+              { id: 'all', label: 'All', count: showSegmentCounts ? countBadge(counts.all, partial) : undefined },
+              { id: 'attention', label: 'Needs attention', count: showSegmentCounts ? countBadge(counts.attention, partial) : undefined },
+              { id: 'bound', label: 'Bound', count: showSegmentCounts ? countBadge(counts.bound, partial) : undefined },
+              { id: 'expired', label: 'Expired', count: showSegmentCounts ? countBadge(counts.expired, partial) : undefined },
             ]}
           />
           <PoolSelect pools={poolOptions} value={pool} onChange={setPool} multiNamespace={multiPoolNs} />
@@ -900,6 +910,7 @@ export function WarmPoolsScreen({ data, namespaces, onClearNamespaces, onInspect
 
   const pools = useMemo(() => filterByName(apply(bySegment), search), [bySegment, search, apply])
   const empty = noMatchText('SandboxWarmPools', search, narrows || segment !== 'all', pools)
+  const showSegmentCounts = !(search || narrows)
   const subtitle = data.warmPools.state === 'read' ? listSubtitle(counts.all, ['warm pool', 'warm pools'], partial, namespaces, baseItems, counts.attention) : undefined
 
   return (
@@ -912,9 +923,9 @@ export function WarmPoolsScreen({ data, namespaces, onClearNamespaces, onInspect
             value={segment}
             onChange={setSegment}
             options={[
-              { id: 'all', label: 'All', count: countBadge(counts.all, partial) },
-              { id: 'attention', label: 'Needs attention', count: countBadge(counts.attention, partial) },
-              { id: 'ready', label: 'Ready', count: countBadge(counts.ready, partial) },
+              { id: 'all', label: 'All', count: showSegmentCounts ? countBadge(counts.all, partial) : undefined },
+              { id: 'attention', label: 'Needs attention', count: showSegmentCounts ? countBadge(counts.attention, partial) : undefined },
+              { id: 'ready', label: 'Ready', count: showSegmentCounts ? countBadge(counts.ready, partial) : undefined },
             ]}
           />
           <div className="ml-auto">

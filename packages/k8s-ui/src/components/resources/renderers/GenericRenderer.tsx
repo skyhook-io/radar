@@ -37,6 +37,9 @@ export function GenericRenderer({ data }: GenericRendererProps) {
   // Check if resource has meaningful content
   const hasStatusContent = Object.keys(statusFields).length > 0 || (conditions && conditions.length > 0)
   const hasSpecContent = Object.keys(specFields).length > 0 || nestedSpecObjects.length > 0
+  const conditionSection = Array.isArray(conditions) && conditions.length > 0
+    ? <GenericConditionsSection conditions={conditions} resource={data} folded={summaryOwnsDiagnosis} />
+    : null
 
   return (
     <>
@@ -77,10 +80,7 @@ export function GenericRenderer({ data }: GenericRendererProps) {
         </Section>
       )}
 
-      {/* Conditions (common in CRDs) */}
-      {conditions && Array.isArray(conditions) && conditions.length > 0 && (
-        <GenericConditionsSection conditions={conditions} resource={data} />
-      )}
+      {!summaryOwnsDiagnosis && conditionSection}
 
       {/* Nested Status Objects */}
       {nestedStatusObjects.length > 0 && (
@@ -114,6 +114,7 @@ export function GenericRenderer({ data }: GenericRendererProps) {
           </div>
         </Section>
       )}
+      {summaryOwnsDiagnosis && conditionSection}
     </>
   )
 }
@@ -354,24 +355,11 @@ export function genericConditionTone(resource: any, cond: any): GenericCondition
   if (isSandbox && cond.type === 'Suspended') {
     return cond.status === 'False' && cond.reason === 'PodNotOwned' ? 'warning' : 'neutral'
   }
-  // Agent Sandbox reports every non-running state as Ready=False. Settled
-  // lifecycle outcomes are neutral rather than failures; missing pool/template
-  // refs on claims and refused suspensions are warnings matching their readings.
   if ((isSandbox || isSandboxClaim) && cond.type === 'Ready' && cond.status === 'False') {
-    if (cond.reason === 'SandboxExpired' || cond.reason === 'ClaimExpired' || cond.reason === 'PodSucceeded') {
-      return 'neutral'
-    }
-    if (cond.reason === 'SandboxSuspended') {
-      if (isSandboxClaim) return 'neutral'
-      const suspended = Array.isArray(resource?.status?.conditions)
-        ? resource.status.conditions.find((c: any) => c?.type === 'Suspended')
-        : undefined
-      if (suspended?.status === 'True') return 'neutral'
-      if (suspended?.status === 'False' && suspended?.reason === 'PodNotOwned') return 'warning'
-    }
-    if (isSandboxClaim && (cond.reason === 'WarmPoolNotFound' || cond.reason === 'TemplateNotFound')) {
-      return 'warning'
-    }
+    const level = getAgentRuntimeStatus(resource)?.level
+    if (level === 'neutral') return 'neutral'
+    if (level === 'degraded' || level === 'alert') return 'warning'
+    if (level === 'unknown') return 'unknown'
   }
   const isTrue = cond.status === 'True'
   if (WARNING_CONDITION_TYPES.has(cond.type)) return isTrue ? 'warning' : 'ok'
@@ -382,7 +370,7 @@ export function genericConditionTone(resource: any, cond: any): GenericCondition
 
 const isProblemTone = (tone: GenericConditionTone) => tone === 'fail' || tone === 'warning' || tone === 'unclear'
 
-function GenericConditionsSection({ conditions, resource }: { conditions: any[]; resource: any }) {
+function GenericConditionsSection({ conditions, resource, folded }: { conditions: any[]; resource: any; folded: boolean }) {
   // Sort conditions: problematic first, then alphabetically
   const sortedConditions = [...conditions].sort((a, b) => {
     const aProblematic = isProblemTone(genericConditionTone(resource, a))
@@ -395,7 +383,7 @@ function GenericConditionsSection({ conditions, resource }: { conditions: any[];
   const hasProblems = sortedConditions.some(c => isProblemTone(genericConditionTone(resource, c)))
 
   return (
-    <Section title={`Conditions (${conditions.length})`} defaultExpanded={hasProblems || conditions.length <= 5}>
+    <Section title={`Conditions (${conditions.length})`} defaultExpanded={!folded && (hasProblems || conditions.length <= 5)}>
       <div className="space-y-2">
         {sortedConditions.map((cond: any, index: number) => {
           const tone = genericConditionTone(resource, cond)

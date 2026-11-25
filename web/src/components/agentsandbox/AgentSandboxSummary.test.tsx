@@ -19,6 +19,7 @@ const state = vi.hoisted(() => ({
   events: [] as TimelineEvent[],
 }))
 
+vi.mock('../../contexts/CapabilitiesContext', () => ({ useNamespacedCapabilities: () => ({ canViewLogs: true, logsUnknown: false }) }))
 vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({ connection: { context: 'kind-demo' } }) }))
 vi.mock('../../api/client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/client')>()),
@@ -44,7 +45,8 @@ vi.mock('./data', async (importOriginal) => ({
   }),
 }))
 
-import { AgentSandboxStatusBadge, AgentSandboxSummary, drawerProblem, objectReadings, otherConditions, podExitSummary, sandboxPod, type AgentSandboxSummaryKind } from './AgentSandboxSummary'
+import { AgentSandboxStatusBadge, AgentSandboxSummary, drawerProblem, objectReadings, otherConditions, podExitSummary, type AgentSandboxSummaryKind } from './AgentSandboxSummary'
+import { sandboxPod } from './lists'
 import { NS, claim, liveClaims, liveData, liveSandboxes, warmPool } from './agentsandbox.fixtures'
 import { liveAttention, liveWorkspace } from './workspace.fixtures'
 
@@ -139,7 +141,7 @@ describe('Agent Sandbox drawer and expanded reading', () => {
     const html = drawer('Sandbox', byName('failed'))
     expect(html).toContain('Pod failed')
     expect(html).toContain('Container "agent" exited with code 3 (Error).')
-    expect(html).toContain('Pod logs →')
+    expect(html).toContain('>Pod logs</button>')
     expect(html).toContain('Logs →')
     expect(html).toMatch(/<button[^>]*>failed<\/button>/)
   })
@@ -229,11 +231,16 @@ describe('Agent Sandbox drawer and expanded reading', () => {
 
     // Expired claim shows controller-initiated cleanup without claiming cleanup finished.
     const expiredHtml = drawer('SandboxClaim', liveClaims()[1])
-    expect(expiredHtml).toContain('Expired · controller initiated cleanup')
-    expect(expiredHtml).toContain('cleanup outcome unknown unless observed')
+    expect(words(expiredHtml)).toContain('Controller initiated cleanup. Cleanup outcome unknown.')
     expect(expiredHtml).toContain('>warm</button>')
     expect(expiredHtml).toContain('0/2 ready')
     expect(expiredHtml).toContain('Browse warm pools in this namespace →')
+  })
+
+  it('leaves cleanup initiation unknown when expiration is the only evidence', () => {
+    const html = drawer('SandboxClaim', claim('expired-no-message', { reason: 'ClaimExpired' }))
+    expect(html).toContain('Cleanup outcome unknown.')
+    expect(html).not.toContain('Controller initiated cleanup')
   })
 
   it('gives a warm pool one reserve verdict, members sorted failures-first, referencing claims, and controller warning events', () => {
@@ -336,7 +343,7 @@ describe('Agent Sandbox drawer facts', () => {
     state.relationships = podChild('failed')
     state.pod = podOf('failed', [{ name: 'agent', state: { terminated: { exitCode: 137, reason: 'OOMKilled' } } }], 'Failed')
     const html = drawer('Sandbox', withTemplate('failed', [{ name: 'agent', image: 'agent:1' }]))
-    expect(html).toContain('Exited with code 137 (OOMKilled)')
+    expect(html.match(/exited with code 137 \(OOMKilled\)/ig)).toHaveLength(1)
   })
 
   it('says a Sandbox nothing owns has no owner and no expiry, in words', () => {
