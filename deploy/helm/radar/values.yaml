@@ -624,6 +624,16 @@ cloud:
     # while owner=false this renders nothing, but it stays latent — re-enabling
     # owner later activates it. See templates/cloud-rbac-node-ops.yaml.
     nodeOps: false
+    # Grant Cloud Owners get/patch on Argo CD Applications. The grant defaults
+    # on and follows rbac.namespaces. Set argocd.owner=false to disable it.
+    # Application patch delegates the Argo CD controller's deployment authority.
+    # See the chart README for upgrade and opt-out guidance.
+    # Requires cloud.enabled, rbac.create, defaultRbac.create, owner=true, and
+    # either rbac.crdGroups.argo or rbac.crdGroups.all.
+    # Grants callers access; does not change Radar's collector ServiceAccount.
+    integrationWrite:
+      argocd:
+        owner: true
   # Create the default read grant for radar:system: Radar Cloud's alerts worker
   # and timeline puller. Includes view via a chart-owned aggregated role, the
   # cluster-read and integration-read add-ons, and cluster-wide Secret read

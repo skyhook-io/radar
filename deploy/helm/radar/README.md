@@ -316,6 +316,70 @@ Radar binary (including Radar Cloud self-upgrade) does not update RBAC. Missing 
 on an older `--reuse-values` installation default to enabled; set explicit false
 before upgrading if the added visibility is unwanted.
 
+### Cloud Owner access to Argo CD
+
+The chart lets Cloud Owners refresh and sync Argo CD Applications on a standard
+install. The [grant](files/integration-write-baseline.yaml) fills the gap in
+the built-in `admin` role.
+
+```yaml
+cloud:
+  defaultRbac:
+    integrationWrite:
+      argocd:
+        owner: true  # Set false to opt out
+```
+
+The switch grants `get` and `patch` on Argo CD Applications
+(`argoproj.io/applications`) through a `*-integration-write` ClusterRole bound
+to `radar:owner` and `cloud:owner`.
+
+The grant is on by default for chart-managed Cloud owners, including owners
+with a custom base role. Set `owner: false` to disable the add-on. Kubernetes
+RBAC is additive, so other bindings and vendor aggregation can still grant
+access. An owner bound to `cluster-admin` already has Application patch access.
+
+The add-on also requires `cloud.enabled`, `rbac.create`,
+`cloud.defaultRbac.create`, `cloud.defaultRbac.owner`, and the `argo`
+collection (`rbac.crdGroups.argo` or `all`). If `rbac.namespaces` is set, the
+chart creates a RoleBinding in each listed namespace. Cloud actions use the
+caller’s Kubernetes identity, including MCP clients and confirmed actions in
+Radar Diagnose. `rbac.additionalRules` extends the collector ServiceAccount,
+which is the identity used for in-cluster actions without authentication.
+
+**Authority delegated.** Kubernetes grants access to the entire Application.
+The patch permission applies through any Kubernetes client and covers deployment
+configuration, project assignment, and sync operations. These requests use
+Kubernetes authorization. The Argo CD controller then uses its own deployment
+credentials, which can extend to cluster-scoped resources and to other clusters.
+Review the [controller credentials](https://argo-cd.readthedocs.io/en/stable/operator-manual/security/#cluster-rbac),
+eligible [AppProjects](https://argo-cd.readthedocs.io/en/stable/user-guide/projects/),
+and any Kubernetes admission controls before granting this access.
+
+The namespace setting scopes access to Application objects. Those Applications
+may deploy into different namespaces or clusters. To limit the grant to named
+Applications, leave the add-on off and manage RoleBindings with `resourceNames`.
+Each named Application still delegates controller authority.
+
+**Upgrades.** Upgrading the chart adds this permission to eligible Cloud owners.
+Older values files that omit the key inherit `true`, including with
+`helm upgrade --reuse-values`. A saved `false` continues to disable the grant
+when the upgrade reuses that value. To opt out, set
+`cloud.defaultRbac.integrationWrite.argocd.owner=false` in the release values
+before applying the chart:
+
+```bash
+helm upgrade radar skyhook/radar -n radar --reuse-values \
+  --set cloud.defaultRbac.integrationWrite.argocd.owner=false
+```
+
+For an installation managed by Argo CD or Flux, change the values in Git.
+If Argo CD manages the Radar release, [sync with pruning enabled](https://argo-cd.readthedocs.io/en/stable/user-guide/auto_sync/#automatic-pruning).
+Verify that the `*-cloud-owner-integration-write` ClusterRoleBinding, or the
+RoleBinding in each configured namespace, has been removed. Review other
+bindings, changes made to Applications while the grant was on, and pending
+operations the Argo CD controller can still run.
+
 ### Radar Cloud background services (`radar:system`)
 
 Radar Cloud's alerts worker and timeline puller read as `radar:system`.

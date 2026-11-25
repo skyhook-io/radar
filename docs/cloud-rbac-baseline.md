@@ -108,9 +108,19 @@ namespace RoleBinding does not restrict an existing cluster-wide default binding
 so disable the defaults first. Product organization roles and saved-investigation
 sharing are separate concerns; this chart change does not redefine them.
 
+## Argo CD Application actions
+
+The chart grants `get` and `patch` on `argoproj.io/applications` to
+`radar:owner` and `cloud:owner`. This supports Refresh and Sync on standard
+Cloud installs. The grant follows `rbac.namespaces` when configured and
+defaults on for chart-managed Owners, including with a custom base role.
+Set `cloud.defaultRbac.integrationWrite.argocd.owner=false` to opt out.
+The [chart README](../deploy/helm/radar/README.md#cloud-owner-access-to-argo-cd)
+describes the permission and the Argo CD controller's deployment authority.
+
 ## Rollout and verification
 
-The baseline is default-on for enabled default tiers. Upgrading an installed chart
+The read baseline is default-on for enabled default tiers. Upgrading an installed chart
 therefore expands deliberate read access, including inline configuration. Missing
 `integrationRead` maps/keys on `helm upgrade --reuse-values` follow the declared
 default; explicit `false` is preserved. Review/set opt-outs before the upgrade.
