@@ -157,7 +157,7 @@ func TestTraceInClusterNotGatedOnCloudRole(t *testing.T) {
 // namespaces. Mirrors handleTrace.
 func TestTraceInClusterDoesNotLeakExistenceAcrossNamespaces(t *testing.T) {
 	s := newTestServer(t)
-	s.permCache = auth.NewPermissionCache()
+	s.permCache = auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)
 	s.permCache.Set("u@example.com", []string{"radar:member"}, &auth.UserPermissions{AllowedNamespaces: []string{"ns-a"}})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/trace/Service/ns-b/secret-svc/in-cluster", strings.NewReader(`{}`))

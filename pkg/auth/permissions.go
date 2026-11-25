@@ -167,6 +167,9 @@ func NewPermissionCache() *PermissionCache {
 
 // WithConnectionKey binds permission entries to the client that discovered them.
 // A reconnect under the same context name can have different permissions.
+// provider returns the current connection's key; it runs under the cache's
+// lock, so it must be quick and must not call back into the cache. Without
+// one, every entry belongs to the empty connection.
 func (pc *PermissionCache) WithConnectionKey(provider func() string) *PermissionCache {
 	pc.mu.Lock()
 	defer pc.mu.Unlock()
@@ -197,7 +200,8 @@ func (pc *PermissionCache) liveLocked(key, connection string) *UserPermissions {
 	return perms
 }
 
-// Set stores permissions for a user on the current connection, and evicts
+// Set stores an already-known entry for a user on the connection current at
+// the time of the call (discovery goes through Resolve), and evicts
 // expired entries so a long-running install with churning users doesn't
 // accumulate them.
 func (pc *PermissionCache) Set(username string, groups []string, perms *UserPermissions) {
@@ -236,7 +240,10 @@ func (pc *PermissionCache) Invalidate() {
 // the cache. A nil answer, expired budget or superseded connection fails closed.
 // Invalidate detaches a run from the cache, but its existing callers can still
 // use its answer while the connection is current. discover must honor its context.
-// Without a connection provider, use the empty connection key.
+// connection must be captured together with the client discover reads; a caller
+// naming a connection that is no longer current fails closed at once. Without a
+// connection provider, use the empty connection key. ok is false exactly when
+// perms is nil.
 func (pc *PermissionCache) Resolve(ctx context.Context, username string, groups []string, connection string, discover func(context.Context) *UserPermissions) (*UserPermissions, bool) {
 	key := cacheKey(username, groups)
 	flightKey := string(appendKeyPart([]byte(key), connection))

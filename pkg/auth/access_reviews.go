@@ -23,7 +23,9 @@ type reviewKey struct {
 	question   AccessReviewQuestion
 }
 
-// AccessReviewQuestion identifies an exact resource check. An empty namespace
+// AccessReviewQuestion identifies an exact resource check, in Kubernetes'
+// own terms: {Verb: "list", Group: "", Resource: "pods", Namespace: "team-a"}
+// asks about core-group Pods (the resource, not the Kind). An empty Namespace
 // asks about the cluster-wide operation.
 type AccessReviewQuestion struct {
 	Verb      string
@@ -34,11 +36,16 @@ type AccessReviewQuestion struct {
 
 type reviewVerdict struct{ allowed, authoritative bool }
 
-// Decide reports whether user may verb resource in namespace ("" for
-// cluster-wide), answering from the verdict cached in perms or by running
-// review. authoritative is false when no verdict was reached: review couldn't
-// consult the apiserver, or the caller's context ended first. Either way the
-// answer is a denial and nothing is cached.
+// Decide reports whether user (non-nil) may ask question, answering from the
+// verdict cached in perms or by running review. authoritative is false when no
+// verdict was reached: review couldn't consult the apiserver, or this caller's
+// context ended first. Either way this caller gets a denial, and nothing it
+// produced is cached. A review that reports allowed without authority counts
+// as a denial.
+//
+// connection names the client review runs on; it must change whenever that
+// client is replaced. perms from any other connection is treated as absent, so
+// a verdict cached for one cluster never answers a question about another.
 //
 // Callers asking the same question of the same entry over the same connection
 // share one review. It runs while any of them still waits and is canceled when
@@ -52,6 +59,9 @@ type reviewVerdict struct{ allowed, authoritative bool }
 func (a *AccessReviews) Decide(ctx context.Context, user *User, perms *UserPermissions, connection string, question AccessReviewQuestion, review func(context.Context) (allowed, authoritative bool)) (allowed, authoritative bool) {
 	if ctx.Err() != nil {
 		return false, false
+	}
+	if perms != nil && perms.connection != connection {
+		perms = nil
 	}
 	if perms != nil {
 		if v, ok := perms.CanI(question.Verb, question.Group, question.Resource, question.Namespace); ok {

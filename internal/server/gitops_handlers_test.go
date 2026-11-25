@@ -171,7 +171,7 @@ func TestGitopsRequestHasNamespaceAccess(t *testing.T) {
 }
 
 func TestFilterGitOpsTreeForUserAppliesNamespaceAndClusterScope(t *testing.T) {
-	s := &Server{permCache: auth.NewPermissionCache()}
+	s := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	s.permCache.Set("gitops-tree-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"team-a"}})
 	s.permCache.Get("gitops-tree-user", nil).SetCanI("get", "apps", "deployments", "team-a", true)
 	req := &gitopsRequest{AllowedNamespaces: []string{"team-a"}}
@@ -268,7 +268,7 @@ func TestGitOpsFinalizerOwnerMayRunOffCluster(t *testing.T) {
 }
 
 func TestGitOpsTreeDeniesUnreadableKindInsideAllowedNamespace(t *testing.T) {
-	s := &Server{permCache: auth.NewPermissionCache()}
+	s := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	s.permCache.Set("source-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"team"}})
 	s.permCache.Get("source-user", nil).SetCanI("get", "", "secrets", "team", false)
 	req := &gitopsRequest{AllowedNamespaces: []string{"team"}}
@@ -289,7 +289,7 @@ func TestGitOpsTreeDeniesUnreadableKindInsideAllowedNamespace(t *testing.T) {
 }
 
 func TestGitOpsUnknownNamespacedDeclarationIsNotReadDenied(t *testing.T) {
-	s := &Server{permCache: auth.NewPermissionCache()}
+	s := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	s.permCache.Set("declaration-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"team"}})
 	r := httptest.NewRequest(http.MethodGet, "/api/gitops/tree", nil)
 	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "declaration-user"}))
@@ -306,7 +306,7 @@ func TestGitOpsUnknownNamespacedDeclarationIsNotReadDenied(t *testing.T) {
 }
 
 func TestSyntheticPodGroupReadsPodsInsteadOfPodGroupAPIs(t *testing.T) {
-	s := &Server{permCache: auth.NewPermissionCache()}
+	s := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	permissions := &auth.UserPermissions{AllowedNamespaces: []string{"team"}}
 	permissions.SetCanI("get", "", "pods", "team", true)
 	s.permCache.Set("group-user", nil, permissions)
@@ -323,7 +323,7 @@ func TestSyntheticPodGroupReadsPodsInsteadOfPodGroupAPIs(t *testing.T) {
 }
 
 func TestRemoteDeclaredTreeNodePreservesRootInventory(t *testing.T) {
-	s := &Server{permCache: auth.NewPermissionCache()}
+	s := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	s.permCache.Set("fleet-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"argocd"}})
 	root := gitopstree.Node{ID: "root", Role: gitopstree.RoleRoot}
 	remote := gitopstree.Node{ID: "remote", Role: gitopstree.RoleDeclared, Remote: true, Ref: gitopstree.ResourceRef{Kind: "Secret", Namespace: "remote", Name: "declared"}, Sync: "Synced"}
@@ -337,7 +337,7 @@ func TestRemoteDeclaredTreeNodePreservesRootInventory(t *testing.T) {
 }
 
 func TestRemoteInsightPreservesOnlyRemoteInventoryDeclarations(t *testing.T) {
-	s := &Server{permCache: auth.NewPermissionCache()}
+	s := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	s.permCache.Set("fleet-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"argocd"}})
 	remote := gitopstree.Node{ID: "remote", Role: gitopstree.RoleDeclared, Remote: true, Ref: gitopstree.ResourceRef{Kind: "Secret", Namespace: "destination", Name: "declared"}}
 	tree := &gitopstree.ResourceTree{Nodes: []gitopstree.Node{remote}}
@@ -353,7 +353,7 @@ func TestRemoteInsightPreservesOnlyRemoteInventoryDeclarations(t *testing.T) {
 }
 
 func TestFluxSourceInsightDropsDeniedStatusText(t *testing.T) {
-	s := &Server{permCache: auth.NewPermissionCache()}
+	s := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	permissions := &auth.UserPermissions{AllowedNamespaces: []string{"team", "shared"}}
 	s.permCache.Set("source-user", nil, permissions)
 	r := httptest.NewRequest(http.MethodGet, "/api/gitops/insights", nil)
@@ -375,7 +375,7 @@ func TestFluxSourceInsightDropsDeniedStatusText(t *testing.T) {
 }
 
 func TestFluxTreeResummarizesDependenciesAfterFiltering(t *testing.T) {
-	s := &Server{permCache: auth.NewPermissionCache()}
+	s := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	permissions := &auth.UserPermissions{AllowedNamespaces: []string{"team"}}
 	permissions.SetCanI("get", "apps", "deployments", "team", true)
 	s.permCache.Set("tree-user", nil, permissions)
@@ -391,7 +391,7 @@ func TestFluxTreeResummarizesDependenciesAfterFiltering(t *testing.T) {
 }
 
 func TestFluxBlockerConditionSurvivesDeniedSource(t *testing.T) {
-	s := &Server{permCache: auth.NewPermissionCache()}
+	s := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	s.permCache.Set("blocker-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"team"}})
 	r := httptest.NewRequest(http.MethodGet, "/api/gitops/insights", nil)
 	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "blocker-user"}))

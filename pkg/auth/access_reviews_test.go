@@ -32,6 +32,30 @@ func waitForReviewers(t *testing.T, a *AccessReviews, n int) {
 
 var reviewer = &User{Username: "reader", Groups: []string{"viewers"}}
 
+// entryOn returns an empty permissions entry discovered on connection.
+func entryOn(connection string) *UserPermissions {
+	return &UserPermissions{connection: connection}
+}
+
+// An entry from an earlier connection must not answer, or record, a question
+// asked over the current one: its cached allow describes another cluster.
+func TestAccessReviews_EntryFromAnotherConnectionIsIgnored(t *testing.T) {
+	var a AccessReviews
+	old := entryOn("1")
+	old.SetCanI("list", "", "nodes", "", true)
+	var calls atomic.Int32
+	allowed, decided := a.Decide(context.Background(), reviewer, old, "2", AccessReviewQuestion{Verb: "list", Resource: "nodes"}, func(context.Context) (bool, bool) {
+		calls.Add(1)
+		return false, true
+	})
+	if allowed || !decided || calls.Load() != 1 {
+		t.Fatalf("allowed=%v decided=%v reviews=%d; want a fresh review's denial", allowed, decided, calls.Load())
+	}
+	if v, ok := old.CanI("list", "", "nodes", ""); !ok || !v {
+		t.Fatalf("the old entry's verdict changed to %v (cached=%v)", v, ok)
+	}
+}
+
 func decide(a *AccessReviews, ctx context.Context, perms *UserPermissions, review func(context.Context) (bool, bool)) (bool, bool) {
 	return a.Decide(ctx, reviewer, perms, "1", AccessReviewQuestion{Verb: "list", Resource: "nodes"}, review)
 }
@@ -53,7 +77,7 @@ func heldReview(release <-chan struct{}, calls *atomic.Int32) func(context.Conte
 // and its verdict is recorded once in that entry.
 func TestAccessReviews_ConcurrentChecksShareOneReview(t *testing.T) {
 	var a AccessReviews
-	perms := &UserPermissions{}
+	perms := entryOn("1")
 	release := make(chan struct{})
 	var calls atomic.Int32
 	const n = 8
@@ -80,7 +104,7 @@ func TestAccessReviews_ConcurrentChecksShareOneReview(t *testing.T) {
 
 func TestAccessReviews_ServesACachedVerdict(t *testing.T) {
 	var a AccessReviews
-	perms := &UserPermissions{}
+	perms := entryOn("1")
 	perms.SetCanI("list", "", "nodes", "", false)
 	var called bool
 	allowed, decided := decide(&a, context.Background(), perms, func(context.Context) (bool, bool) {
@@ -96,7 +120,7 @@ func TestAccessReviews_ServesACachedVerdict(t *testing.T) {
 // on it, and they still share that one review.
 func TestAccessReviews_StarterLeavingDoesNotFailOthers(t *testing.T) {
 	var a AccessReviews
-	perms := &UserPermissions{}
+	perms := entryOn("1")
 	release := make(chan struct{})
 	var calls atomic.Int32
 	ctx, cancel := context.WithCancel(context.Background())
@@ -128,7 +152,7 @@ func TestAccessReviews_StarterLeavingDoesNotFailOthers(t *testing.T) {
 // A review ends when no caller waits for it, as a caller's own review did.
 func TestAccessReviews_LastCallerLeavingCancelsTheReview(t *testing.T) {
 	var a AccessReviews
-	perms := &UserPermissions{}
+	perms := entryOn("1")
 	canceled := make(chan struct{})
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -154,7 +178,7 @@ func TestAccessReviews_LastCallerLeavingCancelsTheReview(t *testing.T) {
 // verdict in the same entry, never overwrites that verdict.
 func TestAccessReviews_AbandonedReviewNeverOverwritesItsSuccessor(t *testing.T) {
 	var a AccessReviews
-	perms := &UserPermissions{}
+	perms := entryOn("1")
 	release := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
 	abandoned := make(chan [2]bool, 1)
@@ -196,7 +220,7 @@ func TestAccessReviews_AbandonedReviewNeverOverwritesItsSuccessor(t *testing.T) 
 func TestAccessReviews_ReviewKeepsTheCallersBudget(t *testing.T) {
 	var a AccessReviews
 	var hasDeadline bool
-	allowed, decided := decide(&a, context.Background(), &UserPermissions{}, func(ctx context.Context) (bool, bool) {
+	allowed, decided := decide(&a, context.Background(), entryOn("1"), func(ctx context.Context) (bool, bool) {
 		_, hasDeadline = ctx.Deadline()
 		return true, true
 	})
@@ -213,7 +237,7 @@ func TestAccessReviews_ReviewKeepsTheCallersBudget(t *testing.T) {
 // old entry.
 func TestAccessReviews_NewEntryNeverJoinsAnOldReview(t *testing.T) {
 	var a AccessReviews
-	old := &UserPermissions{}
+	old := entryOn("1")
 	release := make(chan struct{})
 	var calls atomic.Int32
 	before := make(chan [2]bool, 1)
@@ -223,7 +247,7 @@ func TestAccessReviews_NewEntryNeverJoinsAnOldReview(t *testing.T) {
 	}()
 	waitForReviewers(t, &a, 1)
 
-	fresh := &UserPermissions{}
+	fresh := entryOn("1")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	allowed, decided := decide(&a, ctx, fresh, func(context.Context) (bool, bool) {
@@ -261,7 +285,7 @@ func TestAccessReviews_FailuresFailClosedAndAreNotRecorded(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var a AccessReviews
-			perms := &UserPermissions{}
+			perms := entryOn("1")
 			if allowed, decided := decide(&a, context.Background(), perms, tc.review); allowed || decided {
 				t.Fatalf("allowed=%v decided=%v, want a non-authoritative denial", allowed, decided)
 			}
@@ -296,7 +320,7 @@ func TestAccessReviews_CallersWithoutAnEntryShareAndRecordNothing(t *testing.T) 
 		}()
 	}
 	waitForReviewers(t, &a, n)
-	entry := &UserPermissions{}
+	entry := entryOn("1")
 	entryDone := make(chan struct{})
 	go func() {
 		defer close(entryDone)
@@ -354,7 +378,7 @@ func TestAccessReviews_DistinctConnectionsAndIdentitiesDoNotShare(t *testing.T) 
 func TestAccessReviews_AlreadyCanceledCallerFailsClosed(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var a AccessReviews
-		perms := &UserPermissions{}
+		perms := entryOn("1")
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 		for _, warm := range []bool{false, true} {
