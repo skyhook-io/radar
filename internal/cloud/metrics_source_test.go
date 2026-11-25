@@ -206,6 +206,56 @@ func TestMetricsSourceOlderHubMeansPrometheus(t *testing.T) {
 	}
 }
 
+// Hub says on every answer whether it offers OpenObserve; a Hub that leaves
+// it out, or predates the endpoint, does not. A failed check keeps the last
+// answer's.
+func TestHubOffersOpenObserve(t *testing.T) {
+	hub, srv := newFakeSourceHub(t)
+	p := newTestPoller(t, srv, func(MetricsSourceDecision) {})
+	metricsSourcePollers.Lock()
+	metricsSourcePollers.set[p] = struct{}{}
+	metricsSourcePollers.Unlock()
+	t.Cleanup(func() {
+		metricsSourcePollers.Lock()
+		delete(metricsSourcePollers.set, p)
+		metricsSourcePollers.Unlock()
+	})
+	setStatus := func(status int) {
+		hub.mu.Lock()
+		hub.status = status
+		hub.mu.Unlock()
+	}
+	ctx := t.Context()
+
+	p.poll(ctx)
+	if HubOffersOpenObserve() {
+		t.Fatal("answer without the flag: offers OpenObserve")
+	}
+	hub.set(map[string]any{"source": "prometheus", "openobserve": true})
+	p.poll(ctx)
+	if !HubOffersOpenObserve() {
+		t.Fatal("prometheus answer with the flag: does not offer OpenObserve")
+	}
+	setStatus(http.StatusServiceUnavailable)
+	p.poll(ctx)
+	if !HubOffersOpenObserve() {
+		t.Fatal("failed check dropped the last answer's flag")
+	}
+	setStatus(http.StatusNotFound)
+	p.poll(ctx)
+	if HubOffersOpenObserve() {
+		t.Fatal("older Hub: offers OpenObserve")
+	}
+	setStatus(0)
+	src := openObserveSource()
+	src["openobserve"] = true
+	hub.set(src)
+	p.poll(ctx)
+	if !HubOffersOpenObserve() {
+		t.Fatal("OpenObserve selected: does not offer OpenObserve")
+	}
+}
+
 func relayTransportFor(t *testing.T, hub *fakeSourceHub, srv *httptest.Server) (prom.Transport, *metricsSourcePoller, MetricsSourceDecision) {
 	t.Helper()
 	hub.set(openObserveSource())

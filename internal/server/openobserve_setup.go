@@ -79,12 +79,17 @@ func (s *Server) openObserveLocal() bool {
 	return s.configManagement() == "local" && !k8s.IsInCluster() && s.localRuntime != nil
 }
 
+// hubOffersOpenObserve is cloud.HubOffersOpenObserve; a variable for tests.
+var hubOffersOpenObserve = cloud.HubOffersOpenObserve
+
 // openObservePath says how this install can get OpenObserve metrics. A Hub
 // connection makes configuration management "cloud", so the two never hold
 // together; Hub is checked first because its choice is what the agent applies.
+// A Hub without OpenObserve offers no path, so its clusters keep the
+// Prometheus setup screens.
 func (s *Server) openObservePath() string {
 	switch {
-	case cloud.MetricsSourcePollerRunning():
+	case hubOffersOpenObserve():
 		return "hub"
 	case s.openObserveLocal():
 		return "local"

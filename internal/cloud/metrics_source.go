@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/prom"
@@ -63,6 +64,9 @@ type MetricsSourceResponse struct {
 	VersionWarning  string                 `json:"versionWarning,omitempty"`
 	MissingFamilies []string               `json:"missingFamilies,omitempty"`
 	Revision        string                 `json:"revision,omitempty"`
+	// OpenObserve says this Hub offers OpenObserve metrics, whichever source
+	// it selected. Hubs without OpenObserve, and older ones, leave it out.
+	OpenObserve bool `json:"openobserve,omitempty"`
 }
 
 // MetricsSourceDecision is what the agent should do with its metrics client.
@@ -102,6 +106,19 @@ func MetricsSourcePollerRunning() bool {
 	return len(metricsSourcePollers.set) > 0
 }
 
+// HubOffersOpenObserve reports whether Hub's last successful answer to a
+// running poller said it offers OpenObserve metrics.
+func HubOffersOpenObserve() bool {
+	metricsSourcePollers.Lock()
+	defer metricsSourcePollers.Unlock()
+	for p := range metricsSourcePollers.set {
+		if p.offersOpenObserve.Load() {
+			return true
+		}
+	}
+	return false
+}
+
 // CheckMetricsSourceNow makes every running poller ask Hub for the metrics
 // source and waits until each has applied the answer of a check that started
 // after this call, or ctx ends. The check keeps the poller's minimum gap
@@ -138,6 +155,8 @@ type metricsSourcePoller struct {
 	appliedKey  string
 	health      *relayHealth
 	lastFailure string
+	// offersOpenObserve is read by HubOffersOpenObserve from other goroutines.
+	offersOpenObserve atomic.Bool
 }
 
 func newMetricsSourcePoller(cfg Config) (*metricsSourcePoller, error) {
@@ -240,6 +259,7 @@ func (p *metricsSourcePoller) poll(ctx context.Context) bool {
 		decision, err = p.decide(resp)
 		if err == nil {
 			p.lastFailure = ""
+			p.offersOpenObserve.Store(resp.OpenObserve || resp.Source == MetricsSourceOpenObserve)
 			if p.applied != nil && p.appliedKey == decision.Key && reflect.DeepEqual(*p.applied, decision.Response) {
 				return true
 			}

@@ -193,4 +193,15 @@ func TestOpenObservePath(t *testing.T) {
 	if got := s.openObservePath(); got != "" {
 		t.Fatalf("in-cluster Radar without Hub: path = %q, want none", got)
 	}
+	// A Hub agent reports the hub path only when its Hub offers OpenObserve;
+	// otherwise the status leaves it out and the Prometheus screens stay.
+	t.Cleanup(func() { hubOffersOpenObserve = cloud.HubOffersOpenObserve })
+	hubOffersOpenObserve = func() bool { return true }
+	if got := s.openObservePath(); got != "hub" {
+		t.Fatalf("Hub offering OpenObserve: path = %q, want hub", got)
+	}
+	hubOffersOpenObserve = func() bool { return false }
+	if got := s.openObservePath(); got != "" {
+		t.Fatalf("Hub without OpenObserve: path = %q, want none", got)
+	}
 }
