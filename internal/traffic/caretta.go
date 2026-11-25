@@ -808,6 +808,13 @@ func carettaLinksQuery(namespace string, sc clusterScope) string {
 // store the operator configured can hold several clusters; Caretta's own
 // caretta-vm and any store found in the cluster hold this one.
 func (c *CarettaSource) resolveClusterScope(ctx context.Context) (clusterScope, error) {
+	if c.metricsURL != "" && metricsRelayActive() {
+		// Caretta reads the configured store directly, but while an
+		// OpenObserve relay serves metrics the shared cluster check answers
+		// for OpenObserve ("one cluster, nothing to filter"), not for this
+		// store. Read it unfiltered and say it may hold other clusters'.
+		return clusterScope{mixed: true}, nil
+	}
 	return scopeForMetric(ctx, "caretta_links_observed", "", c.metricsURL != "", 0)
 }
 
