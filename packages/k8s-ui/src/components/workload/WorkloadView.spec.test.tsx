@@ -345,6 +345,43 @@ it.each([['cold', undefined], ['cached', resource]] as const)('gates host tabs o
   act(() => root.unmount())
 })
 
+it('reserves built-in IDs, ignores empty IDs and keeps the first host tab for each ID', () => {
+  const extraTabs = [
+    { id: '', label: 'Empty ID' },
+    { id: 'overview', label: 'Host overview' },
+    { id: 'settings', label: 'First settings' },
+    { id: 'settings', label: 'Duplicate settings' },
+  ].map(tab => ({ ...tab, render: () => tab.label + ' panel' }))
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  act(() => root.render(<WorkloadView {...props} activeTab="overview" extraTabs={extraTabs} />))
+  expect(host.textContent).toContain('Composed Overview')
+  const labels = [...host.querySelectorAll('[role="tab"]')].map(tab => tab.textContent)
+  expect(labels).toContain('First settings')
+  for (const ignored of ['Empty ID', 'Host overview', 'Duplicate settings']) expect(labels).not.toContain(ignored)
+  act(() => root.render(<WorkloadView {...props} activeTab="settings" extraTabs={extraTabs} />))
+  expect(host.textContent).toContain('First settings panel')
+  act(() => root.unmount())
+})
+
+it.each([['Timeline', 'timeline'], ['Logs', 'logs'], ['Topology', 'topology']] as const)(
+  'opens the host replacement from the %s shortcut on Overview', (label, replaces) => {
+    const host = document.createElement('div')
+    const root = createRoot(host)
+    const deployment = { ...resource, kind: 'Deployment', apiVersion: 'apps/v1' }
+    const extraTabs = [{ id: 'details', label: 'Host details', replaces, render: () => 'Replacement content' }]
+    act(() => root.render(<WorkloadView {...props} kind="deployments" group="apps" resource={deployment}
+      relationships={{ services: [{ kind: 'Service', namespace: 'db', name: 'postgres' }] }}
+      activeTab={undefined} renderSummary={undefined} extraTabs={extraTabs} />))
+    const shortcut = [...host.querySelectorAll<HTMLButtonElement>('button:not([role="tab"])')].find(button => button.textContent === label)
+    expect(shortcut).toBeDefined()
+    act(() => shortcut!.click())
+    expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Host details')
+    expect(host.textContent).toContain('Replacement content')
+    act(() => root.unmount())
+  },
+)
+
 it('restores an uncontrolled workload tab when its data becomes available again', () => {
   const host = document.createElement('div')
   const root = createRoot(host)
