@@ -505,7 +505,7 @@ func TestRelayMissingThrottlingNote(t *testing.T) {
 	if err := EnableRelay(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if note := GetClient().relayMissingThrottlingNote(); note != "OpenObserve has no CPU throttling data for this cluster." {
+	if note := GetClient().relayMissingThrottlingNote(); note != "OpenObserve has no data for this chart." {
 		t.Fatalf("standard note = %q", note)
 	}
 

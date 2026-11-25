@@ -40,8 +40,8 @@ type RewriteOptions struct {
 }
 
 // ErrNotCollected wraps the metric name of a selector this source cannot
-// answer for the cluster. Callers show it as "not collected by this source".
-var ErrNotCollected = errors.New("openobserve: not collected by this source")
+// answer for the cluster. Callers show it as having no data in OpenObserve.
+var ErrNotCollected = errors.New("openobserve: no data in OpenObserve for")
 
 var errNoMatchers = errors.New("openobserve: no cluster matcher configured")
 

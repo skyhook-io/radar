@@ -1042,13 +1042,19 @@ because OpenObserve refuses one without it. Metric metadata and the list of
 metric names aren't available: OpenObserve answers both for the whole
 organization, and no filter narrows them to one cluster. The AI's
 `discover_metrics` says so when asked for metric names; label values for a
-named metric still work. Metric families the source doesn't collect show no data, and Settings →
-Metrics lists them, under "OpenObserve · shared connection · matched by cluster
-ID" (or "matched by confirmed name").
+named metric still work. A chart OpenObserve holds no data for says
+"OpenObserve has no data for this chart", and Settings → Metrics lists those
+metric families as "No data in OpenObserve for: …", under "OpenObserve · shared
+connection · matched by cluster ID" (or "matched by confirmed name").
+
+**The `cluster` label.** OpenObserve removes the `cluster` label on remote write
+by default: it is its HA deduplication label (`ZO_PROMETHEUS_HA_CLUSTER`). Use
+`radar_cluster_uid`, or name your cluster label something else, such as
+`cluster_name`.
 
 **CPU throttling from the OpenObserve collector.** The collector's gateway
 scrapes cAdvisor but, by default, keeps only the disk read and write metrics,
-so CPU throttling shows as not collected. To see it, add
+so the CPU throttling chart says "OpenObserve has no data for this chart". To see it, add
 `container_cpu_cfs_(periods_total|throttled_periods_total)` to the `keep`
 regex of the `cadvisor` job in the collector's Helm values
 (`gateway.receivers.prometheus.config.scrape_configs`). Helm replaces lists

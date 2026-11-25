@@ -307,11 +307,7 @@ func (c openobserveCmd) printMatchDetails(m oo.ClusterMatch) {
 		fmt.Fprintln(c.out, "Data comes from the OpenObserve collector.")
 	}
 	if len(m.Missing) > 0 {
-		names := make([]string, len(m.Missing))
-		for i, f := range m.Missing {
-			names[i] = string(f)
-		}
-		fmt.Fprintf(c.out, "No data for: %s\n", strings.Join(names, ", "))
+		fmt.Fprintln(c.out, oo.MissingFamiliesNote(m.Missing))
 	}
 	if m.Warning != "" {
 		fmt.Fprintf(c.out, "Warning: %s\n", m.Warning)
@@ -414,11 +410,7 @@ func (c openobserveCmd) status(args []string) int {
 		fmt.Fprintln(c.out, "Data comes from the OpenObserve collector.")
 	}
 	if len(m.Missing) > 0 {
-		names := make([]string, len(m.Missing))
-		for i, f := range m.Missing {
-			names[i] = string(f)
-		}
-		fmt.Fprintf(c.out, "No data for: %s\n", strings.Join(names, ", "))
+		fmt.Fprintln(c.out, oo.MissingFamiliesNote(m.Missing))
 	} else {
 		fmt.Fprintln(c.out, "Every metric family has data.")
 	}

@@ -701,3 +701,17 @@ func TestConfirmedNameMatchCollectorNameUsedByAnotherCluster(t *testing.T) {
 		t.Fatalf("match = %+v", m)
 	}
 }
+
+// The CLI names families the way the UI does (familyLabel in
+// web/src/components/settings/openobserveStatus.ts).
+func TestFamilyLabels(t *testing.T) {
+	want := []string{"CPU", "Memory", "CPU throttling", "Network", "Disk I/O", "Restarts", "Volumes", "Nodes", "HPA"}
+	for i, f := range AllFamilies {
+		if got := FamilyLabel(f); got != want[i] {
+			t.Errorf("FamilyLabel(%s) = %q, want %q", f, got, want[i])
+		}
+	}
+	if got := MissingFamiliesNote([]Family{FamilyFilesystem, FamilyHPA}); got != "No data in OpenObserve for: Disk I/O, HPA." {
+		t.Fatalf("note = %q", got)
+	}
+}

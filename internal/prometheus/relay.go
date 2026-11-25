@@ -269,9 +269,9 @@ func (c *Client) relayMissingThrottlingNote() string {
 		return ""
 	}
 	if src.Dialect == "collector" {
-		return "OpenObserve's collector drops CPU throttling by default. Keep container_cpu_cfs_throttled_periods_total and container_cpu_cfs_periods_total in its cadvisor scrape job to see it here."
+		return "OpenObserve has no data for this chart: its collector drops CPU throttling by default. Keep container_cpu_cfs_throttled_periods_total and container_cpu_cfs_periods_total in its cadvisor scrape job to see it here."
 	}
-	return "OpenObserve has no CPU throttling data for this cluster."
+	return "OpenObserve has no data for this chart."
 }
 
 func (c *Client) relaySourceScopeNote() string {

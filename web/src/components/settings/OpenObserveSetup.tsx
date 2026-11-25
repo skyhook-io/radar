@@ -12,7 +12,7 @@ import {
   type OpenObserveSetupRequest,
   type OpenObserveState,
 } from '../../api/openobserveSetup'
-import { familyLabel } from './openobserveStatus'
+import { missingFamiliesNote } from './openobserveStatus'
 
 const SERVICE_ACCOUNT_DOCS = 'https://openobserve.ai/docs/user-guide/identity-and-access-management/service-accounts/'
 const inputClass = 'block w-full min-w-0 px-3 py-2 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500'
@@ -203,7 +203,7 @@ export function OpenObserveSetup({
     result.notes?.collector && 'Data comes from the OpenObserve collector.',
     // The live status line repeats the warning, version and coverage notes
     // once the match settles; only say them here when that line isn't shown.
-    !status && result.notes?.missing?.length && `No data for: ${result.notes.missing.map(familyLabel).join(', ')}.`,
+    !status && result.notes?.missing?.length && missingFamiliesNote(result.notes.missing),
     !status && result.notes?.warning,
     !status && result.notes?.versionWarning,
     result.reloadFailed && "Saved, but Radar couldn't reload this page. Reopen Settings to see the match.",

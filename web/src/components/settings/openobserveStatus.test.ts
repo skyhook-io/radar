@@ -11,7 +11,7 @@ describe('metricsSourceLine', () => {
   it('keeps the standing warning, version warning and missing families for a name match', () => {
     const line = metricsSourceLine({ kind: 'openobserve', via: 'local', matchedBy: 'name', versionWarning: 'Upgrade.', missingFamilies: ['throttling', 'hpa'] })
     expect(line?.status).toBe('OpenObserve · shared connection · matched by confirmed name')
-    expect(line?.detail).toBe("Add the cluster ID label so this match can't break. Upgrade. Not collected: CPU throttling, HPA.")
+    expect(line?.detail).toBe("Add the cluster ID label so this match can't break. Upgrade. No data in OpenObserve for: CPU throttling, HPA.")
   })
 
   it('shows the standing warning of an active match after saving', () => {

@@ -171,7 +171,7 @@ describe('OpenObserve setup', () => {
     expect(onChanged).toHaveBeenCalled()
     expect(container.textContent).toContain('Data comes from the OpenObserve collector.')
     // The status block carries coverage once the match settles; not repeated here.
-    expect(container.textContent).not.toContain('No data for:')
+    expect(container.textContent).not.toContain('No data in OpenObserve for:')
     expect(container.textContent).toContain('Matched by cluster ID (k8s_cluster_uid=uid-123)')
     expect(onDirtyChange).toHaveBeenLastCalledWith(false)
   })

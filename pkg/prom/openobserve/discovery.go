@@ -51,6 +51,30 @@ const (
 	FamilyHPA        Family = "hpa"
 )
 
+// FamilyLabel is how Radar names a family to people, the same names the UI
+// shows (familyLabel in web/src/components/settings/openobserveStatus.ts).
+func FamilyLabel(f Family) string {
+	if l, ok := familyLabels[f]; ok {
+		return l
+	}
+	return string(f)
+}
+
+var familyLabels = map[Family]string{
+	FamilyCPU: "CPU", FamilyMemory: "Memory", FamilyThrottling: "CPU throttling", FamilyNetwork: "Network",
+	FamilyFilesystem: "Disk I/O", FamilyRestarts: "Restarts", FamilyVolumes: "Volumes", FamilyNodes: "Nodes", FamilyHPA: "HPA",
+}
+
+// MissingFamiliesNote is the one phrase for families OpenObserve holds no
+// data for.
+func MissingFamiliesNote(families []Family) string {
+	names := make([]string, len(families))
+	for i, f := range families {
+		names[i] = FamilyLabel(f)
+	}
+	return "No data in OpenObserve for: " + strings.Join(names, ", ") + "."
+}
+
 // AllFamilies in display order.
 var AllFamilies = []Family{FamilyCPU, FamilyMemory, FamilyThrottling, FamilyNetwork, FamilyFilesystem, FamilyRestarts, FamilyVolumes, FamilyNodes, FamilyHPA}
 
@@ -80,7 +104,7 @@ const IDLabel = "radar_cluster_uid"
 const UnsafeDefaultName = "cluster1"
 
 // VersionWarning is shown when LegacyFilterBehaviour reports true.
-const VersionWarning = "This OpenObserve version ignores filters on labels a metric doesn't have, so Radar only shows metrics whose data carries the cluster label; others show as not collected. Upgrade to v1.2 or later."
+const VersionWarning = "This OpenObserve version ignores filters on labels a metric doesn't have, so Radar only shows metrics whose data carries the cluster label; others show as having no data in OpenObserve. Upgrade to v1.2 or later."
 
 // NameMatchWarning is the standing warning on a cluster matched by name.
 const NameMatchWarning = "Matched by cluster name. If another cluster writes metrics under the same name, Radar cannot tell them apart. Add a radar_cluster_uid label with this cluster's kube-system namespace UID to match by ID."

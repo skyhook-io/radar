@@ -6,12 +6,17 @@ export interface MetricsSourceLine {
   tone: 'success' | 'warning' | 'neutral'
 }
 
+// The one set of metric family names Radar shows (mirrored by FamilyLabel in
+// pkg/prom/openobserve for the CLI). Each starts with a capital, even mid-list.
 const FAMILY_LABELS: Record<string, string> = {
-  cpu: 'CPU', memory: 'memory', throttling: 'CPU throttling', network: 'network',
-  filesystem: 'disk I/O', restarts: 'restarts', volumes: 'volumes', nodes: 'nodes', hpa: 'HPA',
+  cpu: 'CPU', memory: 'Memory', throttling: 'CPU throttling', network: 'Network',
+  filesystem: 'Disk I/O', restarts: 'Restarts', volumes: 'Volumes', nodes: 'Nodes', hpa: 'HPA',
 }
 
 export const familyLabel = (family: string) => FAMILY_LABELS[family] ?? family
+
+/** The one phrase for metric families OpenObserve holds no data for. */
+export const missingFamiliesNote = (families: string[]) => `No data in OpenObserve for: ${families.map(familyLabel).join(', ')}.`
 
 /**
  * The status line for a metrics source, or undefined when the source is not
@@ -31,7 +36,7 @@ export function metricsSourceLine(source: MetricsSource | undefined): MetricsSou
   else if (source.matchedBy === 'name') details.push("Add the cluster ID label so this match can't break.")
   if (source.versionWarning) details.push(source.versionWarning)
   if (source.missingFamilies?.length) {
-    details.push(`Not collected: ${source.missingFamilies.map(familyLabel).join(', ')}.`)
+    details.push(missingFamiliesNote(source.missingFamilies))
   }
   return {
     status: `OpenObserve${shared} · matched by ${source.matchedBy === 'id' ? 'cluster ID' : 'confirmed name'}`,
