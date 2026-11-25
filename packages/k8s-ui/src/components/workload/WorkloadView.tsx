@@ -259,6 +259,8 @@ type WorkloadViewBaseProps = {
   renderServicePortPanel?: (props: ServicePortRenderProps) => ReactNode
   /** Whether the resource is loading */
   isLoading?: boolean
+  /** Whether the resource read is in flight, including a refresh of cached data. */
+  isFetching?: boolean
   /** Fetch error for the resource (preserves status + message so the
    *  drawer body can distinguish 403/404/503 from "no data"). */
   resourceError?: unknown
@@ -541,6 +543,7 @@ export function WorkloadView({
   renderServicePortAction,
   renderServicePortPanel,
   isLoading: resourceLoading = false,
+  isFetching: resourceFetching = false,
   resourceError,
   refetch: refetchProp,
   // Timeline
@@ -1107,7 +1110,7 @@ export function WorkloadView({
     active &&
     requestedTab !== fallbackTab &&
     !requestedTabAvailable &&
-    !(resourceLoading && activeExtraTab && !activeExtraTab.availableWhenDeleted) &&
+    !((resourceLoading || resourceFetching) && activeExtraTab && !activeExtraTab.availableWhenDeleted) &&
     (replacementTab !== undefined || unavailableTabConfirmed)
   useEffect(() => {
     if (!shouldCommitFallback) return

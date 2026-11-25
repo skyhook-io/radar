@@ -640,6 +640,7 @@ export function WorkloadView({
   const {
     data: resourceResponse,
     isLoading: resourceLoading,
+    isFetching: resourceFetching,
     error: resourceError,
     refetch: refetchResource,
   } = useResourceWithRelationships<any>(apiKind, namespace, name, rest.group)
@@ -1279,6 +1280,7 @@ export function WorkloadView({
         renderServicePortAction={renderServicePortAction}
         renderServicePortPanel={renderServicePortPanel}
         isLoading={resourceLoading}
+        isFetching={resourceFetching}
         resourceError={resourceError}
         refetch={refetchResourceAndRuns}
         // Timeline
