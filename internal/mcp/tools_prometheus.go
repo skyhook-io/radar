@@ -129,6 +129,26 @@ type discoverMetricsResponse struct {
 	Usage      string           `json:"usage,omitempty"`
 }
 
+// openObserveMetricNamesNote answers a metric-name listing on metrics served
+// from OpenObserve. OpenObserve lists metric names for the whole
+// organization, every cluster's together, and refuses or ignores a cluster
+// filter on that listing, so Radar can't narrow it to this cluster.
+const openObserveMetricNamesNote = "listing metric names isn't available for metrics served from OpenObserve: it can only list every cluster's metric names together, not this cluster's. Query a metric by its name with query_prometheus instead (e.g. container_cpu_usage_seconds_total, container_memory_working_set_bytes, kube_pod_info), or list a label's values with discover_metrics label=<name> and a match selector that names the metric"
+
+// metricsFromOpenObserve reports whether metrics are being served from
+// OpenObserve (local or through Radar Hub) right now.
+func metricsFromOpenObserve() bool {
+	if !prometheus.RelayActive() {
+		return false
+	}
+	c := prometheus.GetClient()
+	if c == nil {
+		return false
+	}
+	st := c.GetStatus()
+	return st.Source != nil && st.Source.Kind == "openobserve"
+}
+
 // requireClusterWideMetrics gates the tools whose queries are unbounded by a
 // resource on the any-namespace list-pods SubjectAccessReview, the same
 // grant the REST raw-query and cluster-aggregate routes require. Passes
@@ -219,7 +239,7 @@ func handleQueryPrometheus(ctx context.Context, req *mcp.CallToolRequest, input 
 	if len(result.Series) == 0 {
 		resp.Note = partialNote + "query returned no data — verify metric and label names with discover_metrics"
 		prefix := promMetricFamilyPrefix(input.Query)
-		if prefix != "" {
+		if prefix != "" && !metricsFromOpenObserve() {
 			discoveryCtx, discoveryCancel := context.WithTimeout(ctx, promSuggestionTimeout)
 			values, truncated, discoveryErr := discoverPromLabelValues(
 				discoveryCtx,
@@ -271,6 +291,10 @@ func handleDiscoverMetrics(ctx context.Context, req *mcp.CallToolRequest, input 
 	}
 	if limit > promDiscoverMaxLimit {
 		limit = promDiscoverMaxLimit
+	}
+
+	if (input.Label == "" || input.Label == "__name__") && metricsFromOpenObserve() {
+		return toJSONResult(discoverMetricsResponse{Match: input.Match, Note: openObserveMetricNamesNote})
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, promQueryTimeout)
@@ -807,6 +831,15 @@ func promQueryError(ctx context.Context, query string, timeout time.Duration, er
 		return fmt.Errorf("prometheus query timed out after %s — narrow the time window, add aggregation (sum/avg by), or wrap with topk(5, ...); raise timeout (max 180) only as a last resort: %s",
 			timeout, query)
 	}
+	if msg, ok := prometheus.QueryRefusal(err); ok {
+		var httpErr *prom.HTTPError
+		if errors.As(err, &httpErr) {
+			if hint := promQLHint(string(httpErr.Body)); hint != "" {
+				return fmt.Errorf("%s — hint: %s", msg, hint)
+			}
+		}
+		return errors.New(msg)
+	}
 	if e := promHTTPError(err, "query", query); e != nil {
 		var httpErr *prom.HTTPError
 		if errors.As(err, &httpErr) && (httpErr.StatusCode == 400 || httpErr.StatusCode == 422) {
@@ -824,6 +857,9 @@ func promQueryError(ctx context.Context, query string, timeout time.Duration, er
 func promDiscoverError(ctx context.Context, match string, err error) error {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return fmt.Errorf("prometheus discovery timed out after %s — add or tighten the match selector to reduce the series scanned", promQueryTimeout)
+	}
+	if msg, ok := prometheus.QueryRefusal(err); ok {
+		return errors.New(msg)
 	}
 	if e := promHTTPError(err, "match", match); e != nil {
 		return e

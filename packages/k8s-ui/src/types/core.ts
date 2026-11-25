@@ -59,6 +59,10 @@ export interface WorkloadWritePermissions {
   daemonSets: boolean
   statefulSets: boolean
   rollouts: boolean
+  /** Absent from a Radar older than Workflow Stop; treat absence as not allowed. */
+  workflows?: boolean
+  /** Can create Argo Workflows (submit a WorkflowTemplate). Absent from an older Radar; treat absence as not allowed. */
+  createWorkflows?: boolean
 }
 
 export type WorkloadContainerType = 'container' | 'initContainer'
@@ -119,6 +123,7 @@ export interface IntegrationCapability {
 // Feature capabilities based on RBAC permissions
 export interface Capabilities {
   configManagement?: 'local' | 'operator' | 'cloud'
+  podExecUID?: boolean
   podDebugImage?: string
   podDebug?: boolean
   exec: boolean           // Terminal feature (pods/exec)
@@ -174,10 +179,13 @@ export interface CloudConnectCapability {
 }
 
 export interface FeatureCapabilities {
+  gitopsActionCapabilities?: boolean
  helmSourceIdentity?: boolean
   helmInventory?: boolean
   datadogRightsizing?: boolean
   datadogAgentPresence?: boolean
+  openobserveCollectorPresence?: boolean
+  openobserveLocalSetup?: boolean
   resourceReadCoverage?: boolean
   searchCoverage?: boolean
  applicationEvidence?: boolean
@@ -191,6 +199,7 @@ export interface FeatureCapabilities {
   resourceIssueCoverage?: boolean
   // GET /api/issues/resource/... with ?correlate=<issueID>
   issueCorrelation?: boolean
+  podDebugAccess?: boolean
   podEnvironment?: boolean
   policyResource?: boolean
   workloadHistory?: boolean
@@ -209,6 +218,8 @@ export interface FeatureCapabilities {
   veleroRunVolumes?: boolean
   /** DELETE /api/resources/... honours ?uid=&resourceVersion= preconditions */
   resourceDeletePreconditions?: boolean
+  /** POST /api/workloads/{kind}/{ns}/{name}/restart accepts {uid, resourceVersion}; an older Radar ignores the body and restarts unconditionally. */
+  workloadRestartPreconditions?: boolean
   gitopsWriteEvidence?: boolean
   agentSigninCheck?: boolean
   serviceEndpointSlices?: boolean
@@ -233,6 +244,8 @@ export interface FeatureCapabilities {
   sealedSecretsController?: boolean // GET /api/sealedsecrets/controller
   cronJobTriggerJobName?: boolean
   sealedSecretsCert?: boolean // GET /api/sealedsecrets/cert
+  workflowStop?: boolean // POST /api/workflows/{namespace}/{name}/stop
+  workflowTemplateSubmit?: boolean // POST /api/workflowtemplates/{namespace}/{name}/submit
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.

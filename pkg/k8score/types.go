@@ -146,7 +146,7 @@ type CacheConfig struct {
 
 	// OnReceived is called for every non-Event resource change before any
 	// filtering (noisy checks, suppress-initial-adds). Used for metrics
-	// tracking (e.g., timeline.IncrementReceived). May be nil.
+	// tracking. May be nil.
 	OnReceived func(kind string)
 
 	// OnTransform is called immediately before DropManagedFields strips an

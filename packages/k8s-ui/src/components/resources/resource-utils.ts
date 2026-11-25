@@ -864,17 +864,33 @@ export function getDefaultContainerName(pod: any): string | undefined {
   return containers[0]?.name
 }
 
+interface EphemeralContainerRef { name: string; image: string; targetContainerName?: string }
+
+export function getRunningEphemeralContainers(pod: {
+  spec?: { ephemeralContainers?: EphemeralContainerRef[] }
+  status?: { ephemeralContainerStatuses?: { name: string; state?: { running?: { startedAt?: string } } }[] }
+}): (EphemeralContainerRef & { startedAt?: string })[] {
+  return [...(pod.spec?.ephemeralContainers ?? [])].reverse().flatMap(container => {
+    const running = pod.status?.ephemeralContainerStatuses?.find(status => status.name === container.name)?.state?.running
+    return running ? [{ ...container, startedAt: running.startedAt }] : []
+  })
+}
+
 /**
  * The containers a terminal can target: the regular containers, then native
  * sidecars (init containers with restartPolicy: Always, Kubernetes 1.29+),
  * which keep running for the pod's lifetime like regular containers.
  */
-export function getExecContainerNames(pod: any): string[] {
+export function getExecContainerNames(pod: any, options?: { runningOnly: boolean }): string[] {
   const regular = (pod?.spec?.containers || []).map((c: any) => c.name)
   const sidecars = (pod?.spec?.initContainers || [])
     .filter((c: any) => c.restartPolicy === 'Always')
     .map((c: any) => c.name)
-  return [...regular, ...sidecars].filter(Boolean)
+  const names: string[] = [...regular, ...sidecars].filter(Boolean)
+  if (!options?.runningOnly) return names
+  const statuses = [...(pod?.status?.containerStatuses ?? []), ...(pod?.status?.initContainerStatuses ?? [])]
+  const running = new Set(statuses.filter(status => status.state?.running).map(status => status.name))
+  return names.filter(name => running.has(name))
 }
 
 /** Init container names in run order, native sidecars included. */

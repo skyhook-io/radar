@@ -381,6 +381,14 @@ auth:
 
 When using `caCert` in Kubernetes, mount the CA certificate into the pod via a ConfigMap or Secret volume.
 
+### MCP clients with OIDC
+
+Enable `--mcp-oauth` (Helm: `mcp.oauth.enabled: true`) to let compatible remote MCP clients authenticate through Radar's existing OIDC browser login. Radar acts as the MCP authorization server: it supports discovery, public client registration, authorization code flow with mandatory S256 PKCE, explicit browser consent, and access/refresh tokens bound to the requested MCP endpoint. The identity provider's tokens remain inside Radar; MCP clients receive separate Radar credentials and use the same per-user Kubernetes RBAC boundary.
+
+This option requires standalone OIDC mode, MCP enabled, exactly one replica, and an HTTPS `auth.oidc.redirectURL` whose path is `{basePath}/auth/callback`. It is unavailable in proxy, unauthenticated or Radar Cloud modes. Existing browser-session authentication continues to work.
+
+MCP access tokens last 10 minutes; refresh tokens rotate with an absolute 24-hour grant limit. OAuth state is held in memory, so pod restarts require client re-registration and authorization even when `auth.existingSecret` preserves browser sessions. The chart uses `Recreate` rollouts when this option is enabled. See [Remote MCP authentication](mcp.md#remote-authentication-with-oidc) for deployment, client setup, discovery checks and ingress requirements.
+
 ### Radar Cloud mode
 
 If you see `RADAR_CLOUD_MODE` or `cloud.*` values in the chart, they control a specialized deployment mode used by [Radar Cloud](https://radarhq.io) — a hosted SaaS that lets a single Cloud frontend manage many in-cluster Radar instances over an outbound tunnel. You don't need to use it to run Radar standalone; leave `cloud.enabled: false` (the default).
@@ -420,6 +428,11 @@ Set `auth.kubernetesCredentials: user-token` (flag `--auth-k8s-credentials=user-
 - **With the user's token** (`X-Forwarded-Kubernetes-Token`): Radar asks the API server who the token belongs to (SelfSubjectReview) and makes every live call — writes, logs, exec, Helm — with that token alone, so the API server applies your own RBAC and audit logs show the real user. The forwarded username must match the token's username, or the request is refused.
 - **Without a token, as a person** (for example cross-cluster views): Radar serves its cache, filtered by that person's permissions, and refuses every live call with a 403 (`reason: user_token_required`).
 - **Without a token, as `radar:system:*` (group `radar:system`) or `radar:ai:<org>` (group `radar:ai:reader`)**: Radar reads with its ServiceAccount, after a SubjectAccessReview of every request against that identity's bindings (`cloud.systemRbac`, `cloud.aiRbac`).
+
+GitOps action capability checks use a `SelfSubjectAccessReview` through the
+person's token client. The API server supplies the identity and groups. Without
+a token, capability answers stay unknown for people. Background identities
+without a token can only read and receive an unavailable action result.
 
 **Requirements:**
 

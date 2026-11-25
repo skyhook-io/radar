@@ -8,34 +8,55 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
-// checkCollected records why Radar holds no changes for a source's kind in
-// namespace ("" for a cluster-scoped kind): it doesn't collect the kind, or
-// not in that namespace, or it is still loading it. An empty answer about
-// such a source means nothing.
-func (c *run) checkCollected(kind, group, namespace string) {
-	c.collected(kind, group, namespace)
+// collected reports whether kind is ready: collected in namespace ("" for a
+// cluster-scoped kind), synced, and watched since before the window began.
+func (c *run) collected(kind, group, namespace string) bool {
+	return c.kindCollected(kind, group, namespace) && c.watchCovers(kind, group, namespace)
 }
 
-// collected is checkCollected that also reports whether the kind is ready:
-// collected in namespace and synced. For a coverage-checking caller, a kind
-// Radar started watching after the window began is not ready either: its
-// earlier changes were never seen, so the history is incomplete from then.
-func (c *run) collected(kind, group, namespace string) bool {
+// kindCollected reports whether Radar collects kind in namespace and has
+// synced it, recording why when not.
+func (c *run) kindCollected(kind, group, namespace string) bool {
 	if reason, ok := collectionGap(kind, group, namespace); ok {
 		c.addUnknown(reason, group, kind)
 		return false
 	}
-	if !c.opts.CheckCoverage {
-		return true
+	return true
+}
+
+// objectWatch is watchCovers for the subject workload's kind and its
+// ConfigMaps' and Secrets' kinds. A kind watched late is recorded in
+// objectWatchHistory and left to historyCoversObjects: an object created
+// after the watch began has had every change seen.
+func (c *run) objectWatch(kind, group, namespace string) {
+	if late, ok := c.lateWatch(kind, group, namespace); ok {
+		c.objectWatchHistory = mergeHistory(c.objectWatchHistory, late)
 	}
-	if since, ok := watchedSince(kind, group, namespace); ok && since.After(c.opts.Window.From) {
-		c.watchHistory = mergeHistory(c.watchHistory, issuesapi.HistoryCoverage{
-			Incomplete: true, CompleteSince: roundUpToSecond(since).UTC(), Reasons: []issuesapi.HistoryGapReason{issuesapi.HistoryObservationStartedLate},
-		})
+}
+
+// watchCovers reports whether Radar has watched kind in namespace since
+// before the window began. A kind watched later never saw the earlier
+// changes, so the history is incomplete from its watch start; that is
+// recorded in watchHistory.
+func (c *run) watchCovers(kind, group, namespace string) bool {
+	if late, ok := c.lateWatch(kind, group, namespace); ok {
+		c.watchHistory = mergeHistory(c.watchHistory, late)
 		c.addUnknown(issuesapi.CorrelationUnknownHistoryIncomplete, group, kind)
 		return false
 	}
 	return true
+}
+
+// lateWatch is the history lost when Radar started watching kind in
+// namespace after the window began.
+func (c *run) lateWatch(kind, group, namespace string) (issuesapi.HistoryCoverage, bool) {
+	since, ok := watchedSince(kind, group, namespace)
+	if !ok || !since.After(c.opts.Window.From) {
+		return issuesapi.HistoryCoverage{}, false
+	}
+	return issuesapi.HistoryCoverage{
+		Incomplete: true, CompleteSince: roundUpToSecond(since).UTC(), Reasons: []issuesapi.HistoryGapReason{issuesapi.HistoryObservationStartedLate},
+	}, true
 }
 
 // watchedSince is when Radar's change history for kind in namespace becomes
@@ -44,7 +65,19 @@ func (c *run) collected(kind, group, namespace string) bool {
 // done (every one starts after the timeline, and the deferred ones only after
 // the critical ones synced), and a kind collected through the dynamic cache
 // (custom resources, webhook configurations) from when it was first watched.
-func watchedSince(kind, group, namespace string) (time.Time, bool) {
+var watchedSince = cacheWatchedSince
+
+// SetWatchedSinceForTest stands in for when Radar's history for each kind
+// becomes complete and returns the function that restores it. The dynamic
+// cache dates its watches at real time, so without it a test can't have a
+// webhook configuration kind watched since before its window.
+func SetWatchedSinceForTest(since func(kind, group, namespace string) (time.Time, bool)) func() {
+	prev := watchedSince
+	watchedSince = since
+	return func() { watchedSince = prev }
+}
+
+func cacheWatchedSince(kind, group, namespace string) (time.Time, bool) {
 	if b, builtin := resourceid.BuiltinForKind(kind); builtin && (group == "" || b.Group == group) {
 		if cache := k8s.GetResourceCache(); cache != nil {
 			if g, resource, _, ok := k8s.ResolveChangeGVR(kind, b.Group); ok && g == b.Group {

@@ -178,6 +178,12 @@ type chartStores struct {
 // Conventional reads do not wait for an optional native probe. A chart that
 // needs it reuses the same discovery pass's Kubernetes Service inventory.
 func (c *Client) chartStores(ctx context.Context) chartStores {
+	// A relay is the only metrics source while it is active: an empty or failed
+	// relay answer must not be filled from GKE's in-cluster store.
+	if c.relayActive() {
+		standard, _ := c.bindStore(ctx)
+		return chartStores{standard: standard}
+	}
 	if g := c.cachedNativeCharts(); g != nil {
 		return chartStores{native: g}
 	}
@@ -214,7 +220,7 @@ func (c *Client) findGKEChartStore(ctx context.Context, gen uint64, regularErr e
 	fallback := c.baseURL != ""
 	revision := c.gkeRevision
 	operatorScope := c.workloadScope
-	recent := c.retired || c.discoveryGen != gen || c.gkeCheckFreshLocked(gen)
+	recent := c.retired || c.relay != nil || c.discoveryGen != gen || c.gkeCheckFreshLocked(gen)
 	c.mu.RUnlock()
 	if recent || c.k8sClient == nil || c.k8sConfig == nil || ctx.Err() != nil ||
 		(configured && regularErr != nil) || (!configured && regularErr != nil && !errors.Is(regularErr, ErrPrometheusNotFound) && !IsUnreachable(regularErr)) {
@@ -368,6 +374,12 @@ func (c *Client) cachedNativeCharts() *gkeMetrics {
 	return c.gke
 }
 
+func (c *Client) relayActive() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.relay != nil
+}
+
 func (c *Client) gkeChartStore() *gkeMetrics {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -378,7 +390,7 @@ func (c *Client) gkeChartStore() *gkeMetrics {
 }
 
 func (c *Client) gkeActiveLocked() bool {
-	if c.retired || c.gke == nil || c.gkeGeneration != c.discoveryGen {
+	if c.retired || c.relay != nil || c.gke == nil || c.gkeGeneration != c.discoveryGen {
 		return false
 	}
 	if c.gke.configured {

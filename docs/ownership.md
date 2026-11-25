@@ -142,6 +142,7 @@ The families so far:
 | `FluxSources` | Flux Kustomizations, HelmReleases, HelmCharts → the GitRepository, OCIRepository, Bucket, ExternalArtifact, HelmRepository or HelmChart they build from, in any namespace (an inline HelmRelease also declares the HelmChart the controller recorded); up the artifact chain, ExternalArtifacts → the ArtifactGenerator their `spec.sourceRef` names (another producer isn't followed), and ArtifactGenerators → the GitRepository, OCIRepository, Bucket, HelmChart or ExternalArtifact their `spec.sources` list | `families.go` |
 | `NodeClasses` | Karpenter NodePools → their provider's NodeClass, or EKS Auto Mode's (`IsTarget`: each provider defines its own kind) | `families.go` |
 | `ClusterClasses` | Cluster API Clusters → the ClusterClass their topology names, in any namespace | `families.go` |
+| `FluxDependsOn` | A Flux Kustomization or HelmRelease → the object of its own kind it waits for through `spec.dependsOn`, in any namespace (an entry without a namespace means the object's own); Depends On on the waiting object, Required By on the one it waits for | `families.go` |
 | `KnativeEventDestinations` | Knative Triggers, event sources and Channels → where they send events (subscriber, sink, backing channel), in any namespace: core Services and any kind in a Knative group, such as JobSink | `families.go` |
 | `KnativeTriggerBrokers` | Knative Triggers → the Broker they subscribe to (`brokerRef` in any namespace, or the older same-namespace `broker`) | `families.go` |
 | `KnativeRouteRevisions` | Knative Routes → the Revisions their status sends traffic to | `families.go` |
@@ -197,7 +198,7 @@ Each declared, selector and composition family carries its Related Resources `Pr
 The independent family inventory is `pkg/topology/testdata/relationship-family-inventory.tsv`. Each direction names registered or direct producers, or a reason it does not project. Its notes preserve the remaining held-target differences for synthetic AnalysisRun and Secret/ConfigMap nodes; these are not parity claims. `TestRelationshipFamilyInventoryHasBothDirections` rejects an unaccounted family or unknown producer.
 
 Related Resources and REST/MCP resource context now read these families from a captured cache session through
-`internal/k8s.AnswerRelationships` / `AnswerResourceContextRelationships`. `pkg/topology.RelationsAnswer` projects
+`internal/k8s.AnswerRelationships` / `AnswerResourceContextRelationships`. `pkg/topology.RelationsAnswerWithExtras` projects
 only the subject's family answers into the existing drawer fields; the context variant also supplies non-wire
 provenance and coverage to `pkg/resourcecontext`. Ownership is applied through the caller's ownership view; context
 uses the owner-only path. Summary manager enrichment and workload history attachments also use the family sources.
@@ -213,7 +214,11 @@ Applications builds no graph: its rows come from ownership and one request-local
 The drawer characterization pins the family answer. Its [accepted differences](../pkg/topology/testdata/characterization/drawer-relationships.md)
 explain every changed class, including the hand-made Crossplane claim/XR fixture without a backlink. New relations
 belong in a family with its field disposition and coverage, then in the family inventory and projection tests; adding
-a display edge alone does not add a drawer or agent relationship.
+a display edge alone does not add a drawer or agent relationship. The Topology screen draws a new family's edges
+through `drawFamilies` in `pkg/topology/builder.go` instead of reading the spec again. `TestDisplayEdgesAreFamilyAnswers`
+fails when a drawn edge has no family answer with the same type and direction, or when a family answer on its fixture
+isn't drawn. Older edges are still parsed in the builder, held to the same answers by that test; its `displayOnlyEdges`
+list names the few the screen draws that no family answers.
 
 The cache-source conformance tests check `Indexed` and both answers against the brute-force `Scan` of generated
 worlds whose objects declare references (`ownershiptest.Object.Declares`), and through histories of changes.
@@ -290,7 +295,7 @@ claims need not indicate current reconciliation; native Helm coordinates do not 
 | `rbac_denied` | The subject or a controller ancestor was unreadable. |
 | `cache_cold` | An owner kind is known to be uncollected or unsynced. Ownership starts no watches; `list_resources` for that kind can activate its on-demand cache. |
 | `unavailable` | A controller walk or observed spec source could not be resolved, the required relation source is unavailable, or management evidence has no eligible lead. Retry is not guaranteed to help. |
-| `budget_exceeded` | The list/search enrichment budget elapsed; other causes can coexist. |
+| `budget_exceeded` | In list/search, the enrichment budget elapsed. In detail context, `managedBy` exceeded 20 readable references or left a permission tuple unchecked after 80 distinct checks. Its total is unknown. Other omission reasons can coexist. |
 
 A GitOps fallback may coexist with an incomplete-controller note. Detail can report missing spec evidence after a
 summary already found its controller lead. Family coverage qualifies unread or narrowed context fields without inspecting denied objects to decide whether they exist.

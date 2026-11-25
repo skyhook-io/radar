@@ -67,6 +67,7 @@ func attachIssueChangeCorrelation(ctx context.Context, resp *issues.ListResponse
 	}
 	opts := correlationOptions(window)
 	access := correlationAccess(ctx)
+	readsAllNamespaces := callerReadsAllNamespaces(ctx)
 	checked := 0
 	for _, severity := range []issuesapi.Severity{issuesapi.SeverityCritical, issuesapi.SeverityWarning} {
 		for i := range resp.Issues {
@@ -79,7 +80,7 @@ func attachIssueChangeCorrelation(ctx context.Context, resp *issues.ListResponse
 				return
 			}
 			checked++
-			applyCorrelation(iss, issuecorrelation.Correlate(ctx, *iss, opts, access), window)
+			applyCorrelation(iss, issuecorrelation.Correlate(ctx, *iss, opts, access), window, readsAllNamespaces)
 		}
 	}
 }
@@ -97,8 +98,11 @@ func correlationOptions(window time.Duration) issuecorrelation.Options {
 
 // applyCorrelation writes a correlation onto the issue as the tool reports
 // it: the changes, or the no_recent_changes marker, and corrected timing.
-// An issue with neither means unknown, never "no changes".
-func applyCorrelation(iss *issuesapi.Issue, result issuecorrelation.Result, window time.Duration) {
+// An issue with neither means unknown, never "no changes". When the
+// subject's own reads found nothing but the rest couldn't be vouched for,
+// correlation.unknown says why, and correlation.history says from when the
+// history is complete as far as this caller may know.
+func applyCorrelation(iss *issuesapi.Issue, result issuecorrelation.Result, window time.Duration, readsAllNamespaces bool) {
 	if result.Timing.Changed {
 		iss.IssueTiming, iss.IssueTimingBasis, iss.TimingSummary = result.Timing.IssueTiming, result.Timing.IssueTimingBasis, result.Timing.TimingSummary
 	}
@@ -107,8 +111,14 @@ func applyCorrelation(iss *issuesapi.Issue, result issuecorrelation.Result, wind
 		iss.CorrelatedChangesIncomplete = result.FetchSaturated
 		return
 	}
-	if result.NoChanges {
+	switch {
+	case result.NoChanges:
 		iss.NoRecentChanges = &issuesapi.NoRecentChangesMarker{WindowSeconds: int(window.Seconds())}
+	case result.NoChangesWithheld && result.Unknown != nil:
+		iss.Correlation = &issuesapi.ChangeCorrelation{
+			Unknown: result.Unknown,
+			History: meaningfulchanges.HistoryCoverageFor(result.History, readsAllNamespaces),
+		}
 	}
 }
 

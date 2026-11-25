@@ -332,6 +332,42 @@ func TestClustersNameTheirClusterClass(t *testing.T) {
 	}
 }
 
+func TestFluxDependsOnNamesItsOwnKindAcrossNamespaces(t *testing.T) {
+	infra := inNamespace(object("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "infra", nil), "flux-system")
+	apps := object("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "apps", map[string]any{"dependsOn": []any{map[string]any{"name": "infra", "namespace": "flux-system"}}})
+	session := allNamespaces{cluster: cluster{objects: []runtime.Object{infra, apps}}}
+	checkFamilyIn(t, session, FluxDependsOn, apps, refOf(infra), "spec.dependsOn[]")
+
+	shopOnly := NewView(session, namespaceAccess{namespace: "shop"})
+	if got := shopOnly.References(FluxDependsOn, refOf(apps), apps); len(got.Declared) != 1 || got.Declared[0].Ref != refOf(infra) || got.Declared[0].State != TargetWithheld {
+		t.Errorf("dependency outside shop: %+v", got)
+	}
+	fluxOnly := NewView(session, namespaceAccess{namespace: "flux-system"})
+	if got := fluxOnly.Referrers(FluxDependsOn, refOf(infra), nil); len(got.Referrers) != 0 || !got.Coverage.Narrowed {
+		t.Errorf("referrers visible in flux-system: %+v", got)
+	}
+
+	db := object("helm.toolkit.fluxcd.io/v2", "HelmRelease", "db", nil)
+	web := object("helm.toolkit.fluxcd.io/v2", "HelmRelease", "web", map[string]any{"dependsOn": []any{map[string]any{"name": "db"}}})
+	checkFamily(t, FluxDependsOn, []runtime.Object{db, web}, web, ref("helm.toolkit.fluxcd.io", "HelmRelease", "db"), "spec.dependsOn[]")
+
+	if FluxDependsOn.Covers(resourceid.GroupKind{Group: "source.toolkit.fluxcd.io", Kind: "GitRepository"}) {
+		t.Error("FluxDependsOn covers a Flux source")
+	}
+}
+
+func TestMalformedBrokerRefLeavesTriggerWithoutABroker(t *testing.T) {
+	broker := object("eventing.knative.dev/v1", "Broker", "default", nil)
+	trigger := object("eventing.knative.dev/v1", "Trigger", "orders", map[string]any{"broker": "default", "brokerRef": "invalid"})
+	v := NewView(allNamespaces{cluster: cluster{objects: []runtime.Object{broker, trigger}}}, ownership.Unrestricted())
+	if got := v.References(KnativeTriggerBrokers, refOf(trigger), trigger); len(got.Declared) != 0 {
+		t.Errorf("Trigger declares %+v", got.Declared)
+	}
+	if got := v.Referrers(KnativeTriggerBrokers, refOf(broker), nil); len(got.Referrers) != 0 {
+		t.Errorf("Broker has referrers %+v", got.Referrers)
+	}
+}
+
 func TestKnativeFamiliesNameWhereEventsAndTrafficGo(t *testing.T) {
 	ksvc := inNamespace(object("serving.knative.dev/v1", "Service", "handler", nil), "apps")
 	trigger := object("eventing.knative.dev/v1", "Trigger", "orders", map[string]any{
@@ -406,5 +442,29 @@ func TestAWorkflowTemplateUsedTwiceReportsBothPaths(t *testing.T) {
 	want := []string{"spec.templates[].dag.tasks[].templateRef", "spec.templates[].steps[][].templateRef"}
 	if len(got.Declared) != 1 || !slices.Equal(got.Declared[0].Paths, want) {
 		t.Errorf("declared %+v; want one target at %v", got.Declared, want)
+	}
+}
+
+func TestUnambiguousDeclaredTargetsLeaveOutReferencesWithAlternatives(t *testing.T) {
+	// A TraefikService backend may be served from Traefik's current or legacy
+	// group; which one stands depends on what Radar could read. A core
+	// Service backend has no alternative.
+	route := object("traefik.io/v1alpha1", "IngressRoute", "web", map[string]any{"routes": []any{map[string]any{
+		"match": "Host(`shop.example.com`)",
+		"services": []any{
+			map[string]any{"name": "web", "port": 80}, map[string]any{"name": "web", "port": 80},
+			map[string]any{"name": "weighted", "kind": "TraefikService"},
+			map[string]any{"name": "api", "port": 80}, map[string]any{"name": "api", "port": 80},
+		},
+	}}})
+	got, err := TraefikBackends.UnambiguousDeclaredTargets(refOf(route).GroupKind(), route)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []resourceid.Ref{ref("", "Service", "web"), ref("", "Service", "api")}; !slices.Equal(got, want) {
+		t.Errorf("UnambiguousDeclaredTargets = %v, want %v", got, want)
+	}
+	if got, _ := TraefikBackends.UnambiguousDeclaredTargets(resourceid.GroupKind{Kind: "ConfigMap"}, route); got != nil {
+		t.Errorf("a kind the family doesn't read from declares %v", got)
 	}
 }

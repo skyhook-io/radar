@@ -10,6 +10,7 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/workloadrestart"
 )
 
 // Re-export types from pkg/k8score for backward compatibility.
@@ -129,8 +130,8 @@ func RestartWorkload(ctx context.Context, kind, namespace, name string) error {
 }
 
 // RestartWorkloadWithClient performs a rolling restart using the provided client.
-func RestartWorkloadWithClient(ctx context.Context, kind, namespace, name string, client dynamic.Interface) error {
-	return getWorkloadManagerWithClient(ctx, client).RestartWorkload(ctx, kind, namespace, name)
+func RestartWorkloadWithClient(ctx context.Context, kind, namespace, name string, client dynamic.Interface) (workloadrestart.Result, error) {
+	return getWorkloadManagerWithClient(ctx, client).RestartWorkloadWithResult(ctx, kind, namespace, name)
 }
 
 // SetDeploymentPausedWithClient sets spec.paused on a Deployment using the provided client.

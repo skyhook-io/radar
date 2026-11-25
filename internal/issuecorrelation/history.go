@@ -4,6 +4,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/meaningfulchanges"
 	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
@@ -22,6 +23,11 @@ func historyCoversObjects(obj any, refs []configrefs.Ref, namespace string, cove
 	}
 	workload, ok := obj.(metav1.Object)
 	if !ok || !workload.GetCreationTimestamp().After(coverage.CompleteSince) {
+		return false
+	}
+	// A Rollout that takes its template from another workload changes with
+	// it, and that workload's age isn't checked here.
+	if _, _, separate := meaningfulchanges.RolloutTemplateSource(obj); separate {
 		return false
 	}
 	cache := k8s.GetResourceCache()

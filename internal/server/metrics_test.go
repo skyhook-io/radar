@@ -27,10 +27,8 @@ func scrapeMetrics(t *testing.T) string {
 // what was lost, and never carry the database address.
 func TestMetricsReportTimelineOutage(t *testing.T) {
 	timeline.ResetStore()
-	timeline.ResetMetricsForContextSwitch()
 	t.Cleanup(func() {
 		timeline.ResetStore()
-		timeline.ResetMetricsForContextSwitch()
 		if err := timeline.InitStore(timeline.DefaultStoreConfig()); err != nil {
 			t.Fatalf("re-init global store: %v", err)
 		}
@@ -43,7 +41,7 @@ func TestMetricsReportTimelineOutage(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("InitStore: %v", err)
 	}
-	timeline.RecordDrop("Deployment", "shop", "web", timeline.DropReasonStoreDown, "update", "ctx")
+	timeline.CaptureStore().RecordDrop("Deployment", "shop", "web", timeline.DropReasonStoreDown, "update", "ctx")
 
 	out := scrapeMetrics(t)
 	if !strings.Contains(out, "radar_timeline_available 0") {

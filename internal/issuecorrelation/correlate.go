@@ -101,11 +101,9 @@ type Options struct {
 	// MinWindow is the shortest window over which an absence of changes is
 	// claimed: a shorter one (a fresh start) may still be filling.
 	MinWindow time.Duration
-	// CheckCoverage also requires, before claiming absence, that every
-	// source's kind is collected in the namespace and that a workload's
-	// sources could be resolved, and reports why when not. Any Unknown then
-	// blocks the absence claim.
-	CheckCoverage bool
+	// PolicyOnlyAbsence lets an admission rejection on a subject whose kind
+	// isn't tracked claim absence for the rejecting policy alone (PolicyOnly).
+	PolicyOnlyAbsence bool
 	// EventIDs asks for each change's timeline event ID, so a change can link
 	// to its event.
 	EventIDs bool
@@ -134,6 +132,13 @@ type Result struct {
 	// NoChanges means the window held no change on any source, and every
 	// source was read in full.
 	NoChanges bool
+	// NoChangesWithheld means the subject's own reads found nothing and were
+	// complete, but absence isn't claimed because Radar can't vouch for the
+	// rest: a workload's sources couldn't be resolved, a source's kind isn't
+	// collected or is still loading, a kind involved was watched only since
+	// after the window began, or the admission policy side is unknown.
+	// Unknown says why.
+	NoChangesWithheld bool
 	// PolicyOnly scopes NoChanges to the admission policy that rejected the
 	// issue: the subject's own kind isn't tracked, so only the policy was
 	// checked.
@@ -170,7 +175,7 @@ func Correlate(ctx context.Context, iss issuesapi.Issue, opts Options, access Ac
 	c := &run{ctx: ctx, iss: iss, opts: opts, access: access, unknown: map[issuesapi.CorrelationUnknownReason][]issuesapi.UncheckedKind{}}
 	res := c.correlate()
 	res.Eligible = true
-	res.History = mergeHistory(res.History, c.watchHistory)
+	res.History = mergeHistory(mergeHistory(res.History, c.watchHistory), c.objectWatchHistory)
 	res.Unknown = c.primaryUnknown()
 	if c.iss.IssueTiming != iss.IssueTiming || c.iss.IssueTimingBasis != iss.IssueTimingBasis || c.iss.TimingSummary != iss.TimingSummary {
 		res.Timing = Timing{Changed: true, IssueTiming: c.iss.IssueTiming, IssueTimingBasis: c.iss.IssueTimingBasis, TimingSummary: c.iss.TimingSummary}
@@ -187,6 +192,9 @@ type run struct {
 	// watchHistory is the coverage lost to kinds Radar started watching
 	// after the window began.
 	watchHistory issuesapi.HistoryCoverage
+	// objectWatchHistory is the same for the subject workload's kind and its
+	// sources' kinds, which historyCoversObjects can still clear.
+	objectWatchHistory issuesapi.HistoryCoverage
 }
 
 func (c *run) correlate() Result {
@@ -198,7 +206,7 @@ func (c *run) correlate() Result {
 	var obj any
 	var refs []configrefs.Ref
 	var changes []issuesapi.RecentChange
-	subjectAllowed, sourcesKnown := true, true
+	subjectAllowed, sourcesKnown, sourcesResolved := true, true, true
 	if subjectTracked {
 		switch {
 		case nativeHelm:
@@ -222,7 +230,7 @@ func (c *run) correlate() Result {
 			subjectAllowed = false
 		default:
 			var err error
-			result, obj, refs, sourcesKnown, err = c.subjectChanges()
+			result, obj, refs, sourcesKnown, sourcesResolved, err = c.subjectChanges()
 			if err != nil {
 				log.Printf("[issuecorrelation] Failed to read changes for %s %s/%s: %v", iss.Kind, iss.Namespace, iss.Name, err)
 				c.addUnknown(issuesapi.CorrelationUnknownReadError, iss.Group, iss.Kind)
@@ -237,11 +245,21 @@ func (c *run) correlate() Result {
 	// all are unknown, not "no changes".
 	// Kinds watched late so far are the subject's and its sources'; the
 	// admission policy's are added below.
-	historyComplete := historyCoversObjects(obj, refs, iss.Namespace, result.History) && !c.watchHistory.Incomplete
+	storeHistoryComplete := historyCoversObjects(obj, refs, iss.Namespace, result.History)
+	// A late watch on the workload's or its sources' kinds is cleared when
+	// every object was created after it.
+	watchComplete := !c.watchHistory.Incomplete &&
+		(!c.objectWatchHistory.Incomplete || historyCoversObjects(obj, refs, iss.Namespace, mergeHistory(result.History, c.objectWatchHistory)))
+	historyComplete := storeHistoryComplete && watchComplete
 	if subjectTracked && !historyComplete {
 		c.addHistoryUnknown(iss)
 	}
-	subjectComplete := subjectTracked && subjectAllowed && sourcesKnown && !result.FetchSaturated && historyComplete
+	// subjectRead: every source that was resolved was read in full from the
+	// history the store holds. subjectComplete also needs the sources
+	// resolved and every kind watched since before the window began: only
+	// then is an empty subject list a true "no recorded change".
+	subjectRead := subjectTracked && subjectAllowed && sourcesKnown && !result.FetchSaturated && storeHistoryComplete
+	subjectComplete := subjectRead && sourcesResolved && watchComplete
 	absenceKnown := c.opts.Window.length() >= c.opts.MinWindow
 
 	res.FetchSaturated = result.FetchSaturated
@@ -261,16 +279,21 @@ func (c *run) correlate() Result {
 		}
 	}
 	if !subjectTracked || len(changes) == 0 {
-		// A coverage-checking caller is told every reason absence can't be
-		// claimed; the MCP tool claims it from the subject's side alone.
-		if subjectTracked && subjectComplete && absenceKnown && (!c.opts.CheckCoverage || len(c.unknown) == 0 && (blocker == nil || blocker.complete)) {
-			res.NoChanges = true
+		// Absence needs every source read in full and nothing unknown: an
+		// unresolved or uncollected source, a kind watched late, or an
+		// unknown policy side may hold the change.
+		if subjectRead && absenceKnown {
+			if len(c.unknown) == 0 && (blocker == nil || blocker.complete) {
+				res.NoChanges = true
+			} else {
+				res.NoChangesWithheld = true
+			}
 		}
 		// An admission rejection on a subject whose own changes aren't
 		// tracked (a Job, a bare ReplicaSet) can still say the policy that
-		// rejected it didn't change, scoped to the policy. Only a
-		// coverage-checking caller gets this; the MCP tool says nothing.
-		if !subjectTracked && c.opts.CheckCoverage && blocker != nil && blocker.complete && len(blocker.changes) == 0 && absenceKnown && len(c.unknown) == 0 {
+		// rejected it didn't change, scoped to the policy. The MCP tool
+		// says nothing for such a subject.
+		if !subjectTracked && c.opts.PolicyOnlyAbsence && blocker != nil && blocker.complete && len(blocker.changes) == 0 && absenceKnown && len(c.unknown) == 0 {
 			res.NoChanges, res.PolicyOnly = true, true
 		}
 		return res
@@ -303,34 +326,37 @@ func mergeHistory(a, b issuesapi.HistoryCoverage) issuesapi.HistoryCoverage {
 
 // subjectChanges reads a tracked subject's changes, and a workload's
 // directly referenced ConfigMaps and Secrets. sourcesKnown is false when a
-// source was withheld from the caller or couldn't be determined, or when
-// Radar doesn't fully hold the subject's own kind yet. obj is the
-// workload whose sources were resolved, or nil, and refs are those sources.
-func (c *run) subjectChanges() (result meaningfulchanges.RecentResult, obj any, refs []configrefs.Ref, sourcesKnown bool, err error) {
+// source was withheld from the caller, or when Radar doesn't fully hold the
+// subject's own kind yet. sourcesResolved is false when Radar couldn't read
+// the workload's pod template, so which sources it uses is unknown. obj is
+// the workload whose sources were resolved, or nil, and refs are those
+// sources.
+func (c *run) subjectChanges() (result meaningfulchanges.RecentResult, obj any, refs []configrefs.Ref, sourcesKnown, sourcesResolved bool, err error) {
 	iss := &c.iss
 	q := c.query(c.subjectLimit())
 	if !meaningfulchanges.WorkloadKind(iss.Kind) {
 		q.Namespaces, q.Kinds, q.Name, q.TrackedOnly = []string{iss.Namespace}, []string{iss.Kind}, iss.Name, true
 		// A subject kind Radar doesn't fully hold yet can't be said to be
-		// unchanged, on either surface.
-		subjectReady := c.collected(iss.Kind, iss.Group, iss.Namespace)
+		// unchanged. A late watch goes to watchHistory.
+		subjectReady := c.kindCollected(iss.Kind, iss.Group, iss.Namespace)
+		if subjectReady {
+			c.watchCovers(iss.Kind, iss.Group, iss.Namespace)
+		}
 		result, err = meaningfulchanges.Recent(c.ctx, q)
-		return result, nil, nil, subjectReady, err
+		return result, nil, nil, subjectReady, true, err
 	}
 	obj = WorkloadObjectFromCache(iss.Kind, iss.Namespace, iss.Name)
-	sourcesKnown = true
+	sourcesKnown, sourcesResolved = true, true
 	// A Rollout that takes its template from a workloadRef target names its
 	// sources through that object, so the caller must be able to list the
 	// target's kind before the template is read.
 	if group, kind, ok := meaningfulchanges.RolloutTemplateSource(obj); ok && !c.allowed(kind, group, iss.Namespace) {
 		obj, sourcesKnown = nil, false
-	} else if (strings.EqualFold(iss.Kind, "Rollout") || c.opts.CheckCoverage) && !meaningfulchanges.ConfigReferencesKnown(obj) {
-		// A Rollout whose template can't be read (an unsupported or missing
-		// workloadRef target) has unknown sources, so absence proves nothing.
-		// A workload missing from the cache is the same, but only a
-		// coverage-checking caller is told: the MCP tool reads its references
-		// as none.
-		sourcesKnown = false
+	} else if !meaningfulchanges.ConfigReferencesKnown(obj) {
+		// A workload missing from the cache, or a Rollout whose template
+		// can't be read (an unsupported or missing workloadRef target), has
+		// unknown sources, so absence proves nothing.
+		sourcesResolved = false
 		c.addUnknown(issuesapi.CorrelationUnknownSourcesUnresolved, iss.Group, iss.Kind)
 	}
 	// The sources are resolved once: the ones checked are the only ones read.
@@ -339,14 +365,19 @@ func (c *run) subjectChanges() (result meaningfulchanges.RecentResult, obj any, 
 	for _, ref := range refs {
 		if _, ok := decided[ref.Kind]; !ok {
 			decided[ref.Kind] = c.allowed(ref.Kind, "", iss.Namespace)
-			if decided[ref.Kind] && c.opts.CheckCoverage {
-				c.checkCollected(ref.Kind, "", iss.Namespace)
+			if decided[ref.Kind] {
+				if c.kindCollected(ref.Kind, "", iss.Namespace) {
+					c.objectWatch(ref.Kind, "", iss.Namespace)
+				}
 			}
 		}
 	}
-	subjectReady := c.collected(iss.Kind, iss.Group, iss.Namespace)
+	subjectReady := c.kindCollected(iss.Kind, iss.Group, iss.Namespace)
+	if subjectReady {
+		c.objectWatch(iss.Kind, iss.Group, iss.Namespace)
+	}
 	result, withheld, err := meaningfulchanges.RecentForWorkloadSourceRefs(c.ctx, refs, iss.Kind, iss.Namespace, iss.Name, q, c.sourceFilter(decided))
-	return result, obj, refs, sourcesKnown && subjectReady && !withheld, err
+	return result, obj, refs, sourcesKnown && subjectReady && !withheld, sourcesResolved, err
 }
 
 // sourceFilter admits the subject, which was checked before its sources

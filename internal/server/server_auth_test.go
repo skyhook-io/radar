@@ -21,7 +21,7 @@ func newAuthServer(cfg auth.Config) *Server {
 	cfg.Defaults()
 	s := &Server{authConfig: cfg}
 	if cfg.Enabled() {
-		s.permCache = auth.NewPermissionCache()
+		s.permCache = auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)
 	}
 	return s
 }

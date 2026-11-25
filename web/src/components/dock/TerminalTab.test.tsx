@@ -1,11 +1,14 @@
 import { renderToString } from 'react-dom/server'
-import { expect, it, vi } from 'vitest'
+import { beforeEach, expect, it, vi } from 'vitest'
 import type { TerminalTabProps } from '@skyhook-io/k8s-ui'
 import { TerminalTab } from './TerminalTab'
 vi.mock('./PodDebugSession', () => ({ PodDebugSession: ({ children }: { children: React.ReactNode }) => children }))
-const captured = vi.hoisted(() => ({ props: null as TerminalTabProps | null }))
-vi.mock('@skyhook-io/k8s-ui', () => ({ TerminalTab: (props: TerminalTabProps) => { captured.props = props; return null } }))
+const captured = vi.hoisted(() => ({ props: null as TerminalTabProps | null, read: vi.fn((): { data?: unknown } => ({})) }))
+vi.mock('../../api/client', () => ({ useResource: captured.read }))
+vi.mock('@skyhook-io/k8s-ui', async original => ({ ...await original<typeof import('@skyhook-io/k8s-ui')>(), TerminalTab: (props: TerminalTabProps) => { captured.props = props; return null } }))
 vi.mock('../../api/config', async (importOriginal) => ({ ...await importOriginal<typeof import('../../api/config')>(), apiUrl: (path: string) => `/api${path}`, getWsUrl: (path: string) => `ws://localhost/api${path}` }))
+beforeEach(() => captured.read.mockReturnValue({}))
+
 it.each([undefined, '/bin/custom+command'])('forwards the executable and context through the shared terminal (%s)', async shell => {
   renderToString(<TerminalTab namespace="app" podName="worker" containerName="app" containers={['app', 'sidecar']} shell={shell} note="Primary" />)
   const props = captured.props!
@@ -15,6 +18,9 @@ it.each([undefined, '/bin/custom+command'])('forwards the executable and context
   const url = new URL(wsUrl)
   expect(url.pathname).toBe('/api/pods/app/worker/exec'); expect(url.searchParams.get('container')).toBe('app')
   expect(url.searchParams.get('shell')).toBe(shell ?? null)
+  expect(url.searchParams.has('uid')).toBe(false)
+  const retry = await props.createSession('app', 'reviewed-pod')
+  expect(new URL(retry.wsUrl).searchParams.get('uid')).toBe('reviewed-pod')
 })
 
 it('reconnects on the connection the tab was opened on, not the latest', async () => {
@@ -34,6 +40,33 @@ it('reconnects an existing debug session to its reviewed connection without offe
   renderToString(<TerminalTab namespace="demo" podName="api" containerName="debug-1" containers={['debug-1']} debugSession={{ connectionId: 'reviewed-cluster', apiBase: '/api', podUID: 'reviewed', image: 'mirror.example/debug' }} />)
   const { wsUrl } = await captured.props!.createSession('debug-1')
   expect(new URL(wsUrl).searchParams.get('connection')).toBe('reviewed-cluster')
-  expect(captured.props!.renderDebugAction).toBeUndefined()
+  expect(new URL(wsUrl).searchParams.get('uid')).toBe('reviewed')
+  expect(renderToString(captured.props!.renderDebugAction!('debug-1', 'reviewed'))).toContain('different image')
   resetConnectionBindingForTest()
+})
+
+it('opens and retries an ordinary terminal on the UID captured in Pod details', async () => {
+  renderToString(<TerminalTab namespace="demo" podName="api" podUID="fresh" containerName="tools" containers={['tools']} />)
+  expect(new URL((await captured.props!.createSession('tools')).wsUrl).searchParams.get('uid')).toBe('fresh')
+  expect(new URL((await captured.props!.createSession('tools', 'other')).wsUrl).searchParams.get('uid')).toBe('fresh')
+})
+
+it('only offers running regular containers and native sidecars of the original Pod', () => {
+  captured.read.mockReturnValue({ data: {
+    metadata: { uid: 'original' },
+    spec: {
+      containers: [{ name: 'api' }, { name: 'worker' }],
+      initContainers: [{ name: 'mesh', restartPolicy: 'Always' }, { name: 'init' }],
+    },
+    status: {
+      containerStatuses: [{ name: 'api', state: { terminated: {} } }, { name: 'worker', state: { running: {} } }],
+      initContainerStatuses: [{ name: 'mesh', state: { running: {} } }, { name: 'init', state: { running: {} } }],
+    },
+  } })
+  const render = (uid: string) => renderToString(<TerminalTab namespace="demo" podName="pod" podUID={uid} containerName="api" containers={['api', 'worker', 'mesh']} />)
+  render('original')
+  expect(captured.props?.containers).toEqual(['worker', 'mesh'])
+  expect(captured.props?.containerName).toBe('api')
+  render('replacement')
+  expect(captured.props?.containers).toEqual([])
 })

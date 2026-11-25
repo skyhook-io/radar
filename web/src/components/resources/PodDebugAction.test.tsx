@@ -3,9 +3,11 @@ import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, expect, it, vi } from 'vitest'
-import { DockProvider, useDock } from '@skyhook-io/k8s-ui'
+import { DockProvider, ResourceActionsBar, useDock } from '@skyhook-io/k8s-ui'
 import { observeConnectionStatus, resetConnectionBindingForTest } from '../../api/connectionBinding'
 import { PodDebugAction } from './PodDebugAction'
+
+vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({connection:{context:'test-context'}}) }))
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 const running = { running: {} }
@@ -97,4 +99,59 @@ it('opens an accepted session in the dock if its Pod details closed during the r
   act(() => root.render(<QueryClientProvider client={client}><DockProvider>{null}<Tabs /></DockProvider></QueryClientProvider>))
   await act(async () => { finish(new Response(JSON.stringify({ containerName: 'debug-name', image: 'mirror.example/debug', status: 'pending' }))) })
   expect(document.querySelector('output')!.textContent).toBe('debug-name')
+})
+
+it('keeps the header chooser open on a confirmed denial after a refused write', () => {
+  const fetch = vi.fn()
+  vi.stubGlobal('fetch', fetch)
+  render()
+  click('Debug')
+  act(() => root.render(<QueryClientProvider client={client}><DockProvider>
+    <PodDebugAction pod={pod} debugDenial={{ refusal: 'The image policy refused this request' }} /><Tabs />
+  </DockProvider></QueryClientProvider>))
+  const dialog = document.querySelector('[role="dialog"]')!
+  expect(dialog.textContent).toContain('Ask your cluster admin for access to update pods/ephemeralcontainers for Pod demo/api.')
+  expect(dialog.textContent).toContain('The image policy refused this request')
+  expect(dialog.textContent).not.toContain('Start debug container')
+  expect(fetch).not.toHaveBeenCalled()
+  click('Close')
+  click('Debug')
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Ask your cluster admin for access')
+})
+
+it.each([
+  ['allowed', 'mirror.example/debug', undefined, '', true],
+  ['named denial', undefined, {}, 'Ask your cluster admin for access', false],
+  ['completed undecided update with verified exec', 'mirror.example/debug', undefined, '', true],
+  ['completed undecided review without verified exec', undefined, undefined, 'Access is unconfirmed', false],
+  ['failed update review', undefined, undefined, 'Kubernetes couldn’t complete the check', false],
+  ['Radar HTTP failure', undefined, undefined, 'The permission request failed', false],
+  ['exec disabled', undefined, undefined, 'Debugging is unavailable', false],
+  ['hosted', undefined, undefined, 'This view can’t add a debug container', false],
+  ['changed connection', 'mirror.example/debug', undefined, 'The cluster connection changed', false],
+] as const)('an open header review stays mounted through %s', (state, image, denial, message, canSubmit) => {
+  const div = document.createElement('div')
+  document.body.append(div)
+  root = createRoot(div)
+  client = new QueryClient()
+  function draw(initial: boolean) {
+    const unverified = !initial && state === 'completed undecided update with verified exec'
+    const recheck = vi.fn().mockResolvedValue(undefined)
+    act(() => root.render(<QueryClientProvider client={client}><DockProvider>
+      <ResourceActionsBar resource={{ kind: 'pods', namespace: 'demo', name: 'api' }} data={pod} canExec={initial || canSubmit}
+        podDebugAction={<PodDebugAction pod={pod} defaultImage={initial ? 'mirror.example/debug' : image} debugDenial={initial ? undefined : denial}
+          unverifiedReview={unverified ? { refused: undefined, recheckAccess: recheck, rememberRefusal: vi.fn(), clearRefusal: vi.fn() } : undefined}
+          reviewStatus={{ message, refusal: undefined, checking: false, recheck: state === 'hosted' ? undefined : recheck }} />} />
+    </DockProvider></QueryClientProvider>))
+  }
+  draw(true)
+  click('Debug')
+  if (state === 'changed connection') observeConnectionStatus({ connectionId: 'replacement' })
+  draw(false)
+  const dialog = document.querySelector('[role="dialog"]')!
+  expect(dialog.textContent).toContain(message)
+  const start = [...dialog.querySelectorAll('button')].find(button => button.textContent === 'Start debug container')
+  expect(!!start && !start.disabled).toBe(canSubmit)
+  expect(dialog.textContent?.includes('Ask your cluster admin for access')).toBe(state === 'named denial')
+  expect(dialog.textContent?.includes('Recheck access')).toBe(!canSubmit && state !== 'hosted' && state !== 'changed connection')
 })

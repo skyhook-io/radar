@@ -121,6 +121,58 @@ func TestCarettaQueriesCarryClusterMatchers(t *testing.T) {
 	}
 }
 
+// While an OpenObserve relay serves metrics, the shared cluster check answers
+// for OpenObserve, not for the store Caretta reads directly: the map reads it
+// unfiltered and says it may include other clusters' traffic.
+func TestCarettaWarnsWhileARelayServesMetrics(t *testing.T) {
+	prev := metricsRelayActive
+	metricsRelayActive = func() bool { return true }
+	t.Cleanup(func() { metricsRelayActive = prev })
+	calls := stubScope(t, clusterA)
+	srv, sent := recordingProm(t)
+	c := connectedCaretta(srv.URL, srv.URL)
+	resp, err := c.GetFlows(t.Context(), FlowOptions{})
+	if err != nil || len(resp.Flows) != 1 {
+		t.Fatalf("GetFlows: %v %+v", err, resp)
+	}
+	if *calls != 0 {
+		t.Error("the relay's cluster check was used for Caretta's direct store")
+	}
+	if got := sent(); len(got) != 1 || got[0] != "caretta_links_observed" {
+		t.Errorf("queries = %q, want the unfiltered query", got)
+	}
+	if !strings.Contains(resp.Warning, mixedClustersNote) {
+		t.Errorf("warning = %q, want the mixed-clusters note", resp.Warning)
+	}
+}
+
+// The cluster labels an operator configured for the store Caretta reads still
+// filter the map while an OpenObserve relay serves the charts.
+func TestCarettaKeepsTheOperatorScopeWhileARelayServesMetrics(t *testing.T) {
+	prevActive, prevScope := metricsRelayActive, operatorScopeDuringRelay
+	metricsRelayActive = func() bool { return true }
+	operatorScopeDuringRelay = func() (prom.WorkloadMetricsScope, bool) {
+		return prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "prod"}}, true
+	}
+	t.Cleanup(func() { metricsRelayActive, operatorScopeDuringRelay = prevActive, prevScope })
+	calls := stubScope(t, clusterA)
+	srv, sent := recordingProm(t)
+	c := connectedCaretta(srv.URL, srv.URL)
+	resp, err := c.GetFlows(t.Context(), FlowOptions{})
+	if err != nil || len(resp.Flows) != 1 {
+		t.Fatalf("GetFlows: %v %+v", err, resp)
+	}
+	if *calls != 0 {
+		t.Error("the relay's cluster check was used for Caretta's direct store")
+	}
+	if got := sent(); len(got) != 1 || got[0] != `caretta_links_observed{cluster="prod"}` {
+		t.Errorf("queries = %q, want the operator's cluster filter", got)
+	}
+	if strings.Contains(resp.Warning, mixedClustersNote) {
+		t.Errorf("warning = %q, want no mixed-clusters note", resp.Warning)
+	}
+}
+
 // Without a configured URL Caretta reads its own caretta-vm, which holds only
 // this cluster and carries no cluster label: filtering it would empty the map.
 func TestCarettaOwnStoreIsNotFiltered(t *testing.T) {

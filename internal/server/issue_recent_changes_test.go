@@ -255,6 +255,34 @@ func TestProxyAuth_IssueRecentChangesHelmRowHasNoEventID(t *testing.T) {
 	}
 }
 
+// A Helm issue's first_seen comes from release storage in the server's own
+// zone, while /api/issues sends it in UTC. The row lookup sends UTC too, so a
+// page matching the two finds the same occurrence on a Radar outside UTC.
+func TestProxyAuth_IssueRecentChangesSendsUTC(t *testing.T) {
+	prevLocal := time.Local
+	time.Local = time.FixedZone("UTC+2", 2*60*60)
+	t.Cleanup(func() { time.Local = prevLocal })
+	correlationFixture(t)
+	helmStorage(t, "denied", "")
+	env := newAuthTestServer(t)
+	correlationUser(env, "reader", []string{"shop"})
+	_, listed := getResourceIssues(t, env, "reader", "/api/issues/resource/HelmRelease/shop/payments?group=helm.sh&coverage=1")
+	if len(listed.Issues) != 1 {
+		t.Fatalf("issues %+v", listed.Issues)
+	}
+	_, body := getRecentChanges(t, env, "reader", listed.Issues[0].ID+"/HelmRelease/shop/payments/helm.sh")
+	got, ok := body.Changes[listed.Issues[0].ID]
+	if !ok || got.FirstSeen.IsZero() {
+		t.Fatalf("no row change with first_seen: %+v", body)
+	}
+	if got.FirstSeen.Location() != time.UTC {
+		t.Fatalf("first_seen sent as %s, want UTC", got.FirstSeen.Format(time.RFC3339Nano))
+	}
+	if !got.FirstSeen.Equal(listed.Issues[0].FirstSeen) {
+		t.Fatalf("first_seen %s, the issue's is %s", got.FirstSeen, listed.Issues[0].FirstSeen)
+	}
+}
+
 // Shared without authentication: the batched lookup answers a direct read
 // and the Hub tunnel, and refuses a page on another site.
 func TestIssueRecentChangesWithoutAuth(t *testing.T) {
@@ -305,10 +333,10 @@ func TestIssueRecentChangesWithoutAuth(t *testing.T) {
 	}
 }
 
-// With incomplete history, a caller who can't read every namespace gets no
-// complete_since in the public answer, yet the row pick still uses it: the
-// change is named when it is after the point Radar's history starts, and not
-// when it is before.
+// With incomplete history from a late start, a caller who can't read every
+// namespace gets complete_since too, and the row pick uses it: the change is
+// named when it is after the point Radar's history starts, and not when it
+// is before.
 func TestProxyAuth_IssueRecentChangesRestrictedCallerHistoryBoundary(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
@@ -340,8 +368,8 @@ func TestProxyAuth_IssueRecentChangesRestrictedCallerHistoryBoundary(t *testing.
 				iss.Correlation.Unknown.Reason != issuesapi.CorrelationUnknownHistoryIncomplete {
 				t.Fatalf("setup: want history_incomplete, got %+v", iss)
 			}
-			if iss.Correlation.History == nil || !iss.Correlation.History.Incomplete || !iss.Correlation.History.CompleteSince.IsZero() {
-				t.Fatalf("public history must say incomplete and withhold complete_since: %+v", iss.Correlation.History)
+			if iss.Correlation.History == nil || !iss.Correlation.History.Incomplete || iss.Correlation.History.CompleteSince.IsZero() {
+				t.Fatalf("public history must say incomplete and name complete_since: %+v", iss.Correlation.History)
 			}
 
 			_, rows := getRecentChanges(t, env, "restricted", web.param(id))

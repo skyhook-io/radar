@@ -41,7 +41,7 @@ scaling workloads still follow their existing permissions.
 | Cost data | `cost.source`, `cost.kubecost.url`, `cost.kubecost.clusterId`, `cost.kubecost.existingSecret`, `cost.currency` |
 | Audit policy | `audit.ignoredNamespaces`, `audit.disabledChecks` |
 | Helm OCI chart sources | `helm.ociSources` |
-| Timeline / MCP | `timeline`, `persistence`, `mcp.enabled` |
+| Timeline / MCP | `timeline`, `persistence`, `mcp.enabled`, `mcp.oauth.enabled` |
 
 For example, add this to your existing values file:
 
@@ -451,7 +451,11 @@ rbac:
   helm: false         # Enable Helm write operations (broad permissions)
 ```
 
-Pod **Debug** requires `get pods`, `create pods/exec`, and a separate `update pods/ephemeralcontainers` grant in the Pod’s namespace. The chart’s `rbac.podExec` grants exec only. Use a namespaced Role and RoleBinding for Radar’s ServiceAccount when authentication is off, or for the signed-in user or group when per-user authentication is enabled. The Pod action and the missing-shell recovery action are available in standalone and in-cluster Radar. Both are intentionally disabled in the Radar Hub UI.
+Pod **Debug** requires `get pods`, `create pods/exec`, and a separate `update pods/ephemeralcontainers` grant in the Pod’s namespace. The chart’s `rbac.podExec` grants exec only. Use a namespaced Role and RoleBinding for Radar’s ServiceAccount when authentication is off, or for the signed-in user or group when per-user authentication is enabled. Standalone and in-cluster Radar can start a new debug container from Pod details or missing-shell recovery. Radar Hub keeps debug-container creation disabled. A host that supports Pod exec can still open a shell in an existing running debugger.
+
+For a selected Pod, Radar checks named exec and ephemeral-container update permissions when the namespace-wide grant is insufficient. A Role with `resourceNames` can therefore grant debugging on one Pod. In a shell-less container, the terminal offers a running debugger targeting that container first. If access is denied it can copy a request for the specific Pod, namespace and permission.
+
+To open a fresh shell in an existing container, open the Pod and choose **Open terminal** under **Running debug containers**. This requires Pod read and exec access. Closing the tab and opening it again uses the same container.
 
 The **Debug** action launches a throwaway container (ephemeral container on a pod, or a privileged pod on a node) using `busybox:latest` by default. If the built-in restricted Pod Security Standard rejects the default pod debug container, Radar retries with a restricted-compatible Linux security context using the target/pod non-root UID, or UID `65532` by default, so custom images used in restricted namespaces must work as a non-root user. In air-gapped or private-registry clusters where the default image can't be pulled, point it at a reachable mirror:
 
@@ -572,6 +576,8 @@ auth:
     redirectURL: https://radar.example.com/auth/callback
 ```
 
+To connect remote MCP clients through browser login, also set `mcp.oauth.enabled: true`. This requires standalone OIDC mode, an HTTPS callback URL, and `replicaCount: 1`. The chart uses `Recreate` rollouts because OAuth registrations and tokens are held in memory; clients must re-register and authorize after pod restarts. See [Remote MCP authentication](mcp.md#remote-authentication-with-oidc) for the full setup and discovery paths your ingress must expose.
+
 ## Security Considerations
 
 When deploying Radar in-cluster:
@@ -626,6 +632,7 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 | `service.port` | Service port | `9280` |
 | `basePath` | URL prefix Radar serves under, e.g. `/radar` for no-strip-prefix subpath ingress | `""` |
 | `mcp.enabled` | Enable MCP server for AI tools | `true` |
+| `mcp.oauth.enabled` | Enable MCP OAuth for single-replica standalone OIDC deployments | `false` |
 | `debug.image` | Image for ephemeral debug containers and node debug pods. In built-in restricted PodSecurity namespaces, pod debug containers may retry as the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. | `""` (busybox:latest) |
 | `listPageSize` | Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) on very large clusters that fail to sync; `0` = off, try `2000`. Only used when the apiserver lacks WatchList streaming. | `0` |
 | `timeline.storage` | Event storage (memory/sqlite/postgres) | `memory` |

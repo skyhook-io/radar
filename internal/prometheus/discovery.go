@@ -139,13 +139,22 @@ func (c *Client) discover(ctx context.Context, gen uint64) (discoveredEndpoint, 
 	manualURL := c.manualURL
 	contextName := c.contextName
 	k8sClient := c.k8sClient
+	relay := c.relay
 	c.mu.RUnlock()
+
+	// Layer 0: a relay replaces discovery entirely. Its failures surface per
+	// request; no in-cluster Prometheus is ever read in its place.
+	if relay != nil {
+		if !c.markConnected(relay.cfg.Endpoint, "", relayIdentity(relay), startGen) {
+			return discoveredEndpoint{}, errDiscoverySuperseded
+		}
+		return discoveredEndpoint{addr: relay.cfg.Endpoint}, nil
+	}
 
 	if manualURL != "" {
 		addr := strings.TrimRight(manualURL, "/")
 		c.mu.RLock()
-		tr := prom.NewHTTPTransport(addr, "", c.httpClient)
-		tr.Headers = copyHeaders(c.headers)
+		tr := c.newTransportLocked(addr, "", c.httpClient, 0)
 		c.mu.RUnlock()
 		ok, reason := prom.NewClient(tr).ProbeQueryAPI(ctx)
 		if ok {

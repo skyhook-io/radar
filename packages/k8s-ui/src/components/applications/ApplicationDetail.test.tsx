@@ -76,6 +76,14 @@ function renderDetail(props: Partial<ApplicationDetailProps> = {}) {
 }
 
 describe("ApplicationDetail shell", () => {
+  it("uses the host's provenance badge in place of the cluster grouping tier", () => {
+    const groupedApp = { ...app, tier: 3 }
+    expect(renderDetail({ app: groupedApp })).toContain('>Argo CD</span>')
+    const managed = renderDetail({ app: groupedApp, source: 'skyhook' })
+    expect(managed).toContain('>Skyhook</span>')
+    expect(managed).not.toContain('>Argo CD</span>')
+  })
+
   it("shows rollout activity in the application summary and workload matrix", () => {
     const rolling: AppRow = {
       ...app,
@@ -117,6 +125,12 @@ describe("ApplicationDetail shell", () => {
     const html = renderDetail({ app: single, headerActions: <button type="button">host action</button> });
     expect(html).toContain("Runtime for");
     expect(firstInHeaderCluster(html)).toContain("host action");
+  });
+
+  it("shows the host's status in the header pill in place of the workloads'", () => {
+    const html = renderDetail({ status: { health: "unhealthy", label: "Last run failed 38m ago: secret not found" } });
+    expect(html).toMatch(/text-sm font-semibold">Last run failed 38m ago: secret not found</);
+    expect(html).not.toMatch(/text-sm font-semibold">Healthy</);
   });
 
   it("adds nothing for a host that doesn't pass them, on either kind of app", () => {
@@ -782,6 +796,9 @@ describe("ApplicationDetail shell", () => {
       renderOverviewIssues: () => <div>Operational Issues (1)</div>,
     });
 
+    expect(html).toMatch(/text-sm font-semibold">Failed</);
+    const hostStatus = renderDetail({ app: batchApp, status: { health: "unhealthy" } });
+    expect(hostStatus).toMatch(/text-sm font-semibold">Unhealthy</);
     expect(html).toContain("Application views");
     expect(html).toContain("Operational Issues (1)");
     expect(html).not.toContain("Batch activity");
@@ -830,7 +847,7 @@ describe("ApplicationDetail shell", () => {
     };
     const html = renderDetail({ app: batchApp });
 
-    expect(html).toMatch(/<span class="text-sm font-semibold">Degraded<\/span>/);
+    expect(html).toMatch(/text-sm font-semibold">Degraded<\/span>/);
     expect(html).toContain("Succeeded");
   });
 

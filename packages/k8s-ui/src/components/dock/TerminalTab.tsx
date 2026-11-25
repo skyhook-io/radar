@@ -20,11 +20,14 @@ export interface TerminalTabProps {
   podName: string
   containerName: string
   containers: string[]
+  /** When supplied, the host owns the selected container through containerName. */
+  onContainerChange?: (name: string) => void
   isActive?: boolean
   /** Returns the WebSocket URL to connect to for a given container. */
-  createSession: (containerName: string) => Promise<{ wsUrl: string }>
+  createSession: (containerName: string, podUID?: string) => Promise<{ wsUrl: string }>
   /** Optional: creates a debug (ephemeral) container. If omitted, the debug button is hidden. */
   createDebugContainer?: (targetContainer: string) => Promise<{ containerName: string }>
+  podDetailsLink?: ReactNode
   renderDebugAction?: (targetContainer: string, podUID: string) => ReactNode
   /** Optional: a short line in the toolbar describing the session. */
   note?: string
@@ -37,10 +40,12 @@ export function TerminalTab({
   podName,
   containerName,
   containers,
+  onContainerChange,
   isActive = true,
   createSession,
   createDebugContainer,
   renderDebugAction,
+  podDetailsLink,
   note,
   command,
 }: TerminalTabProps) {
@@ -48,10 +53,10 @@ export function TerminalTab({
   const xtermRef = useRef<XTerm | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
+  const reviewedPodUID = useRef<string | undefined>(undefined)
   // Cleanup ref holds the ResizeObserver disconnect from an async setup
   const cleanupRef = useRef<(() => void) | undefined>(undefined)
-  // Prevents stale .then() callbacks from running after unmount or reconnect
-  const cancelledRef = useRef(false)
+  const connectionAttemptRef = useRef(0)
   // Stable refs for callbacks — avoids effect re-runs when consumers pass unstable functions
   const createSessionRef = useRef(createSession)
   const createDebugContainerRef = useRef(createDebugContainer)
@@ -61,9 +66,12 @@ export function TerminalTab({
   const [isConnecting, setIsConnecting] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [errorType, setErrorType] = useState<string | null>(null)
+  const [failedExecutable, setFailedExecutable] = useState<string>()
   const [failedPodUID, setFailedPodUID] = useState<string>()
   const [isCreatingDebug, setIsCreatingDebug] = useState(false)
-  const [selectedContainer, setSelectedContainer] = useState(containerName)
+  const [localContainer, setLocalContainer] = useState(containerName)
+  const selectedContainer = onContainerChange ? containerName : localContainer
+  const selectContainer = onContainerChange ?? setLocalContainer
   const [hasSelection, setHasSelection] = useState(false)
   const { confirmPaste, pasteDialog } = useMultilinePasteConfirm()
   const search = useTerminalSearch(isActive)
@@ -77,8 +85,11 @@ export function TerminalTab({
   const connect = useCallback(() => {
     if (!terminalRef.current) return
 
-    cancelledRef.current = false
+    const attempt = ++connectionAttemptRef.current
+    const isCurrent = () => attempt === connectionAttemptRef.current
+    setIsConnected(false)
     setFailedPodUID(undefined)
+    setFailedExecutable(undefined)
     setIsConnecting(true)
     setError(null)
     setErrorType(null)
@@ -141,6 +152,7 @@ export function TerminalTab({
     attachTerminalKeys(xterm, { onFind: openSearch })
 
     const doFit = (ws?: WebSocket) => {
+      if (!isCurrent()) return
       const dims = fitAddon.proposeDimensions()
       if (dims) xterm.resize(dims.cols, dims.rows)
       const conn = ws ?? wsRef.current
@@ -171,7 +183,7 @@ export function TerminalTab({
       lastHeight = height
       if (resizeTimeout) clearTimeout(resizeTimeout)
       resizeTimeout = setTimeout(() => {
-        if (!fitAddonRef.current || !xtermRef.current) return
+        if (!isCurrent() || !fitAddonRef.current || !xtermRef.current) return
         const dims = fitAddonRef.current.proposeDimensions()
         if (dims) xtermRef.current.resize(dims.cols, dims.rows)
         const conn = wsRef.current
@@ -182,38 +194,56 @@ export function TerminalTab({
     })
     resizeObserver.observe(terminalRef.current)
     cleanupRef.current = () => {
+      if (resizeTimeout) clearTimeout(resizeTimeout)
       resizeObserver.disconnect()
       disposeClipboard()
       detachSearch()
     }
 
-    createSessionRef.current(selectedContainer)
+    const uid = reviewedPodUID.current
+    const session = uid ? createSessionRef.current(selectedContainer, uid) : createSessionRef.current(selectedContainer)
+    session
       .then(({ wsUrl }) => {
-        if (cancelledRef.current) return
+        if (!isCurrent()) return
         const ws = new WebSocket(wsUrl)
         wsRef.current = ws
 
         ws.onopen = () => {
+          if (!isCurrent()) return
           setIsConnected(true)
           setIsConnecting(false)
           doFit(ws)
           restoreFocus()
         }
 
+        let receivedOutput = false
         ws.onmessage = (event) => {
+          if (!isCurrent()) return
           let msg: Record<string, string> | null = null
           try {
             msg = JSON.parse(event.data as string) as Record<string, string>
           } catch {
+            receivedOutput = true
             xterm.write(event.data as string)
             return
           }
           if (msg.type === 'output' && msg.data) {
+            receivedOutput = true
             xterm.write(msg.data)
           } else if (msg.type === 'exit') {
             xterm.write('\r\n\x1b[2m[Process exited]\x1b[0m\r\n')
           } else if (msg.type === 'error' && msg.data) {
+            setIsConnecting(false)
+            // Once the server identifies the Pod, every retry in this tab stays on it,
+            // including after a later UID-mismatch error that reports no identifier.
+            if (msg.podUID) reviewedPodUID.current ??= msg.podUID
+            if (receivedOutput && !command) {
+              xterm.write(`\r\n${msg.data}\r\n`)
+              setIsConnected(false)
+              return
+            }
             setFailedPodUID(msg.podUID)
+            setFailedExecutable(msg.executable)
             setError(msg.data)
             // Support both camelCase (radar) and snake_case (conduit) error type field
             setErrorType(msg.errorType ?? msg.error_type ?? 'exec_error')
@@ -222,43 +252,43 @@ export function TerminalTab({
         }
 
         ws.onerror = () => {
+          if (!isCurrent()) return
           setError((prev) => prev || 'Connection error')
           setIsConnected(false)
           setIsConnecting(false)
         }
 
         ws.onclose = () => {
+          if (!isCurrent()) return
           setIsConnected(false)
           setIsConnecting(false)
           xterm.write('\r\n\x1b[31mConnection closed\x1b[0m\r\n')
         }
 
         xterm.onData((data: string) => {
+          if (!isCurrent()) return
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'input', data }))
           }
         })
       })
       .catch((err) => {
+        if (!isCurrent()) return
         setError(err instanceof Error ? err.message : 'Failed to connect')
         setErrorType('exec_error')
         setIsConnecting(false)
       })
-  }, [namespace, podName, selectedContainer, attachSearch, openSearch, restoreFocus])
+  }, [namespace, podName, selectedContainer, command, attachSearch, openSearch, restoreFocus])
 
   useEffect(() => {
     connect()
     return () => {
-      cancelledRef.current = true
+      connectionAttemptRef.current++
       cleanupRef.current?.()
       wsRef.current?.close()
       xtermRef.current?.dispose()
     }
   }, [connect])
-
-  const handleContainerChange = useCallback((container: string) => {
-    setSelectedContainer(container)
-  }, [])
 
   const handleCreateDebugContainer = useCallback(async () => {
     if (!createDebugContainerRef.current) return
@@ -267,14 +297,14 @@ export function TerminalTab({
       const { containerName: newContainer } = await createDebugContainerRef.current(selectedContainer)
       setError(null)
       setErrorType(null)
-      setSelectedContainer(newContainer)
+      selectContainer(newContainer)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create debug container')
       setErrorType('exec_error')
     } finally {
       setIsCreatingDebug(false)
     }
-  }, [selectedContainer])
+  }, [selectedContainer, selectContainer])
 
   // Refit when tab becomes active (may have been resized while hidden)
   useEffect(() => {
@@ -285,6 +315,7 @@ export function TerminalTab({
     }
   }, [isActive, restoreFocus])
 
+  const retryShell = !command && !!error && errorType === 'shell_not_found'
   return (
     <div className="relative h-full w-full bg-theme-base overflow-hidden">
       {/* Mini toolbar */}
@@ -299,28 +330,32 @@ export function TerminalTab({
         <span className="text-xs text-theme-text-tertiary">{podName}</span>
         {note && <span className="truncate text-xs text-theme-text-secondary">{note}</span>}
 
-        {!command && containers.length > 1 && (
-          <div className="relative">
-            <select
-              value={selectedContainer}
-              onChange={(e) => handleContainerChange(e.target.value)}
-              className="appearance-none bg-theme-elevated text-xs text-theme-text-primary px-2 py-0.5 pr-5 rounded border border-theme-border-light focus:outline-none focus:ring-1 focus:ring-blue-500"
-            >
-              {containers.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-            <ChevronDown className="absolute right-1 top-1/2 -translate-y-1/2 w-3 h-3 text-theme-text-tertiary pointer-events-none" />
-          </div>
+        {!command && containers.some(name => name !== selectedContainer) && (
+          <label className="flex min-w-0 items-center gap-1 text-xs text-theme-text-secondary">
+            Container
+            <span className="relative min-w-0">
+              <select aria-label="Terminal container"
+                value={selectedContainer}
+                onChange={(e) => selectContainer(e.target.value)}
+                className="max-w-full appearance-none bg-theme-elevated text-xs text-theme-text-primary px-2 py-0.5 pr-5 rounded border border-theme-border-light focus:outline-none focus:ring-1 focus:ring-blue-500"
+              >
+                {!containers.includes(selectedContainer) && <option value={selectedContainer} disabled>{selectedContainer}</option>}
+                {containers.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+              <ChevronDown className="absolute right-1 top-1/2 -translate-y-1/2 w-3 h-3 text-theme-text-tertiary pointer-events-none" />
+            </span>
+          </label>
         )}
 
-        {!isConnected && !isConnecting && (
+        {(retryShell || (!isConnected && !isConnecting && errorType !== 'pod_replaced')) && (
           <button
             onClick={connect}
             className="flex items-center gap-1 px-2 py-0.5 text-xs text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
           >
             <RefreshCw className="w-3 h-3" />
-            Reconnect
+            {retryShell ? 'Retry terminal' : 'Reconnect'}
           </button>
         )}
 
@@ -335,21 +370,22 @@ export function TerminalTab({
 
       <div ref={terminalRef} className="absolute top-8 left-0 right-0 bottom-0 bg-[#0f172a] [&_.xterm-viewport]:!bg-[#0f172a]" />
       {error && (
-        <div key="error" className="absolute top-8 left-0 right-0 bottom-0 flex flex-col items-center justify-center p-4 text-center bg-theme-base">
-          {errorType === 'shell_not_found' ? (
+        <div key="error" className="absolute top-8 left-0 right-0 bottom-0 flex flex-col items-center justify-center-safe overflow-y-auto p-4 text-center bg-theme-base">
+          {errorType === 'pod_replaced' ? <>
+            <div className="mb-2 text-sm font-medium text-theme-text-primary">The original Pod was replaced</div>
+            <p className="mb-3 text-xs text-theme-text-secondary">This terminal belongs to the previous Pod. Review the current Pod before opening a new terminal.</p>
+            {podDetailsLink || <p className="text-xs text-theme-text-secondary">Close this tab and open the Pod in Resources.</p>}
+          </> : errorType === 'shell_not_found' ? (
             <>
-              <div className="text-warning-text mb-2 text-sm">{command ? 'Command not available' : 'Shell not available'}</div>
+              <div className="text-warning-text mb-2 break-words text-sm font-medium">{command ? 'Command not available' : <>Couldn’t start a shell in container <code className="inline-code">{selectedContainer}</code></>}</div>
               {command ? (
                 <div className="text-xs text-theme-text-tertiary mb-4 max-w-md">
-                  Container <span className="font-mono text-theme-text-secondary">{selectedContainer}</span> could not start <span className="font-mono text-theme-text-secondary">{command}</span>. Check that the executable is installed in this container.
+                  Container <code className="inline-code">{selectedContainer}</code> could not start <code className="inline-code">{command}</code>. Check that the executable is installed in this container.
                 </div>
               ) : <div className="text-xs text-theme-text-tertiary mb-4 max-w-md">
-                Container <span className="font-mono text-theme-text-secondary">{selectedContainer}</span> doesn&apos;t
-                have a shell (/bin/sh). This is common with distroless or minimal container images.
-                {containers.length > 1 && ' Try another container above.'}
-                {createDebugContainer && ' You can create a debug container to troubleshoot.'}
+                {failedExecutable ? <>This image may not include <code className="inline-code">{failedExecutable}</code>.</> : 'This image may not include a shell.'}
               </div>}
-              <div className="flex gap-2">
+              <div className="flex w-full min-w-0 max-w-md flex-wrap items-center justify-center gap-2">
                 {!command && failedPodUID && renderDebugAction?.(selectedContainer, failedPodUID)}
                 {!command && !renderDebugAction && createDebugContainerRef.current && (
                   <button
@@ -364,19 +400,20 @@ export function TerminalTab({
                     )}
                   </button>
                 )}
-                <button
+                {command && <button
                   onClick={connect}
                   className="flex items-center gap-2 px-3 py-1.5 bg-theme-elevated text-theme-text-primary text-xs rounded hover:bg-theme-hover"
                 >
                   <RefreshCw className="w-3 h-3" />
                   Retry
-                </button>
+                </button>}
               </div>
             </>
           ) : (
             <>
               <div className={clsx(toneTextClass('unhealthy'), 'mb-2 text-sm')}>Failed to connect</div>
               <div className="text-xs text-theme-text-secondary mb-3">{error}</div>
+              {podDetailsLink}
               <button
                 onClick={connect}
                 className="flex items-center gap-2 px-3 py-1.5 btn-brand text-xs rounded"

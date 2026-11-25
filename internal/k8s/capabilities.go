@@ -115,6 +115,7 @@ func (r *PermissionCheckResult) CredentialRejectedNamespaces(resource string, na
 type Capabilities struct {
 	ConfigManagement       string                   `json:"configManagement"`
 	Exec                   bool                     `json:"exec"` // Can create pods/exec (terminal feature)
+	PodExecUID             bool                     `json:"podExecUID,omitempty"`
 	PodDebugImage          string                   `json:"podDebugImage,omitempty"`
 	PodDebug               bool                     `json:"podDebug,omitempty"` // Scoped to the requested namespace.
 	LocalTerminal          bool                     `json:"localTerminal"`      // Local terminal available (not in-cluster, not disabled)
@@ -205,6 +206,7 @@ type FeatureCapabilities struct {
 	// GET /api/issues/recent-changes, the one change each listed issue row
 	// names.
 	IssueCorrelation bool `json:"issueCorrelation"`
+	PodDebugAccess   bool `json:"podDebugAccess"`
 	PodEnvironment   bool `json:"podEnvironment"`  // GET /api/pods/{namespace}/{name}/environment
 	PolicyResource   bool `json:"policyResource"`  // GET /api/policy/resource/{kind}/{namespace}/{name}
 	WorkloadHistory  bool `json:"workloadHistory"` // GET /api/workloads/{kind}/{namespace}/{name}/history
@@ -222,10 +224,14 @@ type FeatureCapabilities struct {
 	VeleroDeleteBackup bool `json:"veleroDeleteBackup"`
 	// DELETE /api/resources/... honours ?uid=&resourceVersion= preconditions
 	ResourceDeletePreconditions bool `json:"resourceDeletePreconditions"`
-	ServiceEndpointSlices       bool `json:"serviceEndpointSlices"` // GET /api/services/{namespace}/{name}/endpointslices
-	TrafficRecords              bool `json:"trafficRecords"`        // GET /api/traffic/flows/records
-	GitOpsWriteEvidence         bool `json:"gitopsWriteEvidence"`   // POST /api/gitops/write-evidence
-	AgentSigninCheck            bool `json:"agentSigninCheck"`      // GET /api/agents/signin
+	// POST /api/workloads/{kind}/{ns}/{name}/restart accepts {uid, resourceVersion};
+	// an older Radar ignores the body and restarts unconditionally.
+	WorkloadRestartPreconditions bool `json:"workloadRestartPreconditions"`
+	ServiceEndpointSlices        bool `json:"serviceEndpointSlices"`    // GET /api/services/{namespace}/{name}/endpointslices
+	TrafficRecords               bool `json:"trafficRecords"`           // GET /api/traffic/flows/records
+	GitOpsWriteEvidence          bool `json:"gitopsWriteEvidence"`      // POST /api/gitops/write-evidence
+	GitOpsActionCapabilities     bool `json:"gitopsActionCapabilities"` // GET /api/gitops/capabilities/{kind}/{namespace}/{name}
+	AgentSigninCheck             bool `json:"agentSigninCheck"`         // GET /api/agents/signin
 	// POST /api/argo/applications/{namespace}/{name}/rollback starts a sync to
 	// the history entry (id 0 included), and .../resume also clears
 	// spec.syncPolicy.automated.enabled: false. An older Radar writes an
@@ -267,21 +273,61 @@ type FeatureCapabilities struct {
 	CronJobTriggerJobName bool `json:"cronJobTriggerJobName"`
 	// GET /api/sealedsecrets/cert
 	SealedSecretsCert bool `json:"sealedSecretsCert"`
+	// POST /api/workflows/{namespace}/{name}/stop
+	WorkflowStop bool `json:"workflowStop"`
+	// POST /api/workflowtemplates/{namespace}/{name}/submit
+	WorkflowTemplateSubmit bool `json:"workflowTemplateSubmit"`
+
+	// GET /api/metrics/openobserve/collector.
+	OpenObserveCollectorPresence bool `json:"openobserveCollectorPresence"`
+	// GET/DELETE /api/integrations/openobserve, POST .../setup and DELETE
+	// .../cluster: local Radar's OpenObserve setup in Settings → Metrics.
+	OpenObserveLocalSetup bool `json:"openobserveLocalSetup"`
 }
 
-// WorkloadWritePermissions indicates which workload resources the user can patch.
+// WorkloadWritePermissions indicates which workload resources the user can
+// patch, plus whether they can create Workflows.
 type WorkloadWritePermissions struct {
 	Deployments  bool `json:"deployments"`
 	DaemonSets   bool `json:"daemonSets"`
 	StatefulSets bool `json:"statefulSets"`
 	Rollouts     bool `json:"rollouts"`
+	Workflows    bool `json:"workflows"` // Argo Workflows: Stop and Terminate patch spec.shutdown
+	// Argo Workflows: create, to submit a WorkflowTemplate.
+	CreateWorkflows bool `json:"createWorkflows"`
 }
 
 type WorkloadWriteCapabilityErrors struct {
-	Deployments  bool
-	DaemonSets   bool
-	StatefulSets bool
-	Rollouts     bool
+	Deployments     bool
+	DaemonSets      bool
+	StatefulSets    bool
+	Rollouts        bool
+	Workflows       bool
+	CreateWorkflows bool
+}
+
+// workloadWriteChecks lists the workload write permissions in the order their
+// checks are started. Each is checked globally and per namespace, as Radar and as the
+// caller, and merged per namespace by MergeWorkloadWrites.
+var workloadWriteChecks = []struct {
+	group, resource, verb string
+	permission            func(*WorkloadWritePermissions) *bool
+	apiError              func(*WorkloadWriteCapabilityErrors) *bool
+}{
+	{"apps", "deployments", "patch", func(p *WorkloadWritePermissions) *bool { return &p.Deployments }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.Deployments }},
+	{"apps", "daemonsets", "patch", func(p *WorkloadWritePermissions) *bool { return &p.DaemonSets }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.DaemonSets }},
+	{"apps", "statefulsets", "patch", func(p *WorkloadWritePermissions) *bool { return &p.StatefulSets }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.StatefulSets }},
+	{"argoproj.io", "rollouts", "patch", func(p *WorkloadWritePermissions) *bool { return &p.Rollouts }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.Rollouts }},
+	{"argoproj.io", "workflows", "patch", func(p *WorkloadWritePermissions) *bool { return &p.Workflows }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.Workflows }},
+	{"argoproj.io", "workflows", "create", func(p *WorkloadWritePermissions) *bool { return &p.CreateWorkflows }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.CreateWorkflows }},
+}
+
+// MergeWorkloadWrites folds one namespace's workload write answers into the
+// global ones, field by field, in table order.
+func MergeWorkloadWrites(global *WorkloadWritePermissions, namespaced WorkloadWritePermissions, errs WorkloadWriteCapabilityErrors, merge func(global, namespaced, errored bool) bool) {
+	for _, c := range workloadWriteChecks {
+		*c.permission(global) = merge(*c.permission(global), *c.permission(&namespaced), *c.apiError(&errs))
+	}
 }
 
 type NamespaceCapabilityErrors struct {
@@ -471,10 +517,9 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 		{resource: "secrets", verb: "update", result: &caps.SecretsUpdate, namespaceFallback: true},
 		{resource: "secrets", verb: "create", result: &caps.HelmWrite, namespaceFallback: true},
 		{resource: "nodes", verb: "patch", result: &caps.NodeWrite, namespaceFallback: true},
-		{group: "apps", resource: "deployments", verb: "patch", result: &caps.WorkloadWrites.Deployments},
-		{group: "apps", resource: "daemonsets", verb: "patch", result: &caps.WorkloadWrites.DaemonSets},
-		{group: "apps", resource: "statefulsets", verb: "patch", result: &caps.WorkloadWrites.StatefulSets},
-		{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &caps.WorkloadWrites.Rollouts},
+	}
+	for _, w := range workloadWriteChecks {
+		checks = append(checks, capCheck{group: w.group, resource: w.resource, verb: w.verb, result: w.permission(&caps.WorkloadWrites)})
 	}
 
 	var wg sync.WaitGroup
@@ -612,11 +657,10 @@ func CheckNamespaceCapabilities(ctx context.Context, namespace string) (*Namespa
 	checks = append(checks,
 		capCheck{resource: "pods/log", verb: "get", result: &result.Logs, apiError: &result.Errors.Logs},
 		capCheck{resource: "pods/portforward", verb: "create", result: &result.PortForward, apiError: &result.Errors.PortForward},
-		capCheck{group: "apps", resource: "deployments", verb: "patch", result: &result.WorkloadWrites.Deployments, apiError: &result.Errors.WorkloadWrites.Deployments},
-		capCheck{group: "apps", resource: "daemonsets", verb: "patch", result: &result.WorkloadWrites.DaemonSets, apiError: &result.Errors.WorkloadWrites.DaemonSets},
-		capCheck{group: "apps", resource: "statefulsets", verb: "patch", result: &result.WorkloadWrites.StatefulSets, apiError: &result.Errors.WorkloadWrites.StatefulSets},
-		capCheck{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &result.WorkloadWrites.Rollouts, apiError: &result.Errors.WorkloadWrites.Rollouts},
 	)
+	for _, w := range workloadWriteChecks {
+		checks = append(checks, capCheck{group: w.group, resource: w.resource, verb: w.verb, result: w.permission(&result.WorkloadWrites), apiError: w.apiError(&result.Errors.WorkloadWrites)})
+	}
 	if !ForceDisableHelmWrite {
 		checks = append(checks, capCheck{resource: "secrets", verb: "create", result: &result.HelmWrite, apiError: &result.Errors.HelmWrite})
 	}
@@ -752,10 +796,9 @@ func (state *permissionState) checkCapabilitiesForUser(conn *Connection, fallbac
 		{resource: "secrets", verb: "update", result: &caps.SecretsUpdate, namespaceFallback: true},
 		{resource: "secrets", verb: "create", result: &caps.HelmWrite, namespaceFallback: true},
 		{resource: "nodes", verb: "patch", result: &caps.NodeWrite, namespaceFallback: true},
-		{group: "apps", resource: "deployments", verb: "patch", result: &caps.WorkloadWrites.Deployments},
-		{group: "apps", resource: "daemonsets", verb: "patch", result: &caps.WorkloadWrites.DaemonSets},
-		{group: "apps", resource: "statefulsets", verb: "patch", result: &caps.WorkloadWrites.StatefulSets},
-		{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &caps.WorkloadWrites.Rollouts},
+	}
+	for _, w := range workloadWriteChecks {
+		checks = append(checks, capCheck{group: w.group, resource: w.resource, verb: w.verb, result: w.permission(&caps.WorkloadWrites)})
 	}
 
 	var hadErrors atomic.Bool
@@ -866,11 +909,10 @@ func CheckNamespaceCapabilitiesForUser(ctx context.Context, username string, gro
 	checks = append(checks,
 		capCheck{resource: "pods/log", verb: "get", result: &result.Logs, apiError: &result.Errors.Logs},
 		capCheck{resource: "pods/portforward", verb: "create", result: &result.PortForward, apiError: &result.Errors.PortForward},
-		capCheck{group: "apps", resource: "deployments", verb: "patch", result: &result.WorkloadWrites.Deployments, apiError: &result.Errors.WorkloadWrites.Deployments},
-		capCheck{group: "apps", resource: "daemonsets", verb: "patch", result: &result.WorkloadWrites.DaemonSets, apiError: &result.Errors.WorkloadWrites.DaemonSets},
-		capCheck{group: "apps", resource: "statefulsets", verb: "patch", result: &result.WorkloadWrites.StatefulSets, apiError: &result.Errors.WorkloadWrites.StatefulSets},
-		capCheck{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &result.WorkloadWrites.Rollouts, apiError: &result.Errors.WorkloadWrites.Rollouts},
 	)
+	for _, w := range workloadWriteChecks {
+		checks = append(checks, capCheck{group: w.group, resource: w.resource, verb: w.verb, result: w.permission(&result.WorkloadWrites), apiError: w.apiError(&result.Errors.WorkloadWrites)})
+	}
 	if !ForceDisableHelmWrite {
 		checks = append(checks, capCheck{resource: "secrets", verb: "create", result: &result.HelmWrite, apiError: &result.Errors.HelmWrite})
 	}

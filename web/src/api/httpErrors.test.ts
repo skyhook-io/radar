@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, fetchJSON } from './client'
-import { CHI_UNKNOWN_ROUTE_BODY, httpStatusMessage, isUnknownRouteResponse, nonJsonErrorMessage, readErrorResponse } from './httpErrors'
+import { CHI_UNKNOWN_ROUTE_BODY, GitOpsActionError, httpStatusMessage, isUnknownRouteResponse, nonJsonErrorMessage, readErrorResponse } from './httpErrors'
 
 const TEXT = 'text/plain; charset=utf-8'
 
@@ -91,5 +91,34 @@ describe('fetchJSON error fallback', () => {
     const error = (await fetchJSON('/pods/default/web/environment').catch((e: unknown) => e)) as ApiError
     expect(error.message).toBe('pods "web" not found')
     expect(error.unknownRoute).toBe(false)
+  })
+})
+
+describe('GitOpsActionError', () => {
+  it.each(['rbac_denied', 'admission_denied'])('shows the server summary and retains the original %s response', error_code => {
+    const note = 'Reconcile already requested for HelmRepository charts/repo.'
+    const raw = `upstream error. ${note}`
+    const error = new GitOpsActionError({ error: raw, error_code, summary: 'Request rejected', note }, 403)
+    expect(error.message).toBe(`Request rejected\n${note}`)
+    expect(error.rawDetail).toBe(raw)
+  })
+
+  it('adds request context only to the notification', () => {
+    const error = new GitOpsActionError({
+      error: 'original webhook error',
+      error_code: 'admission_denied',
+      summary: 'Request for HelmChart charts/shared rejected by admission webhook freeze',
+      note: 'Reconcile already requested for HelmRepository charts/repo.',
+    }, 403, 'apps/storefront on prod')
+    expect(error.notificationDetail).toBe(`apps/storefront on prod\n${error.message}`)
+    expect(error.rawDetail).toBe('original webhook error')
+    expect(error.message).not.toContain('apps/storefront')
+  })
+
+  it('preserves a plain 403 from an older connected Radar without guessing its cause', () => {
+    const message = 'an upstream request was forbidden'
+    const error = new GitOpsActionError({ error: message }, 403)
+    expect(error.message).toBe(message)
+    expect(error.rawDetail).toBeUndefined()
   })
 })
