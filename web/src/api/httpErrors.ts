@@ -111,3 +111,20 @@ export function markShownInline(error: Error): void {
 export function isShownInline(error: unknown): boolean {
   return error instanceof Error && (error as Error & { shownInline?: boolean }).shownInline === true
 }
+
+export class GitOpsActionError extends Error {
+  readonly rawDetail?: string
+
+  constructor(body: ErrorBody, status: number, readonly requestTarget?: string) {
+    const raw = body.error || `HTTP ${status}`
+    const classified = body.error_code === 'rbac_denied' || body.error_code === 'admission_denied'
+    const summary = classified && typeof body.summary === 'string' && body.summary ? body.summary : raw
+    super(summary !== raw && body.note ? `${summary}\n${body.note}` : summary)
+    this.name = 'GitOpsActionError'
+    if (summary !== raw) this.rawDetail = raw
+  }
+
+  get notificationDetail(): string {
+    return this.requestTarget ? `${this.requestTarget}\n${this.message}` : this.message
+  }
+}

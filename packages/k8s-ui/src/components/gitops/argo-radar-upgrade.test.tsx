@@ -286,7 +286,10 @@ describe("the drawer's Sync with an options dialog", () => {
     await act(async () => dialogButton('Sync now').click())
     expect(onArgoSync).toHaveBeenCalledTimes(1)
     expect(dialog().textContent).toContain('Sync now')
-    expect(dialog().querySelector('[role="alert"]')?.textContent).toBe('Sync failed: denied')
+    const alert = dialog().querySelector('[role="alert"]')
+    expect(alert?.textContent).toBe('Sync failed: denied')
+    const syncControls = dialogButton('Sync now').closest('[role="group"][aria-label="Sync controls"]')
+    expect(syncControls?.contains(alert)).toBe(true)
     expect(prune().checked).toBe(true)
     fail = false
     await act(async () => dialogButton('Sync now').click())
@@ -334,6 +337,31 @@ describe("the drawer's Sync with an options dialog", () => {
     await act(async () => dialogButton('Sync now').click())
     expect(onArgoSync.mock.calls[0][0]).toMatchObject({ name: 'other', prune: false })
     await close()
+  })
+
+  it.each(['success', 'failure'])('ignores a late %s from an earlier dialog for the same Application', async (outcome) => {
+    let finish!: () => void
+    const onArgoSync = vi.fn<OnArgoSync>(() => new Promise<void>((resolve, reject) => {
+      finish = outcome === 'success' ? resolve : () => reject(new Error('earlier Sync denied'))
+    }))
+    const { rerender, close } = await open(onArgoSync)
+    try {
+      await act(async () => dialogButton('Sync now').click())
+      const { isErrorShownInline } = onArgoSync.mock.calls[0][0] as { isErrorShownInline: () => boolean }
+      expect(isErrorShownInline()).toBe(true)
+      await rerender('other')
+      await rerender('guestbook')
+      const reopen = [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Sync…')!
+      await act(async () => reopen.click())
+      expect(isErrorShownInline()).toBe(false)
+
+      await act(async () => finish())
+      expect(dialog().closest('[inert]')).toBeNull()
+      expect(dialogButton('Sync now').disabled).toBe(false)
+      expect(dialog().querySelector('[role="alert"]')).toBeNull()
+    } finally {
+      await close()
+    }
   })
 
   it("syncs with the dialog's choices and the Application's options", async () => {

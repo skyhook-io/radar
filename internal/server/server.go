@@ -5645,7 +5645,11 @@ func (s *Server) writeSwitchPreflightError(w http.ResponseWriter, prefix string,
 }
 
 func (s *Server) writeError(w http.ResponseWriter, status int, message string) {
-	body := map[string]string{"error": message}
+	s.writeErrorFields(w, status, message, map[string]string{})
+}
+
+func (s *Server) writeErrorFields(w http.ResponseWriter, status int, message string, body map[string]string) {
+	body["error"] = message
 	if k8s.IsUserTokenRequired(message) {
 		status = http.StatusForbidden
 		body["reason"] = pkgauth.UserTokenRequiredReason
