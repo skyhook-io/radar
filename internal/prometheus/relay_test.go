@@ -106,6 +106,9 @@ func TestRelayServesEveryPathAndNeverReachesPrometheus(t *testing.T) {
 	if !ok || !scope.SingleCluster || len(scope.ClusterLabels) != 0 {
 		t.Fatalf("relay scope not bound: %+v ok=%v", scope, ok)
 	}
+	if aside, ok := OperatorScopeDuringRelay(); !ok || aside.ClusterLabels["cluster"] != "prod" {
+		t.Fatalf("operator scope set aside = %+v ok=%v, want the configured cluster label", aside, ok)
+	}
 
 	ctx := t.Context()
 	if _, err := c.Query(ctx, "up"); err != nil {
@@ -151,6 +154,9 @@ func TestRelayServesEveryPathAndNeverReachesPrometheus(t *testing.T) {
 
 	if !DisableRelay() {
 		t.Fatal("DisableRelay reported no relay")
+	}
+	if _, ok := OperatorScopeDuringRelay(); ok {
+		t.Fatal("operator scope reported with no relay active")
 	}
 	if _, err := c.Query(ctx, "up"); err != nil {
 		t.Fatalf("query after relay ended: %v", err)

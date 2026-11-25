@@ -812,7 +812,15 @@ func (c *CarettaSource) resolveClusterScope(ctx context.Context) (clusterScope, 
 		// Caretta reads the configured store directly, but while an
 		// OpenObserve relay serves metrics the shared cluster check answers
 		// for OpenObserve ("one cluster, nothing to filter"), not for this
-		// store. Read it unfiltered and say it may hold other clusters'.
+		// store. The operator's own scope for the store still applies;
+		// without one, read it unfiltered and say it may hold other clusters'.
+		if scope, ok := operatorScopeDuringRelay(); ok {
+			m, err := scope.Matchers()
+			if err != nil {
+				return clusterScope{}, err
+			}
+			return clusterScope{matchers: m, labels: scope.ClusterLabels}, nil
+		}
 		return clusterScope{mixed: true}, nil
 	}
 	return scopeForMetric(ctx, "caretta_links_observed", "", c.metricsURL != "", 0)

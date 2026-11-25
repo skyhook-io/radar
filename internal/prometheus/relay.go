@@ -175,6 +175,26 @@ func RelayActive() bool {
 	return activeRelay != nil
 }
 
+// OperatorScopeDuringRelay returns the cluster scope an operator configured
+// for the Prometheus store, which the active relay set aside. ok is false when
+// no relay is active or no scope was configured.
+func OperatorScopeDuringRelay() (scope prom.WorkloadMetricsScope, ok bool) {
+	clientMu.RLock()
+	st := activeRelay
+	clientMu.RUnlock()
+	if st == nil {
+		return prom.WorkloadMetricsScope{}, false
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.saved.scope == nil {
+		return prom.WorkloadMetricsScope{}, false
+	}
+	scope = *st.saved.scope
+	scope.ClusterLabels = maps.Clone(scope.ClusterLabels)
+	return scope, true
+}
+
 func (c *Client) prometheusSettingsLocked() prometheusSettings {
 	s := prometheusSettings{captured: true, scopeEverSet: c.workloadScopeEverSet, beylaJobSelector: c.beylaJobSelector}
 	if c.workloadScope != nil {

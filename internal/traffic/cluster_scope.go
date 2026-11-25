@@ -43,6 +43,10 @@ var resolveTrafficScope = func(ctx context.Context, metric, selector string, win
 // variable so tests can stand in for the Prometheus client.
 var metricsRelayActive = promclient.RelayActive
 
+// operatorScopeDuringRelay is the scope an operator configured for the
+// Prometheus store, set aside while a relay is active. A variable for tests.
+var operatorScopeDuringRelay = promclient.OperatorScopeDuringRelay
+
 // trafficSpansClusters reports whether metric's series carry more than one
 // cluster identity. A variable so tests can stand in for the Prometheus client.
 var trafficSpansClusters = func(ctx context.Context, metric, selector string, window time.Duration) (bool, error) {
