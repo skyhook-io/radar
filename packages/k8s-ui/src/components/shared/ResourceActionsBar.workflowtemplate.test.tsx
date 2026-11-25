@@ -14,6 +14,7 @@ function template(resourceVersion = '7') {
     metadata: { name: 'migrate', namespace: 'jobs', uid: 'template-1', resourceVersion },
     spec: {
       serviceAccountName: 'migrator',
+      entrypoint: 'main',
       arguments: { parameters: [{ name: 'target' }, { name: 'batch', value: '10' }] },
     },
   }
@@ -113,6 +114,35 @@ describe('WorkflowTemplate Submit', () => {
     expect(third.parameters.target).toBe('payments')
     await act(async () => { await new Promise(r => setTimeout(r, 0)) })
     expect(onSubmitWorkflowTemplate).toHaveBeenCalledTimes(3)
+  })
+
+  it('after a failed attempt, still lets the unchanged request be repeated when the template changes', async () => {
+    const onSubmitWorkflowTemplate = vi.fn<(s: WorkflowTemplateSubmission) => Promise<unknown>>(() => Promise.reject(new Error('timeout')))
+    const props = { onSubmitWorkflowTemplate }
+    render(props)
+    act(() => button('Submit…')!.click())
+    type('target', 'orders')
+    await act(async () => { button('Submit')!.click() })
+    rerender(props, template('8'))
+    expect(document.body.textContent).toContain('Submitting again repeats your last attempt')
+    await act(async () => { button('Submit')!.click() })
+    const [first, second] = onSubmitWorkflowTemplate.mock.calls.map(c => c[0])
+    expect(second).toEqual(first)
+    expect(second.resourceVersion).toBe('7')
+
+    type('target', 'payments')
+    expect(button('Submit')!.disabled).toBe(true)
+    expect(document.body.textContent).toContain('Close and open Submit again')
+  })
+
+  it('explains a template without an entrypoint instead of submitting it', () => {
+    const data = template()
+    delete (data.spec as { entrypoint?: string }).entrypoint
+    render({ onSubmitWorkflowTemplate: vi.fn() }, data)
+    act(() => button('Submit…')!.click())
+    type('target', 'orders')
+    expect(document.body.textContent).toContain('has no entrypoint')
+    expect(button('Submit')!.disabled).toBe(true)
   })
 
   it('refuses to submit once the template changes under the dialog', () => {

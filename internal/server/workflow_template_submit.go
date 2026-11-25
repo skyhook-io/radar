@@ -42,11 +42,13 @@ const (
 // WorkflowTemplate. Every field is optional; an empty body starts a run with
 // the template's defaults and a generated name.
 type WorkflowTemplateSubmitRequest struct {
-	// Parameters sets values for parameters the template declares in
-	// spec.arguments.parameters. A declared parameter with neither a value nor
-	// valueFrom must be set here; a parameter with an enum must use one of
-	// its values; a name the template does not declare is refused.
-	Parameters map[string]string `json:"parameters,omitempty"`
+	// Parameters sets values for the parameters the template declares: its
+	// spec.arguments.parameters, and the inputs of its entrypoint template,
+	// which Argo fills from a Workflow's arguments by name. A parameter with
+	// no value of its own must be set here; a value must be one of the
+	// parameter's enum when it has one; a name the template does not declare
+	// is refused, and so is a null value.
+	Parameters map[string]*string `json:"parameters,omitempty"`
 	// Name names the Workflow. At most one of Name and GenerateName.
 	Name string `json:"name,omitempty"`
 	// GenerateName is the prefix the API server completes. Defaults to
@@ -54,10 +56,11 @@ type WorkflowTemplateSubmitRequest struct {
 	GenerateName string `json:"generateName,omitempty"`
 	// Submission identifies one confirmation: 8–64 letters, digits or
 	// hyphens, stored on the Workflow as the radar.skyhook.io/submission
-	// annotation. It needs Name: a request whose answer was lost is safe to
-	// repeat unchanged, with the same name and submission, and then returns
-	// the Workflow already created. A Workflow that already has the name
-	// without that submission is a 409.
+	// annotation. It needs Name: a request whose answer was lost can be
+	// repeated unchanged, with the same name and submission, and returns the
+	// Workflow it created while that Workflow still exists. Once Argo or
+	// anyone deletes it, the repeat creates a new run. Another Workflow
+	// holding the name is a 409.
 	Submission string `json:"submission,omitempty"`
 	// ResourceVersion of the WorkflowTemplate the caller reviewed. A template
 	// that changed since is refused with 409. This covers only Radar's read:
@@ -126,12 +129,16 @@ func (s *Server) handleWorkflowTemplateSubmit(w http.ResponseWriter, r *http.Req
 	// for exists, so return it, even if the template has changed since.
 	if req.Name != "" && req.Submission != "" {
 		if existing, getErr := workflows.Get(r.Context(), req.Name, metav1.GetOptions{}); getErr == nil {
-			s.answerExistingWorkflow(w, existing, name, req.Submission)
+			s.answerExistingWorkflow(w, existing, name, req)
 			return
 		}
 	}
 	if req.ResourceVersion != "" && req.ResourceVersion != template.GetResourceVersion() {
 		s.writeErrorCode(w, http.StatusConflict, "workflow_template_changed", "the workflow template changed since you opened it; review it again before submitting")
+		return
+	}
+	if entrypoint, _, _ := unstructured.NestedString(template.Object, "spec", "entrypoint"); entrypoint == "" {
+		s.writeErrorCode(w, http.StatusBadRequest, "workflow_template_no_entrypoint", "the workflow template has no entrypoint, so a Workflow that references it cannot start")
 		return
 	}
 	arguments, problems := workflowArguments(template, req.Parameters)
@@ -142,11 +149,14 @@ func (s *Server) handleWorkflowTemplateSubmit(w http.ResponseWriter, r *http.Req
 
 	created, err := workflows.Create(r.Context(), workflowFromTemplate(template, req, arguments), metav1.CreateOptions{})
 	if apierrors.IsAlreadyExists(err) && req.Name != "" {
-		if existing, getErr := workflows.Get(r.Context(), req.Name, metav1.GetOptions{}); getErr == nil {
-			s.answerExistingWorkflow(w, existing, name, req.Submission)
+		existing, getErr := workflows.Get(r.Context(), req.Name, metav1.GetOptions{})
+		if getErr != nil {
+			// Possibly this request's own run, created before its answer was
+			// lost: never advise another name for a Workflow Radar can't see.
+			s.writeErrorCode(w, http.StatusConflict, "workflow_unverified", "a workflow with this name already exists, and Radar could not read it to tell whether this request created it; check the template's runs before submitting again")
 			return
 		}
-		s.writeErrorCode(w, http.StatusConflict, "workflow_name_taken", "a workflow with this name already exists; choose another name")
+		s.answerExistingWorkflow(w, existing, name, req)
 		return
 	}
 	if err != nil {
@@ -157,16 +167,38 @@ func (s *Server) handleWorkflowTemplateSubmit(w http.ResponseWriter, r *http.Req
 }
 
 // answerExistingWorkflow answers a request whose name is taken: with that
-// Workflow when this request's submission created it from this template,
-// otherwise 409.
-func (s *Server) answerExistingWorkflow(w http.ResponseWriter, existing *unstructured.Unstructured, template, submission string) {
+// Workflow when this request created it, otherwise 409.
+func (s *Server) answerExistingWorkflow(w http.ResponseWriter, existing *unstructured.Unstructured, template string, req *WorkflowTemplateSubmitRequest) {
 	ref, _, _ := unstructured.NestedString(existing.Object, "spec", "workflowTemplateRef", "name")
 	clusterScope, _, _ := unstructured.NestedBool(existing.Object, "spec", "workflowTemplateRef", "clusterScope")
-	if submission == "" || existing.GetAnnotations()[workflowSubmissionAnnotation] != submission || ref != template || clusterScope {
+	if req.Submission == "" || existing.GetAnnotations()[workflowSubmissionAnnotation] != req.Submission || ref != template || clusterScope {
 		s.writeErrorCode(w, http.StatusConflict, "workflow_name_taken", "a workflow with this name already exists; choose another name")
 		return
 	}
+	if !sameArguments(existing, req.Parameters) {
+		s.writeErrorCode(w, http.StatusConflict, "workflow_submission_reused", "this submission already created a workflow with different parameters; a changed request needs a new submission")
+		return
+	}
 	s.writeJSON(w, WorkflowTemplateSubmitResponse{Namespace: existing.GetNamespace(), Name: existing.GetName(), UID: string(existing.GetUID())})
+}
+
+// sameArguments reports whether a Workflow's arguments are the values a
+// request asks for: what workflowFromTemplate would have written for it.
+func sameArguments(existing *unstructured.Unstructured, values map[string]*string) bool {
+	params, _, _ := unstructured.NestedSlice(existing.Object, "spec", "arguments", "parameters")
+	if len(params) != len(values) {
+		return false
+	}
+	for _, item := range params {
+		param, _ := item.(map[string]any)
+		paramName, _ := param["name"].(string)
+		value, _ := param["value"].(string)
+		want, ok := values[paramName]
+		if !ok || want == nil || *want != value {
+			return false
+		}
+	}
+	return true
 }
 
 func (req *WorkflowTemplateSubmitRequest) problem() string {
@@ -185,48 +217,98 @@ func (req *WorkflowTemplateSubmitRequest) problem() string {
 	return ""
 }
 
+// declaredParameter is one parameter a submission may set.
+type declaredParameter struct {
+	name string
+	// satisfied: the run has a value without one from the request.
+	satisfied bool
+	enum      []any
+}
+
+// declaredParameters lists what a Workflow referencing the template can be
+// given: its spec.arguments.parameters, then the entrypoint template's inputs
+// those don't name. Argo passes a Workflow's arguments to the entrypoint's
+// inputs by name, so `argo submit --from` accepts either.
+func declaredParameters(template *unstructured.Unstructured) []declaredParameter {
+	var out []declaredParameter
+	seen := map[string]bool{}
+	add := func(items []any, defaultKeys ...string) {
+		for _, item := range items {
+			param, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			paramName, _ := param["name"].(string)
+			if paramName == "" || seen[paramName] {
+				continue
+			}
+			seen[paramName] = true
+			satisfied := false
+			for _, key := range defaultKeys {
+				if _, ok := param[key]; ok {
+					satisfied = true
+				}
+			}
+			// Argo resolves a ConfigMap reference for a submitted run; other
+			// sources (supplied, event) have nothing to read from.
+			if _, ok, _ := unstructured.NestedMap(param, "valueFrom", "configMapKeyRef"); ok {
+				satisfied = true
+			}
+			enum, _ := param["enum"].([]any)
+			out = append(out, declaredParameter{name: paramName, satisfied: satisfied, enum: enum})
+		}
+	}
+	arguments, _, _ := unstructured.NestedSlice(template.Object, "spec", "arguments", "parameters")
+	add(arguments, "value")
+	entrypoint, _, _ := unstructured.NestedString(template.Object, "spec", "entrypoint")
+	templates, _, _ := unstructured.NestedSlice(template.Object, "spec", "templates")
+	for _, item := range templates {
+		t, _ := item.(map[string]any)
+		if t == nil || t["name"] != entrypoint || entrypoint == "" {
+			continue
+		}
+		inputs, _, _ := unstructured.NestedSlice(t, "inputs", "parameters")
+		add(inputs, "value", "default")
+		break
+	}
+	return out
+}
+
 // workflowArguments checks the requested values against the parameters the
-// template declares, with Argo's own rules for a Workflow's arguments: a
-// parameter with neither value nor valueFrom needs one, and a value must be
-// one of the parameter's enum when it has one. It returns the requested
-// values in the template's order.
-func workflowArguments(template *unstructured.Unstructured, values map[string]string) ([]any, []string) {
-	declared, _, _ := unstructured.NestedSlice(template.Object, "spec", "arguments", "parameters")
+// template declares, with Argo's rules for a submitted Workflow: a parameter
+// with no value of its own needs one, and a value must be one of the
+// parameter's enum when it has one. It returns the requested values in the
+// template's order.
+func workflowArguments(template *unstructured.Unstructured, values map[string]*string) ([]any, []string) {
 	var arguments []any
 	var problems []string
 	known := map[string]bool{}
-	for _, item := range declared {
-		param, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		paramName, _ := param["name"].(string)
-		if paramName == "" || known[paramName] {
-			continue
-		}
-		known[paramName] = true
-		value, set := values[paramName]
+	for _, param := range declaredParameters(template) {
+		known[param.name] = true
+		value, set := values[param.name]
 		if !set {
-			_, hasValue := param["value"]
-			_, hasValueFrom := param["valueFrom"]
-			if !hasValue && !hasValueFrom {
-				problems = append(problems, fmt.Sprintf("parameter %q is required", paramName))
+			if !param.satisfied {
+				problems = append(problems, fmt.Sprintf("parameter %q is required", param.name))
 			}
 			continue
 		}
-		if enum, ok := param["enum"].([]any); ok && len(enum) > 0 {
-			allowed := make([]string, 0, len(enum))
-			for _, e := range enum {
+		if value == nil {
+			problems = append(problems, fmt.Sprintf("parameter %q is null; send a string", param.name))
+			continue
+		}
+		if len(param.enum) > 0 {
+			allowed := make([]string, 0, len(param.enum))
+			for _, e := range param.enum {
 				if s, ok := argoParameterString(e); ok {
 					allowed = append(allowed, s)
 				}
 			}
-			if !slices.Contains(allowed, value) {
-				problems = append(problems, fmt.Sprintf("parameter %q must be one of %s", paramName, strings.Join(allowed, ", ")))
+			if !slices.Contains(allowed, *value) {
+				problems = append(problems, fmt.Sprintf("parameter %q must be one of %s", param.name, strings.Join(allowed, ", ")))
 				continue
 			}
 		}
-		arguments = append(arguments, map[string]any{"name": paramName, "value": value})
+		arguments = append(arguments, map[string]any{"name": param.name, "value": *value})
 	}
 	var unknown []string
 	for paramName := range values {

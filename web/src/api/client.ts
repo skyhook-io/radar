@@ -8507,11 +8507,9 @@ export function useSubmitWorkflowTemplate() {
           },
         ),
       ),
-    meta: {
-      errorMessage: "Could not submit the workflow template",
-      successMessage: "Workflow submitted",
-    },
-    onSuccess: (_, variables) => {
+    meta: { errorMessage: "Could not submit the workflow template" },
+    onSuccess: (run, variables) => {
+      showApiSuccess("Workflow submitted", `${run.namespace}/${run.name}`);
       void queryClient.invalidateQueries({
         queryKey: ["workload-runs", "workflowtemplates", variables.namespace, variables.name],
       });

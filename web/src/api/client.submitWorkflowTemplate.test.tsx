@@ -5,6 +5,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { useRadarFeature, useSubmitWorkflowTemplate } from './client'
 import { isRadarFeatureUnsupported } from './radarFeatures'
+import { showApiSuccess } from '../components/ui/Toast'
+
+vi.mock('../components/ui/Toast', () => ({
+  showApiError: vi.fn(),
+  showApiSuccess: vi.fn(),
+  showApiNotice: vi.fn(),
+}))
 
 vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
 beforeEach(() => {
@@ -14,6 +21,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.restoreAllMocks()
+  vi.mocked(showApiSuccess).mockClear()
 })
 
 const submission = {
@@ -73,6 +81,7 @@ it('posts the reviewed version, run name, submission and parameters, and refresh
     parameters: { target: 'orders', mode: 'apply' },
   })
   expect(invalidated).toContain(JSON.stringify(['workload-runs', 'workflowtemplates', 'jobs', 'migrate']))
+  expect(showApiSuccess).toHaveBeenCalledWith('Workflow submitted', 'jobs/migrate-k2x9q')
 })
 
 it('surfaces the server error', async () => {

@@ -9,6 +9,7 @@ import {
   submittedParameters,
   suggestWorkflowName,
   workflowNameError,
+  workflowTemplateEntrypoint,
   workflowTemplateParameters,
   type WorkflowTemplateSubmission,
 } from '../../utils/workflow-template-submit'
@@ -51,18 +52,25 @@ export function WorkflowTemplateSubmitDialog({ open, onClose, template, liveReso
   const invalid = Object.keys(errors).length - missing
   const sent = submittedParameters(parameters, values)
   const changedUnderneath = Boolean(reviewedVersion && liveResourceVersion && liveResourceVersion !== reviewedVersion)
-  const serviceAccount: string = template?.spec?.serviceAccountName || 'default'
+  const fingerprint = JSON.stringify([trimmedName, sent])
+  // After an attempt whose answer may have been lost, repeating it unchanged
+  // stays possible even if the template changed: Radar answers with the run
+  // that attempt created, or refuses it as changed when there is none.
+  const repeatsAttempt = attempt.current?.fingerprint === fingerprint
+  const blockedByChange = changedUnderneath && !repeatsAttempt
+  const entrypoint = workflowTemplateEntrypoint(template)
+  const serviceAccount: string | undefined = template?.spec?.serviceAccountName || undefined
 
   const confirm = () => {
-    if (nameError || Object.keys(errors).length > 0 || changedUnderneath || isLoading) return
-    const fingerprint = JSON.stringify([trimmedName, sent])
-    if (attempt.current?.fingerprint !== fingerprint) attempt.current = { fingerprint, token: newSubmissionToken() }
+    if (nameError || Object.keys(errors).length > 0 || blockedByChange || !entrypoint || isLoading) return
+    const current = repeatsAttempt && attempt.current ? attempt.current : { fingerprint, token: newSubmissionToken() }
+    attempt.current = current
     void Promise.resolve(onConfirm({
       namespace,
       name,
       resourceVersion: reviewedVersion,
       runName: trimmedName,
-      submission: attempt.current.token,
+      submission: current.token,
       parameters: sent,
     })).catch(() => {})
   }
@@ -81,12 +89,17 @@ export function WorkflowTemplateSubmitDialog({ open, onClose, template, liveReso
       isLoading={isLoading}
       title="Submit workflow template"
       subject={{ kind: 'WorkflowTemplate', namespace, name }}
-      effect="Creates a Workflow that runs this template now, with the values below."
+      effect={<>Creates a Workflow that references this template{entrypoint && <>, starting at <span className="font-mono">{entrypoint}</span></>}, with the values below.</>}
       confirmLabel="Submit"
       incompleteReason={incompleteReason}
-      disabledReason={changedUnderneath ? 'The template changed since you opened this. Close and open Submit again to review the new version.' : undefined}
+      disabledReason={!entrypoint
+        ? 'This template has no entrypoint, so a Workflow that references it cannot start. It is meant to be called from other workflows.'
+        : blockedByChange ? 'The template changed since you opened this. Close and open Submit again to review the new version.' : undefined}
+      warnings={changedUnderneath && repeatsAttempt ? ['The template changed since you opened this. Submitting again repeats your last attempt: Radar returns the run it created, or refuses it if it created none.'] : []}
       notes={[
-        <>Argo runs it as the template&apos;s service account, <span className="font-mono">{serviceAccount}</span>.</>,
+        serviceAccount
+          ? <>This template sets the service account <span className="font-mono">{serviceAccount}</span> for its pods.</>
+          : 'This template sets no service account, so Argo uses its configured default.',
         'The run refers to the template by name. Argo reads the template again when it starts the run, so an edit made after you submit can still apply to it.',
       ]}
       writes={[{

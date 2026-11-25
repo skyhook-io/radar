@@ -50,34 +50,55 @@ function argoString(value: unknown): string | undefined {
 function valueFromLabel(valueFrom: unknown): string {
   const ref = (valueFrom as { configMapKeyRef?: { name?: string; key?: string } } | undefined)?.configMapKeyRef
   if (ref?.name && ref.key) return `ConfigMap ${ref.name}, key ${ref.key}`
-  return 'the template'
+  return 'a ConfigMap'
 }
 
+/** The template's entrypoint, or '' when it has none and so can't be run directly. */
+export function workflowTemplateEntrypoint(template: unknown): string {
+  const entrypoint = (template as { spec?: { entrypoint?: unknown } } | undefined)?.spec?.entrypoint
+  return typeof entrypoint === 'string' ? entrypoint : ''
+}
+
+/**
+ * What a submission can set: the template's spec.arguments.parameters, then
+ * the entrypoint template's inputs those don't name (Argo passes a Workflow's
+ * arguments to the entrypoint's inputs by name).
+ */
 export function workflowTemplateParameters(template: unknown): WorkflowTemplateParameter[] {
-  const declared = (template as { spec?: { arguments?: { parameters?: unknown } } } | undefined)?.spec?.arguments?.parameters
-  if (!Array.isArray(declared)) return []
+  const spec = (template as { spec?: { arguments?: { parameters?: unknown }; templates?: unknown } } | undefined)?.spec
+  const entrypoint = workflowTemplateEntrypoint(template)
+  const entry = entrypoint && Array.isArray(spec?.templates)
+    ? (spec.templates as Array<{ name?: unknown; inputs?: { parameters?: unknown } } | null>).find(t => t?.name === entrypoint)
+    : undefined
   const seen = new Set<string>()
   const out: WorkflowTemplateParameter[] = []
-  for (const item of declared) {
-    if (!item || typeof item !== 'object') continue
-    const param = item as Record<string, unknown>
-    const name = typeof param.name === 'string' ? param.name : ''
-    if (!name || seen.has(name)) continue
-    seen.add(name)
-    const hasValue = 'value' in param
-    const hasValueFrom = 'valueFrom' in param
-    const enumValues = Array.isArray(param.enum)
-      ? param.enum.map(argoString).filter((v): v is string => v !== undefined)
-      : []
-    out.push({
-      name,
-      description: typeof param.description === 'string' && param.description ? param.description : undefined,
-      defaultValue: hasValue ? argoString(param.value) ?? '' : undefined,
-      valueFromLabel: hasValueFrom ? valueFromLabel(param.valueFrom) : undefined,
-      required: !hasValue && !hasValueFrom,
-      enum: enumValues.length > 0 ? enumValues : undefined,
-    })
+  const add = (declared: unknown, defaultKeys: string[]) => {
+    if (!Array.isArray(declared)) return
+    for (const item of declared) {
+      if (!item || typeof item !== 'object') continue
+      const param = item as Record<string, unknown>
+      const name = typeof param.name === 'string' ? param.name : ''
+      if (!name || seen.has(name)) continue
+      seen.add(name)
+      const defaultKey = defaultKeys.find(k => k in param)
+      // Argo resolves a ConfigMap reference for a submitted run; other
+      // sources (supplied, event) have nothing to read from.
+      const fromConfigMap = Boolean((param.valueFrom as { configMapKeyRef?: unknown } | undefined)?.configMapKeyRef)
+      const enumValues = Array.isArray(param.enum)
+        ? param.enum.map(argoString).filter((v): v is string => v !== undefined)
+        : []
+      out.push({
+        name,
+        description: typeof param.description === 'string' && param.description ? param.description : undefined,
+        defaultValue: defaultKey ? argoString(param[defaultKey]) ?? '' : undefined,
+        valueFromLabel: fromConfigMap ? valueFromLabel(param.valueFrom) : undefined,
+        required: !defaultKey && !fromConfigMap,
+        enum: enumValues.length > 0 ? enumValues : undefined,
+      })
+    }
   }
+  add(spec?.arguments?.parameters, ['value'])
+  add(entry?.inputs?.parameters, ['value', 'default'])
   return out
 }
 
@@ -87,16 +108,22 @@ export function initialParameterValues(parameters: WorkflowTemplateParameter[]):
 }
 
 /** Why the form can't be submitted, per parameter; empty when it can. */
+// Records keyed by parameter name are built with Object.fromEntries and read
+// with Object.hasOwn: a parameter may be named __proto__.
+function valueOf(values: Record<string, string>, name: string): string {
+  return Object.hasOwn(values, name) ? values[name] : ''
+}
+
 export function parameterErrors(parameters: WorkflowTemplateParameter[], values: Record<string, string>): Record<string, string> {
-  const errors: Record<string, string> = {}
+  const errors: Array<[string, string]> = []
   for (const p of parameters) {
-    const value = values[p.name] ?? ''
+    const value = valueOf(values, p.name)
     // Argo accepts an empty value for a required parameter; an empty field
     // here is a value nobody chose, so the form asks for one.
-    if (p.required && value === '') errors[p.name] = 'Required.'
-    else if (p.enum && (value !== '' || p.defaultValue !== undefined) && !p.enum.includes(value)) errors[p.name] = `One of ${p.enum.join(', ')}.`
+    if (p.required && value === '') errors.push([p.name, 'Required.'])
+    else if (p.enum && (value !== '' || p.defaultValue !== undefined) && !p.enum.includes(value)) errors.push([p.name, `One of ${p.enum.join(', ')}.`])
   }
-  return errors
+  return Object.fromEntries(errors)
 }
 
 /**
@@ -105,12 +132,10 @@ export function parameterErrors(parameters: WorkflowTemplateParameter[], values:
  * backed by valueFrom is left out, so Argo reads it from its source.
  */
 export function submittedParameters(parameters: WorkflowTemplateParameter[], values: Record<string, string>): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (const p of parameters) {
-    const value = values[p.name] ?? ''
-    if (value !== '' || p.defaultValue !== undefined) out[p.name] = value
-  }
-  return out
+  return Object.fromEntries(parameters
+    .map(p => [p.name, valueOf(values, p.name), p.defaultValue] as const)
+    .filter(([, value, defaultValue]) => value !== '' || defaultValue !== undefined)
+    .map(([name, value]) => [name, value]))
 }
 
 /** Why `name` can't name a Workflow, or null when it can. */

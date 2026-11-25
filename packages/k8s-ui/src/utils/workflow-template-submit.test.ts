@@ -11,6 +11,11 @@ import {
 const template = {
   metadata: { name: 'migrate', namespace: 'jobs' },
   spec: {
+    entrypoint: 'main',
+    templates: [
+      { name: 'main', inputs: { parameters: [{ name: 'target' }, { name: 'message' }, { name: 'color', default: 'blue' }] } },
+      { name: 'helper', inputs: { parameters: [{ name: 'unrelated' }] } },
+    ],
     arguments: {
       parameters: [
         { name: 'target', description: 'Database to migrate' },
@@ -18,6 +23,7 @@ const template = {
         { name: 'batch', value: 10 },
         { name: 'region', valueFrom: { configMapKeyRef: { name: 'defaults', key: 'region' } } },
         { name: 'level', enum: [1, 2] },
+        { name: 'approval', valueFrom: { supplied: {} } },
         { name: 'target', value: 'duplicate ignored' },
         { value: 'nameless ignored' },
       ],
@@ -33,6 +39,11 @@ describe('workflowTemplateParameters', () => {
       { name: 'batch', description: undefined, required: false, defaultValue: '10', valueFromLabel: undefined, enum: undefined },
       { name: 'region', description: undefined, required: false, defaultValue: undefined, valueFromLabel: 'ConfigMap defaults, key region', enum: undefined },
       { name: 'level', description: undefined, required: true, defaultValue: undefined, valueFromLabel: undefined, enum: ['1', '2'] },
+      // Only a ConfigMap reference stands in for a value on a submitted run.
+      { name: 'approval', description: undefined, required: true, defaultValue: undefined, valueFromLabel: undefined, enum: undefined },
+      // The entrypoint's inputs the arguments don't name; another template's are not offered.
+      { name: 'message', description: undefined, required: true, defaultValue: undefined, valueFromLabel: undefined, enum: undefined },
+      { name: 'color', description: undefined, required: false, defaultValue: 'blue', valueFromLabel: undefined, enum: undefined },
     ])
   })
 
@@ -47,19 +58,27 @@ describe('the form', () => {
 
   it('starts from the defaults and asks for each required value', () => {
     const values = initialParameterValues(parameters)
-    expect(values).toEqual({ target: '', mode: 'dry-run', batch: '10', region: '', level: '' })
-    expect(parameterErrors(parameters, values)).toEqual({ target: 'Required.', level: 'Required.' })
+    expect(values).toEqual({ target: '', mode: 'dry-run', batch: '10', region: '', level: '', approval: '', message: '', color: 'blue' })
+    expect(parameterErrors(parameters, values)).toEqual({ target: 'Required.', level: 'Required.', approval: 'Required.', message: 'Required.' })
   })
 
   it('refuses a value outside the enum, including a cleared default', () => {
-    expect(parameterErrors(parameters, { target: 'x', mode: 'destroy', level: '2' })).toEqual({ mode: 'One of dry-run, apply.' })
-    expect(parameterErrors(parameters, { target: 'x', mode: '', level: '2' })).toEqual({ mode: 'One of dry-run, apply.' })
+    const filled = { target: 'x', level: '2', approval: 'yes', message: 'hi' }
+    expect(parameterErrors(parameters, { ...filled, mode: 'destroy' })).toEqual({ mode: 'One of dry-run, apply.' })
+    expect(parameterErrors(parameters, { ...filled, mode: '' })).toEqual({ mode: 'One of dry-run, apply.' })
   })
 
   it('sends what was reviewed, and leaves an empty valueFrom field to its source', () => {
-    const values = { ...initialParameterValues(parameters), target: 'orders', level: '1' }
-    expect(submittedParameters(parameters, values)).toEqual({ target: 'orders', mode: 'dry-run', batch: '10', level: '1' })
-    expect(submittedParameters(parameters, { ...values, region: 'eu', batch: '' })).toEqual({ target: 'orders', mode: 'dry-run', batch: '', region: 'eu', level: '1' })
+    const values = { ...initialParameterValues(parameters), target: 'orders', level: '1', approval: 'yes', message: 'hi' }
+    expect(submittedParameters(parameters, values)).toEqual({ target: 'orders', mode: 'dry-run', batch: '10', level: '1', approval: 'yes', message: 'hi', color: 'blue' })
+    expect(submittedParameters(parameters, { ...values, region: 'eu', batch: '' })).toMatchObject({ batch: '', region: 'eu' })
+  })
+
+  it('keeps a parameter named __proto__', () => {
+    const protoParams = workflowTemplateParameters({ spec: { arguments: { parameters: [{ name: '__proto__' }] } } })
+    const values = { ...initialParameterValues(protoParams), ['__proto__']: 'set' }
+    expect(parameterErrors(protoParams, values)).toEqual({})
+    expect(Object.entries(submittedParameters(protoParams, values))).toEqual([['__proto__', 'set']])
   })
 })
 

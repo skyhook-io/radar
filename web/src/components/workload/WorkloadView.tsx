@@ -1194,9 +1194,18 @@ export function WorkloadView({
     imageSelection,
   ])
   // A submitted run opens once Radar lists it: on the page it is selected in
-  // the run view; in the drawer, the drawer moves to it.
+  // the run view, on the Overview tab; in the drawer, the drawer moves to it.
   const listedRunKeys = useMemo(() => batchRunsQuery.data?.runs.map(workloadRunKey), [batchRunsQuery.data?.runs])
-  const selectRunWhenListed = useSelectRunWhenListed(listedRunKeys, batchRunsQuery.refetch, handleSelectedRunChange)
+  const openRunInOverview = useCallback(
+    (runKey: string) => {
+      const params = new URLSearchParams(searchParams)
+      params.set('run', runKey)
+      params.delete('tab')
+      setSearchParams(params, { replace: true })
+    },
+    [searchParams, setSearchParams],
+  )
+  const selectRunWhenListed = useSelectRunWhenListed(listedRunKeys, batchRunsQuery.refetch, openRunInOverview)
   const submitWorkflowTemplate = baseActionsBarProps.onSubmitWorkflowTemplate
   const navigateToResource = rest.onNavigateToResource
   const submitAndOpenRun = useMemo(

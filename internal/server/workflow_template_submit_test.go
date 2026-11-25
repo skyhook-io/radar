@@ -186,6 +186,66 @@ func TestWorkflowTemplateSubmit(t *testing.T) {
 			t.Fatalf("a refused request created %d workflows", n)
 		}
 	})
+	t.Run("the entrypoint's inputs are parameters too, as Argo passes arguments to them by name", func(t *testing.T) {
+		tmpl := submitTemplate("7", nil)
+		_ = unstructured.SetNestedSlice(tmpl.Object, []any{
+			map[string]any{"name": "main", "inputs": map[string]any{"parameters": []any{
+				map[string]any{"name": "target"},
+				map[string]any{"name": "message"},
+				map[string]any{"name": "color", "default": "blue", "enum": []any{"blue", "red"}},
+			}}},
+			map[string]any{"name": "helper", "inputs": map[string]any{"parameters": []any{map[string]any{"name": "unrelated"}}}},
+		}, "spec", "templates")
+		srv, dyn := workflowSubmitServer(t, tmpl)
+		rec := postSubmit(srv, `{"parameters":{"target":"x"}}`, nil)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `parameter \"message\" is required`) || strings.Contains(rec.Body.String(), "color") {
+			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+		}
+		if rec := postSubmit(srv, `{"parameters":{"target":"x","message":"hi","color":"green"}}`, nil); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `must be one of blue, red`) {
+			t.Fatalf("enum: %d %s", rec.Code, rec.Body.String())
+		}
+		if rec := postSubmit(srv, `{"parameters":{"target":"x","message":"hi","unrelated":"y"}}`, nil); rec.Code != http.StatusBadRequest {
+			t.Fatalf("another template's input was accepted: %d %s", rec.Code, rec.Body.String())
+		}
+		if rec := postSubmit(srv, `{"parameters":{"message":"hi","target":"x","color":"red"}}`, nil); rec.Code != http.StatusOK {
+			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+		}
+		got, _, _ := unstructured.NestedSlice(workflowCreates(dyn)[0].Object, "spec", "arguments", "parameters")
+		want := []any{
+			map[string]any{"name": "target", "value": "x"},
+			map[string]any{"name": "message", "value": "hi"},
+			map[string]any{"name": "color", "value": "red"},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("arguments = %v, want %v", got, want)
+		}
+	})
+	t.Run("a template without an entrypoint is refused", func(t *testing.T) {
+		tmpl := submitTemplate("7", nil)
+		unstructured.RemoveNestedField(tmpl.Object, "spec", "entrypoint")
+		srv, dyn := workflowSubmitServer(t, tmpl)
+		rec := postSubmit(srv, `{"parameters":{"target":"x"}}`, nil)
+		if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "workflow_template_no_entrypoint" || len(workflowCreates(dyn)) != 0 {
+			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+	t.Run("only a ConfigMap reference stands in for a value", func(t *testing.T) {
+		tmpl := submitTemplate("7", nil)
+		_ = unstructured.SetNestedSlice(tmpl.Object, []any{map[string]any{"name": "approval", "valueFrom": map[string]any{"supplied": map[string]any{}}}}, "spec", "arguments", "parameters")
+		srv, _ := workflowSubmitServer(t, tmpl)
+		if rec := postSubmit(srv, `{}`, nil); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "approval") {
+			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+	t.Run("a null value is refused, an empty string is a value", func(t *testing.T) {
+		srv, dyn := workflowSubmitServer(t, submitTemplate("7", nil))
+		if rec := postSubmit(srv, `{"parameters":{"target":null}}`, nil); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "null") {
+			t.Fatalf("null: %d %s", rec.Code, rec.Body.String())
+		}
+		if rec := postSubmit(srv, `{"parameters":{"target":""}}`, nil); rec.Code != http.StatusOK || len(workflowCreates(dyn)) != 1 {
+			t.Fatalf("empty: %d %s", rec.Code, rec.Body.String())
+		}
+	})
 	t.Run("an enum accepts a value Argo reads from a YAML number", func(t *testing.T) {
 		tmpl := submitTemplate("7", nil)
 		_ = unstructured.SetNestedSlice(tmpl.Object, []any{map[string]any{"name": "replicas", "value": int64(1), "enum": []any{int64(1), int64(3), 1.5, true}}}, "spec", "arguments", "parameters")
@@ -266,6 +326,31 @@ func TestWorkflowTemplateSubmit(t *testing.T) {
 		again := postSubmit(srv, body, nil)
 		if again.Code != http.StatusOK || again.Body.String() != first.Body.String() || len(workflowCreates(dyn)) != 1 {
 			t.Fatalf("again = %d: %s (first %s), creates = %d", again.Code, again.Body.String(), first.Body.String(), len(workflowCreates(dyn)))
+		}
+	})
+	t.Run("a submission repeated with other parameters is refused, not answered with the first run", func(t *testing.T) {
+		srv, dyn := workflowSubmitServer(t, submitTemplate("7", nil))
+		if rec := postSubmit(srv, `{"name":"migrate-k2x9q","submission":"confirmation-0001","parameters":{"target":"orders"}}`, nil); rec.Code != http.StatusOK {
+			t.Fatalf("first = %d: %s", rec.Code, rec.Body.String())
+		}
+		rec := postSubmit(srv, `{"name":"migrate-k2x9q","submission":"confirmation-0001","parameters":{"target":"invoices"}}`, nil)
+		if rec.Code != http.StatusConflict || errorCode(t, rec) != "workflow_submission_reused" || len(workflowCreates(dyn)) != 1 {
+			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+	t.Run("a taken name Radar can't read is not called another run", func(t *testing.T) {
+		for name, readErr := range map[string]error{
+			"denied":    apierrors.NewForbidden(argoWorkflowGVR.GroupResource(), "migrate-k2x9q", errors.New("no get")),
+			"timed out": apierrors.NewTimeoutError("slow", 1),
+		} {
+			t.Run(name, func(t *testing.T) {
+				srv, dyn := workflowSubmitServer(t, submitTemplate("7", nil), withAnnotation(testWorkflow("Running", ""), workflowSubmissionAnnotation, "confirmation-0001"))
+				dyn.PrependReactor("get", "workflows", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, readErr })
+				rec := postSubmit(srv, `{"name":"migrate-abcde","submission":"confirmation-0001","parameters":{"target":"x"}}`, nil)
+				if rec.Code != http.StatusConflict || errorCode(t, rec) != "workflow_unverified" || strings.Contains(rec.Body.String(), "choose another name") {
+					t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+				}
+			})
 		}
 	})
 	t.Run("a name taken by another run is 409", func(t *testing.T) {
