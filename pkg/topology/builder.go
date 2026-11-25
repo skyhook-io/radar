@@ -4478,9 +4478,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	// 14b. Istio edges: Gateway → VirtualService, VirtualService → Service (the
 	// first route to reach a Service, HTTP before TCP before TLS), and
 	// DestinationRule → Service.
-	istioHosts := relations.IstioServiceHostsIn(func() string { loadIstioDomain(); return istioDomain })
-	edges = drawFamilies(edges, drawn, nodes, unstructuredSources(virtualServiceResources), relations.IstioGateways, istioHosts)
-	edges = drawFamilies(edges, drawn, nodes, unstructuredSources(destinationRuleResources), istioHosts)
+	if len(virtualServiceResources) > 0 || len(destinationRuleResources) > 0 {
+		istioHosts := relations.IstioServiceHostsIn(func() string { loadIstioDomain(); return istioDomain })
+		edges = drawFamilies(edges, drawn, nodes, unstructuredSources(virtualServiceResources), relations.IstioGateways, istioHosts)
+		edges = drawFamilies(edges, drawn, nodes, unstructuredSources(destinationRuleResources), istioHosts)
+	}
 
 	// 14d. Create KNative Serving edges
 

@@ -91,27 +91,46 @@ func TestIstioRoutesDrawOneEdgePerServiceInProtocolOrder(t *testing.T) {
 	}
 }
 
-func TestTrafficViewDrawsTheIstioGatewaysAVirtualServiceBindsTo(t *testing.T) {
+func TestIstioGatewayBindings(t *testing.T) {
 	vsGVR := schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1", Resource: "virtualservices"}
 	gwGVR := schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1", Resource: "gateways"}
 	vs := genericIdentityObject(vsGVR, "VirtualService", "rules", "route")
 	vs.Object["spec"] = map[string]any{"gateways": []any{"mesh", "edge", "infra/shared"}, "http": []any{map[string]any{"route": []any{map[string]any{"destination": map[string]any{"host": "web"}}}}}}
 	gateways := []*unstructured.Unstructured{genericIdentityObject(gwGVR, "Gateway", "rules", "edge"), genericIdentityObject(gwGVR, "Gateway", "infra", "shared"), genericIdentityObject(gwGVR, "Gateway", "rules", "mesh")}
-	d := &genericIdentityDynamic{watched: []schema.GroupVersionResource{vsGVR, gwGVR}, kinds: map[schema.GroupVersionResource]string{vsGVR: "VirtualService", gwGVR: "Gateway"}, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{vsGVR: {vs}, gwGVR: gateways}, listCalls: map[schema.GroupVersionResource]int{}}
-	opts := DefaultBuildOptions()
-	opts.ViewMode = ViewModeTraffic
-	topo, err := NewBuilder(&mockProvider{services: []*corev1.Service{{ObjectMeta: metav1.ObjectMeta{Namespace: "rules", Name: "web"}}}}).WithDynamic(d).Build(opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got []string
-	for _, e := range topo.Edges {
-		if e.Target == "virtualservice/rules/route" {
-			got = append(got, e.Source)
+	check := func(t *testing.T, vs *unstructured.Unstructured, mode ViewMode, namespaces, want []string) {
+		t.Helper()
+		d := &genericIdentityDynamic{watched: []schema.GroupVersionResource{vsGVR, gwGVR}, kinds: map[schema.GroupVersionResource]string{vsGVR: "VirtualService", gwGVR: "Gateway"}, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{vsGVR: {vs}, gwGVR: gateways}, listCalls: map[schema.GroupVersionResource]int{}}
+		opts := DefaultBuildOptions()
+		opts.ViewMode = mode
+		opts.Namespaces = namespaces
+		topo, err := NewBuilder(&mockProvider{services: []*corev1.Service{{ObjectMeta: metav1.ObjectMeta{Namespace: "rules", Name: "web"}}}}).WithDynamic(d).Build(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, e := range topo.Edges {
+			if e.Target == "virtualservice/rules/route" {
+				if e.Type != EdgeExposes {
+					t.Errorf("unexpected Gateway binding: %+v", e)
+				}
+				got = append(got, e.Source)
+			}
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("gateways bound = %v, want %v", got, want)
 		}
 	}
-	want := []string{"istiogateway/rules/edge", "istiogateway/infra/shared"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("gateways bound = %v, want %v (mesh binds sidecars)", got, want)
+	for _, mode := range []ViewMode{ViewModeResources, ViewModeTraffic} {
+		t.Run(string(mode)+"/all namespaces", func(t *testing.T) {
+			check(t, vs, mode, nil, []string{"istiogateway/rules/edge", "istiogateway/infra/shared"})
+		})
+		t.Run(string(mode)+"/rules only", func(t *testing.T) {
+			check(t, vs, mode, []string{"rules"}, []string{"istiogateway/rules/edge"})
+		})
 	}
+	t.Run("resources/duplicate alias", func(t *testing.T) {
+		aliases := vs.DeepCopy()
+		aliases.Object["spec"] = map[string]any{"gateways": []any{"edge", "rules/edge"}}
+		check(t, aliases, ViewModeResources, nil, []string{"istiogateway/rules/edge"})
+	})
 }
