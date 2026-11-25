@@ -520,9 +520,9 @@ export const SOURCE_ORDER: AppSource[] = [
   "argocd",
   "flux",
   "helm",
+  "skyhook",
   "label",
   "ungrouped",
-  "skyhook",
 ];
 
 interface SourceMeta {
