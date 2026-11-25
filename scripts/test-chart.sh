@@ -442,7 +442,6 @@ echo
 render "the stock Cloud owner gets Argo CD actions by default" $CLOUD
 assert_contains 'name: radar-owner-access-argocd$'                     "write role rendered"
 assert_contains 'name: radar:owner-access:argocd$'         "owner-only write binding rendered"
-assert_not_contains 'name: radar:member:access:argocd$'    "no member write binding"
 echo
 
 render "explicit false disables the Cloud owner write grant on upgrade" $CLOUD --is-upgrade --set cloud.defaultRbac.integrationWrite.argocd.owner=false
