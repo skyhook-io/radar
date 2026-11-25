@@ -5815,13 +5815,13 @@ export function useRestartWorkload() {
       if (!response.ok) {
         throw new Error(restartErrorMessage(await readErrorBody(response), response.status));
       }
-      return response.json();
+      return response.json() as Promise<RestartResult>;
     },
     meta: {
       errorMessage: "Failed to restart workload",
-      successMessage: "Workload restarting",
     },
-    onSuccess: (_, variables) => {
+    onSuccess: (result, variables) => {
+      reportRestart(result);
       queryClient.invalidateQueries({
         queryKey: ["resources", variables.kind],
       });
@@ -6092,12 +6092,36 @@ export function rollbackErrorMessage(body: { error?: string; error_code?: string
   return body.error || `HTTP ${status}`;
 }
 
+export interface RestartResult {
+  message?: string;
+  restartedAt?: string;
+  changed?: boolean;
+}
+
+// changed:false means the workload already carried a restart request at or after
+// now (a repeated click, or a Rollout's future restartAt), so nothing new was written.
+export function restartOutcome(result: RestartResult | undefined): { title: string; detail?: string; repeated: boolean } {
+  if (result?.changed !== false) return { title: "Workload restarting", repeated: false };
+  const at = result.restartedAt ? new Date(result.restartedAt) : undefined;
+  return {
+    title: "Restart already requested",
+    detail: at && !Number.isNaN(at.getTime()) ? `Requested for ${at.toLocaleString()}.` : undefined,
+    repeated: true,
+  };
+}
+
+function reportRestart(result: RestartResult | undefined): void {
+  const { title, detail, repeated } = restartOutcome(result);
+  if (repeated) showApiNotice(title, detail, "info");
+  else showApiSuccess(title, detail);
+}
+
 export function restartErrorMessage(body: { error?: string; error_code?: string }, status: number): string {
   switch (body.error_code) {
     case "workload_paused":
       return "This Deployment is paused. Click Resume rollout, then restart.";
     case "workload_changed":
-      return "This workload was replaced since you opened it. Refresh and try again.";
+      return "This workload changed or was replaced since you opened it. Refresh and try again.";
     case "restart_not_applicable":
       return body.error || "This workload’s update strategy won’t restart all pods.";
     case "workload_terminating":
