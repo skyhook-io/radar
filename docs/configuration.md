@@ -610,6 +610,17 @@ While you're connected, Radar first checks that the new cluster answers and acce
 
 In local Radar, **Cancel switch** keeps the current cluster while Radar checks the target. Once Radar begins closing the old cluster's sessions, it shows progress as the new cluster's resources load. **Stop switch** stops loading the target and lets you choose a cluster to reconnect. Sessions on the previous cluster have already closed. **Hide progress** lets the switch continue. Select the switching indicator to reopen progress, or refresh the tab to follow the same switch. The connectivity timeout and initial workload sync limit apply to different stages.
 
+### Cluster proxy
+
+A context can reach its API server through an HTTP, HTTPS or SOCKS5 proxy saved in Radar, without editing the kubeconfig. **Settings → Connection → Cluster proxy** lists every kubeconfig context with its saved proxy, so you can set one before switching to a cluster Radar can only reach through it. A context that fails to connect also offers **Connect through a proxy** on the screen Radar shows. Radar saves a proxy only after the cluster answered through it; saving one for the current context reconnects.
+
+- Accepted URLs: `http://host:port`, `https://host:port` and `socks5://host:port`, the same schemes as a kubeconfig `proxy-url`. They may include `user:password@`.
+- A saved proxy takes precedence over the context's kubeconfig `proxy-url` and over `HTTPS_PROXY`. It carries all of Radar's Kubernetes traffic for that context, including exec, logs, port-forward and Helm, and the kubeconfig the local terminal hands to `kubectl` carries it as `proxy-url`. It doesn't change how Radar reaches Prometheus, Argo CD or Kubecost, or how exec credential plugins (`aws`, `gke-gcloud-auth-plugin`, `kubelogin`) reach their identity provider.
+- Saving checks that the API server answers through the proxy. An answer that rejects the credentials still proves the proxy works, so the proxy is saved. Saving from Settings while port forwards or terminals are open asks first, because reconnecting ends them.
+- Each proxy is saved for one context, identified by its kubeconfig file and its name in that file, so a context that gains a source suffix in the switcher keeps its proxy. Renaming the context or moving the file drops it. Proxies live in `~/.radar/cluster-proxies.json` (mode `0600`), not in `settings.json`. The context list and the API return them without credentials.
+- Available only in local CLI and Desktop Radar opened over a loopback address. With authentication, in a cluster, connected to Radar Hub, or on a shared listener, the setting is hidden and `PUT /api/contexts/{name}/proxy` returns 403. A proxy saved earlier still applies there, and Radar logs which one it uses.
+- If `cluster-proxies.json` can't be read or parsed, contexts fail to connect rather than going direct, and saving is refused until the file is fixed or removed.
+
 ### Expired credentials
 
 If an active context's credentials expire or are rejected, Radar disconnects cluster-backed work and retries automatically. After you re-authenticate, exec-based credentials are re-probed and static credentials are reloaded from kubeconfig on disk, so Radar can reconnect without a restart. Retries start after 30 seconds and back off to 5 minutes; a credential plugin that stops responding is retried less frequently.

@@ -8088,6 +8088,39 @@ export class SwitchContextError extends Error {
   }
 }
 
+export interface ContextProxyResult {
+  context: string;
+  proxyUrl?: string;
+  /** The context is the active one; retry the connection to use the proxy. */
+  current: boolean;
+}
+
+// Saves (or, with an empty proxyUrl, removes) the proxy Radar uses for a
+// context. The server saves a proxy only after the cluster answered through it.
+export function useSetContextProxy() {
+  const queryClient = useQueryClient();
+  return useMutation<ContextProxyResult, Error, { name: string; proxyUrl: string }>({
+    mutationFn: async ({ name, proxyUrl }) => {
+      const resp = await apiFetch(`${getApiBase()}/contexts/${encodeURIComponent(name)}/proxy`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ proxyUrl }),
+      });
+      if (!resp.ok) {
+        const body = await readErrorBody(resp);
+        throw new Error(body.error || `HTTP ${resp.status}`);
+      }
+      return resp.json();
+    },
+    meta: {
+      errorMessage: "Failed to save the cluster proxy",
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["contexts"] });
+    },
+  });
+}
+
 export function useSwitchContext() {
   const queryClient = useQueryClient();
 

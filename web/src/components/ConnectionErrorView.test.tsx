@@ -8,7 +8,7 @@ vi.stubGlobal('window', { location: { host: 'localhost:9280' } })
 const useContextsMock = vi.hoisted(() => vi.fn(
   (): { data: ContextInfo[] | undefined } => ({ data: undefined }),
 ))
-const capabilitiesMock = vi.hoisted(() => ({ localTerminal: true }))
+const capabilitiesMock = vi.hoisted(() => ({ localTerminal: true, clusterProxy: false }))
 
 vi.mock('@skyhook-io/k8s-ui', () => ({
   ClusterName: ({ name }: { name: string }) => <span>{name}</span>,
@@ -25,6 +25,9 @@ vi.mock('../contexts/CapabilitiesContext', () => ({
 }))
 vi.mock('./ContextSwitcher', () => ({
   ContextSwitcher: () => <button>Switch context</button>,
+}))
+vi.mock('./settings/ClusterProxyForm', () => ({
+  ClusterProxyForm: ({ context, savedProxyUrl }: { context: string; savedProxyUrl?: string }) => <div data-proxy-form={context}>{savedProxyUrl}</div>,
 }))
 vi.mock('./ui/Tooltip', () => ({
   Tooltip: ({ children }: { children: ReactNode }) => children,
@@ -234,5 +237,30 @@ describe('ConnectionErrorView after a refused switch with a stuck credential plu
     expect(connectionMarkup).toContain('keep checking in the background')
     expect(switchMarkup).not.toContain('keep checking in the background')
     expect(switchMarkup).toContain('use Retry Connection')
+  })
+})
+
+describe('ConnectionErrorView cluster proxy', () => {
+  const connection = { state: 'disconnected' as const, context: 'prod', errorType: 'network', error: 'dial tcp: i/o timeout' }
+  beforeEach(() => {
+    capabilitiesMock.clusterProxy = false
+    useContextsMock.mockReturnValue({ data: undefined })
+  })
+
+  it('offers a proxy only where this Radar lets one be saved', () => {
+    expect(renderToStaticMarkup(<ConnectionErrorView connection={connection} onRetry={() => {}} isRetrying={false} />)).not.toContain('Connect through a proxy')
+    capabilitiesMock.clusterProxy = true
+    const markup = renderToStaticMarkup(<ConnectionErrorView connection={connection} onRetry={() => {}} isRetrying={false} variant="switch" />)
+    expect(markup).toContain('Connect through a proxy')
+    expect(markup).toContain('data-proxy-form="prod"')
+    expect(markup).toContain('aria-expanded="false"')
+  })
+
+  it('opens on its own when a saved proxy may be the cause', () => {
+    capabilitiesMock.clusterProxy = true
+    useContextsMock.mockReturnValue({ data: [{ name: 'prod', cluster: 'prod', user: 'u', namespace: '', isCurrent: true, proxyUrl: 'socks5://bastion:1080' }] })
+    const markup = renderToStaticMarkup(<ConnectionErrorView connection={connection} onRetry={() => {}} isRetrying={false} />)
+    expect(markup).toContain('aria-expanded="true"')
+    expect(markup).toContain('socks5://bastion:1080')
   })
 })
