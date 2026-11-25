@@ -206,6 +206,7 @@ func TestLiveLegacyStoreEscapes(t *testing.T) {
 		for _, q := range escapes {
 			res, err := client.Query(ctx, q)
 			switch {
+			case errors.Is(err, ErrScalarUnsupported):
 			case errors.Is(err, ErrUnscopable):
 				if !legacy {
 					t.Errorf("legacy=%v %s: refused as unscopable on a store treated as current", legacy, q)
@@ -318,7 +319,7 @@ func TestLiveSchemaGuardOldData(t *testing.T) {
 	}
 	for _, r := range leaks {
 		body, err := guarded.Do(ctx, "GET", r.path, r.params)
-		if errors.Is(err, ErrUnscopable) {
+		if errors.Is(err, ErrUnscopable) || errors.Is(err, ErrScalarUnsupported) {
 			continue
 		}
 		if err != nil {

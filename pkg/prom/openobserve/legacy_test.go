@@ -169,11 +169,11 @@ func TestLegacyStoreRefusesUnscopableMetrics(t *testing.T) {
 
 	for _, q := range []string{
 		`k8s_pod_cpu_usage{k8s_namespace_name="demo"}`,
-		`vector(scalar(count(k8s_pod_cpu_usage)))`,
-		`up * 0 + scalar(sum(k8s_pod_cpu_usage))`,
-		`sum(rate(container_cpu_usage_seconds_total[5m])) / scalar(count(k8s_pod_cpu_usage))`,
+		`count(k8s_pod_cpu_usage)`,
+		`up * 0 + on () group_left sum(k8s_pod_cpu_usage)`,
+		`sum(rate(container_cpu_usage_seconds_total[5m])) / on () group_left count(k8s_pod_cpu_usage)`,
 		`{__name__=~"k8s_.+"}`,
-		`vector(scalar(count(last_over_time(container_spec_memory_limit_bytes[30d]))))`,
+		`count(last_over_time(container_spec_memory_limit_bytes[30d]))`,
 		`count(container_spec_memory_limit_bytes offset 30d)`,
 		`count(container_spec_memory_limit_bytes @ 1700000000)`,
 		`max_over_time(count(container_spec_memory_limit_bytes)[7d:1h])`,
@@ -182,6 +182,14 @@ func TestLegacyStoreRefusesUnscopableMetrics(t *testing.T) {
 		_, err := legacyQuery(rt, "/api/v1/query", q)
 		if !errors.Is(err, ErrUnscopable) || !errors.Is(err, ErrNotCollected) {
 			t.Errorf("%s: err = %v, want ErrUnscopable", q, err)
+		}
+	}
+	for _, q := range []string{
+		`vector(scalar(count(k8s_pod_cpu_usage)))`,
+		`sum(rate(container_cpu_usage_seconds_total[5m])) / scalar(count(k8s_pod_cpu_usage))`,
+	} {
+		if _, err := legacyQuery(rt, "/api/v1/query", q); !errors.Is(err, ErrScalarUnsupported) {
+			t.Errorf("%s: err = %v, want ErrScalarUnsupported", q, err)
 		}
 	}
 	if _, err := rt.Do(context.Background(), "GET", "/api/v1/label/pod/values", url.Values{"match[]": {"container_spec_memory_limit_bytes"}, "start": {"0"}}); !errors.Is(err, ErrUnscopable) {

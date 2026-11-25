@@ -1,11 +1,15 @@
 package openobserve
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/promql/parser"
+
+	"github.com/skyhook-io/radar/pkg/prom"
 )
 
 var uidOpts = RewriteOptions{Matchers: []Matcher{{Name: "radar_cluster_uid", Value: "u-1"}}}
@@ -51,7 +55,7 @@ func TestRewrite(t *testing.T) {
 		{"override uppercase label", `x{RADAR_CLUSTER_UID="evil"}`, `x{radar_cluster_uid="evil",radar_cluster_uid="u-1"}`},
 		{"same as forced", `x{radar_cluster_uid="u-1"}`, `x{radar_cluster_uid="u-1"}`},
 		{"uppercase metric", `node_memory_MemTotal_bytes`, `node_memory_memtotal_bytes{radar_cluster_uid="u-1"}`},
-		{"nested binary and paren", `(a - b) / scalar(c)`, `(a{radar_cluster_uid="u-1"} - b{radar_cluster_uid="u-1"}) / scalar(c{radar_cluster_uid="u-1"})`},
+		{"nested binary and paren", `(a - b) / on () c`, `(a{radar_cluster_uid="u-1"} - b{radar_cluster_uid="u-1"}) / on (radar_cluster_uid) c{radar_cluster_uid="u-1"}`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -194,5 +198,31 @@ func assertEverySelectorScoped(t *testing.T, q, name, value string) {
 	})
 	if selectors == 0 {
 		t.Fatalf("no selectors in %q", q)
+	}
+}
+
+// scalar() turns a vector into a bare number, which the response filter
+// can't check for the cluster's labels.
+func TestRewriteRefusesScalar(t *testing.T) {
+	for _, q := range []string{
+		`scalar(sum(x))`,
+		`sum(x) / scalar(sum(y))`,
+		`vector(scalar(count(x)))`,
+		`up * 0 + scalar(sum(k8s_pod_cpu_usage))`,
+		`scalar((x))`,
+	} {
+		_, err := Rewrite(q, uidOpts)
+		if !errors.Is(err, ErrScalarUnsupported) {
+			t.Errorf("Rewrite(%q) err = %v, want ErrScalarUnsupported", q, err)
+		}
+	}
+	if !strings.Contains(ErrScalarUnsupported.Error(), "sum(") {
+		t.Fatalf("the refusal must say what to query instead: %q", ErrScalarUnsupported)
+	}
+	// The transport reports it as the query's fault, with its text.
+	rt := &RewritingTransport{Inner: &fakeStore{body: `{"status":"success","data":{"resultType":"vector","result":[]}}`}, Options: uidOpts}
+	_, err := prom.NewClient(rt).Query(context.Background(), `scalar(sum(x))`)
+	if !errors.Is(err, prom.ErrQueryRefused) || !strings.Contains(err.Error(), "don't support scalar()") {
+		t.Fatalf("transport err = %v", err)
 	}
 }

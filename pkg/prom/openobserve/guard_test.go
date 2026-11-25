@@ -26,9 +26,7 @@ func TestRewriteKeepsClusterLabelThroughAggregation(t *testing.T) {
 		{`a + ignoring (cluster, pod) b`, `a{cluster="oo-b"} + ignoring (pod) b{cluster="oo-b"}`},
 		{`x or vector(0)`, `x{cluster="oo-b"} or label_replace(vector(0), "cluster", "oo-b", "", "")`},
 		{`sum(x) or on () vector(0)`, `sum by (cluster) (x{cluster="oo-b"}) or on (cluster) label_replace(vector(0), "cluster", "oo-b", "", "")`},
-		{`scalar(sum(x))`, `scalar(sum by (cluster) (x{cluster="oo-b"}))`},
 		{`absent(x)`, `absent(x{cluster="oo-b"})`},
-		{`sum(x) / scalar(sum(y))`, `sum by (cluster) (x{cluster="oo-b"}) / scalar(sum by (cluster) (y{cluster="oo-b"}))`},
 	}
 	for _, tc := range tests {
 		got, err := Rewrite(tc.in, clusterOpts)

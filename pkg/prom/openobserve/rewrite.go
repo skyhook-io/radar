@@ -45,6 +45,11 @@ var ErrNotCollected = errors.New("openobserve: not collected by this source")
 
 var errNoMatchers = errors.New("openobserve: no cluster matcher configured")
 
+// ErrScalarUnsupported refuses scalar() over a vector. Its result is a bare
+// number with no labels, so FilterResponse can't tell whether the vector it
+// came from held only this cluster's series.
+var ErrScalarUnsupported = errors.New("openobserve: OpenObserve-backed metrics don't support scalar(), because its result carries no cluster label to check. Query the vector instead, for example sum(...) rather than scalar(sum(...)), and read the single value from the result")
+
 // ErrClusterLabelWrite refuses a query that writes a cluster label itself
 // (label_replace, label_join, count_values).
 var ErrClusterLabelWrite = errors.New("openobserve: queries may not write a cluster label")
@@ -113,7 +118,7 @@ func (s *scope) required(name string) []*labels.Matcher {
 // labels, which can only narrow the answer further), and every step that would drop labels keeping the matcher labels,
 // so that FilterResponse can require them on every answer.
 //
-// Not rewritten: scalar() results carry no labels and are not series, and
+// Refused: scalar() over a vector (ErrScalarUnsupported). Not rewritten:
 // absent()/absent_over_time() already return the equality matchers' labels.
 func Rewrite(q string, opts RewriteOptions) (string, error) {
 	s, err := prepare(opts)
@@ -345,6 +350,9 @@ func (r *rewriter) call(c *parser.Call) (parser.Expr, []rename, error) {
 	if c.Func == nil {
 		return nil, nil, errors.New("openobserve: call without a function")
 	}
+	if c.Func.Name == "scalar" && !allNumberLiterals(c.Args) {
+		return nil, nil, ErrScalarUnsupported
+	}
 	// absent() derives its labels from the selector's equality matchers, so
 	// a translated selector is renamed after absent, not before.
 	deferSelector := c.Func.Name == "absent"
@@ -405,6 +413,15 @@ func (r *rewriter) checkWrittenLabel(c *parser.Call) error {
 	return nil
 }
 
+func allNumberLiterals(args parser.Expressions) bool {
+	for _, a := range args {
+		if _, ok := unparen(a).(*parser.NumberLiteral); !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func stringArg(e parser.Expr) (string, bool) {
 	for {
 		p, ok := e.(*parser.ParenExpr)
@@ -421,7 +438,7 @@ func stringArg(e parser.Expr) (string, bool) {
 }
 
 // rangeScalarAsVector wraps a range query whose result is a plain number
-// (time(), scalar(...), a literal) in vector(), which Rewrite labels with the
+// (time(), a literal) in vector(), which Rewrite labels with the
 // cluster: the matrix such a query returns has a series with no labels, which
 // FilterResponse would otherwise drop. An instant query keeps its scalar
 // result type, which FilterResponse leaves alone.

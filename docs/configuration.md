@@ -1032,7 +1032,9 @@ label in the query is kept alongside it, so it can only narrow the answer:
 `radar_cluster_uid!="<this cluster>"` returns nothing), and series of other
 clusters are dropped from answers. A query that would write a cluster label
 (`label_replace`, `label_join`, `count_values`) is refused as the caller's
-error. A series or label lookup with no time range reads the last hour,
+error, and so is `scalar()`: its bare number carries no cluster label to
+check, so query the vector instead (`sum(x)`, not `scalar(sum(x))`). A series
+or label lookup with no time range reads the last hour,
 because OpenObserve refuses one without it. Metric families the source doesn't collect show no data, and Settings →
 Metrics lists them, under "OpenObserve · shared connection · matched by cluster
 ID" (or "matched by confirmed name").

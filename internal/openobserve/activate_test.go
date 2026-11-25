@@ -414,7 +414,7 @@ func TestLegacyStoreRefusesUnscopableMetricsAsNotCollected(t *testing.T) {
 
 	mcp := prometheus.GetClient().PromForMCP()
 	before := len(f.Recorded())
-	res, err := mcp.Query(context.Background(), `vector(scalar(sum(k8s_pod_cpu_usage)))`)
+	res, err := mcp.Query(context.Background(), `sum(k8s_pod_cpu_usage)`)
 	if err != nil || len(res.Series) != 0 {
 		t.Fatalf("unscopable metric: %+v, %v", res, err)
 	}
@@ -471,7 +471,7 @@ func TestGuardStaysOnWhenVersionUnknown(t *testing.T) {
 			}
 			mcp := prometheus.GetClient().PromForMCP()
 			before := len(tc.f.Recorded())
-			res, err := mcp.Query(context.Background(), `vector(scalar(sum(k8s_pod_cpu_usage)))`)
+			res, err := mcp.Query(context.Background(), `sum(k8s_pod_cpu_usage)`)
 			if err != nil || len(res.Series) != 0 {
 				t.Fatalf("unscopable metric: %+v, %v", res, err)
 			}
