@@ -48,6 +48,8 @@ export function TerminalTab({
   const xtermRef = useRef<XTerm | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
+  const reviewedPodUID = useRef<string | undefined>(undefined)
+  const containerPicker = useRef<HTMLSelectElement>(null)
   // Cleanup ref holds the ResizeObserver disconnect from an async setup
   const cleanupRef = useRef<(() => void) | undefined>(undefined)
   // Prevents stale .then() callbacks from running after unmount or reconnect
@@ -75,7 +77,7 @@ export function TerminalTab({
     if (xtermRef.current) copyTerminalSelection(xtermRef.current)
   }, [])
 
-  const connect = useCallback((podUID?: string) => {
+  const connect = useCallback(() => {
     if (!terminalRef.current) return
 
     cancelledRef.current = false
@@ -189,7 +191,8 @@ export function TerminalTab({
       detachSearch()
     }
 
-    const session = podUID ? createSessionRef.current(selectedContainer, podUID) : createSessionRef.current(selectedContainer)
+    const uid = reviewedPodUID.current
+    const session = uid ? createSessionRef.current(selectedContainer, uid) : createSessionRef.current(selectedContainer)
     session
       .then(({ wsUrl }) => {
         if (cancelledRef.current) return
@@ -219,6 +222,9 @@ export function TerminalTab({
           } else if (msg.type === 'exit') {
             xterm.write('\r\n\x1b[2m[Process exited]\x1b[0m\r\n')
           } else if (msg.type === 'error' && msg.data) {
+            // Once the server identifies the Pod, every retry in this tab stays on it,
+            // including after a later UID-mismatch error that reports no identifier.
+            if (msg.podUID) reviewedPodUID.current ??= msg.podUID
             if (receivedOutput && !command) {
               xterm.write(`\r\n${msg.data}\r\n`)
               setIsConnected(false)
@@ -313,7 +319,7 @@ export function TerminalTab({
 
         {!command && containers.length > 1 && (
           <div className="relative">
-            <select
+            <select ref={containerPicker} aria-label="Terminal container"
               value={selectedContainer}
               onChange={(e) => handleContainerChange(e.target.value)}
               className="appearance-none bg-theme-elevated text-xs text-theme-text-primary px-2 py-0.5 pr-5 rounded border border-theme-border-light focus:outline-none focus:ring-1 focus:ring-blue-500"
@@ -328,7 +334,7 @@ export function TerminalTab({
 
         {!isConnected && !isConnecting && (command || errorType !== 'shell_not_found') && (
           <button
-            onClick={() => connect()}
+            onClick={connect}
             className="flex items-center gap-1 px-2 py-0.5 text-xs text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
           >
             <RefreshCw className="w-3 h-3" />
@@ -356,7 +362,7 @@ export function TerminalTab({
                   Container <span className="font-mono text-theme-text-secondary">{selectedContainer}</span> could not start <span className="font-mono text-theme-text-secondary">{command}</span>. Check that the executable is installed in this container.
                 </div>
               ) : <div className="text-xs text-theme-text-tertiary mb-4 max-w-md">
-                This container image may have no shell.{containers.length > 1 && ' You can also select another container above.'}
+                This container image may have no shell.{containers.length > 1 && <> You can also <button type="button" className="underline underline-offset-2 hover:text-theme-text-primary" onClick={() => containerPicker.current?.focus()}>select another container</button> above.</>}
               </div>}
               <div className="flex w-full min-w-0 max-w-md flex-wrap items-center justify-center gap-2">
                 {!command && failedPodUID && renderDebugAction?.(selectedContainer, failedPodUID)}
@@ -374,15 +380,15 @@ export function TerminalTab({
                   </button>
                 )}
                 {command && <button
-                  onClick={() => connect()}
+                  onClick={connect}
                   className="flex items-center gap-2 px-3 py-1.5 bg-theme-elevated text-theme-text-primary text-xs rounded hover:bg-theme-hover"
                 >
                   <RefreshCw className="w-3 h-3" />
                   Retry
                 </button>}
               </div>
-              {!command && failedPodUID && failedExecutable && <button
-                type="button" onClick={() => connect(failedPodUID)}
+              {!command && <button
+                type="button" onClick={connect}
                 className="mt-3 text-xs text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary"
               >Retry terminal</button>}
             </>
@@ -391,7 +397,7 @@ export function TerminalTab({
               <div className={clsx(toneTextClass('unhealthy'), 'mb-2 text-sm')}>Failed to connect</div>
               <div className="text-xs text-theme-text-secondary mb-3">{error}</div>
               <button
-                onClick={() => connect()}
+                onClick={connect}
                 className="flex items-center gap-2 px-3 py-1.5 btn-brand text-xs rounded"
               >
                 <RefreshCw className="w-3 h-3" />

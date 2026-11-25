@@ -66,6 +66,7 @@ export function MissingShellDebug({ namespace, name, uid, target, connection, ba
         {!query.isFetching && <button className="btn-secondary rounded px-2 py-1" onClick={() => void query.refetch()}>Recheck access</button>}
       </div>
     }
+    if (running.length && support === 'unsupported') return <p className="max-w-md text-xs text-theme-text-secondary">A debug container is already running. Upgrade this cluster’s Radar to reopen it here, or open a terminal to that container with kubectl.</p>
     return <p className="max-w-md text-xs text-theme-text-secondary">To start a debug container, run <code>kubectl debug</code> with an identity permitted to patch <code>pods/ephemeralcontainers</code> on this Pod, or open the Pod in standalone Radar.</p>
   }
   const access = query.error ? undefined : query.data
@@ -94,7 +95,7 @@ export function MissingShellDebug({ namespace, name, uid, target, connection, ba
     : `Could you check whether ${username ? `Kubernetes user ${username}` : sharedServiceAccount ? requester : 'my Kubernetes identity'} can update pods/ephemeralcontainers for Pod ${name} in namespace ${namespace}? Radar couldn’t verify access while I was troubleshooting container ${target}.${subjectDetails}`
   return <div className="flex max-w-md flex-col items-center gap-2 text-xs text-theme-text-secondary">
     <p>{denied ? <>{sharedServiceAccount ? "Radar’s ServiceAccount doesn’t have" : "You don’t have"} permission to add a debug container to this Pod. Copy an access request for your cluster administrator.</>
-      : <>Radar couldn’t verify whether you can add a debug container to <code>{namespace}/{name}</code>. Recheck access or ask your administrator to verify it.</>}</p>
+      : <>Radar couldn’t verify whether {sharedServiceAccount ? "Radar’s ServiceAccount" : "you"} can add a debug container to <code>{namespace}/{name}</code>. Recheck access or ask your administrator to verify it.</>}</p>
     {denied && <p className="text-xs text-theme-text-tertiary">Pod <code>{namespace}/{name}</code></p>}
     <div className="flex flex-wrap items-center justify-center gap-2">
       <button className="btn-secondary flex items-center gap-1.5 rounded px-2 py-1" onClick={async () => setCopied(await copyText(request) ? 'copied' : 'manual')}>

@@ -206,7 +206,7 @@ it.each([undefined, 'psql'])('keeps shell defaults and command-specific unavaila
     expect(element.textContent).not.toContain('/bin/sh')
   } else {
     expect(element.textContent).toContain('Couldn’t start a shell in')
-    expect(element.textContent).not.toContain('Retry')
+    expect(element.textContent).toContain('Retry terminal')
     expect(element.textContent).not.toContain('Reconnect')
     expect(element.textContent).toContain('Start debug container')
   }
@@ -224,6 +224,21 @@ it('lets an operator retry just the original shell on the Pod that failed', asyn
   await act(async () => retry!.click())
   expect(createSession).toHaveBeenLastCalledWith('app', 'original')
   expect(createDebugContainer).not.toHaveBeenCalled()
+})
+
+it.each(['original', undefined])('keeps Retry on an older shell error and preserves any reviewed UID (%s)', async uid => {
+  const createSession = vi.fn(async () => ({ wsUrl: 'ws://localhost' }))
+  await act(async () => root.render(<TerminalTab namespace="test" podName="worker" containerName="app" containers={['app', 'sidecar']} createSession={createSession}/>))
+  await act(async () => Socket.instances[0].onmessage?.({ data: JSON.stringify({ type: 'error', errorType: 'shell_not_found', data: 'no such file or directory', podUID: uid }) }))
+  const click = (label: string) => act(async () => [...element.querySelectorAll('button')].find(b => b.textContent === label)!.click())
+  await click('Retry terminal')
+  expect(createSession.mock.lastCall).toEqual(uid ? ['app', uid] : ['app'])
+  await act(async () => Socket.instances[1].onmessage?.({ data: JSON.stringify({ type: 'error', errorType: 'exec_error', data: 'The original Pod was replaced' }) }))
+  await click('Retry')
+  expect(createSession.mock.lastCall).toEqual(uid ? ['app', uid] : ['app'])
+  await act(async () => Socket.instances[2].onmessage?.({ data: JSON.stringify({ type: 'error', errorType: 'exec_error', data: 'The original Pod was replaced' }) }))
+  await click('Reconnect')
+  expect(createSession.mock.lastCall).toEqual(uid ? ['app', uid] : ['app'])
 })
 
 it('keeps the transcript and Reconnect after an interactive shell exits 127', async () => {
