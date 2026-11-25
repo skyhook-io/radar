@@ -8,13 +8,13 @@ import { Tooltip } from '../ui/Tooltip'
 import { Input } from '../ui/Input'
 import { showApiError, showApiSuccess } from '../ui/Toast'
 import {
-  formatLogTimestamp,
   highlightSearchMatches,
   stripAnsi,
   ansiToHtml,
   type TimestampFormat,
   TIMESTAMP_FORMAT_LABELS,
 } from '../../utils/log-format'
+import { createLogTimestampFormatter } from '../../utils/log-format/timestamp'
 import { getLogPalette, getLogLevelColor, type LogPalette } from './log-palette'
 import { associateContinuations, groupContinuations, type LogGroup } from '../../utils/log-level'
 import { copyText } from '../../utils/clipboard'
@@ -135,11 +135,6 @@ const EMPTY_STATE_CLASS = 'flex-1 flex flex-col items-center justify-center gap-
 
 const isLocalFormat = (format: TimestampFormat) => format === 'time-local' || format === 'iso-local'
 const localTimeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone
-
-function TimestampFormatHint({ format }: { format: TimestampFormat }) {
-  const timeZone = isLocalFormat(format) ? localTimeZone() : undefined
-  return <>Timestamp format: {TIMESTAMP_FORMAT_LABELS[format]}{timeZone && ` · ${timeZone}`}</>
-}
 
 const TIMESTAMP_FORMAT_SHORT_LABELS: Record<TimestampFormat, string> = {
   'time-local': 'Local time',
@@ -280,8 +275,10 @@ export function LogCore({
   })
   const [showTsMenu, setShowTsMenu] = useState(false)
   const tsMenu = useAnimatedUnmount(showTsMenu, overlayExitMs('menu'))
-  // Keep the picker label current as the browser's default zone changes.
-  const timeZone = tsMenu.shouldRender ? localTimeZone() : undefined
+  const [timeZone, setTimeZone] = useState(localTimeZone)
+  const refreshTimeZone = () => setTimeZone(localTimeZone())
+  const formatTimestamp = useMemo(() => createLogTimestampFormatter(tsFormat, timeZone), [tsFormat, timeZone])
+  const timestampHint = `Timestamp format: ${TIMESTAMP_FORMAT_LABELS[tsFormat]}${isLocalFormat(tsFormat) ? ` · ${timeZone}` : ''}`
   const [showStructuredMenu, setShowStructuredMenu] = useState(false)
   const structuredMenu = useAnimatedUnmount(showStructuredMenu, overlayExitMs('menu'))
   const [structuredMode, setStructuredMode] = useState<StructuredMode>(() => {
@@ -802,9 +799,14 @@ export function LogCore({
             </button>
           </Tooltip>
           <div className="relative" ref={tsMenuRef}>
-            <Tooltip content={<TimestampFormatHint format={tsFormat} />} delay={TIP_DELAY} position="bottom">
+            <Tooltip content={timestampHint} delay={TIP_DELAY} position="bottom">
               <button
-                onClick={() => setShowTsMenu(prev => !prev)}
+                onMouseEnter={refreshTimeZone}
+                onFocus={refreshTimeZone}
+                onClick={() => {
+                  if (!showTsMenu) refreshTimeZone()
+                  setShowTsMenu(!showTsMenu)
+                }}
                 className={`px-2 py-1.5 rounded-r text-[10px] font-medium transition-colors whitespace-nowrap ${
                   showTimestamps ? palette.toolbarActive : iconBtnInactiveTertiary
                 }`}
@@ -1195,7 +1197,7 @@ export function LogCore({
                 showContainerName={showContainerName}
                 containerLabelWidth={containerLabelWidth}
                 showTimestamp={showTimestamps}
-                tsFormat={tsFormat}
+                formatTimestamp={formatTimestamp}
                 ansiEnabled={ansiEnabled}
                 isCurrentMatch={group.head.id === currentHighlightId}
                 wordWrap={wordWrap}
@@ -1302,7 +1304,7 @@ interface LogLineProps {
   showContainerName?: boolean
   containerLabelWidth?: number
   showTimestamp: boolean
-  tsFormat: TimestampFormat
+  formatTimestamp: (ts: string) => string
   ansiEnabled: boolean
   isCurrentMatch: boolean
   wordWrap: boolean
@@ -1325,7 +1327,7 @@ function LogLine({
   showContainerName = false,
   containerLabelWidth,
   showTimestamp,
-  tsFormat,
+  formatTimestamp,
   ansiEnabled,
   isCurrentMatch,
   wordWrap,
@@ -1392,7 +1394,7 @@ function LogLine({
           className={`${palette.textTertiary} select-none pr-2 whitespace-nowrap`}
           title={entry.timestamp}
         >
-          {formatLogTimestamp(entry.timestamp, tsFormat)}
+          {formatTimestamp(entry.timestamp)}
         </span>
       )}
       {showPodName && entry.pod && (
@@ -1445,7 +1447,7 @@ interface LogGroupItemProps {
   showContainerName?: boolean
   containerLabelWidth?: number
   showTimestamp: boolean
-  tsFormat: TimestampFormat
+  formatTimestamp: (ts: string) => string
   ansiEnabled: boolean
   isCurrentMatch: boolean
   wordWrap: boolean

@@ -5,13 +5,8 @@
 
 import type { LogLevel } from './log-level'
 
-export type TimestampFormat =
-  | 'time-local'
-  | 'time-utc'
-  | 'iso-local'
-  | 'iso-utc'
-  | 'relative'
-  | 'epoch'
+import { createLogTimestampFormatter, type TimestampFormat } from './log-format/timestamp'
+export type { TimestampFormat } from './log-format/timestamp'
 
 export const TIMESTAMP_FORMAT_LABELS: Record<TimestampFormat, string> = {
   'time-local': 'Time (local)',
@@ -20,36 +15,6 @@ export const TIMESTAMP_FORMAT_LABELS: Record<TimestampFormat, string> = {
   'iso-utc': 'ISO (UTC)',
   'relative': 'Relative',
   'epoch': 'Epoch',
-}
-
-function pad2(n: number): string {
-  return n < 10 ? '0' + n : String(n)
-}
-
-function formatIsoLocal(date: Date): string {
-  const offset = -date.getTimezoneOffset()
-  const sign = offset >= 0 ? '+' : '-'
-  const abs = Math.abs(offset)
-  return (
-    date.getFullYear() +
-    '-' + pad2(date.getMonth() + 1) +
-    '-' + pad2(date.getDate()) +
-    'T' + pad2(date.getHours()) +
-    ':' + pad2(date.getMinutes()) +
-    ':' + pad2(date.getSeconds()) +
-    sign + pad2(Math.floor(abs / 60)) + ':' + pad2(abs % 60)
-  )
-}
-
-function formatRelative(date: Date, now: number): string {
-  const diffSec = Math.round((now - date.getTime()) / 1000)
-  const abs = Math.abs(diffSec)
-  const suffix = diffSec >= 0 ? ' ago' : ' from now'
-  if (abs < 2) return 'just now'
-  if (abs < 60) return `${abs}s${suffix}`
-  if (abs < 3600) return `${Math.floor(abs / 60)}m${suffix}`
-  if (abs < 86400) return `${Math.floor(abs / 3600)}h${suffix}`
-  return `${Math.floor(abs / 86400)}d${suffix}`
 }
 
 /**
@@ -62,30 +27,7 @@ export function formatLogTimestamp(
   format: TimestampFormat = 'time-local',
   now?: number,
 ): string {
-  const date = new Date(ts)
-  if (isNaN(date.getTime())) {
-    return ts.slice(11, 19) || ts
-  }
-  switch (format) {
-    case 'time-utc':
-      return date.toISOString().slice(11, 19)
-    case 'iso-local':
-      return formatIsoLocal(date)
-    case 'iso-utc':
-      return date.toISOString()
-    case 'relative':
-      return formatRelative(date, now ?? Date.now())
-    case 'epoch':
-      return String(Math.floor(date.getTime() / 1000))
-    case 'time-local':
-    default:
-      return date.toLocaleTimeString('en-US', {
-        hour12: false,
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-      })
-  }
+  return createLogTimestampFormatter(format)(ts, now)
 }
 
 /** Map a detected LogLevel to a Tailwind color class. */
