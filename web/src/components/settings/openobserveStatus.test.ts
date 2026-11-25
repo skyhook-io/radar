@@ -14,6 +14,12 @@ describe('metricsSourceLine', () => {
     expect(line?.detail).toBe("Add the cluster ID label so this match can't break. Upgrade. Not collected: CPU throttling, HPA.")
   })
 
+  it('shows the standing warning of an active match after saving', () => {
+    const warning = 'This cluster\'s OpenObserve collector sends the default cluster name "cluster1". Radar refuses its kube-state metrics.'
+    expect(metricsSourceLine({ kind: 'openobserve', via: 'local', matchedBy: 'id', warning })?.detail).toBe(warning)
+    expect(metricsSourceLine({ kind: 'openobserve', via: 'local', matchedBy: 'name', warning: 'Matched by cluster name.' })?.detail).toBe('Matched by cluster name.')
+  })
+
   it('reports unavailable without claiming a connection', () => {
     expect(metricsSourceLine({ kind: 'openobserve', via: 'local', matchedBy: 'id', unavailable: true, error: 'OpenObserve unavailable: refused' }))
       .toEqual({ status: 'OpenObserve unavailable', detail: 'OpenObserve unavailable: refused', tone: 'warning' })

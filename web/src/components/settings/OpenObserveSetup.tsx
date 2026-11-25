@@ -201,10 +201,10 @@ export function OpenObserveSetup({
 
   const notes = result?.kind === 'saved' ? [
     result.notes?.collector && 'Data comes from the OpenObserve collector.',
-    // The live status line repeats the version and coverage notes once the
-    // match settles; only say them here when that line isn't shown.
+    // The live status line repeats the warning, version and coverage notes
+    // once the match settles; only say them here when that line isn't shown.
     !status && result.notes?.missing?.length && `No data for: ${result.notes.missing.map(familyLabel).join(', ')}.`,
-    result.notes?.warning,
+    !status && result.notes?.warning,
     !status && result.notes?.versionWarning,
     result.reloadFailed && "Saved, but Radar couldn't reload this page. Reopen Settings to see the match.",
   ].filter((note): note is string => !!note) : []

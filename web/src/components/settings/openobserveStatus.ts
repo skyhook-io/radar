@@ -25,7 +25,10 @@ export function metricsSourceLine(source: MetricsSource | undefined): MetricsSou
   }
   if (!source.matchedBy) return undefined
   const details: string[] = []
-  if (source.matchedBy === 'name') details.push("Add the cluster ID label so this match can't break.")
+  // The backend's standing warning (name match, refused collector metrics)
+  // says why and what to fix; the short hint stands in only without one.
+  if (source.warning) details.push(source.warning)
+  else if (source.matchedBy === 'name') details.push("Add the cluster ID label so this match can't break.")
   if (source.versionWarning) details.push(source.versionWarning)
   if (source.missingFamilies?.length) {
     details.push(`Not collected: ${source.missingFamilies.map(familyLabel).join(', ')}.`)
