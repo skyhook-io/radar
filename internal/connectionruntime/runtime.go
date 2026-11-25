@@ -170,11 +170,17 @@ func openObserveTarget(target k8s.ProfileTarget) openobserve.Target {
 
 // RefreshOpenObserve applies the saved OpenObserve connection again for the
 // active context after it or one of its matches changed. It does nothing
-// while the context's metrics are off or failed to resolve.
+// while the context's metrics are off or failed to resolve. While Kubernetes
+// is unreachable it forgets the active metrics selection instead, so the
+// Apply on reconnect activates metrics again with the change.
 func (r *Runtime) RefreshOpenObserve() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if s, ok := r.active[config.IntegrationMetrics]; !ok || s.Err != nil || k8s.GetConnectionStatus().State != k8s.StateConnected {
+	if k8s.GetConnectionStatus().State != k8s.StateConnected {
+		delete(r.active, config.IntegrationMetrics)
+		return
+	}
+	if s, ok := r.active[config.IntegrationMetrics]; !ok || s.Err != nil {
 		return
 	}
 	openobserve.Default.Refresh(openObserveTarget(r.target))
