@@ -112,7 +112,7 @@ interface ResourceActionsBarProps {
   cascadePreviewFailed?: boolean
 
   // Workload restart
-  onRestart?: (params: { kind: string; namespace: string; name: string }, callbacks?: { onSuccess?: () => void; onError?: (err: unknown) => void }) => void
+  onRestart?: (params: { kind: string; namespace: string; name: string; uid?: string }, callbacks?: { onSuccess?: () => void; onError?: (err: unknown) => void }) => void
   isRestarting?: boolean
 
   // Deployment rollout pause. A host passes both callbacks only when the caller may patch Deployments.
@@ -559,6 +559,7 @@ export function ResourceActionsBar({
                   kind: resource.kind,
                   namespace: resource.namespace,
                   name: resource.name,
+                  uid: data?.metadata?.uid,
                 })}
                 disabled={isRestarting}
                 aria-busy={isRestarting}

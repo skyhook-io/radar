@@ -19,7 +19,8 @@ import (
 var (
 	ErrUnsupportedImageWorkload = errors.New("image updates are not supported for this workload kind")
 	ErrInvalidImageUpdate       = errors.New("invalid image update")
-	ErrImageWorkloadTerminating = errors.New("workload is terminating")
+	ErrWorkloadTerminating      = errors.New("workload is terminating")
+	ErrImageWorkloadTerminating = ErrWorkloadTerminating
 )
 
 const (

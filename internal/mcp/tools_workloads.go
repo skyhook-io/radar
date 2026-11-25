@@ -120,7 +120,7 @@ func handleManageWorkload(ctx context.Context, req *mcp.CallToolRequest, input m
 	switch strings.ToLower(input.Action) {
 	case "restart":
 		warnings := schedulingBlockerWarnings(ctx, kind, input.Namespace, input.Name)
-		if err := k8s.RestartWorkloadWithClient(ctx, kind, input.Namespace, input.Name, dynClient); err != nil {
+		if _, err := k8s.RestartWorkloadWithClient(ctx, kind, input.Namespace, input.Name, dynClient); err != nil {
 			return nil, nil, restartFailure(err)
 		}
 		resp := map[string]any{

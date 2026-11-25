@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"time"
 
+	restartpatch "github.com/skyhook-io/radar/pkg/internal/workloadrestart"
+	"github.com/skyhook-io/radar/pkg/workloadrestart"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -373,17 +376,40 @@ func nextStepIndex(ro *unstructured.Unstructured) int64 {
 // Restart recreates the Rollout's pods in place via spec.restartAt, without
 // creating a new revision or re-running the canary steps.
 func Restart(ctx context.Context, client dynamic.Interface, namespace, name string) (OperationResult, error) {
-	if _, err := get(ctx, client, namespace, name); err != nil {
+	restart, err := RestartWithResult(ctx, client, namespace, name)
+	if err != nil {
 		return OperationResult{}, err
 	}
+	return result("restart", namespace, name,
+		fmt.Sprintf("Rollout %s/%s restarting pods (restartAt %s)", namespace, name, restart.RestartedAt)), nil
+}
 
+// RestartWithResult performs an unconditional Rollout restart and reports the stored cutoff.
+func RestartWithResult(ctx context.Context, client dynamic.Interface, namespace, name string) (workloadrestart.Result, error) {
+	ro, err := get(ctx, client, namespace, name)
+	if err != nil {
+		return workloadrestart.Result{}, err
+	}
 	restartAt := time.Now().UTC().Format(time.RFC3339)
 	patch := fmt.Sprintf(`{"spec":{%q:%q}}`, RestartAtField, restartAt)
-	if _, err := client.Resource(GVR).Namespace(namespace).Patch(
+	updated, err := client.Resource(GVR).Namespace(namespace).Patch(
 		ctx, name, types.MergePatchType, []byte(patch), metav1.PatchOptions{},
-	); err != nil {
-		return OperationResult{}, fmt.Errorf("failed to restart Rollout: %w", err)
+	)
+	if err != nil {
+		return workloadrestart.Result{}, fmt.Errorf("failed to restart Rollout: %w", err)
 	}
-	return result("restart", namespace, name,
-		fmt.Sprintf("Rollout %s/%s restarting pods (restartAt %s)", namespace, name, restartAt)), nil
+	return restartpatch.PatchResult(ro, updated, restartAt, "spec", RestartAtField), nil
+}
+
+// RestartReviewed only sets spec.restartAt on the reviewed, non-terminating Rollout.
+func RestartReviewed(ctx context.Context, client dynamic.Interface, namespace, name string, review workloadrestart.Preconditions) (workloadrestart.Result, error) {
+	return restartReviewed(ctx, client, namespace, name, review, time.Now())
+}
+
+func restartReviewed(ctx context.Context, client dynamic.Interface, namespace, name string, review workloadrestart.Preconditions, at time.Time) (workloadrestart.Result, error) {
+	validate := func(ro *unstructured.Unstructured) error {
+		return assertNotTerminating(ro, namespace, name)
+	}
+	return restartpatch.Apply(ctx, client.Resource(GVR).Namespace(namespace), name, review, validate,
+		at, time.RFC3339, "spec", RestartAtField)
 }

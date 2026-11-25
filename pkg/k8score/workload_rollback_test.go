@@ -20,6 +20,7 @@ import (
 	clienttesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/pkg/rollouts"
+	"github.com/skyhook-io/radar/pkg/workloadrestart"
 )
 
 var (
@@ -342,6 +343,34 @@ func TestRestartRunningDeploymentPatchesTemplate(t *testing.T) {
 	}
 	if n := len(patchActions(client)); n != 1 {
 		t.Fatalf("issued %d patches, want 1", n)
+	}
+}
+
+func TestReviewedRestartBindsTheBuiltInWorkloadUIDAndVersion(t *testing.T) {
+	deployment := deploymentObject(podTemplateV2(), nil, nil)
+	deployment.SetUID("current-uid")
+	deployment.SetResourceVersion("72")
+	client := newAppsClient(deployment)
+	manager := NewWorkloadManager(client, nil)
+	ctx := context.Background()
+	if _, err := manager.RestartReviewedWorkload(ctx, "deployments", "prod", "web", workloadrestart.Preconditions{UID: "old-uid", ResourceVersion: "72"}); !errors.Is(err, workloadrestart.ErrChanged) {
+		t.Fatalf("replacement UID should conflict, got %v", err)
+	}
+	if _, err := manager.RestartReviewedWorkload(ctx, "deployments", "prod", "web", workloadrestart.Preconditions{UID: "current-uid", ResourceVersion: "71"}); !errors.Is(err, workloadrestart.ErrChanged) {
+		t.Fatalf("stale revision should conflict, got %v", err)
+	}
+	if _, err := manager.RestartReviewedWorkload(ctx, "deployments", "prod", "web", workloadrestart.Preconditions{UID: "current-uid", ResourceVersion: "72"}); err != nil {
+		t.Fatalf("restart reviewed deployment: %v", err)
+	}
+	actions := patchActions(client)
+	if len(actions) != 1 || actions[0].GetResource() != deploymentsGVR || actions[0].GetPatchType() != types.MergePatchType {
+		t.Fatalf("wanted one built-in Deployment merge patch, got %v", actions)
+	}
+	var patch struct {
+		Metadata metav1.ObjectMeta `json:"metadata"`
+	}
+	if err := json.Unmarshal(actions[0].GetPatch(), &patch); err != nil || patch.Metadata.UID != "current-uid" || patch.Metadata.ResourceVersion != "72" {
+		t.Fatalf("patch must send reviewed preconditions to the API server: %s, %v", actions[0].GetPatch(), err)
 	}
 }
 
