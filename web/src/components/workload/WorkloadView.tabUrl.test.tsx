@@ -11,6 +11,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
 it.each([
   ['deploys', '?namespaces=shop', 'REPLACE'],
+  ['logs', '?namespaces=shop', 'REPLACE'],
   ['runs', '?tab=runs&namespaces=shop', 'POP'],
 ])('opens Overview for ?tab=%s with the expected URL and history action', async (tab, search, historyAction) => {
   const path = '/workload/configmaps/shop/settings'

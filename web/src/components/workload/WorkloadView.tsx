@@ -1314,7 +1314,7 @@ export function WorkloadView({
         yamlSchemaLoader={features?.yamlSchemas ? fetchYamlSchemas : undefined}
         // Tab state (URL-synced)
         activeTab={migratedTab}
-        extraTabsComplete={migratedTab === 'deploys'}
+        extraTabsComplete={migratedTab === 'deploys' ? true : undefined}
         onTabChange={handleTabChange}
         // Render props
         renderLogsTab={(props) => (

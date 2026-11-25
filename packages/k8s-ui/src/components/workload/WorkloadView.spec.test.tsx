@@ -272,11 +272,11 @@ it.each(['found', 'missing'] as const)('keeps the requested Timeline until the C
   act(() => root.unmount())
 })
 
-it.each([{}, { extraTabsComplete: false }])('keeps a hidden Spec link for a late replacement with %j', completeness => {
+it('keeps a hidden Spec link while the host registers a replacement', () => {
   const host = document.createElement('div')
   const root = createRoot(host)
   const onTabChange = vi.fn()
-  const base = { ...props, ...completeness, renderSummary: undefined, onTabChange }
+  const base = { ...props, extraTabsComplete: false, renderSummary: undefined, onTabChange }
   act(() => root.render(<WorkloadView {...base} />))
   expect(host.querySelector('[aria-selected="true"]')?.textContent).toBe('Overview')
   expect(onTabChange).not.toHaveBeenCalled()

@@ -394,8 +394,9 @@ type WorkloadViewBaseProps = {
     /** The resource's operational issues, for a summary that shows them itself. */
     leadContent?: ReactNode
   }) => ReactNode
-  /** Pass true when extraTabs lists every host tab. Otherwise an unknown or hidden tab
-   * keeps its requested ID so a later registration can supply it or its replacement. */
+  /** By default, repair hidden built-in tab links and preserve unknown host IDs.
+   * Pass false while registering replacements to preserve hidden built-in IDs too.
+   * Pass true when registration is complete to also repair unknown host IDs. */
   extraTabsComplete?: boolean
   /** Expanded view: a line under the title, above the tabs, shown on every tab. */
   subheader?: ReactNode
@@ -585,7 +586,7 @@ export function WorkloadView({
   onSelectTopologyMember,
   renderSummary,
   extraTabs,
-  extraTabsComplete = false,
+  extraTabsComplete,
   tabOrder,
   specTab,
   subheader,
@@ -1092,14 +1093,16 @@ export function WorkloadView({
   const timelineTarget = tabTarget('timeline')
   const logsTarget = tabTarget('logs')
   const topologyTarget = tabTarget('topology')
-  const unavailableTabConfirmed = extraTabsComplete && (
-    (expanded && !resourceLoading && !isBuiltInTab(requestedTab) && !requestedHostTabKnown) ||
+  const hiddenBuiltInTab = (
     (requestedTab === 'spec' && !!resource && !resourceLoading && !expandedSummary) ||
     (requestedTab === 'topology' && topologyTabHidden) ||
     (requestedTab === 'metrics' && (!renderMetricsTab || (!!resource && !resourceLoading && !showMetricsTab))) ||
     (requestedTab === 'cost' && (!renderCostTab || (!!resource && !resourceLoading && !showCostTab))) ||
     (requestedTab === 'logs' && logsFallbackReady)
   )
+  const unavailableTabConfirmed = isBuiltInTab(requestedTab)
+    ? extraTabsComplete !== false && hiddenBuiltInTab
+    : extraTabsComplete === true && expanded && !resourceLoading && !requestedHostTabKnown
   const shouldCommitFallback =
     active &&
     requestedTab !== fallbackTab &&
