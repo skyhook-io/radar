@@ -1022,8 +1022,11 @@ Add the ID label so the match can't break:
   attribute); until then Radar refuses the metrics that carry only the name
   (kube-state metrics such as restarts and HPA, and scraped disk metrics).
   The name must be this cluster's alone over the last 7 days, the longest span
-  charts and rightsizing read: a cluster rebuilt under the same name gets those
-  metrics once the old collector's data is more than 7 days old.
+  charts and rightsizing read: no other collector may send it, and no other
+  cluster may write metrics under it in any cluster label (Radar checks
+  `kube_pod_info` and `up`, and that every node with Pods under the name is one
+  this cluster's collector reports). A cluster rebuilt under the same name gets
+  those metrics once the old data is more than 7 days old.
 
 **What changes.** For a matched context the normal metrics views, rightsizing
 and the AI's `query_prometheus` read OpenObserve. Every query gets this

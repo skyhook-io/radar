@@ -606,3 +606,71 @@ func TestListClusterNames(t *testing.T) {
 		t.Fatal("query error swallowed")
 	}
 }
+
+// A cluster claiming another cluster's name through its collector: the name
+// is unique among k8s_pod_cpu_time senders, but another cluster remote-writes
+// metrics under it, so the metrics that carry only the name stay refused.
+func TestDiscoverIDsCollectorNameUsedByAnotherCluster(t *testing.T) {
+	const other = "11111111-2222-3333-4444-555555555555"
+	claim := []route{
+		{match: []string{"k8s_pod_cpu_time{k8s_cluster_uid=~"}, rows: []map[string]string{{"k8s_cluster_uid": uidA, "k8s_cluster": "victim-prod"}}},
+		{match: []string{"k8s_pod_cpu_time[7d]"}, rows: []map[string]string{{"k8s_cluster_uid": uidA, "k8s_cluster": "victim-prod"}}},
+		{match: []string{"count by (k8s_node_name)", `k8s_cluster_uid="` + uidA + `"`}, rows: []map[string]string{{"k8s_node_name": "a-node-1"}}},
+	}
+	cases := []struct {
+		name     string
+		evidence []route
+		allowed  bool
+		mention  string
+	}{
+		{"nothing else uses the name", nil, true, ""},
+		{"own gateway's kube_pod_info on own nodes", []route{
+			{match: []string{"count by (node)"}, rows: []map[string]string{{"node": "a-node-1"}}},
+			{match: []string{`kube_pod_info{k8s_cluster="victim-prod"}`}, rows: []map[string]string{{"k8s_cluster": "victim-prod"}}},
+		}, true, ""},
+		{"remote write with k8s_cluster and no collector", []route{
+			{match: []string{"count by (node)"}, rows: []map[string]string{{"node": "a-node-1"}, {"node": "victim-node-7"}}},
+		}, false, "victim-node-7"},
+		{"remote write with the ID label", []route{
+			{match: []string{`kube_pod_info{k8s_cluster="victim-prod"}`}, rows: []map[string]string{{"k8s_cluster": "victim-prod", "radar_cluster_uid": other}}},
+		}, false, other},
+		{"another partition label", []route{
+			{match: []string{`up{cluster_name="victim-prod"}`}, rows: []map[string]string{{"cluster_name": "victim-prod"}}},
+		}, false, "cluster_name"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &routeStore{routes: append(append([]route(nil), tc.evidence...), claim...)}
+			got, err := DiscoverIDs(context.Background(), store, []string{uidA})
+			if err != nil {
+				t.Fatal(err)
+			}
+			a := got[uidA]
+			if a.Options.GatewayMetricsAllowed != tc.allowed {
+				t.Fatalf("GatewayMetricsAllowed = %v, warning %q", a.Options.GatewayMetricsAllowed, a.Warning)
+			}
+			if !tc.allowed {
+				if !strings.Contains(a.Warning, "Another cluster also wrote metrics") || !strings.Contains(a.Warning, tc.mention) {
+					t.Fatalf("warning = %q", a.Warning)
+				}
+				if _, err := Rewrite(`kube_pod_container_status_restarts_total`, a.Options); !errors.Is(err, ErrNotCollected) {
+					t.Fatalf("name-only metric err = %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestConfirmedNameMatchCollectorNameUsedByAnotherCluster(t *testing.T) {
+	store := &routeStore{routes: []route{
+		{match: []string{"count by (node)"}, rows: []map[string]string{{"node": "victim-node-7"}}},
+		{match: []string{`k8s_pod_cpu_time{k8s_cluster="prod-a"}`}, rows: []map[string]string{{"k8s_cluster": "prod-a", "k8s_cluster_uid": uidA}}},
+	}}
+	m, err := ConfirmedNameMatch(context.Background(), store, "k8s_cluster", "prod-a", uidA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Options.GatewayMetricsAllowed || !strings.Contains(m.Warning, "victim-node-7") {
+		t.Fatalf("match = %+v", m)
+	}
+}

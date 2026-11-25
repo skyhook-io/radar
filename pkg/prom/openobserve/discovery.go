@@ -313,9 +313,112 @@ func DiscoverIDs(ctx context.Context, t prom.Transport, uids []string) (map[stri
 		return nil, err
 	}
 	for _, uid := range pending {
-		out[uid] = collectorMatch(uid, collectorFound[uid], usage)
+		name := collectorFound[uid]
+		elsewhere := ""
+		if collectorNameUnique(uid, name, usage) {
+			if elsewhere, err = nameUsedElsewhere(ctx, dt, name, uid); err != nil {
+				return nil, err
+			}
+		}
+		out[uid] = collectorMatch(uid, name, usage, elsewhere)
 	}
 	return out, nil
+}
+
+func collectorNameUnique(uid, name string, usage map[string]map[string]bool) bool {
+	return name != UnsafeDefaultName && !IsReservedValue(name) && len(usage[name]) == 1 && usage[name][uid]
+}
+
+// nameEvidenceMetrics are metrics nearly every cluster's Prometheus or
+// collector gateway sends, read to find another cluster writing a collector's
+// cluster name under any label.
+var nameEvidenceMetrics = []string{"kube_pod_info", "up"}
+
+// maxNameEvidenceNodes bounds the node lists nameUsedElsewhere compares.
+const maxNameEvidenceNodes = 5000
+
+// nameUsedElsewhere looks, over nameHistory, for another cluster writing
+// metrics under a collector's cluster name, which the collector's
+// k8s_pod_cpu_time alone can't show: a Prometheus remote-writing the name in
+// k8s_cluster (or any partition label) without a collector. uid is the
+// collector's k8s_cluster_uid ("" for an agent that sends none). It returns
+// what it found, or "" when nothing else uses the name.
+//
+// Series carrying another cluster ID, or the name in a partition label the
+// collector doesn't write, belong to someone else. Series with only
+// k8s_cluster=name look the same from the collector's own gateway and from
+// another cluster, so their Pods' nodes are compared with the nodes the
+// collector's agents run on: another cluster's Pods run on nodes this
+// collector has never reported.
+func nameUsedElsewhere(ctx context.Context, t prom.Transport, name, uid string) (string, error) {
+	qv := strconv.Quote(name)
+	group := strings.Join(append([]string{IDLabel, collectorUIDLabel}, PartitionLabels...), ", ")
+	queries := make([]string, 0, len(nameEvidenceMetrics)+2)
+	for _, metric := range nameEvidenceMetrics {
+		parts := make([]string, 0, len(PartitionLabels))
+		for _, l := range PartitionLabels {
+			parts = append(parts, fmt.Sprintf(`count by (%s) (last_over_time(%s{%s=%s}[%s]))`, group, metric, l, qv, nameHistory))
+		}
+		queries = append(queries, strings.Join(parts, " or "))
+	}
+	agentSelector := fmt.Sprintf(`k8s_pod_cpu_time{%s=%s}`, collectorUIDLabel, strconv.Quote(uid))
+	if uid == "" {
+		agentSelector = fmt.Sprintf(`k8s_pod_cpu_time{k8s_cluster=%s}`, qv)
+	}
+	queries = append(queries,
+		fmt.Sprintf(`count by (node) (last_over_time(kube_pod_info{k8s_cluster=%s,node!=""}[%s]))`, qv, nameHistory),
+		fmt.Sprintf(`count by (k8s_node_name) (last_over_time(%s[%s]))`, agentSelector, nameHistory),
+	)
+	results := make([][]prom.Series, len(queries))
+	errs := make([]error, len(queries))
+	var wg sync.WaitGroup
+	for i, q := range queries {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i], errs[i] = query(ctx, t, q)
+		}()
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		return "", err
+	}
+
+	for i, metric := range nameEvidenceMetrics {
+		for _, s := range results[i] {
+			if id := s.Labels[IDLabel]; id != "" && id != uid {
+				return fmt.Sprintf("%s carries %s=%q", metric, IDLabel, id), nil
+			}
+			if id := s.Labels[collectorUIDLabel]; id != "" && id != uid {
+				return fmt.Sprintf("%s carries %s=%q", metric, collectorUIDLabel, id), nil
+			}
+			for _, l := range PartitionLabels {
+				if l != collectorClusterLabel && s.Labels[l] == name {
+					return fmt.Sprintf("%s has %s=%q", metric, l, name), nil
+				}
+			}
+		}
+	}
+
+	podNodes, agentNodes := results[len(results)-2], results[len(results)-1]
+	if len(podNodes) > maxNameEvidenceNodes || len(agentNodes) > maxNameEvidenceNodes {
+		return fmt.Sprintf("more than %d nodes report under the name, too many to compare", maxNameEvidenceNodes), nil
+	}
+	own := make(map[string]bool, len(agentNodes))
+	for _, s := range agentNodes {
+		own[s.Labels["k8s_node_name"]] = true
+	}
+	var foreign []string
+	for _, s := range podNodes {
+		if n := s.Labels["node"]; n != "" && !own[n] {
+			foreign = append(foreign, n)
+		}
+	}
+	if len(foreign) > 0 {
+		sort.Strings(foreign)
+		return fmt.Sprintf("kube_pod_info lists Pods on node %s, which this cluster's collector has never reported", foreign[0]), nil
+	}
+	return "", nil
 }
 
 // collectorNameUsage maps each collector cluster name to the k8s_cluster_uid
@@ -344,6 +447,12 @@ func collectorNameUsage(ctx context.Context, t prom.Transport, name string) (map
 	return usage, nil
 }
 
+// nameElsewhereWarning explains refused name-only metrics when another
+// cluster writes the collector's name without a collector of its own.
+func nameElsewhereWarning(name, evidence string) string {
+	return fmt.Sprintf("Another cluster also wrote metrics under the cluster name %q in the last 7 days (%s). Radar refuses this cluster's kube-state metrics (restarts, HPA, workload ownership) and scraped disk metrics, which carry only the name, until the collector is given a unique cluster name or a radar_cluster_uid label, or the other cluster's data is more than 7 days old.", name, evidence)
+}
+
 // sharedNameWarning explains refused name-only metrics when another collector
 // sent the same cluster name within nameHistory, now or before (a cluster
 // rebuilt under the same name).
@@ -356,7 +465,9 @@ func reservedCollectorNameWarning(name string) string {
 	return fmt.Sprintf("This cluster's OpenObserve collector sends the cluster name %q, which OpenObserve treats as its dashboard placeholder and never filters on. Radar matches it by cluster ID only and refuses its kube-state metrics (restarts, HPA, workload ownership) and scraped disk metrics, which carry only the name, until the collector is given another cluster name.", name)
 }
 
-func collectorMatch(uid, name string, usage map[string]map[string]bool) ClusterMatch {
+// collectorMatch builds the ID match of a collector sending name. elsewhere
+// is what nameUsedElsewhere found, for a name unique among collectors.
+func collectorMatch(uid, name string, usage map[string]map[string]bool, elsewhere string) ClusterMatch {
 	if IsReservedValue(name) {
 		// The name can't filter, so the cluster ID is the only matcher and
 		// nothing that carries only the name is read.
@@ -371,7 +482,7 @@ func collectorMatch(uid, name string, usage map[string]map[string]bool) ClusterM
 		m.Missing = staticMissing(m.Options)
 		return m
 	}
-	unique := name != UnsafeDefaultName && len(usage[name]) == 1 && usage[name][uid]
+	unique := collectorNameUnique(uid, name, usage) && elsewhere == ""
 	m := ClusterMatch{
 		By:      "id",
 		Dialect: DialectCollector,
@@ -389,6 +500,8 @@ func collectorMatch(uid, name string, usage map[string]map[string]bool) ClusterM
 	if !unique {
 		if name == UnsafeDefaultName {
 			m.Warning = fmt.Sprintf("This cluster's OpenObserve collector sends the default cluster name %q, which other clusters can share. Radar refuses its kube-state metrics (restarts, HPA, workload ownership) and scraped disk metrics, which carry only the name, until the collector is given a unique cluster name or a radar_cluster_uid label.", name)
+		} else if elsewhere != "" {
+			m.Warning = nameElsewhereWarning(name, elsewhere)
 		} else {
 			m.Warning = sharedNameWarning(name)
 		}
@@ -573,6 +686,7 @@ func ConfirmedNameMatch(ctx context.Context, t prom.Transport, label, value, own
 	}
 
 	var m ClusterMatch
+	elsewhere := ""
 	switch {
 	case len(collectorUIDs) > 1:
 		return ClusterMatch{}, fmt.Errorf("openobserve: more than one OpenObserve collector sends the cluster name %q", value)
@@ -591,6 +705,12 @@ func ConfirmedNameMatch(ctx context.Context, t prom.Transport, label, value, own
 			return ClusterMatch{}, err
 		}
 		unique := len(usage[value]) == 1 && usage[value][uid]
+		if unique {
+			if elsewhere, err = nameUsedElsewhere(ctx, dt, value, uid); err != nil {
+				return ClusterMatch{}, err
+			}
+			unique = elsewhere == ""
+		}
 		m = ClusterMatch{
 			Dialect: DialectCollector,
 			Options: RewriteOptions{Matchers: []Matcher{{Name: "k8s_cluster", Value: value}}, Dialect: DialectCollector, CollectorUID: uid, GatewayMetricsAllowed: unique},
@@ -620,7 +740,11 @@ func ConfirmedNameMatch(ctx context.Context, t prom.Transport, label, value, own
 		m.Warning += " " + CollectorNoIDWarning
 	}
 	if m.Dialect == DialectCollector && !m.Options.GatewayMetricsAllowed {
-		m.Warning += " " + sharedNameWarning(value)
+		if elsewhere != "" {
+			m.Warning += " " + nameElsewhereWarning(value, elsewhere)
+		} else {
+			m.Warning += " " + sharedNameWarning(value)
+		}
 	}
 	missing, err := DetectFamilies(ctx, dt, m.Options)
 	if err != nil {
