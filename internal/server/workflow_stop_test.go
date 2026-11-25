@@ -118,15 +118,20 @@ func TestWorkflowStop(t *testing.T) {
 			t.Fatal("a refused request patched")
 		}
 	})
-	t.Run("only stops the resource version checked by the caller", func(t *testing.T) {
-		srv, dyn := workflowStopServer(t, testWorkflow("Running", ""))
-		rec := postStop(srv, `{"strategy":"Stop","uid":"run-1","resourceVersion":"6"}`, nil)
+	t.Run("pinning the reviewed version protects an in-place retry with the same UID", func(t *testing.T) {
+		srv, dyn := workflowStopServer(t, testWorkflow("Failed", ""))
+		retried := testWorkflow("Running", "")
+		retried.SetResourceVersion("8")
+		if err := dyn.Tracker().Update(argoWorkflowGVR, retried, "jobs"); err != nil {
+			t.Fatal(err)
+		}
+		rec := postStop(srv, `{"strategy":"Stop","uid":"run-1","resourceVersion":"7"}`, nil)
 		if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "workflow_changed") || len(workflowPatches(dyn)) != 0 {
 			t.Fatalf("unexpected stale stop response = %d: %s", rec.Code, rec.Body.String())
 		}
-		rec = postStop(srv, `{"strategy":"Stop","uid":"run-1","resourceVersion":"7"}`, nil)
+		rec = postStop(srv, `{"strategy":"Stop","uid":"run-1"}`, nil)
 		if rec.Code != http.StatusOK || len(workflowPatches(dyn)) != 1 {
-			t.Fatalf("unexpected current stop response = %d: %s", rec.Code, rec.Body.String())
+			t.Fatalf("unexpected UID-only stop response = %d: %s", rec.Code, rec.Body.String())
 		}
 	})
 	t.Run("replacement takes precedence over phase, shutdown and version", func(t *testing.T) {

@@ -985,9 +985,9 @@ are redacted in its column and drawer; the YAML view and MCP show the object as 
 | WorkflowTemplate | `argoproj.io/v1alpha1` | — | Yes | — |
 | CronWorkflow | `argoproj.io/v1alpha1` | — | Generic | — |
 
-**Stop a Workflow** with `POST /api/workflows/{namespace}/{name}/stop` (capability `workflowStop`). Send a JSON object with the reviewed Workflow's `metadata.uid` as `uid` and an explicit `strategy` of `Stop` or `Terminate`. Callers may also send the reviewed `resourceVersion`. Missing either required field or supplying an unknown strategy returns 400. The body limit is 1 KiB.
+**Stop a Workflow** with `POST /api/workflows/{namespace}/{name}/stop` (capability `workflowStop`). Send a JSON object with the reviewed Workflow's `metadata.uid` as `uid` and an explicit `strategy` of `Stop` or `Terminate`. An in-place `argo retry` preserves the Workflow UID, so callers that must stop only the execution they reviewed should also send its reviewed `resourceVersion`. Missing either required field or supplying an unknown strategy returns 400. The body limit is 1 KiB.
 
-Argo reconciles `spec.shutdown` asynchronously. Stop allows exit handlers to run. Terminate skips them and can escalate an existing Stop. Radar checks the Workflow in this order.
+Argo reconciles `spec.shutdown` asynchronously. Stop allows exit handlers to run. Terminate skips them and can escalate an existing Stop. Older Argo controllers (for example, v3.5) may leave shutdown pending while the Workflow is globally suspended, so watch `status.phase` for completion. Radar checks the Workflow in this order.
 
 1. A different UID means the name now identifies another run. Radar returns 409 `workflow_replaced`.
 2. A finished run returns 409 `workflow_finished`.
