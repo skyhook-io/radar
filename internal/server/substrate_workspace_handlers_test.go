@@ -433,7 +433,7 @@ func call(t *testing.T, s *Server, h http.HandlerFunc, c substrateCall, out any)
 	return rec
 }
 
-func errorCode(t *testing.T, rec *httptest.ResponseRecorder) string {
+func substrateErrorCode(t *testing.T, rec *httptest.ResponseRecorder) string {
 	t.Helper()
 	var body struct {
 		ErrorCode string `json:"error_code"`
@@ -452,7 +452,7 @@ func TestSubstrateStatusNotConfigured(t *testing.T) {
 		t.Errorf("status = %+v", status)
 	}
 	rec := call(t, s, s.handleSubstrateActors, substrateCall{path: "/api/substrate/actors"}, nil)
-	if rec.Code != http.StatusConflict || errorCode(t, rec) != substrateapi.CodeNotConfigured {
+	if rec.Code != http.StatusConflict || substrateErrorCode(t, rec) != substrateapi.CodeNotConfigured {
 		t.Errorf("actors before configuring: %d %s", rec.Code, rec.Body)
 	}
 	var ws substrateWorkspaceResponse
@@ -575,7 +575,7 @@ func TestSubstrateConnected(t *testing.T) {
 		t.Errorf("crashed detail = %+v", detail)
 	}
 	rec := call(t, s, s.handleSubstrateActor, substrateCall{path: "/api/substrate/actors/research/nope", params: map[string]string{"atespace": "research", "name": "nope"}}, nil)
-	if rec.Code != http.StatusNotFound || errorCode(t, rec) != substrateapi.CodeNotFound {
+	if rec.Code != http.StatusNotFound || substrateErrorCode(t, rec) != substrateapi.CodeNotFound {
 		t.Errorf("missing actor = %d %s", rec.Code, rec.Body)
 	}
 
@@ -627,7 +627,7 @@ func TestSubstrateUnreachable(t *testing.T) {
 		t.Errorf("tier = %+v", status.APITier)
 	}
 	rec := call(t, s, s.handleSubstrateActors, substrateCall{path: "/api/substrate/actors"}, nil)
-	if rec.Code != http.StatusServiceUnavailable || errorCode(t, rec) != substrateapi.CodeUnreachable {
+	if rec.Code != http.StatusServiceUnavailable || substrateErrorCode(t, rec) != substrateapi.CodeUnreachable {
 		t.Errorf("actors = %d %s", rec.Code, rec.Body)
 	}
 }
@@ -663,7 +663,7 @@ func TestSubstratePermissionDeniedForOneAtespace(t *testing.T) {
 		}
 	}
 	rec := call(t, s, s.handleSubstrateActor, substrateCall{path: "/api/substrate/actors/secret/hidden-1", params: map[string]string{"atespace": "secret", "name": "hidden-1"}}, nil)
-	if rec.Code != http.StatusForbidden || errorCode(t, rec) != substrateapi.CodeDenied {
+	if rec.Code != http.StatusForbidden || substrateErrorCode(t, rec) != substrateapi.CodeDenied {
 		t.Errorf("denied actor = %d %s", rec.Code, rec.Body)
 	}
 }
@@ -686,7 +686,7 @@ func TestSubstrateSharedListenerRefusesConnection(t *testing.T) {
 	s := substrateTestServer(t, substrateapi.Kube{})
 	s.listenAddress = "0.0.0.0"
 	rec := call(t, s, s.handlePutSubstrateConnection, substrateCall{method: http.MethodPut, path: "/api/substrate/connection", body: `{"identity":"shared"}`}, nil)
-	if rec.Code != http.StatusForbidden || errorCode(t, rec) != substrateapi.CodeSharedRadar {
+	if rec.Code != http.StatusForbidden || substrateErrorCode(t, rec) != substrateapi.CodeSharedRadar {
 		t.Errorf("PUT on a shared listener = %d %s", rec.Code, rec.Body)
 	}
 	if rec := call(t, s, s.handleGetSubstrateConnection, substrateCall{path: "/api/substrate/connection"}, nil); rec.Code != http.StatusOK {
@@ -707,7 +707,7 @@ func TestSubstrateCrossSitePutRefused(t *testing.T) {
 	h := s.requireSameOrigin(http.HandlerFunc(s.handlePutSubstrateConnection))
 	rec := call(t, s, h.ServeHTTP, substrateCall{method: http.MethodPut, path: "/api/substrate/connection", body: `{"identity":"shared"}`,
 		header: map[string]string{"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site", "Content-Type": "application/json"}}, nil)
-	if rec.Code != http.StatusForbidden || errorCode(t, rec) != "cross_origin_refused" {
+	if rec.Code != http.StatusForbidden || substrateErrorCode(t, rec) != "cross_origin_refused" {
 		t.Errorf("cross-site PUT = %d %s", rec.Code, rec.Body)
 	}
 	if saved, _, _ := s.substrate.SavedSettings(); saved != nil {
@@ -765,7 +765,7 @@ func TestSubstrateConnectionBoundToReviewedTarget(t *testing.T) {
 
 	useTestCluster(t, "https://cluster-b")
 	rec := putConnectionFor(t, s, onA.Target, map[string]any{"identity": "tokenFile", "tokenFile": tokenFile(t, fullToken)}, nil)
-	if rec.Code != http.StatusConflict || errorCode(t, rec) != substrateapi.CodeTargetChanged {
+	if rec.Code != http.StatusConflict || substrateErrorCode(t, rec) != substrateapi.CodeTargetChanged {
 		t.Fatalf("save reviewed on A, sent after a switch to B = %d %s", rec.Code, rec.Body)
 	}
 	var onB substrateConnectionView
@@ -965,7 +965,7 @@ func TestSubstrateCaptureRefusedDuringContextOperation(t *testing.T) {
 		t.Errorf("tier during a switch = %+v", status.APITier)
 	}
 	rec := call(t, s, s.handleSubstrateActors, substrateCall{path: "/api/substrate/actors"}, nil)
-	if rec.Code != http.StatusConflict || errorCode(t, rec) != substrateapi.CodeContextChanged {
+	if rec.Code != http.StatusConflict || substrateErrorCode(t, rec) != substrateapi.CodeContextChanged {
 		t.Errorf("actors during a switch = %d %s", rec.Code, rec.Body)
 	}
 }
@@ -1199,7 +1199,7 @@ func TestSubstrateConnectionProbedBeforeSave(t *testing.T) {
 		"unauthenticated": {fakeConnection(t, "wrong-token-0123456789"), substrateapi.CodeUnauthenticated},
 	} {
 		rec := putConnection(t, s, tc.body, nil)
-		if rec.Code != http.StatusBadGateway || errorCode(t, rec) != tc.code || !strings.Contains(rec.Body.String(), "nothing was saved") {
+		if rec.Code != http.StatusBadGateway || substrateErrorCode(t, rec) != tc.code || !strings.Contains(rec.Body.String(), "nothing was saved") {
 			t.Errorf("%s: %d %s", name, rec.Code, rec.Body)
 		}
 		if strings.Contains(rec.Body.String(), "wrong-token") {
@@ -1684,11 +1684,11 @@ func TestSubstrateReadsHonorTheNamespacePin(t *testing.T) {
 	t.Cleanup(func() { k8s.SetTestClient(prevLogs) })
 
 	rec := call(t, s, s.handleSubstratePool, substrateCall{path: "/x", params: map[string]string{"namespace": "agents", "name": "agent-pool"}}, nil)
-	if rec.Code != readStatusFor(readreason.OutsideNamespacePin) || errorCode(t, rec) != string(readreason.OutsideNamespacePin) {
+	if rec.Code != readStatusFor(readreason.OutsideNamespacePin) || substrateErrorCode(t, rec) != string(readreason.OutsideNamespacePin) {
 		t.Errorf("pool outside the pin = %d %s", rec.Code, rec.Body)
 	}
 	rec = call(t, s, s.handleSubstrateActorLogs, substrateCall{path: "/logs", params: map[string]string{"atespace": "research", "name": "lit-0201"}}, nil)
-	if rec.Code != readStatusFor(readreason.OutsideNamespacePin) || errorCode(t, rec) != string(readreason.OutsideNamespacePin) {
+	if rec.Code != readStatusFor(readreason.OutsideNamespacePin) || substrateErrorCode(t, rec) != string(readreason.OutsideNamespacePin) {
 		t.Errorf("worker log outside the pin = %d %s", rec.Code, rec.Body)
 	}
 }
@@ -1721,7 +1721,7 @@ func TestSubstratePoolDetailAbsence(t *testing.T) {
 		t.Errorf("proven absent (get NotFound, every worker read) = %d", rec.Code)
 	}
 	get(nil, errors.New("watch still syncing"))
-	if rec := read("nope"); rec.Code != http.StatusServiceUnavailable || errorCode(t, rec) != substrateapi.CodeIncomplete {
+	if rec := read("nope"); rec.Code != http.StatusServiceUnavailable || substrateErrorCode(t, rec) != substrateapi.CodeIncomplete {
 		t.Errorf("an unreadable pool is not proven absent: %d %s", rec.Code, rec.Body)
 	}
 }
@@ -1743,8 +1743,8 @@ func TestSubstrateWorkerHeldForAbsentWithoutUpdateTime(t *testing.T) {
 
 func TestSubstrateSettingsCodesSplit(t *testing.T) {
 	s := substrateTestServer(t, substrateapi.Kube{})
-	if rec := putConnection(t, s, map[string]any{"identity": "root"}, nil); errorCode(t, rec) != substrateapi.CodeInvalidSettings {
-		t.Errorf("a bad request = %s", errorCode(t, rec))
+	if rec := putConnection(t, s, map[string]any{"identity": "root"}, nil); substrateErrorCode(t, rec) != substrateapi.CodeInvalidSettings {
+		t.Errorf("a bad request = %s", substrateErrorCode(t, rec))
 	}
 	if err := os.WriteFile(s.substrate.Store.Path, []byte("{not json"), 0600); err != nil {
 		t.Fatal(err)

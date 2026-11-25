@@ -151,7 +151,7 @@ func TestSubstrateHubOwnerReadsAsTheSharedIdentityMintedAsThemselves(t *testing.
 		t.Errorf("owner status = %+v", status)
 	}
 	for _, h := range []http.HandlerFunc{s.handlePutSubstrateConnection} {
-		if rec := call(t, s, h, substrateCall{path: "/api/substrate/connection", user: alice}, nil); rec.Code != http.StatusForbidden || errorCode(t, rec) != "operator_managed" {
+		if rec := call(t, s, h, substrateCall{path: "/api/substrate/connection", user: alice}, nil); rec.Code != http.StatusForbidden || substrateErrorCode(t, rec) != "operator_managed" {
 			t.Errorf("Hub's connection is its operator's, as every integration's: %d %s", rec.Code, rec.Body)
 		}
 	}
@@ -194,7 +194,7 @@ func TestSubstrateHubOwnerWhoCannotMint(t *testing.T) {
 		t.Errorf("tier = %+v", ws.APITier)
 	}
 	rec := call(t, s, s.handleSubstrateActors, substrateCall{path: "/api/substrate/actors", user: hubUser("o", "owner")}, nil)
-	if rec.Code != http.StatusForbidden || errorCode(t, rec) != substrateapi.CodeMintDenied {
+	if rec.Code != http.StatusForbidden || substrateErrorCode(t, rec) != substrateapi.CodeMintDenied {
 		t.Errorf("actors = %d %s", rec.Code, rec.Body)
 	}
 	if rec := call(t, s, s.handleSubstrateActors, substrateCall{path: "/api/substrate/actors", user: hubUser("a", "owner")}, nil); rec.Code != http.StatusOK {

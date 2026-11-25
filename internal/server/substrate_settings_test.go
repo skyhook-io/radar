@@ -86,7 +86,7 @@ func TestSubstrateGateMatrix(t *testing.T) {
 				if rec.Code != 200 {
 					t.Fatalf("allowed: %d %s", rec.Code, rec.Body)
 				}
-			} else if rec.Code != 403 || errorCode(t, rec) != tc.code {
+			} else if rec.Code != 403 || substrateErrorCode(t, rec) != tc.code {
 				t.Fatalf("denied: %d %s", rec.Code, rec.Body)
 			}
 			asked, minted := mints.count()
@@ -162,7 +162,7 @@ func TestSubstrateConnectionRevisionReconfirmAndConsent(t *testing.T) {
 	if _, err := s.substrate.Store.Update(context.Background(), first.Revision, first.Target.Binding, &saved); err != nil {
 		t.Fatal(err)
 	}
-	if rec := send(first, initial, "save", false); rec.Code != 409 || errorCode(t, rec) != substrateapi.CodeConflict {
+	if rec := send(first, initial, "save", false); rec.Code != 409 || substrateErrorCode(t, rec) != substrateapi.CodeConflict {
 		t.Fatalf("stale: %d %s", rec.Code, rec.Body)
 	}
 	call(t, s, s.handleGetSubstrateConnection, substrateCall{path: "/api/substrate/connection"}, &first)
@@ -170,7 +170,7 @@ func TestSubstrateConnectionRevisionReconfirmAndConsent(t *testing.T) {
 	f := defaultFake()
 	endpoint, ca := startFakeSubstrate(t, f)
 	candidate := map[string]any{"identity": "tokenFile", "tokenFile": initial["tokenFile"], "endpoint": endpoint, "caFile": ca}
-	if rec := send(first, candidate, "save", false); rec.Code != 409 || errorCode(t, rec) != substrateapi.CodeConfirmDestination {
+	if rec := send(first, candidate, "save", false); rec.Code != 409 || substrateErrorCode(t, rec) != substrateapi.CodeConfirmDestination {
 		t.Fatalf("consent: %d %s", rec.Code, rec.Body)
 	}
 	if f.atespaceCalls.Load() != 0 {
@@ -188,7 +188,7 @@ func TestSubstrateConnectionRevisionReconfirmAndConsent(t *testing.T) {
 	if !changed.TargetChanged || changed.Access.Code != substrateapi.CodeTargetChanged {
 		t.Fatalf("changed: %+v", changed)
 	}
-	if rec := send(changed, candidate, "save", false); rec.Code != 409 || errorCode(t, rec) != substrateapi.CodeTargetChanged {
+	if rec := send(changed, candidate, "save", false); rec.Code != 409 || substrateErrorCode(t, rec) != substrateapi.CodeTargetChanged {
 		t.Fatalf("must reconfirm: %d %s", rec.Code, rec.Body)
 	}
 	if rec := send(changed, candidate, "reconfirm", false); rec.Code != 200 {
@@ -292,7 +292,7 @@ func TestSubstrateEveryCredentialDestinationChangeNeedsConsent(t *testing.T) {
 				}
 				body, _ := json.Marshal(map[string]any{"target": target, "revision": revision, "settings": next})
 				rec := call(t, s, s.handlePutSubstrateConnection, substrateCall{method: http.MethodPut, path: "/api/substrate/connection", body: string(body)}, nil)
-				if rec.Code != 409 || errorCode(t, rec) != substrateapi.CodeConfirmDestination || !strings.Contains(rec.Body.String(), "→") {
+				if rec.Code != 409 || substrateErrorCode(t, rec) != substrateapi.CodeConfirmDestination || !strings.Contains(rec.Body.String(), "→") {
 					t.Fatalf("destination change: %d %s", rec.Code, rec.Body)
 				}
 			})
@@ -310,7 +310,7 @@ func TestSubstrateManagedRuntimeCAFailureNeverDisclosesPath(t *testing.T) {
 	}
 	user := hubUser("reader", "member")
 	rec := call(t, s, s.handleSubstrateActors, substrateCall{path: "/api/substrate/actors", user: user}, nil)
-	if rec.Code != http.StatusServiceUnavailable || errorCode(t, rec) != substrateapi.CodeTLS {
+	if rec.Code != http.StatusServiceUnavailable || substrateErrorCode(t, rec) != substrateapi.CodeTLS {
 		t.Fatalf("CA failure: %d %s", rec.Code, rec.Body)
 	}
 	if strings.Contains(rec.Body.String(), c.Settings.CAFile) {
