@@ -4,7 +4,7 @@ import { LoaderCircle, RefreshCw } from 'lucide-react'
 import type { DockTab } from '@skyhook-io/k8s-ui'
 import { ApiError, fetchResourceWithRelationships } from '../../api/client'
 import { getApiBase } from '../../api/config'
-import { connectionHeaderValue } from '../../api/connectionBinding'
+import { connectionHeaderValue, useCurrentConnection } from '../../api/connectionBinding'
 import type { PodDebugTarget } from '../resources/PodDebugAction'
 
 type Session = NonNullable<DockTab['debugSession']>
@@ -50,6 +50,7 @@ export function PodDebugSession({ namespace, podName, containerName, session, is
   namespace: string; podName: string; containerName: string; session: Session; isActive?: boolean; children: ReactNode
 }) {
   const [connected, setConnected] = useState(false)
+  const currentConnection = useCurrentConnection()
   const current = () => getApiBase() === session.apiBase && connectionHeaderValue() === session.connectionId
   const query = useQuery({
     queryKey: ['pod-debug-startup', session.apiBase, session.connectionId, session.podUID, containerName],
@@ -67,7 +68,7 @@ export function PodDebugSession({ namespace, podName, containerName, session, is
   })
 
   if (!connected && !query.error && query.data?.state === 'running' && current()) setConnected(true)
-  if (!current()) return <div role="status" className="p-5 text-sm text-theme-text-secondary">The cluster connection changed. Reopen the Pod to inspect this debug session.</div>
+  if (currentConnection !== session.connectionId || getApiBase() !== session.apiBase) return <div role="status" className="p-5 text-sm text-theme-text-secondary">The cluster connection changed. Reopen the Pod to inspect this debug session.</div>
   if (connected) return <>{children}</>
 
   const status = query.data

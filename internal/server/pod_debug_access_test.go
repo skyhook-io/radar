@@ -47,7 +47,7 @@ func TestNamedPodDebugAccess(t *testing.T) {
 				}
 				return true, review, nil
 			})
-			if got := reviewPodDebugAccess(context.Background(), client, "payments", "checkout"); got.State != tc.want || got.Exec != tc.exec.Allowed {
+			if got := reviewPodDebugAccess(context.Background(), client, "payments", "checkout", false); got.State != tc.want || got.Exec != tc.exec.Allowed {
 				t.Fatalf("access=%+v, want state=%s, exec=%v", got, tc.want, tc.exec.Allowed)
 			}
 			want := []authv1.ResourceAttributes{{Namespace: "payments", Name: "checkout", Verb: "create", Resource: "pods", Subresource: "exec"}, {Namespace: "payments", Name: "checkout", Verb: "update", Resource: "pods", Subresource: "ephemeralcontainers"}}
@@ -58,6 +58,21 @@ func TestNamedPodDebugAccess(t *testing.T) {
 	}
 }
 
+func TestHostedPodDebugChecksOnlyExec(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("create", "selfsubjectaccessreviews", func(action k8stest.Action) (bool, runtime.Object, error) {
+		review := action.(k8stest.CreateAction).GetObject().(*authv1.SelfSubjectAccessReview)
+		if attrs := review.Spec.ResourceAttributes; attrs.Name != "api" || attrs.Subresource != "exec" {
+			t.Fatalf("unexpected hosted review: %+v", attrs)
+		}
+		review.Status.Allowed = true
+		return true, review, nil
+	})
+	if got := reviewPodDebugAccess(context.Background(), client, "demo", "api", true); got != (podDebugAccess{State: "unavailable", Exec: true}) {
+		t.Fatalf("%+v", got)
+	}
+}
+
 func TestPodDebugAccessScopeAndMode(t *testing.T) {
 	for _, tc := range []struct {
 		name, cloud   string
@@ -65,7 +80,7 @@ func TestPodDebugAccessScopeAndMode(t *testing.T) {
 		want          int
 	}{
 		{"shared unauthenticated, disabled exec", "false", false, true, http.StatusOK},
-		{"hosted", "true", false, false, http.StatusOK},
+
 		{"outside namespace pin", "false", true, false, http.StatusForbidden},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

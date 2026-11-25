@@ -105,8 +105,7 @@ import { TIME_RANGES, PrometheusCharts, isPrometheusSupported } from '../resourc
 import { RightsizingStrip } from '../resource/RightsizingStrip'
 import { PrometheusChartsGrid } from '../resource/PrometheusChartsGrid'
 import { DatadogSetupHint, DatadogWorkloadCharts, useDatadogWorkloadCharts, WorkloadCostRightsizing } from '../resource/DatadogWorkloadCharts'
-import { PodDebugAction, type PodDebugTarget } from '../resources/PodDebugAction'
-import { usePodDebugAccess } from '../../api/podDebug'
+import { PodDebugAction, usePodDetailAccess, type PodDebugTarget } from '../resources/PodDebugAction'
 import { useNavCustomization } from '../../context/NavCustomization'
 import { RestartEventLane } from '../resource/RestartChart'
 import { WorkloadCostTab } from '../cost/WorkloadCostTab'
@@ -345,11 +344,9 @@ function useActionsBarProps(
   const openWorkloadLogs = useOpenWorkloadLogs()
   const openNodeTerminal = useOpenNodeTerminal()
   const { embedded } = useNavCustomization()
-  const { canExec, podDebugImage, canViewLogs, canPortForward, workloadWrites, workloadWritesPending } = useNamespacedCapabilities(namespace)
-  const { query: namedAccess } = usePodDebugAccess(namespace, name, pod?.metadata.uid ?? '', !!pod && !embedded &&
-    !podDebugImage && pod.status.phase === 'Running' && !pod.metadata.deletionTimestamp)
-  const access = !namedAccess.error && pod ? namedAccess.data : undefined
-  const debugImage = podDebugImage || (access?.state === 'allowed' ? access.image : undefined)
+  const nsCaps = useNamespacedCapabilities(namespace)
+  const { canViewLogs, canPortForward, workloadWrites, workloadWritesPending } = nsCaps
+  const { canExec, debugImage } = usePodDetailAccess(pod, nsCaps)
   const queryClient = useQueryClient()
   // Live forward when local+RBAC; otherwise (in-cluster/Cloud) still surface the
   // copy-paste kubectl command. The button picks live vs. copy by deployment mode.
@@ -437,7 +434,7 @@ function useActionsBarProps(
   const { renderAction: renderDiagnose } = useDiagnoseCustomization()
 
   return {
-    canExec: canExec || access?.exec === true,
+    canExec,
     canViewLogs,
     canPortForward: showPortForward,
     onOpenTerminal: openTerminal,

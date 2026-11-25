@@ -36,6 +36,6 @@ it('reconnects an existing debug session to its reviewed connection without offe
   const { wsUrl } = await captured.props!.createSession('debug-1')
   expect(new URL(wsUrl).searchParams.get('connection')).toBe('reviewed-cluster')
   expect(new URL(wsUrl).searchParams.get('uid')).toBe('reviewed')
-  expect(captured.props!.renderDebugAction).toBeUndefined()
+  expect(renderToString(captured.props!.renderDebugAction!('debug-1', 'reviewed'))).toContain('different image')
   resetConnectionBindingForTest()
 })

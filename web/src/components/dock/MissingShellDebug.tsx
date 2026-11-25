@@ -14,17 +14,18 @@ export function MissingShellDebug({ namespace, name, uid, target, connection, ba
   namespace: string; name: string; uid: string; target: string; connection?: string; base: string
 }) {
   const { embedded } = useNavCustomization()
-  const { username, configManagement } = useCapabilitiesContext()
+  const { username, configManagement, deployment } = useCapabilitiesContext()
   const { podDebugImage, canOpenEphemeralTerminal } = useNamespacedCapabilities(namespace)
+  const execOnly = !!embedded || deployment?.mode === 'cloud'
   const current = () => getApiBase() === base && connectionHeaderValue() === connection
   const currentConnection = useCurrentConnection()
   const sameCluster = currentConnection === connection && getApiBase() === base
-  const enabled = sameCluster && (!embedded || canOpenEphemeralTerminal)
+  const enabled = sameCluster
   const podQuery = useResource<PodDebugTarget>('pods', namespace, name, undefined, { enabled })
   const pod = podQuery.data
   const usable = enabled && !podQuery.error && pod?.metadata.uid === uid && runningPodDebugTargets(pod)?.includes(target)
   const running = usable ? getRunningEphemeralContainers(pod).filter(c => c.targetContainerName === target) : []
-  const { query, support } = usePodDebugAccess(namespace, name, uid, !embedded && !!usable && !running.length)
+  const { query, support, recheckSupport } = usePodDebugAccess(namespace, name, uid, !!usable && (execOnly ? !!running.length && !canOpenEphemeralTerminal : !running.length && !podDebugImage), execOnly)
   const openTerminal = useOpenTerminal()
   const [choice, setChoice] = useState('')
   const [copied, setCopied] = useState<'copied' | 'manual'>()
@@ -37,33 +38,40 @@ export function MissingShellDebug({ namespace, name, uid, target, connection, ba
   if (!pod) return <p className="text-xs text-theme-text-secondary">Checking debug options…</p>
   if (pod.metadata.uid !== uid) return <p className="text-xs text-theme-text-secondary">This Pod was replaced. Open its details to start a new terminal.</p>
   if (!usable) return null
-  if (running.length && support === 'supported') {
+  if (running.length && support === 'supported' && (!execOnly || canOpenEphemeralTerminal || (!query.error && query.data?.exec))) {
     const newestFirst = [...running].reverse()
     const selected = newestFirst.find(c => c.name === choice) ?? newestFirst[0]
     return <div className="flex w-full min-w-0 max-w-md flex-col items-center gap-2">
       <p className="text-xs text-theme-text-secondary">{running.length === 1 ? 'A debug container is already running' : `${running.length} debug containers are running`} for <code>{target}</code>.</p>
-      {running.length === 1 && <p className="max-w-full text-xs text-theme-text-tertiary [overflow-wrap:anywhere]"><code>{selected.name}</code> · {selected.image}</p>}
-      {running.length > 1 && <select aria-label="Running debug container" className="min-w-0 max-w-full rounded border border-theme-border bg-theme-surface px-2 py-1 text-xs"
+      {running.length > 1 && <select aria-label="Running debug container" className="w-full min-w-0 max-w-full rounded border border-theme-border bg-theme-surface px-2 py-1 text-xs"
         value={selected.name} onChange={event => setChoice(event.target.value)}>
-        {newestFirst.map(c => <option key={c.name} value={c.name}>{c.name} · {c.image}{c.startedAt && ` · started ${formatAge(c.startedAt)} ago`}</option>)}
+        {newestFirst.map(c => <option key={c.name} value={c.name}>{c.startedAt && `${formatAge(c.startedAt)} ago · `}{c.name}</option>)}
       </select>}
+      <div className="max-w-full text-xs text-theme-text-tertiary [overflow-wrap:anywhere]">
+        <div><code>{selected.name}</code></div>
+        <div>{selected.image}{selected.startedAt && <> · started {formatAge(selected.startedAt)} ago</>}</div>
+      </div>
       <button className="btn-brand flex items-center gap-2 rounded px-3 py-1.5 text-xs" onClick={() => {
         if (current()) openTerminal({ namespace, podName: name, containerName: selected.name, containers: [selected.name],
           debugSession: { podUID: uid, image: selected.image, connectionId: connection, apiBase: base } })
       }}><Terminal className="h-3.5 w-3.5"/>Open debug terminal</button>
     </div>
   }
-  if (embedded) return null
+  if (execOnly) return null
+  const access = query.error ? undefined : query.data
+  const allowedImage = access?.state === 'allowed' ? access.image :
+    access?.state === 'denied' || access?.state === 'unavailable' ? undefined : podDebugImage
+  if (allowedImage) return <div className="flex flex-col items-center gap-2">
+    <p className="text-xs text-theme-text-secondary">Open a shell in a separate container in this Pod.</p>
+    <PodDebugAction pod={pod} defaultImage={allowedImage} failedContainer={target}/>
+  </div>
   if (support !== 'supported') {
-    if (podDebugImage) return <PodDebugAction pod={pod} defaultImage={podDebugImage} failedContainer={target}/>
-    return support === 'unsupported' ? <p className="max-w-sm text-xs text-theme-text-secondary">Upgrade Radar to check debug access for this Pod, or ask your cluster administrator to help start a debug container.</p> : null
+    return support === 'unsupported' ? <p className="max-w-sm text-xs text-theme-text-secondary">Upgrade Radar to check debug access for this Pod, or ask your cluster administrator to help start a debug container.</p> : <div className="flex flex-col items-center gap-2 text-xs text-theme-text-secondary">
+      <p>Radar hasn’t confirmed debug support for this cluster.</p>
+      <button className="btn-secondary rounded px-2 py-1" onClick={() => void recheckSupport()}>Recheck support</button>
+    </div>
   }
   if (query.isPending && !query.error) return <p className="text-xs text-theme-text-secondary">Checking access for this Pod…</p>
-  const access = query.error ? undefined : query.data
-  if (access?.state === 'allowed') return <div className="flex flex-col items-center gap-2">
-    <p className="text-xs text-theme-text-secondary">Open a shell in a separate container in this Pod.</p>
-    <PodDebugAction pod={pod} defaultImage={access.image} failedContainer={target}/>
-  </div>
   if (access?.state === 'unavailable') return null
   const denied = access?.state === 'denied'
   const requester = username ? `Kubernetes user ${username}` : configManagement === 'operator' ? 'Radar’s Kubernetes service account' : 'me'

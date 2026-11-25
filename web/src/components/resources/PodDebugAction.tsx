@@ -6,7 +6,9 @@ import { ApiError } from '../../api/client'
 import { connectionHeaderValue } from '../../api/connectionBinding'
 import { getApiBase } from '../../api/config'
 import { useReviewedActionMutation } from '../../api/reviewedActionMutation'
-import { createPodDebugContainer } from '../../api/podDebug'
+import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
+import { useNavCustomization } from '../../context/NavCustomization'
+import { createPodDebugContainer, usePodDebugAccess } from '../../api/podDebug'
 
 export interface PodDebugTarget {
   apiVersion: string
@@ -42,6 +44,24 @@ export function runningPodDebugTargets(pod: PodDebugTarget): string[] | undefine
   const running = [...(pod.status.containerStatuses ?? []), ...(pod.status.initContainerStatuses ?? [])]
     .filter(container => container.state?.running)
   return getExecContainerNames(pod).filter(name => running.some(container => container.name === name))
+}
+
+export function usePodDetailAccess(pod: PodDebugTarget | undefined, namespace: {
+  canExec: boolean; canOpenEphemeralTerminal: boolean; podDebugImage?: string
+}) {
+  const { embedded } = useNavCustomization()
+  const { deployment } = useCapabilitiesContext()
+  const eligible = pod?.apiVersion === 'v1' && pod.kind === 'Pod' && pod.status.phase === 'Running' && !pod.metadata.deletionTimestamp
+  const execOnly = !!embedded || deployment?.mode === 'cloud' || !pod || !runningPodDebugTargets(pod)?.length
+  const { query } = usePodDebugAccess(pod?.metadata.namespace ?? '', pod?.metadata.name ?? '', pod?.metadata.uid ?? '',
+    !!eligible && (!namespace.canExec || (!execOnly && !namespace.podDebugImage)), execOnly)
+  const named = eligible && !query.error ? query.data : undefined
+  return {
+    canExec: namespace.canExec || named?.exec === true,
+    canOpenEphemeralTerminal: namespace.canOpenEphemeralTerminal || named?.exec === true,
+    debugImage: execOnly || named?.state === 'denied' || named?.state === 'unavailable' ? undefined :
+      named?.state === 'allowed' ? named.image : namespace.podDebugImage,
+  }
 }
 
 export function PodDebugAction({ pod, defaultImage, failedContainer }: { pod: PodDebugTarget; defaultImage: string; failedContainer?: string }) {

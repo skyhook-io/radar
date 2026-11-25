@@ -213,6 +213,20 @@ it.each([undefined, 'psql'])('keeps shell defaults and command-specific unavaila
 })
 
 
+it('keeps the transcript and Reconnect after an interactive shell exits 127', async () => {
+  await act(async () => root.render(<TerminalTab namespace="default" podName="pod" containerName="app" containers={['app']} createSession={async () => ({ wsUrl:'ws://localhost' })} />))
+  const ws=Socket.instances[0]
+  await act(async () => ws.onopen?.())
+  await act(async () => {
+    ws.onmessage?.({data:JSON.stringify({type:'output', data:'$ typo\r\ncommand not found'})})
+    ws.onmessage?.({data:JSON.stringify({type:'error', errorType:'shell_not_found',data:'command terminated with exit code 127'})})
+    ws.onclose?.()
+  })
+  expect(element.textContent).toContain('Reconnect')
+  expect(element.textContent).not.toContain('Couldn’t start')
+  expect(element.textContent).not.toContain('Failed to connect')
+})
+
 it('refreshes command session context when reusing its tab without reconnecting', async () => {
   let open!: ReturnType<typeof useOpenTerminal>
   const createSession = vi.fn(async () => ({ wsUrl: 'ws://localhost' }))

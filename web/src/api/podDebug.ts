@@ -1,7 +1,7 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { getApiBase } from './config'
 import { fetchJSON, useRadarFeature } from './client'
-import { connectionHeaders, connectionHeaderValue } from './connectionBinding'
+import { connectionHeaders, useCurrentConnection } from './connectionBinding'
 
 export function createPodDebugContainer(namespace: string, podName: string, connection: string | undefined, request: {
   targetContainer: string
@@ -19,13 +19,14 @@ export function createPodDebugContainer(namespace: string, podName: string, conn
 
 type PodDebugAccess = { exec?: boolean } & ({ state: 'allowed'; image: string } | { state: 'denied' | 'unknown' | 'unavailable' })
 
-export function usePodDebugAccess(namespace: string, name: string, uid: string, enabled: boolean) {
+export function usePodDebugAccess(namespace: string, name: string, uid: string, enabled: boolean, execOnly = false) {
   const { support } = useRadarFeature('podDebugAccess')
+  const client = useQueryClient()
   const base = getApiBase()
-  const connection = connectionHeaderValue()
+  const connection = useCurrentConnection()
   const query = useQuery({
-    queryKey: ['pod-debug-access', base, connection, namespace, name, uid],
-    queryFn: () => fetchJSON<PodDebugAccess>(`/pods/${namespace}/${name}/debug-access`, {
+    queryKey: ['pod-debug-access', base, connection, namespace, name, uid, execOnly],
+    queryFn: () => fetchJSON<PodDebugAccess>(`/pods/${namespace}/${name}/debug-access${execOnly ? '?execOnly=true' : ''}`, {
       headers: connectionHeaders(connection),
     }),
     enabled: enabled && support === 'supported',
@@ -33,5 +34,5 @@ export function usePodDebugAccess(namespace: string, name: string, uid: string, 
     retry: false,
     refetchOnWindowFocus: false,
   })
-  return { query, support }
+  return { query, support, recheckSupport: () => client.invalidateQueries({queryKey: ['capabilities'], exact: true}) }
 }

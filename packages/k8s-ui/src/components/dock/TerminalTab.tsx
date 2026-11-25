@@ -219,7 +219,7 @@ export function TerminalTab({
             xterm.write('\r\n\x1b[2m[Process exited]\x1b[0m\r\n')
           } else if (msg.type === 'error' && msg.data) {
             if (receivedOutput && !command) {
-              xterm.writeln(`\r\n${msg.data}`)
+              xterm.write(`\r\n${msg.data}\r\n`)
               setIsConnected(false)
               return
             }
@@ -357,7 +357,7 @@ export function TerminalTab({
               ) : <div className="text-xs text-theme-text-tertiary mb-4 max-w-md">
                 This container image may have no shell.{containers.length > 1 && ' You can also select another container above.'}
               </div>}
-              <div className="flex flex-wrap items-center justify-center gap-2">
+              <div className="flex w-full min-w-0 max-w-md flex-wrap items-center justify-center gap-2">
                 {!command && failedPodUID && renderDebugAction?.(selectedContainer, failedPodUID)}
                 {!command && !renderDebugAction && createDebugContainerRef.current && (
                   <button
