@@ -208,7 +208,7 @@ export function TrafficFlowList({ flows, responsesCallerOriented }: TrafficFlowL
                       </>
                     )}
                     {!isHTTP && !isDNS && (
-                      <span className="text-theme-text-tertiary uppercase">{portLabel(flow.port, flow.portSource) ? `${flow.protocol}:${portLabel(flow.port, flow.portSource)}` : flow.protocol}</span>
+                      <span className="text-theme-text-tertiary"><span className="uppercase">{flow.protocol}</span>{portLabel(flow.port, flow.portSource) && `:${portLabel(flow.port, flow.portSource)}`}</span>
                     )}
                   </div>
 
