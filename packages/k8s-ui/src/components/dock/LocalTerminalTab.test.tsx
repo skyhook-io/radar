@@ -316,6 +316,12 @@ it('keeps the tab, picker, connection and future opens on the selected container
   await act(async () => open(base))
   expect(dock.activeTabId).not.toBe(tabId)
   expect(dock.tabs.map(tab => tab.title)).toEqual(['checkout/worker', 'checkout/api'])
+  const secondPicker = element.querySelectorAll('select')[1]
+  await act(async () => { secondPicker.value = 'worker'; secondPicker.dispatchEvent(new Event('change', { bubbles: true })) })
+  expect(dock.activeTabId).toBe(tabId)
+  expect(dock.tabs.map(tab => tab.title)).toEqual(['checkout/worker', 'checkout/api'])
+  expect(Socket.instances).toHaveLength(3)
+  expect(Socket.instances[2].readyState).toBe(Socket.OPEN)
 })
 
 it('ignores a previous Pod session that resolves after switching containers', async () => {
