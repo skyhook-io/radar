@@ -58,11 +58,10 @@ func (f *fakeArgo) handler() http.Handler {
 
 func newTestManager(cfg config.Config) *Manager {
 	m := &Manager{
-		k8sClient:   func() kubernetes.Interface { return nil },
-		k8sConfig:   func() *rest.Config { return nil },
-		inCluster:   func() bool { return false },
-		contextName: func() string { return "" },
-		loadConfig:  func() config.Config { return cfg },
+		clusterClients: func() (kubernetes.Interface, *rest.Config) { return nil, nil },
+		inCluster:      func() bool { return false },
+		contextName:    func() string { return "" },
+		loadConfig:     func() config.Config { return cfg },
 	}
 	m.contextBinding = func(context.Context) string { return m.currentContextName() }
 	return m

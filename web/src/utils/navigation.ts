@@ -15,7 +15,7 @@ export function searchHitToSelectedResource(hit: SearchHit): SelectedResource {
 }
 
 // Re-export shared navigation utilities from @skyhook-io/k8s-ui.
-export { kindToPlural, kindToPluralWithGroup, pluralToKind, knownKindForPluralWithGroup, refToSelectedResource, apiVersionToGroup } from '@skyhook-io/k8s-ui/utils/navigation'
+export { namespacesFromSearch, kindToPlural, kindToPluralWithGroup, pluralToKind, knownKindForPluralWithGroup, refToSelectedResource, apiVersionToGroup } from '@skyhook-io/k8s-ui/utils/navigation'
 export type { NavigateToResource } from '@skyhook-io/k8s-ui/utils/navigation'
 
 const NETWORK_POLICY_TOPOLOGY_KINDS = new Set([
@@ -132,20 +132,6 @@ export function openExternal(url: string): void {
     .catch(() => {
       window.open(url, '_blank')
     })
-}
-
-/** The header picker's namespace selection as the URL carries it: App keeps
- *  ?namespaces= in sync with its state (legacy ?namespace= still read). */
-export function namespacesFromSearch(params: URLSearchParams): string[] {
-  const nsParam = params.get('namespaces')
-  if (nsParam) {
-    return nsParam.split(',').map(s => s.trim()).filter(Boolean)
-  }
-  const ns = params.get('namespace')
-  if (ns) {
-    return [ns]
-  }
-  return []
 }
 
 // setMainView's cross-view params. A navigation whose search omits

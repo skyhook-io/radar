@@ -10,6 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/skyhook-io/radar/pkg/rightsizing"
+	corev1 "k8s.io/api/core/v1"
+
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 )
 
@@ -65,14 +68,33 @@ func TestGetRightsizingWorkloadScopeRequiresIdentifiers(t *testing.T) {
 	}
 }
 
+func finalizeSizingFixture(rows []rightsizing.Row, scaledToZero bool) {
+	var qos rightsizing.PodQoS
+	qos.Observe(corev1.PodQOSBurstable)
+	rightsizing.Finalize(rows, nil, qos, scaledToZero)
+}
+
+func filterSizingFixture(rows []rightsizing.Row, includeAll, keepAll bool, replicas int, scaledToZero bool) filteredRows {
+	finalizeSizingFixture(rows, scaledToZero)
+	return filterRightsizingRows(rows, includeAll, keepAll, replicas, scaledToZero)
+}
+
+func selectSizingFixtures(workloads []prometheuspkg.RightsizingScanWorkload, input getRightsizingInput) ([]rightsizingWorkloadDTO, rightsizingOmissions, bool, map[prometheuspkg.RightsizingClass]int) {
+	for _, workload := range workloads {
+		finalizeSizingFixture(workload.Rows, workload.ScaledToZero)
+	}
+	return selectRightsizingWorkloads(workloads, input)
+}
+
 func rightsizingRow(fit prometheuspkg.RightsizingFit, current, recommended float64) prometheuspkg.RightsizingRow {
 	recommendedStr := "recommended"
 	row := prometheuspkg.RightsizingRow{
-		Container:      "app",
-		Resource:       "cpu",
-		Fit:            fit,
-		Confidence:     prometheuspkg.ConfidenceHigh,
-		RecommendedReq: &recommendedStr,
+		Container:            "app",
+		Resource:             "cpu",
+		Fit:                  fit,
+		Confidence:           prometheuspkg.ConfidenceHigh,
+		HPAEvidenceAvailable: true,
+		Peak:                 &rightsizing.ObservedStatistic{Name: "P99"},
 	}
 	// A missing request has no current value at all, which is what the ranker
 	// keys on — so only populate it when there is one.
@@ -81,7 +103,8 @@ func rightsizingRow(fit prometheuspkg.RightsizingFit, current, recommended float
 		row.CurrentRequest = &currentStr
 		row.CurrentRequestValue = &current
 	}
-	if recommended > 0 {
+	if recommended > 0 && (fit == prometheuspkg.FitUnderRequested || fit == prometheuspkg.FitOversized || fit == prometheuspkg.FitMissingRequest) {
+		row.RecommendedReq = &recommendedStr
 		row.RecommendedRequestValue = &recommended
 	}
 	return row
@@ -100,7 +123,7 @@ func TestFilterRightsizingRowsDropsBalancedByDefault(t *testing.T) {
 		unjudged,
 	}
 
-	filtered := filterRightsizingRows(rows, false, false, 1, false)
+	filtered := filterSizingFixture(rows, false, false, 1, false)
 	actionable, omitted := filtered.rows, filtered.omitted
 	if len(actionable) != 3 {
 		t.Fatalf("expected only oversized, under_requested, and missing_request, got %d", len(actionable))
@@ -115,7 +138,7 @@ func TestFilterRightsizingRowsDropsBalancedByDefault(t *testing.T) {
 		t.Errorf("omissions must be reported so the model can see rows were withheld, got %+v", omitted)
 	}
 
-	includeAll := filterRightsizingRows(rows, true, false, 1, false)
+	includeAll := filterSizingFixture(rows, true, false, 1, false)
 	all, allOmitted := includeAll.rows, includeAll.omitted
 	if len(all) != len(rows) {
 		t.Errorf("include_all should return every row, got %d of %d", len(all), len(rows))
@@ -134,7 +157,7 @@ func TestFilterRightsizingRowsFormatsThrottleOnlyWhenMeasured(t *testing.T) {
 	unmeasured := rightsizingRow(prometheuspkg.FitOversized, 4, 1)
 	unmeasured.ThrottleRatio = &ratio
 
-	out := filterRightsizingRows([]prometheuspkg.RightsizingRow{measured, unmeasured}, false, false, 1, false).rows
+	out := filterSizingFixture([]prometheuspkg.RightsizingRow{measured, unmeasured}, false, false, 1, false).rows
 	if out[0].ThrottleRatio == nil || *out[0].ThrottleRatio != 12.5 {
 		t.Errorf("measured throttling should be formatted as a percentage, got %v", out[0].ThrottleRatio)
 	}
@@ -148,10 +171,10 @@ func TestFilterRightsizingRowsFormatsThrottleOnlyWhenMeasured(t *testing.T) {
 // request changes by the largest proportion.
 func TestScanRankingFollowsReplicaWeightedImpact(t *testing.T) {
 	// 200m -> 50m on one replica: a 4x proportional cut, 150m of real CPU.
-	small := filterRightsizingRows(
+	small := filterSizingFixture(
 		[]prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitOversized, 0.2, 0.05)}, false, false, 1, false)
 	// 1500m -> 750m across three replicas: a 2x cut, 2250m of real CPU.
-	large := filterRightsizingRows(
+	large := filterSizingFixture(
 		[]prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitOversized, 1.5, 0.75)}, false, false, 3, false)
 
 	if prometheuspkg.ImpactScore(large.impact) <= prometheuspkg.ImpactScore(small.impact) {
@@ -167,9 +190,9 @@ func TestScanRankingFollowsReplicaWeightedImpact(t *testing.T) {
 }
 
 func TestScanRankingOrdersByClassBeforeImpact(t *testing.T) {
-	increase := filterRightsizingRows(
+	increase := filterSizingFixture(
 		[]prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitUnderRequested, 0.05, 0.1)}, false, false, 1, false)
-	reduction := filterRightsizingRows(
+	reduction := filterSizingFixture(
 		[]prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitOversized, 4, 1)}, false, false, 100, false)
 
 	if prometheuspkg.ImpactScore(increase.impact) >= prometheuspkg.ImpactScore(reduction.impact) {
@@ -189,7 +212,7 @@ func TestClassificationPrefersIncreaseOverReduction(t *testing.T) {
 	over := rightsizingRow(prometheuspkg.FitOversized, 4, 1)
 	over.Container = "sidecar"
 
-	filtered := filterRightsizingRows([]prometheuspkg.RightsizingRow{over, under}, false, false, 1, false)
+	filtered := filterSizingFixture([]prometheuspkg.RightsizingRow{over, under}, false, false, 1, false)
 	if filtered.classification != prometheuspkg.ClassIncrease {
 		t.Errorf("an under-requested container decides the workload's class, got %q", filtered.classification)
 	}
@@ -203,7 +226,7 @@ func TestFilterKeepsOOMEvidenceDespiteBalancedFit(t *testing.T) {
 	row.Resource = "memory"
 	row.CurrentPodOOM = true
 
-	filtered := filterRightsizingRows([]prometheuspkg.RightsizingRow{row}, false, false, 1, false)
+	filtered := filterSizingFixture([]prometheuspkg.RightsizingRow{row}, false, false, 1, false)
 	if len(filtered.rows) != 1 {
 		t.Fatalf("a row carrying OOM evidence must never be omitted as balanced, got %d rows", len(filtered.rows))
 	}
@@ -215,6 +238,37 @@ func TestFilterKeepsOOMEvidenceDespiteBalancedFit(t *testing.T) {
 	}
 }
 
+func TestDefaultScanKeepsRiskSignalsWithoutUsage(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		row  rightsizing.Row
+	}{
+		{"new pod OOM", rightsizing.Row{Resource: "memory", CurrentPodOOM: true}},
+		{"historical OOM", rightsizing.Row{Resource: "memory", WindowOOMEvidence: true}},
+		{"failed CPU query on HPA target", rightsizing.Row{Resource: "cpu", HPAManaged: true, QueryError: prometheuspkg.RowUsageQueryFailed}},
+		{"limit conflict", rightsizing.Row{Resource: "cpu", LimitConflict: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			row := tc.row
+			row.Container, row.Fit = "app", rightsizing.FitInsufficientHistory
+			workloads, omitted, incomplete, _ := selectSizingFixtures([]prometheuspkg.RightsizingScanWorkload{
+				{Name: "checkout", Replicas: 1, Rows: []rightsizing.Row{row}},
+			}, getRightsizingInput{})
+			if len(workloads) != 1 || len(workloads[0].Rows) != 1 || !incomplete || omitted.InsufficientHistory+omitted.QueryError != 0 {
+				t.Fatalf("expected a visible workload and one incomplete row, got %+v, omitted %+v", workloads, omitted)
+			}
+			workload := workloads[0]
+			got := workload.Rows[0]
+			if workload.Classification != prometheuspkg.ClassNeedData || *workload.RequestDelta != (rightsizingRequestDelta{}) || got.RecommendedRequest != nil {
+				t.Fatalf("insufficient usage must produce no request change: %+v", workload)
+			}
+			if got.CurrentPodOOM != row.CurrentPodOOM || got.WindowOOMEvidence != row.WindowOOMEvidence || got.HPAManaged != row.HPAManaged || got.LimitConflict != row.LimitConflict {
+				t.Fatalf("expected the reported signal to survive: %+v", got)
+			}
+		})
+	}
+}
+
 // oomEvidenceAvailable is meaningless on a CPU row; a literal false there reads
 // as an evidence gap the agent should weigh.
 func TestOOMAvailabilityOnlyEmittedForMemoryRows(t *testing.T) {
@@ -222,7 +276,7 @@ func TestOOMAvailabilityOnlyEmittedForMemoryRows(t *testing.T) {
 	mem := rightsizingRow(prometheuspkg.FitOversized, 4, 1)
 	mem.Resource = "memory"
 
-	out := filterRightsizingRows([]prometheuspkg.RightsizingRow{cpu, mem}, false, false, 1, false).rows
+	out := filterSizingFixture([]prometheuspkg.RightsizingRow{cpu, mem}, false, false, 1, false).rows
 	if out[0].OOMEvidenceAvailable != nil {
 		t.Error("a CPU row must not carry oomEvidenceAvailable")
 	}
@@ -519,7 +573,7 @@ func TestOmissionCountersAreExclusive(t *testing.T) {
 	queryErr := rightsizingRow(prometheuspkg.FitInsufficientHistory, 1, 1)
 	queryErr.QueryError = "upstream 500"
 
-	omitted := filterRightsizingRows([]prometheuspkg.RightsizingRow{
+	omitted := filterSizingFixture([]prometheuspkg.RightsizingRow{
 		queryErr,
 		rightsizingRow(prometheuspkg.FitInsufficientHistory, 1, 1),
 		rightsizingRow(prometheuspkg.FitBalanced, 1, 1),
@@ -540,10 +594,10 @@ func TestIncompleteEvidenceReadsRawRowsNotSurvivors(t *testing.T) {
 	queryErr.QueryError = "upstream 500"
 	rows := []prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitOversized, 4, 1), queryErr}
 
-	if !filterRightsizingRows(rows, true, false, 1, false).incompleteEvidence {
+	if !filterSizingFixture(rows, true, false, 1, false).incompleteEvidence {
 		t.Error("a query error is incomplete evidence regardless of what survives filtering")
 	}
-	if filterRightsizingRows([]prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitOversized, 4, 1)}, false, false, 1, false).incompleteEvidence {
+	if filterSizingFixture([]prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitOversized, 4, 1)}, false, false, 1, false).incompleteEvidence {
 		t.Error("fully evidenced rows must not be reported as partial")
 	}
 }
@@ -554,8 +608,8 @@ func TestBlockedRecommendationsRankBelowRealOnes(t *testing.T) {
 	// limit ahead of a workload with something to act on.
 	blocked := rightsizingRow(prometheuspkg.FitOversized, 4, 0)
 	blocked.RecommendedReq = nil
-	blockedRows := filterRightsizingRows([]prometheuspkg.RightsizingRow{blocked}, false, false, 1, false)
-	realRows := filterRightsizingRows([]prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitOversized, 4, 1)}, false, false, 1, false)
+	blockedRows := filterSizingFixture([]prometheuspkg.RightsizingRow{blocked}, false, false, 1, false)
+	realRows := filterSizingFixture([]prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitOversized, 4, 1)}, false, false, 1, false)
 
 	if prometheuspkg.ImpactScore(blockedRows.impact) != 0 {
 		t.Errorf("a blocked recommendation has no impact to rank on, got %v", prometheuspkg.ImpactScore(blockedRows.impact))
@@ -572,12 +626,14 @@ func TestEvidenceAvailabilityFlagsSurvive(t *testing.T) {
 	// and a request cut is unsafe in both the OOM and HPA unknown cases.
 	unknown := rightsizingRow(prometheuspkg.FitOversized, 4, 1)
 	unknown.Resource = "memory"
+	unknown.HPAEvidenceAvailable = false
+	unknown.OOMEvidenceAvailable = false
 	known := rightsizingRow(prometheuspkg.FitOversized, 4, 1)
 	known.Resource = "memory"
 	known.HPAEvidenceAvailable = true
 	known.OOMEvidenceAvailable = true
 
-	out := filterRightsizingRows([]prometheuspkg.RightsizingRow{unknown, known}, false, false, 1, false).rows
+	out := filterSizingFixture([]prometheuspkg.RightsizingRow{unknown, known}, false, false, 1, false).rows
 	if out[0].HPAEvidenceAvailable || (out[0].OOMEvidenceAvailable != nil && *out[0].OOMEvidenceAvailable) {
 		t.Error("missing evidence must not be reported as available")
 	}
@@ -622,12 +678,12 @@ func TestBlockedRowsClassifyAsUnactionable(t *testing.T) {
 	// must not outrank a workload that does.
 	blocked := rightsizingRow(prometheuspkg.FitMissingRequest, 0, 0)
 	blocked.RecommendedReq = nil
-	blockedRows := filterRightsizingRows([]prometheuspkg.RightsizingRow{blocked}, false, false, 1, false)
+	blockedRows := filterSizingFixture([]prometheuspkg.RightsizingRow{blocked}, false, false, 1, false)
 	if blockedRows.classification == prometheuspkg.ClassIncrease {
 		t.Error("a missing request with no recommendation is not an actionable increase")
 	}
 
-	actionable := filterRightsizingRows(
+	actionable := filterSizingFixture(
 		[]prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitMissingRequest, 0, 2)}, false, false, 1, false)
 	if actionable.classification != prometheuspkg.ClassIncrease {
 		t.Errorf("a missing request WITH a recommendation is an increase, got %q", actionable.classification)
@@ -648,7 +704,7 @@ func TestExplicitZeroRequestStillCountsItsFullImpact(t *testing.T) {
 	zeroValue := 0.0
 	zero.CurrentRequestValue = &zeroValue
 
-	filtered := filterRightsizingRows([]prometheuspkg.RightsizingRow{zero}, false, false, 2, false)
+	filtered := filterSizingFixture([]prometheuspkg.RightsizingRow{zero}, false, false, 2, false)
 	if filtered.classification != prometheuspkg.ClassIncrease {
 		t.Errorf("an explicit zero request is still a missing request, got %q", filtered.classification)
 	}
@@ -669,7 +725,7 @@ func TestSuppressedRecommendationsCountAsIncompleteEvidence(t *testing.T) {
 	} {
 		row := rightsizingRow(prometheuspkg.FitOversized, 4, 1)
 		row.RecommendationReason = reason
-		if !filterRightsizingRows([]prometheuspkg.RightsizingRow{row}, true, false, 1, false).incompleteEvidence {
+		if !filterSizingFixture([]prometheuspkg.RightsizingRow{row}, true, false, 1, false).incompleteEvidence {
 			t.Errorf("reason %q suppressed the recommendation and must not report as complete", reason)
 		}
 	}
@@ -677,8 +733,57 @@ func TestSuppressedRecommendationsCountAsIncompleteEvidence(t *testing.T) {
 	// A recommendation that stands on full evidence stays complete.
 	fine := rightsizingRow(prometheuspkg.FitOversized, 4, 1)
 	fine.RecommendationReason = "request_within_fit_range"
-	if filterRightsizingRows([]prometheuspkg.RightsizingRow{fine}, true, false, 1, false).incompleteEvidence {
+	if filterSizingFixture([]prometheuspkg.RightsizingRow{fine}, true, false, 1, false).incompleteEvidence {
 		t.Error("a fully evidenced row must not downgrade the response to partial")
+	}
+}
+
+func TestGuardedRequestCompleteness(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		qos         corev1.PodQOSClass
+		hpaKnown    bool
+		peakKnown   bool
+		confidence  rightsizing.RightsizingConfidence
+		fit         rightsizing.RightsizingFit
+		wantPartial bool
+	}{
+		{"increase without HPA evidence", corev1.PodQOSBurstable, false, true, rightsizing.ConfidenceHigh, rightsizing.FitUnderRequested, true},
+		{"increase without QoS evidence", "", true, true, rightsizing.ConfidenceHigh, rightsizing.FitUnderRequested, true},
+		{"cut without CPU peak", corev1.PodQOSBurstable, true, false, rightsizing.ConfidenceHigh, rightsizing.FitOversized, true},
+		{"cut with sparse history", corev1.PodQOSBurstable, true, true, rightsizing.ConfidenceLow, rightsizing.FitOversized, true},
+		{"observed Guaranteed Pod", corev1.PodQOSGuaranteed, true, true, rightsizing.ConfidenceHigh, rightsizing.FitUnderRequested, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			row := rightsizingRow(tc.fit, 1, 2)
+			if tc.fit == rightsizing.FitOversized {
+				row = rightsizingRow(tc.fit, 2, 1)
+			}
+			row.Confidence, row.HPAEvidenceAvailable = tc.confidence, tc.hpaKnown
+			if !tc.peakKnown {
+				row.Peak = nil
+			}
+			rows := []rightsizing.Row{row}
+			var qos rightsizing.PodQoS
+			qos.Observe(tc.qos)
+			rightsizing.Finalize(rows, nil, qos, false)
+			out := workloadScopeResponse(prometheuspkg.RightsizingResponse{Rows: rows, Replicas: 1, SampleAvailable: true}, getRightsizingInput{})
+			expected := prometheuspkg.RightsizingScanComplete
+			if tc.wantPartial {
+				expected = prometheuspkg.RightsizingScanPartial
+			}
+			if out.State != expected || (tc.wantPartial && out.Reason != reasonRowEvidenceIncomplete) {
+				t.Fatalf("workload state=%s reason=%s", out.State, out.Reason)
+			}
+			workload := out.Workloads[0]
+			if !workload.Rows[0].NeedsManualReview || workload.Rows[0].RecommendedRequest == nil || *workload.RequestDelta != (rightsizingRequestDelta{}) {
+				t.Fatalf("expected a review-only proposal: %+v", workload)
+			}
+			_, _, incomplete, _ := selectRightsizingWorkloads([]prometheuspkg.RightsizingScanWorkload{{Rows: rows, Replicas: 1}}, getRightsizingInput{})
+			if incomplete != tc.wantPartial {
+				t.Fatalf("scan incomplete=%t", incomplete)
+			}
+		})
 	}
 }
 
@@ -768,7 +873,7 @@ func TestUnevidencedSidecarDoesNotDemoteTheWorkload(t *testing.T) {
 	sidecar := rightsizingRow(prometheuspkg.FitInsufficientHistory, 1, 1)
 	sidecar.Container = "istio-proxy"
 
-	filtered := filterRightsizingRows([]prometheuspkg.RightsizingRow{app, sidecar}, false, false, 3, false)
+	filtered := filterSizingFixture([]prometheuspkg.RightsizingRow{app, sidecar}, false, false, 3, false)
 	if filtered.classification != prometheuspkg.ClassReduction {
 		t.Fatalf("workload must rank by its best container, got %q", filtered.classification)
 	}
@@ -786,7 +891,7 @@ func TestEveryContainerUnevidencedStaysNeedData(t *testing.T) {
 	second := rightsizingRow(prometheuspkg.FitInsufficientHistory, 1, 1)
 	second.Container = "istio-proxy"
 
-	filtered := filterRightsizingRows([]prometheuspkg.RightsizingRow{first, second}, false, false, 1, false)
+	filtered := filterSizingFixture([]prometheuspkg.RightsizingRow{first, second}, false, false, 1, false)
 	if filtered.classification != prometheuspkg.ClassNeedData {
 		t.Fatalf("expected need_data when no container has evidence, got %q", filtered.classification)
 	}
@@ -803,7 +908,7 @@ func TestUnevidencedContainerDoesNotFlipIncreaseToReduction(t *testing.T) {
 	blind := rightsizingRow(prometheuspkg.FitInsufficientHistory, 1, 1)
 	blind.Container = "istio-proxy"
 
-	filtered := filterRightsizingRows([]prometheuspkg.RightsizingRow{over, under, blind}, false, false, 1, false)
+	filtered := filterSizingFixture([]prometheuspkg.RightsizingRow{over, under, blind}, false, false, 1, false)
 	if filtered.classification != prometheuspkg.ClassIncrease {
 		t.Errorf("under-requested must still decide the class, got %q", filtered.classification)
 	}
@@ -821,7 +926,7 @@ func TestFilterRightsizingRowsKeepsThrottledBalancedRows(t *testing.T) {
 
 	quiet := rightsizingRow(prometheuspkg.FitBalanced, 1, 1)
 
-	filtered := filterRightsizingRows([]prometheuspkg.RightsizingRow{throttled, quiet}, false, false, 1, false)
+	filtered := filterSizingFixture([]prometheuspkg.RightsizingRow{throttled, quiet}, false, false, 1, false)
 	if len(filtered.rows) != 1 {
 		t.Fatalf("the throttled row must survive the default filter, got %d rows", len(filtered.rows))
 	}
@@ -841,7 +946,7 @@ func TestFilterRightsizingRowsDropsLightlyThrottledBalancedRows(t *testing.T) {
 	light.ThrottleAvailable = true
 	light.ThrottleRatio = &ratio
 
-	filtered := filterRightsizingRows([]prometheuspkg.RightsizingRow{light}, false, false, 1, false)
+	filtered := filterSizingFixture([]prometheuspkg.RightsizingRow{light}, false, false, 1, false)
 	if len(filtered.rows) != 0 {
 		t.Errorf("light throttling is not a reason to keep a balanced row: %+v", filtered.rows)
 	}
@@ -857,7 +962,7 @@ func TestFilterKeepsThrottledRowDespiteBalancedFit(t *testing.T) {
 	row.ThrottleAvailable = true
 	row.ThrottleRatio = &ratio
 
-	filtered := filterRightsizingRows([]prometheuspkg.RightsizingRow{row}, false, false, 1, false)
+	filtered := filterSizingFixture([]prometheuspkg.RightsizingRow{row}, false, false, 1, false)
 	if len(filtered.rows) != 1 {
 		t.Fatalf("a throttled row must survive the default filter, got %d rows", len(filtered.rows))
 	}
@@ -869,7 +974,7 @@ func TestFilterKeepsThrottledRowDespiteBalancedFit(t *testing.T) {
 // A workload the response has already declared unjudgeable must not carry a
 // classification that reads as a verdict that it is correctly sized.
 func TestWorkloadWithNoRowsIsNeedDataNotInRange(t *testing.T) {
-	filtered := filterRightsizingRows(nil, false, false, 1, false)
+	filtered := filterSizingFixture(nil, false, false, 1, false)
 	if filtered.classification != prometheuspkg.ClassNeedData {
 		t.Errorf("no rows means no evidence, got %q", filtered.classification)
 	}
@@ -893,7 +998,7 @@ func TestWorkloadScopeHonoursTheNamespaceAllowList(t *testing.T) {
 // lists among its actions; filtering its balanced rows dropped the workload.
 func TestFilterKeepsScaledToZeroWorkloadRows(t *testing.T) {
 	row := rightsizingRow(prometheuspkg.FitBalanced, 1, 1)
-	filtered := filterRightsizingRows([]prometheuspkg.RightsizingRow{row}, false, false, 0, true)
+	filtered := filterSizingFixture([]prometheuspkg.RightsizingRow{row}, false, false, 0, true)
 	if filtered.classification != prometheuspkg.ClassReview {
 		t.Fatalf("classification = %q, want review", filtered.classification)
 	}
@@ -907,7 +1012,7 @@ func TestThrottleAvailabilityOnlyEmittedForCPURows(t *testing.T) {
 	memory := rightsizingRow(prometheuspkg.FitOversized, 4, 1)
 	memory.Resource = "memory"
 
-	out := filterRightsizingRows([]prometheuspkg.RightsizingRow{cpu, memory}, false, false, 1, false).rows
+	out := filterSizingFixture([]prometheuspkg.RightsizingRow{cpu, memory}, false, false, 1, false).rows
 	if out[0].ThrottleAvailable == nil || *out[0].ThrottleAvailable {
 		t.Errorf("an unmeasured CPU row must say throttleAvailable=false, got %v", out[0].ThrottleAvailable)
 	}
@@ -927,7 +1032,7 @@ func TestDemandTargetOnlyAccompaniesAClampedRecommendation(t *testing.T) {
 	clamped.CalculatedReq = &calculated
 	clamped.Observed = &prometheuspkg.ObservedStatistic{Name: "Max", Value: 220 * 1024 * 1024, Formatted: "220Mi"}
 
-	out := filterRightsizingRows([]prometheuspkg.RightsizingRow{clamped}, false, true, 1, false).rows
+	out := filterSizingFixture([]prometheuspkg.RightsizingRow{clamped}, false, true, 1, false).rows
 	if out[0].DemandTarget == nil || out[0].DemandTarget.Value != "253Mi" || out[0].DemandTarget.Basis == "" {
 		t.Fatalf("a clamped row must carry its demand target and basis, got %+v", out[0].DemandTarget)
 	}
@@ -941,7 +1046,7 @@ func TestDemandTargetOnlyAccompaniesAClampedRecommendation(t *testing.T) {
 		withheld.RecommendedRequestValue = nil
 		withheld.ReductionLimited = false
 		withheld.RecommendationReason = reason
-		row := filterRightsizingRows([]prometheuspkg.RightsizingRow{withheld}, false, true, 1, false).rows[0]
+		row := filterSizingFixture([]prometheuspkg.RightsizingRow{withheld}, false, true, 1, false).rows[0]
 		if row.DemandTarget != nil {
 			t.Errorf("%s: a withheld recommendation must not expose the demand target, got %+v", reason, row.DemandTarget)
 		}
@@ -950,7 +1055,7 @@ func TestDemandTargetOnlyAccompaniesAClampedRecommendation(t *testing.T) {
 
 func TestGuidanceWarnsAgainstApplyingTheDemandTarget(t *testing.T) {
 	got := strings.Join(rightsizingGuidance(rightsizingGuidanceInput{state: prometheuspkg.RightsizingScanComplete, scope: "cluster", reductionLimited: true}), " ")
-	for _, want := range []string{"demandTarget is the demand-based end state, not a value to apply", "risks OOM"} {
+	for _, want := range []string{"demandTarget explains the calculation", "Applying it directly risks OOM", "If needsManualReview=true, resolve reviewReasons before considering that step"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("clamped guidance missing %q: %q", want, got)
 		}
@@ -968,7 +1073,7 @@ func TestReturnedContainerKeepsItsFailedRow(t *testing.T) {
 	sidecarFailed := failed
 	sidecarFailed.Container = "sidecar"
 
-	filtered := filterRightsizingRows([]prometheuspkg.RightsizingRow{failed, memory, sidecarFailed}, false, false, 2, false)
+	filtered := filterSizingFixture([]prometheuspkg.RightsizingRow{failed, memory, sidecarFailed}, false, false, 2, false)
 	if len(filtered.rows) != 2 || filtered.rows[0].QueryError == "" {
 		t.Fatalf("the returned container must keep its failed row, got %+v", filtered.rows)
 	}
@@ -1189,7 +1294,7 @@ func TestHalfEvidencedContainerRetainsKnownIncrease(t *testing.T) {
 	sidecarMemory.Container, sidecarMemory.Resource = "sidecar", "memory"
 	sidecarCPU := rightsizingRow(prometheuspkg.FitInsufficientHistory, 0.1, 0)
 	sidecarCPU.Container, sidecarCPU.RecommendedReq = "sidecar", nil
-	got := filterRightsizingRows([]prometheuspkg.RightsizingRow{app, sidecarMemory, sidecarCPU}, false, false, 2, false)
+	got := filterSizingFixture([]prometheuspkg.RightsizingRow{app, sidecarMemory, sidecarCPU}, false, false, 2, false)
 	if got.classification != prometheuspkg.ClassIncrease || !got.incompleteEvidence {
 		t.Fatalf("known increase must survive missing CPU evidence: %+v", got)
 	}
@@ -1300,9 +1405,8 @@ func TestWorkloadScopeStateSeparatesRowGapsFromFailedQueries(t *testing.T) {
 		{"everything answered", true, false, nil, prometheuspkg.RightsizingScanComplete, ""},
 		{"row lost its own evidence", true, true, restart, prometheuspkg.RightsizingScanPartial, reasonRowEvidenceIncomplete},
 		{"rows intact, supporting query failed", true, false, restart, prometheuspkg.RightsizingScanPartial, prometheuspkg.ReasonSomeEvidenceUnavailable},
-		// A lost throttle reading clears throttled_reduction and loosens the
-		// clamp, so the row reads as a clean cut. Every failed query degrades
-		// the answer; none of them is only a footnote.
+		// A lost throttle reading clears the observed-risk reason. The warning
+		// still qualifies the answer.
 		{"only throttle failed", true, false, throttle, prometheuspkg.RightsizingScanPartial, prometheuspkg.ReasonSomeEvidenceUnavailable},
 		{"throttle alongside a load-bearing failure", true, false, both, prometheuspkg.RightsizingScanPartial, prometheuspkg.ReasonSomeEvidenceUnavailable},
 		{"row gaps outrank query failures", true, true, both, prometheuspkg.RightsizingScanPartial, reasonRowEvidenceIncomplete},
@@ -1391,7 +1495,7 @@ func TestClassificationSelectionKeepsAllMatchingRowsAndWholeScanGaps(t *testing.
 	}{
 		{"increase", "grow", 2}, {"in_range", "steady", 1}, {"need_data", "unknown", 1}, {"review", "oom", 1},
 	} {
-		selected, omitted, incomplete, counts := selectRightsizingWorkloads(workloads, getRightsizingInput{Classification: tc.class, Limit: 1})
+		selected, omitted, incomplete, counts := selectSizingFixtures(workloads, getRightsizingInput{Classification: tc.class, Limit: 1})
 		if len(selected) != 1 || selected[0].Name != tc.name || len(selected[0].Rows) != tc.rows || omitted.total() != 0 || !incomplete {
 			t.Fatalf("%s selection lost rows or whole-scan gap: selected=%+v omitted=%+v incomplete=%v", tc.class, selected, omitted, incomplete)
 		}
@@ -1402,7 +1506,7 @@ func TestClassificationSelectionKeepsAllMatchingRowsAndWholeScanGaps(t *testing.
 			t.Fatal("lost live inventory evidence flag")
 		}
 	}
-	all, _, _, counts := selectRightsizingWorkloads(workloads, getRightsizingInput{})
+	all, _, _, counts := selectSizingFixtures(workloads, getRightsizingInput{})
 	if counts[prometheuspkg.ClassNeedData] != 1 || counts[prometheuspkg.ClassInRange] != 1 {
 		t.Fatalf("default row omissions changed evaluated counts: %+v", counts)
 	}
@@ -1415,7 +1519,7 @@ func TestHalfEvidencedContainerRetainsKnownReduction(t *testing.T) {
 	cpu := rightsizingRow(prometheuspkg.FitOversized, 4, 1)
 	memory := rightsizingRow(prometheuspkg.FitInsufficientHistory, 1, 0)
 	memory.Resource, memory.QueryError = "memory", prometheuspkg.RowUsageQueryFailed
-	got := filterRightsizingRows([]prometheuspkg.RightsizingRow{cpu, memory}, false, false, 2, false)
+	got := filterSizingFixture([]prometheuspkg.RightsizingRow{cpu, memory}, false, false, 2, false)
 	if got.classification != prometheuspkg.ClassReduction || got.impact.CPUChange != -6 || got.impact.MemoryChange != 0 || !got.incompleteEvidence || len(got.rows) != 2 {
 		t.Fatalf("known CPU reduction lost to missing memory evidence: %+v", got)
 	}
@@ -1467,7 +1571,7 @@ func TestRightsizingCoverageWireNamesPreserveEvidence(t *testing.T) {
 }
 
 func TestEmptyRightsizingScanEmitsZeroClassificationCounts(t *testing.T) {
-	_, _, _, counts := selectRightsizingWorkloads(nil, getRightsizingInput{})
+	_, _, _, counts := selectSizingFixtures(nil, getRightsizingInput{})
 	body, err := json.Marshal(rightsizingResponse{ClassificationCounts: counts})
 	if err != nil {
 		t.Fatal(err)
@@ -1516,7 +1620,7 @@ func TestScanReliabilityPriority(t *testing.T) {
 		{Name: "partial-grow", Replicas: 1, Rows: []prometheuspkg.RightsizingRow{grow, missing}},
 		{Name: "steady", Replicas: 1, Rows: []prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitBalanced, 1, 1)}},
 	}
-	got, _, _, _ := selectRightsizingWorkloads(workloads, getRightsizingInput{IncludeAll: true})
+	got, _, _, _ := selectSizingFixtures(workloads, getRightsizingInput{IncludeAll: true})
 	var names []string
 	for _, workload := range got {
 		names = append(names, workload.Name)
@@ -1536,5 +1640,33 @@ func TestRunningScanGuidanceSuppliesExactContinuation(t *testing.T) {
 	}
 	if out.NextCall == nil || out.NextCall.Tool != "get_rightsizing" || out.NextCall.Arguments.ScanID != "rs_example" || out.NextCall.Arguments.Refresh || out.NextCall.Arguments.Limit != 7 || out.NextCall.Arguments.Classification != "increase" || len(out.NextCall.Arguments.Namespaces) != 2 {
 		t.Fatalf("invalid continuation: %+v", out.NextCall)
+	}
+}
+
+// A withheld cluster scope has no rows; the answer must still say why, so an
+// agent never reports it as workloads needing no change.
+func TestWorkloadScopeCarriesWithheldClusterScope(t *testing.T) {
+	scope := &prometheuspkg.ClusterScope{State: prometheuspkg.ViewScopeSeveralClusters, Note: "This metrics store holds several clusters"}
+	out := workloadScopeResponse(prometheuspkg.RightsizingResponse{
+		Kind: "Deployment", Namespace: "payments", Name: "api", Window: "7d", Source: "radar",
+		Rows: []prometheuspkg.RightsizingRow{}, Reason: prometheuspkg.ReasonClusterScopeWithheld, ClusterScope: scope,
+	}, getRightsizingInput{Scope: "workload", Kind: "Deployment", Namespace: "payments", Name: "api"})
+	if out.State != prometheuspkg.RightsizingScanUnavailable || out.Reason != prometheuspkg.ScanReasonClusterScopeWithheld {
+		t.Fatalf("state=%s reason=%q", out.State, out.Reason)
+	}
+	if out.ClusterScope != scope || !strings.Contains(out.Remediation, "clusterScope.note") || !strings.Contains(out.Remediation, "never as workloads needing no change") {
+		t.Errorf("clusterScope=%+v remediation=%q", out.ClusterScope, out.Remediation)
+	}
+	raw, err := json.Marshal(out)
+	if err != nil || !strings.Contains(string(raw), `"clusterScope":{"state":"several_clusters"`) {
+		t.Errorf("wire: %s err=%v", raw, err)
+	}
+
+	partial := workloadScopeResponse(prometheuspkg.RightsizingResponse{Rows: []prometheuspkg.RightsizingRow{}, Reason: prometheuspkg.ReasonRightsizingPartialData}, getRightsizingInput{})
+	if partial.Reason != "partial_data" || partial.Remediation == "" {
+		t.Errorf("partial data: reason=%q remediation=%q", partial.Reason, partial.Remediation)
+	}
+	if rightsizingRemediation("cluster", prometheuspkg.ScanReasonClusterScopeWithheld) == "" {
+		t.Error("withheld scan has no remediation")
 	}
 }

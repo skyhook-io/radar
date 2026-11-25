@@ -285,6 +285,33 @@ func TestFluxSourcesNameTheirArtifactsAcrossNamespaces(t *testing.T) {
 	checkFamily(t, FluxSources, []runtime.Object{charts, hr}, hr, ref("source.toolkit.fluxcd.io", "HelmRepository", "charts"), "spec.chart.spec.sourceRef")
 }
 
+// Up the artifact chain: an ExternalArtifact names its ArtifactGenerator and
+// the generator the sources it composes, each with the field declaring it.
+func TestFluxSourcesFollowTheArtifactChain(t *testing.T) {
+	gen := object("source.extensions.fluxcd.io/v1beta1", "ArtifactGenerator", "gen", map[string]any{"sources": []any{map[string]any{"alias": "repo", "kind": "GitRepository", "name": "platform"}}})
+	art := object("source.toolkit.fluxcd.io/v1", "ExternalArtifact", "app", map[string]any{"sourceRef": map[string]any{"apiVersion": "source.extensions.fluxcd.io/v1beta1", "kind": "ArtifactGenerator", "name": "gen"}})
+	repo := object("source.toolkit.fluxcd.io/v1", "GitRepository", "platform", nil)
+	checkFamily(t, FluxSources, []runtime.Object{gen, art}, art, ref("source.extensions.fluxcd.io", "ArtifactGenerator", "gen"), "spec.sourceRef")
+	checkFamily(t, FluxSources, []runtime.Object{repo, gen}, gen, ref("source.toolkit.fluxcd.io", "GitRepository", "platform"), "spec.sources")
+
+	// Another producer is not a generator, so the artifact declares nothing.
+	foreign := object("source.toolkit.fluxcd.io/v1", "ExternalArtifact", "built", map[string]any{"sourceRef": map[string]any{"apiVersion": "example.com/v1", "kind": "Builder", "name": "b"}})
+	if got := NewView(allNamespaces{}, ownership.Unrestricted()).References(FluxSources, refOf(foreign), foreign); len(got.Declared) != 0 {
+		t.Errorf("a foreign producer is declared: %+v", got.Declared)
+	}
+
+	// A caller who can't read generators gets it withheld, and the repository
+	// doesn't name the generator among what reads it.
+	s := allNamespaces{cluster: cluster{objects: []runtime.Object{gen, art, repo}}}
+	v := NewView(s, denies{"ArtifactGenerator"})
+	if got := v.References(FluxSources, refOf(art), art); len(got.Declared) != 1 || got.Declared[0].State != TargetWithheld {
+		t.Errorf("denied generator: %+v", got.Declared)
+	}
+	if got := referrerRefs(v.Referrers(FluxSources, refOf(repo), nil)); len(got) != 0 {
+		t.Errorf("denied generator listed as a referrer: %v", got)
+	}
+}
+
 func TestNodePoolsNameTheirProvidersNodeClass(t *testing.T) {
 	class := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "karpenter.k8s.aws/v1", "kind": "EC2NodeClass", "metadata": map[string]any{"name": "default"}}}
 	pool := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "karpenter.sh/v1", "kind": "NodePool", "metadata": map[string]any{"name": "general"},

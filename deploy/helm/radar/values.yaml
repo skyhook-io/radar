@@ -131,8 +131,8 @@ rbac:
   # plane visibility.
   viewWebhooks: false
 
-  # Allow reading native ValidatingAdmissionPolicy and
-  # ValidatingAdmissionPolicyBinding resources so the resource browser can show
+  # Allow reading native validating and mutating admission policies and
+  # bindings so the resource browser can show
   # their declared rules and binding relationships. Auto-enabled when auth is on
   # (auth.mode != none) or in cloud mode, where every read is re-checked against
   # the requesting user's own permissions. For no-auth installs this stays
@@ -208,7 +208,7 @@ rbac:
     inferenceGateway: true  # inference.networking.k8s.io, inference.networking.x-k8s.io, llm-d.ai (Inference Gateway + llm-d routing APIs)
     externalDns: true       # externaldns.k8s.io
     externalSecrets: true   # external-secrets.io
-    flux: true              # *.toolkit.fluxcd.io
+    flux: true              # *.toolkit.fluxcd.io, source.extensions.fluxcd.io
     fluxOperator: true      # fluxcd.controlplane.io (FluxInstance, FluxReport, ResourceSet, ResourceSetInputProvider)
     gatewayApi: true        # gateway.networking.k8s.io
     gcpMonitoring: true     # monitoring.googleapis.com
@@ -228,6 +228,7 @@ rbac:
     kueue: true             # kueue.x-k8s.io + autoscaling.x-k8s.io (queues, workloads, ProvisioningRequests) + get localqueues/pendingworkloads in visibility.kueue.x-k8s.io (pending position)
     kured: true             # kured.io
     kyverno: true           # kyverno.io, policies.kyverno.io (modern CEL policy family), wgpolicyk8s.io, reports.kyverno.io, openreports.io
+    longhorn: true          # longhorn.io volumes, engines and replicas (read-only)
     lws: true               # leaderworkerset.x-k8s.io
     mariadb: true           # mariadb.mmontes.io
     metallb: true           # metallb.io (IPAddressPools, L2/BGPAdvertisements, ConfigurationStates; BGPPeers only when Secrets are granted, as they can hold an inline password)
@@ -238,6 +239,7 @@ rbac:
     nvidia: true            # nvidia.com (GPU Operator: ClusterPolicy, NVIDIADriver)
     openshift: true         # observability.openshift.io
     flagger: false         # Opt in to get/list/watch flagger.app Canaries and MetricTemplates. No default collection expansion.
+    k3sHelm: false         # Opt in to get/list/watch helm.cattle.io HelmCharts and HelmChartConfigs (k3s/RKE2). Values can hold credentials.
     systemUpgrade: false   # Opt in to get/list/watch upgrade.cattle.io Plans (system-upgrade-controller). Plans can carry env values.
     opentelemetry: true     # opentelemetry.io
     prometheus: true        # monitoring.coreos.com
@@ -697,7 +699,7 @@ traffic:
   prometheusUrl: ""
   # Optional workload/PVC metrics scope override, not a feature enable switch.
   # Leave both unset for automatic matching; set at most one mode.
-  # Does not scope rightsizing, node/HPA or legacy network/storage queries.
+  # Also scopes rightsizing, node/HPA charts and OpenCost costs from the store.
   # prometheusClusterLabels also scopes the Caretta, Beyla and Istio traffic map
   # when prometheusUrl is set.
   prometheusSingleCluster: false

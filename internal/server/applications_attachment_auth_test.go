@@ -180,13 +180,8 @@ func TestApplicationsExposureOnNamespaceScopedServices(t *testing.T) {
 		{"Deployments cluster-wide", "", map[string]string{"team/api": "service", "team/worker": "worker", "other/worker": "unknown"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Cleanup(func() {
-				k8s.ResetResourceCache()
-				if err := k8s.InitTestResourceCache(testFakeClient); err != nil {
-					t.Fatalf("restore package fixture cache: %v", err)
-				}
-			})
-			k8s.ResetResourceCache()
+			t.Cleanup(k8s.SwapResourceCacheForTest(nil))
+			t.Cleanup(k8s.ResetResourceCache)
 			if err := k8s.InitTestResourceCacheFromConfig(k8score.CacheConfig{
 				Client:         client,
 				ResourceTypes:  map[string]bool{"deployments": true, "services": true},

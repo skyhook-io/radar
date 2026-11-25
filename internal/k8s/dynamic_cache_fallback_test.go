@@ -23,7 +23,9 @@ import (
 func TestSupportedFallbacksIncludeNativeAdmissionPolicies(t *testing.T) {
 	for _, want := range []supportedCRDResource{
 		{Group: "admissionregistration.k8s.io", Versions: []string{"v1"}, Resource: "validatingadmissionpolicies", Kind: "ValidatingAdmissionPolicy", Namespaced: false},
+		{Group: "admissionregistration.k8s.io", Versions: []string{"v1", "v1beta1", "v1alpha1"}, Resource: "mutatingadmissionpolicies", Kind: "MutatingAdmissionPolicy", Namespaced: false},
 		{Group: "admissionregistration.k8s.io", Versions: []string{"v1"}, Resource: "validatingadmissionpolicybindings", Kind: "ValidatingAdmissionPolicyBinding", Namespaced: false},
+		{Group: "admissionregistration.k8s.io", Versions: []string{"v1", "v1beta1", "v1alpha1"}, Resource: "mutatingadmissionpolicybindings", Kind: "MutatingAdmissionPolicyBinding", Namespaced: false},
 	} {
 		if !slices.ContainsFunc(supportedCRDFallbacks, func(got supportedCRDResource) bool {
 			return got.Group == want.Group && slices.Equal(got.Versions, want.Versions) &&
@@ -101,14 +103,18 @@ func TestFallbackListProbeDoesNotNamespaceFallbackClusterScoped(t *testing.T) {
 
 func TestRegisterSupportedCRDFallbacks_RegistersSupportedCRDFromPartialDiscovery(t *testing.T) {
 	cases := []struct {
-		name       string
-		group      string
-		version    string
-		resource   string
-		kind       string
-		objectName string
-		cluster    bool
+		name            string
+		group           string
+		version         string
+		resource        string
+		kind            string
+		objectName      string
+		cluster         bool
+		nativeDiscovery bool
 	}{
+		{name: "PodTemplate v1", group: "", version: "v1", resource: "podtemplates", kind: "PodTemplate", objectName: "example"},
+		{name: "MutatingAdmissionPolicy v1beta1", group: "admissionregistration.k8s.io", version: "v1beta1", resource: "mutatingadmissionpolicies", kind: "MutatingAdmissionPolicy", objectName: "defaults", cluster: true, nativeDiscovery: true},
+		{name: "MutatingAdmissionPolicyBinding v1alpha1", group: "admissionregistration.k8s.io", version: "v1alpha1", resource: "mutatingadmissionpolicybindings", kind: "MutatingAdmissionPolicyBinding", objectName: "teams", cluster: true, nativeDiscovery: true},
 		{name: "StrimziPodSet v1", group: "core.strimzi.io", version: "v1", resource: "strimzipodsets", kind: "StrimziPodSet", objectName: "connect"},
 		{name: "StrimziPodSet v1beta2", group: "core.strimzi.io", version: "v1beta2", resource: "strimzipodsets", kind: "StrimziPodSet", objectName: "connect"},
 		{name: "strimzi KafkaConnect v1", group: "kafka.strimzi.io", version: "v1", resource: "kafkaconnects", kind: "KafkaConnect", objectName: "connect"},
@@ -141,7 +147,9 @@ func TestRegisterSupportedCRDFallbacks_RegistersSupportedCRDFromPartialDiscovery
 				ResetDynamicResourceCache()
 				ResetResourceDiscovery()
 				clientMu.Lock()
-				dynamicClient = nil
+				next := copyTestConnectionLocked()
+				next.clients.dynamic = nil
+				installedConn.Store(next)
 				clientMu.Unlock()
 			})
 
@@ -182,7 +190,9 @@ func TestRegisterSupportedCRDFallbacks_RegistersSupportedCRDFromPartialDiscovery
 				return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: action.GetResource().Group, Resource: action.GetResource().Resource}, "", nil)
 			})
 			clientMu.Lock()
-			dynamicClient = dyn
+			next := copyTestConnectionLocked()
+			next.clients.dynamic = dyn
+			installedConn.Store(next)
 			clientMu.Unlock()
 
 			fakeDisc := fakeclientset.NewSimpleClientset().Discovery().(*fakediscovery.FakeDiscovery)
@@ -210,7 +220,8 @@ func TestRegisterSupportedCRDFallbacks_RegistersSupportedCRDFromPartialDiscovery
 			if err != nil {
 				t.Fatalf("NewResourceDiscovery failed: %v", err)
 			}
-			resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: coreDiscovery}
+			resourceDiscovery := &ResourceDiscovery{ResourceDiscovery: coreDiscovery}
+			setTestDiscovery(resourceDiscovery)
 			if !resourceDiscovery.HasPartialDiscovery() || !resourceDiscovery.GroupHadPartialDiscovery(tt.group) {
 				t.Fatalf("expected fake discovery to record partial %s discovery", tt.group)
 			}
@@ -220,6 +231,10 @@ func TestRegisterSupportedCRDFallbacks_RegistersSupportedCRDFromPartialDiscovery
 
 			RegisterSupportedCRDFallbacks()
 
+			info, ok := resourceDiscovery.GetResourceWithGroup(tt.kind, tt.group)
+			if !ok || info.IsCRD != !tt.nativeDiscovery {
+				t.Fatalf("unexpected discovery classification for %s: %+v", tt.kind, info)
+			}
 			gvr, ok := resourceDiscovery.GetGVRWithGroup(tt.kind, tt.group)
 			if !ok {
 				t.Fatalf("expected fallback probing to register %s/%s", tt.group, tt.kind)
@@ -261,7 +276,9 @@ func TestRegisterSupportedCRDFallbacks_DoesNotProbeOnCleanDiscovery(t *testing.T
 	t.Cleanup(func() {
 		ResetResourceDiscovery()
 		clientMu.Lock()
-		dynamicClient = nil
+		next := copyTestConnectionLocked()
+		next.clients.dynamic = nil
+		installedConn.Store(next)
 		clientMu.Unlock()
 	})
 
@@ -276,7 +293,9 @@ func TestRegisterSupportedCRDFallbacks_DoesNotProbeOnCleanDiscovery(t *testing.T
 		return false, nil, nil
 	})
 	clientMu.Lock()
-	dynamicClient = dyn
+	next := copyTestConnectionLocked()
+	next.clients.dynamic = dyn
+	installedConn.Store(next)
 	clientMu.Unlock()
 
 	fakeDisc := fakeclientset.NewSimpleClientset().Discovery().(*fakediscovery.FakeDiscovery)
@@ -292,7 +311,8 @@ func TestRegisterSupportedCRDFallbacks_DoesNotProbeOnCleanDiscovery(t *testing.T
 	if err != nil {
 		t.Fatalf("NewResourceDiscovery failed: %v", err)
 	}
-	resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: coreDiscovery}
+	resourceDiscovery := &ResourceDiscovery{ResourceDiscovery: coreDiscovery}
+	setTestDiscovery(resourceDiscovery)
 	if resourceDiscovery.HasPartialDiscovery() {
 		t.Fatal("clean fake discovery should not be partial")
 	}
@@ -312,7 +332,9 @@ func TestRegisterSupportedCRDFallbacks_DoesNotRegisterWhenWatchDenied(t *testing
 	t.Cleanup(func() {
 		ResetResourceDiscovery()
 		clientMu.Lock()
-		dynamicClient = nil
+		next := copyTestConnectionLocked()
+		next.clients.dynamic = nil
+		installedConn.Store(next)
 		clientMu.Unlock()
 	})
 
@@ -331,7 +353,9 @@ func TestRegisterSupportedCRDFallbacks_DoesNotRegisterWhenWatchDenied(t *testing
 		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: action.GetResource().Group, Resource: action.GetResource().Resource}, "", nil)
 	})
 	clientMu.Lock()
-	dynamicClient = dyn
+	next := copyTestConnectionLocked()
+	next.clients.dynamic = dyn
+	installedConn.Store(next)
 	clientMu.Unlock()
 
 	fakeDisc := fakeDiscoveryWithPartialGroup(t, "keda.sh", "v1alpha1")
@@ -339,7 +363,8 @@ func TestRegisterSupportedCRDFallbacks_DoesNotRegisterWhenWatchDenied(t *testing
 	if err != nil {
 		t.Fatalf("NewResourceDiscovery failed: %v", err)
 	}
-	resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: coreDiscovery}
+	resourceDiscovery := &ResourceDiscovery{ResourceDiscovery: coreDiscovery}
+	setTestDiscovery(resourceDiscovery)
 
 	RegisterSupportedCRDFallbacks()
 
@@ -382,7 +407,9 @@ func TestRegisterSupportedCRDFallbacks_MultiVersionProbeOrder(t *testing.T) {
 				ResetDynamicResourceCache()
 				ResetResourceDiscovery()
 				clientMu.Lock()
-				dynamicClient = nil
+				next := copyTestConnectionLocked()
+				next.clients.dynamic = nil
+				installedConn.Store(next)
 				clientMu.Unlock()
 			})
 
@@ -406,7 +433,9 @@ func TestRegisterSupportedCRDFallbacks_MultiVersionProbeOrder(t *testing.T) {
 				return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: action.GetResource().Group, Resource: action.GetResource().Resource}, "", nil)
 			})
 			clientMu.Lock()
-			dynamicClient = dyn
+			next := copyTestConnectionLocked()
+			next.clients.dynamic = dyn
+			installedConn.Store(next)
 			clientMu.Unlock()
 
 			fakeDisc := fakeDiscoveryWithPartialGroup(t, "source.toolkit.fluxcd.io", "v1")
@@ -414,7 +443,8 @@ func TestRegisterSupportedCRDFallbacks_MultiVersionProbeOrder(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewResourceDiscovery failed: %v", err)
 			}
-			resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: coreDiscovery}
+			resourceDiscovery := &ResourceDiscovery{ResourceDiscovery: coreDiscovery}
+			setTestDiscovery(resourceDiscovery)
 
 			RegisterSupportedCRDFallbacks()
 
@@ -442,7 +472,9 @@ func TestRegisterSupportedCRDFallbacks_SkipsGroupsWithoutPartialDiscovery(t *tes
 	t.Cleanup(func() {
 		ResetResourceDiscovery()
 		clientMu.Lock()
-		dynamicClient = nil
+		next := copyTestConnectionLocked()
+		next.clients.dynamic = nil
+		installedConn.Store(next)
 		clientMu.Unlock()
 	})
 
@@ -459,7 +491,9 @@ func TestRegisterSupportedCRDFallbacks_SkipsGroupsWithoutPartialDiscovery(t *tes
 		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: action.GetResource().Group, Resource: action.GetResource().Resource}, "", nil)
 	})
 	clientMu.Lock()
-	dynamicClient = dyn
+	next := copyTestConnectionLocked()
+	next.clients.dynamic = dyn
+	installedConn.Store(next)
 	clientMu.Unlock()
 
 	fakeDisc := fakeDiscoveryWithPartialGroup(t, "networking.istio.io", "v1")
@@ -467,7 +501,8 @@ func TestRegisterSupportedCRDFallbacks_SkipsGroupsWithoutPartialDiscovery(t *tes
 	if err != nil {
 		t.Fatalf("NewResourceDiscovery failed: %v", err)
 	}
-	resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: coreDiscovery}
+	resourceDiscovery := &ResourceDiscovery{ResourceDiscovery: coreDiscovery}
+	setTestDiscovery(resourceDiscovery)
 
 	RegisterSupportedCRDFallbacks()
 

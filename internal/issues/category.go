@@ -133,6 +133,14 @@ func Classify(in classifyInput) issuesapi.Category {
 				return issuesapi.CategoryGatewayRouteInvalid
 			}
 			return issuesapi.CategoryOperatorConditionFail
+		case g == "longhorn.io":
+			switch in.Reason {
+			case ReasonLonghornVolumeFaulted:
+				return issuesapi.CategoryVolumeFaulted
+			case ReasonLonghornVolumeDegraded:
+				return issuesapi.CategoryVolumeDegraded
+			}
+			return issuesapi.CategoryOperatorConditionFail
 		case g == "apiregistration.k8s.io" && in.Kind == "APIService":
 			return issuesapi.CategoryAPIServiceUnavailable
 		case g == "velero.io":
@@ -197,7 +205,7 @@ func Classify(in classifyInput) issuesapi.Category {
 			return issuesapi.CategoryNodeProvisioningFail
 		case strings.Contains(g, "crossplane.io"):
 			return issuesapi.CategoryCrossplaneReconcile
-		case g == "source.toolkit.fluxcd.io" || g == "image.toolkit.fluxcd.io" || g == "notification.toolkit.fluxcd.io":
+		case g == "source.toolkit.fluxcd.io" || g == "source.extensions.fluxcd.io" || g == "image.toolkit.fluxcd.io" || g == "notification.toolkit.fluxcd.io":
 			// Source objects (GitRepository/OCIRepository/HelmRepository/…) fail
 			// at the fetch/render stage, so render_failed is the right default.
 			// Reasons here arrive as condTypeReason display strings ("Ready:

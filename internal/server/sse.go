@@ -197,7 +197,7 @@ func (b *SSEBroadcaster) Start() {
 	b.registerCRDDiscoveryCallback()
 
 	go b.run()
-	go b.topologyWorker()
+	go b.topologyWorker(topologyRetryDelay)
 	go b.watchResourceChanges()
 	go b.watchDeferredSync()
 	go b.heartbeat()
@@ -218,12 +218,12 @@ func (b *SSEBroadcaster) requestTopologyBroadcast() {
 // both queue their own trigger, so this only covers the window where neither
 // fires — but the token it consumed stood for every request that coalesced into
 // it, so dropping it silently strands the graph until the next cluster change.
-const topologyRetryDelay = 2 * time.Second
+var topologyRetryDelay = 2 * time.Second
 
 // topologyWorker owns every broadcast build, so concurrent triggers (debounce
 // fire, context switch, CRD discovery) coalesce into a single build instead of
 // racing several multi-second ones.
-func (b *SSEBroadcaster) topologyWorker() {
+func (b *SSEBroadcaster) topologyWorker(retryDelay time.Duration) {
 	for {
 		select {
 		case <-b.stopCh:
@@ -235,7 +235,7 @@ func (b *SSEBroadcaster) topologyWorker() {
 			select {
 			case <-b.stopCh:
 				return
-			case <-time.After(topologyRetryDelay):
+			case <-time.After(retryDelay):
 				b.requestTopologyBroadcast()
 			}
 		}
@@ -334,7 +334,7 @@ func (b *SSEBroadcaster) registerConnectionStateCallback() {
 
 		b.Broadcast(SSEEvent{
 			Event: "connection_state",
-			Data: map[string]any{
+			Data: connectionIdentityFields(status, map[string]any{
 				"state":           status.State,
 				"context":         status.Context,
 				"clusterName":     status.ClusterName,
@@ -342,7 +342,7 @@ func (b *SSEBroadcaster) registerConnectionStateCallback() {
 				"errorType":       status.ErrorType,
 				"progressMessage": status.ProgressMsg,
 				"disconnectedAt":  status.DisconnectedAt,
-			},
+			}),
 		})
 
 		// When we become connected, build and broadcast topology to all clients
@@ -380,7 +380,7 @@ func (b *SSEBroadcaster) registerContextSwitchCallback() {
 	}
 
 	// Register for context switch completion
-	k8s.OnContextSwitch(func(newContext string) {
+	k8s.OnContextSwitchComplete(func(newContext, switchID string) {
 		log.Printf("SSE broadcaster: context switched to %q, invalidating topology builds", newContext)
 		resetCacheView()
 
@@ -390,12 +390,11 @@ func (b *SSEBroadcaster) registerContextSwitchCallback() {
 		b.mu.RUnlock()
 		log.Printf("SSE broadcaster: broadcasting context_changed to %d clients", clientCount)
 
-		b.Broadcast(SSEEvent{
-			Event: "context_changed",
-			Data: map[string]any{
-				"context": newContext,
-			},
-		})
+		data := map[string]any{"context": newContext}
+		if switchID != "" {
+			data["switchId"] = switchID
+		}
+		b.Broadcast(SSEEvent{Event: "context_changed", Data: data})
 
 		// Broadcast the new topology so clients can complete the switch.
 		// Handed to the worker so the context switch isn't blocked on a build.
@@ -1110,7 +1109,7 @@ func (b *SSEBroadcaster) HandleSSE(w http.ResponseWriter, r *http.Request, denie
 
 	// Send current connection state immediately so client knows current status
 	status := k8s.GetConnectionStatus()
-	connData, err := json.Marshal(map[string]any{
+	connData, err := json.Marshal(connectionIdentityFields(status, map[string]any{
 		"state":           status.State,
 		"context":         status.Context,
 		"clusterName":     status.ClusterName,
@@ -1118,7 +1117,7 @@ func (b *SSEBroadcaster) HandleSSE(w http.ResponseWriter, r *http.Request, denie
 		"errorType":       status.ErrorType,
 		"progressMessage": status.ProgressMsg,
 		"disconnectedAt":  status.DisconnectedAt,
-	})
+	}))
 	if err == nil {
 		fmt.Fprintf(w, "event: connection_state\ndata: %s\n\n", connData)
 		flusher.Flush()

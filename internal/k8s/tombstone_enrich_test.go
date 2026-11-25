@@ -37,8 +37,6 @@ func initMemoryTimeline(t *testing.T) {
 	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 100}); err != nil {
 		t.Fatalf("InitStore: %v", err)
 	}
-	// Clean tombstone cache (resourceCache is nil in tests, so this is safe).
-	ResetResourceCache()
 	t.Cleanup(timeline.ResetStore)
 }
 
@@ -90,17 +88,18 @@ func k8sEventFromStore(t *testing.T) timeline.TimelineEvent {
 // informer cache. Because the delete fed the tombstone with the final object's
 // enrichment, the event still ships owner + labels + createdAt as fact.
 func TestK8sEvent_TombstoneEnrichesAfterDelete(t *testing.T) {
+	state := newConnectionCache()
 	initMemoryTimeline(t)
 
 	created := time.Now().Add(-45 * time.Minute)
 	pod := tombstoneTestPod("web-abc", created)
 
 	// Informer delete: production passes the deleted object as newObj, oldObj=nil.
-	recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "web-abc", string(pod.UID), "delete", nil, pod, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Pod", "shop", "web-abc", string(pod.UID), "delete", nil, pod, nil, false)
 
 	// Late K8s event; live cache is empty (GetResourceCache()==nil), so
 	// enrichment must come from the tombstone.
-	recordK8sEventToTimeline(ActiveClusterContext(), k8sEventPod("web-abc", "Killing"))
+	state.recordK8sEventToTimeline(timeline.GetStore(), ActiveClusterContext(), k8sEventPod("web-abc", "Killing"))
 
 	got := k8sEventFromStore(t)
 	if got.Owner == nil || got.Owner.Kind != "ReplicaSet" || got.Owner.Name != "web-rs" {
@@ -117,9 +116,10 @@ func TestK8sEvent_TombstoneEnrichesAfterDelete(t *testing.T) {
 // Without a tombstone (or live cache) the event ships anonymous — the silent
 // null-enrichment fallback, unchanged from before the cache existed.
 func TestK8sEvent_MissStaysSilentNull(t *testing.T) {
+	state := newConnectionCache()
 	initMemoryTimeline(t)
 
-	recordK8sEventToTimeline(ActiveClusterContext(), k8sEventPod("ghost", "Killing"))
+	state.recordK8sEventToTimeline(timeline.GetStore(), ActiveClusterContext(), k8sEventPod("ghost", "Killing"))
 
 	got := k8sEventFromStore(t)
 	if got.Owner != nil {
@@ -136,15 +136,15 @@ func TestK8sEvent_MissStaysSilentNull(t *testing.T) {
 // An informer add feeds the tombstone too, so a later event for a still-recent
 // (or just-evicted) object is enriched even without a delete.
 func TestK8sEvent_TombstoneFedOnAdd(t *testing.T) {
+	state := newConnectionCache()
 	initMemoryTimeline(t)
-	initialSyncComplete.Store(true)
-	t.Cleanup(func() { initialSyncComplete.Store(false) })
+	state.initialSyncComplete.Store(true)
 
 	created := time.Now() // fresh add (age <= 30s so it is recorded, not treated as sync)
 	pod := tombstoneTestPod("web-new", created)
-	recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "web-new", string(pod.UID), "add", nil, pod, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Pod", "shop", "web-new", string(pod.UID), "add", nil, pod, nil, false)
 
-	recordK8sEventToTimeline(ActiveClusterContext(), k8sEventPod("web-new", "Started"))
+	state.recordK8sEventToTimeline(timeline.GetStore(), ActiveClusterContext(), k8sEventPod("web-new", "Started"))
 
 	got := k8sEventFromStore(t)
 	if got.Owner == nil || got.Owner.Name != "web-rs" {
@@ -159,17 +159,18 @@ func TestK8sEvent_TombstoneFedOnAdd(t *testing.T) {
 // the tombstone — an empty entry would clobber the enrichment a prior good
 // entry was preserving.
 func TestK8sEvent_FailedExtractDoesNotClobberTombstone(t *testing.T) {
+	state := newConnectionCache()
 	initMemoryTimeline(t)
 
 	created := time.Now().Add(-45 * time.Minute)
 	pod := tombstoneTestPod("web-abc", created)
-	recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "web-abc", string(pod.UID), "delete", nil, pod, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Pod", "shop", "web-abc", string(pod.UID), "delete", nil, pod, nil, false)
 
 	// Same resource identity, but a payload ExtractTombstoneEntry can't
 	// unwrap (not a metav1.Object, not a DeletedFinalStateUnknown).
-	recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "web-abc", string(pod.UID), "delete", nil, "not-an-object", nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Pod", "shop", "web-abc", string(pod.UID), "delete", nil, "not-an-object", nil, false)
 
-	recordK8sEventToTimeline(ActiveClusterContext(), k8sEventPod("web-abc", "Killing"))
+	state.recordK8sEventToTimeline(timeline.GetStore(), ActiveClusterContext(), k8sEventPod("web-abc", "Killing"))
 
 	got := k8sEventFromStore(t)
 	if got.Owner == nil || got.Owner.Kind != "ReplicaSet" || got.Owner.Name != "web-rs" {
@@ -187,13 +188,13 @@ func TestK8sEvent_FailedExtractDoesNotClobberTombstone(t *testing.T) {
 // prove it names that exact object — the built-in group and the object's UID —
 // before the live object's owner is attached to it.
 func TestK8sEvent_LiveEnrichmentRequiresExactSubject(t *testing.T) {
+	state := newConnectionCache()
 	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{
 		Namespace: "shop", Name: "web-rs", UID: types.UID("rs-live"),
 		OwnerReferences: []metav1.OwnerReference{controllerRef("Deployment", "web")},
 	}}
 	cache := newOwnershipCache(t, map[string]bool{k8score.Pods: true, k8score.ReplicaSets: true}, rs)
-	previous := resourceCache.Swap(cache)
-	t.Cleanup(func() { resourceCache.Store(previous) })
+	state.promoted.Store(cache)
 
 	event := func(apiVersion, uid string) *corev1.Event {
 		return &corev1.Event{
@@ -216,7 +217,7 @@ func TestK8sEvent_LiveEnrichmentRequiresExactSubject(t *testing.T) {
 		{"no apiVersion cannot prove the group", event("", "rs-live"), false, timeline.OwnerMissed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			owner, _, _, evidence := enrichInvolvedObject(tc.event)
+			owner, _, _, evidence := state.enrichInvolvedObject(tc.event)
 			if tc.wantEnriched != (owner != nil && owner.Kind == "Deployment" && owner.Name == "web") {
 				t.Fatalf("owner = %+v, want enriched=%v", owner, tc.wantEnriched)
 			}
@@ -235,14 +236,14 @@ func TestK8sEvent_LiveEnrichmentRequiresExactSubject(t *testing.T) {
 // reconstructed — the object's current owner applied to earlier timestamps —
 // and the object's own UID.
 func TestInformerAdd_RecordsOwnerEvidence(t *testing.T) {
+	state := newConnectionCache()
 	initMemoryTimeline(t)
-	initialSyncComplete.Store(true)
-	t.Cleanup(func() { initialSyncComplete.Store(false) })
+	state.initialSyncComplete.Store(true)
 
 	pod := tombstoneTestPod("web-ev", time.Now())
 	pod.OwnerReferences[0].APIVersion = "apps/v1"
 	pod.OwnerReferences[0].UID = types.UID("rs-uid")
-	recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "web-ev", string(pod.UID), "add", nil, pod, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Pod", "shop", "web-ev", string(pod.UID), "add", nil, pod, nil, false)
 
 	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{
 		Kinds: []string{"Pod"}, IncludeManaged: true,
@@ -270,5 +271,35 @@ func TestInformerAdd_RecordsOwnerEvidence(t *testing.T) {
 	}
 	if !seen[timeline.SourceInformer] || !seen[timeline.SourceHistorical] {
 		t.Fatalf("expected informer and historical rows, got %v", seen)
+	}
+}
+
+func TestRetiredCacheTimelineCallbacksStayOnTheirConnection(t *testing.T) {
+	withFreshTestConnection(t)
+	initMemoryTimeline(t)
+	old := Current().cacheState()
+	dep := testDeployment("old-uid", "nginx", time.Now())
+	recordDelete := func() {
+		old.recordToTimelineStore(timeline.CaptureStore(), "a", "Deployment", "shop", "web", "old-uid", "delete", nil, dep, nil, false)
+	}
+	recordDelete()
+	if old.tombstones.Len() != 1 {
+		t.Fatal("delete did not seed the tombstone")
+	}
+	ResetResourceCache()
+	ResetResourceDiscovery()
+	if old.tombstones.Len() != 0 {
+		t.Fatal("teardown retained tombstone enrichment")
+	}
+	if _, ok := old.recreates.takeRecreateMatch("apps", "Deployment", "shop", "web", "new-uid"); ok {
+		t.Fatal("teardown retained a recreate predecessor")
+	}
+	recordDelete()
+	next := Current().cacheState()
+	if next.tombstones.Len() != 0 {
+		t.Fatal("late deletion enriched the replacement connection")
+	}
+	if _, ok := next.recreates.takeRecreateMatch("apps", "Deployment", "shop", "web", "new-uid"); ok {
+		t.Fatal("late deletion supplied a predecessor for the replacement connection")
 	}
 }

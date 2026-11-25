@@ -1,5 +1,7 @@
 import { NodeTerminalTab as SharedNodeTerminalTab, type NodeTerminalTabProps as SharedNodeTerminalTabProps } from '@skyhook-io/k8s-ui'
-import { apiUrl, getWsUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
+import { apiUrl, getWsUrl } from '../../api/config'
+import { apiFetch } from '../../api/client'
+import { connectionHeaders, useOpenedConnection, withConnectionParam } from '../../api/connectionBinding'
 import { readErrorBody } from '../../api/httpErrors'
 
 interface NodeTerminalTabProps {
@@ -8,11 +10,11 @@ interface NodeTerminalTabProps {
 }
 
 export function NodeTerminalTab({ nodeName, isActive }: NodeTerminalTabProps) {
+  const connection = useOpenedConnection()
   const createNodeDebugPod = async (name: string) => {
-    const response = await fetch(apiUrl(`/nodes/${encodeURIComponent(name)}/debug`), {
+    const response = await apiFetch(apiUrl(`/nodes/${encodeURIComponent(name)}/debug`), {
       method: 'POST',
-      credentials: getCredentialsMode(),
-      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+      headers: { 'Content-Type': 'application/json', ...connectionHeaders(connection) },
       body: JSON.stringify({}),
     })
     if (!response.ok) {
@@ -25,10 +27,8 @@ export function NodeTerminalTab({ nodeName, isActive }: NodeTerminalTabProps) {
   const cleanupNodeDebugPod: SharedNodeTerminalTabProps['cleanupNodeDebugPod'] = async (name, pod) => {
     const query = new URLSearchParams({ namespace: pod.namespace, podName: pod.podName, uid: pod.uid })
     try {
-      const response = await fetch(apiUrl(`/nodes/${encodeURIComponent(name)}/debug?${query}`), {
+      const response = await apiFetch(apiUrl(`/nodes/${encodeURIComponent(name)}/debug?${query}`), {
         method: 'DELETE',
-        credentials: getCredentialsMode(),
-        headers: getAuthHeaders(),
         keepalive: true,
       })
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
@@ -38,7 +38,7 @@ export function NodeTerminalTab({ nodeName, isActive }: NodeTerminalTabProps) {
   }
 
   const createSession = async (namespace: string, podName: string, containerName: string) => ({
-    wsUrl: getWsUrl(`/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(podName)}/exec?container=${encodeURIComponent(containerName)}`),
+    wsUrl: withConnectionParam(getWsUrl(`/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(podName)}/exec?container=${encodeURIComponent(containerName)}`), connection),
   })
 
   return (

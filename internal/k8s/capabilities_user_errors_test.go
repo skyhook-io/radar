@@ -39,15 +39,14 @@ func TestCheckCapabilitiesForUserDoesNotCacheFailedChecks(t *testing.T) {
 		t.Fatal(err)
 	}
 	clientMu.Lock()
-	oldClient := k8sClient
-	k8sClient = client
+	previous := installedConn.Load()
+	installedConn.Store(installedConnectionLocked(nil, &sharedKubernetesClients{clientset: client}))
 	clientMu.Unlock()
-	InvalidateUserCapabilitiesCache()
+
 	t.Cleanup(func() {
 		clientMu.Lock()
-		k8sClient = oldClient
+		installedConn.Store(previous)
 		clientMu.Unlock()
-		InvalidateUserCapabilitiesCache()
 	})
 
 	caps, err := CheckCapabilitiesForUser(t.Context(), "alice", nil)
@@ -62,7 +61,7 @@ func TestCheckCapabilitiesForUserDoesNotCacheFailedChecks(t *testing.T) {
 	}
 
 	failing.Store(false)
-	userCapabilitiesCache.Range(func(key, value any) bool {
+	Current().permissions().userCapabilitiesCache.Range(func(key, value any) bool {
 		// Past the short error TTL, still well inside the full one.
 		value.(*userCapEntry).expiresAt = value.(*userCapEntry).expiresAt.Add(-capabilitiesErrorTTL)
 		return true
@@ -101,15 +100,16 @@ func TestCheckCapabilitiesForUserFallbackGrantIsComplete(t *testing.T) {
 		t.Fatal(err)
 	}
 	clientMu.Lock()
-	oldClient, oldNs := k8sClient, contextNamespace
-	k8sClient, contextNamespace = client, "team-a"
+	previous, oldNs := installedConn.Load(), contextNamespace
+	contextNamespace = "team-a"
+	installedConn.Store(installedConnectionLocked(nil, &sharedKubernetesClients{clientset: client}))
 	clientMu.Unlock()
-	InvalidateUserCapabilitiesCache()
+
 	t.Cleanup(func() {
 		clientMu.Lock()
-		k8sClient, contextNamespace = oldClient, oldNs
+		installedConn.Store(previous)
+		contextNamespace = oldNs
 		clientMu.Unlock()
-		InvalidateUserCapabilitiesCache()
 	})
 
 	caps, err := CheckCapabilitiesForUser(t.Context(), "alice", nil)

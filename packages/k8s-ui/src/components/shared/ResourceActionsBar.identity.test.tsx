@@ -4,7 +4,7 @@ import { ResourceActionsBar } from './ResourceActionsBar'
 
 const noop = () => {}
 
-function actions(kind: string, apiVersion: string) {
+function actions(kind: string, apiVersion: string, replicaSetLogs = false) {
   return renderToString(
     <ResourceActionsBar
       resource={{ kind, name: 'example', namespace: 'test' }}
@@ -16,6 +16,9 @@ function actions(kind: string, apiVersion: string) {
       onArgoRefresh={noop}
       onArgoSuspend={noop}
       onArgoResume={noop}
+      replicaSetLogs={replicaSetLogs}
+      canViewLogs
+      onOpenWorkloadLogs={noop}
       canPortForward
       renderPortForward={() => <button>Port forward</button>}
     />,
@@ -23,6 +26,12 @@ function actions(kind: string, apiVersion: string) {
 }
 
 describe('resource actions use the loaded API group', () => {
+  it('offers combined logs only for an apps ReplicaSet on a capable server', () => {
+    expect(actions('replicasets', 'apps/v1', true)).toContain('>Logs</button>')
+    expect(actions('replicasets', 'example.io/v1', true)).not.toContain('>Logs</button>')
+    expect(actions('replicasets', 'apps/v1')).not.toContain('>Logs</button>')
+  })
+
   it.each(['app.k8s.io/v1beta1', 'notargoproj.io/v1alpha1', ''])('does not offer Argo actions for Application in %s', (apiVersion) => {
     const html = actions('applications', apiVersion)
     expect(html).not.toContain('>Sync<')
@@ -61,4 +70,27 @@ describe('resource actions use the loaded API group', () => {
     }
   })
 
+})
+
+describe('node actions are for the core Node only', () => {
+  const nodeActions = (apiVersion: string) => renderToString(
+    <ResourceActionsBar
+      resource={{ kind: 'nodes', name: 'n1', namespace: '' }}
+      data={{ apiVersion, metadata: { name: 'n1' } }}
+      onCordonNode={noop}
+      onUncordonNode={noop}
+      onDrainNode={noop}
+      canNodeWrite
+    />,
+  )
+
+  it('offers Cordon on a core Node', () => {
+    expect(nodeActions('v1')).toContain('Cordon')
+  })
+
+  it('offers no node actions on a Longhorn Node', () => {
+    const html = nodeActions('longhorn.io/v1beta2')
+    expect(html).not.toContain('Cordon')
+    expect(html).not.toContain('Drain')
+  })
 })

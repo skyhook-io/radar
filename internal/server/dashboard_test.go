@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -154,29 +155,34 @@ func TestDashboardCalicoCoverageUsesNamespaceAwareReadsAndCalicoFallback(t *test
 	t.Cleanup(k8s.ResetTestDynamicState)
 
 	dynamicCache := k8s.GetDynamicResourceCache()
-	for gvr := range map[schema.GroupVersionResource]bool{
-		projectNetworkPolicy:                 true,
-		projectStagedNetworkPolicy:           true,
-		projectStagedKubernetesNetworkPolicy: true,
-		legacyNetworkPolicy:                  true,
-	} {
+	namespacedKinds := []schema.GroupVersionResource{
+		projectNetworkPolicy,
+		projectStagedNetworkPolicy,
+		projectStagedKubernetesNetworkPolicy,
+		legacyNetworkPolicy,
+	}
+	for _, gvr := range namespacedKinds {
 		for _, namespace := range []string{"ns-a", "ns-b", "ns-c"} {
 			if _, err := dynamicCache.List(gvr, namespace); err != nil {
 				t.Fatalf("List(%v, %q): %v", gvr, namespace, err)
-			}
-			if !dynamicCache.WaitForSync(gvr, 2*time.Second) {
-				t.Fatalf("%v informer did not sync for namespace %q", gvr, namespace)
 			}
 		}
 	}
 	if _, err := dynamicCache.List(projectGlobalNetworkPolicy, ""); err != nil {
 		t.Fatalf("List(%v): %v", projectGlobalNetworkPolicy, err)
 	}
-	if !dynamicCache.WaitForSync(projectGlobalNetworkPolicy, 2*time.Second) {
-		t.Fatalf("%v informer did not sync", projectGlobalNetworkPolicy)
-	}
 	if _, err := dynamicCache.List(projectStagedGlobalNetworkPolicy, ""); err != nil {
 		t.Fatalf("List(%v): %v", projectStagedGlobalNetworkPolicy, err)
+	}
+	for _, gvr := range namespacedKinds {
+		for _, namespace := range []string{"ns-a", "ns-b", "ns-c"} {
+			if !dynamicCache.WaitForSync(gvr, 2*time.Second) {
+				t.Fatalf("%v informer did not sync for namespace %q", gvr, namespace)
+			}
+		}
+	}
+	if !dynamicCache.WaitForSync(projectGlobalNetworkPolicy, 2*time.Second) {
+		t.Fatalf("%v informer did not sync", projectGlobalNetworkPolicy)
 	}
 	if !dynamicCache.WaitForSync(projectStagedGlobalNetworkPolicy, 2*time.Second) {
 		t.Fatalf("%v informer did not sync", projectStagedGlobalNetworkPolicy)
@@ -450,5 +456,57 @@ func TestDashboardClusterFromInfo_NamesTheContext(t *testing.T) {
 				t.Errorf("unexpected context key: %s", raw)
 			}
 		})
+	}
+}
+
+// Until the policy informer's first list arrives it lists nothing, which must
+// read as unknown coverage, not "No network policies configured".
+func TestDashboardCoverageUnknownUntilPolicyInformerSyncs(t *testing.T) {
+	deployment := dashboardTestDeployment("ns-a", "frontend", "frontend")
+	core, err := k8score.NewResourceCache(k8score.CacheConfig{
+		Client:        kubernetesfake.NewSimpleClientset(deployment),
+		ResourceTypes: map[string]bool{k8score.Deployments: true},
+		DeferredTypes: map[string]bool{},
+		SyncTimeout:   2 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewResourceCache: %v", err)
+	}
+	t.Cleanup(core.Stop)
+	cache := &k8s.ResourceCache{ResourceCache: core}
+
+	cnp := schema.GroupVersionResource{Group: "cilium.io", Version: "v2", Resource: "ciliumnetworkpolicies"}
+	resources := []k8s.APIResource{{Group: cnp.Group, Version: cnp.Version, Kind: "CiliumNetworkPolicy", Name: cnp.Resource, Namespaced: true, IsCRD: true, Verbs: []string{"get", "list", "watch"}}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{cnp: "CiliumNetworkPolicyList"},
+		&unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "cilium.io/v2", "kind": "CiliumNetworkPolicy",
+			"metadata": map[string]any{"namespace": "ns-a", "name": "frontend"},
+			"spec":     map[string]any{"endpointSelector": map[string]any{"matchLabels": map[string]any{"app": "frontend"}}},
+		}})
+	// The first list is the access probe; the informer's list waits for release.
+	release := make(chan struct{})
+	var lists atomic.Int32
+	dyn.PrependReactor("list", "ciliumnetworkpolicies", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if lists.Add(1) > 1 {
+			<-release
+		}
+		return false, nil, nil
+	})
+	if err := k8s.InitTestDynamicResourceCache(dyn, resources); err != nil {
+		t.Fatalf("InitTestDynamicResourceCache: %v", err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+
+	if got := (&Server{}).getDashboardNetworkPolicyCoverage(requestWithUser("GET", "/", nil), cache, nil); got != nil {
+		t.Fatalf("coverage before the policy informer synced = %+v, want unknown", got)
+	}
+	close(release)
+	if !k8s.GetDynamicResourceCache().WaitForSync(cnp, 2*time.Second) {
+		t.Fatal("policy informer did not sync")
+	}
+	got := (&Server{}).getDashboardNetworkPolicyCoverage(requestWithUser("GET", "/", nil), cache, nil)
+	if got == nil || got.TotalPolicies != 1 || got.CoveredWorkloads != 1 {
+		t.Fatalf("coverage after sync = %+v, want 1 policy covering 1 workload", got)
 	}
 }

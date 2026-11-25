@@ -53,7 +53,7 @@ Graph or table sub-modes. The graph starts from the resources the controller rec
 
 You see only the resources you can read. A readable resource under a hidden parent stays visible. Resources on another cluster, from a remote Application or a Flux object with `spec.kubeConfig`, are not expanded. When Radar can't read part of the tree, a **Limited resource view** notice says so.
 
-For Flux, the graph also shows where the root's content comes from. Its sources sit to the left of the root, with arrows pointing into it: the GitRepository, OCIRepository, Bucket or ExternalArtifact a Kustomization reads, the Kustomizations it `dependsOn`, and for a HelmRelease the chart chain. An inline `spec.chart` release draws release ← generated HelmChart (`status.helmChart`) ← the chart's source (HelmRepository, GitRepository or Bucket), so a chart that fails to pull shows as its own red node; `spec.chartRef` draws the referenced HelmChart, OCIRepository or ExternalArtifact. Source cards show what each kind has: the URL, the fetched revision, or for a HelmChart the requested chart and version. Sources are dependencies, not managed resources: they are counted separately and listed under the **Dependency** role. A source the root also manages, like a bootstrap Kustomization's own GitRepository, stays with the managed resources.
+For Flux, the graph also shows where the root's content comes from. Its sources sit to the left of the root, with arrows pointing into it: the GitRepository, OCIRepository, Bucket or ExternalArtifact a Kustomization reads, the Kustomizations it `dependsOn`, and for a HelmRelease the chart chain. An inline `spec.chart` release draws release ← generated HelmChart (`status.helmChart`) ← the chart's source (HelmRepository, GitRepository or Bucket), so a chart that fails to pull shows as its own red node; `spec.chartRef` draws the referenced HelmChart, OCIRepository or ExternalArtifact; an ExternalArtifact made by an ArtifactGenerator (Flux 2.7+, source-watcher) continues to that generator and its sources, labelled with their aliases. A generator fed by another generator's artifact is followed the same way. Only the artifact the root consumes is drawn, never the generator's other artifacts. The walk stops after eight upstream levels (four nested generators), and never revisits an object, so a cycle ends; when it stops with more to follow, the card where it stopped reads **chain continues…** and a notice names the object to open to follow it further. A generator paused with `source.extensions.fluxcd.io/reconcile: disabled` reads as Suspended, not failing, even though it keeps its last Ready condition. Source cards show what each kind has: the URL, the fetched revision, for a HelmChart the requested chart and version, or for an ArtifactGenerator how many ExternalArtifacts its inventory lists (not the Namespaces it manages; no count when Radar can't read an inventory). A generator that isn't Ready, and isn't paused, raises a warning, since the artifacts it generates may then be out of date. The Kustomization and HelmRelease drawers list `spec.healthCheckExprs` (HelmRelease from Flux 2.8) under **Health checks (expressions)**; Flux records no result per expression, so the Ready condition still names what failed. Sources are dependencies, not managed resources: they are counted separately and listed under the **Dependency** role. A source the root also manages, like a bootstrap Kustomization's own GitRepository, stays with the managed resources.
 
 GitOps CRs that are themselves managed (a child Application from an app-of-apps parent, a Kustomization referenced by another Kustomization, ApplicationSet children) render with a small `Argo` or `Flux` tool badge and a `→` chevron — click to open that CR's own GitOps detail page. The child page's breadcrumb shows the lineage `GitOps / parent-ns/parent / child-ns/child`; the parent segment is clickable to navigate back.
 
@@ -210,6 +210,23 @@ argocd-server API upgrades the Changes tab with the **canonical Git-rendered
 diff**: desired (rendered from Git, with Argo's own normalizations and every
 `ignoreDifferences` rule applied — including jq rules Radar can't evaluate)
 vs live, per managed resource, as a full YAML line diff.
+
+The same connection lets you open a sync in an application's **Deploys** tab
+and compare the Kubernetes resources Argo renders at that Git commit and at
+the previous sync's commit. A Kustomize image override, for example, appears
+as a change to the workload's container image. Expand **Deployment metadata**
+to inspect changes to the `build.run.url`, `deployment-id`, and
+`deployment-timestamp` annotations. Other annotations and labels remain
+with their resource. A change confined to annotations on a pod template can
+still trigger a rollout.
+
+This comparison uses adjacent retained syncs for a single Git source targeting
+the connected cluster. Both history entries must match the Application's
+current rendering options. Changes to the tracked tag or branch are supported
+because Radar requests each commit by SHA. Argo renders the commits on demand using its current
+renderer and dependencies. Use workload **Revisions** to inspect the pod
+templates the controller retained. Without an Argo API connection, the sync
+can still link to the commits and their comparison on supported Git hosts.
 
 Setup (Settings → Argo CD; the API is `PUT /api/integrations/connections` in
 local CLI and Desktop, and `PUT /api/integrations/argocd` in Radar Cloud):

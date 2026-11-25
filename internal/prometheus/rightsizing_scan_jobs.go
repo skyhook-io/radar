@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
@@ -94,7 +95,9 @@ func newRightsizingScanManager() *RightsizingScanManager {
 			}
 			return func(ctx context.Context, scope RightsizingScanScope, publish func(RightsizingScanResponse)) RightsizingScanResponse {
 				if connectionErr != nil {
-					return RightsizingScanResponse{State: RightsizingScanUnavailable, Reason: connectionErr.Error()}
+					result := newRightsizingScanResponse(time.Now().UTC(), scope)
+					result.Reason = connectionErr.Error()
+					return result
 				}
 				return runRightsizingScan(ctx, scope, client, cache, publish)
 			}, valid
@@ -133,15 +136,21 @@ func (m *RightsizingScanManager) Namespaces(ctx context.Context, id string, gene
 }
 
 func scanOwner(ctx context.Context) string {
+	// A fleet request needs UID-bound evidence even if the same user has a
+	// standalone scan of the same namespaces cached on this agent.
+	origin := "standalone:"
+	if cloud.IsAuthenticatedTunnelRequest(ctx) {
+		origin = "hub:"
+	}
 	user := auth.UserFromContext(ctx)
 	if user == nil {
-		return "local"
+		return origin + "local"
 	}
 	data, _ := json.Marshal(struct {
 		Name   string
 		Groups []string
 	}{user.Username, sortedScanStrings(user.Groups)})
-	return string(data)
+	return origin + string(data)
 }
 
 func sortedScanStrings(values []string) []string {
@@ -205,7 +214,8 @@ func (m *RightsizingScanManager) Resolve(ctx context.Context, request Rightsizin
 		run, valid := m.prepare()
 		started := time.Now().UTC()
 		deadline := started.Add(m.duration)
-		workCtx, cancel := context.WithDeadline(context.Background(), deadline)
+		// Keep the authenticated tunnel origin while the job outlives its starting HTTP request.
+		workCtx, cancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
 		result := newRightsizingScanResponse(started, request.Scope)
 		result.RightsizingScanProgress = RightsizingScanProgress{ScanID: "rs_" + auth.NewSessionID(), ScanStatus: "running", DeadlineAt: &deadline, PollAfterSeconds: 5}
 		result.State, result.Reason = RightsizingScanPartial, "scan_in_progress"

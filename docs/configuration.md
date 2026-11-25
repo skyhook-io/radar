@@ -30,15 +30,15 @@ installed version. Several flags also take a persistent default from `~/.radar/c
 | `--disable-helm-write` | `false` | Disable release writes, per-release source updates, values previews and `manage_helm`; also global repository/OCI changes without auth. Signed-in global source management and Cloud install/upgrade continue |
 | `--disable-local-terminal` | `false` | Disable the host local terminal |
 | `--disable-auto-port-forward` | `false` | Never open a port-forward on Radar's own initiative (metrics, traffic, cost and Argo CD discovery). Port-forwards you start still work. See [Automatic port-forwarding](#automatic-port-forwarding) |
-| `--debug-image` | `busybox:latest` | Image for ephemeral debug containers and node debug pods. If built-in restricted PodSecurity rejects the default pod debug container, Radar retries with a restricted-compatible Linux security context using the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. |
+| `--debug-image` | `busybox:latest` | Default image for ephemeral debug containers and node debug pods. On a running Pod, **Debug** opens a target container and image chooser. The chooser shows this default. Leave it unchanged or clear the field to use the server setting. If built-in restricted PodSecurity rejects the default pod debug container, Radar retries with a restricted-compatible Linux security context using the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. |
 | `--list-page-size` | `0` (off) | Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) at this size. Helps very large clusters that fail to sync; only used when WatchList streaming is unavailable. Try `2000`. |
-| `--context-switch-timeout` | `30s` | Maximum time a kubeconfig context switch may take. Widen on high-latency control planes — see [Tuning for slow clusters](#tuning-for-slow-or-high-latency-clusters). Env: `RADAR_CONTEXT_SWITCH_TIMEOUT`. |
+| `--context-switch-timeout` | See description | Overrides the target connectivity check (normally 5s, or 11s with a kubeconfig exec credential plugin). Synchronous switches and in-cluster recovery use a 30s initialization deadline by default. Setting this option overrides that deadline too. Widen on high-latency control planes — see [Tuning for slow clusters](#tuning-for-slow-or-high-latency-clusters). Env: `RADAR_CONTEXT_SWITCH_TIMEOUT`. |
 | `--first-paint-backstop` | `5m` | Hard upper bound on the initial critical-cache sync wait before Radar falls through to a partial-data render. Env: `RADAR_FIRST_PAINT_BACKSTOP`. |
 | `--namespace-list-timeout` | `5s` | Timeout for the cluster-wide namespace LIST used to decide if the user is RBAC-namespace-restricted. A timeout on a slow control plane is misreported in the UI as "Limited list — RBAC". Env: `RADAR_NAMESPACE_LIST_TIMEOUT`. |
 | `--max-scope-candidates` | `20` | Cap on the namespace-fallback probe fanout (used by accounts that can list namespaces cluster-wide but not list a specific kind cluster-wide). Raise above `20` for clusters with more than 20 namespaces. Env: `RADAR_MAX_SCOPE_CANDIDATES`. |
 | `--prometheus-url` | (auto-discover) | Manual PromQL-compatible query URL, including Prometheus, VictoriaMetrics, Thanos, or Mimir (skips auto-discovery). In local CLI/Desktop mode, applies only to the launch's initial context and never inherits saved headers. |
-| `--prometheus-single-cluster` | `false` | Declare the backend dedicated to this cluster for workload metrics and PVC usage, replacing automatic identity matching. Other metrics do not use this override. [Scope and lifetime](workload-metrics.md#optional-operator-override). |
-| `--prometheus-cluster-label` | (automatic matching) | Optional workload/PVC metrics override for a shared backend, also used for the Caretta/Beyla/Istio traffic map on a metrics store you configured, e.g. `cluster=production` (repeatable, ANDed). Alternative to `--prometheus-single-cluster`; leave both unset for automatic matching. Not persisted. |
+| `--prometheus-single-cluster` | `false` | Declare the backend dedicated to this cluster for rightsizing and other supported metrics views, replacing automatic identity matching. [Scope and lifetime](workload-metrics.md#optional-operator-override). |
+| `--prometheus-cluster-label` | (automatic matching) | Optional cluster labels for rightsizing and other supported metrics views on a shared backend, also used for the Caretta/Beyla/Istio traffic map on a metrics store you configured, e.g. `cluster=production` (repeatable, ANDed). Alternative to `--prometheus-single-cluster`; leave both unset for automatic matching. Not persisted. |
 | `--prometheus-header` | | HTTP header sent with every Prometheus request, format `Key=Value` (repeatable). Required for auth-protected backends. In local CLI/Desktop mode, requires `--prometheus-url` in the same launch and applies only to the launch's initial context. |
 | `--prometheus-header-from-env` | | HTTP header sent with every Prometheus request, sourced from an environment variable, format `Key=ENV_VAR` (repeatable). In local CLI/Desktop mode, requires `--prometheus-url` in the same launch and applies only to the launch's initial context. |
 | `--beyla-job-selector` | (empty) | Beyla Live Traffic matcher fragment (empty matches Beyla/Alloy jobs there). Workload charts use it only with an explicit scope override and accept one `job` equality or regex matcher. Automatic workload matching discovers custom jobs without it. [Details](workload-metrics.md#request-sources). |
@@ -51,13 +51,17 @@ installed version. Several flags also take a persistent default from `~/.radar/c
 
 ### Tuning for slow or high-latency clusters
 
-The default deadlines (30 s context switch, 5 m first-paint backstop, 5 s
-namespace LIST, 20 scope candidates) are tuned for healthy clusters reached
+In the local cluster picker, Radar checks the target before closing sessions on a connected cluster. You can cancel during that check. Once the switch starts replacing caches, dismissing the progress display or refreshing the tab lets the switch continue. The picker reports its progress. Selecting a cluster during a local reconnect stops that retry. If the retry already closed its connection, cancelling the new selection leaves the picker available.
+
+When you switch clusters in the local picker or retry a kubeconfig connection, Radar first waits for the core resource cache to be ready. If Kubernetes API discovery is still running, Radar waits up to another five minutes by default (set by `--first-paint-backstop`). Once that wait expires, the cluster shows as connected and you can browse built-in resources such as Pods and Deployments. Radar continues discovering custom resources in the background and loads them if you are still on that connection.
+
+The defaults (5 s connectivity check, or 11 s with exec credentials, 5 m
+first-paint backstop, 5 s namespace LIST, and 20 scope candidates) are tuned for healthy clusters reached
 over fast, low-latency connections. They are too tight for clusters reached
 over SSH tunnels, geographically distant control planes, or accounts subject
 to API-server throttling, where they surface as one of three symptoms:
 
-- "Context switch timed out" toasts when the cache eventually does sync
+- Timeouts while checking target connectivity
 - "Limited list — RBAC doesn't allow listing all namespaces" even though the
   account has cluster-wide list permission (the LIST timed out, not RBAC)
 - Kinds silently marked denied because the namespace they live in fell past
@@ -604,6 +608,8 @@ Switching contexts in the UI never rewrites your kubeconfig — `kubectl` keeps 
 
 While you're connected, Radar first checks that the new cluster answers and accepts your credentials. If it doesn't, Radar shows why and how to fix it, and your current cluster stays connected: **Back to** returns to it at once. If a switch fails after Radar has already left the previous cluster, the same button switches back to it.
 
+In local Radar, **Cancel switch** keeps the current cluster while Radar checks the target. Once Radar begins closing the old cluster's sessions, it shows progress as the new cluster's resources load. **Stop switch** stops loading the target and lets you choose a cluster to reconnect. Sessions on the previous cluster have already closed. **Hide progress** lets the switch continue. Select the switching indicator to reopen progress, or refresh the tab to follow the same switch. The connectivity timeout and initial workload sync limit apply to different stages.
+
 ### Expired credentials
 
 If an active context's credentials expire or are rejected, Radar disconnects cluster-backed work and retries automatically. After you re-authenticate, exec-based credentials are re-probed and static credentials are reloaded from kubeconfig on disk, so Radar can reconnect without a restart. Retries start after 30 seconds and back off to 5 minutes; a credential plugin that stops responding is retried less frequently.
@@ -783,6 +789,46 @@ mapping needs no confirmation. Token rotation alone does not prompt. Replacing
 a cluster behind identical endpoint, trust and user reference is not detectable
 by this fingerprint.
 
+#### GKE system metric connections
+
+With GKE system metrics enabled, local Radar can read Cloud Monitoring using
+Google's hosted Prometheus API. This path requires neither an in-cluster
+frontend nor managed Prometheus collection. For a local session, replace
+`SCOPING_PROJECT_ID` with the project whose metrics scope includes the cluster.
+Your Google identity needs permission to read time series in that scope.
+
+```sh
+RADAR_GKE_AUTH="Bearer $(gcloud auth print-access-token)" kubectl radar \
+  --prometheus-url='https://monitoring.googleapis.com/v1/projects/SCOPING_PROJECT_ID/location/global/prometheus' \
+  --prometheus-header-from-env=Authorization=RADAR_GKE_AUTH
+```
+
+Radar reads the header at launch. Rerun the command for a fresh token after it
+expires. The explicitly configured URL also serves Radar's raw PromQL queries,
+which can read the token's full metrics scope. [Google's Prometheus HTTP API](https://docs.cloud.google.com/stackdriver/docs/managed-prometheus/query-api-ui#prometheus_http_api)
+
+On GKE, Radar first reads the usual Prometheus-compatible backend. When a
+supported chart has no conventional measurements, Radar can obtain that chart
+from a Google Managed Service for Prometheus query frontend alongside the
+regular backend. A chart with usable conventional data returns immediately.
+With only the Google frontend, Radar serves the supported native charts. Autodiscovery trusts only the
+`frontend` or `gmp-frontend` Service in the operator-managed `gmp-public`,
+`gmp-system` or `gke-gmp-system` namespace. Keep Pod and Service writes in those
+namespaces limited to platform operators. For a frontend in a custom namespace,
+configure its URL explicitly. Locally, automatic detection uses the Kubernetes
+Service proxy (GET on `services/proxy` in the frontend's namespace).
+In-cluster it uses the Service address. Discovery verifies the Service's
+selected Pods and queries for native node data from the connected cluster.
+GKE managed collection and the query frontend are installed independently.
+
+Radar obtains the GKE project, control-plane location and cluster name from
+the connected API server's OpenID issuer. If the issuer cannot identify the
+cluster, those three exact values can be supplied as `project_id`, `location` and
+`cluster_name` in the existing metrics cluster-label setting. Conflicting values
+withhold native charts. A manually configured endpoint keeps priority and can
+supply conventional and native series together. With an explicit URL, Radar
+checks only that endpoint for both sources and sends configured headers only to it. [GKE chart coverage](workload-metrics.md#google-kubernetes-engine-system-metrics)
+
 #### Startup overrides and older settings
 
 An explicit local `--prometheus-url` is a complete, read-only **Set for this
@@ -892,7 +938,9 @@ launch context, so switching to another context goes back to discovery.
 Workload metrics and PVC usage normally use automatic identity matching.
 `--prometheus-single-cluster` and repeatable `--prometheus-cluster-label` replace
 it for workload request/resource charts, history, Pod comparison and PVC usage.
-They do not scope rightsizing, node/HPA or the workload network/filesystem charts.
+They also scope rightsizing, the overview, namespace, Node and HPA charts, diagnose
+vitals and OpenCost costs from the metrics store; see
+[other views in a shared store](workload-metrics.md#other-views-in-a-shared-metrics-store).
 Leave both unset for automatic matching. Configured labels must exist on each
 affected metric source, including kubelet volume stats. See
 [scope and remedies](workload-metrics.md#pvc-usage-scope).
@@ -1005,6 +1053,8 @@ The header has a namespace picker on the right. Pick a single namespace to focus
 
 The pick belongs to the browser tab. Picking in one tab doesn't change your other tabs, or what anyone else sees, and a tab keeps its pick when you reload it, including **All namespaces**. A new tab starts from the last pick made on this Radar for the kubeconfig context, in any tab. Locally that last pick is remembered across restarts. In shared (auth-enabled) deployments it lives until Radar restarts or reconnects to the cluster, and it is shared by everyone Radar maps to the same Kubernetes user, so with a shared identity a new tab can start on someone else's last pick.
 
+The pick stays applied as you move between views. When it leaves a resource list empty, the list says how many of that kind are in other namespaces you can read, with a **Show all namespaces** button. A count Radar couldn't read in full, or one limited by your access, reads "At least N". Under `--namespace-scope` Radar holds no other namespace, so the list says nothing more.
+
 The pick narrows Radar's own views only, and only because the UI sends it with each request. An API read that names no namespace (`?namespace=` / `?namespaces=`) never inherits a remembered pick: it returns everything you're allowed to see, within the `--namespace-scope` pin when one is set. So the same user reading through another client — AI tools over MCP, Radar Cloud's fleet-wide views and background pollers, or `curl` — is never quietly narrowed to a namespace picked while browsing. A few UI surfaces deliberately cover all your namespaces regardless of the pick: the namespace list in the ⌘K palette, the **My permissions** dialog, and the standalone Cost view (which disables the picker). Home's Cost Insights card follows the pick.
 
 Until you make a pick, local sessions default to the namespace set on the kubeconfig context (kubectl parity — the same namespace `kubectl` would use, including one set via `kubectl config set-context` or `kubens`). An explicit `--namespace` / `--namespaces` flag outranks the kubeconfig value, and contexts without either default to **All namespaces**. Once you pick namespaces or explicitly choose **All namespaces**, that choice is what new tabs start from for the context and the kubeconfig value is no longer consulted.
@@ -1086,6 +1136,20 @@ Pod-spec findings, put the annotation on the Deployment or other owning workload
 not only on its generated Pods. Unknown check IDs have no effect. The annotation
 travels with the manifest and suppresses the matching findings for every Radar
 reading it; it does not disable those checks for other resources.
+
+The same annotation on a Namespace skips the listed checks for every resource
+in that namespace, while they stay on everywhere else:
+
+```bash
+kubectl annotate namespace batch-jobs radarhq.io/ignore-checks=cpuLimitMissing
+```
+
+It adds to any annotation on the resource itself and does not affect
+cluster-scoped resources such as PersistentVolumes. Radar applies it only when
+it can list Namespaces cluster-wide; otherwise those findings stay visible.
+With authentication on, a user who cannot read Namespace objects can still
+infer from the hidden-findings count that their namespace carries the
+annotation and which check IDs it lists.
 
 ### Storage review checks
 

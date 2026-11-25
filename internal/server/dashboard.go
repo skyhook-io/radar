@@ -55,7 +55,7 @@ type DashboardResponse struct {
 	// rendering an empty state.
 	GitOpsControllers *DashboardGitOpsControllers `json:"gitopsControllers,omitempty"`
 	DeferredLoading   bool                        `json:"deferredLoading,omitempty"`  // True while deferred informers (secrets, events, etc.) are still syncing
-	PartialData       []string                    `json:"partialData,omitempty"`      // Resource kinds that timed out during critical sync (e.g. ["Pod", "Deployment"])
+	PartialData       []string                    `json:"partialData,omitempty"`      // Resources still loading after the initial wait
 	AccessRestricted  bool                        `json:"accessRestricted,omitempty"` // True when user has no namespace access (RBAC)
 }
 
@@ -426,7 +426,11 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 
 	// Cert health is derived from TLS Secrets — gate by per-user secrets RBAC.
 	resp.CertificateHealth = s.getDashboardCertificateHealth(s.secretReadableNamespaces(r, namespaces))
-	resp.NetworkPolicyCoverage = s.getDashboardNetworkPolicyCoverage(r, cache, namespaces)
+	if cache.CustomResourcesPending() {
+		resp.PartialData = append(resp.PartialData, "custom resources")
+	} else {
+		resp.NetworkPolicyCoverage = s.getDashboardNetworkPolicyCoverage(r, cache, namespaces)
+	}
 	resp.Audit = s.getDashboardAudit(r, cache, namespaces)
 	resp.GitOpsControllers = s.getDashboardGitOpsControllers(cache, namespaces)
 
@@ -514,7 +518,7 @@ func (s *Server) handleDashboardHelm(w http.ResponseWriter, r *http.Request) {
 // (auth disabled or user has cluster-wide namespaced access). Empty =
 // no access.
 func (s *Server) handleDashboardCRDs(w http.ResponseWriter, r *http.Request) {
-	if !s.requireConnected(w) {
+	if !s.requireConnected(w) || s.writeIfDiscoveryPending(w) {
 		return
 	}
 	namespaces := s.parseNamespacesForUser(r)
@@ -1706,6 +1710,11 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 				} else if len(readableNamespaces) > 0 {
 					cnps, err = dynamicCache.ListNamespaces(cnpGVR, readableNamespaces)
 				}
+				// An informer that hasn't synced lists nothing; that is unknown
+				// coverage, not "no policies".
+				if (clusterWide || len(readableNamespaces) > 0) && err == nil && !dynamicCache.IsSynced(cnpGVR) {
+					return nil
+				}
 				if err == nil {
 					for _, cnp := range cnps {
 						ns := cnp.GetNamespace()
@@ -1739,20 +1748,27 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 					}
 					var policies []*unstructured.Unstructured
 					var err error
+					read := false
 					if definition.Namespaced {
 						clusterWide, readableNamespaces := s.dashboardPolicyReadScope(r, namespaces, group, gvr.Resource)
 						if clusterWide {
+							read = true
 							policies, err = dynamicCache.List(gvr, "")
 						} else if len(readableNamespaces) > 0 {
+							read = true
 							policies, err = dynamicCache.ListNamespaces(gvr, readableNamespaces)
 						}
 					} else {
 						if s.canRead(r, group, gvr.Resource, "", "list") {
+							read = true
 							policies, err = dynamicCache.List(gvr, "")
 						}
 					}
 					if err != nil {
 						continue
+					}
+					if read && !dynamicCache.IsSynced(gvr) {
+						return nil
 					}
 					for _, policy := range policies {
 						identity := definition.Kind + "\x00" + policy.GetNamespace() + "\x00" + policy.GetName()

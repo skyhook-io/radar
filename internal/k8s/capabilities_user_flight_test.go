@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,7 @@ import (
 // sarServer answers every SubjectAccessReview as allowed, or with a 504 while
 // failing is set, after waiting on gate when it is non-nil.
 type sarServer struct {
+	entered chan struct{}
 	reviews atomic.Int32
 	failing atomic.Bool
 	gate    atomic.Pointer[chan struct{}]
@@ -34,9 +36,11 @@ func (s *sarServer) hold(t *testing.T) (release func()) {
 
 func useSARServer(t *testing.T) *sarServer {
 	t.Helper()
-	s := &sarServer{}
+	s := &sarServer{entered: make(chan struct{})}
+	signalReview := sync.OnceFunc(func() { close(s.entered) })
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.reviews.Add(1)
+		signalReview()
 		if g := s.gate.Load(); g != nil {
 			<-*g
 		}
@@ -59,21 +63,22 @@ func useSARServer(t *testing.T) *sarServer {
 		t.Fatal(err)
 	}
 	clientMu.Lock()
-	oldClient, oldNs := k8sClient, contextNamespace
-	k8sClient, contextNamespace = client, ""
+	previous, oldNs := installedConn.Load(), contextNamespace
+	contextNamespace = ""
+	installedConn.Store(installedConnectionLocked(nil, &sharedKubernetesClients{clientset: client}))
 	clientMu.Unlock()
-	InvalidateUserCapabilitiesCache()
+
 	t.Cleanup(func() {
 		clientMu.Lock()
-		k8sClient, contextNamespace = oldClient, oldNs
+		installedConn.Store(previous)
+		contextNamespace = oldNs
 		clientMu.Unlock()
-		InvalidateUserCapabilitiesCache()
 	})
 	return s
 }
 
 func expireUserCapabilities() {
-	userCapabilitiesCache.Range(func(_, value any) bool {
+	Current().permissions().userCapabilitiesCache.Range(func(_, value any) bool {
 		value.(*userCapEntry).expiresAt = time.Now().Add(-time.Second)
 		return true
 	})
@@ -86,7 +91,7 @@ func TestCheckCapabilitiesForUserCoalescesConcurrentChecks(t *testing.T) {
 		t.Fatal(err)
 	}
 	perRound := s.reviews.Swap(0)
-	InvalidateUserCapabilitiesCache()
+	Current().ResetPermissions()
 
 	release := s.hold(t)
 	var wg sync.WaitGroup
@@ -153,5 +158,56 @@ func TestCheckCapabilitiesForUserServesLastGoodDuringRecheck(t *testing.T) {
 			t.Fatal("the re-check never replaced the failed answer")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestUserCapabilityFlightsStayOnTheirConnection(t *testing.T) {
+	a := useSARServer(t)
+	connA := Current()
+	releaseA := a.hold(t)
+	check := func(ctx context.Context) <-chan *Capabilities {
+		done := make(chan *Capabilities, 1)
+		go func() {
+			caps, _ := CheckCapabilitiesForUser(ctx, "alice", nil)
+			done <- caps
+		}()
+		return done
+	}
+	resultA := check(t.Context())
+	select {
+	case <-a.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("A never started a review")
+	}
+
+	b := useSARServer(t)
+	b.failing.Store(true)
+	releaseB := b.hold(t)
+	resultB := check(t.Context())
+	select {
+	case <-b.entered:
+	case <-time.After(5 * time.Second):
+		releaseA()
+		t.Fatal("B did not start its own review while A was blocked")
+	}
+
+	releaseA()
+	if caps := <-resultA; !caps.Exec || caps.ChecksIncomplete {
+		t.Fatalf("A's result = %+v", caps)
+	}
+	Current().permissions().userCapabilitiesCache.Range(func(key, _ any) bool {
+		t.Errorf("B cached %v before its reviews completed", key)
+		return true
+	})
+	if caps, _ := CheckCapabilitiesForUser(WithConnection(t.Context(), connA), "alice", nil); !caps.Exec {
+		t.Fatal("a request bound to A lost its cached grant")
+	}
+	releaseB()
+	if caps := <-resultB; caps.Exec || !caps.ChecksIncomplete {
+		t.Fatalf("B's result = %+v", caps)
+	}
+	reviews := b.reviews.Load()
+	if caps, _ := CheckCapabilitiesForUser(t.Context(), "alice", nil); caps.Exec || !caps.ChecksIncomplete || b.reviews.Load() != reviews {
+		t.Fatalf("B did not cache its own result: %+v", caps)
 	}
 }
