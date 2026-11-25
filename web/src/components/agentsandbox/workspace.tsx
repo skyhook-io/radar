@@ -15,7 +15,7 @@ import type {
 import { useConnection } from '../../context/ConnectionContext'
 import { INCOMPLETE_COVERAGE_STATES, coverageLabel } from '../workspace/coverage'
 import { Notice, RefreshFailedNotice, ScreenEmptyState } from '../workspace/layout'
-import { KIND_LABEL } from './shared'
+import { KIND_LABEL, KIND_LIST_PERMISSION } from './shared'
 
 // Presentation of GET /api/agentsandbox/workspace. The server decides every
 // reading, row and count; this file only words them.
@@ -45,7 +45,7 @@ const sentenceCase = (t: string) => (t ? `${t[0].toUpperCase()}${t.slice(1)}` : 
  * How long a row's state has lasted, beside its title, from the server's
  * `since`. For most rules `since` is the latest condition transition Radar
  * can see, and a condition keeps its transition time when only its reason
- * changes, so the state began no earlier: the age is a ceiling, shown "≤1d 2h".
+ * changes, so the state began no earlier: the age is a ceiling, shown "up to 1d 2h".
  * The controller's row is a real status flip, so its age is exact. Nothing
  * without `since`; creation time would claim more than Radar knows.
  */
@@ -58,8 +58,8 @@ export function attentionAge(a: AgentSandboxAttention, now = Date.now()): { text
   }
   const d = ceilingDuration(now - at)
   return {
-    text: `≤${d}`,
-    tip: `Began at most ${d} ago. Radar sees when the condition last changed; Kubernetes keeps that time when only the reason changes, so this state may have begun later.`,
+    text: `up to ${d}`,
+    tip: `Began up to ${d} ago. Radar sees when the condition last changed; Kubernetes keeps that time when only the reason changes, so this state may have begun later.`,
   }
 }
 
@@ -141,25 +141,29 @@ const withHeld = (text: string, since: string | undefined, now = Date.now()) => 
 export function controllerValue(c: AgentSandboxController): { value: string; tone: StatusTone; unknown: boolean } {
   switch (c.state) {
     case 'running':
-      return { value: 'running', tone: 'healthy', unknown: false }
+      return { value: c.ready !== undefined && c.desired !== undefined ? `Running (${c.ready}/${c.desired} ready)` : 'Running', tone: 'healthy', unknown: false }
     case 'notReady':
-      return { value: withHeld('not ready', c.since), tone: 'unhealthy', unknown: false }
+      return { value: withHeld('Not ready', c.since), tone: 'unhealthy', unknown: false }
     case 'scaledToZero':
-      return { value: withHeld('scaled to zero', c.since), tone: 'unhealthy', unknown: false }
+      return { value: withHeld('Scaled to zero', c.since), tone: 'unhealthy', unknown: false }
     case 'notInstalled':
-      return { value: 'not installed', tone: 'neutral', unknown: false }
+      return { value: 'Not installed', tone: 'neutral', unknown: false }
     case 'notFound':
-      return { value: `unknown — not found as ${c.namespace}/${c.name}`, tone: 'unknown', unknown: true }
+      return { value: `Unknown — not found as ${c.namespace}/${c.name}`, tone: 'unknown', unknown: true }
+  }
+  if (c.code === 'user_forbidden') {
+    return { value: `Unknown — no access (missing get deployments in namespace ${c.namespace})`, tone: 'unknown', unknown: true }
   }
   const why = c.code ? CONTROLLER_UNREAD[c.code] ?? gapReasonText(c.code) : 'not read'
-  return { value: `unknown — ${why}`, tone: 'unknown', unknown: true }
+  return { value: `Unknown — ${why}`, tone: 'unknown', unknown: true }
 }
 
-/** "unknown — no access" for a kind the summary left out; "not installed" for one whose CRD isn't served. */
+/** "Unknown — no access (missing ...)" for a kind the summary left out; "Not installed" for one whose CRD isn't served. */
 export function leftOutText(data: AgentSandboxWorkspaceResponse, key: AgentSandboxWorkspaceKey): string {
   const cov = data.coverage[key]
-  if (cov?.state === 'notInstalled') return 'not installed'
-  return `unknown — ${coverageLabel(cov)}`
+  if (cov?.state === 'notInstalled') return 'Not installed'
+  if (cov?.state === 'denied') return `Unknown — no access (missing ${KIND_LIST_PERMISSION[key]})`
+  return `Unknown — ${coverageLabel(cov)}`
 }
 
 /** A badge from the server's count: "≥N" for a lower bound, the unknown dash for a lower-bound zero. */
@@ -183,10 +187,12 @@ export function sidebarCount(c: AgentSandboxCount, noun: [string, string], contr
 export function WorkspaceCoverageNotice({ data }: { data: AgentSandboxWorkspaceResponse }) {
   const gaps = (['sandboxes', 'claims', 'warmPools', 'templates'] as const).flatMap((k) => {
     const cov = data.coverage[k]
-    return cov && INCOMPLETE_COVERAGE_STATES.has(cov.state) ? [`${KIND_LABEL[k]} (${coverageLabel(cov)})`] : []
+    if (!cov || !INCOMPLETE_COVERAGE_STATES.has(cov.state)) return []
+    const detail = cov.state === 'denied' ? `no access — missing ${KIND_LIST_PERMISSION[k]}` : coverageLabel(cov)
+    return [`${KIND_LABEL[k]} (${detail})`]
   })
   const controller = controllerValue(data.controller)
-  if (controller.unknown) gaps.push(`the controller Deployment (${controller.value.replace(/^unknown — /, '')})`)
+  if (controller.unknown) gaps.push(`the controller Deployment (${controller.value.replace(/^Unknown — /, '')})`)
   if (gaps.length === 0 && !data.forcedNamespace) return null
   return (
     <Notice>
