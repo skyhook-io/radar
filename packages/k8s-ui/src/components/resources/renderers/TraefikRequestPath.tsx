@@ -32,7 +32,9 @@ function podsFact(s: TraefikBackendFact): Fact {
 // the day count is only for display.
 export function tlsLine(tls: TraefikTLSFact, now = Date.now()): { text: string; severity?: 'warning' | 'error' } {
   switch (tls.mode) {
-    case 'none': return { text: 'No TLS on this route' }
+    // entryPoints.<name>.http.tls in Traefik's static config applies to every
+    // router on that entry point, and Radar doesn't read it.
+    case 'none': return { text: 'No TLS declared on this route; its entry point may still add it' }
     case 'resolver': return { text: `Certificate requested from ACME resolver ${tls.resolver}` }
     case 'default': return { text: 'TLS, no Secret named: Traefik picks the certificate from its TLS store by SNI' }
     case 'secret': break

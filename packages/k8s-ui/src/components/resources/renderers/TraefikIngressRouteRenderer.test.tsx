@@ -83,6 +83,10 @@ describe('TraefikIngressRouteRenderer request path', () => {
   })
 })
 
+it('says a route without spec.tls declares none, since an entry point can still add TLS', () => {
+  expect(tlsLine({ mode: 'none' }).text).toBe('No TLS declared on this route; its entry point may still add it')
+})
+
 describe('tlsLine expiry boundary', () => {
   const now = Date.UTC(2026, 10, 12)
   const at = (days: number) => ({ mode: 'secret' as const, secret: 's', certificate: 'read' as const, notAfter: new Date(now + days * 864e5).toISOString() })
