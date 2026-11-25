@@ -74,15 +74,23 @@ describe('Agent Sandbox kind list gate', () => {
 })
 
 describe('Agent Sandbox kind lists', () => {
-  it('lists sandboxes with their reading, the controller’s message, owner and expiry, failures first', () => {
+  it('lists sandboxes with their reading, concise reason, owner, expiry, and visible Open affordance, failures first', () => {
     const html = page(<SandboxesScreen {...screenProps(liveData())} />)
     expect(html).toContain('Agent Sandbox')
+    // Clickable breadcrumb back to Overview.
+    expect(html).toMatch(/<button[^>]*>Agent Sandbox<\/button>/)
+    // Single-namespace subtitle shown under All namespaces.
+    expect(html).toContain(`in namespace ${NS}`)
+    // Segments toolbar includes Needs attention, Ready, and Settled.
+    expect(html).toContain('Needs attention')
+    expect(html).toContain('Settled')
+    expect(html).toContain('Open →')
     expect(html.indexOf('ImagePullBackOff')).toBeLessThan(html.indexOf('>Suspended<'))
     // Plain words on the badge; the controller's code stays on hover.
     for (const label of ['>Image can’t be pulled<', '>Pod failed<', '>Can’t schedule<']) expect(html).toContain(label)
     for (const raw of ['>ImagePullBackOff<', '>PodFailed<', '>Unschedulable<']) expect(html).not.toContain(raw)
     expect(html).toContain('Suspension blocked')
-    expect(html).toContain('The conflicting Pod is "foreign"')
+    expect(html).toContain('Conflicting Pod "foreign" is not owned by this Sandbox')
     // Narrow (no matchMedia here): the pool sits under the Sandbox's name, the age under its expiry.
     expect(html).toMatch(/warm pool <span[^>]*><button[^>]*>warm<\/button>/)
     expect(html).toMatch(/expired 1d ago.*?\dd old/)
@@ -94,11 +102,27 @@ describe('Agent Sandbox kind lists', () => {
     expect(html).not.toContain('requested running')
   })
 
-  it('explains a state under its badge only when it adds something, the scheduler’s verdict in plain words', () => {
+  it('explains affected rows concisely: scheduler plain words, stripped container reason, Pod failed hint, and suspension conflict', () => {
     const by = Object.fromEntries(liveSandboxes().map((s) => [s.metadata.name, stateMessage(s, getSandboxStatus(s))]))
     expect(by['warm-4xmkm']).toBe('All nodes have reached their Pod limit')
-    expect(by['bad-image']).toContain('ImagePullBackOff')
-    for (const name of ['failed', 'expired', 'finished', 'running', 'suspended']) expect(by[name], name).toBeUndefined()
+    expect(by['bad-image']).toBe('Container "agent" is waiting: ImagePullBackOff')
+    expect(by['failed']).toContain('Pod retained after exit')
+    expect(by['foreign']).toBe('Conflicting Pod "foreign" is not owned by this Sandbox')
+    for (const name of ['expired', 'finished', 'running', 'suspended']) expect(by[name], name).toBeUndefined()
+  })
+
+  it('supports Needs attention, Ready, Settled segments and ?state=expired filtering on Sandboxes', () => {
+    const attn = page(<SandboxesScreen {...screenProps(liveData())} />, '/resources/sandboxes?segment=attention')
+    expect(attn).toContain('bad-image')
+    expect(attn).toContain('failed')
+    expect(attn).not.toContain('>suspended<')
+    const settled = page(<SandboxesScreen {...screenProps(liveData())} />, '/resources/sandboxes?segment=settled')
+    expect(settled).toContain('>suspended<')
+    expect(settled).toContain('>finished<')
+    expect(settled).not.toContain('>bad-image<')
+    const expired = page(<SandboxesScreen {...screenProps(liveData())} />, '/resources/sandboxes?state=expired')
+    expect(expired).toContain('>expired<')
+    expect(expired).not.toContain('>suspended<')
   })
 
   it('says what was requested only where the state differs from it', () => {
@@ -110,24 +134,31 @@ describe('Agent Sandbox kind lists', () => {
     expect(page(<SandboxesScreen {...screenProps(liveData({ sandboxes: [suspendedAsked] }))} />)).toContain('requested suspended')
   })
 
-  it('says a claim’s missing warm pool once, as its state, with the pool named in its column', () => {
+  it('shows a claim’s missing warm pool clearly in its column, and supports Claims segments and pool filter', () => {
     const html = page(<ClaimsScreen {...screenProps(liveData())} />)
-    expect(html.match(/[Nn]ot found/g)).toEqual(['not found'])
     expect(html).toContain('>Warm pool not found<')
     expect(html).not.toContain('>WarmPoolNotFound<')
-    // The controller's sentence is in the drawer, not under the state.
     expect(html).not.toContain('SandboxWarmPool "no-such-pool" not found')
-    // Named, not linked; the pool it has is linked.
-    expect(html).toMatch(/>no-such-pool<\/span>/)
+    // Named, not linked, with verified missing tag; the pool it has is linked.
+    expect(html).toMatch(/no-such-pool(<\/span>)+<div[^>]*><span[^>]*>not found/)
     expect(html).not.toContain('>no-such-pool</button>')
     expect(html).toContain('>warm</button>')
+    expect(html).toContain('Open →')
+    // Filter Claims by warm pool (return journey from Warm pools).
+    const forWarm = page(<ClaimsScreen {...screenProps(liveData())} />, `/resources/sandboxclaims?pool=${encodeURIComponent(`${NS}/warm`)}`)
+    expect(forWarm).toContain('claim-ok')
+    expect(forWarm).not.toContain('claim-missing-pool')
+    // Segment filter for Expired.
+    const expired = page(<ClaimsScreen {...screenProps(liveData())} />, '/resources/sandboxclaims?segment=expired')
+    expect(expired).toContain('claim-ok')
+    expect(expired).not.toContain('claim-missing-pool')
   })
 
   it('still says not found where only Radar’s read says the pool is missing', () => {
     // The controller hasn't said why this claim waits: the column is the only place the missing pool shows.
     const waiting = claim('waiting', { pool: 'gone-pool', reason: 'SandboxNotReady', message: 'waiting for a sandbox' })
     const html = page(<ClaimsScreen {...screenProps(liveData({ claims: [waiting] }))} />)
-    expect(html).toMatch(/gone-pool(<\/span>)+<div[^>]*>not found/)
+    expect(html).toMatch(/gone-pool(<\/span>)+<div[^>]*><span[^>]*>not found/)
   })
 
   it('says a relation it could not read is not read, never not found', () => {
@@ -135,32 +166,32 @@ describe('Agent Sandbox kind lists', () => {
     const partial = read([], { status: 'partial', scope: { type: 'all_namespaces' }, read: { type: 'namespaces', namespaces: { count: 1, names: ['other'] } }, gaps: [{ code: 'user_forbidden', namespaces: { count: 1, names: [NS] } }] })
     const claims = page(<ClaimsScreen {...screenProps(liveData({ warmPools: partial }))} />)
     expect(claims).toMatch(/no-such-pool<\/span>.*?not read/)
-    expect(claims).not.toMatch(/no-such-pool(<\/span>)+<div[^>]*>not found/)
+    expect(claims).not.toMatch(/no-such-pool(<\/span>)+<div[^>]*><span[^>]*>not found/)
     expect(claims).toContain('>Warm pool not found<')
-    expect(page(<ClaimsScreen {...screenProps(liveData({ warmPools: DENIED }))} />)).toMatch(/no-such-pool(<\/span>)+<div[^>]*>not read/)
+    expect(page(<ClaimsScreen {...screenProps(liveData({ warmPools: DENIED }))} />)).toMatch(/no-such-pool(<\/span>)+<div[^>]*><span[^>]*>not read/)
     // A pool's claims Radar couldn't read are unknown, not none.
     expect(page(<WarmPoolsScreen {...screenProps(liveData({ claims: DENIED }))} />)).toMatch(/unknown/)
   })
 
-  it('lists warm pools with ready of desired and the claims they serve', () => {
+  it('lists warm pools with ready of desired and Claims referencing / currently bound', () => {
     const html = page(<WarmPoolsScreen {...screenProps(liveData())} />)
     expect(html).toContain('0/2')
-    // Without the server saying its sandboxes can't be placed, a short pool is refilling.
+    expect(html).toContain('Claims referencing')
+    expect(html).toContain('1 referencing')
+    expect(html).toContain('0 currently bound · 1 expired')
+    expect(html).toContain('Open →')
+    // Without the server saying its reserve is below target, a short pool is refilling.
     expect(html).toContain('>Warming<')
   })
 
-  it('reads a warm pool as unable to schedule only when the server says so', () => {
+  it('uses Reserve below target as the warm pool verdict when the server reports reserveBelowTarget, with cause beneath', () => {
     const server = serverReadings(liveWorkspace())
     const html = page(<WarmPoolsScreen {...screenProps(liveData())} server={server} />)
-    expect(html).toContain('>Can’t schedule<')
+    expect(html).toContain('>Reserve below target<')
     expect(html).not.toContain('>Warming<')
     // Colored as its Needs attention row (alert, orange), the same as on the Overview.
-    expect(html).toMatch(/class="[^"]*orange[^"]*"[^>]*>Can’t schedule</)
-  })
-
-  it('says why a warm pool can’t schedule in the Overview’s plain words, and links the sandboxes it holds back', () => {
-    const html = page(<WarmPoolsScreen {...screenProps(liveData())} server={serverReadings(liveWorkspace())} />)
-    expect(html).toMatch(/Can’t schedule<.*?>All nodes have reached their Pod limit</)
+    expect(html).toMatch(/class="[^"]*orange[^"]*"[^>]*>Reserve below target</)
+    expect(html).toContain('Can’t schedule · All nodes have reached their Pod limit')
     // The scheduler's own message is on hover and in the drawer, not in the row.
     expect(html).not.toContain('Too many pods')
     expect(html).toMatch(/<button[^>]*>2 sandboxes not ready<\/button>/)
@@ -229,7 +260,7 @@ describe('Agent Sandbox kind lists', () => {
     const sandboxes = page(<SandboxesScreen {...screenProps(liveData())} />, '/resources/sandboxes?search=BAD')
     expect(sandboxes).toContain('bad-image')
     expect(sandboxes).not.toContain('foreign')
-    expect(page(<SandboxesScreen {...screenProps(liveData())} />, '/resources/sandboxes?search=nothing-here')).toContain('No Sandboxes match these filters.')
+    expect(page(<SandboxesScreen {...screenProps(liveData())} />, '/resources/sandboxes?search=nothing-here')).toContain('No Sandboxes match this search.')
     const claims = page(<ClaimsScreen {...screenProps(liveData())} />, '/resources/sandboxclaims?search=ok')
     expect(claims).toContain('claim-ok')
     expect(claims).not.toContain('claim-missing-pool')
@@ -287,8 +318,8 @@ describe('Agent Sandbox kind lists', () => {
     expect(page(<WarmPoolsScreen {...screenProps(liveData({ warmPools: [bare] }))} />)).toContain('no template')
   })
 
-  it('says an empty list is unknown when the kind could not be read', () => {
-    expect(page(<SandboxesScreen {...screenProps(liveData({ sandboxes: DENIED }))} />)).toContain('Unknown: no access to Sandboxes here.')
+  it('says an empty list is unknown and names the missing permission when denied', () => {
+    expect(page(<SandboxesScreen {...screenProps(liveData({ sandboxes: DENIED }))} />)).toContain('Unknown: no access to Sandboxes (missing list sandboxes.agents.x-k8s.io).')
     expect(page(<ClaimsScreen {...screenProps(emptyData())} />)).toContain('No SandboxClaims found in the requested scope.')
     expect(page(<WarmPoolsScreen {...screenProps(emptyData({ warmPools: read([], PARTIAL) }))} />)).toContain('No SandboxWarmPools found in the namespaces Radar could read.')
   })

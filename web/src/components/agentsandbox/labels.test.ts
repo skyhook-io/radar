@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { getSandboxClaimStatus, getSandboxStatus } from '@skyhook-io/k8s-ui/components/resources/resource-utils-agent-runtimes'
-import { readingLabel, unschedulablePools } from './labels'
-import { claim, liveSandboxes } from './agentsandbox.fixtures'
+import { RESERVE_BELOW_TARGET, readingLabel, serverReadings, unschedulablePools, warmPoolBadge } from './labels'
+import { claim, liveSandboxes, warmPool } from './agentsandbox.fixtures'
 import { liveAttention, liveWorkspace } from './workspace.fixtures'
 
 describe('Agent Sandbox reading labels', () => {
@@ -26,5 +26,17 @@ describe('warm pools that can’t schedule', () => {
     const controller = liveAttention().map((a) => (a.rule === 'reserveBelowTarget' ? { ...a, rawDetailSource: 'controller' as const } : a))
     expect(unschedulablePools(liveWorkspace({ attention: controller })).size).toBe(0)
     expect(unschedulablePools(undefined).size).toBe(0)
+  })
+
+  it('produces one canonical Reserve below target verdict for warm pools with a reserve row', () => {
+    const server = serverReadings(liveWorkspace())
+    const b = warmPoolBadge(warmPool('warm', { readyReplicas: 0 }), server)
+    expect(b.label).toBe(RESERVE_BELOW_TARGET)
+    expect(b.level).toBe('alert')
+    expect(b.title).toContain('scheduler')
+    // Without a server reserve row, a refilling pool stays Warming.
+    const refilling = warmPoolBadge(warmPool('warm', { readyReplicas: 0 }), undefined)
+    expect(refilling.label).toBeUndefined()
+    expect(refilling.status.text).toBe('Warming')
   })
 })

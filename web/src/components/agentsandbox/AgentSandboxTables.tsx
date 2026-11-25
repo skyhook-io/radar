@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { SearchBox, Tooltip, type StatusBadge } from '@skyhook-io/k8s-ui'
+import { Plus } from 'lucide-react'
+import { SearchBox, Tooltip, toneTextClass, type StatusBadge } from '@skyhook-io/k8s-ui'
 import { formatAge, summarizeSchedulerMessage } from '@skyhook-io/k8s-ui/components/resources/resource-utils'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
 import {
@@ -14,13 +15,13 @@ import {
   getSandboxWarmPoolTemplate,
 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-agent-runtimes'
 import type { SelectedResource } from '../../types'
-import { ScreenBody, SectionTable, Sub, type TableColumn } from '../workspace/layout'
+import { ScreenBody, SectionTable, Segments, Sub, type TableColumn } from '../workspace/layout'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { claimSandboxName, poolClaims, sandboxController } from './lists'
-import { CANT_SCHEDULE, notReadyMembers, objectKey, schedulerReason, type ServerReadings } from './labels'
+import { notReadyMembers, objectKey, schedulerReason, warmPoolBadge, type ServerReadings } from './labels'
 import type { KindRead } from './data'
 import { readInNamespace, readItems } from './data'
-import { AGENT_SANDBOX_EXTENSIONS_GROUP, AGENT_SANDBOX_GROUP, SANDBOXES_PATH, SANDBOX_CLAIM_KIND, SANDBOX_KIND, SANDBOX_WARM_POOL_KIND } from './routes'
+import { AGENT_SANDBOX_EXTENSIONS_GROUP, AGENT_SANDBOX_GROUP, SANDBOXES_PATH, SANDBOX_CLAIMS_PATH, SANDBOX_CLAIM_KIND, SANDBOX_KIND, SANDBOX_WARM_POOL_KIND } from './routes'
 import { useListFilters } from './listFilters'
 import {
   AGENT_SANDBOX_WIDE,
@@ -41,17 +42,27 @@ const nm = (o: any): string => o?.metadata?.name ?? ''
 const rowKey = (o: any) => `${ns(o)}/${nm(o)}`
 const manyNamespaces = (rows: any[]) => new Set(rows.map(ns)).size > 1
 
+function singleNamespaceOf(rows: any[]): string | undefined {
+  const seen = new Set(rows.map(ns).filter(Boolean))
+  return seen.size === 1 ? [...seen][0] : undefined
+}
+
+function isPartialRead(read: KindRead): boolean {
+  return read.state === 'read' && read.coverage.status === 'partial'
+}
+
+const countBadge = (n: number, partial: boolean) => (partial ? `≥${n}` : n)
+
 const RANK: Record<StatusBadge['level'], number> = { unhealthy: 0, alert: 1, degraded: 2, unknown: 3, healthy: 4, neutral: 5 }
 
-/** Rows that need a look first, then by namespace and name. */
-function byReading(rows: any[], status: (row: any) => StatusBadge): any[] {
+/** Rows that need a look first (using the server's escalated tone when present), then by namespace and name. */
+function byReading(rows: any[], levelOf: (row: any) => StatusBadge['level']): any[] {
   return [...rows].sort((a, b) => {
-    const r = RANK[status(a).level] - RANK[status(b).level]
+    const r = RANK[levelOf(a)] - RANK[levelOf(b)]
     if (r !== 0) return r
     return rowKey(a).localeCompare(rowKey(b))
   })
 }
-
 
 function NameCell({ o, multi }: { o: any; multi: boolean }) {
   return (
@@ -79,9 +90,9 @@ export function requestedMode(o: any): string | undefined {
 const letters = (t: string) => t.toLowerCase().replace(/[^a-z]/g, '')
 
 /**
- * The line under a reading: the scheduler's verdict in plain words when the
- * Pod can't be placed, else the controller's message. Nothing for a settled
- * state ("Sandbox has expired") or one that only repeats the badge ("Pod failed").
+ * One readable reason under a reading in a table row: the scheduler's verdict
+ * in plain words, a concise suspension-conflict summary, a stripped container
+ * waiting reason, or the controller's message. Nothing for a settled state.
  */
 export function stateMessage(o: any, status: StatusBadge): string | undefined {
   if (status.level === 'healthy' || status.level === 'neutral') return undefined
@@ -90,14 +101,25 @@ export function stateMessage(o: any, status: StatusBadge): string | undefined {
     const plain = summarizeSchedulerMessage(scheduled.message, { plain: true })
     if (plain) return `${plain[0].toUpperCase()}${plain.slice(1)}`
   }
+  if (status.text === 'Suspension blocked') {
+    const annotated = o?.metadata?.annotations?.['agents.x-k8s.io/pod-name']
+    const podName = typeof annotated === 'string' && annotated ? annotated : nm(o)
+    return podName ? `Conflicting Pod "${podName}" is not owned by this Sandbox` : 'Conflicting Pod is not owned by this Sandbox'
+  }
+  if (status.text === 'PodFailed') {
+    return o?.spec?.failedPodPolicy === 'Retain' ? 'Pod retained after exit · open for exit code and logs' : 'Pod exited with failure · open for details'
+  }
   const message = getAgentRuntimeStatus(o)?.message
   if (!message || letters(message) === letters(status.text)) return undefined
-  return message
+  // Strip noisy controller boilerplate so container waiting reasons stay short and readable.
+  const stripped = message.replace(/^Pod exists with phase:\s*Pending;\s*/i, '')
+  return stripped ? `${stripped[0].toUpperCase()}${stripped.slice(1)}` : message
 }
 
 /** The reading, with what explains it under it, unless another column already says it. */
 function StateCell({ o, status, requested, level, hideMessage }: { o: any; status: StatusBadge; requested?: string; level?: StatusBadge['level']; hideMessage?: boolean }) {
   const message = hideMessage ? undefined : stateMessage(o, status)
+  const rawMessage = hideMessage ? undefined : getAgentRuntimeStatus(o)?.message
   return (
     <>
       <span className="inline-flex flex-wrap items-center gap-x-1.5">
@@ -106,7 +128,7 @@ function StateCell({ o, status, requested, level, hideMessage }: { o: any; statu
       </span>
       {message && (
         <Sub>
-          <Tooltip content={message}><span className="line-clamp-2">{message}</span></Tooltip>
+          <Tooltip content={rawMessage || message}><span className="line-clamp-2">{message}</span></Tooltip>
         </Sub>
       )}
     </>
@@ -116,6 +138,10 @@ function StateCell({ o, status, requested, level, hideMessage }: { o: any; statu
 function AgeCell({ o }: { o: any }) {
   const created = o?.metadata?.creationTimestamp
   return created ? <span className="text-sm text-theme-text-secondary">{formatAge(created)}</span> : <Absent>unknown</Absent>
+}
+
+function OpenCell() {
+  return <span className="whitespace-nowrap text-xs font-medium text-accent-text">Open →</span>
 }
 
 /** Narrow: the expiry with the age under it. */
@@ -150,7 +176,10 @@ export function OwnerAbsent({ o, claims }: { o: any; claims: KindRead }) {
 }
 
 export function SandboxesTable({ read, claims: claimsRead, onInspect, inspected, title, server, empty }: { read: KindRead; claims: KindRead; onInspect: (r: SelectedResource) => void; inspected: SelectedResource | null; title?: string; server?: ServerReadings; empty?: string }) {
-  const rows = useMemo(() => byReading(readItems(read), getSandboxStatus), [read])
+  const rows = useMemo(
+    () => byReading(readItems(read), (o) => server?.tones.get(objectKey('Sandbox', ns(o), nm(o))) ?? getSandboxStatus(o).level),
+    [read, server],
+  )
   const multi = manyNamespaces(rows)
   // A Sandbox a claim names but doesn't own (adopted from a warm pool) still belongs to that claim.
   const claimFor = useMemo(() => {
@@ -171,7 +200,7 @@ export function SandboxesTable({ read, claims: claimsRead, onInspect, inspected,
   const columns: TableColumn<any>[] = [
     {
       header: 'Sandbox',
-      width: wide ? '22%' : '30%',
+      width: wide ? '21%' : '29%',
       cell: (o) => {
         const owner = wide ? undefined : ownerOf(o)
         return (
@@ -191,12 +220,12 @@ export function SandboxesTable({ read, claims: claimsRead, onInspect, inspected,
         )
       },
     },
-    { header: 'State', width: wide ? '36%' : '46%', cell: (o) => <StateCell o={o} status={getSandboxStatus(o)} requested={requestedMode(o)} level={server?.tones.get(objectKey('Sandbox', ns(o), nm(o)))} /> },
+    { header: 'State', width: wide ? '33%' : '41%', cell: (o) => <StateCell o={o} status={getSandboxStatus(o)} requested={requestedMode(o)} level={server?.tones.get(objectKey('Sandbox', ns(o), nm(o)))} /> },
     ...(wide
       ? [
           {
             header: 'Claim or pool',
-            width: '18%',
+            width: '17%',
             cell: (o: any) => {
               const owner = ownerOf(o)
               if (!owner) return <OwnerAbsent o={o} claims={claimsRead} />
@@ -208,10 +237,11 @@ export function SandboxesTable({ read, claims: claimsRead, onInspect, inspected,
               )
             },
           },
-          { header: 'Expiry', width: '16%', cell: (o: any) => <ExpiryCell resource={o} claimed={ownerOf(o)?.kind === 'SandboxClaim'} /> },
+          { header: 'Expiry', width: '14%', cell: (o: any) => <ExpiryCell resource={o} claimed={ownerOf(o)?.kind === 'SandboxClaim'} /> },
           { header: 'Age', width: '8%', cell: (o: any) => <AgeCell o={o} /> },
         ]
-      : [{ header: 'Expiry, age', width: '24%', cell: (o: any) => <ExpiryAgeCell o={o} claimed={ownerOf(o)?.kind === 'SandboxClaim'} /> }]),
+      : [{ header: 'Expiry, age', width: '21%', cell: (o: any) => <ExpiryAgeCell o={o} claimed={ownerOf(o)?.kind === 'SandboxClaim'} /> }]),
+    { header: '', width: wide ? '7%' : '9%', className: 'text-right', cell: () => <OpenCell /> },
   ]
   return (
     <SectionTable
@@ -222,7 +252,7 @@ export function SandboxesTable({ read, claims: claimsRead, onInspect, inspected,
       rowResource={(o) => agentSandboxResource({ kind: 'Sandbox', group: AGENT_SANDBOX_GROUP, namespace: ns(o), name: nm(o) })}
       onInspect={onInspect}
       inspected={inspected}
-      empty={empty ?? coverageEmptyText(read, 'Sandboxes')}
+      empty={empty ?? coverageEmptyText(read, 'Sandboxes', 'sandboxes')}
       minWidth={wide ? 760 : 560}
     />
   )
@@ -234,7 +264,10 @@ export function reportsMissingPool(o: any): boolean {
 }
 
 export function ClaimsTable({ read, warmPools, onInspect, inspected, server, empty }: { read: KindRead; warmPools: KindRead; onInspect: (r: SelectedResource) => void; inspected: SelectedResource | null; server?: ServerReadings; empty?: string }) {
-  const rows = useMemo(() => byReading(readItems(read), getSandboxClaimStatus), [read])
+  const rows = useMemo(
+    () => byReading(readItems(read), (o) => server?.tones.get(objectKey('SandboxClaim', ns(o), nm(o))) ?? getSandboxClaimStatus(o).level),
+    [read, server],
+  )
   const multi = manyNamespaces(rows)
   const pools = useMemo(() => new Set(readItems(warmPools).map(rowKey)), [warmPools])
   const wide = useMediaQuery(AGENT_SANDBOX_WIDE)
@@ -247,24 +280,33 @@ export function ClaimsTable({ read, warmPools, onInspect, inspected, server, emp
     if (pool === '-') return <Absent>no warm pool</Absent>
     const ref = { kind: 'SandboxWarmPool', group: AGENT_SANDBOX_EXTENSIONS_GROUP, namespace: ns(o), name: pool }
     // A pool Radar didn't find is named, not linked: "not found" only where
-    // every warm pool in the namespace was read, else "not read". Where the
-    // claim's state already says the pool is missing, its name is enough.
+    // every warm pool in the namespace was read, else "not read".
     if (!pools.has(`${ns(o)}/${pool}`)) {
       const absent = readInNamespace(warmPools, ns(o))
       return (
         <>
           <ObjectName name={pool} />
-          {!(absent && reportsMissingPool(o)) && <Sub>{absent ? 'not found' : 'not read'}</Sub>}
+          <Sub>
+            <span className={absent ? toneTextClass('unhealthy') : undefined}>{absent ? 'not found' : 'not read'}</span>
+          </Sub>
         </>
       )
     }
     return <RowLink refTo={ref} onInspect={onInspect} />
   }
+  const bindingCell = (o: any) => {
+    const sb = sandboxOf(o)
+    if (sb) return <RowLink refTo={sb} onInspect={onInspect} />
+    if (getSandboxClaimStatus(o).text === 'Expired') {
+      return <Absent title="This claim expired without a bound Sandbox listed in status.">not bound (expired)</Absent>
+    }
+    return <Absent title="The claim’s status names no Sandbox now.">not bound</Absent>
+  }
   // Narrow: the bound Sandbox under the name, the age under the expiry.
   const columns: TableColumn<any>[] = [
     {
       header: 'Claim',
-      width: wide ? '20%' : '28%',
+      width: wide ? '19%' : '26%',
       cell: (o) => {
         const sb = wide ? undefined : sandboxOf(o)
         return (
@@ -279,23 +321,16 @@ export function ClaimsTable({ read, warmPools, onInspect, inspected, server, emp
         )
       },
     },
-    // A missing warm pool reads once, as the state, and its name sits in its own column; the controller's sentence is in the drawer.
-    { header: 'State', width: wide ? '28%' : '34%', cell: (o) => <StateCell o={o} status={getSandboxClaimStatus(o)} level={server?.tones.get(objectKey('SandboxClaim', ns(o), nm(o)))} hideMessage={reportsMissingPool(o)} /> },
+    { header: 'State', width: wide ? '25%' : '30%', cell: (o) => <StateCell o={o} status={getSandboxClaimStatus(o)} level={server?.tones.get(objectKey('SandboxClaim', ns(o), nm(o)))} hideMessage={reportsMissingPool(o)} /> },
     { header: 'Warm pool', width: wide ? '16%' : '18%', cell: poolCell },
     ...(wide
       ? [
-          {
-            header: 'Sandbox',
-            width: '16%',
-            cell: (o: any) => {
-              const sb = sandboxOf(o)
-              return sb ? <RowLink refTo={sb} onInspect={onInspect} /> : <Absent title="The claim’s status names no Sandbox now.">not bound</Absent>
-            },
-          },
-          { header: 'Expiry', width: '13%', cell: (o: any) => <ExpiryCell resource={o} /> },
+          { header: 'Sandbox', width: '15%', cell: bindingCell },
+          { header: 'Expiry', width: '11%', cell: (o: any) => <ExpiryCell resource={o} /> },
           { header: 'Age', width: '7%', cell: (o: any) => <AgeCell o={o} /> },
         ]
-      : [{ header: 'Expiry, age', width: '20%', cell: (o: any) => <ExpiryAgeCell o={o} /> }]),
+      : [{ header: 'Expiry, age', width: '17%', cell: (o: any) => <ExpiryAgeCell o={o} /> }]),
+    { header: '', width: wide ? '7%' : '9%', className: 'text-right', cell: () => <OpenCell /> },
   ]
   return (
     <SectionTable
@@ -305,10 +340,15 @@ export function ClaimsTable({ read, warmPools, onInspect, inspected, server, emp
       rowResource={(o) => agentSandboxResource({ kind: 'SandboxClaim', group: AGENT_SANDBOX_EXTENSIONS_GROUP, namespace: ns(o), name: nm(o) })}
       onInspect={onInspect}
       inspected={inspected}
-      empty={empty ?? coverageEmptyText(read, 'SandboxClaims')}
+      empty={empty ?? coverageEmptyText(read, 'SandboxClaims', 'claims')}
       minWidth={wide ? 760 : 560}
     />
   )
+}
+
+/** The Claims list narrowed to claims referencing one warm pool. */
+export function poolClaimsPath(namespace: string, name: string): string {
+  return `${SANDBOX_CLAIMS_PATH}&pool=${encodeURIComponent(`${namespace}/${name}`)}`
 }
 
 export function WarmPoolsTable({
@@ -331,14 +371,18 @@ export function WarmPoolsTable({
   server?: ServerReadings
   empty?: string
 }) {
-  const rows = useMemo(() => byReading(readItems(read), getSandboxWarmPoolStatus), [read])
+  const navigate = useWorkspaceNavigate()
+  const rows = useMemo(
+    () => byReading(readItems(read), (o) => server?.tones.get(objectKey('SandboxWarmPool', ns(o), nm(o))) ?? getSandboxWarmPoolStatus(o).level),
+    [read, server],
+  )
   const multi = manyNamespaces(rows)
   const wide = useMediaQuery(AGENT_SANDBOX_WIDE)
   // Narrow: ready of desired under the state, the age under the name.
   const columns: TableColumn<any>[] = [
     {
       header: 'Warm pool',
-      width: wide ? '24%' : '28%',
+      width: wide ? '20%' : '25%',
       cell: (o) => (
         <>
           <NameCell o={o} multi={multi} />
@@ -348,7 +392,7 @@ export function WarmPoolsTable({
     },
     {
       header: 'State',
-      width: wide ? '16%' : '24%',
+      width: wide ? '25%' : '29%',
       cell: (o) => (
         <>
           <PoolStateBadge o={o} server={server} />
@@ -361,7 +405,7 @@ export function WarmPoolsTable({
       ? [
           {
             header: 'Ready',
-            width: '12%',
+            width: '10%',
             cell: (o: any) => (
               <>
                 <span className="font-mono text-sm">{getReadyOfDesired(o)}</span>
@@ -373,29 +417,55 @@ export function WarmPoolsTable({
       : []),
     {
       header: 'Template',
-      width: wide ? '18%' : '24%',
+      width: wide ? '14%' : '18%',
       cell: (o) => {
         const t = getSandboxWarmPoolTemplate(o)
-        return t === '-' ? <Absent>no template</Absent> : <RowLink refTo={{ kind: 'SandboxTemplate', group: AGENT_SANDBOX_EXTENSIONS_GROUP, namespace: ns(o), name: t }} onInspect={onInspect} />
+        if (t === '-') return <Absent>no template</Absent>
+        const row = server?.rows.get(objectKey('SandboxWarmPool', ns(o), nm(o)))
+        const rel = row?.relations?.find((r) => r.role === 'template')
+        if (rel && rel.presence !== 'present') {
+          return (
+            <>
+              <ObjectName name={t} />
+              <Sub>
+                <span className={rel.presence === 'absent' ? toneTextClass('unhealthy') : undefined}>{rel.presence === 'absent' ? 'not found' : 'not read'}</span>
+              </Sub>
+            </>
+          )
+        }
+        return <RowLink refTo={{ kind: 'SandboxTemplate', group: AGENT_SANDBOX_EXTENSIONS_GROUP, namespace: ns(o), name: t }} onInspect={onInspect} />
       },
     },
     {
-      header: 'Claims served',
-      width: wide ? '18%' : '24%',
+      header: 'Claims referencing',
+      width: wide ? '17%' : '19%',
       cell: (o) => {
-        if (!readInNamespace(claimsRead, ns(o))) return <span className="text-sm text-theme-text-tertiary">unknown</span>
+        if (!readInNamespace(claimsRead, ns(o))) return <Absent>unknown</Absent>
         const served = poolClaims(o, claims)
-        if (served.length === 0) return <span className="text-sm text-theme-text-tertiary">none</span>
-        const bound = served.filter((c) => claimSandboxName(c)).length
+        if (served.length === 0) return <Absent>none</Absent>
+        const bound = served.filter((c) => claimSandboxName(c) && getSandboxClaimStatus(c).text !== 'Expired').length
+        const expired = served.filter((c) => getSandboxClaimStatus(c).text === 'Expired').length
+        const detail = expired > 0 ? `${bound} currently bound · ${expired} expired` : `${bound} currently bound`
         return (
           <>
-            <span className="text-sm">{served.length}</span>
-            <Sub>{bound} bound</Sub>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                navigate(poolClaimsPath(ns(o), nm(o)))
+              }}
+              onKeyDown={(e) => e.stopPropagation()}
+              className="text-left text-sm text-accent-text hover:underline"
+            >
+              {served.length} referencing
+            </button>
+            <Sub>{detail}</Sub>
           </>
         )
       },
     },
-    ...(wide ? [{ header: 'Age', width: '10%', cell: (o: any) => <AgeCell o={o} /> }] : []),
+    ...(wide ? [{ header: 'Age', width: '7%', cell: (o: any) => <AgeCell o={o} /> }] : []),
+    { header: '', width: wide ? '7%' : '9%', className: 'text-right', cell: () => <OpenCell /> },
   ]
   return (
     <SectionTable
@@ -406,20 +476,16 @@ export function WarmPoolsTable({
       rowResource={(o) => agentSandboxResource({ kind: 'SandboxWarmPool', group: AGENT_SANDBOX_EXTENSIONS_GROUP, namespace: ns(o), name: nm(o) })}
       onInspect={onInspect}
       inspected={inspected}
-      empty={empty ?? coverageEmptyText(read, 'SandboxWarmPools')}
+      empty={empty ?? coverageEmptyText(read, 'SandboxWarmPools', 'warmPools')}
       minWidth={wide ? 760 : 560}
     />
   )
 }
 
-/** A pool's reading, "Can’t schedule" instead of "Warming" when the server says its sandboxes can't be placed, colored as the server's row about it. */
+/** One canonical warm pool badge reading, shared with the drawer/page header pill. */
 function PoolStateBadge({ o, server }: { o: any; server?: ServerReadings }) {
-  const status = getSandboxWarmPoolStatus(o)
-  const level = server?.tones.get(objectKey('SandboxWarmPool', ns(o), nm(o)))
-  if (status.text === 'Warming' && server?.unschedulable.has(rowKey(o))) {
-    return <ReadingBadge status={status} label={CANT_SCHEDULE} level={level} title="Warming, but the scheduler can’t place its sandboxes, so it isn’t refilling" />
-  }
-  return <ReadingBadge status={status} level={level} />
+  const b = warmPoolBadge(o, server)
+  return <ReadingBadge status={b.status} label={b.label} level={b.level} title={b.title} />
 }
 
 /** The Sandboxes list narrowed to one warm pool's sandboxes that aren't ready. */
@@ -428,9 +494,8 @@ export function poolNotReadyPath(namespace: string, name: string): string {
 }
 
 /**
- * Under a pool's state, from the server's row about it: the scheduler's
- * verdict in plain words (its own message on hover, in full in the drawer),
- * and the sandboxes it names as not ready, as a link to them.
+ * Under a pool's state, from the server's row about it: the cause (e.g.
+ * scheduler verdict in plain words) and the sandboxes it names as not ready.
  */
 function PoolStateDetail({ o, server }: { o: any; server?: ServerReadings }) {
   const navigate = useWorkspaceNavigate()
@@ -441,7 +506,12 @@ function PoolStateDetail({ o, server }: { o: any; server?: ServerReadings }) {
     <>
       {reason && (
         <Sub>
-          <Tooltip content={reason.raw}><span className="line-clamp-2">{reason.plain}</span></Tooltip>
+          <Tooltip content={reason.raw}><span className="line-clamp-2">Can’t schedule · {reason.plain}</span></Tooltip>
+        </Sub>
+      )}
+      {!reason && row?.rule === 'reserveBelowTarget' && row.reading && (
+        <Sub>
+          <Tooltip content={row.reading}><span className="line-clamp-2">{row.reading}</span></Tooltip>
         </Sub>
       )}
       {members.length > 0 && (
@@ -466,7 +536,8 @@ function PoolStateDetail({ o, server }: { o: any; server?: ServerReadings }) {
 function CreateButton({ onCreate, label }: { onCreate?: () => void; label: string }) {
   if (!onCreate) return null
   return (
-    <button type="button" onClick={onCreate} className="btn-secondary px-2.5 py-1 text-xs">
+    <button type="button" onClick={onCreate} className="btn-secondary inline-flex items-center gap-1.5 px-2.5 py-1 text-xs">
+      <Plus className="h-3.5 w-3.5" />
       Create {label}
     </button>
   )
@@ -475,16 +546,18 @@ function CreateButton({ onCreate, label }: { onCreate?: () => void; label: strin
 /**
  * The Sandboxes list's own filters, from the URL: `pool` (namespace/name)
  * keeps one warm pool's sandboxes, `state=notReady` those whose reading
- * isn't Ready. A warm pool's "not ready" link sets both.
+ * isn't Ready, `state=expired` those whose reading is Expired.
  */
 export function filterSandboxes(read: KindRead, pool: string, state: string): KindRead {
-  if (read.state !== 'read' || (!pool && state !== 'notReady')) return read
+  if (read.state !== 'read' || (!pool && state !== 'notReady' && state !== 'expired')) return read
   const items = read.items.filter((o) => {
     if (pool) {
       const owner = sandboxController(o)
       if (owner?.kind !== 'SandboxWarmPool' || `${owner.namespace}/${owner.name}` !== pool) return false
     }
-    return state !== 'notReady' || getSandboxStatus(o).level !== 'healthy'
+    if (state === 'notReady') return getSandboxStatus(o).level !== 'healthy'
+    if (state === 'expired') return getSandboxStatus(o).text === 'Expired'
+    return true
   })
   return { ...read, items }
 }
@@ -494,6 +567,11 @@ export function filterByName(read: KindRead, search: string): KindRead {
   const q = search.trim().toLowerCase()
   if (read.state !== 'read' || !q) return read
   return { ...read, items: read.items.filter((o) => nm(o).toLowerCase().includes(q)) }
+}
+
+function filterItems(read: KindRead, predicate: (o: any) => boolean): KindRead {
+  if (read.state !== 'read') return read
+  return { ...read, items: read.items.filter(predicate) }
 }
 
 /** The list's name search, kept in the Resources page's own `search` URL param so its links narrow these lists too. */
@@ -508,6 +586,19 @@ function useNameSearch(): [string, (value: string) => void] {
   return [params.get('search') ?? '', set]
 }
 
+function useUrlParam<T extends string>(key: string, valid: readonly T[], fallback: T): [T, (value: T) => void] {
+  const [params, setParams] = useSearchParams()
+  const raw = params.get(key)
+  const value = raw && (valid as readonly string[]).includes(raw) ? (raw as T) : fallback
+  const set = (next: T) => {
+    const p = new URLSearchParams(params)
+    if (next === fallback) p.delete(key)
+    else p.set(key, next)
+    setParams(p, { replace: true })
+  }
+  return [value, set]
+}
+
 /** What an empty list says when its filters, not the cluster, emptied it. */
 function noMatchText(noun: string, search: string, narrowed: boolean, read: KindRead): string | undefined {
   if (read.state !== 'read' || read.items.length > 0) return undefined
@@ -516,50 +607,256 @@ function noMatchText(noun: string, search: string, narrowed: boolean, read: Kind
 }
 
 function NameSearch({ value, onChange, noun, id }: { value: string; onChange: (value: string) => void; noun: string; id: string }) {
-  return <SearchBox value={value} onChange={onChange} scope="resources" shortcutId={id} placeholder={`Search ${noun} by name`} className="w-72 max-w-full" />
+  return <SearchBox value={value} onChange={onChange} scope="resources" shortcutId={id} placeholder={`Search ${noun} by name`} className="w-64 max-w-full" />
+}
+
+function PoolSelect({
+  pools,
+  value,
+  onChange,
+  multiNamespace,
+}: {
+  pools: { key: string; namespace: string; name: string }[]
+  value: string
+  onChange: (value: string) => void
+  multiNamespace: boolean
+}) {
+  if (pools.length === 0) return null
+  return (
+    <select
+      aria-label="Filter by warm pool"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="h-8 rounded-lg border border-theme-border bg-theme-elevated px-2.5 text-xs text-theme-text-primary focus:outline-none focus:ring-2 focus:ring-accent"
+    >
+      <option value="">All warm pools</option>
+      {pools.map((p) => (
+        <option key={p.key} value={p.key}>
+          {multiNamespace ? `${p.namespace}/${p.name}` : p.name}
+        </option>
+      ))}
+    </select>
+  )
+}
+
+function listSubtitle(count: number, noun: [string, string], partial: boolean, namespaces: string[], items: any[], attentionCount: number): string {
+  const prefix = partial ? '≥' : ''
+  const parts = [`${prefix}${count} ${count === 1 ? noun[0] : noun[1]}`]
+  if (attentionCount > 0) parts.push(`${prefix}${attentionCount} need attention`)
+  if (namespaces.length > 0) parts.push(`in ${namespaces.join(', ')}`)
+  else {
+    const single = singleNamespaceOf(items)
+    if (single) parts.push(`in namespace ${single}`)
+  }
+  return parts.join(' · ')
+}
+
+const SANDBOX_SEGMENTS = ['all', 'attention', 'ready', 'settled'] as const
+type SandboxSegment = (typeof SANDBOX_SEGMENTS)[number]
+
+function isSandboxAttention(o: any, server?: ServerReadings): boolean {
+  const level = server?.tones.get(objectKey('Sandbox', ns(o), nm(o))) ?? getSandboxStatus(o).level
+  return level !== 'healthy' && level !== 'neutral'
 }
 
 export function SandboxesScreen({ data, namespaces, onClearNamespaces, onInspect, inspected, onCreate, server }: AgentSandboxScreenProps & { onCreate?: () => void; server?: ServerReadings }) {
   const [params, setParams] = useSearchParams()
   const [search, setSearch] = useNameSearch()
+  const [segment, setSegment] = useUrlParam<SandboxSegment>('segment', SANDBOX_SEGMENTS, 'all')
   const pool = params.get('pool') ?? ''
-  const state = params.get('state') === 'notReady' ? 'notReady' : ''
+  const rawState = params.get('state')
+  const state = rawState === 'notReady' || rawState === 'expired' ? rawState : ''
   const clear = (key: string) => {
     const p = new URLSearchParams(params)
     p.delete(key)
     setParams(p, { replace: true })
   }
+  const setPool = (value: string) => {
+    const p = new URLSearchParams(params)
+    if (value) p.set('pool', value)
+    else p.delete('pool')
+    setParams(p, { replace: true })
+  }
   const listFilters = useListFilters(SANDBOX_KIND)
   const chips = [
     ...(pool ? [{ label: `Warm pool: ${pool.slice(pool.indexOf('/') + 1)}`, onClear: () => clear('pool') }] : []),
-    ...(state ? [{ label: 'Not ready', onClear: () => clear('state') }] : []),
+    ...(state === 'notReady' ? [{ label: 'Not ready', onClear: () => clear('state') }] : []),
+    ...(state === 'expired' ? [{ label: 'Expired', onClear: () => clear('state') }] : []),
     ...listFilters.chips,
   ]
   const { apply } = listFilters
-  const sandboxes = useMemo(() => filterByName(apply(filterSandboxes(data.sandboxes, pool, state)), search), [data.sandboxes, pool, state, search, apply])
-  const filtered = (!!pool || !!state || listFilters.narrows || !!search.trim()) && sandboxes.state === 'read' && sandboxes.items.length === 0
+  const baseItems = readItems(data.sandboxes)
+  const partial = isPartialRead(data.sandboxes)
+  const poolOptions = useMemo(() => {
+    const map = new Map<string, { key: string; namespace: string; name: string }>()
+    for (const p of readItems(data.warmPools)) {
+      const k = rowKey(p)
+      map.set(k, { key: k, namespace: ns(p), name: nm(p) })
+    }
+    for (const s of baseItems) {
+      const owner = sandboxController(s)
+      if (owner?.kind === 'SandboxWarmPool') {
+        const k = `${owner.namespace}/${owner.name}`
+        if (!map.has(k)) map.set(k, { key: k, namespace: owner.namespace, name: owner.name })
+      }
+    }
+    return [...map.values()].sort((a, b) => a.key.localeCompare(b.key))
+  }, [data.warmPools, baseItems])
+  const multiPoolNs = new Set(poolOptions.map((p) => p.namespace)).size > 1
+
+  const counts = useMemo(() => {
+    let attention = 0
+    let ready = 0
+    let settled = 0
+    for (const o of baseItems) {
+      const level = server?.tones.get(objectKey('Sandbox', ns(o), nm(o))) ?? getSandboxStatus(o).level
+      if (level === 'healthy') ready++
+      else if (level === 'neutral') settled++
+      else attention++
+    }
+    return { all: baseItems.length, attention, ready, settled }
+  }, [baseItems, server])
+
+  const bySegment = useMemo(() => {
+    const base = filterSandboxes(data.sandboxes, pool, state)
+    if (segment === 'all') return base
+    return filterItems(base, (o) => {
+      const level = server?.tones.get(objectKey('Sandbox', ns(o), nm(o))) ?? getSandboxStatus(o).level
+      if (segment === 'attention') return isSandboxAttention(o, server)
+      if (segment === 'ready') return level === 'healthy'
+      return level === 'neutral'
+    })
+  }, [data.sandboxes, pool, state, segment, server])
+
+  const sandboxes = useMemo(() => filterByName(apply(bySegment), search), [bySegment, search, apply])
+  const narrowed = !!pool || !!state || segment !== 'all' || listFilters.narrows
+  const empty = noMatchText('Sandboxes', search, narrowed, sandboxes)
+  const subtitle = data.sandboxes.state === 'read' ? listSubtitle(counts.all, ['sandbox', 'sandboxes'], partial, namespaces, baseItems, counts.attention) : undefined
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <AgentSandboxHeader title="Sandboxes" namespaces={namespaces} onClearNamespaces={onClearNamespaces} chips={chips} actions={<CreateButton onCreate={onCreate} label={SANDBOX_KIND.kind} />} />
+      <AgentSandboxHeader title="Sandboxes" subtitle={subtitle} namespaces={namespaces} onClearNamespaces={onClearNamespaces} chips={chips} actions={<CreateButton onCreate={onCreate} label={SANDBOX_KIND.kind} />} />
       <ScreenBody>
-        <NameSearch value={search} onChange={setSearch} noun="sandboxes" id="agent-sandbox-sandboxes-search" />
+        <div className="flex flex-wrap items-center gap-2">
+          <Segments
+            label="Filter sandboxes by state"
+            value={segment}
+            onChange={setSegment}
+            options={[
+              { id: 'all', label: 'All', count: countBadge(counts.all, partial) },
+              { id: 'attention', label: 'Needs attention', count: countBadge(counts.attention, partial) },
+              { id: 'ready', label: 'Ready', count: countBadge(counts.ready, partial) },
+              { id: 'settled', label: 'Settled', count: countBadge(counts.settled, partial) },
+            ]}
+          />
+          <PoolSelect pools={poolOptions} value={pool} onChange={setPool} multiNamespace={multiPoolNs} />
+          <div className="ml-auto">
+            <NameSearch value={search} onChange={setSearch} noun="sandboxes" id="agent-sandbox-sandboxes-search" />
+          </div>
+        </div>
         <AgentSandboxCoverageNotice data={data} kinds={['sandboxes', 'claims']} />
-        <SandboxesTable read={sandboxes} claims={data.claims} onInspect={onInspect} inspected={inspected} server={server} empty={filtered ? 'No Sandboxes match these filters.' : undefined} />
+        <SandboxesTable read={sandboxes} claims={data.claims} onInspect={onInspect} inspected={inspected} server={server} empty={empty} />
       </ScreenBody>
     </div>
   )
 }
 
+const CLAIM_SEGMENTS = ['all', 'attention', 'bound', 'expired'] as const
+type ClaimSegment = (typeof CLAIM_SEGMENTS)[number]
+
+function classifyClaim(o: any, server?: ServerReadings): 'attention' | 'bound' | 'expired' {
+  const status = getSandboxClaimStatus(o)
+  if (status.text === 'Expired') return 'expired'
+  const level = server?.tones.get(objectKey('SandboxClaim', ns(o), nm(o))) ?? status.level
+  if (claimSandboxName(o) && level === 'healthy') return 'bound'
+  if (claimSandboxName(o) && level === 'neutral') return 'bound'
+  return 'attention'
+}
+
 export function ClaimsScreen({ data, namespaces, onClearNamespaces, onInspect, inspected, onCreate, server }: AgentSandboxScreenProps & { onCreate?: () => void; server?: ServerReadings }) {
+  const [params, setParams] = useSearchParams()
   const [search, setSearch] = useNameSearch()
-  const { apply, narrows, chips } = useListFilters(SANDBOX_CLAIM_KIND)
-  const claims = useMemo(() => filterByName(apply(data.claims), search), [data.claims, search, apply])
-  const empty = noMatchText('SandboxClaims', search, narrows, claims)
+  const [segment, setSegment] = useUrlParam<ClaimSegment>('segment', CLAIM_SEGMENTS, 'all')
+  const pool = params.get('pool') ?? ''
+  const setPool = (value: string) => {
+    const p = new URLSearchParams(params)
+    if (value) p.set('pool', value)
+    else p.delete('pool')
+    setParams(p, { replace: true })
+  }
+  const { apply, narrows, chips: listChips } = useListFilters(SANDBOX_CLAIM_KIND)
+  const chips = [
+    ...(pool ? [{ label: `Warm pool: ${pool.slice(pool.indexOf('/') + 1)}`, onClear: () => setPool('') }] : []),
+    ...listChips,
+  ]
+  const baseItems = readItems(data.claims)
+  const partial = isPartialRead(data.claims)
+  const poolOptions = useMemo(() => {
+    const map = new Map<string, { key: string; namespace: string; name: string }>()
+    for (const p of readItems(data.warmPools)) {
+      const k = rowKey(p)
+      map.set(k, { key: k, namespace: ns(p), name: nm(p) })
+    }
+    for (const c of baseItems) {
+      const ref = getSandboxClaimWarmPool(c)
+      if (ref && ref !== '-') {
+        const k = `${ns(c)}/${ref}`
+        if (!map.has(k)) map.set(k, { key: k, namespace: ns(c), name: ref })
+      }
+    }
+    return [...map.values()].sort((a, b) => a.key.localeCompare(b.key))
+  }, [data.warmPools, baseItems])
+  const multiPoolNs = new Set(poolOptions.map((p) => p.namespace)).size > 1
+
+  const counts = useMemo(() => {
+    let attention = 0
+    let bound = 0
+    let expired = 0
+    for (const o of baseItems) {
+      const bucket = classifyClaim(o, server)
+      if (bucket === 'attention') attention++
+      else if (bucket === 'bound') bound++
+      else expired++
+    }
+    return { all: baseItems.length, attention, bound, expired }
+  }, [baseItems, server])
+
+  const narrowedRead = useMemo(() => {
+    let next = data.claims
+    if (pool) {
+      next = filterItems(next, (c) => `${ns(c)}/${getSandboxClaimWarmPool(c)}` === pool)
+    }
+    if (segment !== 'all') {
+      next = filterItems(next, (c) => classifyClaim(c, server) === segment)
+    }
+    return next
+  }, [data.claims, pool, segment, server])
+
+  const claims = useMemo(() => filterByName(apply(narrowedRead), search), [narrowedRead, search, apply])
+  const empty = noMatchText('SandboxClaims', search, narrows || !!pool || segment !== 'all', claims)
+  const subtitle = data.claims.state === 'read' ? listSubtitle(counts.all, ['claim', 'claims'], partial, namespaces, baseItems, counts.attention) : undefined
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <AgentSandboxHeader title="Claims" namespaces={namespaces} onClearNamespaces={onClearNamespaces} chips={chips} actions={<CreateButton onCreate={onCreate} label={SANDBOX_CLAIM_KIND.kind} />} />
+      <AgentSandboxHeader title="Claims" subtitle={subtitle} namespaces={namespaces} onClearNamespaces={onClearNamespaces} chips={chips} actions={<CreateButton onCreate={onCreate} label={SANDBOX_CLAIM_KIND.kind} />} />
       <ScreenBody>
-        <NameSearch value={search} onChange={setSearch} noun="claims" id="agent-sandbox-claims-search" />
+        <div className="flex flex-wrap items-center gap-2">
+          <Segments
+            label="Filter claims by state"
+            value={segment}
+            onChange={setSegment}
+            options={[
+              { id: 'all', label: 'All', count: countBadge(counts.all, partial) },
+              { id: 'attention', label: 'Needs attention', count: countBadge(counts.attention, partial) },
+              { id: 'bound', label: 'Bound', count: countBadge(counts.bound, partial) },
+              { id: 'expired', label: 'Expired', count: countBadge(counts.expired, partial) },
+            ]}
+          />
+          <PoolSelect pools={poolOptions} value={pool} onChange={setPool} multiNamespace={multiPoolNs} />
+          <div className="ml-auto">
+            <NameSearch value={search} onChange={setSearch} noun="claims" id="agent-sandbox-claims-search" />
+          </div>
+        </div>
         <AgentSandboxCoverageNotice data={data} kinds={['claims', 'warmPools']} />
         <ClaimsTable read={claims} warmPools={data.warmPools} onInspect={onInspect} inspected={inspected} server={server} empty={empty} />
       </ScreenBody>
@@ -567,16 +864,63 @@ export function ClaimsScreen({ data, namespaces, onClearNamespaces, onInspect, i
   )
 }
 
+const WARM_POOL_SEGMENTS = ['all', 'attention', 'ready'] as const
+type WarmPoolSegment = (typeof WARM_POOL_SEGMENTS)[number]
+
+function isWarmPoolAttention(o: any, server?: ServerReadings): boolean {
+  const key = objectKey('SandboxWarmPool', ns(o), nm(o))
+  if (server?.rows.has(key)) return true
+  const level = server?.tones.get(key) ?? getSandboxWarmPoolStatus(o).level
+  return level !== 'healthy' && level !== 'neutral'
+}
+
 export function WarmPoolsScreen({ data, namespaces, onClearNamespaces, onInspect, inspected, onCreate, server }: AgentSandboxScreenProps & { onCreate?: () => void; server?: ServerReadings }) {
   const [search, setSearch] = useNameSearch()
+  const [segment, setSegment] = useUrlParam<WarmPoolSegment>('segment', WARM_POOL_SEGMENTS, 'all')
   const { apply, narrows, chips } = useListFilters(SANDBOX_WARM_POOL_KIND)
-  const pools = useMemo(() => filterByName(apply(data.warmPools), search), [data.warmPools, search, apply])
-  const empty = noMatchText('SandboxWarmPools', search, narrows, pools)
+  const baseItems = readItems(data.warmPools)
+  const partial = isPartialRead(data.warmPools)
+
+  const counts = useMemo(() => {
+    let attention = 0
+    let ready = 0
+    for (const o of baseItems) {
+      if (isWarmPoolAttention(o, server)) attention++
+      else if (getSandboxWarmPoolStatus(o).level === 'healthy') ready++
+    }
+    return { all: baseItems.length, attention, ready }
+  }, [baseItems, server])
+
+  const bySegment = useMemo(() => {
+    if (segment === 'all') return data.warmPools
+    return filterItems(data.warmPools, (o) =>
+      segment === 'attention' ? isWarmPoolAttention(o, server) : !isWarmPoolAttention(o, server) && getSandboxWarmPoolStatus(o).level === 'healthy',
+    )
+  }, [data.warmPools, segment, server])
+
+  const pools = useMemo(() => filterByName(apply(bySegment), search), [bySegment, search, apply])
+  const empty = noMatchText('SandboxWarmPools', search, narrows || segment !== 'all', pools)
+  const subtitle = data.warmPools.state === 'read' ? listSubtitle(counts.all, ['warm pool', 'warm pools'], partial, namespaces, baseItems, counts.attention) : undefined
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <AgentSandboxHeader title="Warm pools" namespaces={namespaces} onClearNamespaces={onClearNamespaces} chips={chips} actions={<CreateButton onCreate={onCreate} label={SANDBOX_WARM_POOL_KIND.kind} />} />
+      <AgentSandboxHeader title="Warm pools" subtitle={subtitle} namespaces={namespaces} onClearNamespaces={onClearNamespaces} chips={chips} actions={<CreateButton onCreate={onCreate} label={SANDBOX_WARM_POOL_KIND.kind} />} />
       <ScreenBody>
-        <NameSearch value={search} onChange={setSearch} noun="warm pools" id="agent-sandbox-warm-pools-search" />
+        <div className="flex flex-wrap items-center gap-2">
+          <Segments
+            label="Filter warm pools by state"
+            value={segment}
+            onChange={setSegment}
+            options={[
+              { id: 'all', label: 'All', count: countBadge(counts.all, partial) },
+              { id: 'attention', label: 'Needs attention', count: countBadge(counts.attention, partial) },
+              { id: 'ready', label: 'Ready', count: countBadge(counts.ready, partial) },
+            ]}
+          />
+          <div className="ml-auto">
+            <NameSearch value={search} onChange={setSearch} noun="warm pools" id="agent-sandbox-warm-pools-search" />
+          </div>
+        </div>
         <AgentSandboxCoverageNotice data={data} kinds={['warmPools', 'claims']} />
         <WarmPoolsTable read={pools} claims={readItems(data.claims)} claimsRead={data.claims} onInspect={onInspect} inspected={inspected} server={server} empty={empty} />
       </ScreenBody>

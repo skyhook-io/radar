@@ -1,5 +1,6 @@
 import type { HealthLevel, StatusBadge } from '@skyhook-io/k8s-ui'
 import { summarizeSchedulerMessage } from '@skyhook-io/k8s-ui/components/resources/resource-utils'
+import { getSandboxWarmPoolStatus } from '@skyhook-io/k8s-ui/components/resources/resource-utils-agent-runtimes'
 import type { AgentSandboxAttention, AgentSandboxWorkspaceResponse } from '../../api/agentSandbox'
 
 // Plain words for the controller's and Kubernetes' reasons a reading names.
@@ -47,6 +48,44 @@ export function unschedulablePools(workspace: AgentSandboxWorkspaceResponse | un
 }
 
 export const CANT_SCHEDULE = 'Can’t schedule'
+export const RESERVE_BELOW_TARGET = 'Reserve below target'
+
+/**
+ * One canonical badge reading for a SandboxWarmPool, shared by the Warm pools
+ * list, the drawer/page header pill, and the Overview summary so every surface
+ * shows the same verdict and severity tone.
+ */
+export function warmPoolBadge(
+  pool: any,
+  server?: ServerReadings,
+): { status: StatusBadge; label?: string; level?: HealthLevel; title?: string } {
+  const status = getSandboxWarmPoolStatus(pool)
+  const namespace = pool?.metadata?.namespace ?? ''
+  const name = pool?.metadata?.name ?? ''
+  const key = objectKey('SandboxWarmPool', namespace, name)
+  const row = server?.rows.get(key)
+  const level = server?.tones.get(key)
+  if (row?.rule === 'templateMissing') {
+    return {
+      status,
+      label: 'Template not found',
+      level,
+      title: row.reading || 'The SandboxTemplate this warm pool names does not exist',
+    }
+  }
+  if (row?.rule === 'reserveBelowTarget') {
+    const unschedulable = server?.unschedulable.has(`${namespace}/${name}`)
+    return {
+      status,
+      label: RESERVE_BELOW_TARGET,
+      level,
+      title: unschedulable
+        ? 'Warm reserve is below target because the scheduler can’t place its sandboxes'
+        : row.reading || 'Warm reserve is below target',
+    }
+  }
+  return { status, level }
+}
 
 export type RowTone = Extract<HealthLevel, 'unhealthy' | 'alert' | 'degraded'>
 
