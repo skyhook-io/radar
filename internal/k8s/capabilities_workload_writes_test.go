@@ -17,6 +17,8 @@ func TestWorkloadWriteChecksMapToTheirFields(t *testing.T) {
 		{"argoproj.io", "rollouts", "patch", &p.Rollouts, &e.Rollouts},
 		{"argoproj.io", "workflows", "patch", &p.Workflows, &e.Workflows},
 		{"argoproj.io", "workflows", "create", &p.CreateWorkflows, &e.CreateWorkflows},
+		{"batch", "cronjobs", "patch", &p.CronJobs, &e.CronJobs},
+		{"batch", "jobs", "create", &p.CreateJobs, &e.CreateJobs},
 	}
 	if len(workloadWriteChecks) != len(want) {
 		t.Fatalf("workloadWriteChecks has %d entries, want %d", len(workloadWriteChecks), len(want))
@@ -40,6 +42,8 @@ func TestMergeWorkloadWritesKeepsEachFieldSeparate(t *testing.T) {
 		func(p *WorkloadWritePermissions) *bool { return &p.Rollouts },
 		func(p *WorkloadWritePermissions) *bool { return &p.Workflows },
 		func(p *WorkloadWritePermissions) *bool { return &p.CreateWorkflows },
+		func(p *WorkloadWritePermissions) *bool { return &p.CronJobs },
+		func(p *WorkloadWritePermissions) *bool { return &p.CreateJobs },
 	}
 	errFields := []func(*WorkloadWriteCapabilityErrors) *bool{
 		func(e *WorkloadWriteCapabilityErrors) *bool { return &e.Deployments },
@@ -48,6 +52,8 @@ func TestMergeWorkloadWritesKeepsEachFieldSeparate(t *testing.T) {
 		func(e *WorkloadWriteCapabilityErrors) *bool { return &e.Rollouts },
 		func(e *WorkloadWriteCapabilityErrors) *bool { return &e.Workflows },
 		func(e *WorkloadWriteCapabilityErrors) *bool { return &e.CreateWorkflows },
+		func(e *WorkloadWriteCapabilityErrors) *bool { return &e.CronJobs },
+		func(e *WorkloadWriteCapabilityErrors) *bool { return &e.CreateJobs },
 	}
 	for i := range fields {
 		// The namespaced answer reaches only its own field.
