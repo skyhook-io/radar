@@ -276,7 +276,18 @@ export function LogCore({
   const [showTsMenu, setShowTsMenu] = useState(false)
   const tsMenu = useAnimatedUnmount(showTsMenu, overlayExitMs('menu'))
   const [timeZone, setTimeZone] = useState(localTimeZone)
-  const refreshTimeZone = () => setTimeZone(localTimeZone())
+  const refreshTimeZone = useCallback(() => setTimeZone(localTimeZone()), [])
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') refreshTimeZone()
+    }
+    window.addEventListener('focus', refreshTimeZone)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      window.removeEventListener('focus', refreshTimeZone)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [refreshTimeZone])
   const formatTimestamp = useMemo(() => createLogTimestampFormatter(tsFormat, timeZone), [tsFormat, timeZone])
   const zoneSuffix = isLocalFormat(tsFormat) && timeZone ? ` · ${timeZone}` : ''
   const [showStructuredMenu, setShowStructuredMenu] = useState(false)

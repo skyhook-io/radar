@@ -159,3 +159,28 @@ it('reuses the displayed zone and formatter for incoming lines with the picker o
   expect(rowTime(second.timestamp)).toBe('06:30:00')
   expect(dateTimeFormat).not.toHaveBeenCalled()
 })
+
+it.each(['focus', 'visibilitychange'])('refreshes a running stream on %s with the picker closed', async event => {
+  const dateTimeFormat = mockSystemZone()
+  const streaming = { isStreaming: true, isFollowing: true }
+  const picker = await render(streaming)
+  expect(rowTime()).toBe('05:30:00')
+  systemZone = 'Asia/Tokyo'
+  if (event === 'focus') {
+    act(() => window.dispatchEvent(new Event('focus')))
+  } else {
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+    expect(rowTime()).toBe('05:30:00')
+    visibility.mockReturnValue('visible')
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+  }
+  expect(picker.getAttribute('aria-expanded')).toBe('false')
+  expect(picker.getAttribute('aria-label')).toBe('Pick timestamp format: Local time · Asia/Tokyo')
+  expect(rowTime()).toBe('14:30:00')
+  dateTimeFormat.mockClear()
+  const second = { ...entry, id: 2, timestamp: '2026-11-01T06:30:00Z' }
+  await render({ ...streaming, entries: [entry, second] })
+  expect(rowTime(second.timestamp)).toBe('15:30:00')
+  expect(dateTimeFormat).not.toHaveBeenCalled()
+})
