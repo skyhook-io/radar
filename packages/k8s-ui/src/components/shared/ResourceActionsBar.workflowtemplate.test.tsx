@@ -7,11 +7,11 @@ import type { WorkflowTemplateSubmission } from '../../utils/workflow-template-s
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-function template(resourceVersion = '7') {
+function template() {
   return {
     apiVersion: 'argoproj.io/v1alpha1',
     kind: 'WorkflowTemplate',
-    metadata: { name: 'migrate', namespace: 'jobs', uid: 'template-1', resourceVersion },
+    metadata: { name: 'migrate', namespace: 'jobs', uid: 'template-1' },
     spec: {
       serviceAccountName: 'migrator',
       entrypoint: 'main',
@@ -28,9 +28,6 @@ function render(props: Record<string, unknown>, data: unknown = template(), reso
   root = createRoot(host)
   roots.push(root)
   act(() => root.render(<ResourceActionsBar resource={resource} data={data} {...props} />))
-}
-function rerender(props: Record<string, unknown>, data: unknown) {
-  act(() => root.render(<ResourceActionsBar resource={{ kind: 'workflowtemplates', name: 'migrate', namespace: 'jobs', group: 'argoproj.io' }} data={data} {...props} />))
 }
 // The last match: once the dialog is open its Submit follows the bar's.
 const button = (label: string) => [...document.querySelectorAll('button')].filter(b => b.textContent?.trim() === label).at(-1)
@@ -66,73 +63,77 @@ describe('WorkflowTemplate Submit', () => {
     expect(button('Submit…')?.disabled).toBe(true)
   })
 
-  it('prefills defaults, requires a value for each required parameter, and sends the reviewed request', async () => {
+  it('prefills defaults, leaves run name optional, and sends the reviewed request', async () => {
     const onSubmitWorkflowTemplate = vi.fn<(s: WorkflowTemplateSubmission) => Promise<unknown>>(() => Promise.resolve({}))
     render({ onSubmitWorkflowTemplate })
     act(() => button('Submit…')!.click())
     expect(dialogOpen()).toBe(true)
     expect(document.body.textContent).toContain('migrator')
     expect(input('batch')!.value).toBe('10')
-    expect(input('Run name')!.value).toMatch(/^migrate-[a-z0-9]{5}$/)
+    expect(input('Run name')!.value).toBe('')
     expect(button('Submit')!.disabled).toBe(true)
     expect(document.body.textContent).toContain('Fill in the required parameter')
 
     type('target', 'orders')
-    type('Run name', 'migrate-orders')
     expect(button('Submit')!.disabled).toBe(false)
     await act(async () => { button('Submit')!.click() })
     expect(onSubmitWorkflowTemplate).toHaveBeenCalledOnce()
-    const sent = onSubmitWorkflowTemplate.mock.calls[0][0]
-    expect(sent).toMatchObject({
+    expect(onSubmitWorkflowTemplate.mock.calls[0][0]).toEqual({
       namespace: 'jobs',
       name: 'migrate',
-      resourceVersion: '7',
-      runName: 'migrate-orders',
       parameters: { target: 'orders', batch: '10' },
     })
-    expect(sent.submission).toMatch(/^[A-Za-z0-9-]{8,64}$/)
   })
 
-  it('keeps the dialog on failure, repeats an unchanged request with the same submission, and a changed one with a new one', async () => {
-    let fail = true
-    const onSubmitWorkflowTemplate = vi.fn<(s: WorkflowTemplateSubmission) => Promise<unknown>>(() => (fail ? Promise.reject(new Error('timeout')) : Promise.resolve({})))
+  it('sends an explicit run name when entered', async () => {
+    const onSubmitWorkflowTemplate = vi.fn<(s: WorkflowTemplateSubmission) => Promise<unknown>>(() => Promise.resolve({}))
     render({ onSubmitWorkflowTemplate })
     act(() => button('Submit…')!.click())
     type('target', 'orders')
+    type('Run name', 'migrate-orders')
     await act(async () => { button('Submit')!.click() })
-    expect(dialogOpen()).toBe(true)
-    await act(async () => { button('Submit')!.click() })
-    const [first, second] = onSubmitWorkflowTemplate.mock.calls.map(c => c[0])
-    expect(second.submission).toBe(first.submission)
-    expect(second.runName).toBe(first.runName)
-
-    type('target', 'payments')
-    fail = false
-    await act(async () => { button('Submit')!.click() })
-    const third = onSubmitWorkflowTemplate.mock.calls[2][0]
-    expect(third.submission).not.toBe(first.submission)
-    expect(third.parameters.target).toBe('payments')
-    await act(async () => { await new Promise(r => setTimeout(r, 0)) })
-    expect(onSubmitWorkflowTemplate).toHaveBeenCalledTimes(3)
+    expect(onSubmitWorkflowTemplate.mock.calls[0][0]).toEqual({
+      namespace: 'jobs',
+      name: 'migrate',
+      runName: 'migrate-orders',
+      parameters: { target: 'orders', batch: '10' },
+    })
   })
 
-  it('after a failed attempt, still lets the unchanged request be repeated when the template changes', async () => {
-    const onSubmitWorkflowTemplate = vi.fn<(s: WorkflowTemplateSubmission) => Promise<unknown>>(() => Promise.reject(new Error('timeout')))
-    const props = { onSubmitWorkflowTemplate }
-    render(props)
-    act(() => button('Submit…')!.click())
-    type('target', 'orders')
-    await act(async () => { button('Submit')!.click() })
-    rerender(props, template('8'))
-    expect(document.body.textContent).toContain('Submitting again repeats your last attempt')
-    await act(async () => { button('Submit')!.click() })
-    const [first, second] = onSubmitWorkflowTemplate.mock.calls.map(c => c[0])
-    expect(second).toEqual(first)
-    expect(second.resourceVersion).toBe('7')
+  it('locks submit and warns when a network error or 5xx leaves the outcome ambiguous', async () => {
+    for (const err of [
+      new TypeError('Failed to fetch'),
+      Object.assign(new Error('could not create the workflow'), { status: 500 }),
+      Object.assign(new Error('Kubernetes timed out'), { status: 504 }),
+    ]) {
+      const onSubmitWorkflowTemplate = vi.fn<(s: WorkflowTemplateSubmission) => Promise<unknown>>(() => Promise.reject(err))
+      render({ onSubmitWorkflowTemplate })
+      act(() => button('Submit…')!.click())
+      type('target', 'orders')
+      await act(async () => { button('Submit')!.click() })
+      expect(dialogOpen()).toBe(true)
+      expect(document.body.textContent).toContain('The run may have started. Check the runs below before submitting again.')
+      expect(button('Submit')!.disabled).toBe(true)
+      act(() => roots.splice(0).forEach(r => r.unmount()))
+      document.body.innerHTML = ''
+    }
+  })
 
-    type('target', 'payments')
-    expect(button('Submit')!.disabled).toBe(true)
-    expect(document.body.textContent).toContain('Close and open Submit again')
+  it('keeps the form submittable without the ambiguous-failure message on 400 or 409', async () => {
+    for (const status of [400, 409]) {
+      const onSubmitWorkflowTemplate = vi.fn<(s: WorkflowTemplateSubmission) => Promise<unknown>>(() =>
+        Promise.reject(Object.assign(new Error('refused'), { status })),
+      )
+      render({ onSubmitWorkflowTemplate })
+      act(() => button('Submit…')!.click())
+      type('target', 'orders')
+      await act(async () => { button('Submit')!.click() })
+      expect(dialogOpen()).toBe(true)
+      expect(document.body.textContent).not.toContain('The run may have started.')
+      expect(button('Submit')!.disabled).toBe(false)
+      act(() => roots.splice(0).forEach(r => r.unmount()))
+      document.body.innerHTML = ''
+    }
   })
 
   it('explains a template without an entrypoint instead of submitting it', () => {
@@ -164,16 +165,5 @@ describe('WorkflowTemplate Submit', () => {
     render({ onSubmitWorkflowTemplate: vi.fn() }, data)
     act(() => button('Submit…')!.click())
     expect(document.body.textContent).toContain('instance ID ci')
-  })
-
-  it('refuses to submit once the template changes under the dialog', () => {
-    const onSubmitWorkflowTemplate = vi.fn()
-    const props = { onSubmitWorkflowTemplate }
-    render(props)
-    act(() => button('Submit…')!.click())
-    type('target', 'orders')
-    rerender(props, template('8'))
-    expect(document.body.textContent).toContain('The template changed since you opened this')
-    expect(button('Submit')!.disabled).toBe(true)
   })
 })

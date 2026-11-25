@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   initialParameterValues,
+  isAmbiguousSubmitError,
   parameterErrors,
   submittedParameters,
-  suggestWorkflowName,
   workflowNameError,
   workflowTemplateParameters,
 } from './workflow-template-submit'
@@ -115,17 +115,28 @@ describe('the form', () => {
 })
 
 describe('run names', () => {
-  it('suggests <template>-xxxxx within 63 characters', () => {
-    expect(suggestWorkflowName('migrate')).toMatch(/^migrate-[a-z0-9]{5}$/)
-    const long = suggestWorkflowName(`${'a'.repeat(56)}-.bbbb`)
-    expect(long.length).toBeLessThanOrEqual(63)
-    expect(workflowNameError(long)).toBeNull()
-  })
-
-  it('explains a name Argo or Kubernetes would refuse', () => {
-    expect(workflowNameError('')).toBe('Enter a run name.')
+  it('allows an empty name and explains a name Argo or Kubernetes would refuse', () => {
+    expect(workflowNameError('')).toBeNull()
     expect(workflowNameError('a'.repeat(64))).toContain('At most 63')
     expect(workflowNameError('Migrate_1')).toContain('lowercase')
     expect(workflowNameError('migrate.v2-1')).toBeNull()
+  })
+})
+
+describe('isAmbiguousSubmitError', () => {
+  it('treats network errors, timeouts and 5xx as ambiguous', () => {
+    expect(isAmbiguousSubmitError(new TypeError('Failed to fetch'))).toBe(true)
+    expect(isAmbiguousSubmitError(new Error('timeout'))).toBe(true)
+    expect(isAmbiguousSubmitError(Object.assign(new Error('timeout'), { status: 408 }))).toBe(true)
+    expect(isAmbiguousSubmitError(Object.assign(new Error('internal'), { status: 500 }))).toBe(true)
+    expect(isAmbiguousSubmitError(Object.assign(new Error('gateway'), { status: 504 }))).toBe(true)
+  })
+
+  it('treats definite refusals and unsupported features as not ambiguous', () => {
+    for (const status of [400, 403, 404, 409, 422]) {
+      expect(isAmbiguousSubmitError(Object.assign(new Error('refused'), { status }))).toBe(false)
+    }
+    const unsupported = Object.assign(new Error('needs newer Radar'), { name: 'RadarFeatureUnsupportedError' })
+    expect(isAmbiguousSubmitError(unsupported)).toBe(false)
   })
 })

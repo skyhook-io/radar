@@ -892,7 +892,6 @@ export function ResourceActionsBar({
           open={submitOpen}
           onClose={() => setSubmitOpen(false)}
           template={submitDraft.template}
-          liveResourceVersion={submitDraft.target.key === resourceTarget.key && submitDraft.target.uid === resourceTarget.uid ? data?.metadata?.resourceVersion : undefined}
           onConfirm={confirmSubmit}
           isLoading={submitPending}
         />

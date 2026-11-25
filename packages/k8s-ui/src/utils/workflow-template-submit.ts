@@ -6,7 +6,6 @@
 // label values on the run's Pods.
 const MAX_WORKFLOW_NAME = 63
 const DNS1123_SUBDOMAIN = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$/
-const RANDOM_LENGTH = 5
 
 export interface WorkflowTemplateParameter {
   name: string
@@ -24,16 +23,12 @@ export interface WorkflowTemplateParameter {
 export interface WorkflowTemplateSubmission {
   namespace: string
   name: string
-  /** The template version the user reviewed. */
-  resourceVersion?: string
-  /** The Workflow's name. */
-  runName: string
-  /** Identifies this confirmation, so an unchanged retry returns the run it created. */
-  submission: string
+  /** Optional explicit Workflow name; omitted to let Kubernetes generate `<template>-`. */
+  runName?: string
   parameters: Record<string, string>
 }
 
-/** The created (or, for a repeated request, existing) Workflow. */
+/** The created Workflow. */
 export interface SubmittedWorkflow {
   namespace: string
   name: string
@@ -156,26 +151,24 @@ export function submittedParameters(parameters: WorkflowTemplateParameter[], val
     .map(([name, value]) => [name, value]))
 }
 
-/** Why `name` can't name a Workflow, or null when it can. */
+/** Why an explicit `name` can't name a Workflow, or null when empty or valid. */
 export function workflowNameError(name: string): string | null {
-  if (!name) return 'Enter a run name.'
+  if (!name) return null
   if (name.length > MAX_WORKFLOW_NAME) return `At most ${MAX_WORKFLOW_NAME} characters: Argo copies the name into labels on the run's Pods.`
   if (!DNS1123_SUBDOMAIN.test(name)) return "Use lowercase letters, digits, '-' and '.', starting and ending with a letter or digit."
   return null
 }
 
-/** `<template>-xxxxx`, as Argo names a submitted run, cut to fit 63 characters. */
-export function suggestWorkflowName(templateName: string): string {
-  const base = templateName.slice(0, MAX_WORKFLOW_NAME - RANDOM_LENGTH - 1).replace(/[-.]+$/, '')
-  return `${base}-${randomToken(RANDOM_LENGTH)}`
-}
-
-/** A submission token: 8–64 letters, digits or hyphens. */
-export function newSubmissionToken(): string {
-  return typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `s-${randomToken(16)}`
-}
-
-function randomToken(length: number): string {
-  const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789'
-  return Array.from(crypto.getRandomValues(new Uint8Array(length)), (b) => alphabet[b % alphabet.length]).join('')
+/**
+ * True when Submit failed without a definite answer from the server (a network
+ * error, timeout, or 5xx response), so the Workflow may have been created.
+ */
+export function isAmbiguousSubmitError(error: unknown): boolean {
+  if (!error) return false
+  if (error instanceof Error && error.name === 'RadarFeatureUnsupportedError') return false
+  const status = typeof error === 'object' && 'status' in error && typeof (error as { status?: unknown }).status === 'number'
+    ? (error as { status: number }).status
+    : undefined
+  if (status !== undefined) return status === 408 || status >= 500
+  return true
 }

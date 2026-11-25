@@ -1,14 +1,13 @@
-import { useId, useMemo, useRef, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import { ActionConfirmDialog } from './ActionConfirmDialog'
 import { Input } from '../ui/Input'
 import { SelectMenu } from '../ui/SelectMenu'
 import {
   initialParameterValues,
-  newSubmissionToken,
+  isAmbiguousSubmitError,
   parameterValue,
   parameterErrors,
   submittedParameters,
-  suggestWorkflowName,
   workflowNameError,
   workflowTemplateEntrypoint,
   workflowTemplateParameters,
@@ -16,14 +15,13 @@ import {
 } from '../../utils/workflow-template-submit'
 
 const FIELD_CLASS = 'mt-1 w-full rounded-lg border border-theme-border bg-theme-base px-3 py-1.5 font-mono text-sm text-theme-text-primary focus:outline-none focus:ring-2 focus:ring-skyhook-500'
+const AMBIGUOUS_SUBMIT_MESSAGE = 'The run may have started. Check the runs below before submitting again.'
 
 export interface WorkflowTemplateSubmitDialogProps {
   open: boolean
   onClose: () => void
   /** The template as it was when the dialog opened: what the user reviews. */
   template: any
-  /** The template's current resourceVersion, to say when it changed under the dialog. */
-  liveResourceVersion?: string
   /** Rejecting keeps the dialog open with its values; the host reports the error. */
   onConfirm: (submission: WorkflowTemplateSubmission) => void | Promise<unknown>
   isLoading?: boolean
@@ -33,16 +31,13 @@ export interface WorkflowTemplateSubmitDialogProps {
  * Mount it fresh for each review (a `key` per opening): the form starts from
  * the template it was given.
  */
-export function WorkflowTemplateSubmitDialog({ open, onClose, template, liveResourceVersion, onConfirm, isLoading = false }: WorkflowTemplateSubmitDialogProps) {
+export function WorkflowTemplateSubmitDialog({ open, onClose, template, onConfirm, isLoading = false }: WorkflowTemplateSubmitDialogProps) {
   const namespace: string = template?.metadata?.namespace ?? ''
   const name: string = template?.metadata?.name ?? ''
-  const reviewedVersion: string | undefined = template?.metadata?.resourceVersion
   const parameters = useMemo(() => workflowTemplateParameters(template), [template])
   const [values, setValues] = useState(() => initialParameterValues(parameters))
-  const [runName, setRunName] = useState(() => suggestWorkflowName(name))
-  // One token per distinct request: repeating an unchanged request (its
-  // answer lost) returns the run it created; any edit makes a new request.
-  const attempt = useRef<{ fingerprint: string; token: string } | null>(null)
+  const [runName, setRunName] = useState('')
+  const [ambiguousFailure, setAmbiguousFailure] = useState(false)
   const nameErrorId = useId()
   const fieldId = useId()
 
@@ -52,33 +47,24 @@ export function WorkflowTemplateSubmitDialog({ open, onClose, template, liveReso
   const missing = parameters.filter(p => parameterValue(errors, p.name) === 'Required.').length
   const invalid = Object.keys(errors).length - missing
   const sent = submittedParameters(parameters, values)
-  const changedUnderneath = Boolean(reviewedVersion && liveResourceVersion && liveResourceVersion !== reviewedVersion)
-  const fingerprint = JSON.stringify([trimmedName, sent])
-  // After an attempt whose answer may have been lost, repeating it unchanged
-  // stays possible even if the template changed: Radar answers with the run
-  // that attempt created, or refuses it as changed when there is none.
-  const repeatsAttempt = attempt.current?.fingerprint === fingerprint
-  const blockedByChange = changedUnderneath && !repeatsAttempt
   const entrypoint = workflowTemplateEntrypoint(template)
   const serviceAccount: string | undefined = template?.spec?.serviceAccountName || undefined
   const controllerInstance: string | undefined = template?.metadata?.labels?.['workflows.argoproj.io/controller-instanceid'] || undefined
 
   const confirm = () => {
-    if (nameError || Object.keys(errors).length > 0 || blockedByChange || !entrypoint || isLoading) return
-    const current = repeatsAttempt && attempt.current ? attempt.current : { fingerprint, token: newSubmissionToken() }
-    attempt.current = current
+    if (nameError || Object.keys(errors).length > 0 || !entrypoint || isLoading || ambiguousFailure) return
     void Promise.resolve(onConfirm({
       namespace,
       name,
-      resourceVersion: reviewedVersion,
-      runName: trimmedName,
-      submission: current.token,
+      ...(trimmedName ? { runName: trimmedName } : {}),
       parameters: sent,
-    })).catch(() => {})
+    })).catch((err) => {
+      if (isAmbiguousSubmitError(err)) setAmbiguousFailure(true)
+    })
   }
 
   const incompleteReason = nameError
-    ? (trimmedName ? 'Use a valid run name' : 'Enter a run name')
+    ? 'Use a valid run name'
     : missing > 0
       ? (missing === 1 ? 'Fill in the required parameter' : `Fill in ${missing} required parameters`)
       : invalid > 0 ? 'Choose an allowed value' : undefined
@@ -96,22 +82,26 @@ export function WorkflowTemplateSubmitDialog({ open, onClose, template, liveReso
       incompleteReason={incompleteReason}
       disabledReason={!entrypoint
         ? 'This template has no entrypoint, so a Workflow that references it cannot start. It is meant to be called from other workflows.'
-        : blockedByChange ? 'The template changed since you opened this. Close and open Submit again to review the new version.' : undefined}
-      warnings={changedUnderneath && repeatsAttempt ? ['The template changed since you opened this. Submitting again repeats your last attempt: Radar returns the run it created, or refuses it if it created none.'] : []}
+        : undefined}
+      result={ambiguousFailure
+        ? { state: 'unknown', message: AMBIGUOUS_SUBMIT_MESSAGE }
+        : undefined}
       notes={[
         serviceAccount
           ? <>This template sets the service account <span className="font-mono">{serviceAccount}</span> for its pods; a step can set its own.</>
           : 'This template sets no workflow-level service account: its steps or Argo’s configured default decide which one the pods use.',
         ...(controllerInstance ? [<>The run is labelled for the Argo controller with instance ID <span className="font-mono">{controllerInstance}</span>, as the template is.</>] : []),
-        'The run refers to the template by name. Argo reads the template again when it starts the run, so an edit made after you submit can still apply to it.',
       ]}
       writes={[{
-        summary: `create Workflow ${namespace}/${trimmedName || '…'} referencing WorkflowTemplate ${name}`,
+        summary: `create Workflow ${namespace}/${trimmedName || `${name}-…`} referencing WorkflowTemplate ${name}`,
         detail: JSON.stringify({ workflowTemplateRef: { name }, ...(Object.keys(sent).length > 0 ? { arguments: { parameters: Object.entries(sent).map(([n, value]) => ({ name: n, value })) } } : {}) }, null, 2),
       }]}
     >
       <label className="block">
-        <span className="text-xs text-theme-text-secondary">Run name</span>
+        <span className="flex items-baseline gap-1.5 text-xs text-theme-text-secondary">
+          <span>Run name</span>
+          <span className="text-theme-text-tertiary">optional</span>
+        </span>
         <Input
           aria-label="Run name"
           value={runName}
@@ -122,6 +112,7 @@ export function WorkflowTemplateSubmitDialog({ open, onClose, template, liveReso
               confirm()
             }
           }}
+          placeholder={`${name}-…`}
           autoFocus={parameters.length === 0}
           spellCheck={false}
           aria-invalid={nameError !== null}
@@ -129,7 +120,7 @@ export function WorkflowTemplateSubmitDialog({ open, onClose, template, liveReso
           className={FIELD_CLASS}
         />
       </label>
-      {nameError && trimmedName && <p id={nameErrorId} className="text-xs text-warning-text">{nameError}</p>}
+      {nameError && <p id={nameErrorId} className="text-xs text-warning-text">{nameError}</p>}
 
       {parameters.length > 0 ? (
         <fieldset className="space-y-3">

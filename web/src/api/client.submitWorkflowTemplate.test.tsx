@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import type { WorkflowTemplateSubmission } from '@skyhook-io/k8s-ui/utils/workflow-template-submit'
 import { useRadarFeature, useSubmitWorkflowTemplate } from './client'
 import { isRadarFeatureUnsupported } from './radarFeatures'
 import { showApiSuccess } from '../components/ui/Toast'
@@ -24,22 +25,24 @@ afterEach(() => {
   vi.mocked(showApiSuccess).mockClear()
 })
 
-const submission = {
+const baseSubmission: WorkflowTemplateSubmission = {
   namespace: 'jobs',
   name: 'migrate',
-  resourceVersion: '7',
-  runName: 'migrate-k2x9q',
-  submission: 'confirmation-0001',
   parameters: { target: 'orders', mode: 'apply' },
 }
 
-async function submit(features: Record<string, boolean>, response = new Response('{"namespace":"jobs","name":"migrate-k2x9q","uid":"run-1"}', { status: 200 })) {
+async function submit(
+  features: Record<string, boolean>,
+  postResult: Response | Error = new Response('{"namespace":"jobs","name":"migrate-k2x9q","uid":"run-1"}', { status: 200 }),
+  submission: WorkflowTemplateSubmission = baseSubmission,
+) {
   const posts: Array<{ url: string; body: unknown; contentType: string | null }> = []
   vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (input, init) => {
     const url = String(input)
     if (init?.method === 'POST') {
       posts.push({ url, body: JSON.parse(String(init.body)), contentType: new Headers(init.headers).get('Content-Type') })
-      return response
+      if (postResult instanceof Error) throw postResult
+      return postResult
     }
     if (url.includes('/capabilities')) return new Response(JSON.stringify({ features }), { status: 200 })
     return new Response('{}', { status: 200 })
@@ -66,8 +69,12 @@ async function submit(features: Record<string, boolean>, response = new Response
   return { posts, result, failure, invalidated }
 }
 
-it('posts the reviewed version, run name, submission and parameters, and refreshes the runs', async () => {
-  const { posts, result, failure, invalidated } = await submit({ workflowTemplateSubmit: true })
+it('posts parameters and optional run name, and refreshes the runs', async () => {
+  const { posts, result, failure, invalidated } = await submit(
+    { workflowTemplateSubmit: true },
+    undefined,
+    { ...baseSubmission, runName: 'migrate-k2x9q' },
+  )
 
   expect(failure).toBeUndefined()
   expect(result).toEqual({ namespace: 'jobs', name: 'migrate-k2x9q', uid: 'run-1' })
@@ -76,18 +83,40 @@ it('posts the reviewed version, run name, submission and parameters, and refresh
   expect(posts[0].contentType).toBe('application/json')
   expect(posts[0].body).toEqual({
     name: 'migrate-k2x9q',
-    submission: 'confirmation-0001',
-    resourceVersion: '7',
     parameters: { target: 'orders', mode: 'apply' },
   })
   expect(invalidated).toContain(JSON.stringify(['workload-runs', 'workflowtemplates', 'jobs', 'migrate']))
   expect(showApiSuccess).toHaveBeenCalledWith('Workflow submitted', 'jobs/migrate-k2x9q')
 })
 
-it('surfaces the server error', async () => {
-  const { failure } = await submit({ workflowTemplateSubmit: true }, new Response('{"error":"parameter \\"target\\" is required","error_code":"invalid_parameters"}', { status: 400 }))
+it('omits name when no explicit run name is set', async () => {
+  const { posts, failure } = await submit({ workflowTemplateSubmit: true })
 
-  expect((failure as Error).message).toBe('parameter "target" is required')
+  expect(failure).toBeUndefined()
+  expect(posts[0].body).toEqual({ parameters: { target: 'orders', mode: 'apply' } })
+})
+
+it('surfaces definite refusals without refreshing the runs', async () => {
+  for (const response of [
+    new Response('{"error":"parameter \\"target\\" is required","error_code":"invalid_parameters"}', { status: 400 }),
+    new Response('{"error":"a Workflow named migrate-k2x9q already exists","error_code":"workflow_name_taken"}', { status: 409 }),
+  ]) {
+    const { failure, invalidated } = await submit({ workflowTemplateSubmit: true }, response)
+    expect(failure).toBeInstanceOf(Error)
+    expect(invalidated).not.toContain(JSON.stringify(['workload-runs', 'workflowtemplates', 'jobs', 'migrate']))
+  }
+})
+
+it('refreshes the runs when a 5xx or network error leaves the outcome ambiguous', async () => {
+  for (const err of [
+    new Response('{"error":"could not create the workflow"}', { status: 500 }),
+    new Response('{"error":"Kubernetes timed out"}', { status: 504 }),
+    new TypeError('Failed to fetch'),
+  ]) {
+    const { failure, invalidated } = await submit({ workflowTemplateSubmit: true }, err)
+    expect(failure).toBeInstanceOf(Error)
+    expect(invalidated).toContain(JSON.stringify(['workload-runs', 'workflowtemplates', 'jobs', 'migrate']))
+  }
 })
 
 it('sends nothing to a Radar that predates the route', async () => {
