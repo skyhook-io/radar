@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"errors"
-	"io"
 	"log"
 	"net/http"
 	"time"
@@ -13,10 +12,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/utils/ptr"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/integration"
+	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 var argoWorkflowGVR = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "workflows"}
@@ -28,12 +27,10 @@ const (
 	workflowStoppedAtAnnotation = "radar.skyhook.io/stopped-at"
 )
 
-// WorkflowStopRequest picks how to stop. Terminate (the default) ends the
-// run now, skipping exit handlers; Stop ends it after running them, as
-// `argo terminate` and `argo stop` do.
+// WorkflowStopRequest targets the Workflow instance the caller reviewed.
 type WorkflowStopRequest struct {
-	Strategy *string `json:"strategy"`
-	// ResourceVersion binds the stop to a Workflow a caller already checked.
+	UID             string `json:"uid"`
+	Strategy        string `json:"strategy"`
 	ResourceVersion string `json:"resourceVersion,omitempty"`
 }
 
@@ -45,28 +42,14 @@ type WorkflowStopResponse struct {
 	Changed bool `json:"changed"`
 }
 
-// workflowFinishedPhases have nothing left to stop.
-var workflowFinishedPhases = map[string]bool{"Succeeded": true, "Failed": true, "Error": true}
-
-// handleWorkflowStop stops an Argo Workflow by setting spec.shutdown, which
-// the workflow controller acts on.
-//
-//	POST /api/workflows/{namespace}/{name}/stop  {"strategy": "Terminate"|"Stop", "resourceVersion": "..."}
-//
-// The read and the merge patch run as the caller, so the apiserver decides
-// (`get` and `patch workflows`); without authentication that is Radar's own
-// identity, like every other workload action. The patch carries the
-// resourceVersion that was read, so a Workflow that finishes or changes in
-// between is refused (409), not overwritten. Radar records who stopped it and
-// when; the caller can't supply annotations. A finished Workflow is 409.
-// Terminate can escalate Stop, never the reverse. Setting shutdown asks the
-// Workflow controller to stop asynchronously. Callers that checked the Workflow
-// before calling can supply its resourceVersion as an additional precondition.
+// handleWorkflowStop sets spec.shutdown for Argo to reconcile asynchronously.
+// Both the read and patch use the caller's Kubernetes identity, or Radar's
+// identity when authentication is disabled. Terminate can escalate Stop.
 func (s *Server) handleWorkflowStop(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
-	req := &WorkflowStopRequest{Strategy: ptr.To("Terminate")}
-	if err := decodeBoundedJSONBody(w, r, 1<<10, &req); err != nil && !errors.Is(err, io.EOF) {
+	var req WorkflowStopRequest
+	if err := decodeBoundedJSONBody(w, r, 1<<10, &req); err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
 			s.writeError(w, http.StatusRequestEntityTooLarge, "request body is too large")
@@ -75,13 +58,13 @@ func (s *Server) handleWorkflowStop(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
-	if req == nil {
-		s.writeError(w, http.StatusBadRequest, "invalid request body: the body must be a JSON object")
+	if req.Strategy != "Terminate" && req.Strategy != "Stop" {
+		s.writeError(w, http.StatusBadRequest, "strategy must be Terminate or Stop")
 		return
 	}
-	strategy := ptr.Deref(req.Strategy, "")
-	if strategy != "Terminate" && strategy != "Stop" {
-		s.writeError(w, http.StatusBadRequest, "strategy must be Terminate or Stop")
+
+	if req.UID == "" {
+		s.writeError(w, http.StatusBadRequest, "uid is required")
 		return
 	}
 
@@ -96,16 +79,20 @@ func (s *Server) handleWorkflowStop(w http.ResponseWriter, r *http.Request) {
 		s.writeWorkflowStopError(w, err, namespace, name, "read")
 		return
 	}
+	if req.UID != string(wf.GetUID()) {
+		s.writeErrorCode(w, http.StatusConflict, "workflow_replaced", "a different workflow now has this name")
+		return
+	}
+	if k8s.IsWorkflowTerminal(wf.Object) {
+		s.writeErrorCode(w, http.StatusConflict, "workflow_finished", "the workflow has already finished")
+		return
+	}
+	if current, _, _ := unstructured.NestedString(wf.Object, "spec", "shutdown"); current == "Terminate" || (current == "Stop" && req.Strategy == "Stop") {
+		s.writeJSON(w, WorkflowStopResponse{Shutdown: current})
+		return
+	}
 	if req.ResourceVersion != "" && req.ResourceVersion != wf.GetResourceVersion() {
 		s.writeErrorCode(w, http.StatusConflict, "workflow_changed", "the workflow changed before stopping it; look again")
-		return
-	}
-	if phase, _, _ := unstructured.NestedString(wf.Object, "status", "phase"); workflowFinishedPhases[phase] {
-		s.writeErrorCode(w, http.StatusConflict, "workflow_finished", "the workflow has already finished ("+phase+")")
-		return
-	}
-	if current, _, _ := unstructured.NestedString(wf.Object, "spec", "shutdown"); current == "Terminate" || (current == "Stop" && strategy == "Stop") {
-		s.writeJSON(w, WorkflowStopResponse{Shutdown: current})
 		return
 	}
 	annotations := map[string]any{
@@ -117,14 +104,14 @@ func (s *Server) handleWorkflowStop(w http.ResponseWriter, r *http.Request) {
 	}
 	updated, err := integration.ApplyVersionedMergePatch(r.Context(), client, argoWorkflowGVR, wf, map[string]any{
 		"metadata": map[string]any{"annotations": annotations},
-		"spec":     map[string]any{"shutdown": strategy},
+		"spec":     map[string]any{"shutdown": req.Strategy},
 	})
 	if err != nil {
 		s.writeWorkflowStopError(w, err, namespace, name, "patch")
 		return
 	}
 	shutdown, _, _ := unstructured.NestedString(updated.Object, "spec", "shutdown")
-	if shutdown != strategy {
+	if shutdown != req.Strategy {
 		s.writeError(w, http.StatusUnprocessableEntity, "Kubernetes did not store the requested workflow shutdown strategy")
 		return
 	}
