@@ -136,7 +136,7 @@ func healthyReplicas(volume string, engines []*unstructured.Unstructured, read b
 		engine = active[0]
 	}
 	modes, found, err := unstructured.NestedStringMap(engine.Object, "status", "replicaModeMap")
-	if !found || err != nil {
+	if !found || err != nil || len(modes) == 0 {
 		return nil, ReplicasNoModes
 	}
 	var n int64
