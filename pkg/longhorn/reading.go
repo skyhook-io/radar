@@ -21,7 +21,7 @@ type UseState string
 const (
 	UseBound   UseState = "bound"   // a live PV names the Volume
 	UseNone    UseState = "none"    // every PV was read and none names it
-	UseUnknown UseState = "unknown" // PVs unread, or the Volume's name is not unique among those read
+	UseUnknown UseState = "unknown" // PVs unread, or another Volume anywhere has its name
 )
 
 type ClaimRef struct {
@@ -136,7 +136,7 @@ func healthyReplicas(volume string, engines []*unstructured.Unstructured, read b
 		engine = active[0]
 	}
 	modes, found, err := unstructured.NestedStringMap(engine.Object, "status", "replicaModeMap")
-	if !found || err != nil {
+	if !found || err != nil || len(modes) == 0 {
 		return nil, ReplicasNoModes
 	}
 	var n int64
@@ -156,7 +156,8 @@ func PVHandle(pv *corev1.PersistentVolume) string {
 	return pv.Spec.CSI.VolumeHandle
 }
 
-// UseOf is the Volume's current PV among pvs (all of the cluster's, read).
+// UseOf is the Volume's current PV among pvs, read in full (every PV, or
+// every PV whose handle names it).
 // A claim is named only when the PV is Bound to it and claimReadable allows
 // its namespace.
 func UseOf(volume string, pvs []*corev1.PersistentVolume, claimReadable func(namespace string) bool) VolumeUse {

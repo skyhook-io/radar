@@ -29,6 +29,7 @@ func TestHealthyReplicas(t *testing.T) {
 		{"migrating, one active", []*unstructured.Unstructured{engine("v", false, map[string]any{"a": "RW"}), engine("v", true, rw)}, true, 2, ""},
 		{"migrating, none active", []*unstructured.Unstructured{engine("v", false, rw), engine("v", false, rw)}, true, 0, ReplicasEngineAmbiguous},
 		{"stopped engine", []*unstructured.Unstructured{engine("v", true, nil)}, true, 0, ReplicasNoModes},
+		{"empty modes", []*unstructured.Unstructured{engine("v", true, map[string]any{})}, true, 0, ReplicasNoModes},
 		{"no engine", nil, true, 0, ReplicasNoEngine},
 		{"engines unread", []*unstructured.Unstructured{engine("v", true, rw)}, false, 0, ReplicasEngineUnread},
 	} {

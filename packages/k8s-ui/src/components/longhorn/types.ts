@@ -16,7 +16,7 @@ export type LonghornVolumeHealth = 'healthy' | 'degraded' | 'faulted' | 'detache
 
 /** pkg/longhorn VolumeUse: the PV a Volume backs now, proven by the live PV. */
 export interface LonghornVolumeUse {
-  /** unknown: PVs unread, or the Volume's name is not unique among those read. */
+  /** unknown: PVs unread, or another Volume anywhere has its name. */
   state: 'bound' | 'none' | 'unknown'
   persistentVolume?: string
   claim?: { namespace: string; name: string }

@@ -5,8 +5,8 @@
 ## Scope and access
 
 - The namespace picker is not applied: Longhorn keeps its objects in its own namespace (usually `longhorn-system`), while the picker selects application namespaces. `--namespace-scope` still bounds the read (`forcedNamespace`).
-- Volumes and Engines are each authorized on the caller's own `list` access. A caller without the cluster-wide list is checked only in the namespaces where Radar holds Longhorn objects, and its read is always `partial`, so the answer never shows whether those namespaces held more. No namespace the caller did not name is reported as denied.
-- PVs are read only when the caller may list them cluster-wide, and only when some Volume was read. A PV's claim is named only to a caller who may list PVCs in the claim's namespace.
+- Volumes and Engines are each authorized on the caller's own `list` access. A caller without the cluster-wide list is checked only in the namespaces where Radar holds Longhorn objects, and its read is always `partial`, so the answer never shows whether those namespaces held more. Until Radar has read where it holds them, such a caller's kinds read `syncing` (or `uncached` when Radar can't read them), not `denied`. No namespace the caller did not name is reported as denied.
+- PVs are read only when the caller may list them cluster-wide, and only when some Volume was read. A PV's claim is named only to a caller who may list PVCs in the claim's namespace. A cluster switch during the read answers 503, so nothing read from one cluster is served with checks made on another.
 
 ## Values and their sources
 
@@ -21,7 +21,7 @@
 | `actualSize` | `status.actualSize` | absent |
 | `numberOfReplicas` | `spec.numberOfReplicas`, the requested count | absent |
 | `healthyReplicas` | the Volume's Engine (`spec.volumeName`; while it migrates, the one with `spec.active`): replicas in `status.replicaModeMap` with mode `RW` | `null`, never the requested count; `healthyReplicasUnknown` says why: `engineUnread` (no Engine access in that namespace), `noEngine`, `engineAmbiguous`, `noModes` (the Engine reports none, as when it is stopped) |
-| `use.persistentVolume` | the live PV whose `spec.csi.driver` is `driver.longhorn.io` and `volumeHandle` is the Volume's name, never `status.kubernetesStatus` | `use.state: unknown` when the PVs weren't read, the Volume's name is shared by another Volume read, or several PVs name it; `none` only when every PV was read and none names it |
+| `use.persistentVolume` | the live PV whose `spec.csi.driver` is `driver.longhorn.io` and `volumeHandle` is the Volume's name, never `status.kubernetesStatus` | `use.state: unknown` when the PVs weren't read, another Volume in any namespace shares the Volume's name (counted with Radar's own identity, so a Volume the caller can't see counts too, and unknown while Radar hasn't read them all), or several PVs name it; `none` only when every PV was read and none names it |
 | `use.claim` | the PV's `spec.claimRef`, while the PV is `Bound` | absent when the PV isn't Bound; `claimWithheld: true` when the caller can't list PVCs in its namespace |
 | `issues`, `issueTotal` | the Issues engine's Longhorn rules over the Volumes read: faulted is critical, degraded a warning whose `first_seen` is `lastDegradedAt` | only Volumes the caller read raise rows; `first_seen` is absent when the onset isn't recorded. The first 100 are returned, `issueTotal` counts all |
 

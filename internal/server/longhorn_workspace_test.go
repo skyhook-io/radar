@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -11,6 +12,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	integration "github.com/skyhook-io/radar/internal/integration"
@@ -241,5 +245,85 @@ func TestLonghornWorkspace_UnreadEnginesPVsAndClaims(t *testing.T) {
 	}
 	if b := lhVolume(got, "longhorn-system", "pvc-b"); b == nil || b.Use.PersistentVolume != "pv-b" || b.Use.Claim != nil || !b.Use.ClaimWithheld {
 		t.Errorf("pvc-b use %+v, want the PV named and its claim withheld", b)
+	}
+}
+
+// A PV's handle names no namespace: a Volume whose name another Volume shares
+// in a namespace the caller can't read is not proven to back the PV.
+func TestLonghornWorkspace_NameSharedOutsideTheCallersRead(t *testing.T) {
+	objs := append(longhornWorkspaceFixture(), lhObj("Volume", "other-lh", "pvc-b", map[string]any{}, map[string]any{"robustness": "healthy"}))
+	seedSyncedCNPGWorkspace(t, longhornWorkspaceTestKinds, objs...)
+	seedLonghornPVs(t)
+	env := newAuthTestServer(t)
+	lhUser(env, "one-ns", false, false, true, "app", "tenant")
+	perms := env.srv.permCache.Get("one-ns", nil)
+	allow(perms, longhornpkg.Group, "volumes", "longhorn-system", true)
+	got := decodeLonghornWorkspace(t, env.authGet(t, "/api/longhorn/workspace", "one-ns", ""))
+	if b := lhVolume(got, "longhorn-system", "pvc-b"); b == nil || b.Use.State != longhornpkg.UseUnknown || b.Use.PersistentVolume != "" || b.Use.Claim != nil {
+		t.Errorf("pvc-b use %+v, want unknown: another Volume has its name", b)
+	}
+	if a := lhVolume(got, "longhorn-system", "pvc-a"); a == nil || a.Use.State != longhornpkg.UseBound || a.Use.PersistentVolume != "pv-a" {
+		t.Errorf("pvc-a use %+v, want pv-a", a)
+	}
+}
+
+// While Radar's Longhorn watches haven't synced, a caller limited to
+// namespaces reads syncing, never denied: where Longhorn is installed is not
+// known yet, not empty.
+func TestLonghornWorkspace_NamespaceCallerWhileUnsynced(t *testing.T) {
+	previousWait := dynamicSyncWait
+	dynamicSyncWait = 200 * time.Millisecond
+	t.Cleanup(func() { dynamicSyncWait = previousWait })
+	listKinds := map[schema.GroupVersionResource]string{}
+	for _, k := range longhornWorkspaceTestKinds {
+		listKinds[schema.GroupVersionResource{Group: k.Group, Version: k.Version, Resource: k.Name}] = k.Kind + "List"
+	}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	dyn.PrependReactor("list", "*", func(k8stesting.Action) (bool, runtime.Object, error) {
+		<-release
+		return false, nil, nil
+	})
+	if err := k8s.InitTestDynamicResourceCache(dyn, longhornWorkspaceTestKinds); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	env := newAuthTestServer(t)
+	lhUser(env, "one-ns", false, false, true)
+	allow(env.srv.permCache.Get("one-ns", nil), longhornpkg.Group, "volumes", "longhorn-system", true)
+	got := decodeLonghornWorkspace(t, env.authGet(t, "/api/longhorn/workspace", "one-ns", ""))
+	if cov := got.Coverage["volumes"]; cov.State != integration.KindCoverageSyncing {
+		t.Errorf("volumes coverage %+v, want syncing", cov)
+	}
+}
+
+// A switch while the workspace is read serves nothing from the old cluster:
+// its PVs and claim checks may already have run against the new one.
+func TestLonghornWorkspace_SwitchDuringReadServesNothing(t *testing.T) {
+	listKinds := map[schema.GroupVersionResource]string{}
+	for _, k := range longhornWorkspaceTestKinds {
+		listKinds[schema.GroupVersionResource{Group: k.Group, Version: k.Version, Resource: k.Name}] = k.Kind + "List"
+	}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds, longhornWorkspaceFixture()...)
+	var switched atomic.Bool
+	dyn.PrependReactor("list", "engines", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if !switched.Swap(true) {
+			k8s.CancelOngoingOperations()
+		}
+		return false, nil, nil
+	})
+	if err := k8s.InitTestDynamicResourceCache(dyn, longhornWorkspaceTestKinds); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	seedLonghornPVs(t)
+	resp, err := http.Get(testServer.URL + "/api/longhorn/workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if !switched.Load() || resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("switched=%v status=%d, want 503", switched.Load(), resp.StatusCode)
 	}
 }
