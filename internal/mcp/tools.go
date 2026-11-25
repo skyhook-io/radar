@@ -567,7 +567,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"Empty results include a bounded list of related active metric names when a metric family can be inferred. " +
 			"High-cardinality queries must be wrapped in topk(5, ...): oversized results return a " +
 			"summary with a suggested rewrite instead of data. " +
-			"Only OpenObserve gets the cluster filter added; in other multi-cluster stores filter by cluster label.",
+			"OpenObserve is cluster-scoped; elsewhere filter by cluster label.",
 		Annotations: readOnly,
 	}, logToolCall("query_prometheus", handleQueryPrometheus))
 
