@@ -214,7 +214,11 @@ Applications builds no graph: its rows come from ownership and one request-local
 The drawer characterization pins the family answer. Its [accepted differences](../pkg/topology/testdata/characterization/drawer-relationships.md)
 explain every changed class, including the hand-made Crossplane claim/XR fixture without a backlink. New relations
 belong in a family with its field disposition and coverage, then in the family inventory and projection tests; adding
-a display edge alone does not add a drawer or agent relationship.
+a display edge alone does not add a drawer or agent relationship. The Topology screen draws a new family's edges
+through `drawFamilies` in `pkg/topology/builder.go` instead of reading the spec again. `TestDisplayEdgesAreFamilyAnswers`
+fails when a drawn edge has no family answer with the same type and direction, or when a family answer on its fixture
+isn't drawn. Older display edges still come from the builder's own parsing, where the screen deliberately differs from
+Related Resources (selector elision, name-based owners, GitOps destinations and similar); its exceptions list says which.
 
 The cache-source conformance tests check `Indexed` and both answers against the brute-force `Scan` of generated
 worlds whose objects declare references (`ownershiptest.Object.Declares`), and through histories of changes.
