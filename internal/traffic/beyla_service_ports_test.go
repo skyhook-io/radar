@@ -158,3 +158,60 @@ func TestWarningSaysPortsComeFromServices(t *testing.T) {
 		t.Errorf("the dst.port advice stays for edges still at port 0: %s", w)
 	}
 }
+
+func TestInferServicePortsObservedHTTPPorts(t *testing.T) {
+	lookup := lookupFrom(map[string][]int{
+		"shop/web|":    {9000},
+		"shop/web|udp": {5353},
+	})
+	l7 := func(port int) Flow { return Flow{Destination: Endpoint{Name: "web", Namespace: "shop"}, Port: port} }
+
+	tcp := portFlow("shop", "web", "Workload", "tcp")
+	udp := portFlow("shop", "web", "Workload", "udp")
+	svc := portFlow("shop", "web", "Service", "tcp")
+	inferServicePorts([]*Flow{tcp, udp, svc}, []Flow{l7(8080)}, true, lookupFrom(map[string][]int{
+		"shop/web|udp": {5353}, "shop/web|tcp": {80},
+	}))
+	if tcp.Port != 8080 || tcp.PortSource != "" {
+		t.Errorf("TCP edge takes the observed HTTP port: got %d/%q", tcp.Port, tcp.PortSource)
+	}
+	if udp.Port != 5353 || udp.PortSource != PortSourceService {
+		t.Errorf("HTTP is TCP; the UDP edge keeps its Service port: got %d/%q", udp.Port, udp.PortSource)
+	}
+	if svc.Port != 80 || svc.PortSource != PortSourceService {
+		t.Errorf("a Service of the same name is not the workload serving HTTP: got %d/%q", svc.Port, svc.PortSource)
+	}
+
+	several := portFlow("shop", "web", "Workload", "tcp")
+	inferServicePorts([]*Flow{several}, []Flow{l7(8080), l7(8443)}, false, lookup)
+	if several.Port != 0 || several.PortSource != "" {
+		t.Errorf("several observed HTTP ports: no Service port may stand in for them, got %d/%q", several.Port, several.PortSource)
+	}
+}
+
+func TestInferServicePortsLooksUpEachDestinationOnce(t *testing.T) {
+	calls := 0
+	lookup := func(string, string, string, string) ([]int, bool) { calls++; return []int{5432}, true }
+	flows := []*Flow{portFlow("shop", "db", "Workload", "tcp"), portFlow("shop", "db", "Workload", "tcp")}
+	flows[1].Source.Name = "worker"
+	inferServicePorts(flows, nil, false, lookup)
+	if calls != 1 {
+		t.Errorf("lookups = %d, want 1 for two callers of one destination", calls)
+	}
+}
+
+func TestTemplateKindsFollowTheDestinationKind(t *testing.T) {
+	if got := templateKinds(EndpointKindPod); len(got) != 1 || got[0] != "Pod" {
+		t.Errorf("a Pod destination is looked up as a Pod only: %v", got)
+	}
+	got := templateKinds(EndpointKindWorkload)
+	want := map[string]bool{"Deployment": true, "StatefulSet": true, "DaemonSet": true, "ReplicaSet": true}
+	if len(got) != len(want) {
+		t.Fatalf("workload kinds = %v", got)
+	}
+	for _, k := range got {
+		if !want[k] {
+			t.Errorf("unexpected kind %q", k)
+		}
+	}
+}

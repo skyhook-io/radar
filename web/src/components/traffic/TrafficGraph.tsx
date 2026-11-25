@@ -16,7 +16,7 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import type { ELK } from 'elkjs/lib/elk.bundled.js'
-import type { AggregatedFlow } from '../../types'
+import type { AggregatedFlow, TrafficPortSource } from '../../types'
 import { clsx } from 'clsx'
 import { X, ArrowRight, Globe, Server, Activity, Puzzle, Crosshair } from 'lucide-react'
 import { GraphExportButton, MiddleEllipsis, PaneLoader } from '@skyhook-io/k8s-ui'
@@ -157,8 +157,8 @@ function StatusDistributionBar({ counts }: { counts: Record<string, number> }) {
 interface PortInfo {
   port: number
   connections: number
-  /** Every edge on this port took it from a Service rather than observing it. */
-  fromService?: boolean
+  /** Set when no edge observed this port: taken from a Service, or, on port 0, several Service ports. */
+  portSource?: TrafficPortSource
 }
 
 interface TrafficNodeData extends Record<string, unknown> {
@@ -303,15 +303,15 @@ export function TrafficNode({ data }: { data: TrafficNodeData }) {
         </div>
       )}
       {/* Ports section */}
-      {data.ports && data.ports.filter(p => p.port !== 0).length > 0 && (
+      {data.ports && data.ports.filter(p => portLabel(p.port, p.portSource) !== null).length > 0 && (
         <div className="mt-1.5 space-y-0.5">
-          {data.ports.filter(p => p.port !== 0).slice(0, MAX_VISIBLE_PORTS).map((portInfo) => (
+          {data.ports.filter(p => portLabel(p.port, p.portSource) !== null).slice(0, MAX_VISIBLE_PORTS).map((portInfo) => (
             <div key={portInfo.port} className="flex items-center justify-between gap-1 text-xs">
               <span className={clsx(
                 'font-mono',
                 (hasNamespaceColor || isAddonNode) ? 'text-cyan-300' : 'text-blue-600 dark:text-blue-300'
               )}>
-                :{portLabel(portInfo.port, portInfo.fromService ? 'service' : undefined)}
+                :{portLabel(portInfo.port, portInfo.portSource)}
               </span>
               {/* A port serving traffic with no HTTP has no request rate to show, and
                   "0" beside the port reads as an idle port rather than an unmeasured
@@ -330,18 +330,18 @@ export function TrafficNode({ data }: { data: TrafficNodeData }) {
               )}
             </div>
           ))}
-          {data.ports.filter(p => p.port !== 0).length > MAX_VISIBLE_PORTS && (
+          {data.ports.filter(p => portLabel(p.port, p.portSource) !== null).length > MAX_VISIBLE_PORTS && (
             <div className={clsx(
               'text-xs',
               (hasNamespaceColor || isAddonNode) ? 'text-white/50' : 'text-theme-text-tertiary'
             )}>
-              +{data.ports.filter(p => p.port !== 0).length - MAX_VISIBLE_PORTS} more
+              +{data.ports.filter(p => portLabel(p.port, p.portSource) !== null).length - MAX_VISIBLE_PORTS} more
             </div>
           )}
         </div>
       )}
       {/* Total connections (only if no ports shown, or all ports are 0) */}
-      {(!data.ports || data.ports.filter(p => p.port !== 0).length === 0) && data.totalConnections != null && data.totalConnections > 0 && (
+      {(!data.ports || data.ports.filter(p => portLabel(p.port, p.portSource) !== null).length === 0) && data.totalConnections != null && data.totalConnections > 0 && (
         <div className="mt-1">
           <span className={clsx(
             'text-xs truncate',
@@ -1197,6 +1197,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
     // Track primary port for each node (most common destination port)
     const nodePorts = new Map<string, Map<number, number>>() // nodeId -> port -> connection count
     const observedPorts = new Set<string>() // `${nodeId}|${port}` seen on an edge that observed it
+    const multiplePorts = new Set<string>() // nodes an edge reached on several possible Service ports
 
     // Count connections per node
     flows.forEach((flow) => {
@@ -1222,6 +1223,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
         const portCounts = nodePorts.get(destId)!
         portCounts.set(flow.port, (portCounts.get(flow.port) || 0) + volume)
         if (!flow.portSource) observedPorts.add(`${destId}|${flow.port}`)
+        if (flow.portSource === 'serviceMultiple') multiplePorts.add(destId)
         if (flow.connections >= hotPathThreshold && hotPathThreshold > 0) hotNodes.add(destId)
       }
     })
@@ -1232,7 +1234,10 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
       if (!ports || ports.size === 0) return []
       const portList: PortInfo[] = []
       ports.forEach((connections, port) => {
-        portList.push({ port, connections, ...(!observedPorts.has(`${nodeId}|${port}`) && { fromService: true }) })
+        const portSource: TrafficPortSource | undefined = port === 0
+          ? (multiplePorts.has(nodeId) ? 'serviceMultiple' : undefined)
+          : (observedPorts.has(`${nodeId}|${port}`) ? undefined : 'service')
+        portList.push({ port, connections, ...(portSource && { portSource }) })
       })
       // Sort by connection count descending
       return portList.sort((a, b) => b.connections - a.connections)

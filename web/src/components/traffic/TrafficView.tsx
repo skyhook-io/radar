@@ -898,6 +898,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
         if (existing) {
           mergeFlowVolume(existing, flow)
           mergeRawPairs(existing, flow)
+          mergeEdgePortInto(existing, flow)
         } else {
           // Create new "Internet" → destination flow
           internetFlowsMap.set(destKey, {

@@ -85,6 +85,7 @@ func AggregateFlows(flows []Flow) []AggregatedFlow {
 		}
 
 		agg := acc.agg
+		agg.PortSource = mergedPortSource(agg.PortSource, f.PortSource, agg.FlowCount == 0)
 		agg.FlowCount++
 		agg.BytesSent += f.BytesSent
 		agg.BytesRecv += f.BytesRecv
@@ -348,4 +349,21 @@ func DefaultFlowOptions() FlowOptions {
 		Since: 5 * time.Minute,
 		Limit: 1000,
 	}
+}
+
+// mergedPortSource reconciles the markings of flows sharing one port, so the
+// answer does not depend on their order: on port 0 any "multiple" wins, and on
+// a real port an observed flow outranks the same number from a Service.
+func mergedPortSource(current, next string, first bool) string {
+	switch {
+	case first:
+		return next
+	case next == PortSourceServiceMultiple:
+		return next
+	case current == PortSourceServiceMultiple:
+		return current
+	case next == "" || current == "":
+		return ""
+	}
+	return current
 }

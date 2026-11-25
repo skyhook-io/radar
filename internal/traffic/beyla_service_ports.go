@@ -21,7 +21,8 @@ type servicePortLookup func(namespace, name, kind, protocol string) (ports []int
 // inferServicePorts gives port-0 edges a port when Beyla exports no dst_port.
 // Without dst_port every edge reads as port 0; the destination's Services say
 // which port it serves, but that is declared, not observed, so the edge is
-// marked as taken from the Service. An HTTP server_port is observed and wins.
+// marked as taken from the Service. A workload's HTTP server_port is observed
+// and wins on its TCP edges; with several of them no single port is claimed.
 // Returns how many edges got a Service port, for the warning.
 func inferServicePorts(flows []*Flow, l7Flows []Flow, byTransport bool, lookup servicePortLookup) int {
 	l7Ports := make(map[dstKey]map[int]bool)
@@ -36,6 +37,13 @@ func inferServicePorts(flows []*Flow, l7Flows []Flow, byTransport bool, lookup s
 		l7Ports[key][f.Port] = true
 	}
 
+	type lookupKey struct{ ns, name, kind, protocol string }
+	type answer struct {
+		ports    []int
+		complete bool
+	}
+	answers := make(map[lookupKey]answer)
+
 	inferred := 0
 	for _, f := range flows {
 		d := f.Destination
@@ -45,22 +53,33 @@ func inferServicePorts(flows []*Flow, l7Flows []Flow, byTransport bool, lookup s
 			(d.Kind != EndpointKindWorkload && d.Kind != EndpointKindPod && d.Kind != "Service") {
 			continue
 		}
-		if ports := l7Ports[dstKey{d.Namespace, d.Name}]; len(ports) == 1 {
-			for p := range ports {
-				f.Port = p
+		// The HTTP metric names the serving workload, not a Service of the same
+		// name, and HTTP rides on TCP.
+		if d.Kind != "Service" && f.Protocol == "tcp" {
+			if ports := l7Ports[dstKey{d.Namespace, d.Name}]; len(ports) == 1 {
+				for p := range ports {
+					f.Port = p
+				}
+				continue
+			} else if len(ports) > 1 {
+				continue
 			}
-			continue
 		}
 		protocol := ""
 		if byTransport {
 			protocol = f.Protocol
 		}
-		ports, complete := lookup(d.Namespace, d.Name, d.Kind, protocol)
+		key := lookupKey{d.Namespace, d.Name, d.Kind, protocol}
+		a, ok := answers[key]
+		if !ok {
+			a.ports, a.complete = lookup(d.Namespace, d.Name, d.Kind, protocol)
+			answers[key] = a
+		}
 		switch {
-		case len(ports) == 0:
+		case len(a.ports) == 0:
 			continue
-		case len(ports) == 1 && complete:
-			f.Port, f.PortSource = ports[0], PortSourceService
+		case len(a.ports) == 1 && a.complete:
+			f.Port, f.PortSource = a.ports[0], PortSourceService
 		default:
 			f.PortSource = PortSourceServiceMultiple
 		}
@@ -69,9 +88,18 @@ func inferServicePorts(flows []*Flow, l7Flows []Flow, byTransport bool, lookup s
 	return inferred
 }
 
+// templateKinds are the kinds a Beyla destination name can belong to. Beyla
+// names a pod by its top owner, so a workload is one of the controllers; a Pod
+// destination is a bare Pod and nothing else.
+func templateKinds(kind string) []string {
+	if kind == EndpointKindPod {
+		return []string{"Pod"}
+	}
+	return []string{"Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"}
+}
+
 // cachedServicePorts reads the destination's pod template and its namespace's
-// Services from Radar's cache. Beyla names a pod by its top owner, so the name
-// is looked up as a Deployment, StatefulSet, DaemonSet or bare Pod.
+// Services from Radar's cache.
 func cachedServicePorts(namespace, workload, kind, protocol string) ([]int, bool) {
 	cache := k8s.GetResourceCache()
 	if cache == nil || cache.Services() == nil {
@@ -85,24 +113,38 @@ func cachedServicePorts(namespace, workload, kind, protocol string) ([]int, bool
 		return servicePorts(svc, protocol), true
 	}
 	var found []*corev1.PodTemplateSpec
-	if l := cache.Deployments(); l != nil {
-		if d, err := l.Deployments(namespace).Get(workload); err == nil {
-			found = append(found, &d.Spec.Template)
-		}
-	}
-	if l := cache.StatefulSets(); l != nil {
-		if s, err := l.StatefulSets(namespace).Get(workload); err == nil {
-			found = append(found, &s.Spec.Template)
-		}
-	}
-	if l := cache.DaemonSets(); l != nil {
-		if d, err := l.DaemonSets(namespace).Get(workload); err == nil {
-			found = append(found, &d.Spec.Template)
-		}
-	}
-	if l := cache.Pods(); l != nil {
-		if p, err := l.Pods(namespace).Get(workload); err == nil {
-			found = append(found, &corev1.PodTemplateSpec{ObjectMeta: p.ObjectMeta, Spec: p.Spec})
+	for _, k := range templateKinds(kind) {
+		switch k {
+		case "Deployment":
+			if l := cache.Deployments(); l != nil {
+				if d, err := l.Deployments(namespace).Get(workload); err == nil {
+					found = append(found, &d.Spec.Template)
+				}
+			}
+		case "StatefulSet":
+			if l := cache.StatefulSets(); l != nil {
+				if s, err := l.StatefulSets(namespace).Get(workload); err == nil {
+					found = append(found, &s.Spec.Template)
+				}
+			}
+		case "DaemonSet":
+			if l := cache.DaemonSets(); l != nil {
+				if d, err := l.DaemonSets(namespace).Get(workload); err == nil {
+					found = append(found, &d.Spec.Template)
+				}
+			}
+		case "ReplicaSet":
+			if l := cache.ReplicaSets(); l != nil {
+				if r, err := l.ReplicaSets(namespace).Get(workload); err == nil {
+					found = append(found, &r.Spec.Template)
+				}
+			}
+		case "Pod":
+			if l := cache.Pods(); l != nil {
+				if p, err := l.Pods(namespace).Get(workload); err == nil {
+					found = append(found, &corev1.PodTemplateSpec{ObjectMeta: p.ObjectMeta, Spec: p.Spec})
+				}
+			}
 		}
 	}
 	tmpl, ok := onlyTemplate(found...)
