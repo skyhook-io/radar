@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	restartpatch "github.com/skyhook-io/radar/pkg/internal/workloadrestart"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/rollouts"
 	"github.com/skyhook-io/radar/pkg/workloadrestart"
@@ -50,6 +49,6 @@ func (m *WorkloadManager) RestartReviewedWorkload(ctx context.Context, kind, nam
 		}
 		return nil
 	}
-	return restartpatch.Apply(ctx, m.dynClient.Resource(gvr).Namespace(namespace), name, review, validate,
+	return workloadrestart.Apply(ctx, m.dynClient.Resource(gvr).Namespace(namespace), name, review, validate,
 		time.Now(), time.RFC3339Nano, "spec", "template", "metadata", "annotations", "kubectl.kubernetes.io/restartedAt")
 }

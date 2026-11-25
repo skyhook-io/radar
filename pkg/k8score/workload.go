@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	restartpatch "github.com/skyhook-io/radar/pkg/internal/workloadrestart"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/workloadrestart"
 
@@ -963,7 +962,7 @@ func (m *WorkloadManager) RestartWorkloadWithResult(ctx context.Context, kind, n
 		return workloadrestart.Result{}, fmt.Errorf("failed to restart workload: %w", err)
 	}
 
-	return restartpatch.PatchResult(deployment, updated, restartTime, "spec", "template", "metadata", "annotations", "kubectl.kubernetes.io/restartedAt"), nil
+	return workloadrestart.PatchResult(deployment, updated, restartTime, "spec", "template", "metadata", "annotations", "kubectl.kubernetes.io/restartedAt"), nil
 }
 
 // SetDeploymentPaused sets spec.paused on a Deployment, as kubectl rollout pause

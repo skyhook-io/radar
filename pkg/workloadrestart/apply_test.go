@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/skyhook-io/radar/pkg/workloadrestart"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -14,7 +13,7 @@ import (
 func TestApplyRequiresCheckAndMarkerPath(t *testing.T) {
 	client := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
 	resource := client.Resource(schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}).Namespace("prod")
-	review := workloadrestart.Preconditions{UID: "uid"}
+	review := Preconditions{UID: "uid"}
 	for _, tc := range []struct {
 		name  string
 		check func(*unstructured.Unstructured) error
@@ -42,7 +41,7 @@ func TestApplyReadsPreviousMarkerWithItsLayout(t *testing.T) {
 	resource := client.Resource(schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}).Namespace("prod")
 	check := func(*unstructured.Unstructured) error { return nil }
 	at := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
-	got, err := Apply(t.Context(), resource, "web", workloadrestart.Preconditions{UID: obj.GetUID()}, check, at, time.DateTime, "spec", "marker")
+	got, err := Apply(t.Context(), resource, "web", Preconditions{UID: obj.GetUID()}, check, at, time.DateTime, "spec", "marker")
 	if err != nil || got.Changed || got.RestartedAt != previous || len(client.Actions()) != 1 || client.Actions()[0].GetVerb() != "get" {
 		t.Fatalf("result = %+v, error = %v, Kubernetes requests = %v", got, err, client.Actions())
 	}

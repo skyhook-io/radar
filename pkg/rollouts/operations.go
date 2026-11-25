@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	restartpatch "github.com/skyhook-io/radar/pkg/internal/workloadrestart"
 	"github.com/skyhook-io/radar/pkg/workloadrestart"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -398,7 +397,7 @@ func RestartWithResult(ctx context.Context, client dynamic.Interface, namespace,
 	if err != nil {
 		return workloadrestart.Result{}, fmt.Errorf("failed to restart Rollout: %w", err)
 	}
-	return restartpatch.PatchResult(ro, updated, restartAt, "spec", RestartAtField), nil
+	return workloadrestart.PatchResult(ro, updated, restartAt, "spec", RestartAtField), nil
 }
 
 // RestartReviewed only sets spec.restartAt on the reviewed, non-terminating Rollout.
@@ -410,6 +409,6 @@ func restartReviewed(ctx context.Context, client dynamic.Interface, namespace, n
 	validate := func(ro *unstructured.Unstructured) error {
 		return assertNotTerminating(ro, namespace, name)
 	}
-	return restartpatch.Apply(ctx, client.Resource(GVR).Namespace(namespace), name, review, validate,
+	return workloadrestart.Apply(ctx, client.Resource(GVR).Namespace(namespace), name, review, validate,
 		at, time.RFC3339, "spec", RestartAtField)
 }

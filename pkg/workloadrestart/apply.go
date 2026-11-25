@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/skyhook-io/radar/pkg/workloadrestart"
-
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -20,9 +18,9 @@ import (
 // PatchResult reports the marker admission returned. An unconditional StatefulSet
 // or DaemonSet restart only requires patch permission, so it has no prior marker
 // to compare. In that case Changed reports whether the patch stored its marker.
-func PatchResult(before, after *unstructured.Unstructured, requested string, path ...string) workloadrestart.Result {
+func PatchResult(before, after *unstructured.Unstructured, requested string, path ...string) Result {
 	stored, _, _ := unstructured.NestedString(after.Object, path...)
-	result := workloadrestart.Result{RestartedAt: stored, Changed: stored == requested}
+	result := Result{RestartedAt: stored, Changed: stored == requested}
 	if before != nil {
 		previous, _, _ := unstructured.NestedString(before.Object, path...)
 		result.Changed = result.Changed && previous != stored
@@ -32,42 +30,42 @@ func PatchResult(before, after *unstructured.Unstructured, requested string, pat
 
 // Apply checks the reviewed identity and the workload's update behavior on each
 // attempt. On ErrNotStored the result carries the marker returned by admission.
-func Apply(ctx context.Context, resource dynamic.ResourceInterface, name string, review workloadrestart.Preconditions, check func(*unstructured.Unstructured) error, at time.Time, layout string, path ...string) (workloadrestart.Result, error) {
+func Apply(ctx context.Context, resource dynamic.ResourceInterface, name string, review Preconditions, check func(*unstructured.Unstructured) error, at time.Time, layout string, path ...string) (Result, error) {
 	if review.UID == "" {
-		return workloadrestart.Result{}, errors.New("a reviewed workload UID is required")
+		return Result{}, errors.New("a reviewed workload UID is required")
 	}
 	if check == nil {
-		return workloadrestart.Result{}, errors.New("a workload applicability check is required")
+		return Result{}, errors.New("a workload applicability check is required")
 	}
 	if len(path) == 0 {
-		return workloadrestart.Result{}, errors.New("a restart marker path is required")
+		return Result{}, errors.New("a restart marker path is required")
 	}
 	marker := at.UTC().Format(layout)
 	const maxAttempts = 4
 	obj, err := resource.Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
-		return workloadrestart.Result{}, err
+		return Result{}, err
 	}
 	for attempt := 1; ; attempt++ {
 		version := obj.GetResourceVersion()
 		if obj.GetUID() != review.UID || (review.ResourceVersion != "" && version != review.ResourceVersion) {
-			return workloadrestart.Result{}, workloadrestart.ErrChanged
+			return Result{}, ErrChanged
 		}
 		if err := check(obj); err != nil {
-			return workloadrestart.Result{}, err
+			return Result{}, err
 		}
 		previous, _, _ := unstructured.NestedString(obj.Object, path...)
 		// A later Rollout cutoff also covers pods older than the requested marker.
 		if t, err := time.Parse(layout, previous); err == nil && (t.UTC().Format(layout) == marker || (obj.GetKind() == "Rollout" && t.After(at))) {
-			return workloadrestart.Result{RestartedAt: previous}, nil
+			return Result{RestartedAt: previous}, nil
 		}
 		patch := map[string]any{"metadata": map[string]any{"uid": string(review.UID), "resourceVersion": version}}
 		if err := unstructured.SetNestedField(patch, marker, path...); err != nil {
-			return workloadrestart.Result{}, err
+			return Result{}, err
 		}
 		body, err := json.Marshal(patch)
 		if err != nil {
-			return workloadrestart.Result{}, err
+			return Result{}, err
 		}
 		updated, err := resource.Patch(ctx, name, types.MergePatchType, body, metav1.PatchOptions{})
 		if apierrors.IsConflict(err) {
@@ -75,29 +73,29 @@ func Apply(ctx context.Context, resource dynamic.ResourceInterface, name string,
 			// refusal on the same version from a concurrent workload update.
 			latest, readErr := resource.Get(ctx, name, metav1.GetOptions{})
 			if readErr != nil {
-				return workloadrestart.Result{}, readErr
+				return Result{}, readErr
 			}
 			if latest.GetUID() != review.UID {
-				return workloadrestart.Result{}, workloadrestart.ErrChanged
+				return Result{}, ErrChanged
 			}
 			if latest.GetResourceVersion() == version {
-				return workloadrestart.Result{}, err
+				return Result{}, err
 			}
 			if review.ResourceVersion != "" || attempt == maxAttempts {
-				return workloadrestart.Result{}, workloadrestart.ErrChanged
+				return Result{}, ErrChanged
 			}
 			obj = latest
 			continue
 		}
 		if err != nil {
 			if isImmutableUID(err) {
-				return workloadrestart.Result{}, workloadrestart.ErrChanged
+				return Result{}, ErrChanged
 			}
-			return workloadrestart.Result{}, err
+			return Result{}, err
 		}
 		result := PatchResult(obj, updated, marker, path...)
 		if result.RestartedAt != marker {
-			return result, fmt.Errorf("%w (stored %q)", workloadrestart.ErrNotStored, result.RestartedAt)
+			return result, fmt.Errorf("%w (stored %q)", ErrNotStored, result.RestartedAt)
 		}
 		return result, nil
 	}
