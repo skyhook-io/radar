@@ -223,17 +223,16 @@ function appliedLabel(summary: GitOpsInsightSummary): string {
   return short
 }
 
-// fluxNextRunMinutes estimates a Kustomization's next run from its last run
-// and interval; after a failed apply Flux retries on retryInterval, which
-// defaults to interval. HelmRelease history records deploys, not runs.
+// fluxNextRunMinutes estimates a Kustomization's next run from its last
+// successful apply and interval. The server sends the interval only while the
+// latest reconcile succeeded: after a failure Flux retries on other timers.
+// HelmRelease history records deploys, not runs.
 function fluxNextRunMinutes(summary: GitOpsInsightSummary): number | null {
   if (summary.kind !== 'Kustomization' || summary.autoSyncMode === 'Suspended') return null
-  const applied = Date.parse(summary.lastApplied || '')
+  const last = Date.parse(summary.lastApplied || '')
   const attempt = Date.parse(summary.lastApplyAttempt || '')
-  const failedLast = Number.isFinite(attempt) && !(applied >= attempt)
-  const last = failedLast ? attempt : applied
-  const interval = (failedLast && summary.retryInterval) || summary.interval
-  const seconds = interval ? parseInterval(interval) : null
+  if (Number.isFinite(attempt) && !(last >= attempt)) return null
+  const seconds = summary.interval ? parseInterval(summary.interval) : null
   if (!Number.isFinite(last) || !seconds) return null
   const remaining = last + seconds * 1000 - Date.now()
   return remaining > 0 ? Math.ceil(remaining / 60000) : null

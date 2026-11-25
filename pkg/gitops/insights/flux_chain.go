@@ -12,8 +12,12 @@ import (
 // The tree is already filtered for the caller, so a source they can't read
 // has no node and leaves Pending nil.
 func applyFluxChain(s *Summary, root *unstructured.Unstructured, tree *gitopstree.ResourceTree) {
-	s.Interval, _, _ = unstructured.NestedString(root.Object, "spec", "interval")
-	s.RetryInterval, _, _ = unstructured.NestedString(root.Object, "spec", "retryInterval")
+	// The next-run estimate is anchored on status.history, which a source,
+	// build or dependency failure doesn't update while Flux retries on another
+	// timer. Offer the interval only while the latest reconcile succeeded.
+	if fluxReady(root) {
+		s.Interval, _, _ = unstructured.NestedString(root.Object, "spec", "interval")
+	}
 	// No copy: an inventory can list thousands of entries and only its length is read.
 	raw, _, _ := unstructured.NestedFieldNoCopy(root.Object, "status", "inventory", "entries")
 	if entries, ok := raw.([]any); ok {
@@ -72,4 +76,13 @@ func fluxRevisionsMatch(a, b string) bool {
 		return a[strings.LastIndex(a, "@")+1:] == b[strings.LastIndex(b, "@")+1:]
 	}
 	return a == b
+}
+
+func fluxReady(root *unstructured.Unstructured) bool {
+	for _, c := range conditions(root) {
+		if c.typ == "Ready" {
+			return c.status == "True"
+		}
+	}
+	return false
 }

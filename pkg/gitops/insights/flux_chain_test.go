@@ -36,7 +36,7 @@ func TestFluxChainKustomizationPending(t *testing.T) {
 		"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
 		"metadata": map[string]any{"namespace": "team", "name": "app"},
 		"spec":     map[string]any{"interval": "10m", "sourceRef": map[string]any{"kind": "GitRepository", "name": "repo"}},
-		"status": map[string]any{"lastAppliedRevision": "main@sha1:aaa", "inventory": map[string]any{"entries": []any{
+		"status": map[string]any{"lastAppliedRevision": "main@sha1:aaa", "conditions": []any{map[string]any{"type": "Ready", "status": "True"}}, "inventory": map[string]any{"entries": []any{
 			map[string]any{"id": "team_a__ConfigMap"}, map[string]any{"id": "team_b__ConfigMap"}, map[string]any{"id": "team_c__ConfigMap"}}}},
 	}}
 	tree := &gitopstree.ResourceTree{Nodes: []gitopstree.Node{sourceNode("GitRepository", "repo", "main@sha1:bbb", "2026-11-10T09:00:00Z")}, Summary: gitopstree.Summary{Declared: 7}}
@@ -118,13 +118,28 @@ func TestFluxChainHelmChartWithDigestMatchesChartVersion(t *testing.T) {
 	}
 }
 
-func TestFluxChainCarriesRetryInterval(t *testing.T) {
-	root := &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
-		"metadata": map[string]any{"namespace": "team", "name": "app"},
-		"spec":     map[string]any{"interval": "10m", "retryInterval": "2m"},
-	}}
-	if s := Build(root, nil, nil).Summary; s.RetryInterval != "2m" {
-		t.Fatalf("summary = %+v", s)
+func TestFluxChainIntervalOnlyWhileReady(t *testing.T) {
+	root := func(ready string, reason string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
+			"metadata": map[string]any{"namespace": "team", "name": "app"},
+			"spec":     map[string]any{"interval": "10m", "retryInterval": "2m"},
+			"status": map[string]any{"conditions": []any{
+				map[string]any{"type": "Ready", "status": ready, "reason": reason},
+			}},
+		}}
+	}
+	if s := Build(root("True", "ReconciliationSucceeded"), nil, nil).Summary; s.Interval != "10m" {
+		t.Fatalf("ready: summary = %+v", s)
+	}
+	// A failure before apply adds no history entry, and a dependency wait
+	// requeues on its own timer: the last recorded run says nothing about the next.
+	for _, reason := range []string{"ArtifactFailed", "BuildFailed", "DependencyNotReady", "ReconciliationFailed"} {
+		if s := Build(root("False", reason), nil, nil).Summary; s.Interval != "" {
+			t.Fatalf("%s: interval = %q", reason, s.Interval)
+		}
+	}
+	if s := Build(root("Unknown", "Progressing"), nil, nil).Summary; s.Interval != "" {
+		t.Fatalf("reconciling: interval = %q", s.Interval)
 	}
 }

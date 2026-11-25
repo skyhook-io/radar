@@ -69,8 +69,9 @@ export interface GitOpsInsightSummary {
   sourceFetchedAt?: string
   appliedRevision?: string
   pending?: boolean
+  // Only sent while the latest reconcile succeeded; the next-run estimate
+  // is hidden otherwise.
   interval?: string
-  retryInterval?: string
   objects?: number
   partialReason?: string
   // Human-readable sync mode for the chip in the status strip.

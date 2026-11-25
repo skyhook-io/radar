@@ -63,7 +63,6 @@ type Summary struct {
 	AppliedRevision string `json:"appliedRevision,omitempty"`
 	Pending         *bool  `json:"pending,omitempty"`
 	Interval        string `json:"interval,omitempty"`
-	RetryInterval   string `json:"retryInterval,omitempty"`
 	Objects         int    `json:"objects,omitempty"`
 	PartialReason   string `json:"partialReason,omitempty"`
 	// AutoSyncMode is the human-readable syncPolicy chip label, e.g.
