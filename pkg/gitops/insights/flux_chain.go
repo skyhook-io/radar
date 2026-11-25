@@ -44,8 +44,11 @@ func applyFluxChain(s *Summary, root *unstructured.Unstructured, tree *gitopstre
 			// chart source is an OCI artifact compared by digest.
 			if primary != nil && primary.Kind == "HelmChart" {
 				s.AppliedRevision = deployed.ChartVersion
+				// Only from a HelmRepository is spec.chart a chart name; from a
+				// GitRepository or Bucket it is a path, which says nothing about it.
 				desired, _, _ := unstructured.NestedString(root.Object, "spec", "chart", "spec", "chart")
-				chartSwitched = desired != "" && deployed.ChartName != "" && desired != deployed.ChartName
+				from, _, _ := unstructured.NestedString(root.Object, "spec", "chart", "spec", "sourceRef", "kind")
+				chartSwitched = from == "HelmRepository" && desired != "" && deployed.ChartName != "" && desired != deployed.ChartName
 			} else {
 				s.AppliedRevision = deployed.OCIDigest
 			}

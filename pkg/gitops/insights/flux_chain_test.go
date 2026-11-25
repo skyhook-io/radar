@@ -110,6 +110,12 @@ func TestFluxChainHelmChartSwitchToAnotherChartIsPending(t *testing.T) {
 	if s := Build(root, tree, nil).Summary; s.Pending == nil || *s.Pending {
 		t.Fatalf("same chart, same version: %+v", s)
 	}
+	// From a GitRepository or Bucket the field is a path, not the chart's name.
+	chartSpec := root.Object["spec"].(map[string]any)["chart"].(map[string]any)["spec"].(map[string]any)
+	chartSpec["chart"], chartSpec["sourceRef"] = "./charts/chart-a", map[string]any{"kind": "GitRepository", "name": "repo"}
+	if s := Build(root, tree, nil).Summary; s.Pending == nil || *s.Pending {
+		t.Fatalf("a chart path from Git is not another chart: %+v", s)
+	}
 }
 
 func TestFluxChainUnknownWithoutSourceNode(t *testing.T) {
