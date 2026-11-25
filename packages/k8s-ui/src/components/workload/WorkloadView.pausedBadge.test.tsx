@@ -56,3 +56,22 @@ describe.each([['full view', true], ['drawer', false]])('Paused badge in the %s'
     expect(header(deployment({ paused: true }, settled, 'vendor.io/v1'), expanded)).not.toMatch(pausedBadge)
   })
 })
+
+it('shows only the loading pane while waiting for host tab registration', () => {
+  const resource = deployment({ paused: true }, held)
+  const view = (name: string, resourceError?: Error) => {
+    const host = document.createElement('div')
+    host.innerHTML = renderToStaticMarkup(
+      <WorkloadView kind="deployments" namespace="prod" name={name} group="apps" resource={resource}
+        onBack={() => {}} activeTab="deploys" extraTabsState="loading" resourceError={resourceError} />,
+    )
+    return host
+  }
+  const previous = view('next')
+  expect(previous.querySelector('[role="tabpanel"]')?.textContent).toContain('Loading…')
+  expect(previous.querySelector('[role="status"]')).toBeNull()
+  const deleted = view('web', Object.assign(new Error('workload not found'), { status: 404 }))
+  expect(deleted.querySelector('[role="tab"][aria-selected="true"]')).toBeNull()
+  expect(deleted.querySelector('[role="tabpanel"]')?.textContent).toContain('Loading…')
+  expect(deleted.textContent).not.toMatch(/no longer exists|workload not found/i)
+})

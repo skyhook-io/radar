@@ -127,16 +127,13 @@ export interface WorkloadExtraTab {
   icon?: ReactNode
   /** Place after this built-in tab before applying tabOrder. Appends if the anchor is absent. */
   after?: WorkloadTabType
-  /** Use this tab for links to the built-in ID. An explicitly live-only
-   * replacement keeps those links while the workload is unavailable. */
+  /** Use this tab for links to the built-in ID. */
   replaces?: WorkloadTabType
   /** Trailing adornment after the label, e.g. a status mark. */
   badge?: ReactNode
-  /** True suspends the tab until the matching workload is available. False
-   * keeps independent tabs available after deletion. Omit to show the tab
-   * while loading and suspend it only after deletion is known. */
-  requiresLiveResource?: boolean
-  /** Render the content when this tab is selected and its resource requirements are met. */
+  /** Keep this tab available when the workload read returns 404. */
+  availableWhenDeleted?: boolean
+  /** Render the content when this tab is selected. */
   render: () => ReactNode
 }
 
@@ -800,6 +797,7 @@ export function WorkloadView({
   const overviewEvents = resourceEvents.length > 0 ? resourceEvents : (resourceFocusedK8sEvents ?? [])
   const overviewEventsLoading = resourceEvents.length > 0 ? eventsLoading : resourceFocusedEventsLoading
   const overviewEventsError = resourceEvents.length > 0 ? undefined : resourceFocusedK8sError
+
   // Get pods from relationships and hierarchy
   const childPods = useMemo(() => {
     if (resourceLanes.length === 0) return []
@@ -953,9 +951,10 @@ export function WorkloadView({
     : null
   const rolloutActivity = rolloutDisplay?.activity ?? null
   const crossplaneResource = isManagedResource(resource) || isComposite(resource) || getCrossplanePauseState(resource) === 'acknowledged'
+  const resourceNotFound = isFetchError(resourceError) && resourceError.status === 404
   // A 404 with a cached copy: the object was deleted while this view was
   // open. Everything below that copy describes the past.
-  const resourceGone = Boolean(resource) && isFetchError(resourceError) && resourceError.status === 404
+  const resourceGone = Boolean(resource) && resourceNotFound
   // A held rollout already reads "Rollout paused" in the status chip. With nothing
   // pending the chip shows plain health, so this badge is the only paused signal.
   const statusSaysRolloutPaused = rolloutActivity?.phase === 'paused' && isRolloutActivityVisible(rolloutActivity)
@@ -982,7 +981,6 @@ export function WorkloadView({
   const renderDiagnoseTabForState = resourceGone ? undefined : renderDiagnoseTab
   // A host's summary, tabs and subheader can hold actions on the live object.
   const renderSummaryForState = resourceGone ? undefined : renderSummary
-  const canRenderLiveTab = resourceMatchesSelection && !resourceGone
   const offeredExtraTabs = useMemo(() => {
     if (!extraTabs) return undefined
     const seen = new Set<string>(WORKLOAD_TABS)
@@ -992,10 +990,7 @@ export function WorkloadView({
       return true
     })
   }, [extraTabs])
-  const extraTabsForState = offeredExtraTabs?.filter((tab) => {
-    if (tab.requiresLiveResource === true) return canRenderLiveTab
-    return tab.requiresLiveResource === false || !resourceGone
-  })
+  const availableExtraTabs = expanded ? offeredExtraTabs?.filter(tab => !resourceNotFound || tab.availableWhenDeleted) : undefined
   // A remount closes any dialog the bar had open: once its actions are gone,
   // a confirm button left on screen would do nothing.
   const actionsBarKey = resourceGone ? 'gone' : 'live'
@@ -1079,33 +1074,22 @@ export function WorkloadView({
     { id: 'cost', label: 'Cost', icon: <Coins className="w-4 h-4" />, hidden: !costTabVisible },
     { id: 'yaml', label: 'YAML', icon: <FileText className="w-4 h-4" /> },
   ]
-  const registeredExtraTabs = expanded
-    ? offeredExtraTabs?.filter((tab) => !resourceGone || tab.requiresLiveResource !== undefined)
-    : undefined
-  const suspendedTabIds = new Set(registeredExtraTabs?.filter(({ id }) => !extraTabsForState?.some((tab) => tab.id === id)).map(({ id }) => id))
-  const mergedTabs = mergeExtraTabs(tabs, registeredExtraTabs).map((tab) => suspendedTabIds.has(tab.id) ? { ...tab, hidden: true } : tab)
-  const allTabs = orderById(mergedTabs, expanded ? tabOrder : undefined)
+  const allTabs = orderById(mergeExtraTabs(tabs, availableExtraTabs), expanded ? tabOrder : undefined)
   const tabIsVisible = (id: TabType) => allTabs.some((tab) => tab.id === id && !tab.hidden)
-  const tabTarget = (id: WorkloadTabType) => tabIsVisible(id) ? id : expanded ? extraTabsForState?.find((tab) => tab.replaces === id)?.id : undefined
+  const tabTarget = (id: WorkloadTabType) => tabIsVisible(id) ? id : availableExtraTabs?.find((tab) => tab.replaces === id)?.id
   const requestedTabAvailable = tabIsVisible(requestedTab)
   const requestedHostTabKnown = offeredExtraTabs?.some(({ id }) => id === requestedTab)
-  const replacementTab = expanded ? extraTabsForState?.find((tab) => tab.replaces === requestedTab)?.id : undefined
+  const replacementTab = availableExtraTabs?.find((tab) => tab.replaces === requestedTab)?.id
   const extraTabsLoading = extraTabsState === 'loading'
-  const awaitingRequestedTab = expanded && !requestedTabAvailable && !replacementTab && (
-    extraTabsLoading || (!canRenderLiveTab && registeredExtraTabs?.some((tab) =>
-      tab.requiresLiveResource === true && (tab.id === requestedTab || tab.replaces === requestedTab)
-    ))
-  )
-  // Honor an explicit replacement. Otherwise prefer Overview or the first visible tab.
-  const fallbackTab = replacementTab ?? (allTabs.find((tab) => tab.id === 'overview' && !tab.hidden) ?? allTabs.find((tab) => !tab.hidden))?.id ?? ''
+  const awaitingRequestedTab = expanded && extraTabsLoading && !requestedTabAvailable && !replacementTab
+  const fallbackTab = replacementTab ?? tabTarget('overview') ?? 'overview'
   const effectiveTab: TabType = requestedTabAvailable ? requestedTab : awaitingRequestedTab ? '' : fallbackTab
-  const activeExtraTab = expanded ? extraTabsForState?.find((x) => x.id === effectiveTab) : undefined
+  const activeExtraTab = availableExtraTabs?.find((tab) => tab.id === effectiveTab)
   const timelineTarget = tabTarget('timeline')
   const logsTarget = tabTarget('logs')
   const topologyTarget = tabTarget('topology')
   const shouldCommitFallback =
     !(expanded && extraTabsLoading) &&
-    !awaitingRequestedTab &&
     requestedTab !== fallbackTab &&
     !requestedTabAvailable &&
     (
@@ -1118,7 +1102,7 @@ export function WorkloadView({
       (requestedTab === 'logs' && logsFallbackReady)
     )
   useEffect(() => {
-    if (!fallbackTab || !shouldCommitFallback) return
+    if (!shouldCommitFallback) return
     notifyTabChange(fallbackTab, { replace: true })
   }, [notifyTabChange, shouldCommitFallback, fallbackTab, requestedTab])
   const expandedOverview = expanded ? renderExpandedOverview?.({
@@ -1513,8 +1497,8 @@ export function WorkloadView({
       compactHeader={compactHeader}
     >
       <div className="flex h-full min-h-0 flex-col">
-        {deletedNotice && <div className="shrink-0 px-4 pt-4">{deletedNotice}</div>}
-        {!resourceGone && effectiveTab !== 'overview' && rolloutActivity && (rolloutActivity.phase !== 'idle' || recentImageSave) && (
+        {!awaitingRequestedTab && deletedNotice && <div className="shrink-0 px-4 pt-4">{deletedNotice}</div>}
+        {!awaitingRequestedTab && resourceMatchesSelection && !resourceGone && effectiveTab !== 'overview' && rolloutActivity && (rolloutActivity.phase !== 'idle' || recentImageSave) && (
           <div className="shrink-0 px-4 pt-4">
             <WorkloadRolloutNotice activity={rolloutActivity} recentImageSave={recentImageSave} />
           </div>
@@ -1522,18 +1506,13 @@ export function WorkloadView({
         <div className="min-h-0 flex-1">
         {awaitingRequestedTab && (
           <div role="tabpanel" className="h-full">
-            <FetchResult
-              loading={extraTabsLoading || resourceLoading}
-              error={extraTabsLoading ? undefined : resourceError}
-              notFoundMessage="Workload unavailable"
-              className="h-full"
-            />
+            <PaneLoader className="h-full" />
           </div>
         )}
         {/* Keyed by tab: another host tab opens at its top, not at the scroll offset the last one was left at. */}
         {activeExtraTab && (
           <div
-            key={JSON.stringify([activeExtraTab.requiresLiveResource === false ? selectionIdentity : selectionScope.generation, activeExtraTab.id])}
+            key={JSON.stringify([selectionScope.generation, activeExtraTab.id])}
             className="h-full min-h-0 overflow-y-auto"
           >
             {activeExtraTab.render()}

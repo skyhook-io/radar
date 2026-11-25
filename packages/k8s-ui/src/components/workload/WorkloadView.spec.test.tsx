@@ -246,40 +246,28 @@ it('keeps an asynchronous deep link and reconciles an explicit built-in replacem
   act(() => root.unmount())
 })
 
-it('preserves a host tab after a cached 404 and only runs tabs that can work without the workload', () => {
+it.each([['cold', undefined], ['cached', resource]] as const)('gates host tabs on a %s 404 and preserves the requested tab for recovery', (_, cached) => {
   const host = document.createElement('div')
   const root = createRoot(host)
   const onTabChange = vi.fn()
   const extraTabs = [
-    { id: 'live', label: 'Live', render: () => <div>Live action</div>, requiresLiveResource: true, replaces: 'timeline' as const },
-    { id: 'git', label: 'Git', render: () => <div>Git history</div>, requiresLiveResource: false, replaces: 'spec' as const },
-    { id: 'runs', label: 'Runs', render: () => <div>Run history</div> },
+    { id: 'deploys', label: 'Deploys', render: () => 'Deploy history', availableWhenDeleted: true, replaces: 'spec' as const },
+    { id: 'runs', label: 'Runs', render: () => 'Run history' },
   ]
   const gone = Object.assign(new Error('not found'), { status: 404 })
-  const hosted = { ...props, expanded: true, extraTabs, extraTabsState: 'ready' as const, onTabChange }
-  act(() => root.render(<WorkloadView {...hosted} activeTab="timeline" resource={undefined} isLoading />))
-  expect(host.querySelector('[role="tab"][aria-selected="true"]')).toBeNull()
-  expect(onTabChange).not.toHaveBeenCalled()
-  act(() => root.render(<WorkloadView {...hosted} activeTab="runs" resourceError={gone} />))
+  const hosted = { ...props, extraTabs, extraTabsState: 'ready' as const, onTabChange }
+  act(() => root.render(<WorkloadView {...hosted} activeTab="runs" resource={cached} resourceError={gone} />))
+  expect([...host.querySelectorAll('[role="tab"]')].map(tab => tab.textContent)).not.toContain('Runs')
   expect(host.textContent).not.toContain('Run history')
   expect(onTabChange).not.toHaveBeenCalled()
   act(() => root.render(<WorkloadView {...hosted} activeTab="runs" />))
   expect(host.textContent).toContain('Run history')
-  act(() => root.render(<WorkloadView {...hosted} activeTab="live" resource={undefined} isLoading />))
-  expect(host.textContent).not.toContain('Live action')
+  act(() => root.render(<WorkloadView {...hosted} activeTab="deploys" resource={cached} resourceError={gone} />))
+  expect(host.textContent).toContain('Deploy history')
   expect(onTabChange).not.toHaveBeenCalled()
-  act(() => root.render(<WorkloadView {...hosted} activeTab="live" resourceError={gone} />))
-  expect(host.textContent).not.toContain('Live action')
-  expect(host.textContent).not.toContain('Git history')
-  expect(onTabChange).not.toHaveBeenCalled()
-  act(() => root.render(<WorkloadView {...hosted} activeTab="live" />))
-  expect(host.textContent).toContain('Live action')
-  act(() => root.render(<WorkloadView {...hosted} activeTab="git" resourceError={gone} />))
-  expect(host.textContent).toContain('Git history')
-  expect(onTabChange).not.toHaveBeenCalled()
-  act(() => root.render(<WorkloadView {...hosted} activeTab="spec" resourceError={gone} />))
-  expect(host.textContent).toContain('Git history')
-  expect(onTabChange).toHaveBeenCalledExactlyOnceWith('git', { replace: true })
+  act(() => root.render(<WorkloadView {...hosted} activeTab="spec" resource={cached} resourceError={gone} />))
+  expect(host.textContent).toContain('Deploy history')
+  expect(onTabChange).toHaveBeenCalledExactlyOnceWith('deploys', { replace: true })
   act(() => root.unmount())
 })
 
