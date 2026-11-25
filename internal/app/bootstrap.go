@@ -26,6 +26,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
 	internalopencost "github.com/skyhook-io/radar/internal/opencost"
+	"github.com/skyhook-io/radar/internal/openobserve"
 	"github.com/skyhook-io/radar/internal/portforward"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/server"
@@ -342,12 +343,7 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 
 	RegisterLastContextMemory(cfg)
 
-	k8s.RegisterTimelineFuncs(func() {
-		// Reset the store AND the per-cluster event-pipeline metrics: RecentDrops
-		// name resources from the previous cluster and must not survive the switch.
-		timeline.ResetStore()
-		timeline.ResetMetricsForContextSwitch()
-	}, func() error {
+	k8s.RegisterTimelineFuncs(timeline.ResetStore, func() error {
 		if err := timeline.ReinitStore(timelineStoreCfg); err != nil {
 			log.Printf("Warning: timeline init failed, continuing degraded: %v", err)
 		}
@@ -445,6 +441,14 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 		return nil
 	})
 	k8s.RegisterCostResetFunc(internalopencost.Reset)
+	// The automatic cost source was chosen against the metrics backend; an
+	// OpenObserve relay starting, changing or ending makes it choose again,
+	// as a metrics settings change does.
+	prometheuspkg.OnRelayChange(func() {
+		internalopencost.Reset()
+		internalopencost.InvalidateCurrency()
+	})
+	openobserve.Default.LogIfIgnored()
 	if cfg.LocalConnections != nil {
 		cfg.LocalRuntime = connectionruntime.New(cfg.LocalConnections, k8s.RestartTrafficSubsystem)
 		argocd.SetConfig("", "", false, true)

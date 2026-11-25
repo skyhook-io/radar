@@ -1,6 +1,7 @@
 package resourcecontext
 
 import (
+	"cmp"
 	"context"
 	"slices"
 	"sort"
@@ -96,6 +97,12 @@ type Options struct {
 	// Service spec already carries selector/ports; this lookup answers
 	// whether that selector currently resolves to ready Pods.
 	ServiceBackends ServiceBackendLookup
+
+	// ExpandRelationship names one relationship preview field
+	// (IsRelationshipPreviewField) to fill with up to
+	// MaxExpandedRelationshipItems readable references instead of the usual
+	// preview, for a caller that needs more of a list it saw clipped.
+	ExpandRelationship string
 }
 
 // PolicyReportLookup is the minimal interface Build needs from the
@@ -197,6 +204,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		rc.AutoInstrumentation = &AutoInstrumentationContext{OpenTelemetry: opts.OpenTelemetryAutoInstrumentation}
 	}
 	omitted := newOmittedTracker()
+	omitted.expand = opts.ExpandRelationship
 	// Canonical context references still require Get access, even when a
 	// host's relationship view intentionally exposes namespace-readable names.
 	if opts.Children != nil {
@@ -234,19 +242,24 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		rc.Manager = managerContext(rel.Ownership.Manager)
 	}
 	if answered && rel.Ownership != nil {
+		access := previewAccess{checker: opts.AccessChecker, limit: omitted.previewLimit("managedBy")}
+		var chainGap OmittedReason
 		chain := rel.ControllerChain.ToManager().Readable(func(r topology.ResourceRef) bool {
-			ref := toContextRef(r)
-			return checkRef(ctx, opts.AccessChecker, &ref)
+			chainGap = access.check(ctx, toContextRef(r))
+			return chainGap == ""
 		})
-		var managedBy []topology.ResourceRef
+		managers := toContextRefs(rel.Managers)
+		var lead []ContextRef
 		if top := chain.Top(); top != nil {
-			managedBy = append(managedBy, *top)
+			lead = []ContextRef{toContextRef(*top)}
+			managers = slices.DeleteFunc(managers, func(r ContextRef) bool { return r == lead[0] })
 		}
-		for _, r := range rel.Managers {
-			managedBy = append(managedBy, r)
-		}
-		rc.ManagedBy = filterRefs(ctx, opts.AccessChecker, toContextRefs(managedBy), "managedBy", nil)
+		rc.ManagedBy = access.selectRefs(ctx, managers, lead, "managedBy", omitted)
+		sortContextRefs(rc.ManagedBy)
 		reason := ControllerOmission(chain)
+		if chainGap != "" {
+			reason = chainGap
+		}
 		if chain == nil && rel.Ownership.UnavailableReason == string(readreason.UserForbidden) {
 			reason = OmittedRBACDenied
 		}
@@ -301,33 +314,33 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		if !(ident.Kind == "Deployment" && ident.Group == "apps") && !(ident.Kind == "Node" && ident.Group == "") {
 			backends = append(backends, rel.Pods...)
 		}
-		rc.ExposedBy = filterRefs(ctx, opts.AccessChecker, toContextRefs(exposedBy), "exposedBy", omitted)
-		rc.Backends = filterRefs(ctx, opts.AccessChecker, toContextRefs(backends), "backends", omitted)
-		exposes := append(exposedBy, backends...)
-		rc.Exposes = filterRefs(ctx, opts.AccessChecker, toContextRefs(exposes), "exposes", omitted)
+		rc.ExposedBy = filterBoundedRefs(ctx, opts.AccessChecker, toContextRefs(exposedBy), "exposedBy", omitted)
+		rc.Backends = filterBoundedRefs(ctx, opts.AccessChecker, toContextRefs(backends), "backends", omitted)
+		rc.Exposes = slices.Clone(rc.ExposedBy)
+		for _, ref := range rc.Backends {
+			if !slices.Contains(rc.ExposedBy, ref) {
+				rc.Exposes = append(rc.Exposes, ref)
+			}
+		}
+		sortContextRefs(rc.Exposes)
+		for _, gap := range omitted.items {
+			if gap.Field == "exposedBy" || gap.Field == "backends" {
+				omitted.add("exposes", gap.Reason)
+			}
+		}
 
 		selected := make([]topology.ResourceRef, 0, len(rel.PDBs)+len(rel.NetworkPolicies))
 		selected = append(selected, rel.PDBs...)
 		selected = append(selected, rel.NetworkPolicies...)
-		rc.SelectedBy = filterRefs(ctx, opts.AccessChecker,
+		rc.SelectedBy = filterBoundedRefs(ctx, opts.AccessChecker,
 			toContextRefs(selected),
 			"selectedBy", omitted)
 
-		rc.Protects = filterRefs(ctx, opts.AccessChecker, toContextRefs(rel.Protects), "protects", omitted)
-		rc.HealthChecks = filterRefs(ctx, opts.AccessChecker, toContextRefs(rel.HealthChecks), "healthChecks", omitted)
-		rc.StagedPolicies = filterRefs(ctx, opts.AccessChecker, toContextRefs(rel.StagedPolicies), "stagedPolicies", omitted)
-		rc.Monitors = filterRefs(ctx, opts.AccessChecker, toContextRefs(rel.Monitors), "monitors", omitted)
-		rc.MonitorTargets = filterRefs(ctx, opts.AccessChecker, toContextRefs(rel.MonitorTargets), "monitorTargets", omitted)
-
-		if dependencies, dependents, ok := storageChain(ident.Group, ident.Kind, rel); ok {
-			rc.Dependencies = filterBoundedRefs(ctx, opts.AccessChecker, dependencies, "dependencies", omitted)
-			rc.Dependents = filterBoundedRefs(ctx, opts.AccessChecker, dependents, "dependents", omitted)
-		} else {
-			rc.Dependencies = filterRefs(ctx, opts.AccessChecker,
-				toContextRefs(rel.Dependencies), "dependencies", omitted)
-			rc.Dependents = filterRefs(ctx, opts.AccessChecker,
-				toContextRefs(rel.Dependents), "dependents", omitted)
-		}
+		rc.Protects = filterBoundedRefs(ctx, opts.AccessChecker, toContextRefs(rel.Protects), "protects", omitted)
+		rc.HealthChecks = filterBoundedRefs(ctx, opts.AccessChecker, toContextRefs(rel.HealthChecks), "healthChecks", omitted)
+		rc.StagedPolicies = filterBoundedRefs(ctx, opts.AccessChecker, toContextRefs(rel.StagedPolicies), "stagedPolicies", omitted)
+		rc.Monitors = filterBoundedRefs(ctx, opts.AccessChecker, toContextRefs(rel.Monitors), "monitors", omitted)
+		rc.MonitorTargets = filterBoundedRefs(ctx, opts.AccessChecker, toContextRefs(rel.MonitorTargets), "monitorTargets", omitted)
 
 		rc.ScaledBy = buildScaledBy(ctx, rel.Scalers, opts.Provider, opts.RelationshipExtras, opts.AccessChecker, omitted)
 	}
@@ -404,7 +417,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		}
 	}
 
-	addWebhookContext(ctx, obj, opts, rc, omitted)
+	rc.Dependencies, rc.Dependents = dependencyContext(ctx, obj, ident, rel, opts, omitted)
 	rc.Omitted = omitted.collect()
 	return rc
 }
@@ -902,7 +915,7 @@ func buildIngressSummary(ctx context.Context, obj runtime.Object, ac RefAccessCh
 	for _, name := range configrefs.IngressBackendServices(ing) {
 		svcSet.add(name, ing.Namespace)
 	}
-	out.BackendServices = filterRefs(ctx, ac, svcSet.refs("Service", ""), "ingressSummary.backendServices", omitted)
+	out.BackendServices = filterBoundedRefs(ctx, ac, svcSet.refs("Service", ""), "ingressSummary.backendServices", omitted)
 
 	var secrets []ContextRef
 	for _, ref := range configrefs.IngressTLSSecretReferences(ing) {
@@ -1013,12 +1026,32 @@ func compactResourceList(resources corev1.ResourceList) map[string]string {
 	return out
 }
 
+func dependencyContext(ctx context.Context, obj runtime.Object, ident resourceIdentity, rel *topology.Relationships, opts Options, omitted *omittedTracker) ([]ContextRef, []ContextRef) {
+	dependencies, dependents := storageChain(ident.Group, ident.Kind, rel)
+	if webhook, ok := obj.(*unstructured.Unstructured); ok {
+		if refs := configrefs.AdmissionWebhookServices(webhook); len(refs) > 0 {
+			for _, ref := range refs {
+				dependencies = append(dependencies, ContextRef{Kind: "Service", Namespace: ref.Service.Namespace, Name: ref.Service.Name})
+			}
+			slices.SortFunc(dependencies, compareRefIdentity)
+		}
+	}
+	if ident.Kind == "Service" && ident.Group == "" {
+		dependents = appendWebhookConsumers(ctx, dependents, ident, opts, omitted)
+	}
+	return filterBoundedRefs(ctx, opts.AccessChecker, dependencies, "dependencies", omitted),
+		filterBoundedRefs(ctx, opts.AccessChecker, dependents, "dependents", omitted)
+}
+
 // storageChain maps a claim, volume or class's storage relationships into
 // dependencies and dependents: a claim depends on its volume and class, a
 // volume on its class and is used by its claim, and a class is used by its
 // volumes and claims. A class can back thousands of volumes, so the caller
 // bounds both lists.
-func storageChain(group, kind string, rel *topology.Relationships) (dependencies, dependents []ContextRef, ok bool) {
+func storageChain(group, kind string, rel *topology.Relationships) (dependencies, dependents []ContextRef) {
+	if rel == nil {
+		return nil, nil
+	}
 	pick := func(dst []ContextRef, refs []topology.ResourceRef, group, kind string) []ContextRef {
 		for _, ref := range refs {
 			if ref.Group == group && ref.Kind == kind {
@@ -1040,9 +1073,11 @@ func storageChain(group, kind string, rel *topology.Relationships) (dependencies
 		dependents = pick(dependents, rel.Consumers, "", "PersistentVolume")
 		dependents = pick(dependents, rel.Consumers, "", "PersistentVolumeClaim")
 	default:
-		return nil, nil, false
+		return dependencies, dependents
 	}
-	return dependencies, dependents, true
+	slices.SortFunc(dependencies, compareRefIdentity)
+	slices.SortFunc(dependents, compareRefIdentity)
+	return dependencies, dependents
 }
 
 func buildPVCSummary(obj runtime.Object) *PVCSummary {
@@ -1123,7 +1158,7 @@ func buildCronJobSummary(ctx context.Context, obj runtime.Object, ac RefAccessCh
 			Name:      ref.Name,
 		})
 	}
-	out.ActiveJobs = filterRefs(ctx, ac, active, "cronJobSummary.activeJobs", omitted)
+	out.ActiveJobs = filterBoundedRefs(ctx, ac, active, "cronJobSummary.activeJobs", omitted)
 	return out
 }
 
@@ -1131,7 +1166,7 @@ func buildCronJobSummary(ctx context.Context, obj runtime.Object, ac RefAccessCh
 // object, so a scaler the caller cannot read never reaches the diagnosis and
 // nothing about it (state, bounds, metric names) can leak through the summary.
 func buildScaledBy(ctx context.Context, scalers []topology.ResourceRef, provider topology.ResourceProvider, extras *topology.RelationshipExtras, ac RefAccessChecker, omitted *omittedTracker) []ScalerRef {
-	refs := filterRefs(ctx, ac, toContextRefs(scalers), "scaledBy", omitted)
+	refs := filterBoundedRefs(ctx, ac, toContextRefs(scalers), "scaledBy", omitted)
 	if len(refs) == 0 {
 		return nil
 	}
@@ -1507,23 +1542,16 @@ func toContextRefs(refs []topology.ResourceRef) []ContextRef {
 	}
 	out := make([]ContextRef, 0, len(refs))
 	for _, r := range refs {
-		out = append(out, ContextRef{
-			Kind:      r.Kind,
-			Group:     r.Group,
-			Namespace: r.Namespace,
-			Name:      r.Name,
-		})
+		out = append(out, toContextRef(r))
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Kind != out[j].Kind {
-			return out[i].Kind < out[j].Kind
-		}
-		if out[i].Namespace != out[j].Namespace {
-			return out[i].Namespace < out[j].Namespace
-		}
-		return out[i].Name < out[j].Name
-	})
+	sortContextRefs(out)
 	return out
+}
+
+func sortContextRefs(refs []ContextRef) {
+	slices.SortStableFunc(refs, func(a, b ContextRef) int {
+		return cmp.Or(strings.Compare(a.Kind, b.Kind), strings.Compare(a.Namespace, b.Namespace), strings.Compare(a.Name, b.Name))
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -1600,79 +1628,129 @@ func declaredRefs(ctx context.Context, ac RefAccessChecker, extras *topology.Rel
 	return sorted
 }
 
-// Denied namespaces must not make reference authorization unbounded.
-const maxReferenceAccessChecks = 4 * maxReferencedByItems
+// MaxExpandedRelationshipItems bounds the field Options.ExpandRelationship
+// names.
+const MaxExpandedRelationshipItems = 200
 
-// filterBoundedRefs dedupes refs and keeps the readable ones, taking one ref
-// per kind in turn so a kind with many matches cannot crowd out the others.
-// Access checks are cached per (group, kind, namespace) and capped, and the
-// result is capped at maxReferencedByItems; either cap records budget_exceeded.
+// Denied namespaces must not make reference authorization unbounded.
+const accessChecksPerPreviewItem = 4
+
+// previewAccess selects at most limit readable references for one field.
+type previewAccess struct {
+	checker   RefAccessChecker
+	limit     int
+	decisions map[resourceid.Ref]ownership.Decision
+}
+
+func (a *previewAccess) check(ctx context.Context, r ContextRef) OmittedReason {
+	if a.checker == nil {
+		return ""
+	}
+	key := resourceid.NewRef(r.Group, r.Kind, r.Namespace, "")
+	d, known := a.decisions[key]
+	if !known {
+		if len(a.decisions) == accessChecksPerPreviewItem*a.limit {
+			return OmittedBudgetExceeded
+		}
+		if a.decisions == nil {
+			a.decisions = make(map[resourceid.Ref]ownership.Decision)
+		}
+		d = decideRef(ctx, a.checker, &r)
+		a.decisions[key] = d
+	}
+	switch d {
+	case ownership.Allowed:
+		return ""
+	case ownership.Undecided:
+		return OmittedUnavailable
+	default:
+		return OmittedRBACDenied
+	}
+}
+
+func compareRefIdentity(a, b ContextRef) int {
+	return strings.Compare(resourceid.ResourceKey(a.Group, a.Kind, a.Namespace, a.Name), resourceid.ResourceKey(b.Group, b.Kind, b.Namespace, b.Name))
+}
+
+// relationshipPreviewFields are the fields filterBoundedRefs and selectRefs
+// clip to a preview. budget_exceeded on one of them means the preview was cut;
+// on any other field it means something else, such as an enrichment timeout.
+// TestRelationshipPreviewFieldsCoverEveryCappedField keeps this in step with
+// the calls in this package.
+var relationshipPreviewFields = map[string]bool{
+	"dependencies": true, "dependents": true, "exposedBy": true, "backends": true, "exposes": true,
+	"selectedBy": true, "protects": true, "healthChecks": true, "stagedPolicies": true, "monitors": true,
+	"monitorTargets": true, "scaledBy": true, "managedBy": true,
+	"ingressSummary.backendServices": true, "cronJobSummary.activeJobs": true,
+}
+
+// IsRelationshipPreviewField reports whether field is a relationship preview
+// that Build clips to a bounded number of readable references.
+func IsRelationshipPreviewField(field string) bool {
+	return relationshipPreviewFields[field]
+}
+
 func filterBoundedRefs(ctx context.Context, ac RefAccessChecker, refs []ContextRef, field string, omitted *omittedTracker) []ContextRef {
-	sorted := append([]ContextRef(nil), refs...)
-	less := func(a, b ContextRef) bool {
-		return resourceid.ResourceKey(a.Group, a.Kind, a.Namespace, a.Name) < resourceid.ResourceKey(b.Group, b.Kind, b.Namespace, b.Name)
+	access := previewAccess{checker: ac, limit: omitted.previewLimit(field)}
+	return access.selectRefs(ctx, refs, nil, field, omitted)
+}
+
+// A readable top controller already in lead must survive a crowded managedBy.
+// Remember input positions so complete fields keep their ordinary display order.
+func (a *previewAccess) selectRefs(ctx context.Context, refs, lead []ContextRef, field string, omitted *omittedTracker) []ContextRef {
+	if len(refs) == 0 {
+		return lead
 	}
-	sort.Slice(sorted, func(i, j int) bool { return less(sorted[i], sorted[j]) })
-	type bucket struct {
-		refs []ContextRef
-		next int
+	order := make([]int, len(refs))
+	for i := range order {
+		order[i] = i
 	}
-	var buckets []bucket
-	var last, kindKey string
-	for _, ref := range sorted {
-		key := resourceid.ResourceKey(ref.Group, ref.Kind, ref.Namespace, ref.Name)
-		if key == last {
-			continue
+	slices.SortStableFunc(order, func(i, j int) int { return compareRefIdentity(refs[i], refs[j]) })
+	order = slices.CompactFunc(order, func(i, j int) bool { return compareRefIdentity(refs[i], refs[j]) == 0 })
+	var buckets [][]int
+	for len(order) > 0 {
+		first := refs[order[0]]
+		n := 1
+		for n < len(order) && refs[order[n]].Group == first.Group && refs[order[n]].Kind == first.Kind {
+			n++
 		}
-		last = key
-		kind := resourceid.ResourceKey(ref.Group, ref.Kind, "", "")
-		if len(buckets) == 0 || kind != kindKey {
-			buckets = append(buckets, bucket{})
-			kindKey = kind
-		}
-		buckets[len(buckets)-1].refs = append(buckets[len(buckets)-1].refs, ref)
+		buckets = append(buckets, order[:n])
+		order = order[n:]
 	}
-	decisions := make(map[string]bool)
-	var out []ContextRef
-	for {
-		advanced := false
-		for i := range buckets {
-			b := &buckets[i]
-			if b.next == len(b.refs) {
-				continue
+	var selected []int
+	clipped := false
+rounds:
+	for len(buckets) > 0 {
+		next := buckets[:0]
+		for _, bucket := range buckets {
+			if len(bucket) > 1 {
+				next = append(next, bucket[1:])
 			}
-			ref := b.refs[b.next]
-			b.next++
-			advanced = true
-			allowed := true
-			if ac != nil {
-				key := resourceid.ResourceKey(ref.Group, ref.Kind, ref.Namespace, "")
-				var known bool
-				allowed, known = decisions[key]
-				if !known {
-					if len(decisions) == maxReferenceAccessChecks {
-						omitted.add(field, OmittedBudgetExceeded)
-						continue
-					}
-					allowed = checkRef(ctx, ac, &ref)
-					decisions[key] = allowed
+			i := bucket[0]
+			if reason := a.check(ctx, refs[i]); reason != "" {
+				// A note about an unreadable spec generator would reveal that
+				// it manages the subject. Its producer reports inventory gaps.
+				if field != "managedBy" || reason == OmittedBudgetExceeded {
+					omitted.add(field, reason)
 				}
-			}
-			if !allowed {
-				omitted.add(field, OmittedRBACDenied)
 				continue
 			}
-			out = append(out, ref)
-			if len(out) > maxReferencedByItems {
+			if len(lead)+len(selected) == a.limit {
 				omitted.add(field, OmittedBudgetExceeded)
-				return out[:maxReferencedByItems]
+				clipped = true
+				break rounds
 			}
+			selected = append(selected, i)
 		}
-		if !advanced {
-			break
-		}
+		buckets = next
 	}
-	sort.Slice(out, func(i, j int) bool { return less(out[i], out[j]) })
+	if !clipped {
+		slices.Sort(selected)
+	}
+	out := lead
+	for _, i := range selected {
+		out = append(out, refs[i])
+	}
 	return out
 }
 
@@ -1984,6 +2062,18 @@ func resultRank(r string) int {
 type omittedTracker struct {
 	seen  map[string]bool
 	items []OmittedField
+	// expand is Options.ExpandRelationship. It rides on the tracker because
+	// every call that clips a relationship preview already receives it.
+	expand string
+}
+
+// previewLimit is how many readable references the relationship preview
+// field may hold.
+func (t *omittedTracker) previewLimit(field string) int {
+	if t.expand != "" && field == t.expand {
+		return MaxExpandedRelationshipItems
+	}
+	return maxReferencedByItems
 }
 
 func newOmittedTracker() *omittedTracker {

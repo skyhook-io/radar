@@ -30,7 +30,7 @@ installed version. Several flags also take a persistent default from `~/.radar/c
 | `--disable-helm-write` | `false` | Disable release writes, per-release source updates, values previews and `manage_helm`; also global repository/OCI changes without auth. Signed-in global source management and Cloud install/upgrade continue |
 | `--disable-local-terminal` | `false` | Disable the host local terminal |
 | `--disable-auto-port-forward` | `false` | Never open a port-forward on Radar's own initiative (metrics, traffic, cost and Argo CD discovery). Port-forwards you start still work. See [Automatic port-forwarding](#automatic-port-forwarding) |
-| `--debug-image` | `busybox:latest` | Image for ephemeral debug containers and node debug pods. If built-in restricted PodSecurity rejects the default pod debug container, Radar retries with a restricted-compatible Linux security context using the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. |
+| `--debug-image` | `busybox:latest` | Default image for ephemeral debug containers and node debug pods. On a running Pod, **Debug** opens a target container and image chooser. The chooser shows this default. Leave it unchanged or clear the field to use the server setting. If built-in restricted PodSecurity rejects the default pod debug container, Radar retries with a restricted-compatible Linux security context using the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. |
 | `--list-page-size` | `0` (off) | Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) at this size. Helps very large clusters that fail to sync; only used when WatchList streaming is unavailable. Try `2000`. |
 | `--context-switch-timeout` | See description | Overrides the target connectivity check (normally 5s, or 11s with a kubeconfig exec credential plugin). Synchronous switches and in-cluster recovery use a 30s initialization deadline by default. Setting this option overrides that deadline too. Widen on high-latency control planes — see [Tuning for slow clusters](#tuning-for-slow-or-high-latency-clusters). Env: `RADAR_CONTEXT_SWITCH_TIMEOUT`. |
 | `--first-paint-backstop` | `5m` | Hard upper bound on the initial critical-cache sync wait before Radar falls through to a partial-data render. Env: `RADAR_FIRST_PAINT_BACKSTOP`. |
@@ -789,6 +789,46 @@ mapping needs no confirmation. Token rotation alone does not prompt. Replacing
 a cluster behind identical endpoint, trust and user reference is not detectable
 by this fingerprint.
 
+#### GKE system metric connections
+
+With GKE system metrics enabled, local Radar can read Cloud Monitoring using
+Google's hosted Prometheus API. This path requires neither an in-cluster
+frontend nor managed Prometheus collection. For a local session, replace
+`SCOPING_PROJECT_ID` with the project whose metrics scope includes the cluster.
+Your Google identity needs permission to read time series in that scope.
+
+```sh
+RADAR_GKE_AUTH="Bearer $(gcloud auth print-access-token)" kubectl radar \
+  --prometheus-url='https://monitoring.googleapis.com/v1/projects/SCOPING_PROJECT_ID/location/global/prometheus' \
+  --prometheus-header-from-env=Authorization=RADAR_GKE_AUTH
+```
+
+Radar reads the header at launch. Rerun the command for a fresh token after it
+expires. The explicitly configured URL also serves Radar's raw PromQL queries,
+which can read the token's full metrics scope. [Google's Prometheus HTTP API](https://docs.cloud.google.com/stackdriver/docs/managed-prometheus/query-api-ui#prometheus_http_api)
+
+On GKE, Radar first reads the usual Prometheus-compatible backend. When a
+supported chart has no conventional measurements, Radar can obtain that chart
+from a Google Managed Service for Prometheus query frontend alongside the
+regular backend. A chart with usable conventional data returns immediately.
+With only the Google frontend, Radar serves the supported native charts. Autodiscovery trusts only the
+`frontend` or `gmp-frontend` Service in the operator-managed `gmp-public`,
+`gmp-system` or `gke-gmp-system` namespace. Keep Pod and Service writes in those
+namespaces limited to platform operators. For a frontend in a custom namespace,
+configure its URL explicitly. Locally, automatic detection uses the Kubernetes
+Service proxy (GET on `services/proxy` in the frontend's namespace).
+In-cluster it uses the Service address. Discovery verifies the Service's
+selected Pods and queries for native node data from the connected cluster.
+GKE managed collection and the query frontend are installed independently.
+
+Radar obtains the GKE project, control-plane location and cluster name from
+the connected API server's OpenID issuer. If the issuer cannot identify the
+cluster, those three exact values can be supplied as `project_id`, `location` and
+`cluster_name` in the existing metrics cluster-label setting. Conflicting values
+withhold native charts. A manually configured endpoint keeps priority and can
+supply conventional and native series together. With an explicit URL, Radar
+checks only that endpoint for both sources and sends configured headers only to it. [GKE chart coverage](workload-metrics.md#google-kubernetes-engine-system-metrics)
+
 #### Startup overrides and older settings
 
 An explicit local `--prometheus-url` is a complete, read-only **Set for this
@@ -892,6 +932,169 @@ or an AI agent, still open port-forwards.
 
 A placeholder `--prometheus-url` does not do the same job: it applies only to the
 launch context, so switching to another context goes back to discovery.
+
+### OpenObserve (local)
+
+Local Radar can read a cluster's metrics from an OpenObserve organization that
+many clusters write to. You save the connection once and turn it on cluster by
+cluster. A cluster you haven't turned on never uses OpenObserve, even when
+OpenObserve has its data.
+
+**In Settings.** Open Settings → Metrics and choose **OpenObserve** instead of
+**Prometheus-compatible**. The first time, enter the OpenObserve address, the
+organization (`default` unless you use another), a user or service account
+email and its token, then click **Test and save**. Advanced holds an extra CA
+certificate file and a cluster label override. Radar saves only when the login
+works and it finds this cluster in OpenObserve:
+
+- Found by cluster ID: saved.
+- Found only by cluster name: the button asks you to confirm that name, and
+  saves once you do.
+- Not found: nothing is saved. Radar says why, lists the cluster names
+  OpenObserve has, and shows how to add the ID label (below).
+
+For the next cluster, switch to it and choose OpenObserve again: Radar offers
+the saved connection, so one click tests and saves it for that cluster. Changes
+to the connection apply to every cluster that uses it. Leaving the token empty
+while the address, organization and user stay the same keeps the saved token.
+**Use Prometheus for this cluster** turns OpenObserve off for the current
+cluster only; **Remove saved OpenObserve connection** removes the connection
+and every cluster's match. Saving and removing work only while Radar listens
+on this machine alone, not on a shared `--listen-address`.
+
+**From the command line.** The same connection, saved with the CLI:
+
+```bash
+radar openobserve connect --url https://openobserve.example.com --org default \
+  --user radar@example.com --token-env OPENOBSERVE_TOKEN [--context NAME] [--yes]
+radar openobserve status        # the connection (never the token) and this context's match
+radar openobserve disconnect    # removes the connection and every match
+```
+
+`connect` saves the connection, tests it, and turns OpenObserve on for one
+context (the current one unless `--context` is given). Run it again with
+`--context` for other contexts; the saved connection is reused. Other flags:
+`--token` (stored in plain text), `--ca-cert FILE` (an extra CA bundle to
+trust), `--cluster-label NAME` (a cluster label Radar doesn't already know).
+`--token-env` reads the token from an environment variable, and wins over a
+saved token when the variable is set and not empty; Settings shows such a token
+as coming from that variable and keeps it.
+
+Both save an `openobserve` entry in `~/.radar/config.json`, readable only by
+you. A token typed in Settings or passed with `--token` is stored there in
+plain text. Each cluster that uses OpenObserve has an entry in `matches`, keyed
+by its kube-system namespace UID:
+
+```json
+"openobserve": {
+  "baseUrl": "https://openobserve.example.com", "org": "default", "user": "radar@example.com",
+  "tokenEnv": "OPENOBSERVE_TOKEN", "caCertFile": "/path/ca.pem", "clusterLabel": "",
+  "matches": { "<kube-system namespace UID>": { "label": "cluster", "value": "prod-eu", "by": "name", "confirmedAt": "2026-11-23T10:00:00Z", "context": "prod-eu" } }
+}
+```
+
+Changing the address or organization removes the saved matches, since they
+describe another organization's data.
+
+**Matching.** Radar finds each cluster by its kube-system namespace UID. It
+looks for that UID in a `radar_cluster_uid` label (Prometheus remote write) or
+in the OpenObserve collector's `k8s_cluster_uid`. When neither is there,
+Radar looks up a sample of the cluster's running Pods, suggests the cluster
+name they are stored under and asks you to confirm it (in the CLI, `--yes`
+accepts it). Only a confirmed name is ever used, and never the shared default
+name `cluster1` or a name another cluster's Pods also use. Nor is a name
+starting with `_o2_`: OpenObserve treats its dashboard placeholder (`_o2_all_`
+by default, changed with `ZO_DASHBOARD_PLACEHOLDER`) as "any value" and drops
+the filter, so don't name a cluster after it. A collector sending such a name
+is matched by its cluster ID alone. A name match carries
+a standing warning: if another cluster writes under the same name, Radar can't
+tell them apart. An ID match is looked up again each time Radar activates the
+cluster.
+
+Add the ID label so the match can't break:
+
+- Prometheus remote write, in `prometheus.yml`'s `global` section:
+  `external_labels: { radar_cluster_uid: "<kube-system UID>" }`
+  (kube-prometheus-stack: `prometheus.prometheusSpec.externalLabels`).
+  `kubectl get namespace kube-system -o jsonpath='{.metadata.uid}'` prints the UID.
+- OpenObserve collector: its agent already sends the UID. Give each cluster a
+  unique cluster name instead of `cluster1` (the `k8s.cluster.name` resource
+  attribute); until then Radar refuses the metrics that carry only the name
+  (kube-state metrics such as restarts and HPA, and scraped disk metrics).
+  The name must be this cluster's alone over the last 7 days, and those
+  metrics are read over the last 7 days only: a 14-day chart shows them from
+  7 days ago, and a query reaching earlier (an offset or an @ time) is
+  refused. No other collector may send the name, and no other
+  cluster may write metrics under it in any cluster label (Radar checks
+  `kube_pod_info` and `up`, and that every node with Pods under the name is one
+  this cluster's collector reports). A cluster rebuilt under the same name gets
+  those metrics once the old data is more than 7 days old.
+
+**What changes.** For a matched context the normal metrics views, rightsizing
+and the AI's `query_prometheus` read OpenObserve. Every query gets this
+cluster's filter added, including free-form PromQL (a filter on the cluster
+label in the query is kept alongside it, so it can only narrow the answer:
+`radar_cluster_uid!="<this cluster>"` returns nothing), and series of other
+clusters are dropped from answers. A query that would write a cluster label
+(`label_replace`, `label_join`, `count_values`) is refused as the caller's
+error, and so is `scalar()`: its bare number carries no cluster label to
+check, so query the vector instead (`sum(x)`, not `scalar(sum(x))`). A series
+or label lookup with no time range reads the last hour,
+because OpenObserve refuses one without it. Metric metadata and the list of
+metric names aren't available: OpenObserve answers both for the whole
+organization, and no filter narrows them to one cluster. The AI's
+`discover_metrics` says so when asked for metric names; label values for a
+named metric still work. A chart OpenObserve holds no data for says
+"OpenObserve has no data for this chart", and Settings → Metrics lists those
+metric families as "No data in OpenObserve for: …", under "OpenObserve · shared
+connection · matched by cluster ID" (or "matched by confirmed name").
+
+**The `cluster` label.** OpenObserve removes the `cluster` label on remote write
+by default: it is its HA deduplication label (`ZO_PROMETHEUS_HA_CLUSTER`). Use
+`radar_cluster_uid`, or name your cluster label something else, such as
+`cluster_name`.
+
+**CPU throttling from the OpenObserve collector.** The collector's gateway
+scrapes cAdvisor but, by default, keeps only the disk read and write metrics,
+so the CPU throttling chart says "OpenObserve has no data for this chart". To see it, add
+`container_cpu_cfs_(periods_total|throttled_periods_total)` to the `keep`
+regex of the `cadvisor` job in the collector's Helm values
+(`gateway.receivers.prometheus.config.scrape_configs`). Helm replaces lists
+rather than merging them, so copy the whole `scrape_configs` list from
+`helm show values openobserve/openobserve-collector`, change that regex, and
+upgrade with `--reuse-values -f <file>`. Node and volume charts don't read the
+collector's node and volume metrics yet.
+
+**Precedence for each cluster:** OpenObserve, when the cluster is turned on for
+it, wins even over a Prometheus URL set by hand for the context; the hand-set
+URL stays saved and is used again once you switch the cluster back to
+Prometheus. Then a Prometheus URL set by hand (saved in Settings, or
+`--prometheus-url` on its launch context), then auto-detected Prometheus. A
+cluster that isn't turned on keeps using its own Prometheus. When OpenObserve
+can't be reached for a cluster that uses it, metrics show "OpenObserve
+unavailable" rather than another backend's data. Radar checks the match on
+startup and on each context switch and remembers the result for five minutes.
+A change made in Settings applies at once; one made with the CLI applies the
+next time Radar switches to the context or restarts.
+
+**Version.** Radar reads OpenObserve's version from its config endpoint
+(`/api/<org>/config`, or `/config` before v1.1). OpenObserve before v1.2
+ignores a filter on a label a metric doesn't have, so Radar warns and only
+shows metrics whose data carries the cluster label; others show as having no
+data. OpenObserve before v1.1 also answers label lookups (the values of a label,
+such as Pod names) from every cluster's series, so Radar refuses them there.
+When the version can't be read, Radar keeps both checks on (the label check
+always, the metric check unless a test query shows the store filters). Upgrade
+to v1.2 or later.
+
+**Service account.** OpenObserve's open-source edition has no read-only role
+(RBAC is an Enterprise feature), so a service account can also write. Use a
+dedicated one for Radar; Radar only reads.
+
+**Local only.** Radar running in a cluster has no OpenObserve choice in
+Settings, ignores the entry and logs
+`Ignoring the OpenObserve entry in ~/.radar/config.json: OpenObserve connections are local only`.
+For Radar Cloud, connect OpenObserve in Radar Hub instead.
 
 ## Workload metrics overrides by run mode
 
@@ -1012,6 +1215,8 @@ external terminal. Radar will not substitute a shell for the previous context.
 The header has a namespace picker on the right. Pick a single namespace to focus the view, or **All namespaces** to see everything you have access to. Cluster-scoped resources (Nodes, Namespaces, PVs, StorageClasses) appear regardless of the pick if your RBAC permits them — they have no namespace to filter on. Namespace-restricted users without their own cluster-scoped RBAC won't see cluster-scoped sections at all.
 
 The pick belongs to the browser tab. Picking in one tab doesn't change your other tabs, or what anyone else sees, and a tab keeps its pick when you reload it, including **All namespaces**. A new tab starts from the last pick made on this Radar for the kubeconfig context, in any tab. Locally that last pick is remembered across restarts. In shared (auth-enabled) deployments it lives until Radar restarts or reconnects to the cluster, and it is shared by everyone Radar maps to the same Kubernetes user, so with a shared identity a new tab can start on someone else's last pick.
+
+The pick stays applied as you move between views. When it leaves a resource list empty, the list says how many of that kind are in other namespaces you can read, with a **Show all namespaces** button. A count Radar couldn't read in full, or one limited by your access, reads "At least N". Under `--namespace-scope` Radar holds no other namespace, so the list says nothing more.
 
 The pick narrows Radar's own views only, and only because the UI sends it with each request. An API read that names no namespace (`?namespace=` / `?namespaces=`) never inherits a remembered pick: it returns everything you're allowed to see, within the `--namespace-scope` pin when one is set. So the same user reading through another client — AI tools over MCP, Radar Cloud's fleet-wide views and background pollers, or `curl` — is never quietly narrowed to a namespace picked while browsing. A few UI surfaces deliberately cover all your namespaces regardless of the pick: the namespace list in the ⌘K palette, the **My permissions** dialog, and the standalone Cost view (which disables the picker). Home's Cost Insights card follows the pick.
 

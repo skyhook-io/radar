@@ -1,8 +1,9 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import { kindToPluralWithGroup } from '../../utils/navigation'
-import { IssueRow, type IssueRowSlotContext } from './IssuesView'
-import { compareIssues, subjectRef, type Issue, type IssueResourceRef } from './types'
+import { IssueRow, issueRowKey, useOpenIssueNotice, useVisibleIssues, type IssueRowSlotContext } from './IssuesView'
+import type { IssueExpansion, IssueTimelineLinks } from './IssueRecentChanges'
+import { compareIssues, subjectRef, type Issue, type IssueResourceRef, type IssueRowChange } from './types'
 
 export function ResourceIssuesSection({
   issues,
@@ -11,6 +12,11 @@ export function ResourceIssuesSection({
   compact,
   renderDetailSection,
   heading = "Operational issues",
+  onOpenIssueChange,
+  expandedIssue,
+  rowChanges,
+  onVisibleIssuesChange,
+  timelineLinks,
 }: {
   compact?: boolean
   renderDetailSection?: (ctx: IssueRowSlotContext) => ReactNode
@@ -23,9 +29,21 @@ export function ResourceIssuesSection({
    *  header already names it. Omit (e.g. the standalone fleet queue) to always
    *  show the subject. */
   subjectResource?: IssueResourceRef
+  /** See IssuesViewProps.onOpenIssueChange. */
+  onOpenIssueChange?: (issue: Issue | null) => void
+  /** See IssuesViewProps.expandedIssue. */
+  expandedIssue?: (issue: Issue) => IssueExpansion | undefined
+  /** See IssuesViewProps.rowChanges. */
+  rowChanges?: ReadonlyMap<string, IssueRowChange>
+  /** See IssuesViewProps.onVisibleIssuesChange. */
+  onVisibleIssuesChange?: (issues: Issue[]) => void
+  /** See IssuesViewProps.timelineLinks. */
+  timelineLinks?: IssueTimelineLinks
 }) {
   const sorted = useMemo(() => [...(issues ?? [])].sort(compareIssues), [issues])
   const [openId, setOpenId] = useState<string | null>(null)
+  useOpenIssueNotice(sorted, openId, issueRowKey, onOpenIssueChange)
+  const listRef = useVisibleIssues(sorted, onVisibleIssuesChange)
 
   if (sorted.length === 0) return null
 
@@ -35,19 +53,23 @@ export function ResourceIssuesSection({
         <AlertTriangle className="h-4 w-4 text-theme-text-tertiary" aria-hidden />
         <span>{heading} ({sorted.length})</span>
       </div>
-      <ol className="flex flex-col gap-1.5">
+      <ol ref={listRef} className="flex flex-col gap-1.5">
         {sorted.map((issue) => {
-          const key = issueKey(issue)
+          const key = issueRowKey(issue)
+          const open = openId === key
           return (
             <IssueRow
               key={key}
               issue={issue}
+              expandedIssue={open ? expandedIssue?.(issue) : undefined}
               compact={compact}
               renderDetailSection={renderDetailSection}
-              open={openId === key}
+              open={open}
               onToggle={() => setOpenId((cur) => (cur === key ? null : key))}
               onResourceClick={onResourceClick}
               hideSubject={subjectResource ? sameResource(subjectRef(issue), subjectResource) : false}
+              rowChange={rowChanges?.get(key)}
+              timelineLinks={timelineLinks}
             />
           )
         })}
@@ -71,8 +93,4 @@ export function sameResource(a: IssueResourceRef, b: IssueResourceRef): boolean 
     kindToPluralWithGroup(a.kind, a.group ?? '').toLowerCase() ===
       kindToPluralWithGroup(b.kind, b.group ?? '').toLowerCase()
   )
-}
-
-function issueKey(issue: Issue): string {
-  return `${issue.cluster_id ?? ''}:${issue.id}`
 }

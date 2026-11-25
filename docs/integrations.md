@@ -689,7 +689,7 @@ TLS references resolve local Secret names and delegated `namespace/name` names c
 
 **Dashboard:** Certificate health card showing healthy/warning/critical/expired certificate counts across all namespaces.
 
-**TLS Secret Parsing:** Click any TLS Secret to see the X.509 certificate details — subject, issuer, validity dates, SANs — parsed directly from the secret data.
+**Secret certificates.** Open a Secret to inspect PEM certificates under any data key. The drawer names the key, preserves certificate order within each bundle, and shows the subject, organization, issuer, DNS and IP alternative names, serial number, key type and validity dates. The dashboard's Secret expiry counts use the serving certificate in a TLS Secret's `tls.crt`.
 
 <p align="center">
   <img src="screenshots/integrations/certmanager-certificate-detail.png" alt="Certificate Detail" width="800">
@@ -900,7 +900,9 @@ See the main [README](../README.md#gitops) for the user-facing overview. This se
 | GitRepository | `source.toolkit.fluxcd.io/v1` | Yes | Yes | — |
 | OCIRepository | `source.toolkit.fluxcd.io/v1beta2` | Yes | Yes | — |
 | HelmRepository | `source.toolkit.fluxcd.io/v1` | Yes | Yes | — |
-| Bucket / HelmChart / ExternalArtifact | `source.toolkit.fluxcd.io` | When referenced | Generic | — |
+| Bucket / HelmChart | `source.toolkit.fluxcd.io` | When referenced | Generic | — |
+| ExternalArtifact | `source.toolkit.fluxcd.io/v1` | When referenced | Yes | — |
+| ArtifactGenerator | `source.extensions.fluxcd.io/v1beta1` (source-watcher) | When referenced | Yes | — |
 | Kustomization | `kustomize.toolkit.fluxcd.io/v1` | Yes | Yes | Yes |
 | HelmRelease | `helm.toolkit.fluxcd.io/v2` | Yes | Yes | Yes |
 | Alert | `notification.toolkit.fluxcd.io/v1beta3` | — | Yes | — |
@@ -912,6 +914,16 @@ observed Flux sources in both directions within Radar's namespace scope.
 Kustomizations use `spec.sourceRef`; HelmReleases use `spec.chart.spec.sourceRef`
 or `spec.chartRef`. Inline releases also link the generated HelmChart named by
 `status.helmChart`; an observed HelmChart links its source in its own namespace.
+An ExternalArtifact links the ArtifactGenerator named by its `spec.sourceRef`, and a
+generator links the GitRepository / OCIRepository / Bucket / HelmChart /
+ExternalArtifact in its `spec.sources` (with their aliases). Its artifact count
+reads the ExternalArtifacts in `status.inventory`, not the Namespaces
+source-watcher 2.3 also records there, and shows `-` when Radar can't read an
+inventory. These upstream hops follow only objects already reached
+from a root, at most eight levels, so a release that consumes one of a
+generator's artifacts never pulls in the generator's other artifacts. A
+generator paused with `source.extensions.fluxcd.io/reconcile: disabled` is
+Suspended, not failing, in every surface (tree, topology, table, drawer, Issues).
 `spec.dependsOn` links a Kustomization or HelmRelease to the objects of the same
 kind it waits for (an entry without a namespace means its own namespace).
 These are dependencies, not owners: topology draws each source upstream, with
@@ -1007,6 +1019,35 @@ are redacted in its column and drawer; the YAML view and MCP show the object as 
 | Workflow | `argoproj.io/v1alpha1` | — | Yes | — |
 | WorkflowTemplate | `argoproj.io/v1alpha1` | — | Yes | — |
 | CronWorkflow | `argoproj.io/v1alpha1` | — | Generic | — |
+
+**Stop a Workflow** with `POST /api/workflows/{namespace}/{name}/stop` (capability `workflowStop`). Send a JSON object with the reviewed Workflow's `metadata.uid` as `uid` and an explicit `strategy` of `Stop` or `Terminate`. An in-place `argo retry` preserves the Workflow UID, so callers that must stop only the execution they reviewed should also send its reviewed `resourceVersion`. Missing either required field or supplying an unknown strategy returns 400. The body limit is 1 KiB.
+
+Argo reconciles `spec.shutdown` asynchronously. Stop allows exit handlers to run. Terminate skips them and can escalate an existing Stop. Older Argo controllers (for example, v3.5) may leave shutdown pending while the Workflow is globally suspended, so watch `status.phase` for completion. Radar checks the Workflow in this order.
+
+1. A different UID means the name now identifies another run. Radar returns 409 `workflow_replaced`.
+2. A finished run returns 409 `workflow_finished`.
+3. If the stored shutdown already satisfies the request, Radar returns 200 with that `shutdown` and `changed: false`. A stored Terminate satisfies either strategy.
+4. If a patch is still needed and the caller supplied a stale version, Radar returns 409 `workflow_changed`.
+
+Radar patches at the version it just read. With a caller-supplied version, a patch conflict returns 409 `workflow_changed` immediately. Otherwise Radar reads the Workflow again and repeats all four checks. If all four patch attempts conflict, it returns 409 `workflow_changed`.
+
+After Kubernetes accepts the patch, Radar returns 200 with the stored `shutdown`, including a strategy rewritten by admission or an empty string if admission removed it. `changed` is true only if the stored strategy differs from the value Radar read for that patch. A patch rejected by Kubernetes as invalid returns 422.
+
+Kubernetes checks the caller's `get` permission on the Workflow for the read and `patch` for a write. On a shared listener without authentication, anyone who can reach Radar can stop Workflows its Kubernetes identity can read and patch. The stock chart's Argo permissions are read-only. Same-origin and [connection binding](connection-lifecycle.md) checks apply.
+
+In the UI, a Workflow's detail page, and the run view of a CronWorkflow, WorkflowTemplate or ClusterWorkflowTemplate for its selected child Workflow, offer **Stop…** while the run has not finished (phase other than Succeeded, Failed or Error). The dialog explains both strategies and defaults to Stop. While a Stop is in progress, the button becomes **Terminate…**, and once a Terminate is stored, it disappears. Until the run finishes, the page header (or the selected run's header in a run view) shows **Stopping** or **Terminating**, because `spec.shutdown` records the request and the phase stays Running until Argo acts. An unconfirmed dialog closes when the run finishes, is terminated, starts deleting, or restarts under the same UID (`argo retry`, recognised by a new `status.startedAt`). The button appears only when the connected Radar advertises `workflowStop` and `capabilities.workloadWrites.workflows` (a `patch argoproj.io/workflows` access check in the Workflow's namespace) is true. On an older Radar, it renders disabled with an upgrade note. The UI sends the Workflow's UID and never its `resourceVersion`, because Argo's status updates change the version continually. Pinning the version would refuse almost every Stop on a running Workflow.
+
+**Submit a WorkflowTemplate** with `POST /api/workflowtemplates/{namespace}/{name}/submit` (capability `workflowTemplateSubmit`). The WorkflowTemplate page shows it as **Submit…** when the caller may create Workflows in the namespace (`workloadWrites.createWorkflows`). After a submit, Radar opens the new Workflow's page, as Argo's UI does. Radar creates a Workflow whose `spec.workflowTemplateRef` names the template, as `argo submit --from workflowtemplate/<name>` does, and answers 200 with its `namespace`, `name` and `uid`. Every body field is optional, and an empty body is accepted; the body limit is 256 KiB.
+
+- `parameters`, an object of name to string value, is checked against what the template declares: its `spec.arguments.parameters`, and the inputs of its entrypoint template, which Argo fills from a Workflow's arguments by name. A parameter needs a value from the request unless the template gives it one (`value`, an input's `default`, or a `valueFrom.configMapKeyRef`; other `valueFrom` sources have nothing to read for a submitted run). As in Argo's validation, an argument with an `enum` needs a literal `value`. A value must be one of the parameter's `enum` when it has one, including the enum of the entrypoint input an argument of the same name feeds. A `null` value is refused, and so is a name the template doesn't declare: Argo would accept it and ignore it, so Radar treats it as a typo. All of these return 400 `invalid_parameters`, naming each problem. Radar sends only the values in the request, in the template's order; Argo fills in the rest from the template.
+- A template without `spec.entrypoint` returns 400 `workflow_template_no_entrypoint`: a Workflow that references it can't start. Choosing an entrypoint is not supported.
+- `name` names the Workflow (at most 63 characters, a DNS subdomain). `generateName` sets the prefix instead (at most 58 characters). They can't be combined, and without either Radar uses `<template>-`, with the template name cut to fit. An explicit `name` that already exists returns 409 `workflow_name_taken`.
+
+When Submit fails without a definite answer from the server (a network error, timeout, or 5xx), the dialog locks resubmission with a warning to check the runs below and refreshes the template's run list. A definite refusal (400, 403, 404, 409) keeps the form open with the error.
+
+The Workflow carries Argo's `workflows.argoproj.io/workflow-template` label, as Argo's CLI and UI set it, and the template's `workflows.argoproj.io/controller-instanceid` label when it has one, so a controller started with an instance ID picks the run up. Radar copies no other labels and has no instance ID of its own: where the controller runs with one, label the template with it, or the run is created and never picked up. Argo runs the Workflow's pods with the service account the template sets, or Argo's configured default, never the caller's.
+
+The template read and the create both run as the caller: `get workflowtemplates` and `create workflows` in the namespace. A namespace outside the `--namespace-scope` pin is refused with 403 before any Kubernetes call. On a shared listener without authentication, anyone who can reach Radar can start runs of templates its Kubernetes identity can read, if that identity may create Workflows. The stock chart's Argo permissions are read-only, so this needs a grant beyond the chart. Same-origin and connection binding checks apply. ClusterWorkflowTemplates are not supported yet.
 
 ---
 

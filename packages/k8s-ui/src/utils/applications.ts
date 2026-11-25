@@ -149,6 +149,7 @@ export interface AppHistorySummary {
 }
 
 export interface AppHistoryAnchor {
+  git?: { repoURL: string; path?: string; previousRevision?: string; historyID?: string };
   type: "gitops" | "helm" | string;
   title: string;
   status?: string;
@@ -1710,6 +1711,13 @@ export interface AppEntryBase {
   /** ready/desired as a fraction for sorting; -1 when nothing is desired. */
   readyRatio: number;
   source: AppSource;
+}
+
+/** A status the host knows better than the workloads say, e.g. how a job's last run went. */
+export interface AppHostStatus {
+  health: AppHealth;
+  /** Defaults to the standard label for this health. */
+  label?: string;
 }
 
 export interface SingleAppEntry extends AppEntryBase {

@@ -2127,6 +2127,9 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName, safetyBinding str
 	if err != nil {
 		return "", "", false, fmt.Errorf("failed to parse kubeconfig: %w", err)
 	}
+	if reasons := UntrustedKubeconfigReasons(newConfig); len(reasons) > 0 {
+		return "", "", false, fmt.Errorf("kubeconfig would run a command or read a file on this computer: %s", strings.Join(reasons, "; "))
+	}
 	if _, ok := newConfig.Contexts[contextName]; !ok {
 		return "", "", false, fmt.Errorf("context %q not found in provided kubeconfig", contextName)
 	}

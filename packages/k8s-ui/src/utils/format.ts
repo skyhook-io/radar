@@ -220,11 +220,11 @@ export function formatCPUMillicores(millicores: number): string {
 // Time Formatting
 // =============================================================================
 
-export function formatCompactAge(value?: string): string {
+export function formatCompactAge(value?: string, now = Date.now()): string {
   if (!value) return ''
   const time = Date.parse(value)
   if (!Number.isFinite(time)) return ''
-  const seconds = Math.max(0, Math.floor((Date.now() - time) / 1000))
+  const seconds = Math.max(0, Math.floor((now - time) / 1000))
   if (seconds < 60) return `${seconds}s`
   const minutes = Math.floor(seconds / 60)
   if (minutes < 60) return `${minutes}m`

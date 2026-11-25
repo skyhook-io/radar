@@ -7,6 +7,8 @@ export type ApplicationHistoryCategory = 'deployment' | 'change' | 'problem'
 export type ApplicationHistoryRange = '24h' | '7d' | '30d' | 'all'
 
 export interface ApplicationHistoryItem {
+  /** Source record shared by Timeline and Deploys. */
+  delivery?: AppHistoryAnchor;
   id: string
   category: ApplicationHistoryCategory
   title: string
@@ -92,7 +94,8 @@ function anchorItem(anchor: AppHistoryAnchor, sourceRef: AppSourceRef | undefine
   if (!validTimestamp(anchor.timestamp)) return null
   return {
     id: `source:${anchor.type}:${anchor.timestamp}:${anchor.revision ?? index}`,
-    category: 'deployment',
+    category: anchor.type === 'condition' ? 'change' : 'deployment',
+    delivery: anchor.type === sourceRef?.type && anchor.revision ? anchor : undefined,
     title: anchor.title,
     timestamp: anchor.timestamp,
     detail: anchor.source || anchor.message,
@@ -197,13 +200,10 @@ function warningKey(item: ApplicationHistoryItem): string {
   return `${item.title}\u0000${resource?.kind ?? ''}\u0000${resource?.namespace ?? ''}\u0000${resource?.name ?? ''}\u0000${item.detail ?? ''}`
 }
 
-export function buildApplicationHistoryItems(
-  history: AppHistory | undefined,
-  events: TimelineEvent[],
-): ApplicationHistoryItem[] {
+/** One record per change: Argo CD reports its latest sync in both status.history and operationState. */
+export function coalesceHistoryAnchors(records: AppHistoryAnchor[]): AppHistoryAnchor[] {
   const anchorsByChange = new Map<string, AppHistoryAnchor>()
-  for (const anchor of history?.anchors ?? []) {
-    if (!validTimestamp(anchor.timestamp)) continue
+  for (const anchor of records) {
     const key = `${anchor.type}\u0000${anchor.title}\u0000${anchor.timestamp}\u0000${anchor.revision ?? ''}`
     const existing = anchorsByChange.get(key)
     if (!existing) {
@@ -214,11 +214,27 @@ export function buildApplicationHistoryItems(
       ...existing,
       status: anchor.status ?? existing.status,
       source: existing.source ?? anchor.source,
+      git: existing.git ?? anchor.git,
       message: anchor.message ?? existing.message,
       initiatedBy: anchor.initiatedBy ?? existing.initiatedBy,
     })
   }
-  const anchors = [...anchorsByChange.values()]
+  return [...anchorsByChange.values()]
+}
+
+/** Identified releases and syncs for the application's delivery source, newest first. */
+export function applicationDeliveryRecords(history: AppHistory | undefined): AppHistoryAnchor[] {
+  if (!history?.sourceRef) return []
+  return coalesceHistoryAnchors((history.anchors ?? []).filter(record =>
+    record.type === history.sourceRef?.type && Boolean(record.revision) && validTimestamp(record.timestamp),
+  )).sort((a, b) => Date.parse(b.timestamp!) - Date.parse(a.timestamp!))
+}
+
+export function buildApplicationHistoryItems(
+  history: AppHistory | undefined,
+  events: TimelineEvent[],
+): ApplicationHistoryItem[] {
+  const anchors = coalesceHistoryAnchors((history?.anchors ?? []).filter((anchor) => validTimestamp(anchor.timestamp)))
     .map((anchor, index) => anchorItem(anchor, history?.sourceRef, index))
     .filter((item): item is ApplicationHistoryItem => item !== null)
   const hasAnchors = anchors.length > 0

@@ -22,7 +22,7 @@ func TestTheRegistryListsEachFamilyOnce(t *testing.T) {
 		}
 		seen[f.Name] = true
 	}
-	if len(seen) != 41 {
+	if len(seen) != 42 {
 		t.Errorf("the registry lists %d families; update it with the families", len(seen))
 	}
 }

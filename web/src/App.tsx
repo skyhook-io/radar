@@ -12,7 +12,7 @@ import { switchInProgress } from './api/contextSwitch'
 import { ContextSwitchActions } from './components/ContextSwitchActions'
 import { investigationWorkspaceSearch, isInvestigationWorkspacePath, useDiagnoseLayout } from './components/diagnose/DiagnoseContext'
 import { DiagnoseSurface } from './components/diagnose/DiagnoseSurface'
-import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader, usePhoneLayout, PHONE_MEDIA_QUERY } from '@skyhook-io/k8s-ui'
+import { type IssueTimelineEventTarget, TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader, usePhoneLayout, PHONE_MEDIA_QUERY } from '@skyhook-io/k8s-ui'
 import { resetNavigationMap } from '@skyhook-io/k8s-ui/utils/navigation'
 import { topologyNodeResourceKind } from '@skyhook-io/k8s-ui/utils/topology-neighborhood'
 import { useAPIResources, findAPIResourceForRoute } from './api/apiResources'
@@ -28,6 +28,7 @@ import { TrafficView } from './components/traffic/TrafficView'
 import { CostView } from './components/cost/CostView'
 import { AuditView } from './components/audit/AuditView'
 import { IssuesPane } from './components/issues/IssuesPane'
+import { TimelineNavigationProvider, canOpenTimelineEvent, openTimelineEventIn } from './context/TimelineNavigation'
 import { GitOpsView } from './components/gitops/GitOpsView'
 import { gitopsTableChange } from './components/gitops/gitopsRowEvents'
 import { ApplicationsView } from './components/applications/ApplicationsView'
@@ -1538,6 +1539,21 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       { onSuccess: (_scope, _vars, start) => { if (isAppliedNamespaceSwitch(start)) setNamespaces([]) } },
     )
   }, [namespaceScope?.cacheScoped, namespaces.length, setActiveNamespace])
+  // A change's timeline event, in its namespace (all namespaces for a
+  // cluster-scoped event). See openTimelineEventIn.
+  const openTimelineEvent = useCallback((target: IssueTimelineEventTarget) => {
+    openTimelineEventIn(target, {
+      currentNamespaces: namespaces,
+      cacheScoped: Boolean(namespaceScope?.cacheScoped),
+      setNamespaces,
+      requestNamespaces: (picked) => setActiveNamespace.mutate({ namespaces: picked }),
+      navigate: (search) => navigate({ pathname: '/timeline', search: search.toString() }),
+    })
+  }, [namespaceScope?.cacheScoped, namespaces, navigate, setActiveNamespace])
+  const timelineEventLinks = useMemo(() => ({
+    onTimelineEventClick: openTimelineEvent,
+    canOpenTimelineEvent: (target: IssueTimelineEventTarget) => canOpenTimelineEvent(target, Boolean(namespaceScope?.cacheScoped)),
+  }), [openTimelineEvent, namespaceScope?.cacheScoped])
   // Same write as the header picker, which then mirrors it into `namespaces`.
   // The flash shows where that scope lives from now on. The picker owns the
   // namespace scope from then on, so no kind keeps a Namespace column filter.
@@ -1895,6 +1911,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const navActiveView = mainView === 'helmCompare' ? 'helm' : activeWorkspace?.navView ?? mainView
 
   return (
+    <TimelineNavigationProvider value={timelineEventLinks}>
     <PortForwardProvider>
     {/* Preserve the ~800px content floor: the rail is a fixed-width sibling, so
         the outer minimum must include it (176px pinned / 56px collapsed) or the
@@ -2717,6 +2734,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       </div>
     </div>
     </PortForwardProvider>
+    </TimelineNavigationProvider>
   )
 }
 

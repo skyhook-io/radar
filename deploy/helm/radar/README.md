@@ -588,13 +588,25 @@ Disabled by default for security:
 |---------|-------|-------------|
 | Secrets | `rbac.secrets: true` | View secrets in resource list. Also granted by `rbac.helm` (Helm stores releases in Secrets), by auth (`auth.mode` other than `none`), and in cloud mode, where every Secret read is re-checked against the requesting user's own RBAC. The grant is cluster-wide `get/list/watch` on all Secrets; `rbac.secrets: false` does not remove it in those modes. |
 | Terminal | `rbac.podExec: true` | Shell access to pods |
+| Pod Debug | A namespaced grant to `update` core `pods/ephemeralcontainers`, in addition to terminal access and `get pods` | Add an ephemeral toolbox container and open its terminal |
 | Port Forward | `rbac.portForward: true` | Port forwarding to pods. Also the fallback for traffic sources (Hubble/Caretta) — Radar dials the relay/metrics Service directly first, so in-cluster installs only need this when a NetworkPolicy or routing blocks Radar's namespace from reaching the service |
 | Logs | `rbac.podLogs: true` | View pod logs (**enabled by default**) |
 | Helm Write | `rbac.helm: true` | Install/upgrade/rollback/uninstall Helm releases. Installs with auth and Cloud off: grants Radar's ServiceAccount create/update/patch/delete on all resource types, since Helm runs as it. Under auth or cloud-mode Helm runs as the signed-in user, so the ServiceAccount gets no write grant; instead a split helm add-on ClusterRole is emitted — `radar-helm` (member-safe: CRDs, storage, namespaces) and `radar-helm-admin` (owner-only: RBAC, webhooks, ApiServices) |
 | RBAC view | `rbac.viewRBAC: true` | Show ClusterRoles, ClusterRoleBindings, Roles, RoleBindings and CertificateSigningRequests in the resource browser. Off by default — cache-served reads bypass per-user RBAC, so this exposes the cluster's authorization graph to every authenticated Radar user. Auto-enabled under auth or cloud mode (every read is re-checked per user there). |
 | Webhooks view | `rbac.viewWebhooks: true` | Show MutatingWebhookConfigurations and ValidatingWebhookConfigurations in the resource browser. Off by default — the configurations reveal which admission controls are enforced (Gatekeeper / Kyverno policies, image scanners, DLP) and where the gaps are, which is recon value for a low-trust viewer. Auto-enabled under auth or cloud mode. |
-| Admission policies view | `rbac.viewAdmissionPolicies: true` | Show native ValidatingAdmissionPolicies and ValidatingAdmissionPolicyBindings in the resource browser. Off by default for no-auth installs because the declarations expose admission-control coverage and gaps. Auto-enabled under auth or cloud mode, where reads are re-checked per user. |
+| Admission policies view | `rbac.viewAdmissionPolicies: true` | Show native validating and mutating admission policies and bindings in the resource browser. Off by default for no-auth installs because the declarations expose admission-control coverage and gaps. Auto-enabled under auth or cloud mode, where reads are re-checked per user. |
 | Node runtime evidence | `rbac.viewNodeRuntime: true` | Let upgrade-impact checks inspect kubelet metrics and effective configuration through `nodes/proxy`. Off by default because this exposes node-level runtime and configuration details to anyone who can reach a no-auth Radar install. Under auth, grant `get` on `nodes/proxy` to each Kubernetes identity that should inspect this evidence. |
+
+For Pod Debug, bind the extra `pods/ephemeralcontainers` permission in the target namespace. With authentication off, bind Radar’s ServiceAccount. With per-user authentication, grant the signed-in user or their group. Pod Debug is available in standalone and in-cluster Radar. The Radar Hub UI omits both the Pod action and the missing-shell recovery action.
+
+For example, add the separate grant for an existing per-user group in one namespace:
+
+```sh
+kubectl -n payments create role pod-debugger --verb=update --resource=pods/ephemeralcontainers
+kubectl -n payments create rolebinding pod-debugger --role=pod-debugger --group=payments-oncall
+```
+
+With authentication off, use `--serviceaccount=<radar-namespace>:<radar-serviceaccount>` in place of `--group`. These commands add only the ephemeral-container permission.
 
 ### MCP container commands
 
@@ -741,7 +753,7 @@ retain their finite grants.
 | `externalDns` | `externaldns.k8s.io` |
 | `externalSecrets` | `external-secrets.io` |
 | `flagger` | `flagger.app` (`canaries`, `metrictemplates` only); **off by default**. Enable `rbac.crdGroups.flagger=true` for native browsing and failed-rollout Issues. |
-| `flux` | `*.toolkit.fluxcd.io` |
+| `flux` | `*.toolkit.fluxcd.io`, `source.extensions.fluxcd.io` (ArtifactGenerator) |
 | `fluxOperator` | `fluxcd.controlplane.io` (FluxInstance, FluxReport, ResourceSet, ResourceSetInputProvider) |
 | `k3sHelm` | `helm.cattle.io` (`helmcharts`, `helmchartconfigs` only); **off by default**, because `spec.valuesContent` and `spec.set` can carry credentials. Enable `rbac.crdGroups.k3sHelm=true` on k3s/RKE2 for the HelmChart drawers and the `k3s` badge on the releases they manage. |
 | `gatewayApi` | `gateway.networking.k8s.io` |

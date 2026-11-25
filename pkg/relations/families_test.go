@@ -285,6 +285,33 @@ func TestFluxSourcesNameTheirArtifactsAcrossNamespaces(t *testing.T) {
 	checkFamily(t, FluxSources, []runtime.Object{charts, hr}, hr, ref("source.toolkit.fluxcd.io", "HelmRepository", "charts"), "spec.chart.spec.sourceRef")
 }
 
+// Up the artifact chain: an ExternalArtifact names its ArtifactGenerator and
+// the generator the sources it composes, each with the field declaring it.
+func TestFluxSourcesFollowTheArtifactChain(t *testing.T) {
+	gen := object("source.extensions.fluxcd.io/v1beta1", "ArtifactGenerator", "gen", map[string]any{"sources": []any{map[string]any{"alias": "repo", "kind": "GitRepository", "name": "platform"}}})
+	art := object("source.toolkit.fluxcd.io/v1", "ExternalArtifact", "app", map[string]any{"sourceRef": map[string]any{"apiVersion": "source.extensions.fluxcd.io/v1beta1", "kind": "ArtifactGenerator", "name": "gen"}})
+	repo := object("source.toolkit.fluxcd.io/v1", "GitRepository", "platform", nil)
+	checkFamily(t, FluxSources, []runtime.Object{gen, art}, art, ref("source.extensions.fluxcd.io", "ArtifactGenerator", "gen"), "spec.sourceRef")
+	checkFamily(t, FluxSources, []runtime.Object{repo, gen}, gen, ref("source.toolkit.fluxcd.io", "GitRepository", "platform"), "spec.sources")
+
+	// Another producer is not a generator, so the artifact declares nothing.
+	foreign := object("source.toolkit.fluxcd.io/v1", "ExternalArtifact", "built", map[string]any{"sourceRef": map[string]any{"apiVersion": "example.com/v1", "kind": "Builder", "name": "b"}})
+	if got := NewView(allNamespaces{}, ownership.Unrestricted()).References(FluxSources, refOf(foreign), foreign); len(got.Declared) != 0 {
+		t.Errorf("a foreign producer is declared: %+v", got.Declared)
+	}
+
+	// A caller who can't read generators gets it withheld, and the repository
+	// doesn't name the generator among what reads it.
+	s := allNamespaces{cluster: cluster{objects: []runtime.Object{gen, art, repo}}}
+	v := NewView(s, denies{"ArtifactGenerator"})
+	if got := v.References(FluxSources, refOf(art), art); len(got.Declared) != 1 || got.Declared[0].State != TargetWithheld {
+		t.Errorf("denied generator: %+v", got.Declared)
+	}
+	if got := referrerRefs(v.Referrers(FluxSources, refOf(repo), nil)); len(got) != 0 {
+		t.Errorf("denied generator listed as a referrer: %v", got)
+	}
+}
+
 func TestNodePoolsNameTheirProvidersNodeClass(t *testing.T) {
 	class := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "karpenter.k8s.aws/v1", "kind": "EC2NodeClass", "metadata": map[string]any{"name": "default"}}}
 	pool := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "karpenter.sh/v1", "kind": "NodePool", "metadata": map[string]any{"name": "general"},
@@ -302,6 +329,42 @@ func TestClustersNameTheirClusterClass(t *testing.T) {
 	legacy := object("cluster.x-k8s.io/v1beta1", "Cluster", "old", map[string]any{"topology": map[string]any{"class": "quick-start"}})
 	if r, ok := configrefs.CAPIClusterClass(legacy); !ok || r.Ref.Namespace != "shop" || r.Path != "spec.topology.class" {
 		t.Errorf("a v1beta1 Cluster names %+v", r)
+	}
+}
+
+func TestFluxDependsOnNamesItsOwnKindAcrossNamespaces(t *testing.T) {
+	infra := inNamespace(object("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "infra", nil), "flux-system")
+	apps := object("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "apps", map[string]any{"dependsOn": []any{map[string]any{"name": "infra", "namespace": "flux-system"}}})
+	session := allNamespaces{cluster: cluster{objects: []runtime.Object{infra, apps}}}
+	checkFamilyIn(t, session, FluxDependsOn, apps, refOf(infra), "spec.dependsOn[]")
+
+	shopOnly := NewView(session, namespaceAccess{namespace: "shop"})
+	if got := shopOnly.References(FluxDependsOn, refOf(apps), apps); len(got.Declared) != 1 || got.Declared[0].Ref != refOf(infra) || got.Declared[0].State != TargetWithheld {
+		t.Errorf("dependency outside shop: %+v", got)
+	}
+	fluxOnly := NewView(session, namespaceAccess{namespace: "flux-system"})
+	if got := fluxOnly.Referrers(FluxDependsOn, refOf(infra), nil); len(got.Referrers) != 0 || !got.Coverage.Narrowed {
+		t.Errorf("referrers visible in flux-system: %+v", got)
+	}
+
+	db := object("helm.toolkit.fluxcd.io/v2", "HelmRelease", "db", nil)
+	web := object("helm.toolkit.fluxcd.io/v2", "HelmRelease", "web", map[string]any{"dependsOn": []any{map[string]any{"name": "db"}}})
+	checkFamily(t, FluxDependsOn, []runtime.Object{db, web}, web, ref("helm.toolkit.fluxcd.io", "HelmRelease", "db"), "spec.dependsOn[]")
+
+	if FluxDependsOn.Covers(resourceid.GroupKind{Group: "source.toolkit.fluxcd.io", Kind: "GitRepository"}) {
+		t.Error("FluxDependsOn covers a Flux source")
+	}
+}
+
+func TestMalformedBrokerRefLeavesTriggerWithoutABroker(t *testing.T) {
+	broker := object("eventing.knative.dev/v1", "Broker", "default", nil)
+	trigger := object("eventing.knative.dev/v1", "Trigger", "orders", map[string]any{"broker": "default", "brokerRef": "invalid"})
+	v := NewView(allNamespaces{cluster: cluster{objects: []runtime.Object{broker, trigger}}}, ownership.Unrestricted())
+	if got := v.References(KnativeTriggerBrokers, refOf(trigger), trigger); len(got.Declared) != 0 {
+		t.Errorf("Trigger declares %+v", got.Declared)
+	}
+	if got := v.Referrers(KnativeTriggerBrokers, refOf(broker), nil); len(got.Referrers) != 0 {
+		t.Errorf("Broker has referrers %+v", got.Referrers)
 	}
 }
 
@@ -379,5 +442,29 @@ func TestAWorkflowTemplateUsedTwiceReportsBothPaths(t *testing.T) {
 	want := []string{"spec.templates[].dag.tasks[].templateRef", "spec.templates[].steps[][].templateRef"}
 	if len(got.Declared) != 1 || !slices.Equal(got.Declared[0].Paths, want) {
 		t.Errorf("declared %+v; want one target at %v", got.Declared, want)
+	}
+}
+
+func TestUnambiguousDeclaredTargetsLeaveOutReferencesWithAlternatives(t *testing.T) {
+	// A TraefikService backend may be served from Traefik's current or legacy
+	// group; which one stands depends on what Radar could read. A core
+	// Service backend has no alternative.
+	route := object("traefik.io/v1alpha1", "IngressRoute", "web", map[string]any{"routes": []any{map[string]any{
+		"match": "Host(`shop.example.com`)",
+		"services": []any{
+			map[string]any{"name": "web", "port": 80}, map[string]any{"name": "web", "port": 80},
+			map[string]any{"name": "weighted", "kind": "TraefikService"},
+			map[string]any{"name": "api", "port": 80}, map[string]any{"name": "api", "port": 80},
+		},
+	}}})
+	got, err := TraefikBackends.UnambiguousDeclaredTargets(refOf(route).GroupKind(), route)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []resourceid.Ref{ref("", "Service", "web"), ref("", "Service", "api")}; !slices.Equal(got, want) {
+		t.Errorf("UnambiguousDeclaredTargets = %v, want %v", got, want)
+	}
+	if got, _ := TraefikBackends.UnambiguousDeclaredTargets(resourceid.GroupKind{Kind: "ConfigMap"}, route); got != nil {
+		t.Errorf("a kind the family doesn't read from declares %v", got)
 	}
 }

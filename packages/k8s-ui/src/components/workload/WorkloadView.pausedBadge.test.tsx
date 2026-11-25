@@ -28,6 +28,18 @@ function header(resource: ReturnType<typeof deployment>, expanded: boolean) {
 const pausedBadge = />\s*(<svg[^>]*>.*?<\/svg>)?\s*Paused\s*</
 const statusChip = /class="badge(?: whitespace-nowrap)? status-[a-z]+"[^>]*>Rollout paused</
 
+it('withholds the rollout notice when the host still supplies the previous Deployment', () => {
+  const resource = deployment({ paused: true }, held)
+  const render = (name: string) => renderToStaticMarkup(
+    <WorkloadView kind="deployments" group="apps" namespace="prod" name={name} resource={resource}
+      onBack={() => {}} activeTab="details" extraTabs={[{ id: 'details', label: 'Details', render: () => 'Host panel' }]} />,
+  )
+  expect(render('web')).toContain('Paused at 0/1 updated')
+  const next = render('worker')
+  expect(next).toContain('Host panel')
+  expect(next).not.toContain('Paused at 0/1 updated')
+})
+
 describe.each([['full view', true], ['drawer', false]])('Paused badge in the %s', (_, expanded) => {
   it('is the paused signal when nothing is pending', () => {
     const html = header(deployment({ paused: true }), expanded)
