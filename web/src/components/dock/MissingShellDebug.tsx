@@ -1,5 +1,4 @@
 import { type ReactNode, useState } from 'react'
-import { Disclosure } from '@skyhook-io/k8s-ui/components/ui/Disclosure'
 import { Terminal } from 'lucide-react'
 import { formatAge, getRunningEphemeralContainers, useOpenTerminal } from '@skyhook-io/k8s-ui'
 import { PodDebugPermission } from '../resources/PodDebugPermission'
@@ -12,7 +11,7 @@ import { useCapabilitiesContext, useNamespacedCapabilities } from '../../context
 import { PodDebugAction, debugAccessMessage, runningPodDebugTargets, type PodDebugTarget } from '../resources/PodDebugAction'
 
 interface RecoveryTarget {
-  namespace: string; name: string; uid: string; target: string; connection?: string; base: string; podDetailsLink?: ReactNode; switchContainer?: (name: string) => void
+  namespace: string; name: string; uid: string; target: string; connection?: string; base: string; podDetailsLink?: ReactNode
 }
 
 export function MissingShellDebug(props: RecoveryTarget) {
@@ -30,20 +29,7 @@ export function MissingShellDebug(props: RecoveryTarget) {
   if (pod.metadata.uid !== uid) return <p className="text-xs text-theme-text-secondary">This Pod was replaced. Open its details to start a new terminal. {podDetailsLink}</p>
   const targets = runningPodDebugTargets(pod)
   if (!targets?.includes(target)) return <p className="max-w-md text-xs text-theme-text-secondary">Debug recovery needs a running Linux container. Check the container state in Pod details.</p>
-  const untargeted = getRunningEphemeralContainers(pod).filter(c => !c.targetContainerName)
-  const alternatives = targets.filter(name => name !== target)
-  return <div className="flex w-full min-w-0 max-w-md flex-col items-center gap-2">
-    <DebugOptions {...props} pod={pod}/>
-    {(alternatives.length > 0 || untargeted.length > 0) && <Disclosure summary="Other containers"
-      className="max-w-full text-xs text-theme-text-secondary" summaryClassName="justify-center hover:text-theme-text-primary">
-      <div className="mt-2 space-y-2 [overflow-wrap:anywhere]">
-        {alternatives.length > 0 && <p>Try a terminal in {alternatives.map((name, index) => <span key={name}>{index > 0 && ', '}{props.switchContainer
-          ? <button type="button" className="font-mono underline underline-offset-2" onClick={() => props.switchContainer?.(name)}>{name}</button>
-          : <code>{name}</code>}</span>)}.</p>}
-        {untargeted.length > 0 && <p>Pod-wide {untargeted.length === 1 ? 'debugger' : 'debuggers'}: <code>{untargeted.map(c => c.name).join(', ')}</code>. {podDetailsLink}</p>}
-      </div>
-    </Disclosure>}
-  </div>
+  return <DebugOptions {...props} pod={pod}/>
 }
 
 function DebugOptions({ namespace, name, uid, target, connection, base, pod }: RecoveryTarget & {pod: PodDebugTarget}) {
@@ -80,7 +66,7 @@ function DebugOptions({ namespace, name, uid, target, connection, base, pod }: R
     if (running.length && support === 'supported' && (!execOnly || canOpenEphemeralTerminal || (!query.error && query.data?.exec))) {
       const selected = running.find(c => c.name === choice) ?? running[0]
       return <div className="flex w-full min-w-0 max-w-md flex-col items-center gap-2">
-        <p className="text-xs text-theme-text-secondary [overflow-wrap:anywhere]">{running.length === 1 ? <>A debug container (<code>{selected.image}</code>) is running</> : `${running.length} debug containers are running`} for <code>{target}</code>.</p>
+        <p className="text-xs text-theme-text-secondary [overflow-wrap:anywhere]">{running.length === 1 ? <>A debug container using <code className="inline-code">{selected.image}</code> is running</> : `${running.length} debug containers are running`} for container <code className="inline-code">{target}</code>.</p>
         {running.length > 1 && <select aria-label="Running debug container" className="w-full min-w-0 max-w-full rounded border border-theme-border bg-theme-surface px-2 py-1 text-xs"
           value={selected.name} onChange={event => setChoice(event.target.value)}>
           {running.map(c => <option key={c.name} value={c.name}>{c.startedAt && `${formatAge(c.startedAt)} ago · `}{c.name} · {c.image}</option>)}
@@ -103,7 +89,7 @@ function DebugOptions({ namespace, name, uid, target, connection, base, pod }: R
         </div>
       }
       if (running.length && support === 'unsupported') return <p className="max-w-md text-xs text-theme-text-secondary">A debug container is already running. Upgrade this cluster’s Radar to reopen it here, or open a terminal to that container with kubectl.</p>
-      return <p className="max-w-md text-xs text-theme-text-secondary">Run <code>kubectl debug</code> against this cluster with an approved image, or open this Pod in standalone Radar. Your kubectl identity needs permission to patch <code>pods/ephemeralcontainers</code>. <code className="mt-2 block select-all break-all rounded bg-theme-elevated p-2 text-left">kubectl --context CONTEXT -n {namespace} debug {name} --target={target} --image=APPROVED_IMAGE -it</code></p>
+      return <p className="max-w-md text-xs text-theme-text-secondary">Run <code className="inline-code">kubectl debug</code> against this cluster with an approved image, or open this Pod in standalone Radar. Your kubectl identity needs permission to patch <code className="inline-code">pods/ephemeralcontainers</code>. <code className="mt-2 block select-all break-all rounded bg-theme-elevated p-2 text-left">kubectl --context CONTEXT -n {namespace} debug {name} --target={target} --image=APPROVED_IMAGE -it</code></p>
     }
     if (allowedImage) return null
     if (support !== 'supported') {

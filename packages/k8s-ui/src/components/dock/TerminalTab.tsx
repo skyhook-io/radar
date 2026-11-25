@@ -26,7 +26,7 @@ export interface TerminalTabProps {
   /** Optional: creates a debug (ephemeral) container. If omitted, the debug button is hidden. */
   createDebugContainer?: (targetContainer: string) => Promise<{ containerName: string }>
   podDetailsLink?: ReactNode
-  renderDebugAction?: (targetContainer: string, podUID: string, switchContainer?: (name: string) => void) => ReactNode
+  renderDebugAction?: (targetContainer: string, podUID: string) => ReactNode
   /** Optional: a short line in the toolbar describing the session. */
   note?: string
   /** Executable supplied by the host session callback; pins its target container. */
@@ -275,10 +275,6 @@ export function TerminalTab({
     }
   }, [connect])
 
-  const handleContainerChange = useCallback((container: string) => {
-    setSelectedContainer(container)
-  }, [])
-
   const handleCreateDebugContainer = useCallback(async () => {
     if (!createDebugContainerRef.current) return
     setIsCreatingDebug(true)
@@ -320,18 +316,21 @@ export function TerminalTab({
         {note && <span className="truncate text-xs text-theme-text-secondary">{note}</span>}
 
         {!command && containers.length > 1 && (
-          <div className="relative">
-            <select aria-label="Terminal container"
-              value={selectedContainer}
-              onChange={(e) => handleContainerChange(e.target.value)}
-              className="appearance-none bg-theme-elevated text-xs text-theme-text-primary px-2 py-0.5 pr-5 rounded border border-theme-border-light focus:outline-none focus:ring-1 focus:ring-blue-500"
-            >
-              {containers.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-            <ChevronDown className="absolute right-1 top-1/2 -translate-y-1/2 w-3 h-3 text-theme-text-tertiary pointer-events-none" />
-          </div>
+          <label className="flex min-w-0 items-center gap-1 text-xs text-theme-text-secondary">
+            Container
+            <span className="relative min-w-0">
+              <select aria-label="Terminal container"
+                value={selectedContainer}
+                onChange={(e) => setSelectedContainer(e.target.value)}
+                className="max-w-full appearance-none bg-theme-elevated text-xs text-theme-text-primary px-2 py-0.5 pr-5 rounded border border-theme-border-light focus:outline-none focus:ring-1 focus:ring-blue-500"
+              >
+                {containers.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+              <ChevronDown className="absolute right-1 top-1/2 -translate-y-1/2 w-3 h-3 text-theme-text-tertiary pointer-events-none" />
+            </span>
+          </label>
         )}
 
         {(retryShell || (!isConnected && !isConnecting && errorType !== 'pod_replaced')) && (
@@ -362,16 +361,16 @@ export function TerminalTab({
             {podDetailsLink || <p className="text-xs text-theme-text-secondary">Close this tab and open the Pod in Resources.</p>}
           </> : errorType === 'shell_not_found' ? (
             <>
-              <div className="text-warning-text mb-2 break-words text-sm font-medium">{command ? 'Command not available' : <>Couldn’t start {failedExecutable ? <code>{failedExecutable}</code> : 'a shell'} in <code>{selectedContainer}</code></>}</div>
+              <div className="text-warning-text mb-2 break-words text-sm font-medium">{command ? 'Command not available' : <>Couldn’t start a shell in container <code className="inline-code">{selectedContainer}</code></>}</div>
               {command ? (
                 <div className="text-xs text-theme-text-tertiary mb-4 max-w-md">
-                  Container <span className="font-mono text-theme-text-secondary">{selectedContainer}</span> could not start <span className="font-mono text-theme-text-secondary">{command}</span>. Check that the executable is installed in this container.
+                  Container <code className="inline-code">{selectedContainer}</code> could not start <code className="inline-code">{command}</code>. Check that the executable is installed in this container.
                 </div>
               ) : <div className="text-xs text-theme-text-tertiary mb-4 max-w-md">
-                This container image may have no shell.
+                {failedExecutable ? <>This image may not include <code className="inline-code">{failedExecutable}</code>.</> : 'This image may not include a shell.'}
               </div>}
               <div className="flex w-full min-w-0 max-w-md flex-wrap items-center justify-center gap-2">
-                {!command && failedPodUID && renderDebugAction?.(selectedContainer, failedPodUID, handleContainerChange)}
+                {!command && failedPodUID && renderDebugAction?.(selectedContainer, failedPodUID)}
                 {!command && !renderDebugAction && createDebugContainerRef.current && (
                   <button
                     onClick={handleCreateDebugContainer}

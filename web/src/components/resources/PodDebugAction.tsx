@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import { Bug } from 'lucide-react'
 import { ActionConfirmDialog, getDefaultContainerName, getExecContainerNames, useOpenTerminal, type ActionConfirmResult } from '@skyhook-io/k8s-ui'
-import { PodDebugPermission, usePodDebugContext } from './PodDebugPermission'
+import { PodDebugPermission, PodDebugPermissionScope, usePodDebugContext } from './PodDebugPermission'
 import { Tooltip } from '../ui/Tooltip'
 import { actionDialogResult } from '../../api/actions'
 import { ApiError } from '../../api/client'
@@ -49,13 +49,10 @@ export function runningPodDebugTargets(pod: PodDebugTarget): string[] | undefine
 }
 
 export function debugAccessMessage(readOnly: boolean, error: unknown, state: string | undefined, pod: PodDebugTarget | undefined) {
-  const subject = pod ? `Pod ${pod.metadata.namespace}/${pod.metadata.name}` : 'this Pod'
-  const permission = `update pods/ephemeralcontainers for ${subject}`
   if (readOnly) return 'This view can’t add a debug container.'
-  if (error) return `Radar couldn’t check permission to ${permission}.`
-  if (state === 'check_failed') return `Kubernetes couldn’t complete the check for permission to ${permission}.`
-  if (state === 'unavailable') return 'Debugging is unavailable. Check Pod exec access and whether exec is enabled on this Radar.'
-  return `Kubernetes couldn’t confirm permission to ${permission}.`
+  if (state === 'unavailable' && !error) return 'Debugging is unavailable. Check Pod exec access and whether exec is enabled on this Radar.'
+  const reason = error ? 'Radar couldn’t check' : state === 'check_failed' ? 'Kubernetes couldn’t complete the check for' : 'Kubernetes couldn’t confirm'
+  return <>{reason} permission to <PodDebugPermissionScope pod={pod?.metadata} />.</>
 }
 
 export function usePodDetailAccess(pod: PodDebugTarget | undefined, namespace: {
@@ -189,7 +186,7 @@ export function PodDebugAction({ pod, defaultImage, failedContainer, unverifiedR
       {draft && canReview && <div className="grid gap-3">
         {refused && <div className="space-y-1 text-sm text-warning-text"><p>The last debug request was refused.</p><p className="break-words">{refused.message}</p>
           {recheckRequired && <button type="button" className="btn-secondary px-2 py-1" onClick={() => void unverifiedReview?.recheckAccess()}>Recheck access</button>}</div>}
-        {unverifiedReview && <p className="text-sm text-theme-text-secondary">Radar verified terminal access to this Pod. Kubernetes will decide whether to allow <code>update pods/ephemeralcontainers</code> when you confirm.</p>}
+        {unverifiedReview && <p className="text-sm text-theme-text-secondary">Radar verified terminal access to this Pod. Kubernetes will decide whether to allow <code className="inline-code">update pods/ephemeralcontainers</code> when you confirm.</p>}
         <label className="grid gap-1">Target container
           <select className="rounded border border-theme-border bg-theme-surface px-2 py-1.5" value={draft.target} disabled={busy}
             onChange={event => setDraft({ ...draft, target: event.target.value })}>
@@ -202,7 +199,7 @@ export function PodDebugAction({ pod, defaultImage, failedContainer, unverifiedR
             onChange={event => setDraft({ ...draft, image: event.target.value })} />
           <span className="text-xs text-theme-text-tertiary">
             {draft.image.trim() && draft.image.trim() !== defaultImage
-              ? <>Server default: <code>{defaultImage}</code></>
+              ? <>Server default: <code className="inline-code">{defaultImage}</code></>
               : 'Using the server default. Edit to override it for this container.'}
           </span>
         </label>

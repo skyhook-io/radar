@@ -54,7 +54,7 @@ it('offers only running debuggers targeting the failed container, with no access
 it('shows the exact missing permission and rechecks an updated grant', () => {
   render()
   expect(host.textContent).toContain('Ask your cluster admin for access to update pods/ephemeralcontainers for Pod payments/checkout.')
-  expect(host.querySelector('textarea')).toBeNull()
+  expect([...host.querySelectorAll('code.inline-code')].map(code => code.textContent)).toEqual(['update pods/ephemeralcontainers', 'payments/checkout'])
   act(() => button('Recheck access')!.click())
   expect(f.recheck).toHaveBeenCalledOnce()
   f.access='allowed'; render()
@@ -149,18 +149,6 @@ it.each(['unknown', 'unavailable'])('rechecks hosted exec access to a running de
   expect(button('Open debug terminal')).toBeDefined()
 })
 
-it('names other running containers without suggesting a shell or listing stopped siblings', () => {
-  f.pod.spec.containers.push({ name: 'tools' }, { name: 'stopped' })
-  f.pod.status.containerStatuses.push({ name: 'tools', state: { running: {} } }, { name: 'stopped', state: { terminated: {} } })
-  render()
-  const other = button('Other containers')!
-  expect(other.getAttribute('aria-expanded')).toBe('false')
-  act(() => other.click())
-  expect(other.getAttribute('aria-expanded')).toBe('true')
-  expect(host.textContent).toContain('Try a terminal in tools')
-  expect(host.textContent).not.toContain('stopped')
-})
-
 it('offers confirmation only while the named response verifies exec, on a writable Radar', () => {
   f.namedExec = true
   f.access = 'unknown'
@@ -178,19 +166,14 @@ it('offers confirmation only while the named response verifies exec, on a writab
   render()
   expect(button('Review attempt for app')).toBeUndefined()
 })
-it('shows no alternative when every sibling has stopped', () => {
-  f.pod.spec.containers.push({ name: 'stopped' })
-  f.pod.status.containerStatuses.push({ name: 'stopped', state: { terminated: {} } })
+it('keeps unrelated containers out of the shell recovery actions', () => {
+  f.pod.spec.containers.push({ name: 'worker' })
+  f.pod.status.containerStatuses.push({ name: 'worker', state: { running: {} } })
+  f.pod.spec.ephemeralContainers = [{ name: 'network-tools', image: 'tools' }]
+  f.pod.status.ephemeralContainerStatuses = [{ name: 'network-tools', state: { running: {} } }]
   render()
-  expect(button('Other containers')).toBeUndefined()
-})
-
-it('identifies an untargeted running debugger without offering it as the failed container’s debugger', () => {
-  f.pod.spec.ephemeralContainers = [{name:'network-tools', image:'tools'}]
-  f.pod.status.ephemeralContainerStatuses = [{name:'network-tools', state:{ running:{} }}]
-  render()
-  act(() => button('Other containers')!.click())
-  expect(host.textContent).toContain('Pod-wide debugger: network-tools')
+  expect(host.textContent).not.toContain('worker')
+  expect(host.textContent).not.toContain('network-tools')
   expect(button('Open debug terminal')).toBeUndefined()
 })
 it('keeps verified named exec when the separate update review failed, with no write preview', async () => {

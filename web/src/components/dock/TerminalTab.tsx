@@ -51,8 +51,8 @@ export function TerminalTab({ namespace, podName, podUID, containerName, contain
       podDetailsLink={podDetailsLink}
       renderDebugAction={shell ? undefined : debugSession ? () => <p className="max-w-md text-xs text-theme-text-secondary">
         This debug image has no usable shell. Open Pod details to choose another running container or start a debugger with a different image. {podDetailsLink}
-      </p> : (target, uid, switchContainer) =>
-        <MissingShellDebug key={JSON.stringify([uid,target])} namespace={namespace} name={podName} target={target} uid={uid} connection={connection} base={base} podDetailsLink={podDetailsLink} switchContainer={switchContainer} />}
+      </p> : (target, uid) =>
+        <MissingShellDebug key={JSON.stringify([uid,target])} namespace={namespace} name={podName} target={target} uid={uid} connection={connection} base={base} podDetailsLink={podDetailsLink} />}
       note={note}
       command={shell}
     />

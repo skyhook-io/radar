@@ -205,7 +205,8 @@ it.each([undefined, 'psql'])('keeps shell defaults and command-specific unavaila
     expect(element.textContent).not.toContain('debug container')
     expect(element.textContent).not.toContain('/bin/sh')
   } else {
-    expect(element.textContent).toContain('Couldn’t start a shell in')
+    expect(element.textContent).toContain('Couldn’t start a shell in container app')
+    expect(element.textContent).toContain('This image may not include a shell.')
     expect(element.textContent).toContain('Retry terminal')
     expect(element.textContent).not.toContain('Reconnect')
     expect(element.textContent).toContain('Start debug container')
@@ -218,6 +219,8 @@ it('lets an operator retry just the original shell on the Pod that failed', asyn
   const createDebugContainer = vi.fn()
   await act(async () => root.render(<TerminalTab namespace="app" podName="worker" containerName="app" containers={['app']} createSession={createSession} createDebugContainer={createDebugContainer}/>))
   await act(async () => Socket.instances[0].onmessage?.({ data: JSON.stringify({ type: 'error', errorType: 'shell_not_found', podUID: 'original', executable: 'sh', data: 'executable file not found' }) }))
+  expect(element.textContent).toContain('Couldn’t start a shell in container app')
+  expect(element.textContent).toContain('This image may not include sh.')
   const retry = [...element.querySelectorAll('button')].find(button => button.textContent === 'Retry terminal')
   expect(retry).toBeDefined()
   expect(element.textContent).not.toContain('Reconnect')
