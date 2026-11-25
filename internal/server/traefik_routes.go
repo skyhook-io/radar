@@ -291,19 +291,22 @@ func traefikGatedRefusal(refusal func(*unstructured.Unstructured) (bool, []issue
 
 type traefikPodCounts struct{ ready, total *int }
 
-// traefikBackend counts ready pods only for a Service Traefik routes to,
-// where the caller may list Services and Pods, once per Service per request.
+// traefikBackend checks the port of a Service Traefik routes to where the
+// caller may list Services, and counts ready pods once per Service per
+// request where they may also list Pods.
 func traefikBackend(v k8s.TraefikRefVerdict, in traefikRoutesInput, counts map[[2]string]traefikPodCounts) traefikBackendFact {
 	fact := traefikBackendFact{Namespace: v.Namespace, Name: v.Name, Port: v.Port, Kind: v.Kind, Exists: traefikVerdictExists(v, in)}
 	ns := v.Namespace
-	if v.Kind != "Service" || (v.Refused && traefikReadsAllowed(v.Reads, in)) || in.Service == nil || in.Pods == nil ||
+	if v.Kind != "Service" || (v.Refused && traefikReadsAllowed(v.Reads, in)) || in.Service == nil ||
 		(in.NSVisible != nil && !in.NSVisible(ns)) ||
-		(in.CanRead != nil && (!in.CanRead(issuesapi.EvidenceRead{Resource: "services", Namespace: ns, Verb: "list"}) ||
-			!in.CanRead(issuesapi.EvidenceRead{Resource: "pods", Namespace: ns, Verb: "list"}))) {
+		(in.CanRead != nil && !in.CanRead(issuesapi.EvidenceRead{Resource: "services", Namespace: ns, Verb: "list"})) {
 		return fact
 	}
 	if s, ok := in.Service(ns, v.Name); ok && v.Port != "" {
 		fact.PortMissing = !traefikServiceHasPort(s, v.Port, v.PortName)
+	}
+	if in.Pods == nil || (in.CanRead != nil && !in.CanRead(issuesapi.EvidenceRead{Resource: "pods", Namespace: ns, Verb: "list"})) {
+		return fact
 	}
 	key := [2]string{ns, v.Name}
 	c, seen := counts[key]

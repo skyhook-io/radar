@@ -452,6 +452,18 @@ func TestBuildTraefikRoutesFlagsAPortTheServiceDoesNotExpose(t *testing.T) {
 	if rows, _, _ := buildTraefikRoutes(f.input(tRoute("shop", "web", nil, nil, rule(int64(8080))))); rows[0].Services[0].PortMissing {
 		t.Errorf("a Service the caller can't list is not judged: %+v", rows[0].Services[0])
 	}
+	// The port needs only the Service; Pod access gates the readiness count.
+	f.denyRead = false
+	in := f.input(tRoute("shop", "web", nil, nil, rule(int64(8080))))
+	in.CanRead = func(r issuesapi.EvidenceRead) bool { return r.Resource != "pods" }
+	if rows, _, _ := buildTraefikRoutes(in); !rows[0].Services[0].PortMissing || rows[0].Services[0].ReadyPods != nil || !hasProblem(rows[0], "backend_port_missing") {
+		t.Errorf("a caller without Pod access still sees the missing port, without a pod count: %+v %v", rows[0].Services[0], rows[0].Problems)
+	}
+	in = f.input(tRoute("shop", "web", nil, nil, rule(int64(8080))))
+	in.Pods = nil
+	if rows, _, _ := buildTraefikRoutes(in); !rows[0].Services[0].PortMissing || rows[0].Services[0].ReadyPods != nil {
+		t.Errorf("an incomplete pod cache still checks the port: %+v", rows[0].Services[0])
+	}
 }
 
 func TestTraefikGatedRefusalNeedsTraefikPods(t *testing.T) {
