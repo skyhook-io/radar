@@ -41,6 +41,21 @@ afterEach(() => {
 })
 
 describe.each([true, false])('selected filters with loading=%s', (loading) => {
+  it('counts the bookmarked system toggle and clears it without clearing staging', () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: true, media: query, addEventListener: () => {}, removeEventListener: () => {} }))
+    const host = mountList('?system=1&env=staging', loading)
+    const filters = host.querySelector<HTMLButtonElement>('aside button[aria-expanded]')!
+    expect(filters.textContent).toBe('Filters2')
+    act(() => filters.click())
+    const system = host.querySelector<HTMLInputElement>('aside input[type="checkbox"]')!
+    expect(system.checked).toBe(true)
+    expect(system.labels?.[0].textContent).toBe(loading ? 'Show system namespaces' : 'Show system namespaces0')
+    act(() => system.click())
+    expect(host.contains(system)).toBe(false)
+    expect(filters.textContent).toBe('Filters1')
+    expect(host.querySelector('aside button[aria-pressed="true"]')?.textContent).toBe('staging')
+  })
+
   it('clears a bookmarked health tile before or after the inventory arrives', () => {
     const host = mountList('?health=unknown', loading)
     const tile = [...host.querySelectorAll<HTMLButtonElement>('button[aria-pressed="true"]')].find((b) => !b.closest('aside'))!
@@ -60,5 +75,23 @@ describe.each([true, false])('selected filters with loading=%s', (loading) => {
       expect(host.contains(option!)).toBe(false)
     }
     if (!loading) expect(host.querySelector('tbody')?.textContent).toContain('api')
+  })
+})
+
+describe('initial filter rail', () => {
+  it('keeps the skeleton alongside a bookmarked option and after it is cleared', () => {
+    const host = mountList('?source=skyhook', true)
+    const option = host.querySelector<HTMLButtonElement>('aside button[aria-pressed="true"]')!
+    expect(option.textContent).toBe('Skyhook')
+    expect(host.querySelector('aside .animate-pulse')).not.toBeNull()
+    act(() => option.click())
+    expect(host.contains(option)).toBe(false)
+    expect(host.querySelector('aside .animate-pulse')).not.toBeNull()
+  })
+
+  it('keeps the skeleton when the bookmarked source is unknown', () => {
+    const host = mountList('?source=legacy', true)
+    expect(host.querySelector('aside .animate-pulse')).not.toBeNull()
+    expect(host.querySelector('aside button')?.textContent).toBe('Clear')
   })
 })

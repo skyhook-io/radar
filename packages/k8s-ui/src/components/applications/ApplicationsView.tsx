@@ -204,7 +204,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
   const fSource = filters.values.source as Set<AppSource>
   const fClass = filters.values.class as Set<AppWorkloadClass>
   const fType = filters.values.type as Set<AppCategory>
-  const showSystem = filters.values.system
+  const showSystem = variant === 'single' && filters.values.system
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir } | null>(null)
 
   // The Show-system toggle keys off per-entry workload namespaces, which only
@@ -389,7 +389,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
   // showSystem lives in the Filters rail, so Clear resets it too (and its
   // non-default ON state counts as an active filter that surfaces the button).
   const anyFilterActive = filters.isActive
-  const activeFilterCount = fHealth.size + fClass.size + fType.size + fEnv.size + fSource.size + (systemCount > 0 && showSystem ? 1 : 0)
+  const activeFilterCount = fHealth.size + fClass.size + fType.size + fEnv.size + fSource.size + (showSystem ? 1 : 0)
   const clearAllFilters = () => {
     filters.clearAll()
   }
@@ -440,7 +440,19 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
               <button type="button" onClick={clearAllFilters} className="text-[10px] font-medium text-blue-500 hover:text-blue-400">Clear</button>
             )}
           >
-            {initialLoading && activeFilterCount === 0 ? (
+            <Facet icon={HeartPulse} title="Status" options={HEALTH_ORDER.map((h) => ({ value: h, label: HEALTH_META[h].label, count: counts.health[h] ?? 0, tone: HEALTH_TONE[h] }))} selected={fHealth} onToggle={(v) => filters.toggle('health', v)} />
+            <Facet icon={Layers} title="Class" options={CLASS_ORDER.map((c) => ({ value: c, label: CLASS_META[c].label, count: counts.workloadClass[c] ?? 0 }))} selected={fClass} onToggle={(v) => filters.toggle('class', v)} />
+            <Facet icon={Shapes} title="Type" options={CATEGORY_ORDER.map((c) => ({ value: c, label: CATEGORY_META[c].label, count: counts.category[c] ?? 0, tooltip: CATEGORY_META[c].tooltip }))} selected={fType} onToggle={(v) => filters.toggle('type', v)} />
+            <Facet icon={Globe} title="Environment" info={<EnvHint />} options={envOptions} selected={fEnv} onToggle={(v) => filters.toggle('env', v)} />
+            <Facet icon={Tag} title="Source" options={SOURCE_ORDER.map((s) => ({ value: s, label: SOURCE_META[s].label, count: counts.source[s] ?? 0 }))} selected={fSource} onToggle={(v) => filters.toggle('source', v)} />
+            {(systemCount > 0 || showSystem) && (
+              <label className="flex cursor-pointer items-center gap-2 border-b border-theme-border px-3 py-2 text-[11px] text-theme-text-secondary hover:bg-theme-hover">
+                <input type="checkbox" checked={showSystem} onChange={(e) => filters.setBoolean('system', e.target.checked)} className="accent-skyhook-500" />
+                <span>Show system namespaces</span>
+                {!initialLoading && <span className="ml-auto tabular-nums text-theme-text-tertiary">{systemCount}</span>}
+              </label>
+            )}
+            {initialLoading && (
               <BoardRailSkeleton
                 sections={[
                   ['Status', 5],
@@ -450,21 +462,6 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                   ['Source', 3],
                 ]}
               />
-            ) : (
-              <>
-            <Facet icon={HeartPulse} title="Status" options={HEALTH_ORDER.map((h) => ({ value: h, label: HEALTH_META[h].label, count: counts.health[h] ?? 0, tone: HEALTH_TONE[h] }))} selected={fHealth} onToggle={(v) => filters.toggle('health', v)} />
-            <Facet icon={Layers} title="Class" options={CLASS_ORDER.map((c) => ({ value: c, label: CLASS_META[c].label, count: counts.workloadClass[c] ?? 0 }))} selected={fClass} onToggle={(v) => filters.toggle('class', v)} />
-            <Facet icon={Shapes} title="Type" options={CATEGORY_ORDER.map((c) => ({ value: c, label: CATEGORY_META[c].label, count: counts.category[c] ?? 0, tooltip: CATEGORY_META[c].tooltip }))} selected={fType} onToggle={(v) => filters.toggle('type', v)} />
-            <Facet icon={Globe} title="Environment" info={<EnvHint />} options={envOptions} selected={fEnv} onToggle={(v) => filters.toggle('env', v)} />
-            <Facet icon={Tag} title="Source" options={SOURCE_ORDER.map((s) => ({ value: s, label: SOURCE_META[s].label, count: counts.source[s] ?? 0 }))} selected={fSource} onToggle={(v) => filters.toggle('source', v)} />
-            {systemCount > 0 && (
-              <label className="flex cursor-pointer items-center gap-2 border-b border-theme-border px-3 py-2 text-[11px] text-theme-text-secondary hover:bg-theme-hover">
-                <input type="checkbox" checked={showSystem} onChange={(e) => filters.setBoolean('system', e.target.checked)} className="accent-skyhook-500" />
-                <span>Show system namespaces</span>
-                <span className="ml-auto tabular-nums text-theme-text-tertiary">{systemCount}</span>
-              </label>
-            )}
-              </>
             )}
           </FilterRailPanel>
         </aside>
