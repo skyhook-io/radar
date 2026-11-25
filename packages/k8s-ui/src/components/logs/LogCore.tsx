@@ -444,6 +444,30 @@ export function LogCore({
 
   // Same close-on-outside-click for the timestamp format menu.
   const tsMenuRef = useRef<HTMLDivElement>(null)
+  const viewerRef = useRef<HTMLDivElement>(null)
+  const [tsMenuBounds, setTsMenuBounds] = useState<{ maxHeight: number; maxWidth: number }>()
+  useLayoutEffect(() => {
+    const viewer = viewerRef.current
+    const anchor = tsMenuRef.current
+    if (!showTsMenu || !viewer || !anchor) return
+    const fit = () => {
+      const bounds = viewer.getBoundingClientRect()
+      const trigger = anchor.getBoundingClientRect()
+      setTsMenuBounds({
+        maxHeight: Math.max(0, Math.min(bounds.bottom, window.innerHeight) - trigger.bottom - 8),
+        maxWidth: Math.max(0, trigger.right - Math.max(0, bounds.left) - 4),
+      })
+    }
+    fit()
+    const observer = new ResizeObserver(fit)
+    observer.observe(viewer)
+    window.addEventListener('resize', fit)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', fit)
+    }
+  }, [showTsMenu])
+
   useEffect(() => {
     if (!showTsMenu) return
     const handleClick = (e: MouseEvent) => {
@@ -674,6 +698,7 @@ export function LogCore({
 
   return (
     <div
+      ref={viewerRef}
       className={`flex flex-col h-full ${palette.containerBg}`}
       style={{ colorScheme: isDark ? 'dark' : 'light', fontFamily: "'SF Mono', 'Cascadia Code', 'Fira Code', Menlo, Consolas, 'DejaVu Sans Mono', monospace" }}
     >
@@ -841,10 +866,10 @@ export function LogCore({
                 role="radiogroup"
                 aria-label="Timestamp format"
                 inert={!showTsMenu}
-                className={`absolute top-full right-0 mt-1 w-44 origin-top-right ${palette.menuBg} border ${palette.border} rounded-lg shadow-lg z-50 ${TRANSITION_MENU} ${
+                className={`absolute top-full right-0 mt-1 w-44 origin-top-right overflow-y-auto overscroll-contain ${palette.menuBg} border ${palette.border} rounded-lg shadow-lg z-50 ${TRANSITION_MENU} ${
                   tsMenu.isOpen ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 -translate-y-1 scale-[0.97]'
                 } ${showTsMenu ? '' : 'pointer-events-none'}`}
-                style={overlayTransitionStyle(tsMenu.isOpen, 'menu')}
+                style={{ ...overlayTransitionStyle(tsMenu.isOpen, 'menu'), ...tsMenuBounds }}
               >
                 <div className={`px-3 py-1.5 text-[10px] uppercase tracking-wide ${palette.textTertiary} border-b ${palette.border}`}>
                   Timestamp format

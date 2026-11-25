@@ -13,6 +13,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 let root: Root
 let element: HTMLDivElement
 beforeEach(() => {
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
   localStorage.removeItem('radar-logs-ts-format')
   element = document.createElement('div')
   document.body.appendChild(element)
@@ -23,6 +24,7 @@ afterEach(async () => {
   element.remove()
   vi.useRealTimers()
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 const noop = () => {}
@@ -50,6 +52,22 @@ function mockSystemZone() {
 
 const rowTime = (timestamp = entry.timestamp) => element.querySelector(`[title="${timestamp}"]`)?.textContent
 const tooltipText = () => document.querySelector('[role="tooltip"]')?.textContent
+
+it('keeps the last option in a scrollable menu bounded by the short dock and viewport', async () => {
+  const picker = await render()
+  const viewer = element.firstElementChild!
+  vi.spyOn(viewer, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 400, 390, 275))
+  vi.spyOn(picker.closest('.relative')!, 'getBoundingClientRect').mockReturnValue(new DOMRect(90, 442, 72, 24))
+  act(() => picker.click())
+  const menu = element.querySelector<HTMLElement>('[role="radiogroup"][aria-label="Timestamp format"]')!
+  expect(menu.style.maxHeight).toBe('201px')
+  expect(menu.style.maxWidth).toBe('158px')
+  expect(menu.classList.contains('overflow-y-auto')).toBe(true)
+  expect(menu.querySelector('[role="radio"]:last-child')?.textContent).toBe('Epoch')
+  vi.stubGlobal('innerHeight', 620)
+  act(() => window.dispatchEvent(new Event('resize')))
+  expect(menu.style.maxHeight).toBe('146px')
+})
 
 it.each(['', undefined])('omits an unknown zone (%s) from local choices and the tooltip', async timeZone => {
   vi.useFakeTimers()
