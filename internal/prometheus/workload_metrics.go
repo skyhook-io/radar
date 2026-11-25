@@ -571,7 +571,10 @@ func queryWorkloadPanel(ctx context.Context, client RangeQuerier, query string, 
 		if errors.Is(err, prom.ErrQueryWarning) {
 			panel.Reason = "The metrics backend returned a query warning; samples are withheld because the result may be incomplete or unreliable."
 		}
-		log.Printf("[prometheus] Workload metric query failed: %s", panel.Reason)
+		// A request its caller abandoned (the page moved on) is not a failure.
+		if ctx.Err() == nil {
+			log.Printf("[prometheus] Workload metric query failed: %s", panel.Reason)
+		}
 		return panel
 	}
 	latest := int64(0)
