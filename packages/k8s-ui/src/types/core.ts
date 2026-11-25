@@ -216,6 +216,8 @@ export interface FeatureCapabilities {
   veleroRunVolumes?: boolean
   /** DELETE /api/resources/... honours ?uid=&resourceVersion= preconditions */
   resourceDeletePreconditions?: boolean
+  /** POST /api/workloads/{kind}/{ns}/{name}/restart accepts {uid, resourceVersion}; an older Radar ignores the body and restarts unconditionally. */
+  workloadRestartPreconditions?: boolean
   gitopsWriteEvidence?: boolean
   agentSigninCheck?: boolean
   serviceEndpointSlices?: boolean

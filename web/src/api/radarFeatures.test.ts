@@ -20,6 +20,13 @@ describe('radarFeatureSupport', () => {
     expect(radarFeatureSupport('searchEventContent', { features: { searchEventContent: true } }, 'v1.0.0')).toBe('supported')
     expect(radarFeatureSupport('searchEventContent', undefined, 'dev')).toBe('unknown')
   })
+  it('requires affirmative capability support for restart preconditions', () => {
+    const feature = 'workloadRestartPreconditions'
+    expect(radarFeatureSupport(feature, { features: { workloadRestartPreconditions: true } }, undefined)).toBe('supported')
+    expect(radarFeatureSupport(feature, { features: {} }, 'v99.0.0')).toBe('unsupported')
+    expect(radarFeatureSupport(feature, undefined, 'v99.0.0')).toBe('unknown')
+  })
+
   it('trusts the advertised flag over the version', () => {
     expect(radarFeatureSupport('policyResource', { features: { policyResource: true } }, 'v1.7.2')).toBe('supported')
     expect(radarFeatureSupport('policyResource', { features: { policyResource: true } }, undefined)).toBe('supported')
@@ -111,6 +118,16 @@ describe('radarSpecSupport for a feature whose flag shipped with its endpoint', 
 describe('guardRadarFeature', () => {
   const versions = { currentVersion: 'v1.7.2', latestVersion: 'v1.15.0' }
 
+  it.each(['workloadRestartPreconditions', 'argoRollback', 'argoAutoSyncEnable', 'datadogRightsizing', 'replicaSetLogs', 'substrateHealthMetrics'] as const)(
+    'sends a request for %s only after support is confirmed', async feature => {
+      const request = vi.fn(async () => 'ok')
+      await expect(guardRadarFeature(feature, 'unknown', versions, request)).rejects.toThrow(/not been confirmed/)
+      expect(request).not.toHaveBeenCalled()
+      await expect(guardRadarFeature(feature, 'supported', versions, request)).resolves.toBe('ok')
+      expect(request).toHaveBeenCalledTimes(1)
+    },
+  )
+
   it('never asks a Radar known to be too old', async () => {
     const request = vi.fn(() => Promise.resolve('data'))
     await expect(guardRadarFeature('policyResource', 'unsupported', versions, request))
@@ -171,7 +188,7 @@ describe('shouldRetryRadarQuery', () => {
 })
 
 describe('affirmative mutation support', () => {
-  it.each(['argoRollback', 'argoAutoSyncEnable'] as const)('%s distinguishes checking, failed and known answers', feature => {
+  it.each(['argoRollback', 'argoAutoSyncEnable', 'workloadRestartPreconditions'] as const)('%s distinguishes checking, failed and known answers', feature => {
     expect(radarControlBlockedReason(feature, 'unknown', false)).toBe("Checking this cluster's Radar…")
     expect(radarControlBlockedReason(feature, 'unknown', true)).toBe("Couldn't check this cluster's Radar support. Refresh to try again.")
     expect(radarControlBlockedReason(feature, 'supported', false)).toBeUndefined()

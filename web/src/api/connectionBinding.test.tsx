@@ -48,6 +48,8 @@ it("shows the server's refusal when a restart names a connection it no longer se
   const message = 'Nothing was changed: the cluster changed since this view loaded. Check the current cluster and try again.'
   const seen = recordHeaders(409, JSON.stringify({ error: message, code: 'context_changed', error_code: 'context_changed' }))
   const client = new QueryClient()
+  client.setQueryData(['capabilities'], { features: { workloadRestartPreconditions: true } })
+  client.setQueryData(['version-check', getApiBase()], {})
   let restart: ReturnType<typeof useRestartWorkload> | undefined
   function Probe() {
     restart = useRestartWorkload()
@@ -59,7 +61,7 @@ it("shows the server's refusal when a restart names a connection it no longer se
   })
   let error: unknown
   await act(async () => {
-    await restart!.mutateAsync({ kind: 'deployments', namespace: 'default', name: 'web' }).catch((e) => { error = e })
+    await restart!.mutateAsync({ kind: 'deployments', namespace: 'default', name: 'web', uid: 'uid-1' }).catch((e) => { error = e })
   })
   expect(seen).toEqual(['n-1'])
   expect((error as Error).message).toBe(message)

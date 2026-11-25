@@ -2169,13 +2169,10 @@ export function useVersionCheck() {
 
 /**
  * Guards a fetch for an endpoint the connected Radar may predate (see
- * radarFeatures.ts). A Radar known to be too old is never asked; one whose
- * version is unknown is asked, and chi's unknown-route 404 is read as the same
- * answer. Either way the caller gets a RadarFeatureUnsupportedError, which the
- * sections render as an upgrade note instead of an error.
- *
- * Nothing waits on /version-check: an agent that advertises the feature flag
- * is fetched immediately, and an unknown version falls through to the fetch.
+ * radarFeatures.ts). Features requiring affirmative support wait for the
+ * flag. Others can probe while support is unknown. A known-old version or
+ * an unknown-route 404 from a probe raises RadarFeatureUnsupportedError,
+ * which sections render as an upgrade note.
  *
  * Spread `gatedKey` into the query key. A gate decided from early information
  * (a host-supplied version before /capabilities answers) can lift later, and
@@ -5789,33 +5786,42 @@ export function useStopWorkflow() {
 // Restart a workload (Deployment, StatefulSet, DaemonSet, Rollout)
 export function useRestartWorkload() {
   const queryClient = useQueryClient();
+  const { support, guard } = useRadarFeature("workloadRestartPreconditions");
+  const apiBase = getApiBase();
 
   return useMutation({
     mutationFn: async ({
       kind,
       namespace,
       name,
+      uid,
     }: {
       kind: string;
       namespace: string;
       name: string;
+      uid?: string;
     }) => {
-      const response = await apiFetch(
-        `${getApiBase()}/workloads/${kind}/${namespace}/${name}/restart`,
-        {
-          method: "POST",
-        },
-      );
+      const url = apiUrl(`/workloads/${kind}/${namespace}/${name}/restart`, apiBase);
+      const response = support === "unsupported"
+        ? await apiFetch(url, { method: "POST" })
+        : await guard(() => {
+            if (!uid) throw new Error("The workload UID is unavailable. Refresh and try again.");
+            return apiFetch(url, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ uid }),
+            });
+          });
       if (!response.ok) {
         throw new Error(restartErrorMessage(await readErrorBody(response), response.status));
       }
-      return response.json();
+      return response.json() as Promise<RestartResult>;
     },
     meta: {
       errorMessage: "Failed to restart workload",
-      successMessage: "Workload restarting",
     },
-    onSuccess: (_, variables) => {
+    onSuccess: (result, variables) => {
+      reportRestart(result);
       queryClient.invalidateQueries({
         queryKey: ["resources", variables.kind],
       });
@@ -6086,9 +6092,42 @@ export function rollbackErrorMessage(body: { error?: string; error_code?: string
   return body.error || `HTTP ${status}`;
 }
 
+export interface RestartResult {
+  message?: string;
+  restartedAt?: string;
+  changed?: boolean;
+}
+
+// changed:false means the workload already carried a restart request at or after
+// now (a repeated click, or a Rollout's future restartAt), so nothing new was written.
+export function restartOutcome(result: RestartResult | undefined): { title: string; detail?: string; repeated: boolean } {
+  if (result?.changed !== false) return { title: "Workload restarting", repeated: false };
+  const at = result.restartedAt ? new Date(result.restartedAt) : undefined;
+  return {
+    title: "Restart already requested",
+    detail: at && !Number.isNaN(at.getTime()) ? `Requested for ${at.toLocaleString()}.` : undefined,
+    repeated: true,
+  };
+}
+
+function reportRestart(result: RestartResult | undefined): void {
+  const { title, detail, repeated } = restartOutcome(result);
+  if (repeated) showApiNotice(title, detail, "info");
+  else showApiSuccess(title, detail);
+}
+
 export function restartErrorMessage(body: { error?: string; error_code?: string }, status: number): string {
-  if (body.error_code === "workload_paused") {
-    return "This Deployment is paused. Click Resume rollout, then restart.";
+  switch (body.error_code) {
+    case "workload_paused":
+      return "This Deployment is paused. Click Resume rollout, then restart.";
+    case "workload_changed":
+      return "This workload changed or was replaced since you opened it. Refresh and try again.";
+    case "restart_not_applicable":
+      return body.error || "This workload’s update strategy won’t restart all pods.";
+    case "workload_terminating":
+      return "This workload is being deleted and cannot be restarted.";
+    case "restart_not_stored":
+      return "Kubernetes admission changed or removed the restart marker.";
   }
   return body.error || `HTTP ${status}`;
 }

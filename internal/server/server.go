@@ -1541,60 +1541,61 @@ func (s *Server) handleClusterInfo(w http.ResponseWriter, r *http.Request) {
 // an older binary simply lacks it.
 func advertisedFeatures() k8s.FeatureCapabilities {
 	return k8s.FeatureCapabilities{
-		ApplicationEvidence:         true,
-		DatadogAgentPresence:        true,
-		DatadogRightsizing:          true,
-		SealedSecretsController:     true,
-		SealedSecretsCert:           true,
-		ResourceReadCoverage:        true,
-		SearchCoverage:              true,
-		SearchEventContent:          true,
-		YAMLReview:                  true,
-		YAMLSchemas:                 true,
-		WorkloadImages:              true,
-		DeploymentPause:             true,
-		SubstrateHealthMetrics:      true,
-		ResourceIssues:              true,
-		ResourceIssueCoverage:       true,
-		IssueCorrelation:            true,
-		PodDebugAccess:              true,
-		PodEnvironment:              true,
-		PolicyResource:              true,
-		WorkloadHistory:             true,
-		CNPGWorkspace:               true,
-		CNPGProtectionSetup:         true,
-		VeleroWorkspace:             true,
-		VeleroBackupNow:             true,
-		VeleroSchedulePause:         true,
-		VeleroRuns:                  true,
-		VeleroDeleteBackup:          true,
-		ResourceDeletePreconditions: true,
-		VeleroRunVolumes:            true,
-		VeleroRunArtifacts:          true,
-		ServiceEndpointSlices:       true,
-		TrafficRecords:              true,
-		GitOpsWriteEvidence:         true,
-		GitOpsActionCapabilities:    true,
-		ArgoRollbackSync:            true,
-		ArgoSyncInheritance:         true,
-		ArgoEnableSelfHealOff:       true,
-		AgentSigninCheck:            true,
-		HelmSourceIdentity:          true,
-		HelmInventory:               true,
-		ClusterScopedPlaceholder:    true,
-		KueuePendingPosition:        true,
-		RayClusterPods:              true,
-		ReplicaSetLogs:              true,
-		PodSidecarMarks:             true,
-		KueueQueueWorkloads:         true,
-		PodFileUpload:               true,
-		Vulnerabilities:             true,
-		VulnerabilitiesExport:       true,
-		RuntimeAdvisoryChecks:       true,
-		RuntimeAdvisoryProgress:     true,
-		CronJobTriggerJobName:       true,
-		WorkflowStop:                true,
-		WorkflowTemplateSubmit:      true,
+		ApplicationEvidence:          true,
+		DatadogAgentPresence:         true,
+		DatadogRightsizing:           true,
+		SealedSecretsController:      true,
+		SealedSecretsCert:            true,
+		ResourceReadCoverage:         true,
+		SearchCoverage:               true,
+		SearchEventContent:           true,
+		YAMLReview:                   true,
+		YAMLSchemas:                  true,
+		WorkloadImages:               true,
+		DeploymentPause:              true,
+		SubstrateHealthMetrics:       true,
+		ResourceIssues:               true,
+		ResourceIssueCoverage:        true,
+		IssueCorrelation:             true,
+		PodDebugAccess:               true,
+		PodEnvironment:               true,
+		PolicyResource:               true,
+		WorkloadHistory:              true,
+		CNPGWorkspace:                true,
+		CNPGProtectionSetup:          true,
+		VeleroWorkspace:              true,
+		VeleroBackupNow:              true,
+		VeleroSchedulePause:          true,
+		VeleroRuns:                   true,
+		VeleroDeleteBackup:           true,
+		ResourceDeletePreconditions:  true,
+		WorkloadRestartPreconditions: true,
+		VeleroRunVolumes:             true,
+		VeleroRunArtifacts:           true,
+		ServiceEndpointSlices:        true,
+		TrafficRecords:               true,
+		GitOpsWriteEvidence:          true,
+		GitOpsActionCapabilities:     true,
+		ArgoRollbackSync:             true,
+		ArgoSyncInheritance:          true,
+		ArgoEnableSelfHealOff:        true,
+		AgentSigninCheck:             true,
+		HelmSourceIdentity:           true,
+		HelmInventory:                true,
+		ClusterScopedPlaceholder:     true,
+		KueuePendingPosition:         true,
+		RayClusterPods:               true,
+		ReplicaSetLogs:               true,
+		PodSidecarMarks:              true,
+		KueueQueueWorkloads:          true,
+		PodFileUpload:                true,
+		Vulnerabilities:              true,
+		VulnerabilitiesExport:        true,
+		RuntimeAdvisoryChecks:        true,
+		RuntimeAdvisoryProgress:      true,
+		CronJobTriggerJobName:        true,
+		WorkflowStop:                 true,
+		WorkflowTemplateSubmit:       true,
 	}
 }
 
@@ -4841,58 +4842,6 @@ func (s *Server) handleResumeCronJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, map[string]string{"message": "CronJob resumed"})
-}
-
-// handleRestartWorkload performs a rolling restart on a Deployment, StatefulSet, or DaemonSet
-func (s *Server) handleRestartWorkload(w http.ResponseWriter, r *http.Request) {
-	kind := chi.URLParam(r, "kind")
-	namespace := chi.URLParam(r, "namespace")
-	name := chi.URLParam(r, "name")
-
-	// Validate that this is a restartable workload type
-	validKinds := map[string]bool{
-		"deployments":  true,
-		"statefulsets": true,
-		"daemonsets":   true,
-		"rollouts":     true,
-	}
-	normalizedKind := k8score.NormalizeWorkloadKind(strings.ToLower(kind))
-	if !validKinds[normalizedKind] {
-		s.writeError(w, http.StatusBadRequest, "only Deployments, StatefulSets, DaemonSets, and Rollouts can be restarted")
-		return
-	}
-
-	auth.AuditLog(r, namespace, name)
-	client := s.getDynamicClientForRequest(r)
-	if client == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
-		return
-	}
-	err := k8s.RestartWorkloadWithClient(r.Context(), kind, namespace, name, client)
-	if err != nil {
-		// Restart reaches a terminating Rollout through get(), so it carries the
-		// same sentinels rollback does.
-		if normalizedKind == "rollouts" {
-			s.writeRolloutError(w, err, "restart", namespace, name)
-			return
-		}
-		if errors.Is(err, k8score.ErrRestartPaused) {
-			s.writeErrorCode(w, http.StatusConflict, errCodeWorkloadPaused, err.Error())
-			return
-		}
-		if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
-			s.writeError(w, http.StatusNotFound, err.Error())
-			return
-		}
-		if apierrors.IsForbidden(err) {
-			s.writeError(w, http.StatusForbidden, err.Error())
-			return
-		}
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	s.writeJSON(w, map[string]string{"message": "Workload restart initiated"})
 }
 
 // handlePauseDeployment holds a Deployment's pod template changes without rolling them out.
