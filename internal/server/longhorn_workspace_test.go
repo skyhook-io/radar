@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -294,5 +295,35 @@ func TestLonghornWorkspace_NamespaceCallerWhileUnsynced(t *testing.T) {
 	got := decodeLonghornWorkspace(t, env.authGet(t, "/api/longhorn/workspace", "one-ns", ""))
 	if cov := got.Coverage["volumes"]; cov.State != integration.KindCoverageSyncing {
 		t.Errorf("volumes coverage %+v, want syncing", cov)
+	}
+}
+
+// A switch while the workspace is read serves nothing from the old cluster:
+// its PVs and claim checks may already have run against the new one.
+func TestLonghornWorkspace_SwitchDuringReadServesNothing(t *testing.T) {
+	listKinds := map[schema.GroupVersionResource]string{}
+	for _, k := range longhornWorkspaceTestKinds {
+		listKinds[schema.GroupVersionResource{Group: k.Group, Version: k.Version, Resource: k.Name}] = k.Kind + "List"
+	}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds, longhornWorkspaceFixture()...)
+	var switched atomic.Bool
+	dyn.PrependReactor("list", "engines", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if !switched.Swap(true) {
+			k8s.CancelOngoingOperations()
+		}
+		return false, nil, nil
+	})
+	if err := k8s.InitTestDynamicResourceCache(dyn, longhornWorkspaceTestKinds); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	seedLonghornPVs(t)
+	resp, err := http.Get(testServer.URL + "/api/longhorn/workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if !switched.Load() || resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("switched=%v status=%d, want 503", switched.Load(), resp.StatusCode)
 	}
 }

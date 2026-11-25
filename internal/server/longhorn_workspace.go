@@ -24,18 +24,25 @@ func (s *Server) handleLonghornWorkspace(w http.ResponseWriter, r *http.Request)
 	if !s.requireConnected(w) || s.writeIfDiscoveryPending(w) {
 		return
 	}
-	reader, ok := s.longhornReader(r)
+	reader, current, ok := s.longhornReader(r)
 	if !ok {
 		s.writeError(w, http.StatusServiceUnavailable, "cluster connection is changing; try again")
 		return
 	}
-	s.writeJSON(w, reader.Workspace(r.Context()))
+	resp := reader.Workspace(r.Context())
+	// A switch during the read may have let claim checks run against the
+	// new cluster while the PVs came from the old one.
+	if !current() {
+		s.writeError(w, http.StatusServiceUnavailable, "cluster connection is changing; try again")
+		return
+	}
+	s.writeJSON(w, resp)
 }
 
 // longhornReader captures the connection once and binds every read to the
 // caller, as veleroReader does. ok=false when the connection changes during
-// capture.
-func (s *Server) longhornReader(r *http.Request) (*longhornsvc.Reader, bool) {
+// capture; current reports whether it is still the one serving.
+func (s *Server) longhornReader(r *http.Request) (reader *longhornsvc.Reader, current func() bool, ok bool) {
 	var cache *k8s.ResourceCache
 	var discovery *k8s.ResourceDiscovery
 	var dynamicCache *k8s.DynamicResourceCache
@@ -49,9 +56,9 @@ func (s *Server) longhornReader(r *http.Request) (*longhornsvc.Reader, bool) {
 		forced, target = k8s.ForceNamespaceScope, k8s.GetNamespaceScopeTarget()
 	})
 	if !captured || cache == nil {
-		return nil, false
+		return nil, nil, false
 	}
-	current := func() bool { return operation != nil && operation.Err() == nil }
+	current = func() bool { return operation != nil && operation.Err() == nil }
 	budget := newSyncBudget(r.Context())
 	budget.bound, budget.discovery, budget.dynamicCache, budget.readOnly = true, discovery, dynamicCache, true
 
@@ -122,5 +129,5 @@ func (s *Server) longhornReader(r *http.Request) (*longhornsvc.Reader, bool) {
 				return counts, true
 			},
 		},
-	}, true
+	}, current, true
 }
