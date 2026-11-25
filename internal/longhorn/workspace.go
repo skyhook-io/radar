@@ -56,6 +56,11 @@ type Observations struct {
 	PersistentVolumes func() ([]*corev1.PersistentVolume, string)
 	// ClaimReadable: the caller may read PVCs in namespace.
 	ClaimReadable func(namespace string) bool
+	// VolumeNames counts the objects of k (Volumes) of each name in every
+	// namespace, read with Radar's identity, so a name shared with a Volume
+	// the caller can't see still counts twice. ok is false when not every
+	// one was read.
+	VolumeNames func(ctx context.Context, k integration.WorkspaceKind) (counts map[string]int, ok bool)
 }
 
 // Reader builds the workspace for one request.
@@ -126,26 +131,38 @@ func (r *Reader) Workspace(ctx context.Context) WorkspaceResponse {
 	pvs, pvState := r.Observations.PersistentVolumes()
 	resp.Coverage[PersistentVolumesKey] = integration.KindCoverage{State: pvState}
 
-	enginesByNS := map[string][]*unstructured.Unstructured{}
+	// Grouped once, so each Volume reads only its own Engines and PVs.
+	type volumeKey struct{ namespace, name string }
+	enginesOf := map[volumeKey][]*unstructured.Unstructured{}
 	for _, e := range objects[enginesKey] {
-		enginesByNS[e.GetNamespace()] = append(enginesByNS[e.GetNamespace()], e)
+		name, _, _ := unstructured.NestedString(e.Object, "spec", "volumeName")
+		k := volumeKey{e.GetNamespace(), name}
+		enginesOf[k] = append(enginesOf[k], e)
+	}
+	pvsOf := map[string][]*corev1.PersistentVolume{}
+	for _, pv := range pvs {
+		if h := domain.PVHandle(pv); h != "" {
+			pvsOf[h] = append(pvsOf[h], pv)
+		}
 	}
 	// A PV's handle names no namespace, so it proves a Volume only when no
-	// other Volume read shares the name.
-	names := map[string]int{}
+	// other Volume anywhere shares the name.
+	names, namesRead := map[string]int(nil), false
+	if pvState == integration.KindCoverageFull {
+		names, namesRead = r.Observations.VolumeNames(ctx, workspaceKinds[0])
+	}
 	var volumes []*unstructured.Unstructured
 	for _, v := range objects[volumesKey] {
 		if volumesAccess.Covers(v.GetNamespace()) {
 			volumes = append(volumes, v)
-			names[v.GetName()]++
 		}
 	}
 	counts := &domain.HealthCounts{Complete: volumesAccess.State == integration.KindCoverageFull}
 	for _, v := range volumes {
 		ns := v.GetNamespace()
-		reading := domain.ReadVolume(v, enginesByNS[ns], access[enginesKey].Covers(ns))
-		if pvState == integration.KindCoverageFull && names[v.GetName()] == 1 {
-			reading.Use = domain.UseOf(v.GetName(), pvs, r.Observations.ClaimReadable)
+		reading := domain.ReadVolume(v, enginesOf[volumeKey{ns, v.GetName()}], access[enginesKey].Covers(ns))
+		if namesRead && names[v.GetName()] == 1 {
+			reading.Use = domain.UseOf(v.GetName(), pvsOf[v.GetName()], r.Observations.ClaimReadable)
 		}
 		counts.Add(reading.Health)
 		resp.Volumes = append(resp.Volumes, reading)

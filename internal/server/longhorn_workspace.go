@@ -129,6 +129,17 @@ func (s *Server) longhornReader(r *http.Request) (*longhornsvc.Reader, bool) {
 			ClaimReadable: func(namespace string) bool {
 				return s.canRead(r, "", "persistentvolumeclaims", namespace, "list")
 			},
+			VolumeNames: func(ctx context.Context, k integration.WorkspaceKind) (map[string]int, bool) {
+				list, err := listKindInGroups(ctx, cache, k, nil, []string{longhornpkg.Group}, budget)
+				if err != nil || !current() {
+					return nil, false
+				}
+				counts := map[string]int{}
+				for _, v := range list {
+					counts[v.GetName()]++
+				}
+				return counts, true
+			},
 		},
 	}, true
 }

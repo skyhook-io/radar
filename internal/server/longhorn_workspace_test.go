@@ -243,3 +243,22 @@ func TestLonghornWorkspace_UnreadEnginesPVsAndClaims(t *testing.T) {
 		t.Errorf("pvc-b use %+v, want the PV named and its claim withheld", b)
 	}
 }
+
+// A PV's handle names no namespace: a Volume whose name another Volume shares
+// in a namespace the caller can't read is not proven to back the PV.
+func TestLonghornWorkspace_NameSharedOutsideTheCallersRead(t *testing.T) {
+	objs := append(longhornWorkspaceFixture(), lhObj("Volume", "other-lh", "pvc-b", map[string]any{}, map[string]any{"robustness": "healthy"}))
+	seedSyncedCNPGWorkspace(t, longhornWorkspaceTestKinds, objs...)
+	seedLonghornPVs(t)
+	env := newAuthTestServer(t)
+	lhUser(env, "one-ns", false, false, true, "app", "tenant")
+	perms := env.srv.permCache.Get("one-ns", nil)
+	allow(perms, longhornpkg.Group, "volumes", "longhorn-system", true)
+	got := decodeLonghornWorkspace(t, env.authGet(t, "/api/longhorn/workspace", "one-ns", ""))
+	if b := lhVolume(got, "longhorn-system", "pvc-b"); b == nil || b.Use.State != longhornpkg.UseUnknown || b.Use.PersistentVolume != "" || b.Use.Claim != nil {
+		t.Errorf("pvc-b use %+v, want unknown: another Volume has its name", b)
+	}
+	if a := lhVolume(got, "longhorn-system", "pvc-a"); a == nil || a.Use.State != longhornpkg.UseBound || a.Use.PersistentVolume != "pv-a" {
+		t.Errorf("pvc-a use %+v, want pv-a", a)
+	}
+}
