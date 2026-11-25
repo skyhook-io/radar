@@ -46,8 +46,8 @@ func TestInferServicePorts(t *testing.T) {
 
 	flows := []*Flow{single, multi, none, node, unoriented, l7, svc}
 	l7Flows := []Flow{{Destination: Endpoint{Name: "checkout", Namespace: "shop"}, Port: 8080}}
-	if n := inferServicePorts(flows, l7Flows, false, lookup); n != 3 {
-		t.Errorf("inferred = %d, want 3 (postgres, web and the redis Service)", n)
+	if n := inferServicePorts(flows, l7Flows, false, lookup); n != 4 {
+		t.Errorf("inferred = %d, want 4 (postgres, web, the redis Service and the HTTP port)", n)
 	}
 	if svc.Port != 6379 || svc.PortSource != PortSourceService {
 		t.Errorf("a Service destination takes its own port: got %d/%q", svc.Port, svc.PortSource)
@@ -146,7 +146,7 @@ func TestPodTemplateFromCacheRefusesAmbiguousNames(t *testing.T) {
 }
 
 func TestWarningSaysPortsComeFromServices(t *testing.T) {
-	p := l4LabelPresence{metric: "beyla_network_flow_bytes_total", transport: true, servicePorts: 3}
+	p := l4LabelPresence{metric: "beyla_network_flow_bytes_total", transport: true, portsFilled: 3}
 	w := p.warning(5)
 	if !strings.Contains(w, "taken from Service specs, not observed") {
 		t.Errorf("warning must say the ports are inferred: %s", w)
@@ -213,5 +213,15 @@ func TestTemplateKindsFollowTheDestinationKind(t *testing.T) {
 		if !want[k] {
 			t.Errorf("unexpected kind %q", k)
 		}
+	}
+}
+
+func TestInferServicePortsCountsObservedHTTPPortsForTheWarning(t *testing.T) {
+	f := portFlow("shop", "web", "Workload", "tcp")
+	l7 := []Flow{{Destination: Endpoint{Name: "web", Namespace: "shop"}, Port: 8080}}
+	n := inferServicePorts([]*Flow{f}, l7, true, lookupFrom(nil))
+	p := l4LabelPresence{metric: "beyla_network_flow_bytes_total", transport: true, portsFilled: n}
+	if w := p.warning(1); strings.Contains(w, "every edge here appears as port 0") {
+		t.Errorf("an edge shows its HTTP port: %s", w)
 	}
 }
