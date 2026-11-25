@@ -1095,6 +1095,7 @@ export function WorkloadView({
   const shouldCommitFallback =
     requestedTab !== fallbackTab &&
     !requestedTabAvailable &&
+    !(resourceLoading && activeExtraTab && !activeExtraTab.availableWhenDeleted) &&
     (
       replacementTab !== undefined ||
       (expanded && extraTabsComplete && !resourceLoading && !isBuiltInTab(requestedTab) && !requestedHostTabKnown) ||

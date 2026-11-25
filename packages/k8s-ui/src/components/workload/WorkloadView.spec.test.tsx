@@ -245,6 +245,33 @@ it('keeps an asynchronous deep link and reconciles an explicit built-in replacem
   act(() => root.unmount())
 })
 
+it.each(['found', 'missing'] as const)('keeps the requested Timeline until the Cluster read settles as %s', outcome => {
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  const onTabChange = vi.fn()
+  const extraTabs = [{ id: 'activity', label: 'Activity', replaces: 'timeline' as const, render: () => 'Cluster activity' }]
+  function Page({ loading }: { loading: boolean }) {
+    const [tab, setTab] = useState('timeline')
+    const missing = !loading && outcome === 'missing'
+    return <WorkloadView {...props} activeTab={tab} extraTabs={extraTabs} isLoading={loading}
+      resource={loading || missing ? undefined : resource}
+      resourceError={missing ? Object.assign(new Error('not found'), { status: 404 }) : undefined}
+      onTabChange={(next, options) => { onTabChange(next, options); setTab(next) }} />
+  }
+  act(() => root.render(<Page loading />))
+  expect(onTabChange).not.toHaveBeenCalled()
+  act(() => root.render(<Page loading={false} />))
+  const selected = host.querySelector('[role="tab"][aria-selected="true"]')
+  if (outcome === 'missing') {
+    expect(selected?.textContent).toBe('Timeline')
+    expect(onTabChange).not.toHaveBeenCalled()
+  } else {
+    expect(selected?.textContent).toBe('Activity')
+    expect(onTabChange).toHaveBeenCalledExactlyOnceWith('activity', { replace: true })
+  }
+  act(() => root.unmount())
+})
+
 it('repairs unknown tab IDs once the host list is complete and the workload read settles', () => {
   const root = createRoot(document.createElement('div'))
   const onTabChange = vi.fn()
