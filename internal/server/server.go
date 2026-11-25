@@ -841,6 +841,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Post("/cronjobs/{namespace}/{name}/suspend", s.bindWrite(s.handleSuspendCronJob))
 			r.Post("/cronjobs/{namespace}/{name}/resume", s.bindWrite(s.handleResumeCronJob))
 
+			r.Post("/workflows/{namespace}/{name}/stop", s.bindWrite(s.handleWorkflowStop))
+
 			// Workload restart, scale, rollback. Writes are bound to the connection
 			// the caller names (bindWrite in connection_binding.go).
 			r.Post("/workloads/{kind}/{namespace}/{name}/restart", s.bindWrite(s.handleRestartWorkload))
@@ -1592,6 +1594,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		RuntimeAdvisoryChecks:       true,
 		RuntimeAdvisoryProgress:     true,
 		CronJobTriggerJobName:       true,
+		WorkflowStop:                true,
 	}
 }
 
