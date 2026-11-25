@@ -1,3 +1,4 @@
+import { hasPrometheusCharts } from '../../../api/prometheusCharts'
 import { PodRenderer as BasePodRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/PodRenderer'
 import type { CopyHandler } from '@skyhook-io/k8s-ui/components/ui/drawer-components'
 import { getPodNetworks, uniqueNetworkAttachmentRefs } from '@skyhook-io/k8s-ui/utils/multus'
@@ -66,7 +67,7 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
 
   // Hide metrics-server section when Prometheus has CPU data
   const { data: prometheusStatus } = usePrometheusStatus()
-  const prometheusConnected = prometheusStatus?.connected === true
+  const prometheusConnected = hasPrometheusCharts(prometheusStatus)
   const { data: prometheusCPU, isLoading: prometheusCPULoading, error: prometheusCPUError } = usePrometheusResourceMetrics(
     'Pod', namespace ?? '', podName ?? '', 'cpu', '1h', prometheusConnected,
   )
