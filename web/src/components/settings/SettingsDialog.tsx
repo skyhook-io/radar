@@ -17,6 +17,7 @@ import {
   useOpenCostSummary,
 } from '../../api/client'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
+import { ClusterProxyList } from './ClusterProxyForm'
 import { Input, ResourceRefBadge, SelectMenu, type ResourceRef } from '@skyhook-io/k8s-ui'
 import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
 import { Tooltip } from '../ui/Tooltip'
@@ -751,6 +752,13 @@ export function SettingsDialog({
                   onChange={updateConfigField}
                 />
               </div>
+              {capabilities.clusterProxy && canEditConfig && (
+                <div className="space-y-2 border-t border-theme-border-subtle pt-4">
+                  <SubHeading>Cluster proxy</SubHeading>
+                  <p className="text-xs text-theme-text-tertiary">Each kubeconfig context can go through its own HTTP or SOCKS5 proxy. Set one before switching to a cluster Radar can only reach through it.</p>
+                  <ClusterProxyList />
+                </div>
+              )}
               {configData?.management === 'local' && configData.integrationProfiles && canEditConfig && (
                 <SavedClusterConnections
                   key={settingsScope}

@@ -12,6 +12,7 @@ import { allShellSafe, awsProfileFlag } from '../utils/shell-safe'
 import { apiUrl } from '../api/config'
 import { useCapabilitiesContext } from '../contexts/CapabilitiesContext'
 import { outageSinceLabel } from './outageSince'
+import { ClusterProxyForm } from './settings/ClusterProxyForm'
 
 interface ConnectionErrorViewProps {
   connection: ConnectionState
@@ -374,9 +375,13 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying, back, var
   const errorInfo = commandInfo || errorHints[connection.errorType || 'unknown'] || errorHints.unknown
   const openLocalTerminal = useOpenLocalTerminal()
   const { data: authMe } = useAuthMe()
-  const { localTerminal } = useCapabilitiesContext()
+  const { localTerminal, clusterProxy } = useCapabilitiesContext()
   const rawErrorDefaultOpen = !connection.errorType || connection.errorType === 'unknown'
   const [showRawError, setShowRawError] = useState(rawErrorDefaultOpen)
+  const savedProxyUrl = matchedContext?.proxyUrl
+  // Opens on its own when a proxy is already saved, since it may be the cause.
+  const [showProxy, setShowProxy] = useState<boolean | null>(null)
+  const proxyOpen = showProxy ?? !!savedProxyUrl
 
   useEffect(() => {
     setShowRawError(rawErrorDefaultOpen)
@@ -519,6 +524,26 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying, back, var
               </div>
             )}
           </div>
+
+          {clusterProxy && connection.context && connection.errorType !== 'config' && (
+            <div className="w-full bg-theme-surface border border-theme-border rounded-lg p-4 mb-5 text-left">
+              <button
+                type="button"
+                aria-expanded={proxyOpen}
+                aria-controls="connection-proxy"
+                onClick={() => setShowProxy(!proxyOpen)}
+                className="flex items-center gap-1 text-sm font-medium text-theme-text-primary"
+              >
+                <CollapseChevron open={proxyOpen} className="h-3.5 w-3.5" />
+                Connect through a proxy
+              </button>
+              <Collapse open={proxyOpen} id="connection-proxy">
+                <div className="mt-3">
+                  <ClusterProxyForm key={connection.context} context={connection.context} savedProxyUrl={savedProxyUrl} onSaved={onRetry} />
+                </div>
+              </Collapse>
+            </div>
+          )}
 
           <div className="flex flex-wrap items-center justify-center gap-3">
             <button

@@ -128,6 +128,7 @@ export interface Capabilities {
   podDebug?: boolean
   exec: boolean           // Terminal feature (pods/exec)
   localTerminal: boolean  // Local terminal available (not in-cluster, not disabled)
+  clusterProxy?: boolean  // A per-context proxy can be saved; absent on older Radar
   /** Shell family where a hand-off command runs; absent from older Radars. */
   localShell?: 'powershell' | 'posix'
   logs: boolean           // Log viewer (pods/log)
@@ -605,6 +606,8 @@ export interface ContextInfo {
   /** AWS profile extracted from the exec plugin's --profile arg or AWS_PROFILE
    *  env var. Present only for EKS contexts that pin a profile. */
   awsProfile?: string
+  /** Proxy saved for this context in Radar, without credentials. */
+  proxyUrl?: string
 }
 
 // Namespace

@@ -253,7 +253,7 @@ radar
 | `--no-mcp` | `false` | Disable all MCP endpoints |
 | `--mcp-read-only` | `false` | Expose only read-only MCP tools; disable `/mcp` (env: `RADAR_MCP_READ_ONLY`) |
 
-<a id="tuning-for-slow-or-high-latency-clusters"></a>The [Configuration Guide](docs/configuration.md#cli-flags) describes every startup flag in the table above and 27 more, plus tuning for slow or high-latency clusters, kubeconfig precedence, and context switching.
+<a id="tuning-for-slow-or-high-latency-clusters"></a>The [Configuration Guide](docs/configuration.md#cli-flags) describes every startup flag in the table above and 27 more, plus tuning for slow or high-latency clusters, kubeconfig precedence, context switching, and a per-context HTTP or SOCKS5 proxy saved in Radar instead of the kubeconfig.
 
 <details>
 <summary>The other 27 flags</summary>
