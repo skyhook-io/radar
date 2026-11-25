@@ -1730,12 +1730,7 @@ func mergeNamespaceCapabilities(caps *k8s.Capabilities, nsCaps *k8s.NamespaceCap
 	caps.Logs = mergeNamespaceCapability(caps.Logs, nsCaps.Logs, nsCaps.Errors.Logs)
 	caps.PortForward = mergeNamespaceCapability(caps.PortForward, nsCaps.PortForward, nsCaps.Errors.PortForward)
 	caps.HelmWrite = mergeNamespaceCapability(caps.HelmWrite, nsCaps.HelmWrite, nsCaps.Errors.HelmWrite)
-	caps.WorkloadWrites.Deployments = mergeNamespaceCapability(caps.WorkloadWrites.Deployments, nsCaps.WorkloadWrites.Deployments, nsCaps.Errors.WorkloadWrites.Deployments)
-	caps.WorkloadWrites.DaemonSets = mergeNamespaceCapability(caps.WorkloadWrites.DaemonSets, nsCaps.WorkloadWrites.DaemonSets, nsCaps.Errors.WorkloadWrites.DaemonSets)
-	caps.WorkloadWrites.StatefulSets = mergeNamespaceCapability(caps.WorkloadWrites.StatefulSets, nsCaps.WorkloadWrites.StatefulSets, nsCaps.Errors.WorkloadWrites.StatefulSets)
-	caps.WorkloadWrites.Rollouts = mergeNamespaceCapability(caps.WorkloadWrites.Rollouts, nsCaps.WorkloadWrites.Rollouts, nsCaps.Errors.WorkloadWrites.Rollouts)
-	caps.WorkloadWrites.Workflows = mergeNamespaceCapability(caps.WorkloadWrites.Workflows, nsCaps.WorkloadWrites.Workflows, nsCaps.Errors.WorkloadWrites.Workflows)
-	caps.WorkloadWrites.CreateWorkflows = mergeNamespaceCapability(caps.WorkloadWrites.CreateWorkflows, nsCaps.WorkloadWrites.CreateWorkflows, nsCaps.Errors.WorkloadWrites.CreateWorkflows)
+	k8s.MergeWorkloadWrites(&caps.WorkloadWrites, nsCaps.WorkloadWrites, nsCaps.Errors.WorkloadWrites, mergeNamespaceCapability)
 }
 
 func mergeNamespaceCapability(global, namespaced, checkErrored bool) bool {
