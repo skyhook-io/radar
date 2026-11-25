@@ -3713,7 +3713,7 @@ function EnvSwitcher({
   );
   const evidenceChip = actualEnvironments.some((inst) => inst.evidence) && (
     <Tooltip content={<AppIdentityTooltip identityKey={identityKey} members={actualEnvironments.map(
-      ({ name, env, confidence = "", evidence = "" }) => ({ name, env, confidence, evidence }),
+      ({ name, env, confidence, evidence = "" }) => ({ name, env, confidence, evidence }),
     )} />} delay={150}>
       <span role="img" aria-label="Application grouping evidence" className="inline-flex cursor-default items-center rounded-sm bg-theme-hover px-1 py-px ring-1 ring-inset ring-theme-border">
         <Layers className="h-3 w-3 text-theme-text-tertiary" aria-hidden />

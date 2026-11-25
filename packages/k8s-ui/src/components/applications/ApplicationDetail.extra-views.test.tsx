@@ -565,4 +565,24 @@ describe('ApplicationDetail extra views', () => {
     rerender({ ...props, identityInstances: [all, { ...prod, evidence: 'app annotation' }] })
     expect(evidenceChip()).not.toBeNull()
   })
+
+  it.each([undefined, 'medium', 'high'])('shows the grouping evidence with confidence %s', (confidence) => {
+    vi.useFakeTimers()
+    try {
+      const prod = { appKey: 'prod', name: 'prod', env: 'prod', health: 'healthy' as const, evidence: 'app annotation', confidence }
+      const { host } = show({
+        activeInstanceKey: 'prod',
+        onSwitchInstance: () => {},
+        identityInstances: [prod, { ...prod, appKey: 'dev', env: 'dev' }],
+      })
+      const chip = host.querySelector('[aria-label="Application grouping evidence"]')!
+      act(() => { chip.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body })) })
+      act(() => { vi.advanceTimersByTime(400) })
+      const tooltip = document.querySelector('[role="tooltip"]')?.textContent
+      expect(tooltip).toContain('app annotation')
+      expect(tooltip?.includes('heuristic · medium confidence')).toBe(confidence === 'medium')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
