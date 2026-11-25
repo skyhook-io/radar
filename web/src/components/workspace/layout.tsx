@@ -182,7 +182,7 @@ export function SectionTable<T>({
                         e.preventDefault()
                         open()
                       } : undefined}
-                      className={clsx(open && 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent', ROW_HOVER, active && 'selection')}
+                      className={clsx(open && ['cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent', ROW_HOVER], active && 'selection')}
                       aria-selected={res ? active : undefined}
                     >
                       {columns.map((c, i) => (
