@@ -1,6 +1,7 @@
 package topology
 
 import (
+	"slices"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -119,5 +120,57 @@ func TestBuilderReadsBackingChannelOwnerBeforeStatusReference(t *testing.T) {
 	rel := GetRelationshipsWithObject("InMemoryChannel", "app", "events", backing, topo, nil, dp, IndexByResource(topo))
 	if rel == nil || rel.Owner == nil || rel.Owner.Kind != "Channel" {
 		t.Fatalf("owner=%+v", rel)
+	}
+}
+
+func TestBuilderResolvesTriggerBrokerRef(t *testing.T) {
+	const group = "eventing.knative.dev"
+	const version = group + "/v1"
+	remote := map[string]any{"apiVersion": version, "kind": "Broker", "namespace": "events", "name": "remote"}
+	for _, tc := range []struct {
+		name       string
+		brokerRef  any
+		namespaces []string
+		want       []string
+	}{
+		{"cross namespace", remote, nil, []string{"broker/events/remote"}},
+		{"filtered namespace", remote, []string{"app"}, nil},
+		{"only a different kind exists", map[string]any{"apiVersion": version, "kind": "Trigger", "namespace": "events", "name": "other"}, nil, nil},
+		{"only a foreign Broker exists", map[string]any{"apiVersion": "other.example/v1", "kind": "Broker", "namespace": "events", "name": "foreign"}, nil, nil},
+		{"malformed ref", "invalid", nil, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newCharDynamic()
+			d.add(group, "v1", "Broker", "brokers", true,
+				charUnstructured(version, "Broker", "events", "remote", nil, nil, nil),
+				charUnstructured(version, "Broker", "app", "local", nil, nil, nil))
+			trigger := charUnstructured(version, "Trigger", "app", "orders", nil, map[string]any{
+				"broker": "local", "brokerRef": tc.brokerRef,
+			}, nil)
+			d.add(group, "v1", "Trigger", "triggers", true, trigger, charUnstructured(version, "Trigger", "events", "other", nil, nil, nil))
+			d.add("other.example", "v1", "Broker", "brokers", true, charUnstructured("other.example/v1", "Broker", "events", "foreign", nil, nil, nil))
+			opts := DefaultBuildOptions()
+			opts.Namespaces = tc.namespaces
+			topo, err := NewBuilder(&mockProvider{}).WithDynamic(d).Build(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			const triggerID = "trigger/app/orders"
+			if findNode(topo, triggerID) == nil {
+				t.Fatalf("missing %s", triggerID)
+			}
+			var got []string
+			for _, e := range topo.Edges {
+				if e.Target == triggerID {
+					if e.Type != EdgeExposes {
+						t.Errorf("unexpected Trigger edge: %+v", e)
+					}
+					got = append(got, e.Source)
+				}
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("Trigger brokers = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

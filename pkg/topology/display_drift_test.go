@@ -160,6 +160,7 @@ func fixtureFamilyEdges(t *testing.T, s *projectionSession) (projected, required
 		relations.IngressBackends: true, relations.GatewayClasses: true,
 		relations.GatewayParents: true, relations.GatewayBackends: true,
 		relations.ClusterClasses: true, relations.ArgoWorkflowTemplates: true,
+		relations.CertificateSecrets: true,
 	}
 	record := func(name string, d relations.Disposition, from, to resourceid.Ref, mustDraw bool) {
 		for _, rule := range d.Rules {

@@ -356,6 +356,18 @@ func TestFluxDependsOnNamesItsOwnKindAcrossNamespaces(t *testing.T) {
 	}
 }
 
+func TestMalformedBrokerRefLeavesTriggerWithoutABroker(t *testing.T) {
+	broker := object("eventing.knative.dev/v1", "Broker", "default", nil)
+	trigger := object("eventing.knative.dev/v1", "Trigger", "orders", map[string]any{"broker": "default", "brokerRef": "invalid"})
+	v := NewView(allNamespaces{cluster: cluster{objects: []runtime.Object{broker, trigger}}}, ownership.Unrestricted())
+	if got := v.References(KnativeTriggerBrokers, refOf(trigger), trigger); len(got.Declared) != 0 {
+		t.Errorf("Trigger declares %+v", got.Declared)
+	}
+	if got := v.Referrers(KnativeTriggerBrokers, refOf(broker), nil); len(got.Referrers) != 0 {
+		t.Errorf("Broker has referrers %+v", got.Referrers)
+	}
+}
+
 func TestKnativeFamiliesNameWhereEventsAndTrafficGo(t *testing.T) {
 	ksvc := inNamespace(object("serving.knative.dev/v1", "Service", "handler", nil), "apps")
 	trigger := object("eventing.knative.dev/v1", "Trigger", "orders", map[string]any{
