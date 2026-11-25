@@ -1124,6 +1124,9 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 
 func readMCPResource(ctx context.Context, input getResourceInput, tier resourcecontext.ContextTier) (*mcp.CallToolResult, any, error) {
 	if input.Relationship != "" {
+		if input.Relationship == "exposes" {
+			return nil, nil, fmt.Errorf("relationship exposes joins two directions; ask for exposedBy or backends")
+		}
 		if !resourcecontext.IsRelationshipPreviewField(input.Relationship) {
 			return nil, nil, fmt.Errorf("relationship %q is not a field Radar previews; use a field a partial-preview warning names", input.Relationship)
 		}
@@ -3857,12 +3860,9 @@ func relationshipPreviewWarning(rc *resourcecontext.ResourceContext, expanded st
 		fields.Delete("exposes")
 	}
 	var parts []string
-	if expanded != "" && (fields.Has(expanded) || expanded == "exposes" && fields.HasAny("exposedBy", "backends")) {
+	if fields.Has(expanded) {
 		parts = append(parts, fmt.Sprintf("%s is still partial after expansion: Radar reached its %d-entry limit or its access-check limit. The total is unknown and get_resource can't list more.", expanded, resourcecontext.MaxExpandedRelationshipItems))
 		fields.Delete(expanded)
-		if expanded == "exposes" {
-			fields.Delete("exposedBy", "backends")
-		}
 	}
 	if len(fields) > 0 {
 		ordered := sets.List(fields)

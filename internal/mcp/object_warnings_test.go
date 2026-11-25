@@ -79,8 +79,10 @@ func TestExpandedRelationshipPreviewWarning(t *testing.T) {
 		{"clipped again", clipped("dependents"), "dependents", exhausted},
 		{"clipped again beside another", clipped("dependents", "monitors"), "dependents", exhausted +
 			" Partial preview of monitors. Radar reached its display or access-check limit. The total is unknown. To list up to 200 of one, call get_resource for this resource with relationship=\"monitors\"."},
-		{"routing union", clipped("backends", "exposes"), "exposes",
-			"exposes is still partial after expansion: Radar reached its 200-entry limit or its access-check limit. The total is unknown and get_resource can't list more."},
+		{"one routing direction", clipped("exposedBy", "backends", "exposes"), "exposedBy",
+			"exposedBy is still partial after expansion: Radar reached its 200-entry limit or its access-check limit. The total is unknown and get_resource can't list more." +
+				" Partial preview of backends. Radar reached its display or access-check limit. The total is unknown. To list up to 200 of one, call get_resource for this resource with relationship=\"backends\"."},
+		{"nothing clipped", clipped(), "dependents", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := relationshipPreviewWarning(tc.rc, tc.expanded); got != tc.want {

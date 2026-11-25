@@ -297,10 +297,21 @@ func TestRelationshipPreviewExpansion(t *testing.T) {
 	}
 	rc := Build(t.Context(), &corev1.Pod{}, Options{
 		Relationships:      &topology.Relationships{Services: routes, Backends: services},
-		ExpandRelationship: "exposes",
+		ExpandRelationship: "exposedBy",
 	})
-	if len(rc.ExposedBy) != 200 || len(rc.Backends) != 200 || len(rc.Exposes) != 400 {
-		t.Fatalf("exposes expanded to exposedBy=%d backends=%d union=%d", len(rc.ExposedBy), len(rc.Backends), len(rc.Exposes))
+	if len(rc.ExposedBy) != 200 || len(rc.Backends) != 20 || len(rc.Exposes) != 220 {
+		t.Fatalf("exposedBy expanded to exposedBy=%d backends=%d union=%d", len(rc.ExposedBy), len(rc.Backends), len(rc.Exposes))
+	}
+
+	managers := widgets(250)
+	top := managers[249]
+	owned := Build(t.Context(), &corev1.ConfigMap{}, Options{
+		Relationships: &topology.Relationships{Managers: managers, Ownership: &topology.OwnershipCoverage{},
+			ControllerChain: &topology.ControllerChain{Refs: []topology.ResourceRef{{Kind: "ConfigMap"}, top}}},
+		ExpandRelationship: "managedBy",
+	})
+	if len(owned.ManagedBy) != 200 || !slices.Contains(owned.ManagedBy, toContextRef(top)) {
+		t.Fatalf("expanded managedBy %d, top kept %v", len(owned.ManagedBy), slices.Contains(owned.ManagedBy, toContextRef(top)))
 	}
 
 	var denied []topology.ResourceRef
@@ -308,8 +319,18 @@ func TestRelationshipPreviewExpansion(t *testing.T) {
 		denied = append(denied, topology.ResourceRef{Group: fmt.Sprintf("z%03d.example", i), Kind: "Secret", Namespace: "private-namespace", Name: "hidden"})
 	}
 	checker := &countingRefChecker{deniedKind: "Secret"}
-	Build(t.Context(), &corev1.ConfigMap{}, Options{Relationships: &topology.Relationships{Dependents: denied}, AccessChecker: checker, ExpandRelationship: "dependents"})
-	if checker.calls != accessChecksPerPreviewItem*MaxExpandedRelationshipItems {
-		t.Fatalf("expanded access checks = %d", checker.calls)
+	hidden := Build(t.Context(), &corev1.ConfigMap{}, Options{Relationships: &topology.Relationships{Dependents: denied}, AccessChecker: checker, ExpandRelationship: "dependents"})
+	if checker.calls != accessChecksPerPreviewItem*MaxExpandedRelationshipItems || len(hidden.Dependents) != 0 ||
+		!slices.Equal(hidden.Omitted, []OmittedField{{"dependents", OmittedRBACDenied}, {"dependents", OmittedBudgetExceeded}}) {
+		t.Fatalf("expanded access checks = %d, %+v", checker.calls, hidden)
+	}
+	raw, err := json.Marshal(hidden)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{"hidden", "private-namespace", "Secret", "900", "800"} {
+		if strings.Contains(string(raw), s) {
+			t.Fatalf("serialized withheld evidence: %s", raw)
+		}
 	}
 }

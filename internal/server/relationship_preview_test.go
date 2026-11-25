@@ -122,6 +122,7 @@ func TestResourceRelationshipPreviewAcrossRESTAndMCP(t *testing.T) {
 	for _, bad := range []map[string]any{
 		{"relationship": "referencedBy"},
 		{"relationship": "dependents", "context": "none"},
+		{"relationship": "exposes"},
 	} {
 		badArgs := maps.Clone(args)
 		maps.Copy(badArgs, bad)
