@@ -32,6 +32,9 @@ func applyFluxChain(s *Summary, root *unstructured.Unstructured, tree *gitopstre
 		}
 	}
 
+	// chartSwitched: the inline chart now names another chart than the
+	// deployed release, so equal versions don't mean it was applied.
+	chartSwitched := false
 	switch root.GetKind() {
 	case "Kustomization":
 		s.AppliedRevision, _, _ = unstructured.NestedString(root.Object, "status", "lastAppliedRevision")
@@ -41,6 +44,8 @@ func applyFluxChain(s *Summary, root *unstructured.Unstructured, tree *gitopstre
 			// chart source is an OCI artifact compared by digest.
 			if primary != nil && primary.Kind == "HelmChart" {
 				s.AppliedRevision = deployed.ChartVersion
+				desired, _, _ := unstructured.NestedString(root.Object, "spec", "chart", "spec", "chart")
+				chartSwitched = desired != "" && deployed.ChartName != "" && desired != deployed.ChartName
 			} else {
 				s.AppliedRevision = deployed.OCIDigest
 			}
@@ -64,7 +69,7 @@ func applyFluxChain(s *Summary, root *unstructured.Unstructured, tree *gitopstre
 		break
 	}
 	if s.SourceRevision != "" && s.AppliedRevision != "" {
-		pending := !fluxRevisionsMatch(s.SourceRevision, s.AppliedRevision)
+		pending := chartSwitched || !fluxRevisionsMatch(s.SourceRevision, s.AppliedRevision)
 		s.Pending = &pending
 	}
 }

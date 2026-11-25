@@ -37,6 +37,7 @@ func FluxLastApply(root *unstructured.Unstructured) (at string, succeeded bool) 
 
 type FluxDeployedSnapshot struct {
 	Version      int64
+	ChartName    string
 	ChartVersion string
 	Status       string
 	LastDeployed string
@@ -61,8 +62,9 @@ func FluxReleaseSnapshots(root *unstructured.Unstructured) []FluxDeployedSnapsho
 			continue
 		}
 		chartVersion, _, _ := unstructured.NestedString(entry, "chartVersion")
+		chartName, _, _ := unstructured.NestedString(entry, "chartName")
 		ociDigest, _, _ := unstructured.NestedString(entry, "ociDigest")
-		snapshot := FluxDeployedSnapshot{Version: version, ChartVersion: chartVersion, Status: status, OCIDigest: ociDigest}
+		snapshot := FluxDeployedSnapshot{Version: version, ChartName: chartName, ChartVersion: chartVersion, Status: status, OCIDigest: ociDigest}
 		value, _, _ := unstructured.NestedString(entry, "lastDeployed")
 		if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil && !parsed.IsZero() {
 			snapshot.LastDeployed = parsed.UTC().Format(time.RFC3339Nano)

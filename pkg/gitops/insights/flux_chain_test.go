@@ -90,6 +90,28 @@ func TestFluxChainInlineHelmReleaseUsesHelmChart(t *testing.T) {
 	}
 }
 
+// A HelmChart is compared by version, so a switch to another chart with the
+// same version that failed to deploy must still read pending.
+func TestFluxChainHelmChartSwitchToAnotherChartIsPending(t *testing.T) {
+	root := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease",
+		"metadata": map[string]any{"namespace": "team", "name": "app"},
+		"spec":     map[string]any{"chart": map[string]any{"spec": map[string]any{"chart": "chart-b", "sourceRef": map[string]any{"kind": "HelmRepository", "name": "charts"}}}},
+		"status": map[string]any{"helmChart": "team/team-app", "history": []any{
+			map[string]any{"version": int64(4), "status": "failed", "chartName": "chart-b", "chartVersion": "1.0.0"},
+			map[string]any{"version": int64(3), "status": "deployed", "chartName": "chart-a", "chartVersion": "1.0.0"},
+		}},
+	}}
+	tree := &gitopstree.ResourceTree{Nodes: []gitopstree.Node{sourceNode("HelmChart", "team-app", "1.0.0", "")}}
+	if s := Build(root, tree, nil).Summary; s.Pending == nil || !*s.Pending {
+		t.Fatalf("different chart, same version: %+v", s)
+	}
+	root.Object["spec"].(map[string]any)["chart"].(map[string]any)["spec"].(map[string]any)["chart"] = "chart-a"
+	if s := Build(root, tree, nil).Summary; s.Pending == nil || *s.Pending {
+		t.Fatalf("same chart, same version: %+v", s)
+	}
+}
+
 func TestFluxChainUnknownWithoutSourceNode(t *testing.T) {
 	root := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
