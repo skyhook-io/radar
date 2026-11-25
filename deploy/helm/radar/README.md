@@ -597,6 +597,8 @@ Disabled by default for security:
 | Admission policies view | `rbac.viewAdmissionPolicies: true` | Show native ValidatingAdmissionPolicies and ValidatingAdmissionPolicyBindings in the resource browser. Off by default for no-auth installs because the declarations expose admission-control coverage and gaps. Auto-enabled under auth or cloud mode, where reads are re-checked per user. |
 | Node runtime evidence | `rbac.viewNodeRuntime: true` | Let upgrade-impact checks inspect kubelet metrics and effective configuration through `nodes/proxy`. Off by default because this exposes node-level runtime and configuration details to anyone who can reach a no-auth Radar install. Under auth, grant `get` on `nodes/proxy` to each Kubernetes identity that should inspect this evidence. |
 
+For Pod Debug, bind the extra `pods/ephemeralcontainers` permission in the target namespace. With authentication off, bind Radar’s ServiceAccount. With per-user authentication, grant the signed-in user or their group. The shared Radar Hub view is read-only and omits this action.
+
 ### MCP container commands
 
 `mcp.execTools` registers `exec_pod`, and `mcp.httpTools` independently registers

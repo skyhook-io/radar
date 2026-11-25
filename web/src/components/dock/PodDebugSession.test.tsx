@@ -47,6 +47,8 @@ it('keeps watching a pull backoff and opens only the accepted container once it 
   expect(fetch.mock.calls.every(([, init]) => !init.method || init.method === 'GET')).toBe(true)
 })
 it.each([
+  [() => reply({ waiting: { reason: 'InvalidImageName' } }), 'Start a new debug session with a valid image reference'],
+  [() => reply({ waiting: { reason: 'CreateContainerConfigError', message: 'image runs as root' } }), 'Kubernetes could not start the debug container'],
   [() => reply({ terminated: { exitCode: 17, reason: 'Error' } }), 'exited with code 17'],
   [() => reply({ running: {} }, 'replacement'), 'original Pod was replaced'],
   [() => new Response(JSON.stringify({ error: 'pods is forbidden' }), { status: 403 }), 'Access denied'],

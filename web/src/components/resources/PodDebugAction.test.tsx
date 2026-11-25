@@ -87,3 +87,14 @@ it.each([
     expect(retry.disabled).toBe(false)
   }
 })
+
+it('opens an accepted session in the dock if its Pod details closed during the request', async () => {
+  let finish!: (response: Response) => void
+  vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { finish = resolve })))
+  render()
+  click('Debug')
+  await act(async () => { click('Start debug container') })
+  act(() => root.render(<QueryClientProvider client={client}><DockProvider>{null}<Tabs /></DockProvider></QueryClientProvider>))
+  await act(async () => { finish(new Response(JSON.stringify({ containerName: 'debug-name', image: 'mirror.example/debug', status: 'pending' }))) })
+  expect(document.querySelector('output')!.textContent).toBe('debug-name')
+})

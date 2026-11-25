@@ -10,8 +10,9 @@ import type { PodDebugTarget } from '../resources/PodDebugAction'
 type Session = NonNullable<DockTab['debugSession']>
 
 interface Startup {
-  state: 'finished' | 'running' | 'waiting'
+  state: 'finished' | 'running' | 'waiting' | 'blocked'
   title?: string
+  hint?: string
   reason?: string
   message?: string
 }
@@ -27,11 +28,26 @@ function startup(pod: PodDebugTarget, uid: string, container: string): Startup {
     return { state: 'finished', title: 'The Pod is terminating or has finished' }
   }
   if (status?.running) return { state: 'running' }
-  return { state: 'waiting', title: 'Waiting for the debug container', ...status?.waiting }
+  const waiting = status?.waiting
+  switch (waiting?.reason) {
+    case 'InvalidImageName':
+      return { state: 'finished', title: 'The debug image name is invalid', hint: 'Start a new debug session with a valid image reference.', ...waiting }
+    case 'ErrImagePull':
+    case 'ImagePullBackOff':
+      return { state: 'blocked', title: 'Kubernetes could not pull the debug image', hint: 'Check the image and registry access. The terminal opens if Kubernetes succeeds on a retry.', ...waiting }
+    case 'ErrImageNeverPull':
+      return { state: 'blocked', title: 'The debug image is missing on the node and pulling is disabled', hint: 'Load the image on the node or start a new session with an available image.', ...waiting }
+    case 'CreateContainerConfigError':
+    case 'CreateContainerError':
+    case 'RunContainerError':
+      return { state: 'blocked', title: 'Kubernetes could not start the debug container', hint: 'Inspect the kubelet message. Start a new session if the image or its configuration must change.', ...waiting }
+    default:
+      return { state: 'waiting', title: 'Waiting for the debug container', ...waiting }
+  }
 }
 
-export function PodDebugSession({ namespace, podName, containerName, session, children }: {
-  namespace: string; podName: string; containerName: string; session: Session; children: ReactNode
+export function PodDebugSession({ namespace, podName, containerName, session, isActive = true, children }: {
+  namespace: string; podName: string; containerName: string; session: Session; isActive?: boolean; children: ReactNode
 }) {
   const [connected, setConnected] = useState(false)
   const current = () => getApiBase() === session.apiBase && connectionHeaderValue() === session.connectionId
@@ -43,10 +59,10 @@ export function PodDebugSession({ namespace, podName, containerName, session, ch
       if (!current()) throw new ApiError('The cluster connection changed.', 409)
       return startup(resource, session.podUID, containerName)
     },
-    enabled: !connected,
+    enabled: !connected && isActive,
     retry: false,
     refetchInterval: query => query.state.data?.state === 'finished' || query.state.data?.state === 'running' ||
-      (query.state.error instanceof ApiError && [403, 404, 409].includes(query.state.error.status)) ? false : 2000,
+      (query.state.error instanceof ApiError && [403, 404, 409].includes(query.state.error.status)) ? false : query.state.data?.state === 'blocked' ? 5000 : 2000,
     refetchOnWindowFocus: false,
   })
 
@@ -63,14 +79,15 @@ export function PodDebugSession({ namespace, podName, containerName, session, ch
     : error ? 'Could not read the debug container status' : status?.title ?? 'Waiting for the debug container'
   return <div className="flex h-full min-h-32 flex-col justify-center gap-2 overflow-auto bg-theme-base px-5 py-4">
     <h3 className="flex items-center gap-2 font-medium text-theme-text-primary">
-      {!error && status?.state !== 'finished' && <LoaderCircle aria-hidden className="h-4 w-4 animate-spin text-theme-text-tertiary" />}
+      {!error && (!status || status.state === 'waiting') && <LoaderCircle aria-hidden className="h-4 w-4 animate-spin text-theme-text-tertiary" />}
       {title}
     </h3>
     <p className="break-all font-mono text-xs text-theme-text-secondary">{namespace}/{podName} · {containerName} · {session.image}</p>
     {(error || status?.reason || status?.message) && <p className="break-words text-sm text-theme-text-primary">
       {error?.message || [status?.reason, status?.message].filter(Boolean).join(' · ')}
     </p>}
-    {!error && status?.state !== 'finished' && <p className="text-xs text-theme-text-secondary">The terminal opens when Kubernetes reports this container is running.</p>}
+    {!error && status?.hint && <p className="text-xs text-theme-text-secondary">{status.hint}</p>}
+    {!error && (!status || status.state === 'waiting') && <p className="text-xs text-theme-text-secondary">The terminal opens when Kubernetes reports this container is running.</p>}
     {error && code !== 404 && code !== 409 && <button type="button" className="btn-secondary flex w-fit items-center gap-1.5 px-3 py-1.5 text-xs"
       disabled={query.isFetching} onClick={() => { void query.refetch() }}><RefreshCw className="h-3.5 w-3.5" />Check status</button>}
   </div>

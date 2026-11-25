@@ -45,7 +45,7 @@ export function TerminalTab({ namespace, podName, containerName, containers, isA
       command={shell}
     />
   )
-  return debugSession ? <PodDebugSession namespace={namespace} podName={podName} containerName={containerName} session={debugSession}>
+  return debugSession ? <PodDebugSession namespace={namespace} podName={podName} containerName={containerName} session={debugSession} isActive={isActive}>
     {terminal}
   </PodDebugSession> : terminal
 }

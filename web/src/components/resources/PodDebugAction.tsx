@@ -62,7 +62,7 @@ export function PodDebugAction({ pod, defaultImage, failedContainer }: { pod: Po
           uid, targetContainer: request.targetContainer, image: request.image,
         })
       },
-    }, 'Check the ephemeral containers in the Pod YAML before trying again.',
+    }, '',
   )
   const busy = mutation.isPending
   const outcome = result ?? actionDialogResult(mutation.outcomeError, {
@@ -82,12 +82,12 @@ export function PodDebugAction({ pod, defaultImage, failedContainer }: { pod: Po
       const { containerName, image } = await mutation.mutateAsync({ request: {
         base: draft.base, reviewedContext: draft.connection ?? '', targetContainer: draft.target, image: draft.image.trim() === defaultImage ? undefined : draft.image.trim() || undefined,
       } })
-      if (!mounted.current || !sameConnection()) return
+      if (!sameConnection()) return
       openTerminal({
         namespace, podName: name, containerName, containers: [containerName],
         debugSession: { connectionId: draft.connection, apiBase: draft.base, podUID: uid, image },
       })
-      setDraft(undefined)
+      if (mounted.current) setDraft(undefined)
     } catch (error) {
       if (mounted.current && sameConnection()) setResult(actionDialogResult(error instanceof Error ? error : new Error(String(error)), {
         unknown: 'Radar could not confirm whether the debug container was added',
@@ -111,11 +111,13 @@ export function PodDebugAction({ pod, defaultImage, failedContainer }: { pod: Po
         if (result?.state === 'error') setResult(undefined)
       }}
       onConfirm={start} confirmLabel="Start debug container" isLoading={busy} result={outcome}
-      guard={outcome?.state === 'unknown' && <button type="button" className="btn-secondary px-3 py-1.5 text-sm"
+      guard={outcome?.state === 'unknown' && <div className="space-y-2">
+        <p>Inspect the Pod YAML for an added ephemeral container before you retry.</p>
+        <button type="button" className="btn-secondary px-3 py-1.5 text-sm"
         onClick={() => {
           mutation.acknowledgeOutcome()
           setResult(undefined)
-        }}>I checked the Pod YAML</button>}
+        }}>I checked the Pod YAML</button></div>}
       incompleteReason={draft && !targets.includes(draft.target) ? 'Select a running container.' : undefined}>
       {draft && <div className="grid gap-3">
         <label className="grid gap-1">Target container

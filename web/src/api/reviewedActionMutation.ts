@@ -54,7 +54,7 @@ export function useReviewedActionMutation<Data, Variables extends { request: { r
       } catch (error) {
         if (actionOutcomeLocked(error)) {
           const failure = error as Error
-          const message = `${failure.message} ${recoveryInstruction}`
+          const message = [failure.message, recoveryInstruction].filter(Boolean).join(' ')
           retainedError = failure instanceof ApiError ? new ApiError(message, failure.status, failure.data) : new Error(message)
         }
         throw error
