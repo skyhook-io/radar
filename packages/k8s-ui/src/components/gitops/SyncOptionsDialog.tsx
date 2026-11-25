@@ -4,6 +4,7 @@ import { AlertTriangle, CheckCircle2, CircleAlert, Loader2, RefreshCw, ShieldChe
 import { DialogPortal } from '../ui/DialogPortal'
 import { Input } from '../ui/Input'
 import { Tooltip } from '../ui/Tooltip'
+import { AlertBanner } from '../ui/drawer-components'
 import { RawErrorDetails } from '../ui/RawErrorDetails'
 import { SEVERITY_TEXT } from '../../utils/badge-colors'
 import type { GitOpsInsightRef } from '../../types/gitops-insights'
@@ -53,6 +54,7 @@ export interface SyncOptionsDialogProps {
   // when the sync runs.
   pinsComparedRevision?: boolean
   resource?: GitOpsInsightRef
+  disabledReason?: string
   // The Application's spec.syncPolicy.syncOptions. Without it the toggles
   // are disabled and the submitted syncOptions are omitted.
   applicationSyncOptions?: string[]
@@ -81,7 +83,7 @@ export interface ResourceValidationResult {
   }
 }
 
-export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevision, pinsComparedRevision, resource, applicationSyncOptions, pending, autoSyncEnabled, validationPending, operationInProgress, validationResult, validationError, validationRawError, syncError, syncRawError, onCancel, onConfirm, onValidate, onValidationReset }: SyncOptionsDialogProps) {
+export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevision, pinsComparedRevision, resource, disabledReason, applicationSyncOptions, pending, autoSyncEnabled, validationPending, operationInProgress, validationResult, validationError, validationRawError, syncError, syncRawError, onCancel, onConfirm, onValidate, onValidationReset }: SyncOptionsDialogProps) {
   const titleId = useId()
   const syncOptionsUnknown = applicationSyncOptions === undefined
   const liveAppOptions = applicationSyncOptions ?? EMPTY_OPTIONS
@@ -106,7 +108,7 @@ export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevisio
   const [serverSideApply, setServerSideApply] = useState(appServerSideApply)
   const richResourceValidation = !!resource && !!onValidate
   const busy = !!pending || !!validationPending
-  const optionsDisabled = busy || !!operationInProgress
+  const optionsDisabled = busy || !!operationInProgress || !!disabledReason
   const revisionDisabled = !!autoSyncEnabled && !dryRun
   const targetLabel = pinsComparedRevision
     ? `the revision Argo last compared${comparedRevisionLabel ? ` (${comparedRevisionLabel})` : ''}`
@@ -166,10 +168,12 @@ export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevisio
   const showValidationError = richResourceValidation && !!validationError && !validationPending
 
   function submit() {
+    if (optionsDisabled) return
     onConfirm(buildArgoSyncOpts({ resourceMode: !!resource, revision: multiSource || revisionDisabled ? '' : revision, prune, dryRun: richResourceValidation ? false : dryRun, force, applyOnly, ...optionEdits }))
   }
 
   function validate() {
+    if (optionsDisabled) return
     onValidate?.(buildArgoSyncOpts({ resourceMode: true, revision, prune, dryRun: true, force, applyOnly, ...optionEdits }))
   }
 
@@ -281,6 +285,11 @@ export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevisio
         )}
       </div>
       <div role="group" aria-label="Sync controls" className="shrink-0">
+        {disabledReason && (
+          <div className="px-4 pt-3">
+            <AlertBanner variant="warning" title="Action unavailable" message={disabledReason} />
+          </div>
+        )}
         {(showSyncError || showValidationError) && (
           <div role="region" aria-label="Action errors" tabIndex={0} className="max-h-[40dvh] space-y-3 overflow-y-auto border-t border-theme-border bg-theme-base px-4 py-3">
             {showSyncError && <SyncActionError label="Sync failed" reason={syncError} rawError={syncRawError} />}
