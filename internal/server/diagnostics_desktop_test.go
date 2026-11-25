@@ -235,7 +235,7 @@ func TestDiagnosticsConnectionUpdatesDuringCollection(t *testing.T) {
 				t.Fatalf("could not seed cluster observation: %+v, %v", info, err)
 			}
 
-			s := &Server{broadcaster: &SSEBroadcaster{}, permCache: auth.NewPermissionCache(), diagConfig: &DiagConfig{Port: 9280}}
+			s := &Server{broadcaster: &SSEBroadcaster{}, permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection), diagConfig: &DiagConfig{Port: 9280}}
 			s.permCache.Set("viewer", nil, &auth.UserPermissions{AllowedNamespaces: []string{"default"}})
 			rec := httptest.NewRecorder()
 			s.handleDiagnostics(rec, requestWithUser("GET", "/api/diagnostics", &auth.User{Username: "viewer"}))

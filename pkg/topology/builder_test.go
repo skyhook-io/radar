@@ -678,8 +678,8 @@ func TestBuildResourcesTopology_PrometheusMonitors(t *testing.T) {
 			if indexed {
 				idx = IndexByResource(topo)
 			}
-			mr := GetRelationshipsWithIndex(monitor.Kind, monitor.Namespace, monitor.Name, topo, provider, dynamic, idx)
-			tr := GetRelationshipsWithIndex(target.Kind, target.Namespace, target.Name, topo, provider, dynamic, idx)
+			mr := graphRelationshipsWithIndex(monitor.Kind, monitor.Namespace, monitor.Name, topo, provider, dynamic, idx)
+			tr := graphRelationshipsWithIndex(target.Kind, target.Namespace, target.Name, topo, provider, dynamic, idx)
 			if mr == nil || len(mr.MonitorTargets) != 1 || mr.MonitorTargets[0] != *target || len(mr.Consumers) != 0 {
 				t.Fatalf("monitor relationships = %+v", mr)
 			}

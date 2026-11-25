@@ -401,8 +401,11 @@ func charCluster() *charFixture {
 	dyn("kustomize.toolkit.fluxcd.io", "v1", "Kustomization", "kustomizations", true,
 		charUnstructured("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "flux-system", "shop", nil, map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "repo"}, "path": "./shop"},
 			inventory("shop_cart_apps_Deployment", "shop_redis_helm.toolkit.fluxcd.io_HelmRelease")),
-		charUnstructured("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "flux-system", "platform", nil, map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "repo"}, "path": "./platform"},
-			inventory("flux-system_shop_kustomize.toolkit.fluxcd.io_Kustomization")))
+		charUnstructured("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "flux-system", "platform", nil, map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "repo"}, "path": "./platform", "dependsOn": []any{map[string]any{"name": "infra"}}},
+			inventory("flux-system_shop_kustomize.toolkit.fluxcd.io_Kustomization")),
+		// flux-system/infra: platform waits for it through spec.dependsOn,
+		// and nothing else relates the two.
+		charUnstructured("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "flux-system", "infra", nil, map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "repo"}, "path": "./infra"}, inventory()))
 	dyn("source.toolkit.fluxcd.io", "v1", "GitRepository", "gitrepositories", true, charUnstructured("source.toolkit.fluxcd.io/v1", "GitRepository", "flux-system", "repo", nil, map[string]any{"url": "https://example.com/repo.git"}, nil))
 	// The artifact chain: an ExternalArtifact made by an ArtifactGenerator
 	// that composes the shared repository.
@@ -828,7 +831,7 @@ func TestTopologyCharacterizationKeepsDuplicatePairs(t *testing.T) {
 	if edges != 2 {
 		t.Fatalf("CronJob -> Job with two owner records: %d manages edges, want 2", edges)
 	}
-	rel := GetRelationships("cronjobs", "team", "nightly", topo, f.provider, f.dynamic)
+	rel := graphRelationships("cronjobs", "team", "nightly", topo, f.provider, f.dynamic)
 	children := 0
 	for _, child := range rel.Children {
 		if child.Kind == "Job" && child.Name == "nightly-28999" {

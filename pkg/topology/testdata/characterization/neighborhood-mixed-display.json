@@ -925,6 +925,21 @@
       }
     },
     {
+      "id": "kustomization/flux-system/infra",
+      "kind": "Kustomization",
+      "name": "infra",
+      "status": "healthy",
+      "data": {
+        "apiVersion": "kustomize.toolkit.fluxcd.io/v1",
+        "auditKey": "kustomize.toolkit.fluxcd.io|Kustomization|flux-system|infra",
+        "labels": null,
+        "namespace": "flux-system",
+        "ready": "True",
+        "resourceCount": 0,
+        "sourceRef": "GitRepository/repo"
+      }
+    },
+    {
       "id": "gitrepository/flux-system/repo",
       "kind": "GitRepository",
       "name": "repo",
