@@ -95,13 +95,13 @@ func handleManageGitOps(ctx context.Context, req *mcp.CallToolRequest, input man
 		if resolveErr != nil {
 			return nil, nil, resolveErr
 		}
-		entry = entry.Served(k8s.ServedGVR)
+		entry = entry.Served(k8s.ServedGVRFor(ctx))
 
 		switch action {
 		case "reconcile":
 			result, err = gitops.ReconcileFlux(ctx, dynClient, entry, input.Namespace, input.Name)
 		case "sync-with-source":
-			result, err = gitops.SyncFluxWithSource(ctx, dynClient, input.Kind, input.Namespace, input.Name, k8s.ServedGVR)
+			result, err = gitops.SyncFluxWithSource(ctx, dynClient, input.Kind, input.Namespace, input.Name, k8s.ServedGVRFor(ctx))
 		case "suspend":
 			result, err = gitops.SetFluxSuspend(ctx, dynClient, entry, input.Namespace, input.Name, true)
 		case "resume":

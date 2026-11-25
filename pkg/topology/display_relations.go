@@ -47,9 +47,10 @@ func newDrawnNodes() *drawnNodes {
 func (d *drawnNodes) update(nodes []Node) {
 	if d.indexed > len(nodes) || d.indexed > 0 && nodes[0].ID != d.first {
 		// The slice was rebuilt (a node prepended, say), not grown: positions
-		// moved, so index it again. Identities already worked out still stand.
+		// moved and previously keyed nodes may have disappeared.
 		d.indexed = 0
-		d.pending = map[string][]int{}
+		clear(d.pending)
+		clear(d.byKey)
 	}
 	if len(nodes) > 0 {
 		d.first = nodes[0].ID
@@ -64,9 +65,12 @@ func (d *drawnNodes) update(nodes []Node) {
 func (d *drawnNodes) id(r resourceid.Ref) (string, bool) {
 	if pending, ok := d.pending[r.Kind]; ok {
 		for _, i := range pending {
-			for _, key := range nodeResourceKeys(&d.nodes[i]) {
-				if _, ok := d.byKey[key]; !ok {
-					d.byKey[key] = d.nodes[i].ID
+			node := &d.nodes[i]
+			for _, key := range nodeResourceKeys(node) {
+				// Prefer the display kind assigned to this GVK; a NodePool
+				// can draw the same object again under its NodeClass alias.
+				if _, exists := d.byKey[key]; !exists || string(node.Kind) == NodeKindForGVK(r.Kind, nodeGroup(node)) {
+					d.byKey[key] = node.ID
 				}
 			}
 		}
@@ -83,6 +87,9 @@ func (d *drawnNodes) id(r resourceid.Ref) (string, bool) {
 // no drawn node draws nothing, which keeps the display's namespace filter and
 // include options in force.
 func drawFamilies(edges []Edge, drawn *drawnNodes, nodes []Node, sources []declaring, families ...*relations.Family) []Edge {
+	if len(sources) == 0 {
+		return edges
+	}
 	drawn.update(nodes)
 	seen := map[string]bool{}
 	for _, s := range sources {
@@ -99,7 +106,7 @@ func drawFamilies(edges []Edge, drawn *drawnNodes, nodes []Node, sources []decla
 
 // drawDeclared draws what s, drawn as from, declares under f.
 func drawDeclared(edges []Edge, drawn *drawnNodes, f *relations.Family, s declaring, from string, seen map[string]bool) []Edge {
-	targets, err := f.DeclaredTargets(s.ref.GroupKind(), s.obj)
+	targets, err := f.UnambiguousDeclaredTargets(s.ref.GroupKind(), s.obj)
 	if err != nil {
 		log.Printf("WARNING [topology] %s: reading %s: %v", f.Name, s.ref.Key(), err)
 	}

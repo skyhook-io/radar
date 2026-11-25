@@ -121,24 +121,33 @@ func (d Declaration) candidates(f *Family, source Source) []resourceid.Ref {
 	return out
 }
 
-// DeclaredTargets are the targets obj, an object of kind gk, declares under
-// f, each once, in declaration order: the refs View.References would read,
-// without reading them. A declaration that still has alternatives once f's
-// target kinds are applied is left out, since which alternative stands
-// depends on what Radar could read, which only a View answers.
-func (f *Family) DeclaredTargets(gk resourceid.GroupKind, obj runtime.Object) ([]resourceid.Ref, error) {
+// UnambiguousDeclaredTargets lists each target once in declaration order,
+// omitting declarations with multiple candidates after the family's kind
+// filters. Callers that need presence, alternatives or access must use View.References.
+func (f *Family) UnambiguousDeclaredTargets(gk resourceid.GroupKind, obj runtime.Object) ([]resourceid.Ref, error) {
 	i := f.source(gk)
 	if i < 0 {
 		return nil, nil
 	}
 	source := f.Sources[i]
 	var out []resourceid.Ref
-	seen := map[resourceid.Ref]bool{}
+	var seen map[resourceid.Ref]bool
 	err := f.Declared(obj, func(d Declaration) {
-		if c := d.candidates(f, source); len(c) == 1 && !seen[c[0]] {
-			seen[c[0]] = true
-			out = append(out, c[0])
+		refs := d.candidates(f, source)
+		if len(refs) != 1 {
+			return
 		}
+		target := refs[0]
+		if len(out) > 0 {
+			if out[0] == target || seen[target] {
+				return
+			}
+			if seen == nil {
+				seen = make(map[resourceid.Ref]bool)
+			}
+			seen[target] = true
+		}
+		out = append(out, target)
 	})
 	return out, err
 }

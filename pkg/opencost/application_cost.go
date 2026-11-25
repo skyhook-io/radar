@@ -182,7 +182,7 @@ func finalizeApplicationCostTotals(total *ApplicationCostTotals) {
 
 func applicationUnavailableReason(statuses []ApplicationWorkloadStatus) string {
 	for _, status := range statuses {
-		if status.Reason == ReasonQueryError || status.Reason == ReasonNoPrometheus || status.Reason == ReasonAccessDenied {
+		if status.Reason == ReasonQueryError || status.Reason == ReasonNoPrometheus || status.Reason == ReasonAccessDenied || status.Reason == ReasonClusterScope || status.Reason == ReasonPartialData {
 			return status.Reason
 		}
 	}

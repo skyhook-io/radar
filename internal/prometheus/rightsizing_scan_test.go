@@ -10,17 +10,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/prom"
+	"github.com/skyhook-io/radar/pkg/rightsizing"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	"k8s.io/client-go/kubernetes/fake"
-
-	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/pkg/k8score"
-	"github.com/skyhook-io/radar/pkg/prom"
 )
 
 type fakeScanQuerier struct {
@@ -82,7 +81,7 @@ func scanMatrixSeries(namespace, kind, workload, container string, values []floa
 }
 
 func repeatedValues(value float64) []float64 {
-	values := make([]float64, rightsizingMinSamples)
+	values := make([]float64, rightsizing.RightsizingMinSamples)
 	for i := range values {
 		values[i] = value
 	}
@@ -94,7 +93,7 @@ func TestRightsizingScanQueriesPreserveWorkloadIdentity(t *testing.T) {
 		scanTestWorkload("Deployment", "team-a", "api.v1", "app"),
 		scanTestWorkload("StatefulSet", "team-b", "db", "db"),
 	}
-	queries := buildRightsizingScanQueries(batch)
+	queries := buildRightsizingScanQueries(batch, ViewScope{})
 	for key, query := range queries {
 		for _, want := range []string{"namespace,workload_kind,workload,container", "group_left(workload_kind,workload)"} {
 			if !strings.Contains(query, want) {
@@ -102,7 +101,7 @@ func TestRightsizingScanQueriesPreserveWorkloadIdentity(t *testing.T) {
 			}
 		}
 	}
-	owner := rightsizingScanOwnerVector(batch)
+	owner := rightsizingScanOwnerVector(batch, ViewScope{})
 	for _, want := range []string{`namespace="team-a"`, `owner_name=~"^(api\\.v1)$"`, `"workload_kind", "Deployment"`, `namespace="team-b"`, `"workload_kind", "StatefulSet"`} {
 		if !strings.Contains(owner, want) {
 			t.Errorf("owner vector missing %q: %s", want, owner)
@@ -180,10 +179,85 @@ func TestRightsizingScanBatchesAtFiftyWithConstantQueries(t *testing.T) {
 	}
 }
 
+func TestRightsizingScanSplitsOversizedFamiliesByWholeWorkload(t *testing.T) {
+	// A count limit alone cannot bound the repeated owner joins for workloads
+	// in different namespaces or the regexes for long Kubernetes names.
+	var batch []scanWorkload
+	kinds := []string{"Deployment", "DaemonSet", "StatefulSet"}
+	for i := range rightsizingScanBatchSize {
+		name := fmt.Sprintf("%s-%03d", strings.Repeat("w", 249), i)
+		namespace := fmt.Sprintf("%s-%02d", strings.Repeat("n", 60), i)
+		batch = append(batch, scanTestWorkload(kinds[i%len(kinds)], namespace, name, "app"))
+	}
+	for family, query := range buildRightsizingScanQueries(batch, ViewScope{}) {
+		if len(query) <= prom.MaxWorkloadQueryBytes {
+			t.Fatalf("%s fixture only generated %d bytes", family, len(query))
+		}
+	}
+	run := func(query string) (*prom.QueryResult, error) {
+		if len(query) > prom.MaxWorkloadQueryBytes {
+			return nil, fmt.Errorf("store rejected %d-byte query", len(query))
+		}
+		var series []prom.Series
+		for i, workload := range batch {
+			if strings.Contains(query, workload.name) {
+				series = append(series, scanMatrixSeries(workload.namespace, workload.kind, workload.name, "app", []float64{float64(i + 1)}))
+			}
+		}
+		return &prom.QueryResult{Series: series}, nil
+	}
+	client := &fakeScanQuerier{queryFn: run, rangeFn: run}
+	evidence := queryRightsizingScanBatch(context.Background(), client, batch, time.Now(), ViewScope{}, new(scanMemoryBudget))
+	if len(evidence.errors) != 0 {
+		t.Fatalf("incomplete batch: %v", evidence.errors)
+	}
+	for i, w := range batch {
+		k := scanKey{w.namespace, w.kind, w.name, "app"}
+		want := float64(i + 1)
+		for _, measured := range []map[scanKey][]float64{evidence.cpu, evidence.memory, evidence.throttle} {
+			if !slices.Equal(measured[k], []float64{want}) {
+				t.Fatalf("wrong samples for %v: %v", k, measured[k])
+			}
+		}
+		if evidence.restarts[k] != want || !evidence.terminations[k].Any {
+			t.Fatalf("wrong restart/termination evidence for %v", k)
+		}
+	}
+}
+
+func TestRightsizingScanOversizedFamilyWithholdsIncompleteResults(t *testing.T) {
+	batch := []scanWorkload{
+		scanTestWorkload("Deployment", "first", "api", "app"),
+		scanTestWorkload("Deployment", "second", "api", "app"),
+	}
+	filters := map[string]string{metricCPUUsage: `cluster=""`}
+	scope := ViewScope{Filters: filters}
+	original := buildRightsizingScanQueries(batch, scope)["cpu"]
+	filters[metricCPUUsage] = `cluster="` + strings.Repeat("x", prom.MaxWorkloadQueryBytes-len(original)+1) + `"`
+	calls := 0
+	run := func(context.Context, string) (*prom.QueryResult, error) {
+		calls++
+		if calls == 1 {
+			return &prom.QueryResult{Series: []prom.Series{scanMatrixSeries("first", "Deployment", "api", "app", []float64{1})}}, nil
+		}
+		return nil, prom.ErrQueryWarning
+	}
+	result, err := runScanQuery(context.Background(), batch, scope, "cpu", buildRightsizingScanQueries(batch, scope)["cpu"], run)
+	if !errors.Is(err, prom.ErrQueryWarning) || result != nil || calls != 2 {
+		t.Fatalf("partial query exposed evidence: result=%v err=%v calls=%d", result, err, calls)
+	}
+	batch = batch[:1]
+	filters[metricCPUUsage] = `cluster="` + strings.Repeat("x", prom.MaxWorkloadQueryBytes) + `"`
+	result, err = runScanQuery(context.Background(), batch, scope, "cpu", buildRightsizingScanQueries(batch, scope)["cpu"], run)
+	if !errors.Is(err, prom.ErrWorkloadQueryTooLarge) || result != nil || calls != 2 {
+		t.Fatalf("oversized singleton dispatched: result=%v err=%v calls=%d", result, err, calls)
+	}
+}
+
 func TestRightsizingScanSafetyQueriesCoverHistoricalPodsAndReasons(t *testing.T) {
 	queries := buildRightsizingScanQueries([]scanWorkload{
 		scanTestWorkload("Deployment", "prod", "api", "app"),
-	})
+	}, ViewScope{})
 	for _, want := range []string{"increase(", "kube_pod_container_status_restarts_total", "[7d:5m]", "group_left(workload_kind,workload)"} {
 		if !strings.Contains(queries["restart_activity"], want) {
 			t.Errorf("restart query missing %q: %s", want, queries["restart_activity"])
@@ -218,7 +292,7 @@ func TestScanMemoryReductionRequiresVerifiedRestartHistory(t *testing.T) {
 				memory:   map[scanKey][]float64{key: repeatedValues(50 * 1024 * 1024)},
 				restarts: tc.restarts, terminations: tc.terminations, errors: map[string]error{},
 			}
-			row := buildScanRow(workload.workload.containers[0], "memory", key, rightsizingMinSamples, workload.workload, evidence)
+			row := buildScanRow(workload.workload.containers[0], "memory", key, rightsizing.RightsizingMinSamples, workload.workload, evidence)
 			if row.RecommendationReason != tc.wantReason || row.WindowOOMEvidence != tc.wantOOM || (row.RecommendedReq != nil) != tc.wantRec {
 				t.Fatalf("row = %+v", row)
 			}
@@ -373,13 +447,13 @@ func TestRightsizingScanDoesNotCallRestrictedEmptyScopeComplete(t *testing.T) {
 
 func TestRecommendationSafetySuppressesUnknownHPAAndOOM(t *testing.T) {
 	cpu := RightsizingRow{HPAEvidenceAvailable: false}
-	classifyRightsizingFit(&cpu, 0.05, mustQuantity(t, "200m"), mustQuantity(t, "1"), "cpu")
+	rightsizing.ClassifyRightsizingFit(&cpu, 0.05, mustQuantity(t, "200m"), mustQuantity(t, "1"), "cpu")
 	if cpu.RecommendedReq != nil || cpu.RecommendationReason != "hpa_evidence_unavailable" {
 		t.Fatalf("unknown HPA evidence did not suppress CPU recommendation: %+v", cpu)
 	}
 
 	memory := RightsizingRow{HPAEvidenceAvailable: true, OOMEvidenceAvailable: false}
-	classifyRightsizingFit(&memory, 50*1024*1024, mustQuantity(t, "256Mi"), mustQuantity(t, "1Gi"), "memory")
+	rightsizing.ClassifyRightsizingFit(&memory, 50*1024*1024, mustQuantity(t, "256Mi"), mustQuantity(t, "1Gi"), "memory")
 	if memory.RecommendedReq != nil || memory.RecommendationReason != "oom_evidence_unavailable" {
 		t.Fatalf("unknown OOM evidence did not suppress memory downsize: %+v", memory)
 	}
@@ -396,7 +470,7 @@ func TestUnknownHPAEvidencePermitsIncreaseGuidance(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			row := RightsizingRow{HPAEvidenceAvailable: false}
-			classifyRightsizingFit(&row, 0.2, test.req, nil, "cpu")
+			rightsizing.ClassifyRightsizingFit(&row, 0.2, test.req, nil, "cpu")
 			if row.Fit != test.fit || row.RecommendedReq == nil || row.RecommendationReason != "" {
 				t.Fatalf("unknown HPA evidence suppressed increase guidance: %+v", row)
 			}
@@ -426,12 +500,12 @@ func TestScanMarksWorkloadsWhenPodInventoryIsUnreadable(t *testing.T) {
 			LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled"}},
 		}}},
 	}
-	replicaSet := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api-7f6", OwnerReferences: []metav1.OwnerReference{scopeOwner("Deployment", "api")}}}
+	replicaSet := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api-7f6", UID: "api-7f6-uid", OwnerReferences: []metav1.OwnerReference{scopeOwner("Deployment", "api")}}}
 
 	newWorkloads := func() map[string]*scanWorkload {
 		return map[string]*scanWorkload{
 			workloadIdentity("Deployment", "shop", "api"): {
-				kind: "Deployment", namespace: "shop", name: "api",
+				uid: "api-uid", kind: "Deployment", namespace: "shop", name: "api",
 				workload: rightsizingWorkload{currentPodOOM: map[string]bool{}},
 			},
 		}
@@ -441,7 +515,7 @@ func TestScanMarksWorkloadsWhenPodInventoryIsUnreadable(t *testing.T) {
 	t.Run("pods readable", func(t *testing.T) {
 		cache := scopeTestCache(t, map[string]bool{k8score.Pods: true, k8score.ReplicaSets: true}, replicaSet, oomed)
 		workloads := newWorkloads()
-		enrichScanCurrentOOM(context.Background(), cache, scopes, workloads)
+		enrichScanCurrentOOM(context.Background(), cache, scopes, workloads, time.Now())
 		got := workloads[workloadIdentity("Deployment", "shop", "api")].workload
 		if got.liveInventoryUnavailable {
 			t.Error("pods were readable; the row must not claim the inventory was denied")
@@ -454,7 +528,7 @@ func TestScanMarksWorkloadsWhenPodInventoryIsUnreadable(t *testing.T) {
 	t.Run("pod lister denied", func(t *testing.T) {
 		cache := scopeTestCache(t, map[string]bool{k8score.ReplicaSets: true}, replicaSet)
 		workloads := newWorkloads()
-		enrichScanCurrentOOM(context.Background(), cache, scopes, workloads)
+		enrichScanCurrentOOM(context.Background(), cache, scopes, workloads, time.Now())
 		got := workloads[workloadIdentity("Deployment", "shop", "api")].workload
 		if !got.liveInventoryUnavailable {
 			t.Error("the pod lister was denied, so the empty OOM map must be reported as unanswered")
@@ -488,7 +562,7 @@ func TestScanMarksOnlyDeploymentsWhenReplicaSetOwnershipIsUnreadable(t *testing.
 			workload: rightsizingWorkload{currentPodOOM: map[string]bool{}},
 		},
 	}
-	enrichScanCurrentOOM(context.Background(), cache, map[string][]string{"Deployment": {"shop"}}, workloads)
+	enrichScanCurrentOOM(context.Background(), cache, map[string][]string{"Deployment": {"shop"}}, workloads, time.Now())
 
 	if !workloads[workloadIdentity("Deployment", "shop", "api")].workload.liveInventoryUnavailable {
 		t.Error("no ReplicaSet lister, so the Deployment never sees its pods; that has to be reported")
@@ -529,7 +603,7 @@ func TestScanMarksWorkloadsOutsideTheInformersNamespaces(t *testing.T) {
 			workload: rightsizingWorkload{currentPodOOM: map[string]bool{}},
 		},
 	}
-	enrichScanCurrentOOM(context.Background(), cache, map[string][]string{"StatefulSet": {"team-a", "team-b"}}, workloads)
+	enrichScanCurrentOOM(context.Background(), cache, map[string][]string{"StatefulSet": {"team-a", "team-b"}}, workloads, time.Now())
 
 	if workloads[workloadIdentity("StatefulSet", "team-a", "watched")].workload.liveInventoryUnavailable {
 		t.Error("team-a is watched, so its empty pod list is authoritative and must not be flagged")
@@ -553,7 +627,7 @@ func TestScanSkipsReplicaSetWaitWithoutDeployments(t *testing.T) {
 		t.Fatal("a DaemonSet-only scan reported that it needs ReplicaSet ownership")
 	}
 	start := time.Now()
-	enrichScanCurrentOOM(context.Background(), cache, map[string][]string{"DaemonSet": {"shop"}}, workloads)
+	enrichScanCurrentOOM(context.Background(), cache, map[string][]string{"DaemonSet": {"shop"}}, workloads, time.Now())
 	if elapsed := time.Since(start); elapsed >= warmingRetryBudget {
 		t.Errorf("waited %v on ReplicaSets a DaemonSet-only scan never reads", elapsed)
 	}
@@ -805,7 +879,7 @@ func TestHPAEvidenceUnavailableWhileInformerIsWarming(t *testing.T) {
 				t.Fatalf("a warming informer must not establish HPA evidence: %+v", workload)
 			}
 			row := RightsizingRow{HPAEvidenceAvailable: workload.hpaAvailable, HPAManaged: workload.hpaManaged["cpu"]}
-			classifyRightsizingFit(&row, 0.05, mustQuantity(t, "200m"), mustQuantity(t, "1"), "cpu")
+			rightsizing.ClassifyRightsizingFit(&row, 0.05, mustQuantity(t, "200m"), mustQuantity(t, "1"), "cpu")
 			if row.RecommendedReq != nil || row.RecommendationReason != ReasonHPAEvidenceUnavailable {
 				t.Fatalf("unknown HPA evidence must withhold a reduction: %+v", row)
 			}
@@ -1003,7 +1077,7 @@ func TestScanRangeWindowIsAlignedToTheSubqueryGrid(t *testing.T) {
 		fake := &fakeScanQuerier{}
 		now := time.Unix(1789513500, 0).UTC().Add(offset)
 		queryRightsizingScanBatch(context.Background(), fake,
-			[]scanWorkload{scanTestWorkload("Deployment", "shop", "checkout", "api")}, now)
+			[]scanWorkload{scanTestWorkload("Deployment", "shop", "checkout", "api")}, now, ViewScope{}, new(scanMemoryBudget))
 
 		if len(fake.rangeStarts) == 0 {
 			t.Fatalf("offset %v: no range queries issued", offset)
@@ -1038,7 +1112,7 @@ func TestScansSecondsApartQueryTheSameWindow(t *testing.T) {
 	for _, offset := range []time.Duration{3 * time.Second, 91 * time.Second, 288 * time.Second} {
 		fake := &fakeScanQuerier{}
 		queryRightsizingScanBatch(context.Background(), fake,
-			[]scanWorkload{scanTestWorkload("Deployment", "shop", "checkout", "api")}, base.Add(offset))
+			[]scanWorkload{scanTestWorkload("Deployment", "shop", "checkout", "api")}, base.Add(offset), ViewScope{}, new(scanMemoryBudget))
 		windows = append(windows, [2]time.Time{fake.rangeStarts[0], fake.rangeEnds[0]})
 	}
 	for i := 1; i < len(windows); i++ {

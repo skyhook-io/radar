@@ -46,7 +46,7 @@ describe('revisionRoleBadges', () => {
 
     const stable = revisionRoleBadges(revision({ number: 4, isStable: true }), true)
     expect(stable).toEqual([
-      { label: 'Stable', tone: 'status-healthy', tip: 'Serving stable traffic — an abort reverts here' },
+      { label: 'Stable', tone: 'status-healthy', tip: 'The controller identifies this as the stable revision. An abort reverts here.' },
     ])
   })
 

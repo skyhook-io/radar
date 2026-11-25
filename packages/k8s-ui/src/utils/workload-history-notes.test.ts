@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { formatRelativeAgeTime } from './format'
 import { workloadHistoryNotes } from './workload-history-notes'
 
 describe('workloadHistoryNotes', () => {
@@ -10,12 +11,12 @@ describe('workloadHistoryNotes', () => {
   it('dates the start of complete history when the viewer may see the time', () => {
     const since = '2026-11-03T05:00:00Z'
     const [note] = workloadHistoryNotes({ incomplete: true, complete_since: since, reasons: ['observation_started_late'] })
-    expect(note).toBe(`Changes before ${new Date(since).toLocaleString()} may be missing: Radar began recording part of this history later.`)
+    expect(note).toBe(`Changes before ${formatRelativeAgeTime(since)} may be missing: recording started later.`)
   })
 
   it('names both reasons, and no time when the server withheld it', () => {
     expect(workloadHistoryNotes({ incomplete: true, reasons: ['observation_started_late', 'events_evicted'] })).toEqual([
-      'Earlier changes may be missing: Radar began recording part of this history later and older history was deleted to stay within its limits.',
+      'Earlier changes may be missing: recording started later and older history was deleted.',
     ])
     expect(workloadHistoryNotes({ incomplete: true, reasons: ['something_new'] })).toEqual(['Earlier changes may be missing.'])
   })

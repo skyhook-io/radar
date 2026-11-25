@@ -80,13 +80,17 @@ func TestResourceCountsCountsWatchedCRDsAndMarksUnwatchedUnavailable(t *testing.
 	}
 }
 
-func TestResourceCountsDirectlyCountsKubernetes137BrowseResources(t *testing.T) {
+func TestResourceCountsDirectlyCountsDiscoveredBrowseResources(t *testing.T) {
+	policyGVR := schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1beta1", Resource: "mutatingadmissionpolicies"}
+	bindingGVR := schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1beta1", Resource: "mutatingadmissionpolicybindings"}
 	workloadBetaGVR := schema.GroupVersionResource{Group: "scheduling.k8s.io", Version: "v1beta1", Resource: "workloads"}
 	workloadAlphaGVR := schema.GroupVersionResource{Group: "scheduling.k8s.io", Version: "v1alpha3", Resource: "workloads"}
 	endpointSliceGVR := schema.GroupVersionResource{Group: "discovery.k8s.io", Version: "v1", Resource: "endpointslices"}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
 		runtime.NewScheme(),
 		map[schema.GroupVersionResource]string{
+			policyGVR:        "MutatingAdmissionPolicyList",
+			bindingGVR:       "MutatingAdmissionPolicyBindingList",
 			workloadBetaGVR:  "WorkloadList",
 			workloadAlphaGVR: "WorkloadList",
 			endpointSliceGVR: "EndpointSliceList",
@@ -105,6 +109,8 @@ func TestResourceCountsDirectlyCountsKubernetes137BrowseResources(t *testing.T) 
 		return true, &unstructured.UnstructuredList{}, nil
 	})
 	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{
+		{Group: policyGVR.Group, Version: policyGVR.Version, Name: policyGVR.Resource, Kind: "MutatingAdmissionPolicy", Verbs: []string{"list"}},
+		{Group: bindingGVR.Group, Version: bindingGVR.Version, Name: bindingGVR.Resource, Kind: "MutatingAdmissionPolicyBinding", Verbs: []string{"list"}},
 		{Group: "scheduling.k8s.io", Version: "v1alpha3", Kind: "Workload", Name: "workloads", Namespaced: true, IsCRD: false, Verbs: []string{"get", "list"}},
 		{Group: "scheduling.k8s.io", Version: "v1beta1", Kind: "Workload", Name: "workloads", Namespaced: true, IsCRD: false, Verbs: []string{"get", "list"}},
 	}); err != nil {
@@ -120,6 +126,11 @@ func TestResourceCountsDirectlyCountsKubernetes137BrowseResources(t *testing.T) 
 	var body ResourceCountsResponse
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
+	}
+	for _, kind := range []string{"MutatingAdmissionPolicy", "MutatingAdmissionPolicyBinding"} {
+		if got, ok := body.Counts[policyGVR.Group+"/"+kind]; !ok || got != 0 {
+			t.Errorf("%s count = %d, present=%v; want a confirmed zero", kind, got, ok)
+		}
 	}
 	if got := body.Counts["scheduling.k8s.io/Workload"]; got != 2 {
 		t.Fatalf("Workload count = %d, want 2", got)

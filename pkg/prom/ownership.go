@@ -66,6 +66,12 @@ func scopeClause(sel PodSelection) string {
 // form sums them for the diagnose vitals. filterContainer drops the
 // container!=” matcher for clusters whose cAdvisor lacks the label.
 func BuildScopedQuery(sel PodSelection, category MetricCategory, agg Aggregate, filterContainer bool) string {
+	return BuildScopedQueryFiltered(sel, category, agg, filterContainer, nil)
+}
+
+// BuildScopedQueryFiltered is BuildScopedQuery with each metric's selectors
+// narrowed by filter.
+func BuildScopedQueryFiltered(sel PodSelection, category MetricCategory, agg Aggregate, filterContainer bool, filter ClusterFilter) string {
 	ns := SanitizeLabelValue(sel.Namespace)
 	pods := scopeClause(sel)
 	cf := ""
@@ -73,10 +79,10 @@ func BuildScopedQuery(sel PodSelection, category MetricCategory, agg Aggregate, 
 		cf = "container!='',"
 	}
 	rate := func(metric string) string {
-		return fmt.Sprintf(`rate(%s{%snamespace='%s'%s}[5m])`, metric, cf, ns, pods)
+		return fmt.Sprintf(`rate(%s{%snamespace='%s'%s%s}[5m])`, metric, cf, ns, pods, filter.and(metric))
 	}
 	rateNoCF := func(metric string) string {
-		return fmt.Sprintf(`rate(%s{namespace='%s'%s}[5m])`, metric, ns, pods)
+		return fmt.Sprintf(`rate(%s{namespace='%s'%s%s}[5m])`, metric, ns, pods, filter.and(metric))
 	}
 	switch category {
 	case CategoryRestarts:
@@ -85,18 +91,18 @@ func BuildScopedQuery(sel PodSelection, category MetricCategory, agg Aggregate, 
 			// increase() reads the counter delta, so several restarts between
 			// two scrapes count as several. Its extrapolation yields
 			// fractions, which round() settles per pod before summing.
-			return fmt.Sprintf(`sum(round(increase(kube_pod_container_status_restarts_total{namespace='%s'%s}[1h])))`, ns, pods)
+			return fmt.Sprintf(`sum(round(increase(kube_pod_container_status_restarts_total{namespace='%s'%s%s}[1h])))`, ns, pods, filter.and(MetricContainerRestarts))
 		}
 		// The per-pod chart answers "when did this pod restart": changes()
 		// counts the transitions the samples show, which is what puts a step
 		// on the line at the moment it happened. On a fast crashloop it reads
 		// lower than the total above, which is the honest difference between
 		// counting events and counting restarts.
-		return fmt.Sprintf(`sum by (pod,namespace) (changes(kube_pod_container_status_restarts_total{namespace='%s'%s}[1h]))`, ns, pods)
+		return fmt.Sprintf(`sum by (pod,namespace) (changes(kube_pod_container_status_restarts_total{namespace='%s'%s%s}[1h]))`, ns, pods, filter.and(MetricContainerRestarts))
 	case CategoryCPU:
 		return wrap(agg, rate("container_cpu_usage_seconds_total"))
 	case CategoryMemory:
-		inner := fmt.Sprintf(`max by (pod,namespace,container) (container_memory_working_set_bytes{%snamespace='%s'%s})`, cf, ns, pods)
+		inner := fmt.Sprintf(`max by (pod,namespace,container) (container_memory_working_set_bytes{%snamespace='%s'%s%s})`, cf, ns, pods, filter.and(MetricMemoryWorkingSet))
 		if agg == AggregateTotal {
 			return fmt.Sprintf(`sum(%s)`, inner)
 		}

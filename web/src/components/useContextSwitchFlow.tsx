@@ -1,7 +1,9 @@
-import { useState, type ReactNode } from 'react'
+import { useLayoutEffect, useState, type ReactNode } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import { pluralize } from '@skyhook-io/k8s-ui'
 import { useSwitchContext, fetchSessionCounts, SwitchContextError, type SessionCounts } from '../api/client'
+import { finishSwitch, followSwitch, followingSwitch, switchInProgress, useTrackedContextSwitch } from '../api/contextSwitch'
+import { useConnection } from '../context/ConnectionContext'
 import { useContextSwitch } from '../context/ContextSwitchContext'
 import { useToast } from './ui/Toast'
 import { Tooltip } from './ui/Tooltip'
@@ -30,8 +32,9 @@ interface PendingSwitch {
 // toast when the switch fails. `openAfter` is opened once the new context is
 // live. Callers render `confirmDialog`.
 export function useContextSwitchFlow() {
+  const { connection } = useConnection()
   const switchContext = useSwitchContext()
-  const { startSwitch, endSwitch, setOpenAfterSwitch, setFailedSwitch } = useContextSwitch()
+  const { isSwitching, startSwitch, endSwitch, setOpenAfterSwitch, setFailedSwitch } = useContextSwitch()
   const { showError } = useToast()
   const { tabs } = useDock()
   const [pending, setPending] = useState<PendingSwitch | null>(null)
@@ -65,9 +68,9 @@ export function useContextSwitchFlow() {
   }
 
   const requestSwitch = async (context: ContextInfo, openAfter?: SelectedResource) => {
-    if (switchContext.isPending) return
+    if (isSwitching || switchContext.isPending) return
     // Picking the cluster you're still on dismisses a refused switch's screen.
-    if (context.isCurrent) {
+    if (context.isCurrent && connection.errorType !== 'switch-stopped') {
       setFailedSwitch(null)
       return
     }
@@ -157,7 +160,7 @@ export function useContextSwitchFlow() {
 
   return {
     requestSwitch,
-    isPending: switchContext.isPending,
+    isPending: !!isSwitching || switchContext.isPending,
     error: switchContext.isError ? switchContext.error : null,
     // The picker's inline line is for failures that don't get the full screen.
     errorText: switchContext.isError && switchContext.error && !refusedBeforeLeaving(switchContext.error)
@@ -169,4 +172,39 @@ export function useContextSwitchFlow() {
 
 function shortNameHides(context: ContextInfo) {
   return parseContextForSwitcher(context).clusterName !== context.name
+}
+
+export function useContextSwitchOutcome(applyContextChange: (context: string, id: string) => void) {
+  const { contextSwitch: polledSwitch, connection } = useConnection()
+  const contextSwitch = useTrackedContextSwitch(polledSwitch)
+  const { endSwitch, setOpenAfterSwitch, setFailedSwitch } = useContextSwitch()
+  const { showError } = useToast()
+
+  useLayoutEffect(() => {
+    if (!contextSwitch) return
+    if (switchInProgress(contextSwitch)) {
+      if (followingSwitch() !== contextSwitch.id) followSwitch(contextSwitch.id)
+      // The accepted POST can arrive before the first connection poll. Keep
+      // local progress until an observed operation takes over the overlay.
+      endSwitch()
+      return
+    }
+    if (followingSwitch() !== contextSwitch.id) return
+    if (contextSwitch.phase === 'failed' && connection.state === 'connecting') return
+    finishSwitch(contextSwitch.id)
+    endSwitch()
+    if (contextSwitch.phase === 'succeeded' && connection.context === contextSwitch.target) {
+      applyContextChange(contextSwitch.target, contextSwitch.id)
+    } else {
+      setOpenAfterSwitch(null)
+      if (contextSwitch.phase === 'failed' && (connection.state === 'connected' || connection.context !== contextSwitch.target)) {
+        const reason = contextSwitch.error || 'Cluster switch failed'
+        if (contextSwitch.errorType) {
+          setFailedSwitch({ context: contextSwitch.target, error: reason, errorType: contextSwitch.errorType })
+        } else {
+          showError('Failed to switch context', reason)
+        }
+      }
+    }
+  }, [contextSwitch, connection.state, connection.context, applyContextChange, endSwitch, setOpenAfterSwitch, setFailedSwitch, showError])
 }

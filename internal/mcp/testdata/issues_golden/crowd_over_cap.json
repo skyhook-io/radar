@@ -1,0 +1,662 @@
+{
+  "issues": [
+    {
+      "severity": "critical",
+      "source": "problem",
+      "category": "crashloop",
+      "category_group": "runtime",
+      "id": "fe263bd0ca630292",
+      "grouping_scope": "workload",
+      "kind": "Deployment",
+      "group": "apps",
+      "namespace": "crowd",
+      "name": "crowd-00",
+      "reason": "CrashLoopBackOff",
+      "message": "back-off restarting failed container",
+      "onset_unknown": true,
+      "resource_created_at": "1999-12-31T21:00:00Z",
+      "last_seen": "2000-01-01T00:00:00Z",
+      "count": 1,
+      "restart_count": 7,
+      "affected": {
+        "pods": 1
+      },
+      "members": [
+        {
+          "kind": "Pod",
+          "namespace": "crowd",
+          "name": "crowd-00-rs-1"
+        }
+      ],
+      "diagnostic_context": {
+        "role": "rollup",
+        "facts": [
+          {
+            "type": "restart_cause",
+            "message": "Container restart evidence: restartCount=7."
+          },
+          {
+            "type": "owner_rollup",
+            "message": "Grouped from 1 affected resource(s) under this Deployment.",
+            "refs": [
+              {
+                "kind": "Pod",
+                "namespace": "crowd",
+                "name": "crowd-00-rs-1"
+              }
+            ]
+          }
+        ]
+      },
+      "no_recent_changes": {
+        "window_seconds": 3600
+      }
+    },
+    {
+      "severity": "critical",
+      "source": "problem",
+      "category": "crashloop",
+      "category_group": "runtime",
+      "id": "7fc4af61b6ac28e5",
+      "grouping_scope": "workload",
+      "kind": "Deployment",
+      "group": "apps",
+      "namespace": "crowd",
+      "name": "crowd-01",
+      "reason": "CrashLoopBackOff",
+      "message": "back-off restarting failed container",
+      "onset_unknown": true,
+      "resource_created_at": "1999-12-31T21:00:00Z",
+      "last_seen": "2000-01-01T00:00:00Z",
+      "count": 1,
+      "restart_count": 7,
+      "affected": {
+        "pods": 1
+      },
+      "members": [
+        {
+          "kind": "Pod",
+          "namespace": "crowd",
+          "name": "crowd-01-rs-1"
+        }
+      ],
+      "diagnostic_context": {
+        "role": "rollup",
+        "facts": [
+          {
+            "type": "restart_cause",
+            "message": "Container restart evidence: restartCount=7."
+          },
+          {
+            "type": "owner_rollup",
+            "message": "Grouped from 1 affected resource(s) under this Deployment.",
+            "refs": [
+              {
+                "kind": "Pod",
+                "namespace": "crowd",
+                "name": "crowd-01-rs-1"
+              }
+            ]
+          }
+        ]
+      },
+      "no_recent_changes": {
+        "window_seconds": 3600
+      }
+    },
+    {
+      "severity": "critical",
+      "source": "problem",
+      "category": "crashloop",
+      "category_group": "runtime",
+      "id": "e4cda87090e46815",
+      "grouping_scope": "workload",
+      "kind": "Deployment",
+      "group": "apps",
+      "namespace": "crowd",
+      "name": "crowd-02",
+      "reason": "CrashLoopBackOff",
+      "message": "back-off restarting failed container",
+      "onset_unknown": true,
+      "resource_created_at": "1999-12-31T21:00:00Z",
+      "last_seen": "2000-01-01T00:00:00Z",
+      "count": 1,
+      "restart_count": 7,
+      "affected": {
+        "pods": 1
+      },
+      "members": [
+        {
+          "kind": "Pod",
+          "namespace": "crowd",
+          "name": "crowd-02-rs-1"
+        }
+      ],
+      "diagnostic_context": {
+        "role": "rollup",
+        "facts": [
+          {
+            "type": "restart_cause",
+            "message": "Container restart evidence: restartCount=7."
+          },
+          {
+            "type": "owner_rollup",
+            "message": "Grouped from 1 affected resource(s) under this Deployment.",
+            "refs": [
+              {
+                "kind": "Pod",
+                "namespace": "crowd",
+                "name": "crowd-02-rs-1"
+              }
+            ]
+          }
+        ]
+      },
+      "no_recent_changes": {
+        "window_seconds": 3600
+      }
+    },
+    {
+      "severity": "critical",
+      "source": "problem",
+      "category": "crashloop",
+      "category_group": "runtime",
+      "id": "f240aa62f1351447",
+      "grouping_scope": "workload",
+      "kind": "Deployment",
+      "group": "apps",
+      "namespace": "crowd",
+      "name": "crowd-03",
+      "reason": "CrashLoopBackOff",
+      "message": "back-off restarting failed container",
+      "onset_unknown": true,
+      "resource_created_at": "1999-12-31T21:00:00Z",
+      "last_seen": "2000-01-01T00:00:00Z",
+      "count": 1,
+      "restart_count": 7,
+      "affected": {
+        "pods": 1
+      },
+      "members": [
+        {
+          "kind": "Pod",
+          "namespace": "crowd",
+          "name": "crowd-03-rs-1"
+        }
+      ],
+      "diagnostic_context": {
+        "role": "rollup",
+        "facts": [
+          {
+            "type": "restart_cause",
+            "message": "Container restart evidence: restartCount=7."
+          },
+          {
+            "type": "owner_rollup",
+            "message": "Grouped from 1 affected resource(s) under this Deployment.",
+            "refs": [
+              {
+                "kind": "Pod",
+                "namespace": "crowd",
+                "name": "crowd-03-rs-1"
+              }
+            ]
+          }
+        ]
+      },
+      "correlated_changes": [
+        {
+          "kind": "Deployment",
+          "apiVersion": "apps/v1",
+          "namespace": "crowd",
+          "name": "crowd-03",
+          "changeType": "update",
+          "summary": "spec.replicas changed",
+          "timestamp": "1999-12-31T23:53:00Z",
+          "change_category": "spec_config",
+          "rank_reason": "desired-state or configuration field changed",
+          "fields": [
+            {
+              "path": "spec.replicas",
+              "oldValue": 1,
+              "newValue": 2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "severity": "critical",
+      "source": "problem",
+      "category": "crashloop",
+      "category_group": "runtime",
+      "id": "d9f0d08bf098dc4a",
+      "grouping_scope": "workload",
+      "kind": "Deployment",
+      "group": "apps",
+      "namespace": "crowd",
+      "name": "crowd-04",
+      "reason": "CrashLoopBackOff",
+      "message": "back-off restarting failed container",
+      "onset_unknown": true,
+      "resource_created_at": "1999-12-31T21:00:00Z",
+      "last_seen": "2000-01-01T00:00:00Z",
+      "count": 1,
+      "restart_count": 7,
+      "affected": {
+        "pods": 1
+      },
+      "members": [
+        {
+          "kind": "Pod",
+          "namespace": "crowd",
+          "name": "crowd-04-rs-1"
+        }
+      ],
+      "diagnostic_context": {
+        "role": "rollup",
+        "facts": [
+          {
+            "type": "restart_cause",
+            "message": "Container restart evidence: restartCount=7."
+          },
+          {
+            "type": "owner_rollup",
+            "message": "Grouped from 1 affected resource(s) under this Deployment.",
+            "refs": [
+              {
+                "kind": "Pod",
+                "namespace": "crowd",
+                "name": "crowd-04-rs-1"
+              }
+            ]
+          }
+        ]
+      },
+      "no_recent_changes": {
+        "window_seconds": 3600
+      }
+    },
+    {
+      "severity": "critical",
+      "source": "problem",
+      "category": "crashloop",
+      "category_group": "runtime",
+      "id": "9c7f9d137644959c",
+      "grouping_scope": "workload",
+      "kind": "Deployment",
+      "group": "apps",
+      "namespace": "crowd",
+      "name": "crowd-05",
+      "reason": "CrashLoopBackOff",
+      "message": "back-off restarting failed container",
+      "onset_unknown": true,
+      "resource_created_at": "1999-12-31T21:00:00Z",
+      "last_seen": "2000-01-01T00:00:00Z",
+      "count": 1,
+      "restart_count": 7,
+      "affected": {
+        "pods": 1
+      },
+      "members": [
+        {
+          "kind": "Pod",
+          "namespace": "crowd",
+          "name": "crowd-05-rs-1"
+        }
+      ],
+      "diagnostic_context": {
+        "role": "rollup",
+        "facts": [
+          {
+            "type": "restart_cause",
+            "message": "Container restart evidence: restartCount=7."
+          },
+          {
+            "type": "owner_rollup",
+            "message": "Grouped from 1 affected resource(s) under this Deployment.",
+            "refs": [
+              {
+                "kind": "Pod",
+                "namespace": "crowd",
+                "name": "crowd-05-rs-1"
+              }
+            ]
+          }
+        ]
+      },
+      "no_recent_changes": {
+        "window_seconds": 3600
+      }
+    },
+    {
+      "severity": "critical",
+      "source": "problem",
+      "category": "crashloop",
+      "category_group": "runtime",
+      "id": "7f50b508541d7af2",
+      "grouping_scope": "workload",
+      "kind": "Deployment",
+      "group": "apps",
+      "namespace": "crowd",
+      "name": "crowd-06",
+      "reason": "CrashLoopBackOff",
+      "message": "back-off restarting failed container",
+      "onset_unknown": true,
+      "resource_created_at": "1999-12-31T21:00:00Z",
+      "last_seen": "2000-01-01T00:00:00Z",
+      "count": 1,
+      "restart_count": 7,
+      "affected": {
+        "pods": 1
+      },
+      "members": [
+        {
+          "kind": "Pod",
+          "namespace": "crowd",
+          "name": "crowd-06-rs-1"
+        }
+      ],
+      "diagnostic_context": {
+        "role": "rollup",
+        "facts": [
+          {
+            "type": "restart_cause",
+            "message": "Container restart evidence: restartCount=7."
+          },
+          {
+            "type": "owner_rollup",
+            "message": "Grouped from 1 affected resource(s) under this Deployment.",
+            "refs": [
+              {
+                "kind": "Pod",
+                "namespace": "crowd",
+                "name": "crowd-06-rs-1"
+              }
+            ]
+          }
+        ]
+      },
+      "no_recent_changes": {
+        "window_seconds": 3600
+      }
+    },
+    {
+      "severity": "critical",
+      "source": "problem",
+      "category": "crashloop",
+      "category_group": "runtime",
+      "id": "6d6f8ece89724ff9",
+      "grouping_scope": "workload",
+      "kind": "Deployment",
+      "group": "apps",
+      "namespace": "crowd",
+      "name": "crowd-07",
+      "reason": "CrashLoopBackOff",
+      "message": "back-off restarting failed container",
+      "onset_unknown": true,
+      "resource_created_at": "1999-12-31T21:00:00Z",
+      "last_seen": "2000-01-01T00:00:00Z",
+      "count": 1,
+      "restart_count": 7,
+      "affected": {
+        "pods": 1
+      },
+      "members": [
+        {
+          "kind": "Pod",
+          "namespace": "crowd",
+          "name": "crowd-07-rs-1"
+        }
+      ],
+      "diagnostic_context": {
+        "role": "rollup",
+        "facts": [
+          {
+            "type": "restart_cause",
+            "message": "Container restart evidence: restartCount=7."
+          },
+          {
+            "type": "owner_rollup",
+            "message": "Grouped from 1 affected resource(s) under this Deployment.",
+            "refs": [
+              {
+                "kind": "Pod",
+                "namespace": "crowd",
+                "name": "crowd-07-rs-1"
+              }
+            ]
+          }
+        ]
+      },
+      "no_recent_changes": {
+        "window_seconds": 3600
+      }
+    },
+    {
+      "severity": "critical",
+      "source": "problem",
+      "category": "crashloop",
+      "category_group": "runtime",
+      "id": "e4f51509c56f4557",
+      "grouping_scope": "workload",
+      "kind": "Deployment",
+      "group": "apps",
+      "namespace": "crowd",
+      "name": "crowd-08",
+      "reason": "CrashLoopBackOff",
+      "message": "back-off restarting failed container",
+      "onset_unknown": true,
+      "resource_created_at": "1999-12-31T21:00:00Z",
+      "last_seen": "2000-01-01T00:00:00Z",
+      "count": 1,
+      "restart_count": 7,
+      "affected": {
+        "pods": 1
+      },
+      "members": [
+        {
+          "kind": "Pod",
+          "namespace": "crowd",
+          "name": "crowd-08-rs-1"
+        }
+      ],
+      "diagnostic_context": {
+        "role": "rollup",
+        "facts": [
+          {
+            "type": "restart_cause",
+            "message": "Container restart evidence: restartCount=7."
+          },
+          {
+            "type": "owner_rollup",
+            "message": "Grouped from 1 affected resource(s) under this Deployment.",
+            "refs": [
+              {
+                "kind": "Pod",
+                "namespace": "crowd",
+                "name": "crowd-08-rs-1"
+              }
+            ]
+          }
+        ]
+      },
+      "no_recent_changes": {
+        "window_seconds": 3600
+      }
+    },
+    {
+      "severity": "critical",
+      "source": "problem",
+      "category": "crashloop",
+      "category_group": "runtime",
+      "id": "dc26c6fe3dcbf7d8",
+      "grouping_scope": "workload",
+      "kind": "Deployment",
+      "group": "apps",
+      "namespace": "crowd",
+      "name": "crowd-09",
+      "reason": "CrashLoopBackOff",
+      "message": "back-off restarting failed container",
+      "onset_unknown": true,
+      "resource_created_at": "1999-12-31T21:00:00Z",
+      "last_seen": "2000-01-01T00:00:00Z",
+      "count": 1,
+      "restart_count": 7,
+      "affected": {
+        "pods": 1
+      },
+      "members": [
+        {
+          "kind": "Pod",
+          "namespace": "crowd",
+          "name": "crowd-09-rs-1"
+        }
+      ],
+      "diagnostic_context": {
+        "role": "rollup",
+        "facts": [
+          {
+            "type": "restart_cause",
+            "message": "Container restart evidence: restartCount=7."
+          },
+          {
+            "type": "owner_rollup",
+            "message": "Grouped from 1 affected resource(s) under this Deployment.",
+            "refs": [
+              {
+                "kind": "Pod",
+                "namespace": "crowd",
+                "name": "crowd-09-rs-1"
+              }
+            ]
+          }
+        ]
+      },
+      "no_recent_changes": {
+        "window_seconds": 3600
+      }
+    },
+    {
+      "severity": "critical",
+      "source": "problem",
+      "category": "crashloop",
+      "category_group": "runtime",
+      "id": "dc21c6b5cb335f01",
+      "grouping_scope": "workload",
+      "kind": "Deployment",
+      "group": "apps",
+      "namespace": "crowd",
+      "name": "crowd-10",
+      "reason": "CrashLoopBackOff",
+      "message": "back-off restarting failed container",
+      "onset_unknown": true,
+      "resource_created_at": "1999-12-31T21:00:00Z",
+      "last_seen": "2000-01-01T00:00:00Z",
+      "count": 1,
+      "restart_count": 7,
+      "affected": {
+        "pods": 1
+      },
+      "members": [
+        {
+          "kind": "Pod",
+          "namespace": "crowd",
+          "name": "crowd-10-rs-1"
+        }
+      ],
+      "diagnostic_context": {
+        "role": "rollup",
+        "facts": [
+          {
+            "type": "restart_cause",
+            "message": "Container restart evidence: restartCount=7."
+          },
+          {
+            "type": "owner_rollup",
+            "message": "Grouped from 1 affected resource(s) under this Deployment.",
+            "refs": [
+              {
+                "kind": "Pod",
+                "namespace": "crowd",
+                "name": "crowd-10-rs-1"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "severity": "critical",
+      "source": "problem",
+      "category": "crashloop",
+      "category_group": "runtime",
+      "id": "f37196f85dc9bc0a",
+      "grouping_scope": "workload",
+      "kind": "Deployment",
+      "group": "apps",
+      "namespace": "crowd",
+      "name": "crowd-11",
+      "reason": "CrashLoopBackOff",
+      "message": "back-off restarting failed container",
+      "onset_unknown": true,
+      "resource_created_at": "1999-12-31T21:00:00Z",
+      "last_seen": "2000-01-01T00:00:00Z",
+      "count": 1,
+      "restart_count": 7,
+      "affected": {
+        "pods": 1
+      },
+      "members": [
+        {
+          "kind": "Pod",
+          "namespace": "crowd",
+          "name": "crowd-11-rs-1"
+        }
+      ],
+      "diagnostic_context": {
+        "role": "rollup",
+        "facts": [
+          {
+            "type": "restart_cause",
+            "message": "Container restart evidence: restartCount=7."
+          },
+          {
+            "type": "owner_rollup",
+            "message": "Grouped from 1 affected resource(s) under this Deployment.",
+            "refs": [
+              {
+                "kind": "Pod",
+                "namespace": "crowd",
+                "name": "crowd-11-rs-1"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "total": 12,
+  "total_matched": 12,
+  "correlation_truncated": true,
+  "unchecked_sources": [
+    {
+      "source": "custom_resources",
+      "reason": "kind_sync_pending"
+    },
+    {
+      "source": "kueue",
+      "reason": "kind_sync_pending",
+      "kinds": [
+        {
+          "group": "kueue.x-k8s.io",
+          "kind": "LocalQueue"
+        },
+        {
+          "group": "kueue.x-k8s.io",
+          "kind": "Workload"
+        }
+      ]
+    }
+  ]
+}

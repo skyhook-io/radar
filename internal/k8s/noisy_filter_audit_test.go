@@ -158,9 +158,8 @@ func TestComputeDiff_UnknownCRDArbitraryStatus_Detected(t *testing.T) {
 }
 
 func TestRecordToTimelineStore_SyncAddMarksResourceSeen(t *testing.T) {
-	prev := initialSyncComplete.Load()
-	initialSyncComplete.Store(false)
-	defer func() { initialSyncComplete.Store(prev) }()
+	state := newConnectionCache()
+	state.initialSyncComplete.Store(false)
 
 	timeline.ResetStore()
 	if err := timeline.InitStore(timeline.DefaultStoreConfig()); err != nil {
@@ -177,7 +176,7 @@ func TestRecordToTimelineStore_SyncAddMarksResourceSeen(t *testing.T) {
 		},
 	}
 
-	recordToTimelineStore(ActiveClusterContext(), "Pod", "default", "p", "pod-uid", "add", nil, pod, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Pod", "default", "p", "pod-uid", "add", nil, pod, nil, false)
 
 	store := timeline.GetStore()
 	if store == nil {

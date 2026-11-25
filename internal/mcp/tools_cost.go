@@ -18,7 +18,6 @@ import (
 	"github.com/skyhook-io/radar/internal/opencost"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	pkgopencost "github.com/skyhook-io/radar/pkg/opencost"
-	"github.com/skyhook-io/radar/pkg/prom"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
@@ -37,7 +36,8 @@ const (
 	// The denominator is allocation — max(requested, observed) — not the
 	// request, so the ratio caps at 100 and a low value is not by itself a
 	// defect. Neither fact is derivable from the numbers in the response.
-	costEfficiencyExplainer = "efficiencyPercent compares observed use against cost allocation, which is the greater of requested and observed usage — not against the request. It therefore caps at 100, and a low value is not by itself a defect or recoverable money (bursty workloads, P95-sized requests and HPA headroom all read low). Use get_rightsizing to judge whether a request should change; it applies OOM and HPA gating a ratio cannot."
+	costUsageWithheldGuidance = "efficiencyPercent and unusedRequestHourlyCost are null: the usage metrics could not be kept to this cluster in a metrics store several clusters share (usageClusterScope.note says why). The costs themselves are this cluster's; the waste figures are unmeasured, not zero."
+	costEfficiencyExplainer   = "efficiencyPercent compares observed use against cost allocation, which is the greater of requested and observed usage — not against the request. It therefore caps at 100, and a low value is not by itself a defect or recoverable money (bursty workloads, P95-sized requests and HPA headroom all read low). Use get_rightsizing to judge whether a request should change; it applies OOM and HPA gating a ratio cannot."
 	// Enumerating what the workload total leaves out would go stale: the
 	// namespace row's basis is the cost source's own total, which carries
 	// storage, network, shared and external cost on Kubecost.
@@ -223,8 +223,14 @@ type costResponse struct {
 	NodeCount      int `json:"nodeCount,omitempty"`
 	// NodesNotInCluster counts nodes the cost source still reports that the
 	// cluster no longer has, which is why their rows carry no pool.
-	NodesNotInCluster int      `json:"nodesNotInCluster,omitempty"`
-	Guidance          []string `json:"guidance,omitempty"`
+	NodesNotInCluster int `json:"nodesNotInCluster,omitempty"`
+	// ClusterScope says how metrics-store costs were kept to this cluster in
+	// a store several clusters share, or why they were withheld.
+	ClusterScope *pkgopencost.ClusterScope `json:"clusterScope,omitempty"`
+	// UsageClusterScope says why efficiency and unused-request cost are null
+	// when only the usage metrics could not be kept to this cluster.
+	UsageClusterScope *pkgopencost.ClusterScope `json:"usageClusterScope,omitempty"`
+	Guidance          []string                  `json:"guidance,omitempty"`
 }
 
 func handleGetCost(ctx context.Context, _ *mcp.CallToolRequest, input getCostInput) (*mcp.CallToolResult, any, error) {
@@ -353,11 +359,11 @@ func costSummaryView(ctx context.Context, input getCostInput, limit int) (costRe
 			return base.unavailable(opencost.ConnectionFailureReason(err), currency, "kubecost"), nil
 		}
 	} else {
-		client, reason := promCostClient(ctx)
+		promCost, reason := promCostClient(ctx)
 		if reason != "" {
 			return base.unavailable(reason, currency, "prometheus"), nil
 		}
-		summary = pkgopencost.ComputeCostSummaryFromProm(ctx, client, pkgopencost.SummaryOptions{Currency: currency, SkipNodeCost: allowed != nil})
+		summary = promCost.Summary(ctx, pkgopencost.SummaryOptions{Currency: currency, SkipNodeCost: allowed != nil})
 		summary.Source = "prometheus"
 	}
 
@@ -376,6 +382,8 @@ func costSummaryView(ctx context.Context, input getCostInput, limit int) (costRe
 	resp.Window = summary.Window
 	resp.DataThrough = summary.DataThrough
 	resp.NamespaceScope = summary.NamespaceScope
+	resp.ClusterScope = summary.ClusterScope
+	resp.UsageClusterScope = summary.UsageClusterScope
 	if !summary.Available {
 		// FilterCostSummary reports a filtered-to-empty result as no_metrics,
 		// which otherwise renders as "install a cost source" for a source that
@@ -421,8 +429,11 @@ func costSummaryView(ctx context.Context, input getCostInput, limit int) (costRe
 		})
 	}
 	resp.Guidance = append(costGuidance(summary.NamespaceScope, strings.TrimSpace(input.Namespace)), costEfficiencyExplainer)
-	if partial := partialUsageGuidance(summary.Namespaces); partial != "" {
+	if partial := partialUsageGuidance(summary.Namespaces); partial != "" && !summary.EfficiencyUnavailable {
 		resp.Guidance = append(resp.Guidance, strings.TrimSpace(partial))
+	}
+	if summary.EfficiencyUnavailable {
+		resp.Guidance = append(resp.Guidance, costUsageWithheldGuidance)
 	}
 	resp.Guidance = append(resp.Guidance, costSplitGuidance(summary, len(summary.NamespaceScope) > 0)...)
 	return resp, nil
@@ -524,11 +535,11 @@ func costWorkloadsView(ctx context.Context, input getCostInput, limit int) (cost
 			return base.unavailable(opencost.ConnectionFailureReason(err), currency, "kubecost"), nil
 		}
 	} else {
-		client, reason := promCostClient(ctx)
+		promCost, reason := promCostClient(ctx)
 		if reason != "" {
 			return base.unavailable(reason, currency, "prometheus"), nil
 		}
-		workloads = pkgopencost.ComputeWorkloadsFromProm(ctx, client, namespace, opencost.BuildPodOwnerLookup(namespace))
+		workloads = promCost.Workloads(ctx, namespace, opencost.BuildPodOwnerLookup(namespace))
 		workloads.Currency = currency
 		workloads.Source = "prometheus"
 	}
@@ -539,6 +550,8 @@ func costWorkloadsView(ctx context.Context, input getCostInput, limit int) (cost
 	resp.Source = workloads.Source
 	resp.Currency = workloads.Currency
 	resp.DataThrough = workloads.DataThrough
+	resp.ClusterScope = workloads.ClusterScope
+	resp.UsageClusterScope = workloads.UsageClusterScope
 	// Unavailable paths carry no window; the agent still needs to state what
 	// window the call was for.
 	resp.Window = workloads.Window
@@ -607,6 +620,9 @@ func costWorkloadsView(ctx context.Context, input getCostInput, limit int) (cost
 		totalsExplainer = costSelectedWorkloadTotalExplainer + " " + costWorkloadTotalExplainer
 	}
 	resp.Guidance = []string{costRateExplainer, totalsExplainer, costEfficiencyExplainer}
+	if workloads.EfficiencyUnavailable {
+		resp.Guidance = append(resp.Guidance, costUsageWithheldGuidance)
+	}
 	return resp, nil
 }
 
@@ -662,11 +678,11 @@ func costNodesView(ctx context.Context, name string, limit int) (costResponse, e
 			return base.unavailable(opencost.ConnectionFailureReason(err), currency, "kubecost"), nil
 		}
 	} else {
-		client, reason := promCostClient(ctx)
+		promCost, reason := promCostClient(ctx)
 		if reason != "" {
 			return base.unavailable(reason, currency, "prometheus"), nil
 		}
-		nodes = pkgopencost.ComputeNodeCosts(ctx, client)
+		nodes = promCost.Nodes(ctx)
 		nodes.Currency = currency
 		nodes.Source = "prometheus"
 	}
@@ -677,6 +693,7 @@ func costNodesView(ctx context.Context, name string, limit int) (costResponse, e
 	resp.Source = nodes.Source
 	resp.Currency = nodes.Currency
 	resp.DataThrough = nodes.DataThrough
+	resp.ClusterScope = nodes.ClusterScope
 	resp.Window = nodes.Window
 	if !nodes.Available {
 		resp.Remediation = costRemediation(nodes.Reason)
@@ -801,11 +818,11 @@ func costTrendView(ctx context.Context, input getCostInput) (costResponse, error
 			return base.unavailable(opencost.ConnectionFailureReason(err), currency, "kubecost"), nil
 		}
 	} else {
-		client, reason := promCostClient(ctx)
+		promCost, reason := promCostClient(ctx)
 		if reason != "" {
 			return base.unavailable(reason, currency, "prometheus"), nil
 		}
-		trend = pkgopencost.ComputeCostTrendFromProm(ctx, client, pkgopencost.TrendPromOptions{
+		trend = promCost.Trend(ctx, pkgopencost.TrendPromOptions{
 			Range: input.Range, Namespaces: allowed,
 		})
 		trend.Currency = currency
@@ -818,6 +835,7 @@ func costTrendView(ctx context.Context, input getCostInput) (costResponse, error
 	resp.Source = trend.Source
 	resp.Currency = trend.Currency
 	resp.DataThrough = trend.DataThrough
+	resp.ClusterScope = trend.ClusterScope
 	// Keep the echoed request: the backends return an empty Range on their
 	// failure paths, and dropping it leaves an agent that asked for 7d unable
 	// to tell which range failed.
@@ -978,20 +996,20 @@ func changePercent(points int, start, end float64) *float64 {
 //
 // PromForMCP, not Prom: the shared Prom() client carries a 10s socket backstop
 // sized for REST callers, which a 7d trend query on a large cluster outruns.
-func promCostClient(ctx context.Context) (*prom.Client, string) {
+func promCostClient(ctx context.Context) (opencost.PromCost, string) {
 	client, connectionErr := prometheuspkg.ClientForOperation()
 	if connectionErr != nil {
-		return nil, opencost.ConnectionFailureReason(connectionErr)
+		return opencost.PromCost{}, opencost.ConnectionFailureReason(connectionErr)
 	}
 	if _, _, err := client.EnsureConnected(ctx); err != nil {
 		log.Printf("[mcp] Prometheus EnsureConnected failed for cost query: %v", err)
-		return nil, opencost.ConnectionFailureReason(err)
+		return opencost.PromCost{}, opencost.ConnectionFailureReason(err)
 	}
-	promClient := client.PromForMCP()
-	if promClient == nil {
-		return nil, pkgopencost.ReasonNoPrometheus
+	promCost := opencost.NewMCPPromCost(client)
+	if promCost.Store == nil {
+		return opencost.PromCost{}, pkgopencost.ReasonNoPrometheus
 	}
-	return promClient, ""
+	return promCost, ""
 }
 
 func requestedNamespaces(namespace string) []string {
@@ -1081,6 +1099,10 @@ func costRemediation(reason string) string {
 		return "Automatic port-forwarding is turned off, and Radar can't reach Prometheus directly, so OpenCost metrics are unavailable. Set a metrics URL for this cluster in Radar's Settings → Metrics."
 	case pkgopencost.ReasonKubecostPortForwardDisabled:
 		return "Automatic port-forwarding is turned off, so Radar can't reach the Kubecost Aggregator it found in this cluster. Set the Kubecost URL for this cluster in Radar's Settings → Cost."
+	case pkgopencost.ReasonClusterScope:
+		return "The metrics store holds several clusters and Radar could not keep these costs to this one, so it withholds them rather than report another cluster's spend; this is not zero cost. clusterScope.note says why. Fix: set --prometheus-cluster-label (Helm traffic.prometheusClusterLabels) to a label every OpenCost and kube-state-metrics series carries."
+	case pkgopencost.ReasonPartialData:
+		return "The metrics store answered a cost query only partially (a backend may be down), so Radar withholds totals that could be missing series. Retry shortly; if it persists, check the metrics store's health."
 	case pkgopencost.ReasonQueryError, pkgopencost.ReasonSourceUnavailable:
 		return "The selected cost source's connection or query failed. For OpenCost metrics, check Radar's Metrics connection status; for Kubecost, check its URL, network path and backend health."
 	default:
