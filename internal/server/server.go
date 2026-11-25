@@ -780,6 +780,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// fan-out for cross-cluster issues.
 			r.Get("/issues", s.handleIssues)
 			r.Get("/issues/resource/{kind}/{namespace}/{name}", s.handleResourceIssues)
+			r.Get("/issues/recent-changes", s.handleIssueRecentChanges)
 			r.Get("/settings/audit", s.handleGetAuditSettings)
 			r.Put("/settings/audit", s.handlePutAuditSettings)
 			r.Get("/events", s.handleEvents)
@@ -1556,6 +1557,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		SubstrateHealthMetrics:      true,
 		ResourceIssues:              true,
 		ResourceIssueCoverage:       true,
+		IssueCorrelation:            true,
 		PodEnvironment:              true,
 		PolicyResource:              true,
 		WorkloadHistory:             true,

@@ -198,9 +198,14 @@ type FeatureCapabilities struct {
 	SubstrateHealthMetrics bool `json:"substrateHealthMetrics"`
 	ResourceIssues         bool `json:"resourceIssues"`        // GET /api/issues/resource/{kind}/{namespace}/{name}
 	ResourceIssueCoverage  bool `json:"resourceIssueCoverage"` // Resource issues with ?coverage=1
-	PodEnvironment         bool `json:"podEnvironment"`        // GET /api/pods/{namespace}/{name}/environment
-	PolicyResource         bool `json:"policyResource"`        // GET /api/policy/resource/{kind}/{namespace}/{name}
-	WorkloadHistory        bool `json:"workloadHistory"`       // GET /api/workloads/{kind}/{namespace}/{name}/history
+	// Resource issues with ?correlate=<issueID>: that issue's correlated
+	// changes over a window anchored on when it was first seen; and
+	// GET /api/issues/recent-changes, the one change each listed issue row
+	// names.
+	IssueCorrelation bool `json:"issueCorrelation"`
+	PodEnvironment   bool `json:"podEnvironment"`  // GET /api/pods/{namespace}/{name}/environment
+	PolicyResource   bool `json:"policyResource"`  // GET /api/policy/resource/{kind}/{namespace}/{name}
+	WorkloadHistory  bool `json:"workloadHistory"` // GET /api/workloads/{kind}/{namespace}/{name}/history
 	// The workspace and its read/action surfaces, excluding protection setup.
 	CNPGWorkspace       bool `json:"cnpgWorkspace"`
 	CNPGProtectionSetup bool `json:"cnpgProtectionSetup"`

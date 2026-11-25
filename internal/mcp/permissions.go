@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/skyhook-io/radar/internal/issuecorrelation"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
 	"github.com/skyhook-io/radar/internal/readscope"
@@ -76,7 +77,7 @@ func recentChangeReadFilter(ctx context.Context) func(issuesapi.RecentChange) bo
 		return all || authz(group, resource, namespace)
 	}
 	return func(c issuesapi.RecentChange) bool {
-		return c.Source == helmChangeSource || k8s.ChangeReadAllowed(c.Kind, c.APIVersion, c.Namespace, authorize)
+		return c.Source == issuecorrelation.HelmChangeSource || k8s.ChangeReadAllowed(c.Kind, c.APIVersion, c.Namespace, authorize)
 	}
 }
 

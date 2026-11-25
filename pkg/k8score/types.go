@@ -258,6 +258,10 @@ type CacheConfig struct {
 	// set in production paths.
 	DebugSyncDelays map[string]time.Duration
 
+	// Clock dates each informer's InformerWatchedSince boundary. time.Now
+	// when nil.
+	Clock func() time.Time
+
 	// ListPageSize, when > 0, makes high-cardinality informers fetch their
 	// initial LIST in pages of this size via a consistent (resourceVersion="")
 	// read instead of one unpaginated response. This mitigates response-read
