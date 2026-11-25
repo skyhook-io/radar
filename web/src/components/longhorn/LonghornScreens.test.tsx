@@ -36,4 +36,12 @@ describe('Longhorn volumes', () => {
     expect(html).not.toMatch(/>0 \/ 3/)
     expect(html).toContain('a claim you can’t read')
   })
+
+  it('keeps a reported actual size when the requested size is not reported', () => {
+    const html = text(renderToStaticMarkup(
+      <MemoryRouter><LonghornVolumes data={workspace({ volumes: [volume({ size: undefined, actualSize: 2 * 1024 ** 3 })] })} {...props} /></MemoryRouter>,
+    ))
+    expect(html).toContain('not reported')
+    expect(html).toContain('2 GB used')
+  })
 })

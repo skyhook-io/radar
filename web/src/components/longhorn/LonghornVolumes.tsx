@@ -65,7 +65,7 @@ const columns: TableColumn<LonghornVolumeReading>[] = [
   {
     header: 'Size',
     width: '110px',
-    cell: (v) => (v.size === undefined ? NOT_REPORTED : <>{formatBytes(v.size)}{v.actualSize !== undefined && <Sub>{formatBytes(v.actualSize)} used</Sub>}</>),
+    cell: (v) => <>{v.size === undefined ? NOT_REPORTED : formatBytes(v.size)}{v.actualSize !== undefined && <Sub>{formatBytes(v.actualSize)} used</Sub>}</>,
   },
   { header: 'Healthy replicas', width: '130px', cell: (v) => <ReplicasCell v={v} /> },
   { header: 'Claim', width: '190px', cell: (v) => <ClaimCell v={v} /> },
