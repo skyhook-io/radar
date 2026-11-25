@@ -158,8 +158,12 @@ it('only polls while opted in', async () => {
 it('keeps the remaining attempts across a long background pause and background refetches', async () => {
   await observe(true)
   await advance(5000)
+  const beforeBlur = vi.getTimerCount()
   focusManager.setFocused(false)
+  // Blur cancels the poll timer, and a hidden view arms none while it waits.
+  expect(vi.getTimerCount()).toBe(beforeBlur - 1)
   await advance(300_000)
+  expect(vi.getTimerCount()).toBe(0)
   expect(requests).toEqual([0, 5000])
   await act(async () => { await client.invalidateQueries({ queryKey: key }) })
   await observe(true)

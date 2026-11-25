@@ -3259,18 +3259,19 @@ export function useResourceWithRelationships<T>(
 
     function schedule() {
       clearTimeout(timer);
+      timer = undefined;
       const state = cache.get<ResourceWithRelationships<T>>(queryHash)?.state;
       if (!state || state.error || !hasPendingOwnership(state.data)) {
         attempts = 0;
         return;
       }
+      // A hidden or offline view waits without timers; focus and reconnect
+      // resume it below.
+      if (!focusManager.isFocused() || !onlineManager.isOnline()) return;
       if (state.fetchStatus !== "idle" || attempts >= 8) return;
       timer = setTimeout(() => {
+        timer = undefined;
         if (apiBase !== getApiBase()) return;
-        if (!focusManager.isFocused() || !onlineManager.isOnline()) {
-          schedule();
-          return;
-        }
         attempts++;
         void refetch({ cancelRefetch: false });
       }, Math.min(5000 * 2 ** attempts, 30_000));
@@ -3281,9 +3282,22 @@ export function useResourceWithRelationships<T>(
     const unsubscribe = cache.subscribe(event => {
       if ((event.type === "updated" || event.type === "removed") && event.query.queryHash === queryHash) schedule();
     });
+    // Redundant focus or online events must not restart a running countdown.
+    const resume = () => {
+      if (!focusManager.isFocused() || !onlineManager.isOnline()) {
+        clearTimeout(timer);
+        timer = undefined;
+      } else if (timer === undefined) {
+        schedule();
+      }
+    };
+    const unsubscribeFocus = focusManager.subscribe(resume);
+    const unsubscribeOnline = onlineManager.subscribe(resume);
     schedule();
     return () => {
       unsubscribe();
+      unsubscribeFocus();
+      unsubscribeOnline();
       clearTimeout(timer);
     };
   }, [poll, apiBase, client, resourceOptions, refetch]);
