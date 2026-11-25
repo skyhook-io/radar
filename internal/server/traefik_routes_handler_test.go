@@ -260,6 +260,33 @@ func TestTraefikRoutesSingleRouteModePartialForLimitedCaller(t *testing.T) {
 	}
 }
 
+// A read narrowed to some namespaces, by --namespace-scope or ?namespaces,
+// can't say how the whole cluster uses a Middleware, even for a caller with
+// no namespace limit of their own.
+func TestTraefikRoutesDrawerPartialWhenTheReadIsNarrowed(t *testing.T) {
+	seedTraefikFixture(t)
+	state := func(path string) string {
+		resp, _ := http.Get(testServer.URL + path)
+		got, _ := decodeTraefik(t, resp)
+		return got.Coverage["ingressroutes"].State
+	}
+	if s := state("/api/traefik/routes?middleware=shop/redirect"); s != "full" {
+		t.Fatalf("unnarrowed read = %q, want full", s)
+	}
+	if s := state("/api/traefik/routes?middleware=shop/redirect&namespaces=shop"); s != "partial" {
+		t.Errorf("?namespaces read = %q, want partial", s)
+	}
+	k8s.ForceNamespaceScope = true
+	k8s.SetFallbackNamespace("shop")
+	t.Cleanup(func() {
+		k8s.ForceNamespaceScope = false
+		k8s.SetFallbackNamespace("")
+	})
+	if s := state("/api/traefik/routes?namespace=shop&name=ui"); s != "partial" {
+		t.Errorf("--namespace-scope read = %q, want partial", s)
+	}
+}
+
 var traefikLegacyKinds = []k8s.APIResource{
 	{Group: "traefik.containo.us", Version: "v1alpha1", Name: "ingressroutes", Kind: "IngressRoute", Namespaced: true, Verbs: []string{"get", "list", "watch"}},
 	{Group: "traefik.containo.us", Version: "v1alpha1", Name: "middlewares", Kind: "Middleware", Namespaced: true, Verbs: []string{"get", "list", "watch"}},

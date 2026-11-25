@@ -630,11 +630,14 @@ func (s *Server) handleTraefikRoutes(w http.ResponseWriter, r *http.Request) {
 	default:
 		resp.Routes, resp.Middlewares = rows, uses
 	}
-	// Both drawers count middleware use across the whole cluster: a caller
-	// who sees only some namespaces gets a lower bound, not the count.
+	// Both drawers count middleware use across the whole cluster: a read
+	// narrowed to some namespaces (the caller's access, --namespace-scope or
+	// ?namespaces) gets a lower bound, not the count.
 	if routeName != "" || middleware != "" {
 		if cov := resp.Coverage["ingressroutes"]; cov.State == integration.KindCoverageFull {
-			if visible := s.getUserNamespaces(r, nil); visible != nil {
+			if namespaces != nil {
+				resp.Coverage["ingressroutes"] = integration.KindCoverage{State: integration.KindCoveragePartial, AllowedNamespaces: namespaces}
+			} else if visible := s.getUserNamespaces(r, nil); visible != nil {
 				resp.Coverage["ingressroutes"] = integration.KindCoverage{State: integration.KindCoveragePartial, AllowedNamespaces: visible}
 			}
 		}
