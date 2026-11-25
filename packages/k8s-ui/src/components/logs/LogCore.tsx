@@ -457,11 +457,13 @@ export function LogCore({
     tsTriggerRef.current?.focus()
   }
   const viewerRef = useRef<HTMLDivElement>(null)
+  const toolbarRef = useRef<HTMLDivElement>(null)
   const [tsMenuBounds, setTsMenuBounds] = useState<{ maxHeight: number; maxWidth: number }>()
   useLayoutEffect(() => {
     const viewer = viewerRef.current
+    const toolbar = toolbarRef.current
     const anchor = tsMenuRef.current
-    if (!showTsMenu || !viewer || !anchor) return
+    if (!showTsMenu || !viewer || !toolbar || !anchor) return
     const fit = () => {
       const bounds = viewer.getBoundingClientRect()
       const trigger = anchor.getBoundingClientRect()
@@ -473,6 +475,7 @@ export function LogCore({
     fit()
     const observer = new ResizeObserver(fit)
     observer.observe(viewer)
+    observer.observe(toolbar)
     window.addEventListener('resize', fit)
     return () => {
       observer.disconnect()
@@ -714,7 +717,7 @@ export function LogCore({
       style={{ colorScheme: isDark ? 'dark' : 'light', fontFamily: "'SF Mono', 'Cascadia Code', 'Fira Code', Menlo, Consolas, 'DejaVu Sans Mono', monospace" }}
     >
       {/* Toolbar */}
-      <div className={`flex flex-wrap items-center gap-2 px-3 py-2 border-b ${palette.border} ${palette.toolbarBg}`}>
+      <div ref={toolbarRef} className={`flex flex-wrap items-center gap-2 px-3 py-2 border-b ${palette.border} ${palette.toolbarBg}`}>
         {toolbarExtraNode}
 
         {/* Stream / Stop toggle — only shown when streaming is supported */}

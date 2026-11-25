@@ -89,20 +89,32 @@ it('moves focus and selection with the arrow keys and returns focus on confirmat
   expect(document.activeElement).toBe(picker)
 })
 
-it('keeps the last option in a scrollable menu bounded by the short dock and viewport', async () => {
+it('keeps Epoch reachable in a short dock as the toolbar wraps and the viewport shrinks', async () => {
+  const resizeCallbacks = new Map<Element, () => void>()
+  vi.stubGlobal('ResizeObserver', class {
+    constructor(private callback: () => void) {}
+    observe(target: Element) { resizeCallbacks.set(target, this.callback) }
+    disconnect() {}
+  })
   const picker = await render()
   const viewer = element.firstElementChild!
+  const toolbar = picker.closest('[aria-label="Log display and utilities"]')!.parentElement!
   vi.spyOn(viewer, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 400, 390, 275))
-  vi.spyOn(picker.closest('.relative')!, 'getBoundingClientRect').mockReturnValue(new DOMRect(90, 442, 72, 24))
+  const anchorRect = vi.spyOn(picker.closest('.relative')!, 'getBoundingClientRect').mockReturnValue(new DOMRect(90, 442, 72, 24))
   act(() => picker.click())
   const menu = element.querySelector<HTMLElement>('[role="radiogroup"][aria-label="Timestamp format"]')!
   expect(menu.style.maxHeight).toBe('201px')
   expect(menu.style.maxWidth).toBe('158px')
   expect(menu.classList.contains('overflow-y-auto')).toBe(true)
   expect(menu.querySelector('[role="radio"]:last-child')?.textContent).toBe('Epoch')
+  await render({ entries: [entry, { ...entry, id: 2, isJson: true, content: '{"msg":"structured"}' }] })
+  expect(toolbar.querySelector('[aria-label="Pick structured log display mode"]')).toBeTruthy()
+  anchorRect.mockReturnValue(new DOMRect(90, 478, 72, 24))
+  act(() => resizeCallbacks.get(toolbar)?.())
+  expect(menu.style.maxHeight).toBe('165px')
   vi.stubGlobal('innerHeight', 620)
   act(() => window.dispatchEvent(new Event('resize')))
-  expect(menu.style.maxHeight).toBe('146px')
+  expect(menu.style.maxHeight).toBe('110px')
 })
 
 it.each(['', undefined])('omits an unknown zone (%s) from local choices and the tooltip', async timeZone => {
