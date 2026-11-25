@@ -1002,7 +1002,11 @@ in the OpenObserve collector's `k8s_cluster_uid`. When neither is there,
 Radar looks up a sample of the cluster's running Pods, suggests the cluster
 name they are stored under and asks you to confirm it (in the CLI, `--yes`
 accepts it). Only a confirmed name is ever used, and never the shared default
-name `cluster1` or a name another cluster's Pods also use. A name match carries
+name `cluster1` or a name another cluster's Pods also use. Nor is a name
+starting with `_o2_`: OpenObserve treats its dashboard placeholder (`_o2_all_`
+by default, changed with `ZO_DASHBOARD_PLACEHOLDER`) as "any value" and drops
+the filter, so don't name a cluster after it. A collector sending such a name
+is matched by its cluster ID alone. A name match carries
 a standing warning: if another cluster writes under the same name, Radar can't
 tell them apart. An ID match is looked up again each time Radar activates the
 cluster.

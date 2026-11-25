@@ -276,7 +276,7 @@ func DiscoverIDs(ctx context.Context, t prom.Transport, uids []string) (map[stri
 				}
 				name := ""
 				for _, l := range PartitionLabels {
-					if v := s.Labels[l]; v != "" {
+					if v := s.Labels[l]; v != "" && !IsReservedValue(v) {
 						name = v
 						break
 					}
@@ -351,7 +351,26 @@ func sharedNameWarning(name string) string {
 	return fmt.Sprintf("More than one OpenObserve collector sent the cluster name %q in the last 7 days. Radar refuses this cluster's kube-state metrics (restarts, HPA, workload ownership) and scraped disk metrics, which carry only the name, until the collector is given a unique cluster name or a radar_cluster_uid label, or the other collector's data is more than 7 days old.", name)
 }
 
+// reservedCollectorNameWarning explains a collector match scoped by ID alone.
+func reservedCollectorNameWarning(name string) string {
+	return fmt.Sprintf("This cluster's OpenObserve collector sends the cluster name %q, which OpenObserve treats as its dashboard placeholder and never filters on. Radar matches it by cluster ID only and refuses its kube-state metrics (restarts, HPA, workload ownership) and scraped disk metrics, which carry only the name, until the collector is given another cluster name.", name)
+}
+
 func collectorMatch(uid, name string, usage map[string]map[string]bool) ClusterMatch {
+	if IsReservedValue(name) {
+		// The name can't filter, so the cluster ID is the only matcher and
+		// nothing that carries only the name is read.
+		m := ClusterMatch{
+			By:      "id",
+			Dialect: DialectCollector,
+			Options: RewriteOptions{Matchers: []Matcher{{Name: collectorUIDLabel, Value: uid}}, Dialect: DialectCollector},
+			Label:   collectorUIDLabel,
+			Value:   uid,
+			Warning: reservedCollectorNameWarning(name),
+		}
+		m.Missing = staticMissing(m.Options)
+		return m
+	}
 	unique := name != UnsafeDefaultName && len(usage[name]) == 1 && usage[name][uid]
 	m := ClusterMatch{
 		By:      "id",
@@ -434,6 +453,7 @@ func SuggestName(ctx context.Context, t prom.Transport, sample PodSample, overri
 	type key struct{ label, value string }
 	coverage := map[key]map[string]bool{}
 	found := map[string]bool{}
+	var reserved *key
 	for _, s := range series {
 		uid := s.Labels["uid"]
 		if !sampleUIDs[uid] {
@@ -441,7 +461,11 @@ func SuggestName(ctx context.Context, t prom.Transport, sample PodSample, overri
 		}
 		found[uid] = true
 		for _, l := range candidates {
-			if v := s.Labels[l]; v != "" {
+			if v := s.Labels[l]; v != "" && IsReservedValue(v) {
+				if reserved == nil {
+					reserved = &key{l, v}
+				}
+			} else if v != "" {
 				k := key{l, v}
 				if coverage[k] == nil {
 					coverage[k] = map[string]bool{}
@@ -452,6 +476,9 @@ func SuggestName(ctx context.Context, t prom.Transport, sample PodSample, overri
 	}
 	if len(found) == 0 {
 		return Suggestion{Reason: fmt.Sprintf("None of the %d sampled Pods from namespace %s were found in OpenObserve's kube_pod_info in the last 15 minutes.", len(uids), sample.Namespace)}, nil
+	}
+	if len(coverage) == 0 && reserved != nil {
+		return Suggestion{Reason: fmt.Sprintf("%d sampled Pods from namespace %s are stored under %s=%q, which OpenObserve treats as its dashboard placeholder and never filters on, so it can't identify this cluster. Give the cluster another name, or use the cluster ID label below.", len(found), sample.Namespace, reserved.label, reserved.value)}, nil
 	}
 	if len(coverage) == 0 {
 		// OpenObserve strips its HA dedup label (cluster, by default) on
@@ -522,6 +549,9 @@ func ConfirmedNameMatch(ctx context.Context, t prom.Transport, label, value, own
 	}
 	if value == UnsafeDefaultName {
 		return ClusterMatch{}, ErrUnsafeDefault
+	}
+	if IsReservedValue(value) {
+		return ClusterMatch{}, ErrReservedName
 	}
 	dt := newDiscoveryTransport(t)
 	qv := strconv.Quote(value)
@@ -721,13 +751,13 @@ func ListClusterNames(ctx context.Context, t prom.Transport, overrideLabel strin
 	seen := map[LabelValue]bool{}
 	for _, s := range results[0] {
 		for _, l := range labels {
-			if v := s.Labels[l]; v != "" {
+			if v := s.Labels[l]; v != "" && !IsReservedValue(v) {
 				seen[LabelValue{Label: l, Value: v}] = true
 			}
 		}
 	}
 	for _, s := range results[1] {
-		if v := s.Labels["k8s_cluster"]; v != "" {
+		if v := s.Labels["k8s_cluster"]; v != "" && !IsReservedValue(v) {
 			seen[LabelValue{Label: "k8s_cluster", Value: v}] = true
 		}
 	}

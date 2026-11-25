@@ -49,6 +49,22 @@ var errNoMatchers = errors.New("openobserve: no cluster matcher configured")
 // (label_replace, label_join, count_values).
 var ErrClusterLabelWrite = errors.New("openobserve: queries may not write a cluster label")
 
+// ReservedValuePrefix starts OpenObserve's dashboard placeholder ("_o2_all_"
+// by default, configurable with ZO_DASHBOARD_PLACEHOLDER). OpenObserve drops
+// every matcher whose value equals the placeholder before running a query,
+// so a cluster matcher with such a value would filter nothing.
+const ReservedValuePrefix = "_o2_"
+
+// IsReservedValue reports whether v may be OpenObserve's dashboard
+// placeholder and so can never scope a query.
+func IsReservedValue(v string) bool {
+	return strings.HasPrefix(strings.ToLower(v), ReservedValuePrefix)
+}
+
+// ErrReservedName refuses a cluster name OpenObserve would treat as its
+// dashboard placeholder.
+var ErrReservedName = errors.New(`openobserve: cluster names starting with "_o2_" can't identify a cluster: OpenObserve treats its dashboard placeholder (_o2_all_ by default) as "any value" and drops the filter`)
+
 const (
 	collectorUIDLabel     = "k8s_cluster_uid"
 	collectorClusterLabel = "k8s_cluster"
@@ -188,6 +204,9 @@ func prepare(opts RewriteOptions) (*scope, error) {
 		if m.Value == "" {
 			return nil, fmt.Errorf("openobserve: cluster matcher %q has an empty value", m.Name)
 		}
+		if IsReservedValue(m.Value) {
+			return nil, fmt.Errorf("%w (cluster matcher %s=%q)", ErrReservedName, name, m.Value)
+		}
 		if seen[name] {
 			return nil, fmt.Errorf("openobserve: duplicate cluster matcher %q", name)
 		}
@@ -196,11 +215,14 @@ func prepare(opts RewriteOptions) (*scope, error) {
 	}
 	if s.collector {
 		if opts.CollectorUID != "" {
+			if IsReservedValue(opts.CollectorUID) {
+				return nil, fmt.Errorf("%w (collector UID %q)", ErrReservedName, opts.CollectorUID)
+			}
 			if seen[collectorUIDLabel] {
 				return nil, fmt.Errorf("openobserve: %s is both a cluster matcher and the collector UID", collectorUIDLabel)
 			}
 			s.uid = &labels.Matcher{Type: labels.MatchEqual, Name: collectorUIDLabel, Value: opts.CollectorUID}
-		} else if !s.gatewayAllowed {
+		} else if !s.gatewayAllowed && !seen[collectorUIDLabel] {
 			return nil, errors.New("openobserve: collector scope without a cluster UID must be identified by a unique cluster name")
 		}
 	} else if opts.CollectorUID != "" || opts.GatewayMetricsAllowed {
