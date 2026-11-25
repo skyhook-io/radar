@@ -33,6 +33,10 @@ type decision struct {
 	// had (OpenObserve before v1.2, or a version that couldn't be told), so
 	// every metric is checked before use.
 	legacyStore bool
+	// labelValuesUnscoped: label lookups may ignore their cluster filter
+	// (OpenObserve before v1.1, or a version that couldn't be read), so they
+	// are refused.
+	labelValuesUnscoped bool
 	// reason explains an unmatched or unreachable outcome.
 	reason string
 }
@@ -82,14 +86,15 @@ func resolve(ctx context.Context, conn oo.Connection, cfg config.OpenObserveConf
 	} else {
 		return decision{outcome: outcomeUnmatched, reason: fmt.Sprintf("OpenObserve has had no metrics with this cluster's ID (%s=%s) in the last 15 minutes.", stored.Label, uid)}
 	}
-	// The guard stays on unless the store is positively known to filter
+	// The guards stay on unless the store is positively known to filter
 	// correctly; only a positive detection shows the version warning.
-	legacy, err := oo.LegacyFilterBehaviour(ctx, raw)
+	b, err := oo.DetectStoreBehaviour(ctx, raw)
 	if err != nil {
-		log.Printf("[openobserve] Checking how OpenObserve filters labels (keeping the scoping check on): %v", prom.RedactURLs(err.Error()))
+		log.Printf("[openobserve] Checking which OpenObserve version this is (keeping the scoping checks on where it matters): %v", prom.RedactURLs(err.Error()))
 	}
-	d.legacyStore = err != nil || legacy
-	if err == nil && legacy {
+	d.legacyStore = b.LegacyFilter
+	d.labelValuesUnscoped = b.LabelValuesUnscoped
+	if b.LegacyFilter && b.LegacyKnown {
 		d.versionWarning = oo.VersionWarning
 	}
 	return d

@@ -32,6 +32,13 @@ type RewritingTransport struct {
 	// SchemaFetcher reads a metric's stream columns (NewSchemaFetcher). With
 	// LegacyStore set and no SchemaFetcher, every metric is refused.
 	SchemaFetcher SchemaFetcher
+	// LabelValuesUnscoped refuses label value and label name lookups, with
+	// ErrLabelLookupsUnscoped, for a store that may answer them ignoring
+	// match[] (OpenObserve before v1.1 answers from every series of the
+	// metric). Set it unless the store's version is known
+	// (DetectStoreBehaviour): their answers are plain strings that
+	// FilterResponse can't check.
+	LabelValuesUnscoped bool
 }
 
 var _ prom.Transport = (*RewritingTransport)(nil)
@@ -85,6 +92,10 @@ const (
 // ErrRulesUnscoped refuses alerting and recording rules on a shared
 // OpenObserve: they can't be limited to one cluster.
 var ErrRulesUnscoped = errors.New("alerting and recording rules aren't available from a shared OpenObserve: they can't be limited to one cluster")
+
+// ErrLabelLookupsUnscoped refuses label lookups on a store that may ignore
+// their cluster filter (RewritingTransport.LabelValuesUnscoped).
+var ErrLabelLookupsUnscoped = errors.New("label lookups aren't available from this OpenObserve: Radar couldn't confirm its version limits them to one cluster (OpenObserve before v1.1 ignores the filter). Query the metric with the label in a by() clause instead, for example count by (pod) (kube_pod_info{namespace=\"x\"})")
 
 // ErrMetadataUnscoped refuses metric metadata: OpenObserve answers it with
 // every metric name (and its help text) in the organization, whichever
@@ -146,6 +157,9 @@ func (t *RewritingTransport) Do(ctx context.Context, method, path string, params
 	}
 	if outPath == "/api/v1/label/__name__/values" {
 		return nil, &prom.RefusedError{Message: ErrMetricNamesUnscoped.Error(), Err: ErrMetricNamesUnscoped}
+	}
+	if kind == pathLabels && t.LabelValuesUnscoped {
+		return nil, &prom.RefusedError{Message: ErrLabelLookupsUnscoped.Error(), Err: ErrLabelLookupsUnscoped}
 	}
 
 	// Old stores answer a label-name listing from every series of the named

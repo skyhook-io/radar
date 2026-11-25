@@ -131,9 +131,9 @@ func TestRewritingTransportQueryRangeThroughClient(t *testing.T) {
 
 func TestRewritingTransportKeepsScalarRangeResults(t *testing.T) {
 	for q, want := range map[string]string{
-		`time()`:          `label_replace(vector(time()), "cluster", "oo-b", "", "")`,
-		`1 + 2`:           `label_replace(vector(1 + 2), "cluster", "oo-b", "", "")`,
-		`sum(up)`:         `sum by (cluster) (up{cluster="oo-b"})`,
+		`time()`:  `label_replace(vector(time()), "cluster", "oo-b", "", "")`,
+		`1 + 2`:   `label_replace(vector(1 + 2), "cluster", "oo-b", "", "")`,
+		`sum(up)`: `sum by (cluster) (up{cluster="oo-b"})`,
 	} {
 		f := &fakeOO{body: `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"cluster":"oo-b"},"values":[[1,"1"]]}]}}`}
 		rt, dropped := newRewriting(t, f)

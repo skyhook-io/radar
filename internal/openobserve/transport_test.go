@@ -32,7 +32,7 @@ func TestNotCollectedQueryAnswersEmptyInsteadOfError(t *testing.T) {
 		Dialect:      oo.DialectCollector,
 		CollectorUID: uidB,
 	}
-	tr := transportFactory(testConn(t, srv.URL), opts, false, &health{})(5*time.Second, 0)
+	tr := transportFactory(testConn(t, srv.URL), opts, storeGuards{}, &health{})(5*time.Second, 0)
 	for path, want := range map[string]string{
 		"/api/v1/query":       `"resultType":"vector","result":[]`,
 		"/api/v1/query_range": `"resultType":"matrix","result":[]`,
@@ -66,7 +66,7 @@ func TestOverloadIsRetriedOnceThenReportedUnavailable(t *testing.T) {
 	t.Cleanup(srv.Close)
 	opts := oo.RewriteOptions{Matchers: []oo.Matcher{{Name: "radar_cluster_uid", Value: uidB}}}
 	h := &health{}
-	tr := transportFactory(testConn(t, srv.URL), opts, false, h)(5*time.Second, 0)
+	tr := transportFactory(testConn(t, srv.URL), opts, storeGuards{}, h)(5*time.Second, 0)
 
 	failures.Store(1)
 	if _, err := tr.Do(context.Background(), http.MethodGet, "/api/v1/query", url.Values{"query": {"up"}}); err != nil {
@@ -104,7 +104,7 @@ func TestRateLimitIsReportedAsUnavailable(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	h := &health{}
-	tr := transportFactory(testConn(t, srv.URL), oo.RewriteOptions{Matchers: []oo.Matcher{{Name: "radar_cluster_uid", Value: uidB}}}, false, h)(5*time.Second, 0)
+	tr := transportFactory(testConn(t, srv.URL), oo.RewriteOptions{Matchers: []oo.Matcher{{Name: "radar_cluster_uid", Value: uidB}}}, storeGuards{}, h)(5*time.Second, 0)
 	_, err := tr.Do(context.Background(), http.MethodGet, "/api/v1/query", url.Values{"query": {"up"}})
 	var limited oo.ErrRateLimited
 	if err == nil || !asRateLimited(err, &limited) || limited.RetryAfter != 7*time.Second {
@@ -130,8 +130,8 @@ func TestRateLimitHoldsRequestsForRetryAfter(t *testing.T) {
 	h := &health{now: func() time.Time { return now }}
 	opts := oo.RewriteOptions{Matchers: []oo.Matcher{{Name: "radar_cluster_uid", Value: uidB}}}
 	// Two transports of one relay (a chart query and a health probe) share h.
-	chart := transportFactory(testConn(t, srv.URL), opts, false, h)(5*time.Second, 0)
-	probe := transportFactory(testConn(t, srv.URL), opts, false, h)(5*time.Second, 0)
+	chart := transportFactory(testConn(t, srv.URL), opts, storeGuards{}, h)(5*time.Second, 0)
+	probe := transportFactory(testConn(t, srv.URL), opts, storeGuards{}, h)(5*time.Second, 0)
 	query := func(tr prom.Transport) error {
 		_, err := tr.Do(context.Background(), http.MethodGet, "/api/v1/query", url.Values{"query": {"up"}})
 		return err
@@ -163,7 +163,7 @@ func TestForbiddenQuerySaysTheAccountCantReadMetrics(t *testing.T) {
 		http.StatusForbidden:    "it doesn't let this account read metrics",
 	} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(code) }))
-		tr := transportFactory(testConn(t, srv.URL), oo.RewriteOptions{Matchers: []oo.Matcher{{Name: "radar_cluster_uid", Value: uidB}}}, false, &health{})(5*time.Second, 0)
+		tr := transportFactory(testConn(t, srv.URL), oo.RewriteOptions{Matchers: []oo.Matcher{{Name: "radar_cluster_uid", Value: uidB}}}, storeGuards{}, &health{})(5*time.Second, 0)
 		_, err := tr.Do(context.Background(), http.MethodGet, "/api/v1/query", url.Values{"query": {"up"}})
 		srv.Close()
 		if err == nil || !strings.Contains(err.Error(), want) {
@@ -197,7 +197,7 @@ func TestLegacySchemaFailureMarksSourceUnavailable(t *testing.T) {
 	t.Cleanup(srv.Close)
 	h := &health{}
 	opts := oo.RewriteOptions{Matchers: []oo.Matcher{{Name: "radar_cluster_uid", Value: uidB}}}
-	tr := transportFactory(testConn(t, srv.URL), opts, true, h)(5*time.Second, 0)
+	tr := transportFactory(testConn(t, srv.URL), opts, storeGuards{legacy: true}, h)(5*time.Second, 0)
 	_, err := tr.Do(context.Background(), http.MethodGet, "/api/v1/query", url.Values{"query": {"kube_pod_info"}})
 	want := UnavailablePrefix + ": it doesn't let this account read metrics; give it a role that can read the metrics streams"
 	if err == nil || err.Error() != want {
@@ -226,7 +226,7 @@ func TestErrorsShowNoURL(t *testing.T) {
 	t.Cleanup(srv.Close)
 	h := &health{}
 	opts := oo.RewriteOptions{Matchers: []oo.Matcher{{Name: "radar_cluster_uid", Value: uidB}}}
-	tr := transportFactory(testConn(t, srv.URL), opts, false, h)(5*time.Second, 0)
+	tr := transportFactory(testConn(t, srv.URL), opts, storeGuards{}, h)(5*time.Second, 0)
 	host := strings.TrimPrefix(srv.URL, "http://")
 	for q, want := range map[string]string{
 		"up":      UnavailablePrefix + ": it answered HTTP 500",

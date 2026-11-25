@@ -501,3 +501,48 @@ func TestGuardOffWhenStoreFilters(t *testing.T) {
 		t.Fatalf("sent = %q", sent)
 	}
 }
+
+// The store's version decides the guards. OpenObserve v0.14 answers a label
+// lookup from every series of the metric and its instant probe can come back
+// empty, so the version, not the probe, turns the guards on; v1.2 needs
+// neither; a version that can't be read keeps label lookups refused.
+func TestGuardsFollowStoreVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		f             *oofake.Server
+		legacyWarning bool
+		labelsAllowed bool
+	}{
+		{name: "v0.14.7", f: &oofake.Server{IDs: map[string]string{uidB: "oo-b"}, PublicVersion: "v0.14.7", Undetectable: true}, legacyWarning: true},
+		{name: "v1.1.2", f: &oofake.Server{IDs: map[string]string{uidB: "oo-b"}, Version: "v1.1.2"}, legacyWarning: true, labelsAllowed: true},
+		{name: "v1.2.0", f: &oofake.Server{IDs: map[string]string{uidB: "oo-b"}, Version: "v1.2.0", Legacy: true}, labelsAllowed: true},
+		{name: "unknown, probe says current", f: &oofake.Server{IDs: map[string]string{uidB: "oo-b"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withMetricsClient(t)
+			srv := oofake.Start(t, tc.f)
+			ta := newTestActivator(t, entryFor(srv.URL, uidB), false)
+			ta.Apply(Target{Context: "kind-oo-b", Fingerprint: "fp-b", Client: kubeWithUID(uidB)})
+			ta.wait(t)
+			st := prometheus.GetClient().GetStatus()
+			if st.Source == nil || (st.Source.VersionWarning == oo.VersionWarning) != tc.legacyWarning {
+				t.Fatalf("status source = %+v", st.Source)
+			}
+			before := len(tc.f.Recorded())
+			end := time.Now()
+			values, err := prometheus.GetClient().PromForMCP().LabelValues(context.Background(), "pod", []string{`kube_pod_info{namespace="demo"}`}, end.Add(-time.Hour), end, 10)
+			if tc.labelsAllowed {
+				if err != nil || len(values) != 1 {
+					t.Fatalf("label values = %v, %v", values, err)
+				}
+				return
+			}
+			if !errors.Is(err, oo.ErrLabelLookupsUnscoped) {
+				t.Fatalf("label values err = %v", err)
+			}
+			if sent := tc.f.Recorded()[before:]; len(sent) != 0 {
+				t.Fatalf("label lookup reached OpenObserve: %q", sent)
+			}
+		})
+	}
+}

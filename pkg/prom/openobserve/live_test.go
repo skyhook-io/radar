@@ -193,8 +193,10 @@ func TestLiveLegacyStoreEscapes(t *testing.T) {
 	window := func(match string) url.Values {
 		return url.Values{"match[]": {match}, "start": {strconv.FormatInt(now-600, 10)}, "end": {strconv.FormatInt(now, 10)}}
 	}
+	behaviour, _ := DetectStoreBehaviour(ctx, raw)
+	t.Logf("store behaviour: %+v", behaviour)
 	for _, legacy := range []bool{detected, true} {
-		rt := &RewritingTransport{Inner: raw, Options: optsB, LegacyStore: legacy, SchemaFetcher: NewSchemaFetcher(raw)}
+		rt := &RewritingTransport{Inner: raw, Options: optsB, LegacyStore: legacy, LabelValuesUnscoped: behaviour.LabelValuesUnscoped, SchemaFetcher: NewSchemaFetcher(raw)}
 		client := prom.NewClient(rt)
 
 		escapes := []string{
@@ -232,7 +234,7 @@ func TestLiveLegacyStoreEscapes(t *testing.T) {
 
 		for _, path := range []string{"/api/v1/label/k8s_cluster_uid/values", "/api/v1/label/k8s_pod_name/values", "/api/v1/series"} {
 			body, err := rt.Do(ctx, "GET", path, window("k8s_pod_cpu_usage"))
-			if errors.Is(err, ErrUnscopable) {
+			if errors.Is(err, ErrUnscopable) || errors.Is(err, ErrLabelLookupsUnscoped) {
 				continue
 			}
 			if err != nil {
@@ -266,7 +268,11 @@ func TestLiveLegacyStoreEscapes(t *testing.T) {
 			t.Fatalf("legacy=%v B kube_pod_info: %v, %v", legacy, res, err)
 		}
 		body, err := rt.Do(ctx, "GET", "/api/v1/label/pod/values", window(`kube_pod_info{namespace="demo"}`))
-		if err != nil || !strings.Contains(string(body), "db-0") {
+		if behaviour.LabelValuesUnscoped {
+			if !errors.Is(err, ErrLabelLookupsUnscoped) {
+				t.Fatalf("legacy=%v B pod values on a store whose label lookups aren't scoped: %v %.200s", legacy, err, body)
+			}
+		} else if err != nil || !strings.Contains(string(body), "db-0") {
 			t.Fatalf("legacy=%v B pod values: %v %.200s", legacy, err, body)
 		}
 	}
@@ -299,7 +305,9 @@ func TestLiveSchemaGuardOldData(t *testing.T) {
 	optsB := RewriteOptions{Matchers: []Matcher{{Name: IDLabel, Value: uidB}}}
 	now := time.Now()
 	unix := func(d time.Duration) string { return strconv.FormatInt(now.Add(-d).Unix(), 10) }
-	guarded := &RewritingTransport{Inner: raw, Options: optsB, LegacyStore: true, SchemaFetcher: fetch}
+	behaviour, berr := DetectStoreBehaviour(ctx, raw)
+	t.Logf("store behaviour: %+v (%v)", behaviour, berr)
+	guarded := &RewritingTransport{Inner: raw, Options: optsB, LegacyStore: true, LabelValuesUnscoped: behaviour.LabelValuesUnscoped, SchemaFetcher: fetch}
 
 	type req struct {
 		path   string
@@ -319,7 +327,7 @@ func TestLiveSchemaGuardOldData(t *testing.T) {
 	}
 	for _, r := range leaks {
 		body, err := guarded.Do(ctx, "GET", r.path, r.params)
-		if errors.Is(err, ErrUnscopable) || errors.Is(err, ErrScalarUnsupported) {
+		if errors.Is(err, ErrUnscopable) || errors.Is(err, ErrScalarUnsupported) || errors.Is(err, ErrLabelLookupsUnscoped) {
 			continue
 		}
 		if err != nil {
@@ -346,13 +354,12 @@ func TestLiveSchemaGuardOldData(t *testing.T) {
 		}
 	}
 
-	detected, err := LegacyFilterBehaviour(ctx, raw)
-	guardOn := err != nil || detected
-	t.Logf("legacy detection: %v, %v; guard on: %v", detected, err, guardOn)
+	guardOn := behaviour.LegacyFilter
+	t.Logf("guard on: %v", guardOn)
 	if want := os.Getenv("OPENOBSERVE_LIVE_LEGACY"); want != "" && guardOn != (want == "true") {
 		t.Fatalf("guard on = %v, want %s", guardOn, want)
 	}
-	for _, rt := range []*RewritingTransport{guarded, {Inner: raw, Options: optsB, LegacyStore: guardOn, SchemaFetcher: fetch}} {
+	for _, rt := range []*RewritingTransport{guarded, {Inner: raw, Options: optsB, LegacyStore: guardOn, LabelValuesUnscoped: behaviour.LabelValuesUnscoped, SchemaFetcher: fetch}} {
 		res, err := prom.NewClient(rt).Query(ctx, `sum by (namespace, pod) (rate(container_cpu_usage_seconds_total{namespace="demo",container!=""}[5m]))`)
 		if err != nil || len(res.Series) < 3 {
 			t.Fatalf("guard=%v B cpu: %v, %v", rt.LegacyStore, res, err)
@@ -367,7 +374,11 @@ func TestLiveSchemaGuardOldData(t *testing.T) {
 			t.Fatalf("guard=%v B kube_pod_info over 7d: %v, %v", rt.LegacyStore, res, err)
 		}
 		body, err := rt.Do(ctx, "GET", "/api/v1/label/pod/values", url.Values{"match[]": {`kube_pod_info{namespace="demo"}`}, "start": {unix(6 * 24 * time.Hour)}, "end": {unix(0)}})
-		if err != nil || !strings.Contains(string(body), "db-0") {
+		if behaviour.LabelValuesUnscoped {
+			if !errors.Is(err, ErrLabelLookupsUnscoped) {
+				t.Fatalf("guard=%v B pod values on a store whose label lookups aren't scoped: %v %.200s", rt.LegacyStore, err, body)
+			}
+		} else if err != nil || !strings.Contains(string(body), "db-0") {
 			t.Fatalf("guard=%v B pod values: %v %.200s", rt.LegacyStore, err, body)
 		}
 	}

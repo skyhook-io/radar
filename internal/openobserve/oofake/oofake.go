@@ -33,6 +33,11 @@ type Server struct {
 	// Undetectable leaves the filter-behaviour check without data, so the
 	// version can't be told.
 	Undetectable bool
+	// Version, when set, is reported at /api/<org>/config, as OpenObserve
+	// v1.1 and later do; PublicVersion at the public /config, as older
+	// versions do.
+	Version       string
+	PublicVersion string
 
 	mu      sync.Mutex
 	queries []string
@@ -74,6 +79,18 @@ func (f *Server) serve(w http.ResponseWriter, r *http.Request) {
 	if f.MetricsForbidden && q != "vector(1)" {
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte(`{"code":403,"message":"Unauthorized Access"}`))
+		return
+	}
+	if r.URL.Path == "/api/default/config" && f.Version != "" {
+		_ = json.NewEncoder(w).Encode(map[string]string{"version": f.Version})
+		return
+	}
+	if r.URL.Path == "/config" && f.PublicVersion != "" {
+		_ = json.NewEncoder(w).Encode(map[string]string{"version": f.PublicVersion})
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/api/default/prometheus/api/v1/label/") {
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "success", "data": []string{"db-0"}})
 		return
 	}
 	if m, ok := strings.CutPrefix(r.URL.Path, "/api/default/streams/"); ok && strings.HasSuffix(m, "/schema") {

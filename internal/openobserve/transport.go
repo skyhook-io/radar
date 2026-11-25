@@ -285,8 +285,14 @@ func (t unavailableTransport) Do(context.Context, string, string, url.Values) ([
 	return nil, errors.New(t.reason)
 }
 
+// storeGuards are the checks a store's version calls for.
+type storeGuards struct {
+	legacy              bool
+	labelValuesUnscoped bool
+}
+
 // transportFactory builds the scoped transport stack for one use.
-func transportFactory(conn oo.Connection, opts oo.RewriteOptions, legacyStore bool, h *health) func(time.Duration, int64) prom.Transport {
+func transportFactory(conn oo.Connection, opts oo.RewriteOptions, guards storeGuards, h *health) func(time.Duration, int64) prom.Transport {
 	return func(timeout time.Duration, maxResponseBytes int64) prom.Transport {
 		httpTr, err := conn.NewHTTPTransport(timeout)
 		if err != nil {
@@ -301,10 +307,11 @@ func transportFactory(conn oo.Connection, opts oo.RewriteOptions, legacyStore bo
 		httpTr.MaxResponseBytes = maxResponseBytes
 		retry := &retryTransport{inner: httpTr, health: h}
 		return notCollectedTransport{inner: &oo.RewritingTransport{
-			Inner:         retry,
-			Options:       opts,
-			LegacyStore:   legacyStore,
-			SchemaFetcher: retry.schemaFetcher(oo.NewSchemaFetcher(httpTr)),
+			Inner:               retry,
+			Options:             opts,
+			LegacyStore:         guards.legacy,
+			LabelValuesUnscoped: guards.labelValuesUnscoped,
+			SchemaFetcher:       retry.schemaFetcher(oo.NewSchemaFetcher(httpTr)),
 		}}
 	}
 }

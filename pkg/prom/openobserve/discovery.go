@@ -133,6 +133,7 @@ const (
 	discoveryRetries     = 2
 	uidBatchSize         = 64
 	lookback             = "15m"
+	lookbackDuration     = 15 * time.Minute
 	// activeWindow is how recently a Pod must have reported to count as
 	// another cluster writing the same name. A Pod replaced under the same
 	// name (a StatefulSet's db-0) stops reporting; a cluster that really
@@ -769,14 +770,14 @@ func DetectFamilies(ctx context.Context, t prom.Transport, opts RewriteOptions) 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			series, err := query(ctx, scoped, fmt.Sprintf(`count(last_over_time(%s[%s]))`, familyMetrics[f], lookback))
+			present, err := hasRecentData(ctx, scoped, familyMetrics[f])
 			switch {
 			case errors.Is(err, ErrNotCollected):
 				missing[i] = true
 			case err != nil:
 				errs[i] = fmt.Errorf("openobserve: detect %s: %w", f, err)
 			default:
-				missing[i] = !hasPositive(series)
+				missing[i] = !present
 			}
 		}()
 	}
@@ -808,27 +809,59 @@ func hasPositive(series []prom.Series) bool {
 var legacyProbeMetrics = []string{"kube_pod_info", "up", "k8s_pod_cpu_time"}
 
 // LegacyFilterBehaviour reports whether the store ignores a matcher on a
-// label a metric never had (OpenObserve before v1.2), by filtering a metric
-// that has data on a label nobody writes. Show VersionWarning when true.
+// label a metric never had (OpenObserve before v1.2). With a
+// *prom.HTTPTransport it reads the store's version; otherwise, or when the
+// version can't be read, it filters a metric that has data on a label nobody
+// writes. Show VersionWarning when true. DetectStoreBehaviour also says
+// whether label lookups can be scoped.
 func LegacyFilterBehaviour(ctx context.Context, t prom.Transport) (bool, error) {
+	if ht, ok := t.(*prom.HTTPTransport); ok {
+		if v, err := FetchVersion(ctx, ht); err == nil {
+			return v.Before(1, 2), nil
+		}
+	}
+	return probeLegacyFilter(ctx, t)
+}
+
+func probeLegacyFilter(ctx context.Context, t prom.Transport) (bool, error) {
 	dt := newDiscoveryTransport(t)
 	for _, metric := range legacyProbeMetrics {
-		ignored, err := query(ctx, dt, fmt.Sprintf(`count(last_over_time(%s{radar_probe_never_written="x"}[%s]))`, metric, lookback))
+		ignored, err := hasRecentData(ctx, dt, metric+`{radar_probe_never_written="x"}`)
 		if err != nil {
 			return false, err
 		}
-		if hasPositive(ignored) {
+		if ignored {
 			return true, nil
 		}
-		all, err := query(ctx, dt, fmt.Sprintf(`count(last_over_time(%s[%s]))`, metric, lookback))
+		all, err := hasRecentData(ctx, dt, metric)
 		if err != nil {
 			return false, err
 		}
-		if hasPositive(all) {
+		if all {
 			return false, nil
 		}
 	}
 	return false, ErrNoProbeData
+}
+
+// hasRecentData reports whether selector has a sample in the last 15
+// minutes. Older OpenObserve versions can answer the instant query empty
+// while range queries over the same data, which charts use, answer; a range
+// query confirms an empty instant answer.
+func hasRecentData(ctx context.Context, t prom.Transport, selector string) (bool, error) {
+	series, err := query(ctx, t, fmt.Sprintf(`count(last_over_time(%s[%s]))`, selector, lookback))
+	if err != nil {
+		return false, err
+	}
+	if hasPositive(series) {
+		return true, nil
+	}
+	end := time.Now()
+	res, err := prom.NewClient(t).QueryRange(ctx, fmt.Sprintf(`count(%s)`, selector), end.Add(-lookbackDuration), end, time.Minute)
+	if err != nil {
+		return false, err
+	}
+	return hasPositive(res.Series), nil
 }
 
 // LabelValue is one cluster name as OpenObserve stores it.

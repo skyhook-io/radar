@@ -1069,9 +1069,15 @@ startup and on each context switch and remembers the result for five minutes.
 A change made in Settings applies at once; one made with the CLI applies the
 next time Radar switches to the context or restarts.
 
-**Version.** OpenObserve before v1.2 ignores a filter on a label a metric doesn't
-have, so Radar detects this, warns, and only shows metrics whose data carries the
-cluster label; others show as not collected. Upgrade to v1.2 or later.
+**Version.** Radar reads OpenObserve's version from its config endpoint
+(`/api/<org>/config`, or `/config` before v1.1). OpenObserve before v1.2
+ignores a filter on a label a metric doesn't have, so Radar warns and only
+shows metrics whose data carries the cluster label; others show as having no
+data. OpenObserve before v1.1 also answers label lookups (the values of a label,
+such as Pod names) from every cluster's series, so Radar refuses them there.
+When the version can't be read, Radar keeps both checks on (the label check
+always, the metric check unless a test query shows the store filters). Upgrade
+to v1.2 or later.
 
 **Service account.** OpenObserve's open-source edition has no read-only role
 (RBAC is an Enterprise feature), so a service account can also write. Use a

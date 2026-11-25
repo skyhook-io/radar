@@ -23,9 +23,12 @@ const (
 
 // route answers queries containing every substring in match.
 type route struct {
-	match []string
-	rows  []map[string]string
-	err   error
+	// rangeOnly answers only range queries, as older OpenObserve versions
+	// leave instant queries over a range selector empty.
+	rangeOnly bool
+	match     []string
+	rows      []map[string]string
+	err       error
 }
 
 // routeStore is a fake OpenObserve answering by query text, the way the
@@ -52,14 +55,18 @@ func (s *routeStore) Do(ctx context.Context, _, path string, params url.Values) 
 	if s.delay > 0 {
 		time.Sleep(s.delay)
 	}
-	if path != "/api/v1/query" {
+	if path != "/api/v1/query" && path != "/api/v1/query_range" {
 		return nil, fmt.Errorf("unexpected path %s", path)
 	}
+	rangeQuery := path == "/api/v1/query_range"
 	q := params.Get("query")
 	s.mu.Lock()
 	s.queries = append(s.queries, q)
 	s.mu.Unlock()
 	for _, r := range s.routes {
+		if r.rangeOnly && !rangeQuery {
+			continue
+		}
 		all := true
 		for _, sub := range r.match {
 			if !strings.Contains(q, sub) {
@@ -71,10 +78,29 @@ func (s *routeStore) Do(ctx context.Context, _, path string, params url.Values) 
 			if r.err != nil {
 				return nil, r.err
 			}
+			if rangeQuery {
+				return matrixBody(r.rows), nil
+			}
 			return vectorBody(r.rows), nil
 		}
 	}
+	if rangeQuery {
+		return matrixBody(nil), nil
+	}
 	return vectorBody(nil), nil
+}
+
+func matrixBody(rows []map[string]string) []byte {
+	type series struct {
+		Metric map[string]string `json:"metric"`
+		Values [][2]any          `json:"values"`
+	}
+	result := make([]series, 0, len(rows))
+	for _, r := range rows {
+		result = append(result, series{Metric: r, Values: [][2]any{{1700000000, "1"}}})
+	}
+	body, _ := json.Marshal(map[string]any{"status": "success", "data": map[string]any{"resultType": "matrix", "result": result}})
+	return body
 }
 
 func (s *routeStore) Address() string { return "fake" }
@@ -498,7 +524,8 @@ func TestDetectFamiliesConcurrencyCap(t *testing.T) {
 	if n := store.maxSeen.Load(); n > 4 || n < 2 {
 		t.Fatalf("max concurrent queries = %d", n)
 	}
-	if len(store.sent()) != len(AllFamilies) {
+	// An empty instant answer is confirmed with a range query.
+	if len(store.sent()) != 2*len(AllFamilies) {
 		t.Fatalf("queries = %d", len(store.sent()))
 	}
 }

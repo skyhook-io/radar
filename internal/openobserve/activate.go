@@ -330,11 +330,11 @@ func (a *Activator) applyLocked(d decision, conn oo.Connection, cfg config.OpenO
 			MissingFamilies: familyNames(m.Missing),
 		}
 		a.enableLocked(prometheus.RelayConfig{
-			Key:          "openobserve-local|" + key + "|" + uid + "|" + optionsKey(m.Options) + fmt.Sprintf("|legacy=%v", d.legacyStore),
+			Key:          "openobserve-local|" + key + "|" + uid + "|" + optionsKey(m.Options) + fmt.Sprintf("|legacy=%v|labels-unscoped=%v", d.legacyStore, d.labelValuesUnscoped),
 			Endpoint:     conn.PrometheusURL(),
 			Address:      Address(conn),
 			Source:       src,
-			NewTransport: transportFactory(conn, m.Options, d.legacyStore, h),
+			NewTransport: transportFactory(conn, m.Options, storeGuards{legacy: d.legacyStore, labelValuesUnscoped: d.labelValuesUnscoped}, h),
 			Health:       h.get,
 		})
 	case outcomeUnreachable:
