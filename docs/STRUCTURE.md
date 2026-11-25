@@ -66,6 +66,7 @@ radar/
 │   │   ├── portforward.go     # Port forwarding sessions
 │   │   ├── resource_counts.go # Resource counting
 │   │   ├── dashboard.go       # Dashboard summary endpoint
+│   │   ├── workload_actions.go # Built-in workload and CronJob actions: scale, pause/resume, revisions/rollback, CronJob trigger/suspend/resume
 │   │   ├── argo_handlers.go   # ArgoCD sync/refresh/terminate/suspend/resume/rollback/selective-sync
 │   │   ├── flux_handlers.go   # FluxCD reconcile/suspend/resume/sync-with-source
 │   │   ├── gitops_handlers.go # /api/gitops/tree + /api/gitops/insights handlers
