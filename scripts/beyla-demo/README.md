@@ -116,6 +116,14 @@ the flow would still count twice. Without the node attributes (configs A-C), the
 be told apart from two replicas of one owner running on different nodes. The
 Service-attributed series has no destination node and comes from one agent only.
 
+**Node-to-node UDP is marked as likely overlay.** On a VXLAN or Geneve CNI
+(flannel, the k3s default, for example) Beyla also sees the encapsulated pod
+traffic on the node's own NIC: both owner types `Node`, `transport="UDP"`. Radar
+marks it `likelyOverlay` and offers "Hide node-to-node overlay", off by default.
+It needs `transport` (configs B and D). With `dst.port` too, only ports 4789,
+8472 and 6081 count; with `transport` alone it is a guess. kind's default CNI routes without
+encapsulation, so this cluster does not produce such traffic.
+
 ## Metric names
 
 Grafana's Beyla emits `beyla_network_flow_bytes_total`; upstream OpenTelemetry
