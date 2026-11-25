@@ -12,7 +12,7 @@ import {
   EditableYamlView,
   FetchResult,
   Section,
-  type WorkloadTabType,
+  type WorkloadDetailTab,
   type WorkloadExtraTab,
   type GitOpsOwnerRef,
   type HelmOwnerRef,
@@ -153,11 +153,11 @@ import { recordUsageEvent } from '../../api/usage-data'
 import { issueResourceOpener } from './issueResourceOpener'
 import { isVeleroBackupKind } from '../velero/routes'
 
-type TabType = WorkloadTabType
+type TabType = WorkloadDetailTab
 
 // The usage-report view a tab counts under. Timeline holds the resource's
 // events (it replaced the Events tab), so it counts as panel:events.
-const PANEL_USAGE_VIEWS: Readonly<Partial<Record<TabType | "deploys", string>>> = {
+const PANEL_USAGE_VIEWS: Readonly<Partial<Record<TabType, string>>> = {
   logs: 'panel:logs',
   yaml: 'panel:yaml',
   metrics: 'panel:metrics',
@@ -604,8 +604,8 @@ export function WorkloadView({
   // recount the same open tab: the drawer mounts hidden WorkloadView layers
   // for expand-on-hover and crossfades.
   const handleTabChange = useCallback(
-    (tab: TabType | 'deploys', opts?: { replace?: boolean }) => {
-      const panel = PANEL_USAGE_VIEWS[tab]
+    (tab: TabType, opts?: { replace?: boolean }) => {
+      const panel = Object.hasOwn(PANEL_USAGE_VIEWS, tab) ? PANEL_USAGE_VIEWS[tab] : undefined
       if (panel && tab !== migratedTab) recordUsageEvent({ type: 'view', name: panel })
       const params = new URLSearchParams(searchParams)
       if (tab === 'overview') {
@@ -640,6 +640,7 @@ export function WorkloadView({
   const {
     data: resourceResponse,
     isLoading: resourceLoading,
+    isFetching: resourceFetching,
     error: resourceError,
     refetch: refetchResource,
   } = useResourceWithRelationships<any>(apiKind, namespace, name, rest.group)
@@ -1279,6 +1280,7 @@ export function WorkloadView({
         renderServicePortAction={renderServicePortAction}
         renderServicePortPanel={renderServicePortPanel}
         isLoading={resourceLoading}
+        isFetching={resourceFetching}
         resourceError={resourceError}
         refetch={refetchResourceAndRuns}
         // Timeline
@@ -1314,6 +1316,7 @@ export function WorkloadView({
         yamlSchemaLoader={features?.yamlSchemas ? fetchYamlSchemas : undefined}
         // Tab state (URL-synced)
         activeTab={migratedTab}
+        extraTabsComplete={migratedTab === 'deploys' ? true : undefined}
         onTabChange={handleTabChange}
         // Render props
         renderLogsTab={(props) => (

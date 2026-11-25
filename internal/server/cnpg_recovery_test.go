@@ -34,7 +34,7 @@ func apiForbidden(resource string) error {
 
 func TestHandleCNPGRestoreCapability(t *testing.T) {
 	for _, allowed := range []bool{false, true} {
-		srv := &Server{permCache: auth.NewPermissionCache()}
+		srv := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 		perms := &auth.UserPermissions{AllowedNamespaces: []string{"db"}}
 		perms.SetCanI("create", cnpgsvc.Group, "clusters", "db", allowed)
 		srv.permCache.Set("alice", nil, perms)

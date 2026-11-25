@@ -74,7 +74,7 @@ describe('application resource hosts', () => {
     const path = resourceDetailRedirect({ ...cluster, kind: 'clusters' }, search)!
     const url = new URL(path, 'http://radar.test')
     expect(url.pathname).toBe('/cnpg/clusters/db/pg')
-    expect(Object.fromEntries(url.searchParams)).toEqual({ ctx: 'kind-demo', tab: 'activity', drawer: 'pods:pg-1', 'ai-run': 'run' })
+    expect(Object.fromEntries(url.searchParams)).toEqual({ ctx: 'kind-demo', tab: 'events', drawer: 'pods:pg-1', 'ai-run': 'run' })
     expect(search.get('tab')).toBe('events')
     expect(search.get('apiGroup')).toBe('postgresql.cnpg.io')
   })

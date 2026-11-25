@@ -28,12 +28,6 @@ const (
 
 func fluxRelatedResources(root *unstructured.Unstructured) []relatedResource {
 	var out []relatedResource
-	rootRef := ResourceRef{
-		Group:     apiGroup(root),
-		Kind:      root.GetKind(),
-		Namespace: root.GetNamespace(),
-		Name:      root.GetName(),
-	}
 
 	for _, source := range gitops.FluxSourceReferences(root) {
 		out = append(out, relatedResource{
@@ -43,28 +37,9 @@ func fluxRelatedResources(root *unstructured.Unstructured) []relatedResource {
 		})
 	}
 
-	deps, _, _ := unstructured.NestedSlice(root.Object, "spec", "dependsOn")
-	for _, item := range deps {
-		m, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		name := gitops.StringValue(m["name"])
-		if name == "" {
-			continue
-		}
-		namespace := gitops.StringValue(m["namespace"])
-		if namespace == "" {
-			namespace = root.GetNamespace()
-		}
-		ref := ResourceRef{
-			Group:     rootRef.Group,
-			Kind:      rootRef.Kind,
-			Namespace: namespace,
-			Name:      name,
-		}
+	for _, dep := range gitops.FluxDependsOn(root) {
 		out = append(out, relatedResource{
-			Ref:  ref,
+			Ref:  ResourceRef{Group: dep.Group, Kind: dep.Kind, Namespace: dep.Namespace, Name: dep.Name},
 			Type: EdgeDependsOn,
 			Data: map[string]any{"relationship": "depends on"},
 		})

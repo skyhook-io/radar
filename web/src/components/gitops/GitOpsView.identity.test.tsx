@@ -19,6 +19,7 @@ vi.mock('../../api/client', async (importOriginal) => {
   }
 })
 vi.mock('../ui/Toast', () => ({ useToast: () => ({ showError: vi.fn(), showSuccess: vi.fn(), showToast: vi.fn() }) }))
+vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({ connection: { state: 'connected', context: 'test' } }) }))
 vi.mock('../useContextSwitchFlow', () => ({ useContextSwitchFlow: () => ({ confirmDialog: null }) }))
 vi.mock('./useDestinationCluster', () => ({ useDestinationCluster: (...args: unknown[]) => { destinationRequest(...args); return {} } }))
 vi.mock('../../hooks/useKeyboardShortcuts', () => ({ useRegisterShortcut: () => {} }))

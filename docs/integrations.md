@@ -1014,6 +1014,21 @@ are redacted in its column and drawer; the YAML view and MCP show the object as 
 | WorkflowTemplate | `argoproj.io/v1alpha1` | — | Yes | — |
 | CronWorkflow | `argoproj.io/v1alpha1` | — | Generic | — |
 
+**Stop a Workflow** with `POST /api/workflows/{namespace}/{name}/stop` (capability `workflowStop`). Send a JSON object with the reviewed Workflow's `metadata.uid` as `uid` and an explicit `strategy` of `Stop` or `Terminate`. An in-place `argo retry` preserves the Workflow UID, so callers that must stop only the execution they reviewed should also send its reviewed `resourceVersion`. Missing either required field or supplying an unknown strategy returns 400. The body limit is 1 KiB.
+
+Argo reconciles `spec.shutdown` asynchronously. Stop allows exit handlers to run. Terminate skips them and can escalate an existing Stop. Older Argo controllers (for example, v3.5) may leave shutdown pending while the Workflow is globally suspended, so watch `status.phase` for completion. Radar checks the Workflow in this order.
+
+1. A different UID means the name now identifies another run. Radar returns 409 `workflow_replaced`.
+2. A finished run returns 409 `workflow_finished`.
+3. If the stored shutdown already satisfies the request, Radar returns 200 with that `shutdown` and `changed: false`. A stored Terminate satisfies either strategy.
+4. If a patch is still needed and the caller supplied a stale version, Radar returns 409 `workflow_changed`.
+
+Radar patches at the version it just read. With a caller-supplied version, a patch conflict returns 409 `workflow_changed` immediately. Otherwise Radar reads the Workflow again and repeats all four checks. If all four patch attempts conflict, it returns 409 `workflow_changed`.
+
+After Kubernetes accepts the patch, Radar returns 200 with the stored `shutdown`, including a strategy rewritten by admission or an empty string if admission removed it. `changed` is true only if the stored strategy differs from the value Radar read for that patch. A patch rejected by Kubernetes as invalid returns 422.
+
+Kubernetes checks the caller's `get` permission on the Workflow for the read and `patch` for a write. On a shared listener without authentication, anyone who can reach Radar can stop Workflows its Kubernetes identity can read and patch. The stock chart's Argo permissions are read-only. Same-origin and [connection binding](connection-lifecycle.md) checks apply.
+
 ---
 
 ## Istio

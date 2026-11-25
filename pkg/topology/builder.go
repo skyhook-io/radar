@@ -7288,19 +7288,14 @@ func isCRDGVR(provider DynamicProvider, gvr schema.GroupVersionResource, kind st
 	return provider.IsCRD(kind)
 }
 
-// addGenericCRDNodes adds CRD nodes connected to the topology via owner references.
-// It uses two-phase resolution: first collecting all candidate CRD resources, then
-// iteratively adding nodes whose owners are already in the topology. This handles
-// multi-level CRD chains (e.g., Certificate → CertificateRequest → Order) where
-// intermediate nodes only become resolvable after their parents are added.
-func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptions) ([]Node, []Edge) {
-	nodes, edges, _ = b.enrollGenericCRDNodes(nodes, edges, opts, nil)
-	return nodes, edges
-}
-
-// enrollGenericCRDNodes is addGenericCRDNodes that also returns the issuer
-// dependencies of the cert-manager issuance stages it admitted, parsed from
-// the objects enrollment already read so the issuer join lists nothing again.
+// enrollGenericCRDNodes adds CRD nodes connected to the topology via owner
+// references. It uses two-phase resolution: first collecting all candidate CRD
+// resources, then iteratively adding nodes whose owners are already in the
+// topology. This handles multi-level CRD chains (e.g., Certificate →
+// CertificateRequest → Order) where intermediate nodes only become resolvable
+// after their parents are added. It also returns the issuer dependencies of the
+// cert-manager issuance stages it admitted, parsed from the objects enrollment
+// already read so the issuer join lists nothing again.
 //
 // ownerUIDs (resource key -> UID) names the incarnation of owners the caller
 // drew from their objects; an owner reference naming another UID for one of

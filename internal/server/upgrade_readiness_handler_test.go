@@ -53,7 +53,7 @@ func TestUpgradeReadinessNamespacesIntersectsForcedScopeWithUserAccess(t *testin
 		k8s.ForceNamespaceScope = previousForce
 	})
 
-	s := &Server{permCache: auth.NewPermissionCache()}
+	s := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	s.permCache.Set("alice", nil, &auth.UserPermissions{AllowedNamespaces: []string{"tenant-b"}})
 	req := requestWithUser("GET", "/api/upgrade-readiness", &auth.User{Username: "alice"})
 	if got := s.upgradeReadinessNamespaces(req); !readscope.NoNamespaceAccess(got) {

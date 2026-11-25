@@ -18,7 +18,6 @@ import (
 	"reflect"
 	"regexp"
 	"runtime"
-	"runtime/debug"
 	"slices"
 	"sort"
 	"strconv"
@@ -198,7 +197,7 @@ type Server struct {
 	yamlSchemaFetchGroup  singleflight.Group
 
 	// accessReviews collapses identical access reviews in flight at once.
-	accessReviews singleflight.Group
+	accessReviews pkgauth.AccessReviews
 
 	// aiMu guards aiDiagnoser and aiRuns: refreshAIEngine turns the engine on
 	// when an agent CLI is installed while Radar runs. Read them through
@@ -376,12 +375,7 @@ func New(cfg Config) *Server {
 
 	// Initialize auth components when auth is enabled
 	if s.authConfig.Enabled() {
-		// Stamp cache entries with the current K8s context so an in-flight
-		// request mid-context-switch can't use the previous cluster's
-		// AllowedNamespaces / canI results to authorize the new cluster's
-		// reads. Without the stamp, the window between PerformContextSwitch
-		// step 2 (client swap) and the post-switch invalidation is exploitable.
-		s.permCache = auth.NewPermissionCache().WithContextName(k8s.GetContextName)
+		s.permCache = auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)
 
 		if s.authConfig.Mode == "oidc" {
 			// Validate required OIDC fields before attempting provider discovery
@@ -840,6 +834,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Post("/cronjobs/{namespace}/{name}/trigger", s.bindWrite(s.handleTriggerCronJob))
 			r.Post("/cronjobs/{namespace}/{name}/suspend", s.bindWrite(s.handleSuspendCronJob))
 			r.Post("/cronjobs/{namespace}/{name}/resume", s.bindWrite(s.handleResumeCronJob))
+
+			r.Post("/workflows/{namespace}/{name}/stop", s.bindWrite(s.handleWorkflowStop))
 
 			// Workload restart, scale, rollback. Writes are bound to the connection
 			// the caller names (bindWrite in connection_binding.go).
@@ -1592,6 +1588,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		RuntimeAdvisoryChecks:       true,
 		RuntimeAdvisoryProgress:     true,
 		CronJobTriggerJobName:       true,
+		WorkflowStop:                true,
 	}
 }
 
@@ -1967,54 +1964,19 @@ func (s *Server) canReadUserDecision(ctx context.Context, user *auth.User, group
 		return true, true
 	}
 	perms := s.permCache.Get(user.Username, user.Groups)
-	if perms != nil {
-		if v, ok := perms.CanI(verb, group, resource, namespace); ok {
-			return v, true
-		}
-	}
-	type verdict struct{ allowed, authoritative bool }
 	// Keyed by connection generation, not context name: a reconnect under the
 	// same name can reach a different cluster, and the review must run on the
 	// client its key names.
 	conn := k8s.Current()
 	client, generation := conn.Client(), conn.ClientGeneration()
-	key := pkgauth.IdentityCacheKey(user.Username, user.Groups) + strings.Join([]string{strconv.FormatUint(generation, 10), verb, group, resource, namespace}, "\x00")
-	review := s.accessReviews.DoChan(key, func() (v any, err error) {
-		// The review runs on its own goroutine, where a panic would end the
-		// process instead of failing one request.
-		defer func() {
-			if r := recover(); r != nil {
-				log.Printf("[auth] access review panicked: %v\n%s", r, debug.Stack())
-				v, err = verdict{}, nil
-			}
-		}()
-		// Callers that didn't start the review share it, so it runs on its own
-		// clock rather than the first caller's: a SubjectAccessReview is a POST,
-		// which the client's request deadlines leave unbounded.
-		reviewCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), accessReviewTimeout)
+	question := pkgauth.AccessReviewQuestion{Verb: verb, Group: group, Resource: resource, Namespace: namespace}
+	return s.accessReviews.Decide(ctx, user, perms, strconv.FormatUint(generation, 10), question, func(ctx context.Context) (bool, bool) {
+		// A SubjectAccessReview is a POST, which the client's request deadlines
+		// leave unbounded.
+		ctx, cancel := context.WithTimeout(ctx, accessReviewTimeout)
 		defer cancel()
-		allowed, authoritative := canReadUserSARWith(reviewCtx, client, user, group, resource, namespace, verb)
-		// Cache only a real apiserver verdict. A transient failure (no client, SAR
-		// error, timeout) fails closed for this call but must NOT be memoized, or a
-		// momentary blip would deny the tuple for the whole cache TTL.
-		if authoritative && perms != nil {
-			perms.SetCanI(verb, group, resource, namespace, allowed)
-		}
-		return verdict{allowed, authoritative}, nil
+		return canReadUserSARWith(ctx, client, user, group, resource, namespace, verb)
 	})
-	select {
-	case r := <-review:
-		v := r.Val.(verdict)
-		// A caller that joined another's review keeps the answer in its own
-		// permissions too; after a cache expiry they can be different entries.
-		if v.authoritative && perms != nil {
-			perms.SetCanI(verb, group, resource, namespace, v.allowed)
-		}
-		return v.allowed, v.authoritative
-	case <-ctx.Done():
-		// This caller gave up; the review carries on for the others.
-		return false, false
-	}
 }
 
 // canReadUserSAR runs a single fresh SubjectAccessReview for (group, resource,
@@ -2027,7 +1989,7 @@ func (s *Server) canReadUserDecision(ctx context.Context, user *auth.User, group
 // canReadUser wraps this behind the shared cache. The SSE change authorizer
 // calls it directly instead: reusing the shared cache there would let a decision
 // already up to the cache TTL old be re-cached under the SSE memo's own TTL,
-// stacking staleness — and the shared entry's context stamping wouldn't help,
+// stacking staleness — and the shared entry's connection stamping wouldn't help,
 // because the SSE memo, not the shared cache, is what a long-lived stream reads.
 // A fresh SAR keeps the SSE staleness bounded to that memo's TTL alone.
 func (s *Server) canReadUserSAR(ctx context.Context, user *auth.User, group, resource, namespace, verb string) (allowed bool, authoritative bool) {
@@ -5642,7 +5604,11 @@ func (s *Server) writeSwitchPreflightError(w http.ResponseWriter, prefix string,
 }
 
 func (s *Server) writeError(w http.ResponseWriter, status int, message string) {
-	body := map[string]string{"error": message}
+	s.writeErrorFields(w, status, message, map[string]string{})
+}
+
+func (s *Server) writeErrorFields(w http.ResponseWriter, status int, message string, body map[string]string) {
+	body["error"] = message
 	if k8s.IsUserTokenRequired(message) {
 		status = http.StatusForbidden
 		body["reason"] = pkgauth.UserTokenRequiredReason
@@ -5950,6 +5916,10 @@ func (s *Server) getClientSafetySnapshotForRequest(r *http.Request) (kubernetes.
 	return conn.ClientInterface(), conn.ContextBinding()
 }
 
+func currentPermissionConnection() string {
+	return strconv.FormatUint(k8s.Current().ClientGeneration(), 10)
+}
+
 // getUserNamespaces returns namespace filtering for the current user.
 // When auth is disabled, returns the requested namespaces unchanged.
 // When auth is enabled, intersects with the user's allowed namespaces.
@@ -5974,46 +5944,56 @@ func (s *Server) getUserNamespacesWithStatus(r *http.Request, requested []string
 	if perms == nil {
 		log.Printf("[auth] No cached permissions for %s — discovering namespaces", user.Username)
 		// Discover namespaces synchronously on first request
-		client := k8s.GetClient()
+		conn := k8s.Current()
+		client, generation := conn.Client(), conn.ClientGeneration()
 		if client == nil {
 			log.Printf("[auth] K8s client not available for namespace discovery (user=%s) — denying access", k8s.SanitizeForLog(user.Username))
 			return []string{}, true // fail-closed: cannot verify permissions
 		}
-
-		// Get all namespace names from cache
-		var allNamespaces []string
-		if cache := k8s.GetResourceCache(); cache != nil {
-			if nsLister := cache.Namespaces(); nsLister != nil {
-				nsList, _ := nsLister.List(labels.Everything())
-				for _, ns := range nsList {
-					allNamespaces = append(allNamespaces, ns.Name)
-				}
-			}
-		}
-		// Fallback for namespace-scoped SAs: when the cluster-wide namespace
-		// informer is unavailable (SA lacks list-namespaces RBAC), the lister
-		// is empty and DiscoverNamespaces' per-namespace SAR loop has nothing
-		// to iterate — every non-admin user gets [] even when they have RBAC
-		// on the SA's bound namespace. Seed candidates from the kubeconfig
-		// context / --namespace fallback so those users get surfaced.
-		if len(allNamespaces) == 0 {
-			if accessible, _ := k8s.GetAccessibleNamespaces(r.Context()); len(accessible) > 0 {
-				allNamespaces = accessible
-			}
-		}
-
-		allowed, err := auth.DiscoverNamespaces(r.Context(), client, user.Username, user.Groups, allNamespaces)
-		if err != nil {
-			log.Printf("[auth] Failed to discover namespaces for %s: %v — denying access (fail-closed)", k8s.SanitizeForLog(user.Username), err)
+		var ok bool
+		perms, ok = s.permCache.Resolve(r.Context(), user.Username, user.Groups, strconv.FormatUint(generation, 10), func(ctx context.Context) *auth.UserPermissions {
+			return discoverUserPermissions(ctx, client, user)
+		})
+		if !ok {
 			return []string{}, true // fail-closed: no access on discovery error
 		}
-
-		log.Printf("[auth] DiscoverNamespaces result for %s: allowed=%v (nil=all, []=none)", user.Username, allowed)
-		perms = &auth.UserPermissions{AllowedNamespaces: allowed}
-		s.permCache.Set(user.Username, user.Groups, perms)
 	}
 
 	return auth.FilterNamespacesForUser(requested, user, perms), false
+}
+
+// discoverUserPermissions computes the user's namespace access on client, or
+// returns nil when discovery fails.
+func discoverUserPermissions(ctx context.Context, client *kubernetes.Clientset, user *auth.User) *auth.UserPermissions {
+	var allNamespaces []string
+	if cache := k8s.GetResourceCache(); cache != nil {
+		if nsLister := cache.Namespaces(); nsLister != nil {
+			nsList, _ := nsLister.List(labels.Everything())
+			for _, ns := range nsList {
+				allNamespaces = append(allNamespaces, ns.Name)
+			}
+		}
+	}
+	// Fallback for namespace-scoped SAs: when the cluster-wide namespace
+	// informer is unavailable (SA lacks list-namespaces RBAC), the lister
+	// is empty and DiscoverNamespaces' per-namespace SAR loop has nothing
+	// to iterate — every non-admin user gets [] even when they have RBAC
+	// on the SA's bound namespace. Seed candidates from the kubeconfig
+	// context / --namespace fallback so those users get surfaced.
+	if len(allNamespaces) == 0 {
+		if accessible, _ := k8s.GetAccessibleNamespaces(ctx); len(accessible) > 0 {
+			allNamespaces = accessible
+		}
+	}
+
+	allowed, err := auth.DiscoverNamespaces(ctx, client, user.Username, user.Groups, allNamespaces)
+	if err != nil {
+		log.Printf("[auth] Failed to discover namespaces for %s: %v — denying access (fail-closed)", k8s.SanitizeForLog(user.Username), err)
+		return nil
+	}
+
+	log.Printf("[auth] DiscoverNamespaces result for %s: allowed=%v (nil=all, []=none)", user.Username, allowed)
+	return &auth.UserPermissions{AllowedNamespaces: allowed}
 }
 
 // handleSSE wraps the SSEBroadcaster's HandleSSE with per-user namespace filtering.
@@ -6078,9 +6058,6 @@ const (
 	// sseChangeAuthSARTimeout caps a single authorization SAR issued from the
 	// broadcast goroutine, so one hung apiserver call can't stall broadcasts.
 	sseChangeAuthSARTimeout = 5 * time.Second
-	// accessReviewTimeout caps a review shared by the callers asking the same
-	// question at once; each caller still stops waiting when its own request ends.
-	accessReviewTimeout = 10 * time.Second
 	// sseChangeAuthNegativeTTL caps how long a transient SAR failure (apiserver
 	// unreachable, error, or timeout) is remembered as a fail-closed deny. Short
 	// so a momentary blip clears within seconds, but non-zero so a degraded
@@ -6093,6 +6070,10 @@ const (
 	// legitimately large live working set may exceed it.
 	sseChangeAuthMemoCap = 8192
 )
+
+// accessReviewTimeout caps a review shared by the callers asking the same
+// question at once; each caller still stops waiting when its own request ends.
+var accessReviewTimeout = 10 * time.Second
 
 // newSSEChangeAuthorizer returns the per-kind authorizer for one SSE client's
 // change frames, backed by a connection-lived memo.
@@ -6110,7 +6091,7 @@ const (
 // which leaves SSE connections open (they receive a context_changed frame, not
 // a disconnect) — can't authorize new-cluster frames with the previous
 // cluster's decisions; post-switch keys miss and re-run against the new
-// apiserver, mirroring the shared cache's own context stamping. nil user
+// apiserver, mirroring the shared cache's own connection stamping. nil user
 // (auth off) is a passthrough.
 func (s *Server) newSSEChangeAuthorizer(ctx context.Context, user *auth.User) func(group, resource, namespace, verb string) bool {
 	if user == nil || s.permCache == nil {

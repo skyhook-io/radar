@@ -9,7 +9,7 @@ describe('CNPG host composition', () => {
     const path = cnpgHost.detailRedirect(resource, search)!
     const url = new URL(path, 'http://radar.test')
     expect(url.pathname).toBe('/cnpg/clusters/db/pg')
-    expect(Object.fromEntries(url.searchParams)).toEqual({ ctx: 'kind-demo', tab: 'activity', drawer: 'pods:pg-1' })
+    expect(Object.fromEntries(url.searchParams)).toEqual({ ctx: 'kind-demo', tab: 'timeline', drawer: 'pods:pg-1' })
     expect(search.get('tab')).toBe('timeline')
     expect(search.get('apiGroup')).toBe('postgresql.cnpg.io')
   })

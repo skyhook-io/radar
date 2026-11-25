@@ -9,7 +9,7 @@ import (
 )
 
 func TestApplicationSourcesAreWithheldFromCallersWhoCannotReadThem(t *testing.T) {
-	s := &Server{permCache: auth.NewPermissionCache()}
+	s := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	argo := &appSourceRef{Type: "gitops", Tool: "argocd", Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "billing"}
 	release := &appSourceRef{Type: "gitops", Tool: "fluxcd", Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Namespace: "flux-system", Name: "podinfo"}
 	helm := &appSourceRef{Type: "helm", Tool: "helm", Kind: "HelmRelease", Namespace: "apps", Name: "web"}
