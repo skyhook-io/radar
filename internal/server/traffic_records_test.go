@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/traffic"
 )
 
@@ -130,8 +131,10 @@ func TestTrafficFlowsPayloadByPod(t *testing.T) {
 }
 
 func TestVisibleFlowsWithholdsServicePortsFromUnreadableNamespaces(t *testing.T) {
-	s := &Server{}
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("alice", nil, &auth.UserPermissions{AllowedNamespaces: []string{"a"}})
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "alice"}))
 	pod := func(ns, name string) traffic.Endpoint {
 		return traffic.Endpoint{Namespace: ns, Name: name, Kind: traffic.EndpointKindWorkload}
 	}
@@ -142,7 +145,7 @@ func TestVisibleFlowsWithholdsServicePortsFromUnreadableNamespaces(t *testing.T)
 		{Source: pod("a", "web"), Destination: pod("a", "db"), Port: 5432, PortSource: traffic.PortSourceService},
 		{Source: pod("a", "web"), Destination: pod("b", "api"), Port: 8080},
 	}
-	got := s.visibleFlows(r, flows, []string{"a"}, traffic.FlowOptions{})
+	got := env.srv.visibleFlows(r, flows, []string{"a"}, traffic.FlowOptions{})
 	want := []struct {
 		port   int
 		source string
@@ -152,7 +155,19 @@ func TestVisibleFlowsWithholdsServicePortsFromUnreadableNamespaces(t *testing.T)
 			t.Errorf("flow %d (%s): got %d/%q, want %d/%q", i, got[i].Destination.Name, got[i].Port, got[i].PortSource, w.port, w.source)
 		}
 	}
-	if all := s.visibleFlows(r, flows, nil, traffic.FlowOptions{}); all[0].Port != 5432 {
-		t.Errorf("a caller who can read every namespace keeps the port: %+v", all[0])
+}
+
+// The namespaces a request names are a view filter, not the caller's access: a
+// caller who can read b keeps the port of an edge into b while viewing a.
+func TestVisibleFlowsKeepsServicePortsTheCallerCanRead(t *testing.T) {
+	s := &Server{}
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	flows := []traffic.Flow{{
+		Source:      traffic.Endpoint{Namespace: "a", Name: "web", Kind: traffic.EndpointKindWorkload},
+		Destination: traffic.Endpoint{Namespace: "b", Name: "db", Kind: traffic.EndpointKindWorkload},
+		Port:        5432, PortSource: traffic.PortSourceService,
+	}}
+	if got := s.visibleFlows(r, flows, []string{"a"}, traffic.FlowOptions{}); got[0].Port != 5432 {
+		t.Errorf("viewing namespace a withheld a port the caller can read: %+v", got[0])
 	}
 }
