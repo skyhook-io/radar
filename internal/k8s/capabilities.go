@@ -119,6 +119,7 @@ type Capabilities struct {
 	PodDebugImage          string                   `json:"podDebugImage,omitempty"`
 	PodDebug               bool                     `json:"podDebug,omitempty"` // Scoped to the requested namespace.
 	LocalTerminal          bool                     `json:"localTerminal"`      // Local terminal available (not in-cluster, not disabled)
+	ClusterProxy           bool                     `json:"clusterProxy"`       // A per-context proxy can be saved (PUT /api/contexts/{name}/proxy)
 	LocalShell             string                   `json:"localShell"`         // Shell family where a hand-off command runs: "powershell" on Windows, else "posix"
 	Logs                   bool                     `json:"logs"`               // Can get pods/log (log viewer)
 	PortForward            bool                     `json:"portForward"`        // Can create pods/portforward

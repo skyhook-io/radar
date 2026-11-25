@@ -2,6 +2,10 @@ package helm
 
 import (
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -214,5 +218,40 @@ func TestBuildRESTClientGetter_UserTokenModeIgnoresKubeconfigFlags(t *testing.T)
 	}
 	if cfg.BearerToken != "alice-token" {
 		t.Fatalf("getter = %T with token %q, want the user's token on the resolved config", got, cfg.BearerToken)
+	}
+}
+
+// Helm builds its own config from the kubeconfig flags; the proxy Radar
+// connects through (a saved per-context proxy) must still reach it.
+func TestBuildRESTClientGetter_KubeconfigFlagsKeepRadarProxy(t *testing.T) {
+	kubeconfig := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(kubeconfig, []byte(`apiVersion: v1
+kind: Config
+clusters: [{name: c, cluster: {server: "https://10.0.0.1:6443"}}]
+users: [{name: u, user: {token: t}}]
+contexts: [{name: prod, context: {cluster: c, user: u}}]
+current-context: prod
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	proxy, _ := url.Parse("socks5://127.0.0.1:1080")
+	got, err := buildRESTClientGetter(restClientGetterParams{
+		kubeconfig:     kubeconfig,
+		currentContext: "prod",
+		restConfig:     &rest.Config{Host: "https://10.0.0.1:6443", Proxy: http.ProxyURL(proxy)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := got.ToRESTConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Proxy == nil {
+		t.Fatal("Helm's config has no proxy; it would connect directly")
+	}
+	req, _ := http.NewRequest(http.MethodGet, "https://10.0.0.1:6443/version", nil)
+	if u, _ := cfg.Proxy(req); u == nil || u.String() != proxy.String() {
+		t.Fatalf("Helm proxy = %v, want %v", u, proxy)
 	}
 }

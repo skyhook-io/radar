@@ -954,6 +954,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// Context routes
 			r.Get("/contexts", s.handleListContexts)
 			r.Post("/contexts/{name}", s.handleSwitchContext)
+			r.Put("/contexts/{name}/proxy", s.handleSetContextProxy)
 
 			// Active namespace switcher (k9s :ns equivalent for the
 			// namespace-scoped path; informational filter for cluster-wide users)
@@ -1638,6 +1639,8 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.ConfigManagement = s.configManagement()
 	status, _ := s.localTerminalUnavailable(r)
 	caps.LocalTerminal = status == 0
+	proxyStatus, _ := s.clusterProxyUnavailable(r)
+	caps.ClusterProxy = proxyStatus == 0
 	caps.LocalShell = "posix"
 	if runtime.GOOS == "windows" {
 		caps.LocalShell = "powershell"
@@ -5124,10 +5127,21 @@ func StopAllSessions() {
 // Context switching handlers
 
 func (s *Server) handleListContexts(w http.ResponseWriter, r *http.Request) {
-	contexts, err := k8s.GetAvailableContexts()
+	contexts, err := availableContexts()
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if status, _ := s.clusterProxyUnavailable(r); status == 0 {
+		proxies, err := settings.ClusterProxies()
+		if err != nil {
+			log.Printf("[proxy] Failed to read saved cluster proxies: %v", err)
+		}
+		for i := range contexts {
+			if saved := proxies[k8s.ContextBindingFor(contexts[i].Name)]; saved != "" {
+				contexts[i].ProxyURL = prom.SafeAddress(saved)
+			}
+		}
 	}
 
 	s.writeJSON(w, contexts)
