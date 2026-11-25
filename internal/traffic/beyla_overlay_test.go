@@ -70,3 +70,20 @@ func TestBeylaSource_GetFlows_MarksNodeToNodeUDPAsLikelyOverlay(t *testing.T) {
 		}
 	}
 }
+
+func TestAggregateKeepsLikelyOverlayApart(t *testing.T) {
+	a := Endpoint{Name: "node-a", Kind: "External"}
+	b := Endpoint{Name: "node-b", Kind: "External"}
+	agg := AggregateFlows([]Flow{
+		{Source: a, Destination: b, Protocol: "udp", LikelyOverlay: true, BytesSent: 100},
+		{Source: a, Destination: b, Protocol: "tcp", BytesSent: 10},
+	})
+	if len(agg) != 2 {
+		t.Fatalf("got %d edges, want the overlay apart from the other node traffic", len(agg))
+	}
+	for _, e := range agg {
+		if e.LikelyOverlay != (e.Protocol == "udp") {
+			t.Errorf("edge %s overlay=%t", e.Protocol, e.LikelyOverlay)
+		}
+	}
+}
