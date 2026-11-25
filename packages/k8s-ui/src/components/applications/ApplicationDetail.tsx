@@ -3689,6 +3689,17 @@ function InstanceTooltip({ instance }: { instance: AppIdentityInstance }) {
   );
 }
 
+function InstanceVersion({ instance }: { instance: AppIdentityInstance }) {
+  const version = instance.version || instance.declaredVersion;
+  if (!version) return null;
+  return (
+    <span className="text-[10px] text-theme-text-tertiary">
+      <span className="font-mono">{midTruncate(version, 18)}</span>
+      {!instance.version && " (configured)"}
+    </span>
+  );
+}
+
 function EnvSwitcher({
   instances,
   identityKey,
@@ -3729,9 +3740,9 @@ function EnvSwitcher({
   const lagChip = lag && (
     <span className={`${CHIP} ${CHIP_TONE.amber}`}>{lag}</span>
   );
-  const evidenceChip = actualEnvironments.length > 0 && (
+  const evidenceChip = actualEnvironments.some((inst) => inst.evidence) && (
     <Tooltip content={<AppIdentityTooltip identityKey={identityKey} members={actualEnvironments} />} delay={150}>
-      <span className="inline-flex cursor-default items-center rounded-sm bg-theme-hover px-1 py-px ring-1 ring-inset ring-theme-border">
+      <span role="img" aria-label="Application grouping evidence" className="inline-flex cursor-default items-center rounded-sm bg-theme-hover px-1 py-px ring-1 ring-inset ring-theme-border">
         <Layers className="h-3 w-3 text-theme-text-tertiary" aria-hidden />
       </span>
     </Tooltip>
@@ -3745,7 +3756,6 @@ function EnvSwitcher({
         {orderedInstances.map((inst) => {
           const isActive = inst.appKey === activeKey;
           const duplicateEnv = (envCounts.get(inst.env) ?? 0) > 1;
-          const version = inst.version ?? inst.declaredVersion;
           return (
             <Tooltip
               key={inst.appKey}
@@ -3766,11 +3776,7 @@ function EnvSwitcher({
               >
                 <StatusDot tone={mapHealthToTone(inst.health)} />
                 {inst.env}
-                {showVersions && version && (
-                  <span className="font-mono text-[10px] text-theme-text-secondary">
-                    {midTruncate(version, 18)}
-                  </span>
-                )}
+                {showVersions && <InstanceVersion instance={inst} />}
                 {inst.detail || duplicateEnv ? (
                   <span className="max-w-32 truncate text-theme-text-tertiary">
                     {instanceLabel(inst)}
@@ -3826,7 +3832,6 @@ function EnvSwitcher({
         >
           {orderedInstances.map((inst) => {
             const isActive = inst.appKey === activeKey;
-            const version = inst.version ?? inst.declaredVersion;
             return (
               <Tooltip
                 key={inst.appKey}
@@ -3854,11 +3859,7 @@ function EnvSwitcher({
                     {inst.env}
                   </span>
                   {!inst.aggregate && <span className="min-w-0 flex-1 truncate text-theme-text-secondary">{instanceLabel(inst)}</span>}
-                  {version && (
-                    <span className="font-mono text-[10px] text-theme-text-tertiary">
-                      {midTruncate(version, 18)}
-                    </span>
-                  )}
+                  <InstanceVersion instance={inst} />
                 </button>
               </Tooltip>
             );

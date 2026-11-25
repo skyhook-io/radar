@@ -498,9 +498,26 @@ describe('ApplicationDetail extra views', () => {
     const staging = { ...instance('staging'), declaredVersion: '2.0.0' }
     const props = { showEnvironmentVersions: true, activeInstanceKey: 'prod', onSwitchInstance: () => {} }
     const { host, rerender } = show({ ...props, identityInstances: [prod, staging] })
-    expect(host.textContent).toContain('staging2.0.0')
+    const stagingButton = () => Array.from(host.querySelectorAll('button')).find(b => b.textContent?.startsWith('staging'))!
+    expect(stagingButton().textContent).toBe('staging2.0.0 (configured)')
     expect(host.textContent).not.toContain('behind')
-    rerender({ ...props, identityInstances: [prod, { ...staging, version: '2.0.0' }] })
+    rerender({ ...props, identityInstances: [prod, { ...staging, version: '1.5.0' }] })
+    expect(stagingButton().textContent).toBe('staging1.5.0')
     expect(host.textContent).toContain('behind')
+
+    rerender({ ...props, identityInstances: [prod, staging, ...['dev', 'qa', 'test', 'demo', 'perf'].map(instance)] })
+    act(() => Array.from(host.querySelectorAll('button')).find(b => b.textContent?.includes('7 environments'))!.click())
+    expect(stagingButton().textContent).toContain('2.0.0 (configured)')
+  })
+
+  it('shows the identity evidence chip only for evidence from a non-aggregate instance', () => {
+    const prod = { appKey: 'prod', name: 'prod', env: 'prod', health: 'healthy' as const, confidence: 'high', evidence: '' }
+    const all = { ...prod, appKey: 'all', env: 'All environments', aggregate: true, evidence: 'aggregate' }
+    const props = { activeInstanceKey: 'prod', onSwitchInstance: () => {} }
+    const { host, rerender } = show({ ...props, identityInstances: [all, prod] })
+    const evidenceChip = () => host.querySelector('[aria-label="Application grouping evidence"]')
+    expect(evidenceChip()).toBeNull()
+    rerender({ ...props, identityInstances: [all, { ...prod, evidence: 'app annotation' }] })
+    expect(evidenceChip()).not.toBeNull()
   })
 })
