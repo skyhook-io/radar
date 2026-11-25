@@ -406,6 +406,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
     },
   ])
 
+  const countEntries = countsFrom === 'all' ? all : scoped
   const counts = useMemo(() => {
     const health: Record<string, number> = {}
     const env: Record<string, number> = {}
@@ -413,15 +414,14 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
     const workloadClass: Record<string, number> = {}
     const category: Record<string, number> = {}
     for (const e of all) source[e.source] = (source[e.source] ?? 0) + 1
-    for (const e of (countsFrom === 'all' ? all : scoped)) {
+    for (const e of countEntries) {
       health[e.health] = (health[e.health] ?? 0) + 1
       for (const c of e.classSet) workloadClass[c] = (workloadClass[c] ?? 0) + 1
       category[e.category] = (category[e.category] ?? 0) + 1
       for (const en of entryEnvs(e)) env[en] = (env[en] ?? 0) + 1
     }
-    const total = Object.values(health).reduce((a, b) => a + b, 0)
-    return { health, env, source, workloadClass, category, total }
-  }, [all, countsFrom, scoped])
+    return { health, env, source, workloadClass, category }
+  }, [all, countEntries])
 
   // asc → desc → off (null = default health-worst-first sort).
   const onSort = (key: SortKey) => {
@@ -433,7 +433,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
   }
 
   const filteredCounts = countsFrom === 'searchAndSource'
-  const total = filteredCounts ? counts.total : all.length
+  const total = countEntries.length
   const envOptions = [...new Set([...Object.keys(counts.env), ...fEnv])]
     .sort((a, b) => (envRank(b === 'none' ? undefined : b) ?? -1) - (envRank(a === 'none' ? undefined : a) ?? -1))
     .map((env) => ({ value: env, label: env === 'none' ? 'unlabeled' : env, count: counts.env[env] ?? 0 }))

@@ -52,6 +52,17 @@ function show(countsFrom?: 'all' | 'searchAndSource', apps = entries()) {
 const pickManagedSource = (host: Element) =>
   act(() => [...host.querySelectorAll('button')].find((b) => b.textContent?.startsWith(SOURCE_META[managedSource].label))!.click())
 const unhealthyFacet = (host: Element) => [...host.querySelectorAll('button')].find((b) => b.textContent?.startsWith('Unhealthy'))?.textContent
+function setSearch(host: Element, value: string) {
+  const input = host.querySelector<HTMLInputElement>('input[type="text"]')!
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+function headerTotal(host: Element) {
+  const label = [...host.querySelectorAll('span')].find((el) => /^applications?$/.test(el.textContent ?? ''))
+  return label?.parentElement?.previousElementSibling?.textContent
+}
 
 beforeEach(() => {
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} unobserve() {} })
@@ -85,6 +96,21 @@ describe('ApplicationsView countsFrom', () => {
     const host = show()
     pickManagedSource(host)
     expect([...host.querySelectorAll('h3, [role="heading"], span')].some((el) => el.textContent === 'Type')).toBe(true)
+    expect(unhealthyFacet(host)).toBe('Unhealthy1')
+  })
+
+  it('reuses inventory counts when a default-mode search excludes a row', () => {
+    const apps = entries()
+    const excluded = apps[2]
+    const readHealth = vi.fn(() => excluded.health)
+    apps[2] = { ...excluded, get health() { return readHealth() } }
+    const host = show('all', apps)
+    expect(readHealth).toHaveBeenCalled()
+    readHealth.mockClear()
+    setSearch(host, 'demo')
+    expect(host.querySelectorAll('tbody tr')).toHaveLength(2)
+    expect(readHealth).not.toHaveBeenCalled()
+    expect(headerTotal(host)).toBe('3')
     expect(unhealthyFacet(host)).toBe('Unhealthy1')
   })
 
