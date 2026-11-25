@@ -56,7 +56,7 @@ func TestManageGitOpsReportsExplicitPermissionDenied(t *testing.T) {
 	gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
 	dyn := setupMCPDynamicResource(t, gvr, "ApplicationList", k8s.APIResource{Group: gvr.Group, Version: gvr.Version, Kind: "Application", Name: gvr.Resource, Namespaced: true})
 	dyn.(*dynamicfake.FakeDynamicClient).PrependReactor("patch", "applications", func(ktesting.Action) (bool, runtime.Object, error) {
-		return true, nil, apierrors.NewForbidden(gvr.GroupResource(), "demo", errors.New(`User "opaque-user" cannot patch resource "applications"`))
+		return true, nil, apierrors.NewForbidden(gvr.GroupResource(), "demo", errors.New(`User "opaque-user" cannot patch resource "applications": requires one of ["container.thirdPartyObjects.update"] permission(s)`))
 	})
 	result, _, err := handleManageGitOps(context.Background(), nil, manageGitOpsInput{Action: "refresh", Tool: "argocd", Namespace: "argocd", Name: "demo"})
 	if err != nil {
@@ -68,6 +68,9 @@ func TestManageGitOpsReportsExplicitPermissionDenied(t *testing.T) {
 	}
 	if strings.Contains(decoded["error"].(string), "opaque-user") {
 		t.Fatalf("raw identity in summary: %v", decoded)
+	}
+	if raw, ok := decoded["raw_error"].(string); !ok || !strings.Contains(raw, "container.thirdPartyObjects.update") {
+		t.Fatalf("missing authorizer detail: %v", decoded)
 	}
 }
 

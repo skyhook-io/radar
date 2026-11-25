@@ -205,8 +205,9 @@ request target, and **Error details** exposes the original message for copying.
 
 If Flux Sync with source fails after requesting earlier reconciles, the response
 and UI identify the accepted requests. Controller completion is reported by Flux.
-The MCP `manage_gitops` tool returns the same classified codes and includes any
-accepted reconcile requests in its error.
+The MCP `manage_gitops` tool returns the same classified codes. Its `raw_error`
+field preserves the original diagnostic, including permission details added by
+the authorizer. It includes any accepted reconcile requests in its error.
 
 ### Keyboard shortcuts (per-app detail page)
 

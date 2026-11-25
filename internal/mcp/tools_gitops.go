@@ -128,6 +128,7 @@ func handleManageGitOps(ctx context.Context, req *mcp.CallToolRequest, input man
 			body = map[string]any{"error": admission.Summary(), "error_code": "admission_denied"}
 		}
 		if body != nil {
+			body["raw_error"] = err.Error()
 			var partial *gitops.PartialSyncError
 			if errors.As(err, &partial) {
 				body["note"] = partial.Note()
