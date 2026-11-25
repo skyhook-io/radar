@@ -436,12 +436,16 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
   const initialLoading = Boolean(loading) && allEntries.length === 0
 
   // Clickable status tile wired to the health facet — tap to filter to that tier.
-  const healthTile = (h: AppHealth, tone: SummaryTone) =>
-    initialLoading && (h === 'healthy' || h === 'degraded' || h === 'unhealthy') ? (
-      <SummaryTile key={h} label={HEALTH_META[h].label} value={0} tone={tone} loading />
-    ) : counts.health[h] || fHealth.has(h) ? (
-      <SummaryTile key={h} label={HEALTH_META[h].label} value={counts.health[h] ?? 0} tone={tone} active={fHealth.has(h)} onClick={() => filters.toggle('health', h)} />
-    ) : null
+  const healthTile = (h: AppHealth, tone: SummaryTone) => {
+    const active = fHealth.has(h)
+    if (initialLoading) {
+      return active || h === 'healthy' || h === 'degraded' || h === 'unhealthy'
+        ? <SummaryTile key={h} label={HEALTH_META[h].label} value={0} tone={tone} loading />
+        : null
+    }
+    if (!counts.health[h] && !active) return null
+    return <SummaryTile key={h} label={HEALTH_META[h].label} value={counts.health[h] ?? 0} tone={tone} active={active} onClick={() => filters.toggle('health', h)} />
+  }
 
   // showSystem lives in the Filters rail, so Clear resets it too (and its
   // non-default ON state counts as an active filter that surfaces the button).

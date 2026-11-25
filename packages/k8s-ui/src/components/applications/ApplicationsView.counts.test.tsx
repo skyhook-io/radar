@@ -2,12 +2,13 @@
 //
 // A host scoped to one source can have the tiles and facet counts count only
 // what the list shows; by default they count every app.
-import { act } from 'react'
+import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { KeyboardShortcutProvider } from '../../hooks/useKeyboardShortcuts'
+import { FilterLocationProvider } from '../../filter-state'
 import { buildSingleAppEntry, isHostManagedSource, SOURCE_META, SOURCE_ORDER, type FleetAppEntry, type AppHealth, type AppRow } from '../../utils/applications'
-import { ApplicationsView } from './ApplicationsView'
+import { ApplicationsView, type ApplicationsViewProps } from './ApplicationsView'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
@@ -26,17 +27,26 @@ const entries = () => [
 ]
 
 let root: Root | undefined
-function show(countsFrom?: 'all' | 'searchAndSource', apps = entries()) {
+function mountList(search = '') {
   const host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
-  act(() =>
-    root!.render(
-      <KeyboardShortcutProvider>
-        <ApplicationsView entries={apps} variant="single" onSelect={() => {}} countsFrom={countsFrom} />
-      </KeyboardShortcutProvider>,
-    ),
-  )
+  type ListProps = Omit<ApplicationsViewProps, 'onSelect'>
+  function List(props: ListProps) {
+    const [searchParams, update] = useState(() => new URLSearchParams(search))
+    return (
+      <FilterLocationProvider value={{ searchParams, update }}>
+        <KeyboardShortcutProvider>
+          <ApplicationsView {...props} onSelect={() => {}} />
+        </KeyboardShortcutProvider>
+      </FilterLocationProvider>
+    )
+  }
+  return { host, render: (props: ListProps) => act(() => root!.render(<List {...props} />)) }
+}
+function show(countsFrom?: 'all' | 'searchAndSource', apps = entries()) {
+  const { host, render } = mountList()
+  render({ variant: 'single', entries: apps, countsFrom })
   return host
 }
 const pickManagedSource = (host: Element) =>
@@ -56,6 +66,21 @@ afterEach(() => {
 })
 
 describe('ApplicationsView countsFrom', () => {
+  it.each([['unknown', 'Unknown'], ['neutral', 'Idle']])('loads a ?health=%s tile before showing its clearable zero', (health, label) => {
+    const { host, render } = mountList(`?health=${health}`)
+    render({ variant: 'single', entries: [], loading: true })
+    const skeleton = [...host.querySelectorAll('.animate-pulse')].find((el) => el.parentElement?.textContent === label)
+    expect(skeleton).toBeDefined()
+    expect(skeleton!.closest('button')).toBeNull()
+
+    render({ variant: 'single', entries: entries() })
+    const tile = () => [...host.querySelectorAll('button')].find((button) => button.textContent === `0${label}`)
+    expect(tile()?.getAttribute('aria-pressed')).toBe('true')
+    act(() => tile()!.click())
+    expect(tile()).toBeUndefined()
+    expect(host.querySelectorAll('tbody tr')).toHaveLength(3)
+  })
+
   it('counts every app by default', () => {
     const host = show()
     pickManagedSource(host)
