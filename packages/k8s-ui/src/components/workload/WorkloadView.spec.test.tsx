@@ -307,6 +307,19 @@ it('repairs unknown tab IDs once the host list is complete and the workload read
   act(() => root.unmount())
 })
 
+it('waits until the expanded view is active to repair a stale Deploys link', () => {
+  const root = createRoot(document.createElement('div'))
+  const onTabChange = vi.fn()
+  const render = (active: boolean) => act(() => root.render(
+    <WorkloadView {...props} expanded active={active} activeTab="deploys" extraTabs={[]} extraTabsComplete onTabChange={onTabChange} />,
+  ))
+  render(false)
+  expect(onTabChange).not.toHaveBeenCalled()
+  render(true)
+  expect(onTabChange).toHaveBeenCalledExactlyOnceWith('overview', { replace: true })
+  act(() => root.unmount())
+})
+
 it.each([['cold', undefined], ['cached', resource]] as const)('gates host tabs on a %s 404 and preserves the requested tab for recovery', (_, cached) => {
   const host = document.createElement('div')
   const root = createRoot(host)

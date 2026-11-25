@@ -1101,6 +1101,7 @@ export function WorkloadView({
     (requestedTab === 'logs' && logsFallbackReady)
   )
   const shouldCommitFallback =
+    active &&
     requestedTab !== fallbackTab &&
     !requestedTabAvailable &&
     !(resourceLoading && activeExtraTab && !activeExtraTab.availableWhenDeleted) &&
