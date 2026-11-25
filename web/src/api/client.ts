@@ -83,7 +83,7 @@ import type {
 } from '../types'
 import type { GitOpsOperationResponse } from '../types/gitops'
 import { apiUrl, automaticRequestHeaders, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
-import { CONNECTION_HEADER, connectionHeaderValue } from './connectionBinding'
+import { CONNECTION_HEADER, connectionHeaderValue, useCurrentConnectionId } from './connectionBinding'
 import { GitOpsActionError, httpStatusMessage, markShownInline, readErrorBody, readErrorResponse } from './httpErrors'
 import {
   isRadarFeatureUnsupported,
@@ -7366,11 +7366,11 @@ type CachedGitOpsActionCapabilities = GitOpsActionCapabilities & {
 };
 
 export function useGitOpsActionCapabilities(kind: string, group: string | undefined, namespace: string, name: string, enabled = true) {
-  const active = enabled && isGitOpsActionTarget(kind, group);
+  const active = isGitOpsActionTarget(kind, group);
   const queryClient = useQueryClient();
   const { support, guard, gatedKey } = useRadarFeature("gitopsActionCapabilities");
   const apiBase = getApiBase();
-  const connection = connectionHeaderValue(apiBase) ?? cachedContextName(queryClient);
+  const connection = useCurrentConnectionId(apiBase);
   const queryKey = ["gitops-action-capabilities", apiBase, connection, kind, group, namespace, name, ...gatedKey];
   const [, setExpiryTime] = useState(0);
   const query = useQuery<CachedGitOpsActionCapabilities>({
@@ -7390,9 +7390,9 @@ export function useGitOpsActionCapabilities(kind: string, group: string | undefi
       }
       return { ...next, confirmedAt };
     }),
-    enabled: active && Boolean(namespace && name) && support !== 'unsupported',
+    enabled: enabled && active && Boolean(namespace && name) && support !== 'unsupported',
     staleTime: 15_000,
-    refetchInterval: active ? 30_000 : false,
+    refetchInterval: query => enabled && active && !isRadarFeatureUnsupported(query.state.error, 'gitopsActionCapabilities') ? 30_000 : false,
   });
   const now = Date.now();
   const expiries = Object.values(query.data?.confirmedAt ?? {}).map(time => time + GITOPS_PERMISSION_MAX_AGE).filter(time => time > now);

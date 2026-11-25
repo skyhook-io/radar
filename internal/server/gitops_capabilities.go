@@ -82,8 +82,11 @@ func (s *Server) handleGitOpsCapabilities(w http.ResponseWriter, r *http.Request
 		}
 	}
 	kubeClient := conn.ClientInterface()
-	if useToken && user.Token != "" {
-		kubeClient = k8s.ClientFromContext(r.Context())
+	if useToken {
+		kubeClient = nil
+		if user.Token != "" {
+			kubeClient = k8s.ClientFromContext(r.Context())
+		}
 	}
 
 	review := func(ctx context.Context, attrs authv1.ResourceAttributes) (bool, error) {

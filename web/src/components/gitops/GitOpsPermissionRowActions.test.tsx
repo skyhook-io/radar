@@ -88,3 +88,13 @@ it('shows the unavailable note and enables an expired denial while checks remain
   await act(async () => action().click())
   expect(sync).toHaveBeenCalledOnce()
 })
+
+it('keeps a denied action disabled while the row menu closes', async () => {
+  answer = async () => Response.json({ actions: { sync: { allowed: false, denied: [{ verb: 'patch', resource: 'applications', group: 'argoproj.io', namespace: 'argocd', name: 'demo' }] } } })
+  await openMenu()
+  expect(action().getAttribute('aria-disabled')).toBe('true')
+
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Row actions"]')!.click())
+  expect(host.querySelector('[role="menu"]')?.hasAttribute('inert')).toBe(true)
+  expect(action().getAttribute('aria-disabled')).toBe('true')
+})

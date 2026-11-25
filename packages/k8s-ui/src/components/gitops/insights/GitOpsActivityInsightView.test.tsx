@@ -13,7 +13,7 @@ function render(insight: GitOpsInsight, rollbackUpgrade?: RadarUpgradeRequiremen
 
 function rollbackButtons(insight: GitOpsInsight, rollbackUpgrade?: RadarUpgradeRequirement | null): { disabled: boolean }[] {
   const html = render(insight, rollbackUpgrade)
-  return [...html.matchAll(/<button([^>]*)>Rollback<\/button>/g)].map((m) => ({ disabled: /\sdisabled=""/.test(m[1]) }))
+  return [...html.matchAll(/<button([^>]*)>Rollback<\/button>/g)].map((m) => ({ disabled: /\saria-disabled="true"/.test(m[1]) }))
 }
 
 function insight(autoSyncMode: string): GitOpsInsight {

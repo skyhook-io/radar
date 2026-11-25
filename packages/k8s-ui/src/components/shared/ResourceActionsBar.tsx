@@ -953,12 +953,12 @@ function FluxActions({ disabledReasons, resource, data, onReconcile, isReconcili
         <Tooltip preserveWords content={disabledReasons?.reconcile || (isSuspended ? 'Cannot reconcile while suspended' : 'Trigger reconciliation')} delay={150}>
           {disabledReasons?.reconcile && <span id={`${descriptionId}-reconcile`} className="sr-only">{disabledReasons.reconcile}</span>}
           <button
-            onClick={() => !disabledReasons?.reconcile && onReconcile({
+            onClick={() => !isSuspended && !disabledReasons?.reconcile && onReconcile({
               kind: resource.kind,
               namespace: resource.namespace,
               name: resource.name,
             })}
-            disabled={isReconciling || isSuspended}
+            disabled={isReconciling || (isSuspended && !disabledReasons?.reconcile)}
             aria-disabled={isReconciling || isSuspended || !!disabledReasons?.reconcile}
             aria-describedby={disabledReasons?.reconcile ? `${descriptionId}-reconcile` : undefined}
             className="aria-disabled:opacity-50 aria-disabled:cursor-not-allowed flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
@@ -973,12 +973,12 @@ function FluxActions({ disabledReasons, resource, data, onReconcile, isReconcili
         <Tooltip preserveWords content={disabledReasons?.['sync-with-source'] || (isSuspended ? 'Cannot sync while suspended' : 'Fetch latest from source, then reconcile')} delay={150}>
           {disabledReasons?.['sync-with-source'] && <span id={`${descriptionId}-sync-with-source`} className="sr-only">{disabledReasons['sync-with-source']}</span>}
           <button
-            onClick={() => !disabledReasons?.['sync-with-source'] && onSyncWithSource({
+            onClick={() => !isSuspended && !disabledReasons?.['sync-with-source'] && onSyncWithSource({
               kind: resource.kind,
               namespace: resource.namespace,
               name: resource.name,
             })}
-            disabled={isSyncing || isSuspended}
+            disabled={isSyncing || (isSuspended && !disabledReasons?.['sync-with-source'])}
             aria-disabled={isSyncing || isSuspended || !!disabledReasons?.['sync-with-source']}
             aria-describedby={disabledReasons?.['sync-with-source'] ? `${descriptionId}-sync-with-source` : undefined}
             className="aria-disabled:opacity-50 aria-disabled:cursor-not-allowed flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
@@ -1085,12 +1085,12 @@ function ArgoActions({ disabledReasons, resource, data, onSync, isSyncing, syncD
           {disabledReasons?.sync && <span id={`${descriptionId}-sync`} className="sr-only">{disabledReasons.sync}</span>}
           <button
             onClick={() => {
-              if (disabledReasons?.sync) return
+              if (operationRunning || disabledReasons?.sync) return
               if (!syncDialog) return void sync().catch(() => {})
               setSyncError(null)
               setSyncSelection({ appKey })
             }}
-            disabled={isSyncing || operationRunning}
+            disabled={isSyncing || (operationRunning && !disabledReasons?.sync)}
             aria-disabled={isSyncing || operationRunning || !!disabledReasons?.sync}
             aria-describedby={disabledReasons?.sync ? `${descriptionId}-sync` : undefined}
             className="aria-disabled:opacity-50 aria-disabled:cursor-not-allowed flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"

@@ -1588,6 +1588,7 @@ func SyncFluxWithSource(ctx context.Context, dynClient dynamic.Interface, kind, 
 	}, nil
 }
 
+// FluxSyncTarget identifies one Kubernetes object in the Flux source chain.
 type FluxSyncTarget struct {
 	Entry           FluxKindEntry
 	Namespace, Name string

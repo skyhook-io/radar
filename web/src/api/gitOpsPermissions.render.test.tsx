@@ -140,8 +140,10 @@ it('keeps a pending permission result scoped to its original connection', async 
   await render()
 
   answer = async () => Response.json({ actions: { sync: { allowed: true } } })
-  observeConnectionStatus({ connectionId: 'new-connection' })
-  await render()
+  await act(async () => {
+    observeConnectionStatus({ connectionId: 'new-connection' })
+    await new Promise(resolve => setTimeout(resolve, 0))
+  })
   await refetch()
 
   await act(async () => {

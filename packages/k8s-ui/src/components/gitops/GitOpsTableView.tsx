@@ -297,8 +297,8 @@ export interface GitOpsTableViewProps {
   // SyncOptionsDialog). When undefined the actions column is omitted
   // entirely — keeps Hub and other consumers' layout unchanged until they
   // opt in.
-  renderRowActions?: (row: GitOpsRow, items: RowActionItem[]) => ReactNode
   onRowAction?: (row: GitOpsRow, action: GitOpsRowAction) => void
+  renderRowActions?: (row: GitOpsRow, items: RowActionItem[]) => ReactNode
   // In-flight action state, keyed by `row.id`. Drives the per-item
   // spinner so the user can tell which Sync/Refresh is still running.
   pendingRowActions?: Map<string, Set<GitOpsRowAction>>
