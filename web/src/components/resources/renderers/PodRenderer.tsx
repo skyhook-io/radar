@@ -1,6 +1,8 @@
 import { connectionHeaderValue } from '../../../api/connectionBinding'
 import { usePodDetailAccess } from '../PodDebugAction'
 import { getApiBase } from '../../../api/config'
+import { SUBSTRATE_WORKER_POOL_LABEL } from '@skyhook-io/k8s-ui/components/resources/resource-utils-agent-runtimes'
+import { SubstrateWorkerPodContext } from '../../substrate/SubstrateWorkerPodContext'
 import { hasPrometheusCharts } from '../../../api/prometheusCharts'
 import { PodRenderer as BasePodRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/PodRenderer'
 import type { CopyHandler } from '@skyhook-io/k8s-ui/components/ui/drawer-components'
@@ -36,6 +38,7 @@ interface PodRendererProps {
 export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, resolvedEnvFrom }: PodRendererProps) {
   const namespace = data.metadata?.namespace
   const podName = data.metadata?.name
+  const substratePool = data.metadata?.labels?.[SUBSTRATE_WORKER_POOL_LABEL]
   const isTerminal = data.status?.phase === 'Succeeded' || data.status?.phase === 'Failed'
   const environmentEnabled = [...(data.spec?.initContainers ?? []), ...(data.spec?.containers ?? [])]
     .some((container: any) => container.env?.length > 0 || container.envFrom?.length > 0)
@@ -106,6 +109,7 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
   return (
     <BasePodRenderer
       data={data}
+      substrateWorkerContext={substratePool && namespace && podName ? <SubstrateWorkerPodContext namespace={namespace} pool={substratePool} pod={podName} resource={data} /> : undefined}
       onCopy={onCopy}
       copied={copied}
       onNavigate={onNavigate}

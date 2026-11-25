@@ -72,6 +72,7 @@ interface PodRendererProps {
   data: any
   onCopy: CopyHandler
   copied: string | null
+  substrateWorkerContext?: ReactNode
   onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
   /** When provided, container-level Logs buttons call this instead of onOpenLogsPanel */
   onOpenLogs?: (podName: string, containerName: string) => void
@@ -291,6 +292,7 @@ export function PodRenderer({
   onCopy,
   copied,
   onNavigate,
+  substrateWorkerContext,
   onOpenLogs: onOpenLogsOverride,
   onEvaluateCapacity,
   canExec,
@@ -444,7 +446,7 @@ export function PodRenderer({
         </AlertBanner>
       )}
 
-      {substrateWorkerPool && (
+      {substrateWorkerContext ?? (substrateWorkerPool && (
         <AlertBanner
           variant="info"
           icon={Info}
@@ -455,7 +457,7 @@ export function PodRenderer({
             {' '}Substrate places actors on this Pod in turn, so its logs, metrics and restarts are shared by every actor it has hosted.
           </>}
         />
-      )}
+      ))}
 
       {onEvaluateCapacity && (
         <div className="mb-3">
