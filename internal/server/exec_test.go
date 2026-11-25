@@ -324,8 +324,18 @@ func TestIsShellNotFoundError(t *testing.T) {
 			want:   true,
 		},
 		{
-			name:   "no such file or directory",
+			name:   "unqualified missing file is retryable",
 			errMsg: `no such file or directory`,
+			want:   false,
+		},
+		{
+			name:   "missing working directory is retryable",
+			errMsg: `OCI runtime exec failed: unable to start container process: chdir to cwd ("/app") failed: no such file or directory while starting /bin/sh`,
+			want:   false,
+		},
+		{
+			name:   "runtime reports the selected executable missing",
+			errMsg: `exec: "sh": stat sh: no such file or directory`,
 			want:   true,
 		},
 		{
@@ -371,7 +381,7 @@ func TestIsShellNotFoundError(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isShellNotFoundError(tc.errMsg); got != tc.want {
+			if got := isShellNotFoundError(tc.errMsg, "sh"); got != tc.want {
 				t.Errorf("isShellNotFoundError(%q) = %v, want %v", tc.errMsg, got, tc.want)
 			}
 		})

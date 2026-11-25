@@ -479,7 +479,7 @@ func streamPodTerminal(parent context.Context, conn *websocket.Conn, uid types.U
 func sendPodExecError(conn *websocket.Conn, err error, podUID types.UID, executable string, wroteOutput bool) {
 	errMsg := err.Error()
 	errorType := "exec_error"
-	if !wroteOutput && isShellNotFoundError(errMsg) {
+	if !wroteOutput && isShellNotFoundError(errMsg, executable) {
 		errorType = "shell_not_found"
 	} else if !wroteOutput && looksLikeShellNotFound(errMsg) {
 		// Drift canary: the error has shell-not-found hallmarks but
@@ -542,13 +542,23 @@ func sendWSErrorWithType(conn *websocket.Conn, errorType, msg string, podUID typ
 }
 
 // isShellNotFoundError detects errors indicating the shell binary is missing
-func isShellNotFoundError(errMsg string) bool {
+func isShellNotFoundError(errMsg, executable string) bool {
+	lower := strings.ToLower(errMsg)
+	if strings.Contains(lower, "chdir") || strings.Contains(lower, "working directory") {
+		return false
+	}
+	if isShellMissing(errMsg) || isCommandNotFound(errMsg) {
+		return true
+	}
+	// A missing working directory can also return ENOENT. Match the executable
+	// named by the runtime before assigning the error to the command.
+	if executable != "" && strings.Contains(lower, "no such file or directory") {
+		command := strings.ToLower(executable)
+		return strings.Contains(lower, `exec: "`+command+`": stat `+command+`:`) ||
+			strings.Contains(lower, `exec: "`+command+`": no such file or directory`)
+	}
 	patterns := []string{
-		"executable file not found",
-		"no such file or directory",
-		"command not found",
 		"executable not found",
-		"not found in $path",
 		// POSIX exit 127 = "command not found". Some runtime/kubelet
 		// combinations surface a missing shell as "command terminated with
 		// exit code 127" via the exec stream rather than as a structured
@@ -567,9 +577,8 @@ func isShellNotFoundError(errMsg string) bool {
 		"hcs::system::createprocess",
 		"the system cannot find the file",
 	}
-	errLower := strings.ToLower(errMsg)
 	for _, pattern := range patterns {
-		if strings.Contains(errLower, pattern) {
+		if strings.Contains(lower, pattern) {
 			return true
 		}
 	}

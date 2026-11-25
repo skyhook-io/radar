@@ -56,17 +56,19 @@ it('copies the precise access request and rechecks an updated grant', async () =
   render()
   await act(async () => button('Copy access request')!.click())
   expect(button('Copied')).toBeDefined()
-  expect(f.copy).toHaveBeenCalledWith('Could you grant me permission to update pods/ephemeralcontainers for Pod checkout in namespace payments? I need to troubleshoot container app. Please limit the rule to resourceNames: ["checkout"].')
+  expect(f.copy).toHaveBeenCalledWith('Could you grant me permission to update pods/ephemeralcontainers for Pod checkout in namespace payments? I need to troubleshoot container app. Please limit the rule to resourceNames: ["checkout"]. A replacement Pod with another name would need its own grant.')
   act(() => button('Recheck access')!.click())
   expect(f.recheck).toHaveBeenCalledOnce()
   f.access='allowed'; render()
   expect(button('Start for app')).toBeDefined()
 })
-it('rechecks unknown permission without offering a denial request', () => {
+it('asks for verification on an unknown result without requesting a grant', async () => {
   f.access='unknown'; render()
   expect(host.textContent).toContain('couldn’t verify')
   expect(button('Copy access request')).toBeUndefined()
   expect(button('Recheck access')).toBeDefined()
+  await act(async () => button('Copy verification request')!.click())
+  expect(f.copy).toHaveBeenCalledWith('Could you check whether my Kubernetes identity can update pods/ephemeralcontainers for Pod checkout in namespace payments? Radar couldn’t verify access while I was troubleshooting container app.')
 })
 it.each(['embedded', 'replaced', 'windows', 'stopped', 'old', 'disabled'])('suppresses the grant request on %s', mode => {
   if(mode==='embedded')f.embedded=true
@@ -114,9 +116,10 @@ it('supplies named-only exec to the Pod header and existing terminals independen
 })
 
 it('identifies where to find the real ServiceAccount when Radar has no signed-in user', async () => {
-  f.installation = { configManagement: 'operator', deployment: { mode: 'in-cluster' } }
+  f.installation = { deployment: { mode: 'in-cluster' } }
   render()
   await act(async () => button('Copy access request')!.click())
+  expect(host.textContent).toContain('Radar’s ServiceAccount doesn’t have permission')
   const [request] = f.copy.mock.lastCall!
   expect(request).toContain('the ServiceAccount used by this Radar installation')
   expect(request).toContain('running Radar Pod’s namespace and its spec.serviceAccountName')

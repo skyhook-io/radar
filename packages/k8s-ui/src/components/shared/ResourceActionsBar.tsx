@@ -379,7 +379,7 @@ export function ResourceActionsBar({
               Terminal
             </button>
           )}
-          {isRunning && data?.apiVersion === 'v1' && data?.kind === 'Pod' && !data.metadata?.deletionTimestamp && renderPodDebug?.(data)}
+          {isRunning && canExec && data?.apiVersion === 'v1' && data?.kind === 'Pod' && !data.metadata?.deletionTimestamp && renderPodDebug?.(data)}
           {canViewLogs && !hideLogs && openLogs && (
             <div
               className="relative"
