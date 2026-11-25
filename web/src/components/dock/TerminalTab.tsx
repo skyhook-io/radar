@@ -16,9 +16,10 @@ interface TerminalTabProps {
   shell?: string
   note?: string
   debugSession?: DockTab['debugSession']
+  onLeaveTerminal?: () => void
 }
 
-export function TerminalTab({ namespace, podName, containerName, containers, isActive, shell, note, debugSession }: TerminalTabProps) {
+export function TerminalTab({ namespace, podName, containerName, containers, isActive, shell, note, debugSession, onLeaveTerminal }: TerminalTabProps) {
   const openedConnection = useOpenedConnection()
   const [openedBase] = useState(getApiBase)
   const connection = debugSession ? debugSession.connectionId : openedConnection
@@ -26,6 +27,8 @@ export function TerminalTab({ namespace, podName, containerName, containers, isA
   const currentConnection = useCurrentConnection()
   const podDetailsLink = currentConnection === connection && getApiBase() === base && <Link
     className="mb-2 inline-block text-xs text-accent underline underline-offset-2"
+    title="Close this terminal tab and open the current Pod"
+    onClick={event => { if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey && event.button === 0) onLeaveTerminal?.() }}
     to={relatedResourcePath({ kind: 'Pod', namespace, name: podName })}
   >Open current Pod details</Link>
   const createSession = async (container: string, failedPodUID?: string) => {
