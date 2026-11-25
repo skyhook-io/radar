@@ -649,7 +649,9 @@ export function WorkloadView({
     isFetching: resourceFetching,
     error: resourceError,
     refetch: refetchResource,
-  } = useResourceWithRelationships<any>(apiKind, namespace, name, rest.group)
+  } = useResourceWithRelationships<any>(apiKind, namespace, name, rest.group, {
+    pollPendingOwnership: rest.active !== false,
+  })
   const resource = resourceResponse?.resource
   const relationships = resourceResponse?.relationships
   useRefreshRevisionsOnNewRollout(

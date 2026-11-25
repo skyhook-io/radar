@@ -1,5 +1,5 @@
 import { dedupeResourceRefs, omitResourceRefs, resourceRefKey } from '../../utils/resource-refs'
-import { gapReasonText } from '../../utils/read-actions'
+import { canonicalReadCode, gapReasonText } from '../../utils/read-actions'
 import { customResourceDefinitionRef, getCRDDefinitionsSnapshot, subscribeCRDDefinitions } from '../../utils/navigation'
 import { Disclosure } from './Disclosure'
 import { createContext, useContext, useState, useSyncExternalStore } from 'react'
@@ -845,7 +845,7 @@ export type CopyHandler = (text: string, key: string) => void
 // RELATED RESOURCES SECTION
 // ============================================================================
 
-import type { TimelineEvent, Relationships, ResourceRef, OwnershipCoverage, ManagerAnswer } from '../../types'
+import type { TimelineEvent, Relationships, ResourceRef, OwnershipCoverage, OwnershipGap, ManagerAnswer } from '../../types'
 import { isChangeEvent, isK8sEvent } from '../../types'
 import { Info, Link } from 'lucide-react'
 import { formatRelativeAgeTime } from '../../utils/format'
@@ -1061,35 +1061,73 @@ export function ownerNote(coverage: OwnershipCoverage | undefined): Relationship
   return undefined
 }
 
-// childrenNote says what a Children list may be missing. Kinds Radar doesn't
-// collect are a hint, since most lists miss a few; kinds it couldn't check
-// for any other reason, a list cut short, and places the viewer may not read
-// are said outright.
+function boundedKinds(kinds: string[], conjunction: 'and' | 'or') {
+  if (kinds.length > 3) return `${kinds.slice(0, 3).join(', ')} and ${kinds.length - 3} more`
+  if (kinds.length === 1) return kinds[0]
+  return `${kinds.slice(0, -1).join(', ')} ${conjunction} ${kinds[kinds.length - 1]}`
+}
+
+function coverageGapNote(gaps: OwnershipGap[], relation: 'children' | 'managers') {
+  const groups = new Map<string, Set<string>>()
+  for (const { kind, group = '' } of gaps) {
+    if (!kind) continue
+    if (!groups.has(kind)) groups.set(kind, new Set())
+    groups.get(kind)!.add(group)
+  }
+
+  const byReason = new Map<string, Set<string>>()
+  let undiscovered = false
+  for (const { kind, group = '', reason } of gaps) {
+    if (!kind) {
+      undiscovered = true
+      continue
+    }
+    const label = groups.get(kind)!.size > 1 ? `${kind} (${group || 'core'})` : kind
+    const code = String(canonicalReadCode(reason))
+    if (!byReason.has(code)) byReason.set(code, new Set())
+    byReason.get(code)!.add(label)
+  }
+
+  const hint: string[] = []
+  const warnings = new Map<string, Set<string>>()
+  const children = relation === 'children'
+  for (const [reason, labels] of byReason) {
+    const kinds = [...labels]
+    if (reason === 'kind_sync_pending') {
+      const names = boundedKinds(kinds, 'and')
+      const loading = kinds.length <= 3 ? `${names} objects` : `${kinds.length} resource kinds (${names})`
+      const which = kinds.length === 1 ? 'that kind' : 'those kinds'
+      hint.push(`Radar is still loading ${loading}, so ${relation} of ${which} aren't ${children ? 'listed yet' : 'checked yet'}.`)
+    } else if (reason === 'radar_kind_not_collected' || (!children && reason === 'read_error')) {
+      const verb = reason === 'read_error' ? "couldn't search" : "doesn't collect"
+      const objects = kinds.length <= 3 ? `${boundedKinds(kinds, 'or')} objects` : `objects of ${kinds.length} kinds (${boundedKinds(kinds, 'or')})`
+      hint.push(`Radar ${verb} ${objects}, so ${children ? 'none of those are listed' : "those managers aren't checked"}.`)
+    } else if (children && reason === 'radar_namespace_not_collected') {
+      hint.push("Radar doesn't collect every namespace, so children in the others aren't listed.")
+    } else {
+      const text = gapReasonText(reason)
+      const combined = warnings.get(text) ?? new Set<string>()
+      for (const label of labels) combined.add(label)
+      warnings.set(text, combined)
+    }
+  }
+  // An API group whose discovery fails, often a metrics API with no server
+  // behind it, leaves every answer with this gap; most such groups hold no
+  // related objects, so it is a hint, not a warning.
+  if (undiscovered) hint.push(`Radar's API discovery missed some API groups, so ${relation} of their kinds aren't ${children ? 'listed' : 'checked'}.`)
+  const pressing = Array.from(warnings, ([text, labels]) => `${boundedKinds([...labels], 'and')} (${text})`)
+  return { hint, pressing }
+}
+
 function childrenNote(coverage: OwnershipCoverage | undefined): RelationshipNote | undefined {
   const children = coverage?.children
   if (!children) return undefined
-  const uncollected = new Set<string>()
-  let someNamespaces = false
-  let undiscovered = false
-  const pressing = new Map<string, string>()
-  for (const g of children.notChecked ?? []) {
-    if (!g.kind) undiscovered = true
-    else if (g.reason === 'radar_kind_not_collected') uncollected.add(g.kind)
-    else if (g.reason === 'radar_namespace_not_collected') someNamespaces = true
-    else if (!pressing.has(g.kind)) pressing.set(g.kind, gapReasonText(g.reason))
-  }
+  const { hint, pressing } = coverageGapNote(children.notChecked ?? [], 'children')
   const note: RelationshipNote = {}
-  const hint: string[] = []
-  if (uncollected.size > 0) hint.push(`Radar doesn't collect ${joinOr(Array.from(uncollected))} objects, so none of those are listed.`)
-  if (someNamespaces) hint.push("Radar doesn't collect every namespace, so children in the others aren't listed.")
-  // An API group whose discovery fails, often a metrics API with no server
-  // behind it, leaves every answer with this gap; most such groups hold no
-  // children, so it is a hint, not a warning.
-  if (undiscovered) hint.push("Radar's API discovery missed some API groups, so children of their kinds aren't listed.")
   if (children.narrowed) hint.push('Only children you can view are listed.')
   if (hint.length > 0) note.hint = hint
   const text: string[] = []
-  if (pressing.size > 0) text.push(`Couldn't check ${Array.from(pressing, ([kind, why]) => `${kind} (${why})`).join(', ')}.`)
+  if (pressing.length > 0) text.push(`Couldn't check ${pressing.join('; ')}.`)
   if (children.truncated) text.push('More children than shown.')
   if (text.length > 0) note.text = text.join(' ')
   return note.hint || note.text ? note : undefined
@@ -1097,10 +1135,6 @@ function childrenNote(coverage: OwnershipCoverage | undefined): RelationshipNote
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1)
-}
-
-function joinOr(items: string[]): string {
-  return items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} or ${items[items.length - 1]}`
 }
 
 // membersNote says what a GitOps manager's status records beyond the members
@@ -1205,16 +1239,9 @@ function managersNote(coverage: OwnershipCoverage | undefined, listed: number, t
     const n = coverageOf.remote
     open.push(`${n} ${n === 1 ? 'manager lists' : 'managers list'} it for a cluster Radar can't confirm is this one`)
   }
-  const pressing = new Map<string, string>()
-  for (const g of coverageOf?.notChecked ?? []) {
-    // An unserved manager kind under incomplete discovery reads as read_error
-    // on every resource, like discovery's own gap.
-    if (!g.kind) hint.push("Radar's API discovery missed some API groups, so managers of their kinds aren't checked.")
-    else if (g.reason === 'read_error') hint.push(`Radar couldn't search ${g.kind} objects, so those managers aren't checked.`)
-    else if (g.reason === 'radar_kind_not_collected') hint.push(`Radar doesn't collect ${g.kind} objects, so those managers aren't checked.`)
-    else if (!pressing.has(g.kind)) pressing.set(g.kind, gapReasonText(g.reason))
-  }
-  if (pressing.size > 0) open.push(`couldn't check ${Array.from(pressing, ([kind, why]) => `${kind} (${why})`).join(', ')}`)
+  const gaps = coverageGapNote(coverageOf?.notChecked ?? [], 'managers')
+  hint.push(...gaps.hint)
+  if (gaps.pressing.length > 0) open.push(`couldn't check ${gaps.pressing.join('; ')}`)
   const text: string[] = []
   if (trackedBy) text.push(`Its tracking label names ${trackedBy}, whose status doesn't list it.`)
   if (open.length > 0) {
