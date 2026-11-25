@@ -32,6 +32,7 @@ const (
 	mcpStoreLimit       = 4096
 	mcpPendingPerClient = 8
 	mcpConsentCookie    = "radar_mcp_consent_"
+	mcpPendingCookie    = "radar_mcp_pending_"
 )
 
 type mcpClient struct {
@@ -46,7 +47,7 @@ type mcpClient struct {
 
 type mcpAuthorization struct {
 	ClientID, RedirectURI, Resource, State, Challenge string
-	CSRF, SID                                         string
+	CSRF, SID, Browser                                string
 	Expires                                           time.Time
 }
 
@@ -329,6 +330,12 @@ func (s *MCPOAuthServer) HandleAuthorize(w http.ResponseWriter, r *http.Request)
 	var pending *mcpAuthorization
 	if id != "" {
 		pending = s.pending[mcpHash(id)]
+		// The resume link carries only the request ID, so whoever opens it would
+		// otherwise become the approver of someone else's sign-in.
+		cookie, err := r.Cookie(mcpPendingCookie + mcpHash(id))
+		if pending != nil && (err != nil || pending.Browser == "" || subtle.ConstantTimeCompare([]byte(mcpHash(cookie.Value)), []byte(pending.Browser)) != 1) {
+			pending = nil
+		}
 	} else {
 		client, ok := s.clients[q.Get("client_id")]
 		challenge, err := base64.RawURLEncoding.DecodeString(q.Get("code_challenge"))
@@ -372,6 +379,11 @@ func (s *MCPOAuthServer) HandleAuthorize(w http.ResponseWriter, r *http.Request)
 	}
 	session := s.browserSession(r)
 	if session == nil {
+		if pending.Browser == "" {
+			browser := mcpRandom()
+			pending.Browser = mcpHash(browser)
+			http.SetCookie(w, &http.Cookie{Name: mcpPendingCookie + mcpHash(id), Value: browser, Path: s.basePath + "/auth/mcp/authorize", Secure: strings.HasPrefix(s.origin, "https://"), HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: int(mcpPendingTTL.Seconds())})
+		}
 		s.mu.Unlock()
 		returnTo := s.basePath + "/auth/mcp/authorize?request=" + url.QueryEscape(id)
 		http.Redirect(w, r, s.basePath+"/auth/login?return_to="+url.QueryEscape(returnTo), http.StatusFound)
@@ -434,6 +446,9 @@ func (s *MCPOAuthServer) consent(w http.ResponseWriter, r *http.Request) {
 	}
 	delete(s.pending, id)
 	http.SetCookie(w, &http.Cookie{Name: mcpConsentCookie + id, Path: s.basePath + "/auth/mcp/authorize", MaxAge: -1, Secure: strings.HasPrefix(s.origin, "https://"), HttpOnly: true, SameSite: http.SameSiteLaxMode})
+	if pending.Browser != "" {
+		http.SetCookie(w, &http.Cookie{Name: mcpPendingCookie + id, Path: s.basePath + "/auth/mcp/authorize", MaxAge: -1, Secure: strings.HasPrefix(s.origin, "https://"), HttpOnly: true, SameSite: http.SameSiteLaxMode})
+	}
 	u, _ := url.Parse(pending.RedirectURI)
 	q := u.Query()
 	if pending.State != "" {

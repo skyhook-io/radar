@@ -169,7 +169,7 @@ func TestMCPOAuthDiscoveryAndLoginContinuation(t *testing.T) {
 	if err != nil || continuation.Path != "/radar/auth/mcp/authorize" || continuation.Query().Get("request") == "" || len(continuation.Query()) != 1 {
 		t.Fatalf("unsafe continuation: %v", continuation)
 	}
-	page := f.authorize(continuation.Query(), f.cookies)
+	page := f.authorize(continuation.Query(), append(f.cookies, w.Result().Cookies()...))
 	if page.Code != 200 || !strings.Contains(page.Body.String(), "read-only tools") {
 		t.Fatalf("resume failed: %d %s", page.Code, page.Body)
 	}
