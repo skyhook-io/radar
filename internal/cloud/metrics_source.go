@@ -32,10 +32,11 @@ const (
 
 // The agent asks Hub for its metrics source only when something can have
 // changed it: at start, on each tunnel (re)connect, when Hub nudges it after a
-// settings change, and when the relay answers that this cluster is no longer
-// selected. Hub checks every relay request itself, so a missed change costs
-// chart errors until one of those moments, never another cluster's data. A
-// failed check is retried with backoff until one succeeds.
+// settings change, when the relay answers that this cluster is no longer
+// selected, and when a user asks for a check from an empty metrics screen.
+// Hub checks every relay request itself, so a missed change costs chart
+// errors until one of those moments, never another cluster's data. A failed
+// check is retried with backoff until one succeeds.
 var (
 	metricsSourceMinPollGap = 2 * time.Second
 	metricsSourceRetryMin   = 30 * time.Second
@@ -76,24 +77,50 @@ type MetricsSourceDecision struct {
 	Health       func() (unavailable bool, message string)
 }
 
-// metricsSourceNudges holds one channel per running poller, so a refresh
-// request from Hub reaches whichever tunnel is current.
-var metricsSourceNudges = struct {
+// metricsSourcePollers holds every running poller, so a refresh request from
+// Hub reaches whichever tunnel is current.
+var metricsSourcePollers = struct {
 	sync.Mutex
-	set map[chan struct{}]struct{}
-}{set: map[chan struct{}]struct{}{}}
+	set map[*metricsSourcePoller]struct{}
+}{set: map[*metricsSourcePoller]struct{}{}}
 
 // RequestMetricsSourceRefresh makes every running poller ask Hub for the
 // metrics source now.
 func RequestMetricsSourceRefresh() {
-	metricsSourceNudges.Lock()
-	defer metricsSourceNudges.Unlock()
-	for ch := range metricsSourceNudges.set {
+	metricsSourcePollers.Lock()
+	defer metricsSourcePollers.Unlock()
+	for p := range metricsSourcePollers.set {
+		p.requestPoll()
+	}
+}
+
+// MetricsSourcePollerRunning reports whether this agent asks Hub for its
+// metrics source.
+func MetricsSourcePollerRunning() bool {
+	metricsSourcePollers.Lock()
+	defer metricsSourcePollers.Unlock()
+	return len(metricsSourcePollers.set) > 0
+}
+
+// CheckMetricsSourceNow makes every running poller ask Hub for the metrics
+// source and waits until each has applied the answer of a check that started
+// after this call, or ctx ends. The check keeps the poller's minimum gap
+// between requests. It reports whether any poller finished such a check.
+func CheckMetricsSourceNow(ctx context.Context) bool {
+	metricsSourcePollers.Lock()
+	var waits []<-chan struct{}
+	for p := range metricsSourcePollers.set {
+		waits = append(waits, p.waitForPoll())
+	}
+	metricsSourcePollers.Unlock()
+	for _, w := range waits {
 		select {
-		case ch <- struct{}{}:
-		default:
+		case <-w:
+		case <-ctx.Done():
+			return false
 		}
 	}
+	return len(waits) > 0
 }
 
 type metricsSourcePoller struct {
@@ -103,6 +130,9 @@ type metricsSourcePoller struct {
 	relay     *http.Transport
 	apply     func(MetricsSourceDecision)
 	nudge     chan struct{}
+
+	waitMu  sync.Mutex
+	waiters []chan struct{}
 
 	applied     *MetricsSourceResponse
 	appliedKey  string
@@ -128,17 +158,17 @@ func newMetricsSourcePoller(cfg Config) (*metricsSourcePoller, error) {
 }
 
 func (p *metricsSourcePoller) run(ctx context.Context) {
-	metricsSourceNudges.Lock()
-	metricsSourceNudges.set[p.nudge] = struct{}{}
-	metricsSourceNudges.Unlock()
+	metricsSourcePollers.Lock()
+	metricsSourcePollers.set[p] = struct{}{}
+	metricsSourcePollers.Unlock()
 	defer func() {
-		metricsSourceNudges.Lock()
-		delete(metricsSourceNudges.set, p.nudge)
-		metricsSourceNudges.Unlock()
+		metricsSourcePollers.Lock()
+		delete(metricsSourcePollers.set, p)
+		metricsSourcePollers.Unlock()
 	}()
 
 	retry := metricsSourceRetryMin
-	ok := p.poll(ctx)
+	ok := p.pollForWaiters(ctx)
 	last := time.Now()
 	for {
 		var retryTimer *time.Timer
@@ -163,7 +193,7 @@ func (p *metricsSourcePoller) run(ctx context.Context) {
 				return
 			}
 		}
-		if ok = p.poll(ctx); ok {
+		if ok = p.pollForWaiters(ctx); ok {
 			retry = metricsSourceRetryMin
 		}
 		last = time.Now()
@@ -175,6 +205,29 @@ func (p *metricsSourcePoller) requestPoll() {
 	case p.nudge <- struct{}{}:
 	default:
 	}
+}
+
+// waitForPoll requests a check and returns a channel closed once a check that
+// started after this call has finished.
+func (p *metricsSourcePoller) waitForPoll() <-chan struct{} {
+	ch := make(chan struct{})
+	p.waitMu.Lock()
+	p.waiters = append(p.waiters, ch)
+	p.waitMu.Unlock()
+	p.requestPoll()
+	return ch
+}
+
+func (p *metricsSourcePoller) pollForWaiters(ctx context.Context) bool {
+	p.waitMu.Lock()
+	waiters := p.waiters
+	p.waiters = nil
+	p.waitMu.Unlock()
+	ok := p.poll(ctx)
+	for _, ch := range waiters {
+		close(ch)
+	}
+	return ok
 }
 
 // poll reads the source and applies it when it changed, and reports whether

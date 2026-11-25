@@ -13,6 +13,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func TestOpenObserveAgentRoutesAreTunnelOnly(t *testing.T) {
@@ -154,5 +155,42 @@ func TestRunningOpenObserveCollector(t *testing.T) {
 				t.Fatalf("detected=%v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// Local Radar sets OpenObserve up in Settings, so its own UI may ask whether a
+// collector runs; in-cluster Radar without Hub still answers 404.
+func TestOpenObserveCollectorPresenceInLocalRadar(t *testing.T) {
+	s := setupOpenObserveTest(t)
+	collector := runningPod("observability", "collector-0")
+	collector.Labels = map[string]string{"app.kubernetes.io/name": "openobserve-collector"}
+	useTestResourceCache(t, fake.NewClientset(collector))
+
+	w := httptest.NewRecorder()
+	s.handleOpenObserveCollectorPresence(w, httptest.NewRequest(http.MethodGet, "/api/metrics/openobserve/collector", nil))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"detected":true`) {
+		t.Fatalf("local: got %d %s, want detected", w.Code, w.Body.String())
+	}
+
+	previous := k8s.ForceInCluster
+	k8s.ForceInCluster = true
+	t.Cleanup(func() { k8s.ForceInCluster = previous })
+	w = httptest.NewRecorder()
+	s.handleOpenObserveCollectorPresence(w, httptest.NewRequest(http.MethodGet, "/api/metrics/openobserve/collector", nil))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("in cluster: got %d, want 404", w.Code)
+	}
+}
+
+func TestOpenObservePath(t *testing.T) {
+	s := setupOpenObserveTest(t)
+	if got := s.openObservePath(); got != "local" {
+		t.Fatalf("local Radar: path = %q, want local", got)
+	}
+	previous := k8s.ForceInCluster
+	k8s.ForceInCluster = true
+	t.Cleanup(func() { k8s.ForceInCluster = previous })
+	if got := s.openObservePath(); got != "" {
+		t.Fatalf("in-cluster Radar without Hub: path = %q, want none", got)
 	}
 }

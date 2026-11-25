@@ -103,8 +103,10 @@ type Config struct {
 	Handler http.Handler
 
 	// OnMetricsSource, when set, receives the metrics source Hub selects for
-	// this cluster: at start, whenever it changes (checked every 30s), and
-	// after Hub asks for a refresh. It runs on the poller's goroutine.
+	// this cluster whenever it changes. The agent asks Hub at start, on each
+	// tunnel reconnect, after Hub asks for a refresh, when the relay answers
+	// that this cluster is no longer selected, and when a user asks for a
+	// check. It runs on the poller's goroutine.
 	OnMetricsSource func(MetricsSourceDecision)
 }
 

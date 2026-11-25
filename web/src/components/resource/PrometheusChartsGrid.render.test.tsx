@@ -9,6 +9,8 @@ import type { WorkloadMetrics } from '../../api/workloadMetrics'
 
 let connected = false
 let source: Record<string, unknown> | undefined
+let openobserve: 'hub' | 'local' | undefined
+let discoverOutcome: 'connected' | 'collector' | 'none' | undefined
 const ranges: string[] = []
 const charts: { seriesLabels?: string[]; referenceLines?: unknown[] }[] = []
 let workload: WorkloadMetrics
@@ -19,8 +21,9 @@ let metricsByCategory: Record<string, Record<string, unknown>> = {}
 vi.mock('../../api/client', async (importActual) => ({
   ...(await importActual<typeof import('../../api/client')>()),
   useAutoPromConnect: () => undefined,
-  usePrometheusStatus: () => ({ data: { connected, error: 'Backend query failed', source } }),
+  usePrometheusStatus: () => ({ data: { connected, error: openobserve ? undefined : 'Backend query failed', source, openobserve } }),
   usePrometheusConnect: () => ({ mutate: vi.fn(), isPending: false }),
+  useDiscoverMetrics: () => ({ mutate: vi.fn(), isPending: false, data: discoverOutcome }),
   usePrometheusResourceMetrics: (_kind: string, _ns: string, _name: string, category: string, range: string, enabled = true) => {
     if (enabled) ranges.push(range)
     return { data: metricsByCategory[category] ?? resourceMetrics }
@@ -46,6 +49,8 @@ const render = (url = '/workloads/Deployment/demo/web?tab=metrics', embedded = f
 beforeEach(() => {
   connected = false
   source = undefined
+  openobserve = undefined
+  discoverOutcome = undefined
   ranges.length = 0
   charts.length = 0
   resourceMetrics = drawnMetrics
@@ -89,6 +94,29 @@ describe('Expanded metrics recovery and scope', () => {
     expect(html).toContain('Discover Prometheus')
     expect(html).toContain('Configure metrics')
     expect(html).toContain('workload-metrics.md#what-each-chart-needs')
+  })
+  it.each(['hub', 'local'] as const)('offers metrics discovery when OpenObserve is available through %s', (path) => {
+    openobserve = path
+    const html = render()
+    expect(html).toContain('No metrics source connected')
+    expect(html).toContain('Radar can read metrics from Prometheus or OpenObserve.')
+    expect(html).toContain('Discover metrics')
+    expect(html).not.toContain('Discover Prometheus')
+    expect(html).not.toContain('Prometheus not connected')
+    expect(html).toContain('Configure metrics')
+  })
+  it.each([
+    ['local', 'none', 'No metrics source found'],
+    ['hub', 'none', 'No metrics source found'],
+    ['local', 'collector', 'OpenObserve collector found. Connect it in Settings → Metrics'],
+    ['hub', 'collector', 'OpenObserve collector found. Ask your organization owner to connect OpenObserve in Radar Hub.'],
+  ] as const)('shows the %s discovery outcome %s without offering discovery again', (path, outcome, message) => {
+    openobserve = path
+    discoverOutcome = outcome
+    const html = render()
+    expect(html).toContain(message)
+    expect(html).not.toContain('Discover metrics')
+    expect(html).not.toContain('Discover Prometheus')
   })
   it('uses operator guidance instead of standalone settings when embedded', () => {
     const html = render(undefined, true)

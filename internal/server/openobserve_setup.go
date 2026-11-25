@@ -11,6 +11,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/openobserve"
@@ -74,8 +75,25 @@ type openObserveClusterState struct {
 	Match *openobserve.MatchView `json:"match,omitempty"`
 }
 
+func (s *Server) openObserveLocal() bool {
+	return s.configManagement() == "local" && !k8s.IsInCluster() && s.localRuntime != nil
+}
+
+// openObservePath says how this install can get OpenObserve metrics. A Hub
+// connection makes configuration management "cloud", so the two never hold
+// together; Hub is checked first because its choice is what the agent applies.
+func (s *Server) openObservePath() string {
+	switch {
+	case cloud.MetricsSourcePollerRunning():
+		return "hub"
+	case s.openObserveLocal():
+		return "local"
+	}
+	return ""
+}
+
 func (s *Server) requireOpenObserveLocal(w http.ResponseWriter) bool {
-	if s.configManagement() != "local" || k8s.IsInCluster() || s.localRuntime == nil {
+	if !s.openObserveLocal() {
 		s.writeError(w, http.StatusForbidden, "OpenObserve setup is available only in local CLI and Desktop Radar. Radar running in a cluster reads metrics from the Prometheus its operator configures.")
 		return false
 	}

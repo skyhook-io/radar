@@ -4211,6 +4211,8 @@ export interface PrometheusStatus {
   error?: string;
   /** Set when metrics come from a backend other than plain Prometheus. */
   source?: MetricsSource;
+  /** How this install can get OpenObserve metrics: Radar Hub selects the source, or local Settings → Metrics. */
+  openobserve?: "hub" | "local";
 }
 
 /**
@@ -4417,6 +4419,33 @@ export function usePrometheusConnect() {
     meta: {
       errorMessage: "Failed to connect to Prometheus",
       successMessage: "Connected to Prometheus",
+    },
+  });
+}
+
+export type MetricsDiscoveryOutcome = "connected" | "collector" | "none";
+
+// Discover metrics on an install that can also read OpenObserve. The connect
+// call asks Radar Hub for the source first (when connected to it), then looks
+// for Prometheus; with nothing found, it reports whether an OpenObserve
+// collector runs. The outcome is shown in place, so there are no toasts.
+export function useDiscoverMetrics() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (): Promise<MetricsDiscoveryOutcome> => {
+      const resp = await apiFetch(`${getApiBase()}/prometheus/connect`, {
+        method: "POST",
+      });
+      if (resp.ok && hasPrometheusCharts((await resp.json()) as PrometheusStatus)) return "connected";
+      try {
+        const presence = await fetchJSON<{ detected: boolean }>("/metrics/openobserve/collector");
+        return presence.detected ? "collector" : "none";
+      } catch {
+        return "none";
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["prometheus-status"] });
     },
   });
 }

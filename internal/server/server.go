@@ -881,6 +881,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// own Prometheus access, so each route authorizes the caller
 			// through this gate before querying — see prometheusAuthGate.
 			prometheuspkg.SetAuthGate(s.prometheusAuthGate)
+			prometheuspkg.SetOpenObservePath(s.openObservePath)
 			r.Post("/prometheus/rightsizing/scan", s.handleRightsizingScan)
 			r.Get("/prometheus/rightsizing/scan", s.handleRightsizingScan)
 			r.Get("/prometheus/rightsizing/scan/{scanId}", s.handleRightsizingScan)

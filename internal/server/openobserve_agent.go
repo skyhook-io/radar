@@ -137,16 +137,19 @@ func runningOpenObserveCollector(p *corev1.Pod) bool {
 }
 
 // Presence is a setup hint. A negative result also covers collectors outside the caller's visibility.
+// Hub's callers reach it over the tunnel; local Radar, where OpenObserve is set
+// up in Settings, serves its own unauthenticated user, whose access is Radar's.
 func (s *Server) handleOpenObserveCollectorPresence(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	if !cloud.IsAuthenticatedTunnelRequest(r.Context()) || auth.UserFromContext(r.Context()) == nil {
+	local := s.openObserveLocal()
+	if !local && (!cloud.IsAuthenticatedTunnelRequest(r.Context()) || auth.UserFromContext(r.Context()) == nil) {
 		http.NotFound(w, r)
 		return
 	}
 	detected := false
 	generation := k8s.Current().ClientGeneration()
 	cache := k8s.GetResourceCache()
-	if s.permCache != nil && cache != nil && cache.Pods() != nil {
+	if (local || s.permCache != nil) && cache != nil && cache.Pods() != nil {
 		if pods, err := cache.Pods().List(labels.Everything()); err == nil {
 			for _, p := range pods {
 				if runningOpenObserveCollector(p) && outsideNamespacePin(p.Namespace) == nil && s.prometheusAuthGate(r, "", "pods", p.Namespace, "list") {

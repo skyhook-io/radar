@@ -22,6 +22,7 @@ import {
 import {
   usePrometheusStatus,
   usePrometheusConnect,
+  useDiscoverMetrics,
   usePrometheusResourceMetrics,
   useAutoPromConnect,
   type PrometheusMetricCategory,
@@ -81,6 +82,7 @@ export function PrometheusChartsGrid({
   useAutoPromConnect();
   const { data: status, isLoading: statusLoading } = usePrometheusStatus();
   const connectMutation = usePrometheusConnect();
+  const discoverMutation = useDiscoverMetrics();
   const isConnected = hasPrometheusCharts(status);
   const isSupported = SUPPORTED_KINDS.has(kind);
   const isWorkload = ["Deployment", "StatefulSet", "DaemonSet"].includes(kind);
@@ -185,30 +187,42 @@ export function PrometheusChartsGrid({
   }
 
   if (!isConnected) {
+    const openObservePath = status?.openobserve;
+    const discovery = openObservePath ? discoverMutation : connectMutation;
+    const outcome = openObservePath ? discoverMutation.data : undefined;
+    const notFound = outcome === "none" || outcome === "collector";
     return (
       <div className="flex flex-col items-center justify-center py-12 gap-4">
         <WifiOff className="w-10 h-10 text-theme-text-quaternary" />
         <div className="text-center">
           <p className="text-sm text-theme-text-secondary mb-1">
-            Prometheus not connected
+            {openObservePath ? "No metrics source connected" : "Prometheus not connected"}
           </p>
           <p className="text-xs text-theme-text-tertiary mb-4">
-            {status?.error ||
-              "Connect to view historical CPU, memory, and network metrics"}
+            {status?.error || (openObservePath
+              ? "Radar can read metrics from Prometheus or OpenObserve."
+              : "Connect to view historical CPU, memory, and network metrics")}
           </p>
+          {notFound && <p className="text-sm text-theme-text-secondary mb-4">
+            {outcome === "none"
+              ? "No metrics source found"
+              : openObservePath === "hub"
+                ? "OpenObserve collector found. Ask your organization owner to connect OpenObserve in Radar Hub."
+                : "OpenObserve collector found. Connect it in Settings → Metrics"}
+          </p>}
           <div className="flex flex-wrap items-center justify-center gap-3">
-          <button
-            onClick={() => connectMutation.mutate()}
-            disabled={connectMutation.isPending}
+          {!notFound && <button
+            onClick={() => discovery.mutate()}
+            disabled={discovery.isPending}
             className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg btn-brand"
           >
-            {connectMutation.isPending ? (
+            {discovery.isPending ? (
               <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
               <Wifi className="w-4 h-4" />
             )}
-            Discover Prometheus
-          </button>
+            {openObservePath ? "Discover metrics" : "Discover Prometheus"}
+          </button>}
           {settingsAvailable && <button
             type="button"
             className="text-sm text-accent hover:underline"

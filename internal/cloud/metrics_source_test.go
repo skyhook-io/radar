@@ -390,13 +390,52 @@ func TestRequestMetricsSourceRefreshPollsNow(t *testing.T) {
 
 	waitUntil(t, func() bool { return hub.polls.Load() == 1 })
 	waitUntil(t, func() bool {
-		metricsSourceNudges.Lock()
-		defer metricsSourceNudges.Unlock()
-		_, ok := metricsSourceNudges.set[p.nudge]
+		metricsSourcePollers.Lock()
+		defer metricsSourcePollers.Unlock()
+		_, ok := metricsSourcePollers.set[p]
 		return ok
 	})
 	RequestMetricsSourceRefresh()
 	waitUntil(t, func() bool { return hub.polls.Load() == 2 })
+}
+
+func TestCheckMetricsSourceNowWaitsForTheAnswer(t *testing.T) {
+	if CheckMetricsSourceNow(t.Context()) {
+		t.Fatal("reported a check with no poller running")
+	}
+	prevGap := metricsSourceMinPollGap
+	metricsSourceMinPollGap = 50 * time.Millisecond
+	t.Cleanup(func() { metricsSourceMinPollGap = prevGap })
+
+	hub, srv := newFakeSourceHub(t)
+	var source atomic.Value
+	p := newTestPoller(t, srv, func(d MetricsSourceDecision) { source.Store(d.Response.Source) })
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { p.run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+	waitUntil(t, func() bool { return MetricsSourcePollerRunning() && hub.polls.Load() == 1 })
+
+	hub.set(openObserveSource())
+	if !CheckMetricsSourceNow(t.Context()) {
+		t.Fatal("check did not finish")
+	}
+	if got := source.Load(); got != MetricsSourceOpenObserve {
+		t.Fatalf("source after check = %v, want openobserve applied before returning", got)
+	}
+	if n := hub.polls.Load(); n != 2 {
+		t.Fatalf("polls = %d, want 2", n)
+	}
+
+	expired, stop := context.WithTimeout(t.Context(), time.Millisecond)
+	defer stop()
+	hub.mu.Lock()
+	hub.status = http.StatusServiceUnavailable
+	hub.mu.Unlock()
+	metricsSourceMinPollGap = time.Second
+	if CheckMetricsSourceNow(expired) {
+		t.Fatal("reported a finished check after the wait expired")
+	}
 }
 
 // Nothing but a start, a reconnect, a nudge or a not-selected relay answer
