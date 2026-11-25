@@ -550,8 +550,9 @@ func TestProxyAuth_IssueCorrelationSaturatedEmptyRead(t *testing.T) {
 	}
 }
 
-// complete_since is store-wide: only a caller who reads every namespace gets it.
-func TestProxyAuth_IssueCorrelationCompleteSinceOnlyForAllNamespaces(t *testing.T) {
+// A boundary from Radar's own late start dates no one's activity, so a caller
+// limited to some namespaces gets it too.
+func TestProxyAuth_IssueCorrelationLateStartBoundaryForEveryCaller(t *testing.T) {
 	store := correlationFixture(t)
 	recordChanges(t, store)
 	timeline.SetObservationStartForTest(time.Now().Add(-20 * time.Minute))
@@ -561,7 +562,7 @@ func TestProxyAuth_IssueCorrelationCompleteSinceOnlyForAllNamespaces(t *testing.
 	for _, tc := range []struct {
 		user string
 		want bool
-	}{{"everywhere", true}, {"shop-only", false}} {
+	}{{"everywhere", true}, {"shop-only", true}} {
 		iss := correlated(t, env, tc.user, "Deployment", "web", "apps", issuesapi.CategoryCrashLoop)
 		history := iss.Correlation.History
 		if history == nil || !history.Incomplete || !slices.Contains(history.Reasons, issuesapi.HistoryObservationStartedLate) {
