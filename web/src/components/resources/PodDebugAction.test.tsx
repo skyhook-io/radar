@@ -115,7 +115,7 @@ it('keeps the header chooser open on a confirmed denial after a refused write', 
   click('Start debug container')
   expect(fetch).not.toHaveBeenCalled()
   click('Cancel')
-  click('Debug access denied for this Pod')
+  click('Debug')
   expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Copy access request')
 })
 

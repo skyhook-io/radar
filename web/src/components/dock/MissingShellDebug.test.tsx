@@ -10,6 +10,7 @@ const f = vi.hoisted(() => ({
   pod: {} as any, installation: {} as Record<string, unknown>, checkError: undefined as Error | undefined, namedExec: false, embedded: false, support: 'supported', access: 'denied', image: undefined as string | undefined,
   recheck: vi.fn(), open: vi.fn(), copy: vi.fn(), probe: vi.fn(),
 }))
+vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({connection:{context:'fixture-cluster'}}) }))
 vi.mock('../../context/NavCustomization', () => ({ useNavCustomization: () => ({ embedded: f.embedded }) }))
 vi.mock('../../contexts/CapabilitiesContext', () => ({ useCapabilitiesContext: () => f.installation, useNamespacedCapabilities: () => ({ podDebugImage: f.image }) }))
 vi.mock('../../api/client', async original => ({ ...await original<typeof import('../../api/client')>(), useResource: () => ({ data: f.pod }) }))
@@ -20,7 +21,7 @@ vi.mock('../../api/podDebug', () => ({ usePodDebugAccess: (...args: unknown[]) =
 vi.mock('@skyhook-io/k8s-ui', async original => ({ ...await original<typeof import('@skyhook-io/k8s-ui')>(), useOpenTerminal: () => f.open }))
 vi.mock('@skyhook-io/k8s-ui/utils/clipboard', () => ({ copyText: f.copy }))
 vi.mock('../resources/PodDebugAction', async original => ({ ...await original<typeof import('../resources/PodDebugAction')>(),
-  PodDebugAction: ({ failedContainer, unverifiedReview }: { failedContainer: string; unverifiedReview?: object }) => <button>{unverifiedReview ? 'Review attempt for' : 'Start for'} {failedContainer}</button> }))
+  PodDebugAction: ({ failedContainer, unverifiedReview, hideLauncher }: { failedContainer: string; unverifiedReview?: object; hideLauncher?: boolean }) => hideLauncher ? null : <button>{unverifiedReview ? 'Review attempt for' : 'Start for'} {failedContainer}</button> }))
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 let host: HTMLDivElement, root: ReturnType<typeof createRoot>
@@ -56,7 +57,7 @@ it('copies the precise access request and rechecks an updated grant', async () =
   render()
   await act(async () => button('Copy access request')!.click())
   expect(button('Copied')).toBeDefined()
-  expect(f.copy).toHaveBeenCalledWith('Could you grant me permission to update pods/ephemeralcontainers for Pod checkout in namespace payments? I need to troubleshoot container app. Please limit the rule to resourceNames: ["checkout"]. A replacement Pod with another name would need its own grant.')
+  expect(f.copy).toHaveBeenCalledWith('Could you grant me permission to update pods/ephemeralcontainers for Pod checkout in namespace payments? I need to troubleshoot container app. Please limit the rule to resourceNames: ["checkout"]. A replacement Pod with another name would need its own grant. Radar context: fixture-cluster.')
   act(() => button('Recheck access')!.click())
   expect(f.recheck).toHaveBeenCalledOnce()
   f.access='allowed'; render()
@@ -68,7 +69,7 @@ it('asks for verification on an unknown result without requesting a grant', asyn
   expect(button('Copy access request')).toBeUndefined()
   expect(button('Recheck access')).toBeDefined()
   await act(async () => button('Copy verification request')!.click())
-  expect(f.copy).toHaveBeenCalledWith('Could you check whether my Kubernetes identity can update pods/ephemeralcontainers for Pod checkout in namespace payments? Radar couldn’t verify access while I was troubleshooting container app.')
+  expect(f.copy).toHaveBeenCalledWith('Could you check whether my Kubernetes identity can update pods/ephemeralcontainers for Pod checkout in namespace payments? Radar couldn’t verify access while I was troubleshooting container app. Radar context: fixture-cluster.')
 })
 it('distinguishes a failed request from an inconclusive cluster answer', () => {
   f.access = 'unknown'
@@ -132,6 +133,7 @@ it('identifies where to find the real ServiceAccount when Radar has no signed-in
   expect(host.textContent).toContain('Radar’s ServiceAccount doesn’t have permission')
   const [request] = f.copy.mock.lastCall!
   expect(request).toContain('the ServiceAccount used by this Radar installation')
+  expect(request).toContain('Radar context: fixture-cluster.')
   expect(request).toContain('running Radar Pod’s namespace and its spec.serviceAccountName')
 })
 
