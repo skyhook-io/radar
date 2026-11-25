@@ -35,7 +35,7 @@ func TestRewriteRefusesPlaceholderValues(t *testing.T) {
 func TestDiscoverIDsCollectorPlaceholderName(t *testing.T) {
 	store := &routeStore{routes: []route{
 		{match: []string{"k8s_pod_cpu_time{k8s_cluster_uid=~"}, rows: []map[string]string{{"k8s_cluster_uid": uidA, "k8s_cluster": "_o2_all_"}}},
-		{match: []string{"k8s_pod_cpu_time[7d]"}, rows: []map[string]string{{"k8s_cluster_uid": uidA, "k8s_cluster": "_o2_all_"}}},
+		{match: []string{"k8s_pod_cpu_time[7d1h]"}, rows: []map[string]string{{"k8s_cluster_uid": uidA, "k8s_cluster": "_o2_all_"}}},
 	}}
 	got, err := DiscoverIDs(context.Background(), store, []string{uidA})
 	if err != nil {

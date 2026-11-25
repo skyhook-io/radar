@@ -194,14 +194,22 @@ func (t *RewritingTransport) Do(ctx context.Context, method, path string, params
 		defaultLookupRange(out)
 	}
 
+	var exprs []string
+	switch kind {
+	case pathQuery:
+		exprs = out["query"]
+	case pathSeries, pathLabels:
+		exprs = out["match[]"]
+	}
+	s, err := prepare(t.Options)
+	if err != nil {
+		return nil, err
+	}
+	if err := boundGatewayWindow(out, kind != pathQuery || path == "/api/v1/query_range", exprs, s, lookupNow()); err != nil {
+		return nil, refused(err)
+	}
+
 	if t.LegacyStore {
-		var exprs []string
-		switch kind {
-		case pathQuery:
-			exprs = out["query"]
-		case pathSeries, pathLabels:
-			exprs = out["match[]"]
-		}
 		if err := t.checkLegacyScopable(ctx, exprs); err != nil {
 			return nil, rateLimited(err)
 		}

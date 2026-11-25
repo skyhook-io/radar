@@ -137,7 +137,7 @@ func TestDiscoverIDs(t *testing.T) {
 			{"k8s_cluster": "cluster1"},
 		}},
 		{match: []string{"k8s_pod_cpu_time{k8s_cluster_uid=~"}, rows: []map[string]string{{"k8s_cluster_uid": uidA, "k8s_cluster": "cluster1"}}},
-		{match: []string{"k8s_pod_cpu_time[7d]"}, rows: []map[string]string{{"k8s_cluster_uid": uidA, "k8s_cluster": "cluster1"}}},
+		{match: []string{"k8s_pod_cpu_time[7d1h]"}, rows: []map[string]string{{"k8s_cluster_uid": uidA, "k8s_cluster": "cluster1"}}},
 	}}
 	got, err := DiscoverIDs(context.Background(), store, []string{uidA, uidB, uidC, uidB})
 	if err != nil {
@@ -199,7 +199,7 @@ func TestDiscoverIDsCollectorNameUniqueness(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &routeStore{routes: []route{
 				{match: []string{"k8s_pod_cpu_time{k8s_cluster_uid=~"}, rows: []map[string]string{{"k8s_cluster_uid": uidA, "k8s_cluster": "prod-a"}}},
-				{match: []string{"k8s_pod_cpu_time[7d]"}, rows: tc.usage},
+				{match: []string{"k8s_pod_cpu_time[7d1h]"}, rows: tc.usage},
 			}}
 			got, err := DiscoverIDs(context.Background(), store, []string{uidA})
 			if err != nil {
@@ -431,7 +431,7 @@ func TestConfirmedNameMatchCollector(t *testing.T) {
 	// still in the span charts read. The match stands without them.
 	rebuilt := &routeStore{routes: []route{
 		{match: []string{`k8s_pod_cpu_time{k8s_cluster="prod-a"}`, "[15m]"}, rows: []map[string]string{{"k8s_cluster": "prod-a", "k8s_cluster_uid": uidA}}},
-		{match: []string{`k8s_pod_cpu_time{k8s_cluster="prod-a"}`, "[7d]"}, rows: []map[string]string{{"k8s_cluster": "prod-a", "k8s_cluster_uid": uidA}, {"k8s_cluster": "prod-a", "k8s_cluster_uid": uidB}}},
+		{match: []string{`k8s_pod_cpu_time{k8s_cluster="prod-a"}`, "[7d1h]"}, rows: []map[string]string{{"k8s_cluster": "prod-a", "k8s_cluster_uid": uidA}, {"k8s_cluster": "prod-a", "k8s_cluster_uid": uidB}}},
 	}}
 	rm, err := ConfirmedNameMatch(context.Background(), rebuilt, "k8s_cluster", "prod-a", uidA)
 	if err != nil {
@@ -641,7 +641,7 @@ func TestDiscoverIDsCollectorNameUsedByAnotherCluster(t *testing.T) {
 	const other = "11111111-2222-3333-4444-555555555555"
 	claim := []route{
 		{match: []string{"k8s_pod_cpu_time{k8s_cluster_uid=~"}, rows: []map[string]string{{"k8s_cluster_uid": uidA, "k8s_cluster": "victim-prod"}}},
-		{match: []string{"k8s_pod_cpu_time[7d]"}, rows: []map[string]string{{"k8s_cluster_uid": uidA, "k8s_cluster": "victim-prod"}}},
+		{match: []string{"k8s_pod_cpu_time[7d1h]"}, rows: []map[string]string{{"k8s_cluster_uid": uidA, "k8s_cluster": "victim-prod"}}},
 		{match: []string{"count by (k8s_node_name)", `k8s_cluster_uid="` + uidA + `"`}, rows: []map[string]string{{"k8s_node_name": "a-node-1"}}},
 	}
 	cases := []struct {

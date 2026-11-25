@@ -168,10 +168,14 @@ const (
 	// nameHistory is how far back a collector cluster name must have been
 	// sent by this cluster's collector alone before Radar reads the metrics
 	// that carry only that name (kube-state and scraped disk metrics). It
-	// covers the longest span Radar reads (7-day charts and rightsizing):
-	// a cluster rebuilt under the same name leaves the old one's series in
-	// that span, and they would chart as this cluster's.
-	nameHistory = "7d"
+	// covers the longest span Radar reads (7-day charts and rightsizing, whose
+	// [7d:5m] subqueries reach a few minutes further back): a cluster rebuilt
+	// under the same name leaves the old one's series in that span, and they
+	// would chart as this cluster's.
+	nameHistory = "7d1h"
+	// nameHistoryDuration is nameHistory; reads of name-only metrics are
+	// kept inside it (boundGatewayWindow).
+	nameHistoryDuration = 7*24*time.Hour + time.Hour
 )
 
 var (
