@@ -39,11 +39,8 @@ func testDeployment(uid, image string, created time.Time) *appsv1.Deployment {
 // Delete + recreate under the same name must produce an add event that
 // carries the diff against the deleted predecessor, marked ReasonRecreated.
 func TestRecreateJoin_DeleteThenRecreateCarriesDiff(t *testing.T) {
-	prev := initialSyncComplete.Load()
-	initialSyncComplete.Store(true)
-	defer func() { initialSyncComplete.Store(prev) }()
-	resetRecreateStash()
-	defer resetRecreateStash()
+	state := newConnectionCache()
+	state.initialSyncComplete.Store(true)
 
 	timeline.ResetStore()
 	defer timeline.ResetStore()
@@ -52,10 +49,10 @@ func TestRecreateJoin_DeleteThenRecreateCarriesDiff(t *testing.T) {
 	}
 
 	oldDep := testDeployment("uid-1", "nginx:1.0", time.Now().Add(-time.Hour))
-	recordToTimelineStore(ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "delete", nil, oldDep, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "delete", nil, oldDep, nil, false)
 
 	newDep := testDeployment("uid-2", "nginx:2.0", time.Now())
-	recordToTimelineStore(ActiveClusterContext(), "Deployment", "shop", "web", "uid-2", "add", nil, newDep, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Deployment", "shop", "web", "uid-2", "add", nil, newDep, nil, false)
 
 	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{
 		Kinds: []string{"Deployment"}, Namespaces: []string{"shop"},
@@ -100,11 +97,8 @@ func TestRecreateJoin_DeleteThenRecreateCarriesDiff(t *testing.T) {
 
 // A re-add with the same UID is an informer replay, not a recreate.
 func TestRecreateJoin_SameUIDReAdd_NoJoin(t *testing.T) {
-	prev := initialSyncComplete.Load()
-	initialSyncComplete.Store(true)
-	defer func() { initialSyncComplete.Store(prev) }()
-	resetRecreateStash()
-	defer resetRecreateStash()
+	state := newConnectionCache()
+	state.initialSyncComplete.Store(true)
 
 	timeline.ResetStore()
 	defer timeline.ResetStore()
@@ -113,8 +107,8 @@ func TestRecreateJoin_SameUIDReAdd_NoJoin(t *testing.T) {
 	}
 
 	dep := testDeployment("uid-1", "nginx:1.0", time.Now())
-	recordToTimelineStore(ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "delete", nil, dep, nil, false)
-	recordToTimelineStore(ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "add", nil, dep, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "delete", nil, dep, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "add", nil, dep, nil, false)
 
 	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{
 		Kinds: []string{"Deployment"}, EventTypes: []timeline.EventType{timeline.EventTypeAdd},
@@ -130,11 +124,8 @@ func TestRecreateJoin_SameUIDReAdd_NoJoin(t *testing.T) {
 }
 
 func TestRecreateJoin_CrossGroupAddDoesNotConsumeDeletedService(t *testing.T) {
-	prev := initialSyncComplete.Load()
-	initialSyncComplete.Store(true)
-	defer func() { initialSyncComplete.Store(prev) }()
-	resetRecreateStash()
-	defer resetRecreateStash()
+	state := newConnectionCache()
+	state.initialSyncComplete.Store(true)
 
 	timeline.ResetStore()
 	defer timeline.ResetStore()
@@ -148,7 +139,7 @@ func TestRecreateJoin_CrossGroupAddDoesNotConsumeDeletedService(t *testing.T) {
 		UID:               types.UID("core-uid-1"),
 		CreationTimestamp: metav1.NewTime(time.Now().Add(-time.Hour)),
 	}, Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}}}
-	recordToTimelineStore(ActiveClusterContext(), "Service", "shop", "api", "core-uid-1", "delete", nil, deletedCore, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Service", "shop", "api", "core-uid-1", "delete", nil, deletedCore, nil, false)
 
 	knative := &unstructured.Unstructured{}
 	knative.SetAPIVersion("serving.knative.dev/v1")
@@ -157,7 +148,7 @@ func TestRecreateJoin_CrossGroupAddDoesNotConsumeDeletedService(t *testing.T) {
 	knative.SetName("api")
 	knative.SetUID(types.UID("knative-uid-1"))
 	knative.SetCreationTimestamp(metav1.Now())
-	recordToTimelineStore(ActiveClusterContext(), "Service", "shop", "api", "knative-uid-1", "add", nil, knative, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Service", "shop", "api", "knative-uid-1", "add", nil, knative, nil, false)
 
 	recreatedCore := &corev1.Service{ObjectMeta: metav1.ObjectMeta{
 		Name:              "api",
@@ -165,7 +156,7 @@ func TestRecreateJoin_CrossGroupAddDoesNotConsumeDeletedService(t *testing.T) {
 		UID:               types.UID("core-uid-2"),
 		CreationTimestamp: metav1.Now(),
 	}, Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 8080}}}}
-	recordToTimelineStore(ActiveClusterContext(), "Service", "shop", "api", "core-uid-2", "add", nil, recreatedCore, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Service", "shop", "api", "core-uid-2", "add", nil, recreatedCore, nil, false)
 
 	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{
 		Kinds: []string{"Service"}, EventTypes: []timeline.EventType{timeline.EventTypeAdd},
@@ -194,9 +185,8 @@ func TestRecreateJoin_CrossGroupAddDoesNotConsumeDeletedService(t *testing.T) {
 }
 
 func TestTimelineSeenIdentity_SameGroupSharesServedVersions(t *testing.T) {
-	prev := initialSyncComplete.Load()
-	initialSyncComplete.Store(true)
-	defer func() { initialSyncComplete.Store(prev) }()
+	state := newConnectionCache()
+	state.initialSyncComplete.Store(true)
 
 	timeline.ResetStore()
 	defer timeline.ResetStore()
@@ -211,12 +201,12 @@ func TestTimelineSeenIdentity_SameGroupSharesServedVersions(t *testing.T) {
 	first.SetName("api")
 	first.SetUID(types.UID("knative-v1"))
 	first.SetCreationTimestamp(metav1.Now())
-	recordToTimelineStore(ActiveClusterContext(), "Service", "shop", "api", "knative-v1", "add", nil, first, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Service", "shop", "api", "knative-v1", "add", nil, first, nil, false)
 
 	second := first.DeepCopy()
 	second.SetAPIVersion("serving.knative.dev/v1beta1")
 	second.SetUID(types.UID("knative-v1beta1"))
-	recordToTimelineStore(ActiveClusterContext(), "Service", "shop", "api", "knative-v1beta1", "add", nil, second, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Service", "shop", "api", "knative-v1beta1", "add", nil, second, nil, false)
 
 	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{
 		Kinds: []string{"Service"}, EventTypes: []timeline.EventType{timeline.EventTypeAdd},
@@ -233,9 +223,8 @@ func TestTimelineSeenIdentity_SameGroupSharesServedVersions(t *testing.T) {
 }
 
 func TestTimelineSeenIdentity_CrossGroupAddsBothRecorded(t *testing.T) {
-	prev := initialSyncComplete.Load()
-	initialSyncComplete.Store(true)
-	defer func() { initialSyncComplete.Store(prev) }()
+	state := newConnectionCache()
+	state.initialSyncComplete.Store(true)
 
 	timeline.ResetStore()
 	defer timeline.ResetStore()
@@ -246,7 +235,7 @@ func TestTimelineSeenIdentity_CrossGroupAddsBothRecorded(t *testing.T) {
 	coreService := &corev1.Service{ObjectMeta: metav1.ObjectMeta{
 		Name: "api", Namespace: "shop", UID: types.UID("core-uid"), CreationTimestamp: metav1.Now(),
 	}}
-	recordToTimelineStore(ActiveClusterContext(), "Service", "shop", "api", "core-uid", "add", nil, coreService, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Service", "shop", "api", "core-uid", "add", nil, coreService, nil, false)
 
 	knativeService := &unstructured.Unstructured{}
 	knativeService.SetAPIVersion("serving.knative.dev/v1")
@@ -255,7 +244,7 @@ func TestTimelineSeenIdentity_CrossGroupAddsBothRecorded(t *testing.T) {
 	knativeService.SetName("api")
 	knativeService.SetUID(types.UID("knative-uid"))
 	knativeService.SetCreationTimestamp(metav1.Now())
-	recordToTimelineStore(ActiveClusterContext(), "Service", "shop", "api", "knative-uid", "add", nil, knativeService, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Service", "shop", "api", "knative-uid", "add", nil, knativeService, nil, false)
 
 	store := timeline.GetStore()
 	events, err := store.Query(context.Background(), timeline.QueryOptions{
@@ -274,9 +263,8 @@ func TestTimelineSeenIdentity_CrossGroupAddsBothRecorded(t *testing.T) {
 }
 
 func TestTimelineSeenIdentity_TypedBuiltinUsesCanonicalGroup(t *testing.T) {
-	prev := initialSyncComplete.Load()
-	initialSyncComplete.Store(true)
-	defer func() { initialSyncComplete.Store(prev) }()
+	state := newConnectionCache()
+	state.initialSyncComplete.Store(true)
 
 	timeline.ResetStore()
 	defer timeline.ResetStore()
@@ -287,7 +275,7 @@ func TestTimelineSeenIdentity_TypedBuiltinUsesCanonicalGroup(t *testing.T) {
 	role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{
 		Name: "reader", Namespace: "shop", UID: types.UID("role-uid"), CreationTimestamp: metav1.Now(),
 	}}
-	recordToTimelineStore(ActiveClusterContext(), "Role", "shop", "reader", "role-uid", "add", nil, role, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Role", "shop", "reader", "role-uid", "add", nil, role, nil, false)
 
 	store := timeline.GetStore()
 	if !store.IsResourceSeen(ActiveClusterContext(), "rbac.authorization.k8s.io", "Role", "shop", "reader") {
@@ -299,11 +287,8 @@ func TestTimelineSeenIdentity_TypedBuiltinUsesCanonicalGroup(t *testing.T) {
 }
 
 func TestRecreateJoin_KnativeDeleteTombstonePreservesGroupAndObject(t *testing.T) {
-	prev := initialSyncComplete.Load()
-	initialSyncComplete.Store(true)
-	defer func() { initialSyncComplete.Store(prev) }()
-	resetRecreateStash()
-	defer resetRecreateStash()
+	state := newConnectionCache()
+	state.initialSyncComplete.Store(true)
 
 	timeline.ResetStore()
 	defer timeline.ResetStore()
@@ -328,7 +313,7 @@ func TestRecreateJoin_KnativeDeleteTombstonePreservesGroupAndObject(t *testing.T
 			},
 		},
 	}}
-	recordToTimelineStore(
+	state.recordToTimelineStore(timeline.CaptureStore(),
 		ActiveClusterContext(),
 		"Service",
 		"shop",
@@ -347,9 +332,9 @@ func TestRecreateJoin_KnativeDeleteTombstonePreservesGroupAndObject(t *testing.T
 		UID:               types.UID("core-uid-1"),
 		CreationTimestamp: metav1.Now(),
 	}}
-	recordToTimelineStore(ActiveClusterContext(), "Service", "shop", "api", "core-uid-1", "add", nil, core, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Service", "shop", "api", "core-uid-1", "add", nil, core, nil, false)
 
-	stashed, ok := takeRecreateMatch("serving.knative.dev", "Service", "shop", "api", "knative-uid-2")
+	stashed, ok := state.recreates.takeRecreateMatch("serving.knative.dev", "Service", "shop", "api", "knative-uid-2")
 	if !ok {
 		t.Fatal("cross-group core Service add consumed the wrapped Knative Service stash")
 	}
@@ -363,59 +348,57 @@ func TestRecreateJoin_KnativeDeleteTombstonePreservesGroupAndObject(t *testing.T
 }
 
 func TestTakeRecreateMatch_TTLExpiry(t *testing.T) {
-	resetRecreateStash()
-	defer resetRecreateStash()
+	state := newConnectionCache()
 
-	recreateStashMu.Lock()
-	recreateStash[recreateKey("apps", "Deployment", "shop", "web")] = recreateEntry{
+	state.recreates.mu.Lock()
+	state.recreates.entries = make(map[string]recreateEntry)
+	state.recreates.entries[recreateKey("apps", "Deployment", "shop", "web")] = recreateEntry{
 		obj: testDeployment("uid-1", "nginx:1.0", time.Now()), uid: "uid-1",
 		deletedAt: time.Now().Add(-recreateJoinTTL - time.Minute),
 	}
-	recreateStashMu.Unlock()
+	state.recreates.mu.Unlock()
 
-	if _, ok := takeRecreateMatch("apps", "Deployment", "shop", "web", "uid-2"); ok {
+	if _, ok := state.recreates.takeRecreateMatch("apps", "Deployment", "shop", "web", "uid-2"); ok {
 		t.Fatal("expired stash entry must not join")
 	}
-	recreateStashMu.Lock()
-	remaining := len(recreateStash)
-	recreateStashMu.Unlock()
+	state.recreates.mu.Lock()
+	remaining := len(state.recreates.entries)
+	state.recreates.mu.Unlock()
 	if remaining != 0 {
 		t.Fatalf("expired entry should be consumed, %d left", remaining)
 	}
 }
 
 func TestRecreateStash_KindGateAndReset(t *testing.T) {
-	resetRecreateStash()
-	defer resetRecreateStash()
+	state := newConnectionCache()
 
-	stashDeletedForRecreate("", "Pod", "shop", "p", "uid-1", &corev1.Pod{})
-	if _, ok := takeRecreateMatch("", "Pod", "shop", "p", "uid-2"); ok {
+	state.recreates.stashDeletedForRecreate("", "Pod", "shop", "p", "uid-1", &corev1.Pod{})
+	if _, ok := state.recreates.takeRecreateMatch("", "Pod", "shop", "p", "uid-2"); ok {
 		t.Fatal("Pod is outside the stash allowlist")
 	}
 
-	stashDeletedForRecreate("apps", "Deployment", "shop", "web", "uid-1", testDeployment("uid-1", "nginx:1.0", time.Now()))
-	resetRecreateStash()
-	if _, ok := takeRecreateMatch("apps", "Deployment", "shop", "web", "uid-2"); ok {
+	state.recreates.stashDeletedForRecreate("apps", "Deployment", "shop", "web", "uid-1", testDeployment("uid-1", "nginx:1.0", time.Now()))
+	state.recreates.clear()
+	if _, ok := state.recreates.takeRecreateMatch("apps", "Deployment", "shop", "web", "uid-2"); ok {
 		t.Fatal("reset must clear the stash")
 	}
 }
 
 func TestRecreateStash_CapEviction(t *testing.T) {
-	resetRecreateStash()
-	defer resetRecreateStash()
+	state := newConnectionCache()
 
 	for i := 0; i < recreateStashCap+100; i++ {
-		stashDeletedForRecreate("", "ConfigMap", "shop", fmt.Sprintf("cm-%d", i), fmt.Sprintf("uid-%d", i), &corev1.ConfigMap{})
+		state.recreates.stashDeletedForRecreate("", "ConfigMap", "shop", fmt.Sprintf("cm-%d", i), fmt.Sprintf("uid-%d", i), &corev1.ConfigMap{})
 	}
-	recreateStashMu.Lock()
-	size := len(recreateStash)
-	recreateStashMu.Unlock()
+	state.recreates.mu.Lock()
+	size := len(state.recreates.entries)
+	state.recreates.mu.Unlock()
 	if size > recreateStashCap {
 		t.Fatalf("stash size %d exceeds cap %d", size, recreateStashCap)
 	}
 	// The newest entries must have survived eviction — recreates that matter
 	// happen seconds after the delete.
-	if _, ok := takeRecreateMatch("", "ConfigMap", "shop", fmt.Sprintf("cm-%d", recreateStashCap+99), "other-uid"); !ok {
+	if _, ok := state.recreates.takeRecreateMatch("", "ConfigMap", "shop", fmt.Sprintf("cm-%d", recreateStashCap+99), "other-uid"); !ok {
 		t.Fatal("newest entry was evicted; eviction must drop oldest first")
 	}
 }
@@ -424,11 +407,8 @@ func TestRecreateStash_CapEviction(t *testing.T) {
 // across recreates are tautological, and a status-only "recreated with
 // changes" entry reads as a config change that never happened.
 func TestRecreateJoin_SpecIdenticalRecreate_NoJoin(t *testing.T) {
-	prev := initialSyncComplete.Load()
-	initialSyncComplete.Store(true)
-	defer func() { initialSyncComplete.Store(prev) }()
-	resetRecreateStash()
-	defer resetRecreateStash()
+	state := newConnectionCache()
+	state.initialSyncComplete.Store(true)
 
 	timeline.ResetStore()
 	defer timeline.ResetStore()
@@ -438,10 +418,10 @@ func TestRecreateJoin_SpecIdenticalRecreate_NoJoin(t *testing.T) {
 
 	oldDep := testDeployment("uid-1", "nginx:1.0", time.Now().Add(-time.Hour))
 	oldDep.Status = appsv1.DeploymentStatus{ReadyReplicas: 1, AvailableReplicas: 1}
-	recordToTimelineStore(ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "delete", nil, oldDep, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "delete", nil, oldDep, nil, false)
 
 	newDep := testDeployment("uid-2", "nginx:1.0", time.Now()) // same spec, fresh status
-	recordToTimelineStore(ActiveClusterContext(), "Deployment", "shop", "web", "uid-2", "add", nil, newDep, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Deployment", "shop", "web", "uid-2", "add", nil, newDep, nil, false)
 
 	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{
 		Kinds: []string{"Deployment"}, EventTypes: []timeline.EventType{timeline.EventTypeAdd},

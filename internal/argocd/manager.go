@@ -232,8 +232,7 @@ type Manager struct {
 	tokenContext string
 	tokenBinding string
 
-	k8sClient      func() kubernetes.Interface
-	k8sConfig      func() *rest.Config
+	clusterClients func() (kubernetes.Interface, *rest.Config)
 	inCluster      func() bool
 	contextName    func() string
 	contextBinding func(context.Context) string
@@ -247,15 +246,10 @@ type Manager struct {
 // kubeconfig context switches without a reinit step.
 func NewManager() *Manager {
 	return &Manager{
-		k8sClient: func() kubernetes.Interface {
-			// k8s.GetClient returns a concrete *Clientset; convert nil to a
-			// nil interface so callers can compare against nil.
-			if c := k8s.GetClient(); c != nil {
-				return c
-			}
-			return nil
+		clusterClients: func() (kubernetes.Interface, *rest.Config) {
+			conn := k8s.Current()
+			return conn.ClientInterface(), conn.Config()
 		},
-		k8sConfig:      k8s.GetConfig,
 		inCluster:      k8s.IsInCluster,
 		contextName:    k8s.GetContextName,
 		contextBinding: k8s.ClusterSafetyBinding,
@@ -1262,12 +1256,9 @@ type probeSnapshot struct {
 
 func (m *Manager) snapshotLocked() probeSnapshot {
 	var k8sc kubernetes.Interface
-	if m.k8sClient != nil {
-		k8sc = m.k8sClient()
-	}
 	var cfg *rest.Config
-	if m.k8sConfig != nil {
-		cfg = m.k8sConfig()
+	if m.clusterClients != nil {
+		k8sc, cfg = m.clusterClients()
 	}
 	return probeSnapshot{
 		generation:   m.generation,

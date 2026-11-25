@@ -40,12 +40,7 @@ type DropRecord struct {
 	Name      string `json:"name"`
 	Reason    string `json:"reason"`
 	Operation string `json:"operation"`
-	// ClusterContext is the kubeconfig context the dropped event belonged to,
-	// captured at informer wiring time (NOT read live at drop time). Informer
-	// shutdown on a context switch is asynchronous, so a straggler callback can
-	// record a drop after the switch — stamping the wiring-time context keeps it
-	// attributed to the cluster it came from, and read paths filter to the active
-	// context so a previous cluster's resource names never surface on the new one.
+	// ClusterContext is captured when the source informer is wired.
 	ClusterContext string    `json:"clusterContext,omitempty"`
 	Time           time.Time `json:"time"`
 }
@@ -225,11 +220,7 @@ func (m *EventMetrics) Reset() {
 }
 
 // DropsForCluster returns only the drop records attributed to clusterContext.
-// Read paths pass the active context so a straggler drop stamped with a
-// previously-connected cluster (recorded in the async informer-shutdown window
-// after a switch) is never shown on the new cluster. Both the stamp and the read
-// filter come from ActiveClusterContext(), so the in-cluster case matches too
-// (both sides use the "in-cluster" sentinel).
+// The stamp and the read filter use the same "in-cluster" sentinel.
 func DropsForCluster(drops []DropRecord, clusterContext string) []DropRecord {
 	out := make([]DropRecord, 0, len(drops))
 	for _, d := range drops {
@@ -248,13 +239,6 @@ func DropsForCluster(drops []DropRecord, clusterContext string) []DropRecord {
 // the same kind on the NEW cluster. Process uptime (startTime) is preserved:
 // it reports how long the event pipeline has been running, not a per-cluster
 // session, so it must survive the switch.
-//
-// Best-effort on the counters: unlike RecentDrops (stamped + filtered on read),
-// the counters have no cluster guard, so a straggler informer draining after the
-// switch (async shutdown, up to ~5s) can re-increment them with a few old-cluster
-// ticks after this reset. Accepted: counters carry only kind names, not resource
-// identity, so the exposure is a type label ("Secret") on a debug surface, never
-// a resource name.
 func ResetMetricsForContextSwitch() {
 	m := GetMetrics()
 	m.mu.Lock()
@@ -377,10 +361,7 @@ func GetDiagnosis(kind, namespace, name, clusterContext string, allow func(kind,
 		}
 	}
 
-	// Check for drops related to this resource. Scope to the active cluster so a
-	// straggler drop from a previously-connected cluster (recorded in the async
-	// informer-shutdown window after a switch) neither appears in DropHistory nor
-	// influences the recommendations derived from it.
+	// Filter by cluster before deriving recommendations from the drop history.
 	metrics := GetMetrics()
 	metrics.mu.RLock()
 	for _, drop := range metrics.RecentDrops {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/cloud"
 )
 
 func scanTestManager(t *testing.T, run scanRunner) *RightsizingScanManager {
@@ -278,5 +279,48 @@ func TestScanWaitSkipsInventoryOnlyProgress(t *testing.T) {
 	result, err := m.Resolve(context.Background(), request)
 	if err != nil || result.ScanStatus != "finished" || result.Coverage.WorkloadsEvaluated != 50 {
 		t.Fatalf("wait returned inventory-only progress: %+v %v", result, err)
+	}
+}
+
+func TestRightsizingScanIsolatesLocalAndTunnelJobsForSameCaller(t *testing.T) {
+	m := scanTestManager(t, func(ctx context.Context, scope RightsizingScanScope, _ func(RightsizingScanResponse)) RightsizingScanResponse {
+		resp := newRightsizingScanResponse(time.Now(), scope)
+		if cloud.IsAuthenticatedTunnelRequest(ctx) {
+			resp.Reason = "tunnel"
+		} else {
+			resp.Reason = "local"
+		}
+		return resp
+	})
+	req := scanTestRequest(m)
+	req.Wait = time.Second
+	local := auth.ContextWithUser(context.Background(), &auth.User{Username: "alice", Groups: []string{"operators"}})
+	tunnel := sizingTunnelTestContext(local)
+	a, err := m.Resolve(local, req)
+	if err != nil || a.Reason != "local" {
+		t.Fatalf("local job: %+v %v", a, err)
+	}
+	b, err := m.Resolve(tunnel, req)
+	if err != nil || b.Reason != "tunnel" || a.ScanID == b.ScanID {
+		t.Fatalf("fleet job: %+v %v", b, err)
+	}
+	for _, tc := range []struct {
+		ctx        context.Context
+		own, other string
+	}{{local, a.ScanID, b.ScanID}, {tunnel, b.ScanID, a.ScanID}} {
+		q := req
+		q.Start = false
+		cached, err := m.Resolve(tc.ctx, q)
+		if err != nil || cached.ScanID != tc.own {
+			t.Fatalf("wrong cached result: %+v %v", cached, err)
+		}
+		q.ID = tc.other
+		q.Cancel = true
+		if _, err = m.Resolve(tc.ctx, q); !errors.Is(err, ErrRightsizingScanNotFound) {
+			t.Errorf("another transport's scan accessible: %v", err)
+		}
+		if _, err = m.Namespaces(tc.ctx, q.ID, q.Generation); !errors.Is(err, ErrRightsizingScanNotFound) {
+			t.Errorf("another transport's scope accessible: %v", err)
+		}
 	}
 }

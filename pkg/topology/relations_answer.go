@@ -394,6 +394,7 @@ func relationsAnswer(session relations.Session, access, traverse ownership.Acces
 	if rel == nil {
 		rel = &Relationships{}
 	}
+	n.longhornStorage(session, subject, obj, rel)
 	n.networkEntrypoints(session, access, traverse, subject, obj, istioDomain, rel)
 	n.listUnreadable(rel)
 	n.nameSpecDeclared(obj, rel)

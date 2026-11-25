@@ -4,10 +4,12 @@ import { clsx } from 'clsx'
 import { stringify as yamlStringify } from 'yaml'
 import { Section, PropertyList, Property, AlertBanner } from '../../ui/drawer-components'
 import { ConfirmDialog } from '../../ui/ConfirmDialog'
+import { showApiError } from '../../ui/Toast'
 import { ReflectorSummary, ReflectorSection, isReflectorMirror, reflectorEditNotice } from './ReflectorSection'
 import type { SecretCertificateInfo, CertificateInfo, Relationships, ResourceRef } from '../../../types'
-import { pluralize } from '../../../utils/pluralize'
+import { formatDuration } from '../resource-utils'
 import { cleanResourceForYaml } from '../../../utils/yaml'
+import { copyText } from '../../../utils/clipboard'
 import { isFetchError } from '../../../types/fetch-error'
 
 interface SecretRendererProps {
@@ -20,15 +22,19 @@ interface SecretRendererProps {
   isSaving?: boolean
 }
 
+const DAY = 24 * 60 * 60 * 1000
+
 function formatDate(dateStr: string): string {
   if (!dateStr) return '-'
   const d = new Date(dateStr)
-  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+  return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 }
 
 export function SecretRenderer({ data, relationships, onNavigate, certificateInfo, resourceData, onSaveSecretValue, isSaving }: SecretRendererProps) {
   const [revealed, setRevealed] = useState<Set<string>>(new Set())
   const [copied, setCopied] = useState<string | null>(null)
+  const copyTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  useEffect(() => () => clearTimeout(copyTimer.current), [])
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [showSaveConfirm, setShowSaveConfirm] = useState(false)
@@ -49,22 +55,22 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
     })
   }
 
-  function decodeBase64(value: string): string {
+  function decodeBase64(value: string): string | null {
     try {
       return decodeURIComponent(escape(atob(value)))
     } catch {
-      return '[binary data]'
+      return null
     }
   }
 
-  async function copyValue(key: string, decodedValue: string): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(decodedValue)
-      setCopied(key)
-      setTimeout(() => setCopied(null), 2000)
-    } catch (err) {
-      console.error('Failed to copy:', err)
+  async function copyValue(copyId: string, decodedValue: string): Promise<void> {
+    if (!await copyText(decodedValue)) {
+      showApiError("Couldn't copy the value", 'The browser blocked clipboard access.')
+      return
     }
+    setCopied(copyId)
+    clearTimeout(copyTimer.current)
+    copyTimer.current = setTimeout(() => setCopied(null), 2000)
   }
 
   function startEdit(key: string, decoded: string) {
@@ -108,9 +114,7 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
     }
   }, [editValue])
 
-  const certs = certificateInfo?.certificates
-  const leafCert = certs?.[0]
-
+  const reflectionSummary = <ReflectorSummary data={data} reflection={relationships?.reflection} onNavigate={onNavigate} />
   return (
     <>
       <Section title="Secret">
@@ -121,46 +125,11 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
         </PropertyList>
       </Section>
 
-      {/* Certificate expiry alerts */}
-      {leafCert && leafCert.expired && (
-        <AlertBanner
-          variant="error"
-          title="Certificate has expired"
-          message={`Expired ${formatDate(leafCert.notAfter)}.${leafCert.daysLeft !== 0 ? ` ${Math.abs(leafCert.daysLeft)}d ago.` : ''}`}
-        />
-      )}
-
-      {leafCert && !leafCert.expired && leafCert.daysLeft <= 7 && (
-        <AlertBanner
-          variant="error"
-          title={`Certificate expires in ${pluralize(leafCert.daysLeft, 'day')}`}
-          message="Check that cert-manager or your CA is renewing this certificate."
-        />
-      )}
-
-      {leafCert && !leafCert.expired && leafCert.daysLeft > 7 && leafCert.daysLeft <= 30 && (
-        <AlertBanner
-          variant="warning"
-          title={`Certificate expires in ${pluralize(leafCert.daysLeft, 'day')}`}
-          message="Renewal should happen automatically before expiry."
-        />
-      )}
-
-      <ReflectorSummary data={data} reflection={relationships?.reflection} onNavigate={onNavigate} />
-
-      {/* Certificate info section */}
-      {certs && certs.length > 0 && (
-        <>
-          {certs.map((cert, i) => (
-            <CertificateInfoSection
-              key={cert.serialNumber}
-              cert={cert}
-              index={i}
-              total={certs.length}
-            />
-          ))}
-        </>
-      )}
+      {certificateInfo ? (
+        <SecretCertificates key={data.metadata?.uid ?? `${data.metadata?.namespace}/${data.metadata?.name}`} info={certificateInfo}>
+          {reflectionSummary}
+        </SecretCertificates>
+      ) : reflectionSummary}
 
       {dataKeys.length > 0 && (
         <div className="flex items-center gap-2 p-3 bg-amber-500/10 border border-amber-500/30 rounded text-amber-400 text-sm">
@@ -176,7 +145,10 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
         <div className="space-y-2">
           {dataKeys.map((key) => {
             const decoded = decodeBase64(data.data[key])
-            const isBinary = decoded === '[binary data]'
+            const isBinary = decoded === null
+            // A refresh can rotate the value while a clipboard write is pending.
+            const copyId = JSON.stringify([data.metadata?.uid, data.metadata?.resourceVersion, key])
+            const isCopied = copied === copyId
             const canEdit = onSaveSecretValue && !isImmutable && !isBinary
             // Without a save handler (the Secret was deleted, say) an open
             // editor would have a Save button that does nothing.
@@ -196,13 +168,14 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
                         <Pencil className="w-3.5 h-3.5" />
                       </button>
                     )}
-                    {revealed.has(key) && !isBinary && !isEditing && (
+                    {!isBinary && !isEditing && (
                       <button
-                        onClick={() => copyValue(key, decoded)}
+                        onClick={() => copyValue(copyId, decoded)}
                         className="p-1 text-theme-text-tertiary hover:text-theme-text-primary transition-colors"
-                        title="Copy value"
+                        title={isCopied ? 'Copied' : 'Copy value'}
+                        aria-label={isCopied ? `Copied value for ${key}` : `Copy value for ${key}`}
                       >
-                        {copied === key ? (
+                        {isCopied ? (
                           <Check className="w-3.5 h-3.5 text-green-400" />
                         ) : (
                           <Copy className="w-3.5 h-3.5" />
@@ -269,7 +242,7 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
                   </div>
                 ) : revealed.has(key) ? (
                   <pre className="mt-2 bg-theme-base rounded p-2 text-xs text-theme-text-secondary overflow-x-auto max-h-40 whitespace-pre-wrap">
-                    {decoded}
+                    {decoded ?? '[binary data]'}
                   </pre>
                 ) : null}
               </div>
@@ -313,26 +286,83 @@ function secretSaveErrorMessage(error: unknown): { reason?: string } {
   return { reason: error instanceof Error && error.message ? error.message : undefined }
 }
 
-export function CertificateInfoSection({ cert, index, total, title: titleOverride, children }: {
+function SecretCertificates({ info, children }: { info: SecretCertificateInfo; children: ReactNode }) {
+  const [now, setNow] = useState(Date.now)
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  const primary = info.certificates
+  const leafCert = primary?.[0]
+  const leafRemaining = leafCert ? Date.parse(leafCert.notAfter) - now : Infinity
+  const chains = Object.entries(info.additionalKeys ?? {}).sort(([a], [b]) => a.localeCompare(b))
+  if (primary?.length) chains.unshift(['tls.crt', primary])
+
+  const certificateCount = chains.reduce((total, [, chain]) => total + chain.length, 0)
+  let expiredCount = 0
+  let expiringCount = 0
+  const certificateSections = chains.flatMap(([key, chain], groupIndex) => chain.map((cert, index) => {
+    const remaining = Date.parse(cert.notAfter) - now
+    if (remaining <= 0) expiredCount++
+    else if (remaining <= 30 * DAY) expiringCount++
+    const position = chain.length > 1 ? ` (${index + 1}/${chain.length}) · ${cert.subject}` : ''
+    const status = remaining <= 0 ? ' · Expired' : remaining <= 30 * DAY ? ` · Expires in ${formatDuration(remaining)}` : ''
+    return (
+      <CertificateInfoSection
+        key={`${key}/${index}`}
+        cert={cert}
+        index={index}
+        total={chain.length}
+        expanded={groupIndex === 0 && index === 0}
+        title={`Certificate · ${key}${position}${status}`}
+        remaining={remaining}
+      >
+        {cert.organizations?.length ? <Property label="Organization" value={cert.organizations.join(', ')} /> : null}
+      </CertificateInfoSection>
+    )
+  }))
+
+  const summary = [`Certificates (${certificateCount})`, expiredCount && `${expiredCount} expired`, expiringCount && `${expiringCount} expiring`].filter(Boolean).join(' · ')
+  return (
+    <>
+      {leafCert && leafRemaining <= 30 * DAY && (
+        <AlertBanner
+          variant={leafRemaining <= 7 * DAY ? 'error' : 'warning'}
+          title={leafRemaining <= 0 ? 'Certificate has expired' : `Certificate expires in ${formatDuration(leafRemaining)}`}
+          message={`${leafRemaining <= 0 ? 'Expired' : 'Expires'} ${formatDate(leafCert.notAfter)} · tls.crt`}
+        />
+      )}
+
+      {children}
+      {certificateCount > 6 ? <Section title={summary} defaultExpanded={false} contentClassName="pl-6 space-y-4" mountLazily>{certificateSections}</Section> : certificateSections}
+    </>
+  )
+}
+
+export function CertificateInfoSection({ cert, index, total, title: titleOverride, expanded, remaining = Date.parse(cert.notAfter) - Date.now(), children }: {
   cert: CertificateInfo
   index: number
   total: number
   title?: string
+  expanded?: boolean
+  remaining?: number
   /** Extra properties shown after the subject. */
   children?: ReactNode
 }) {
-  const expiryTextColor = cert.expired || cert.daysLeft <= 7
-    ? 'text-red-400'
-    : cert.daysLeft <= 30
-      ? 'text-yellow-400'
-      : 'text-green-400'
+  const expired = remaining <= 0
+  const daysLeft = remaining / DAY
+  const expiryTextColor = expired || daysLeft <= 7
+    ? 'text-semantic-error'
+    : daysLeft <= 30 ? 'text-warning-text' : 'text-theme-text-secondary'
+  const duration = formatDuration(Math.abs(remaining))
 
   const title = titleOverride ?? (total > 1
     ? `Certificate ${index + 1} of ${total}`
     : 'Certificate Info')
 
   return (
-    <Section title={title} icon={Shield} defaultExpanded={index === 0}>
+    <Section title={title} icon={Shield} defaultExpanded={expanded ?? index === 0} mountLazily={expanded === false}>
       <PropertyList>
         <Property label="Subject (CN)" value={cert.subject} />
         {children}
@@ -364,9 +394,7 @@ export function CertificateInfoSection({ cert, index, total, title: titleOverrid
           <span>
             {formatDate(cert.notAfter)}
             <span className={clsx('ml-2 text-xs', expiryTextColor)}>
-              {cert.expired
-                ? `(expired ${Math.abs(cert.daysLeft)}d ago)`
-                : `(${cert.daysLeft}d remaining)`}
+              {expired ? `(expired ${duration} ago)` : `(${duration} remaining)`}
             </span>
           </span>
         } />

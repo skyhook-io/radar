@@ -1,10 +1,11 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ReadGap } from '@skyhook-io/k8s-ui/types/read-coverage'
 import type { ResourceReadCoverage } from '@skyhook-io/k8s-ui/types/resource-coverage'
 import type { APIResource } from '../types'
-import { ApiError, fetchJSON, useRadarFeature } from './client'
+import { ApiError, apiFetch, fetchJSON, useRadarFeature } from './client'
 import { readActionFor } from '@skyhook-io/k8s-ui/utils/read-actions'
-import { getApiBase } from './config'
+import { apiUrl, getApiBase } from './config'
+import { httpStatusMessage, readErrorResponse } from './httpErrors'
 import { shouldRetryRadarQuery } from './radarFeatures'
 
 // Mirrors internal/vulnerabilities/types.go.
@@ -29,6 +30,35 @@ export interface VulnerabilityWorkloadRef {
   container?: string
 }
 
+/** A route from outside the cluster to a workload. via: LoadBalancer, NodePort, Ingress or a Gateway API route kind. */
+export interface VulnerabilityRoute {
+  via: string
+  namespace: string
+  name: string
+}
+
+/** A workload with a route from outside the cluster; never a container. */
+export interface ExposedWorkload {
+  kind: string
+  group: string
+  namespace: string
+  name: string
+  /** At most three in a list read; routesTotal counts them all. */
+  routes: VulnerabilityRoute[]
+  routesTotal?: number
+}
+
+/**
+ * The row's workloads with a route from outside the cluster, capped in a list
+ * read; exposedTotal is the full count.
+ */
+export interface VulnerabilityExposure {
+  exposed?: ExposedWorkload[]
+  exposedTotal?: number
+  /** None of the row's workloads is known exposed, but some are where Radar couldn't read every route kind. */
+  exposureUnknown?: boolean
+}
+
 export interface VulnerabilityFinding {
   id: string
   severity: VulnerabilitySeverity
@@ -45,7 +75,7 @@ export interface VulnerabilityFinding {
   link?: string
 }
 
-export interface VulnerableImage {
+export interface VulnerableImage extends VulnerabilityExposure {
   id: string
   image: string
   digest?: string
@@ -71,7 +101,7 @@ export interface VulnerabilityCVEImage {
   workloadsTotal: number
 }
 
-export interface VulnerabilityCVE {
+export interface VulnerabilityCVE extends VulnerabilityExposure {
   id: string
   severity: VulnerabilitySeverity
   score?: number
@@ -86,7 +116,7 @@ export interface VulnerabilityCVE {
   affected: VulnerabilityCVEImage[]
 }
 
-export interface VulnerabilityFix {
+export interface VulnerabilityFix extends VulnerabilityExposure {
   package: string
   packageType?: string
   /** The lowest listed release that fixes every listed CVE; absent when none can be chosen from the scanner's versions. */
@@ -122,6 +152,10 @@ export interface VulnerabilityWorkload {
   counts: VulnerabilityCounts
   fixable: VulnerabilityCounts
   containers: VulnerabilityWorkloadContainer[]
+  routes?: VulnerabilityRoute[]
+  routesTotal?: number
+  /** No route seen, but Radar couldn't read every route kind that could reach it. */
+  exposureUnknown?: boolean
 }
 
 export interface VulnerabilitySummary {
@@ -153,7 +187,16 @@ export interface VulnerabilitiesResponse {
   /** Workloads whose every container is scanned and clean. */
   cleanWorkloads?: VulnerabilityWorkloadRef[]
   /** otherBuildScanned: Trivy's report is of another build of this tag, as after the tag moved. */
-  unscanned?: { image: string; otherBuildScanned?: boolean; workloads: VulnerabilityWorkloadRef[]; workloadsTotal: number }[]
+  unscanned?: ({ image: string; otherBuildScanned?: boolean; workloads: VulnerabilityWorkloadRef[]; workloadsTotal: number } & VulnerabilityExposure)[]
+  /**
+   * Present when this Radar checks exposure; absent from an older Radar, where
+   * exposure is unknown, never none. gaps: route kinds Radar couldn't read.
+   */
+  exposure?: {
+    gaps?: VulnerabilityGap[]
+    /** Route kinds this cluster serves that Radar doesn't follow (Istio, Traefik IngressRoute, Contour, Knative). */
+    unchecked?: { kind: string; group?: string }[]
+  }
   coverage: {
     complete: boolean
     gaps: VulnerabilityGap[]
@@ -170,6 +213,8 @@ export interface VulnerabilitiesParams {
   namespaces?: string[]
   severities?: VulnerabilitySeverity[]
   fixableOnly?: boolean
+  /** Only rows affecting a workload with a route from outside the cluster. */
+  exposed?: boolean
   query?: string
   workload?: { kind: string; group?: string; namespace: string; name: string }
 }
@@ -184,6 +229,7 @@ export interface Java4ShellFinding {
   pods: number
   vbmiPods: number
   unknownCPUPods: number
+  noVBMIByInstanceType?: Record<string, number>
   mitigationDeclaredPods: number
 }
 
@@ -206,12 +252,18 @@ export interface Java4ShellResult {
   unassessed: Record<string, number>
   unassessedRows: Java4ShellUnassessed[]
   unassessedGroups: number
+  authRequiredRegistries?: string[]
+  rateLimitedRegistries?: string[]
+  unaffectedByMajor?: Record<string, number>
   coverage: ResourceReadCoverage
   workload?: VulnerabilityWorkloadRef
 }
 
 export function useJava4ShellCheck(namespaces: string[], context: string, workload?: VulnerabilityWorkloadRef) {
   const { guard } = useRadarFeature('runtimeAdvisoryChecks')
+  const { guard: guardProgress, support: progressSupport } = useRadarFeature('runtimeAdvisoryProgress')
+  const client = useQueryClient()
+  const base = getApiBase()
   const query = new URLSearchParams()
   if (workload) {
     query.set('workloadKind', workload.kind)
@@ -221,13 +273,78 @@ export function useJava4ShellCheck(namespaces: string[], context: string, worklo
   } else if (namespaces.length > 0) {
     query.set('namespaces', [...namespaces].sort().join(','))
   }
-  const path = '/vulnerabilities/java4shell' + (query.size ? `?${query}` : '')
-  return useQuery({
-    queryKey: ['java4shell', getApiBase(), context, path],
-    queryFn: ({ signal }) => guard(() => fetchJSON<Java4ShellResult>(path, { signal, cache: 'no-store' })),
+  const suffix = query.size ? `?${query}` : ''
+  const path = '/vulnerabilities/java4shell' + suffix
+  const queryKey = ['java4shell', base, context, path]
+  const progressKey = [...queryKey, 'progress']
+  const activeKey = ['java4shell-active', base]
+  const { data: progress } = useQuery<Java4ShellProgress | null>({ queryKey: progressKey, enabled: false })
+  const { data: activeScan } = useQuery<AbortController | null>({ queryKey: activeKey, enabled: false, gcTime: 6 * 60 * 1000 })
+  const check = useQuery({
+    queryKey,
+    queryFn: async (request) => {
+      if (progressSupport !== 'supported') {
+        return guard(() => fetchJSON<Java4ShellResult>(path, { signal: request.signal, cache: 'no-store' }))
+      }
+      if (client.getQueryData(activeKey)) throw new Error('A Java4Shell check is already running.')
+      const scan = new AbortController()
+      client.setQueryData(activeKey, scan)
+      client.setQueryData(progressKey, null)
+      // The streaming request can finish while the user visits another Radar view.
+      try {
+        return await guardProgress(() => streamJava4Shell(apiUrl('/vulnerabilities/java4shell/stream' + suffix, base), update => {
+          client.setQueryData(progressKey, update)
+        }, scan.signal))
+      } finally {
+        if (client.getQueryData(activeKey) === scan) client.setQueryData(activeKey, null)
+      }
+    },
     enabled: false,
     retry: false,
   })
+  const cancel = activeScan ? () => activeScan.abort(new DOMException('Java4Shell check canceled.', 'AbortError')) : undefined
+  return { ...check, progress, cancel }
+}
+
+interface Java4ShellProgress {
+  done: number
+  total: number
+}
+
+type Java4ShellStreamMessage =
+  | { type: 'progress'; progress: Java4ShellProgress }
+  | { type: 'result'; report: Java4ShellResult }
+  | { type: 'error'; error: string }
+
+export async function streamJava4Shell(url: string, onProgress: (progress: Java4ShellProgress) => void, signal?: AbortSignal): Promise<Java4ShellResult> {
+  const response = await apiFetch(url, { cache: 'no-store', signal })
+  if (!response.ok) {
+    const { body, unknownRoute } = await readErrorResponse(response)
+    throw new ApiError(body.error || httpStatusMessage(response.status, response.statusText), response.status, body, { unknownRoute })
+  }
+  if (!response.body) throw new Error('Radar did not return a Java4Shell scan.')
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let pending = ''
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      pending += decoder.decode(value, { stream: true })
+      let index: number
+      while ((index = pending.indexOf('\n')) >= 0) {
+        const message = JSON.parse(pending.slice(0, index)) as Java4ShellStreamMessage
+        pending = pending.slice(index + 1)
+        if (message.type === 'result') return message.report
+        if (message.type === 'error') throw new Error(message.error)
+        if (message.type === 'progress') onProgress(message.progress)
+      }
+    }
+    throw new Error('The Java4Shell scan ended before Radar returned a result. Run the check again.')
+  } finally {
+    await reader.cancel().catch(() => {})
+  }
 }
 
 // What an answer is about, apart from its filters: the workload and the
@@ -267,6 +384,7 @@ export function vulnerabilitiesPath(p: VulnerabilitiesParams): string {
   if (p.namespaces && p.namespaces.length > 0) params.set('namespaces', p.namespaces.join(','))
   if (p.severities && p.severities.length > 0) params.set('severity', p.severities.join(','))
   if (p.fixableOnly) params.set('fixable', '1')
+  if (p.exposed) params.set('exposed', '1')
   if (p.query?.trim()) params.set('q', p.query.trim())
   if (p.workload) {
     params.set('workloadKind', p.workload.kind)
@@ -275,6 +393,30 @@ export function vulnerabilitiesPath(p: VulnerabilitiesParams): string {
     if (p.workload.group) params.set('workloadGroup', p.workload.group)
   }
   return `/vulnerabilities?${params.toString()}`
+}
+
+// GET /api/vulnerabilities/export: the same view and filters as CSV, listing
+// every row and every value the table shortens.
+/** What a CSV export lists: a view's rows, or every finding (one row per CVE, image and workload). */
+export type VulnerabilityExportView = VulnerabilityView | 'findings'
+
+export async function fetchVulnerabilitiesCSV(p: VulnerabilitiesParams, as: VulnerabilityExportView = p.view): Promise<string> {
+  const query = new URLSearchParams(vulnerabilitiesPath(p).split('?')[1])
+  query.set('view', as)
+  const path = `/vulnerabilities/export?${query.toString()}`
+  const response = await apiFetch(`${getApiBase()}${path}`, { cache: 'no-store' })
+  if (!response.ok) {
+    const { body, unknownRoute } = await readErrorResponse(response)
+    throw new ApiError(body.error || httpStatusMessage(response.status, response.statusText), response.status, body, { unknownRoute })
+  }
+  return response.text()
+}
+
+// vulnerabilities-by-<view>-<cluster>-<YYYY-MM-DD>.csv, on the local date.
+export function vulnerabilitiesCSVFilename(view: VulnerabilityExportView, cluster: string, now = new Date()): string {
+  const safe = cluster.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+|-+$/g, '') || 'cluster'
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `vulnerabilities-${view === 'findings' ? 'findings' : `by-${view}`}-${safe}-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}.csv`
 }
 
 // GET /api/vulnerabilities. Filters run server-side so the summary always

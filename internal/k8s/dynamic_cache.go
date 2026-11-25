@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -17,29 +19,57 @@ import (
 )
 
 // DynamicResourceCache wraps the shared k8score implementation.
-// Singleton + Radar-specific warmup list stay here.
 type DynamicResourceCache struct {
 	*k8score.DynamicResourceCache
 }
 
+type connectionDynamicCache struct {
+	reports  connectionPolicyReports
+	mu       sync.Mutex
+	once     sync.Once
+	lifetime context.Context
+	cancel   context.CancelFunc
+	promoted atomic.Pointer[DynamicResourceCache]
+	pending  []func()
+}
+
+func (conn *Connection) dynamicCacheState() *connectionDynamicCache {
+	if state := conn.dynamicCache.Load(); state != nil {
+		return state
+	}
+	// The broadcaster can subscribe before the first connection exists.
+	crdCompleteMu.Lock()
+	defer crdCompleteMu.Unlock()
+	if state := conn.dynamicCache.Load(); state != nil {
+		return state
+	}
+	lifetime, cancel := context.WithCancel(context.Background())
+	state := &connectionDynamicCache{lifetime: lifetime, cancel: cancel, pending: slices.Clone(crdCompleteSubscribers)}
+	conn.dynamicCache.Store(state)
+	return state
+}
+
 var (
-	dynamicResourceCache *DynamicResourceCache
-	dynamicCacheOnce     = new(sync.Once)
-	dynamicCacheMu       sync.Mutex
-	// dynamicSyncStallAfter overrides k8score's stall threshold in tests;
-	// zero keeps the default.
-	dynamicSyncStallAfter time.Duration
+	// dynamicSyncStallAfter and dynamicObjectReadSyncWait override k8score's
+	// thresholds in tests; zero keeps the defaults.
+	dynamicSyncStallAfter     time.Duration
+	dynamicObjectReadSyncWait time.Duration
 )
 
 // InitDynamicResourceCache initializes the dynamic resource cache.
 // If changeCh is provided, change notifications will be sent to it (for SSE).
 func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
-	var initErr error
-	dynamicCacheOnce.Do(func() {
-		directClient, client := getDynamicCacheClients()
+	return Current().initDynamicResourceCache(changeCh)
+}
+
+func (conn *Connection) initDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
+	if conn == nil {
+		return fmt.Errorf("dynamic client not initialized")
+	}
+	return conn.dynamicCacheState().init(func() (*DynamicResourceCache, error) {
+		directClient, client := conn.Dynamic(), conn.InformerDynamicClient()
 		if client == nil {
-			initErr = fmt.Errorf("dynamic client not initialized")
-			return
+			return nil, fmt.Errorf("dynamic client not initialized")
 		}
 
 		// The cache always boots cluster-wide (or kubeconfig-fallback when
@@ -48,7 +78,7 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 		var nsFallback string
 		var nsFallbacks []string
 		var nsFallbacksTruncated bool
-		if permResult := GetCachedPermissionResult(); permResult != nil {
+		if permResult := conn.cachedPermissionResult(); permResult != nil {
 			if permResult.NamespaceScoped && permResult.Namespace != "" {
 				nsFallback = permResult.Namespace
 			}
@@ -62,26 +92,15 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 		// --namespace-scope pins namespaced CRD informers to the target namespace
 		// (typed informers are pinned via probeResourceAccess). Cluster-scoped CRDs
 		// stay cluster-wide — enforced by the gvrIsNamespaced guard in probeScope.
-		var nsScoped bool
-		var nsTarget string
-		if ForceNamespaceScope {
-			if t := GetNamespaceScopeTarget(); t != "" {
-				nsScoped = true
-				nsTarget = t
-			}
-		}
+		scope := conn.namespaceListInputs()
 
-		discovery := GetResourceDiscovery()
+		discovery := conn.Discovery()
 		var sharedDiscovery *k8score.ResourceDiscovery
 		if discovery != nil {
 			sharedDiscovery = discovery.ResourceDiscovery
 		}
 
-		// Wiring-time capture — same rationale as InitResourceCache: a late
-		// callback after a context switch must stamp its own cluster.
-		recordClusterContext := ActiveClusterContext()
-
-		core, err := k8score.NewDynamicResourceCache(k8score.DynamicCacheConfig{
+		cfg := k8score.DynamicCacheConfig{
 			RequiredWatchKinds:          relationshipWatchKinds(),
 			DynamicClient:               client,
 			DirectClient:                directClient,
@@ -90,48 +109,75 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 			NamespaceFallback:           nsFallback,
 			NamespaceFallbacks:          nsFallbacks,
 			NamespaceFallbacksTruncated: nsFallbacksTruncated,
-			NamespaceScoped:             nsScoped,
-			Namespace:                   nsTarget,
+			NamespaceScoped:             scope.forceNamespace && scope.target != "",
+			Namespace:                   scope.target,
 			SyncStallAfter:              dynamicSyncStallAfter,
+			ObjectReadSyncWait:          dynamicObjectReadSyncWait,
 			DebugEvents:                 DebugEvents,
-			OnReceived: func(kind string) {
-				timeline.IncrementReceived(kind)
-			},
-			OnChange: func(change k8score.ResourceChange, obj, oldObj any) {
-				u := extractUnstructured(obj)
-				if u == nil {
-					return
-				}
-				recordToTimelineStore(
-					recordClusterContext,
-					change.Kind,
-					change.Namespace,
-					change.Name,
-					change.UID,
-					change.Operation,
-					oldObj,
-					obj,
-					change.Diff,
-					true,
-				)
-			},
-			OnDrop: func(kind, ns, name, reason, op string) {
-				timeline.RecordDrop(kind, ns, name, reason, op, recordClusterContext)
-			},
-			OnRecorded: func(kind string) {
-				timeline.IncrementRecorded(kind)
-			},
-			ComputeDiff: func(kind string, oldObj, newObj any) *k8score.DiffInfo {
-				return ComputeDiff(kind, oldObj, newObj)
-			},
-		})
+		}
+		conn.configureDynamicCallbacks(&cfg)
+		core, err := k8score.NewDynamicResourceCache(cfg)
+		if err != nil {
+			return nil, err
+		}
+
+		return &DynamicResourceCache{DynamicResourceCache: core}, nil
+	})
+}
+
+func (conn *Connection) configureDynamicCallbacks(cfg *k8score.DynamicCacheConfig) {
+	lifetime := conn.dynamicCacheState().lifetime
+	history := conn.cacheState()
+	cluster := TimelineClusterContext(conn.ContextName())
+	binding := timeline.CaptureStore()
+	cfg.ComputeDiff = func(kind string, oldObj, newObj any) *DiffInfo {
+		if lifetime.Err() != nil {
+			return nil
+		}
+		return ComputeDiff(kind, oldObj, newObj)
+	}
+	cfg.OnReceived = func(kind string) {
+		if lifetime.Err() == nil {
+			timeline.IncrementReceived(kind)
+		}
+	}
+	cfg.OnChange = func(change ResourceChange, obj, oldObj any) {
+		if lifetime.Err() == nil && extractUnstructured(obj) != nil {
+			history.recordToTimelineStore(binding, cluster, change.Kind, change.Namespace, change.Name, change.UID, change.Operation, oldObj, obj, change.Diff, true)
+		}
+	}
+	cfg.OnDrop = func(kind, ns, name, reason, op string) {
+		if lifetime.Err() == nil {
+			timeline.RecordDrop(kind, ns, name, reason, op, cluster)
+		}
+	}
+}
+
+func (s *connectionDynamicCache) init(build func() (*DynamicResourceCache, error)) error {
+	var initErr error
+	s.once.Do(func() {
+		dc, err := build()
 		if err != nil {
 			initErr = err
 			return
 		}
-
-		dynamicResourceCache = &DynamicResourceCache{DynamicResourceCache: core}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.lifetime.Err() != nil {
+			dc.Stop()
+			return
+		}
+		for _, callback := range s.pending {
+			dc.OnCRDDiscoveryComplete(callback)
+		}
+		s.pending = nil
+		s.promoted.Store(dc)
 	})
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lifetime.Err() != nil {
+		return fmt.Errorf("cluster changed during dynamic cache initialization")
+	}
 	return initErr
 }
 
@@ -144,37 +190,75 @@ func extractUnstructured(obj any) interface{ GetName() string } {
 	return nil
 }
 
-// GetDynamicResourceCache returns the singleton dynamic cache instance.
-func GetDynamicResourceCache() *DynamicResourceCache {
-	return dynamicResourceCache
-}
-
-// ResetDynamicResourceCache stops and clears the dynamic resource cache.
-func ResetDynamicResourceCache() {
-	dynamicCacheMu.Lock()
-	defer dynamicCacheMu.Unlock()
-
-	if dynamicResourceCache != nil {
-		dynamicResourceCache.Stop()
-		dynamicResourceCache = nil
+// DynamicResourceCache returns the cache built for this connection.
+func (c *Connection) DynamicResourceCache() *DynamicResourceCache {
+	if c != nil {
+		if state := c.dynamicCache.Load(); state != nil {
+			return state.promoted.Load()
+		}
 	}
-	dynamicCacheOnce = new(sync.Once)
+	return nil
 }
 
-// OnCRDDiscoveryComplete registers a callback to be called when CRD discovery completes.
-// This is a package-level function for backward compatibility.
+func GetDynamicResourceCache() *DynamicResourceCache { return Current().DynamicResourceCache() }
+
+func ResetDynamicResourceCache() { Current().closeDynamicResourceCache() }
+
+func (conn *Connection) closeDynamicResourceCache() {
+	if conn == nil {
+		return
+	}
+	s := conn.dynamicCacheState()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Report rebuilds read the informer stores. Retire their index first.
+	s.reports.close()
+	s.cancel()
+	s.pending = nil
+	if dc := s.promoted.Swap(nil); dc != nil {
+		dc.Stop()
+	}
+}
+
+// Process subscribers follow every cluster. Each build owns its pending
+// registrations until it can hand them to its own discovery core.
+var (
+	crdCompleteMu          sync.Mutex
+	crdCompleteSubscribers []func()
+)
+
+// OnCRDDiscoveryComplete registers a callback for the current and future caches.
 func OnCRDDiscoveryComplete(callback func()) {
-	if dynamicResourceCache != nil && dynamicResourceCache.DynamicResourceCache != nil {
-		dynamicResourceCache.DynamicResourceCache.OnCRDDiscoveryComplete(callback)
+	crdCompleteMu.Lock()
+	defer crdCompleteMu.Unlock()
+	crdCompleteSubscribers = append(crdCompleteSubscribers, callback)
+	if conn := Current(); conn != nil {
+		if s := conn.dynamicCache.Load(); s != nil {
+			s.onCRDDiscoveryComplete(callback)
+		}
+	}
+}
+
+func (s *connectionDynamicCache) onCRDDiscoveryComplete(callback func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lifetime.Err() != nil {
+		return
+	}
+	if dc := s.promoted.Load(); dc != nil {
+		dc.OnCRDDiscoveryComplete(callback)
+	} else {
+		s.pending = append(s.pending, callback)
 	}
 }
 
 type supportedCRDResource struct {
-	Group      string
-	Versions   []string
-	Resource   string
-	Kind       string
-	Namespaced bool
+	NativeDiscovery bool // Preserve native discovery classification on partial-discovery recovery.
+	Group           string
+	Versions        []string
+	Resource        string
+	Kind            string
+	Namespaced      bool
 }
 
 // supportedCRDFallbacks is the server-side catalog of dynamic integrations
@@ -194,6 +278,9 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "opentelemetry.io", Versions: []string{"v1alpha1"}, Resource: "instrumentations", Kind: "Instrumentation", Namespaced: true},
 	{Group: "flagger.app", Versions: []string{"v1beta1"}, Resource: "canaries", Kind: "Canary", Namespaced: true},
 	{Group: "flagger.app", Versions: []string{"v1beta1"}, Resource: "metrictemplates", Kind: "MetricTemplate", Namespaced: true},
+	// k3s / RKE2 Helm controller. HelmChart shares its kind with Flux's source.toolkit.fluxcd.io HelmChart.
+	{Group: "helm.cattle.io", Versions: []string{"v1"}, Resource: "helmcharts", Kind: "HelmChart", Namespaced: true},
+	{Group: "helm.cattle.io", Versions: []string{"v1"}, Resource: "helmchartconfigs", Kind: "HelmChartConfig", Namespaced: true},
 	// system-upgrade-controller (Rancher, k3s, RKE2). Other projects also name a kind Plan.
 	{Group: "upgrade.cattle.io", Versions: []string{"v1"}, Resource: "plans", Kind: "Plan", Namespaced: true},
 	{Group: "secrets-store.csi.x-k8s.io", Versions: []string{"v1", "v1alpha1"}, Resource: "secretproviderclasses", Kind: "SecretProviderClass", Namespaced: true},
@@ -201,6 +288,11 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "snapshot.storage.k8s.io", Versions: []string{"v1"}, Resource: "volumesnapshots", Kind: "VolumeSnapshot", Namespaced: true},
 	{Group: "snapshot.storage.k8s.io", Versions: []string{"v1"}, Resource: "volumesnapshotcontents", Kind: "VolumeSnapshotContent", Namespaced: false},
 	{Group: "snapshot.storage.k8s.io", Versions: []string{"v1"}, Resource: "volumesnapshotclasses", Kind: "VolumeSnapshotClass", Namespaced: false},
+	{Group: "metallb.io", Versions: []string{"v1beta1"}, Resource: "ipaddresspools", Kind: "IPAddressPool", Namespaced: true},
+	{Group: "metallb.io", Versions: []string{"v1beta1"}, Resource: "l2advertisements", Kind: "L2Advertisement", Namespaced: true},
+	{Group: "metallb.io", Versions: []string{"v1beta1"}, Resource: "bgpadvertisements", Kind: "BGPAdvertisement", Namespaced: true},
+	{Group: "metallb.io", Versions: []string{"v1beta2", "v1beta1"}, Resource: "bgppeers", Kind: "BGPPeer", Namespaced: true},
+	{Group: "metallb.io", Versions: []string{"v1beta1"}, Resource: "configurationstates", Kind: "ConfigurationState", Namespaced: true},
 	{Group: "core.strimzi.io", Versions: []string{"v1", "v1beta2"}, Resource: "strimzipodsets", Kind: "StrimziPodSet", Namespaced: true},
 	{Group: "kafka.strimzi.io", Versions: []string{"v1", "v1beta2"}, Resource: "kafkas", Kind: "Kafka", Namespaced: true},
 	{Group: "kafka.strimzi.io", Versions: []string{"v1", "v1beta2"}, Resource: "kafkanodepools", Kind: "KafkaNodePool", Namespaced: true},
@@ -229,6 +321,7 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "source.toolkit.fluxcd.io", Versions: []string{"v1", "v1beta2"}, Resource: "helmrepositories", Kind: "HelmRepository", Namespaced: true},
 	{Group: "source.toolkit.fluxcd.io", Versions: []string{"v1", "v1beta2"}, Resource: "helmcharts", Kind: "HelmChart", Namespaced: true},
 	{Group: "source.toolkit.fluxcd.io", Versions: []string{"v1", "v1beta2"}, Resource: "buckets", Kind: "Bucket", Namespaced: true},
+	{Group: "source.extensions.fluxcd.io", Versions: []string{"v1beta1"}, Resource: "artifactgenerators", Kind: "ArtifactGenerator", Namespaced: true},
 	{Group: "source.toolkit.fluxcd.io", Versions: []string{"v1"}, Resource: "externalartifacts", Kind: "ExternalArtifact", Namespaced: true},
 	{Group: "kustomize.toolkit.fluxcd.io", Versions: []string{"v1", "v1beta2"}, Resource: "kustomizations", Kind: "Kustomization", Namespaced: true},
 	{Group: "helm.toolkit.fluxcd.io", Versions: []string{"v2", "v2beta2", "v2beta1"}, Resource: "helmreleases", Kind: "HelmRelease", Namespaced: true},
@@ -248,7 +341,9 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "scheduling.k8s.io", Versions: []string{"v1"}, Resource: "priorityclasses", Kind: "PriorityClass", Namespaced: false},
 	{Group: "admissionregistration.k8s.io", Versions: []string{"v1"}, Resource: "validatingwebhookconfigurations", Kind: "ValidatingWebhookConfiguration", Namespaced: false},
 	{Group: "admissionregistration.k8s.io", Versions: []string{"v1"}, Resource: "validatingadmissionpolicies", Kind: "ValidatingAdmissionPolicy", Namespaced: false},
+	{Group: "admissionregistration.k8s.io", Versions: []string{"v1", "v1beta1", "v1alpha1"}, Resource: "mutatingadmissionpolicies", Kind: "MutatingAdmissionPolicy", NativeDiscovery: true},
 	{Group: "admissionregistration.k8s.io", Versions: []string{"v1"}, Resource: "validatingadmissionpolicybindings", Kind: "ValidatingAdmissionPolicyBinding", Namespaced: false},
+	{Group: "admissionregistration.k8s.io", Versions: []string{"v1", "v1beta1", "v1alpha1"}, Resource: "mutatingadmissionpolicybindings", Kind: "MutatingAdmissionPolicyBinding", NativeDiscovery: true},
 	{Group: "gateway.networking.k8s.io", Versions: []string{"v1", "v1beta1"}, Resource: "gatewayclasses", Kind: "GatewayClass", Namespaced: false},
 	{Group: "gateway.networking.k8s.io", Versions: []string{"v1", "v1beta1"}, Resource: "gateways", Kind: "Gateway", Namespaced: true},
 	{Group: "gateway.networking.k8s.io", Versions: []string{"v1", "v1beta1"}, Resource: "httproutes", Kind: "HTTPRoute", Namespaced: true},
@@ -363,6 +458,9 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	// The issue adapter reads all six: a failed Backup is only visible if its
 	// informer is running, and BackupRepository/BSL are the backup targets whose
 	// health explains why the runs fail.
+	{Group: "longhorn.io", Versions: []string{"v1beta2"}, Resource: "volumes", Kind: "Volume", Namespaced: true},
+	{Group: "longhorn.io", Versions: []string{"v1beta2"}, Resource: "engines", Kind: "Engine", Namespaced: true},
+	{Group: "longhorn.io", Versions: []string{"v1beta2"}, Resource: "replicas", Kind: "Replica", Namespaced: true},
 	{Group: "velero.io", Versions: []string{"v1"}, Resource: "backups", Kind: "Backup", Namespaced: true},
 	{Group: "velero.io", Versions: []string{"v1"}, Resource: "restores", Kind: "Restore", Namespaced: true},
 	{Group: "velero.io", Versions: []string{"v1"}, Resource: "schedules", Kind: "Schedule", Namespaced: true},
@@ -500,15 +598,19 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "extensions.agents.x-k8s.io", Versions: []string{"v1beta1"}, Resource: "sandboxwarmpools", Kind: "SandboxWarmPool", Namespaced: true},
 	// NOTE: the wgpolicyk8s.io PolicyReport CRDs are intentionally NOT in
 	// this list. They are warmed up conditionally — only when Kyverno is
-	// detected — via WarmupKyvernoPolicyReports in policy_reports.go. Adding
+	// detected — in policy_reports.go. Adding
 	// them here would warm them up on every cluster that has the CRD
 	// installed (e.g. for Trivy reports), which we don't want until we have
 	// a generic per-engine policy index. See T5 in the plan.
 }
 
 func RegisterSupportedCRDFallbacks() {
-	discovery := GetResourceDiscovery()
-	client := GetInformerDynamicClient()
+	Current().registerSupportedCRDFallbacks()
+}
+
+func (conn *Connection) registerSupportedCRDFallbacks() {
+	discovery := conn.Discovery()
+	client := conn.InformerDynamicClient()
 	if discovery == nil || client == nil {
 		return
 	}
@@ -517,7 +619,7 @@ func RegisterSupportedCRDFallbacks() {
 	}
 
 	var nsFallbacks []string
-	if permResult := GetCachedPermissionResult(); permResult != nil {
+	if permResult := conn.cachedPermissionResult(); permResult != nil {
 		nsFallbacks = permResult.ScopeCandidates
 		if len(nsFallbacks) == 0 && permResult.NamespaceScoped && permResult.Namespace != "" {
 			nsFallbacks = []string{permResult.Namespace}
@@ -566,7 +668,7 @@ func RegisterSupportedCRDFallbacks() {
 					Kind:       c.Kind,
 					Name:       c.Resource,
 					Namespaced: c.Namespaced,
-					IsCRD:      true,
+					IsCRD:      !c.NativeDiscovery,
 					Verbs:      []string{"get", "list", "watch"},
 				})
 				mu.Lock()
@@ -667,13 +769,12 @@ func isExpectedFallbackProbeDenial(err error) bool {
 // WarmupCommonCRDs starts watching discovered resources in the supported
 // dynamic-integration catalog at startup.
 func WarmupCommonCRDs() {
-	cache := GetDynamicResourceCache()
-	if cache == nil {
-		return
-	}
+	conn := Current()
+	warmupCommonCRDs(conn.DynamicResourceCache(), conn.Discovery())
+}
 
-	discovery := GetResourceDiscovery()
-	if discovery == nil {
+func warmupCommonCRDs(cache *DynamicResourceCache, discovery *ResourceDiscovery) {
+	if cache == nil || discovery == nil {
 		return
 	}
 

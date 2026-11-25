@@ -133,7 +133,7 @@ func TestMarkAfterAFailedClearKeepsTheResourceMarked(t *testing.T) {
 // be applied once it answers.
 func TestReconnectClearThatFailsIsAppliedWhenTheDatabaseAnswers(t *testing.T) {
 	f := newSeenMarkFixture(t, "web")
-	NoteDeletedWhileUnavailable("ctx", "apps", "Deployment", "shop", "web")
+	CaptureStore().NoteDeletedWhileUnavailable("ctx", "apps", "Deployment", "shop", "web")
 
 	f.proxy.down()
 	f.install()
@@ -377,12 +377,10 @@ func TestOutageRecoveryLeavesTheCurrentContextsDeletesAlone(t *testing.T) {
 		seenWrites:    make(chan seenResourceWrite, 4),
 		quit:          make(chan struct{}),
 	}
+	// As if the next context had noted a delete while its store was down.
+	CaptureStore().NoteDeletedWhileUnavailable("next", "apps", "Deployment", "shop", "web")
 	setGlobalStore(watched)
 	t.Cleanup(func() { setGlobalStore(nil) }) // never opened, so never closed
-	// As if the next context had noted a delete while its store was down.
-	deletedWhileUnavailableMu.Lock()
-	deletedWhileUnavailable[SeenResourceKey("next", "apps", "Deployment", "shop", "web")] = struct{}{}
-	deletedWhileUnavailableMu.Unlock()
 
 	applyUnclearedSeen(watched)
 	if n := DeletedWhileUnavailableCountForTest(); n != 1 {

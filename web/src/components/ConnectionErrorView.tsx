@@ -403,6 +403,19 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying, back, var
     openLocalTerminal({ initialCommand: command, title: 'Auth' })
   }
 
+  if (connection.errorType === 'switch-stopped') {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center gap-3 px-8 text-center">
+        <h2 className="text-xl font-semibold text-theme-text-primary">Cluster switch stopped</h2>
+        <p className="text-sm text-theme-text-secondary">The previous connection was closed. Choose a cluster to reconnect.</p>
+        <div className="flex flex-wrap items-center justify-center gap-3">
+          <ContextSwitcher triggerName="Choose a cluster" />
+          {back && <button type="button" className="btn-secondary px-3 py-1.5" disabled={back.disabled} onClick={back.onBack}>Reconnect to {back.label}</button>}
+        </div>
+      </div>
+    )
+  }
+
   // A startup setting kept Radar from connecting, and the error names the
   // setting to change. Settings are read at startup, so retrying or switching
   // context can't clear it: only the message, no recovery actions.

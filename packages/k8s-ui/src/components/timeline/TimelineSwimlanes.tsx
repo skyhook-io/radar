@@ -28,6 +28,7 @@ import type { TimelineEvent, Topology } from '../../types'
 import type { NavigateToResource } from '../../utils/navigation'
 import { kindToPluralWithGroup, apiVersionToGroup } from '../../utils/navigation'
 import { PaneLoader } from '../ui/PaneLoader'
+import { EmptyState } from '../ui/EmptyState'
 import { TimelineToolbar } from './TimelineToolbar'
 import { sortTimelineLanes, TIMELINE_SORT_DEFAULT, type TimelineSort } from './timeline-lane-sort'
 import {
@@ -1737,7 +1738,23 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
 
   // Empty-state block — shared by the no-rows-at-all case and the
   // pinned-rows-but-nothing-else case (rendered below the pinned section).
-  const emptyState = (
+  const emptyState = compact && viewWindow && events.length > 0 && !hasFilteredEvents && !windowInsideGap(viewWindow, gaps) ? (
+    <EmptyState
+      className="m-2"
+      icon={Clock}
+      headline="No recorded activity in this time window"
+      body={`${pluralize(events.length, 'event')} outside this time window`}
+      action={bounds && onViewWindowChange && (
+        <button
+          type="button"
+          onClick={() => onViewWindowChange(bounds)}
+          className="rounded-lg border border-theme-border bg-theme-elevated px-3 py-1.5 text-sm text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+        >
+          Show all recorded activity
+        </button>
+      )}
+    />
+  ) : (
     <div className="flex flex-col items-center justify-center h-64 text-theme-text-tertiary">
       <AlertCircle className="w-12 h-12 mb-4 opacity-50" />
       {windowInsideGap(viewWindow, gaps) ? (

@@ -30,7 +30,8 @@ func OpenTelemetryAutoInstrumentationForObject(obj runtime.Object, canRead func(
 	if !ok {
 		return nil, false
 	}
-	typed, dynamic, discovery := GetResourceCache(), GetDynamicResourceCache(), GetResourceDiscovery()
+	conn := Current()
+	typed, dynamic, discovery := conn.ResourceCache(), GetDynamicResourceCache(), conn.Discovery()
 	if typed == nil || typed.ResourceCache == nil {
 		return nil, true
 	}
@@ -128,7 +129,7 @@ func OpenTelemetryAutoInstrumentationForObject(obj runtime.Object, canRead func(
 		}
 		out.RequestsIfPodCreatedNow = append(out.RequestsIfPodCreatedNow, request)
 	}
-	if GetResourceCache() != typed || GetDynamicResourceCache() != dynamic || GetResourceDiscovery() != discovery {
+	if !conn.cacheIsCurrent() || GetDynamicResourceCache() != dynamic || GetResourceDiscovery() != discovery {
 		return nil, true
 	}
 	if len(out.RequestsIfPodCreatedNow) == 0 && len(out.IgnoredWorkloadMetadataAnnotations) == 0 && !out.NamespaceDefaultsUnknown {

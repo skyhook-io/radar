@@ -23,6 +23,11 @@ import (
 	evidence "github.com/skyhook-io/radar/pkg/runtimeevidence"
 )
 
+var (
+	applicationEvidencePermissionBudget      = 2 * time.Second
+	applicationEvidenceRetryPermissionBudget = 5 * time.Second
+)
+
 type applicationEvidenceAPI struct {
 	operationContext func() context.Context
 	snapshot         func() (*rest.Config, string)
@@ -34,10 +39,13 @@ type applicationEvidenceAPI struct {
 func newApplicationEvidenceAPI() *applicationEvidenceAPI {
 	return &applicationEvidenceAPI{
 		operationContext: k8s.OperationContext,
-		snapshot:         k8s.GetConfigSnapshot,
-		currentContext:   k8s.ActiveClusterContext,
-		resolve:          collector.ResolveCandidates,
-		collect:          collector.SharedCollector().CollectTarget,
+		snapshot: func() (*rest.Config, string) {
+			conn := k8s.Current()
+			return conn.ConfigCopy(), k8s.TimelineClusterContext(conn.ContextName())
+		},
+		currentContext: k8s.ActiveClusterContext,
+		resolve:        collector.ResolveCandidates,
+		collect:        collector.SharedCollector().CollectTarget,
 	}
 }
 
@@ -127,9 +135,9 @@ func (s *Server) handleApplicationEvidenceCandidates(w http.ResponseWriter, r *h
 			Cache: k8s.GetResourceCache(), Dynamic: k8s.GetDynamicResourceCache(), Discovery: k8s.GetResourceDiscovery(), AllowedNamespaces: namespaces,
 		}, collector.Subject{Group: group, Kind: kind, Namespace: q.Get("namespace"), Name: q.Get("name")})
 	}
-	permissionBudget := 2 * time.Second
+	permissionBudget := applicationEvidencePermissionBudget
 	if q.Get("retryPermissions") == "true" {
-		permissionBudget = 5 * time.Second
+		permissionBudget = applicationEvidenceRetryPermissionBudget
 	}
 	ctx, cancel := context.WithTimeout(collectionCtx, permissionBudget)
 	defer cancel()

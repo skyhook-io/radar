@@ -462,6 +462,7 @@ func TestKueueHistoricalEvents_StatusOnly(t *testing.T) {
 }
 
 func TestRecordToTimelineStore_KueueWorkloadChurnDroppedTransitionKept(t *testing.T) {
+	state := newConnectionCache()
 	timeline.ResetStore()
 	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 10}); err != nil {
 		t.Fatalf("InitStore: %v", err)
@@ -475,8 +476,8 @@ func TestRecordToTimelineStore_KueueWorkloadChurnDroppedTransitionKept(t *testin
 		withAdmission("busy", 1, map[string]any{"cpu": "default"}, map[string]any{"cpu": "20m"}))
 	reserved.SetResourceVersion("3")
 
-	recordToTimelineStore(ActiveClusterContext(), "Workload", "ml", pending.GetName(), "wl-uid", "update", pending, churn, nil, false)
-	recordToTimelineStore(ActiveClusterContext(), "Workload", "ml", pending.GetName(), "wl-uid", "update", churn, reserved, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Workload", "ml", pending.GetName(), "wl-uid", "update", pending, churn, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Workload", "ml", pending.GetName(), "wl-uid", "update", churn, reserved, nil, false)
 
 	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{Kinds: []string{"Workload"}, Namespaces: []string{"ml"}, IncludeManaged: true})
 	if err != nil {
