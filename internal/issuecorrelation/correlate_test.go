@@ -1132,6 +1132,43 @@ func TestCorrelate_DeferredWatchStartedAfterWindowStart(t *testing.T) {
 	})
 }
 
+// A workload and sources all created after the late kind's watch began have
+// had every change seen, so the late watch doesn't stop "no changes". One
+// source older than the watch does.
+func TestCorrelate_NewObjectsOutliveLateWatch(t *testing.T) {
+	windowAt := func(from time.Time) Options {
+		return Options{Window: Window{From: from, To: time.Now().Add(time.Minute)}, Selection: SelectAroundFirstSeen, CheckCoverage: true, EventIDs: true}
+	}
+	// Later than the deferred ConfigMap watch, which starts about 300ms after
+	// the cache does.
+	created := metav1.NewTime(time.Now().Add(5 * time.Second))
+	objects := func(configCreated metav1.Time) []runtime.Object {
+		deployment := webDeployment()
+		deployment.CreationTimestamp = created
+		return []runtime.Object{deployment,
+			&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "web-config", Namespace: "shop", CreationTimestamp: configCreated}},
+			&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "web-creds", Namespace: "shop", CreationTimestamp: created}}}
+	}
+
+	t.Run("all new", func(t *testing.T) {
+		from, _ := initDeferredCache(t, k8score.ConfigMaps, objects(created)...)
+		initStore(t)
+		got := Correlate(context.Background(), webIssue(time.Time{}), windowAt(from), Access{})
+		if !got.NoChanges || got.Unknown != nil {
+			t.Fatalf("new workload and sources: no_changes=%v unknown=%+v history=%+v", got.NoChanges, got.Unknown, got.History)
+		}
+	})
+
+	t.Run("source older than the watch", func(t *testing.T) {
+		from, _ := initDeferredCache(t, k8score.ConfigMaps, objects(metav1.NewTime(time.Now().Add(-time.Hour)))...)
+		initStore(t)
+		got := Correlate(context.Background(), webIssue(time.Time{}), windowAt(from), Access{})
+		if got.NoChanges || got.Unknown == nil || got.Unknown.Reason != issuesapi.CorrelationUnknownHistoryIncomplete {
+			t.Fatalf("old ConfigMap: no_changes=%v unknown=%+v", got.NoChanges, got.Unknown)
+		}
+	})
+}
+
 // A Rollout's workloadRef target gains a Secret reference after the engine
 // checked the sources it found, while the read is still to come: the Secret
 // is never queried, so neither its rows nor its fetch saturation reach the

@@ -10,7 +10,7 @@ import type { ClusterScope } from '@skyhook-io/k8s-ui/types/cluster-scope'
 import type { WorkloadHistoryCoverage } from '@skyhook-io/k8s-ui/utils/workload-history-notes'
 import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
 import { useEffect, useRef, useCallback, useMemo, useState } from 'react'
-import { argoSyncOptionsForRequest } from '@skyhook-io/k8s-ui'
+import { argoSyncOptionsForRequest, issueOccurrence, issueRowKey, type IssueRowChange } from '@skyhook-io/k8s-ui'
 import { useClusterConnected } from '../context/clusterConnected'
 import type { KueueAdmissionResponse, KueuePositionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
 import type { KueueQueueMembership, KueueQueueWorkloadsResponse } from '@skyhook-io/k8s-ui/types/kueue-queues'
@@ -1051,6 +1051,100 @@ export function useSubjectIssues(
     // The existing route alone cannot prove support for this opt-in shape.
     enabled: enabled && !!subject && !capabilities.isPending,
   });
+}
+
+export interface CorrelatedIssuesResponse extends SubjectIssuesResponse {
+  /** Set when the correlated issue isn't in this answer. not_found: resolved,
+   *  or outside what the caller may see. user_forbidden / read_error: a native
+   *  Helm release whose storage read, which serves both the issue and its
+   *  history, was refused or failed. */
+  correlation_status?: 'not_found' | 'user_forbidden' | 'read_error';
+}
+
+const ISSUE_CORRELATION_REFRESH_INTERVAL_MS = 60_000;
+
+// One issue's recent changes: the per-resource lookup for the issue's subject,
+// with ?correlate=<id> so Radar correlates that issue only and returns it with
+// its timing corrected. Hosts enable it for the open row only. An older Radar
+// ignores the parameter rather than failing, so the request waits for
+// capabilities and is sent only when the flag says the server reads it.
+export function useIssueCorrelation(issue: Issue | null, enabled: boolean) {
+  const capabilities = useCapabilities();
+  const { gatedKey, guard } = useRadarFeature('issueCorrelation');
+  const pathNs = issue?.namespace ? encodeURIComponent(issue.namespace) : "_";
+  const params = new URLSearchParams({ coverage: "1" });
+  if (issue?.group) params.set("group", issue.group);
+  if (issue) params.set("correlate", issue.id);
+  return useQuery<CorrelatedIssuesResponse>({
+    // The occurrence is in the key: an issue's id survives recurrence, and a
+    // cached answer for the earlier occurrence would describe the wrong window.
+    queryKey: ["issues", "correlation", issue?.kind ?? "", issue?.group ?? "", issue?.namespace ?? "", issue?.name ?? "", issue?.id ?? "", issue ? issueOccurrence(issue) : "", ...gatedKey],
+    queryFn: () => {
+      if (!capabilities.data && capabilities.error) throw capabilities.error;
+      return guard(() => fetchJSON<CorrelatedIssuesResponse>(`/issues/resource/${encodeURIComponent(issue!.kind)}/${pathNs}/${encodeURIComponent(issue!.name)}?${params}`));
+    },
+    retry: shouldRetryRadarQuery,
+    staleTime: 30000,
+    refetchInterval: (q) => q.state.error instanceof RadarFeatureUnsupportedError ? false : ISSUE_CORRELATION_REFRESH_INTERVAL_MS,
+    refetchIntervalInBackground: false,
+    enabled: enabled && !!issue && !capabilities.isPending,
+  });
+}
+
+export interface IssueRecentChangesResponse {
+  /** Per issue id, the one change its row names. An issue with nothing to
+   *  name is absent, whatever the reason; absence is never "no changes". */
+  changes: Record<string, IssueRowChange>;
+}
+
+/** The server's cap on issues per batched row lookup. */
+export const ISSUE_ROW_CHANGES_MAX = 50;
+
+/** One issue= value: <id>/<kind>/<namespace>/<name>[/<group>], "_" for a
+ *  cluster-scoped subject's namespace. */
+export function issueRowChangeParam(issue: Issue): string {
+  const value = [issue.id, issue.kind, issue.namespace || "_", issue.name].map(encodeURIComponent).join("/");
+  return issue.group ? `${value}/${encodeURIComponent(issue.group)}` : value;
+}
+
+// The one change each issue row on screen names, from one batched lookup
+// (GET /api/issues/recent-changes), polled like an open issue's recent
+// changes. Like the per-issue correlation, it waits for capabilities and goes
+// out only when the server advertises issueCorrelation. The previous answer
+// stays while a new set of rows loads, so rows on screen before and after a
+// scroll keep their note. Keyed by issueRowKey.
+export function useIssueRowChanges(issues: Issue[]): ReadonlyMap<string, IssueRowChange> | undefined {
+  const capabilities = useCapabilities();
+  const { gatedKey, guard, support } = useRadarFeature('issueCorrelation');
+  const rows = useMemo(() => issues.slice(0, ISSUE_ROW_CHANGES_MAX), [issues]);
+  const params = useMemo(() => {
+    const p = new URLSearchParams();
+    for (const issue of rows) p.append("issue", issueRowChangeParam(issue));
+    return p.toString();
+  }, [rows]);
+  const query = useQuery<IssueRecentChangesResponse>({
+    queryKey: ["issues", "row-changes", params, ...gatedKey],
+    queryFn: () => {
+      if (!capabilities.data && capabilities.error) throw capabilities.error;
+      return guard(() => fetchJSON<IssueRecentChangesResponse>(`/issues/recent-changes?${params}`));
+    },
+    retry: shouldRetryRadarQuery,
+    staleTime: 30000,
+    placeholderData: (previous) => previous,
+    refetchInterval: (q) => q.state.error instanceof RadarFeatureUnsupportedError ? false : ISSUE_CORRELATION_REFRESH_INTERVAL_MS,
+    refetchIntervalInBackground: false,
+    enabled: rows.length > 0 && !capabilities.isPending && support !== "unsupported",
+  });
+  const changes = query.data?.changes;
+  return useMemo(() => {
+    if (!changes || rows.length === 0) return undefined;
+    const out = new Map<string, IssueRowChange>();
+    for (const issue of rows) {
+      const change = changes[issue.id];
+      if (change) out.set(issueRowKey(issue), change);
+    }
+    return out;
+  }, [changes, rows]);
 }
 
 import type { Trace as NetworkTrace, InClusterCapability, DrainPlan, DrainPlanPod } from '@skyhook-io/k8s-ui'

@@ -1361,6 +1361,10 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
   // (leave an open drawer alone — a user opening a cluster, or a pan, is
   // authoritative and must not be re-resolved back to the prior selection).
   const prevSelRef = useRef<string | null>(selectedEventId ?? null)
+  // A selection opened from outside (a link, back/forward) can sit on a lane
+  // below the fold. A drawer the user opened by clicking a marker is already
+  // in view, so only the restore sets this.
+  const scrollToSelectedRef = useRef(false)
 
   useEffect(() => {
     if (!onSelectedEventChange) return
@@ -1394,6 +1398,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
     const resolved = resolveEventCluster(resolverRows, expandedLanes, want, timeToX)
     if (resolved) {
       restoredForRef.current = want
+      scrollToSelectedRef.current = true
       setDrawer(resolved)
       return
     }
@@ -1403,6 +1408,13 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
     restoredForRef.current = want
     onSelectedEventChange(null)
   }, [selectedEventId, drawer, resolverRows, expandedLanes, timeToX, isLoading, onSelectedEventChange])
+
+  // Bring a selection opened from outside into view once its marker renders.
+  useEffect(() => {
+    if (!scrollToSelectedRef.current || !drawer) return
+    scrollToSelectedRef.current = false
+    containerRef.current?.querySelector('[data-selected-event]')?.scrollIntoView?.({ block: 'center', inline: 'nearest' })
+  }, [drawer])
 
   useEffect(() => {
     if (!onSelectedEventChange) return
@@ -2727,6 +2739,7 @@ function ClusterPill({ cluster, selected, onClick, small }: {
     >
       <button
         aria-label={`Open ${cluster.count} clustered events`}
+        data-selected-event={selected || undefined}
         className={clsx(
           'inline-flex items-center gap-1 rounded-full border border-theme-border bg-theme-surface shadow-theme-sm transition-transform',
           small ? 'px-1 py-px' : 'px-1.5 py-0.5',
@@ -2951,6 +2964,7 @@ function EventMarker({ event, x, selected, onClick, dimmed, small }: EventMarker
           // Icon-only marker: the tooltip is mouse-only, so mirror it into an
           // accessible name (event type · message · time) for screen readers.
           aria-label={tooltipText}
+          data-selected-event={selected || undefined}
           className={clsx(
             'rounded-full transition-all flex items-center justify-center',
             'w-5 h-5',
@@ -2990,6 +3004,7 @@ function EventMarker({ event, x, selected, onClick, dimmed, small }: EventMarker
         // Icon-only glyph: the tooltip is mouse-only, so mirror it into an
         // accessible name (event type · message · time) for screen readers.
         aria-label={tooltipText}
+        data-selected-event={selected || undefined}
         className={clsx(
           'flex items-center justify-center transition-transform',
           selected ? 'scale-150' : 'hover:scale-125'

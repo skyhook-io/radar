@@ -162,6 +162,21 @@ export interface IssueRecentChange {
   running_previous_value?: IssueRunningPreviousValue;
   updates_in_window?: number;
   first_update_at?: string;
+  /** The timeline event this change was read from; the Timeline opens it with
+   *  ?event=<id>. Set only by the per-resource issues endpoint's correlation
+   *  and the batched row lookup. Absent on rows read from no single event,
+   *  such as native Helm release records. */
+  event_id?: string;
+}
+
+/** The one change a collapsed issue row names, from the batched row lookup
+ *  (GET /api/issues/recent-changes). first_seen and resource_created_at are
+ *  the occurrence it was read for: a row shows it only when they match its
+ *  own issue's (issueOccurrence), since an issue's id survives recurrence. */
+export interface IssueRowChange {
+  first_seen?: string;
+  resource_created_at?: string;
+  change: IssueRecentChange;
 }
 
 /** One finalizer removal: a JSON Patch that tests the object UID and the
@@ -378,6 +393,22 @@ export interface IssueChangeCorrelation {
   unknown?: IssueCorrelationUnknown;
   /** Set when Radar's held history does not cover the window. */
   history?: WorkloadHistoryCoverage;
+}
+
+/** Which occurrence of an issue this is. An issue's id survives resolution and
+ *  recurrence, so the id alone can't tell a new occurrence from the old one;
+ *  when first_seen is missing, the subject's creation time still tells a
+ *  recreated object apart. */
+export function issueOccurrence(issue: Pick<Issue, 'first_seen' | 'resource_created_at'>): string {
+  return `${instant(issue.first_seen)}|${instant(issue.resource_created_at)}`;
+}
+
+// The same moment can arrive written in different time zones, so compare the
+// instant, not the text.
+function instant(timestamp: string | undefined): string {
+  if (!timestamp) return '';
+  const ms = Date.parse(timestamp);
+  return Number.isFinite(ms) ? String(ms) : timestamp;
 }
 
 /** subjectRef builds a deep-linkable ref for an issue's subject — the row's

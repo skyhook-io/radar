@@ -107,7 +107,7 @@ func (s *Server) handleIssueRecentChanges(w http.ResponseWriter, r *http.Request
 					continue
 				}
 				if change, ok := issuecorrelation.RowChange(iss, read.correlationHistory[id]); ok {
-					resp.Changes[id] = IssueRowChange{FirstSeen: iss.FirstSeen, ResourceCreatedAt: iss.ResourceCreatedAt, Change: change}
+					resp.Changes[id] = IssueRowChange{FirstSeen: iss.FirstSeen.UTC(), ResourceCreatedAt: iss.ResourceCreatedAt.UTC(), Change: change}
 				}
 				break
 			}
