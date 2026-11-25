@@ -294,10 +294,12 @@ function AppDetailRoute({
   });
   const readableHistory = historyQuery.isError ? undefined : historyQuery.data;
   const deliveryRecords = useMemo(() => applicationDeliveryRecords(readableHistory), [readableHistory]);
-  const deliverySource = readableHistory?.sourceRef ?? app.sourceRef;
+  const partialSources = readableHistory?.partialSources;
+  const sourceUnavailable = !readableHistory?.sourceRef && !!partialSources?.length;
+  const deliverySource = sourceUnavailable ? undefined : readableHistory?.sourceRef ?? app.sourceRef;
   const needsDeploySource = requestedDeploys && !deploysInWorkloadScope && !deliverySource;
-  const waitingForDeploySource = needsDeploySource && (historyQuery.isPending || historyQuery.isFetching);
-  const clearDeploySelection = deploysInWorkloadScope || (needsDeploySource && historyQuery.isSuccess && !historyQuery.isFetching);
+  const waitingForDeploySource = needsDeploySource && !sourceUnavailable && (historyQuery.isPending || historyQuery.isFetching);
+  const clearDeploySelection = deploysInWorkloadScope || (needsDeploySource && !sourceUnavailable && historyQuery.isSuccess && !historyQuery.isFetching);
   const normalizeSingleWorkload = Boolean(singleWorkloadKey && (selectedWorkloadParam !== singleWorkloadKey || viewParam));
   const clearCostSelection = !singleWorkloadKey && selectedRouteView === "cost" && !applicationCostAvailable;
   const [retainedHistoryRange, setRetainedHistoryRange] =
@@ -672,9 +674,9 @@ function AppDetailRoute({
   );
 
   const renderDeploys = deliverySource && (deliveryRecords.length > 0 || requestedDeploys)
-    ? () => <ApplicationDeploys source={deliverySource} records={deliveryRecords} loading={historyQuery.isLoading} unavailable={historyQuery.isError} partialSources={readableHistory?.partialSources} onOpenSource={openSource} />
-    : needsDeploySource && historyQuery.isError
-      ? () => <AlertBanner className="m-4" variant="warning" title="Delivery records could not be refreshed" />
+    ? () => <ApplicationDeploys source={deliverySource} records={deliveryRecords} loading={historyQuery.isLoading} unavailable={historyQuery.isError} partialSources={partialSources} onOpenSource={openSource} />
+    : needsDeploySource && (historyQuery.isError || sourceUnavailable)
+      ? () => <AlertBanner className="m-4" variant="warning" title={sourceUnavailable ? "Delivery records are unavailable" : "Delivery records could not be refreshed"} items={partialSources} />
       : undefined;
 
   return (

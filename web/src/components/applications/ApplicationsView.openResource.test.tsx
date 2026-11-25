@@ -197,3 +197,25 @@ it('keeps Deploys on a failed history refresh until a successful response rules 
   expect(new URLSearchParams(location.split('?')[1]).has('view')).toBe(false)
   expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Overview')
 })
+
+it('keeps Deploys and explains a partial source lookup until a complete response rules out a source', async () => {
+  apps = [app('shop/web', ['web', 'worker'])]
+  const appKey = apps[0].key
+  const url = '/applications?app=shop%2Fweb&view=deploys'
+  const reason = "Deployment-source history is unavailable because you don't have access to this app's deployment source."
+  history = { ...idle, isSuccess: true, data: {
+    appKey,
+    partialSources: [reason],
+    anchors: [{ type: 'helm', title: 'Release promoted', revision: '3', timestamp: '2026-11-23T12:00:00Z' }],
+  } }
+  await renderAt(url)
+  expect(location).toBe(url)
+  expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Deploys')
+  expect(container.textContent).toContain(reason)
+  expect(container.textContent).not.toContain('Release promoted')
+
+  history = { ...idle, isSuccess: true, data: { appKey } }
+  await renderAt(url)
+  expect(new URLSearchParams(location.split('?')[1]).has('view')).toBe(false)
+  expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Overview')
+})
