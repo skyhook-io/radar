@@ -539,7 +539,7 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying, back, var
               </button>
               <Collapse open={proxyOpen} id="connection-proxy">
                 <div className="mt-3">
-                  <ClusterProxyForm context={connection.context} savedProxyUrl={savedProxyUrl} onSaved={onRetry} />
+                  <ClusterProxyForm key={connection.context} context={connection.context} savedProxyUrl={savedProxyUrl} onSaved={onRetry} />
                 </div>
               </Collapse>
             </div>
