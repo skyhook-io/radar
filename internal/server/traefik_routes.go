@@ -697,20 +697,76 @@ func traefikUnreadSecretState(a k8score.KindReadAssessment) string {
 }
 
 // readTraefikKind reads one Traefik kind in each installed API group as the
-// caller; coverage is the first group's that isn't full.
+// caller, with the groups' coverage merged.
 func (s *Server) readTraefikKind(r *http.Request, cache *k8s.ResourceCache, k integration.WorkspaceKind, groups, namespaces []string, budget *syncBudget) (integration.KindAccess, []*unstructured.Unstructured) {
-	var access integration.KindAccess
+	var accesses []integration.KindAccess
 	var out []*unstructured.Unstructured
-	for i, g := range groups {
+	for _, g := range groups {
 		kg := k
 		kg.Group = g
 		acc, list := s.readWorkspaceKind(r, cache, kg, namespaces, []string{g}, budget)
-		if i == 0 || (access.State == integration.KindCoverageFull && acc.State != integration.KindCoverageFull) {
-			access = acc
-		}
+		accesses = append(accesses, acc)
 		out = append(out, list...)
 	}
-	return access, out
+	return mergeTraefikGroupAccess(accesses), out
+}
+
+// mergeTraefikGroupAccess: when one API group was read and another wasn't
+// (denied, syncing, uncached, failed), the routes read are still an answer,
+// so the merge is partial; a namespace counts as read only when every
+// installed group was read there. With nothing read, a syncing group says
+// to wait, otherwise the first group's failure stands.
+func mergeTraefikGroupAccess(accesses []integration.KindAccess) integration.KindAccess {
+	var installed []integration.KindAccess
+	read, allFull := false, true
+	for _, a := range accesses {
+		if a.State == integration.KindCoverageNotInstalled {
+			continue
+		}
+		installed = append(installed, a)
+		read = read || a.State == integration.KindCoverageFull || a.State == integration.KindCoveragePartial
+		allFull = allFull && a.State == integration.KindCoverageFull
+	}
+	if len(installed) == 0 {
+		return integration.KindAccess{State: integration.KindCoverageNotInstalled}
+	}
+	if !read {
+		for _, a := range installed {
+			if a.State == integration.KindCoverageSyncing {
+				return a
+			}
+		}
+		return installed[0]
+	}
+	out := integration.KindAccess{State: integration.KindCoveragePartial, All: true}
+	if allFull {
+		out.State = integration.KindCoverageFull
+	}
+	for _, a := range installed {
+		out.Denied = append(out.Denied, a.Denied...)
+		out.Uncached = append(out.Uncached, a.Uncached...)
+		switch {
+		case a.State != integration.KindCoverageFull && a.State != integration.KindCoveragePartial:
+			out.All, out.Namespaces = false, map[string]bool{}
+		case a.All:
+		case out.All:
+			out.All, out.Namespaces = false, map[string]bool{}
+			for ns := range a.Namespaces {
+				out.Namespaces[ns] = true
+			}
+		default:
+			for ns := range out.Namespaces {
+				if !a.Namespaces[ns] {
+					delete(out.Namespaces, ns)
+				}
+			}
+		}
+	}
+	slices.Sort(out.Denied)
+	out.Denied = slices.Compact(out.Denied)
+	slices.Sort(out.Uncached)
+	out.Uncached = slices.Compact(out.Uncached)
+	return out
 }
 
 // traefikSecretsCoverage reads secretReadableNamespaces' answer: nil is every
