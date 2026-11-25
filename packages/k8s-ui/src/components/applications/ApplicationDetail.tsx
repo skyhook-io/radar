@@ -33,6 +33,7 @@ import argoCdLogo from "../../assets/gitops/argocd.png";
 import fluxLogo from "../../assets/gitops/flux.svg";
 import { StatusDot, mapHealthToTone } from "../ui/status-tone";
 import { Tooltip } from "../ui/Tooltip";
+import { TruncatedText } from "../ui/TruncatedText";
 import { useAnimatedUnmount } from "../../hooks/useAnimatedUnmount";
 import {
   TRANSITION_MENU,
@@ -344,10 +345,8 @@ type ApplicationDetailBaseProps = {
   onOpenSource?: (source: AppSourceRef) => void;
   /** Leading element in the header's right-hand cluster, before the health pill. */
   headerActions?: ReactNode;
-  /**
-   * The host's own status for the app, e.g. how a job's last run went, in
-   * place of the header status pill. For jobs, also hides the duplicate Runtime fact.
-   */
+  /** Host-reported health for the header pill, including offline instances.
+   *  For jobs, also hides the duplicate Runtime fact. */
   status?: AppHostStatus;
   /** Order the visible tabs by ID, including `cost`. A removed view falls back
    *  to the first offered non-Cost view once selection settles.
@@ -494,7 +493,7 @@ export function ApplicationDetail({
   const verdictTone = HEALTH_META[overall].pill;
   const verdictLabel =
     status?.label ??
-    (unavailable == null && workloadClass === "job" && overall === batchRuntime.health
+    (!status && unavailable == null && workloadClass === "job" && overall === batchRuntime.health
       ? batchRuntime.label
       : HEALTH_META[overall].label);
   const versions = useMemo(
@@ -804,22 +803,10 @@ export function ApplicationDetail({
         </div>
         <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2">
           {headerActions}
-          {status ? (
-            // A host's status can be a sentence: keep it to one line, whole in the tooltip.
-            <Tooltip content={status.label} delay={150}>
-              <span className={`inline-flex max-w-md items-center gap-2 rounded-md px-2.5 py-1 ring-1 ring-inset ${verdictTone}`}>
-                <StatusDot tone={mapHealthToTone(overall)} />
-                <span className="truncate text-sm font-semibold">{verdictLabel}</span>
-              </span>
-            </Tooltip>
-          ) : (
-            <span
-              className={`inline-flex items-center gap-2 rounded-md px-2.5 py-1 ring-1 ring-inset ${verdictTone}`}
-            >
-              <StatusDot tone={mapHealthToTone(overall)} />
-              <span className="text-sm font-semibold">{verdictLabel}</span>
-            </span>
-          )}
+          <span className={`inline-flex items-center gap-2 rounded-md max-w-md min-w-0 px-2.5 py-1 ring-1 ring-inset ${verdictTone}`}>
+            <StatusDot tone={mapHealthToTone(overall)} />
+            <TruncatedText text={verdictLabel} className="text-sm font-semibold" />
+          </span>
           {restartSignal && (
             <Tooltip
               content={`${restartSignal.workload} · ${pluralize(restartSignal.restarts, "restart")}`}

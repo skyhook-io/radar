@@ -1716,7 +1716,8 @@ export interface AppEntryBase {
 /** A status the host knows better than the workloads say, e.g. how a job's last run went. */
 export interface AppHostStatus {
   health: AppHealth;
-  label: string;
+  /** Defaults to the standard label for this health. */
+  label?: string;
 }
 
 export interface SingleAppEntry extends AppEntryBase {

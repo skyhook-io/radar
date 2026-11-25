@@ -74,6 +74,28 @@ const tab = (el: HTMLElement, label: string) => tabs(el).find((t) => t.textConte
 const selected = (el: HTMLElement) => tabs(el).filter((t) => t.getAttribute('aria-selected') === 'true').map((t) => t.textContent?.trim())
 
 describe('ApplicationDetail extra views', () => {
+  it('shows the full host status on hover only when the label overflows', () => {
+    vi.useFakeTimers()
+    try {
+      const { host, rerender } = show({ status: { health: 'degraded' } })
+      const label = Array.from(host.querySelectorAll('span')).find(el => el.childNodes.length === 1 && el.firstChild?.nodeValue === 'Degraded')!
+      const hover = () => {
+        act(() => { label.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body })) })
+        act(() => { vi.advanceTimersByTime(400) })
+      }
+      hover()
+      expect(document.querySelector('[role="tooltip"]')).toBeNull()
+
+      Object.defineProperty(label, 'scrollWidth', { value: 400 })
+      const fullLabel = 'Waiting for the next deployment in the production environment'
+      rerender({ status: { health: 'degraded', label: fullLabel } })
+      hover()
+      expect(document.querySelector('[role="tooltip"]')?.textContent).toBe(fullLabel)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('lists host views after the built-in ones and shows no extra tab without them', () => {
     const plain = show({})
     expect(tabs(plain.host).map((t) => t.textContent?.trim())).toEqual(['Overview', 'Topology', 'Timeline'])

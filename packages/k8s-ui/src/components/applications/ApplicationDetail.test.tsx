@@ -788,6 +788,9 @@ describe("ApplicationDetail shell", () => {
       renderOverviewIssues: () => <div>Operational Issues (1)</div>,
     });
 
+    expect(html).toMatch(/text-sm font-semibold">Failed</);
+    const hostStatus = renderDetail({ app: batchApp, status: { health: "unhealthy" } });
+    expect(hostStatus).toMatch(/text-sm font-semibold">Unhealthy</);
     expect(html).toContain("Application views");
     expect(html).toContain("Operational Issues (1)");
     expect(html).not.toContain("Batch activity");
@@ -836,7 +839,7 @@ describe("ApplicationDetail shell", () => {
     };
     const html = renderDetail({ app: batchApp });
 
-    expect(html).toMatch(/<span class="text-sm font-semibold">Degraded<\/span>/);
+    expect(html).toMatch(/text-sm font-semibold">Degraded<\/span>/);
     expect(html).toContain("Succeeded");
   });
 
