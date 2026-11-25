@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"slices"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -15,10 +16,10 @@ func TestObjectWarningsDeferToTheManagerAnswer(t *testing.T) {
 		"apiVersion": "v1", "kind": "ConfigMap",
 		"metadata": map[string]any{"namespace": "shop", "name": "settings", "annotations": map[string]any{"meta.helm.sh/release-name": "web"}},
 	}}
-	if got := objectWarnings(obj, nil); len(got) != 1 {
+	if got := resourceContextWarnings(obj, nil); len(got) != 1 {
 		t.Fatalf("warnings without a context = %q; want the metadata warning", got)
 	}
-	if got := objectWarnings(obj, &resourcecontext.ResourceContext{Manager: &resourcecontext.ManagerContext{State: "claimed"}}); len(got) != 0 {
+	if got := resourceContextWarnings(obj, &resourcecontext.ResourceContext{Manager: &resourcecontext.ManagerContext{State: "claimed"}}); len(got) != 0 {
 		t.Fatalf("warnings with a manager answer = %q; want none", got)
 	}
 }
@@ -34,8 +35,24 @@ func TestResourceRelationshipPreviewWarning(t *testing.T) {
 	if w := relationshipPreviewWarning(rc); w != "" {
 		t.Fatalf("unclipped relationships: %q", w)
 	}
-	rc.Omitted = append(rc.Omitted, resourcecontext.OmittedField{Field: "exposes", Reason: resourcecontext.OmittedBudgetExceeded}, resourcecontext.OmittedField{Field: "backends", Reason: resourcecontext.OmittedBudgetExceeded})
-	if w := relationshipPreviewWarning(rc); w != "Partial preview of backends, exposes. Radar reached its display or access-check limit. The total is unknown. To list more, use search with kind:<Kind> and a CEL filter on the field that refers to this object." {
-		t.Fatalf("empty clipped preview: %q", w)
+	for _, tc := range []struct {
+		fields []string
+		want   string
+	}{
+		{[]string{"exposes"}, "exposes"},
+		{[]string{"exposes", "backends"}, "backends"},
+		{[]string{"exposedBy", "exposes"}, "exposedBy"},
+		{[]string{"exposedBy", "exposes", "backends"}, "backends, exposedBy"},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			clipped := resourcecontext.ResourceContext{Omitted: slices.Clone(rc.Omitted)}
+			for _, field := range tc.fields {
+				clipped.Omitted = append(clipped.Omitted, resourcecontext.OmittedField{Field: field, Reason: resourcecontext.OmittedBudgetExceeded})
+			}
+			want := "Partial preview of " + tc.want + ". Radar reached its display or access-check limit. The total is unknown."
+			if got := relationshipPreviewWarning(&clipped); got != want {
+				t.Fatalf("warning = %q, want %q", got, want)
+			}
+		})
 	}
 }

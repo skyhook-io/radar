@@ -102,9 +102,7 @@ func TestResourceRelationshipPreviewAcrossRESTAndMCP(t *testing.T) {
 		!slices.Contains(rest.Context.Omitted, gap) || !slices.Contains(viaMCP.Context.Omitted, gap) {
 		t.Fatalf("REST %+v MCP %+v", rest, viaMCP)
 	}
-	if !slices.ContainsFunc(viaMCP.Warnings, func(w string) bool {
-		return strings.Contains(w, "Partial preview of dependents.") && strings.Contains(w, "use search with kind:<Kind>")
-	}) {
+	if !slices.Contains(viaMCP.Warnings, "Partial preview of dependents. Radar reached its display or access-check limit. The total is unknown.") {
 		t.Fatalf("warnings %v", viaMCP.Warnings)
 	}
 	args["context"] = "none"

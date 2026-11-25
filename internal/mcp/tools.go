@@ -22,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/sets"
 
 	"github.com/skyhook-io/radar/internal/capacity"
 	"github.com/skyhook-io/radar/internal/filter"
@@ -1290,10 +1291,7 @@ func readMCPResource(ctx context.Context, input getResourceInput, tier resourcec
 		// below, because silent truncation would read as a complete value, and
 		// a Pod/template divergence note, because a bare Pod whose spec
 		// admission rewrote reads as the template's intent.
-		warnings = objectWarnings(rawObj, resourceCtx)
-		if warning := relationshipPreviewWarning(resourceCtx); warning != "" {
-			warnings = append(warnings, warning)
-		}
+		warnings = resourceContextWarnings(rawObj, resourceCtx)
 	} else if note := issues.TemplateDivergenceNote(mcpTemplateDivergence(ctx, rawObj)); note != "" {
 		warnings = append(warnings, note)
 	}
@@ -3813,22 +3811,26 @@ func toJSONResult(data any) (*mcp.CallToolResult, any, error) {
 	}, nil, nil
 }
 
-// objectWarnings are the object's advisory warnings. When the context carries
-// a manager answer, the warning naming an Argo CD, Flux or Helm manager from
-// metadata is left out: the answer weighs those claims against the managers'
-// lists, and a metadata-only sentence would contradict it when they disagree.
-func objectWarnings(obj runtime.Object, rc *resourcecontext.ResourceContext) []string {
+// A manager answer weighs metadata claims against the managers' lists, so a
+// separate warning based on metadata alone could contradict it.
+func resourceContextWarnings(obj runtime.Object, rc *resourcecontext.ResourceContext) []string {
+	var warnings []string
 	if rc != nil && rc.Manager != nil {
-		return k8score.EnrichRuntimeObjectAnsweredWarnings(obj)
+		warnings = k8score.EnrichRuntimeObjectAnsweredWarnings(obj)
+	} else {
+		warnings = k8score.EnrichRuntimeObjectWarnings(obj)
 	}
-	return k8score.EnrichRuntimeObjectWarnings(obj)
+	if warning := relationshipPreviewWarning(rc); warning != "" {
+		warnings = append(warnings, warning)
+	}
+	return warnings
 }
 
 func relationshipPreviewWarning(rc *resourcecontext.ResourceContext) string {
 	if rc == nil {
 		return ""
 	}
-	var fields []string
+	fields := sets.New[string]()
 	for _, gap := range rc.Omitted {
 		if gap.Reason != resourcecontext.OmittedBudgetExceeded {
 			continue
@@ -3837,13 +3839,14 @@ func relationshipPreviewWarning(rc *resourcecontext.ResourceContext) string {
 		case "dependencies", "dependents", "exposedBy", "backends", "exposes", "selectedBy",
 			"protects", "healthChecks", "stagedPolicies", "monitors", "monitorTargets", "scaledBy",
 			"managedBy", "ingressSummary.backendServices", "cronJobSummary.activeJobs":
-			fields = append(fields, gap.Field)
+			fields.Insert(gap.Field)
 		}
 	}
 	if len(fields) == 0 {
 		return ""
 	}
-	slices.Sort(fields)
-	return "Partial preview of " + strings.Join(fields, ", ") + ". Radar reached its display or access-check limit. The total is unknown. " +
-		"To list more, use search with kind:<Kind> and a CEL filter on the field that refers to this object."
+	if fields.HasAny("exposedBy", "backends") {
+		fields.Delete("exposes")
+	}
+	return "Partial preview of " + strings.Join(sets.List(fields), ", ") + ". Radar reached its display or access-check limit. The total is unknown."
 }

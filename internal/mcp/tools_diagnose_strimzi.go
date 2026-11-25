@@ -58,6 +58,7 @@ func handleStrimziDiagnose(ctx context.Context, input diagnoseInput, kind string
 		OperatorSnapshot issues.StrimziSnapshotAssessment `json:"operatorSnapshot"`
 		Resource         any                              `json:"resource"`
 		ResourceContext  *resourcecontext.ResourceContext `json:"resourceContext,omitempty"`
+		Warnings         []string                         `json:"warnings,omitempty"`
 		RelatedIssues    []issues.Issue                   `json:"relatedIssues,omitempty"`
 		Coverage         string                           `json:"coverage"`
 	}{
@@ -66,6 +67,9 @@ func handleStrimziDiagnose(ctx context.Context, input diagnoseInput, kind string
 		Resource:         map[string]any{"apiVersion": obj.GetAPIVersion(), "kind": kind, "metadata": map[string]any{"name": obj.GetName(), "namespace": obj.GetNamespace(), "generation": obj.GetGeneration()}},
 		ResourceContext:  buildMCPResourceContext(ctx, obj, kind, input.Namespace, input.Name, resourcecontext.TierBasic, nil),
 	}
+	// Strimzi diagnosis exposes curated evidence only. Derive warnings from
+	// its context without feeding the raw connector object into advisories.
+	resp.Warnings = resourceContextWarnings(nil, resp.ResourceContext)
 	// Generic condition messages may contain credentials or exception traces.
 	resp.ResourceContext.StatusSummary = nil
 	if kind == "KafkaConnector" {

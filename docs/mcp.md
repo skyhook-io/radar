@@ -1553,7 +1553,7 @@ it does not scale it. These references carry API group and namespace identity,
 are filtered by the caller's reference permissions, and do not establish that
 a controller has successfully reconciled the dependency.
 
-In `get_resource` and REST AI resource context, `dependencies`, `dependents`,
+In MCP and REST AI resource context, `dependencies`, `dependents`,
 `exposedBy`, `backends`, `selectedBy`, `protects`, `healthChecks`,
 `stagedPolicies`, `monitors`, `monitorTargets`, `scaledBy`, `managedBy`,
 `ingressSummary.backendServices` and `cronJobSummary.activeJobs` each preview up
@@ -1563,8 +1563,10 @@ A readable top controller has a reserved place in `managedBy`. A field marked
 either found another readable reference or left a permission tuple unchecked
 after 80 distinct (group, kind, namespace) decisions for that field. Relationship
 sources can make additional checks while collecting candidates. Even an empty
-preview can carry this marker. MCP names the clipped fields in one warning. An explicit denial records `rbac_denied`
-and a failed check records `unavailable`. These reasons can appear together.
+preview can carry this marker. In `get_resource` and `diagnose`, one warning
+names the clipped fields. It omits the `exposes` alias when the list includes
+`exposedBy` or `backends`. An explicit denial records `rbac_denied` and a failed
+check records `unavailable`. These reasons can appear together.
 Unreadable spec generators leave no individual trace in `managedBy`.
 
 Clipped relationship previews have no pagination. For example, to investigate

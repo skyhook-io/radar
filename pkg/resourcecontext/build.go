@@ -1674,7 +1674,7 @@ func (a *previewAccess) selectRefs(ctx context.Context, refs, lead []ContextRef,
 	for i := range order {
 		order[i] = i
 	}
-	slices.SortFunc(order, func(i, j int) int { return compareRefIdentity(refs[i], refs[j]) })
+	slices.SortStableFunc(order, func(i, j int) int { return compareRefIdentity(refs[i], refs[j]) })
 	order = slices.CompactFunc(order, func(i, j int) bool { return compareRefIdentity(refs[i], refs[j]) == 0 })
 	var buckets [][]int
 	for len(order) > 0 {

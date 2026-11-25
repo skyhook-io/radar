@@ -111,7 +111,7 @@ func TestRelationshipPreviewAccessBudget(t *testing.T) {
 	}
 }
 
-func TestRelationshipPreviewRareReadableAfterDeniedRefs(t *testing.T) {
+func TestRelationshipPreviewFindsReadableRefAfterDeniedRefsWhenPreviewHasRoom(t *testing.T) {
 	var refs []topology.ResourceRef
 	for i := range 300 {
 		refs = append(refs, topology.ResourceRef{Group: "rare", Kind: "Widget", Namespace: "a-hidden", Name: fmt.Sprint(i)})
@@ -178,6 +178,21 @@ func TestRelationshipPreviewUnverifiedController(t *testing.T) {
 	})
 	if len(rc.ManagedBy) != 0 || !slices.Equal(rc.Omitted, []OmittedField{{"managedBy", OmittedUnavailable}}) {
 		t.Fatalf("an unverified ancestor must leave an unavailable controller walk: %+v", rc)
+	}
+}
+
+func TestRelationshipPreviewUnderCapKeepsFirstOccurrenceOrder(t *testing.T) {
+	cj := &batchv1.CronJob{}
+	for _, name := range strings.Fields("m c j a h f k b m e l a d g i") {
+		cj.Status.Active = append(cj.Status.Active, corev1.ObjectReference{APIVersion: "batch/v1", Kind: "Job", Name: name})
+	}
+	rc := Build(t.Context(), cj, Options{})
+	var got []string
+	for _, job := range rc.CronJobSummary.ActiveJobs {
+		got = append(got, job.Name)
+	}
+	if want := strings.Fields("m c j a h f k b e l d g i"); !slices.Equal(got, want) {
+		t.Fatalf("active job order = %v, want %v", got, want)
 	}
 }
 

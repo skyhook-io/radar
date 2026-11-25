@@ -291,7 +291,7 @@ claims need not indicate current reconciliation; native Helm coordinates do not 
 | `rbac_denied` | The subject or a controller ancestor was unreadable. |
 | `cache_cold` | An owner kind is known to be uncollected or unsynced. Ownership starts no watches; `list_resources` for that kind can activate its on-demand cache. |
 | `unavailable` | A controller walk or observed spec source could not be resolved, the required relation source is unavailable, or management evidence has no eligible lead. Retry is not guaranteed to help. |
-| `budget_exceeded` | The list/search enrichment budget elapsed; other causes can coexist. |
+| `budget_exceeded` | In list/search, the enrichment budget elapsed. In detail context, `managedBy` exceeded 20 readable references or left a permission tuple unchecked after 80 distinct checks. Its total is unknown. Other omission reasons can coexist. |
 
 A GitOps fallback may coexist with an incomplete-controller note. Detail can report missing spec evidence after a
 summary already found its controller lead. Family coverage qualifies unread or narrowed context fields without inspecting denied objects to decide whether they exist.

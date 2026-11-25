@@ -545,7 +545,7 @@ func diagnoseWorkload(ctx context.Context, input diagnoseInput, expectedOwner *o
 		}
 	}
 	resp.DNSContext = dnsContextForDiagnose(ctx, cache, obj, pods, resp.LogsCurrent, resp.LogsPrevious, resp.Events)
-	resp.Warnings = objectWarnings(obj, resCtx)
+	resp.Warnings = resourceContextWarnings(obj, resCtx)
 	if podsNotListable {
 		// Say it plainly: everything pod-derived is empty because the pods
 		// could not be listed, not because the workload has none.
