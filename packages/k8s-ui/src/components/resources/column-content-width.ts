@@ -257,6 +257,7 @@ const CURATED_CELL_WIDTHS: Record<string, CellWidth> = {
   'daemonsets:images': workloadImages,
   'rollouts:images': workloadImages,
   'replicasets:owner': text(getReplicaSetOwner),
+  'mutatingadmissionpolicybindings:policyName': text(r => r.spec?.policyName),
   'persistentvolumeclaims:volume': text(r => r.spec?.volumeName),
   'ingresses:hosts': text(getIngressHosts),
   'ingresses:rules': text(getIngressRules),

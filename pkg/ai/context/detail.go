@@ -2,6 +2,7 @@ package context
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -45,6 +46,7 @@ func minifyDetailUnstructured(obj map[string]any) map[string]any {
 // the only value-level pass that reaches arbitrary CRD specs (e.g. a Traefik
 // Middleware basicAuth user) before they go to an LLM.
 func redactUnstructuredSecrets(obj map[string]any) {
+	stripK3sHelmValues(obj)
 	redactUpgradePlanEnvs(obj)
 	if spec, ok := obj["spec"]; ok {
 		RedactInlineSecrets(spec)
@@ -56,6 +58,46 @@ func redactUnstructuredSecrets(obj map[string]any) {
 		RedactInlineSecrets(template)
 	}
 	redactSecretFindings(obj)
+}
+
+// stripK3sHelmValues replaces a k3s HelmChart's or HelmChartConfig's inline
+// values with their size: valuesContent, values and set carry chart values, which can
+// hold credentials in any key, so pattern redaction is not enough.
+func stripK3sHelmValues(obj map[string]any) {
+	apiVersion, _ := obj["apiVersion"].(string)
+	if resourceid.GroupFromAPIVersion(apiVersion) != "helm.cattle.io" {
+		return
+	}
+	spec, _ := obj["spec"].(map[string]any)
+	if values, ok := spec["valuesContent"].(string); ok && strings.TrimSpace(values) != "" {
+		spec["valuesContent"] = fmt.Sprintf("[%d lines omitted]", len(strings.Split(strings.TrimRight(values, "\n"), "\n")))
+	}
+	// An inline chart archive: large, and its default values may hold secrets too.
+	if _, ok := spec["chartContent"].(string); ok {
+		spec["chartContent"] = "[chart archive omitted]"
+	}
+	// k3s (wrangler) and kubectl keep a full copy of the applied object in an
+	// annotation, values included.
+	if meta, ok := obj["metadata"].(map[string]any); ok {
+		if annotations, ok := meta["annotations"].(map[string]any); ok {
+			delete(annotations, "objectset.rio.cattle.io/applied")
+			delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
+		}
+	}
+	switch values := spec["values"].(type) {
+	case nil:
+	case map[string]any:
+		spec["values"] = fmt.Sprintf("[%d top-level keys omitted]", len(values))
+	default:
+		spec["values"] = "[values omitted]"
+	}
+	if set, ok := spec["set"].(map[string]any); ok {
+		keys := make(map[string]any, len(set))
+		for k := range set {
+			keys[k] = "[omitted]"
+		}
+		spec["set"] = keys
+	}
 }
 
 // redactUpgradePlanEnvs blanks every env value of a system-upgrade-controller

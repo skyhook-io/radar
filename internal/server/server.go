@@ -721,6 +721,9 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Delete("/resources/{kind}/{namespace}/{name}", s.bindWrite(s.handleDeleteResource))
 			r.Get("/secrets/certificate-expiry", s.handleSecretCertExpiry)
 			r.Get("/sealedsecrets/controller", s.handleSealedSecretsController)
+			// The serving controller's public sealing certificate, from its fixed
+			// /v1/cert.pem; gated on get services/proxy for that Service and port name.
+			r.Get("/sealedsecrets/cert", s.handleSealedSecretsCert)
 			r.Get("/certificates", s.handleCertificates)
 
 			// Cluster audit
@@ -777,6 +780,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// fan-out for cross-cluster issues.
 			r.Get("/issues", s.handleIssues)
 			r.Get("/issues/resource/{kind}/{namespace}/{name}", s.handleResourceIssues)
+			r.Get("/issues/recent-changes", s.handleIssueRecentChanges)
 			r.Get("/settings/audit", s.handleGetAuditSettings)
 			r.Put("/settings/audit", s.handlePutAuditSettings)
 			r.Get("/events", s.handleEvents)
@@ -918,6 +922,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Post("/argo/applications/{namespace}/{name}/suspend", s.bindWrite(s.handleArgoSuspend))
 			r.Post("/argo/applications/{namespace}/{name}/resume", s.bindWrite(s.handleArgoResume))
 			r.Get("/argo/applications/{namespace}/{name}/resource-diff", s.handleArgoResourceDiff)
+			r.Get("/argo/applications/{namespace}/{name}/sync-diff", s.handleArgoSyncDiff)
 			r.Get("/argo/applications/{namespace}/{name}/revision-metadata", s.handleArgoRevisionMetadata)
 
 			// AI resource preview (minified output for MCP/debugging).
@@ -1541,6 +1546,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		DatadogAgentPresence:        true,
 		DatadogRightsizing:          true,
 		SealedSecretsController:     true,
+		SealedSecretsCert:           true,
 		ResourceReadCoverage:        true,
 		SearchCoverage:              true,
 		SearchEventContent:          true,
@@ -1551,6 +1557,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		SubstrateHealthMetrics:      true,
 		ResourceIssues:              true,
 		ResourceIssueCoverage:       true,
+		IssueCorrelation:            true,
 		PodEnvironment:              true,
 		PolicyResource:              true,
 		WorkloadHistory:             true,
@@ -1576,6 +1583,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		ClusterScopedPlaceholder:    true,
 		KueuePendingPosition:        true,
 		RayClusterPods:              true,
+		ReplicaSetLogs:              true,
 		PodSidecarMarks:             true,
 		KueueQueueWorkloads:         true,
 		PodFileUpload:               true,
@@ -1648,6 +1656,9 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[capabilities] namespace-scoped check for %q failed: %v", ns, err)
 		} else if nsCaps != nil {
 			mergeNamespaceCapabilities(caps, nsCaps)
+			if caps.PodDebug {
+				caps.PodDebugImage = s.resolveDebugImage("")
+			}
 			if nsCaps.Errors != (k8s.NamespaceCapabilityErrors{}) {
 				caps.ChecksIncomplete = true
 			}
@@ -1709,6 +1720,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 }
 
 func mergeNamespaceCapabilities(caps *k8s.Capabilities, nsCaps *k8s.NamespaceCapabilities) {
+	caps.PodDebug = !cloudMode() && nsCaps.Exec && nsCaps.PodDebug
 	caps.Exec = mergeNamespaceCapability(caps.Exec, nsCaps.Exec, nsCaps.Errors.Exec)
 	caps.Logs = mergeNamespaceCapability(caps.Logs, nsCaps.Logs, nsCaps.Errors.Logs)
 	caps.PortForward = mergeNamespaceCapability(caps.PortForward, nsCaps.PortForward, nsCaps.Errors.PortForward)
@@ -3443,14 +3455,8 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		HPADiagnosis:    hpaDiagnosisFor(resource),
 	}
 
-	// Enrich TLS secrets with parsed certificate info
-	if secret, ok := resource.(*corev1.Secret); ok && secret.Type == corev1.SecretTypeTLS {
-		if certPEM, exists := secret.Data["tls.crt"]; exists && len(certPEM) > 0 {
-			certs := topology.ParsePEMCertificates(certPEM)
-			if len(certs) > 0 {
-				response.CertificateInfo = &SecretCertificateInfo{Certificates: certs}
-			}
-		}
+	if secret, ok := resource.(*corev1.Secret); ok {
+		response.CertificateInfo = topology.ParseSecretCertificates(secret)
 	}
 
 	if readCache() != cache {

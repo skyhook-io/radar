@@ -969,7 +969,7 @@ func TestHandleDiagnoseMetricsScopedQueries(t *testing.T) {
 		want      func(prom.MetricCategory) string
 	}{
 		{name: "configured label", configure: true, want: func(cat prom.MetricCategory) string {
-			return prom.BuildScopedQueryFiltered(sel, cat, prom.AggregateTotal, true, func(string) string { return `cluster="a"` })
+			return prom.BuildScopedQueryFiltered(sel, cat, prom.AggregateTotal, true, func(string) string { return `cluster="a",location="",project_id=""` })
 		}},
 		{name: "unlabeled store", want: func(cat prom.MetricCategory) string {
 			return prom.BuildScopedQuery(sel, cat, prom.AggregateTotal, true)

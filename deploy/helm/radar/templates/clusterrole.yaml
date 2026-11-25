@@ -214,6 +214,8 @@ rules:
     resources:
       - validatingadmissionpolicies
       - validatingadmissionpolicybindings
+      - mutatingadmissionpolicies
+      - mutatingadmissionpolicybindings
     verbs: ["get", "list", "watch"]
   {{- end }}
 
@@ -392,7 +394,7 @@ rules:
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.flux }}
-  - apiGroups: ["source.toolkit.fluxcd.io", "kustomize.toolkit.fluxcd.io", "helm.toolkit.fluxcd.io", "notification.toolkit.fluxcd.io", "image.toolkit.fluxcd.io"]
+  - apiGroups: ["source.toolkit.fluxcd.io", "source.extensions.fluxcd.io", "kustomize.toolkit.fluxcd.io", "helm.toolkit.fluxcd.io", "notification.toolkit.fluxcd.io", "image.toolkit.fluxcd.io"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
@@ -590,6 +592,11 @@ rules:
   {{- if .Values.rbac.crdGroups.flagger }}
   - apiGroups: ["flagger.app"]
     resources: ["canaries", "metrictemplates"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.k3sHelm }}
+  - apiGroups: ["helm.cattle.io"]
+    resources: ["helmcharts", "helmchartconfigs"]
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.systemUpgrade }}

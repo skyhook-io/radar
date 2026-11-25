@@ -16,6 +16,7 @@ import (
 )
 
 type workloadMetricPanel struct {
+	Source string        `json:"source,omitempty"`
 	State  string        `json:"state"`
 	Reason string        `json:"reason,omitempty"`
 	Unit   string        `json:"unit"`
@@ -29,6 +30,7 @@ type workloadRequestSource struct {
 }
 
 type workloadMetricsResponse struct {
+	ResourceSource    string                         `json:"resourceSource,omitempty"`
 	ScopeNotice       string                         `json:"scopeNotice,omitempty"`
 	State             string                         `json:"state"`
 	Reason            string                         `json:"reason,omitempty"`
@@ -105,6 +107,33 @@ func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 	duration := end.Sub(start)
 	end = end.Truncate(step)
 	start = end.Add(-duration)
+	stores := client.chartStores(ctx)
+	g := stores.native
+	writeMetrics := func(resp workloadMetricsResponse) {
+		if stores.supplement != nil && needsGKEResources(&resp) {
+			var err error
+			g, err = stores.supplement(ctx)
+			if errors.Is(err, context.DeadlineExceeded) && r.Context().Err() == nil {
+				// The optional reader exhausted our budget. Return the conventional answer.
+				g = nil
+			} else if err != nil {
+				writeChartError(w, err)
+				return
+			}
+		}
+		if g != nil && g.fallback {
+			mergeGKEResources(ctx, g, &resp, scope, start, end, step)
+		}
+		if (g != nil && g != client.gkeChartStore()) || client != GetClient() || generation != client.DiscoveryGeneration() || epoch != client.backendEpoch() {
+			writeError(w, http.StatusConflict, "metrics connection changed; retry the request")
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+	}
+	if g != nil && !g.fallback {
+		writeMetrics(g.workload(ctx, scope, start, end, step))
+		return
+	}
 	historyConfig, historyErr := client.historicalClusterScope(ctx, scope, cache)
 	history := workloadHistoryPlan{err: historyErr, reason: "Historical cluster identity lookup failed. Retrying automatically."}
 	if historyErr == nil {
@@ -123,11 +152,7 @@ func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 			if state == "unavailable" {
 				reason = "Current Pod identities are not available yet."
 			}
-			if client != GetClient() || generation != client.DiscoveryGeneration() || epoch != client.backendEpoch() {
-				writeError(w, http.StatusConflict, "metrics connection changed; retry the request")
-				return
-			}
-			writeJSON(w, http.StatusOK, workloadMetricsResponse{State: state, Reason: reason, ScopeNotice: client.workloadScopeNotice(), Sources: []workloadRequestSource{}, Panels: map[string]workloadMetricPanel{}, History: map[string]workloadMetricScope{}, Comparison: map[string]workloadMetricPanel{}})
+			writeMetrics(workloadMetricsResponse{State: state, Reason: reason, ScopeNotice: client.workloadScopeNotice(), Sources: []workloadRequestSource{}, Panels: map[string]workloadMetricPanel{}, History: map[string]workloadMetricScope{}, Comparison: map[string]workloadMetricPanel{}})
 			return
 		}
 		automatic = append(automatic, attributions)
@@ -147,11 +172,7 @@ func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	resp.ScopeNotice = client.workloadScopeNotice()
-	if client != GetClient() || generation != client.DiscoveryGeneration() || epoch != client.backendEpoch() {
-		writeError(w, http.StatusConflict, "metrics connection changed; retry the request")
-		return
-	}
-	writeJSON(w, http.StatusOK, resp)
+	writeMetrics(resp)
 }
 
 type workloadRangeClient struct{ *Client }

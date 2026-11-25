@@ -13,6 +13,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/rightsizing"
@@ -286,12 +287,12 @@ func TestSizingInjectedSidecarWithSharedLimit(t *testing.T) {
 	template := corev1.PodSpec{Containers: []corev1.Container{container}, Resources: &corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1")}}}
 	actual := corev1.Pod{Spec: *template.DeepCopy()}
 	actual.Spec.Containers = append(actual.Spec.Containers, corev1.Container{Name: "proxy"})
-	if sizingPodMatches(&actual, template) {
+	if prometheus.SizingPodMatches(&actual, template) {
 		t.Fatal("injected container can change a shared Pod limit budget")
 	}
 	template.Resources = nil
 	actual.Spec.Resources = nil
-	if !sizingPodMatches(&actual, template) {
+	if !prometheus.SizingPodMatches(&actual, template) {
 		t.Fatal("injected container unnecessarily blocked per-container sizing")
 	}
 }
@@ -462,11 +463,11 @@ func TestSizingPodMatchesDefaultedContainerRequest(t *testing.T) {
 	}}}
 	pod := corev1.Pod{Spec: *template.DeepCopy()}
 	pod.Spec.Containers[0].Resources.Requests = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1000m")}
-	if !sizingPodMatches(&pod, template) {
+	if !prometheus.SizingPodMatches(&pod, template) {
 		t.Fatal("defaulted request did not match the workload's limit")
 	}
 	pod.Spec.Containers[0].Resources.Requests[corev1.ResourceCPU] = resource.MustParse("500m")
-	if sizingPodMatches(&pod, template) {
+	if prometheus.SizingPodMatches(&pod, template) {
 		t.Fatal("admission override must invalidate scope")
 	}
 }
@@ -489,7 +490,7 @@ func TestSizingPodMatchesDefaultedPodRequests(t *testing.T) {
 	pod.Spec.Resources.Requests = corev1.ResourceList{
 		corev1.ResourceCPU: resource.MustParse("250m"), corev1.ResourceMemory: resource.MustParse("64Mi"),
 	}
-	if !sizingPodMatches(&pod, template) {
+	if !prometheus.SizingPodMatches(&pod, template) {
 		t.Fatal("expected the larger init cohort for CPU and the Pod limit for memory")
 	}
 	if template.Resources.Requests != nil {
@@ -498,21 +499,21 @@ func TestSizingPodMatchesDefaultedPodRequests(t *testing.T) {
 	t.Run("changed Pod request", func(t *testing.T) {
 		changed := pod.DeepCopy()
 		changed.Spec.Resources.Requests[corev1.ResourceCPU] = resource.MustParse("300m")
-		if sizingPodMatches(changed, template) {
+		if prometheus.SizingPodMatches(changed, template) {
 			t.Fatal("accepted an admission override")
 		}
 	})
 	t.Run("changed Pod limit", func(t *testing.T) {
 		changed := pod.DeepCopy()
 		changed.Spec.Resources.Limits[corev1.ResourceCPU] = resource.MustParse("2")
-		if sizingPodMatches(changed, template) {
+		if prometheus.SizingPodMatches(changed, template) {
 			t.Fatal("accepted a different shared budget")
 		}
 	})
 	t.Run("explicit Pod request", func(t *testing.T) {
 		explicit := template.DeepCopy()
 		explicit.Resources.Requests = cpu("0")
-		if sizingPodMatches(&pod, *explicit) {
+		if prometheus.SizingPodMatches(&pod, *explicit) {
 			t.Fatal("ignored the explicit zero in the template")
 		}
 	})
@@ -520,7 +521,7 @@ func TestSizingPodMatchesDefaultedPodRequests(t *testing.T) {
 		changed := pod.DeepCopy()
 		changed.Spec.Containers[0].Resources.Requests = cpu("300m")
 		changed.Spec.Resources.Requests[corev1.ResourceCPU] = resource.MustParse("350m")
-		if sizingPodMatches(changed, template) {
+		if prometheus.SizingPodMatches(changed, template) {
 			t.Fatal("accepted a changed app container")
 		}
 	})

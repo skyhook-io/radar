@@ -1309,7 +1309,7 @@ func (h *HubbleSource) connectedNodes(ctx context.Context, client observerpb.Obs
 	defer cancel()
 	if status, err := client.ServerStatus(statusCtx, &observerpb.ServerStatusRequest{}); err == nil {
 		n = int(status.GetNumConnectedNodes().GetValue())
-	} else if c := h.clusterNodeCount(ctx); c > 0 {
+	} else if c := countClusterNodes(ctx, h.k8sClient); c > 0 {
 		n = c
 	}
 	if ctx.Err() != nil {
@@ -1323,16 +1323,16 @@ func (h *HubbleSource) connectedNodes(ctx context.Context, client observerpb.Obs
 	return n
 }
 
-// clusterNodeCount counts the cluster's nodes from a one-item page: the API
+// countClusterNodes counts the cluster's nodes from a one-item page: the API
 // server reports how many it left out, so this reads one node, not all. 0 when
 // it cannot tell.
-func (h *HubbleSource) clusterNodeCount(ctx context.Context) int {
-	if h.k8sClient == nil {
+func countClusterNodes(ctx context.Context, client kubernetes.Interface) int {
+	if client == nil {
 		return 0
 	}
 	listCtx, cancel := context.WithTimeout(ctx, hubbleStatusTimeout)
 	defer cancel()
-	nodes, err := h.k8sClient.CoreV1().Nodes().List(listCtx, metav1.ListOptions{Limit: 1})
+	nodes, err := client.CoreV1().Nodes().List(listCtx, metav1.ListOptions{Limit: 1})
 	if err != nil {
 		return 0
 	}

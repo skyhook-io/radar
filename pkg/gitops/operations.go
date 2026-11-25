@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -1253,6 +1255,71 @@ func argoHistoryEntry(app *unstructured.Unstructured, id int64) map[string]any {
 		}
 	}
 	return nil
+}
+
+var fullGitSHA = regexp.MustCompile(`^[a-fA-F0-9]{40}$`)
+
+// IsFullGitSHA reports whether a revision is a full SHA-1 Git object ID.
+func IsFullGitSHA(revision string) bool { return fullGitSHA.MatchString(revision) }
+
+// ArgoSyncRevisionPair identifies the Git inputs to two consecutive syncs.
+type ArgoSyncRevisionPair struct{ Previous, Revision string }
+
+// RenderableArgoSyncPairs indexes consecutive syncs that can be rendered with
+// today's local, single-source Application. GetManifests overrides targetRevision
+// with each SHA. All other source settings must agree with both history entries.
+func RenderableArgoSyncPairs(app *unstructured.Unstructured) map[int64]ArgoSyncRevisionPair {
+	if !IsInClusterDestination(app) {
+		return nil
+	}
+	spec, _, _ := unstructured.NestedFieldNoCopy(app.Object, "spec")
+	settings, _ := spec.(map[string]any)
+	sources, _ := settings["sources"].([]any)
+	if len(sources) > 0 || settings["sourceHydrator"] != nil {
+		return nil
+	}
+	renderOptions := func(raw any) map[string]any {
+		source, _ := raw.(map[string]any)
+		repo, _ := source["repoURL"].(string)
+		if repo == "" || !jsonValueIsZero(source["chart"]) {
+			return nil
+		}
+		options := maps.Clone(source)
+		delete(options, "targetRevision")
+		delete(options, "chart")
+		return options
+	}
+	current := renderOptions(settings["source"])
+	if current == nil {
+		return nil
+	}
+	history, _, _ := unstructured.NestedFieldNoCopy(app.Object, "status", "history")
+	entries, _ := history.([]any)
+	revisions := make(map[int64]string, len(entries))
+	for _, raw := range entries {
+		entry, _ := raw.(map[string]any)
+		id, ok := argoHistoryEntryID(entry)
+		if !ok || id < 0 {
+			continue
+		}
+		revision, _ := entry["revision"].(string)
+		if !IsFullGitSHA(revision) || !jsonValueIsZero(entry["sources"]) || !jsonValueIsZero(entry["revisions"]) || !reflect.DeepEqual(current, renderOptions(entry["source"])) {
+			revision = ""
+		}
+		// Duplicate IDs make the predecessor ambiguous.
+		if _, duplicate := revisions[id]; duplicate {
+			revision = ""
+		}
+		revisions[id] = revision
+	}
+	out := make(map[int64]ArgoSyncRevisionPair)
+	for id, revision := range revisions {
+		prev := revisions[id-1]
+		if prev != "" && revision != "" && prev != revision {
+			out[id] = ArgoSyncRevisionPair{Previous: prev, Revision: revision}
+		}
+	}
+	return out
 }
 
 // argoRollbackSyncOperation builds the operation.sync Argo CD's API server

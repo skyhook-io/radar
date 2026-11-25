@@ -15,6 +15,7 @@ import (
 )
 
 const clusterAFilter = `cluster="a"`
+const checkedClusterAFilter = clusterAFilter + `,location="",project_id=""`
 
 func filteredRightsizingScope(filters map[string]string) ViewScope {
 	all := map[string]string{}
@@ -149,7 +150,7 @@ func TestRightsizingLabeledOwnershipUnlabeledAnchoredUsage(t *testing.T) {
 		t.Fatalf("scope = %+v err=%v", scope, err)
 	}
 	for _, m := range rightsizingMetricNames {
-		want := clusterAFilter
+		want := checkedClusterAFilter
 		if slices.Contains(cadvisor, m) {
 			want = ""
 		}
