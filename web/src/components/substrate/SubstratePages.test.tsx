@@ -432,5 +432,5 @@ it('puts the actor template and resource facts in one grid and shows the matched
   const doc = new DOMParser().parseFromString(page, 'text/html')
   const fields = [...doc.querySelectorAll('dt')]
   expect(fields.find((field) => field.textContent === 'Template')?.parentElement).toBe(fields.find((field) => field.textContent === 'CPU')?.parentElement)
-  expect(doc.querySelector('button[title^="agent-ns/agent-pool · Short of workers"]')?.textContent).toBe('agent-pool')
+  expect(doc.querySelector('button[aria-label^="agent-ns/agent-pool · Short of workers"]')?.textContent).toBe('agent-pool')
 })

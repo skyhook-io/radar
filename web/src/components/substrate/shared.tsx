@@ -197,7 +197,12 @@ export function PoolMatchLinks({ pools, workspace }: { pools: SubstratePoolRef[]
         const open = () => navigate(row && !row.kubernetes
           ? `${SUBSTRATE_SCREENS.workers.path}?${new URLSearchParams({ pool: key })}`
           : substratePoolPath(p, connection.context || undefined))
-        return <button key={key} type="button" title={`${key} · ${reading?.label ?? 'Capacity unknown'}`} onClick={open} className="btn-secondary inline-flex items-center gap-1.5 px-2 py-0.5 text-xs font-mono"><StatusDot tone={tone} />{p.name}</button>
+        const verdict = `${key} · ${reading?.label ?? 'Capacity unknown'}`
+        return (
+          <Tooltip key={key} content={verdict}>
+            <button type="button" aria-label={verdict} onClick={open} className="btn-secondary inline-flex items-center gap-1.5 px-2 py-0.5 text-xs font-mono"><StatusDot tone={tone} />{p.name}</button>
+          </Tooltip>
+        )
       })}
     </div>
   )
