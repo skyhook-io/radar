@@ -57,6 +57,10 @@ const countBadge = (n: number, partial: boolean) => (partial ? `≥${n}` : n)
 
 const RANK: Record<StatusBadge['level'], number> = { unhealthy: 0, alert: 1, degraded: 2, unknown: 3, healthy: 4, neutral: 5 }
 
+// These columns stay readable to the left of the overlay drawer at laptop widths.
+const INSPECTED_NAME_WIDTH = '9rem'
+const INSPECTED_STATE_WIDTH = '10.5rem'
+
 /** Rows that need a look first (using the server's escalated tone when present), then by namespace and name. */
 function byReading(rows: any[], levelOf: (row: any) => StatusBadge['level']): any[] {
   return [...rows].sort((a, b) => {
@@ -108,7 +112,7 @@ export function stateMessage(o: any, status: StatusBadge): string | undefined {
     return podName ? `Conflicting Pod "${podName}" is not owned by this Sandbox` : 'Conflicting Pod is not owned by this Sandbox'
   }
   if (status.text === 'PodFailed') {
-    return 'Pod exited with failure. Open for available exit details.'
+    return 'Pod exited with failure.'
   }
   const message = getAgentRuntimeStatus(o)?.message
   if (!message || letters(message) === letters(status.text)) return undefined
@@ -201,7 +205,7 @@ export function SandboxesTable({ read, claims: claimsRead, onInspect, inspected,
   const columns: TableColumn<any>[] = [
     {
       header: 'Sandbox',
-      width: wide ? '21%' : '29%',
+      width: inspected ? INSPECTED_NAME_WIDTH : wide ? '21%' : '29%',
       cell: (o) => {
         const owner = wide ? undefined : ownerOf(o)
         return (
@@ -221,7 +225,7 @@ export function SandboxesTable({ read, claims: claimsRead, onInspect, inspected,
         )
       },
     },
-    { header: 'State', width: wide ? '33%' : '41%', cell: (o) => <StateCell o={o} status={getSandboxStatus(o)} requested={requestedMode(o)} level={server?.tones.get(objectKey('Sandbox', ns(o), nm(o)))} /> },
+    { header: 'State', width: inspected ? INSPECTED_STATE_WIDTH : wide ? '33%' : '41%', cell: (o) => <StateCell o={o} status={getSandboxStatus(o)} requested={requestedMode(o)} level={server?.tones.get(objectKey('Sandbox', ns(o), nm(o)))} /> },
     ...(wide
       ? [
           {
@@ -305,8 +309,8 @@ export function ClaimsTable({ read, warmPools, onInspect, inspected, server, emp
   }
 
   const columns: TableColumn<any>[] = [
-    { header: 'Claim', width: wide ? '19%' : '20%', cell: (o) => <NameCell o={o} multi={multi} /> },
-    { header: 'State', width: wide ? '25%' : '30%', cell: (o) => <StateCell o={o} status={getSandboxClaimStatus(o)} level={server?.tones.get(objectKey('SandboxClaim', ns(o), nm(o)))} hideMessage={reportsMissingPool(o)} /> },
+    { header: 'Claim', width: inspected ? INSPECTED_NAME_WIDTH : wide ? '19%' : '20%', cell: (o) => <NameCell o={o} multi={multi} /> },
+    { header: 'State', width: inspected ? INSPECTED_STATE_WIDTH : wide ? '25%' : '30%', cell: (o) => <StateCell o={o} status={getSandboxClaimStatus(o)} level={server?.tones.get(objectKey('SandboxClaim', ns(o), nm(o)))} hideMessage={reportsMissingPool(o)} /> },
     { header: 'Warm pool & binding', width: wide ? '31%' : '24%', cell: (o) => (
       <div className="space-y-1">
         {poolCell(o)}
@@ -371,7 +375,7 @@ export function WarmPoolsTable({
   const columns: TableColumn<any>[] = [
     {
       header: 'Warm pool',
-      width: wide ? '19%' : '24%',
+      width: inspected ? INSPECTED_NAME_WIDTH : wide ? '19%' : '24%',
       cell: (o) => (
         <>
           <NameCell o={o} multi={multi} />
@@ -381,7 +385,7 @@ export function WarmPoolsTable({
     },
     {
       header: 'State',
-      width: wide ? '24%' : '28%',
+      width: inspected ? INSPECTED_STATE_WIDTH : wide ? '24%' : '28%',
       cell: (o) => (
         <>
           <PoolStateBadge o={o} server={server} />
@@ -497,12 +501,12 @@ function PoolStateDetail({ o, server }: { o: any; server?: ServerReadings }) {
     <>
       {reason && (
         <Sub>
-          <Tooltip content={reason.raw}><span className="line-clamp-2">Can’t schedule · {reason.plain}</span></Tooltip>
+          <Tooltip content={reason.raw}><span>Can’t schedule · {reason.plain}</span></Tooltip>
         </Sub>
       )}
       {!reason && row?.rule === 'reserveBelowTarget' && row.reading && (
         <Sub>
-          <Tooltip content={row.reading}><span className="line-clamp-2">{row.reading}</span></Tooltip>
+          <Tooltip content={row.reading}><span>{row.reading}</span></Tooltip>
         </Sub>
       )}
       {members.length > 0 && (

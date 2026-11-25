@@ -478,6 +478,7 @@ export function AgentSandboxOverview({ data, onClearNamespaces, onInspect }: Age
             <WorkspaceProblemCallout
               problem={attentionProblem(controllerProblem)}
               rootKind="Deployment"
+              hideOrigin
               onNavigate={navigate}
             />
           )}
