@@ -123,8 +123,6 @@ describe("ApplicationDetail shell", () => {
     const html = renderDetail({ status: { health: "unhealthy", label: "Last run failed 38m ago: secret not found", detail: "why" } });
     expect(html).toMatch(/text-sm font-semibold">Last run failed 38m ago: secret not found</);
     expect(html).not.toMatch(/text-sm font-semibold">Healthy</);
-    // With somewhere to go, the pill is a button.
-    expect(renderDetail({ status: { health: "unhealthy", label: "Stuck", onSelect: () => {} } })).toMatch(/<button type="button" class="inline-flex max-w-md/);
   });
 
   it("adds nothing for a host that doesn't pass them, on either kind of app", () => {

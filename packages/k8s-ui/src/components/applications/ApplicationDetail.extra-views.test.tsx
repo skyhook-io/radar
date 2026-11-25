@@ -140,13 +140,6 @@ describe('ApplicationDetail extra views', () => {
     expect(count().textContent).toBe('0')
   })
 
-  it("shows the host's line above every view's content", () => {
-    const { host, rerender } = show({ extraViews, selectedView: 'overview', onSelectView: () => {}, viewHeader: <span data-testid="vh">Pods on old values</span> })
-    expect(host.querySelector('[data-testid="vh"]')).not.toBeNull()
-    rerender({ extraViews, selectedView: 'release-notes', onSelectView: () => {}, viewHeader: <span data-testid="vh">Pods on old values</span> })
-    expect(host.querySelector('[data-testid="vh"]')).not.toBeNull()
-  })
-
   it("orders the tabs as the host asks, built-in views first otherwise", () => {
     const { host } = show({ extraViews, viewOrder: ['overview', 'release-notes', 'settings', 'topology'] })
     expect(tabs(host).map((t) => t.textContent?.trim())).toEqual(['Overview', 'Release notes', 'Settings', 'Topology', 'Timeline'])
@@ -435,16 +428,15 @@ describe('ApplicationDetail extra views', () => {
     expect(pills.map((b) => b.textContent)).toEqual(['prodnonprod', 'staging'])
   })
 
-  it('names a duplicated env by its instance when the detail is empty, and shows an adornment', () => {
+  it('names a duplicated env by its instance when the detail is empty', () => {
     const instance = (appKey: string, env: string, extra: object = {}) => ({ appKey, name: `${appKey} on nonprod`, env, health: 'healthy' as const, confidence: 'high', evidence: '', ...extra })
     const { host } = show({
-      identityInstances: [instance('a', 'prod', { detail: '' }), instance('b', 'prod', { adornment: <span data-testid="mark">•</span> })],
+      identityInstances: [instance('a', 'prod', { detail: '' }), instance('b', 'prod')],
       activeInstanceKey: 'a',
       onSwitchInstance: () => {},
     })
     const pills = Array.from(host.querySelectorAll('button')).filter((b) => (b.textContent ?? '').startsWith('prod'))
-    expect(pills.map((b) => b.textContent)).toEqual(['proda on nonprod', 'prodb on nonprod•'])
-    expect(host.querySelectorAll('[data-testid="mark"]')).toHaveLength(1)
+    expect(pills.map((b) => b.textContent)).toEqual(['proda on nonprod', 'prodb on nonprod'])
   })
 
   it('distinguishes instances that share an environment and cluster label', () => {

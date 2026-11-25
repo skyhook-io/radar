@@ -135,8 +135,6 @@ export interface AppIdentityInstance {
   env: string;
   /** Secondary text beside the environment, such as the cluster. Instances sharing an environment show their names instead. */
   detail?: string;
-  /** A mark after the env in the switcher, e.g. that the instance has unsaved edits. */
-  adornment?: ReactNode;
   health: AppHealth;
   /** Observed running version, used to compare promotion across environments. */
   version?: string;
@@ -184,8 +182,6 @@ export interface ApplicationExtraView {
    *  Reserved even when hidden: `overview`, `deploys`, `topology`, `history`, and `cost`. */
   id: string;
   label: string;
-  /** Shown after the tab's label, e.g. a mark for unsaved edits. */
-  adornment?: ReactNode;
   render: () => ReactNode;
 }
 
@@ -348,25 +344,15 @@ type ApplicationDetailBaseProps = {
   /** Leading element in the header's right-hand cluster, before the health pill. */
   headerActions?: ReactNode;
   /**
-   * Whether the context strip names the workload when it differs from the
-   * app's name (default true). A host whose app names its workload another
-   * way turns it off.
-   */
-  showWorkloadFact?: boolean;
-  /**
    * The host's own status for the app, e.g. how a job's last run went, in
    * place of the header status pill. For jobs, also hides the duplicate Runtime fact.
    */
   status?: AppHostStatus;
-  /** Content of the page heading, such as an app switcher. */
-  renderTitle?: (name: string) => ReactNode;
   /** Order the visible tabs by ID, including `cost`. A removed view falls back
    *  to the first offered non-Cost view. Fallback skips Deploys and extra views
    *  while selection is pending or a controlled link is unresolved offline.
    *  Cost has separate selection props. */
   viewOrder?: string[];
-  /** Content directly below the application tabs, including when live data is unavailable. WorkloadView has its own tabHeader. */
-  viewHeader?: ReactNode;
 } & SelectionProps;
 
 export type ApplicationDetailProps = ApplicationDetailBaseProps & ViewProps;
@@ -477,11 +463,8 @@ export function ApplicationDetail({
   onOpenTimeline,
   onOpenSource,
   headerActions,
-  showWorkloadFact = true,
   status,
-  renderTitle,
   viewOrder,
-  viewHeader,
   selectedWorkloadKey,
   onSelectWorkload,
   selectedView,
@@ -811,11 +794,7 @@ export function ApplicationDetail({
           <Boxes className="h-4 w-4" aria-hidden />
         </span>
         <div className="flex min-w-0 flex-1 items-center gap-2">
-          {renderTitle ? (
-            <div role="heading" aria-level={1} className="min-w-0">{renderTitle(app.name)}</div>
-          ) : (
-            <h1 className="min-w-0 truncate text-xl font-semibold text-theme-text-primary lg:text-2xl">{app.name}</h1>
-          )}
+          <h1 className="min-w-0 truncate text-xl font-semibold text-theme-text-primary lg:text-2xl">{app.name}</h1>
           {unavailable == null && !singleWorkloadScope && workloads.length > 0 && (
             <>
               <span className="shrink-0 text-theme-text-tertiary">/</span>
@@ -833,23 +812,10 @@ export function ApplicationDetail({
           {status ? (
             // A host's status can be a sentence: keep it to one line, whole in the tooltip.
             <Tooltip content={status.detail && status.detail !== status.label ? `${status.label} · ${status.detail}` : status.label} delay={150}>
-              {status.onSelect ? (
-                <button
-                  type="button"
-                  onClick={status.onSelect}
-                  className={`inline-flex max-w-md items-center gap-2 rounded-md px-2.5 py-1 ring-1 ring-inset hover:underline ${verdictTone}`}
-                >
-                  <StatusDot tone={mapHealthToTone(overall)} />
-                  <span className="truncate text-sm font-semibold">{verdictLabel}</span>
-                </button>
-              ) : (
-                <span
-                  className={`inline-flex max-w-md items-center gap-2 rounded-md px-2.5 py-1 ring-1 ring-inset ${verdictTone}`}
-                >
-                  <StatusDot tone={mapHealthToTone(overall)} />
-                  <span className="truncate text-sm font-semibold">{verdictLabel}</span>
-                </span>
-              )}
+              <span className={`inline-flex max-w-md items-center gap-2 rounded-md px-2.5 py-1 ring-1 ring-inset ${verdictTone}`}>
+                <StatusDot tone={mapHealthToTone(overall)} />
+                <span className="truncate text-sm font-semibold">{verdictLabel}</span>
+              </span>
             </Tooltip>
           ) : (
             <span
@@ -902,7 +868,7 @@ export function ApplicationDetail({
           composition={classCompositionOf(app)}
         />
         <BatchSignalChip signal={batchSignal} />
-        {showWorkloadFact && singleWorkloadScope && selectedWorkload.name !== app.name && (
+        {singleWorkloadScope && selectedWorkload.name !== app.name && (
           <ContextFact label="Workload">
             <span className="font-mono">
               {selectedWorkload.kind}/{selectedWorkload.name}
@@ -985,7 +951,6 @@ export function ApplicationDetail({
               activeExtraView={activeExtraView}
               instanceKey={instanceKey}
               viewOrder={viewOrder}
-              viewHeader={viewHeader}
               extraViews={offeredExtraViews}
               offeredViews={offeredViews}
               unavailable={unavailable}
@@ -1046,7 +1011,6 @@ function ApplicationWorkspace({
   activeExtraView,
   instanceKey,
   viewOrder,
-  viewHeader,
   extraViews,
   offeredViews,
   unavailable,
@@ -1098,7 +1062,6 @@ function ApplicationWorkspace({
   /** The instance shown: a host view's state belongs to one instance, never carried to the next. */
   instanceKey: string;
   viewOrder?: string[];
-  viewHeader?: ReactNode;
   extraViews?: ApplicationExtraView[];
   offeredViews: ApplicationView[];
   unavailable?: ReactNode;
@@ -1173,8 +1136,6 @@ function ApplicationWorkspace({
         onCostChange={onCostViewChange}
         viewOrder={viewOrder}
       />
-      {/* Hidden when the host's line renders nothing. */}
-      {viewHeader && <div className="shrink-0 px-4 pt-3 empty:hidden sm:px-6">{viewHeader}</div>}
       {costSelected && renderCostView && (
         <div key={JSON.stringify([app.key, instanceKey])} className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
           {renderCostView({ app, workloads, onSelectWorkload })}
@@ -1338,7 +1299,6 @@ function ApplicationViewTabs({
           className={viewTabClass(active)}
         >
           {view.label}
-          {view.adornment}
         </button>
       ),
     });
@@ -3816,7 +3776,6 @@ function EnvSwitcher({
                     {instanceLabel(inst)}
                   </span>
                 ) : null}
-                {inst.adornment}
               </button>
             </Tooltip>
           );
@@ -3894,7 +3853,6 @@ function EnvSwitcher({
                   <span className={clsx("truncate font-medium text-theme-text-primary", inst.aggregate ? "min-w-0 flex-1" : "w-24 shrink-0")}>
                     {inst.env}
                   </span>
-                  {inst.adornment}
                   {!inst.aggregate && <span className="min-w-0 flex-1 truncate text-theme-text-secondary">{instanceLabel(inst)}</span>}
                   {version && (
                     <span className="font-mono text-[10px] text-theme-text-tertiary">
