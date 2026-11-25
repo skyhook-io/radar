@@ -5,53 +5,11 @@ import (
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
-	autoscalingv2 "k8s.io/api/autoscaling/v2"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	networkingv1 "k8s.io/api/networking/v1"
-	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
-
-// stubProvider supplies a typed K8s resource for the kinds GetRelationships
-// inspects for Pod hygiene fields and ManagedBy synthesis. Other methods
-// return empty slices so calls fall through cleanly.
-type stubProvider struct {
-	pods     []*corev1.Pod
-	services []*corev1.Service
-	pdbs     []*policyv1.PodDisruptionBudget
-}
-
-func (s *stubProvider) Pods() ([]*corev1.Pod, error)         { return s.pods, nil }
-func (s *stubProvider) Services() ([]*corev1.Service, error) { return s.services, nil }
-func (s *stubProvider) Deployments() ([]*appsv1.Deployment, error) {
-	return nil, nil
-}
-func (s *stubProvider) DaemonSets() ([]*appsv1.DaemonSet, error)     { return nil, nil }
-func (s *stubProvider) StatefulSets() ([]*appsv1.StatefulSet, error) { return nil, nil }
-func (s *stubProvider) ReplicaSets() ([]*appsv1.ReplicaSet, error)   { return nil, nil }
-func (s *stubProvider) Jobs() ([]*batchv1.Job, error)                { return nil, nil }
-func (s *stubProvider) CronJobs() ([]*batchv1.CronJob, error)        { return nil, nil }
-func (s *stubProvider) Ingresses() ([]*networkingv1.Ingress, error)  { return nil, nil }
-func (s *stubProvider) ConfigMaps() ([]*corev1.ConfigMap, error)     { return nil, nil }
-func (s *stubProvider) Secrets() ([]*corev1.Secret, error)           { return nil, nil }
-func (s *stubProvider) PersistentVolumeClaims() ([]*corev1.PersistentVolumeClaim, error) {
-	return nil, nil
-}
-func (s *stubProvider) PersistentVolumes() ([]*corev1.PersistentVolume, error) { return nil, nil }
-func (s *stubProvider) HorizontalPodAutoscalers() ([]*autoscalingv2.HorizontalPodAutoscaler, error) {
-	return nil, nil
-}
-func (s *stubProvider) PodDisruptionBudgets() ([]*policyv1.PodDisruptionBudget, error) {
-	return s.pdbs, nil
-}
-func (s *stubProvider) NetworkPolicies() ([]*networkingv1.NetworkPolicy, error) { return nil, nil }
-func (s *stubProvider) Nodes() ([]*corev1.Node, error)                          { return nil, nil }
-func (s *stubProvider) GetResourceStatus(kind, namespace, name string) *ResourceStatus {
-	return nil
-}
 
 func TestGetCascadeDeletePreview_GroupQualifiedCollisions(t *testing.T) {
 	capiGVR := schema.GroupVersionResource{Group: "cluster.x-k8s.io", Version: "v1beta1", Resource: "clusters"}
@@ -241,8 +199,6 @@ func TestGetCascadeDeletePreview_CalicoGroupCollisionUsesQualifiedRoot(t *testin
 	}
 }
 
-// TestGetRelationships_PodHygieneFields covers T2: pods carry
-// ServiceAccount, Node, and ManagedBy refs derived from spec + labels.
 func TestGetRelationships_PodHygieneFields(t *testing.T) {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -257,14 +213,13 @@ func TestGetRelationships_PodHygieneFields(t *testing.T) {
 			NodeName:           "node-1",
 		},
 	}
-	provider := &stubProvider{pods: []*corev1.Pod{pod}}
 
 	topo := &Topology{
 		Nodes: []Node{{ID: "pod/demo/web-abc-xyz", Kind: KindPod, Name: "web-abc-xyz"}},
 		Edges: []Edge{},
 	}
 
-	rel := GetRelationships("Pod", "demo", "web-abc-xyz", topo, provider, nil)
+	rel := GetRelationshipsWithObject("Pod", pod.Namespace, pod.Name, pod, topo, nil, nil, nil)
 	if rel == nil {
 		t.Fatal("expected non-nil Relationships for pod with hygiene fields")
 	}
@@ -279,22 +234,29 @@ func TestGetRelationships_PodHygieneFields(t *testing.T) {
 	}
 }
 
-// TestGetRelationships_PodHygieneFields_EmptySAandUnscheduled verifies that
-// optional fields are properly omitted when the source data is empty. The
-// nil-result short-circuit must also still kick in.
 func TestGetRelationships_PodHygieneFields_EmptySAandUnscheduled(t *testing.T) {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "demo", Name: "lone"},
 		Spec:       corev1.PodSpec{ /* SA empty, NodeName empty */ },
 	}
-	provider := &stubProvider{pods: []*corev1.Pod{pod}}
 	topo := &Topology{
 		Nodes: []Node{{ID: "pod/demo/lone", Kind: KindPod, Name: "lone"}},
 	}
 
-	rel := GetRelationships("Pod", "demo", "lone", topo, provider, nil)
+	rel := GetRelationshipsWithObject("Pod", pod.Namespace, pod.Name, pod, topo, nil, nil, nil)
 	if rel != nil {
 		t.Errorf("expected nil for pod with no edges and no hygiene data, got %+v", rel)
+	}
+}
+
+func TestGetRelationshipsWithObject_NilObjectOmitsPodSpec(t *testing.T) {
+	cached := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "demo", Name: "web"},
+		Spec:       corev1.PodSpec{NodeName: "node-1"},
+	}
+	provider := &mockProvider{pods: []*corev1.Pod{cached}}
+	if rel := GetRelationshipsWithObject("Pod", cached.Namespace, cached.Name, nil, &Topology{}, provider, nil, nil); rel != nil {
+		t.Errorf("a nil object yielded relationships from the cached Pod: %+v", rel)
 	}
 }
 
@@ -361,7 +323,7 @@ func TestGetRelationships_ConfiguresDispatchesByKind(t *testing.T) {
 		},
 	}
 
-	rel := GetRelationships("Deployment", "demo", "web", topo, nil, nil)
+	rel := graphRelationships("Deployment", "demo", "web", topo, nil, nil)
 	if rel == nil {
 		t.Fatal("expected relationships")
 	}
@@ -396,7 +358,7 @@ func TestGetRelationships_ConfigRefsListsEachTargetOnce(t *testing.T) {
 			{ID: "config-volume-to-web", Source: "configmap/demo/web", Target: "deployment/demo/web", Type: EdgeConfigures},
 		},
 	}
-	rel := GetRelationships("Deployment", "demo", "web", topo, nil, nil)
+	rel := graphRelationships("Deployment", "demo", "web", topo, nil, nil)
 	if rel == nil || len(rel.ConfigRefs) != 1 {
 		t.Fatalf("expected one ConfigRef for a ConfigMap reached by two configuration edges, got %+v", rel)
 	}
@@ -419,7 +381,7 @@ func TestGetRelationships_WorkloadIncludesServiceEntrypoints(t *testing.T) {
 		},
 	}
 
-	rel := GetRelationshipsWithIndex("Deployment", "demo", "web", topo, nil, nil, IndexByResource(topo))
+	rel := graphRelationshipsWithIndex("Deployment", "demo", "web", topo, nil, nil, IndexByResource(topo))
 	if rel == nil {
 		t.Fatal("expected workload relationships")
 	}
@@ -437,7 +399,7 @@ func TestGetRelationships_WorkloadIncludesServiceEntrypoints(t *testing.T) {
 		t.Fatalf("Routes = %+v, want HTTPRoute and IngressRoute", rel.Routes)
 	}
 
-	serviceRel := GetRelationshipsWithIndex("Service", "demo", "web", topo, nil, nil, IndexByResource(topo))
+	serviceRel := graphRelationshipsWithIndex("Service", "demo", "web", topo, nil, nil, IndexByResource(topo))
 	if serviceRel == nil || len(serviceRel.Routes) != 2 {
 		t.Fatalf("Service Routes = %+v, want HTTPRoute and IngressRoute", serviceRel)
 	}
@@ -465,11 +427,11 @@ func TestGetRelationships_ServiceEntrypointsUseExactAPIGroup(t *testing.T) {
 	}
 	idx := IndexByResource(topo)
 
-	core := GetRelationshipsWithIndex("Deployment", "demo", "core", topo, nil, nil, idx)
+	core := graphRelationshipsWithIndex("Deployment", "demo", "core", topo, nil, nil, idx)
 	if core == nil || len(core.Ingresses) != 1 || core.Ingresses[0].Name != "core" || len(core.Routes) != 0 {
 		t.Fatalf("core workload borrowed custom Service entrypoints: %+v", core)
 	}
-	custom := GetRelationshipsWithIndex("Deployment", "demo", "custom", topo, nil, nil, idx)
+	custom := graphRelationshipsWithIndex("Deployment", "demo", "custom", topo, nil, nil, idx)
 	if custom == nil || len(custom.Services) != 0 || len(custom.RoutedFrom) != 1 || custom.RoutedFrom[0].Group != "platform.example.io" || len(custom.Routes) != 0 || len(custom.Ingresses) != 0 {
 		t.Fatalf("custom Service kind was given core Service entrypoint semantics: %+v", custom)
 	}
@@ -488,7 +450,7 @@ func TestGetRelationships_ServiceEntrypointsSkipKnativeService(t *testing.T) {
 		},
 	}
 
-	rel := GetRelationshipsWithIndex("Service", "demo", "web", topo, nil, nil, IndexByResource(topo))
+	rel := graphRelationshipsWithIndex("Service", "demo", "web", topo, nil, nil, IndexByResource(topo))
 	if len(rel.Ingresses) != 0 {
 		t.Fatalf("core Service inherited an entrypoint through a Knative Service: %+v", rel.Ingresses)
 	}
@@ -519,7 +481,7 @@ func TestGetRelationshipsEmitsKubernetesKindForPseudoNode(t *testing.T) {
 		Edges: []Edge{{Source: "knativeservice/demo/shop", Target: "revision/demo/shop-v1", Type: EdgeManages}},
 	}
 
-	rel := GetRelationships("Revision", "demo", "shop-v1", topo, nil, nil)
+	rel := graphRelationships("Revision", "demo", "shop-v1", topo, nil, nil)
 	if rel == nil || rel.Owner == nil || rel.Owner.Kind != "Service" || rel.Owner.Group != "serving.knative.dev" {
 		t.Fatalf("pseudo owner leaked as a non-Kubernetes tuple: %+v", rel)
 	}
@@ -548,9 +510,9 @@ func TestGetRelationships_IncomingEdgeProtects_DispatchesByKind(t *testing.T) {
 		},
 	}
 
-	rel := GetRelationships("Deployment", "demo", "web", topo, nil, nil)
+	rel := graphRelationships("Deployment", "demo", "web", topo, nil, nil)
 	if rel == nil {
-		t.Fatal("GetRelationships returned nil for deployment with 3 incoming protects edges")
+		t.Fatal("graphRelationships returned nil for deployment with 3 incoming protects edges")
 	}
 
 	if len(rel.PDBs) != 1 || rel.PDBs[0].Kind != "PodDisruptionBudget" || rel.PDBs[0].Name != "web-pdb" {
@@ -584,9 +546,9 @@ func TestGetRelationships_IncomingEdgeUsesSplitsScalersFromStorage(t *testing.T)
 		},
 	}
 
-	rel := GetRelationships("Deployment", "demo", "web", topo, nil, nil)
+	rel := graphRelationships("Deployment", "demo", "web", topo, nil, nil)
 	if rel == nil {
-		t.Fatal("GetRelationships returned nil for deployment with incoming uses edges")
+		t.Fatal("graphRelationships returned nil for deployment with incoming uses edges")
 	}
 	if len(rel.Scalers) != 1 || rel.Scalers[0].Kind != "HorizontalPodAutoscaler" || rel.Scalers[0].Name != "web-hpa" {
 		t.Errorf("rel.Scalers: want [HorizontalPodAutoscaler/web-hpa], got %+v", rel.Scalers)
@@ -595,9 +557,9 @@ func TestGetRelationships_IncomingEdgeUsesSplitsScalersFromStorage(t *testing.T)
 		t.Errorf("rel.StorageRefs: want [PersistentVolumeClaim/web-data], got %+v", rel.StorageRefs)
 	}
 
-	pvcRel := GetRelationships("PersistentVolumeClaim", "demo", "web-data", topo, nil, nil)
+	pvcRel := graphRelationships("PersistentVolumeClaim", "demo", "web-data", topo, nil, nil)
 	if pvcRel == nil {
-		t.Fatal("GetRelationships returned nil for PVC with outgoing uses edge")
+		t.Fatal("graphRelationships returned nil for PVC with outgoing uses edge")
 	}
 	if pvcRel.ScaleTarget != nil {
 		t.Errorf("PVC relationship should not expose a scale target, got %+v", pvcRel.ScaleTarget)
@@ -639,7 +601,7 @@ func TestGetRelationships_OutgoingEdgeProtects_SelectsTargets(t *testing.T) {
 			// fails, the test below would pass for the wrong reason — the
 			// edges or node IDs aren't matching at all. Catches the
 			// vacuous-pass class of mistakes.
-			incoming := GetRelationships("Deployment", "demo", "web", topo, nil, nil)
+			incoming := graphRelationships("Deployment", "demo", "web", topo, nil, nil)
 			if incoming == nil {
 				t.Fatalf("control assertion failed: querying the target Deployment should surface the policy via incoming EdgeProtects, got nil relationships")
 			}
@@ -654,7 +616,7 @@ func TestGetRelationships_OutgoingEdgeProtects_SelectsTargets(t *testing.T) {
 				}
 			}
 
-			rel := GetRelationships(c.queryKind, "demo", c.queryName, topo, nil, nil)
+			rel := graphRelationships(c.queryKind, "demo", c.queryName, topo, nil, nil)
 			if rel == nil || len(rel.Protects) != 2 || len(rel.NetworkPolicies) != 0 || len(rel.PDBs) != 0 {
 				t.Errorf("policy targets must appear under Selects: %+v", rel)
 			}
@@ -676,9 +638,9 @@ func TestGetRelationships_NoProtects_FieldsOmitted(t *testing.T) {
 		},
 	}
 
-	rel := GetRelationships("Deployment", "demo", "lone", topo, nil, nil)
+	rel := graphRelationships("Deployment", "demo", "lone", topo, nil, nil)
 	if rel == nil {
-		t.Fatal("GetRelationships returned nil for deployment with a child")
+		t.Fatal("graphRelationships returned nil for deployment with a child")
 	}
 	if len(rel.PDBs) != 0 {
 		t.Errorf("rel.PDBs: want empty, got %+v", rel.PDBs)
@@ -700,28 +662,28 @@ func TestGetRelationships_UsesSeparatesDependenciesFromScaling(t *testing.T) {
 		{Source: "scaledobject/team/scale", Target: "deployment/team/app", Type: EdgeUses},
 		{Source: "scaledobject/team/scale", Target: "triggerauthentication/team/credential", Type: EdgeUses},
 	}}
-	cert := GetRelationships("Certificate", "team", "tls", topo, nil, nil)
+	cert := graphRelationships("Certificate", "team", "tls", topo, nil, nil)
 	if cert == nil || cert.ScaleTarget != nil || len(cert.Dependencies) != 1 || cert.Dependencies[0].Name != "ca" {
 		t.Fatalf("certificate relationship = %+v, want issuer dependency without scale target", cert)
 	}
 	if len(cert.ConfigRefs) != 1 || cert.ConfigRefs[0] != cert.Dependencies[0] {
 		t.Fatalf("versioned UI configuration projection = %+v", cert.ConfigRefs)
 	}
-	issuer := GetRelationships("Issuer", "team", "ca", topo, nil, nil)
+	issuer := graphRelationships("Issuer", "team", "ca", topo, nil, nil)
 	if issuer == nil || len(issuer.Scalers) != 0 || len(issuer.Dependents) != 1 || issuer.Dependents[0].Name != "tls" {
 		t.Fatalf("issuer relationship = %+v, want certificate dependent without scaler", issuer)
 	}
 	if len(issuer.Consumers) != 1 || issuer.Consumers[0] != issuer.Dependents[0] {
 		t.Fatalf("versioned UI consumer projection = %+v", issuer.Consumers)
 	}
-	scaler := GetRelationships("ScaledObject", "team", "scale", topo, nil, nil)
+	scaler := graphRelationships("ScaledObject", "team", "scale", topo, nil, nil)
 	if scaler == nil || scaler.ScaleTarget == nil || scaler.ScaleTarget.Name != "app" || len(scaler.Dependencies) != 1 || scaler.Dependencies[0].Name != "credential" {
 		t.Fatalf("scaler relationship = %+v, want workload target and authentication dependency", scaler)
 	}
 	if len(scaler.ConfigRefs) != 1 || scaler.ConfigRefs[0] != scaler.Dependencies[0] {
 		t.Fatalf("versioned UI authentication projection = %+v", scaler.ConfigRefs)
 	}
-	app := GetRelationships("Deployment", "team", "app", topo, nil, nil)
+	app := graphRelationships("Deployment", "team", "app", topo, nil, nil)
 	if app == nil || len(app.Scalers) != 1 || len(app.Dependents) != 0 {
 		t.Fatalf("workload relationship = %+v, want scaler only", app)
 	}
@@ -772,11 +734,11 @@ func TestGetRelationships_SharedClaimListsEachConsumerOnce(t *testing.T) {
 	}
 	topo.Edges = append(topo.Edges, Edge{Source: "persistentvolumeclaim/team/shared", Target: "job/team/run-0", Type: EdgeUses})
 
-	rel := GetRelationships("PersistentVolumeClaim", "team", "shared", topo, nil, nil)
+	rel := graphRelationships("PersistentVolumeClaim", "team", "shared", topo, nil, nil)
 	if rel == nil || len(rel.Consumers) != consumers {
 		t.Fatalf("consumers = %d, want %d", len(rel.Consumers), consumers)
 	}
-	job := GetRelationships("Job", "team", "run-0", topo, nil, nil)
+	job := graphRelationships("Job", "team", "run-0", topo, nil, nil)
 	if job == nil || len(job.StorageRefs) != 1 {
 		t.Fatalf("storage refs = %+v, want the shared claim once", job)
 	}

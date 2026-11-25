@@ -359,7 +359,7 @@ func TestJobSetOwnedByDrawnOwnerIsNotDuplicated(t *testing.T) {
 	}
 	nodes = append(nodes, Node{ID: "trainjob/ml/train/trainer.kubeflow.org", Kind: NodeKind("TrainJob"), Name: "train", Data: map[string]any{"namespace": "ml", "apiVersion": "trainer.kubeflow.org/v1alpha1"}})
 
-	nodes, edges := b.addGenericCRDNodes(nodes, nil, DefaultBuildOptions())
+	nodes, edges, _ := b.enrollGenericCRDNodes(nodes, nil, DefaultBuildOptions(), nil)
 
 	var jobSets int
 	for _, n := range nodes {
