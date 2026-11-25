@@ -36,5 +36,9 @@ it('reuses normal terminals and separates explicit executables and cluster ident
       await act(async () => open({ ...base, debugSession: { ...debug, ...delta } }))
     }
     expect(dock.tabs).toHaveLength(8)
+    await act(async () => open({ ...base, podUID: 'original' }))
+    await act(async () => open({ ...base, podUID: 'original' }))
+    await act(async () => open({ ...base, podUID: 'replacement' }))
+    expect(dock.tabs.slice(8).map(t => t.podUID)).toEqual(['original', 'replacement'])
   } finally { await act(async () => root.unmount()); host.remove() }
 })

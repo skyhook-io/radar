@@ -33,14 +33,11 @@ func (s *Server) handlePodDebugAccess(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	response := reviewPodDebugAccess(ctx, s.getClientForRequest(r), ns, name, cloudMode() || r.URL.Query().Get("execOnly") == "true")
-	if response.State == "allowed" {
-		response.Image = s.resolveDebugImage("")
-	}
+	response := reviewPodDebugAccess(ctx, s.getClientForRequest(r), ns, name, cloudMode() || r.URL.Query().Get("execOnly") == "true", s.resolveDebugImage(""))
 	s.writeJSON(w, response)
 }
 
-func reviewPodDebugAccess(ctx context.Context, client kubernetes.Interface, ns, name string, execOnly bool) podDebugAccess {
+func reviewPodDebugAccess(ctx context.Context, client kubernetes.Interface, ns, name string, execOnly bool, defaultImage string) podDebugAccess {
 	response := podDebugAccess{State: "unknown"}
 	if client == nil {
 		return response
@@ -61,6 +58,8 @@ func reviewPodDebugAccess(ctx context.Context, client kubernetes.Interface, ns, 
 					response.State = "unavailable"
 					return response
 				}
+				// The chooser can preview a confirmed attempt when only the update review is inconclusive.
+				response.Image = defaultImage
 			}
 			continue
 		}
@@ -72,6 +71,7 @@ func reviewPodDebugAccess(ctx context.Context, client kubernetes.Interface, ns, 
 			return response
 		}
 		response.State = "denied"
+		response.Image = ""
 		return response
 	}
 	response.State = "allowed"

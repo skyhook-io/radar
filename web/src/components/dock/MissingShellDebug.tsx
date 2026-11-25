@@ -11,7 +11,7 @@ import { useCapabilitiesContext, useNamespacedCapabilities } from '../../context
 import { PodDebugAction, runningPodDebugTargets, type PodDebugTarget } from '../resources/PodDebugAction'
 
 interface RecoveryTarget {
-  namespace: string; name: string; uid: string; target: string; connection?: string; base: string; podDetailsLink?: ReactNode
+  namespace: string; name: string; uid: string; target: string; connection?: string; base: string; podDetailsLink?: ReactNode; switchContainer?: (name: string) => void
 }
 
 export function MissingShellDebug(props: RecoveryTarget) {
@@ -33,7 +33,9 @@ export function MissingShellDebug(props: RecoveryTarget) {
   return <div className="flex w-full min-w-0 max-w-md flex-col items-center gap-2">
     <DebugOptions {...props} pod={pod}/>
     {alternatives.length > 0 && <p className="max-w-md text-xs text-theme-text-secondary [overflow-wrap:anywhere]">
-      {alternatives.length === 1 ? 'Other running container' : 'Other running containers'}: <code>{alternatives.join(', ')}</code>
+      {alternatives.length === 1 ? 'Other running container' : 'Other running containers'}: <code>{alternatives.map((name, index) => <span key={name}>{index > 0 && ', '}{props.switchContainer
+        ? <button type="button" className="underline underline-offset-2 hover:text-theme-text-primary" onClick={() => props.switchContainer?.(name)}>{name}</button>
+        : name}</span>)}</code>
     </p>}
   </div>
 }
@@ -45,7 +47,7 @@ function DebugOptions({ namespace, name, uid, target, connection, base, pod }: R
   const execOnly = !!embedded || deployment?.mode === 'cloud'
   const current = () => getApiBase() === base && connectionHeaderValue() === connection
   const running = getRunningEphemeralContainers(pod).filter(c => c.targetContainerName === target)
-  const { query, support, recheckSupport } = usePodDebugAccess(namespace, name, uid,
+  const { query, support, recheckSupport, unverifiedImage } = usePodDebugAccess(namespace, name, uid,
     execOnly ? !!running.length && !canOpenEphemeralTerminal : !running.length && !podDebugImage,
     execOnly, !execOnly && !running.length ? podDebugImage : undefined)
   const openTerminal = useOpenTerminal()
@@ -109,7 +111,8 @@ function DebugOptions({ namespace, name, uid, target, connection, base, pod }: R
     : `Could you check whether ${username ? `Kubernetes user ${username}` : sharedServiceAccount ? requester : 'my Kubernetes identity'} can update pods/ephemeralcontainers for Pod ${name} in namespace ${namespace}? Radar couldn’t verify access while I was troubleshooting container ${target}.${subjectDetails}`
   return <div className="flex max-w-md flex-col items-center gap-2 text-xs text-theme-text-secondary">
     <p>{denied ? <>{sharedServiceAccount ? "Radar’s ServiceAccount doesn’t have" : "You don’t have"} permission to add a debug container to this Pod. Copy an access request for your cluster administrator.</>
-      : <>Radar couldn’t verify whether {sharedServiceAccount ? "Radar’s ServiceAccount" : "you"} can add a debug container to <code>{namespace}/{name}</code>. {query.error ? ' The permission request failed before Radar received a decision.' : ' The cluster access check returned no decision.'} Recheck access or ask your administrator to verify it.</>}</p>
+      : <>Radar couldn’t verify whether {sharedServiceAccount ? "Radar’s ServiceAccount" : "you"} can add a debug container to <code>{namespace}/{name}</code>. {query.error ? ' The permission request failed before Radar received a decision.' : ' The cluster access check returned no decision.'} {unverifiedImage ? ' You can review a debug attempt. Kubernetes will check the update when you confirm.' : ' Recheck access or ask your administrator to verify it.'}</>}</p>
+    {unverifiedImage && <PodDebugAction pod={pod} defaultImage={unverifiedImage} failedContainer={target} updateUnverified/>}
     {denied && <p className="text-xs text-theme-text-tertiary">Pod <code>{namespace}/{name}</code></p>}
     <div className="flex flex-wrap items-center justify-center gap-2">
       <button className="btn-secondary flex items-center gap-1.5 rounded px-2 py-1" onClick={async () => setCopied(await copyText(request) ? 'copied' : 'manual')}>

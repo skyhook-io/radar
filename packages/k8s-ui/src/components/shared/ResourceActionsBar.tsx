@@ -78,7 +78,7 @@ interface ResourceActionsBarProps {
   canPortForward?: boolean
 
   // Dock actions (injected by platform)
-  onOpenTerminal?: (params: { namespace: string; podName: string; containerName: string; containers: string[] }) => void
+  onOpenTerminal?: (params: { namespace: string; podName: string; podUID?: string; containerName: string; containers: string[] }) => void
   onOpenLogs?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string; initContainers?: string[] }) => void
   replicaSetLogs?: boolean
   onOpenWorkloadLogs?: (params: { namespace: string; workloadKind: string; workloadName: string }) => void
@@ -322,6 +322,7 @@ export function ResourceActionsBar({
   const handleOpenTerminal = () => {
     if (resource.namespace && resource.name && containers.length > 0) {
       onOpenTerminal?.({
+        podUID: data?.metadata?.uid,
         namespace: resource.namespace,
         podName: resource.name,
         containerName: getDefaultContainerName(data) || containers[0],

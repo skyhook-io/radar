@@ -54,18 +54,19 @@ export function usePodDetailAccess(pod: PodDebugTarget | undefined, namespace: {
   const { deployment } = useCapabilitiesContext()
   const eligible = pod?.apiVersion === 'v1' && pod.kind === 'Pod' && pod.status.phase === 'Running' && !pod.metadata.deletionTimestamp
   const execOnly = !!embedded || deployment?.mode === 'cloud' || !pod || !runningPodDebugTargets(pod)?.length
-  const { query } = usePodDebugAccess(pod?.metadata.namespace ?? '', pod?.metadata.name ?? '', pod?.metadata.uid ?? '',
+  const { query, unverifiedImage } = usePodDebugAccess(pod?.metadata.namespace ?? '', pod?.metadata.name ?? '', pod?.metadata.uid ?? '',
     !!eligible && (!namespace.canExec || (!execOnly && !namespace.podDebugImage)), execOnly, eligible && !execOnly ? namespace.podDebugImage : undefined)
   const named = eligible && !query.error ? query.data : undefined
   return {
     canExec: namespace.canExec || named?.exec === true,
     canOpenEphemeralTerminal: namespace.canOpenEphemeralTerminal || named?.exec === true,
     debugImage: execOnly || named?.state === 'denied' || named?.state === 'unavailable' ? undefined :
-      named?.state === 'allowed' ? named.image : namespace.podDebugImage,
+      named?.state === 'allowed' ? named.image : namespace.podDebugImage || unverifiedImage,
+    updateUnverified: !!unverifiedImage && !namespace.podDebugImage,
   }
 }
 
-export function PodDebugAction({ pod, defaultImage, failedContainer }: { pod: PodDebugTarget; defaultImage: string; failedContainer?: string }) {
+export function PodDebugAction({ pod, defaultImage, failedContainer, updateUnverified = false }: { pod: PodDebugTarget; defaultImage: string; failedContainer?: string; updateUnverified?: boolean }) {
   const openTerminal = useOpenTerminal()
   const eligibleTargets = runningPodDebugTargets(pod)
   const targets = eligibleTargets ?? []
@@ -132,7 +133,7 @@ export function PodDebugAction({ pod, defaultImage, failedContainer }: { pod: Po
   if (!eligibleTargets || (!draft && !targets.length)) return null
   return <>
     <button type="button" className={`${failedContainer ? 'btn-brand' : 'btn-secondary'} flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium`} onClick={show}>
-      <Bug className="h-3.5 w-3.5" />{failedContainer ? 'Start a debug container' : 'Debug'}
+      <Bug className="h-3.5 w-3.5" />{failedContainer ? updateUnverified ? 'Review debug container' : 'Start a debug container' : 'Debug'}
     </button>
     <ActionConfirmDialog open={!!draft} title="Debug Pod" context={draft?.context} writes={[{ summary: `Update pods/ephemeralcontainers on ${namespace}/${name}` }]} subject={{ kind: 'Pod', namespace, name }}
       effect="Start an ephemeral container and open a terminal in it. Its entry stays on the Pod until the Pod is deleted."
@@ -151,6 +152,7 @@ export function PodDebugAction({ pod, defaultImage, failedContainer }: { pod: Po
         }}>I checked the Pod YAML</button></div>}
       incompleteReason={draft && !targets.includes(draft.target) ? 'Select a running container.' : undefined}>
       {draft && <div className="grid gap-3">
+        {updateUnverified && <p className="text-sm text-theme-text-secondary">Radar verified terminal access to this Pod. Kubernetes will decide whether you can add a debug container when you confirm.</p>}
         <label className="grid gap-1">Target container
           <select className="rounded border border-theme-border bg-theme-surface px-2 py-1.5" value={draft.target} disabled={busy}
             onChange={event => setDraft({ ...draft, target: event.target.value })}>

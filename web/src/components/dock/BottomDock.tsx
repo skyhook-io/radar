@@ -15,6 +15,7 @@ function renderTabContent(tab: DockTab, isActive: boolean, viewNamespaces: strin
       <TerminalTab
         namespace={tab.namespace!}
         podName={tab.podName!}
+        podUID={tab.podUID}
         containerName={tab.containerName!}
         containers={tab.containers!}
         isActive={isActive}

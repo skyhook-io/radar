@@ -41,3 +41,9 @@ it('reconnects an existing debug session to its reviewed connection without offe
   expect(renderToString(captured.props!.renderDebugAction!('debug-1', 'reviewed'))).toContain('different image')
   resetConnectionBindingForTest()
 })
+
+it('opens and retries an ordinary terminal on the UID captured in Pod details', async () => {
+  renderToString(<TerminalTab namespace="demo" podName="api" podUID="fresh" containerName="tools" containers={['tools']} />)
+  expect(new URL((await captured.props!.createSession('tools')).wsUrl).searchParams.get('uid')).toBe('fresh')
+  expect(new URL((await captured.props!.createSession('tools', 'other')).wsUrl).searchParams.get('uid')).toBe('fresh')
+})

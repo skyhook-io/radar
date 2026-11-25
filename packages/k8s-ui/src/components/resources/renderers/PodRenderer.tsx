@@ -84,7 +84,7 @@ interface PodRendererProps {
   canViewLogs?: boolean
   canPortForward?: boolean
   // Dock actions
-  onOpenTerminal?: (params: { namespace: string; podName: string; containerName: string; containers: string[] }) => void
+  onOpenTerminal?: (params: { namespace: string; podName: string; podUID?: string; containerName: string; containers: string[] }) => void
   onOpenEphemeralTerminal?: (name: string, image: string) => void
   onOpenLogsPanel?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string; initContainers?: string[] }) => void
   // Port forward render prop
@@ -377,6 +377,7 @@ export function PodRenderer({
     const container = containerName || getDefaultContainerName(data)
     if (namespace && podName && container) {
       onOpenTerminal?.({
+        podUID: data?.metadata?.uid,
         namespace,
         podName,
         containerName: container,

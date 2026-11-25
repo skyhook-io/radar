@@ -26,7 +26,7 @@ export interface TerminalTabProps {
   /** Optional: creates a debug (ephemeral) container. If omitted, the debug button is hidden. */
   createDebugContainer?: (targetContainer: string) => Promise<{ containerName: string }>
   podDetailsLink?: ReactNode
-  renderDebugAction?: (targetContainer: string, podUID: string) => ReactNode
+  renderDebugAction?: (targetContainer: string, podUID: string, switchContainer?: (name: string) => void) => ReactNode
   /** Optional: a short line in the toolbar describing the session. */
   note?: string
   /** Executable supplied by the host session callback; pins its target container. */
@@ -51,7 +51,6 @@ export function TerminalTab({
   const fitAddonRef = useRef<FitAddon | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const reviewedPodUID = useRef<string | undefined>(undefined)
-  const containerPicker = useRef<HTMLSelectElement>(null)
   // Cleanup ref holds the ResizeObserver disconnect from an async setup
   const cleanupRef = useRef<(() => void) | undefined>(undefined)
   // Prevents stale .then() callbacks from running after unmount or reconnect
@@ -321,7 +320,7 @@ export function TerminalTab({
 
         {!command && containers.length > 1 && (
           <div className="relative">
-            <select ref={containerPicker} aria-label="Terminal container"
+            <select aria-label="Terminal container"
               value={selectedContainer}
               onChange={(e) => handleContainerChange(e.target.value)}
               className="appearance-none bg-theme-elevated text-xs text-theme-text-primary px-2 py-0.5 pr-5 rounded border border-theme-border-light focus:outline-none focus:ring-1 focus:ring-blue-500"
@@ -368,15 +367,10 @@ export function TerminalTab({
                   Container <span className="font-mono text-theme-text-secondary">{selectedContainer}</span> could not start <span className="font-mono text-theme-text-secondary">{command}</span>. Check that the executable is installed in this container.
                 </div>
               ) : <div className="text-xs text-theme-text-tertiary mb-4 max-w-md">
-                This container image may have no shell.{containers.length > 1 && <> You can also <button type="button" className="underline underline-offset-2 hover:text-theme-text-primary" onClick={() => {
-                  const picker = containerPicker.current
-                  picker?.focus()
-                  // Some embedded browsers disallow opening a native picker programmatically.
-                  try { picker?.showPicker?.() } catch { /* focus preserves keyboard access */ }
-                }}>select another container</button> above.</>}
+                This container image may have no shell.
               </div>}
               <div className="flex w-full min-w-0 max-w-md flex-wrap items-center justify-center gap-2">
-                {!command && failedPodUID && renderDebugAction?.(selectedContainer, failedPodUID)}
+                {!command && failedPodUID && renderDebugAction?.(selectedContainer, failedPodUID, handleContainerChange)}
                 {!command && !renderDebugAction && createDebugContainerRef.current && (
                   <button
                     onClick={handleCreateDebugContainer}

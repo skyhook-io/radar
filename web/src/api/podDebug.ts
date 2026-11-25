@@ -18,7 +18,7 @@ export function createPodDebugContainer(namespace: string, podName: string, conn
   )
 }
 
-type PodDebugAccess = { exec?: boolean } & ({ state: 'allowed'; image: string } | { state: 'denied' | 'unknown' | 'unavailable' })
+type PodDebugAccess = { exec?: boolean } & ({ state: 'allowed'; image: string } | { state: 'unknown'; image?: string } | { state: 'denied' | 'unavailable' })
 
 function refusesDebug(access?: PodDebugAccess) {
   return access?.state === 'denied' || access?.state === 'unavailable'
@@ -51,5 +51,7 @@ export function usePodDebugAccess(namespace: string, name: string, uid: string, 
     const previous = client.getQueryData<PodDebugAccess>(key)
     if (namespaceGrant && support === 'supported' && refusesDebug(previous)) void recheck({ cancelRefetch: false })
   }, [namespaceGrant, support, client, key, recheck])
-  return { query, support, recheckSupport: () => client.invalidateQueries({queryKey: ['capabilities'], exact: true}) }
+  const access = query.data
+  const unverifiedImage = support === 'supported' && !execOnly && !query.error && access?.state === 'unknown' && access.exec ? access.image : undefined
+  return { unverifiedImage, query, support, recheckSupport: () => client.invalidateQueries({queryKey: ['capabilities'], exact: true}) }
 }

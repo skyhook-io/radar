@@ -12,8 +12,8 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 let root: Root, client: QueryClient, host: HTMLDivElement
 
 function Access({ image }: { image?: string }) {
-  const { query } = usePodDebugAccess('demo', 'checkout', 'uid-1', !image, false, image)
-  return <>{query.data?.state}</>
+  const { query, unverifiedImage } = usePodDebugAccess('demo', 'checkout', 'uid-1', !image, false, image)
+  return <span data-unverified-image={unverifiedImage}>{query.data?.state}</span>
 }
 function render(image?: string) {
   return act(() => root.render(<QueryClientProvider client={client}><Access image={image}/></QueryClientProvider>))
@@ -53,4 +53,16 @@ it('requires no named check when nothing contradicts the namespace grant on this
   client.setQueryData([...podDebugAccessKey('demo', 'checkout', 'old-uid'), false], { state: 'denied' })
   render('tools')
   expect(fetchJSON).not.toHaveBeenCalled()
+})
+
+it.each([
+  [{ state: 'unknown', exec: true, image: 'operator-default' }, 'operator-default'],
+  [{ state: 'unknown', exec: true }, undefined],
+  [{ state: 'unknown', image: 'operator-default' }, undefined],
+  [{ state: 'denied', exec: true, image: 'ignored' }, undefined],
+] as const)('requires both named exec and an effective image before offering an unverified attempt', async (access, expected) => {
+  vi.mocked(fetchJSON).mockResolvedValue(access)
+  render()
+  await vi.waitFor(() => expect(host.textContent).toBe(access.state))
+  expect(host.querySelector('span')?.dataset.unverifiedImage).toBe(expected)
 })

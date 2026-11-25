@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/go-chi/chi/v5"
-	"github.com/skyhook-io/radar/internal/k8s"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/skyhook-io/radar/internal/k8s"
 	authv1 "k8s.io/api/authorization/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
@@ -47,7 +47,11 @@ func TestNamedPodDebugAccess(t *testing.T) {
 				}
 				return true, review, nil
 			})
-			if got := reviewPodDebugAccess(context.Background(), client, "payments", "checkout", false); got.State != tc.want || got.Exec != tc.exec.Allowed {
+			wantImage := ""
+			if tc.exec.Allowed && (tc.want == "allowed" || tc.want == "unknown") {
+				wantImage = "operator-tools"
+			}
+			if got := reviewPodDebugAccess(context.Background(), client, "payments", "checkout", false, "operator-tools"); got.State != tc.want || got.Exec != tc.exec.Allowed || got.Image != wantImage {
 				t.Fatalf("access=%+v, want state=%s, exec=%v", got, tc.want, tc.exec.Allowed)
 			}
 			want := []authv1.ResourceAttributes{{Namespace: "payments", Name: "checkout", Verb: "create", Resource: "pods", Subresource: "exec"}, {Namespace: "payments", Name: "checkout", Verb: "update", Resource: "pods", Subresource: "ephemeralcontainers"}}
@@ -68,7 +72,7 @@ func TestHostedPodDebugChecksOnlyExec(t *testing.T) {
 		review.Status.Allowed = true
 		return true, review, nil
 	})
-	if got := reviewPodDebugAccess(context.Background(), client, "demo", "api", true); got != (podDebugAccess{State: "unavailable", Exec: true}) {
+	if got := reviewPodDebugAccess(context.Background(), client, "demo", "api", true, "never-disclose"); got != (podDebugAccess{State: "unavailable", Exec: true}) {
 		t.Fatalf("%+v", got)
 	}
 }

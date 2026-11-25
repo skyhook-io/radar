@@ -15,12 +15,12 @@ vi.mock('../../contexts/CapabilitiesContext', () => ({ useCapabilitiesContext: (
 vi.mock('../../api/client', async original => ({ ...await original<typeof import('../../api/client')>(), useResource: () => ({ data: f.pod }) }))
 vi.mock('../../api/podDebug', () => ({ usePodDebugAccess: (...args: unknown[]) => {
   f.probe(...args)
-  return {support: f.support, query: { error: f.checkError, data: {state: f.access, image: 'toolbox', exec: f.namedExec}, refetch: f.recheck }}
+  return {support: f.support, unverifiedImage: !args[4] && f.access === 'unknown' && f.namedExec && !f.checkError ? 'operator-tools' : undefined, query: { error: f.checkError, data: {state: f.access, image: 'toolbox', exec: f.namedExec}, refetch: f.recheck }}
 } }))
 vi.mock('@skyhook-io/k8s-ui', async original => ({ ...await original<typeof import('@skyhook-io/k8s-ui')>(), useOpenTerminal: () => f.open }))
 vi.mock('@skyhook-io/k8s-ui/utils/clipboard', () => ({ copyText: f.copy }))
 vi.mock('../resources/PodDebugAction', async original => ({ ...await original<typeof import('../resources/PodDebugAction')>(),
-  PodDebugAction: ({ failedContainer }: { failedContainer: string }) => <button>Start for {failedContainer}</button> }))
+  PodDebugAction: ({ failedContainer, updateUnverified }: { failedContainer: string; updateUnverified?: boolean }) => <button>{updateUnverified ? 'Review attempt for' : 'Start for'} {failedContainer}</button> }))
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 let host: HTMLDivElement, root: ReturnType<typeof createRoot>
@@ -163,4 +163,28 @@ it('names other running containers without suggesting a shell or listing stopped
   render()
   expect(host.textContent).toContain('Other running container: tools')
   expect(host.textContent).not.toContain('stopped')
+})
+
+it('offers confirmation only while the named response verifies exec, on a writable Radar', () => {
+  f.namedExec = true
+  f.access = 'unknown'
+  render()
+  expect(button('Review attempt for app')).toBeDefined()
+  f.checkError = new Error('transport failure')
+  render()
+  expect(button('Review attempt for app')).toBeUndefined()
+  f.checkError = undefined
+  f.access = 'denied'
+  render()
+  expect(button('Review attempt for app')).toBeUndefined()
+  f.access = 'unknown'
+  f.embedded = true
+  render()
+  expect(button('Review attempt for app')).toBeUndefined()
+})
+it('shows no alternative when every sibling has stopped', () => {
+  f.pod.spec.containers.push({ name: 'stopped' })
+  f.pod.status.containerStatuses.push({ name: 'stopped', state: { terminated: {} } })
+  render()
+  expect(host.textContent).not.toContain('Other running')
 })
