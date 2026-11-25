@@ -25,6 +25,10 @@ type TraefikRefVerdict struct {
 	// against the Service's port names, never its numbers.
 	PortName bool
 	Via      string // the chain/errors Middleware leading to a missing target
+	// Target: the missing chain member or errors-page Service behind a
+	// Middleware that exists. Missing stays false for that Middleware, but
+	// Traefik still drops the router.
+	Target string
 	// Refused: a Traefik that loads the route rejects this cross-namespace
 	// reference, so it never routes there.
 	Refused bool
@@ -172,6 +176,11 @@ func (a *TraefikRouteAssessor) RuleRefs(route *unstructured.Unstructured) []Trae
 			v.Refused = v.Namespace != ns && !allowCross
 			known, m, missing := a.inv.middlewarePresence(mw, ns, allowCross, map[string]*traefikVisit{})
 			v.Via = m.via
+			// via is set only when the failure is behind the named Middleware,
+			// which therefore exists.
+			if known && missing && m.via != "" {
+				v.Target, missing = m.target, false
+			}
 			decide(v, known, missing, m.reads)
 		}
 	}

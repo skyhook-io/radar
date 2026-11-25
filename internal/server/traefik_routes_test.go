@@ -138,6 +138,25 @@ func TestBuildTraefikRoutesRowsAndProblems(t *testing.T) {
 	}
 }
 
+// A chain Middleware that exists but leads to a missing member is not itself
+// missing: the member is named, and the router still fails.
+func TestBuildTraefikRoutesNamesTheMissingChainMember(t *testing.T) {
+	chain := k8s.TraefikRefVerdict{Kind: "Middleware", Namespace: "shop", Name: "secure-chain", Missing: boolp(false),
+		Target: `Middleware "shop/gone-auth"`, Via: `chain Middleware "shop/secure-chain"`,
+		Reads: []issuesapi.EvidenceRead{{Group: "traefik.io", Resource: "middlewares", Namespace: "shop", Verb: "list"}}}
+	f := tFixture{refs: map[string][]k8s.TraefikRuleRefs{"shop/ui": {{Middlewares: []k8s.TraefikRefVerdict{chain}}}}}
+	route := tRoute("shop", "ui", nil, nil, tRule("Host(`ui.example.com`)", nil, "secure-chain"))
+	rows, _, _ := buildTraefikRoutes(f.input(route))
+	if m := rows[0].Middlewares[0]; m.Exists == nil || !*m.Exists || m.MissingTarget != `Middleware "shop/gone-auth"` || !hasProblem(rows[0], "middleware_missing") {
+		t.Errorf("chain = %+v, problems %v", m, rows[0].Problems)
+	}
+	f.denyRead = true
+	rows, _, _ = buildTraefikRoutes(f.input(route))
+	if m := rows[0].Middlewares[0]; m.Exists != nil || m.MissingTarget != "" || hasProblem(rows[0], "middleware_missing") {
+		t.Errorf("a caller who can't read the evidence isn't told: %+v %v", m, rows[0].Problems)
+	}
+}
+
 func TestBuildTraefikRoutesCantTellIsNotMissing(t *testing.T) {
 	refs := map[string][]k8s.TraefikRuleRefs{"shop/ui": {{Services: []k8s.TraefikRefVerdict{{Kind: "Service", Namespace: "other", Name: "ui", Missing: boolp(true), Reads: []issuesapi.EvidenceRead{{Resource: "services", Namespace: "other", Verb: "list"}}}}}}}
 	route := tRoute("shop", "ui", nil, nil, map[string]any{"match": "Host(`ui`)", "services": []any{map[string]any{"name": "ui", "namespace": "other", "port": int64(80)}}})

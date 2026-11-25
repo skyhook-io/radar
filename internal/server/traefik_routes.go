@@ -64,6 +64,9 @@ type traefikRefFact struct {
 	Name      string `json:"name"`
 	Exists    *bool  `json:"exists"`
 	Via       string `json:"via,omitempty"`
+	// MissingTarget: the chain member or errors-page Service missing behind
+	// a Middleware that exists; the router still fails.
+	MissingTarget string `json:"missingTarget,omitempty"`
 }
 
 type traefikBackendFact struct {
@@ -181,8 +184,8 @@ func buildTraefikRoutes(in traefikRoutesInput) (rows []traefikRouteRow, uses []t
 				row.Services = []traefikBackendFact{}
 				for _, v := range ruleRefs.Middlewares {
 					fact := traefikRefFact{Namespace: v.Namespace, Name: v.Name, Exists: traefikVerdictExists(v, in)}
-					if fact.Exists != nil && !*fact.Exists {
-						fact.Via = v.Via
+					if fact.Exists != nil && (!*fact.Exists || v.Target != "") {
+						fact.Via, fact.MissingTarget = v.Via, v.Target
 					}
 					row.Middlewares = append(row.Middlewares, fact)
 				}
@@ -371,7 +374,7 @@ func traefikRowProblems(row traefikRouteRow, now time.Time) []string {
 		notReady = notReady || (s.TotalPods != nil && s.ReadyPods != nil && *s.ReadyPods == 0)
 	}
 	for _, m := range row.Middlewares {
-		missingMw = missingMw || (m.Exists != nil && !*m.Exists)
+		missingMw = missingMw || (m.Exists != nil && !*m.Exists) || m.MissingTarget != ""
 	}
 	add("backend_missing", missingBackend)
 	add("backend_port_missing", portMissing)

@@ -84,6 +84,7 @@ export function TraefikRequestPath({ facts, middlewareUse, middlewareUsePartial,
                   <Arrow />
                   <RefLink refTo={{ kind: 'middlewares', group, namespace: m.namespace, name: m.name }} onNavigate={onNavigate}>{m.name}</RefLink>
                   <Presence exists={m.exists} />
+                  {m.missingTarget && <Badge severity="error" size="sm">references missing {m.missingTarget}</Badge>}
                   {shared && shared > 1 && (
                     <span className="inline-flex items-center gap-1 text-theme-text-tertiary">
                       used by {middlewareUsePartial && <CertaintyGlyph certainty="lower_bound" title="At least this many; other routes may be in namespaces you can't see" />}{shared} routes

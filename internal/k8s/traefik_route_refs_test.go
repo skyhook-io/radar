@@ -19,7 +19,7 @@ func missingVerdicts(refs []TraefikRuleRefs) []TraefikRefVerdict {
 	var out []TraefikRefVerdict
 	for _, r := range refs {
 		for _, v := range append(append([]TraefikRefVerdict{}, r.Services...), r.Middlewares...) {
-			if v.Missing != nil && *v.Missing {
+			if (v.Missing != nil && *v.Missing) || v.Target != "" {
 				out = append(out, v)
 			}
 		}
@@ -49,7 +49,9 @@ func TestTraefikRuleRefsAgreeWithDetector(t *testing.T) {
 		if (len(missing) > 0) != reported[key] {
 			t.Errorf("%s: missing verdicts %+v, detector reported %v", key, missing, reported[key])
 		}
-		if key == "shop/via-chain" && (len(missing) != 1 || missing[0].Via != `chain Middleware "shop/secure-chain"`) {
+		// secure-chain exists; its member gone-auth is what's missing.
+		if key == "shop/via-chain" && (len(missing) != 1 || missing[0].Missing == nil || *missing[0].Missing ||
+			missing[0].Target != `Middleware "shop/gone-auth"` || missing[0].Via != `chain Middleware "shop/secure-chain"`) {
 			t.Errorf("via-chain verdict = %+v", missing)
 		}
 	}

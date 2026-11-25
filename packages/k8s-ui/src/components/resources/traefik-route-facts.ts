@@ -1,7 +1,14 @@
 // Wire types of GET /api/traefik/routes: one row per IngressRoute rule.
 // exists null and pod counts null mean Radar can't tell, never missing or zero.
 
-export interface TraefikRefFact { namespace: string; name: string; exists: boolean | null; via?: string }
+export interface TraefikRefFact {
+  namespace: string
+  name: string
+  exists: boolean | null
+  via?: string
+  /** The chain member or errors-page Service missing behind a Middleware that exists; Traefik still drops the router. Absent from older Radar. */
+  missingTarget?: string
+}
 
 export interface TraefikBackendFact {
   namespace: string
