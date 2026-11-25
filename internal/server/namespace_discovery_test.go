@@ -298,19 +298,16 @@ func TestGetUserNamespaces_ReconnectStartsANewDiscovery(t *testing.T) {
 	}
 }
 
-// A discovery sent over the previous connection that finishes after a
-// reconnect answers its own request but never replaces the entry, or the
-// verdicts, cached for the new connection.
 func TestGetUserNamespaces_LateDiscoveryKeepsTheNewConnectionsEntry(t *testing.T) {
 	gate := make(chan struct{})
 	old := newDiscoveryAPI(t, gate, allowOnly())
 	old.install(t)
 	s := newAuthServer(auth.Config{Mode: "proxy"})
 	user := &auth.User{Username: "reader"}
-	late := make(chan []string, 1)
+	late := make(chan bool, 1)
 	go func() {
-		got, _ := s.getUserNamespacesWithStatus(requestWithUser(http.MethodGet, "/api/resources/pods", user), nil)
-		late <- got
+		got, failed := s.getUserNamespacesWithStatus(requestWithUser(http.MethodGet, "/api/resources/pods", user), nil)
+		late <- failed && got != nil && len(got) == 0
 	}()
 	old.awaitDiscovery(t)
 
@@ -321,8 +318,8 @@ func TestGetUserNamespaces_LateDiscoveryKeepsTheNewConnectionsEntry(t *testing.T
 	}
 	s.permCache.Get(user.Username, user.Groups).SetCanI("list", "", "nodes", "", false)
 	close(gate)
-	if got := <-late; got != nil {
-		t.Fatalf("the earlier request got %#v, want its own discovery's every-namespace answer", got)
+	if !<-late {
+		t.Fatal("the superseded discovery did not fail closed")
 	}
 
 	cached := s.permCache.Get(user.Username, user.Groups)

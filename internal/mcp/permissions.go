@@ -129,10 +129,9 @@ var (
 
 func getPermCache() *pkgauth.PermissionCache {
 	mcpPermCacheOnce.Do(func() {
-		// Stamp entries with the current K8s context — a request mid-context-
-		// switch can't be authorized by the previous cluster's RBAC even if
-		// the OnContextSwitch invalidation hasn't fired yet.
-		mcpPermCache = pkgauth.NewPermissionCache().WithContextName(k8s.GetContextName)
+		mcpPermCache = pkgauth.NewPermissionCache().WithConnectionKey(func() string {
+			return strconv.FormatUint(k8s.Current().ClientGeneration(), 10)
+		})
 		// New cluster ⇒ stale RBAC: drop everything we cached for the old one.
 		k8s.OnContextSwitch(func(_ string) {
 			mcpPermCache.Invalidate()
@@ -170,9 +169,8 @@ func resolveUserPermsDecision(ctx context.Context) (*pkgauth.User, *pkgauth.User
 		// Empty (not nil) AllowedNamespaces means "no access"; nil would mean cluster-admin.
 		return user, &pkgauth.UserPermissions{AllowedNamespaces: []string{}}, false
 	}
-	perms, ok := cache.Resolve(ctx, user.Username, user.Groups, strconv.FormatUint(generation, 10), func(ctx context.Context) (*pkgauth.UserPermissions, bool) {
-		perms := discoverUserPermissions(ctx, client, user)
-		return perms, k8s.Current().ClientGeneration() == generation
+	perms, ok := cache.Resolve(ctx, user.Username, user.Groups, strconv.FormatUint(generation, 10), func(ctx context.Context) *pkgauth.UserPermissions {
+		return discoverUserPermissions(ctx, client, user)
 	})
 	if !ok {
 		return user, &pkgauth.UserPermissions{AllowedNamespaces: []string{}}, false
@@ -411,16 +409,20 @@ func canReadInNamespace(ctx context.Context, group, resource, namespace, verb st
 }
 
 func canReadInNamespaceDecision(ctx context.Context, group, resource, namespace, verb string) (bool, bool) {
-	user, perms := resolveUserPerms(ctx)
+	user, perms, authoritative := resolveUserPermsDecision(ctx)
 	if user == nil {
 		return true, true
+	}
+	if !authoritative {
+		perms = nil
 	}
 	// Keyed by connection generation, not context name: a reconnect under the
 	// same name can reach a different cluster, and the review must run on the
 	// client its key names.
 	conn := k8s.Current()
 	client, generation := conn.Client(), conn.ClientGeneration()
-	return accessReviews.Decide(ctx, user, perms, strconv.FormatUint(generation, 10), verb, group, resource, namespace, func(ctx context.Context) (bool, bool) {
+	question := pkgauth.AccessReviewQuestion{Verb: verb, Group: group, Resource: resource, Namespace: namespace}
+	return accessReviews.Decide(ctx, user, perms, strconv.FormatUint(generation, 10), question, func(ctx context.Context) (bool, bool) {
 		if client == nil {
 			log.Printf("[mcp] canReadInNamespace: no K8s client, denying %s on %s/%s in %q for %s", k8s.SanitizeForLog(verb), k8s.SanitizeForLog(group), k8s.SanitizeForLog(resource), k8s.SanitizeForLog(namespace), k8s.SanitizeForLog(user.Username))
 			return false, false

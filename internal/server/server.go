@@ -375,12 +375,7 @@ func New(cfg Config) *Server {
 
 	// Initialize auth components when auth is enabled
 	if s.authConfig.Enabled() {
-		// Stamp cache entries with the current K8s context so an in-flight
-		// request mid-context-switch can't use the previous cluster's
-		// AllowedNamespaces / canI results to authorize the new cluster's
-		// reads. Without the stamp, the window between PerformContextSwitch
-		// step 2 (client swap) and the post-switch invalidation is exploitable.
-		s.permCache = auth.NewPermissionCache().WithContextName(k8s.GetContextName)
+		s.permCache = auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)
 
 		if s.authConfig.Mode == "oidc" {
 			// Validate required OIDC fields before attempting provider discovery
@@ -1965,7 +1960,8 @@ func (s *Server) canReadUserDecision(ctx context.Context, user *auth.User, group
 	// client its key names.
 	conn := k8s.Current()
 	client, generation := conn.Client(), conn.ClientGeneration()
-	return s.accessReviews.Decide(ctx, user, perms, strconv.FormatUint(generation, 10), verb, group, resource, namespace, func(ctx context.Context) (bool, bool) {
+	question := pkgauth.AccessReviewQuestion{Verb: verb, Group: group, Resource: resource, Namespace: namespace}
+	return s.accessReviews.Decide(ctx, user, perms, strconv.FormatUint(generation, 10), question, func(ctx context.Context) (bool, bool) {
 		// A SubjectAccessReview is a POST, which the client's request deadlines
 		// leave unbounded.
 		ctx, cancel := context.WithTimeout(ctx, accessReviewTimeout)
@@ -1984,7 +1980,7 @@ func (s *Server) canReadUserDecision(ctx context.Context, user *auth.User, group
 // canReadUser wraps this behind the shared cache. The SSE change authorizer
 // calls it directly instead: reusing the shared cache there would let a decision
 // already up to the cache TTL old be re-cached under the SSE memo's own TTL,
-// stacking staleness — and the shared entry's context stamping wouldn't help,
+// stacking staleness — and the shared entry's connection stamping wouldn't help,
 // because the SSE memo, not the shared cache, is what a long-lived stream reads.
 // A fresh SAR keeps the SSE staleness bounded to that memo's TTL alone.
 func (s *Server) canReadUserSAR(ctx context.Context, user *auth.User, group, resource, namespace, verb string) (allowed bool, authoritative bool) {
@@ -5907,6 +5903,10 @@ func (s *Server) getClientSafetySnapshotForRequest(r *http.Request) (kubernetes.
 	return conn.ClientInterface(), conn.ContextBinding()
 }
 
+func currentPermissionConnection() string {
+	return strconv.FormatUint(k8s.Current().ClientGeneration(), 10)
+}
+
 // getUserNamespaces returns namespace filtering for the current user.
 // When auth is disabled, returns the requested namespaces unchanged.
 // When auth is enabled, intersects with the user's allowed namespaces.
@@ -5938,9 +5938,8 @@ func (s *Server) getUserNamespacesWithStatus(r *http.Request, requested []string
 			return []string{}, true // fail-closed: cannot verify permissions
 		}
 		var ok bool
-		perms, ok = s.permCache.Resolve(r.Context(), user.Username, user.Groups, strconv.FormatUint(generation, 10), func(ctx context.Context) (*auth.UserPermissions, bool) {
-			perms := discoverUserPermissions(ctx, client, user)
-			return perms, k8s.Current().ClientGeneration() == generation
+		perms, ok = s.permCache.Resolve(r.Context(), user.Username, user.Groups, strconv.FormatUint(generation, 10), func(ctx context.Context) *auth.UserPermissions {
+			return discoverUserPermissions(ctx, client, user)
 		})
 		if !ok {
 			return []string{}, true // fail-closed: no access on discovery error
@@ -5953,7 +5952,6 @@ func (s *Server) getUserNamespacesWithStatus(r *http.Request, requested []string
 // discoverUserPermissions computes the user's namespace access on client, or
 // returns nil when discovery fails.
 func discoverUserPermissions(ctx context.Context, client *kubernetes.Clientset, user *auth.User) *auth.UserPermissions {
-	// Get all namespace names from cache
 	var allNamespaces []string
 	if cache := k8s.GetResourceCache(); cache != nil {
 		if nsLister := cache.Namespaces(); nsLister != nil {
@@ -6080,7 +6078,7 @@ var accessReviewTimeout = 10 * time.Second
 // which leaves SSE connections open (they receive a context_changed frame, not
 // a disconnect) — can't authorize new-cluster frames with the previous
 // cluster's decisions; post-switch keys miss and re-run against the new
-// apiserver, mirroring the shared cache's own context stamping. nil user
+// apiserver, mirroring the shared cache's own connection stamping. nil user
 // (auth off) is a passthrough.
 func (s *Server) newSSEChangeAuthorizer(ctx context.Context, user *auth.User) func(group, resource, namespace, verb string) bool {
 	if user == nil || s.permCache == nil {

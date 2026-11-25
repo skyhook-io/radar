@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -32,7 +33,7 @@ func waitForReviewers(t *testing.T, a *AccessReviews, n int) {
 var reviewer = &User{Username: "reader", Groups: []string{"viewers"}}
 
 func decide(a *AccessReviews, ctx context.Context, perms *UserPermissions, review func(context.Context) (bool, bool)) (bool, bool) {
-	return a.Decide(ctx, reviewer, perms, "1", "list", "", "nodes", "", review)
+	return a.Decide(ctx, reviewer, perms, "1", AccessReviewQuestion{Verb: "list", Resource: "nodes"}, review)
 }
 
 // heldReview answers allowed once release closes, counting its runs.
@@ -81,11 +82,12 @@ func TestAccessReviews_ServesACachedVerdict(t *testing.T) {
 	var a AccessReviews
 	perms := &UserPermissions{}
 	perms.SetCanI("list", "", "nodes", "", false)
+	var called bool
 	allowed, decided := decide(&a, context.Background(), perms, func(context.Context) (bool, bool) {
-		t.Fatal("reviewed a cached verdict")
+		called = true
 		return true, true
 	})
-	if allowed || !decided {
+	if called || allowed || !decided {
 		t.Fatalf("allowed=%v decided=%v, want the cached denial", allowed, decided)
 	}
 }
@@ -193,12 +195,14 @@ func TestAccessReviews_AbandonedReviewNeverOverwritesItsSuccessor(t *testing.T) 
 // whose own context allows the wait.
 func TestAccessReviews_ReviewKeepsTheCallersBudget(t *testing.T) {
 	var a AccessReviews
+	var hasDeadline bool
 	allowed, decided := decide(&a, context.Background(), &UserPermissions{}, func(ctx context.Context) (bool, bool) {
-		if _, ok := ctx.Deadline(); ok {
-			t.Error("the shared review carries a deadline its callers didn't set")
-		}
+		_, hasDeadline = ctx.Deadline()
 		return true, true
 	})
+	if hasDeadline {
+		t.Fatal("the shared review carries a deadline its callers didn't set")
+	}
 	if !allowed || !decided {
 		t.Fatalf("allowed=%v decided=%v, want allowed", allowed, decided)
 	}
@@ -251,6 +255,7 @@ func TestAccessReviews_FailuresFailClosedAndAreNotRecorded(t *testing.T) {
 		name   string
 		review func(context.Context) (bool, bool)
 	}{
+		{"non-authoritative allow", func(context.Context) (bool, bool) { return true, false }},
 		{"unreachable", func(context.Context) (bool, bool) { return false, false }},
 		{"panic", func(context.Context) (bool, bool) { panic("review exploded") }},
 	} {
@@ -333,7 +338,7 @@ func TestAccessReviews_DistinctConnectionsAndIdentitiesDoNotShare(t *testing.T) 
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
-					a.Decide(context.Background(), c.user, nil, c.connection, "list", "", "nodes", "", heldReview(release, &calls))
+					a.Decide(context.Background(), c.user, nil, c.connection, AccessReviewQuestion{Verb: "list", Resource: "nodes"}, heldReview(release, &calls))
 				}()
 				waitForReviewers(t, &a, i+1)
 			}
@@ -343,5 +348,42 @@ func TestAccessReviews_DistinctConnectionsAndIdentitiesDoNotShare(t *testing.T) 
 				t.Fatalf("reviews = %d, want one each", c)
 			}
 		})
+	}
+}
+
+func TestAccessReviews_AlreadyCanceledCallerFailsClosed(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var a AccessReviews
+		perms := &UserPermissions{}
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		for _, warm := range []bool{false, true} {
+			if warm {
+				perms.SetCanI("list", "", "nodes", "", true)
+			}
+			var calls atomic.Int32
+			allowed, decided := decide(&a, ctx, perms, func(context.Context) (bool, bool) {
+				calls.Add(1)
+				return true, true
+			})
+			synctest.Wait()
+			if allowed || decided || calls.Load() != 0 {
+				t.Fatalf("warm=%v: canceled caller got %v, %v or started review", warm, allowed, decided)
+			}
+		}
+	})
+}
+
+func TestFlight_CanceledCallerWithReadyResult(t *testing.T) {
+	var mu sync.Mutex
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	done := make(chan struct{})
+	close(done)
+	for range 100 {
+		f := flight[bool]{done: done, waiters: 1, result: true}
+		if got, ok := f.await(ctx, &mu, nil); got || ok || f.waiters != 0 {
+			t.Fatalf("canceled caller got %v, %v; waiters = %d", got, ok, f.waiters)
+		}
 	}
 }

@@ -17,8 +17,19 @@ type AccessReviews struct {
 // when nothing is cached for the identity) and the identity, connection and
 // question it asks.
 type reviewKey struct {
-	perms *UserPermissions
-	key   string
+	perms      *UserPermissions
+	identity   string
+	connection string
+	question   AccessReviewQuestion
+}
+
+// AccessReviewQuestion identifies an exact resource check. An empty namespace
+// asks about the cluster-wide operation.
+type AccessReviewQuestion struct {
+	Verb      string
+	Group     string
+	Resource  string
+	Namespace string
 }
 
 type reviewVerdict struct{ allowed, authoritative bool }
@@ -38,32 +49,32 @@ type reviewVerdict struct{ allowed, authoritative bool }
 // answer given before a revocation can't outlive the entry it was decided
 // under. perms is nil when nothing is cached for the identity; such callers
 // share reviews only with each other, and record nothing.
-func (a *AccessReviews) Decide(ctx context.Context, user *User, perms *UserPermissions, connection, verb, group, resource, namespace string, review func(context.Context) (allowed, authoritative bool)) (allowed, authoritative bool) {
+func (a *AccessReviews) Decide(ctx context.Context, user *User, perms *UserPermissions, connection string, question AccessReviewQuestion, review func(context.Context) (allowed, authoritative bool)) (allowed, authoritative bool) {
+	if ctx.Err() != nil {
+		return false, false
+	}
 	if perms != nil {
-		if v, ok := perms.CanI(verb, group, resource, namespace); ok {
+		if v, ok := perms.CanI(question.Verb, question.Group, question.Resource, question.Namespace); ok {
 			return v, true
 		}
 	}
-	b := []byte(cacheKey(user.Username, user.Groups))
-	for _, part := range []string{connection, verb, group, resource, namespace} {
-		b = appendKeyPart(b, part)
-	}
-	k := reviewKey{perms: perms, key: string(b)}
-
+	k := reviewKey{perms: perms, identity: cacheKey(user.Username, user.Groups), connection: connection, question: question}
 	a.mu.Lock()
+	if ctx.Err() != nil {
+		a.mu.Unlock()
+		return false, false
+	}
 	if perms != nil {
-		// A review that finished since the check above recorded its verdict
-		// before leaving the index.
-		if v, ok := perms.CanI(verb, group, resource, namespace); ok {
+		if v, ok := perms.CanI(question.Verb, question.Group, question.Resource, question.Namespace); ok {
 			a.mu.Unlock()
 			return v, true
 		}
 	}
 	f := a.flights[k]
 	if f == nil {
-		f = startFlight(ctx, &a.mu, "access review", func(ctx context.Context) reviewVerdict {
+		f = startFlight(ctx, &a.mu, "access review", cancelWhenIdle, func(ctx context.Context) reviewVerdict {
 			allowed, authoritative := review(ctx)
-			return reviewVerdict{allowed, authoritative}
+			return reviewVerdict{allowed && authoritative, authoritative}
 		}, func(f *flight[reviewVerdict], v reviewVerdict) reviewVerdict {
 			// Only a real apiserver verdict is cached: a transient failure
 			// fails this check closed but must not deny the tuple for the
@@ -71,7 +82,7 @@ func (a *AccessReviews) Decide(ctx context.Context, user *User, perms *UserPermi
 			// a successor recorded a newer verdict in the same entry, so only
 			// the key's current review records.
 			if v.authoritative && perms != nil && a.flights[k] == f {
-				perms.SetCanI(verb, group, resource, namespace, v.allowed)
+				perms.SetCanI(question.Verb, question.Group, question.Resource, question.Namespace, v.allowed)
 			}
 			a.detachLocked(k, f)
 			return v

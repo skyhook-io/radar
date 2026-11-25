@@ -3,11 +3,13 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	authorizationv1 "k8s.io/api/authorization/v1"
@@ -166,30 +168,71 @@ func TestCanReadInNamespaceDecision_CallerDeadlineEndsTheWait(t *testing.T) {
 	}
 }
 
-// A review that takes longer than REST's cap still answers a call whose own
-// context allows the wait: sharing reviews added no budget of its own.
-func TestCanReadInNamespaceDecision_SlowAllowWithinTheCallersDeadline(t *testing.T) {
-	const delay = 12 * time.Second
-	client := newReviewServer(t, func(authorizationv1.ResourceAttributes) bool { return true }).client
-	previous := k8s.SetTestClient(client)
-	t.Cleanup(func() { k8s.SetTestClient(previous) })
-	userCtx := withTestUserPerms(t, "reader", nil, nil)
+func TestCanReadInNamespaceDecision_ReviewHasNoShorterDeadlineThanCaller(t *testing.T) {
+	userCtx, _ := accessReviewUser(t, func(authorizationv1.ResourceAttributes) bool { return true })
+	ctx, cancel := context.WithTimeout(userCtx, time.Minute)
+	defer cancel()
+	callerDeadline, _ := ctx.Deadline()
 	original := subjectCanI
+	var called bool
+	var reviewDeadline time.Time
 	subjectCanI = func(ctx context.Context, _ kubernetes.Interface, _ string, _ []string, _, _, _, _ string) (bool, error) {
-		select {
-		case <-time.After(delay):
-			return true, nil
-		case <-ctx.Done():
-			return false, ctx.Err()
-		}
+		called = true
+		reviewDeadline, _ = ctx.Deadline()
+		return true, nil
 	}
 	t.Cleanup(func() { subjectCanI = original })
 
-	ctx, cancel := context.WithTimeout(userCtx, delay+10*time.Second)
-	defer cancel()
 	if allowed, decided := canReadInNamespaceDecision(ctx, "", "secrets", "team", "get"); !allowed || !decided {
-		t.Fatalf("allowed=%v decided=%v, want the slow allow", allowed, decided)
+		t.Fatalf("allowed=%v decided=%v, want allowed", allowed, decided)
 	}
+	if !called {
+		t.Fatal("the exact review was skipped")
+	}
+	if !reviewDeadline.IsZero() && reviewDeadline.Before(callerDeadline) {
+		t.Fatalf("review deadline %v precedes caller deadline %v", reviewDeadline, callerDeadline)
+	}
+}
+
+func TestCanReadInNamespaceDecision_FailedDiscoverySharesReview(t *testing.T) {
+	client, err := kubernetes.NewForConfig(&rest.Config{
+		Host: "https://discovery.invalid",
+		QPS:  -1,
+		Transport: execRoundTripper(func(*http.Request) (*http.Response, error) {
+			return nil, errors.New("discovery unavailable")
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := discoveryAPI{client: client}
+	api.install(t)
+	ctx := userContext("reader")
+	original := subjectCanI
+	t.Cleanup(func() { subjectCanI = original })
+	synctest.Test(t, func(t *testing.T) {
+		release := make(chan struct{})
+		var calls int
+		subjectCanI = func(context.Context, kubernetes.Interface, string, []string, string, string, string, string) (bool, error) {
+			calls++
+			<-release
+			return true, nil
+		}
+		for range 2 {
+			go func() {
+				allowed, decided := canReadInNamespaceDecision(ctx, "", "secrets", "team", "get")
+				if !allowed || !decided {
+					t.Errorf("allowed=%v decided=%v, want the exact review's allow", allowed, decided)
+				}
+			}()
+			synctest.Wait()
+		}
+		close(release)
+		synctest.Wait()
+		if calls != 1 || getPermCache().Get("reader", nil) != nil {
+			t.Fatalf("reviews = %d, want 1 and no cached permissions", calls)
+		}
+	})
 }
 
 // A call holding the entry that replaced an expired one never joins a review

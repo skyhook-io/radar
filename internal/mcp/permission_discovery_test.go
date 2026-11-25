@@ -293,17 +293,14 @@ func TestResolveUserPerms_ReconnectStartsANewDiscovery(t *testing.T) {
 	}
 }
 
-// A discovery sent over the previous connection that finishes after a
-// reconnect answers its own tool call but never replaces the entry, or the
-// verdicts, cached for the new connection.
 func TestResolveUserPerms_LateDiscoveryKeepsTheNewConnectionsEntry(t *testing.T) {
 	gate := make(chan struct{})
 	old := newDiscoveryAPI(t, gate, allowOnly())
 	old.install(t)
-	late := make(chan *pkgauth.UserPermissions, 1)
+	late := make(chan bool, 1)
 	go func() {
-		_, perms := resolveUserPerms(userContext("reader"))
-		late <- perms
+		_, perms, failed := resolveUserPermsWithStatus(userContext("reader"))
+		late <- failed && perms != nil && perms.AllowedNamespaces != nil && len(perms.AllowedNamespaces) == 0
 	}()
 	old.awaitDiscovery(t)
 
@@ -315,8 +312,8 @@ func TestResolveUserPerms_LateDiscoveryKeepsTheNewConnectionsEntry(t *testing.T)
 	}
 	perms.SetCanI("list", "", "nodes", "", false)
 	close(gate)
-	if got := <-late; got == nil || got.AllowedNamespaces != nil {
-		t.Fatal("the earlier call didn't get its own discovery's every-namespace answer")
+	if !<-late {
+		t.Fatal("the superseded discovery did not fail closed")
 	}
 
 	cached := getPermCache().Get("reader", nil)
