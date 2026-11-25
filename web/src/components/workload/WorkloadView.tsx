@@ -113,6 +113,7 @@ import { WorkloadCostTab } from '../cost/WorkloadCostTab'
 import { isOpenCostWorkloadKind } from '../cost/kinds'
 import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
 import { useTrafficAvailable } from '../../api/traffic'
+import { useIssueExpansion, useIssueRowNotes } from '../issues/useIssueExpansion'
 import { isNotFoundError, useResourceAudit, useResourceIssues, useSubjectIssues, useRadarFeature, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
 import { AuditAlerts, getRadarUpgradeRequirement, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows, getDefaultLogContainerName, getLogContainerNames, getInitContainerNames } from '@skyhook-io/k8s-ui'
 import { WorkloadLogsTab } from '../dock/WorkloadLogsTab'
@@ -925,6 +926,11 @@ export function WorkloadView({
     rest.active !== false && !useReportCoverage && !isNotFoundError(resourceError), issueObservation)
   const subjectIssues = useSubjectIssues(useReportCoverage ? { kind: isCoreNode ? 'Node' : 'CronJob', group: isCoreNode ? '' : 'batch', namespace, name, uid: resource?.metadata?.uid } : null, useReportCoverage && Boolean(resource))
   const liveIssues = useReportCoverage ? subjectIssues.data?.issues : ordinaryIssues.data
+  const issueExpansion = useIssueExpansion(() => {
+    if (useReportCoverage) void subjectIssues.refetch()
+    else void ordinaryIssues.refetch()
+  })
+  const issueRowNotes = useIssueRowNotes()
   const issuesPending = useReportCoverage ? subjectIssues.isPending : ordinaryIssues.isPending
   const schedulingEvidence = isCronJob && subjectIssues.data?.scheduling_report?.uid === resource?.metadata?.uid ? subjectIssues.data?.scheduling_report : undefined
   const certificateEvidence = isCoreNode && subjectIssues.data?.node_certificate_report?.uid === resource?.metadata?.uid ? subjectIssues.data?.node_certificate_report : undefined
@@ -1474,6 +1480,11 @@ export function WorkloadView({
             compact={!expanded}
             subjectResource={{ kind: apiKind, namespace, name, group: identityGroup }}
             onResourceClick={openIssueResource}
+            onOpenIssueChange={issueExpansion.onOpenIssueChange}
+            expandedIssue={issueExpansion.expandedIssue}
+            timelineLinks={issueExpansion.timelineLinks}
+            rowChanges={issueRowNotes.rowChanges}
+            onVisibleIssuesChange={issueRowNotes.onVisibleIssuesChange}
           />
           </div>
         )}

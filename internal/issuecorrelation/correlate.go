@@ -170,7 +170,7 @@ func Correlate(ctx context.Context, iss issuesapi.Issue, opts Options, access Ac
 	c := &run{ctx: ctx, iss: iss, opts: opts, access: access, unknown: map[issuesapi.CorrelationUnknownReason][]issuesapi.UncheckedKind{}}
 	res := c.correlate()
 	res.Eligible = true
-	res.History = mergeHistory(res.History, c.watchHistory)
+	res.History = mergeHistory(mergeHistory(res.History, c.watchHistory), c.objectWatchHistory)
 	res.Unknown = c.primaryUnknown()
 	if c.iss.IssueTiming != iss.IssueTiming || c.iss.IssueTimingBasis != iss.IssueTimingBasis || c.iss.TimingSummary != iss.TimingSummary {
 		res.Timing = Timing{Changed: true, IssueTiming: c.iss.IssueTiming, IssueTimingBasis: c.iss.IssueTimingBasis, TimingSummary: c.iss.TimingSummary}
@@ -187,6 +187,9 @@ type run struct {
 	// watchHistory is the coverage lost to kinds Radar started watching
 	// after the window began.
 	watchHistory issuesapi.HistoryCoverage
+	// objectWatchHistory is the same for the subject workload's kind and its
+	// sources' kinds, which historyCoversObjects can still clear.
+	objectWatchHistory issuesapi.HistoryCoverage
 }
 
 func (c *run) correlate() Result {
@@ -237,7 +240,7 @@ func (c *run) correlate() Result {
 	// all are unknown, not "no changes".
 	// Kinds watched late so far are the subject's and its sources'; the
 	// admission policy's are added below.
-	historyComplete := historyCoversObjects(obj, refs, iss.Namespace, result.History) && !c.watchHistory.Incomplete
+	historyComplete := historyCoversObjects(obj, refs, iss.Namespace, mergeHistory(result.History, c.objectWatchHistory)) && !c.watchHistory.Incomplete
 	if subjectTracked && !historyComplete {
 		c.addHistoryUnknown(iss)
 	}
@@ -340,11 +343,11 @@ func (c *run) subjectChanges() (result meaningfulchanges.RecentResult, obj any, 
 		if _, ok := decided[ref.Kind]; !ok {
 			decided[ref.Kind] = c.allowed(ref.Kind, "", iss.Namespace)
 			if decided[ref.Kind] && c.opts.CheckCoverage {
-				c.checkCollected(ref.Kind, "", iss.Namespace)
+				c.collectedObject(ref.Kind, "", iss.Namespace)
 			}
 		}
 	}
-	subjectReady := c.collected(iss.Kind, iss.Group, iss.Namespace)
+	subjectReady := c.collectedObject(iss.Kind, iss.Group, iss.Namespace)
 	result, withheld, err := meaningfulchanges.RecentForWorkloadSourceRefs(c.ctx, refs, iss.Kind, iss.Namespace, iss.Name, q, c.sourceFilter(decided))
 	return result, obj, refs, sourcesKnown && subjectReady && !withheld, err
 }

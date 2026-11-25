@@ -8,34 +8,49 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
-// checkCollected records why Radar holds no changes for a source's kind in
-// namespace ("" for a cluster-scoped kind): it doesn't collect the kind, or
-// not in that namespace, or it is still loading it. An empty answer about
-// such a source means nothing.
-func (c *run) checkCollected(kind, group, namespace string) {
-	c.collected(kind, group, namespace)
-}
-
-// collected is checkCollected that also reports whether the kind is ready:
+// collected records why Radar holds no changes for kind in namespace ("" for
+// a cluster-scoped kind): it doesn't collect the kind, or not in that
+// namespace, or it is still loading it. It reports whether the kind is ready:
 // collected in namespace and synced. For a coverage-checking caller, a kind
 // Radar started watching after the window began is not ready either: its
 // earlier changes were never seen, so the history is incomplete from then.
 func (c *run) collected(kind, group, namespace string) bool {
-	if reason, ok := collectionGap(kind, group, namespace); ok {
-		c.addUnknown(reason, group, kind)
-		return false
-	}
-	if !c.opts.CheckCoverage {
-		return true
-	}
-	if since, ok := watchedSince(kind, group, namespace); ok && since.After(c.opts.Window.From) {
-		c.watchHistory = mergeHistory(c.watchHistory, issuesapi.HistoryCoverage{
-			Incomplete: true, CompleteSince: roundUpToSecond(since).UTC(), Reasons: []issuesapi.HistoryGapReason{issuesapi.HistoryObservationStartedLate},
-		})
+	ready, late := c.collectedFor(kind, group, namespace)
+	if late.Incomplete {
+		c.watchHistory = mergeHistory(c.watchHistory, late)
 		c.addUnknown(issuesapi.CorrelationUnknownHistoryIncomplete, group, kind)
 		return false
 	}
-	return true
+	return ready
+}
+
+// collectedObject is collected for the subject workload's kind and its
+// ConfigMaps' and Secrets' kinds. A kind watched late is recorded in
+// objectWatchHistory and left to historyCoversObjects: an object created
+// after the watch began has had every change seen.
+func (c *run) collectedObject(kind, group, namespace string) bool {
+	ready, late := c.collectedFor(kind, group, namespace)
+	c.objectWatchHistory = mergeHistory(c.objectWatchHistory, late)
+	return ready
+}
+
+// collectedFor reports whether kind is collected in namespace and synced,
+// and, for a coverage-checking caller, the history lost when Radar started
+// watching it after the window began.
+func (c *run) collectedFor(kind, group, namespace string) (ready bool, late issuesapi.HistoryCoverage) {
+	if reason, ok := collectionGap(kind, group, namespace); ok {
+		c.addUnknown(reason, group, kind)
+		return false, late
+	}
+	if !c.opts.CheckCoverage {
+		return true, late
+	}
+	if since, ok := watchedSince(kind, group, namespace); ok && since.After(c.opts.Window.From) {
+		late = issuesapi.HistoryCoverage{
+			Incomplete: true, CompleteSince: roundUpToSecond(since).UTC(), Reasons: []issuesapi.HistoryGapReason{issuesapi.HistoryObservationStartedLate},
+		}
+	}
+	return true, late
 }
 
 // watchedSince is when Radar's change history for kind in namespace becomes
