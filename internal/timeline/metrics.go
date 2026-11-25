@@ -76,12 +76,12 @@ func newEventMetrics() *EventMetrics {
 
 // GetMetrics returns the current store binding's metrics.
 func GetMetrics() *EventMetrics {
-	return CaptureStore().metrics.Load()
+	return CaptureStore().metrics
 }
 
 // IncrementReceived increments the counter for received events by kind
 func (b *StoreBinding) IncrementReceived(kind string) {
-	m := b.metrics.Load()
+	m := b.metrics
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.EventsReceived[kind]++
@@ -89,7 +89,7 @@ func (b *StoreBinding) IncrementReceived(kind string) {
 
 // IncrementRecorded increments the counter for recorded events by kind
 func (b *StoreBinding) IncrementRecorded(kind string) {
-	m := b.metrics.Load()
+	m := b.metrics
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.EventsRecorded[kind]++
@@ -121,7 +121,7 @@ func RecordDrop(kind, namespace, name, reason, operation, clusterContext string)
 }
 
 func (b *StoreBinding) RecordDrop(kind, namespace, name, reason, operation, clusterContext string) {
-	m := b.metrics.Load()
+	m := b.metrics
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -214,11 +214,6 @@ func DropsForCluster(drops []DropRecord, clusterContext string) []DropRecord {
 		}
 	}
 	return out
-}
-
-// ResetMetrics replaces the current binding's metrics while preserving its store for tests.
-func ResetMetrics() {
-	CaptureStore().metrics.Store(newEventMetrics())
 }
 
 // MetricsSnapshot is a JSON-serializable snapshot of metrics

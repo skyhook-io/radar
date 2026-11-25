@@ -329,15 +329,13 @@ func HistoryEvictedThrough() time.Time {
 type StoreBinding struct {
 	retired                         atomic.Bool
 	store                           EventStore
-	metrics                         atomic.Pointer[EventMetrics]
+	metrics                         *EventMetrics
 	deletedWhileUnavailable         map[string]struct{}
 	deletedWhileUnavailableOverflow bool
 }
 
 func newStoreBinding() *StoreBinding {
-	b := &StoreBinding{}
-	b.metrics.Store(newEventMetrics())
-	return b
+	return &StoreBinding{metrics: newEventMetrics()}
 }
 
 func CaptureStore() *StoreBinding {

@@ -54,23 +54,6 @@ func TestStoreBindingMetricsAcrossReset(t *testing.T) {
 	}
 }
 
-func TestResetMetricsPreservesStore(t *testing.T) {
-	ResetStore()
-	t.Cleanup(ResetStore)
-	if err := InitStore(StoreConfig{Type: StoreTypeMemory}); err != nil {
-		t.Fatal(err)
-	}
-	store, oldMetrics := GetStore(), GetMetrics()
-	CaptureStore().IncrementReceived("Pod")
-	ResetMetrics()
-	if GetStore() != store {
-		t.Fatal("ResetMetrics replaced the store")
-	}
-	if got := GetMetrics(); got == oldMetrics || len(got.GetSnapshot().Counters.Received) != 0 {
-		t.Fatalf("ResetMetrics did not replace the metrics with a fresh instance: %+v", got.GetSnapshot())
-	}
-}
-
 func TestDropsForCluster_FiltersStaleClusterDrops(t *testing.T) {
 	ResetStore()
 	t.Cleanup(ResetStore)
