@@ -277,6 +277,7 @@ interface TimelineViewProps {
   initialTimeRange?: TimeRange
   requiresNamespaceFilter?: boolean
   availableNamespaces?: { name: string }[]
+  availableNamespacesError?: string
   onNamespaceSelect?: (ns: string) => void
   onOpenDiagnostics?: () => void
 }
@@ -297,7 +298,7 @@ export function resolveApplicationTimelineScope(searchParams: URLSearchParams, n
   }
 }
 
-export function TimelineView({ namespaces, onResourceClick, initialViewMode, initialFilter, initialTimeRange, requiresNamespaceFilter, availableNamespaces, onNamespaceSelect, onOpenDiagnostics }: TimelineViewProps) {
+export function TimelineView({ namespaces, onResourceClick, initialViewMode, initialFilter, initialTimeRange, requiresNamespaceFilter, availableNamespaces, availableNamespacesError, onNamespaceSelect, onOpenDiagnostics }: TimelineViewProps) {
   // URL is the source of truth for every control below (deep-linkable +
   // back/forward-restorable). Read on mount, written on user change.
   const [searchParams, setSearchParams] = useSearchParams()
@@ -951,6 +952,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
                 <div className="relative">
                   <LargeClusterNamespacePicker
                     namespaces={availableNamespaces}
+                    error={availableNamespacesError}
                     onSelect={(ns) => onNamespaceSelect?.(ns)}
                   />
                 </div>
@@ -1058,6 +1060,8 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
       topology={stableTopology}
       appScopeLoading={focusedAppLoading}
       onOpenDiagnostics={onOpenDiagnostics}
+      selectedEventId={selectedEventId}
+      onSelectEvent={setSelectedEventId}
     />
   )
 }

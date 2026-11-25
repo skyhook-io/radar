@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/resourceid"
+	"github.com/skyhook-io/radar/pkg/workloadrestart"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -22,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/yaml"
@@ -37,20 +39,25 @@ type WorkloadRevision struct {
 	IsCurrent bool      `json:"isCurrent"`
 	Replicas  int64     `json:"replicas"`
 	Template  string    `json:"template,omitempty"` // Pod template spec as YAML (for revision diff)
-	// Rollouts only: mid-canary IsCurrent (rolling out) and IsStable (serving
-	// traffic, what an abort reverts to) are different revisions.
+	// Rollouts only: IsStable identifies the abort target, regardless of traffic weight.
 	IsStable bool   `json:"isStable,omitempty"`
 	PodHash  string `json:"podHash,omitempty"`
 	// ReadyReplicas is this revision's own ready pods. Nil when the kind has no
 	// per-revision count and the workload's pods may span revisions.
 	ReadyReplicas *int64 `json:"readyReplicas,omitempty"`
-	// Serving says whether this revision's pods are running and ready. Nil means
+	// Serving reports the active Service selector for a blue-green Rollout, or
+	// whether a native workload revision has ready pods. Nil means
 	// the API can't tell: a StatefulSet or DaemonSet mid-update reports no split
-	// per revision. Rollouts leave it nil; IsStable is their signal.
+	// per revision, and canary traffic weights are unknown.
 	Serving *bool `json:"serving,omitempty"`
 	// ChangeCause is the kubernetes.io/change-cause note on this revision, the
 	// one record of why it exists when no Helm or GitOps source does.
 	ChangeCause string `json:"changeCause,omitempty"`
+	// MatchesDesired says whether a Deployment's spec asks for this revision's
+	// pod template. IsCurrent is only the highest number: no revision matches
+	// while a change waits, as it does on a paused Deployment, and an older one
+	// matches when a paused Deployment is changed back. Nil on other kinds.
+	MatchesDesired *bool `json:"matchesDesired,omitempty"`
 }
 
 // UpdateResourceOptions contains options for updating a resource.
@@ -81,6 +88,11 @@ type DeleteResourceOptions struct {
 	Namespace string
 	Name      string
 	Force     bool // Force delete with grace period 0
+	// UID and ResourceVersion, when set, bind the delete to the object the
+	// caller reviewed: the API server refuses it (a conflict) when the object
+	// was replaced or changed since.
+	UID             types.UID
+	ResourceVersion string
 }
 
 // ApplyResourceOptions contains options for creating or applying a resource.
@@ -285,6 +297,26 @@ func stripServerManagedFields(obj *unstructured.Unstructured) {
 	} {
 		unstructured.RemoveNestedField(obj.Object, f...)
 	}
+}
+
+// workloadGVR resolves a kind a workload action reads or writes (Deployment,
+// ReplicaSet, ControllerRevision, Job, ...). Discovery answers when it knows the
+// kind; while it is still loading, which on a slow cluster can outlast a switch
+// whose typed caches already serve, or after a refresh that failed, a built-in
+// kind resolves from the built-in table instead of failing the action.
+func (m *WorkloadManager) workloadGVR(kind string) (schema.GroupVersionResource, bool, error) {
+	if m.discovery != nil {
+		if gvr, ok := m.discovery.GetGVR(kind); ok {
+			return gvr, true, nil
+		}
+	}
+	if b, ok := resourceid.BuiltinForName(kind); ok && b.Version != "" {
+		return schema.GroupVersionResource{Group: b.Group, Version: b.Version, Resource: b.Resource}, true, nil
+	}
+	if m.discovery == nil {
+		return schema.GroupVersionResource{}, false, fmt.Errorf("resource discovery not initialized")
+	}
+	return schema.GroupVersionResource{}, false, nil
 }
 
 // ApplyResource creates or updates a Kubernetes resource from YAML.
@@ -634,8 +666,18 @@ func (m *WorkloadManager) DeleteResourceWithResult(ctx context.Context, opts Del
 	// Background propagation avoids legacy defaults that orphan a Job's Pods.
 	background := metav1.DeletePropagationBackground
 	deleteOpts := metav1.DeleteOptions{PropagationPolicy: &background}
-	if uid != "" {
+	if opts.UID != "" {
+		reviewed := opts.UID
+		deleteOpts.Preconditions = &metav1.Preconditions{UID: &reviewed}
+	} else if uid != "" {
 		deleteOpts.Preconditions = &metav1.Preconditions{UID: &uid}
+	}
+	if opts.ResourceVersion != "" {
+		if deleteOpts.Preconditions == nil {
+			deleteOpts.Preconditions = &metav1.Preconditions{}
+		}
+		rv := opts.ResourceVersion
+		deleteOpts.Preconditions.ResourceVersion = &rv
 	}
 	if readErr == nil {
 		// Only GC finalizers record a policy to preserve; Background has no finalizer.
@@ -700,16 +742,74 @@ func (m *WorkloadManager) DeleteResourceWithResult(ctx context.Context, opts Del
 	return ObserveResourceDeletion(ctx, client, opts.Name, uid), nil
 }
 
-// TriggerCronJob creates a Job from a CronJob.
+// ErrInvalidJobName is returned by TriggerCronJobNamed for a Job name the API
+// server would reject; it is checked before any API call.
+var ErrInvalidJobName = errors.New("invalid job name")
+
+// TriggerCronJob creates a Job from a CronJob, letting the API server pick its
+// name from "<cronjob>-manual-".
 func (m *WorkloadManager) TriggerCronJob(ctx context.Context, namespace, name string) (*unstructured.Unstructured, error) {
+	return m.TriggerCronJobNamed(ctx, namespace, name, "")
+}
+
+// ValidateJobName reports why a Job name is unusable, or nil. Beyond the API
+// server's DNS-1123 subdomain rule, the name is copied into the job-name label
+// on the Job's Pods, which caps it at 63 characters.
+func ValidateJobName(jobName string) error {
+	if len(jobName) > validation.LabelValueMaxLength {
+		return fmt.Errorf("%w %q: must be no more than %d characters", ErrInvalidJobName, jobName, validation.LabelValueMaxLength)
+	}
+	if errs := validation.IsDNS1123Subdomain(jobName); len(errs) > 0 {
+		return fmt.Errorf("%w %q: %s", ErrInvalidJobName, jobName, strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// indexSuffixLength is the room an Indexed Job's widest Pod hostname,
+// <job>-<index>, needs beyond the Job name; 0 for other completion modes.
+func indexSuffixLength(jobSpec map[string]any) int {
+	if mode, _, _ := unstructured.NestedString(jobSpec, "completionMode"); mode != "Indexed" {
+		return 0
+	}
+	completions, found, _ := unstructured.NestedInt64(jobSpec, "completions")
+	if !found || completions < 1 {
+		completions = 1
+	}
+	return len(strconv.FormatInt(completions-1, 10)) + 1
+}
+
+// manualJobGenerateName keeps "-manual-" whole within the 58 characters the
+// API server keeps of a generateName before appending its 5 random ones, less
+// the room an Indexed Job's Pod hostnames need. Those hostnames are DNS
+// labels, so an Indexed Job's name has no dots.
+func manualJobGenerateName(cronJobName string, indexRoom int) string {
+	const suffix = "-manual-"
+	maxBase := validation.LabelValueMaxLength - 5 - indexRoom
+	if indexRoom > 0 {
+		cronJobName = strings.ReplaceAll(cronJobName, ".", "-")
+	}
+	if len(cronJobName)+len(suffix) > maxBase {
+		cronJobName = strings.TrimRight(cronJobName[:maxBase-len(suffix)], "-.")
+	}
+	return cronJobName + suffix
+}
+
+// TriggerCronJobNamed creates a Job from a CronJob. An empty jobName lets the
+// API server generate one from "<cronjob>-manual-".
+func (m *WorkloadManager) TriggerCronJobNamed(ctx context.Context, namespace, name, jobName string) (*unstructured.Unstructured, error) {
+	jobName = strings.TrimSpace(jobName)
+	if jobName != "" {
+		if err := ValidateJobName(jobName); err != nil {
+			return nil, err
+		}
+	}
 	if m.dynClient == nil {
 		return nil, fmt.Errorf("dynamic client not initialized")
 	}
-	if m.discovery == nil {
-		return nil, fmt.Errorf("resource discovery not initialized")
+	cronJobGVR, ok, err := m.workloadGVR("cronjobs")
+	if err != nil {
+		return nil, err
 	}
-
-	cronJobGVR, ok := m.discovery.GetGVR("cronjobs")
 	if !ok {
 		return nil, fmt.Errorf("cronjobs resource not found")
 	}
@@ -726,14 +826,20 @@ func (m *WorkloadManager) TriggerCronJob(ctx context.Context, namespace, name st
 	if !found {
 		return nil, fmt.Errorf("cronjob %s/%s has no spec.jobTemplate", namespace, name)
 	}
+	jobSpec, _, _ := unstructured.NestedMap(jobTemplate, "spec")
+	indexRoom := indexSuffixLength(jobSpec)
+	if indexRoom > 0 && strings.Contains(jobName, ".") {
+		return nil, fmt.Errorf("%w %q: an Indexed Job's name becomes its Pods' hostnames, which cannot contain '.'", ErrInvalidJobName, jobName)
+	}
+	if maxLen := validation.LabelValueMaxLength - indexRoom; indexRoom > 0 && len(jobName) > maxLen {
+		return nil, fmt.Errorf("%w %q: must be no more than %d characters, so the Pods' hostnames <job>-<index> fit 63", ErrInvalidJobName, jobName, maxLen)
+	}
 
-	jobName := fmt.Sprintf("%s-manual-%d", name, time.Now().Unix())
 	job := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "batch/v1",
 			"kind":       "Job",
 			"metadata": map[string]any{
-				"name":      jobName,
 				"namespace": namespace,
 				"annotations": map[string]any{
 					"cronjob.kubernetes.io/instantiate": "manual",
@@ -752,6 +858,12 @@ func (m *WorkloadManager) TriggerCronJob(ctx context.Context, namespace, name st
 		},
 	}
 
+	if jobName != "" {
+		job.SetName(jobName)
+	} else {
+		job.SetGenerateName(manualJobGenerateName(name, indexRoom))
+	}
+
 	if spec, found, _ := unstructured.NestedMap(jobTemplate, "spec"); found {
 		if err := unstructured.SetNestedMap(job.Object, spec, "spec"); err != nil {
 			return nil, fmt.Errorf("failed to set job spec: %w", err)
@@ -763,7 +875,10 @@ func (m *WorkloadManager) TriggerCronJob(ctx context.Context, namespace, name st
 		}
 	}
 
-	jobGVR, ok := m.discovery.GetGVR("jobs")
+	jobGVR, ok, err := m.workloadGVR("jobs")
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, fmt.Errorf("jobs resource not found")
 	}
@@ -781,17 +896,16 @@ func (m *WorkloadManager) SetCronJobSuspend(ctx context.Context, namespace, name
 	if m.dynClient == nil {
 		return fmt.Errorf("dynamic client not initialized")
 	}
-	if m.discovery == nil {
-		return fmt.Errorf("resource discovery not initialized")
+	cronJobGVR, ok, err := m.workloadGVR("cronjobs")
+	if err != nil {
+		return err
 	}
-
-	cronJobGVR, ok := m.discovery.GetGVR("cronjobs")
 	if !ok {
 		return fmt.Errorf("cronjobs resource not found")
 	}
 
 	patch := fmt.Sprintf(`{"spec":{"suspend":%t}}`, suspend)
-	_, err := m.dynClient.Resource(cronJobGVR).Namespace(namespace).Patch(
+	_, err = m.dynClient.Resource(cronJobGVR).Namespace(namespace).Patch(
 		ctx, name, types.MergePatchType, []byte(patch), metav1.PatchOptions{},
 	)
 	if err != nil {
@@ -803,47 +917,52 @@ func (m *WorkloadManager) SetCronJobSuspend(ctx context.Context, namespace, name
 
 // RestartWorkload performs a rolling restart on a Deployment, StatefulSet, or DaemonSet.
 func (m *WorkloadManager) RestartWorkload(ctx context.Context, kind, namespace, name string) error {
+	_, err := m.RestartWorkloadWithResult(ctx, kind, namespace, name)
+	return err
+}
+
+// RestartWorkloadWithResult performs the same unconditional restart and returns its stored marker.
+func (m *WorkloadManager) RestartWorkloadWithResult(ctx context.Context, kind, namespace, name string) (workloadrestart.Result, error) {
 	if m.dynClient == nil {
-		return fmt.Errorf("dynamic client not initialized")
+		return workloadrestart.Result{}, fmt.Errorf("dynamic client not initialized")
 	}
 	normalizedKind := NormalizeWorkloadKind(strings.ToLower(kind))
 	// A Rollout's restart is spec.restartAt; the pod-template annotation below
 	// would change the template hash and re-run every canary step instead.
 	if normalizedKind == "rollouts" {
-		_, err := rollouts.Restart(ctx, m.dynClient, namespace, name)
-		return err
+		return rollouts.RestartWithResult(ctx, m.dynClient, namespace, name)
 	}
 
-	if m.discovery == nil {
-		return fmt.Errorf("resource discovery not initialized")
+	gvr, ok, err := m.workloadGVR(kind)
+	if err != nil {
+		return workloadrestart.Result{}, err
 	}
-
-	gvr, ok := m.discovery.GetGVR(kind)
 	if !ok {
-		return fmt.Errorf("unknown resource kind: %s", kind)
+		return workloadrestart.Result{}, fmt.Errorf("unknown resource kind: %s", kind)
 	}
 
+	var deployment *unstructured.Unstructured
 	if normalizedKind == "deployments" {
-		deployment, err := m.dynClient.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+		deployment, err = m.dynClient.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
-			return fmt.Errorf("failed to restart workload: %w", err)
+			return workloadrestart.Result{}, fmt.Errorf("failed to restart workload: %w", err)
 		}
 		if paused, _, _ := unstructured.NestedBool(deployment.Object, "spec", "paused"); paused {
-			return fmt.Errorf("Deployment %s/%s: %w", namespace, name, ErrRestartPaused)
+			return workloadrestart.Result{}, fmt.Errorf("Deployment %s/%s: %w", namespace, name, ErrRestartPaused)
 		}
 	}
 
 	restartTime := time.Now().Format(time.RFC3339)
 	patch := fmt.Sprintf(`{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":"%s"}}}}}`, restartTime)
 
-	_, err := m.dynClient.Resource(gvr).Namespace(namespace).Patch(
+	updated, err := m.dynClient.Resource(gvr).Namespace(namespace).Patch(
 		ctx, name, types.MergePatchType, []byte(patch), metav1.PatchOptions{},
 	)
 	if err != nil {
-		return fmt.Errorf("failed to restart workload: %w", err)
+		return workloadrestart.Result{}, fmt.Errorf("failed to restart workload: %w", err)
 	}
 
-	return nil
+	return workloadrestart.PatchResult(deployment, updated, restartTime, "spec", "template", "metadata", "annotations", "kubectl.kubernetes.io/restartedAt"), nil
 }
 
 // SetDeploymentPaused sets spec.paused on a Deployment, as kubectl rollout pause
@@ -853,11 +972,10 @@ func (m *WorkloadManager) SetDeploymentPaused(ctx context.Context, namespace, na
 	if m.dynClient == nil {
 		return fmt.Errorf("dynamic client not initialized")
 	}
-	if m.discovery == nil {
-		return fmt.Errorf("resource discovery not initialized")
+	deploymentGVR, ok, err := m.workloadGVR("deployments")
+	if err != nil {
+		return err
 	}
-
-	deploymentGVR, ok := m.discovery.GetGVR("deployments")
 	if !ok {
 		return fmt.Errorf("deployments resource not found")
 	}
@@ -885,10 +1003,10 @@ func (m *WorkloadManager) ScaleWorkload(ctx context.Context, kind, namespace, na
 		// Fixed, not discovered: the CRD may not be in discovery's cache yet.
 		gvr = rollouts.GVR
 	case "deployments", "statefulsets":
-		if m.discovery == nil {
-			return fmt.Errorf("resource discovery not initialized")
+		found, ok, err := m.workloadGVR(normalizedKind)
+		if err != nil {
+			return err
 		}
-		found, ok := m.discovery.GetGVR(normalizedKind)
 		if !ok {
 			return fmt.Errorf("unknown resource kind: %s", kind)
 		}
@@ -951,11 +1069,10 @@ func (m *WorkloadManager) ListWorkloadRevisions(ctx context.Context, kind, names
 		return m.listRolloutRevisions(ctx, namespace, name)
 	}
 
-	if m.discovery == nil {
-		return nil, fmt.Errorf("resource discovery not initialized")
+	workloadGVR, ok, err := m.workloadGVR(normalizedKind)
+	if err != nil {
+		return nil, err
 	}
-
-	workloadGVR, ok := m.discovery.GetGVR(normalizedKind)
 	if !ok {
 		return nil, fmt.Errorf("unknown resource kind: %s", kind)
 	}
@@ -968,7 +1085,13 @@ func (m *WorkloadManager) ListWorkloadRevisions(ctx context.Context, kind, names
 
 	switch normalizedKind {
 	case "deployments":
-		return m.listDeploymentRevisions(ctx, namespace, name, workloadUID)
+		rsList, err := m.listDeploymentReplicaSets(ctx, namespace)
+		if err != nil {
+			return nil, err
+		}
+		revisions := BuildDeploymentRevisions(rsList, workloadUID)
+		applyDeploymentDesiredTemplate(revisions, rsList, workload, workloadUID)
+		return revisions, nil
 	case "statefulsets", "daemonsets":
 		revisions, err := m.listControllerRevisions(ctx, namespace, name, workloadUID)
 		if err != nil {
@@ -999,13 +1122,17 @@ func (m *WorkloadManager) listRolloutRevisions(ctx context.Context, namespace, n
 			Replicas:      r.Replicas,
 			Template:      r.Template,
 			ReadyReplicas: &readyReplicas,
+			Serving:       r.Serving,
 		})
 	}
 	return out, nil
 }
 
-func (m *WorkloadManager) listDeploymentRevisions(ctx context.Context, namespace, name, workloadUID string) ([]WorkloadRevision, error) {
-	rsGVR, ok := m.discovery.GetGVR("replicasets")
+func (m *WorkloadManager) listDeploymentReplicaSets(ctx context.Context, namespace string) ([]unstructured.Unstructured, error) {
+	rsGVR, ok, err := m.workloadGVR("replicasets")
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, fmt.Errorf("replicasets resource not found")
 	}
@@ -1015,7 +1142,35 @@ func (m *WorkloadManager) listDeploymentRevisions(ctx context.Context, namespace
 		return nil, fmt.Errorf("failed to list replicasets: %w", err)
 	}
 
-	return BuildDeploymentRevisions(rsList.Items, workloadUID), nil
+	return rsList.Items, nil
+}
+
+// applyDeploymentDesiredTemplate marks which revision the Deployment's spec asks for.
+func applyDeploymentDesiredTemplate(revisions []WorkloadRevision, rsList []unstructured.Unstructured, workload *unstructured.Unstructured, workloadUID string) {
+	desired, found, err := unstructured.NestedMap(workload.Object, "spec", "template")
+	if err != nil || !found {
+		return
+	}
+	templates := make(map[int64]map[string]any, len(rsList))
+	for i := range rsList {
+		rs := &rsList[i]
+		if !ownedBy(rs, types.UID(workloadUID)) {
+			continue
+		}
+		number, err := strconv.ParseInt(rs.GetAnnotations()["deployment.kubernetes.io/revision"], 10, 64)
+		if err != nil {
+			continue
+		}
+		if template, found, err := unstructured.NestedMap(rs.Object, "spec", "template"); err == nil && found {
+			templates[number] = template
+		}
+	}
+	for i := range revisions {
+		matches, err := podTemplatesEqual(templates[revisions[i].Number], desired, true)
+		if err == nil {
+			revisions[i].MatchesDesired = &matches
+		}
+	}
 }
 
 // BuildDeploymentRevisions builds WorkloadRevision[] from unstructured ReplicaSets owned by a Deployment.
@@ -1149,7 +1304,10 @@ func CurrentControllerRevisionPodHashes(revisions []unstructured.Unstructured) m
 }
 
 func (m *WorkloadManager) listControllerRevisions(ctx context.Context, namespace, name, workloadUID string) ([]WorkloadRevision, error) {
-	crGVR, ok := m.discovery.GetGVR("controllerrevisions")
+	crGVR, ok, err := m.workloadGVR("controllerrevisions")
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, fmt.Errorf("controllerrevisions resource not found")
 	}
@@ -1213,11 +1371,12 @@ func BuildControllerRevisions(crList []unstructured.Unstructured, workloadUID st
 			podHash = cr.GetName()
 		}
 		revisions = append(revisions, WorkloadRevision{
-			Number:    revNum,
-			CreatedAt: cr.GetCreationTimestamp().Time,
-			Image:     image,
-			Template:  templateStr,
-			PodHash:   podHash,
+			Number:      revNum,
+			CreatedAt:   cr.GetCreationTimestamp().Time,
+			Image:       image,
+			Template:    templateStr,
+			PodHash:     podHash,
+			ChangeCause: cr.GetAnnotations()["kubernetes.io/change-cause"],
 		})
 	}
 
@@ -1243,7 +1402,7 @@ func applyControllerRevisionServing(revisions []WorkloadRevision, workload *unst
 	}
 
 	settled := -1
-	var ready int64
+	var total, ready int64
 	switch normalizedKind {
 	case "statefulsets":
 		updateRevision, _, _ := unstructured.NestedString(workload.Object, "status", "updateRevision")
@@ -1258,6 +1417,7 @@ func applyControllerRevisionServing(revisions []WorkloadRevision, workload *unst
 		if onRevision != replicas {
 			return
 		}
+		total = replicas
 		ready, _, _ = unstructured.NestedInt64(workload.Object, "status", "readyReplicas")
 		for i := range revisions {
 			if revisions[i].PodHash == updateRevision {
@@ -1273,6 +1433,7 @@ func applyControllerRevisionServing(revisions []WorkloadRevision, workload *unst
 		if updated != desired || misscheduled != 0 {
 			return
 		}
+		total = desired
 		ready, _, _ = unstructured.NestedInt64(workload.Object, "status", "numberReady")
 		for i := range revisions {
 			if revisions[i].IsCurrent {
@@ -1289,6 +1450,7 @@ func applyControllerRevisionServing(revisions []WorkloadRevision, workload *unst
 		revisions[i].Serving = &serving
 		var count int64
 		if i == settled {
+			revisions[i].Replicas = total
 			count = ready
 		}
 		revisions[i].ReadyReplicas = &count
@@ -1308,11 +1470,10 @@ func (m *WorkloadManager) RollbackWorkload(ctx context.Context, kind, namespace,
 		return err
 	}
 
-	if m.discovery == nil {
-		return fmt.Errorf("resource discovery not initialized")
+	workloadGVR, ok, err := m.workloadGVR(normalizedKind)
+	if err != nil {
+		return err
 	}
-
-	workloadGVR, ok := m.discovery.GetGVR(normalizedKind)
 	if !ok {
 		return fmt.Errorf("unknown resource kind: %s", kind)
 	}
@@ -1374,7 +1535,10 @@ func (m *WorkloadManager) rollbackDeployment(ctx context.Context, deployment *un
 		return fmt.Errorf("Deployment %s/%s: %w", namespace, name, ErrWorkloadPaused)
 	}
 
-	rsGVR, ok := m.discovery.GetGVR("replicasets")
+	rsGVR, ok, err := m.workloadGVR("replicasets")
+	if err != nil {
+		return err
+	}
 	if !ok {
 		return fmt.Errorf("replicasets resource not found")
 	}
@@ -1440,7 +1604,10 @@ func (m *WorkloadManager) rollbackDeployment(ctx context.Context, deployment *un
 		return fmt.Errorf("failed to build rollback patch: %w", err)
 	}
 
-	deployGVR, ok := m.discovery.GetGVR("deployments")
+	deployGVR, ok, err := m.workloadGVR("deployments")
+	if err != nil {
+		return err
+	}
 	if !ok {
 		return fmt.Errorf("deployments resource not found")
 	}
@@ -1456,7 +1623,10 @@ func (m *WorkloadManager) rollbackDeployment(ctx context.Context, deployment *un
 // replaced rather than merged.
 func (m *WorkloadManager) rollbackControllerRevision(ctx context.Context, normalizedKind string, workload *unstructured.Unstructured, revision int64) error {
 	namespace, name := workload.GetNamespace(), workload.GetName()
-	crGVR, ok := m.discovery.GetGVR("controllerrevisions")
+	crGVR, ok, err := m.workloadGVR("controllerrevisions")
+	if err != nil {
+		return err
+	}
 	if !ok {
 		return fmt.Errorf("controllerrevisions resource not found")
 	}
@@ -1504,7 +1674,10 @@ func (m *WorkloadManager) rollbackControllerRevision(ctx context.Context, normal
 		return fmt.Errorf("failed to build rollback patch: %w", err)
 	}
 
-	gvr, ok := m.discovery.GetGVR(normalizedKind)
+	gvr, ok, err := m.workloadGVR(normalizedKind)
+	if err != nil {
+		return err
+	}
 	if !ok {
 		return fmt.Errorf("unknown resource kind: %s", normalizedKind)
 	}

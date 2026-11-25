@@ -48,7 +48,7 @@ func TestApplyHandlerExcludesRuntimeCollection(t *testing.T) {
 		}
 	}
 	for _, tool := range listRegisteredToolsWith(t, true) {
-		if tool.Name != "collect_application_evidence" && tool.Name != "exec_pod" && tool.Name != "delete_resource" && tool.Name != "manage_helm" && tool.Name != "curl_service" && !names[tool.Name] {
+		if tool.Name != "collect_application_evidence" && tool.Name != "exec_pod" && tool.Name != "delete_resource" && tool.Name != "manage_helm" && tool.Name != "curl_service" && tool.Name != "list_vulnerabilities" && !names[tool.Name] { // listed only where Trivy's reports are served
 			t.Errorf("existing tool %s missing from apply handler", tool.Name)
 		}
 	}

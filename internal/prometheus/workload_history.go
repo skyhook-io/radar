@@ -22,6 +22,7 @@ const historyScopeRemedy = "Historical cluster scope could not be verified. An o
 
 type workloadPartitionMemo struct {
 	generation uint64
+	epoch      uint64
 	expires    time.Time
 	scope      prom.WorkloadMetricsScope
 	namespace  string
@@ -30,8 +31,9 @@ type workloadPartitionMemo struct {
 }
 
 type workloadPartitionProof struct {
-	scope     prom.WorkloadMetricsScope
-	unlabeled bool
+	uidlessAnchors []prom.WorkloadPodIdentity
+	scope          prom.WorkloadMetricsScope
+	unlabeled      bool
 }
 
 type workloadHistoryPlan struct {
@@ -56,7 +58,7 @@ func (c *Client) historicalClusterProof(ctx context.Context, scope PodScope, cac
 	c.mu.RLock()
 	generation := c.discoveryGen
 	epoch := c.connectionEpoch
-	if memo := c.workloadPartition; memo != nil && memo.generation == generation && time.Now().Before(memo.expires) && !c.retired && len(memo.scope.ClusterLabels) > 0 {
+	if memo := c.workloadPartition; memo != nil && memo.generation == generation && memo.epoch == epoch && time.Now().Before(memo.expires) && !c.retired && len(memo.scope.ClusterLabels) > 0 {
 		proof := workloadPartitionProof{scope: memo.scope, unlabeled: memo.unlabeled}
 		c.mu.RUnlock()
 		return proof, nil
@@ -87,7 +89,7 @@ func (c *Client) historicalClusterProof(ctx context.Context, scope PodScope, cac
 	})
 	identities := fmt.Sprint(anchors)
 	c.mu.RLock()
-	if memo := c.workloadPartition; memo != nil && memo.generation == generation && time.Now().Before(memo.expires) && !c.retired &&
+	if memo := c.workloadPartition; memo != nil && memo.generation == generation && memo.epoch == epoch && time.Now().Before(memo.expires) && !c.retired &&
 		(len(memo.scope.ClusterLabels) > 0 || (memo.namespace == scope.Namespace && memo.identities == identities)) {
 		proof := workloadPartitionProof{scope: memo.scope, unlabeled: memo.unlabeled}
 		c.mu.RUnlock()
@@ -107,8 +109,7 @@ func (c *Client) historicalClusterProof(ctx context.Context, scope PodScope, cac
 			c.mu.RUnlock()
 			return nil, fmt.Errorf("metrics connection changed")
 		}
-		tr := prom.NewHTTPTransport(c.baseURL, c.basePath, c.httpClient)
-		tr.Headers, tr.MaxResponseBytes = copyHeaders(c.headers), 4<<20
+		tr := c.newTransportLocked(c.baseURL, c.basePath, c.httpClient, 4<<20)
 		c.mu.RUnlock()
 		probeCtx, probeCancel := context.WithTimeout(flightCtx, probeBudget)
 		defer probeCancel()
@@ -129,9 +130,9 @@ func (c *Client) historicalClusterProof(ctx context.Context, scope PodScope, cac
 			ttl = 30 * time.Second
 		}
 		memo := c.workloadPartition
-		if len(proof.scope.ClusterLabels) > 0 || memo == nil || memo.generation != generation ||
+		if len(proof.scope.ClusterLabels) > 0 || memo == nil || memo.generation != generation || memo.epoch != epoch ||
 			len(memo.scope.ClusterLabels) == 0 || !time.Now().Before(memo.expires) {
-			c.workloadPartition = &workloadPartitionMemo{generation: generation, expires: time.Now().Add(ttl), scope: proof.scope, namespace: scope.Namespace, identities: identities, unlabeled: proof.unlabeled}
+			c.workloadPartition = &workloadPartitionMemo{generation: generation, epoch: epoch, expires: time.Now().Add(ttl), scope: proof.scope, namespace: scope.Namespace, identities: identities, unlabeled: proof.unlabeled}
 		}
 		return proof, nil
 	})
@@ -168,6 +169,18 @@ func probeHistoricalPartition(ctx context.Context, client *prom.Client, namespac
 			proof.scope.ClusterLabels, proof.unlabeled = nil, true
 			break
 		}
+	}
+	// Only a labeled inventory missing UIDs qualifies for the rightsizing
+	// fallback. An ambiguous UID, a truncated answer or an unlabeled store
+	// must retain its original decision.
+	if len(partition) == 0 && len(result.Series) > 0 {
+		emptyPartition := identityKey(nil, partitionLabels)
+		for _, row := range result.Series {
+			if row.Labels["uid"] != "" || identityKey(row.Labels, partitionLabels) == emptyPartition {
+				return proof, nil
+			}
+		}
+		proof.uidlessAnchors = anchors
 	}
 	return proof, nil
 }

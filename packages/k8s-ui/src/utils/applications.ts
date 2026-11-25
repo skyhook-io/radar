@@ -149,6 +149,7 @@ export interface AppHistorySummary {
 }
 
 export interface AppHistoryAnchor {
+  git?: { repoURL: string; path?: string; previousRevision?: string; historyID?: string };
   type: "gitops" | "helm" | string;
   title: string;
   status?: string;
@@ -1035,17 +1036,7 @@ export function foldAppGroups<T extends AppGroupFoldEntry>(
     const classComposition = CLASS_ORDER.filter((c) => compMap.has(c)).map(
       (c) => ({ cls: c, count: compMap.get(c)! }),
     );
-    const known = classComposition
-      .map((c) => c.cls)
-      .filter((c) => c !== "unknown");
-    const workloadClass: AppWorkloadClass =
-      known.length === 0
-        ? "unknown"
-        : known.includes("service") && !known.includes("job")
-          ? "service"
-          : known.length === 1
-            ? known[0]
-            : "mixed";
+    const workloadClass = appClassOf(classComposition.map((c) => c.cls));
     const expanded = autoExpand || expandedKeys.has(k);
     out.push({
       kind: "group",
@@ -1235,14 +1226,32 @@ export function classCompositionOf(
   }));
 }
 
-/** The distinct KNOWN classes an app contains — the facet-matching set. Falls
- *  back to the app-level class when there are no classifiable workloads. */
+/** The distinct classes an app's workloads have — the facet-matching set. A
+ *  workload whose exposure went undecided counts under Unknown, not Service or
+ *  Worker, since it may be either. Falls back to the app-level class when the
+ *  app has no workloads. */
 export function classSetOf(app: AppRow): AppWorkloadClass[] {
-  const known = classCompositionOf(app)
-    .map((c) => c.cls)
-    .filter((c) => c === "service" || c === "worker" || c === "job");
-  if (known.length > 0) return known;
+  const classes = classCompositionOf(app).map((c) => c.cls);
+  if (classes.length > 0) return classes;
   return [workloadClassOf(app.workload_class)];
+}
+
+/** An app's class from its workloads' classes, the server's rule: an `unknown`
+ *  workload is long-running with undecided exposure, so the app takes the
+ *  class both readings of it (service, worker) agree on. */
+export function appClassOf(classes: readonly AppWorkloadClass[]): AppWorkloadClass {
+  const service = classes.includes("service");
+  const worker = classes.includes("worker");
+  const job = classes.includes("job");
+  if (!classes.includes("unknown")) return foldKnownClasses(service, worker, job);
+  const asService = foldKnownClasses(true, worker, job);
+  return asService === foldKnownClasses(service, true, job) ? asService : "unknown";
+}
+
+function foldKnownClasses(service: boolean, worker: boolean, job: boolean): AppWorkloadClass {
+  if (job) return service || worker ? "mixed" : "job";
+  if (service) return "service";
+  return worker ? "worker" : "unknown";
 }
 
 export interface BatchSignal {
@@ -1702,6 +1711,13 @@ export interface AppEntryBase {
   /** ready/desired as a fraction for sorting; -1 when nothing is desired. */
   readyRatio: number;
   source: AppSource;
+}
+
+/** A status the host knows better than the workloads say, e.g. how a job's last run went. */
+export interface AppHostStatus {
+  health: AppHealth;
+  /** Defaults to the standard label for this health. */
+  label?: string;
 }
 
 export interface SingleAppEntry extends AppEntryBase {

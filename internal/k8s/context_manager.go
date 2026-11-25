@@ -66,7 +66,7 @@ type CostResetFunc func()
 
 var (
 	beforeContextSwitchCallbacks   []ContextSwitchCallback
-	contextSwitchCallbacks         []ContextSwitchCallback
+	contextSwitchCallbacks         []func(string, string)
 	namespaceRescopeCallbacks      []NamespaceRescopeCallback
 	contextSwitchProgressCallbacks []ContextSwitchProgressCallback
 	contextSwitchMu                sync.RWMutex
@@ -121,12 +121,13 @@ func init() {
 // operations (capabilities checks, RBAC checks, etc.) and creates a fresh
 // operation context. Called at the start of context switch and retry, and by
 // runtime auth-loss demotion.
-func CancelOngoingOperations() {
+func CancelOngoingOperations() (context.Context, uint64) {
 	operationMu.Lock()
 	defer operationMu.Unlock()
 	operationCancel()
 	operationCtx, operationCancel = context.WithCancel(context.Background())
 	operationGen++
+	return operationCtx, operationGen
 }
 
 // currentOperationGen returns the generation of the most recently started
@@ -201,6 +202,11 @@ func OnBeforeContextSwitch(callback ContextSwitchCallback) {
 
 // OnContextSwitch registers a callback to be called when the context is switched
 func OnContextSwitch(callback ContextSwitchCallback) {
+	OnContextSwitchComplete(func(name, _ string) { callback(name) })
+}
+
+// OnContextSwitchComplete includes the operation ID for a tracked user switch.
+func OnContextSwitchComplete(callback func(name, switchID string)) {
 	contextSwitchMu.Lock()
 	defer contextSwitchMu.Unlock()
 	contextSwitchCallbacks = append(contextSwitchCallbacks, callback)
@@ -374,6 +380,13 @@ func connectionTestTimeoutFor(usesExec bool) time.Duration {
 	return ConnectionTestTimeout
 }
 
+func localProbeTimeout(usesExec bool) time.Duration {
+	if localProbeTimeoutOverride > 0 {
+		return localProbeTimeoutOverride
+	}
+	return connectionTestTimeoutFor(usesExec)
+}
+
 func connectionProbeHTTPTimeout(ctx context.Context) time.Duration {
 	timeout := ConnectionTestTimeout
 	if deadline, ok := ctx.Deadline(); ok {
@@ -421,12 +434,13 @@ var contextOperationsBlocked atomic.Pointer[error]
 // still name the context. Settings are read at startup, so nothing lifts it.
 func BlockClusterAccess(err error) {
 	contextOperationsBlocked.Store(&err)
+	dropClusterClients()
+}
+
+func dropClusterClients() *Connection {
 	clientMu.Lock()
 	defer clientMu.Unlock()
-	k8sConfig = nil
-	k8sClient = nil
-	discoveryClient = nil
-	dynamicClient = nil
+	return installedConn.Swap(installedConnectionLocked(nil, &sharedKubernetesClients{generation: clusterBuildSequence.Add(1)}))
 }
 
 func contextOperationsBlockedErr() error {
@@ -478,8 +492,10 @@ func credentialPluginStuck(ctx context.Context, prepared *preparedContext, probe
 // checkedSwitch carries a context that was prepared and found reachable
 // before the switch took contextOpMu.
 type checkedSwitch struct {
-	ctx      context.Context
-	prepared *preparedContext
+	ctx        context.Context
+	prepared   *preparedContext
+	tracker    *ContextSwitchTracker
+	localRetry bool
 }
 
 // PerformCheckedContextSwitch is the switch a person asks for. While the
@@ -489,17 +505,27 @@ type checkedSwitch struct {
 // never holds up another operation. Disconnected sessions switch as before:
 // there is no working cluster to protect.
 func PerformCheckedContextSwitch(ctx context.Context, newContext string) error {
+	return performCheckedContextSwitch(ctx, newContext, nil)
+}
+
+func performCheckedContextSwitch(ctx context.Context, newContext string, tracker *ContextSwitchTracker) error {
+	checked := &checkedSwitch{ctx: ctx, tracker: tracker}
 	if !shouldCheckBeforeSwitch(newContext) {
-		return performContextSwitch(newContext, 0, false, nil)
+		return performContextSwitch(newContext, 0, false, checked)
 	}
 	observedOperationGen := currentOperationGen()
 	prepared, err := prepareContext(newContext)
 	if err != nil {
 		// A context that can't even be loaded is refused by the switch's own
 		// preflight, with its existing wording.
-		return performContextSwitch(newContext, 0, false, nil)
+		return performContextSwitch(newContext, 0, false, checked)
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, connectionTestTimeoutFor(prepared.usesExec))
+	timeout := connectionTestTimeoutFor(prepared.usesExec)
+	if tracker != nil {
+		timeout = localProbeTimeout(prepared.usesExec)
+		tracker.recordProbeTimeout(ctx, timeout)
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	probeErr := testConnection(probeCtx, prepared.config, prepared.usesExec)
 	cancel()
 	if probeErr != nil {
@@ -512,7 +538,8 @@ func PerformCheckedContextSwitch(ctx context.Context, newContext string) error {
 			PluginStuck: credentialPluginStuck(ctx, prepared, probeErr),
 		})
 	}
-	return performContextSwitch(newContext, observedOperationGen, true, &checkedSwitch{ctx: ctx, prepared: prepared})
+	checked.prepared = prepared
+	return performContextSwitch(newContext, observedOperationGen, true, checked)
 }
 
 func shouldCheckBeforeSwitch(newContext string) bool {
@@ -526,19 +553,46 @@ func shouldCheckBeforeSwitch(newContext string) bool {
 // kubeconfig source to reload, so it verifies connectivity before rebuilding
 // caches around the existing client configuration.
 func RetryCurrentConnection() error {
+	return retryCurrentConnection(nil)
+}
+
+// RetryLocalConnection gives the local picker ownership of a manual retry's
+// lifetime. It can yield to a new selection after the previous sessions closed.
+func RetryLocalConnection(ctx context.Context) error {
+	return retryCurrentConnection(&checkedSwitch{ctx: ctx, localRetry: true})
+}
+
+func retryCurrentConnection(retry *checkedSwitch) error {
 	if err := contextOperationsBlockedErr(); err != nil {
 		return fmt.Errorf("%w: %w", ErrContextSwitchPreflight, err)
 	}
+	if !IsInCluster() {
+		var contextName string
+		var generation uint64
+		var stopped bool
+		if !CaptureClusterReads(func() {
+			contextName = GetContextName()
+			generation = currentOperationGen()
+			stopped = GetConnectionStatus().ErrorType == switchStoppedErrorType
+		}) || stopped {
+			return ErrReconnectSuperseded
+		}
+		if contextName == "" {
+			return errors.New("no context configured")
+		}
+		if retry == nil {
+			retry = &checkedSwitch{ctx: context.Background()}
+		}
+		return performContextSwitch(contextName, generation, true, retry)
+	}
+
 	contextName := GetContextName()
 	if contextName == "" {
 		return errors.New("no context configured")
 	}
-	if !IsInCluster() {
-		return PerformContextSwitch(contextName)
-	}
-
-	CancelOngoingOperations()
-	observedOperationGen := currentOperationGen()
+	// In-cluster recovery can be blocked in cache initialization while
+	// holding contextOpMu. A manual retry must interrupt it before probing.
+	_, observedOperationGen := CancelOngoingOperations()
 	probeCtx, probeCancel, ok := newOperationContextForGeneration(
 		observedOperationGen,
 		connectionTestOperationTimeout(),
@@ -551,10 +605,21 @@ func RetryCurrentConnection() error {
 	if currentOperationGen() != observedOperationGen {
 		return ErrReconnectSuperseded
 	}
+	var err error
 	if probeErr != nil {
-		return fmt.Errorf("cluster connection failed: %w", probeErr)
+		err = fmt.Errorf("cluster connection failed: %w", probeErr)
+	} else {
+		err = getRuntimeAuthReconnect()(contextName, observedOperationGen)
 	}
-	return getRuntimeAuthReconnect()(contextName, observedOperationGen)
+	if err != nil && !errors.Is(err, ErrReconnectSuperseded) {
+		contextOpMu.Lock()
+		defer contextOpMu.Unlock()
+		if currentOperationGen() != observedOperationGen {
+			return ErrReconnectSuperseded
+		}
+		SetConnectionStatus(ConnectionStatus{State: StateDisconnected, Context: contextName, Error: err.Error(), ErrorType: ClassifyError(err)})
+	}
+	return err
 }
 
 // PerformContextSwitchIfOperationCurrent is the conditional variant used by
@@ -594,8 +659,6 @@ func reinitializeCurrentContextIfOperationCurrent(
 
 	reportProgress("Restoring cluster caches...")
 	ResetAllSubsystems()
-	InvalidateCapabilitiesCache()
-	InvalidateResourcePermissionsCache()
 	InvalidateServerVersionCache()
 	InvalidatePlatformCache()
 
@@ -612,7 +675,7 @@ func reinitializeCurrentContextIfOperationCurrent(
 	}
 
 	reportProgress("Building topology...")
-	notifyContextSwitchCallbacks(contextName)
+	notifyContextSwitchCallbacks(contextName, "")
 	SetConnectionStatus(ConnectionStatus{
 		State:       StateConnected,
 		Context:     contextName,
@@ -622,7 +685,7 @@ func reinitializeCurrentContextIfOperationCurrent(
 	return nil
 }
 
-func performContextSwitch(newContext string, observedOperationGen uint64, requireOperationCurrent bool, checked *checkedSwitch) error {
+func performContextSwitch(newContext string, observedOperationGen uint64, requireOperationCurrent bool, checked *checkedSwitch) (switchErr error) {
 	switchStart := time.Now()
 	log.Printf("[ops] Context switch START → %q", newContext)
 
@@ -681,16 +744,64 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	// it if the person gave up waiting, or if the name now resolves to
 	// something else: a CAPI merge or a kubeconfig edit doesn't bump the
 	// operation generation.
-	if checked != nil {
-		if checked.ctx.Err() != nil {
-			return fmt.Errorf("%w: switch to %q was cancelled", ErrContextSwitchPreflight, newContext)
+	if checked != nil && checked.ctx.Err() != nil {
+		if checked.localRetry {
+			return ErrReconnectSuperseded
 		}
+		return fmt.Errorf("%w: switch to %q was cancelled", ErrContextSwitchPreflight, newContext)
+	}
+	if checked != nil && checked.prepared != nil {
 		fingerprint, err := currentContextSourceFingerprint(newContext)
 		if err != nil || fingerprint != checked.prepared.fingerprint {
 			return fmt.Errorf("%w: the kubeconfig for %q changed while Radar was checking it, try again", ErrContextSwitchPreflight, newContext)
 		}
 	}
 
+	localRetry := checked != nil && checked.localRetry
+	progress := reportProgress
+	var tracker *ContextSwitchTracker
+	if checked != nil {
+		tracker = checked.tracker
+	}
+	if tracker != nil {
+		if !tracker.commit(checked.ctx) {
+			return context.Canceled
+		}
+		progress = func(message string) {
+			tracker.progress(message)
+			if status := GetConnectionStatus(); status.State == StateConnecting && status.Context == newContext {
+				UpdateConnectionProgress(message)
+			}
+			reportProgress(message)
+		}
+	}
+	defer func() {
+		if tracker != nil {
+			if p := recover(); p != nil {
+				switchErr = contextSwitchPanic(p)
+			}
+		}
+		retryInterrupted := localRetry && checked.ctx.Err() != nil
+		if switchErr != nil && (retryInterrupted || (tracker != nil && !tracker.setCanStop(checked.ctx, false))) {
+			CancelOngoingOperations()
+			// Drop clients immediately, but stop the informers owned by the
+			// connection they belonged to.
+			displaced := dropClusterClients()
+			resetAllSubsystems(displaced)
+			InvalidateServerVersionCache()
+			InvalidatePlatformCache()
+			msg := "Cluster switch stopped. The previous connection was closed. Choose a cluster to connect."
+			if retryInterrupted {
+				switchErr = ErrReconnectSuperseded
+				msg = "Connection retry stopped for a new cluster selection. Choose a cluster to connect."
+			}
+			SetConnectionStatus(ConnectionStatus{State: StateDisconnected, Context: newContext, ErrorType: switchStoppedErrorType, Error: msg})
+			return
+		}
+		if switchErr != nil && (checked != nil || !requireOperationCurrent) {
+			SetConnectionStatus(ConnectionStatus{State: StateDisconnected, Context: GetContextName(), Error: switchErr.Error(), ErrorType: ClassifyError(switchErr)})
+		}
+	}()
 	// Fire before-switch callbacks while the OLD context is still active, so
 	// teardown (e.g. cancelling in-flight AI investigations) can't leak onto the
 	// cluster we're about to connect to. After the preflight above — a failed
@@ -706,24 +817,16 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	// previous cluster's caches are gone, so lingering port-forwards / exec
 	// terminals would be reading state we can no longer serve.
 	stopActiveSessions()
-	reportProgress("Stopping caches...")
+	progress("Stopping caches...")
 	t := time.Now()
 	ResetAllSubsystems()
 	logTiming("   [ops] ResetAllSubsystems: %v", time.Since(t))
-	// Drop the previous cluster's permission result before the client swap, so
-	// nothing pairs it with the new client, including when the switch fails
-	// past this point. Not before the reset above: until then the previous
-	// cluster's resource cache is live, and several readers treat a nil
-	// permission result as cluster-wide access. The invalidations right after
-	// SwitchContext retire any probe still in flight against the previous
-	// client.
-	InvalidateResourcePermissionsCache()
 
 	// Step 2: Switch the K8s client to the new context
-	reportProgress("Connecting to cluster...")
+	progress("Connecting to cluster...")
 	t = time.Now()
 	log.Printf("Switching K8s client to context %q...", newContext)
-	if checked != nil {
+	if checked != nil && checked.prepared != nil {
 		installPreparedContext(checked.prepared)
 	} else if err := SwitchContext(newContext); err != nil {
 		elapsed := time.Since(switchStart).Truncate(time.Millisecond)
@@ -733,15 +836,15 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 		return fmt.Errorf("failed to switch context: %w", err)
 	}
 	logTiming("   [ops] SwitchContext: %v", time.Since(t))
+	if tracker != nil {
+		SetConnectionStatus(ConnectionStatus{State: StateConnecting, Context: newContext, ClusterName: GetClusterName(), ProgressMsg: "Loading cluster data…"})
+	}
 	ClearNamespaceScopeOverride()
 	RestoreNamespaceScopePreference(GetContextName())
 	if err := requireNamespaceScopeTarget(newContext); err != nil {
 		return err
 	}
 
-	// Invalidate caches - permissions and cluster info may differ between clusters
-	InvalidateCapabilitiesCache()
-	InvalidateResourcePermissionsCache()
 	InvalidateServerVersionCache()
 	InvalidatePlatformCache()
 
@@ -749,29 +852,66 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	// checked switch already probed the same client config before teardown.
 	// Contexts are derived from the operation context so they're canceled
 	// if another context switch starts while this one is in progress.
-	if checked == nil {
-		reportProgress("Testing cluster connectivity...")
+	if checked == nil || checked.prepared == nil {
+		progress("Testing cluster connectivity...")
 		t = time.Now()
 		log.Println("Testing cluster connectivity...")
-		connCtx, connCancel := NewOperationContext(connectionTestOperationTimeout())
+		timeout := connectionTestOperationTimeout()
+		if tracker != nil || localRetry {
+			timeout = localProbeTimeout(UsesExecAuth())
+		}
+		if tracker != nil {
+			tracker.recordProbeTimeout(checked.ctx, timeout)
+		}
+		connCtx, connCancel := NewOperationContext(timeout)
 		defer connCancel()
+		if tracker != nil && !tracker.setCanStop(checked.ctx, true) {
+			return context.Canceled
+		}
+		if tracker != nil || localRetry {
+			stop := context.AfterFunc(checked.ctx, connCancel)
+			defer stop()
+		}
 		if err := TestClusterConnection(connCtx); err != nil {
+			if (tracker != nil && !tracker.setCanStop(checked.ctx, false)) || (localRetry && checked.ctx.Err() != nil) {
+				return context.Canceled
+			}
 			elapsed := time.Since(switchStart).Truncate(time.Millisecond)
 			log.Printf("[ops] Context switch FAILED at connectivity test: %v (%v since switch start)", err, elapsed)
 			errorlog.Record("context-switch", "error",
 				"stage=TestClusterConnection target=%q elapsed=%v: %v", newContext, elapsed, err)
 			return fmt.Errorf("cluster connection failed: %w", err)
 		}
+		if tracker != nil && !tracker.setCanStop(checked.ctx, false) {
+			return context.Canceled
+		}
 		log.Printf("[ops] Cluster connectivity verified (%v)", time.Since(t))
 	}
 
 	// Step 4: Initialize all subsystems (same function as initial boot).
 	// Teardown above is non-blocking, so old informers may still be draining.
-	// Use a timeout to prevent context switch from hanging indefinitely.
+
 	t = time.Now()
-	initCtx, initCancel := NewOperationContext(ContextSwitchTimeout)
+	var initCtx context.Context
+	var initCancel context.CancelFunc
+	var discoveryWait time.Duration
+	if tracker != nil || localRetry {
+		// Once the target answers, informer readiness uses the same first-paint
+		// backstop as startup. A cluster replacement still cancels this work.
+		initCtx, initCancel = context.WithCancel(OperationContext())
+		// A stuck exec plugin can outlive the discovery client HTTP timeout.
+		// Start this wait budget only once the typed cache is ready.
+		discoveryWait = FirstPaintBackstop
+		stop := context.AfterFunc(checked.ctx, initCancel)
+		defer stop()
+	} else {
+		initCtx, initCancel = NewOperationContext(ContextSwitchTimeout)
+	}
 	defer initCancel()
-	if err := InitAllSubsystems(initCtx, reportProgress); err != nil {
+	if err := initAllSubsystems(initCtx, progress, discoveryWait, tracker); err != nil {
+		if (tracker != nil && !tracker.setCanStop(checked.ctx, false)) || (localRetry && checked.ctx.Err() != nil) {
+			return context.Canceled
+		}
 		elapsed := time.Since(switchStart).Truncate(time.Millisecond)
 		log.Printf("[ops] Context switch FAILED at subsystem init: %v (%v since switch start)", err, elapsed)
 		errorlog.Record("context-switch", "error",
@@ -781,9 +921,15 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	logTiming("   [ops] InitAllSubsystems: %v", time.Since(t))
 
 	// Step 5: Notify all registered callbacks
-	reportProgress("Building topology...")
-	log.Printf("[ops] Context switch to %q COMPLETE (%v total)", newContext, time.Since(switchStart))
-	notifyContextSwitchCallbacks(newContext)
+	progress("Building topology...")
+	var switchID string
+	if (tracker != nil || localRetry) && checked.ctx.Err() != nil {
+		return context.Canceled
+	}
+	if tracker != nil {
+		switchID = tracker.Snapshot().ID
+	}
+	notifyContextSwitchCallbacks(newContext, switchID)
 
 	// Publish success while still holding contextOpMu: a caller publishing
 	// after this returns races the next queued operation's teardown, and the
@@ -794,18 +940,19 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 		Context:     newContext,
 		ClusterName: GetClusterName(),
 	})
+	log.Printf("[ops] Context switch to %q COMPLETE (%v total)", newContext, time.Since(switchStart))
 
 	return nil
 }
 
-func notifyContextSwitchCallbacks(contextName string) {
+func notifyContextSwitchCallbacks(contextName, switchID string) {
 	contextSwitchMu.RLock()
-	callbacks := make([]ContextSwitchCallback, len(contextSwitchCallbacks))
+	callbacks := make([]func(string, string), len(contextSwitchCallbacks))
 	copy(callbacks, contextSwitchCallbacks)
 	contextSwitchMu.RUnlock()
 
 	for _, callback := range callbacks {
-		callback(contextName)
+		callback(contextName, switchID)
 	}
 }
 
@@ -880,8 +1027,11 @@ func PerformNamespaceRescope(namespace string) error {
 			log.Printf("[ops] Namespace rescope rollback to %q FAILED: %v", safePreviousNamespace, rollbackErr)
 			errorlog.Record("namespace-rescope", "error",
 				"stage=Rollback namespace=%q elapsed=%v: %v", safePreviousNamespace, time.Since(rescopeStart).Truncate(time.Millisecond), rollbackErr)
+			SetConnectionStatus(ConnectionStatus{State: StateDisconnected, Context: GetContextName(), ClusterName: GetClusterName(), Error: rollbackErr.Error(), ErrorType: ClassifyError(rollbackErr)})
 			return fmt.Errorf("subsystem init failed: %w; rollback to previous namespace %q failed: %v", err, previousNamespace, rollbackErr)
 		}
+		// The rollback rebuilt the caches: a new admission with a fresh ID.
+		SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: GetContextName(), ClusterName: GetClusterName()})
 		notifyNamespaceRescopeCallbacks(previousNamespace)
 		return fmt.Errorf("subsystem init failed: %w; restored previous namespace %q", err, previousNamespace)
 	}
@@ -895,6 +1045,8 @@ func PerformNamespaceRescope(namespace string) error {
 
 	reportProgress("Building topology...")
 	log.Printf("[ops] Namespace rescope to %q COMPLETE (%v total)", safeNamespace, time.Since(rescopeStart))
+	// The rebuild retired the previous connection; admit the rescoped one.
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: GetContextName(), ClusterName: GetClusterName()})
 	notifyNamespaceRescopeCallbacks(namespace)
 
 	return nil
@@ -907,7 +1059,6 @@ func reinitializeNamespaceScope(namespace, resetMessage string) error {
 	logTiming("   [ops] ResetAllSubsystems: %v", time.Since(t))
 
 	SetNamespaceScopeOverride(namespace)
-	InvalidateCapabilitiesCache()
 	InvalidateServerVersionCache()
 	InvalidatePlatformCache()
 

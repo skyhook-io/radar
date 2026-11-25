@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/skyhook-io/radar/pkg/gitops"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -49,13 +50,13 @@ func TestFluxSourceGraphFollowsReferencedChart(t *testing.T) {
 			}
 			for _, node := range nodes {
 				namespace, _ := node.Data["namespace"].(string)
-				before := GetRelationships(string(node.Kind), namespace, node.Name, &Topology{Nodes: nodes, Edges: previousEdges}, nil, p)
-				after := GetRelationships(string(node.Kind), namespace, node.Name, &Topology{Nodes: nodes, Edges: edges}, nil, p)
+				before := graphRelationships(string(node.Kind), namespace, node.Name, &Topology{Nodes: nodes, Edges: previousEdges}, nil, p)
+				after := graphRelationships(string(node.Kind), namespace, node.Name, &Topology{Nodes: nodes, Edges: edges}, nil, p)
 				if !reflect.DeepEqual(before, after) {
 					t.Fatalf("%s %s/%s relationship projection changed:\nbefore=%+v\nafter=%+v", node.Kind, namespace, node.Name, before, after)
 				}
 			}
-			rel := GetRelationships("HelmRelease", "team", "app", &Topology{Nodes: nodes, Edges: edges}, nil, p)
+			rel := graphRelationships("HelmRelease", "team", "app", &Topology{Nodes: nodes, Edges: edges}, nil, p)
 			wantDependencies := 1
 			if inline {
 				wantDependencies++
@@ -63,7 +64,7 @@ func TestFluxSourceGraphFollowsReferencedChart(t *testing.T) {
 			if rel == nil || rel.Owner != nil || len(rel.Dependencies) != wantDependencies || rel.Dependencies[0].Kind != "HelmChart" || rel.Dependencies[0].Namespace != "shared" {
 				t.Fatalf("source presented as owner: %+v", rel)
 			}
-			chartRel := GetRelationships("HelmChart", "shared", "chart", &Topology{Nodes: nodes, Edges: edges}, nil, p)
+			chartRel := graphRelationships("HelmChart", "shared", "chart", &Topology{Nodes: nodes, Edges: edges}, nil, p)
 			if chartRel == nil || len(chartRel.Dependencies) != 1 || len(chartRel.Dependents) != 1 {
 				t.Fatalf("chart traversal: %+v", chartRel)
 			}
@@ -86,5 +87,159 @@ func TestFluxSourceGraphFollowsReferencedChart(t *testing.T) {
 				t.Fatalf("cross-namespace source leaked through namespace filter: nodes=%+v edges=%+v", nodes, edges)
 			}
 		})
+	}
+}
+
+func TestFluxSourceGraphFollowsArtifactChain(t *testing.T) {
+	obj := func(apiVersion, kind, name string, spec map[string]any) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{"apiVersion": apiVersion, "kind": kind, "metadata": map[string]any{"namespace": "team", "name": name}, "spec": spec}}
+	}
+	genRef := map[string]any{"apiVersion": "source.extensions.fluxcd.io/v1beta1", "kind": "ArtifactGenerator", "name": "gen"}
+	hr := obj("helm.toolkit.fluxcd.io/v2", "HelmRelease", "app", map[string]any{"chartRef": map[string]any{"kind": "ExternalArtifact", "name": "app"}})
+	ea := obj("source.toolkit.fluxcd.io/v1", "ExternalArtifact", "app", map[string]any{"sourceRef": genRef})
+	sibling := obj("source.toolkit.fluxcd.io/v1", "ExternalArtifact", "other", map[string]any{"sourceRef": genRef})
+	gen := obj("source.extensions.fluxcd.io/v1beta1", "ArtifactGenerator", "gen", map[string]any{"sources": []any{map[string]any{"alias": "repo", "kind": "GitRepository", "name": "platform"}}})
+	repo := obj("source.toolkit.fluxcd.io/v1", "GitRepository", "platform", nil)
+	gvrs := map[string]schema.GroupVersionResource{
+		"ExternalArtifact":  {Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "externalartifacts"},
+		"ArtifactGenerator": {Group: "source.extensions.fluxcd.io", Version: "v1beta1", Resource: "artifactgenerators"},
+		"GitRepository":     {Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "gitrepositories"},
+	}
+	p := &issuerTestProvider{monitorDynamicProvider: monitorDynamicProvider{gvrs: gvrs, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{
+		gvrs["ExternalArtifact"]: {ea, sibling}, gvrs["ArtifactGenerator"]: {gen}, gvrs["GitRepository"]: {repo},
+	}}, listCalls: map[string]int{}}
+	nodes := []Node{{ID: "helmrelease/team/app", Kind: KindHelmRelease, Name: "app", Data: map[string]any{"namespace": "team", "apiVersion": hr.GetAPIVersion()}}}
+	nodes, edges, warnings := addFluxSourceEdges(nodes, nil, []*unstructured.Unstructured{hr}, p, DefaultBuildOptions())
+	if len(warnings) != 0 || len(nodes) != 4 || len(edges) != 3 {
+		t.Fatalf("chain: nodes=%+v edges=%+v warnings=%v", nodes, edges, warnings)
+	}
+	for _, n := range nodes {
+		if n.Name == "other" {
+			t.Fatalf("a sibling artifact joined the graph: %+v", n)
+		}
+	}
+	for _, e := range edges {
+		if e.Type != EdgeConfigures {
+			t.Fatalf("source edge must configure: %+v", e)
+		}
+	}
+	for resource, n := range p.listCalls {
+		if n > 2 {
+			t.Fatalf("%s listed %d times: %v", resource, n, p.listCalls)
+		}
+	}
+	rel := graphRelationships("ArtifactGenerator", "team", "gen", &Topology{Nodes: nodes, Edges: edges}, nil, p)
+	if rel == nil || len(rel.Dependents) != 1 || rel.Dependents[0].Kind != "ExternalArtifact" || len(rel.Dependencies) != 1 || rel.Dependencies[0].Kind != "GitRepository" {
+		t.Fatalf("generator relationships: %+v", rel)
+	}
+}
+
+func TestFluxSourceGraphGeneratorCycleTerminates(t *testing.T) {
+	obj := func(apiVersion, kind, name string, spec map[string]any) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{"apiVersion": apiVersion, "kind": kind, "metadata": map[string]any{"namespace": "team", "name": name}, "spec": spec}}
+	}
+	genRef := map[string]any{"apiVersion": "source.extensions.fluxcd.io/v1beta1", "kind": "ArtifactGenerator", "name": "gen"}
+	hr := obj("helm.toolkit.fluxcd.io/v2", "HelmRelease", "app", map[string]any{"chartRef": map[string]any{"kind": "ExternalArtifact", "name": "app"}})
+	ea := obj("source.toolkit.fluxcd.io/v1", "ExternalArtifact", "app", map[string]any{"sourceRef": genRef})
+	gen := obj("source.extensions.fluxcd.io/v1beta1", "ArtifactGenerator", "gen", map[string]any{"sources": []any{
+		map[string]any{"alias": "self", "kind": "ExternalArtifact", "name": "app"},
+		map[string]any{"alias": "repo", "kind": "GitRepository", "name": "platform"},
+	}})
+	repo := obj("source.toolkit.fluxcd.io/v1", "GitRepository", "platform", nil)
+	gvrs := map[string]schema.GroupVersionResource{
+		"ExternalArtifact":  {Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "externalartifacts"},
+		"ArtifactGenerator": {Group: "source.extensions.fluxcd.io", Version: "v1beta1", Resource: "artifactgenerators"},
+		"GitRepository":     {Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "gitrepositories"},
+	}
+	p := &issuerTestProvider{monitorDynamicProvider: monitorDynamicProvider{gvrs: gvrs, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{
+		gvrs["ExternalArtifact"]: {ea}, gvrs["ArtifactGenerator"]: {gen}, gvrs["GitRepository"]: {repo},
+	}}, listCalls: map[string]int{}}
+	nodes := []Node{{ID: "helmrelease/team/app", Kind: KindHelmRelease, Name: "app", Data: map[string]any{"namespace": "team", "apiVersion": hr.GetAPIVersion()}}}
+	nodes, edges, warnings := addFluxSourceEdges(nodes, nil, []*unstructured.Unstructured{hr}, p, DefaultBuildOptions())
+	if len(warnings) != 0 || len(nodes) != 4 {
+		t.Fatalf("nodes=%+v warnings=%v", nodes, warnings)
+	}
+	seen := map[string]bool{}
+	for _, n := range nodes {
+		if seen[n.ID] {
+			t.Fatalf("duplicate node %s", n.ID)
+		}
+		seen[n.ID] = true
+	}
+	// release←artifact, artifact←generator, generator←repository, generator←artifact (the generator's own input).
+	if len(edges) != 4 {
+		t.Fatalf("edges = %+v", edges)
+	}
+	// Cached lists stay bounded by the level cap, not by the cycle.
+	for resource, n := range p.listCalls {
+		if n > gitops.MaxFluxSourceLevels+1 {
+			t.Fatalf("%s listed %d times", resource, n)
+		}
+	}
+}
+
+func TestFluxDependsOnBecomesRequiredBy(t *testing.T) {
+	makeObject := func(group, kind, namespace, name string, dependsOn ...map[string]any) *unstructured.Unstructured {
+		deps := make([]any, 0, len(dependsOn))
+		for _, d := range dependsOn {
+			deps = append(deps, d)
+		}
+		return &unstructured.Unstructured{Object: map[string]any{"apiVersion": group + "/v1", "kind": kind, "metadata": map[string]any{"namespace": namespace, "name": name}, "spec": map[string]any{"dependsOn": deps}}}
+	}
+	const ksGroup, hrGroup = "kustomize.toolkit.fluxcd.io", "helm.toolkit.fluxcd.io"
+	base := makeObject(ksGroup, "Kustomization", "team", "base")
+	overlay := makeObject(ksGroup, "Kustomization", "team", "overlay", map[string]any{"name": "base"})
+	app := makeObject(hrGroup, "HelmRelease", "team", "app", map[string]any{"name": "base"})
+	db := makeObject(hrGroup, "HelmRelease", "team", "db-hr", map[string]any{"name": "missing"}, map[string]any{"name": "db-hr"})
+	gvrs := map[string]schema.GroupVersionResource{
+		"Kustomization": {Group: ksGroup, Version: "v1", Resource: "kustomizations"},
+		"HelmRelease":   {Group: hrGroup, Version: "v2", Resource: "helmreleases"},
+	}
+	p := &issuerTestProvider{monitorDynamicProvider: monitorDynamicProvider{gvrs: gvrs, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{
+		gvrs["Kustomization"]: {base, overlay}, gvrs["HelmRelease"]: {app, db},
+	}}, listCalls: map[string]int{}}
+	node := func(kind NodeKind, prefix, name, apiVersion string) Node {
+		return Node{ID: prefix + "/team/" + name, Kind: kind, Name: name, Data: map[string]any{"namespace": "team", "apiVersion": apiVersion}}
+	}
+	nodes := []Node{
+		node(KindKustomization, "kustomization", "base", base.GetAPIVersion()),
+		node(KindKustomization, "kustomization", "overlay", overlay.GetAPIVersion()),
+		node(KindHelmRelease, "helmrelease", "app", app.GetAPIVersion()),
+		node(KindHelmRelease, "helmrelease", "db-hr", db.GetAPIVersion()),
+	}
+	nodes, edges, warnings := addFluxSourceEdges(nodes, nil, []*unstructured.Unstructured{base, overlay, app, db}, p, DefaultBuildOptions())
+	if len(warnings) != 0 || len(nodes) != 4 {
+		t.Fatalf("nodes=%d warnings=%v, want 4 nodes and no warnings", len(nodes), warnings)
+	}
+	want := Edge{ID: "kustomization/team/overlay-to-kustomization/team/base", Source: "kustomization/team/overlay", Target: "kustomization/team/base", Type: EdgeUses, Label: "depends on"}
+	if len(edges) != 1 || !reflect.DeepEqual(edges[0], want) {
+		t.Fatalf("edges = %+v, want only %+v", edges, want)
+	}
+	rel := graphRelationships("Kustomization", "team", "base", &Topology{Nodes: nodes, Edges: edges}, nil, p)
+	if rel == nil || len(rel.Dependents) != 1 || rel.Dependents[0].Name != "overlay" {
+		t.Fatalf("base dependents = %+v, want overlay", rel)
+	}
+}
+
+// A generator paused by source-watcher's annotation keeps its last Ready
+// condition; topology colours it as an intentional pause, not a failure.
+func TestFluxSourceGraphPausedGeneratorIsNeutral(t *testing.T) {
+	gen := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "source.extensions.fluxcd.io/v1beta1", "kind": "ArtifactGenerator",
+		"metadata": map[string]any{"namespace": "team", "name": "gen", "annotations": map[string]any{"source.extensions.fluxcd.io/reconcile": "Disabled"}},
+		"status":   map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "False", "reason": "BuildFailed"}}},
+	}}
+	if got := extractGenericStatus(gen); got != StatusNeutral {
+		t.Fatalf("paused generator status = %s, want neutral", got)
+	}
+	gen.SetAnnotations(nil)
+	if got := extractGenericStatus(gen); got != StatusUnhealthy {
+		t.Fatalf("unpaused generator status = %s, want unhealthy", got)
+	}
+	other := gen.DeepCopy()
+	other.SetAPIVersion("example.com/v1")
+	other.SetAnnotations(map[string]string{"source.extensions.fluxcd.io/reconcile": "disabled"})
+	if got := extractGenericStatus(other); got != StatusUnhealthy {
+		t.Fatalf("another group's ArtifactGenerator status = %s, want unhealthy", got)
 	}
 }

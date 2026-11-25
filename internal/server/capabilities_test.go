@@ -16,6 +16,7 @@ func TestMergeNamespaceCapabilitiesUsesCleanNamespaceDenies(t *testing.T) {
 			DaemonSets:   true,
 			StatefulSets: true,
 			Rollouts:     true,
+			Workflows:    true,
 		},
 	}
 	nsCaps := &k8s.NamespaceCapabilities{}
@@ -25,7 +26,7 @@ func TestMergeNamespaceCapabilitiesUsesCleanNamespaceDenies(t *testing.T) {
 	if caps.Exec || caps.Logs || caps.PortForward {
 		t.Fatalf("clean namespace denies should override global exec/log/port-forward grants: %+v", caps)
 	}
-	if caps.WorkloadWrites.Deployments || caps.WorkloadWrites.DaemonSets || caps.WorkloadWrites.StatefulSets || caps.WorkloadWrites.Rollouts {
+	if caps.WorkloadWrites.Deployments || caps.WorkloadWrites.DaemonSets || caps.WorkloadWrites.StatefulSets || caps.WorkloadWrites.Rollouts || caps.WorkloadWrites.Workflows {
 		t.Fatalf("clean namespace denies should override global workload write grants: %+v", caps.WorkloadWrites)
 	}
 }
@@ -40,6 +41,7 @@ func TestMergeNamespaceCapabilitiesPreservesGlobalOnErroredChecks(t *testing.T) 
 			DaemonSets:   true,
 			StatefulSets: true,
 			Rollouts:     true,
+			Workflows:    true,
 		},
 	}
 	nsCaps := &k8s.NamespaceCapabilities{
@@ -47,6 +49,7 @@ func TestMergeNamespaceCapabilitiesPreservesGlobalOnErroredChecks(t *testing.T) 
 			Exec: true,
 			WorkloadWrites: k8s.WorkloadWriteCapabilityErrors{
 				Deployments: true,
+				Workflows:   true,
 			},
 		},
 	}
@@ -61,6 +64,9 @@ func TestMergeNamespaceCapabilitiesPreservesGlobalOnErroredChecks(t *testing.T) 
 	}
 	if !caps.WorkloadWrites.Deployments {
 		t.Fatal("errored deployment write check should preserve existing global grant")
+	}
+	if !caps.WorkloadWrites.Workflows {
+		t.Fatal("errored workflow write check should preserve existing global grant")
 	}
 	if caps.WorkloadWrites.DaemonSets || caps.WorkloadWrites.StatefulSets || caps.WorkloadWrites.Rollouts {
 		t.Fatalf("clean workload write denies should still override non-errored grants: %+v", caps.WorkloadWrites)
@@ -80,5 +86,27 @@ func TestMergeNamespaceCapabilitiesHelmWrite(t *testing.T) {
 	mergeNamespaceCapabilities(caps, &k8s.NamespaceCapabilities{})
 	if caps.HelmWrite {
 		t.Fatal("a clean namespace deny should override a global Helm write grant")
+	}
+}
+
+func TestPodDebugNeedsBothNamespacePermissions(t *testing.T) {
+	t.Setenv("RADAR_CLOUD_MODE", "false")
+	for _, exec := range []bool{false, true} {
+		for _, update := range []bool{false, true} {
+			caps := &k8s.Capabilities{Exec: true, PodDebug: true}
+			mergeNamespaceCapabilities(caps, &k8s.NamespaceCapabilities{Exec: exec, PodDebug: update})
+			if caps.PodDebug != (exec && update) {
+				t.Errorf("exec=%v, update ephemeralcontainers=%v: podDebug=%v", exec, update, caps.PodDebug)
+			}
+		}
+	}
+}
+
+func TestPodDebugHiddenInCloudMode(t *testing.T) {
+	t.Setenv("RADAR_CLOUD_MODE", "true")
+	caps := &k8s.Capabilities{}
+	mergeNamespaceCapabilities(caps, &k8s.NamespaceCapabilities{Exec: true, PodDebug: true})
+	if caps.PodDebug {
+		t.Fatal("hosted view offered the direct debug action")
 	}
 }

@@ -25,6 +25,10 @@ import (
 // response. Every field is optional; the zero value is a valid (empty)
 // "basic"-tier context.
 //
+// Observed relationship lists preview up to 20 readable references per field.
+// Exposes is the union of both displayed routing directions. A budget_exceeded
+// omission means the display or access-check limit left the total unknown.
+//
 // Context carries structured evidence rather than generated triage prose.
 // Provider field notes may supply fixed writer semantics keyed to raw fields;
 // they must not compose a verdict or hint from the resource's values.
@@ -43,9 +47,12 @@ type ResourceContext struct {
 	// resolved by owner-reference UID, never labels or generated names. Hosts
 	// currently supply this for Collector/Canary roots only; absent is not empty.
 	Children *ChildrenContext `json:"children,omitempty"`
-	// ManagedBy names the highest readable controller and separately observed
-	// non-GitOps managing controllers. Manager carries GitOps/Helm evidence.
-	// An incomplete controller walk is reported in Omitted.
+	// ManagedBy names the highest readable controller, climbing no further
+	// than the first GitOps manager above the resource (an Argo CD
+	// Application, not the ApplicationSet that controls it), and separately
+	// observed non-GitOps managing controllers. Manager carries GitOps/Helm
+	// evidence. An incomplete controller walk below that manager is reported
+	// in Omitted; what stopped the walk above it doesn't qualify the answer.
 	ManagedBy []ContextRef `json:"managedBy,omitempty"`
 	// Manager is what manages the resource, weighed from GitOps managers'
 	// status lists and the resource's own tracking metadata, or its
@@ -202,6 +209,13 @@ type ContextRef struct {
 	Group     string `json:"group,omitempty"`
 	Namespace string `json:"namespace,omitempty"`
 	Name      string `json:"name"`
+	// State qualifies a reference the subject declares, as
+	// topology.ResourceRef.State does: "denied" when the caller may not read
+	// the target, or "access_unverified" when Radar couldn't check the
+	// caller's access to it. The
+	// target's existence and state are unknown then. Empty means no qualifier
+	// was recorded, which is not proof the target exists.
+	State string `json:"state,omitempty"`
 }
 
 // ScalerRef is one scaledBy entry: the scaler's identity plus, when the
@@ -377,8 +391,9 @@ type StaleSecretEnvReference struct {
 	Message            string     `json:"message,omitempty"`
 }
 
-// ReferencedBy lists workload specs that directly reference the subject
-// resource. It is intentionally factual: dynamic API reads and app-specific
+// ReferencedBy lists the objects whose own spec, status or labels name the
+// subject, such as workloads, Ingresses and custom resources, with the paths
+// that name it. Total counts what the caller may read; Items is capped. It is intentionally factual: dynamic API reads and app-specific
 // naming conventions are not inferred.
 type ReferencedBy struct {
 	Total     int            `json:"total"`

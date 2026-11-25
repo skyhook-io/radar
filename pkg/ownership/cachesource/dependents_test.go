@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/discovery"
 	fakediscovery "k8s.io/client-go/discovery/fake"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	clientfeatures "k8s.io/client-go/features"
@@ -629,5 +630,32 @@ func TestDependentCandidatesOnlyPrepareSearchedScopes(t *testing.T) {
 	}
 	if !slices.Equal(first.Gaps, firstGaps) {
 		t.Fatal("preparing another scope changed an earlier answer")
+	}
+}
+
+func TestDependentCandidatesStillRequireEveryGroupsDiscovery(t *testing.T) {
+	for _, whole := range []bool{false, true} {
+		t.Run(fmt.Sprintf("whole failure %v", whole), func(t *testing.T) {
+			f := newFixture(t, k8score.CacheConfig{}, nil)
+			client := &worldDiscovery{lists: discoveryLists(), err: &discovery.ErrGroupDiscoveryFailed{Groups: map[schema.GroupVersion]error{
+				{Group: "metrics.k8s.io", Version: "v1beta1"}: errors.New("unavailable"),
+			}}}
+			if whole {
+				client.lists = nil
+			}
+			rd, err := k8score.NewResourceDiscovery(client)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.caches.Discovery = rd
+			s := begin(t, f.source())
+			got := s.DependentCandidates("uid-deploy", ownership.Everywhere())
+			if !hasGap(got, ownership.Gap{Reason: readreason.ReadError}) || got.Complete() {
+				t.Fatalf("dependents = %+v; want a discovery read_error gap", got)
+			}
+			if got := s.DependentCandidates("uid-deploy", ownership.SearchScope{}); len(got.Gaps) != 0 {
+				t.Fatalf("a search of nothing has gaps: %+v", got.Gaps)
+			}
+		})
 	}
 }

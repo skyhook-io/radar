@@ -630,6 +630,7 @@ func (s *PostgresStore) ClearResourceSeen(clusterContext, group, kind, namespace
 	}
 	select {
 	case <-done:
+	case <-s.quit:
 	case <-ctx.Done():
 		log.Printf("[timeline] timed out waiting for a seen-resource clear to persist")
 	}

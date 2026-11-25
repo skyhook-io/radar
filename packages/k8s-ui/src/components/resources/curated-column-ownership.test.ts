@@ -108,8 +108,8 @@ describe('curated column ownership', () => {
   // Brace-counting, not parsing: assert the extraction actually saw the whole
   // table, or a silently-missed key would let the guard above pass vacuously.
   it('extracted every curated key', () => {
-    expect(CURATED.length).toBe(249)
-    expect(OWNED.size).toBe(209)
+    expect(CURATED.length).toBe(271)
+    expect(OWNED.size).toBe(231)
     expect(CURATED).toContain('pods')
     expect(CURATED).toContain('crossplanemanagedresources')
     expect([...OWNED]).toContain('awsmanagedcontrolplanes')
@@ -154,6 +154,10 @@ describe('curated sets are reachable', () => {
     expect(hasCuratedColumns('services', 'serving.knative.dev')).toBe(true)
     // ...and that an unrelated vendor still gets nothing.
     expect(hasCuratedColumns('policies', 'someone-else.io')).toBe(false)
+    // Longhorn's printer columns (State, Robustness, Scheduled, Size, Node) already
+    // say what a curated set would; neither its Volume nor its Node takes the core set.
+    expect(hasCuratedColumns('volumes', 'longhorn.io')).toBe(false)
+    expect(hasCuratedColumns('nodes', 'longhorn.io')).toBe(false)
   })
 })
 
@@ -166,7 +170,7 @@ describe('every declaration resolves', () => {
     .map(m => [m[1], m[2].split(',').map(g => g.trim().replace(/'/g, ''))] as const)
 
   it('covers the whole ownership table', () => {
-    expect(DECLARED.length).toBe(209)
+    expect(DECLARED.length).toBe(231)
   })
 
   it.each(DECLARED)('%s is curated under each group it claims', (key, groups) => {

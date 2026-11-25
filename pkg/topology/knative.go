@@ -40,31 +40,20 @@ func addKnativeReferenceEdges(nodes []Node, edges []Edge, triggers, sources, cha
 			edges = append(edges, Edge{ID: id, Source: source, Target: target, Type: edgeType})
 		}
 	}
-	appendRef := func(source string, obj *unstructured.Unstructured, reverse bool, fields ...string) {
-		raw, present, err := unstructured.NestedMap(obj.Object, fields...)
-		if err != nil || !present {
-			return
-		}
-		ref, valid := configrefs.KnativeReference(raw, obj.GetNamespace())
-		if valid {
-			appendResolvedRef(source, ref, reverse, EdgeExposes)
+	appendDestinations := func(source string, obj *unstructured.Unstructured) {
+		for _, d := range configrefs.KnativeEventDestinations(obj) {
+			appendResolvedRef(source, d.Ref, false, EdgeExposes)
 		}
 	}
 	for _, trigger := range triggers {
 		id := "trigger/" + trigger.GetNamespace() + "/" + trigger.GetName()
-		appendRef(id, trigger, false, "spec", "subscriber", "ref")
-		// brokerRef is authoritative over the older same-namespace broker field.
-		if raw, present, _ := unstructured.NestedMap(trigger.Object, "spec", "brokerRef"); present {
-			if ref, valid := configrefs.KnativeTriggerBrokerReference(raw); valid {
-				appendResolvedRef(id, ref, true, EdgeExposes)
-			}
-		}
+		appendDestinations(id, trigger)
 	}
 	for _, source := range sources {
 		// Source node identities are indexed by their API group, not guessed
 		// from their plural (ApiServerSource and APIService differ).
 		refKey := resourceid.ResourceKey(resourceid.GroupFromAPIVersion(source.GetAPIVersion()), source.GetKind(), source.GetNamespace(), source.GetName())
-		appendRef(ids[refKey], source, false, "spec", "sink", "ref")
+		appendDestinations(ids[refKey], source)
 	}
 	for _, channel := range channels {
 		id := ids[resourceid.ResourceKey(resourceid.GroupFromAPIVersion(channel.GetAPIVersion()), channel.GetKind(), channel.GetNamespace(), channel.GetName())]
@@ -79,7 +68,7 @@ func addKnativeReferenceEdges(nodes []Node, edges []Edge, triggers, sources, cha
 	// Owner references must win over an identical declared status edge,
 	// independent of the discovery/list order of Channel and backing objects.
 	for _, channel := range channels {
-		appendRef(ids[resourceid.ResourceKey(resourceid.GroupFromAPIVersion(channel.GetAPIVersion()), channel.GetKind(), channel.GetNamespace(), channel.GetName())], channel, false, "status", "channel")
+		appendDestinations(ids[resourceid.ResourceKey(resourceid.GroupFromAPIVersion(channel.GetAPIVersion()), channel.GetKind(), channel.GetNamespace(), channel.GetName())], channel)
 	}
 	return edges
 }

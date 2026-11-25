@@ -1,0 +1,8 @@
+[
+  {"case":"shared managers","root":"argocd/Application/other","key":"argocd/Application/other"},
+  {"case":"disagreeing manager and claim","root":"argocd/Application/shop","key":"argocd/Application/shop"},
+  {"case":"labels without inventory","root":"flux-system/HelmRelease/shop","key":"flux-system/HelmRelease/shop"},
+  {"case":"app of apps","root":"argocd/Application/shop","key":"argocd/Application/shop"},
+  {"case":"operator controller","root":"prod/Platform/database","key":"prod/Platform/database"},
+  {"case":"operator noncontroller owner","root":"prod/Platform/database","key":"prod/Platform/database"}
+]

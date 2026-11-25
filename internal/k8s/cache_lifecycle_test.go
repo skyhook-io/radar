@@ -2,6 +2,9 @@ package k8s
 
 import (
 	"context"
+	"errors"
+
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"sync"
 	"testing"
 	"time"
@@ -125,11 +128,11 @@ func TestInitCancelReturnsPromptly(t *testing.T) {
 		t.Fatalf("creating dummy client: %v", err)
 	}
 	clientMu.Lock()
-	k8sClient = dummyClient
+	installedConn.Store(installedConnectionLocked(nil, &sharedKubernetesClients{clientset: dummyClient}))
 	clientMu.Unlock()
 	defer func() {
 		clientMu.Lock()
-		k8sClient = nil
+		installedConn.Store(nil)
 		clientMu.Unlock()
 	}()
 
@@ -152,11 +155,8 @@ func TestInitCancelReturnsPromptly(t *testing.T) {
 	}
 }
 
-// TestConcurrentInvalidateDuringPermissionCheck verifies that
-// InvalidateResourcePermissionsCache does not deadlock when called
-// concurrently with CheckResourcePermissions. The old code held
-// resourcePermsMu.Lock() for the entire duration of network RBAC
-// calls, blocking InvalidateResourcePermissionsCache during context switch.
+// Rescoping must be able to retire a permission check even when its
+// Kubernetes API call is blocked.
 func TestConcurrentInvalidateDuringPermissionCheck(t *testing.T) {
 	defer ResetTestState()
 
@@ -167,13 +167,7 @@ func TestConcurrentInvalidateDuringPermissionCheck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating dummy client: %v", err)
 	}
-	// The dynamic client is what CheckResourcePermissions probes through. Without
-	// it the call returns at the client-not-initialized guard and never takes
-	// resourcePermsMu at all, so there is no contention left to test.
-	//
-	// It must also BLOCK. A fake that answers instantly lets the probe finish
-	// before the invalidation starts, so the two never overlap and the lock
-	// pattern under test is never exercised.
+	// An instant fake could finish before the invalidation and miss the overlap.
 	probeEntered := make(chan struct{})
 	probeRelease := make(chan struct{})
 	var probeEnteredOnce sync.Once
@@ -185,21 +179,17 @@ func TestConcurrentInvalidateDuringPermissionCheck(t *testing.T) {
 		return gvr.Group == "" && gvr.Resource == "pods"
 	})
 	clientMu.Lock()
-	k8sClient = dummyClient
-	dynamicClient = probeDyn
+	installedConn.Store(installedConnectionLocked(nil, &sharedKubernetesClients{clientset: dummyClient, dynamic: probeDyn}))
 	clientMu.Unlock()
 	defer func() {
 		clientMu.Lock()
-		k8sClient = nil
-		dynamicClient = nil
+		installedConn.Store(nil)
 		clientMu.Unlock()
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Run CheckResourcePermissions and InvalidateResourcePermissionsCache
-	// concurrently. With the old locking pattern this would deadlock.
 	var wg sync.WaitGroup
 	wg.Add(2)
 
@@ -219,7 +209,8 @@ func TestConcurrentInvalidateDuringPermissionCheck(t *testing.T) {
 			releaseProbe()
 			return
 		}
-		InvalidateResourcePermissionsCache()
+
+		Current().ResetPermissions()
 		releaseProbe()
 	}()
 
@@ -276,5 +267,33 @@ func TestCacheUsableAfterReset(t *testing.T) {
 	pods2, _ := cache2.Pods().List(labels.Everything())
 	if len(pods2) != 1 || pods2[0].Name != "new-pod" {
 		t.Fatalf("expected new-pod after re-init, got %v", pods2)
+	}
+}
+
+func TestCancelInitialInformerSyncRetiresSyncingCache(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+	t.Setenv("RADAR_DEBUG_SYNC_DELAY", "pods=1h")
+	previous := SetTestClient(kubernetes.NewForConfigOrDie(&rest.Config{Host: "http://127.0.0.1:1"}))
+	t.Cleanup(func() { SetTestClient(previous) })
+	t.Cleanup(SetTestPermissionResult(&PermissionCheckResult{Perms: &ResourcePermissions{Pods: true}, Scopes: map[string]k8score.ResourceScope{"pods": {Enabled: true}}}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- InitResourceCache(ctx) }()
+	for deadline := time.Now().Add(3 * time.Second); GetSyncingResourceCache() == nil; {
+		if time.Now().After(deadline) {
+			t.Fatal("cache never started syncing")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) || GetResourceCache() != nil || GetSyncingResourceCache() != nil {
+			t.Fatalf("cancelled sync: %v, ready %v, syncing %v", err, GetResourceCache() != nil, GetSyncingResourceCache() != nil)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("initial informer sync ignored cancellation")
 	}
 }

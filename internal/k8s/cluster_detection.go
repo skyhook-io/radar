@@ -17,30 +17,83 @@ import (
 var nkpLookupTimeout = 2 * time.Second
 
 var (
-	nkpAPIMu      sync.Mutex
-	nkpAPIChecked bool
-	nkpAPIAnswer  bool
+	nkpAPIMu         sync.Mutex
+	nkpAPIChecked    bool
+	nkpAPIAnswer     bool
+	nkpAPIGeneration uint64
 )
 
 var (
-	cachedServerVersion string
-	serverVersionOnce   = new(sync.Once)
-	serverVersionMu     sync.Mutex
+	serverVersionMu       sync.Mutex
+	cachedServerVersion   string
+	serverVersionInFlight *serverVersionRead
+	serverVersionFailedAt time.Time
 )
 
-// GetServerVersion returns the cached Kubernetes server version.
-// The version is fetched once and cached for the lifetime of the context.
+// serverVersionRetryAfter answers "" without a new read for a while after a
+// failure, so callers during an outage don't each wait out the client timeout.
+const serverVersionRetryAfter = 5 * time.Second
+
+type serverVersionRead struct {
+	done        chan struct{}
+	version     string
+	invalidated bool // guarded by serverVersionMu
+}
+
+// GetServerVersion returns the Kubernetes server version, read once per
+// context. A failed read is not kept: a call after serverVersionRetryAfter asks
+// again, while callers that arrive during a read wait for it instead of
+// starting their own.
 func GetServerVersion() string {
 	serverVersionMu.Lock()
-	defer serverVersionMu.Unlock()
-	serverVersionOnce.Do(func() {
-		if client := GetClient(); client != nil {
-			if v, err := client.Discovery().ServerVersion(); err == nil {
-				cachedServerVersion = v.GitVersion
-			}
+	if cachedServerVersion != "" {
+		defer serverVersionMu.Unlock()
+		return cachedServerVersion
+	}
+	if time.Since(serverVersionFailedAt) < serverVersionRetryAfter {
+		serverVersionMu.Unlock()
+		return ""
+	}
+	if read := serverVersionInFlight; read != nil {
+		serverVersionMu.Unlock()
+		<-read.done
+		return serverVersionOrRetry(read)
+	}
+	read := &serverVersionRead{done: make(chan struct{})}
+	serverVersionInFlight = read
+	serverVersionMu.Unlock()
+
+	if client := GetClient(); client != nil {
+		if v, err := client.Discovery().ServerVersion(); err == nil {
+			read.version = v.GitVersion
 		}
-	})
-	return cachedServerVersion
+	}
+
+	serverVersionMu.Lock()
+	// A context switch during the read invalidated it; don't cache the
+	// previous cluster's version.
+	if serverVersionInFlight == read {
+		serverVersionInFlight = nil
+		cachedServerVersion = read.version
+		if read.version == "" {
+			serverVersionFailedAt = time.Now()
+		}
+	}
+	serverVersionMu.Unlock()
+	close(read.done)
+	return serverVersionOrRetry(read)
+}
+
+// serverVersionOrRetry asks again when a context switch invalidated the read,
+// so no caller gets the previous cluster's version.
+func serverVersionOrRetry(read *serverVersionRead) string {
+	serverVersionMu.Lock()
+	invalidated := read.invalidated
+	serverVersionMu.Unlock()
+	if invalidated {
+		return GetServerVersion()
+	}
+	return read.version
 }
 
 // InvalidateServerVersionCache resets the cached server version.
@@ -49,7 +102,11 @@ func InvalidateServerVersionCache() {
 	serverVersionMu.Lock()
 	defer serverVersionMu.Unlock()
 	cachedServerVersion = ""
-	serverVersionOnce = new(sync.Once)
+	if serverVersionInFlight != nil {
+		serverVersionInFlight.invalidated = true
+	}
+	serverVersionInFlight = nil
+	serverVersionFailedAt = time.Time{}
 }
 
 // ClusterInfo contains detected cluster information
@@ -84,8 +141,24 @@ func (i *ClusterInfo) KubeconfigCluster() string {
 	return i.Cluster
 }
 
+type clusterInfoObservation struct {
+	info ClusterInfo
+	at   time.Time
+}
+
+// LastClusterInfo returns the last completed read with a known version for this cache generation.
+// Diagnostics must not start or wait for an API request when the cluster is unreachable.
+func (cache *ResourceCache) LastClusterInfo() (ClusterInfo, time.Time) {
+	if observed := cache.lastClusterInfo.Load(); observed != nil {
+		return observed.info, observed.at
+	}
+	return ClusterInfo{}, time.Time{}
+}
+
 // GetClusterInfo returns detected cluster information
 func GetClusterInfo(ctx context.Context) (*ClusterInfo, error) {
+	conn := Current()
+	initialCache := conn.ResourceCache()
 	platform, _ := GetClusterPlatform(ctx)
 
 	info := &ClusterInfo{
@@ -122,8 +195,17 @@ func GetClusterInfo(ctx context.Context) (*ClusterInfo, error) {
 	dynamicCache := GetDynamicResourceCache()
 	if dynamicCache != nil {
 		info.CRDDiscoveryStatus = string(dynamicCache.GetDiscoveryStatus())
+	} else if cache.CustomResourcesPending() {
+		info.CRDDiscoveryStatus = string(k8score.CRDDiscoveryInProgress)
 	}
 
+	// The version is cached and the counts come from informers, so a read
+	// during an outage succeeds on stale data: it must not move the
+	// observation (and its time) forward.
+	if initialCache != nil && conn.cacheIsCurrent() && ctx.Err() == nil && info.KubernetesVersion != "" &&
+		GetConnectionStatus().State != StateDisconnected {
+		initialCache.lastClusterInfo.Store(&clusterInfoObservation{info: *info, at: time.Now()})
+	}
 	return info, nil
 }
 
@@ -192,20 +274,27 @@ func isNKP(ctx context.Context) bool {
 			}
 		}
 	}
+	nkpAPIMu.Lock()
+	if nkpAPIChecked {
+		answer := nkpAPIAnswer
+		nkpAPIMu.Unlock()
+		return answer
+	}
+	generation := nkpAPIGeneration
+	nkpAPIMu.Unlock()
 	client := GetClient()
 	if client == nil {
 		return false
-	}
-
-	nkpAPIMu.Lock()
-	defer nkpAPIMu.Unlock()
-	if nkpAPIChecked {
-		return nkpAPIAnswer
 	}
 	lookupCtx, cancel := context.WithTimeout(ctx, nkpLookupTimeout)
 	defer cancel()
 	_, err := client.CoreV1().Namespaces().Get(lookupCtx, k8score.NKPNamespace, metav1.GetOptions{})
 	if err != nil && !apierrors.IsNotFound(err) && !apierrors.IsForbidden(err) {
+		return false
+	}
+	nkpAPIMu.Lock()
+	defer nkpAPIMu.Unlock()
+	if nkpAPIGeneration != generation {
 		return false
 	}
 	nkpAPIChecked, nkpAPIAnswer = true, err == nil
@@ -217,6 +306,7 @@ func isNKP(ctx context.Context) bool {
 func InvalidatePlatformCache() {
 	nkpAPIMu.Lock()
 	defer nkpAPIMu.Unlock()
+	nkpAPIGeneration++
 	nkpAPIChecked, nkpAPIAnswer = false, false
 }
 

@@ -4,7 +4,10 @@ go 1.26.0
 
 require (
 	github.com/google/uuid v1.6.0
+	github.com/netresearch/go-cron v0.15.0
+	github.com/prometheus/prometheus v0.307.3
 	github.com/robfig/cron v1.2.0
+	github.com/robfig/cron/v3 v3.0.1
 	golang.org/x/net v0.60.0
 	golang.org/x/sync v0.23.0
 	k8s.io/api v0.37.2
@@ -16,6 +19,16 @@ require (
 	k8s.io/kubectl v0.37.2
 	k8s.io/streaming v0.37.2
 	sigs.k8s.io/yaml v1.6.0
+)
+
+require (
+	github.com/beorn7/perks v1.0.1 // indirect
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/dennwc/varint v1.0.0 // indirect
+	github.com/grafana/regexp v0.0.0-20250905093917-f7b3be9d1853 // indirect
+	github.com/prometheus/client_golang v1.23.2 // indirect
+	github.com/prometheus/procfs v0.21.0 // indirect
+	go.uber.org/atomic v1.11.0 // indirect
 )
 
 require (
@@ -59,7 +72,7 @@ require (
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	k8s.io/kube-openapi v0.0.0-20260721132016-d427ff9ee9ad // indirect
-	k8s.io/utils v0.0.0-20260626114624-be93311217bd // indirect
+	k8s.io/utils v0.0.0-20260626114624-be93311217bd
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect

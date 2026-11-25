@@ -161,7 +161,7 @@ func TestKnativeFrontDoorServiceExposesTheKnativeService(t *testing.T) {
 	if ksvcRel == nil || len(ksvcRel.Services) != 1 || ksvcRel.Services[0].Group != "" || len(ksvcRel.Backends) != 0 {
 		t.Errorf("Knative Service should list its front door under Services, not Routes To: %+v", ksvcRel)
 	}
-	svcRel := GetRelationshipsWithIndex("services", "team", "web", topo, nil, nil, idx)
+	svcRel := graphRelationshipsWithIndex("services", "team", "web", topo, nil, nil, idx)
 	if svcRel == nil || len(svcRel.Backends) != 1 || svcRel.Backends[0].Group != "serving.knative.dev" {
 		t.Errorf("front-door Service should list the Knative Service under Routes To: %+v", svcRel)
 	}

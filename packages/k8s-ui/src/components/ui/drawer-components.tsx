@@ -1,9 +1,9 @@
 import { dedupeResourceRefs, omitResourceRefs, resourceRefKey } from '../../utils/resource-refs'
-import { gapReasonText } from '../../utils/read-actions'
+import { canonicalReadCode, gapReasonText } from '../../utils/read-actions'
 import { customResourceDefinitionRef, getCRDDefinitionsSnapshot, subscribeCRDDefinitions } from '../../utils/navigation'
 import { Disclosure } from './Disclosure'
 import { createContext, useContext, useState, useSyncExternalStore } from 'react'
-import { Copy, Check, Tag, AlertTriangle, CheckCircle, ExternalLink, Layers, X, Minus } from 'lucide-react'
+import { Copy, Check, Tag, AlertTriangle, CheckCircle, ExternalLink, Layers, X, Minus, Lock } from 'lucide-react'
 import { clsx } from 'clsx'
 import { formatDuration, formatResources } from '../resources/resource-utils'
 import { getEffectiveResources } from '../../utils/extended-resources'
@@ -86,11 +86,12 @@ interface SectionProps {
   icon?: React.ComponentType<{ className?: string }>
   children: React.ReactNode
   defaultExpanded?: boolean
+  mountLazily?: boolean
   contentClassName?: string
   variant?: 'plain' | 'card'
 }
 
-export function Section({ title, icon: Icon, children, defaultExpanded = true, contentClassName, variant = 'plain' }: SectionProps) {
+export function Section({ title, icon: Icon, children, defaultExpanded = true, mountLazily, contentClassName, variant = 'plain' }: SectionProps) {
   const [expanded, setExpanded] = useState(defaultExpanded)
   const { panelId, buttonProps } = useDisclosure(expanded)
 
@@ -105,7 +106,7 @@ export function Section({ title, icon: Icon, children, defaultExpanded = true, c
         {Icon && <Icon className="w-4 h-4 text-theme-text-secondary" />}
         <span className={clsx("font-medium text-theme-text-secondary", variant === 'card' ? 'text-xs uppercase tracking-wider' : 'text-sm')}>{title}</span>
       </button>
-      <Collapse open={expanded} id={panelId}>
+      <Collapse open={expanded} id={panelId} mountLazily={mountLazily}>
         <div className={contentClassName ?? (variant === 'card' ? 'p-3' : 'pl-6')}>{children}</div>
       </Collapse>
     </div>
@@ -398,13 +399,15 @@ export function ConditionsSection({
 // ALERT BANNER
 // ============================================================================
 
+// The message line is 12px body text, so it uses the neutral secondary tone:
+// the variants' tinted tones fall below 4.5:1 on their light backgrounds.
 const ALERT_COLORS = {
-  alert:   { bg: 'status-alert', border: '', title: '', message: '', list: '', bullet: '' },
+  alert:   { bg: 'status-alert', border: '', title: '', message: 'text-theme-text-secondary', list: '', bullet: '' },
   unknown: { bg: 'status-unknown', border: '', title: '', message: '', list: '', bullet: '' },
-  error:   { bg: 'bg-red-50 dark:bg-red-950/30', border: 'border-red-200 dark:border-red-800/30', title: 'text-red-700 dark:text-red-300', message: 'text-red-600/80 dark:text-red-300/70', list: 'text-red-600 dark:text-red-400', bullet: 'text-red-400/60 dark:text-red-400/50' },
-  warning: { bg: 'bg-amber-50 dark:bg-amber-950/30', border: 'border-amber-200 dark:border-amber-800/30', title: 'text-amber-700 dark:text-amber-300', message: 'text-amber-600/80 dark:text-amber-300/70', list: 'text-amber-600 dark:text-amber-400', bullet: 'text-amber-400/60 dark:text-amber-400/50' },
-  info:    { bg: 'bg-sky-50 dark:bg-sky-950/30', border: 'border-sky-200 dark:border-sky-800/30', title: 'text-sky-700 dark:text-sky-300', message: 'text-sky-600/80 dark:text-sky-300/70', list: 'text-sky-600 dark:text-sky-400', bullet: 'text-sky-400/60 dark:text-sky-400/50' },
-  success: { bg: 'bg-emerald-50 dark:bg-emerald-950/30', border: 'border-emerald-200 dark:border-emerald-800/30', title: 'text-emerald-700 dark:text-emerald-300', message: 'text-emerald-600/80 dark:text-emerald-300/70', list: 'text-emerald-600 dark:text-emerald-400', bullet: 'text-emerald-400/60 dark:text-emerald-400/50' },
+  error:   { bg: 'bg-red-50 dark:bg-red-950/30', border: 'border-red-200 dark:border-red-800/30', title: 'text-red-700 dark:text-red-300', message: 'text-theme-text-secondary', list: 'text-red-600 dark:text-red-400', bullet: 'text-red-400/60 dark:text-red-400/50' },
+  warning: { bg: 'bg-amber-50 dark:bg-amber-950/30', border: 'border-amber-200 dark:border-amber-800/30', title: 'text-amber-700 dark:text-amber-300', message: 'text-theme-text-secondary', list: 'text-amber-600 dark:text-amber-400', bullet: 'text-amber-400/60 dark:text-amber-400/50' },
+  info:    { bg: 'bg-sky-50 dark:bg-sky-950/30', border: 'border-sky-200 dark:border-sky-800/30', title: 'text-sky-700 dark:text-sky-300', message: 'text-theme-text-secondary', list: 'text-sky-600 dark:text-sky-400', bullet: 'text-sky-400/60 dark:text-sky-400/50' },
+  success: { bg: 'bg-emerald-50 dark:bg-emerald-950/30', border: 'border-emerald-200 dark:border-emerald-800/30', title: 'text-emerald-700 dark:text-emerald-300', message: 'text-theme-text-secondary', list: 'text-emerald-600 dark:text-emerald-400', bullet: 'text-emerald-400/60 dark:text-emerald-400/50' },
 } as const
 
 const DEFAULT_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -842,7 +845,7 @@ export type CopyHandler = (text: string, key: string) => void
 // RELATED RESOURCES SECTION
 // ============================================================================
 
-import type { TimelineEvent, Relationships, ResourceRef, OwnershipCoverage, ManagerAnswer } from '../../types'
+import type { TimelineEvent, Relationships, ResourceRef, OwnershipCoverage, OwnershipGap, ManagerAnswer } from '../../types'
 import { isChangeEvent, isK8sEvent } from '../../types'
 import { Info, Link } from 'lucide-react'
 import { formatRelativeAgeTime } from '../../utils/format'
@@ -1058,35 +1061,73 @@ export function ownerNote(coverage: OwnershipCoverage | undefined): Relationship
   return undefined
 }
 
-// childrenNote says what a Children list may be missing. Kinds Radar doesn't
-// collect are a hint, since most lists miss a few; kinds it couldn't check
-// for any other reason, a list cut short, and places the viewer may not read
-// are said outright.
+function boundedKinds(kinds: string[], conjunction: 'and' | 'or') {
+  if (kinds.length > 3) return `${kinds.slice(0, 3).join(', ')} and ${kinds.length - 3} more`
+  if (kinds.length === 1) return kinds[0]
+  return `${kinds.slice(0, -1).join(', ')} ${conjunction} ${kinds[kinds.length - 1]}`
+}
+
+function coverageGapNote(gaps: OwnershipGap[], relation: 'children' | 'managers') {
+  const groups = new Map<string, Set<string>>()
+  for (const { kind, group = '' } of gaps) {
+    if (!kind) continue
+    if (!groups.has(kind)) groups.set(kind, new Set())
+    groups.get(kind)!.add(group)
+  }
+
+  const byReason = new Map<string, Set<string>>()
+  let undiscovered = false
+  for (const { kind, group = '', reason } of gaps) {
+    if (!kind) {
+      undiscovered = true
+      continue
+    }
+    const label = groups.get(kind)!.size > 1 ? `${kind} (${group || 'core'})` : kind
+    const code = String(canonicalReadCode(reason))
+    if (!byReason.has(code)) byReason.set(code, new Set())
+    byReason.get(code)!.add(label)
+  }
+
+  const hint: string[] = []
+  const warnings = new Map<string, Set<string>>()
+  const children = relation === 'children'
+  for (const [reason, labels] of byReason) {
+    const kinds = [...labels]
+    if (reason === 'kind_sync_pending') {
+      const names = boundedKinds(kinds, 'and')
+      const loading = kinds.length <= 3 ? `${names} objects` : `${kinds.length} resource kinds (${names})`
+      const which = kinds.length === 1 ? 'that kind' : 'those kinds'
+      hint.push(`Radar is still loading ${loading}, so ${relation} of ${which} aren't ${children ? 'listed yet' : 'checked yet'}.`)
+    } else if (reason === 'radar_kind_not_collected' || (!children && reason === 'read_error')) {
+      const verb = reason === 'read_error' ? "couldn't search" : "doesn't collect"
+      const objects = kinds.length <= 3 ? `${boundedKinds(kinds, 'or')} objects` : `objects of ${kinds.length} kinds (${boundedKinds(kinds, 'or')})`
+      hint.push(`Radar ${verb} ${objects}, so ${children ? 'none of those are listed' : "those managers aren't checked"}.`)
+    } else if (children && reason === 'radar_namespace_not_collected') {
+      hint.push("Radar doesn't collect every namespace, so children in the others aren't listed.")
+    } else {
+      const text = gapReasonText(reason)
+      const combined = warnings.get(text) ?? new Set<string>()
+      for (const label of labels) combined.add(label)
+      warnings.set(text, combined)
+    }
+  }
+  // An API group whose discovery fails, often a metrics API with no server
+  // behind it, leaves every answer with this gap; most such groups hold no
+  // related objects, so it is a hint, not a warning.
+  if (undiscovered) hint.push(`Radar's API discovery missed some API groups, so ${relation} of their kinds aren't ${children ? 'listed' : 'checked'}.`)
+  const pressing = Array.from(warnings, ([text, labels]) => `${boundedKinds([...labels], 'and')} (${text})`)
+  return { hint, pressing }
+}
+
 function childrenNote(coverage: OwnershipCoverage | undefined): RelationshipNote | undefined {
   const children = coverage?.children
   if (!children) return undefined
-  const uncollected = new Set<string>()
-  let someNamespaces = false
-  let undiscovered = false
-  const pressing = new Map<string, string>()
-  for (const g of children.notChecked ?? []) {
-    if (!g.kind) undiscovered = true
-    else if (g.reason === 'radar_kind_not_collected') uncollected.add(g.kind)
-    else if (g.reason === 'radar_namespace_not_collected') someNamespaces = true
-    else if (!pressing.has(g.kind)) pressing.set(g.kind, gapReasonText(g.reason))
-  }
+  const { hint, pressing } = coverageGapNote(children.notChecked ?? [], 'children')
   const note: RelationshipNote = {}
-  const hint: string[] = []
-  if (uncollected.size > 0) hint.push(`Radar doesn't collect ${joinOr(Array.from(uncollected))} objects, so none of those are listed.`)
-  if (someNamespaces) hint.push("Radar doesn't collect every namespace, so children in the others aren't listed.")
-  // An API group whose discovery fails, often a metrics API with no server
-  // behind it, leaves every answer with this gap; most such groups hold no
-  // children, so it is a hint, not a warning.
-  if (undiscovered) hint.push("Radar's API discovery missed some API groups, so children of their kinds aren't listed.")
   if (children.narrowed) hint.push('Only children you can view are listed.')
   if (hint.length > 0) note.hint = hint
   const text: string[] = []
-  if (pressing.size > 0) text.push(`Couldn't check ${Array.from(pressing, ([kind, why]) => `${kind} (${why})`).join(', ')}.`)
+  if (pressing.length > 0) text.push(`Couldn't check ${pressing.join('; ')}.`)
   if (children.truncated) text.push('More children than shown.')
   if (text.length > 0) note.text = text.join(' ')
   return note.hint || note.text ? note : undefined
@@ -1094,10 +1135,6 @@ function childrenNote(coverage: OwnershipCoverage | undefined): RelationshipNote
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1)
-}
-
-function joinOr(items: string[]): string {
-  return items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} or ${items[items.length - 1]}`
 }
 
 // membersNote says what a GitOps manager's status records beyond the members
@@ -1202,16 +1239,9 @@ function managersNote(coverage: OwnershipCoverage | undefined, listed: number, t
     const n = coverageOf.remote
     open.push(`${n} ${n === 1 ? 'manager lists' : 'managers list'} it for a cluster Radar can't confirm is this one`)
   }
-  const pressing = new Map<string, string>()
-  for (const g of coverageOf?.notChecked ?? []) {
-    // An unserved manager kind under incomplete discovery reads as read_error
-    // on every resource, like discovery's own gap.
-    if (!g.kind) hint.push("Radar's API discovery missed some API groups, so managers of their kinds aren't checked.")
-    else if (g.reason === 'read_error') hint.push(`Radar couldn't search ${g.kind} objects, so those managers aren't checked.`)
-    else if (g.reason === 'radar_kind_not_collected') hint.push(`Radar doesn't collect ${g.kind} objects, so those managers aren't checked.`)
-    else if (!pressing.has(g.kind)) pressing.set(g.kind, gapReasonText(g.reason))
-  }
-  if (pressing.size > 0) open.push(`couldn't check ${Array.from(pressing, ([kind, why]) => `${kind} (${why})`).join(', ')}`)
+  const gaps = coverageGapNote(coverageOf?.notChecked ?? [], 'managers')
+  hint.push(...gaps.hint)
+  if (gaps.pressing.length > 0) open.push(`couldn't check ${gaps.pressing.join('; ')}`)
   const text: string[] = []
   if (trackedBy) text.push(`Its tracking label names ${trackedBy}, whose status doesn't list it.`)
   if (open.length > 0) {
@@ -1312,6 +1342,22 @@ export function ResourceRefBadge({ resourceRef, onClick, wrapAtSeparator }: Reso
     ? 'badge max-w-full min-w-0 flex-wrap items-center whitespace-normal text-left leading-tight'
     : 'badge'
   const tooltip = `${resourceRef.kind}: ${resourceRef.namespace}/${resourceRef.name}`
+
+  if (resourceRef.state) {
+    // Named by this resource's spec, but not readable by the viewer: show the
+    // name without implying it exists or can be opened.
+    const why = resourceRef.state === 'denied'
+      ? `You can't view this ${resourceRef.kind}.`
+      : `Radar couldn't check whether you can view this ${resourceRef.kind}.`
+    return (
+      <Tooltip content={`${why} It's listed because this resource references it; whether it exists isn't shown.`} delay={150}>
+        <span className={clsx(layoutClass, kindClass, 'opacity-70')} aria-label={`${tooltip}, not viewable`}>
+          <Lock className="w-3 h-3 shrink-0" aria-hidden="true" />
+          {content}
+        </span>
+      </Tooltip>
+    )
+  }
 
   if (onClick) {
     return (

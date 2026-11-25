@@ -1,7 +1,12 @@
 import { getCRDColumnValue } from './resource-utils-crd'
 import { getStrimziConnectorColumnValue, getStrimziClusterColumnValue } from './resource-utils-strimzi'
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
+import { getVolumeSnapshotColumnValue } from './resource-utils-volumesnapshot'
+import { getMetalLBColumnValue } from './resource-utils-metallb'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
+import { getK3sHelmChartColumnValue } from './resource-utils-k3s'
+import { getUpgradePlanColumnValue } from './resource-utils-upgrade-plan'
+import { FLUX_OPERATOR_GROUP, getFluxOperatorColumnValue, getFluxOperatorStatus } from './resource-utils-flux-operator'
 // Utility functions for resource display in tables
 
 import { getNodeLifecycle } from '../../utils/node-lifecycle'
@@ -15,7 +20,7 @@ import { getArgoRolloutStepNumber, getObservedGeneration, getWorkloadRolloutActi
 import { getCertificateStatus, getCertificateRequestStatus, getClusterIssuerStatus, getClusterIssuerType, getOrderState, getChallengeState, getChallengeType } from './resource-utils-certmanager'
 import { getNodePoolStatus, getNodeClaimStatus } from './resource-utils-karpenter'
 import { getScaledObjectStatus, getScaledJobStatus } from './resource-utils-keda'
-import { getGitRepositoryStatus, getOCIRepositoryStatus, getHelmRepositoryStatus, getHelmRepositoryType, getKustomizationStatus, getFluxHelmReleaseStatus, getFluxAlertStatus } from './resource-utils-flux'
+import { getGitRepositoryStatus, getOCIRepositoryStatus, getHelmRepositoryStatus, getHelmRepositoryType, getKustomizationStatus, getFluxHelmReleaseStatus, getFluxAlertStatus, getExternalArtifactStatus, getArtifactGeneratorStatus } from './resource-utils-flux'
 import { getArgoApplicationStatus, getArgoApplicationSetStatus, getArgoApplicationSync, getArgoApplicationHealth, getArgoApplicationProject } from './resource-utils-argo'
 import { getVulnerabilityReportImage as _getVulnerabilityReportImage } from './resource-utils-trivy'
 import { getKyvernoPolicyRuleTypes as _getKyvernoPolicyRuleTypes, getPolicyReportStatus as _getPolicyReportStatus, getKyvernoPolicyStatus as _getKyvernoPolicyStatus } from './resource-utils-kyverno'
@@ -29,6 +34,7 @@ import { getInferencePoolStatus as _getInferencePoolStatus, getInferenceObjectiv
 import { getVolcanoJobStatus as _getVolcanoJobStatus, getVolcanoQueueStatus as _getVolcanoQueueStatus, getVolcanoPodGroupStatus as _getVolcanoPodGroupStatus, getJobFlowStatus as _getJobFlowStatus, getJobTemplateStatus as _getJobTemplateStatus } from './resource-utils-volcano'
 import { getKaiQueueStatus as _getKaiQueueStatus, getKaiPodGroupStatus as _getKaiPodGroupStatus } from './resource-utils-kai'
 import { getKaitoWorkspaceStatus as _getKaitoWorkspaceStatus, getRAGEngineStatus as _getRAGEngineStatus } from './resource-utils-kaito'
+import { getAgentRuntimeColumnValue, getSandboxClaimStatus as _getSandboxClaimStatus, getSandboxStatus as _getSandboxStatus, getSandboxWarmPoolStatus as _getSandboxWarmPoolStatus, getWorkerPoolStatus as _getWorkerPoolStatus } from './resource-utils-agent-runtimes'
 import { getNIMServiceStatus as _getNIMServiceStatus, getNIMCacheStatus as _getNIMCacheStatus, getNIMPipelineStatus as _getNIMPipelineStatus } from './resource-utils-nim'
 import { getAMDDeviceConfigStatus as _getAMDDeviceConfigStatus } from './resource-utils-amd-gpu'
 import { getPyTorchJobStatus as _getPyTorchJobStatus, getTFJobStatus as _getTFJobStatus, getMPIJobStatus as _getMPIJobStatus, getTrainJobStatus as _getTrainJobStatus } from './resource-utils-kubeflow-training'
@@ -238,7 +244,7 @@ function containerSettledOk(cs: any): boolean {
 // isFatalWaitingReason. These escalate immediately regardless of pod age or a
 // Terminating overlay (a bad image / config error is a real failure now, not a
 // benign young-Pending pod).
-const FATAL_WAITING_REASONS = new Set([
+export const FATAL_WAITING_REASONS = new Set([
   'CrashLoopBackOff', 'ImagePullBackOff', 'ErrImagePull', 'InvalidImageName',
   'ImageInspectError', 'CreateContainerConfigError', 'CreateContainerError', 'RunContainerError',
 ])
@@ -359,6 +365,13 @@ function readinessGateOOMRecovery(pod: any): string | null {
     return cs.name
   }
   return null
+}
+
+// Longhorn (and any other operator) can serve a `nodes` plural of its own; only
+// the core Node gets the Node drawer, status and node actions. Data without an
+// apiVersion is a core Node from a typed read.
+export function isCoreNode(data: any): boolean {
+  return !data?.apiVersion || data.apiVersion === 'v1'
 }
 
 export function getPodStatus(pod: any): StatusBadge {
@@ -816,7 +829,8 @@ export function getPodRestarts(pod: any): number {
 
 export interface ContainerSquareState {
   name: string
-  status: 'ready' | 'running' | 'waiting' | 'completed' | 'terminated' | 'unknown'
+  /** starting: waiting on a transient reason (PodInitializing, ContainerCreating), not a failure. */
+  status: 'ready' | 'running' | 'starting' | 'waiting' | 'completed' | 'terminated' | 'unknown'
   restarts: number
   reason?: string
   message?: string
@@ -850,17 +864,33 @@ export function getDefaultContainerName(pod: any): string | undefined {
   return containers[0]?.name
 }
 
+interface EphemeralContainerRef { name: string; image: string; targetContainerName?: string }
+
+export function getRunningEphemeralContainers(pod: {
+  spec?: { ephemeralContainers?: EphemeralContainerRef[] }
+  status?: { ephemeralContainerStatuses?: { name: string; state?: { running?: { startedAt?: string } } }[] }
+}): (EphemeralContainerRef & { startedAt?: string })[] {
+  return [...(pod.spec?.ephemeralContainers ?? [])].reverse().flatMap(container => {
+    const running = pod.status?.ephemeralContainerStatuses?.find(status => status.name === container.name)?.state?.running
+    return running ? [{ ...container, startedAt: running.startedAt }] : []
+  })
+}
+
 /**
  * The containers a terminal can target: the regular containers, then native
  * sidecars (init containers with restartPolicy: Always, Kubernetes 1.29+),
  * which keep running for the pod's lifetime like regular containers.
  */
-export function getExecContainerNames(pod: any): string[] {
+export function getExecContainerNames(pod: any, options?: { runningOnly: boolean }): string[] {
   const regular = (pod?.spec?.containers || []).map((c: any) => c.name)
   const sidecars = (pod?.spec?.initContainers || [])
     .filter((c: any) => c.restartPolicy === 'Always')
     .map((c: any) => c.name)
-  return [...regular, ...sidecars].filter(Boolean)
+  const names: string[] = [...regular, ...sidecars].filter(Boolean)
+  if (!options?.runningOnly) return names
+  const statuses = [...(pod?.status?.containerStatuses ?? []), ...(pod?.status?.initContainerStatuses ?? [])]
+  const running = new Set(statuses.filter(status => status.state?.running).map(status => status.name))
+  return names.filter(name => running.has(name))
 }
 
 /** Init container names in run order, native sidecars included. */
@@ -904,6 +934,12 @@ export function getDefaultLogContainerName(pod: any): string | undefined {
   return stuck?.name || getDefaultContainerName(pod)
 }
 
+// PodInitializing and ContainerCreating are steps every container passes
+// through, so they read as starting; any other waiting reason is a problem.
+function waitingSquareStatus(reason: string | undefined): ContainerSquareState['status'] {
+  return reason === 'PodInitializing' || reason === 'ContainerCreating' ? 'starting' : 'waiting'
+}
+
 export function getContainerSquareStates(pod: any): ContainerSquareState[] {
   const result: ContainerSquareState[] = []
   const initStatuses = pod.status?.initContainerStatuses || []
@@ -918,7 +954,7 @@ export function getContainerSquareStates(pod: any): ContainerSquareState[] {
     } else if (stateKey === 'running') {
       status = cs.ready ? 'ready' : 'running'
     } else if (stateKey === 'waiting') {
-      status = 'waiting'
+      status = waitingSquareStatus(cs.state?.waiting?.reason)
     } else if (stateKey === 'terminated') {
       status = 'terminated'
     }
@@ -951,7 +987,7 @@ export function getContainerSquareStates(pod: any): ContainerSquareState[] {
       } else if (stateKey === 'terminated') {
         status = 'terminated'
       } else if (stateKey === 'waiting') {
-        status = 'waiting'
+        status = waitingSquareStatus(cs.state?.waiting?.reason)
       }
       const stateDetail = cs.state?.[stateKey]
       const lastTerm = cs.lastState?.terminated
@@ -1695,8 +1731,22 @@ export function cronToHuman(cron: string): string {
   ) {
     return `Weekdays at ${hour}:${minute.padStart(2, '0')}`
   }
+  // A literal time on every day, or on one day of the week. Literal means a
+  // plain number: a list or range ("1,13", "9-17") is not one time.
+  const literal = (v: string, max: number) => /^\d{1,2}$/.test(v) && Number(v) <= max
+  if (literal(minute, 59) && literal(hour, 23) && dayOfMonth === '*' && month === '*') {
+    const at = `${hour}:${minute.padStart(2, '0')}`
+    if (dayOfWeek === '*') return `Daily at ${at}`
+    const day = CRON_WEEKDAYS[dayOfWeek.toUpperCase()]
+    if (day) return `Weekly on ${day} at ${at}`
+  }
 
   return cron
+}
+
+const CRON_WEEKDAYS: Record<string, string> = {
+  '0': 'Sunday', '1': 'Monday', '2': 'Tuesday', '3': 'Wednesday', '4': 'Thursday', '5': 'Friday', '6': 'Saturday',
+  SUN: 'Sunday', MON: 'Monday', TUE: 'Tuesday', WED: 'Wednesday', THU: 'Thursday', FRI: 'Friday', SAT: 'Saturday',
 }
 
 // ============================================================================
@@ -1919,6 +1969,16 @@ export {
 // ============================================================================
 export {
   getFluxResourceStatus,
+  getExternalArtifactStatus,
+  getExternalArtifactRevision,
+  getExternalArtifactGenerator,
+  getExternalArtifactProducer,
+  getArtifactGeneratorStatus,
+  getArtifactGeneratorSources,
+  getArtifactGeneratorCount,
+  getArtifactGeneratorArtifacts,
+  isArtifactGeneratorPaused,
+  shortArtifactRevision,
   getGitRepositoryStatus,
   getOCIRepositoryStatus,
   getHelmRepositoryStatus,
@@ -2560,10 +2620,25 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
   if (connectorValue !== undefined) return connectorValue
   const strimziClusterValue = getStrimziClusterColumnValue(resource, column)
   if (strimziClusterValue !== undefined) return strimziClusterValue
+  const volumeSnapshotValue = getVolumeSnapshotColumnValue(resource, column)
+  if (volumeSnapshotValue !== undefined) return volumeSnapshotValue
+  const metalLBValue = getMetalLBColumnValue(resource, column)
+  if (metalLBValue !== undefined) return metalLBValue
   const otelValue = getOpenTelemetryColumnValue(resource, column)
   if (otelValue !== undefined) return otelValue
   const flaggerValue = getFlaggerColumnValue(resource, column)
   if (flaggerValue !== undefined) return flaggerValue
+  const k3sValue = getK3sHelmChartColumnValue(resource, column)
+  if (k3sValue !== undefined) return k3sValue
+  const agentRuntimeValue = getAgentRuntimeColumnValue(resource, column)
+  if (agentRuntimeValue !== undefined) return agentRuntimeValue
+  const planValue = getUpgradePlanColumnValue(resource, column)
+  if (planValue !== undefined) return planValue
+  if (_isApiGroup(resource?.apiVersion, FLUX_OPERATOR_GROUP)) {
+    if (column === 'status') return getFluxOperatorStatus(resource).text
+    const fluxOperatorValue = getFluxOperatorColumnValue(kind.toLowerCase(), resource, column)
+    if (fluxOperatorValue !== undefined) return fluxOperatorValue
+  }
   const crdValue = getCRDColumnValue(resource, column)
   if (crdValue !== undefined) return crdValue
   const kindLower = kind.toLowerCase()
@@ -2611,6 +2686,8 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'applications') return getArgoApplicationStatus(resource).text
       if (kindLower === 'applicationsets') return getArgoApplicationSetStatus(resource).text
       if (kindLower === 'gitrepositories') return getGitRepositoryStatus(resource).text
+      if (kindLower === 'externalartifacts' && _isApiGroup(resource.apiVersion, 'source.toolkit.fluxcd.io')) return getExternalArtifactStatus(resource).text
+      if (kindLower === 'artifactgenerators' && _isApiGroup(resource.apiVersion, 'source.extensions.fluxcd.io')) return getArtifactGeneratorStatus(resource).text
       if (kindLower === 'ocirepositories') return getOCIRepositoryStatus(resource).text
       if (kindLower === 'helmrepositories') return getHelmRepositoryStatus(resource).text
       if (kindLower === 'kustomizations') return getKustomizationStatus(resource).text
@@ -2650,6 +2727,10 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'kaiqueues') return _getKaiQueueStatus(resource).text
       if (kindLower === 'kaipodgroups') return _getKaiPodGroupStatus(resource).text
       if (kindLower === 'kaitoworkspaces') return _getKaitoWorkspaceStatus(resource).text
+      if (kindLower === 'substrateworkerpools') return _getWorkerPoolStatus(resource).text
+      if (kindLower === 'agentsandboxes') return _getSandboxStatus(resource).text
+      if (kindLower === 'agentsandboxclaims') return _getSandboxClaimStatus(resource).text
+      if (kindLower === 'agentsandboxwarmpools') return _getSandboxWarmPoolStatus(resource).text
       if (kindLower === 'ragengines') return _getRAGEngineStatus(resource).text
       if (kindLower === 'nimservices') return _getNIMServiceStatus(resource).text
       if (kindLower === 'nimcaches') return _getNIMCacheStatus(resource).text
@@ -2749,6 +2830,11 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       return getStorageClassExpansion(resource)
     case 'automount':
       return getServiceAccountAutomount(resource)
+    case 'mutationCount':
+      return _isApiGroup(resource.apiVersion, 'admissionregistration.k8s.io') && Array.isArray(resource.spec?.mutations) ? String(resource.spec.mutations.length) : ''
+    case 'reinvocationPolicy':
+    case 'policyName':
+      return _isApiGroup(resource.apiVersion, 'admissionregistration.k8s.io') ? resource.spec?.[column] ?? '' : ''
     case 'policyTypes':
       return getNetworkPolicyTypes(resource)
     case 'types':

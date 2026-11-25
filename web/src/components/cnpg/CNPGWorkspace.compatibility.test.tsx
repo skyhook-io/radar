@@ -88,3 +88,33 @@ it('outside the CloudNativePG views the Clusters badge is a lower bound, and its
   expect(badge(flagged)).toMatch(/≥(<!-- -->)?1/)
   expect(overview(true)).toMatchObject({ count: 1, countLowerBound: false })
 })
+
+it('Clusters is the Cluster kind\'s list where its route renders the Clusters view, so the kind highlights it and leaves Other kinds', () => {
+  const crd = (group: string, kind: string, name: string) => ({ group, version: 'v1', kind, name, namespaced: true, isCrd: true, verbs: ['list'] })
+  const apiResources = [crd('postgresql.cnpg.io', 'Cluster', 'clusters'), crd('postgresql.cnpg.io', 'Backup', 'backups'), crd('cluster.x-k8s.io', 'Cluster', 'clusters')] as any
+  const cnpgCluster = { name: 'clusters', kind: 'Cluster', group: 'postgresql.cnpg.io' }
+  const capiCluster = { name: 'clusters', kind: 'Cluster', group: 'cluster.x-k8s.io' }
+  function Sidebar({ selectedKind }: { selectedKind: typeof cnpgCluster }) {
+    const workspaces = useCNPGSidebarWorkspace({ apiResources, namespaces: [] })
+    state.result = workspaces
+    return <ResourcesSidebar selectedKind={selectedKind} onSelectedKindChange={() => {}} apiResources={apiResources} categoryWorkspaces={workspaces} />
+  }
+  const clustersHighlighted = /aria-current="page"[^>]*>(?:(?!<\/button>).)*Clusters/
+
+  state.capabilities = { features: { cnpgWorkspace: true } }
+  let html = renderToStaticMarkup(<Sidebar selectedKind={cnpgCluster} />)
+  expect(state.result.CloudNativePG.destinations.find((d: any) => d.id === 'overview').kind).toEqual(cnpgCluster)
+  expect(html).toMatch(clustersHighlighted)
+  expect(html).toMatch(/Other kinds \((<!-- -->)?1(<!-- -->)?\)/)
+
+  // Cluster API's Cluster kind shares the plural, not the destination.
+  html = renderToStaticMarkup(<Sidebar selectedKind={capiCluster} />)
+  expect(html).not.toMatch(clustersHighlighted)
+
+  // A Radar without the Clusters view keeps the generic table reachable under Other kinds.
+  state.capabilities = { features: { resourceIssues: true } }
+  html = renderToStaticMarkup(<Sidebar selectedKind={cnpgCluster} />)
+  expect(state.result.CloudNativePG.destinations.find((d: any) => d.id === 'overview').kind).toBeUndefined()
+  expect(html).not.toMatch(clustersHighlighted)
+  expect(html).toMatch(/Other kinds \((<!-- -->)?2(<!-- -->)?\)/)
+})

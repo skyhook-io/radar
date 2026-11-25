@@ -2,7 +2,7 @@
 // module-internal and don't collide at the top-level barrel with the Checks
 // queue's identically-named helpers when both land. Issue-prefixed public
 // names are safe to surface.
-export { IssueRow, IssuesView } from './IssuesView';
+export { IssueRow, IssuesView, issueRowKey } from './IssuesView';
 export type { IssueDiagnosisSource, IssueRowProps, IssueRowSlotContext, IssuesViewProps } from './IssuesView';
 export { ResourceIssuesSection } from './ResourceIssuesSection';
 export { issueFirstSeenTitle, issueResourceCreatedTitle, issueTiming, issueTimingForDisplay } from './issue-timing';
@@ -16,8 +16,9 @@ export {
   issueSortAnchor,
   compareIssueSortAnchors,
   compareIssues,
+  issueOccurrence,
 } from './types';
-export type { Issue, IssueConditionalCleanup, IssueFinalizerRemoval, IssueSeverity, IssueAffected, IssueResourceRef, IssueDiagnosticContext, IssueDiagnosticFact, IssueDiagnosticConfidence, IssueDiagnosticIssueRef, IssueDiagnosticRole, IssueIncidentParent, IssueChangeContext, IssueRecentChange, IssueRecentChangeField, IssueRunningPreviousValue, IssueWithheld } from './types';
+export type { Issue, IssueConditionalCleanup, IssueFinalizerRemoval, IssueSeverity, IssueAffected, IssueResourceRef, IssueDiagnosticContext, IssueDiagnosticFact, IssueDiagnosticConfidence, IssueDiagnosticIssueRef, IssueDiagnosticRole, IssueIncidentParent, IssueChangeContext, IssueChangeCorrelation, IssueCorrelationUnknown, IssueCorrelationUnknownReason, IssueNoRecentChanges, IssueRecentChange, IssueRecentChangeField, IssueRowChange, IssueRunningPreviousValue, IssueWithheld } from './types';
 export {
   ISSUE_SEVERITY_LABEL,
   ISSUE_SEVERITY_BADGE_CLASS,
@@ -29,3 +30,6 @@ export {
   issueReasonTitle,
   groupLabel,
 } from './severity';
+export { IssueRecentChanges, groupRecentChanges, recentChangesAnchor, recentChangeTimelineTarget } from './IssueRecentChanges';
+export type { IssueExpansion, IssueRecentChangesState, IssueTimelineEventTarget, IssueTimelineLinks } from './IssueRecentChanges';
+export { changeVerb, rowChangeVerb } from './change-verb';

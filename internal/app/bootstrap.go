@@ -26,6 +26,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
 	internalopencost "github.com/skyhook-io/radar/internal/opencost"
+	"github.com/skyhook-io/radar/internal/openobserve"
 	"github.com/skyhook-io/radar/internal/portforward"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/server"
@@ -342,12 +343,7 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 
 	RegisterLastContextMemory(cfg)
 
-	k8s.RegisterTimelineFuncs(func() {
-		// Reset the store AND the per-cluster event-pipeline metrics: RecentDrops
-		// name resources from the previous cluster and must not survive the switch.
-		timeline.ResetStore()
-		timeline.ResetMetricsForContextSwitch()
-	}, func() error {
+	k8s.RegisterTimelineFuncs(timeline.ResetStore, func() error {
 		if err := timeline.ReinitStore(timelineStoreCfg); err != nil {
 			log.Printf("Warning: timeline init failed, continuing degraded: %v", err)
 		}
@@ -355,7 +351,8 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 	})
 
 	// Initialize Prometheus metrics client (must come before SetManualURL)
-	prometheuspkg.Initialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
+	conn := k8s.Current()
+	prometheuspkg.Initialize(conn.ClientInterface(), conn.Config(), conn.ContextName())
 	prometheuspkg.RegisterRediscoverySignals()
 
 	if cfg.PrometheusURL != "" {
@@ -409,7 +406,8 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 				traffic.SetMetricsConfig(selection.Settings.Prometheus.URL, selection.Settings.Prometheus.Headers)
 			}
 		}
-		return traffic.ReinitializeWithConfig(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
+		conn := k8s.Current()
+		return traffic.ReinitializeWithConfig(conn.ClientInterface(), conn.Config(), conn.ContextName())
 	})
 
 	// Shared installations: Reinitialize carries the current manual URL + headers
@@ -430,17 +428,27 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 			if cfg.LocalConnections.HasLaunchOverride(config.IntegrationMetrics) && selection.View.State != "launch" {
 				log.Printf("[prometheus] --prometheus-url applies only to the context Radar was launched on; %q uses its own metrics settings", k8s.SanitizeForLog(k8s.GetContextName()))
 			}
-			prometheuspkg.Reinitialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
+			conn := k8s.Current()
+			prometheuspkg.Reinitialize(conn.ClientInterface(), conn.Config(), conn.ContextName())
 			url, headers := prometheuspkg.CurrentConfig()
 			if url != strings.TrimRight(selection.Settings.Prometheus.URL, "/") || !maps.Equal(headers, selection.Settings.Prometheus.Headers) {
 				prometheuspkg.Configure(selection.Settings.Prometheus.URL, selection.Settings.Prometheus.Headers)
 			}
 			return nil
 		}
-		prometheuspkg.Reinitialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
+		conn := k8s.Current()
+		prometheuspkg.Reinitialize(conn.ClientInterface(), conn.Config(), conn.ContextName())
 		return nil
 	})
 	k8s.RegisterCostResetFunc(internalopencost.Reset)
+	// The automatic cost source was chosen against the metrics backend; an
+	// OpenObserve relay starting, changing or ending makes it choose again,
+	// as a metrics settings change does.
+	prometheuspkg.OnRelayChange(func() {
+		internalopencost.Reset()
+		internalopencost.InvalidateCurrency()
+	})
+	openobserve.Default.LogIfIgnored()
 	if cfg.LocalConnections != nil {
 		cfg.LocalRuntime = connectionruntime.New(cfg.LocalConnections, k8s.RestartTrafficSubsystem)
 		argocd.SetConfig("", "", false, true)
@@ -656,9 +664,6 @@ func CreateServer(cfg AppConfig) *server.Server {
 	}
 
 	srv := server.New(serverCfg)
-	if cfg.MCPEnabled {
-		mcppkg.SetRelationshipTopologySource(srv.RelationshipTopology)
-	}
 	return srv
 }
 
@@ -674,11 +679,11 @@ func InitializeCluster() {
 
 	// Cancel any in-flight API calls from previous attempts (e.g., browser
 	// polling /api/capabilities with RBAC checks through a broken exec plugin).
-	k8s.CancelOngoingOperations()
+	operation, _ := k8s.CancelOngoingOperations()
 
 	clusterStart := time.Now()
 
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{
+	k8s.SetConnectionStatusIfCurrent(operation, k8s.ConnectionStatus{
 		State:       k8s.StateConnecting,
 		Context:     k8s.GetContextName(),
 		ProgressMsg: "Testing cluster connectivity...",
@@ -690,7 +695,7 @@ func InitializeCluster() {
 	// If /version fails, we cancel subsystem init via context.
 	// Derived from the operation context so a context switch or retry
 	// cancels our goroutines immediately.
-	ctx, cancel := context.WithCancel(k8s.OperationContext())
+	ctx, cancel := context.WithCancel(operation)
 	defer cancel()
 
 	// Gate: subsystem progress messages only update the UI after /version
@@ -718,7 +723,7 @@ func InitializeCluster() {
 	go func() {
 		subsystemErr <- k8s.InitAllSubsystems(ctx, func(msg string) {
 			if connected.Load() {
-				k8s.SetConnectionStatus(k8s.ConnectionStatus{
+				k8s.SetConnectionStatusIfCurrent(operation, k8s.ConnectionStatus{
 					State:       k8s.StateConnecting,
 					Context:     k8s.GetContextName(),
 					ProgressMsg: msg,
@@ -735,7 +740,7 @@ func InitializeCluster() {
 		// Don't wait for subsystem drain — exec credential plugins serialize
 		// API calls, so draining 20+ RBAC checks can take 30+ seconds.
 		errorType := k8s.ClassifyError(err)
-		k8s.SetConnectionStatus(k8s.ConnectionStatus{
+		k8s.SetConnectionStatusIfCurrent(operation, k8s.ConnectionStatus{
 			State:     k8s.StateDisconnected,
 			Context:   k8s.GetContextName(),
 			Error:     err.Error(),
@@ -754,7 +759,7 @@ func InitializeCluster() {
 	k8s.LogTiming(" Cluster access check: %v", time.Since(clusterStart))
 
 	// Connectivity confirmed — kick off progress updates for remaining init
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{
+	k8s.SetConnectionStatusIfCurrent(operation, k8s.ConnectionStatus{
 		State:       k8s.StateConnecting,
 		Context:     k8s.GetContextName(),
 		ProgressMsg: "Loading workloads...",
@@ -762,7 +767,7 @@ func InitializeCluster() {
 
 	// Connectivity confirmed — wait for subsystem init to finish
 	if err := <-subsystemErr; err != nil {
-		k8s.SetConnectionStatus(k8s.ConnectionStatus{
+		k8s.SetConnectionStatusIfCurrent(operation, k8s.ConnectionStatus{
 			State:     k8s.StateDisconnected,
 			Context:   k8s.GetContextName(),
 			Error:     err.Error(),
@@ -773,11 +778,13 @@ func InitializeCluster() {
 	}
 	k8s.LogTiming(" Total cluster init: %v", time.Since(clusterStart))
 
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{
+	if !k8s.SetConnectionStatusIfCurrent(operation, k8s.ConnectionStatus{
 		State:       k8s.StateConnected,
 		Context:     k8s.GetContextName(),
 		ClusterName: k8s.GetClusterName(),
-	})
+	}) {
+		return
+	}
 
 	prometheuspkg.Prewarm()
 }
@@ -844,6 +851,8 @@ func mcpPortFilePath() string {
 func Shutdown(srv *server.Server) {
 	log.Println("Shutting down...")
 	RemoveMCPPortFile()
+	// Closed first, so nothing stopped below can admit a connection.
+	k8s.CloseConnectionAdmissions()
 	srv.Stop()
 	k8s.ResetAllSubsystems()
 }
@@ -886,7 +895,7 @@ func CheckClusterAccess(ctx context.Context) error {
 			default:
 			}
 			log.Printf("Retrying cluster connectivity check...")
-			k8s.SetConnectionStatus(k8s.ConnectionStatus{
+			k8s.SetConnectionStatusIfCurrent(ctx, k8s.ConnectionStatus{
 				State:       k8s.StateConnecting,
 				Context:     k8s.GetContextName(),
 				ProgressMsg: "Retrying cluster connectivity...",

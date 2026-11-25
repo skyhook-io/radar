@@ -214,9 +214,10 @@ func (c *Client) runRediscovery(verifyAddr, reason string, gen uint64) bool {
 	base := c.baseURL
 	manual := c.manualURL != ""
 	gated := c.headersRequireURLLocked()
+	relay := c.relay != nil
 	c.mu.RUnlock()
 	switch {
-	case retired, gated:
+	case retired, gated, relay:
 		return false
 	case currentGen != gen:
 		// The configuration changed after the signal (Reset, a new URL or
@@ -303,7 +304,7 @@ func observeResourceChange(source kubernetes.Interface, change k8s.ResourceChang
 	if change.Kind != "Service" && change.Kind != "Pod" {
 		return
 	}
-	if change.Operation != "add" && change.Operation != "update" {
+	if change.Operation != "add" && change.Operation != "update" && !(change.Kind == "Service" && change.Operation == "delete") {
 		return
 	}
 	if change.Operation == "add" && !k8s.InitialSyncComplete() {
@@ -325,7 +326,11 @@ func (c *Client) observeResourceChange(source kubernetes.Interface, op string, o
 	var pod *corev1.Pod
 	switch o := obj.(type) {
 	case *corev1.Service:
-		if !serviceBecameCandidate(op, o, oldObj) {
+		nativeChange := c.invalidateGKEService(source, op, o, oldObj)
+		if op == "delete" && !nativeChange {
+			return
+		}
+		if !nativeChange && !serviceBecameCandidate(op, o, oldObj) {
 			return
 		}
 		svc = o
@@ -340,7 +345,7 @@ func (c *Client) observeResourceChange(source kubernetes.Interface, op string, o
 
 	c.mu.RLock()
 	sameCluster := c.k8sClient != nil && c.k8sClient == source
-	skip := c.retired || c.manualURL != ""
+	skip := c.retired || c.manualURL != "" || c.relay != nil
 	base := c.baseURL
 	var connected *prom.ServiceInfo
 	if base != "" && c.discoveryService != nil {
@@ -359,10 +364,22 @@ func (c *Client) observeResourceChange(source kubernetes.Interface, op string, o
 		}
 		return
 	}
+	lister := c.cachedServiceLister()
+	if lister != nil {
+		for _, name := range gkeFrontendNames {
+			if !prom.IsGMPFrontendLocation(pod.Namespace, name) {
+				continue
+			}
+			frontend, err := lister.Services(pod.Namespace).Get(name)
+			if err == nil && gkeFrontendCandidate(frontend) && labels.SelectorFromSet(frontend.Spec.Selector).Matches(labels.Set(pod.Labels)) {
+				c.invalidateGKECandidate(source, frontend)
+			}
+		}
+	}
 	if base != "" && connected == nil {
 		return
 	}
-	backing := candidateServiceSelecting(c.cachedServiceLister(), pod, connected)
+	backing := candidateServiceSelecting(lister, pod, connected)
 	if backing == nil {
 		return
 	}
@@ -386,14 +403,14 @@ func pastTense(op string) string {
 // candidate whose ports or selector changed. Metadata churn on an existing
 // candidate is not — it would rerun a failing discovery on every write.
 func serviceBecameCandidate(op string, svc *corev1.Service, oldObj any) bool {
-	if !prom.IsCandidateService(svc) {
+	if !prom.IsCandidateService(svc) && !gkeFrontendCandidate(svc) {
 		return false
 	}
 	if op == "add" {
 		return true
 	}
 	old, ok := oldObj.(*corev1.Service)
-	if !ok || !prom.IsCandidateService(old) {
+	if !ok || !(prom.IsCandidateService(old) || gkeFrontendCandidate(old)) {
 		return true
 	}
 	return !portsEqual(old.Spec.Ports, svc.Spec.Ports) || !labels.Equals(old.Spec.Selector, svc.Spec.Selector)
@@ -456,7 +473,7 @@ func candidateServiceSelecting(lister listerscorev1.ServiceLister, pod *corev1.P
 		if len(svc.Spec.Selector) == 0 || !labels.SelectorFromSet(svc.Spec.Selector).Matches(podLabels) {
 			continue
 		}
-		if connected != nil || prom.IsCandidateService(svc) {
+		if connected != nil || prom.IsCandidateService(svc) || gkeFrontendCandidate(svc) {
 			return svc
 		}
 	}
@@ -504,8 +521,12 @@ func isNoResponseError(err error) bool {
 // newConnectedPromClientLocked builds a prom.Client for the connected endpoint
 // whose transport reports unanswered requests. Caller holds c.mu.
 func (c *Client) newConnectedPromClientLocked(httpClient *http.Client) *prom.Client {
-	tr := prom.NewHTTPTransport(c.baseURL, c.basePath, httpClient)
-	tr.Headers = copyHeaders(c.headers)
+	tr := c.newTransportLocked(c.baseURL, c.basePath, httpClient, 0)
+	if c.relay != nil {
+		// No other endpoint can replace the relay, so a failure has nothing
+		// to rediscover.
+		return prom.NewClient(tr)
+	}
 	return prom.NewClient(failureReportingTransport{Transport: tr, addr: c.baseURL, report: c.noteQueryFailure})
 }
 
@@ -513,7 +534,7 @@ func (c *Client) newConnectedPromClientLocked(httpClient *http.Client) *prom.Cli
 // cache was built from this client's cluster connection, else nil.
 func (c *Client) cachedServiceLister() listerscorev1.ServiceLister {
 	cache := k8s.GetResourceCache()
-	if cache == nil || cache.Client() != c.k8sClient {
+	if cache == nil || cache.Client() != k8s.InformerClientFor(c.k8sClient) {
 		return nil
 	}
 	return cache.Services()
@@ -526,7 +547,7 @@ func (c *Client) cachedServiceLister() listerscorev1.ServiceLister {
 // silently drop candidates.
 func (c *Client) cachedServices() ([]*corev1.Service, bool) {
 	cache := k8s.GetResourceCache()
-	if cache == nil || cache.Client() != c.k8sClient {
+	if cache == nil || cache.Client() != k8s.InformerClientFor(c.k8sClient) {
 		return nil, false
 	}
 	if !cache.IsKindClusterWide(string(k8score.Services)) || !cache.IsKindReady(string(k8score.Services)) {

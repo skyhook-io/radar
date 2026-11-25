@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useRef, useCallback } from 'react'
+import { Fragment, useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import type { ReactNode } from 'react'
 import { ChevronRight, Layers, Boxes, HeartPulse, Shapes, Globe, Tag } from 'lucide-react'
 import { CollapseChevron } from '../ui/Collapse'
@@ -13,6 +13,7 @@ import { PageHeader } from '../ui/PageHeader'
 import { SummaryTile, type SummaryTone } from '../ui/SummaryTile'
 import { Facet, type FacetTone } from '../ui/Facet'
 import { SortableTh, TH_CLASS } from '../ui/SortableTh'
+import { TABLE_DENSITY } from '../ui/table-density'
 import { DistributionBar } from '../ui/DistributionBar'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { pluralize } from '../../utils/pluralize'
@@ -123,6 +124,29 @@ function compareEntries(a: AppEntry, b: AppEntry, key: SortKey): number {
   }
 }
 
+// Whatever a host puts here acts by itself. A click would otherwise open the row,
+// and Enter would reach the table's shortcut and open the highlighted one instead.
+// A key the control used is kept from the table too. Anything else still reaches
+// it, so j and k work after clicking something in a row. A row-moving key also
+// takes focus off the control, so the next Enter opens the highlighted row rather
+// than pressing the control on the row it came from.
+const ROW_MOVE_KEYS = new Set(['j', 'k', 'ArrowDown', 'ArrowUp', 'g', 'G'])
+function RowLeading({ children }: { children: ReactNode }) {
+  if (children == null || children === false) return null
+  return (
+    <span
+      className="inline-flex shrink-0 items-center"
+      onClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.defaultPrevented) event.stopPropagation()
+        else if (ROW_MOVE_KEYS.has(event.key) && event.target instanceof HTMLElement) event.target.blur()
+      }}
+    >
+      {children}
+    </span>
+  )
+}
+
 function runtimeSortValue(entry: AppEntry): number {
   return entry.workloadClass === 'job' ? (HEALTH_RANK[entry.health] ?? 0) : entry.readyRatio
 }
@@ -148,6 +172,13 @@ export interface ApplicationsViewProps {
   /** First fetch in flight — render the shape-stable skeleton (pulsing tiles,
    *  rail stubs, table rows) instead of collapsing the chassis. */
   loading?: boolean
+  /** Rendered before the app name. On a folded group `entry` is its first member
+   *  and `group` holds them all. Clicks, Enter and any key the control prevents
+   *  stay in the slot. Other keys still reach the table's shortcuts. */
+  renderRowLeading?: (entry: AppEntry, group?: AppEntry[]) => ReactNode
+  /** Lift matching applications above the remaining results, preserving the active sort.
+   *  A family moves with all its children when any visible member matches. */
+  pinnedSection?: { title: string; predicate: (entry: AppEntry) => boolean }
 }
 
 const APPS_FILTER_SCHEMA = defineFilterSchema({
@@ -160,7 +191,7 @@ const APPS_FILTER_SCHEMA = defineFilterSchema({
   system: { param: 'system', type: 'boolean' },
 })
 
-export function ApplicationsView({ entries: allEntries, variant, onSelect, title = 'Applications', description, emptySlot, headerActions, loading }: ApplicationsViewProps) {
+export function ApplicationsView({ entries: allEntries, variant, onSelect, title = 'Applications', description, emptySlot, headerActions, loading, renderRowLeading, pinnedSection }: ApplicationsViewProps) {
   // Facets + search + show-system live in the URL (shareable, bookmarkable) via
   // the shared filter-state contract. Sort stays local: it's a compound
   // {key, dir} view-preference, not a result-narrowing filter, so it isn't
@@ -228,7 +259,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
   // Fleet rows must scope non-portable identities to the cluster set that
   // produced them — only a portable (declared / cross-cluster-unified) key may
   // fold across clusters. Single-cluster has no such concern, so no localScope.
-  const visibleRows = useMemo<FoldedRow<AppEntry>[]>(
+  const foldedRows = useMemo<FoldedRow<AppEntry>[]>(
     () => foldAppGroups(entries, expandedGroups, FAMILY_AUTO_EXPAND_ON_SEARCH && textFilter.trim() !== '',
       variant === 'fleet'
         ? {
@@ -252,6 +283,21 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
     ),
     [entries, expandedGroups, textFilter, variant],
   )
+
+  // Partition after sorting, filtering and folding. The same array drives the
+  // keyboard and the DOM, including a folded family's expanded children.
+  const { visibleRows, pinnedCount } = useMemo(() => {
+    if (!pinnedSection) return { visibleRows: foldedRows, pinnedCount: 0 }
+    const pinned: FoldedRow<AppEntry>[] = []
+    const rest: FoldedRow<AppEntry>[] = []
+    let section = rest
+    for (const row of foldedRows) {
+      if (row.kind === 'group') section = row.members.some(pinnedSection.predicate) ? pinned : rest
+      else if (!row.child) section = pinnedSection.predicate(row.entry) ? pinned : rest
+      section.push(row)
+    }
+    return { visibleRows: [...pinned, ...rest], pinnedCount: pinned.length }
+  }, [foldedRows, pinnedSection])
 
   // Row keyboard navigation — same contract as the Resources table: j/k or
   // arrows move a highlight, g g / G jump, Enter opens, Escape clears the
@@ -420,7 +466,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
 
         {/* Content: toolbar (search + sort) over the scrollable table. */}
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          <div className="flex shrink-0 items-center gap-3 border-b border-theme-border px-4 py-3">
+          <div className={clsx('flex shrink-0 items-center gap-3 border-b border-theme-border', TABLE_DENSITY.toolbarClass)}>
             <SearchBox
               value={textFilter}
               onChange={(v) => filters.setString('q', v)}
@@ -481,9 +527,17 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleRows.map((r, idx) => r.kind === 'group' ? (
+                  {visibleRows.map((r, idx) => (
+                    <Fragment key={r.kind === 'group' ? `group:${r.key}` : `app:${r.entry.row.key}`}>
+                    {pinnedCount > 0 && (idx === 0 || idx === pinnedCount) && (
+                      <tr>
+                        <td colSpan={8} className="border-b-subtle bg-theme-surface/60 px-3 py-1.5 text-xs font-medium text-theme-text-secondary">
+                          {idx === 0 ? pinnedSection?.title : 'Other applications'}
+                        </td>
+                      </tr>
+                    )}
+                    {r.kind === 'group' ? (
                     <tr
-                      key={`group:${r.key}`}
                       ref={idx === highlightedIndex ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
                       aria-expanded={r.expanded}
                       className={clsx(
@@ -500,6 +554,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                             <span className={clsx('h-8 w-1 shrink-0 rounded-full', HEALTH_META[r.health].bar)} />
                           </Tooltip>
                           <CollapseChevron open={r.expanded} className="h-3.5 w-3.5" />
+                          {renderRowLeading && <RowLeading>{renderRowLeading(r.members[0], r.members)}</RowLeading>}
                           <span className="truncate font-semibold text-theme-text-primary">{r.label}</span>
                           {r.workloadClass !== 'job' && <BatchSignalChip signal={firstBatchSignal(r.members.map((m) => m.row))} />}
                           <Tooltip
@@ -566,7 +621,6 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                     </tr>
                   ) : ((e) => (
                     <tr
-                      key={e.row.key}
                       ref={idx === highlightedIndex ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
                       className={clsx(
                         'group/row cursor-pointer border-b-subtle',
@@ -579,6 +633,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                           <Tooltip content={applicationRuntimeLabel([e.row], e.workloadClass, e.health)} delay={150}>
                             <span className={clsx('h-8 w-1 shrink-0 rounded-full', HEALTH_META[e.health].bar)} />
                           </Tooltip>
+                          {renderRowLeading && <RowLeading>{renderRowLeading(e)}</RowLeading>}
                           <span className="truncate font-medium text-theme-text-primary">{e.row.name}</span>
                           {e.workloadClass !== 'job' && <BatchSignalChip signal={batchSignalForApp(e.row)} />}
                           <ProvenanceBadge tier={e.row.tier} appKey={e.row.key} confidence={e.row.confidence} />
@@ -676,7 +731,9 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                       </td>
                       <td className="pr-2 text-right"><ChevronRight className="inline h-4 w-4 text-theme-text-tertiary" /></td>
                     </tr>
-                  ))(r.entry))}
+                  ))(r.entry)}
+                    </Fragment>
+                  ))}
                 </tbody>
               </table>
           )}

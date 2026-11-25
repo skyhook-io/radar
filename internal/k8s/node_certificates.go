@@ -104,8 +104,9 @@ func readNodeCertificateHistory(nodes []*corev1.Node) nodeCertificateHistory {
 func nodeCertificateReports(cache *ResourceCache, scope *DetectScope, now time.Time) nodeCertificateAssessment {
 	return scope.get("node-certificate-reports", func() any {
 		empty := nodeCertificateAssessment{}
+		conn := Current()
 		clusterContext := ActiveClusterContext()
-		if cache == nil || cache != GetResourceCache() || cache.Nodes() == nil || !cache.IsKindReady(k8score.Nodes) {
+		if cache == nil || cache != conn.ResourceCache() || cache.Nodes() == nil || !cache.IsKindReady(k8score.Nodes) {
 			return empty
 		}
 		nodes, err := cache.Nodes().List(labels.Everything())
@@ -133,7 +134,7 @@ func nodeCertificateReports(cache *ResourceCache, scope *DetectScope, now time.T
 				history.unavailable = true
 			}
 		}
-		if cache != GetResourceCache() || clusterContext != ActiveClusterContext() {
+		if !conn.cacheIsCurrent() || clusterContext != ActiveClusterContext() {
 			return empty
 		}
 		return assessNodeCertificates(applicable, live, history, liveComplete, now)

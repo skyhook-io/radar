@@ -2,12 +2,14 @@ package context
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/pkg/prune"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // minifyDetail strips metadata noise and per-type status noise, but keeps full spec
@@ -40,17 +42,85 @@ func minifyDetailUnstructured(obj map[string]any) map[string]any {
 }
 
 // redactUnstructuredSecrets redacts inline secret-shaped values in a CRD's
-// spec/status. Core Secret bodies are handled structurally elsewhere; this is
+// spec/status, and in a core PodTemplate's template. Core Secret bodies are handled structurally elsewhere; this is
 // the only value-level pass that reaches arbitrary CRD specs (e.g. a Traefik
 // Middleware basicAuth user) before they go to an LLM.
 func redactUnstructuredSecrets(obj map[string]any) {
+	stripK3sHelmValues(obj)
+	redactUpgradePlanEnvs(obj)
 	if spec, ok := obj["spec"]; ok {
 		RedactInlineSecrets(spec)
 	}
 	if status, ok := obj["status"]; ok {
 		RedactInlineSecrets(status)
 	}
+	if template, ok := obj["template"]; ok {
+		RedactInlineSecrets(template)
+	}
 	redactSecretFindings(obj)
+}
+
+// stripK3sHelmValues replaces a k3s HelmChart's or HelmChartConfig's inline
+// values with their size: valuesContent, values and set carry chart values, which can
+// hold credentials in any key, so pattern redaction is not enough.
+func stripK3sHelmValues(obj map[string]any) {
+	apiVersion, _ := obj["apiVersion"].(string)
+	if resourceid.GroupFromAPIVersion(apiVersion) != "helm.cattle.io" {
+		return
+	}
+	spec, _ := obj["spec"].(map[string]any)
+	if values, ok := spec["valuesContent"].(string); ok && strings.TrimSpace(values) != "" {
+		spec["valuesContent"] = fmt.Sprintf("[%d lines omitted]", len(strings.Split(strings.TrimRight(values, "\n"), "\n")))
+	}
+	// An inline chart archive: large, and its default values may hold secrets too.
+	if _, ok := spec["chartContent"].(string); ok {
+		spec["chartContent"] = "[chart archive omitted]"
+	}
+	// k3s (wrangler) and kubectl keep a full copy of the applied object in an
+	// annotation, values included.
+	if meta, ok := obj["metadata"].(map[string]any); ok {
+		if annotations, ok := meta["annotations"].(map[string]any); ok {
+			delete(annotations, "objectset.rio.cattle.io/applied")
+			delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
+		}
+	}
+	switch values := spec["values"].(type) {
+	case nil:
+	case map[string]any:
+		spec["values"] = fmt.Sprintf("[%d top-level keys omitted]", len(values))
+	default:
+		spec["values"] = "[values omitted]"
+	}
+	if set, ok := spec["set"].(map[string]any); ok {
+		keys := make(map[string]any, len(set))
+		for k := range set {
+			keys[k] = "[omitted]"
+		}
+		spec["set"] = keys
+	}
+}
+
+// redactUpgradePlanEnvs blanks every env value of a system-upgrade-controller
+// Plan (spec.upgrade.envs, spec.prepare.envs): they are passed to upgrade Jobs
+// and can be credentials under any name, so pattern redaction is not enough.
+// Names stay, so the model still sees what is configured.
+func redactUpgradePlanEnvs(obj map[string]any) {
+	apiVersion, _ := obj["apiVersion"].(string)
+	if resourceid.GroupFromAPIVersion(apiVersion) != "upgrade.cattle.io" {
+		return
+	}
+	spec, _ := obj["spec"].(map[string]any)
+	for _, container := range []string{"upgrade", "prepare"} {
+		c, _ := spec[container].(map[string]any)
+		envs, _ := c["envs"].([]any)
+		for _, e := range envs {
+			if env, ok := e.(map[string]any); ok {
+				if _, has := env["value"]; has {
+					env["value"] = "[REDACTED]"
+				}
+			}
+		}
+	}
 }
 
 // redactSecretFindings blanks the matched text of secret-scan findings (Trivy

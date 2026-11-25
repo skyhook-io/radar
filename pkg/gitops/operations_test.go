@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -50,7 +51,46 @@ func newFakeArgo(objs ...runtime.Object) *fake.FakeDynamicClient {
 	scheme.AddKnownTypeWithName(argoAppGVR.GroupVersion().WithKind("ApplicationList"), &unstructured.UnstructuredList{})
 	// Pull in the core scheme so non-Argo objects don't break the client init.
 	_ = corev1.AddToScheme(scheme)
-	return fake.NewSimpleDynamicClient(scheme, objs...)
+	client := fake.NewSimpleDynamicClient(scheme, objs...)
+	client.PrependReactor("patch", "applications", dryRunPatchReactor(client, false))
+	return client
+}
+
+// dryRunPatchReactor answers a dry-run patch with the object the API server
+// would store, without storing it. pruneEnabled models an Argo CD CRD older
+// than 3.1, whose schema drops syncPolicy.automated.enabled.
+func dryRunPatchReactor(client *fake.FakeDynamicClient, pruneEnabled bool) clienttesting.ReactionFunc {
+	return func(action clienttesting.Action) (bool, runtime.Object, error) {
+		patchAction := action.(clienttesting.PatchActionImpl)
+		dryRun := len(patchAction.GetPatchOptions().DryRun) > 0
+		if !dryRun && !pruneEnabled {
+			return false, nil, nil
+		}
+		var patch map[string]any
+		if err := json.Unmarshal(patchAction.GetPatch(), &patch); err != nil {
+			return true, nil, err
+		}
+		current, err := client.Tracker().Get(argoAppGVR, patchAction.GetNamespace(), patchAction.GetName())
+		if err != nil {
+			return true, nil, err
+		}
+		app := current.(*unstructured.Unstructured).DeepCopy()
+		app.Object = jsonMergePatch(app.Object, patch)
+		if pruneEnabled {
+			if automated, found, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated"); found {
+				delete(automated, "enabled")
+				_ = unstructured.SetNestedMap(app.Object, automated, "spec", "syncPolicy", "automated")
+			}
+		}
+		if dryRun {
+			return true, app, nil
+		}
+		app.SetResourceVersion("")
+		if err := client.Tracker().Update(argoAppGVR, app, patchAction.GetNamespace()); err != nil {
+			return true, nil, err
+		}
+		return true, app, nil
+	}
 }
 
 // captureLastPatch returns the body of the most recent merge-patch action,
@@ -2106,6 +2146,11 @@ func getTestApp(t *testing.T, client *fake.FakeDynamicClient) *unstructured.Unst
 
 func setAutoSync(t *testing.T, client *fake.FakeDynamicClient, enable bool) OperationResult {
 	t.Helper()
+	// An in-place suspend watches for its ApplicationSet; the fake never
+	// writes one back, so keep the watch short.
+	window := argoAutoSyncWatchWindow
+	argoAutoSyncWatchWindow = 50 * time.Millisecond
+	t.Cleanup(func() { argoAutoSyncWatchWindow = window })
 	result, err := SetArgoAutoSync(context.Background(), client, "argocd", "demo", enable)
 	if err != nil {
 		t.Fatalf("SetArgoAutoSync(%v): %v", enable, err)
@@ -2536,5 +2581,233 @@ func TestArgoSyncOperationUsesHydratedSyncSource(t *testing.T) {
 	}
 	if _, err := SyncArgoApp(context.Background(), newFakeArgo(app), "argocd", "demo", ArgoSyncOptions{Revision: "environments/prod"}); err != nil {
 		t.Fatalf("revision on a hydrated Application with leftover sources: %v", err)
+	}
+}
+
+// newFakeArgoPre31 serves Applications the way an Argo CD older than 3.1 does:
+// its CRD schema has no syncPolicy.automated.enabled, so the API server
+// prunes the field from every write.
+func newFakeArgoPre31(objs ...runtime.Object) *fake.FakeDynamicClient {
+	client := newFakeArgo(objs...)
+	client.PrependReactor("patch", "applications", dryRunPatchReactor(client, true))
+	return client
+}
+
+// jsonMergePatch applies an RFC 7386 merge patch: null deletes, objects merge.
+func jsonMergePatch(target, patch map[string]any) map[string]any {
+	if target == nil {
+		target = map[string]any{}
+	}
+	for key, value := range patch {
+		switch v := value.(type) {
+		case nil:
+			delete(target, key)
+		case map[string]any:
+			existing, _ := target[key].(map[string]any)
+			target[key] = jsonMergePatch(existing, v)
+		default:
+			target[key] = v
+		}
+	}
+	return target
+}
+
+// Argo CD 3.1+ switches auto-sync off in place with automated.enabled: false,
+// so an ApplicationSet that manages prune and selfHeal has nothing to put
+// back, and Argo CD stops syncing automatically.
+func TestSetArgoAutoSyncSuspendsInPlaceWhereArgoKeepsEnabled(t *testing.T) {
+	original := map[string]any{"prune": true, "selfHeal": true}
+	client := newFakeArgo(appSetOwned(appWithAutomated(original, nil)))
+	if result := setAutoSync(t, client, false); strings.Contains(result.Message, "turned auto-sync back on") {
+		t.Fatalf("result = %q, want a plain suspend: nothing turned auto-sync back on", result.Message)
+	}
+	suspended := getTestApp(t, client)
+	automated, found := automatedOf(suspended)
+	if !found || automated["enabled"] != false || automated["prune"] != true || automated["selfHeal"] != true {
+		t.Fatalf("suspended automated = %#v, want prune and selfHeal kept with enabled: false", automated)
+	}
+	if ArgoAutoSyncEnabled(suspended) {
+		t.Fatal("auto-sync still reads as on after suspend")
+	}
+	setAutoSync(t, client, true)
+	resumed := getTestApp(t, client)
+	if automated, _ := automatedOf(resumed); !reflect.DeepEqual(automated, original) {
+		t.Fatalf("resumed automated = %#v, want %#v", automated, original)
+	}
+	if len(resumed.GetAnnotations()) != 0 {
+		t.Fatalf("resume left suspension annotations: %#v", resumed.GetAnnotations())
+	}
+}
+
+// Before 3.1 the API server prunes enabled, so an ApplicationSet-owned
+// Application is suspended by removing the block, in one write, and the
+// result says the ApplicationSet may turn auto-sync back on.
+func TestSetArgoAutoSyncFallsBackToRemovalWhereArgoPrunesEnabled(t *testing.T) {
+	client := newFakeArgoPre31(appSetOwned(appWithAutomated(map[string]any{"prune": true, "selfHeal": false}, nil)))
+	result := setAutoSync(t, client, false)
+	if !strings.Contains(result.Message, "ApplicationSet") {
+		t.Errorf("result = %q, want a note that the ApplicationSet may turn auto-sync back on", result.Message)
+	}
+	writes := 0
+	for _, action := range client.Actions() {
+		if p, ok := action.(clienttesting.PatchActionImpl); ok && len(p.GetPatchOptions().DryRun) == 0 {
+			writes++
+		}
+	}
+	if writes != 1 {
+		t.Errorf("suspend made %d writes, want one: the settings and the removal together", writes)
+	}
+	suspended := getTestApp(t, client)
+	if _, found := automatedOf(suspended); found {
+		t.Fatalf("suspend left automated in place on an Argo CD that prunes enabled: %#v", suspended.Object["spec"])
+	}
+	if suspended.GetAnnotations()[ArgoSuspendedPruneAnnotation] != "true" {
+		t.Fatalf("suspend didn't save the settings: %#v", suspended.GetAnnotations())
+	}
+}
+
+// An ApplicationSet that doesn't ignore automated.enabled writes its template
+// back right after the suspend. The result must say auto-sync is back on
+// rather than report it suspended.
+func TestSetArgoAutoSyncWarnsWhenTheApplicationSetTurnsItBackOn(t *testing.T) {
+	client := newFakeArgo(appSetOwned(appWithAutomated(map[string]any{"prune": true, "selfHeal": true}, nil)))
+	var written atomic.Bool
+	client.PrependReactor("patch", "applications", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		if len(action.(clienttesting.PatchActionImpl).GetPatchOptions().DryRun) == 0 {
+			written.Store(true)
+		}
+		return false, nil, nil
+	})
+	// After the write, reads see the ApplicationSet's template again.
+	client.PrependReactor("get", "applications", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		if !written.Load() {
+			return false, nil, nil
+		}
+		current, err := client.Tracker().Get(argoAppGVR, "argocd", "demo")
+		if err != nil {
+			return true, nil, err
+		}
+		app := current.(*unstructured.Unstructured).DeepCopy()
+		unstructured.RemoveNestedField(app.Object, "spec", "syncPolicy", "automated", "enabled")
+		return true, app, nil
+	})
+	result := setAutoSync(t, client, false)
+	if !strings.Contains(result.Message, "turned auto-sync back on") {
+		t.Fatalf("result = %q, want a note that the ApplicationSet turned auto-sync back on", result.Message)
+	}
+}
+
+func appSetOwned(app *unstructured.Unstructured) *unstructured.Unstructured {
+	app.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "argoproj.io/v1alpha1", Kind: "ApplicationSet", Name: "team", UID: "set-uid"}})
+	return app
+}
+
+// Without an ApplicationSet to put the block back, suspend keeps removing it:
+// a controller older than its CRD (an upgrade in progress) ignores
+// enabled: false, but no controller syncs an Application without a block.
+func TestSetArgoAutoSyncRemovesTheBlockWithoutAnApplicationSet(t *testing.T) {
+	client := newFakeArgo(appWithAutomated(map[string]any{"prune": true, "selfHeal": true}, nil))
+	setAutoSync(t, client, false)
+	if _, found := automatedOf(getTestApp(t, client)); found {
+		t.Fatalf("suspend kept the automated block on an Application no ApplicationSet owns: %#v", getTestApp(t, client).Object["spec"])
+	}
+}
+
+// refuseDryRun answers every dry-run patch with err; real writes go on.
+func refuseDryRun(client *fake.FakeDynamicClient, err error) *atomic.Int32 {
+	var probes atomic.Int32
+	client.PrependReactor("patch", "applications", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		if len(action.(clienttesting.PatchActionImpl).GetPatchOptions().DryRun) == 0 {
+			return false, nil, nil
+		}
+		probes.Add(1)
+		return true, nil, err
+	})
+	return &probes
+}
+
+// A webhook that refuses dry runs doesn't block the suspend: Radar can't tell
+// whether enabled is kept, so it removes the block and says the
+// ApplicationSet may turn auto-sync back on.
+func TestSetArgoAutoSyncRemovesTheBlockWhenTheDryRunIsRefused(t *testing.T) {
+	client := newFakeArgo(appSetOwned(appWithAutomated(map[string]any{"prune": true}, nil)))
+	refuseDryRun(client, apierrors.NewBadRequest("admission webhook does not support dry run"))
+	result := setAutoSync(t, client, false)
+	if !strings.Contains(result.Message, "ApplicationSet") {
+		t.Errorf("result = %q, want the note that the ApplicationSet may turn auto-sync back on", result.Message)
+	}
+	if _, found := automatedOf(getTestApp(t, client)); found {
+		t.Fatalf("suspend kept the block after a refused dry run: %#v", getTestApp(t, client).Object["spec"])
+	}
+}
+
+// A caller denied the dry run is denied the write it precedes.
+func TestSetArgoAutoSyncFailsWhenTheDryRunIsForbidden(t *testing.T) {
+	client := newFakeArgo(appSetOwned(appWithAutomated(map[string]any{"prune": true}, nil)))
+	refuseDryRun(client, apierrors.NewForbidden(argoAppGVR.GroupResource(), "demo", errors.New(`User "reader" cannot patch resource "applications" in API group "argoproj.io" in the namespace "argocd"`)))
+	_, err := SetArgoAutoSync(context.Background(), client, "argocd", "demo", false)
+	var denied *PermissionDenied
+	if !errors.As(err, &denied) || denied.Verb != "patch" || denied.Name != "demo" {
+		t.Fatalf("err = %v, want a named patch denial", err)
+	}
+	if _, found := automatedOf(getTestApp(t, client)); !found {
+		t.Fatal("a forbidden dry run still changed the Application")
+	}
+}
+
+func TestSetArgoAutoSyncFailsWhenAdmissionDeniesTheDryRun(t *testing.T) {
+	client := newFakeArgo(appSetOwned(appWithAutomated(map[string]any{"prune": true}, nil)))
+	refuseDryRun(client, apierrors.NewBadRequest(`admission webhook "freeze.example.org" denied the request: sync policy is frozen`))
+	_, err := SetArgoAutoSync(context.Background(), client, "argocd", "demo", false)
+	var denied *AdmissionDenied
+	if !errors.As(err, &denied) || denied.Policy != "freeze.example.org" {
+		t.Fatalf("err = %v, want the admission denial", err)
+	}
+	if _, found := automatedOf(getTestApp(t, client)); !found {
+		t.Fatal("an admission denial still changed the Application")
+	}
+}
+
+// A conflict retry rebuilds the patch from a fresh read but doesn't ask the
+// API server again whether it keeps enabled.
+func TestSetArgoAutoSyncProbesWithSuspensionAnnotations(t *testing.T) {
+	client := newFakeArgo(appSetOwned(appWithAutomated(map[string]any{"prune": true}, nil)))
+	var dryRunPatch map[string]any
+	client.PrependReactor("patch", "applications", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		patch := action.(clienttesting.PatchActionImpl)
+		if len(patch.GetPatchOptions().DryRun) > 0 {
+			if err := json.Unmarshal(patch.GetPatch(), &dryRunPatch); err != nil {
+				return true, nil, err
+			}
+		}
+		return false, nil, nil
+	})
+	setAutoSync(t, client, false)
+	actualPatch := captureLastPatch(t, client)
+	delete(nestedMap(actualPatch, "metadata"), "resourceVersion")
+	if !reflect.DeepEqual(dryRunPatch, actualPatch) {
+		t.Fatalf("dry-run patch = %#v, want same proposed changes as write %#v", dryRunPatch, actualPatch)
+	}
+}
+
+func TestSetArgoAutoSyncProbesOnceAcrossConflicts(t *testing.T) {
+	client := newFakeArgo(appSetOwned(appWithAutomated(map[string]any{"prune": true}, nil)))
+	var probes, conflicts atomic.Int32
+	client.PrependReactor("patch", "applications", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		if len(action.(clienttesting.PatchActionImpl).GetPatchOptions().DryRun) > 0 {
+			probes.Add(1)
+			return false, nil, nil
+		}
+		if conflicts.Add(1) == 1 {
+			return true, nil, apierrors.NewConflict(argoAppGVR.GroupResource(), "demo", errors.New("changed"))
+		}
+		return false, nil, nil
+	})
+	setAutoSync(t, client, false)
+	if got := probes.Load(); got != 1 {
+		t.Errorf("dry runs = %d, want 1 across the conflict retry", got)
+	}
+	if automated, _ := automatedOf(getTestApp(t, client)); automated["enabled"] != false {
+		t.Fatalf("automated = %#v, want enabled: false", automated)
 	}
 }

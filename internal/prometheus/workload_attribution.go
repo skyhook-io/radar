@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,7 +35,11 @@ func identitySelection(namespace string, pods []prom.WorkloadPodIdentity) prom.P
 
 var workloadAttributionProbeBudget = 8 * time.Second
 
-var partitionLabels = []string{"cluster", "cluster_name", "k8s_cluster_name", "kubernetes_cluster", "cluster_id"}
+var clusterIdentityLabels = []string{"cluster", "cluster_name", "k8s_cluster_name", "kubernetes_cluster", "cluster_id"}
+
+// Project and location qualify cluster names that can be reused across managed clusters.
+var clusterQualifierLabels = []string{"project_id", "location"}
+var partitionLabels = slices.Concat(clusterIdentityLabels, clusterQualifierLabels)
 
 func probeWorkloadAttributions(ctx context.Context, client *prom.Client, scope PodScope) (workloadAttributions, error) {
 	result := workloadAttributions{}
@@ -252,7 +257,12 @@ func identifyPartition(pods []prom.WorkloadPodIdentity, rows []prom.Series) (map
 func identifyPartitionWithUnlabeled(pods []prom.WorkloadPodIdentity, rows []prom.Series, includeUnlabeled bool) (map[string]string, []prom.WorkloadPodIdentity) {
 	var candidates []map[string]string
 	seen := map[string]bool{}
-	addCandidate := func(candidate map[string]string) {
+	addCandidate := func(candidate, row map[string]string) {
+		for _, qualifier := range clusterQualifierLabels {
+			if value := row[qualifier]; value != "" {
+				candidate[qualifier] = value
+			}
+		}
 		key := fmt.Sprint(candidate)
 		if !seen[key] {
 			seen[key] = true
@@ -264,12 +274,12 @@ func identifyPartitionWithUnlabeled(pods []prom.WorkloadPodIdentity, rows []prom
 			if pod.UID == "" || row.Labels["pod"] != pod.Name || row.Labels["uid"] != pod.UID {
 				continue
 			}
-			for _, label := range partitionLabels {
+			for _, label := range clusterIdentityLabels {
 				if value := row.Labels[label]; value != "" {
-					addCandidate(map[string]string{label: value})
-					for _, second := range partitionLabels {
+					addCandidate(map[string]string{label: value}, row.Labels)
+					for _, second := range clusterIdentityLabels {
 						if second > label && row.Labels[second] != "" {
-							addCandidate(map[string]string{label: value, second: row.Labels[second]})
+							addCandidate(map[string]string{label: value, second: row.Labels[second]}, row.Labels)
 						}
 					}
 				}
@@ -281,7 +291,7 @@ func identifyPartitionWithUnlabeled(pods []prom.WorkloadPodIdentity, rows []prom
 		for _, label := range partitionLabels {
 			candidate[label] = ""
 		}
-		addCandidate(candidate)
+		addCandidate(candidate, nil)
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		if len(candidates[i]) != len(candidates[j]) {
@@ -456,10 +466,7 @@ func (c *Client) automaticWorkloadAttributions(scope PodScope) (workloadAttribut
 			c.mu.RLock()
 			var evidenceClient *prom.Client
 			if c.baseURL != "" && c.discoveryGen == entry.generation && !c.retired {
-				tr := prom.NewHTTPTransport(c.baseURL, c.basePath, c.httpClient)
-				tr.Headers = copyHeaders(c.headers)
-				tr.MaxResponseBytes = 4 << 20
-				evidenceClient = prom.NewClient(tr)
+				evidenceClient = prom.NewClient(c.newTransportLocked(c.baseURL, c.basePath, c.httpClient, 4<<20))
 			}
 			c.mu.RUnlock()
 			if evidenceClient != nil {

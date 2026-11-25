@@ -38,18 +38,18 @@ func FluxLastApply(root *unstructured.Unstructured) (at string, succeeded bool) 
 type FluxDeployedSnapshot struct {
 	Version      int64
 	ChartVersion string
+	Status       string
 	LastDeployed string
 	OCIDigest    string
 }
 
-// FluxDeployedRelease keeps release identity and deployment time on the same
-// snapshot, even when a newer upgrade failed.
-func FluxDeployedRelease(root *unstructured.Unstructured) *FluxDeployedSnapshot {
+// FluxReleaseSnapshots reads the release records retained by helm-controller.
+func FluxReleaseSnapshots(root *unstructured.Unstructured) []FluxDeployedSnapshot {
 	if root == nil || root.GetKind() != "HelmRelease" || ToolOf(root) != ToolFluxCD {
 		return nil
 	}
 	history, _, _ := unstructured.NestedSlice(root.Object, "status", "history")
-	var selected *FluxDeployedSnapshot
+	var snapshots []FluxDeployedSnapshot
 	for _, raw := range history {
 		entry, ok := raw.(map[string]any)
 		if !ok {
@@ -57,15 +57,28 @@ func FluxDeployedRelease(root *unstructured.Unstructured) *FluxDeployedSnapshot 
 		}
 		status, _, _ := unstructured.NestedString(entry, "status")
 		version := fluxReleaseVersion(entry)
-		if status != "deployed" || version <= 0 || (selected != nil && version <= selected.Version) {
+		if version <= 0 {
 			continue
 		}
 		chartVersion, _, _ := unstructured.NestedString(entry, "chartVersion")
 		ociDigest, _, _ := unstructured.NestedString(entry, "ociDigest")
-		selected = &FluxDeployedSnapshot{Version: version, ChartVersion: chartVersion, OCIDigest: ociDigest}
+		snapshot := FluxDeployedSnapshot{Version: version, ChartVersion: chartVersion, Status: status, OCIDigest: ociDigest}
 		value, _, _ := unstructured.NestedString(entry, "lastDeployed")
 		if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil && !parsed.IsZero() {
-			selected.LastDeployed = parsed.UTC().Format(time.RFC3339Nano)
+			snapshot.LastDeployed = parsed.UTC().Format(time.RFC3339Nano)
+		}
+		snapshots = append(snapshots, snapshot)
+	}
+	return snapshots
+}
+
+// FluxDeployedRelease keeps release identity and deployment time on the same
+// snapshot, even when a newer upgrade failed.
+func FluxDeployedRelease(root *unstructured.Unstructured) *FluxDeployedSnapshot {
+	var selected *FluxDeployedSnapshot
+	for _, snapshot := range FluxReleaseSnapshots(root) {
+		if snapshot.Status == "deployed" && (selected == nil || snapshot.Version > selected.Version) {
+			selected = &snapshot
 		}
 	}
 	return selected

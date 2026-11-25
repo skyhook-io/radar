@@ -6,6 +6,7 @@ import type { RenderDiagnoseAction } from '../context/DiagnoseCustomization'
 import { apiVersionToGroup } from '../utils/navigation'
 import type { SelectedResource } from '../types'
 import { cnpgResourceHost } from '../components/cnpg/host'
+import { veleroResourceHost } from '../components/velero/host'
 import { crdResourceHost } from '../components/resources/crd/host'
 import {
   composeDetailSlots, composeResourceHosts, hostsForResource, hostSupport, resourceHostForSlot,
@@ -36,20 +37,26 @@ import { HTTPRouteRenderer } from '../components/resources/renderers/HTTPRouteRe
 import { RolloutRenderer } from '../components/resources/renderers/RolloutRenderer'
 import { KyvernoPolicyCoverage } from '../components/resources/renderers/KyvernoPolicyCoverage'
 import { KyvernoPolicyQueued } from '../components/resources/renderers/KyvernoPolicyQueued'
-import { VeleroBSLRenderer } from '../components/resources/renderers/VeleroBSLRenderer'
-import { VeleroBackupRenderer } from '../components/resources/renderers/VeleroBackupRenderer'
-import { VeleroRestoreRenderer } from '../components/resources/renderers/VeleroRestoreRenderer'
+import { LonghornVolumeRenderer } from '../components/resources/renderers/LonghornVolumeRenderer'
 import { FluxHelmReleaseRenderer } from '../components/resources/renderers/FluxHelmReleaseRenderer'
 import { SecretProviderClassRenderer } from '../components/resources/renderers/SecretProviderClassRenderer'
+import { SealedSecretRenderer } from '../components/resources/renderers/SealedSecretRenderer'
+import { K3sHelmChartRenderer } from '../components/resources/renderers/K3sHelmChartRenderer'
+import { UpgradePlanRenderer } from '../components/resources/renderers/UpgradePlanRenderer'
 import {
+  MutatingAdmissionPolicyBindingRenderer,
+  MutatingAdmissionPolicyRenderer,
   ValidatingAdmissionPolicyBindingRenderer,
   ValidatingAdmissionPolicyRenderer,
-} from '../components/resources/renderers/ValidatingAdmissionPolicyRenderer'
+} from '../components/resources/renderers/AdmissionPolicyRenderers'
 
 export const resourceHosts: readonly ResourceHost[] = [
   { id: 'kubernetes', renderers: { PodRenderer, NodeRenderer, ServiceRenderer, WorkloadRenderer, HPARenderer, PVCRenderer } },
   { id: 'gateway-api', renderers: { HTTPRouteRenderer } },
   { id: 'rbac', renderers: { ServiceAccountRenderer, RoleRenderer, RoleBindingRenderer, NamespaceRenderer } },
+  { id: 'sealed-secrets', renderers: { SealedSecretRenderer } },
+  { id: 'k3s-helm', renderers: { K3sHelmChartRenderer } },
+  { id: 'system-upgrade', renderers: { UpgradePlanRenderer } },
   { id: 'batch-and-admission', renderers: { JobRenderer, JobSetRenderer, KueueWorkloadRenderer } },
   {
     id: 'kueue-queues',
@@ -65,10 +72,11 @@ export const resourceHosts: readonly ResourceHost[] = [
   { id: 'crossplane', renderers: { CompositeRenderer } },
   { id: 'rollouts', renderers: { RolloutRenderer } },
   { id: 'kyverno', renderers: { KyvernoPolicyCoverage, KyvernoPolicyQueued } },
-  { id: 'velero', renderers: { VeleroBSLRenderer, VeleroBackupRenderer, VeleroRestoreRenderer } },
+  veleroResourceHost,
+  { id: 'longhorn', renderers: { LonghornVolumeRenderer } },
   { id: 'flux', renderers: { FluxHelmReleaseRenderer } },
   { id: 'secrets-store-csi', renderers: { SecretProviderClassRenderer } },
-  { id: 'admission-policy', renderers: { ValidatingAdmissionPolicyRenderer, ValidatingAdmissionPolicyBindingRenderer } },
+  { id: 'admission-policy', renderers: { ValidatingAdmissionPolicyRenderer, ValidatingAdmissionPolicyBindingRenderer, MutatingAdmissionPolicyRenderer, MutatingAdmissionPolicyBindingRenderer } },
   cnpgResourceHost,
   crdResourceHost,
 ]
@@ -81,6 +89,14 @@ export function resourceExpandedPath(resource: HostResource, context?: string, t
 
 export function resourceDetailRedirect(resource: HostResource, search: URLSearchParams): string | null {
   return resourceHostForSlot(resourceHosts, resource, 'destination')?.detailRedirect?.(resource, search) ?? null
+}
+
+export function resourceIssueDetail(resource: HostResource, props: { issue: { kind?: string; reason?: string }; resource: any }) {
+  for (const host of hostsForResource(resourceHosts, resource)) {
+    const detail = host.issueDetail?.(props)
+    if (detail) return detail
+  }
+  return null
 }
 
 export function resourceDetailSlots(resource: HostResource, inheritedTabs?: WorkloadExtraTab[]): DetailSlots {
@@ -107,8 +123,9 @@ export function ResourceDrawerNavigation({ resource }: { resource: SelectedResou
 
 export function useResourceHostFeatures(): HostFeatures {
   // Hook order is fixed here; selected adapters mount components that own their data hooks.
-  const { support } = useRadarFeature('cnpgWorkspace')
-  return useMemo(() => ({ cnpgWorkspace: support }), [support])
+  const { support: cnpgWorkspace } = useRadarFeature('cnpgWorkspace')
+  const { support: veleroWorkspace } = useRadarFeature('veleroWorkspace')
+  return useMemo(() => ({ cnpgWorkspace, veleroWorkspace }), [cnpgWorkspace, veleroWorkspace])
 }
 
 
@@ -125,6 +142,13 @@ function kindListHost(kind: Pick<HostKind, 'name' | 'group'> | null) {
 export function resourceKindListMode(kind: Pick<HostKind, 'name' | 'group'> | null, features: HostFeatures, pending: boolean) {
   const contribution = kindListHost(kind)
   return contribution?.list.mode(hostSupport(contribution.host, features), pending) ?? 'table'
+}
+
+/** The disabled picker's tooltip while a kind's own list, which ignores the namespace filter, is on screen. */
+export function resourceKindListNamespaceFilterTooltip(kind: Pick<HostKind, 'name' | 'group'> | null, features: HostFeatures, pending: boolean): string | undefined {
+  const contribution = kindListHost(kind)
+  if (!contribution?.list.namespaceFilterTooltip) return undefined
+  return contribution.list.mode(hostSupport(contribution.host, features), pending) === 'view' ? contribution.list.namespaceFilterTooltip : undefined
 }
 
 export function resourceKindListTitle(kind: Pick<HostKind, 'name' | 'group'>): string | null {

@@ -194,7 +194,8 @@ func TestBeylaSource_GetFlows_OwnerLevel(t *testing.T) {
 	assertEq(t, "dest kind", f.Destination.Kind, "Workload")
 	assertEq(t, "port", fmt.Sprintf("%d", f.Port), "8080")
 	assertEq(t, "protocol", f.Protocol, "tcp")
-	assertEq(t, "verdict", f.Verdict, "forwarded")
+	// Beyla observes traffic, not a datapath decision: no error, no verdict.
+	assertEq(t, "verdict", f.Verdict, "")
 	// No HTTP data on this edge, so there is no rate to report. Beyla exports no
 	// connection count at all, and a placeholder here would drive edge thickness
 	// and the node totals from a number nothing measured.
@@ -355,7 +356,7 @@ func TestBeylaSource_ParseL4Flows_TransportSeparatesOtherwiseIdenticalSeries(t *
 		}, 20.0),
 	)
 
-	flows, presence := src.parseL4Flows(result, beylaWindow(0))
+	flows, presence := src.parseL4Flows(result, rateWindowFor(0))
 	if len(flows) != 2 {
 		t.Fatalf("expected 2 flows (TCP and UDP kept apart), got %d", len(flows))
 	}
@@ -641,6 +642,7 @@ func TestBeylaSource_ParseL7Flows_OwnerFallback(t *testing.T) {
 			}
 			assertEq(t, "dest name", flows[0].Destination.Name, tt.wantName)
 			assertEq(t, "dest kind", flows[0].Destination.Kind, tt.wantKind)
+			assertEq(t, "verdict", flows[0].Verdict, "")
 		})
 	}
 }
@@ -738,7 +740,7 @@ func TestManager_DetectSources_IncludesBeyla(t *testing.T) {
 }
 
 func TestBeylaSource_QueryL4_NamespaceFilterIsValidPromQL(t *testing.T) {
-	q := beylaRateQuery(beylaL4GroupBy, beylaFlowMetric, beylaJobSelector(), "test-ns", beylaL4DirectionFilter, beylaWindow(0))
+	q := beylaRateQuery(beylaL4GroupBy, beylaFlowMetric, beylaJobSelector(), "test-ns", beylaL4DirectionFilter, rateWindowFor(0))
 	if !strings.Contains(q, `k8s_src_namespace="test-ns"}`) || !strings.Contains(q, `k8s_dst_namespace="test-ns"}`) {
 		t.Errorf("namespace matchers must live inside the label selector, got: %s", q)
 	}
@@ -747,8 +749,109 @@ func TestBeylaSource_QueryL4_NamespaceFilterIsValidPromQL(t *testing.T) {
 	}
 }
 
+func TestBeylaRateQuery_CountsCrossNodeFlowsOnce(t *testing.T) {
+	// Both nodes' agents report a cross-node flow with identical labels apart
+	// from instance and pod. Only series carrying a node label can be collapsed:
+	// without one, two replicas on different nodes look exactly like a duplicate.
+	got := beylaRateQuery("a, b", "m", `job="x"`, "", `, direction="request"`, rateWindowFor(0))
+	want := `sum by (a, b) (` +
+		`max without (instance, pod, node, host) (rate(m{job="x", direction="request", k8s_src_node_name!=""}[5m])) or ` +
+		`max without (instance, pod, node, host) (rate(m{job="x", direction="request", k8s_src_node_name="", k8s_dst_node_name!=""}[5m])) or ` +
+		`rate(m{job="x", direction="request", k8s_src_node_name="", k8s_dst_node_name=""}[5m]))`
+	assertEq(t, "query", got, want)
+}
+
+func TestBeylaRateQuery_NamespaceFilterReachesEveryBranch(t *testing.T) {
+	q := beylaRateQuery(beylaL4GroupBy, beylaFlowMetric, beylaJobSelector(), "ns1", beylaL4DirectionFilter, rateWindowFor(0))
+	for _, label := range []string{"k8s_src_namespace", "k8s_dst_namespace"} {
+		if n := strings.Count(q, label+`="ns1"`); n != 3 {
+			t.Errorf("%s matcher appears %d times, want once per node branch (3): %s", label, n, q)
+		}
+	}
+}
+
+func beylaNodeProbeFake(probe func() (*prom.QueryResult, error)) promQueryFunc {
+	return func(_ context.Context, query string) (*prom.QueryResult, error) {
+		if strings.Contains(query, `direction="unknown"`) {
+			return emptyResult(), nil
+		}
+		if strings.HasPrefix(query, "count(") && strings.Contains(query, `k8s_src_node_name!=""`) {
+			return probe()
+		}
+		if strings.Contains(query, "beyla_network_flow_bytes_total") {
+			return promResult("vector", promSeries(map[string]string{
+				"k8s_src_owner_name": "client", "k8s_src_namespace": "demo",
+				"k8s_dst_owner_name": "web", "k8s_dst_namespace": "demo",
+				"dst_port": "80", "transport": "TCP",
+			}, 12.0)), nil
+		}
+		return emptyResult(), nil
+	}
+}
+
+const nodeLabelAdvice = "Flows between two nodes are reported by both nodes' Beyla agents and counted twice here."
+
+func TestBeylaSource_GetFlows_WarnsWhenNodeLabelsAreAbsent(t *testing.T) {
+	src := &BeylaSource{k8sClient: fake.NewSimpleClientset()}
+	src.queryFn = beylaNodeProbeFake(func() (*prom.QueryResult, error) { return emptyResult(), nil })
+
+	resp, err := src.GetFlows(context.Background(), FlowOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, want := range []string{nodeLabelAdvice, "k8s.src.node.name and k8s.dst.node.name", "beyla_network_flow_bytes"} {
+		if !strings.Contains(resp.Warning, want) {
+			t.Errorf("warning should contain %q, got: %q", want, resp.Warning)
+		}
+	}
+	assertEq(t, "warningKind", resp.WarningKind, WarningPartial)
+}
+
+func TestBeylaSource_GetFlows_NoNodeLabelWarningOnOneNode(t *testing.T) {
+	// With one node no flow crosses nodes, so nothing is counted twice.
+	src := &BeylaSource{k8sClient: fake.NewSimpleClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n1"}})}
+	src.queryFn = beylaNodeProbeFake(func() (*prom.QueryResult, error) { return emptyResult(), nil })
+
+	resp, err := src.GetFlows(context.Background(), FlowOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Warning != "" {
+		t.Errorf("expected no warning on a single-node cluster, got: %q", resp.Warning)
+	}
+}
+
+func TestBeylaSource_GetFlows_NoNodeLabelWarningWhenPresent(t *testing.T) {
+	src := &BeylaSource{k8sClient: fake.NewSimpleClientset()}
+	src.queryFn = beylaNodeProbeFake(func() (*prom.QueryResult, error) {
+		return promResult("vector", promSeries(map[string]string{}, 4)), nil
+	})
+
+	resp, err := src.GetFlows(context.Background(), FlowOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Warning != "" {
+		t.Errorf("expected no warning when node labels are exported, got: %q", resp.Warning)
+	}
+}
+
+func TestBeylaSource_GetFlows_NoNodeLabelWarningWhenProbeFails(t *testing.T) {
+	// A warning invented from a failed query is worse than none.
+	src := &BeylaSource{k8sClient: fake.NewSimpleClientset()}
+	src.queryFn = beylaNodeProbeFake(func() (*prom.QueryResult, error) { return nil, fmt.Errorf("timeout") })
+
+	resp, err := src.GetFlows(context.Background(), FlowOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(resp.Warning, nodeLabelAdvice) {
+		t.Errorf("a failed probe must not produce the node-label advice, got: %q", resp.Warning)
+	}
+}
+
 func TestBeylaSource_QueryL7_UsesCorrectMetricAndLabels(t *testing.T) {
-	q := beylaL7RateQuery(beylaJobSelector(), "test-ns", beylaWindow(0))
+	q := beylaL7RateQuery(beylaJobSelector(), "test-ns", rateWindowFor(0))
 	if !strings.Contains(q, "http_server_request_duration_seconds_count") {
 		t.Errorf("expected the OTel-aligned Beyla HTTP server metric, got: %s", q)
 	}
@@ -1214,11 +1317,11 @@ func TestBeylaSource_GetFlows_ReceivedBytesComeFromTheResponseDirection(t *testi
 	}
 	f := resp.Flows[0]
 	// Rates are converted to absolute counts over the window, as Istio does.
-	if f.BytesSent != 4*beylaRateWindowSeconds {
-		t.Errorf("bytesSent = %d, want %d", f.BytesSent, 4*beylaRateWindowSeconds)
+	if f.BytesSent != 4*defaultRateWindowSeconds {
+		t.Errorf("bytesSent = %d, want %d", f.BytesSent, 4*defaultRateWindowSeconds)
 	}
-	if f.BytesRecv != 10*beylaRateWindowSeconds {
-		t.Errorf("bytesRecv = %d, want %d — the response direction carries it", f.BytesRecv, 10*beylaRateWindowSeconds)
+	if f.BytesRecv != 10*defaultRateWindowSeconds {
+		t.Errorf("bytesRecv = %d, want %d — the response direction carries it", f.BytesRecv, 10*defaultRateWindowSeconds)
 	}
 }
 
@@ -1263,13 +1366,14 @@ func TestBeylaSource_GetFlows_UnorientableConversationBecomesOneUndirectedEdge(t
 		t.Error("the edge must declare that its direction is unknown, or the graph will draw an arrow")
 	}
 	assertEq(t, "protocol", f.Protocol, "udp")
+	assertEq(t, "verdict", f.Verdict, "")
 	// Endpoints are ordered deterministically so the edge does not flip between
 	// polls; demo/client sorts before kube-system/coredns.
 	assertEq(t, "source", f.Source.Name, "client")
 	assertEq(t, "destination", f.Destination.Name, "coredns")
-	if f.BytesSent != 10*beylaRateWindowSeconds || f.BytesRecv != 25*beylaRateWindowSeconds {
+	if f.BytesSent != 10*defaultRateWindowSeconds || f.BytesRecv != 25*defaultRateWindowSeconds {
 		t.Errorf("bytes = %d/%d, want %d/%d — both halves belong to the one edge",
-			f.BytesSent, f.BytesRecv, 10*beylaRateWindowSeconds, 25*beylaRateWindowSeconds)
+			f.BytesSent, f.BytesRecv, 10*defaultRateWindowSeconds, 25*defaultRateWindowSeconds)
 	}
 	// Beyla reports no request count for an unorientable conversation, and the
 	// graph omits the label rather than printing a zero.
@@ -1310,7 +1414,7 @@ func TestBeylaSource_GetFlows_UnorientablePairsCollapseAcrossEphemeralPorts(t *t
 		t.Fatalf("five series for one conversation must collapse to 1 edge, got %d", len(resp.Flows))
 	}
 	// The four reverse series sum into the return direction.
-	if want := int64(4 * 2.0 * beylaRateWindowSeconds); resp.Flows[0].BytesRecv != want {
+	if want := int64(4 * 2.0 * defaultRateWindowSeconds); resp.Flows[0].BytesRecv != want {
 		t.Errorf("bytesRecv = %d, want %d (all four ephemeral-port series)", resp.Flows[0].BytesRecv, want)
 	}
 }
@@ -1355,7 +1459,7 @@ func TestBeylaSource_GetFlows_ReceivedBytesSplitAcrossAPairsEdges(t *testing.T) 
 	for _, f := range resp.Flows {
 		total += f.BytesRecv
 	}
-	want := int64(30 * beylaRateWindowSeconds)
+	want := int64(30 * defaultRateWindowSeconds)
 	if total != want {
 		t.Errorf("received bytes total %d across the pair's edges, want %d — it must be divided, not copied", total, want)
 	}
@@ -1720,7 +1824,7 @@ func TestReplyLossFractionRejectsAnImpossibleFraction(t *testing.T) {
 			src.queryFn = func(_ context.Context, _ string) (*prom.QueryResult, error) {
 				return promResult("vector", promSeries(map[string]string{}, tc.val)), nil
 			}
-			if got := src.replyLossFraction(context.Background(), beylaWindow(0), beylaJobSelector()); got != tc.want {
+			if got := src.replyLossFraction(context.Background(), rateWindowFor(0), beylaJobSelector()); got != tc.want {
 				t.Errorf("got %v, want %v", got, tc.want)
 			}
 		})
@@ -1746,7 +1850,7 @@ func TestBeylaWindowFollowsTheRequestedRange(t *testing.T) {
 		{"an hour", time.Hour, "3600s", 3600},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			w := beylaWindow(tc.since)
+			w := rateWindowFor(tc.since)
 			if w.promQL != tc.promQL || w.seconds != tc.seconds {
 				t.Errorf("got %q/%v, want %q/%v", w.promQL, w.seconds, tc.promQL, tc.seconds)
 			}
@@ -1849,5 +1953,35 @@ func TestBeylaSource_GetFlows_FailedEnrichmentIsReportedNotZeroed(t *testing.T) 
 			}
 			assertEq(t, "warningKind", resp.WarningKind, WarningPartial)
 		})
+	}
+}
+
+func TestBeylaSource_GetFlows_UnorientedProtocolBytes(t *testing.T) {
+	src := &BeylaSource{k8sClient: fake.NewSimpleClientset()}
+	src.queryFn = func(_ context.Context, query string) (*prom.QueryResult, error) {
+		if !strings.Contains(query, `direction="unknown"`) {
+			return emptyResult(), nil
+		}
+		return promResult("vector",
+			promSeries(map[string]string{"k8s_src_owner_name": "client", "k8s_src_namespace": "demo", "k8s_dst_owner_name": "dns", "k8s_dst_namespace": "demo", "transport": "UDP"}, 10),
+			promSeries(map[string]string{"k8s_src_owner_name": "dns", "k8s_src_namespace": "demo", "k8s_dst_owner_name": "client", "k8s_dst_namespace": "demo", "transport": "UDP"}, 25),
+			promSeries(map[string]string{"k8s_src_owner_name": "client", "k8s_src_namespace": "demo", "k8s_dst_owner_name": "dns", "k8s_dst_namespace": "demo", "transport": "TCP"}, 4),
+		), nil
+	}
+	resp, err := src.GetFlows(t.Context(), FlowOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	aggregated := AggregateFlows(resp.Flows)
+	if len(resp.Flows) != 2 || len(aggregated) != 1 {
+		t.Fatalf("flows=%+v, aggregates=%+v", resp.Flows, aggregated)
+	}
+	a := aggregated[0]
+	if !a.DirectionUnknown || len(a.BytesByProtocol) != 2 {
+		t.Fatalf("wrong conversation: %+v", a)
+	}
+	udp, tcp := a.BytesByProtocol["udp"], a.BytesByProtocol["tcp"]
+	if udp.BytesSent != 10*defaultRateWindowSeconds || udp.BytesRecv != 25*defaultRateWindowSeconds || tcp.BytesSent != 4*defaultRateWindowSeconds || tcp.BytesRecv != 0 {
+		t.Errorf("protocol buckets: %+v", a.BytesByProtocol)
 	}
 }

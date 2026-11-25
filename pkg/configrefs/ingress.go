@@ -1,6 +1,10 @@
 package configrefs
 
-import networkingv1 "k8s.io/api/networking/v1"
+import (
+	networkingv1 "k8s.io/api/networking/v1"
+
+	"github.com/skyhook-io/radar/pkg/resourceid"
+)
 
 // IngressBackendServices returns the names of the Services an Ingress routes
 // to, in first-seen order and each once: spec.defaultBackend, then every rule
@@ -26,6 +30,44 @@ func IngressBackendServices(ing *networkingv1.Ingress) []string {
 		}
 	}
 	return names
+}
+
+// IngressBackendServiceRefs is IngressBackendServices with the field that
+// names each Service: the default backend, a rule path, or both.
+func IngressBackendServiceRefs(ing *networkingv1.Ingress) []PathRef {
+	var refs []PathRef
+	type key struct {
+		ref  resourceid.Ref
+		path string
+	}
+	var seen map[key]bool
+	add := func(backend *networkingv1.IngressBackend, path string) {
+		if backend == nil || backend.Service == nil || backend.Service.Name == "" {
+			return
+		}
+		r := PathRef{Ref: resourceid.Ref{Kind: "Service", Namespace: ing.Namespace, Name: backend.Service.Name}, Path: path}
+		if len(refs) != 0 {
+			k := key{r.Ref, r.Path}
+			if k == (key{refs[0].Ref, refs[0].Path}) || seen[k] {
+				return
+			}
+			if seen == nil {
+				seen = make(map[key]bool)
+			}
+			seen[k] = true
+		}
+		refs = append(refs, r)
+	}
+	add(ing.Spec.DefaultBackend, "spec.defaultBackend.service.name")
+	for _, rule := range ing.Spec.Rules {
+		if rule.HTTP == nil {
+			continue
+		}
+		for i := range rule.HTTP.Paths {
+			add(&rule.HTTP.Paths[i].Backend, "spec.rules[].http.paths[].backend.service.name")
+		}
+	}
+	return refs
 }
 
 // IngressTLSSecretReferences returns named TLS Secret declarations in the

@@ -15,13 +15,9 @@ import (
 // store_unavailable counter. Objects that merely existed, and updates with
 // nothing to record, must not: they would not have been recorded either.
 func TestTimelineStoreDownCountsLostChangesOnly(t *testing.T) {
+	state := newConnectionCache()
 	timeline.ResetStore()
 	t.Cleanup(timeline.ResetStore)
-	timeline.ResetMetricsForContextSwitch()
-	t.Cleanup(timeline.ResetMetricsForContextSwitch)
-
-	prev := initialSyncComplete.Load()
-	t.Cleanup(func() { initialSyncComplete.Store(prev) })
 
 	dropped := func(reason string) int64 {
 		return timeline.GetMetrics().GetSnapshot().Counters.Dropped[reason]
@@ -33,19 +29,19 @@ func TestTimelineStoreDownCountsLostChangesOnly(t *testing.T) {
 		}}
 	}
 
-	initialSyncComplete.Store(false)
-	recordToTimelineStore("ctx", "Pod", "shop", "listed", "u1", "add", nil, pod("listed", time.Hour), nil, false)
+	state.initialSyncComplete.Store(false)
+	state.recordToTimelineStore(timeline.CaptureStore(), "ctx", "Pod", "shop", "listed", "u1", "add", nil, pod("listed", time.Hour), nil, false)
 	if got := storeDown(); got != 0 {
 		t.Fatalf("an object listed at startup counted as a lost change: store_unavailable=%d", got)
 	}
 
-	initialSyncComplete.Store(true)
-	recordToTimelineStore("ctx", "Pod", "shop", "relisted", "u2", "add", nil, pod("relisted", time.Hour), nil, false)
+	state.initialSyncComplete.Store(true)
+	state.recordToTimelineStore(timeline.CaptureStore(), "ctx", "Pod", "shop", "relisted", "u2", "add", nil, pod("relisted", time.Hour), nil, false)
 	if got := storeDown(); got != 0 {
 		t.Fatalf("a relisted old object counted as a lost change: store_unavailable=%d", got)
 	}
 
-	recordToTimelineStore("ctx", "Pod", "shop", "listed", "u1", "update", pod("listed", time.Hour), pod("listed", time.Hour), nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), "ctx", "Pod", "shop", "listed", "u1", "update", pod("listed", time.Hour), pod("listed", time.Hour), nil, false)
 	if got := storeDown(); got != 0 {
 		t.Fatalf("an update with nothing to record counted as a lost change: store_unavailable=%d", got)
 	}
@@ -55,10 +51,10 @@ func TestTimelineStoreDownCountsLostChangesOnly(t *testing.T) {
 
 	running := pod("listed", time.Hour)
 	running.Status.Phase = corev1.PodRunning
-	recordToTimelineStore("ctx", "Pod", "shop", "new", "u3", "add", nil, pod("new", time.Second), nil, false)
-	recordToTimelineStore("ctx", "Pod", "shop", "listed", "u1", "update", pod("listed", time.Hour), running, nil, false)
-	recordToTimelineStore("ctx", "Pod", "shop", "listed", "u1", "delete", pod("listed", time.Hour), nil, nil, false)
-	recordK8sEventToTimeline("ctx", k8sEventPod("new", "Started"))
+	state.recordToTimelineStore(timeline.CaptureStore(), "ctx", "Pod", "shop", "new", "u3", "add", nil, pod("new", time.Second), nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), "ctx", "Pod", "shop", "listed", "u1", "update", pod("listed", time.Hour), running, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), "ctx", "Pod", "shop", "listed", "u1", "delete", pod("listed", time.Hour), nil, nil, false)
+	state.recordK8sEventToTimeline(timeline.CaptureStore(), "ctx", k8sEventPod("new", "Started"))
 	if got := storeDown(); got != 4 {
 		t.Fatalf("store_unavailable=%d, want 4 (new add, update, delete, K8s event)", got)
 	}
@@ -73,14 +69,13 @@ func TestTimelineStoreDownCountsLostChangesOnly(t *testing.T) {
 // start, loses Kubernetes Events the same way it loses resource changes, and
 // the drop counter has to say so.
 func TestTimelineStoreFailureCountsLostKubernetesEvents(t *testing.T) {
+	state := newConnectionCache()
 	dsn := os.Getenv("RADAR_TEST_POSTGRES_DSN")
 	if dsn == "" {
 		t.Skip("RADAR_TEST_POSTGRES_DSN not set")
 	}
 	timeline.ResetStore()
 	t.Cleanup(timeline.ResetStore)
-	timeline.ResetMetricsForContextSwitch()
-	t.Cleanup(timeline.ResetMetricsForContextSwitch)
 
 	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypePostgres, DSN: dsn}); err != nil {
 		t.Fatalf("InitStore: %v", err)
@@ -94,7 +89,7 @@ func TestTimelineStoreFailureCountsLostKubernetesEvents(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	recordK8sEventToTimeline("ctx", k8sEventPod("web", "Started"))
+	state.recordK8sEventToTimeline(timeline.CaptureStore(), "ctx", k8sEventPod("web", "Started"))
 	if got := timeline.GetMetrics().GetSnapshot().Counters.Dropped[timeline.DropReasonStoreFailed]; got != 1 {
 		t.Fatalf("store_failed=%d after a failed K8s Event write, want 1", got)
 	}

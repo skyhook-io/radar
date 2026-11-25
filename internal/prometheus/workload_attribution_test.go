@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -427,5 +428,26 @@ func TestAttributionDoesNotAddHAReplicas(t *testing.T) {
 	}
 	if job, ok := attributionJob(rows[:1], nil, true); !ok || job != `job="beyla"` {
 		t.Fatalf("single population: %q %v", job, ok)
+	}
+}
+
+func TestPartitionRequiresClusterAlongsideProjectAndLocation(t *testing.T) {
+	pods := []prom.WorkloadPodIdentity{{Name: "api-0", UID: "local"}}
+	local := map[string]string{"pod": "api-0", "uid": "local", "project_id": "alpha", "location": "east"}
+	for _, allowUnlabeled := range []bool{false, true} {
+		if got, _ := identifyPartitionWithUnlabeled(pods, []prom.Series{{Labels: local}}, allowUnlabeled); len(got) > 0 {
+			t.Fatalf("qualified an unknown cluster: %v", got)
+		}
+	}
+	local["cluster"] = "prod"
+	foreign := maps.Clone(local)
+	foreign["uid"], foreign["location"] = "foreign", "west"
+	want := map[string]string{"cluster": "prod", "project_id": "alpha", "location": "east"}
+	if got, _ := identifyPartition(pods, []prom.Series{{Labels: local}, {Labels: foreign}}); !maps.Equal(got, want) {
+		t.Fatalf("partition = %v, want %v", got, want)
+	}
+	foreign["uid"] = "local"
+	if got, _ := identifyPartition(pods, []prom.Series{{Labels: local}, {Labels: foreign}}); len(got) > 0 {
+		t.Fatalf("accepted inconsistent qualifier for same local UID: %v", got)
 	}
 }

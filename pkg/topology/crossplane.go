@@ -13,7 +13,7 @@ import (
 // Crossplane relationships are spec-shape detected, not kind-enumerated:
 // Managed Resources, Composites (XRs) and Claims each have provider-defined
 // CRD kinds (one CRD per provider service), so there is no fixed kind list to
-// key off. The generic owner-reference pass (addGenericCRDNodes) does not wire
+// key off. The generic owner-reference pass (enrollGenericCRDNodes) does not wire
 // them because Claims have no ownerReference and XRs reference their Claim via
 // spec.claimRef rather than an ownerReference — so the composed MRs have no
 // owner node to attach to. This step adds the Claim/XR/MR nodes and the
@@ -218,7 +218,7 @@ func crossplaneIndexKey(group, kind, namespace, name string) string {
 //	Claim  --manages--> bound XR   (via spec.resourceRef)
 //	XR     --manages--> composed MR (via spec.resourceRefs / spec.crossplane.resourceRefs)
 //
-// It runs before addGenericCRDNodes so the XR nodes exist first; nodes already
+// It runs before enrollGenericCRDNodes so the XR nodes exist first; nodes already
 // present are not duplicated. Only resources whose informers are already
 // watched are seen (same trade-off as the generic CRD pass and the audit walker).
 func (b *Builder) addCrossplaneNodes(nodes []Node, edges []Edge, opts BuildOptions) ([]Node, []Edge) {

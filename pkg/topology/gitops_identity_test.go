@@ -227,9 +227,9 @@ func TestBuildLinksHelmReleasesByInventoryElseOriginLabels(t *testing.T) {
 	}
 }
 
-// A HelmRelease's auto neighborhood reaches what its inventory records, in
-// another namespace too, as well as its chart source.
-func TestHelmReleaseNeighborhoodReachesRecordedWorkloads(t *testing.T) {
+// A HelmRelease manages what its inventory records, in another namespace too,
+// not what merely carries its instance label.
+func TestHelmReleaseManagesRecordedWorkloads(t *testing.T) {
 	hrGVR := schema.GroupVersionResource{Group: "helm.toolkit.fluxcd.io", Version: "v2", Resource: "helmreleases"}
 	release := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease",
@@ -251,12 +251,51 @@ func TestHelmReleaseNeighborhoodReachesRecordedWorkloads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	sub := BuildNeighborhood(topo, ResourceRef{Kind: "HelmRelease", Namespace: "flux-system", Name: "podinfo", Group: "helm.toolkit.fluxcd.io"}, NeighborhoodOptions{Profile: ProfileAuto, Hops: 1})
+	drawn, _ := findNodeByRef(topo.Nodes, ResourceRef{Kind: "HelmRelease", Namespace: "flux-system", Name: "podinfo", Group: "helm.toolkit.fluxcd.io"}, nil)
+	if drawn == nil {
+		t.Fatal("the HelmRelease is not drawn")
+	}
 	got := map[string]bool{}
-	for _, n := range sub.Nodes {
-		got[n.ID] = true
+	for _, e := range topo.Edges {
+		if e.Type == EdgeManages && e.Source == drawn.ID {
+			got[e.Target] = true
+		}
 	}
 	if !got["deployment/apps/podinfo"] || got["deployment/apps/unrelated"] {
-		t.Fatalf("HelmRelease neighborhood = %v, want its recorded Deployment and not the instance-label match", slices.Sorted(maps.Keys(got)))
+		t.Fatalf("HelmRelease manages %v, want its recorded Deployment and not the instance-label match", slices.Sorted(maps.Keys(got)))
+	}
+}
+
+func TestApplicationsSharedManagerEdgesFollowInputOrder(t *testing.T) {
+	nodes := []Node{
+		{ID: "application/argocd/shop", Kind: KindApplication, Name: "shop", Data: map[string]any{"namespace": "argocd", "apiVersion": "argoproj.io/v1alpha1"}},
+		{ID: "application/argocd/other", Kind: KindApplication, Name: "other", Data: map[string]any{"namespace": "argocd", "apiVersion": "argoproj.io/v1alpha1"}},
+		{ID: "deployment/prod/api", Kind: KindDeployment, Name: "api", Data: map[string]any{"namespace": "prod", "apiVersion": "apps/v1"}},
+	}
+	var managers []*unstructured.Unstructured
+	for _, name := range []string{"shop", "other"} {
+		managers = append(managers, &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
+			"metadata": map[string]any{"namespace": "argocd", "name": name},
+			"spec":     map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}},
+			"status": map[string]any{"resources": []any{
+				map[string]any{"group": "apps", "kind": "Deployment", "namespace": "prod", "name": "api"},
+			}},
+		}})
+	}
+	ids := map[string]string{"argocd/shop": nodes[0].ID, "argocd/other": nodes[1].ID}
+	for _, order := range [][]*unstructured.Unstructured{managers, {managers[1], managers[0]}} {
+		edges := addGitOpsManagedResourceEdges(nodes, nil, order, ids, nil, nil, nil, nil, nil)
+		incoming, _ := IndexByResource(&Topology{Nodes: nodes, Edges: edges}).EdgesFor(nodes[2].ID)
+		if len(incoming) != 2 {
+			t.Fatalf("incoming edges = %+v", incoming)
+		}
+		for i, manager := range order {
+			want := ids[manager.GetNamespace()+"/"+manager.GetName()]
+			if incoming[i].Source != want {
+				t.Fatalf("incoming[%d]=%q, want %q", i, incoming[i].Source, want)
+			}
+		}
+		t.Logf("manager input order %s, %s: first incoming manager %s", order[0].GetName(), order[1].GetName(), incoming[0].Source)
 	}
 }

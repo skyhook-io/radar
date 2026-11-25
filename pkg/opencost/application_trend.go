@@ -16,6 +16,10 @@ type ApplicationTrendOptions struct {
 	Workloads         []ApplicationWorkloadRef
 	Unavailable       []ApplicationWorkloadStatus
 	UnavailableReason string
+	// ScopeFor decides one namespace's scope; a non-empty reason marks that
+	// namespace's workloads unavailable with it and sends no query. Nil
+	// leaves every query as it always was.
+	ScopeFor func(namespace string) (StoreScope, string)
 }
 
 func ComputeApplicationCostTrendFromProm(ctx context.Context, client *prom.Client, opts ApplicationTrendOptions) *ApplicationCostTrendResponse {
@@ -49,9 +53,25 @@ func ComputeApplicationCostTrendFromProm(ctx context.Context, client *prom.Clien
 	}
 
 	byNamespace := groupApplicationRefsByNamespace(supported)
+	withheld := false
 	for _, namespace := range sortedNamespaceKeys(byNamespace) {
 		refs := byNamespace[namespace]
-		result, reason := queryApplicationTrendNamespace(ctx, client, namespace, refs, start, end, step)
+		var scope StoreScope
+		reason := ""
+		if opts.ScopeFor != nil {
+			scope, reason = opts.ScopeFor(namespace)
+			// A namespace withheld for cluster scope has the scope worth
+			// showing; any other reason (a failed check) carries none.
+			scopeWithheld := reason == ReasonClusterScope && scope.ClusterScope != nil
+			if resp.ClusterScope == nil || (scopeWithheld && !withheld) {
+				resp.ClusterScope = scope.ClusterScope
+			}
+			withheld = withheld || scopeWithheld
+		}
+		var result *prom.QueryResult
+		if reason == "" {
+			result, reason = queryApplicationTrendNamespace(ctx, client, scope, namespace, refs, start, end, step)
+		}
 		if reason != "" {
 			resp.Coverage.Unavailable = append(resp.Coverage.Unavailable, applicationStatusesForRefs(refs, reason)...)
 			continue
@@ -109,19 +129,24 @@ func ComputeApplicationCostTrendFromProm(ctx context.Context, client *prom.Clien
 	return resp
 }
 
-func queryApplicationTrendNamespace(ctx context.Context, client *prom.Client, namespace string, refs []ApplicationWorkloadRef, start, end time.Time, step time.Duration) (*prom.QueryResult, string) {
-	query := buildApplicationTrendQuery(namespace, refs, false)
+func queryApplicationTrendNamespace(ctx context.Context, client *prom.Client, scope StoreScope, namespace string, refs []ApplicationWorkloadRef, start, end time.Time, step time.Duration) (*prom.QueryResult, string) {
+	f := scope.Filter
+	query := buildApplicationTrendQuery(f, namespace, refs, false)
 	if query == "" {
 		return nil, ReasonNoMetrics
 	}
-	result, err := client.QueryRange(ctx, query, start, end, step)
+	q := &costQuerier{client: client}
+	result, err := q.QueryRange(ctx, query, start, end, step)
 	if err != nil {
 		log.Print("[opencost] app workload trend range query failed; trying opencost_container_* fallback")
-		result, err = client.QueryRange(ctx, buildApplicationTrendQuery(namespace, refs, true), start, end, step)
+		result, err = q.QueryRange(ctx, buildApplicationTrendQuery(f, namespace, refs, true), start, end, step)
 		if err != nil {
 			log.Print("[opencost] app workload trend fallback query failed")
 			return nil, ReasonQueryError
 		}
+	}
+	if scope.partial(q) {
+		return nil, ReasonPartialData
 	}
 	if result == nil || len(result.Series) == 0 {
 		return nil, ReasonNoMetrics
@@ -129,9 +154,9 @@ func queryApplicationTrendNamespace(ctx context.Context, client *prom.Client, na
 	return result, ""
 }
 
-func buildApplicationTrendQuery(namespace string, refs []ApplicationWorkloadRef, fallback bool) string {
+func buildApplicationTrendQuery(f prom.ClusterFilter, namespace string, refs []ApplicationWorkloadRef, fallback bool) string {
 	safeNS := prom.SanitizeLabelValue(namespace)
-	podCost := workloadPodCostExpr(safeNS, fallback)
+	podCost := workloadPodCostExpr(f, safeNS, fallback)
 	namesByKind := make(map[string][]string)
 	for _, ref := range refs {
 		namesByKind[ref.Kind] = append(namesByKind[ref.Kind], ref.Name)
@@ -143,13 +168,15 @@ func buildApplicationTrendQuery(namespace string, refs []ApplicationWorkloadRef,
   (%s)
   * on(namespace, pod) group_left(replicaset)
     max by (namespace, pod, replicaset) (
-      label_replace(kube_pod_owner{namespace="%s", owner_kind="ReplicaSet", owner_is_controller="true"}, "replicaset", "$1", "owner_name", "(.+)")
+      label_replace(%s, "replicaset", "$1", "owner_name", "(.+)")
     )
   * on(namespace, replicaset) group_left(owner_kind, owner_name)
     max by (namespace, replicaset, owner_kind, owner_name) (
-      kube_replicaset_owner{namespace="%s", owner_kind="Deployment", owner_name=~"%s", owner_is_controller="true"}
+      %s
     )
-)`, podCost, safeNS, safeNS, promRegexAlternation(names)))
+)`, podCost,
+			sel(f, MetricPodOwner, `namespace="`+safeNS+`", owner_kind="ReplicaSet", owner_is_controller="true"`),
+			sel(f, MetricReplicaSetOwner, `namespace="`+safeNS+`", owner_kind="Deployment", owner_name=~"`+promRegexAlternation(names)+`", owner_is_controller="true"`)))
 	}
 	for _, kind := range []string{"StatefulSet", "DaemonSet"} {
 		if names := namesByKind[kind]; len(names) > 0 {
@@ -157,9 +184,9 @@ func buildApplicationTrendQuery(namespace string, refs []ApplicationWorkloadRef,
   (%s)
   * on(namespace, pod) group_left(owner_kind, owner_name)
     max by (namespace, pod, owner_kind, owner_name) (
-      kube_pod_owner{namespace="%s", owner_kind="%s", owner_name=~"%s", owner_is_controller="true"}
+      %s
     )
-)`, podCost, safeNS, kind, promRegexAlternation(names)))
+)`, podCost, sel(f, MetricPodOwner, `namespace="`+safeNS+`", owner_kind="`+kind+`", owner_name=~"`+promRegexAlternation(names)+`", owner_is_controller="true"`)))
 		}
 	}
 	if len(exprs) == 0 {

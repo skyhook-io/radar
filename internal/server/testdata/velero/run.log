@@ -1,0 +1,7 @@
+time="2026-11-16T10:00:00Z" level=info msg="Starting backup" backup=velero/nightly logSource="pkg/controller/backup_controller.go:700"
+time="2026-11-16T10:00:01Z" level=warning msg="No volume snapshot location found" backup=velero/nightly
+time="2026-11-16T10:00:02Z" level=error msg="Error backing up item" error="permission denied" resource=pods namespace=demo-app name=web
+msg="quoted level=error is not severity" level="info"
+time="2026-11-16T10:00:03Z" level=debug msg="Skipping item"
+time="2026-11-16T10:00:04Z" level=trace msg="Unknown level"
+plain output without a level

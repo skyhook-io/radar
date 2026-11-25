@@ -444,8 +444,8 @@ trend charts remain unavailable for Kubecost.
 | `traffic.prometheusUrl` | Manual Prometheus/VictoriaMetrics URL (skips auto-discovery) | `""` |
 | `traffic.prometheusHeaders` | HTTP headers sent with every Prometheus request (auth-protected backends). Requires `traffic.prometheusUrl` — credentials are never sent to auto-discovered endpoints | `{}` |
 | `traffic.prometheusHeadersFromEnv` | Prometheus headers sourced from environment variables, for secret-backed auth headers. Requires `traffic.prometheusUrl` | `{}` |
-| `traffic.prometheusSingleCluster` | Assert that the backend is dedicated to this cluster for workload metrics and PVC usage. Replaces automatic matching. [Scope limits](../../../docs/workload-metrics.md#optional-operator-override) | `false` |
-| `traffic.prometheusClusterLabels` | Exact cluster label/value constraints for workload metrics, PVC usage and, when `prometheusUrl` is set, the Caretta/Beyla/Istio traffic map, combined with AND. Labels must exist on each affected metric source. Alternative to `prometheusSingleCluster`; leave both unset for automatic matching | `{}` |
+| `traffic.prometheusSingleCluster` | Assert that the backend is dedicated to this cluster for workload metrics, rightsizing and PVC usage. Replaces automatic matching. [Scope limits](../../../docs/workload-metrics.md#optional-operator-override) | `false` |
+| `traffic.prometheusClusterLabels` | Exact cluster label/value constraints for workload metrics, rightsizing, PVC usage and, when `prometheusUrl` is set, the Caretta/Beyla/Istio traffic map, combined with AND. Labels must exist on each affected metric source. Alternative to `prometheusSingleCluster`; leave both unset for automatic matching | `{}` |
 | `traffic.beylaJobSelector` | Beyla Live Traffic matcher fragment. Workload charts use it only with an explicit scope override and accept one `job` equality or regex matcher; custom workload jobs are normally discovered automatically | `""` |
 | `argocd.existingSecret` | Name of a Secret holding the Argo CD API token (recommended — keeps it out of the release) | `""` |
 | `argocd.existingSecretKey` | Key within `argocd.existingSecret` holding the token | `token` |
@@ -566,7 +566,7 @@ Always granted (required for basic functionality):
 
 | API Group | Resources |
 |-----------|-----------|
-| Core (`""`) | pods, services, configmaps, events, namespaces, nodes, persistentvolumes, pvcs, serviceaccounts, endpoints, limitranges, resourcequotas |
+| Core (`""`) | pods, services, configmaps, events, namespaces, nodes, persistentvolumes, pvcs, serviceaccounts, podtemplates, endpoints, limitranges, resourcequotas |
 | `discovery.k8s.io` | endpointslices |
 | `policy` | poddisruptionbudgets |
 | `storage.k8s.io` | storageclasses |
@@ -588,13 +588,25 @@ Disabled by default for security:
 |---------|-------|-------------|
 | Secrets | `rbac.secrets: true` | View secrets in resource list. Also granted by `rbac.helm` (Helm stores releases in Secrets), by auth (`auth.mode` other than `none`), and in cloud mode, where every Secret read is re-checked against the requesting user's own RBAC. The grant is cluster-wide `get/list/watch` on all Secrets; `rbac.secrets: false` does not remove it in those modes. |
 | Terminal | `rbac.podExec: true` | Shell access to pods |
+| Pod Debug | A namespaced grant to `update` core `pods/ephemeralcontainers`, in addition to terminal access and `get pods` | Add an ephemeral toolbox container and open its terminal |
 | Port Forward | `rbac.portForward: true` | Port forwarding to pods. Also the fallback for traffic sources (Hubble/Caretta) — Radar dials the relay/metrics Service directly first, so in-cluster installs only need this when a NetworkPolicy or routing blocks Radar's namespace from reaching the service |
 | Logs | `rbac.podLogs: true` | View pod logs (**enabled by default**) |
 | Helm Write | `rbac.helm: true` | Install/upgrade/rollback/uninstall Helm releases. Installs with auth and Cloud off: grants Radar's ServiceAccount create/update/patch/delete on all resource types, since Helm runs as it. Under auth or cloud-mode Helm runs as the signed-in user, so the ServiceAccount gets no write grant; instead a split helm add-on ClusterRole is emitted — `radar-helm` (member-safe: CRDs, storage, namespaces) and `radar-helm-admin` (owner-only: RBAC, webhooks, ApiServices) |
 | RBAC view | `rbac.viewRBAC: true` | Show ClusterRoles, ClusterRoleBindings, Roles, RoleBindings and CertificateSigningRequests in the resource browser. Off by default — cache-served reads bypass per-user RBAC, so this exposes the cluster's authorization graph to every authenticated Radar user. Auto-enabled under auth or cloud mode (every read is re-checked per user there). |
 | Webhooks view | `rbac.viewWebhooks: true` | Show MutatingWebhookConfigurations and ValidatingWebhookConfigurations in the resource browser. Off by default — the configurations reveal which admission controls are enforced (Gatekeeper / Kyverno policies, image scanners, DLP) and where the gaps are, which is recon value for a low-trust viewer. Auto-enabled under auth or cloud mode. |
-| Admission policies view | `rbac.viewAdmissionPolicies: true` | Show native ValidatingAdmissionPolicies and ValidatingAdmissionPolicyBindings in the resource browser. Off by default for no-auth installs because the declarations expose admission-control coverage and gaps. Auto-enabled under auth or cloud mode, where reads are re-checked per user. |
+| Admission policies view | `rbac.viewAdmissionPolicies: true` | Show native validating and mutating admission policies and bindings in the resource browser. Off by default for no-auth installs because the declarations expose admission-control coverage and gaps. Auto-enabled under auth or cloud mode, where reads are re-checked per user. |
 | Node runtime evidence | `rbac.viewNodeRuntime: true` | Let upgrade-impact checks inspect kubelet metrics and effective configuration through `nodes/proxy`. Off by default because this exposes node-level runtime and configuration details to anyone who can reach a no-auth Radar install. Under auth, grant `get` on `nodes/proxy` to each Kubernetes identity that should inspect this evidence. |
+
+For Pod Debug, bind the extra `pods/ephemeralcontainers` permission in the target namespace. With authentication off, bind Radar’s ServiceAccount. With per-user authentication, grant the signed-in user or their group. Pod Debug is available in standalone and in-cluster Radar. The Radar Hub UI omits both the Pod action and the missing-shell recovery action.
+
+For example, add the separate grant for an existing per-user group in one namespace:
+
+```sh
+kubectl -n payments create role pod-debugger --verb=update --resource=pods/ephemeralcontainers
+kubectl -n payments create rolebinding pod-debugger --role=pod-debugger --group=payments-oncall
+```
+
+With authentication off, use `--serviceaccount=<radar-namespace>:<radar-serviceaccount>` in place of `--group`. These commands add only the ephemeral-container permission.
 
 ### MCP container commands
 
@@ -665,6 +677,8 @@ delegates Radar-to-Service network access; it doesn't control where a Service
 routes. On a shared cluster, constrain who can change EndpointSlices, directly or
 through GitOps controllers, and use network policy.
 
+For a Java4Shell check that reports **Registry authentication required**, see [workload pull secrets and private ECR setup for in-cluster Radar](../../../docs/authentication.md#java4shell-registry-access).
+
 ### Turning exec off
 
 `disableExec: true` turns off pod exec through Radar for everyone on this cluster,
@@ -706,7 +720,7 @@ It creates a namespace-scoped Role (not a ClusterRole) with `get` + `patch` on t
 
 ### CRD Access
 
-Radar discovers CRDs in your cluster. Common CRD groups are enabled by default; Flagger is explicitly opt-in. Granting RBAC for CRDs that don't exist has no effect.
+Radar discovers CRDs in your cluster. Common CRD groups are enabled by default; Flagger, the k3s Helm controller and system-upgrade-controller are explicitly opt-in. Granting RBAC for CRDs that don't exist has no effect.
 
 **Wildcard option:** Grant the collector service account read access to every API group and resource:
 ```bash
@@ -720,6 +734,8 @@ retain their finite grants.
 
 | Option | API Groups |
 |--------|------------|
+| `agentSandbox` | `agents.x-k8s.io`, `extensions.agents.x-k8s.io`. Sandboxes and SandboxTemplates carry Pod templates, whose environment values can be inline |
+| `agentSubstrate` | `ate.dev` |
 | `antrea` | `crd.antrea.io` (`networkpolicies`, `clusternetworkpolicies`) |
 | `apiRegistration` | `apiregistration.k8s.io` |
 | `argo` | `argoproj.io` |
@@ -737,18 +753,22 @@ retain their finite grants.
 | `externalDns` | `externaldns.k8s.io` |
 | `externalSecrets` | `external-secrets.io` |
 | `flagger` | `flagger.app` (`canaries`, `metrictemplates` only); **off by default**. Enable `rbac.crdGroups.flagger=true` for native browsing and failed-rollout Issues. |
-| `flux` | `*.toolkit.fluxcd.io` |
+| `flux` | `*.toolkit.fluxcd.io`, `source.extensions.fluxcd.io` (ArtifactGenerator) |
+| `fluxOperator` | `fluxcd.controlplane.io` (FluxInstance, FluxReport, ResourceSet, ResourceSetInputProvider) |
+| `k3sHelm` | `helm.cattle.io` (`helmcharts`, `helmchartconfigs` only); **off by default**, because `spec.valuesContent` and `spec.set` can carry credentials. Enable `rbac.crdGroups.k3sHelm=true` on k3s/RKE2 for the HelmChart drawers and the `k3s` badge on the releases they manage. |
 | `gatewayApi` | `gateway.networking.k8s.io` |
 | `gcpMonitoring` | `monitoring.googleapis.com` |
 | `grafana` | `monitoring.grafana.com`, `tempo.grafana.com`, `loki.grafana.com`, `grafana.integreatly.org` |
 | `istio` | `networking.istio.io`, `security.istio.io` |
 | `karpenter` | `karpenter.sh`, `karpenter.k8s.aws`, `karpenter.azure.com`, `karpenter.k8s.gcp`, `eks.amazonaws.com` |
 | `keda` | `keda.sh` |
-| `knative` | `serving.knative.dev`, `eventing.knative.dev`, `sources.knative.dev`, `messaging.knative.dev`, `flows.knative.dev`, `networking.internal.knative.dev` |
+| `knative` | `serving.knative.dev`, `eventing.knative.dev`, `sources.knative.dev`, `messaging.knative.dev`, `flows.knative.dev`, `networking.internal.knative.dev`, and `jobsinks` in `sinks.knative.dev` |
 | `kubeshark` | `kubeshark.io` |
 | `kured` | `kured.io` |
 | `kyverno` | `kyverno.io`, `policies.kyverno.io`, `wgpolicyk8s.io`, `reports.kyverno.io`, `openreports.io` |
+| `longhorn` | `longhorn.io` (`volumes`, `engines`, `replicas`), read-only volume health; on by default. |
 | `mariadb` | `mariadb.mmontes.io` |
+| `metallb` | `metallb.io` (`ipaddresspools`, `l2advertisements`, `bgpadvertisements`, `configurationstates` only; `bgppeers` only when Secrets are granted, see below) |
 | `multus` | `k8s.cni.cncf.io` (`network-attachment-definitions`) |
 | `networkPolicyApi` | `policy.networking.k8s.io` |
 | `nginx` | `nginx.org` |
@@ -760,11 +780,13 @@ retain their finite grants.
 | `sealedSecrets` | `bitnami.com` |
 | `secretsStoreCsi` | `secrets-store.csi.x-k8s.io` (`secretproviderclasses`, `secretproviderclasspodstatuses` only) |
 | `strimzi` | `strimzi.io`, `kafka.strimzi.io`, `core.strimzi.io` (`strimzipodsets` only) |
+| `systemUpgrade` | `upgrade.cattle.io` (`plans` only); **off by default**, because Plan env can carry values. Enable `rbac.crdGroups.systemUpgrade=true` on Rancher/k3s/RKE2 for the Plan drawer and per-node upgrade progress. |
 | `tekton` | `tekton.dev` |
 | `traefik` | `traefik.io`, `traefik.containo.us` |
 | `trivy` | `aquasecurity.github.io` |
 | `velero` | `velero.io` |
 | `verticalPodAutoscaler` | `autoscaling.k8s.io` |
+| `volumeSnapshots` | `snapshot.storage.k8s.io` (`volumesnapshots`, `volumesnapshotcontents`, `volumesnapshotclasses` only) |
 
 **VictoriaMetrics collection:** the chart grants Radar cluster-wide `get/list/watch`
 on VMAgent, VMCluster and VMSingle (`vmagents`, `vmclusters`, `vmsingles` in
@@ -778,6 +800,10 @@ VMUser/VMAuth, alerting and scrape/probe resources, and the Logs, Traces,
 Distributed and Anomaly families. `crdGroups.all=true` or adding
 `operator.victoriametrics.com` to `additionalCrdGroups` grants them anyway;
 permissions are additive, and these exclusions are not deny rules.
+
+**MetalLB BGPPeers** (`bgppeers` in `metallb.io`) follow the same rule when
+`rbac.crdGroups.metallb` is on: `spec.password` can hold the BGP session
+password inline, so Radar reads BGPPeers only when the chart grants Secrets.
 
 **Disable groups:** `--set rbac.crdGroups.calico=false`
 

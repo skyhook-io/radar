@@ -29,7 +29,13 @@ import (
 // with a pkg/prom.Client that performs the actual HTTP calls once an
 // endpoint has been discovered.
 type Client struct {
-	mu sync.RWMutex
+	gkeSF         singleflight.Group
+	gkeServices   *serviceInventory
+	gke           *gkeMetrics
+	gkeGeneration uint64
+	gkeRevision   uint64
+	gkeChecked    time.Time
+	mu            sync.RWMutex
 
 	// Effective connection (populated after discover succeeds).
 	baseURL  string
@@ -50,8 +56,14 @@ type Client struct {
 	workloadAttributionEntries map[string]*workloadAttributionEntry
 	workloadPartition          *workloadPartitionMemo
 	workloadPartitionSF        singleflight.Group
+	viewScopes                 map[string]viewScopeEntry
+	viewScopeSF                singleflight.Group
 	lastDiscoverErr            error
 	lastDiscoverAt             time.Time
+
+	// relay, when set, serves every request through a metrics relay instead
+	// of a discovered or configured Prometheus; see relay.go.
+	relay *relayState
 
 	// discoveryGen increments whenever configuration that invalidates a
 	// discovery result changes (Reset, SetManualURL, SetHeaders). It keys the
@@ -135,7 +147,7 @@ const failedDiscoveryCacheTTL = 5 * time.Second
 const discoveryTimeout = 60 * time.Second
 
 func (c *Client) headersRequireURLLocked() bool {
-	return prom.HeadersRequireURL(c.manualURL, c.headers)
+	return c.relay == nil && prom.HeadersRequireURL(c.manualURL, c.headers)
 }
 
 // Global client instance
@@ -186,6 +198,7 @@ func Initialize(client kubernetes.Interface, config *rest.Config, contextName st
 		httpClient:    &http.Client{Timeout: 10 * time.Second},
 		mcpHTTPClient: newMCPHTTPClient(),
 	}
+	globalClient.adoptRelayLocked()
 }
 
 // newMCPHTTPClient builds the HTTP client backing the MCP-only prom.Client.
@@ -306,6 +319,15 @@ func ConnectionSource() string {
 // stale settings. Lock order clientMu→c.mu matches Reinitialize.
 func (c *Client) configureLocked(rawURL string, headers map[string]string) {
 	normalized := strings.TrimRight(rawURL, "/")
+	if c.relay != nil {
+		// Kept for when the relay ends; the relay's connection and scope stay.
+		if c.manualURL != normalized || !maps.Equal(c.headers, headers) {
+			c.relay.setAside(func(s *prometheusSettings) { s.scope = nil })
+		}
+		c.manualURL = normalized
+		c.headers = copyHeaders(headers)
+		return
+	}
 	if c.manualURL != normalized || !maps.Equal(c.headers, headers) {
 		if c.workloadScope != nil {
 			log.Print("[prometheus] Workload metrics scope cleared: endpoint or headers changed; restart with a fresh scope assertion")
@@ -384,10 +406,13 @@ func (c *Client) connectInBackground(label string) error {
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(withSuppressedDiscoveryDiagnostics(context.Background()), discoveryTimeout+5*time.Second)
 	defer cancel()
-	addr, _, err := c.EnsureConnected(ctx)
+	addr, _, err := c.connectWithGKE(ctx)
 	switch {
 	case err == nil:
 		log.Printf("[prometheus] %s connected to %s (%s)", label, addr, took(start))
+	case c.gkeChartStore() != nil:
+		log.Printf("[prometheus] %s connected to GKE system metrics (%s)", label, took(start))
+		return nil
 	case errors.Is(err, prom.ErrHeadersRequireURL):
 		log.Printf("[prometheus] %s skipped: %v", label, err)
 	default:
@@ -435,6 +460,9 @@ func Retire() {
 		globalClient.mu.Unlock()
 		globalClient = nil
 	}
+	if activeRelay != nil {
+		activeRelay.resetSavedScope()
+	}
 	portforward.Stop(portforward.OwnerPrometheus)
 }
 
@@ -461,7 +489,11 @@ func Reinitialize(client kubernetes.Interface, config *rest.Config, contextName 
 		headers = copyHeaders(globalClient.headers)
 		// Startup initializes subsystems twice. Preserve trust across that same
 		// connection, but not a same-named context whose endpoint or identity changed.
-		if globalClient.contextName == contextName && reflect.DeepEqual(globalClient.k8sConfig, config) && globalClient.workloadScope != nil {
+		sameConnection := globalClient.contextName == contextName && reflect.DeepEqual(globalClient.k8sConfig, config)
+		if !sameConnection && activeRelay != nil {
+			activeRelay.resetSavedScope()
+		}
+		if sameConnection && globalClient.workloadScope != nil {
 			scope := *globalClient.workloadScope
 			scope.ClusterLabels = maps.Clone(scope.ClusterLabels)
 			workloadScope = &scope
@@ -493,6 +525,7 @@ func Reinitialize(client kubernetes.Interface, config *rest.Config, contextName 
 		httpClient:           &http.Client{Timeout: 10 * time.Second},
 		mcpHTTPClient:        newMCPHTTPClient(),
 	}
+	globalClient.adoptRelayLocked()
 }
 
 // DiscoveryGeneration identifies the current connection configuration. It
@@ -521,22 +554,41 @@ func (c *Client) GetStatus() prom.Status {
 		svc = &cp
 	}
 
+	if c.relay != nil {
+		src := c.relay.status()
+		// An unavailable relay source reports not connected, so status
+		// never says "Connected" while every chart fails; Address and
+		// Source still say which backend it is and why.
+		up := !src.Unavailable
+		return prom.Status{
+			Available:   up,
+			Connected:   up,
+			Address:     c.relay.cfg.Address,
+			ContextName: c.contextName,
+			Error:       src.Error,
+			Source:      &src,
+		}
+	}
+
 	connected := c.baseURL != ""
-	discovering := !connected && c.flightActive && c.flightGen == c.discoveryGen
+	gkeConnected := c.gkeActiveLocked()
+	discovering := !gkeConnected && !connected && c.flightActive && c.flightGen == c.discoveryGen
 	st := prom.Status{
-		Available:   connected,
-		Connected:   connected,
-		Discovering: discovering,
-		Address:     prom.SafeAddress(c.baseURL),
-		Service:     svc,
-		ContextName: c.contextName,
+		GKESystemMetrics: gkeConnected,
+		Available:        connected,
+		Connected:        connected,
+		Discovering:      discovering,
+		Address:          prom.SafeAddress(c.baseURL),
+		Service:          svc,
+		ContextName:      c.contextName,
 	}
 	switch {
 	case c.headersRequireURLLocked():
 		st.Error = prom.ErrHeadersRequireURL.Error()
-	case !connected && !discovering && c.lastOutcomeGen == c.discoveryGen:
+	case !gkeConnected && !connected && !discovering && c.lastOutcomeGen == c.discoveryGen:
 		st.Error = prom.RedactURLs(c.lastOutcome)
 	}
+	st.Source = sourceNote()
 	return st
 }
 
@@ -563,8 +615,14 @@ func (c *Client) EnsureConnected(ctx context.Context) (string, string, error) {
 	bp := c.basePath
 	gen := c.discoveryGen
 	manual := c.manualURL != ""
+	relay := c.relay != nil
 	c.mu.RUnlock()
 
+	// A relay reports its own failures per request; probing it here would
+	// spend the relay's request budget on every query.
+	if base != "" && relay {
+		return base, bp, nil
+	}
 	if base != "" {
 		// Probe whatever we already have, building the pkg/prom.Client
 		// on-demand. The cached client may be nil here for two reasons:
@@ -848,6 +906,50 @@ func (c *Client) getPromClient() *prom.Client {
 	return c.prom
 }
 
+// ConnectionSnapshot identifies the connection a store handle was taken
+// from, so work that pairs a cluster scope check with data queries on that
+// handle can tell when the connection moved between them.
+type ConnectionSnapshot struct {
+	generation uint64
+	epoch      uint64
+	bound      bool
+}
+
+// PromSnapshot is Prom with the connection it belongs to, read together.
+func (c *Client) PromSnapshot() (*prom.Client, ConnectionSnapshot) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.prom == nil && c.baseURL != "" {
+		c.prom = c.newConnectedPromClientLocked(c.httpClient)
+	}
+	return c.prom, c.snapshotLocked()
+}
+
+// PromForMCPSnapshot is PromForMCP with the connection it belongs to, read
+// together.
+func (c *Client) PromForMCPSnapshot() (*prom.Client, ConnectionSnapshot) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.baseURL == "" {
+		return nil, c.snapshotLocked()
+	}
+	return c.newConnectedPromClientLocked(c.mcpHTTPClient), c.snapshotLocked()
+}
+
+func (c *Client) snapshotLocked() ConnectionSnapshot {
+	return ConnectionSnapshot{generation: c.discoveryGen, epoch: c.connectionEpoch, bound: true}
+}
+
+// ConnectionCurrent reports whether the connection snap was taken from is
+// still the current one: same configuration, same backend, client not
+// retired. A zero snapshot is never current.
+func (c *Client) ConnectionCurrent(snap ConnectionSnapshot) bool {
+	if c == nil || !snap.bound {
+		return false
+	}
+	return c.viewScopeConnectionCurrent(snap.generation, snap.epoch)
+}
+
 // PromForMCP returns a prom.Client backed by the MCP-only http.Client, whose
 // 200s socket backstop accommodates the MCP path's model-settable per-query
 // timeout (up to 180s). The shared Prom() client keeps a 10s backstop that
@@ -889,11 +991,8 @@ func (c *Client) probeReachable(ctx context.Context, addr string, logReject bool
 // endpoint that answered and was refused.
 func (c *Client) probeWithReason(ctx context.Context, addr string, logReject bool) (bool, prom.ProbeReason) {
 	c.mu.RLock()
-	httpC := c.httpClient
-	headers := copyHeaders(c.headers)
+	tr := c.newTransportLocked(addr, "", c.httpClient, 0)
 	c.mu.RUnlock()
-	tr := prom.NewHTTPTransport(addr, "", httpC)
-	tr.Headers = headers
 	ok, reason := prom.NewClient(tr).Probe(ctx)
 	if !ok && logReject {
 		logProbeRejection(addr, reason, !discoveryDiagnosticsSuppressed(ctx))
@@ -943,6 +1042,23 @@ func (c *Client) QueryRange(ctx context.Context, query string, start, end time.T
 	return p.QueryRange(ctx, query, start, end, step)
 }
 
+// MetricNames lists the metric names matching the selectors that hold
+// samples between start and end.
+func (c *Client) MetricNames(ctx context.Context, matches []string, start, end time.Time) ([]string, error) {
+	if _, _, err := c.EnsureConnected(ctx); err != nil {
+		return nil, err
+	}
+	p := c.getPromClient()
+	if p == nil {
+		return nil, errors.New("prometheus connection was reset")
+	}
+	names, warnings, err := p.LabelValuesWithWarnings(ctx, "__name__", matches, start, end, 2000)
+	if err == nil && len(warnings) > 0 {
+		return nil, fmt.Errorf("Prometheus returned an incomplete list of metric names: %s", truncate(strings.Join(warnings, "; "), 200))
+	}
+	return names, err
+}
+
 // Query executes a Prometheus instant query via the underlying pkg/prom.Client.
 func (c *Client) Query(ctx context.Context, query string) (*prom.QueryResult, error) {
 	if _, _, err := c.EnsureConnected(ctx); err != nil {
@@ -953,4 +1069,41 @@ func (c *Client) Query(ctx context.Context, query string) (*prom.QueryResult, er
 		return nil, errors.New("prometheus connection was reset")
 	}
 	return p.Query(ctx, query)
+}
+
+// QueryAt is Query evaluated at a fixed time.
+func (c *Client) QueryAt(ctx context.Context, query string, at time.Time) (*prom.QueryResult, error) {
+	if _, _, err := c.EnsureConnected(ctx); err != nil {
+		return nil, err
+	}
+	p := c.getPromClient()
+	if p == nil {
+		return nil, errors.New("prometheus connection was reset")
+	}
+	return p.QueryAt(ctx, query, at)
+}
+
+// QueryAtPost is QueryAt with the query sent in a POST body rather than the
+// URL.
+func (c *Client) QueryAtPost(ctx context.Context, query string, at time.Time) (*prom.QueryResult, error) {
+	if _, _, err := c.EnsureConnected(ctx); err != nil {
+		return nil, err
+	}
+	p := c.getPromClient()
+	if p == nil {
+		return nil, errors.New("prometheus connection was reset")
+	}
+	return p.QueryAtPost(ctx, query, at)
+}
+
+// QueryPost is Query with the query sent in a POST body rather than the URL.
+func (c *Client) QueryPost(ctx context.Context, query string) (*prom.QueryResult, error) {
+	if _, _, err := c.EnsureConnected(ctx); err != nil {
+		return nil, err
+	}
+	p := c.getPromClient()
+	if p == nil {
+		return nil, errors.New("prometheus connection was reset")
+	}
+	return p.QueryPost(ctx, query)
 }

@@ -78,6 +78,9 @@ func Classify(in classifyInput) issuesapi.Category {
 
 	case SourceCondition:
 		switch in.Reason {
+		case ReasonVeleroServerNotRunning:
+			// Filed on the server's Deployment, but what stops is backups.
+			return issuesapi.CategoryBackupStalled
 		case ReasonCertificateRenewalFailed:
 			return issuesapi.CategoryCertificateRenewalFailed
 		case ReasonKarpenterNodePoolNotReady,
@@ -130,6 +133,14 @@ func Classify(in classifyInput) issuesapi.Category {
 				return issuesapi.CategoryGatewayRouteInvalid
 			}
 			return issuesapi.CategoryOperatorConditionFail
+		case g == "longhorn.io":
+			switch in.Reason {
+			case ReasonLonghornVolumeFaulted:
+				return issuesapi.CategoryVolumeFaulted
+			case ReasonLonghornVolumeDegraded:
+				return issuesapi.CategoryVolumeDegraded
+			}
+			return issuesapi.CategoryOperatorConditionFail
 		case g == "apiregistration.k8s.io" && in.Kind == "APIService":
 			return issuesapi.CategoryAPIServiceUnavailable
 		case g == "velero.io":
@@ -144,7 +155,8 @@ func Classify(in classifyInput) issuesapi.Category {
 			// under backup_failed it renders as "Backup failed" above a message
 			// saying the run is still in progress, and points at the wrong fix:
 			// you look at the controller, not at an error the run never produced.
-			if in.Reason == ReasonVeleroRunStalled {
+			switch in.Reason {
+			case ReasonVeleroRunStalled, ReasonVeleroScheduleLate, ReasonVeleroScheduleHeld, ReasonVeleroScheduleNotValidated:
 				return issuesapi.CategoryBackupStalled
 			}
 			return issuesapi.CategoryBackupFailed
@@ -193,7 +205,7 @@ func Classify(in classifyInput) issuesapi.Category {
 			return issuesapi.CategoryNodeProvisioningFail
 		case strings.Contains(g, "crossplane.io"):
 			return issuesapi.CategoryCrossplaneReconcile
-		case g == "source.toolkit.fluxcd.io" || g == "image.toolkit.fluxcd.io" || g == "notification.toolkit.fluxcd.io":
+		case g == "source.toolkit.fluxcd.io" || g == "source.extensions.fluxcd.io" || g == "image.toolkit.fluxcd.io" || g == "notification.toolkit.fluxcd.io":
 			// Source objects (GitRepository/OCIRepository/HelmRepository/…) fail
 			// at the fetch/render stage, so render_failed is the right default.
 			// Reasons here arrive as condTypeReason display strings ("Ready:

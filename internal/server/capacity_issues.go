@@ -104,10 +104,11 @@ func (s *Server) capacityIssuesForRequest(r *http.Request) capacityIssueProjecti
 		}
 		return capacity
 	}, func() bool {
-		return contextName == k8s.GetContextName() &&
+		conn := k8s.Current()
+		return contextName == conn.ContextName() &&
 			resource == k8s.GetResourceCache() &&
 			dynamic == k8s.GetDynamicResourceCache() &&
-			discovery == k8s.GetResourceDiscovery()
+			discovery == conn.Discovery()
 	})
 	if !available {
 		return newCapacityIssueProjection(nil, false)

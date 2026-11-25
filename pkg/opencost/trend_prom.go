@@ -21,6 +21,10 @@ type TrendPromOptions struct {
 
 	// Namespaces limits results before top-N aggregation. Nil means all.
 	Namespaces []string
+
+	// Scope keeps the query to this cluster; the zero value leaves it as it
+	// always was.
+	Scope StoreScope
 }
 
 // ComputeCostTrendFromProm returns a stacked per-namespace cost trend from
@@ -35,6 +39,18 @@ func ComputeCostTrendFromProm(ctx context.Context, client *prom.Client, opts Tre
 	if client == nil {
 		return &CostTrendResponse{Available: false, Reason: ReasonNoPrometheus}
 	}
+	q := &costQuerier{client: client}
+	resp := computeCostTrendFromProm(ctx, q, opts)
+	if opts.Scope.partial(q) {
+		_, _, _, label := resolveTrendRange(opts.Range)
+		resp = &CostTrendResponse{Available: false, Reason: ReasonPartialData, Range: label}
+	}
+	resp.ClusterScope = opts.Scope.ClusterScope
+	return resp
+}
+
+func computeCostTrendFromProm(ctx context.Context, client *costQuerier, opts TrendPromOptions) *CostTrendResponse {
+	f := opts.Scope.Filter
 
 	start, end, step, label := resolveTrendRange(opts.Range)
 	maxSeries := opts.MaxSeries
@@ -42,10 +58,10 @@ func ComputeCostTrendFromProm(ctx context.Context, client *prom.Client, opts Tre
 		maxSeries = 8
 	}
 
-	const query = `sum by (namespace) (
-  label_replace((sum_over_time(container_cpu_allocation{namespace!=""}[1h:1m]) / 60), "namespace", "$1", "exported_namespace", "(.+)") * on(node) group_left() ` + nodeCPUHourlyCostExpr + `
+	query := `sum by (namespace) (
+  label_replace((sum_over_time(` + sel(f, MetricCPUAllocation, `namespace!=""`) + `[1h:1m]) / 60), "namespace", "$1", "exported_namespace", "(.+)") * on(node) group_left() ` + nodeCPUHourlyCostExpr(f) + `
 ) + sum by (namespace) (
-  label_replace((sum_over_time(container_memory_allocation_bytes{namespace!=""}[1h:1m]) / 60), "namespace", "$1", "exported_namespace", "(.+)") / 1073741824 * on(node) group_left() ` + nodeRAMHourlyCostExpr + `
+  label_replace((sum_over_time(` + sel(f, MetricMemoryAllocation, `namespace!=""`) + `[1h:1m]) / 60), "namespace", "$1", "exported_namespace", "(.+)") / 1073741824 * on(node) group_left() ` + nodeRAMHourlyCostExpr(f) + `
 )`
 
 	result, err := client.QueryRange(ctx, query, start, end, step)
@@ -131,6 +147,12 @@ func ComputeCostTrendFromProm(ctx context.Context, client *prom.Client, opts Tre
 func SupportedTrendRange(value string) bool {
 	_, _, _, label := resolveTrendRange(value)
 	return value == "" || value == label
+}
+
+// TrendRangeDuration is how far back the named range reaches.
+func TrendRangeDuration(rangeStr string) time.Duration {
+	start, end, _, _ := resolveTrendRange(rangeStr)
+	return end.Sub(start)
 }
 
 // resolveTrendRange returns the start/end/step/label for the named Range.

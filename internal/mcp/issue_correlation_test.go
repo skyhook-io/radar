@@ -10,8 +10,10 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 
+	"github.com/skyhook-io/radar/internal/issuecorrelation"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
@@ -32,7 +34,26 @@ func initCorrelationStore(t *testing.T) timeline.EventStore {
 	// The timeline fills only while connected, and get_changes refuses to
 	// answer otherwise.
 	setConnectedForTest(t)
+	// Correlation claims nothing about a subject kind Radar doesn't collect,
+	// so a test that brings no cache of its own gets an empty one, as a
+	// connected Radar always has.
+	if k8s.GetResourceCache() == nil {
+		if err := k8s.InitTestResourceCache(k8sfake.NewSimpleClientset()); err != nil {
+			t.Fatalf("InitTestResourceCache: %v", err)
+		}
+		t.Cleanup(k8s.ResetTestState)
+	}
 	return timeline.GetStore()
+}
+
+// shopDeployments are cached Deployments in namespace shop with an empty pod
+// template: their sources are known to be none.
+func shopDeployments(names ...string) []runtime.Object {
+	objs := make([]runtime.Object, 0, len(names))
+	for _, name := range names {
+		objs = append(objs, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "shop"}})
+	}
+	return objs
 }
 
 func setConnectedForTest(t *testing.T) {
@@ -87,6 +108,10 @@ func warningIssue(kind, name string) issuesapi.Issue {
 // The changed workload gets correlated_changes; the chronic one gets an
 // explicit no_recent_changes marker with the window.
 func TestAttachIssueChangeCorrelation_Markers(t *testing.T) {
+	if err := k8s.InitTestResourceCache(k8sfake.NewSimpleClientset(shopDeployments("web", "quiet", "warn-quiet")...)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	t.Cleanup(k8s.ResetTestState)
 	store := initCorrelationStore(t)
 	if err := store.Append(context.Background(), timeline.TimelineEvent{
 		ID: "web-spec", Timestamp: time.Now().Add(-5 * time.Minute),
@@ -278,6 +303,12 @@ func TestAttachIssueChangeCorrelation_WorkloadConfigMapFanout(t *testing.T) {
 	}
 }
 
+// checked reports whether correlation answered for the issue: with changes,
+// the no_recent_changes marker, or the reason it can't tell.
+func checked(iss issuesapi.Issue) bool {
+	return iss.NoRecentChanges != nil || len(iss.CorrelatedChanges) > 0 || iss.Correlation != nil
+}
+
 // Past the cap, remaining criticals are skipped and the response says so.
 func TestAttachIssueChangeCorrelation_Truncation(t *testing.T) {
 	initCorrelationStore(t)
@@ -294,7 +325,7 @@ func TestAttachIssueChangeCorrelation_Truncation(t *testing.T) {
 	}
 	marked := 0
 	for _, iss := range resp.Issues {
-		if iss.NoRecentChanges != nil || len(iss.CorrelatedChanges) > 0 {
+		if checked(iss) {
 			marked++
 		}
 	}
@@ -304,7 +335,7 @@ func TestAttachIssueChangeCorrelation_Truncation(t *testing.T) {
 	// The issues past the cap carry NO marker — "not checked", never a false
 	// "no changes".
 	last := resp.Issues[len(resp.Issues)-1]
-	if last.NoRecentChanges != nil || len(last.CorrelatedChanges) > 0 {
+	if checked(last) {
 		t.Fatalf("issue past cap must be unmarked: %+v", last)
 	}
 }
@@ -327,7 +358,7 @@ func TestAttachIssueChangeCorrelation_CriticalsPriorityUnderCap(t *testing.T) {
 	}
 	marked := 0
 	for _, iss := range resp.Issues {
-		if iss.NoRecentChanges != nil || len(iss.CorrelatedChanges) > 0 {
+		if checked(iss) {
 			marked++
 			if iss.Severity == issuesapi.SeverityWarning && marked > correlationIssueCap {
 				t.Fatalf("warning %s marked past the cap", iss.Name)
@@ -338,7 +369,7 @@ func TestAttachIssueChangeCorrelation_CriticalsPriorityUnderCap(t *testing.T) {
 		t.Fatalf("marked = %d, want exactly the cap (%d)", marked, correlationIssueCap)
 	}
 	for _, iss := range resp.Issues {
-		if iss.Severity == issuesapi.SeverityCritical && iss.NoRecentChanges == nil && len(iss.CorrelatedChanges) == 0 {
+		if iss.Severity == issuesapi.SeverityCritical && !checked(iss) {
 			t.Fatalf("critical %s lost its slot to an earlier-listed warning", iss.Name)
 		}
 	}
@@ -360,7 +391,7 @@ func TestAttachIssueChangeCorrelation_WarningOnlyTruncation(t *testing.T) {
 	}
 	marked := 0
 	for _, iss := range resp.Issues {
-		if iss.NoRecentChanges != nil || len(iss.CorrelatedChanges) > 0 {
+		if checked(iss) {
 			marked++
 		}
 	}
@@ -475,7 +506,7 @@ func TestIssueCorrelation_WorstCasePayloadBounded(t *testing.T) {
 	var iss []issuesapi.Issue
 	for i := 0; i < correlationIssueCap; i++ {
 		issue := criticalIssue("Deployment", fmt.Sprintf("dep-%d", i))
-		for c := 0; c < correlationChangeCap; c++ {
+		for c := 0; c < issuecorrelation.ChangeCap; c++ {
 			change := issuesapi.RecentChange{
 				Source: "informer", Kind: "Deployment", Namespace: "shop",
 				Name:           fmt.Sprintf("dep-%d", i),
@@ -483,7 +514,7 @@ func TestIssueCorrelation_WorstCasePayloadBounded(t *testing.T) {
 				ChangeCategory: issuesapi.ChangeCategorySpecConfig,
 				Summary:        "spec changed: containers[app].image, containers[app].resources, replicas, strategy, template.metadata.labels",
 			}
-			for f := 0; f < correlationFieldLimit; f++ {
+			for f := 0; f < issuecorrelation.FieldLimit; f++ {
 				change.Fields = append(change.Fields, issuesapi.ChangeField{
 					Path:     fmt.Sprintf("spec.template.spec.containers[app].env[FEATURE_FLAG_%d].value", f),
 					OldValue: "a-realistically-long-previous-configuration-value-1234567890",
@@ -503,4 +534,66 @@ func TestIssueCorrelation_WorstCasePayloadBounded(t *testing.T) {
 		t.Fatalf("worst-case correlation payload = %d bytes, exceeds %d — correlation caps no longer bound the response", len(data), maxBytes)
 	}
 	t.Logf("worst-case correlation payload: %d bytes", len(data))
+}
+
+// What the tool says about a source the caller can't list must not depend on
+// whether that source changed: a Service they can't list, or a ConfigMap a
+// workload they can read references, gets the same answer either way, and
+// never no_recent_changes.
+func TestAttachIssueChangeCorrelation_DeniedSourceSameAnswerEitherWay(t *testing.T) {
+	client := k8sfake.NewSimpleClientset(&appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "flagd", Namespace: "shop"},
+		Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+			Volumes: []corev1.Volume{{Name: "config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "flagd-config"},
+			}}}},
+			Containers: []corev1.Container{{Name: "flagd", Image: "flagd:v1"}},
+		}}},
+	})
+	if err := k8s.InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	ctx := withClusterAdmin(t, "deploy-reader")
+	t.Cleanup(getPermCache().Invalidate)
+	perms := getPermCache().Get("deploy-reader", nil)
+	perms.SetCanI("list", "apps", "deployments", "shop", true)
+	perms.SetCanI("list", "", "services", "shop", false)
+	perms.SetCanI("list", "", "configmaps", "shop", false)
+
+	answer := func(changed bool) string {
+		store := initCorrelationStore(t)
+		if changed {
+			for _, e := range []timeline.TimelineEvent{
+				{ID: "svc", Kind: "Service", APIVersion: "v1", Name: "cart",
+					Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "spec.selector.app", OldValue: "cart", NewValue: "cartt"}}}},
+				{ID: "cm", Kind: "ConfigMap", APIVersion: "v1", Name: "flagd-config",
+					Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "data.flags", OldValue: "off", NewValue: "on"}}}},
+			} {
+				e.Timestamp, e.Namespace, e.EventType = time.Now().Add(-5*time.Minute), "shop", timeline.EventTypeUpdate
+				e.Source, e.ClusterContext = timeline.SourceInformer, k8s.ActiveClusterContext()
+				if err := store.Append(context.Background(), e); err != nil {
+					t.Fatalf("append: %v", err)
+				}
+			}
+		}
+		svc := warningIssue("Service", "cart")
+		deploy := criticalIssue("Deployment", "flagd")
+		deploy.Group = "apps"
+		resp := issues.ListResponse{Issues: []issuesapi.Issue{deploy, svc}}
+		attachIssueChangeCorrelation(ctx, &resp)
+		for _, iss := range resp.Issues {
+			if checked(iss) {
+				t.Fatalf("changed=%v: denied source produced an answer: %+v", changed, iss)
+			}
+		}
+		data, err := json.Marshal(resp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	if quiet, changed := answer(false), answer(true); quiet != changed {
+		t.Fatalf("answer depends on hidden changes:\nquiet:   %s\nchanged: %s", quiet, changed)
+	}
 }

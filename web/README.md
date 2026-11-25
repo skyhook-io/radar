@@ -10,7 +10,7 @@ This package is source-only — it ships TypeScript + TSX files under `src/`. Co
 npm install @skyhook-io/radar-app
 ```
 
-Peer deps: `react >=19`, `react-dom >=19`, `react-router-dom >=7`, `@tanstack/react-query >=5`, `@skyhook-io/k8s-ui >=1.18.2`, plus `clsx`, `tailwind-merge`, `lucide-react`, `@xyflow/react`, `elkjs`.
+Peer deps: `react >=19`, `react-dom >=19`, `react-router-dom >=7`, `@tanstack/react-query >=5`, `@skyhook-io/k8s-ui >=1.21.7`, plus `clsx`, `tailwind-merge`, `lucide-react`, `@xyflow/react`, `elkjs`.
 
 ## Use
 
@@ -66,6 +66,17 @@ Host apps can override Radar's runtime behavior without passing props:
 - `setCredentialsMode(mode)` — fetch credentials mode (`same-origin` | `include` | `omit`).
 
 Call these before mounting `<RadarApp>`.
+
+## Fleet rightsizing
+
+An embedded host may return its cluster-scoped fleet URL from
+`navSlots.fleetTakeoverHref('rightsizing', search)`. The search string comes from
+the nested router so the host can carry the current namespace selection. The
+Cost tab link and direct `/cost/rightsizing` bookmarks honor the takeover.
+Standalone Radar keeps its local scan. Set `navSlots.rightsizingProviderStatus` when the host advertises `fleet_rightsizing`, so embedded Metrics and Cost can tell a missing provider response from a Hub version that predates provider selection. `RightsizingScanResponse`,
+`RightsizingScanWorkload`, and `PrometheusRightsizing` are exported types for
+the existing scan and workload reads. A scan starts with an explicit POST;
+GET retrieves a retained scan and returns JSON null before the first scan.
 
 ## Resource list responses
 

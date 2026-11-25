@@ -1,11 +1,14 @@
 package topology
 
 import (
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"slices"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/skyhook-io/radar/pkg/relations"
 )
 
 func TestKnativeObservedBackingChannelAndGroupReference(t *testing.T) {
@@ -76,10 +79,15 @@ func TestTriggerBrokerAndObservedChannelOwnership(t *testing.T) {
 		{ID: "channel/app/c", Kind: KindChannel, Name: "c", Data: map[string]any{"namespace": "app", "apiVersion": "messaging.knative.dev/v1"}},
 		{ID: "inmemorychannel/app/c", Kind: NodeKind("InMemoryChannel"), Name: "c", Data: map[string]any{"namespace": "app", "apiVersion": "messaging.knative.dev/v1"}},
 	}
-	trigger := &unstructured.Unstructured{Object: map[string]any{"metadata": map[string]any{"namespace": "app", "name": "t"}, "spec": map[string]any{"brokerRef": map[string]any{"namespace": "events", "name": "b", "kind": "Service", "apiVersion": "v1"}}}}
+	// A brokerRef names a Broker whatever kind it spells, here in another namespace.
+	trigger := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "eventing.knative.dev/v1", "kind": "Trigger", "metadata": map[string]any{"namespace": "app", "name": "t"}, "spec": map[string]any{"brokerRef": map[string]any{"namespace": "events", "name": "b", "kind": "Service", "apiVersion": "v1"}}}}
+	brokers := drawFamilies(nil, newDrawnNodes(), nodes, unstructuredSources([]*unstructured.Unstructured{trigger}), relations.KnativeTriggerBrokers)
+	if len(brokers) != 1 || brokers[0].Source != "broker/events/b" || brokers[0].Target != "trigger/app/t" || brokers[0].Type != EdgeExposes {
+		t.Fatalf("broker edges=%+v", brokers)
+	}
 	channel := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "messaging.knative.dev/v1", "kind": "InMemoryChannel", "metadata": map[string]any{"namespace": "app", "name": "c", "ownerReferences": []any{map[string]any{"apiVersion": "messaging.knative.dev/v1", "kind": "Channel", "name": "c"}}}}}
 	edges := addKnativeReferenceEdges(nodes, nil, []*unstructured.Unstructured{trigger}, nil, []*unstructured.Unstructured{channel})
-	if len(edges) != 2 || edges[0].Source != "broker/events/b" || edges[1].Type != EdgeManages {
+	if len(edges) != 1 || edges[0].Source != "channel/app/c" || edges[0].Type != EdgeManages {
 		t.Fatalf("edges=%+v", edges)
 	}
 }
@@ -112,5 +120,57 @@ func TestBuilderReadsBackingChannelOwnerBeforeStatusReference(t *testing.T) {
 	rel := GetRelationshipsWithObject("InMemoryChannel", "app", "events", backing, topo, nil, dp, IndexByResource(topo))
 	if rel == nil || rel.Owner == nil || rel.Owner.Kind != "Channel" {
 		t.Fatalf("owner=%+v", rel)
+	}
+}
+
+func TestBuilderResolvesTriggerBrokerRef(t *testing.T) {
+	const group = "eventing.knative.dev"
+	const version = group + "/v1"
+	remote := map[string]any{"apiVersion": version, "kind": "Broker", "namespace": "events", "name": "remote"}
+	for _, tc := range []struct {
+		name       string
+		brokerRef  any
+		namespaces []string
+		want       []string
+	}{
+		{"cross namespace", remote, nil, []string{"broker/events/remote"}},
+		{"filtered namespace", remote, []string{"app"}, nil},
+		{"only a different kind exists", map[string]any{"apiVersion": version, "kind": "Trigger", "namespace": "events", "name": "other"}, nil, nil},
+		{"only a foreign Broker exists", map[string]any{"apiVersion": "other.example/v1", "kind": "Broker", "namespace": "events", "name": "foreign"}, nil, nil},
+		{"malformed ref", "invalid", nil, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newCharDynamic()
+			d.add(group, "v1", "Broker", "brokers", true,
+				charUnstructured(version, "Broker", "events", "remote", nil, nil, nil),
+				charUnstructured(version, "Broker", "app", "local", nil, nil, nil))
+			trigger := charUnstructured(version, "Trigger", "app", "orders", nil, map[string]any{
+				"broker": "local", "brokerRef": tc.brokerRef,
+			}, nil)
+			d.add(group, "v1", "Trigger", "triggers", true, trigger, charUnstructured(version, "Trigger", "events", "other", nil, nil, nil))
+			d.add("other.example", "v1", "Broker", "brokers", true, charUnstructured("other.example/v1", "Broker", "events", "foreign", nil, nil, nil))
+			opts := DefaultBuildOptions()
+			opts.Namespaces = tc.namespaces
+			topo, err := NewBuilder(&mockProvider{}).WithDynamic(d).Build(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			const triggerID = "trigger/app/orders"
+			if findNode(topo, triggerID) == nil {
+				t.Fatalf("missing %s", triggerID)
+			}
+			var got []string
+			for _, e := range topo.Edges {
+				if e.Target == triggerID {
+					if e.Type != EdgeExposes {
+						t.Errorf("unexpected Trigger edge: %+v", e)
+					}
+					got = append(got, e.Source)
+				}
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("Trigger brokers = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

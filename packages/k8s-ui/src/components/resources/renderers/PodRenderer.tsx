@@ -1,10 +1,11 @@
 import { useState, type ReactNode, type JSX } from 'react'
-import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity, CirclePlay, FolderOpen, List, Eye, EyeOff, Shield } from 'lucide-react'
+import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity, CirclePlay, FolderOpen, List, Eye, EyeOff, Shield, Info } from 'lucide-react'
 import { clsx } from 'clsx'
 import { PolicySection } from './PolicySection'
 import type { PolicyResourceResponse } from '../../../types/policy'
 import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink, useOperationalIssuesShown, PodAggregateResources } from '../../ui/drawer-components'
-import { formatResources, formatDuration, getPodProblems, getPodPhaseDisplay, healthColors, SEVERITY_DOT_COLOR, getDefaultContainerName, getExecContainerNames, getInitContainerNames, getLogContainerNames } from '../resource-utils'
+import { SUBSTRATE_GROUP, SUBSTRATE_WORKER_POOL_LABEL } from '../resource-utils-agent-runtimes'
+import { formatResources, formatDuration, getPodProblems, getPodPhaseDisplay, healthColors, SEVERITY_DOT_COLOR, getDefaultContainerName, getExecContainerNames, getRunningEphemeralContainers, formatAge, getInitContainerNames, getLogContainerNames } from '../resource-utils'
 import { getResourceStatusColor, SEVERITY_BORDER } from '../../../utils/badge-colors'
 import {
   rbacVerbBadgeClass,
@@ -83,7 +84,8 @@ interface PodRendererProps {
   canViewLogs?: boolean
   canPortForward?: boolean
   // Dock actions
-  onOpenTerminal?: (params: { namespace: string; podName: string; containerName: string; containers: string[] }) => void
+  onOpenTerminal?: (params: { namespace: string; podName: string; podUID?: string; containerName: string; containers: string[] }) => void
+  onOpenEphemeralTerminal?: (name: string, image: string) => void
   onOpenLogsPanel?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string; initContainers?: string[] }) => void
   // Port forward render prop
   renderPortAction?: (props: { namespace: string; podName: string; port: number; protocol: string; disabled?: boolean }) => ReactNode
@@ -295,6 +297,7 @@ export function PodRenderer({
   canViewLogs,
   canPortForward,
   onOpenTerminal,
+  onOpenEphemeralTerminal,
   onOpenLogsPanel,
   renderPortAction,
   metrics,
@@ -323,6 +326,7 @@ export function PodRenderer({
   const containerStatuses = data.status?.containerStatuses || []
   const containers = data.spec?.containers || []
   const initContainers = data.spec?.initContainers || []
+  const runningDebugContainers = getRunningEphemeralContainers(data)
   const podResources = data.spec?.resources
   const initContainerStatuses = data.status?.initContainerStatuses || []
   const hasEnvironmentDeclarations = [...initContainers, ...containers].some(
@@ -373,6 +377,7 @@ export function PodRenderer({
     const container = containerName || getDefaultContainerName(data)
     if (namespace && podName && container) {
       onOpenTerminal?.({
+        podUID: data?.metadata?.uid,
         namespace,
         podName,
         containerName: container,
@@ -418,6 +423,8 @@ export function PodRenderer({
     )
   }
 
+  const substrateWorkerPool = data.metadata?.labels?.[SUBSTRATE_WORKER_POOL_LABEL]
+
   return (
     <>
       {/* Problems alert - shown at top when there are issues */}
@@ -435,6 +442,19 @@ export function PodRenderer({
             ))}
           </ul>
         </AlertBanner>
+      )}
+
+      {substrateWorkerPool && (
+        <AlertBanner
+          variant="info"
+          icon={Info}
+          title="Agent Substrate worker"
+          message={<>
+            A worker in WorkerPool{' '}
+            <ResourceLink name={substrateWorkerPool} kind="workerpools" group={SUBSTRATE_GROUP} namespace={data.metadata?.namespace || ''} onNavigate={onNavigate} />.
+            {' '}Substrate places actors on this Pod in turn, so its logs, metrics and restarts are shared by every actor it has hosted.
+          </>}
+        />
       )}
 
       {onEvaluateCapacity && (
@@ -673,6 +693,23 @@ export function PodRenderer({
       {/* Container Status */}
       {policyData !== undefined && (
         <PolicySection data={policyData} loading={policyLoading} error={policyError} />
+      )}
+
+      {onOpenEphemeralTerminal && canExec && data.apiVersion === 'v1' && data.kind === 'Pod' && data.metadata?.uid && !data.metadata.deletionTimestamp && data.status?.phase === 'Running' && runningDebugContainers.length > 0 && (
+        <Section title="Running debug containers" icon={TerminalIcon} defaultExpanded>
+          <div className="space-y-2">{runningDebugContainers.map(container => (
+            <div key={container.name} className="card-inner flex items-center gap-2 p-3">
+              <div className="min-w-0 flex-1">
+                <div className="break-all font-mono text-sm text-theme-text-primary">{container.name}</div>
+                <div className="break-all text-xs text-theme-text-secondary">{container.image}{container.startedAt && <> · started {formatAge(container.startedAt)} ago</>}{container.targetContainerName && <> · Target: {container.targetContainerName}</>}</div>
+              </div>
+              <button type="button" className="btn-secondary flex shrink-0 items-center gap-1.5 px-2 py-1 text-xs"
+                aria-label={`Open terminal in ${container.name}`} onClick={() => onOpenEphemeralTerminal(container.name, container.image)}>
+                <TerminalIcon className="h-3.5 w-3.5" />Open terminal
+              </button>
+            </div>
+          ))}</div>
+        </Section>
       )}
 
       <Section title="Containers" icon={HardDrive} defaultExpanded>

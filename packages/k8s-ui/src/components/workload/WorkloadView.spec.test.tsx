@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, useEffect } from 'react'
+import { act, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ReactNode } from 'react'
@@ -177,13 +177,237 @@ it('does not carry a picked Pod to a recreated resource with the same name', () 
   const renderLogsTab = (tab: { selectedPod: string | null; onSelectPod: (pod: string | null) => void }) => <Probe {...tab} />
   const host = document.createElement('div')
   const root = createRoot(host)
-  const withUID = (uid: string) => ({ ...resource, metadata: { ...resource.metadata, uid } })
-  act(() => root.render(<WorkloadView {...props} resource={withUID('a')} activeTab="logs" relationships={relationships} renderLogsTab={renderLogsTab} />))
+  const withUID = (uid: string) => ({ ...resource, kind: 'Deployment', apiVersion: 'apps/v1', metadata: { ...resource.metadata, uid } })
+  act(() => root.render(<WorkloadView {...props} kind="deployments" group={undefined} resource={withUID('a')} activeTab="logs" relationships={relationships} renderLogsTab={renderLogsTab} />))
   act(() => host.querySelector<HTMLButtonElement>('[data-pick]')!.click())
-  act(() => root.render(<WorkloadView {...props} resource={withUID('a')} activeTab="logs" relationships={relationships} renderLogsTab={renderLogsTab} />))
+  act(() => root.render(<WorkloadView {...props} kind="deployments" group="apps" resource={withUID('a')} activeTab="logs" relationships={relationships} renderLogsTab={renderLogsTab} />))
   expect(seen.at(-1)).toBe('pg-1')
   const before = seen.length
-  act(() => root.render(<WorkloadView {...props} resource={withUID('b')} activeTab="logs" relationships={relationships} renderLogsTab={renderLogsTab} />))
+  act(() => root.render(<WorkloadView {...props} kind="deployments" group="apps" resource={withUID('b')} activeTab="logs" relationships={relationships} renderLogsTab={renderLogsTab} />))
   expect(seen.slice(before)).not.toContain('pg-1')
   act(() => root.unmount())
+})
+
+it.each([
+  ['Deployment', 'deployments', 'apps'],
+  ['Cluster', 'clusters', 'postgresql.cnpg.io'],
+])('preserves %s panel state on first group resolution and resets it for a new identity or tab', (kind, apiKind, group) => {
+  function Panel() {
+    const [edited, setEdited] = useState(false)
+    return <button data-edit onClick={() => setEdited(true)}>{edited ? 'Edited' : 'New'}</button>
+  }
+  const tabs = ['settings', 'runs'].map(id => ({ id, label: id, render: () => <Panel /> }))
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  function render(routeGroup: string | undefined, uid?: string, tab = 'settings') {
+    const workload = uid ? {
+      kind, apiVersion: `${routeGroup || group}/v1`, metadata: { name: 'web', namespace: 'db', uid },
+    } : undefined
+    act(() => root.render(<WorkloadView {...props} name="web" kind={apiKind} resource={workload}
+      group={routeGroup} activeTab={tab} extraTabs={tabs} />))
+  }
+  const panel = () => host.querySelector<HTMLButtonElement>('[data-edit]')!
+  render(undefined)
+  act(() => panel().click())
+  render(group, 'first')
+  expect(panel().textContent).toBe('Edited')
+  render('', 'first')
+  expect(panel().textContent).toBe('Edited')
+  render('', 'recreated')
+  expect(panel().textContent).toBe('New')
+  act(() => panel().click())
+  render('example.io', 'recreated')
+  expect(panel().textContent).toBe('New')
+  act(() => panel().click())
+  const scrollContainer = panel().parentElement
+  render('example.io', 'recreated', 'runs')
+  expect(panel().textContent).toBe('New')
+  expect(panel().parentElement).not.toBe(scrollContainer)
+  act(() => root.unmount())
+})
+
+it('keeps an asynchronous deep link and reconciles an explicit built-in replacement', () => {
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  const onTabChange = vi.fn()
+  const extraTabs = [{ id: 'runs', label: 'Runs', replaces: 'spec' as const, render: () => <div>The runs</div> }]
+  act(() => root.render(<WorkloadView {...props} expanded activeTab="runs" onTabChange={onTabChange} />))
+  expect(host.textContent).toContain('Composed Overview')
+  expect(onTabChange).not.toHaveBeenCalled()
+  act(() => root.render(<WorkloadView {...props} expanded activeTab="runs" extraTabsComplete={false} onTabChange={onTabChange} />))
+  expect(host.textContent).toContain('Composed Overview')
+  expect(onTabChange).not.toHaveBeenCalled()
+  act(() => root.render(<WorkloadView {...props} expanded activeTab="runs" extraTabs={extraTabs} onTabChange={onTabChange} />))
+  expect(host.textContent).toContain('The runs')
+  expect(onTabChange).not.toHaveBeenCalled()
+  act(() => root.render(<WorkloadView {...props} expanded activeTab="spec" extraTabs={extraTabs} onTabChange={onTabChange} />))
+  expect(onTabChange).toHaveBeenCalledWith('runs', { replace: true })
+  act(() => root.unmount())
+})
+
+it.each([
+  ['cold', 'found'], ['cold', 'missing'],
+  ['cached', 'found'], ['cached', 'missing'],
+] as const)('keeps the requested Timeline until the %s Cluster read settles as %s', (cache, outcome) => {
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  const onTabChange = vi.fn()
+  const extraTabs = [{ id: 'activity', label: 'Activity', replaces: 'timeline' as const, render: () => 'Cluster activity' }]
+  function Page({ fetching }: { fetching: boolean }) {
+    const [tab, setTab] = useState('timeline')
+    const missing = !fetching && outcome === 'missing'
+    return <WorkloadView {...props} activeTab={tab} extraTabs={extraTabs} isFetching={fetching}
+      isLoading={fetching && cache === 'cold'}
+      resource={cache === 'cold' && (fetching || missing) ? undefined : resource}
+      resourceError={missing ? Object.assign(new Error('not found'), { status: 404 }) : undefined}
+      onTabChange={(next, options) => { onTabChange(next, options); setTab(next) }} />
+  }
+  act(() => root.render(<Page fetching />))
+  expect(onTabChange).not.toHaveBeenCalled()
+  act(() => root.render(<Page fetching={false} />))
+  const selected = host.querySelector('[role="tab"][aria-selected="true"]')
+  if (outcome === 'missing') {
+    expect(selected?.textContent).toBe('Timeline')
+    expect(onTabChange).not.toHaveBeenCalled()
+  } else {
+    expect(selected?.textContent).toBe('Activity')
+    expect(onTabChange).toHaveBeenCalledExactlyOnceWith('activity', { replace: true })
+  }
+  act(() => root.unmount())
+})
+
+it('keeps a hidden Spec link while the host registers a replacement', () => {
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  const onTabChange = vi.fn()
+  const base = { ...props, extraTabsComplete: false, renderSummary: undefined, onTabChange }
+  act(() => root.render(<WorkloadView {...base} />))
+  expect(host.querySelector('[aria-selected="true"]')?.textContent).toBe('Overview')
+  expect(onTabChange).not.toHaveBeenCalled()
+  act(() => root.render(<WorkloadView {...base}
+    extraTabs={[{ id: 'settings', label: 'Settings', replaces: 'spec', render: () => 'Cluster settings' }]} />))
+  expect(host.textContent).toContain('Cluster settings')
+  expect(onTabChange).toHaveBeenCalledExactlyOnceWith('settings', { replace: true })
+  act(() => root.render(<WorkloadView {...base} extraTabsComplete />))
+  expect(onTabChange).toHaveBeenLastCalledWith('overview', { replace: true })
+  act(() => root.unmount())
+})
+
+it('repairs unknown tab IDs once the host list is complete and the workload read settles', () => {
+  const root = createRoot(document.createElement('div'))
+  const onTabChange = vi.fn()
+  const render = (activeTab: string, extraTabsComplete: boolean, isLoading: boolean) => act(() => root.render(
+    <WorkloadView {...props} expanded activeTab={activeTab} extraTabsComplete={extraTabsComplete}
+      isLoading={isLoading} onTabChange={onTabChange} />,
+  ))
+  render('removed', false, false)
+  expect(onTabChange).not.toHaveBeenCalled()
+  render('removed', true, true)
+  expect(onTabChange).not.toHaveBeenCalled()
+  render('removed', true, false)
+  expect(onTabChange).toHaveBeenCalledExactlyOnceWith('overview', { replace: true })
+  render('also-removed', true, false)
+  expect(onTabChange).toHaveBeenCalledTimes(2)
+  act(() => root.unmount())
+})
+
+it('waits until the expanded view is active to repair a stale Deploys link', () => {
+  const root = createRoot(document.createElement('div'))
+  const onTabChange = vi.fn()
+  const render = (active: boolean) => act(() => root.render(
+    <WorkloadView {...props} expanded active={active} activeTab="deploys" extraTabs={[]} extraTabsComplete onTabChange={onTabChange} />,
+  ))
+  render(false)
+  expect(onTabChange).not.toHaveBeenCalled()
+  render(true)
+  expect(onTabChange).toHaveBeenCalledExactlyOnceWith('overview', { replace: true })
+  act(() => root.unmount())
+})
+
+it.each([['cold', undefined], ['cached', resource]] as const)('gates host tabs on a %s 404 and preserves the requested tab for recovery', (_, cached) => {
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  const onTabChange = vi.fn()
+  const extraTabs = [
+    { id: 'deploys', label: 'Deploys', render: () => 'Deploy history', availableWhenDeleted: true, replaces: 'spec' as const },
+    { id: 'runs', label: 'Runs', render: () => 'Run history' },
+  ]
+  const gone = Object.assign(new Error('not found'), { status: 404 })
+  const hosted = { ...props, extraTabs, extraTabsComplete: true, onTabChange }
+  act(() => root.render(<WorkloadView {...hosted} activeTab="runs" resource={cached} resourceError={gone} />))
+  expect([...host.querySelectorAll('[role="tab"]')].map(tab => tab.textContent)).not.toContain('Runs')
+  expect(host.textContent).not.toContain('Run history')
+  expect(onTabChange).not.toHaveBeenCalled()
+  act(() => root.render(<WorkloadView {...hosted} activeTab="runs" />))
+  expect(host.textContent).toContain('Run history')
+  act(() => root.render(<WorkloadView {...hosted} activeTab="deploys" resource={cached} resourceError={gone} />))
+  expect(host.textContent).toContain('Deploy history')
+  expect(onTabChange).not.toHaveBeenCalled()
+  act(() => root.render(<WorkloadView {...hosted} activeTab="spec" resource={cached} resourceError={gone} />))
+  expect(host.textContent).toContain('Deploy history')
+  expect(onTabChange).toHaveBeenCalledExactlyOnceWith('deploys', { replace: true })
+  act(() => root.unmount())
+})
+
+it('reserves built-in IDs, ignores empty IDs and keeps the first host tab for each ID', () => {
+  const extraTabs = [
+    { id: '', label: 'Empty ID' },
+    { id: 'overview', label: 'Host overview' },
+    { id: 'settings', label: 'First settings' },
+    { id: 'settings', label: 'Duplicate settings' },
+  ].map(tab => ({ ...tab, render: () => tab.label + ' panel' }))
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  act(() => root.render(<WorkloadView {...props} activeTab="overview" extraTabs={extraTabs} />))
+  expect(host.textContent).toContain('Composed Overview')
+  const labels = [...host.querySelectorAll('[role="tab"]')].map(tab => tab.textContent)
+  expect(labels).toContain('First settings')
+  for (const ignored of ['Empty ID', 'Host overview', 'Duplicate settings']) expect(labels).not.toContain(ignored)
+  act(() => root.render(<WorkloadView {...props} activeTab="settings" extraTabs={extraTabs} />))
+  expect(host.textContent).toContain('First settings panel')
+  act(() => root.unmount())
+})
+
+it.each([['Timeline', 'timeline'], ['Logs', 'logs'], ['Topology', 'topology']] as const)(
+  'opens the host replacement from the %s shortcut on Overview', (label, replaces) => {
+    const host = document.createElement('div')
+    const root = createRoot(host)
+    const deployment = { ...resource, kind: 'Deployment', apiVersion: 'apps/v1' }
+    const extraTabs = [{ id: 'details', label: 'Host details', replaces, render: () => 'Replacement content' }]
+    act(() => root.render(<WorkloadView {...props} kind="deployments" group="apps" resource={deployment}
+      relationships={{ services: [{ kind: 'Service', namespace: 'db', name: 'postgres' }] }}
+      activeTab={undefined} renderSummary={undefined} extraTabs={extraTabs} />))
+    const shortcut = [...host.querySelectorAll<HTMLButtonElement>('button:not([role="tab"])')].find(button => button.textContent === label)
+    expect(shortcut).toBeDefined()
+    act(() => shortcut!.click())
+    expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Host details')
+    expect(host.textContent).toContain('Replacement content')
+    act(() => root.unmount())
+  },
+)
+
+it('restores an uncontrolled workload tab when its data becomes available again', () => {
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  const render = (available: boolean) => act(() => root.render(
+    <WorkloadView {...props} activeTab={undefined} isMetricsAvailable={() => available}
+      renderMetricsTab={() => <div>Metrics charts</div>} />,
+  ))
+  render(true)
+  const metrics = [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((tab) => tab.textContent === 'Metrics')!
+  act(() => metrics.click())
+  expect(host.textContent).toContain('Metrics charts')
+  render(false)
+  expect(host.textContent).not.toContain('Metrics charts')
+  render(true)
+  expect(host.textContent).toContain('Metrics charts')
+  act(() => root.unmount())
+})
+
+it('uses the singular replica label for a single replica', () => {
+  const deployment = { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'web', namespace: 'shop' }, spec: { replicas: 1, strategy: { type: 'RollingUpdate' }, template: { spec: { containers: [{ name: 'web', image: 'web:1' }] } } }, status: { replicas: 1, readyReplicas: 1, updatedReplicas: 1, availableReplicas: 1 } }
+  const base = { ...props, kind: 'deployments', group: 'apps', name: 'web', namespace: 'shop', resource: deployment, activeTab: 'overview' as const, renderSummary: undefined, expanded: true }
+  const html = renderToStaticMarkup(<WorkloadView {...base} />)
+  expect(html).toContain('1 replica<')
+  expect(html).not.toContain('1 replicas')
 })

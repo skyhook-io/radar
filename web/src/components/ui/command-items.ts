@@ -18,10 +18,15 @@ import {
   Server,
   Megaphone,
 } from "lucide-react";
+import { SlackIcon } from "../community";
+import type { ContextInfo } from "../../types";
 import { useNamespaces, useContexts } from "../../api/client";
 import { CORE_RESOURCES, useAPIResources } from "../../api/apiResources";
 import { getResourceIcon } from "../../utils/resource-icons";
-import { parseContextForSwitcher, parseContextName } from "../../utils/context-name";
+import {
+  parseContextForSwitcher,
+  parseContextName,
+} from "../../utils/context-name";
 
 export type MainView =
   | "home"
@@ -122,12 +127,13 @@ export function bestScore(item: CommandItem, query: string): number {
 export interface CommandItemCallbacks {
   onNavigateView: (view: MainView) => void;
   onNavigateKind: (kind: string, group: string) => void;
-  onSwitchContext: (name: string) => void;
+  onSwitchContext: (context: ContextInfo) => void;
   onSetNamespaces: (ns: string[]) => void;
   onToggleTheme: () => void;
   onShowDiagnostics?: () => void;
   // Present only when release notes exist for this version.
   onShowWhatsNew?: () => void;
+  onOpenCommunity?: () => void;
 }
 
 const VIEW_ENTRIES: {
@@ -233,9 +239,7 @@ export function useCommandItems(cb: CommandItemCallbacks): CommandItem[] {
           sublabel: sub || undefined,
           category: "Clusters",
           icon: Server,
-          action: () => {
-            if (!ctx.isCurrent) cb.onSwitchContext(ctx.name);
-          },
+          action: () => cb.onSwitchContext(ctx),
           searchTerms: [ctx.name, account || ""].filter(Boolean),
         });
       }
@@ -276,6 +280,23 @@ export function useCommandItems(cb: CommandItemCallbacks): CommandItem[] {
         searchTerms: ["release notes", "changelog", "updates", "new features"],
       });
     }
+    if (cb.onOpenCommunity) {
+      result.push({
+        id: "action-community",
+        label: "Radar community on Slack",
+        category: "Actions",
+        icon: SlackIcon,
+        action: () => cb.onOpenCommunity?.(),
+        searchTerms: [
+          "slack",
+          "community",
+          "help",
+          "support",
+          "chat",
+          "question",
+        ],
+      });
+    }
     if (cb.onShowDiagnostics) {
       result.push({
         id: "action-diagnostics",
@@ -300,5 +321,6 @@ export function useCommandItems(cb: CommandItemCallbacks): CommandItem[] {
     cb.onToggleTheme,
     cb.onShowDiagnostics,
     cb.onShowWhatsNew,
+    cb.onOpenCommunity,
   ]);
 }

@@ -12,6 +12,7 @@ import (
 	"log"
 	"time"
 
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
@@ -145,7 +146,7 @@ type CacheConfig struct {
 
 	// OnReceived is called for every non-Event resource change before any
 	// filtering (noisy checks, suppress-initial-adds). Used for metrics
-	// tracking (e.g., timeline.IncrementReceived). May be nil.
+	// tracking. May be nil.
 	OnReceived func(kind string)
 
 	// OnTransform is called immediately before DropManagedFields strips an
@@ -257,6 +258,10 @@ type CacheConfig struct {
 	// set in production paths.
 	DebugSyncDelays map[string]time.Duration
 
+	// Clock dates each informer's InformerWatchedSince boundary. time.Now
+	// when nil.
+	Clock func() time.Time
+
 	// ListPageSize, when > 0, makes high-cardinality informers fetch their
 	// initial LIST in pages of this size via a consistent (resourceVersion="")
 	// read instead of one unpaginated response. This mitigates response-read
@@ -338,8 +343,20 @@ type DynamicResourceObservation struct {
 // All application-specific behavior is injected via callbacks — the cache
 // itself has no imports of any internal/ package.
 type DynamicCacheConfig struct {
+	// RequiredWatchKinds are collection dependencies that must be retried even
+	// without readers after StartWatchReconciler. They bypass the small-CRD
+	// object-count deferral.
+	RequiredWatchKinds []schema.GroupKind
+
 	// DynamicClient is the dynamic Kubernetes client used to create informers.
 	DynamicClient dynamic.Interface
+
+	// DirectClient serves the reads that bypass the informers (ListDirect,
+	// ListDirectSelected, ListDirectBounded, GetDirect, CountDirectProbe).
+	// Giving it a client with its own rate limiter keeps request-triggered
+	// reads from queuing behind informer LIST/WATCH traffic. Nil means
+	// DynamicClient.
+	DirectClient dynamic.Interface
 
 	// Discovery is used for GVR→Kind resolution and watch-verb checks.
 	// May be nil; when nil the cache falls back to heuristic kind names.
@@ -404,6 +421,11 @@ type DynamicCacheConfig struct {
 	// observation reports sync_stalled instead of initial_sync. Zero means 30
 	// seconds.
 	SyncStallAfter time.Duration
+
+	// ObjectReadSyncWait is how long a read of one object waits for an
+	// informer that hasn't finished its first list before answering from what
+	// has loaded. Zero means 2 seconds.
+	ObjectReadSyncWait time.Duration
 
 	// DebugEvents enables verbose debug logging.
 	DebugEvents bool

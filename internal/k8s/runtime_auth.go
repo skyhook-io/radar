@@ -21,10 +21,15 @@ import (
 )
 
 type sharedKubernetesClients struct {
-	clientset  *kubernetes.Clientset
-	discovery  *discovery.DiscoveryClient
-	dynamic    dynamic.Interface
-	generation uint64
+	clientset *kubernetes.Clientset
+	discovery *discovery.DiscoveryClient
+	dynamic   dynamic.Interface
+	// The informer cache and its list probes use their own clients: each
+	// client-go client carries its own rate limiter, and informer LIST/WATCH
+	// bursts must not queue request handlers behind them.
+	informerClientset kubernetes.Interface
+	informerDynamic   dynamic.Interface
+	generation        uint64
 }
 
 const (
@@ -47,10 +52,9 @@ const (
 )
 
 var (
-	clientGenerationCounter atomic.Uint64
-	// Guarded by clientMu (written in doInit/SwitchContext, read via
-	// runtimeAuthStateIsCurrent) — not an atomic like its neighbors.
-	activeClientGeneration  uint64
+	// Client bundles and typed caches each need a unique ID, even when a
+	// rescope reuses the bundle to construct a different cache.
+	clusterBuildSequence    atomic.Uint64
 	discoveryRequestTimeout = 32 * time.Second
 
 	runtimeAuthChecksMu sync.Mutex
@@ -83,7 +87,7 @@ func newSharedKubernetesClients(config *rest.Config) (*sharedKubernetesClients, 
 		return nil, fmt.Errorf("failed to create Kubernetes HTTP client: %w", err)
 	}
 
-	generation := clientGenerationCounter.Add(1)
+	generation := clusterBuildSequence.Add(1)
 	// Struct copy matters: rest.HTTPClientFor returns http.DefaultClient
 	// itself for default transports, and swapping Transport in place would
 	// mutate the process-wide client.
@@ -119,11 +123,22 @@ func newSharedKubernetesClients(config *rest.Config) (*sharedKubernetesClients, 
 		return nil, fmt.Errorf("failed to create dynamic client: %w", err)
 	}
 
+	informerClientset, err := kubernetes.NewForConfigAndClient(clientConfig, &observedClient)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create informer clientset: %w", err)
+	}
+	informerDynamic, err := dynamic.NewForConfigAndClient(clientConfig, &observedClient)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create informer dynamic client: %w", err)
+	}
+
 	return &sharedKubernetesClients{
-		clientset:  clientset,
-		discovery:  discoveryClient,
-		dynamic:    dynamicClient,
-		generation: generation,
+		clientset:         clientset,
+		discovery:         discoveryClient,
+		dynamic:           dynamicClient,
+		informerClientset: informerClientset,
+		informerDynamic:   informerDynamic,
+		generation:        generation,
 	}, nil
 }
 
@@ -336,7 +351,7 @@ func runtimeAuthStateIsCurrent(generation uint64) bool {
 	// In-cluster SA tokens are refreshed from disk by client-go, so
 	// credential loss there is transient by construction — demotion is a
 	// kubeconfig-mode concern only.
-	isCurrent := !isInCluster && activeClientGeneration == generation
+	isCurrent := !isInCluster && installedConn.Load().ClientGeneration() == generation
 	clientMu.RUnlock()
 	return isCurrent && GetConnectionStatus().State == StateConnected
 }
@@ -452,6 +467,8 @@ func transitionConnectedToRuntimeAuthFailure(classification string) bool {
 		ErrorType:   classification,
 	}
 	status.DisconnectedAt = outageStart(connectionStatus, status, time.Now())
+	// Demotion is this connection's point of no return: retire its ID here.
+	serving = nil
 	connectionStatus = status
 	connectionStatusMu.Unlock()
 

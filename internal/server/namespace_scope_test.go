@@ -210,7 +210,7 @@ func TestFinalizePostContextSwitch_ClearsBothCaches(t *testing.T) {
 	// it MUST clear permCache AND every user's namespace pick. A regression
 	// that drops either side leaves stale state attached to the new cluster.
 	s := newTestServer(t)
-	s.permCache = pkgauth.NewPermissionCache()
+	s.permCache = pkgauth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)
 	s.permCache.Set("alice", nil, &pkgauth.UserPermissions{AllowedNamespaces: []string{"alpha"}})
 	s.setActiveNamespaceForUser(reqAs("alice"), []string{"alpha"})
 	s.setActiveNamespaceForUser(reqAs("bob"), []string{"beta", "gamma"})
@@ -332,7 +332,7 @@ func TestResolveHelmNamespaces_AuthenticatedClusterWideUserDoesNotUseBackendFall
 	s := newTestServer(t)
 	restoreHelmNamespaceFallbackState(t)
 
-	s.permCache = pkgauth.NewPermissionCache()
+	s.permCache = pkgauth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)
 	s.permCache.Set("alice", nil, &pkgauth.UserPermissions{AllowedNamespaces: nil})
 
 	got, ok := s.resolveHelmNamespaces(reqAs("alice"))
@@ -350,7 +350,7 @@ func TestResolveHelmNamespacesForScope_ClusterWideWorkloadReaderUsesPerNamespace
 	perms.SetCanI("list", "", "secrets", "", false)
 	perms.SetCanI("list", "", "secrets", "default", true)
 	perms.SetCanI("list", "", "secrets", "broken", false)
-	s.permCache = pkgauth.NewPermissionCache()
+	s.permCache = pkgauth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)
 	s.permCache.Set("alice", nil, perms)
 
 	got, ok := s.resolveHelmNamespacesForScope(reqAs("alice"), nil)
@@ -377,6 +377,8 @@ func restoreHelmNamespaceFallbackState(t *testing.T) {
 		t.Fatalf("creating dummy client: %v", err)
 	}
 	k8s.SetTestClient(dummyClient)
+	// No synced namespace cache to fall back to either.
+	t.Cleanup(k8s.SwapResourceCacheForTest(nil))
 
 	k8s.SetFallbackNamespace("backend-fallback")
 	t.Cleanup(func() { k8s.SetFallbackNamespace("") })
@@ -409,7 +411,7 @@ func TestParseNamespacesForUser_IgnoresSavedPick(t *testing.T) {
 func TestParseNamespacesForUser_IgnoresPickKeepsRBAC(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	s := newTestServer(t)
-	s.permCache = pkgauth.NewPermissionCache()
+	s.permCache = pkgauth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)
 	s.permCache.Set("alice", nil, &pkgauth.UserPermissions{AllowedNamespaces: []string{"default", "broken"}})
 	s.permCache.Set("carol", nil, &pkgauth.UserPermissions{AllowedNamespaces: []string{"broken"}})
 	s.setActiveNamespaceForUser(reqAs("alice"), []string{"broken"})

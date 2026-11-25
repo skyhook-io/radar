@@ -101,13 +101,44 @@ describe("ApplicationDetail shell", () => {
     expect(html).toContain('2/3 updated · 3 available')
   })
 
+  // The pill is the cluster's first child unless a host adds something before it.
+  const firstInHeaderCluster = (html: string) =>
+    html.match(/<div class="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2">(.{0,80})/)?.[1];
+
+  it("renders the host's header actions before the health pill on a multi-workload app", () => {
+    const html = renderDetail({ headerActions: <button type="button">host action</button> });
+    expect(firstInHeaderCluster(html)).toContain("host action");
+    expect(html.indexOf("host action")).toBeGreaterThan(html.indexOf("</h1>"));
+    expect(html.indexOf("host action")).toBeLessThan(html.indexOf("Healthy"));
+  });
+
+  it("renders them on a single-workload app, which opens straight on the workload", () => {
+    const single = { ...app, workloads: [app.workloads[0]] };
+    const html = renderDetail({ app: single, headerActions: <button type="button">host action</button> });
+    expect(html).toContain("Runtime for");
+    expect(firstInHeaderCluster(html)).toContain("host action");
+  });
+
+  it("shows the host's status in the header pill in place of the workloads'", () => {
+    const html = renderDetail({ status: { health: "unhealthy", label: "Last run failed 38m ago: secret not found" } });
+    expect(html).toMatch(/text-sm font-semibold">Last run failed 38m ago: secret not found</);
+    expect(html).not.toMatch(/text-sm font-semibold">Healthy</);
+  });
+
+  it("adds nothing for a host that doesn't pass them, on either kind of app", () => {
+    for (const shape of [app, { ...app, workloads: [app.workloads[0]] }]) {
+      const first = firstInHeaderCluster(renderDetail({ app: shape }));
+      expect(first).toMatch(/^<span class="inline-flex items-center gap-2 rounded-md/);
+    }
+  });
+
   it("preserves the built-in issue surface when the host slot is omitted", () => {
     const html = renderDetail({ renderOverviewIssues: undefined });
 
     expect(html).toContain('Application views')
     expect(html).toContain('Overview')
     expect(html).toContain('Topology')
-    expect(html).toContain('History')
+    expect(html).toContain('Timeline')
     expect(html).toContain('BackOff on checkout-api')
     expect(html).toContain('Application identity')
     expect(html).toContain('Grouped from Kubernetes ownership')
@@ -135,7 +166,7 @@ describe("ApplicationDetail shell", () => {
     expect(html).toContain("Application views");
     expect(html).toContain("Overview");
     expect(html).toContain("Topology");
-    expect(html).toContain("History");
+    expect(html).toContain("Timeline");
     expect(html).not.toContain("BackOff on checkout-api");
     expect(html).toContain("Application identity");
     expect(html).toContain("Entrypoints");
@@ -169,7 +200,7 @@ describe("ApplicationDetail shell", () => {
     expect(html).not.toContain('Application views')
     expect(html).not.toContain('Overview')
     expect(html).not.toContain('Topology')
-    expect(html).not.toContain('History')
+    expect(html).not.toContain('Timeline')
     expect(html).not.toContain('Application identity')
   })
 
@@ -314,7 +345,7 @@ describe("ApplicationDetail shell", () => {
       onOpenSource: () => {},
     });
 
-    expect(html).toContain("Application history");
+    expect(html).toContain("Application timeline");
     expect(html).toContain("Deployments");
     expect(html).toContain("Changes");
     expect(html).toContain("Problems");
@@ -404,7 +435,7 @@ describe("ApplicationDetail shell", () => {
 
     expect(html).toContain('Application changes could not be loaded.')
     expect(html).not.toContain('Deployment-source history is still shown.')
-    expect(html).not.toContain('No application history in this range.')
+    expect(html).not.toContain('No application activity in this range.')
   })
 
   it('marks retained runtime rows as stale when a refresh fails', () => {
@@ -463,7 +494,7 @@ describe("ApplicationDetail shell", () => {
 
     expect(html).toContain('Latest change')
     expect(html).toContain('Argo CD sync')
-    expect(html).toContain('History')
+    expect(html).toContain('Timeline')
     expect(html).toContain('View Argo CD application')
     expect(html).not.toContain('No application issues detected')
   })
@@ -605,7 +636,7 @@ describe("ApplicationDetail shell", () => {
 
     expect(html).toContain('Latest incident')
     expect(html).toContain('Current incident: FailedScheduling on Pod/checkout-api-abc')
-    expect(html).toContain('View history')
+    expect(html).toContain('View timeline')
   })
 
   it('does not duplicate retained incidents when the host renders current issues', () => {
@@ -757,6 +788,9 @@ describe("ApplicationDetail shell", () => {
       renderOverviewIssues: () => <div>Operational Issues (1)</div>,
     });
 
+    expect(html).toMatch(/text-sm font-semibold">Failed</);
+    const hostStatus = renderDetail({ app: batchApp, status: { health: "unhealthy" } });
+    expect(hostStatus).toMatch(/text-sm font-semibold">Unhealthy</);
     expect(html).toContain("Application views");
     expect(html).toContain("Operational Issues (1)");
     expect(html).not.toContain("Batch activity");
@@ -805,7 +839,42 @@ describe("ApplicationDetail shell", () => {
     };
     const html = renderDetail({ app: batchApp });
 
-    expect(html).toMatch(/<span class="text-sm font-semibold">Degraded<\/span>/);
+    expect(html).toMatch(/text-sm font-semibold">Degraded<\/span>/);
     expect(html).toContain("Succeeded");
+  });
+
+  describe("application navigation", () => {
+    const renderDeploys = () => <p>Environment deliveries</p>;
+
+    it("keeps a plain app on Overview with a Timeline and workload-level revision access", () => {
+      const html = renderDetail({ renderWorkloadRevisions: (workload) => <button>Revisions for {workload.name}</button> });
+      expect(html).toContain(">Timeline<");
+      expect(html).toContain("Revisions for ");
+      expect(html).not.toContain(">Deploys<");
+      expect(renderDetail({ selectedView: "deploys", onSelectView: () => {} })).toContain("Workloads");
+    });
+
+    it("lets the host supply exactly one inspectable delivery destination", () => {
+      const html = renderDetail({ selectedView: "deploys", onSelectView: () => {}, renderDeploys });
+      expect(html.match(/>Deploys</g)).toHaveLength(1);
+      expect(html).toContain("Environment deliveries");
+    });
+
+    it("keeps whole-app deliveries out of individual child workloads", () => {
+      const ids: string[] = [];
+      renderDetail({ selectedWorkloadKey: workloadKey(app.workloads[0]), renderDeploys,
+        renderWorkload: (_, context) => { ids.push(...(context.extraTabs ?? []).map(tab => tab.id)); return null; },
+      });
+      expect(ids).toEqual([]);
+    });
+
+    it("uses the same delivery slot for a single workload without adding an app tab bar", () => {
+      const ids: string[] = [];
+      renderDetail({
+        app: { ...app, workloads: [app.workloads[0]] }, renderDeploys,
+        renderWorkload: (_, context) => { ids.push(...(context.extraTabs ?? []).map(t => t.id)); return null; },
+      });
+      expect(ids).toEqual(["deploys"]);
+    });
   });
 });

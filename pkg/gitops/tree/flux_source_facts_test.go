@@ -111,6 +111,45 @@ func TestHelmReleaseRevisionIsTheInstalledChart(t *testing.T) {
 	if node.Data["revision"] != "6.15.0" || node.Data["attemptedRevision"] != "6.16.0" {
 		t.Fatalf("failed upgrade: revision = %v attempted = %v", node.Data["revision"], node.Data["attemptedRevision"])
 	}
+	// A version with build metadata is longer than a short revision; the
+	// attempt that installed it must still equal it.
+	obj.Object["status"] = map[string]any{
+		"lastAttemptedRevision": "1.4.2+0f3c9a1b7e",
+		"history":               []any{map[string]any{"version": int64(4), "chartVersion": "1.4.2+0f3c9a1b7e", "status": "deployed"}},
+	}
+	node = enrichNodeFromObject(Node{Tool: ToolFluxCD}, obj)
+	if node.Data["revision"] != "1.4.2+0f3c9a1b7e" || node.Data["attemptedRevision"] != "1.4.2+0f3c9a1b7e" {
+		t.Fatalf("long version: revision = %v attempted = %v", node.Data["revision"], node.Data["attemptedRevision"])
+	}
+	// A failed first install leaves nothing installed; the attempt still
+	// names the version it tried, not a prefix of it.
+	obj.Object["status"] = map[string]any{
+		"lastAttemptedRevision": "1.4.2+0f3c9a1b7e",
+		"history":               []any{map[string]any{"version": int64(1), "chartVersion": "1.4.2+0f3c9a1b7e", "status": "failed"}},
+	}
+	node = enrichNodeFromObject(Node{Tool: ToolFluxCD}, obj)
+	if node.Data["revision"] != nil || node.Data["attemptedRevision"] != "1.4.2+0f3c9a1b7e" {
+		t.Fatalf("failed install: revision = %v attempted = %v", node.Data["revision"], node.Data["attemptedRevision"])
+	}
+}
+
+func TestArtifactGeneratorSourceFacts(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "source.extensions.fluxcd.io/v1beta1", "kind": "ArtifactGenerator",
+		"metadata": map[string]any{"name": "gen", "namespace": "team"},
+		"status": map[string]any{"inventory": []any{map[string]any{"name": "a"}, map[string]any{"kind": "ExternalArtifact", "name": "b"}, map[string]any{"kind": "Namespace", "name": "team-a"}},
+			"conditions": []any{map[string]any{"type": "Ready", "status": "False", "reason": "SourceNotReady", "message": "source not ready"}}}}}
+	node := enrichNodeFromObject(Node{Tool: ToolFluxCD, Sync: "Synced"}, obj)
+	if node.Health != "Degraded" || node.Data["readyMessage"] != "source not ready" || node.Data["generatedCount"] != 2 || node.Data["artifact"] != nil || node.Sync != "" {
+		t.Fatalf("generator facts: %+v", node)
+	}
+	delete(obj.Object["status"].(map[string]any), "inventory")
+	if node := enrichNodeFromObject(Node{Tool: ToolFluxCD}, obj); node.Data["generatedCount"] != nil {
+		t.Fatalf("no inventory read as a count: %v", node.Data["generatedCount"])
+	}
+	obj.SetAPIVersion("example.org/v1")
+	if other := enrichNodeFromObject(Node{Tool: ToolFluxCD, Sync: "Synced"}, obj); other.Data["generatedCount"] != nil {
+		t.Fatalf("foreign group read as a generator: %+v", other)
+	}
 }
 
 func TestFluxSourceRecordsArtifactUpdateTime(t *testing.T) {

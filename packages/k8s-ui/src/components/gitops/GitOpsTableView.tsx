@@ -32,6 +32,7 @@ import { PageHeader } from '../ui/PageHeader'
 import { SummaryTile, type SummaryTone } from '../ui/SummaryTile'
 import { FacetSection, FacetButton } from '../ui/Facet'
 import { SortableTh, TH_CLASS, type SortDir } from '../ui/SortableTh'
+import { TABLE_DENSITY } from '../ui/table-density'
 import { DistributionBar } from '../ui/DistributionBar'
 import { RowActionMenu, type RowActionItem } from '../ui/RowActionMenu'
 import { radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
@@ -94,6 +95,11 @@ export type SortKey = 'urgency' | 'name' | 'health' | 'sync' | 'lastSync' | 'pro
 
 function isGitOpsCountKey(key: string): boolean {
   return GITOPS_COUNT_GROUP_PREFIXES.some((prefix) => key.startsWith(prefix))
+}
+
+/** Whether objects of this API group count toward the GitOps table's totals. */
+export function isGitOpsCountGroup(group: string | undefined): boolean {
+  return GITOPS_COUNT_GROUP_PREFIXES.includes(`${group ?? ''}/`)
 }
 
 // Row-level actions surfaced from the table's three-dot menu. The set
@@ -221,6 +227,9 @@ export interface GitOpsTableViewProps {
   // rendered leading the header actions. The host owns the mode + data, so this
   // shared table makes no assumption about whether the view auto-updates.
   freshnessSlot?: ReactNode
+  // Optional host content shown inside the scrolling table area above the
+  // rows (Radar's Flux Operator card). Hosts that don't pass it are unchanged.
+  headerSlot?: ReactNode
   // Row click — caller routes to its own detail page. When the host also
   // passes `rowHrefFor`, the callback receives the MouseEvent so it can
   // `preventDefault()` for same-tree nav (e.g. react-router) or skip the
@@ -289,6 +298,7 @@ export interface GitOpsTableViewProps {
   // entirely — keeps Hub and other consumers' layout unchanged until they
   // opt in.
   onRowAction?: (row: GitOpsRow, action: GitOpsRowAction) => void
+  renderRowActions?: (row: GitOpsRow, items: RowActionItem[]) => ReactNode
   // In-flight action state, keyed by `row.id`. Drives the per-item
   // spinner so the user can tell which Sync/Refresh is still running.
   pendingRowActions?: Map<string, Set<GitOpsRowAction>>
@@ -323,6 +333,7 @@ export function GitOpsTableView({
   countsPartial,
   coverageStatus = 'unknown',
   freshnessSlot,
+  headerSlot,
   onRowClick,
   rowHrefFor,
   onDestinationClick,
@@ -337,6 +348,7 @@ export function GitOpsTableView({
   globalNamespaces,
   onClearNamespaces,
   onRowAction,
+  renderRowActions,
   pendingRowActions,
   argoResumeUpgrade,
   argoResumeBlockedReason,
@@ -576,15 +588,18 @@ export function GitOpsTableView({
   // be hidden behind a "nothing here" screen.
   if (totalGitOps === 0 && allRowsInput.length === 0 && !loading && !hasGlobalNamespaceFilter && !hasUnavailableGitOpsCounts && coverageStatus !== 'partial') {
     return (
-      <div className="flex h-full min-h-0 flex-1 items-start justify-center bg-theme-base px-4 pb-4 pt-[22vh]">
-        <div className="rounded-lg border border-theme-border bg-theme-surface p-8 text-center">
-          <GitBranch className="mx-auto h-8 w-8 text-theme-text-tertiary" />
-          <h2 className="mt-3 text-base font-semibold text-theme-text-primary">
-            {emptyStateTitle ?? 'No GitOps resources detected'}
-          </h2>
-          <p className="mt-1 text-sm text-theme-text-secondary">
-            {emptyStateBody ?? 'No ArgoCD Applications or FluxCD resources were found.'}
-          </p>
+      <div className="flex h-full min-h-0 flex-1 flex-col overflow-auto bg-theme-base">
+        {headerSlot}
+        <div className="flex flex-1 items-start justify-center px-4 pb-4 pt-[22vh]">
+          <div className="rounded-lg border border-theme-border bg-theme-surface p-8 text-center">
+            <GitBranch className="mx-auto h-8 w-8 text-theme-text-tertiary" />
+            <h2 className="mt-3 text-base font-semibold text-theme-text-primary">
+              {emptyStateTitle ?? 'No GitOps resources detected'}
+            </h2>
+            <p className="mt-1 text-sm text-theme-text-secondary">
+              {emptyStateBody ?? 'No ArgoCD Applications or FluxCD resources were found.'}
+            </p>
+          </div>
         </div>
       </div>
     )
@@ -743,7 +758,7 @@ export function GitOpsTableView({
           </div>
         )}
 
-        <div className="shrink-0 border-b border-theme-border bg-theme-surface/70 px-4 py-3">
+        <div className={clsx('shrink-0 border-b border-theme-border bg-theme-surface/70', TABLE_DENSITY.toolbarClass)}>
           <StatusDistribution rows={filteredRows} />
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <div className="relative w-full max-w-md">
@@ -827,8 +842,9 @@ export function GitOpsTableView({
             once the list fills the viewport. Only needed when the actions column
             is present — consumers without onRowAction (e.g. Hub) skip the slack. */}
         <div className={clsx('min-h-0 min-w-0 flex-1 overflow-auto bg-theme-base', onRowAction && 'pb-20')}>
+          {headerSlot}
           {mode !== 'applications' ? (
-            <div className="flex h-full items-center justify-center text-sm text-theme-text-secondary">
+            <div className={clsx('flex items-center justify-center text-sm text-theme-text-secondary', headerSlot ? 'py-12' : 'h-full')}>
               {modeLabel(mode)} view is queued behind the application list.
             </div>
           ) : initialLoading ? (
@@ -836,7 +852,7 @@ export function GitOpsTableView({
           ) : error ? (
             <div className="p-4 text-sm text-red-500">Failed to load GitOps applications: {error.message}</div>
           ) : filteredRows.length === 0 ? (
-            <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-theme-text-secondary">
+            <div className={clsx('flex flex-col items-center justify-center gap-3 text-sm text-theme-text-secondary', headerSlot ? 'py-12' : 'h-full')}>
               <p>{noApplicationsMessage(allRows.length > 0, coverageStatus, hasGlobalNamespaceFilter)}</p>
               {hasGlobalNamespaceFilter && globalNamespaces && (
                 <p className="text-xs text-theme-text-tertiary">
@@ -866,6 +882,7 @@ export function GitOpsTableView({
               showDestination={showDestination}
               onDestinationClick={onDestinationClick}
               destinationHrefFor={destinationHrefFor}
+              renderRowActions={renderRowActions}
               onRowAction={onRowAction}
               pendingRowActions={pendingRowActions}
               argoResumeUpgrade={argoResumeUpgrade}
@@ -1303,6 +1320,7 @@ function GitOpsTable({
   onDestinationClick,
   destinationHrefFor,
   onRowAction,
+  renderRowActions,
   pendingRowActions,
   argoResumeUpgrade,
   argoResumeBlockedReason,
@@ -1315,6 +1333,7 @@ function GitOpsTable({
   showDestination?: boolean
   onDestinationClick?: (row: GitOpsRow, destination: FleetDestinationStamp) => void
   destinationHrefFor?: (row: GitOpsRow, destination: FleetDestinationStamp) => string
+  renderRowActions?: (row: GitOpsRow, items: RowActionItem[]) => ReactNode
   onRowAction?: (row: GitOpsRow, action: GitOpsRowAction) => void
   pendingRowActions?: Map<string, Set<GitOpsRowAction>>
   argoResumeUpgrade?: RadarUpgradeRequirement | null
@@ -1425,7 +1444,7 @@ function GitOpsTable({
                   className="overflow-visible border-b border-theme-border px-2 py-2 text-right align-middle"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <RowActionMenu items={buildRowActionItems(row, onRowAction, pendingRowActions, argoResumeUpgrade, argoResumeBlockedReason)} />
+                  {renderRowActions ? renderRowActions(row, buildRowActionItems(row, onRowAction, pendingRowActions, argoResumeUpgrade, argoResumeBlockedReason)) : <RowActionMenu items={buildRowActionItems(row, onRowAction, pendingRowActions, argoResumeUpgrade, argoResumeBlockedReason)} />}
                 </td>
               )}
             </tr>

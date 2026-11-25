@@ -1,10 +1,19 @@
 import { getCRDStatus } from '../resources/resource-utils-crd'
+import { FLUX_OPERATOR_GROUP, FLUX_OPERATOR_PLURALS, getFluxOperatorStatus } from '../resources/resource-utils-flux-operator'
 import { getStrimziConnectorStatus, getStrimziClusterStatus, isStrimziKafka, isStrimziKafkaNodePool } from '../resources/resource-utils-strimzi'
 import { StrimziConnectorRenderer } from '../resources/renderers/StrimziConnectorRenderer'
 import { StrimziKafkaRenderer, StrimziKafkaNodePoolRenderer } from '../resources/renderers/StrimziKafkaRenderer'
+import { getVolumeSnapshotStatus, isVolumeSnapshot, isVolumeSnapshotContent, isVolumeSnapshotClass } from '../resources/resource-utils-volumesnapshot'
+import { VolumeSnapshotRenderer, VolumeSnapshotContentRenderer, VolumeSnapshotClassRenderer } from '../resources/renderers/VolumeSnapshotRenderers'
+import { getMetalLBPoolStatus, getMetalLBConfigurationStateStatus, isMetalLBIPAddressPool, isMetalLBL2Advertisement, isMetalLBBGPAdvertisement, isMetalLBBGPPeer, isMetalLBConfigurationState } from '../resources/resource-utils-metallb'
+import { MetalLBIPAddressPoolRenderer, MetalLBL2AdvertisementRenderer, MetalLBBGPAdvertisementRenderer, MetalLBBGPPeerRenderer, MetalLBConfigurationStateRenderer } from '../resources/renderers/MetalLBRenderers'
 import { getOpenTelemetryCollectorStatus, getOpenTelemetryInstrumentationStatus } from '../resources/resource-utils-opentelemetry'
 import { OpenTelemetryCollectorRenderer, OpenTelemetryInstrumentationRenderer } from '../resources/renderers/OpenTelemetryRenderers'
 import { FlaggerCanaryRenderer, FlaggerMetricTemplateRenderer } from '../resources/renderers/FlaggerRenderers'
+import { K3sHelmChartConfigRenderer, K3sHelmChartRenderer } from '../resources/renderers/K3sHelmRenderers'
+import { K3S_HELM_GROUP, getK3sHelmChartStatus } from '../resources/resource-utils-k3s'
+import { UpgradePlanRenderer } from '../resources/renderers/UpgradePlanRenderer'
+import { UPGRADE_PLAN_GROUP, getUpgradePlanStatus } from '../resources/resource-utils-upgrade-plan'
 import { SecretProviderClassRenderer, type SecretProviderClassRendererProps } from '../resources/renderers/SecretsStoreRenderers'
 import { SECRETS_STORE_GROUP } from '../resources/resource-utils-secrets-store'
 import { getFlaggerCanaryStatus } from '../resources/resource-utils-flagger'
@@ -41,6 +50,8 @@ import {
   getSealedSecretStatus,
   getPDBStatus,
   getGitRepositoryStatus,
+  getExternalArtifactStatus,
+  getArtifactGeneratorStatus,
   getOCIRepositoryStatus,
   getHelmRepositoryStatus,
   getKustomizationStatus,
@@ -88,6 +99,7 @@ import { getInferencePoolStatus, getInferenceObjectiveStatus } from '../resource
 import { getVolcanoJobStatus, getVolcanoQueueStatus, getVolcanoPodGroupStatus, getJobFlowStatus, getJobTemplateStatus } from '../resources/resource-utils-volcano'
 import { getKaiQueueStatus, getKaiPodGroupStatus } from '../resources/resource-utils-kai'
 import { getKaitoWorkspaceStatus, getRAGEngineStatus } from '../resources/resource-utils-kaito'
+import { getSandboxClaimStatus, getSandboxStatus, getSandboxWarmPoolStatus, getWorkerPoolStatus, isAgentSandboxExtensionResource, isAgentSandboxResource, isSubstrateResource } from '../resources/resource-utils-agent-runtimes'
 import { getNIMServiceStatus, getNIMCacheStatus, getNIMPipelineStatus } from '../resources/resource-utils-nim'
 import { getAMDDeviceConfigStatus } from '../resources/resource-utils-amd-gpu'
 import { getPyTorchJobStatus, getTFJobStatus, getMPIJobStatus, getTrainJobStatus } from '../resources/resource-utils-kubeflow-training'
@@ -100,6 +112,9 @@ import {
   getPeerAuthenticationStatus,
   getAuthorizationPolicyStatus,
 } from '../resources/resource-utils-istio'
+import { LonghornVolumeRenderer } from '../resources/renderers/LonghornVolumeRenderer'
+import { getLonghornVolumeStatus, LONGHORN_GROUP } from '../resources/resource-utils-longhorn'
+import { isCoreNode } from '../resources/resource-utils'
 import { getCNPGClusterStatus, getCNPGBackupStatus, getCNPGScheduledBackupStatus, getCNPGPoolerStatus, getCNPGObjectStoreStatus, getCNPGDeclarativeStatus, isApiGroup, CNPG_GROUP } from '../resources/resource-utils-cnpg'
 import { getExternalSecretStatus, getClusterExternalSecretStatus, getSecretStoreStatus, getClusterSecretStoreStatus } from '../resources/resource-utils-eso'
 import {
@@ -174,10 +189,18 @@ import {
   WebhookConfigRenderer,
   ValidatingAdmissionPolicyRenderer,
   ValidatingAdmissionPolicyBindingRenderer,
+  MutatingAdmissionPolicyRenderer,
+  MutatingAdmissionPolicyBindingRenderer,
   EventRenderer,
   EndpointSliceRenderer,
   GenericRenderer,
   GitRepositoryRenderer,
+  ExternalArtifactRenderer,
+  ArtifactGeneratorRenderer,
+  FluxInstanceRenderer,
+  FluxReportRenderer,
+  ResourceSetRenderer,
+  ResourceSetInputProviderRenderer,
   OCIRepositoryRenderer,
   HelmRepositoryRenderer,
   KustomizationRenderer,
@@ -356,6 +379,7 @@ export interface RendererOverrides {
   NodeRenderer?: React.ComponentType<{
     data: any; relationships?: Relationships
   }>
+  LonghornVolumeRenderer?: React.ComponentType<{ data: any }>
   KarpenterNodePoolRenderer?: React.ComponentType<{
     data: any
     onNavigate?: (ref: ResourceRef) => void
@@ -398,6 +422,16 @@ export interface RendererOverrides {
     data: any
     onNavigate?: (ref: ResourceRef) => void
   }>
+  /** Host-injected: wires the HelmChart drawer's "Open Helm release" link. */
+  K3sHelmChartRenderer?: React.ComponentType<{
+    data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
+  /** Host-injected: feeds Nodes to the Plan drawer's per-node progress. */
+  UpgradePlanRenderer?: React.ComponentType<{
+    data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
   /** Host-injected: adds the Pods that mount this class and their mount state. */
   SecretProviderClassRenderer?: React.ComponentType<Pick<SecretProviderClassRendererProps, 'data' | 'onNavigate'>>
   /** Host-injected: adds the Backups-stored-here lookup to a storage location. */
@@ -411,6 +445,8 @@ export interface RendererOverrides {
   /** Host-injected: adds the on-demand fetch for the messages behind a
    *  restore's error and warning counts. */
   VeleroRestoreRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
+  /** Host-injected: adds the schedule's reading and recent runs from the Velero workspace endpoint. */
+  VeleroScheduleRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   // Kyverno policy coverage: the host fetches /api/policy/policies/... and
   // renders the section, which the policy renderers accept as a slot. One
   // override serves all six policy renderers — they differ in what the policy
@@ -432,6 +468,11 @@ export interface RendererOverrides {
   // Role / ClusterRole reverse-lookup: host fetches /api/rbac/role/... so the
   // detail page can show "who is bound to this role".
   RoleRenderer?: React.ComponentType<{
+    data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
+  // SealedSecret controller and sealing keys: host fetches /sealedsecrets/controller.
+  SealedSecretRenderer?: React.ComponentType<{
     data: any
     onNavigate?: (ref: ResourceRef) => void
   }>
@@ -483,20 +524,32 @@ export interface RendererOverrides {
     data: any
     onNavigate?: (ref: ResourceRef) => void
   }>
+  MutatingAdmissionPolicyRenderer?: React.ComponentType<{
+    data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
+  MutatingAdmissionPolicyBindingRenderer?: React.ComponentType<{
+    data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
 }
 
 // Known resource types with specific renderers (module-level to avoid re-allocation)
 const KNOWN_KINDS = new Set([
   'customresourcedefinitions',
   'kafkaconnectors', 'kafkas', 'kafkanodepools',
+  'volumesnapshots', 'volumesnapshotcontents', 'volumesnapshotclasses',
+  'ipaddresspools', 'l2advertisements', 'bgpadvertisements', 'bgppeers', 'configurationstates',
   'opentelemetrycollectors', 'instrumentations',
   'canaries', 'metrictemplates',
+  'helmcharts', 'helmchartconfigs',
+  'plans',
   'secretproviderclasses',
   'pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets',
   'services', 'endpointslices', 'ingresses', 'configmaps', 'secrets', 'jobs', 'cronjobs', 'cronworkflows',
   'jobsets',
   'rayclusters', 'rayservices', 'rayjobs', 'workloads', 'localqueues', 'clusterqueues', 'admissionchecks', 'provisioningrequests',
-  'hpas', 'horizontalpodautoscalers', 'nodes', 'persistentvolumeclaims',
+  'hpas', 'horizontalpodautoscalers', 'nodes', 'volumes', 'persistentvolumeclaims',
   'rollouts', 'analysisruns', 'analysistemplates', 'clusteranalysistemplates', 'experiments', 'certificates', 'workflows', 'persistentvolumes',
   'storageclasses', 'certificaterequests', 'clusterissuers', 'issuers',
   'orders', 'challenges', 'certificatesigningrequests',
@@ -510,7 +563,8 @@ const KNOWN_KINDS = new Set([
   'clusternetworkpolicies', 'clusternetworkpolicy',
   'poddisruptionbudgets', 'serviceaccounts', 'namespaces',
   'roles', 'clusterroles', 'rolebindings', 'clusterrolebindings',
-  'events', 'gitrepositories', 'ocirepositories', 'helmrepositories',
+  'events', 'gitrepositories', 'ocirepositories', 'helmrepositories', 'externalartifacts', 'artifactgenerators',
+  'fluxinstances', 'fluxreports', 'resourcesets', 'resourcesetinputproviders',
   'kustomizations', 'helmreleases', 'alerts', 'applications',
   'nodepools', 'nodeclaims', 'ec2nodeclasses', 'scaledobjects', 'scaledjobs',
   'triggerauthentications', 'clustertriggerauthentications',
@@ -545,6 +599,7 @@ const KNOWN_KINDS = new Set([
   'peerauthentications', 'authorizationpolicies',
   'mutatingwebhookconfigurations', 'validatingwebhookconfigurations',
   'validatingadmissionpolicies', 'validatingadmissionpolicybindings',
+  'mutatingadmissionpolicies', 'mutatingadmissionpolicybindings',
   'ingressclasses', 'priorityclasses', 'runtimeclasses', 'leases', 'limitranges',
   'knativeservices', 'knativeconfigurations', 'knativerevisions', 'knativeroutes',
   'brokers', 'triggers', 'eventtypes', 'pingsources', 'apiserversources', 'containersources', 'sinkbindings',
@@ -756,11 +811,17 @@ export function ResourceRendererDispatch({
   // API group can publish either plural without inheriting CAPI presentation.
   const isFluxKind = ['gitrepositories', 'ocirepositories', 'helmrepositories', 'kustomizations', 'helmreleases', 'alerts'].includes(kind)
   const isFluxResource = getGitOpsTool(kind, apiVersionToGroup(data?.apiVersion)) === 'flux'
+  const isFluxOperatorKind = FLUX_OPERATOR_PLURALS.includes(kind)
+  const isFluxOperatorResource = isFluxOperatorKind && isApiGroup(data?.apiVersion, FLUX_OPERATOR_GROUP)
   const isGroupGatedKind =
     kind === 'customresourcedefinitions' ||
     kind === 'kafkaconnectors' || kind === 'kafkas' || kind === 'kafkanodepools' ||
+    ['volumesnapshots', 'volumesnapshotcontents', 'volumesnapshotclasses'].includes(kind) ||
+    ['ipaddresspools', 'l2advertisements', 'bgpadvertisements', 'bgppeers', 'configurationstates'].includes(kind) ||
     ['opentelemetrycollectors', 'instrumentations'].includes(kind) ||
     ['canaries', 'metrictemplates'].includes(kind) ||
+    ['helmcharts', 'helmchartconfigs'].includes(kind) ||
+    kind === 'plans' ||
     kind === 'secretproviderclasses' ||
     isFluxKind || kind === 'applications' || kind === 'services' || kind === 'ingresses' || kind === 'certificates' || kind === 'gateways'
     || kind === 'httproutes' || kind === 'grpcroutes'
@@ -771,15 +832,29 @@ export function ResourceRendererDispatch({
     || kind === 'rayjobs' || kind === 'rayclusters' || kind === 'rayservices' || kind === 'admissionchecks' || kind === 'provisioningrequests'
     || kind === 'machines' || kind === 'machinesets' || kind === 'workloads' || kind === 'localqueues' || kind === 'clusterqueues'
     || kind === 'validatingadmissionpolicies' || kind === 'validatingadmissionpolicybindings'
+    || kind === 'mutatingadmissionpolicies' || kind === 'mutatingadmissionpolicybindings'
     || kind === 'certificatesigningrequests'
+    || kind === 'externalartifacts' || kind === 'artifactgenerators'
+    || kind === 'nodes' || kind === 'volumes'
+    || isFluxOperatorKind
   const isCNPGApiVersion = isApiGroup(data?.apiVersion, CNPG_GROUP)
   const groupGatedMatched =
     (kind === 'customresourcedefinitions' && isApiGroup(data?.apiVersion, 'apiextensions.k8s.io')) ||
     (kind === 'kafkaconnectors' && isApiGroup(data?.apiVersion, 'kafka.strimzi.io')) ||
     (kind === 'kafkas' && isStrimziKafka(data)) ||
     (kind === 'kafkanodepools' && isStrimziKafkaNodePool(data)) ||
+    (kind === 'volumesnapshots' && isVolumeSnapshot(data)) ||
+    (kind === 'volumesnapshotcontents' && isVolumeSnapshotContent(data)) ||
+    (kind === 'volumesnapshotclasses' && isVolumeSnapshotClass(data)) ||
+    (kind === 'ipaddresspools' && isMetalLBIPAddressPool(data)) ||
+    (kind === 'l2advertisements' && isMetalLBL2Advertisement(data)) ||
+    (kind === 'bgpadvertisements' && isMetalLBBGPAdvertisement(data)) ||
+    (kind === 'bgppeers' && isMetalLBBGPPeer(data)) ||
+    (kind === 'configurationstates' && isMetalLBConfigurationState(data)) ||
     (['opentelemetrycollectors', 'instrumentations'].includes(kind) && isApiGroup(data?.apiVersion, 'opentelemetry.io')) ||
     (['canaries', 'metrictemplates'].includes(kind) && isApiGroup(data?.apiVersion, 'flagger.app')) ||
+    (['helmcharts', 'helmchartconfigs'].includes(kind) && isApiGroup(data?.apiVersion, K3S_HELM_GROUP)) ||
+    (kind === 'plans' && isApiGroup(data?.apiVersion, UPGRADE_PLAN_GROUP)) ||
     (kind === 'secretproviderclasses' && isApiGroup(data?.apiVersion, SECRETS_STORE_GROUP)) ||
     (isFluxKind && isFluxResource)
     || (kind === 'applications' && isApiGroup(data?.apiVersion, 'argoproj.io'))
@@ -813,9 +888,15 @@ export function ResourceRendererDispatch({
     || (kind === 'admissionchecks' && isKueueQueueResource(data))
     || (kind === 'provisioningrequests' && ['autoscaling.x-k8s.io/v1', 'autoscaling.x-k8s.io/v1beta1'].includes(data?.apiVersion))
     || ((kind === 'localqueues' || kind === 'clusterqueues') && isKueueQueueResource(data))
-    || ((kind === 'validatingadmissionpolicies' || kind === 'validatingadmissionpolicybindings')
+    || ((kind === 'validatingadmissionpolicies' || kind === 'validatingadmissionpolicybindings'
+    || kind === 'mutatingadmissionpolicies' || kind === 'mutatingadmissionpolicybindings')
       && isApiGroup(data?.apiVersion, 'admissionregistration.k8s.io'))
     || (kind === 'certificatesigningrequests' && isCertificateSigningRequest(data))
+    || (kind === 'externalartifacts' && isApiGroup(data?.apiVersion, 'source.toolkit.fluxcd.io'))
+    || (kind === 'artifactgenerators' && isApiGroup(data?.apiVersion, 'source.extensions.fluxcd.io'))
+    || (kind === 'nodes' && isCoreNode(data))
+    || (kind === 'volumes' && isApiGroup(data?.apiVersion, LONGHORN_GROUP))
+    || isFluxOperatorResource
   const groupGatedFallthrough = isGroupGatedKind && !groupGatedMatched
 
   const calicoApiVersionMatched = isCalicoApiVersion(data?.apiVersion)
@@ -848,6 +929,7 @@ export function ResourceRendererDispatch({
   const ClusterQueueComp = rendererOverrides?.ClusterQueueRenderer ?? ClusterQueueRenderer
   const PodComp = rendererOverrides?.PodRenderer ?? PodRenderer
   const KarpenterNodePoolComp = rendererOverrides?.KarpenterNodePoolRenderer ?? KarpenterNodePoolRenderer
+  const LonghornVolumeComp = rendererOverrides?.LonghornVolumeRenderer ?? LonghornVolumeRenderer
   const WorkloadComp = rendererOverrides?.WorkloadRenderer ?? WorkloadRenderer
   const NodeComp = rendererOverrides?.NodeRenderer ?? NodeRenderer
   const ServiceComp = rendererOverrides?.ServiceRenderer ?? ServiceRenderer
@@ -860,8 +942,11 @@ export function ResourceRendererDispatch({
   const CNPGObjectStoreComp = rendererOverrides?.CNPGObjectStoreRenderer ?? CNPGObjectStoreRenderer
   const VeleroBSLComp = rendererOverrides?.VeleroBSLRenderer ?? VeleroBSLRenderer
   const SecretProviderClassComp = rendererOverrides?.SecretProviderClassRenderer ?? SecretProviderClassRenderer
+  const K3sHelmChartComp = rendererOverrides?.K3sHelmChartRenderer ?? K3sHelmChartRenderer
+  const UpgradePlanComp = rendererOverrides?.UpgradePlanRenderer ?? UpgradePlanRenderer
   const VeleroBackupComp = rendererOverrides?.VeleroBackupRenderer ?? VeleroBackupRenderer
   const VeleroRestoreComp = rendererOverrides?.VeleroRestoreRenderer ?? VeleroRestoreRenderer
+  const VeleroScheduleComp = rendererOverrides?.VeleroScheduleRenderer ?? VeleroScheduleRenderer
   const KyvernoCoverageComp = rendererOverrides?.KyvernoPolicyCoverage
   const kyvernoCoverage = KyvernoCoverageComp ? (
     <KyvernoCoverageComp data={data} onNavigate={onNavigate} />
@@ -870,6 +955,7 @@ export function ResourceRendererDispatch({
   const kyvernoQueued = KyvernoQueuedComp ? <KyvernoQueuedComp data={data} /> : undefined
   const ServiceAccountComp = rendererOverrides?.ServiceAccountRenderer ?? ServiceAccountRenderer
   const RoleComp = rendererOverrides?.RoleRenderer ?? RoleRenderer
+  const SealedSecretComp = rendererOverrides?.SealedSecretRenderer ?? SealedSecretRenderer
   const RoleBindingComp = rendererOverrides?.RoleBindingRenderer ?? RoleBindingRenderer
   const NamespaceComp = rendererOverrides?.NamespaceRenderer ?? NamespaceRenderer
   const CAPIClusterComp = rendererOverrides?.CAPIClusterRenderer ?? CAPIClusterRenderer
@@ -879,7 +965,9 @@ export function ResourceRendererDispatch({
   const HTTPRouteComp = rendererOverrides?.HTTPRouteRenderer ?? HTTPRouteRenderer
   const RolloutComp = rendererOverrides?.RolloutRenderer ?? RolloutRenderer
   const ValidatingAdmissionPolicyComp = rendererOverrides?.ValidatingAdmissionPolicyRenderer ?? ValidatingAdmissionPolicyRenderer
+  const MutatingAdmissionPolicyComp = rendererOverrides?.MutatingAdmissionPolicyRenderer ?? MutatingAdmissionPolicyRenderer
   const ValidatingAdmissionPolicyBindingComp = rendererOverrides?.ValidatingAdmissionPolicyBindingRenderer ?? ValidatingAdmissionPolicyBindingRenderer
+  const MutatingAdmissionPolicyBindingComp = rendererOverrides?.MutatingAdmissionPolicyBindingRenderer ?? MutatingAdmissionPolicyBindingRenderer
   const showsReflection = (kind === 'configmaps' || kind === 'secrets') && hasReflectorDetails(data, relationships?.reflection)
   const reflectionRefs = showsReflection ? [relationships?.reflection?.source, ...(relationships?.reflection?.mirrors ?? [])].filter((ref): ref is ResourceRef => !!ref) : []
   const withoutReflection = (refs: ResourceRef[] | undefined) => refs?.filter(ref => !reflectionRefs.some(mirror => mirror.kind === ref.kind && mirror.namespace === ref.namespace && mirror.name === ref.name && (mirror.group ?? '') === (ref.group ?? '')))
@@ -931,7 +1019,8 @@ export function ResourceRendererDispatch({
         {kind === 'cronjobs' && <CronJobRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'cronworkflows' && <CronWorkflowRenderer data={data} onNavigate={onNavigate} />}
         {(kind === 'hpas' || kind === 'horizontalpodautoscalers') && <HPAComp data={data} onNavigate={onNavigate} hpaDiagnosis={hpaDiagnosis} />}
-        {kind === 'nodes' && <NodeComp data={data} relationships={relationships} />}
+        {kind === 'nodes' && groupGatedMatched && <NodeComp data={data} relationships={relationships} />}
+        {kind === 'volumes' && groupGatedMatched && <LonghornVolumeComp data={data} />}
         {kind === 'persistentvolumeclaims' && <PVCComp data={data} onNavigate={onNavigate} />}
         {kind === 'rollouts' && isArgoRolloutResource(data) && <RolloutComp data={data} onNavigate={onNavigate} />}
         {kind === 'analysisruns' && <AnalysisRunRenderer data={data} onNavigate={onNavigate} />}
@@ -954,7 +1043,7 @@ export function ResourceRendererDispatch({
         {kind === 'tcproutes' && <SimpleRouteRenderer data={data} kind="TCPRoute" onNavigate={onNavigate} />}
         {kind === 'tlsroutes' && <SimpleRouteRenderer data={data} kind="TLSRoute" onNavigate={onNavigate} />}
         {kind === 'udproutes' && <SimpleRouteRenderer data={data} kind="UDPRoute" onNavigate={onNavigate} />}
-        {kind === 'sealedsecrets' && <SealedSecretRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'sealedsecrets' && <SealedSecretComp data={data} onNavigate={onNavigate} />}
         {(kind === 'workflowtemplates' || kind === 'clusterworkflowtemplates') && <WorkflowTemplateRenderer data={data} />}
         {isCoreNetworkPolicy && <NetworkPolicyRenderer data={data} />}
         {isCalicoStagedKubernetesPolicy && <NetworkPolicyRenderer data={data} staged />}
@@ -968,6 +1057,12 @@ export function ResourceRendererDispatch({
         {(kind === 'rolebindings' || kind === 'clusterrolebindings') && <RoleBindingComp data={data} onNavigate={onNavigate} />}
         {kind === 'events' && <EventRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'gitrepositories' && isFluxResource && <GitRepositoryRenderer data={data} />}
+        {kind === 'externalartifacts' && isApiGroup(data?.apiVersion, 'source.toolkit.fluxcd.io') && <ExternalArtifactRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'artifactgenerators' && isApiGroup(data?.apiVersion, 'source.extensions.fluxcd.io') && <ArtifactGeneratorRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'fluxinstances' && isFluxOperatorResource && <FluxInstanceRenderer data={data} />}
+        {kind === 'fluxreports' && isFluxOperatorResource && <FluxReportRenderer data={data} />}
+        {kind === 'resourcesets' && isFluxOperatorResource && <ResourceSetRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'resourcesetinputproviders' && isFluxOperatorResource && <ResourceSetInputProviderRenderer data={data} />}
         {kind === 'ocirepositories' && isFluxResource && <OCIRepositoryRenderer data={data} />}
         {kind === 'helmrepositories' && isFluxResource && <HelmRepositoryRenderer data={data} />}
         {kind === 'kustomizations' && isFluxResource && <KustomizationRenderer data={data} onNavigate={onNavigate} />}
@@ -1025,7 +1120,7 @@ export function ResourceRendererDispatch({
         {kind === 'backups' && isApiGroup(data.apiVersion, CNPG_GROUP) && <CNPGBackupRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'backups' && isApiGroup(data.apiVersion, 'velero.io') && <VeleroBackupComp data={data} onNavigate={onNavigate} />}
         {kind === 'restores' && isVeleroResource(data) && <VeleroRestoreComp data={data} onNavigate={onNavigate} />}
-        {kind === 'schedules' && isVeleroResource(data) && <VeleroScheduleRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'schedules' && isVeleroResource(data) && <VeleroScheduleComp data={data} onNavigate={onNavigate} />}
         {kind === 'backupstoragelocations' && isVeleroResource(data) && <VeleroBSLComp data={data} onNavigate={onNavigate} />}
         {kind === 'backuprepositories' && isVeleroResource(data) && <VeleroBackupRepositoryRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'volumesnapshotlocations' && isVeleroResource(data) && <VeleroVSLRenderer data={data} />}
@@ -1074,7 +1169,9 @@ export function ResourceRendererDispatch({
         {kind === 'mutatingwebhookconfigurations' && <WebhookConfigRenderer data={data} isMutating onNavigate={onNavigate} />}
         {kind === 'validatingwebhookconfigurations' && <WebhookConfigRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'validatingadmissionpolicies' && isApiGroup(data?.apiVersion, 'admissionregistration.k8s.io') && <ValidatingAdmissionPolicyComp data={data} onNavigate={onNavigate} />}
+        {kind === 'mutatingadmissionpolicies' && isApiGroup(data?.apiVersion, 'admissionregistration.k8s.io') && <MutatingAdmissionPolicyComp data={data} onNavigate={onNavigate} />}
         {kind === 'validatingadmissionpolicybindings' && isApiGroup(data?.apiVersion, 'admissionregistration.k8s.io') && <ValidatingAdmissionPolicyBindingComp data={data} onNavigate={onNavigate} />}
+        {kind === 'mutatingadmissionpolicybindings' && isApiGroup(data?.apiVersion, 'admissionregistration.k8s.io') && <MutatingAdmissionPolicyBindingComp data={data} onNavigate={onNavigate} />}
         {kind === 'ingressclasses' && <IngressClassRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'customresourcedefinitions' && isApiGroup(data?.apiVersion, 'apiextensions.k8s.io') && <CRDComp data={data} onNavigate={onNavigate} />}
         {kind === 'priorityclasses' && <PriorityClassRenderer data={data} />}
@@ -1135,10 +1232,21 @@ export function ResourceRendererDispatch({
         {kind === 'kafkaconnectors' && isApiGroup(data?.apiVersion, 'kafka.strimzi.io') && <StrimziConnectorRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'kafkas' && isStrimziKafka(data) && <StrimziKafkaRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'kafkanodepools' && isStrimziKafkaNodePool(data) && <StrimziKafkaNodePoolRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'volumesnapshots' && isVolumeSnapshot(data) && <VolumeSnapshotRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'volumesnapshotcontents' && isVolumeSnapshotContent(data) && <VolumeSnapshotContentRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'volumesnapshotclasses' && isVolumeSnapshotClass(data) && <VolumeSnapshotClassRenderer data={data} />}
+        {kind === 'ipaddresspools' && isMetalLBIPAddressPool(data) && <MetalLBIPAddressPoolRenderer data={data} />}
+        {kind === 'l2advertisements' && isMetalLBL2Advertisement(data) && <MetalLBL2AdvertisementRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'bgpadvertisements' && isMetalLBBGPAdvertisement(data) && <MetalLBBGPAdvertisementRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'bgppeers' && isMetalLBBGPPeer(data) && <MetalLBBGPPeerRenderer data={data} />}
+        {kind === 'configurationstates' && isMetalLBConfigurationState(data) && <MetalLBConfigurationStateRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'instrumentations' && isApiGroup(data?.apiVersion, 'opentelemetry.io') && <OpenTelemetryInstrumentationRenderer data={data} />}
         {kind === 'canaries' && isApiGroup(data?.apiVersion, 'flagger.app') && <FlaggerCanaryRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'metrictemplates' && isApiGroup(data?.apiVersion, 'flagger.app') && <FlaggerMetricTemplateRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'secretproviderclasses' && isApiGroup(data?.apiVersion, SECRETS_STORE_GROUP) && <SecretProviderClassComp data={data} onNavigate={onNavigate} />}
+        {kind === 'helmcharts' && isApiGroup(data?.apiVersion, K3S_HELM_GROUP) && <K3sHelmChartComp data={data} onNavigate={onNavigate} />}
+        {kind === 'helmchartconfigs' && isApiGroup(data?.apiVersion, K3S_HELM_GROUP) && <K3sHelmChartConfigRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'plans' && isApiGroup(data?.apiVersion, UPGRADE_PLAN_GROUP) && <UpgradePlanComp data={data} onNavigate={onNavigate} />}
 
         {/* Generic renderer for CRDs and unknown resource types — also fires
             for known-plural collisions where no apiVersion-gated renderer
@@ -1153,7 +1261,7 @@ export function ResourceRendererDispatch({
             <ExternalLinksSection data={data} />
 
             {/* Prometheus Metrics Charts — skip for Pending pods, and when parent has dedicated Metrics tab */}
-            {showMetrics && renderMetrics && !(kind === 'pods' && data?.status?.phase === 'Pending') && (
+            {showMetrics && renderMetrics && !(kind === 'pods' && data?.status?.phase === 'Pending') && !(kind === 'nodes' && !isCoreNode(data)) && (
               renderMetrics({ kind: data?.kind || resource.kind, namespace: resource.namespace, name: resource.name })
             )}
 
@@ -1203,12 +1311,23 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   }
   if (k === 'kafkaconnectors' && isApiGroup(data.apiVersion, 'kafka.strimzi.io')) return getStrimziConnectorStatus(data)
   if ((k === 'kafkas' && isStrimziKafka(data)) || (k === 'kafkanodepools' && isStrimziKafkaNodePool(data))) return getStrimziClusterStatus(data)
+  if ((k === 'volumesnapshots' && isVolumeSnapshot(data)) || (k === 'volumesnapshotcontents' && isVolumeSnapshotContent(data))) return getVolumeSnapshotStatus(data)
+  // Native mutating admission policies and bindings expose only their declared configuration.
+  if ((k === 'mutatingadmissionpolicies' || k === 'mutatingadmissionpolicybindings') && isApiGroup(data.apiVersion, 'admissionregistration.k8s.io')) return null
+  // A class is configuration with no status of its own.
+  if (k === 'volumesnapshotclasses' && isVolumeSnapshotClass(data)) return null
+  if (k === 'ipaddresspools' && isMetalLBIPAddressPool(data)) return getMetalLBPoolStatus(data)
+  if (k === 'configurationstates' && isMetalLBConfigurationState(data)) return getMetalLBConfigurationStateStatus(data)
+  // Advertisements and peers are configuration; MetalLB writes no status on them.
+  if ((k === 'l2advertisements' && isMetalLBL2Advertisement(data)) || (k === 'bgpadvertisements' && isMetalLBBGPAdvertisement(data)) || (k === 'bgppeers' && isMetalLBBGPPeer(data))) return null
 
   if (isApiGroup(data.apiVersion, 'opentelemetry.io')) {
     if (k === 'opentelemetrycollectors') return getOpenTelemetryCollectorStatus(data)
     if (k === 'instrumentations') return getOpenTelemetryInstrumentationStatus(data)
   }
   if (k === 'canaries' && isApiGroup(data.apiVersion, 'flagger.app')) return getFlaggerCanaryStatus(data)
+  if (k === 'helmcharts' && isApiGroup(data.apiVersion, K3S_HELM_GROUP)) return getK3sHelmChartStatus(data)
+  if (k === 'plans' && isApiGroup(data.apiVersion, UPGRADE_PLAN_GROUP)) return getUpgradePlanStatus(data)
   // A SecretProviderClass is configuration with no status of its own; mount
   // state belongs to each Pod and is shown in the Pod drawer.
   if (k === 'secretproviderclasses' && isApiGroup(data.apiVersion, SECRETS_STORE_GROUP)) return null
@@ -1247,6 +1366,10 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
     if (data?.apiVersion?.startsWith('scheduling.volcano.sh/')) return getVolcanoPodGroupStatus(data)
   }
   if (k === 'workspaces' && data?.apiVersion?.startsWith('kaito.sh/')) return getKaitoWorkspaceStatus(data)
+  if (k === 'workerpools' && isSubstrateResource(data)) return getWorkerPoolStatus(data)
+  if (k === 'sandboxes' && isAgentSandboxResource(data)) return getSandboxStatus(data)
+  if (k === 'sandboxclaims' && isAgentSandboxExtensionResource(data)) return getSandboxClaimStatus(data)
+  if (k === 'sandboxwarmpools' && isAgentSandboxExtensionResource(data)) return getSandboxWarmPoolStatus(data)
   if (k === 'workloads' && data?.apiVersion?.startsWith('kueue.x-k8s.io/')) return getKueueWorkloadStatus(data)
   if (k === 'clusterqueues' && data?.apiVersion?.startsWith('kueue.x-k8s.io/')) return getClusterQueueStatus(data)
   if (k === 'localqueues' && data?.apiVersion?.startsWith('kueue.x-k8s.io/')) return getLocalQueueStatus(data)
@@ -1285,7 +1408,8 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'trainjobs' && data?.apiVersion?.startsWith('trainer.kubeflow.org/')) return getTrainJobStatus(data)
   if (k === 'cronjobs') return getCronJobStatus(data)
   if (k === 'hpas' || k === 'horizontalpodautoscalers') return getHPAStatus(data)
-  if (k === 'nodes') return getNodeStatus(data)
+  if (k === 'nodes' && isCoreNode(data)) return getNodeStatus(data)
+  if (k === 'volumes' && isApiGroup(data?.apiVersion, LONGHORN_GROUP)) return getLonghornVolumeStatus(data)
   if (k === 'persistentvolumeclaims') return getPVCStatus(data)
   if (k === 'analysisruns') return getAnalysisRunStatus(data)
   // Same collision guard as the render branch above — Katib's unrelated
@@ -1319,6 +1443,9 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'poddisruptionbudgets') return getPDBStatus(data)
   const isFluxResource = getGitOpsTool(k, apiVersionToGroup(data.apiVersion)) === 'flux'
   if (k === 'gitrepositories' && isFluxResource) return getGitRepositoryStatus(data)
+  if (k === 'externalartifacts' && isApiGroup(data.apiVersion, 'source.toolkit.fluxcd.io')) return getExternalArtifactStatus(data)
+  if (k === 'artifactgenerators' && isApiGroup(data.apiVersion, 'source.extensions.fluxcd.io')) return getArtifactGeneratorStatus(data)
+  if (FLUX_OPERATOR_PLURALS.includes(k) && isApiGroup(data.apiVersion, FLUX_OPERATOR_GROUP)) return getFluxOperatorStatus(data)
   if (k === 'ocirepositories' && isFluxResource) return getOCIRepositoryStatus(data)
   if (k === 'helmrepositories' && isFluxResource) return getHelmRepositoryStatus(data)
   if (k === 'kustomizations' && isFluxResource) return getKustomizationStatus(data)

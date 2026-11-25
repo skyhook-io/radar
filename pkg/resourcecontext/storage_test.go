@@ -19,36 +19,36 @@ func TestBuild_StorageDependencyChain(t *testing.T) {
 	pvc := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "prod"}, Spec: corev1.PersistentVolumeClaimSpec{VolumeName: "disk", StorageClassName: &class}}
 	pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "disk"}, Spec: corev1.PersistentVolumeSpec{StorageClassName: class, ClaimRef: &corev1.ObjectReference{Kind: "PersistentVolumeClaim", Namespace: "prod", Name: "data"}}}
 	sc := &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: class}}
-	opts := Options{Tier: TierBasic, Topology: &topology.Topology{}, Provider: mockResourceProvider{pvcs: []*corev1.PersistentVolumeClaim{pvc}, pvs: []*corev1.PersistentVolume{pv}}}
+	opts := Options{Tier: TierBasic, Provider: mockResourceProvider{pvcs: []*corev1.PersistentVolumeClaim{pvc}, pvs: []*corev1.PersistentVolume{pv}}}
 
-	rc := Build(context.Background(), pvc, opts)
+	rc := fixtureContext(context.Background(), pvc, &topology.Topology{}, opts)
 	if len(rc.Dependencies) != 2 || !slices.Contains(rc.Dependencies, ContextRef{Kind: "PersistentVolume", Name: "disk"}) || !slices.Contains(rc.Dependencies, ContextRef{Kind: "StorageClass", Group: "storage.k8s.io", Name: "fast"}) {
 		t.Fatalf("claim context: %+v", rc.Dependencies)
 	}
-	rc = Build(context.Background(), pv, opts)
+	rc = fixtureContext(context.Background(), pv, &topology.Topology{}, opts)
 	if len(rc.Dependencies) != 1 || rc.Dependencies[0].Kind != "StorageClass" || len(rc.Dependents) != 1 || rc.Dependents[0].Kind != "PersistentVolumeClaim" || rc.Dependents[0].Name != "data" {
 		t.Fatalf("volume context: %+v", rc)
 	}
-	rc = Build(context.Background(), sc, opts)
+	rc = fixtureContext(context.Background(), sc, &topology.Topology{}, opts)
 	if len(rc.Dependents) != 2 {
 		t.Fatalf("class context: %+v", rc.Dependents)
 	}
 
 	pvc.Spec.VolumeName = ""
-	rc = Build(context.Background(), pvc, opts)
+	rc = fixtureContext(context.Background(), pvc, &topology.Topology{}, opts)
 	if len(rc.Dependencies) != 1 || rc.Dependencies[0].Kind != "StorageClass" {
 		t.Fatalf("a Pending claim must still lead to its class: %+v", rc.Dependencies)
 	}
 
 	opts.AccessChecker = denyChecker{group: "storage.k8s.io", kind: "StorageClass"}
-	rc = Build(context.Background(), pvc, opts)
+	rc = fixtureContext(context.Background(), pvc, &topology.Topology{}, opts)
 	if len(rc.Dependencies) != 0 || !hasOmitted(rc.Omitted, "dependencies") {
 		t.Fatalf("class permission gate: %+v", rc)
 	}
 
 	for _, kind := range []string{"PersistentVolumeClaim", "PersistentVolume", "StorageClass"} {
 		custom := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "custom.example/v1", "kind": kind, "metadata": map[string]any{"name": map[string]string{"PersistentVolumeClaim": "data", "PersistentVolume": "disk", "StorageClass": "fast"}[kind], "namespace": "prod"}}}
-		got := Build(context.Background(), custom, opts)
+		got := fixtureContext(context.Background(), custom, &topology.Topology{}, opts)
 		if len(got.Dependencies) != 0 || len(got.Dependents) != 0 {
 			t.Fatalf("custom %s got core storage facts: %+v", kind, got)
 		}
@@ -62,13 +62,13 @@ func TestBuild_StorageClassClaimsAreBoundedAndKeepVolumes(t *testing.T) {
 	for i := 0; i < 1000; i++ {
 		provider.pvcs = append(provider.pvcs, &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("claim-%04d", i), Namespace: "prod"}, Spec: corev1.PersistentVolumeClaimSpec{StorageClassName: &class}})
 	}
-	opts := Options{Tier: TierBasic, Topology: &topology.Topology{}, Provider: provider}
-	rc := Build(context.Background(), sc, opts)
+	opts := Options{Tier: TierBasic, Provider: provider}
+	rc := fixtureContext(context.Background(), sc, &topology.Topology{}, opts)
 	if len(rc.Dependents) != maxReferencedByItems || !slices.ContainsFunc(rc.Dependents, func(r ContextRef) bool { return r.Kind == "PersistentVolume" && r.Name == "disk" }) || !slices.Contains(rc.Omitted, OmittedField{Field: "dependents", Reason: OmittedBudgetExceeded}) {
 		t.Fatalf("claims crowded out the volume or the cap went unreported: %+v %+v", rc.Dependents, rc.Omitted)
 	}
 	opts.AccessChecker = denyChecker{kind: "PersistentVolume"}
-	rc = Build(context.Background(), sc, opts)
+	rc = fixtureContext(context.Background(), sc, &topology.Topology{}, opts)
 	if len(rc.Dependents) != maxReferencedByItems || slices.ContainsFunc(rc.Dependents, func(r ContextRef) bool { return r.Kind == "PersistentVolume" }) {
 		t.Fatalf("denied volume leaked or shrank the visible cap: %+v", rc.Dependents)
 	}
@@ -92,7 +92,7 @@ func TestBuild_StorageClassAuthorizationBudgetKeepsReadableVolume(t *testing.T) 
 	refs = append(refs, topology.ResourceRef{Kind: "PersistentVolume", Name: "disk"})
 	checker := &countingRefChecker{deniedKind: "PersistentVolumeClaim"}
 	rc := Build(context.Background(), &storagev1.StorageClass{}, Options{Relationships: &topology.Relationships{Consumers: refs}, AccessChecker: checker})
-	if checker.calls != maxReferenceAccessChecks || len(rc.Dependents) != 1 || rc.Dependents[0].Name != "disk" {
+	if checker.calls != accessChecksPerPreviewItem*maxReferencedByItems || len(rc.Dependents) != 1 || rc.Dependents[0].Name != "disk" {
 		t.Fatalf("denied namespaces exhausted readable evidence: checks=%d refs=%+v", checker.calls, rc.Dependents)
 	}
 	for _, reason := range []OmittedReason{OmittedBudgetExceeded, OmittedRBACDenied} {
@@ -147,7 +147,7 @@ func TestBuild_StorageClassReportsIncompleteInventories(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			provider := &assessingStorageProvider{mockResourceProvider: mockResourceProvider{pvs: []*corev1.PersistentVolume{volume}}, claims: tc.claims, volumes: tc.volumes, syncOnClaimsRead: tc.syncDuringRead}
-			rc := Build(context.Background(), &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: class}}, Options{Tier: TierBasic, Topology: &topology.Topology{}, Provider: provider})
+			rc := fixtureContext(context.Background(), &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: class}}, &topology.Topology{}, Options{Tier: TierBasic, Provider: provider})
 			if !slices.Contains(rc.Dependents, ContextRef{Kind: "PersistentVolume", Name: "disk"}) {
 				t.Fatalf("available volume lost: %+v", rc.Dependents)
 			}
@@ -164,7 +164,7 @@ func TestBuild_EmptyStorageClassStillReportsIncompleteInventory(t *testing.T) {
 		claims:  k8score.KindReadAssessment{Readiness: k8score.KindPending, AllNamespaces: true},
 		volumes: k8score.KindReadAssessment{Readiness: k8score.KindPending, AllNamespaces: true},
 	}
-	rc := Build(context.Background(), &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "fast"}}, Options{Tier: TierBasic, Topology: &topology.Topology{}, Provider: provider})
+	rc := fixtureContext(context.Background(), &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "fast"}}, &topology.Topology{}, Options{Tier: TierBasic, Provider: provider})
 	if len(rc.Dependents) != 0 || !slices.Contains(rc.Omitted, OmittedField{Field: "dependents", Reason: OmittedCacheCold}) {
 		t.Fatalf("an empty, still-loading class read as unused: %+v", rc)
 	}
@@ -175,11 +175,11 @@ func TestBuild_ClaimAndVolumeUseTheFetchedObject(t *testing.T) {
 	pvc := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "prod"}, Spec: corev1.PersistentVolumeClaimSpec{VolumeName: "disk", StorageClassName: &class}}
 	pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "disk"}, Spec: corev1.PersistentVolumeSpec{StorageClassName: class, ClaimRef: &corev1.ObjectReference{Namespace: "prod", Name: "data"}}}
 	// The provider's inventories are still empty, as while claims and volumes load.
-	opts := Options{Tier: TierBasic, Topology: &topology.Topology{}, Provider: mockResourceProvider{}}
-	if rc := Build(context.Background(), pvc, opts); len(rc.Dependencies) != 2 {
+	opts := Options{Tier: TierBasic, Provider: mockResourceProvider{}}
+	if rc := fixtureContext(context.Background(), pvc, &topology.Topology{}, opts); len(rc.Dependencies) != 2 {
 		t.Fatalf("claim lost its declared volume and class: %+v", rc.Dependencies)
 	}
-	if rc := Build(context.Background(), pv, opts); len(rc.Dependencies) != 1 || len(rc.Dependents) != 1 {
+	if rc := fixtureContext(context.Background(), pv, &topology.Topology{}, opts); len(rc.Dependencies) != 1 || len(rc.Dependents) != 1 {
 		t.Fatalf("volume lost its declared class and claim: %+v", rc)
 	}
 }

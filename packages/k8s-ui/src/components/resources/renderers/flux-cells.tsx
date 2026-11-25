@@ -2,8 +2,18 @@
 
 import { clsx } from 'clsx'
 import { Tooltip } from '../../ui/Tooltip'
+import { formatBytes } from '../../../utils/format'
+import { TruncatedText } from '../../ui/TruncatedText'
 import { getFluxDeployedRelease, getFluxLastApply } from '../../../utils/flux-history'
 import {
+  getExternalArtifactStatus,
+  getExternalArtifactRevision,
+  getExternalArtifactGenerator,
+  getExternalArtifactProducer,
+  getArtifactGeneratorStatus,
+  getArtifactGeneratorSources,
+  getArtifactGeneratorCount,
+  shortArtifactRevision,
   getGitRepositoryUrl,
   getGitRepositoryRef,
   getGitRepositoryStatus,
@@ -33,12 +43,7 @@ import {
 export function GitRepositoryCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'url': {
-      const url = getGitRepositoryUrl(resource)
-      return (
-        <Tooltip content={url}>
-          <span className="text-sm text-theme-text-secondary truncate block">{url}</span>
-        </Tooltip>
-      )
+      return <TruncatedText text={getGitRepositoryUrl(resource)} className="text-sm text-theme-text-secondary" />
     }
     case 'ref': {
       const ref = getGitRepositoryRef(resource)
@@ -66,12 +71,7 @@ export function GitRepositoryCell({ resource, column }: { resource: any; column:
 export function OCIRepositoryCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'url': {
-      const url = getOCIRepositoryUrl(resource)
-      return (
-        <Tooltip content={url}>
-          <span className="text-sm text-theme-text-secondary truncate block">{url}</span>
-        </Tooltip>
-      )
+      return <TruncatedText text={getOCIRepositoryUrl(resource)} className="text-sm text-theme-text-secondary" />
     }
     case 'ref': {
       const ref = getOCIRepositoryRef(resource)
@@ -99,12 +99,7 @@ export function OCIRepositoryCell({ resource, column }: { resource: any; column:
 export function HelmRepositoryCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'url': {
-      const url = getHelmRepositoryUrl(resource)
-      return (
-        <Tooltip content={url}>
-          <span className="text-sm text-theme-text-secondary truncate block">{url}</span>
-        </Tooltip>
-      )
+      return <TruncatedText text={getHelmRepositoryUrl(resource)} className="text-sm text-theme-text-secondary" />
     }
     case 'type': {
       const type = getHelmRepositoryType(resource)
@@ -214,11 +209,7 @@ export function FluxHelmReleaseCell({ resource, column }: { resource: any; colum
       if (!message) {
         return <span className="text-sm text-theme-text-tertiary">-</span>
       }
-      return (
-        <Tooltip content={message}>
-          <span className="text-sm text-theme-text-secondary truncate block">{message}</span>
-        </Tooltip>
-      )
+      return <TruncatedText text={message} className="text-sm text-theme-text-secondary" />
     }
     case 'revision': {
       const revision = getFluxHelmReleaseRevision(resource)
@@ -266,6 +257,56 @@ export function FluxAlertCell({ resource, column }: { resource: any; column: str
           {status.text}
         </span>
       )
+    }
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
+export function ExternalArtifactCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'producer': {
+      const producer = getExternalArtifactGenerator(resource) || getExternalArtifactProducer(resource)
+      if (!producer) return <span className="text-sm text-theme-text-tertiary">-</span>
+      return <TruncatedText text={producer} className="text-sm text-theme-text-secondary" />
+    }
+    case 'status': {
+      const status = getExternalArtifactStatus(resource)
+      return <span className={clsx('badge', status.color)}>{status.text}</span>
+    }
+    case 'revision': {
+      const revision = getExternalArtifactRevision(resource)
+      if (!revision) return <span className="text-sm text-theme-text-tertiary">-</span>
+      return (
+        <Tooltip content={revision}>
+          <span className="text-sm text-theme-text-tertiary font-mono truncate block">{shortArtifactRevision(revision)}</span>
+        </Tooltip>
+      )
+    }
+    case 'size': {
+      const size = resource.status?.artifact?.size
+      return <span className="text-sm text-theme-text-secondary">{typeof size === 'number' ? formatBytes(size) : '-'}</span>
+    }
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
+export function ArtifactGeneratorCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'sources': {
+      const sources = getArtifactGeneratorSources(resource)
+      return (
+        <Tooltip content={sources}>
+          <span className="text-sm text-theme-text-secondary truncate block">{sources || '-'}</span>
+        </Tooltip>
+      )
+    }
+    case 'artifacts':
+      return <span className="text-sm text-theme-text-secondary">{getArtifactGeneratorCount(resource) ?? '-'}</span>
+    case 'status': {
+      const status = getArtifactGeneratorStatus(resource)
+      return <span className={clsx('badge', status.color)}>{status.text}</span>
     }
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>

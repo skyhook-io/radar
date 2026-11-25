@@ -2,8 +2,12 @@ import { argoApplicationSetConditionsToGitOpsStatus } from '../../types/gitops'
 import { getArgoApplicationSetStatus } from './resource-utils-argo'
 import { getCRDStatus } from './resource-utils-crd'
 import { getStrimziConnectorStatus, getStrimziClusterStatus, isStrimziKafka, isStrimziKafkaNodePool } from './resource-utils-strimzi'
+import { getVolumeSnapshotStatus, getVolumeSnapshotErrorMessage, isVolumeSnapshot, isVolumeSnapshotContent } from './resource-utils-volumesnapshot'
+import { getMetalLBPoolStatus, getMetalLBConfigurationStateStatus, getMetalLBConfigurationErrors, isMetalLBIPAddressPool, isMetalLBConfigurationState } from './resource-utils-metallb'
 import { getOpenTelemetryCollectorStatus, getOpenTelemetryInstrumentationStatus } from './resource-utils-opentelemetry'
 import { getFlaggerCanaryStatus } from './resource-utils-flagger'
+import { K3S_HELM_GROUP, getK3sHelmChartStatus } from './resource-utils-k3s'
+import { UPGRADE_PLAN_GROUP, getUpgradePlanStatus } from './resource-utils-upgrade-plan'
 import { isApiGroup } from './resource-utils-cnpg'
 import type { HealthLevel } from './resource-utils'
 import { getGatewayPolicyStatus } from './gateway-policy-status'
@@ -109,6 +113,18 @@ export function getGenericResourceStatus(resource: any): GenericStatus | null {
     const native = getStrimziClusterStatus(resource)
     return { text: native.text, tone: native.level }
   }
+  if (isVolumeSnapshot(resource) || isVolumeSnapshotContent(resource)) {
+    const native = getVolumeSnapshotStatus(resource)
+    return { text: native.text, tone: native.level, reason: native.text === 'Error' ? getVolumeSnapshotErrorMessage(resource) : undefined }
+  }
+  if (isMetalLBIPAddressPool(resource)) {
+    const native = getMetalLBPoolStatus(resource)
+    return { text: native.text, tone: native.level }
+  }
+  if (isMetalLBConfigurationState(resource)) {
+    const native = getMetalLBConfigurationStateStatus(resource)
+    return { text: native.text, tone: native.level, reason: native.text === 'Invalid' ? getMetalLBConfigurationErrors(resource).join('; ') || undefined : undefined }
+  }
   if (isApiGroup(resource?.apiVersion, 'opentelemetry.io')) {
     const native = resource.kind === 'OpenTelemetryCollector' ? getOpenTelemetryCollectorStatus(resource)
       : resource.kind === 'Instrumentation' ? getOpenTelemetryInstrumentationStatus(resource) : null
@@ -120,6 +136,17 @@ export function getGenericResourceStatus(resource: any): GenericStatus | null {
       return { text: native.text, tone: native.level }
     }
     if (resource.kind === 'MetricTemplate') return { text: 'Configured', tone: 'neutral' }
+  }
+  if (isApiGroup(resource?.apiVersion, K3S_HELM_GROUP)) {
+    if (resource.kind === 'HelmChart') {
+      const native = getK3sHelmChartStatus(resource)
+      return { text: native.text, tone: native.level }
+    }
+    if (resource.kind === 'HelmChartConfig') return { text: 'Configured', tone: 'neutral' }
+  }
+  if (isApiGroup(resource?.apiVersion, UPGRADE_PLAN_GROUP) && resource.kind === 'Plan') {
+    const native = getUpgradePlanStatus(resource)
+    return { text: native.text, tone: native.level }
   }
   const status = resource?.status
   if (!status || typeof status !== 'object') return null

@@ -95,13 +95,13 @@ func handleManageGitOps(ctx context.Context, req *mcp.CallToolRequest, input man
 		if resolveErr != nil {
 			return nil, nil, resolveErr
 		}
-		entry = entry.Served(k8s.ServedGVR)
+		entry = entry.Served(k8s.ServedGVRFor(ctx))
 
 		switch action {
 		case "reconcile":
 			result, err = gitops.ReconcileFlux(ctx, dynClient, entry, input.Namespace, input.Name)
 		case "sync-with-source":
-			result, err = gitops.SyncFluxWithSource(ctx, dynClient, input.Kind, input.Namespace, input.Name, k8s.ServedGVR)
+			result, err = gitops.SyncFluxWithSource(ctx, dynClient, input.Kind, input.Namespace, input.Name, k8s.ServedGVRFor(ctx))
 		case "suspend":
 			result, err = gitops.SetFluxSuspend(ctx, dynClient, entry, input.Namespace, input.Name, true)
 		case "resume":
@@ -117,6 +117,28 @@ func handleManageGitOps(ctx context.Context, req *mcp.CallToolRequest, input man
 	if err != nil {
 		if tool == "argocd" && errors.Is(err, gitops.ErrAutoSyncEnabled) {
 			return nil, nil, fmt.Errorf("%w (MCP: manage_gitops with tool=argocd and action=suspend)", err)
+		}
+		var denied *gitops.PermissionDenied
+		var admission *gitops.AdmissionDenied
+		var body map[string]any
+		switch {
+		case errors.As(err, &denied):
+			body = map[string]any{"error": denied.Summary(), "error_code": "rbac_denied", "verb": denied.Verb, "group": denied.Group, "resource": denied.Resource, "namespace": denied.Namespace, "name": denied.Name, "kind": denied.Kind}
+		case errors.As(err, &admission):
+			body = map[string]any{"error": admission.Summary(), "error_code": "admission_denied"}
+		}
+		if body != nil {
+			body["raw_error"] = err.Error()
+			var partial *gitops.PartialSyncError
+			if errors.As(err, &partial) {
+				body["note"] = partial.Note()
+			}
+			response, _, marshalErr := toJSONResult(body)
+			if marshalErr != nil {
+				return nil, nil, marshalErr
+			}
+			response.SetError(err)
+			return response, nil, nil
 		}
 		return nil, nil, err
 	}
