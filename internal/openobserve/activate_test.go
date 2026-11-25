@@ -3,6 +3,7 @@ package openobserve
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -16,8 +17,10 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/openobserve/oofake"
@@ -219,6 +222,34 @@ func TestStoredNameMatchActivates(t *testing.T) {
 	}
 	if len(ta.saved) != 0 {
 		t.Fatalf("a name match saved an ID entry: %+v", ta.saved)
+	}
+}
+
+func TestFailedClusterUIDReadIsRetried(t *testing.T) {
+	withMetricsClient(t)
+	srv := oofake.Start(t, &oofake.Server{IDs: map[string]string{uidB: "oo-b"}})
+	cfg := entryFor(srv.URL, uidB)
+	cfg.Matches[uidB] = config.OpenObserveMatch{Label: oo.IDLabel, Value: uidB, By: config.OpenObserveMatchByID, Context: "kind-oo-b"}
+	ta := newTestActivator(t, cfg, false)
+	ta.retryAfter = 200 * time.Millisecond
+
+	kube := kubeWithUID(uidB)
+	var reads atomic.Int32
+	kube.PrependReactor("get", "namespaces", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if reads.Add(1) == 1 {
+			return true, nil, errors.New("apiserver timeout")
+		}
+		return false, nil, nil
+	})
+
+	ta.Apply(Target{Context: "kind-oo-b", Fingerprint: "fp-b", Client: kube})
+	ta.wait(t)
+	if st := prometheus.GetClient().GetStatus(); prometheus.RelayActive() || st.Source == nil || !strings.Contains(st.Source.Error, "Couldn't read this cluster's ID") {
+		t.Fatalf("after the failed read: relay=%v source=%+v", prometheus.RelayActive(), st.Source)
+	}
+	ta.wait(t)
+	if st := prometheus.GetClient().GetStatus(); !prometheus.RelayActive() || st.Source == nil || st.Source.MatchedBy != "id" {
+		t.Fatalf("after the retry: relay=%v source=%+v", prometheus.RelayActive(), st.Source)
 	}
 }
 

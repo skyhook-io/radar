@@ -136,26 +136,45 @@ func (a *Activator) Apply(t Target) {
 	prometheus.SetSourceNote(nil)
 	go func() {
 		defer a.finished()
-		uid, err := a.clusterUID(context.Background(), t)
-		a.mu.Lock()
-		if a.gen != gen {
-			a.mu.Unlock()
-			return
-		}
-		var match func()
-		if err != nil {
-			log.Printf("[openobserve] Couldn't read the cluster ID of context %q: %v", k8s.SanitizeForLog(t.Context), err)
-			if savedFromContext(*cfg, t.Context) {
-				prometheus.SetSourceNote(&prom.MetricsSource{Kind: "openobserve", Via: "local", Error: "Couldn't read this cluster's ID to find it in OpenObserve: " + err.Error()})
-			}
-		} else {
-			match = a.startLocked(gen, t, *cfg, uid)
-		}
-		a.mu.Unlock()
-		if match != nil {
-			match()
-		}
+		a.matchAfterUID(gen, t, *cfg, false)
 	}()
+}
+
+// matchAfterUID reads t's cluster UID and runs its match. A failed read is
+// tried again while gen is current: an unchanged context and settings are
+// never applied again on their own, so one failed read would otherwise leave
+// OpenObserve off until a restart, a context switch or a save.
+func (a *Activator) matchAfterUID(gen uint64, t Target, cfg config.OpenObserveConfig, retry bool) {
+	uid, err := a.clusterUID(context.Background(), t)
+	a.mu.Lock()
+	if a.gen != gen {
+		a.mu.Unlock()
+		return
+	}
+	var match func()
+	if err != nil {
+		if !retry {
+			log.Printf("[openobserve] Couldn't read the cluster ID of context %q: %v", k8s.SanitizeForLog(t.Context), err)
+		}
+		if savedFromContext(cfg, t.Context) {
+			prometheus.SetSourceNote(&prom.MetricsSource{Kind: "openobserve", Via: "local", Error: "Couldn't read this cluster's ID to find it in OpenObserve: " + err.Error()})
+		}
+		time.AfterFunc(a.retryAfter, func() {
+			a.mu.Lock()
+			current := a.gen == gen
+			a.mu.Unlock()
+			if current {
+				a.matchAfterUID(gen, t, cfg, true)
+				a.finished()
+			}
+		})
+	} else {
+		match = a.startLocked(gen, t, cfg, uid)
+	}
+	a.mu.Unlock()
+	if match != nil {
+		match()
+	}
 }
 
 // startLocked applies what is known for the cluster with UID uid and returns
