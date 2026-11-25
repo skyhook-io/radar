@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -235,8 +236,9 @@ func runPodExecHeartbeat(conn *websocket.Conn, interval time.Duration, done <-ch
 
 // wsWriter wraps a websocket connection to satisfy io.Writer
 type wsWriter struct {
-	conn *websocket.Conn
-	mu   sync.Mutex
+	wroteOutput atomic.Bool
+	conn        *websocket.Conn
+	mu          sync.Mutex
 }
 
 func (w *wsWriter) Write(p []byte) (int, error) {
@@ -250,6 +252,9 @@ func (w *wsWriter) Write(p []byte) (int, error) {
 	}
 	if err := w.conn.WriteMessage(websocket.TextMessage, data); err != nil {
 		return 0, err
+	}
+	if len(p) > 0 {
+		w.wroteOutput.Store(true)
 	}
 	return len(p), nil
 }
@@ -449,7 +454,7 @@ func streamPodTerminal(parent context.Context, conn *websocket.Conn, uid types.U
 			deadline := time.Now().Add(terminalCloseTimeout)
 			if streamErr != nil {
 				conn.SetWriteDeadline(deadline)
-				sendPodExecError(conn, streamErr, uid, executable)
+				sendPodExecError(conn, streamErr, uid, executable, output.wroteOutput.Load())
 			}
 			if writeTerminalClose(conn, deadline) == nil {
 				// Release any blocked input so the sole reader can consume the peer's close reply.
@@ -471,12 +476,12 @@ func streamPodTerminal(parent context.Context, conn *websocket.Conn, uid types.U
 	<-streamDone
 }
 
-func sendPodExecError(conn *websocket.Conn, err error, podUID types.UID, executable string) {
+func sendPodExecError(conn *websocket.Conn, err error, podUID types.UID, executable string, wroteOutput bool) {
 	errMsg := err.Error()
 	errorType := "exec_error"
-	if isShellNotFoundError(errMsg) {
+	if !wroteOutput && isShellNotFoundError(errMsg) {
 		errorType = "shell_not_found"
-	} else if looksLikeShellNotFound(errMsg) {
+	} else if !wroteOutput && looksLikeShellNotFound(errMsg) {
 		// Drift canary: the error has shell-not-found hallmarks but
 		// isShellNotFoundError's substring matcher didn't recognize
 		// it. Most likely kubelet/runc/containerd reworded the

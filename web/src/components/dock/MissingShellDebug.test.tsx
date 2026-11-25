@@ -9,7 +9,7 @@ const f = vi.hoisted(() => ({
   recheck: vi.fn(), open: vi.fn(), copy: vi.fn(), probe: vi.fn(),
 }))
 vi.mock('../../context/NavCustomization', () => ({ useNavCustomization: () => ({ embedded: f.embedded }) }))
-vi.mock('../../contexts/CapabilitiesContext', () => ({ useNamespacedCapabilities: () => ({ podDebugImage: f.image }) }))
+vi.mock('../../contexts/CapabilitiesContext', () => ({ useCapabilitiesContext: () => ({}), useNamespacedCapabilities: () => ({ podDebugImage: f.image }) }))
 vi.mock('../../api/client', async original => ({ ...await original<typeof import('../../api/client')>(), useResource: () => ({ data: f.pod }) }))
 vi.mock('../../api/podDebug', () => ({ usePodDebugAccess: (...args: unknown[]) => {
   f.probe(...args)
@@ -40,7 +40,7 @@ it('offers only running debuggers targeting the failed container, with no access
   f.pod.status.ephemeralContainerStatuses = names.map(name => ({ name, state:name === 'stopped' ? {terminated:{}} : {running:{}} }))
   render()
   const select = host.querySelector('select')!
-  expect([...select.options].map(o=>o.value)).toEqual(names.slice(0,2))
+  expect([...select.options].map(o=>o.value)).toEqual(names.slice(0,2).reverse())
   act(() => { select.value='second'; select.dispatchEvent(new Event('change',{bubbles:true})) })
   act(() => button('Open debug terminal')!.click())
   expect(f.open).toHaveBeenCalledWith(expect.objectContaining({containerName:'second',debugSession:expect.objectContaining({podUID:'uid-1'})}))

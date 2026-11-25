@@ -542,12 +542,23 @@ func TestPodTerminalStream(t *testing.T) {
 			t.Fatal("terminal stayed open past the close deadline")
 		}
 	})
+	t.Run("missing shell before any terminal output", func(t *testing.T) {
+		conn, _, done := run(t, func(context.Context, remotecommand.StreamOptions) error {
+			return errors.New("command terminated with exit code 127")
+		})
+		var msg map[string]string
+		if err := conn.ReadJSON(&msg); err != nil || msg["errorType"] != "shell_not_found" || msg["executable"] != "sh" {
+			t.Fatalf("startup error: %v %v", msg, err)
+		}
+		conn.Close()
+		wait(t, done)
+	})
 	t.Run("final output and structured error precede close", func(t *testing.T) {
 		conn, _, done := run(t, func(_ context.Context, opts remotecommand.StreamOptions) error {
 			if _, err := io.WriteString(opts.Stdout, "last output"); err != nil {
 				return err
 			}
-			return errors.New("executable file not found")
+			return errors.New("command terminated with exit code 127")
 		})
 		conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 		conn.SetCloseHandler(func(int, string) error { return nil })
@@ -558,7 +569,7 @@ func TestPodTerminalStream(t *testing.T) {
 		if err := conn.ReadJSON(&msg); err != nil || msg["data"] != "last output" {
 			t.Fatalf("last output: %v, %v", msg, err)
 		}
-		if err := conn.ReadJSON(&msg); err != nil || msg["errorType"] != "shell_not_found" || msg["executable"] != "sh" || msg["podUID"] != "reviewed-pod" {
+		if err := conn.ReadJSON(&msg); err != nil || msg["errorType"] != "exec_error" || msg["executable"] != "sh" || msg["podUID"] != "reviewed-pod" {
 			t.Fatalf("last error: %v, %v", msg, err)
 		}
 		if _, _, err := conn.ReadMessage(); !websocket.IsCloseError(err, websocket.CloseNormalClosure) {

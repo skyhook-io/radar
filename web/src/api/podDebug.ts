@@ -17,7 +17,7 @@ export function createPodDebugContainer(namespace: string, podName: string, conn
   )
 }
 
-type PodDebugAccess = { state: 'allowed'; image: string } | { state: 'denied' | 'unknown' | 'unavailable' }
+type PodDebugAccess = { exec?: boolean } & ({ state: 'allowed'; image: string } | { state: 'denied' | 'unknown' | 'unavailable' })
 
 export function usePodDebugAccess(namespace: string, name: string, uid: string, enabled: boolean) {
   const { support } = useRadarFeature('podDebugAccess')

@@ -105,7 +105,8 @@ import { TIME_RANGES, PrometheusCharts, isPrometheusSupported } from '../resourc
 import { RightsizingStrip } from '../resource/RightsizingStrip'
 import { PrometheusChartsGrid } from '../resource/PrometheusChartsGrid'
 import { DatadogSetupHint, DatadogWorkloadCharts, useDatadogWorkloadCharts, WorkloadCostRightsizing } from '../resource/DatadogWorkloadCharts'
-import { PodDetailDebugAction } from '../resources/PodDebugAction'
+import { PodDebugAction, type PodDebugTarget } from '../resources/PodDebugAction'
+import { usePodDebugAccess } from '../../api/podDebug'
 import { useNavCustomization } from '../../context/NavCustomization'
 import { RestartEventLane } from '../resource/RestartChart'
 import { WorkloadCostTab } from '../cost/WorkloadCostTab'
@@ -334,6 +335,7 @@ function useActionsBarProps(
   group: string | undefined,
   cascadeEnabled: boolean,
   nodeUID: string,
+  pod?: PodDebugTarget,
 ) {
   const [deletePreviewOpen, setDeletePreviewOpen] = useState(false)
   const { showCopied } = useToast()
@@ -344,6 +346,10 @@ function useActionsBarProps(
   const openNodeTerminal = useOpenNodeTerminal()
   const { embedded } = useNavCustomization()
   const { canExec, podDebugImage, canViewLogs, canPortForward, workloadWrites, workloadWritesPending } = useNamespacedCapabilities(namespace)
+  const { query: namedAccess } = usePodDebugAccess(namespace, name, pod?.metadata.uid ?? '', !!pod && !embedded &&
+    !podDebugImage && pod.status.phase === 'Running' && !pod.metadata.deletionTimestamp)
+  const access = !namedAccess.error && pod ? namedAccess.data : undefined
+  const debugImage = podDebugImage || (access?.state === 'allowed' ? access.image : undefined)
   const queryClient = useQueryClient()
   // Live forward when local+RBAC; otherwise (in-cluster/Cloud) still surface the
   // copy-paste kubectl command. The button picks live vs. copy by deployment mode.
@@ -431,11 +437,11 @@ function useActionsBarProps(
   const { renderAction: renderDiagnose } = useDiagnoseCustomization()
 
   return {
-    canExec,
+    canExec: canExec || access?.exec === true,
     canViewLogs,
     canPortForward: showPortForward,
     onOpenTerminal: openTerminal,
-    renderPodDebug: !embedded ? (pod: any) => <PodDetailDebugAction key={pod.metadata.uid} pod={pod} namespaceImage={podDebugImage} /> : undefined,
+    renderPodDebug: !embedded && debugImage ? (pod: PodDebugTarget) => <PodDebugAction key={pod.metadata.uid} pod={pod} defaultImage={debugImage} /> : undefined,
     onOpenLogs: openLogs,
     onOpenWorkloadLogs: openWorkloadLogs,
     replicaSetLogs: isAppsReplicaSet && replicaSetLogSupport === 'supported',
@@ -901,6 +907,7 @@ export function WorkloadView({
     effectiveGroup,
     !resourceLoading && Boolean(resource),
     apiKind === 'nodes' && !effectiveGroup ? resource?.metadata?.uid ?? '' : '',
+    apiKind === 'pods' && resource?.apiVersion === 'v1' && resource?.kind === 'Pod' ? resource : undefined,
   )
   const desktopDownload = useDesktopDownload()
 

@@ -202,19 +202,27 @@ export function TerminalTab({
           restoreFocus()
         }
 
+        let receivedOutput = false
         ws.onmessage = (event) => {
           let msg: Record<string, string> | null = null
           try {
             msg = JSON.parse(event.data as string) as Record<string, string>
           } catch {
+            receivedOutput = true
             xterm.write(event.data as string)
             return
           }
           if (msg.type === 'output' && msg.data) {
+            receivedOutput = true
             xterm.write(msg.data)
           } else if (msg.type === 'exit') {
             xterm.write('\r\n\x1b[2m[Process exited]\x1b[0m\r\n')
           } else if (msg.type === 'error' && msg.data) {
+            if (receivedOutput && !command) {
+              xterm.writeln(`\r\n${msg.data}`)
+              setIsConnected(false)
+              return
+            }
             setFailedPodUID(msg.podUID)
             setFailedExecutable(msg.executable)
             setError(msg.data)
@@ -247,7 +255,7 @@ export function TerminalTab({
         setErrorType('exec_error')
         setIsConnecting(false)
       })
-  }, [namespace, podName, selectedContainer, attachSearch, openSearch, restoreFocus])
+  }, [namespace, podName, selectedContainer, command, attachSearch, openSearch, restoreFocus])
 
   useEffect(() => {
     connect()

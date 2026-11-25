@@ -868,10 +868,12 @@ interface EphemeralContainerRef { name: string; image: string; targetContainerNa
 
 export function getRunningEphemeralContainers(pod: {
   spec?: { ephemeralContainers?: EphemeralContainerRef[] }
-  status?: { ephemeralContainerStatuses?: { name: string; state?: { running?: object } }[] }
-}): EphemeralContainerRef[] {
-  return (pod.spec?.ephemeralContainers ?? []).filter(container =>
-    pod.status?.ephemeralContainerStatuses?.some(status => status.name === container.name && status.state?.running))
+  status?: { ephemeralContainerStatuses?: { name: string; state?: { running?: { startedAt?: string } } }[] }
+}): (EphemeralContainerRef & { startedAt?: string })[] {
+  return (pod.spec?.ephemeralContainers ?? []).flatMap(container => {
+    const running = pod.status?.ephemeralContainerStatuses?.find(status => status.name === container.name)?.state?.running
+    return running ? [{ ...container, startedAt: running.startedAt }] : []
+  })
 }
 
 /**

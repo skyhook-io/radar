@@ -14,6 +14,7 @@ import (
 
 type podDebugAccess struct {
 	State string `json:"state"`
+	Exec  bool   `json:"exec,omitempty"`
 	Image string `json:"image,omitempty"`
 }
 
@@ -32,17 +33,17 @@ func (s *Server) handlePodDebugAccess(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	state := reviewPodDebugAccess(ctx, s.getClientForRequest(r), ns, name)
-	response := podDebugAccess{State: state}
-	if state == "allowed" {
+	response := reviewPodDebugAccess(ctx, s.getClientForRequest(r), ns, name)
+	if response.State == "allowed" {
 		response.Image = s.resolveDebugImage("")
 	}
 	s.writeJSON(w, response)
 }
 
-func reviewPodDebugAccess(ctx context.Context, client kubernetes.Interface, ns, name string) string {
+func reviewPodDebugAccess(ctx context.Context, client kubernetes.Interface, ns, name string) podDebugAccess {
+	response := podDebugAccess{State: "unknown"}
 	if client == nil {
-		return "unknown"
+		return response
 	}
 	for _, action := range []struct{ verb, subresource string }{{"create", "exec"}, {"update", "ephemeralcontainers"}} {
 		result, err := client.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, &authv1.SelfSubjectAccessReview{
@@ -51,18 +52,24 @@ func reviewPodDebugAccess(ctx context.Context, client kubernetes.Interface, ns, 
 			}},
 		}, metav1.CreateOptions{})
 		if err != nil {
-			return "unknown"
+			return response
 		}
 		if result.Status.Allowed {
+			if action.subresource == "exec" {
+				response.Exec = true
+			}
 			continue
 		}
 		if !result.Status.Denied && result.Status.EvaluationError != "" {
-			return "unknown"
+			return response
 		}
 		if action.subresource == "exec" {
-			return "unavailable"
+			response.State = "unavailable"
+			return response
 		}
-		return "denied"
+		response.State = "denied"
+		return response
 	}
-	return "allowed"
+	response.State = "allowed"
+	return response
 }

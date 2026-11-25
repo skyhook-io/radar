@@ -2,7 +2,12 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"github.com/go-chi/chi/v5"
+	"github.com/skyhook-io/radar/internal/k8s"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 
@@ -42,12 +47,48 @@ func TestNamedPodDebugAccess(t *testing.T) {
 				}
 				return true, review, nil
 			})
-			if got := reviewPodDebugAccess(context.Background(), client, "payments", "checkout"); got != tc.want {
-				t.Fatalf("state=%s, want %s", got, tc.want)
+			if got := reviewPodDebugAccess(context.Background(), client, "payments", "checkout"); got.State != tc.want || got.Exec != tc.exec.Allowed {
+				t.Fatalf("access=%+v, want state=%s, exec=%v", got, tc.want, tc.exec.Allowed)
 			}
 			want := []authv1.ResourceAttributes{{Namespace: "payments", Name: "checkout", Verb: "create", Resource: "pods", Subresource: "exec"}, {Namespace: "payments", Name: "checkout", Verb: "update", Resource: "pods", Subresource: "ephemeralcontainers"}}
 			if !reflect.DeepEqual(reviews, want[:tc.checks]) {
 				t.Fatalf("requests=%#v", reviews)
+			}
+		})
+	}
+}
+
+func TestPodDebugAccessScopeAndMode(t *testing.T) {
+	for _, tc := range []struct {
+		name, cloud   string
+		pin, disabled bool
+		want          int
+	}{
+		{"shared unauthenticated, disabled exec", "false", false, true, http.StatusOK},
+		{"hosted", "true", false, false, http.StatusOK},
+		{"outside namespace pin", "false", true, false, http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("RADAR_CLOUD_MODE", tc.cloud)
+			oldPin, oldDisabled := k8s.ForceNamespaceScope, k8s.ForceDisableExec
+			k8s.ForceNamespaceScope, k8s.ForceDisableExec = tc.pin, tc.disabled
+			t.Cleanup(func() { k8s.ForceNamespaceScope, k8s.ForceDisableExec = oldPin, oldDisabled })
+			if tc.pin {
+				k8s.SetFallbackNamespace("allowed")
+				t.Cleanup(func() { k8s.SetFallbackNamespace("") })
+			}
+			router := chi.NewRouter()
+			router.Get("/pods/{namespace}/{name}/debug-access", (&Server{listenAddress: "0.0.0.0"}).handlePodDebugAccess)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/pods/payments/api/debug-access", nil))
+			if w.Code != tc.want {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+			if tc.want == http.StatusOK {
+				var result podDebugAccess
+				if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil || result != (podDebugAccess{State: "unavailable"}) {
+					t.Fatalf("%+v %v", result, err)
+				}
 			}
 		})
 	}

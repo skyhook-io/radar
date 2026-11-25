@@ -6,12 +6,12 @@ import { ApiError } from '../../api/client'
 import { connectionHeaderValue } from '../../api/connectionBinding'
 import { getApiBase } from '../../api/config'
 import { useReviewedActionMutation } from '../../api/reviewedActionMutation'
-import { createPodDebugContainer, usePodDebugAccess } from '../../api/podDebug'
+import { createPodDebugContainer } from '../../api/podDebug'
 
 export interface PodDebugTarget {
   apiVersion: string
   kind: string
-  metadata: { uid: string; name: string; namespace: string; deletionTimestamp?: string }
+  metadata: { uid: string; name: string; namespace: string; deletionTimestamp?: string; ownerReferences?: {kind: string; name: string; controller?: boolean}[] }
   spec: {
     containers: { name: string }[]
     ephemeralContainers?: { name: string; image: string; targetContainerName?: string }[]
@@ -22,7 +22,7 @@ export interface PodDebugTarget {
   status: {
     phase?: string
     ephemeralContainerStatuses?: { name: string; state?: {
-      running?: object
+      running?: { startedAt?: string }
       waiting?: { reason?: string; message?: string }
       terminated?: { exitCode: number; reason?: string; message?: string }
     } }[]
@@ -42,13 +42,6 @@ export function runningPodDebugTargets(pod: PodDebugTarget): string[] | undefine
   const running = [...(pod.status.containerStatuses ?? []), ...(pod.status.initContainerStatuses ?? [])]
     .filter(container => container.state?.running)
   return getExecContainerNames(pod).filter(name => running.some(container => container.name === name))
-}
-
-export function PodDetailDebugAction({ pod, namespaceImage }: { pod: PodDebugTarget; namespaceImage?: string }) {
-  const eligible = !!runningPodDebugTargets(pod)?.length
-  const { query } = usePodDebugAccess(pod.metadata.namespace, pod.metadata.name, pod.metadata.uid, eligible && !namespaceImage)
-  const image = namespaceImage || (!query.error && query.data?.state === 'allowed' ? query.data.image : undefined)
-  return eligible && image ? <PodDebugAction pod={pod} defaultImage={image} /> : null
 }
 
 export function PodDebugAction({ pod, defaultImage, failedContainer }: { pod: PodDebugTarget; defaultImage: string; failedContainer?: string }) {
@@ -114,7 +107,7 @@ export function PodDebugAction({ pod, defaultImage, failedContainer }: { pod: Po
 
   if (!eligibleTargets || (!draft && !targets.length)) return null
   return <>
-    <button type="button" className="btn-secondary flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium" onClick={show}>
+    <button type="button" className={`${failedContainer ? 'btn-brand' : 'btn-secondary'} flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium`} onClick={show}>
       <Bug className="h-3.5 w-3.5" />{failedContainer ? 'Start a debug container' : 'Debug'}
     </button>
     <ActionConfirmDialog open={!!draft} title="Debug Pod" subject={{ kind: 'Pod', namespace, name }}
