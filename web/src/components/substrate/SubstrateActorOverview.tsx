@@ -1,6 +1,6 @@
 import { useId, useLayoutEffect, useRef, type ReactNode } from 'react'
 import { clsx } from 'clsx'
-import { AlertBanner, FactGrid, FactRow, FoldSection, SectionHeading, Tooltip, formatAge, toneFillClass, toneTextClass, type StatusTone } from '@skyhook-io/k8s-ui'
+import { DimensionValue, FactGrid, FactRow, FoldSection, SectionHeading, WorkspaceCard, WorkspaceProblemCallout, formatAge, toneFillClass, toneTextClass, type WorkspaceProblem } from '@skyhook-io/k8s-ui'
 import {
   substrateErrorCode,
   useSubstrateActorLogs,
@@ -10,190 +10,72 @@ import {
   type SubstrateActorLogs,
   type SubstrateLogLine,
   type SubstrateRef,
-  type SubstrateWorkerRow,
 } from '../../api/substrateWorkspace'
 import { type OpenSubject, SubjectLink } from './SubstrateAttentionList'
-import { ACTOR_STATE_LABEL, kagentRecoverStep, DISCARD_WHY, definitiveFailure, killLineLabel, killTie, logsCommand, memoryKillText, attentionBannerVariant, bytesText, cpuText, durableText, fidelityLabel, refText, resumeConditionSentence, resumeSentence, revertCommand, stateExtra, localTime, relativeTime, servingEvidence, splitReading, withoutRepeats, workerImpactTone } from './readings'
-import { ActorStateBadge, CommandChip, Term, Unread, When } from './shared'
+import { ACTOR_STATE_LABEL, kagentRecoverStep, DISCARD_WHY, definitiveFailure, killLineLabel, killTie, memoryKillText, attentionTone, bytesText, coverageReason, cpuText, fidelityLabel, refText, resumeConditionSentence, resumeSentence, resumesWithText, revertCommand, localTime, relativeTime, servingEvidence, splitReading, withoutRepeats, workerImpactTone } from './readings'
+import { CommandChip, Unread, When } from './shared'
 import { RefreshFailedNotice } from '../workspace/layout'
-
-const CARD = 'rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm'
-
-// The tones of the actor's own chip and banner for the same condition (workerImpactTone): one condition, one tone.
-const WORKER_STATE: Record<SubstrateWorkerRow['state'], { label: string; tone: StatusTone }> = {
-  active: { label: 'active', tone: 'healthy' },
-  draining: { label: 'draining', tone: workerImpactTone('draining') },
-  unavailable: { label: 'unavailable', tone: workerImpactTone('unavailable') },
-  unknown: { label: 'state unknown', tone: 'unknown' },
-}
-
-/**
- * The crash banner, visible part first: the cause, how many crashed actors
- * share its template, and one next step with its commands. Where the cause was
- * read, an earlier run's kill, what a revert keeps and drops, and Substrate's
- * own message (once the worker's log names the cause) fold under Details.
- */
-function CrashBanner({ detail, onOpenSubject }: { detail: SubstrateActorDetail; onOpenSubject?: OpenSubject }) {
-  const { actor, template, recovery } = detail
-  const at = actor.crash?.time ?? actor.updateTime
-  const message = actor.crash?.message
-  const crashedOfTemplate = template?.actors?.byState.crashed
-  // A pending upload that can still finish is worth waiting for; an abandoned one never is.
-  const pending = recovery?.discarded.filter((d) => d.why === 'uploadPending') ?? []
-  // The same read as the Overview's last lines; a memory-limit kill among them is the crash's cause.
-  const logs = useSubstrateActorLogs(actor, { tailLines: 8 })
-  const kill = logs.data?.memoryKill
-  // The evidence that ties the kill to this crash: its timing.
-  const tie = kill ? killTie(kill, actor.crash?.time) : undefined
-  // The worker's log names the cause and its remedy; without it, Substrate's own crash row says what to do.
-  const crashedRow = detail.attention.find((a) => a.rule === 'crashedActors')
-  // This actor built its template's golden snapshot, and that build failed
-  // for good: the template's row is the step. Moving or reverting the actor
-  // leaves the template's error in place, so neither is offered.
-  const goldenRow = detail.attention.find((a) => a.rule === 'goldenSnapshotFailed')
-  const step = goldenRow
-    ? { text: `This actor built ${refText(actor.template)}’s golden snapshot, and the build failed; Substrate doesn’t retry it, and reverting or moving this actor won’t either. ${goldenRow.nextStep}`, command: undefined, thenCommand: undefined }
-    : kill?.current && kill.nextStep
-    ? { text: kill.nextStep, command: kill.command, thenCommand: kill.thenCommand }
-    : crashedRow
-      ? { text: crashedRow.nextStep, command: crashedRow.command, thenCommand: crashedRow.thenCommand }
-      : recovery && actor.kagent
-        ? { text: kagentRecoverStep(actor.kagent), command: undefined }
-        : recovery
-          ? { text: 'Fix the cause in Substrate’s message, then revert the actor.', command: revertCommand(actor) }
-          : undefined
-  const substrateMessage = message ? (
-    <>
-      Substrate’s message: <span className="font-medium text-theme-text-primary">{message}</span>
-    </>
-  ) : (
-    'Substrate recorded no crash message.'
-  )
-  const details: ReactNode[] = []
-  if (kill?.current) {
-    details.push(
-      <p key="where">
-        Read from the worker’s log{kill.time && <> <When iso={kill.time} /></>}, in <span className="font-mono">{kill.pod}</span>. Radar ties it to this crash by timing: the record names this actor{tie ? `, came ${tie},` : ''} and the lines read show no restart between them.
-      </p>,
-    )
-  }
-  if (kill && !kill.current) {
-    details.push(<p key="earlier">Earlier run: a memory-limit kill was recorded{kill.time && <> <When iso={kill.time} /></>} in <span className="font-mono">{kill.pod}</span>; Radar can’t tie it to this crash.</p>)
-  }
-  // What a revert keeps and drops stays with the crash, folded: the step above already says to wait for a pending upload.
-  if (recovery && !goldenRow) details.push(<p key="recovery"><RecoveryText recovery={recovery} newest={detail.row.newestSnapshot?.generation} /></p>)
-  if (recovery && !goldenRow && recovery.discarded.length > 0) {
-    details.push(
-      <ul key="discarded" className="list-disc space-y-0.5 pl-4">
-        {recovery.discarded.map((d) => (
-          <li key={d.generation}>
-            A revert drops generation {d.generation}{d.fidelity ? ` (${fidelityLabel(d.fidelity)})` : ''}: {DISCARD_WHY[d.why] ?? d.why}.
-          </li>
-        ))}
-      </ul>,
-    )
-  }
-  if (kill?.current) details.push(<p key="message">{substrateMessage}</p>)
-  return (
-    <AlertBanner variant="error" title={`Crashed${at ? ` ${relativeTime(at)}` : ''}`} className="">
-      <div className="mt-1 break-words text-xs text-theme-text-secondary">
-        {kill?.current ? (
-          <>
-            Cause, from its worker’s log: <span className="font-medium text-theme-text-primary">{memoryKillText(kill)}</span>{tie ? `, ${tie}` : ''}.
-          </>
-        ) : (
-          substrateMessage
-        )}
-      </div>
-      {/* Holds the cause's place while the log is read, so the banner doesn't grow under the reader. */}
-      {logs.isLoading && <div className="mt-1 text-xs text-theme-text-tertiary">Reading its worker’s log for the cause…</div>}
-      {/* How many crashed actors share its template: a concentration, not a cause. */}
-      {crashedOfTemplate !== undefined && crashedOfTemplate > 1 && (
-        <div className="mt-1 text-xs font-medium text-theme-text-primary">
-          {onOpenSubject ? (
-            <button
-              type="button"
-              onClick={() => onOpenSubject({ kind: 'Actors', filter: { state: 'crashed', template: `${actor.template.atespace}/${actor.template.name}` } })}
-              className="text-left text-accent-text hover:underline"
-            >
-              {crashedOfTemplate} crashed actors use its template, this one included →
-            </button>
-          ) : (
-            <>{crashedOfTemplate} crashed actors use its template, this one included</>
-          )}
-        </div>
-      )}
-      {step && (
-        <div className="mt-1.5 break-words text-xs text-theme-text-primary">
-          <span className="font-medium">Next step: </span>
-          {step.text}
-          {pending.length > 0 && !goldenRow && <> To keep generation {pending[0].generation}, wait for its upload to finish before reverting.</>}
-          {step.command && <CommandChip command={step.command} />}
-          {step.command && step.thenCommand && <CommandChip command={step.thenCommand} />}
-        </div>
-      )}
-      {details.length > 0 && <BannerDetails>{details}</BannerDetails>}
-    </AlertBanner>
-  )
-}
-
-/** A callout's folded part: provenance, mechanics and secondary branches, under Details. */
-function BannerDetails({ children }: { children: ReactNode }) {
-  return (
-    <div className="mt-1.5">
-      <FoldSection title="Details" summary="" attention={false}>
-        <div className="space-y-1 break-words text-xs text-theme-text-secondary">{children}</div>
-      </FoldSection>
-    </div>
-  )
-}
 
 const WORKER_RULES = new Set<SubstrateAttention['rule']>(['workerUnavailable', 'workerDraining', 'workerRestarting'])
 
-// The tone of the actor's chip for the same condition: a lost sandbox is lost, an unavailable worker puts it at risk.
-const IMPACT_VARIANT: Record<NonNullable<SubstrateActorDetail['workerImpact']>['kind'], 'error' | 'alert' | 'warning'> = {
-  restarted: 'error',
-  unavailable: 'alert',
-  draining: 'warning',
+function crashPlan(detail: SubstrateActorDetail, kill?: SubstrateActorLogs['memoryKill']) {
+  const { actor, recovery } = detail
+  if (actor.kagent) return { text: kagentRecoverStep(actor.kagent) }
+  const golden = detail.attention.find((a) => a.rule === 'goldenSnapshotFailed')
+  if (golden) return { text: `This actor built ${refText(actor.template)}’s golden snapshot. ${golden.nextStep}` }
+  const crash = detail.attention.find((a) => a.rule === 'crashedActors')
+  const remedy = kill?.current && kill.nextStep ? kill : crash
+  if (remedy) return { text: remedy.nextStep, command: remedy.command, thenCommand: 'thenCommand' in remedy ? remedy.thenCommand : undefined }
+  return recovery ? { text: 'Fix the crash cause, then revert the actor.', command: revertCommand(actor) } : undefined
 }
 
-const IMPACT_TITLE: Record<NonNullable<SubstrateActorDetail['workerImpact']>['kind'], string> = {
-  unavailable: 'Its worker is unavailable',
-  draining: 'Its worker is draining: Substrate crashes it when the Pod is gone',
-  restarted: 'Its worker restarted under it: its sandbox is gone',
-}
-
-/**
- * What the worker's trouble means for this actor, first, before the worker's
- * own row. Visible: the cause, the state Substrate records beside the time of
- * its newest output (a past line, not proof it runs now), the deadline, and
- * the next step. The mechanics fold under Details.
- */
-function WorkerImpactBanner({ actor, impact }: { actor: SubstrateActorDetail['actor']; impact: NonNullable<SubstrateActorDetail['workerImpact']> }) {
-  // The same read as the Overview's last lines: the actor's own output is the evidence it may still run.
-  const logs = useSubstrateActorLogs(actor, { tailLines: 8 })
-  const evidence = impact.kind === 'restarted' ? undefined : servingEvidence(logs.data?.lines)
-  // The title names a draining or restarted worker; only an unavailable one's cause needs its first sentence.
-  const [cause, rest] = impact.kind === 'unavailable' ? splitReading(impact.reading) : [undefined, impact.reading]
-  const recorded = `Recorded as ${(ACTOR_STATE_LABEL[actor.state] ?? actor.state).toLowerCase()}`
-  return (
-    <AlertBanner variant={IMPACT_VARIANT[impact.kind]} title={IMPACT_TITLE[impact.kind]} className="">
-      <div className="mt-1 break-words text-xs text-theme-text-secondary">
-        {cause && <>{cause} </>}
-        {recorded}
-        {!evidence && '.'}
-        {evidence?.at && <>; its last log line was <When iso={evidence.at} />{evidence.recent ? '.' : ', so it may not be serving.'}</>}
-        {evidence && !evidence.at && <>; Radar found no output from it in the worker’s log, so it may not be serving.</>}
-      </div>
-      {impact.deadline && <div className="mt-1 text-xs text-theme-text-secondary">Its Pod is due to be gone <When iso={impact.deadline} />.</div>}
-      <div className="mt-1 break-words text-xs text-theme-text-primary">
-        <span className="font-medium">Next step: </span>
-        {impact.nextStep}
-        {impact.command && <CommandChip command={impact.command} />}
-      </div>
-      {rest && <BannerDetails><p>{rest}</p></BannerDetails>}
-    </AlertBanner>
-  )
+function actorProblem(detail: SubstrateActorDetail, logs?: SubstrateActorLogs): { problem: WorkspaceProblem; additional: SubstrateAttention[] } | undefined {
+  const { actor, workerImpact } = detail
+  const subject = { kind: 'Actor', group: '', namespace: actor.atespace, name: actor.name }
+  const origin = { label: 'Substrate API' }
+  const base = { source: 'reading' as const, subject, origin }
+  const additional = detail.attention.filter((a) => !WORKER_RULES.has(a.rule) && a.rule !== 'crashedActors' && !(actor.state === 'crashed' && a.rule === 'goldenSnapshotFailed'))
+  if (actor.state === 'crashed') {
+    const kill = logs?.memoryKill
+    const tie = kill && killTie(kill, actor.crash?.time)
+    const at = actor.crash?.time ?? actor.updateTime
+    const message = actor.crash?.message
+    return { additional, problem: {
+      ...base, id: 'crash', category: 'crash', tone: 'unhealthy',
+      title: at ? `Actor crashed ${relativeTime(at)}` : 'Actor crashed',
+      detail: kill?.current ? `Cause, from its worker’s log: ${memoryKillText(kill)}${tie ? `, ${tie}` : ''}.` : message ? `Substrate’s message: ${splitReading(message)[0]}` : 'Substrate recorded no crash message.',
+      rawDetail: kill?.current ? [`Read from the worker’s log in ${kill.pod}. Radar ties it to this crash by timing: the record names this actor${tie ? `, came ${tie},` : ''} and the lines read show no restart between them.`, message].filter(Boolean).join(' ')
+        : [message && splitReading(message)[1], kill && `Earlier run: a memory-limit kill was recorded in ${kill.pod}. Radar can’t tie it to this crash.`].filter(Boolean).join(' ') || undefined,
+      rawDetailLabel: 'Details',
+      origin: kill?.current ? { label: 'Worker Pod logs' } : origin,
+      nextStep: actor.kagent ? kagentRecoverStep(actor.kagent)
+        : detail.attention.some((a) => a.rule === 'goldenSnapshotFailed') ? 'Recreate the template to build a new golden snapshot.'
+        : 'Review the recovery steps before changing this actor.',
+    } }
+  }
+  if (workerImpact) {
+    const title = { unavailable: 'Worker unavailable', draining: 'Worker draining', restarted: 'Worker restarted and sandbox was lost' }[workerImpact.kind]
+    const [lead, rest] = splitReading(workerImpact.reading)
+    const evidence = workerImpact.kind === 'restarted' ? undefined : servingEvidence(logs?.lines)
+    return { additional, problem: {
+      ...base, id: 'worker', category: 'worker', tone: workerImpactTone(workerImpact.kind) as WorkspaceProblem['tone'], title,
+      detail: [lead, `Recorded as ${ACTOR_STATE_LABEL[actor.state].toLowerCase()}` + (evidence?.at
+        ? `; its last log line was ${relativeTime(evidence.at)}${evidence.recent ? '.' : ', so it may not be serving.'}`
+        : evidence ? '; Radar found no output from it in the worker’s log, so it may not be serving.' : '.'),
+        workerImpact.deadline && `The Pod is due to be gone ${relativeTime(workerImpact.deadline)}.`].filter(Boolean).join(' '),
+      rawDetail: rest, rawDetailLabel: 'Details',
+      nextStep: actor.kagent ? kagentRecoverStep(actor.kagent) : workerImpact.nextStep,
+    } }
+  }
+  const [first, ...rest] = additional
+  if (!first) return undefined
+  const { title, message } = actorAttentionText(first, detail)
+  const nextStep = actor.kagent ? kagentRecoverStep(actor.kagent) : first.nextStep
+  const distinct = withoutRepeats(message, nextStep)
+  const [lead, rawDetail] = distinct ? splitReading(distinct) : []
+  return { additional: rest, problem: {
+    ...base, id: first.id, category: first.rule, tone: attentionTone(first), title, detail: lead, rawDetail, rawDetailLabel: 'Details', nextStep,
+  } }
 }
 
 /** What a revert leaves: the newest stored generation, or nothing. */
@@ -236,27 +118,6 @@ export function actorAttentionText(row: SubstrateAttention, detail: SubstrateAct
   return { title: row.title, message: row.reading }
 }
 
-function AttentionBanner({ row, detail }: { row: SubstrateAttention; detail: SubstrateActorDetail }) {
-  const text = actorAttentionText(row, detail)
-  const message = withoutRepeats(text.message, row.nextStep)
-  // The first sentence stays in view, whole; the rest waits under Details.
-  const [lead, rest] = message ? splitReading(message) : [undefined, undefined]
-  return (
-    <AlertBanner variant={attentionBannerVariant(row)} title={text.title} message={lead} className="">
-      <div className="mt-1 break-words text-xs text-theme-text-primary">
-        <span className="font-medium">Next step: </span>
-        {row.nextStep}
-        {row.command && <CommandChip command={row.command} />}
-        {row.command && row.thenCommand && <CommandChip command={row.thenCommand} />}
-      </div>
-      {rest && <BannerDetails><p>{rest}</p></BannerDetails>}
-    </AlertBanner>
-  )
-}
-
-// Substrate's egress gateway refuses every outbound connection of an actor
-// with no policy, or with one that has no rules, and its DNS relay answers
-// NXDOMAIN for it: no policy is a deny, not an open door.
 const EGRESS_DENIED = 'so Substrate denies all outbound traffic'
 
 export function egressText(e: SubstrateEgress): { text: ReactNode; tone: 'neutral' | 'unknown' } {
@@ -269,106 +130,43 @@ export function egressText(e: SubstrateEgress): { text: ReactNode; tone: 'neutra
     case 'none':
       return { text: `No egress policy, ${EGRESS_DENIED}`, tone: 'neutral' }
     case 'denied':
-      return { text: `Substrate denied reading it${e.message ? `: ${e.message}` : ''}`, tone: 'unknown' }
+      return { text: `Substrate denied permission to read this actor’s egress policy${e.message ? `: ${e.message}` : ''}`, tone: 'unknown' }
     default:
       return { text: `Couldn’t be read${e.message ? `: ${e.message}` : ''}`, tone: 'unknown' }
   }
 }
 
-function AtAGlance({ detail, onOpenSubject }: { detail: SubstrateActorDetail; onOpenSubject?: OpenSubject }) {
-  const { actor, row, template, worker } = detail
-  const as = actor.assignment
-  const snap = row.newestSnapshot
-  const egress = egressText(detail.egress)
-  // Two columns where the card is wide: where it runs on the left, what it resumes from and holds on the right.
+function ActorAbout({ detail, onOpenSubject }: { detail: SubstrateActorDetail; onOpenSubject?: OpenSubject }) {
+  const { actor, template } = detail
   return (
-    <div className="@container">
-      <div className="grid gap-x-8 gap-y-2 @3xl:grid-cols-2">
-        <FactGrid>
-          <FactRow label="State">
-            <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5">
-              <ActorStateBadge state={actor.state} impact={detail.workerImpact} updateTime={actor.updateTime} />
-              {actor.updateTime && (
-                <span className="text-theme-text-secondary"><When iso={actor.updateTime} prefix="for at least" held hint="Substrate records no transition time; its last change to the actor is a lower bound:" /></span>
-              )}
-            </span>
-            {/* A held duration is already in "for at least"; only other facts (a pending upload) add a line. */}
-            {actor.state !== 'crashed' && stateExtra(actor.state, row.reason) && !stateExtra(actor.state, row.reason)!.startsWith('for ') && (
-              <div className="text-xs text-theme-text-secondary">{stateExtra(actor.state, row.reason)}</div>
-            )}
-          </FactRow>
-          <FactRow label={<Term term="template">Template</Term>}>
-            <SubjectLink subject={{ kind: 'ActorTemplate', atespace: actor.template.atespace, name: actor.template.name }} onOpen={onOpenSubject} withKind={false} />
-            {template && (template.cpuMillicores || template.memoryBytes) ? (
-              <div className="text-xs text-theme-text-secondary">
-                {[template.cpuMillicores ? `${cpuText(template.cpuMillicores)} CPU` : null, template.memoryBytes ? bytesText(template.memoryBytes) : null].filter(Boolean).join(', ')} per actor
-              </div>
-            ) : null}
-          </FactRow>
-          <FactRow label={<Term term="worker">Worker</Term>}>
-            {as ? (
-              <>
-                <SubjectLink subject={{ kind: 'Pod', namespace: as.namespace, name: as.pod }} label={as.pod} onOpen={onOpenSubject} withKind={false} />
-                {worker ? (
-                  <span className={clsx('ml-1.5', toneTextClass(WORKER_STATE[worker.state].tone))}>{WORKER_STATE[worker.state].label}</span>
-                ) : (
-                  <Unread title="Substrate’s workers were not read."> · state unknown</Unread>
-                )}
-              </>
-            ) : (
-              <span className="text-theme-text-secondary">none while {ACTOR_STATE_LABEL[actor.state].toLowerCase()}</span>
-            )}
-          </FactRow>
-          <FactRow label={<Term term="pool">Pool</Term>}>
-            {as ? (
-              <>
-                <SubjectLink subject={{ kind: 'WorkerPool', namespace: as.namespace, name: as.pool }} label={as.pool} onOpen={onOpenSubject} withKind={false} />
-                <span className="text-theme-text-secondary"> · namespace <span className="whitespace-nowrap">{as.namespace}</span></span>
-                {(as.sandboxClass || snap?.sandboxClass) && <div className="text-xs text-theme-text-secondary">sandbox class <span className="font-mono">{as.sandboxClass ?? snap?.sandboxClass}</span></div>}
-              </>
-            ) : snap?.sandboxClass ? (
-              <span className="text-theme-text-secondary">none now · last ran under sandbox class <span className="font-mono">{snap.sandboxClass}</span></span>
-            ) : (
-              <span className="text-theme-text-secondary">none now</span>
-            )}
-          </FactRow>
-          <FactRow label="Node">
-            {row.node ? (
-              <>
-                <SubjectLink subject={{ kind: 'Node', name: row.node }} onOpen={onOpenSubject} withKind={false} />
-                {!as && <div className="text-xs text-theme-text-secondary">where it was last, or where its snapshot is</div>}
-              </>
-            ) : (
-              <Unread>Substrate names none</Unread>
-            )}
-          </FactRow>
-        </FactGrid>
-        <FactGrid>
-          <FactRow label={<Term term="snapshot">Newest snapshot</Term>}>
-            {snap ? (
-              <>
-                <span>generation {snap.generation} · {fidelityLabel(snap.fidelity)} · </span>
-                <Tooltip content={durableText(snap).title}>
-                  <span className={durableText(snap).tone === 'healthy' ? undefined : toneTextClass(durableText(snap).tone)}>{durableText(snap).text}</span>
-                </Tooltip>
-                <div className="text-xs text-theme-text-secondary">{resumeSentence(row)}</div>
-              </>
-            ) : (
-              <span className="text-theme-text-secondary">None yet, so it boots fresh when it resumes</span>
-            )}
-          </FactRow>
-          <FactRow label="Seeded from">
-            {actor.sourceTag ? <span className="font-mono">{refText(actor.sourceTag)}</span> : <span className="text-theme-text-secondary">its template, not a tag</span>}
-          </FactRow>
-          <FactRow label="Egress">
-            <span className={egress.tone === 'unknown' ? 'text-theme-text-tertiary' : undefined}>{egress.text}</span>
-          </FactRow>
-          <FactRow label="Created">
-            {actor.createTime ? <When iso={actor.createTime} /> : <Unread>unknown</Unread>}
-          </FactRow>
-        </FactGrid>
-      </div>
-    </div>
+    <FactGrid>
+      <FactRow label="Template">
+        <SubjectLink subject={{ kind: 'ActorTemplate', ...actor.template }} onOpen={onOpenSubject} withKind={false} />
+        {template && <div className="text-xs text-theme-text-tertiary">
+          {template.cpuMillicores !== undefined ? `${cpuText(template.cpuMillicores)} CPU` : 'CPU unreported'} · {template.memoryBytes !== undefined ? bytesText(template.memoryBytes) : 'memory unreported'} per actor
+        </div>}
+      </FactRow>
+      <FactRow label="Sandbox class">{actor.assignment?.sandboxClass ?? detail.row.newestSnapshot?.sandboxClass ?? <Unread>Unknown</Unread>}</FactRow>
+      <FactRow label="Seeded from">{actor.sourceTag ? <span className="font-mono">{refText(actor.sourceTag)}</span> : 'Template'}</FactRow>
+      <FactRow label="Created">{actor.createTime ? <When iso={actor.createTime} /> : <Unread>Unknown</Unread>}</FactRow>
+    </FactGrid>
+  )
+}
+
+function ActorPlacement({ detail, onOpenSubject }: { detail: SubstrateActorDetail; onOpenSubject?: OpenSubject }) {
+  const { actor, row, worker } = detail
+  const as = actor.assignment
+  const node = row.node ? <SubjectLink subject={{ kind: 'Node', name: row.node }} onOpen={onOpenSubject} withKind={false} /> : undefined
+  const pool = as?.pool ? <SubjectLink subject={{ kind: 'WorkerPool', namespace: as.namespace, name: as.pool }} label={as.pool} onOpen={onOpenSubject} withKind={false} /> : undefined
+  return (
+    <DimensionValue tone={detail.workerImpact ? workerImpactTone(detail.workerImpact.kind) : worker?.state === 'active' ? 'healthy' : as ? 'unknown' : 'neutral'}
+      source={as ? <>Substrate assignment · namespace {as.namespace} · {worker ? `worker ${worker.state}` : 'worker state unknown'}
+        {!worker && coverageReason(detail.coverage.workers, 'workers') && ` · ${coverageReason(detail.coverage.workers, 'workers')}`}
+        {pool && <> · Pool {pool}</>}{node && <> · Node {node}</>}</>
+        : <>No worker assignment in Substrate{node && <> · Last known node {node}</>}</>}>
+      {as ? <SubjectLink subject={{ kind: 'Pod', namespace: as.namespace, name: as.pod }} label={as.pod} onOpen={onOpenSubject} withKind={false} />
+        : actor.state === 'crashed' ? 'Unassigned while crashed' : 'Unassigned'}
+    </DimensionValue>
   )
 }
 
@@ -434,12 +232,16 @@ export function LogHandoff({ actor }: { actor: SubstrateActorDetail['actor'] }) 
     <div className="space-y-1.5 text-sm text-theme-text-secondary">
       <p className="text-xs">To find its lines in your log backend, search for its attributes{crashed ? <> around <span className="font-mono">{localTime(actor.crash!.time!)}</span> (local time)</> : ''}:</p>
       <CommandChip command={actorLogQuery(actor)} />
-      <p className="text-xs">kubectl ate reads only the current worker; it shows lines once the actor runs again:</p>
-      <CommandChip command={logsCommand(actor)} />
+
     </div>
   )
 }
 
+
+export function workerLogsAvailable(logs: SubstrateActorLogs): boolean {
+  return logs.reasonCode === 'candidates' || logs.reasonCode === 'noMatch' ||
+    (logs.origin === 'worker' && logs.reasonCode === undefined)
+}
 
 /** What a log read could not give, in product terms, from the server's reason code. */
 function logGap(logs: SubstrateActorLogs, actor: SubstrateActorDetail['actor']): string {
@@ -453,7 +255,7 @@ function logGap(logs: SubstrateActorLogs, actor: SubstrateActorDetail['actor']):
     case 'noWorkerPods':
       return `No worker Pod runs on ${node} now: the one it ran in is gone, and its lines with it.`
     case 'denied':
-      return `You may not read the logs of the worker Pods on ${node}.`
+      return `Reading the worker Pod logs on ${node} requires get on pods/log in the worker namespaces.`
     case 'podsNotCollected':
       return `Radar doesn’t hold Pods in every namespace, so it can’t search the worker Pods on ${node}.`
     case 'noMatch':
@@ -478,7 +280,7 @@ export function ActorLogsBody({ actor, logs, compact, killNoticeAbove }: { actor
   const stale = data && logs.isRefetchError ? <RefreshFailedNotice queries={[{ isRefetchError: true, error: logs.error instanceof Error ? logs.error : null, dataUpdatedAt: logs.dataUpdatedAt ?? 0 }]} /> : null
   if (logs.isLoading) return <p className="text-sm text-theme-text-tertiary">Reading the worker Pod’s log…</p>
   if (logs.error && !data) return <p className="text-sm text-theme-text-tertiary">Radar couldn’t read the log: {logs.error instanceof Error ? logs.error.message : 'unknown error'}.</p>
-  if (!data) return null
+  if (!data) return <p className="text-sm text-theme-text-tertiary">Worker logs have not been read.</p>
   const crashedAt = actor.state === 'crashed' ? actor.crash?.time : undefined
   if (data.lines.length > 0) {
     const pods = [...new Set(data.lines.map((l) => l.pod))]
@@ -518,8 +320,11 @@ export function ActorLogsBody({ actor, logs, compact, killNoticeAbove }: { actor
       </div>
     )
   }
-  if (data.origin === 'worker' && !data.reasonCode) {
-    return <div className="space-y-1.5">{stale}<p className="text-sm text-theme-text-tertiary">No lines for this actor in its current worker Pod’s log{data.windowFull ? ' within the part Radar scanned' : ''}.</p></div>
+  if (data.reasonCode === 'noMatch' || (data.origin === 'worker' && !data.reasonCode)) {
+    return <div className="space-y-1.5">{stale}
+      <p className="text-sm text-theme-text-secondary">No matching log lines.</p>
+      {data.windowFull && <p className="text-xs text-theme-text-tertiary">Radar scanned the newest lines. Older lines may exist outside that window.</p>}
+    </div>
   }
   return (
     <div className="space-y-1.5">
@@ -543,60 +348,118 @@ export function ActorLogsBody({ actor, logs, compact, killNoticeAbove }: { actor
   )
 }
 
-function LastLines({ actor, onShowAll }: { actor: SubstrateActorDetail['actor']; onShowAll?: () => void }) {
-  const logs = useSubstrateActorLogs(actor, { tailLines: 8 })
-  const fromWorker = logs.data?.origin === 'worker'
-  return (
-    <section>
-      <SectionHeading hint={onShowAll && <button type="button" onClick={onShowAll} className="text-accent-text hover:underline">All logs →</button>}>
-        {fromWorker ? 'Last lines from its current worker' : 'Last lines'}
-      </SectionHeading>
-      <ActorLogsBody actor={actor} logs={logs} compact />
-    </section>
-  )
-}
-
-/**
- * An actor's Overview, on its page and in the drawer: what is wrong first
- * (Substrate's crash message, or Radar's reading), then the facts, its last
- * log lines and what it relates to.
- */
 export function SubstrateActorOverview({
   detail,
   onOpenSubject,
   onShowLogs,
+  onShowSnapshots,
+  onShowEgress,
+  framed = true,
+  actions,
 }: {
   detail: SubstrateActorDetail
   onOpenSubject?: OpenSubject
-  /** Opens the Logs tab, or the page at it from the drawer. */
   onShowLogs?: () => void
+  onShowSnapshots?: () => void
+  onShowEgress?: () => void
+  framed?: boolean
+  actions?: ReactNode
 }) {
-  // A crashed golden-build actor's crash banner carries its template's row.
-  const others = detail.attention.filter((a) => a.rule !== 'crashedActors' && !(a.rule === 'goldenSnapshotFailed' && detail.actor.state === 'crashed'))
+  const { actor, row, recovery } = detail
+  const logs = useSubstrateActorLogs(actor, { tailLines: 8 })
+  const assessment = actorProblem(detail, logs.data)
+  const plan = actor.state === 'crashed' ? crashPlan(detail, logs.data?.memoryKill) : undefined
+  const otherRemedy = detail.workerImpact ?? detail.attention.find((a) => a.id === assessment?.problem.id)
+  const command = actor.kagent ? undefined : plan ? plan.command : otherRemedy?.command
+  const then = actor.kagent ? undefined : plan ? plan.thenCommand : otherRemedy && 'thenCommand' in otherRemedy ? otherRemedy.thenCommand : undefined
+  const egress = egressText(detail.egress)
+  const matchingLines = logs.data?.lines.length ?? 0
+  const logsUnavailable = logs.data && !workerLogsAvailable(logs.data)
+  const logValue = logs.isLoading ? 'Reading worker logs…'
+    : logsUnavailable ? 'Worker logs unavailable'
+    : logs.error ? 'Worker logs couldn’t be read'
+    : !logs.data ? 'Worker logs not read'
+    : matchingLines > 0 ? `${matchingLines} recent ${matchingLines === 1 ? 'line' : 'lines'} read`
+    : 'No matches in the recent log window'
+  const recoveryText = row.resumeGeneration === undefined ? 'Fresh boot'
+    : `Generation ${row.resumeGeneration} · ${row.resumeCondition === 'compatibleRuntime' ? 'memory if compatible' : resumesWithText(row.resumesWith)}`
+  const Frame = framed ? WorkspaceCard : FlatActorSection
+  const discarded = recovery?.discarded ?? []
+  const recommended = plan?.text ?? otherRemedy?.nextStep
+  const golden = detail.attention.some((a) => a.rule === 'goldenSnapshotFailed')
+  const pending = discarded.find((d) => d.why === 'uploadPending')
+  const crashCount = detail.template?.actors?.byState.crashed
+  const crashesPartial = detail.coverage.actors.state !== 'full'
   return (
     <div className="space-y-4">
-      {detail.actor.state === 'crashed' && <CrashBanner detail={detail} onOpenSubject={onOpenSubject} />}
-      {detail.workerImpact && <WorkerImpactBanner actor={detail.actor} impact={detail.workerImpact} />}
-      {others.filter((a) => !(detail.workerImpact && WORKER_RULES.has(a.rule))).map((a) => <AttentionBanner key={a.id} row={a} detail={detail} />)}
-      <section className={CARD}>
-        <SectionHeading>At a glance</SectionHeading>
-        <AtAGlance detail={detail} onOpenSubject={onOpenSubject} />
-      </section>
-      <section className={CARD}>
-        <LastLines actor={detail.actor} onShowAll={onShowLogs} />
-      </section>
-      {detail.related.length > 0 && (
-        <section className={CARD}>
-          <SectionHeading>Related</SectionHeading>
-          <ul className="space-y-1 text-sm">
-            {detail.related.map((s) => (
-              <li key={`${s.kind}/${s.namespace ?? s.atespace ?? ''}/${s.name}`} className="text-theme-text-tertiary">
-                <SubjectLink subject={s} onOpen={onOpenSubject} />
-              </li>
-            ))}
-          </ul>
-        </section>
+      {assessment && (
+        <WorkspaceProblemCallout problem={assessment.problem} rootKind="Actor" subjectIsSelf
+          action={actor.state === 'crashed' && !!crashCount && crashCount > 1 && onOpenSubject && (
+            <button type="button" className="text-accent-text hover:underline" onClick={() => onOpenSubject({ kind: 'Actors', filter: { state: 'crashed', template: `${actor.template.atespace}/${actor.template.name}` } })}>
+              {crashesPartial ? '≥' : ''}{crashCount} reported crashed on this template →
+            </button>
+          )}
+          more={assessment.additional.length > 0 && (
+            <FoldSection title={`+${assessment.additional.length} more`} summary="" attention={false}>
+              <ul className="space-y-1 text-xs text-theme-text-secondary">
+                {assessment.additional.map((a) => <li key={a.id}>{actorAttentionText(a, detail).title}</li>)}
+              </ul>
+            </FoldSection>
+          )} />
       )}
+      {actions}
+      <Frame title="At a glance">
+        <FactGrid>
+          <FactRow label="Recovery">
+            <DimensionValue tone={row.resumesWith === 'unknown' ? 'unknown' : 'neutral'}
+              source={actor.kagent ? 'Recovery is managed by kagent' : <>Current template · {resumeSentence(row)}</>} linkLabel="Snapshots" onOpen={onShowSnapshots}>
+              {actor.kagent ? 'Recover through kagent' : recoveryText}
+            </DimensionValue>
+            {actor.state === 'crashed' && recommended && !actor.kagent && <p className="mt-1 text-xs text-theme-text-secondary"><span className="font-medium">Recommended</span> · {recommended}</p>}
+            {(command || (recovery && !actor.kagent && !golden)) && (
+              <div className="mt-2">
+                <FoldSection title="Recovery steps" summary="" attention={false}>
+                  <div className="space-y-1.5 text-xs text-theme-text-secondary">
+                    <p>Target actor <span className="font-mono">{refText(actor)}</span>.</p>
+                    {recovery && !actor.kagent && !golden && (
+                      <>
+                        <p><RecoveryText recovery={recovery} newest={row.newestSnapshot?.generation} /></p>
+                        {pending && <p>To keep generation {pending.generation}, wait for its upload to finish before reverting.</p>}
+                        {discarded.length > 0 && <ul className="list-disc pl-4">
+                          {discarded.map((d) => <li key={d.generation}>A revert drops generation {d.generation}{d.fidelity ? ` (${fidelityLabel(d.fidelity)})` : ''}: {DISCARD_WHY[d.why] ?? d.why}.</li>)}
+                        </ul>}
+                      </>
+                    )}
+                    {command && <CommandChip command={command} />}
+                    {command && then && <CommandChip command={then} />}
+                  </div>
+                </FoldSection>
+              </div>
+            )}
+          </FactRow>
+          <FactRow label="Placement"><ActorPlacement detail={detail} onOpenSubject={onOpenSubject} /></FactRow>
+          <FactRow label="Recent logs">
+            <DimensionValue tone={!logs.data || logsUnavailable || logs.error ? 'unknown' : 'neutral'} source={logsUnavailable ? logGap(logs.data!, actor) : "Actor-filtered records from Kubernetes worker Pods"} linkLabel="Logs" onOpen={onShowLogs}>
+              {logValue}
+            </DimensionValue>
+            {matchingLines > 0 && (
+              <div className="mt-2">
+                <FoldSection title="Recent lines" summary="" attention={false}><ActorLogsBody actor={actor} logs={logs} compact /></FoldSection>
+              </div>
+            )}
+          </FactRow>
+          <FactRow label="Outbound policy">
+            <DimensionValue tone={egress.tone} source={detail.egress.state === 'none' || (detail.egress.state === 'set' && detail.egress.rules === 0) ? egress.text : 'Actor egress policy from Substrate'} linkLabel="Egress" onOpen={onShowEgress}>
+              {detail.egress.state === 'none' || (detail.egress.state === 'set' && detail.egress.rules === 0) ? 'Default deny' : egress.text}
+            </DimensionValue>
+          </FactRow>
+        </FactGrid>
+      </Frame>
+      <Frame title="About"><ActorAbout detail={detail} onOpenSubject={onOpenSubject} /></Frame>
     </div>
   )
+}
+
+function FlatActorSection({ title, children }: { title: string; children: ReactNode }) {
+  return <section className="border-t-subtle pt-3"><SectionHeading>{title}</SectionHeading>{children}</section>
 }

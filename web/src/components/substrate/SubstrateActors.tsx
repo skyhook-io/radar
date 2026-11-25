@@ -1,7 +1,9 @@
+import { ChevronRight, SlidersHorizontal } from 'lucide-react'
+import { SubstrateStateBar } from './SubstrateStateBar'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { useSearchParams } from 'react-router-dom'
-import { Input, SelectMenu, Tooltip, toneTextClass, type SelectMenuOption } from '@skyhook-io/k8s-ui'
+import { Collapse, Input, SelectMenu, Tooltip, TruncatedText, WorkspaceCard, toneTextClass, useDisclosure, type SelectMenuOption } from '@skyhook-io/k8s-ui'
 import {
   useSubstrateActors,
   useSubstrateTemplates,
@@ -19,7 +21,6 @@ import { FilterChips, Notice, RefreshFailedNotice, ScreenBody, Segments, Section
 import {
   ACTOR_SEGMENTS,
   ACTOR_STATE_LABEL,
-  IN_PROGRESS_STATES,
   coverageInPart,
   coverageReason,
   durableText,
@@ -32,8 +33,7 @@ import {
   type ActorSegment,
 } from './readings'
 import { SubstrateConnectNotice, SubstrateTierBanner } from './SubstrateConnect'
-import { actorAttentionParts, substrateScreenCounts } from './attention'
-import { ActorStateBadge, Name, SUBSTRATE_WIDE, SubstrateHeader, SubstrateSourceLine, Term, Unread, When, WholeNames } from './shared'
+import { ActorStateBadge, SUBSTRATE_WIDE, SubstrateHeader, SubstrateSourceLine, Unread, When } from './shared'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
 
 export const ACTORS_PAGE_SIZE = 50
@@ -41,7 +41,7 @@ export const ACTORS_PAGE_SIZE = 50
 export type ActorSort = 'attention' | 'updated' | 'name'
 
 const SORT_OPTIONS = [
-  { value: 'attention', label: 'Needs attention first', description: 'Crashed, then stuck in a transition, then newest change' },
+  { value: 'attention', label: 'Needs attention first', description: 'Crashed, then worker disruptions and stuck transitions' },
   { value: 'updated', label: 'Newest change first' },
   { value: 'name', label: 'By name' },
 ]
@@ -64,7 +64,6 @@ export function sourcesNote(sources: ('snapshot' | 'atespace' | 'actor')[]): str
 }
 
 /** The URL filters that narrow the Actors list to a subset; the state segment and sort are not among them. */
-const SCOPING_PARAMS = ['atespace', 'template', 'pool', 'q', 'worker', 'impact', 'node', 'nodeHas'] as const
 
 /** An actor as the workspace tables' row identity. Actors are not Kubernetes objects; the drawer this opens is Substrate's own. */
 export const ACTOR_ROW_KIND = 'SubstrateActor'
@@ -76,7 +75,7 @@ export function actorRowResource(ref: SubstrateRef): SelectedResource {
 /** The states a segment asks /actors for; undefined for every state. */
 export function segmentStates(segment: ActorSegment, linked: string | null): SubstrateActorState[] | undefined {
   // A link to one transitional state ("Resuming 6") keeps that state inside the In progress segment.
-  if (segment === 'inProgress' && linked && (IN_PROGRESS_STATES as readonly string[]).includes(linked)) return [linked as SubstrateActorState]
+  if (linked && linked in ACTOR_STATE_LABEL) return [linked as SubstrateActorState]
   const states = ACTOR_SEGMENTS.find((s) => s.id === segment)!.states
   return states.length ? [...states] : undefined
 }
@@ -149,7 +148,7 @@ function StateCell({ row }: { row: SubstrateActorRow }) {
   const place = 'min-w-[8rem] flex-1 pt-0.5'
   return (
     <span className="flex min-w-0 flex-wrap items-start gap-x-1.5 gap-y-0.5">
-      <span className="shrink-0"><ActorStateBadge state={row.state} impact={row.workerImpact} updateTime={row.updateTime} /></span>
+      <span className="shrink-0 basis-full"><ActorStateBadge state={row.state} impact={row.workerImpact} updateTime={row.updateTime} /></span>
       {line && (hover ? <Tooltip content={hover} wrapperClassName={place}>{line}</Tooltip> : <span className={place}>{line}</span>)}
     </span>
   )
@@ -157,14 +156,14 @@ function StateCell({ row }: { row: SubstrateActorRow }) {
 
 function WorkerCell({ row }: { row: SubstrateActorRow }) {
   if (row.worker) {
-    return <Line title={row.node ? `${row.worker.pod}, on node ${row.node}` : row.worker.pod} className="font-mono text-[11.5px]">{row.worker.pod}</Line>
+    return <><Line title={row.worker.pod} className="font-mono text-[11.5px]">{row.worker.pod}</Line><Sub>Assigned worker</Sub></>
   }
   if (!row.node) return <span className="text-theme-text-tertiary">none</span>
   // A node's DNS suffix is the same on every row; the hover has it whole.
   return (
-    <Line title={`No worker now. It last ran on node ${row.node}, or its snapshot is there.`} className="font-mono text-[12.5px] text-theme-text-tertiary">
+    <><Line title={`No worker now. It last ran on node ${row.node}, or its snapshot is there.`} className="font-mono text-[12.5px] text-theme-text-tertiary">
       {row.node.split('.')[0]}
-    </Line>
+    </Line><Sub>Last known node</Sub></>
   )
 }
 
@@ -174,33 +173,26 @@ function WorkerCell({ row }: { row: SubstrateActorRow }) {
  * whole: the atespace rides beside the name rather than in a column of its
  * own. Narrow folds the atespace and template under the name.
  */
-function actorColumns(wide: boolean): TableColumn<SubstrateActorRow>[] {
+function actorColumns(wide: boolean, onOpen: (ref: SubstrateRef) => void): TableColumn<SubstrateActorRow>[] {
   return [
     {
       header: 'Actor',
-      width: wide ? '16%' : '27%',
+      width: wide ? '15%' : '26%',
       cell: (r) => (
-        wide ? (
-          <span className="flex min-w-0 flex-wrap items-baseline gap-x-1">
-            <Name name={r.name} className="text-[12.5px]" />
-            <span className="text-[11.5px] text-theme-text-tertiary"><WholeNames text={r.atespace} /></span>
-          </span>
-        ) : (
-          <>
-            <Name name={r.name} className="text-[12.5px]" />
-            <Sub><WholeNames text={`${r.atespace} · ${r.template.name}`} /></Sub>
-          </>
-        )
+        <>
+          <TruncatedText text={r.name} className="font-mono text-xs font-medium" />
+          <Sub>{r.atespace}{!wide && <> · {r.template.name}</>}</Sub>
+        </>
       ),
     },
-    { header: 'State', width: wide ? '26%' : '30%', cell: (r) => <StateCell row={r} /> },
-    ...(wide ? [{ header: 'Template', width: '18%', cell: (r: SubstrateActorRow) => <Line title={r.template.name} className="font-mono text-[12px]">{r.template.name}</Line> }] : []),
-    { header: 'Worker or last node', width: wide ? '17%' : '21%', cell: (r) => <WorkerCell row={r} /> },
-    { header: 'Newest snapshot', width: wide ? '14%' : '22%', cell: (r) => <SnapshotCell row={r} /> },
+    { header: 'State', width: wide ? '24%' : '29%', cell: (r) => <StateCell row={r} /> },
+    ...(wide ? [{ header: 'Template', width: '16%', cell: (r: SubstrateActorRow) => <Line title={r.template.name} className="font-mono text-[12px]">{r.template.name}</Line> }] : []),
+    { header: 'Worker or last node', width: wide ? '14%' : '20%', cell: (r) => <WorkerCell row={r} /> },
+    { header: 'Newest snapshot', width: wide ? '15%' : '21%', cell: (r) => <SnapshotCell row={r} /> },
     ...(wide
       ? [{
-          header: 'Changed',
-          width: '9%',
+          header: 'Last updated',
+          width: '12%',
           cell: (r: SubstrateActorRow) =>
             r.updateTime ? (
               <span className="text-xs"><When iso={r.updateTime} hint="Substrate’s last change to the actor: the current state has held at least since" /></span>
@@ -209,48 +201,12 @@ function actorColumns(wide: boolean): TableColumn<SubstrateActorRow>[] {
             ),
         }]
       : []),
+    {
+      header: <span className="sr-only">Open actor</span>,
+      width: '38px',
+      cell: (r) => <button type="button" aria-label={`Open actor ${r.name}`} className="text-accent-text hover:text-accent-light" onClick={(e) => { e.stopPropagation(); onOpen(r) }}><ChevronRight size={16} /></button>,
+    },
   ]
-}
-
-/**
- * What the Actors badge in the sidebar counts, said on the page it opens:
- * "N need attention: C crashed · S stuck", from the same read and the same
- * count. Each part opens its segment. The count is always over every actor:
- * while a filter narrows the list it says so ("across all actors"), and its
- * parts open their segment with the filters cleared, so a link never lands on
- * a tab that counts zero.
- */
-export function ActorAttentionSummary({ workspace, filtered, onCrashed, onStuck }: { workspace: SubstrateWorkspace; filtered?: boolean; onCrashed: () => void; onStuck: () => void }) {
-  const c = substrateScreenCounts(workspace).actors
-  const { crashed, stuck } = actorAttentionParts(workspace)
-  if (c.count === null) {
-    return (
-      <p className="text-sm text-theme-text-secondary">
-        <Tooltip content={c.title}><span tabIndex={0} className="font-medium text-theme-text-primary">Needing attention{filtered ? ' across all actors' : ''}: unknown</span></Tooltip>
-      </p>
-    )
-  }
-  if (c.count === 0 && !c.lowerBound) return null
-  const parts = [
-    crashed > 0 && (
-      <button key="crashed" type="button" onClick={onCrashed} className="text-accent-text hover:underline">{crashed.toLocaleString('en-US')} crashed</button>
-    ),
-    stuck > 0 && (
-      <Tooltip key="stuck" content="Opens In progress, with the actors stuck longest first. Stuck: held in a transition past Substrate’s 5m threshold.">
-        <button type="button" onClick={onStuck} className="text-accent-text hover:underline">{stuck.toLocaleString('en-US')} stuck</button>
-      </Tooltip>
-    ),
-  ].filter(Boolean)
-  return (
-    <p className="text-sm text-theme-text-secondary">
-      <Tooltip content={c.title}>
-        <span tabIndex={0} className="font-medium text-theme-text-primary">
-          {c.lowerBound ? 'At least ' : ''}{c.count.toLocaleString('en-US')} {c.count === 1 ? 'needs' : 'need'} attention{filtered ? ' across all actors' : ''}
-        </span>
-      </Tooltip>
-      {parts.length > 0 && <>: {parts.map((p, i) => <span key={i}>{i > 0 && ' · '}{p}</span>)}</>}
-    </p>
-  )
 }
 
 export interface SubstrateActorsProps {
@@ -264,7 +220,9 @@ export interface SubstrateActorsProps {
 export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActor }: SubstrateActorsProps) {
   const [params, setParams] = useSearchParams()
   const linkedState = params.get('state')
-  const segment = segmentOfState(linkedState)
+  const attentionOnly = params.get('attention') === '1'
+  const phase = segmentOfState(linkedState)
+  const segment = attentionOnly ? 'attention' : phase
   const atespace = params.get('atespace') ?? ''
   const template = params.get('template') ?? ''
   const pool = params.get('pool') ?? ''
@@ -288,6 +246,9 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
   const setQ = (v: string) => update({ q: v })
   const page = Math.max(0, Number(params.get('page') ?? 0) || 0)
   const [search, setSearch] = useState(q)
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const filterDisclosure = useDisclosure(filtersOpen)
+  const filterCount = [atespace, template, pool, sort !== 'attention'].filter(Boolean).length
   useEffect(() => setSearch(q), [q])
   useEffect(() => {
     if (search === q) return
@@ -296,7 +257,7 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
     return () => clearTimeout(t)
   }, [search]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const states = segmentStates(segment, linkedState)
+  const states = segmentStates(phase, linkedState)
   const query = useSubstrateActors({
     atespace: atespace || undefined,
     template: template || undefined,
@@ -306,6 +267,7 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
     node: node || undefined,
     nodeHas: node ? nodeHas : undefined,
     state: states,
+    attention: attentionOnly ? 1 : undefined,
     q: q || undefined,
     sort,
     limit: ACTORS_PAGE_SIZE,
@@ -314,22 +276,13 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
   const connected = (query.data?.apiTier ?? workspace?.apiTier)?.state === 'connected'
   const templates = useSubstrateTemplates(connected)
 
-  const setSegment = (id: ActorSegment) => {
+  const setSegment = (id: ActorSegment | 'attention') => {
     const p = new URLSearchParams(params)
-    const next = segmentStates(id, null)
+    if (id === 'attention') p.set('attention', '1')
+    else p.delete('attention')
+    const next = id === 'attention' ? undefined : segmentStates(id, null)
     if (id === 'all' || !next) p.delete('state')
     else p.set('state', id === 'inProgress' ? 'inProgress' : next.join(','))
-    p.delete('page')
-    setParams(p, { replace: true })
-  }
-  // Every filter but the state segment: the attention count covers all actors, so with any of these set it says so.
-  const filtered = !!(atespace || template || pool || q || worker || impact || node)
-  // Opens the summary's segment over every actor, the set its count is over. Needs attention first puts the stuck ones on top.
-  const openAttention = (state: 'crashed' | 'inProgress') => {
-    const p = new URLSearchParams(params)
-    for (const k of SCOPING_PARAMS) p.delete(k)
-    p.set('state', state)
-    if (state === 'inProgress') p.delete('sort')
     p.delete('page')
     setParams(p, { replace: true })
   }
@@ -371,31 +324,17 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
     ...(worker ? [{ label: `Worker: ${worker}`, onClear: () => update({ worker: '' }) }] : []),
     ...(impact ? [{ label: IMPACT_FILTER_LABEL[impact], onClear: () => update({ impact: '' }) }] : []),
     ...(node ? [{ label: `Node: ${node}`, onClear: () => update({ node: '', nodeHas: '' }) }] : []),
-    ...(linkedState && segment === 'inProgress' && linkedState !== 'inProgress' ? [{ label: `State: ${ACTOR_STATE_LABEL[linkedState as SubstrateActorState]}`, onClear: () => setSegment('inProgress') }] : []),
+    ...(linkedState && linkedState in ACTOR_STATE_LABEL && (phase === 'inProgress' || phase === 'all') ? [{ label: `Phase: ${ACTOR_STATE_LABEL[linkedState as SubstrateActorState]}`, onClear: () => setSegment(phase) }] : []),
   ]
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <SubstrateHeader title="Actors">
-        <Segments
-          label="Actor state"
-          value={segment}
-          onChange={setSegment}
-          options={ACTOR_SEGMENTS.map((s) => {
-            const n = segmentCount(query.data?.counts, s.id)
-            return { id: s.id, label: s.label, count: n !== undefined ? n.toLocaleString('en-US') : undefined }
-          })}
-        />
-      </SubstrateHeader>
+      <SubstrateHeader title="Actors" intro={atespace ? <>Atespace: {atespace}</> : 'Cluster-wide · all atespaces'} />
       <ScreenBody>
-        {tier && <SubstrateSourceLine tier={tier} status={status} />}
-        {workspace && workspace.apiTier.state === 'connected' && !notConnected && (
-          <ActorAttentionSummary
-            workspace={workspace}
-            filtered={filtered}
-            onCrashed={() => openAttention('crashed')}
-            onStuck={() => openAttention('inProgress')}
-          />
+        {!notConnected && query.data?.counts && (
+          <WorkspaceCard title="Reported phases">
+            <SubstrateStateBar counts={query.data.counts} partial={coverageInPart(query.data.coverage)} onSelectState={(state) => update({ state, attention: '' })} />
+          </WorkspaceCard>
         )}
         {node && !notConnected && (
           <div className="flex flex-wrap items-center gap-3 text-sm text-theme-text-secondary">
@@ -414,22 +353,47 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
         {query.data && query.data.sources.some((s) => s !== 'snapshot') && (
           <p className="text-xs text-theme-text-tertiary">{sourcesNote(query.data.sources)}</p>
         )}
-        {!notConnected && <div className="flex flex-wrap items-center gap-2">
-          <SelectMenu ariaLabel="Atespace" value={atespace} options={extra(atespaceOptions, atespace)} onChange={(v) => update({ atespace: v, ...(template && v && !template.startsWith(`${v}/`) ? { template: '' } : {}) })} className="min-w-[10rem]" />
-          <SelectMenu ariaLabel="Template" value={template} options={extra(templateOptions, template)} onChange={(v) => update({ template: v })} className="min-w-[12rem]" searchPlaceholder="Search templates" />
-          <SelectMenu ariaLabel="Pool" value={pool} options={extra(poolOptions, pool)} onChange={(v) => update({ pool: v })} className="min-w-[10rem]" />
-          <Input
-            aria-label="Search actor names"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search actor name…"
-            className="h-8 min-w-[12rem] rounded-md border border-theme-border bg-theme-elevated px-3 text-sm text-theme-text-primary placeholder:text-theme-text-tertiary focus:border-skyhook-500 focus:outline-none"
-            spellCheck={false}
-          />
-          <SelectMenu ariaLabel="Sort" value={sort} options={SORT_OPTIONS} onChange={(v) => update({ sort: v === 'attention' ? '' : v })} className="min-w-[11rem]" />
+        {!notConnected && <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Segments
+              label="Actor filter"
+              value={segment}
+              onChange={setSegment}
+              options={[
+                ...ACTOR_SEGMENTS.slice(0, 1).map((s) => ({ id: s.id, label: s.label })),
+                { id: 'attention' as const, label: 'Needs attention' },
+                ...ACTOR_SEGMENTS.slice(1).map((s) => ({ id: s.id, label: s.label })),
+              ].map((s) => {
+                const n = s.id === 'attention' ? query.data?.attentionCount : segmentCount(query.data?.counts, s.id)
+                const partial = coverageInPart(query.data?.coverage) || (s.id === 'attention' && coverageInPart(workspace?.coverage.workers))
+                return { ...s, count: n === undefined ? undefined : partial ? (n > 0 ? `≥${n.toLocaleString('en-US')}` : undefined) : n.toLocaleString('en-US') }
+              })}
+            />
+            <Input
+              aria-label="Search actor names"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search actor name…"
+              className="h-8 w-44 rounded-md border border-theme-border bg-theme-elevated px-3 text-sm text-theme-text-primary placeholder:text-theme-text-tertiary focus:border-skyhook-500 focus:outline-none"
+              spellCheck={false}
+            />
+            <button type="button" {...filterDisclosure.buttonProps} onClick={() => setFiltersOpen((open) => !open)} className="btn-secondary inline-flex items-center gap-1.5 px-3 py-1.5 text-xs">
+              <SlidersHorizontal size={14} /> Filters{filterCount > 0 && ` · ${filterCount}`}
+            </button>
+          </div>
+          <Collapse open={filtersOpen} id={filterDisclosure.panelId}>
+            <div className="flex flex-wrap items-center gap-2 pt-2">
+              <SelectMenu ariaLabel="Atespace" value={atespace} options={extra(atespaceOptions, atespace)} onChange={(v) => update({ atespace: v, ...(template && v && !template.startsWith(`${v}/`) ? { template: '' } : {}) })} className="min-w-[10rem]" />
+              <SelectMenu ariaLabel="Template" value={template} options={extra(templateOptions, template)} onChange={(v) => update({ template: v })} className="min-w-[12rem]" searchPlaceholder="Search templates" />
+              <SelectMenu ariaLabel="Pool" value={pool} options={extra(poolOptions, pool)} onChange={(v) => update({ pool: v })} className="min-w-[10rem]" />
+              <SelectMenu ariaLabel="Sort" value={sort} options={SORT_OPTIONS} onChange={(v) => update({ sort: v === 'attention' ? '' : v })} className="min-w-[11rem]" />
+            </div>
+          </Collapse>
           <FilterChips chips={chips} />
         </div>}
-        {notConnected && tier ? (
+        {attentionOnly && query.data && query.data.attentionCount === undefined ? (
+          <Notice>Filtering actors that need attention requires a newer Radar.</Notice>
+        ) : notConnected && tier ? (
           <>
             <SubstrateTierBanner tier={tier} />
             <SubstrateConnectNotice status={status} tier={tier} />
@@ -439,12 +403,11 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
         ) : (
           <>
             <RefreshFailedNotice queries={[query]} />
-            <ActorsTable sort={sort} data={query.data} loading={query.isLoading} placeholder={query.isPlaceholderData} page={page} onPage={setPage} onOpenActor={onOpenActor} openActor={openActor} />
+            <ActorsTable sort={sort} data={query.data} attentionPartial={attentionOnly && coverageInPart(workspace?.coverage.workers)} loading={query.isLoading} placeholder={query.isPlaceholderData} page={page} onPage={setPage} onOpenActor={onOpenActor} openActor={openActor} />
           </>
         )}
-        <p className="text-xs text-theme-text-tertiary">
-          A <Term term="snapshot">snapshot</Term> of memory holds the running process, so the actor resumes where it left off. A snapshot of the root filesystem or volumes restarts the agent on its saved files. An actor without one boots fresh.
-        </p>
+        {attentionOnly && <p className="text-xs text-theme-text-tertiary">Includes reported crashes, lost sandboxes, unavailable workers and stuck transitions. Failed golden builds also have a template finding.</p>}
+        {tier && <SubstrateSourceLine tier={tier} status={status} />}
       </ScreenBody>
     </div>
   )
@@ -453,6 +416,7 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
 export function ActorsTable({
   sort = 'attention',
   data,
+  attentionPartial,
   loading,
   placeholder,
   page,
@@ -461,6 +425,7 @@ export function ActorsTable({
   openActor,
 }: {
   sort?: ActorSort
+  attentionPartial?: boolean
   data?: SubstrateActorsResponse
   loading?: boolean
   /** The rows are the page before, kept while this page loads. */
@@ -476,20 +441,23 @@ export function ActorsTable({
   const from = (data?.offset ?? page * ACTORS_PAGE_SIZE) + 1
   const to = (data?.offset ?? 0) + rows.length
   const cov = data?.coverage
+  const partial = coverageInPart(cov) || attentionPartial
   const empty = loading
     ? 'Loading actors…'
     : !data
       ? 'Actors were not read.'
       : cov && (cov.state === 'denied' || cov.state === 'failed')
         ? `No actors: ${coverageReason(cov, 'actors')}.`
-        : coverageInPart(cov)
+        : attentionPartial
+          ? 'No matching actors observed. Some worker disruptions could not be assessed.'
+          : coverageInPart(cov)
           ? `No actors match in what Radar could read (${coverageReason(cov, 'actors')}).`
           : 'No actors match.'
   const pages = total !== undefined ? Math.ceil(total / ACTORS_PAGE_SIZE) : undefined
   return (
     <div aria-busy={placeholder || undefined} className={placeholder ? 'opacity-60' : undefined}>
       <SectionTable
-        columns={actorColumns(wide)}
+        columns={actorColumns(wide, onOpenActor)}
         rows={rows}
         rowKey={(r) => `${r.atespace}/${r.name}`}
         rowResource={(r) => actorRowResource(r)}
@@ -503,7 +471,7 @@ export function ActorsTable({
               <span>
                 {placeholder
                   ? `Loading page ${page + 1}… showing the page before until it arrives`
-                  : <>{from.toLocaleString('en-US')}–{to.toLocaleString('en-US')} of {coverageInPart(cov) ? 'at least ' : ''}{total.toLocaleString('en-US')} · {SORT_LABEL[sort]}</>}
+                  : <>{from.toLocaleString('en-US')}–{to.toLocaleString('en-US')} of {partial ? 'at least ' : ''}{total.toLocaleString('en-US')} · {SORT_LABEL[sort]}</>}
               </span>
               {pages !== undefined && pages > 1 && (
                 <span className="flex items-center gap-1.5">

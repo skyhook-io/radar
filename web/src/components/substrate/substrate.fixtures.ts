@@ -121,7 +121,7 @@ export const goldenRow: SubstrateAttention = {
 const pool = {
   namespace: 'agent-ns',
   name: 'agent-pool',
-  kubernetes: { namespace: 'agent-ns', name: 'agent-pool', desired: 6, ready: 6, sandboxClasses: ['gvisor'], health: 'degraded', healthReason: '5 of 6 workers active' },
+  kubernetes: { namespace: 'agent-ns', name: 'agent-pool', desired: 6, ready: 6, reportedReady: 6, sandboxClasses: ['gvisor'], health: 'degraded', healthReason: '5 of 6 workers active' },
   sandboxClasses: ['gvisor'],
 }
 
@@ -166,7 +166,7 @@ export function workspace(overrides: Partial<SubstrateWorkspace> = {}): Substrat
       {
         namespace: 'agent-ns',
         name: 'microvm-pool',
-        kubernetes: { namespace: 'agent-ns', name: 'microvm-pool', desired: 4, ready: 4, health: 'healthy', healthReason: '' },
+        kubernetes: { namespace: 'agent-ns', name: 'microvm-pool', desired: 4, ready: 4, reportedReady: 4, health: 'healthy', healthReason: '' },
         placement: { workers: { total: 4, active: 4, draining: 0, unavailable: 0 }, slots: { used: 16, total: 16 }, cpuMillicores: { used: 1, total: 1 }, memoryBytes: { used: 1, total: 1 }, complete: true },
         actors: 16,
         sandboxClasses: ['microvm'],
@@ -175,7 +175,7 @@ export function workspace(overrides: Partial<SubstrateWorkspace> = {}): Substrat
       {
         namespace: 'batch',
         name: 'batch-pool',
-        kubernetes: { namespace: 'batch', name: 'batch-pool', desired: 10, ready: 9, health: 'healthy', healthReason: '' },
+        kubernetes: { namespace: 'batch', name: 'batch-pool', desired: 10, ready: 9, reportedReady: 9, health: 'healthy', healthReason: '' },
         placement: { workers: { total: 10, active: 9, draining: 1, unavailable: 0 }, slots: { used: 159, total: 180 }, cpuMillicores: { used: 1, total: 2 }, memoryBytes: { used: 1, total: 2 }, complete: true },
         actors: 159,
         sandboxClasses: ['gvisor'],

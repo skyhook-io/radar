@@ -1,4 +1,5 @@
 import { podDebugAccessKey } from '../../api/podDebug'
+import { PoolSpecStatus } from '../substrate/SubstratePoolSummary'
 import { supportsWorkloadRevisions, WorkloadRevisionsButton } from './WorkloadRevisionsButton'
 import { RelatedFindingsSection } from './RelatedFindingsSection'
 import { decorateResourceDiagnose, resourceDetailRedirect, resourceDetailSlots, resourceIssueDetail, resourceLogs, resourceRendererOverrides } from '../../integrations/resourceHosts'
@@ -1476,9 +1477,8 @@ export function WorkloadView({
         onDownload={desktopDownload}
         actionsBarProps={actionsBarProps}
         rendererOverrides={resourceRendererOverrides}
-        renderOverviewIntro={isSubstrateWorkerPool
-          ? ({ namespace: ns, name: n }) => <SubstrateVerdictLine target={{ kind: 'workerpool', namespace: ns, name: n }} onOpenMetrics={expanded ? () => handleTabChange('metrics') : undefined} />
-          : isNode && resource?.metadata?.uid
+        specTab={isSubstrateWorkerPool && resource ? { render: () => <PoolSpecStatus resource={resource} /> } : rest.specTab}
+        renderOverviewIntro={isNode && resource?.metadata?.uid
             ? () => (
               <div className="space-y-3">
                 <NodeDrainStatus name={name} nodeUID={resource.metadata.uid} />

@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { clsx } from 'clsx'
-import { Collapse, CollapseChevron, Tooltip, toneTextClass, useDisclosure } from '@skyhook-io/k8s-ui'
+import { Collapse, CollapseChevron, StatusDot, Tooltip, toneTextClass, useDisclosure } from '@skyhook-io/k8s-ui'
 import type { SubstrateAttention, SubstrateSubject } from '../../api/substrateWorkspace'
 import { SUBJECT_KIND_LABEL, attentionTone, splitReading, subjectLabel } from './readings'
 import { CommandChip, Tokens, When } from './shared'
@@ -36,7 +36,7 @@ function AffectedActors({ row, onOpen }: { row: SubstrateAttention; onOpen?: Ope
       ))}
       {more > 0 && (
         onOpen && row.subject.kind === 'Worker' && row.subject.name ? (
-          <> and <button type="button" onClick={() => onOpen({ kind: 'Actors', filter: { worker: row.subject.name! } })} className="text-accent-text hover:underline">{more} more →</button></>
+          <> and <button type="button" onClick={() => onOpen({ kind: 'Actors', filter: { worker: row.subject.name! } })} className="text-accent-text hover:underline">view all assignments →</button></>
         ) : (
           <> and {more} more</>
         )
@@ -110,7 +110,7 @@ function Tallies({ row, onOpen }: { row: SubstrateAttention; onOpen?: OpenSubjec
       label:
         filter && onOpen ? (
           <button type="button" onClick={() => onOpen({ kind: 'Actors', filter })} className="text-left font-mono text-accent-text hover:underline">
-            {g.subject?.kind === 'Worker' ? g.subject.name : subjectLabel(g.subject!)}
+            {g.subject?.kind === 'Worker' ? g.subject.name : subjectLabel(g.subject!)} · View matching actors
           </button>
         ) : (
           <span className="font-mono">{g.subject ? subjectLabel(g.subject) : g.text}</span>
@@ -290,7 +290,7 @@ function NextStep({ row, onOpen, onShowDetails }: { row: SubstrateAttention; onO
         <div className="mt-0.5 break-words text-xs text-theme-text-secondary">
           {otherLead}:{' '}
           {one && onOpen ? (
-            <button type="button" onClick={() => onOpen({ kind: 'Actors', filter: one })} className="text-accent-text hover:underline">show {others === 1 ? 'it' : 'them'} →</button>
+            <button type="button" onClick={() => onOpen({ kind: 'Actors', filter: one })} className="text-accent-text hover:underline">view crashes on this template →</button>
           ) : (
             <button type="button" onClick={onShowDetails} className="text-accent-text hover:underline">see Details</button>
           )}
@@ -330,7 +330,7 @@ function OtherSteps({ row, onOpen }: { row: SubstrateAttention; onOpen?: OpenSub
 /** A worker row's link to the actors on that worker, beside its subject: the row is about them. */
 function WorkerActorsLink({ row, onOpen }: { row: SubstrateAttention; onOpen?: OpenSubject }) {
   if (!WORKER_RULES.has(row.rule) || row.subject.kind !== 'Worker' || !row.subject.name || row.count <= 0) return null
-  const label = `Show the ${row.count === 1 ? 'actor' : `${row.count} actors`}`
+  const label = 'View all actors assigned to this worker'
   return onOpen ? (
     <button type="button" onClick={() => onOpen({ kind: 'Actors', filter: { worker: row.subject.name! } })} className="whitespace-nowrap text-accent-text hover:underline">{label} →</button>
   ) : (
@@ -342,7 +342,7 @@ function WorkerActorsLink({ row, onOpen }: { row: SubstrateAttention; onOpen?: O
 function RowDetails({ open, onToggle, children }: { open: boolean; onToggle: () => void; children: ReactNode }) {
   const d = useDisclosure(open)
   return (
-    <div className="mt-1">
+    <div className="leading-4">
       <button type="button" {...d.buttonProps} onClick={onToggle} className="inline-flex items-center gap-1 rounded text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary hover:text-theme-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
         <CollapseChevron open={open} className="h-3 w-3" />
         Details
@@ -371,23 +371,34 @@ export function AttentionRow({ row, onOpen }: { row: SubstrateAttention; onOpen?
     .filter((r) => !(row.subject.kind === 'Worker' && r.kind === 'Pod' && r.name === row.subject.name))
   const crash = row.rule === 'crashedActors'
   const [first, others] = splitReading(row.reading)
-  const lead = crash ? undefined : first
+  const lead = crash ? <Concentration row={row} /> : first
   const rest = crash ? row.reading || undefined : others
-  const hasDetails = related.length > 0 || splitsByRemedy(row) || (row.groups?.length ?? 0) > 1 || (row.messages?.length ?? 0) > 1 || (row.nodes?.length ?? 0) > 0 || (row.sample?.length ?? 0) > 0 || !!rest
+  const hasDetails = related.length > 0 || splitsByRemedy(row) || (row.groups?.length ?? 0) > 1 || (row.messages?.length ?? 0) > 1 || (row.nodes?.length ?? 0) > 0 || (row.sample?.length ?? 0) > 0 || !!rest || !!row.nextStep || !!row.command
   return (
-    <li className="min-w-0 text-sm" data-rule={row.rule} data-severity={row.severity}>
-      <div className={clsx('font-medium break-words', toneTextClass(attentionTone(row)))}>{row.title}</div>
-      <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-theme-text-tertiary">
-        <SubjectLink subject={row.subject} onOpen={onOpen} count={row.subject.kind === 'Actors' ? row.count : undefined} short />
-        <WorkerActorsLink row={row} onOpen={onOpen} />
-        {row.since && <When iso={row.since} prefix="for at least" held hint="Newest change among them: the condition has held at least since" />}
+    <li className="min-w-0 py-1.5 text-sm first:pt-0.5" data-rule={row.rule} data-severity={row.severity}>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5">
+        <div className={clsx('flex items-center gap-2 font-medium break-words', toneTextClass(attentionTone(row)))}>
+          <StatusDot tone={attentionTone(row)} />
+          {row.title}
+        </div>
+        <div className="text-xs">
+          <SubjectLink
+            subject={row.subject}
+            onOpen={onOpen}
+            label={crash ? 'View all crashed actors' : row.rule === 'uploadOverdue' ? 'View all suspended actors'
+              : row.rule === 'stuckTransition' ? `View all ${row.subject.filter?.state ?? 'transitioning'} actors`
+              : row.rule === 'workerRestarting' && row.subject.kind === 'Actors' ? `View ${row.count} affected ${row.count === 1 ? 'actor' : 'actors'}` : undefined}
+            short
+          />
+        </div>
       </div>
-      <Concentration row={row} onOpen={onOpen} />
-      {lead && <div className="break-words text-xs text-theme-text-secondary">{lead}</div>}
-      <NextStep row={row} onOpen={onOpen} onShowDetails={() => setOpen(true)} />
+      {lead && <div className="mt-0.5 break-words text-xs text-theme-text-secondary">{lead}</div>}
       {hasDetails && (
         <RowDetails open={open} onToggle={() => setOpen((v) => !v)}>
           {rest && <div className="break-words text-xs text-theme-text-secondary">{rest}</div>}
+          {row.since && <div className="text-xs text-theme-text-tertiary"><When iso={row.since} prefix="for at least" held hint="Newest change among them: the condition has held at least since" /></div>}
+          <WorkerActorsLink row={row} onOpen={onOpen} />
+          <NextStep row={row} onOpen={onOpen} onShowDetails={() => setOpen(true)} />
           <OtherSteps row={row} onOpen={onOpen} />
           {related.length > 0 && (
             <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-theme-text-tertiary">
@@ -415,13 +426,13 @@ export function SubstrateAttentionList({ rows, onOpen }: { rows: SubstrateAttent
   const foldId = 'substrate-attention-more'
   return (
     <div>
-      <ul className="space-y-3">
+      <ul className="divide-y divide-theme-border-subtle">
         {shown.map((r) => <AttentionRow key={r.id} row={r} onOpen={onOpen} />)}
       </ul>
       {folded.length > 0 && (
         <>
           <Collapse open={showAll} id={foldId}>
-            <ul className="space-y-3 pt-3">
+            <ul className="divide-y divide-theme-border-subtle border-t-subtle">
               {folded.map((r) => <AttentionRow key={r.id} row={r} onOpen={onOpen} />)}
             </ul>
           </Collapse>

@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { Bot, Camera, FileCode, Globe, LayoutDashboard, RefreshCw, ScrollText } from 'lucide-react'
-import { Badge, CodeViewer, DetailShell, FactGrid, FactRow, PaneLoader, SectionHeading, StatusDot, Tooltip, toneTextClass, type DetailShellTab } from '@skyhook-io/k8s-ui'
+import { Badge, CodeViewer, DetailShell, DimensionValue, FactGrid, FactRow, FoldSection, PaneLoader, SectionHeading, StatusDot, Tooltip, WorkspaceCard, toneTextClass, type DetailShellTab } from '@skyhook-io/k8s-ui'
 import {
   substrateErrorCode,
   useSubstrateActor,
@@ -13,11 +13,11 @@ import {
 } from '../../api/substrateWorkspace'
 import { RefreshFailedNotice, ScreenEmptyState, Segments, SectionTable, type TableColumn } from '../workspace/layout'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
-import { type OpenSubject } from './SubstrateAttentionList'
+import { SubjectLink, type OpenSubject } from './SubstrateAttentionList'
 import { NotInContext, useContextPin } from './contextPin'
-import { ActorLogsBody, SubstrateActorOverview, egressText } from './SubstrateActorOverview'
-import { bytesText, cpuText, definitiveFailure, fidelityLabel, fidelityResume, killTie, logsCommand, tierReading } from './readings'
-import { SUBSTRATE_PATH, SUBSTRATE_SCREENS, substrateActorsPath } from './routes'
+import { ActorLogsBody, SubstrateActorOverview, egressText, workerLogsAvailable } from './SubstrateActorOverview'
+import { bytesText, cpuText, definitiveFailure, fidelityLabel, fidelityResume, killTie, resumeConditionSentence, tierReading } from './readings'
+import { SUBSTRATE_PATH, SUBSTRATE_SCREENS } from './routes'
 import { ActorStateBadge, Term, Unread, When } from './shared'
 
 export type ActorTab = 'overview' | 'snapshots' | 'logs' | 'egress' | 'spec'
@@ -36,15 +36,6 @@ function TabBody({ children }: { children: ReactNode }) {
 
 type SnapshotRow = NonNullable<SubstrateActorDetail['actor']['snapshots']>[number]
 
-/** A node's hostname, whole: it truncates with the name on hover rather than breaking inside a label. */
-function NodeName({ node }: { node: string }) {
-  return (
-    <Tooltip content={node} wrapperClassName="min-w-0 max-w-full">
-      <span className="block truncate whitespace-nowrap font-mono text-[12.5px]">{node}</span>
-    </Tooltip>
-  )
-}
-
 /**
  * Where a snapshot's state is kept: a durable copy in object storage, which
  * outlives the node, or files on one node only. Substrate records no upload
@@ -54,16 +45,16 @@ export function snapshotWhere(s: Pick<SnapshotRow, 'durable' | 'locality'>): { l
   switch (s.durable) {
     case 'completed':
       return s.locality
-        ? { label: 'Durable copy', tone: 'healthy', detail: 'Uploaded to object storage. Its files are also on', node: s.locality }
+        ? { label: 'Durable copy', tone: 'healthy', detail: 'Uploaded to object storage. Recorded locality:', node: s.locality }
         : { label: 'Durable copy', tone: 'healthy', detail: 'Uploaded to object storage.' }
     case 'pending':
       return s.locality
-        ? { label: 'Only on its node', tone: 'degraded', detail: 'Upload pending. Until it finishes, its state is only on', node: s.locality }
+        ? { label: 'Only on its node', tone: 'degraded', detail: 'Upload pending. Recorded locality:', node: s.locality }
         : { label: 'Upload pending', tone: 'degraded', detail: 'Substrate names no node holding its files.' }
     default:
       return s.locality
-        ? { label: 'Only on its node', tone: 'degraded', detail: 'No durable copy recorded. Its files are only on', node: s.locality }
-        : { label: 'Not stored', tone: 'degraded', detail: 'No durable copy recorded, and no node holds its files.' }
+        ? { label: 'Only on its node', tone: 'degraded', detail: 'No durable copy recorded. Recorded locality:', node: s.locality }
+        : { label: 'Not stored', tone: 'degraded', detail: 'No durable copy or node locality recorded.' }
   }
 }
 
@@ -74,8 +65,10 @@ export function unlistedGenerations(rows: Pick<SnapshotRow, 'generation'>[]): nu
   return newest - new Set(rows.map((r) => r.generation)).size
 }
 
-function SnapshotsTab({ detail }: { detail: SubstrateActorDetail }) {
+function SnapshotsTab({ detail, onOpenSubject }: { detail: SubstrateActorDetail; onOpenSubject: OpenSubject }) {
   const rows = [...(detail.actor.snapshots ?? [])].sort((a, b) => b.generation - a.generation)
+  const source = rows.find((s) => s.generation === detail.row.resumeGeneration)
+  const place = source && snapshotWhere(source)
   const columns: TableColumn<SnapshotRow>[] = [
     { header: 'Generation', width: '100px', cell: (s) => <span className="font-mono">{s.generation}</span> },
     {
@@ -96,7 +89,7 @@ function SnapshotsTab({ detail }: { detail: SubstrateActorDetail }) {
           <span className="block min-w-0">
             <span className={w.tone === 'healthy' ? undefined : toneTextClass(w.tone)}>{w.label}</span>
             <span className="block text-xs text-theme-text-tertiary">{w.detail}</span>
-            {w.node && <NodeName node={w.node} />}
+            {w.node && <SubjectLink subject={{ kind: 'Node', name: w.node }} onOpen={onOpenSubject} withKind={false} />}
           </span>
         )
       },
@@ -107,11 +100,23 @@ function SnapshotsTab({ detail }: { detail: SubstrateActorDetail }) {
   const unlisted = unlistedGenerations(rows)
   return (
     <TabBody>
+      <WorkspaceCard title="Resume source">
+        <FactGrid>
+          <FactRow label="Generation">
+            <DimensionValue tone={place?.tone ?? 'neutral'} source="Substrate’s recorded resume choice on the current template">
+              {detail.row.resumeGeneration === undefined ? 'Fresh boot' : `Generation ${detail.row.resumeGeneration}`}
+              {source && <> · {fidelityLabel(source.fidelity)} · {place?.label}</>}
+            </DimensionValue>
+          </FactRow>
+          <FactRow label="What returns">{resumeConditionSentence(detail.row.resumesWith, detail.row.resumeCondition)}</FactRow>
+          {place?.node && <FactRow label="Recorded locality"><SubjectLink subject={{ kind: 'Node', name: place.node }} onOpen={onOpenSubject} withKind={false} /></FactRow>}
+        </FactGrid>
+      </WorkspaceCard>
       <SectionTable
         title={<Term term="snapshot">Snapshots</Term>}
         subtitle={
           <>
-            Newest first. A resume restores from the newest one with a durable copy or files still on its node.
+            Newest recorded generation first.
             {unlisted > 0 && <> Substrate’s record of an actor lists only its active and in-progress generations, so {unlisted === 1 ? '1 earlier generation is' : `${unlisted} earlier generations are`} not listed.</>}
           </>
         }
@@ -137,7 +142,11 @@ function LogsTab({ detail }: { detail: SubstrateActorDetail }) {
   const containers = detail.template?.containers ?? []
   const filtered = hidesWorkerRecords(view, container)
   const logs = useSubstrateActorLogs(detail.actor, { source: view, container: view === 'lifecycle' || view === 'worker' ? undefined : container || undefined, tailLines: 500 })
-  const data = logs.data
+  const data = definitiveFailure(substrateErrorCode(logs.error)) ? undefined : logs.data
+  if (!data || !workerLogsAvailable(data)) {
+    const title = logs.isLoading ? 'Worker logs' : 'Worker logs unavailable'
+    return <TabBody><WorkspaceCard title={title}><ActorLogsBody actor={detail.actor} logs={logs} /></WorkspaceCard></TabBody>
+  }
   // The server weighs a memory-limit kill on every source, so a view that leaves out the worker's records still knows of one.
   const hiddenKill = filtered ? data?.memoryKill : undefined
   return (
@@ -151,7 +160,7 @@ function LogsTab({ detail }: { detail: SubstrateActorDetail }) {
             { id: 'all', label: 'All' },
             { id: 'containers', label: 'Container output' },
             { id: 'lifecycle', label: 'Lifecycle events' },
-            { id: 'worker', label: 'Worker records' },
+            { id: 'worker', label: 'Worker process records' },
           ]}
         />
         {(view === 'all' || view === 'containers') && containers.length > 1 && (
@@ -172,9 +181,6 @@ function LogsTab({ detail }: { detail: SubstrateActorDetail }) {
       </div>
       {hiddenKill && <HiddenKillNotice kill={hiddenKill} crashTime={detail.actor.state === 'crashed' ? detail.actor.crash?.time : undefined} onShowAll={() => { setView('all'); setContainer('') }} />}
       <ActorLogsBody actor={detail.actor} logs={logs} killNoticeAbove={!!hiddenKill} />
-      <p className="text-xs text-theme-text-tertiary">
-        Lines from worker Pods that are gone are lost with them. While the actor runs, <span className="whitespace-nowrap font-mono">{logsCommand(detail.actor)}</span> shows the same lines.
-      </p>
     </TabBody>
   )
 }
@@ -201,25 +207,25 @@ function EgressTab({ detail }: { detail: SubstrateActorDetail }) {
   const t = egressText(e)
   return (
     <TabBody>
-      <section className={CARD}>
-        <SectionHeading>Egress policy</SectionHeading>
-        <p className={t.tone === 'unknown' ? 'text-sm text-theme-text-tertiary' : 'text-sm text-theme-text-primary'}>{e.state === 'set' && e.rules > 0 ? `${e.rules} ${e.rules === 1 ? 'rule' : 'rules'}` : t.text}</p>
+      <WorkspaceCard title="Outbound policy">
+        <DimensionValue tone={t.tone} source="Actor egress policy from Substrate">
+          {e.state === 'set' && e.rules > 0 ? `${e.rules} ${e.rules === 1 ? 'rule' : 'rules'}` : t.text}
+        </DimensionValue>
         {e.state === 'set' && e.destinations && e.destinations.length > 0 && (
           <>
-            <div className="mt-3 text-xs text-theme-text-tertiary">Destinations the rules name</div>
+            <div className="mt-3 text-xs text-theme-text-tertiary">Destinations from policy</div>
             <ul className="mt-1 flex flex-wrap gap-1.5">
               {e.destinations.map((d) => <li key={d}><Badge tone="structural" size="sm">{d}</Badge></li>)}
               {e.more ? <li className="text-xs text-theme-text-tertiary">and {e.more} more</li> : null}
             </ul>
           </>
         )}
-        <p className="mt-3 text-xs text-theme-text-tertiary">Substrate’s egress policy for this actor (kubectl ate get egresspolicy). Radar shows its rules’ destinations, not the full policy.</p>
-      </section>
+      </WorkspaceCard>
     </TabBody>
   )
 }
 
-function SpecTab({ detail }: { detail: SubstrateActorDetail }) {
+function SpecTab({ detail, onOpenSubject }: { detail: SubstrateActorDetail; onOpenSubject: OpenSubject }) {
   const t = detail.template
   const selectorText = (sel?: Record<string, string>) =>
     sel && Object.keys(sel).length ? <span className="font-mono">{Object.entries(sel).map(([k, v]) => `${k}=${v}`).join(', ')}</span> : <span className="text-theme-text-secondary">none</span>
@@ -227,23 +233,24 @@ function SpecTab({ detail }: { detail: SubstrateActorDetail }) {
   return (
     <TabBody>
       <section className={CARD}>
-        <SectionHeading hint="from its template">What it runs with</SectionHeading>
+        <SectionHeading>Template configuration</SectionHeading>
+        <FactGrid>
+          <FactRow label="Template"><SubjectLink subject={{ kind: 'ActorTemplate', ...detail.actor.template }} onOpen={onOpenSubject} withKind={false} /></FactRow>
+        </FactGrid>
         {t ? (
           <FactGrid>
-            <FactRow label="Template"><span className="font-mono">{t.atespace} / {t.name}</span></FactRow>
             <FactRow label="CPU">{t.cpuMillicores ? cpuText(t.cpuMillicores) : <Unread>not set</Unread>}</FactRow>
             <FactRow label="Memory">{t.memoryBytes ? bytesText(t.memoryBytes) : <Unread>not set</Unread>}</FactRow>
             <FactRow label="Containers">{t.containers?.length ? <span className="font-mono">{t.containers.join(', ')}</span> : <Unread>not listed</Unread>}</FactRow>
             <FactRow label="Snapshots up to">{fidelityLabel(t.preferredFidelity)}</FactRow>
             <FactRow label="Stored in">{t.storageLocation ? <span className="font-mono">{t.storageLocation}</span> : 'the API server’s default location'}</FactRow>
-            <FactRow label="Template’s selector">{selectorText(t.workerSelector)}</FactRow>
           </FactGrid>
         ) : (
           <p className="text-sm text-theme-text-tertiary">Substrate’s templates were not read, so what the actor runs with is unknown.</p>
         )}
       </section>
       <section className={CARD}>
-        <SectionHeading hint="a worker must match both">Where it can be placed</SectionHeading>
+        <SectionHeading>Placement rules</SectionHeading>
         <FactGrid>
           <FactRow label="Actor’s own selector">{selectorText(detail.actor.workerSelector)}</FactRow>
           <FactRow label="Template’s selector">{t ? selectorText(t.workerSelector) : <Unread>unknown: templates were not read</Unread>}</FactRow>
@@ -253,16 +260,20 @@ function SpecTab({ detail }: { detail: SubstrateActorDetail }) {
             ) : pools.length === 0 ? (
               <span className="font-medium">none</span>
             ) : (
-              <span className="font-mono">{pools.map((p) => p.name).join(', ')}</span>
+              <span className="flex flex-wrap gap-x-3 gap-y-1">
+                {!detail.matchingPoolsComplete && <span>At least these pools match</span>}
+                {pools.map((p) => <SubjectLink key={`${p.namespace}/${p.name}`} subject={{ kind: 'WorkerPool', ...p }} onOpen={onOpenSubject} withKind={false} />)}
+              </span>
             )}
             <div className="text-xs text-theme-text-tertiary">Matching labels, not a promise it fits: CPU, memory and its snapshot’s runtime decide that.</div>
           </FactRow>
         </FactGrid>
       </section>
-      <section>
-        <SectionHeading hint="as Substrate’s API returned it">Actor</SectionHeading>
-        <CodeViewer code={JSON.stringify(detail.actor, null, 2)} language="json" showLineNumbers={false} maxHeight="32rem" />
-      </section>
+      <WorkspaceCard>
+        <FoldSection title="Raw actor JSON" summary="Substrate API record" attention={false}>
+          <CodeViewer code={JSON.stringify(detail.actor, null, 2)} language="json" showLineNumbers={false} maxHeight="32rem" />
+        </FoldSection>
+      </WorkspaceCard>
     </TabBody>
   )
 }
@@ -323,16 +334,14 @@ export function SubstrateActorPage({ actor, onOpenSubject }: { actor: SubstrateR
       <span>/</span>
       <button type="button" onClick={() => navigate(SUBSTRATE_SCREENS.actors.path)} className="hover:text-theme-text-primary hover:underline">Actors</button>
       <span>/</span>
-      <button type="button" onClick={() => navigate(substrateActorsPath({ atespace: actor.atespace }))} className="font-mono hover:text-theme-text-primary hover:underline">{actor.atespace}</button>
-      <span>/</span>
     </nav>
   )
   const identity = (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      {breadcrumb}
       <h1 className="min-w-0 truncate font-mono text-lg font-semibold text-theme-text-primary">{actor.name}</h1>
-      <Badge tone="structural" size="sm">Actor</Badge>
       {detail && <ActorStateBadge state={detail.actor.state} impact={detail.workerImpact} updateTime={detail.actor.updateTime} />}
-      <span className="text-sm text-theme-text-secondary"><Term term="atespace">atespace</Term> <span className="font-mono">{actor.atespace}</span></span>
+      <span className="text-sm text-theme-text-secondary"><Term term="atespace">Atespace</Term>: <span className="font-mono">{actor.atespace}</span></span>
     </div>
   )
   const snapshots = detail?.actor.snapshots?.length
@@ -346,16 +355,15 @@ export function SubstrateActorPage({ actor, onOpenSubject }: { actor: SubstrateR
   let body: ReactNode
   if (!detail && query.isLoading) body = <PaneLoader label={`Loading ${actor.name}…`} className="h-full" />
   else if (!detail) body = <ActorReadFailure actor={actor} error={query.error} onBack={() => navigate(SUBSTRATE_SCREENS.actors.path)} />
-  else if (tab === 'snapshots') body = <SnapshotsTab detail={detail} />
+  else if (tab === 'snapshots') body = <SnapshotsTab detail={detail} onOpenSubject={onOpenSubject} />
   else if (tab === 'logs') body = <LogsTab detail={detail} />
   else if (tab === 'egress') body = <EgressTab detail={detail} />
-  else if (tab === 'spec') body = <SpecTab detail={detail} />
-  else body = <TabBody><SubstrateActorOverview detail={detail} onOpenSubject={onOpenSubject} onShowLogs={() => setTab('logs')} /></TabBody>
+  else if (tab === 'spec') body = <SpecTab detail={detail} onOpenSubject={onOpenSubject} />
+  else body = <TabBody><SubstrateActorOverview detail={detail} onOpenSubject={onOpenSubject} onShowLogs={() => setTab('logs')} onShowSnapshots={() => setTab('snapshots')} onShowEgress={() => setTab('egress')} /></TabBody>
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
       <DetailShell
-        breadcrumb={breadcrumb}
         identity={identity}
         headerActions={
           <Tooltip content="Refresh" delay={150} position="bottom">

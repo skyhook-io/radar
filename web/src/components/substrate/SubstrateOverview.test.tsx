@@ -27,7 +27,7 @@ const words = (html: string) => html.replace(/<[^>]+>/g, '')
 function render(data: SubstrateWorkspace, st: SubstrateStatus | undefined = status({ apiTier: data.apiTier })) {
   return text(renderToStaticMarkup(
     <MemoryRouter>
-      <SubstrateOverview data={data} status={st} onInspect={() => {}} inspected={null} onOpenSubject={() => {}} />
+      <SubstrateOverview data={data} status={st} onOpenSubject={() => {}} />
     </MemoryRouter>,
   ))
 }
@@ -41,21 +41,22 @@ describe('Agent Substrate overview, connected', () => {
     expect(html).toContain('Change connection')
   })
 
-  it('reads the status line from Substrate’s counts', () => {
+  it('reads the sourced At a glance rows from Substrate’s counts', () => {
     const html = render(workspace())
-    expect(html).toContain('3, 1 short of workers, 1 full')
-    expect(html).toContain('18 active, 1 draining, 1 unavailable')
+    expect(html).toContain('3 pools · 1 short of workers · 1 full')
+    expect(html).toContain('18 active · 1 draining · 1 unavailable')
     expect(html).toContain('212 of 236 used (24 free, 21 of them on batch-pool)')
-    expect(html).toContain('1,284, 14 crashed')
-    expect(words(html)).toContain('6, 1 golden snapshot failed')
+    expect(html).toContain('1,284 total, 14 crashed')
+    expect(words(html)).toContain('6 · 1 golden snapshot failed')
     // One run of text, not an element per part: the facts row is a flex row
     // whose gap would set each comma apart from the word before it.
-    expect(html).toContain('6, 1 ')
+    expect(html).toContain('6 · 1 ')
   })
 
-  it('draws the state bar with accessible counts, and lists Needs attention in the server’s order, each row labelled', () => {
+  it('leads with Needs attention in the server’s order and labels broader crash links', () => {
     const html = render(workspace())
-    expect(html).toMatch(/role="img" aria-label="1,284 actors: Crashed 14, Resuming 6, Suspending 9, Reverting 2, Running 212, Suspended 1,041"/)
+    expect(html).not.toContain('aria-label="Actors by state"')
+    expect(html.indexOf('Needs attention')).toBeLessThan(html.indexOf('At a glance'))
     const attention = html.slice(html.indexOf('Needs attention'))
     // The fixture's order is the server's ranking: crash, pool, golden snapshot. No category regrouping.
     const crash = attention.indexOf('14 actors are crashed')
@@ -67,30 +68,24 @@ describe('Agent Substrate overview, connected', () => {
     expect(attention).toMatch(/<span>Pool <span[^>]*><span><button[^>]*><span[^>]*>agent-pool</)
     expect(attention).toContain('14 actors are crashed')
     // Where most of them are, as a concentration with a link, not a cause.
-    expect(plain(attention)).toMatch(/11 of the 14 use template <button[^>]*>research \/ langgraph-research<\/button>/)
-    expect(attention).toContain('Show the 14 actors →')
+    expect(words(attention)).toContain('11 of the 14 use template research / langgraph-research')
+    expect(attention).toContain('View all crashed actors →')
     expect(attention).toContain('research / langgraph-research')
     expect(attention).toContain('Substrate’s messages')
     expect(attention).toContain('By template')
     expect(attention).toContain('Next step: ')
   })
 
-  it('shows the evidence of a healthy installation, not only the absence of problems', () => {
+  it('keeps the healthy state compact and the check evidence in a closed disclosure', () => {
     const html = render(workspace({ needsAttention: [] }))
-    // An empty list names what was checked and what no check reads, not "healthy".
     expect(html).toContain(SUBSTRATE_NO_PROBLEMS)
-    expect(html).toContain('Crashed actors')
-    expect(html).toContain('Not assessed by any check')
-    expect(html).toContain('Request routing and egress')
-    expect(html).toContain('Worker pools')
-    expect(plain(html)).toContain('agent-pool')
-    expect(html).toContain('37 of 40 used')
-    // Slots count active workers only; the rest of a pool's actors are said to be elsewhere, not left to contradict.
-    const ws = workspace()
-    ws.pools[0] = { ...ws.pools[0], actors: 40 }
-    // Which workers they are on, and what that means, in plain words.
-    expect(render(ws)).toContain('+3 actors on unavailable workers, which take no new actors')
-    expect(html).toContain('Free actor slots')
+    const checks = html.slice(html.indexOf('What was checked'), html.indexOf('At a glance'))
+    expect(checks).toContain('inert=""')
+    expect(checks).toContain('Crashed actors')
+    expect(checks).toContain('Not assessed by any check')
+    expect(checks).toContain('Request routing and egress')
+    expect(html).toContain('>Pools →</button>')
+    expect(html).not.toContain('Slots on active workers</th>')
     expect(plain(html)).toContain('support-bots')
   })
 
@@ -107,8 +102,8 @@ describe('Agent Substrate overview, connected', () => {
       service: { ...base.service, why: collecting, collecting: true },
     }
     let html = words(render(ws))
-    expect(html).toContain('What was checked: 3 of 5 checks ran, 2 still running')
-    expect(html).not.toContain('could not')
+    expect(html).toContain('What was checked3 of 5 checks ran · 2 still running')
+    expect(html).not.toContain('checks ran · 2 could not')
     expect(html).toContain(`Still running: ${collecting}`)
     // The Delivery fact doesn't claim an absence Radar hasn't read yet.
     expect(html).toContain('being collected from Prometheus')
@@ -116,14 +111,14 @@ describe('Agent Substrate overview, connected', () => {
     // Prometheus not connected: the honest state is that they could not run, and why.
     const down = { ...ws, checks: ws.checks.map((c) => (c.collecting ? { ...c, why: 'Prometheus is not connected', collecting: false } : c)), service: base.service }
     html = words(render(down))
-    expect(html).toContain('What was checked: 3 of 5 checks ran, 2 could not')
+    expect(html).toContain('What was checked3 of 5 checks ran · 2 could not')
     expect(html).not.toContain('still running')
     expect(html).toContain('Substrate’s pool capacity verdicts (Prometheus): Prometheus is not connected')
   })
 
   it('defines atespace where the Overview first names it', () => {
     const raw = render(workspace())
-    expect(raw).toMatch(/counted by Substrate across ?(<!-- -->)?\s*(<!-- -->)?\d+(<!-- -->)? (<!-- -->)?<span[^>]*><span[^>]*decoration-dotted[^>]*>atespaces?<\/span>/)
+    expect(raw).toMatch(/decoration-dotted[^>]*>Atespaces<\/span>/)
   })
 
   it('says an atespace Substrate denied is unread, never empty', () => {
@@ -164,15 +159,14 @@ describe('Agent Substrate overview, not connected', () => {
   it('keeps what Kubernetes shows, and says actor values are not connected rather than 0', () => {
     state.connection = connection()
     const html = render(notConnectedWorkspace())
-    expect(html).toMatch(/Worker Pods:<\/dt><dd[^>]*>(<span[^>]*>)*6 ready of 6/)
-    expect(html).toMatch(/Actors<\/span><\/span>:<\/dt><dd[^>]*>(?:<[^>]+>)*Not connected/)
-    expect(html).toMatch(/Templates<\/span><\/span>:<\/dt><dd[^>]*>(?:<[^>]+>)*Not connected/)
-    expect(html).not.toMatch(/Actors<\/span><\/span>:<\/dt><dd[^>]*>0/)
-    expect(plain(html)).toContain('agent-pool')
+    const body = words(html)
+    expect(body).toContain('Worker capacity1 poolPools →Kubernetes and Substrate')
+    expect(body).toContain('ActorsNot connectedActors →')
+    expect(body).toContain('Template startupNot connectedTemplates →')
+    expect(body).not.toContain('Actors0')
     expect(html).toContain('Not checked on this read')
     expect(html).toContain('Crashed actors: actors were not read')
-    // Delivery from Prometheus is unknown, with why, never zero.
-    expect(html).toMatch(/Delivery \(1h\):<\/dt><dd[^>]*>(?:<[^>]+>)*unknown \(no Substrate metrics\)/)
+    expect(body).toContain('Delivery metricsUnavailable · no Substrate series')
   })
 
   it('offers Settings → Agent Substrate where actors would be, on a local Radar', () => {
@@ -213,7 +207,7 @@ describe('Agent Substrate on an in-cluster Radar with sign-in, or Radar Hub', ()
     expect(html).not.toContain('Change connection')
     expect(html).toContain('>Connection settings</button>')
     // Their own access could mint the token: the actors are there.
-    expect(html).toContain('Actor states')
+    expect(words(html)).toContain('Actors1,284 total, 14 crashed')
   })
 
   it('says when the operator turned the API off, and keeps Kubernetes and Prometheus', () => {
@@ -223,7 +217,7 @@ describe('Agent Substrate on an in-cluster Radar with sign-in, or Radar Hub', ()
     expect(html).toContain('substrate.api.enabled')
     expect(html).not.toContain('Open Substrate settings')
     expect(html).not.toContain('Substrate API: ')
-    expect(html).toContain('Worker pools')
+    expect(html).toContain('Worker capacity')
     expect(html).toContain('Prometheus')
   })
 
@@ -313,7 +307,7 @@ describe('Agent Substrate status line beside the inventory', () => {
     const live = { ...base, summary: { ...base.summary, pools: { total: 1, short: 0, full: 0, noRoom: 1 }, slots: { used: 1, total: 1000 }, freeSlots: [{ pool, free: 999, lacking: 'cpu' as const }] } }
     expect(slotLine(live)).toEqual({ value: '1 of 1,000 used (999 free, but agent-pool’s workers have no CPU left for an actor)', tone: 'degraded' })
     const poolsFact = overviewFacts(live).find((f) => words(renderToStaticMarkup(<>{f.label}</>)) === 'Worker pools')!
-    expect(poolsFact.value).toBe('1, 1 with no room for an actor')
+    expect(poolsFact.value).toBe('1 pool · 1 with no room for an actor')
     expect(poolsFact.tone).not.toBe('healthy')
     // Mixed: the free count is the room that is left; the rest is named, not added in.
     const mixed = { ...base, summary: { ...base.summary, freeSlots: [{ pool: { namespace: 'batch', name: 'batch-pool' }, free: 21, lacking: 'memory' as const }, { pool: { namespace: 'agent-ns', name: 'agent-pool' }, free: 3 }] } }

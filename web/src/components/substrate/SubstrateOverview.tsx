@@ -1,20 +1,19 @@
 import { Fragment, useState, type ReactNode } from 'react'
-import { Badge, CertaintyGlyph, Collapse, CollapseChevron, StatusDot, Tooltip, worseTone, type StatusTone } from '@skyhook-io/k8s-ui'
-import type { SubstrateAtespaceRead, SubstratePoolRow, SubstrateStatus, SubstrateWorkspace } from '../../api/substrateWorkspace'
+import { toneTextClass, Badge, CertaintyGlyph, DimensionValue, FactGrid, FactRow, FoldSection, Input, Tooltip, WorkspaceCard, worseTone, type StatusTone } from '@skyhook-io/k8s-ui'
+import type { SubstrateAtespaceRead, SubstrateAttention, SubstratePoolRow, SubstrateStatus, SubstrateWorkspace } from '../../api/substrateWorkspace'
 import type { SelectedResource } from '../../types'
 import { refToSelectedResource } from '../../utils/navigation'
-import { ScreenBody, SectionTable, Sub, type TableColumn } from '../workspace/layout'
+import { ScreenBody, SectionTable, Segments, Sub, type TableColumn } from '../workspace/layout'
 import { INCOMPLETE_COVERAGE_STATES, coverageEmpty, coverageLabel } from '../workspace/coverage'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { attentionArea, coverageInPart, countText, lackingText, poolReading, poolReadyPods, worstAttentionTone, type AttentionArea } from './readings'
-import { SUBSTRATE_GROUP, substrateActorsPath } from './routes'
+import { SUBSTRATE_GROUP, SUBSTRATE_POOLS_PATH, SUBSTRATE_SCREENS, substrateActorsPath } from './routes'
 import { SubstrateAttentionList, type OpenSubject } from './SubstrateAttentionList'
 import { SubstrateConnectNotice, SubstrateConnectionLink, SubstrateTierBanner, showsConnectNotice } from './SubstrateConnect'
 import { SubstrateStateBar } from './SubstrateStateBar'
-import { NOT_CONNECTED_TITLE, Name, SUBSTRATE_WHAT_IT_IS, SUBSTRATE_WIDE, SubstrateCoverageNotice, SubstrateHeader, SubstrateSourceLine, Term, Unread, WholeNames } from './shared'
-import { useMediaQuery } from '../../hooks/useMediaQuery'
+import { NOT_CONNECTED_TITLE, Name, SubstrateCoverageNotice, SubstrateHeader, SubstrateSourceLine, Term, Unread } from './shared'
 
-export const SUBSTRATE_NO_PROBLEMS = 'No problems found by these checks:'
+export const SUBSTRATE_NO_PROBLEMS = 'No problems found by the checks that ran.'
 
 /**
  * What the checks covered. An empty list says only that these checks found
@@ -23,7 +22,6 @@ export const SUBSTRATE_NO_PROBLEMS = 'No problems found by these checks:'
  * list folds under them.
  */
 function ChecksSummary({ data, empty }: { data: SubstrateWorkspace; empty?: boolean }) {
-  const [open, setOpen] = useState(false)
   const ran = data.checks.filter((c) => c.ran)
   // A check waiting on Radar's first collection from Prometheus runs on a later read: it is still running, not one that could not.
   const running = data.checks.filter((c) => !c.ran && c.collecting)
@@ -31,28 +29,21 @@ function ChecksSummary({ data, empty }: { data: SubstrateWorkspace; empty?: bool
   const counts = [running.length > 0 && `${running.length} still running`, skipped.length > 0 && `${skipped.length} could not`].filter(Boolean)
   const body = (
     <div className="space-y-2 text-xs text-theme-text-secondary">
-      {ran.length > 0 && <CheckList title={empty ? undefined : 'Checks that ran'} items={ran.map((c) => c.label)} />}
+      {ran.length > 0 && <CheckList title="Checks that ran" items={ran.map((c) => c.label)} />}
       {running.length > 0 && <CheckList title={`Still running: ${running[0].why ?? 'their inputs are still being collected'}`} items={running.map((c) => c.label)} />}
       {skipped.length > 0 && <CheckList title="Not checked on this read" items={skipped.map((c) => `${c.label}: ${c.why ?? 'its inputs were not read'}`)} />}
       {data.notAssessed.length > 0 && <CheckList title="Not assessed by any check" items={data.notAssessed} />}
     </div>
   )
-  if (empty) {
-    return (
-      <div>
-        <p className="mb-1.5 text-sm text-theme-text-primary">{ran.length > 0 ? SUBSTRATE_NO_PROBLEMS : 'No check could run on this read.'}</p>
-        {body}
-      </div>
-    )
-  }
   return (
-    <div className="mt-3 border-t-subtle pt-2">
-      <button type="button" aria-expanded={open} aria-controls="substrate-checks" onClick={() => setOpen((v) => !v)} className="inline-flex items-center gap-1 text-xs font-medium text-accent-text hover:underline">
-        <CollapseChevron open={open} />
-        What was checked: {ran.length} of {data.checks.length} checks ran{counts.length > 0 ? `, ${counts.join(', ')}` : ''}
-      </button>
-      <Collapse open={open} id="substrate-checks"><div className="pt-2">{body}</div></Collapse>
-    </div>
+    <>
+      {empty && <p className="text-sm text-theme-text-primary">{ran.length > 0 ? SUBSTRATE_NO_PROBLEMS : 'No check could run on this read.'}</p>}
+      <div className="mt-2 border-t-subtle pt-2">
+        <FoldSection title="What was checked" summary={`${ran.length} of ${data.checks.length} checks ran${counts.length ? ` · ${counts.join(', ')}` : ''}`} attention={false}>
+          {body}
+        </FoldSection>
+      </div>
+    </>
   )
 }
 
@@ -70,8 +61,6 @@ function CheckList({ title, items }: { title?: string; items: string[] }) {
 export interface SubstrateOverviewProps {
   data: SubstrateWorkspace
   status?: SubstrateStatus
-  onInspect: (resource: SelectedResource) => void
-  inspected: SelectedResource | null
   onOpenSubject: OpenSubject
 }
 
@@ -84,20 +73,12 @@ interface Fact {
   title?: string
 }
 
-function StatusLine({ facts }: { facts: Fact[] }) {
+function FleetValue({ fact }: { fact: Fact }) {
   return (
-    <dl className="flex flex-wrap gap-x-7 gap-y-2 text-sm" aria-label="Agent Substrate at a glance">
-      {facts.map((f, i) => (
-        <div key={i} className="flex items-center gap-1.5">
-          <StatusDot tone={f.tone} />
-          <dt className="text-theme-text-tertiary">{f.label}:</dt>
-          <dd className="flex items-center gap-1 font-medium text-theme-text-primary">
-            {f.lowerBound && <CertaintyGlyph certainty="lower_bound" title="At least: some of it could not be read" />}
-            {f.title ? <Tooltip content={f.title}><span>{f.value}</span></Tooltip> : f.value}
-          </dd>
-        </div>
-      ))}
-    </dl>
+    <>
+      {fact.lowerBound && <CertaintyGlyph certainty="lower_bound" title="At least: some of it could not be read" />}
+      {fact.title ? <Tooltip content={fact.title}><span>{fact.value}</span></Tooltip> : fact.value}
+    </>
   )
 }
 
@@ -153,22 +134,22 @@ export function overviewFacts(data: SubstrateWorkspace): Fact[] {
     const noRoom = pools.noRoom ?? 0
     const poolNotes = [pools.short > 0 && `${pools.short} short of workers`, pools.full > 0 && `${pools.full} full`, noRoom > 0 && `${noRoom} with no room for an actor`].filter(Boolean)
     facts.push({
-      label: <Term term="pool">Worker pools</Term>,
-      value: [countText(pools.total), ...poolNotes].join(', '),
+      label: 'Worker pools',
+      value: [`${countText(pools.total)} ${pools.total === 1 ? 'pool' : 'pools'}`, ...poolNotes].join(' · '),
       tone: areaTone(data, 'pools', poolNotes.length > 0 ? 'degraded' : pools.total > 0 ? 'healthy' : poolsPartial ? 'unknown' : 'neutral'),
       lowerBound: poolsPartial,
       title: poolsPartial ? `WorkerPools: ${coverageLabel(data.coverage.pools)}` : undefined,
     })
   } else {
-    facts.push({ label: <Term term="pool">Worker pools</Term>, value: <Unread title={`WorkerPools: ${coverageLabel(data.coverage.pools)}`}>unknown</Unread>, tone: 'unknown' })
+    facts.push({ label: 'Worker pools', value: <Unread title={`WorkerPools: ${coverageLabel(data.coverage.pools)}`}>unknown</Unread>, tone: 'unknown' })
   }
 
   if (summary.workers) {
     const w = summary.workers
     const notes = [w.draining > 0 && `${w.draining} draining`, w.unavailable > 0 && `${w.unavailable} unavailable`].filter(Boolean)
     facts.push({
-      label: <Term term="worker">Workers</Term>,
-      value: [`${countText(w.active)} active`, ...notes].join(', '),
+      label: 'Workers',
+      value: [`${countText(w.active)} active`, ...notes].join(' · '),
       // An unavailable worker is at risk (alert), the tone of its chip and its row.
       tone: areaTone(data, 'workers', w.unavailable > 0 ? 'alert' : w.total > 0 ? 'healthy' : 'neutral'),
       lowerBound: coverageInPart(cov?.workers),
@@ -176,14 +157,16 @@ export function overviewFacts(data: SubstrateWorkspace): Fact[] {
   } else {
     // Without the API, the worker Pods Kubernetes calls ready stand in, said as Pods.
     const k8s = data.pools.map((p) => p.kubernetes).filter((p): p is NonNullable<SubstratePoolRow['kubernetes']> => !!p)
-    const ready = k8s.reduce((n, p) => n + poolReadyPods(p), 0)
+    const readable = k8s.filter((p) => p.pods || p.reportedReady !== undefined)
+    const ready = readable.reduce((n, p) => n + poolReadyPods(p), 0)
+    const podsPartial = poolsPartial || readable.length < k8s.length
     const desired = k8s.every((p) => p.desired !== undefined) ? k8s.reduce((n, p) => n + (p.desired ?? 0), 0) : undefined
     facts.push({
       label: 'Worker Pods',
-      value: k8s.length === 0 ? 'unknown' : desired !== undefined ? `${countText(ready)} ready of ${countText(desired)}` : `${countText(ready)} ready`,
-      tone: k8s.length === 0 ? 'unknown' : desired !== undefined && ready < desired ? 'degraded' : 'neutral',
+      value: readable.length === 0 ? 'Worker Pod readiness unknown' : `${countText(ready)} Pods ready${desired !== undefined ? ` of ${countText(desired)} desired` : ''}`,
+      tone: readable.length === 0 || podsPartial ? 'unknown' : desired !== undefined && ready < desired ? 'degraded' : 'neutral',
       title: 'Ready worker Pods, from Kubernetes. Whether Substrate places actors on them needs its API.',
-      lowerBound: poolsPartial,
+      lowerBound: podsPartial && ready > 0,
     })
   }
 
@@ -195,13 +178,13 @@ export function overviewFacts(data: SubstrateWorkspace): Fact[] {
 
   if (summary.actors) {
     facts.push({
-      label: <Term term="actor">Actors</Term>,
-      value: `${countText(summary.actors.total)}${summary.actors.crashed > 0 ? `, ${countText(summary.actors.crashed)} crashed` : ''}`,
+      label: 'Actors',
+      value: `${countText(summary.actors.total)} total${summary.actors.crashed > 0 ? `, ${countText(summary.actors.crashed)} crashed` : ''}`,
       tone: summary.actors.crashed > 0 ? 'unhealthy' : summary.actors.total > 0 ? 'healthy' : 'neutral',
       lowerBound: coverageInPart(cov?.actors),
     })
   } else {
-    facts.push({ label: <Term term="actor">Actors</Term>, value: <Unread title={NOT_CONNECTED_TITLE}>{connected ? 'unknown' : 'Not connected'}</Unread>, tone: 'unknown' })
+    facts.push({ label: 'Actors', value: <Unread title={NOT_CONNECTED_TITLE}>{connected ? 'unknown' : 'Not connected'}</Unread>, tone: 'unknown' })
   }
 
   if (summary.templates) {
@@ -212,15 +195,15 @@ export function overviewFacts(data: SubstrateWorkspace): Fact[] {
       noPool > 0 && `${noPool} with no pool`,
     ].filter(Boolean)
     facts.push({
-      label: <Term term="template">Templates</Term>,
+      label: 'Templates',
       // Fragments, not spans: the value sits in a flex row whose gap would push each comma away from its word.
-      value: <span>{[countText(t.total), ...notes].map((n, i) => <Fragment key={i}>{i > 0 && ', '}{n}</Fragment>)}</span>,
+      value: <span>{[countText(t.total), ...notes].map((n, i) => <Fragment key={i}>{i > 0 && ' · '}{n}</Fragment>)}</span>,
       // A template no pool matches is at risk (alert), as its badge and row say; a failed golden snapshot is a warning.
       tone: areaTone(data, 'templates', noPool > 0 ? 'alert' : t.goldenFailed > 0 ? 'degraded' : t.total > 0 ? 'healthy' : 'neutral'),
       lowerBound: coverageInPart(cov?.templates),
     })
   } else {
-    facts.push({ label: <Term term="template">Templates</Term>, value: <Unread title={NOT_CONNECTED_TITLE}>{connected ? 'unknown' : 'Not connected'}</Unread>, tone: 'unknown' })
+    facts.push({ label: 'Templates', value: <Unread title={NOT_CONNECTED_TITLE}>{connected ? 'unknown' : 'Not connected'}</Unread>, tone: 'unknown' })
   }
   facts.push(...serviceFacts(data))
   return facts
@@ -254,7 +237,7 @@ export function serviceFacts(data: Pick<SubstrateWorkspace, 'service' | 'summary
       // While the first collection runs, "no Substrate metrics" would claim an absence Radar hasn't read yet.
       value: svc.collecting
         ? <Unread title={svc.why}>being collected from Prometheus</Unread>
-        : <Unread title={svc.why ?? 'Prometheus holds no Agent Substrate series, so resume latency, failed resumes and crash rates are unknown.'}>unknown (no Substrate metrics)</Unread>,
+        : <Unread title={svc.why ?? 'Prometheus holds no Agent Substrate series, so resume latency, failed resumes and crash rates are unknown.'}>Unavailable · no Substrate series</Unread>,
       tone: 'unknown',
     })
   } else {
@@ -286,7 +269,7 @@ export function serviceFacts(data: Pick<SubstrateWorkspace, 'service' | 'summary
       label: 'Uploads',
       value: `${countText(unstored)} ${unstored === 1 ? 'snapshot' : 'snapshots'} not stored yet`,
       tone: worst,
-      title: svc.nodesOverdue > 0 ? `atelet reports overdue uploads on ${svc.nodesOverdue} ${svc.nodesOverdue === 1 ? 'node' : 'nodes'}.` : 'From Substrate’s API. atelet’s own overdue count, from Prometheus, reports none or wasn’t read.',
+      title: svc.nodesOverdue > 0 ? `Substrate actor snapshots · atelet metrics show overdue uploads on ${svc.nodesOverdue} ${svc.nodesOverdue === 1 ? 'node' : 'nodes'}` : 'From suspended actor snapshots in Substrate',
     })
   } else if (svc.read && svc.nodesOverdue > 0) {
     facts.push({
@@ -300,28 +283,15 @@ export function serviceFacts(data: Pick<SubstrateWorkspace, 'service' | 'summary
   return facts
 }
 
-function ServiceCell({ p, svc }: { p: SubstratePoolRow; svc: SubstrateWorkspace['service'] }) {
-  if (!svc.read) return <Unread title={svc.why}>unknown</Unread>
-  const s = p.service
-  if (!s || s.verdict === 'unknown') return <Unread title={s?.reason ?? 'Prometheus gave no reading for this pool.'}>unknown</Unread>
-  return (
-    <>
-      <span className="whitespace-nowrap">{s.resumeP95Seconds !== undefined ? `p95 ${secs(s.resumeP95Seconds)}` : <span className="text-theme-text-tertiary">p95 unknown</span>}</span>
-      <Sub>
-        {[s.failedResumesPercent !== undefined && `${pct(s.failedResumesPercent)} failed`, s.crashes !== undefined && `${Math.round(s.crashes)} ${Math.round(s.crashes) === 1 ? 'crash' : 'crashes'}`].filter(Boolean).join(' · ') || 'no failures reported'}
-      </Sub>
-    </>
-  )
-}
-
 /** The pool's one reading, the same as its page header: Substrate's verdict, Kubernetes' phase beneath. */
-export function PoolReadingCell({ p }: { p: SubstratePoolRow }) {
-  const r = poolReading(p)
+export function PoolReadingCell({ p, finding }: { p: SubstratePoolRow; finding?: SubstrateAttention }) {
+  const r = poolReading(p, finding)
   return (
     <>
       <Tooltip content={r.kubernetes ? `${r.meaning} Kubernetes: ${r.kubernetes}.` : r.meaning}><span><Badge severity={r.severity} size="sm" className="whitespace-normal text-left">{r.label}</Badge></span></Tooltip>
       {/* Kubernetes' own verdict earns a line only when it explains a problem. */}
-      {r.kubernetes && p.capacity !== 'free' && <Sub>Kubernetes: {r.kubernetes}</Sub>}
+      {p.kubernetes?.healthDetail && <Sub>{p.kubernetes.healthReason === 'Provisioning stalled' ? 'No Deployment reported' : p.kubernetes.healthDetail}</Sub>}
+      {!p.kubernetes?.healthDetail && finding && p.capacity !== 'short' && <Sub>{finding.reading.split('. ')[0]}</Sub>}
     </>
   )
 }
@@ -341,22 +311,14 @@ function WorkersCell({ p }: { p: SubstratePoolRow }) {
       </>
     )
   }
-  if (p.kubernetes) {
-    return (
-      <>
-        <span>{poolReadyPods(p.kubernetes)} ready{desired !== undefined ? ` of ${desired}` : ''}</span>
-        <Sub>worker Pods, from Kubernetes</Sub>
-      </>
-    )
-  }
-  return <Unread>unknown</Unread>
+  return <Unread>Unknown</Unread>
 }
 
-function SlotsCell({ p, connected }: { p: SubstratePoolRow; connected: boolean }) {
+export function SlotsCell({ p, connected }: { p: SubstratePoolRow; connected: boolean }) {
   if (!p.placement) return <Unread title={NOT_CONNECTED_TITLE}>{connected ? 'unknown' : 'Not connected'}</Unread>
   const s = p.placement.slots
   // Substrate counts an unreported actor capacity as zero: such a worker takes no actors.
-  if (s.total === 0) return <Tooltip content="No active worker of this pool has an actor slot, so Substrate places no actors here."><span>0 slots</span></Tooltip>
+  if (s.total === 0 && p.placement.complete) return <Tooltip content="No active worker of this pool has an actor slot, so Substrate places no actors here."><span>0 slots</span></Tooltip>
   // Slots count active workers only; the pool's other actors sit on draining or unavailable workers, which take no new actors.
   // Saying so keeps "31 of 48 used" beside "38 actors" from reading as a contradiction.
   const w = p.placement.workers
@@ -366,64 +328,97 @@ function SlotsCell({ p, connected }: { p: SubstratePoolRow; connected: boolean }
     <>
       <span className="inline-flex items-center gap-1 whitespace-nowrap">
         {!p.placement.complete && <CertaintyGlyph certainty="lower_bound" title="At least: Radar read only part of Substrate’s workers" />}
-        {s.used} of {s.total} used
+        {s.used} of {p.placement.complete ? '' : '≥'}{s.total} used
       </span>
-      {elsewhere > 0 && <Sub>+{elsewhere} {elsewhere === 1 ? 'actor' : 'actors'} on {which} workers, which take no new actors</Sub>}
+      {elsewhere > 0 && <Sub><Tooltip content={`Actors on ${which} workers, which take no new actors.`}><span>+{elsewhere} on non-active workers</span></Tooltip></Sub>}
     </>
   )
 }
 
-export function PoolsTable({ data, onInspect, inspected }: Pick<SubstrateOverviewProps, 'data' | 'onInspect' | 'inspected'>) {
-  const connected = data.apiTier.state === 'connected'
-  const wide = useMediaQuery(SUBSTRATE_WIDE)
-  const measured = serviceMeasured(data.service)
-  const classes = (p: SubstratePoolRow) => (p.sandboxClasses?.length ? p.sandboxClasses.join(', ') : undefined)
-  // One namespace for every pool is said once, in the title, not on each row.
+export function PoolsTable({ data, onInspect, inspected }: {
+  data: SubstrateWorkspace
+  onInspect: (resource: SelectedResource) => void
+  inspected: SelectedResource | null
+}) {
+  const navigate = useWorkspaceNavigate()
+  const [search, setSearch] = useState('')
+  const [filter, setFilter] = useState<'all' | 'attention' | 'free'>('all')
+  const findings = new Map(data.needsAttention
+    .filter((f) => f.subject.kind === 'WorkerPool' && f.severity !== 'info')
+    .map((f) => [`${f.subject.namespace}/${f.subject.name}`, f]))
+  const key = (p: SubstratePoolRow) => `${p.namespace}/${p.name}`
+  const finding = (p: SubstratePoolRow) => findings.get(key(p))
+  const rank = (p: SubstratePoolRow) => {
+    const ranks = { error: 0, alert: 1, warning: 2, info: 3, neutral: 3, success: 4 }
+    return ranks[poolReading(p, finding(p)).severity]
+  }
+  const rows = data.pools
+    .filter((p) => key(p).toLowerCase().includes(search.trim().toLowerCase()))
+    .filter((p) => filter === 'all' || (filter === 'attention' ? rank(p) < 3 : p.capacity === 'free' && rank(p) >= 3))
+    .sort((a, b) => rank(a) - rank(b) || key(a).localeCompare(key(b)))
   const namespaces = [...new Set(data.pools.map((p) => p.namespace))]
   const oneNamespace = namespaces.length === 1 ? namespaces[0] : undefined
+  const openWorkers = (p: SubstratePoolRow) => navigate(`${SUBSTRATE_SCREENS.workers.path}?${new URLSearchParams({ pool: key(p) })}`)
   const columns: TableColumn<SubstratePoolRow>[] = [
     {
       header: 'Pool',
-      width: wide ? (measured ? '16%' : '18%') : '30%',
-      cell: (p) => {
-        const sub = [!oneNamespace && p.namespace, !wide && classes(p), !p.kubernetes && 'named only by Substrate’s workers'].filter(Boolean).join(' · ')
-        return (
-          <>
-            <Name name={p.name} />
-            {sub && <Sub><WholeNames text={sub} /></Sub>}
-          </>
-        )
-      },
+      width: '21%',
+      cell: (p) => (
+        <>
+          <Name name={p.name} />
+          {!oneNamespace && <Sub>{p.namespace}</Sub>}
+          {!p.kubernetes && <Sub>Named by Substrate workers</Sub>}
+        </>
+      ),
     },
-    ...(wide ? [{ header: 'Sandbox class', width: measured ? '10%' : '11%', cell: (p: SubstratePoolRow) => (classes(p) ? <span className="font-mono text-[12.5px]"><WholeNames text={classes(p)!} /></span> : <Unread>none named</Unread>) }] : []),
-    { header: 'Workers', width: wide ? (measured ? '16%' : '17%') : '20%', cell: (p) => <WorkersCell p={p} /> },
-    { header: 'Actor slots', width: wide ? (measured ? '12%' : '13%') : '16%', cell: (p) => <SlotsCell p={p} connected={connected} /> },
-    ...(wide && measured ? [{ header: `Resumes (${data.service.window ?? '1h'})`, width: '12%', cell: (p: SubstratePoolRow) => <ServiceCell p={p} svc={data.service} /> }] : []),
-    { header: 'Actors', width: wide ? (measured ? '8%' : '9%') : '12%', cell: (p) => (p.actors !== undefined ? <span>{countText(p.actors)}</span> : <Unread title={NOT_CONNECTED_TITLE}>{connected ? 'unknown' : '—'}</Unread>) },
+    { header: 'Workers accepting actors', width: '18%', cell: (p) => <WorkersCell p={p} /> },
+    { header: 'Slots on active workers', width: '17%', cell: (p) => <SlotsCell p={p} connected={data.apiTier.state === 'connected'} /> },
     {
-      header: 'Capacity',
-      width: wide ? (measured ? '26%' : '32%') : '22%',
-      cell: (p) => <PoolReadingCell p={p} />,
+      header: 'Kubernetes readiness',
+      width: '19%',
+      cell: ({ kubernetes: k }) => k
+        ? <>{k.reportedReady === undefined ? 'Ready replicas unreported' : `${k.reportedReady} ready · controller`}{k.pods && <Sub>{k.pods.ready} of {k.pods.created} observed {k.pods.created === 1 ? 'Pod' : 'Pods'} ready</Sub>}</>
+        : <Unread>WorkerPool not read</Unread>,
+    },
+    { header: 'Needs attention', cell: (p) => <PoolReadingCell p={p} finding={finding(p)} /> },
+    {
+      header: <span className="sr-only">Open pool</span>,
+      width: '38px',
+      cell: (p) => (
+        <button type="button" aria-label={p.kubernetes ? `Open pool ${p.name}` : `Open workers for ${p.name}`} onClick={(e) => {
+          e.stopPropagation()
+          if (p.kubernetes) onInspect(refToSelectedResource({ kind: 'WorkerPool', group: SUBSTRATE_GROUP, namespace: p.namespace, name: p.name }))
+          else openWorkers(p)
+        }} className="text-accent-text hover:underline">→</button>
+      ),
     },
   ]
   const empty = data.coverage.pools.state === 'notInstalled' ? 'The WorkerPool kind is not installed.' : coverageEmpty(data.coverage.pools, 'WorkerPools')
   return (
-    <SectionTable
-      title="Worker pools"
-      subtitle={oneNamespace ? <>in namespace <span className="font-mono">{oneNamespace}</span></> : undefined}
-      columns={columns}
-      rows={data.pools}
-      rowKey={(p) => `${p.namespace}/${p.name}`}
-      rowResource={(p) => (p.kubernetes ? refToSelectedResource({ kind: 'WorkerPool', group: SUBSTRATE_GROUP, namespace: p.namespace, name: p.name }) : null)}
-      onInspect={onInspect}
-      inspected={inspected}
-      empty={empty}
-      minWidth={wide ? 900 : 640}
-      footer={[
-        INCOMPLETE_COVERAGE_STATES.has(data.coverage.pools.state) && data.pools.length > 0 ? `WorkerPools Radar couldn’t read are not listed: ${coverageLabel(data.coverage.pools)}.` : '',
-        !measured ? 'No Agent Substrate metrics in Prometheus: resume latency and crash rates per pool are unknown.' : '',
-      ].filter(Boolean).join(' ') || undefined}
-    />
+    <>
+      <div className="flex flex-wrap items-center gap-2">
+        <Segments label="Pool filter" value={filter} onChange={setFilter} options={[
+          { id: 'all', label: 'All' }, { id: 'attention', label: 'Needs attention' }, { id: 'free', label: 'Free slots' },
+        ]} />
+        <Input aria-label="Search pools" placeholder="Search pools…" value={search} onChange={(e) => setSearch(e.target.value)} className="h-8 max-w-52 rounded-md border border-theme-border bg-theme-elevated px-3" />
+      </div>
+      <SectionTable
+        subtitle={oneNamespace ? <>Namespace: <span className="font-mono">{oneNamespace}</span></> : undefined}
+        columns={columns}
+        rows={rows}
+        rowKey={key}
+        rowResource={(p) => refToSelectedResource({ kind: 'WorkerPool', group: SUBSTRATE_GROUP, namespace: p.namespace, name: p.name })}
+        onInspect={(res) => {
+          const p = rows.find((row) => row.namespace === res.namespace && row.name === res.name)
+          if (p?.kubernetes) onInspect(res)
+          else if (p) openWorkers(p)
+        }}
+        inspected={inspected}
+        empty={data.pools.length && !rows.length ? 'No pools match these filters.' : empty}
+        minWidth={850}
+        footer={INCOMPLETE_COVERAGE_STATES.has(data.coverage.pools.state) ? `WorkerPools Radar couldn’t read are not listed: ${coverageLabel(data.coverage.pools)}.` : undefined}
+      />
+    </>
   )
 }
 
@@ -432,6 +427,7 @@ type AtespaceRow = NonNullable<SubstrateWorkspace['atespaces']>[number]
 /** One atespace's count of a kind: a lower bound when only part was read, and no number when none was. */
 function AtespaceCount({ read, count, noun }: { read: SubstrateAtespaceRead; count?: number; noun: string }) {
   if (read === 'denied') return <Unread title={`Substrate denied reading this atespace’s ${noun}.`}>No access</Unread>
+  if (read === 'partial' && count === 0) return <Unread title={`Radar found no ${noun} in the part of this atespace it could read.`}>Unknown</Unread>
   if (read === 'unread' || count === undefined) return <Unread title={`Radar didn’t read this atespace’s ${noun}: the read’s budget ran out first, or the connection’s atespaces don’t name it.`}>not read</Unread>
   return (
     <span className="inline-flex items-center gap-1">
@@ -457,7 +453,7 @@ function AtespacesTable({ data }: { data: SubstrateWorkspace }) {
         const n = a.actors.byState.crashed
         const partial = a.actorsRead === 'partial'
         return (
-          <span className={`inline-flex items-center gap-1 ${n > 0 ? 'font-medium' : 'text-theme-text-tertiary'}`}>
+          <span className={`inline-flex items-center gap-1 ${n > 0 ? `font-medium ${toneTextClass('unhealthy')}` : 'text-theme-text-tertiary'}`}>
             {partial && <CertaintyGlyph certainty="lower_bound" title="At least: Radar read only part of this atespace’s actors" />}
             {n}
           </span>
@@ -471,7 +467,7 @@ function AtespacesTable({ data }: { data: SubstrateWorkspace }) {
         title={<Term term="atespace">Atespaces</Term>}
         subtitle="Open one to see its actors."
         columns={columns}
-        rows={data.atespaces}
+        rows={[...data.atespaces].sort((a, b) => (b.actors?.byState.crashed ?? 0) - (a.actors?.byState.crashed ?? 0) || a.name.localeCompare(b.name))}
         rowKey={(a) => a.name}
         // Not a Kubernetes object: the row opens the Actors list narrowed to it.
         rowResource={(a) => ({ kind: 'Atespace', namespace: '', name: a.name })}
@@ -483,55 +479,72 @@ function AtespacesTable({ data }: { data: SubstrateWorkspace }) {
   )
 }
 
-export function SubstrateOverview({ data, status, onInspect, inspected, onOpenSubject }: SubstrateOverviewProps) {
+export function SubstrateOverview({ data, status, onOpenSubject }: SubstrateOverviewProps) {
   const navigate = useWorkspaceNavigate()
   const tier = data.apiTier
-  const connected = tier.state === 'connected'
+  const [pools, workers, slots, actors, templates, ...service] = overviewFacts(data)
+  const uploads = service.find((f) => f.label === 'Uploads')
+  const delivery = service.filter((f) => f !== uploads)
+  const uploadCheck = data.checks.find((c) => c.rule === 'uploadOverdue')
+  const uploadsInPart = coverageInPart(data.coverage.actors)
+  const uploadReading: Fact = uploads ?? {
+    label: 'Uploads',
+    value: uploadCheck?.ran && !uploadsInPart ? 'No overdue uploads found' : 'Unknown',
+    tone: uploadCheck?.ran && !uploadsInPart ? 'healthy' as const : 'unknown' as const,
+  }
+  const uploadRow = data.needsAttention.find((f) => f.rule === 'uploadOverdue')
+  const actorsExtra = data.summary.actors && data.needsAttention.some((a) => a.rule === 'goldenSnapshotFailed') && !coverageInPart(data.coverage.templates)
+    ? data.summary.actors.crashed - (data.needsAttention.find((f) => f.rule === 'crashedActors')?.count ?? 0)
+    : 0
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <SubstrateHeader title="Overview" intro={SUBSTRATE_WHAT_IT_IS} />
+      <SubstrateHeader title="Overview" intro="Cluster-wide" />
       <ScreenBody>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <SubstrateSourceLine tier={tier} status={status} />
-          {connected && <SubstrateConnectionLink status={status} />}
-        </div>
-        <SubstrateCoverageNotice coverage={data.coverage} kinds={['actors', 'templates', 'workers', 'atespaces']} />
         <SubstrateTierBanner tier={tier} />
-        <StatusLine facts={overviewFacts(data)} />
         {showsConnectNotice(tier) && <SubstrateConnectNotice status={status} tier={tier} />}
-        {data.actorStates && (
-          <section aria-labelledby="substrate-states">
-            <div className="mb-2 flex flex-wrap items-baseline gap-x-2.5">
-              <h2 id="substrate-states" className="text-sm font-semibold text-theme-text-primary">Actor states</h2>
-              <span className="text-xs text-theme-text-tertiary">
-                counted by Substrate across{' '}
-                {data.atespaces ? (
-                  <>{data.atespaces.length.toLocaleString('en-US')} <Term term="atespace">{data.atespaces.length === 1 ? 'atespace' : 'atespaces'}</Term></>
-                ) : (
-                  <>every <Term term="atespace">atespace</Term> it lets Radar read</>
-                )}
-              </span>
+        <WorkspaceCard title="Needs attention">
+          {data.needsAttention.length > 0 && <SubstrateAttentionList rows={data.needsAttention} onOpen={onOpenSubject} />}
+          <ChecksSummary data={data} empty={data.needsAttention.length === 0} />
+        </WorkspaceCard>
+        <WorkspaceCard title="At a glance">
+          <FactGrid>
+            <FactRow label="Actors">
+              <DimensionValue tone={actors.tone} source={actorsExtra > 0 ? `Reported phases from Substrate · ${actorsExtra} failed golden ${actorsExtra === 1 ? 'build is' : 'builds are'} tracked under Templates` : 'Reported phases from Substrate'} linkLabel="Actors" onOpen={() => navigate(SUBSTRATE_SCREENS.actors.path)}>
+                <FleetValue fact={actors} />
+              </DimensionValue>
+            </FactRow>
+            <FactRow label="Worker capacity">
+              <DimensionValue tone={worseTone(worseTone(pools.tone, workers.tone), slots.tone)} source={<>Kubernetes and Substrate · <FleetValue fact={workers} /> · <FleetValue fact={slots} /></>} linkLabel="Pools" onOpen={() => navigate(SUBSTRATE_POOLS_PATH)}>
+                <FleetValue fact={pools} />
+              </DimensionValue>
+            </FactRow>
+            <FactRow label="Template startup">
+              <DimensionValue tone={templates.tone} source="Template records from Substrate" linkLabel="Templates" onOpen={() => navigate(SUBSTRATE_SCREENS.templates.path)}>
+                <FleetValue fact={templates} />
+              </DimensionValue>
+            </FactRow>
+            <FactRow label="Snapshot uploads">
+              <DimensionValue tone={uploadReading.tone} source={uploadReading.title ?? (uploadCheck?.why || 'Latest suspended snapshots from Substrate')} linkLabel="Suspended actors" onOpen={uploadRow ? () => onOpenSubject(uploadRow.subject) : undefined}>
+                <FleetValue fact={{ ...uploadReading, lowerBound: uploadsInPart && !!uploadRow }} />
+              </DimensionValue>
+            </FactRow>
+            <FactRow label="Delivery metrics">
+              <DimensionValue tone={delivery.reduce<StatusTone>((tone, f) => worseTone(tone, f.tone), delivery[0].tone)} source={data.service.why || `Substrate Prometheus series · last ${data.service.window ?? '1h'}`}>
+                {delivery.map((f, i) => <Fragment key={i}>{i > 0 && ' · '}{delivery.length > 1 && <>{f.label}: </>}<FleetValue fact={f} /></Fragment>)}
+              </DimensionValue>
+            </FactRow>
+          </FactGrid>
+        </WorkspaceCard>
+        <WorkspaceCard>
+          <FoldSection title="Coverage and connection" summary="Substrate API, Kubernetes and Prometheus" attention={false}>
+            <div className="space-y-3">
+              <SubstrateSourceLine tier={tier} status={status} />
+              <SubstrateConnectionLink status={status} />
+              <SubstrateCoverageNotice coverage={data.coverage} kinds={['actors', 'templates', 'workers', 'atespaces']} />
+              <AtespacesTable data={data} />
             </div>
-            <div className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
-              <SubstrateStateBar counts={data.actorStates} onSelectState={(state) => navigate(substrateActorsPath({ state }))} />
-            </div>
-          </section>
-        )}
-        <section aria-labelledby="substrate-attention">
-          <h2 id="substrate-attention" className="mb-2 text-sm font-semibold text-theme-text-primary">Needs attention</h2>
-          <div className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
-            {data.needsAttention.length === 0 ? (
-              <ChecksSummary data={data} empty />
-            ) : (
-              <>
-                <SubstrateAttentionList rows={data.needsAttention} onOpen={onOpenSubject} />
-                <ChecksSummary data={data} />
-              </>
-            )}
-          </div>
-        </section>
-        <PoolsTable data={data} onInspect={onInspect} inspected={inspected} />
-        <AtespacesTable data={data} />
+          </FoldSection>
+        </WorkspaceCard>
       </ScreenBody>
     </div>
   )

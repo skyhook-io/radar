@@ -27,9 +27,7 @@ function isWorkerPool(resource: HostResource): boolean {
 }
 
 /**
- * The WorkerPool kind's list on its Resources route: Radar's pool table, the
- * same as the Overview's, joining each WorkerPool with Substrate's workers.
- * The namespace filter does not apply.
+ * The WorkerPool kind's list joins Kubernetes and Substrate across namespaces.
  */
 function SubstratePoolsKindList({ inspected, onInspect }: KindListProps) {
   const query = useSubstrateWorkspace()
@@ -72,12 +70,9 @@ export const substrateResourceHost: ResourceHost = {
     return qs ? `${base}?${qs}` : base
   },
   detailOwnership: ['summary', 'destination'],
-  // The composed Overview on the page and in the drawer: the capacity verdict,
-  // which actor holds which slot, and what can run here. The WorkerPool's
-  // renderer moves to "Spec & status".
   detailSlots: (resource): DetailSlots => (isWorkerPool(resource)
     ? {
-        renderSummary: ({ namespace, name, resource: data, context, onNavigate, leadContent }) => <SubstratePoolSummary namespace={namespace} name={name} resource={data} context={context} onNavigate={onNavigate} leadContent={leadContent} />,
+        renderSummary: ({ namespace, name, resource: data, context, onNavigate }) => <SubstratePoolSummary namespace={namespace} name={name} resource={data} context={context} onNavigate={onNavigate} />,
         renderStatusBadge: (data: any) => <PoolHeaderBadge resource={data} />,
       }
     : {}),

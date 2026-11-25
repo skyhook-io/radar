@@ -2,10 +2,10 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { describe, expect, it, vi } from 'vitest'
-import type { SubstrateActorDetail, SubstrateRef, SubstrateTemplate } from '../../api/substrateWorkspace'
+import type { SubstrateActorDetail, SubstrateActorLogs, SubstrateRef, SubstrateTemplate } from '../../api/substrateWorkspace'
 import { ApiError } from '../../api/client'
 import { decodeDrawerTrail } from '../../utils/drawer-trail'
-import { actorDetail, workspace } from './substrate.fixtures'
+import { actorDetail, counts, workspace } from './substrate.fixtures'
 
 type Read<T> = { data?: T; error: unknown; isLoading: boolean; isRefetchError: boolean; dataUpdatedAt: number; isFetching?: boolean; refetch?: () => void }
 
@@ -13,6 +13,7 @@ const state = vi.hoisted(() => ({
   context: 'cluster-B',
   template: undefined as unknown as Read<SubstrateTemplate>,
   actor: undefined as unknown as Read<SubstrateActorDetail>,
+  logs: undefined as SubstrateActorLogs | undefined,
   reads: [] as string[],
   workspace: undefined as unknown,
 }))
@@ -35,7 +36,7 @@ vi.mock('../../api/substrateWorkspace', async (importOriginal) => ({
     if (ref) state.reads.push(`actor ${ref.name}`)
     return ref ? state.actor : { data: undefined, error: null, isLoading: false, isRefetchError: false, dataUpdatedAt: 0 }
   },
-  useSubstrateActorLogs: () => ({ data: undefined, error: null, isLoading: true }),
+  useSubstrateActorLogs: () => ({ data: state.logs, error: null, isLoading: !state.logs }),
   useSubstrateWorkspace: () => ({ data: state.workspace }),
   useSubstratePool: () => ({ data: undefined, error: null, isLoading: true }),
 }))
@@ -99,7 +100,9 @@ describe('a failed template', () => {
     ;(t.template as any).golden = { state: 'failed', error: 'killed for exceeding its memory limit' }
     state.template = ok(t)
     const html = render(<SubstrateTemplatePage template={{ atespace: 'team', name: 'broken' }} onOpenSubject={() => {}} />, '/substrate/templates/team/broken?ctx=cluster-B')
-    expect(html).toContain('No golden snapshot: new actors not seeded from a tag start from a cold boot, not a prepared snapshot')
+    expect(html).toContain('Startup snapshot failed')
+    expect(html).toContain('New actors without a seed tag start from a cold boot.')
+    expect(html).toContain('Failed · cold startup')
     expect(html.split('does not retry').length - 1).toBe(1)
   })
 
@@ -139,25 +142,22 @@ describe('a crashed golden-build actor', () => {
 describe('a template whose actors crashed', () => {
   it('says how many of its actors crashed and why, beside the memory it sets', () => {
     const t = template('langgraph-research')
-    ;(t.template as any).memoryBytes = 2 * 1024 ** 3
-    ;(t.template as any).cpuMillicores = 2000
+    t.template.memoryBytes = 2 * 1024 ** 3
+    t.template.cpuMillicores = 2000
+    t.template.attentionCount = 11
+    t.template.actors = counts({ crashed: 11, running: 30 })
     state.template = ok(t)
     const crash = { id: 'c', rule: 'crashedActors', severity: 'critical', title: 't', reading: 'r', nextStep: 'Fix it.', subject: { kind: 'Actors', filter: { state: 'crashed' } }, count: 15,
       groups: [{ subject: { kind: 'ActorTemplate', atespace: 'team', name: 'langgraph-research' }, count: 11, cause: 'memoryLimit', nextStep: 'Create a template with a higher memory limit.', command: 'kubectl ate update actor <name> -a <atespace> --template <new-template>' }] }
     state.workspace = { ...workspace(), needsAttention: [crash] }
     const html = render(<SubstrateTemplatePage template={{ atespace: 'team', name: 'langgraph-research' }} onOpenSubject={() => {}} />, '/substrate/templates/team/langgraph-research?ctx=cluster-B')
-    expect(html).toContain('11 of its actors are crashed')
-    expect(html).toContain('Killed over the 2Gi memory limit it sets per actor.')
-    expect(html).not.toContain('they were killed for exceeding')
-    expect(html).toContain('Next step: Create a template with a higher memory limit.')
-    expect(html).toContain('The 11 crashed actors →')
-    // Beside a crash callout, the header chip names what is ready: the golden snapshot, not the template.
+    expect(html).toContain('11 reported crashed →')
+    expect(html).toContain('Killed over the 2Gi memory limit per actor')
+    expect(html).toContain('Create a template with a higher memory limit.')
     expect(html).toContain('Golden snapshot ready')
-    expect(html).toContain('a ceiling, not a guarantee')
-    // Compact: the cause and the way to the actors on one line, then the step with its one command.
-    expect(html).toMatch(/Killed over the 2Gi memory limit it sets per actor\.(<\/span>)?<button[^>]*>The 11 crashed actors →<\/button><\/div>/)
-    expect(html.indexOf('The 11 crashed actors')).toBeLessThan(html.indexOf('Next step: Create'))
-    expect(html.match(/aria-label="Copy command"/g)?.length).toBe(2) // the step's, and the Spec's YAML command
+    expect(html).toContain('2 CPU · 2Gi')
+    expect(html).toMatch(/Crash recovery steps.*?inert=.*?Create a template.*?Copy command/)
+    expect(html.match(/aria-label="Copy command"/g)?.length).toBe(2)
     state.workspace = undefined
   })
 })
@@ -182,29 +182,25 @@ describe('a template whose golden actor and actors were both killed over its mem
   }
   const words = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\s+/g, ' ')
 
-  it('leads with the crash callout, and gives one plan there with its two commands in order', () => {
+  it('uses one startup callout for the joint recovery plan and folds the commands in order', () => {
     const html = page('memoryLimit', 1)
     const w = words(html)
-    // Lost work first: the red callout comes before the amber golden-snapshot one.
-    expect(html.indexOf('1 of its actors is crashed')).toBeLessThan(html.indexOf('No '))
-    expect(html.indexOf('bg-red-50')).toBeLessThan(html.indexOf('bg-amber-50'))
-    // One plan, one next step: the golden banner points at it rather than offering its own.
+    expect(w.indexOf('Startup snapshot failed')).toBeLessThan(w.indexOf('At a glance'))
+    expect(html).not.toContain('bg-red-50')
     const plan = 'Recreate the template with a higher memory limit, move the crashed actor to it, then revert it. The move may keep only its snapshot’s volumes.'
     expect(w).toContain(`Next step: ${plan}`)
     expect(w.split('Next step:').length - 1).toBe(1)
     expect(w).not.toContain('Recreate the template with a higher memory limit; templates can’t be edited.')
-    expect(w).toContain('Recreating the template, as the step above says, starts a new golden snapshot build.')
     expect(w.indexOf(plan)).toBeLessThan(w.indexOf(move))
     expect(w.indexOf(move)).toBeLessThan(w.indexOf(revert))
-    expect(w.indexOf(revert)).toBeLessThan(w.indexOf('Recreating the template'))
+    expect(html).toMatch(/Crash recovery steps.*?inert=.*?Copy command/)
   })
 
-  it('keeps each callout’s own step when the golden build failed for another reason', () => {
+  it('keeps the actor remedy separately folded when the startup build failed for another reason', () => {
     const w = words(page(undefined, 3))
-    expect(w).toContain('Next step: Move the actors to a template with more memory, then revert them.')
+    expect(w).toContain('Move the actors to a template with more memory, then revert them.')
     expect(w).toContain('Next step: Recreate the template with a higher memory limit; templates can’t be edited.')
-    expect(w).not.toContain('Recreating the template, as the step above says')
-    expect(w.indexOf('3 of its actors are crashed')).toBeLessThan(w.indexOf('No golden snapshot'))
+    expect(w.indexOf('Startup snapshot failed')).toBeLessThan(w.indexOf('Crash recovery steps'))
   })
 
   it('offers no command, and keeps the server’s step, when kagent runs some of its crashed actors', () => {
@@ -218,7 +214,7 @@ describe('a template whose golden actor and actors were both killed over its mem
     state.workspace = { ...workspace(), needsAttention: [row, goldenRow] } as any
     try {
       const w = words(render(<SubstrateTemplatePage template={{ atespace: 'sandbox-dev', name: 'mcp-browser' }} onOpenSubject={() => {}} />, '/substrate/templates/sandbox-dev/mcp-browser?ctx=cluster-B'))
-      expect(w).toContain(`Next step: ${step}`)
+      expect(w).toContain(step)
       expect(w).not.toContain(move)
       expect(w).not.toContain(revert)
       expect(w).not.toContain('move the crashed actors to it, then revert them')
@@ -227,25 +223,26 @@ describe('a template whose golden actor and actors were both killed over its mem
     }
   })
 
-  it('defines the golden snapshot where its banner first names it', () => {
+  it('defines the startup snapshot in At a glance', () => {
     const t = template('mcp-browser')
     ;(t.template as any).golden = { state: 'failed', error: 'x' }
     state.template = ok(t)
     const raw = renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/substrate/templates/team/mcp-browser?ctx=cluster-B']}><SubstrateTemplatePage template={{ atespace: 'team', name: 'mcp-browser' }} onOpenSubject={() => {}} /></MemoryRouter></QueryClientProvider>)
-    expect(raw).toMatch(/No <span[^>]*><span[^>]*decoration-dotted[^>]*>golden snapshot<\/span><\/span>: new actors/)
+    expect(raw).toMatch(/decoration-dotted[^>]*>Startup snapshot<\/span>/)
   })
 })
 
 describe('a template’s banners', () => {
-  it('reads each in its row’s tone: no matching pool an alert, a failed golden snapshot a warning', () => {
+  it('uses the strongest template finding for the callout and header', () => {
     const t = template('stranded')
     ;(t.template as any).matchingPools = []
     ;(t.template as any).golden = { state: 'failed', error: 'x' }
     state.template = ok(t)
     const html = render(<SubstrateTemplatePage template={{ atespace: 'team', name: 'stranded' }} onOpenSubject={() => {}} />, '/substrate/templates/team/stranded?ctx=cluster-B')
     const banner = (title: string) => html.slice(html.lastIndexOf('<div class="p-3 border rounded-lg', html.indexOf(title)), html.indexOf(title))
-    expect(banner('No pool can run it')).toContain('status-alert')
-    expect(banner('No golden snapshot')).toContain('bg-amber-50')
+    expect(banner('No worker pool matches')).toContain('status-alert')
+    expect(html).not.toContain('bg-amber-50')
+    expect(html).toContain('Failed · cold startup')
     expect(html).not.toContain('bg-red-50')
   })
 })
@@ -283,7 +280,8 @@ describe('a detail read whose refresh failed', () => {
 
 describe('an actor’s snapshots', () => {
   const page = (snapshots: NonNullable<SubstrateActorDetail['actor']['snapshots']>) => {
-    state.actor = ok(actorDetail({ actor: { ...actorDetail().actor, snapshots } }))
+    const detail = actorDetail()
+    state.actor = ok(actorDetail({ actor: { ...detail.actor, snapshots }, row: { ...detail.row, resumeGeneration: snapshots.find((s) => s.durable === 'completed')?.generation } }))
     return render(<SubstrateActorPage actor={{ atespace: 'research', name: 'lit-review-0193' }} onOpenSubject={() => {}} />, '/substrate/actors/research/lit-review-0193?tab=snapshots&ctx=cluster-B')
   }
 
@@ -294,13 +292,15 @@ describe('an actor’s snapshots', () => {
       { generation: 4, fidelity: 'rootfs', owner: 'actor', durable: 'none', locality: 'ip-10-0-17-21.ec2.internal' },
     ])
     expect(html).toContain('Where it is kept')
+    expect(html.indexOf('Resume source')).toBeLessThan(html.indexOf('Where it is kept'))
+    expect(html).toContain('Generation 5 · memory · Durable copy')
     expect(html).not.toContain('>Stored<')
-    expect(html).toContain('Only on its nodeUpload pending. Until it finishes, its state is only on')
+    expect(html).toContain('Only on its nodeUpload pending. Recorded locality:')
     expect(html).toContain('Durable copyUploaded to object storage.')
-    expect(html).toContain('No durable copy recorded. Its files are only on')
+    expect(html).toContain('No durable copy recorded. Recorded locality:')
     // The hostname stays one unbroken token.
     const raw = renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/substrate/actors/research/lit-review-0193?tab=snapshots&ctx=cluster-B']}><SubstrateActorPage actor={{ atespace: 'research', name: 'lit-review-0193' }} onOpenSubject={() => {}} /></MemoryRouter></QueryClientProvider>)
-    expect(raw).toMatch(/class="block truncate whitespace-nowrap font-mono text-\[12\.5px\]">ip-10-0-17-21\.ec2\.internal</)
+    expect(raw).toMatch(/<button[^>]*>.*?class="inline-block whitespace-nowrap">ip-10-0-17-21\.ec2\.internal<\/span><\/button>/)
     // Substrate records no upload time, so none is invented.
     expect(html).not.toMatch(/uploaded \d|upload(ed)? at/i)
   })
@@ -311,6 +311,38 @@ describe('an actor’s snapshots', () => {
     expect(missing).not.toContain('pruned')
     const whole = page([{ generation: 2, fidelity: 'memory', owner: 'actor', durable: 'completed' }, { generation: 1, fidelity: 'memory', owner: 'actor', durable: 'completed' }])
     expect(whole).not.toContain('earlier generation')
+  })
+})
+
+describe('actor log availability', () => {
+  function logs(reasonCode: SubstrateActorLogs['reasonCode']) {
+    const detail = actorDetail()
+    state.actor = ok(detail)
+    state.logs = {
+      actor: detail.actor, state: 'crashed', origin: 'lastNode', reasonCode, node: 'former-node',
+      source: 'all', lines: [], searched: [], scanned: 0, windowFull: false,
+    }
+    try {
+      return render(<SubstrateActorPage actor={detail.actor} onOpenSubject={() => {}} />, '/substrate/actors/research/lit-review-0193?tab=logs&ctx=cluster-B')
+    } finally {
+      state.logs = undefined
+    }
+  }
+
+  it('gives one unavailable card and an external query when the recorded node is gone', () => {
+    const html = logs('nodeGone')
+    expect(html.match(/Worker logs unavailable/g)).toHaveLength(1)
+    expect(html).toContain('former-node, is gone from the cluster')
+    expect(html).toContain('ate.actor.name="lit-review-0193" ate.atespace="research"')
+    expect(html).not.toContain('Log source')
+    expect(html).not.toContain('No matching log lines')
+  })
+
+  it('keeps source controls when the log was read and returned no matches', () => {
+    const html = logs('noMatch')
+    expect(html).toContain('No matching log lines')
+    expect(html).toContain('Container output')
+    expect(html).not.toContain('Worker logs unavailable')
   })
 })
 

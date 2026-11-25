@@ -361,8 +361,8 @@ describe('pool reading over a partial read of the workers', () => {
     const { poolReading } = await import('./readings')
     const placement = { workers: { total: 2, active: 2, draining: 0, unavailable: 0 }, slots: { used: 1, total: 8 }, cpuMillicores: { used: 1, total: 2 }, memoryBytes: { used: 1, total: 2 } }
     const kubernetes = { namespace: 'a', name: 'p', desired: 5, ready: 2, health: 'degraded' as const, healthReason: 'Scaling' }
-    expect(poolReading({ capacity: 'short', placement: { ...placement, complete: false }, kubernetes }).label).toBe('Short of workers: at least 2 of 5 active')
-    expect(poolReading({ capacity: 'short', placement: { ...placement, complete: true }, kubernetes }).label).toBe('Short of workers: 2 of 5 active')
+    expect(poolReading({ capacity: 'short', placement: { ...placement, complete: false }, kubernetes }).label).toBe('Short of workers · at least 2 of 5 active')
+    expect(poolReading({ capacity: 'short', placement: { ...placement, complete: true }, kubernetes }).label).toBe('Short of workers · 2 of 5 active')
   })
 })
 

@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
-import { Maximize2, X } from 'lucide-react'
-import { Badge, PaneLoader, ResourceDetailDrawer, Tooltip } from '@skyhook-io/k8s-ui'
+import { X } from 'lucide-react'
+import { PaneLoader, ResourceDetailDrawer, Tooltip } from '@skyhook-io/k8s-ui'
 import { substrateErrorCode, useSubstrateActor, type SubstrateRef } from '../../api/substrateWorkspace'
 import { RefreshFailedNotice } from '../workspace/layout'
 import { definitiveFailure } from './readings'
@@ -54,17 +54,11 @@ function ActorDrawerBody({ actor, onClose, onOpenFull, onOpenSubject }: { actor:
       <div className="flex shrink-0 items-start gap-3 border-b border-theme-border px-4 py-3">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge tone="structural" size="sm">Actor</Badge>
             {detail && <ActorStateBadge state={detail.actor.state} impact={detail.workerImpact} updateTime={detail.actor.updateTime} />}
           </div>
           <h2 className="mt-1 truncate font-mono text-base font-semibold text-theme-text-primary">{actor.name}</h2>
-          <div className="text-xs text-theme-text-tertiary"><Term term="atespace">atespace</Term> <span className="font-mono">{actor.atespace}</span></div>
+          <div className="text-xs text-theme-text-tertiary"><Term term="atespace">Atespace</Term>: <span className="font-mono">{actor.atespace}</span></div>
         </div>
-        <Tooltip content="Open full view" delay={150} position="bottom">
-          <button type="button" aria-label="Open full view" onClick={() => onOpenFull(actor)} className="rounded-lg p-1.5 text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary">
-            <Maximize2 className="h-4 w-4" />
-          </button>
-        </Tooltip>
         <Tooltip content="Close (Esc)" delay={150} position="bottom">
           <button type="button" aria-label="Close" onClick={onClose} className="rounded-lg p-1.5 text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary">
             <X className="h-4 w-4" />
@@ -78,7 +72,14 @@ function ActorDrawerBody({ actor, onClose, onOpenFull, onOpenSubject }: { actor:
         ) : !detail ? (
           <ActorReadFailure actor={actor} error={query.error} onBack={onClose} backLabel="Close" />
         ) : (
-          <SubstrateActorOverview detail={detail} onOpenSubject={onOpenSubject} onShowLogs={() => onOpenFull(actor, 'logs')} />
+          <SubstrateActorOverview detail={detail} framed={false} onOpenSubject={onOpenSubject}
+            onShowLogs={() => onOpenFull(actor, 'logs')} onShowSnapshots={() => onOpenFull(actor, 'snapshots')} onShowEgress={() => onOpenFull(actor, 'egress')}
+            actions={<div className="flex flex-wrap gap-2">
+              <button type="button" className="btn-brand px-3 py-1 text-sm" onClick={() => onOpenFull(actor)}>Open actor</button>
+              <button type="button" className="btn-secondary px-3 py-1 text-sm" onClick={() => onOpenFull(actor, 'snapshots')}>Snapshots</button>
+              <button type="button" className="btn-secondary px-3 py-1 text-sm" onClick={() => onOpenFull(actor, 'logs')}>Logs</button>
+            </div>}
+          />
         )}
       </div>
     </div>

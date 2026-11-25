@@ -2,21 +2,22 @@ import type { ReactNode } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { clsx } from 'clsx'
 import { Unlink } from 'lucide-react'
-import { Badge, SectionHeading, Tooltip, formatDuration, toneFillClass, toneTextClass, type NavigateToResource, type StatusTone } from '@skyhook-io/k8s-ui'
+import { Badge, CertaintyGlyph, DimensionValue, FactGrid, FactRow, FactSource, FactValue, SectionHeading, Tooltip, WorkspaceCard, WorkspaceProblemCallout, formatDuration, toneFillClass, toneTextClass, type NavigateToResource, type StatusTone } from '@skyhook-io/k8s-ui'
 import { getWorkerPoolSandboxConfig, getWorkerPoolStatus } from '@skyhook-io/k8s-ui/components/resources/resource-utils-agent-runtimes'
-import { substrateErrorCode, useSubstratePool, type SubstrateK8sPool, type SubstratePool, type SubstrateRef, type SubstrateWorkerRow } from '../../api/substrateWorkspace'
+import { substrateErrorCode, useSubstratePool, type SubstratePool, type SubstrateRef, type SubstrateWorkerRow } from '../../api/substrateWorkspace'
 import { useConnection } from '../../context/ConnectionContext'
-import { usePrometheusStatus } from '../../api/client'
+import { isForbiddenError, usePrometheusStatus } from '../../api/client'
 import { useSubstrateHealth } from '../../api/substrateHealth'
-import { SubstrateVerdictLine } from '../resource/SubstrateVerdictLine'
+import { formatMetricValue } from '@skyhook-io/k8s-ui/components/charts'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
+import { WorkspaceConditions } from '../workspace/WorkspaceConditions'
+import { coverageLabel } from '../workspace/coverage'
 import { RefreshFailedNotice } from '../workspace/layout'
-import { ACTOR_STATE_LABEL, definitiveFailure, placementTone, poolPodsText, poolReadFailure, poolReading, bytesText, coverageInPart, coverageReason, coverageUnread, cpuText, tierReading } from './readings'
-import { ACTOR_DRAWER_PARAM, SUBSTRATE_PATH, encodeActorParam, substrateActorPath, substrateActorsPath, substrateTemplatePath } from './routes'
-import { IMPACT_LABEL, Name, Term, Unread, When, WorkerStateChip } from './shared'
+import { ACTOR_STATE_LABEL, definitiveFailure, attentionTone, placementTone, poolReadFailure, poolReading, splitReading, bytesText, coverageInPart, coverageReason, coverageUnread, cpuText, tierReading } from './readings'
+import { ACTOR_DRAWER_PARAM, SUBSTRATE_GROUP, SUBSTRATE_PATH, SUBSTRATE_SCREENS, encodeActorParam, substrateActorPath, substrateActorsPath, substratePoolPath, substrateTemplatePath } from './routes'
+import { IMPACT_LABEL, Name, Term, Unread, WorkerStateChip } from './shared'
+import { SlotsCell } from './SubstrateOverview'
 import { RESERVED_MEANING, lostText } from './SubstrateWorkers'
-
-const CARD = 'rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm'
 
 /** Past this many workers the grid becomes one row per worker with a slot bar. */
 export const PLACEMENT_CARD_LIMIT = 12
@@ -128,7 +129,7 @@ function WorkerStateBadge({ w }: { w: SubstrateWorkerRow }) {
   )
 }
 
-function WorkerCard({ w, onOpenActor, onOpenPod }: { w: SubstrateWorkerRow; onOpenActor: (ref: SubstrateRef) => void; onOpenPod: (w: SubstrateWorkerRow) => void }) {
+function WorkerCard({ w, onOpenActor, onOpenPod, onOpenNode }: { w: SubstrateWorkerRow; onOpenActor: (ref: SubstrateRef) => void; onOpenPod: (w: SubstrateWorkerRow) => void; onOpenNode?: (node: string) => void }) {
   const { actors, free } = workerSlots(w)
   const podMismatch = w.podReady === true && w.state === 'unavailable'
   const resources = resourcesReserved(w)
@@ -155,10 +156,11 @@ function WorkerCard({ w, onOpenActor, onOpenPod }: { w: SubstrateWorkerRow; onOp
         </>
       )}
       <div className="mt-0.5 text-xs text-theme-text-tertiary">
-        <span className="whitespace-nowrap font-mono">{w.node || 'node unknown'}</span>
+        {w.node && onOpenNode
+          ? <button type="button" onClick={() => onOpenNode(w.node)} className="break-all font-mono text-accent-text hover:underline">{w.node}</button>
+          : <span className="break-all font-mono">{w.node || 'node unknown'}</span>}
         {resources && <> · {resources}</>}
       </div>
-      {w.node && <NodeRiskLinks node={w.node} />}
       {podMismatch && <div className="mt-1 text-xs text-theme-text-secondary">Its Pod is Ready, so the worker, not Kubernetes, is refusing work.</div>}
       {w.podTerminating && <div className="mt-1 text-xs text-theme-text-secondary">Its Pod is terminating, so Kubernetes doesn’t count it as ready.</div>}
     </div>
@@ -209,44 +211,23 @@ function WorkerRows({ workers, onOpenPod }: { workers: SubstrateWorkerRow[]; onO
  */
 function CapacityVerdict({ namespace, name, onOpenMetrics }: { namespace: string; name: string; onOpenMetrics?: () => void }) {
   const target = { kind: 'workerpool' as const, namespace, name }
-  const { data: prometheus } = usePrometheusStatus()
+  const { data: prometheus, isError } = usePrometheusStatus()
   const connected = prometheus?.connected === true
   const health = useSubstrateHealth(target, connected)
-  if (connected && health.data?.status === 'available') return <SubstrateVerdictLine target={target} onOpenMetrics={onOpenMetrics} />
-  let why: string | undefined
-  if (prometheus && !connected) why = 'Prometheus is not connected, so Radar has no capacity verdict over time for this pool.'
-  else if (health.data?.status === 'notFound') why = 'Prometheus has no Agent Substrate series for this pool, so Radar has no capacity verdict over time. The placement below is Substrate’s own reading, now.'
-  if (!why) return null
-  return <p className="text-xs text-theme-text-tertiary">{why}</p>
-}
-
-/**
- * The pool's workers before its map: active, registered with Substrate and
- * desired, then any desired worker Substrate has no registration for. Only a
- * complete worker list can say one is missing; whether its Pod exists is
- * Kubernetes' to say, so its Pod count stands beside it.
- */
-export function WorkerCounts({ workers, partial, k8s, short }: { workers: Pick<SubstrateWorkerRow, 'state'>[]; partial: boolean; k8s?: SubstrateK8sPool; short: boolean }) {
-  const desired = k8s?.desired
-  const atLeast = partial ? 'at least ' : ''
-  const active = workers.filter((w) => w.state === 'active').length
-  const missing = !partial && desired !== undefined ? Math.max(0, desired - workers.length) : 0
-  // A partial read that saw none counts nothing: the line below says Radar saw none.
-  const seen = !partial || workers.length > 0
-  const parts = [seen && `${atLeast}${active} active`, seen && `${atLeast}${workers.length} registered with Substrate`, desired !== undefined && `${desired} desired`].filter(Boolean)
-  if (parts.length === 0) return null
-  return (
-    <div className="mb-3 space-y-0.5">
-      <div className={clsx('text-sm font-medium', short ? toneTextClass('degraded') : 'text-theme-text-primary')}>Workers: {parts.join(' · ')}</div>
-      {missing > 0 && (
-        <div className="text-xs text-theme-text-secondary">
-          <span className="font-medium text-theme-text-primary">{missing === 1 ? '1 desired worker is not registered with Substrate.' : `${missing} desired workers are not registered with Substrate.`}</span>
-          {k8s && <> {poolPodsText(k8s)}</>}
-        </div>
-      )}
-      {missing === 0 && k8s && <div className="text-xs text-theme-text-secondary">{poolPodsText(k8s)}</div>}
-    </div>
-  )
+  const delivery = !health.error && health.data?.status === 'available'
+    ? health.data.verdict?.facts
+      .filter((f) => f.id === 'resumeP95' || f.id === 'resumeFailures' || f.id === 'crashes')
+      .map((f) => `${f.label} ${f.state === 'ok' && f.value !== undefined ? formatMetricValue(f.value, f.unit) : f.state === 'empty' ? 'none recorded' : 'unavailable'}`)
+    : undefined
+  const reason = isForbiddenError(health.error) ? `Requires get on workerpools.ate.dev in ${namespace}`
+    : isError ? 'Prometheus connection status could not be read'
+    : !prometheus ? 'Checking Prometheus…'
+    : !connected ? 'Prometheus is not connected'
+    : health.error ? health.error.message
+    : health.data?.status === 'notFound' ? 'No Substrate series for this pool'
+    : health.data?.status === 'available' ? (delivery?.length ? delivery.join(' · ') : 'Resume and crash readings unavailable')
+    : health.data?.reason || health.blockedReason || (health.upgrade ? 'This Radar needs an upgrade' : 'Reading Prometheus…')
+  return <DimensionValue tone={delivery?.length ? 'neutral' : 'unknown'} source="Substrate Prometheus series · last hour" linkLabel="Metrics" onOpen={onOpenMetrics}>{reason}</DimensionValue>
 }
 
 function Legend() {
@@ -271,101 +252,105 @@ function Legend() {
   )
 }
 
-export function Placement({ data, onOpenActor, onOpenPod, drawer }: { data: SubstratePool; onOpenActor: (ref: SubstrateRef) => void; onOpenPod: (w: SubstrateWorkerRow) => void; drawer?: boolean }) {
-  const k8s = data.pool.kubernetes
+export function Placement({
+  data, onOpenActor, onOpenPod, onOpenNode, drawer,
+}: {
+  data: SubstratePool
+  onOpenActor: (ref: SubstrateRef) => void
+  onOpenPod: (w: SubstrateWorkerRow) => void
+  onOpenNode?: (node: string) => void
+  drawer?: boolean
+}) {
   const workers = [...data.workers].sort((a, b) => a.pod.localeCompare(b.pod))
-  const tierRead = data.apiTier.readAt
-  const heading = <SectionHeading hint={<>which actor holds which slot · from Substrate’s API{tierRead ? <> · <When iso={tierRead} prefix="read" /></> : ''}</>}>Placement</SectionHeading>
-  const kubernetesReady = k8s ? <p className="mt-2 text-xs text-theme-text-secondary">{poolPodsText(k8s)}</p> : null
-  // Unread workers: placement is unknown, not empty, and no count of missing workers can be made from it.
-  if (coverageUnread(data.coverage.workers)) {
-    return (
-      <section className={CARD}>
-        {heading}
-        <p className="text-sm text-theme-text-secondary">Which actor holds which slot is unknown: Substrate’s workers were not read ({coverageReason(data.coverage.workers, 'workers')}).</p>
-        {kubernetesReady}
-      </section>
-    )
-  }
+  if (workers.length === 0 || coverageUnread(data.coverage.workers)) return null
   const partial = coverageInPart(data.coverage.workers)
-  const rows = workers.length > PLACEMENT_CARD_LIMIT
-  return (
-    <section className={CARD}>
-      {heading}
-      {partial && <p className="mb-2 text-xs text-theme-text-secondary">Not every worker was read, so these are the ones Radar saw: {coverageReason(data.coverage.workers, 'workers')}.</p>}
-      {/* The shortage leads: how many workers the pool has and wants, above the map of what they hold. */}
-      <WorkerCounts workers={workers} partial={partial} k8s={k8s} short={data.pool.capacity === 'short'} />
-      <div className="mb-3"><Legend /></div>
-      {workers.length === 0 ? (
-        <p className="text-sm text-theme-text-tertiary">{partial ? 'Radar saw no worker of this pool in what it read.' : 'Substrate has no workers in this pool.'}</p>
-      ) : rows ? (
-        <WorkerRows workers={workers} onOpenPod={onOpenPod} />
-      ) : (
-        // items-start: each card ends at its content; order stays row by row.
-        <div className={clsx('grid items-start gap-3', drawer ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-2')}>
-          {workers.map((w) => <WorkerCard key={w.name} w={w} onOpenActor={onOpenActor} onOpenPod={onOpenPod} />)}
-        </div>
-      )}
-      <p className="mt-3 text-xs text-theme-text-tertiary">
-        A <Term term="slot">slot</Term> is room for one actor; CPU or memory can run out first.
-      </p>
-    </section>
+  const nodes = [...new Set(workers.map((w) => w.node).filter(Boolean))]
+  const content = <>
+    {partial && <p className="mb-2 text-xs text-theme-text-secondary">Observed workers only · {coverageReason(data.coverage.workers, 'workers')}.</p>}
+    {workers.length > PLACEMENT_CARD_LIMIT ? (
+      <WorkerRows workers={workers} onOpenPod={onOpenPod} />
+    ) : (
+      <div className={clsx('grid items-start gap-3', drawer ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-2')}>
+        {workers.map((w) => <WorkerCard key={w.name} w={w} onOpenActor={onOpenActor} onOpenPod={onOpenPod} onOpenNode={onOpenNode} />)}
+      </div>
+    )}
+    <div className="mt-3"><Legend /></div>
+    <p className="mt-2 text-xs text-theme-text-tertiary">
+      A <Term term="slot">slot</Term> holds one actor. Placement also uses CPU and memory.
+    </p>
+    {nodes.length > 0 && <div className="mt-2 flex flex-wrap gap-3 border-t-subtle pt-2">
+      {nodes.map((node) => <div key={node} className="min-w-0 text-xs text-theme-text-secondary">
+        <span className="break-all font-mono">{node}</span><NodeRiskLinks node={node} />
+      </div>)}
+    </div>}
+  </>
+  return drawer ? <section className="border-t-subtle pt-3"><SectionHeading>Placement</SectionHeading>{content}</section>
+    : <WorkspaceCard title="Placement">{content}</WorkspaceCard>
+}
+
+interface PoolResource {
+  metadata?: { namespace?: string; name?: string; generation?: number }
+  spec?: { replicas?: number; sandboxClasses?: { name?: string }[] }
+  status?: {
+    replicas?: number
+    readyReplicas?: number
+    selector?: string
+    sandboxClasses?: { name?: string; conditions?: { type: string; status: string; reason?: string; message?: string; lastTransitionTime?: string }[] }[]
+  }
+}
+
+function poolConditions(resource: PoolResource) {
+  return (resource.status?.sandboxClasses ?? []).flatMap((c) =>
+    (c.conditions ?? []).map((condition) => ({ ...condition, type: c.name ? `${c.name} · ${condition.type}` : condition.type })),
   )
 }
 
-function RunsHere({ data, loading, classes, config, onOpenTemplate }: { data?: SubstratePool; loading?: boolean; classes: string[]; config?: string; onOpenTemplate: (ref: SubstrateRef) => void }) {
-  const templates = data?.templates
-  let templatesBody: ReactNode
-  if (loading) templatesBody = <span className="text-theme-text-tertiary">Reading…</span>
-  else if (!data || data.apiTier.state !== 'connected' || templates === undefined) templatesBody = <Unread title="Kept in Substrate’s API.">unknown: templates were not read</Unread>
-  else if (templates.length === 0) templatesBody = <span className="text-theme-text-secondary">None.</span>
-  else {
-    templatesBody = (
-      <>
-        {templates.map((t, i) => (
-          <span key={`${t.atespace}/${t.name}`}>
-            {i > 0 && ', '}
-            <button type="button" onClick={() => onOpenTemplate(t)} className="whitespace-nowrap font-mono text-accent-text hover:underline">{t.atespace} / {t.name}</button>
-          </span>
-        ))}
-        <span className="text-theme-text-tertiary"> · matching labels, not a promise each actor fits</span>
-      </>
-    )
+function PoolAbout({ resource, onNavigate }: { resource: PoolResource; onNavigate?: NavigateToResource }) {
+  const classes = resource.spec?.sandboxClasses?.flatMap((c) => c.name ? [c.name] : []) ?? []
+  const config = getWorkerPoolSandboxConfig(resource)
+  return (
+    <FactGrid>
+      <FactRow label="Sandbox classes">{classes.length > 0 ? classes.join(' · ') : <Unread>None declared</Unread>}</FactRow>
+      <FactRow label="SandboxConfig">
+        {config === '-' ? <Unread>Unreported</Unread> : onNavigate
+          ? <button type="button" onClick={() => onNavigate({ kind: 'SandboxConfig', group: SUBSTRATE_GROUP, namespace: '', name: config })} className="font-mono text-accent-text hover:underline">{config}</button>
+          : <span className="font-mono">{config}</span>}
+      </FactRow>
+    </FactGrid>
+  )
+}
+
+export function PoolSpecStatus({ resource }: { resource: PoolResource }) {
+  const count = (n: number | undefined, source: string) => {
+    const fact = { text: n === undefined ? 'Unreported' : String(n), tone: n === undefined ? 'unknown' as const : 'neutral' as const, source }
+    return <><FactValue fact={fact} /><FactSource fact={fact} /></>
   }
   return (
-    <section className={CARD}>
-      <dl className="grid grid-cols-[12.5rem_minmax(0,1fr)] items-baseline gap-x-4 gap-y-2 text-sm">
-        <dt className="text-theme-text-tertiary">Sandbox classes</dt>
-        <dd className="min-w-0">
-          {classes.length ? classes.map((c) => <Badge key={c} tone="structural" size="sm" className="mr-1.5">{c}</Badge>) : <Unread>none named</Unread>}
-          {config && <span className="text-theme-text-secondary">resolved to SandboxConfig <span className="font-mono">{config}</span></span>}
-        </dd>
-        <dt className="text-theme-text-tertiary"><Term term="template">Templates</Term> whose selector matches this pool</dt>
-        <dd className="min-w-0 break-words">{templatesBody}</dd>
-      </dl>
-    </section>
+    <div className="space-y-4 p-4">
+      <WorkspaceCard title="Desired by spec">
+        <FactGrid><FactRow label="Workers">{count(resource.spec?.replicas, 'spec.replicas')}</FactRow></FactGrid>
+        <div className="mt-2"><PoolAbout resource={resource} /></div>
+      </WorkspaceCard>
+      <WorkspaceCard title="Reported by controller">
+        <FactGrid>
+          <FactRow label="Worker replicas">{count(resource.status?.replicas, 'status.replicas')}</FactRow>
+          <FactRow label="Ready replicas">{count(resource.status?.readyReplicas, 'status.readyReplicas')}</FactRow>
+          <FactRow label="Worker selector">{resource.status?.selector || <Unread>Unreported</Unread>}</FactRow>
+        </FactGrid>
+      </WorkspaceCard>
+      <WorkspaceConditions conditions={poolConditions(resource)} title="Sandbox class conditions" />
+    </div>
   )
 }
 
-/**
- * A WorkerPool's composed Overview, on its page and in the drawer: Radar's
- * capacity verdict from Prometheus, which actor holds which slot, and what
- * can run here. The WorkerPool's own renderer moves to "Spec & status".
- */
 export function SubstratePoolSummary({
-  namespace,
-  name,
-  resource,
-  context,
-  onNavigate,
-  leadContent,
+  namespace, name, resource, context, onNavigate,
 }: {
   namespace: string
   name: string
-  resource: any
+  resource: PoolResource
   context: 'drawer' | 'expanded'
   onNavigate?: NavigateToResource
-  leadContent?: ReactNode
 }) {
   const query = useSubstratePool({ namespace, name })
   const [params, setParams] = useSearchParams()
@@ -373,48 +358,106 @@ export function SubstratePoolSummary({
   const { connection } = useConnection()
   const openActor = useOpenActor()
   const code = substrateErrorCode(query.error)
-  // A refresh that says the pool is gone or can't be read replaces what was kept.
   const data = definitiveFailure(code) || code === 'incomplete' ? undefined : query.data
-  const specClasses: string[] = Array.isArray(resource?.spec?.sandboxClasses) ? resource.spec.sandboxClasses.map((c: any) => c?.name).filter(Boolean) : []
-  const classes = [...new Set([...specClasses, ...(data?.pool.sandboxClasses ?? [])])]
-  const config = getWorkerPoolSandboxConfig(resource)
-  const openPod = (w: SubstrateWorkerRow) => onNavigate?.({ kind: 'Pod', namespace: w.namespace, name: w.pod })
-  const openMetrics = context === 'expanded'
-    ? () => {
-        const p = new URLSearchParams(params)
-        p.set('tab', 'metrics')
-        setParams(p, { replace: true })
-      }
-    : undefined
-  let placement: ReactNode
-  if (query.isLoading) placement = <section className={CARD}><SectionHeading>Placement</SectionHeading><p className="text-sm text-theme-text-tertiary">Reading Substrate’s workers…</p></section>
-  else if (!data) placement = <section className={CARD}><SectionHeading>Placement</SectionHeading><p className="text-sm text-theme-text-tertiary">{poolReadFailure(code, query.error instanceof Error ? query.error.message : undefined)}</p></section>
-  else if (data.apiTier.state !== 'connected') placement = <section className={CARD}><SectionHeading>Placement</SectionHeading><p className="text-sm text-theme-text-secondary">{tierReading(data.apiTier).detail} Which actor holds which slot is kept in Substrate’s API.</p></section>
-  else placement = <><RefreshFailedNotice queries={[query]} /><Placement data={data} onOpenActor={openActor} onOpenPod={openPod} drawer={context === 'drawer'} /></>
+  const k = data?.pool.kubernetes
+  const workerRead = data?.coverage.workers
+  const finding = data?.attention
+  const placement = data?.pool.placement
+  const partial = coverageInPart(workerRead)
+  const workers = placement?.workers
+  const openTab = (tab: string) => {
+    const p = new URLSearchParams(params)
+    if (tab === 'overview') p.delete('tab')
+    else p.set('tab', tab)
+    setParams(p, { replace: true })
+  }
+  const drawer = context === 'drawer'
+  const desired = resource.spec?.replicas
+  const replicas = resource.status?.readyReplicas
+  const observed = k?.pods
+  const [lead, rawDetail] = finding ? splitReading(finding.reading) : []
+  const readState = query.isLoading ? 'Reading Substrate…'
+    : !data ? poolReadFailure(code, query.error instanceof Error ? query.error.message : undefined)
+    : data.apiTier.state !== 'connected' ? tierReading(data.apiTier).detail
+    : coverageReason(workerRead, 'workers')
+  const Frame = drawer ? FlatPoolSection : WorkspaceCard
   return (
     <div className="space-y-4 p-4">
-      {leadContent}
-      <CapacityVerdict namespace={namespace} name={name} onOpenMetrics={openMetrics} />
-      {placement}
-      <RunsHere data={data} loading={query.isLoading} classes={classes} config={config === '-' ? undefined : config} onOpenTemplate={(t) => navigate(substrateTemplatePath(t, connection.context || undefined))} />
+      <RefreshFailedNotice queries={[query]} />
+      {finding && <WorkspaceProblemCallout rootKind="WorkerPool" subjectIsSelf problem={{
+        id: finding.id, category: finding.rule, source: 'reading', tone: attentionTone(finding),
+        subject: { kind: 'WorkerPool', group: SUBSTRATE_GROUP, namespace, name },
+        title: poolReading(data!.pool, finding).label,
+        detail: lead, nextStep: k?.health === 'unhealthy' || finding.rule !== 'poolShort' ? finding.nextStep : 'Compare controller readiness with Substrate registrations below.',
+        rawDetail, rawDetailLabel: 'Details',
+        origin: { label: k?.health === 'unhealthy' ? 'WorkerPool controller status' : 'Kubernetes and Substrate' },
+      }} />}
+      {drawer && <div className="flex flex-wrap gap-2">
+        <button type="button" className="btn-brand px-3 py-1 text-sm" onClick={() => navigate(substratePoolPath({ namespace, name }, connection.context || undefined))}>Open pool</button>
+        <button type="button" className="btn-secondary px-3 py-1 text-sm" onClick={() => navigate(substratePoolPath({ namespace, name }, connection.context || undefined, 'workers'))}>Workers</button>
+      </div>}
+      <Frame title="At a glance">
+        <FactGrid>
+          <FactRow label="Provisioning">
+            <DimensionValue tone={k?.health === 'unhealthy' ? 'unhealthy' : k?.health === 'healthy' && (!observed || observed.ready === replicas) ? 'healthy' : 'unknown'}
+              source={<>{observed ? `Pods observed by Radar: ${observed.created} present, ${observed.ready} ready${observed.terminating ? `, ${observed.terminating} terminating` : ''}` : `Pod counts unavailable · requires collected Pods and list pods in ${namespace}`}
+                {observed && replicas !== undefined && observed.ready !== replicas && ' · Counts differ from the controller’s status'}</>}>
+              {desired === undefined ? 'Desired workers unreported' : `${desired} desired by spec`}
+              {' · '}{replicas === undefined ? 'Controller readiness unreported' : `${replicas} ready reported by controller`}
+            </DimensionValue>
+          </FactRow>
+          <FactRow label="Registration">
+            <DimensionValue tone={finding ? attentionTone(finding) : !workers || partial ? 'unknown' : workers.active > 0 ? 'healthy' : 'neutral'}
+              source={workers ? partial ? coverageReason(workerRead, 'workers') : 'Worker registrations from Substrate' : readState}
+              linkLabel="Workers" onOpen={drawer ? undefined : () => openTab('workers')}>
+              {workers && (!partial || workers.total > 0) ? <>{partial ? '≥' : ''}{workers.total} registered · {partial ? '≥' : ''}{workers.active} accepting actors</> : 'Unknown'}
+            </DimensionValue>
+          </FactRow>
+          <FactRow label="Placement capacity">
+            <DimensionValue tone={finding ? attentionTone(finding) : placement?.complete && data?.pool.capacity === 'free' ? 'healthy' : 'unknown'}
+              source="Slots on active workers · actor CPU and memory can limit placement" linkLabel="Workers" onOpen={drawer ? undefined : () => openTab('workers')}>
+              {data ? <SlotsCell p={data.pool} connected={data.apiTier.state === 'connected'} /> : <Unread>Unknown</Unread>}
+            </DimensionValue>
+          </FactRow>
+          <FactRow label="Template matches">
+            <DimensionValue tone={data?.templates && !coverageInPart(data.coverage.templates) ? 'neutral' : 'unknown'}
+              source={data?.templates ? coverageInPart(data.coverage.templates) ? coverageReason(data.coverage.templates, 'templates') : 'Template selectors matched against this pool’s labels' : data ? coverageReason(data.coverage.templates, 'templates') : readState}
+              linkLabel="Templates" onOpen={() => navigate(SUBSTRATE_SCREENS.templates.path)}>
+              {data?.templates && (!coverageInPart(data.coverage.templates) || data.templates.length > 0)
+                ? <>{coverageInPart(data.coverage.templates) && <CertaintyGlyph certainty="lower_bound" title="Some templates could not be read" />} {data.templates.length} label-matched</>
+                : 'Unknown'}
+            </DimensionValue>
+            {!!data?.templates?.length && <div className="mt-1 flex flex-wrap gap-1.5">
+              {data.templates.map((t) => <button type="button" key={`${t.atespace}/${t.name}`} onClick={() => navigate(substrateTemplatePath(t, connection.context || undefined))} className="btn-secondary px-2 py-0.5 font-mono text-xs">{t.atespace}/{t.name}</button>)}
+            </div>}
+          </FactRow>
+          <FactRow label="Delivery metrics"><CapacityVerdict namespace={namespace} name={name} onOpenMetrics={drawer ? undefined : () => openTab('metrics')} /></FactRow>
+        </FactGrid>
+        {data && data.coverage.pools.state !== 'full' && <p className="mt-2 text-xs text-theme-text-tertiary">{coverageLabel(data.coverage.pools)}</p>}
+      </Frame>
+      {data && <Placement data={data} drawer={drawer} onOpenActor={openActor} onOpenPod={(w) => onNavigate?.({ kind: 'Pod', namespace: w.namespace, name: w.pod })}
+        onOpenNode={onNavigate ? (node) => onNavigate({ kind: 'Node', namespace: '', name: node }) : undefined} />}
+      <Frame title="About"><PoolAbout resource={resource} onNavigate={onNavigate} /></Frame>
+      <WorkspaceConditions conditions={poolConditions(resource)} title="Sandbox class conditions" framed={!drawer} />
     </div>
   )
 }
 
-/**
- * A WorkerPool's header chip: the same reading as its row in the Pools list,
- * with Kubernetes' phase beside it. Until Substrate's side is read, the
- * Kubernetes reading stands alone.
- */
+function FlatPoolSection({ title, children }: { title: string; children: ReactNode }) {
+  return <section className="border-t-subtle pt-3"><SectionHeading>{title}</SectionHeading>{children}</section>
+}
+
 export function PoolHeaderBadge({ resource }: { resource: any }) {
   const namespace: string = resource?.metadata?.namespace ?? ''
   const name: string = resource?.metadata?.name ?? ''
-  const { data } = useSubstratePool(namespace && name ? { namespace, name } : null)
+  const query = useSubstratePool(namespace && name ? { namespace, name } : null)
+  const code = substrateErrorCode(query.error)
+  const data = definitiveFailure(code) || code === 'incomplete' ? undefined : query.data
   if (!data) {
     const k = getWorkerPoolStatus(resource)
     return <span className={clsx('badge whitespace-nowrap', k.color)}>{k.text}</span>
   }
-  const r = poolReading(data.pool)
+  const r = poolReading(data.pool, data.attention)
   // Kubernetes' phase rides in the tooltip: beside the name it would crowd the title out.
   return (
     <Tooltip content={[r.meaning, r.kubernetes && `Kubernetes: ${r.kubernetes}.`].filter(Boolean).join(' ')}>

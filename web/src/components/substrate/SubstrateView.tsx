@@ -88,7 +88,7 @@ export function SubstrateView({ namespaces, selectedResource, onOpenResource, on
   const veleroSidebar = useVeleroSidebarWorkspace({ apiResources })
   const sidebarWorkspace = useMergedSidebarWorkspaces(cnpgSidebar, veleroSidebar, substrateSidebar)
   const selectedKind = route.pool ? SUBSTRATE_WORKERPOOL_KIND : null
-  const { drawerTarget, inspect } = useWorkspaceDrawer({ selectedResource, onOpenResource, onCloseResource })
+  const { inspect } = useWorkspaceDrawer({ selectedResource, onOpenResource, onCloseResource })
   // On a local Radar, the file and name the context has there, and a saved
   // direct endpoint (the default is the port-forward kubectl ate makes itself).
   const kubectlContext = useCNPGKubectlContext()
@@ -167,7 +167,7 @@ export function SubstrateView({ namespaces, selectedResource, onOpenResource, on
             case 'workers':
               return <SubstrateWorkersScreen workspace={data} status={status.data} onOpenSubject={openSubject} />
             default:
-              return <SubstrateOverview data={data} status={status.data} onInspect={inspectResource} inspected={drawerTarget} onOpenSubject={openSubject} />
+              return <SubstrateOverview data={data} status={status.data} onOpenSubject={openSubject} />
           }
         }}
       </SubstrateScreenGate>

@@ -108,6 +108,7 @@ export function actorStateReading(
   opts: { impact?: Pick<SubstrateWorkerImpact, 'kind' | 'reading'>; updateTime?: string; now?: number } = {},
 ): ActorStateReading {
   const label = ACTOR_STATE_LABEL[state] ?? state
+  if (state === 'crashed') return { label, severity: 'error' }
   if (opts.impact) return { label: `${label} · ${IMPACT_LABEL[opts.impact.kind]}`, severity: toneSeverity(workerImpactTone(opts.impact.kind)), title: opts.impact.reading }
   if (stuckInTransition(state, opts.updateTime, opts.now)) {
     return { label: `${label} · stuck`, severity: 'warning', title: `${label} for longer than ${formatDuration(STUCK_AFTER_MS)}, past Radar’s stuck threshold.` }
@@ -421,7 +422,7 @@ export function coverageReason(cov: SubstrateCoverage | undefined, noun: string)
     if (cov.deniedAtespaces?.length) return `Substrate denied ${cov.deniedAtespaces.length === 1 ? 'atespace' : 'atespaces'} ${cov.deniedAtespaces.join(', ')}`
     return `some ${noun} could not be read`
   }
-  if (cov.state === 'denied') return `Substrate denied reading ${noun}${cov.message ? `: ${cov.message}` : ''}`
+  if (cov.state === 'denied') return `Substrate denied permission to list ${noun}${cov.message ? `: ${cov.message}` : ''}`
   if (cov.state === 'failed') return `${noun} could not be read${cov.message ? `: ${cov.message}` : ''}`
   return ''
 }
@@ -637,16 +638,25 @@ export interface PoolReading {
  * One reading of a pool, the same in its list and on its page: Substrate's
  * capacity verdict with the count behind it, and Kubernetes' phase as context.
  */
-export function poolReading(p: Pick<SubstratePoolRow, 'capacity' | 'lacking' | 'placement' | 'kubernetes'>): PoolReading {
+export function poolReading(p: Pick<SubstratePoolRow, 'capacity' | 'lacking' | 'placement' | 'kubernetes'>, finding?: SubstrateAttention): PoolReading {
+  const reading = poolCapacityReading(p)
+  if (p.kubernetes?.health === 'unhealthy') {
+    return { ...reading, label: p.kubernetes.healthReason === 'SandboxConfigNotFound' ? 'Sandbox configuration missing' : p.kubernetes.healthReason || reading.label, severity: 'error' }
+  }
+  if (finding) return { ...reading, severity: toneSeverity(attentionTone(finding)) }
+  return reading
+}
+
+function poolCapacityReading(p: Pick<SubstratePoolRow, 'capacity' | 'lacking' | 'placement' | 'kubernetes'>): PoolReading {
   const kubernetes = p.kubernetes?.healthReason || undefined
   const desired = p.kubernetes?.desired
   switch (p.capacity) {
     case 'short': {
-      const [have, word] = p.placement ? [p.placement.workers.active, 'active'] : [p.kubernetes ? poolReadyPods(p.kubernetes) : 0, 'ready']
-      // A partial read of Substrate's workers counts what it saw: a floor, not the pool's number.
-      const atLeast = p.placement && !p.placement.complete ? 'at least ' : ''
+      const observed = p.placement?.workers.active
+      const have = observed ?? p.kubernetes?.pods?.ready ?? p.kubernetes?.reportedReady
+      const count = have === undefined ? '' : ` · ${p.placement?.complete === false ? 'at least ' : ''}${have} of ${desired ?? '?'} ${p.placement ? 'active' : 'Pods ready'}`
       return {
-        label: `Short of workers: ${atLeast}${have} of ${desired ?? '?'} ${word}`,
+        label: `Short of workers${count}`,
         severity: 'warning',
         meaning: 'Fewer workers take actors than the pool wants. New and resuming actors may wait or fail to start.',
         kubernetes,
@@ -666,7 +676,7 @@ export function poolReading(p: Pick<SubstratePoolRow, 'capacity' | 'lacking' | '
       }
     }
     case 'free':
-      return { label: 'Free actor slots', severity: 'neutral', meaning: 'At least one active worker has a free actor slot. Whether an actor fits depends on its size and its snapshot’s restore constraints.', kubernetes }
+      return { label: 'Free actor slots', severity: p.placement?.complete && p.kubernetes?.health === 'healthy' ? 'success' : 'neutral', meaning: 'At least one active worker has a free actor slot. Whether an actor fits depends on its size and its snapshot’s restore constraints.', kubernetes }
     case undefined:
       return { label: 'Unknown', severity: 'neutral', meaning: 'Neither Kubernetes nor Substrate was read well enough to say.', kubernetes }
   }
@@ -806,7 +816,7 @@ export function withoutRepeats(reading: string | undefined, nextStep: string | u
 
 /** The tone of an actor's cell in the placement grid: its badge's, worker impact first. */
 export function placementTone(state: SubstrateActorState, impact: SubstrateWorkerImpact['kind'] | undefined): StatusTone {
-  return impact ? workerImpactTone(impact) : actorStateTone(state)
+  return impact && state !== 'crashed' ? workerImpactTone(impact) : actorStateTone(state)
 }
 
 const WORKER_STATE_LABEL: Record<SubstrateWorkerRow['state'], { label: string; severity: BadgeSeverity }> = {

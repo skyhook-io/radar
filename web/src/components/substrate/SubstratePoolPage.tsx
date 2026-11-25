@@ -8,7 +8,7 @@ import { refToSelectedResource } from '../../utils/navigation'
 import { WorkloadView } from '../workload/WorkloadView'
 import { Notice, RefreshFailedNotice } from '../workspace/layout'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
-import { SUBSTRATE_GROUP, SUBSTRATE_PATH, SUBSTRATE_POOLS_PATH } from './routes'
+import { SUBSTRATE_GROUP, SUBSTRATE_PATH, SUBSTRATE_POOLS_PATH, substratePoolPath } from './routes'
 import { WorkersTable } from './SubstrateWorkers'
 import { useOpenActor } from './SubstratePoolSummary'
 import { definitiveFailure, poolReadFailure, tierReading } from './readings'
@@ -16,6 +16,8 @@ import { NotInContext, useContextPin } from './contextPin'
 
 function PoolWorkers({ pool, onOpenResource }: { pool: SubstratePoolRef; onOpenResource: (resource: SelectedResource) => void }) {
   const query = useSubstratePool(pool)
+  const navigate = useWorkspaceNavigate()
+  const pin = useContextPin()
   const code = substrateErrorCode(query.error)
   const data = definitiveFailure(code) || code === 'incomplete' ? undefined : query.data
   const openActor = useOpenActor()
@@ -29,7 +31,14 @@ function PoolWorkers({ pool, onOpenResource }: { pool: SubstratePoolRef; onOpenR
   return (
     <div className="h-full space-y-3 overflow-y-auto p-4">
       <RefreshFailedNotice queries={[query]} />
-      <WorkersTable data={{ workers: data.workers, coverage: { workers: data.coverage.workers } }} onOpenSubject={open} />
+      <WorkersTable data={{ workers: data.workers, coverage: data.coverage }} onOpenSubject={open}
+        emptyMessage={<div className="space-y-1">
+          <div className="font-medium text-theme-text-primary">No workers registered{data.pool.kubernetes?.desired !== undefined ? ` · ${data.pool.kubernetes.desired} desired` : ''}</div>
+          {data.attention && <button type="button" className="text-accent-text hover:underline" onClick={() => navigate(substratePoolPath(pool, pin.pinned || pin.active || undefined))}>
+            {data.pool.kubernetes?.healthReason === 'SandboxConfigNotFound' ? 'See the missing sandbox configuration' : data.pool.kubernetes?.healthReason === 'Provisioning stalled' ? 'See why provisioning stalled' : 'See the capacity finding'} →
+          </button>}
+        </div>}
+      />
     </div>
   )
 }

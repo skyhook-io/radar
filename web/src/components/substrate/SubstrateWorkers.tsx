@@ -1,9 +1,10 @@
 import { Fragment, useMemo, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { clsx } from 'clsx'
-import { Badge, Collapse, CollapseChevron, PaneLoader, SelectMenu, Tooltip, formatDuration } from '@skyhook-io/k8s-ui'
+import { Badge, Collapse, CollapseChevron, Input, PaneLoader, SelectMenu, Tooltip, formatDuration } from '@skyhook-io/k8s-ui'
 import {
   useSubstrateWorkers,
+  type SubstrateAttention,
   type SubstrateCoverage,
   type SubstrateResources,
   type SubstrateStatus,
@@ -13,11 +14,12 @@ import {
 } from '../../api/substrateWorkspace'
 import { Notice, RefreshFailedNotice, ScreenBody, Segments, Sub, type TableColumn } from '../workspace/layout'
 import { ROW_HOVER, TABLE_HEAD, TABLE_WRAP, TBODY, TD, TH } from '../workspace/table'
+import { useConnection } from '../../context/ConnectionContext'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import type { OpenSubject } from './SubstrateAttentionList'
 import { SubstrateConnectNotice, SubstrateTierBanner } from './SubstrateConnect'
 import { bytesText, coverageInPart, coverageReason, cpuText, poolReading, workerPodText } from './readings'
-import { substrateActorsPath } from './routes'
+import { substrateActorsPath, substratePoolPath } from './routes'
 import { ActorStateBadge, Name, SUBSTRATE_WIDE, SubstrateHeader, SubstrateSourceLine, Term, Unread, WholeNames, WorkerStateChip } from './shared'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
 
@@ -47,24 +49,22 @@ function usage(allocated: SubstrateResources | undefined, capacity: SubstrateRes
 }
 
 /** Wide: every column. Narrow: CPU and memory under the slots, the node under the Pod. */
-export function workerColumns(onOpenSubject: OpenSubject, wide: boolean, grouped = false): TableColumn<SubstrateWorkerRow>[] {
+export function workerColumns(onOpenSubject: OpenSubject, wide: boolean): TableColumn<SubstrateWorkerRow>[] {
   return [
     {
       header: 'Worker Pod',
-      width: wide ? '22%' : '32%',
+      width: wide ? '20%' : '25%',
       cell: (w) => (
         <>
-          <button type="button" onClick={(e) => { e.stopPropagation(); onOpenSubject({ kind: 'Pod', namespace: w.namespace, name: w.pod }) }} className="block max-w-full text-left text-accent-text hover:underline">
-            <Name name={w.pod} />
-          </button>
-          {/* Grouped, the pool header names the pool. */}
-          {(!grouped || !wide) && <Sub><WholeNames text={[!grouped && `${w.namespace} / ${w.pool}`, !wide && w.node].filter(Boolean).join(' · ')} /></Sub>}
+          <Name name={w.pod} />
+          {!wide && w.node && <Sub><WholeNames text={w.node} /></Sub>}
+          <button type="button" onClick={(e) => { e.stopPropagation(); onOpenSubject({ kind: 'Pod', namespace: w.namespace, name: w.pod }) }} className="text-xs text-accent-text hover:underline">Open Pod →</button>
         </>
       ),
     },
     {
       header: 'State',
-      width: wide ? '19%' : '20%',
+      width: wide ? '20%' : '25%',
       cell: (w) => (
         <>
           <span className="inline-flex flex-wrap items-center gap-x-1.5">
@@ -79,7 +79,7 @@ export function workerColumns(onOpenSubject: OpenSubject, wide: boolean, grouped
     },
     {
       header: <Term term="slot">Actor slots</Term>,
-      width: wide ? '10%' : '24%',
+      width: wide ? '10%' : '28%',
       cell: (w) => (
         <>
           <span className="inline-flex flex-wrap items-center gap-1.5">
@@ -98,17 +98,13 @@ export function workerColumns(onOpenSubject: OpenSubject, wide: boolean, grouped
           { header: <Reserved>Memory reserved</Reserved>, width: '12%', cell: (w: SubstrateWorkerRow) => usage(w.allocated, w.capacity, 'memoryBytes', bytesText) },
           {
             header: 'Node',
-            width: '19%',
+            width: '17%',
             // A hostname truncates whole, with the name on hover; it never breaks inside a label.
             cell: (w: SubstrateWorkerRow) => (w.node ? <Tooltip content={w.node} wrapperClassName="min-w-0 max-w-full"><span className="block truncate whitespace-nowrap font-mono text-[12px]">{w.node}</span></Tooltip> : <Unread>unknown</Unread>),
           },
         ]
       : []),
-    {
-      header: 'Actors',
-      width: wide ? '8%' : '12%',
-      cell: (w) => (w.actors ? <span>{w.actors.length}</span> : <Unread>unknown</Unread>),
-    },
+
   ]
 }
 
@@ -128,11 +124,12 @@ export function sortWorkers(workers: SubstrateWorkerRow[]): SubstrateWorkerRow[]
   )
 }
 
-type StateFilter = 'all' | SubstrateWorkerRow['state']
+type StateFilter = 'all' | 'attention' | SubstrateWorkerRow['state']
 
 /** Substrate's workers by pool: state, slots, and the actors on each. */
 export function SubstrateWorkersScreen({ workspace, status, onOpenSubject }: { workspace?: SubstrateWorkspace; status?: SubstrateStatus; onOpenSubject: OpenSubject }) {
   const [params, setParams] = useSearchParams()
+  const [search, setSearch] = useState('')
   const tier = workspace?.apiTier
   const connected = tier?.state === 'connected'
   const query = useSubstrateWorkers(undefined, connected)
@@ -146,33 +143,35 @@ export function SubstrateWorkersScreen({ workspace, status, onOpenSubject }: { w
     setParams(p, { replace: true })
   }
   const pools = useMemo(() => [...new Set((data?.workers ?? []).map((w) => `${w.namespace}/${w.pool}`))].sort(), [data])
-  const shown = useMemo(
-    () => (data?.workers ?? []).filter((w) => (!pool || `${w.namespace}/${w.pool}` === pool) && (stateFilter === 'all' || w.state === stateFilter)),
-    [data, pool, stateFilter],
-  )
-  const counts = data?.counts
+  const scoped = (data?.workers ?? []).filter((w) => (!pool || `${w.namespace}/${w.pool}` === pool) && w.pod.toLowerCase().includes(search.trim().toLowerCase()))
+  const needsAttention = (w: SubstrateWorkerRow) => w.state === 'unavailable' || w.state === 'draining' || w.workerState?.kind === 'reconciling'
+  const shown = scoped.filter((w) => stateFilter === 'all' || (stateFilter === 'attention' ? needsAttention(w) : w.state === stateFilter))
+  const partial = coverageInPart(data?.coverage.workers)
+  const count = (n: number) => partial ? n > 0 ? `≥${n}` : undefined : n
+  const poolFindings = workspace?.needsAttention.filter((a) => a.subject.kind === 'WorkerPool')
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <SubstrateHeader title="Workers">
         {data && (
           <>
             <Segments
-              label="Worker state"
+              label="Worker filter"
               value={stateFilter}
               onChange={(v) => set('state', v)}
               options={[
-                { id: 'all', label: 'All', count: counts?.total },
-                { id: 'active', label: 'Active', count: counts?.active },
-                { id: 'draining', label: 'Draining', count: counts?.draining },
-                { id: 'unavailable', label: 'Unavailable', count: counts?.unavailable },
+                { id: 'all', label: 'All', count: count(scoped.length) },
+                { id: 'attention', label: 'Needs attention', count: count(scoped.filter(needsAttention).length) },
+                { id: 'active', label: 'Active', count: count(scoped.filter((w) => w.state === 'active').length) },
+                { id: 'draining', label: 'Draining', count: count(scoped.filter((w) => w.state === 'draining').length) },
+                { id: 'unavailable', label: 'Unavailable', count: count(scoped.filter((w) => w.state === 'unavailable').length) },
               ]}
             />
+            <Input aria-label="Search worker names" placeholder="Search workers…" value={search} onChange={(e) => setSearch(e.target.value)} className="h-8 max-w-52 rounded-md border border-theme-border bg-theme-elevated px-3" />
             <SelectMenu ariaLabel="Pool" value={pool} options={[{ value: '', label: 'Every pool' }, ...pools.map((p) => ({ value: p, label: p.replace('/', ' / ') }))]} onChange={(v) => set('pool', v)} className="min-w-[12rem]" />
           </>
         )}
       </SubstrateHeader>
       <ScreenBody>
-        {tier && <SubstrateSourceLine tier={tier} status={status} />}
         {!connected && tier ? (
           <>
             <SubstrateTierBanner tier={tier} />
@@ -185,19 +184,20 @@ export function SubstrateWorkersScreen({ workspace, status, onOpenSubject }: { w
         ) : (
           <>
             <RefreshFailedNotice queries={[query]} />
-            <WorkersTable data={{ workers: shown, coverage: data.coverage }} pools={workspace?.pools} onOpenSubject={onOpenSubject} grouped />
+            <WorkersTable data={{ workers: shown, coverage: data.coverage }} pools={workspace?.pools} poolFindings={poolFindings} onOpenSubject={onOpenSubject} grouped />
           </>
         )}
+        {tier && <SubstrateSourceLine tier={tier} status={status} />}
       </ScreenBody>
     </div>
   )
 }
 
 /** The worker's actors, under its row: each opens in the actor drawer. */
-function WorkerActors({ w, onOpenSubject }: { w: SubstrateWorkerRow; onOpenSubject: OpenSubject }) {
+function WorkerActors({ w, onOpenSubject, partial }: { w: SubstrateWorkerRow; onOpenSubject: OpenSubject; partial: boolean }) {
   const navigate = useWorkspaceNavigate()
   if (!w.actors) return <p className="text-xs text-theme-text-tertiary">Actors were not read, so which actors are on this worker is unknown.</p>
-  if (w.actors.length === 0) return <p className="text-xs text-theme-text-tertiary">No actor is on this worker.</p>
+  if (w.actors.length === 0) return <p className="text-xs text-theme-text-tertiary">{partial ? 'No assignments found in the actors Radar could read.' : 'No actor is on this worker.'}</p>
   return (
     <div className="space-y-1.5">
       <ul className="grid grid-cols-[repeat(auto-fill,minmax(22rem,1fr))] gap-x-4 gap-y-1">
@@ -209,12 +209,12 @@ function WorkerActors({ w, onOpenSubject }: { w: SubstrateWorkerRow; onOpenSubje
           </li>
         ))}
       </ul>
-      <button type="button" onClick={() => navigate(substrateActorsPath({ worker: w.pod }))} className="text-xs text-accent-text hover:underline">In the Actors list →</button>
+      <button type="button" onClick={() => navigate(substrateActorsPath({ worker: w.name, pool: `${w.namespace}/${w.pool}` }))} className="text-xs text-accent-text hover:underline">In the Actors list →</button>
     </div>
   )
 }
 
-function WorkerRows({ workers, columns, onOpenSubject }: { workers: SubstrateWorkerRow[]; columns: TableColumn<SubstrateWorkerRow>[]; onOpenSubject: OpenSubject }) {
+function WorkerRows({ workers, columns, onOpenSubject, actorsPartial }: { workers: SubstrateWorkerRow[]; columns: TableColumn<SubstrateWorkerRow>[]; onOpenSubject: OpenSubject; actorsPartial: boolean }) {
   const [open, setOpen] = useState<Set<string>>(() => new Set())
   const toggle = (name: string) =>
     setOpen((prev) => {
@@ -231,26 +231,27 @@ function WorkerRows({ workers, columns, onOpenSubject }: { workers: SubstrateWor
         const full = w.state === 'active' && !w.hasFreeSlot
         return (
           <Fragment key={w.name}>
-            <tr className={clsx(ROW_HOVER, full && 'bg-theme-elevated/40')}>
-              <td className={clsx(TD, 'pr-0')}>
+            <tr className={clsx(ROW_HOVER, 'cursor-pointer', full && 'bg-theme-elevated/40')} onClick={() => toggle(w.name)}>
+              {columns.map((c, i) => <td key={i} className={clsx(TD, c.className)}>{c.cell(w)}</td>)}
+              <td className={TD}>
                 <button
                   type="button"
                   aria-expanded={isOpen}
                   aria-controls={panel}
-                  aria-label={`${isOpen ? 'Hide' : 'Show'} the actors on ${w.pod}`}
-                  onClick={() => toggle(w.name)}
-                  className="rounded p-0.5 text-theme-text-tertiary hover:bg-theme-hover"
+                  aria-label={`${isOpen ? 'Hide' : 'Show'} assigned actors for ${w.pod}`}
+                  onClick={(e) => { e.stopPropagation(); toggle(w.name) }}
+                  className="inline-flex items-center gap-1 text-left text-xs text-accent-text hover:underline"
                 >
                   <CollapseChevron open={isOpen} />
+                  {isOpen ? 'Hide assigned actors' : w.actors ? `Show ${actorsPartial ? '≥' : ''}${w.actors.length} assigned actors` : 'Check assigned actors'}
                 </button>
               </td>
-              {columns.map((c, i) => <td key={i} className={clsx(TD, c.className)}>{c.cell(w)}</td>)}
             </tr>
             <tr>
               <td colSpan={columns.length + 1} className="p-0">
                 <Collapse open={isOpen} id={panel} unmountOnExit>
                   <div className="border-t-subtle bg-theme-base/40 py-2.5 pl-11 pr-4">
-                    <WorkerActors w={w} onOpenSubject={onOpenSubject} />
+                    <WorkerActors w={w} onOpenSubject={onOpenSubject} partial={actorsPartial} />
                   </div>
                 </Collapse>
               </td>
@@ -270,27 +271,34 @@ function WorkerRows({ workers, columns, onOpenSubject }: { workers: SubstrateWor
 export function WorkersTable({
   data,
   pools,
+  poolFindings,
+  emptyMessage,
   onOpenSubject,
   grouped,
   title,
 }: {
-  data: { workers: SubstrateWorkerRow[]; coverage: { workers: SubstrateCoverage } }
+  data: { workers: SubstrateWorkerRow[]; coverage: { workers: SubstrateCoverage; actors?: SubstrateCoverage } }
   pools?: SubstratePoolRow[]
+  poolFindings?: SubstrateAttention[]
+  emptyMessage?: ReactNode
   onOpenSubject: OpenSubject
   grouped?: boolean
   title?: string
 }) {
+  const navigate = useWorkspaceNavigate()
+  const { connection } = useConnection()
   const wide = useMediaQuery(SUBSTRATE_WIDE)
-  const columns = workerColumns(onOpenSubject, wide, grouped)
+  const columns = workerColumns(onOpenSubject, wide)
   const groups = useMemo(() => {
     const by = new Map<string, SubstrateWorkerRow[]>()
     for (const w of data.workers) {
       const k = grouped ? `${w.namespace}/${w.pool}` : ''
       by.set(k, [...(by.get(k) ?? []), w])
     }
-    return [...by].sort(([a], [b]) => a.localeCompare(b)).map(([key, ws]) => ({ key, workers: sortWorkers(ws) }))
+    return [...by].map(([key, ws]) => ({ key, workers: sortWorkers(ws) }))
+      .sort((a, b) => rank(a.workers[0]) - rank(b.workers[0]) || a.key.localeCompare(b.key))
   }, [data.workers, grouped])
-  const empty = coverageInPart(data.coverage.workers) ? `No workers: ${coverageReason(data.coverage.workers, 'workers')}.` : 'No workers match.'
+  const empty = coverageInPart(data.coverage.workers) ? `No workers: ${coverageReason(data.coverage.workers, 'workers')}.` : emptyMessage ?? 'No workers match.'
   return (
     <section>
       {title && <h2 className="mb-2 text-sm font-semibold text-theme-text-primary">{title}</h2>}
@@ -301,13 +309,13 @@ export function WorkersTable({
           <div className={TABLE_WRAP}>
             <table className="w-full table-fixed" style={{ minWidth: wide ? 900 : 700 }}>
               <colgroup>
-                <col style={{ width: '2.25rem' }} />
                 {columns.map((c, i) => <col key={i} style={c.width ? { width: c.width } : undefined} />)}
+                <col style={{ width: '10rem' }} />
               </colgroup>
               <thead className={TABLE_HEAD}>
                 <tr>
-                  <th className={TH}><span className="sr-only">Actors on it</span></th>
                   {columns.map((c, i) => <th key={i} className={TH}>{c.header}</th>)}
+                  <th className={TH}>Assignments</th>
                 </tr>
               </thead>
               {groups.map((g) => {
@@ -320,17 +328,19 @@ export function WorkersTable({
                       <tr className="bg-theme-base/60">
                         <td colSpan={columns.length + 1} className="px-3 py-2 text-xs">
                           <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
-                            <span className="font-mono text-sm font-medium text-theme-text-primary">{name}</span>
+                            {row?.kubernetes
+                              ? <button type="button" className="font-mono text-sm font-medium text-accent-text hover:underline" onClick={() => navigate(substratePoolPath(row, connection.context || undefined))}>{name} →</button>
+                              : <span className="font-mono text-sm font-medium text-theme-text-primary">{name}</span>}
                             <span className="text-theme-text-tertiary">
                               {ns} · {poolWorkersText(row, g.workers)}
                               {slots ? ` · ${row?.placement?.complete === false ? 'at least ' : ''}${slots.used} of ${slots.total} actor slots used on active workers` : ''}
                             </span>
-                            {row && <PoolReadingBadge p={row} />}
+                            {row && <PoolReadingBadge p={row} finding={poolFindings?.find((f) => f.subject.namespace === ns && f.subject.name === name)} />}
                           </span>
                         </td>
                       </tr>
                     )}
-                    <WorkerRows workers={g.workers} columns={columns} onOpenSubject={onOpenSubject} />
+                    <WorkerRows workers={g.workers} columns={columns} onOpenSubject={onOpenSubject} actorsPartial={coverageInPart(data.coverage.actors)} />
                   </tbody>
                 )
               })}
@@ -357,7 +367,7 @@ export function poolWorkersText(row: Pick<SubstratePoolRow, 'placement' | 'kuber
   return `${reg}, ${atLeast}${active} active`
 }
 
-function PoolReadingBadge({ p }: { p: SubstratePoolRow }) {
-  const r = poolReading(p)
+function PoolReadingBadge({ p, finding }: { p: SubstratePoolRow; finding?: SubstrateAttention }) {
+  const r = poolReading(p, finding)
   return <Tooltip content={r.meaning}><span><Badge severity={r.severity} size="sm">{r.label}</Badge></span></Tooltip>
 }

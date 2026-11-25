@@ -2,13 +2,27 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import type { SubstratePool, SubstrateWorkerRow } from '../../api/substrateWorkspace'
-import { PLACEMENT_CARD_LIMIT, Placement, workerSlots } from './SubstratePoolSummary'
+import { PLACEMENT_CARD_LIMIT, Placement, SubstratePoolSummary, workerSlots } from './SubstratePoolSummary'
 import { actorAttentionText } from './SubstrateActorOverview'
 import { actorDetail, connectedTier, minutesAgo } from './substrate.fixtures'
 
 vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({ connection: { context: 'kind-demo' } }) }))
 
 const text = (html: string) => html.replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/<\/?span[^>]*>/g, '')
+
+const state = vi.hoisted(() => ({ pool: undefined as SubstratePool | undefined }))
+vi.mock('../../api/substrateWorkspace', async (original) => ({
+  ...(await original<typeof import('../../api/substrateWorkspace')>()),
+  useSubstratePool: () => ({ data: state.pool, isLoading: false }),
+}))
+vi.mock('../../api/client', async (original) => ({
+  ...(await original<typeof import('../../api/client')>()),
+  usePrometheusStatus: () => ({ data: { connected: false } }),
+}))
+vi.mock('../../api/substrateHealth', async (original) => ({
+  ...(await original<typeof import('../../api/substrateHealth')>()),
+  useSubstrateHealth: () => ({ support: 'supported' }),
+}))
 
 function worker(i: number, overrides: Partial<SubstrateWorkerRow> = {}): SubstrateWorkerRow {
   return {
@@ -77,57 +91,15 @@ describe('WorkerPool placement', () => {
     expect(raw(pool([worker(0), worker(1)]))).toMatch(/class="grid items-start gap-3/)
   })
 
-  it('calls a gap in a complete worker list a registration shortfall, never missing Pods', () => {
-    const html = render(pool([worker(0), worker(1, { podTerminating: true })], 3))
-    expect(html).toContain('Workers: 2 active · 2 registered with Substrate · 3 desired')
-    expect(html).toContain('1 desired worker is not registered with Substrate. Kubernetes calls 2 of 3 worker Pods ready.')
-    expect(html).not.toMatch(/no Pod/)
+  it('hides the placement and legend when no workers have registered', () => {
+    expect(render(pool([], 3))).toBe('')
   })
 
-  it('leads with the workers it has and wants, above the legend and the map', () => {
-    const data = pool([worker(0), worker(1, { state: 'unavailable' })], 5)
-    data.pool.capacity = 'short'
-    const html = render(data)
-    const counts = html.indexOf('Workers: 1 active · 2 registered with Substrate · 5 desired')
-    expect(counts).toBeGreaterThan(-1)
-    expect(html.indexOf('3 desired workers are not registered with Substrate.')).toBeGreaterThan(counts)
-    expect(counts).toBeLessThan(html.indexOf('aria-label="Legend"'))
-    expect(counts).toBeLessThan(html.indexOf('agent-pool-worker-0'))
-  })
-
-  it('counts a partial worker read as a lower bound, and never zero when it saw none', () => {
-    const partial = (workers: SubstrateWorkerRow[]) => ({ ...pool(workers, 3), coverage: { ...pool([]).coverage, workers: { state: 'partial' as const, code: 'capExceeded' as const } } })
-    expect(render(partial([worker(0)]))).toContain('Workers: at least 1 active · at least 1 registered with Substrate · 3 desired')
-    const none = render(partial([]))
-    expect(none).toContain('Workers: 3 desired')
-    expect(none).not.toContain('at least 0')
-  })
-
-  it('counts the worker Pods Radar holds, citing the WorkerPool’s own ready count only where it differs', () => {
-    const data = pool([worker(0), worker(1), worker(2), worker(3, { podTerminating: true })], 5)
-    data.pool.kubernetes = { ...data.pool.kubernetes!, ready: 3, pods: { created: 4, ready: 2, terminating: 1 } }
-    const html = render(data)
-    expect(html).toContain('Kubernetes has created 4 of 5 worker Pods; 2 are ready, and 1 is terminating. The WorkerPool’s status says 3 ready.')
-    expect(html).not.toContain('may be pending')
-    data.pool.kubernetes = { ...data.pool.kubernetes!, ready: 2 }
-    expect(render(data)).not.toContain('status says')
-  })
-
-  it('reads placement as unknown when the workers were not read, keeping Kubernetes’ readiness apart', () => {
-    const data = { ...pool([], 3), coverage: { ...pool([]).coverage, workers: { state: 'denied' as const, code: 'denied' as const } } }
-    data.pool.kubernetes!.ready = 3
-    const html = render(data)
-    expect(html).toContain('Which actor holds which slot is unknown: Substrate’s workers were not read')
-    expect(html).toContain('Kubernetes calls 3 of 3 worker Pods ready.')
-    expect(html).not.toMatch(/desired workers? (have|has|is|are) no/)
-    expect(html).not.toContain('not registered')
-  })
-
-  it('shows what a partial worker read saw and counts nothing as missing', () => {
+  it('shows observed workers only when Substrate’s inventory is partial', () => {
     const data = { ...pool([worker(0)], 3), coverage: { ...pool([]).coverage, workers: { state: 'partial' as const, code: 'capExceeded' as const } } }
     const html = render(data)
     expect(html).toContain('agent-pool-worker-0')
-    expect(html).toContain('Not every worker was read, so these are the ones Radar saw')
+    expect(html).toContain('Observed workers only')
     expect(html).not.toContain('not registered')
   })
 
@@ -147,6 +119,57 @@ describe('WorkerPool placement', () => {
   it('says which actor holds a slot is unknown when actors were not read', () => {
     const html = render(pool([worker(0, { actors: undefined })]))
     expect(html).toContain('Actors were not read')
+  })
+})
+
+describe('WorkerPool Overview', () => {
+  function overview(data: SubstratePool, ready = data.pool.kubernetes?.ready, framed = true) {
+    state.pool = data
+    const resource = { spec: { replicas: data.pool.kubernetes?.desired }, status: { readyReplicas: ready } }
+    return text(renderToStaticMarkup(<MemoryRouter><SubstratePoolSummary namespace="agents" name="agent-pool" resource={resource} context={framed ? 'expanded' : 'drawer'} /></MemoryRouter>))
+  }
+
+  it('keeps registrations, requested workers and observed Pod readiness separate above the placement grid', () => {
+    const data = pool([worker(0), worker(1, { state: 'unavailable' })], 5)
+    data.pool.kubernetes!.pods = { created: 0, ready: 0, terminating: 0 }
+    data.pool.placement = { workers: { total: 2, active: 1, draining: 0, unavailable: 1 }, slots: { used: 2, total: 4 }, cpuMillicores: { used: 1, total: 2 }, memoryBytes: { used: 1, total: 2 }, complete: true }
+    const html = overview(data, 2)
+    expect(html).toContain('5 desired by spec')
+    expect(html).toContain('2 ready reported by controller')
+    expect(html).toContain('Pods observed by Radar: 0 present, 0 ready')
+    expect(html).toContain('Counts differ from the controller’s status')
+    expect(html.replace(/<[^>]+>/g, '')).toContain('2 registered · 1 accepting actors')
+    expect(html.indexOf('At a glance')).toBeLessThan(html.indexOf('agent-pool-worker-0'))
+    expect(html).toContain('Prometheus is not connected')
+  })
+
+  it('renders a partial registration count as a lower bound and an unread count as unknown', () => {
+    const data = pool([worker(0)], 3)
+    data.coverage.workers = { state: 'partial', deniedAtespaces: ['restricted'] }
+    data.pool.placement = { workers: { total: 1, active: 1, draining: 0, unavailable: 0 }, slots: { used: 2, total: 4 }, cpuMillicores: { used: 1, total: 2 }, memoryBytes: { used: 1, total: 2 }, complete: false }
+    const partial = overview(data).replace(/<[^>]+>/g, '')
+    expect(partial).toContain('≥1 registered · ≥1 accepting actors')
+    const denied = pool([], 3)
+    denied.coverage.workers = { state: 'denied', code: 'denied' }
+    const unread = overview(denied, 3).replace(/<[^>]+>/g, '')
+    expect(unread).toContain('RegistrationUnknown')
+    expect(unread).toContain('Substrate denied permission to list workers')
+    expect(unread).toContain('3 ready reported by controller')
+    expect(unread).not.toContain('0 registered')
+  })
+
+  it('leads with the distinct provisioning cause and has flat drawer sections', () => {
+    const data = pool([], 3)
+    data.pool.kubernetes!.health = 'unhealthy'
+    data.pool.kubernetes!.healthReason = 'SandboxConfigNotFound'
+    data.attention = { id: 'broken', rule: 'poolShort', severity: 'critical', title: 'Missing config', reading: 'SandboxConfig gvisor-v2 is missing.', nextStep: 'Restore the SandboxConfig.', subject: { kind: 'WorkerPool', namespace: 'agents', name: 'agent-pool' }, count: 3 }
+    const html = overview(data, 0, false)
+    expect(html).toContain('Sandbox configuration missing')
+    expect(html).toContain('SandboxConfig gvisor-v2 is missing.')
+    expect(html).toContain('Restore the SandboxConfig.')
+    expect(html).toContain('Open pool')
+    expect(html).not.toContain('aria-label="Legend"')
+    expect(html).not.toContain('shadow-theme-sm')
   })
 })
 
@@ -198,7 +221,7 @@ describe('Workers by pool', () => {
     expect(badgeClass('Full')).toContain(getSeverityColorClass('neutral'))
     expect(badgeClass('Free actor slots')).toContain(getSeverityColorClass('neutral'))
     expect(badgeClass('Free actor slots')).not.toContain(getSeverityColorClass('success'))
-    expect(html).toContain('aria-label="Show the actors on agent-pool-worker-0"')
+    expect(html).toContain('aria-label="Show assigned actors for agent-pool-worker-0"')
   })
 
   it('names registered of desired workers on the pool header, and keeps a lost count out of the state chip', async () => {
