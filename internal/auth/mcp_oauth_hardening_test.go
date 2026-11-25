@@ -70,3 +70,22 @@ func TestMCPOAuthConsentSaysThisComputer(t *testing.T) {
 		t.Fatalf("wording: %s", page.Body)
 	}
 }
+
+func TestMCPOAuthCallbackCarriesIssuer(t *testing.T) {
+	f := newMCPOAuthFixture(t)
+	metadata := httptest.NewRecorder()
+	f.s.HandleMetadata(metadata, httptest.NewRequest("GET", "/.well-known/oauth-authorization-server", nil))
+	if strings.Contains(metadata.Body.String(), "authorization_response_iss_parameter_supported") {
+		t.Fatalf("advertising iss support makes clients that drop it fail: %s", metadata.Body)
+	}
+	for _, decision := range []string{"allow", "deny"} {
+		page := f.authorize(f.request("/mcp"), f.cookies)
+		form := f.consentForm(page)
+		form.Set("decision", decision)
+		w := f.consent(page, form, f.s.origin, f.cookies)
+		u, _ := url.Parse(w.Header().Get("Location"))
+		if w.Code != 303 || u.Query().Get("iss") != f.s.issuer {
+			t.Errorf("%s: callback %s lacks iss=%s", decision, u, f.s.issuer)
+		}
+	}
+}

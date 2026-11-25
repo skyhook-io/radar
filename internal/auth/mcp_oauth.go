@@ -451,6 +451,9 @@ func (s *MCPOAuthServer) consent(w http.ResponseWriter, r *http.Request) {
 	}
 	u, _ := url.Parse(pending.RedirectURI)
 	q := u.Query()
+	// Sent but not advertised in metadata: advertising makes clients reject
+	// responses without it, and some client callback handlers drop it.
+	q.Set("iss", s.issuer)
 	if pending.State != "" {
 		q.Set("state", pending.State)
 	}
