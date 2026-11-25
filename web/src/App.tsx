@@ -142,7 +142,7 @@ const FLEET_MODE_KINDS = new Set<NodeKind>([
 
 // Convert API resource name back to topology node ID prefix
 // Extended MainView type that includes traffic and cost
-type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'cnpg' | 'velero' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications' | 'investigations'
+type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'cnpg' | 'velero' | 'longhorn' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications' | 'investigations'
 
 // Views that have been laid out for phone width (640px and below). The rest
 // keep their desktop width on a phone and scroll sideways; add a view here in
@@ -953,7 +953,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     gitops: 'g o', checks: 'g u', cost: 'g c', capacity: 'g p',
     // Non-rail views (reachable via deep links / actions, not the rail) get no
     // dedicated mnemonic — listed for exhaustiveness so the type stays total.
-    workload: '', compare: '', helmCompare: '', investigations: '', cnpg: '', velero: '',
+    workload: '', compare: '', helmCompare: '', investigations: '', cnpg: '', velero: '', longhorn: '',
   }
   const views = Object.keys(VIEW_SHORTCUT_KEYS).filter(
     (v): v is ExtendedMainView => VIEW_SHORTCUT_KEYS[v as ExtendedMainView] !== '',
@@ -1163,6 +1163,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   }>({ changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null })
   const cnpgInvalidationPendingRef = useRef(false)
   const veleroInvalidationPendingRef = useRef(false)
+  const longhornInvalidationPendingRef = useRef(false)
   const slowInvalidationRef = useRef<{
     updatedKinds: Set<string>    // update-only churn → throttled list + dashboard
     gitopsRowsChanged: boolean   // Argo/Flux row and source kinds → GitOps table rows
@@ -1198,6 +1199,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
     if (event.group?.endsWith('.cnpg.io')) cnpgInvalidationPendingRef.current = true
     if (event.group === 'velero.io') veleroInvalidationPendingRef.current = true
+    if (event.group === 'longhorn.io') longhornInvalidationPendingRef.current = true
 
     const fast = fastInvalidationRef.current
     fast.changedKinds.add(kind)
@@ -1259,6 +1261,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           veleroInvalidationPendingRef.current = false
           queryClient.invalidateQueries({ queryKey: ['velero', 'workspace'] })
           queryClient.invalidateQueries({ queryKey: ['velero', 'schedule-activity'] })
+        }
+        if (longhornInvalidationPendingRef.current) {
+          longhornInvalidationPendingRef.current = false
+          queryClient.invalidateQueries({ queryKey: ['longhorn', 'workspace'] })
         }
         fastInvalidationRef.current = { changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
       }, 3000)

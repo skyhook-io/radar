@@ -171,23 +171,7 @@ func (s *Server) veleroReader(r *http.Request) (*velerosvc.Reader, bool) {
 	// in. Each kind is still authorized there on its own, so an installation
 	// with no Backups yet is checked for Backups too, and reads as none rather
 	// than denied.
-	var installationsOnce sync.Once
-	var installationNamespaces []string
-	installations := func(ctx context.Context) []string {
-		installationsOnce.Do(func() {
-			seen := map[string]bool{}
-			for _, k := range velerosvc.WorkspaceKinds() {
-				for _, ns := range veleroNamespacesHeld(ctx, cache, k, budget) {
-					if !seen[ns] {
-						seen[ns] = true
-						installationNamespaces = append(installationNamespaces, ns)
-					}
-				}
-			}
-			sort.Strings(installationNamespaces)
-		})
-		return installationNamespaces
-	}
+	installations := workspaceInstallations(cache, velerosvc.WorkspaceKinds(), budget)
 
 	return &velerosvc.Reader{
 		ClusterContext: clusterContext,
@@ -199,8 +183,7 @@ func (s *Server) veleroReader(r *http.Request) (*velerosvc.Reader, bool) {
 				if !current() {
 					return integration.KindAccess{State: integration.KindCoverageSyncing}, nil
 				}
-				candidates := func() []string { return installations(ctx) }
-				access, items := s.readWorkspaceKindAmong(r.WithContext(ctx), cache, k, namespaces, []string{veleropkg.Group}, budget, candidates, true)
+				access, items := s.readWorkspaceKindInstalled(r.WithContext(ctx), cache, k, namespaces, []string{veleropkg.Group}, budget, installations)
 				if !current() {
 					return integration.KindAccess{State: integration.KindCoverageSyncing}, nil
 				}
@@ -217,15 +200,16 @@ func (s *Server) veleroReader(r *http.Request) (*velerosvc.Reader, bool) {
 	}, true
 }
 
-// veleroNamespacesHeld is where Radar's own identity holds objects of k. Their
-// union over the Velero kinds is where a caller without cluster-wide list
-// access is checked: Velero keeps its objects in one or two namespaces, so
-// this costs a handful of access checks where every namespace in the cluster
-// would cost one each, and it does not depend on Radar listing Namespaces.
-// When Radar watches k namespace by namespace, its watched namespaces stand
-// in.
-func veleroNamespacesHeld(ctx context.Context, cache *k8s.ResourceCache, k integration.WorkspaceKind, budget *syncBudget) []string {
-	if list, err := listKindInGroups(ctx, cache, k, nil, []string{veleropkg.Group}, budget); err == nil {
+// namespacesHeld is where Radar's own identity holds objects of k. Their
+// union over a workspace's kinds is where a caller without cluster-wide list
+// access is checked: Velero and Longhorn keep their objects in one or two
+// namespaces, so this costs a handful of access checks where every namespace
+// in the cluster would cost one each, and it does not depend on Radar listing
+// Namespaces. When Radar watches k namespace by namespace, its watched
+// namespaces stand in. err is the failed read when neither is known.
+func namespacesHeld(ctx context.Context, cache *k8s.ResourceCache, k integration.WorkspaceKind, budget *syncBudget) ([]string, error) {
+	list, err := listKindInGroups(ctx, cache, k, nil, []string{k.Group}, budget)
+	if err == nil {
 		seen := map[string]bool{}
 		var out []string
 		for _, o := range list {
@@ -235,12 +219,61 @@ func veleroNamespacesHeld(ctx context.Context, cache *k8s.ResourceCache, k integ
 			}
 		}
 		sort.Strings(out)
-		return out
+		return out, nil
 	}
 	if _, _, watched, ok := dynamicNamespaceWatches(k, budget); ok {
-		return watched
+		return watched, nil
 	}
-	return nil
+	return nil, err
+}
+
+// workspaceInstallations is the union of namespacesHeld over kinds, read once
+// per request. err is set only when nothing was found and some read failed:
+// an installation Radar hasn't read yet is not the same as none.
+func workspaceInstallations(cache *k8s.ResourceCache, kinds []integration.WorkspaceKind, budget *syncBudget) func(context.Context) ([]string, error) {
+	var once sync.Once
+	var out []string
+	var failed error
+	return func(ctx context.Context) ([]string, error) {
+		once.Do(func() {
+			seen := map[string]bool{}
+			for _, k := range kinds {
+				held, err := namespacesHeld(ctx, cache, k, budget)
+				if err != nil && failed == nil {
+					failed = err
+				}
+				for _, ns := range held {
+					if !seen[ns] {
+						seen[ns] = true
+						out = append(out, ns)
+					}
+				}
+			}
+			sort.Strings(out)
+			if len(out) > 0 {
+				failed = nil
+			}
+		})
+		return out, failed
+	}
+}
+
+// readWorkspaceKindInstalled is readWorkspaceKindAmong checking a caller
+// without cluster-wide list access where the workspace is installed. When
+// that is unknown because Radar's own read failed, the kind reads as that
+// failure (syncing, uncached), not as denied.
+func (s *Server) readWorkspaceKindInstalled(r *http.Request, cache *k8s.ResourceCache, k integration.WorkspaceKind, namespaces, groups []string, budget *syncBudget, installations func(context.Context) ([]string, error)) (integration.KindAccess, []*unstructured.Unstructured) {
+	var failed error
+	candidates := func() []string {
+		held, err := installations(r.Context())
+		failed = err
+		return held
+	}
+	access, items := s.readWorkspaceKindAmong(r, cache, k, namespaces, groups, budget, candidates, true)
+	if access.State == integration.KindCoverageDenied && failed != nil {
+		return kindAccessFromListError(k, failed), nil
+	}
+	return access, items
 }
 
 // veleroDeployments are a namespace's Deployments, where the caller may list

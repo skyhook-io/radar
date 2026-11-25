@@ -3,7 +3,8 @@ import type { SidebarCategoryWorkspace } from '@skyhook-io/k8s-ui'
 
 type Workspaces = Record<string, SidebarCategoryWorkspace>
 
-/** Two integrations' sidebar workspaces as one map; undefined when neither applies. */
-export function useMergedSidebarWorkspaces(a: Workspaces | undefined, b: Workspaces | undefined): Workspaces | undefined {
-  return useMemo(() => (a || b ? { ...a, ...b } : undefined), [a, b])
+/** Integrations' sidebar workspaces as one map; undefined when none applies. */
+// shortcut: fixed arity, since useMemo needs a literal dependency list; add a parameter per new workspace integration.
+export function useMergedSidebarWorkspaces(a: Workspaces | undefined, b: Workspaces | undefined, c?: Workspaces): Workspaces | undefined {
+  return useMemo(() => (a || b || c ? { ...a, ...b, ...c } : undefined), [a, b, c])
 }
