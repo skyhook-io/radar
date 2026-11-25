@@ -9,8 +9,10 @@ import (
 	"github.com/skyhook-io/radar/pkg/probe"
 	authzv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 )
@@ -536,5 +538,42 @@ func TestWithProbeMeshMarksSidecarResults(t *testing.T) {
 	}
 	if got := withProbeMesh(results(), radarPod("ns", corev1.Container{Name: "probe"})); got[0].Mesh != "" {
 		t.Errorf("plain probe pod marked with mesh %q", got[0].Mesh)
+	}
+}
+
+// A pod an admission policy refuses never exists, so the wait would only time
+// out with a guess. The Job controller's FailedCreate event names the policy:
+// it is reported at once, and an unreadable event list falls back to the
+// timeout's own explanation.
+func TestWaitNamesAPodCreationRefusal(t *testing.T) {
+	refusal := &corev1.Event{
+		ObjectMeta:     metav1.ObjectMeta{Name: "radar-probe-abc.1", Namespace: "shop"},
+		InvolvedObject: corev1.ObjectReference{Kind: "Job", Name: "radar-probe-abc", Namespace: "shop"},
+		Reason:         "FailedCreate",
+		Message:        `Error creating: pods "radar-probe-abc-x" is forbidden: ValidatingAdmissionPolicy 'require-team' denied request: Pods must carry a team label`,
+	}
+	other := refusal.DeepCopy()
+	other.Name, other.InvolvedObject.Name, other.Message = "radar-probe-other.1", "radar-probe-other", "Error creating: something else"
+
+	client := fake.NewClientset(other, refusal)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	start := time.Now()
+	_, err := waitAndReadProbeJob(ctx, client, "shop", "radar-probe-abc", probeRunLabelKey+"=abc", 0)
+	if err == nil || !strings.Contains(err.Error(), "Pods must carry a team label") || strings.Contains(err.Error(), "something else") || strings.Contains(err.Error(), "Error creating:") {
+		t.Fatalf("err = %v", err)
+	}
+	if time.Since(start) > 3*time.Second {
+		t.Fatalf("waited %s for a refusal already recorded", time.Since(start))
+	}
+
+	denied := fake.NewClientset(refusal)
+	denied.PrependReactor("list", "events", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "events"}, "", nil)
+	})
+	short, cancelShort := context.WithTimeout(context.Background(), 1200*time.Millisecond)
+	defer cancelShort()
+	if _, err := waitAndReadProbeJob(short, denied, "shop", "radar-probe-abc", probeRunLabelKey+"=abc", 0); err == nil || !strings.Contains(err.Error(), "never saw the probe pod run") {
+		t.Fatalf("without events: %v", err)
 	}
 }

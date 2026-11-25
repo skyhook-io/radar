@@ -231,7 +231,7 @@ func Run(ctx context.Context, client kubernetes.Interface, opts RunOptions) (res
 	if id := created.Labels[probeRunLabelKey]; id != "" {
 		selector = probeRunLabelKey + "=" + id
 	}
-	results, err = waitAndReadProbeJob(runCtx, client, opts.Namespace, selector, grantedBudget)
+	results, err = waitAndReadProbeJob(runCtx, client, opts.Namespace, created.Name, selector, grantedBudget)
 	if err != nil {
 		return nil, fallbackCommand, err
 	}
@@ -335,8 +335,10 @@ func buildProbeJob(opts RunOptions) *batchv1.Job {
 // guaranteed label (radar.skyhook.io/probe-run=<id>), not the k8s-managed
 // job-name label that only exists on clusters >= 1.27. grantedBudget > 0 means
 // the run started with less than jobTimeout of request budget - an expiry then
-// names the budget, not the cluster.
-func waitAndReadProbeJob(ctx context.Context, client kubernetes.Interface, namespace, selector string, grantedBudget time.Duration) ([]probe.Result, error) {
+// names the budget, not the cluster. While no pod exists it also looks for
+// the Job controller's FailedCreate event, so an admission policy that
+// refuses the pod is named at once rather than after the deadline.
+func waitAndReadProbeJob(ctx context.Context, client kubernetes.Interface, namespace, jobName, selector string, grantedBudget time.Duration) ([]probe.Result, error) {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	var lastPod *corev1.Pod
@@ -376,6 +378,9 @@ func waitAndReadProbeJob(ctx context.Context, client kubernetes.Interface, names
 				continue
 			}
 			if len(pods.Items) == 0 {
+				if msg := podCreationRefused(ctx, client, namespace, jobName); msg != "" {
+					return nil, fmt.Errorf("in-cluster test couldn't run - the cluster refused to create the probe pod, so the target was NOT tested: %s", msg)
+				}
 				continue
 			}
 			pod := pods.Items[0]
@@ -402,6 +407,29 @@ func waitAndReadProbeJob(ctx context.Context, client kubernetes.Interface, names
 			}
 		}
 	}
+}
+
+// podCreationRefused returns the Job controller's FailedCreate message for the
+// probe Job (an admission webhook, Pod Security or a quota refusing the pod),
+// or "" when there is none or events can't be read. Best effort: reading
+// events is not part of the capability check, so a denial just leaves the
+// timeout message to explain.
+func podCreationRefused(ctx context.Context, client kubernetes.Interface, namespace, jobName string) string {
+	if jobName == "" {
+		return ""
+	}
+	events, err := client.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{
+		FieldSelector: "involvedObject.kind=Job,involvedObject.name=" + jobName + ",reason=FailedCreate",
+	})
+	if err != nil {
+		return ""
+	}
+	for _, e := range events.Items {
+		if e.InvolvedObject.Name == jobName && e.Reason == "FailedCreate" && e.Message != "" {
+			return truncate(strings.TrimPrefix(e.Message, "Error creating: "), 300)
+		}
+	}
+	return ""
 }
 
 // withProbeMesh records a sidecar proxy in the probe pod on its results: the
