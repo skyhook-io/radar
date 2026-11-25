@@ -617,7 +617,8 @@ func TestRuntimeAuthFailureDoesNotTearDownRecoveredClient(t *testing.T) {
 	contextOpMu.Lock()
 	CancelOngoingOperations()
 	clientMu.Lock()
-	activeClientGeneration = generation + 1
+	installedConn.Store(copyTestConnectionLocked())
+	installedConn.Load().clients.generation = generation + 1
 	clientMu.Unlock()
 	contextOpMu.Unlock()
 	close(releaseProbe)
@@ -662,7 +663,7 @@ func TestRuntimeAuthRecoveryRearmsThroughSwitchContext(t *testing.T) {
 	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "recovered"})
 
 	clientMu.RLock()
-	recoveredGeneration := activeClientGeneration
+	recoveredGeneration := installedConn.Load().ClientGeneration()
 	clientMu.RUnlock()
 	if recoveredGeneration == oldGeneration {
 		t.Fatal("SwitchContext() did not publish a new client generation")
@@ -1109,9 +1110,10 @@ func TestRuntimeAuthCooldownIsScopedToGeneration(t *testing.T) {
 
 	// A context switch mints a new client generation; the old generation's
 	// cooldown must not suppress the new one's first candidate.
-	newGeneration := clientGenerationCounter.Add(1)
+	newGeneration := clusterBuildSequence.Add(1)
 	clientMu.Lock()
-	activeClientGeneration = newGeneration
+	installedConn.Store(copyTestConnectionLocked())
+	installedConn.Load().clients.generation = newGeneration
 	clientMu.Unlock()
 
 	reportRuntimeAuthFailure(newGeneration, errors.New("unauthorized"))
@@ -1156,7 +1158,8 @@ func TestRuntimeAuthObserverCoversAllSharedClients(t *testing.T) {
 				t.Fatalf("newSharedKubernetesClients() error = %v", err)
 			}
 			clientMu.Lock()
-			activeClientGeneration = clients.generation
+			installedConn.Store(copyTestConnectionLocked())
+			installedConn.Load().clients.generation = clients.generation
 			clientMu.Unlock()
 
 			tt.request(t, clients)
@@ -1233,9 +1236,7 @@ func TestRuntimeAuthRecoveryStaticCredentialsReconnectViaDiskReread(t *testing.T
 	t.Cleanup(ResetTestState)
 	setRuntimeAuthRecoveryIntervalsForTest(2*time.Millisecond, 4*time.Millisecond)
 
-	clientMu.Lock()
-	k8sConfig = &rest.Config{Host: "https://cluster.test", BearerToken: "expired-inline-token"}
-	clientMu.Unlock()
+	SetTestConfig(&rest.Config{Host: "https://cluster.test", BearerToken: "expired-inline-token"})
 
 	setRuntimeAuthProbe(func(context.Context) error {
 		return errors.New("Kubernetes API returned HTTP 401 Unauthorized")
@@ -1355,9 +1356,7 @@ func TestRuntimeAuthRecoveryStaticCredentialsSkipDiskRereadWhenOffline(t *testin
 	t.Cleanup(ResetTestState)
 	setRuntimeAuthRecoveryIntervalsForTest(2*time.Millisecond, 4*time.Millisecond)
 
-	clientMu.Lock()
-	k8sConfig = &rest.Config{Host: "https://cluster.test", BearerToken: "expired-inline-token"}
-	clientMu.Unlock()
+	SetTestConfig(&rest.Config{Host: "https://cluster.test", BearerToken: "expired-inline-token"})
 
 	var probes atomic.Int32
 	setRuntimeAuthProbe(func(context.Context) error {
@@ -1394,12 +1393,10 @@ func TestRuntimeAuthRecoveryExecCredentialsSkipDiskRereadAttempts(t *testing.T) 
 	t.Cleanup(ResetTestState)
 	setRuntimeAuthRecoveryIntervalsForTest(2*time.Millisecond, 4*time.Millisecond)
 
-	clientMu.Lock()
-	k8sConfig = &rest.Config{
+	SetTestConfig(&rest.Config{
 		Host:         "https://cluster.test",
 		ExecProvider: &clientcmdapi.ExecConfig{Command: "aws"},
-	}
-	clientMu.Unlock()
+	})
 
 	var probes atomic.Int32
 	setRuntimeAuthProbe(func(context.Context) error {
@@ -1464,14 +1461,15 @@ func prepareRuntimeAuthTest(t *testing.T) uint64 {
 	ResetTestState()
 	t.Cleanup(ResetTestState)
 
-	generation := clientGenerationCounter.Add(1)
+	generation := clusterBuildSequence.Add(1)
 	clientMu.Lock()
 	previousPath := kubeconfigPath
 	// Without a kubeconfig path the package reads as in-cluster
 	// (isInClusterLocked), where runtimeAuthStateIsCurrent is always false and
 	// every assertion below would pass vacuously.
 	kubeconfigPath = "/tmp/radar-runtime-auth-test"
-	activeClientGeneration = generation
+	installedConn.Store(copyTestConnectionLocked())
+	installedConn.Load().clients.generation = generation
 	clientMu.Unlock()
 	t.Cleanup(func() {
 		clientMu.Lock()
@@ -1567,11 +1565,7 @@ func TestRuntimeAuthExecCredentialExpiry(t *testing.T) {
 	clientMu.Lock()
 	previousPath := kubeconfigPath
 	kubeconfigPath = statePath
-	k8sConfig = config
-	k8sClient = clients.clientset
-	discoveryClient = clients.discovery
-	dynamicClient = clients.dynamic
-	activeClientGeneration = clients.generation
+	installedConn.Store(installedConnectionLocked(config, clients))
 	clientMu.Unlock()
 	t.Cleanup(func() {
 		clientMu.Lock()
@@ -1617,11 +1611,7 @@ func TestRuntimeAuthExecCredentialExpiry(t *testing.T) {
 	}
 
 	clientMu.Lock()
-	k8sConfig = config
-	k8sClient = recoveredClients.clientset
-	discoveryClient = recoveredClients.discovery
-	dynamicClient = recoveredClients.dynamic
-	activeClientGeneration = recoveredClients.generation
+	installedConn.Store(installedConnectionLocked(config, recoveredClients))
 	clientMu.Unlock()
 	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "exec-test"})
 

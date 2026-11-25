@@ -34,7 +34,7 @@ import (
 )
 
 func TestAgentListAndSearchBoundSlowOwnershipAuthorization(t *testing.T) {
-	t.Cleanup(summarycontext.SetTestEnrichmentBudget(time.Second))
+	t.Cleanup(summarycontext.SetTestEnrichmentBudget(300 * time.Millisecond))
 
 	withOwnershipDiscovery(t)
 	objects := []runtime.Object{}
@@ -48,7 +48,7 @@ func TestAgentListAndSearchBoundSlowOwnershipAuthorization(t *testing.T) {
 	fakeSARServer(t, func(a authv1.ResourceAttributes) bool {
 		if a.Verb == "get" && a.Resource == "pods" {
 			gets.Add(1)
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(30 * time.Millisecond)
 		}
 		return true
 	})
@@ -64,7 +64,7 @@ func TestAgentListAndSearchBoundSlowOwnershipAuthorization(t *testing.T) {
 		if err != nil || resp.StatusCode != 200 {
 			t.Fatalf("%s: status=%d error=%v", path, resp.StatusCode, err)
 		}
-		if time.Since(start) > 6*time.Second || gets.Load() >= 60 {
+		if time.Since(start) > 1800*time.Millisecond || gets.Load() >= 60 {
 			t.Fatalf("unbounded ownership work: elapsed=%s gets=%d", time.Since(start), gets.Load())
 		}
 		var rows []struct {

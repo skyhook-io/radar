@@ -1,0 +1,192 @@
+{
+  "issues": [
+    {
+      "severity": "critical",
+      "source": "scheduling",
+      "category": "admission_webhook_blocking",
+      "category_group": "scheduling",
+      "id": "722e237ea9685313",
+      "grouping_scope": "workload",
+      "kind": "Deployment",
+      "group": "apps",
+      "namespace": "admit",
+      "name": "hooked",
+      "reason": "WebhookDenied",
+      "message": "pod creation blocked: admission webhook \"deny-root.policy.example.com\" denied the request: runAsNonRoot is required",
+      "first_seen": "1999-12-31T23:51:00Z",
+      "resource_created_at": "1999-12-31T21:00:00Z",
+      "last_seen": "2000-01-01T00:00:00Z",
+      "issue_timing": "started_after_resource_was_healthy",
+      "issue_timing_basis": "owner_condition",
+      "timing_summary": "ValidatingWebhookConfiguration pod-policy was created at 1999-12-31T23:55:00Z; Deployment hooked has no recorded change in the last hour: the ValidatingWebhookConfiguration changed last.",
+      "correlated_changes": [
+        {
+          "kind": "ValidatingWebhookConfiguration",
+          "apiVersion": "admissionregistration.k8s.io/v1",
+          "name": "pod-policy",
+          "changeType": "add",
+          "summary": "add",
+          "timestamp": "1999-12-31T23:55:00Z",
+          "change_category": "lifecycle",
+          "rank_reason": "the object named by the admission rejection"
+        }
+      ]
+    },
+    {
+      "severity": "critical",
+      "source": "scheduling",
+      "category": "quota_exceeded",
+      "category_group": "scheduling",
+      "id": "bc5d48af35074044",
+      "grouping_scope": "workload",
+      "kind": "Deployment",
+      "group": "apps",
+      "namespace": "admit",
+      "name": "search",
+      "reason": "QuotaExceeded",
+      "message": "pod creation blocked: pods \"search-7d996-j2wkp\" is forbidden: exceeded quota: compute, requested: pods=1, used: pods=2, limited: pods=2",
+      "first_seen": "1999-12-31T23:51:00Z",
+      "resource_created_at": "1999-12-31T21:00:00Z",
+      "last_seen": "2000-01-01T00:00:00Z",
+      "issue_timing": "started_after_resource_was_healthy",
+      "issue_timing_basis": "owner_condition",
+      "timing_summary": "ResourceQuota compute was created at 1999-12-31T23:50:00Z, after Deployment search was updated at 1999-12-31T23:40:00Z: the ResourceQuota changed last.",
+      "correlated_changes": [
+        {
+          "kind": "ResourceQuota",
+          "apiVersion": "v1",
+          "namespace": "admit",
+          "name": "compute",
+          "changeType": "add",
+          "summary": "add",
+          "timestamp": "1999-12-31T23:50:00Z",
+          "change_category": "lifecycle",
+          "rank_reason": "the object named by the admission rejection"
+        },
+        {
+          "kind": "Deployment",
+          "apiVersion": "apps/v1",
+          "namespace": "admit",
+          "name": "search",
+          "changeType": "update",
+          "summary": "spec.replicas changed",
+          "timestamp": "1999-12-31T23:40:00Z",
+          "change_category": "spec_config",
+          "rank_reason": "desired-state or configuration field changed",
+          "fields": [
+            {
+              "path": "spec.replicas",
+              "oldValue": 2,
+              "newValue": 4
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "severity": "critical",
+      "source": "scheduling",
+      "category": "quota_exceeded",
+      "category_group": "scheduling",
+      "id": "edc2e36a17b250d0",
+      "grouping_scope": "workload",
+      "kind": "ReplicaSet",
+      "group": "apps",
+      "namespace": "admit",
+      "name": "batch-rs",
+      "reason": "LimitRangeViolation",
+      "message": "pod creation blocked: pods \"batch-rs-x\" is forbidden: maximum memory usage per Container is 256Mi, but limit is 1Gi",
+      "first_seen": "1999-12-31T23:49:00Z",
+      "resource_created_at": "1999-12-31T21:00:00Z",
+      "last_seen": "2000-01-01T00:00:00Z",
+      "correlated_changes": [
+        {
+          "kind": "LimitRange",
+          "apiVersion": "v1",
+          "namespace": "admit",
+          "name": "limits",
+          "changeType": "update",
+          "summary": "spec.limits[0].max.memory changed",
+          "timestamp": "1999-12-31T23:48:00Z",
+          "change_category": "spec_config",
+          "rank_reason": "a LimitRange in the rejecting namespace (LimitRange rejections name none)",
+          "fields": [
+            {
+              "path": "spec.limits[0].max.memory",
+              "oldValue": "1Gi",
+              "newValue": "256Mi"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "severity": "critical",
+      "source": "problem",
+      "category": "helm_release_failed",
+      "category_group": "control_plane",
+      "id": "571962da04b2cb46",
+      "grouping_scope": "unknown",
+      "kind": "HelmRelease",
+      "group": "helm.sh",
+      "namespace": "admit",
+      "name": "payments",
+      "reason": "HelmUpgradeFailed",
+      "message": "Upgrade failed at rev 2. Upgrade \"payments\" failed: context deadline exceeded",
+      "cause": "The latest native Helm release revision is failed.",
+      "action": "Open the Helm release history and hook diagnostics, then inspect the failed revision, values, hooks, and owned resources.",
+      "stuck": true,
+      "first_seen": "1999-12-31T23:57:00Z",
+      "last_seen": "2000-01-01T00:00:00Z",
+      "correlated_changes": [
+        {
+          "source": "helm",
+          "kind": "HelmRelease",
+          "namespace": "admit",
+          "name": "payments",
+          "changeType": "upgrade_failed",
+          "summary": "Upgrade failed at rev 2. Upgrade \"payments\" failed: context deadline exceeded",
+          "timestamp": "1999-12-31T23:57:00Z",
+          "change_category": "spec_config",
+          "rank_reason": "Helm release operation history",
+          "fields": [
+            {
+              "path": "helm.operation",
+              "newValue": "upgrade_failed"
+            },
+            {
+              "path": "helm.status",
+              "newValue": "failed"
+            },
+            {
+              "path": "helm.revision",
+              "newValue": 2
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "total": 4,
+  "total_matched": 4,
+  "unchecked_sources": [
+    {
+      "source": "custom_resources",
+      "reason": "kind_sync_pending"
+    },
+    {
+      "source": "kueue",
+      "reason": "kind_sync_pending",
+      "kinds": [
+        {
+          "group": "kueue.x-k8s.io",
+          "kind": "LocalQueue"
+        },
+        {
+          "group": "kueue.x-k8s.io",
+          "kind": "Workload"
+        }
+      ]
+    }
+  ]
+}

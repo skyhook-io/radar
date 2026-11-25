@@ -47,15 +47,10 @@ var (
 // replace the resource cache restore it from here.
 var testFakeClient *fake.Clientset
 
-func useTestResourceCache(t *testing.T, client *fake.Clientset) {
+func useTestResourceCache(t testing.TB, client *fake.Clientset) {
 	t.Helper()
-	t.Cleanup(func() {
-		k8s.ResetResourceCache()
-		if err := k8s.InitTestResourceCache(testFakeClient); err != nil {
-			t.Fatalf("restore package fixture cache: %v", err)
-		}
-	})
-	k8s.ResetResourceCache()
+	t.Cleanup(k8s.SwapResourceCacheForTest(nil))
+	t.Cleanup(k8s.ResetResourceCache)
 	if err := k8s.InitTestResourceCache(client); err != nil {
 		t.Fatalf("initialize test resource cache: %v", err)
 	}

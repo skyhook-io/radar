@@ -263,7 +263,7 @@ func TestViewScopeProbesBoundedForMixedLabels(t *testing.T) {
 	ps := &probeServer{store: &evaluatingStore{t: t, series: data}}
 	c := newProbeClient(t, ps)
 	scope, err := decideViewScope(context.Background(), c, req, time.Now(), clusterA, false)
-	if err != nil || scope.State != ViewScopeUnlabeled || scope.Withheld || scope.Filter("kube_pod_owner") != `cluster="a"` {
+	if err != nil || scope.State != ViewScopeUnlabeled || scope.Withheld || scope.Filter("kube_pod_owner") != checkedClusterAFilter {
 		t.Fatalf("scope = %+v err = %v", scope, err)
 	}
 	ps.check(t)
@@ -404,5 +404,92 @@ func TestParseViewMatchers(t *testing.T) {
 	}
 	if q := strconv.Quote(`a"b`); parseViewMatchers("namespace=" + q)[0].value != `a"b` {
 		t.Error("quoted value not decoded")
+	}
+}
+
+func TestSharedClusterViewRequiresQualifiersAcrossFamilies(t *testing.T) {
+	owner := probeSeries(metricPodOwner, "api-0", "cluster", "prod", "project_id", "local")
+	usage := probeSeries(metricMemoryWorkingSet, "api-0", "cluster", "prod")
+	req := workloadChartRequest(true, []string{"api-0"}, metricPodOwner, metricMemoryWorkingSet)
+	for _, tt := range []struct {
+		name         string
+		labels       map[string]string
+		owner, usage map[string]string
+	}{
+		{"usage missing inventory qualifier", map[string]string{"cluster": "prod", "project_id": "local"}, owner, usage},
+		{"usage carries an unverified project", map[string]string{"cluster": "prod"}, probeSeries(metricPodOwner, "api-0", "cluster", "prod"), probeSeries(metricMemoryWorkingSet, "api-0", "cluster", "prod", "project_id", "foreign")},
+		{"without verified cluster identity", nil, owner, usage},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &evaluatingStore{t: t, series: []map[string]string{tt.owner, tt.usage}}
+			scope, err := decideViewScope(context.Background(), store, req, time.Now(), tt.labels, false)
+			if err != nil || !scope.Withheld {
+				t.Fatalf("scope=%+v, err=%v", scope, err)
+			}
+		})
+	}
+}
+
+func TestConfiguredSelectorChecksManagedClusterContext(t *testing.T) {
+	owner := probeSeries(metricPodOwner, "api-0", "cluster", "prod", "project_id", "local", "location", "east")
+	usage := probeSeries(metricMemoryWorkingSet, "api-0", "cluster", "prod", "project_id", "local", "location", "east")
+	otherProject := probeSeries(metricMemoryWorkingSet, "api-0", "cluster", "prod", "project_id", "foreign", "location", "east")
+	otherCluster := probeSeries(metricMemoryWorkingSet, "api-0", "cluster", "other", "project_id", "local", "location", "east")
+	noLocation := probeSeries(metricMemoryWorkingSet, "api-0", "cluster", "prod", "project_id", "local")
+	req := workloadChartRequest(true, []string{"api-0"}, metricPodOwner, metricMemoryWorkingSet)
+	for _, tt := range []struct {
+		name     string
+		labels   map[string]string
+		series   []map[string]string
+		withheld bool
+	}{
+		{"cluster in a single project", map[string]string{"cluster": "prod"}, []map[string]string{owner, usage}, false},
+		{"cluster in multiple projects", map[string]string{"cluster": "prod"}, []map[string]string{owner, usage, otherProject}, true},
+		{"different projects across families", map[string]string{"cluster": "prod"}, []map[string]string{owner, otherProject}, true},
+		{"location missing on one family", map[string]string{"cluster": "prod"}, []map[string]string{owner, noLocation}, true},
+		{"complete selector", map[string]string{"cluster": "prod", "project_id": "local", "location": "east"}, []map[string]string{owner, usage, otherProject, otherCluster}, false},
+		{"asserted project holds one cluster", map[string]string{"project_id": "local"}, []map[string]string{owner, usage}, false},
+		{"asserted project holds two clusters", map[string]string{"project_id": "local"}, []map[string]string{owner, usage, otherCluster}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &evaluatingStore{t: t, series: tt.series}
+			scope, err := decideViewScope(context.Background(), store, req, time.Now(), tt.labels, true)
+			if err != nil || scope.Withheld != tt.withheld || (!tt.withheld && scope.State != ViewScopeConfigured) {
+				t.Fatalf("scope=%+v, err=%v", scope, err)
+			}
+			if !tt.withheld {
+				got := store.selected(metricMemoryWorkingSet, scope.Filter(metricMemoryWorkingSet))
+				if len(got) != 1 || !reflect.DeepEqual(got[0], usage) {
+					t.Fatalf("measurement selector %s selected %v", scope.Filter(metricMemoryWorkingSet), got)
+				}
+			}
+			wantLabels := tt.labels
+			if !tt.withheld {
+				wantLabels = map[string]string{"cluster": "prod", "project_id": "local", "location": "east"}
+			}
+			if got := scope.Wire().Labels; !reflect.DeepEqual(got, wantLabels) {
+				t.Fatalf("reported cluster labels = %v, want %v", got, wantLabels)
+			}
+		})
+	}
+}
+
+func TestViewMeasurementPinsAbsentIdentityAfterReadback(t *testing.T) {
+	for _, configured := range []bool{false, true} {
+		local := probeSeries(metricMemoryWorkingSet, "api-0", "cluster", "prod")
+		store := &evaluatingStore{t: t, series: []map[string]string{local}}
+		req := workloadChartRequest(true, []string{"api-0"}, metricMemoryWorkingSet)
+		scope, err := decideViewScope(context.Background(), store, req, time.Now(), map[string]string{"cluster": "prod"}, configured)
+		if err != nil || scope.Withheld {
+			t.Fatalf("scope=%+v err=%v", scope, err)
+		}
+		store.series = append(store.series,
+			probeSeries(metricMemoryWorkingSet, "api-0", "cluster", "prod", "project_id", "elsewhere"),
+			probeSeries(metricMemoryWorkingSet, "api-0", "cluster", "prod", "location", "west"),
+			probeSeries(metricMemoryWorkingSet, "api-0", "cluster", "other"),
+		)
+		if got := store.selected(metricMemoryWorkingSet, scope.Filter(metricMemoryWorkingSet)); len(got) != 1 || !reflect.DeepEqual(got[0], local) {
+			t.Fatalf("configured=%t filter=%s selected %v", configured, scope.Filter(metricMemoryWorkingSet), got)
+		}
 	}
 }

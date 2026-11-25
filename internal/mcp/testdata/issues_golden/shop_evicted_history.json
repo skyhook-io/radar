@@ -1,0 +1,414 @@
+{
+  "issues": [
+    {
+      "severity": "critical",
+      "source": "problem",
+      "category": "crashloop",
+      "category_group": "runtime",
+      "id": "751e1b47066e7dc5",
+      "grouping_scope": "workload",
+      "kind": "Rollout",
+      "group": "argoproj.io",
+      "namespace": "shop",
+      "name": "canary",
+      "reason": "CrashLoopBackOff",
+      "message": "back-off restarting failed container",
+      "onset_unknown": true,
+      "resource_created_at": "1999-12-31T21:00:00Z",
+      "last_seen": "2000-01-01T00:00:00Z",
+      "count": 1,
+      "restart_count": 7,
+      "affected": {
+        "pods": 1
+      },
+      "members": [
+        {
+          "kind": "Pod",
+          "namespace": "shop",
+          "name": "canary-rs-1"
+        }
+      ],
+      "diagnostic_context": {
+        "role": "rollup",
+        "facts": [
+          {
+            "type": "restart_cause",
+            "message": "Container restart evidence: restartCount=7."
+          },
+          {
+            "type": "owner_rollup",
+            "message": "Grouped from 1 affected resource(s) under this Rollout.",
+            "refs": [
+              {
+                "kind": "Pod",
+                "namespace": "shop",
+                "name": "canary-rs-1"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "severity": "critical",
+      "source": "problem",
+      "category": "crashloop",
+      "category_group": "runtime",
+      "id": "152ceceba9fcb422",
+      "grouping_scope": "workload",
+      "kind": "Deployment",
+      "group": "apps",
+      "namespace": "shop",
+      "name": "churn",
+      "reason": "CrashLoopBackOff",
+      "message": "back-off restarting failed container",
+      "onset_unknown": true,
+      "resource_created_at": "1999-12-31T21:00:00Z",
+      "last_seen": "2000-01-01T00:00:00Z",
+      "count": 1,
+      "restart_count": 7,
+      "affected": {
+        "pods": 1
+      },
+      "members": [
+        {
+          "kind": "Pod",
+          "namespace": "shop",
+          "name": "churn-rs-1"
+        }
+      ],
+      "diagnostic_context": {
+        "role": "rollup",
+        "facts": [
+          {
+            "type": "restart_cause",
+            "message": "Container restart evidence: restartCount=7."
+          },
+          {
+            "type": "owner_rollup",
+            "message": "Grouped from 1 affected resource(s) under this Deployment.",
+            "refs": [
+              {
+                "kind": "Pod",
+                "namespace": "shop",
+                "name": "churn-rs-1"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "severity": "critical",
+      "source": "problem",
+      "category": "crashloop",
+      "category_group": "runtime",
+      "id": "8c75610cacc7081a",
+      "grouping_scope": "workload",
+      "kind": "Deployment",
+      "group": "apps",
+      "namespace": "shop",
+      "name": "flagd",
+      "reason": "CrashLoopBackOff",
+      "message": "back-off restarting failed container",
+      "onset_unknown": true,
+      "resource_created_at": "1999-12-31T21:00:00Z",
+      "last_seen": "2000-01-01T00:00:00Z",
+      "count": 1,
+      "restart_count": 7,
+      "affected": {
+        "pods": 1
+      },
+      "members": [
+        {
+          "kind": "Pod",
+          "namespace": "shop",
+          "name": "flagd-rs-1"
+        }
+      ],
+      "diagnostic_context": {
+        "role": "rollup",
+        "facts": [
+          {
+            "type": "restart_cause",
+            "message": "Container restart evidence: restartCount=7."
+          },
+          {
+            "type": "owner_rollup",
+            "message": "Grouped from 1 affected resource(s) under this Deployment.",
+            "refs": [
+              {
+                "kind": "Pod",
+                "namespace": "shop",
+                "name": "flagd-rs-1"
+              }
+            ]
+          }
+        ]
+      },
+      "correlated_changes": [
+        {
+          "kind": "ConfigMap",
+          "apiVersion": "v1",
+          "namespace": "shop",
+          "name": "flagd-config",
+          "changeType": "update",
+          "summary": "data.flags changed",
+          "timestamp": "1999-12-31T23:54:00Z",
+          "change_category": "spec_config",
+          "rank_reason": "application configuration field changed",
+          "application_configuration_change": true,
+          "fields": [
+            {
+              "path": "data.flags",
+              "oldValue": "off",
+              "newValue": "on"
+            }
+          ],
+          "consumed_by": [
+            "Deployment/flagd"
+          ]
+        },
+        {
+          "kind": "Secret",
+          "apiVersion": "v1",
+          "namespace": "shop",
+          "name": "flagd-creds",
+          "changeType": "update",
+          "summary": "data (modified keys) changed",
+          "timestamp": "1999-12-31T23:52:00Z",
+          "change_category": "spec_config",
+          "rank_reason": "Secret changed; referenced by a workload template or current Pod spec",
+          "fields": [
+            {
+              "path": "data (modified keys)"
+            }
+          ],
+          "consumed_by": [
+            "Deployment/flagd"
+          ]
+        }
+      ]
+    },
+    {
+      "severity": "critical",
+      "source": "problem",
+      "category": "crashloop",
+      "category_group": "runtime",
+      "id": "0cccbccddf33b43b",
+      "grouping_scope": "workload",
+      "kind": "Deployment",
+      "group": "apps",
+      "namespace": "shop",
+      "name": "quiet",
+      "reason": "CrashLoopBackOff",
+      "message": "back-off restarting failed container",
+      "onset_unknown": true,
+      "resource_created_at": "1999-12-31T21:00:00Z",
+      "last_seen": "2000-01-01T00:00:00Z",
+      "count": 1,
+      "restart_count": 7,
+      "affected": {
+        "pods": 1
+      },
+      "members": [
+        {
+          "kind": "Pod",
+          "namespace": "shop",
+          "name": "quiet-rs-1"
+        }
+      ],
+      "diagnostic_context": {
+        "role": "rollup",
+        "facts": [
+          {
+            "type": "restart_cause",
+            "message": "Container restart evidence: restartCount=7."
+          },
+          {
+            "type": "owner_rollup",
+            "message": "Grouped from 1 affected resource(s) under this Deployment.",
+            "refs": [
+              {
+                "kind": "Pod",
+                "namespace": "shop",
+                "name": "quiet-rs-1"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "severity": "critical",
+      "source": "problem",
+      "category": "crashloop",
+      "category_group": "runtime",
+      "id": "649c9894e4eeea6f",
+      "grouping_scope": "workload",
+      "kind": "Deployment",
+      "group": "apps",
+      "namespace": "shop",
+      "name": "web",
+      "reason": "CrashLoopBackOff",
+      "message": "back-off restarting failed container",
+      "onset_unknown": true,
+      "resource_created_at": "1999-12-31T21:00:00Z",
+      "last_seen": "2000-01-01T00:00:00Z",
+      "count": 1,
+      "restart_count": 7,
+      "affected": {
+        "pods": 1
+      },
+      "members": [
+        {
+          "kind": "Pod",
+          "namespace": "shop",
+          "name": "web-rs-1"
+        }
+      ],
+      "diagnostic_context": {
+        "role": "rollup",
+        "facts": [
+          {
+            "type": "restart_cause",
+            "message": "Container restart evidence: restartCount=7."
+          },
+          {
+            "type": "owner_rollup",
+            "message": "Grouped from 1 affected resource(s) under this Deployment.",
+            "refs": [
+              {
+                "kind": "Pod",
+                "namespace": "shop",
+                "name": "web-rs-1"
+              }
+            ]
+          }
+        ]
+      },
+      "correlated_changes": [
+        {
+          "kind": "Deployment",
+          "apiVersion": "apps/v1",
+          "namespace": "shop",
+          "name": "web",
+          "changeType": "update",
+          "summary": "spec.template.spec.containers[web].image changed",
+          "timestamp": "1999-12-31T23:56:00Z",
+          "change_category": "spec_config",
+          "rank_reason": "application configuration field changed",
+          "application_configuration_change": true,
+          "fields": [
+            {
+              "path": "spec.template.spec.containers[web].image",
+              "oldValue": "web:1",
+              "newValue": "web:2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "severity": "warning",
+      "source": "problem",
+      "category": "service_no_endpoints",
+      "category_group": "networking",
+      "id": "771cc3d427dc5905",
+      "grouping_scope": "service",
+      "kind": "Service",
+      "namespace": "shop",
+      "name": "cart",
+      "reason": "Selector matches no pods",
+      "message": "selector: app=cartt",
+      "onset_unknown": true,
+      "resource_created_at": "1999-12-31T21:00:00Z",
+      "last_seen": "2000-01-01T00:00:00Z",
+      "diagnostic_context": {
+        "role": "candidate",
+        "facts": [
+          {
+            "type": "service_config_mismatch",
+            "message": "Selector matches no pods"
+          }
+        ]
+      },
+      "correlated_changes": [
+        {
+          "kind": "Service",
+          "apiVersion": "v1",
+          "namespace": "shop",
+          "name": "cart",
+          "changeType": "update",
+          "summary": "spec.selector.app changed",
+          "timestamp": "1999-12-31T23:57:00Z",
+          "change_category": "spec_config",
+          "rank_reason": "desired-state or configuration field changed",
+          "fields": [
+            {
+              "path": "spec.selector.app",
+              "oldValue": "cart",
+              "newValue": "cartt"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "severity": "warning",
+      "source": "problem",
+      "category": "service_no_endpoints",
+      "category_group": "networking",
+      "id": "a4597eb44cbe803a",
+      "grouping_scope": "service",
+      "kind": "Service",
+      "namespace": "shop",
+      "name": "orphan",
+      "reason": "Selector matches no pods",
+      "message": "selector: app=nothing",
+      "onset_unknown": true,
+      "resource_created_at": "1999-12-31T21:00:00Z",
+      "last_seen": "2000-01-01T00:00:00Z",
+      "diagnostic_context": {
+        "role": "candidate",
+        "facts": [
+          {
+            "type": "service_config_mismatch",
+            "message": "Selector matches no pods"
+          }
+        ]
+      }
+    }
+  ],
+  "total": 7,
+  "total_matched": 7,
+  "unchecked_sources": [
+    {
+      "source": "custom_resources",
+      "reason": "kind_sync_pending"
+    },
+    {
+      "source": "kueue",
+      "reason": "kind_sync_pending",
+      "kinds": [
+        {
+          "group": "kueue.x-k8s.io",
+          "kind": "LocalQueue"
+        },
+        {
+          "group": "kueue.x-k8s.io",
+          "kind": "Workload"
+        }
+      ]
+    }
+  ],
+  "cluster_scoped_changes": {
+    "kinds": [
+      "MutatingWebhookConfiguration",
+      "ValidatingWebhookConfiguration"
+    ],
+    "window_seconds": 3600,
+    "changes": [],
+    "incomplete": "Radar has evicted older change history; earlier changes in the window are unknown. Radar has watched MutatingWebhookConfigurations only since <real clock>; earlier changes in the window are unknown. Radar has watched ValidatingWebhookConfigurations only since <real clock>; earlier changes in the window are unknown."
+  }
+}

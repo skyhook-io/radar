@@ -2,8 +2,10 @@ package timeline
 
 import (
 	"context"
+	"io/fs"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -12,6 +14,7 @@ import (
 // MemoryStore is an in-memory implementation of EventStore using a ring buffer.
 // Suitable for local development and testing. Events are lost on restart.
 type MemoryStore struct {
+	closed        atomic.Bool
 	records       []TimelineEvent
 	maxSize       int
 	head          int // next write position
@@ -60,10 +63,7 @@ func NewDegradedMemoryStore(maxSize int, reason string) *MemoryStore {
 
 // Append adds a single event to the store
 func (m *MemoryStore) Append(ctx context.Context, event TimelineEvent) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.appendLocked(event)
-	return nil
+	return m.AppendBatch(ctx, []TimelineEvent{event})
 }
 
 // AppendBatch adds multiple events atomically
@@ -71,6 +71,9 @@ func (m *MemoryStore) AppendBatch(ctx context.Context, events []TimelineEvent) e
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if m.closed.Load() {
+		return fs.ErrClosed
+	}
 	for _, event := range events {
 		m.appendLocked(event)
 	}
@@ -305,6 +308,7 @@ func (m *MemoryStore) EvictedThrough() time.Time {
 
 // Close releases any resources held by the store
 func (m *MemoryStore) Close() error {
+	m.closed.Store(true)
 	return nil
 }
 

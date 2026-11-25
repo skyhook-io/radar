@@ -1,6 +1,7 @@
 package helm
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base32"
 	"errors"
@@ -656,16 +657,8 @@ func releaseChanging(status release.Status) bool {
 	return status.IsPending() || status == release.StatusUninstalling
 }
 
-func (c *Client) SetSource(namespace, name string, selected ChartSourceCandidate) error {
-	cfg, err := c.getActionConfig(namespace)
-	if err != nil {
-		return err
-	}
-	return c.setSourceWith(cfg, name, selected)
-}
-
-func (c *Client) SetSourceAsUser(namespace, name string, selected ChartSourceCandidate, user *pkgauth.User) error {
-	cfg, err := c.getActionConfigForUser(namespace, user)
+func (c *Client) setSourceForWrite(ctx context.Context, namespace, name string, selected ChartSourceCandidate) error {
+	cfg, err := c.actionConfigForWrite(ctx, namespace)
 	if err != nil {
 		return err
 	}

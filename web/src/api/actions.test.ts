@@ -23,10 +23,21 @@ it('does not call a pre-request feature refusal an unknown write outcome', () =>
   expect(actionDialogResult(error)?.state).toBe('error')
 })
 
+it('reads the connection refusals as refusals, not unknown outcomes', () => {
+  const unavailable = new ApiError('Nothing was changed', 503, { error_code: 'cluster_unavailable' })
+  const changed = new ApiError('Nothing was changed', 409, { error_code: 'context_changed' })
+  expect(actionErrorCode(unavailable)).toBe('unavailable')
+  expect(actionErrorCode(changed)).toBe('context_changed')
+  expect(actionOutcomeLocked(unavailable)).toBe(false)
+  expect(actionOutcomeLocked(new ApiError('reset', 503, { error_code: 'something_else' }))).toBe(true)
+})
+
 describe('actionDialogResult', () => {
   it.each([
     [new ApiError('Review changed', 409, { code: 'changed' }), 'error'],
     [new ApiError('upstream connect error or disconnect/reset before headers', 503), 'unknown'],
+    [new ApiError('Nothing was changed: Radar has no usable cluster connection', 503, { error_code: 'cluster_unavailable' }), 'error'],
+    [new ApiError('Nothing was changed: the cluster changed', 409, { error_code: 'context_changed' }), 'error'],
     [new ApiError('The operator webhook did not answer', 503, { code: 'operator_webhook_unavailable' }), 'error'],
     [new ApiError('Gateway timeout', 504), 'unknown'],
     [new Error('Connection lost'), 'unknown'],

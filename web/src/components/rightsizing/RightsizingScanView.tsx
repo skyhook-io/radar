@@ -1,43 +1,34 @@
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, Coins, ExternalLink, Gauge, Loader2, RefreshCw } from 'lucide-react'
+import { ClusterScopeNote } from '@skyhook-io/k8s-ui/components/ui/ClusterScopeNote'
+import { isClusterScopeWithheld } from '@skyhook-io/k8s-ui/types/cluster-scope'
 import {
   Collapse,
   CollapseChevron,
   EmptyState,
   PageHeader,
-  SearchBox,
-  SelectMenu,
   pluralize,
   useDisclosure,
 } from '@skyhook-io/k8s-ui'
-import { Badge } from '@skyhook-io/k8s-ui/components/ui/Badge'
 import {
   useAutoPromConnect,
   useClusterInfo,
   usePrometheusStatus,
   useRightsizingScan,
-  type RightsizingRow,
 } from '../../api/client'
-import { podLevelOverUseNote, RIGHTSIZING_DOCS_URL } from '../resource/RightsizingStrip'
+import { RIGHTSIZING_DOCS_URL } from '../resource/RightsizingStrip'
 import { buildWorkloadPath } from '../../utils/navigation'
 import { CostViewTabs } from '../cost/CostViewTabs'
 import {
   flattenScanResults,
-  isActionableClass,
-  scanClassCounts,
   type RightsizingScanRow,
-  type ScanClass,
 } from './model'
-import {
-  getResourceRequestPresentation,
-  RIGHTSIZING_ACTION_SEVERITY,
-  type ResourceSignal,
-  type RightsizingActionTone,
-} from './presentation'
+import { matchesResultClass, matchesResultIdentity, readResultFilters, resultFilterKeys, scanClassCounts, type ClassFilter, type ScanClass } from '@skyhook-io/k8s-ui/components/rightsizing/results-model'
+import { RightsizingActionFilters, RightsizingResultFilters } from '@skyhook-io/k8s-ui/components/rightsizing/RightsizingFilters'
+import { RightsizingResultsTable } from '@skyhook-io/k8s-ui/components/rightsizing/RightsizingResultsTable'
 import { useNavCustomization } from '../../context/NavCustomization'
 import { previousSettingsNote, usePreviousIntegrationSettings } from '../../hooks/usePreviousIntegrationSettings'
-import { clsx } from 'clsx'
 
 export const RIGHTSIZING_SCAN_DESCRIPTION =
   'Find CPU and memory requests to increase, reduce, or review. Radar never changes them.'
@@ -84,29 +75,7 @@ interface RightsizingScanViewProps {
 }
 
 type ScanResult = NonNullable<ReturnType<typeof useRightsizingScan>['data']>
-type ClassFilter = ScanClass | 'actions'
 const ROW_PAGE_SIZE = 50
-
-const ACTION_META: Record<
-  'increase' | 'reduction' | 'review',
-  { label: string; severity: 'warning' | 'info' | 'neutral'; helper: string }
-> = {
-  increase: {
-    label: 'Increase or add',
-    severity: RIGHTSIZING_ACTION_SEVERITY.increase,
-    helper: 'Reduce reliability risk',
-  },
-  review: {
-    label: 'Review first',
-    severity: RIGHTSIZING_ACTION_SEVERITY.review,
-    helper: 'Check safety signals or workloads with no replicas',
-  },
-  reduction: {
-    label: 'Reduce requests',
-    severity: RIGHTSIZING_ACTION_SEVERITY.reduction,
-    helper: 'Reclaim meaningful capacity',
-  },
-}
 
 export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
   useAutoPromConnect()
@@ -142,13 +111,11 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
   }
 
   const rows = useMemo(() => (result ? flattenScanResults(result) : []), [result])
-  const includeSystem = params.get('rfScope') === 'all'
+  const filters = readResultFilters(params, 'actions')
+  const { includeSystem, classFilter, search, kindFilter, namespaceFilter } = filters
   const scopeRows = includeSystem ? rows : rows.filter((row) => !row.system)
-  const counts = useMemo(() => scanClassCounts(scopeRows), [scopeRows])
-  const classFilter = (params.get('rfClass') as ClassFilter | null) ?? 'actions'
-  const search = params.get('rfQ') ?? ''
-  const kindFilter = params.get('rfKind') ?? ''
-  const namespaceFilter = params.get('rfNs') ?? ''
+  const matching = scopeRows.filter((row) => matchesResultIdentity(row, filters))
+  const counts = scanClassCounts(matching)
   const setFilter = (key: string, value?: string) => {
     const next = new URLSearchParams(params)
     if (value) next.set(key, value)
@@ -157,27 +124,10 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
   }
   const clearFilters = () => {
     const next = new URLSearchParams(params)
-    for (const key of ['rfClass', 'rfQ', 'rfKind', 'rfNs', 'rfScope']) next.delete(key)
+    for (const key of resultFilterKeys) next.delete(key)
     setParams(next, { replace: true })
   }
-  const filteredRows = scopeRows.filter((row) => {
-    if (
-      classFilter === 'actions'
-        ? !isActionableClass(row.classification)
-        : row.classification !== classFilter
-    )
-      return false
-    if (kindFilter && row.kind !== kindFilter) return false
-    if (namespaceFilter && row.namespace !== namespaceFilter) return false
-    if (
-      search &&
-      !`${row.namespace} ${row.name} ${row.container} ${row.kind}`
-        .toLowerCase()
-        .includes(search.toLowerCase())
-    )
-      return false
-    return true
-  })
+  const filteredRows = matching.filter((row) => matchesResultClass(row, classFilter))
   const visibleRows = filteredRows.slice(0, visibleLimit)
 
   useEffect(() => {
@@ -188,7 +138,7 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
   const resultNamespaces = [...new Set(scopeRows.map((row) => row.namespace))].sort()
   const activeFilters =
     classFilter !== 'actions' || Boolean(search || kindFilter || namespaceFilter || includeSystem)
-  const hiddenSystem = rows.length - rows.filter((row) => !row.system).length
+  const hasSystem = rows.some((row) => row.system)
   const onlySystemRowsAreHidden = !includeSystem && rows.length > 0 && scopeRows.length === 0
   const surfaceState = getRightsizingScanSurfaceState({
     statusLoading,
@@ -313,19 +263,7 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
             }
           />
         ) : surfaceState === 'unavailable' && result ? (
-          <CenteredState
-            title="Rightsizing is unavailable"
-            body={unavailableMessage(result.reason)}
-            action={
-              <button
-                type="button"
-                onClick={runScan}
-                className="btn-brand px-3 py-1.5 text-xs font-medium"
-              >
-                Try again
-              </button>
-            }
-          />
+          <ScanUnavailableState result={result} onRun={runScan} />
         ) : result ? (
           <div
             className="flex flex-col gap-4"
@@ -363,7 +301,7 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
               />
             ) : (
               <section className="overflow-visible rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm">
-                <ScanFilters
+                <RightsizingResultFilters
                   search={search}
                   onSearch={(value) => setFilter('rfQ', value || undefined)}
                   kind={kindFilter}
@@ -373,7 +311,7 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
                   namespaces={resultNamespaces}
                   onNamespace={(value) => setFilter('rfNs', value || undefined)}
                   includeSystem={includeSystem}
-                  hiddenSystem={hiddenSystem}
+                  hasSystem={hasSystem}
                   onScope={(value) => setFilter('rfScope', value === 'all' ? 'all' : undefined)}
                   shown={filteredRows.length}
                   total={scopeRows.length}
@@ -397,36 +335,28 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
                   />
                 ) : (
                   <div>
-                    <div className="grid grid-cols-[minmax(230px,1.15fr)_minmax(190px,1fr)_minmax(200px,1fr)_minmax(220px,.9fr)_28px] gap-3 border-b border-theme-border px-3.5 py-2 text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
-                      <span>Workload / container</span>
-                      <span>CPU request</span>
-                      <span>Memory request</span>
-                      <span>Total request change</span>
-                      <span />
-                    </div>
-                    <div className="table-divide-subtle">
-                      {visibleRows.map((row) => (
-                        <ScanResultRow
-                          key={row.id}
-                          row={row}
-                          open={openRow === row.id}
-                          onToggle={() => setOpenRow(openRow === row.id ? null : row.id)}
-                          onOpen={() => openWorkload(row)}
-                        />
-                      ))}
-                      {visibleRows.length < filteredRows.length && (
-                        <div className="flex justify-center border-t border-theme-border px-4 py-3">
-                          <button
-                            type="button"
-                            onClick={() => setVisibleLimit((value) => value + ROW_PAGE_SIZE)}
-                            className="text-xs font-medium text-accent-text hover:underline"
-                          >
-                            Show {Math.min(ROW_PAGE_SIZE, filteredRows.length - visibleRows.length)}{' '}
-                            more
-                          </button>
-                        </div>
+                    <RightsizingResultsTable
+                      rows={visibleRows}
+                      openRowId={openRow}
+                      onOpenRowChange={setOpenRow}
+                      renderWorkloadLink={row => (
+                        <button type="button" onClick={() => openWorkload(row)} className="self-start text-xs font-medium text-accent-text hover:underline">
+                          Open workload
+                        </button>
                       )}
-                    </div>
+                    />
+                    {visibleRows.length < filteredRows.length && (
+                      <div className="flex justify-center border-t border-theme-border px-4 py-3">
+                        <button
+                          type="button"
+                          onClick={() => setVisibleLimit((value) => value + ROW_PAGE_SIZE)}
+                          className="text-xs font-medium text-accent-text hover:underline"
+                        >
+                          Show {Math.min(ROW_PAGE_SIZE, filteredRows.length - visibleRows.length)}{' '}
+                          more
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </section>
@@ -560,60 +490,20 @@ export function ScanSummary({
         </span>
         <span className="text-theme-text-tertiary"> · Change scan scope in the top bar</span>
       </p>
-      <div className="grid gap-2 md:grid-cols-3">
-        {(Object.keys(ACTION_META) as Array<keyof typeof ACTION_META>).map((key) => {
-          const meta = ACTION_META[key]
-          return (
-            <button
-              key={key}
-              type="button"
-              onClick={() => onSelect(selected === key ? 'actions' : key)}
-              className={`rounded-lg border p-3 text-left transition-colors ${selected === key ? 'border-accent bg-accent-muted' : 'border-theme-border bg-theme-base/50 hover:bg-theme-hover'}`}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-sm font-medium text-theme-text-primary">{meta.label}</span>
-                <Badge severity={meta.severity} size="sm">
-                  {pluralize(counts[key], 'container')}
-                </Badge>
-              </div>
-              <p className="mt-1 text-xs text-theme-text-tertiary">{meta.helper}</p>
-            </button>
-          )
-        })}
-      </div>
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-theme-text-tertiary">
-        <span>
-          {result.coverage.workloadsEvaluated} of {result.coverage.workloadsDiscovered} workloads
-          attempted{result.scanStatus === 'running' ? ' so far' : ''}
-          {' · '}
-          {result.coverage.workloadsWithData} with usage data · {result.window} window
-        </span>
-        <span className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => onSelect('in_range')}
-            className="hover:text-theme-text-primary"
-          >
-            {pluralize(counts.in_range, 'container')} · no meaningful change
-          </button>
-          <button
-            type="button"
-            onClick={() => onSelect('need_data')}
-            className="hover:text-theme-text-primary"
-          >
-            {pluralize(counts.need_data, 'container')} · needs evidence
-          </button>
-          {selected !== 'actions' && (
-            <button
-              type="button"
-              onClick={() => onSelect('actions')}
-              className="font-medium text-accent-text hover:underline"
-            >
-              Recommended actions
-            </button>
-          )}
-        </span>
-      </div>
+      <RightsizingActionFilters
+        counts={counts}
+        selected={selected}
+        defaultClass="actions"
+        onSelect={onSelect}
+        coverage={
+          <span>
+            {result.coverage.workloadsEvaluated} of {result.coverage.workloadsDiscovered} workloads
+            attempted{result.scanStatus === 'running' ? ' so far' : ''}
+            {' · '}
+            {result.coverage.workloadsWithData} with usage data · {result.window} window
+          </span>
+        }
+      />
     </section>
   )
 }
@@ -701,354 +591,27 @@ function Notice({ text, tone, loading }: { text: string; tone?: 'warning'; loadi
   )
 }
 
-function ScanFilters(props: {
-  search: string
-  onSearch: (value: string) => void
-  kind: string
-  kinds: string[]
-  onKind: (value: string) => void
-  namespace: string
-  namespaces: string[]
-  onNamespace: (value: string) => void
-  includeSystem: boolean
-  hiddenSystem: number
-  onScope: (value: string) => void
-  shown: number
-  total: number
-  active: boolean
-  onClear: () => void
-}) {
+// A withheld cluster scope replaces the whole result: no workload was
+// measured, so none may read as needing no change.
+export function ScanUnavailableState({ result, onRun }: { result: ScanResult; onRun: () => void }) {
+  if (isClusterScopeWithheld(result.clusterScope)) {
+    return <ClusterScopeNote scope={result.clusterScope} title="Recommendations withheld for this cluster" />
+  }
   return (
-    <div className="flex flex-wrap items-center gap-2 border-b border-theme-border p-3">
-      <span className="text-xs font-medium text-theme-text-secondary">Filter results</span>
-      <SearchBox
-        value={props.search}
-        onChange={props.onSearch}
-        scope="global"
-        shortcutId="rightsizing-search"
-        placeholder="Search workloads…"
-        className="mr-auto w-60 2xl:w-72"
-      />
-      <SelectMenu
-        ariaLabel="Filter results by namespace"
-        value={props.namespace}
-        onChange={props.onNamespace}
-        className="w-52"
-        options={[
-          { value: '', label: 'All scanned namespaces' },
-          ...props.namespaces.map((value) => ({ value, label: value })),
-        ]}
-      />
-      <SelectMenu
-        ariaLabel="Filter by workload kind"
-        value={props.kind}
-        onChange={props.onKind}
-        className="w-36"
-        options={[
-          { value: '', label: 'All kinds' },
-          ...props.kinds.map((value) => ({ value, label: value })),
-        ]}
-      />
-      {props.hiddenSystem > 0 && (
-        <SelectMenu
-          ariaLabel="Choose workload scope"
-          value={props.includeSystem ? 'all' : 'applications'}
-          onChange={props.onScope}
-          className="w-44 2xl:w-48"
-          options={[
-            { value: 'applications', label: 'Hide system workloads' },
-            {
-              value: 'all',
-              label: `Include system workloads (+${props.hiddenSystem})`,
-            },
-          ]}
-        />
-      )}
-      <span className="shrink-0 text-xs tabular-nums text-theme-text-tertiary">
-        {props.shown} of {props.total} containers
-      </span>
-      {props.active && (
+    <CenteredState
+      title="Rightsizing is unavailable"
+      body={unavailableMessage(result.reason)}
+      action={
         <button
           type="button"
-          onClick={props.onClear}
-          className="shrink-0 text-xs text-accent-text hover:underline"
+          onClick={onRun}
+          className="btn-brand px-3 py-1.5 text-xs font-medium"
         >
-          Reset view
+          Try again
         </button>
-      )}
-    </div>
-  )
-}
-
-function ScanResultRow({
-  row,
-  open,
-  onToggle,
-  onOpen,
-}: {
-  row: RightsizingScanRow
-  open: boolean
-  onToggle: () => void
-  onOpen: () => void
-}) {
-  return (
-    <div>
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        className={clsx('grid w-full grid-cols-[minmax(230px,1.15fr)_minmax(190px,1fr)_minmax(200px,1fr)_minmax(220px,.9fr)_28px] items-center gap-3 text-left hover:bg-theme-hover/50', 'px-3.5 py-2.5' /* TABLE_DENSITY.cellClass in k8s-ui */)}
-      >
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <Badge kind={row.kind} size="sm">
-              {row.kind}
-            </Badge>
-            <span className="truncate text-sm font-medium text-theme-text-primary">{row.name}</span>
-          </div>
-          <div className="mt-1 truncate text-xs text-theme-text-tertiary">
-            {row.namespace} · {row.container}
-          </div>
-        </div>
-        <ResourceRequestCell row={row.cpu} scaledToZero={row.scaledToZero} />
-        <ResourceRequestCell row={row.memory} scaledToZero={row.scaledToZero} />
-        <ImpactCell row={row} />
-        <CollapseChevron open={open} className="h-4 w-4" />
-      </button>
-      <Collapse open={open} mountLazily>
-        <div className="grid gap-4 border-t border-theme-border bg-theme-base/40 px-4 py-3 md:grid-cols-[1fr_1fr_auto]">
-          <FitWhy label="CPU" row={row.cpu} />
-          <FitWhy label="Memory" row={row.memory} />
-          <button
-            type="button"
-            onClick={onOpen}
-            className="self-start text-xs font-medium text-accent-text hover:underline"
-          >
-            Open workload
-          </button>
-        </div>
-      </Collapse>
-    </div>
-  )
-}
-
-function ResourceRequestCell({
-  row,
-  scaledToZero,
-}: {
-  row?: RightsizingRow
-  scaledToZero: boolean
-}) {
-  const presentation = getResourceRequestPresentation(row, scaledToZero)
-  return (
-    <div className="min-w-0 text-xs">
-      <div className="truncate font-medium tabular-nums text-theme-text-primary">
-        {presentation.primary}
-      </div>
-      <div className={`mt-0.5 ${requestToneClass(presentation.tone)}`}>
-        {presentation.secondary}
-      </div>
-      {presentation.signals.length > 0 && (
-        <div className="mt-1 flex flex-wrap gap-1">
-          {presentation.signals.map((signal) => (
-            <SignalBadge key={signal} signal={signal} />
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function requestToneClass(tone: RightsizingActionTone): string {
-  if (tone === 'reduction') return 'text-accent-text'
-  if (tone === 'increase') return 'text-warning-text'
-  return 'text-theme-text-tertiary'
-}
-
-function ImpactCell({ row }: { row: RightsizingScanRow }) {
-  if (row.classification === 'in_range') {
-    return <div className="text-xs text-theme-text-tertiary">Below action threshold</div>
-  }
-  const changes: string[] = []
-  if (row.impact.cpuChange !== 0) changes.push(formatCPUChange(row.impact.cpuChange))
-  if (row.impact.memoryChange !== 0) changes.push(formatMemoryChange(row.impact.memoryChange))
-  return (
-    <div className="min-w-0 text-xs text-theme-text-secondary">
-      <div>{row.replicas === 1 ? '1 replica' : `${row.replicas} replicas`}</div>
-      {row.scaledToZero ? (
-        <div className="mt-0.5 text-theme-text-tertiary">No current capacity impact</div>
-      ) : changes.length > 0 ? (
-        changes.map((change) => (
-          <div key={change} className="mt-0.5 tabular-nums text-theme-text-tertiary">
-            {change}
-          </div>
-        ))
-      ) : (
-        <div className="mt-0.5 text-theme-text-tertiary">No suggested change</div>
-      )}
-    </div>
-  )
-}
-
-function SignalBadge({ signal }: { signal: ResourceSignal }) {
-  return (
-    <Badge
-      severity={
-        signal === 'oom' || signal === 'query_error'
-          ? 'error'
-          : signal === 'throttling'
-            ? 'warning'
-            : 'neutral'
       }
-      size="sm"
-    >
-      {signalLabel(signal)}
-    </Badge>
+    />
   )
-}
-
-export function FitWhy({ label, row }: { label: string; row?: RightsizingRow }) {
-  if (!row)
-    return (
-      <div>
-        <div className="text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
-          {label}
-        </div>
-        <p className="mt-1 text-xs text-theme-text-secondary">No result returned.</p>
-      </div>
-    )
-  const history =
-    row.coverage >= 0.95
-      ? 'Full 7-day history.'
-      : `${Math.max(row.coverage * 7, 0).toFixed(1)} days of usable history.`
-  const observation = row.observed
-    ? row.observed.name === 'Max'
-      ? `${label} peaked at ${row.observed.formatted} during the measured period. `
-      : `${label} stayed below ${row.observed.formatted} for ${row.observed.name === 'P95' ? '95%' : '99%'} of the measured period. `
-    : ''
-  return (
-    <div>
-      <div className="text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
-        Why this {label.toLowerCase()} guidance
-      </div>
-      <p className="mt-1 text-xs text-theme-text-secondary">
-        {row.queryError
-          ? 'Metrics could not be queried, so usable history could not be determined. Retry the scan, or select fewer namespaces in the top bar.'
-          : `${observation}${history}`}
-      </p>
-      <EvidenceNote row={row} />
-    </div>
-  )
-}
-
-function EvidenceNote({ row }: { row: RightsizingRow }) {
-  const primary = primaryEvidenceNote(row)
-  // A denied pod read qualifies whichever reason applies rather than standing in
-  // for it: a row can both be unable to check its pods and have a limit conflict,
-  // and hiding either one behind the other loses something the reader needs.
-  const inventory =
-    row.liveInventoryUnavailable && row.resource === 'memory' ? (
-      <p className="mt-1 text-xs text-theme-text-tertiary">
-        Radar could not read this workload&apos;s pods, so it could not check them for
-        out-of-memory restarts.
-      </p>
-    ) : null
-  if (!primary && !inventory) return null
-  return (
-    <>
-      {primary}
-      {inventory}
-    </>
-  )
-}
-
-function primaryEvidenceNote(row: RightsizingRow) {
-  if (row.fit === 'pod_level_request' && !row.queryError)
-    return (
-      <p className="mt-1 text-xs text-theme-text-tertiary">
-        {podLevelOverUseNote(row) ??
-          "This pod sets a pod-level request in spec.resources, which the scheduler reserves instead of container requests. Radar shows this container's usage but doesn't size the pod-level request."}
-      </p>
-    )
-  if (row.hpaManaged)
-    return (
-      <p className="mt-1 text-xs text-theme-text-tertiary">
-        The HPA uses this request when calculating scale, so Radar does not suggest changing it
-        directly.
-      </p>
-    )
-  if (row.recommendationReason === 'oom_evidence')
-    return (
-      <p className="mt-1 text-xs text-theme-text-tertiary">
-        A recent out-of-memory restart makes a lower memory request unsafe to suggest.
-      </p>
-    )
-  if (row.recommendationReason === 'hpa_evidence_unavailable')
-    return (
-      <p className="mt-1 text-xs text-theme-text-tertiary">
-        Radar could not verify whether autoscaling depends on this request.
-      </p>
-    )
-  if (row.recommendationReason === 'oom_evidence_unavailable')
-    return (
-      <p className="mt-1 text-xs text-theme-text-tertiary">
-        Radar could not verify restart history before suggesting a lower memory request.
-      </p>
-    )
-  if (row.recommendationReason === 'requests_exceed_pod_limit')
-    return (
-      <p className="mt-1 text-xs text-theme-text-tertiary">
-        Together with the other containers&apos; requests and suggested increases, the calculated
-        request would take the pod above its pod-level limit. Decide how to split the limit, or
-        raise it.
-      </p>
-    )
-  if (row.limitConflict)
-    return (
-      <p className="mt-1 text-xs text-theme-text-tertiary">
-        The calculated request would exceed the current limit.
-      </p>
-    )
-  if (row.fit === 'insufficient_history' && !row.queryError)
-    return (
-      <p className="mt-1 text-xs text-theme-text-tertiary">
-        Wait for more runtime history before changing this request.
-      </p>
-    )
-  const isReduction =
-    row.recommendedRequestValue != null &&
-    row.currentRequestValue != null &&
-    row.recommendedRequestValue < row.currentRequestValue
-  if (row.resource === 'cpu' && isReduction && (row.throttleRatio ?? 0) >= 0.1)
-    return (
-      <p className="mt-1 text-xs text-theme-text-tertiary">
-        CPU limit throttling was observed. Review the limit and burst behavior before reducing this
-        request.
-      </p>
-    )
-  if (row.resource === 'cpu' && isReduction && row.bursty)
-    return (
-      <p className="mt-1 text-xs text-theme-text-tertiary">
-        CPU usage was bursty during the measured period. Review the peak before reducing this
-        request.
-      </p>
-    )
-  if (row.reductionLimited && row.calculatedRequest && row.recommendedRequest) {
-    return (
-      <p className="mt-1 text-xs text-theme-text-tertiary">
-        Demand-based target: {row.calculatedRequest}. Radar suggests {row.recommendedRequest} as a
-        conservative next step; observe another full window before reducing further.
-        {row.bursty && row.peak ? ` CPU P99 reached ${row.peak.formatted}.` : ''}
-      </p>
-    )
-  }
-  if (row.recommendedRequest)
-    return (
-      <p className="mt-1 text-xs text-theme-text-tertiary">
-        The target includes 15% headroom, a practical minimum, and scale-aware rounding.
-      </p>
-    )
-  return null
 }
 
 function CenteredState({
@@ -1076,32 +639,6 @@ function CenteredState({
       </div>
     </div>
   )
-}
-
-function formatCPUChange(value: number): string {
-  const prefix = value > 0 ? '+' : '−'
-  const absolute = Math.abs(value)
-  return absolute >= 1
-    ? `${prefix}${absolute.toFixed(1)} CPU requested`
-    : `${prefix}${Math.round(absolute * 1000)}m CPU requested`
-}
-
-function formatMemoryChange(value: number): string {
-  const prefix = value > 0 ? '+' : '−'
-  const mib = Math.abs(value) / (1024 * 1024)
-  return mib >= 1024
-    ? `${prefix}${(mib / 1024).toFixed(1)}Gi memory requested`
-    : `${prefix}${Math.round(mib)}Mi memory requested`
-}
-
-function signalLabel(signal: ResourceSignal): string {
-  return {
-    hpa: 'HPA',
-    oom: 'OOM restart',
-    bursty: 'Bursty usage',
-    throttling: 'Throttling',
-    query_error: 'Metrics unavailable',
-  }[signal]
 }
 
 function errorMessage(error: unknown): string {

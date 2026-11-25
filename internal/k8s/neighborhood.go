@@ -7,7 +7,6 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/cachesource"
 	"github.com/skyhook-io/radar/pkg/readreason"
@@ -85,7 +84,7 @@ func collectRootKinds(ctx context.Context, caches cachesource.Caches, roots []re
 	if caches.Dynamic == nil || caches.Discovery == nil {
 		return false, nil
 	}
-	bounded, cancel := context.WithTimeout(ctx, k8score.ObjectReadSyncWait)
+	bounded, cancel := context.WithTimeout(ctx, caches.Dynamic.ObjectReadSyncWait())
 	defer cancel()
 	type watch struct {
 		gvr       schema.GroupVersionResource

@@ -1,0 +1,22 @@
+suite: k3s Helm collection is explicitly opt-in
+templates:
+  - clusterrole.yaml
+tests:
+  - it: does not expand default collection permissions
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["helm.cattle.io"]
+            resources: ["helmcharts", "helmchartconfigs"]
+            verbs: ["get", "list", "watch"]
+  - it: grants only native read collection when explicitly enabled
+    set:
+      rbac.crdGroups.k3sHelm: true
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["helm.cattle.io"]
+            resources: ["helmcharts", "helmchartconfigs"]
+            verbs: ["get", "list", "watch"]

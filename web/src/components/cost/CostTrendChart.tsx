@@ -9,7 +9,14 @@ import {
   type OpenCostTrendSeries,
 } from '../../api/client'
 import { DEFAULT_COST_CURRENCY, formatCostAxis, formatCostPerHour } from './format'
-import { costDataThroughLabel } from './source'
+import { ClusterScopeNote } from '@skyhook-io/k8s-ui/components/ui/ClusterScopeNote'
+import {
+  COST_TREND_PARTIAL_NOTE,
+  COST_TREND_WITHHELD_TITLE,
+  costDataThroughLabel,
+  costTrendWithholding,
+  type CostTrendWithholding,
+} from './source'
 
 const SERIES_COLORS = [
   '#3b82f6', // blue-500
@@ -45,7 +52,11 @@ export function CostTrendChart({ namespaceScoped = false }: { namespaceScoped?: 
   }
 
   const showKubecostUnavailable = data?.source === 'kubecost' && data.available === false
-  if ((!data?.available || !data.series?.length) && !showKubecostUnavailable) {
+  // Hiding a withheld trend (cluster scope, or a partial answer) would read as
+  // "no history"; other unavailable Prometheus trends stay hidden.
+  const withholding = costTrendWithholding(data)
+  const withheld = !showKubecostUnavailable && withholding && (withholding.reason === 'partial_data' || withholding.scope) ? withholding : undefined
+  if (!data || ((!data.available || !data.series?.length) && !showKubecostUnavailable && !withheld)) {
     return null
   }
 
@@ -76,6 +87,10 @@ export function CostTrendChart({ namespaceScoped = false }: { namespaceScoped?: 
           <div className="min-h-[268px] flex items-center justify-center px-6 text-center text-xs text-theme-text-tertiary">
             {kubecostTrendUnavailableMessage(data.reason, namespaceScoped)}
           </div>
+        ) : withheld ? (
+          <div className="min-h-[268px] flex items-center justify-center px-6">
+            <CostTrendWithheldNote withholding={withheld} />
+          </div>
         ) : (
           <>
             <StackedAreaChart
@@ -91,6 +106,14 @@ export function CostTrendChart({ namespaceScoped = false }: { namespaceScoped?: 
       </div>
     </div>
   )
+}
+
+/** Says why a cost trend was withheld, in place of an empty chart. */
+export function CostTrendWithheldNote({ withholding }: { withholding: CostTrendWithholding }) {
+  if (withholding.reason === 'cluster_scope') {
+    return <ClusterScopeNote scope={withholding.scope} title={COST_TREND_WITHHELD_TITLE} className="max-w-md text-left" />
+  }
+  return <p className="max-w-md text-center text-sm text-theme-text-tertiary">{COST_TREND_PARTIAL_NOTE}</p>
 }
 
 export function StackedAreaChart({

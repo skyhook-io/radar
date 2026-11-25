@@ -94,3 +94,26 @@ func TestWorkloadIdentityMatchers(t *testing.T) {
 		t.Fatal("accepted conflicting name/UID tuple")
 	}
 }
+
+func TestPodCgroupPatternForUIDs(t *testing.T) {
+	uids := []string{"030a7597-c1fc-48b0-9bb4-683489285358", "0d709b51-f624-4d0a-b7dd-79e17402acb9"}
+	pattern, err := PodCgroupPatternForUIDs(uids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	re := regexp.MustCompile("^(?:" + pattern + ")$")
+	for _, uid := range uids {
+		if !re.MatchString("/kubepods/burstable/pod"+uid+"/container") || !re.MatchString("/kubepods.slice/kubepods-pod"+strings.ReplaceAll(uid, "-", "_")+".slice/container.scope") {
+			t.Errorf("missing UID %s", uid)
+		}
+	}
+	if re.MatchString("/kubepods/burstable/pod00000000-0000-0000-0000-000000000000/" + uids[0]) {
+		t.Fatal("matched container path outside verified Pod")
+	}
+	if _, err := PodCgroupPatternForUIDs(nil); err == nil {
+		t.Fatal("empty selection accepted")
+	}
+	if _, err := PodCgroupPatternForUIDs([]string{uids[0], ".*"}); err == nil {
+		t.Fatal("invalid UID accepted")
+	}
+}
