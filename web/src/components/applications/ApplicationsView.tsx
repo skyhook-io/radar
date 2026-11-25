@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
+  AlertBanner,
   ApplicationsList,
   ApplicationDetail,
   ArgoSyncDetailsContext,
@@ -19,6 +20,7 @@ import {
   useToast,
   orderEnvs,
   matchWorkloadAcrossInstances,
+  resolveAppWorkloadSelection,
   workloadKey,
   healthOf,
   compareVersions,
@@ -286,18 +288,18 @@ function AppDetailRoute({
     selectedRouteView === "cost" && applicationCostAvailable;
   const requestedDeploys = selectedView === "deploys" || searchParams.get("tab") === "deploys";
   const deploysInWorkloadScope = requestedDeploys && !singleWorkloadKey &&
-    appWorkloads.some((workload) => workloadKey(workload) === selectedWorkloadParam);
+    resolveAppWorkloadSelection(appWorkloads.map(workloadKey), selectedWorkloadParam).selected !== null;
   const historyQuery = useApplicationHistory(app.key, appHistoryNamespaces, {
     enabled: !selectedWorkloadKey || Boolean(app.sourceRef) || (requestedDeploys && !deploysInWorkloadScope),
   });
   const readableHistory = historyQuery.isError ? undefined : historyQuery.data;
   const deliveryRecords = useMemo(() => applicationDeliveryRecords(readableHistory), [readableHistory]);
   const deliverySource = readableHistory?.sourceRef ?? app.sourceRef;
-  const waitingForDeploySource = requestedDeploys && !deploysInWorkloadScope && !deliverySource && historyQuery.isFetching;
-  const clearDeploySelection = deploysInWorkloadScope || (requestedDeploys && !deliverySource && !waitingForDeploySource);
+  const needsDeploySource = requestedDeploys && !deploysInWorkloadScope && !deliverySource;
+  const waitingForDeploySource = needsDeploySource && (historyQuery.isPending || historyQuery.isFetching);
+  const clearDeploySelection = deploysInWorkloadScope || (needsDeploySource && historyQuery.isSuccess && !historyQuery.isFetching);
   const normalizeSingleWorkload = Boolean(singleWorkloadKey && (selectedWorkloadParam !== singleWorkloadKey || viewParam));
   const clearCostSelection = !singleWorkloadKey && selectedRouteView === "cost" && !applicationCostAvailable;
-  const showDeploys = deliveryRecords.length > 0 || (requestedDeploys && Boolean(deliverySource));
   const [retainedHistoryRange, setRetainedHistoryRange] =
     useState<ApplicationHistoryRange>("7d");
   const historyRangeOptions = useMemo(
@@ -669,6 +671,12 @@ function AppDetailRoute({
     [apps],
   );
 
+  const renderDeploys = deliverySource && (deliveryRecords.length > 0 || requestedDeploys)
+    ? () => <ApplicationDeploys source={deliverySource} records={deliveryRecords} loading={historyQuery.isLoading} unavailable={historyQuery.isError} partialSources={readableHistory?.partialSources} onOpenSource={openSource} />
+    : needsDeploySource && historyQuery.isError
+      ? () => <AlertBanner className="m-4" variant="warning" title="Delivery records could not be refreshed" />
+      : undefined;
+
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <ArgoSyncDetailsContext.Provider value={ArgoSyncDetails}>
@@ -704,8 +712,7 @@ function AppDetailRoute({
         selectedView={selectedView}
         onSelectView={selectView}
         selectionLoading={waitingForDeploySource || clearDeploySelection || clearCostSelection}
-        renderDeploys={deliverySource && showDeploys ? () =>
-          <ApplicationDeploys source={deliverySource} records={deliveryRecords} loading={historyQuery.isLoading} unavailable={historyQuery.isError} partialSources={readableHistory?.partialSources} onOpenSource={openSource} /> : undefined}
+        renderDeploys={renderDeploys}
         renderWorkloadRevisions={(workload) => <WorkloadRevisionsButton {...workload} />}
         costViewSelected={applicationCostSelected}
         onSelectCostView={() => selectView("cost")}

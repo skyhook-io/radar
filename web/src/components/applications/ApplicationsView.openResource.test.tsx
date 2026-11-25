@@ -8,7 +8,7 @@ import { ToastProvider, workloadKey, type AppHistory, type AppRow, type AppWorkl
 import { ApplicationsView } from './ApplicationsView'
 
 let apps: AppRow[] = []
-const idle = { data: undefined, isLoading: false, isFetching: false, isError: false, error: null }
+const idle = { data: undefined, isLoading: false, isFetching: false, isPending: false, isSuccess: false, isError: false, error: null }
 let history: Omit<typeof idle, 'data'> & { data?: AppHistory }
 
 vi.mock('../../api/client', () => ({
@@ -122,13 +122,13 @@ it('keeps the API group, namespace filter and open investigation when opening an
 it.each(['initial fetch', 'background refresh'])('keeps a single-workload Deploys link during %s', async (phase) => {
   apps = [app('shop/Deployment/web', ['web'])]
   const initial = phase === 'initial fetch'
-  history = { ...idle, isFetching: true, isLoading: initial, data: initial ? undefined : { appKey: apps[0].key } }
+  history = { ...idle, isFetching: true, isLoading: initial, isPending: initial, isSuccess: !initial, data: initial ? undefined : { appKey: apps[0].key } }
   const url = '/applications?app=shop%2FDeployment%2Fweb&view=deploys&namespaces=shop'
   await renderAt(url)
   expect(new URLSearchParams(location.split('?')[1]).get('view')).toBe('deploys')
   expect(container.querySelector('[data-testid="workload-view"]')).toBeNull()
 
-  history = { ...idle, data: { appKey: apps[0].key, sourceRef: { type: 'helm', kind: 'HelmRelease', namespace: 'shop', name: 'web' } } }
+  history = { ...idle, isSuccess: true, data: { appKey: apps[0].key, sourceRef: { type: 'helm', kind: 'HelmRelease', namespace: 'shop', name: 'web' } } }
   await renderAt(url)
   const params = new URLSearchParams(location.split('?')[1])
   expect(params.get('view')).toBeNull()
@@ -155,4 +155,45 @@ it('keeps app Deploys after clearing a stale workload, and drops Deploys from a 
   expect(params.get('workload')).toBe(child)
   expect(params.get('view')).toBeNull()
   expect(container.textContent).not.toContain('Recorded deliveries')
+})
+
+it.each([false, true])('resolves a group-less Deploys workload link (ambiguous: %s)', async (ambiguous) => {
+  const rollout = { ...deployment('api'), kind: 'Rollout', group: 'argoproj.io' }
+  apps = [{
+    ...app('shop/web', []),
+    workloads: [rollout, ambiguous ? { ...rollout, group: 'example.io' } : deployment('worker')],
+    sourceRef: { type: 'helm', kind: 'HelmRelease', namespace: 'shop', name: 'web' },
+  }]
+  const child = 'Rollout/shop/api'
+  await renderAt(`/applications?app=shop%2Fweb&tab=deploys&workload=${encodeURIComponent(child)}`)
+  const params = new URLSearchParams(location.split('?')[1])
+  expect(params.has('tab')).toBe(false)
+  expect(params.get('workload')).toBe(ambiguous ? null : child)
+  expect(params.get('view')).toBe(ambiguous ? 'deploys' : null)
+  expect(container.querySelector('[data-testid="workload-view"]')?.getAttribute('data-name')).toBe(ambiguous ? undefined : 'api')
+})
+
+it('keeps Deploys on a failed history refresh until a successful response rules out a source', async () => {
+  apps = [app('shop/web', ['web', 'worker'])]
+  const data: AppHistory = {
+    appKey: 'shop/web',
+    sourceRef: { type: 'helm', kind: 'HelmRelease', namespace: 'shop', name: 'web' },
+    anchors: [{ type: 'helm', title: 'Release promoted', revision: '3', timestamp: '2026-11-23T12:00:00Z' }],
+  }
+  const url = '/applications?app=shop%2Fweb&view=deploys'
+  history = { ...idle, isSuccess: true, data }
+  await renderAt(url)
+  expect(container.textContent).toContain('Release promoted')
+
+  history = { ...idle, isError: true, data }
+  await renderAt(url)
+  expect(new URLSearchParams(location.split('?')[1]).get('view')).toBe('deploys')
+  expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Deploys')
+  expect(container.textContent).toContain('Delivery records could not be refreshed')
+  expect(container.textContent).not.toContain('Release promoted')
+
+  history = { ...idle, isSuccess: true, data: { appKey: data.appKey } }
+  await renderAt(url)
+  expect(new URLSearchParams(location.split('?')[1]).has('view')).toBe(false)
+  expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Overview')
 })
