@@ -15,10 +15,10 @@ export interface WorkloadCard {
 }
 
 // Card grid layout constants — must match CSS in GroupNode.tsx cardGrid rendering
-const GRID_CARD_W = 200
-const GRID_CARD_H = 68
-const GRID_GAP = 6
-const GRID_PAD = { top: 48, left: 14, bottom: 14, right: 14 }
+export const GRID_CARD_W = 200
+export const GRID_CARD_H = 68
+export const GRID_GAP = 6
+export const GRID_PAD = { top: 48, left: 14, bottom: 14, right: 14 }
 
 // Group padding - space for header + internal spacing (must account for border)
 // Top padding accommodates the header at its largest (when zoomed out)

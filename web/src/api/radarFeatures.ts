@@ -38,11 +38,14 @@ export const RADAR_FEATURES = {
   searchEventContent: { label: 'Event reason and message searches', flag: 'searchEventContent', flagShippedWithEndpoint: true },
   resourceIssues: { label: 'Operational issues', minimumVersion: 'v1.8.0', flag: 'resourceIssues' },
   resourceIssueCoverage: { label: 'Resource-specific issue views', flag: 'resourceIssueCoverage', flagShippedWithEndpoint: true },
+  // An older Radar serves the route and ignores ?correlate=.
+  issueCorrelation: { label: 'Recent changes on an issue', flag: 'issueCorrelation', flagShippedWithEndpoint: true },
   podEnvironment: { label: 'Values from ConfigMaps and Secrets', minimumVersion: 'v1.9.0', flag: 'podEnvironment' },
   policyResource: { label: 'Policy results', minimumVersion: 'v1.10.0', flag: 'policyResource' },
   capacity: { label: 'Capacity views', minimumVersion: 'v1.9.0' },
   // Radars from v1.15.0 serve the route without advertising the flag.
   rayClusterPods: { label: 'RayCluster runtime Pods', minimumVersion: 'v1.15.0', flag: 'rayClusterPods' },
+  replicaSetLogs: { label: 'Combined ReplicaSet logs', flag: 'replicaSetLogs', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
   upgradeReadiness: { label: 'Upgrade impact reports', minimumVersion: 'v1.9.0' },
   drainPlan: { label: 'Drain plans', minimumVersion: 'v1.14.0' },
   applications: { label: 'Applications', minimumVersion: 'v1.7.7' },
@@ -51,6 +54,7 @@ export const RADAR_FEATURES = {
   substrateHealthMetrics: { label: 'Agent Substrate charts', flag: 'substrateHealthMetrics', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
   cnpgWorkspace: { label: 'CloudNativePG views', flag: 'cnpgWorkspace', flagShippedWithEndpoint: true },
   sealedSecretsController: { label: 'Sealed Secrets controller status', flag: 'sealedSecretsController', flagShippedWithEndpoint: true },
+  sealedSecretsCert: { label: 'Sealed Secrets sealing certificate', flag: 'sealedSecretsCert', flagShippedWithEndpoint: true },
   cnpgProtectionSetup: { label: 'CloudNativePG backup setup', flag: 'cnpgProtectionSetup', flagShippedWithEndpoint: true },
   veleroWorkspace: { label: 'Velero views', flag: 'veleroWorkspace', flagShippedWithEndpoint: true },
   veleroBackupNow: { label: 'Back up now', flag: 'veleroBackupNow', flagShippedWithEndpoint: true },

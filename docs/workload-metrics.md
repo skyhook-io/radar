@@ -16,6 +16,32 @@ organization owner can open Integrations from an empty Metrics tab when a runnin
 Kubernetes UID. The connected Radar agent checks workload access and cluster
 identity for each chart read. When both sources are connected, Datadog workload totals appear alongside Prometheus traffic, resource, network and storage charts. Request and limit lines stay on the current-Pod charts where their units and scope match.
 
+### Google Kubernetes Engine system metrics
+
+On GKE, enabling system metrics in Cloud Monitoring provides historical CPU,
+non-evictable memory, Pod network rates, container restarts, node ephemeral
+storage use and current PVC use. Radar can query these through an existing
+Managed Service for Prometheus frontend or directly through Google's hosted
+Prometheus API. Both paths work without managed Prometheus collection,
+node-exporter or kube-state-metrics. Google's sampling and ingestion delay can
+leave the last few minutes of a chart empty.
+[Connect Radar to the hosted API or a frontend](configuration.md#gke-system-metric-connections).
+
+Every query selects the project, control-plane location and GKE cluster name.
+Workload charts use current controller-owned Pods and omit the lookback after
+each Pod's creation so reused names cannot include a previous replica's data.
+Network and CPU rates have a five-minute lookback. Restart counts use the per-container counter increase over a
+one-hour window. For a new Pod, the native cumulative count covers its time alive after the first one-minute sample lookback. The PVC gauge uses the claim name and namespace and takes the
+maximum across mounts of the same volume.
+
+HTTP request metrics, CPU throttling, workload disk I/O, deleted replica history
+and rightsizing still need their existing sources. A discovered frontend serves
+the curated charts only. When a conventional store is also present, Radar keeps
+its measured resource panels and HTTP instrumentation. Missing CPU and memory
+panels, including the current-Pod comparisons, can use GKE measurements.
+While conventional Pod identity is being checked, the Metrics tab keeps its quick retry. When identity cannot be checked, independently verified native panels retain the conventional diagnostic. Conventional errors and incomplete populated panels keep their diagnostics. See [Metrics connections](configuration.md#local-integration-connections)
+and [Google's frontend setup](https://cloud.google.com/stackdriver/docs/managed-prometheus/query-api-ui).
+
 ### Datadog-backed rightsizing in Radar Hub
 
 After an organization owner enables rightsizing for a verified cluster, the
@@ -40,8 +66,13 @@ When only Datadog charts are enabled, an existing Prometheus connection still su
 For Prometheus-backed fleet scans and workload details, Hub shows measurements
 when the agent verifies the cluster, an operator configures exact cluster labels
 for a shared store, or an operator explicitly identifies a dedicated backend as
-single-cluster. If the agent cannot establish which cluster supplied the data,
-Hub withholds the measurements. Upgrade agents that do not report cluster scope.
+single-cluster. Those options include history from replaced Pods. On an unlabeled
+store, agents that support current-Pod attribution can instead match cAdvisor
+measurements to the Kubernetes UIDs of this cluster's live Pods. That path uses
+only intervals with data from every current replica and excludes replaced Pods.
+Recent rollouts or a store that drops the cAdvisor `id` label can therefore
+leave too little history for a recommendation. Hub withholds measurements it
+cannot attribute to the cluster. Upgrade agents that do not report cluster scope.
 See [Prometheus scope configuration](#optional-operator-override) for the shared
 and dedicated backend examples.
 
@@ -335,6 +366,23 @@ different cluster labels:
   back on each metric's series. A store that ignores a filter on a label the
   metric lacks returns other values, and the view is withheld rather than
   shown as scoped.
+- Rightsizing has an additional check for exporters that omit Pod UIDs from
+  labeled `kube_pod_info` series. It matches controlling `kube_pod_owner`
+  UIDs to live Pods. Within the candidate partition, every exporter reporting
+  UID-less Pod info or ownership must report the complete current Kubernetes
+  Node inventory with matching cloud provider IDs. Reported system UUIDs must
+  also agree. Radar also checks every UID-less reporter retained during the
+  measurement window, including reporters retired since then. Each must have
+  reported a Node that still exists with a matching provider ID. Conflicting
+  identities for live Node names withhold the view. Every five-minute interval
+  with UID-less Pod inventory must also include a local Node on that reporter.
+  A retired Node qualifies if it overlapped a live Node on the same reporter.
+  If independent clusters emit identical cluster and scrape identities at the
+  same time, the metrics store can merge their series. Give each cluster a
+  unique ingestion label in that setup. This check applies only to
+  rightsizing and requires the verified labels on each historical metric. If it fails,
+  Radar keeps the ordinary scope decision, including any unverified result
+  available in standalone Radar.
 - A metric without that label is used unfiltered only when it shows one cluster
   identity and holds this cluster's own live objects (Pods, Nodes, ReplicaSets,
   volumes or the HPA, depending on the metric). Views that join metrics, like
@@ -408,6 +456,11 @@ backend. Without them the map uses the labels automatic matching proves for
 this cluster. `--prometheus-single-cluster` adds no traffic filtering. See
 [Traffic map in a shared metrics store](configuration.md#traffic-map-in-a-shared-metrics-store).
 
+Radar reports the verified project and location alongside the configured cluster
+name and uses them on subsequent queries. If a project or location appears on
+only some of the participating metric families, Radar withholds the view until
+the exporters supply consistent labels.
+
 Labels must exist on each affected metric source. An empty value is rejected
 because it would also match series without that label. A tenant header alone
 does not prove single-cluster isolation. Use `--prometheus-header-from-env` for credentials.
@@ -460,6 +513,18 @@ historical query is an error, not permission to silently change scope. Independe
 current-Pod comparison and explicitly current-only HTTP observations remain usable
 when the ownership lookup fails. While current attribution is pending, comparison
 shows a matching-in-progress state and refreshes every three seconds.
+
+For a fleet rightsizing scan, a proxy must allow read-only form POST requests
+to `/api/v1/query` and `/api/v1/query_range` when the encoded URL exceeds
+7 KiB. On retained ownership scans, Radar can split a query after
+VictoriaMetrics reports its requested and available memory in HTTP 422.
+Recovery is limited to four requests per failed metric family and batch,
+and 30 seconds across the scan. Other backend errors remain visible in coverage.
+
+Rightsizing CPU measurements require a whole-container counter, identified by
+`cpu="total"` or by an absent or empty `cpu` label. If only per-core counters
+are retained, CPU requests cannot be sized from that source. Memory uses its
+own observations.
 
 When identity-checked CPU/memory charts cannot be served, the existing basic charts
 remain in a collapsed **Basic CPU / memory · identity unverified** section

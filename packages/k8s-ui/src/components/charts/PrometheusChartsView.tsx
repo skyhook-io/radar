@@ -121,6 +121,7 @@ const SUPPORTED_KINDS = new Set([
 ]);
 
 export interface PrometheusResourceMetricsResult {
+  source?: "gke";
   unit: string;
   result?: { series?: TimeSeries[] };
   query?: string;
@@ -169,6 +170,7 @@ export interface PrometheusChartsViewProps {
   // Connection status (host-provided)
   statusLoading: boolean;
   isConnected: boolean;
+  gkeOnly?: boolean;
   statusError?: string;
   onConnect: () => void;
   connecting: boolean;
@@ -191,6 +193,7 @@ export function PrometheusChartsView({
   showEmptyState = false,
   statusLoading,
   isConnected,
+  gkeOnly = false,
   statusError,
   onConnect,
   connecting,
@@ -205,7 +208,7 @@ export function PrometheusChartsView({
   referenceLines,
 }: PrometheusChartsViewProps) {
   const categories =
-    kind === "Node" ? NODE_METRIC_CATEGORIES : WORKLOAD_METRIC_CATEGORIES;
+    kind === "Node" ? NODE_METRIC_CATEGORIES : gkeOnly ? WORKLOAD_METRIC_CATEGORIES.filter((item) => item.key !== "filesystem") : WORKLOAD_METRIC_CATEGORIES;
   const isSupported = SUPPORTED_KINDS.has(kind);
   const activeCategoryDef =
     categories.find((c) => c.key === category) || categories[0];
@@ -340,6 +343,8 @@ export function PrometheusChartsView({
                 color={activeCategoryDef.chartColor}
               />
             )}
+            {metrics?.source === "gke" && (category === "memory" || category === "filesystem") &&
+              <p className="text-xs text-theme-text-tertiary">{category === "memory" ? "Non-evictable memory" : "Ephemeral storage used"} · GKE system metrics</p>}
             {coverageNote && (
               <p className="text-xs text-theme-text-tertiary">{coverageNote}</p>
             )}

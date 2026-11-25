@@ -4,6 +4,7 @@ import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getVolumeSnapshotColumnValue } from './resource-utils-volumesnapshot'
 import { getMetalLBColumnValue } from './resource-utils-metallb'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
+import { getK3sHelmChartColumnValue } from './resource-utils-k3s'
 import { getUpgradePlanColumnValue } from './resource-utils-upgrade-plan'
 import { FLUX_OPERATOR_GROUP, getFluxOperatorColumnValue, getFluxOperatorStatus } from './resource-utils-flux-operator'
 // Utility functions for resource display in tables
@@ -19,7 +20,7 @@ import { getArgoRolloutStepNumber, getObservedGeneration, getWorkloadRolloutActi
 import { getCertificateStatus, getCertificateRequestStatus, getClusterIssuerStatus, getClusterIssuerType, getOrderState, getChallengeState, getChallengeType } from './resource-utils-certmanager'
 import { getNodePoolStatus, getNodeClaimStatus } from './resource-utils-karpenter'
 import { getScaledObjectStatus, getScaledJobStatus } from './resource-utils-keda'
-import { getGitRepositoryStatus, getOCIRepositoryStatus, getHelmRepositoryStatus, getHelmRepositoryType, getKustomizationStatus, getFluxHelmReleaseStatus, getFluxAlertStatus } from './resource-utils-flux'
+import { getGitRepositoryStatus, getOCIRepositoryStatus, getHelmRepositoryStatus, getHelmRepositoryType, getKustomizationStatus, getFluxHelmReleaseStatus, getFluxAlertStatus, getExternalArtifactStatus, getArtifactGeneratorStatus } from './resource-utils-flux'
 import { getArgoApplicationStatus, getArgoApplicationSetStatus, getArgoApplicationSync, getArgoApplicationHealth, getArgoApplicationProject } from './resource-utils-argo'
 import { getVulnerabilityReportImage as _getVulnerabilityReportImage } from './resource-utils-trivy'
 import { getKyvernoPolicyRuleTypes as _getKyvernoPolicyRuleTypes, getPolicyReportStatus as _getPolicyReportStatus, getKyvernoPolicyStatus as _getKyvernoPolicyStatus } from './resource-utils-kyverno'
@@ -1952,6 +1953,16 @@ export {
 // ============================================================================
 export {
   getFluxResourceStatus,
+  getExternalArtifactStatus,
+  getExternalArtifactRevision,
+  getExternalArtifactGenerator,
+  getExternalArtifactProducer,
+  getArtifactGeneratorStatus,
+  getArtifactGeneratorSources,
+  getArtifactGeneratorCount,
+  getArtifactGeneratorArtifacts,
+  isArtifactGeneratorPaused,
+  shortArtifactRevision,
   getGitRepositoryStatus,
   getOCIRepositoryStatus,
   getHelmRepositoryStatus,
@@ -2601,6 +2612,8 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
   if (otelValue !== undefined) return otelValue
   const flaggerValue = getFlaggerColumnValue(resource, column)
   if (flaggerValue !== undefined) return flaggerValue
+  const k3sValue = getK3sHelmChartColumnValue(resource, column)
+  if (k3sValue !== undefined) return k3sValue
   const agentRuntimeValue = getAgentRuntimeColumnValue(resource, column)
   if (agentRuntimeValue !== undefined) return agentRuntimeValue
   const planValue = getUpgradePlanColumnValue(resource, column)
@@ -2657,6 +2670,8 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'applications') return getArgoApplicationStatus(resource).text
       if (kindLower === 'applicationsets') return getArgoApplicationSetStatus(resource).text
       if (kindLower === 'gitrepositories') return getGitRepositoryStatus(resource).text
+      if (kindLower === 'externalartifacts' && _isApiGroup(resource.apiVersion, 'source.toolkit.fluxcd.io')) return getExternalArtifactStatus(resource).text
+      if (kindLower === 'artifactgenerators' && _isApiGroup(resource.apiVersion, 'source.extensions.fluxcd.io')) return getArtifactGeneratorStatus(resource).text
       if (kindLower === 'ocirepositories') return getOCIRepositoryStatus(resource).text
       if (kindLower === 'helmrepositories') return getHelmRepositoryStatus(resource).text
       if (kindLower === 'kustomizations') return getKustomizationStatus(resource).text
@@ -2799,6 +2814,11 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       return getStorageClassExpansion(resource)
     case 'automount':
       return getServiceAccountAutomount(resource)
+    case 'mutationCount':
+      return _isApiGroup(resource.apiVersion, 'admissionregistration.k8s.io') && Array.isArray(resource.spec?.mutations) ? String(resource.spec.mutations.length) : ''
+    case 'reinvocationPolicy':
+    case 'policyName':
+      return _isApiGroup(resource.apiVersion, 'admissionregistration.k8s.io') ? resource.spec?.[column] ?? '' : ''
     case 'policyTypes':
       return getNetworkPolicyTypes(resource)
     case 'types':

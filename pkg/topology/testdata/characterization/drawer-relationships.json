@@ -2468,6 +2468,16 @@
             },
             {
               "group": "admissionregistration.k8s.io",
+              "kind": "MutatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "MutatingAdmissionPolicyBinding",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
               "kind": "MutatingWebhookConfiguration",
               "reason": "radar_kind_not_collected"
             },
@@ -2701,6 +2711,16 @@
           "notChecked": [
             {
               "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "MutatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "MutatingAdmissionPolicyBinding",
               "reason": "radar_kind_not_collected"
             },
             {
@@ -3007,6 +3027,16 @@
             },
             {
               "group": "admissionregistration.k8s.io",
+              "kind": "MutatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "MutatingAdmissionPolicyBinding",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
               "kind": "MutatingWebhookConfiguration",
               "reason": "radar_kind_not_collected"
             },
@@ -3114,6 +3144,16 @@
           "notChecked": [
             {
               "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "MutatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "MutatingAdmissionPolicyBinding",
               "reason": "radar_kind_not_collected"
             },
             {
@@ -3276,6 +3316,16 @@
           "notChecked": [
             {
               "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "MutatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "MutatingAdmissionPolicyBinding",
               "reason": "radar_kind_not_collected"
             },
             {
@@ -4033,6 +4083,124 @@
     }
   },
   {
+    "root": "source.extensions.fluxcd.io|ArtifactGenerator|flux-system|bundle",
+    "relationships": {
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        },
+        "managers": {
+          "unreadable": 1
+        },
+        "manager": {
+          "state": "unknown",
+          "direct": {
+            "object": {"kind": "ArtifactGenerator", "namespace": "flux-system", "name": "bundle", "group": "source.extensions.fluxcd.io"}
+          }
+        }
+      },
+      "configRefs": [
+        {"kind": "GitRepository", "namespace": "flux-system", "name": "repo", "group": "source.toolkit.fluxcd.io"}
+      ],
+      "consumers": [
+        {"kind": "ExternalArtifact", "namespace": "flux-system", "name": "bundle-app", "group": "source.toolkit.fluxcd.io"}
+      ],
+      "dependencies": [
+        {"kind": "GitRepository", "namespace": "flux-system", "name": "repo", "group": "source.toolkit.fluxcd.io"}
+      ],
+      "dependents": [
+        {"kind": "ExternalArtifact", "namespace": "flux-system", "name": "bundle-app", "group": "source.toolkit.fluxcd.io"}
+      ]
+    }
+  },
+  {
+    "root": "source.toolkit.fluxcd.io|ExternalArtifact|flux-system|bundle-app",
+    "relationships": {
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        },
+        "managers": {
+          "unreadable": 1
+        },
+        "manager": {
+          "state": "unknown",
+          "direct": {
+            "object": {"kind": "ExternalArtifact", "namespace": "flux-system", "name": "bundle-app", "group": "source.toolkit.fluxcd.io"}
+          }
+        }
+      },
+      "configRefs": [
+        {"kind": "ArtifactGenerator", "namespace": "flux-system", "name": "bundle", "group": "source.extensions.fluxcd.io"}
+      ],
+      "dependencies": [
+        {"kind": "ArtifactGenerator", "namespace": "flux-system", "name": "bundle", "group": "source.extensions.fluxcd.io"}
+      ]
+    }
+  },
+  {
     "root": "source.toolkit.fluxcd.io|GitRepository|flux-system|repo",
     "relationships": {
       "ownership": {
@@ -4082,11 +4250,13 @@
       },
       "consumers": [
         {"kind": "Kustomization", "namespace": "flux-system", "name": "platform", "group": "kustomize.toolkit.fluxcd.io"},
-        {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
+        {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"},
+        {"kind": "ArtifactGenerator", "namespace": "flux-system", "name": "bundle", "group": "source.extensions.fluxcd.io"}
       ],
       "dependents": [
         {"kind": "Kustomization", "namespace": "flux-system", "name": "platform", "group": "kustomize.toolkit.fluxcd.io"},
-        {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
+        {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"},
+        {"kind": "ArtifactGenerator", "namespace": "flux-system", "name": "bundle", "group": "source.extensions.fluxcd.io"}
       ]
     }
   },
@@ -4223,6 +4393,16 @@
             },
             {
               "group": "admissionregistration.k8s.io",
+              "kind": "MutatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "MutatingAdmissionPolicyBinding",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
               "kind": "MutatingWebhookConfiguration",
               "reason": "radar_kind_not_collected"
             },
@@ -4345,6 +4525,16 @@
           "notChecked": [
             {
               "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "MutatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "MutatingAdmissionPolicyBinding",
               "reason": "radar_kind_not_collected"
             },
             {
@@ -4524,6 +4714,16 @@
             },
             {
               "group": "admissionregistration.k8s.io",
+              "kind": "MutatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "MutatingAdmissionPolicyBinding",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
               "kind": "MutatingWebhookConfiguration",
               "reason": "radar_kind_not_collected"
             },
@@ -4631,6 +4831,16 @@
           "notChecked": [
             {
               "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "MutatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "MutatingAdmissionPolicyBinding",
               "reason": "radar_kind_not_collected"
             },
             {

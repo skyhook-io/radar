@@ -1,3 +1,4 @@
+import { hasPrometheusCharts } from './prometheusCharts'
 import type { RightsizingRow, WorkloadRightsizingEvidence } from '@skyhook-io/k8s-ui/types/rightsizing'
 import { followSwitch, switchFinished, switchInProgress, type ContextSwitchOperation } from './contextSwitch'
 import { createListRefetchInterval, normalizeResourceList, type ResourceListBody, type ResourceListResult } from './resourceLists'
@@ -589,6 +590,7 @@ export interface AuditResponse {
   missingInputs?: string[];
   // Absent on a Radar that predates the per-resource opt-out.
   ignoreChecksAnnotation?: string;
+  namespaceIgnoreChecks?: boolean;
   // checkID → namespace → resources whose findings the annotation hid.
   annotationIgnoredByNamespace?: Record<string, Record<string, number>>;
   summary: DashboardAudit;
@@ -2993,6 +2995,40 @@ export function useArgoResourceDiff(
   });
 }
 
+export interface RenderedFieldChange {
+  path: string[];
+  before?: unknown;
+  after?: unknown;
+}
+
+export interface RenderedResourceChange {
+  group?: string;
+  kind: string;
+  namespace?: string;
+  name: string;
+  operation: "added" | "removed" | "modified";
+  fields: RenderedFieldChange[];
+}
+
+export interface RenderedSyncDiff {
+  changes: RenderedResourceChange[];
+  partial?: boolean;
+  secretsMasked?: boolean;
+}
+
+export function useArgoSyncDiff(namespace: string, name: string, syncID: string, previous: string, revision: string) {
+  const params = new URLSearchParams({ syncID, previous, revision });
+  return useQuery<RenderedSyncDiff>({
+    queryKey: ["argo-sync-diff", getApiBase(), namespace, name, syncID, previous, revision],
+    queryFn: ({ signal }) => fetchJSON(`/argo/applications/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/sync-diff?${params}`, signal),
+    // Results depend on today's render settings and the viewer's access.
+    gcTime: 0,
+    staleTime: 0,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+}
+
 // Git commit metadata for one deployed revision of an Argo CD Application.
 // Enabled only when a revision is known and the caller passes `enabled` (gated
 // on capabilities.revisionMetadataAvailable). Cached long — a resolved SHA's
@@ -3998,6 +4034,7 @@ export function useTopNodeMetrics(options?: { enabled?: boolean }) {
 
 // Prometheus types
 export interface PrometheusStatus {
+  gkeSystemMetrics?: boolean;
   available: boolean;
   connected: boolean;
   /** A discovery run is in flight for the current configuration. Never true alongside connected. */
@@ -4031,6 +4068,7 @@ export interface PrometheusQueryResult {
 }
 
 export interface PrometheusResourceMetrics {
+  source?: "gke";
   kind: string;
   namespace?: string;
   name: string;
@@ -4130,7 +4168,7 @@ export function prometheusStatusRefetchInterval(
   status: PrometheusStatus | undefined,
 ): number {
   if (!status) return PROM_STATUS_POLL_IDLE_MS;
-  const settled = status.connected || !!status.error;
+  const settled = hasPrometheusCharts(status) || !!status.error;
   return status.discovering || !settled
     ? PROM_STATUS_POLL_DISCOVERING_MS
     : PROM_STATUS_POLL_IDLE_MS;
@@ -4235,6 +4273,7 @@ export function useAutoPromConnect(): void {
   const queryClient = useQueryClient();
   const { data: clusterInfo } = useClusterInfo();
   const { data: status, isLoading: statusLoading } = usePrometheusStatus();
+  const chartsAvailable = hasPrometheusCharts(status);
   const attemptedRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -4243,7 +4282,7 @@ export function useAutoPromConnect(): void {
     if (!context || statusLoading) return;
 
     // Persist the "we've connected here before" signal once a connection lands.
-    if (status?.connected) {
+    if (chartsAvailable) {
       try {
         window.localStorage.setItem(promAutoConnectKey(context), "1");
       } catch {
@@ -4282,7 +4321,7 @@ export function useAutoPromConnect(): void {
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
           const nextStatus = (await resp.json()) as PrometheusStatus;
           queryClient.setQueryData(["prometheus-status"], nextStatus);
-          if (!nextStatus.connected)
+          if (!hasPrometheusCharts(nextStatus))
             throw new Error(nextStatus.error || "Prometheus unavailable");
           queryClient.invalidateQueries({ queryKey: ["prometheus-status"] });
         })
@@ -4304,7 +4343,7 @@ export function useAutoPromConnect(): void {
         });
     }, delay);
     return () => window.clearTimeout(timeout);
-  }, [clusterInfo?.context, status?.connected, statusLoading, queryClient]);
+  }, [clusterInfo?.context, chartsAvailable, statusLoading, queryClient]);
 }
 
 // Fetch Prometheus metrics for a resource
@@ -5728,6 +5767,10 @@ export interface WorkloadRevision {
   // (serving traffic, what an abort reverts to) are different revisions.
   isStable?: boolean;
   podHash?: string;
+  readyReplicas?: number;
+  serving?: boolean;
+  changeCause?: string;
+  matchesDesired?: boolean;
 }
 
 export function useWorkloadRevisions(
@@ -5738,8 +5781,9 @@ export function useWorkloadRevisions(
 ) {
   return useQuery<WorkloadRevision[]>({
     queryKey: ["workload-revisions", kind, namespace, name],
-    queryFn: () =>
-      fetchJSON(`/workloads/${kind}/${namespace}/${name}/revisions`),
+    queryFn: async () => (await fetchJSON<WorkloadRevision[] | null>(
+      `/workloads/${kind}/${namespace}/${name}/revisions`,
+    )) ?? [],
     enabled: Boolean(kind && namespace && name && enabled),
   });
 }

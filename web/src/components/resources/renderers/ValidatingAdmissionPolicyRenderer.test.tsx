@@ -1,9 +1,11 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  MutatingAdmissionPolicyBindingRenderer,
+  MutatingAdmissionPolicyRenderer,
   ValidatingAdmissionPolicyBindingRenderer,
   ValidatingAdmissionPolicyRenderer,
-} from './ValidatingAdmissionPolicyRenderer'
+} from './AdmissionPolicyRenderers'
 
 const mock = vi.hoisted(() => ({
   query: {} as any,
@@ -156,5 +158,26 @@ describe('ValidatingAdmissionPolicy reverse binding lookup', () => {
     const present = renderBinding()
     expect(present).not.toContain('availability')
     expect(present).toContain('>require-owner</button>')
+  })
+})
+
+describe('mutating admission policy relationships', () => {
+  it('reads the mutating binding kind and withholds cached rows after permission loss', () => {
+    mock.query = { data: [binding('owner-prod', 'require-owner')], coverage: { status: 'complete' }, isLoading: false }
+    const renderMutating = () => renderToStaticMarkup(<MutatingAdmissionPolicyRenderer data={policy} />)
+    expect(renderMutating()).toContain('owner-prod')
+    expect(mock.reads[0][0]).toBe('mutatingadmissionpolicybindings')
+    mock.query.error = { status: 403, message: 'Forbidden' }
+    const html = renderMutating()
+    expect(html).not.toContain('owner-prod')
+    expect(html).toContain('permission')
+  })
+
+  it('looks up its policy in the mutating API without requesting parameters', () => {
+    mock.policyQuery = { data: { resource: policy } }
+    const html = renderToStaticMarkup(<MutatingAdmissionPolicyBindingRenderer data={binding('team', 'require-owner')} onNavigate={() => {}} />)
+    expect(html).toContain('>require-owner</button>')
+    expect(mock.policyReads[0]).toEqual(['mutatingadmissionpolicies', '', 'require-owner', 'admissionregistration.k8s.io'])
+    expect(mock.reads).toHaveLength(0)
   })
 })

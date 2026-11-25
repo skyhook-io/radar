@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useRef, useCallback } from 'react'
+import { Fragment, useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import type { ReactNode } from 'react'
 import { ChevronRight, Layers, Boxes, HeartPulse, Shapes, Globe, Tag } from 'lucide-react'
 import { CollapseChevron } from '../ui/Collapse'
@@ -176,6 +176,9 @@ export interface ApplicationsViewProps {
    *  and `group` holds them all. Clicks, Enter and any key the control prevents
    *  stay in the slot. Other keys still reach the table's shortcuts. */
   renderRowLeading?: (entry: AppEntry, group?: AppEntry[]) => ReactNode
+  /** Lift matching applications above the remaining results, preserving the active sort.
+   *  A family moves with all its children when any visible member matches. */
+  pinnedSection?: { title: string; predicate: (entry: AppEntry) => boolean }
 }
 
 const APPS_FILTER_SCHEMA = defineFilterSchema({
@@ -188,7 +191,7 @@ const APPS_FILTER_SCHEMA = defineFilterSchema({
   system: { param: 'system', type: 'boolean' },
 })
 
-export function ApplicationsView({ entries: allEntries, variant, onSelect, title = 'Applications', description, emptySlot, headerActions, loading, renderRowLeading }: ApplicationsViewProps) {
+export function ApplicationsView({ entries: allEntries, variant, onSelect, title = 'Applications', description, emptySlot, headerActions, loading, renderRowLeading, pinnedSection }: ApplicationsViewProps) {
   // Facets + search + show-system live in the URL (shareable, bookmarkable) via
   // the shared filter-state contract. Sort stays local: it's a compound
   // {key, dir} view-preference, not a result-narrowing filter, so it isn't
@@ -256,7 +259,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
   // Fleet rows must scope non-portable identities to the cluster set that
   // produced them — only a portable (declared / cross-cluster-unified) key may
   // fold across clusters. Single-cluster has no such concern, so no localScope.
-  const visibleRows = useMemo<FoldedRow<AppEntry>[]>(
+  const foldedRows = useMemo<FoldedRow<AppEntry>[]>(
     () => foldAppGroups(entries, expandedGroups, FAMILY_AUTO_EXPAND_ON_SEARCH && textFilter.trim() !== '',
       variant === 'fleet'
         ? {
@@ -280,6 +283,21 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
     ),
     [entries, expandedGroups, textFilter, variant],
   )
+
+  // Partition after sorting, filtering and folding. The same array drives the
+  // keyboard and the DOM, including a folded family's expanded children.
+  const { visibleRows, pinnedCount } = useMemo(() => {
+    if (!pinnedSection) return { visibleRows: foldedRows, pinnedCount: 0 }
+    const pinned: FoldedRow<AppEntry>[] = []
+    const rest: FoldedRow<AppEntry>[] = []
+    let section = rest
+    for (const row of foldedRows) {
+      if (row.kind === 'group') section = row.members.some(pinnedSection.predicate) ? pinned : rest
+      else if (!row.child) section = pinnedSection.predicate(row.entry) ? pinned : rest
+      section.push(row)
+    }
+    return { visibleRows: [...pinned, ...rest], pinnedCount: pinned.length }
+  }, [foldedRows, pinnedSection])
 
   // Row keyboard navigation — same contract as the Resources table: j/k or
   // arrows move a highlight, g g / G jump, Enter opens, Escape clears the
@@ -509,9 +527,17 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleRows.map((r, idx) => r.kind === 'group' ? (
+                  {visibleRows.map((r, idx) => (
+                    <Fragment key={r.kind === 'group' ? `group:${r.key}` : `app:${r.entry.row.key}`}>
+                    {pinnedCount > 0 && (idx === 0 || idx === pinnedCount) && (
+                      <tr>
+                        <td colSpan={8} className="border-b-subtle bg-theme-surface/60 px-3 py-1.5 text-xs font-medium text-theme-text-secondary">
+                          {idx === 0 ? pinnedSection?.title : 'Other applications'}
+                        </td>
+                      </tr>
+                    )}
+                    {r.kind === 'group' ? (
                     <tr
-                      key={`group:${r.key}`}
                       ref={idx === highlightedIndex ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
                       aria-expanded={r.expanded}
                       className={clsx(
@@ -595,7 +621,6 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                     </tr>
                   ) : ((e) => (
                     <tr
-                      key={e.row.key}
                       ref={idx === highlightedIndex ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
                       className={clsx(
                         'group/row cursor-pointer border-b-subtle',
@@ -706,7 +731,9 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                       </td>
                       <td className="pr-2 text-right"><ChevronRight className="inline h-4 w-4 text-theme-text-tertiary" /></td>
                     </tr>
-                  ))(r.entry))}
+                  ))(r.entry)}
+                    </Fragment>
+                  ))}
                 </tbody>
               </table>
           )}

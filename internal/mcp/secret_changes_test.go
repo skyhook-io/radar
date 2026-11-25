@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/skyhook-io/radar/internal/issuecorrelation"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
@@ -84,25 +85,6 @@ func TestSecretChangesMCPSurfacesAndRedaction(t *testing.T) {
 	}
 }
 
-func TestSecretCorrelationHistoryComplete(t *testing.T) {
-	deployment, now := secretChangesMCPFixture(t)
-	deployment.CreationTimestamp = metav1.NewTime(now)
-	coverage := issuesapi.HistoryCoverage{Incomplete: true, CompleteSince: now.Add(-time.Minute)}
-	if correlationHistoryComplete(deployment, "shop", coverage) {
-		t.Fatal("old referenced Secret incorrectly treated as complete")
-	}
-	secret, _ := k8s.GetResourceCache().Secrets().Secrets("shop").Get("db")
-	copy := secret.DeepCopy()
-	copy.CreationTimestamp = metav1.NewTime(now)
-	k8s.ResetTestState()
-	if err := k8s.InitTestResourceCache(fake.NewSimpleClientset(deployment, copy)); err != nil {
-		t.Fatal(err)
-	}
-	if !correlationHistoryComplete(deployment, "shop", coverage) {
-		t.Fatal("new referenced Secret should cover its whole lifetime")
-	}
-}
-
 func TestSecretChangesRBACAcrossMCPSurfaces(t *testing.T) {
 	secretChangesMCPFixture(t)
 	ctx := withClusterAdmin(t, "secret-context-reader")
@@ -129,8 +111,7 @@ func TestSecretChangesRBACAcrossMCPSurfaces(t *testing.T) {
 			case "get_resource":
 				result, _, err = handleGetResource(ctx, nil, getResourceInput{Kind: "secret", Namespace: "shop", Name: "db", Include: "changes", Context: "none"})
 			case "correlation":
-				res, _, _, e := correlationChangesForIssue(ctx, &issuesapi.Issue{Kind: "Deployment", Namespace: "shop", Name: "reader"}, time.Hour, 10)
-				err = e
+				res := issuecorrelation.Correlate(ctx, issuesapi.Issue{Kind: "Deployment", Group: "apps", Namespace: "shop", Name: "reader"}, correlationOptions(time.Hour), correlationAccess(ctx))
 				data, _ := json.Marshal(res.Changes)
 				body = string(data)
 			}
@@ -160,9 +141,9 @@ func TestSecretChangesRBACAcrossMCPSurfaces(t *testing.T) {
 		t.Fatalf("hidden Deployment not withheld: %s", body)
 	}
 	perms.SetCanI("list", "", "secrets", "shop", false)
-	filter := configSourceFilter(ctx, "shop")
-	if filter("Secret", "db") || !filter("ConfigMap", "config") {
-		t.Fatal("config source filter did not gate Secret independently")
+	check := correlationAccess(ctx).Check
+	if check("Secret", "", "shop") != issuecorrelation.Forbidden || check("ConfigMap", "", "shop") != issuecorrelation.Allowed {
+		t.Fatal("config source check did not gate Secret independently")
 	}
 	if meaningfulchanges.TrackedKindForGroup("Secret", "") {
 		t.Fatal("Secret issues must stay ineligible for no_recent_changes")
@@ -200,12 +181,12 @@ func TestRolloutIssueCorrelatesReferencedSecret(t *testing.T) {
 	if err := store.Append(context.Background(), timeline.TimelineEvent{ID: "secret-write", Kind: "Secret", APIVersion: "v1", Name: "db", Namespace: "shop", Timestamp: time.Now().Add(-5 * time.Minute), ClusterContext: k8s.ActiveClusterContext(), Source: timeline.SourceInformer, EventType: timeline.EventTypeUpdate, Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "data (modified keys)", OldValue: []string{"password"}, NewValue: []string{"password"}}}}}); err != nil {
 		t.Fatal(err)
 	}
-	result, _, obj, err := correlationChangesForIssue(context.Background(), &issuesapi.Issue{Kind: "Rollout", Namespace: "shop", Name: "roll"}, time.Hour, 10)
-	if err != nil || obj == nil {
-		t.Fatalf("Rollout object not resolved: obj=%v err=%v", obj, err)
+	if obj := issuecorrelation.WorkloadObjectFromCache("Rollout", "shop", "roll"); obj == nil {
+		t.Fatal("Rollout object not resolved")
 	}
-	if len(result.Changes) != 1 || result.Changes[0].Kind != "Secret" || result.Changes[0].Name != "db" {
-		t.Fatalf("Rollout correlation changes = %+v", result.Changes)
+	result := issuecorrelation.Correlate(context.Background(), issuesapi.Issue{Kind: "Rollout", Group: "argoproj.io", Namespace: "shop", Name: "roll"}, correlationOptions(time.Hour), correlationAccess(context.Background()))
+	if result.Unknown != nil || len(result.Changes) != 1 || result.Changes[0].Kind != "Secret" || result.Changes[0].Name != "db" {
+		t.Fatalf("Rollout correlation = %+v", result)
 	}
 }
 
@@ -235,13 +216,35 @@ func TestRolloutWorkloadRefCorrelatesReferencedSecret(t *testing.T) {
 	if err := store.Append(context.Background(), timeline.TimelineEvent{ID: "secret-write", Kind: "Secret", APIVersion: "v1", Name: "db", Namespace: "shop", Timestamp: time.Now().Add(-5 * time.Minute), ClusterContext: k8s.ActiveClusterContext(), Source: timeline.SourceInformer, EventType: timeline.EventTypeUpdate, Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "data (modified keys)", OldValue: []string{"password"}, NewValue: []string{"password"}}}}}); err != nil {
 		t.Fatal(err)
 	}
-	result, withheld, _, err := correlationChangesForIssue(context.Background(), &issuesapi.Issue{Kind: "Rollout", Namespace: "shop", Name: "ref"}, time.Hour, 10)
-	if err != nil || withheld || len(result.Changes) != 1 || result.Changes[0].Name != "db" {
-		t.Fatalf("workloadRef Rollout: changes=%+v withheld=%v err=%v", result.Changes, withheld, err)
+	correlate := func(name string) issuecorrelation.Result {
+		return issuecorrelation.Correlate(context.Background(), issuesapi.Issue{Kind: "Rollout", Group: "argoproj.io", Namespace: "shop", Name: name}, correlationOptions(time.Hour), correlationAccess(context.Background()))
+	}
+	if result := correlate("ref"); result.Unknown != nil || len(result.Changes) != 1 || result.Changes[0].Name != "db" {
+		t.Fatalf("workloadRef Rollout: %+v", result)
 	}
 	// An unresolvable target leaves the sources unknown, so no absence claim.
-	result, withheld, _, err = correlationChangesForIssue(context.Background(), &issuesapi.Issue{Kind: "Rollout", Namespace: "shop", Name: "dangling"}, time.Hour, 10)
-	if err != nil || !withheld || len(result.Changes) != 0 {
-		t.Fatalf("dangling workloadRef Rollout: changes=%+v withheld=%v err=%v", result.Changes, withheld, err)
+	if result := correlate("dangling"); result.NoChanges || len(result.Changes) != 0 || result.Unknown == nil || result.Unknown.Reason != issuesapi.CorrelationUnknownSourcesUnresolved {
+		t.Fatalf("dangling workloadRef Rollout: %+v", result)
+	}
+
+	// A caller who can list Rollouts and Secrets but not Deployments can't
+	// learn which Secret the target Deployment's template names: its template
+	// is not read, and the issue gets no marker either way.
+	ctx := withClusterAdmin(t, "rollout-reader")
+	t.Cleanup(getPermCache().Invalidate)
+	perms := getPermCache().Get("rollout-reader", nil)
+	perms.SetCanI("list", "argoproj.io", "rollouts", "shop", true)
+	perms.SetCanI("list", "", "secrets", "shop", true)
+	perms.SetCanI("list", "", "configmaps", "shop", true)
+	perms.SetCanI("list", "apps", "deployments", "shop", false)
+	denied := issuecorrelation.Correlate(ctx, issuesapi.Issue{Kind: "Rollout", Group: "argoproj.io", Namespace: "shop", Name: "ref"}, correlationOptions(time.Hour), correlationAccess(ctx))
+	if len(denied.Changes) != 0 || denied.NoChanges || denied.Unknown == nil || denied.Unknown.Reason != issuesapi.CorrelationUnknownUserForbidden ||
+		len(denied.Unknown.Kinds) != 1 || denied.Unknown.Kinds[0] != (issuesapi.UncheckedKind{Group: "apps", Kind: "Deployment"}) {
+		t.Fatalf("workloadRef target read without Deployment access: %+v", denied)
+	}
+	resp := issues.ListResponse{Issues: []issuesapi.Issue{{Severity: issuesapi.SeverityCritical, Kind: "Rollout", Group: "argoproj.io", Namespace: "shop", Name: "ref"}}}
+	attachIssueChangeCorrelation(ctx, &resp)
+	if iss := resp.Issues[0]; len(iss.CorrelatedChanges) != 0 || iss.NoRecentChanges != nil {
+		t.Fatalf("issues tool: %+v", iss)
 	}
 }

@@ -64,6 +64,8 @@ const BUILTIN_GROUP_KIND_TO_PLURAL: Record<string, string> = {
 
 const BUILTIN_GROUP_PLURAL_TO_KIND: Record<string, string> = {
   ...Object.fromEntries(CORE_RESOURCES.map(r => [`${r.group}/${r.name}`, r.kind])),
+  'admissionregistration.k8s.io/mutatingadmissionpolicies': 'MutatingAdmissionPolicy',
+  'admissionregistration.k8s.io/mutatingadmissionpolicybindings': 'MutatingAdmissionPolicyBinding',
   'metrics.k8s.io/pods': 'PodMetrics',
   'metrics.k8s.io/nodes': 'NodeMetrics',
   'scheduling.k8s.io/podgroups': 'PodGroup',

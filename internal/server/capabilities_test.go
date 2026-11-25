@@ -82,3 +82,25 @@ func TestMergeNamespaceCapabilitiesHelmWrite(t *testing.T) {
 		t.Fatal("a clean namespace deny should override a global Helm write grant")
 	}
 }
+
+func TestPodDebugNeedsBothNamespacePermissions(t *testing.T) {
+	t.Setenv("RADAR_CLOUD_MODE", "false")
+	for _, exec := range []bool{false, true} {
+		for _, update := range []bool{false, true} {
+			caps := &k8s.Capabilities{Exec: true, PodDebug: true}
+			mergeNamespaceCapabilities(caps, &k8s.NamespaceCapabilities{Exec: exec, PodDebug: update})
+			if caps.PodDebug != (exec && update) {
+				t.Errorf("exec=%v, update ephemeralcontainers=%v: podDebug=%v", exec, update, caps.PodDebug)
+			}
+		}
+	}
+}
+
+func TestPodDebugHiddenInCloudMode(t *testing.T) {
+	t.Setenv("RADAR_CLOUD_MODE", "true")
+	caps := &k8s.Capabilities{}
+	mergeNamespaceCapabilities(caps, &k8s.NamespaceCapabilities{Exec: true, PodDebug: true})
+	if caps.PodDebug {
+		t.Fatal("hosted view offered the direct debug action")
+	}
+}
