@@ -44,28 +44,46 @@ function mockSystemZone() {
   systemZone = 'UTC'
   const DateTimeFormat = Intl.DateTimeFormat
   return vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(function (locales, options) {
-    return new DateTimeFormat(locales, { timeZone: systemZone, ...options })
+    return new DateTimeFormat(locales, { ...options, timeZone: options?.timeZone ?? systemZone })
   })
 }
 
 const rowTime = (timestamp = entry.timestamp) => element.querySelector(`[title="${timestamp}"]`)?.textContent
 const tooltipText = () => document.querySelector('[role="tooltip"]')?.textContent
 
-it('names the zone beside local formats in the timestamp menu', async () => {
+it('labels all six timestamp choices and exposes the selected format when closed', async () => {
+  mockSystemZone()
+  systemZone = 'Asia/Tokyo'
+  vi.useFakeTimers()
   const picker = await render()
-  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone
   expect(picker.textContent).toBe('Local time')
-  await act(async () => picker.click())
-  const labels = Array.from(element.querySelectorAll('button'), (button) => button.textContent)
-  expect(labels.filter((label) => label?.includes('(local)'))).toEqual([`Time (local)${zone}✓`, `ISO (local)${zone}`])
-  const time = element.querySelector<HTMLButtonElement>(`button[aria-label="Time (local), ${zone}"]`)!
-  const iso = element.querySelector<HTMLButtonElement>(`button[aria-label="ISO (local), ${zone}"]`)!
-  expect(time.getAttribute('aria-pressed')).toBe('true')
-  expect(iso.getAttribute('aria-pressed')).toBe('false')
-  await act(async () => iso.click())
-  await act(async () => picker.click())
-  expect(element.querySelector(`button[aria-label="ISO (local), ${zone}"]`)?.getAttribute('aria-pressed')).toBe('true')
-  expect(labels).toContain('Relative')
+  expect(picker.getAttribute('aria-label')).toBe('Pick timestamp format: Local time · Asia/Tokyo')
+  expect(picker.getAttribute('aria-expanded')).toBe('false')
+
+  act(() => picker.focus())
+  act(() => picker.click())
+  act(() => { vi.advanceTimersByTime(200) })
+  expect(tooltipText()).toBeUndefined()
+  expect(document.activeElement).toBe(picker)
+  expect(picker.getAttribute('aria-expanded')).toBe('true')
+  const group = element.querySelector('[role="radiogroup"][aria-label="Timestamp format"]')!
+  const options = Array.from(group.querySelectorAll<HTMLButtonElement>('[role="radio"]'))
+  expect(options.map(option => option.textContent)).toEqual([
+    'Time (local)Asia/Tokyo✓', 'Time (UTC)', 'ISO (local)Asia/Tokyo', 'ISO (UTC)', 'Relative', 'Epoch',
+  ])
+  expect(options.map(option => option.getAttribute('aria-label') ?? option.textContent)).toEqual([
+    'Time (local), Asia/Tokyo', 'Time (UTC)', 'ISO (local), Asia/Tokyo', 'ISO (UTC)', 'Relative', 'Epoch',
+  ])
+  expect(options.filter(option => option.getAttribute('aria-checked') === 'true')).toEqual([options[0]])
+  act(() => options[1].click())
+  expect(picker.getAttribute('aria-expanded')).toBe('false')
+  expect(picker.getAttribute('aria-label')).toBe('Pick timestamp format: UTC time')
+  act(() => picker.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })))
+  act(() => { vi.advanceTimersByTime(200) })
+  expect(tooltipText()).toBe('Timestamp format: Time (UTC)')
+  act(() => picker.click())
+  const checked = element.querySelectorAll('[role="radiogroup"][aria-label="Timestamp format"] [aria-checked="true"]')
+  expect(Array.from(checked, option => option.textContent)).toEqual(['Time (UTC)✓'])
 })
 
 it.each(['focus', 'hover'])('updates the paused row and tooltip together on %s', async interaction => {

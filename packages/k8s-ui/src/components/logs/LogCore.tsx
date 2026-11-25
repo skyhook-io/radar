@@ -278,7 +278,7 @@ export function LogCore({
   const [timeZone, setTimeZone] = useState(localTimeZone)
   const refreshTimeZone = () => setTimeZone(localTimeZone())
   const formatTimestamp = useMemo(() => createLogTimestampFormatter(tsFormat, timeZone), [tsFormat, timeZone])
-  const timestampHint = `Timestamp format: ${TIMESTAMP_FORMAT_LABELS[tsFormat]}${isLocalFormat(tsFormat) ? ` · ${timeZone}` : ''}`
+  const zoneSuffix = isLocalFormat(tsFormat) ? ` · ${timeZone}` : ''
   const [showStructuredMenu, setShowStructuredMenu] = useState(false)
   const structuredMenu = useAnimatedUnmount(showStructuredMenu, overlayExitMs('menu'))
   const [structuredMode, setStructuredMode] = useState<StructuredMode>(() => {
@@ -799,7 +799,13 @@ export function LogCore({
             </button>
           </Tooltip>
           <div className="relative" ref={tsMenuRef}>
-            <Tooltip content={timestampHint} delay={TIP_DELAY} position="bottom">
+            <Tooltip
+              content={`Timestamp format: ${TIMESTAMP_FORMAT_LABELS[tsFormat]}${zoneSuffix}`}
+              delay={TIP_DELAY}
+              position="bottom"
+              disabled={showTsMenu}
+              preserveWrapperWhenDisabled
+            >
               <button
                 onMouseEnter={refreshTimeZone}
                 onFocus={refreshTimeZone}
@@ -810,7 +816,7 @@ export function LogCore({
                 className={`px-2 py-1.5 rounded-r text-[10px] font-medium transition-colors whitespace-nowrap ${
                   showTimestamps ? palette.toolbarActive : iconBtnInactiveTertiary
                 }`}
-                aria-label="Pick timestamp format"
+                aria-label={`Pick timestamp format: ${TIMESTAMP_FORMAT_SHORT_LABELS[tsFormat]}${zoneSuffix}`}
                 aria-expanded={showTsMenu}
               >
                 <span className="inline-flex items-center gap-1">
@@ -821,6 +827,8 @@ export function LogCore({
             </Tooltip>
             {tsMenu.shouldRender && (
               <div
+                role="radiogroup"
+                aria-label="Timestamp format"
                 inert={!showTsMenu}
                 className={`absolute top-full right-0 mt-1 w-44 origin-top-right ${palette.menuBg} border ${palette.border} rounded-lg shadow-lg z-50 ${TRANSITION_MENU} ${
                   tsMenu.isOpen ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 -translate-y-1 scale-[0.97]'
@@ -834,15 +842,16 @@ export function LogCore({
                   <button
                     key={fmt}
                     onClick={() => pickTsFormat(fmt)}
-                    aria-label={isLocalFormat(fmt) && timeZone ? `${TIMESTAMP_FORMAT_LABELS[fmt]}, ${timeZone}` : undefined}
-                    aria-pressed={tsFormat === fmt}
+                    aria-label={isLocalFormat(fmt) ? `${TIMESTAMP_FORMAT_LABELS[fmt]}, ${timeZone}` : undefined}
+                    role="radio"
+                    aria-checked={tsFormat === fmt}
                     className={`w-full text-left px-3 py-1.5 text-xs ${palette.hoverBg} flex items-center justify-between gap-2 ${
                       tsFormat === fmt ? palette.textPrimary : palette.textSecondary
                     }`}
                   >
                     <span className="min-w-0">
                       {TIMESTAMP_FORMAT_LABELS[fmt]}
-                      {isLocalFormat(fmt) && timeZone && <span className={`block break-words text-[10px] ${palette.textSecondary}`}>{timeZone}</span>}
+                      {isLocalFormat(fmt) && <span className={`block break-words text-[10px] ${palette.textSecondary}`}>{timeZone}</span>}
                     </span>
                     {tsFormat === fmt && <span aria-hidden className={`shrink-0 text-[10px] ${palette.textAccent}`}>✓</span>}
                   </button>
