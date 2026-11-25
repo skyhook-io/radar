@@ -1741,7 +1741,7 @@ export interface TrafficFlow {
    *  destination are ordered arbitrarily rather than describing a caller. */
   directionUnknown?: boolean
   /** Node-to-node UDP, likely CNI overlay carrying pod traffic already on the
-   *  map. A guess the source makes; it cannot confirm the overlay port. */
+   *  map. A guess unless the source reports the overlay port. */
   likelyOverlay?: boolean
   /** 5xx responses per second. How a rate-based source reports failures: it
    *  measures a rate rather than observing individual responses, so it has a
@@ -1795,7 +1795,7 @@ export interface AggregatedFlow {
    *  ordered arbitrarily and the edge is drawn without an arrowhead. */
   directionUnknown?: boolean
   /** Node-to-node UDP, likely CNI overlay carrying pod traffic already on the
-   *  map. A guess the source makes; it cannot confirm the overlay port. */
+   *  map. A guess unless the source reports the overlay port. */
   likelyOverlay?: boolean
   l7Protocol?: string // HTTP, gRPC, DNS
   requestCount?: number

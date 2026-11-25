@@ -1183,7 +1183,7 @@ func (s *BeylaSource) queryUnorientable(ctx context.Context, opts FlowOptions, s
 			Source:        Endpoint{Name: conv.key.srcWorkload, Namespace: conv.key.srcNs, Kind: mapBeylaKind(att.srcType), Workload: conv.key.srcWorkload},
 			Destination:   Endpoint{Name: conv.key.dstWorkload, Namespace: conv.key.dstNs, Kind: mapBeylaKind(att.dstType), Workload: conv.key.dstWorkload},
 			Protocol:      mapBeylaTransport(conv.transport),
-			LikelyOverlay: likelyOverlay(att.srcType, att.dstType, conv.transport),
+			LikelyOverlay: likelyOverlay(att.srcType, att.dstType, conv.transport, 0),
 			LastSeen:      time.Now(),
 			BytesSent:     h.forward,
 			BytesRecv:     h.backward,
@@ -1378,7 +1378,7 @@ func (s *BeylaSource) parseL4Flows(result *prom.QueryResult, w rateWindow) (map[
 			Source:        Endpoint{Name: srcName, Namespace: srcNs, Kind: mapBeylaKind(srcType), Workload: srcName},
 			Destination:   Endpoint{Name: dstName, Namespace: dstNs, Kind: mapBeylaKind(dstType), Workload: dstName, Port: port},
 			Protocol:      mapBeylaTransport(labels["transport"]),
-			LikelyOverlay: likelyOverlay(srcType, dstType, labels["transport"]),
+			LikelyOverlay: likelyOverlay(srcType, dstType, labels["transport"], port),
 			Port:          port,
 			LastSeen:      time.Now(),
 			BytesSent:     int64(val * w.seconds),
@@ -1489,10 +1489,12 @@ func parseIntLabel(s string) int {
 	return v
 }
 
-// likelyOverlay: node-to-node UDP is what a VXLAN overlay looks like from the
-// physical NIC. Unconfirmable without dst_port (8472/4789), so only marked.
-func likelyOverlay(srcType, dstType, transport string) bool {
-	return strings.EqualFold(srcType, "node") && strings.EqualFold(dstType, "node") && strings.EqualFold(transport, "udp")
+// likelyOverlay: node-to-node UDP is what a VXLAN or Geneve overlay looks like
+// from the physical NIC. Without dst_port (port 0) that is only a guess; with it,
+// only the overlay ports count.
+func likelyOverlay(srcType, dstType, transport string, port int) bool {
+	return strings.EqualFold(srcType, "node") && strings.EqualFold(dstType, "node") && strings.EqualFold(transport, "udp") &&
+		(port == 0 || port == 4789 || port == 8472 || port == 6081)
 }
 
 func mapBeylaKind(beylaType string) string {

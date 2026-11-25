@@ -268,7 +268,7 @@ export const TrafficFilterSidebar = memo(function TrafficFilterSidebar({
             {hasOverlayFlows && setHideOverlay && (
               <ToggleOption
                 label="Hide node-to-node overlay"
-                description="UDP between two nodes is likely CNI overlay (VXLAN) carrying pod traffic already on the map. A guess: the port that would confirm it is not reported, and WireGuard or DNS between nodes look the same."
+                description="UDP between two nodes is likely CNI overlay (VXLAN, Geneve) carrying pod traffic already on the map. Unless Beyla reports the port, a guess: WireGuard or DNS between nodes look the same."
                 enabled={!!hideOverlay}
                 onToggle={() => setHideOverlay(!hideOverlay)}
                 icon={Server}

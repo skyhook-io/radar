@@ -12,18 +12,24 @@ import (
 func TestLikelyOverlay(t *testing.T) {
 	cases := []struct {
 		src, dst, transport string
+		port                int
 		want                bool
 	}{
-		{"Node", "Node", "UDP", true},
-		{"node", "node", "udp", true},
-		{"Node", "Node", "TCP", false},
-		{"Node", "Node", "", false}, // transport not exported: UDP cannot be told apart
-		{"Node", "Deployment", "UDP", false},
-		{"Deployment", "Deployment", "UDP", false},
+		{"Node", "Node", "UDP", 0, true},
+		{"node", "node", "udp", 0, true},
+		{"Node", "Node", "TCP", 0, false},
+		{"Node", "Node", "", 0, false}, // transport not exported: UDP cannot be told apart
+		{"Node", "Deployment", "UDP", 0, false},
+		{"Deployment", "Deployment", "UDP", 0, false},
+		// With dst.port exported the port settles it.
+		{"Node", "Node", "UDP", 8472, true},
+		{"Node", "Node", "UDP", 4789, true},
+		{"Node", "Node", "UDP", 6081, true},
+		{"Node", "Node", "UDP", 53, false},
 	}
 	for _, c := range cases {
-		if got := likelyOverlay(c.src, c.dst, c.transport); got != c.want {
-			t.Errorf("likelyOverlay(%q, %q, %q) = %t, want %t", c.src, c.dst, c.transport, got, c.want)
+		if got := likelyOverlay(c.src, c.dst, c.transport, c.port); got != c.want {
+			t.Errorf("likelyOverlay(%q, %q, %q, %d) = %t, want %t", c.src, c.dst, c.transport, c.port, got, c.want)
 		}
 	}
 }
