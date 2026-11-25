@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -13,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/tools/remotecommand"
 )
 
 func TestRunPodExecHeartbeat(t *testing.T) {
@@ -459,4 +461,97 @@ func TestDefaultExecContainer(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPodTerminalStream(t *testing.T) {
+	run := func(t *testing.T, stream func(context.Context, remotecommand.StreamOptions) error) (*websocket.Conn, context.CancelFunc, <-chan struct{}) {
+		t.Helper()
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer close(done)
+			conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			streamPodTerminal(ctx, conn, "reviewed-pod", stream)
+		}))
+		conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { cancel(); conn.Close(); srv.Close() })
+		return conn, cancel, done
+	}
+	wait := func(t *testing.T, done <-chan struct{}) {
+		t.Helper()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Fatal("terminal workers did not exit")
+		}
+	}
+	t.Run("slow Kubernetes stdin preserves burst through client close", func(t *testing.T) {
+		release := make(chan struct{})
+		got := make(chan string, 1)
+		conn, _, done := run(t, func(ctx context.Context, opts remotecommand.StreamOptions) error {
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			b, err := io.ReadAll(opts.Stdin)
+			got <- string(b)
+			return err
+		})
+		want := strings.Repeat("abc界", 250) + "\n"
+		for _, r := range want {
+			if err := conn.WriteJSON(TerminalMessage{Type: "input", Data: string(r)}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		close(release)
+		wait(t, done)
+		if input := <-got; input != want {
+			t.Fatalf("received %d bytes, want %d in order", len(input), len(want))
+		}
+	})
+	t.Run("cancel unsticks unread stdin", func(t *testing.T) {
+		started := make(chan struct{})
+		conn, cancel, done := run(t, func(ctx context.Context, _ remotecommand.StreamOptions) error {
+			close(started)
+			<-ctx.Done()
+			return ctx.Err()
+		})
+		wait(t, started)
+		if err := conn.WriteJSON(TerminalMessage{Type: "input", Data: "one queued frame"}); err != nil {
+			t.Fatal(err)
+		}
+		cancel()
+		wait(t, done)
+	})
+	t.Run("final output and structured error precede close", func(t *testing.T) {
+		conn, _, done := run(t, func(_ context.Context, opts remotecommand.StreamOptions) error {
+			if _, err := io.WriteString(opts.Stdout, "last output"); err != nil {
+				return err
+			}
+			return errors.New("executable file not found")
+		})
+		conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+		var msg map[string]string
+		if err := conn.ReadJSON(&msg); err != nil || msg["data"] != "last output" {
+			t.Fatalf("last output: %v, %v", msg, err)
+		}
+		if err := conn.ReadJSON(&msg); err != nil || msg["errorType"] != "shell_not_found" || msg["podUID"] != "reviewed-pod" {
+			t.Fatalf("last error: %v, %v", msg, err)
+		}
+		if _, _, err := conn.ReadMessage(); !websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+			t.Fatalf("websocket close: %v", err)
+		}
+		wait(t, done)
+	})
 }

@@ -15,6 +15,7 @@ it.each([undefined, '/bin/custom+command'])('forwards the executable and context
   const url = new URL(wsUrl)
   expect(url.pathname).toBe('/api/pods/app/worker/exec'); expect(url.searchParams.get('container')).toBe('app')
   expect(url.searchParams.get('shell')).toBe(shell ?? null)
+  expect(url.searchParams.has('uid')).toBe(false)
 })
 
 it('reconnects on the connection the tab was opened on, not the latest', async () => {
@@ -34,6 +35,7 @@ it('reconnects an existing debug session to its reviewed connection without offe
   renderToString(<TerminalTab namespace="demo" podName="api" containerName="debug-1" containers={['debug-1']} debugSession={{ connectionId: 'reviewed-cluster', apiBase: '/api', podUID: 'reviewed', image: 'mirror.example/debug' }} />)
   const { wsUrl } = await captured.props!.createSession('debug-1')
   expect(new URL(wsUrl).searchParams.get('connection')).toBe('reviewed-cluster')
+  expect(new URL(wsUrl).searchParams.get('uid')).toBe('reviewed')
   expect(captured.props!.renderDebugAction).toBeUndefined()
   resetConnectionBindingForTest()
 })

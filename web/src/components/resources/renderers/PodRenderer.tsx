@@ -1,3 +1,5 @@
+import { connectionHeaderValue } from '../../../api/connectionBinding'
+import { getApiBase } from '../../../api/config'
 import { hasPrometheusCharts } from '../../../api/prometheusCharts'
 import { PodRenderer as BasePodRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/PodRenderer'
 import type { CopyHandler } from '@skyhook-io/k8s-ui/components/ui/drawer-components'
@@ -49,7 +51,7 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
   const awaitsScheduling = podAwaitsScheduling(data)
 
   // Capabilities (namespace-scoped: re-checks RBAC if globally denied)
-  const { canExec, canViewLogs, canPortForward } = useNamespacedCapabilities(namespace)
+  const { canExec, canOpenEphemeralTerminal, canViewLogs, canPortForward } = useNamespacedCapabilities(namespace)
   // Show the port-forward affordance for a live forward (local + RBAC) OR when
   // not local — in-cluster/Cloud surfaces a copy-paste kubectl command instead.
   // The button itself picks live vs. copy-command based on deployment mode.
@@ -144,6 +146,10 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
       canViewLogs={canViewLogs}
       canPortForward={showPortForward}
       onOpenTerminal={(params) => openTerminal(params)}
+      onOpenEphemeralTerminal={canOpenEphemeralTerminal ? (name, image) => openTerminal({
+        namespace, podName, containerName: name, containers: [name],
+        debugSession: { podUID: data.metadata.uid, image, connectionId: connectionHeaderValue(), apiBase: getApiBase() },
+      }) : undefined}
       onOpenLogsPanel={(params) => openLogsPanel(params)}
       renderPortAction={({ namespace: ns, podName: pod, port, protocol, disabled }) => (
         <PortForwardInlineButton

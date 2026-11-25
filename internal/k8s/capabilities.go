@@ -115,6 +115,8 @@ func (r *PermissionCheckResult) CredentialRejectedNamespaces(resource string, na
 type Capabilities struct {
 	ConfigManagement       string                   `json:"configManagement"`
 	Exec                   bool                     `json:"exec"` // Can create pods/exec (terminal feature)
+	PodExecUID             bool                     `json:"podExecUID,omitempty"`
+	PodDebugUpdateDenied   bool                     `json:"podDebugUpdateDenied,omitempty"`
 	PodDebugImage          string                   `json:"podDebugImage,omitempty"`
 	PodDebug               bool                     `json:"podDebug,omitempty"` // Scoped to the requested namespace.
 	LocalTerminal          bool                     `json:"localTerminal"`      // Local terminal available (not in-cluster, not disabled)
@@ -942,7 +944,7 @@ func canIAs(ctx context.Context, client *kubernetes.Clientset, username string, 
 		return false, true
 	}
 
-	return result.Status.Allowed, false
+	return result.Status.Allowed, k8score.DebugPermissionUnknown(review.Spec.ResourceAttributes, result.Status)
 }
 
 // resourceProbe describes one typed-resource probe target. The probe issues

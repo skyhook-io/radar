@@ -32,3 +32,26 @@ func TestCanISendsSubresourceInItsOwnField(t *testing.T) {
 		t.Errorf("plain resource = %q / %q", got.Resource, got.Subresource)
 	}
 }
+
+func TestDebugPermissionUnknown(t *testing.T) {
+	debug := authv1.ResourceAttributes{Namespace: "ops", Verb: "update", Resource: "pods", Subresource: "ephemeralcontainers"}
+	exec := authv1.ResourceAttributes{Namespace: "ops", Verb: "create", Resource: "pods", Subresource: "exec"}
+	for _, tc := range []struct {
+		name    string
+		attrs   authv1.ResourceAttributes
+		status  authv1.SubjectAccessReviewStatus
+		unknown bool
+	}{
+		{"partial debug", debug, authv1.SubjectAccessReviewStatus{EvaluationError: "webhook timeout"}, true},
+		{"explicit deny", debug, authv1.SubjectAccessReviewStatus{Denied: true, EvaluationError: "another webhook timed out"}, false},
+		{"explicit allow", debug, authv1.SubjectAccessReviewStatus{Allowed: true, EvaluationError: "another webhook timed out"}, false},
+		{"no authorizer granted", debug, authv1.SubjectAccessReviewStatus{}, false},
+		{"ordinary exec unchanged", exec, authv1.SubjectAccessReviewStatus{EvaluationError: "webhook timeout"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := DebugPermissionUnknown(&tc.attrs, tc.status); got != tc.unknown {
+				t.Fatalf("unknown=%v, want %v", got, tc.unknown)
+			}
+		})
+	}
+}

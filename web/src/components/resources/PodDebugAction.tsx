@@ -35,11 +35,18 @@ interface ContainerStatus {
   state?: Partial<Record<'running' | 'waiting' | 'terminated', object>>
 }
 
-export function PodDebugAction({ pod, defaultImage, failedContainer }: { pod: PodDebugTarget; defaultImage: string; failedContainer?: string }) {
-  const openTerminal = useOpenTerminal()
+export function runningPodDebugTargets(pod: PodDebugTarget): string[] | undefined {
+  const os = pod.spec?.os?.name || pod.spec?.nodeSelector?.['kubernetes.io/os'] || pod.spec?.nodeSelector?.['beta.kubernetes.io/os']
+  if (!pod.metadata.uid || pod.apiVersion !== 'v1' || pod.kind !== 'Pod' || pod.status.phase !== 'Running' || pod.metadata.deletionTimestamp || os?.toLowerCase() === 'windows') return undefined
   const running = [...(pod.status.containerStatuses ?? []), ...(pod.status.initContainerStatuses ?? [])]
     .filter(container => container.state?.running)
-  const targets = getExecContainerNames(pod).filter(name => running.some(container => container.name === name))
+  return getExecContainerNames(pod).filter(name => running.some(container => container.name === name))
+}
+
+export function PodDebugAction({ pod, defaultImage, failedContainer }: { pod: PodDebugTarget; defaultImage: string; failedContainer?: string }) {
+  const openTerminal = useOpenTerminal()
+  const eligibleTargets = runningPodDebugTargets(pod)
+  const targets = eligibleTargets ?? []
   const [draft, setDraft] = useState<{ target: string; image: string; base: string; connection?: string }>()
   const [result, setResult] = useState<ActionConfirmResult>()
   const submitting = useRef(false)
@@ -49,7 +56,6 @@ export function PodDebugAction({ pod, defaultImage, failedContainer }: { pod: Po
     return () => { mounted.current = false }
   }, [])
 
-  const os = pod.spec?.os?.name || pod.spec?.nodeSelector?.['kubernetes.io/os'] || pod.spec?.nodeSelector?.['beta.kubernetes.io/os']
   const { namespace, name, uid } = pod.metadata
   const connection = connectionHeaderValue()
   const mutation = useReviewedActionMutation(
@@ -98,7 +104,7 @@ export function PodDebugAction({ pod, defaultImage, failedContainer }: { pod: Po
     }
   }
 
-  if (!uid || pod.apiVersion !== 'v1' || pod.kind !== 'Pod' || pod.status.phase !== 'Running' || pod.metadata.deletionTimestamp || os?.toLowerCase() === 'windows' || (!draft && !targets.length)) return null
+  if (!eligibleTargets || (!draft && !targets.length)) return null
   return <>
     <button type="button" className="btn-secondary flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium" onClick={show}>
       <Bug className="h-3.5 w-3.5" />{failedContainer ? 'Debug with an ephemeral container' : 'Debug'}

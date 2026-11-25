@@ -119,6 +119,8 @@ export interface IntegrationCapability {
 // Feature capabilities based on RBAC permissions
 export interface Capabilities {
   configManagement?: 'local' | 'operator' | 'cloud'
+  podExecUID?: boolean
+  podDebugUpdateDenied?: boolean
   podDebugImage?: string
   podDebug?: boolean
   exec: boolean           // Terminal feature (pods/exec)

@@ -51,5 +51,11 @@ func CanI(ctx context.Context, client kubernetes.Interface, namespace, group, re
 		return false, true
 	}
 
-	return result.Status.Allowed, false
+	return result.Status.Allowed, DebugPermissionUnknown(review.Spec.ResourceAttributes, result.Status)
+}
+
+// DebugPermissionUnknown distinguishes an inconclusive review from an actionable
+// denial for the missing-shell hint. Other capability checks keep their existing semantics.
+func DebugPermissionUnknown(attrs *authv1.ResourceAttributes, status authv1.SubjectAccessReviewStatus) bool {
+	return attrs.Namespace != "" && attrs.Group == "" && attrs.Resource == "pods" && attrs.Subresource == "ephemeralcontainers" && attrs.Verb == "update" && !status.Allowed && !status.Denied && status.EvaluationError != ""
 }

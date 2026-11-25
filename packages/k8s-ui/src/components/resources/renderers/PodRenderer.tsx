@@ -85,6 +85,7 @@ interface PodRendererProps {
   canPortForward?: boolean
   // Dock actions
   onOpenTerminal?: (params: { namespace: string; podName: string; containerName: string; containers: string[] }) => void
+  onOpenEphemeralTerminal?: (name: string, image: string) => void
   onOpenLogsPanel?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string; initContainers?: string[] }) => void
   // Port forward render prop
   renderPortAction?: (props: { namespace: string; podName: string; port: number; protocol: string; disabled?: boolean }) => ReactNode
@@ -296,6 +297,7 @@ export function PodRenderer({
   canViewLogs,
   canPortForward,
   onOpenTerminal,
+  onOpenEphemeralTerminal,
   onOpenLogsPanel,
   renderPortAction,
   metrics,
@@ -324,6 +326,9 @@ export function PodRenderer({
   const containerStatuses = data.status?.containerStatuses || []
   const containers = data.spec?.containers || []
   const initContainers = data.spec?.initContainers || []
+  const runningDebugContainers = (data.spec?.ephemeralContainers ?? []).filter((container: { name: string }) =>
+    data.status?.ephemeralContainerStatuses?.some((status: { name: string; state?: { running?: object } }) =>
+      status.name === container.name && status.state?.running))
   const podResources = data.spec?.resources
   const initContainerStatuses = data.status?.initContainerStatuses || []
   const hasEnvironmentDeclarations = [...initContainers, ...containers].some(
@@ -689,6 +694,23 @@ export function PodRenderer({
       {/* Container Status */}
       {policyData !== undefined && (
         <PolicySection data={policyData} loading={policyLoading} error={policyError} />
+      )}
+
+      {onOpenEphemeralTerminal && canExec && data.apiVersion === 'v1' && data.kind === 'Pod' && data.metadata?.uid && !data.metadata.deletionTimestamp && data.status?.phase === 'Running' && runningDebugContainers.length > 0 && (
+        <Section title="Running debug containers" icon={TerminalIcon} defaultExpanded>
+          <div className="space-y-2">{runningDebugContainers.map((container: { name: string; image: string; targetContainerName?: string }) => (
+            <div key={container.name} className="card-inner flex items-center gap-2 p-3">
+              <div className="min-w-0 flex-1">
+                <div className="break-all font-mono text-sm text-theme-text-primary">{container.name}</div>
+                <div className="break-all text-xs text-theme-text-secondary">{container.image}{container.targetContainerName && <> · Target: {container.targetContainerName}</>}</div>
+              </div>
+              <button type="button" className="btn-secondary flex shrink-0 items-center gap-1.5 px-2 py-1 text-xs"
+                aria-label={`Open terminal in ${container.name}`} onClick={() => onOpenEphemeralTerminal(container.name, container.image)}>
+                <TerminalIcon className="h-3.5 w-3.5" />Open terminal
+              </button>
+            </div>
+          ))}</div>
+        </Section>
       )}
 
       <Section title="Containers" icon={HardDrive} defaultExpanded>

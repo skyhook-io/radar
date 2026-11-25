@@ -104,3 +104,27 @@ func TestPodDebugHiddenInCloudMode(t *testing.T) {
 		t.Fatal("hosted view offered the direct debug action")
 	}
 }
+
+func TestMissingShellPermissionHint(t *testing.T) {
+	for _, tc := range []struct {
+		name, cloud  string
+		ns           k8s.NamespaceCapabilities
+		open, denied bool
+	}{
+		{"exec only", "false", k8s.NamespaceCapabilities{Exec: true}, true, true},
+		{"update granted", "false", k8s.NamespaceCapabilities{Exec: true, PodDebug: true}, true, false},
+		{"update unresolved", "false", k8s.NamespaceCapabilities{Exec: true, Errors: k8s.NamespaceCapabilityErrors{PodDebug: true}}, true, false},
+		{"exec unresolved", "false", k8s.NamespaceCapabilities{Errors: k8s.NamespaceCapabilityErrors{Exec: true}}, false, false},
+		{"exec disabled or denied", "false", k8s.NamespaceCapabilities{}, false, false},
+		{"hosted", "true", k8s.NamespaceCapabilities{Exec: true}, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("RADAR_CLOUD_MODE", tc.cloud)
+			caps := &k8s.Capabilities{Exec: true}
+			mergeNamespaceCapabilities(caps, &tc.ns)
+			if caps.PodExecUID != tc.open || caps.PodDebugUpdateDenied != tc.denied {
+				t.Fatalf("open=%v denied=%v", caps.PodExecUID, caps.PodDebugUpdateDenied)
+			}
+		})
+	}
+}
