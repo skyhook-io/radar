@@ -51,6 +51,39 @@ function mockSystemZone() {
 const rowTime = (timestamp = entry.timestamp) => element.querySelector(`[title="${timestamp}"]`)?.textContent
 const tooltipText = () => document.querySelector('[role="tooltip"]')?.textContent
 
+it.each(['', undefined])('omits an unknown zone (%s) from local choices and the tooltip', async timeZone => {
+  vi.useFakeTimers()
+  mockSystemZone()
+  const resolved = Intl.DateTimeFormat().resolvedOptions()
+  vi.spyOn(Object.getPrototypeOf(Intl.DateTimeFormat()), 'resolvedOptions').mockReturnValue({ ...resolved, timeZone })
+  const picker = await render()
+  expect(rowTime()).toBe('05:30:00')
+  expect(picker.getAttribute('aria-label')).toBe('Pick timestamp format: Local time')
+  act(() => picker.focus())
+  act(() => { vi.advanceTimersByTime(200) })
+  expect(tooltipText()).toBe('Timestamp format: Time (local)')
+  act(() => picker.click())
+  const localOptions = Array.from(element.querySelectorAll('[role="radio"]')).filter(option => option.textContent?.includes('(local)'))
+  expect(localOptions).toHaveLength(2)
+  for (const option of localOptions) {
+    expect(option.hasAttribute('aria-label')).toBe(false)
+    expect(option.querySelector('span span')).toBeNull()
+  }
+})
+
+it.each([
+  ['time-local', '00:00:00'],
+  ['iso-local', '2026-11-02T00:00:00+09:00'],
+])('uses an explicit midnight hour of 00 for %s', async (format, expected) => {
+  const dateTimeFormat = mockSystemZone()
+  systemZone = 'Asia/Tokyo'
+  localStorage.setItem('radar-logs-ts-format', format)
+  const timestamp = '2026-11-01T15:00:00Z'
+  await render({ entries: [{ ...entry, timestamp }] })
+  expect(dateTimeFormat).toHaveBeenCalledWith('en-US', expect.objectContaining({ hourCycle: 'h23' }))
+  expect(rowTime(timestamp)).toBe(expected)
+})
+
 it('labels all six timestamp choices and exposes the selected format when closed', async () => {
   mockSystemZone()
   systemZone = 'Asia/Tokyo'

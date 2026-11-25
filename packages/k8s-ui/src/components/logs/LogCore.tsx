@@ -134,7 +134,7 @@ const STRUCTURED_MODE_DESCRIPTIONS: Record<StructuredMode, string> = {
 const EMPTY_STATE_CLASS = 'flex-1 flex flex-col items-center justify-center gap-2 px-4 text-center'
 
 const isLocalFormat = (format: TimestampFormat) => format === 'time-local' || format === 'iso-local'
-const localTimeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone
+const localTimeZone = (): string | undefined => Intl.DateTimeFormat().resolvedOptions().timeZone || undefined
 
 const TIMESTAMP_FORMAT_SHORT_LABELS: Record<TimestampFormat, string> = {
   'time-local': 'Local time',
@@ -278,7 +278,7 @@ export function LogCore({
   const [timeZone, setTimeZone] = useState(localTimeZone)
   const refreshTimeZone = () => setTimeZone(localTimeZone())
   const formatTimestamp = useMemo(() => createLogTimestampFormatter(tsFormat, timeZone), [tsFormat, timeZone])
-  const zoneSuffix = isLocalFormat(tsFormat) ? ` · ${timeZone}` : ''
+  const zoneSuffix = isLocalFormat(tsFormat) && timeZone ? ` · ${timeZone}` : ''
   const [showStructuredMenu, setShowStructuredMenu] = useState(false)
   const structuredMenu = useAnimatedUnmount(showStructuredMenu, overlayExitMs('menu'))
   const [structuredMode, setStructuredMode] = useState<StructuredMode>(() => {
@@ -842,7 +842,7 @@ export function LogCore({
                   <button
                     key={fmt}
                     onClick={() => pickTsFormat(fmt)}
-                    aria-label={isLocalFormat(fmt) ? `${TIMESTAMP_FORMAT_LABELS[fmt]}, ${timeZone}` : undefined}
+                    aria-label={isLocalFormat(fmt) && timeZone ? `${TIMESTAMP_FORMAT_LABELS[fmt]}, ${timeZone}` : undefined}
                     role="radio"
                     aria-checked={tsFormat === fmt}
                     className={`w-full text-left px-3 py-1.5 text-xs ${palette.hoverBg} flex items-center justify-between gap-2 ${
@@ -851,7 +851,7 @@ export function LogCore({
                   >
                     <span className="min-w-0">
                       {TIMESTAMP_FORMAT_LABELS[fmt]}
-                      {isLocalFormat(fmt) && <span className={`block break-words text-[10px] ${palette.textSecondary}`}>{timeZone}</span>}
+                      {isLocalFormat(fmt) && timeZone && <span className={`block break-words text-[10px] ${palette.textSecondary}`}>{timeZone}</span>}
                     </span>
                     {tsFormat === fmt && <span aria-hidden className={`shrink-0 text-[10px] ${palette.textAccent}`}>✓</span>}
                   </button>

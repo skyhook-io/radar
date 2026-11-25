@@ -5,10 +5,12 @@ export function createLogTimestampFormatter(format: TimestampFormat, timeZone?: 
     return (ts: string) => formatLogTimestamp(ts, format)
   }
 
-  const clock: Intl.DateTimeFormatOptions = { timeZone, hour: '2-digit', minute: '2-digit', second: '2-digit' }
+  const clock: Intl.DateTimeFormatOptions = {
+    timeZone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }
   const formatter = new Intl.DateTimeFormat('en-US', format === 'time-local'
-    ? { ...clock, hour12: false }
-    : { ...clock, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', timeZoneName: 'longOffset' })
+    ? clock
+    : { ...clock, year: 'numeric', month: '2-digit', day: '2-digit', timeZoneName: 'longOffset' })
 
   return (ts: string) => {
     const date = new Date(ts)
