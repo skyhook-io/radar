@@ -159,6 +159,7 @@ func TestClassify(t *testing.T) {
 		{"crossplane package failed", classifyInput{Source: SourceCondition, Kind: "Provider", APIGroup: "pkg.crossplane.io", Reason: "Healthy: UnhealthyPackageRevision"}, issuesapi.CategoryCrossplaneReconcile},
 		{"generic operator condition", classifyInput{Source: SourceCondition, Kind: "Foo", APIGroup: "example.com", Reason: "Ready=False"}, issuesapi.CategoryOperatorConditionFail},
 		{"flux source repo is render_failed", classifyInput{Source: SourceCondition, Kind: "GitRepository", APIGroup: "source.toolkit.fluxcd.io", Reason: "Ready: GitOperationFailed"}, issuesapi.CategoryGitOpsRenderFailed},
+		{"flux artifact generator is render_failed", classifyInput{Source: SourceCondition, Kind: "ArtifactGenerator", APIGroup: "source.extensions.fluxcd.io", Reason: "Ready: BuildFailed"}, issuesapi.CategoryGitOpsRenderFailed},
 		{"argo non-app CRD is not sync", classifyInput{Source: SourceCondition, Kind: "AppProject", APIGroup: "argoproj.io", Reason: "Ready=False"}, issuesapi.CategoryOperatorConditionFail},
 
 		// CAPI: control-plane vs machine layer, gated on the CAPI group.

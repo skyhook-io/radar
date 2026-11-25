@@ -62,6 +62,9 @@ type CheckInput struct {
 	// ConfigObjectRefs lists ConfigMaps and Secrets referenced by non-core
 	// resources that the typed Kubernetes structs above do not cover.
 	ConfigObjectRefs []ConfigObjectRef
+	// Namespaces carry the namespace-wide radarhq.io/ignore-checks opt-outs.
+	// Nil means not provided: no namespace opt-out is applied.
+	Namespaces []*corev1.Namespace
 
 	// Crossplane resources arrive unstructured because every provider ships
 	// its own CRDs — there's no typed Go schema to share across them. The
@@ -160,11 +163,15 @@ type ScanResults struct {
 	// means some subject was left unevaluated; a gap in supplemental evidence
 	// that still lets a finding fire is stated in that finding's message.
 	MissingInputs []string `json:"missingInputs,omitempty"`
-	// IgnoreChecksAnnotation names the per-resource opt-out annotation this
-	// Radar honors. Its presence is what tells a newer UI the opt-out exists.
+	// IgnoreChecksAnnotation names the opt-out annotation this Radar honors on
+	// resources. Its presence is what tells a newer UI the opt-out exists.
 	IgnoreChecksAnnotation string `json:"ignoreChecksAnnotation,omitempty"`
+	// NamespaceIgnoreChecks reports that this scan also honored the annotation
+	// on Namespace objects, which needs a synced cluster-wide Namespace list.
+	NamespaceIgnoreChecks bool `json:"namespaceIgnoreChecks,omitempty"`
 	// AnnotationIgnoredByNamespace maps checkID → namespace → distinct subjects
-	// whose findings were dropped by IgnoreChecksAnnotation, shaped like
+	// whose findings were dropped by IgnoreChecksAnnotation on the subject or
+	// its Namespace, shaped like
 	// EvaluatedByNamespace so ApplySettings filters both the same way.
 	AnnotationIgnoredByNamespace map[string]map[string]int `json:"annotationIgnoredByNamespace,omitempty"`
 	// GroupedChecks is the per-check remediation-queue rollup (one Check per

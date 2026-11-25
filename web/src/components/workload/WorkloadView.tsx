@@ -1,3 +1,4 @@
+import { supportsWorkloadRevisions, WorkloadRevisionsButton } from './WorkloadRevisionsButton'
 import { RelatedFindingsSection } from './RelatedFindingsSection'
 import { decorateResourceDiagnose, resourceDetailRedirect, resourceDetailSlots, resourceIssueDetail, resourceLogs, resourceRendererOverrides } from '../../integrations/resourceHosts'
 import { ApplicationEvidenceAction } from '../application-evidence/ApplicationEvidenceAction'
@@ -104,6 +105,7 @@ import { TIME_RANGES, PrometheusCharts, isPrometheusSupported } from '../resourc
 import { RightsizingStrip } from '../resource/RightsizingStrip'
 import { PrometheusChartsGrid } from '../resource/PrometheusChartsGrid'
 import { DatadogSetupHint, DatadogWorkloadCharts, useDatadogWorkloadCharts, WorkloadCostRightsizing } from '../resource/DatadogWorkloadCharts'
+import { PodDebugAction } from '../resources/PodDebugAction'
 import { useNavCustomization } from '../../context/NavCustomization'
 import { RestartEventLane } from '../resource/RestartChart'
 import { WorkloadCostTab } from '../cost/WorkloadCostTab'
@@ -112,6 +114,7 @@ import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
 import { useTrafficAvailable } from '../../api/traffic'
 import { isNotFoundError, useResourceAudit, useResourceIssues, useSubjectIssues, useRadarFeature, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
 import { AuditAlerts, getRadarUpgradeRequirement, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows, getDefaultLogContainerName, getLogContainerNames, getInitContainerNames } from '@skyhook-io/k8s-ui'
+import { WorkloadLogsTab } from '../dock/WorkloadLogsTab'
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
 import { ScheduledWorkloadLogsViewer } from '../logs/ScheduledWorkloadLogsViewer'
 import { LogsViewer } from '../logs/LogsViewer'
@@ -154,7 +157,7 @@ type TabType = WorkloadTabType
 
 // The usage-report view a tab counts under. Timeline holds the resource's
 // events (it replaced the Events tab), so it counts as panel:events.
-const PANEL_USAGE_VIEWS: Partial<Record<TabType, string>> = {
+const PANEL_USAGE_VIEWS: Readonly<Partial<Record<TabType | "deploys", string>>> = {
   logs: 'panel:logs',
   yaml: 'panel:yaml',
   metrics: 'panel:metrics',
@@ -339,7 +342,8 @@ function useActionsBarProps(
   const openLogs = useOpenLogs()
   const openWorkloadLogs = useOpenWorkloadLogs()
   const openNodeTerminal = useOpenNodeTerminal()
-  const { canExec, canViewLogs, canPortForward, workloadWrites, workloadWritesPending } = useNamespacedCapabilities(namespace)
+  const { embedded } = useNavCustomization()
+  const { canExec, podDebugImage, canViewLogs, canPortForward, workloadWrites, workloadWritesPending } = useNamespacedCapabilities(namespace)
   const queryClient = useQueryClient()
   // Live forward when local+RBAC; otherwise (in-cluster/Cloud) still surface the
   // copy-paste kubectl command. The button picks live vs. copy by deployment mode.
@@ -361,7 +365,7 @@ function useActionsBarProps(
 
   const isRolloutShape = isRolloutKind(kind)
   const isRollout = isRolloutShape && group === 'argoproj.io'
-  const isRollbackKind = ['deployments', 'statefulsets', 'daemonsets'].includes(kind.toLowerCase()) || isRollout
+  const isRollbackKind = supportsWorkloadRevisions(kind, group)
   const { data: rolloutCapabilities, isPending: rolloutCapabilitiesPending } = useRolloutCapabilities(namespace, name, isRollout)
   // Restart and Rollback are the generic workload buttons, so a Rollout has to
   // withhold the callback the way promote-full does. Permissive until the probe
@@ -372,6 +376,8 @@ function useActionsBarProps(
   const canSetImages = isRolloutShape
     ? imageUpdatesSupported && isRollout && !rolloutCapabilitiesPending && rolloutCapabilities?.setImage === true
     : !workloadWritesPending && canSetWorkloadImages({ name: kind, group }, workloadWrites, imageUpdatesSupported)
+  const { support: replicaSetLogSupport } = useRadarFeature('replicaSetLogs')
+  const isAppsReplicaSet = kind === 'replicasets' && group === 'apps'
   const { support: deploymentPauseSupport } = useRadarFeature('deploymentPause')
   const canPauseDeployments = !workloadWritesPending &&
     canPauseDeployment({ name: kind, group }, workloadWrites, deploymentPauseSupport === 'supported')
@@ -429,8 +435,11 @@ function useActionsBarProps(
     canViewLogs,
     canPortForward: showPortForward,
     onOpenTerminal: openTerminal,
+    renderPodDebug: podDebugImage && !embedded ? (pod: any) => <PodDebugAction key={pod.metadata.uid} pod={pod} defaultImage={podDebugImage} /> : undefined,
     onOpenLogs: openLogs,
     onOpenWorkloadLogs: openWorkloadLogs,
+    replicaSetLogs: isAppsReplicaSet && replicaSetLogSupport === 'supported',
+    replicaSetLogTab: isAppsReplicaSet && replicaSetLogSupport !== 'unsupported',
     onOpenNodeTerminal: openNodeTerminal,
     onCopyCommand: (text: string, message: string, event: React.MouseEvent) =>
       showCopied(text, message, event),
@@ -595,7 +604,7 @@ export function WorkloadView({
   // recount the same open tab: the drawer mounts hidden WorkloadView layers
   // for expand-on-hover and crossfades.
   const handleTabChange = useCallback(
-    (tab: TabType, opts?: { replace?: boolean }) => {
+    (tab: TabType | 'deploys', opts?: { replace?: boolean }) => {
       const panel = PANEL_USAGE_VIEWS[tab]
       if (panel && tab !== migratedTab) recordUsageEvent({ type: 'view', name: panel })
       const params = new URLSearchParams(searchParams)
@@ -1310,6 +1319,7 @@ export function WorkloadView({
         renderLogsTab={(props) => (
           <LogsTabContent
             {...props}
+            replicaSetLogs={baseActionsBarProps.replicaSetLogs || (baseActionsBarProps.replicaSetLogTab && props.pods.length === 0)}
             resourceLoading={resourceLoading}
             resourceError={resourceError}
             group={effectiveGroup}
@@ -1408,6 +1418,12 @@ export function WorkloadView({
               </div>
             )
             : undefined}
+        timelineActions={(supportsWorkloadRevisions(apiKind, effectiveGroup) || rest.extraTabs?.some(tab => tab.id === 'deploys')) && (
+          <div className="flex flex-wrap items-center gap-3 border-b border-theme-border px-4 py-2">
+            <WorkloadRevisionsButton kind={apiKind} group={effectiveGroup} namespace={namespace} name={name} />
+            {rest.extraTabs?.some(tab => tab.id === 'deploys') && <button type="button" className="text-xs text-accent-text hover:underline" onClick={() => handleTabChange('deploys')}>View application deploys</button>}
+          </div>
+        )}
         renderOverviewExtra={({ kind: k, namespace: ns, name: n, group: g, context }) => {
           // Network entry kinds (Service/Ingress/Route/Gateway) ARE the diagnosis
           // target: DiagnoseInlineSection renders in the drawer, no hint. Workload
@@ -1423,6 +1439,7 @@ export function WorkloadView({
           ) : null
           return (
           <>
+            <WorkloadRevisionsButton kind={k} group={g} namespace={ns} name={n} />
             {diagnoseInline}
             <ApplicationEvidenceAction kind={k} namespace={ns} name={n} group={g} uid={resource?.metadata?.uid ?? ''} />
             {diagnoseHint}
@@ -1606,6 +1623,7 @@ const SCHEDULED_LOG_KINDS = new Set([
 ])
 
 function LogsTabContent({
+  replicaSetLogs,
   kind,
   apiKind,
   group,
@@ -1623,6 +1641,7 @@ function LogsTabContent({
   resourceLoading,
   resourceError,
 }: {
+  replicaSetLogs: boolean
   kind: string
   apiKind: string
   group?: string
@@ -1674,7 +1693,8 @@ function LogsTabContent({
     )
   }
 
-  // Workload kinds with stable pod selectors use the aggregated workload logs viewer
+  if (replicaSetLogs) return <WorkloadLogsTab namespace={namespace} workloadKind={apiKind} workloadName={name} />
+
   if (WORKLOAD_LOG_KINDS.has(kind) && (kind !== 'Job' || isCoreBatchJob(apiKind, group))) {
     return (
       <div className="h-full">
@@ -1701,7 +1721,7 @@ function LogsTabContent({
     )
   }
 
-  // Other kinds with associated pods (Jobs, CronJobs, ReplicaSets, etc.) — pod selector + LogsViewer
+  // Other resources with associated Pods offer their individual logs.
   return (
     <MultiPodLogsTab
       pods={pods}

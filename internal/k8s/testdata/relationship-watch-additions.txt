@@ -11,6 +11,7 @@ keda.sh/v1alpha1, Resource=clustertriggerauthentications
 keda.sh/v1alpha1, Resource=triggerauthentications
 serving.knative.dev/v1beta1, Resource=domainmappings
 sinks.knative.dev/v1alpha1, Resource=jobsinks
+source.extensions.fluxcd.io/v1beta1, Resource=artifactgenerators
 source.toolkit.fluxcd.io/v1, Resource=buckets
 source.toolkit.fluxcd.io/v1, Resource=externalartifacts
 source.toolkit.fluxcd.io/v1, Resource=helmcharts

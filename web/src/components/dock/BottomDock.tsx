@@ -20,6 +20,7 @@ function renderTabContent(tab: DockTab, isActive: boolean, viewNamespaces: strin
         isActive={isActive}
         shell={tab.shell}
         note={tab.sessionNote}
+        debugSession={tab.debugSession}
       />
     )
   }

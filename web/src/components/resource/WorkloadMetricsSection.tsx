@@ -58,6 +58,7 @@ export function WorkloadMetricsSection(props: Props) {
   const memoryNameMatched = usePrometheusResourceMetrics(props.kind, props.namespace, props.name, 'memory', props.range, false).data;
   const nameMatchedScope = leastCertainScope(nameMatchedFallbacks.map((key) => (key === 'cpu' ? cpuNameMatched : memoryNameMatched)?.clusterScope));
   const nameMatchedNote = NAME_MATCHED_CLUSTER_NOTE[nameMatchedScope];
+  const gke = data?.resourceSource === "gke";
   const resourceNotice = sameResourceScope ? sharedPanelNotice([data?.panels.cpu, data?.panels.memory, data?.panels.throttling]) : undefined;
   const hasHistoricalTotals = (['cpu', 'memory'] as const).some((key) => data?.history[key]?.mode === 'workload-history');
   const hasResourceDetails = hasHistoricalTotals || data?.history.throttling?.mode === 'workload-history' || resourceNotice?.state === 'stale';
@@ -71,20 +72,20 @@ export function WorkloadMetricsSection(props: Props) {
       </div>
       {helpOpen && <WorkloadMetricsHelpDialog kind={props.kind} namespace={props.namespace} name={props.name} range={props.range} data={data} pending={isLoading || isPlaceholderData} error={error} onClose={() => setHelpOpen(false)} />}
       {data?.scopeNotice && <p role="status" className={`text-xs ${SEVERITY_TEXT.warning}`}>{data.scopeNotice}</p>}
-      {data?.state === 'partial' && data.reason && <p role="status" className={`text-xs ${SEVERITY_TEXT.warning}`}>{data.reason}</p>}
+      {(data?.state === 'partial' || (gke && (data?.state === 'unavailable' || data?.state === 'error'))) && data.reason && <p role="status" className={`text-xs ${SEVERITY_TEXT.warning}`}>{data.reason}</p>}
       {isPlaceholderData && <p role="status" className="text-xs text-theme-text-secondary">Loading selected request source… Resources show previous samples.</p>}
-      <WorkloadRequests data={data} isLoading={isLoading || isPlaceholderData} error={error} setSource={setSource} />
+      {!gke && <WorkloadRequests data={data} isLoading={isLoading || isPlaceholderData} error={error} setSource={setSource} />}
       {props.workloadTotals}
       <section aria-label="Workload resource pressure">
         {(data?.panels.cpu || data?.panels.memory || data?.panels.throttling) && <div className="mb-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <h3 className="text-sm font-semibold text-theme-text-primary">{props.workloadTotals ? 'Prometheus resources' : 'Resources'}</h3>
+          <h3 className="text-sm font-semibold text-theme-text-primary">{gke ? 'GKE system metrics' : props.workloadTotals ? 'Prometheus resources' : 'Resources'}</h3>
           {sameResourceScope && <HistoryNotice scope={data?.history.cpu} omitReason={data?.panels.cpu?.reason} />}
         </div>}
         {props.restartLane}
         {resourceNotice && <div className="mb-2"><MetricNotice panel={resourceNotice} label="CPU, memory and throttling" /></div>}
-        <div className="metrics-chart-grid">
+        <div className={gke ? "metrics-chart-grid metrics-chart-pair" : "metrics-chart-grid"}>
           {data?.panels.cpu && <WorkloadChart label="CPU usage" population={data.history.cpu?.mode === 'workload-history' ? 'workload' : 'per Pod'} panel={data.panels.cpu} window={data} scope={sameResourceScope ? undefined : data.history.cpu} referenceLines={data.history.cpu?.mode === 'current-pods' ? props.cpuReferenceLines : undefined} sharedNotice={!!resourceNotice} />}
-          {data?.panels.memory && <WorkloadChart label="Memory working set" population={data.history.memory?.mode === 'workload-history' ? 'workload' : 'per Pod'} panel={data.panels.memory} window={data} scope={sameResourceScope ? undefined : data.history.memory} referenceLines={data.history.memory?.mode === 'current-pods' ? props.memoryReferenceLines : undefined} sharedNotice={!!resourceNotice} />}
+          {data?.panels.memory && <WorkloadChart label={data.panels.memory.source === "gke" ? "Non-evictable memory" : "Memory working set"} population={data.history.memory?.mode === 'workload-history' ? 'workload' : 'per Pod'} panel={data.panels.memory} window={data} scope={sameResourceScope ? undefined : data.history.memory} referenceLines={data.history.memory?.mode === 'current-pods' ? props.memoryReferenceLines : undefined} sharedNotice={!!resourceNotice} />}
           {data?.panels.throttling && <WorkloadChart
             className="metrics-chart-wide"
             label="CPU throttled periods"
@@ -411,6 +412,8 @@ function PodComparison({
     const value = values[metric].get(pod);
     return value == null ? "—" : formatMetricValue(value, unit);
   };
+  const memoryLabel = memory?.source === "gke" ? "Non-evictable memory" : "Memory";
+  const showThrottle = !!throttle || cpu?.source !== "gke";
   const comparisonPanels = [{ label: 'CPU', panel: cpu }, { label: 'Memory', panel: memory }, { label: 'Throttling', panel: throttle }];
   const pending = comparisonPanels.filter(({ panel }) => panel?.state === 'detecting');
   const notices = new Map<string, { labels: string[]; panel: WorkloadMetricPanel }>();
@@ -440,7 +443,7 @@ function PodComparison({
           <thead className="text-theme-text-tertiary">
             <tr>
               <th className="py-2 font-medium">Pod</th>
-              {(["cpu", "memory", "throttling"] as const).map((metric) => (
+              {(["cpu", "memory", "throttling"] as const).filter((metric) => metric !== "throttling" || showThrottle).map((metric) => (
                 <th
                   key={metric}
                   className="py-2 pl-3 text-right font-medium"
@@ -450,7 +453,7 @@ function PodComparison({
                     {metric === "cpu"
                       ? "CPU"
                       : metric === "memory"
-                        ? "Memory"
+                        ? memoryLabel
                         : "Throttled"}
                     {sort === metric ? " ↓" : ""}
                   </button>
@@ -472,9 +475,9 @@ function PodComparison({
                 <td className="pl-3 text-right tabular-nums">
                   {show(pod, "memory", "bytes")}
                 </td>
-                <td className="pl-3 text-right tabular-nums">
+                {showThrottle && <td className="pl-3 text-right tabular-nums">
                   {show(pod, "throttling", "percent")}
-                </td>
+                </td>}
               </tr>
             ))}
           </tbody>

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useCallback, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useCallback, useState, type ReactNode } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -25,6 +25,7 @@ export interface TerminalTabProps {
   createSession: (containerName: string) => Promise<{ wsUrl: string }>
   /** Optional: creates a debug (ephemeral) container. If omitted, the debug button is hidden. */
   createDebugContainer?: (targetContainer: string) => Promise<{ containerName: string }>
+  renderDebugAction?: (targetContainer: string, podUID: string) => ReactNode
   /** Optional: a short line in the toolbar describing the session. */
   note?: string
   /** Executable supplied by the host session callback; pins its target container. */
@@ -39,6 +40,7 @@ export function TerminalTab({
   isActive = true,
   createSession,
   createDebugContainer,
+  renderDebugAction,
   note,
   command,
 }: TerminalTabProps) {
@@ -59,6 +61,7 @@ export function TerminalTab({
   const [isConnecting, setIsConnecting] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [errorType, setErrorType] = useState<string | null>(null)
+  const [failedPodUID, setFailedPodUID] = useState<string>()
   const [isCreatingDebug, setIsCreatingDebug] = useState(false)
   const [selectedContainer, setSelectedContainer] = useState(containerName)
   const [hasSelection, setHasSelection] = useState(false)
@@ -75,6 +78,7 @@ export function TerminalTab({
     if (!terminalRef.current) return
 
     cancelledRef.current = false
+    setFailedPodUID(undefined)
     setIsConnecting(true)
     setError(null)
     setErrorType(null)
@@ -209,6 +213,7 @@ export function TerminalTab({
           } else if (msg.type === 'exit') {
             xterm.write('\r\n\x1b[2m[Process exited]\x1b[0m\r\n')
           } else if (msg.type === 'error' && msg.data) {
+            setFailedPodUID(msg.podUID)
             setError(msg.data)
             // Support both camelCase (radar) and snake_case (conduit) error type field
             setErrorType(msg.errorType ?? msg.error_type ?? 'exec_error')
@@ -340,12 +345,13 @@ export function TerminalTab({
                 </div>
               ) : <div className="text-xs text-theme-text-tertiary mb-4 max-w-md">
                 Container <span className="font-mono text-theme-text-secondary">{selectedContainer}</span> doesn&apos;t
-                have a shell (/bin/sh). This is common with distroless or minimal container images
-                {containers.length > 1 ? ' — try another container above, or' : '. You can'} create a
-                debug container to troubleshoot.
+                have a shell (/bin/sh). This is common with distroless or minimal container images.
+                {containers.length > 1 && ' Try another container above.'}
+                {createDebugContainer && ' You can create a debug container to troubleshoot.'}
               </div>}
               <div className="flex gap-2">
-                {!command && createDebugContainerRef.current && (
+                {!command && failedPodUID && renderDebugAction?.(selectedContainer, failedPodUID)}
+                {!command && !renderDebugAction && createDebugContainerRef.current && (
                   <button
                     onClick={handleCreateDebugContainer}
                     disabled={isCreatingDebug}

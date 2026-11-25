@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 
+	"github.com/skyhook-io/radar/internal/issuecorrelation"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
@@ -32,6 +33,15 @@ func initCorrelationStore(t *testing.T) timeline.EventStore {
 	// The timeline fills only while connected, and get_changes refuses to
 	// answer otherwise.
 	setConnectedForTest(t)
+	// Correlation claims nothing about a subject kind Radar doesn't collect,
+	// so a test that brings no cache of its own gets an empty one, as a
+	// connected Radar always has.
+	if k8s.GetResourceCache() == nil {
+		if err := k8s.InitTestResourceCache(k8sfake.NewSimpleClientset()); err != nil {
+			t.Fatalf("InitTestResourceCache: %v", err)
+		}
+		t.Cleanup(k8s.ResetTestState)
+	}
 	return timeline.GetStore()
 }
 
@@ -475,7 +485,7 @@ func TestIssueCorrelation_WorstCasePayloadBounded(t *testing.T) {
 	var iss []issuesapi.Issue
 	for i := 0; i < correlationIssueCap; i++ {
 		issue := criticalIssue("Deployment", fmt.Sprintf("dep-%d", i))
-		for c := 0; c < correlationChangeCap; c++ {
+		for c := 0; c < issuecorrelation.ChangeCap; c++ {
 			change := issuesapi.RecentChange{
 				Source: "informer", Kind: "Deployment", Namespace: "shop",
 				Name:           fmt.Sprintf("dep-%d", i),
@@ -483,7 +493,7 @@ func TestIssueCorrelation_WorstCasePayloadBounded(t *testing.T) {
 				ChangeCategory: issuesapi.ChangeCategorySpecConfig,
 				Summary:        "spec changed: containers[app].image, containers[app].resources, replicas, strategy, template.metadata.labels",
 			}
-			for f := 0; f < correlationFieldLimit; f++ {
+			for f := 0; f < issuecorrelation.FieldLimit; f++ {
 				change.Fields = append(change.Fields, issuesapi.ChangeField{
 					Path:     fmt.Sprintf("spec.template.spec.containers[app].env[FEATURE_FLAG_%d].value", f),
 					OldValue: "a-realistically-long-previous-configuration-value-1234567890",
@@ -503,4 +513,66 @@ func TestIssueCorrelation_WorstCasePayloadBounded(t *testing.T) {
 		t.Fatalf("worst-case correlation payload = %d bytes, exceeds %d — correlation caps no longer bound the response", len(data), maxBytes)
 	}
 	t.Logf("worst-case correlation payload: %d bytes", len(data))
+}
+
+// What the tool says about a source the caller can't list must not depend on
+// whether that source changed: a Service they can't list, or a ConfigMap a
+// workload they can read references, gets the same answer either way, and
+// never no_recent_changes.
+func TestAttachIssueChangeCorrelation_DeniedSourceSameAnswerEitherWay(t *testing.T) {
+	client := k8sfake.NewSimpleClientset(&appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "flagd", Namespace: "shop"},
+		Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+			Volumes: []corev1.Volume{{Name: "config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "flagd-config"},
+			}}}},
+			Containers: []corev1.Container{{Name: "flagd", Image: "flagd:v1"}},
+		}}},
+	})
+	if err := k8s.InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	ctx := withClusterAdmin(t, "deploy-reader")
+	t.Cleanup(getPermCache().Invalidate)
+	perms := getPermCache().Get("deploy-reader", nil)
+	perms.SetCanI("list", "apps", "deployments", "shop", true)
+	perms.SetCanI("list", "", "services", "shop", false)
+	perms.SetCanI("list", "", "configmaps", "shop", false)
+
+	answer := func(changed bool) string {
+		store := initCorrelationStore(t)
+		if changed {
+			for _, e := range []timeline.TimelineEvent{
+				{ID: "svc", Kind: "Service", APIVersion: "v1", Name: "cart",
+					Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "spec.selector.app", OldValue: "cart", NewValue: "cartt"}}}},
+				{ID: "cm", Kind: "ConfigMap", APIVersion: "v1", Name: "flagd-config",
+					Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "data.flags", OldValue: "off", NewValue: "on"}}}},
+			} {
+				e.Timestamp, e.Namespace, e.EventType = time.Now().Add(-5*time.Minute), "shop", timeline.EventTypeUpdate
+				e.Source, e.ClusterContext = timeline.SourceInformer, k8s.ActiveClusterContext()
+				if err := store.Append(context.Background(), e); err != nil {
+					t.Fatalf("append: %v", err)
+				}
+			}
+		}
+		svc := warningIssue("Service", "cart")
+		deploy := criticalIssue("Deployment", "flagd")
+		deploy.Group = "apps"
+		resp := issues.ListResponse{Issues: []issuesapi.Issue{deploy, svc}}
+		attachIssueChangeCorrelation(ctx, &resp)
+		for _, iss := range resp.Issues {
+			if iss.NoRecentChanges != nil || len(iss.CorrelatedChanges) > 0 {
+				t.Fatalf("changed=%v: denied source produced an answer: %+v", changed, iss)
+			}
+		}
+		data, err := json.Marshal(resp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	if quiet, changed := answer(false), answer(true); quiet != changed {
+		t.Fatalf("answer depends on hidden changes:\nquiet:   %s\nchanged: %s", quiet, changed)
+	}
 }

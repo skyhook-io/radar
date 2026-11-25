@@ -43,12 +43,47 @@ func TestMetricsHistoryStopCancelsPodList(t *testing.T) {
 
 		start := time.Now()
 		store.Stop()
+		store.wg.Wait()
 		if elapsed := time.Since(start); elapsed != 0 {
 			t.Errorf("Stop advanced the test clock by %s while the pod LIST was blocked", elapsed)
 		}
 		health := store.CollectionHealth()
 		if health.PodMetrics != (MetricsSourceHealth{}) || health.NodeMetrics != (MetricsSourceHealth{}) {
 			t.Errorf("cancelled poll updated source health: %+v", health)
+		}
+	})
+}
+
+func TestMetricsHistoryStopWhileResolving(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		resolving := make(chan struct{})
+		release := make(chan struct{})
+		client := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
+		store := NewMetricsHistoryStoreWithResolver(client, func(string) (schema.GroupVersionResource, bool) {
+			close(resolving)
+			<-release
+			return schema.GroupVersionResource{}, false
+		})
+		store.OnError = func(_, _, format string, args ...any) { t.Errorf(format, args...) }
+		store.Start()
+		<-resolving
+		before := store.CollectionHealth()
+		stopped := make(chan struct{})
+		go func() {
+			store.Stop()
+			store.Stop()
+			close(stopped)
+		}()
+		synctest.Wait()
+		select {
+		case <-stopped:
+		default:
+			t.Error("Stop waited for the blocked metrics resolver")
+		}
+		close(release)
+		store.wg.Wait()
+		if after := store.CollectionHealth(); after != before {
+			t.Errorf("released resolver changed health from %+v to %+v", before, after)
 		}
 	})
 }
