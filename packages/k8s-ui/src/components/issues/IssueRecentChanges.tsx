@@ -123,9 +123,9 @@ function kindList(kinds: { group?: string; kind: string }[] | undefined): string
 }
 
 // complete_since is the boundary for every kind the answer depends on (a kind
-// can start being watched after Radar does), and only callers who read every
-// namespace get it. Without it, the line names no time rather than Radar's
-// own start, which can be earlier than the gap.
+// can start being watched after Radar does). After an eviction only callers
+// who read every namespace get it. Without it, the line names no time rather
+// than Radar's own start, which can be earlier than the gap.
 function historyLine(reason: string, completeSince: string | undefined): string | null {
   if (reason === 'observation_started_late') {
     const since = clockTime(completeSince);

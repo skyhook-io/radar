@@ -5,7 +5,8 @@ import { canonicalReadCode, gapReasonText, READ_ACTIONS, readActionFor } from '.
 /**
  * Whether Radar holds every change since a workload existed, as Radar's
  * issuesapi.HistoryCoverage serializes it. Present only when incomplete;
- * complete_since is sent only to callers who can read every namespace.
+ * when events were evicted, complete_since is sent only to callers who can
+ * read every namespace.
  * An absent coverage value means complete history or an older Radar; it
  * does not establish completeness on its own.
  */
