@@ -121,6 +121,20 @@ describe('Metrics backend choice', () => {
     expect(container.textContent).not.toContain('This cluster still reads from OpenObserve.')
   })
 
+  it('falls back to Prometheus on a failed load, then follows the cluster match once Retry succeeds', async () => {
+    replies['GET /integrations/openobserve'] = [{ status: 500, body: { error: 'Radar is restarting' } }, { body: matched() }]
+    act(() => root.render(
+      <MetricsBackendSwitch onChanged={vi.fn()} status={<span>Status block</span>}
+        prometheus={() => <div data-testid="prometheus-form">Prometheus form</div>} />
+    ))
+    await flush()
+    expect(container.textContent).toContain('Radar is restarting')
+    expect(radio('Prometheus-compatible').getAttribute('aria-checked')).toBe('true')
+    await click(Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((b) => b.textContent === 'Retry'))
+    expect(radio('OpenObserve').getAttribute('aria-checked')).toBe('true')
+    expect(container.textContent).toContain('Matched by cluster ID (k8s_cluster_uid=uid-123)')
+  })
+
   it('shows the choice and status read-only when locked', async () => {
     await mount(matched({ clusters: [{ context: 'a', by: 'id' }, { context: 'b', by: 'name' }] }), { locked: true })
     expect(container.querySelectorAll('input, textarea, select')).toHaveLength(0)

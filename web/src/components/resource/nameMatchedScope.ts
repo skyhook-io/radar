@@ -13,7 +13,7 @@ const RANK: NameMatchedScope[] = ["caveat", "withheld", "asserted", "openobserve
 
 // Radar serving metrics from OpenObserve reports the single-cluster state
 // (for older UIs) with this note: the source itself scopes every query.
-const OPENOBSERVE_NOTE = "Scoped to this cluster through OpenObserve";
+export const OPENOBSERVE_NOTE = "Scoped to this cluster through OpenObserve";
 
 function classify(scope: ClusterScope | null | undefined): NameMatchedScope {
   if (scope?.state === "scoped_configured" || scope?.state === "scoped_verified") return "scoped";

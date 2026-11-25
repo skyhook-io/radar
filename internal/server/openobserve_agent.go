@@ -35,6 +35,9 @@ func (s *Server) handleMetricsPodSample(w http.ResponseWriter, r *http.Request) 
 		http.NotFound(w, r)
 		return
 	}
+	if !s.requireConnected(w) {
+		return
+	}
 	cache := k8s.GetResourceCache()
 	if cache == nil || cache.Pods() == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Pods are not available yet")

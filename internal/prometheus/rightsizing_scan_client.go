@@ -34,6 +34,17 @@ func (t scanQueryTransport) Do(ctx context.Context, method, path string, params 
 	return t.HTTPTransport.Do(ctx, method, path, params)
 }
 
+// A relay adds the cluster filter after this point, so the final URL length
+// is unknown here; both relays and OpenObserve accept the POST form.
+type relayScanQueryTransport struct{ prom.Transport }
+
+func (t relayScanQueryTransport) Do(ctx context.Context, method, path string, params url.Values) ([]byte, error) {
+	if method == http.MethodGet && (path == "/api/v1/query" || path == "/api/v1/query_range") {
+		method = http.MethodPost
+	}
+	return t.Transport.Do(ctx, method, path, params)
+}
+
 // scanQuerier runs a scan's queries on one store handle; conn is the
 // connection it was taken from, which the scan's cluster scope check must
 // have run on.
@@ -55,6 +66,8 @@ func (c *Client) newScanQuerier(ctx context.Context, at time.Time) (*scanQuerier
 	transport := c.newTransportLocked(c.baseURL, c.basePath, rightsizingScanHTTPClient, 0)
 	if direct, ok := transport.(*prom.HTTPTransport); ok {
 		transport = scanQueryTransport{direct}
+	} else {
+		transport = relayScanQueryTransport{transport}
 	}
 	return &scanQuerier{client: prom.NewClient(transport), at: at, conn: c.snapshotLocked()}, nil
 }

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,6 +22,7 @@ import (
 type fakeRelayTransport struct {
 	mu       sync.Mutex
 	paths    []string
+	methods  []string
 	timeouts []time.Duration
 	err      error
 }
@@ -35,10 +37,11 @@ func (f *fakeRelayTransport) build(timeout time.Duration, _ int64) prom.Transpor
 type relayTransportFunc struct{ f *fakeRelayTransport }
 
 func (t relayTransportFunc) Address() string { return "fake relay" }
-func (t relayTransportFunc) Do(_ context.Context, _, path string, _ url.Values) ([]byte, error) {
+func (t relayTransportFunc) Do(_ context.Context, method, path string, _ url.Values) ([]byte, error) {
 	t.f.mu.Lock()
 	defer t.f.mu.Unlock()
 	t.f.paths = append(t.f.paths, path)
+	t.f.methods = append(t.f.methods, method)
 	if t.f.err != nil {
 		return nil, t.f.err
 	}
@@ -119,6 +122,13 @@ func TestRelayServesEveryPathAndNeverReachesPrometheus(t *testing.T) {
 	}
 	if _, err := q.Query(ctx, "up"); err != nil {
 		t.Fatalf("scan query through relay: %v", err)
+	}
+	// Scan queries go as POST: the relay lengthens them with the cluster filter.
+	f.mu.Lock()
+	methods := slices.Clone(f.methods)
+	f.mu.Unlock()
+	if len(methods) != 3 || methods[0] != http.MethodGet || methods[2] != http.MethodPost {
+		t.Fatalf("relay methods = %v, want GET for ordinary queries and POST for the scan", methods)
 	}
 	// Reset (a context switch) reconnects to the relay, not by discovery.
 	Reset()

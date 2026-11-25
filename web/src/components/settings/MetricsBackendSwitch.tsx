@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import {
   getOpenObserveState,
@@ -38,7 +38,7 @@ export function MetricsBackendSwitch({
   const [data, setData] = useState<OpenObserveState | null>(null)
   const [loadError, setLoadError] = useState('')
   const [retry, setRetry] = useState(0)
-  const [choice, setChoice] = useState<Backend | null>(null)
+  const [picked, setChoice] = useState<Backend | null>(null)
   const [promDirty, setPromDirty] = useState(false)
   const [promBusy, setPromBusy] = useState(false)
   const [ooDirty, setOoDirty] = useState(false)
@@ -46,6 +46,7 @@ export function MetricsBackendSwitch({
   const [releasing, setReleasing] = useState(false)
   const [releaseError, setReleaseError] = useState('')
   const busy = promBusy || ooBusy || releasing
+  const choice: Backend | null = picked ?? (loadError ? 'prometheus' : null)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -59,13 +60,25 @@ export function MetricsBackendSwitch({
       .catch((error: unknown) => {
         if (controller.signal.aborted) return
         setLoadError(error instanceof Error ? error.message : String(error))
-        setChoice((current) => current ?? 'prometheus')
       })
     return () => controller.abort()
   }, [retry])
 
   useEffect(() => onDirtyChange?.(promDirty || ooDirty), [promDirty, ooDirty, onDirtyChange])
   useEffect(() => onBusyChange?.(busy), [busy, onBusyChange])
+
+  // The Prometheus form restores focus in the same commit it reports idle, so
+  // the dialog must hear it then: a parent still marked busy keeps the pane inert.
+  const reported = useRef({ promDirty: false, ooDirty: false, promBusy: false, ooBusy: false, releasing: false })
+  reported.current = { promDirty, ooDirty, promBusy, ooBusy, releasing }
+  const promDirtyChange = useCallback((dirty: boolean) => {
+    setPromDirty(dirty)
+    onDirtyChange?.(dirty || reported.current.ooDirty)
+  }, [onDirtyChange])
+  const promBusyChange = useCallback((next: boolean) => {
+    setPromBusy(next)
+    onBusyChange?.(next || reported.current.ooBusy || reported.current.releasing)
+  }, [onBusyChange])
 
   const releaseCluster = useCallback(async () => {
     const next = await removeOpenObserveCluster(data?.cluster.uid)
@@ -128,7 +141,7 @@ export function MetricsBackendSwitch({
         )}
         {locked
           ? choice === 'prometheus' && statusRow
-          : prometheus({ status: choice === 'prometheus' ? status : undefined, onDirtyChange: setPromDirty, onBusyChange: setPromBusy })}
+          : prometheus({ status: choice === 'prometheus' ? status : undefined, onDirtyChange: promDirtyChange, onBusyChange: promBusyChange })}
       </div>
       <div className={clsx(choice !== 'openobserve' && 'hidden')} inert={choice !== 'openobserve' || undefined}>
         {data ? (

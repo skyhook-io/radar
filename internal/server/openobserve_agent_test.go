@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/cloud"
+	"github.com/skyhook-io/radar/internal/k8s"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -54,6 +56,20 @@ func TestMetricsSourceRefreshInsideTunnel(t *testing.T) {
 	cloud.AuthenticatedTunnelHandler(http.HandlerFunc(s.handleMetricsSourceRefresh)).ServeHTTP(w, req)
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("got %d, want 204", w.Code)
+	}
+}
+
+func TestMetricsPodSampleRefusedWhileDisconnected(t *testing.T) {
+	prev := k8s.GetConnectionStatus()
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected, Error: "apiserver unreachable"})
+	t.Cleanup(func() { k8s.SetConnectionStatus(prev) })
+	s := &Server{}
+	req := httptest.NewRequest(http.MethodGet, "/api/agent/metrics-pod-sample", nil)
+	req = req.WithContext(auth.ContextWithUser(req.Context(), &auth.User{Username: "owner"}))
+	w := httptest.NewRecorder()
+	cloud.AuthenticatedTunnelHandler(http.HandlerFunc(s.handleMetricsPodSample)).ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "Not connected to cluster") {
+		t.Fatalf("got %d %s, want 503 not connected", w.Code, w.Body.String())
 	}
 }
 
