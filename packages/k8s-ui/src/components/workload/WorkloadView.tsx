@@ -402,30 +402,6 @@ type WorkloadViewBaseProps = {
   subheader?: ReactNode
   /** Expanded view: tab ids in display order; tabs not listed follow in their usual order. */
   tabOrder?: string[]
-  /** Expanded view: a line directly under the tabs. Hidden if the workload was deleted. */
-  tabHeader?: ReactNode
-  /** Expanded view: leave out the Overview's generic stats. For replicated workloads, rollout activity still appears above the Overview. */
-  hideOverviewStats?: boolean
-  /**
-   * Expanded Deployment, StatefulSet, and DaemonSet overview: leave out
-   * Kubernetes configuration already shown by the host. Keeps observed
-   * serving and runtime state, including addresses and replica counts.
-   */
-  hideOverviewConfig?: boolean
-  /**
-   * Expanded Deployment, StatefulSet, and DaemonSet overview: use one column of cards inside this
-   * container class (e.g. "mx-auto w-full max-w-5xl"), the way a host's own
-   * tabs are, instead of Radar's grid with its side columns.
-   */
-  overviewColumnClassName?: string
-  /**
-   * Expanded view: which events the Overview's Recent activity keeps (e.g. a
-   * host that drops autoscaler condition churn). The Timeline tab keeps all.
-   */
-  overviewActivityFilter?: (event: TimelineEvent) => boolean
-  /** Expanded view: leave out these built-in tabs. Fallback is the replacement,
-   * then visible Overview, then the first visible tab in tab order. */
-  hiddenTabs?: WorkloadTabType[]
   /** Expanded view: relabel, lead, or replace the whole "Spec & status" body. */
   specTab?: { label?: string; icon?: ReactNode; lead?: ReactNode; render?: () => ReactNode }
   /** Domain actions rendered in the header (drawer and expanded). */
@@ -612,12 +588,6 @@ export function WorkloadView({
   extraTabs,
   extraTabsState,
   tabOrder,
-  hiddenTabs,
-  tabHeader,
-  hideOverviewStats,
-  hideOverviewConfig,
-  overviewColumnClassName,
-  overviewActivityFilter,
   specTab,
   subheader,
   renderHeaderActions,
@@ -829,12 +799,6 @@ export function WorkloadView({
   const overviewEvents = resourceEvents.length > 0 ? resourceEvents : (resourceFocusedK8sEvents ?? [])
   const overviewEventsLoading = resourceEvents.length > 0 ? eventsLoading : resourceFocusedEventsLoading
   const overviewEventsError = resourceEvents.length > 0 ? undefined : resourceFocusedK8sError
-  const activityEvents = useMemo(() => (overviewActivityFilter ? overviewEvents.filter(overviewActivityFilter) : overviewEvents), [overviewEvents, overviewActivityFilter])
-  const activityUpdates = useMemo(
-    () => (overviewActivityFilter && resourceFocusedUpdates ? resourceFocusedUpdates.filter(overviewActivityFilter) : resourceFocusedUpdates),
-    [resourceFocusedUpdates, overviewActivityFilter],
-  )
-
   // Get pods from relationships and hierarchy
   const childPods = useMemo(() => {
     if (resourceLanes.length === 0) return []
@@ -1114,12 +1078,11 @@ export function WorkloadView({
     { id: 'cost', label: 'Cost', icon: <Coins className="w-4 h-4" />, hidden: !costTabVisible },
     { id: 'yaml', label: 'YAML', icon: <FileText className="w-4 h-4" /> },
   ]
-  const shownTabs = expanded && hiddenTabs?.length ? tabs.map((t) => (hiddenTabs.some((id) => id === t.id) ? { ...t, hidden: true } : t)) : tabs
   const registeredExtraTabs = expanded
     ? offeredExtraTabs?.filter((tab) => !resourceGone || tab.requiresLiveResource !== undefined)
     : undefined
   const suspendedTabIds = new Set(registeredExtraTabs?.filter(({ id }) => !extraTabsForState?.some((tab) => tab.id === id)).map(({ id }) => id))
-  const mergedTabs = mergeExtraTabs(shownTabs, registeredExtraTabs).map((tab) => suspendedTabIds.has(tab.id) ? { ...tab, hidden: true } : tab)
+  const mergedTabs = mergeExtraTabs(tabs, registeredExtraTabs).map((tab) => suspendedTabIds.has(tab.id) ? { ...tab, hidden: true } : tab)
   const allTabs = orderById(mergedTabs, expanded ? tabOrder : undefined)
   const tabIsVisible = (id: TabType) => allTabs.some((tab) => tab.id === id && !tab.hidden)
   const tabTarget = (id: WorkloadTabType) => tabIsVisible(id) ? id : expanded ? extraTabsForState?.find((tab) => tab.replaces === id)?.id : undefined
@@ -1145,7 +1108,7 @@ export function WorkloadView({
     requestedTab !== fallbackTab &&
     !requestedTabAvailable &&
     (
-      (expanded && (replacementTab !== undefined || hiddenTabs?.some((tab) => tab === requestedTab))) ||
+      replacementTab !== undefined ||
       (expanded && extraTabsState === 'ready' && !resourceLoading && !isBuiltInTab(requestedTab) && !requestedHostTabKnown) ||
       (requestedTab === 'spec' && !!resource && !resourceLoading && !expandedSummary) ||
       (requestedTab === 'topology' && topologyTabHidden) ||
@@ -1550,9 +1513,7 @@ export function WorkloadView({
     >
       <div className="flex h-full min-h-0 flex-col">
         {deletedNotice && <div className="shrink-0 px-4 pt-4">{deletedNotice}</div>}
-        {expanded && !resourceGone && tabHeader && <div className="shrink-0 px-4 pt-4 empty:hidden">{tabHeader}</div>}
-        {/* On the Overview only when its stats strip, which says the same, is left out. */}
-        {!resourceGone && (effectiveTab !== 'overview' || (expanded && hideOverviewStats && isRuntimeWorkloadOverviewKind(apiKind, group) && runtimeOverviewShape(apiKind) === 'replicated' && !expandedSummary && !expandedOverview)) && rolloutActivity && (rolloutActivity.phase !== 'idle' || recentImageSave) && (
+        {!resourceGone && effectiveTab !== 'overview' && rolloutActivity && (rolloutActivity.phase !== 'idle' || recentImageSave) && (
           <div className="shrink-0 px-4 pt-4">
             <WorkloadRolloutNotice activity={rolloutActivity} recentImageSave={recentImageSave} />
           </div>
@@ -1615,17 +1576,13 @@ export function WorkloadView({
               onSwitchToTopology={topologyTarget ? () => handleSetTab(topologyTarget) : undefined}
               rendererOverrides={rendererOverridesForState}
               resolvedEnvFrom={resolvedEnvFrom}
-              events={effectiveTab === 'overview' ? activityEvents : overviewEvents}
+              events={overviewEvents}
               eventsLoading={overviewEventsLoading}
-              updates={effectiveTab === 'overview' ? activityUpdates : resourceFocusedUpdates}
-              activityHidden={effectiveTab === 'overview' ? overviewEvents.length - activityEvents.length + (resourceFocusedUpdates?.length ?? 0) - (activityUpdates?.length ?? 0) : 0}
+              updates={resourceFocusedUpdates}
               eventsError={overviewEventsError}
               updatesError={resourceFocusedUpdatesError}
               extraContent={renderOverviewExtraForState && renderOverviewExtraForState({ kind, namespace, name, group, context: 'expanded' })}
               introContent={overviewIntro}
-              hideStats={effectiveTab === 'overview' && hideOverviewStats}
-              hideConfig={effectiveTab === 'overview' && hideOverviewConfig}
-              column={effectiveTab === 'overview' ? overviewColumnClassName : undefined}
               leadContent={
                 // A host's spec lead replaces the operational issues there: its Overview already leads with them.
                 effectiveTab === 'spec' && specTab?.lead
@@ -2315,14 +2272,10 @@ function InfoTab({
   events,
   eventsLoading,
   updates,
-  activityHidden,
   eventsError,
   updatesError,
   extraContent,
   introContent,
-  hideStats,
-  hideConfig,
-  column,
   leadContent,
   onEvaluateCapacity,
   recentImageSave,
@@ -2359,15 +2312,10 @@ function InfoTab({
   events?: TimelineEvent[]
   eventsLoading?: boolean
   updates?: TimelineEvent[]
-  /** Events the host left out of Recent activity: an empty card then says so. */
-  activityHidden?: number
   eventsError?: Error | null
   updatesError?: Error | null
   extraContent?: ReactNode
   introContent?: ReactNode
-  hideStats?: boolean
-  hideConfig?: boolean
-  column?: string
   leadContent?: ReactNode
   recentImageSave?: boolean
 }) {
@@ -2454,14 +2402,10 @@ function InfoTab({
       events={events}
       eventsLoading={eventsLoading}
       updates={updates}
-      activityHidden={activityHidden}
       eventsError={eventsError}
       updatesError={updatesError}
       extraContent={extraContent}
       introContent={introContent}
-      hideStats={hideStats}
-      hideConfig={hideConfig}
-      column={column}
       leadContent={leadContent}
       onEvaluateCapacity={onEvaluateCapacity}
       recentImageSave={recentImageSave}
@@ -2545,15 +2489,11 @@ function WorkloadOverviewTab({
   onSwitchToTopology,
   events = [],
   updates = [],
-  activityHidden = 0,
   eventsLoading,
   eventsError,
   updatesError,
   extraContent,
   introContent,
-  hideStats,
-  hideConfig,
-  column,
   leadContent,
   onEvaluateCapacity,
   recentImageSave,
@@ -2576,15 +2516,11 @@ function WorkloadOverviewTab({
   onSwitchToTopology?: () => void
   events?: TimelineEvent[]
   updates?: TimelineEvent[]
-  activityHidden?: number
   eventsLoading?: boolean
   eventsError?: Error | null
   updatesError?: Error | null
   extraContent?: ReactNode
   introContent?: ReactNode
-  hideStats?: boolean
-  hideConfig?: boolean
-  column?: string
   leadContent?: ReactNode
   recentImageSave?: boolean
 }) {
@@ -2612,21 +2548,19 @@ function WorkloadOverviewTab({
   if (overviewShape === 'replicated') {
     const state = getReplicatedWorkloadState(resource, apiKind, workloadPods)
     const serviceAccountName = getPodTemplateSpec(resource, apiKind)?.serviceAccountName || 'default'
-    // A host's one column: its cards stack, with none of Radar's side columns.
-    const oneColumn = 'grid items-start gap-4'
     return (
       <div className="h-full overflow-auto bg-theme-base">
-        <div className={clsx('space-y-4 p-4', column)}>
+        <div className="space-y-4 p-4">
           {leadContent}
           {introContent}
 
-          {!hideStats && <WorkloadStatusStrip
+          <WorkloadStatusStrip
             state={state}
             readiness={readiness}
             podSummary={podSummary}
             servingSummary={showServingPath ? buildServingStripSummary(servingRelationshipGroups, servingResources) : undefined}
             recentImageSave={recentImageSave}
-          />}
+          />
 
           {onEvaluateCapacity && (
             <div>
@@ -2640,9 +2574,9 @@ function WorkloadOverviewTab({
             </div>
           )}
 
-          <div className={column ? oneColumn : 'grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_360px] 2xl:grid-cols-[minmax(0,1fr)_400px]'}>
+          <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_360px] 2xl:grid-cols-[minmax(0,1fr)_400px]">
             <div className="space-y-4">
-              <div className={column ? oneColumn : 'grid items-start gap-4 phone:grid-cols-[minmax(0,1fr)] 2xl:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]'}>
+              <div className="grid items-start gap-4 phone:grid-cols-[minmax(0,1fr)] 2xl:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
                 <div className="space-y-4">
                   {showServingPath && (
                     <ServingConfigurationCard
@@ -2652,7 +2586,6 @@ function WorkloadOverviewTab({
                       renderPortPanel={renderServicePortPanel}
                       onNavigate={onNavigate}
                       onSwitchToTopology={onSwitchToTopology}
-                      liveOnly={hideConfig}
                     />
                   )}
                   <RuntimeCard
@@ -2671,19 +2604,16 @@ function WorkloadOverviewTab({
                     relationships={relationships}
                     onNavigate={onNavigate}
                     onSwitchToLogs={onSwitchToLogs}
-                    liveOnly={hideConfig}
                   />
                 </div>
-                <div className="space-y-4 empty:hidden">
-                  {!hideConfig && (
-                    <ConfigurationInputsCard
-                      serviceAccountName={serviceAccountName}
-                      namespace={selectedResource.namespace}
-                      relationships={relationships}
-                      onNavigate={onNavigate}
-                      onSwitchToTopology={onSwitchToTopology}
-                    />
-                  )}
+                <div className="space-y-4">
+                  <ConfigurationInputsCard
+                    serviceAccountName={serviceAccountName}
+                    namespace={selectedResource.namespace}
+                    relationships={relationships}
+                    onNavigate={onNavigate}
+                    onSwitchToTopology={onSwitchToTopology}
+                  />
                   {observationGroups.length > 0 && (
                     <ServingDependenciesCard
                       title="Related resources"
@@ -2701,7 +2631,6 @@ function WorkloadOverviewTab({
               <ActivityCard
                 events={events}
                 updates={updates}
-                hidden={activityHidden}
                 loading={eventsLoading}
                 eventsError={eventsError}
                 updatesError={updatesError}
@@ -2720,11 +2649,11 @@ function WorkloadOverviewTab({
         {leadContent}
         {introContent}
 
-        {!hideStats && <div className="grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-4">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-4">
           {summaryMetrics.map((metric) => (
             <SummaryMetric key={metric.label} {...metric} />
           ))}
-        </div>}
+        </div>
 
         {showServingPath && (
           <ServingConfigurationCard
@@ -2790,7 +2719,6 @@ function WorkloadOverviewTab({
             <ActivityCard
               events={events}
               updates={updates}
-              hidden={activityHidden}
               loading={eventsLoading}
               eventsError={eventsError}
               updatesError={updatesError}
@@ -3409,9 +3337,6 @@ function InlineFact({ label, value }: { label: string; value: ReactNode }) {
   )
 }
 
-/** Runtime facts that restate configuration rather than live state. */
-const CONFIGURED_FACTS = new Set(['Target replicas', 'Strategy', 'Partition', 'Min', 'Max'])
-
 function RuntimeCard({
   resource,
   apiKind,
@@ -3428,7 +3353,6 @@ function RuntimeCard({
   relationships,
   onNavigate,
   onSwitchToLogs,
-  liveOnly,
 }: {
   resource: any
   apiKind: string
@@ -3445,14 +3369,12 @@ function RuntimeCard({
   relationships?: Relationships
   onNavigate?: NavigateToResource
   onSwitchToLogs?: () => void
-  /** Only live facts: the configured ones (target replicas, strategy, partition, autoscaler bounds) are said by the host. */
-  liveOnly?: boolean
 }) {
   const progress = rolloutProgress(resource, apiKind, state)
   const headline = state.rollout.phase !== 'idle'
     ? `${state.label}${state.detail ? ` · ${state.detail}` : ''}`
     : rolloutHeadline(resource, apiKind, readiness, scaling)
-  const facts = rolloutFacts(resource, apiKind, scaling, Boolean(progress)).filter((f) => !liveOnly || !CONFIGURED_FACTS.has(String(f.label)))
+  const facts = rolloutFacts(resource, apiKind, scaling, Boolean(progress))
   const scalerRefs = relationships?.scalers ?? []
   const navigateRef = onNavigate ? (ref: ResourceRef) => onNavigate(refToSelectedResource(ref)) : undefined
 
@@ -3474,14 +3396,11 @@ function RuntimeCard({
             <div className="min-w-0 truncate text-sm font-medium text-theme-text-primary">{headline}</div>
           </div>
 
-          {/* No chips (a host keeping only live facts, nothing scaling): no empty row. */}
-          {facts.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              {facts.map((fact) => (
-                <RolloutFactChip key={String(fact.label)} label={fact.label} value={fact.value} tone={fact.tone} />
-              ))}
-            </div>
-          )}
+          <div className="flex flex-wrap gap-1.5">
+            {facts.map((fact) => (
+              <RolloutFactChip key={String(fact.label)} label={fact.label} value={fact.value} tone={fact.tone} />
+            ))}
+          </div>
 
           {progress && <RolloutProgressBar progress={progress} state={state} />}
 
@@ -3601,7 +3520,7 @@ function PodsListContent({
         <div className="text-sm text-theme-text-tertiary">Loading pod readiness…</div>
       ) : workloadPodsError ? (
         <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-600 dark:text-amber-300">
-          Pod readiness unavailable.
+          Pod readiness unavailable. Use Logs or Timeline for deeper inspection.
         </div>
       ) : workloadPods ? (
         visiblePods.length > 0 ? (
@@ -3716,7 +3635,6 @@ function ServingConfigurationCard({
   renderPortPanel,
   onNavigate,
   onSwitchToTopology,
-  liveOnly = false,
 }: {
   groups: RelationshipGroup[]
   details?: ServingResourceDetail[]
@@ -3724,7 +3642,6 @@ function ServingConfigurationCard({
   renderPortPanel?: (props: ServicePortRenderProps) => ReactNode
   onNavigate?: NavigateToResource
   onSwitchToTopology?: () => void
-  liveOnly?: boolean
 }) {
   const services = groups.find((group) => group.label === 'Services')?.refs ?? []
   const entrypoints = groups.find((group) => group.label === 'Entry points')?.refs ?? []
@@ -3749,7 +3666,7 @@ function ServingConfigurationCard({
 
   return (
     <OverviewCard
-      title={liveOnly ? 'Serving' : 'Serving configuration'}
+      title="Serving configuration"
       icon={Network}
       action={onSwitchToTopology && (
         <button type="button" onClick={onSwitchToTopology} className="inline-flex items-center gap-1 text-xs text-accent-text hover:underline">
@@ -3766,22 +3683,16 @@ function ServingConfigurationCard({
         </div>
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(18rem,0.8fr)]">
           <div className="min-w-0 space-y-3">
-            {!liveOnly && (
-              <>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <OverviewStat label="Service type" value={serviceTypes} />
-                  <OverviewStat label="Services" value={serviceCount} />
-                </div>
-              </>
-            )}
-            {(!liveOnly || renderPortAction || renderPortPanel) && (
-              <ServingPortRows
-                services={serviceResources}
-                loading={serviceDetailsLoading}
-                renderPortAction={renderPortAction}
-                renderPortPanel={renderPortPanel}
-              />
-            )}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <OverviewStat label="Service type" value={serviceTypes} />
+              <OverviewStat label="Services" value={serviceCount} />
+            </div>
+            <ServingPortRows
+              services={serviceResources}
+              loading={serviceDetailsLoading}
+              renderPortAction={renderPortAction}
+              renderPortPanel={renderPortPanel}
+            />
             <ServingRefChips label="Services" refs={services} onNavigate={navigateRef} />
           </div>
           <div className="min-w-0 space-y-3 border-t border-theme-border pt-3 lg:border-l lg:border-t-0 lg:pl-4 lg:pt-0">
@@ -4328,7 +4239,6 @@ function ConfigurationInputsCard({
 function ActivityCard({
   events,
   updates,
-  hidden = 0,
   loading,
   eventsError,
   updatesError,
@@ -4336,8 +4246,6 @@ function ActivityCard({
 }: {
   events: TimelineEvent[]
   updates: TimelineEvent[]
-  /** Events the host left out: when that leaves nothing, the card doesn't say nothing happened. */
-  hidden?: number
   loading?: boolean
   eventsError?: Error | null
   updatesError?: Error | null
@@ -4377,14 +4285,11 @@ function ActivityCard({
             </div>
           ))}
           {(events.length + updates.length) > EVENT_VISIBLE_LIMIT && (
-            <div className="text-xs text-theme-text-tertiary">Showing highest-signal recent events.{onSwitchToTimeline && ' Timeline has the full history.'}</div>
+            <div className="text-xs text-theme-text-tertiary">Showing highest-signal recent events. Timeline has the full history.</div>
           )}
         </div>
       ) : (
-        <div className="text-sm text-theme-text-tertiary">
-          {hidden > 0 ? 'Nothing here to act on lately.' : 'No recent activity captured.'}
-          {hidden > 0 && onSwitchToTimeline && ' Timeline has the full history.'}
-        </div>
+        <div className="text-sm text-theme-text-tertiary">No recent activity captured.</div>
       )}
       {eventsError && <div className="mt-2 text-xs text-red-500">Failed to load events: {eventsError.message}</div>}
       {updatesError && <div className="mt-2 text-xs text-red-500">Failed to load changes: {updatesError.message}</div>}

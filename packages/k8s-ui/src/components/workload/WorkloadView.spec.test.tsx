@@ -188,18 +188,6 @@ it('does not carry a picked Pod to a recreated resource with the same name', () 
   act(() => root.unmount())
 })
 
-it('leaves out a built-in tab the host hides, falling back to the first tab shown', () => {
-  const host = document.createElement('div')
-  const root = createRoot(host)
-  const onTabChange = vi.fn()
-  const extraTabs = [{ id: 'runs', label: 'Runs', render: () => <div>The runs</div> }]
-  act(() => root.render(<WorkloadView {...props} activeTab="overview" onTabChange={onTabChange} expanded extraTabs={extraTabs} tabOrder={['runs']} hiddenTabs={['overview']} />))
-  expect([...host.querySelectorAll('[role="tab"]')].map((t) => t.textContent)).not.toContain('Overview')
-  expect(host.textContent).toContain('The runs')
-  expect(onTabChange).toHaveBeenCalledWith('runs', { replace: true })
-  act(() => root.unmount())
-})
-
 it('keeps an asynchronous deep link and reconciles an explicit built-in replacement', () => {
   const host = document.createElement('div')
   const root = createRoot(host)
@@ -212,8 +200,6 @@ it('keeps an asynchronous deep link and reconciles an explicit built-in replacem
   expect(onTabChange).not.toHaveBeenCalled()
   act(() => root.render(<WorkloadView {...props} expanded activeTab="runs" extraTabs={extraTabs} onTabChange={onTabChange} />))
   expect(host.textContent).toContain('The runs')
-  expect(onTabChange).not.toHaveBeenCalled()
-  act(() => root.render(<WorkloadView {...props} expanded activeTab="spec" extraTabsState="loading" hiddenTabs={['spec']} onTabChange={onTabChange} />))
   expect(onTabChange).not.toHaveBeenCalled()
   act(() => root.render(<WorkloadView {...props} expanded activeTab="spec" extraTabs={extraTabs} onTabChange={onTabChange} />))
   expect(onTabChange).toHaveBeenCalledWith('runs', { replace: true })
@@ -235,7 +221,7 @@ it('preserves a host tab after a cached 404 and only runs tabs that can work wit
     { id: 'runs', label: 'Runs', render: () => <div>Run history</div> },
   ]
   const gone = Object.assign(new Error('not found'), { status: 404 })
-  const hosted = { ...props, expanded: true, extraTabs, extraTabsState: 'ready' as const, onTabChange, tabHeader: <div>Host header</div> }
+  const hosted = { ...props, expanded: true, extraTabs, extraTabsState: 'ready' as const, onTabChange }
   act(() => root.render(<WorkloadView {...hosted} activeTab="timeline" resource={undefined} isLoading />))
   expect(host.querySelector('[role="tab"][aria-selected="true"]')).toBeNull()
   expect(onTabChange).not.toHaveBeenCalled()
@@ -250,7 +236,6 @@ it('preserves a host tab after a cached 404 and only runs tabs that can work wit
   act(() => root.render(<WorkloadView {...hosted} activeTab="live" resourceError={gone} />))
   expect(host.textContent).not.toContain('Live action')
   expect(host.textContent).not.toContain('Git history')
-  expect(host.textContent).not.toContain('Host header')
   expect(onTabChange).not.toHaveBeenCalled()
   act(() => root.render(<WorkloadView {...hosted} activeTab="live" />))
   expect(host.textContent).toContain('Live action')
@@ -260,19 +245,6 @@ it('preserves a host tab after a cached 404 and only runs tabs that can work wit
   act(() => root.render(<WorkloadView {...hosted} activeTab="spec" resourceError={gone} />))
   expect(host.textContent).toContain('Git history')
   expect(onTabChange).toHaveBeenCalledExactlyOnceWith('git', { replace: true })
-  act(() => root.unmount())
-})
-
-it('shows a host line above every tab, in the expanded view only', () => {
-  const host = document.createElement('div')
-  const root = createRoot(host)
-  const extraTabs = [{ id: 'runs', label: 'Runs', render: () => <div>The runs</div> }]
-  act(() => root.render(<WorkloadView {...props} activeTab="overview" expanded extraTabs={extraTabs} tabHeader={<div>Host line</div>} />))
-  expect(host.textContent).toContain('Host line')
-  act(() => root.render(<WorkloadView {...props} activeTab="runs" expanded extraTabs={extraTabs} tabHeader={<div>Host line</div>} />))
-  expect(host.textContent).toContain('Host line')
-  act(() => root.render(<WorkloadView {...props} expanded={false} tabHeader={<div>Host line</div>} />))
-  expect(host.textContent).not.toContain('Host line')
   act(() => root.unmount())
 })
 
@@ -294,73 +266,10 @@ it('restores an uncontrolled workload tab when its data becomes available again'
   act(() => root.unmount())
 })
 
-it("leaves out the Overview's stats strip when the host asks, and only then", () => {
-  const deployment = { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'web', namespace: 'shop' }, spec: { replicas: 1, template: { spec: { containers: [{ name: 'web', image: 'web:1' }] } } }, status: { replicas: 1, readyReplicas: 1 } }
-  const base = { ...props, kind: 'deployments', group: 'apps', name: 'web', namespace: 'shop', resource: deployment, activeTab: 'overview' as const, renderSummary: undefined, expanded: true }
-  const shown = renderToStaticMarkup(<WorkloadView {...base} />)
-  const hidden = renderToStaticMarkup(<WorkloadView {...base} hideOverviewStats />)
-  // The strip's Pods fact.
-  expect(shown).toContain('no pod refs')
-  expect(hidden).not.toContain('no pod refs')
-})
-
-it("leaves out the Overview's configured values when the host says them, keeping live state", () => {
-  const deployment = { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'web', namespace: 'shop' }, spec: { replicas: 2, strategy: { type: 'RollingUpdate' }, template: { spec: { serviceAccountName: 'web', containers: [{ name: 'web', image: 'web:1' }] } } }, status: { replicas: 1, readyReplicas: 1 } }
-  const base = { ...props, kind: 'deployments', group: 'apps', name: 'web', namespace: 'shop', resource: deployment, activeTab: 'overview' as const, renderSummary: undefined, expanded: true }
-  const shown = renderToStaticMarkup(<WorkloadView {...base} />)
-  const hidden = renderToStaticMarkup(<WorkloadView {...base} hideOverviewConfig />)
-  for (const configured of ['Target replicas', 'Strategy', 'Configuration inputs']) {
-    expect(shown).toContain(configured)
-    expect(hidden).not.toContain(configured)
-  }
-  // Live state stays: the Runtime card, and the replicas running that differ from the target.
-  expect(hidden).toContain('Runtime')
-  expect(hidden).toContain('Current')
-})
-
-it('keeps serving addresses and pending status when the host supplies configured values', () => {
-  const deployment = { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'web', namespace: 'shop' }, spec: { replicas: 1 }, status: {} }
-  const ref = { kind: 'Service', name: 'web-public', namespace: 'shop' }
-  const service = { apiVersion: 'v1', kind: 'Service', metadata: { name: ref.name, namespace: ref.namespace }, spec: { type: 'LoadBalancer', ports: [{ port: 8765 }] } }
-  const workload = { ...props, kind: 'deployments', group: 'apps', name: 'web', namespace: 'shop', resource: deployment, activeTab: 'overview' as const, renderSummary: undefined, relationships: { services: [ref] }, hideOverviewConfig: true, hideOverviewStats: true }
-  const pending = renderToStaticMarkup(<WorkloadView {...workload} servingResources={[{ ref, resource: service }]} />)
-  expect(pending).toContain('External service pending')
-  expect(pending).not.toContain('8765')
-  const resolved = { ...service, status: { loadBalancer: { ingress: [{ hostname: 'address.example' }] } } }
-  const addressed = renderToStaticMarkup(<WorkloadView {...workload} servingResources={[{ ref, resource: resolved }]} />)
-  expect(addressed).toContain('address.example')
-})
-
-it('keeps the controller-reported DaemonSet target nodes when hiding configuration', () => {
-  const daemonSet = {
-    apiVersion: 'apps/v1', kind: 'DaemonSet', metadata: { name: 'agent', namespace: 'shop' },
-    spec: { updateStrategy: { type: 'RollingUpdate' } },
-    status: { desiredNumberScheduled: 5, currentNumberScheduled: 5, numberReady: 4, updatedNumberScheduled: 5 },
-  }
-  const html = renderToStaticMarkup(<WorkloadView {...props} kind="daemonsets" group="apps" name="agent"
-    namespace="shop" resource={daemonSet} activeTab="overview" renderSummary={undefined} expanded hideOverviewConfig />)
-  expect(html).toContain('Target nodes')
-  expect(html).not.toContain('>Strategy<')
-})
-
-it("lays the Overview out in the host's one column when asked, and in Radar's grid otherwise", () => {
-  const deployment = { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'web', namespace: 'shop' }, spec: { replicas: 1, template: { spec: { containers: [{ name: 'web', image: 'web:1' }] } } }, status: { replicas: 1, readyReplicas: 1 } }
-  const base = { ...props, kind: 'deployments', group: 'apps', name: 'web', namespace: 'shop', resource: deployment, activeTab: 'overview' as const, renderSummary: undefined, expanded: true }
-  const grid = renderToStaticMarkup(<WorkloadView {...base} />)
-  const column = renderToStaticMarkup(<WorkloadView {...base} overviewColumnClassName="mx-auto max-w-5xl" />)
-  expect(grid).toContain('xl:grid-cols-[minmax(0,1fr)_360px]')
-  expect(column).not.toContain('xl:grid-cols-[minmax(0,1fr)_360px]')
-  expect(column).toContain('mx-auto max-w-5xl')
-})
-
-it("leaves out Runtime's fact row when no fact is left, and says one replica as one", () => {
+it('uses the singular replica label for a single replica', () => {
   const deployment = { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'web', namespace: 'shop' }, spec: { replicas: 1, strategy: { type: 'RollingUpdate' }, template: { spec: { containers: [{ name: 'web', image: 'web:1' }] } } }, status: { replicas: 1, readyReplicas: 1, updatedReplicas: 1, availableReplicas: 1 } }
   const base = { ...props, kind: 'deployments', group: 'apps', name: 'web', namespace: 'shop', resource: deployment, activeTab: 'overview' as const, renderSummary: undefined, expanded: true }
-  const html = renderToStaticMarkup(<WorkloadView {...base} hideOverviewConfig />)
+  const html = renderToStaticMarkup(<WorkloadView {...base} />)
   expect(html).toContain('1 replica<')
   expect(html).not.toContain('1 replicas')
-  // Every fact is configured (target, strategy): the row isn't rendered empty.
-  expect(html).not.toContain('flex flex-wrap gap-1.5"></div>')
-  // Without the host's option the facts still show.
-  expect(renderToStaticMarkup(<WorkloadView {...base} />)).toContain('Target replicas')
 })
