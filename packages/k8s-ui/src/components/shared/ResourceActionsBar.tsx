@@ -17,7 +17,6 @@ import {
   GitCompare,
   FileCode2,
   X,
-  Square,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { RevisionDiffView } from './RevisionDiffView'
@@ -36,7 +35,7 @@ import { radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
 import { SetImageDialog, type SetImageOwnership } from './SetImageDialog'
 import { DrainPlanDialog, DEFAULT_DRAIN_DIALOG_OPTIONS, type DrainDialogOptions, type DrainPlan } from './DrainPlanDialog'
 import { ActionConfirmDialog } from './ActionConfirmDialog'
-import { WorkflowStopDialog, workflowStopState, type WorkflowStopStrategy } from './WorkflowStopDialog'
+import { WorkflowStopAction, type WorkflowStopStrategy } from './WorkflowStopDialog'
 import { Input } from '../ui/Input'
 import { jobNameError, manualJobIndexRoom, suggestManualJobName } from '../../utils/job-name'
 import type { WorkloadImageInventory, WorkloadImageUpdate } from '../../types/core'
@@ -319,36 +318,6 @@ export function ResourceActionsBar({
     Promise.resolve(onTriggerCronJob({ namespace: resource.namespace, name: resource.name, jobName: trimmedTriggerJobName }))
       .then(() => setTriggerDraft(null), () => {})
       .finally(() => setTriggerPending(false))
-  }
-  // The dialog targets the run the user opened it on and keeps the mode it
-  // opened in, so a status refresh can't turn a reviewed Stop into Terminate.
-  // It closes once that run ends or restarts: `argo retry` keeps the UID, so
-  // a new start time is what marks another attempt.
-  const workflowStop = kind === 'workflows' ? workflowStopState(data) : 'none'
-  // Argo serializes an unset start time as null.
-  const workflowStartedAt: string | undefined = data?.status?.startedAt || undefined
-  // Closing keeps the draft, so the dialog shows what it showed while it animates out.
-  const [stopDraft, setStopDraft] = useState<{ target: typeof resourceTarget; namespace: string; name: string; startedAt?: string; stopping: boolean; suspended: boolean } | null>(null)
-  const [stopOpen, setStopOpen] = useState(false)
-  const [stopPending, setStopPending] = useState(false)
-  const stopTargetShown = stopDraft !== null && stopDraft.target.key === resourceTarget.key && stopDraft.target.uid === resourceTarget.uid
-  if (stopOpen && stopDraft && !stopPending && (
-    !onStopWorkflow || workflowStop === 'none' || !stopTargetShown ||
-    (stopDraft.startedAt !== undefined && stopDraft.startedAt !== workflowStartedAt)
-  )) {
-    setStopOpen(false)
-  } else if (stopOpen && stopDraft && stopTargetShown && !stopDraft.startedAt && workflowStartedAt) {
-    // Opened before the run started: its first start time is the one reviewed.
-    setStopDraft({ ...stopDraft, startedAt: workflowStartedAt })
-  }
-  const confirmStop = (strategy: WorkflowStopStrategy) => {
-    const uid = stopDraft?.target.uid
-    if (!stopOpen || !stopDraft || !onStopWorkflow || !uid || stopPending) return
-    setStopPending(true)
-    // A rejection keeps the dialog and its choice; the host's mutation meta reports the error.
-    Promise.resolve(onStopWorkflow({ namespace: stopDraft.namespace, name: stopDraft.name, uid, strategy }))
-      .then(() => setStopOpen(false), () => {})
-      .finally(() => setStopPending(false))
   }
   const isRollbackKind = ['deployments', 'statefulsets', 'daemonsets', 'rollouts'].includes(kind)
   const hasMultipleRevisions = (revisionsList?.length ?? 0) > 1
@@ -717,29 +686,16 @@ export function ResourceActionsBar({
         </button>
       )}
 
-      {workflowStop !== 'none' && (onStopWorkflow ? (
-        <Tooltip content={workflowStop === 'stopping' ? 'A Stop is in progress. Terminate also ends any exit handler.' : 'Stop or terminate this run'} delay={150}>
-          <button
-            onClick={() => {
-              setStopDraft({ target: resourceTarget, namespace: resource.namespace, name: resource.name, startedAt: workflowStartedAt, stopping: workflowStop === 'stopping', suspended: data?.spec?.suspend === true })
-              setStopOpen(true)
-            }}
-            disabled={isStoppingWorkflow || stopPending || !resourceTarget.uid}
-            aria-busy={isStoppingWorkflow || stopPending}
-            className="flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
-          >
-            <Square className={`w-3.5 h-3.5 ${isStoppingWorkflow || stopPending ? 'animate-pulse' : ''}`} />
-            {workflowStop === 'stopping' ? 'Terminate…' : 'Stop…'}
-          </button>
-        </Tooltip>
-      ) : workflowStopUpgrade && (
-        <Tooltip content={radarUpgradeNoteText(workflowStopUpgrade)} delay={150}>
-          <button disabled className="flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium btn-brand-muted rounded-lg disabled:cursor-not-allowed">
-            <Square className="w-3.5 h-3.5" />
-            {workflowStop === 'stopping' ? 'Terminate…' : 'Stop…'}
-          </button>
-        </Tooltip>
-      ))}
+      {kind === 'workflows' && (
+        <WorkflowStopAction
+          data={data}
+          namespace={resource.namespace}
+          name={resource.name}
+          onStopWorkflow={onStopWorkflow}
+          isStoppingWorkflow={isStoppingWorkflow}
+          workflowStopUpgrade={workflowStopUpgrade}
+        />
+      )}
 
       {kind === 'workflows' && onCopyCommand && (!canViewLogs || !openWorkloadLogs) && (
         <button
@@ -911,19 +867,6 @@ export function ResourceActionsBar({
           </label>
           {triggerJobNameError && <p id={triggerJobNameId} className="text-xs text-warning-text">{triggerJobNameError}</p>}
         </ActionConfirmDialog>
-      )}
-
-      {onStopWorkflow && kind === 'workflows' && (
-        <WorkflowStopDialog
-          open={stopOpen}
-          onClose={() => setStopOpen(false)}
-          onConfirm={confirmStop}
-          isLoading={stopPending}
-          namespace={stopDraft?.namespace ?? resource.namespace}
-          name={stopDraft?.name ?? resource.name}
-          stopping={stopDraft?.stopping ?? false}
-          suspended={stopDraft?.suspended ?? false}
-        />
       )}
 
       {/* Node cordon confirmation */}

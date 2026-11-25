@@ -27,7 +27,6 @@ import {
   isRolloutKind,
   canSetWorkloadImages,
   canPauseDeployment,
-  canStopWorkflow,
   isCoreBatchJob,
   type SetImageOwnership,
   SET_IMAGE_WRITES,
@@ -69,8 +68,6 @@ import {
   useTriggerCronJob,
   useSuspendCronJob,
   useResumeCronJob,
-  useStopWorkflow,
-  isWorkflowStopTargetGone,
   useRestartWorkload,
   usePauseDeployment,
   useResumeDeployment,
@@ -125,6 +122,7 @@ import { LogsViewer } from '../logs/LogsViewer'
 import { MultiPodLogsTab } from '../logs/MultiPodLogsTab'
 import { RayClusterLogsTab } from '../logs/RayClusterLogsTab'
 import { isKubeRayCluster } from '../logs/rayClusterPods'
+import { useWorkflowStopAction } from '../../hooks/useWorkflowStopAction'
 import { BatchExecutionFullscreen } from '../execution/BatchExecutionView'
 import { workloadRunTimelineEvents } from '../execution/batch-timeline'
 import {
@@ -366,7 +364,7 @@ function useActionsBarProps(
   const triggerCronJobMutation = useTriggerCronJob()
   const suspendCronJobMutation = useSuspendCronJob()
   const resumeCronJobMutation = useResumeCronJob()
-  const stopWorkflowMutation = useStopWorkflow()
+  const workflowStop = useWorkflowStopAction(kind, group, namespace)
 
   const isRolloutShape = isRolloutKind(kind)
   const isRollout = isRolloutShape && group === 'argoproj.io'
@@ -414,10 +412,6 @@ function useActionsBarProps(
   const { upgrade: argoResumeUpgrade, blockedReason: argoResumeBlockedReason } = useRadarFeature('argoAutoSyncEnable')
   const { support: argoInheritanceSupport } = useRadarFeature('argoSyncInheritance')
   const { support: cronJobJobNameSupport } = useRadarFeature('cronJobTriggerJobName')
-  const { support: workflowStopSupport, upgrade: workflowStopUpgrade } = useRadarFeature('workflowStop')
-  const isArgoWorkflow = kind === 'workflows' && group === 'argoproj.io'
-  const canStopWorkflows = !workloadWritesPending &&
-    canStopWorkflow({ name: kind, group }, workloadWrites, workflowStopSupport === 'supported')
 
   const {
     data: cascadePreview,
@@ -530,20 +524,7 @@ function useActionsBarProps(
       resumeCronJobMutation.mutate(params),
     isResumingCronJob: resumeCronJobMutation.isPending,
     gitOpsActionDisabledReasons,
-    // mutateAsync, not mutate: the stop dialog stays open when this rejects.
-    // A run that is gone or replaced has nothing left to retry, so those
-    // resolve and close it; the mutation meta has already reported them.
-    onStopWorkflow: canStopWorkflows
-      ? (params: Parameters<typeof stopWorkflowMutation.mutateAsync>[0]) =>
-          stopWorkflowMutation.mutateAsync(params).catch((error: unknown) => {
-            if (isWorkflowStopTargetGone(error)) return
-            throw error
-          })
-      : undefined,
-    isStoppingWorkflow: stopWorkflowMutation.isPending,
-    // Only a Radar known to lack the endpoint gets the upgrade note; a failed
-    // capabilities probe is not evidence of an old Radar.
-    workflowStopUpgrade: isArgoWorkflow && workflowStopSupport === 'unsupported' ? workflowStopUpgrade : null,
+    ...workflowStop,
     onFluxReconcile: (params: Parameters<typeof fluxReconcileMutation.mutate>[0]) =>
       fluxReconcileMutation.mutate(params),
     isFluxReconciling: fluxReconcileMutation.isPending,

@@ -1,6 +1,10 @@
 import { useEffect, useState } from 'react'
+import { Square } from 'lucide-react'
 import { ActionConfirmDialog } from './ActionConfirmDialog'
 import { isApiGroup } from '../resources/resource-utils-cnpg'
+import { Tooltip } from '../ui/Tooltip'
+import { radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
+import type { RadarUpgradeRequirement } from '../../types/fetch-error'
 
 export type WorkflowStopStrategy = 'Stop' | 'Terminate'
 
@@ -99,5 +103,99 @@ export function WorkflowStopDialog({ open, onClose, onConfirm, isLoading, namesp
         </fieldset>
       )}
     </ActionConfirmDialog>
+  )
+}
+
+export interface WorkflowStopActionProps {
+  /** The Workflow object as last read; its phase, shutdown, UID and start time drive the action. */
+  data: any
+  namespace: string
+  name: string
+  /**
+   * Passed only when the Radar serves the stop endpoint and the caller may
+   * patch Workflows. The host reports the outcome; the dialog closes when the
+   * promise resolves and stays open with its choice when it rejects.
+   */
+  onStopWorkflow?: (params: { namespace: string; name: string; uid: string; strategy: WorkflowStopStrategy }) => void | Promise<unknown>
+  isStoppingWorkflow?: boolean
+  /** Set when the connected Radar predates the stop endpoint: the button renders disabled with the upgrade note. */
+  workflowStopUpgrade?: RadarUpgradeRequirement | null
+}
+
+/** The Stop… / Terminate… button for one Workflow and its confirmation dialog. */
+export function WorkflowStopAction({ data, namespace, name, onStopWorkflow, isStoppingWorkflow, workflowStopUpgrade }: WorkflowStopActionProps) {
+  // The dialog targets the run the user opened it on and keeps the mode it
+  // opened in, so a status refresh can't turn a reviewed Stop into Terminate.
+  // It closes once that run ends or restarts: `argo retry` keeps the UID, so
+  // a new start time is what marks another attempt.
+  const state = workflowStopState(data)
+  const target = { key: `${namespace}/${name}`, uid: data?.metadata?.uid as string | undefined }
+  // Argo serializes an unset start time as null.
+  const startedAt: string | undefined = data?.status?.startedAt || undefined
+  // Closing keeps the draft, so the dialog shows what it showed while it animates out.
+  const [draft, setDraft] = useState<{ target: typeof target; namespace: string; name: string; startedAt?: string; stopping: boolean; suspended: boolean } | null>(null)
+  const [open, setOpen] = useState(false)
+  const [pending, setPending] = useState(false)
+  const targetShown = draft !== null && draft.target.key === target.key && draft.target.uid === target.uid
+  if (open && draft && !pending && (
+    !onStopWorkflow || state === 'none' || !targetShown ||
+    (draft.startedAt !== undefined && draft.startedAt !== startedAt)
+  )) {
+    setOpen(false)
+  } else if (open && draft && targetShown && !draft.startedAt && startedAt) {
+    // Opened before the run started: its first start time is the one reviewed.
+    setDraft({ ...draft, startedAt })
+  }
+  const confirm = (strategy: WorkflowStopStrategy) => {
+    const uid = draft?.target.uid
+    if (!open || !draft || !onStopWorkflow || !uid || pending) return
+    setPending(true)
+    // A rejection keeps the dialog and its choice; the host's mutation meta reports the error.
+    Promise.resolve(onStopWorkflow({ namespace: draft.namespace, name: draft.name, uid, strategy }))
+      .then(() => setOpen(false), () => {})
+      .finally(() => setPending(false))
+  }
+  const label = state === 'stopping' ? 'Terminate…' : 'Stop…'
+  const busy = isStoppingWorkflow || pending
+
+  return (
+    <>
+      {state !== 'none' && (onStopWorkflow ? (
+        <Tooltip content={state === 'stopping' ? 'A Stop is in progress. Terminate also ends any exit handler.' : 'Stop or terminate this run'} delay={150}>
+          <button
+            type="button"
+            onClick={() => {
+              setDraft({ target, namespace, name, startedAt, stopping: state === 'stopping', suspended: data?.spec?.suspend === true })
+              setOpen(true)
+            }}
+            disabled={busy || !target.uid}
+            aria-busy={busy}
+            className="flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
+          >
+            <Square className={`w-3.5 h-3.5 ${busy ? 'animate-pulse' : ''}`} />
+            {label}
+          </button>
+        </Tooltip>
+      ) : workflowStopUpgrade && (
+        <Tooltip content={radarUpgradeNoteText(workflowStopUpgrade)} delay={150}>
+          <button type="button" disabled className="flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium btn-brand-muted rounded-lg disabled:cursor-not-allowed">
+            <Square className="w-3.5 h-3.5" />
+            {label}
+          </button>
+        </Tooltip>
+      ))}
+      {onStopWorkflow && (
+        <WorkflowStopDialog
+          open={open}
+          onClose={() => setOpen(false)}
+          onConfirm={confirm}
+          isLoading={pending}
+          namespace={draft?.namespace ?? namespace}
+          name={draft?.name ?? name}
+          stopping={draft?.stopping ?? false}
+          suspended={draft?.suspended ?? false}
+        />
+      )}
+    </>
   )
 }

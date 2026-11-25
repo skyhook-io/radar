@@ -14,3 +14,4 @@ export { DetailShell, type DetailShellProps, type DetailShellTab } from './Detai
 export { classifyDiffLine, hasDiffBodyChange, DiffLine } from './UnifiedDiff'
 
 export { ActionConfirmDialog, type ActionConfirmDialogProps, type ActionConfirmResult, type ActionWrite } from './ActionConfirmDialog'
+export { WorkflowStopAction, type WorkflowStopActionProps, type WorkflowStopStrategy } from './WorkflowStopDialog'
