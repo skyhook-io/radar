@@ -701,9 +701,12 @@ type Issue struct {
 	// changes this caller may see than CorrelatedChanges lists.
 	CorrelatedChangesMoreNotShown bool `json:"correlated_changes_more_not_shown,omitempty"`
 	// Correlation describes the window and completeness of the correlated
-	// changes. Only an issue correlated on request carries it (the
-	// per-resource issues endpoint's correlate parameter); the MCP issues
-	// tool does not.
+	// changes. An issue correlated on request (the per-resource issues
+	// endpoint's correlate parameter) carries all of it. The MCP issues tool
+	// sets only Unknown and History, and only when it withholds
+	// no_recent_changes although the subject's own reads found nothing: a
+	// source couldn't be resolved or isn't collected, a kind was watched only
+	// since after the window began, or the admission policy side is unknown.
 	Correlation *ChangeCorrelation `json:"correlation,omitempty"`
 }
 
@@ -712,9 +715,10 @@ type ChangeCorrelation struct {
 	// WindowFrom and WindowTo bound the changes read: an hour before the
 	// issue was first seen, whether or not its onset is known, until the
 	// read; the 24 hours before the read when the issue has no first-seen
-	// time.
-	WindowFrom time.Time `json:"window_from"`
-	WindowTo   time.Time `json:"window_to"`
+	// time. Always set on an issue correlated on request; the MCP issues tool
+	// leaves them out.
+	WindowFrom time.Time `json:"window_from,omitzero"`
+	WindowTo   time.Time `json:"window_to,omitzero"`
 	// ObservedSince is when this Radar process started recording changes.
 	ObservedSince time.Time `json:"observed_since,omitzero"`
 	// Unknown says why an empty CorrelatedChanges is not "nothing changed".
@@ -793,9 +797,7 @@ type NoRecentChangesMarker struct {
 	// policy too; NoRecentChangesScopeAdmissionPolicy means only the policy
 	// that rejected the admission request was checked, since the subject's
 	// own kind (a Job, a bare ReplicaSet) isn't tracked. The MCP issues tool
-	// never sets Scope, and its marker can rest on the subject's side alone:
-	// it is also emitted when the admission policy's evidence was unavailable
-	// (unreadable, unidentified or not fully collected).
+	// never sets Scope.
 	Scope string `json:"scope,omitempty"`
 }
 

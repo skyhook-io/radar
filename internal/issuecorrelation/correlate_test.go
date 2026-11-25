@@ -54,7 +54,7 @@ func webIssue(firstSeen time.Time) issuesapi.Issue {
 }
 
 func anchoredOptions(iss issuesapi.Issue) Options {
-	return Options{Window: WindowAroundFirstSeen(iss, time.Now()), Selection: SelectAroundFirstSeen, CheckCoverage: true, EventIDs: true}
+	return Options{Window: WindowAroundFirstSeen(iss, time.Now()), Selection: SelectAroundFirstSeen, PolicyOnlyAbsence: true, EventIDs: true}
 }
 
 func specUpdate(kind, name string, at time.Time, value string) timeline.TimelineEvent {
@@ -665,7 +665,7 @@ func TestCorrelate_PolicyHistoryCoverageReported(t *testing.T) {
 }
 
 // An admission issue whose rejecting policy Radar can't identify is unknown
-// to a coverage-checking caller, never "no changes".
+// to every caller, never "no changes".
 func TestCorrelate_UnresolvedAdmissionBlocker(t *testing.T) {
 	firstSeen := time.Now().Add(-10 * time.Minute)
 	initCache(t, webDeployment())
@@ -827,7 +827,7 @@ func TestCorrelate_UnknownOnsetStillAnchorsOnFirstSeen(t *testing.T) {
 	appendChange(t, store, specUpdate("Deployment", "web", imageAt, "web:bad"))
 	iss := webIssue(firstSeen)
 	iss.OnsetUnknown = true
-	opts := Options{Window: WindowAroundFirstSeen(iss, now), Selection: SelectAroundFirstSeen, CheckCoverage: true, EventIDs: true}
+	opts := Options{Window: WindowAroundFirstSeen(iss, now), Selection: SelectAroundFirstSeen, PolicyOnlyAbsence: true, EventIDs: true}
 	got := Correlate(context.Background(), iss, opts, Access{})
 	if got.NoChanges || len(got.Changes) != 1 || !changeTime(got.Changes[0]).Equal(imageAt) {
 		t.Fatalf("image change before first seen: no_changes=%v changes=%+v window=%+v", got.NoChanges, got.Changes, opts.Window)
@@ -861,7 +861,7 @@ func TestCorrelate_FirstSeenAtObservationStartIsIncomplete(t *testing.T) {
 	timeline.SetObservationStartForTest(start)
 	iss := webIssue(start)
 	iss.OnsetUnknown = true
-	got := Correlate(context.Background(), iss, Options{Window: WindowAroundFirstSeen(iss, now), Selection: SelectAroundFirstSeen, CheckCoverage: true}, Access{})
+	got := Correlate(context.Background(), iss, Options{Window: WindowAroundFirstSeen(iss, now), Selection: SelectAroundFirstSeen, PolicyOnlyAbsence: true}, Access{})
 	if got.NoChanges || got.Unknown == nil || got.Unknown.Reason != issuesapi.CorrelationUnknownHistoryIncomplete ||
 		!slices.Contains(got.History.Reasons, issuesapi.HistoryObservationStartedLate) {
 		t.Fatalf("first seen at observation start: %+v", got)
@@ -875,7 +875,7 @@ func TestCorrelate_NoFirstSeenLooksBackADay(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	iss := webIssue(time.Time{})
 	iss.OnsetUnknown = true
-	opts := Options{Window: WindowAroundFirstSeen(iss, now), Selection: SelectAroundFirstSeen, CheckCoverage: true, EventIDs: true}
+	opts := Options{Window: WindowAroundFirstSeen(iss, now), Selection: SelectAroundFirstSeen, PolicyOnlyAbsence: true, EventIDs: true}
 
 	t.Run("change an hour ago", func(t *testing.T) {
 		initCache(t, webDeployment())
@@ -998,7 +998,7 @@ func TestRecentForWorkloadSourceRefsAndSourceFilter(t *testing.T) {
 }
 
 // A quiet admission rejection on a subject whose own changes aren't tracked
-// says the policy didn't change, scoped to the policy, for a coverage-checking
+// says the policy didn't change, scoped to the policy, for a policy-only
 // caller; the issues tool still says nothing.
 func TestCorrelate_QuietPolicyOnUntrackedSubject(t *testing.T) {
 	initCache(t, &corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "compute", Namespace: "shop"}})
@@ -1100,7 +1100,7 @@ func waitCaughtUp(t *testing.T, resource string) {
 // though the subject's own history is complete.
 func TestCorrelate_DeferredWatchStartedAfterWindowStart(t *testing.T) {
 	windowAt := func(from time.Time) Options {
-		return Options{Window: Window{From: from, To: time.Now().Add(time.Minute)}, Selection: SelectAroundFirstSeen, CheckCoverage: true, EventIDs: true}
+		return Options{Window: Window{From: from, To: time.Now().Add(time.Minute)}, Selection: SelectAroundFirstSeen, PolicyOnlyAbsence: true, EventIDs: true}
 	}
 
 	t.Run("referenced ConfigMap", func(t *testing.T) {
@@ -1137,7 +1137,7 @@ func TestCorrelate_DeferredWatchStartedAfterWindowStart(t *testing.T) {
 // source older than the watch does.
 func TestCorrelate_NewObjectsOutliveLateWatch(t *testing.T) {
 	windowAt := func(from time.Time) Options {
-		return Options{Window: Window{From: from, To: time.Now().Add(time.Minute)}, Selection: SelectAroundFirstSeen, CheckCoverage: true, EventIDs: true}
+		return Options{Window: Window{From: from, To: time.Now().Add(time.Minute)}, Selection: SelectAroundFirstSeen, PolicyOnlyAbsence: true, EventIDs: true}
 	}
 	// Later than the deferred ConfigMap watch, which starts about 300ms after
 	// the cache does.
@@ -1200,10 +1200,14 @@ func TestCorrelate_RolloutTargetGainsSourceDuringRead(t *testing.T) {
 	if err := k8s.GetDynamicResourceCache().EnsureWatching(gvr); err != nil || !k8s.GetDynamicResourceCache().WaitForSync(gvr, 5*time.Second) {
 		t.Fatalf("watch rollouts: %v", err)
 	}
+	// The window starts once Rollouts are watched, so their history covers
+	// it and the answer rests on the sources alone.
+	from := time.Now()
 	store := initStore(t)
 	for i := range meaningfulchanges.NamedFetchBound + 1 {
-		appendChange(t, store, specUpdate("Secret", "api-creds", time.Now().Add(-time.Duration(i+1)*time.Second), fmt.Sprint(i)))
+		appendChange(t, store, specUpdate("Secret", "api-creds", from.Add(time.Duration(i+1)*time.Millisecond), fmt.Sprint(i)))
 	}
+	time.Sleep(time.Duration(meaningfulchanges.NamedFetchBound+2) * time.Millisecond)
 
 	// The template gains the Secret once the engine has checked the
 	// ConfigMap, the last source it found, and before it reads anything.
@@ -1233,7 +1237,7 @@ func TestCorrelate_RolloutTargetGainsSourceDuringRead(t *testing.T) {
 	}}
 	iss := issuesapi.Issue{ID: "roll", Severity: issuesapi.SeverityCritical, Category: issuesapi.CategoryCrashLoop,
 		Kind: "Rollout", Group: "argoproj.io", Namespace: "shop", Name: "roll", FirstSeen: time.Now().Add(-10 * time.Minute)}
-	lookback := Options{Window: Window{From: time.Now().Add(-time.Hour), To: time.Now(), OpenEnded: true}, MinWindow: 5 * time.Minute}
+	lookback := Options{Window: Window{From: from, To: from.Add(time.Hour), OpenEnded: true}, MinWindow: 5 * time.Minute}
 	got := Correlate(ctx, iss, lookback, access)
 	if got.FetchSaturated {
 		t.Fatal("the Secret added after the check was read: its saturation reached the answer")
@@ -1296,7 +1300,7 @@ func TestCorrelate_WindowStartsBeforeFirstSyncCompleted(t *testing.T) {
 	from := listReturned.Add(-100 * time.Millisecond)
 	listMu.Unlock()
 	iss := webIssue(time.Time{})
-	opts := Options{Window: Window{From: from, To: time.Now()}, Selection: SelectAroundFirstSeen, CheckCoverage: true, EventIDs: true}
+	opts := Options{Window: Window{From: from, To: time.Now()}, Selection: SelectAroundFirstSeen, PolicyOnlyAbsence: true, EventIDs: true}
 	got := Correlate(context.Background(), iss, opts, Access{})
 	if got.NoChanges || got.Unknown == nil || got.Unknown.Reason != issuesapi.CorrelationUnknownHistoryIncomplete {
 		t.Fatalf("window inside the first list: no_changes=%v unknown=%+v history=%+v", got.NoChanges, got.Unknown, got.History)

@@ -78,7 +78,7 @@ func TestRowChange_SourceWatchedLaterThanSubject(t *testing.T) {
 			appendChange(t, store, specUpdate("Deployment", "web", tc.at(from, boundary), "web:bad"))
 			iss := webIssue(time.Time{})
 			got := Correlate(context.Background(), iss, Options{Window: Window{From: from, To: time.Now().Add(time.Minute)},
-				Selection: SelectAroundFirstSeen, CheckCoverage: true, EventIDs: true}, Access{})
+				Selection: SelectAroundFirstSeen, PolicyOnlyAbsence: true, EventIDs: true}, Access{})
 			if len(got.Changes) != 1 || got.Unknown == nil || got.Unknown.Reason != issuesapi.CorrelationUnknownHistoryIncomplete {
 				t.Fatalf("setup: changes=%d unknown=%+v", len(got.Changes), got.Unknown)
 			}

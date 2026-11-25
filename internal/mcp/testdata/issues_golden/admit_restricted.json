@@ -18,8 +18,20 @@
       "last_seen": "2000-01-01T00:00:00Z",
       "issue_timing": "started_after_resource_was_healthy",
       "issue_timing_basis": "owner_condition",
-      "no_recent_changes": {
-        "window_seconds": 3600
+      "correlation": {
+        "unknown": {
+          "reason": "user_forbidden",
+          "kinds": [
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "MutatingWebhookConfiguration"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingWebhookConfiguration"
+            }
+          ]
+        }
       }
     },
     {
