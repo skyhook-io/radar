@@ -298,7 +298,7 @@ describe('Agent Sandbox overview, from the server summary', () => {
   })
 
   it('says when it shows only the first rows the server sent', () => {
-    expect(overview(liveWorkspace({ attentionTotal: 240 }))).toContain('Showing 5 of 240.')
+    expect(overview(liveWorkspace({ attentionTotal: 240 }))).toContain('Showing 5 of 240 findings.')
   })
 
   it('links recent expirations into the Sandboxes inventory and shows nothing when none expired', () => {
@@ -315,9 +315,9 @@ describe('Agent Sandbox overview, from the server summary', () => {
 
 describe('Agent Sandbox sidebar badges', () => {
   it('take the server’s counts: ≥ for a lower bound, the unknown dash for a lower-bound zero', () => {
-    expect(sidebarCount({ count: 3, lowerBound: false }, ['sandbox', 'sandboxes'])).toEqual({ count: 3, lowerBound: false, title: '3 workspace findings for sandboxes (related objects can share a finding).' })
-    expect(sidebarCount({ count: 2, lowerBound: true }, ['claim', 'claims']).title).toBe('At least 2 workspace findings for claims (related objects can share a finding). Some couldn’t be read, so there may be more.')
+    expect(sidebarCount({ count: 3, lowerBound: false }, ['sandbox', 'sandboxes'])).toEqual({ count: 3, lowerBound: false, title: '3 sandboxes need attention.' })
+    expect(sidebarCount({ count: 2, lowerBound: true }, ['claim', 'claims']).title).toBe('At least 2 claims need attention. Some couldn’t be read, so there may be more.')
     expect(sidebarCount({ count: null, lowerBound: true }, ['warm pool', 'warm pools'])).toMatchObject({ count: null, lowerBound: true })
-    expect(sidebarCount({ count: 1, lowerBound: false }, ['attention item', 'attention items'], true).title).toBe('1 attention item. One is the controller’s row, which every namespace shares.')
+    expect(sidebarCount({ count: 1, lowerBound: false }, ['object', 'objects']).title).toBe('1 object needs attention.')
   })
 })

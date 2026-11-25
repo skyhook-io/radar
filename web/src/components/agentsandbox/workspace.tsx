@@ -167,19 +167,16 @@ export function leftOutText(data: AgentSandboxWorkspaceResponse, key: AgentSandb
 }
 
 /** A badge from the server's count: "≥N" for a lower bound, the unknown dash for a lower-bound zero. */
-export function sidebarCount(c: AgentSandboxCount, noun: [string, string], controller = false): { count: number | null; lowerBound: boolean; title: string } {
+export function sidebarCount(c: AgentSandboxCount, noun: [string, string]): { count: number | null; lowerBound: boolean; title: string } {
   if (c.count === null) {
     return { count: null, lowerBound: true, title: `Unknown: Radar couldn’t read every ${noun[0]}, so nothing found doesn’t mean nothing needs attention.` }
   }
-  const shared = controller ? ' One is the controller’s row, which every namespace shares.' : ''
   const partial = c.lowerBound ? ' Some couldn’t be read, so there may be more.' : ''
-  const unit = noun[0] === 'attention item'
-    ? (c.count === 1 ? 'attention item' : 'attention items')
-    : `${c.count === 1 ? 'workspace finding' : 'workspace findings'} for ${noun[1]} (related objects can share a finding)`
+  const unit = c.count === 1 ? `${noun[0]} needs attention` : `${noun[1]} need attention`
   return {
     count: c.count,
     lowerBound: c.lowerBound,
-    title: `${c.lowerBound ? 'At least ' : ''}${c.count} ${unit}.${partial}${shared}`,
+    title: `${c.lowerBound ? 'At least ' : ''}${c.count} ${unit}.${partial}`,
   }
 }
 

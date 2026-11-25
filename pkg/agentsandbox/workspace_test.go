@@ -229,7 +229,10 @@ func TestLiveNamespace(t *testing.T) {
 		t.Errorf("pool counts %+v", c.WarmPools)
 	}
 
-	if s.Sidebar.Total.Count == nil || *s.Sidebar.Total.Count != 5 || s.Sidebar.Total.LowerBound || s.Sidebar.Controller {
+	if badge := s.Sidebar.Sandboxes; badge.Count == nil || *badge.Count != 5 || !slices.Contains(s.AttentionObjects.Sandboxes, ns+"/warm-4xmkm") {
+		t.Errorf("sandbox badge %+v, segment keys %v", badge, s.AttentionObjects.Sandboxes)
+	}
+	if s.Sidebar.Total.Count == nil || *s.Sidebar.Total.Count != 7 || s.Sidebar.Total.LowerBound {
 		t.Errorf("sidebar %+v", s.Sidebar)
 	}
 	if !s.AttentionComplete {
@@ -438,8 +441,8 @@ func TestStoppedControllerTakesTheLateSandboxes(t *testing.T) {
 	if rowFor(s, "Sandbox", "late") != nil || rowFor(s, "Sandbox", "bad-image") == nil {
 		t.Error("late folds into the controller's row; a failure keeps its own")
 	}
-	if !s.Sidebar.Controller {
-		t.Error("sidebar does not say the controller's row is counted")
+	if !slices.Contains(s.AttentionObjects.Sandboxes, ns+"/late") || s.Sidebar.Total.Count == nil || *s.Sidebar.Total.Count != 8 {
+		t.Errorf("the late Sandbox counts toward the badges: %+v, segment keys %v", s.Sidebar, s.AttentionObjects.Sandboxes)
 	}
 
 	in.Controller = ControllerNotRead(readreason.UserForbidden)

@@ -125,6 +125,18 @@ describe('Agent Sandbox kind lists', () => {
     expect(expired).not.toContain('>suspended<')
   })
 
+  it('matches the Sandboxes sidebar badge when a pool finding covers a member', () => {
+    const workspace = liveWorkspace()
+    const member = 'warm-4xmkm'
+    expect(workspace.attention.some((row) => row.subject.name === member)).toBe(false)
+    expect(workspace.attention.find((row) => row.rule === 'reserveBelowTarget')?.related?.refs).toContainEqual(expect.objectContaining({ name: member }))
+
+    const html = page(<SandboxesScreen {...screenProps(liveData())} server={serverReadings(workspace)} />, '/resources/sandboxes?segment=attention')
+    expect(html).toMatch(new RegExp(`Needs attention<span[^>]*>${workspace.sidebar.sandboxes.count}</span>`))
+    expect(html).toContain(`>${member}<`)
+    expect(html).not.toContain('>suspended<')
+  })
+
   it('says what was requested only where the state differs from it', () => {
     const suspendedAsked = { ...liveSandboxes()[1], spec: { operatingMode: 'Suspended' } }
     const resuming = { ...liveSandboxes().find((s) => s.metadata.name === 'suspended'), spec: { operatingMode: 'Running' } }
