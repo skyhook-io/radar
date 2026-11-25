@@ -42,12 +42,31 @@ it('still opens the original Spec & status in a drawer when a page replacement i
   const host = document.createElement('div')
   const root = createRoot(host)
   act(() => root.render(<WorkloadView {...props} expanded={false} specTab={{ label: 'Configuration', render: replacement }} />))
-  const tab = [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((b) => b.textContent === 'Spec & status')!
+  const tabs = [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+  expect(tabs.map((b) => b.textContent)).toEqual(['Overview', 'Spec & status', 'YAML'])
+  const tab = tabs.find((b) => b.textContent === 'Spec & status')!
   act(() => tab.click())
   expect(tab.getAttribute('aria-selected')).toBe('true')
   expect(host.textContent).toContain('Generic renderer and Conditions')
   expect(host.textContent).toContain('Audit Findings')
   expect(replacement).not.toHaveBeenCalled()
+  // Switching to YAML keeps the same three-tab switcher in place.
+  const yamlTab = tabs.find((b) => b.textContent === 'YAML')!
+  act(() => yamlTab.click())
+  const tabsOnYaml = [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+  expect(tabsOnYaml.map((b) => b.textContent)).toEqual(['Overview', 'Spec & status', 'YAML'])
+  expect(tabsOnYaml[2].getAttribute('aria-selected')).toBe('true')
+  act(() => root.unmount())
+})
+
+it('omits duplicate operational issues on Spec & status when a composed Overview is present', () => {
+  const lead = vi.fn(() => <div>OPERATIONAL ISSUES</div>)
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  act(() => root.render(<WorkloadView {...props} expanded={false} hasOperationalIssues renderOverviewLead={lead} />))
+  const tab = [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((b) => b.textContent === 'Spec & status')!
+  act(() => tab.click())
+  expect(host.textContent).not.toContain('OPERATIONAL ISSUES')
   act(() => root.unmount())
 })
 
@@ -133,15 +152,22 @@ it.each(['Deployment', 'Pod', 'Pooler', 'ScheduledBackup'])('groups %s drawer ac
   const host = document.createElement('div'); const root = createRoot(host)
   const apiKind = kind === 'Deployment' ? 'deployments' : kind === 'Pod' ? 'pods' : kind === 'Pooler' ? 'poolers' : 'scheduledbackups'
   const group = kind === 'Deployment' ? 'apps' : kind === 'Pod' ? '' : 'postgresql.cnpg.io'
+  const hasSummary = kind === 'Pooler' || kind === 'ScheduledBackup'
   const data = { ...resource, kind, apiVersion: group ? `${group}/v1` : 'v1', spec: { containers: [{ name: 'postgres', image: 'postgres' }] }, status: { phase: 'Running' } }
-  act(() => root.render(<WorkloadView {...props} kind={apiKind} group={group} expanded={false} resource={data} actionsBarProps={{ canExec: true, onOpenTerminal: () => {}, onRestart: () => {} }} renderHeaderActions={() => kind === 'ScheduledBackup' ? <><div><button>Suspend</button><button>Run now</button><button>Edit schedule</button></div><div>Run blocked: no backup destination</div></> : <button>{kind === 'Pooler' ? 'Pause' : 'Object action'}</button>} />))
+  act(() => root.render(<WorkloadView {...props} renderSummary={hasSummary ? props.renderSummary : undefined} kind={apiKind} group={group} expanded={false} resource={data} actionsBarProps={{ canExec: true, onOpenTerminal: () => {}, onRestart: () => {}, onDelete: () => {} }} renderHeaderActions={() => kind === 'ScheduledBackup' ? <><div><button>Suspend</button><button>Run now</button><button>Edit schedule</button></div><div>Run blocked: no backup destination</div></> : <button>{kind === 'Pooler' ? 'Pause' : 'Object action'}</button>} />))
   const object = host.querySelector('[data-action-group=object]')!
   const utility = host.querySelector('[data-action-group=utility]')!
   expect(object.parentElement).toBe(utility.parentElement)
   expect(object.parentElement!.classList.contains('flex-wrap')).toBe(true)
   expect(utility.classList.contains('ml-auto')).toBe(true)
   expect(object.querySelector('button')).not.toBeNull()
-  expect(utility.textContent).toContain('YAML')
+  if (hasSummary) {
+    // YAML moves into the stable Overview / Spec & status / YAML view switcher.
+    expect(utility.textContent).not.toContain('YAML')
+    expect([...host.querySelectorAll('[role="tab"]')].map((t) => t.textContent)).toEqual(['Overview', 'Spec & status', 'YAML'])
+  } else {
+    expect(utility.textContent).toContain('YAML')
+  }
   if (kind === 'Pod') expect(object.textContent).toContain('Terminal')
   if (kind === 'Deployment') expect(object.textContent).toContain('Restart')
   if (kind === 'ScheduledBackup') { expect(object.querySelectorAll('button')).toHaveLength(3); expect(object.textContent).toContain('Run blocked: no backup destination') }

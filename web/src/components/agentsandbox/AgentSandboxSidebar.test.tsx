@@ -73,9 +73,25 @@ describe('The Agents row with both runtimes', () => {
     expect(new Set(agents?.destinations.map((d) => d.id)).size).toBe(9)
     expect(html.indexOf('>Substrate</div>')).toBeGreaterThan(-1)
     expect(html.indexOf('>Substrate</div>')).toBeLessThan(html.indexOf('>Sandbox</div>'))
-    // Substrate's 3 attention items and Sandbox's 5 rows.
-    expect(agents).toMatchObject({ count: 8, countLowerBound: false })
-    // The kinds neither runtime has a table for stay under Other kinds, once.
+    // Substrate's 3 attention items and Sandbox's 5 attention items, with hover breakdown and scope.
+    expect(agents).toMatchObject({
+      count: 8,
+      countLowerBound: false,
+      countTitle: 'Attention items — Substrate: 3 · cluster-wide · Sandbox: 5 · all namespaces',
+    })
+    // The kinds neither runtime has a table for stay under Other kinds, suffixed with their runtime.
     expect(html).toMatch(/Other kinds \(2\)/)
+    expect(html).toContain('SandboxConfig')
+    expect(html).toContain(' · Substrate')
+    expect(html).toContain('SandboxTemplate')
+    expect(html).toContain(' · Sandbox')
+  })
+
+  it('includes namespace scope in the Agents badge hover breakdown when filtered', () => {
+    state.sandbox = liveWorkspace()
+    state.substrate = substrateWorkspace()
+    const { agents } = render([...SUBSTRATE_KINDS, ...SANDBOX_KINDS], ['payments'])
+    expect(agents?.countTitle).toBe('Attention items — Substrate: 3 · cluster-wide · Sandbox: 5 · namespace payments')
+    expect(agents?.scopeNote).toBe('Agent Sandbox: Counts for namespace payments · Agent Substrate: cluster-wide')
   })
 })

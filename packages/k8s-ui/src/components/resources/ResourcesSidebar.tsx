@@ -72,6 +72,8 @@ export interface SidebarCategoryWorkspace {
   count?: number | null
   countLowerBound?: boolean
   countTitle?: string
+  /** Scope of the row's count (e.g. "cluster-wide", "namespace payments"), used in combined hover breakdowns. */
+  countScope?: string
   /** Explains what the destination counts are scoped to. */
   scopeNote?: string
 }
@@ -198,11 +200,14 @@ interface ResourceTypeButtonProps {
   onTogglePin?: () => void
   onClick: () => void
   indent?: boolean
+  /** Optional muted runtime/owner suffix shown after the kind name (e.g. "Sandbox" or "Substrate"). */
+  suffix?: string
 }
 
 const ResourceTypeButton = forwardRef<HTMLButtonElement, ResourceTypeButtonProps>(
-  function ResourceTypeButton({ resource, count, coverage, isSelected, isHighlighted, isForbidden: forbidden, isPinned, onTogglePin, onClick, indent }, ref) {
+  function ResourceTypeButton({ resource, count, coverage, isSelected, isHighlighted, isForbidden: forbidden, isPinned, onTogglePin, onClick, indent, suffix }, ref) {
     const Icon = getResourceIcon(resource.kind, resource.group)
+    const tooltipLabel = suffix ? `${resource.kind} · ${suffix}` : resource.kind
     return (
       <button
         ref={ref}
@@ -220,9 +225,10 @@ const ResourceTypeButton = forwardRef<HTMLButtonElement, ResourceTypeButtonProps
         )}
       >
         <Icon className="w-4 h-4 shrink-0" />
-        <Tooltip content={forbidden ? `${resource.kind} (no access)` : resource.kind} position="right" wrapperClassName="min-w-0 flex-1 overflow-hidden">
+        <Tooltip content={forbidden ? `${tooltipLabel} (no access)` : tooltipLabel} position="right" wrapperClassName="min-w-0 flex-1 overflow-hidden">
           <span className="text-left truncate block">
             {resource.kind}
+            {suffix && <span className="text-theme-text-tertiary font-normal"> · {suffix}</span>}
           </span>
         </Tooltip>
         <div className="ml-auto flex items-center gap-1 shrink-0">
@@ -804,7 +810,8 @@ export function ResourcesSidebar({
                             const resourceIsPinned = isPinned(resource.name, resource.group)
                             const isResourceSelected = isSelectedKind(resource)
                             const highlighted = isKindHighlighted(resource.name, resource.group)
-                            const groupLabel = groupHeaderBefore(list, index)
+                            const runtimeSuffix = category.name === 'Agents' ? agentRuntimeSuffix(resource.group) : undefined
+                            const groupLabel = category.name === 'Agents' && runtimeSuffix ? null : groupHeaderBefore(list, index)
                             return (
                               <div key={`${resource.group}/${resource.name}`}>
                                 {groupLabel && (
@@ -822,6 +829,7 @@ export function ResourcesSidebar({
                                   onTogglePin={() => togglePin({ name: resource.name, kind: resource.kind, group: resource.group })}
                                   onClick={() => selectKind({ name: resource.name, kind: resource.kind, group: resource.group })}
                                   indent
+                                  suffix={runtimeSuffix}
                                 />
                               </div>
                             )
@@ -975,6 +983,17 @@ function sortByGroup(resources: APIResource[]): APIResource[] {
       ? a.kind.localeCompare(b.kind)
       : (size.get(b.group) ?? 0) - (size.get(a.group) ?? 0) || a.group.localeCompare(b.group),
   )
+}
+
+const AGENT_RUNTIME_GROUP_SUFFIX: Record<string, string> = {
+  'ate.dev': 'Substrate',
+  'agents.x-k8s.io': 'Sandbox',
+  'extensions.agents.x-k8s.io': 'Sandbox',
+  'api.kagent.dev': 'kagent',
+}
+
+function agentRuntimeSuffix(group: string): string | undefined {
+  return AGENT_RUNTIME_GROUP_SUFFIX[group]
 }
 
 function groupHeaderBefore(resources: APIResource[], index: number): string | null {

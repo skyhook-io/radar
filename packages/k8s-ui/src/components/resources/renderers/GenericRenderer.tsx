@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { Info, CheckCircle, XCircle, AlertCircle, FileCode, AlertTriangle, Layers, Minus } from 'lucide-react'
 import { clsx } from 'clsx'
-import { AlertBanner, Section, PropertyList, Property, isInvertedPolarityCondition } from '../../ui/drawer-components'
+import { AlertBanner, Section, PropertyList, Property, isInvertedPolarityCondition, useSummaryOwnsDiagnosis } from '../../ui/drawer-components'
 import { Collapse, CollapseChevron, useDisclosure } from '../../ui/Collapse'
 import { getGenericResourceStatus } from '../generic-status'
-import { getAgentRuntimeStatus, isAgentSandboxResource } from '../resource-utils-agent-runtimes'
+import { getAgentRuntimeStatus, isAgentSandboxExtensionResource, isAgentSandboxResource } from '../resource-utils-agent-runtimes'
 import { isApiGroup } from '../resource-utils-cnpg'
 import { getInferenceServiceStatus, isInferenceServiceStopRequested } from '../resource-utils-kserve'
 import { getCrossplanePauseState, getCrossplaneIndependentStatus, getCrossplaneConditionTone } from '../resource-utils-crossplane'
@@ -22,8 +22,9 @@ export function GenericRenderer({ data }: GenericRendererProps) {
   const conditions = status.conditions
 
   // Determine health status from conditions or status fields
+  const summaryOwnsDiagnosis = useSummaryOwnsDiagnosis()
   const acknowledgedPause = getCrossplanePauseState(data) === 'acknowledged'
-  const healthStatus = getHealthStatus(data)
+  const healthStatus = summaryOwnsDiagnosis ? null : getHealthStatus(data)
 
   // Extract important fields from spec and status
   const statusFields = getImportantFields(status, 'status')
@@ -348,8 +349,29 @@ export function genericConditionTone(resource: any, cond: any): GenericCondition
     && cond.type === 'RolloutProgressing') return 'neutral'
   // A Sandbox's Suspended says which lifecycle state it is in, not whether it
   // is healthy. Only a suspension the controller refuses is a problem.
-  if (resource?.kind === 'Sandbox' && isAgentSandboxResource(resource) && cond.type === 'Suspended') {
+  const isSandbox = resource?.kind === 'Sandbox' && isAgentSandboxResource(resource)
+  const isSandboxClaim = resource?.kind === 'SandboxClaim' && isAgentSandboxExtensionResource(resource)
+  if (isSandbox && cond.type === 'Suspended') {
     return cond.status === 'False' && cond.reason === 'PodNotOwned' ? 'warning' : 'neutral'
+  }
+  // Agent Sandbox reports every non-running state as Ready=False. Settled
+  // lifecycle outcomes are neutral rather than failures; missing pool/template
+  // refs on claims and refused suspensions are warnings matching their readings.
+  if ((isSandbox || isSandboxClaim) && cond.type === 'Ready' && cond.status === 'False') {
+    if (cond.reason === 'SandboxExpired' || cond.reason === 'ClaimExpired' || cond.reason === 'PodSucceeded') {
+      return 'neutral'
+    }
+    if (cond.reason === 'SandboxSuspended') {
+      if (isSandboxClaim) return 'neutral'
+      const suspended = Array.isArray(resource?.status?.conditions)
+        ? resource.status.conditions.find((c: any) => c?.type === 'Suspended')
+        : undefined
+      if (suspended?.status === 'True') return 'neutral'
+      if (suspended?.status === 'False' && suspended?.reason === 'PodNotOwned') return 'warning'
+    }
+    if (isSandboxClaim && (cond.reason === 'WarmPoolNotFound' || cond.reason === 'TemplateNotFound')) {
+      return 'warning'
+    }
   }
   const isTrue = cond.status === 'True'
   if (WARNING_CONDITION_TYPES.has(cond.type)) return isTrue ? 'warning' : 'ok'
