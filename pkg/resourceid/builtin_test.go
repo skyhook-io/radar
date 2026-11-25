@@ -19,7 +19,7 @@ func TestBuiltinTableIsConsistent(t *testing.T) {
 		if b.Resource != strings.ToLower(b.Resource) {
 			t.Errorf("%s: resource %q is not lowercase", b.Kind, b.Resource)
 		}
-		if b.Version == "" && b.Group != "resource.k8s.io" {
+		if b.Version == "" && b.Group != "resource.k8s.io" && b.Kind != "MutatingAdmissionPolicy" && b.Kind != "MutatingAdmissionPolicyBinding" {
 			t.Errorf("%s: only resources whose served version varies may omit Version", b.Kind)
 		}
 		for _, name := range b.Names() {
@@ -43,7 +43,9 @@ func TestBuiltinForName(t *testing.T) {
 		"ep":                                {Group: "", Kind: "Endpoints"},
 		"jobs":                              {Group: "batch", Kind: "Job"},
 		"validatingadmissionpolicies":       {Group: "admissionregistration.k8s.io", Kind: "ValidatingAdmissionPolicy"},
+		"mutatingadmissionpolicies":         {Group: "admissionregistration.k8s.io", Kind: "MutatingAdmissionPolicy"},
 		"validatingadmissionpolicybindings": {Group: "admissionregistration.k8s.io", Kind: "ValidatingAdmissionPolicyBinding"},
+		"mutatingadmissionpolicybindings":   {Group: "admissionregistration.k8s.io", Kind: "MutatingAdmissionPolicyBinding"},
 	} {
 		b, ok := BuiltinForName(name)
 		if !ok || b.GroupKind() != want {
@@ -60,6 +62,7 @@ func TestBuiltinScope(t *testing.T) {
 		"Pod": true, "Node": false, "Namespace": false, "Role": true, "ClusterRole": false,
 		"ResourceClaim": true, "DeviceClass": false,
 		"ValidatingAdmissionPolicy": false, "ValidatingAdmissionPolicyBinding": false,
+		"MutatingAdmissionPolicy": false, "MutatingAdmissionPolicyBinding": false,
 	} {
 		b, ok := BuiltinForKind(kind)
 		if !ok || b.Namespaced != namespaced {

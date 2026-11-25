@@ -366,6 +366,12 @@ func charCluster() *charFixture {
 	typed("", "PersistentVolume", "persistentvolumes", pv)
 	addSecret(&corev1.Secret{ObjectMeta: charMeta("team", "db-creds", nil)})
 
+	// A Longhorn Volume and the PV whose CSI handle names it.
+	lhPV := &corev1.PersistentVolume{ObjectMeta: charMeta("", "pv-lh-0", nil), Spec: corev1.PersistentVolumeSpec{PersistentVolumeSource: corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "driver.longhorn.io", VolumeHandle: "vol-lh-0"}}}}
+	p.pvs = append(p.pvs, lhPV)
+	typed("", "PersistentVolume", "persistentvolumes", lhPV)
+	dyn("longhorn.io", "v1beta2", "Volume", "volumes", true, charUnstructured("longhorn.io/v1beta2", "Volume", "longhorn-system", "vol-lh-0", nil, map[string]any{"numberOfReplicas": int64(3)}, nil))
+
 	// infra/agent: DaemonSet Pods on two Nodes.
 	agent := &appsv1.DaemonSet{ObjectMeta: charMeta("infra", "agent", nil), Spec: appsv1.DaemonSetSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "agent"}}}}
 	p.daemonSets = append(p.daemonSets, agent)
@@ -401,6 +407,12 @@ func charCluster() *charFixture {
 		// and nothing else relates the two.
 		charUnstructured("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "flux-system", "infra", nil, map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "repo"}, "path": "./infra"}, inventory()))
 	dyn("source.toolkit.fluxcd.io", "v1", "GitRepository", "gitrepositories", true, charUnstructured("source.toolkit.fluxcd.io/v1", "GitRepository", "flux-system", "repo", nil, map[string]any{"url": "https://example.com/repo.git"}, nil))
+	// The artifact chain: an ExternalArtifact made by an ArtifactGenerator
+	// that composes the shared repository.
+	dyn("source.extensions.fluxcd.io", "v1beta1", "ArtifactGenerator", "artifactgenerators", true, charUnstructured("source.extensions.fluxcd.io/v1beta1", "ArtifactGenerator", "flux-system", "bundle", nil,
+		map[string]any{"sources": []any{map[string]any{"alias": "repo", "kind": "GitRepository", "name": "repo"}}}, nil))
+	dyn("source.toolkit.fluxcd.io", "v1", "ExternalArtifact", "externalartifacts", true, charUnstructured("source.toolkit.fluxcd.io/v1", "ExternalArtifact", "flux-system", "bundle-app", nil,
+		map[string]any{"sourceRef": map[string]any{"apiVersion": "source.extensions.fluxcd.io/v1beta1", "kind": "ArtifactGenerator", "name": "bundle"}}, nil))
 	dyn("helm.toolkit.fluxcd.io", "v2", "HelmRelease", "helmreleases", true, charUnstructured("helm.toolkit.fluxcd.io/v2", "HelmRelease", "shop", "redis",
 		map[string]string{"kustomize.toolkit.fluxcd.io/name": "shop", "kustomize.toolkit.fluxcd.io/namespace": "flux-system"},
 		map[string]any{"chart": map[string]any{"spec": map[string]any{"chart": "redis", "sourceRef": map[string]any{"kind": "HelmRepository", "name": "bitnami", "namespace": "flux-system"}}}}, nil))

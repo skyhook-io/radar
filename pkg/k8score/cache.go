@@ -1506,6 +1506,15 @@ func (rc *ResourceCache) Stop() {
 	})
 }
 
+// Done returns a channel closed when the cache is stopped, so work tied to
+// this cache's lifetime can let go of it once it is retired.
+func (rc *ResourceCache) Done() <-chan struct{} {
+	if rc == nil {
+		return nil
+	}
+	return rc.stopCh
+}
+
 // Client returns the clientset the cache's informers were built from. An
 // embedder that lists through a separate informer clientset must map its
 // request clientset to that informer clientset before comparing, or the

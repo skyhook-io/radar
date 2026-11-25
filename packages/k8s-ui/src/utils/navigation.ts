@@ -2,6 +2,13 @@ import type { SelectedResource, ResourceRef, APIResource } from '../types/core'
 import { englishPlural, englishSingular, isEnglishPlural } from './pluralize'
 import { CORE_RESOURCES, isBuiltinCoreKind } from './api-resources'
 
+/** Read the cluster namespace picker from repeated or comma-separated URL parameters. */
+export function namespacesFromSearch(params: URLSearchParams): string[] {
+  const plural = params.getAll('namespaces')
+  const values = plural.some(value => value.trim()) ? plural : params.getAll('namespace')
+  return [...new Set(values.flatMap(value => value.split(',')).map(name => name.trim()).filter(Boolean))]
+}
+
 /**
  * Canonical callback type for navigating to a resource.
  * All components that trigger resource navigation should use this type.
@@ -57,6 +64,8 @@ const BUILTIN_GROUP_KIND_TO_PLURAL: Record<string, string> = {
 
 const BUILTIN_GROUP_PLURAL_TO_KIND: Record<string, string> = {
   ...Object.fromEntries(CORE_RESOURCES.map(r => [`${r.group}/${r.name}`, r.kind])),
+  'admissionregistration.k8s.io/mutatingadmissionpolicies': 'MutatingAdmissionPolicy',
+  'admissionregistration.k8s.io/mutatingadmissionpolicybindings': 'MutatingAdmissionPolicyBinding',
   'metrics.k8s.io/pods': 'PodMetrics',
   'metrics.k8s.io/nodes': 'NodeMetrics',
   'scheduling.k8s.io/podgroups': 'PodGroup',

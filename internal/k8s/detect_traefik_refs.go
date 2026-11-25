@@ -622,6 +622,9 @@ func addTraefikIngressRouteTLSReferences(idx *tlsServingIndex) {
 	dynamicCache := GetDynamicResourceCache()
 	discovery := GetResourceDiscovery()
 	if dynamicCache == nil || discovery == nil {
+		if GetResourceCache().CustomResourcesPending() {
+			idx.uncertain[traefikIngressController] = true
+		}
 		return
 	}
 	gvr, ok := discovery.GetGVRWithGroup("IngressRoute", traefikGroup)

@@ -4,12 +4,12 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
 	"time"
 
-	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -17,12 +17,12 @@ import (
 )
 
 const (
-	Java4ShellCVE              = "CVE-2026-114938"
-	java4ShellVBMILabel        = "feature.node.kubernetes.io/cpu-cpuid.AVX512VBMI"
-	java4ShellRowLimit         = 100
-	java4ShellDockerHubLookups = 24
-	javaHomeDeclaredReason     = "java_home_declared"
-	noJavaDeclarationReason    = "no_java_declaration"
+	Java4ShellCVE           = "CVE-2026-114938"
+	java4ShellVBMILabel     = "feature.node.kubernetes.io/cpu-cpuid.AVX512VBMI"
+	java4ShellRowLimit      = 100
+	CredentialCheckTimeout  = "credential_check_timeout"
+	javaHomeDeclaredReason  = "java_home_declared"
+	noJavaDeclarationReason = "no_java_declaration"
 )
 
 const (
@@ -40,6 +40,7 @@ type Java4ShellPod struct {
 }
 
 type Java4ShellRegistryAccess struct {
+	TimedOut         bool
 	PullSecrets      []*corev1.Secret
 	RadarCredentials bool
 }
@@ -54,17 +55,21 @@ type Java4ShellFinding struct {
 	Pods                   int            `json:"pods"`
 	VBMIPods               int            `json:"vbmiPods"`
 	UnknownCPUPods         int            `json:"unknownCPUPods"`
+	NoVBMIByInstanceType   map[string]int `json:"noVBMIByInstanceType,omitempty"`
 	MitigationDeclaredPods int            `json:"mitigationDeclaredPods"`
 }
 
 type Java4ShellResult struct {
-	Findings         []Java4ShellFinding    `json:"findings"`
-	Containers       int                    `json:"containers"`
-	Matches          int                    `json:"matches"`
-	FindingGroups    int                    `json:"findingGroups"`
-	Unassessed       map[string]int         `json:"unassessed"`
-	UnassessedRows   []Java4ShellUnassessed `json:"unassessedRows"`
-	UnassessedGroups int                    `json:"unassessedGroups"`
+	Findings               []Java4ShellFinding    `json:"findings"`
+	Containers             int                    `json:"containers"`
+	Matches                int                    `json:"matches"`
+	FindingGroups          int                    `json:"findingGroups"`
+	Unassessed             map[string]int         `json:"unassessed"`
+	UnassessedRows         []Java4ShellUnassessed `json:"unassessedRows"`
+	UnassessedGroups       int                    `json:"unassessedGroups"`
+	UnaffectedByMajor      map[int]int            `json:"unaffectedByMajor,omitempty"`
+	AuthRequiredRegistries []string               `json:"authRequiredRegistries,omitempty"`
+	RateLimitedRegistries  []string               `json:"rateLimitedRegistries,omitempty"`
 }
 
 type Java4ShellReport struct {
@@ -83,6 +88,7 @@ type Java4ShellUnassessed struct {
 }
 
 type java4ShellContainer struct {
+	accessTimedOut     bool
 	pod                *corev1.Pod
 	container          string
 	image              string
@@ -91,6 +97,7 @@ type java4ShellContainer struct {
 	unassessedReason   string
 	platformAssumed    bool
 	cpu                string
+	noVBMIInstanceType string
 	mitigationDeclared bool
 }
 
@@ -108,6 +115,12 @@ type java4ShellUnassessedGroup struct {
 // platform and credential grant. The caller authorizes and captures the
 // credentials for each Pod before a private read.
 func (r *RuntimeInventory) CheckJava4Shell(ctx context.Context, pods []Java4ShellPod, workloadFor func(context.Context, *corev1.Pod) resourceid.Ref, accessFor func(*corev1.Pod) Java4ShellRegistryAccess) (Java4ShellResult, error) {
+	return r.ScanJava4Shell(ctx, pods, workloadFor, accessFor, nil)
+}
+
+// ScanJava4Shell with a progress observer uses the paced registry scan.
+// Its observer receives serial updates for completed image lookup groups.
+func (r *RuntimeInventory) ScanJava4Shell(ctx context.Context, pods []Java4ShellPod, workloadFor func(context.Context, *corev1.Pod) resourceid.Ref, accessFor func(*corev1.Pod) Java4ShellRegistryAccess, progress func(done, total int)) (Java4ShellResult, error) {
 	if !r.java4ShellActive.CompareAndSwap(false, true) {
 		return Java4ShellResult{}, ErrJava4ShellBusy
 	}
@@ -123,7 +136,6 @@ func (r *RuntimeInventory) CheckJava4Shell(ctx context.Context, pods []Java4Shel
 	})
 	var items []*work
 	byKey := map[string]int{}
-	dockerHubLookups := 0
 	var containers []java4ShellContainer
 	for _, target := range pods {
 		pod := target.Pod
@@ -131,6 +143,10 @@ func (r *RuntimeInventory) CheckJava4Shell(ctx context.Context, pods []Java4Shel
 			continue
 		}
 		platform, assumed, cpu := java4ShellPlacement(target.Node)
+		var noVBMIInstanceType string
+		if cpu == "unknown" {
+			noVBMIInstanceType = java4ShellInstanceTypeWithoutVBMI(target.Node)
+		}
 		var access Java4ShellRegistryAccess
 		var secrets []credential
 		var credentialScope string
@@ -186,29 +202,24 @@ func (r *RuntimeInventory) CheckJava4Shell(ctx context.Context, pods []Java4Shel
 			lookupKey := key + credentialScope
 			i, exists := byKey[lookupKey]
 			if !exists {
-				onDockerHub := ref.Context().RegistryStr() == name.DefaultRegistry
-				if len(items) >= maxLookupsPerCall || (onDockerHub && dockerHubLookups >= java4ShellDockerHubLookups) {
-					c.unassessedReason = StatusNotChecked
-					containers = append(containers, c)
-					continue
-				}
-				if onDockerHub {
-					dockerHubLookups++
-				}
 				i = len(items)
 				byKey[lookupKey] = i
 				items = append(items, &work{key: key, ref: ref, platform: platform, advisory: true,
 					secrets: secrets, radarCredentials: access.RadarCredentials})
 			}
 			c.lookup = i
+			c.accessTimedOut = access.TimedOut
 			c.platformAssumed = assumed
 			c.cpu = cpu
+			c.noVBMIInstanceType = noVBMIInstanceType
 			c.mitigationDeclared = java4ShellMitigationDeclared(container)
 			containers = append(containers, c)
 		}
 	}
 
-	results := r.lookupConfigs(context.WithValue(ctx, strictRegistryLookupKey{}, true), items, false)
+	results := r.lookupConfigs(context.WithValue(ctx, strictRegistryLookupKey{}, true), items, false, progress)
+	authRegistries := map[string]struct{}{}
+	throttledRegistries := map[string]struct{}{}
 	groups := map[java4ShellGroup]*Java4ShellFinding{}
 	workloads := map[*corev1.Pod]resourceid.Ref{}
 	resolveWorkload := func(ctx context.Context, pod *corev1.Pod) resourceid.Ref {
@@ -230,6 +241,14 @@ func (r *RuntimeInventory) CheckJava4Shell(ctx context.Context, pods []Java4Shel
 		res := results[c.lookup]
 		if res.status != StatusOK {
 			c.unassessedReason = res.status
+			switch {
+			case c.accessTimedOut && (res.status == StatusAuthRequired || res.status == StatusNotFound):
+				c.unassessedReason = CredentialCheckTimeout
+			case res.status == StatusAuthRequired:
+				authRegistries[registryBudgetHost(items[c.lookup].ref)] = struct{}{}
+			case res.status == StatusRateLimited:
+				throttledRegistries[registryBudgetHost(items[c.lookup].ref)] = struct{}{}
+			}
 			continue
 		}
 		// An image index can point at several platform manifests. Without
@@ -252,12 +271,16 @@ func (r *RuntimeInventory) CheckJava4Shell(ctx context.Context, pods []Java4Shel
 			}
 			continue
 		}
-		affected, fixedIn, known := java4ShellVersion(version)
-		if !known {
+		major, affected, fixedIn := java4ShellVersion(version)
+		if major == 0 {
 			c.unassessedReason = "version_unknown"
 			continue
 		}
 		if !affected {
+			if out.UnaffectedByMajor == nil {
+				out.UnaffectedByMajor = map[int]int{}
+			}
+			out.UnaffectedByMajor[major]++
 			continue
 		}
 		workload := resolveWorkload(ctx, c.pod)
@@ -273,11 +296,24 @@ func (r *RuntimeInventory) CheckJava4Shell(ctx context.Context, pods []Java4Shel
 		case "vbmi":
 			row.VBMIPods++
 		case "unknown":
-			row.UnknownCPUPods++
+			if c.noVBMIInstanceType == "" {
+				row.UnknownCPUPods++
+			} else {
+				if row.NoVBMIByInstanceType == nil {
+					row.NoVBMIByInstanceType = map[string]int{}
+				}
+				row.NoVBMIByInstanceType[c.noVBMIInstanceType]++
+			}
 		}
 		if c.mitigationDeclared {
 			row.MitigationDeclaredPods++
 		}
+	}
+	out.AuthRequiredRegistries = slices.Sorted(maps.Keys(authRegistries))
+	out.RateLimitedRegistries = slices.Sorted(maps.Keys(throttledRegistries))
+	if !r.cli {
+		out.AuthRequiredRegistries = out.AuthRequiredRegistries[:min(len(out.AuthRequiredRegistries), java4ShellRowLimit)]
+		out.RateLimitedRegistries = out.RateLimitedRegistries[:min(len(out.RateLimitedRegistries), java4ShellRowLimit)]
 	}
 	for _, row := range groups {
 		out.Findings = append(out.Findings, *row)
@@ -285,6 +321,7 @@ func (r *RuntimeInventory) CheckJava4Shell(ctx context.Context, pods []Java4Shel
 	slices.SortFunc(out.Findings, func(a, b Java4ShellFinding) int {
 		return cmp.Or(
 			cmp.Compare(b.VBMIPods, a.VBMIPods),
+			cmp.Compare(b.UnknownCPUPods, a.UnknownCPUPods),
 			strings.Compare(a.Workload.Namespace, b.Workload.Namespace),
 			strings.Compare(a.Workload.Name, b.Workload.Name),
 			strings.Compare(a.Workload.Kind, b.Workload.Kind),
@@ -296,7 +333,9 @@ func (r *RuntimeInventory) CheckJava4Shell(ctx context.Context, pods []Java4Shel
 		)
 	})
 	out.FindingGroups = len(out.Findings)
-	out.Findings = out.Findings[:min(out.FindingGroups, java4ShellRowLimit)]
+	if !r.cli {
+		out.Findings = out.Findings[:min(out.FindingGroups, java4ShellRowLimit)]
+	}
 
 	// A cluster full of images without Java metadata can need many owner
 	// permission checks. Fall back to the visible Pod once the budget expires.
@@ -336,7 +375,9 @@ func (r *RuntimeInventory) CheckJava4Shell(ctx context.Context, pods []Java4Shel
 		)
 	})
 	out.UnassessedGroups = len(out.UnassessedRows)
-	out.UnassessedRows = out.UnassessedRows[:min(out.UnassessedGroups, java4ShellRowLimit)]
+	if !r.cli {
+		out.UnassessedRows = out.UnassessedRows[:min(out.UnassessedGroups, java4ShellRowLimit)]
+	}
 	return out, nil
 }
 
@@ -371,32 +412,66 @@ func java4ShellPlacement(node *corev1.Node) (v1.Platform, bool, string) {
 	}
 }
 
+var azureDav4InstanceType = regexp.MustCompile(`(?i)^standard_d(2|4|8|16|32|48|64|96)as?_v4$`)
+
+func java4ShellInstanceTypeWithoutVBMI(node *corev1.Node) string {
+	if node == nil || node.Status.NodeInfo.Architecture != "amd64" {
+		return ""
+	}
+	instanceType := node.Labels[corev1.LabelInstanceTypeStable]
+	provider, id, ok := strings.Cut(node.Spec.ProviderID, "://")
+	if !ok || id == "" {
+		return ""
+	}
+	switch provider {
+	case "aws":
+		family, size, _ := strings.Cut(instanceType, ".")
+		if size != "" && (family == "c6a" || family == "m6a" || family == "r6a") {
+			return instanceType
+		}
+	case "gce":
+		family, size, _ := strings.Cut(instanceType, "-")
+		if size != "" && (family == "c2" || family == "c2d") {
+			return instanceType
+		}
+	case "azure":
+		if azureDav4InstanceType.MatchString(instanceType) {
+			return instanceType
+		}
+	}
+	return ""
+}
+
 var (
-	java8Release      = regexp.MustCompile(`^(?:jdk-?)?8u([0-9]+)(?:-?b([0-9]+))?$`)
+	java8Release      = regexp.MustCompile(`^(?:jdk-?)?(?:8u|1\.8\.0_)([0-9]+)(?:-?b([0-9]+))?$`)
 	javaReleaseSuffix = regexp.MustCompile(`^(?:\+[0-9]+(?:-lts)?)?$`)
 )
 
 // java4ShellVersion compares a declared upstream version string with the
 // November 2026 advisory. A vendor package revision needs its own advisory.
-func java4ShellVersion(raw string) (affected bool, fixedIn string, known bool) {
+func java4ShellVersion(raw string) (major int, affected bool, fixedIn string) {
 	v := strings.ToLower(raw)
-	if strings.TrimPrefix(strings.TrimPrefix(v, "jdk"), "-") == "8u511b33-perf" {
-		return true, "", true
+	switch strings.TrimPrefix(strings.TrimPrefix(v, "jdk"), "-") {
+	case "8u511b33-perf", "8u511-b33-perf":
+		return 8, true, ""
 	}
 	if parts := java8Release.FindStringSubmatch(v); parts != nil {
-		return false, "", parts[1] != "511" || (parts[2] != "" && parts[2] != "33")
+		if parts[1] == "511" && (parts[2] == "" || parts[2] == "33") {
+			return 0, false, ""
+		}
+		return 8, false, ""
 	}
 	version, suffix := parseVersionRest(v)
 	if len(version) == 1 && strings.HasPrefix(suffix, "+") {
 		version = append(version, 0, 0)
 	}
 	if len(version) < 3 || len(version) > 5 || !javaReleaseSuffix.MatchString(suffix) {
-		return false, "", false
+		return 0, false, ""
 	}
 	switch version[0] {
 	case 17:
 		if compareVersions(version[:3], []int{17, 0, 6}) < 0 {
-			return false, "", true
+			return 17, false, ""
 		}
 		fixedIn = "17.0.21.1"
 	case 21:
@@ -406,18 +481,18 @@ func java4ShellVersion(raw string) (affected bool, fixedIn string, known bool) {
 	case 27:
 		fixedIn = "27.0.1.1"
 	case 18, 19, 20, 22, 23, 24, 26:
-		return true, "", true
+		return version[0], true, ""
 	case 9, 10, 11, 12, 13, 14, 15, 16:
-		return false, "", true
+		return version[0], false, ""
 	default:
-		return false, "", false
+		return 0, false, ""
 	}
 	fixed, _ := parseVersionRest(fixedIn)
 	if len(version) > 3 && slices.Equal(version[:3], fixed[:3]) &&
 		!slices.Equal(version, fixed) && !slices.Equal(version[3:], []int{0, 3}) {
-		return false, "", false
+		return 0, false, ""
 	}
-	return compareVersions(version, fixed) < 0, fixedIn, true
+	return version[0], compareVersions(version, fixed) < 0, fixedIn
 }
 
 func java4ShellMitigationDeclared(container corev1.Container) bool {

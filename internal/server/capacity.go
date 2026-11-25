@@ -72,14 +72,15 @@ type capacityClusterIdentity struct {
 var capacityClusterIdentityNow = liveCapacityClusterIdentity
 
 func liveCapacityClusterIdentity() capacityClusterIdentity {
+	conn := k8s.Current()
 	return capacityClusterIdentity{
-		contextName:          k8s.GetContextName(),
-		activeClusterContext: k8s.ActiveClusterContext(),
-		clusterName:          k8s.GetClusterName(),
-		client:               k8s.GetClient(),
+		contextName:          conn.ContextName(),
+		activeClusterContext: k8s.TimelineClusterContext(conn.ContextName()),
+		clusterName:          conn.ClusterName(),
+		client:               conn.Client(),
 		resource:             k8s.GetResourceCache(),
 		dynamic:              k8s.GetDynamicResourceCache(),
-		discovery:            k8s.GetResourceDiscovery(),
+		discovery:            conn.Discovery(),
 		metrics:              k8s.GetMetricsHistory(),
 		timeline:             internaltimeline.GetStore(),
 	}
@@ -399,7 +400,7 @@ func (s *Server) loadCapacityModel(w http.ResponseWriter, r *http.Request, ident
 	if !s.requireNodeVisibility(w, r) {
 		return capacityLoadResult{}, false
 	}
-	capability := s.karpenterCapability(r)
+	capability := s.karpenterCapability(r, k8s.BoundOrCurrent(r.Context()))
 	result.state = capability.State
 	if capability.State == capacityapi.IntegrationDenied {
 		if !softKarpenterDenial {

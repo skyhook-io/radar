@@ -53,3 +53,33 @@ describe('finding evidence', () => {
     expect(html).toContain('Different cluster deadline')
   })
 })
+
+describe('ignore-checks hint', () => {
+  const namespaceSentence = 'Put it on the Namespace'
+  const renderHint = (namespaceIgnoreChecks?: boolean) => renderToStaticMarkup(
+    <ChecksView checks={[check([deadline])]} catalog={{}} anyData ignoreChecksAnnotation="radarhq.io/ignore-checks" namespaceIgnoreChecks={namespaceIgnoreChecks} />,
+  )
+
+  it('offers only the per-resource opt-out when the Radar did not honor Namespace annotations', () => {
+    const html = renderHint()
+    expect(html).toContain('radarhq.io/ignore-checks: tlsCertificateExpiry')
+    expect(html).toContain('Skip for one resource')
+    expect(html).not.toContain(namespaceSentence)
+  })
+
+  it('mentions the Namespace when the Radar honored Namespace annotations', () => {
+    const html = renderHint(true)
+    expect(html).toContain(namespaceSentence)
+    expect(html).toContain('Skip for a resource or namespace')
+  })
+
+  it('does not mention the Namespace for a check on cluster-scoped resources', () => {
+    const clusterScoped = check([deadline])
+    for (const f of clusterScoped.findings) f.resource = { ...f.resource, kind: 'PersistentVolume', namespace: '' }
+    const html = renderToStaticMarkup(
+      <ChecksView checks={[clusterScoped]} catalog={{}} anyData ignoreChecksAnnotation="radarhq.io/ignore-checks" namespaceIgnoreChecks />,
+    )
+    expect(html).toContain('Skip for one resource')
+    expect(html).not.toContain(namespaceSentence)
+  })
+})

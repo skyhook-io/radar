@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -26,6 +27,46 @@ var ErrWorkloadCacheWarming = errors.New("workload cache is still loading")
 // workload reports it as not found.
 var ErrWorkloadNotFound = errors.New("workload not found")
 var ErrWorkloadSelectorUnavailable = errors.New("workload selector unavailable")
+
+// WorkloadLogPodLister pins a live log follow to the workload selected at open.
+func WorkloadLogPodLister(cache *ResourceCache, kind, namespace, name string) (func() (pods []*corev1.Pod, awaitingPods bool, err error), error) {
+	if kind == "replicaset" || kind == "replicasets" {
+		if cache.ReplicaSets() == nil {
+			return nil, fmt.Errorf("%w: list replicasets", ErrWorkloadAccessDenied)
+		}
+		if err := requireCovers(cache, "replicasets", namespace); err != nil {
+			return nil, err
+		}
+		replicaSets := cache.ReplicaSets().ReplicaSets(namespace)
+		rs, err := replicaSets.Get(name)
+		if err != nil {
+			return nil, err
+		}
+		uid := rs.UID
+		return func() ([]*corev1.Pod, bool, error) {
+			pods, err := DirectlyOwnedPods(cache, namespace, name, "apps", "ReplicaSet", uid)
+			if err != nil || len(pods) != 0 {
+				return pods, false, err
+			}
+			current, err := replicaSets.Get(name)
+			if apierrors.IsNotFound(err) {
+				return nil, false, nil
+			}
+			if err != nil {
+				return nil, false, err
+			}
+			awaiting := current.UID == uid && current.DeletionTimestamp == nil && (current.Spec.Replicas == nil || *current.Spec.Replicas > 0)
+			return nil, awaiting, nil
+		}, nil
+	}
+	selector, err := GetWorkloadSelector(cache, kind, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+	return func() ([]*corev1.Pod, bool, error) {
+		return cache.GetPodsForWorkload(namespace, selector), false, nil
+	}, nil
+}
 
 // GetWorkloadSelector returns the label selector for a workload from cache.
 // kind is case-insensitive and accepts either singular ("deployment") or plural

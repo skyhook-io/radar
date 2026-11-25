@@ -32,7 +32,7 @@ func (p ProfileTarget) Same(other ProfileTarget) bool {
 
 func CurrentProfileTarget() (ProfileTarget, error) {
 	clientMu.RLock()
-	p := ProfileTarget{Binding: contextBinding, Context: contextName, Source: activeSourceFile, InFileName: activeSourceName, ClientGeneration: activeClientGeneration}
+	p := ProfileTarget{Binding: contextBinding, Context: contextName, Source: activeSourceFile, InFileName: activeSourceName, ClientGeneration: installedConn.Load().ClientGeneration()}
 	var identity struct {
 		Server, TLSName, User string
 		CA                    []byte
@@ -40,7 +40,7 @@ func CurrentProfileTarget() (ProfileTarget, error) {
 		Proxy                 string
 	}
 	caFile := ""
-	if activeSourceConfig != nil && k8sConfig != nil {
+	if k8sConfig := installedConn.Load().Config(); activeSourceConfig != nil && k8sConfig != nil {
 		if ctx := activeSourceConfig.Contexts[activeSourceName]; ctx != nil {
 			identity.User = ctx.AuthInfo
 			if cluster := activeSourceConfig.Clusters[ctx.Cluster]; cluster != nil {

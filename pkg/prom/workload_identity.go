@@ -37,12 +37,29 @@ func PodUIDFromCgroupID(id string) string {
 
 // PodCgroupPattern matches the Pod segment, never a UID appearing in a container name.
 func PodCgroupPattern(uid string) (string, error) {
-	if !podIdentityUID.MatchString(uid) {
-		return "", fmt.Errorf("invalid Kubernetes Pod UID")
+	return PodCgroupPatternForUIDs([]string{uid})
+}
+
+// PodCgroupPatternForUIDs returns an unquoted RE2 pattern matching the cgroup
+// Pod segment of any supplied Kubernetes Pod UID. An empty list or an invalid
+// UID returns an error.
+// Callers bound the number of UIDs to fit their query budget.
+func PodCgroupPatternForUIDs(uids []string) (string, error) {
+	if len(uids) == 0 {
+		return "", fmt.Errorf("empty Pod UID selection")
+	}
+	for _, uid := range uids {
+		if !podIdentityUID.MatchString(uid) {
+			return "", fmt.Errorf("invalid Kubernetes Pod UID")
+		}
+	}
+	names := strings.Join(uids, "|")
+	if len(uids) > 1 {
+		names = "(" + names + ")"
 	}
 	patterns := make([]string, 0, len(podCgroupFormats))
 	for _, format := range podCgroupFormats {
-		patterns = append(patterns, format.prefix+strings.ReplaceAll(uid, "-", format.separator)+format.suffix)
+		patterns = append(patterns, format.prefix+strings.ReplaceAll(names, "-", format.separator)+format.suffix)
 	}
 	return "(" + strings.Join(patterns, "|") + ")", nil
 }

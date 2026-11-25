@@ -765,6 +765,34 @@
       }
     },
     {
+      "id": "rel||PersistentVolume||pv-lh-0",
+      "kind": "PersistentVolume",
+      "name": "pv-lh-0",
+      "status": "unknown",
+      "data": {
+        "apiVersion": "v1",
+        "auditKey": "|PersistentVolume||pv-lh-0",
+        "labels": null,
+        "namespace": "",
+        "resource": "persistentvolumes",
+        "resourceKind": "PersistentVolume"
+      }
+    },
+    {
+      "id": "volume/longhorn-system/vol-lh-0/longhorn.io",
+      "kind": "Volume",
+      "name": "vol-lh-0",
+      "status": "unknown",
+      "data": {
+        "apiVersion": "longhorn.io/v1beta2",
+        "auditKey": "longhorn.io|Volume|longhorn-system|vol-lh-0",
+        "labels": null,
+        "namespace": "longhorn-system",
+        "resource": "volumes",
+        "resourceKind": "Volume"
+      }
+    },
+    {
       "id": "daemonset/infra/agent",
       "kind": "DaemonSet",
       "name": "agent",
@@ -924,6 +952,34 @@
         "namespace": "flux-system",
         "ready": "Unknown",
         "url": "https://example.com/repo.git"
+      }
+    },
+    {
+      "id": "artifactgenerator/flux-system/bundle/source.extensions.fluxcd.io",
+      "kind": "ArtifactGenerator",
+      "name": "bundle",
+      "status": "unknown",
+      "data": {
+        "apiVersion": "source.extensions.fluxcd.io/v1beta1",
+        "auditKey": "source.extensions.fluxcd.io|ArtifactGenerator|flux-system|bundle",
+        "labels": null,
+        "namespace": "flux-system",
+        "resource": "artifactgenerators",
+        "resourceKind": "ArtifactGenerator"
+      }
+    },
+    {
+      "id": "externalartifact/flux-system/bundle-app/source.toolkit.fluxcd.io",
+      "kind": "ExternalArtifact",
+      "name": "bundle-app",
+      "status": "unknown",
+      "data": {
+        "apiVersion": "source.toolkit.fluxcd.io/v1",
+        "auditKey": "source.toolkit.fluxcd.io|ExternalArtifact|flux-system|bundle-app",
+        "labels": null,
+        "namespace": "flux-system",
+        "resource": "externalartifacts",
+        "resourceKind": "ExternalArtifact"
       }
     },
     {

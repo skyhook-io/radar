@@ -1,3 +1,4 @@
+import { supportsWorkloadRevisions, WorkloadRevisionsButton } from './WorkloadRevisionsButton'
 import { RelatedFindingsSection } from './RelatedFindingsSection'
 import { decorateResourceDiagnose, resourceDetailRedirect, resourceDetailSlots, resourceIssueDetail, resourceLogs, resourceRendererOverrides } from '../../integrations/resourceHosts'
 import { ApplicationEvidenceAction } from '../application-evidence/ApplicationEvidenceAction'
@@ -37,6 +38,7 @@ import {
 } from '@skyhook-io/k8s-ui'
 import type { ServicePortRenderProps } from '@skyhook-io/k8s-ui/components/resources/renderers/ServiceRenderer'
 import { isJobSetV1Alpha2 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-jobset-lws'
+import { isCoreNode as isCoreNodeObject } from '@skyhook-io/k8s-ui/components/resources/resource-utils'
 import { SUBSTRATE_GROUP } from '@skyhook-io/k8s-ui/components/resources/resource-utils-agent-runtimes'
 import type { SelectedResource, ResourceRef, Relationships, ResourceWithRelationships } from '../../types'
 import { CronJobSchedulingContext, CronJobSchedulingDetails } from './CronJobSchedulingEvidence'
@@ -99,16 +101,19 @@ import {
   fetchJSON,
   fetchYamlSchemas,
 } from '../../api/client'
-import { PrometheusCharts, isPrometheusSupported } from '../resource/PrometheusCharts'
+import { TIME_RANGES, PrometheusCharts, isPrometheusSupported } from '../resource/PrometheusCharts'
+import { RightsizingStrip } from '../resource/RightsizingStrip'
 import { PrometheusChartsGrid } from '../resource/PrometheusChartsGrid'
+import { DatadogSetupHint, DatadogWorkloadCharts, useDatadogWorkloadCharts, WorkloadCostRightsizing } from '../resource/DatadogWorkloadCharts'
+import { useNavCustomization } from '../../context/NavCustomization'
 import { RestartEventLane } from '../resource/RestartChart'
-import { RightsizingPanel } from '../resource/RightsizingStrip'
 import { WorkloadCostTab } from '../cost/WorkloadCostTab'
 import { isOpenCostWorkloadKind } from '../cost/kinds'
 import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
 import { useTrafficAvailable } from '../../api/traffic'
 import { isNotFoundError, useResourceAudit, useResourceIssues, useSubjectIssues, useRadarFeature, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
 import { AuditAlerts, getRadarUpgradeRequirement, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows, getDefaultLogContainerName, getLogContainerNames, getInitContainerNames } from '@skyhook-io/k8s-ui'
+import { WorkloadLogsTab } from '../dock/WorkloadLogsTab'
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
 import { ScheduledWorkloadLogsViewer } from '../logs/ScheduledWorkloadLogsViewer'
 import { LogsViewer } from '../logs/LogsViewer'
@@ -151,7 +156,7 @@ type TabType = WorkloadTabType
 
 // The usage-report view a tab counts under. Timeline holds the resource's
 // events (it replaced the Events tab), so it counts as panel:events.
-const PANEL_USAGE_VIEWS: Partial<Record<TabType, string>> = {
+const PANEL_USAGE_VIEWS: Readonly<Partial<Record<TabType | "deploys", string>>> = {
   logs: 'panel:logs',
   yaml: 'panel:yaml',
   metrics: 'panel:metrics',
@@ -176,6 +181,14 @@ export function supportsBatchExecution(kind: string, apiKind: string, group?: st
     return group === 'jobset.x-k8s.io' && isJobSetV1Alpha2({ kind, apiVersion })
   }
   return true
+}
+
+// Longhorn serves a `nodes` plural whose objects are also Kind Node; node metrics
+// only exist for the core Node.
+export function isPrometheusMetricsAvailable(kind: string, resource: any, coreNodeRoute: boolean): boolean {
+  if (!isPrometheusSupported(kind)) return false
+  if (kind === 'Node') return coreNodeRoute && isCoreNodeObject(resource)
+  return !(kind === 'Pod' && resource?.status?.phase === 'Pending')
 }
 
 // ============================================================================
@@ -350,7 +363,7 @@ function useActionsBarProps(
 
   const isRolloutShape = isRolloutKind(kind)
   const isRollout = isRolloutShape && group === 'argoproj.io'
-  const isRollbackKind = ['deployments', 'statefulsets', 'daemonsets'].includes(kind.toLowerCase()) || isRollout
+  const isRollbackKind = supportsWorkloadRevisions(kind, group)
   const { data: rolloutCapabilities, isPending: rolloutCapabilitiesPending } = useRolloutCapabilities(namespace, name, isRollout)
   // Restart and Rollback are the generic workload buttons, so a Rollout has to
   // withhold the callback the way promote-full does. Permissive until the probe
@@ -361,6 +374,8 @@ function useActionsBarProps(
   const canSetImages = isRolloutShape
     ? imageUpdatesSupported && isRollout && !rolloutCapabilitiesPending && rolloutCapabilities?.setImage === true
     : !workloadWritesPending && canSetWorkloadImages({ name: kind, group }, workloadWrites, imageUpdatesSupported)
+  const { support: replicaSetLogSupport } = useRadarFeature('replicaSetLogs')
+  const isAppsReplicaSet = kind === 'replicasets' && group === 'apps'
   const { support: deploymentPauseSupport } = useRadarFeature('deploymentPause')
   const canPauseDeployments = !workloadWritesPending &&
     canPauseDeployment({ name: kind, group }, workloadWrites, deploymentPauseSupport === 'supported')
@@ -390,6 +405,7 @@ function useActionsBarProps(
   const argoResumeMutation = useArgoResume()
   const { upgrade: argoResumeUpgrade, blockedReason: argoResumeBlockedReason } = useRadarFeature('argoAutoSyncEnable')
   const { support: argoInheritanceSupport } = useRadarFeature('argoSyncInheritance')
+  const { support: cronJobJobNameSupport } = useRadarFeature('cronJobTriggerJobName')
 
   const {
     data: cascadePreview,
@@ -419,6 +435,8 @@ function useActionsBarProps(
     onOpenTerminal: openTerminal,
     onOpenLogs: openLogs,
     onOpenWorkloadLogs: openWorkloadLogs,
+    replicaSetLogs: isAppsReplicaSet && replicaSetLogSupport === 'supported',
+    replicaSetLogTab: isAppsReplicaSet && replicaSetLogSupport !== 'unsupported',
     onOpenNodeTerminal: openNodeTerminal,
     onCopyCommand: (text: string, message: string, event: React.MouseEvent) =>
       showCopied(text, message, event),
@@ -487,9 +505,11 @@ function useActionsBarProps(
       ? (params: { namespace: string; name: string }) =>
           rolloutDialogPromote.mutateAsync({ action: 'promote-full', ...params })
       : undefined,
+    // mutateAsync, not mutate: the Job name dialog stays open when this rejects.
     onTriggerCronJob: (params: Parameters<typeof triggerCronJobMutation.mutate>[0]) =>
-      triggerCronJobMutation.mutate(params),
+      triggerCronJobMutation.mutateAsync(params),
     isTriggeringCronJob: triggerCronJobMutation.isPending,
+    cronJobTriggerDialog: cronJobJobNameSupport === 'supported',
     onSuspendCronJob: (params: Parameters<typeof suspendCronJobMutation.mutate>[0]) =>
       suspendCronJobMutation.mutate(params),
     isSuspendingCronJob: suspendCronJobMutation.isPending,
@@ -581,7 +601,7 @@ export function WorkloadView({
   // recount the same open tab: the drawer mounts hidden WorkloadView layers
   // for expand-on-hover and crossfades.
   const handleTabChange = useCallback(
-    (tab: TabType, opts?: { replace?: boolean }) => {
+    (tab: TabType | 'deploys', opts?: { replace?: boolean }) => {
       const panel = PANEL_USAGE_VIEWS[tab]
       if (panel && tab !== migratedTab) recordUsageEvent({ type: 'view', name: panel })
       const params = new URLSearchParams(searchParams)
@@ -1296,6 +1316,7 @@ export function WorkloadView({
         renderLogsTab={(props) => (
           <LogsTabContent
             {...props}
+            replicaSetLogs={baseActionsBarProps.replicaSetLogs || (baseActionsBarProps.replicaSetLogTab && props.pods.length === 0)}
             resourceLoading={resourceLoading}
             resourceError={resourceError}
             group={effectiveGroup}
@@ -1351,7 +1372,7 @@ export function WorkloadView({
         )}
         renderCostTab={({ kind, namespace: ns, name: n }) => (
           <div className="space-y-4">
-            <RightsizingPanel kind={kind} namespace={ns} name={n} />
+            <WorkloadCostRightsizing kind={kind} namespace={ns} name={n} />
             <WorkloadCostTab kind={kind} namespace={ns} name={n} />
           </div>
         )}
@@ -1377,7 +1398,7 @@ export function WorkloadView({
           />
         )}
         isMetricsAvailable={(kind, res) =>
-          isSubstrateWorkerPool || (isPrometheusSupported(kind) && !(kind === 'Pod' && res?.status?.phase === 'Pending'))
+          isSubstrateWorkerPool || isPrometheusMetricsAvailable(kind, res, isNode)
         }
         isCostAvailable={(kind) => isOpenCostWorkloadKind(kind)}
         onDuplicate={handleDuplicate}
@@ -1394,6 +1415,12 @@ export function WorkloadView({
               </div>
             )
             : undefined}
+        timelineActions={(supportsWorkloadRevisions(apiKind, effectiveGroup) || rest.extraTabs?.some(tab => tab.id === 'deploys')) && (
+          <div className="flex flex-wrap items-center gap-3 border-b border-theme-border px-4 py-2">
+            <WorkloadRevisionsButton kind={apiKind} group={effectiveGroup} namespace={namespace} name={name} />
+            {rest.extraTabs?.some(tab => tab.id === 'deploys') && <button type="button" className="text-xs text-accent-text hover:underline" onClick={() => handleTabChange('deploys')}>View application deploys</button>}
+          </div>
+        )}
         renderOverviewExtra={({ kind: k, namespace: ns, name: n, group: g, context }) => {
           // Network entry kinds (Service/Ingress/Route/Gateway) ARE the diagnosis
           // target: DiagnoseInlineSection renders in the drawer, no hint. Workload
@@ -1409,6 +1436,7 @@ export function WorkloadView({
           ) : null
           return (
           <>
+            <WorkloadRevisionsButton kind={k} group={g} namespace={ns} name={n} />
             {diagnoseInline}
             <ApplicationEvidenceAction kind={k} namespace={ns} name={n} group={g} uid={resource?.metadata?.uid ?? ''} />
             {diagnoseHint}
@@ -1592,6 +1620,7 @@ const SCHEDULED_LOG_KINDS = new Set([
 ])
 
 function LogsTabContent({
+  replicaSetLogs,
   kind,
   apiKind,
   group,
@@ -1609,6 +1638,7 @@ function LogsTabContent({
   resourceLoading,
   resourceError,
 }: {
+  replicaSetLogs: boolean
   kind: string
   apiKind: string
   group?: string
@@ -1660,7 +1690,8 @@ function LogsTabContent({
     )
   }
 
-  // Workload kinds with stable pod selectors use the aggregated workload logs viewer
+  if (replicaSetLogs) return <WorkloadLogsTab namespace={namespace} workloadKind={apiKind} workloadName={name} />
+
   if (WORKLOAD_LOG_KINDS.has(kind) && (kind !== 'Job' || isCoreBatchJob(apiKind, group))) {
     return (
       <div className="h-full">
@@ -1687,7 +1718,7 @@ function LogsTabContent({
     )
   }
 
-  // Other kinds with associated pods (Jobs, CronJobs, ReplicaSets, etc.) — pod selector + LogsViewer
+  // Other resources with associated Pods offer their individual logs.
   return (
     <MultiPodLogsTab
       pods={pods}
@@ -2255,7 +2286,7 @@ function DiagnoseInlineSection({ kind, namespace, name, group, onOpenReachabilit
 // Drawer mode: single chart + category tabs (compact for ~500px width).
 // Full-screen mode: multi-chart grid so CPU + Memory + Network can be
 // compared side-by-side without tab switching.
-function MetricsTabContent({
+export function MetricsTabContent({
   kind,
   namespace,
   name,
@@ -2271,20 +2302,47 @@ function MetricsTabContent({
   /** False when content follows, so the tab scrolls everything as one. */
   fill?: boolean
 }) {
-  if (expanded) {
-    if (!fill) return <PrometheusChartsGrid kind={kind} namespace={namespace} name={name} resource={resource} fill={false} />
+  const [params] = useSearchParams()
+  const range = TIME_RANGES.find((option) => option.value === params.get('metricsRange'))?.value ?? '1h'
+  const workload = { kind, namespace, name }
+  const { embedded = false } = useNavCustomization()
+  const { charts, rightsizing, checking, configured, setup } = useDatadogWorkloadCharts(workload, range, embedded)
+  if (configured) {
+    const workloadTotals = (
+      <DatadogWorkloadCharts charts={charts.data?.configured ? charts.data.charts : undefined}
+        loading={charts.isLoading} error={charts.error} onRetry={() => void charts.refetch()} />
+    )
+    if (rightsizing) return (
+      <div className={fill ? 'h-full overflow-auto' : undefined}>
+        <PrometheusChartsGrid {...workload} resource={resource} workloadTotals={workloadTotals} fill={false} showRightsizing={false} />
+        <div className="px-4 pb-4">{rightsizing}</div>
+      </div>
+    )
+    return <PrometheusChartsGrid {...workload} resource={resource} workloadTotals={workloadTotals} fill={fill} />
+  }
+  if (checking) return <p role="status" className="p-4 text-sm text-theme-text-secondary">Loading workload metrics…</p>
+
+  const setupHint = setup && <DatadogSetupHint owner={setup === 'owner'} />
+  if (rightsizing || !expanded) {
     return (
-      <div className="flex flex-col h-full">
-        <div className="flex-1 min-h-0">
-          <PrometheusChartsGrid kind={kind} namespace={namespace} name={name} resource={resource} />
-        </div>
+      <div className={fill ? 'h-full overflow-auto' : undefined}>
+        {setupHint}
+        {expanded
+          ? <PrometheusChartsGrid {...workload} resource={resource} fill={false} showRightsizing={false} />
+          : <DrawerMetricsContent {...workload} resource={resource} />}
+        <div className="px-4 pb-4">{rightsizing ?? <RightsizingStrip {...workload} />}</div>
       </div>
     )
   }
-
-  // Drawer fallback: single chart with tabs + restart lane below. The chart's
-  // time-range selector is mirrored to the restart lane so they stay aligned.
-  return <DrawerMetricsContent kind={kind} namespace={namespace} name={name} resource={resource} />
+  if (!fill) return <PrometheusChartsGrid {...workload} resource={resource} fill={false} />
+  return (
+    <div className="flex flex-col h-full">
+      {setupHint}
+      <div className="flex-1 min-h-0">
+        <PrometheusChartsGrid {...workload} resource={resource} />
+      </div>
+    </div>
+  )
 }
 
 function DrawerMetricsContent({

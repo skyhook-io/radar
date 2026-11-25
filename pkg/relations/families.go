@@ -234,6 +234,8 @@ var CertManagerIssuers = &Family{
 	},
 }
 
+var fluxArtifactGenerator = resourceid.GroupKind{Group: "source.extensions.fluxcd.io", Kind: "ArtifactGenerator"}
+
 func fluxSource(kind string) resourceid.GroupKind {
 	return resourceid.GroupKind{Group: "source.toolkit.fluxcd.io", Kind: kind}
 }
@@ -242,7 +244,8 @@ func fluxSource(kind string) resourceid.GroupKind {
 // HelmRelease or HelmChart builds from: its source, chart reference or chart
 // source, which a Kustomization or HelmRelease may name in another
 // namespace. An inline HelmRelease also declares the HelmChart the controller
-// recorded for it.
+// recorded for it. Up the artifact chain, an ExternalArtifact declares the
+// ArtifactGenerator that produces it and a generator the sources it composes.
 var FluxSources = &Family{
 	ScanRationale: "Indexing a Flux object's sourceRef exceeds the per-update admission bar (BenchmarkRelationIndexUpdate).",
 	Name:          "fluxSources",
@@ -251,8 +254,10 @@ var FluxSources = &Family{
 		{Kind: fluxKustomization, Targets: []resourceid.GroupKind{fluxSource("GitRepository"), fluxSource("OCIRepository"), fluxSource("Bucket"), fluxSource("ExternalArtifact")}},
 		{Kind: fluxHelmRelease},
 		{Kind: fluxSource("HelmChart"), Targets: []resourceid.GroupKind{fluxSource("HelmRepository"), fluxSource("GitRepository"), fluxSource("Bucket")}},
+		{Kind: fluxSource("ExternalArtifact"), Targets: []resourceid.GroupKind{fluxArtifactGenerator}},
+		{Kind: fluxArtifactGenerator, Targets: []resourceid.GroupKind{fluxSource("GitRepository"), fluxSource("OCIRepository"), fluxSource("Bucket"), fluxSource("HelmChart"), fluxSource("ExternalArtifact")}},
 	},
-	Targets:        []resourceid.GroupKind{fluxSource("GitRepository"), fluxSource("OCIRepository"), fluxSource("Bucket"), fluxSource("ExternalArtifact"), fluxSource("HelmRepository"), fluxSource("HelmChart")},
+	Targets:        []resourceid.GroupKind{fluxSource("GitRepository"), fluxSource("OCIRepository"), fluxSource("Bucket"), fluxSource("ExternalArtifact"), fluxSource("HelmRepository"), fluxSource("HelmChart"), fluxArtifactGenerator},
 	CrossNamespace: true,
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
 		if u, ok := obj.(*unstructured.Unstructured); ok {

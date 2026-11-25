@@ -42,6 +42,11 @@ export function actionErrorCode<C extends string = ActionErrorCode>(err: unknown
   if (!(err instanceof ApiError)) return 'outcome_unknown'
   const code = err.data?.code
   if (typeof code === 'string') return code as C
+  // The connection check refuses before any handler runs, under the server's
+  // general error_code field.
+  const refusal = err.data?.error_code
+  if (refusal === 'context_changed') return 'context_changed'
+  if (refusal === 'cluster_unavailable') return 'unavailable'
   return AMBIGUOUS_STATUSES.has(err.status) ? 'outcome_unknown' : undefined
 }
 

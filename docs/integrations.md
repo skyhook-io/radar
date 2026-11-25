@@ -9,6 +9,42 @@ to a stale view refreshes it without requiring the detail view to be reopened.
 
 Cluster-scoped drawers retain refresh-on-reopen/focus instead of automatic polling: their Issues request scans the whole cluster.
 
+## Longhorn
+
+[Longhorn](https://longhorn.io/) provides replicated block storage. Radar reads its `Volume`, `Engine` and `Replica` objects (`longhorn.io/v1beta2`), read-only. Fields are those of the v1beta2 types in Longhorn 1.10 to 1.13; one a version doesn't write reads as unknown.
+
+### What Radar Shows
+
+**Volume drawer:**
+- Size, actual size, data locality, access mode, frontend and data engine.
+- **Healthy replicas** out of the requested number. The healthy count comes only from the Volume's Engine (`status.replicaModeMap`, mode `RW`); when Radar can't read the Engine it reads `?`, never the requested count, and the drawer says the Engine read failed.
+- State, robustness, node, `lastDegradedAt`, `lastAutoSalvagedAt` (Longhorn 1.11+) and `lastBackupAt`, plus the Volume's conditions (`OfflineRebuilding`, `Scheduled`, …).
+- **Degraded** is amber: how long it has lasted (from `lastDegradedAt`), and "Rebuilding" with each replica's progress only when the Engine's `status.rebuildStatus` reports one (the replica is named from `status.currentReplicaAddressMap`, otherwise shown by address). When the Volume's `Scheduled` condition is False, it says Longhorn can't place a new replica. **Faulted** (no usable replica) is the red banner. With Longhorn's `auto-salvage` setting on (the default), a faulted Volume is often salvaged within seconds; `lastAutoSalvagedAt` then shows when.
+- Conditions whose normal value is False (`Restore`, `TooManySnapshots`, `WaitForBackingImage`, `BackingImageIncompatible`, `OfflineRebuilding`) read as fine when False.
+- While a volume migrates it has two Engines; Radar reads the active one (`spec.active`), and unknown when it can't tell. A detached volume's Engine isn't running, so its healthy count reads `?` with that reason.
+- Radar's cache keeps an Engine without the status maps it never reads (`snapshots`, `backupStatus`, `restoreStatus`, `purgeStatus`, `cloneStatus`, `replicaTransitionTimeMap`), which grow with every snapshot and backup; an Engine's YAML in Radar omits them.
+- **Last seen by Longhorn:** the PVC and pods from `status.kubernetesStatus`, as history. Each row has its time: "last seen 3h ago" from `lastPVCRefAt` / `lastPodRefAt`, or "no end recorded" when Longhorn records none (it clears the time while the reference holds, as of its last update). A time Radar can't place (in the future, unparseable) is shown as written. They are plain text, never relationships or topology edges. With auth on, the section shows only when the caller's namespace list includes that namespace; this tidies the view and is not access control. The recorded namespace, claim and pod names are fields of the Volume itself, so anyone who can read the Volume sees them in its YAML, the API and the AI context, as with kubectl; the drawer only leaves the section out for users who can't see that namespace. With auth off (the default for a Radar you run yourself) it always shows, so a deleted namespace's history stays visible; with auth on, a deleted namespace isn't in anyone's list, so its history shows only in the YAML.
+- **Current use** is under Related Resources: the PV whose `spec.csi.driver` is `driver.longhorn.io` and whose `volumeHandle` is the Volume's name. From there the PV leads on to its claim and the pods using it.
+
+**PersistentVolume drawer:** a Longhorn PV's Related Resources include its Volume, when Radar has exactly one cached Volume with that name and the caller may list Longhorn Volumes in its namespace. Two Volumes with one name (a leftover second install) link neither way. Until Radar has read every Volume (while it starts, or after a list error), neither direction links, and the answer reports that it couldn't check rather than an empty one.
+
+**Status badge (drawer header):** Healthy, Degraded (amber), Faulted (red), Detached (neutral), Unknown. The Volumes table keeps the CRD's printer columns (State, Robustness, Scheduled, Size, Node), so robustness reads there as Longhorn writes it.
+
+**Kind collisions:** Longhorn serves `nodes` and `volumes` plurals. Only the core `Node` gets the Node drawer, status, Debug Shell, cordon, uncordon and drain; a Longhorn `Node` renders generically. A `volumes` plural from any other group renders generically too.
+
+### Issues
+
+| Condition | Severity | Category |
+|---|---|---|
+| Volume `status.robustness: faulted` | critical | Volume faulted |
+| Volume `status.robustness: degraded` (onset `lastDegradedAt`) | warning | Volume degraded |
+
+A detached volume is not an issue. Like other namespaced Issues, they are visible to callers with access to the Longhorn namespace (usually `longhorn-system`).
+
+### Access
+
+The chart grants `get`/`list`/`watch` on `volumes`, `engines` and `replicas` behind `rbac.crdGroups.longhorn` (default on). For Radar Cloud callers the read baseline grants them: they hold no credentials (`spec.fromBackup` is a backup URL, not a secret). Namespace-scoped callers usually can't read them, since they live in the Longhorn namespace.
+
 ## OpenTelemetry Operator
 
 Radar provides native resource details for `opentelemetry.io` **OpenTelemetryCollector**
@@ -139,6 +175,23 @@ Issues reports missing declared Flagger targets, analysis MetricTemplates and pr
 
 Absence is reported only from an already watched, synced inventory covering the referenced namespace. Unwatched, unsynced or unreadable dependencies produce no missing-reference finding; the scan starts no watches and makes no provider requests. Secret checks use metadata existence, never values. Findings depending on another namespace or Secret inventory are withheld unless the caller may read that evidence. Generated primary workloads and Services are not declared prerequisites.
 
+
+## k3s Helm controller
+
+k3s and RKE2 install add-ons (Traefik, CoreDNS and whatever the admin adds) through their Helm controller: a `HelmChart` renders into a `helm-install-<name>` Job that installs a normal Helm release, and a `HelmChartConfig` of the same name and namespace overrides its values.
+
+**Helm view.** The release's `controller` names the HelmChart (tool `k3s`) and the HelmChartConfig, so it carries a `k3s` badge, and its drawer says it is managed by k3s and names the `HelmChart` and the `HelmChartConfig` (or says to create one), with links to each. An upgrade or rollback from Radar is overwritten the next time helm-controller runs the install Job (when the HelmChart or its HelmChartConfig changes), so the upgrade-available hint and "Choose chart source" are hidden; MCP `manage_helm` refuses writes to it (an uninstall is pointed at deleting the HelmChart or, for one k3s applies from a server manifest (`objectset.rio.cattle.io/owner-gvk` is a `k3s.cattle.io` Addon), at the servers' `--disable <name>` flag, since k3s re-applies a deleted one). Flux wins if a Flux `HelmRelease` also matches, and two HelmCharts installing the same release credit neither. Issues still report a failed k3s release, and its Helm revisions stay in recent changes, since k3s keeps no change history of its own.
+
+**Detail views.** The `HelmChart` drawer shows what helm-controller reports (`JobCreated` / `Failed`), the chart (a chart served by k3s itself reads "Bundled with k3s", and one carried only in `spec.chartContent`, as RKE2 packages its add-ons, reads "Inline chart archive"), the target namespace and release with a link to it in the Helm view, the install Job, and who manages the object. The `HelmChartConfig` drawer links its `HelmChart`. **Values stay out of the views**: `spec.valuesContent`, the structured `spec.values` and `spec.set` can carry credentials, so drawers, table cells and the resource bodies sent to AI (`get_resource`, `list_resources`, search result bodies, the AI resource API) show only a line count, the number of top-level `values` keys and the `set` keys (an inline `spec.chartContent` archive and the applied-object copies in the `objectset.rio.cattle.io/applied` and last-applied annotations are omitted from those bodies too). Not filtered yet, as for any custom resource: search match snippets quote the matched value text, an MCP dry-run patch preview shows old and new values, change history shows numeric values, and the `set` values appear in the install Job's arguments. The YAML tab shows the object as stored to whoever can read it.
+
+`HelmChart` shares its kind and plural with Flux's `source.toolkit.fluxcd.io` HelmChart; every view is gated on the `helm.cattle.io` group, and a Flux HelmChart keeps its generic drawer and printer columns.
+
+**In-cluster.** The chart toggle `rbac.crdGroups.k3sHelm` is **off by default** (read-baseline decision `withhold`, because the values can carry credentials). Local runs use your own kubeconfig and are unaffected.
+
+| Resource | Group | Topology | Detail View | AI Summary |
+|----------|-------|----------|-------------|------------|
+| HelmChart | `helm.cattle.io/v1` | — | Yes | Values omitted from resource bodies |
+| HelmChartConfig | `helm.cattle.io/v1` | — | Yes | Values omitted from resource bodies |
 
 ## System Upgrade Controller
 
@@ -630,7 +683,7 @@ TLS references resolve local Secret names and delegated `namespace/name` names c
 
 **Dashboard:** Certificate health card showing healthy/warning/critical/expired certificate counts across all namespaces.
 
-**TLS Secret Parsing:** Click any TLS Secret to see the X.509 certificate details — subject, issuer, validity dates, SANs — parsed directly from the secret data.
+**Secret certificates.** Open a Secret to inspect PEM certificates under any data key. The drawer names the key, preserves certificate order within each bundle, and shows the subject, organization, issuer, DNS and IP alternative names, serial number, key type and validity dates. The dashboard's Secret expiry counts use the serving certificate in a TLS Secret's `tls.crt`.
 
 <p align="center">
   <img src="screenshots/integrations/certmanager-certificate-detail.png" alt="Certificate Detail" width="800">
@@ -722,18 +775,37 @@ resource, including core Secrets and these excluded kinds. See the
 
 **Check for Java4Shell** runs on demand in the same tab, including in clusters without Trivy Operator. It uses image metadata for the digest of each visible running container to compare its declared `JAVA_VERSION` with the [Java4Shell advisory](https://github.com/advisories/GHSA-6g7j-4xh3-xq2q). An affected version declaration is a reason to confirm the installed JVM and its vendor's fix. The table groups replicas by workload, container and image build, and prioritizes groups with Pods running on nodes that report AVX-512 VBMI via Node Feature Discovery. Missing CPU labels or access to Nodes leave the capability unknown. A flag in the Pod spec is shown as declared, and does not change the priority. Where Trivy serves reports, **Find in Trivy reports** searches what those reports recorded for the same CVE.
 
-**Unassessed containers** lists the images whose Java version Radar could not assess, with the reason and the number of running Pods. When the image sets `JAVA_HOME` and Radar finds no version declaration, the row appears first with a prompt to verify the installed Java version. Rows link to the workload when Radar can resolve its owner, or to the visible Pod. Results list up to 100 matching and 100 unassessed groups and keep container totals for the full scope Radar checked. **Download JSON** saves the displayed result, its check time and its namespace coverage.
+The report explains why some containers could not be checked and names the registries that required authentication or throttled the scan. **Show skipped images** lists the affected workloads and running Pod counts. Images that set `JAVA_HOME` without a version declaration appear first with a prompt to verify the installed Java version. Rows link to the workload when Radar can resolve its owner, or to the visible Pod. Results list up to 100 matching and 100 unassessed groups and keep container totals for the full scope Radar checked. **Download JSON** saves the displayed result, its check time, context and namespace coverage.
 
-Deployment, StatefulSet and DaemonSet drawers also run **Check for Java4Shell** under **Vulnerabilities**, with or without Trivy. The check reads the current workload's owned Pods before making registry requests, and shows matches, unassessed containers and a JSON export for that workload. The caller needs read access to the workload kind and list access to Pods in its namespace.
+When a node lacks an observed VBMI label, Radar can infer that VBMI is absent for a small set of documented x86 instance types. It reads the cloud provider and instance type from the Node object. The supported families are [AWS C6a, M6a and R6a](https://aws.amazon.com/blogs/compute/tuning-guide-for-amd-amazon-ec2-instances/), [Google Cloud C2 and C2D](https://docs.cloud.google.com/compute/docs/machine-resource), and [Azure Dav4 and Dasv4](https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/general-purpose/d-family#dav4-and-dasv4-series). The documented processors for those families predate [Intel Xeon VBMI support](https://www.intel.com/content/www/us/en/support/articles/000058341.html) or [AMD EPYC AVX-512 support](https://www.amd.com/en/blogs/2022/amd-ecosystem-poised-and-ready.html). The UI and CLI show the instance type at check time alongside the affected Java declaration. Other x86 instance types without observed CPU evidence stay unknown.
+
+Deployment, StatefulSet and DaemonSet drawers surface reported image vulnerabilities when the workload has findings. Open a finding to see the workload’s reports in **Checks → Vulnerabilities**.
 
 For headless checks, run `radar check java4shell` or `kubectl radar check java4shell`. [Java4Shell CLI flags and exit codes](configuration.md#java4shell-cli)
 
-The check follows the namespace selection, Radar's collection and the caller's list access to Pods and Nodes. It reads image manifests and configs for the registry digests those Pods report. Private lookups follow [image inspection permissions](authentication.md#image-inspection), and images Radar cannot read stay unassessed. The check separately counts images with no declared Java version. Radar checks up to 200 image, platform and credential groups with up to 24 groups from Docker Hub, 200 registry attempts in total, four lookups in flight and a 40-second registry lookup budget. Radar runs one advisory check at a time and shares registry rate-limit backoff with its runtime inventory.
+The check follows the namespace selection, Radar's collection and the caller's list access to Pods and Nodes. It reads image manifests and configs for the registry digests those Pods report. Private lookups follow [Java4Shell registry access](authentication.md#java4shell-registry-access), and images Radar cannot read stay unassessed. Results count assessed versions outside the affected ranges by Java major. Ordinary Java 8 builds can appear here, while Oracle Java 8 Performance Pack `8u511b33-perf` is in the affected range.
 
-- **By image** (default): one row per running image, however many workloads run it, with its findings by severity, how many have a fix, and the workloads that run it.
+The UI and CLI report progress by distinct image, platform and credential group. The UI allows four lookups in flight. The CLI allows eight overall, with at most four for Docker Hub. Both pace lookup starts at eight per second, with an initial burst of four and a five-minute registry budget. Radar waits at least one second between Amazon ECR Public manifest requests, including the requests within a single multi-platform lookup. Other registries continue checking during that wait. Each scan allows 24 uncached Docker Hub groups to protect the shared pull quota. Radar runs one advisory check at a time and shares registry rate-limit backoff with its runtime inventory. The UI can retain the running request as you navigate in Radar. Use **Cancel check** to stop it, or close the browser connection. A repeat check on the same Radar instance can reuse cached public results. Private registry access is checked on each new scan. If the scan stops before reading every image, narrow the namespace selection or use `radar check java4shell -n NAMESPACE`.
+
+- **By fix** (default): the fixable findings as a list of package upgrades (below).
+- **By image**: one row per running image, however many workloads run it, with its findings by severity, how many have a fix, and the workloads that run it.
 - **By CVE**: each CVE with the images and workloads that carry it, and how many of its images have a fixed release.
-- **By workload**: each workload's containers and what their images carry.
-- **By fix**: the fixable findings as a list of package upgrades (below).
+- **By workload**: each workload's containers and what their images carry, and its routes from outside the cluster.
+
+Every view lists the most severe rows first, and exposed first within each severity: rows with an exposed workload, then rows whose exposure is unknown, then the rest. Within that, rows with more exposed workloads come first, then rows in more workloads. A row's exposure is unknown when none of its workloads has a route Radar sees, but one runs in a namespace where Radar couldn't read every kind of route. In By workload, a workload with no findings read yet (its images aren't scanned) comes after every workload with findings. A workload is exposed when Radar sees a route to it from outside the cluster. A globe icon marks that workload, and its tooltip names the route, such as `LoadBalancer kube-system/traefik`; rows that span workloads also show how many are exposed ("3 exposed"). The **Exposed** chip keeps only those rows and combines with the other filters. Radar counts these routes:
+
+- a LoadBalancer Service that selects the workload's Pods and has an address or node ports
+- a NodePort Service that selects them
+- an Ingress with an address whose backend Service selects them
+- an HTTPRoute, GRPCRoute, TCPRoute, TLSRoute or UDPRoute attached to a Gateway that has an address, whose backend Service selects them. A backend that a request mirror copies requests to counts too. A route the Gateway rejected (`Accepted=False`) doesn't count, and neither does a backend with weight 0 or a mirror set to copy no requests, since they get no traffic.
+
+A route is something Radar sees configured, not proof that traffic reaches the workload: a NetworkPolicy or a firewall can still block it. "Outside the cluster" isn't the same as public: an internal LoadBalancer or a NodePort on private nodes counts too. When the Gateway controller reports that a route refers to a Service in another namespace it isn't allowed to (`ResolvedRefs=False`, `RefNotPermitted`), Radar checks that route's cross-namespace backends against the ReferenceGrants in their namespaces: a backend no grant allows doesn't count, and where Radar can't read the grants, or you may not, those workloads read Unknown. Until a controller writes that status, a route to a Service in another namespace counts, so such a workload can be marked although the route doesn't reach it.
+
+Radar does not count these, so a workload reached only through one of them has no mark: an Ingress or Gateway without an address, hostNetwork and hostPort Pods, Istio Gateways and VirtualServices, Traefik IngressRoutes, Contour HTTPProxies, Knative Services, and Services without a selector. No mark never means a workload can't be reached. When the cluster serves any of those Istio, Traefik, Contour or Knative route kinds, the API lists them in `exposure.unchecked`. Where Radar can't read Ingresses, Gateways or routes, the page says so and those workloads read Unknown rather than unmarked. The same goes for your own access: Services and Ingresses you can't read in a workload's namespace, or Gateways and routes you can't read in every namespace (a shared Gateway can sit in any of them), leave your workloads without a route you can see reading Unknown. This depends only on your access, never on what exists where you can't look. Gateways and routes are read in every namespace you can see, whatever the namespace picker shows, since a shared Gateway often sits in its own namespace.
+
+**Download CSV** saves the view you're on, with its search, severity, has-a-fix and namespace filters, as one row per item. The file lists everything the table shortens: every CVE ID an upgrade clears, every image and every workload. Each row starts with `cluster`, `scanned` (the oldest scan the row draws on, in UTC) and `status`: `ok`, or why the row has no findings, such as `not scanned` for a running image without a report, `partly scanned` for a workload with some containers unscanned, `not read` for an image past Radar's findings limit, and `no access`, `loading` or `read failed` for namespaces Radar couldn't read. Multi-value cells are separated by `; `. The last column, `exposed_workloads`, lists the row's exposed workloads with their routes, such as `Deployment kube-system/traefik (LoadBalancer kube-system/traefik)`. It is empty when Radar sees no route and `unknown` where Radar couldn't read routes. With the Exposed filter, the namespaces where Radar couldn't read routes are rows too. Rows follow the page's order. REST: `GET /api/vulnerabilities/export?view=image|fix|cve|workload|findings` with the same filters as `/api/vulnerabilities`, plus `exposed=1`.
+
+The findings export (`view=findings`) is one row per finding, image and workload container, the shape a compliance tracker such as a POA&M takes. After `cluster`, `scanned` and `status` its columns are `cve`, `severity`, `score`, `title`, `package`, `package_type`, `installed_version`, `fixed_version`, `fix_target`, `fix_available` (`yes` or `no`), `image`, `digest`, `namespace`, `workload_kind`, `workload`, `container`, `exposure`, `routes` and `link`. `exposure` is `exposed`, `unknown` (Radar couldn't read every kind of route in that namespace), or empty when Radar sees no route, and `routes` names the workload's routes, such as `LoadBalancer kube-system/traefik`. A running image that isn't scanned, or whose findings weren't read, is a row per workload container with the finding cells empty. A workload filter or the Exposed filter keeps only that workload's, or the exposed workloads', rows. Severity words are `Critical`, `High`, `Medium`, `Low` and `Unrated` in every export. Radar Cloud's fleet view writes the same columns, one row per item per cluster.
 
 Severity and has-a-fix filters apply to every view. A finding Trivy left unrated (common for Go modules) is rated from its CVSS score. A CVE counts once per package version in an image, so totals can be lower than the summaries in Trivy Operator's own reports.
 
@@ -797,6 +869,12 @@ Severity and has-a-fix filters apply to every view. A finding Trivy left unrated
 
 The section reads `GET /api/sealedsecrets/controller?sealedSecretNamespace=<SealedSecret namespace>` (without it, kubeseal's defaults pick the controller). Each part has its own gate, and a denied part is a state in a 200, never a 403 for the whole answer: the controller needs `get deployments` in its namespace, the keys need `list secrets` there, and the totals cover the SealedSecrets the caller can list. Keys come from Radar's Secret cache and only the public `tls.crt` is read: key names and certificate dates are returned, never `tls.key`, the certificate, labels or annotations. When Radar does not collect Secrets in that namespace, is still loading them (the section refreshes until they arrive) or failed to load them, the section says so instead of showing none; likewise for the controller while Deployments are loading or failed to load, or when Radar watches Deployments in some namespaces only and the controller is not among them. Only the key's first certificate counts. A key whose certificate does not parse is listed without dates and never marked as the one sealing new secrets. On a Radar without the endpoint (Radar Hub against an older cluster) the section is absent, including when that Radar answers before its capabilities have loaded.
 
+**Sealing certificate.** `GET /api/sealedsecrets/cert?sealedSecretNamespace=<namespace>` returns `{certPem, certFingerprint, controller: {namespace, name}}`. Send the namespace of the Secret that will be sealed. Radar requires one controller whose scope covers that namespace, with a complete Deployment cache. Omit the query to use the controller view’s default selection. It prefers the standard kube-system controller, then a unique kube-system candidate, then a single cluster-wide candidate. The reply contains one current PEM certificate with an RSA public key. Its fingerprint is lowercase hex SHA-256 of the certificate’s DER. Responses containing the certificate use `Cache-Control: no-store`.
+
+Radar reads only `/v1/cert.pem` on the Service named like the controller Deployment. It uses the `http` port or the only TCP port. The Service must select pods. In-cluster Radar connects directly. Other modes use the API server’s services proxy. With auth on, the caller needs `get services/proxy` on the same `http:<service>:<port-name>` resource that kubeseal uses. A human caller in user-token mode must supply their Kubernetes token. Fetches time out after five seconds, carry a 64 KiB limit and follow no redirects.
+
+The `sealedSecretsCert` capability signals endpoint support. A 404 from a supported agent distinguishes `notInstalled`, `notFound` and `serviceNotFound`. Overlapping or unknown controller scope yields 409 `ambiguous` or `unknown`. Invalid namespaces yield 400. A refused permission yields 403. In user-token mode a missing person’s token yields 403 with `reason: user_token_required`. A switched connection yields 409 `connection_changed`. A namespace outside collection yields 409 `radar_namespace_not_collected`. Pending, timed-out or disabled collection is reported with its standard Radar read error code. A bad upstream response yields 502 `upstream`.
+
 ### Supported CRDs
 
 | CRD | Group | Topology | Detail View | AI Summary |
@@ -816,7 +894,9 @@ See the main [README](../README.md#gitops) for the user-facing overview. This se
 | GitRepository | `source.toolkit.fluxcd.io/v1` | Yes | Yes | — |
 | OCIRepository | `source.toolkit.fluxcd.io/v1beta2` | Yes | Yes | — |
 | HelmRepository | `source.toolkit.fluxcd.io/v1` | Yes | Yes | — |
-| Bucket / HelmChart / ExternalArtifact | `source.toolkit.fluxcd.io` | When referenced | Generic | — |
+| Bucket / HelmChart | `source.toolkit.fluxcd.io` | When referenced | Generic | — |
+| ExternalArtifact | `source.toolkit.fluxcd.io/v1` | When referenced | Yes | — |
+| ArtifactGenerator | `source.extensions.fluxcd.io/v1beta1` (source-watcher) | When referenced | Yes | — |
 | Kustomization | `kustomize.toolkit.fluxcd.io/v1` | Yes | Yes | Yes |
 | HelmRelease | `helm.toolkit.fluxcd.io/v2` | Yes | Yes | Yes |
 | Alert | `notification.toolkit.fluxcd.io/v1beta3` | — | Yes | — |
@@ -828,6 +908,16 @@ observed Flux sources in both directions within Radar's namespace scope.
 Kustomizations use `spec.sourceRef`; HelmReleases use `spec.chart.spec.sourceRef`
 or `spec.chartRef`. Inline releases also link the generated HelmChart named by
 `status.helmChart`; an observed HelmChart links its source in its own namespace.
+An ExternalArtifact links the ArtifactGenerator named by its `spec.sourceRef`, and a
+generator links the GitRepository / OCIRepository / Bucket / HelmChart /
+ExternalArtifact in its `spec.sources` (with their aliases). Its artifact count
+reads the ExternalArtifacts in `status.inventory`, not the Namespaces
+source-watcher 2.3 also records there, and shows `-` when Radar can't read an
+inventory. These upstream hops follow only objects already reached
+from a root, at most eight levels, so a release that consumes one of a
+generator's artifacts never pulls in the generator's other artifacts. A
+generator paused with `source.extensions.fluxcd.io/reconcile: disabled` is
+Suspended, not failing, in every surface (tree, topology, table, drawer, Issues).
 `spec.dependsOn` links a Kustomization or HelmRelease to the objects of the same
 kind it waits for (an entry without a namespace means its own namespace).
 These are dependencies, not owners: topology draws each source upstream, with
@@ -1326,6 +1416,8 @@ The names in these specs are PostgreSQL names, not Kubernetes names: a Publicati
 
 A declared object the operator could not apply raises an **Issue** (`CNPGDeclarativeNotApplied`, warning) carrying the operator's own message. This is the one CNPG failure with no other signal: the CR exists, the cluster is healthy, every count is green, and the database simply is not there. Only `applied: false` raises it — an absent `applied` means not yet reconciled, and reporting that would flag every declarative object for the first seconds of its life.
 
+The operator's primary budget (`<cluster>-primary`, `minAvailable: 1`) always allows 0 disruptions. On a healthy HA Cluster that is expected protection: the operator switches over before a drain evicts the primary. When Radar verifies that (the budget's exact shape and owner UID, reconciliation not disabled on the Cluster, a healthy phase with all instances ready, no pending switchover or maintenance window, the primary and a ready standby on separate schedulable Nodes, with no drain taint and no hard taint the instance doesn't tolerate), the budget is not an Active Issue. A single-instance Cluster keeps the warning with maintenance-window advice. An HA Cluster outside that layout keeps the warning with the reason (the same one the Cluster's HA details show) and the advice to check the Cluster and its standbys rather than relax the budget; when Radar can't see the Pods or Nodes behind the reason, the warning stays generic. A rolling update or switchover passes through not-ready states, so while the Cluster's `Ready=False` is less than 5 minutes old and the reason is one of those (instances not ready, phase not healthy, switchover pending), the budget stays out of Active Issues; the Cluster's HA details still show the live reason. The verification is checked against the caller's exact `list` access to Nodes, Clusters and Pods (Clusters only for the single-instance advice); a caller missing any of them gets the generic warning, so hidden evidence changes nothing they see. The drain plan and Upgrade impact still report the budget as a blocker.
+
 ### Image catalogs
 
 `ImageCatalog` and `ClusterImageCatalog` pin one PostgreSQL image per major version. A Cluster that references one carries **no `spec.imageName` at all**; the resolved image lives in `status.image`, so anything reading spec alone shows a dash where an image is running.
@@ -1344,7 +1436,7 @@ A cluster asking for a major the catalog does not list reports "incomplete or in
 
 All five are posture findings (warning, default severity Medium, not badge-worthy) that state what the Cluster declares to CNPG. A dump job or storage snapshots outside CNPG are invisible to them, so none says a database has no backups. One cause gives one finding: a Cluster with no destination gets `cnpgNoBackupDestination` only, and neither the WAL rule nor the schedule rule evaluates it.
 
-The schedule rule is deliberately narrow: the absence of a ScheduledBackup does not prove a cluster is unprotected (on-demand Backups and external schedulers exist), so the finding asserts only that no schedule is *declared*. All three `spec.method` values — `barmanObjectStore`, `volumeSnapshot` and `plugin` — count as a declared schedule. Suspended schedules count as present, since suspension is deliberate operator intent. It does not run at all unless a synced cluster-wide ScheduledBackup informer backs the inventory, because absence would otherwise be unprovable. The other four read only the Cluster object and need no other inventory. All five obey `radarhq.io/ignore-checks` on the Cluster.
+The schedule rule is deliberately narrow: the absence of a ScheduledBackup does not prove a cluster is unprotected (on-demand Backups and external schedulers exist), so the finding asserts only that no schedule is *declared*. All three `spec.method` values — `barmanObjectStore`, `volumeSnapshot` and `plugin` — count as a declared schedule. Suspended schedules count as present, since suspension is deliberate operator intent. It does not run at all unless a synced cluster-wide ScheduledBackup informer backs the inventory, because absence would otherwise be unprovable. The other four read only the Cluster object and need no other inventory. All five obey `radarhq.io/ignore-checks` on the Cluster or its Namespace.
 
 ### Supported CRDs
 
@@ -1943,6 +2035,57 @@ either grant is enough to read it.
 ### Calico Coverage Limits
 
 Radar statically evaluates Calico selectors against workload pod templates and the Namespace and ServiceAccount objects it can read. The result describes declared policy coverage, not live CNI enforcement or packet-level behavior. Missing labels or RBAC-restricted resources can prevent a relationship from being inferred, and staged policies are never included in enforced coverage. The projected "if staged" figure assumes every staged policy is promoted at once; it is a projection of the declared rules, not a simulation of what the data plane would do.
+
+---
+
+## MetalLB
+
+[MetalLB](https://metallb.io/) (`metallb.io`) gives LoadBalancer Services an address from an IPAddressPool and announces it from the cluster's nodes, over layer 2 (ARP/NDP) or BGP. It reads its objects only from its own namespace (usually `metallb-system`); its admission webhook refuses them anywhere else.
+
+### What Radar Shows
+
+**IPAddressPool:** status, address ranges, auto assign (when off, only Services that request the pool get its addresses), avoid buggy IPs, assigned and available addresses per IP family, and service allocation (priority, namespaces and selectors). Counts are addresses, not Services: Services can share an address. A Service records the pool its address came from in the `metallb.io/ip-allocated-from-pool` annotation.
+
+**L2Advertisement / BGPAdvertisement:** the pools announced, by name (linked) or selector, and "All pools" when neither is set; the nodes allowed to announce; interfaces (L2); peers (linked), communities, local preference, AS-path prepend and aggregation lengths (BGP); Service selectors. Selectors in one list are ORed.
+
+**BGPPeer:** peer address or unnumbered interface, port, peer ASN (or the dynamic ASN mode), local ASN, source address, router ID, VRF, BFD profile, eBGP multi-hop, graceful restart, timers and node selectors. A password set inline in `spec.password` is shown as "Set inline (not shown)"; a password Secret is named, never read.
+
+**ConfigurationState:** whether a MetalLB component accepted the configuration. The controller writes one (`controller`) and each speaker one per node (`speaker-<node>`), labelled `metallb.io/component-type` and `metallb.io/node-name`. The drawer shows the component, links the node and lists the errors.
+
+All five kinds have curated table columns, which keep the fields of MetalLB's own printer columns. Status reads:
+
+| Kind | Status | Source |
+|---|---|---|
+| IPAddressPool | Available | `status` counters with addresses free in each family the pool has |
+| IPAddressPool | Exhausted, IPv4 exhausted, IPv6 exhausted | No available addresses, in every family or in one of a dual-stack pool's. A new Service that can only use the pool stays pending |
+| IPAddressPool | No addresses | Every counter is zero. The controller reports this for a pool it has not loaded, for example after rejecting the configuration |
+| IPAddressPool | Not reported | No `status`: MetalLB before 0.15, or a pool the controller has not reconciled |
+| ConfigurationState | Valid, Invalid, Unknown | `status.result` |
+| ConfigurationState | Not reported | No `status.result` yet |
+
+MetalLB reports the largest 64-bit count for an IPv6 range with 62 or more host bits; Radar shows any count beyond 2^53 as unlimited. Advertisements and peers are configuration and carry no status. None of these views show which node announces a Service, whether a BGP session is established, or whether an address is reachable.
+
+**Issues:** a ConfigurationState whose result is `Invalid` produces a warning, `MetalLBConfigurationInvalid`, quoting the component's errors. Invalid means a reconciler could not parse the configuration; the component keeps the last configuration it accepted. Failures that are not parse errors leave the result Valid, so Valid does not prove addresses are announced. Every speaker parses the same objects, so one bad object makes them all Invalid: states with the same errors in the same namespace produce one Issue, on the controller's state when it shares them and otherwise on the first speaker's by name, and the message counts the others. A speaker that alone rejects a node-scoped object (a BGPPeer or BGPAdvertisement whose node selector matches only some nodes) reports different errors and gets its own Issue. The reconcilers rewrite the condition time on every pass, so the onset is unknown.
+
+**MCP:** list summaries carry each pool's status, addresses, counters and "Requested only" when auto assign is off; each advertisement's mode and pools; each peer's address, iBGP/eBGP and ASNs (never the password); and each ConfigurationState's result, component and node.
+
+### Supported CRDs
+
+| CRD | Group | Topology | Detail View | AI Summary |
+|-----|-------|----------|-------------|------------|
+| IPAddressPool | `metallb.io/v1beta1` | — | Yes | Yes |
+| L2Advertisement | `metallb.io/v1beta1` | — | Yes | Yes |
+| BGPAdvertisement | `metallb.io/v1beta1` | — | Yes | Yes |
+| BGPPeer | `metallb.io/v1beta2`, `v1beta1` | — | Yes | Yes |
+| ConfigurationState | `metallb.io/v1beta1` | — | Yes | Yes |
+
+**Helm:** `rbac.crdGroups.metallb` (default on) grants read on these resources only. BGPPeers can hold the session password inline, so the chart reads them only when it also reads Secrets (`rbac.secrets`, `rbac.helm`, authentication enabled, or cloud mode), like VictoriaMetrics; otherwise the BGPPeer list is not collected. BFD profiles, communities and the ServiceL2Status / ServiceBGPStatus resources are not read. Radar Cloud's default integration-read role grants pools, advertisements and ConfigurationStates, and withholds BGPPeers because `spec.password` can hold the session password inline; see [the default read policy](cloud-rbac-baseline.md).
+
+**Access:** with authentication, BGPPeers are one of the kinds Radar checks per user, like Secrets: seeing `metallb-system` is not enough to list, open, count or search them; the caller needs their own `list` (or `get`) on BGPPeers there. See [Authentication](authentication.md).
+
+Checked against MetalLB v0.16.2 (native mode) on kind: an exhausted pool with a pending Service, a dual-stack pool with auto assign off and service allocation, advertisements by name, by selector and for every pool, a peer with an inline password, and a peer naming a missing password Secret, which made the speaker's ConfigurationState Invalid while the controller's stayed Valid.
+
+Not covered: topology and Related Resources edges (Service to pool, advertisement to pool, peer to node), the ServiceL2Status and ServiceBGPStatus announcement resources, BFDProfile and Community views, and FRR-K8s configuration.
 
 ---
 

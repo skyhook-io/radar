@@ -9,7 +9,7 @@ export interface ResourceCategory {
 // Known core resource categories
 const WORKLOAD_KINDS = ['Pod', 'Deployment', 'Rollout', 'DaemonSet', 'StatefulSet', 'ReplicaSet', 'Job', 'CronJob']
 const NETWORKING_KINDS = ['Service', 'Ingress', 'IngressClass', 'NetworkPolicy', 'Endpoints', 'EndpointSlice']
-const CONFIG_KINDS = ['ConfigMap', 'Secret', 'HorizontalPodAutoscaler', 'PodDisruptionBudget', 'LimitRange', 'ResourceQuota', 'PriorityClass', 'RuntimeClass', 'Lease', 'MutatingWebhookConfiguration', 'ValidatingWebhookConfiguration', 'ValidatingAdmissionPolicy', 'ValidatingAdmissionPolicyBinding']
+const CONFIG_KINDS = ['ConfigMap', 'Secret', 'HorizontalPodAutoscaler', 'PodDisruptionBudget', 'LimitRange', 'ResourceQuota', 'PriorityClass', 'RuntimeClass', 'Lease', 'MutatingWebhookConfiguration', 'ValidatingWebhookConfiguration', 'ValidatingAdmissionPolicy', 'ValidatingAdmissionPolicyBinding', 'MutatingAdmissionPolicy', 'MutatingAdmissionPolicyBinding']
 const STORAGE_KINDS = ['PersistentVolumeClaim', 'PersistentVolume', 'StorageClass', 'VolumeAttachment']
 const ACCESS_CONTROL_KINDS = ['ServiceAccount', 'Role', 'ClusterRole', 'RoleBinding', 'ClusterRoleBinding']
 const CLUSTER_KINDS = ['Node', 'Namespace', 'Event', 'CustomResourceDefinition']
@@ -57,6 +57,8 @@ export const CORE_RESOURCES: APIResource[] = [
 
 // These identities are built-in but must not become always-present sidebar rows.
 const ADDITIONAL_BUILTIN_IDENTITIES: Record<string, string> = {
+  mutatingadmissionpolicy: 'admissionregistration.k8s.io', mutatingadmissionpolicies: 'admissionregistration.k8s.io',
+  mutatingadmissionpolicybinding: 'admissionregistration.k8s.io', mutatingadmissionpolicybindings: 'admissionregistration.k8s.io',
   endpoints: '',
   controllerrevision: 'apps', controllerrevisions: 'apps',
   resourceclaim: 'resource.k8s.io', resourceclaims: 'resource.k8s.io',
@@ -100,6 +102,11 @@ export function findAPIResourceForRoute(
     ?? resources?.find(matchesRoute)
 }
 
+export function supportsWorkloadLogAction(plural: string, group?: string, replicaSetLogs = false): boolean {
+  return ['deployments', 'statefulsets', 'daemonsets', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(plural) ||
+    isCoreBatchJob(plural, group) || (replicaSetLogs && plural === 'replicasets' && group === 'apps')
+}
+
 export function isCoreBatchJob(kind: string, group?: string): boolean {
   const normalizedKind = kind.toLowerCase()
   return (normalizedKind === 'job' || normalizedKind === 'jobs') && (!group || group === 'batch')
@@ -139,7 +146,6 @@ export function categorizeResources(resources: APIResource[]): ResourceCategory[
   const storage = coreResources.filter(r => STORAGE_KINDS.includes(r.kind))
   const accessControl = coreResources.filter(r => ACCESS_CONTROL_KINDS.includes(r.kind))
   const cluster = coreResources.filter(r => CLUSTER_KINDS.includes(r.kind))
-  const otherKubernetesAPIs = coreResources.filter(r => r.featured)
 
   const crds = uniqueResources.filter(r => r.isCrd)
   const crdGroups = new Map<string, APIResource[]>()
@@ -155,7 +161,8 @@ export function categorizeResources(resources: APIResource[]): ResourceCategory[
   addToCategory('Storage', storage)
   addToCategory('Access Control', accessControl)
   addToCategory('Cluster', cluster)
-  addToCategory('Other Kubernetes APIs', otherKubernetesAPIs)
+  const categorized = new Set([...categoryMap.values()].flat())
+  addToCategory('Other Kubernetes APIs', coreResources.filter(r => r.featured && !categorized.has(r)))
 
   for (const [group, groupResources] of crdGroups) {
     addToCategory(formatGroupName(group), groupResources)
@@ -192,6 +199,7 @@ export function formatGroupName(group: string): string {
     'helm.crossplane.io': 'Crossplane',
     'kubernetes.crossplane.io': 'Crossplane',
     'source.toolkit.fluxcd.io': 'Flux',
+    'source.extensions.fluxcd.io': 'Flux',
     'fluxcd.controlplane.io': 'Flux Operator',
     'helm.toolkit.fluxcd.io': 'Flux',
     'kustomize.toolkit.fluxcd.io': 'Flux',
@@ -220,6 +228,7 @@ export function formatGroupName(group: string): string {
     'jaegertracing.io': 'Jaeger',
     'opentelemetry.io': 'OpenTelemetry',
     'flagger.app': 'Flagger',
+    'helm.cattle.io': 'k3s Helm',
     'upgrade.cattle.io': 'System Upgrade',
     'secrets-store.csi.x-k8s.io': 'Secrets Store CSI',
     'projectcalico.org': 'Calico',
@@ -240,6 +249,7 @@ export function formatGroupName(group: string): string {
     'sparkoperator.k8s.io': 'Spark',
     'kubeflow.org': 'Kubeflow',
     'snapshot.storage.k8s.io': 'Snapshots',
+    'metallb.io': 'MetalLB',
     'karpenter.sh': 'Karpenter',
     'karpenter.k8s.aws': 'Karpenter',
     'karpenter.azure.com': 'Karpenter',

@@ -98,3 +98,52 @@ describe('CostCard namespace scope', () => {
       .map((url) => url.searchParams.get('namespaces'))).toEqual(['team-a', null])
   })
 })
+
+describe('CostCard unavailable answers', () => {
+  async function renderWithSummary(summary: unknown) {
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://radar.invalid')
+      if (url.pathname === '/api/opencost/summary') {
+        return Promise.resolve(new Response(JSON.stringify(summary), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      }
+      return new Promise<Response>(() => {})
+    }))
+    const container = document.createElement('div')
+    const localRoot = createRoot(container)
+    await act(async () => {
+      localRoot.render(
+        <QueryClientProvider client={client}>
+          <CostCard />
+        </QueryClientProvider>,
+      )
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    return { container, unmount: () => act(async () => localRoot.unmount()) }
+  }
+
+  it('shows why costs were withheld in a shared metrics store', async () => {
+    const { container, unmount } = await renderWithSummary({
+      available: false,
+      reason: 'cluster_scope',
+      currency: 'USD',
+      clusterScope: { state: 'several_clusters', note: 'This metrics store holds several clusters.' },
+    })
+    const note = container.querySelector('[role="note"]')
+    expect(note?.getAttribute('data-cluster-scope')).toBe('several_clusters')
+    expect(container.textContent).toContain('Costs withheld for this cluster')
+    expect(container.textContent).toContain('This metrics store holds several clusters.')
+    await unmount()
+  })
+
+  it.each([
+    { label: 'no metrics', summary: { available: false, reason: 'no_metrics', currency: 'USD' } },
+    { label: 'partial answer', summary: { available: false, reason: 'partial_data', currency: 'USD', clusterScope: { state: 'scoped_verified', note: 'ok' } } },
+    { label: 'older Radar without a scope', summary: { available: false, reason: 'cluster_scope', currency: 'USD' } },
+  ])('still hides for $label', async ({ summary }) => {
+    const { container, unmount } = await renderWithSummary(summary)
+    expect(container.innerHTML).toBe('')
+    await unmount()
+  })
+})

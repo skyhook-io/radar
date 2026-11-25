@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -27,6 +28,28 @@ import (
 // A workload scope additionally requires get access to the workload kind and
 // uses only Pods owned by that controller, before any registry reads.
 func (s *Server) handleJava4Shell(w http.ResponseWriter, r *http.Request) {
+	s.serveJava4Shell(w, r, false)
+}
+
+// The stream uses the same authorization and immutable Pod snapshot as the
+// one-shot check and stops its registry work when the request ends.
+func (s *Server) handleJava4ShellStream(w http.ResponseWriter, r *http.Request) {
+	s.serveJava4Shell(w, r, true)
+}
+
+type java4ShellStreamMessage struct {
+	Type     string                   `json:"type"`
+	Progress *java4ShellProgress      `json:"progress,omitempty"`
+	Report   *images.Java4ShellReport `json:"report,omitempty"`
+	Error    string                   `json:"error,omitempty"`
+}
+
+type java4ShellProgress struct {
+	Done  int `json:"done"`
+	Total int `json:"total"`
+}
+
+func (s *Server) serveJava4Shell(w http.ResponseWriter, r *http.Request, stream bool) {
 	if !s.requireConnected(w) {
 		return
 	}
@@ -50,9 +73,9 @@ func (s *Server) handleJava4Shell(w http.ResponseWriter, r *http.Request) {
 		requested = []string{ns}
 	}
 	cache := readCache()
-	_, generation := k8s.GetClientWithGeneration()
+	generation := k8s.Current().ClientGeneration()
 	current := func() bool {
-		_, now := k8s.GetClientWithGeneration()
+		now := k8s.Current().ClientGeneration()
 		return generation == now && readCache() == cache
 	}
 	if auth.UserFromContext(r.Context()) != nil && s.permCache == nil {
@@ -157,41 +180,93 @@ func (s *Server) handleJava4Shell(w http.ResponseWriter, r *http.Request) {
 	}
 	// Leave most of the HTTP request budget for the registry. When a permission
 	// review is slow, the remaining unauthenticated lookups still make progress.
-	accessCtx, cancelAccess := context.WithTimeout(r.Context(), 5*time.Second)
+	accessBudget := 5 * time.Second
+	if stream {
+		accessBudget = 15 * time.Second
+	}
+	accessCtx, cancelAccess := context.WithTimeout(r.Context(), accessBudget)
 	defer cancelAccess()
 	accessRequest := r.WithContext(accessCtx)
-	result, err := images.DefaultRuntimeInventory(k8s.IsInCluster()).CheckJava4Shell(r.Context(), pods, func(ctx context.Context, pod *corev1.Pod) resourceid.Ref {
+	scanCtx, cancelScan := context.WithCancel(r.Context())
+	defer cancelScan()
+	var progress func(done, total int)
+	var enc *json.Encoder
+	controller := http.NewResponseController(w)
+	send := func(message java4ShellStreamMessage) error {
+		if enc == nil {
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			w.Header().Set("Cache-Control", "private, no-store")
+			w.Header().Set("X-Accel-Buffering", "no")
+			enc = json.NewEncoder(w)
+		}
+		if err := controller.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+			return err
+		}
+		defer controller.SetWriteDeadline(time.Time{})
+		if err := enc.Encode(message); err != nil {
+			return err
+		}
+		return controller.Flush()
+	}
+	if stream {
+		var last time.Time
+		progress = func(done, total int) {
+			if !current() {
+				cancelScan()
+			}
+			if scanCtx.Err() != nil || (done != total && time.Since(last) < time.Second) {
+				return
+			}
+			last = time.Now()
+			if err := send(java4ShellStreamMessage{Type: "progress", Progress: &java4ShellProgress{Done: done, Total: total}}); err != nil {
+				cancelScan()
+			}
+		}
+	}
+	result, err := images.DefaultRuntimeInventory(k8s.IsInCluster()).ScanJava4Shell(scanCtx, pods, func(ctx context.Context, pod *corev1.Pod) resourceid.Ref {
 		if workload != nil {
 			return *workload
 		}
 		return s.java4ShellWorkload(r.WithContext(ctx), cache, pod)
 	}, func(pod *corev1.Pod) images.Java4ShellRegistryAccess {
 		if accessCtx.Err() != nil || !current() {
-			return images.Java4ShellRegistryAccess{}
+			return images.Java4ShellRegistryAccess{TimedOut: accessCtx.Err() != nil}
 		}
 		access := s.java4ShellRegistryAccess(accessRequest, cache, pod)
+		access.TimedOut = accessCtx.Err() != nil
 		if !current() {
 			return images.Java4ShellRegistryAccess{}
 		}
 		return access
-	})
+	}, progress)
 	if r.Context().Err() != nil {
 		return
 	}
 	if errors.Is(err, images.ErrJava4ShellBusy) {
-		s.writeError(w, http.StatusConflict, "A Java4Shell check is already running. Try again shortly.")
+		s.writeError(w, http.StatusConflict, "A Java4Shell check is already running on this Radar instance. Checks run one at a time and registry reads can take up to five minutes.")
 		return
 	}
 	if !current() {
+		if enc != nil {
+			_ = send(java4ShellStreamMessage{Type: "error", Error: "The cluster connection changed. Run the check again."})
+			return
+		}
 		s.writeReadFailure(w, resource, errReadHandlesChanged, &target)
 		return
 	}
-	w.Header().Set("Cache-Control", "private, no-store")
-	s.writeJSON(w, images.Java4ShellReport{
+	report := images.Java4ShellReport{
 		Java4ShellResult: result,
 		Coverage:         target.coverage(plan.read, plan.gaps),
 		Workload:         workload,
-	})
+	}
+	if enc != nil {
+		if scanCtx.Err() == nil {
+			_ = send(java4ShellStreamMessage{Type: "result", Report: &report})
+		}
+		return
+	}
+	w.Header().Set("Cache-Control", "private, no-store")
+	s.writeJSON(w, report)
 }
 
 func (s *Server) java4ShellRegistryAccess(r *http.Request, cache *k8s.ResourceCache, pod *corev1.Pod) images.Java4ShellRegistryAccess {

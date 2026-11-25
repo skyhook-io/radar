@@ -101,6 +101,7 @@ func TestComputeDiff_NodeMetadataValues(t *testing.T) {
 }
 
 func TestRecordToTimelineStore_NodeExcludedMetadata(t *testing.T) {
+	state := newConnectionCache()
 	for _, key := range []string{
 		"node.alpha.kubernetes.io/ttl",
 		"nvidia.com/gfd.timestamp",
@@ -141,7 +142,7 @@ func TestRecordToTimelineStore_NodeExcludedMetadata(t *testing.T) {
 					t.Fatal(err)
 				}
 				for _, precomputed := range []bool{false, true} {
-					recordToTimelineStore(ActiveClusterContext(), "Node", "", "worker", "node-uid", "update", oldNode, newNode, nil, precomputed)
+					state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Node", "", "worker", "node-uid", "update", oldNode, newNode, nil, precomputed)
 				}
 				events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{Kinds: []string{"Node"}})
 				if err != nil || len(events) != 0 {
@@ -314,6 +315,7 @@ func TestComputeDiff_NodeSystemTaints(t *testing.T) {
 }
 
 func TestRecordToTimelineStore_NodeConfiguration(t *testing.T) {
+	state := newConnectionCache()
 	for _, field := range []string{"label", "annotation", "autoscaler policy", "taint value", "sensitive taint rotation", "taint effect"} {
 		for _, precomputed := range []bool{false, true} {
 			t.Run(field+"/precomputed="+map[bool]string{true: "true", false: "false"}[precomputed], func(t *testing.T) {
@@ -346,7 +348,7 @@ func TestRecordToTimelineStore_NodeConfiguration(t *testing.T) {
 				if want == nil {
 					t.Fatal("expected configuration diff with no generation")
 				}
-				recordToTimelineStore(ActiveClusterContext(), "Node", "", "worker", "node-uid", "update", oldNode, newNode, want, precomputed)
+				state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Node", "", "worker", "node-uid", "update", oldNode, newNode, want, precomputed)
 				events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{Kinds: []string{"Node"}})
 				if err != nil || len(events) != 1 || !reflect.DeepEqual(events[0].Diff, want) {
 					t.Fatalf("recorded events = %+v, err=%v, want diff %+v", events, err, want)
@@ -357,16 +359,16 @@ func TestRecordToTimelineStore_NodeConfiguration(t *testing.T) {
 }
 
 func TestRecordToTimelineStore_NodeCreationHasNoMetadataDiff(t *testing.T) {
+	state := newConnectionCache()
 	timeline.ResetStore()
 	t.Cleanup(timeline.ResetStore)
 	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 10}); err != nil {
 		t.Fatal(err)
 	}
-	wasSynced := initialSyncComplete.Swap(true)
-	t.Cleanup(func() { initialSyncComplete.Store(wasSynced) })
+	state.initialSyncComplete.Store(true)
 	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "fresh-node", UID: "fresh-uid", CreationTimestamp: metav1.Now(),
 		Labels: map[string]string{"topology.kubernetes.io/zone": "east"}, Annotations: map[string]string{"projectcalico.org/IPv4Address": "10.0.0.1/24"}}}
-	recordToTimelineStore(ActiveClusterContext(), "Node", "", node.Name, string(node.UID), "add", nil, node, nil, false)
+	state.recordToTimelineStore(timeline.CaptureStore(), ActiveClusterContext(), "Node", "", node.Name, string(node.UID), "add", nil, node, nil, false)
 	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{Kinds: []string{"Node"}})
 	if err != nil || len(events) != 1 || events[0].EventType != timeline.EventTypeAdd || events[0].Diff != nil {
 		t.Fatalf("creation produced metadata changes: %+v, err=%v", events, err)

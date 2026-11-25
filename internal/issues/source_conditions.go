@@ -13,8 +13,10 @@ import (
 	"github.com/skyhook-io/radar/internal/logsafe"
 	"github.com/skyhook-io/radar/pkg/conditions"
 	"github.com/skyhook-io/radar/pkg/configrefs"
+	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/longhorn"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -143,6 +145,16 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 			if kind == "BackupStorageLocation" && wantVeleroReadings {
 				out = append(out, detectVeleroReadingIssues(p, gvr, items, time.Now())...)
 			}
+			continue
+		}
+		// A Longhorn Volume carries no failing condition for faulted or
+		// degraded: its robustness says it, so the Volume is read here.
+		if gvr.Group == longhorn.Group && kind == "Volume" {
+			out = append(out, detectLonghornVolumeIssues(gvr, kind, items)...)
+		}
+		// Every MetalLB speaker reports the same rejection, so it is read per list.
+		if gvr.Group == MetalLBGroup && kind == "ConfigurationState" {
+			out = append(out, MetalLBConfigurationIssues(gvr, items, ownedSubjects)...)
 			continue
 		}
 		// A schedule's outcome is read against the cluster's backups, so it is
@@ -702,6 +714,9 @@ func isTransientCRDCondition(u *unstructured.Unstructured, reason string) bool {
 		}
 	}
 	if suspend, ok, _ := unstructured.NestedBool(u.Object, "spec", "suspend"); ok && suspend {
+		return true
+	}
+	if gitops.ArtifactGeneratorPaused(u) {
 		return true
 	}
 	// observedGeneration lags generation → controller hasn't caught up yet.
