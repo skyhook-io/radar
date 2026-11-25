@@ -9,14 +9,17 @@ import { WorkloadViewRoute } from './WorkloadView'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
-it('replaces a stale Deploys URL with Overview and preserves the rest of the location', async () => {
+it.each([
+  ['deploys', '?namespaces=shop', 'REPLACE'],
+  ['runs', '?tab=runs&namespaces=shop', 'POP'],
+])('opens Overview for ?tab=%s with the expected URL and history action', async (tab, search, historyAction) => {
   const path = '/workload/configmaps/shop/settings'
   const client = new QueryClient()
   client.setQueryData(['resource', 'configmaps', 'shop', 'settings', ''], {
     resource: { apiVersion: 'v1', kind: 'ConfigMap', metadata: { namespace: 'shop', name: 'settings' } },
   })
   const router = createMemoryRouter([{ path: '*', element: <WorkloadViewRoute /> }], {
-    initialEntries: [{ pathname: path, search: '?tab=deploys&namespaces=shop', state: { from: 'apps' } }],
+    initialEntries: [{ pathname: path, search: `?tab=${tab}&namespaces=shop`, state: { from: 'apps' } }],
   })
   const host = document.createElement('div')
   const root = createRoot(host)
@@ -29,8 +32,8 @@ it('replaces a stale Deploys URL with Overview and preserves the rest of the loc
       </QueryClientProvider>,
     ))
     expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Overview')
-    expect(router.state.location).toMatchObject({ pathname: path, search: '?namespaces=shop', state: { from: 'apps' } })
-    expect(router.state.historyAction).toBe('REPLACE')
+    expect(router.state.location).toMatchObject({ pathname: path, search, state: { from: 'apps' } })
+    expect(router.state.historyAction).toBe(historyAction)
   } finally {
     act(() => root.unmount())
     router.dispose()

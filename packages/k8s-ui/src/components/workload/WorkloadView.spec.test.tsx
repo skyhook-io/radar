@@ -228,20 +228,34 @@ it('keeps an asynchronous deep link and reconciles an explicit built-in replacem
   const root = createRoot(host)
   const onTabChange = vi.fn()
   const extraTabs = [{ id: 'runs', label: 'Runs', replaces: 'spec' as const, render: () => <div>The runs</div> }]
-  act(() => root.render(<WorkloadView {...props} expanded activeTab="runs" extraTabsState="loading" onTabChange={onTabChange} />))
-  expect(onTabChange).not.toHaveBeenCalled()
-  expect(host.textContent).not.toContain('Composed Overview')
   act(() => root.render(<WorkloadView {...props} expanded activeTab="runs" onTabChange={onTabChange} />))
+  expect(host.textContent).toContain('Composed Overview')
+  expect(onTabChange).not.toHaveBeenCalled()
+  act(() => root.render(<WorkloadView {...props} expanded activeTab="runs" extraTabsComplete={false} onTabChange={onTabChange} />))
+  expect(host.textContent).toContain('Composed Overview')
   expect(onTabChange).not.toHaveBeenCalled()
   act(() => root.render(<WorkloadView {...props} expanded activeTab="runs" extraTabs={extraTabs} onTabChange={onTabChange} />))
   expect(host.textContent).toContain('The runs')
   expect(onTabChange).not.toHaveBeenCalled()
   act(() => root.render(<WorkloadView {...props} expanded activeTab="spec" extraTabs={extraTabs} onTabChange={onTabChange} />))
   expect(onTabChange).toHaveBeenCalledWith('runs', { replace: true })
-  onTabChange.mockClear()
-  act(() => root.render(<WorkloadView {...props} expanded activeTab="removed" extraTabs={extraTabs} extraTabsState="ready" onTabChange={onTabChange} />))
+  act(() => root.unmount())
+})
+
+it('repairs unknown tab IDs once the host list is complete and the workload read settles', () => {
+  const root = createRoot(document.createElement('div'))
+  const onTabChange = vi.fn()
+  const render = (activeTab: string, extraTabsComplete: boolean, isLoading: boolean) => act(() => root.render(
+    <WorkloadView {...props} expanded activeTab={activeTab} extraTabsComplete={extraTabsComplete}
+      isLoading={isLoading} onTabChange={onTabChange} />,
+  ))
+  render('removed', false, false)
+  expect(onTabChange).not.toHaveBeenCalled()
+  render('removed', true, true)
+  expect(onTabChange).not.toHaveBeenCalled()
+  render('removed', true, false)
   expect(onTabChange).toHaveBeenCalledExactlyOnceWith('overview', { replace: true })
-  act(() => root.render(<WorkloadView {...props} expanded activeTab="also-removed" extraTabs={extraTabs} extraTabsState="ready" onTabChange={onTabChange} />))
+  render('also-removed', true, false)
   expect(onTabChange).toHaveBeenCalledTimes(2)
   act(() => root.unmount())
 })
@@ -255,7 +269,7 @@ it.each([['cold', undefined], ['cached', resource]] as const)('gates host tabs o
     { id: 'runs', label: 'Runs', render: () => 'Run history' },
   ]
   const gone = Object.assign(new Error('not found'), { status: 404 })
-  const hosted = { ...props, extraTabs, extraTabsState: 'ready' as const, onTabChange }
+  const hosted = { ...props, extraTabs, extraTabsComplete: true, onTabChange }
   act(() => root.render(<WorkloadView {...hosted} activeTab="runs" resource={cached} resourceError={gone} />))
   expect([...host.querySelectorAll('[role="tab"]')].map(tab => tab.textContent)).not.toContain('Runs')
   expect(host.textContent).not.toContain('Run history')

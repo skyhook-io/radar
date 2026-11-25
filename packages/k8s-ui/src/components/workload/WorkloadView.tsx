@@ -1,5 +1,5 @@
 import { dedupeResourceRefs } from '../../utils/resource-refs'
-import { orderById } from '../../utils/order-by-id'
+import { orderById } from '../shared/order-by-id'
 import { pluralize } from '../../utils/pluralize'
 import { isKubeRayClusterIdentity } from '../resources/resource-utils-ray'
 import { PodRow, PodListFrame, PodListToggle, workloadPodDetail } from './PodList'
@@ -392,9 +392,9 @@ type WorkloadViewBaseProps = {
     /** The resource's operational issues, for a summary that shows them itself. */
     leadContent?: ReactNode
   }) => ReactNode
-  /** Loading defers expanded-view URL repairs. Ready allows replacement of unknown
-   * host IDs once resource loading settles. Omit to preserve unknown host IDs. */
-  extraTabsState?: 'loading' | 'ready'
+  /** Pass true when extraTabs lists every host tab. The expanded view can then repair
+   * an unknown ?tab= once the workload read settles. Omit or pass false to preserve the ID. */
+  extraTabsComplete?: boolean
   /** Expanded view: a line under the title, above the tabs, shown on every tab. */
   subheader?: ReactNode
   /** Expanded view: tab ids in display order; tabs not listed follow in their usual order. */
@@ -583,7 +583,7 @@ export function WorkloadView({
   onSelectTopologyMember,
   renderSummary,
   extraTabs,
-  extraTabsState,
+  extraTabsComplete = false,
   tabOrder,
   specTab,
   subheader,
@@ -1080,21 +1080,18 @@ export function WorkloadView({
   const requestedTabAvailable = tabIsVisible(requestedTab)
   const requestedHostTabKnown = offeredExtraTabs?.some(({ id }) => id === requestedTab)
   const replacementTab = availableExtraTabs?.find((tab) => tab.replaces === requestedTab)?.id
-  const extraTabsLoading = extraTabsState === 'loading'
-  const awaitingRequestedTab = expanded && extraTabsLoading && !requestedTabAvailable && !replacementTab
   const fallbackTab = replacementTab ?? tabTarget('overview') ?? 'overview'
-  const effectiveTab: TabType = requestedTabAvailable ? requestedTab : awaitingRequestedTab ? '' : fallbackTab
+  const effectiveTab: TabType = requestedTabAvailable ? requestedTab : fallbackTab
   const activeExtraTab = availableExtraTabs?.find((tab) => tab.id === effectiveTab)
   const timelineTarget = tabTarget('timeline')
   const logsTarget = tabTarget('logs')
   const topologyTarget = tabTarget('topology')
   const shouldCommitFallback =
-    !(expanded && extraTabsLoading) &&
     requestedTab !== fallbackTab &&
     !requestedTabAvailable &&
     (
       replacementTab !== undefined ||
-      (expanded && extraTabsState === 'ready' && !resourceLoading && !isBuiltInTab(requestedTab) && !requestedHostTabKnown) ||
+      (expanded && extraTabsComplete && !resourceLoading && !isBuiltInTab(requestedTab) && !requestedHostTabKnown) ||
       (requestedTab === 'spec' && !!resource && !resourceLoading && !expandedSummary) ||
       (requestedTab === 'topology' && topologyTabHidden) ||
       (requestedTab === 'metrics' && (!renderMetricsTab || (!!resource && !resourceLoading && !showMetricsTab))) ||
@@ -1497,18 +1494,13 @@ export function WorkloadView({
       compactHeader={compactHeader}
     >
       <div className="flex h-full min-h-0 flex-col">
-        {!awaitingRequestedTab && deletedNotice && <div className="shrink-0 px-4 pt-4">{deletedNotice}</div>}
-        {!awaitingRequestedTab && resourceMatchesSelection && !resourceGone && effectiveTab !== 'overview' && rolloutActivity && (rolloutActivity.phase !== 'idle' || recentImageSave) && (
+        {deletedNotice && <div className="shrink-0 px-4 pt-4">{deletedNotice}</div>}
+        {resourceMatchesSelection && !resourceGone && effectiveTab !== 'overview' && rolloutActivity && (rolloutActivity.phase !== 'idle' || recentImageSave) && (
           <div className="shrink-0 px-4 pt-4">
             <WorkloadRolloutNotice activity={rolloutActivity} recentImageSave={recentImageSave} />
           </div>
         )}
         <div className="min-h-0 flex-1">
-        {awaitingRequestedTab && (
-          <div role="tabpanel" className="h-full">
-            <PaneLoader className="h-full" />
-          </div>
-        )}
         {/* Keyed by tab: another host tab opens at its top, not at the scroll offset the last one was left at. */}
         {activeExtraTab && (
           <div
