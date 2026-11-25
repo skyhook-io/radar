@@ -7,7 +7,7 @@ import (
 )
 
 func TestHTTPUpgradeAuthorizerDecisionMatrix(t *testing.T) {
-	s := &Server{permCache: auth.NewPermissionCache()}
+	s := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	perms := &auth.UserPermissions{AllowedNamespaces: nil}
 	perms.SetCanI("list", "", "nodes", "", true)
 	perms.SetCanI("list", "", "persistentvolumes", "", false)

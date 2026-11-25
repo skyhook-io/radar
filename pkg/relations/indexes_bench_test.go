@@ -43,6 +43,7 @@ func indexExamples() []indexExample {
 		{KnativeEventDestinations, u("eventing.knative.dev/v1", "Trigger", `{"subscriber":{"ref":{"apiVersion":"v1","kind":"Service","name":"web","namespace":"shared"}}}`)},
 		{KnativeTriggerBrokers, u("eventing.knative.dev/v1", "Trigger", `{"brokerRef":{"name":"default","namespace":"shared"}}`)},
 		{FluxSources, u("kustomize.toolkit.fluxcd.io/v1", "Kustomization", `{"sourceRef":{"kind":"GitRepository","name":"app","namespace":"shared"}}`)},
+		{FluxDependsOn, u("kustomize.toolkit.fluxcd.io/v1", "Kustomization", `{"dependsOn":[{"name":"infra","namespace":"shared"}]}`)},
 		{CertManagerIssuers, u("cert-manager.io/v1", "Certificate", `{"issuerRef":{"name":"ca","kind":"ClusterIssuer"}}`)},
 		{ClusterClasses, u("cluster.x-k8s.io/v1beta1", "Cluster", `{"topology":{"class":"base","classNamespace":"shared"}}`)},
 		{ArgoWorkflowTemplates, u("argoproj.io/v1alpha1", "Workflow", `{"workflowTemplateRef":{"name":"base","clusterScope":true},"templates":[{"name":"run","dag":{"tasks":[{"name":"a","templateRef":{"name":"task","template":"run","clusterScope":true}}]}}]}`)},

@@ -8,6 +8,7 @@ export {
   type ResourceOwnershipContext,
   type ServingResourceDetail,
   type WorkloadTabType,
+  type WorkloadDetailTab,
   type WorkloadExtraTab,
 } from './WorkloadView'
 export { ResourceDetailDrawer } from './ResourceDetailDrawer'

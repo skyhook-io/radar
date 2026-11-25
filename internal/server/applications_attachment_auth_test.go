@@ -85,7 +85,7 @@ func TestApplicationsAttachmentAccessInBothCacheFillOrders(t *testing.T) {
 		t.Fatalf("ScaledJob attachments=%#v want=%#v", got, wantJob)
 	}
 	t.Cleanup(clearApplicationsCache)
-	s := &Server{permCache: auth.NewPermissionCache()}
+	s := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	for _, name := range []string{"reader", "restricted"} {
 		allowed := name == "reader"
 		p := &auth.UserPermissions{AllowedNamespaces: []string{"team"}}

@@ -41,6 +41,7 @@ import { focusManager, useInfiniteQuery, useQuery, useMutation, useQueryClient, 
 import { showApiError, showApiSuccess, showApiNotice } from '../components/ui/Toast'
 import { useIsAuthEnabled, useNamespacedCapabilities } from '../contexts/CapabilitiesContext'
 import { applyTabPick, cleanPick, ownsTabPick, pruneTabPick, withActives, writeTabPick } from '../utils/namespacePick'
+import { parseContextName } from '../utils/context-name'
 import type {
   Topology,
   ClusterInfo,
@@ -83,7 +84,7 @@ import type {
 import type { GitOpsOperationResponse } from '../types/gitops'
 import { apiUrl, automaticRequestHeaders, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
 import { CONNECTION_HEADER, connectionHeaderValue } from './connectionBinding'
-import { httpStatusMessage, markShownInline, readErrorBody, readErrorResponse } from './httpErrors'
+import { GitOpsActionError, httpStatusMessage, markShownInline, readErrorBody, readErrorResponse } from './httpErrors'
 import {
   RadarFeatureUnsupportedError,
   guardRadarFeature,
@@ -1939,6 +1940,11 @@ export function useClusterInfo() {
     },
   });
   return query;
+}
+
+function cachedContextName(queryClient: QueryClient): string | undefined {
+  return queryClient.getQueryData<ClusterInfo>(["cluster-info"])?.context
+    ?? queryClient.getQueryData<{ context: string }>(["connection-status"])?.context;
 }
 
 // Version check
@@ -6224,8 +6230,7 @@ export function useDrainNode(nodeUID = "") {
       return response.json();
     },
     onMutate: ({ name }) => {
-      const contextName = queryClient.getQueryData<ClusterInfo>(["cluster-info"])?.context
-        ?? queryClient.getQueryData<{ context: string }>(["connection-status"])?.context;
+      const contextName = cachedContextName(queryClient);
       const activity: NodeDrainActivity = {
         status: "pending",
         requestId: ++nextNodeDrainRequestId,
@@ -7341,6 +7346,17 @@ export function useArtifactHubChart(
 // GitOps Mutation Factory
 // ============================================================================
 
+type GitOpsConnection = { apiBase: string; connectionId?: string };
+type GitOpsTargetVars = ArgoAppVars & { kind?: string; expectedConnection?: GitOpsConnection };
+
+function gitOpsRequestTarget(queryClient: QueryClient, { namespace, name, kind }: GitOpsTargetVars): string {
+  const clusterId = /^\/c\/([^/]+)$/.exec(getBasename())?.[1];
+  const context = cachedContextName(queryClient);
+  const cluster = clusterId ?? (context && context !== "in-cluster" ? parseContextName(context).clusterName : undefined);
+  const resource = `${kind ? pluralToKind(kind) : "Application"} ${namespace}/${name}`;
+  return cluster ? `${resource} on ${cluster}` : resource;
+}
+
 interface GitOpsMutationConfig<TVariables, TContext = undefined> {
   getPath: (variables: TVariables) => string;
   // Called by the hook on every render (so it may call hooks); its value is
@@ -7348,6 +7364,7 @@ interface GitOpsMutationConfig<TVariables, TContext = undefined> {
   useRequestContext?: () => TContext;
   getBody?: (variables: TVariables, context: TContext) => unknown;
   errorMessage: string;
+  isErrorShownInline?: (variables: TVariables) => boolean;
   successMessage?: string;
   getSuccessMessage?: (data: GitOpsOperationResponse, variables: TVariables) => string;
   getInvalidateKeys: (variables: TVariables) => (string | undefined)[][];
@@ -7357,36 +7374,46 @@ interface GitOpsMutationConfig<TVariables, TContext = undefined> {
  * Factory function for creating GitOps mutation hooks with consistent patterns.
  * Handles fetch, error handling, meta messages, and query invalidation.
  */
-function createGitOpsMutation<TVariables, TContext = undefined>(
+function createGitOpsMutation<TVariables extends GitOpsTargetVars, TContext = undefined>(
   config: GitOpsMutationConfig<TVariables, TContext>,
 ) {
-  return function useGitOpsMutation() {
+  return function useGitOpsMutation(options?: { reportErrors?: boolean }) {
     const queryClient = useQueryClient();
     const requestContext = config.useRequestContext?.() as TContext;
-    return useMutation<GitOpsOperationResponse, Error, TVariables>({
+    return useMutation<GitOpsOperationResponse, GitOpsActionError, TVariables>({
       mutationFn: async (
         variables: TVariables,
       ): Promise<GitOpsOperationResponse> => {
-        const response = await apiFetch(
-          `${getApiBase()}${config.getPath(variables)}`,
-          {
-            method: "POST",
-            headers: config.getBody
-              ? { "Content-Type": "application/json" }
-              : undefined,
-            body: config.getBody
-              ? JSON.stringify(config.getBody(variables, requestContext))
-              : undefined,
-          },
-        );
-        if (!response.ok) {
-          const error = await readErrorBody(response);
-          throw new Error(error.error || `HTTP ${response.status}`);
+        const target = gitOpsRequestTarget(queryClient, variables);
+        try {
+          const expected = variables.expectedConnection;
+          if (expected && (getApiBase() !== expected.apiBase || connectionHeaderValue(expected.apiBase) !== expected.connectionId)) {
+            throw new Error("The cluster connection changed before syncing. Return to the original cluster to retry.");
+          }
+          const response = await apiFetch(
+            apiUrl(config.getPath(variables)),
+            {
+              method: "POST",
+              headers: config.getBody
+                ? { "Content-Type": "application/json" }
+                : undefined,
+              body: config.getBody
+                ? JSON.stringify(config.getBody(variables, requestContext))
+                : undefined,
+            },
+          );
+          if (!response.ok) {
+            const error = await readErrorBody(response);
+            throw new GitOpsActionError(error, response.status, target);
+          }
+          return await response.json() as GitOpsOperationResponse;
+        } catch (error) {
+          if (error instanceof Error && config.isErrorShownInline?.(variables)) markShownInline(error);
+          throw error;
         }
-        return response.json() as Promise<GitOpsOperationResponse>;
       },
       meta: {
-        errorMessage: config.errorMessage,
+        errorMessage: options?.reportErrors === false ? undefined : config.errorMessage,
         successMessage: config.successMessage,
       },
       onSuccess: (data, variables) => {
@@ -7409,6 +7436,8 @@ type ArgoAppVars = { namespace: string; name: string };
 // useArgoSync sends these — splitting the type prevents callers from passing
 // resources/revision/prune to mutations that would silently drop them.
 export type ArgoSyncVars = ArgoAppVars & {
+  expectedConnection?: GitOpsConnection;
+  isErrorShownInline?: () => boolean;
   resources?: Array<{
     group?: string;
     kind: string;
@@ -7569,6 +7598,7 @@ export const useArgoSync = createGitOpsMutation<ArgoSyncVars, boolean>({
   useRequestContext: useArgoSyncInheritance,
   getBody: argoSyncRequestBody,
   errorMessage: "Failed to trigger sync",
+  isErrorShownInline: (variables) => variables.isErrorShownInline?.() ?? false,
   getSuccessMessage: (_data, v) => (v.dryRun ? "Dry run started" : "Sync initiated"),
   getInvalidateKeys: argoInvalidateKeys,
 });
@@ -7576,10 +7606,10 @@ export const useArgoSync = createGitOpsMutation<ArgoSyncVars, boolean>({
 export function useArgoResourceValidation() {
   const queryClient = useQueryClient();
   const serverInheritsOptions = useArgoSyncInheritance();
-  return useMutation<ArgoResourceValidationResult, Error, ArgoSyncVars>({
+  return useMutation<ArgoResourceValidationResult, GitOpsActionError, ArgoSyncVars>({
     mutationFn: async (variables) => {
       const response = await apiFetch(
-        `${getApiBase()}/argo/applications/${variables.namespace}/${variables.name}/validate-resource`,
+        apiUrl(`/argo/applications/${variables.namespace}/${variables.name}/validate-resource`),
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -7596,7 +7626,7 @@ export function useArgoResourceValidation() {
       );
       if (!response.ok) {
         const error = await readErrorBody(response);
-        throw new Error(error.error || `HTTP ${response.status}`);
+        throw new GitOpsActionError(error, response.status);
       }
       return response.json() as Promise<ArgoResourceValidationResult>;
     },
@@ -7637,48 +7667,12 @@ export const useArgoResume = createGitOpsMutation<ArgoAppVars>({
   getInvalidateKeys: argoInvalidateKeys,
 });
 
-// useArgoRefresh has a unique parameter (hard), so it's defined separately
-export function useArgoRefresh() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: async ({
-      namespace,
-      name,
-      hard = false,
-    }: {
-      namespace: string;
-      name: string;
-      hard?: boolean;
-    }) => {
-      const params = hard ? "?type=hard" : "";
-      const response = await apiFetch(
-        `${getApiBase()}/argo/applications/${namespace}/${name}/refresh${params}`,
-        {
-          method: "POST",
-        },
-      );
-      if (!response.ok) {
-        const error = await readErrorBody(response);
-        throw new Error(error.error || `HTTP ${response.status}`);
-      }
-      return response.json();
-    },
-    meta: {
-      errorMessage: "Failed to refresh application",
-      successMessage: "Application refreshed",
-    },
-    onSuccess: (_, variables) => {
-      // Match the standard Argo invalidation set so the GitOps detail page
-      // (insights strip, resource tree) refetches after Refresh / Hard
-      // Refresh — without these two extra keys the user clicks Refresh and
-      // sees stale insight/tree data until the next staleTime tick.
-      argoInvalidateKeys(variables).forEach((key) =>
-        queryClient.invalidateQueries({ queryKey: key }),
-      );
-    },
-  });
-}
+export const useArgoRefresh = createGitOpsMutation<ArgoAppVars & { hard?: boolean }>({
+  getPath: ({ namespace, name, hard }) => `/argo/applications/${namespace}/${name}/refresh${hard ? "?type=hard" : ""}`,
+  errorMessage: "Failed to refresh application",
+  successMessage: "Application refreshed",
+  getInvalidateKeys: argoInvalidateKeys,
+});
 
 // ============================================================================
 // Context Switching API hooks

@@ -48,26 +48,19 @@ func attachFluxBlocker(issue Issue, root *unstructured.Unstructured, tree *gitop
 	if tree == nil {
 		return issue
 	}
+	direct := map[Ref]bool{}
 	switch issue.Reason {
-	case "SourceNotReady", "ArtifactFailed", "DependencyNotReady":
+	case "SourceNotReady", "ArtifactFailed":
+		for _, source := range gitops.FluxSourceReferences(root) {
+			direct[Ref(source.Ref)] = true
+		}
+	case "DependencyNotReady":
+		// Inventory ownership can replace a dependsOn edge without erasing the declaration.
+		for _, dep := range gitops.FluxDependsOn(root) {
+			direct[Ref(dep)] = true
+		}
 	default:
 		return issue
-	}
-	direct := map[Ref]bool{}
-	for _, source := range gitops.FluxSourceReferences(root) {
-		if issue.Reason == "DependencyNotReady" {
-			break
-		}
-		direct[Ref{Group: source.Group, Kind: source.Kind, Namespace: source.Namespace, Name: source.Name}] = true
-	}
-	// Inventory ownership can replace a dependsOn edge without erasing the declaration.
-	deps, _, _ := unstructured.NestedSlice(root.Object, "spec", "dependsOn")
-	for _, raw := range deps {
-		dep, ok := raw.(map[string]any)
-		if issue.Reason != "DependencyNotReady" || !ok || gitops.StringValue(dep["name"]) == "" {
-			continue
-		}
-		direct[Ref{Group: tree.Root.Ref.Group, Kind: tree.Root.Ref.Kind, Namespace: firstNonEmpty(gitops.StringValue(dep["namespace"]), root.GetNamespace()), Name: gitops.StringValue(dep["name"])}] = true
 	}
 	quoted := fluxQuotedReference.FindAllStringSubmatch(issue.Message, -1)
 	sourceMessage := strings.ToLower(issue.Message)

@@ -136,7 +136,7 @@ func TestAuditBadgesResponseKeepsOnlyBadgeWorthyChecks(t *testing.T) {
 // asked for, so a badge view never receives the full response.
 func TestHandleAuditIncludeBadgesWithoutNamespaceAccess(t *testing.T) {
 	s := newTestServer(t)
-	s.permCache = pkgauth.NewPermissionCache()
+	s.permCache = pkgauth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)
 	s.permCache.Set("alice", nil, &pkgauth.UserPermissions{AllowedNamespaces: []string{}})
 	req := httptest.NewRequest(http.MethodGet, "/api/audit?include=badges", nil)
 	req = req.WithContext(pkgauth.ContextWithUser(req.Context(), &pkgauth.User{Username: "alice"}))
