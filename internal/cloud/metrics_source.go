@@ -98,14 +98,6 @@ func RequestMetricsSourceRefresh() {
 	}
 }
 
-// MetricsSourcePollerRunning reports whether this agent asks Hub for its
-// metrics source.
-func MetricsSourcePollerRunning() bool {
-	metricsSourcePollers.Lock()
-	defer metricsSourcePollers.Unlock()
-	return len(metricsSourcePollers.set) > 0
-}
-
 // HubOffersOpenObserve reports whether Hub's last successful answer to a
 // running poller said it offers OpenObserve metrics.
 func HubOffersOpenObserve() bool {

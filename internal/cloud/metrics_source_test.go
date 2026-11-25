@@ -464,7 +464,7 @@ func TestCheckMetricsSourceNowWaitsForTheAnswer(t *testing.T) {
 	done := make(chan struct{})
 	go func() { p.run(ctx); close(done) }()
 	defer func() { cancel(); <-done }()
-	waitUntil(t, func() bool { return MetricsSourcePollerRunning() && hub.polls.Load() == 1 })
+	waitUntil(t, func() bool { return hub.polls.Load() == 1 })
 
 	hub.set(openObserveSource())
 	if !CheckMetricsSourceNow(t.Context()) {
