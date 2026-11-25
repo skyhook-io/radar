@@ -1,4 +1,4 @@
-import { ChevronRight, SlidersHorizontal } from 'lucide-react'
+import { SlidersHorizontal } from 'lucide-react'
 import { SubstrateStateBar } from './SubstrateStateBar'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { clsx } from 'clsx'
@@ -62,8 +62,6 @@ export function sourcesNote(sources: ('snapshot' | 'atespace' | 'actor')[]): str
   if (sources.includes('atespace')) return 'Read directly from this atespace: the shared read does not hold all of it.'
   return ''
 }
-
-/** The URL filters that narrow the Actors list to a subset; the state segment and sort are not among them. */
 
 /** An actor as the workspace tables' row identity. Actors are not Kubernetes objects; the drawer this opens is Substrate's own. */
 export const ACTOR_ROW_KIND = 'SubstrateActor'
@@ -137,14 +135,9 @@ export function stateCellReading(row: SubstrateActorRow): { text: string; hover:
   return { text, hover: [message, row.waitingOn?.reading].filter(Boolean).join(' ') }
 }
 
-/** The state chip and, beside it on the same line, what the chip leaves out. */
 function StateCell({ row }: { row: SubstrateActorRow }) {
   const { text, hover } = stateCellReading(row)
-  // The one cell that may take a second line: a crash message or a wait reads whole at 1440.
-  // The badge is a crash's one red signal; its message reads neutral, so a different cause stands out by its words.
-  // A stuck transition's amber is on its badge, which says "stuck"; the line stays quiet.
   const line = text ? <span className={clsx('line-clamp-2 min-w-0 text-xs leading-4', row.state === 'crashed' ? 'text-theme-text-secondary' : 'text-theme-text-tertiary')}>{text}</span> : null
-  // Beside the chip while there is room for a few words, under it when there isn't.
   const place = 'min-w-[8rem] flex-1 pt-0.5'
   return (
     <span className="flex min-w-0 flex-wrap items-start gap-x-1.5 gap-y-0.5">
@@ -203,8 +196,8 @@ function actorColumns(wide: boolean, onOpen: (ref: SubstrateRef) => void): Table
       : []),
     {
       header: <span className="sr-only">Open actor</span>,
-      width: '38px',
-      cell: (r) => <button type="button" aria-label={`Open actor ${r.name}`} className="text-accent-text hover:text-accent-light" onClick={(e) => { e.stopPropagation(); onOpen(r) }}><ChevronRight size={16} /></button>,
+      width: '76px',
+      cell: (r) => <button type="button" aria-label={`Open actor ${r.name}`} className="whitespace-nowrap text-xs text-accent-text hover:underline" onClick={(e) => { e.stopPropagation(); onOpen(r) }}>Open →</button>,
     },
   ]
 }
@@ -365,7 +358,7 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
                 ...ACTOR_SEGMENTS.slice(1).map((s) => ({ id: s.id, label: s.label })),
               ].map((s) => {
                 const n = s.id === 'attention' ? query.data?.attentionCount : segmentCount(query.data?.counts, s.id)
-                const partial = coverageInPart(query.data?.coverage) || (s.id === 'attention' && coverageInPart(workspace?.coverage.workers))
+                const partial = coverageInPart(query.data?.coverage) || (s.id === 'attention' && coverageInPart(query.data?.workerCoverage))
                 return { ...s, count: n === undefined ? undefined : partial ? (n > 0 ? `≥${n.toLocaleString('en-US')}` : undefined) : n.toLocaleString('en-US') }
               })}
             />
@@ -403,7 +396,7 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
         ) : (
           <>
             <RefreshFailedNotice queries={[query]} />
-            <ActorsTable sort={sort} data={query.data} attentionPartial={attentionOnly && coverageInPart(workspace?.coverage.workers)} loading={query.isLoading} placeholder={query.isPlaceholderData} page={page} onPage={setPage} onOpenActor={onOpenActor} openActor={openActor} />
+            <ActorsTable sort={sort} data={query.data} attentionPartial={attentionOnly && coverageInPart(query.data?.workerCoverage)} loading={query.isLoading} placeholder={query.isPlaceholderData} page={page} onPage={setPage} onOpenActor={onOpenActor} openActor={openActor} />
           </>
         )}
         {attentionOnly && <p className="text-xs text-theme-text-tertiary">Includes reported crashes, lost sandboxes, unavailable workers and stuck transitions. Failed golden builds also have a template finding.</p>}

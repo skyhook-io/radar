@@ -132,7 +132,7 @@ export function SubstrateSettings({ active, onDirtyChange, onBusyChange }: {
   return (
     <div className="space-y-4">
       <p className="text-sm text-theme-text-secondary">
-        Substrate keeps <Term term="actor">actors</Term>, <Term term="template">templates</Term> and <Term term="worker">workers</Term> in its own API, not Kubernetes, and checks its own roles there. Radar reads them, read-only, as the identity below. Pools, worker Pods and Prometheus readings show either way.
+        Substrate keeps actors, templates and workers in its own API, not Kubernetes, and checks its own roles there. Radar reads them, read-only, as the identity below. Pools, worker Pods and Prometheus readings show either way.
       </p>
       {statusError}
       {notInstalled && savedHere && (

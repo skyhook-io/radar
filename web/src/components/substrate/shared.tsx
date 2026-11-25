@@ -17,6 +17,8 @@ import {
 } from '@skyhook-io/k8s-ui'
 import type {
   SubstrateAPITier,
+  SubstratePoolRef,
+  SubstrateWorkspace,
   SubstrateActorState,
   SubstrateSnapshotCoverage,
   SubstratePoolsCoverage,
@@ -30,19 +32,14 @@ import { usePrometheusStatus } from '../../api/client'
 import { BreakText, Notice, RefreshFailedNotice, ScreenEmptyState } from '../workspace/layout'
 import { INCOMPLETE_COVERAGE_STATES, coverageLabel } from '../workspace/coverage'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
-import { IMPACT_LABEL, actorStateReading, coverageInPart, coverageReason, localTime, relativeTime, tierReading, workerStateReading } from './readings'
-import { SUBSTRATE_PATH } from './routes'
+import { IMPACT_LABEL, actorStateReading, coverageInPart, coverageReason, localTime, poolReading, relativeTime, tierReading, workerStateReading } from './readings'
+import { SUBSTRATE_PATH, SUBSTRATE_SCREENS, substratePoolPath } from './routes'
 
 /** Substrate's terms, defined where they first appear on a screen. */
 export const SUBSTRATE_TERMS = {
-  actor: 'An agent’s sandboxed process. Substrate runs it on a worker while it works and suspends it to a snapshot when it is idle. Actors live in Substrate’s API, not in Kubernetes.',
   atespace: 'Substrate’s own scope for actors and templates; not a Kubernetes namespace.',
-  worker: 'A worker Pod of a WorkerPool. Substrate places actors on workers; each takes a limited number of actors (its slots).',
-  pool: 'A WorkerPool: the Kubernetes object that runs worker Pods of one sandbox class.',
-  template: 'An ActorTemplate: the image, resources and snapshot settings every new actor of it starts from.',
   golden: 'The prepared starting snapshot a template builds for new actors. Without it, they boot cold.',
   slot: 'A place for one actor on a worker; a worker’s actor limit is its number of slots. A free slot takes an actor only when the worker also has the CPU and memory the actor’s template asks.',
-  snapshot: 'A saved copy of an actor’s state, taken when it suspends. The actor resumes from the newest one that is stored or still on its node.',
 } as const
 
 export type SubstrateTerm = keyof typeof SUBSTRATE_TERMS
@@ -70,7 +67,6 @@ export function ActorStateBadge({ state, impact, updateTime }: { state: Substrat
 }
 
 /** What the workspace is, in one line, at the top of its Overview. */
-export const SUBSTRATE_WHAT_IT_IS = 'Agent Substrate runs stateful agent actors on worker Pods and suspends them to snapshots between runs.'
 
 /** The crumb and title every Substrate screen starts with; `intro` is a line under it, `children` sit below (filters). */
 export function SubstrateHeader({ title, intro, children }: { title: string; intro?: ReactNode; children?: ReactNode }) {
@@ -131,7 +127,7 @@ function SharedAsCallerIdentity() {
  * Where the screen's values come from: Substrate's API (endpoint, identity,
  * read age), Prometheus, and Kubernetes, which Radar always reads.
  */
-export function SubstrateSourceLine({ tier, status }: { tier: SubstrateAPITier; status?: SubstrateStatus }) {
+export function SubstrateSourceLine({ tier, status, showRefreshFailure = true }: { tier: SubstrateAPITier; status?: SubstrateStatus; showRefreshFailure?: boolean }) {
   const { data: prometheus } = usePrometheusStatus()
   const service = status?.apiService
   const endpoint = tier.endpoint ?? (service ? `${service.namespace}/${service.name}:${service.port}` : undefined)
@@ -166,15 +162,41 @@ export function SubstrateSourceLine({ tier, status }: { tier: SubstrateAPITier; 
       ) : (
         <SourcePart tone={reading.tone} label="Substrate API">{reading.title.toLowerCase()}</SourcePart>
       )}
-      {tier.lastError && (
-        <Tooltip content={tier.lastError.message}>
-          <span className={toneTextClass('degraded')}>last read failed {relativeTime(tier.lastError.at)}: showing the one before</span>
-        </Tooltip>
-      )}
+      {showRefreshFailure && <SubstrateRefreshFailure tier={tier} />}
       <SourcePart tone={prometheus?.connected ? 'healthy' : 'unknown'} label="Prometheus">
         {prometheus === undefined ? 'unknown' : prometheus.connected ? 'connected' : 'not connected'}
       </SourcePart>
       <SourcePart tone="healthy" label="Kubernetes">WorkerPools and worker Pods</SourcePart>
+    </div>
+  )
+}
+
+export function SubstrateRefreshFailure({ tier }: { tier: SubstrateAPITier }) {
+  if (!tier.lastError) return null
+  return (
+    <Tooltip content={tier.lastError.message}>
+      <span role="status" className={`text-xs ${toneTextClass('degraded')}`}>Last Substrate API read failed {relativeTime(tier.lastError.at)}. Showing the previous read.</span>
+    </Tooltip>
+  )
+}
+
+export function PoolMatchLinks({ pools, workspace }: { pools: SubstratePoolRef[]; workspace?: SubstrateWorkspace }) {
+  const navigate = useWorkspaceNavigate()
+  const { connection } = useConnection()
+  return (
+    <div className="mt-1 flex flex-wrap gap-1.5">
+      {pools.map((p) => {
+        const key = `${p.namespace}/${p.name}`
+        const row = workspace?.pools.find((q) => q.name === p.name && q.namespace === p.namespace)
+        const finding = workspace?.needsAttention.find((f) => f.subject.kind === 'WorkerPool' && f.subject.name === p.name && f.subject.namespace === p.namespace)
+        const reading = row && poolReading(row, finding)
+        const tone = reading?.severity === 'error' ? 'unhealthy' : reading?.severity === 'alert' ? 'alert'
+          : reading?.severity === 'warning' ? 'degraded' : reading?.severity === 'success' ? 'healthy' : 'unknown'
+        const open = () => navigate(row && !row.kubernetes
+          ? `${SUBSTRATE_SCREENS.workers.path}?${new URLSearchParams({ pool: key })}`
+          : substratePoolPath(p, connection.context || undefined))
+        return <button key={key} type="button" title={`${key} · ${reading?.label ?? 'Capacity unknown'}`} onClick={open} className="btn-secondary inline-flex items-center gap-1.5 px-2 py-0.5 text-xs font-mono"><StatusDot tone={tone} />{p.name}</button>
+      })}
     </div>
   )
 }
@@ -360,7 +382,7 @@ export function CommandChip({ command: written }: { command: string }) {
 }
 
 /** A worker's state chip, the same on Workers and on a pool's placement cards. */
-export function WorkerStateChip({ w }: { w: Pick<SubstrateWorkerRow, 'state' | 'workerState'> }) {
+export function WorkerStateChip({ w }: { w: Pick<SubstrateWorkerRow, 'state' | 'workerState' | 'attentionSeverity'> }) {
   const r = workerStateReading(w)
   return (
     <Tooltip content={r.title}>

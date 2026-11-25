@@ -20,7 +20,7 @@ import type { OpenSubject } from './SubstrateAttentionList'
 import { SubstrateConnectNotice, SubstrateTierBanner } from './SubstrateConnect'
 import { bytesText, coverageInPart, coverageReason, cpuText, poolReading, workerPodText } from './readings'
 import { substrateActorsPath, substratePoolPath } from './routes'
-import { ActorStateBadge, Name, SUBSTRATE_WIDE, SubstrateHeader, SubstrateSourceLine, Term, Unread, WholeNames, WorkerStateChip } from './shared'
+import { ActorStateBadge, Name, SUBSTRATE_WIDE, SubstrateCoverageNotice, SubstrateHeader, SubstrateSourceLine, Term, Unread, WholeNames, WorkerStateChip } from './shared'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
 
 
@@ -112,13 +112,16 @@ const STATE_RANK: Record<SubstrateWorkerRow['state'], number> = { unavailable: 0
 
 // A worker whose actors lost their sandboxes ranks with the unavailable ones: its actors are as affected.
 const lostSandboxes = (w: SubstrateWorkerRow) => (w.workerState?.lost ?? 0) > 0
-const rank = (w: SubstrateWorkerRow) => (lostSandboxes(w) ? Math.min(STATE_RANK[w.state], STATE_RANK.unavailable) : STATE_RANK[w.state])
+const ATTENTION_RANK = { critical: 0, alert: 1, warning: 2, info: 3 }
+const rank = (w: SubstrateWorkerRow) =>
+  w.attentionSeverity ? ATTENTION_RANK[w.attentionSeverity] : lostSandboxes(w) ? 0 : 4
 
 /** Within a pool: the worst state first, then full workers, then by name. */
 export function sortWorkers(workers: SubstrateWorkerRow[]): SubstrateWorkerRow[] {
   return [...workers].sort(
     (a, b) =>
       rank(a) - rank(b) ||
+      STATE_RANK[a.state] - STATE_RANK[b.state] ||
       Number(a.state === 'active' && a.hasFreeSlot) - Number(b.state === 'active' && b.hasFreeSlot) ||
       a.pod.localeCompare(b.pod),
   )
@@ -129,6 +132,8 @@ type StateFilter = 'all' | 'attention' | SubstrateWorkerRow['state']
 /** Substrate's workers by pool: state, slots, and the actors on each. */
 export function SubstrateWorkersScreen({ workspace, status, onOpenSubject }: { workspace?: SubstrateWorkspace; status?: SubstrateStatus; onOpenSubject: OpenSubject }) {
   const [params, setParams] = useSearchParams()
+  const navigate = useWorkspaceNavigate()
+  const { connection } = useConnection()
   const [search, setSearch] = useState('')
   const tier = workspace?.apiTier
   const connected = tier?.state === 'connected'
@@ -142,25 +147,32 @@ export function SubstrateWorkersScreen({ workspace, status, onOpenSubject }: { w
     else p.delete(k)
     setParams(p, { replace: true })
   }
-  const pools = useMemo(() => [...new Set((data?.workers ?? []).map((w) => `${w.namespace}/${w.pool}`))].sort(), [data])
+  const registeredPools = useMemo(() => new Set((data?.workers ?? []).map((w) => `${w.namespace}/${w.pool}`)), [data])
+  const emptyPools = data?.coverage.workers.state === 'full'
+    ? (workspace?.pools ?? []).filter((p) => p.kubernetes && !registeredPools.has(`${p.namespace}/${p.name}`))
+    : []
+  const pools = [...new Set([...registeredPools, ...emptyPools.map((p) => `${p.namespace}/${p.name}`)])].sort()
   const scoped = (data?.workers ?? []).filter((w) => (!pool || `${w.namespace}/${w.pool}` === pool) && w.pod.toLowerCase().includes(search.trim().toLowerCase()))
-  const needsAttention = (w: SubstrateWorkerRow) => w.state === 'unavailable' || w.state === 'draining' || w.workerState?.kind === 'reconciling'
+  const needsAttention = (w: SubstrateWorkerRow) => w.attentionSeverity !== undefined && w.attentionSeverity !== 'info'
   const shown = scoped.filter((w) => stateFilter === 'all' || (stateFilter === 'attention' ? needsAttention(w) : w.state === stateFilter))
   const partial = coverageInPart(data?.coverage.workers)
   const count = (n: number) => partial ? n > 0 ? `≥${n}` : undefined : n
+  const attentionPartial = partial || coverageInPart(data?.coverage.actors)
+  const attentionCount = scoped.filter(needsAttention).length
   const poolFindings = workspace?.needsAttention.filter((a) => a.subject.kind === 'WorkerPool')
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <SubstrateHeader title="Workers">
+      <SubstrateHeader title="Workers" intro="Cluster-wide" />
+      <ScreenBody>
         {data && (
-          <>
+          <div className="flex flex-wrap items-center gap-2">
             <Segments
               label="Worker filter"
               value={stateFilter}
               onChange={(v) => set('state', v)}
               options={[
                 { id: 'all', label: 'All', count: count(scoped.length) },
-                { id: 'attention', label: 'Needs attention', count: count(scoped.filter(needsAttention).length) },
+                { id: 'attention', label: 'Needs attention', count: attentionPartial ? attentionCount > 0 ? `≥${attentionCount}` : undefined : attentionCount },
                 { id: 'active', label: 'Active', count: count(scoped.filter((w) => w.state === 'active').length) },
                 { id: 'draining', label: 'Draining', count: count(scoped.filter((w) => w.state === 'draining').length) },
                 { id: 'unavailable', label: 'Unavailable', count: count(scoped.filter((w) => w.state === 'unavailable').length) },
@@ -168,10 +180,8 @@ export function SubstrateWorkersScreen({ workspace, status, onOpenSubject }: { w
             />
             <Input aria-label="Search worker names" placeholder="Search workers…" value={search} onChange={(e) => setSearch(e.target.value)} className="h-8 max-w-52 rounded-md border border-theme-border bg-theme-elevated px-3" />
             <SelectMenu ariaLabel="Pool" value={pool} options={[{ value: '', label: 'Every pool' }, ...pools.map((p) => ({ value: p, label: p.replace('/', ' / ') }))]} onChange={(v) => set('pool', v)} className="min-w-[12rem]" />
-          </>
+          </div>
         )}
-      </SubstrateHeader>
-      <ScreenBody>
         {!connected && tier ? (
           <>
             <SubstrateTierBanner tier={tier} />
@@ -184,7 +194,12 @@ export function SubstrateWorkersScreen({ workspace, status, onOpenSubject }: { w
         ) : (
           <>
             <RefreshFailedNotice queries={[query]} />
+            <SubstrateCoverageNotice coverage={data.coverage} kinds={['workers', 'actors']} />
             <WorkersTable data={{ workers: shown, coverage: data.coverage }} pools={workspace?.pools} poolFindings={poolFindings} onOpenSubject={onOpenSubject} grouped />
+            {emptyPools.length > 0 && <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-theme-text-secondary">
+              <span>Pools with no registered workers</span>
+              {emptyPools.map((p) => <button key={`${p.namespace}/${p.name}`} type="button" onClick={() => navigate(substratePoolPath(p, connection.context || undefined))} className="font-mono text-accent-text hover:underline">{p.namespace}/{p.name} →</button>)}
+            </div>}
           </>
         )}
         {tier && <SubstrateSourceLine tier={tier} status={status} />}
@@ -243,7 +258,7 @@ function WorkerRows({ workers, columns, onOpenSubject, actorsPartial }: { worker
                   className="inline-flex items-center gap-1 text-left text-xs text-accent-text hover:underline"
                 >
                   <CollapseChevron open={isOpen} />
-                  {isOpen ? 'Hide assigned actors' : w.actors ? `Show ${actorsPartial ? '≥' : ''}${w.actors.length} assigned actors` : 'Check assigned actors'}
+                  {isOpen ? 'Hide assigned actors' : w.actors && (!actorsPartial || w.actors.length > 0) ? `Show ${actorsPartial ? '≥' : ''}${w.actors.length} assigned actors` : 'View assigned actors'}
                 </button>
               </td>
             </tr>
@@ -333,7 +348,7 @@ export function WorkersTable({
                               : <span className="font-mono text-sm font-medium text-theme-text-primary">{name}</span>}
                             <span className="text-theme-text-tertiary">
                               {ns} · {poolWorkersText(row, g.workers)}
-                              {slots ? ` · ${row?.placement?.complete === false ? 'at least ' : ''}${slots.used} of ${slots.total} actor slots used on active workers` : ''}
+                              {slots ? ` · ${row?.placement?.complete === false ? slots.used > 0 ? `at least ${slots.used} actor slots used on active workers` : 'actor slot usage unknown' : `${slots.used} of ${slots.total} actor slots used on active workers`}` : ''}
                             </span>
                             {row && <PoolReadingBadge p={row} finding={poolFindings?.find((f) => f.subject.namespace === ns && f.subject.name === name)} />}
                           </span>
@@ -361,10 +376,12 @@ export function poolWorkersText(row: Pick<SubstratePoolRow, 'placement' | 'kuber
   const counts = row?.placement?.workers
   const registered = counts?.total ?? shown.length
   const active = counts?.active ?? shown.filter((w) => w.state === 'active').length
-  const atLeast = row?.placement?.complete === false ? 'at least ' : ''
+  const partial = row?.placement?.complete === false
+  const atLeast = partial ? 'at least ' : ''
   const desired = row?.kubernetes?.desired
-  const reg = desired !== undefined ? `${atLeast}${registered} of ${desired} desired workers registered` : `${atLeast}${registered} ${registered === 1 ? 'worker' : 'workers'} registered`
-  return `${reg}, ${atLeast}${active} active`
+  const reg = partial && registered === 0 ? 'registrations unknown'
+    : desired !== undefined ? `${atLeast}${registered} of ${desired} desired workers registered` : `${atLeast}${registered} ${registered === 1 ? 'worker' : 'workers'} registered`
+  return `${reg}, ${partial && active === 0 ? 'active worker count unknown' : `${atLeast}${active} active`}`
 }
 
 function PoolReadingBadge({ p, finding }: { p: SubstratePoolRow; finding?: SubstrateAttention }) {

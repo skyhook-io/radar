@@ -78,3 +78,19 @@ describe('Agent Substrate screen gate', () => {
     expect(gate({ data: workspace() })).toContain('screen')
   })
 })
+it('counts attention actors and templates from the fleet and distinct restarted workers', () => {
+  const ws = workspace()
+  ws.summary.actors!.attentionCount = 24
+  ws.summary.templates!.attentionCount = 5
+  ws.needsAttention.push(...['a', 'b'].map((pod) => ({
+    id: `workerRestarting:${pod}`, rule: 'workerRestarting' as const, severity: 'critical' as const, count: 3,
+    title: 'Restarted', reading: 'Sandboxes lost', nextStep: 'Review recovery',
+    subject: { kind: 'Actors' as const, filter: { worker: pod, pool: 'agents/pool', impact: 'restarted' } },
+  })))
+  ws.needsAttention.push({ ...ws.needsAttention.at(-1)!, id: 'workerDraining:c', rule: 'workerDraining', severity: 'info' })
+  state.data = ws
+  const destinations = sidebar()!.destinations
+  expect(destinations.find((d) => d.id === 'actors')?.count).toBe(24)
+  expect(destinations.find((d) => d.id === 'templates')?.count).toBe(5)
+  expect(destinations.find((d) => d.id === 'workers')?.count).toBe(2)
+})

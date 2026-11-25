@@ -1,4 +1,6 @@
 import { podDebugAccessKey } from '../../api/podDebug'
+import { SUBSTRATE_WORKER_POOL_LABEL } from '@skyhook-io/k8s-ui/components/resources/resource-utils-agent-runtimes'
+import { SubstrateWorkerPodScope } from '../substrate/SubstrateWorkerPodContext'
 import { PoolSpecStatus } from '../substrate/SubstratePoolSummary'
 import { supportsWorkloadRevisions, WorkloadRevisionsButton } from './WorkloadRevisionsButton'
 import { RelatedFindingsSection } from './RelatedFindingsSection'
@@ -695,6 +697,7 @@ export function WorkloadView({
   // '' whenever a link left ?apiGroup out.
   const identityGroup = resource?.apiVersion ? resourceGroup : effectiveGroup
   const isNode = apiKind === 'nodes' && !effectiveGroup
+  const substratePodPool = apiKind === 'pods' ? resource?.metadata?.labels?.[SUBSTRATE_WORKER_POOL_LABEL] : undefined
   const isSubstrateWorkerPool = apiKind === 'workerpools' && effectiveGroup === SUBSTRATE_GROUP
   // Substrate's node charts are asked of Prometheus only on a cluster that serves it.
   const { data: apiResources } = useAPIResources()
@@ -1429,6 +1432,11 @@ export function WorkloadView({
             collapsible={!expanded}
             workerPods={typeof resource?.status?.replicas === 'number' ? resource.status.replicas : undefined}
           />
+        ) : substratePodPool ? (
+          <div className="flex h-full min-h-0 flex-col gap-2">
+            <SubstrateWorkerPodScope namespace={ns} pool={substratePodPool} pod={n} tab="metrics" />
+            <div className="min-h-0 flex-1 overflow-auto"><MetricsTabContent kind={kind} namespace={ns} name={n} resource={resource} expanded={expanded} /></div>
+          </div>
         ) : (
           <>
             <MetricsTabContent
@@ -1477,7 +1485,7 @@ export function WorkloadView({
         onDownload={desktopDownload}
         actionsBarProps={actionsBarProps}
         rendererOverrides={resourceRendererOverrides}
-        specTab={isSubstrateWorkerPool && resource ? { render: () => <PoolSpecStatus resource={resource} /> } : rest.specTab}
+        specTab={isSubstrateWorkerPool && resource ? { render: () => <PoolSpecStatus resource={resource} onNavigate={rest.onNavigateToResource} /> } : rest.specTab}
         renderOverviewIntro={isNode && resource?.metadata?.uid
             ? () => (
               <div className="space-y-3">
@@ -1845,16 +1853,20 @@ function PodLogsTab({
     }
   }, [initialContainer, containers, onConsumeInitialContainer])
 
+  const pool = resource?.metadata?.labels?.[SUBSTRATE_WORKER_POOL_LABEL]
   return (
-    <div className="h-full">
-      <LogsViewer
-        namespace={namespace}
-        podName={name}
-        containers={containers}
-        initialContainer={initialContainer || getDefaultLogContainerName(resource)}
-        initContainers={initContainers}
-        autoStream={autoStream}
-      />
+    <div className="flex h-full min-h-0 flex-col">
+      {pool && <div className="border-b-subtle px-4 py-2"><SubstrateWorkerPodScope namespace={namespace} pool={pool} pod={name} tab="logs" /></div>}
+      <div className="min-h-0 flex-1">
+        <LogsViewer
+          namespace={namespace}
+          podName={name}
+          containers={containers}
+          initialContainer={initialContainer || getDefaultLogContainerName(resource)}
+          initContainers={initContainers}
+          autoStream={autoStream}
+        />
+      </div>
     </div>
   )
 }

@@ -176,10 +176,9 @@ describe('API tier readings', () => {
 })
 
 describe('needs-attention severity', () => {
-  it('reads the four steps in the house’s tones, and a banner in the same one', async () => {
-    const { attentionTone, attentionBannerVariant, worstAttentionTone } = await import('./readings')
+  it('reads the four steps in the house’s tones', async () => {
+    const { attentionTone, worstAttentionTone } = await import('./readings')
     expect((['critical', 'alert', 'warning', 'info'] as const).map((severity) => attentionTone({ severity }))).toEqual(['unhealthy', 'alert', 'degraded', 'neutral'])
-    expect((['critical', 'alert', 'warning', 'info'] as const).map((severity) => attentionBannerVariant({ severity }))).toEqual(['error', 'alert', 'warning', 'info'])
     expect(worstAttentionTone([{ severity: 'warning' }, { severity: 'alert' }, { severity: 'info' }])).toBe('alert')
     expect(worstAttentionTone([])).toBeUndefined()
   })
@@ -197,7 +196,7 @@ describe('needs-attention counts', () => {
     const data = workspace()
     expect(substrateAttentionCount(data)).toMatchObject({ count: 3, lowerBound: false })
     const screens = substrateScreenCounts(data)
-    expect(screens.actors).toMatchObject({ count: 14, title: '14 actors need attention: 14 crashed, 0 stuck in a transition.' })
+    expect(screens.actors).toMatchObject({ count: 14, title: '14 actors need attention.' })
     expect(screens.templates.count).toBe(1)
     expect(screens.pools.count).toBe(1)
     expect(screens.workers.count).toBe(0)
@@ -357,11 +356,11 @@ describe('a failed golden snapshot in plain words', () => {
 })
 
 describe('pool reading over a partial read of the workers', () => {
-  it('says the active count is a floor when not every worker was read', async () => {
+  it('uses Kubernetes readiness to explain a shortfall when not every worker was read', async () => {
     const { poolReading } = await import('./readings')
     const placement = { workers: { total: 2, active: 2, draining: 0, unavailable: 0 }, slots: { used: 1, total: 8 }, cpuMillicores: { used: 1, total: 2 }, memoryBytes: { used: 1, total: 2 } }
-    const kubernetes = { namespace: 'a', name: 'p', desired: 5, ready: 2, health: 'degraded' as const, healthReason: 'Scaling' }
-    expect(poolReading({ capacity: 'short', placement: { ...placement, complete: false }, kubernetes }).label).toBe('Short of workers · at least 2 of 5 active')
+    const kubernetes = { namespace: 'a', name: 'p', desired: 5, ready: 2, reportedReady: 2, health: 'degraded' as const, healthReason: 'Scaling' }
+    expect(poolReading({ capacity: 'short', placement: { ...placement, complete: false }, kubernetes }).label).toBe('Short of workers · 2 of 5 Pods ready')
     expect(poolReading({ capacity: 'short', placement: { ...placement, complete: true }, kubernetes }).label).toBe('Short of workers · 2 of 5 active')
   })
 })
@@ -382,15 +381,15 @@ describe('one fact once, and a worker that says what happened to its actors', ()
     const { workerStateReading, workerPodText } = await import('./readings')
     const reading = '3 actors lost their sandboxes when its process restarted; Substrate marks them crashed when it reconciles the worker.'
     // Lost sandboxes are critical, the tone of their Needs attention row; a reconcile that lost none stays amber.
-    expect(workerStateReading({ state: 'active', workerState: { kind: 'reconciling', assigned: 13, lost: 3, reading } })).toMatchObject({ label: 'Active · reconciling', severity: 'error', title: reading })
-    expect(workerStateReading({ state: 'active', workerState: { kind: 'reconciling', assigned: 13, lost: 0, reading } })).toMatchObject({ severity: 'warning' })
+    expect(workerStateReading({ state: 'active', attentionSeverity: 'critical', workerState: { kind: 'reconciling', assigned: 13, lost: 3, reading } })).toMatchObject({ label: 'Active · reconciling', severity: 'error', title: reading })
+    expect(workerStateReading({ state: 'active', attentionSeverity: 'warning', workerState: { kind: 'reconciling', assigned: 13, lost: 0, reading } })).toMatchObject({ severity: 'warning' })
     // An unavailable worker is at risk, not lost: orange, as its row reads.
     expect(workerStateReading({ state: 'unavailable' }).severity).toBe('alert')
     expect(workerStateReading({ state: 'unavailable', workerState: { kind: 'reconciling', reading } }).severity).toBe('alert')
     // Actors not read: no count is made up.
     expect(workerStateReading({ state: 'active', workerState: { kind: 'reconciling', reading } }).label).toBe('Active · reconciling')
     expect(workerStateReading({ state: 'active' })).toMatchObject({ label: 'Active', severity: 'success' })
-    expect(workerStateReading({ state: 'draining', workerState: { kind: 'draining', assigned: 4, reading: 'Draining…' } })).toMatchObject({ label: 'Draining', title: 'Draining…' })
+    expect(workerStateReading({ state: 'draining', attentionSeverity: 'info', workerState: { kind: 'draining', assigned: 4, reading: 'Draining…' } })).toMatchObject({ label: 'Draining', title: 'Draining…', severity: 'info' })
     const { withoutReasonCode } = await import('./readings')
     expect(withoutReasonCode('GoldenActorCrashed: golden actor crashed before its snapshot was taken')).toBe('golden actor crashed before its snapshot was taken')
     expect(withoutReasonCode('killed for exceeding its memory limit')).toBe('killed for exceeding its memory limit')

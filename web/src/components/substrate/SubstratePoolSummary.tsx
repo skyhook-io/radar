@@ -2,8 +2,8 @@ import type { ReactNode } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { clsx } from 'clsx'
 import { Unlink } from 'lucide-react'
-import { Badge, CertaintyGlyph, DimensionValue, FactGrid, FactRow, FactSource, FactValue, SectionHeading, Tooltip, WorkspaceCard, WorkspaceProblemCallout, formatDuration, toneFillClass, toneTextClass, type NavigateToResource, type StatusTone } from '@skyhook-io/k8s-ui'
-import { getWorkerPoolSandboxConfig, getWorkerPoolStatus } from '@skyhook-io/k8s-ui/components/resources/resource-utils-agent-runtimes'
+import { Badge, CertaintyGlyph, DimensionValue, FactGrid, FactRow, FactSource, FactValue, Tooltip, WorkspaceCard, WorkspaceProblemCallout, formatDuration, toneFillClass, toneTextClass, type NavigateToResource, type StatusTone } from '@skyhook-io/k8s-ui'
+import { getWorkerPoolStatus } from '@skyhook-io/k8s-ui/components/resources/resource-utils-agent-runtimes'
 import { substrateErrorCode, useSubstratePool, type SubstratePool, type SubstrateRef, type SubstrateWorkerRow } from '../../api/substrateWorkspace'
 import { useConnection } from '../../context/ConnectionContext'
 import { isForbiddenError, usePrometheusStatus } from '../../api/client'
@@ -16,7 +16,7 @@ import { RefreshFailedNotice } from '../workspace/layout'
 import { ACTOR_STATE_LABEL, definitiveFailure, attentionTone, placementTone, poolReadFailure, poolReading, splitReading, bytesText, coverageInPart, coverageReason, coverageUnread, cpuText, tierReading } from './readings'
 import { ACTOR_DRAWER_PARAM, SUBSTRATE_GROUP, SUBSTRATE_PATH, SUBSTRATE_SCREENS, encodeActorParam, substrateActorPath, substrateActorsPath, substratePoolPath, substrateTemplatePath } from './routes'
 import { IMPACT_LABEL, Name, Term, Unread, WorkerStateChip } from './shared'
-import { SlotsCell } from './SubstrateOverview'
+import { SlotsCell, slotsOffActive } from './SubstrateOverview'
 import { RESERVED_MEANING, lostText } from './SubstrateWorkers'
 
 /** Past this many workers the grid becomes one row per worker with a slot bar. */
@@ -196,7 +196,7 @@ function WorkerRows({ workers, onOpenPod }: { workers: SubstrateWorkerRow[]; onO
           <button type="button" onClick={() => onOpenPod(w)} className="min-w-0 text-left text-accent-text hover:underline"><Name name={w.pod} /></button>
           <WorkerStateBadge w={w} />
           <SlotBar w={w} />
-          <button type="button" onClick={() => navigate(substrateActorsPath({ worker: w.pod }))} className="whitespace-nowrap text-xs text-accent-text hover:underline">
+          <button type="button" onClick={() => navigate(substrateActorsPath({ worker: w.pod, pool: `${w.namespace}/${w.pool}` }))} className="whitespace-nowrap text-xs text-accent-text hover:underline">
             {slotsText(w)}
           </button>
         </li>
@@ -284,18 +284,17 @@ export function Placement({
       </div>)}
     </div>}
   </>
-  return drawer ? <section className="border-t-subtle pt-3"><SectionHeading>Placement</SectionHeading>{content}</section>
-    : <WorkspaceCard title="Placement">{content}</WorkspaceCard>
+  return <WorkspaceCard title="Placement" framed={!drawer}>{content}</WorkspaceCard>
 }
 
 interface PoolResource {
   metadata?: { namespace?: string; name?: string; generation?: number }
-  spec?: { replicas?: number; sandboxClasses?: { name?: string }[] }
+  spec?: { replicas?: number; sandboxClasses?: { name?: string; configRef?: { name?: string } }[] }
   status?: {
     replicas?: number
     readyReplicas?: number
     selector?: string
-    sandboxClasses?: { name?: string; conditions?: { type: string; status: string; reason?: string; message?: string; lastTransitionTime?: string }[] }[]
+    sandboxClasses?: { name?: string; configRef?: { name?: string }; pendingConfigRef?: { name?: string }; conditions?: { type: string; status: string; reason?: string; message?: string; lastTransitionTime?: string }[] }[]
   }
 }
 
@@ -305,22 +304,33 @@ function poolConditions(resource: PoolResource) {
   )
 }
 
-function PoolAbout({ resource, onNavigate }: { resource: PoolResource; onNavigate?: NavigateToResource }) {
-  const classes = resource.spec?.sandboxClasses?.flatMap((c) => c.name ? [c.name] : []) ?? []
-  const config = getWorkerPoolSandboxConfig(resource)
+function PoolAbout({ resource, onNavigate, specOnly }: { resource: PoolResource; onNavigate?: NavigateToResource; specOnly?: boolean }) {
+  const classes = resource.spec?.sandboxClasses ?? []
+  const link = (name: string) => onNavigate
+    ? <button type="button" onClick={() => onNavigate({ kind: 'SandboxConfig', group: SUBSTRATE_GROUP, namespace: '', name })} className="font-mono text-accent-text hover:underline">{name}</button>
+    : <span className="font-mono">{name}</span>
   return (
-    <FactGrid>
-      <FactRow label="Sandbox classes">{classes.length > 0 ? classes.join(' · ') : <Unread>None declared</Unread>}</FactRow>
+    <>
+      <FactRow label="Sandbox classes">{classes.length > 0 ? classes.map((c) => c.name).filter(Boolean).join(' · ') : <Unread>None declared</Unread>}</FactRow>
       <FactRow label="SandboxConfig">
-        {config === '-' ? <Unread>Unreported</Unread> : onNavigate
-          ? <button type="button" onClick={() => onNavigate({ kind: 'SandboxConfig', group: SUBSTRATE_GROUP, namespace: '', name: config })} className="font-mono text-accent-text hover:underline">{config}</button>
-          : <span className="font-mono">{config}</span>}
+        {classes.length === 0 ? <Unread>Unreported</Unread> : classes.map((c, i) => {
+          const status = specOnly ? undefined : resource.status?.sandboxClasses?.find((sc) => sc.name === c.name)
+          const current = status?.configRef?.name
+          const pending = status?.pendingConfigRef?.name
+          const requested = c.configRef?.name
+          return <div key={c.name ?? i}>
+            {classes.length > 1 && c.name && <>{c.name} · </>}
+            {current || pending
+              ? <>{current && link(current)}{pending && pending !== current && <>{current ? ' → ' : 'Pending: '}{link(pending)}</>}</>
+              : requested ? <>{!specOnly && 'Requested: '}{link(requested)}{!specOnly && ' (unresolved)'}</> : <Unread>Unreported</Unread>}
+          </div>
+        })}
       </FactRow>
-    </FactGrid>
+    </>
   )
 }
 
-export function PoolSpecStatus({ resource }: { resource: PoolResource }) {
+export function PoolSpecStatus({ resource, onNavigate }: { resource: PoolResource; onNavigate?: NavigateToResource }) {
   const count = (n: number | undefined, source: string) => {
     const fact = { text: n === undefined ? 'Unreported' : String(n), tone: n === undefined ? 'unknown' as const : 'neutral' as const, source }
     return <><FactValue fact={fact} /><FactSource fact={fact} /></>
@@ -328,8 +338,10 @@ export function PoolSpecStatus({ resource }: { resource: PoolResource }) {
   return (
     <div className="space-y-4 p-4">
       <WorkspaceCard title="Desired by spec">
-        <FactGrid><FactRow label="Workers">{count(resource.spec?.replicas, 'spec.replicas')}</FactRow></FactGrid>
-        <div className="mt-2"><PoolAbout resource={resource} /></div>
+        <FactGrid>
+          <FactRow label="Workers">{count(resource.spec?.replicas, 'spec.replicas')}</FactRow>
+          <PoolAbout resource={resource} onNavigate={onNavigate} specOnly />
+        </FactGrid>
       </WorkspaceCard>
       <WorkspaceCard title="Reported by controller">
         <FactGrid>
@@ -338,7 +350,7 @@ export function PoolSpecStatus({ resource }: { resource: PoolResource }) {
           <FactRow label="Worker selector">{resource.status?.selector || <Unread>Unreported</Unread>}</FactRow>
         </FactGrid>
       </WorkspaceCard>
-      <WorkspaceConditions conditions={poolConditions(resource)} title="Sandbox class conditions" />
+      <WorkspaceConditions conditions={poolConditions(resource)} title="Sandbox class conditions" sourcePath="status.sandboxClasses[].conditions" />
     </div>
   )
 }
@@ -365,6 +377,8 @@ export function SubstratePoolSummary({
   const placement = data?.pool.placement
   const partial = coverageInPart(workerRead)
   const workers = placement?.workers
+  const actorsPartial = coverageInPart(data?.coverage.actors)
+  const offActive = data ? slotsOffActive(data.pool, actorsPartial) : 0
   const openTab = (tab: string) => {
     const p = new URLSearchParams(params)
     if (tab === 'overview') p.delete('tab')
@@ -375,54 +389,58 @@ export function SubstratePoolSummary({
   const desired = resource.spec?.replicas
   const replicas = resource.status?.readyReplicas
   const observed = k?.pods
+  const poolVerdict = data && poolReading(data.pool, finding)
   const [lead, rawDetail] = finding ? splitReading(finding.reading) : []
+  const shortfallDetails = poolVerdict?.label.startsWith('Short of workers · ') ? rawDetail : undefined
   const readState = query.isLoading ? 'Reading Substrate…'
     : !data ? poolReadFailure(code, query.error instanceof Error ? query.error.message : undefined)
     : data.apiTier.state !== 'connected' ? tierReading(data.apiTier).detail
     : coverageReason(workerRead, 'workers')
-  const Frame = drawer ? FlatPoolSection : WorkspaceCard
   return (
     <div className="space-y-4 p-4">
       <RefreshFailedNotice queries={[query]} />
       {finding && <WorkspaceProblemCallout rootKind="WorkerPool" subjectIsSelf problem={{
         id: finding.id, category: finding.rule, source: 'reading', tone: attentionTone(finding),
         subject: { kind: 'WorkerPool', group: SUBSTRATE_GROUP, namespace, name },
-        title: poolReading(data!.pool, finding).label,
-        detail: lead, nextStep: k?.health === 'unhealthy' || finding.rule !== 'poolShort' ? finding.nextStep : 'Compare controller readiness with Substrate registrations below.',
-        rawDetail, rawDetailLabel: 'Details',
+        title: poolVerdict!.label,
+        detail: shortfallDetails ?? lead, nextStep: k?.health === 'unhealthy' || finding.rule !== 'poolShort' ? finding.nextStep : 'Compare controller readiness with Substrate registrations below.',
+        rawDetail: shortfallDetails ? undefined : rawDetail, rawDetailLabel: 'Details',
         origin: { label: k?.health === 'unhealthy' ? 'WorkerPool controller status' : 'Kubernetes and Substrate' },
       }} />}
       {drawer && <div className="flex flex-wrap gap-2">
         <button type="button" className="btn-brand px-3 py-1 text-sm" onClick={() => navigate(substratePoolPath({ namespace, name }, connection.context || undefined))}>Open pool</button>
         <button type="button" className="btn-secondary px-3 py-1 text-sm" onClick={() => navigate(substratePoolPath({ namespace, name }, connection.context || undefined, 'workers'))}>Workers</button>
       </div>}
-      <Frame title="At a glance">
+      <WorkspaceCard framed={!drawer} title="At a glance">
         <FactGrid>
           <FactRow label="Provisioning">
-            <DimensionValue tone={k?.health === 'unhealthy' ? 'unhealthy' : k?.health === 'healthy' && (!observed || observed.ready === replicas) ? 'healthy' : 'unknown'}
-              source={<>{observed ? `Pods observed by Radar: ${observed.created} present, ${observed.ready} ready${observed.terminating ? `, ${observed.terminating} terminating` : ''}` : `Pod counts unavailable · requires collected Pods and list pods in ${namespace}`}
+            <DimensionValue tone={k?.health === 'unhealthy' ? 'unhealthy' : k?.health === 'healthy' && (!observed || observed.ready === replicas) ? 'healthy' : (k?.health === 'degraded' || (observed && replicas !== undefined && observed.ready < replicas)) ? 'degraded' : 'unknown'}
+              source={<>{observed ? `Pods observed by Radar: ${observed.created} present, ${observed.ready} ready${observed.terminating ? `, ${observed.terminating} terminating` : ''}` : query.isLoading ? 'Reading Pod counts…' : !data ? readState
+                : data.podRead === 'denied' ? `Requires list on pods in ${namespace}` : data.podRead === 'uncollected' ? 'Worker Pods are not collected' : 'WorkerPool not read'}
                 {observed && replicas !== undefined && observed.ready !== replicas && ' · Counts differ from the controller’s status'}</>}>
               {desired === undefined ? 'Desired workers unreported' : `${desired} desired by spec`}
               {' · '}{replicas === undefined ? 'Controller readiness unreported' : `${replicas} ready reported by controller`}
             </DimensionValue>
           </FactRow>
           <FactRow label="Registration">
-            <DimensionValue tone={finding ? attentionTone(finding) : !workers || partial ? 'unknown' : workers.active > 0 ? 'healthy' : 'neutral'}
+            <DimensionValue tone={!workers || partial ? 'unknown' : finding ? attentionTone(finding) : workers.active > 0 ? 'healthy' : 'neutral'}
               source={workers ? partial ? coverageReason(workerRead, 'workers') : 'Worker registrations from Substrate' : readState}
               linkLabel="Workers" onOpen={drawer ? undefined : () => openTab('workers')}>
-              {workers && (!partial || workers.total > 0) ? <>{partial ? '≥' : ''}{workers.total} registered · {partial ? '≥' : ''}{workers.active} accepting actors</> : 'Unknown'}
+              {workers && (!partial || workers.total > 0)
+                ? <>{partial ? '≥' : ''}{workers.total} registered · {partial && workers.active === 0 ? 'accepting actors unknown' : `${partial ? '≥' : ''}${workers.active} accepting actors`}</>
+                : 'Unknown'}
             </DimensionValue>
           </FactRow>
           <FactRow label="Placement capacity">
-            <DimensionValue tone={finding ? attentionTone(finding) : placement?.complete && data?.pool.capacity === 'free' ? 'healthy' : 'unknown'}
-              source="Slots on active workers · actor CPU and memory can limit placement" linkLabel="Workers" onOpen={drawer ? undefined : () => openTab('workers')}>
-              {data ? <SlotsCell p={data.pool} connected={data.apiTier.state === 'connected'} /> : <Unread>Unknown</Unread>}
+            <DimensionValue tone={!placement || partial ? 'unknown' : finding ? attentionTone(finding) : data?.pool.capacity === 'free' ? 'healthy' : 'unknown'}
+              source={!placement ? readState : <>{partial ? coverageReason(workerRead, 'workers') : 'Slots on active workers · actor CPU and memory can limit placement'}{offActive > 0 && ` · +${offActive} on non-active workers`}</>} linkLabel="Workers" onOpen={drawer ? undefined : () => openTab('workers')}>
+              {data ? <SlotsCell p={data.pool} connected={data.apiTier.state === 'connected'} actorsPartial={actorsPartial} inline /> : <Unread>Unknown</Unread>}
             </DimensionValue>
           </FactRow>
           <FactRow label="Template matches">
             <DimensionValue tone={data?.templates && !coverageInPart(data.coverage.templates) ? 'neutral' : 'unknown'}
               source={data?.templates ? coverageInPart(data.coverage.templates) ? coverageReason(data.coverage.templates, 'templates') : 'Template selectors matched against this pool’s labels' : data ? coverageReason(data.coverage.templates, 'templates') : readState}
-              linkLabel="Templates" onOpen={() => navigate(SUBSTRATE_SCREENS.templates.path)}>
+              linkLabel="All templates" onOpen={() => navigate(SUBSTRATE_SCREENS.templates.path)}>
               {data?.templates && (!coverageInPart(data.coverage.templates) || data.templates.length > 0)
                 ? <>{coverageInPart(data.coverage.templates) && <CertaintyGlyph certainty="lower_bound" title="Some templates could not be read" />} {data.templates.length} label-matched</>
                 : 'Unknown'}
@@ -434,17 +452,13 @@ export function SubstratePoolSummary({
           <FactRow label="Delivery metrics"><CapacityVerdict namespace={namespace} name={name} onOpenMetrics={drawer ? undefined : () => openTab('metrics')} /></FactRow>
         </FactGrid>
         {data && data.coverage.pools.state !== 'full' && <p className="mt-2 text-xs text-theme-text-tertiary">{coverageLabel(data.coverage.pools)}</p>}
-      </Frame>
+      </WorkspaceCard>
       {data && <Placement data={data} drawer={drawer} onOpenActor={openActor} onOpenPod={(w) => onNavigate?.({ kind: 'Pod', namespace: w.namespace, name: w.pod })}
         onOpenNode={onNavigate ? (node) => onNavigate({ kind: 'Node', namespace: '', name: node }) : undefined} />}
-      <Frame title="About"><PoolAbout resource={resource} onNavigate={onNavigate} /></Frame>
-      <WorkspaceConditions conditions={poolConditions(resource)} title="Sandbox class conditions" framed={!drawer} />
+      <WorkspaceCard framed={!drawer} title="About"><FactGrid><PoolAbout resource={resource} onNavigate={onNavigate} /></FactGrid></WorkspaceCard>
+      <WorkspaceConditions conditions={poolConditions(resource)} title="Sandbox class conditions" sourcePath="status.sandboxClasses[].conditions" framed={!drawer} />
     </div>
   )
-}
-
-function FlatPoolSection({ title, children }: { title: string; children: ReactNode }) {
-  return <section className="border-t-subtle pt-3"><SectionHeading>{title}</SectionHeading>{children}</section>
 }
 
 export function PoolHeaderBadge({ resource }: { resource: any }) {

@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
@@ -45,12 +47,12 @@ describe('Agent Substrate overview, connected', () => {
     const html = render(workspace())
     expect(html).toContain('3 pools · 1 short of workers · 1 full')
     expect(html).toContain('18 active · 1 draining · 1 unavailable')
-    expect(html).toContain('212 of 236 used (24 free, 21 of them on batch-pool)')
+    expect(html).toContain('212 of 236 actor slots used (24 free, 21 of them on batch-pool)')
     expect(html).toContain('1,284 total, 14 crashed')
-    expect(words(html)).toContain('6 · 1 golden snapshot failed')
+    expect(words(html)).toContain('6 templates · 1 golden snapshot failed')
     // One run of text, not an element per part: the facts row is a flex row
     // whose gap would set each comma apart from the word before it.
-    expect(html).toContain('6 · 1 ')
+    expect(html).toContain('6 templates · 1 ')
   })
 
   it('leads with Needs attention in the server’s order and labels broader crash links', () => {
@@ -160,7 +162,7 @@ describe('Agent Substrate overview, not connected', () => {
     state.connection = connection()
     const html = render(notConnectedWorkspace())
     const body = words(html)
-    expect(body).toContain('Worker capacity1 poolPools →Kubernetes and Substrate')
+    expect(body).toMatch(/Worker capacity1 pool .*6 Pods ready of 6 desired .*Not connectedPools →Kubernetes WorkerPools and Substrate API/)
     expect(body).toContain('ActorsNot connectedActors →')
     expect(body).toContain('Template startupNot connectedTemplates →')
     expect(body).not.toContain('Actors0')
@@ -256,7 +258,7 @@ describe('Agent Substrate status line beside the inventory', () => {
     // Prometheus was read but counted no crashes and no overdue node, while the API lists 15 crashed and 24 unstored.
     const facts = serviceFacts({
       service: { read: true, slowestResume: { pool: { namespace: 'n', name: 'agent-pool' }, value: 4.8 }, poolsUnknown: 2, nodesOverdue: 0, nodesUnknown: 0 },
-      summary: { pools: { total: 1, short: 0, full: 0 }, actors: { total: 100, crashed: 15 } },
+      summary: { pools: { total: 1, short: 0, full: 0 }, actors: { total: 100, crashed: 15, attentionCount: 24 } },
       needsAttention: [upload],
     })
     const crashes = facts.find((f) => String(f.label).startsWith('Crashes'))!
@@ -305,15 +307,15 @@ describe('Agent Substrate status line beside the inventory', () => {
     const pool = { namespace: 'kagent', name: 'agent-pool' }
     // The live case: one worker, 1,000 slots, 1 used, and not the CPU for a second actor.
     const live = { ...base, summary: { ...base.summary, pools: { total: 1, short: 0, full: 0, noRoom: 1 }, slots: { used: 1, total: 1000 }, freeSlots: [{ pool, free: 999, lacking: 'cpu' as const }] } }
-    expect(slotLine(live)).toEqual({ value: '1 of 1,000 used (999 free, but agent-pool’s workers have no CPU left for an actor)', tone: 'degraded' })
+    expect(slotLine(live)).toEqual({ value: '1 of 1,000 actor slots used (999 free, but agent-pool’s workers have no CPU left for an actor)', tone: 'degraded' })
     const poolsFact = overviewFacts(live).find((f) => words(renderToStaticMarkup(<>{f.label}</>)) === 'Worker pools')!
     expect(poolsFact.value).toBe('1 pool · 1 with no room for an actor')
     expect(poolsFact.tone).not.toBe('healthy')
     // Mixed: the free count is the room that is left; the rest is named, not added in.
     const mixed = { ...base, summary: { ...base.summary, freeSlots: [{ pool: { namespace: 'batch', name: 'batch-pool' }, free: 21, lacking: 'memory' as const }, { pool: { namespace: 'agent-ns', name: 'agent-pool' }, free: 3 }] } }
-    expect(slotLine(mixed)).toEqual({ value: '212 of 236 used (3 free on agent-pool; 21 more where batch-pool’s workers have no memory left for an actor)', tone: 'healthy' })
+    expect(slotLine(mixed)).toEqual({ value: '212 of 236 actor slots used (3 free on agent-pool; 21 more where batch-pool’s workers have no memory left for an actor)', tone: 'healthy' })
     // An older Radar sends no lacking: the line reads as it always did.
-    expect(slotLine(base)).toEqual({ value: '212 of 236 used (24 free, 21 of them on batch-pool)', tone: 'healthy' })
+    expect(slotLine(base)).toEqual({ value: '212 of 236 actor slots used (24 free, 21 of them on batch-pool)', tone: 'healthy' })
   })
 
   it('folds an unmeasured Prometheus into one unknown fact', async () => {
@@ -322,4 +324,31 @@ describe('Agent Substrate status line beside the inventory', () => {
     expect(facts).toHaveLength(1)
     expect(facts[0]).toMatchObject({ label: 'Delivery (1h)', tone: 'unknown' })
   })
+})
+
+it('keeps coverage and refresh warnings visible with the coverage disclosure closed', () => {
+  const ws = workspace()
+  ws.coverage.actors = { state: 'partial', deniedAtespaces: ['restricted'] }
+  ws.apiTier = { ...ws.apiTier, lastError: { code: 'unreachable', at: new Date().toISOString(), message: 'timed out' } }
+  ws.atespaces = [{ name: 'partial', actorsRead: 'partial', actors: counts({ running: 2 }), templatesRead: 'partial', templates: 0 }]
+  const html = render(ws)
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const notice = [...doc.querySelectorAll('p, div')].find((n) => n.textContent?.startsWith('Radar couldn’t read all of what this screen shows') && n.children.length === 0)
+  expect(notice?.textContent).toContain('Substrate denied atespace restricted')
+  expect(notice?.closest('[inert]')).toBeNull()
+  const failure = [...doc.querySelectorAll('[role="status"]')].find((n) => n.textContent?.startsWith('Last Substrate API read failed'))
+  expect(failure?.textContent).toContain('Showing the previous read')
+  expect(failure?.closest('[inert]')).toBeNull()
+  const values = [...doc.querySelectorAll('tbody tr')].find((r) => r.firstElementChild?.textContent === 'partial')?.querySelectorAll('td')
+  expect(values?.[4].textContent).toBe('Unknown')
+})
+
+it('labels the broader suspended-actors link and makes the crash concentration actionable', () => {
+  const ws = workspace()
+  ws.needsAttention = [...ws.needsAttention, { ...poolShortRow, id: 'upload', rule: 'uploadOverdue', count: 1, subject: { kind: 'Actors', filter: { state: 'suspended' } } }]
+  const doc = new DOMParser().parseFromString(render(ws), 'text/html')
+  const buttons = [...doc.querySelectorAll('button')]
+  expect(buttons.some((b) => b.textContent === 'View all suspended actors →')).toBe(true)
+  const concentration = [...doc.querySelectorAll('div')].find((n) => n.textContent === '11 of the 14 use template research / langgraph-research' && n.firstElementChild?.tagName === 'BUTTON')
+  expect(concentration?.querySelector('button')?.textContent).toBe('research / langgraph-research')
 })

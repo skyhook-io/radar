@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -55,7 +57,7 @@ function template(name: string): SubstrateTemplate {
   return {
     apiTier: workspace().apiTier,
     template: { atespace: 'team', name, golden: { state: 'ready' }, matchingPools: [{ namespace: ready.namespace, name: ready.name }], matchingPoolsComplete: true, preferredFidelity: 'memory' },
-    coverage: { templates: { state: 'full' }, actors: { state: 'full' }, pools: { state: 'full' } },
+    coverage: { templates: { state: 'full' }, actors: { state: 'full' }, workers: { state: 'full' }, pools: { state: 'full' } },
   } as unknown as SubstrateTemplate
 }
 const ok = <T,>(data: T): Read<T> => ({ data, error: null, isLoading: false, isRefetchError: false, dataUpdatedAt: Date.now() - 120_000 })
@@ -157,7 +159,7 @@ describe('a template whose actors crashed', () => {
     expect(html).toContain('Golden snapshot ready')
     expect(html).toContain('2 CPU · 2Gi')
     expect(html).toMatch(/Crash recovery steps.*?inert=.*?Create a template.*?Copy command/)
-    expect(html.match(/aria-label="Copy command"/g)?.length).toBe(2)
+    expect(html.match(/aria-label="Copy command"/g)?.length).toBe(1)
     state.workspace = undefined
   })
 })
@@ -397,4 +399,38 @@ describe('An in-cluster Radar or Radar Hub whose operator turned the API off', (
     expect(html).toContain('Turned off for this Radar')
     expect(html).toContain('substrate.api.enabled')
   })
+})
+
+it('uses template-local coverage while the workspace loads and keeps configuration on Spec', () => {
+  state.context = 'cluster-B'
+  state.workspace = undefined
+  const t = template('template')
+  t.template.actors = counts({})
+  t.template.attentionCount = 0
+  t.spec = { containers: [{ name: 'only-on-spec', image: 'example/image' }], volumes: [], snapshot: { preferredFidelity: 'memory', golden: 'enabled' } }
+  const page = <SubstrateTemplatePage template={t.template} onOpenSubject={() => {}} />
+  state.template = ok(t)
+  const overview = render(page, '/substrate/templates/team/template')
+  expect(overview).toContain('0 need attention')
+  expect(overview).toContain('New actors start from the golden snapshot')
+  expect(overview).not.toContain('only-on-spec')
+  expect(render(page, '/substrate/templates/team/template?tab=spec')).toContain('only-on-spec')
+  t.coverage.actors = { state: 'partial' }
+  const partial = render(page, '/substrate/templates/team/template')
+  expect(partial).not.toContain('≥0')
+  expect(partial).not.toContain('0 actors')
+  expect(partial).toContain('Unknown')
+})
+
+it('puts the actor template and resource facts in one grid and shows the matched pool verdict', () => {
+  state.context = 'cluster-B'
+  const ws = workspace()
+  state.workspace = ws
+  const detail = actorDetail({ matchingPools: [ws.pools[0]], matchingPoolsComplete: true })
+  state.actor = ok(detail)
+  const page = render(<SubstrateActorPage actor={detail.actor} onOpenSubject={() => {}} />, '/substrate/actors/research/lit-review-0193?tab=spec')
+  const doc = new DOMParser().parseFromString(page, 'text/html')
+  const fields = [...doc.querySelectorAll('dt')]
+  expect(fields.find((field) => field.textContent === 'Template')?.parentElement).toBe(fields.find((field) => field.textContent === 'CPU')?.parentElement)
+  expect(doc.querySelector('button[title^="agent-ns/agent-pool · Short of workers"]')?.textContent).toBe('agent-pool')
 })

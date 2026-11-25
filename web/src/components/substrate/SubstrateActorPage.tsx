@@ -1,11 +1,12 @@
 import { useState, type ReactNode } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { Bot, Camera, FileCode, Globe, LayoutDashboard, RefreshCw, ScrollText } from 'lucide-react'
-import { Badge, CodeViewer, DetailShell, DimensionValue, FactGrid, FactRow, FoldSection, PaneLoader, SectionHeading, StatusDot, Tooltip, WorkspaceCard, toneTextClass, type DetailShellTab } from '@skyhook-io/k8s-ui'
+import { Badge, CodeViewer, DetailShell, DimensionValue, FactGrid, FactRow, FoldSection, PaneLoader, StatusDot, Tooltip, WorkspaceCard, toneTextClass, type DetailShellTab } from '@skyhook-io/k8s-ui'
 import {
   substrateErrorCode,
   useSubstrateActor,
   useSubstrateActorLogs,
+  useSubstrateWorkspace,
   type SubstrateActorDetail,
   type SubstrateActorLogs,
   type SubstrateLogSource,
@@ -16,15 +17,13 @@ import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { SubjectLink, type OpenSubject } from './SubstrateAttentionList'
 import { NotInContext, useContextPin } from './contextPin'
 import { ActorLogsBody, SubstrateActorOverview, egressText, workerLogsAvailable } from './SubstrateActorOverview'
-import { bytesText, cpuText, definitiveFailure, fidelityLabel, fidelityResume, killTie, resumeConditionSentence, tierReading } from './readings'
+import { bytesText, cpuText, definitiveFailure, fidelityLabel, killTie, resumeConditionSentence, tierReading } from './readings'
 import { SUBSTRATE_PATH, SUBSTRATE_SCREENS } from './routes'
-import { ActorStateBadge, Term, Unread, When } from './shared'
+import { ActorStateBadge, PoolMatchLinks, Term, Unread, When } from './shared'
 
 export type ActorTab = 'overview' | 'snapshots' | 'logs' | 'egress' | 'spec'
 
 const TABS: ActorTab[] = ['overview', 'snapshots', 'logs', 'egress', 'spec']
-
-const CARD = 'rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm'
 
 function TabBody({ children }: { children: ReactNode }) {
   return (
@@ -73,12 +72,7 @@ function SnapshotsTab({ detail, onOpenSubject }: { detail: SubstrateActorDetail;
     { header: 'Generation', width: '100px', cell: (s) => <span className="font-mono">{s.generation}</span> },
     {
       header: 'Holds',
-      cell: (s) => (
-        <>
-          <span>{fidelityLabel(s.fidelity)}</span>
-          <div className="text-xs text-theme-text-tertiary">{fidelityResume(s.fidelity)}</div>
-        </>
-      ),
+      cell: (s) => fidelityLabel(s.fidelity),
     },
     {
       header: 'Where it is kept',
@@ -113,7 +107,7 @@ function SnapshotsTab({ detail, onOpenSubject }: { detail: SubstrateActorDetail;
         </FactGrid>
       </WorkspaceCard>
       <SectionTable
-        title={<Term term="snapshot">Snapshots</Term>}
+        title="Snapshots"
         subtitle={
           <>
             Newest recorded generation first.
@@ -230,27 +224,24 @@ function SpecTab({ detail, onOpenSubject }: { detail: SubstrateActorDetail; onOp
   const selectorText = (sel?: Record<string, string>) =>
     sel && Object.keys(sel).length ? <span className="font-mono">{Object.entries(sel).map(([k, v]) => `${k}=${v}`).join(', ')}</span> : <span className="text-theme-text-secondary">none</span>
   const pools = detail.matchingPools
+  const workspace = useSubstrateWorkspace()
   return (
     <TabBody>
-      <section className={CARD}>
-        <SectionHeading>Template configuration</SectionHeading>
+      <WorkspaceCard title="Template configuration">
         <FactGrid>
           <FactRow label="Template"><SubjectLink subject={{ kind: 'ActorTemplate', ...detail.actor.template }} onOpen={onOpenSubject} withKind={false} /></FactRow>
-        </FactGrid>
-        {t ? (
-          <FactGrid>
+          {t ? (<>
             <FactRow label="CPU">{t.cpuMillicores ? cpuText(t.cpuMillicores) : <Unread>not set</Unread>}</FactRow>
             <FactRow label="Memory">{t.memoryBytes ? bytesText(t.memoryBytes) : <Unread>not set</Unread>}</FactRow>
             <FactRow label="Containers">{t.containers?.length ? <span className="font-mono">{t.containers.join(', ')}</span> : <Unread>not listed</Unread>}</FactRow>
             <FactRow label="Snapshots up to">{fidelityLabel(t.preferredFidelity)}</FactRow>
             <FactRow label="Stored in">{t.storageLocation ? <span className="font-mono">{t.storageLocation}</span> : 'the API server’s default location'}</FactRow>
-          </FactGrid>
-        ) : (
-          <p className="text-sm text-theme-text-tertiary">Substrate’s templates were not read, so what the actor runs with is unknown.</p>
-        )}
-      </section>
-      <section className={CARD}>
-        <SectionHeading>Placement rules</SectionHeading>
+          </>) : (
+            <FactRow label="Configuration"><Unread>Substrate’s templates were not read.</Unread></FactRow>
+          )}
+        </FactGrid>
+      </WorkspaceCard>
+      <WorkspaceCard title="Placement rules">
         <FactGrid>
           <FactRow label="Actor’s own selector">{selectorText(detail.actor.workerSelector)}</FactRow>
           <FactRow label="Template’s selector">{t ? selectorText(t.workerSelector) : <Unread>unknown: templates were not read</Unread>}</FactRow>
@@ -260,15 +251,15 @@ function SpecTab({ detail, onOpenSubject }: { detail: SubstrateActorDetail; onOp
             ) : pools.length === 0 ? (
               <span className="font-medium">none</span>
             ) : (
-              <span className="flex flex-wrap gap-x-3 gap-y-1">
+              <>
                 {!detail.matchingPoolsComplete && <span>At least these pools match</span>}
-                {pools.map((p) => <SubjectLink key={`${p.namespace}/${p.name}`} subject={{ kind: 'WorkerPool', ...p }} onOpen={onOpenSubject} withKind={false} />)}
-              </span>
+                <PoolMatchLinks pools={pools} workspace={workspace.data} />
+              </>
             )}
             <div className="text-xs text-theme-text-tertiary">Matching labels, not a promise it fits: CPU, memory and its snapshot’s runtime decide that.</div>
           </FactRow>
         </FactGrid>
-      </section>
+      </WorkspaceCard>
       <WorkspaceCard>
         <FoldSection title="Raw actor JSON" summary="Substrate API record" attention={false}>
           <CodeViewer code={JSON.stringify(detail.actor, null, 2)} language="json" showLineNumbers={false} maxHeight="32rem" />

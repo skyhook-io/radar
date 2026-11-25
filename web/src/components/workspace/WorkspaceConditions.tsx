@@ -4,19 +4,21 @@ export function WorkspaceConditions({
   conditions,
   title = 'Operator conditions',
   className,
-  emptyMessage = 'No status.conditions reported.',
+  sourcePath = 'status.conditions',
+  emptyMessage = `No ${sourcePath} reported.`,
   framed = true,
 }: {
   title?: string
   className?: string
   framed?: boolean
+  sourcePath?: string
   emptyMessage?: string
   conditions: { type: string; status: string; reason?: string; message?: string; lastTransitionTime?: string }[]
 }) {
   const content = (
     <FoldSection
       title={title}
-      summary={conditions.length > 0 ? `${conditions.length} reported · status.conditions` : 'No conditions reported'}
+      summary={conditions.length > 0 ? `${conditions.length} reported · ${sourcePath}` : 'No conditions reported'}
       attention={false}
     >
       <FactGrid>
@@ -50,5 +52,5 @@ export function WorkspaceConditions({
       {conditions.length === 0 && <p className="text-sm text-theme-text-tertiary">{emptyMessage}</p>}
     </FoldSection>
   )
-  return framed ? <WorkspaceCard className={className}>{content}</WorkspaceCard> : <section className={className ?? 'border-t-subtle pt-3'}>{content}</section>
+  return !framed && className ? <section className={className}>{content}</section> : <WorkspaceCard framed={framed} className={className}>{content}</WorkspaceCard>
 }

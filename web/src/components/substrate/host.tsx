@@ -37,11 +37,11 @@ function SubstratePoolsKindList({ inspected, onInspect }: KindListProps) {
       <SubstrateScreenGate query={query} discoveryPending={false} discovered>
         {(data) => (
           <div className="flex min-h-0 flex-1 flex-col">
-            <SubstrateHeader title="Pools" />
+            <SubstrateHeader title="Pools" intro="Cluster-wide" />
             <ScreenBody>
-              <SubstrateSourceLine tier={data.apiTier} status={status.data} />
               <SubstrateCoverageNotice coverage={data.coverage} kinds={['workers', 'actors']} />
               <PoolsTable data={data} onInspect={onInspect} inspected={inspected} />
+              <SubstrateSourceLine tier={data.apiTier} status={status.data} />
             </ScreenBody>
           </div>
         )}

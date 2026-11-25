@@ -1,6 +1,6 @@
 import { useId, useLayoutEffect, useRef, type ReactNode } from 'react'
 import { clsx } from 'clsx'
-import { DimensionValue, FactGrid, FactRow, FoldSection, SectionHeading, WorkspaceCard, WorkspaceProblemCallout, formatAge, toneFillClass, toneTextClass, type WorkspaceProblem } from '@skyhook-io/k8s-ui'
+import { DimensionValue, FactGrid, FactRow, FoldSection, WorkspaceCard, WorkspaceProblemCallout, formatAge, toneFillClass, toneTextClass, type WorkspaceProblem } from '@skyhook-io/k8s-ui'
 import {
   substrateErrorCode,
   useSubstrateActorLogs,
@@ -12,7 +12,7 @@ import {
   type SubstrateRef,
 } from '../../api/substrateWorkspace'
 import { type OpenSubject, SubjectLink } from './SubstrateAttentionList'
-import { ACTOR_STATE_LABEL, kagentRecoverStep, DISCARD_WHY, definitiveFailure, killLineLabel, killTie, memoryKillText, attentionTone, bytesText, coverageReason, cpuText, fidelityLabel, refText, resumeConditionSentence, resumeSentence, resumesWithText, revertCommand, localTime, relativeTime, servingEvidence, splitReading, withoutRepeats, workerImpactTone } from './readings'
+import { ACTOR_STATE_LABEL, kagentRecoverStep, DISCARD_WHY, definitiveFailure, killLineLabel, killTie, memoryKillText, attentionTone, bytesText, coverageReason, cpuText, fidelityLabel, refText, resumeConditionSentence, resumeSentence, revertCommand, localTime, relativeTime, servingEvidence, splitReading, withoutRepeats, workerImpactTone } from './readings'
 import { CommandChip, Unread, When } from './shared'
 import { RefreshFailedNotice } from '../workspace/layout'
 
@@ -48,9 +48,7 @@ function actorProblem(detail: SubstrateActorDetail, logs?: SubstrateActorLogs): 
         : [message && splitReading(message)[1], kill && `Earlier run: a memory-limit kill was recorded in ${kill.pod}. Radar can’t tie it to this crash.`].filter(Boolean).join(' ') || undefined,
       rawDetailLabel: 'Details',
       origin: kill?.current ? { label: 'Worker Pod logs' } : origin,
-      nextStep: actor.kagent ? kagentRecoverStep(actor.kagent)
-        : detail.attention.some((a) => a.rule === 'goldenSnapshotFailed') ? 'Recreate the template to build a new golden snapshot.'
-        : 'Review the recovery steps before changing this actor.',
+      nextStep: crashPlan(detail, kill)?.text ?? 'Investigate the crash cause before trying to recover the actor.',
     } }
   }
   if (workerImpact) {
@@ -246,7 +244,6 @@ export function workerLogsAvailable(logs: SubstrateActorLogs): boolean {
 /** What a log read could not give, in product terms, from the server's reason code. */
 function logGap(logs: SubstrateActorLogs, actor: SubstrateActorDetail['actor']): string {
   const node = logs.node ? `node ${logs.node}` : 'its node'
-  const searched = logs.searched.filter((p) => p.outcome !== 'denied').length
   switch (logs.reasonCode) {
     case 'workerPodGone':
       return `The worker Pod ${logs.worker?.pod ?? ''} is gone; Substrate still lists the worker, so its lines went with the Pod.`
@@ -254,23 +251,33 @@ function logGap(logs: SubstrateActorLogs, actor: SubstrateActorDetail['actor']):
       return `The node it last ran on, ${logs.node ?? ''}, is gone from the cluster, and its worker Pods’ logs with it.`
     case 'noWorkerPods':
       return `No worker Pod runs on ${node} now: the one it ran in is gone, and its lines with it.`
-    case 'denied':
+    case 'podsDenied':
+      return `Finding the worker Pods on ${node} requires list on pods in the worker namespaces.`
+    case 'logsDenied':
       return `Reading the worker Pod logs on ${node} requires get on pods/log in the worker namespaces.`
     case 'podsNotCollected':
       return `Radar doesn’t hold Pods in every namespace, so it can’t search the worker Pods on ${node}.`
-    case 'noMatch':
-      return `None of the ${searched} worker ${searched === 1 ? 'Pod' : 'Pods'} on ${node} holds its lines${logs.windowFull ? ' within the part Radar scanned' : ''}.`
     case 'noWorker':
     default:
       return `A ${ACTOR_STATE_LABEL[actor.state].toLowerCase()} actor runs on no worker, and Substrate names no node it ran on.`
   }
 }
 
-/**
- * An actor's log lines, by where Radar found them: its current worker Pod;
- * or, with no worker, the worker Pods on the node it last ran on, each line
- * naming its Pod, as candidates; or what is missing and how to look further.
- */
+function SearchedPods({ data }: { data: SubstrateActorLogs }) {
+  if (data.searched.length === 0 && !data.morePods) return null
+  return (
+    <ul aria-label="Worker Pods searched" className="text-xs text-theme-text-tertiary">
+      {data.searched.map((p) => (
+        <li key={`${p.namespace}/${p.pod}`}>
+          <span className="font-mono">{p.namespace}/{p.pod}</span>: {p.outcome === 'read' ? `read, ${p.matched} matching lines` : p.outcome === 'gone' ? 'gone'
+            : p.outcome === 'denied' ? p.message ?? `requires get pods/log in ${p.namespace}` : `couldn’t be read${p.message ? `: ${p.message}` : ''}`}
+        </li>
+      ))}
+      {data.morePods ? <li>{data.morePods} more worker {data.morePods === 1 ? 'Pod' : 'Pods'} left unsearched</li> : null}
+    </ul>
+  )
+}
+
 type LogsRead = { data?: SubstrateActorLogs; isLoading: boolean; error: unknown; isRefetchError?: boolean; dataUpdatedAt?: number }
 
 export function ActorLogsBody({ actor, logs, compact, killNoticeAbove }: { actor: SubstrateActorDetail['actor']; logs: LogsRead; compact?: boolean; killNoticeAbove?: boolean }) {
@@ -320,30 +327,18 @@ export function ActorLogsBody({ actor, logs, compact, killNoticeAbove }: { actor
       </div>
     )
   }
-  if (data.reasonCode === 'noMatch' || (data.origin === 'worker' && !data.reasonCode)) {
-    return <div className="space-y-1.5">{stale}
-      <p className="text-sm text-theme-text-secondary">No matching log lines.</p>
-      {data.windowFull && <p className="text-xs text-theme-text-tertiary">Radar scanned the newest lines. Older lines may exist outside that window.</p>}
-    </div>
-  }
+  const noMatch = data.reasonCode === 'noMatch' || (data.origin === 'worker' && !data.reasonCode)
+  const showSearch = !compact && (!noMatch || data.origin === 'lastNode' || data.morePods || data.searched.some((p) => p.outcome !== 'read'))
   return (
     <div className="space-y-1.5">
       {stale}
-      <p className="text-sm text-theme-text-secondary">
-        {logGap(data, actor)}
-        {crashedAt && <> It crashed <When iso={crashedAt} />.</>}
+      <p className="text-sm text-theme-text-secondary">{noMatch ? 'No matching log lines.' : logGap(data, actor)}
+        {!noMatch && crashedAt && <> It crashed <When iso={crashedAt} />.</>}
       </p>
-      {!compact && data.searched.length > 0 && (
-        <ul className="text-xs text-theme-text-tertiary">
-          {data.searched.map((p) => (
-            <li key={`${p.namespace}/${p.pod}`}>
-              <span className="font-mono">{p.pod}</span>: {p.outcome === 'read' ? `read, ${p.matched} of its lines` : p.outcome === 'gone' ? 'gone' : p.outcome === 'denied' ? 'no access to its log' : `couldn’t be read${p.message ? `: ${p.message}` : ''}`}
-            </li>
-          ))}
-          {data.morePods ? <li>and {data.morePods} more worker {data.morePods === 1 ? 'Pod' : 'Pods'} not searched</li> : null}
-        </ul>
-      )}
-      {!compact && <LogHandoff actor={actor} />}
+      {noMatch && data.origin === 'lastNode' && <p className="text-xs text-theme-text-secondary">Radar searched worker Pods on {data.node}, the node where the actor last ran.</p>}
+      {noMatch && data.windowFull && <p className="text-xs text-theme-text-tertiary">Radar scanned the newest lines. Older lines may exist outside that window.</p>}
+      {showSearch && <SearchedPods data={data} />}
+      {!compact && (!noMatch || data.windowFull || data.origin === 'lastNode') && <LogHandoff actor={actor} />}
     </div>
   )
 }
@@ -381,11 +376,10 @@ export function SubstrateActorOverview({
     : !logs.data ? 'Worker logs not read'
     : matchingLines > 0 ? `${matchingLines} recent ${matchingLines === 1 ? 'line' : 'lines'} read`
     : 'No matches in the recent log window'
-  const recoveryText = row.resumeGeneration === undefined ? 'Fresh boot'
-    : `Generation ${row.resumeGeneration} · ${row.resumeCondition === 'compatibleRuntime' ? 'memory if compatible' : resumesWithText(row.resumesWith)}`
-  const Frame = framed ? WorkspaceCard : FlatActorSection
+  const restore = { memory: 'with memory', filesystem: 'with saved files', volumes: 'with saved volumes only', cold: 'as a fresh boot', unknown: 'with unreported fidelity' }[row.resumesWith]
+  const recoveryText = row.resumeGeneration === undefined ? 'Boots fresh'
+    : `Resumes from snapshot generation ${row.resumeGeneration} (${row.resumeCondition === 'compatibleRuntime' ? 'with memory, if the runtime is compatible' : restore})`
   const discarded = recovery?.discarded ?? []
-  const recommended = plan?.text ?? otherRemedy?.nextStep
   const golden = detail.attention.some((a) => a.rule === 'goldenSnapshotFailed')
   const pending = discarded.find((d) => d.why === 'uploadPending')
   const crashCount = detail.template?.actors?.byState.crashed
@@ -408,14 +402,13 @@ export function SubstrateActorOverview({
           )} />
       )}
       {actions}
-      <Frame title="At a glance">
+      <WorkspaceCard framed={framed} title="At a glance">
         <FactGrid>
           <FactRow label="Recovery">
             <DimensionValue tone={row.resumesWith === 'unknown' ? 'unknown' : 'neutral'}
               source={actor.kagent ? 'Recovery is managed by kagent' : <>Current template · {resumeSentence(row)}</>} linkLabel="Snapshots" onOpen={onShowSnapshots}>
               {actor.kagent ? 'Recover through kagent' : recoveryText}
             </DimensionValue>
-            {actor.state === 'crashed' && recommended && !actor.kagent && <p className="mt-1 text-xs text-theme-text-secondary"><span className="font-medium">Recommended</span> · {recommended}</p>}
             {(command || (recovery && !actor.kagent && !golden)) && (
               <div className="mt-2">
                 <FoldSection title="Recovery steps" summary="" attention={false}>
@@ -454,12 +447,8 @@ export function SubstrateActorOverview({
             </DimensionValue>
           </FactRow>
         </FactGrid>
-      </Frame>
-      <Frame title="About"><ActorAbout detail={detail} onOpenSubject={onOpenSubject} /></Frame>
+      </WorkspaceCard>
+      <WorkspaceCard framed={framed} title="About"><ActorAbout detail={detail} onOpenSubject={onOpenSubject} /></WorkspaceCard>
     </div>
   )
-}
-
-function FlatActorSection({ title, children }: { title: string; children: ReactNode }) {
-  return <section className="border-t-subtle pt-3"><SectionHeading>{title}</SectionHeading>{children}</section>
 }

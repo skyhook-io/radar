@@ -144,8 +144,8 @@ export function workspace(overrides: Partial<SubstrateWorkspace> = {}): Substrat
         { pool: { namespace: 'batch', name: 'batch-pool' }, free: 21 },
         { pool: { namespace: 'agent-ns', name: 'agent-pool' }, free: 3 },
       ],
-      actors: { total: 1284, crashed: 14 },
-      templates: { total: 6, goldenFailed: 1, noMatchingPool: 0 },
+      actors: { total: 1284, crashed: 14, attentionCount: 14 },
+      templates: { total: 6, goldenFailed: 1, attentionCount: 1, noMatchingPool: 0 },
     },
     actorStates: counts({ running: 212, suspended: 1041, resuming: 6, suspending: 9, reverting: 2, crashed: 14 }),
     needsAttention: [crashedRow, poolShortRow, goldenRow],
@@ -234,6 +234,7 @@ export function actors(overrides: Partial<SubstrateActors> = {}): SubstrateActor
   return {
     apiTier: connectedTier,
     coverage: { state: 'full', count: 1284 },
+    workerCoverage: { state: 'full', count: 20 },
     sources: ['snapshot'],
     total: 1284,
     counts: counts({ running: 212, suspended: 1041, resuming: 6, suspending: 9, reverting: 2, crashed: 14 }),

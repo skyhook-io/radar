@@ -4,9 +4,9 @@ import type { HealthLevel } from '../resources/resource-utils'
 import { SectionHeading } from '../ui/FoldSection'
 import { StatusDot, toneTextClass } from '../ui/status-tone'
 
-export function WorkspaceCard({ title, children, className }: { title?: ReactNode; children: ReactNode; className?: string }) {
+export function WorkspaceCard({ title, children, className, framed = true }: { title?: ReactNode; children: ReactNode; className?: string; framed?: boolean }) {
   return (
-    <section className={clsx('rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm', className)}>
+    <section className={clsx(framed ? 'rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm' : 'border-t-subtle pt-3', className)}>
       {title && <SectionHeading>{title}</SectionHeading>}
       {children}
     </section>

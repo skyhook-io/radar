@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Bot, FileCode, LayoutDashboard, RefreshCw } from 'lucide-react'
-import { Badge, CertaintyGlyph, DetailShell, DimensionValue, FactGrid, FactRow, FoldSection, Input, PaneLoader, StatusDot, Tooltip, WorkspaceCard, WorkspaceProblemCallout, type WorkspaceProblem } from '@skyhook-io/k8s-ui'
+import { Badge, CertaintyGlyph, DetailShell, DimensionValue, FactGrid, FactRow, FoldSection, Input, PaneLoader, SelectMenu, Tooltip, WorkspaceCard, WorkspaceProblemCallout, type WorkspaceProblem } from '@skyhook-io/k8s-ui'
 import {
   substrateErrorCode,
   useSubstrateTemplate,
@@ -14,14 +14,15 @@ import {
   type SubstrateWorkspace,
 } from '../../api/substrateWorkspace'
 import { Notice, RefreshFailedNotice, ScreenBody, ScreenEmptyState, SectionTable, Segments, Sub, type TableColumn } from '../workspace/layout'
+import { INCOMPLETE_COVERAGE_STATES } from '../workspace/coverage'
 import { useConnection } from '../../context/ConnectionContext'
 import { NotInContext, useContextPin } from './contextPin'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { type OpenSubject } from './SubstrateAttentionList'
 import { SubstrateConnectNotice, SubstrateTierBanner } from './SubstrateConnect'
-import { attentionTone, memoryRebuildStep, templateYamlCommand, bytesText, coverageInPart, coverageReason, cpuText, definitiveFailure, withoutReasonCode, fidelityLabel, goldenReading, poolReading, splitReading, templateFilterValue, tierReading } from './readings'
-import { SUBSTRATE_PATH, SUBSTRATE_SCREENS, substrateActorsPath, substratePoolPath, substrateTemplatePath } from './routes'
-import { CommandChip, Name, SUBSTRATE_TERMS, SUBSTRATE_WIDE, SubstrateCoverageNotice, SubstrateHeader, SubstrateSourceLine, Term, Unread, When, WholeNames } from './shared'
+import { attentionTone, memoryRebuildStep, templateYamlCommand, bytesText, coverageInPart, coverageReason, cpuText, definitiveFailure, withoutReasonCode, fidelityLabel, goldenReading, splitReading, templateFilterValue, tierReading } from './readings'
+import { SUBSTRATE_PATH, SUBSTRATE_SCREENS, substrateActorsPath, substrateTemplatePath } from './routes'
+import { CommandChip, Name, PoolMatchLinks, SUBSTRATE_TERMS, SUBSTRATE_WIDE, SubstrateCoverageNotice, SubstrateHeader, SubstrateSourceLine, Term, Unread, When, WholeNames } from './shared'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
 
 /** `named` says what the chip is about, for a place where it stands alone (a page header), not under a Golden snapshot column. */
@@ -56,17 +57,23 @@ export function SubstrateTemplatesScreen({ workspace, status }: { workspace?: Su
   const navigate = useWorkspaceNavigate()
   const { connection } = useConnection()
   const [search, setSearch] = useState('')
+  const [atespace, setAtespace] = useState('')
   const [filter, setFilter] = useState<'all' | 'attention' | 'ready'>('all')
   const tier = workspace?.apiTier
   const connected = tier?.state === 'connected'
   const query = useSubstrateTemplates(connected)
   const data = query.data
   const wide = useMediaQuery(SUBSTRATE_WIDE)
-  const actorsPartial = coverageInPart(data?.coverage.actors) || coverageInPart(workspace?.coverage.workers)
+  const actorsPartial = coverageInPart(data?.coverage.actors) || coverageInPart(data?.coverage.workers)
   const open = (t: SubstrateRef) => navigate(substrateTemplatePath(t, connection.context || undefined))
-  const rows = (data?.templates ?? [])
-    .filter((t) => `${t.atespace}/${t.name}`.toLowerCase().includes(search.trim().toLowerCase()))
-    .filter((t) => filter === 'all' || (filter === 'attention' ? templateRank(t) < 3 : t.golden.state === 'ready' && templateRank(t) === 3))
+  const atespaces = [...new Set(data?.templates.map((t) => t.atespace))].sort()
+  const scoped = (data?.templates ?? []).filter((t) => (!atespace || t.atespace === atespace) && templateFilterValue(t).toLowerCase().includes(search.trim().toLowerCase()))
+  const needsAttention = (t: SubstrateTemplateRow) => templateRank(t) < 3
+  const ready = (t: SubstrateTemplateRow) => t.golden.state === 'ready' && !needsAttention(t)
+  const partial = coverageInPart(data?.coverage.templates)
+  const verdictsPartial = actorsPartial || !!data && (INCOMPLETE_COVERAGE_STATES.has(data.coverage.pools.state) || data.templates.some((t) => !t.matchingPoolsComplete))
+  const count = (n: number, inPart: boolean) => inPart ? n > 0 ? `≥${n}` : undefined : n
+  const rows = scoped.filter((t) => filter === 'all' || (filter === 'attention' ? needsAttention(t) : ready(t)))
     .sort((a, b) => templateRank(a) - templateRank(b) || (b.attentionCount ?? 0) - (a.attentionCount ?? 0) || templateFilterValue(a).localeCompare(templateFilterValue(b)))
   const columns: TableColumn<SubstrateTemplateRow>[] = [
     {
@@ -107,8 +114,8 @@ export function SubstrateTemplatesScreen({ workspace, status }: { workspace?: Su
     },
     { header: 'Label-matched pools', width: wide ? '16%' : '14%', cell: (t) => <PoolsCell t={t} /> },
     { header: 'Per-actor resources', width: '15%', cell: (t) => resourcesText(t) },
-    { header: <span className="sr-only">Open template</span>, width: '38px', cell: (t) =>
-      <button type="button" aria-label={`Open template ${t.name}`} className="text-accent-text hover:underline" onClick={(e) => { e.stopPropagation(); open(t) }}>→</button> },
+    { header: <span className="sr-only">Open template</span>, width: '76px', cell: (t) =>
+      <button type="button" aria-label={`Open template ${t.name}`} className="whitespace-nowrap text-xs text-accent-text hover:underline" onClick={(e) => { e.stopPropagation(); open(t) }}>Open →</button> },
   ]
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -126,14 +133,15 @@ export function SubstrateTemplatesScreen({ workspace, status }: { workspace?: Su
         ) : (
           <>
             <RefreshFailedNotice queries={[query]} />
-            {(coverageInPart(data.coverage.templates) || coverageInPart(data.coverage.actors)) && (
-              <SubstrateCoverageNotice coverage={data.coverage} kinds={['templates', 'actors']} />
-            )}
+            <SubstrateCoverageNotice coverage={data.coverage} kinds={['templates', 'actors', 'workers']} />
             <div className="flex flex-wrap items-center gap-2">
               <Segments label="Template filter" value={filter} onChange={setFilter} options={[
-                { id: 'all', label: 'All' }, { id: 'attention', label: 'Needs attention' }, { id: 'ready', label: 'Ready' },
+                { id: 'all', label: 'All', count: count(scoped.length, partial) },
+                { id: 'attention', label: 'Needs attention', count: count(scoped.filter(needsAttention).length, partial || verdictsPartial) },
+                { id: 'ready', label: 'Ready', count: verdictsPartial ? undefined : count(scoped.filter(ready).length, partial) },
               ]} />
               <Input aria-label="Search templates" placeholder="Search templates…" value={search} onChange={(e) => setSearch(e.target.value)} className="h-8 max-w-52 rounded-md border border-theme-border bg-theme-elevated px-3" />
+              <SelectMenu ariaLabel="Atespace" value={atespace} onChange={setAtespace} options={[{ value: '', label: 'Every atespace' }, ...atespaces.map((value) => ({ value, label: value }))]} />
             </div>
             <SectionTable
               columns={columns}
@@ -210,7 +218,6 @@ export function SubstrateTemplatePage({ template, onOpenSubject }: { template: S
   const navigate = useWorkspaceNavigate()
   const pin = useContextPin()
   const [params, setParams] = useSearchParams()
-  const { connection } = useConnection()
   const tab = params.get('tab') === 'spec' ? 'spec' : 'overview'
   const query = useSubstrateTemplate(pin.mismatch ? null : template)
   // The same read the workspace frame holds; shared, not repeated.
@@ -270,7 +277,7 @@ export function SubstrateTemplatePage({ template, onOpenSubject }: { template: S
     rawDetail: t.golden.error ? withoutReasonCode(t.golden.error) : undefined, rawDetailLabel: 'Details',
   } : undefined
   const actorCoverage = query.data?.coverage.actors
-  const actorsPartial = coverageInPart(actorCoverage) || coverageInPart(workspace.data?.coverage.workers)
+  const actorsPartial = coverageInPart(actorCoverage) || coverageInPart(query.data?.coverage.workers)
   const actorNote = t.attentionCount === undefined || (actorsPartial && t.attentionCount === 0) ? 'Unknown' : `${actorsPartial ? '≥' : ''}${t.attentionCount} need attention`
   const selector = Object.entries(t.workerSelector ?? {}).map(([k, v]) => `${k}=${v}`).join(', ')
   const config = <TemplateSpec spec={query.data?.spec} unavailable={query.data?.specUnavailable} template={t} />
@@ -305,8 +312,8 @@ export function SubstrateTemplatePage({ template, onOpenSubject }: { template: S
             <FactGrid>
               <FactRow label={<Term term="golden">Startup snapshot</Term>}>
                 <DimensionValue tone={declaredNoPool ? 'alert' : golden.severity === 'success' ? 'healthy' : golden.severity === 'warning' ? 'degraded' : 'neutral'}
-                  source={t.golden.time ? <>Substrate template · <When iso={t.golden.time} prefix="updated" /></> : 'Substrate template'}>
-                  {t.golden.state === 'failed' ? 'Failed · cold startup' : golden.meaning}
+                  source={<>Substrate template{t.golden.time && <> · <When iso={t.golden.time} prefix="updated" /></>}{t.golden.state === 'ready' && ' · New actors start from the golden snapshot'}</>}>
+                  {t.golden.state === 'failed' ? 'Failed · cold startup' : t.golden.state === 'ready' ? 'Ready' : golden.label}
                 </DimensionValue>
               </FactRow>
               <FactRow label="Placement">
@@ -314,22 +321,12 @@ export function SubstrateTemplatePage({ template, onOpenSubject }: { template: S
                   source="WorkerPool labels and template selector · placement also requires capacity and a compatible runtime">
                   <PoolsCell t={t} />
                 </DimensionValue>
-                <div className="mt-1 flex flex-wrap gap-1.5">
-                  {t.matchingPools?.map((p) => {
-                    const row = workspace.data?.pools.find((q) => q.name === p.name && q.namespace === p.namespace)
-                    const poolFinding = workspace.data?.needsAttention.find((f) => f.subject.kind === 'WorkerPool' && f.subject.name === p.name && f.subject.namespace === p.namespace)
-                    const r = row ? poolReading(row, poolFinding) : undefined
-                    const tone = poolFinding ? attentionTone(poolFinding) : r?.severity === 'success' ? 'healthy' : r?.severity === 'error' ? 'unhealthy' : r?.severity === 'warning' ? 'degraded' : 'unknown'
-                    const open = () => row?.kubernetes
-                      ? navigate(substratePoolPath(p, connection.context || undefined))
-                      : navigate(`${SUBSTRATE_SCREENS.workers.path}?${new URLSearchParams({ pool: `${p.namespace}/${p.name}` })}`)
-                    return <button key={`${p.namespace}/${p.name}`} type="button" title={r?.label ?? 'Capacity unknown'} onClick={open} className="btn-secondary inline-flex items-center gap-1.5 px-2 py-0.5 text-xs font-mono"><StatusDot tone={tone} />{p.name}</button>
-                  })}
-                </div>
+                {t.matchingPools && <PoolMatchLinks pools={t.matchingPools} workspace={workspace.data} />}
               </FactRow>
               <FactRow label="Actors">
-                <DimensionValue tone={t.attentionCount ? 'alert' : actorNote === 'Unknown' ? 'unknown' : 'neutral'}
-                  source={t.actors ? `Reported by Substrate · ${coverageInPart(actorCoverage) ? '≥' : ''}${t.actors.total} actors` : coverageReason(actorCoverage, 'actors')}
+                <DimensionValue tone={t.actors?.byState.crashed ? 'unhealthy' : t.attentionCount ? 'alert' : actorNote === 'Unknown' ? 'unknown' : 'neutral'}
+                  source={t.actors && (!coverageInPart(actorCoverage) || t.actors.total > 0)
+                    ? `Reported by Substrate · ${coverageInPart(actorCoverage) ? '≥' : ''}${t.actors.total} actors` : coverageReason(actorCoverage, 'actors')}
                   linkLabel="Actors needing attention" onOpen={() => onOpenSubject({ kind: 'Actors', filter: { template: templateFilterValue(t), attention: '1' } })}>
                   {actorNote}
                 </DimensionValue>
@@ -352,7 +349,7 @@ export function SubstrateTemplatePage({ template, onOpenSubject }: { template: S
               <FactRow label="Snapshot fidelity">{fidelityLabel(t.preferredFidelity)}</FactRow>
             </FactGrid>
           </WorkspaceCard>
-          <WorkspaceCard><FoldSection title="Configuration" summary="Containers, snapshots and volumes" attention={false}>{config}</FoldSection></WorkspaceCard>
+
         </>}
       </ScreenBody>
     </DetailShell>

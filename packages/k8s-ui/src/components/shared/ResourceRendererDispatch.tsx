@@ -375,6 +375,7 @@ export interface RendererOverrides {
     onNavigate?: (ref: ResourceRef) => void
     onOpenLogs?: (podName: string, containerName: string) => void
     resolvedEnvFrom?: ResolvedEnvFrom
+    expanded?: boolean
   }>
   NodeRenderer?: React.ComponentType<{
     data: any; relationships?: Relationships
@@ -649,6 +650,7 @@ function isCAPITopologyGroup(apiVersion?: string): boolean {
 // ============================================================================
 
 interface ResourceRendererDispatchProps {
+  expanded?: boolean
   /** Whether the containing resource view is active; hosts can pause their reads. */
   active?: boolean
   resource: SelectedResource
@@ -701,6 +703,7 @@ interface ResourceRendererDispatchProps {
 
 export function ResourceRendererDispatch({
   active = true,
+  expanded = false,
   resource,
   data,
   relationships,
@@ -988,7 +991,7 @@ export function ResourceRendererDispatch({
     <div className={renderSidebar ? 'lg:flex' : ''}>
       <div className={clsx('p-4 space-y-4', renderSidebar && 'lg:flex-1 lg:min-w-0')}>
         {/* Kind-specific content - delegates to modular renderers */}
-        {kind === 'pods' && <PodComp data={data} onCopy={onCopy} copied={copied} onNavigate={onNavigate} onOpenLogs={onOpenLogs} resolvedEnvFrom={resolvedEnvFrom} />}
+        {kind === 'pods' && <PodComp data={data} expanded={expanded} onCopy={onCopy} copied={copied} onNavigate={onNavigate} onOpenLogs={onOpenLogs} resolvedEnvFrom={resolvedEnvFrom} />}
         {['deployments', 'statefulsets', 'daemonsets'].includes(kind) && (
           <WorkloadComp
             kind={kind}

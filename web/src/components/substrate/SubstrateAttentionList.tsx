@@ -367,11 +367,11 @@ function RowDetails({ open, onToggle, children }: { open: boolean; onToggle: () 
 export function AttentionRow({ row, onOpen }: { row: SubstrateAttention; onOpen?: OpenSubject }) {
   const [open, setOpen] = useState(false)
   const related = (row.related ?? [])
-    // A worker is its Pod: the subject already links it.
+    // A Worker subject already links to its Pod.
     .filter((r) => !(row.subject.kind === 'Worker' && r.kind === 'Pod' && r.name === row.subject.name))
   const crash = row.rule === 'crashedActors'
   const [first, others] = splitReading(row.reading)
-  const lead = crash ? <Concentration row={row} /> : first
+  const lead = crash ? <Concentration row={row} onOpen={onOpen} /> : first
   const rest = crash ? row.reading || undefined : others
   const hasDetails = related.length > 0 || splitsByRemedy(row) || (row.groups?.length ?? 0) > 1 || (row.messages?.length ?? 0) > 1 || (row.nodes?.length ?? 0) > 0 || (row.sample?.length ?? 0) > 0 || !!rest || !!row.nextStep || !!row.command
   return (
@@ -424,6 +424,10 @@ export function SubstrateAttentionList({ rows, onOpen }: { rows: SubstrateAttent
   const shown = rows.slice(0, visible)
   const folded = rows.slice(visible)
   const foldId = 'substrate-attention-more'
+  const hiddenSeverities = (['critical', 'alert', 'warning', 'info'] as const).flatMap((severity) => {
+    const count = folded.filter((row) => row.severity === severity).length
+    return count > 0 ? [`${count} ${severity}`] : []
+  }).join(', ')
   return (
     <div>
       <ul className="divide-y divide-theme-border-subtle">
@@ -444,7 +448,7 @@ export function SubstrateAttentionList({ rows, onOpen }: { rows: SubstrateAttent
             className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-accent-text hover:underline"
           >
             <CollapseChevron open={showAll} />
-            {showAll ? 'Show fewer' : `Show ${folded.length} more`}
+            {showAll ? 'Show fewer' : `Show ${folded.length} more (${hiddenSeverities})`}
           </button>
         </>
       )}

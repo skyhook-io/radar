@@ -210,6 +210,15 @@ describe('Actors list', () => {
     expect(html).not.toContain('need attention: 14')
   })
 
+  it('takes worker coverage for the attention count from the actor response', () => {
+    const ws = workspace()
+    ws.coverage.workers = { state: 'partial' }
+    state.actors = actors({ attentionCount: 24 })
+    expect(screen('/substrate/actors', ws)).toMatch(/>Needs attention<span[^>]*>24</)
+    state.actors = actors({ attentionCount: 24, workerCoverage: { state: 'partial' } })
+    expect(screen()).toMatch(/>Needs attention<span[^>]*>≥24</)
+  })
+
   it('sends the attention filter with the current scope and gives partial results a lower bound', () => {
     state.actors = actors({ attentionCount: 24, coverage: { state: 'partial', deniedAtespaces: ['restricted'] } })
     const html = screen('/substrate/actors?attention=1&atespace=research')
@@ -295,7 +304,7 @@ describe('Actor overview', () => {
     expect(html).toContain('in agent-pool-worker-1.')
     expect(html.indexOf('in agent-pool-worker-1.')).toBeGreaterThan(html.indexOf('Details'))
     // The cause found picks the step: the remedy, not "find the cause".
-    expect(html).toContain('Recommended · Raise the template’s memory limit (recreate it), then revert the actor.')
+    expect(html).toContain('Next step: Raise the template’s memory limit (recreate it), then revert the actor.')
     expect(html).not.toContain('Find the cause')
     // The banner names the cause; the last lines below don't repeat it.
     expect(html).not.toContain('that is why it crashed')
@@ -322,6 +331,7 @@ describe('Actor overview', () => {
     })
     try {
       const html = plain(text(renderToStaticMarkup(<MemoryRouter><SubstrateActorOverview detail={d} onOpenSubject={() => {}} /></MemoryRouter>))).replace(/<[^>]+>/g, ' ')
+      expect(html).toContain('Resumes from snapshot generation 6 (with memory, if the runtime is compatible)')
       expect(html).toContain('Snapshot holds memory')
       expect(html).toContain("The move drops its snapshot's memory and files: it restarts from volumes.")
       // Every sentence that restores from volumes names the move as the reason; none says what the snapshot lacks.
@@ -429,6 +439,30 @@ describe('Logs for an actor on no worker', () => {
     const { ActorLogsBody } = await import('./SubstrateActorOverview')
     return plain(text(renderToStaticMarkup(<MemoryRouter><ActorLogsBody actor={crashed} logs={{ data: logs, isLoading: false, error: null }} /></MemoryRouter>)))
   }
+
+  it('preserves searched Pods, unread logs and external search after a zero-match result', async () => {
+    const html = await render({
+      ...base, origin: 'lastNode', node: 'worker-node', reasonCode: 'noMatch', windowFull: true, morePods: 2, lines: [],
+      searched: [
+        { namespace: 'agents', pod: 'read-worker', outcome: 'read', scanned: 20_000, windowFull: true, matched: 0 },
+        { namespace: 'other', pod: 'denied-worker', outcome: 'denied', message: 'requires get pods/log in other', scanned: 0, windowFull: false, matched: 0 },
+      ],
+    })
+    expect(html).toContain('No matching log lines')
+    expect(html).toContain('Older lines may exist')
+    expect(html).toContain('agents/read-worker: read, 0 matching lines')
+    expect(html).toContain('other/denied-worker: requires get pods/log in other')
+    expect(html).toContain('2 more worker Pods left unsearched')
+    expect(html).toContain('ate.actor.name="lit-review-0193"')
+  })
+
+  it('distinguishes permission to discover worker Pods from reading their logs', async () => {
+    const empty = { ...base, origin: 'lastNode' as const, node: 'worker-node', searched: [], lines: [] }
+    const pods = await render({ ...empty, reasonCode: 'podsDenied' })
+    expect(pods).toContain('requires list on pods')
+    expect(pods).not.toContain('requires get on pods/log')
+    expect(await render({ ...empty, reasonCode: 'logsDenied' })).toContain('requires get on pods/log')
+  })
 
   it('never calls an earlier run’s memory-limit kill the reason for the crash in the logs', async () => {
     const html = await render({ ...base, origin: 'lastNode', node: 'node', reasonCode: 'candidates', searched: [], lines: [{ kind: 'worker', pod: 'worker', text: 'old kill', message: 'old kill', time: '2026-11-17T12:00:00Z' }], memoryKill: { time: '2026-11-17T12:00:00Z', pod: 'worker', limitBytes: 1024, current: false } })

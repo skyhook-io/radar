@@ -678,9 +678,9 @@ export interface SubstrateWorkspace {
     slots?: SubstrateUsage
     /** Free actor slots per pool, largest first; [] when workers were read and none is free. lacking: the pool's free slots fit no actor of its templates. */
     freeSlots?: { pool: SubstratePoolRef; free: number; lacking?: SubstrateLacking }[]
-    actors?: { total: number; crashed: number }
+    actors?: { total: number; crashed: number; attentionCount: number }
     /** noMatchingPool counts templates whose selector matches no pool; absent unless the pool list is complete. */
-    templates?: { total: number; goldenFailed: number; noMatchingPool?: number }
+    templates?: { total: number; goldenFailed: number; attentionCount: number; noMatchingPool?: number }
   }
   actorStates?: SubstrateStateCounts
   needsAttention: SubstrateAttention[]
@@ -740,6 +740,8 @@ export interface SubstrateActors {
   apiTier: SubstrateAPITier
   /** Coverage of the source that answered. */
   coverage: SubstrateCoverage
+  /** Worker coverage qualifies attention counts and worker impact. */
+  workerCoverage: SubstrateCoverage
   /**
    * What answered: snapshot (the shared read); atespace (a direct read of the
    * atespace filter, when the snapshot does not hold all of it); actor (a
@@ -791,6 +793,8 @@ export interface SubstrateWorkerRow {
   podTerminating?: boolean
   /** What its state means for its actors; absent for an active worker whose registration Substrate has observed. */
   workerState?: SubstrateWorkerReading
+  /** Strongest worker finding, including an in-budget drain (info). */
+  attentionSeverity?: SubstrateAttention['severity']
   /** Absent when actors were not read; [] when none is assigned. */
   actors?: SubstrateAssignedActor[]
 }
@@ -953,12 +957,13 @@ export interface SubstrateActorLogs {
   /**
    * noWorker: no worker and no node recorded. nodeGone. noWorkerPods: no worker
    * Pod on that node now (the one it ran in is gone). workerPodGone: its
-   * assigned worker's Pod no longer exists. denied: no readable worker Pod.
+   * assigned worker's Pod no longer exists. podsDenied: cannot list worker
+   * Pods. logsDenied: cannot get their logs.
    * noMatch: Pods searched, none holds its lines. candidates: lines found on
    * the last node. podsNotCollected: Radar doesn't hold Pods in every
    * namespace, so the node can't be searched.
    */
-  reasonCode?: 'noWorker' | 'nodeGone' | 'noWorkerPods' | 'workerPodGone' | 'denied' | 'noMatch' | 'candidates' | 'podsNotCollected'
+  reasonCode?: 'noWorker' | 'nodeGone' | 'noWorkerPods' | 'workerPodGone' | 'podsDenied' | 'logsDenied' | 'noMatch' | 'candidates' | 'podsNotCollected'
   reason?: string
   source: SubstrateLogSource
   /** Newest lines, oldest first, each with the Pod it came from. */
@@ -1002,7 +1007,7 @@ export interface SubstrateWorkers {
 
 export interface SubstrateTemplates {
   apiTier: SubstrateAPITier
-  coverage: { templates: SubstrateCoverage; actors: SubstrateCoverage; pools: SubstratePoolsCoverage }
+  coverage: { templates: SubstrateCoverage; actors: SubstrateCoverage; workers: SubstrateCoverage; pools: SubstratePoolsCoverage }
   templates: SubstrateTemplateRow[]
 }
 
@@ -1040,10 +1045,12 @@ export interface SubstrateTemplate {
   spec?: SubstrateTemplateSpec
   specUnavailable?: string
   /** Coverage of the reads its actor counts and eligible pools come from. */
-  coverage: { templates: SubstrateCoverage; actors: SubstrateCoverage; pools: SubstratePoolsCoverage }
+  coverage: { templates: SubstrateCoverage; actors: SubstrateCoverage; workers: SubstrateCoverage; pools: SubstratePoolsCoverage }
 }
 
 export interface SubstratePool {
+  /** Why observed Pod counts are absent for this WorkerPool. */
+  podRead?: 'denied' | 'uncollected'
   apiTier: SubstrateAPITier
   pool: SubstratePoolRow
   attention?: SubstrateAttention

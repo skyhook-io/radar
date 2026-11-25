@@ -28,15 +28,17 @@ function areaRead(data: SubstrateWorkspace, area: AttentionArea): { read: boolea
   }
   if (!connected) return { read: false, why: 'Radar is not connected to Substrate’s API' }
   const cov = data.coverage
-  const parts = area === 'actors' ? [cov?.actors] : area === 'templates' ? [cov?.templates, cov?.workers] : [cov?.workers, cov?.actors]
+  const parts = area === 'actors' ? [cov.actors, cov.workers] : area === 'templates' ? [cov.templates, cov.actors, cov.workers] : [cov.workers, cov.actors]
+  if (area === 'templates' && (INCOMPLETE_COVERAGE_STATES.has(cov.pools.state) || data.summary.templates?.noMatchingPool === undefined)) return { read: false, why: 'some WorkerPools could not be read' }
   if (parts.some((c) => coverageInPart(c))) return { read: false, why: `some ${AREA_NOUN[area]} could not be read` }
   return { read: true }
 }
 
-function countOf(count: number, read: { read: boolean; why?: string }, what: (n: number) => string): SubstrateAttentionCount {
-  if (!read.read && count === 0) {
+function countOf(count: number | undefined, read: { read: boolean; why?: string }, what: (n: number) => string): SubstrateAttentionCount {
+  if (!read.read && !count) {
     return { count: null, lowerBound: true, title: `Unknown: ${read.why}, so nothing found does not mean nothing needs attention.` }
   }
+  if (count === undefined) return { count: null, lowerBound: true, title: 'The attention count was not reported.' }
   const note = read.read ? '' : ` ${read.why ? `${read.why[0].toUpperCase()}${read.why.slice(1)}` : 'Some was not read'}, so there may be more.`
   return { count, lowerBound: !read.read, title: `${read.read ? '' : 'At least '}${what(count)}.${note}` }
 }
@@ -59,26 +61,14 @@ export function substrateAttentionCount(data: SubstrateWorkspace): SubstrateAtte
 
 const subjectKey = (s: SubstrateAttention['subject']) => `${s.kind}/${s.namespace ?? s.atespace ?? ''}/${s.name ?? s.filter?.template ?? ''}`
 
-/** The actors the Actors badge counts, by why: crashed, and stuck in a transition. */
-export function actorAttentionParts(data: SubstrateWorkspace): { crashed: number; stuck: number } {
-  const rows = needing(data)
-  const sum = (rule: SubstrateAttention['rule']) => rows.filter((a) => a.rule === rule).reduce((n, a) => n + a.count, 0)
-  return { crashed: sum('crashedActors'), stuck: sum('stuckTransition') }
-}
-
-/**
- * Each screen's badge counts the objects of that screen needing attention, so
- * it matches what the screen shows: actors crashed or stuck in a transition;
- * templates, workers and pools named by a row (each once).
- */
+/** Counts for the same predicates as each screen’s Needs attention filter. */
 export function substrateScreenCounts(data: SubstrateWorkspace): Record<AttentionArea, SubstrateAttentionCount> {
   const rows = needing(data)
-  const { crashed, stuck } = actorAttentionParts(data)
-  const distinct = (area: AttentionArea) => new Set(rows.filter((a) => attentionArea(a) === area).map((a) => subjectKey(a.subject))).size
+  const distinct = (area: AttentionArea) => new Set(rows.filter((a) => attentionArea(a) === area).map((a) => area === 'workers' ? a.id : subjectKey(a.subject))).size
   const objects = (one: string, many: string) => (n: number) => `${n} ${n === 1 ? `${one} needs` : `${many} need`} attention`
   return {
-    actors: countOf(crashed + stuck, areaRead(data, 'actors'), (n) => `${n} ${n === 1 ? 'actor needs' : 'actors need'} attention: ${crashed} crashed, ${stuck} stuck in a transition`),
-    templates: countOf(distinct('templates'), areaRead(data, 'templates'), objects('template', 'templates')),
+    actors: countOf(data.summary.actors?.attentionCount, areaRead(data, 'actors'), objects('actor', 'actors')),
+    templates: countOf(data.summary.templates?.attentionCount, areaRead(data, 'templates'), objects('template', 'templates')),
     workers: countOf(distinct('workers'), areaRead(data, 'workers'), objects('worker', 'workers')),
     pools: countOf(distinct('pools'), areaRead(data, 'pools'), objects('pool', 'pools')),
     nodes: countOf(distinct('nodes'), areaRead(data, 'nodes'), objects('node', 'nodes')),

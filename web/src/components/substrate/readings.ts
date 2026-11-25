@@ -209,11 +209,6 @@ export const DISCARD_WHY: Record<string, string> = {
   incomplete: 'recorded but never captured',
 }
 
-/** A snapshot's own resume, by what it holds. */
-export function fidelityResume(fidelity: SubstrateSnapshot['fidelity']): string {
-  return RESUME_SENTENCE[fidelity === 'memory' ? 'memory' : fidelity === 'rootfs' ? 'filesystem' : fidelity === 'volumes' ? 'volumes' : 'unknown']
-}
-
 /**
  * What a state badge leaves to say: "for 36m", "upload pending for 36m", or
  * the crash message. The badge names the state, so the reason's own state
@@ -297,11 +292,6 @@ export function revertCommand(ref: SubstrateRef): string {
   return `kubectl ate revert actor ${ref.name} -a ${ref.atespace}`
 }
 
-/** `kubectl ate logs actor`, which reads the actor's lines from its current worker. */
-export function logsCommand(ref: SubstrateRef): string {
-  return `kubectl ate logs actor ${ref.name} -a ${ref.atespace}`
-}
-
 /** `kubectl ate get actor-template … -o yaml`: the template's full spec. */
 export function templateYamlCommand(ref: SubstrateRef): string {
   return `kubectl ate get actor-template ${ref.name} -a ${ref.atespace} -o yaml`
@@ -322,19 +312,6 @@ const ATTENTION_TONE: Record<SubstrateAttention['severity'], Exclude<StatusTone,
 /** A row's tone, by the house's four steps: critical red, alert orange, warning amber, info blue. */
 export function attentionTone(a: Pick<SubstrateAttention, 'severity'>): Exclude<StatusTone, 'healthy'> {
   return ATTENTION_TONE[a.severity] ?? 'degraded'
-}
-
-const BANNER_VARIANT: Record<Exclude<StatusTone, 'healthy'>, 'error' | 'alert' | 'warning' | 'info' | 'unknown'> = {
-  unhealthy: 'error',
-  alert: 'alert',
-  degraded: 'warning',
-  neutral: 'info',
-  unknown: 'unknown',
-}
-
-/** The AlertBanner variant of a row, so a banner reads the tone its row does. */
-export function attentionBannerVariant(a: Pick<SubstrateAttention, 'severity'>): 'error' | 'alert' | 'warning' | 'info' | 'unknown' {
-  return BANNER_VARIANT[attentionTone(a)]
 }
 
 /** The worst tone among rows, or undefined when there are none. */
@@ -640,8 +617,11 @@ export interface PoolReading {
  */
 export function poolReading(p: Pick<SubstratePoolRow, 'capacity' | 'lacking' | 'placement' | 'kubernetes'>, finding?: SubstrateAttention): PoolReading {
   const reading = poolCapacityReading(p)
-  if (p.kubernetes?.health === 'unhealthy') {
-    return { ...reading, label: p.kubernetes.healthReason === 'SandboxConfigNotFound' ? 'Sandbox configuration missing' : p.kubernetes.healthReason || reading.label, severity: 'error' }
+  const k = p.kubernetes
+  if (k?.health === 'unhealthy' || (k?.health === 'degraded' && k.healthDetail && finding?.severity !== 'critical' && finding?.severity !== 'alert')) {
+    const label = k.healthReason === 'SandboxConfigNotFound' ? 'Sandbox configuration missing'
+      : k.healthReason === 'Provisioning stalled' ? 'Provisioning stalled' : 'Sandbox configuration unresolved'
+    return { ...reading, label, severity: k.health === 'unhealthy' ? 'error' : 'warning' }
   }
   if (finding) return { ...reading, severity: toneSeverity(attentionTone(finding)) }
   return reading
@@ -652,9 +632,9 @@ function poolCapacityReading(p: Pick<SubstratePoolRow, 'capacity' | 'lacking' | 
   const desired = p.kubernetes?.desired
   switch (p.capacity) {
     case 'short': {
-      const observed = p.placement?.workers.active
+      const observed = p.placement?.complete ? p.placement.workers.active : undefined
       const have = observed ?? p.kubernetes?.pods?.ready ?? p.kubernetes?.reportedReady
-      const count = have === undefined ? '' : ` · ${p.placement?.complete === false ? 'at least ' : ''}${have} of ${desired ?? '?'} ${p.placement ? 'active' : 'Pods ready'}`
+      const count = have === undefined ? '' : ` · ${have} of ${desired ?? '?'} ${observed === undefined ? 'Pods ready' : 'active'}`
       return {
         label: `Short of workers${count}`,
         severity: 'warning',
@@ -833,13 +813,13 @@ const WORKER_STATE_LABEL: Record<SubstrateWorkerRow['state'], { label: string; s
  * would say the opposite of the actors' own rows. The chip stays one line; the
  * screens say how many were lost beside it (workerState.lost).
  */
-export function workerStateReading(w: Pick<SubstrateWorkerRow, 'state' | 'workerState'>): { label: string; severity: BadgeSeverity; title: string } {
+export function workerStateReading(w: Pick<SubstrateWorkerRow, 'state' | 'workerState' | 'attentionSeverity'>): { label: string; severity: BadgeSeverity; title: string } {
   const base = WORKER_STATE_LABEL[w.state]
   const ws = w.workerState
   const title = ws?.reading ?? 'Substrate’s state for the worker. Only active workers take new actors.'
-  if (ws?.kind !== 'reconciling') return { ...base, title }
-  // Lost sandboxes are lost (critical); otherwise the worker's own state sets it.
-  return { label: `${base.label} · reconciling`, severity: ws.lost ? 'error' : w.state === 'unavailable' ? 'alert' : 'warning', title }
+  const label = ws?.kind === 'reconciling' ? `${base.label} · reconciling` : base.label
+  const severity = w.attentionSeverity
+  return { label, severity: severity === 'info' ? 'info' : severity ? toneSeverity(attentionTone({ severity })) : base.severity, title }
 }
 
 /** What Kubernetes says about a worker's Pod, in one phrase; terminating comes first, since a Ready Pod being deleted is not counted ready. */
@@ -852,19 +832,6 @@ export function workerPodText(w: Pick<SubstrateWorkerRow, 'podReady' | 'podTermi
 /** A Substrate reason code Kubernetes-style messages lead with ("GoldenActorCrashed: …"): the words after it say the same, plainly. */
 export function withoutReasonCode(message: string): string {
   return message.replace(/^[A-Z][A-Za-z]+:\s+/, '')
-}
-
-/**
- * A pool's worker Pods in words: Radar's own count of the Pods it holds, with
- * the WorkerPool's status cited only where it says otherwise. readyReplicas
- * lags the Pods, so it is Kubernetes' claim, not the count.
- */
-export function poolPodsText(k: Pick<SubstrateK8sPool, 'desired' | 'ready' | 'pods'>): string {
-  const of = k.desired !== undefined ? ` of ${k.desired}` : ''
-  if (!k.pods) return `Kubernetes calls ${k.ready}${of} worker Pods ready.`
-  const terminating = k.pods.terminating ? `, and ${k.pods.terminating} ${k.pods.terminating === 1 ? 'is' : 'are'} terminating` : ''
-  const claim = k.ready !== k.pods.ready ? ` The WorkerPool’s status says ${k.ready} ready.` : ''
-  return `Kubernetes has created ${k.pods.created}${of} worker Pods; ${k.pods.ready} ${k.pods.ready === 1 ? 'is' : 'are'} ready${terminating}.${claim}`
 }
 
 /** Ready worker Pods: Radar's own count when it holds the Pods, else the WorkerPool's status. */

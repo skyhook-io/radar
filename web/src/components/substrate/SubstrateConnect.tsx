@@ -1,7 +1,7 @@
 import { AlertBanner } from '@skyhook-io/k8s-ui'
 import type { SubstrateAPITier, SubstrateStatus } from '../../api/substrateWorkspace'
 import { tierReading } from './readings'
-import { CommandChip, Term } from './shared'
+import { CommandChip } from './shared'
 
 /**
  * Why actor values are missing, in a banner: not connected, or connected and
@@ -65,7 +65,7 @@ export function SubstrateConnectNotice({ status, tier }: { status?: SubstrateSta
         {local && unset ? 'Connect to Substrate’s API' : reading ? r.title : 'Actors, templates and workers aren’t read'}
       </h2>
       <p className="mt-1 text-sm text-theme-text-secondary">
-        Substrate keeps <Term term="actor">actors</Term>, <Term term="template">templates</Term> and <Term term="worker">workers</Term> in its own API, not Kubernetes. Pools, worker Pods and Prometheus readings show below either way.
+        Substrate keeps actors, templates and workers in its own API, not Kubernetes. Pools, worker Pods and Prometheus readings show below either way.
       </p>
       {reading && !(local && unset) && r.detail && <p className="mt-2 text-sm text-theme-text-secondary">{r.detail}</p>}
       {reading && r.nextStep && !(local && tier.state === 'notConfigured') && (

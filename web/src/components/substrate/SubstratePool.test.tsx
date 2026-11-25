@@ -1,19 +1,25 @@
+// @vitest-environment jsdom
+
 import { renderToStaticMarkup } from 'react-dom/server'
+import { toneFillClass } from '@skyhook-io/k8s-ui'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
-import type { SubstratePool, SubstrateWorkerRow } from '../../api/substrateWorkspace'
-import { PLACEMENT_CARD_LIMIT, Placement, SubstratePoolSummary, workerSlots } from './SubstratePoolSummary'
+import type { SubstratePool, SubstrateWorkerRow, SubstrateWorkers } from '../../api/substrateWorkspace'
+import { ApiError } from '../../api/client'
+import { SubstrateWorkerPodContext, SubstrateWorkerPodScope } from './SubstrateWorkerPodContext'
+import { PLACEMENT_CARD_LIMIT, Placement, PoolSpecStatus, SubstratePoolSummary, workerSlots } from './SubstratePoolSummary'
 import { actorAttentionText } from './SubstrateActorOverview'
-import { actorDetail, connectedTier, minutesAgo } from './substrate.fixtures'
+import { actorDetail, connectedTier, minutesAgo, workspace } from './substrate.fixtures'
 
 vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({ connection: { context: 'kind-demo' } }) }))
 
 const text = (html: string) => html.replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/<\/?span[^>]*>/g, '')
 
-const state = vi.hoisted(() => ({ pool: undefined as SubstratePool | undefined }))
+const state = vi.hoisted(() => ({ pool: undefined as SubstratePool | undefined, workers: undefined as SubstrateWorkers | undefined, workerError: null as Error | null, poolError: null as Error | null, poolLoading: false }))
 vi.mock('../../api/substrateWorkspace', async (original) => ({
   ...(await original<typeof import('../../api/substrateWorkspace')>()),
-  useSubstratePool: () => ({ data: state.pool, isLoading: false }),
+  useSubstratePool: () => ({ data: state.pool, isLoading: state.poolLoading, error: state.poolError }),
+  useSubstrateWorkers: () => ({ data: state.workers, isLoading: false, error: state.workerError }),
 }))
 vi.mock('../../api/client', async (original) => ({
   ...(await original<typeof import('../../api/client')>()),
@@ -273,4 +279,119 @@ describe('Workers by pool', () => {
     expect(html).toContain('sandbox lost: its worker restarted under it')
     expect(html).toContain('resuming, suspending or reverting')
   })
+})
+
+const dom = (node: React.ReactNode, path = '/substrate') => new DOMParser().parseFromString(
+  renderToStaticMarkup(<MemoryRouter initialEntries={[path]}>{node}</MemoryRouter>), 'text/html',
+)
+
+it('reads requested SandboxConfigs on Spec and the two independent status refs on Overview', () => {
+  const resource = {
+    spec: { sandboxClasses: [{ name: 'gvisor', configRef: { name: 'gvisor-v2' } }] },
+    status: { sandboxClasses: [{ name: 'gvisor', configRef: { name: 'gvisor-v1' }, pendingConfigRef: { name: 'gvisor-next' }, conditions: [{ type: 'Resolved', status: 'False' }] }] },
+  }
+  const spec = dom(<PoolSpecStatus resource={resource} onNavigate={() => {}} />)
+  expect(spec.body.textContent).toContain('status.sandboxClasses[].conditions')
+  expect([...spec.querySelectorAll('button')].some((b) => b.textContent === 'gvisor-v2')).toBe(true)
+  expect(spec.body.textContent).not.toContain('gvisor-v1')
+  state.pool = pool([])
+  const summary = (poolResource: typeof resource) => dom(<SubstratePoolSummary namespace="agents" name="agent-pool" context="expanded" resource={poolResource} onNavigate={() => {}} />)
+  expect([...summary(resource).querySelectorAll('button')].map((b) => b.textContent)).toEqual(expect.arrayContaining(['gvisor-v1', 'gvisor-next']))
+  const unresolved = structuredClone(resource)
+  unresolved.status.sandboxClasses = []
+  expect(summary(unresolved).body.textContent).toContain('Requested: gvisor-v2 (unresolved)')
+})
+
+it('keeps unread worker dimensions unknown and names the failed read before blaming Pod permissions', () => {
+  const summary = () => dom(<SubstratePoolSummary namespace="agents" name="agent-pool" context="expanded" resource={{}} />)
+  try {
+    state.pool = undefined
+    state.poolLoading = true
+    expect(summary().body.textContent).toContain('Reading Pod counts…')
+    state.poolLoading = false
+    state.poolError = new ApiError('this read requires get on workerpools.ate.dev in namespace agents', 403, { error_code: 'denied' })
+    expect(summary().body.textContent).toContain('requires get on workerpools.ate.dev in namespace agents')
+    expect(summary().body.textContent).not.toContain('list on pods')
+    const denied = pool([])
+    denied.podRead = 'denied'
+    denied.coverage.workers = { state: 'denied', code: 'denied' }
+    denied.attention = { id: 'broken', rule: 'poolShort', severity: 'critical', title: 'Unresolved', reading: 'Unresolved', nextStep: 'Review conditions', subject: { kind: 'WorkerPool', name: 'agent-pool' }, count: 1 }
+    state.pool = denied
+    state.poolError = null
+    const doc = summary()
+    expect(doc.body.textContent).toContain('Requires list on pods in agents')
+    for (const dimension of ['Registration', 'Placement capacity']) {
+      const value = [...doc.querySelectorAll('dt')].find((e) => e.textContent === dimension)?.nextElementSibling
+      expect(value?.textContent).toContain('Unknown')
+      expect(value?.textContent).toContain('Substrate denied permission to list workers')
+      expect(value?.querySelector(`.${toneFillClass('unknown')}`)).not.toBeNull()
+    }
+  } finally {
+    state.poolError = null
+    state.poolLoading = false
+  }
+})
+
+it('shows a worker Pod handoff with no invented count and names the role or Kubernetes permission for refusal', () => {
+  const context = (framed?: boolean) => dom(<SubstrateWorkerPodContext namespace="agents" pool="agent-pool" pod="agent-pool-worker-0" resource={{}} framed={framed} />)
+  try {
+    state.workers = { apiTier: connectedTier, workers: [worker(0, { actors: [] })], coverage: { workers: { state: 'full' }, actors: { state: 'partial' } } }
+    const doc = context()
+    expect(doc.body.textContent).toContain('View assigned actors')
+    expect(doc.body.textContent).not.toContain('≥0')
+    expect(doc.querySelector('section')?.classList.contains('border-t-subtle')).toBe(true)
+    expect(context(true).querySelector('section')?.classList.contains('rounded-xl')).toBe(true)
+    state.workers = undefined
+    state.workerError = new ApiError('denied mint', 403, { error_code: 'mintDenied' })
+    expect(context().body.textContent).toContain('create on serviceaccounts/token for ate-client in ate-system')
+    state.workerError = new ApiError('denied read', 403, { error_code: 'denied' })
+    expect(context().body.textContent).toContain('viewer role')
+  } finally {
+    state.workerError = null
+    state.workers = undefined
+  }
+  for (const tab of ['logs', 'metrics'] as const) {
+    const doc = dom(<SubstrateWorkerPodScope namespace="agents" pool="agent-pool" pod="agent-pool-worker-0" tab={tab} />)
+    expect(doc.body.textContent).toContain(`These ${tab} cover the shared worker Pod`)
+    expect(doc.querySelector('button')?.textContent).toContain('View assigned actors')
+  }
+})
+
+it('filters Workers attention by the shared severity and links to pools with no registrations', async () => {
+  const { SubstrateWorkersScreen, poolWorkersText } = await import('./SubstrateWorkers')
+  try {
+    state.workers = {
+      apiTier: connectedTier,
+      workers: [worker(0, { attentionSeverity: 'warning', actors: [] }), worker(1, { attentionSeverity: 'info', state: 'draining' })],
+      coverage: { workers: { state: 'full' }, actors: { state: 'partial' } },
+    }
+    const doc = dom(<SubstrateWorkersScreen workspace={workspace()} onOpenSubject={() => {}} />, '/substrate/workers?state=attention')
+    expect(doc.body.textContent).toContain('Needs attention≥1')
+    expect(doc.querySelector('button[aria-label="Show assigned actors for agent-pool-worker-0"]')?.textContent).toBe('View assigned actors')
+    expect(doc.querySelector('button[aria-label="Show assigned actors for agent-pool-worker-1"]')).toBeNull()
+    expect(doc.body.textContent).toContain('Pools with no registered workers')
+    expect([...doc.querySelectorAll('button')].some((b) => b.textContent === 'agent-ns/microvm-pool →')).toBe(true)
+    const row = workspace().pools[0]
+    row.placement!.workers.active = 0
+    row.placement!.complete = false
+    expect(poolWorkersText(row, [])).toContain('active worker count unknown')
+  } finally {
+    state.workers = undefined
+  }
+})
+
+it('keeps the placement qualification below the value and uses a degraded provisioning tone', () => {
+  const data = pool([worker(0), worker(1, { state: 'unavailable' })], 5)
+  data.pool.kubernetes!.health = 'degraded'
+  data.pool.actors = 9
+  data.pool.placement = { workers: { total: 2, active: 1, draining: 0, unavailable: 1 }, slots: { used: 2, total: 4 }, cpuMillicores: { used: 1, total: 2 }, memoryBytes: { used: 1, total: 2 }, complete: true }
+  state.pool = data
+  const doc = dom(<SubstratePoolSummary namespace="agents" name="agent-pool" context="expanded" resource={{}} />)
+  const field = (label: string) => [...doc.querySelectorAll('dt')].find((node) => node.textContent === label)?.nextElementSibling
+  expect(field('Provisioning')?.querySelector(`.${toneFillClass('degraded')}`)).not.toBeNull()
+  const placement = field('Placement capacity')
+  expect(placement?.querySelector('button')?.parentElement?.textContent).toContain('2 of 4 used')
+  expect(placement?.querySelector('button')?.parentElement?.textContent).not.toContain('+7')
+  expect(placement?.textContent).toContain('+7 on non-active workers')
+  expect(field('Template matches')?.querySelector('button')?.textContent).toBe('All templates →')
 })

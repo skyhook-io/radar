@@ -28,6 +28,7 @@ import { PodFilesystemModal } from '../PodFilesystemModal'
 
 interface PodRendererProps {
   data: any
+  expanded?: boolean
   onCopy: CopyHandler
   copied: string | null
   onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
@@ -35,7 +36,7 @@ interface PodRendererProps {
   resolvedEnvFrom?: ResolvedEnvFrom
 }
 
-export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, resolvedEnvFrom }: PodRendererProps) {
+export function PodRenderer({ data, expanded, onCopy, copied, onNavigate, onOpenLogs, resolvedEnvFrom }: PodRendererProps) {
   const namespace = data.metadata?.namespace
   const podName = data.metadata?.name
   const substratePool = data.metadata?.labels?.[SUBSTRATE_WORKER_POOL_LABEL]
@@ -109,7 +110,7 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
   return (
     <BasePodRenderer
       data={data}
-      substrateWorkerContext={substratePool && namespace && podName ? <SubstrateWorkerPodContext namespace={namespace} pool={substratePool} pod={podName} resource={data} /> : undefined}
+      substrateWorkerContext={substratePool && namespace && podName ? <SubstrateWorkerPodContext namespace={namespace} pool={substratePool} pod={podName} resource={data} framed={expanded} /> : undefined}
       onCopy={onCopy}
       copied={copied}
       onNavigate={onNavigate}
