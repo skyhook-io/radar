@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -146,18 +148,24 @@ func TestBatchDiagnoseJobListsWhatItsTemplateUses(t *testing.T) {
 			{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "db"}}},
 		}}},
 	}}}}
-	if err := k8s.InitTestResourceCache(fake.NewClientset(
+	job.Status.Active = 1
+	job.Spec.Template.Labels = map[string]string{"app": "migrate"}
+	objects := []runtime.Object{
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "alpha"}}, job,
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "settings", Namespace: "alpha"}},
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "alpha"}},
 		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "migrator", Namespace: "alpha"}},
-	)); err != nil {
+	}
+	for i := range 21 {
+		objects = append(objects, &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("entry-%02d", i), Namespace: "alpha"}, Spec: corev1.ServiceSpec{Selector: job.Spec.Template.Labels}})
+	}
+	if err := k8s.InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { k8s.ResetTestState(); getPermCache().Invalidate() })
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
 	var resources []k8s.APIResource
-	for _, r := range []struct{ group, kind, name string }{{"batch", "Job", "jobs"}, {"", "Pod", "pods"}, {"", "ConfigMap", "configmaps"}, {"", "Secret", "secrets"}, {"", "ServiceAccount", "serviceaccounts"}} {
+	for _, r := range []struct{ group, kind, name string }{{"", "Service", "services"}, {"batch", "Job", "jobs"}, {"", "Pod", "pods"}, {"", "ConfigMap", "configmaps"}, {"", "Secret", "secrets"}, {"", "ServiceAccount", "serviceaccounts"}} {
 		resources = append(resources, k8s.APIResource{Group: r.group, Version: "v1", Kind: r.kind, Name: r.name, Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}})
 	}
 	if err := k8s.InitTestDynamicResourceCache(dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), resources); err != nil {
@@ -175,6 +183,9 @@ func TestBatchDiagnoseJobListsWhatItsTemplateUses(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(raw), &body); err != nil {
 		t.Fatal(err)
+	}
+	if got := body.ResourceContext; got == nil || len(got.ExposedBy) != 20 || !slices.Contains(got.Omitted, resourcecontext.OmittedField{Field: "exposedBy", Reason: resourcecontext.OmittedBudgetExceeded}) {
+		t.Fatalf("diagnose lost the bounded Service selection: %s", raw)
 	}
 	uses := body.ResourceContext.Uses
 	if uses == nil || len(uses.ConfigMaps) != 1 || uses.ConfigMaps[0].Name != "settings" || len(uses.Secrets) != 1 || uses.Secrets[0].Name != "db" || uses.ServiceAccount == nil || uses.ServiceAccount.Name != "migrator" {
