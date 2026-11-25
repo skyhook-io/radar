@@ -126,7 +126,7 @@ type Capabilities struct {
 	SecretsUpdate          bool                     `json:"secretsUpdate"`      // Can update secrets (inline editing)
 	HelmWrite              bool                     `json:"helmWrite"`          // Helm write ops (detected via secrets/create as sentinel RBAC check)
 	NodeWrite              bool                     `json:"nodeWrite"`          // Can patch nodes (cordon/uncordon/drain)
-	WorkloadWrites         WorkloadWritePermissions `json:"workloadWrites"`     // Can patch workload kinds (restart/scale controls)
+	WorkloadWrites         WorkloadWritePermissions `json:"workloadWrites"`     // Permissions for workload actions
 	MCPReadOnly            bool                     `json:"mcpReadOnly"`
 	MCPExecTools           bool                     `json:"mcpExecTools"`
 	MCPHelmTools           bool                     `json:"mcpHelmTools"` // Native Helm MCP tool registered; target Kubernetes permissions still required
@@ -285,8 +285,7 @@ type FeatureCapabilities struct {
 	OpenObserveLocalSetup bool `json:"openobserveLocalSetup"`
 }
 
-// WorkloadWritePermissions indicates which workload resources the user can
-// patch, plus whether they can create Workflows.
+// WorkloadWritePermissions records the permissions used by workload actions.
 type WorkloadWritePermissions struct {
 	Deployments  bool `json:"deployments"`
 	DaemonSets   bool `json:"daemonSets"`
@@ -295,6 +294,8 @@ type WorkloadWritePermissions struct {
 	Workflows    bool `json:"workflows"` // Argo Workflows: Stop and Terminate patch spec.shutdown
 	// Argo Workflows: create, to submit a WorkflowTemplate.
 	CreateWorkflows bool `json:"createWorkflows"`
+	CronJobs        bool `json:"cronJobs"`   // Suspend and Resume patch spec.suspend
+	CreateJobs      bool `json:"createJobs"` // Trigger creates a Job from the CronJob's template
 }
 
 type WorkloadWriteCapabilityErrors struct {
@@ -304,6 +305,8 @@ type WorkloadWriteCapabilityErrors struct {
 	Rollouts        bool
 	Workflows       bool
 	CreateWorkflows bool
+	CronJobs        bool
+	CreateJobs      bool
 }
 
 // workloadWriteChecks lists the workload write permissions in the order their
@@ -320,6 +323,8 @@ var workloadWriteChecks = []struct {
 	{"argoproj.io", "rollouts", "patch", func(p *WorkloadWritePermissions) *bool { return &p.Rollouts }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.Rollouts }},
 	{"argoproj.io", "workflows", "patch", func(p *WorkloadWritePermissions) *bool { return &p.Workflows }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.Workflows }},
 	{"argoproj.io", "workflows", "create", func(p *WorkloadWritePermissions) *bool { return &p.CreateWorkflows }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.CreateWorkflows }},
+	{"batch", "cronjobs", "patch", func(p *WorkloadWritePermissions) *bool { return &p.CronJobs }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.CronJobs }},
+	{"batch", "jobs", "create", func(p *WorkloadWritePermissions) *bool { return &p.CreateJobs }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.CreateJobs }},
 }
 
 // MergeWorkloadWrites folds one namespace's workload write answers into the
