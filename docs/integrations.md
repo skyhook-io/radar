@@ -1029,6 +1029,8 @@ After Kubernetes accepts the patch, Radar returns 200 with the stored `shutdown`
 
 Kubernetes checks the caller's `get` permission on the Workflow for the read and `patch` for a write. On a shared listener without authentication, anyone who can reach Radar can stop Workflows its Kubernetes identity can read and patch. The stock chart's Argo permissions are read-only. Same-origin and [connection binding](connection-lifecycle.md) checks apply.
 
+In the UI, a Workflow's detail page, and the run view of a CronWorkflow, WorkflowTemplate or ClusterWorkflowTemplate for its selected child Workflow, offer **Stop…** while the run has not finished (phase other than Succeeded, Failed or Error). The dialog explains both strategies and defaults to Stop. While a Stop is in progress, the button becomes **Terminate…**, and once a Terminate is stored, it disappears. Until the run finishes, the page header (or the selected run's header in a run view) shows **Stopping** or **Terminating**, because `spec.shutdown` records the request and the phase stays Running until Argo acts. An unconfirmed dialog closes when the run finishes, is terminated, starts deleting, or restarts under the same UID (`argo retry`, recognised by a new `status.startedAt`). The button appears only when the connected Radar advertises `workflowStop` and `capabilities.workloadWrites.workflows` (a `patch argoproj.io/workflows` access check in the Workflow's namespace) is true. On an older Radar, it renders disabled with an upgrade note. The UI sends the Workflow's UID and never its `resourceVersion`, because Argo's status updates change the version continually. Pinning the version would refuse almost every Stop on a running Workflow.
+
 ---
 
 ## Istio

@@ -14,6 +14,7 @@ import {
   podStatusClass,
   podStatusLabel,
   workloadPodDetail,
+  WorkflowShutdownBadge,
 } from '@skyhook-io/k8s-ui'
 import { buildWorkflowExecutionModel, flattenWorkflowExecution, type WorkflowExecutionActivity, type WorkflowExecutionModel, type WorkflowExecutionNode, type WorkflowExecutionRow, type WorkflowTemplateReference } from '@skyhook-io/k8s-ui/utils/workflow-execution'
 import { midTruncate } from '@skyhook-io/k8s-ui/utils/format'
@@ -27,6 +28,7 @@ import { getScaledJobStatus } from '../resources/resource-utils-keda'
 import { Tooltip } from '../ui/Tooltip'
 import { ImageFilesystemModal } from '../resources/ImageFilesystemModal'
 import { useIsAuthEnabled } from '../../contexts/CapabilitiesContext'
+import { WorkflowRunStopAction } from './WorkflowRunStopAction'
 import { executionDefinitionDiffers, executionDefinitionSummary, type ExecutionDefinitionSummary, type ExecutionUnitSummary } from './execution-definition'
 import { batchRunHasContainerOutcome, batchRunNextStep, isFailedRunPhase, type BatchRunNextStep } from './batch-run-actions'
 import { JobSetAdmission } from './JobSetAdmission'
@@ -254,6 +256,17 @@ function BatchExecutionContent({ leadContent, kind, apiKind, namespace, name, re
     { enabled: Boolean(fetchTarget), refetchInterval: selectedRun?.active ? 5000 : false },
   )
   const selectedResource = scheduled ? selectedResourceQuery.data : resource
+  // A scheduled parent's selected run is a child Workflow with no action bar
+  // of its own here; a standalone Workflow already has Stop in its bar.
+  // An older Radar's run rows carry no group; the Workflow object's own
+  // apiVersion still decides, in WorkflowStopAction.
+  const selectedRunStoppable = scheduled && selectedRun?.kind === 'workflows' && (!selectedRun.group || selectedRun.group === 'argoproj.io')
+  // Only the selected run's own, currently readable object: never the previous
+  // selection's, nor a last copy kept after a failed refetch.
+  const selectedWorkflow = selectedRunStoppable && !selectedResourceQuery.error &&
+    selectedResource?.metadata?.name === selectedRun.name && selectedResource?.metadata?.namespace === selectedRun.namespace
+    ? selectedResource
+    : undefined
   const workflowExecution = useMemo(
     () => selectedResource && selectedRun?.kind === 'workflows' ? buildWorkflowExecutionModel(selectedResource) : null,
     [selectedResource, selectedRun?.kind],
@@ -418,7 +431,14 @@ function BatchExecutionContent({ leadContent, kind, apiKind, namespace, name, re
                         {selectedResourceQuery.isFetching && <span>refreshing</span>}
                       </div>
                     </div>
-                    <span className={clsx('badge', selectedRunHeldByKueue ? 'status-neutral' : phaseBadgeClass(selectedRun.phase))}>{selectedRunHeldByKueue ? `Held by Kueue until admitted${selectedRun.deleting ? ' · deleting' : ''}` : runStateLabel(selectedRun)}</span>
+                    <div className="flex shrink-0 items-center gap-2">
+                      {/* Stays mounted across selections so a request in flight keeps its dialog. */}
+                      {selectedRunStoppable && (
+                        <WorkflowRunStopAction workflow={selectedWorkflow} namespace={selectedRun.namespace} name={selectedRun.name} />
+                      )}
+                      {selectedWorkflow && <WorkflowShutdownBadge data={selectedWorkflow} />}
+                      <span className={clsx('badge', selectedRunHeldByKueue ? 'status-neutral' : phaseBadgeClass(selectedRun.phase))}>{selectedRunHeldByKueue ? `Held by Kueue until admitted${selectedRun.deleting ? ' · deleting' : ''}` : runStateLabel(selectedRun)}</span>
+                    </div>
                   </div>
                   {memberCollection && <div className="flex flex-wrap items-center gap-3 border-b border-theme-border px-4 py-2 text-xs">
                     {!runs.some(run => workloadRunKey(run) === selectedRunKey) && <span className="text-theme-text-secondary">Selected Job is outside the current filter or shown window.</span>}

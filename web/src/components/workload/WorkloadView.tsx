@@ -123,6 +123,7 @@ import { LogsViewer } from '../logs/LogsViewer'
 import { MultiPodLogsTab } from '../logs/MultiPodLogsTab'
 import { RayClusterLogsTab } from '../logs/RayClusterLogsTab'
 import { isKubeRayCluster } from '../logs/rayClusterPods'
+import { useWorkflowStopAction } from '../../hooks/useWorkflowStopAction'
 import { BatchExecutionFullscreen } from '../execution/BatchExecutionView'
 import { workloadRunTimelineEvents } from '../execution/batch-timeline'
 import {
@@ -366,6 +367,7 @@ function useActionsBarProps(
   const triggerCronJobMutation = useTriggerCronJob()
   const suspendCronJobMutation = useSuspendCronJob()
   const resumeCronJobMutation = useResumeCronJob()
+  const workflowStop = useWorkflowStopAction(kind, group, namespace)
 
   const isRolloutShape = isRolloutKind(kind)
   const isRollout = isRolloutShape && group === 'argoproj.io'
@@ -525,6 +527,7 @@ function useActionsBarProps(
       resumeCronJobMutation.mutate(params),
     isResumingCronJob: resumeCronJobMutation.isPending,
     gitOpsActionDisabledReasons,
+    ...workflowStop,
     onFluxReconcile: (params: Parameters<typeof fluxReconcileMutation.mutate>[0]) =>
       fluxReconcileMutation.mutate(params),
     isFluxReconciling: fluxReconcileMutation.isPending,

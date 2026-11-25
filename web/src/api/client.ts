@@ -5587,6 +5587,107 @@ export function useResumeCronJob() {
 }
 
 // ============================================================================
+// Argo Workflow stop
+// ============================================================================
+
+export type WorkflowStopStrategy = "Stop" | "Terminate";
+
+/** What POST /workflows/{ns}/{name}/stop settled to, as the UI reports it. */
+export type WorkflowStopOutcome =
+  | { state: "requested"; shutdown: string }
+  | { state: "already"; shutdown: string }
+  | { state: "notStored"; shutdown: string }
+  | { state: "finished" };
+
+// A stored Terminate satisfies either strategy. Anything else that doesn't
+// match the request means admission rewrote or dropped it, whatever `changed`
+// says: `changed` compares with the value before the patch, not the request.
+export function workflowStopOutcome(requested: WorkflowStopStrategy, response: { shutdown: string; changed: boolean }): WorkflowStopOutcome {
+  const { shutdown, changed } = response;
+  if (shutdown !== requested && shutdown !== "Terminate") return { state: "notStored", shutdown };
+  // A Stop that admission stored as Terminate interrupts exit handlers the user meant to run.
+  if (changed && shutdown !== requested) return { state: "notStored", shutdown };
+  return changed ? { state: "requested", shutdown } : { state: "already", shutdown };
+}
+
+export function workflowStopErrorMessage(body: { error?: string; error_code?: string }, status: number): string {
+  if (body.error_code === "workflow_replaced") {
+    return "A different Workflow now has this name, so nothing was stopped. Open it again to review the current run.";
+  }
+  return body.error || `HTTP ${status}`;
+}
+
+/** The request named a run that no longer exists under this name. */
+export function isWorkflowStopTargetGone(error: unknown): boolean {
+  return error instanceof ApiError && (error.status === 404 || error.data?.error_code === "workflow_replaced");
+}
+
+export function reportWorkflowStopOutcome(outcome: WorkflowStopOutcome): void {
+  if (outcome.state === "finished") {
+    showApiNotice("Workflow already finished", "Nothing was stopped.", "info");
+  } else if (outcome.state === "already") {
+    showApiNotice(outcome.shutdown === "Terminate" ? "Workflow is already terminating" : "Workflow is already stopping", undefined, "info");
+  } else if (outcome.state === "notStored") {
+    showApiNotice(
+      "Stop not stored",
+      outcome.shutdown
+        ? `Kubernetes accepted the change but stored shutdown "${outcome.shutdown}". An admission policy may have changed it.`
+        : "Kubernetes accepted the change but stored no shutdown, so the Workflow keeps running. An admission policy may have removed it.",
+      "warning",
+    );
+  } else if (outcome.shutdown === "Stop") {
+    showApiSuccess("Stop requested", "Argo ends the running steps, then runs the exit handlers.");
+  } else {
+    showApiSuccess("Terminate requested", "Argo ends the running steps, including any exit handler, and starts no more.");
+  }
+}
+
+// The request names the reviewed run by UID only. A running Workflow's
+// resourceVersion moves with every controller status update, so pinning it
+// would refuse nearly every stop; the server still refuses a replaced run.
+export function useStopWorkflow() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      namespace,
+      name,
+      uid,
+      strategy,
+    }: {
+      namespace: string;
+      name: string;
+      uid: string;
+      strategy: WorkflowStopStrategy;
+    }): Promise<WorkflowStopOutcome> => {
+      const response = await apiFetch(
+        `${getApiBase()}/workflows/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/stop`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ uid, strategy }),
+        },
+      );
+      if (!response.ok) {
+        const body = await readErrorBody(response);
+        // The run ended before the request reached it: what the user wanted holds.
+        if (response.status === 409 && body.error_code === "workflow_finished") return { state: "finished" };
+        throw new ApiError(workflowStopErrorMessage(body, response.status), response.status, body);
+      }
+      return workflowStopOutcome(strategy, await response.json());
+    },
+    meta: { errorMessage: "Failed to stop Workflow" },
+    onSuccess: reportWorkflowStopOutcome,
+    onSettled: (_data, _error, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["resource", "workflows", variables.namespace, variables.name] });
+      queryClient.invalidateQueries({ queryKey: ["resources", "workflows"] });
+      queryClient.invalidateQueries({ queryKey: ["workload-runs"] });
+      queryClient.invalidateQueries({ queryKey: ["topology"] });
+    },
+  });
+}
+
+// ============================================================================
 // Workload operations
 // ============================================================================
 

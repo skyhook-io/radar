@@ -35,6 +35,7 @@ import { radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
 import { SetImageDialog, type SetImageOwnership } from './SetImageDialog'
 import { DrainPlanDialog, DEFAULT_DRAIN_DIALOG_OPTIONS, type DrainDialogOptions, type DrainPlan } from './DrainPlanDialog'
 import { ActionConfirmDialog } from './ActionConfirmDialog'
+import { WorkflowStopAction, type WorkflowStopStrategy } from './WorkflowStopDialog'
 import { Input } from '../ui/Input'
 import { jobNameError, manualJobIndexRoom, suggestManualJobName } from '../../utils/job-name'
 import type { WorkloadImageInventory, WorkloadImageUpdate } from '../../types/core'
@@ -146,6 +147,16 @@ interface ResourceActionsBarProps {
   onResumeCronJob?: (params: { namespace: string; name: string }) => void
   isResumingCronJob?: boolean
 
+  // Argo Workflow Stop / Terminate. A host passes the callback only when the
+  // Radar serves the stop endpoint and the caller may patch Workflows, and
+  // reports the outcome. The dialog closes when the promise resolves and stays
+  // open with its choice when it rejects.
+  onStopWorkflow?: (params: { namespace: string; name: string; uid: string; strategy: WorkflowStopStrategy }) => void | Promise<unknown>
+  isStoppingWorkflow?: boolean
+  // Set when the connected Radar predates the stop endpoint: Stop renders
+  // disabled with the upgrade note instead.
+  workflowStopUpgrade?: RadarUpgradeRequirement | null
+
   // Flux actions
   onFluxReconcile?: (params: { kind: string; namespace: string; name: string }) => void
   isFluxReconciling?: boolean
@@ -220,6 +231,7 @@ export function ResourceActionsBar({
   onSuspendCronJob, isSuspendingCronJob,
   onResumeCronJob, isResumingCronJob,
   gitOpsActionDisabledReasons,
+  onStopWorkflow, isStoppingWorkflow, workflowStopUpgrade,
   onFluxReconcile, isFluxReconciling,
   onFluxSyncWithSource, isFluxSyncing,
   onFluxSuspend, isFluxSuspending,
@@ -674,6 +686,17 @@ export function ResourceActionsBar({
           <FileText className="w-3.5 h-3.5" />
           Logs
         </button>
+      )}
+
+      {kind === 'workflows' && (
+        <WorkflowStopAction
+          data={data}
+          namespace={resource.namespace}
+          name={resource.name}
+          onStopWorkflow={onStopWorkflow}
+          isStoppingWorkflow={isStoppingWorkflow}
+          workflowStopUpgrade={workflowStopUpgrade}
+        />
       )}
 
       {kind === 'workflows' && onCopyCommand && (!canViewLogs || !openWorkloadLogs) && (

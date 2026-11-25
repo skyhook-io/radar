@@ -59,6 +59,8 @@ export interface WorkloadWritePermissions {
   daemonSets: boolean
   statefulSets: boolean
   rollouts: boolean
+  /** Absent from a Radar older than Workflow Stop; treat absence as not allowed. */
+  workflows?: boolean
 }
 
 export type WorkloadContainerType = 'container' | 'initContainer'
