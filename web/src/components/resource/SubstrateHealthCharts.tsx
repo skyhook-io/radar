@@ -1,6 +1,6 @@
 import { Info, LineChart, Loader2, Lock, Wifi } from 'lucide-react'
 import { clsx } from 'clsx'
-import { AlertBanner, RadarUpgradeNote, Section, Tooltip, toneTextClass } from '@skyhook-io/k8s-ui'
+import { AlertBanner, RadarUpgradeNote, Section, Tooltip, WorkspaceCard, toneTextClass } from '@skyhook-io/k8s-ui'
 import { AreaChart, SeriesLegend, formatMetricValue, formatTimestamp, type TimeSeries, type TimeSeriesPoint } from '@skyhook-io/k8s-ui/components/charts'
 import { isForbiddenError, useAutoPromConnect, usePrometheusConnect, usePrometheusStatus } from '../../api/client'
 import { SUBSTRATE_RANGE, useSubstrateHealth, type SubstrateChart, type SubstrateHealth, type SubstrateTarget } from '../../api/substrateHealth'
@@ -27,17 +27,17 @@ export function SubstrateHealthCharts({ target, standalone = false, collapsible 
   workerPods?: number
 }) {
   useAutoPromConnect()
-  const { data: status } = usePrometheusStatus()
+  const { data: status, error: statusError } = usePrometheusStatus()
   const connect = usePrometheusConnect()
   const connected = status?.connected === true
   const { data, error, upgrade, blockedReason, support } = useSubstrateHealth(target, connected && Boolean(target.name))
 
   if (!connected) {
-    if (!standalone || !status) return null
+    if (!standalone) return null
     return (
       <Frame collapsible={collapsible}>
-        <Muted>{status.discovering ? 'Discovering Prometheus…' : status.error || 'Connect Prometheus to chart this pool\'s workers, resumes and crashes.'}</Muted>
-        {!status.discovering && (
+        <Muted>{statusError ? `Couldn’t read Prometheus connection status: ${statusError.message}` : !status ? 'Checking Prometheus connection…' : status.discovering ? 'Discovering Prometheus…' : status.error || 'Connect Prometheus to chart this pool\'s workers, resumes and crashes.'}</Muted>
+        {status && !status.discovering && (
           <button type="button" onClick={() => connect.mutate()} disabled={connect.isPending} className="btn-brand mt-3 inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium">
             {connect.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wifi className="h-3.5 w-3.5" />}
             Discover Prometheus
@@ -61,7 +61,7 @@ export function SubstrateHealthCharts({ target, standalone = false, collapsible 
           icon={Lock}
           title="You don't have access to these metrics"
           message={target.kind === 'workerpool'
-            ? 'Agent Substrate charts are available to users who can read this WorkerPool.'
+            ? `Requires get on workerpools.ate.dev in namespace ${target.namespace}.`
             : 'Agent Substrate charts for a node are available to users who can read Nodes.'}
         />
       </Frame>
@@ -70,11 +70,11 @@ export function SubstrateHealthCharts({ target, standalone = false, collapsible 
   if (error) {
     return <Frame collapsible={collapsible}><Muted tone="warning">Agent Substrate metrics could not be read: {error.message}</Muted></Frame>
   }
-  if (!data) return null
+  if (!data) return standalone ? <Frame collapsible={collapsible}><Muted>Reading Agent Substrate metrics…</Muted></Frame> : null
 
   switch (data.status) {
     case 'notOnNode':
-      return null
+      return standalone ? <Frame collapsible={collapsible}><Muted>No Agent Substrate series were found.</Muted></Frame> : null
     case 'notFound':
       if (target.kind !== 'workerpool') return null
       return <Frame collapsible={collapsible}><Muted>{workerPods === 0 ? NO_WORKERS : NOT_FOUND.workerpool}</Muted></Frame>
@@ -95,13 +95,7 @@ function Frame({ children, collapsible }: { children: React.ReactNode; collapsib
       {collapsible ? (
         <Section title={title} icon={LineChart}>{children}</Section>
       ) : (
-        <>
-          <h3 className="mb-2 flex items-center gap-2 text-sm font-medium text-theme-text-secondary">
-            <LineChart className="h-4 w-4" />
-            {title}
-          </h3>
-          {children}
-        </>
+        <WorkspaceCard title={title}>{children}</WorkspaceCard>
       )}
     </section>
   )

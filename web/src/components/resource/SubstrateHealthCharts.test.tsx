@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { SubstrateHealth } from '../../api/substrateHealth'
 
 let health: { data?: SubstrateHealth; error?: unknown; upgrade?: unknown; blockedReason?: string; support?: string } = {}
-let promStatus: { connected: boolean; discovering?: boolean; error?: string } = { connected: true }
+let promStatus: { connected: boolean; discovering?: boolean; error?: string } | undefined = { connected: true }
 
 vi.mock('../../api/client', async (orig) => ({
   ...(await orig<typeof import('../../api/client')>()),
@@ -43,6 +43,17 @@ describe('SubstrateHealthCharts', () => {
     expect(render(pool)).toBe('')
     expect(renderToStaticMarkup(<SubstrateHealthCharts target={pool} standalone />)).toContain('Discover Prometheus')
     promStatus = { connected: true }
+  })
+
+  it('has a standalone state before connection and series data arrive', () => {
+    const standalone = () => renderToStaticMarkup(<SubstrateHealthCharts target={pool} standalone collapsible={false} />)
+    promStatus = undefined
+    health = {}
+    expect(standalone()).toContain('Checking Prometheus connection…')
+    promStatus = { connected: true }
+    health = { support: 'supported' }
+    expect(standalone()).toContain('Reading Agent Substrate metrics…')
+    expect(render(node)).toBe('')
   })
 
   it('says why there are no charts when Radar support could not be checked', () => {
@@ -85,6 +96,7 @@ describe('SubstrateHealthCharts', () => {
   it('shows a denial instead of an empty chart', () => {
     health = { error: new ApiError('forbidden', 403) }
     expect(render(pool)).toContain('You don&#x27;t have access to these metrics')
+    expect(render(pool)).toContain('Requires get on workerpools.ate.dev in namespace agents.')
   })
 
   it('keeps unrounded values readable and explains charts it cannot draw', () => {
