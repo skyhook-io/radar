@@ -125,13 +125,15 @@ export interface WorkloadExtraTab {
   id: string
   label: string
   icon?: ReactNode
-  /** Place after this built-in tab before applying tabOrder. Appends if the anchor is absent. */
+  /** Place after this built-in tab before applying tabOrder. Tabs after the same anchor
+   * appear in reverse registration order. Append if the anchor is absent. */
   after?: WorkloadTabType
-  /** Use this tab for links to the built-in ID. */
+  /** Hide this built-in tab and take its place when after is omitted.
+   * Links and Overview shortcuts to the built-in tab open this tab. */
   replaces?: WorkloadTabType
   /** Trailing adornment after the label, e.g. a status mark. */
   badge?: ReactNode
-  /** Keep this tab available when the workload read returns 404. */
+  /** Keep this tab available when the workload read returns 404 (deleted or never existed). */
   availableWhenDeleted?: boolean
   /** Render the content when this tab is selected. */
   render: () => ReactNode
