@@ -9,7 +9,7 @@ import type { ReadGap, ReadGapSet } from '@skyhook-io/k8s-ui/types/read-coverage
 import type { ClusterScope } from '@skyhook-io/k8s-ui/types/cluster-scope'
 import type { WorkloadHistoryCoverage } from '@skyhook-io/k8s-ui/utils/workload-history-notes'
 import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
-import { useEffect, useRef, useCallback, useMemo } from 'react'
+import { useEffect, useRef, useCallback, useMemo, useState } from 'react'
 import { argoSyncOptionsForRequest } from '@skyhook-io/k8s-ui'
 import { useClusterConnected } from '../context/clusterConnected'
 import type { KueueAdmissionResponse, KueuePositionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
@@ -41,6 +41,7 @@ import { focusManager, useInfiniteQuery, useQuery, useMutation, useQueryClient, 
 import { showApiError, showApiSuccess, showApiNotice } from '../components/ui/Toast'
 import { useIsAuthEnabled, useNamespacedCapabilities } from '../contexts/CapabilitiesContext'
 import { applyTabPick, cleanPick, ownsTabPick, pruneTabPick, withActives, writeTabPick } from '../utils/namespacePick'
+import { parseContextName } from '../utils/context-name'
 import type {
   Topology,
   ClusterInfo,
@@ -82,9 +83,10 @@ import type {
 } from '../types'
 import type { GitOpsOperationResponse } from '../types/gitops'
 import { apiUrl, automaticRequestHeaders, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
-import { CONNECTION_HEADER, connectionHeaderValue } from './connectionBinding'
-import { httpStatusMessage, markShownInline, readErrorBody, readErrorResponse } from './httpErrors'
+import { CONNECTION_HEADER, connectionHeaderValue, useCurrentConnectionId } from './connectionBinding'
+import { GitOpsActionError, httpStatusMessage, markShownInline, readErrorBody, readErrorResponse } from './httpErrors'
 import {
+  isRadarFeatureUnsupported,
   RadarFeatureUnsupportedError,
   guardRadarFeature,
   radarControlBlocked,
@@ -95,6 +97,7 @@ import {
   type RadarFeature,
 } from './radarFeatures'
 import { useRadarUpgradeHost } from '../context/RadarUpgradeHost'
+import { isGitOpsActionTarget, gitOpsActionPermissions, gitOpsDisabledReasons, type GitOpsActionCapabilities } from './gitOpsPermissions'
 import { apiVersionToGroup } from '../utils/navigation'
 import { isBadgeWorthy } from '../utils/auditBadges'
 import type { DeploymentMode } from '../types'
@@ -1939,6 +1942,11 @@ export function useClusterInfo() {
     },
   });
   return query;
+}
+
+function cachedContextName(queryClient: QueryClient): string | undefined {
+  return queryClient.getQueryData<ClusterInfo>(["cluster-info"])?.context
+    ?? queryClient.getQueryData<{ context: string }>(["connection-status"])?.context;
 }
 
 // Version check
@@ -6224,8 +6232,7 @@ export function useDrainNode(nodeUID = "") {
       return response.json();
     },
     onMutate: ({ name }) => {
-      const contextName = queryClient.getQueryData<ClusterInfo>(["cluster-info"])?.context
-        ?? queryClient.getQueryData<{ context: string }>(["connection-status"])?.context;
+      const contextName = cachedContextName(queryClient);
       const activity: NodeDrainActivity = {
         status: "pending",
         requestId: ++nextNodeDrainRequestId,
@@ -7341,6 +7348,81 @@ export function useArtifactHubChart(
 // GitOps Mutation Factory
 // ============================================================================
 
+type GitOpsConnection = { apiBase: string; connectionId?: string };
+type GitOpsTargetVars = ArgoAppVars & { kind?: string; expectedConnection?: GitOpsConnection };
+
+function gitOpsRequestTarget(queryClient: QueryClient, { namespace, name, kind }: GitOpsTargetVars): string {
+  const clusterId = /^\/c\/([^/]+)$/.exec(getBasename())?.[1];
+  const context = cachedContextName(queryClient);
+  const cluster = clusterId ?? (context && context !== "in-cluster" ? parseContextName(context).clusterName : undefined);
+  const resource = `${kind ? pluralToKind(kind) : "Application"} ${namespace}/${name}`;
+  return cluster ? `${resource} on ${cluster}` : resource;
+}
+
+const GITOPS_PERMISSION_MAX_AGE = 120_000;
+
+type CachedGitOpsActionCapabilities = GitOpsActionCapabilities & {
+  confirmedAt: Record<string, number>;
+};
+
+export function useGitOpsActionCapabilities(kind: string, group: string | undefined, namespace: string, name: string, enabled = true) {
+  const active = isGitOpsActionTarget(kind, group);
+  const queryClient = useQueryClient();
+  const { support, guard, gatedKey } = useRadarFeature("gitopsActionCapabilities");
+  const apiBase = getApiBase();
+  const connection = useCurrentConnectionId(apiBase);
+  const queryKey = ["gitops-action-capabilities", apiBase, connection, kind, group, namespace, name, ...gatedKey];
+  const [, setExpiryTime] = useState(0);
+  const query = useQuery<CachedGitOpsActionCapabilities>({
+    queryKey,
+    queryFn: ({ signal }) => guard(async () => {
+      const next = await fetchJSON<GitOpsActionCapabilities>(`/gitops/capabilities/${encodeURIComponent(kind)}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`, signal);
+      const previous = queryClient.getQueryData<CachedGitOpsActionCapabilities>(queryKey);
+      const now = Date.now();
+      const confirmedAt: Record<string, number> = {};
+      for (const [action, capability] of Object.entries(next.actions)) {
+        if (capability.allowed !== undefined || capability.unsupported) {
+          confirmedAt[action] = now;
+        } else if (!capability.unsupported && previous?.confirmedAt[action] !== undefined && now - previous.confirmedAt[action] < GITOPS_PERMISSION_MAX_AGE) {
+          next.actions[action] = previous.actions[action];
+          confirmedAt[action] = previous.confirmedAt[action];
+        }
+      }
+      return { ...next, confirmedAt };
+    }),
+    enabled: enabled && active && Boolean(namespace && name) && support !== 'unsupported',
+    staleTime: 15_000,
+    refetchInterval: query => enabled && active && !isRadarFeatureUnsupported(query.state.error, 'gitopsActionCapabilities') ? 30_000 : false,
+  });
+  const now = Date.now();
+  const expiries = Object.values(query.data?.confirmedAt ?? {}).map(time => time + GITOPS_PERMISSION_MAX_AGE).filter(time => time > now);
+  const nextExpiry = expiries.length ? Math.min(...expiries) : undefined;
+  useEffect(() => {
+    if (nextExpiry === undefined) return;
+    const timer = setTimeout(() => setExpiryTime(Date.now()), Math.max(0, nextExpiry - Date.now()));
+    return () => clearTimeout(timer);
+  }, [nextExpiry]);
+  const data: GitOpsActionCapabilities | undefined = query.data && {
+    actions: Object.fromEntries(Object.entries(query.data.actions).map(([action, capability]) => [action,
+      (capability.allowed !== undefined || capability.unsupported) && now - query.data!.confirmedAt[action] >= GITOPS_PERMISSION_MAX_AGE
+        ? { reason: "Couldn't check your permissions — retrying" }
+        : capability,
+    ])),
+  };
+  const featureUnsupported = isRadarFeatureUnsupported(query.error, 'gitopsActionCapabilities');
+  const permissions = active ? gitOpsActionPermissions(support, data, featureUnsupported) : undefined;
+  const permissionCheckUnavailable = active && support !== 'unsupported' && !featureUnsupported && (
+    (!data && query.isError) || Object.values(permissions ?? {}).some(capability => capability.allowed === undefined && !capability.unsupported && !!capability.reason)
+  );
+  return {
+    ...query,
+    data,
+    permissions,
+    permissionCheckUnavailable,
+    disabledReasons: active ? gitOpsDisabledReasons(support, data, featureUnsupported) : {},
+  };
+}
+
 interface GitOpsMutationConfig<TVariables, TContext = undefined> {
   getPath: (variables: TVariables) => string;
   // Called by the hook on every render (so it may call hooks); its value is
@@ -7348,6 +7430,7 @@ interface GitOpsMutationConfig<TVariables, TContext = undefined> {
   useRequestContext?: () => TContext;
   getBody?: (variables: TVariables, context: TContext) => unknown;
   errorMessage: string;
+  isErrorShownInline?: (variables: TVariables) => boolean;
   successMessage?: string;
   getSuccessMessage?: (data: GitOpsOperationResponse, variables: TVariables) => string;
   getInvalidateKeys: (variables: TVariables) => (string | undefined)[][];
@@ -7357,36 +7440,46 @@ interface GitOpsMutationConfig<TVariables, TContext = undefined> {
  * Factory function for creating GitOps mutation hooks with consistent patterns.
  * Handles fetch, error handling, meta messages, and query invalidation.
  */
-function createGitOpsMutation<TVariables, TContext = undefined>(
+function createGitOpsMutation<TVariables extends GitOpsTargetVars, TContext = undefined>(
   config: GitOpsMutationConfig<TVariables, TContext>,
 ) {
-  return function useGitOpsMutation() {
+  return function useGitOpsMutation(options?: { reportErrors?: boolean }) {
     const queryClient = useQueryClient();
     const requestContext = config.useRequestContext?.() as TContext;
-    return useMutation<GitOpsOperationResponse, Error, TVariables>({
+    return useMutation<GitOpsOperationResponse, GitOpsActionError, TVariables>({
       mutationFn: async (
         variables: TVariables,
       ): Promise<GitOpsOperationResponse> => {
-        const response = await apiFetch(
-          `${getApiBase()}${config.getPath(variables)}`,
-          {
-            method: "POST",
-            headers: config.getBody
-              ? { "Content-Type": "application/json" }
-              : undefined,
-            body: config.getBody
-              ? JSON.stringify(config.getBody(variables, requestContext))
-              : undefined,
-          },
-        );
-        if (!response.ok) {
-          const error = await readErrorBody(response);
-          throw new Error(error.error || `HTTP ${response.status}`);
+        const target = gitOpsRequestTarget(queryClient, variables);
+        try {
+          const expected = variables.expectedConnection;
+          if (expected && (getApiBase() !== expected.apiBase || connectionHeaderValue(expected.apiBase) !== expected.connectionId)) {
+            throw new Error("The cluster connection changed before syncing. Return to the original cluster to retry.");
+          }
+          const response = await apiFetch(
+            apiUrl(config.getPath(variables)),
+            {
+              method: "POST",
+              headers: config.getBody
+                ? { "Content-Type": "application/json" }
+                : undefined,
+              body: config.getBody
+                ? JSON.stringify(config.getBody(variables, requestContext))
+                : undefined,
+            },
+          );
+          if (!response.ok) {
+            const error = await readErrorBody(response);
+            throw new GitOpsActionError(error, response.status, target);
+          }
+          return await response.json() as GitOpsOperationResponse;
+        } catch (error) {
+          if (error instanceof Error && config.isErrorShownInline?.(variables)) markShownInline(error);
+          throw error;
         }
-        return response.json() as Promise<GitOpsOperationResponse>;
       },
       meta: {
-        errorMessage: config.errorMessage,
+        errorMessage: options?.reportErrors === false ? undefined : config.errorMessage,
         successMessage: config.successMessage,
       },
       onSuccess: (data, variables) => {
@@ -7409,6 +7502,8 @@ type ArgoAppVars = { namespace: string; name: string };
 // useArgoSync sends these — splitting the type prevents callers from passing
 // resources/revision/prune to mutations that would silently drop them.
 export type ArgoSyncVars = ArgoAppVars & {
+  expectedConnection?: GitOpsConnection;
+  isErrorShownInline?: () => boolean;
   resources?: Array<{
     group?: string;
     kind: string;
@@ -7569,6 +7664,7 @@ export const useArgoSync = createGitOpsMutation<ArgoSyncVars, boolean>({
   useRequestContext: useArgoSyncInheritance,
   getBody: argoSyncRequestBody,
   errorMessage: "Failed to trigger sync",
+  isErrorShownInline: (variables) => variables.isErrorShownInline?.() ?? false,
   getSuccessMessage: (_data, v) => (v.dryRun ? "Dry run started" : "Sync initiated"),
   getInvalidateKeys: argoInvalidateKeys,
 });
@@ -7576,10 +7672,10 @@ export const useArgoSync = createGitOpsMutation<ArgoSyncVars, boolean>({
 export function useArgoResourceValidation() {
   const queryClient = useQueryClient();
   const serverInheritsOptions = useArgoSyncInheritance();
-  return useMutation<ArgoResourceValidationResult, Error, ArgoSyncVars>({
+  return useMutation<ArgoResourceValidationResult, GitOpsActionError, ArgoSyncVars>({
     mutationFn: async (variables) => {
       const response = await apiFetch(
-        `${getApiBase()}/argo/applications/${variables.namespace}/${variables.name}/validate-resource`,
+        apiUrl(`/argo/applications/${variables.namespace}/${variables.name}/validate-resource`),
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -7596,7 +7692,7 @@ export function useArgoResourceValidation() {
       );
       if (!response.ok) {
         const error = await readErrorBody(response);
-        throw new Error(error.error || `HTTP ${response.status}`);
+        throw new GitOpsActionError(error, response.status);
       }
       return response.json() as Promise<ArgoResourceValidationResult>;
     },
@@ -7637,48 +7733,12 @@ export const useArgoResume = createGitOpsMutation<ArgoAppVars>({
   getInvalidateKeys: argoInvalidateKeys,
 });
 
-// useArgoRefresh has a unique parameter (hard), so it's defined separately
-export function useArgoRefresh() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: async ({
-      namespace,
-      name,
-      hard = false,
-    }: {
-      namespace: string;
-      name: string;
-      hard?: boolean;
-    }) => {
-      const params = hard ? "?type=hard" : "";
-      const response = await apiFetch(
-        `${getApiBase()}/argo/applications/${namespace}/${name}/refresh${params}`,
-        {
-          method: "POST",
-        },
-      );
-      if (!response.ok) {
-        const error = await readErrorBody(response);
-        throw new Error(error.error || `HTTP ${response.status}`);
-      }
-      return response.json();
-    },
-    meta: {
-      errorMessage: "Failed to refresh application",
-      successMessage: "Application refreshed",
-    },
-    onSuccess: (_, variables) => {
-      // Match the standard Argo invalidation set so the GitOps detail page
-      // (insights strip, resource tree) refetches after Refresh / Hard
-      // Refresh — without these two extra keys the user clicks Refresh and
-      // sees stale insight/tree data until the next staleTime tick.
-      argoInvalidateKeys(variables).forEach((key) =>
-        queryClient.invalidateQueries({ queryKey: key }),
-      );
-    },
-  });
-}
+export const useArgoRefresh = createGitOpsMutation<ArgoAppVars & { hard?: boolean }>({
+  getPath: ({ namespace, name, hard }) => `/argo/applications/${namespace}/${name}/refresh${hard ? "?type=hard" : ""}`,
+  errorMessage: "Failed to refresh application",
+  successMessage: "Application refreshed",
+  getInvalidateKeys: argoInvalidateKeys,
+});
 
 // ============================================================================
 // Context Switching API hooks

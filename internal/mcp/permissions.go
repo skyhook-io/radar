@@ -4,12 +4,14 @@ import (
 	"context"
 	"log"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 
 	"github.com/skyhook-io/radar/internal/issuecorrelation"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -128,10 +130,9 @@ var (
 
 func getPermCache() *pkgauth.PermissionCache {
 	mcpPermCacheOnce.Do(func() {
-		// Stamp entries with the current K8s context — a request mid-context-
-		// switch can't be authorized by the previous cluster's RBAC even if
-		// the OnContextSwitch invalidation hasn't fired yet.
-		mcpPermCache = pkgauth.NewPermissionCache().WithContextName(k8s.GetContextName)
+		mcpPermCache = pkgauth.NewPermissionCache().WithConnectionKey(func() string {
+			return strconv.FormatUint(k8s.Current().ClientGeneration(), 10)
+		})
 		// New cluster ⇒ stale RBAC: drop everything we cached for the old one.
 		k8s.OnContextSwitch(func(_ string) {
 			mcpPermCache.Invalidate()
@@ -162,30 +163,39 @@ func resolveUserPermsDecision(ctx context.Context) (*pkgauth.User, *pkgauth.User
 		return user, perms, true
 	}
 
-	client := k8s.BoundOrCurrent(ctx).Client()
+	conn := k8s.BoundOrCurrent(ctx)
+	client, generation := conn.Client(), conn.ClientGeneration()
 	if client == nil {
 		log.Printf("[mcp] K8s client unavailable for namespace discovery (user=%s) — denying access", user.Username)
 		// Empty (not nil) AllowedNamespaces means "no access"; nil would mean cluster-admin.
 		return user, &pkgauth.UserPermissions{AllowedNamespaces: []string{}}, false
 	}
+	perms, ok := cache.Resolve(ctx, user.Username, user.Groups, strconv.FormatUint(generation, 10), func(ctx context.Context) *pkgauth.UserPermissions {
+		return discoverUserPermissions(ctx, client, user)
+	})
+	if !ok {
+		return user, &pkgauth.UserPermissions{AllowedNamespaces: []string{}}, false
+	}
+	return user, perms, true
+}
 
+// discoverUserPermissions computes the user's namespace access on client, or
+// returns nil when it can't be decided.
+func discoverUserPermissions(ctx context.Context, client kubernetes.Interface, user *pkgauth.User) *pkgauth.UserPermissions {
 	allNamespaces, listed := mcpAllNamespaceNamesDecision(ctx)
 	allowed, err := pkgauth.DiscoverNamespaces(ctx, client, user.Username, user.Groups, allNamespaces)
 	if err != nil {
 		log.Printf("[mcp] DiscoverNamespaces failed for %s: %v — denying access (fail-closed)", user.Username, err)
-		return user, &pkgauth.UserPermissions{AllowedNamespaces: []string{}}, false
+		return nil
 	}
 	// Cluster-wide access needs no namespace list. A per-namespace answer
 	// does: checked against a list that couldn't be read, it would say "no
 	// access" where the truth is unknown.
 	if allowed != nil && !listed {
 		log.Printf("[mcp] namespace list unavailable for discovery (user=%s), denying access (fail-closed, not cached)", k8s.SanitizeForLog(user.Username))
-		return user, &pkgauth.UserPermissions{AllowedNamespaces: []string{}}, false
+		return nil
 	}
-
-	perms := &pkgauth.UserPermissions{AllowedNamespaces: allowed}
-	cache.Set(user.Username, user.Groups, perms)
-	return user, perms, true
+	return &pkgauth.UserPermissions{AllowedNamespaces: allowed}
 }
 
 func resolveUserPermsWithStatus(ctx context.Context) (*pkgauth.User, *pkgauth.UserPermissions, bool) {
@@ -353,6 +363,11 @@ func checkNamespaceAccess(ctx context.Context, namespace string) bool {
 // subjectCanI is overridden in tests to bypass the live apiserver call.
 var subjectCanI = pkgauth.SubjectCanI
 
+// accessReviews collapses identical access reviews in flight at once. A review
+// carries no cap of its own: each tool call waits as long as its own context
+// allows, as it did when it sent the review itself.
+var accessReviews pkgauth.AccessReviews
+
 // canReadClusterScopedKind authorizes a single (verb, kind) cluster-scoped
 // read for the calling user via SubjectAccessReview. Mirrors Server.canRead
 // for the MCP package. Result is cached on UserPermissions per the same TTL
@@ -395,29 +410,31 @@ func canReadInNamespace(ctx context.Context, group, resource, namespace, verb st
 }
 
 func canReadInNamespaceDecision(ctx context.Context, group, resource, namespace, verb string) (bool, bool) {
-	user, perms := resolveUserPerms(ctx)
+	user, perms, authoritative := resolveUserPermsDecision(ctx)
 	if user == nil {
 		return true, true
 	}
-	if perms != nil {
-		if v, ok := perms.CanI(verb, group, resource, namespace); ok {
-			return v, true
+	if !authoritative {
+		perms = nil
+	}
+	// Keyed by connection generation, not context name: a reconnect under the
+	// same name can reach a different cluster, and the review must run on the
+	// client its key names.
+	conn := k8s.BoundOrCurrent(ctx)
+	client, generation := conn.Client(), conn.ClientGeneration()
+	question := pkgauth.AccessReviewQuestion{Verb: verb, Group: group, Resource: resource, Namespace: namespace}
+	return accessReviews.Decide(ctx, user, perms, strconv.FormatUint(generation, 10), question, func(ctx context.Context) (bool, bool) {
+		if client == nil {
+			log.Printf("[mcp] canReadInNamespace: no K8s client, denying %s on %s/%s in %q for %s", k8s.SanitizeForLog(verb), k8s.SanitizeForLog(group), k8s.SanitizeForLog(resource), k8s.SanitizeForLog(namespace), k8s.SanitizeForLog(user.Username))
+			return false, false
 		}
-	}
-	client := k8s.BoundOrCurrent(ctx).Client()
-	if client == nil {
-		log.Printf("[mcp] canReadInNamespace: no K8s client, denying %s on %s/%s in %q for %s", k8s.SanitizeForLog(verb), k8s.SanitizeForLog(group), k8s.SanitizeForLog(resource), k8s.SanitizeForLog(namespace), k8s.SanitizeForLog(user.Username))
-		return false, false
-	}
-	allowed, err := subjectCanI(ctx, client, user.Username, user.Groups, namespace, group, resource, verb)
-	if err != nil {
-		log.Printf("[mcp] canReadInNamespace SAR failed for %s on %s/%s in %q: %v", k8s.SanitizeForLog(user.Username), k8s.SanitizeForLog(group), k8s.SanitizeForLog(resource), k8s.SanitizeForLog(namespace), err)
-		return false, false
-	}
-	if perms != nil {
-		perms.SetCanI(verb, group, resource, namespace, allowed)
-	}
-	return allowed, true
+		allowed, err := subjectCanI(ctx, client, user.Username, user.Groups, namespace, group, resource, verb)
+		if err != nil {
+			log.Printf("[mcp] canReadInNamespace SAR failed for %s on %s/%s in %q: %v", k8s.SanitizeForLog(user.Username), k8s.SanitizeForLog(group), k8s.SanitizeForLog(resource), k8s.SanitizeForLog(namespace), err)
+			return false, false
+		}
+		return allowed, true
+	})
 }
 
 // filterNamespacesByCanRead returns the subset of `namespaces` where the

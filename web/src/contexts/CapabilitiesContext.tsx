@@ -165,6 +165,7 @@ export function useNamespacedCapabilities(namespace: string | undefined) {
   // the global value is not an answer for this namespace.
   const namespaceUnknown = Boolean(namespace && !nsCaps && (isPending || error))
   return useMemo(() => ({
+    canOpenEphemeralTerminal: !error && nsCaps?.podExecUID === true,
     podDebugImage: nsCaps?.podDebug ? nsCaps.podDebugImage : undefined,
     canExec: nsCaps?.exec ?? globalCaps.exec,
     canViewLogs: nsCaps?.logs ?? globalCaps.logs,
@@ -174,5 +175,5 @@ export function useNamespacedCapabilities(namespace: string | undefined) {
     workloadWritesPending: Boolean(namespace && isPending),
     helmWriteUnknown: namespaceUnknown,
     logsUnknown: namespaceUnknown,
-  }), [globalCaps.exec, globalCaps.logs, globalCaps.portForward, globalCaps.helmWrite, globalCaps.workloadWrites, isPending, namespace, nsCaps, namespaceUnknown])
+  }), [error, globalCaps.exec, globalCaps.logs, globalCaps.portForward, globalCaps.helmWrite, globalCaps.workloadWrites, isPending, namespace, nsCaps, namespaceUnknown])
 }

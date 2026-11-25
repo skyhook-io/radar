@@ -14,6 +14,7 @@ export interface DockTab {
   // Terminal / logs props
   namespace?: string
   podName?: string
+  podUID?: string
   containerName?: string
   containers?: string[]
   /** Logs: which of `containers` are init containers, labelled in the selector. */
@@ -93,6 +94,9 @@ export function DockProvider({ children }: { children: ReactNode }) {
       if (t.type === 'traffic-flows') {
         return true // Singleton — always reuse existing tab
       }
+      if (t.podUID !== tabData.podUID || t.debugSession?.podUID !== tabData.debugSession?.podUID ||
+          t.debugSession?.connectionId !== tabData.debugSession?.connectionId ||
+          t.debugSession?.apiBase !== tabData.debugSession?.apiBase) return false
       return t.namespace === tabData.namespace &&
              t.podName === tabData.podName &&
              t.containerName === tabData.containerName &&
@@ -223,6 +227,7 @@ export function useOpenTerminal() {
   return (opts: {
     namespace: string
     podName: string
+    podUID?: string
     containerName: string
     containers: string[]
     orgId?: string
@@ -240,6 +245,7 @@ export function useOpenTerminal() {
       podName: opts.podName,
       containerName: opts.containerName,
       containers: opts.containers,
+      podUID: opts.podUID,
       shell: opts.shell,
       sessionNote: opts.sessionNote,
       debugSession: opts.debugSession,

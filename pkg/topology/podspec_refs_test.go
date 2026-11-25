@@ -76,7 +76,7 @@ func TestResourceGraphSeparatesAdmittedPodFromCurrentAndReplicaTemplates(t *test
 			}
 		}
 	}
-	reverse := GetRelationships("ConfigMap", "team", "prior", topo, provider, nil)
+	reverse := graphRelationships("ConfigMap", "team", "prior", topo, provider, nil)
 	if reverse == nil || len(reverse.Consumers) != 2 {
 		t.Fatalf("prior ConfigMap consumers=%+v, want live Pod and ReplicaSet", reverse)
 	}
@@ -155,7 +155,7 @@ func TestAdmittedPodFactsDoNotJoinNormalGraphComponents(t *testing.T) {
 			}
 		}
 	}
-	reverse := GetRelationships("ConfigMap", "team", "six-0", cached, provider, nil)
+	reverse := graphRelationships("ConfigMap", "team", "six-0", cached, provider, nil)
 	if reverse == nil || len(reverse.Consumers) != 1 || reverse.Consumers[0].Name != "six-0" {
 		t.Fatalf("grouped Pod missing from reverse relationships: %+v", reverse)
 	}
@@ -163,7 +163,7 @@ func TestAdmittedPodFactsDoNotJoinNormalGraphComponents(t *testing.T) {
 	if indexed == nil || len(indexed.Consumers) != 1 || indexed.Consumers[0].Name != "six-0" {
 		t.Fatalf("reverse lookup needs raw provider instead of cached facts: %+v", indexed)
 	}
-	account := GetRelationships("ServiceAccount", "team", "default", cached, provider, nil)
+	account := graphRelationships("ServiceAccount", "team", "default", cached, provider, nil)
 	if account == nil || len(account.Consumers) != 8 {
 		t.Fatalf("ServiceAccount lost grouped Pod consumers: %+v", account)
 	}
@@ -185,7 +185,7 @@ func TestAdmittedPodFactsDoNotJoinNormalGraphComponents(t *testing.T) {
 	filtered.Nodes = append([]Node(nil), cached.Nodes...)
 	filtered.Edges = append([]Edge(nil), cached.Edges...)
 	filtered.StripNodeKinds(map[NodeKind]bool{KindPod: true, KindPodGroup: true})
-	denied := GetRelationships("ConfigMap", "team", "six-0", &filtered, provider, nil)
+	denied := graphRelationships("ConfigMap", "team", "six-0", &filtered, provider, nil)
 	if denied != nil {
 		for _, consumer := range denied.Consumers {
 			if consumer.Kind == "Pod" {

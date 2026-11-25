@@ -51,6 +51,42 @@ func TestFluxSourceReferencesRejectInvalidDeclarations(t *testing.T) {
 	}
 }
 
+func TestFluxDependsOn(t *testing.T) {
+	if got := FluxDependsOn(nil); len(got) != 0 {
+		t.Fatalf("nil root declares %v", got)
+	}
+	for _, tc := range []struct{ group, version, kind string }{
+		{"kustomize.toolkit.fluxcd.io", "v1", "Kustomization"},
+		{"helm.toolkit.fluxcd.io", "v2", "HelmRelease"},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			root := &unstructured.Unstructured{Object: map[string]any{
+				"apiVersion": tc.group + "/" + tc.version, "kind": tc.kind,
+				"metadata": map[string]any{"namespace": "team", "name": "app"},
+				"spec": map[string]any{"dependsOn": []any{
+					map[string]any{"name": "base"},
+					map[string]any{"name": "app"},
+					map[string]any{"name": ""},
+					map[string]any{"namespace": "shared"},
+					"invalid",
+					map[string]any{"name": "app", "namespace": "shared"},
+				}},
+			}}
+			want := []resourceid.Ref{
+				resourceid.NewRef(tc.group, tc.kind, "team", "base"),
+				resourceid.NewRef(tc.group, tc.kind, "shared", "app"),
+			}
+			if got := FluxDependsOn(root); !reflect.DeepEqual(got, want) {
+				t.Fatalf("dependencies = %v, want %v", got, want)
+			}
+			root.SetAPIVersion("custom.example/v1")
+			if got := FluxDependsOn(root); len(got) != 0 {
+				t.Fatalf("foreign %s declares %v", tc.kind, got)
+			}
+		})
+	}
+}
+
 func TestInlineHelmReleaseUsesRecordedChart(t *testing.T) {
 	root := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease",

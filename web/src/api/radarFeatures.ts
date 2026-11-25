@@ -32,6 +32,7 @@ export interface RadarFeatureSpec {
 export const RADAR_FEATURES = {
   datadogRightsizing: { label: 'Datadog-backed rightsizing', flag: 'datadogRightsizing', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
   datadogAgentPresence: { label: 'Datadog Agent setup hints', flag: 'datadogAgentPresence', flagShippedWithEndpoint: true },
+  gitopsActionCapabilities: { label: 'GitOps action permission checks', flag: 'gitopsActionCapabilities', flagShippedWithEndpoint: true },
   resourceReadCoverage: { label: 'Resource read coverage', flag: 'resourceReadCoverage', flagShippedWithEndpoint: true },
   searchCoverage: { label: 'Search coverage and object filters', flag: 'searchCoverage', flagShippedWithEndpoint: true },
   applicationEvidence: { label: 'Application evidence collection', flag: 'applicationEvidence', flagShippedWithEndpoint: true },
@@ -40,6 +41,7 @@ export const RADAR_FEATURES = {
   resourceIssueCoverage: { label: 'Resource-specific issue views', flag: 'resourceIssueCoverage', flagShippedWithEndpoint: true },
   // An older Radar serves the route and ignores ?correlate=.
   issueCorrelation: { label: 'Recent changes on an issue', flag: 'issueCorrelation', flagShippedWithEndpoint: true },
+  podDebugAccess: { label: 'Pod debug access', flag: 'podDebugAccess', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
   podEnvironment: { label: 'Values from ConfigMaps and Secrets', minimumVersion: 'v1.9.0', flag: 'podEnvironment' },
   policyResource: { label: 'Policy results', minimumVersion: 'v1.10.0', flag: 'policyResource' },
   capacity: { label: 'Capacity views', minimumVersion: 'v1.9.0' },
@@ -55,6 +57,7 @@ export const RADAR_FEATURES = {
   cnpgWorkspace: { label: 'CloudNativePG views', flag: 'cnpgWorkspace', flagShippedWithEndpoint: true },
   sealedSecretsController: { label: 'Sealed Secrets controller status', flag: 'sealedSecretsController', flagShippedWithEndpoint: true },
   sealedSecretsCert: { label: 'Sealed Secrets sealing certificate', flag: 'sealedSecretsCert', flagShippedWithEndpoint: true },
+  workflowStop: { label: 'Argo Workflow stop actions', flag: 'workflowStop', flagShippedWithEndpoint: true },
   cnpgProtectionSetup: { label: 'CloudNativePG backup setup', flag: 'cnpgProtectionSetup', flagShippedWithEndpoint: true },
   veleroWorkspace: { label: 'Velero views', flag: 'veleroWorkspace', flagShippedWithEndpoint: true },
   veleroBackupNow: { label: 'Back up now', flag: 'veleroBackupNow', flagShippedWithEndpoint: true },

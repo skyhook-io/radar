@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -115,6 +116,7 @@ func (r *PermissionCheckResult) CredentialRejectedNamespaces(resource string, na
 type Capabilities struct {
 	ConfigManagement       string                   `json:"configManagement"`
 	Exec                   bool                     `json:"exec"` // Can create pods/exec (terminal feature)
+	PodExecUID             bool                     `json:"podExecUID,omitempty"`
 	PodDebugImage          string                   `json:"podDebugImage,omitempty"`
 	PodDebug               bool                     `json:"podDebug,omitempty"` // Scoped to the requested namespace.
 	LocalTerminal          bool                     `json:"localTerminal"`      // Local terminal available (not in-cluster, not disabled)
@@ -205,6 +207,7 @@ type FeatureCapabilities struct {
 	// GET /api/issues/recent-changes, the one change each listed issue row
 	// names.
 	IssueCorrelation bool `json:"issueCorrelation"`
+	PodDebugAccess   bool `json:"podDebugAccess"`
 	PodEnvironment   bool `json:"podEnvironment"`  // GET /api/pods/{namespace}/{name}/environment
 	PolicyResource   bool `json:"policyResource"`  // GET /api/policy/resource/{kind}/{namespace}/{name}
 	WorkloadHistory  bool `json:"workloadHistory"` // GET /api/workloads/{kind}/{namespace}/{name}/history
@@ -222,10 +225,11 @@ type FeatureCapabilities struct {
 	VeleroDeleteBackup bool `json:"veleroDeleteBackup"`
 	// DELETE /api/resources/... honours ?uid=&resourceVersion= preconditions
 	ResourceDeletePreconditions bool `json:"resourceDeletePreconditions"`
-	ServiceEndpointSlices       bool `json:"serviceEndpointSlices"` // GET /api/services/{namespace}/{name}/endpointslices
-	TrafficRecords              bool `json:"trafficRecords"`        // GET /api/traffic/flows/records
-	GitOpsWriteEvidence         bool `json:"gitopsWriteEvidence"`   // POST /api/gitops/write-evidence
-	AgentSigninCheck            bool `json:"agentSigninCheck"`      // GET /api/agents/signin
+	ServiceEndpointSlices       bool `json:"serviceEndpointSlices"`    // GET /api/services/{namespace}/{name}/endpointslices
+	TrafficRecords              bool `json:"trafficRecords"`           // GET /api/traffic/flows/records
+	GitOpsWriteEvidence         bool `json:"gitopsWriteEvidence"`      // POST /api/gitops/write-evidence
+	GitOpsActionCapabilities    bool `json:"gitopsActionCapabilities"` // GET /api/gitops/capabilities/{kind}/{namespace}/{name}
+	AgentSigninCheck            bool `json:"agentSigninCheck"`         // GET /api/agents/signin
 	// POST /api/argo/applications/{namespace}/{name}/rollback starts a sync to
 	// the history entry (id 0 included), and .../resume also clears
 	// spec.syncPolicy.automated.enabled: false. An older Radar writes an
@@ -267,6 +271,8 @@ type FeatureCapabilities struct {
 	CronJobTriggerJobName bool `json:"cronJobTriggerJobName"`
 	// GET /api/sealedsecrets/cert
 	SealedSecretsCert bool `json:"sealedSecretsCert"`
+	// POST /api/workflows/{namespace}/{name}/stop
+	WorkflowStop bool `json:"workflowStop"`
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.
@@ -385,7 +391,10 @@ func ReadPermissionCache(ctx context.Context, host *pkgauth.PermissionCache) *pk
 	if found, ok := caches.Load(host); ok {
 		return found.(*pkgauth.PermissionCache)
 	}
-	found, _ := caches.LoadOrStore(host, pkgauth.NewPermissionCache())
+	// Keyed like the host's, so discovery and reviews on this connection's
+	// cache are accepted for it.
+	generation := strconv.FormatUint(conn.ClientGeneration(), 10)
+	found, _ := caches.LoadOrStore(host, pkgauth.NewPermissionCache().WithConnectionKey(func() string { return generation }))
 	return found.(*pkgauth.PermissionCache)
 }
 

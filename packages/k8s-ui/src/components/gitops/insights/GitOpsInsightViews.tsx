@@ -3,7 +3,7 @@ import { AlertTriangle, ArrowUpDown, ChevronDown, ChevronRight, ChevronUp, Circl
 import { IssueGuidance } from '../../issues/IssueGuidance'
 import { PaneLoader } from '../../ui/PaneLoader'
 import { clsx } from 'clsx'
-import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import type { GitOpsChange, GitOpsDrift, GitOpsHistoryItem, GitOpsInsight, GitOpsInsightRef, GitOpsIssue, GitOpsPlanItem, GitOpsRemediation, GitOpsResourceTree, GitOpsTreeNode } from '../../../types'
 import { HealthStatusBadge, SyncStatusBadge } from '../GitOpsStatusBadge'
 import { radarHealthNote } from '../health-provenance'
@@ -1383,12 +1383,14 @@ function ChangeRow({
   const rowInteractive = expandable || (!isAbsent && !!onOpenResource)
   const hookLabel = change.hookPhase || hook
   const canSyncResource = !!onSyncResource && isArgoResourceSyncEligible(change, declared, hookLabel)
+  const syncDisabledReasonId = useId()
   const syncResourceButton = canSyncResource ? (
     <button
       type="button"
-      onClick={() => onSyncResource(change.ref)}
-      disabled={!!syncResourceDisabledReason}
-      className="inline-flex w-full items-center justify-center gap-1.5 rounded border border-theme-border bg-theme-base px-2 py-1 text-[11px] font-medium text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+      onClick={() => { if (!syncResourceDisabledReason) onSyncResource(change.ref) }}
+      aria-disabled={!!syncResourceDisabledReason}
+      aria-describedby={syncResourceDisabledReason ? syncDisabledReasonId : undefined}
+      className="inline-flex w-full items-center justify-center gap-1.5 rounded border border-theme-border bg-theme-base px-2 py-1 text-[11px] font-medium text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
     >
       <RefreshCw className="h-3 w-3" />
       Sync resource
@@ -1491,9 +1493,12 @@ function ChangeRow({
         </div>
         <div className="self-start space-y-1.5">
           {syncResourceButton && syncResourceDisabledReason ? (
-            <Tooltip content={syncResourceDisabledReason} delay={200} wrapperClassName="block">
-              {syncResourceButton}
-            </Tooltip>
+            <>
+              <span id={syncDisabledReasonId} className="sr-only">{syncResourceDisabledReason}</span>
+              <Tooltip preserveWords content={syncResourceDisabledReason} delay={200} wrapperClassName="block">
+                {syncResourceButton}
+              </Tooltip>
+            </>
           ) : syncResourceButton}
           {/* Three affordance states:
               - Live resource (not Missing): "Open <kind> <name> →" opens the
@@ -1602,6 +1607,7 @@ interface GitOpsActivityInsightViewProps {
   // is true, history rows with an ID expose a Rollback button that fires this
   // with the target entry. The consumer is responsible for the confirmation
   // dialog + the actual mutation.
+  rollbackDisabledReason?: string
   onRollback?: (item: GitOpsHistoryItem) => void
   // Set when the connected Radar is too old to roll back: every Rollback
   // renders disabled, with the upgrade note above the history.
@@ -1609,7 +1615,7 @@ interface GitOpsActivityInsightViewProps {
   rollbackBlockedReason?: string
 }
 
-export function GitOpsActivityInsightView({ insight, error, onRollback, rollbackUpgrade, rollbackBlockedReason }: GitOpsActivityInsightViewProps) {
+export function GitOpsActivityInsightView({ insight, error, onRollback, rollbackDisabledReason, rollbackUpgrade, rollbackBlockedReason }: GitOpsActivityInsightViewProps) {
   if (error && !insight) return <InsightErrorState error={error} />
   if (!insight) return <PaneLoader label="Loading GitOps activity…" className="h-full" />
   const canRollback = !!insight.capabilities?.rollback && !!onRollback
@@ -1627,18 +1633,19 @@ export function GitOpsActivityInsightView({ insight, error, onRollback, rollback
         <SectionHeader
           icon={Clock3}
           title="History"
-          hint={canRollback && !upgrade && !rollbackBlockedReason ? 'Each revision can be rolled back to.' : undefined}
+          hint={canRollback && !upgrade && !rollbackBlockedReason && !rollbackDisabledReason ? 'Each revision can be rolled back to.' : undefined}
         />
         {upgrade && <RadarUpgradeNote requirement={upgrade} className="border-b border-theme-border px-4 py-2.5" />}
         {canRollback && rollbackBlockedReason && <p className="border-b border-theme-border px-4 py-2.5 text-xs text-theme-text-secondary">{rollbackBlockedReason}</p>}
         <HistoryRows
           items={insight.history ?? []}
           canRollback={canRollback}
+          // A newer Radar comes first, then the role: without patch access, disabling auto-sync is not an option either.
           rollbackBlockedReason={rollbackBlockedReason || (upgrade
             ? radarUpgradeNoteText(upgrade)
-            : autoSyncBlocksRollback
+            : rollbackDisabledReason || (autoSyncBlocksRollback
               ? 'Auto-sync is enabled. Disable it to enable rollback — otherwise the controller will sync forward to HEAD again.'
-              : undefined)}
+              : undefined))}
           onRollback={onRollback}
         />
       </section>
@@ -1660,6 +1667,7 @@ function HistoryRows({
   rollbackBlockedReason?: string
   onRollback?: (item: GitOpsHistoryItem) => void
 }) {
+  const rollbackDescriptionId = useId()
   if (items.length === 0) {
     return (
       <div className="flex items-center gap-3 px-4 py-6 text-sm text-theme-text-tertiary">
@@ -1679,6 +1687,7 @@ function HistoryRows({
         // to it is meaningless.
         const showRollback = canRollback && !!item.id && !!onRollback
         const blockedReason = historyRollbackBlockedReason(item, rollbackBlockedReason)
+        const descriptionId = blockedReason ? `${rollbackDescriptionId}-${index}` : undefined
         return (
           // `group` enables the Rollback button's hover-reveal; baseline
           // opacity-40 keeps it touch-discoverable.
@@ -1698,30 +1707,34 @@ function HistoryRows({
                   <span className="text-[11px] text-theme-text-tertiary">by {item.initiatedBy}</span>
                 )}
                 {showRollback && (
-                  <Tooltip
-                    content={blockedReason || `Roll back to revision ${item.revision || `#${item.id}`}`}
-                    delay={200}
-                    wrapperClassName="ml-auto"
-                  >
-                    {/* Two visually distinct states:
-                        - Enabled: low-emphasis baseline (opacity-40), brightens on row hover
-                        - Disabled (auto-sync on, or an entry with no source): full opacity but desaturated, cursor-not-allowed,
-                          no hover affordance — reads unambiguously as "not actionable, here's why" */}
-                    <button
-                      type="button"
-                      onClick={() => !blockedReason && onRollback?.(item)}
-                      disabled={!!blockedReason}
-                      aria-disabled={!!blockedReason}
-                      className={clsx(
-                        'rounded border px-1.5 py-0.5 text-[10px] transition-opacity',
-                        blockedReason
-                          ? 'cursor-not-allowed border-theme-border bg-theme-base text-theme-text-tertiary'
-                          : 'border-theme-border bg-theme-elevated text-theme-text-secondary opacity-40 hover:bg-theme-hover hover:text-theme-text-primary hover:opacity-100 focus-visible:opacity-100 group-hover:opacity-100'
-                      )}
+                  <>
+                    {descriptionId && <span id={descriptionId} className="sr-only">{blockedReason}</span>}
+                    <Tooltip
+                      preserveWords
+                      content={blockedReason || `Roll back to revision ${item.revision || `#${item.id}`}`}
+                      delay={200}
+                      wrapperClassName="ml-auto"
                     >
-                      Rollback
-                    </button>
-                  </Tooltip>
+                      {/* Two visually distinct states:
+                          - Enabled: low-emphasis baseline (opacity-40), brightens on row hover
+                          - Disabled (auto-sync on, or an entry with no source): full opacity but desaturated, cursor-not-allowed,
+                            no hover affordance — reads unambiguously as "not actionable, here's why" */}
+                      <button
+                        type="button"
+                        onClick={() => !blockedReason && onRollback?.(item)}
+                        aria-disabled={!!blockedReason}
+                        aria-describedby={descriptionId}
+                        className={clsx(
+                          'rounded border px-1.5 py-0.5 text-[10px] transition-opacity',
+                          blockedReason
+                            ? 'cursor-not-allowed border-theme-border bg-theme-base text-theme-text-tertiary'
+                            : 'border-theme-border bg-theme-elevated text-theme-text-secondary opacity-40 hover:bg-theme-hover hover:text-theme-text-primary hover:opacity-100 focus-visible:opacity-100 group-hover:opacity-100'
+                        )}
+                      >
+                        Rollback
+                      </button>
+                    </Tooltip>
+                  </>
                 )}
               </div>
               {sourceDisplay && (

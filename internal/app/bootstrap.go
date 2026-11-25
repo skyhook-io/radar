@@ -342,12 +342,7 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 
 	RegisterLastContextMemory(cfg)
 
-	k8s.RegisterTimelineFuncs(func() {
-		// Reset the store AND the per-cluster event-pipeline metrics: RecentDrops
-		// name resources from the previous cluster and must not survive the switch.
-		timeline.ResetStore()
-		timeline.ResetMetricsForContextSwitch()
-	}, func() error {
+	k8s.RegisterTimelineFuncs(timeline.ResetStore, func() error {
 		if err := timeline.ReinitStore(timelineStoreCfg); err != nil {
 			log.Printf("Warning: timeline init failed, continuing degraded: %v", err)
 		}

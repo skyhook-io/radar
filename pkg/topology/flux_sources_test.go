@@ -50,13 +50,13 @@ func TestFluxSourceGraphFollowsReferencedChart(t *testing.T) {
 			}
 			for _, node := range nodes {
 				namespace, _ := node.Data["namespace"].(string)
-				before := GetRelationships(string(node.Kind), namespace, node.Name, &Topology{Nodes: nodes, Edges: previousEdges}, nil, p)
-				after := GetRelationships(string(node.Kind), namespace, node.Name, &Topology{Nodes: nodes, Edges: edges}, nil, p)
+				before := graphRelationships(string(node.Kind), namespace, node.Name, &Topology{Nodes: nodes, Edges: previousEdges}, nil, p)
+				after := graphRelationships(string(node.Kind), namespace, node.Name, &Topology{Nodes: nodes, Edges: edges}, nil, p)
 				if !reflect.DeepEqual(before, after) {
 					t.Fatalf("%s %s/%s relationship projection changed:\nbefore=%+v\nafter=%+v", node.Kind, namespace, node.Name, before, after)
 				}
 			}
-			rel := GetRelationships("HelmRelease", "team", "app", &Topology{Nodes: nodes, Edges: edges}, nil, p)
+			rel := graphRelationships("HelmRelease", "team", "app", &Topology{Nodes: nodes, Edges: edges}, nil, p)
 			wantDependencies := 1
 			if inline {
 				wantDependencies++
@@ -64,7 +64,7 @@ func TestFluxSourceGraphFollowsReferencedChart(t *testing.T) {
 			if rel == nil || rel.Owner != nil || len(rel.Dependencies) != wantDependencies || rel.Dependencies[0].Kind != "HelmChart" || rel.Dependencies[0].Namespace != "shared" {
 				t.Fatalf("source presented as owner: %+v", rel)
 			}
-			chartRel := GetRelationships("HelmChart", "shared", "chart", &Topology{Nodes: nodes, Edges: edges}, nil, p)
+			chartRel := graphRelationships("HelmChart", "shared", "chart", &Topology{Nodes: nodes, Edges: edges}, nil, p)
 			if chartRel == nil || len(chartRel.Dependencies) != 1 || len(chartRel.Dependents) != 1 {
 				t.Fatalf("chart traversal: %+v", chartRel)
 			}
@@ -128,7 +128,7 @@ func TestFluxSourceGraphFollowsArtifactChain(t *testing.T) {
 			t.Fatalf("%s listed %d times: %v", resource, n, p.listCalls)
 		}
 	}
-	rel := GetRelationships("ArtifactGenerator", "team", "gen", &Topology{Nodes: nodes, Edges: edges}, nil, p)
+	rel := graphRelationships("ArtifactGenerator", "team", "gen", &Topology{Nodes: nodes, Edges: edges}, nil, p)
 	if rel == nil || len(rel.Dependents) != 1 || rel.Dependents[0].Kind != "ExternalArtifact" || len(rel.Dependencies) != 1 || rel.Dependencies[0].Kind != "GitRepository" {
 		t.Fatalf("generator relationships: %+v", rel)
 	}
@@ -215,7 +215,7 @@ func TestFluxDependsOnBecomesRequiredBy(t *testing.T) {
 	if len(edges) != 1 || !reflect.DeepEqual(edges[0], want) {
 		t.Fatalf("edges = %+v, want only %+v", edges, want)
 	}
-	rel := GetRelationships("Kustomization", "team", "base", &Topology{Nodes: nodes, Edges: edges}, nil, p)
+	rel := graphRelationships("Kustomization", "team", "base", &Topology{Nodes: nodes, Edges: edges}, nil, p)
 	if rel == nil || len(rel.Dependents) != 1 || rel.Dependents[0].Name != "overlay" {
 		t.Fatalf("base dependents = %+v, want overlay", rel)
 	}

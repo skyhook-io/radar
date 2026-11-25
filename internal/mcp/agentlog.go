@@ -148,7 +148,10 @@ func logToolCall[In any](
 		dur := time.Since(start)
 		toolErr := err
 		if toolErr == nil && result != nil && result.IsError {
-			toolErr = errors.New("tool returned an error result")
+			toolErr = result.GetError()
+			if toolErr == nil {
+				toolErr = errors.New("tool returned an error result")
+			}
 		}
 
 		if isTimeout(toolErr) {

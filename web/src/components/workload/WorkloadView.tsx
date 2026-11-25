@@ -1,3 +1,4 @@
+import { podDebugAccessKey } from '../../api/podDebug'
 import { supportsWorkloadRevisions, WorkloadRevisionsButton } from './WorkloadRevisionsButton'
 import { RelatedFindingsSection } from './RelatedFindingsSection'
 import { decorateResourceDiagnose, resourceDetailRedirect, resourceDetailSlots, resourceIssueDetail, resourceLogs, resourceRendererOverrides } from '../../integrations/resourceHosts'
@@ -12,7 +13,7 @@ import {
   EditableYamlView,
   FetchResult,
   Section,
-  type WorkloadTabType,
+  type WorkloadDetailTab,
   type WorkloadExtraTab,
   type GitOpsOwnerRef,
   type HelmOwnerRef,
@@ -85,6 +86,7 @@ import {
   useFluxSuspend,
   useFluxResume,
   useArgoSync,
+  useGitOpsActionCapabilities,
   useArgoRefresh,
   useArgoSuspend,
   useArgoResume,
@@ -105,7 +107,7 @@ import { TIME_RANGES, PrometheusCharts, isPrometheusSupported } from '../resourc
 import { RightsizingStrip } from '../resource/RightsizingStrip'
 import { PrometheusChartsGrid } from '../resource/PrometheusChartsGrid'
 import { DatadogSetupHint, DatadogWorkloadCharts, useDatadogWorkloadCharts, WorkloadCostRightsizing } from '../resource/DatadogWorkloadCharts'
-import { PodDebugAction } from '../resources/PodDebugAction'
+import { PodDebugAction, usePodDetailAccess, type PodDebugTarget } from '../resources/PodDebugAction'
 import { useNavCustomization } from '../../context/NavCustomization'
 import { RestartEventLane } from '../resource/RestartChart'
 import { WorkloadCostTab } from '../cost/WorkloadCostTab'
@@ -153,11 +155,11 @@ import { recordUsageEvent } from '../../api/usage-data'
 import { issueResourceOpener } from './issueResourceOpener'
 import { isVeleroBackupKind } from '../velero/routes'
 
-type TabType = WorkloadTabType
+type TabType = WorkloadDetailTab
 
 // The usage-report view a tab counts under. Timeline holds the resource's
 // events (it replaced the Events tab), so it counts as panel:events.
-const PANEL_USAGE_VIEWS: Readonly<Partial<Record<TabType | "deploys", string>>> = {
+const PANEL_USAGE_VIEWS: Readonly<Partial<Record<TabType, string>>> = {
   logs: 'panel:logs',
   yaml: 'panel:yaml',
   metrics: 'panel:metrics',
@@ -334,6 +336,7 @@ function useActionsBarProps(
   group: string | undefined,
   cascadeEnabled: boolean,
   nodeUID: string,
+  pod?: PodDebugTarget,
 ) {
   const [deletePreviewOpen, setDeletePreviewOpen] = useState(false)
   const { showCopied } = useToast()
@@ -342,8 +345,9 @@ function useActionsBarProps(
   const openLogs = useOpenLogs()
   const openWorkloadLogs = useOpenWorkloadLogs()
   const openNodeTerminal = useOpenNodeTerminal()
-  const { embedded } = useNavCustomization()
-  const { canExec, podDebugImage, canViewLogs, canPortForward, workloadWrites, workloadWritesPending } = useNamespacedCapabilities(namespace)
+  const nsCaps = useNamespacedCapabilities(namespace)
+  const { canViewLogs, canPortForward, workloadWrites, workloadWritesPending } = nsCaps
+  const { canExec, debugImage, unverifiedReview, debugDenial, reviewStatus } = usePodDetailAccess(pod, nsCaps)
   const queryClient = useQueryClient()
   // Live forward when local+RBAC; otherwise (in-cluster/Cloud) still surface the
   // copy-paste kubectl command. The button picks live vs. copy by deployment mode.
@@ -401,6 +405,7 @@ function useActionsBarProps(
   const fluxSuspendMutation = useFluxSuspend()
   const fluxResumeMutation = useFluxResume()
 
+  const { disabledReasons: gitOpsActionDisabledReasons } = useGitOpsActionCapabilities(kind, group, namespace, name)
   const argoSyncMutation = useArgoSync()
   const argoRefreshMutation = useArgoRefresh()
   const argoSuspendMutation = useArgoSuspend()
@@ -435,7 +440,7 @@ function useActionsBarProps(
     canViewLogs,
     canPortForward: showPortForward,
     onOpenTerminal: openTerminal,
-    renderPodDebug: podDebugImage && !embedded ? (pod: any) => <PodDebugAction key={pod.metadata.uid} pod={pod} defaultImage={podDebugImage} /> : undefined,
+    podDebugAction: pod && <PodDebugAction key={pod.metadata.uid} pod={pod} defaultImage={debugImage} unverifiedReview={unverifiedReview} debugDenial={debugDenial} reviewStatus={reviewStatus} />,
     onOpenLogs: openLogs,
     onOpenWorkloadLogs: openWorkloadLogs,
     replicaSetLogs: isAppsReplicaSet && replicaSetLogSupport === 'supported',
@@ -519,6 +524,7 @@ function useActionsBarProps(
     onResumeCronJob: (params: Parameters<typeof resumeCronJobMutation.mutate>[0]) =>
       resumeCronJobMutation.mutate(params),
     isResumingCronJob: resumeCronJobMutation.isPending,
+    gitOpsActionDisabledReasons,
     onFluxReconcile: (params: Parameters<typeof fluxReconcileMutation.mutate>[0]) =>
       fluxReconcileMutation.mutate(params),
     isFluxReconciling: fluxReconcileMutation.isPending,
@@ -604,8 +610,8 @@ export function WorkloadView({
   // recount the same open tab: the drawer mounts hidden WorkloadView layers
   // for expand-on-hover and crossfades.
   const handleTabChange = useCallback(
-    (tab: TabType | 'deploys', opts?: { replace?: boolean }) => {
-      const panel = PANEL_USAGE_VIEWS[tab]
+    (tab: TabType, opts?: { replace?: boolean }) => {
+      const panel = Object.hasOwn(PANEL_USAGE_VIEWS, tab) ? PANEL_USAGE_VIEWS[tab] : undefined
       if (panel && tab !== migratedTab) recordUsageEvent({ type: 'view', name: panel })
       const params = new URLSearchParams(searchParams)
       if (tab === 'overview') {
@@ -640,6 +646,7 @@ export function WorkloadView({
   const {
     data: resourceResponse,
     isLoading: resourceLoading,
+    isFetching: resourceFetching,
     error: resourceError,
     refetch: refetchResource,
   } = useResourceWithRelationships<any>(apiKind, namespace, name, rest.group)
@@ -694,6 +701,10 @@ export function WorkloadView({
     await Promise.all([
       refetchResource(),
       onRefresh?.(),
+      ...(apiKind === 'pods' && !effectiveGroup && resource?.metadata?.uid ? [
+        queryClient.invalidateQueries({queryKey: ['capabilities', namespace], exact: true}),
+        queryClient.invalidateQueries({queryKey: podDebugAccessKey(namespace, name, resource.metadata.uid)}),
+      ] : []),
       ...(apiKind === 'rayjobs' && effectiveGroup === 'ray.io' ? [
         queryClient.refetchQueries({ queryKey: ['resource', 'jobs', namespace, name, 'batch'], type: 'active' }),
         ...(resource?.spec?.clusterSelector?.['ray.io/cluster'] ? [queryClient.refetchQueries({ queryKey: ['resource', 'rayclusters', namespace, resource.spec.clusterSelector['ray.io/cluster'], 'ray.io'], type: 'active' })] : []),
@@ -707,7 +718,7 @@ export function WorkloadView({
         ...(apiKind === 'rayclusters' ? { type: 'active' as const } : {}),
       }),
     ])
-  }, [apiKind, effectiveGroup, name, namespace, queryClient, refetchResource, resource?.spec?.clusterSelector, onRefresh])
+  }, [apiKind, effectiveGroup, name, namespace, queryClient, refetchResource, resource?.metadata?.uid, resource?.spec?.clusterSelector, onRefresh])
   const podWorkloadOwner = useMemo(
     () => podWorkloadOwnerFromRelationships(apiKind, namespace, relationships, resource),
     [apiKind, namespace, relationships, resource],
@@ -901,6 +912,7 @@ export function WorkloadView({
     effectiveGroup,
     !resourceLoading && Boolean(resource),
     apiKind === 'nodes' && !effectiveGroup ? resource?.metadata?.uid ?? '' : '',
+    apiKind === 'pods' && resource?.apiVersion === 'v1' && resource?.kind === 'Pod' ? resource : undefined,
   )
   const desktopDownload = useDesktopDownload()
 
@@ -1279,6 +1291,7 @@ export function WorkloadView({
         renderServicePortAction={renderServicePortAction}
         renderServicePortPanel={renderServicePortPanel}
         isLoading={resourceLoading}
+        isFetching={resourceFetching}
         resourceError={resourceError}
         refetch={refetchResourceAndRuns}
         // Timeline
@@ -1314,6 +1327,7 @@ export function WorkloadView({
         yamlSchemaLoader={features?.yamlSchemas ? fetchYamlSchemas : undefined}
         // Tab state (URL-synced)
         activeTab={migratedTab}
+        extraTabsComplete={migratedTab === 'deploys' ? true : undefined}
         onTabChange={handleTabChange}
         // Render props
         renderLogsTab={(props) => (

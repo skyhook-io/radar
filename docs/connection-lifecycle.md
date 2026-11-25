@@ -6,7 +6,7 @@ How Radar names the cluster connection it serves, and how a write is bound to th
 
 A bound write from a Radar tab runs against the connection the tab is on, or is refused before any Kubernetes work. In particular, a tab still showing cluster A after another tab switched Radar to B can't restart or scale B's same-named workload.
 
-Bound writes are the routes wrapped with `bindWrite` in `internal/server/server.go`; `TestBoundWriteRoutesRefuseStaleConnection` walks every one. They are the workload, CronJob, resource (apply, update, delete), node, GitOps, Velero, CloudNativePG, Helm and CAPI connect actions, plus exec, file upload, debug containers and debug pods, port-forward start and the reachability probe test. Beyond the header check:
+Bound writes are the routes wrapped with `bindWrite` in `internal/server/server.go`; `TestBoundWriteRoutesRefuseStaleConnection` walks every one. They are the workload, CronJob, Argo Workflow, resource (apply, update, delete), node, GitOps, Velero, CloudNativePG, Helm and CAPI connect actions, plus exec, file upload, debug containers and debug pods, port-forward start and the reachability probe test. Beyond the header check:
 - **Drain** keeps running on the connection it was admitted to, even if Radar switches meanwhile. Exec and port-forward sessions end when Radar switches.
 - **Code that only has a context** (MCP tools, reachability) gets its clients from `k8s.ClientFromContext` / `DynamicClientFromContext`, which return the bound connection's clients when the request was admitted with one.
 - **CloudNativePG** captures its clients and caches in one step and checks there that the connection is still the bound one (`k8s.StillBound`).

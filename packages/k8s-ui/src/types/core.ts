@@ -119,6 +119,7 @@ export interface IntegrationCapability {
 // Feature capabilities based on RBAC permissions
 export interface Capabilities {
   configManagement?: 'local' | 'operator' | 'cloud'
+  podExecUID?: boolean
   podDebugImage?: string
   podDebug?: boolean
   exec: boolean           // Terminal feature (pods/exec)
@@ -174,6 +175,7 @@ export interface CloudConnectCapability {
 }
 
 export interface FeatureCapabilities {
+  gitopsActionCapabilities?: boolean
  helmSourceIdentity?: boolean
   helmInventory?: boolean
   datadogRightsizing?: boolean
@@ -191,6 +193,7 @@ export interface FeatureCapabilities {
   resourceIssueCoverage?: boolean
   // GET /api/issues/resource/... with ?correlate=<issueID>
   issueCorrelation?: boolean
+  podDebugAccess?: boolean
   podEnvironment?: boolean
   policyResource?: boolean
   workloadHistory?: boolean
@@ -233,6 +236,7 @@ export interface FeatureCapabilities {
   sealedSecretsController?: boolean // GET /api/sealedsecrets/controller
   cronJobTriggerJobName?: boolean
   sealedSecretsCert?: boolean // GET /api/sealedsecrets/cert
+  workflowStop?: boolean // POST /api/workflows/{namespace}/{name}/stop
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.

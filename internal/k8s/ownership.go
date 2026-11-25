@@ -162,7 +162,7 @@ func answerOwnership(source ownership.Source, apply func(*topology.Relationships
 
 // AnswerRelationships is a fetched object's Related Resources answered from
 // the caches in one session: the relation families projected as the
-// relationship graph's edges are (topology.RelationsAnswer), then ownership,
+// relationship graph's edges are (topology.RelationsAnswerWithExtras), then ownership,
 // with one ownership view whose searches both share. When the caches aren't
 // ready or are replaced mid-answer, the relationships are nil and the extras
 // say why (topology.UnansweredRelationships).

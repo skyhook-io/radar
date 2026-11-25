@@ -70,7 +70,7 @@ function renderHosted(resourceError: unknown, activeTab: string) {
       resource={{ apiVersion: 'postgresql.cnpg.io/v1', kind: 'Cluster', metadata: { name: 'pg', namespace: 'db' }, spec: {} }}
       resourceError={resourceError}
       renderSummary={() => 'Host summary action'}
-      extraTabs={[{ id: 'backups', label: 'Host backups', render: () => 'Host backups action' }]}
+      extraTabs={[{ id: 'backups', label: 'Host backups', render: () => 'Host backups action', replaces: 'timeline' }]}
       subheader="Host subheader action"
       renderHeaderActions={() => 'Host header action'}
       renderStatusBadge={() => 'Host phase'}
@@ -97,5 +97,12 @@ describe('a host page for an object deleted while open', () => {
     for (const host of ['Host summary action', 'Host backups', 'Host subheader action', 'Host header action', 'Host phase', 'Host verdict']) {
       expect(html).toContain(host)
     }
+  })
+
+  it('restores a built-in tab when an ordinary host replacement is removed on deletion', () => {
+    const gone = Object.assign(new Error('clusters "pg" not found'), { status: 404 })
+    const html = renderHosted(gone, 'timeline')
+    expect(html).toMatch(/role="tab" aria-selected="true"[^>]*>.*?Timeline/)
+    expect(html).not.toContain('Host backups')
   })
 })

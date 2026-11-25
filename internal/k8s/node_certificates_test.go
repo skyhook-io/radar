@@ -309,7 +309,7 @@ func TestNodeCertificateHistoryUsesSharedStore(t *testing.T) {
 		t.Fatalf("retained history did not power detection: %+v", got)
 	}
 	// A later recovery can be missing even after the store starts reading again.
-	timeline.RecordDrop("K8sEvent:Node", "", node.Name, timeline.DropReasonStoreFailed, "create", ActiveClusterContext())
+	timeline.CaptureStore().RecordDrop("K8sEvent:Node", "", node.Name, timeline.DropReasonStoreFailed, "create", ActiveClusterContext())
 	t.Cleanup(func() { timeline.GetMetrics().Reset() })
 	history = readNodeCertificateHistory([]*corev1.Node{node})
 	got = assessNodeCertificates([]*corev1.Node{node}, nil, history, true, time.Now())

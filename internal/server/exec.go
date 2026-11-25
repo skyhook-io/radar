@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -31,6 +33,7 @@ func (s *Server) upgradeWebSocket(w http.ResponseWriter, r *http.Request) (*webs
 }
 
 const podExecHeartbeatInterval = 30 * time.Second
+const terminalCloseTimeout = time.Second
 
 // defaultShellScript is the built-in fallback command used when no shell is
 // requested explicitly via ?shell= and no override is set via --pod-shell-default.
@@ -171,6 +174,7 @@ type ExecSession struct {
 	Pod       string `json:"pod"`
 	Container string `json:"container"`
 	conn      *websocket.Conn
+	cancel    context.CancelFunc
 }
 
 // execSessionManager tracks active exec sessions
@@ -198,6 +202,7 @@ func StopAllExecSessions() {
 
 	for id, session := range execManager.sessions {
 		log.Printf("Closing exec session %s (%s/%s)", id, session.Namespace, session.Pod)
+		session.cancel()
 		session.conn.Close()
 		delete(execManager.sessions, id)
 	}
@@ -231,8 +236,9 @@ func runPodExecHeartbeat(conn *websocket.Conn, interval time.Duration, done <-ch
 
 // wsWriter wraps a websocket connection to satisfy io.Writer
 type wsWriter struct {
-	conn *websocket.Conn
-	mu   sync.Mutex
+	wroteOutput atomic.Bool
+	conn        *websocket.Conn
+	mu          sync.Mutex
 }
 
 func (w *wsWriter) Write(p []byte) (int, error) {
@@ -246,6 +252,9 @@ func (w *wsWriter) Write(p []byte) (int, error) {
 	}
 	if err := w.conn.WriteMessage(websocket.TextMessage, data); err != nil {
 		return 0, err
+	}
+	if len(p) > 0 {
+		w.wroteOutput.Store(true)
 	}
 	return len(p), nil
 }
@@ -294,6 +303,8 @@ func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
 	// Register the session
 	execManager.mu.Lock()
 	execManager.nextID++
@@ -304,6 +315,7 @@ func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
 		Pod:       podName,
 		Container: container,
 		conn:      conn,
+		cancel:    cancel,
 	}
 	execManager.sessions[sessionID] = session
 	execManager.mu.Unlock()
@@ -317,9 +329,10 @@ func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
 		conn.Close()
 		log.Printf("Exec session %s ended (%s/%s)", sessionID, namespace, podName)
 	}()
-	heartbeatDone := make(chan struct{})
-	defer close(heartbeatDone)
-	go runPodExecHeartbeat(conn, podExecHeartbeatInterval, heartbeatDone)
+	go func() {
+		runPodExecHeartbeat(conn, podExecHeartbeatInterval, ctx.Done())
+		cancel()
+	}()
 
 	// Get K8s client and config (impersonated when auth is enabled)
 	client := s.getClientForRequest(r)
@@ -338,14 +351,25 @@ func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
 	// the apiserver apply its own containers[0] default.
 	var podOS string
 	var podUID types.UID
-	if overrideShell == "" || container == "" {
-		pod, err := client.CoreV1().Pods(namespace).Get(r.Context(), podName, metav1.GetOptions{})
+	expectedUID := types.UID(r.URL.Query().Get("uid"))
+	if overrideShell == "" || container == "" || expectedUID != "" {
+		pod, err := client.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+		if expectedUID != "" {
+			if err != nil {
+				sendWSError(conn, fmt.Sprintf("Could not verify the original Pod: %v", err))
+				return
+			}
+			if pod.UID != expectedUID {
+				closeWithWSError(conn, "pod_replaced", "The original Pod was replaced. Open its details to start a new terminal.")
+				return
+			}
+		}
 		if err != nil {
 			log.Printf("[exec] pod fetch failed for %s/%s (OS detection + container defaulting skipped): %v", k8s.SanitizeForLog(namespace), k8s.SanitizeForLog(podName), err)
 		} else {
 			podUID = pod.UID
 			if overrideShell == "" {
-				podOS = detectPodOS(r.Context(), pod, nodeLabelsLookupFor(client))
+				podOS = detectPodOS(ctx, pod, nodeLabelsLookupFor(client))
 			}
 			if container == "" {
 				container = defaultExecContainer(pod)
@@ -365,151 +389,151 @@ func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set up pipes for stdin
+	streamPodTerminal(ctx, conn, podUID, command[0], exec.StreamWithContext)
+}
+
+func streamPodTerminal(parent context.Context, conn *websocket.Conn, uid types.UID, executable string, stream func(context.Context, remotecommand.StreamOptions) error) {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
 	stdinReader, stdinWriter := io.Pipe()
-	defer stdinWriter.Close()
+	sizes := &terminalSizeQueue{resizeChan: make(chan remotecommand.TerminalSize, 1)}
+	sizes.resizeChan <- remotecommand.TerminalSize{Width: 80, Height: 24}
+	output := &wsWriter{conn: conn}
 
-	// Set up terminal size queue
-	sizeQueue := &terminalSizeQueue{
-		resizeChan: make(chan remotecommand.TerminalSize, 1),
-	}
-
-	// Send initial size
-	sizeQueue.resizeChan <- remotecommand.TerminalSize{Width: 80, Height: 24}
-
-	// Set up stdout/stderr writer
-	wsOut := &wsWriter{conn: conn}
-
-	// Run exec in goroutine
-	execDone := make(chan error, 1)
+	inputDone := make(chan struct{})
 	go func() {
-		err := exec.StreamWithContext(r.Context(), remotecommand.StreamOptions{
-			Stdin:             stdinReader,
-			Stdout:            wsOut,
-			Stderr:            wsOut,
-			Tty:               true,
-			TerminalSizeQueue: sizeQueue,
-		})
-		execDone <- err
-	}()
-
-	// Channel to receive WebSocket messages from reader goroutine
-	msgChan := make(chan []byte, 1)
-	readErrChan := make(chan error, 1)
-
-	// Read WebSocket messages in a separate goroutine
-	// Block on reads - use conn.Close() from watcher to unblock
-	go func() {
+		defer close(inputDone)
+		defer close(sizes.resizeChan)
+		defer stdinWriter.Close()
+		var reportedMalformed bool
 		for {
-			_, message, err := conn.ReadMessage()
+			_, frame, err := conn.ReadMessage()
 			if err != nil {
-				// Any error (including from Close()) means we're done
-				if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) &&
-					!websocket.IsUnexpectedCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-					select {
-					case readErrChan <- err:
-					default:
-					}
+				if ctx.Err() == nil && !errors.Is(err, net.ErrClosed) && !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived) {
+					log.Printf("[exec] terminal WebSocket read failed: %v", err)
 				}
 				return
 			}
-			select {
-			case msgChan <- message:
-			default:
-				// Drop message if main loop isn't reading
-			}
-		}
-	}()
-
-	// Watch for exec completion - close connection to unblock reader
-	go func() {
-		select {
-		case err := <-execDone:
-			if err != nil {
-				errMsg := err.Error()
-				errorType := "exec_error"
-				if isShellNotFoundError(errMsg) {
-					errorType = "shell_not_found"
-				} else if looksLikeShellNotFound(errMsg) {
-					// Drift canary: the error has shell-not-found hallmarks but
-					// isShellNotFoundError's substring matcher didn't recognize
-					// it. Most likely kubelet/runc/containerd reworded the
-					// upstream error text. Log a breadcrumb so we notice before
-					// users start filing "Failed to connect" bugs. See the
-					// looksLikeShellNotFound doc comment for rationale.
-					log.Printf("[exec] WARNING: error looks shell-related but isShellNotFoundError did not match — kubelet error text may have drifted; update isShellNotFoundError patterns if this recurs. errMsg=%q", errMsg)
-				}
-				log.Printf("Exec failed (%s): %v", errorType, err)
-				sendWSErrorWithType(conn, errorType, errMsg, podUID)
-			}
-			// Give browser time to process the error message before closing.
-			// Without this delay, conn.Close() tears down TCP before the
-			// browser's onmessage fires, so the error never reaches the UI.
-			time.Sleep(200 * time.Millisecond)
-			conn.Close()
-		case <-r.Context().Done():
-			conn.Close()
-		}
-	}()
-
-	// Main loop - process messages until read error (watcher handles exec completion)
-	for {
-		select {
-		case err := <-readErrChan:
-			// WebSocket read error
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				log.Printf("WebSocket read error: %v", err)
-			}
-			goto cleanup
-		case message := <-msgChan:
 			var msg TerminalMessage
-			if err := json.Unmarshal(message, &msg); err != nil {
-				log.Printf("WebSocket: invalid terminal message: %v", err)
+			if err := json.Unmarshal(frame, &msg); err != nil {
+				if !reportedMalformed {
+					log.Printf("[exec] malformed terminal WebSocket message")
+					reportedMalformed = true
+				}
 				continue
 			}
-
 			switch msg.Type {
 			case "input":
-				stdinWriter.Write([]byte(msg.Data))
+				// A blocked Kubernetes stdin must backpressure the browser, not discard keystrokes.
+				if _, err := io.WriteString(stdinWriter, msg.Data); err != nil {
+					if errors.Is(err, io.ErrClosedPipe) {
+						drainTerminalPeer(conn)
+					}
+					return
+				}
 			case "resize":
-				// Drain any stale pending size so the new one isn't dropped.
-				// The initial 80x24 may still be buffered if StreamWithContext
-				// hasn't consumed it yet (K8s API connect is slower than local WS).
 				select {
-				case <-sizeQueue.resizeChan:
+				case <-sizes.resizeChan:
 				default:
 				}
-				sizeQueue.resizeChan <- remotecommand.TerminalSize{
-					Width:  msg.Cols,
-					Height: msg.Rows,
+				sizes.resizeChan <- remotecommand.TerminalSize{Width: msg.Cols, Height: msg.Rows}
+			}
+		}
+	}()
+
+	streamDone := make(chan struct{})
+	var streamErr error
+	go func() {
+		defer close(streamDone)
+		streamErr = stream(ctx, remotecommand.StreamOptions{Stdin: stdinReader, Stdout: output, Stderr: output, Tty: true, TerminalSizeQueue: sizes})
+	}()
+
+	select {
+	case <-streamDone:
+		if ctx.Err() == nil {
+			deadline := time.Now().Add(terminalCloseTimeout)
+			if streamErr != nil {
+				conn.SetWriteDeadline(deadline)
+				sendPodExecError(conn, streamErr, uid, executable, output.wroteOutput.Load())
+			}
+			if writeTerminalClose(conn, deadline) == nil {
+				// Release any blocked input so the sole reader can consume the peer's close reply.
+				stdinReader.Close()
+				select {
+				case <-inputDone:
+				case <-ctx.Done():
+				case <-time.After(time.Until(deadline)):
 				}
 			}
-		case <-r.Context().Done():
-			goto cleanup
 		}
+	case <-inputDone:
+	case <-ctx.Done():
 	}
+	cancel()
+	conn.Close()
+	stdinReader.Close()
+	<-inputDone
+	<-streamDone
+}
 
-cleanup:
-	close(sizeQueue.resizeChan)
-	stdinWriter.Close()
+func sendPodExecError(conn *websocket.Conn, err error, podUID types.UID, executable string, wroteOutput bool) {
+	errMsg := err.Error()
+	errorType := "exec_error"
+	if !wroteOutput && isShellNotFoundError(errMsg, executable) {
+		errorType = "shell_not_found"
+	} else if !wroteOutput && looksLikeShellNotFound(errMsg) {
+		// Drift canary: the error has shell-not-found hallmarks but
+		// isShellNotFoundError's substring matcher didn't recognize
+		// it. Most likely kubelet/runc/containerd reworded the
+		// upstream error text. Log a breadcrumb so we notice before
+		// users start filing "Failed to connect" bugs. See the
+		// looksLikeShellNotFound doc comment for rationale.
+		log.Printf("[exec] WARNING: error looks shell-related but isShellNotFoundError did not match — kubelet error text may have drifted; update isShellNotFoundError patterns if this recurs. errMsg=%q", errMsg)
+	}
+	log.Printf("Exec failed (%s): %v", errorType, err)
+	sendWSErrorWithType(conn, errorType, errMsg, podUID, executable)
 }
 
 func sendWSError(conn *websocket.Conn, msg string) {
-	sendWSErrorWithType(conn, "exec_error", msg, "")
+	closeWithWSError(conn, "exec_error", msg)
+}
+
+func closeWithWSError(conn *websocket.Conn, errorType, msg string) {
+	deadline := time.Now().Add(terminalCloseTimeout)
+	conn.SetWriteDeadline(deadline)
+	sendWSErrorWithType(conn, errorType, msg, "", "")
+	if writeTerminalClose(conn, deadline) == nil {
+		conn.SetReadDeadline(deadline)
+		drainTerminalPeer(conn)
+	}
+}
+
+func writeTerminalClose(conn *websocket.Conn, deadline time.Time) error {
+	return conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), deadline)
+}
+
+func drainTerminalPeer(conn *websocket.Conn) {
+	for {
+		if _, _, err := conn.NextReader(); err != nil {
+			return
+		}
+	}
 }
 
 // sendWSErrorWithType sends an error with a specific error type to help frontend distinguish error causes
-func sendWSErrorWithType(conn *websocket.Conn, errorType, msg string, podUID types.UID) {
+func sendWSErrorWithType(conn *websocket.Conn, errorType, msg string, podUID types.UID, executable string) {
 	errMsg := struct {
-		Type      string    `json:"type"`
-		ErrorType string    `json:"errorType,omitempty"`
-		PodUID    types.UID `json:"podUID,omitempty"`
-		Data      string    `json:"data"`
+		Type       string    `json:"type"`
+		ErrorType  string    `json:"errorType,omitempty"`
+		Executable string    `json:"executable,omitempty"`
+		PodUID     types.UID `json:"podUID,omitempty"`
+		Data       string    `json:"data"`
 	}{
-		Type:      "error",
-		ErrorType: errorType,
-		PodUID:    podUID,
-		Data:      msg,
+		Type:       "error",
+		ErrorType:  errorType,
+		Executable: executable,
+		PodUID:     podUID,
+		Data:       msg,
 	}
 	data, err := json.Marshal(errMsg)
 	if err != nil {
@@ -522,14 +546,25 @@ func sendWSErrorWithType(conn *websocket.Conn, errorType, msg string, podUID typ
 }
 
 // isShellNotFoundError detects errors indicating the shell binary is missing
-func isShellNotFoundError(errMsg string) bool {
+func isShellNotFoundError(errMsg, executable string) bool {
+	lower := strings.ToLower(errMsg)
+	if strings.Contains(lower, "chdir") || strings.Contains(lower, "working directory") {
+		return false
+	}
+	if isShellMissing(errMsg) || isCommandNotFound(errMsg) {
+		return true
+	}
+	// A missing working directory can also return ENOENT. Match the executable
+	// named by the runtime before assigning the error to the command.
+	if executable != "" && strings.Contains(lower, "no such file or directory") {
+		command := strings.ToLower(executable)
+		if strings.Contains(lower, `exec: "`+command+`": stat `+command+`:`) ||
+			strings.Contains(lower, `exec: "`+command+`": no such file or directory`) {
+			return true
+		}
+	}
 	patterns := []string{
-		"executable file not found",
-		"no such file or directory",
-		"command not found",
-		"oci runtime exec failed",
 		"executable not found",
-		"not found in $path",
 		// POSIX exit 127 = "command not found". Some runtime/kubelet
 		// combinations surface a missing shell as "command terminated with
 		// exit code 127" via the exec stream rather than as a structured
@@ -548,9 +583,8 @@ func isShellNotFoundError(errMsg string) bool {
 		"hcs::system::createprocess",
 		"the system cannot find the file",
 	}
-	errLower := strings.ToLower(errMsg)
 	for _, pattern := range patterns {
-		if strings.Contains(errLower, pattern) {
+		if strings.Contains(lower, pattern) {
 			return true
 		}
 	}
