@@ -11,11 +11,16 @@ type kubecostTarget struct {
 	forwards    *portforward.Manager
 	contextName string
 	inCluster   bool
+	dedicated   bool
 }
 
 func captureKubecostTarget() kubecostTarget {
 	conn := k8s.Current()
-	return kubecostTarget{conn.PortForwards(), conn.ContextName(), k8s.IsInCluster()}
+	return kubecostTarget{
+		forwards:    conn.PortForwards(),
+		contextName: conn.ContextName(),
+		inCluster:   k8s.IsInCluster(),
+	}
 }
 
 // PrepareCandidate captures discovery and transport before releasing the cluster
@@ -43,6 +48,7 @@ func PrepareCandidate(config ManagerConfig) (func(context.Context) error, error)
 	if err != nil {
 		return nil, err
 	}
+	target.dedicated = true
 	return func(ctx context.Context) error {
 		const owner = "cost-candidate"
 		connection, err := connectDiscoveredKubecost(ctx, config, clusterID, aggregator, owner, target)

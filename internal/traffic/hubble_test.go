@@ -25,8 +25,11 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
+	ktesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/portforward"
 )
@@ -163,6 +166,59 @@ func TestConnectBothLanesFailReportsBoth(t *testing.T) {
 		if !strings.Contains(info.Error, want) {
 			t.Errorf("error %q missing %q", info.Error, want)
 		}
+	}
+}
+
+func TestHubbleClosedForwardManagerSkipsDirectDial(t *testing.T) {
+	for _, closeDuringStart := range []bool{false, true} {
+		name := "already closed"
+		if closeDuringStart {
+			name = "closed during Start"
+		}
+		t.Run(name, func(t *testing.T) {
+			listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			port := listener.Addr().(*net.TCPAddr).Port
+			client := fake.NewSimpleClientset(relayService(port, intstr.FromInt(4245)))
+			manager := portforward.NewManager(client, &rest.Config{})
+			defer manager.Close()
+			if closeDuringStart {
+				client.PrependReactor("get", "services", func(ktesting.Action) (bool, runtime.Object, error) {
+					manager.Close()
+					return true, nil, portforward.ErrClosed
+				})
+			} else {
+				manager.Close()
+			}
+
+			h := NewHubbleSource(client)
+			defer h.Close()
+			h.forwards = manager
+			h.servicePort, h.relayPort = port, 4245
+			h.clusterIP, h.probedAddr = "127.0.0.1", listener.Addr().String()
+
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			info, err := h.Connect(ctx, "ctx")
+			if !manager.Closed() {
+				t.Fatal("manager never closed during Start")
+			}
+			listener.SetDeadline(time.Now().Add(100 * time.Millisecond))
+			conn, acceptErr := listener.AcceptTCP()
+			if acceptErr == nil {
+				conn.Close()
+				t.Fatal("Connect dialed the old relay after the forward manager closed")
+			}
+			if timeout, ok := acceptErr.(net.Error); !ok || !timeout.Timeout() {
+				t.Fatal(acceptErr)
+			}
+			if ctx.Err() != nil || err != nil || info == nil || info.Connected || !strings.Contains(info.Error, portforward.ErrClosed.Error()) {
+				t.Fatalf("Connect did not promptly report the closed manager: info=%+v err=%v context=%v", info, err, ctx.Err())
+			}
+		})
 	}
 }
 

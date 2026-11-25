@@ -222,3 +222,71 @@ func TestCarettaFlowReadRetriesFailedReconnect(t *testing.T) {
 		t.Fatalf("later flow read did not restore the tunnel: response=%+v err=%v", response, err)
 	}
 }
+
+func TestCarettaCancelledRevalidationKeepsBinding(t *testing.T) {
+	for _, query := range []string{"up", "count(caretta_links_observed)"} {
+		t.Run(query, func(t *testing.T) {
+			cfg := forwardtest.Server(t, forwardtest.ServeTunnel)
+			manager := portforward.NewManager(kubernetes.NewForConfigOrDie(cfg), cfg)
+			defer manager.Close()
+			forward, err := manager.Start(portforward.OwnerTraffic, t.Context(), "ns", "svc", 9090, "ctx")
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			metrics := promStub(t, promBackend{links: true})
+			entered := make(chan struct{})
+			var stall atomic.Bool
+			stall.Store(true)
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Query().Get("query") == query && stall.CompareAndSwap(true, false) {
+					close(entered)
+					<-r.Context().Done()
+					return
+				}
+				metrics.Config.Handler.ServeHTTP(w, r)
+			}))
+			defer backend.Close()
+
+			c := NewCarettaSource(fake.NewSimpleClientset())
+			defer c.Close()
+			c.currentContext, c.isConnected = "ctx", true
+			c.bindLocked(forward.Address(), &metricsServiceInfo{namespace: "ns", name: "svc"}, forward)
+			localPort := forward.Info().LocalPort
+			c.httpClient.Transport = &http.Transport{DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				if addr != fmt.Sprintf("localhost:%d", localPort) {
+					return nil, fmt.Errorf("unexpected metrics address %s", addr)
+				}
+				return (&net.Dialer{}).DialContext(ctx, network, backend.Listener.Addr().String())
+			}}
+			defer c.httpClient.CloseIdleConnections()
+
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			finished := make(chan struct{})
+			go func() {
+				defer close(finished)
+				_, _ = c.Connect(ctx, "ctx")
+			}()
+			select {
+			case <-entered:
+			case <-finished:
+				t.Fatal("Connect returned before revalidating the binding")
+			case <-time.After(5 * time.Second):
+				t.Fatal("revalidation did not reach the backend")
+			}
+			cancel()
+			<-finished
+			if !forward.Alive() || c.forward != forward || c.prometheusAddr != forward.Address() {
+				t.Fatal("cancelled revalidation closed or cleared the live binding")
+			}
+			if !c.backendVerified || !c.reconnectAfter.IsZero() {
+				t.Fatal("cancelled revalidation discarded verification or scheduled a reconnect")
+			}
+			response, err := c.GetFlows(t.Context(), FlowOptions{})
+			if err != nil || len(response.Flows) != 1 || c.forward != forward {
+				t.Fatalf("later flow read did not reuse the binding: response=%+v err=%v", response, err)
+			}
+		})
+	}
+}

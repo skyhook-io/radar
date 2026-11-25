@@ -398,6 +398,9 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 			Error:     "traffic source closed (context switched)",
 		}, nil
 	}
+	if h.forwards.Closed() {
+		return &portforward.ConnectionInfo{Error: portforward.ErrClosed.Error()}, nil
+	}
 
 	namespace := h.relayNamespace
 	if namespace == "" {
@@ -473,7 +476,7 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 	// failure. Covers every fallback failure, including a reused forward that
 	// turns out to be broken.
 	retryDirectAfterSkip := func() *portforward.ConnectionInfo {
-		if !skippedDirect || ctx.Err() != nil {
+		if !skippedDirect || ctx.Err() != nil || h.forwards.Closed() {
 			return nil
 		}
 		if retryErr := h.tryDirectLocked(ctx, directAddr); retryErr == nil {
@@ -607,6 +610,10 @@ func tcpReachable(addr string, timeout time.Duration) bool {
 // verdict (including Connect's own inline observations).
 func (h *HubbleSource) probeDirectAsync(addr string) {
 	h.mu.Lock()
+	if h.closed || h.forwards.Closed() {
+		h.mu.Unlock()
+		return
+	}
 	h.probeSeq++
 	gen := h.probeSeq
 	h.mu.Unlock()

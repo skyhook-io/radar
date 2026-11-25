@@ -720,7 +720,9 @@ func (c *CarettaSource) revalidateBoundLocked(ctx context.Context, addr string) 
 		return false
 	}
 	if !c.boundIsCarettaStore {
-		c.backendVerified = c.carettaMetricsPresentLocked(ctx, addr)
+		if verified := c.carettaMetricsPresentLocked(ctx, addr); ctx.Err() == nil {
+			c.backendVerified = verified
+		}
 	}
 	return true
 }
@@ -977,6 +979,9 @@ func (c *CarettaSource) connectLocked(ctx context.Context, contextName string) *
 		c.reconnectDelay = 0
 		return info
 	}
+	if ctx.Err() != nil && c.forward.Alive() {
+		return info
+	}
 	c.reconnectAfter = time.Now()
 	if ctx.Err() == nil {
 		c.reconnectDelay = min(max(5*time.Second, 2*c.reconnectDelay), time.Minute)
@@ -999,7 +1004,11 @@ func (c *CarettaSource) tryConnectLocked(ctx context.Context, contextName string
 	// If already connected to the same context, check if still valid
 	if c.prometheusAddr != "" && c.currentContext == contextName {
 		testAddr := c.prometheusAddr + c.metricsBasePath
-		if c.revalidateBoundLocked(ctx, testAddr) {
+		valid := c.revalidateBoundLocked(ctx, testAddr)
+		if err := ctx.Err(); err != nil {
+			return &portforward.ConnectionInfo{Error: err.Error(), ContextName: contextName}
+		}
+		if valid {
 			return &portforward.ConnectionInfo{
 				Connected:   true,
 				Address:     c.prometheusAddr,

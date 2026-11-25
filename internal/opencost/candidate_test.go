@@ -15,6 +15,9 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/portforward"
+	"github.com/skyhook-io/radar/internal/portforward/forwardtest"
+	"github.com/skyhook-io/radar/pkg/k8score"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -81,29 +84,7 @@ func TestFailedKubecostProbeAfterSwitchKeepsReplacementForward(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			io.WriteString(w, `{"kind":"PodList","apiVersion":"v1","items":[{"metadata":{"name":"aggregator-0"},"status":{"phase":"Running"}}]}`)
 		})
-		mux.HandleFunc("POST /api/v1/namespaces/cost/pods/aggregator-0/portforward", func(w http.ResponseWriter, r *http.Request) {
-			if _, err := httpstream.Handshake(r, w, []string{"portforward.k8s.io"}); err != nil {
-				return
-			}
-			conn := spdy.NewResponseUpgrader().UpgradeResponse(w, r, func(stream httpstream.Stream, replied <-chan struct{}) error {
-				go func() {
-					<-replied
-					defer stream.Close()
-					if stream.Headers().Get(corev1.StreamType) != corev1.StreamTypeData {
-						return
-					}
-					if _, err := http.ReadRequest(bufio.NewReader(stream)); err != nil {
-						return
-					}
-					body := answer()
-					fmt.Fprintf(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
-				}()
-				return nil
-			})
-			if conn != nil {
-				<-conn.CloseChan()
-			}
-		})
+		mux.HandleFunc("POST /api/v1/namespaces/cost/pods/aggregator-0/portforward", kubecostTestTunnel(answer))
 		api := httptest.NewServer(mux)
 		t.Cleanup(api.Close)
 		cfg := &rest.Config{Host: api.URL}
@@ -163,5 +144,95 @@ func TestFailedKubecostProbeAfterSwitchKeepsReplacementForward(t *testing.T) {
 	k8s.ResetAllSubsystems()
 	if bConn.lease.alive() {
 		t.Fatal("connection teardown left B's tunnel open")
+	}
+}
+
+func TestKubecostCandidateTunnelIsDedicated(t *testing.T) {
+	t.Cleanup(k8s.SnapshotTestConnection())
+	t.Cleanup(k8s.SetTestLocalMode())
+	probing, release := make(chan struct{}), make(chan struct{})
+	resume := sync.OnceFunc(func() { close(release) })
+	defer resume()
+	cfg := forwardtest.Server(t, kubecostTestTunnel(func() string {
+		close(probing)
+		<-release
+		return `{"code":200,"data":[{"test":{"properties":{"cluster":"test"},"totalCost":1}}]}`
+	}))
+	if _, err := k8s.InstallTestServingConnection("ctx", cfg, nil, fake.NewSimpleClientset().Discovery()); err != nil {
+		t.Fatal(err)
+	}
+	k8s.SetTestClient(kubernetes.NewForConfigOrDie(cfg))
+	labels := map[string]string{"app": "aggregator"}
+	service := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "svc", Namespace: "ns", Labels: labels},
+		Spec: corev1.ServiceSpec{
+			Selector: labels,
+			Ports:    []corev1.ServicePort{{Name: "tcp-api", Port: 9004}},
+		},
+	}
+	statefulSet := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "aggregator", Namespace: "ns", Labels: labels},
+		Spec:       appsv1.StatefulSetSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}}},
+		Status:     appsv1.StatefulSetStatus{ReadyReplicas: 1},
+	}
+	if err := k8s.InitScopedTestResourceCache(fake.NewSimpleClientset(service, statefulSet), map[string]k8score.ResourceScope{
+		string(k8score.Services):     {Enabled: true},
+		string(k8score.StatefulSets): {Enabled: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer k8s.ResetResourceCache()
+	forwards := k8s.Current().PortForwards()
+	defer forwards.Close()
+	probe, err := PrepareCandidate(ManagerConfig{Source: SourceKubecost, ClusterID: "test", ClusterIDContext: "ctx"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := make(chan error, 1)
+	go func() { result <- probe(t.Context()) }()
+	select {
+	case <-probing:
+	case err := <-result:
+		t.Fatalf("candidate never reached its forwarded probe: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("candidate did not reach its forwarded probe")
+	}
+	if peer := forwards.GetAddressForService(portforward.OwnerPrometheus, "ctx", "ns", "svc"); peer != nil {
+		t.Errorf("candidate probe exposed its tunnel to peer lookup at %s", peer.Address())
+	}
+	resume()
+	if err := <-result; err != nil {
+		t.Fatalf("candidate probe failed: %v", err)
+	}
+}
+
+func kubecostTestTunnel(answer func() string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "use SPDY", http.StatusBadRequest)
+			return
+		}
+		if _, err := httpstream.Handshake(r, w, []string{"portforward.k8s.io"}); err != nil {
+			return
+		}
+		conn := spdy.NewResponseUpgrader().UpgradeResponse(w, r, func(stream httpstream.Stream, replied <-chan struct{}) error {
+			go func() {
+				<-replied
+				defer stream.Close()
+				if stream.Headers().Get(corev1.StreamType) != corev1.StreamTypeData {
+					return
+				}
+				if _, err := http.ReadRequest(bufio.NewReader(stream)); err != nil {
+					return
+				}
+				body := answer()
+				fmt.Fprintf(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
+			}()
+			return nil
+		})
+		if conn != nil {
+			<-conn.CloseChan()
+		}
 	}
 }
