@@ -7346,7 +7346,8 @@ export function useArtifactHubChart(
 // GitOps Mutation Factory
 // ============================================================================
 
-type GitOpsTargetVars = ArgoAppVars & { kind?: string };
+type GitOpsConnection = { apiBase: string; connectionId?: string };
+type GitOpsTargetVars = ArgoAppVars & { kind?: string; expectedConnection?: GitOpsConnection };
 
 function gitOpsRequestTarget(queryClient: QueryClient, { namespace, name, kind }: GitOpsTargetVars): string {
   const clusterId = /^\/c\/([^/]+)$/.exec(getBasename())?.[1];
@@ -7385,6 +7386,10 @@ function createGitOpsMutation<TVariables extends GitOpsTargetVars, TContext = un
       ): Promise<GitOpsOperationResponse> => {
         const target = gitOpsRequestTarget(queryClient, variables);
         try {
+          const expected = variables.expectedConnection;
+          if (expected && (getApiBase() !== expected.apiBase || connectionHeaderValue(expected.apiBase) !== expected.connectionId)) {
+            throw new Error("The cluster connection changed before syncing. Return to the original cluster to retry.");
+          }
           const response = await apiFetch(
             apiUrl(config.getPath(variables)),
             {
@@ -7431,6 +7436,7 @@ type ArgoAppVars = { namespace: string; name: string };
 // useArgoSync sends these — splitting the type prevents callers from passing
 // resources/revision/prune to mutations that would silently drop them.
 export type ArgoSyncVars = ArgoAppVars & {
+  expectedConnection?: GitOpsConnection;
   isErrorShownInline?: () => boolean;
   resources?: Array<{
     group?: string;

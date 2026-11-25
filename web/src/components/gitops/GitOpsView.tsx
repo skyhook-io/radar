@@ -88,6 +88,7 @@ import {
 } from '../../api/client'
 import { useAPIResources, GITOPS_KINDS } from '../../api/apiResources'
 import { getApiBase } from '../../api/config'
+import { connectionHeaderValue } from '../../api/connectionBinding'
 import { combinedListStatus, lowerBound } from '../../api/resourceLists'
 import { useConnection } from '../../context/ConnectionContext'
 import { useRegisterShortcut } from '../../hooks/useKeyboardShortcuts'
@@ -810,6 +811,8 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
       onRemediate={(remediation) => {
         if (remediation.kind === 'create-namespace' && remediation.target) {
           const nsName = remediation.target
+          const apiBase = getApiBase()
+          const expectedConnection = { apiBase, connectionId: connectionHeaderValue(apiBase) }
           const yamlManifest = `apiVersion: v1\nkind: Namespace\nmetadata:\n  name: ${nsName}\n`
           applyResource.mutate(
             { yaml: yamlManifest, mode: 'apply' },
@@ -819,12 +822,15 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
                 // sync was triggered, so a successful create-namespace + sync
                 // failure doesn't yield a misleading "sync triggered" toast.
                 if (isArgoApp) {
-                  void remediationSync.mutateAsync({ namespace, name, applicationSyncOptions: appSyncOptions }).then(
+                  void remediationSync.mutateAsync({ namespace, name, applicationSyncOptions: appSyncOptions, expectedConnection }).then(
                     () => showSuccess(`Created namespace ${nsName}`, 'Sync triggered to retry the apply.'),
                     (error: Error) => {
                       const title = `Created namespace ${nsName}, but sync failed`
-                      if (error instanceof GitOpsActionError) showError(title, error.notificationDetail, error.rawDetail)
-                      else showError(title, error.message)
+                      if (error instanceof GitOpsActionError) {
+                        showError(title, `${error.notificationDetail}\nCheck the application’s status before retrying Sync.`, error.rawDetail)
+                      } else {
+                        showError(title, error.message)
+                      }
                     },
                   )
                 } else {

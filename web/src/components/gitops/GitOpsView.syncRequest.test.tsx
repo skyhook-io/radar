@@ -8,6 +8,7 @@ import { normalizeArgoApplication } from '@skyhook-io/k8s-ui'
 import type { ArgoActionHandlers, GitOpsInsight, GitOpsInsightRef, GitOpsRow, GitOpsRowAction } from '@skyhook-io/k8s-ui'
 import { GitOpsView } from './GitOpsView'
 import { isShownInline } from '../../api/httpErrors'
+import { observeConnectionStatus, resetConnectionBindingForTest } from '../../api/connectionBinding'
 
 // The requests the Sync dialog builds, sent by the real useArgoSync and
 // useArgoResourceValidation: only a Radar advertising argoSyncInheritance is
@@ -30,15 +31,16 @@ vi.mock('@skyhook-io/k8s-ui', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@skyhook-io/k8s-ui')>()
   return {
     ...actual,
-    useToast: () => ({ showError: vi.fn(), showSuccess: vi.fn(), showToast: vi.fn() }),
+    useToast: () => ({ showError: toast.error, showSuccess: vi.fn(), showToast: vi.fn() }),
     GitOpsTableView: (props: { rows: GitOpsRow[]; onRowAction: (row: GitOpsRow, action: GitOpsRowAction) => void }) => (
       <button type="button" onClick={() => props.onRowAction(props.rows[0], 'sync')}>Open sync</button>
     ),
-    GitOpsDetailLayout: (props: { argo?: ArgoActionHandlers; renderTabBody: (ctx: { tab: 'changes'; fullscreen: boolean }) => React.ReactNode; children?: React.ReactNode }) => {
+    GitOpsDetailLayout: (props: { argo?: ArgoActionHandlers; onRemediate?: (remediation: { kind: 'create-namespace'; target: string }) => void; renderTabBody: (ctx: { tab: 'changes'; fullscreen: boolean }) => React.ReactNode; children?: React.ReactNode }) => {
       const navigate = useNavigate()
       return <div data-resume-settings={JSON.stringify(props.argo?.resumeSettings ?? null)}>
         <button type="button" onClick={() => props.argo?.onSyncRequested()}>Open sync</button>
         <button type="button" onClick={() => navigate('/gitops/detail/applications/argocd/other?apiGroup=argoproj.io')}>Open other Application</button>
+        <button type="button" onClick={() => props.onRemediate?.({kind: 'create-namespace', target: 'sandbox'})}>Create namespace and retry</button>
         {props.renderTabBody({ tab: 'changes', fullscreen: false })}
         {props.children}
       </div>
@@ -48,7 +50,7 @@ vi.mock('@skyhook-io/k8s-ui', async (importOriginal) => {
     ),
   }
 })
-const toast = vi.hoisted(() => ({ success: vi.fn() }))
+const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }))
 vi.mock('../ui/Toast', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../ui/Toast')>()),
   showApiSuccess: toast.success,
@@ -62,7 +64,7 @@ vi.mock('../../api/client', async (importOriginal) => {
     useGitOpsTree: () => ({ data: undefined, isLoading: false, error: null }),
     useGitOpsInsights: () => ({ data: insight, isLoading: false, error: null }),
     useArgoRollback: idle, useArgoRefresh: idle, useArgoTerminate: idle,
-    useArgoSuspend: idle, useArgoResume: idle, useApplyResource: idle,
+    useArgoSuspend: idle, useArgoResume: idle,
     useFluxReconcile: idle, useFluxSyncWithSource: idle, useFluxSuspend: idle, useFluxResume: idle,
   }
 })
@@ -84,14 +86,21 @@ let root: ReturnType<typeof createRoot>
 let requests: Array<{ path: string; body: Record<string, unknown> }>
 let syncDenial: { error: string; error_code: string; summary: string } | undefined
 let pendingSyncResponse: Promise<Response> | undefined
+let pendingNamespaceResponse: Promise<Response> | undefined
 
 beforeEach(async () => {
   requests = []
   syncDenial = undefined
   pendingSyncResponse = undefined
+  pendingNamespaceResponse = undefined
+  toast.error.mockClear()
   vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
     if (init?.method === 'POST') {
+      if (path.includes('/resources/apply')) {
+        requests.push({ path, body: {} })
+        return pendingNamespaceResponse ?? Promise.resolve(Response.json([]))
+      }
       requests.push({ path, body: JSON.parse(String(init.body)) })
       if (path.endsWith('/sync') && pendingSyncResponse) return pendingSyncResponse
       if (path.endsWith('/sync') && syncDenial) {
@@ -113,6 +122,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await act(async () => root.unmount())
   client.clear()
+  resetConnectionBindingForTest()
   host.remove()
   document.body.innerHTML = ''
   app.spec.source = {}
@@ -429,4 +439,19 @@ it('keeps global error reporting for a rejection after leaving the originating A
   expect(mutation?.state.status).toBe('error')
   expect(mutation?.options.meta?.errorMessage).toBe('Failed to trigger sync')
   expect(isShownInline(mutation?.state.error)).toBe(false)
+})
+
+it('skips automatic Sync if the connection changes after namespace creation starts', async () => {
+  let applied!: (response: Response) => void
+  pendingNamespaceResponse = new Promise<Response>(resolve => { applied = resolve })
+  observeConnectionStatus({ connectionId: 'first-connection' })
+  await click(button('Create namespace and retry'))
+  expect(requests.map(({ path }) => path)).toEqual([expect.stringContaining('/resources/apply')])
+
+  observeConnectionStatus({ connectionId: 'next-connection' })
+  await act(async () => applied(Response.json([])))
+  await settle()
+
+  expect(requests).toHaveLength(1)
+  expect(toast.error).toHaveBeenCalledWith('Created namespace sandbox, but sync failed', expect.stringContaining('cluster connection changed'))
 })
