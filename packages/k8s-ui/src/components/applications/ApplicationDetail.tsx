@@ -128,20 +128,21 @@ import {
 
 export type SelectedAppWorkload = NeighborhoodSeed;
 
-/** One env instance in the identity switcher — a sibling app row's digest. */
+/** An entry in the application's environment switcher. */
 export interface AppIdentityInstance {
+  /** The host's stable key for this instance. */
   appKey: string;
   name: string;
   env: string;
   /** Secondary text beside the environment, such as the cluster. Instances sharing an environment show their names instead. */
   detail?: string;
   health: AppHealth;
-  /** Observed running version, used to compare promotion across environments. */
+  /** Cluster-reported version (image tag or app version label) used to compare promotion across environments. */
   version?: string;
-  /** Configured version shown when the running version is unknown. */
-  declaredVersion?: string;
-  confidence: string;
-  evidence: string;
+  /** Configured version shown when the cluster-reported version is unknown. */
+  configuredVersion?: string;
+  confidence?: string;
+  evidence?: string;
   count?: number;
   /** Stands for every environment at once (e.g. "All environments"): shown first, never counted as one. */
   aggregate?: boolean;
@@ -264,7 +265,8 @@ type ApplicationDetailBaseProps = {
   /** Delay stale URL repairs while views or workload evidence load. While a
    *  workload link is pending, suppress app-level host content and Deploys content. */
   selectionLoading?: boolean;
-  /** Show versions inline and keep up to six environment pills. Defaults to four pills without inline versions. */
+  /** Show versions on inline pills. Up to four distinct environments use pills, excluding the aggregate entry.
+   *  With more environments, the picker always includes available versions. */
   showEnvironmentVersions?: boolean;
   /** The active instance has nothing live to show (not deployed, its cluster
    *  offline, …): Overview, Topology and Timeline show this instead. Deploys
@@ -295,11 +297,10 @@ type ApplicationDetailBaseProps = {
     workload: SelectedAppWorkload,
     run: TopologyNode,
   ) => void;
-  /** App identity siblings, including the active instance. An optional
-   *  aggregate entry is offered first and excluded from grouping evidence. */
+  /** Switcher entries including the active instance, in the host's display order.
+   *  An optional aggregate entry appears first and is excluded from grouping evidence. */
   identityInstances?: AppIdentityInstance[] | null;
-  /** Switch to a sibling instance (host swaps ?app= and, when it can match
-   *  the current workload in the target, preserves ?workload= + ?tab=). */
+  /** Called with the host's stable instance key when the user switches entries. */
   onSwitchInstance?: (appKey: string) => void;
   /** Env tokens the cluster proved (the list derives the same set) — keeps a
    *  ungrouped app's Environment fact consistent between list and detail. */
@@ -3654,16 +3655,6 @@ function restartWarning(
   return worst;
 }
 
-// EnvSwitcher — the Environment fact's interactive form when one app runs in
-// several environments. Up to MAX_INLINE_ENVS environments: inline pills (the
-// at-a-glance ladder, what runs where). More: a picker popover with the full
-// ladder-ordered list — same affordance at 7 envs or 100. An aggregate entry
-// ("All environments") isn't an environment: it neither counts toward the
-// limit nor in the picker's count. Each pill carries its version, and its
-// tooltip why the instance belongs to this app; when a ranked lower env
-// outruns a ranked higher one, the amber lag chip follows.
-const MAX_INLINE_ENVS = 6;
-
 // A switcher pill's tooltip: the instance, its version, and why it belongs to
 // this app when the host says.
 function InstanceTooltip({ instance }: { instance: AppIdentityInstance }) {
@@ -3671,7 +3662,7 @@ function InstanceTooltip({ instance }: { instance: AppIdentityInstance }) {
     <span className="block max-w-xs">
       <span className="block">
         {instance.name}
-        {instance.version ? ` · ${instance.version}` : instance.declaredVersion ? ` · ${instance.declaredVersion} (configured)` : ""}
+        {instance.version ? ` · ${instance.version}` : instance.configuredVersion ? ` · ${instance.configuredVersion} (configured)` : ""}
       </span>
       {instance.evidence && (
         <span className="mt-0.5 block text-theme-text-tertiary">{instance.evidence}</span>
@@ -3681,7 +3672,7 @@ function InstanceTooltip({ instance }: { instance: AppIdentityInstance }) {
 }
 
 function InstanceVersion({ instance }: { instance: AppIdentityInstance }) {
-  const version = instance.version || instance.declaredVersion;
+  const version = instance.version || instance.configuredVersion;
   if (!version) return null;
   return (
     <span className="text-[10px] text-theme-text-tertiary">
@@ -3732,7 +3723,9 @@ function EnvSwitcher({
     <span className={`${CHIP} ${CHIP_TONE.amber}`}>{lag}</span>
   );
   const evidenceChip = actualEnvironments.some((inst) => inst.evidence) && (
-    <Tooltip content={<AppIdentityTooltip identityKey={identityKey} members={actualEnvironments} />} delay={150}>
+    <Tooltip content={<AppIdentityTooltip identityKey={identityKey} members={actualEnvironments.map(
+      ({ name, env, confidence = "", evidence = "" }) => ({ name, env, confidence, evidence }),
+    )} />} delay={150}>
       <span role="img" aria-label="Application grouping evidence" className="inline-flex cursor-default items-center rounded-sm bg-theme-hover px-1 py-px ring-1 ring-inset ring-theme-border">
         <Layers className="h-3 w-3 text-theme-text-tertiary" aria-hidden />
       </span>
@@ -3741,7 +3734,7 @@ function EnvSwitcher({
 
   const orderedInstances = [...instances.filter((inst) => inst.aggregate), ...instances.filter((inst) => !inst.aggregate)];
   const envCount = envInstances.length;
-  if (envCount <= (showVersions ? MAX_INLINE_ENVS : 4)) {
+  if (envCount <= 4) {
     return (
       <span className="flex flex-wrap items-center gap-1">
         {orderedInstances.map((inst) => {

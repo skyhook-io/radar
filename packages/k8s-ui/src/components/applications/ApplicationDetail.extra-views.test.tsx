@@ -484,28 +484,25 @@ describe('ApplicationDetail extra views', () => {
     expect(selected(some.host)).toEqual(['Topology'])
   })
 
-  it('keeps every environment a pill, with its version, up to six environments; All environments is not counted', () => {
-    const instance = (env: string, extra: object = {}) => ({ appKey: env, name: env, env, version: `${env}-v1`, health: 'healthy' as const, confidence: 'high', evidence: '', ...extra })
-    const envs = ['prod', 'prod-internal', 'staging', 'demo', 'qa', 'dev']
-    const { host } = show({
-      showEnvironmentVersions: true,
-      identityInstances: [instance('All environments', { aggregate: true, version: undefined }), ...envs.map((e) => instance(e))],
+  it.each([false, true])('switches to the picker at five distinct environments with showEnvironmentVersions=%s', (showEnvironmentVersions) => {
+    const instance = (env: string) => ({ appKey: env, name: env, env, version: '1.2.0', health: 'healthy' as const })
+    const entries = [
+      ...['prod', 'staging', 'qa', 'dev'].map(instance),
+      { ...instance('prod'), appKey: 'prod-east', name: 'east' },
+      { ...instance('All environments'), aggregate: true, version: undefined },
+    ]
+    const props = {
+      showEnvironmentVersions,
       activeInstanceKey: 'prod',
       onSwitchInstance: () => {},
-    })
-    const pills = Array.from(host.querySelectorAll('button[aria-current], button')).filter((b) => envs.some((e) => b.textContent === `${e}${e}-v1`))
-    expect(pills).toHaveLength(6)
-    expect(host.textContent).not.toContain('environments ')
-    act(() => root?.unmount())
-
-    // A seventh: the picker, counting environments only.
-    const more = show({
-      showEnvironmentVersions: true,
-      identityInstances: [instance('All environments', { aggregate: true, version: undefined }), ...[...envs, 'perf'].map((e) => instance(e))],
-      activeInstanceKey: 'prod',
-      onSwitchInstance: () => {},
-    })
-    expect(more.host.textContent).toContain('· 7 environments')
+    }
+    const { host, rerender } = show({ ...props, identityInstances: entries })
+    const labels = Array.from(host.querySelectorAll('button'), pill => pill.textContent)
+    expect(labels).toContain('All environments')
+    const stagingLabel = showEnvironmentVersions ? 'staging1.2.0' : 'staging'
+    expect(labels.indexOf(stagingLabel)).toBeGreaterThan(labels.indexOf('All environments'))
+    rerender({ ...props, identityInstances: [...entries, instance('demo')] })
+    expect(host.textContent).toContain('· 5 environments')
   })
 
   it('marks the current instance with aria-current and shows each version on its pill', () => {
@@ -521,7 +518,7 @@ describe('ApplicationDetail extra views', () => {
   it('displays a configured version without using it as evidence of promotion lag', () => {
     const instance = (env: string) => ({ appKey: env, name: env, env, health: 'healthy' as const, confidence: 'high', evidence: '' })
     const prod = { ...instance('prod'), version: '1.0.0' }
-    const staging = { ...instance('staging'), declaredVersion: '2.0.0' }
+    const staging = { ...instance('staging'), configuredVersion: '2.0.0' }
     const props = { showEnvironmentVersions: true, activeInstanceKey: 'prod', onSwitchInstance: () => {} }
     const { host, rerender } = show({ ...props, identityInstances: [prod, staging] })
     const stagingButton = () => Array.from(host.querySelectorAll('button')).find(b => b.textContent?.startsWith('staging'))!
@@ -537,7 +534,7 @@ describe('ApplicationDetail extra views', () => {
   })
 
   it('shows the identity evidence chip only for evidence from a non-aggregate instance', () => {
-    const prod = { appKey: 'prod', name: 'prod', env: 'prod', health: 'healthy' as const, confidence: 'high', evidence: '' }
+    const prod = { appKey: 'prod', name: 'prod', env: 'prod', health: 'healthy' as const }
     const all = { ...prod, appKey: 'all', env: 'All environments', aggregate: true, evidence: 'aggregate' }
     const props = { activeInstanceKey: 'prod', onSwitchInstance: () => {} }
     const { host, rerender } = show({ ...props, identityInstances: [all, prod] })
