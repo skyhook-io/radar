@@ -1251,6 +1251,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         // GitOps view is mounted (Phase 2 will make this relevance-aware).
         queryClient.invalidateQueries({ queryKey: ['gitops-tree'] })
         queryClient.invalidateQueries({ queryKey: ['gitops-insights'] })
+        // Traefik route facts join routes, Middlewares, Services, Pods and
+        // Secrets; only an open drawer's query refetches.
+        queryClient.invalidateQueries({ queryKey: ['traefik'] })
         if (cnpgInvalidationPendingRef.current) {
           cnpgInvalidationPendingRef.current = false
           queryClient.invalidateQueries({ queryKey: ['cnpg', 'workspace'] })
