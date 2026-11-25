@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/rightsizing"
 )
 
 func scopeTestCache(t *testing.T, types map[string]bool, objects ...runtime.Object) *k8s.ResourceCache {
@@ -153,12 +155,29 @@ func TestCurrentReadersExcludePreviousControllerIncarnations(t *testing.T) {
 	previousRS := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "old", UID: "old-uid", OwnerReferences: []metav1.OwnerReference{previousRoot}}}
 	staleOwner := scopeOwner("ReplicaSet", "active")
 	staleOwner.UID = "previous-rs"
+	wrongGroup := scopeOwner("ReplicaSet", "active")
+	wrongGroup.APIVersion = "example.com/v1"
+	pod := func(name string, owner metav1.OwnerReference, qos corev1.PodQOSClass) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: name, OwnerReferences: []metav1.OwnerReference{owner}},
+			Status: corev1.PodStatus{QOSClass: qos, ContainerStatuses: []corev1.ContainerStatus{{
+				Name: name, LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled"}},
+			}}},
+		}
+	}
 	cache := scopeTestCache(t, map[string]bool{k8score.Pods: true, k8score.Deployments: true, k8score.ReplicaSets: true},
 		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api", UID: "api-uid"}}, currentRS, previousRS,
-		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "current", OwnerReferences: []metav1.OwnerReference{scopeOwner("ReplicaSet", "active")}}},
-		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "previous-root", OwnerReferences: []metav1.OwnerReference{scopeOwner("ReplicaSet", "old")}}},
-		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "previous-rs", OwnerReferences: []metav1.OwnerReference{staleOwner}}},
+		pod("current", scopeOwner("ReplicaSet", "active"), corev1.PodQOSBurstable),
+		pod("previous-root", scopeOwner("ReplicaSet", "old"), corev1.PodQOSGuaranteed),
+		pod("previous-rs", staleOwner, corev1.PodQOSGuaranteed),
+		pod("wrong-group", wrongGroup, corev1.PodQOSGuaranteed),
 	)
+	scan, _, _ := snapshotScanWorkloads(context.Background(), cache, map[string][]string{"Deployment": {"shop"}}, time.Now())
+	var currentQoS rightsizing.PodQoS
+	currentQoS.Observe(corev1.PodQOSBurstable)
+	if len(scan) != 1 || scan[0].workload.qos != currentQoS || !reflect.DeepEqual(scan[0].workload.currentPodOOM, map[string]bool{"current": true}) {
+		t.Fatalf("scan must collect only the current Pod's QoS and OOM evidence: %+v", scan)
+	}
 	scope, err := ResolvePodScope(context.Background(), cache, "deployment", "shop", "api", 0)
 	if err != nil || !reflect.DeepEqual(scope.CurrentPods, []string{"current"}) || scope.CurrentTotal != 1 {
 		t.Fatalf("metrics scope=%+v err=%v", scope, err)

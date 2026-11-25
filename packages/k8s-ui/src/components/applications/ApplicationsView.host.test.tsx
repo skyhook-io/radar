@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 //
-// The slot hosts use to put something before an app's name, such as a star. It
-// has to stay out of the row's way, and a host that doesn't use it sees no change.
+// Hosts can add an action next to an app and move selected apps to the top.
 import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -129,5 +128,45 @@ describe('ApplicationsView renderRowLeading', () => {
     document.body.innerHTML = ''
     const { host: plain } = show([app('checkout')])
     expect(withSlot).toBe(rowOf(plain, 'checkout').innerHTML)
+  })
+})
+
+describe('ApplicationsView pinned section', () => {
+  const pinnedSection = { title: 'Following', predicate: (entry: { row: AppRow }) => entry.row.name.startsWith('z') }
+
+  it('puts a matching family and all its children before other rows, in keyboard order', () => {
+    const { host, onSelect } = show([app('alpha'), app('stage', 'shop'), app('zulu', 'shop')], { pinnedSection })
+    const rowLabels = () => [...host.querySelectorAll('tbody tr')].map((row) => row.textContent)
+    expect(rowLabels()).toEqual(['Following', expect.stringContaining('shop'), 'Other applications', expect.stringContaining('alpha')])
+    act(() => (host.querySelector('tr[aria-expanded]') as HTMLElement).click())
+    expect(rowLabels()).toEqual([
+      'Following', expect.stringContaining('shop'), expect.stringContaining('stage'), expect.stringContaining('zulu'),
+      'Other applications', expect.stringContaining('alpha'),
+    ])
+    const press = (key: string) => act(() => {
+      document.body.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }))
+    })
+    press('j')
+    press('j')
+    press('Enter')
+    expect(onSelect).toHaveBeenCalledWith('shop/stage')
+  })
+
+  it('keeps the active column sort within each section', () => {
+    const { host } = show([app('alpha'), app('zulu'), app('zebra'), app('beta')], { pinnedSection })
+    const nameSort = [...host.querySelectorAll('thead button')].find((button) => button.textContent?.includes('Application')) as HTMLElement
+    act(() => nameSort.click())
+    act(() => nameSort.click())
+    const rows = [...host.querySelectorAll('tbody tr')].map((row) => row.textContent)
+    expect(rows).toEqual([
+      'Following', expect.stringContaining('zulu'), expect.stringContaining('zebra'),
+      'Other applications', expect.stringContaining('beta'), expect.stringContaining('alpha'),
+    ])
+  })
+
+  it('omits empty sections', () => {
+    const { host } = show([app('alpha')], { pinnedSection })
+    expect(host.querySelectorAll('tbody tr')).toHaveLength(1)
+    expect(host.querySelector('tbody')?.textContent).toContain('alpha')
   })
 })

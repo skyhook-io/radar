@@ -52,10 +52,9 @@ const (
 )
 
 var (
-	clientGenerationCounter atomic.Uint64
-	// Guarded by clientMu (written in doInit/SwitchContext, read via
-	// runtimeAuthStateIsCurrent) — not an atomic like its neighbors.
-	activeClientGeneration  uint64
+	// Client bundles and typed caches each need a unique ID, even when a
+	// rescope reuses the bundle to construct a different cache.
+	clusterBuildSequence    atomic.Uint64
 	discoveryRequestTimeout = 32 * time.Second
 
 	runtimeAuthChecksMu sync.Mutex
@@ -88,7 +87,7 @@ func newSharedKubernetesClients(config *rest.Config) (*sharedKubernetesClients, 
 		return nil, fmt.Errorf("failed to create Kubernetes HTTP client: %w", err)
 	}
 
-	generation := clientGenerationCounter.Add(1)
+	generation := clusterBuildSequence.Add(1)
 	// Struct copy matters: rest.HTTPClientFor returns http.DefaultClient
 	// itself for default transports, and swapping Transport in place would
 	// mutate the process-wide client.
@@ -352,7 +351,7 @@ func runtimeAuthStateIsCurrent(generation uint64) bool {
 	// In-cluster SA tokens are refreshed from disk by client-go, so
 	// credential loss there is transient by construction — demotion is a
 	// kubeconfig-mode concern only.
-	isCurrent := !isInCluster && activeClientGeneration == generation
+	isCurrent := !isInCluster && installedConn.Load().ClientGeneration() == generation
 	clientMu.RUnlock()
 	return isCurrent && GetConnectionStatus().State == StateConnected
 }
@@ -468,6 +467,8 @@ func transitionConnectedToRuntimeAuthFailure(classification string) bool {
 		ErrorType:   classification,
 	}
 	status.DisconnectedAt = outageStart(connectionStatus, status, time.Now())
+	// Demotion is this connection's point of no return: retire its ID here.
+	serving = nil
 	connectionStatus = status
 	connectionStatusMu.Unlock()
 

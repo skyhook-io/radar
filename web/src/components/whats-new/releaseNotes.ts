@@ -88,7 +88,7 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
         id: 'java4shell-check',
         icon: ScanSearch,
         title: 'Check for Java4Shell',
-        description: 'Check declared Java versions in workload drawers or with radar check java4shell. Node CPU features help prioritize fixes. Works without Trivy.',
+        description: 'Find affected Java versions in Checks or with radar check java4shell. Node CPU features help prioritize fixes. Works without Trivy.',
         importance: 7,
         path: '/checks/vulnerabilities',
         cta: 'Open Java4Shell check',

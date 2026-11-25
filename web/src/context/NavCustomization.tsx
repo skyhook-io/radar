@@ -4,14 +4,16 @@ import type { ReactNode } from 'react';
 /**
  * Per-cluster destinations an embedded host can take over with its own
  * fleet-scoped pages. See `fleetTakeoverHref`. 'issues' | 'gitops' | 'checks'
- * are also Radar view names (so route entry redirects too); 'certs' is
+ * are also Radar view names. 'rightsizing' takes over /cost/rightsizing; 'certs' is
  * card-only (Radar has no certs view).
  */
-export type FleetTakeoverTarget = 'issues' | 'gitops' | 'checks' | 'certs';
+export type FleetTakeoverTarget = 'issues' | 'gitops' | 'checks' | 'certs' | 'rightsizing';
 
 export interface NavCustomization {
   /** Radar Hub owns all chrome; Radar renders only the active view. */
   embedded?: boolean;
+  /** The host's metrics status endpoint explicitly identifies the rightsizing provider. */
+  rightsizingProviderStatus?: boolean;
   /**
    * When set, a "Compare across clusters" option is added to the Compare
    * button in resource action bars. The host returns the URL that should
@@ -38,6 +40,7 @@ export interface NavCustomization {
    *   - 'gitops'  → the GitOps controllers card
    *   - 'checks'  → the Cluster Audit card (and any route to /audit)
    *   - 'certs'   → the Certificate Health card
+   *   - 'rightsizing' → the workload scan; the host receives its router search to retain scope
    *
    * View-shaped targets (issues / gitops / checks) are honored for every entry:
    * in-app nav (Home cards, ⌘K, "view all") hands straight to the host from
@@ -48,7 +51,7 @@ export interface NavCustomization {
    * the card consults it. `onHostNavigate` is optional — without it everything
    * falls back to `window.location` (a hard reload).
    */
-  fleetTakeoverHref?: (target: FleetTakeoverTarget) => string | undefined;
+  fleetTakeoverHref?: (target: FleetTakeoverTarget, search?: string) => string | undefined;
   /**
    * Optional smooth navigator for host-owned URLs. When the host takes a
    * destination over (`fleetTakeoverHref`, `crossClusterCompareHref`), Radar

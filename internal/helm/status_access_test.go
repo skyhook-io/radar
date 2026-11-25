@@ -121,7 +121,7 @@ func TestReleaseDetailWithholdsStatusOfObjectsTheCallerCantRead(t *testing.T) {
 	}
 	detail := func(scope *ObjectScope) (*HelmReleaseDetail, map[string]OwnedResource) {
 		t.Helper()
-		d, err := getReleaseWith(cfg, "", "team-a", "payments", scope)
+		d, err := getReleaseWith(context.Background(), cfg, "", "team-a", "payments", scope)
 		if err != nil {
 			t.Fatal(err)
 		}

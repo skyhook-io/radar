@@ -1041,3 +1041,22 @@ describe('cluster span cap (a pill never spans far-apart events)', () => {
     expect(out[0].count).toBe(3)
   })
 })
+
+describe('resource timeline empty time window', () => {
+  it('explains recorded events outside the window and offers restoring the full range', () => {
+    const html = renderToString(
+      <TimelineSwimlanes
+        events={[mkEvent('web')]}
+        compact grouping="flat" nowMs={NOW}
+        viewWindow={{ fromMs: NOW - 2 * HOUR, toMs: NOW - HOUR }}
+        bounds={BOUNDS} onViewWindowChange={() => {}}
+      />,
+    )
+    expect(html.match(/No recorded activity in this time window/g)).toHaveLength(1)
+    expect(html).toContain('1 event')
+    expect(html).toContain('outside this time window')
+    expect(html).toContain('Show all recorded activity')
+    expect(html).not.toContain('strip above')
+    expect(html).not.toContain('No events yet')
+  })
+})

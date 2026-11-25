@@ -300,8 +300,10 @@ Table-based resource browser with smart columns per resource kind.
 - Search by name, filter by status or problems (CrashLoopBackOff, ImagePullBackOff, etc.)
 - Add custom columns from any label or annotation — sortable, filterable, and resizable
 - Click any resource for YAML manifest, related resources, logs, and events
+- Open **Logs** on a ReplicaSet, or press **L** on its resource row, to follow the Pods controlled by that revision during a rollout.
 - Pod logs list init containers, marked `(init)`, and open on the init container a Pod is stuck on, so a Pod that never starts still shows why
 - Set regular or init-container images on Deployments, StatefulSets, DaemonSets, and Argo Rollouts, with live rollout progress in tables, drawers, workload views, and Applications
+- Investigate app changes in Timeline and compare a workload’s retained revisions from Overview. Apps with identified Helm or GitOps delivery records also offer Deploys, with each recorded revision, outcome, and source.
 
 ### Image Filesystem Viewer
 
@@ -352,9 +354,8 @@ Diff any two Kubernetes resources of the same kind side-by-side — like compari
 
 View TLS certificate details and expiry dates across all namespaces — catch expiring certificates before they cause outages.
 
-- Parses TLS secrets to show certificate subject, issuer, and validity period
+- Open a Secret to inspect the PEM certificates in each data key, including CA bundles in Opaque Secrets
 - Dashboard-level certificate expiry overview
-- Available from the resource detail view for any TLS-type Secret
 
 ### GitOps
 
@@ -365,7 +366,7 @@ Monitor, diagnose, and manage FluxCD and ArgoCD resources in one place.
   <br><em>GitOps fleet view — Argo + Flux applications side-by-side with sync, health, source, destination, and lifecycle state</em>
 </p>
 
-- Fleet view + per-app detail page for **ArgoCD** (`Application`, `ApplicationSet`, `AppProject`) and **FluxCD** (`GitRepository`, `OCIRepository`, `HelmRepository`, `Bucket`, `Kustomization`, `HelmRelease`, `Alert`)
+- Fleet view + per-app detail page for **ArgoCD** (`Application`, `ApplicationSet`, `AppProject`) and **FluxCD** (`GitRepository`, `OCIRepository`, `HelmRepository`, `Bucket`, `ExternalArtifact`, `ArtifactGenerator`, `Kustomization`, `HelmRelease`, `Alert`)
 - **Flux Operator** — a Flux card on the GitOps page (version, controllers, reconciler counts from `FluxReport`) and views for `FluxInstance`, `FluxReport`, `ResourceSet`, `ResourceSetInputProvider`
 - **Diagnosis** — field-level drift, recent events per resource, stuck-drift-loop detection, parsed operation failures, one-click remediation
 - Sync, suspend, resume, reconcile, and rollback from the UI or through MCP
@@ -413,7 +414,7 @@ Proactive best-practices scanner with 48 checks across security, reliability, an
 - Security: privileged containers, privilege escalation, host namespaces, runtime socket mounts, secrets in ConfigMaps, and more
 - Reliability: missing probes, image tag `latest`, single-replica deployments, missing PDB/topology spread, deprecated API versions, CloudNativePG clusters with no backup destination, no WAL archiving, a single instance or the deprecated in-tree Barman backup
 - Efficiency: missing requests and limits, orphan ConfigMaps/Secrets, PVCs with no consumer observed, long-Pending PVCs, and Released or Failed PVs
-- Remediation guidance per finding, NSA/CISA and CIS framework labels, and per-resource opt-out via the `radarhq.io/ignore-checks` annotation
+- Remediation guidance per finding, NSA/CISA and CIS framework labels, and per-resource or per-namespace opt-out via the `radarhq.io/ignore-checks` annotation
 
 See [Cluster audit](https://radarhq.io/docs/features/cluster-audit) and [audit configuration](docs/configuration.md#per-resource-check-suppression).
 
@@ -474,7 +475,7 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets, 
 | **Autoscaling** | HorizontalPodAutoscalers, VerticalPodAutoscalers |
 | **Cluster** | Nodes, Namespaces, ServiceAccounts, Events |
 | **Other Kubernetes APIs** | CertificateSigningRequests; Workloads, PodGroups, CompositePodGroups, PodCertificateRequests, ClusterTrustBundles (only when served by the cluster) |
-| **GitOps (FluxCD)** | GitRepository, OCIRepository, HelmRepository, Kustomization, HelmRelease, Alert |
+| **GitOps (FluxCD)** | GitRepository, OCIRepository, HelmRepository, ExternalArtifact, ArtifactGenerator, Kustomization, HelmRelease, Alert |
 | **GitOps (Flux Operator)** | FluxInstance, FluxReport, ResourceSet, ResourceSetInputProvider |
 | **GitOps (ArgoCD)** | Application, ApplicationSet, AppProject |
 | **Argo Rollouts** | Rollout |
@@ -492,6 +493,7 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets, 
 | **Knative Networking** | Ingress, Certificate, ServerlessService |
 | **Karpenter** | NodePool, NodeClaim (+ provider-specific NodeClasses via auto-discovery) |
 | **OpenTelemetry Operator** | [OpenTelemetryCollector and Instrumentation](docs/integrations.md#opentelemetry-operator): reconciliation, configured pipelines and injection settings |
+| **k3s Helm controller** | [HelmChart and HelmChartConfig](docs/integrations.md#k3s-helm-controller): `k3s` badge and a "change values in HelmChartConfig" note on the releases they install; values kept out of drawers, tables and the resource bodies sent to AI |
 | **System Upgrade Controller** | [Plan](docs/integrations.md#system-upgrade-controller): per-node upgrade progress, an Issue for an invalid Plan, and k3s/RKE2 upgrade Plans on the Upgrade impact page |
 | **Flagger** | [Canary and MetricTemplate](docs/integrations.md#flagger): recorded rollout state, target/autoscaler/template links and failed-rollout Issues |
 | **KEDA** | ScaledObject, ScaledJob, TriggerAuthentication, ClusterTriggerAuthentication |
@@ -501,6 +503,7 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets, 
 | **[RabbitMQ](docs/integrations.md#local-runtime-evidence-rabbitmq-nats-and-vault)** | Node-reported disk and memory alarms - **local collection** |
 | **[NATS](docs/integrations.md#local-runtime-evidence-rabbitmq-nats-and-vault)** | JetStream consumer backlog, acknowledgment-pending and redelivery counters - **local collection** |
 | **Velero** | Backup, Restore, Schedule, BackupStorageLocation, VolumeSnapshotLocation |
+| **Longhorn** | [Volume](docs/integrations.md#longhorn): replica health from its Engine, rebuild progress, faulted and degraded Issues |
 | **External Secrets** | ExternalSecret, ClusterExternalSecret, SecretStore, ClusterSecretStore |
 | **CSI Volume Snapshots** | [VolumeSnapshot, VolumeSnapshotContent and VolumeSnapshotClass](docs/integrations.md#csi-volume-snapshots): readiness, errors, restore size, source, binding and deletion policy |
 | **Secrets Store CSI Driver** | [SecretProviderClass and Pod mounts](docs/integrations.md#secrets-store-csi-driver): mount state, object versions and synced Secrets in the Pod drawer |
@@ -511,6 +514,7 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets, 
 | **Sealed Secrets** | SealedSecret, controller and sealing keys |
 | **Dynamic Resource Allocation** | ResourceClaim, ResourceClaimTemplate, DeviceClass, ResourceSlice (resource.k8s.io, K8s 1.32+) |
 | **NVIDIA GPU Operator** | ClusterPolicy, NVIDIADriver |
+| **MetalLB** | [IPAddressPool, L2Advertisement, BGPAdvertisement, BGPPeer and ConfigurationState](docs/integrations.md#metallb): address counters and exhaustion, advertised pools, peers and Issues for rejected configuration |
 | **Calico** | NetworkPolicy, GlobalNetworkPolicy, StagedNetworkPolicy, StagedGlobalNetworkPolicy, StagedKubernetesNetworkPolicy, IPPool, HostEndpoint, Tier |
 | **Kueue** | ClusterQueue, LocalQueue, Workload, ResourceFlavor, AdmissionCheck (+ Cluster Autoscaler ProvisioningRequest) — basic |
 | **KubeRay** | RayCluster, RayJob, RayService, RayCronJob — basic |

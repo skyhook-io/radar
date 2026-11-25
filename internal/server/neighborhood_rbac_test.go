@@ -761,6 +761,7 @@ func TestNeighborhood_UnwatchedCustomRootStartsItsWatch(t *testing.T) {
 		}
 	})
 	t.Run("still loading", func(t *testing.T) {
+		t.Cleanup(k8s.SetTestDynamicObjectReadSyncWait(500 * time.Millisecond))
 		widgetsUnwatched(t, true)
 		code, body := get(t)
 		if code != http.StatusServiceUnavailable || !strings.Contains(body, string(readreason.KindSyncPending)) {
@@ -773,6 +774,7 @@ func TestNeighborhood_UnwatchedCustomRootStartsItsWatch(t *testing.T) {
 // for it; the neighborhood answers within a read's wait that the kind is
 // still loading.
 func TestNeighborhood_UnwatchedRootDuringDiscoveryAnswersWithinTheBound(t *testing.T) {
+	t.Cleanup(k8s.SetTestDynamicObjectReadSyncWait(500 * time.Millisecond))
 	useTestResourceCache(t, fake.NewClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}}))
 	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
 	widget := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "example.io/v1", "kind": "Widget", "metadata": map[string]any{"name": "w1", "namespace": "shop", "uid": "w1"}}}
@@ -818,8 +820,8 @@ func TestNeighborhood_UnwatchedRootDuringDiscoveryAnswersWithinTheBound(t *testi
 	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body.String(), string(readreason.KindSyncPending)) {
 		t.Fatalf("got %d %s, want 503 %s", resp.StatusCode, body.String(), readreason.KindSyncPending)
 	}
-	if elapsed > 4*k8score.ObjectReadSyncWait {
-		t.Errorf("answered after %s, want about %s", elapsed, k8score.ObjectReadSyncWait)
+	if wait := cache.ObjectReadSyncWait(); elapsed > 4*wait {
+		t.Errorf("answered after %s, want about %s", elapsed, wait)
 	}
 }
 
@@ -828,6 +830,7 @@ func TestNeighborhood_UnwatchedRootDuringDiscoveryAnswersWithinTheBound(t *testi
 // both watches even when neither loads within the wait, so a retry can tell
 // the two apart.
 func TestNeighborhood_StartsEveryUncollectedRootCandidate(t *testing.T) {
+	t.Cleanup(k8s.SetTestDynamicObjectReadSyncWait(500 * time.Millisecond))
 	useTestResourceCache(t, fake.NewClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}}))
 	first := schema.GroupVersionResource{Group: "a.example.io", Version: "v1", Resource: "widgets"}
 	second := schema.GroupVersionResource{Group: "b.example.io", Version: "v1", Resource: "widgets"}
@@ -867,6 +870,8 @@ func TestNeighborhood_StartsEveryUncollectedRootCandidate(t *testing.T) {
 // the first kind's check outlasting the wait, the second kind's watch is
 // still started, by the cache's own check, after the request has answered.
 func TestNeighborhood_SlowRootCandidateStartDoesNotStarveAnother(t *testing.T) {
+	wait := 500 * time.Millisecond
+	t.Cleanup(k8s.SetTestDynamicObjectReadSyncWait(wait))
 	useTestResourceCache(t, fake.NewClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}}))
 	slow := schema.GroupVersionResource{Group: "a.example.io", Version: "v1", Resource: "widgets"}
 	other := schema.GroupVersionResource{Group: "b.example.io", Version: "v1", Resource: "widgets"}
@@ -875,7 +880,7 @@ func TestNeighborhood_SlowRootCandidateStartDoesNotStarveAnother(t *testing.T) {
 	dyn.PrependReactor("list", "widgets", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		// The first list of the slow kind is its access check.
 		if a.GetResource().Group == slow.Group && delayed.CompareAndSwap(false, true) {
-			time.Sleep(k8score.ObjectReadSyncWait + time.Second)
+			time.Sleep(wait + time.Second)
 		}
 		return false, nil, nil
 	})

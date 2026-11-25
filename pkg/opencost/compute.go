@@ -2,6 +2,7 @@ package opencost
 
 import (
 	"context"
+	"errors"
 	"log"
 	"math"
 	"sort"
@@ -70,6 +71,10 @@ type SummaryOptions struct {
 	// Commonly used to scope pod/controller queries to a single namespace.
 	// Example: `namespace:"kube-system"`
 	Filter string
+
+	// Scope keeps the metrics-store queries to this cluster; the zero value
+	// leaves them as they always were. REST paths ignore it.
+	Scope StoreScope
 
 	// NamespaceFilter is a client-side namespace scope applied after the
 	// OpenCost response is received. Set alongside Filter — older OpenCost
@@ -311,11 +316,11 @@ func ComputeCostSummary(ctx context.Context, client *RESTClient, opts SummaryOpt
 
 // queryNodeTotalCost reads the cluster's total node cost, unless the caller
 // asked to skip it.
-func queryNodeTotalCost(ctx context.Context, client *prom.Client, opts SummaryOptions) (float64, bool) {
+func queryNodeTotalCost(ctx context.Context, client *costQuerier, opts SummaryOptions) (float64, bool) {
 	if opts.SkipNodeCost {
 		return 0, false
 	}
-	result, err := client.Query(ctx, `sum(`+nodeTotalHourlyCostExpr+`)`)
+	result, err := client.Query(ctx, `sum(`+nodeTotalHourlyCostExpr(opts.Scope.Filter)+`)`)
 	if err != nil || len(result.Series) == 0 || len(result.Series[0].DataPoints) == 0 {
 		return 0, false
 	}
@@ -325,8 +330,8 @@ func queryNodeTotalCost(ctx context.Context, client *prom.Client, opts SummaryOp
 // mayHaveGPUCost reports whether node cost may carry GPU spend. Only an
 // explicit zero rules it out: a failed query, or an empty result from GPU
 // metrics OpenCost was configured not to emit, leaves the share unknown.
-func mayHaveGPUCost(ctx context.Context, client *prom.Client) bool {
-	result, err := client.Query(ctx, nodeGPUHourlyCostExpr)
+func mayHaveGPUCost(ctx context.Context, client *costQuerier, f prom.ClusterFilter) bool {
+	result, err := client.Query(ctx, nodeGPUHourlyCostExpr(f))
 	if err != nil || len(result.Series) == 0 || len(result.Series[0].DataPoints) == 0 {
 		return true
 	}
@@ -376,6 +381,8 @@ func safeRatio(num, den float64) float64 {
 //     Reason=ReasonQueryError. Errors are never returned — callers serve
 //     the typed reason to the UI.
 //   - Numbers are rounded to 4 decimal places for cleaner JSON.
+//   - With a strict Scope, a partial or warning answer to any of its queries
+//     makes it Available=false, Reason=ReasonPartialData.
 func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts SummaryOptions) *CostSummary {
 	if opts.Currency == "" {
 		opts.Currency = DefaultCurrency
@@ -386,13 +393,31 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 	if opts.Window == "" {
 		opts.Window = DefaultCurrentWindow
 	}
+	q := &costQuerier{client: client}
+	resp := computeCostSummaryFromProm(ctx, q, opts)
+	if opts.Scope.partial(q) {
+		resp = &CostSummary{Available: false, Reason: ReasonPartialData, Currency: opts.Currency}
+	}
+	resp.ClusterScope = opts.Scope.ClusterScope
+	if resp.Available && opts.Scope.UsageWithheld {
+		resp.EfficiencyUnavailable = true
+		resp.UsageClusterScope = opts.Scope.UsageClusterScope
+	}
+	return resp
+}
+
+// errUsageWithheld stands in for the usage queries a scope skipped.
+var errUsageWithheld = errors.New("usage metrics could not be kept to this cluster")
+
+func computeCostSummaryFromProm(ctx context.Context, client *costQuerier, opts SummaryOptions) *CostSummary {
+	f := opts.Scope.Filter
 
 	cpuResult, err := client.Query(ctx,
-		`sum by (namespace) (label_replace((sum_over_time(container_cpu_allocation{namespace!=""}[1h:1m]) / 60), "namespace", "$1", "exported_namespace", "(.+)") * on(node) group_left() `+nodeCPUHourlyCostExpr+`)`)
+		`sum by (namespace) (label_replace((sum_over_time(`+sel(f, MetricCPUAllocation, `namespace!=""`)+`[1h:1m]) / 60), "namespace", "$1", "exported_namespace", "(.+)") * on(node) group_left() `+nodeCPUHourlyCostExpr(f)+`)`)
 	if err != nil {
 		log.Printf("[opencost] CPU allocation query failed, trying opencost_container_cpu_cost_total: %v", err)
 		cpuResult, err = client.Query(ctx,
-			`sum by (namespace) (label_replace(rate(opencost_container_cpu_cost_total[1h]), "namespace", "$1", "exported_namespace", "(.+)"))`)
+			`sum by (namespace) (label_replace(rate(`+sel(f, MetricCPUCostTotal, "")+`[1h]), "namespace", "$1", "exported_namespace", "(.+)"))`)
 		if err != nil {
 			log.Printf("[opencost] CPU allocation fallback query also failed: %v", err)
 			return &CostSummary{Available: false, Reason: ReasonQueryError, Currency: opts.Currency}
@@ -400,11 +425,11 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 	}
 
 	memResult, err := client.Query(ctx,
-		`sum by (namespace) (label_replace((sum_over_time(container_memory_allocation_bytes{namespace!=""}[1h:1m]) / 60), "namespace", "$1", "exported_namespace", "(.+)") / 1073741824 * on(node) group_left() `+nodeRAMHourlyCostExpr+`)`)
+		`sum by (namespace) (label_replace((sum_over_time(`+sel(f, MetricMemoryAllocation, `namespace!=""`)+`[1h:1m]) / 60), "namespace", "$1", "exported_namespace", "(.+)") / 1073741824 * on(node) group_left() `+nodeRAMHourlyCostExpr(f)+`)`)
 	if err != nil {
 		log.Printf("[opencost] memory allocation query failed, trying opencost_container_memory_cost_total: %v", err)
 		memResult, err = client.Query(ctx,
-			`sum by (namespace) (label_replace(rate(opencost_container_memory_cost_total[1h]), "namespace", "$1", "exported_namespace", "(.+)"))`)
+			`sum by (namespace) (label_replace(rate(`+sel(f, MetricMemoryCostTotal, "")+`[1h]), "namespace", "$1", "exported_namespace", "(.+)"))`)
 		if err != nil {
 			log.Printf("[opencost] memory allocation fallback query also failed: %v", err)
 			return &CostSummary{Available: false, Reason: ReasonQueryError, Currency: opts.Currency}
@@ -418,22 +443,25 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 	// Usage queries are best-effort: efficiency / idle are derived from them
 	// and zero out cleanly if the queries fail, but a silent failure here can
 	// look identical to a low-utilization workload — so log when it happens.
-	cpuUsageRes, cpuUsageErr := client.Query(ctx,
-		`sum by (namespace) (label_replace(rate(container_cpu_usage_seconds_total{container!="", namespace!=""}[1h]), "node", "$1", "instance", "(.+?)(?::\\d+)?$") * on(node) group_left() `+nodeCPUHourlyCostExpr+`)`)
-	if cpuUsageErr != nil {
-		log.Printf("[opencost] CPU usage query failed (efficiency will be 0 for affected rows): %v", cpuUsageErr)
+	var cpuUsageRes, memUsageRes *prom.QueryResult
+	cpuUsageErr, memUsageErr := errUsageWithheld, errUsageWithheld
+	if !opts.Scope.UsageWithheld {
+		cpuUsageRes, cpuUsageErr = client.Query(ctx,
+			`sum by (namespace) (label_replace(rate(`+sel(f, MetricCPUUsage, `container!="", namespace!=""`)+`[1h]), "node", "$1", "instance", "(.+?)(?::\\d+)?$") * on(node) group_left() `+nodeCPUHourlyCostExpr(f)+`)`)
+		if cpuUsageErr != nil {
+			log.Printf("[opencost] CPU usage query failed (efficiency will be 0 for affected rows): %v", cpuUsageErr)
+		}
+		memUsageRes, memUsageErr = client.Query(ctx,
+			`sum by (namespace) (label_replace(`+sel(f, MetricMemoryWorkingSet, `container!="", namespace!=""`)+`, "node", "$1", "instance", "(.+?)(?::\\d+)?$") / 1073741824 * on(node) group_left() `+nodeRAMHourlyCostExpr(f)+`)`)
+		if memUsageErr != nil {
+			log.Printf("[opencost] memory usage query failed (efficiency will be 0 for affected rows): %v", memUsageErr)
+		}
 	}
 	cpuUsageMap := lastValuePerLabel(cpuUsageRes, cpuUsageErr, "namespace")
-
-	memUsageRes, memUsageErr := client.Query(ctx,
-		`sum by (namespace) (label_replace(container_memory_working_set_bytes{container!="", namespace!=""}, "node", "$1", "instance", "(.+?)(?::\\d+)?$") / 1073741824 * on(node) group_left() `+nodeRAMHourlyCostExpr+`)`)
-	if memUsageErr != nil {
-		log.Printf("[opencost] memory usage query failed (efficiency will be 0 for affected rows): %v", memUsageErr)
-	}
 	memUsageMap := lastValuePerLabel(memUsageRes, memUsageErr, "namespace")
 
 	storageRes, storageErr := client.Query(ctx,
-		`sum by (namespace) (`+persistentVolumeHourlyCostExpr+` * on(persistentvolume) group_left(namespace) `+persistentVolumeClaimRef+`)`)
+		`sum by (namespace) (`+persistentVolumeHourlyCostExpr(f)+` * on(persistentvolume) group_left(namespace) `+persistentVolumeClaimRef(f)+`)`)
 	if storageErr != nil {
 		log.Printf("[opencost] storage cost query failed (storage costs will be unknown): %v", storageErr)
 	}
@@ -441,7 +469,7 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 	// A priced volume without a size drops out of the storage join, which
 	// would read as a namespace with no storage.
 	unsizedRes, unsizedErr := client.Query(ctx,
-		`count by (namespace) (`+unsizedPersistentVolumeExpr+` * on(persistentvolume) group_left(namespace) `+persistentVolumeClaimRef+`)`)
+		`count by (namespace) (`+unsizedPersistentVolumeExpr(f)+` * on(persistentvolume) group_left(namespace) `+persistentVolumeClaimRef(f)+`)`)
 	if unsizedErr != nil {
 		log.Printf("[opencost] volume size check failed (storage costs will be unknown): %v", unsizedErr)
 	}
@@ -509,7 +537,7 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 		// unallocated. Price rounding can put the allocation slightly above
 		// node cost, hence the clamp.
 		// A missing CPU or memory allocation family would be subtracted as zero.
-		if len(cpuResult.Series) > 0 && len(memResult.Series) > 0 && !mayHaveGPUCost(ctx, client) {
+		if len(cpuResult.Series) > 0 && len(memResult.Series) > 0 && !mayHaveGPUCost(ctx, client, f) {
 			unallocated := roundTo(max(nodeCost-computeAllocCost, 0), 4)
 			unallocatedCost = &unallocated
 		}

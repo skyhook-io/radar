@@ -163,7 +163,8 @@ func resolveUserPermsDecision(ctx context.Context) (*pkgauth.User, *pkgauth.User
 		return user, perms, true
 	}
 
-	client, generation := k8s.GetClientWithGeneration()
+	conn := k8s.Current()
+	client, generation := conn.Client(), conn.ClientGeneration()
 	if client == nil {
 		log.Printf("[mcp] K8s client unavailable for namespace discovery (user=%s) — denying access", user.Username)
 		// Empty (not nil) AllowedNamespaces means "no access"; nil would mean cluster-admin.
@@ -171,8 +172,7 @@ func resolveUserPermsDecision(ctx context.Context) (*pkgauth.User, *pkgauth.User
 	}
 	perms, ok := cache.Resolve(ctx, user.Username, user.Groups, strconv.FormatUint(generation, 10), func(ctx context.Context) (*pkgauth.UserPermissions, bool) {
 		perms := discoverUserPermissions(ctx, client, user)
-		_, current := k8s.GetClientWithGeneration()
-		return perms, current == generation
+		return perms, k8s.Current().ClientGeneration() == generation
 	})
 	if !ok {
 		return user, &pkgauth.UserPermissions{AllowedNamespaces: []string{}}, false
@@ -418,7 +418,8 @@ func canReadInNamespaceDecision(ctx context.Context, group, resource, namespace,
 	// Keyed by connection generation, not context name: a reconnect under the
 	// same name can reach a different cluster, and the review must run on the
 	// client its key names.
-	client, generation := k8s.GetClientWithGeneration()
+	conn := k8s.Current()
+	client, generation := conn.Client(), conn.ClientGeneration()
 	return accessReviews.Decide(ctx, user, perms, strconv.FormatUint(generation, 10), verb, group, resource, namespace, func(ctx context.Context) (bool, bool) {
 		if client == nil {
 			log.Printf("[mcp] canReadInNamespace: no K8s client, denying %s on %s/%s in %q for %s", k8s.SanitizeForLog(verb), k8s.SanitizeForLog(group), k8s.SanitizeForLog(resource), k8s.SanitizeForLog(namespace), k8s.SanitizeForLog(user.Username))

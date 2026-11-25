@@ -22,12 +22,9 @@ import (
 // reads any of these (i.e. before InitializeK8s). No locking is provided —
 // the contract is "configure once at startup".
 var (
-	// ContextSwitchTimeout caps the time a kubeconfig context switch can take
-	// from the user clicking a context to the new client being live and the
-	// minimal informer set having synced. On healthy clusters it completes in
-	// a few seconds; on high-latency clusters reached over an SSH tunnel the
-	// minimal-set sync alone can exceed 30s.
-	ContextSwitchTimeout = 30 * time.Second
+	// ContextSwitchTimeout bounds synchronous switch, rescope and recovery initialization.
+	ContextSwitchTimeout      = 30 * time.Second
+	localProbeTimeoutOverride time.Duration
 
 	// FirstPaintBackstop is the hard upper bound on the critical-sync wait
 	// during initial cluster connect. Past this, Radar gives up waiting and
@@ -73,6 +70,7 @@ func ConfigureDeadlines(opts DeadlineOptions) {
 		log.Printf("[k8s] ignoring negative ContextSwitchTimeout %v, keeping default %v", opts.ContextSwitchTimeout, ContextSwitchTimeout)
 	} else if opts.ContextSwitchTimeout > 0 {
 		ContextSwitchTimeout = opts.ContextSwitchTimeout
+		localProbeTimeoutOverride = opts.ContextSwitchTimeout
 	}
 
 	if opts.FirstPaintBackstop < 0 {

@@ -19,6 +19,7 @@ import {
   Megaphone,
 } from "lucide-react";
 import { SlackIcon } from "../community";
+import type { ContextInfo } from "../../types";
 import { useNamespaces, useContexts } from "../../api/client";
 import { CORE_RESOURCES, useAPIResources } from "../../api/apiResources";
 import { getResourceIcon } from "../../utils/resource-icons";
@@ -126,7 +127,7 @@ export function bestScore(item: CommandItem, query: string): number {
 export interface CommandItemCallbacks {
   onNavigateView: (view: MainView) => void;
   onNavigateKind: (kind: string, group: string) => void;
-  onSwitchContext: (name: string) => void;
+  onSwitchContext: (context: ContextInfo) => void;
   onSetNamespaces: (ns: string[]) => void;
   onToggleTheme: () => void;
   onShowDiagnostics?: () => void;
@@ -238,9 +239,7 @@ export function useCommandItems(cb: CommandItemCallbacks): CommandItem[] {
           sublabel: sub || undefined,
           category: "Clusters",
           icon: Server,
-          action: () => {
-            if (!ctx.isCurrent) cb.onSwitchContext(ctx.name);
-          },
+          action: () => cb.onSwitchContext(ctx),
           searchTerms: [ctx.name, account || ""].filter(Boolean),
         });
       }

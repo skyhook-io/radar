@@ -178,6 +178,7 @@ func ApplySettings(results *ScanResults, ignoredNamespaces, disabledChecks []str
 		EvaluatedByNamespace:         evalByNS,
 		MissingInputs:                results.MissingInputs,
 		IgnoreChecksAnnotation:       results.IgnoreChecksAnnotation,
+		NamespaceIgnoreChecks:        results.NamespaceIgnoreChecks,
 		AnnotationIgnoredByNamespace: filterByCheckNS(results.AnnotationIgnoredByNamespace),
 	}
 }

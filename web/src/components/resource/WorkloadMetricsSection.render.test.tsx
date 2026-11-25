@@ -5,6 +5,11 @@ import type { WorkloadMetrics, WorkloadMetricPanel } from '../../api/workloadMet
 
 let result: { data?: WorkloadMetrics; isLoading?: boolean; isPlaceholderData?: boolean; error?: Error } = {}
 vi.mock('../../api/workloadMetrics', () => ({ useWorkloadMetrics: () => result }))
+let chartScopes: Record<string, { state: string; note: string } | undefined> = {}
+vi.mock('../../api/client', async (importActual) => ({
+  ...(await importActual<typeof import('../../api/client')>()),
+  usePrometheusResourceMetrics: (_kind: string, _ns: string, _name: string, category: string) => ({ data: { unit: 'cores', clusterScope: chartScopes[category] } }),
+}))
 const { WorkloadMetricsSection } = await import('./WorkloadMetricsSection')
 const panel = (value: number, unit = 'requests/s'): WorkloadMetricPanel => ({
   state: 'available', unit,
@@ -13,6 +18,7 @@ const panel = (value: number, unit = 'requests/s'): WorkloadMetricPanel => ({
 const render = () => renderToString(<MemoryRouter><WorkloadMetricsSection kind="Deployment" namespace="shop" name="checkout" range="1h" /></MemoryRouter>)
 
 beforeEach(() => {
+  chartScopes = {}
   result = { data: {
     state: 'available', source: 'beyla',
     sources: [{ id: 'beyla', label: 'Beyla', state: 'available' }],
@@ -74,6 +80,22 @@ describe('Workload metrics interpretation', () => {
     expect(html).toContain('Existing CPU chart')
     expect(html).toContain('History lookup failed')
     expect(html).not.toContain('Existing memory chart')
+  })
+  it('says name-matched charts were kept to this cluster when their scope was verified', () => {
+    result.data!.panels.cpu = { state: 'error', unit: 'cores', reason: 'History lookup failed', series: [] }
+    chartScopes = { cpu: { state: 'scoped_verified', note: 'Matched by cluster labels confirmed against this cluster\'s Pods.' } }
+    const html = renderToString(<MemoryRouter><WorkloadMetricsSection kind="Deployment" namespace="shop" name="checkout" range="1h" nameMatchedCharts={{ cpu: <span>Existing CPU chart</span> }} /></MemoryRouter>).replaceAll('<!-- -->', '')
+    expect(html).toContain('Basic CPU · matched by cluster label')
+    expect(html).toContain('kept to this cluster by its cluster labels')
+    expect(html).not.toContain('may include another cluster')
+    expect(html).not.toContain('identity unverified')
+  })
+  it('keeps the name-matched caveat for an unlabeled store', () => {
+    result.data!.panels.cpu = { state: 'error', unit: 'cores', reason: 'History lookup failed', series: [] }
+    chartScopes = { cpu: { state: 'unlabeled', note: 'No cluster label.' } }
+    const html = renderToString(<MemoryRouter><WorkloadMetricsSection kind="Deployment" namespace="shop" name="checkout" range="1h" nameMatchedCharts={{ cpu: <span>Existing CPU chart</span> }} /></MemoryRouter>).replaceAll('<!-- -->', '')
+    expect(html).toContain('Basic CPU · identity unverified')
+    expect(html).toContain('These charts match current Pod names, not Pod UIDs or historical workload ownership; matching names in a shared backend may include another cluster.')
   })
   it('does not flash name-matched charts during the initial request', () => {
     result = { isLoading: true }

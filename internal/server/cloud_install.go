@@ -296,7 +296,8 @@ func newCloudInstallManager(cfg CloudConnectConfig) *cloudInstallManager {
 	m.backend = cloudInstallBackend{
 		contextSource: k8s.GetContextSource,
 		captureClients: func() (cloudInstallClients, string, error) {
-			base, contextName := k8s.GetConfigSnapshot()
+			conn := k8s.Current()
+			base, contextName := conn.ConfigCopy(), k8s.TimelineClusterContext(conn.ContextName())
 			if base == nil {
 				return cloudInstallClients{}, "", errors.New("no Kubernetes connection is available")
 			}

@@ -2,8 +2,10 @@ import { CRDVersionsCell } from './renderers/crd-cells'
 import { getCRDColumnValue } from './resource-utils-crd'
 import { getStrimziConnectorColumnValue, getStrimziClusterColumnValue } from './resource-utils-strimzi'
 import { getVolumeSnapshotColumnValue, getVolumeSnapshotSortValue } from './resource-utils-volumesnapshot'
+import { getMetalLBColumnValue, getMetalLBSortValue } from './resource-utils-metallb'
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
+import { K3S_HELM_GROUP, getK3sHelmChartColumnValue } from './resource-utils-k3s'
 import { getAgentRuntimeSortValue } from './resource-utils-agent-runtimes'
 import { UPGRADE_PLAN_GROUP, getUpgradePlanColumnValue } from './resource-utils-upgrade-plan'
 import { FLUX_OPERATOR_GROUP, FLUX_OPERATOR_PLURALS, getFluxOperatorColumnValue, getFluxOperatorStatus } from './resource-utils-flux-operator'
@@ -56,7 +58,7 @@ import { ResourceBar } from '../ui/ResourceBar'
 import type { SelectedResource, APIResource } from '../../types'
 import { isForbiddenError } from '../../types/fetch-error'
 import type { NavigateToResource } from '../../utils/navigation'
-import { categorizeResources, CORE_RESOURCES, findAPIResourceForRoute, isCoreBatchJob } from '../../utils/api-resources'
+import { categorizeResources, CORE_RESOURCES, findAPIResourceForRoute, supportsWorkloadLogAction } from '../../utils/api-resources'
 import { copyText } from '../../utils/clipboard'
 import {
   getPodStatus,
@@ -193,7 +195,8 @@ import type { Issue } from '../issues/types'
 import { issueTitle } from '../issues/severity'
 import { SEVERITY_TEXT_CLASS } from '../checks/severity'
 // CRD-specific cell components (extracted)
-import { GitRepositoryCell, OCIRepositoryCell, HelmRepositoryCell, KustomizationCell, FluxHelmReleaseCell, FluxAlertCell } from './renderers/flux-cells'
+import { GitRepositoryCell, OCIRepositoryCell, HelmRepositoryCell, KustomizationCell, FluxHelmReleaseCell, FluxAlertCell, ExternalArtifactCell, ArtifactGeneratorCell } from './renderers/flux-cells'
+import { getArtifactGeneratorCount } from './resource-utils-flux'
 import { ArgoApplicationCell, ArgoApplicationSetCell, ArgoAppProjectCell } from './renderers/argo-cells'
 import { VulnerabilityReportCell, ConfigAuditReportCell, ExposedSecretReportCell, RbacAssessmentReportCell, ClusterComplianceReportCell, SbomReportCell } from './renderers/trivy-cells'
 import { CertificateCell, CertificateRequestCell, ClusterIssuerCell, IssuerCell, OrderCell, ChallengeCell } from './renderers/certmanager-cells'
@@ -413,9 +416,11 @@ function phonePinnedLeft(compareMode: boolean | undefined, showCheckbox: boolean
 // Built-in sortable keys. Hoisted so getColumnMinWidth can reserve room for the
 // sort icon without the header render and the width math drifting apart.
 const BUILTIN_SORTABLE_COLUMN_KEYS = new Set([
-  'connectCluster', 'connectorClass', 'connectorTasks',
+  'connectCluster', 'connectorClass', 'connectorTasks', 'artifacts',
   'kafkaVersion', 'kafkaWarnings', 'kafkaPools', 'kafkaListeners', 'poolKafka', 'poolRoles', 'poolReplicas',
   'snapshotSource', 'restoreSize', 'snapshotClass', 'snapshotContent', 'snapshotTaken', 'snapshotRef', 'snapshotDriver', 'deletionPolicy', 'defaultClass',
+  'poolAddresses', 'poolAssigned', 'poolAutoAssign', 'poolAvoidBuggyIPs', 'advertisedPools', 'advertisedNodes', 'l2Interfaces', 'bgpPeers', 'bgpCommunities',
+  'peerAddress', 'peerASN', 'myASN', 'bfdProfile', 'ebgpMultiHop', 'configComponent', 'configErrors',
   'name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version',
   'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object',
   'cpu', 'memory', 'containers',
@@ -664,6 +669,51 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'defaultClass', label: 'Default', width: 'w-24 shrink-0', tooltip: 'Used for snapshots of this driver that name no class.' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
+  ipaddresspools: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'status', label: 'Status', width: 'w-36 shrink-0', tooltip: 'Address availability from the counters MetalLB 0.15+ writes. Not reported without them.' },
+    { key: 'poolAddresses', label: 'Addresses', width: 'min-w-48' },
+    { key: 'poolAssigned', label: 'Assigned', width: 'w-44 shrink-0', tooltip: 'Addresses assigned / addresses in the pool, per IP family. Services can share an address, so this is not a Service count.' },
+    { key: 'poolAutoAssign', label: 'Auto Assign', width: 'w-28 shrink-0', tooltip: 'No: only Services that request this pool get its addresses.' },
+    { key: 'poolAvoidBuggyIPs', label: 'Avoid Buggy IPs', width: 'w-32 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  l2advertisements: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'advertisedPools', label: 'IP Address Pools', width: 'min-w-48', tooltip: 'Pools this advertisement announces. With no pools or selectors it covers every pool.' },
+    { key: 'advertisedNodes', label: 'Nodes', width: 'min-w-40', tooltip: 'Nodes allowed to announce the addresses.' },
+    { key: 'l2Interfaces', label: 'Interfaces', width: 'w-40 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  bgpadvertisements: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'advertisedPools', label: 'IP Address Pools', width: 'min-w-48', tooltip: 'Pools this advertisement announces. With no pools or selectors it covers every pool.' },
+    { key: 'bgpPeers', label: 'Peers', width: 'min-w-40' },
+    { key: 'bgpCommunities', label: 'Communities', width: 'w-44 shrink-0' },
+    { key: 'advertisedNodes', label: 'Nodes', width: 'min-w-40', tooltip: 'Nodes allowed to announce the addresses.' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  bgppeers: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'peerAddress', label: 'Address', width: 'min-w-40' },
+    { key: 'peerASN', label: 'Peer ASN', width: 'w-32 shrink-0' },
+    { key: 'myASN', label: 'My ASN', width: 'w-28 shrink-0' },
+    { key: 'bfdProfile', label: 'BFD Profile', width: 'w-36 shrink-0' },
+    { key: 'ebgpMultiHop', label: 'Multi Hop', width: 'w-24 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  configurationstates: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'status', label: 'Result', width: 'w-32 shrink-0', tooltip: 'Invalid: the component could not parse the configuration and keeps the last one it accepted.' },
+    { key: 'configComponent', label: 'Component', width: 'w-48 shrink-0' },
+    { key: 'configErrors', label: 'Errors', width: 'min-w-48' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
   opentelemetrycollectors: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
@@ -692,6 +742,15 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'target', label: 'Canary Target', width: 'min-w-40' },
     { key: 'canaryWeight', label: 'Reported Weight', width: 'w-36 shrink-0', tooltip: 'Last reported canary routing weight, not measured traffic. Blue/green and A/B strategies are not weighted.' },
     { key: 'suspended', label: 'Suspend Requested', width: 'w-36 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  helmcharts: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'chart', label: 'Chart', width: 'min-w-48' },
+    { key: 'version', label: 'Version', width: 'w-28 shrink-0' },
+    { key: 'targetNamespace', label: 'Target Namespace', width: 'w-40 shrink-0' },
+    { key: 'status', label: 'Status', width: 'w-32 shrink-0', tooltip: 'What helm-controller reports about its install Job. Whether the release is healthy is in the Helm view.' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   plans: [
@@ -1868,6 +1927,17 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'handler', label: 'Handler', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
+  mutatingadmissionpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'mutationCount', label: 'Mutations', width: 'w-28' },
+    { key: 'reinvocationPolicy', label: 'Reinvocation', width: 'w-36' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  mutatingadmissionpolicybindings: [
+    { key: 'name', label: 'Name' },
+    { key: 'policyName', label: 'Policy', width: 'w-48', sizing: 'grow', growWeight: 1 },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
   mutatingwebhookconfigurations: [
     { key: 'name', label: 'Name' },
     { key: 'webhooks', label: 'Webhooks', width: 'w-28' },
@@ -1905,6 +1975,23 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   // ============================================================================
   // FLUXCD GITOPS RESOURCES
   // ============================================================================
+  externalartifacts: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'producer', label: 'Produced by', width: 'w-48', tooltip: 'What produces this artifact: its ArtifactGenerator, or the kind and name its spec.sourceRef names' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'revision', label: 'Revision', width: 'w-48', tooltip: 'Artifact revision (tag and digest)' },
+    { key: 'size', label: 'Size', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  artifactgenerators: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'sources', label: 'Sources', width: 'w-64', tooltip: 'alias→source the generator copies from' },
+    { key: 'artifacts', label: 'Artifacts', width: 'w-24', tooltip: 'ExternalArtifacts it generates' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
   fluxinstances: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
@@ -3110,10 +3197,16 @@ const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   volumesnapshots: ['snapshot.storage.k8s.io'],
   volumesnapshotcontents: ['snapshot.storage.k8s.io'],
   volumesnapshotclasses: ['snapshot.storage.k8s.io'],
+  ipaddresspools: ['metallb.io'],
+  l2advertisements: ['metallb.io'],
+  bgpadvertisements: ['metallb.io'],
+  bgppeers: ['metallb.io'],
+  configurationstates: ['metallb.io'],
   opentelemetrycollectors: ['opentelemetry.io'],
   instrumentations: ['opentelemetry.io'],
   canaries: ['flagger.app'],
   metrictemplates: ['flagger.app'],
+  helmcharts: ['helm.cattle.io'],
   plans: ['upgrade.cattle.io'],
   challenges: ['acme.cert-manager.io'],
   orders: ['acme.cert-manager.io'],
@@ -3256,6 +3349,8 @@ const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   knativeroutes: ['serving.knative.dev'],
   knativeservices: ['serving.knative.dev'],
   gitrepositories: ['source.toolkit.fluxcd.io'],
+  externalartifacts: ['source.toolkit.fluxcd.io'],
+  artifactgenerators: ['source.extensions.fluxcd.io'],
   fluxinstances: ['fluxcd.controlplane.io'],
   fluxreports: ['fluxcd.controlplane.io'],
   resourcesets: ['fluxcd.controlplane.io'],
@@ -3284,6 +3379,8 @@ const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   volumesnapshotlocations: ['velero.io'],
   clusterpolicyreports: ['wgpolicyk8s.io'],
   policyreports: ['wgpolicyk8s.io'],
+  mutatingadmissionpolicies: ['admissionregistration.k8s.io'],
+  mutatingadmissionpolicybindings: ['admissionregistration.k8s.io'],
   deviceconfigs: ['amd.com'],
   nimcaches: ['apps.nvidia.com'],
   nimpipelines: ['apps.nvidia.com'],
@@ -3748,6 +3845,7 @@ interface ResourcesViewProps {
   /** URL prefix for this view (default: '/resources'). Must match the route path. */
   basePath?: string
   // Dock actions
+  replicaSetLogs?: boolean
   onOpenLogs?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string; initContainers?: string[] }) => void
   onOpenWorkloadLogs?: (params: { namespace: string; workloadKind: string; workloadName: string }) => void
   // Callback when selected kind changes — used by parent to fetch data for the selected kind
@@ -4049,6 +4147,7 @@ export function ResourcesView({
   basePath = '/resources',
   onOpenLogs,
   onOpenWorkloadLogs,
+  replicaSetLogs,
   onSelectedKindChange,
   hideSidebar = false,
   sidebarCategoryWorkspaces,
@@ -4799,6 +4898,7 @@ export function ResourcesView({
   // Open logs for pod / workload resources — provided via props
   const openLogs = onOpenLogs
   const openWorkloadLogs = onOpenWorkloadLogs
+  const selectedKindHasWorkloadLogs = supportsWorkloadLogAction(selectedKind.name.toLowerCase(), selectedKind.group, replicaSetLogs)
 
   // Helper: get resource at highlighted index
   const getHighlightedResource = useCallback(() => {
@@ -4943,13 +5043,12 @@ export function ResourcesView({
           if (containers.length > 0) {
             openLogs?.({ namespace: ns, podName: name, containers, containerName: getDefaultLogContainerName(res), initContainers: getInitContainerNames(res) })
           }
-        } else if (['deployments', 'statefulsets', 'daemonsets', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(kindLower) || isCoreBatchJob(kindLower, selectedKind.group)) {
-          openWorkloadLogs?.({ namespace: ns, workloadKind: selectedKind.kind, workloadName: name })
+        } else if (selectedKindHasWorkloadLogs) {
+          openWorkloadLogs?.({ namespace: ns, workloadKind: selectedKind.name, workloadName: name })
         }
       },
       enabled: highlightedIndex >= 0 && !compareMode && (
-        ['pods', 'deployments', 'statefulsets', 'daemonsets', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(selectedKind.name.toLowerCase()) ||
-        isCoreBatchJob(selectedKind.name, selectedKind.group)
+        selectedKind.name.toLowerCase() === 'pods' || selectedKindHasWorkloadLogs
       ),
     },
     {
@@ -5752,10 +5851,14 @@ export function ResourcesView({
     }
     const volumeSnapshotValue = getVolumeSnapshotSortValue(resource, column)
     if (volumeSnapshotValue !== undefined) return volumeSnapshotValue
+    const metalLBValue = getMetalLBSortValue(resource, column)
+    if (metalLBValue !== undefined) return metalLBValue
     const otelValue = getOpenTelemetryColumnValue(resource, column)
     if (otelValue !== undefined) return otelValue
     const flaggerValue = getFlaggerColumnValue(resource, column)
     if (flaggerValue !== undefined) return flaggerValue
+    const k3sValue = getK3sHelmChartColumnValue(resource, column)
+    if (k3sValue !== undefined) return k3sValue
     const agentRuntimeValue = getAgentRuntimeSortValue(resource, column)
     if (agentRuntimeValue !== undefined) return agentRuntimeValue
     const planValue = getUpgradePlanColumnValue(resource, column)
@@ -5870,6 +5973,8 @@ export function ResourcesView({
         if (kindLower === 'nodes') return getNodeGpuCount(resource)
         return 0
       }
+      case 'artifacts':
+        return kindLower === 'artifactgenerators' ? (getArtifactGeneratorCount(resource) ?? -1) : ''
       default:
         return ''
     }
@@ -8234,6 +8339,11 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
     if (column === 'status') return <GenericCell resource={resource} column={column} />
     return <span className="text-sm text-theme-text-secondary break-all">{volumeSnapshotValue || '-'}</span>
   }
+  const metalLBValue = getMetalLBColumnValue(resource, column)
+  if (metalLBValue !== undefined) {
+    if (column === 'status') return <GenericCell resource={resource} column={column} />
+    return <span className="text-sm text-theme-text-secondary break-words">{metalLBValue || '-'}</span>
+  }
   if (isApiGroup(resource.apiVersion, 'opentelemetry.io') && ['opentelemetrycollectors', 'instrumentations'].includes(kindLower)) {
     if (column === 'status') return <GenericCell resource={resource} column={column} />
     return <span className="text-sm text-theme-text-secondary break-all">{getOpenTelemetryColumnValue(resource, column) || '-'}</span>
@@ -8249,6 +8359,10 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
   if (isApiGroup(resource.apiVersion, 'flagger.app') && ['canaries', 'metrictemplates'].includes(kindLower)) {
     if (column === 'status') return <GenericCell resource={resource} column={column} />
     return <span className="text-sm text-theme-text-secondary break-all">{getFlaggerColumnValue(resource, column) || '-'}</span>
+  }
+  if (isApiGroup(resource.apiVersion, K3S_HELM_GROUP) && kindLower === 'helmcharts') {
+    if (column === 'status') return <GenericCell resource={resource} column={column} />
+    return <span className="text-sm text-theme-text-secondary break-all">{getK3sHelmChartColumnValue(resource, column) || '-'}</span>
   }
   if (isApiGroup(resource.apiVersion, UPGRADE_PLAN_GROUP) && kindLower === 'plans') {
     if (column === 'status') return <GenericCell resource={resource} column={column} />
@@ -8376,6 +8490,10 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       return <PriorityClassCell resource={resource} column={column} />
     case 'runtimeclasses':
       return <RuntimeClassCell resource={resource} column={column} />
+    case 'mutatingadmissionpolicies':
+    case 'mutatingadmissionpolicybindings':
+      if (!isApiGroup(resource.apiVersion, 'admissionregistration.k8s.io')) return <GenericCell resource={resource} column={column} />
+      return <span className="text-sm text-theme-text-secondary">{getCellFilterValue(resource, column, kind) || '—'}</span>
     case 'mutatingwebhookconfigurations':
     case 'validatingwebhookconfigurations':
       return <WebhookConfigCell resource={resource} column={column} />
@@ -8385,6 +8503,12 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
     case 'events':
       return <EventCell resource={resource} column={column} />
     // FluxCD GitOps resources
+    case 'externalartifacts':
+      if (!isApiGroup(resource.apiVersion, 'source.toolkit.fluxcd.io')) return <GenericCell resource={resource} column={column} />
+      return <ExternalArtifactCell resource={resource} column={column} />
+    case 'artifactgenerators':
+      if (!isApiGroup(resource.apiVersion, 'source.extensions.fluxcd.io')) return <GenericCell resource={resource} column={column} />
+      return <ArtifactGeneratorCell resource={resource} column={column} />
     case 'gitrepositories':
       return <GitRepositoryCell resource={resource} column={column} />
     case 'ocirepositories':

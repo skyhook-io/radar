@@ -19,13 +19,14 @@ import type { ELK } from 'elkjs/lib/elk.bundled.js'
 import type { AggregatedFlow } from '../../types'
 import { clsx } from 'clsx'
 import { X, ArrowRight, Globe, Server, Activity, Puzzle, Crosshair } from 'lucide-react'
-import { MiddleEllipsis, PaneLoader } from '@skyhook-io/k8s-ui'
+import { GraphExportButton, MiddleEllipsis, PaneLoader } from '@skyhook-io/k8s-ui'
 import { isClusterAddon, type AddonMode } from './TrafficView'
 import { SEVERITY_BADGE, SEVERITY_DOT, SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { getNamespaceColor } from '../../utils/traffic-colors'
 import { Tooltip } from '../ui/Tooltip'
 import { TrafficData } from './TrafficData'
-import { dataByProtocol, protocolsOf, throughputLabel, totalDataByProtocol, protocolName, isRateBasedSource, isExternalKind, requestRateOf, errorRateOf, formatRate, displayVolume, latencyWeightOf, edgesOnPort, protocolLabel, type TrafficFocus } from './trafficFilters'
+import { describeTrafficNode } from './traffic-export'
+import { dataByProtocol, protocolsOf, throughputLabel, totalDataByProtocol, protocolName, isRateBasedSource, isExternalKind, requestRateOf, errorRateOf, formatRate, formatConnections, formatVolume, MAX_VISIBLE_PORTS, displayVolume, latencyWeightOf, edgesOnPort, protocolLabel, type TrafficFocus } from './trafficFilters'
 
 // ELK is 1.5 MB; load it with the first traffic layout, not with the app.
 let elkPromise: Promise<ELK> | null = null
@@ -87,26 +88,14 @@ interface TrafficGraphProps {
   /** Seconds the byte figures cover, so an edge measured only in bytes can be
    *  labelled with its throughput. */
   windowSeconds: number
+  /** Saves an exported image instead of a browser download (desktop app). */
+  onDownloadBlob?: (blob: Blob, filename: string) => void
 }
 
 // Phase 2.1: Calculate edge width based on connection count (log scale)
 function getEdgeWidth(connections: number): number {
   // 1K -> 1.5px, 10K -> 2.5px, 100K -> 3.5px, 1M -> 4.5px, 10M -> 5.5px
   return Math.min(6, Math.max(1.5, Math.log10(Math.max(connections, 1000)) - 1.5))
-}
-
-// Phase 2.2: Format connection counts for display
-function formatConnections(count: number): string {
-  if (count >= 1_000_000_000) return `${(count / 1_000_000_000).toFixed(1)}B`
-  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`
-  if (count >= 1_000) return `${(count / 1_000).toFixed(0)}K`
-  return count.toString()
-}
-
-// A volume in the source's own unit: a rate to two significant places for a
-// rate-based source, a whole count otherwise.
-function formatVolume(volume: number, isRateBased: boolean): string {
-  return isRateBased ? formatRate(volume) : formatConnections(volume)
 }
 
 function formatLatency(ms: number): string {
@@ -205,7 +194,6 @@ const SERVICE_CATEGORY_COLORS: Record<string, { bg: string; border: string; dot:
 const NODE_WIDTH = 180
 const NODE_BASE_HEIGHT = 56 // Base height without ports
 const NODE_PORT_HEIGHT = 18 // Height per port row
-const MAX_VISIBLE_PORTS = 4 // Maximum ports to show before "+N more"
 
 // Custom node component
 export function TrafficNode({ data }: { data: TrafficNodeData }) {
@@ -372,7 +360,8 @@ export function TrafficNode({ data }: { data: TrafficNodeData }) {
 // Legend component
 function TrafficLegend() {
   return (
-    <div className="absolute bottom-2 left-2 bg-theme-surface border border-theme-border rounded-lg p-2.5 text-xs z-10 shadow-lg max-w-xs">
+    // Clears the graph controls, which sit in the same corner.
+    <div className="absolute bottom-2 left-14 bg-theme-surface border border-theme-border rounded-lg p-2.5 text-xs z-10 shadow-lg max-w-xs">
       <div className="font-medium text-theme-text-primary mb-2">Legend</div>
       <div className="space-y-1.5">
         <div className="flex items-center gap-2">
@@ -1165,7 +1154,7 @@ function trafficEdgeId(sourceId: string, destId: string, flow: AggregatedFlow): 
   return `${sourceId}->${destId}:${flow.port}${flow.directionUnknown ? ':unoriented' : ''}`
 }
 
-export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups = false, serviceCategories, addonMode = 'show', trafficSource = '', selection: viewSelection, onSelectionChange, onFocus, focusedId, onLayoutUnavailable, windowSeconds }: TrafficGraphProps) {
+export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups = false, serviceCategories, addonMode = 'show', trafficSource = '', selection: viewSelection, onSelectionChange, onFocus, focusedId, onLayoutUnavailable, windowSeconds, onDownloadBlob }: TrafficGraphProps) {
   // Beyla is rate-based too: its Connections field carries requests per second,
   // not a connection count, so it needs the same label Istio gets.
   const isRateBased = isRateBasedSource(trafficSource)
@@ -1815,7 +1804,9 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
         nodesConnectable={false}
       >
         <Background />
-        <Controls />
+        <Controls>
+          <GraphExportButton defaultFilename="traffic" title="Export traffic" onDownloadBlob={onDownloadBlob} describeNode={describeTrafficNode} />
+        </Controls>
         <FitViewOnChange shouldFitViewRef={shouldFitViewRef} layoutedNodes={layoutedNodes} />
       </ReactFlow>
 

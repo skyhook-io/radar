@@ -27,8 +27,10 @@ type ServiceInfo struct {
 // callers/UI. Address is the effective URL (may be port-forwarded, a
 // tunneled proxy URL, or a direct service URL depending on the Transport).
 type Status struct {
-	Available bool `json:"available"`
-	Connected bool `json:"connected"`
+	// A discovered GKE frontend serves bounded resource charts only.
+	GKESystemMetrics bool `json:"gkeSystemMetrics,omitempty"`
+	Available        bool `json:"available"`
+	Connected        bool `json:"connected"`
 	// Discovering reports that a discovery run is in flight for the current
 	// configuration and no endpoint has been found yet. Connected and
 	// Discovering are never both true.
