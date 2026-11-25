@@ -304,6 +304,7 @@ export function TerminalTab({
     }
   }, [isActive, restoreFocus])
 
+  const retryShell = !command && !!error && errorType === 'shell_not_found'
   return (
     <div className="relative h-full w-full bg-theme-base overflow-hidden">
       {/* Mini toolbar */}
@@ -333,13 +334,13 @@ export function TerminalTab({
           </div>
         )}
 
-        {!isConnected && !isConnecting && errorType !== 'pod_replaced' && (
+        {(retryShell || (!isConnected && !isConnecting && errorType !== 'pod_replaced')) && (
           <button
             onClick={connect}
             className="flex items-center gap-1 px-2 py-0.5 text-xs text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
           >
             <RefreshCw className="w-3 h-3" />
-            {!command && errorType === 'shell_not_found' ? 'Retry terminal' : 'Reconnect'}
+            {retryShell ? 'Retry terminal' : 'Reconnect'}
           </button>
         )}
 
