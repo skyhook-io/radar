@@ -17,6 +17,27 @@ import (
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 )
 
+// Repository and OCI source management by a signed-in user touches no
+// cluster, so it still works while Radar is disconnected.
+func TestRequireHelmWriteAllowsRepositoryManagementWhileDisconnected(t *testing.T) {
+	t.Cleanup(k8s.SnapshotTestConnection())
+	k8s.RetireServingConnection()
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "a"})
+	admitted, err := k8s.CaptureServingConnection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := pkgauth.ContextWithUser(admitted.Bind(t.Context()), &pkgauth.User{Username: "alice"})
+	r := httptest.NewRequest(http.MethodPost, "/", nil).WithContext(ctx)
+	k8s.RetireServingConnection()
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected})
+
+	rec := httptest.NewRecorder()
+	if !requireHelmWrite(rec, r, "") {
+		t.Fatalf("repository management refused while disconnected: %d %s", rec.Code, rec.Body)
+	}
+}
+
 // The permission preflight uses the serving cluster's capabilities.
 func TestStillAdmittedRefusesAWriteAfterTheConnectionChanged(t *testing.T) {
 	t.Cleanup(k8s.SnapshotTestConnection())

@@ -1534,6 +1534,11 @@ func requireHelmWrite(w http.ResponseWriter, r *http.Request, namespace string) 
 		writeError(w, status, err.Error())
 		return false
 	}
+	// A signed-in user's repository and source management reads nothing from
+	// the cluster, so a missing or replaced connection doesn't invalidate it.
+	if namespace == "" && pkgauth.UserFromContext(r.Context()) != nil {
+		return true
+	}
 	return stillAdmitted(w, r)
 }
 
