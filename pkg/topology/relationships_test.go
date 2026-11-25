@@ -5,53 +5,11 @@ import (
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
-	autoscalingv2 "k8s.io/api/autoscaling/v2"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	networkingv1 "k8s.io/api/networking/v1"
-	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
-
-// stubProvider supplies a typed K8s resource for the kinds graphRelationships
-// inspects for Pod hygiene fields and ManagedBy synthesis. Other methods
-// return empty slices so calls fall through cleanly.
-type stubProvider struct {
-	pods     []*corev1.Pod
-	services []*corev1.Service
-	pdbs     []*policyv1.PodDisruptionBudget
-}
-
-func (s *stubProvider) Pods() ([]*corev1.Pod, error)         { return s.pods, nil }
-func (s *stubProvider) Services() ([]*corev1.Service, error) { return s.services, nil }
-func (s *stubProvider) Deployments() ([]*appsv1.Deployment, error) {
-	return nil, nil
-}
-func (s *stubProvider) DaemonSets() ([]*appsv1.DaemonSet, error)     { return nil, nil }
-func (s *stubProvider) StatefulSets() ([]*appsv1.StatefulSet, error) { return nil, nil }
-func (s *stubProvider) ReplicaSets() ([]*appsv1.ReplicaSet, error)   { return nil, nil }
-func (s *stubProvider) Jobs() ([]*batchv1.Job, error)                { return nil, nil }
-func (s *stubProvider) CronJobs() ([]*batchv1.CronJob, error)        { return nil, nil }
-func (s *stubProvider) Ingresses() ([]*networkingv1.Ingress, error)  { return nil, nil }
-func (s *stubProvider) ConfigMaps() ([]*corev1.ConfigMap, error)     { return nil, nil }
-func (s *stubProvider) Secrets() ([]*corev1.Secret, error)           { return nil, nil }
-func (s *stubProvider) PersistentVolumeClaims() ([]*corev1.PersistentVolumeClaim, error) {
-	return nil, nil
-}
-func (s *stubProvider) PersistentVolumes() ([]*corev1.PersistentVolume, error) { return nil, nil }
-func (s *stubProvider) HorizontalPodAutoscalers() ([]*autoscalingv2.HorizontalPodAutoscaler, error) {
-	return nil, nil
-}
-func (s *stubProvider) PodDisruptionBudgets() ([]*policyv1.PodDisruptionBudget, error) {
-	return s.pdbs, nil
-}
-func (s *stubProvider) NetworkPolicies() ([]*networkingv1.NetworkPolicy, error) { return nil, nil }
-func (s *stubProvider) Nodes() ([]*corev1.Node, error)                          { return nil, nil }
-func (s *stubProvider) GetResourceStatus(kind, namespace, name string) *ResourceStatus {
-	return nil
-}
 
 func TestGetCascadeDeletePreview_GroupQualifiedCollisions(t *testing.T) {
 	capiGVR := schema.GroupVersionResource{Group: "cluster.x-k8s.io", Version: "v1beta1", Resource: "clusters"}
@@ -241,8 +199,6 @@ func TestGetCascadeDeletePreview_CalicoGroupCollisionUsesQualifiedRoot(t *testin
 	}
 }
 
-// TestGetRelationships_PodHygieneFields covers T2: pods carry
-// ServiceAccount, Node, and ManagedBy refs derived from spec + labels.
 func TestGetRelationships_PodHygieneFields(t *testing.T) {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -257,14 +213,13 @@ func TestGetRelationships_PodHygieneFields(t *testing.T) {
 			NodeName:           "node-1",
 		},
 	}
-	provider := &stubProvider{pods: []*corev1.Pod{pod}}
 
 	topo := &Topology{
 		Nodes: []Node{{ID: "pod/demo/web-abc-xyz", Kind: KindPod, Name: "web-abc-xyz"}},
 		Edges: []Edge{},
 	}
 
-	rel := graphRelationships("Pod", "demo", "web-abc-xyz", topo, provider, nil)
+	rel := GetRelationshipsWithObject("Pod", pod.Namespace, pod.Name, pod, topo, nil, nil, nil)
 	if rel == nil {
 		t.Fatal("expected non-nil Relationships for pod with hygiene fields")
 	}
@@ -279,22 +234,29 @@ func TestGetRelationships_PodHygieneFields(t *testing.T) {
 	}
 }
 
-// TestGetRelationships_PodHygieneFields_EmptySAandUnscheduled verifies that
-// optional fields are properly omitted when the source data is empty. The
-// nil-result short-circuit must also still kick in.
 func TestGetRelationships_PodHygieneFields_EmptySAandUnscheduled(t *testing.T) {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "demo", Name: "lone"},
 		Spec:       corev1.PodSpec{ /* SA empty, NodeName empty */ },
 	}
-	provider := &stubProvider{pods: []*corev1.Pod{pod}}
 	topo := &Topology{
 		Nodes: []Node{{ID: "pod/demo/lone", Kind: KindPod, Name: "lone"}},
 	}
 
-	rel := graphRelationships("Pod", "demo", "lone", topo, provider, nil)
+	rel := GetRelationshipsWithObject("Pod", pod.Namespace, pod.Name, pod, topo, nil, nil, nil)
 	if rel != nil {
 		t.Errorf("expected nil for pod with no edges and no hygiene data, got %+v", rel)
+	}
+}
+
+func TestGetRelationshipsWithObject_NilObjectOmitsPodSpec(t *testing.T) {
+	cached := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "demo", Name: "web"},
+		Spec:       corev1.PodSpec{NodeName: "node-1"},
+	}
+	provider := &mockProvider{pods: []*corev1.Pod{cached}}
+	if rel := GetRelationshipsWithObject("Pod", cached.Namespace, cached.Name, nil, &Topology{}, provider, nil, nil); rel != nil {
+		t.Errorf("a nil object yielded relationships from the cached Pod: %+v", rel)
 	}
 }
 

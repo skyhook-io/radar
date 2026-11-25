@@ -1093,8 +1093,6 @@ func TestControllerChainToManager(t *testing.T) {
 	}
 }
 
-// Both climbs fall back to the object's own owner references when its
-// controller chain doesn't climb past it.
 func TestOwnerAboveFallsBackToOwnerReferences(t *testing.T) {
 	controller := true
 	set := projectionCR("argoproj.io", "ApplicationSet", "argocd", "apps", map[string]any{})
@@ -1107,20 +1105,16 @@ func TestOwnerAboveFallsBackToOwnerReferences(t *testing.T) {
 	owned := projectionObject(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "argocd", Name: "settings", UID: "settings", OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "alone", UID: "alone"}}}}, "", "ConfigMap")
 	view := ownership.NewView(newProjectionSession(t, set, app, managed, ownerless, owned), ownership.Unrestricted())
 	for _, tc := range []struct {
-		name           string
-		subject        runtime.Object
-		top, toManager string
-		climbs         bool
+		name      string
+		subject   runtime.Object
+		toManager string
+		climbs    bool
 	}{
-		{"ownerless", ownerless, "", "", false},
-		{"sole owner reference", owned, "alone", "alone", true},
-		{"controller chain through a manager", managed, "apps", "web", true},
+		{"ownerless", ownerless, "", false},
+		{"sole owner reference", owned, "alone", true},
+		{"controller chain through a manager", managed, "web", true},
 	} {
 		r := projectionRef(tc.subject)
-		top, ok := ownerAbove(view, r, ChainOf(view.ControllerChain(r)))
-		if ok != tc.climbs || top.Name != tc.top {
-			t.Errorf("%s: ownerAbove = %v %v, want %q %v", tc.name, top, ok, tc.top, tc.climbs)
-		}
 		manager, ok := OwnerAboveToManager(view, r)
 		if ok != tc.climbs || manager.Name != tc.toManager {
 			t.Errorf("%s: OwnerAboveToManager = %v %v, want %q %v", tc.name, manager, ok, tc.toManager, tc.climbs)

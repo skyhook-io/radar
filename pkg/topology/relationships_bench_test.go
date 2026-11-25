@@ -77,36 +77,6 @@ func buildSyntheticTopology(targetNodes int) *Topology {
 	return topo
 }
 
-// BenchmarkGetRelationships_NoIndex measures the cost of graphRelationships on a
-// synthetic ~5k-node topology with no precomputed index. Each call rescans
-// topo.Edges in full, so cost is O(E) per call — what every consumer pays
-// today.
-func BenchmarkGetRelationships_NoIndex(b *testing.B) {
-	topo := buildSyntheticTopology(5000)
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		nsIdx := i % 50
-		_ = graphRelationships("Deployment", fmt.Sprintf("ns-%d", nsIdx), "app-0", topo, nil, nil)
-	}
-}
-
-// BenchmarkGetRelationships_WithIndex measures the same call shape but with
-// a precomputed RelationshipsIndex shared across calls. Edge lookups become
-// O(degree(node)) instead of O(E). The index build cost is amortized: T6 /
-// T12 build it once per topology refresh (every 5s) and reuse it for many
-// per-resource queries.
-func BenchmarkGetRelationships_WithIndex(b *testing.B) {
-	topo := buildSyntheticTopology(5000)
-	idx := IndexByResource(topo)
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		nsIdx := i % 50
-		_ = graphRelationshipsWithIndex("Deployment", fmt.Sprintf("ns-%d", nsIdx), "app-0", topo, nil, nil, idx)
-	}
-}
-
 // BenchmarkIndexByResource measures the one-time index build cost so callers
 // can reason about whether caching the index pays for itself. With ~5k nodes
 // and ~6k edges, the build is dominated by map allocation, not iteration.
