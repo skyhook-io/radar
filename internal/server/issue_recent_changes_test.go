@@ -333,10 +333,10 @@ func TestIssueRecentChangesWithoutAuth(t *testing.T) {
 	}
 }
 
-// With incomplete history, a caller who can't read every namespace gets no
-// complete_since in the public answer, yet the row pick still uses it: the
-// change is named when it is after the point Radar's history starts, and not
-// when it is before.
+// With incomplete history from a late start, a caller who can't read every
+// namespace gets complete_since too, and the row pick uses it: the change is
+// named when it is after the point Radar's history starts, and not when it
+// is before.
 func TestProxyAuth_IssueRecentChangesRestrictedCallerHistoryBoundary(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
@@ -368,8 +368,8 @@ func TestProxyAuth_IssueRecentChangesRestrictedCallerHistoryBoundary(t *testing.
 				iss.Correlation.Unknown.Reason != issuesapi.CorrelationUnknownHistoryIncomplete {
 				t.Fatalf("setup: want history_incomplete, got %+v", iss)
 			}
-			if iss.Correlation.History == nil || !iss.Correlation.History.Incomplete || !iss.Correlation.History.CompleteSince.IsZero() {
-				t.Fatalf("public history must say incomplete and withhold complete_since: %+v", iss.Correlation.History)
+			if iss.Correlation.History == nil || !iss.Correlation.History.Incomplete || iss.Correlation.History.CompleteSince.IsZero() {
+				t.Fatalf("public history must say incomplete and name complete_since: %+v", iss.Correlation.History)
 			}
 
 			_, rows := getRecentChanges(t, env, "restricted", web.param(id))
