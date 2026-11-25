@@ -1,7 +1,7 @@
 import { Tooltip } from '../ui/Tooltip'
 import {
   type AppRow,
-  type AppSource,
+  type HostManagedSource,
   type AppWorkloadClass,
   type BatchSignal,
   CHIP,
@@ -17,8 +17,14 @@ import { ProvenanceTooltip, CategoryTooltip, VersionTooltip } from './AppTooltip
 // surfaces must render the same chip with the same tooltip for the same fact —
 // defining them once is what keeps that true.
 
-export function ProvenanceBadge({ tier, appKey, confidence, source }: { tier?: number; appKey: string; confidence?: string; source?: AppSource }) {
-  if (source && SOURCE_META[source].hostManaged) {
+export function ProvenanceBadge({ tier, appKey, confidence, source }: {
+  tier?: number
+  appKey: string
+  confidence?: string
+  /** Overrides tier and confidence with the host-managed source label from SOURCE_META. */
+  source?: HostManagedSource
+}) {
+  if (source) {
     const { label } = SOURCE_META[source]
     return (
       <Tooltip content={`Managed by ${label}.`} delay={150}>

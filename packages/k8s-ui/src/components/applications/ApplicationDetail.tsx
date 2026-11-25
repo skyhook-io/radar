@@ -65,7 +65,7 @@ import { getKindLabel } from "../../utils/api-resources";
 import {
   type AppRow,
   type AppHistory,
-  type AppSource,
+  type HostManagedSource,
   type AppSourceRef,
   type AppWorkload,
   type AppBatchActivity,
@@ -352,8 +352,8 @@ type ApplicationDetailBaseProps = {
   /** Host-reported health for the header pill, including offline instances.
    *  For jobs, also hides the duplicate Runtime fact. */
   status?: AppHostStatus;
-  /** A host-managed source takes precedence over grouping evidence in the provenance badge. */
-  source?: AppSource;
+  /** Overrides the provenance badge’s tier and confidence with the host-managed source label from SOURCE_META. */
+  source?: HostManagedSource;
   /** Show the listed tab IDs first, including `cost`. Unlisted tabs follow in their
    *  default order (built-ins, Cost, then extraViews in host order). */
   viewOrder?: string[];

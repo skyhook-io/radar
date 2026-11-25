@@ -525,17 +525,34 @@ export const SOURCE_ORDER: AppSource[] = [
   "skyhook",
 ];
 
-export const SOURCE_META: Record<AppSource, { label: string; hostManaged?: boolean }> = {
+interface SourceMeta {
+  label: string;
+  /** Set only for sources assigned by a host. Their label overrides grouping evidence
+   *  in the badge, including on folded rows whose members all share that source. */
+  hostManaged?: boolean;
+}
+
+const sourceMeta = {
   argocd: { label: "Argo CD" },
   flux: { label: "Flux" },
   helm: { label: "Helm" },
   label: { label: "Label" },
   ungrouped: { label: "Ungrouped" },
   skyhook: { label: "Skyhook", hostManaged: true },
-};
+} satisfies Record<AppSource, SourceMeta>;
+
+export const SOURCE_META: Record<AppSource, SourceMeta> = sourceMeta;
+
+export type HostManagedSource = {
+  [S in AppSource]: (typeof sourceMeta)[S] extends { hostManaged: true } ? S : never;
+}[AppSource];
+
+export function isHostManagedSource(source: AppSource): source is HostManagedSource {
+  return SOURCE_META[source].hostManaged === true;
+}
 
 interface TierMeta {
-  source: AppSource;
+  source: Exclude<AppSource, HostManagedSource>;
   /** Tooltip phrase pieces: "Grouped by {lead} `{code(name)}` {trail}". */
   lead: string;
   code: (name: string) => string;
@@ -569,7 +586,8 @@ const TIER_META: Record<number, TierMeta> = {
   9: { source: "label", lead: "the", code: () => "app", trail: "label" },
 };
 
-export function sourceOf(tier: number | undefined): AppSource {
+/** Maps grouping tiers only. Hosts set entry.source explicitly for host-managed sources. */
+export function sourceOf(tier: number | undefined): TierMeta["source"] {
   if (!tier) return "ungrouped";
   return TIER_META[tier]?.source ?? "label";
 }

@@ -6,7 +6,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { KeyboardShortcutProvider } from '../../hooks/useKeyboardShortcuts'
-import { buildSingleAppEntry, SOURCE_META, SOURCE_ORDER, type FleetAppEntry, type AppHealth, type AppRow } from '../../utils/applications'
+import { buildSingleAppEntry, isHostManagedSource, SOURCE_META, SOURCE_ORDER, type FleetAppEntry, type AppHealth, type AppRow } from '../../utils/applications'
 import { ApplicationsView } from './ApplicationsView'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -18,7 +18,7 @@ const app = (name: string, health: AppHealth): AppRow => ({
   health,
   workloads: [{ kind: 'Deployment', namespace: 'shop', name, workload_class: 'service', health, ready: 1, desired: 1, restarts: 0 }],
 })
-const managedSource = SOURCE_ORDER.find((source) => SOURCE_META[source].hostManaged)!
+const managedSource = SOURCE_ORDER.find(isHostManagedSource)!
 const entries = () => [
   { ...buildSingleAppEntry(app('demo-app', 'healthy')), source: managedSource },
   { ...buildSingleAppEntry(app('demo-jobs', 'healthy')), source: managedSource },

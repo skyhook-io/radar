@@ -37,6 +37,7 @@ import {
   CHIP_TONE,
   SOURCE_ORDER,
   SOURCE_META,
+  isHostManagedSource,
   envRank,
   isSystemNamespace,
   searchTextForEntry,
@@ -619,7 +620,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                           <CollapseChevron open={r.expanded} className="h-3.5 w-3.5" />
                           {renderRowLeading && <RowLeading>{renderRowLeading(r.members[0], r.members)}</RowLeading>}
                           <span className="truncate font-semibold text-theme-text-primary">{r.label}</span>
-                          {SOURCE_META[r.members[0].source].hostManaged && r.members.every((member) => member.source === r.members[0].source) && (
+                          {isHostManagedSource(r.members[0].source) && r.members.every((member) => member.source === r.members[0].source) && (
                             <ProvenanceBadge appKey={r.members[0].row.key} source={r.members[0].source} />
                           )}
                           {r.workloadClass !== 'job' && <BatchSignalChip signal={firstBatchSignal(r.members.map((m) => m.row))} />}
@@ -702,7 +703,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                           {renderRowLeading && <RowLeading>{renderRowLeading(e)}</RowLeading>}
                           <span className="truncate font-medium text-theme-text-primary">{e.row.name}</span>
                           {e.workloadClass !== 'job' && <BatchSignalChip signal={batchSignalForApp(e.row)} />}
-                          <ProvenanceBadge tier={e.row.tier} appKey={e.row.key} confidence={e.row.confidence} source={e.source} />
+                          <ProvenanceBadge tier={e.row.tier} appKey={e.row.key} confidence={e.row.confidence} source={isHostManagedSource(e.source) ? e.source : undefined} />
                           <CategoryChip category={e.category} addonReason={e.row.addonReason} />
                         </span>
                       </td>
