@@ -646,7 +646,10 @@ export function WorkloadView({
     isFetching: resourceFetching,
     error: resourceError,
     refetch: refetchResource,
-  } = useResourceWithRelationships<any>(apiKind, namespace, name, rest.group)
+  } = useResourceWithRelationships<any>(apiKind, namespace, name, rest.group, {
+    // Only drawer layers receive active. Other hosts also mount WorkloadView.
+    pollPendingOwnership: rest.active === true,
+  })
   const resource = resourceResponse?.resource
   const relationships = resourceResponse?.relationships
   useRefreshRevisionsOnNewRollout(

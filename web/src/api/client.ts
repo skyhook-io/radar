@@ -3219,19 +3219,52 @@ export function useResourceAvailability(kind: string, namespace: string, name: s
   });
 }
 
+// The active drawer can remount or share its query with a passive observer.
+// Both the backoff and its deadline belong to the pending answer sequence.
+const ownershipPolls = new WeakMap<object, { firstUpdate: number; deadline: number }>();
+
+function pendingOwnershipInterval(query: { state: { data?: ResourceWithRelationships; dataUpdateCount: number; error: unknown } }): number | false {
+  const { data, dataUpdateCount } = query.state;
+  // A failed refetch retains the previous response in the cache.
+  const coverage = query.state.error ? undefined : data?.relationships?.ownership;
+  const pending = "kind_sync_pending";
+  const stillLoading = coverage && (
+    coverage.unavailableReason === pending ||
+    coverage.ownerReason === pending ||
+    coverage.manages?.unavailableReason === pending ||
+    coverage.managers?.notChecked?.some(gap => gap.reason === pending) ||
+    coverage.children.notChecked?.some(gap => gap.reason === pending)
+  );
+  if (!stillLoading) {
+    ownershipPolls.delete(query);
+    return false;
+  }
+
+  const now = Date.now();
+  let poll = ownershipPolls.get(query);
+  if (!poll) {
+    poll = { firstUpdate: dataUpdateCount, deadline: now + 3 * 60_000 };
+    ownershipPolls.set(query, poll);
+  }
+  const delay = Math.min(5000 * 2 ** (dataUpdateCount - poll.firstUpdate), 30_000);
+  const remaining = poll.deadline - now;
+  return remaining > 0 ? Math.min(delay, remaining) : false;
+}
+
 // Hook that returns full response with relationships explicitly
 export function useResourceWithRelationships<T>(
   kind: string,
   namespace: string,
   name: string,
   group?: string,
-  options?: { cacheScope?: string },
+  options?: { cacheScope?: string; pollPendingOwnership?: boolean },
 ) {
   return useQuery<ResourceWithRelationships<T>>({
     queryKey: ["resource", kind, namespace, name, group, ...(options?.cacheScope ? [options.cacheScope] : [])],
     queryFn: () => fetchResourceWithRelationships<T>(kind, namespace, name, group),
     enabled: Boolean(kind && name),
-    refetchInterval: (query) => goneRecheckInterval(query, undefined),
+    refetchInterval: (query) => goneRecheckInterval(query, options?.pollPendingOwnership ? pendingOwnershipInterval(query) : undefined),
+    refetchIntervalInBackground: false,
     // Deep-linked detail views can mount while the kind's informer is still
     // completing its initial sync: keep polling instead of erroring out.
     retry: (failureCount, error) => {
