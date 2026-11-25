@@ -108,6 +108,17 @@ describe('clicking a namespace cell', () => {
     expect(params.has('resource')).toBe(false)
   })
 
+  it('links with the search the table shows, before the URL catches up', () => {
+    render()
+    const input = host.querySelector<HTMLInputElement>('input[placeholder^="Search..."]')!
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'api')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const params = new URLSearchParams(namespaceLink('billing')!.getAttribute('href')!)
+    expect(params.get('search')).toBe('api')
+  })
+
   it('leaves a modified click to the browser, so it opens a new tab', () => {
     const onResourceClick = vi.fn()
     render({ onResourceClick })

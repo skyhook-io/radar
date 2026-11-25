@@ -6842,15 +6842,18 @@ export function ResourcesView({
   }, [])
   // Query-only, so it resolves under whatever base path the host serves the
   // list from. A modified click opens it in a new tab, without the open drawer.
+  // The search comes from the table, not the URL, whose write is debounced.
   const currentSearch = locationSearch ?? (typeof window !== 'undefined' ? window.location.search : '')
   const namespaceHrefFor = useCallback((ns: string) => {
     const params = new URLSearchParams(currentSearch)
     params.delete('resource')
+    if (deferredSearchTerm) params.set('search', deferredSearchTerm)
+    else params.delete('search')
     const excludes = { ...columnFilterExcludes }
     delete excludes.namespace
     params.set('filters', columnFiltersParam({ ...columnFilters, namespace: [ns] }, excludes))
     return `?${params}`
-  }, [currentSearch, columnFilters, columnFilterExcludes])
+  }, [currentSearch, deferredSearchTerm, columnFilters, columnFilterExcludes])
   const filteredToOneNamespace = !columnFilterExcludes.namespace && columnFilters.namespace?.length === 1 ? columnFilters.namespace[0] : undefined
   const onlyNamespace = namespaces.length === 1 ? namespaces[0] : filteredToOneNamespace
   const resourcesViewDataContextValue = useMemo<ResourcesViewData>(() => ({
