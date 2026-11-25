@@ -328,6 +328,8 @@ func describeFailure(what string, conn oo.Connection, err error) string {
 	var httpErr *prom.HTTPError
 	var limited oo.ErrRateLimited
 	switch {
+	case errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusForbidden && what != "":
+		return "The login works, but OpenObserve doesn't let this account read metrics. Give it a role that can read the metrics streams, then try again."
 	case errors.As(err, &httpErr) && (httpErr.StatusCode == http.StatusUnauthorized || httpErr.StatusCode == http.StatusForbidden):
 		return "OpenObserve rejected the login. Check the user and token."
 	case errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound:

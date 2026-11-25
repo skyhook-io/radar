@@ -22,6 +22,9 @@ type Server struct {
 	// FailStatus, when set, answers every request with it and FailBody.
 	FailStatus int
 	FailBody   string
+	// MetricsForbidden answers the login check but refuses every metrics
+	// query with 403, like an account without read access to the streams.
+	MetricsForbidden bool
 	// Legacy makes the store ignore matchers on labels a metric's stream
 	// lacks (OpenObserve before v1.2); LegacyUnscoped are the metrics whose
 	// streams lack the cluster labels (their schema lists only cluster).
@@ -66,6 +69,11 @@ func (f *Server) serve(w http.ResponseWriter, r *http.Request) {
 	if f.FailStatus != 0 {
 		w.WriteHeader(f.FailStatus)
 		_, _ = w.Write([]byte(f.FailBody))
+		return
+	}
+	if f.MetricsForbidden && q != "vector(1)" {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"code":403,"message":"Unauthorized Access"}`))
 		return
 	}
 	if m, ok := strings.CutPrefix(r.URL.Path, "/api/default/streams/"); ok && strings.HasSuffix(m, "/schema") {

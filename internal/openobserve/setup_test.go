@@ -251,6 +251,27 @@ func TestSetupLoginFailureSavesNothingAndHidesTheToken(t *testing.T) {
 	}
 }
 
+func TestSetupSaysWhenTheLoginWorksButCannotReadMetrics(t *testing.T) {
+	srv := oofake.Start(t, &oofake.Server{IDs: map[string]string{uidB: "oo-b"}, MetricsForbidden: true})
+	h := &setupHarness{}
+	_, err := Setup(context.Background(), h.deps(nil, uidB), fieldsFor(srv.URL))
+	var setupErr *SetupError
+	if !errors.As(err, &setupErr) || !strings.Contains(err.Error(), "The login works, but OpenObserve doesn't let this account read metrics") {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(err.Error(), "rejected the login") {
+		t.Fatalf("a permission problem was reported as a bad login: %v", err)
+	}
+	if h.saves != 0 {
+		t.Fatal("a connection that can't read metrics was saved")
+	}
+
+	forbidden := oofake.Start(t, &oofake.Server{FailStatus: http.StatusForbidden})
+	if _, err := Setup(context.Background(), h.deps(nil, uidB), fieldsFor(forbidden.URL)); err == nil || !strings.Contains(err.Error(), "OpenObserve rejected the login") {
+		t.Fatalf("a refused login check: err = %v", err)
+	}
+}
+
 func TestSetupTokenRules(t *testing.T) {
 	srv := oofake.Start(t, &oofake.Server{IDs: map[string]string{uidB: "oo-b"}})
 	t.Setenv("OO_TOKEN_TEST", "from-env")
