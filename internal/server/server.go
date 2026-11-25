@@ -5459,6 +5459,16 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 		s.writeError(w, http.StatusInternalServerError, "failed to parse kubeconfig: "+err.Error())
 		return
 	}
+	// Whoever can write this Secret controls the kubeconfig, but the client
+	// runs here with the operator's credentials, so it must not run commands
+	// or read local files.
+	if reasons := k8s.UntrustedKubeconfigReasons(newConfig); len(reasons) > 0 {
+		log.Printf("[capi] Refused kubeconfig from secret %s/%s: %s", ns, secretName, strings.Join(reasons, "; "))
+		s.writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(
+			"Not connected: the kubeconfig in Secret %s/%s would run a command or read a file on this computer (%s). Radar doesn't use those settings from a kubeconfig stored in the cluster. If you trust it, download it, check it and add it to your own kubeconfig.",
+			ns, secretName, strings.Join(reasons, "; ")))
+		return
+	}
 
 	// Determine the context name to use from the workload kubeconfig
 	contextName := newConfig.CurrentContext
