@@ -54,7 +54,7 @@ export function usePodDetailAccess(pod: PodDebugTarget | undefined, namespace: {
   const { deployment } = useCapabilitiesContext()
   const eligible = pod?.apiVersion === 'v1' && pod.kind === 'Pod' && pod.status.phase === 'Running' && !pod.metadata.deletionTimestamp
   const execOnly = !!embedded || deployment?.mode === 'cloud' || !pod || !runningPodDebugTargets(pod)?.length
-  const { query, unverifiedImage } = usePodDebugAccess(pod?.metadata.namespace ?? '', pod?.metadata.name ?? '', pod?.metadata.uid ?? '',
+  const { query, unverifiedImage, unverifiedReview } = usePodDebugAccess(pod?.metadata.namespace ?? '', pod?.metadata.name ?? '', pod?.metadata.uid ?? '',
     !!eligible && (!namespace.canExec || (!execOnly && !namespace.podDebugImage)), execOnly, eligible && !execOnly ? namespace.podDebugImage : undefined)
   const named = eligible && !query.error ? query.data : undefined
   return {
@@ -62,11 +62,13 @@ export function usePodDetailAccess(pod: PodDebugTarget | undefined, namespace: {
     canOpenEphemeralTerminal: namespace.canOpenEphemeralTerminal || named?.exec === true,
     debugImage: execOnly || named?.state === 'denied' || named?.state === 'unavailable' ? undefined :
       named?.state === 'allowed' ? named.image : namespace.podDebugImage || unverifiedImage,
-    updateUnverified: !!unverifiedImage && !namespace.podDebugImage,
+    unverifiedReview: namespace.podDebugImage ? undefined : unverifiedReview,
   }
 }
 
-export function PodDebugAction({ pod, defaultImage, failedContainer, updateUnverified = false }: { pod: PodDebugTarget; defaultImage: string; failedContainer?: string; updateUnverified?: boolean }) {
+export function PodDebugAction({ pod, defaultImage, failedContainer, unverifiedReview }: {
+  pod: PodDebugTarget; defaultImage: string; failedContainer?: string; unverifiedReview?: ReturnType<typeof usePodDebugAccess>['unverifiedReview']
+}) {
   const openTerminal = useOpenTerminal()
   const eligibleTargets = runningPodDebugTargets(pod)
   const targets = eligibleTargets ?? []
@@ -95,6 +97,9 @@ export function PodDebugAction({ pod, defaultImage, failedContainer, updateUnver
     }, '',
   )
   const busy = mutation.isPending
+  const refused = unverifiedReview?.refused
+  const refusedNow = result?.state === 'error' && mutation.error instanceof ApiError && mutation.error.status === 403 && !!unverifiedReview
+  const recheckRequired = !!refused && !refused.rechecked
   const outcome = result ?? actionDialogResult(mutation.outcomeError, {
     unknown: 'Radar could not confirm whether the debug container was added',
   })
@@ -106,7 +111,7 @@ export function PodDebugAction({ pod, defaultImage, failedContainer, updateUnver
   }
 
   async function start() {
-    if (!draft || submitting.current || !targets.includes(draft.target)) return
+    if (!draft || submitting.current || refusedNow || recheckRequired || !targets.includes(draft.target)) return
     const sameConnection = () => getApiBase() === draft.base && connectionHeaderValue() === draft.connection
     submitting.current = true
     setResult(undefined)
@@ -133,13 +138,14 @@ export function PodDebugAction({ pod, defaultImage, failedContainer, updateUnver
   if (!eligibleTargets || (!draft && !targets.length)) return null
   return <>
     <button type="button" className={`${failedContainer ? 'btn-brand' : 'btn-secondary'} flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium`} onClick={show}>
-      <Bug className="h-3.5 w-3.5" />{failedContainer ? updateUnverified ? 'Review debug container' : 'Start a debug container' : 'Debug'}
+      <Bug className="h-3.5 w-3.5" />{unverifiedReview ? recheckRequired ? 'Review debug refusal' : refused ? 'Review another debug attempt' : 'Review debug container' : failedContainer ? 'Start a debug container' : 'Debug'}
     </button>
     <ActionConfirmDialog open={!!draft} title="Debug Pod" context={draft?.context} writes={[{ summary: `Update pods/ephemeralcontainers on ${namespace}/${name}` }]} subject={{ kind: 'Pod', namespace, name }}
       effect="Start an ephemeral container and open a terminal in it. Its entry stays on the Pod until the Pod is deleted."
       onClose={() => {
         if (submitting.current) return
         setDraft(undefined)
+        if (refusedNow && mutation.error) unverifiedReview?.rememberRefusal(mutation.error.message)
         if (result?.state === 'error') setResult(undefined)
       }}
       onConfirm={start} confirmLabel="Start debug container" isLoading={busy} result={outcome}
@@ -150,9 +156,11 @@ export function PodDebugAction({ pod, defaultImage, failedContainer, updateUnver
           mutation.acknowledgeOutcome()
           setResult(undefined)
         }}>I checked the Pod YAML</button></div>}
-      incompleteReason={draft && !targets.includes(draft.target) ? 'Select a running container.' : undefined}>
+      incompleteReason={refusedNow ? 'Close to recheck access after the refusal.' : recheckRequired ? 'Recheck access before reviewing another attempt.' : draft && !targets.includes(draft.target) ? 'Select a running container.' : undefined}>
       {draft && <div className="grid gap-3">
-        {updateUnverified && <p className="text-sm text-theme-text-secondary">Radar verified terminal access to this Pod. Kubernetes will decide whether you can add a debug container when you confirm.</p>}
+        {refused && <div className="space-y-1 text-sm text-warning-text"><p>The last debug request was refused.</p><p className="break-words">{refused.message}</p>
+          {recheckRequired && <button type="button" className="btn-secondary px-2 py-1" onClick={() => void unverifiedReview?.recheckAccess()}>Recheck access</button>}</div>}
+        {unverifiedReview && <p className="text-sm text-theme-text-secondary">Radar verified terminal access to this Pod. Kubernetes will decide whether you can add a debug container when you confirm.</p>}
         <label className="grid gap-1">Target container
           <select className="rounded border border-theme-border bg-theme-surface px-2 py-1.5" value={draft.target} disabled={busy}
             onChange={event => setDraft({ ...draft, target: event.target.value })}>

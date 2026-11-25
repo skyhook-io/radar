@@ -66,3 +66,25 @@ it.each([
   await vi.waitFor(() => expect(host.textContent).toBe(access.state))
   expect(host.querySelector('span')?.dataset.unverifiedImage).toBe(expected)
 })
+
+it('retains the actual write refusal until named RBAC settles, and requires a deliberate recheck before another review', async () => {
+  const undecided = { state: 'unknown', exec: true, image: 'tools' }
+  vi.mocked(fetchJSON).mockResolvedValue(undecided)
+  function Review() {
+    const { query, unverifiedReview, recheckAccess } = usePodDebugAccess('demo', 'checkout', 'uid-1', true)
+    return <><output>{query.data?.state} {query.data?.refusedAttempt?.message}</output>
+      <button id="refuse" onClick={() => unverifiedReview?.rememberRefusal('Image policy refused the Pod update')}/>
+      <button id="check" onClick={() => void recheckAccess()}/>
+      <span>{unverifiedReview && (!unverifiedReview.refused || unverifiedReview.refused.rechecked) ? 'review available' : 'no review'}</span></>
+  }
+  act(() => root.render(<QueryClientProvider client={client}><Review/></QueryClientProvider>))
+  await vi.waitFor(() => expect(host.textContent).toContain('review available'))
+  act(() => host.querySelector<HTMLButtonElement>('#refuse')!.click())
+  await vi.waitFor(() => expect(fetchJSON).toHaveBeenCalledTimes(2))
+  await vi.waitFor(() => expect(host.textContent).toContain('Image policy refused the Pod updateno review'))
+  act(() => host.querySelector<HTMLButtonElement>('#check')!.click())
+  await vi.waitFor(() => expect(host.textContent).toContain('Image policy refused the Pod updatereview available'))
+  vi.mocked(fetchJSON).mockResolvedValue({ state: 'denied', exec: true })
+  act(() => host.querySelector<HTMLButtonElement>('#check')!.click())
+  await vi.waitFor(() => expect(host.textContent).toBe('denied no review'))
+})

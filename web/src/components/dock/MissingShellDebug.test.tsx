@@ -15,12 +15,12 @@ vi.mock('../../contexts/CapabilitiesContext', () => ({ useCapabilitiesContext: (
 vi.mock('../../api/client', async original => ({ ...await original<typeof import('../../api/client')>(), useResource: () => ({ data: f.pod }) }))
 vi.mock('../../api/podDebug', () => ({ usePodDebugAccess: (...args: unknown[]) => {
   f.probe(...args)
-  return {support: f.support, unverifiedImage: !args[4] && f.access === 'unknown' && f.namedExec && !f.checkError ? 'operator-tools' : undefined, query: { error: f.checkError, data: {state: f.access, image: 'toolbox', exec: f.namedExec}, refetch: f.recheck }}
+  return {support: f.support, recheckAccess: f.recheck, unverifiedReview: !args[4] && f.access === 'unknown' && f.namedExec && !f.checkError ? {} : undefined, unverifiedImage: !args[4] && f.access === 'unknown' && f.namedExec && !f.checkError ? 'operator-tools' : undefined, query: { error: f.checkError, data: {state: f.access, image: 'toolbox', exec: f.namedExec}, refetch: f.recheck }}
 } }))
 vi.mock('@skyhook-io/k8s-ui', async original => ({ ...await original<typeof import('@skyhook-io/k8s-ui')>(), useOpenTerminal: () => f.open }))
 vi.mock('@skyhook-io/k8s-ui/utils/clipboard', () => ({ copyText: f.copy }))
 vi.mock('../resources/PodDebugAction', async original => ({ ...await original<typeof import('../resources/PodDebugAction')>(),
-  PodDebugAction: ({ failedContainer, updateUnverified }: { failedContainer: string; updateUnverified?: boolean }) => <button>{updateUnverified ? 'Review attempt for' : 'Start for'} {failedContainer}</button> }))
+  PodDebugAction: ({ failedContainer, unverifiedReview }: { failedContainer: string; unverifiedReview?: object }) => <button>{unverifiedReview ? 'Review attempt for' : 'Start for'} {failedContainer}</button> }))
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 let host: HTMLDivElement, root: ReturnType<typeof createRoot>
@@ -64,7 +64,7 @@ it('copies the precise access request and rechecks an updated grant', async () =
 })
 it('asks for verification on an unknown result without requesting a grant', async () => {
   f.access='unknown'; render()
-  expect(host.textContent).toContain('couldn’t verify')
+  expect(host.textContent).toContain('cluster access check returned no decision')
   expect(button('Copy access request')).toBeUndefined()
   expect(button('Recheck access')).toBeDefined()
   await act(async () => button('Copy verification request')!.click())
@@ -187,4 +187,18 @@ it('shows no alternative when every sibling has stopped', () => {
   f.pod.status.containerStatuses.push({ name: 'stopped', state: { terminated: {} } })
   render()
   expect(host.textContent).not.toContain('Other running')
+})
+
+it('identifies an untargeted running debugger without offering it as the failed container’s debugger', () => {
+  f.pod.spec.ephemeralContainers = [{name:'network-tools', image:'tools'}]
+  f.pod.status.ephemeralContainerStatuses = [{name:'network-tools', state:{ running:{} }}]
+  render()
+  expect(host.textContent).toContain('Running without a target: network-tools')
+  expect(button('Open debug terminal')).toBeUndefined()
+})
+it('explains how to find the local effective Kubernetes username before requesting a grant', async () => {
+  f.installation = {deployment:{mode:'local'}}
+  render()
+  await act(async () => button('Copy access request')!.click())
+  expect(f.copy.mock.lastCall?.[0]).toContain('kubectl auth whoami in this context')
 })

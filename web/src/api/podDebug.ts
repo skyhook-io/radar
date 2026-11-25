@@ -18,7 +18,8 @@ export function createPodDebugContainer(namespace: string, podName: string, conn
   )
 }
 
-type PodDebugAccess = { exec?: boolean } & ({ state: 'allowed'; image: string } | { state: 'unknown'; image?: string } | { state: 'denied' | 'unavailable' })
+interface RefusedAttempt { message: string; rechecked: boolean }
+type PodDebugAccess = { exec?: boolean; refusedAttempt?: RefusedAttempt } & ({ state: 'allowed'; image: string } | { state: 'unknown'; image?: string } | { state: 'denied' | 'unavailable' })
 
 function refusesDebug(access?: PodDebugAccess) {
   return access?.state === 'denied' || access?.state === 'unavailable'
@@ -36,9 +37,13 @@ export function usePodDebugAccess(namespace: string, name: string, uid: string, 
   const key = useMemo(() => [...podDebugAccessKey(namespace, name, uid, base, connection), execOnly], [namespace, name, uid, base, connection, execOnly])
   const query = useQuery<PodDebugAccess>({
     queryKey: key,
-    queryFn: () => fetchJSON<PodDebugAccess>(`/pods/${namespace}/${name}/debug-access${execOnly ? '?execOnly=true' : ''}`, {
-      headers: connectionHeaders(connection),
-    }),
+    queryFn: async () => {
+      const answer = await fetchJSON<PodDebugAccess>(`/pods/${namespace}/${name}/debug-access${execOnly ? '?execOnly=true' : ''}`, {
+        headers: connectionHeaders(connection),
+      })
+      const refusal = client.getQueryData<PodDebugAccess>(key)?.refusedAttempt
+      return answer.state === 'unknown' && refusal ? { ...answer, refusedAttempt: refusal } : answer
+    },
     enabled: q => support === 'supported' && (enabled || (!!namespaceGrant && refusesDebug(q.state.data))),
     staleTime: 15_000,
     retry: false,
@@ -53,5 +58,19 @@ export function usePodDebugAccess(namespace: string, name: string, uid: string, 
   }, [namespaceGrant, support, client, key, recheck])
   const access = query.data
   const unverifiedImage = support === 'supported' && !execOnly && !query.error && access?.state === 'unknown' && access.exec ? access.image : undefined
-  return { unverifiedImage, query, support, recheckSupport: () => client.invalidateQueries({queryKey: ['capabilities'], exact: true}) }
+  async function recheckAccess() {
+    const previous = client.getQueryData<PodDebugAccess>(key)?.refusedAttempt
+    const result = await recheck()
+    if (previous && !result.error && result.data?.state === 'unknown') {
+      client.setQueryData<PodDebugAccess>(key, answer => answer?.refusedAttempt === previous
+        ? { ...answer, refusedAttempt: { ...previous, rechecked: true } } : answer)
+    }
+  }
+  function rememberRefusal(message: string) {
+    client.setQueryData<PodDebugAccess>(key, answer => answer?.state === 'unknown'
+      ? { ...answer, refusedAttempt: { message, rechecked: false } } : answer)
+    void recheck({ cancelRefetch: false })
+  }
+  const unverifiedReview = unverifiedImage ? { refused: access?.refusedAttempt, rememberRefusal, recheckAccess } : undefined
+  return { unverifiedImage, unverifiedReview, recheckAccess, query, support, recheckSupport: () => client.invalidateQueries({queryKey: ['capabilities'], exact: true}) }
 }

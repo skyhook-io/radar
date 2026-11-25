@@ -401,7 +401,7 @@ export function TerminalTab({
             <>
               <div className={clsx(toneTextClass('unhealthy'), 'mb-2 text-sm')}>Failed to connect</div>
               <div className="text-xs text-theme-text-secondary mb-3">{error}</div>
-              {reviewedPodUID.current && podDetailsLink}
+              {podDetailsLink}
               <button
                 onClick={connect}
                 className="flex items-center gap-2 px-3 py-1.5 btn-brand text-xs rounded"

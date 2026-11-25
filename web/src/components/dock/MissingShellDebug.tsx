@@ -29,9 +29,13 @@ export function MissingShellDebug(props: RecoveryTarget) {
   if (pod.metadata.uid !== uid) return <p className="text-xs text-theme-text-secondary">This Pod was replaced. Open its details to start a new terminal. {podDetailsLink}</p>
   const targets = runningPodDebugTargets(pod)
   if (!targets?.includes(target)) return <p className="max-w-md text-xs text-theme-text-secondary">Debug recovery needs a running Linux container. Check the container state in Pod details.</p>
+  const untargeted = getRunningEphemeralContainers(pod).filter(c => !c.targetContainerName)
   const alternatives = targets.filter(name => name !== target)
   return <div className="flex w-full min-w-0 max-w-md flex-col items-center gap-2">
     <DebugOptions {...props} pod={pod}/>
+    {untargeted.length > 0 && <p className="max-w-md text-xs text-theme-text-secondary [overflow-wrap:anywhere]">
+      Running without a target: <code>{untargeted.map(c => c.name).join(', ')}</code>. For Pod-wide troubleshooting, check Pod details for terminal access to this debugger. {podDetailsLink}
+    </p>}
     {alternatives.length > 0 && <p className="max-w-md text-xs text-theme-text-secondary [overflow-wrap:anywhere]">
       {alternatives.length === 1 ? 'Other running container' : 'Other running containers'}: <code>{alternatives.map((name, index) => <span key={name}>{index > 0 && ', '}{props.switchContainer
         ? <button type="button" className="underline underline-offset-2 hover:text-theme-text-primary" onClick={() => props.switchContainer?.(name)}>{name}</button>
@@ -47,7 +51,7 @@ function DebugOptions({ namespace, name, uid, target, connection, base, pod }: R
   const execOnly = !!embedded || deployment?.mode === 'cloud'
   const current = () => getApiBase() === base && connectionHeaderValue() === connection
   const running = getRunningEphemeralContainers(pod).filter(c => c.targetContainerName === target)
-  const { query, support, recheckSupport, unverifiedImage } = usePodDebugAccess(namespace, name, uid,
+  const { query, support, recheckSupport, unverifiedImage, unverifiedReview, recheckAccess } = usePodDebugAccess(namespace, name, uid,
     execOnly ? !!running.length && !canOpenEphemeralTerminal : !running.length && !podDebugImage,
     execOnly, !execOnly && !running.length ? podDebugImage : undefined)
   const openTerminal = useOpenTerminal()
@@ -106,19 +110,25 @@ function DebugOptions({ namespace, name, uid, target, connection, base, pod }: R
   const denied = access?.state === 'denied'
   const sharedServiceAccount = !username && !authEnabled && deployment?.mode === 'in-cluster'
   const requester = username ? `Kubernetes user ${username}` : sharedServiceAccount ? 'the ServiceAccount used by this Radar installation' : 'me'
-  const subjectDetails = sharedServiceAccount ? ' For the ServiceAccount subject, use the running Radar Pod’s namespace and its spec.serviceAccountName.' : ''
+  const subjectDetails = sharedServiceAccount ? ' For the ServiceAccount subject, use the running Radar Pod’s namespace and its spec.serviceAccountName.'
+    : !username && deployment?.mode === 'local' ? ' I can identify my Kubernetes user with kubectl auth whoami in this context.' : ''
   const request = denied ? `Could you grant ${requester} permission to update pods/ephemeralcontainers for Pod ${name} in namespace ${namespace}? I need to troubleshoot container ${target}. Please limit the rule to resourceNames: ["${name}"]. A replacement Pod with another name would need its own grant.${subjectDetails}`
     : `Could you check whether ${username ? `Kubernetes user ${username}` : sharedServiceAccount ? requester : 'my Kubernetes identity'} can update pods/ephemeralcontainers for Pod ${name} in namespace ${namespace}? Radar couldn’t verify access while I was troubleshooting container ${target}.${subjectDetails}`
   return <div className="flex max-w-md flex-col items-center gap-2 text-xs text-theme-text-secondary">
     <p>{denied ? <>{sharedServiceAccount ? "Radar’s ServiceAccount doesn’t have" : "You don’t have"} permission to add a debug container to this Pod. Copy an access request for your cluster administrator.</>
-      : <>Radar couldn’t verify whether {sharedServiceAccount ? "Radar’s ServiceAccount" : "you"} can add a debug container to <code>{namespace}/{name}</code>. {query.error ? ' The permission request failed before Radar received a decision.' : ' The cluster access check returned no decision.'} {unverifiedImage ? ' You can review a debug attempt. Kubernetes will check the update when you confirm.' : ' Recheck access or ask your administrator to verify it.'}</>}</p>
-    {unverifiedImage && <PodDebugAction pod={pod} defaultImage={unverifiedImage} failedContainer={target} updateUnverified/>}
+      : query.error ? <>The permission request failed before Radar received a decision for <code>{namespace}/{name}</code>. Recheck access or ask your administrator to verify it.</>
+      : unverifiedImage ? <>You can open terminals in this Pod. Whether you can add a debug container is unconfirmed.</>
+      : <>The cluster access check returned no decision for <code>{namespace}/{name}</code>. Recheck access or ask your administrator to verify it.</>}</p>
+    {query.data?.refusedAttempt && !denied && <div role="status" className="max-w-full break-words text-warning-text">
+      <p>The last debug request was refused.</p><p>{query.data.refusedAttempt.message}</p>
+    </div>}
+    {unverifiedImage && (!unverifiedReview?.refused || unverifiedReview.refused.rechecked) && <PodDebugAction pod={pod} defaultImage={unverifiedImage} failedContainer={target} unverifiedReview={unverifiedReview}/>}
     {denied && <p className="text-xs text-theme-text-tertiary">Pod <code>{namespace}/{name}</code></p>}
     <div className="flex flex-wrap items-center justify-center gap-2">
       <button className="btn-secondary flex items-center gap-1.5 rounded px-2 py-1" onClick={async () => setCopied(await copyText(request) ? 'copied' : 'manual')}>
         <Copy className="h-3 w-3"/>{copied === 'copied' ? 'Copied' : denied ? 'Copy access request' : 'Copy verification request'}</button>
       <button className="btn-secondary flex items-center gap-1.5 rounded px-2 py-1" disabled={query.isFetching}
-        onClick={() => { setCopied(undefined); void query.refetch() }}><RefreshCw className="h-3 w-3"/>{query.isFetching ? 'Checking…' : 'Recheck access'}</button>
+        onClick={() => { setCopied(undefined); void recheckAccess() }}><RefreshCw className="h-3 w-3"/>{query.isFetching ? 'Checking…' : 'Recheck access'}</button>
     </div>
     {copied === 'manual' && <textarea aria-label={denied ? 'Access request to copy' : 'Verification request to copy'} className="w-full rounded bg-theme-elevated p-2" value={request} readOnly onFocus={event => event.target.select()}/>}
   </div>
