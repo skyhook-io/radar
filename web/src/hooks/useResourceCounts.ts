@@ -14,7 +14,7 @@ export interface ResourceCountsResponse {
 // Lightweight per-kind counts for the Resources sidebar badges. Shared by the
 // Resources view and any surface that renders the same sidebar standalone, so
 // both read one cache entry.
-export function useResourceCounts(namespaces: string[]) {
+export function useResourceCounts(namespaces: string[], options?: { enabled?: boolean }) {
   const { connection } = useConnection()
   const namespacesParam = namespaces.join(',')
   return useQuery({
@@ -34,6 +34,7 @@ export function useResourceCounts(namespaces: string[]) {
         })
       }
     },
+    enabled: options?.enabled ?? true,
     staleTime: 10000,
     // SSE invalidation isn't running while connecting, and mid-sync counts
     // are what unlatch guarded kinds as their informers finish — poll fast
