@@ -1,0 +1,43 @@
+import type { ReactNode } from 'react'
+import { clsx } from 'clsx'
+import type { HealthLevel } from '../resources/resource-utils'
+import { SectionHeading } from '../ui/FoldSection'
+import { StatusDot, toneTextClass } from '../ui/status-tone'
+
+export function WorkspaceCard({ title, children, className }: { title?: ReactNode; children: ReactNode; className?: string }) {
+  return (
+    <section className={clsx('rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm', className)}>
+      {title && <SectionHeading>{title}</SectionHeading>}
+      {children}
+    </section>
+  )
+}
+
+export function DimensionValue({
+  tone,
+  children,
+  source,
+  linkLabel,
+  onOpen,
+}: {
+  tone: HealthLevel
+  children: ReactNode
+  source?: ReactNode
+  linkLabel?: string
+  onOpen?: () => void
+}) {
+  return (
+    <div>
+      <span className="inline-flex flex-wrap items-center gap-x-2">
+        <StatusDot tone={tone} />
+        <span className={toneTextClass(tone)}>{children}</span>
+        {onOpen && (
+          <button type="button" onClick={onOpen} className="text-xs text-accent-text hover:underline">
+            {linkLabel} →
+          </button>
+        )}
+      </span>
+      {source && <div className="text-[11.5px] text-theme-text-tertiary">{source}</div>}
+    </div>
+  )
+}
