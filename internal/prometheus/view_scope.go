@@ -322,6 +322,7 @@ func (c *Client) ResolveViewScope(ctx context.Context, req ViewScopeRequest, cac
 		}
 		return ViewScope{State: ViewScopeSingleClusterAsserted, Filters: filters, Note: note}, nil
 	}
+	ctx = c.withRelayIdentity(ctx)
 	now := time.Now()
 	at, live := req.At, false
 	if at.IsZero() || (at.Sub(now) < viewScopeLiveSlack && now.Sub(at) < viewScopeLiveSlack) {
@@ -500,7 +501,7 @@ func decideLabeledViewScope(ctx context.Context, q instantQuerier, req ViewScope
 	qualifiers := clusterQualifierLabels
 	if configured && !slices.ContainsFunc(keys, func(k string) bool { return !slices.Contains(clusterQualifierLabels, k) }) {
 		// An operator may use a project as the cluster boundary. Check visible cluster names within it.
-		qualifiers = partitionLabels
+		qualifiers = partitionLabelsFor(ctx)
 	}
 	readbackKeys := slices.Compact(slices.Sorted(slices.Values(slices.Concat(keys, qualifiers))))
 	readback, _, err := runViewProbes(ctx, q, at, viewReadbackParts(req.Metrics, readbackKeys, matchers, req.Span))
@@ -555,7 +556,7 @@ func decideLabeledViewScope(ctx context.Context, q instantQuerier, req ViewScope
 		filters[m.Name] = queryMatchers
 	}
 	if len(pending) > 0 {
-		identityKeys := slices.Compact(slices.Sorted(slices.Values(append(slices.Clone(partitionLabels), keys...))))
+		identityKeys := slices.Compact(slices.Sorted(slices.Values(append(slices.Clone(partitionLabelsFor(ctx)), keys...))))
 		identities, marks, err := runViewProbes(ctx, q, at, viewIdentityParts(pending, identityKeys, req.Span, true))
 		if err != nil {
 			return unknownViewScope(), err
@@ -667,7 +668,7 @@ func conflictsWithLabels(identity, clusterLabels map[string]string) bool {
 }
 
 func decideUnlabeledViewScope(ctx context.Context, q instantQuerier, req ViewScopeRequest, at time.Time) (ViewScope, error) {
-	identities, _, err := runViewProbes(ctx, q, at, viewIdentityParts(req.Metrics, partitionLabels, req.Span, false))
+	identities, _, err := runViewProbes(ctx, q, at, viewIdentityParts(req.Metrics, partitionLabelsFor(ctx), req.Span, false))
 	if err != nil {
 		return unknownViewScope(), err
 	}
@@ -687,7 +688,7 @@ func decideUnlabeledViewScope(ctx context.Context, q instantQuerier, req ViewSco
 			single = append(single, ids[0])
 		}
 	}
-	if req.Joined && !joinedIdentitiesAgree(single, partitionLabels) {
+	if req.Joined && !joinedIdentitiesAgree(single, partitionLabelsFor(ctx)) {
 		return several, nil
 	}
 	return ViewScope{State: ViewScopeUnlabeled, Filters: filters, Note: viewScopeUnlabeledNote}, nil

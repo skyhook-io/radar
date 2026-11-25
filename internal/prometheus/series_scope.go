@@ -152,7 +152,7 @@ func (client *Client) TrafficSpansClusters(ctx context.Context, metric, selector
 	if client == nil {
 		return false, errors.New("Prometheus client not initialized")
 	}
-	return trafficSpansClusters(ctx, client, metric, selector, window)
+	return trafficSpansClusters(client.withRelayIdentity(ctx), client, metric, selector, window)
 }
 
 func trafficSpansClusters(ctx context.Context, q seriesQuerier, metric, selector string, window time.Duration) (bool, error) {
@@ -242,6 +242,7 @@ func (client *Client) resolveScope(ctx context.Context, namespace string, probe 
 		}
 		return m, iso, nil
 	}
+	ctx = client.withRelayIdentity(ctx)
 	var verified map[string]string
 	unlabeled := false
 	if len(anchors) > 0 || cache != nil {
@@ -252,8 +253,9 @@ func (client *Client) resolveScope(ctx context.Context, namespace string, probe 
 		}
 	}
 	if unlabeled && probe.allowUnlabeledProof {
-		matchers := make([]string, len(partitionLabels))
-		for i, label := range partitionLabels {
+		labels := partitionLabelsFor(ctx)
+		matchers := make([]string, len(labels))
+		for i, label := range labels {
 			matchers[i] = label + `=""`
 		}
 		iso := SeriesIsolation{Mode: SeriesIsolationUnverified, Note: "Matched to stats without cluster identity labels, like this namespace's kube-state-metrics Pod evidence. Radar cannot distinguish unlabeled stats from another cluster"}
@@ -275,11 +277,12 @@ func decideScope(ctx context.Context, q seriesQuerier, probe scopeProbe, verifie
 			return "", SeriesIsolation{}, err
 		}
 	} else {
+		labels := strings.Join(partitionLabelsFor(ctx), ",")
 		for _, sel := range probe.selectors {
-			identities := "count by (" + probe.key + "," + strings.Join(partitionLabels, ",") + ") (" + probe.over(sel) + ")"
+			identities := "count by (" + probe.key + "," + labels + ") (" + probe.over(sel) + ")"
 			if probe.allowUnlabeledDuplicate {
 				// A second scrape without cluster labels is not a second identity.
-				identities += " unless on (" + strings.Join(partitionLabels, ",") + ") vector(1)"
+				identities += " unless on (" + labels + ") vector(1)"
 			}
 			res, err := q.Query(ctx, "max(count by ("+probe.key+") ("+identities+"))")
 			if err != nil {
@@ -335,10 +338,11 @@ func decideVerifiedScope(ctx context.Context, q seriesQuerier, probe scopeProbe,
 
 func readScopePartition(ctx context.Context, q seriesQuerier, probe scopeProbe, matchers string) (bool, error) {
 	var partition string
+	labels := partitionLabelsFor(ctx)
 	for _, sel := range probe.selectors {
-		identities := "count by (" + strings.Join(partitionLabels, ",") + ") (" + probe.over(withScope(sel, matchers)) + ")"
+		identities := "count by (" + strings.Join(labels, ",") + ") (" + probe.over(withScope(sel, matchers)) + ")"
 		if probe.allowUnlabeledDuplicate && matchers == "" {
-			identities += " unless on (" + strings.Join(partitionLabels, ",") + ") vector(1)"
+			identities += " unless on (" + strings.Join(labels, ",") + ") vector(1)"
 		}
 		res, err := q.Query(ctx, "topk(2,"+identities+")")
 		if err != nil {
@@ -348,8 +352,8 @@ func readScopePartition(ctx context.Context, q seriesQuerier, probe scopeProbe, 
 			return false, ErrScopeAmbiguous
 		}
 		for _, row := range res.Series {
-			values := make([]string, len(partitionLabels))
-			for i, label := range partitionLabels {
+			values := make([]string, len(labels))
+			for i, label := range labels {
 				values[i] = strconv.Quote(row.Labels[label])
 			}
 			key := strings.Join(values, ",")

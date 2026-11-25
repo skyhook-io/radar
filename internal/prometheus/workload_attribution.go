@@ -35,11 +35,48 @@ func identitySelection(namespace string, pods []prom.WorkloadPodIdentity) prom.P
 
 var workloadAttributionProbeBudget = 8 * time.Second
 
-var clusterIdentityLabels = []string{"cluster", "cluster_name", "k8s_cluster_name", "kubernetes_cluster", "cluster_id", "radar_cluster_uid", "k8s_cluster"}
+var clusterIdentityLabels = []string{"cluster", "cluster_name", "k8s_cluster_name", "kubernetes_cluster", "cluster_id"}
+
+// OpenObserve holds a cluster's identity in these labels, and a relay forces
+// them into every answer. A plain Prometheus may carry them for other reasons,
+// so they count only while a relay serves metrics.
+var relayClusterIdentityLabels = slices.Concat(clusterIdentityLabels, []string{"radar_cluster_uid", "k8s_cluster"})
 
 // Project and location qualify cluster names that can be reused across managed clusters.
 var clusterQualifierLabels = []string{"project_id", "location"}
 var partitionLabels = slices.Concat(clusterIdentityLabels, clusterQualifierLabels)
+var relayPartitionLabels = slices.Concat(relayClusterIdentityLabels, clusterQualifierLabels)
+
+type relayIdentityKey struct{}
+
+// withRelayIdentity fixes, for one operation, whether the relay's identity
+// labels count, so a proof and the matchers built from it agree.
+func withRelayIdentity(ctx context.Context, relay bool) context.Context {
+	return context.WithValue(ctx, relayIdentityKey{}, relay)
+}
+
+// withRelayIdentity keeps a choice the operation already made. The caller
+// must not hold c.mu.
+func (c *Client) withRelayIdentity(ctx context.Context) context.Context {
+	if _, ok := ctx.Value(relayIdentityKey{}).(bool); ok {
+		return ctx
+	}
+	return withRelayIdentity(ctx, c.relayActive())
+}
+
+func clusterIdentityLabelsFor(ctx context.Context) []string {
+	if relay, _ := ctx.Value(relayIdentityKey{}).(bool); relay {
+		return relayClusterIdentityLabels
+	}
+	return clusterIdentityLabels
+}
+
+func partitionLabelsFor(ctx context.Context) []string {
+	if relay, _ := ctx.Value(relayIdentityKey{}).(bool); relay {
+		return relayPartitionLabels
+	}
+	return partitionLabels
+}
 
 func probeWorkloadAttributions(ctx context.Context, client *prom.Client, scope PodScope) (workloadAttributions, error) {
 	result := workloadAttributions{}
@@ -50,7 +87,7 @@ func probeWorkloadAttributions(ctx context.Context, client *prom.Client, scope P
 	}
 	pattern := strconv.Quote(strings.Join(names, "|"))
 	ns := strconv.Quote(scope.Namespace)
-	projection := "__name__,namespace,pod,k8s_namespace_name,k8s_pod_name,k8s_pod_uid,id,job,replica,prometheus_replica,__replica__," + strings.Join(partitionLabels, ",")
+	projection := "__name__,namespace,pod,k8s_namespace_name,k8s_pod_name,k8s_pod_uid,id,job,replica,prometheus_replica,__replica__," + strings.Join(partitionLabelsFor(ctx), ",")
 	selector := `{__name__=~"container_(cpu_usage_seconds_total|memory_working_set_bytes|cpu_cfs_periods_total|cpu_cfs_throttled_periods_total)",namespace=` + ns + `,pod=~` + pattern + `,container!="",container!="POD"}`
 	selector += ` or {__name__=~"http_server_request_duration_seconds_(count|bucket)",k8s_namespace_name=` + ns + `,k8s_pod_name=~` + pattern + `}`
 	selector += ` or {__name__=~"istio_requests_total|istio_request_duration_milliseconds_bucket",namespace=` + ns + `,pod=~` + pattern + `,reporter="destination",request_protocol="http",destination_workload_namespace=` + ns + `}`
@@ -116,7 +153,7 @@ func probeWorkloadAttributions(ctx context.Context, client *prom.Client, scope P
 	if !needPartition {
 		return result, nil
 	}
-	inventory, err := client.QueryEvidence(ctx, "topk(257,count by (namespace,pod,uid,"+strings.Join(partitionLabels, ",")+") (kube_pod_info{namespace="+ns+",pod=~"+pattern+"}))")
+	inventory, err := client.QueryEvidence(ctx, "topk(257,count by (namespace,pod,uid,"+strings.Join(partitionLabelsFor(ctx), ",")+") (kube_pod_info{namespace="+ns+",pod=~"+pattern+"}))")
 	if err != nil {
 		for key, plan := range result {
 			if !plan.UID && len(groups[families[key]]) > 0 {
@@ -132,7 +169,7 @@ func probeWorkloadAttributions(ctx context.Context, client *prom.Client, scope P
 	if inventory.ResultType != "vector" || len(inventory.Series) > 256 {
 		return result, nil
 	}
-	labels, pods := identifyPartition(scope.Identities, inventory.Series)
+	labels, pods := identifyPartition(ctx, scope.Identities, inventory.Series)
 	if len(labels) == 0 {
 		return result, nil
 	}
@@ -250,11 +287,11 @@ func attributionJob(rows []prom.Series, pods []prom.WorkloadPodIdentity, beyla b
 	return "", false
 }
 
-func identifyPartition(pods []prom.WorkloadPodIdentity, rows []prom.Series) (map[string]string, []prom.WorkloadPodIdentity) {
-	return identifyPartitionWithUnlabeled(pods, rows, false)
+func identifyPartition(ctx context.Context, pods []prom.WorkloadPodIdentity, rows []prom.Series) (map[string]string, []prom.WorkloadPodIdentity) {
+	return identifyPartitionWithUnlabeled(ctx, pods, rows, false)
 }
 
-func identifyPartitionWithUnlabeled(pods []prom.WorkloadPodIdentity, rows []prom.Series, includeUnlabeled bool) (map[string]string, []prom.WorkloadPodIdentity) {
+func identifyPartitionWithUnlabeled(ctx context.Context, pods []prom.WorkloadPodIdentity, rows []prom.Series, includeUnlabeled bool) (map[string]string, []prom.WorkloadPodIdentity) {
 	var candidates []map[string]string
 	seen := map[string]bool{}
 	addCandidate := func(candidate, row map[string]string) {
@@ -274,10 +311,10 @@ func identifyPartitionWithUnlabeled(pods []prom.WorkloadPodIdentity, rows []prom
 			if pod.UID == "" || row.Labels["pod"] != pod.Name || row.Labels["uid"] != pod.UID {
 				continue
 			}
-			for _, label := range clusterIdentityLabels {
+			for _, label := range clusterIdentityLabelsFor(ctx) {
 				if value := row.Labels[label]; value != "" {
 					addCandidate(map[string]string{label: value}, row.Labels)
-					for _, second := range clusterIdentityLabels {
+					for _, second := range clusterIdentityLabelsFor(ctx) {
 						if second > label && row.Labels[second] != "" {
 							addCandidate(map[string]string{label: value, second: row.Labels[second]}, row.Labels)
 						}
@@ -287,8 +324,8 @@ func identifyPartitionWithUnlabeled(pods []prom.WorkloadPodIdentity, rows []prom
 		}
 	}
 	if includeUnlabeled && len(candidates) == 0 {
-		candidate := make(map[string]string, len(partitionLabels))
-		for _, label := range partitionLabels {
+		candidate := make(map[string]string, len(partitionLabelsFor(ctx)))
+		for _, label := range partitionLabelsFor(ctx) {
 			candidate[label] = ""
 		}
 		addCandidate(candidate, nil)
@@ -465,12 +502,13 @@ func (c *Client) automaticWorkloadAttributions(scope PodScope) (workloadAttribut
 		if err == nil {
 			c.mu.RLock()
 			var evidenceClient *prom.Client
+			relay := c.relay != nil
 			if c.baseURL != "" && c.discoveryGen == entry.generation && !c.retired {
 				evidenceClient = prom.NewClient(c.newTransportLocked(c.baseURL, c.basePath, c.httpClient, 4<<20))
 			}
 			c.mu.RUnlock()
 			if evidenceClient != nil {
-				probeCtx, probeCancel := context.WithTimeout(ctx, probeBudget)
+				probeCtx, probeCancel := context.WithTimeout(withRelayIdentity(ctx, relay), probeBudget)
 				result, err = probeWorkloadAttributions(probeCtx, evidenceClient, scope)
 				probeCancel()
 			} else {

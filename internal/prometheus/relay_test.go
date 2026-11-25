@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -533,5 +534,93 @@ func TestRelayMissingThrottlingNote(t *testing.T) {
 	}
 	if !panelHasSamples(workloadMetricPanel{Series: []prom.Series{{DataPoints: []prom.DataPoint{{Value: 1}}}}}) {
 		t.Fatal("a series with points did not count")
+	}
+}
+
+var relayOnlyIdentityLabel = regexp.MustCompile(`\b(radar_cluster_uid|k8s_cluster)\b`)
+
+func TestPlainPrometheusKeepsOriginalClusterIdentityLabels(t *testing.T) {
+	var mu sync.Mutex
+	var queries []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		query := r.Form.Get("query")
+		mu.Lock()
+		queries = append(queries, query)
+		mu.Unlock()
+		switch {
+		case query == "up":
+			_, _ = w.Write([]byte(authProbeBody))
+		case strings.Contains(query, "kube_pod_info"):
+			_, _ = w.Write(attributionEvidence([]prom.Series{{Labels: map[string]string{"namespace": "db", "pod": "pg-0", "uid": "local-uid", "k8s_cluster": "east"}}}, ""))
+		default:
+			_, _ = w.Write(attributionEvidence([]prom.Series{{Labels: map[string]string{"persistentvolumeclaim": "pg-data"}}}, ""))
+		}
+	}))
+	defer upstream.Close()
+	c := &Client{baseURL: upstream.URL, httpClient: upstream.Client()}
+
+	out := c.QueryPVCUsage(context.Background(), "db", []string{"pg-data"}, []prom.WorkloadPodIdentity{{Name: "pg-0", UID: "local-uid"}})
+	if out.Isolation.Mode != SeriesIsolationUnverified {
+		t.Fatalf("a k8s_cluster label on kube_pod_info became cluster identity without a relay: %+v", out)
+	}
+	if _, err := c.TrafficSpansClusters(context.Background(), "beyla_network_flow_bytes_total", "", 0); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	unlabeledProof := false
+	for _, q := range queries {
+		unlabeledProof = unlabeledProof || strings.Contains(q, `cluster_id=""`)
+		if relayOnlyIdentityLabel.MatchString(q) {
+			t.Errorf("query without a relay reads a relay identity label: %s", q)
+		}
+	}
+	if !unlabeledProof {
+		t.Fatalf("no-cluster-label proof did not run: %q", queries)
+	}
+}
+
+type recordingRelayTransport struct {
+	mu      sync.Mutex
+	queries []string
+}
+
+func (r *recordingRelayTransport) Address() string { return "fake relay" }
+func (r *recordingRelayTransport) Do(_ context.Context, _, _ string, params url.Values) ([]byte, error) {
+	r.mu.Lock()
+	r.queries = append(r.queries, params.Get("query"))
+	r.mu.Unlock()
+	return []byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"radar_cluster_uid":"uid-1"},"value":[1,"1"]}]}}`), nil
+}
+
+func TestRelayCountsOpenObserveClusterIdentityLabels(t *testing.T) {
+	withRelayTestClient(t)
+	rec := &recordingRelayTransport{}
+	cfg := testRelayConfig(&fakeRelayTransport{}, nil)
+	cfg.NewTransport = func(time.Duration, int64) prom.Transport { return rec }
+	if err := EnableRelay(cfg); err != nil {
+		t.Fatal(err)
+	}
+	c := GetClient()
+	if _, err := c.TrafficSpansClusters(context.Background(), "beyla_network_flow_bytes_total", "", 0); err != nil {
+		t.Fatal(err)
+	}
+	rec.mu.Lock()
+	queries := slices.Clone(rec.queries)
+	rec.mu.Unlock()
+	if !slices.ContainsFunc(queries, func(q string) bool {
+		return strings.Contains(q, "count by (") && strings.Contains(q, "radar_cluster_uid") && strings.Contains(q, "k8s_cluster,")
+	}) {
+		t.Fatalf("identity count through the relay doesn't group by the relay labels: %q", queries)
+	}
+
+	rows := []prom.Series{{Labels: map[string]string{"pod": "pg-0", "uid": "local-uid", "radar_cluster_uid": "uid-1"}}}
+	pods := []prom.WorkloadPodIdentity{{Name: "pg-0", UID: "local-uid"}}
+	if got, _ := identifyPartition(c.withRelayIdentity(context.Background()), pods, rows); got["radar_cluster_uid"] != "uid-1" {
+		t.Fatalf("relay identity partition = %v, want radar_cluster_uid=uid-1", got)
+	}
+	if got, _ := identifyPartition(context.Background(), pods, rows); len(got) != 0 {
+		t.Fatalf("partition without a relay = %v, want none", got)
 	}
 }
