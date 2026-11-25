@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
-import { MemoryRouter, useLocation } from 'react-router-dom'
+import { MemoryRouter, useLocation, useNavigationType } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { ToastProvider, workloadKey, type AppHistory, type AppRow, type AppWorkload, type SelectedResource } from '@skyhook-io/k8s-ui'
@@ -47,14 +47,15 @@ let root: ReturnType<typeof createRoot>
 let container: HTMLDivElement
 let client: QueryClient
 let location = ''
+let navigationType: ReturnType<typeof useNavigationType>
 
-function recordLocation(next: string) {
-  location = next
-}
-
-function LocationProbe({ onChange }: { onChange: (location: string) => void }) {
+function LocationProbe() {
   const loc = useLocation()
-  useEffect(() => onChange(`${loc.pathname}${loc.search}`), [loc, onChange])
+  const action = useNavigationType()
+  useEffect(() => {
+    location = `${loc.pathname}${loc.search}`
+    navigationType = action
+  }, [loc, action])
   return null
 }
 
@@ -82,7 +83,7 @@ async function renderAt(url: string, onOpenResource = vi.fn()) {
         <ToastProvider>
           <MemoryRouter initialEntries={[url]}>
             <ApplicationsView namespaces={[]} onOpenResource={onOpenResource} />
-            <LocationProbe onChange={recordLocation} />
+            <LocationProbe />
           </MemoryRouter>
         </ToastProvider>
       </QueryClientProvider>,
@@ -155,6 +156,28 @@ it('keeps app Deploys after clearing a stale workload, and drops Deploys from a 
   expect(params.get('workload')).toBe(child)
   expect(params.get('view')).toBeNull()
   expect(container.textContent).not.toContain('Recorded deliveries')
+})
+
+it('replaces a tab-only Deploys link with the app view once the source is known', async () => {
+  apps = [app('shop/web', ['web', 'worker'])]
+  const url = '/applications?app=shop%2Fweb&tab=deploys&namespaces=shop'
+  history = { ...idle, isFetching: true, isPending: true, isLoading: true }
+  await renderAt(url)
+  expect(location).toBe(url)
+  expect(container.querySelector('[role="tab"][aria-selected="true"]')).toBeNull()
+
+  history = { ...idle, isSuccess: true, data: {
+    appKey: apps[0].key,
+    sourceRef: { type: 'helm', kind: 'HelmRelease', namespace: 'shop', name: 'web' },
+  } }
+  await renderAt(url)
+  const params = new URLSearchParams(location.split('?')[1])
+  expect(params.get('view')).toBe('deploys')
+  expect(params.has('tab')).toBe(false)
+  expect(params.get('namespaces')).toBe('shop')
+  expect(navigationType).toBe('REPLACE')
+  expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Deploys')
+  expect(container.textContent).toContain('Recorded deliveries')
 })
 
 it.each([false, true])('resolves a group-less Deploys workload link (ambiguous: %s)', async (ambiguous) => {

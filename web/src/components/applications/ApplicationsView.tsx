@@ -273,20 +273,22 @@ function AppDetailRoute({
   // workload. A single-workload app does not expose app scope.
   const [searchParams, setSearchParams] = useSearchParams();
   const viewParam = searchParams.get("view");
-  const selectedRouteView = parseApplicationView(viewParam);
-  const selectedView: ApplicationView =
-    selectedRouteView === "cost" ? "overview" : selectedRouteView;
   const selectedWorkloadParam = searchParams.get("workload");
   const appWorkloads = app.workloads ?? [];
   const singleWorkloadKey =
     appWorkloads.length === 1 ? workloadKey(appWorkloads[0]) : null;
   const selectedWorkloadKey = singleWorkloadKey ?? selectedWorkloadParam;
+  const deploysTab = searchParams.get("tab") === "deploys";
+  const appDeploysAlias = selectedWorkloadKey === null && !viewParam && deploysTab;
+  const selectedRouteView = appDeploysAlias ? "deploys" : parseApplicationView(viewParam);
+  const selectedView: ApplicationView =
+    selectedRouteView === "cost" ? "overview" : selectedRouteView;
   const applicationCostAvailable =
     !singleWorkloadKey &&
     appWorkloads.some((workload) => isOpenCostWorkloadKind(workload.kind));
   const applicationCostSelected =
     selectedRouteView === "cost" && applicationCostAvailable;
-  const requestedDeploys = selectedView === "deploys" || searchParams.get("tab") === "deploys";
+  const requestedDeploys = selectedView === "deploys" || deploysTab;
   const deploysInWorkloadScope = requestedDeploys && !singleWorkloadKey &&
     resolveAppWorkloadSelection(appWorkloads.map(workloadKey), selectedWorkloadParam).selected !== null;
   const historyQuery = useApplicationHistory(app.key, appHistoryNamespaces, {
@@ -678,6 +680,10 @@ function AppDetailRoute({
     : needsDeploySource && (historyQuery.isError || sourceUnavailable)
       ? () => <AlertBanner className="m-4" variant="warning" title={sourceUnavailable ? "Delivery records are unavailable" : "Delivery records could not be refreshed"} items={partialSources} />
       : undefined;
+  const normalizeDeploysAlias = appDeploysAlias && !!renderDeploys;
+  useEffect(() => {
+    if (normalizeDeploysAlias) selectView("deploys", { replace: true });
+  }, [normalizeDeploysAlias, selectView]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
