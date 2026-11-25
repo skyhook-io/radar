@@ -44,8 +44,12 @@ type Flow struct {
 	// BytesRecv follow that ordering rather than describing a caller and a callee.
 	// The graph draws these without an arrowhead: the traffic is real, only its
 	// direction is not known.
-	DirectionUnknown bool   `json:"directionUnknown,omitempty"`
-	Verdict          string `json:"verdict"` // forwarded, dropped, error; empty when the source reports none
+	DirectionUnknown bool `json:"directionUnknown,omitempty"`
+	// LikelyOverlay marks node-to-node UDP, which on a VXLAN overlay is pod
+	// traffic already on the map, encapsulated. A guess: without the port it
+	// cannot be confirmed, and WireGuard or DNS between nodes match too.
+	LikelyOverlay bool   `json:"likelyOverlay,omitempty"`
+	Verdict       string `json:"verdict"` // forwarded, dropped, error; empty when the source reports none
 	// PolicyVerdict is the network plugin's own account of which policies
 	// decided this flow, when it reports one (Hubble does). It is the ground
 	// truth a static evaluation can only approximate, and it names policy
@@ -318,6 +322,8 @@ type AggregatedFlow struct {
 	// DirectionUnknown is set when the flows behind this edge could not be
 	// oriented; the graph then draws it without an arrowhead.
 	DirectionUnknown bool `json:"directionUnknown,omitempty"`
+	// LikelyOverlay is set when every flow behind this edge is Flow.LikelyOverlay.
+	LikelyOverlay bool `json:"likelyOverlay,omitempty"`
 	// L7 stats (if available)
 	L7Protocol   string `json:"l7Protocol,omitempty"` // HTTP, gRPC, DNS (from majority of flows)
 	RequestCount int64  `json:"requestCount,omitempty"`

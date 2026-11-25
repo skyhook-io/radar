@@ -12,6 +12,7 @@ import {
   Puzzle,
   Boxes,
   ShieldAlert,
+  Server,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { SEVERITY_BADGE } from '@skyhook-io/k8s-ui/utils/badge-colors'
@@ -35,6 +36,10 @@ interface TrafficFilterSidebarProps {
   setHideSystem: (v: boolean) => void
   hideExternal: boolean
   setHideExternal: (v: boolean) => void
+  /** Offered only when the source marked some flows as likely overlay. */
+  hasOverlayFlows?: boolean
+  hideOverlay?: boolean
+  setHideOverlay?: (v: boolean) => void
   minConnections: number
   setMinConnections: (v: number) => void
 
@@ -151,6 +156,9 @@ export const TrafficFilterSidebar = memo(function TrafficFilterSidebar({
   setHideSystem,
   hideExternal,
   setHideExternal,
+  hasOverlayFlows,
+  hideOverlay,
+  setHideOverlay,
   minConnections,
   setMinConnections,
   showNamespaceGroups,
@@ -257,6 +265,15 @@ export const TrafficFilterSidebar = memo(function TrafficFilterSidebar({
               onToggle={() => setHideExternal(!hideExternal)}
               icon={Globe}
             />
+            {hasOverlayFlows && setHideOverlay && (
+              <ToggleOption
+                label="Hide node-to-node overlay"
+                description="UDP between two nodes is likely CNI overlay (VXLAN) carrying pod traffic already on the map. A guess: the port that would confirm it is not reported, and WireGuard or DNS between nodes look the same."
+                enabled={!!hideOverlay}
+                onToggle={() => setHideOverlay(!hideOverlay)}
+                icon={Server}
+              />
+            )}
           </div>
 
           {/* Cluster Addons 3-way toggle */}

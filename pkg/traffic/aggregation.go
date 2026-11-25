@@ -73,6 +73,7 @@ func AggregateFlows(flows []Flow) []AggregatedFlow {
 					PortSource:       f.PortSource,
 					LastSeen:         f.LastSeen,
 					DirectionUnknown: f.DirectionUnknown,
+					LikelyOverlay:    f.LikelyOverlay,
 				},
 				statusCount: make(map[string]int64),
 				pathStats:   make(map[string]*pathAcc),
@@ -85,6 +86,7 @@ func AggregateFlows(flows []Flow) []AggregatedFlow {
 		}
 
 		agg := acc.agg
+		agg.LikelyOverlay = agg.LikelyOverlay && f.LikelyOverlay
 		agg.FlowCount++
 		agg.BytesSent += f.BytesSent
 		agg.BytesRecv += f.BytesRecv
