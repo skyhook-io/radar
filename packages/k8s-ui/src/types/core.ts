@@ -119,6 +119,8 @@ export interface IntegrationCapability {
 // Feature capabilities based on RBAC permissions
 export interface Capabilities {
   configManagement?: 'local' | 'operator' | 'cloud'
+  podDebugImage?: string
+  podDebug?: boolean
   exec: boolean           // Terminal feature (pods/exec)
   localTerminal: boolean  // Local terminal available (not in-cluster, not disabled)
   /** Shell family where a hand-off command runs; absent from older Radars. */

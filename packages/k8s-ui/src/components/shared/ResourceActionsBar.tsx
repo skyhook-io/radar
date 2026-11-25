@@ -84,6 +84,8 @@ interface ResourceActionsBarProps {
   onOpenWorkloadLogs?: (params: { namespace: string; workloadKind: string; workloadName: string }) => void
   onCopyCommand?: (text: string, message: string, event: React.MouseEvent) => void
 
+  renderPodDebug?: (pod: any) => React.ReactNode
+
   // Port forward render prop (injected by platform)
   renderPortForward?: (props: { type: 'pod' | 'service'; namespace: string; name: string; className?: string }) => React.ReactNode
 
@@ -222,6 +224,7 @@ export function ResourceActionsBar({
   onUncordonNode, isUncordoningNode,
   onDrainNode, isDrainingNode,
   onPlanDrain, onPlanDrainReset, drainPlan, isPlanningDrain, drainPlanError, drainPlanUpgrade,
+  renderPodDebug,
 }: ResourceActionsBarProps) {
   const kind = resource.kind.toLowerCase()
   const isFluxAction = FLUX_ACTION_KINDS.has(kind) && getGitOpsTool(kind, apiVersionToGroup(data?.apiVersion)) === 'flux'
@@ -376,6 +379,7 @@ export function ResourceActionsBar({
               Terminal
             </button>
           )}
+          {isRunning && canExec && data?.apiVersion === 'v1' && data?.kind === 'Pod' && !data.metadata?.deletionTimestamp && renderPodDebug?.(data)}
           {canViewLogs && !hideLogs && openLogs && (
             <div
               className="relative"
