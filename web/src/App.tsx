@@ -1163,6 +1163,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   }>({ changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null })
   const cnpgInvalidationPendingRef = useRef(false)
   const veleroInvalidationPendingRef = useRef(false)
+  // Traefik route facts scan every visible IngressRoute per request, so an open
+  // drawer refreshes at most once per batch of this length.
+  const traefikInvalidationRef = useRef<{ timer: number | null }>({ timer: null })
   const slowInvalidationRef = useRef<{
     updatedKinds: Set<string>    // update-only churn → throttled list + dashboard
     gitopsRowsChanged: boolean   // Argo/Flux row and source kinds → GitOps table rows
@@ -1251,9 +1254,6 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         // GitOps view is mounted (Phase 2 will make this relevance-aware).
         queryClient.invalidateQueries({ queryKey: ['gitops-tree'] })
         queryClient.invalidateQueries({ queryKey: ['gitops-insights'] })
-        // Traefik route facts join routes, Middlewares, Services, Pods and
-        // Secrets; only an open drawer's query refetches.
-        queryClient.invalidateQueries({ queryKey: ['traefik'] })
         if (cnpgInvalidationPendingRef.current) {
           cnpgInvalidationPendingRef.current = false
           queryClient.invalidateQueries({ queryKey: ['cnpg', 'workspace'] })
@@ -1265,6 +1265,15 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         }
         fastInvalidationRef.current = { changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
       }, 3000)
+    }
+
+    // Traefik route facts join routes, Middlewares, Services, Pods and Secrets;
+    // only an open drawer's query refetches.
+    if (traefikInvalidationRef.current.timer === null) {
+      traefikInvalidationRef.current.timer = window.setTimeout(() => {
+        traefikInvalidationRef.current = { timer: null }
+        queryClient.invalidateQueries({ queryKey: ['traefik'] })
+      }, 15000)
     }
 
     // SLOW tier — throttle expensive status churn. Workload membership changes
@@ -1294,6 +1303,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     if (fastInvalidationRef.current.timer !== null) clearTimeout(fastInvalidationRef.current.timer)
     if (slowInvalidationRef.current.timer !== null) clearTimeout(slowInvalidationRef.current.timer)
     if (timelineInvalidationRef.current.timer !== null) clearTimeout(timelineInvalidationRef.current.timer)
+    if (traefikInvalidationRef.current.timer !== null) clearTimeout(traefikInvalidationRef.current.timer)
+    traefikInvalidationRef.current = { timer: null }
     fastInvalidationRef.current = { changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
     slowInvalidationRef.current = { updatedKinds: new Set(), gitopsRowsChanged: false, gitopsCountsChanged: false, timer: null }
     timelineInvalidationRef.current = { timer: null }
