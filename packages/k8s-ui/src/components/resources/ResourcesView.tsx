@@ -6792,6 +6792,7 @@ export function ResourcesView({
     (showInactiveReplicaSets ? 1 : 0) +
     (!!onClearNamespaces && namespaces.length > 0 ? 1 : 0)
   const hasAnyFilter = activeFilterCount > 0
+  const hasNonNamespaceFilter = activeFilterCount - (!!onClearNamespaces && namespaces.length > 0 ? 1 : 0) > 0
   const filtersRestored = !!kindFiltersSearch && kindFiltersSearch === restoredKindSearch
 
 
@@ -7515,7 +7516,7 @@ export function ResourcesView({
                 restored={filtersRestored}
                 className="mt-3"
               />
-              {hasAnyFilter && (
+              {hasAnyFilter && (!emptyScopeHint || hasNonNamespaceFilter) && (
                 <button
                   type="button"
                   onClick={clearAllFilters}

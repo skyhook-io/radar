@@ -6,7 +6,7 @@ import { isBadgeWorthy } from '../../utils/auditBadges'
 import { ISSUE_SEVERITY_RANK } from '@skyhook-io/k8s-ui'
 import type { Issue, AuditBadgeMessage } from '@skyhook-io/k8s-ui'
 import { stripBasename } from '../../api/config'
-import { createListRefetchInterval, type ResourceListResult } from '../../api/resourceLists'
+import { createListRefetchInterval, listSyncPending, type ResourceListResult } from '../../api/resourceLists'
 import { useAPIResources } from '../../api/apiResources'
 import { useConnection } from '../../context/ConnectionContext'
 import { getSecretStoreProviderType } from '@skyhook-io/k8s-ui'
@@ -197,7 +197,9 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     return map
   }, [audit.data?.findings, audit.data?.checks, selectedKind, selectedKindCanonical])
 
-  const selectedCountKey = selectedKind ? resourceCountKey(selectedKind) : ''
+  const selectedCountKey = selectedKind && selectedKindCanonical
+    ? resourceCountKey({ ...selectedKind, kind: selectedKindCanonical })
+    : ''
   const selectedCount = selectedCountKey ? countsData?.counts[selectedCountKey] : undefined
   const selectedCountKnown = selectedCountKey ? hasResourceCount(countsData?.counts, selectedCountKey) : false
   const selectedCountUnavailable = selectedCountKey ? countsData?.unavailable?.includes(selectedCountKey) ?? false : false
@@ -305,7 +307,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const selectedKindRows = selectedKindQueryResult && !selectedKindQueryResult.isLoading && !largeListGuard ? selectedKindQueryResult.data?.length : undefined
   const selectedKindNamespaced = namespacedKind(apiResources, selectedKind)
   const wantsEmptyHint = namespaces.length > 0 && selectedKindRows === 0 && selectedKindNamespaced &&
-    !namespaceScope?.cacheScoped && selectedKindListsAsTable
+    namespaceScope?.cacheScoped === false && !listSyncPending(selectedKindQueryResult?.coverage) && selectedKindListsAsTable
   const { data: allNamespaceCounts } = useResourceCounts([], { enabled: wantsEmptyHint })
   const emptyHint = useMemo(() => {
     if (!wantsEmptyHint || !selectedCountKey) return null
@@ -413,8 +415,8 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       rememberedKindSearch={rememberedKindSearch}
       onKindFiltersChange={onKindFiltersChange}
       onApplyNamespacesToAllSections={onApplyNamespacesToAllSections}
-      emptyScopeHint={emptyHint && selectedKindCanonical && onClearNamespaces
-        ? <EmptyNamespaceHint hint={emptyHint} namespaces={namespaces} kind={selectedKindCanonical} onShowAll={onClearNamespaces} />
+      emptyScopeHint={emptyHint && selectedKindCanonical
+        ? <EmptyNamespaceHint hint={emptyHint} namespaces={namespaces} kind={selectedKindCanonical} onShowAll={namespaceScope?.canClearNamespace ? onClearNamespaces : undefined} />
         : undefined}
       // Injected data
       apiResources={apiResources}

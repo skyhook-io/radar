@@ -6,7 +6,7 @@ interface EmptyNamespaceHintProps {
   namespaces: string[]
   /** Real Kind, e.g. "Pod". */
   kind: string
-  onShowAll: () => void
+  onShowAll?: () => void
 }
 
 export function EmptyNamespaceHint({ hint, namespaces, kind, onShowAll }: EmptyNamespaceHintProps) {
@@ -28,13 +28,15 @@ export function EmptyNamespaceHint({ hint, namespaces, kind, onShowAll }: EmptyN
         </span>{' '}
         {hint.count === 1 ? 'is' : 'are'} in other namespaces.
       </p>
-      <button
-        type="button"
-        onClick={onShowAll}
-        className="px-3 py-1.5 rounded-md text-sm font-medium bg-accent-muted text-accent-text hover:bg-theme-hover transition-colors"
-      >
-        Show all namespaces
-      </button>
+      {onShowAll && (
+        <button
+          type="button"
+          onClick={onShowAll}
+          className="px-3 py-1.5 rounded-md text-sm font-medium bg-accent-muted text-accent-text hover:bg-theme-hover transition-colors"
+        >
+          Show all namespaces
+        </button>
+      )}
     </div>
   )
 }
