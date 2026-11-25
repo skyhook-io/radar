@@ -347,7 +347,7 @@ function useActionsBarProps(
   const { embedded } = useNavCustomization()
   const nsCaps = useNamespacedCapabilities(namespace)
   const { canViewLogs, canPortForward, workloadWrites, workloadWritesPending } = nsCaps
-  const { canExec, debugImage, unverifiedReview } = usePodDetailAccess(pod, nsCaps)
+  const { canExec, debugImage, unverifiedReview, deniedAfterRefusal } = usePodDetailAccess(pod, nsCaps)
   const queryClient = useQueryClient()
   // Live forward when local+RBAC; otherwise (in-cluster/Cloud) still surface the
   // copy-paste kubectl command. The button picks live vs. copy by deployment mode.
@@ -439,7 +439,7 @@ function useActionsBarProps(
     canViewLogs,
     canPortForward: showPortForward,
     onOpenTerminal: openTerminal,
-    renderPodDebug: !embedded && debugImage ? (pod: PodDebugTarget) => <PodDebugAction key={pod.metadata.uid} pod={pod} defaultImage={debugImage} unverifiedReview={unverifiedReview} /> : undefined,
+    renderPodDebug: !embedded && (debugImage || deniedAfterRefusal) ? (pod: PodDebugTarget) => <PodDebugAction key={pod.metadata.uid} pod={pod} defaultImage={debugImage} unverifiedReview={unverifiedReview} deniedAfterRefusal={deniedAfterRefusal} /> : undefined,
     onOpenLogs: openLogs,
     onOpenWorkloadLogs: openWorkloadLogs,
     replicaSetLogs: isAppsReplicaSet && replicaSetLogSupport === 'supported',

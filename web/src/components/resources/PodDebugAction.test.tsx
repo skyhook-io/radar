@@ -100,3 +100,20 @@ it('opens an accepted session in the dock if its Pod details closed during the r
   await act(async () => { finish(new Response(JSON.stringify({ containerName: 'debug-name', image: 'mirror.example/debug', status: 'pending' }))) })
   expect(document.querySelector('output')!.textContent).toBe('debug-name')
 })
+
+it('keeps the header chooser open on a confirmed denial after a refused write', () => {
+  const fetch = vi.fn()
+  vi.stubGlobal('fetch', fetch)
+  render()
+  click('Debug')
+  act(() => root.render(<QueryClientProvider client={client}><DockProvider>
+    <PodDebugAction pod={pod} deniedAfterRefusal="The image policy refused this request" /><Tabs />
+  </DockProvider></QueryClientProvider>))
+  const dialog = document.querySelector('[role="dialog"]')!
+  expect(dialog.textContent).toContain('You don’t have permission to add a debug container to this Pod.')
+  expect(dialog.textContent).toContain('The image policy refused this request')
+  click('Start debug container')
+  expect(fetch).not.toHaveBeenCalled()
+  click('Cancel')
+  expect(document.querySelector('[role="status"]')?.textContent).toBe('Debug access denied for this Pod')
+})

@@ -42,7 +42,7 @@ export function usePodDebugAccess(namespace: string, name: string, uid: string, 
         headers: connectionHeaders(connection),
       })
       const refusal = client.getQueryData<PodDebugAccess>(key)?.refusedAttempt
-      return answer.state === 'unknown' && refusal ? { ...answer, refusedAttempt: refusal } : answer
+      return (answer.state === 'unknown' || answer.state === 'denied') && refusal ? { ...answer, refusedAttempt: refusal } : answer
     },
     enabled: q => support === 'supported' && (enabled || (!!namespaceGrant && refusesDebug(q.state.data))),
     staleTime: 15_000,

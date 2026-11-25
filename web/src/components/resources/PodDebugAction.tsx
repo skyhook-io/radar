@@ -62,12 +62,13 @@ export function usePodDetailAccess(pod: PodDebugTarget | undefined, namespace: {
     canOpenEphemeralTerminal: namespace.canOpenEphemeralTerminal || named?.exec === true,
     debugImage: execOnly || named?.state === 'denied' || named?.state === 'unavailable' ? undefined :
       named?.state === 'allowed' ? named.image : namespace.podDebugImage || unverifiedImage,
+    deniedAfterRefusal: !execOnly && named?.state === 'denied' ? named.refusedAttempt?.message : undefined,
     unverifiedReview: namespace.podDebugImage ? undefined : unverifiedReview,
   }
 }
 
-export function PodDebugAction({ pod, defaultImage, failedContainer, unverifiedReview }: {
-  pod: PodDebugTarget; defaultImage: string; failedContainer?: string; unverifiedReview?: ReturnType<typeof usePodDebugAccess>['unverifiedReview']
+export function PodDebugAction({ pod, defaultImage, failedContainer, unverifiedReview, deniedAfterRefusal }: {
+  pod: PodDebugTarget; defaultImage?: string; failedContainer?: string; deniedAfterRefusal?: string; unverifiedReview?: ReturnType<typeof usePodDebugAccess>['unverifiedReview']
 }) {
   const openTerminal = useOpenTerminal()
   const eligibleTargets = runningPodDebugTargets(pod)
@@ -104,6 +105,7 @@ export function PodDebugAction({ pod, defaultImage, failedContainer, unverifiedR
     unknown: 'Radar could not confirm whether the debug container was added',
   })
   function show() {
+    if (!defaultImage) return
     const preferred = failedContainer || getDefaultContainerName(pod)
     const connection = connectionHeaderValue()
     const context = cluster.connectionId === connection ? (cluster.context === 'in-cluster' ? cluster.clusterName || cluster.context : cluster.context) : undefined
@@ -111,7 +113,7 @@ export function PodDebugAction({ pod, defaultImage, failedContainer, unverifiedR
   }
 
   async function start() {
-    if (!draft || submitting.current || refusedNow || recheckRequired || !targets.includes(draft.target)) return
+    if (!draft || !defaultImage || deniedAfterRefusal || submitting.current || refusedNow || recheckRequired || !targets.includes(draft.target)) return
     const sameConnection = () => getApiBase() === draft.base && connectionHeaderValue() === draft.connection
     submitting.current = true
     setResult(undefined)
@@ -137,11 +139,11 @@ export function PodDebugAction({ pod, defaultImage, failedContainer, unverifiedR
 
   if (!eligibleTargets || (!draft && !targets.length)) return null
   return <>
-    <button type="button" className={`${failedContainer ? 'btn-brand' : 'btn-secondary'} flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium`} onClick={show}>
+    {deniedAfterRefusal ? <span role="status" className="text-xs text-theme-text-secondary">Debug access denied for this Pod</span> : <button type="button" className={`${failedContainer ? 'btn-brand' : 'btn-secondary'} flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium`} onClick={show}>
       <Bug className="h-3.5 w-3.5" />{unverifiedReview ? recheckRequired ? 'Review debug refusal' : refused ? 'Review another debug attempt' : 'Review debug container' : failedContainer ? 'Start a debug container' : 'Debug'}
-    </button>
+    </button>}
     <ActionConfirmDialog open={!!draft} title="Debug Pod" context={draft?.context} writes={[{ summary: `Update pods/ephemeralcontainers on ${namespace}/${name}` }]} subject={{ kind: 'Pod', namespace, name }}
-      effect="Start an ephemeral container and open a terminal in it. Its entry stays on the Pod until the Pod is deleted."
+      effect={deniedAfterRefusal ? 'You don’t have permission to add a debug container to this Pod.' : 'Start an ephemeral container and open a terminal in it. Its entry stays on the Pod until the Pod is deleted.'}
       onClose={() => {
         if (submitting.current) return
         setDraft(undefined)
@@ -156,8 +158,9 @@ export function PodDebugAction({ pod, defaultImage, failedContainer, unverifiedR
           mutation.acknowledgeOutcome()
           setResult(undefined)
         }}>I checked the Pod YAML</button></div>}
-      incompleteReason={refusedNow ? 'Close to recheck access after the refusal.' : recheckRequired ? 'Recheck access before reviewing another attempt.' : draft && !targets.includes(draft.target) ? 'Select a running container.' : undefined}>
-      {draft && <div className="grid gap-3">
+      incompleteReason={deniedAfterRefusal ? 'Ask your cluster administrator for access.' : refusedNow ? 'Close to recheck access after the refusal.' : recheckRequired ? 'Recheck access before reviewing another attempt.' : draft && !targets.includes(draft.target) ? 'Select a running container.' : undefined}>
+      {deniedAfterRefusal && <p className="break-words text-warning-text">{deniedAfterRefusal}</p>}
+      {draft && !deniedAfterRefusal && <div className="grid gap-3">
         {refused && <div className="space-y-1 text-sm text-warning-text"><p>The last debug request was refused.</p><p className="break-words">{refused.message}</p>
           {recheckRequired && <button type="button" className="btn-secondary px-2 py-1" onClick={() => void unverifiedReview?.recheckAccess()}>Recheck access</button>}</div>}
         {unverifiedReview && <p className="text-sm text-theme-text-secondary">Radar verified terminal access to this Pod. Kubernetes will decide whether you can add a debug container when you confirm.</p>}

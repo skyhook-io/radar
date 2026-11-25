@@ -121,6 +121,7 @@ function DebugOptions({ namespace, name, uid, target, connection, base, pod }: R
       : <>The cluster access check returned no decision for <code>{namespace}/{name}</code>. Recheck access or ask your administrator to verify it.</>}</p>
     {query.data?.refusedAttempt && !denied && <div role="status" className="max-w-full break-words text-warning-text">
       <p>The last debug request was refused.</p><p>{query.data.refusedAttempt.message}</p>
+      {unverifiedImage && !query.data.refusedAttempt.rechecked && <p className="text-theme-text-secondary">Recheck access to review another attempt.</p>}
     </div>}
     {unverifiedImage && (!unverifiedReview?.refused || unverifiedReview.refused.rechecked) && <PodDebugAction pod={pod} defaultImage={unverifiedImage} failedContainer={target} unverifiedReview={unverifiedReview}/>}
     {denied && <p className="text-xs text-theme-text-tertiary">Pod <code>{namespace}/{name}</code></p>}

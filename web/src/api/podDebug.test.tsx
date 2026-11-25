@@ -86,5 +86,5 @@ it('retains the actual write refusal until named RBAC settles, and requires a de
   await vi.waitFor(() => expect(host.textContent).toContain('Image policy refused the Pod updatereview available'))
   vi.mocked(fetchJSON).mockResolvedValue({ state: 'denied', exec: true })
   act(() => host.querySelector<HTMLButtonElement>('#check')!.click())
-  await vi.waitFor(() => expect(host.textContent).toBe('denied no review'))
+  await vi.waitFor(() => expect(host.textContent).toBe('denied Image policy refused the Pod updateno review'))
 })
