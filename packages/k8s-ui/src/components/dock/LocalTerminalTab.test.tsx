@@ -205,8 +205,9 @@ it.each([undefined, 'psql'])('keeps shell defaults and command-specific unavaila
     expect(element.textContent).not.toContain('debug container')
     expect(element.textContent).not.toContain('/bin/sh')
   } else {
-    expect(element.textContent).toContain('Shell not available')
-    expect(element.textContent).toContain('/bin/sh')
+    expect(element.textContent).toContain('Couldn’t start a shell in')
+    expect(element.textContent).not.toContain('Retry')
+    expect(element.textContent).not.toContain('Reconnect')
     expect(element.textContent).toContain('Start debug container')
   }
 })

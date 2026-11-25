@@ -116,7 +116,6 @@ type Capabilities struct {
 	ConfigManagement       string                   `json:"configManagement"`
 	Exec                   bool                     `json:"exec"` // Can create pods/exec (terminal feature)
 	PodExecUID             bool                     `json:"podExecUID,omitempty"`
-	PodDebugUpdateDenied   bool                     `json:"podDebugUpdateDenied,omitempty"`
 	PodDebugImage          string                   `json:"podDebugImage,omitempty"`
 	PodDebug               bool                     `json:"podDebug,omitempty"` // Scoped to the requested namespace.
 	LocalTerminal          bool                     `json:"localTerminal"`      // Local terminal available (not in-cluster, not disabled)
@@ -207,6 +206,7 @@ type FeatureCapabilities struct {
 	// GET /api/issues/recent-changes, the one change each listed issue row
 	// names.
 	IssueCorrelation bool `json:"issueCorrelation"`
+	PodDebugAccess   bool `json:"podDebugAccess"`
 	PodEnvironment   bool `json:"podEnvironment"`  // GET /api/pods/{namespace}/{name}/environment
 	PolicyResource   bool `json:"policyResource"`  // GET /api/policy/resource/{kind}/{namespace}/{name}
 	WorkloadHistory  bool `json:"workloadHistory"` // GET /api/workloads/{kind}/{namespace}/{name}/history
@@ -944,7 +944,7 @@ func canIAs(ctx context.Context, client *kubernetes.Clientset, username string, 
 		return false, true
 	}
 
-	return result.Status.Allowed, k8score.DebugPermissionUnknown(review.Spec.ResourceAttributes, result.Status)
+	return result.Status.Allowed, false
 }
 
 // resourceProbe describes one typed-resource probe target. The probe issues

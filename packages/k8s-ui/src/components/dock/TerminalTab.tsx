@@ -61,6 +61,7 @@ export function TerminalTab({
   const [isConnecting, setIsConnecting] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [errorType, setErrorType] = useState<string | null>(null)
+  const [failedExecutable, setFailedExecutable] = useState<string>()
   const [failedPodUID, setFailedPodUID] = useState<string>()
   const [isCreatingDebug, setIsCreatingDebug] = useState(false)
   const [selectedContainer, setSelectedContainer] = useState(containerName)
@@ -79,6 +80,7 @@ export function TerminalTab({
 
     cancelledRef.current = false
     setFailedPodUID(undefined)
+    setFailedExecutable(undefined)
     setIsConnecting(true)
     setError(null)
     setErrorType(null)
@@ -214,6 +216,7 @@ export function TerminalTab({
             xterm.write('\r\n\x1b[2m[Process exited]\x1b[0m\r\n')
           } else if (msg.type === 'error' && msg.data) {
             setFailedPodUID(msg.podUID)
+            setFailedExecutable(msg.executable)
             setError(msg.data)
             // Support both camelCase (radar) and snake_case (conduit) error type field
             setErrorType(msg.errorType ?? msg.error_type ?? 'exec_error')
@@ -314,7 +317,7 @@ export function TerminalTab({
           </div>
         )}
 
-        {!isConnected && !isConnecting && (
+        {!isConnected && !isConnecting && (command || errorType !== 'shell_not_found') && (
           <button
             onClick={connect}
             className="flex items-center gap-1 px-2 py-0.5 text-xs text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
@@ -335,19 +338,16 @@ export function TerminalTab({
 
       <div ref={terminalRef} className="absolute top-8 left-0 right-0 bottom-0 bg-[#0f172a] [&_.xterm-viewport]:!bg-[#0f172a]" />
       {error && (
-        <div key="error" className="absolute top-8 left-0 right-0 bottom-0 flex flex-col items-center justify-center p-4 text-center bg-theme-base">
+        <div key="error" className="absolute top-8 left-0 right-0 bottom-0 flex flex-col items-center justify-center overflow-y-auto p-4 text-center bg-theme-base">
           {errorType === 'shell_not_found' ? (
             <>
-              <div className="text-warning-text mb-2 text-sm">{command ? 'Command not available' : 'Shell not available'}</div>
+              <div className="text-warning-text mb-2 break-words text-sm font-medium">{command ? 'Command not available' : <>Couldn’t start {failedExecutable ? <code>{failedExecutable}</code> : 'a shell'} in <code>{selectedContainer}</code></>}</div>
               {command ? (
                 <div className="text-xs text-theme-text-tertiary mb-4 max-w-md">
                   Container <span className="font-mono text-theme-text-secondary">{selectedContainer}</span> could not start <span className="font-mono text-theme-text-secondary">{command}</span>. Check that the executable is installed in this container.
                 </div>
               ) : <div className="text-xs text-theme-text-tertiary mb-4 max-w-md">
-                Container <span className="font-mono text-theme-text-secondary">{selectedContainer}</span> doesn&apos;t
-                have a shell (/bin/sh). This is common with distroless or minimal container images.
-                {containers.length > 1 && ' Try another container above.'}
-                {createDebugContainer && ' You can create a debug container to troubleshoot.'}
+                This container image may have no shell.{containers.length > 1 && ' You can also select another container above.'}
               </div>}
               <div className="flex flex-wrap items-center justify-center gap-2">
                 {!command && failedPodUID && renderDebugAction?.(selectedContainer, failedPodUID)}
@@ -364,13 +364,13 @@ export function TerminalTab({
                     )}
                   </button>
                 )}
-                <button
+                {command && <button
                   onClick={connect}
                   className="flex items-center gap-2 px-3 py-1.5 bg-theme-elevated text-theme-text-primary text-xs rounded hover:bg-theme-hover"
                 >
                   <RefreshCw className="w-3 h-3" />
                   Retry
-                </button>
+                </button>}
               </div>
             </>
           ) : (

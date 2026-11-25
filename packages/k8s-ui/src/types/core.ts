@@ -120,7 +120,6 @@ export interface IntegrationCapability {
 export interface Capabilities {
   configManagement?: 'local' | 'operator' | 'cloud'
   podExecUID?: boolean
-  podDebugUpdateDenied?: boolean
   podDebugImage?: string
   podDebug?: boolean
   exec: boolean           // Terminal feature (pods/exec)
@@ -193,6 +192,7 @@ export interface FeatureCapabilities {
   resourceIssueCoverage?: boolean
   // GET /api/issues/resource/... with ?correlate=<issueID>
   issueCorrelation?: boolean
+  podDebugAccess?: boolean
   podEnvironment?: boolean
   policyResource?: boolean
   workloadHistory?: boolean

@@ -105,7 +105,7 @@ import { TIME_RANGES, PrometheusCharts, isPrometheusSupported } from '../resourc
 import { RightsizingStrip } from '../resource/RightsizingStrip'
 import { PrometheusChartsGrid } from '../resource/PrometheusChartsGrid'
 import { DatadogSetupHint, DatadogWorkloadCharts, useDatadogWorkloadCharts, WorkloadCostRightsizing } from '../resource/DatadogWorkloadCharts'
-import { PodDebugAction } from '../resources/PodDebugAction'
+import { PodDetailDebugAction } from '../resources/PodDebugAction'
 import { useNavCustomization } from '../../context/NavCustomization'
 import { RestartEventLane } from '../resource/RestartChart'
 import { WorkloadCostTab } from '../cost/WorkloadCostTab'
@@ -435,7 +435,7 @@ function useActionsBarProps(
     canViewLogs,
     canPortForward: showPortForward,
     onOpenTerminal: openTerminal,
-    renderPodDebug: podDebugImage && !embedded ? (pod: any) => <PodDebugAction key={pod.metadata.uid} pod={pod} defaultImage={podDebugImage} /> : undefined,
+    renderPodDebug: !embedded ? (pod: any) => <PodDetailDebugAction key={pod.metadata.uid} pod={pod} namespaceImage={podDebugImage} /> : undefined,
     onOpenLogs: openLogs,
     onOpenWorkloadLogs: openWorkloadLogs,
     replicaSetLogs: isAppsReplicaSet && replicaSetLogSupport === 'supported',

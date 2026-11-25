@@ -13,8 +13,8 @@ import (
 // CanI checks if the current user/service account can perform an action using
 // SelfSubjectAccessReview. The group parameter specifies the API group
 // (empty string for core resources like pods, secrets).
-// Returns (allowed, apiErr). apiErr means the review request failed, or a
-// namespaced debug-container update review could not reach a decision.
+// Returns (allowed, apiErr) where apiErr=true means the API call itself failed
+// (distinct from RBAC denial where allowed=false, apiErr=false).
 func CanI(ctx context.Context, client kubernetes.Interface, namespace, group, resource, verb string) (allowed bool, apiErr bool) {
 	if ctx.Err() != nil {
 		return false, true
@@ -51,11 +51,5 @@ func CanI(ctx context.Context, client kubernetes.Interface, namespace, group, re
 		return false, true
 	}
 
-	return result.Status.Allowed, DebugPermissionUnknown(review.Spec.ResourceAttributes, result.Status)
-}
-
-// DebugPermissionUnknown distinguishes an inconclusive review from an actionable
-// denial for the missing-shell hint. Other capability checks keep their existing semantics.
-func DebugPermissionUnknown(attrs *authv1.ResourceAttributes, status authv1.SubjectAccessReviewStatus) bool {
-	return attrs.Namespace != "" && attrs.Group == "" && attrs.Resource == "pods" && attrs.Subresource == "ephemeralcontainers" && attrs.Verb == "update" && !status.Allowed && !status.Denied && status.EvaluationError != ""
+	return result.Status.Allowed, false
 }

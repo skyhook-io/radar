@@ -166,7 +166,6 @@ export function useNamespacedCapabilities(namespace: string | undefined) {
   const namespaceUnknown = Boolean(namespace && !nsCaps && (isPending || error))
   return useMemo(() => ({
     canOpenEphemeralTerminal: !error && nsCaps?.podExecUID === true,
-    podDebugUpdateDenied: !error && nsCaps?.podDebugUpdateDenied === true,
     podDebugImage: nsCaps?.podDebug ? nsCaps.podDebugImage : undefined,
     canExec: nsCaps?.exec ?? globalCaps.exec,
     canViewLogs: nsCaps?.logs ?? globalCaps.logs,

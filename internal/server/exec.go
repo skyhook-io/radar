@@ -384,10 +384,10 @@ func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	streamPodTerminal(ctx, conn, podUID, exec.StreamWithContext)
+	streamPodTerminal(ctx, conn, podUID, command[0], exec.StreamWithContext)
 }
 
-func streamPodTerminal(parent context.Context, conn *websocket.Conn, uid types.UID, stream func(context.Context, remotecommand.StreamOptions) error) {
+func streamPodTerminal(parent context.Context, conn *websocket.Conn, uid types.UID, executable string, stream func(context.Context, remotecommand.StreamOptions) error) {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	stdinReader, stdinWriter := io.Pipe()
@@ -404,7 +404,7 @@ func streamPodTerminal(parent context.Context, conn *websocket.Conn, uid types.U
 		for {
 			_, frame, err := conn.ReadMessage()
 			if err != nil {
-				if ctx.Err() == nil && !errors.Is(err, net.ErrClosed) && !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				if ctx.Err() == nil && !errors.Is(err, net.ErrClosed) && !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived) {
 					log.Printf("[exec] terminal WebSocket read failed: %v", err)
 				}
 				return
@@ -449,7 +449,7 @@ func streamPodTerminal(parent context.Context, conn *websocket.Conn, uid types.U
 			deadline := time.Now().Add(terminalCloseTimeout)
 			if streamErr != nil {
 				conn.SetWriteDeadline(deadline)
-				sendPodExecError(conn, streamErr, uid)
+				sendPodExecError(conn, streamErr, uid, executable)
 			}
 			if writeTerminalClose(conn, deadline) == nil {
 				// Release any blocked input so the sole reader can consume the peer's close reply.
@@ -471,7 +471,7 @@ func streamPodTerminal(parent context.Context, conn *websocket.Conn, uid types.U
 	<-streamDone
 }
 
-func sendPodExecError(conn *websocket.Conn, err error, podUID types.UID) {
+func sendPodExecError(conn *websocket.Conn, err error, podUID types.UID, executable string) {
 	errMsg := err.Error()
 	errorType := "exec_error"
 	if isShellNotFoundError(errMsg) {
@@ -486,13 +486,13 @@ func sendPodExecError(conn *websocket.Conn, err error, podUID types.UID) {
 		log.Printf("[exec] WARNING: error looks shell-related but isShellNotFoundError did not match — kubelet error text may have drifted; update isShellNotFoundError patterns if this recurs. errMsg=%q", errMsg)
 	}
 	log.Printf("Exec failed (%s): %v", errorType, err)
-	sendWSErrorWithType(conn, errorType, errMsg, podUID)
+	sendWSErrorWithType(conn, errorType, errMsg, podUID, executable)
 }
 
 func sendWSError(conn *websocket.Conn, msg string) {
 	deadline := time.Now().Add(terminalCloseTimeout)
 	conn.SetWriteDeadline(deadline)
-	sendWSErrorWithType(conn, "exec_error", msg, "")
+	sendWSErrorWithType(conn, "exec_error", msg, "", "")
 	if writeTerminalClose(conn, deadline) == nil {
 		conn.SetReadDeadline(deadline)
 		drainTerminalPeer(conn)
@@ -512,17 +512,19 @@ func drainTerminalPeer(conn *websocket.Conn) {
 }
 
 // sendWSErrorWithType sends an error with a specific error type to help frontend distinguish error causes
-func sendWSErrorWithType(conn *websocket.Conn, errorType, msg string, podUID types.UID) {
+func sendWSErrorWithType(conn *websocket.Conn, errorType, msg string, podUID types.UID, executable string) {
 	errMsg := struct {
-		Type      string    `json:"type"`
-		ErrorType string    `json:"errorType,omitempty"`
-		PodUID    types.UID `json:"podUID,omitempty"`
-		Data      string    `json:"data"`
+		Type       string    `json:"type"`
+		ErrorType  string    `json:"errorType,omitempty"`
+		Executable string    `json:"executable,omitempty"`
+		PodUID     types.UID `json:"podUID,omitempty"`
+		Data       string    `json:"data"`
 	}{
-		Type:      "error",
-		ErrorType: errorType,
-		PodUID:    podUID,
-		Data:      msg,
+		Type:       "error",
+		ErrorType:  errorType,
+		Executable: executable,
+		PodUID:     podUID,
+		Data:       msg,
 	}
 	data, err := json.Marshal(errMsg)
 	if err != nil {
@@ -540,7 +542,6 @@ func isShellNotFoundError(errMsg string) bool {
 		"executable file not found",
 		"no such file or directory",
 		"command not found",
-		"oci runtime exec failed",
 		"executable not found",
 		"not found in $path",
 		// POSIX exit 127 = "command not found". Some runtime/kubelet

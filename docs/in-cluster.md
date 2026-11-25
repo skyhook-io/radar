@@ -453,6 +453,8 @@ rbac:
 
 Pod **Debug** requires `get pods`, `create pods/exec`, and a separate `update pods/ephemeralcontainers` grant in the Pod’s namespace. The chart’s `rbac.podExec` grants exec only. Use a namespaced Role and RoleBinding for Radar’s ServiceAccount when authentication is off, or for the signed-in user or group when per-user authentication is enabled. The Pod action and the missing-shell recovery action are available in standalone and in-cluster Radar. Both are intentionally disabled in the Radar Hub UI.
 
+For a selected Pod, Radar checks named exec and ephemeral-container update permissions when the namespace-wide grant is insufficient. A Role with `resourceNames` can therefore grant debugging on one Pod. In a shell-less container, the terminal offers a running debugger targeting that container first. If access is denied it can copy a request for the specific Pod, namespace and permission.
+
 To open a fresh shell in an existing container, open the Pod and choose **Open terminal** under **Running debug containers**. This requires Pod read and exec access. Closing the tab and opening it again uses the same container.
 
 The **Debug** action launches a throwaway container (ephemeral container on a pod, or a privileged pod on a node) using `busybox:latest` by default. If the built-in restricted Pod Security Standard rejects the default pod debug container, Radar retries with a restricted-compatible Linux security context using the target/pod non-root UID, or UID `65532` by default, so custom images used in restricted namespaces must work as a non-root user. In air-gapped or private-registry clusters where the default image can't be pulled, point it at a reachable mirror:

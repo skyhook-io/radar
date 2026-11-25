@@ -6,7 +6,7 @@ import { ApiError } from '../../api/client'
 import { connectionHeaderValue } from '../../api/connectionBinding'
 import { getApiBase } from '../../api/config'
 import { useReviewedActionMutation } from '../../api/reviewedActionMutation'
-import { createPodDebugContainer } from '../../api/podDebug'
+import { createPodDebugContainer, usePodDebugAccess } from '../../api/podDebug'
 
 export interface PodDebugTarget {
   apiVersion: string
@@ -14,6 +14,7 @@ export interface PodDebugTarget {
   metadata: { uid: string; name: string; namespace: string; deletionTimestamp?: string }
   spec: {
     containers: { name: string }[]
+    ephemeralContainers?: { name: string; image: string; targetContainerName?: string }[]
     initContainers?: { name: string; restartPolicy?: string }[]
     os?: { name?: string }
     nodeSelector?: Record<string, string>
@@ -41,6 +42,13 @@ export function runningPodDebugTargets(pod: PodDebugTarget): string[] | undefine
   const running = [...(pod.status.containerStatuses ?? []), ...(pod.status.initContainerStatuses ?? [])]
     .filter(container => container.state?.running)
   return getExecContainerNames(pod).filter(name => running.some(container => container.name === name))
+}
+
+export function PodDetailDebugAction({ pod, namespaceImage }: { pod: PodDebugTarget; namespaceImage?: string }) {
+  const eligible = !!runningPodDebugTargets(pod)?.length
+  const { query } = usePodDebugAccess(pod.metadata.namespace, pod.metadata.name, pod.metadata.uid, eligible && !namespaceImage)
+  const image = namespaceImage || (!query.error && query.data?.state === 'allowed' ? query.data.image : undefined)
+  return eligible && image ? <PodDebugAction pod={pod} defaultImage={image} /> : null
 }
 
 export function PodDebugAction({ pod, defaultImage, failedContainer }: { pod: PodDebugTarget; defaultImage: string; failedContainer?: string }) {
@@ -107,7 +115,7 @@ export function PodDebugAction({ pod, defaultImage, failedContainer }: { pod: Po
   if (!eligibleTargets || (!draft && !targets.length)) return null
   return <>
     <button type="button" className="btn-secondary flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium" onClick={show}>
-      <Bug className="h-3.5 w-3.5" />{failedContainer ? 'Debug with an ephemeral container' : 'Debug'}
+      <Bug className="h-3.5 w-3.5" />{failedContainer ? 'Start a debug container' : 'Debug'}
     </button>
     <ActionConfirmDialog open={!!draft} title="Debug Pod" subject={{ kind: 'Pod', namespace, name }}
       effect="Start an ephemeral container and open a terminal in it. Its entry stays on the Pod until the Pod is deleted."

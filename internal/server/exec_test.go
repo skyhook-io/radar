@@ -334,9 +334,9 @@ func TestIsShellNotFoundError(t *testing.T) {
 			want:   true,
 		},
 		{
-			name:   "case-insensitive OCI runtime",
-			errMsg: `oci runtime exec failed`,
-			want:   true,
+			name:   "runtime failure alone does not identify a missing executable",
+			errMsg: `OCI runtime exec failed: permission denied`,
+			want:   false,
 		},
 		{
 			name:   "non-127 exit codes are not classified as shell-missing",
@@ -475,7 +475,7 @@ func TestPodTerminalStream(t *testing.T) {
 				t.Error(err)
 				return
 			}
-			streamPodTerminal(ctx, conn, "reviewed-pod", stream)
+			streamPodTerminal(ctx, conn, "reviewed-pod", "sh", stream)
 		}))
 		conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
 		if err != nil {
@@ -558,7 +558,7 @@ func TestPodTerminalStream(t *testing.T) {
 		if err := conn.ReadJSON(&msg); err != nil || msg["data"] != "last output" {
 			t.Fatalf("last output: %v, %v", msg, err)
 		}
-		if err := conn.ReadJSON(&msg); err != nil || msg["errorType"] != "shell_not_found" || msg["podUID"] != "reviewed-pod" {
+		if err := conn.ReadJSON(&msg); err != nil || msg["errorType"] != "shell_not_found" || msg["executable"] != "sh" || msg["podUID"] != "reviewed-pod" {
 			t.Fatalf("last error: %v, %v", msg, err)
 		}
 		if _, _, err := conn.ReadMessage(); !websocket.IsCloseError(err, websocket.CloseNormalClosure) {
