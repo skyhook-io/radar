@@ -135,6 +135,55 @@
     "text": "SandboxConfigNotFound"
   },
   {
+    "name": "current unresolved class outranks a stale failure with ready workers",
+    "object": {
+      "apiVersion": "ate.dev/v1",
+      "kind": "WorkerPool",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 2
+      },
+      "spec": {
+        "replicas": 3
+      },
+      "status": {
+        "replicas": 2,
+        "readyReplicas": 2,
+        "sandboxClasses": [
+          {
+            "name": "gvisor",
+            "conditions": [
+              {
+                "type": "Resolved",
+                "status": "False",
+                "reason": "SandboxClassMismatch",
+                "message": "The old config had the wrong class.",
+                "observedGeneration": 1
+              }
+            ]
+          },
+          {
+            "name": "microvm",
+            "conditions": [
+              {
+                "type": "Resolved",
+                "status": "False",
+                "reason": "SandboxConfigNotFound",
+                "message": "SandboxConfig microvm-default not found.",
+                "observedGeneration": 2
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "level": "degraded",
+    "uiLevel": "alert",
+    "text": "SandboxConfigNotFound",
+    "message": "SandboxConfig microvm-default not found."
+  },
+  {
     "name": "unresolved, Pods exist but none ready",
     "object": {
       "apiVersion": "ate.dev/v1",

@@ -390,22 +390,23 @@ export function SubstratePoolSummary({
   const replicas = resource.status?.readyReplicas
   const observed = k?.pods
   const poolVerdict = data && poolReading(data.pool, finding)
+  const controllerFinding = poolVerdict?.controllerFinding
   const [lead, rawDetail] = finding ? splitReading(finding.reading) : []
   const shortfallDetails = poolVerdict?.label.startsWith('Short of workers · ') ? rawDetail : undefined
   const readState = query.isLoading ? 'Reading Substrate…'
-    : !data ? poolReadFailure(code, query.error instanceof Error ? query.error.message : undefined)
+    : !data ? poolReadFailure(query.error, namespace)
     : data.apiTier.state !== 'connected' ? tierReading(data.apiTier).detail
     : coverageReason(workerRead, 'workers')
   return (
     <div className="space-y-4 p-4">
-      <RefreshFailedNotice queries={[query]} />
+      {data && <RefreshFailedNotice queries={[query]} />}
       {finding && <WorkspaceProblemCallout rootKind="WorkerPool" subjectIsSelf problem={{
         id: finding.id, category: finding.rule, source: 'reading', tone: attentionTone(finding),
         subject: { kind: 'WorkerPool', group: SUBSTRATE_GROUP, namespace, name },
         title: poolVerdict!.label,
-        detail: shortfallDetails ?? lead, nextStep: k?.health === 'unhealthy' || finding.rule !== 'poolShort' ? finding.nextStep : 'Compare controller readiness with Substrate registrations below.',
+        detail: shortfallDetails ?? lead, nextStep: controllerFinding || finding.rule !== 'poolShort' ? finding.nextStep : 'Compare controller readiness with Substrate registrations below.',
         rawDetail: shortfallDetails ? undefined : rawDetail, rawDetailLabel: 'Details',
-        origin: { label: k?.health === 'unhealthy' ? 'WorkerPool controller status' : 'Kubernetes and Substrate' },
+        origin: { label: controllerFinding ? 'WorkerPool controller status' : 'Kubernetes and Substrate' },
       }} />}
       {drawer && <div className="flex flex-wrap gap-2">
         <button type="button" className="btn-brand px-3 py-1 text-sm" onClick={() => navigate(substratePoolPath({ namespace, name }, connection.context || undefined))}>Open pool</button>

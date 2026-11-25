@@ -183,11 +183,13 @@ export function overviewFacts(data: SubstrateWorkspace): Fact[] {
   }
 
   if (summary.actors) {
+    const partial = coverageInPart(cov.actors)
+    const countUnknown = partial && summary.actors.total === 0
     facts.push({
       label: 'Actors',
-      value: coverageInPart(cov.actors) && summary.actors.total === 0 ? 'Actor count unknown' : `${countText(summary.actors.total)} total${summary.actors.crashed > 0 ? `, ${countText(summary.actors.crashed)} crashed` : ''}`,
-      tone: summary.actors.crashed > 0 ? 'unhealthy' : summary.actors.total > 0 ? 'healthy' : 'neutral',
-      lowerBound: coverageInPart(cov.actors) && summary.actors.total > 0,
+      value: countUnknown ? 'Actor count unknown' : `${countText(summary.actors.total)} total${summary.actors.crashed > 0 ? `, ${countText(summary.actors.crashed)} crashed` : ''}`,
+      tone: countUnknown ? 'unknown' : summary.actors.crashed > 0 ? 'unhealthy' : summary.actors.total > 0 ? 'healthy' : 'neutral',
+      lowerBound: partial && summary.actors.total > 0,
     })
   } else {
     facts.push({ label: 'Actors', value: <Unread title={NOT_CONNECTED_TITLE}>{connected ? 'unknown' : 'Not connected'}</Unread>, tone: 'unknown' })
@@ -195,6 +197,8 @@ export function overviewFacts(data: SubstrateWorkspace): Fact[] {
 
   if (summary.templates) {
     const t = summary.templates
+    const partial = coverageInPart(cov.templates)
+    const countUnknown = partial && t.total === 0
     const noPool = t.noMatchingPool ?? 0
     const notes: ReactNode[] = [
       t.goldenFailed > 0 && <>{t.goldenFailed} <Term term="golden">golden snapshot</Term> failed</>,
@@ -203,10 +207,10 @@ export function overviewFacts(data: SubstrateWorkspace): Fact[] {
     facts.push({
       label: 'Templates',
       // Fragments, not spans: the value sits in a flex row whose gap would push each comma away from its word.
-      value: coverageInPart(cov.templates) && t.total === 0 ? 'Template count unknown' : <span>{[`${countText(t.total)} ${t.total === 1 ? 'template' : 'templates'}`, ...notes].map((n, i) => <Fragment key={i}>{i > 0 && ' · '}{n}</Fragment>)}</span>,
+      value: countUnknown ? 'Template count unknown' : <span>{[`${countText(t.total)} ${t.total === 1 ? 'template' : 'templates'}`, ...notes].map((n, i) => <Fragment key={i}>{i > 0 && ' · '}{n}</Fragment>)}</span>,
       // A template no pool matches is at risk (alert), as its badge and row say; a failed golden snapshot is a warning.
-      tone: areaTone(data, 'templates', noPool > 0 ? 'alert' : t.goldenFailed > 0 ? 'degraded' : t.total > 0 ? 'healthy' : 'neutral'),
-      lowerBound: coverageInPart(cov.templates) && t.total > 0,
+      tone: countUnknown ? 'unknown' : areaTone(data, 'templates', noPool > 0 ? 'alert' : t.goldenFailed > 0 ? 'degraded' : t.total > 0 ? 'healthy' : 'neutral'),
+      lowerBound: partial && t.total > 0,
     })
   } else {
     facts.push({ label: 'Templates', value: <Unread title={NOT_CONNECTED_TITLE}>{connected ? 'unknown' : 'Not connected'}</Unread>, tone: 'unknown' })
@@ -517,7 +521,7 @@ export function SubstrateOverview({ data, status, onOpenSubject }: SubstrateOver
         <SubstrateTierBanner tier={tier} />
         {showsConnectNotice(tier) && <SubstrateConnectNotice status={status} tier={tier} />}
         <SubstrateCoverageNotice coverage={data.coverage} kinds={['actors', 'templates', 'workers', 'atespaces']} />
-        <SubstrateRefreshFailure tier={tier} />
+        <SubstrateRefreshFailure tier={tier} notice />
         <WorkspaceCard title="Needs attention">
           {data.needsAttention.length > 0 && <SubstrateAttentionList rows={data.needsAttention} onOpen={onOpenSubject} />}
           <ChecksSummary data={data} empty={data.needsAttention.length === 0} />

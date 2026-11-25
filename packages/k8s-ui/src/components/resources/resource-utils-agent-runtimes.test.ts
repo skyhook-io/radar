@@ -123,6 +123,7 @@ describe('Agent Substrate WorkerPool status (shared with pkg/health)', () => {
       expect(getResourceStatus('workerpools', vector.object)).toMatchObject(expected)
       expect(getAgentRuntimeStatus(vector.object)).toMatchObject(expected)
       expect(getCellFilterValue(vector.object, 'status', 'substrateworkerpools')).toBe(vector.text)
+      if (vector.message) expect(getAgentRuntimeStatus(vector.object)?.message).toBe(vector.message)
     })
   }
 })

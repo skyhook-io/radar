@@ -1,4 +1,6 @@
 import { formatDuration, toneFillClass, type BadgeSeverity, type StatusTone } from '@skyhook-io/k8s-ui'
+import { isForbiddenError } from '../../api/client'
+import { substrateErrorCode } from '../../api/substrateWorkspace'
 import type {
   SubstrateAPITier,
   SubstrateActorState,
@@ -607,6 +609,7 @@ export interface PoolReading {
   label: string
   severity: BadgeSeverity
   meaning: string
+  controllerFinding?: boolean
   /** Kubernetes' own phase for the WorkerPool ("Scaling"), shown beside as its cause or context. */
   kubernetes?: string
 }
@@ -621,7 +624,7 @@ export function poolReading(p: Pick<SubstratePoolRow, 'capacity' | 'lacking' | '
   if (k?.health === 'unhealthy' || (k?.health === 'degraded' && k.healthDetail && finding?.severity !== 'critical' && finding?.severity !== 'alert')) {
     const label = k.healthReason === 'SandboxConfigNotFound' ? 'Sandbox configuration missing'
       : k.healthReason === 'Provisioning stalled' ? 'Provisioning stalled' : 'Sandbox configuration unresolved'
-    return { ...reading, label, severity: k.health === 'unhealthy' ? 'error' : 'warning' }
+    return { ...reading, label, severity: k.health === 'unhealthy' ? 'error' : 'warning', controllerFinding: true }
   }
   if (finding) return { ...reading, severity: toneSeverity(attentionTone(finding)) }
   return reading
@@ -679,9 +682,16 @@ export function lackingText(lacking: SubstrateLacking | undefined): string {
  * Why a pool's Substrate read failed, in words. Only notFound proves the pool
  * is gone; incomplete means Radar read too little to tell either way.
  */
-export function poolReadFailure(code: SubstrateCode | undefined, message: string | undefined): string {
+export function poolReadFailure(error: unknown, namespace: string): string {
+  const code = substrateErrorCode(error)
+  const message = error instanceof Error ? error.message : undefined
   if (code === 'notFound') return 'There is no WorkerPool by this name, and Substrate has no workers for one.'
   if (code === 'incomplete') return `Radar can’t tell whether this pool exists: it read too little of the WorkerPools or of Substrate’s workers${message ? ` (${message})` : ''}.`
+  if (code === 'denied' && isForbiddenError(error)) return `Reading this WorkerPool requires get on workerpools.ate.dev in namespace ${namespace}.`
+  if (code === 'mintDenied' || code === 'denied') {
+    const { detail, nextStep } = tierReading({ state: 'failed', code, reason: message })
+    return [detail, nextStep].filter(Boolean).join(' ')
+  }
   return `Radar couldn’t read the pool from Substrate’s API${message ? `: ${message}` : ''}.`
 }
 
@@ -763,7 +773,7 @@ export function splitReading(reading: string): [string, string | undefined] {
  * away, or the connection no longer stands. A page shows the failure, not the
  * last answer it kept; any other refresh failure keeps that answer, marked stale.
  */
-const DEFINITIVE_CODES = new Set<SubstrateCode>(['notFound', 'denied', 'unauthenticated', 'notConfigured', 'sharedRadar', 'targetChanged'])
+const DEFINITIVE_CODES = new Set<SubstrateCode>(['notFound', 'denied', 'mintDenied', 'unauthenticated', 'notConfigured', 'sharedRadar', 'targetChanged'])
 
 export function definitiveFailure(code: SubstrateCode | undefined): boolean {
   return !!code && DEFINITIVE_CODES.has(code)
@@ -801,7 +811,7 @@ export function placementTone(state: SubstrateActorState, impact: SubstrateWorke
 
 const WORKER_STATE_LABEL: Record<SubstrateWorkerRow['state'], { label: string; severity: BadgeSeverity }> = {
   active: { label: 'Active', severity: 'success' },
-  draining: { label: 'Draining', severity: 'warning' },
+  draining: { label: 'Draining', severity: 'info' },
   // At risk, nothing lost yet: the tone of its Needs attention row.
   unavailable: { label: 'Unavailable', severity: 'alert' },
   unknown: { label: 'Unknown', severity: 'neutral' },
@@ -818,8 +828,11 @@ export function workerStateReading(w: Pick<SubstrateWorkerRow, 'state' | 'worker
   const ws = w.workerState
   const title = ws?.reading ?? 'Substrate’s state for the worker. Only active workers take new actors.'
   const label = ws?.kind === 'reconciling' ? `${base.label} · reconciling` : base.label
-  const severity = w.attentionSeverity
-  return { label, severity: severity === 'info' ? 'info' : severity ? toneSeverity(attentionTone({ severity })) : base.severity, title }
+  const finding = w.attentionSeverity
+  const severity = finding === 'info' ? 'info' : finding ? toneSeverity(attentionTone({ severity: finding }))
+    : ws?.kind === 'reconciling' ? ws.lost ? 'error' : w.state === 'unavailable' ? 'alert' : 'warning'
+    : base.severity
+  return { label, severity, title }
 }
 
 /** What Kubernetes says about a worker's Pod, in one phrase; terminating comes first, since a Ready Pod being deleted is not counted ready. */

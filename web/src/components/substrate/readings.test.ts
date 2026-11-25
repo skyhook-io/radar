@@ -19,6 +19,7 @@ import {
   splitReading,
   tierReading,
 } from './readings'
+import { ApiError } from '../../api/client'
 import { substrateAttentionCount, substrateScreenCounts } from './attention'
 import { decodeActorParam, encodeActorParam, parseSubstrateRoute, substrateActorPath, substrateActorsPath } from './routes'
 import { segmentStates } from './SubstrateActors'
@@ -272,9 +273,15 @@ describe('the connection settings form', () => {
 
 describe('a pool’s read failure', () => {
   it('says an incomplete pool read can’t tell, and only notFound says the pool is gone', () => {
-    expect(poolReadFailure('incomplete', 'WorkerPools syncing')).toBe('Radar can’t tell whether this pool exists: it read too little of the WorkerPools or of Substrate’s workers (WorkerPools syncing).')
-    expect(poolReadFailure('notFound', undefined)).toContain('There is no WorkerPool by this name')
-    expect(poolReadFailure('unreachable', 'dial tcp')).toBe('Radar couldn’t read the pool from Substrate’s API: dial tcp.')
+    expect(poolReadFailure(new ApiError('WorkerPools syncing', 503, { error_code: 'incomplete' }), 'agents')).toBe('Radar can’t tell whether this pool exists: it read too little of the WorkerPools or of Substrate’s workers (WorkerPools syncing).')
+    expect(poolReadFailure(new ApiError('missing', 404, { error_code: 'notFound' }), 'agents')).toContain('There is no WorkerPool by this name')
+    expect(poolReadFailure(new ApiError('dial tcp', 503, { error_code: 'unreachable' }), 'agents')).toBe('Radar couldn’t read the pool from Substrate’s API: dial tcp.')
+  })
+
+  it('distinguishes Kubernetes access from a denied Substrate tier', () => {
+    expect(poolReadFailure(new ApiError('Forbidden', 403, { error_code: 'denied' }), 'agents')).toBe('Reading this WorkerPool requires get on workerpools.ate.dev in namespace agents.')
+    expect(poolReadFailure(new ApiError('Permission denied', 503, { error_code: 'denied' }), 'agents')).toContain('grant this identity the viewer role')
+    expect(poolReadFailure(new ApiError('Token request forbidden.', 403, { error_code: 'mintDenied' }), 'agents')).toContain('create on serviceaccounts/token for ate-client in ate-system')
   })
 })
 
@@ -387,9 +394,12 @@ describe('one fact once, and a worker that says what happened to its actors', ()
     expect(workerStateReading({ state: 'unavailable' }).severity).toBe('alert')
     expect(workerStateReading({ state: 'unavailable', workerState: { kind: 'reconciling', reading } }).severity).toBe('alert')
     // Actors not read: no count is made up.
-    expect(workerStateReading({ state: 'active', workerState: { kind: 'reconciling', reading } }).label).toBe('Active · reconciling')
+    expect(workerStateReading({ state: 'active', workerState: { kind: 'reconciling', reading } })).toMatchObject({ label: 'Active · reconciling', severity: 'warning' })
+    expect(workerStateReading({ state: 'active', workerState: { kind: 'reconciling', lost: 3, reading } }).severity).toBe('error')
     expect(workerStateReading({ state: 'active' })).toMatchObject({ label: 'Active', severity: 'success' })
     expect(workerStateReading({ state: 'draining', attentionSeverity: 'info', workerState: { kind: 'draining', assigned: 4, reading: 'Draining…' } })).toMatchObject({ label: 'Draining', title: 'Draining…', severity: 'info' })
+    expect(workerStateReading({ state: 'draining' }).severity).toBe('info')
+    expect(workerStateReading({ state: 'draining', attentionSeverity: 'warning' }).severity).toBe('warning')
     const { withoutReasonCode } = await import('./readings')
     expect(withoutReasonCode('GoldenActorCrashed: golden actor crashed before its snapshot was taken')).toBe('golden actor crashed before its snapshot was taken')
     expect(withoutReasonCode('killed for exceeding its memory limit')).toBe('killed for exceeding its memory limit')

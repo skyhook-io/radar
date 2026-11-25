@@ -26,7 +26,7 @@ function PoolWorkers({ pool, onOpenResource }: { pool: SubstratePoolRef; onOpenR
     if (s.kind === 'Actor' && s.atespace && s.name) openActor({ atespace: s.atespace, name: s.name })
   }
   if (query.isLoading) return <PaneLoader label="Loading workers…" />
-  if (!data) return <div className="p-4"><Notice>{poolReadFailure(code, query.error instanceof Error ? query.error.message : undefined)}</Notice></div>
+  if (!data) return <div className="p-4"><Notice>{poolReadFailure(query.error, pool.namespace)}</Notice></div>
   if (data.apiTier.state !== 'connected') return <div className="p-4"><Notice>{tierReading(data.apiTier).detail}</Notice></div>
   return (
     <div className="h-full space-y-3 overflow-y-auto p-4">

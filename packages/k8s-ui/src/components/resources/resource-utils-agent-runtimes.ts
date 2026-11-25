@@ -69,6 +69,12 @@ function workerPoolResolvedConditions(resource: any): { condition: any; stale: b
   })
 }
 
+// Mirrors pkg/health UnresolvedWorkerPoolClass.
+function unresolvedWorkerPoolClass(resolved: ReturnType<typeof workerPoolResolvedConditions>) {
+  const unresolved = resolved.filter(({ condition }) => condition?.status === 'False')
+  return unresolved.find(({ stale }) => !stale) ?? unresolved[0]
+}
+
 // Mirrors pkg/health workerPoolProvisionGrace.
 const WORKER_POOL_PROVISION_GRACE_MS = 10 * 60 * 1000
 
@@ -112,10 +118,10 @@ export function getWorkerPoolStatus(resource: any, now = Date.now()): StatusBadg
   const pods = count(status?.replicas) ?? 0
 
   const desired = count(resource?.spec?.replicas)
-  const unresolved = resolved.filter(({ condition }) => condition?.status === 'False')
-  if (unresolved.length > 0) {
-    const blocking = desired !== undefined && desired > 0 && ready === 0 ? unresolved.find(({ stale }) => !stale) : undefined
-    const { condition, stale } = blocking ?? unresolved[0]
+  const unresolved = unresolvedWorkerPoolClass(resolved)
+  if (unresolved) {
+    const { condition, stale } = unresolved
+    const blocking = !stale && desired !== undefined && desired > 0 && ready === 0
     return badge(condition.reason || 'Unresolved', blocking ? 'unhealthy' : stale ? 'degraded' : 'alert')
   }
 
@@ -128,12 +134,12 @@ export function getWorkerPoolStatus(resource: any, now = Date.now()): StatusBadg
 }
 
 function workerPoolStatusMessage(resource: any, now = Date.now()): string | undefined {
-  const generation = count(resource?.metadata?.generation)
-  for (const { condition, stale } of workerPoolResolvedConditions(resource)) {
-    if (condition?.status !== 'False') continue
+  const unresolved = unresolvedWorkerPoolClass(workerPoolResolvedConditions(resource))
+  if (unresolved) {
+    const { condition, stale } = unresolved
     const message = typeof condition.message === 'string' ? condition.message.trim() : ''
     if (!stale) return message || undefined
-    const note = `Reported for generation ${condition.observedGeneration}; the pool is now at generation ${generation}.`
+    const note = `Reported for generation ${condition.observedGeneration}; the pool is now at generation ${resource.metadata.generation}.`
     return message ? `${note} ${message}` : note
   }
   // No condition explains it: say what the reading means rather than repeat it.

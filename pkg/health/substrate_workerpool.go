@@ -57,6 +57,25 @@ func WorkerPoolClasses(u *unstructured.Unstructured) []WorkerPoolClass {
 	return out
 }
 
+// UnresolvedWorkerPoolClass returns the first current failure, or the first
+// stale failure if the controller has reported none for the current spec.
+func UnresolvedWorkerPoolClass(classes []WorkerPoolClass) *WorkerPoolClass {
+	var stale *WorkerPoolClass
+	for i := range classes {
+		c := &classes[i]
+		if c.Status != "False" {
+			continue
+		}
+		if !c.Stale {
+			return c
+		}
+		if stale == nil {
+			stale = c
+		}
+	}
+	return stale
+}
+
 // SubstrateWorkerPool returns the health of an Agent Substrate WorkerPool
 // (ate.dev) from its per-class Resolved conditions and its desired and ready
 // workers. Its only condition, Resolved, sits per sandbox class in
@@ -76,25 +95,15 @@ func SubstrateWorkerPool(u *unstructured.Unstructured, now time.Time) Verdict {
 	pods, _, _ := unstructured.NestedInt64(u.Object, "status", "replicas")
 	classes := WorkerPoolClasses(u)
 
-	var unresolved Verdict
-	for _, c := range classes {
-		if c.Status != "False" {
-			continue
-		}
+	if c := UnresolvedWorkerPoolClass(classes); c != nil {
 		reason := c.Reason
 		if reason == "" {
 			reason = "Unresolved"
 		}
-		// A current failure with no ready workers outranks a stale condition.
 		if !c.Stale && hasDesired && desired > 0 && ready == 0 {
 			return Verdict{Level: LevelUnhealthy, Reason: reason}
 		}
-		if unresolved.Reason == "" {
-			unresolved = Verdict{Level: LevelDegraded, Reason: reason}
-		}
-	}
-	if unresolved.Reason != "" {
-		return unresolved
+		return Verdict{Level: LevelDegraded, Reason: reason}
 	}
 
 	switch {

@@ -357,26 +357,22 @@ func poolOf(u *unstructured.Unstructured, now time.Time) model.Pool {
 	}
 	v := health.SubstrateWorkerPool(u, now)
 	p.Health, p.HealthReason = string(v.Level), v.Reason
-	for _, c := range health.WorkerPoolClasses(u) {
+	classes := health.WorkerPoolClasses(u)
+	for _, c := range classes {
 		if c.Name != "" {
 			p.SandboxClasses = append(p.SandboxClasses, c.Name)
-		}
-		reason := c.Reason
-		if reason == "" {
-			reason = "Unresolved"
-		}
-		if c.Status == "False" && reason == v.Reason && p.HealthDetail == "" && (v.Level != health.LevelUnhealthy || !c.Stale) {
-			p.HealthDetail = c.Message
-			if p.HealthDetail == "" {
-				p.HealthDetail = "The controller has not resolved the SandboxConfig for sandbox class " + c.Name + "."
-			}
-			if c.Stale {
-				p.HealthDetail = fmt.Sprintf("Reported for generation %d; the pool is now at generation %d. %s", c.ObservedGeneration, u.GetGeneration(), p.HealthDetail)
-			}
 		}
 	}
 	if v.Reason == "Provisioning stalled" {
 		p.HealthDetail = "The sandbox classes resolved, but the controller reports neither a worker Deployment selector nor worker replicas."
+	} else if c := health.UnresolvedWorkerPoolClass(classes); c != nil && u.GetDeletionTimestamp() == nil {
+		p.HealthDetail = c.Message
+		if p.HealthDetail == "" {
+			p.HealthDetail = "The controller has not resolved the SandboxConfig for sandbox class " + c.Name + "."
+		}
+		if c.Stale {
+			p.HealthDetail = fmt.Sprintf("Reported for generation %d; the pool is now at generation %d. %s", c.ObservedGeneration, u.GetGeneration(), p.HealthDetail)
+		}
 	}
 	return p
 }

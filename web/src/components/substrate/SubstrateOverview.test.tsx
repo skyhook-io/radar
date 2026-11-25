@@ -303,6 +303,21 @@ describe('Agent Substrate status line beside the inventory', () => {
     expect(serviceFacts({ service: base.service, summary: base.summary, needsAttention: [upload] }).find((f) => f.label === 'Uploads')!.tone).toBe('alert')
   })
 
+  it('shows unknown tone for empty partial counts and neutral for complete zero counts', async () => {
+    const { overviewFacts } = await import('./SubstrateOverview')
+    const data = workspace({ needsAttention: [] })
+    data.summary.actors = { ...data.summary.actors!, total: 0, crashed: 0 }
+    data.summary.templates = { ...data.summary.templates!, total: 0, goldenFailed: 0, noMatchingPool: 0 }
+    const countFacts = () => overviewFacts(data).filter((f) => f.label === 'Actors' || f.label === 'Templates')
+    expect(countFacts().map((f) => f.tone)).toEqual(['neutral', 'neutral'])
+    data.coverage.actors = { state: 'partial' }
+    data.coverage.templates = { state: 'partial' }
+    expect(countFacts()).toMatchObject([
+      { value: 'Actor count unknown', tone: 'unknown' },
+      { value: 'Template count unknown', tone: 'unknown' },
+    ])
+  })
+
   it('never reads free slots as free capacity when no worker has the CPU or memory for an actor', async () => {
     const { overviewFacts } = await import('./SubstrateOverview')
     const slotLine = (data: ReturnType<typeof workspace>) => {
@@ -344,6 +359,8 @@ it('keeps coverage and refresh warnings visible with the coverage disclosure clo
   expect(notice?.closest('[inert]')).toBeNull()
   const failure = [...doc.querySelectorAll('[role="status"]')].find((n) => n.textContent?.startsWith('Last Substrate API read failed'))
   expect(failure?.textContent).toContain('Showing the previous read')
+  expect(failure?.textContent).toContain('timed out')
+  expect(failure?.closest('.border-theme-border')).not.toBeNull()
   expect(failure?.closest('[inert]')).toBeNull()
   const values = [...doc.querySelectorAll('tbody tr')].find((r) => r.firstElementChild?.textContent === 'partial')?.querySelectorAll('td')
   expect(values?.[4].textContent).toBe('Unknown')

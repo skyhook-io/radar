@@ -19,7 +19,7 @@ const state = vi.hoisted(() => ({ pool: undefined as SubstratePool | undefined, 
 vi.mock('../../api/substrateWorkspace', async (original) => ({
   ...(await original<typeof import('../../api/substrateWorkspace')>()),
   useSubstratePool: () => ({ data: state.pool, isLoading: state.poolLoading, error: state.poolError }),
-  useSubstrateWorkers: () => ({ data: state.workers, isLoading: false, error: state.workerError }),
+  useSubstrateWorkers: () => ({ data: state.workers, isLoading: false, error: state.workerError, isRefetchError: !!state.workers && !!state.workerError, dataUpdatedAt: Date.now() }),
 }))
 vi.mock('../../api/client', async (original) => ({
   ...(await original<typeof import('../../api/client')>()),
@@ -308,6 +308,26 @@ it('reads requested SandboxConfigs on Spec and the two independent status refs o
   expect(summary(unresolved).body.textContent).toContain('Requested: gvisor-v2 (unresolved)')
 })
 
+it('shows the controller’s SandboxConfig evidence and recovery when the pool still has ready workers', () => {
+  const data = pool([worker(0)])
+  data.pool.kubernetes = { ...data.pool.kubernetes!, health: 'degraded', healthReason: 'SandboxConfigNotFound', healthDetail: 'SandboxConfig "gvisor-v2" not found.' }
+  data.attention = {
+    id: 'poolShort:agents/agent-pool', rule: 'poolShort', severity: 'warning', title: 'Sandbox configuration missing',
+    reading: data.pool.kubernetes.healthDetail!, nextStep: 'Restore the missing SandboxConfig or select an existing configuration for this sandbox class.',
+    subject: { kind: 'WorkerPool', name: 'agent-pool' }, count: 1,
+  }
+  state.pool = data
+  try {
+    const summary = dom(<SubstratePoolSummary namespace="agents" name="agent-pool" context="expanded" resource={{ status: { readyReplicas: 1 } }} />)
+    expect(summary.body.textContent).toContain('SandboxConfig "gvisor-v2" not found.')
+    expect(summary.body.textContent).toContain(data.attention.nextStep)
+    expect(summary.body.textContent).toContain('WorkerPool controller status')
+    expect(summary.body.textContent).not.toContain('Compare controller readiness with Substrate registrations below.')
+  } finally {
+    state.pool = undefined
+  }
+})
+
 it('keeps unread worker dimensions unknown and names the failed read before blaming Pod permissions', () => {
   const summary = () => dom(<SubstratePoolSummary namespace="agents" name="agent-pool" context="expanded" resource={{}} />)
   try {
@@ -318,6 +338,12 @@ it('keeps unread worker dimensions unknown and names the failed read before blam
     state.poolError = new ApiError('this read requires get on workerpools.ate.dev in namespace agents', 403, { error_code: 'denied' })
     expect(summary().body.textContent).toContain('requires get on workerpools.ate.dev in namespace agents')
     expect(summary().body.textContent).not.toContain('list on pods')
+    expect(summary().body.textContent).not.toContain('couldn’t read the pool from Substrate’s API')
+    state.pool = pool([worker(0)])
+    state.poolError = new ApiError('Token request forbidden.', 403, { error_code: 'mintDenied' })
+    const mint = summary()
+    expect(mint.body.textContent).toContain('create on serviceaccounts/token for ate-client in ate-system')
+    expect(mint.body.textContent).not.toContain('agent-pool-worker-0')
     const denied = pool([])
     denied.podRead = 'denied'
     denied.coverage.workers = { state: 'denied', code: 'denied' }
@@ -369,9 +395,16 @@ it('filters Workers attention by the shared severity and links to pools with no 
     state.workers = {
       apiTier: connectedTier,
       workers: [worker(0, { attentionSeverity: 'warning', actors: [] }), worker(1, { attentionSeverity: 'info', state: 'draining' })],
-      coverage: { workers: { state: 'full' }, actors: { state: 'partial' } },
+      coverage: { workers: { state: 'full' }, actors: { state: 'partial', deniedAtespaces: ['restricted'] } },
     }
+    state.workerError = new Error('timed out')
     const doc = dom(<SubstrateWorkersScreen workspace={workspace()} onOpenSubject={() => {}} />, '/substrate/workers?state=attention')
+    const content = doc.body.textContent ?? ''
+    const toolbar = content.indexOf('Needs attention≥1')
+    for (const notice of ['Last refresh failed: timed out', 'Substrate denied atespace restricted']) {
+      expect(content).toContain(notice)
+      expect(content.indexOf(notice)).toBeLessThan(toolbar)
+    }
     expect(doc.body.textContent).toContain('Needs attention≥1')
     expect(doc.querySelector('button[aria-label="Show assigned actors for agent-pool-worker-0"]')?.textContent).toBe('View assigned actors')
     expect(doc.querySelector('button[aria-label="Show assigned actors for agent-pool-worker-1"]')).toBeNull()
@@ -383,6 +416,7 @@ it('filters Workers attention by the shared severity and links to pools with no 
     expect(poolWorkersText(row, [])).toContain('active worker count unknown')
   } finally {
     state.workers = undefined
+    state.workerError = null
   }
 })
 

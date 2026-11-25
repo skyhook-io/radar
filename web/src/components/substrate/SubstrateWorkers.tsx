@@ -164,24 +164,6 @@ export function SubstrateWorkersScreen({ workspace, status, onOpenSubject }: { w
     <div className="flex min-h-0 flex-1 flex-col">
       <SubstrateHeader title="Workers" intro="Cluster-wide" />
       <ScreenBody>
-        {data && (
-          <div className="flex flex-wrap items-center gap-2">
-            <Segments
-              label="Worker filter"
-              value={stateFilter}
-              onChange={(v) => set('state', v)}
-              options={[
-                { id: 'all', label: 'All', count: count(scoped.length) },
-                { id: 'attention', label: 'Needs attention', count: attentionPartial ? attentionCount > 0 ? `≥${attentionCount}` : undefined : attentionCount },
-                { id: 'active', label: 'Active', count: count(scoped.filter((w) => w.state === 'active').length) },
-                { id: 'draining', label: 'Draining', count: count(scoped.filter((w) => w.state === 'draining').length) },
-                { id: 'unavailable', label: 'Unavailable', count: count(scoped.filter((w) => w.state === 'unavailable').length) },
-              ]}
-            />
-            <Input aria-label="Search worker names" placeholder="Search workers…" value={search} onChange={(e) => setSearch(e.target.value)} className="h-8 max-w-52 rounded-md border border-theme-border bg-theme-elevated px-3" />
-            <SelectMenu ariaLabel="Pool" value={pool} options={[{ value: '', label: 'Every pool' }, ...pools.map((p) => ({ value: p, label: p.replace('/', ' / ') }))]} onChange={(v) => set('pool', v)} className="min-w-[12rem]" />
-          </div>
-        )}
         {!connected && tier ? (
           <>
             <SubstrateTierBanner tier={tier} />
@@ -195,6 +177,22 @@ export function SubstrateWorkersScreen({ workspace, status, onOpenSubject }: { w
           <>
             <RefreshFailedNotice queries={[query]} />
             <SubstrateCoverageNotice coverage={data.coverage} kinds={['workers', 'actors']} />
+            <div className="flex flex-wrap items-center gap-2">
+              <Segments
+                label="Worker filter"
+                value={stateFilter}
+                onChange={(v) => set('state', v)}
+                options={[
+                  { id: 'all', label: 'All', count: count(scoped.length) },
+                  { id: 'attention', label: 'Needs attention', count: attentionPartial ? attentionCount > 0 ? `≥${attentionCount}` : undefined : attentionCount },
+                  { id: 'active', label: 'Active', count: count(scoped.filter((w) => w.state === 'active').length) },
+                  { id: 'draining', label: 'Draining', count: count(scoped.filter((w) => w.state === 'draining').length) },
+                  { id: 'unavailable', label: 'Unavailable', count: count(scoped.filter((w) => w.state === 'unavailable').length) },
+                ]}
+              />
+              <Input aria-label="Search worker names" placeholder="Search workers…" value={search} onChange={(e) => setSearch(e.target.value)} className="h-8 max-w-52 rounded-md border border-theme-border bg-theme-elevated px-3" />
+              <SelectMenu ariaLabel="Pool" value={pool} options={[{ value: '', label: 'Every pool' }, ...pools.map((p) => ({ value: p, label: p.replace('/', ' / ') }))]} onChange={(v) => set('pool', v)} className="min-w-[12rem]" />
+            </div>
             <WorkersTable data={{ workers: shown, coverage: data.coverage }} pools={workspace?.pools} poolFindings={poolFindings} onOpenSubject={onOpenSubject} grouped />
             {emptyPools.length > 0 && <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-theme-text-secondary">
               <span>Pools with no registered workers</span>

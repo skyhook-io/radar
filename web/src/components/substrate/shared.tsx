@@ -171,11 +171,13 @@ export function SubstrateSourceLine({ tier, status, showRefreshFailure = true }:
   )
 }
 
-export function SubstrateRefreshFailure({ tier }: { tier: SubstrateAPITier }) {
+export function SubstrateRefreshFailure({ tier, notice = false }: { tier: SubstrateAPITier; notice?: boolean }) {
   if (!tier.lastError) return null
+  const summary = `Last Substrate API read failed ${relativeTime(tier.lastError.at)}. Showing the previous read.`
+  if (notice) return <Notice><div role="status">{summary} {tier.lastError.message}</div></Notice>
   return (
     <Tooltip content={tier.lastError.message}>
-      <span role="status" className={`text-xs ${toneTextClass('degraded')}`}>Last Substrate API read failed {relativeTime(tier.lastError.at)}. Showing the previous read.</span>
+      <span role="status" className={`text-xs ${toneTextClass('degraded')}`}>{summary}</span>
     </Tooltip>
   )
 }
