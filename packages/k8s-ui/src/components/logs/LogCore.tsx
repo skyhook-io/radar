@@ -452,10 +452,10 @@ export function LogCore({
       focusSelectedFormat()
     }
   }, [showTsMenu, tsMenu.shouldRender])
-  const closeTsMenu = () => {
+  const closeTsMenu = useCallback(() => {
     setShowTsMenu(false)
     tsTriggerRef.current?.focus()
-  }
+  }, [])
   const viewerRef = useRef<HTMLDivElement>(null)
   const toolbarRef = useRef<HTMLDivElement>(null)
   const [tsMenuBounds, setTsMenuBounds] = useState<{ maxHeight: number; maxWidth: number }>()
@@ -489,9 +489,19 @@ export function LogCore({
       if (tsMenuRef.current?.contains(e.target as Node)) return
       setShowTsMenu(false)
     }
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.stopImmediatePropagation()
+      e.preventDefault()
+      closeTsMenu()
+    }
     window.addEventListener('click', handleClick)
-    return () => window.removeEventListener('click', handleClick)
-  }, [showTsMenu])
+    window.addEventListener('keydown', handleKey, true)
+    return () => {
+      window.removeEventListener('click', handleClick)
+      window.removeEventListener('keydown', handleKey, true)
+    }
+  }, [showTsMenu, closeTsMenu])
 
   const structuredMenuRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -851,12 +861,6 @@ export function LogCore({
           <div
             className="relative"
             ref={tsMenuRef}
-            onKeyDown={event => {
-              if (event.key !== 'Escape' || !showTsMenu) return
-              event.preventDefault()
-              event.stopPropagation()
-              closeTsMenu()
-            }}
             onBlur={event => {
               if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) setShowTsMenu(false)
             }}

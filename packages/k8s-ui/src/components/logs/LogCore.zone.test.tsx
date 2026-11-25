@@ -89,6 +89,28 @@ it('moves focus and selection with the arrow keys and returns focus on confirmat
   expect(document.activeElement).toBe(picker)
 })
 
+it('dismisses the pointer-opened picker before the dock handles Escape when focus is on the body', async () => {
+  const picker = await render()
+  const dockKeyDown = vi.fn()
+  window.addEventListener('keydown', dockKeyDown)
+  try {
+    act(() => picker.click())
+    expect(picker.getAttribute('aria-expanded')).toBe('true')
+    expect(document.activeElement).toBe(document.body)
+    const pressEscape = () => act(() => {
+      document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    })
+    pressEscape()
+    expect(picker.getAttribute('aria-expanded')).toBe('false')
+    expect(document.activeElement).toBe(picker)
+    expect(dockKeyDown).not.toHaveBeenCalled()
+    pressEscape()
+    expect(dockKeyDown).toHaveBeenCalledTimes(1)
+  } finally {
+    window.removeEventListener('keydown', dockKeyDown)
+  }
+})
+
 it('keeps Epoch reachable in a short dock as the toolbar wraps and the viewport shrinks', async () => {
   const resizeCallbacks = new Map<Element, () => void>()
   vi.stubGlobal('ResizeObserver', class {
