@@ -147,7 +147,11 @@ func (t *RewritingTransport) Do(ctx context.Context, method, path string, params
 		if len(qs) != 1 {
 			return nil, &prom.RefusedError{Err: errors.New("openobserve: exactly one query parameter is required")}
 		}
-		rewritten, err := Rewrite(qs[0], t.Options)
+		q := qs[0]
+		if path == "/api/v1/query_range" {
+			q = rangeScalarAsVector(q)
+		}
+		rewritten, err := Rewrite(q, t.Options)
 		if err != nil {
 			return nil, refused(err)
 		}

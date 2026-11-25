@@ -398,6 +398,19 @@ func stringArg(e parser.Expr) (string, bool) {
 	return strings.ToLower(s.Val), true
 }
 
+// rangeScalarAsVector wraps a range query whose result is a plain number
+// (time(), scalar(...), a literal) in vector(), which Rewrite labels with the
+// cluster: the matrix such a query returns has a series with no labels, which
+// FilterResponse would otherwise drop. An instant query keeps its scalar
+// result type, which FilterResponse leaves alone.
+func rangeScalarAsVector(q string) string {
+	expr, err := parser.ParseExpr(q)
+	if err != nil || expr.Type() != parser.ValueTypeScalar {
+		return q
+	}
+	return "vector(" + q + ")"
+}
+
 // absentOverComputed reports whether c is absent or absent_over_time over an
 // expression its result can't take labels from (an aggregation, a function,
 // a subquery): such a result carries no labels at all.

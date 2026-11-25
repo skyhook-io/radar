@@ -129,6 +129,36 @@ func TestRewritingTransportQueryRangeThroughClient(t *testing.T) {
 	}
 }
 
+func TestRewritingTransportKeepsScalarRangeResults(t *testing.T) {
+	for q, want := range map[string]string{
+		`time()`:          `label_replace(vector(time()), "cluster", "oo-b", "", "")`,
+		`scalar(sum(up))`: `label_replace(vector(scalar(sum by (cluster) (up{cluster="oo-b"}))), "cluster", "oo-b", "", "")`,
+		`sum(up)`:         `sum by (cluster) (up{cluster="oo-b"})`,
+	} {
+		f := &fakeOO{body: `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"cluster":"oo-b"},"values":[[1,"1"]]}]}}`}
+		rt, dropped := newRewriting(t, f)
+		res, err := prom.NewClient(rt).QueryRange(context.Background(), q, time.Unix(0, 0), time.Unix(600, 0), time.Minute)
+		if err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+		if got := f.last(t).params.Get("query"); got != want {
+			t.Fatalf("%s: query sent = %s, want %s", q, got, want)
+		}
+		if len(res.Series) != 1 || *dropped != 0 {
+			t.Fatalf("%s: series=%d dropped=%d", q, len(res.Series), *dropped)
+		}
+	}
+	// An instant query keeps its scalar result type.
+	f := &fakeOO{body: `{"status":"success","data":{"resultType":"scalar","result":[1,"1"]}}`}
+	rt, _ := newRewriting(t, f)
+	if _, err := rt.Do(context.Background(), http.MethodGet, "/api/v1/query", url.Values{"query": {"time()"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.last(t).params.Get("query"); got != `time()` {
+		t.Fatalf("instant query sent = %s", got)
+	}
+}
+
 func TestRewritingTransportMatch(t *testing.T) {
 	tests := []struct {
 		name      string
