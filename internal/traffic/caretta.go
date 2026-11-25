@@ -791,17 +791,36 @@ func noBackendWarning(noData, unreachable []string) string {
 // carettaLinksQuery selects Caretta's links, in namespace when set (as either
 // client or server), within the cluster scope.
 func carettaLinksQuery(namespace string, sc clusterScope) string {
+	return strings.Join(carettaLinkSelectors(namespace, sc), " or ")
+}
+
+// carettaLinkSelectors are the series selectors carettaLinksQuery ORs.
+func carettaLinkSelectors(namespace string, sc clusterScope) []string {
 	// caretta_links_observed{client_name, client_namespace, server_name, server_namespace, server_port, ...}
 	if namespace == "" {
 		if sc.matchers == "" {
-			return "caretta_links_observed"
+			return []string{"caretta_links_observed"}
 		}
-		return "caretta_links_observed{" + sc.matchers + "}"
+		return []string{"caretta_links_observed{" + sc.matchers + "}"}
 	}
 	safeNS := prom.SanitizeLabelValue(namespace)
-	return fmt.Sprintf(`caretta_links_observed{%s} or caretta_links_observed{%s}`,
-		sc.with(fmt.Sprintf(`client_namespace="%s"`, safeNS)),
-		sc.with(fmt.Sprintf(`server_namespace="%s"`, safeNS)))
+	return []string{
+		fmt.Sprintf(`caretta_links_observed{%s}`, sc.with(fmt.Sprintf(`client_namespace="%s"`, safeNS))),
+		fmt.Sprintf(`caretta_links_observed{%s}`, sc.with(fmt.Sprintf(`server_namespace="%s"`, safeNS))),
+	}
+}
+
+// carettaRecentLinksQuery keeps the links whose byte count grew within the
+// window. Caretta keeps a link's count from when it started, so the plain
+// selector holds every link it ever saw. A link first seen inside the window
+// has no earlier sample to grow from and is left out: a miss, never a link
+// that wasn't used.
+func carettaRecentLinksQuery(namespace string, sc clusterScope, w rateWindow) string {
+	selectors := carettaLinkSelectors(namespace, sc)
+	for i, sel := range selectors {
+		selectors[i] = fmt.Sprintf("(increase(%s[%s]) > 0)", sel, w.promQL)
+	}
+	return strings.Join(selectors, " or ")
 }
 
 // resolveClusterScope decides the cluster scope of Caretta's queries. Only a
@@ -826,6 +845,9 @@ func (c *CarettaSource) identityRows(ctx context.Context, query string) ([]map[s
 // queryPrometheusForFlows queries Prometheus for caretta_links_observed metrics
 func (c *CarettaSource) queryPrometheusForFlows(ctx context.Context, promAddr string, basePath string, opts FlowOptions, sc clusterScope) ([]Flow, error) {
 	query := carettaLinksQuery(opts.Namespace, sc)
+	if opts.RecentOnly {
+		query = carettaRecentLinksQuery(opts.Namespace, sc, rateWindowFor(opts.Since))
+	}
 
 	queryURL := fmt.Sprintf("%s%s/api/v1/query?query=%s", promAddr, basePath, url.QueryEscape(query))
 

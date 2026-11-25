@@ -49,6 +49,9 @@ export interface OptionalFilter {
 // The chip row's optional filters, in menu order. The view renders each chip.
 export const OPTIONAL_FILTERS: OptionalFilter[] = [
   { key: 'eol', label: 'OS end of life', param: 'eol', defaultOn: true },
+  // Live Traffic's own filter: the active Exposed globe already shows what it
+  // saw on exposed workloads, so this is for narrowing to it, routed or not.
+  { key: 'traffic', label: 'Traffic seen', param: 'traffic' },
 ]
 
 const FILTERS_KEY = 'radar-vulnerability-filters'

@@ -19,7 +19,7 @@ import (
 // rolled up to the images that run now, by image, CVE, workload or fix.
 //
 // Query: view=image|cve|workload|fix|summary, severity=critical,high,
-// fixable=1, exposed=1, q=, namespaces=, and workloadKind + workloadNamespace +
+// fixable=1, exposed=1, eol=1, traffic=1, q=, namespaces=, and workloadKind + workloadNamespace +
 // workloadName (+ optional workloadGroup) to narrow to one workload (the
 // workload drawer).
 //
@@ -39,6 +39,11 @@ import (
 // Gateway API routes across the caller's whole namespace ceiling, which
 // namespace access covers for those kinds; the view's narrower picker
 // scope would otherwise drop a shared Gateway and change the answer.
+//
+// Traffic (the workloads Live Traffic saw receive connections) comes from
+// one fetch of the active traffic source, shared across callers (see
+// vulnerabilityTraffic) and read with Radar's identity as the Traffic view
+// is; the answer lists only workloads this caller's read returned.
 func (s *Server) handleVulnerabilities(w http.ResponseWriter, r *http.Request) {
 	resp, ok := s.readVulnerabilities(w, r, false)
 	if ok {
@@ -134,6 +139,7 @@ func vulnerabilityFilter(r *http.Request) vulnerabilities.Filter {
 		Severities: severities, FixableOnly: q.Get("fixable") == "1" || q.Get("fixable") == "true", Query: q.Get("q"),
 		ExposedOnly:     q.Get("exposed") == "1" || q.Get("exposed") == "true",
 		OSEndOfLifeOnly: q.Get("eol") == "1" || q.Get("eol") == "true",
+		TrafficSeenOnly: q.Get("traffic") == "1" || q.Get("traffic") == "true",
 	}
 	if kind, ns, name := q.Get("workloadKind"), q.Get("workloadNamespace"), q.Get("workloadName"); kind != "" && ns != "" && name != "" {
 		filter.Workload = &vulnerabilities.WorkloadRef{Kind: kind, Group: q.Get("workloadGroup"), Namespace: ns, Name: name}
@@ -179,6 +185,7 @@ func (s *Server) readVulnerabilities(w http.ResponseWriter, r *http.Request, exp
 		View:                 view,
 		Filter:               vulnerabilityFilter(r),
 		Export:               export,
+		Traffic:              trafficFor(r.Context(), view),
 	})
 	if err != nil {
 		if r.Context().Err() != nil {

@@ -27,7 +27,7 @@ const zero = { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 }
 const ref = (name: string, namespace = 'shop'): VulnerabilityWorkloadRef => ({ kind: 'Deployment', group: 'apps', namespace, name, container: 'app' })
 const route = { via: 'LoadBalancer', namespace: 'shop', name: 'web' }
 
-function response(view: VulnerabilitiesResponse['view'], withExposure: boolean): VulnerabilitiesResponse {
+function response(view: VulnerabilitiesResponse['view'], withExposure: boolean, withTraffic = false): VulnerabilitiesResponse {
   const base: VulnerabilitiesResponse = {
     source: 'trivy',
     view,
@@ -42,6 +42,7 @@ function response(view: VulnerabilitiesResponse['view'], withExposure: boolean):
   }
   return {
     ...base,
+    ...(withTraffic ? { traffic: { source: 'caretta', fromOutside: false, windowSeconds: 900, workloads: [ref('web'), ref('worker')].map(({ container: _, ...w }) => w), workloadsTotal: 2 } } : {}),
     ...(withExposure ? { exposure: { gaps: [{ code: 'user_forbidden', kinds: { count: 1, names: [{ kind: 'Ingress', group: 'networking.k8s.io' }] }, namespaces: { count: 1, names: ['hidden'] } }] } } : {}),
     images: [image],
     fixes: [{
@@ -64,9 +65,9 @@ function Probe() {
 
 const urlParams = () => new URLSearchParams(container.querySelector('[data-testid="location"]')!.textContent ?? '')
 
-function render(path: string, withExposure = true) {
+function render(path: string, withExposure = true, withTraffic = false) {
   vi.mocked(useVulnerabilities).mockImplementation((p) => ({
-    data: response(p.view, withExposure), isLoading: false, isFetching: false, isPlaceholderData: false, error: null, dataUpdatedAt: 0, refetch: vi.fn(),
+    data: response(p.view, withExposure, withTraffic), isLoading: false, isFetching: false, isPlaceholderData: false, error: null, dataUpdatedAt: 0, refetch: vi.fn(),
   } as unknown as ReturnType<typeof useVulnerabilities>))
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } })
   act(() => root.render(
@@ -81,7 +82,7 @@ function render(path: string, withExposure = true) {
 
 const button = (label: string) => Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.trim() === label)
 const lastParams = () => vi.mocked(useVulnerabilities).mock.calls.at(-1)![0]
-const marks = () => container.querySelectorAll('svg[aria-label^="Exposed via"]')
+const marks = () => container.querySelectorAll('[role="img"][aria-label^="Exposed via"]')
 
 beforeEach(() => {
   container = document.createElement('div')
@@ -132,6 +133,62 @@ describe('VulnerabilitiesView', () => {
     expect(marked).toHaveLength(1)
     expect(marked[0]).toContain('web')
     expect(marked[0]).not.toContain('worker')
+  })
+
+  it('shows Live Traffic only on the Exposed mark of an exposed workload it saw', () => {
+    for (const by of ['image', 'workload']) {
+      render(`/checks/vulnerabilities?by=${by}`, true, true)
+      const all = Array.from(marks())
+      expect(all.length).toBeGreaterThan(0)
+      for (const m of all) {
+        expect(m.getAttribute('aria-label')).toContain('Live Traffic (Caretta) saw connections to it in the last 15 minutes')
+        expect(m.querySelector('span.rounded-full')).not.toBeNull()
+      }
+      // worker was seen but has no route: nothing marks it, and there is no chip.
+      expect(container.querySelectorAll('[aria-label*="Live Traffic"]').length).toBe(all.length)
+      expect(button('Traffic seen')).toBeUndefined()
+    }
+    render('/checks/vulnerabilities?by=image')
+    for (const m of Array.from(marks())) {
+      expect(m.getAttribute('aria-label')).not.toContain('Live Traffic')
+      expect(m.querySelector('span.rounded-full')).toBeNull()
+    }
+  })
+
+  it('offers Traffic seen as an opt-in filter, remembered per browser', () => {
+    localStorage.clear()
+    const chip = () => Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.startsWith('Traffic seen'))
+    const openMenu = () => act(() => container.querySelector<HTMLButtonElement>('button[aria-label="More actions"]')!.click())
+    const menuItem = (label: string) => Array.from(container.querySelectorAll<HTMLButtonElement>('[role="menu"] [role^="menuitem"]')).find((b) => b.textContent === label)
+
+    render('/checks/vulnerabilities?by=image', true, true)
+    expect(chip()).toBeUndefined()
+    openMenu()
+    expect(menuItem('Show Traffic seen filter')!.getAttribute('aria-checked')).toBe('false')
+    act(() => menuItem('Show Traffic seen filter')!.click())
+    expect(JSON.parse(localStorage.getItem('radar-vulnerability-filters')!)).toMatchObject({ traffic: true })
+    expect(chip()!.textContent).toContain('2')
+    act(() => chip()!.click())
+    expect(urlParams().get('traffic')).toBe('1')
+    expect(lastParams().trafficSeen).toBe(true)
+    // It counts as a filter: the match line offers to clear it.
+    act(() => button('Clear filters')!.click())
+    expect(urlParams().has('traffic')).toBe(false)
+
+    // A link that sets it shows the chip without the choice. A fresh root:
+    // MemoryRouter only reads its entries when it mounts.
+    localStorage.clear()
+    act(() => root.unmount())
+    root = createRoot(container)
+    render('/checks/vulnerabilities?by=image&traffic=1', true, true)
+    expect(chip()!.getAttribute('aria-pressed')).toBe('true')
+
+    // No traffic answer: nothing to offer (here the menu has nothing at all).
+    render('/checks/vulnerabilities?by=image')
+    if (container.querySelector('button[aria-label="More actions"]')) openMenu()
+    expect(menuItem('Show Traffic seen filter')).toBeUndefined()
+    expect(chip()).toBeUndefined()
+    localStorage.clear()
   })
 
   it('counts the exposed workloads beside the mark on rows that span workloads', () => {

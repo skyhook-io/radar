@@ -411,7 +411,7 @@ func TestFindingsBudgetReadsExposedImagesFirst(t *testing.T) {
 func TestExportExposedWorkloads(t *testing.T) {
 	items, targets := exposureFixture()
 	resp := mustExport(t, items, targets, ViewFix, Filter{})
-	if cols := ExportColumns[ViewFix]; cols[len(cols)-1] != "exposed_workloads" {
+	if cols := ExportColumns[ViewFix]; !slices.Contains(cols, "exposed_workloads") {
 		t.Fatalf("header: %v", cols)
 	}
 	// libxml's Critical sorts first, openssl's exposed High second.

@@ -3,7 +3,7 @@ import { useMutation } from '@tanstack/react-query'
 import { WithTooltip } from '../ui/Tooltip'
 import { useSearchParams } from 'react-router-dom'
 import { clsx } from 'clsx'
-import { AlertTriangle, ArrowDownWideNarrow, CircleDashed, FileSpreadsheet, ExternalLink, Info, Search, ShieldAlert, ShieldCheck, X } from 'lucide-react'
+import { Activity, AlertTriangle, ArrowDownWideNarrow, CircleDashed, FileSpreadsheet, ExternalLink, Info, Search, ShieldAlert, ShieldCheck, X } from 'lucide-react'
 import {
   Collapse,
   CollapseChevron,
@@ -78,6 +78,11 @@ import {
   imageParts,
   gapSentence,
   WorkloadSummary,
+  TrafficSeenContext,
+  trafficSeenOf,
+  TRAFFIC_FILTER,
+  exposedTip,
+  useTrafficSeen,
   ExposedMark,
   exposureLookup,
   routesFor,
@@ -137,6 +142,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   const fixableOnly = params.get('fixable') === '1'
   const exposedOnly = params.get('exposed') === '1'
   const eolOnly = params.get('eol') === '1'
+  const trafficOnly = params.get('traffic') === '1'
   const optional = useOptionalColumns()
   const optionalFilters = useOptionalFilters()
   const queryDraft = params.get('q') ?? ''
@@ -155,7 +161,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
     mutate(next)
     setParams(next, { replace: !push })
   }
-  const tableParams: VulnerabilitiesParams = { view, namespaces, severities, fixableOnly, exposed: exposedOnly, osEndOfLife: eolOnly, query, workload }
+  const tableParams: VulnerabilitiesParams = { view, namespaces, severities, fixableOnly, exposed: exposedOnly, osEndOfLife: eolOnly, trafficSeen: trafficOnly, query, workload }
   const { data, isLoading, isFetching, isPlaceholderData, error, dataUpdatedAt, refetch } = useVulnerabilities(tableParams, !reportsAbsent)
   const hasReports = !reportsAbsent && (hasVulnerabilityReports(resources) || !!data)
   const trivySearch = new URLSearchParams({ by: 'cve', q: JAVA4SHELL_CVE })
@@ -214,8 +220,12 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   // to filter to, and always while a link sets it.
   const eolChip = eolCount !== undefined && (eolOnly || (optionalFilters.shown('eol') && eolCount > 0))
   // Optional filters this Radar can apply: an older one sends no end-of-life count.
-  const filterAvailable = (key: string) => key !== 'eol' || eolCount !== undefined
-  const filtered = severities.length > 0 || (fixableOnly && view !== 'fix') || (exposedOnly && !!exposure) || (eolOnly && eolCount !== undefined) || query !== '' || !!workload
+  const filterAvailable = (key: string) => (key !== 'eol' || eolCount !== undefined) && (key !== 'traffic' || !!data.traffic)
+  // Live Traffic's optional chip: only a positive signal, so it shows only
+  // when a source answered and saw something, or while a link sets it.
+  const traffic = data.traffic
+  const trafficChip = !!traffic && (trafficOnly || (optionalFilters.shown('traffic') && traffic.workloadsTotal > 0))
+  const filtered = severities.length > 0 || (fixableOnly && view !== 'fix') || (exposedOnly && !!exposure) || (eolOnly && eolCount !== undefined) || (trafficOnly && !!traffic) || query !== '' || !!workload
   // Narrowed only to a workload whose images are all clean or unscanned:
   // the folds below list them, so "nothing matches" would mislead.
   const workloadFolds = !!workload && (view === 'image' || view === 'workload') && severities.length === 0 && !fixableOnly && query === '' &&
@@ -227,7 +237,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   // A new view or filter starts again from the first page of rows.
   // Every filter lives in the URL; the view and the namespace scope aren't filters.
   const clearFilters = () => update((p) => { for (const key of [...p.keys()]) if (!KEEP_ON_CLEAR.has(key)) p.delete(key) }, true)
-  const pageKey = JSON.stringify([view, namespaces, severities, fixableOnly, exposedOnly, eolOnly, query, workload])
+  const pageKey = JSON.stringify([view, namespaces, severities, fixableOnly, exposedOnly, eolOnly, trafficOnly, query, workload])
   const fixChip = known && view !== 'fix'
   return (
     <div aria-busy={isFetching} className="flex-1 flex flex-col min-h-0 p-4 gap-4 overflow-auto">
@@ -287,7 +297,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
               onClick={() => toggleSeverity(s.key)}
             />
           ))}
-          {known && (fixChip || exposure || eolChip) && <span aria-hidden className="mx-1.5 h-5 w-px bg-theme-border" />}
+          {known && (fixChip || exposure || eolChip || trafficChip) && <span aria-hidden className="mx-1.5 h-5 w-px bg-theme-border" />}
           {fixChip && <FilterPill label="Fix available" tooltip="Only findings the scanner lists a fixed release for" active={fixableOnly} onClick={() => update((p) => (fixableOnly ? p.delete('fixable') : p.set('fixable', '1')))} />}
           {exposure && (
             <FilterPill
@@ -296,6 +306,16 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
               tooltip={EXPOSURE.chipTip}
               active={exposedOnly}
               onClick={() => update((p) => (exposedOnly ? p.delete('exposed') : p.set('exposed', '1')))}
+            />
+          )}
+          {trafficChip && traffic && (
+            <FilterPill
+              label={TRAFFIC_FILTER.chip(traffic)}
+              icon={Activity}
+              count={traffic.workloadsTotal}
+              tooltip={TRAFFIC_FILTER.chipTip(traffic)}
+              active={trafficOnly}
+              onClick={() => update((p) => (trafficOnly ? p.delete('traffic') : p.set('traffic', '1')))}
             />
           )}
           {eolChip && (
@@ -353,7 +373,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
       {data.view !== view ? (
         <PaneLoader label="Reading vulnerability reports…" className="min-h-48" />
       ) : (
-        <>
+        <TrafficSeenContext.Provider value={trafficSeenOf(traffic)}>
         {rows.length === 0 ? (
           <EmptyState
             tone="neutral"
@@ -393,7 +413,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
           <CleanList data={data} view={view} onOpen={(w) => onNavigateToResource(toResource(w))} />
         )}
         <UnscannedList data={data} onOpen={(w) => onNavigateToResource(toResource(w))} />
-        </>
+        </TrafficSeenContext.Provider>
       )}
     </div>
   )
@@ -988,13 +1008,14 @@ function WorkloadTable({ workloads, exposure, severities, query, namespaces, onO
 // The workload's routes from outside the cluster; empty when none was seen,
 // Unknown where Radar couldn't read a route kind in its namespace.
 function WorkloadRoute({ workload: w, gaps }: { workload: VulnerabilityWorkload; gaps?: VulnerabilityGap[] }) {
+  const traffic = useTrafficSeen(w)
   const routes = w.routes ?? []
   const total = w.routesTotal ?? routes.length
   if (routes.length > 0) {
     return (
-      <WithTooltip tip={routesTip(routes, total)}>
+      <WithTooltip tip={exposedTip(routesTip(routes, total), traffic)}>
         <span className="flex min-w-0 items-center gap-1 truncate text-xs text-theme-text-secondary">
-          <ExposedMark tip={routesTip(routes, total)} />
+          <ExposedMark tip={routesTip(routes, total)} workload={w} />
           {routeText(routes[0])}{total > 1 && <span className="text-theme-text-tertiary"> and {total - 1} more</span>}
         </span>
       </WithTooltip>

@@ -989,6 +989,9 @@ func hubbleFlowsRequest(opts FlowOptions, follow bool) *observerpb.GetFlowsReque
 			req.Whitelist = match
 		}
 	}
+	if opts.FromOutsideOnly {
+		req.Whitelist = hubbleFromOutside(req.Whitelist)
+	}
 	req.Blacklist = []*flowpb.FlowFilter{
 		// Reply packets at L3/L4 are dropped by callerOrientedFlow anyway;
 		// excluding them here stops them spending the per-node limit, which on a
@@ -1049,6 +1052,31 @@ var hubbleFlowFields = []string{
 
 // hubbleHostLabels are the identities classifyNonPodIdentity reports as Host.
 var hubbleHostLabels = []string{"reserved:host", "reserved:remote-node", "reserved:kube-apiserver"}
+
+// hubbleWorldLabels are the identities of addresses outside the cluster.
+// Cilium gives a CIDR identity its world label too, so these cover the
+// CIDR identities classifyNonPodIdentity reports as External.
+var hubbleWorldLabels = []string{"reserved:world", "reserved:world-ipv4", "reserved:world-ipv6"}
+
+// hubbleFromOutside narrows a whitelist to flows from outside the cluster:
+// each filter (they are OR'd) also requires a world source, so a busy
+// cluster's internal traffic doesn't fill each node's limit. Labels within
+// one field are OR'd, so a filter that already names source labels is left
+// as it is rather than widened.
+func hubbleFromOutside(whitelist []*flowpb.FlowFilter) []*flowpb.FlowFilter {
+	if len(whitelist) == 0 {
+		return []*flowpb.FlowFilter{{SourceLabel: hubbleWorldLabels}}
+	}
+	out := make([]*flowpb.FlowFilter, len(whitelist))
+	for i, f := range whitelist {
+		c := proto.Clone(f).(*flowpb.FlowFilter)
+		if len(c.SourceLabel) == 0 {
+			c.SourceLabel = hubbleWorldLabels
+		}
+		out[i] = c
+	}
+	return out
+}
 
 func hubbleNamespaces(opts FlowOptions) []string {
 	if len(opts.Namespaces) > 0 {

@@ -1,8 +1,9 @@
 import { clsx } from 'clsx'
+import { createContext, useContext } from 'react'
 import { Globe } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { WithTooltip } from '../ui/Tooltip'
-import { CertaintyGlyph, gapReasonText, VULN_SEVERITY_BADGE, VULN_SEVERITY_BAR, VULN_SEVERITY_TEXT, type Certainty } from '@skyhook-io/k8s-ui'
+import { CertaintyGlyph, gapReasonText, StatusDot, VULN_SEVERITY_BADGE, VULN_SEVERITY_BAR, VULN_SEVERITY_TEXT, type Certainty } from '@skyhook-io/k8s-ui'
 import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import type {
   ExposedWorkload,
@@ -11,6 +12,7 @@ import type {
   VulnerabilityGap,
   VulnerabilityRoute,
   VulnerabilitySeverity,
+  VulnerabilityTraffic,
   VulnerabilityWorkloadRef,
 } from '../../api/vulnerabilities'
 
@@ -187,13 +189,87 @@ export const EXPOSURE = {
   unknownTip: "Radar couldn't read every route kind that could reach this workload, so it may be exposed.",
 }
 
-/** The mark on a workload with a route from outside the cluster; absence gets none. */
-export function ExposedMark({ exposed, tip }: { exposed?: ExposedWorkload; tip?: string }) {
-  const text = tip ?? (exposed ? routesTip(exposed.routes, exposed.routesTotal) : undefined)
+const TRAFFIC_SOURCES: Record<string, string> = { hubble: 'Hubble', caretta: 'Caretta', beyla: 'Beyla', istio: 'Istio' }
+
+/** "15 minutes", "1 hour", "40 seconds". */
+export function trafficWindowText(seconds: number): string {
+  const unit = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
+  if (seconds >= 3600 && seconds % 3600 === 0) return unit(seconds / 3600, 'hour')
+  if (seconds >= 60) return unit(Math.round(seconds / 60), 'minute')
+  return unit(seconds, 'second')
+}
+
+/**
+ * What Live Traffic's evidence on an exposed workload claims: the source, the
+ * window and what counted. Only ever a positive signal, so nothing reads "no
+ * traffic". Hubble tells callers outside the cluster from nodes, so it counts
+ * only those; the other sources can't, so they count any caller but a node
+ * (where health checks come from).
+ */
+export function trafficSentence(t: VulnerabilityTraffic): string {
+  const source = TRAFFIC_SOURCES[t.source] ?? t.source
+  const window = t.historyLimited
+    ? `within the last ${trafficWindowText(t.windowSeconds)}, as far back as ${source}'s flow history reaches`
+    : `in the last ${trafficWindowText(t.windowSeconds)}`
+  if (t.fromOutside) {
+    return `Live Traffic (${source}) saw connections to it from outside the cluster ${window}. A client whose address a node rewrote (SNAT) reads as that node and isn't counted.`
+  }
+  return `Live Traffic (${source}) saw connections to it ${window}. ${source} can't tell callers outside the cluster from nodes, so this counts callers inside the cluster too. Connections from nodes, such as health checks, aren't counted.`
+}
+
+/**
+ * The optional Traffic seen filter, off until turned on from the page's menu.
+ * It keeps rows with a workload Live Traffic saw, routed or not, and says
+ * nothing about the rest.
+ */
+export const TRAFFIC_FILTER = {
+  chip: (t: VulnerabilityTraffic) => (t.fromOutside ? 'Traffic from outside' : 'Traffic seen'),
+  chipTip(t: VulnerabilityTraffic): string {
+    const what = t.fromOutside ? 'receive connections from outside the cluster' : 'receive connections'
+    const source = TRAFFIC_SOURCES[t.source] ?? t.source
+    return `Only rows affecting a workload Live Traffic (${source}) saw ${what} in the last ${trafficWindowText(t.windowSeconds)}. A workload it didn't see may still be reachable.`
+  },
+}
+
+const workloadKey = (w: WorkloadKey) => `${w.kind}/${w.namespace}/${w.name}`
+
+/** The answer's workloads Live Traffic saw, for marking exposed ones. */
+export type TrafficSeen = { traffic: VulnerabilityTraffic; seen: Set<string> }
+
+export function trafficSeenOf(traffic: VulnerabilityTraffic | undefined): TrafficSeen | null {
+  return traffic ? { traffic, seen: new Set(traffic.workloads.map(workloadKey)) } : null
+}
+
+/** Set by the Vulnerabilities view; elsewhere no mark is active. */
+export const TrafficSeenContext = createContext<TrafficSeen | null>(null)
+
+/** The traffic answer when Live Traffic saw this workload, else undefined. */
+export function useTrafficSeen(w: WorkloadKey | undefined): VulnerabilityTraffic | undefined {
+  const t = useContext(TrafficSeenContext)
+  return w && t?.seen.has(workloadKey(w)) ? t.traffic : undefined
+}
+
+/** An exposed workload's tooltip: its routes, then Live Traffic's evidence when it saw some. */
+export function exposedTip(routes: string, traffic: VulnerabilityTraffic | undefined): string {
+  return traffic ? `${routes}. ${trafficSentence(traffic)}` : routes
+}
+
+/**
+ * The mark on a workload with a route from outside the cluster; absence gets
+ * none. Active (a dot on the globe) when Live Traffic saw it receive
+ * connections; the tooltip then says what was seen.
+ */
+export function ExposedMark({ exposed, tip, workload }: { exposed?: ExposedWorkload; tip?: string; workload?: WorkloadKey }) {
+  const traffic = useTrafficSeen(workload ?? exposed)
+  const routes = tip ?? (exposed ? routesTip(exposed.routes, exposed.routesTotal) : undefined)
+  const text = routes === undefined ? undefined : exposedTip(routes, traffic)
   const Icon = EXPOSURE.icon
   return (
     <WithTooltip tip={text}>
-      <Icon className="h-3 w-3 shrink-0 self-center text-theme-text-secondary" role="img" aria-label={text} />
+      <span className="relative inline-flex shrink-0 self-center" role="img" aria-label={text}>
+        <Icon className={clsx('h-3 w-3', traffic ? 'text-theme-text-primary' : 'text-theme-text-secondary')} aria-hidden />
+        {traffic && <StatusDot tone="healthy" size="sm" className="absolute -right-0.5 -top-0.5" />}
+      </span>
     </WithTooltip>
   )
 }

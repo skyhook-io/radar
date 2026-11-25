@@ -341,6 +341,8 @@ type rollup struct {
 	// namespace.
 	exposureGaps *Exposure
 	unknownIn    map[string]bool
+	// traffic is what Live Traffic saw; nil without a traffic source.
+	traffic *trafficIndex
 }
 
 // join matches reports to what runs. A report counts when its scanned object
@@ -548,6 +550,12 @@ func build(ctx context.Context, items []*unstructured.Unstructured, targets []ta
 // sorts above those with none (see exposureTier). Nil reads as every route
 // read.
 func buildWithExposure(ctx context.Context, items []*unstructured.Unstructured, targets []target, view View, f Filter, export bool, exposure *Exposure) (Response, error) {
+	return buildWith(ctx, items, targets, view, f, export, exposure, nil)
+}
+
+// buildWith is buildWithExposure with what Live Traffic saw; nil reads as
+// no traffic source.
+func buildWith(ctx context.Context, items []*unstructured.Unstructured, targets []target, view View, f Filter, export bool, exposure *Exposure, traffic *TrafficEvidence) (Response, error) {
 	var first func(WorkloadRef) bool
 	if f.Workload != nil {
 		first = newMatcher(f).wanted
@@ -562,7 +570,8 @@ func buildWithExposure(ctx context.Context, items []*unstructured.Unstructured, 
 	}
 	j.refsLeft, j.budgeted = maxExportRefs, export
 	j.exposureGaps, j.unknownIn = exposure, map[string]bool{}
-	resp := Response{Source: SourceTrivyOperator, View: view, Summary: j.summary(), Exposure: &Exposure{}}
+	j.traffic = newTrafficIndex(traffic, targets)
+	resp := Response{Source: SourceTrivyOperator, View: view, Summary: j.summary(), Exposure: &Exposure{}, Traffic: j.traffic.answer(targets, lim.rows)}
 	extras := &exportExtras{}
 	resp.WorkloadRuns = f.Workload != nil && slices.ContainsFunc(targets, func(t target) bool { return newMatcher(f).wanted(t.workload) })
 	if view != ViewSummary {
@@ -685,6 +694,10 @@ type matcher struct {
 	// exposed reports whether a workload has a route from outside the
 	// cluster; nil reads as none.
 	exposed func(WorkloadRef) bool
+	// traffic reports whether Live Traffic saw a workload receive
+	// connections; nil when no source answered, and TrafficSeenOnly then
+	// keeps everything.
+	traffic func(WorkloadRef) bool
 }
 
 func newMatcher(f Filter) matcher {
@@ -724,7 +737,8 @@ func (m matcher) findingMatches(f Finding, rowMatched bool) bool {
 
 func (m matcher) workloadKept(workloads []WorkloadRef) bool {
 	return (m.f.Workload == nil || slices.ContainsFunc(workloads, m.wanted)) &&
-		(!m.f.ExposedOnly || slices.ContainsFunc(workloads, m.isExposed))
+		(!m.f.ExposedOnly || slices.ContainsFunc(workloads, m.isExposed)) &&
+		(!m.f.TrafficSeenOnly || m.traffic == nil || slices.ContainsFunc(workloads, m.traffic))
 }
 
 // imageKept is whether an image passes the image filters: the OS end of
@@ -822,7 +836,17 @@ func exposureTier(exposed, unknown bool) int {
 func (j *rollup) match(f Filter) matcher {
 	m := newMatcher(f)
 	m.exposed = j.exposed
+	if j.traffic != nil {
+		m.traffic = j.trafficSeen
+	}
 	return m
+}
+
+// trafficSeen is whether Live Traffic saw a workload receive connections; a
+// reference's container doesn't matter.
+func (j *rollup) trafficSeen(w WorkloadRef) bool {
+	w.Container = ""
+	return j.traffic.seen(w)
 }
 
 // exposedWorkloads are the exposed ones among a row's workloads, each once
@@ -1239,6 +1263,7 @@ func (j *rollup) workloads(f Filter) (rows, clean, unscanned []Workload) {
 		routes := j.exposure[ref]
 		a.row.Routes, a.row.RoutesTotal = routes[:min(len(routes), j.lim.routesPerWorkload)], len(routes)
 		a.row.ExposureUnknown = len(routes) == 0 && j.exposureUnknownIn(ref.Namespace)
+		a.row.TrafficSeen = j.trafficSeen(ref)
 		images := make([]string, 0, len(a.row.Containers))
 		allClean := true
 		for _, c := range a.row.Containers {
