@@ -85,6 +85,11 @@ const VersionWarning = "This OpenObserve version ignores filters on labels a met
 // NameMatchWarning is the standing warning on a cluster matched by name.
 const NameMatchWarning = "Matched by cluster name. If another cluster writes metrics under the same name, Radar cannot tell them apart. Add a radar_cluster_uid label with this cluster's kube-system namespace UID to match by ID."
 
+// CollectorNoIDWarning is added when the collector sending the confirmed name
+// reports no cluster ID: collectors without one can't be told apart, so
+// Radar can't check that only one of them sends the name.
+const CollectorNoIDWarning = "The OpenObserve collector sending this name reports no cluster ID, so Radar couldn't check whether another collector sends the same name. Set k8s_cluster_uid on the collector to match by ID."
+
 // ErrUnsafeDefault refuses the collector chart's default cluster name as a filter.
 var ErrUnsafeDefault = errors.New(`openobserve: "cluster1" is a default cluster name shared by many clusters and cannot identify this one`)
 
@@ -545,6 +550,9 @@ func ConfirmedNameMatch(ctx context.Context, t prom.Transport, label, value, own
 		}
 	}
 	m.By, m.Label, m.Value, m.Name, m.Warning = "name", label, value, value, NameMatchWarning
+	if m.Dialect == DialectCollector && m.Options.CollectorUID == "" {
+		m.Warning += " " + CollectorNoIDWarning
+	}
 	missing, err := DetectFamilies(ctx, dt, m.Options)
 	if err != nil {
 		return ClusterMatch{}, err

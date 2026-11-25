@@ -365,8 +365,15 @@ func TestConfirmedNameMatchCollector(t *testing.T) {
 	noUID := &routeStore{routes: []route{
 		{match: []string{`k8s_pod_cpu_time{k8s_cluster="prod-a"}`}, rows: []map[string]string{{"k8s_cluster": "prod-a"}}},
 	}}
-	if _, err := ConfirmedNameMatch(context.Background(), noUID, "k8s_cluster", "prod-a", uidB); err != nil {
+	nm, err := ConfirmedNameMatch(context.Background(), noUID, "k8s_cluster", "prod-a", uidB)
+	if err != nil {
 		t.Fatalf("collector without ID refused: %v", err)
+	}
+	if !strings.Contains(nm.Warning, CollectorNoIDWarning) {
+		t.Fatalf("collector without ID warning = %q", nm.Warning)
+	}
+	if strings.Contains(m.Warning, CollectorNoIDWarning) {
+		t.Fatalf("collector with ID warned about a missing ID: %q", m.Warning)
 	}
 }
 

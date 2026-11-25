@@ -8,6 +8,7 @@ vi.mock('../../hooks/usePreviousIntegrationSettings', () => ({ usePreviousIntegr
 import type { WorkloadMetrics } from '../../api/workloadMetrics'
 
 let connected = false
+let source: Record<string, unknown> | undefined
 const ranges: string[] = []
 const charts: { seriesLabels?: string[]; referenceLines?: unknown[] }[] = []
 let workload: WorkloadMetrics
@@ -18,7 +19,7 @@ let metricsByCategory: Record<string, Record<string, unknown>> = {}
 vi.mock('../../api/client', async (importActual) => ({
   ...(await importActual<typeof import('../../api/client')>()),
   useAutoPromConnect: () => undefined,
-  usePrometheusStatus: () => ({ data: { connected, error: 'Backend query failed' } }),
+  usePrometheusStatus: () => ({ data: { connected, error: 'Backend query failed', source } }),
   usePrometheusConnect: () => ({ mutate: vi.fn(), isPending: false }),
   usePrometheusResourceMetrics: (_kind: string, _ns: string, _name: string, category: string, range: string, enabled = true) => {
     if (enabled) ranges.push(range)
@@ -44,6 +45,7 @@ const render = (url = '/workloads/Deployment/demo/web?tab=metrics', embedded = f
 
 beforeEach(() => {
   connected = false
+  source = undefined
   ranges.length = 0
   charts.length = 0
   resourceMetrics = drawnMetrics
@@ -52,6 +54,27 @@ beforeEach(() => {
 })
 
 describe('Expanded metrics recovery and scope', () => {
+  it('shows one unavailable state instead of querying charts when OpenObserve through Hub is down', () => {
+    connected = true
+    source = { kind: 'openobserve', via: 'hub', unavailable: true, error: 'Radar Hub could not reach OpenObserve' }
+    const html = render()
+    expect(html).toContain('OpenObserve unavailable')
+    expect(html).toContain('Radar Hub could not reach OpenObserve')
+    expect(html).toContain('through Radar Hub')
+    expect(html).not.toContain('Discover Prometheus')
+    expect(html).not.toContain('Configure metrics')
+    expect(ranges).toEqual([])
+  })
+
+  it('offers metrics settings when the saved local OpenObserve connection is down', () => {
+    connected = true
+    source = { kind: 'openobserve', via: 'local', unavailable: true }
+    const html = render()
+    expect(html).toContain('saved OpenObserve connection')
+    expect(html).toContain('Configure metrics')
+    expect(ranges).toEqual([])
+  })
+
   it('offers standalone setup without losing the backend error or retry', () => {
     const html = render()
     expect(html).toContain('Backend query failed')

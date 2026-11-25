@@ -162,6 +162,29 @@ export function PrometheusChartsGrid({
     );
   }
 
+  if (status?.source?.kind === "openobserve" && status.source.unavailable) {
+    const viaHub = status.source.via === "hub";
+    return (
+      <div className="flex flex-col items-center justify-center py-12 gap-4">
+        <WifiOff className="w-10 h-10 text-theme-text-quaternary" />
+        <div className="text-center">
+          <p className="text-sm text-theme-text-secondary mb-1">OpenObserve unavailable</p>
+          {status.source.error && <p className="text-xs text-theme-text-tertiary mb-1">{status.source.error}</p>}
+          <p className="text-xs text-theme-text-tertiary">
+            {viaHub
+              ? "This cluster's metrics come from OpenObserve through Radar Hub. Charts come back when it answers again."
+              : "This cluster's metrics come from the saved OpenObserve connection. Charts come back when it answers again."}
+          </p>
+          {!viaHub && settingsAvailable && <button
+            type="button"
+            className="mt-3 text-sm text-accent hover:underline"
+            onClick={() => window.dispatchEvent(new CustomEvent('radar:open-settings', { detail: { section: 'prometheus' } }))}
+          >Configure metrics</button>}
+        </div>
+      </div>
+    );
+  }
+
   if (!isConnected) {
     return (
       <div className="flex flex-col items-center justify-center py-12 gap-4">

@@ -197,8 +197,20 @@ func TestRewritingTransportMatch(t *testing.T) {
 	}
 }
 
+func TestRewritingTransportRefusesRules(t *testing.T) {
+	f := &fakeOO{body: `{"status":"success","data":{"groups":[]}}`}
+	rt, _ := newRewriting(t, f)
+	_, err := rt.Do(context.Background(), http.MethodGet, "/api/v1/rules", url.Values{"type": {"alert"}})
+	if !errors.Is(err, prom.ErrQueryRefused) || !errors.Is(err, ErrRulesUnscoped) {
+		t.Fatalf("err = %v, want a refused rules request", err)
+	}
+	if f.count() != 0 {
+		t.Fatal("rules request reached the server")
+	}
+}
+
 func TestRewritingTransportPassthrough(t *testing.T) {
-	for _, path := range []string{"/api/v1/metadata", "/api/v1/rules"} {
+	for _, path := range []string{"/api/v1/metadata"} {
 		f := &fakeOO{body: `{"status":"success","data":{}}`}
 		rt, _ := newRewriting(t, f)
 		body, err := rt.Do(context.Background(), http.MethodGet, path, url.Values{"metric": {"Up"}})

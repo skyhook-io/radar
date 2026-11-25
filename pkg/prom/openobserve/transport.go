@@ -79,7 +79,12 @@ const (
 	pathSeries
 	pathLabels
 	pathPassthrough
+	pathRules
 )
+
+// ErrRulesUnscoped refuses alerting and recording rules on a shared
+// OpenObserve: they can't be limited to one cluster.
+var ErrRulesUnscoped = errors.New("alerting and recording rules aren't available from a shared OpenObserve: they can't be limited to one cluster")
 
 func classifyPath(path string) (pathKind, string) {
 	switch path {
@@ -89,8 +94,10 @@ func classifyPath(path string) (pathKind, string) {
 		return pathSeries, path
 	case "/api/v1/labels":
 		return pathLabels, path
-	case "/api/v1/metadata", "/api/v1/rules":
+	case "/api/v1/metadata":
 		return pathPassthrough, path
+	case "/api/v1/rules":
+		return pathRules, path
 	}
 	const prefix, suffix = "/api/v1/label/", "/values"
 	if strings.HasPrefix(path, prefix) && strings.HasSuffix(path, suffix) && len(path) > len(prefix)+len(suffix) {
@@ -117,6 +124,11 @@ func (t *RewritingTransport) Do(ctx context.Context, method, path string, params
 	kind, outPath := classifyPath(path)
 	if kind == pathRefused {
 		return nil, fmt.Errorf("openobserve: path %q is not allowed", path)
+	}
+	// Rule groups and their alerts come back for every cluster in the
+	// organization, with nothing Radar can filter on reliably.
+	if kind == pathRules {
+		return nil, &prom.RefusedError{Message: ErrRulesUnscoped.Error(), Err: ErrRulesUnscoped}
 	}
 
 	// Old stores answer a label-name listing from every series of the named
