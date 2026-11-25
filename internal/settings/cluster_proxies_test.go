@@ -2,6 +2,7 @@ package settings
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -79,5 +80,33 @@ func TestClusterProxiesRefusesANullFile(t *testing.T) {
 	}
 	if err := SetClusterProxy("staging", "http://other:3128"); err == nil {
 		t.Fatal("saving over a null store must be refused")
+	}
+}
+
+// The store carries credentials: a temp file someone left readable at a
+// predictable path must not become the store.
+func TestSetClusterProxyDoesNotReuseALooseTempFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+	t.Setenv("USERPROFILE", tmpDir)
+	if err := os.MkdirAll(filepath.Dir(clusterProxiesPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	loose := clusterProxiesPath() + ".tmp"
+	if err := os.WriteFile(loose, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(loose, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetClusterProxy("prod", "socks5://user:secret@bastion:1080"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(clusterProxiesPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("store mode = %o, want 600", perm)
 	}
 }

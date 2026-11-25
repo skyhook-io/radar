@@ -76,13 +76,18 @@ func SetClusterProxy(binding, proxyURL string) error {
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	// CreateTemp makes a new 0600 file, never reusing one left at a fixed path.
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".cluster-proxies-*.json")
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
 		return err
 	}
-	return nil
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
