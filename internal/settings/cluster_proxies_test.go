@@ -4,6 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/gofrs/flock"
 )
 
 func TestSetClusterProxy(t *testing.T) {
@@ -108,5 +111,37 @@ func TestSetClusterProxyDoesNotReuseALooseTempFile(t *testing.T) {
 	}
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Fatalf("store mode = %o, want 600", perm)
+	}
+}
+
+// Desktop and the CLI share the store: a save waits for another process's
+// read-modify-write instead of overwriting it.
+func TestSetClusterProxyWaitsForAnotherProcess(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+	t.Setenv("USERPROFILE", tmpDir)
+	if err := os.MkdirAll(filepath.Dir(clusterProxiesPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	other := flock.New(clusterProxiesPath() + ".lock")
+	if err := other.Lock(); err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	done := make(chan error, 1)
+	go func() { done <- SetClusterProxy("prod", "http://proxy:3128") }()
+	select {
+	case err := <-done:
+		t.Fatalf("saved while another process held the lock: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if err := other.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := ClusterProxies(); got["prod"] != "http://proxy:3128" {
+		t.Fatalf("after the lock was released: %v", got)
 	}
 }

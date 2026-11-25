@@ -1,11 +1,16 @@
 package settings
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
+
+	"github.com/gofrs/flock"
 )
 
 // Cluster proxies live in their own file, not in Settings: /api/settings
@@ -60,6 +65,19 @@ func SetClusterProxy(binding, proxyURL string) error {
 	if path == "" {
 		return os.ErrNotExist
 	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	// proxiesMu covers this process; the file lock covers another Radar
+	// (Desktop and the CLI) saving to the same store.
+	lock := flock.New(path+".lock", flock.SetPermissions(0o600))
+	defer lock.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if locked, err := lock.TryLockContext(ctx, 10*time.Millisecond); err != nil || !locked {
+		return errors.Join(errors.New("another Radar is saving cluster proxies; try again"), err)
+	}
+	defer lock.Unlock()
 	proxies, err := loadClusterProxies()
 	if err != nil {
 		return err
@@ -68,9 +86,6 @@ func SetClusterProxy(binding, proxyURL string) error {
 		delete(proxies, binding)
 	} else {
 		proxies[binding] = proxyURL
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
 	}
 	data, err := json.MarshalIndent(proxies, "", "  ")
 	if err != nil {
