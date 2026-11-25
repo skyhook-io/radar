@@ -54,7 +54,6 @@ func (s *Server) handleWorkflowStop(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "strategy must be Terminate or Stop")
 		return
 	}
-
 	if req.UID == "" {
 		s.writeError(w, http.StatusBadRequest, "uid is required")
 		return
@@ -66,36 +65,44 @@ func (s *Server) handleWorkflowStop(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
 		return
 	}
-	wf, err := client.Resource(argoWorkflowGVR).Namespace(namespace).Get(r.Context(), name, metav1.GetOptions{})
-	if err != nil {
-		s.writeWorkflowStopError(w, err, namespace, name, "read")
+	workflows := client.Resource(argoWorkflowGVR).Namespace(namespace)
+	const maxPatchAttempts = 4
+	for attempt := 1; attempt <= maxPatchAttempts; attempt++ {
+		wf, err := workflows.Get(r.Context(), name, metav1.GetOptions{})
+		if err != nil {
+			s.writeWorkflowStopError(w, err, namespace, name, "read")
+			return
+		}
+		if req.UID != string(wf.GetUID()) {
+			s.writeErrorCode(w, http.StatusConflict, "workflow_replaced", "a different workflow now has this name")
+			return
+		}
+		if k8s.IsWorkflowTerminal(wf.Object) {
+			s.writeErrorCode(w, http.StatusConflict, "workflow_finished", "the workflow has already finished")
+			return
+		}
+		if current, _, _ := unstructured.NestedString(wf.Object, "spec", "shutdown"); current == "Terminate" || current == req.Strategy {
+			s.writeJSON(w, WorkflowStopResponse{Shutdown: current})
+			return
+		}
+		if req.ResourceVersion != "" && req.ResourceVersion != wf.GetResourceVersion() {
+			s.writeErrorCode(w, http.StatusConflict, "workflow_changed", "the workflow changed before stopping it; look again")
+			return
+		}
+		updated, err := integration.ApplyVersionedMergePatch(r.Context(), client, argoWorkflowGVR, wf, map[string]any{
+			"spec": map[string]any{"shutdown": req.Strategy},
+		})
+		if apierrors.IsConflict(err) && req.ResourceVersion == "" && attempt < maxPatchAttempts {
+			continue
+		}
+		if err != nil {
+			s.writeWorkflowStopError(w, err, namespace, name, "patch")
+			return
+		}
+		shutdown, _, _ := unstructured.NestedString(updated.Object, "spec", "shutdown")
+		s.writeJSON(w, WorkflowStopResponse{Shutdown: shutdown, Changed: true})
 		return
 	}
-	if req.UID != string(wf.GetUID()) {
-		s.writeErrorCode(w, http.StatusConflict, "workflow_replaced", "a different workflow now has this name")
-		return
-	}
-	if k8s.IsWorkflowTerminal(wf.Object) {
-		s.writeErrorCode(w, http.StatusConflict, "workflow_finished", "the workflow has already finished")
-		return
-	}
-	if current, _, _ := unstructured.NestedString(wf.Object, "spec", "shutdown"); current == "Terminate" || (current == "Stop" && req.Strategy == "Stop") {
-		s.writeJSON(w, WorkflowStopResponse{Shutdown: current})
-		return
-	}
-	if req.ResourceVersion != "" && req.ResourceVersion != wf.GetResourceVersion() {
-		s.writeErrorCode(w, http.StatusConflict, "workflow_changed", "the workflow changed before stopping it; look again")
-		return
-	}
-	updated, err := integration.ApplyVersionedMergePatch(r.Context(), client, argoWorkflowGVR, wf, map[string]any{
-		"spec": map[string]any{"shutdown": req.Strategy},
-	})
-	if err != nil {
-		s.writeWorkflowStopError(w, err, namespace, name, "patch")
-		return
-	}
-	shutdown, _, _ := unstructured.NestedString(updated.Object, "spec", "shutdown")
-	s.writeJSON(w, WorkflowStopResponse{Shutdown: shutdown, Changed: true})
 }
 
 func (s *Server) writeWorkflowStopError(w http.ResponseWriter, err error, namespace, name, step string) {

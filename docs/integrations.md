@@ -985,13 +985,20 @@ are redacted in its column and drawer; the YAML view and MCP show the object as 
 | WorkflowTemplate | `argoproj.io/v1alpha1` | — | Yes | — |
 | CronWorkflow | `argoproj.io/v1alpha1` | — | Generic | — |
 
-**Stop a Workflow** by calling `POST /api/workflows/{namespace}/{name}/stop`. The route requires a JSON object with the reviewed Workflow's `metadata.uid` as `uid` and an explicit `strategy` of `Stop` or `Terminate`. Missing either field or supplying another strategy returns 400. Callers may also send the reviewed `resourceVersion`. The route sets `spec.shutdown` and Argo reconciles it asynchronously. Stop runs exit handlers. Terminate skips them and can escalate an existing Stop.
+**Stop a Workflow** with `POST /api/workflows/{namespace}/{name}/stop` (capability `workflowStop`). Send a JSON object with the reviewed Workflow's `metadata.uid` as `uid` and an explicit `strategy` of `Stop` or `Terminate`. Callers may also send the reviewed `resourceVersion`. Missing either required field or supplying an unknown strategy returns 400. The body limit is 1 KiB.
 
-Radar reads and patches as the caller. Kubernetes checks `get` on the Workflow for the read and `patch` for a write. On a shared listener without authentication, anyone who can reach Radar can stop Workflows its Kubernetes identity can patch and read. The stock chart's Argo permissions are read-only. Same-origin and [connection binding](connection-lifecycle.md) checks apply.
+Argo reconciles `spec.shutdown` asynchronously. Stop allows exit handlers to run. Terminate skips them and can escalate an existing Stop. Radar checks the Workflow in this order.
 
-Radar checks the UID first. A same-name replacement returns 409 `workflow_replaced`. A finished run returns 409 `workflow_finished`. If the current shutdown already satisfies the request (including Terminate for a Stop request), Radar returns 200 with the stored `shutdown` and `changed: false`. These checks precede the optional version check. If a patch is still needed and the supplied version is stale, Radar returns 409 `workflow_changed`. Each patch uses the version just read. A conflict during the patch returns 409 `workflow_changed`.
+1. A different UID means the name now identifies another run. Radar returns 409 `workflow_replaced`.
+2. A finished run returns 409 `workflow_finished`.
+3. If the stored shutdown already satisfies the request, Radar returns 200 with that `shutdown` and `changed: false`. A stored Terminate satisfies either strategy.
+4. If a patch is still needed and the caller supplied a stale version, Radar returns 409 `workflow_changed`.
 
-After Kubernetes accepts a patch, Radar returns 200 with `changed: true` and the stored `shutdown`, even if admission rewrote the strategy. If admission removed `spec.shutdown`, `shutdown` is the empty string. Kubernetes validation failures return 422. The body limit is 1 KiB. The capability is `workflowStop`.
+Radar patches at the version it just read. With a caller-supplied version, a patch conflict returns 409 `workflow_changed` immediately. Otherwise Radar reads the Workflow again and repeats all four checks. If all four patch attempts conflict, it returns 409 `workflow_changed`.
+
+After Kubernetes accepts the patch, Radar returns 200 with `changed: true` and the stored `shutdown`, including a strategy rewritten by admission or an empty string if admission removed it. A patch rejected by Kubernetes as invalid returns 422.
+
+Kubernetes checks the caller's `get` permission on the Workflow for the read and `patch` for a write. On a shared listener without authentication, anyone who can reach Radar can stop Workflows its Kubernetes identity can read and patch. The stock chart's Argo permissions are read-only. Same-origin and [connection binding](connection-lifecycle.md) checks apply.
 
 ---
 

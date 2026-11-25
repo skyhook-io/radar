@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/rest"
 	k8stesting "k8s.io/client-go/testing"
@@ -156,7 +157,11 @@ func TestWorkflowStop(t *testing.T) {
 			t.Fatalf("initial stop = %d: %s", rec.Code, rec.Body.String())
 		}
 		// The fake tracker does not advance resourceVersion on patch.
-		stopped := testWorkflow("Running", "Stop")
+		obj, err := dyn.Tracker().Get(argoWorkflowGVR, "jobs", "migrate-abcde")
+		if err != nil {
+			t.Fatal(err)
+		}
+		stopped := obj.(*unstructured.Unstructured)
 		stopped.SetResourceVersion("8")
 		if err := dyn.Tracker().Update(argoWorkflowGVR, stopped, "jobs"); err != nil {
 			t.Fatal(err)
@@ -194,13 +199,77 @@ func TestWorkflowStop(t *testing.T) {
 			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 		}
 	})
-	t.Run("a change racing the patch is 409, not overwritten", func(t *testing.T) {
-		srv, dyn := workflowStopServer(t, testWorkflow("Running", ""))
-		dyn.PrependReactor("patch", "workflows", func(k8stesting.Action) (bool, runtime.Object, error) {
-			return true, nil, apierrors.NewConflict(argoWorkflowGVR.GroupResource(), "migrate-abcde", nil)
-		})
-		if rec := postStop(srv, `{"strategy":"Terminate","uid":"run-1"}`, nil); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "workflow_changed") {
-			t.Fatalf("status = %d", rec.Code)
+	t.Run("retry uses the new version and rechecks the run", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, uid, phase, shutdown string
+			wantStatus                 int
+			wantResponse               WorkflowStopResponse
+			wantCode                   string
+			wantPatches                int
+		}{
+			{name: "status update", uid: "run-1", phase: "Running", wantStatus: 200, wantResponse: WorkflowStopResponse{Shutdown: "Stop", Changed: true}, wantPatches: 2},
+			{name: "another caller terminated", uid: "run-1", phase: "Running", shutdown: "Terminate", wantStatus: 200, wantResponse: WorkflowStopResponse{Shutdown: "Terminate"}, wantPatches: 1},
+			{name: "finished", uid: "run-1", phase: "Succeeded", wantStatus: 409, wantCode: "workflow_finished", wantPatches: 1},
+			{name: "replaced", uid: "run-2", phase: "Running", wantStatus: 409, wantCode: "workflow_replaced", wantPatches: 1},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				srv, dyn := workflowStopServer(t, testWorkflow("Running", ""))
+				firstPatch := true
+				dyn.PrependReactor("patch", "workflows", func(k8stesting.Action) (bool, runtime.Object, error) {
+					if !firstPatch {
+						return false, nil, nil
+					}
+					firstPatch = false
+					next := testWorkflow(tc.phase, tc.shutdown)
+					next.SetUID(types.UID(tc.uid))
+					next.SetResourceVersion("8")
+					if err := dyn.Tracker().Update(argoWorkflowGVR, next, "jobs"); err != nil {
+						t.Fatal(err)
+					}
+					return true, nil, apierrors.NewConflict(argoWorkflowGVR.GroupResource(), "migrate-abcde", nil)
+				})
+
+				rec := postStop(srv, `{"strategy":"Stop","uid":"run-1"}`, nil)
+				if rec.Code != tc.wantStatus {
+					t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+				}
+				if tc.wantCode != "" {
+					var body map[string]string
+					if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["error_code"] != tc.wantCode {
+						t.Fatalf("response = %s, want %s", rec.Body.String(), tc.wantCode)
+					}
+				} else {
+					var resp WorkflowStopResponse
+					if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || resp != tc.wantResponse {
+						t.Fatalf("response = %s, want %+v", rec.Body.String(), tc.wantResponse)
+					}
+				}
+				patches := workflowPatches(dyn)
+				if len(patches) != tc.wantPatches {
+					t.Fatalf("patch count = %d, want %d", len(patches), tc.wantPatches)
+				}
+				if len(patches) == 2 && patchBody(t, patches[1])["metadata"].(map[string]any)["resourceVersion"] != "8" {
+					t.Fatalf("retry patch = %s, want version 8", patches[1].GetPatch())
+				}
+			})
+		}
+	})
+	t.Run("persistent conflicts are bounded and a pinned conflict is final", func(t *testing.T) {
+		for _, tc := range []struct {
+			body        string
+			wantPatches int
+		}{
+			{`{"strategy":"Stop","uid":"run-1"}`, 4},
+			{`{"strategy":"Stop","uid":"run-1","resourceVersion":"7"}`, 1},
+		} {
+			srv, dyn := workflowStopServer(t, testWorkflow("Running", ""))
+			dyn.PrependReactor("patch", "workflows", func(k8stesting.Action) (bool, runtime.Object, error) {
+				return true, nil, apierrors.NewConflict(argoWorkflowGVR.GroupResource(), "migrate-abcde", nil)
+			})
+			rec := postStop(srv, tc.body, nil)
+			if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "workflow_changed") || len(workflowPatches(dyn)) != tc.wantPatches {
+				t.Fatalf("%s: status = %d: %s, patches = %d", tc.body, rec.Code, rec.Body.String(), len(workflowPatches(dyn)))
+			}
 		}
 	})
 	t.Run("a refused patch is 403 with Kubernetes' reason", func(t *testing.T) {
