@@ -938,6 +938,7 @@ func TestAuditLogActionOptionalFieldsAreGeneric(t *testing.T) {
 	code := 0
 	for _, tc := range []struct {
 		name          string
+		dimension     string
 		executable    string
 		argumentCount int
 		commandHash   string
@@ -949,6 +950,7 @@ func TestAuditLogActionOptionalFieldsAreGeneric(t *testing.T) {
 		suffix        string
 	}{
 		{name: "unset"},
+		{name: "container resources", dimension: "memory", suffix: ` resource_dimension="memory"`},
 		{name: "command metadata", executable: "printf", argumentCount: 1, commandHash: "digest", suffix: ` executable="printf" argumentCount=1 commandHash="digest"`},
 		{name: "zero exit", code: &code, suffix: ` exitCode=0`},
 		{name: "duration", duration: time.Second, suffix: ` duration=1s`},
@@ -957,7 +959,7 @@ func TestAuditLogActionOptionalFieldsAreGeneric(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			output.Reset()
-			AuditLogAction(request, AuditActionDetails{Kind: "ConfigMap", Action: "example", Namespace: "shop", Name: "web", Container: "app", Variable: "TOKEN", Source: "test", Outcome: "done", Executable: tc.executable, ArgumentCount: tc.argumentCount, CommandHash: tc.commandHash, ExitCode: tc.code, Duration: tc.duration, Directory: tc.dir, File: tc.file, Bytes: tc.bytes})
+			AuditLogAction(request, AuditActionDetails{Kind: "ConfigMap", Action: "example", Namespace: "shop", Name: "web", Container: "app", Variable: "TOKEN", ResourceDimension: tc.dimension, Source: "test", Outcome: "done", Executable: tc.executable, ArgumentCount: tc.argumentCount, CommandHash: tc.commandHash, ExitCode: tc.code, Duration: tc.duration, Directory: tc.dir, File: tc.file, Bytes: tc.bytes})
 			_, line, found := strings.Cut(output.String(), "[audit]")
 			if !found || "[audit]"+strings.TrimSuffix(line, "\n") != base+tc.suffix {
 				t.Fatalf("line=%q want=%q", output.String(), base+tc.suffix)

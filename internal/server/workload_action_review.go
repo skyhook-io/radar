@@ -28,6 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 	kjson "sigs.k8s.io/json"
 )
@@ -46,6 +47,10 @@ func (v *optionalWorkloadVersion) UnmarshalJSON(data []byte) error {
 }
 
 type workloadActionInput struct {
+	Container               workloadResourceValue   `json:"container,omitempty"`
+	Resource                workloadResourceValue   `json:"resource,omitempty"`
+	Request                 workloadResourceValue   `json:"request,omitempty"`
+	Limit                   workloadResourceValue   `json:"limit,omitempty"`
 	Action                  string                  `json:"action"`
 	Replicas                *int32                  `json:"replicas,omitempty"`
 	LabelKey                string                  `json:"labelKey,omitempty"`
@@ -58,6 +63,8 @@ type workloadActionInput struct {
 }
 
 type workloadActionView struct {
+	Container               string                   `json:"container,omitempty"`
+	Resource                string                   `json:"resource,omitempty"`
 	Action                  string                   `json:"action"`
 	Kind                    string                   `json:"kind"`
 	Namespace               string                   `json:"namespace"`
@@ -77,11 +84,12 @@ type workloadActionView struct {
 // workloadActionField represents a closed set of actions. No resource, patch
 // path, or arbitrary arguments are accepted from the client.
 type workloadActionField struct {
-	gvr    schema.GroupVersionResource
-	kind   string
-	path   []string
-	after  any
-	effect string
+	resources *containerResourceChange
+	gvr       schema.GroupVersionResource
+	kind      string
+	path      []string
+	after     any
+	effect    string
 }
 
 func resolveWorkloadAction(kind string, in workloadActionInput, execute bool, now time.Time) (workloadActionField, error) {
@@ -111,7 +119,16 @@ func resolveWorkloadAction(kind string, in workloadActionInput, execute bool, no
 	if in.Action != "restart" && in.RestartAt != "" {
 		return field, errors.New("restartAt is only valid for restart")
 	}
+	if in.Action != "setContainerResources" && (in.Container != "" || in.Resource != "" || in.Request != "" || in.Limit != "") {
+		return field, errors.New("container, resource, request and limit are only valid for setContainerResources")
+	}
 	switch {
+	case in.Action == "setContainerResources" && field.kind == "Deployment":
+		change, err := resolveContainerResources(in)
+		if err != nil {
+			return field, err
+		}
+		field.resources = change
 	case in.Action == "setPodTemplateLabel" && field.kind == "Deployment", in.Action == "setServiceSelectorLabel" && field.kind == "Service":
 		if len(validation.IsQualifiedName(in.LabelKey)) != 0 || in.LabelValue == nil || len(validation.IsValidLabelValue(*in.LabelValue)) != 0 {
 			return field, errors.New("the action requires a valid Kubernetes labelKey and labelValue")
@@ -180,6 +197,9 @@ func resolveWorkloadAction(kind string, in workloadActionInput, execute bool, no
 }
 
 func (f workloadActionField) value(obj *unstructured.Unstructured) (any, error) {
+	if f.resources != nil {
+		return f.resources.values(obj)
+	}
 	v, found, err := unstructured.NestedFieldNoCopy(obj.Object, f.path...)
 	if err != nil {
 		return nil, err
@@ -215,11 +235,7 @@ func (f workloadActionField) value(obj *unstructured.Unstructured) (any, error) 
 // the human decision. Exclude observed status so a rollout progressing during
 // review does not itself invalidate the intended write. Keep the spec and its
 // ownership: a target can be adopted between preview and execution.
-func (f workloadActionField) review(obj *unstructured.Unstructured, action, connectionID string) (workloadActionView, error) {
-	before, err := f.value(obj)
-	if err != nil {
-		return workloadActionView{}, err
-	}
+func (f workloadActionField) reviewToken(obj *unstructured.Unstructured, action, connectionID string) (string, error) {
 	var materialOwners []metav1.ManagedFieldsEntry
 	for _, owner := range obj.GetManagedFields() {
 		if owner.Subresource == "status" {
@@ -228,16 +244,39 @@ func (f workloadActionField) review(obj *unstructured.Unstructured, action, conn
 		owner.Time = nil
 		materialOwners = append(materialOwners, owner)
 	}
-	digest, err := json.Marshal([]any{
+	material := []any{
 		connectionID, f.gvr, obj.GetNamespace(), obj.GetName(), obj.GetUID(),
 		obj.GetGeneration(), obj.Object["spec"], obj.GetLabels(), obj.GetAnnotations(),
 		obj.GetOwnerReferences(), materialOwners, action, f.path, f.after,
-	})
+	}
+	if f.resources != nil {
+		material = append(material, f.resources)
+	}
+	digest, err := json.Marshal(material)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(digest)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func (f workloadActionField) review(obj *unstructured.Unstructured, action, token string) (workloadActionView, error) {
+	before, err := f.value(obj)
 	if err != nil {
 		return workloadActionView{}, err
 	}
-	sum := sha256.Sum256(digest)
+	var container, dimension string
+	if f.resources != nil {
+		container, dimension = f.resources.Container, f.resources.Resource
+		f.after, f.effect, err = f.resources.plan(obj, before.(containerResourcePair))
+		if err != nil {
+			return workloadActionView{}, err
+		}
+	}
 	field := strings.Join(f.path, ".")
+	if f.resources != nil {
+		field = f.resources.field()
+	}
 	if action == "setPodTemplateLabel" || action == "setServiceSelectorLabel" {
 		field = strings.Join(f.path[:len(f.path)-1], ".") + "[" + strconv.Quote(f.path[len(f.path)-1]) + "]"
 	}
@@ -245,10 +284,10 @@ func (f workloadActionField) review(obj *unstructured.Unstructured, action, conn
 		field = `spec.template.metadata.annotations["kubectl.kubernetes.io/restartedAt"]`
 	}
 	return workloadActionView{
-		Action: action, Kind: f.kind, Namespace: obj.GetNamespace(), Name: obj.GetName(),
+		Container: container, Resource: dimension, Action: action, Kind: f.kind, Namespace: obj.GetNamespace(), Name: obj.GetName(),
 		UID: string(obj.GetUID()), ResourceVersion: obj.GetResourceVersion(),
 		Generation:  max(obj.GetGeneration(), 0),
-		ReviewToken: hex.EncodeToString(sum[:]), Field: field, Before: before, After: f.after, Effect: f.effect,
+		ReviewToken: token, Field: field, Before: before, After: f.after, Effect: f.effect,
 	}, nil
 }
 
@@ -320,6 +359,10 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, kind str
 	}
 	audit := auth.AuditActionDetails{Action: in.Action, Kind: field.kind, Group: field.gvr.Group, Namespace: ns, Name: name, SelectedUID: in.UID, Source: "reviewed-action", Outcome: "no-write"}
 	if execute {
+		if field.resources != nil {
+			audit.Container = field.resources.Container
+			audit.ResourceDimension = field.resources.Resource
+		}
 		defer func() { auth.AuditLogAction(r, audit) }()
 	}
 	obj, err := client.Resource(field.gvr).Namespace(ns).Get(r.Context(), name, metav1.GetOptions{})
@@ -341,8 +384,24 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, kind str
 	if connectionIdentityPublished() {
 		connectionID = k8s.ConnectionFrom(r.Context()).ID()
 	}
-	view, err := field.review(obj, in.Action, connectionID)
+	token, err := field.reviewToken(obj, in.Action, connectionID)
 	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	// A changed resource plan must report a stale review before interpreting
+	// the replacement spec, including when someone already set one desired key.
+	if execute && field.resources != nil && (string(obj.GetUID()) != in.UID || (in.ExpectedResourceVersion != "" && string(in.ExpectedResourceVersion) != obj.GetResourceVersion()) || in.ReviewToken != token) {
+		s.writeErrorCode(w, http.StatusConflict, errCodeWorkloadChanged, "the Deployment, its version or the proposed resource settings changed. Read the current container settings and replica count before reviewing again")
+		return
+	}
+	view, err := field.review(obj, in.Action, token)
+	if err != nil {
+		var refusal *integration.ActionError
+		if errors.As(err, &refusal) {
+			s.writeErrorCode(w, refusal.Status, refusal.Code, refusal.Message)
+			return
+		}
 		s.writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
@@ -413,12 +472,16 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, kind str
 		return
 	}
 	patch := map[string]any{"metadata": map[string]any{"uid": view.UID}}
-	if err := unstructured.SetNestedField(patch, field.after, field.path...); err != nil {
+	patchType := types.MergePatchType
+	if field.resources != nil {
+		patch = field.resources.patch(view.UID)
+		patchType = types.StrategicMergePatchType
+	} else if err := unstructured.SetNestedField(patch, field.after, field.path...); err != nil {
 		log.Printf("[workload-action] Failed to prepare reviewed patch for %s/%s: %v", ns, name, err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	stored, err := integration.ApplyVersionedMergePatch(r.Context(), client, field.gvr, obj, patch)
+	stored, err := integration.ApplyVersionedPatch(r.Context(), client, field.gvr, obj, patchType, patch)
 	if err != nil {
 		audit.Outcome = s.writeWorkloadActionError(w, err, true)
 		return
@@ -431,6 +494,16 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, kind str
 			message = fmt.Sprintf("Kubernetes accepted the request but returned %s = %v at resourceVersion %s. Inspect the live resource", view.Field, actual, stored.GetResourceVersion())
 		}
 		s.writeErrorCode(w, http.StatusConflict, "workload_action_not_stored", message)
+		return
+	}
+	if field.resources != nil && (stored.GetResourceVersion() == "" || stored.GetResourceVersion() == view.ResourceVersion) {
+		audit.Outcome = "unconfirmed"
+		s.writeErrorCode(w, http.StatusBadGateway, "workload_action_unconfirmed", "Kubernetes returned no new resource version. Inspect the live Deployment before taking further action")
+		return
+	}
+	if field.resources != nil && !field.resources.preservesSpec(obj, stored) {
+		audit.Outcome = "reviewed-value-not-confirmed"
+		s.writeErrorCode(w, http.StatusConflict, "workload_action_not_stored", "Kubernetes also changed other Deployment settings. Inspect the stored Pod template and rollout before taking further action")
 		return
 	}
 	if in.Action == "setServiceSelectorLabel" || in.Action == "setPodTemplateLabel" {
@@ -456,6 +529,9 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, kind str
 	audit.Outcome = "stored"
 	view.Generation = storedGeneration
 	view.ResourceVersion = stored.GetResourceVersion()
+	if field.resources != nil {
+		view.Effect = "Kubernetes stored the reviewed Deployment template. Read the rollout and replacement Pods to verify scheduling, readiness and the original symptom."
+	}
 	s.writeJSON(w, view)
 }
 

@@ -264,6 +264,9 @@ type AuditActionDetails struct {
 	Bytes     int64
 	ExitCode  *int
 	Duration  time.Duration
+
+	// ResourceDimension identifies a reviewed container CPU or memory change.
+	ResourceDimension string
 }
 
 func AuditLogAction(r *http.Request, details AuditActionDetails) {
@@ -276,6 +279,9 @@ func AuditLogAction(r *http.Request, details AuditActionDetails) {
 	line := fmt.Sprintf("[audit] user=%q groups=%q action=%q path=%q kind=%q api_group=%q ns=%q name=%q container=%q variable=%q source=%q outcome=%q",
 		username, groups, details.Action, r.URL.Path, details.Kind, details.Group, details.Namespace, details.Name,
 		details.Container, details.Variable, details.Source, details.Outcome)
+	if details.ResourceDimension != "" {
+		line += fmt.Sprintf(" resource_dimension=%q", details.ResourceDimension)
+	}
 	if details.InvocationID != "" {
 		line += fmt.Sprintf(" invocationID=%q", details.InvocationID)
 	}
