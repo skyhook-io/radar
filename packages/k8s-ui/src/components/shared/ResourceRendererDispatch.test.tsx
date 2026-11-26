@@ -696,14 +696,14 @@ describe('Calico network policy collision handling', () => {
       }, 'default')
 
       if (kind === 'StagedKubernetesNetworkPolicy') {
-        expect(html).toContain('Target')
-        expect(html).toContain('Ingress Rules')
-        expect(html).toContain('Pod Selector')
+        expect(html).toContain('Applies to')
+        expect(html).toContain('Allowed inbound')
+        expect(html).toContain('Applies to')
         expect(html).toContain('Staged preview')
-        expect(html).toContain('Dashed paths are evaluated but not enforced')
-        expect(html).toContain('stroke-dasharray="4 3"')
+        expect(html).toContain('Evaluated but not enforced')
+        expect(html).toContain('border-dashed')
         expect(html).not.toContain('CalicoStagedKubernetesNetworkPolicy')
-        expect(html).not.toContain('Allow')
+        expect(html).not.toMatch(/>Allow</)
       } else {
         expect(html).toContain(label)
         expect(html).toContain('security')
@@ -722,8 +722,8 @@ describe('Calico network policy collision handling', () => {
       spec: { podSelector: {}, policyTypes: ['Ingress'], ingress: [] },
     }, 'default')
 
-    expect(html).toContain('Pod Selector')
-    expect(html).toContain('Deny all ingress')
+    expect(html).toContain('Applies to')
+    expect(html).toContain('All inbound denied')
     expect(html).not.toContain('Calico NetworkPolicy')
   })
 
@@ -739,13 +739,13 @@ describe('Calico network policy collision handling', () => {
       },
     }, 'default')
 
-    expect(html).toContain('Target')
-    expect(html).toContain('Ingress Rules')
-    expect(html).toContain('All sources')
+    expect(html).toContain('Applies to')
+    expect(html).toContain('Allowed inbound')
+    expect(html).toContain('Any source')
     expect(html).toContain('Staged preview')
-    expect(html).toContain('Dashed paths are evaluated but not enforced')
-    expect(html).toContain('stroke-dasharray="4 3"')
-    expect(html).not.toContain('Allow')
+    expect(html).toContain('Evaluated but not enforced')
+    expect(html).toContain('border-dashed')
+    expect(html).not.toMatch(/>Allow</)
   })
 
   it.each([

@@ -9,15 +9,15 @@ const renderDiagram = (spec: any) => renderToString(<NetworkPolicyDiagram spec={
 describe('NetworkPolicyRenderer', () => {
   it('shows a policy without policyTypes as isolating ingress, and says the type was defaulted', () => {
     const html = render({ podSelector: {} })
-    expect(html).toContain('Ingress Rules')
-    expect(html).toContain('Deny all ingress')
+    expect(html).toContain('All inbound denied')
     expect(html).toContain('policyTypes not set')
-    expect(html).not.toContain('Egress Rules')
+    expect(html).not.toContain('Allowed outbound')
+    expect(html).not.toContain('Ingress Rules')
   })
 
   it('does not call an explicitly typed policy defaulted', () => {
     const html = render({ podSelector: {}, policyTypes: ['Ingress'] })
-    expect(html).toContain('Deny all ingress')
+    expect(html).toContain('All inbound denied')
     expect(html).not.toContain('policyTypes not set')
   })
 
@@ -32,9 +32,8 @@ describe('NetworkPolicyRenderer', () => {
         }],
       }],
     })
-    expect(html).toContain('podSelector')
-    expect(html).toContain('in namespaceSelector')
-    expect(html).toContain('kubernetes.io/metadata.name')
+    expect(html).toContain('app=radar')
+    expect(html).toContain('in kubernetes.io/metadata.name=radar')
   })
 
   it('renders matchExpressions rather than calling the selector empty', () => {
@@ -43,10 +42,9 @@ describe('NetworkPolicyRenderer', () => {
       policyTypes: ['Ingress'],
       ingress: [{ from: [{ podSelector: { matchExpressions: [{ key: 'role', operator: 'Exists' }] } }] }],
     })
-    expect(html).toContain('tier')
-    expect(html).toContain('In')
-    expect(html).toContain('role')
-    expect(html).not.toContain('All pods in namespace')
+    expect(html).toContain('tier In (web,api)')
+    expect(html).toContain('role Exists')
+    expect(html).not.toContain('All pods in')
   })
 
   it('renders endPort ranges in the rule port list', () => {
@@ -59,6 +57,13 @@ describe('NetworkPolicyRenderer', () => {
     expect(html).toContain('UDP/53')
   })
 
+  it('names the policy namespace in the target', () => {
+    const html = renderToString(
+      <NetworkPolicyRenderer data={{ kind: 'NetworkPolicy', metadata: { namespace: 'payments' }, spec: { podSelector: {} } }} />,
+    )
+    expect(html).toContain('All pods in payments')
+  })
+
   it('diagram: reads matchExpressions, shows ranges, and treats an empty selector as all pods', () => {
     const html = renderDiagram({
       podSelector: { matchExpressions: [{ key: 'tier', operator: 'In', values: ['web'] }] },
@@ -69,7 +74,7 @@ describe('NetworkPolicyRenderer', () => {
     expect(html).not.toContain('All pods')
 
     const empty = renderDiagram({ podSelector: {} })
-    expect(empty).toContain('All pods')
+    expect(empty).toContain('All pods in this namespace')
     expect(empty).not.toContain('all workloads')
   })
 })
