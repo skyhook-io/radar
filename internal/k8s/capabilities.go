@@ -126,7 +126,7 @@ type Capabilities struct {
 	SecretsUpdate          bool                     `json:"secretsUpdate"`      // Can update secrets (inline editing)
 	HelmWrite              bool                     `json:"helmWrite"`          // Helm write ops (detected via secrets/create as sentinel RBAC check)
 	NodeWrite              bool                     `json:"nodeWrite"`          // Can patch nodes (cordon/uncordon/drain)
-	WorkloadWrites         WorkloadWritePermissions `json:"workloadWrites"`     // Can patch workload kinds (restart/scale controls)
+	WorkloadWrites         WorkloadWritePermissions `json:"workloadWrites"`     // Permissions for workload actions
 	MCPReadOnly            bool                     `json:"mcpReadOnly"`
 	MCPExecTools           bool                     `json:"mcpExecTools"`
 	MCPHelmTools           bool                     `json:"mcpHelmTools"` // Native Helm MCP tool registered; target Kubernetes permissions still required
@@ -285,8 +285,7 @@ type FeatureCapabilities struct {
 	OpenObserveLocalSetup bool `json:"openobserveLocalSetup"`
 }
 
-// WorkloadWritePermissions indicates which workload resources the user can
-// patch, plus whether they can create Workflows.
+// WorkloadWritePermissions records the permissions used by workload actions.
 type WorkloadWritePermissions struct {
 	Deployments  bool `json:"deployments"`
 	DaemonSets   bool `json:"daemonSets"`
@@ -295,6 +294,8 @@ type WorkloadWritePermissions struct {
 	Workflows    bool `json:"workflows"` // Argo Workflows: Stop and Terminate patch spec.shutdown
 	// Argo Workflows: create, to submit a WorkflowTemplate.
 	CreateWorkflows bool `json:"createWorkflows"`
+	CronJobs        bool `json:"cronJobs"`   // Suspend and Resume patch spec.suspend
+	CreateJobs      bool `json:"createJobs"` // Trigger creates a Job from the CronJob's template
 }
 
 type WorkloadWriteCapabilityErrors struct {
@@ -304,6 +305,34 @@ type WorkloadWriteCapabilityErrors struct {
 	Rollouts        bool
 	Workflows       bool
 	CreateWorkflows bool
+	CronJobs        bool
+	CreateJobs      bool
+}
+
+// workloadWriteChecks lists the workload write permissions in the order their
+// checks are started. Each is checked globally and per namespace, as Radar and as the
+// caller, and merged per namespace by MergeWorkloadWrites.
+var workloadWriteChecks = []struct {
+	group, resource, verb string
+	permission            func(*WorkloadWritePermissions) *bool
+	apiError              func(*WorkloadWriteCapabilityErrors) *bool
+}{
+	{"apps", "deployments", "patch", func(p *WorkloadWritePermissions) *bool { return &p.Deployments }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.Deployments }},
+	{"apps", "daemonsets", "patch", func(p *WorkloadWritePermissions) *bool { return &p.DaemonSets }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.DaemonSets }},
+	{"apps", "statefulsets", "patch", func(p *WorkloadWritePermissions) *bool { return &p.StatefulSets }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.StatefulSets }},
+	{"argoproj.io", "rollouts", "patch", func(p *WorkloadWritePermissions) *bool { return &p.Rollouts }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.Rollouts }},
+	{"argoproj.io", "workflows", "patch", func(p *WorkloadWritePermissions) *bool { return &p.Workflows }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.Workflows }},
+	{"argoproj.io", "workflows", "create", func(p *WorkloadWritePermissions) *bool { return &p.CreateWorkflows }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.CreateWorkflows }},
+	{"batch", "cronjobs", "patch", func(p *WorkloadWritePermissions) *bool { return &p.CronJobs }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.CronJobs }},
+	{"batch", "jobs", "create", func(p *WorkloadWritePermissions) *bool { return &p.CreateJobs }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.CreateJobs }},
+}
+
+// MergeWorkloadWrites folds one namespace's workload write answers into the
+// global ones, field by field, in table order.
+func MergeWorkloadWrites(global *WorkloadWritePermissions, namespaced WorkloadWritePermissions, errs WorkloadWriteCapabilityErrors, merge func(global, namespaced, errored bool) bool) {
+	for _, c := range workloadWriteChecks {
+		*c.permission(global) = merge(*c.permission(global), *c.permission(&namespaced), *c.apiError(&errs))
+	}
 }
 
 type NamespaceCapabilityErrors struct {
@@ -493,12 +522,9 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 		{resource: "secrets", verb: "update", result: &caps.SecretsUpdate, namespaceFallback: true},
 		{resource: "secrets", verb: "create", result: &caps.HelmWrite, namespaceFallback: true},
 		{resource: "nodes", verb: "patch", result: &caps.NodeWrite, namespaceFallback: true},
-		{group: "apps", resource: "deployments", verb: "patch", result: &caps.WorkloadWrites.Deployments},
-		{group: "apps", resource: "daemonsets", verb: "patch", result: &caps.WorkloadWrites.DaemonSets},
-		{group: "apps", resource: "statefulsets", verb: "patch", result: &caps.WorkloadWrites.StatefulSets},
-		{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &caps.WorkloadWrites.Rollouts},
-		{group: "argoproj.io", resource: "workflows", verb: "patch", result: &caps.WorkloadWrites.Workflows},
-		{group: "argoproj.io", resource: "workflows", verb: "create", result: &caps.WorkloadWrites.CreateWorkflows},
+	}
+	for _, w := range workloadWriteChecks {
+		checks = append(checks, capCheck{group: w.group, resource: w.resource, verb: w.verb, result: w.permission(&caps.WorkloadWrites)})
 	}
 
 	var wg sync.WaitGroup
@@ -636,13 +662,10 @@ func CheckNamespaceCapabilities(ctx context.Context, namespace string) (*Namespa
 	checks = append(checks,
 		capCheck{resource: "pods/log", verb: "get", result: &result.Logs, apiError: &result.Errors.Logs},
 		capCheck{resource: "pods/portforward", verb: "create", result: &result.PortForward, apiError: &result.Errors.PortForward},
-		capCheck{group: "apps", resource: "deployments", verb: "patch", result: &result.WorkloadWrites.Deployments, apiError: &result.Errors.WorkloadWrites.Deployments},
-		capCheck{group: "apps", resource: "daemonsets", verb: "patch", result: &result.WorkloadWrites.DaemonSets, apiError: &result.Errors.WorkloadWrites.DaemonSets},
-		capCheck{group: "apps", resource: "statefulsets", verb: "patch", result: &result.WorkloadWrites.StatefulSets, apiError: &result.Errors.WorkloadWrites.StatefulSets},
-		capCheck{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &result.WorkloadWrites.Rollouts, apiError: &result.Errors.WorkloadWrites.Rollouts},
-		capCheck{group: "argoproj.io", resource: "workflows", verb: "patch", result: &result.WorkloadWrites.Workflows, apiError: &result.Errors.WorkloadWrites.Workflows},
-		capCheck{group: "argoproj.io", resource: "workflows", verb: "create", result: &result.WorkloadWrites.CreateWorkflows, apiError: &result.Errors.WorkloadWrites.CreateWorkflows},
 	)
+	for _, w := range workloadWriteChecks {
+		checks = append(checks, capCheck{group: w.group, resource: w.resource, verb: w.verb, result: w.permission(&result.WorkloadWrites), apiError: w.apiError(&result.Errors.WorkloadWrites)})
+	}
 	if !ForceDisableHelmWrite {
 		checks = append(checks, capCheck{resource: "secrets", verb: "create", result: &result.HelmWrite, apiError: &result.Errors.HelmWrite})
 	}
@@ -778,12 +801,9 @@ func (state *permissionState) checkCapabilitiesForUser(conn *Connection, fallbac
 		{resource: "secrets", verb: "update", result: &caps.SecretsUpdate, namespaceFallback: true},
 		{resource: "secrets", verb: "create", result: &caps.HelmWrite, namespaceFallback: true},
 		{resource: "nodes", verb: "patch", result: &caps.NodeWrite, namespaceFallback: true},
-		{group: "apps", resource: "deployments", verb: "patch", result: &caps.WorkloadWrites.Deployments},
-		{group: "apps", resource: "daemonsets", verb: "patch", result: &caps.WorkloadWrites.DaemonSets},
-		{group: "apps", resource: "statefulsets", verb: "patch", result: &caps.WorkloadWrites.StatefulSets},
-		{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &caps.WorkloadWrites.Rollouts},
-		{group: "argoproj.io", resource: "workflows", verb: "patch", result: &caps.WorkloadWrites.Workflows},
-		{group: "argoproj.io", resource: "workflows", verb: "create", result: &caps.WorkloadWrites.CreateWorkflows},
+	}
+	for _, w := range workloadWriteChecks {
+		checks = append(checks, capCheck{group: w.group, resource: w.resource, verb: w.verb, result: w.permission(&caps.WorkloadWrites)})
 	}
 
 	var hadErrors atomic.Bool
@@ -894,13 +914,10 @@ func CheckNamespaceCapabilitiesForUser(ctx context.Context, username string, gro
 	checks = append(checks,
 		capCheck{resource: "pods/log", verb: "get", result: &result.Logs, apiError: &result.Errors.Logs},
 		capCheck{resource: "pods/portforward", verb: "create", result: &result.PortForward, apiError: &result.Errors.PortForward},
-		capCheck{group: "apps", resource: "deployments", verb: "patch", result: &result.WorkloadWrites.Deployments, apiError: &result.Errors.WorkloadWrites.Deployments},
-		capCheck{group: "apps", resource: "daemonsets", verb: "patch", result: &result.WorkloadWrites.DaemonSets, apiError: &result.Errors.WorkloadWrites.DaemonSets},
-		capCheck{group: "apps", resource: "statefulsets", verb: "patch", result: &result.WorkloadWrites.StatefulSets, apiError: &result.Errors.WorkloadWrites.StatefulSets},
-		capCheck{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &result.WorkloadWrites.Rollouts, apiError: &result.Errors.WorkloadWrites.Rollouts},
-		capCheck{group: "argoproj.io", resource: "workflows", verb: "patch", result: &result.WorkloadWrites.Workflows, apiError: &result.Errors.WorkloadWrites.Workflows},
-		capCheck{group: "argoproj.io", resource: "workflows", verb: "create", result: &result.WorkloadWrites.CreateWorkflows, apiError: &result.Errors.WorkloadWrites.CreateWorkflows},
 	)
+	for _, w := range workloadWriteChecks {
+		checks = append(checks, capCheck{group: w.group, resource: w.resource, verb: w.verb, result: w.permission(&result.WorkloadWrites), apiError: w.apiError(&result.Errors.WorkloadWrites)})
+	}
 	if !ForceDisableHelmWrite {
 		checks = append(checks, capCheck{resource: "secrets", verb: "create", result: &result.HelmWrite, apiError: &result.Errors.HelmWrite})
 	}

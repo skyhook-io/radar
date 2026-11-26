@@ -41,6 +41,8 @@ const restrictedCapabilities: Capabilities = {
     daemonSets: false,
     statefulSets: false,
     rollouts: false,
+    cronJobs: false,
+    createJobs: false,
   },
   mcpEnabled: false,
   mcpExecTools: false,
