@@ -647,6 +647,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/dashboard/helm", s.handleDashboardHelm)
 			r.Get("/cluster-info", s.handleClusterInfo)
 			r.Get("/capabilities", s.handleCapabilities)
+			r.Get("/cloud/owner-access/review", s.handleOwnerAccessReview)
 			r.Get("/capacity", s.handleCapacityOverview)
 			r.Get("/capacity/pools", s.handleCapacityPools)
 			r.Get("/capacity/pools/{name}", s.handleCapacityPool)
@@ -1617,6 +1618,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		TrafficRecords:               true,
 		GitOpsWriteEvidence:          true,
 		GitOpsActionCapabilities:     true,
+		OwnerAccessReview:            true,
 		ArgoRollbackSync:             true,
 		ArgoSyncInheritance:          true,
 		ArgoEnableSelfHealOff:        true,

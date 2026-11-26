@@ -320,8 +320,9 @@ before upgrading if the added visibility is unwanted.
 
 Helm approves the grants available on each cluster. Organization Owners turn
 those grants on or off in **Settings → Access**. Changes apply on the next
-request without a Helm upgrade. Turning a grant off leaves access from other
-Kubernetes role bindings in place.
+request without a Helm upgrade. The page checks what each grant adds for the
+signed-in Owner within the reported scope. Turning a grant off leaves access
+from other Kubernetes role bindings in place.
 
 | Grant | Active by default | What it allows |
 |---|---|---|
@@ -334,8 +335,8 @@ Kubernetes role bindings in place.
 **Approve or remove a grant.** Set
 `cloud.defaultRbac.integrationWrite.<grant>.owner` to `true` or `false` and
 apply the chart. For Velero data access and deletion, also turn on the grant
-in **Settings → Access**. If Access says **Requires cluster setup**, check
-that chart-managed Owner RBAC and the matching collection
+in **Settings → Access**. If Access says the cluster does not accept a
+permission, check that chart-managed Owner RBAC and the matching collection
 (`rbac.crdGroups.argo`, `rbac.crdGroups.cloudnativePg` or
 `rbac.crdGroups.velero`) are enabled. `rbac.crdGroups.all=true` also enables them.
 

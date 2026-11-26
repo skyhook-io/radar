@@ -232,6 +232,7 @@ type FeatureCapabilities struct {
 	ServiceEndpointSlices        bool `json:"serviceEndpointSlices"`    // GET /api/services/{namespace}/{name}/endpointslices
 	TrafficRecords               bool `json:"trafficRecords"`           // GET /api/traffic/flows/records
 	GitOpsWriteEvidence          bool `json:"gitopsWriteEvidence"`      // POST /api/gitops/write-evidence
+	OwnerAccessReview            bool `json:"ownerAccessReview"`        // GET /api/cloud/owner-access/review
 	GitOpsActionCapabilities     bool `json:"gitopsActionCapabilities"` // GET /api/gitops/capabilities/{kind}/{namespace}/{name}
 	AgentSigninCheck             bool `json:"agentSigninCheck"`         // GET /api/agents/signin
 	// POST /api/argo/applications/{namespace}/{name}/rollback starts a sync to
