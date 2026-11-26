@@ -271,9 +271,10 @@ function AppDetailRoute({
     return [...namespaces].sort();
   }, [appNamespaces, app.relationships, completeInventory]);
   const issuesQuery = useIssues(issueNamespaces);
+  const issueData = issuesQuery.data;
   const appIssues = useMemo(
-    () => appIssuesForApplication(issuesQuery.data?.issues ?? [], app, apps, completeInventory),
-    [issuesQuery.data?.issues, app, apps, completeInventory],
+    () => appIssuesForApplication(issueData?.issues ?? [], app, apps, completeInventory),
+    [issueData?.issues, app, apps, completeInventory],
   );
 
   // The selected workload (?workload=<key>) is the scope switch and wins over
@@ -752,8 +753,9 @@ function AppDetailRoute({
             application={app}
             issues={appIssues}
             error={issuesQuery.error}
-            hasData={Boolean(issuesQuery.data)}
-            visibility={issuesQuery.data?.visibility}
+            hasData={Boolean(issueData)}
+            visibility={issueData?.visibility}
+            truncated={!!issueData && (issueData.total_matched ?? issueData.issues.length) > issueData.issues.length}
             onOpenResource={onOpenResource}
           />
         )}
@@ -803,6 +805,7 @@ function AppOverviewIssues({
   error,
   hasData,
   visibility,
+  truncated,
   onOpenResource,
 }: {
   application: Pick<AppRow, "key" | "name">;
@@ -810,6 +813,7 @@ function AppOverviewIssues({
   error: unknown;
   hasData: boolean;
   visibility?: IssuesResponse["visibility"];
+  truncated: boolean;
   onOpenResource: (resource: SelectedResource) => void;
 }) {
   if (error && !hasData) {
@@ -825,7 +829,7 @@ function AppOverviewIssues({
     );
   }
 
-  if (!error && !visibility?.impact && issues.length === 0) return null;
+  if (!error && !visibility?.impact && !truncated && issues.length === 0) return null;
 
   const navigate = (ref: IssueResourceRef) => {
     onOpenResource({
@@ -847,6 +851,12 @@ function AppOverviewIssues({
         <AppOverviewIssuesState
           headline={issues.length ? "Issue visibility is limited" : "No visible issues"}
           body={`${visibility.impact} Results may be incomplete.`}
+        />
+      )}
+      {truncated && (
+        <AppOverviewIssuesState
+          headline="Issue results are incomplete"
+          body="Radar reached the issue limit for these namespaces. Some issues for this application may be missing."
         />
       )}
       {issues.length > 0 && (

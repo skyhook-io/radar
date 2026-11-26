@@ -130,7 +130,11 @@ export function AppIssueRows<T extends DisplayIssue>({ layout, issueKey, renderI
           className="flex min-w-0 items-center gap-2 rounded-t-xl border border-theme-border bg-theme-elevated px-4 py-2">
           <Icon aria-hidden className="h-4 w-4 shrink-0 text-theme-text-secondary" />
           <h2 id={headerId} className="min-w-0 break-words text-sm font-semibold text-theme-text-primary [&_a]:rounded-sm [&_a:hover]:underline [&_a:focus-visible]:outline">{applicationOverview ? 'Issues' : (link ?? app.name)}</h2>
-          <span className="shrink-0 text-xs text-theme-text-secondary">· {issues.length} issues</span>
+          {applicationOverview ? (
+            <span className="badge-sm shrink-0 text-theme-text-secondary">{issues.length}<span className="sr-only">{issues.length === 1 ? ' issue' : ' issues'}</span></span>
+          ) : (
+            <span className="shrink-0 text-xs text-theme-text-secondary">· {issues.length} issues</span>
+          )}
         </li>
       );
     }
