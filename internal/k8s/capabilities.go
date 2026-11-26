@@ -270,6 +270,8 @@ type FeatureCapabilities struct {
 	RuntimeAdvisoryProgress bool `json:"runtimeAdvisoryProgress"` // GET /api/vulnerabilities/java4shell/stream
 	// GET /api/sealedsecrets/controller
 	SealedSecretsController bool `json:"sealedSecretsController"`
+	// GET /api/traefik/routes
+	TraefikRoutes bool `json:"traefikRoutes"`
 	// POST /api/cronjobs/{namespace}/{name}/trigger accepts {"jobName": ...};
 	// an older Radar ignores the body and names the Job itself.
 	CronJobTriggerJobName bool `json:"cronJobTriggerJobName"`

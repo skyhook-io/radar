@@ -747,6 +747,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Delete("/resources/{kind}/{namespace}/{name}", s.bindWrite(s.handleDeleteResource))
 			r.Get("/secrets/certificate-expiry", s.handleSecretCertExpiry)
 			r.Get("/sealedsecrets/controller", s.handleSealedSecretsController)
+			r.Get("/traefik/routes", s.handleTraefikRoutes)
 			// The serving controller's public sealing certificate, from its fixed
 			// /v1/cert.pem; gated on get services/proxy for that Service and port name.
 			r.Get("/sealedsecrets/cert", s.handleSealedSecretsCert)
@@ -1586,6 +1587,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		DatadogAgentPresence:         true,
 		DatadogRightsizing:           true,
 		SealedSecretsController:      true,
+		TraefikRoutes:                true,
 		SealedSecretsCert:            true,
 		ResourceReadCoverage:         true,
 		SearchCoverage:               true,

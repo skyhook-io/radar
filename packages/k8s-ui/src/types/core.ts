@@ -246,6 +246,7 @@ export interface FeatureCapabilities {
   runtimeAdvisoryChecks?: boolean
   runtimeAdvisoryProgress?: boolean
   sealedSecretsController?: boolean // GET /api/sealedsecrets/controller
+  traefikRoutes?: boolean // GET /api/traefik/routes
   cronJobTriggerJobName?: boolean
   sealedSecretsCert?: boolean // GET /api/sealedsecrets/cert
   workflowStop?: boolean // POST /api/workflows/{namespace}/{name}/stop
