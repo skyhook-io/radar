@@ -3,8 +3,8 @@ import { act, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { getRadarUpgradeRequirement } from '@skyhook-io/k8s-ui'
-import { ApiError, isNotFoundError, useApplications, useCapacityPoolDetail, useDrainPlan, useNodeRemovalPlan, usePodEnvironment, useRadarFeature, useSubjectIssues, useWorkloadHistory } from './client'
+import { getRadarUpgradeRequirement, ResourceActionsBar } from '@skyhook-io/k8s-ui'
+import { ApiError, isNotFoundError, useApplications, useCapacityPoolDetail, useDrainPlan, useNodeRemovalPlan, usePodEnvironment, useRadarFeature, useRestartWorkload, useSubjectIssues, useWorkloadHistory } from './client'
 import { getApiBase } from './config'
 import { usePolicyResource } from './policy'
 import { isRadarFeatureUnsupported } from './radarFeatures'
@@ -61,6 +61,47 @@ async function settle() {
 }
 
 const asked = (suffix: string) => requested.some((url) => url.includes(suffix))
+
+function WorkloadRestart({ uid }: { uid?: string }) {
+  const restart = useRestartWorkload()
+  const target = { kind: 'statefulsets', namespace: 'shop', name: 'orders' }
+  return <>
+    <ResourceActionsBar
+      resource={target}
+      data={{ apiVersion: 'apps/v1', metadata: { uid, resourceVersion: '42' } }}
+      onRestart={params => restart.mutate(params)}
+    />
+    {restart.error?.message}
+  </>
+}
+
+it.each([
+  { features: { workloadRestartPreconditions: true }, body: '{"uid":"reviewed-uid"}' },
+  { features: { workloadRestartPreconditions: false }, body: undefined },
+  { features: {}, body: undefined },
+])('sends the single Restart body for $features', async ({ features, body }) => {
+  client.setQueryData(['capabilities'], { features })
+  client.setQueryData(['version-check', getApiBase()], {})
+  vi.mocked(fetch).mockResolvedValue(Response.json({}))
+  await render(<WorkloadRestart uid="reviewed-uid" />)
+  await act(async () => { element.querySelector('button')!.click() })
+  expect(fetch).toHaveBeenCalledTimes(1)
+  const [url, init] = vi.mocked(fetch).mock.calls[0]
+  expect(url).toBe(`${getApiBase()}/workloads/statefulsets/shop/orders/restart`)
+  expect(init?.method).toBe('POST')
+  expect(init?.body).toBe(body)
+})
+
+it.each([
+  { capabilities: undefined, uid: 'reviewed-uid', reason: 'has not been confirmed' },
+  { capabilities: { features: { workloadRestartPreconditions: true } }, uid: undefined, reason: 'UID is unavailable' },
+])('refuses an unverified single Restart when $reason', async ({ capabilities, uid, reason }) => {
+  client.setQueryData(['capabilities'], capabilities)
+  await render(<WorkloadRestart uid={uid} />)
+  await act(async () => { element.querySelector('button')!.click() })
+  await vi.waitFor(() => expect(element.textContent).toContain(reason))
+  expect(asked('/restart')).toBe(false)
+})
 
 function Environment() {
   const { data, error } = usePodEnvironment('shop', 'web')

@@ -1,4 +1,4 @@
-import { Fragment, useState, type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { Badge } from '../ui/Badge'
 import { Tooltip } from '../ui/Tooltip'
@@ -10,7 +10,7 @@ import { PrimaryConflictNote, ProblemCallout, cnpgProblemForPresentation } from 
 import { Note } from './CNPGSharedSummary'
 import { type NavigateToRef, RefLink } from '../ui/RefLink'
 import { StatusDot, toneTextClass } from '../ui/status-tone'
-import { FactGrid, FactRow, FactSource, FactValue, ManagedByText, managedByLabel } from '../facts'
+import { FactGrid, FactRow, FactSource, FactValue, ManagedByText, managedByLabel, WorkspaceCard, DimensionValue } from '../facts'
 import { ProblemList } from '../problems'
 import { formatAge } from '../resources/resource-utils'
 import { FoldSection, SectionHeading } from '../ui/FoldSection'
@@ -197,8 +197,8 @@ export function CNPGClusterSummary({
   const blocked = classifyCNPGClusterPhase(phase) === 'terminal' ? cnpgBlockedPhaseExplanation(phase, row.cluster?.status?.phaseReason) : null
   const [showRest, setShowRest] = useState(initialProblemsExpanded)
   const restDisclosure = useDisclosure(showRest)
-  const Frame = framed ? 'section' : Fragment
-  const frameProps = framed ? { className: 'mb-4 last:mb-0 rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm' } : {}
+  const Frame = framed ? WorkspaceCard : FlatSummary
+  const frameProps = framed ? { className: 'mb-4 last:mb-0' } : {}
 
   return (
     <div className="px-4 py-4">
@@ -239,7 +239,7 @@ export function CNPGClusterSummary({
         <FactGrid>
           {dimensions?.map((d) => (
             <FactRow key={d.id} label={d.label}>
-              <DimensionValue dimension={d} linkLabel={dimensionLinkLabel?.(d.id) ?? d.label} onOpen={onSelectDimension ? () => onSelectDimension(d.id) : undefined} />
+              <DimensionValue tone={d.tone} source={d.source} linkLabel={dimensionLinkLabel?.(d.id) ?? d.label} onOpen={onSelectDimension ? () => onSelectDimension(d.id) : undefined}>{d.text}</DimensionValue>
             </FactRow>
           ))}
           <FactRow label="Instances">
@@ -338,22 +338,7 @@ export function CNPGClusterSummary({
   )
 }
 
-function DimensionValue({ dimension: d, linkLabel, onOpen }: { dimension: CNPGDimension; linkLabel: string; onOpen?: () => void }) {
-  return (
-    <div>
-      <span className="inline-flex flex-wrap items-center gap-x-2">
-        <StatusDot tone={d.tone} />
-        <span className={toneTextClass(d.tone)}>{d.text}</span>
-        {onOpen && (
-          <button type="button" onClick={onOpen} className="text-xs text-accent-text hover:underline">
-            {linkLabel} →
-          </button>
-        )}
-      </span>
-      {d.source && <div className="text-[11.5px] text-theme-text-tertiary">{d.source}</div>}
-    </div>
-  )
-}
+function FlatSummary({ children }: { children: ReactNode }) { return <>{children}</> }
 
 /** A cluster's recovery evidence as facts: schedule, destination, newest backup, WAL archiving, recovery window and restore validation. */
 export function CNPGClusterBackupFacts({ row, onNavigate }: { row: CNPGFleetRow; onNavigate?: NavigateToRef }) {

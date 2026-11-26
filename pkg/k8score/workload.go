@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/resourceid"
+	"github.com/skyhook-io/radar/pkg/workloadrestart"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -38,20 +39,25 @@ type WorkloadRevision struct {
 	IsCurrent bool      `json:"isCurrent"`
 	Replicas  int64     `json:"replicas"`
 	Template  string    `json:"template,omitempty"` // Pod template spec as YAML (for revision diff)
-	// Rollouts only: mid-canary IsCurrent (rolling out) and IsStable (serving
-	// traffic, what an abort reverts to) are different revisions.
+	// Rollouts only: IsStable identifies the abort target, regardless of traffic weight.
 	IsStable bool   `json:"isStable,omitempty"`
 	PodHash  string `json:"podHash,omitempty"`
 	// ReadyReplicas is this revision's own ready pods. Nil when the kind has no
 	// per-revision count and the workload's pods may span revisions.
 	ReadyReplicas *int64 `json:"readyReplicas,omitempty"`
-	// Serving says whether this revision's pods are running and ready. Nil means
+	// Serving reports the active Service selector for a blue-green Rollout, or
+	// whether a native workload revision has ready pods. Nil means
 	// the API can't tell: a StatefulSet or DaemonSet mid-update reports no split
-	// per revision. Rollouts leave it nil; IsStable is their signal.
+	// per revision, and canary traffic weights are unknown.
 	Serving *bool `json:"serving,omitempty"`
 	// ChangeCause is the kubernetes.io/change-cause note on this revision, the
 	// one record of why it exists when no Helm or GitOps source does.
 	ChangeCause string `json:"changeCause,omitempty"`
+	// MatchesDesired says whether a Deployment's spec asks for this revision's
+	// pod template. IsCurrent is only the highest number: no revision matches
+	// while a change waits, as it does on a paused Deployment, and an older one
+	// matches when a paused Deployment is changed back. Nil on other kinds.
+	MatchesDesired *bool `json:"matchesDesired,omitempty"`
 }
 
 // UpdateResourceOptions contains options for updating a resource.
@@ -911,46 +917,52 @@ func (m *WorkloadManager) SetCronJobSuspend(ctx context.Context, namespace, name
 
 // RestartWorkload performs a rolling restart on a Deployment, StatefulSet, or DaemonSet.
 func (m *WorkloadManager) RestartWorkload(ctx context.Context, kind, namespace, name string) error {
+	_, err := m.RestartWorkloadWithResult(ctx, kind, namespace, name)
+	return err
+}
+
+// RestartWorkloadWithResult performs the same unconditional restart and returns its stored marker.
+func (m *WorkloadManager) RestartWorkloadWithResult(ctx context.Context, kind, namespace, name string) (workloadrestart.Result, error) {
 	if m.dynClient == nil {
-		return fmt.Errorf("dynamic client not initialized")
+		return workloadrestart.Result{}, fmt.Errorf("dynamic client not initialized")
 	}
 	normalizedKind := NormalizeWorkloadKind(strings.ToLower(kind))
 	// A Rollout's restart is spec.restartAt; the pod-template annotation below
 	// would change the template hash and re-run every canary step instead.
 	if normalizedKind == "rollouts" {
-		_, err := rollouts.Restart(ctx, m.dynClient, namespace, name)
-		return err
+		return rollouts.RestartWithResult(ctx, m.dynClient, namespace, name)
 	}
 
 	gvr, ok, err := m.workloadGVR(kind)
 	if err != nil {
-		return err
+		return workloadrestart.Result{}, err
 	}
 	if !ok {
-		return fmt.Errorf("unknown resource kind: %s", kind)
+		return workloadrestart.Result{}, fmt.Errorf("unknown resource kind: %s", kind)
 	}
 
+	var deployment *unstructured.Unstructured
 	if normalizedKind == "deployments" {
-		deployment, err := m.dynClient.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+		deployment, err = m.dynClient.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
-			return fmt.Errorf("failed to restart workload: %w", err)
+			return workloadrestart.Result{}, fmt.Errorf("failed to restart workload: %w", err)
 		}
 		if paused, _, _ := unstructured.NestedBool(deployment.Object, "spec", "paused"); paused {
-			return fmt.Errorf("Deployment %s/%s: %w", namespace, name, ErrRestartPaused)
+			return workloadrestart.Result{}, fmt.Errorf("Deployment %s/%s: %w", namespace, name, ErrRestartPaused)
 		}
 	}
 
 	restartTime := time.Now().Format(time.RFC3339)
 	patch := fmt.Sprintf(`{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":"%s"}}}}}`, restartTime)
 
-	_, err = m.dynClient.Resource(gvr).Namespace(namespace).Patch(
+	updated, err := m.dynClient.Resource(gvr).Namespace(namespace).Patch(
 		ctx, name, types.MergePatchType, []byte(patch), metav1.PatchOptions{},
 	)
 	if err != nil {
-		return fmt.Errorf("failed to restart workload: %w", err)
+		return workloadrestart.Result{}, fmt.Errorf("failed to restart workload: %w", err)
 	}
 
-	return nil
+	return workloadrestart.PatchResult(deployment, updated, restartTime, "spec", "template", "metadata", "annotations", "kubectl.kubernetes.io/restartedAt"), nil
 }
 
 // SetDeploymentPaused sets spec.paused on a Deployment, as kubectl rollout pause
@@ -1073,7 +1085,13 @@ func (m *WorkloadManager) ListWorkloadRevisions(ctx context.Context, kind, names
 
 	switch normalizedKind {
 	case "deployments":
-		return m.listDeploymentRevisions(ctx, namespace, name, workloadUID)
+		rsList, err := m.listDeploymentReplicaSets(ctx, namespace)
+		if err != nil {
+			return nil, err
+		}
+		revisions := BuildDeploymentRevisions(rsList, workloadUID)
+		applyDeploymentDesiredTemplate(revisions, rsList, workload, workloadUID)
+		return revisions, nil
 	case "statefulsets", "daemonsets":
 		revisions, err := m.listControllerRevisions(ctx, namespace, name, workloadUID)
 		if err != nil {
@@ -1104,12 +1122,13 @@ func (m *WorkloadManager) listRolloutRevisions(ctx context.Context, namespace, n
 			Replicas:      r.Replicas,
 			Template:      r.Template,
 			ReadyReplicas: &readyReplicas,
+			Serving:       r.Serving,
 		})
 	}
 	return out, nil
 }
 
-func (m *WorkloadManager) listDeploymentRevisions(ctx context.Context, namespace, name, workloadUID string) ([]WorkloadRevision, error) {
+func (m *WorkloadManager) listDeploymentReplicaSets(ctx context.Context, namespace string) ([]unstructured.Unstructured, error) {
 	rsGVR, ok, err := m.workloadGVR("replicasets")
 	if err != nil {
 		return nil, err
@@ -1123,7 +1142,35 @@ func (m *WorkloadManager) listDeploymentRevisions(ctx context.Context, namespace
 		return nil, fmt.Errorf("failed to list replicasets: %w", err)
 	}
 
-	return BuildDeploymentRevisions(rsList.Items, workloadUID), nil
+	return rsList.Items, nil
+}
+
+// applyDeploymentDesiredTemplate marks which revision the Deployment's spec asks for.
+func applyDeploymentDesiredTemplate(revisions []WorkloadRevision, rsList []unstructured.Unstructured, workload *unstructured.Unstructured, workloadUID string) {
+	desired, found, err := unstructured.NestedMap(workload.Object, "spec", "template")
+	if err != nil || !found {
+		return
+	}
+	templates := make(map[int64]map[string]any, len(rsList))
+	for i := range rsList {
+		rs := &rsList[i]
+		if !ownedBy(rs, types.UID(workloadUID)) {
+			continue
+		}
+		number, err := strconv.ParseInt(rs.GetAnnotations()["deployment.kubernetes.io/revision"], 10, 64)
+		if err != nil {
+			continue
+		}
+		if template, found, err := unstructured.NestedMap(rs.Object, "spec", "template"); err == nil && found {
+			templates[number] = template
+		}
+	}
+	for i := range revisions {
+		matches, err := podTemplatesEqual(templates[revisions[i].Number], desired, true)
+		if err == nil {
+			revisions[i].MatchesDesired = &matches
+		}
+	}
 }
 
 // BuildDeploymentRevisions builds WorkloadRevision[] from unstructured ReplicaSets owned by a Deployment.
@@ -1324,11 +1371,12 @@ func BuildControllerRevisions(crList []unstructured.Unstructured, workloadUID st
 			podHash = cr.GetName()
 		}
 		revisions = append(revisions, WorkloadRevision{
-			Number:    revNum,
-			CreatedAt: cr.GetCreationTimestamp().Time,
-			Image:     image,
-			Template:  templateStr,
-			PodHash:   podHash,
+			Number:      revNum,
+			CreatedAt:   cr.GetCreationTimestamp().Time,
+			Image:       image,
+			Template:    templateStr,
+			PodHash:     podHash,
+			ChangeCause: cr.GetAnnotations()["kubernetes.io/change-cause"],
 		})
 	}
 
@@ -1354,7 +1402,7 @@ func applyControllerRevisionServing(revisions []WorkloadRevision, workload *unst
 	}
 
 	settled := -1
-	var ready int64
+	var total, ready int64
 	switch normalizedKind {
 	case "statefulsets":
 		updateRevision, _, _ := unstructured.NestedString(workload.Object, "status", "updateRevision")
@@ -1369,6 +1417,7 @@ func applyControllerRevisionServing(revisions []WorkloadRevision, workload *unst
 		if onRevision != replicas {
 			return
 		}
+		total = replicas
 		ready, _, _ = unstructured.NestedInt64(workload.Object, "status", "readyReplicas")
 		for i := range revisions {
 			if revisions[i].PodHash == updateRevision {
@@ -1384,6 +1433,7 @@ func applyControllerRevisionServing(revisions []WorkloadRevision, workload *unst
 		if updated != desired || misscheduled != 0 {
 			return
 		}
+		total = desired
 		ready, _, _ = unstructured.NestedInt64(workload.Object, "status", "numberReady")
 		for i := range revisions {
 			if revisions[i].IsCurrent {
@@ -1400,6 +1450,7 @@ func applyControllerRevisionServing(revisions []WorkloadRevision, workload *unst
 		revisions[i].Serving = &serving
 		var count int64
 		if i == settled {
+			revisions[i].Replicas = total
 			count = ready
 		}
 		revisions[i].ReadyReplicas = &count

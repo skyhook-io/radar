@@ -2744,17 +2744,52 @@ func TestSetArgoAutoSyncRemovesTheBlockWhenTheDryRunIsRefused(t *testing.T) {
 // A caller denied the dry run is denied the write it precedes.
 func TestSetArgoAutoSyncFailsWhenTheDryRunIsForbidden(t *testing.T) {
 	client := newFakeArgo(appSetOwned(appWithAutomated(map[string]any{"prune": true}, nil)))
-	refuseDryRun(client, apierrors.NewForbidden(argoAppGVR.GroupResource(), "demo", errors.New("denied")))
-	if _, err := SetArgoAutoSync(context.Background(), client, "argocd", "demo", false); !apierrors.IsForbidden(err) {
-		t.Fatalf("err = %v, want Forbidden", err)
+	refuseDryRun(client, apierrors.NewForbidden(argoAppGVR.GroupResource(), "demo", errors.New(`User "reader" cannot patch resource "applications" in API group "argoproj.io" in the namespace "argocd"`)))
+	_, err := SetArgoAutoSync(context.Background(), client, "argocd", "demo", false)
+	var denied *PermissionDenied
+	if !errors.As(err, &denied) || denied.Verb != "patch" || denied.Name != "demo" {
+		t.Fatalf("err = %v, want a named patch denial", err)
 	}
 	if _, found := automatedOf(getTestApp(t, client)); !found {
 		t.Fatal("a forbidden dry run still changed the Application")
 	}
 }
 
+func TestSetArgoAutoSyncFailsWhenAdmissionDeniesTheDryRun(t *testing.T) {
+	client := newFakeArgo(appSetOwned(appWithAutomated(map[string]any{"prune": true}, nil)))
+	refuseDryRun(client, apierrors.NewBadRequest(`admission webhook "freeze.example.org" denied the request: sync policy is frozen`))
+	_, err := SetArgoAutoSync(context.Background(), client, "argocd", "demo", false)
+	var denied *AdmissionDenied
+	if !errors.As(err, &denied) || denied.Policy != "freeze.example.org" {
+		t.Fatalf("err = %v, want the admission denial", err)
+	}
+	if _, found := automatedOf(getTestApp(t, client)); !found {
+		t.Fatal("an admission denial still changed the Application")
+	}
+}
+
 // A conflict retry rebuilds the patch from a fresh read but doesn't ask the
 // API server again whether it keeps enabled.
+func TestSetArgoAutoSyncProbesWithSuspensionAnnotations(t *testing.T) {
+	client := newFakeArgo(appSetOwned(appWithAutomated(map[string]any{"prune": true}, nil)))
+	var dryRunPatch map[string]any
+	client.PrependReactor("patch", "applications", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		patch := action.(clienttesting.PatchActionImpl)
+		if len(patch.GetPatchOptions().DryRun) > 0 {
+			if err := json.Unmarshal(patch.GetPatch(), &dryRunPatch); err != nil {
+				return true, nil, err
+			}
+		}
+		return false, nil, nil
+	})
+	setAutoSync(t, client, false)
+	actualPatch := captureLastPatch(t, client)
+	delete(nestedMap(actualPatch, "metadata"), "resourceVersion")
+	if !reflect.DeepEqual(dryRunPatch, actualPatch) {
+		t.Fatalf("dry-run patch = %#v, want same proposed changes as write %#v", dryRunPatch, actualPatch)
+	}
+}
+
 func TestSetArgoAutoSyncProbesOnceAcrossConflicts(t *testing.T) {
 	client := newFakeArgo(appSetOwned(appWithAutomated(map[string]any{"prune": true}, nil)))
 	var probes, conflicts atomic.Int32

@@ -20,5 +20,9 @@ describe('prometheusStatusRefetchInterval', () => {
     expect(prometheusStatusRefetchInterval({ available: true, connected: true, address: 'http://localhost:1' })).toBe(
       PROM_STATUS_POLL_IDLE_MS,
     )
+    // A backend match still running replaces its note when it settles.
+    expect(
+      prometheusStatusRefetchInterval({ available: true, connected: true, source: { kind: 'openobserve', via: 'local', pending: true } }),
+    ).toBe(PROM_STATUS_POLL_DISCOVERING_MS)
   })
 })

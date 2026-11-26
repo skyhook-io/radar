@@ -25,6 +25,10 @@ import (
 // response. Every field is optional; the zero value is a valid (empty)
 // "basic"-tier context.
 //
+// Observed relationship lists preview up to 20 readable references per field.
+// Exposes is the union of both displayed routing directions. A budget_exceeded
+// omission means the display or access-check limit left the total unknown.
+//
 // Context carries structured evidence rather than generated triage prose.
 // Provider field notes may supply fixed writer semantics keyed to raw fields;
 // they must not compose a verdict or hint from the resource's values.

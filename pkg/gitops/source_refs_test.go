@@ -51,6 +51,42 @@ func TestFluxSourceReferencesRejectInvalidDeclarations(t *testing.T) {
 	}
 }
 
+func TestFluxDependsOn(t *testing.T) {
+	if got := FluxDependsOn(nil); len(got) != 0 {
+		t.Fatalf("nil root declares %v", got)
+	}
+	for _, tc := range []struct{ group, version, kind string }{
+		{"kustomize.toolkit.fluxcd.io", "v1", "Kustomization"},
+		{"helm.toolkit.fluxcd.io", "v2", "HelmRelease"},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			root := &unstructured.Unstructured{Object: map[string]any{
+				"apiVersion": tc.group + "/" + tc.version, "kind": tc.kind,
+				"metadata": map[string]any{"namespace": "team", "name": "app"},
+				"spec": map[string]any{"dependsOn": []any{
+					map[string]any{"name": "base"},
+					map[string]any{"name": "app"},
+					map[string]any{"name": ""},
+					map[string]any{"namespace": "shared"},
+					"invalid",
+					map[string]any{"name": "app", "namespace": "shared"},
+				}},
+			}}
+			want := []resourceid.Ref{
+				resourceid.NewRef(tc.group, tc.kind, "team", "base"),
+				resourceid.NewRef(tc.group, tc.kind, "shared", "app"),
+			}
+			if got := FluxDependsOn(root); !reflect.DeepEqual(got, want) {
+				t.Fatalf("dependencies = %v, want %v", got, want)
+			}
+			root.SetAPIVersion("custom.example/v1")
+			if got := FluxDependsOn(root); len(got) != 0 {
+				t.Fatalf("foreign %s declares %v", tc.kind, got)
+			}
+		})
+	}
+}
+
 func TestInlineHelmReleaseUsesRecordedChart(t *testing.T) {
 	root := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease",
@@ -77,5 +113,63 @@ func TestInlineHelmReleaseUsesRecordedChart(t *testing.T) {
 	got := FluxSourceReferences(root)
 	if len(got) != 1 || got[0].Kind != "OCIRepository" || got[0].Name != "current" {
 		t.Fatalf("chartRef followed stale generated chart: %+v", got)
+	}
+}
+
+func TestExternalArtifactNamesItsGenerator(t *testing.T) {
+	ea := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "ExternalArtifact",
+		"metadata": map[string]any{"namespace": "flux-system", "name": "app"},
+		"spec":     map[string]any{"sourceRef": map[string]any{"apiVersion": "source.extensions.fluxcd.io/v1beta1", "kind": "ArtifactGenerator", "name": "gen"}},
+	}}
+	got := FluxSourceReferences(ea)
+	want := []FluxSourceRef{{Ref: resourceid.NewRef("source.extensions.fluxcd.io", "ArtifactGenerator", "flux-system", "gen"), Role: "generator", Path: "spec.sourceRef"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("refs = %+v, want %+v", got, want)
+	}
+	ea.Object["spec"].(map[string]any)["sourceRef"].(map[string]any)["apiVersion"] = "example.com/v1"
+	if got := FluxSourceReferences(ea); got != nil {
+		t.Fatalf("foreign generator group accepted: %+v", got)
+	}
+}
+
+func TestArtifactGeneratorNamesItsSources(t *testing.T) {
+	gen := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "source.extensions.fluxcd.io/v1beta1", "kind": "ArtifactGenerator",
+		"metadata": map[string]any{"namespace": "flux-system", "name": "gen"},
+		"spec": map[string]any{"sources": []any{
+			map[string]any{"alias": "repo", "kind": "GitRepository", "name": "platform"},
+			map[string]any{"alias": "charts", "kind": "OCIRepository", "name": "charts", "namespace": "shared"},
+			map[string]any{"kind": "HelmRepository", "name": "x"},
+			map[string]any{"alias": "empty", "kind": "Bucket"},
+			map[string]any{"alias": "chart", "kind": "HelmChart", "name": "podinfo"},
+			map[string]any{"alias": "upstream", "kind": "ExternalArtifact", "name": "base", "namespace": "shared"},
+		}},
+	}}
+	want := []FluxSourceRef{
+		{Ref: resourceid.NewRef("source.toolkit.fluxcd.io", "GitRepository", "flux-system", "platform"), Role: "source", Path: "spec.sources", Alias: "repo"},
+		{Ref: resourceid.NewRef("source.toolkit.fluxcd.io", "OCIRepository", "shared", "charts"), Role: "source", Path: "spec.sources", Alias: "charts"},
+		{Ref: resourceid.NewRef("source.toolkit.fluxcd.io", "HelmChart", "flux-system", "podinfo"), Role: "source", Path: "spec.sources", Alias: "chart"},
+		{Ref: resourceid.NewRef("source.toolkit.fluxcd.io", "ExternalArtifact", "shared", "base"), Role: "source", Path: "spec.sources", Alias: "upstream"},
+	}
+	if got := FluxSourceReferences(gen); !reflect.DeepEqual(got, want) {
+		t.Fatalf("refs = %+v, want %+v", got, want)
+	}
+}
+
+func TestIsUpstreamFluxSource(t *testing.T) {
+	for _, tc := range []struct {
+		group, kind string
+		want        bool
+	}{
+		{"source.toolkit.fluxcd.io", "HelmChart", true},
+		{"source.toolkit.fluxcd.io", "ExternalArtifact", true},
+		{"source.extensions.fluxcd.io", "ArtifactGenerator", true},
+		{"source.toolkit.fluxcd.io", "GitRepository", false},
+		{"example.com", "ExternalArtifact", false},
+	} {
+		if got := IsUpstreamFluxSource(tc.group, tc.kind); got != tc.want {
+			t.Errorf("IsUpstreamFluxSource(%q, %q) = %v", tc.group, tc.kind, got)
+		}
 	}
 }

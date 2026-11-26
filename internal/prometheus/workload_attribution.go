@@ -466,10 +466,7 @@ func (c *Client) automaticWorkloadAttributions(scope PodScope) (workloadAttribut
 			c.mu.RLock()
 			var evidenceClient *prom.Client
 			if c.baseURL != "" && c.discoveryGen == entry.generation && !c.retired {
-				tr := prom.NewHTTPTransport(c.baseURL, c.basePath, c.httpClient)
-				tr.Headers = copyHeaders(c.headers)
-				tr.MaxResponseBytes = 4 << 20
-				evidenceClient = prom.NewClient(tr)
+				evidenceClient = prom.NewClient(c.newTransportLocked(c.baseURL, c.basePath, c.httpClient, 4<<20))
 			}
 			c.mu.RUnlock()
 			if evidenceClient != nil {

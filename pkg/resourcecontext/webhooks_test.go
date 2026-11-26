@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/topology"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -87,11 +88,9 @@ func TestWebhookContextReverseExactBoundedAndCached(t *testing.T) {
 	p.objects["ValidatingWebhookConfiguration"] = append(p.objects["ValidatingWebhookConfiguration"], custom)
 	before := p.objects["MutatingWebhookConfiguration"][0].DeepCopy()
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "admission", Namespace: "backend"}}
-	rc := &ResourceContext{}
-	omitted := newOmittedTracker()
-	addWebhookContext(context.Background(), svc, Options{DynamicProv: p}, rc, omitted)
-	if len(rc.Dependents) != maxReferencedByItems || rc.Dependents[0].Kind == rc.Dependents[1].Kind || !slices.Contains(omitted.collect(), OmittedField{Field: "dependents", Reason: OmittedBudgetExceeded}) {
-		t.Fatalf("bounded fair reverse refs: %+v omitted %+v", rc, omitted.collect())
+	rc := Build(context.Background(), svc, Options{DynamicProv: p})
+	if len(rc.Dependents) != maxReferencedByItems || rc.Dependents[0].Kind == rc.Dependents[1].Kind || !slices.Contains(rc.Omitted, OmittedField{Field: "dependents", Reason: OmittedBudgetExceeded}) {
+		t.Fatalf("bounded fair reverse refs: %+v omitted %+v", rc, rc.Omitted)
 	}
 	if !reflect.DeepEqual(before, p.objects["MutatingWebhookConfiguration"][0]) {
 		t.Fatal("reverse scan mutated cached webhook")
@@ -107,35 +106,27 @@ func TestWebhookContextReverseExactBoundedAndCached(t *testing.T) {
 		}
 	}
 	p.lists = map[string]int{}
-	rc = &ResourceContext{}
-	omitted = newOmittedTracker()
-	addWebhookContext(context.Background(), svc, Options{DynamicProv: p, AccessChecker: denyChecker{group: "admissionregistration.k8s.io", kind: "MutatingWebhookConfiguration"}}, rc, omitted)
-	if p.lists["MutatingWebhookConfiguration"] != 0 || p.lists["ValidatingWebhookConfiguration"] != 1 || len(rc.Dependents) != maxReferencedByItems || !slices.Contains(omitted.collect(), OmittedField{Field: "dependents", Reason: OmittedRBACDenied}) {
-		t.Fatalf("permission gate before lists: %+v %+v %+v", p.lists, rc, omitted.collect())
+	rc = Build(context.Background(), svc, Options{DynamicProv: p, AccessChecker: denyChecker{group: "admissionregistration.k8s.io", kind: "MutatingWebhookConfiguration"}})
+	if p.lists["MutatingWebhookConfiguration"] != 0 || p.lists["ValidatingWebhookConfiguration"] != 1 || len(rc.Dependents) != maxReferencedByItems || !slices.Contains(rc.Omitted, OmittedField{Field: "dependents", Reason: OmittedRBACDenied}) {
+		t.Fatalf("permission gate before lists: %+v %+v %+v", p.lists, rc, rc.Omitted)
 	}
 	p.fail = true
-	rc = &ResourceContext{}
-	omitted = newOmittedTracker()
-	addWebhookContext(context.Background(), svc, Options{DynamicProv: p}, rc, omitted)
-	if len(rc.Dependents) != 0 || !slices.Contains(omitted.collect(), OmittedField{Field: "dependents", Reason: OmittedUnavailable}) {
-		t.Fatalf("failed cache lookup: %+v %+v", rc, omitted.collect())
+	rc = Build(context.Background(), svc, Options{DynamicProv: p})
+	if len(rc.Dependents) != 0 || !slices.Contains(rc.Omitted, OmittedField{Field: "dependents", Reason: OmittedUnavailable}) {
+		t.Fatalf("failed cache lookup: %+v %+v", rc, rc.Omitted)
 	}
 }
 
 func TestWebhookContextSuccessfulUnsyncedCacheIsPartial(t *testing.T) {
 	p := &webhookContextProvider{cold: true, objects: map[string][]*unstructured.Unstructured{"MutatingWebhookConfiguration": {webhookContextObject("MutatingWebhookConfiguration", "partial", "backend", "admission")}, "ValidatingWebhookConfiguration": nil}, lists: map[string]int{}}
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "admission", Namespace: "backend"}}
-	rc := &ResourceContext{}
-	omitted := newOmittedTracker()
-	addWebhookContext(context.Background(), svc, Options{DynamicProv: p}, rc, omitted)
-	if len(rc.Dependents) != 1 || !slices.Contains(omitted.collect(), OmittedField{Field: "dependents", Reason: OmittedCacheCold}) {
-		t.Fatalf("unsynced cache claimed complete: %+v %+v", rc, omitted.collect())
+	rc := Build(context.Background(), svc, Options{DynamicProv: p})
+	if len(rc.Dependents) != 1 || !slices.Contains(rc.Omitted, OmittedField{Field: "dependents", Reason: OmittedCacheCold}) {
+		t.Fatalf("unsynced cache claimed complete: %+v %+v", rc, rc.Omitted)
 	}
-	rc = &ResourceContext{}
-	omitted = newOmittedTracker()
-	addWebhookContext(context.Background(), svc, Options{DynamicProv: struct{ topology.DynamicProvider }{p}}, rc, omitted)
-	if !slices.Contains(omitted.collect(), OmittedField{Field: "dependents", Reason: OmittedUnavailable}) {
-		t.Fatalf("unsupported capability claimed complete: %+v", omitted.collect())
+	rc = Build(context.Background(), svc, Options{DynamicProv: struct{ topology.DynamicProvider }{p}})
+	if !slices.Contains(rc.Omitted, OmittedField{Field: "dependents", Reason: OmittedUnavailable}) {
+		t.Fatalf("unsupported capability claimed complete: %+v", rc.Omitted)
 	}
 }
 
@@ -206,15 +197,13 @@ func TestWebhookContextObservationStates(t *testing.T) {
 				p.objects[kind] = []*unstructured.Unstructured{webhookContextObject(kind, "known", "backend", "admission")}
 			}
 			svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "admission", Namespace: "backend"}}
-			rc := &ResourceContext{}
-			omitted := newOmittedTracker()
-			addWebhookContext(context.Background(), svc, Options{DynamicProv: p}, rc, omitted)
+			rc := Build(context.Background(), svc, Options{DynamicProv: p})
 			if scenario.reason == "" {
-				if len(omitted.collect()) != 0 {
-					t.Fatalf("synced scan incomplete: %+v", omitted.collect())
+				if len(rc.Omitted) != 0 {
+					t.Fatalf("synced scan incomplete: %+v", rc.Omitted)
 				}
-			} else if !slices.Contains(omitted.collect(), OmittedField{Field: "dependents", Reason: scenario.reason}) {
-				t.Fatalf("state lost: %+v", omitted.collect())
+			} else if !slices.Contains(rc.Omitted, OmittedField{Field: "dependents", Reason: scenario.reason}) {
+				t.Fatalf("state lost: %+v", rc.Omitted)
 			}
 			if scenario.read {
 				if len(rc.Dependents) != 2 || len(p.lists) != 2 {
@@ -224,5 +213,45 @@ func TestWebhookContextObservationStates(t *testing.T) {
 				t.Fatalf("unreadable source scanned: %+v lists=%+v", rc, p.lists)
 			}
 		})
+	}
+}
+
+func TestServiceDependentsShareOnePreviewWithWebhooks(t *testing.T) {
+	const kind = "MutatingWebhookConfiguration"
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "admission", Namespace: "backend"}}
+	p := &webhookContextProvider{objects: map[string][]*unstructured.Unstructured{
+		kind:                             {webhookContextObject(kind, "hook", "backend", "admission")},
+		"ValidatingWebhookConfiguration": nil,
+	}, lists: map[string]int{}, cold: true}
+	var refs []topology.ResourceRef
+	for i := range 25 {
+		refs = append(refs, topology.ResourceRef{Group: "example.io", Kind: "Consumer", Namespace: "backend", Name: fmt.Sprintf("item-%02d", i)})
+	}
+	checker := &countingRefChecker{}
+	rc := Build(t.Context(), svc, Options{Relationships: &topology.Relationships{Dependents: refs}, DynamicProv: p, AccessChecker: checker})
+	if len(rc.Dependents) != 20 || !slices.Contains(rc.Dependents, ContextRef{Group: "admissionregistration.k8s.io", Kind: kind, Name: "hook"}) || checker.calls != 4 {
+		t.Fatalf("checks=%d, dependents=%v", checker.calls, rc.Dependents)
+	}
+	for _, reason := range []OmittedReason{OmittedBudgetExceeded, OmittedCacheCold} {
+		if !slices.Contains(rc.Omitted, OmittedField{"dependents", reason}) {
+			t.Fatalf("omissions %v", rc.Omitted)
+		}
+	}
+}
+
+func TestWebhookContextFailedPermissionCheckSkipsInventory(t *testing.T) {
+	const uncheckedKind = "MutatingWebhookConfiguration"
+	const readableKind = "ValidatingWebhookConfiguration"
+	p := &webhookContextProvider{
+		objects: map[string][]*unstructured.Unstructured{
+			uncheckedKind: {webhookContextObject(uncheckedKind, "unchecked", "backend", "admission")},
+			readableKind:  nil,
+		},
+		lists: map[string]int{},
+	}
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "admission", Namespace: "backend"}}
+	rc := Build(t.Context(), svc, Options{DynamicProv: p, AccessChecker: kindDecider{kind: uncheckedKind, decision: ownership.Undecided}})
+	if len(rc.Dependents) != 0 || p.lists[uncheckedKind] != 0 || p.lists[readableKind] != 1 || !slices.Equal(rc.Omitted, []OmittedField{{"dependents", OmittedUnavailable}}) {
+		t.Fatalf("failed access check: omissions %v, lists %v", rc.Omitted, p.lists)
 	}
 }

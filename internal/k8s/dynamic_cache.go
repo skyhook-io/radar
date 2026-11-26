@@ -138,7 +138,7 @@ func (conn *Connection) configureDynamicCallbacks(cfg *k8score.DynamicCacheConfi
 	}
 	cfg.OnReceived = func(kind string) {
 		if lifetime.Err() == nil {
-			timeline.IncrementReceived(kind)
+			binding.IncrementReceived(kind)
 		}
 	}
 	cfg.OnChange = func(change ResourceChange, obj, oldObj any) {
@@ -148,7 +148,7 @@ func (conn *Connection) configureDynamicCallbacks(cfg *k8score.DynamicCacheConfi
 	}
 	cfg.OnDrop = func(kind, ns, name, reason, op string) {
 		if lifetime.Err() == nil {
-			timeline.RecordDrop(kind, ns, name, reason, op, cluster)
+			binding.RecordDrop(kind, ns, name, reason, op, cluster)
 		}
 	}
 }
@@ -253,11 +253,12 @@ func (s *connectionDynamicCache) onCRDDiscoveryComplete(callback func()) {
 }
 
 type supportedCRDResource struct {
-	Group      string
-	Versions   []string
-	Resource   string
-	Kind       string
-	Namespaced bool
+	NativeDiscovery bool // Preserve native discovery classification on partial-discovery recovery.
+	Group           string
+	Versions        []string
+	Resource        string
+	Kind            string
+	Namespaced      bool
 }
 
 // supportedCRDFallbacks is the server-side catalog of dynamic integrations
@@ -326,6 +327,7 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "source.toolkit.fluxcd.io", Versions: []string{"v1", "v1beta2"}, Resource: "helmrepositories", Kind: "HelmRepository", Namespaced: true},
 	{Group: "source.toolkit.fluxcd.io", Versions: []string{"v1", "v1beta2"}, Resource: "helmcharts", Kind: "HelmChart", Namespaced: true},
 	{Group: "source.toolkit.fluxcd.io", Versions: []string{"v1", "v1beta2"}, Resource: "buckets", Kind: "Bucket", Namespaced: true},
+	{Group: "source.extensions.fluxcd.io", Versions: []string{"v1beta1"}, Resource: "artifactgenerators", Kind: "ArtifactGenerator", Namespaced: true},
 	{Group: "source.toolkit.fluxcd.io", Versions: []string{"v1"}, Resource: "externalartifacts", Kind: "ExternalArtifact", Namespaced: true},
 	{Group: "kustomize.toolkit.fluxcd.io", Versions: []string{"v1", "v1beta2"}, Resource: "kustomizations", Kind: "Kustomization", Namespaced: true},
 	{Group: "helm.toolkit.fluxcd.io", Versions: []string{"v2", "v2beta2", "v2beta1"}, Resource: "helmreleases", Kind: "HelmRelease", Namespaced: true},
@@ -345,7 +347,9 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "scheduling.k8s.io", Versions: []string{"v1"}, Resource: "priorityclasses", Kind: "PriorityClass", Namespaced: false},
 	{Group: "admissionregistration.k8s.io", Versions: []string{"v1"}, Resource: "validatingwebhookconfigurations", Kind: "ValidatingWebhookConfiguration", Namespaced: false},
 	{Group: "admissionregistration.k8s.io", Versions: []string{"v1"}, Resource: "validatingadmissionpolicies", Kind: "ValidatingAdmissionPolicy", Namespaced: false},
+	{Group: "admissionregistration.k8s.io", Versions: []string{"v1", "v1beta1", "v1alpha1"}, Resource: "mutatingadmissionpolicies", Kind: "MutatingAdmissionPolicy", NativeDiscovery: true},
 	{Group: "admissionregistration.k8s.io", Versions: []string{"v1"}, Resource: "validatingadmissionpolicybindings", Kind: "ValidatingAdmissionPolicyBinding", Namespaced: false},
+	{Group: "admissionregistration.k8s.io", Versions: []string{"v1", "v1beta1", "v1alpha1"}, Resource: "mutatingadmissionpolicybindings", Kind: "MutatingAdmissionPolicyBinding", NativeDiscovery: true},
 	{Group: "gateway.networking.k8s.io", Versions: []string{"v1", "v1beta1"}, Resource: "gatewayclasses", Kind: "GatewayClass", Namespaced: false},
 	{Group: "gateway.networking.k8s.io", Versions: []string{"v1", "v1beta1"}, Resource: "gateways", Kind: "Gateway", Namespaced: true},
 	{Group: "gateway.networking.k8s.io", Versions: []string{"v1", "v1beta1"}, Resource: "httproutes", Kind: "HTTPRoute", Namespaced: true},
@@ -670,7 +674,7 @@ func (conn *Connection) registerSupportedCRDFallbacks() {
 					Kind:       c.Kind,
 					Name:       c.Resource,
 					Namespaced: c.Namespaced,
-					IsCRD:      true,
+					IsCRD:      !c.NativeDiscovery,
 					Verbs:      []string{"get", "list", "watch"},
 				})
 				mu.Lock()

@@ -300,8 +300,10 @@ Table-based resource browser with smart columns per resource kind.
 - Search by name, filter by status or problems (CrashLoopBackOff, ImagePullBackOff, etc.)
 - Add custom columns from any label or annotation — sortable, filterable, and resizable
 - Click any resource for YAML manifest, related resources, logs, and events
+- Open **Logs** on a ReplicaSet, or press **L** on its resource row, to follow the Pods controlled by that revision during a rollout.
 - Pod logs list init containers, marked `(init)`, and open on the init container a Pod is stuck on, so a Pod that never starts still shows why
 - Set regular or init-container images on Deployments, StatefulSets, DaemonSets, and Argo Rollouts, with live rollout progress in tables, drawers, workload views, and Applications
+- Investigate app changes in Timeline and compare a workload’s retained revisions from Overview. Apps with identified Helm or GitOps delivery records also offer Deploys, with each recorded revision, outcome, and source.
 
 ### Image Filesystem Viewer
 
@@ -352,9 +354,8 @@ Diff any two Kubernetes resources of the same kind side-by-side — like compari
 
 View TLS certificate details and expiry dates across all namespaces — catch expiring certificates before they cause outages.
 
-- Parses TLS secrets to show certificate subject, issuer, and validity period
+- Open a Secret to inspect the PEM certificates in each data key, including CA bundles in Opaque Secrets
 - Dashboard-level certificate expiry overview
-- Available from the resource detail view for any TLS-type Secret
 
 ### GitOps
 
@@ -365,7 +366,7 @@ Monitor, diagnose, and manage FluxCD and ArgoCD resources in one place.
   <br><em>GitOps fleet view — Argo + Flux applications side-by-side with sync, health, source, destination, and lifecycle state</em>
 </p>
 
-- Fleet view + per-app detail page for **ArgoCD** (`Application`, `ApplicationSet`, `AppProject`) and **FluxCD** (`GitRepository`, `OCIRepository`, `HelmRepository`, `Bucket`, `Kustomization`, `HelmRelease`, `Alert`)
+- Fleet view + per-app detail page for **ArgoCD** (`Application`, `ApplicationSet`, `AppProject`) and **FluxCD** (`GitRepository`, `OCIRepository`, `HelmRepository`, `Bucket`, `ExternalArtifact`, `ArtifactGenerator`, `Kustomization`, `HelmRelease`, `Alert`)
 - **Flux Operator** — a Flux card on the GitOps page (version, controllers, reconciler counts from `FluxReport`) and views for `FluxInstance`, `FluxReport`, `ResourceSet`, `ResourceSetInputProvider`
 - **Diagnosis** — field-level drift, recent events per resource, stuck-drift-loop detection, parsed operation failures, one-click remediation
 - Sync, suspend, resume, reconcile, and rollback from the UI or through MCP
@@ -474,7 +475,7 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets, 
 | **Autoscaling** | HorizontalPodAutoscalers, VerticalPodAutoscalers |
 | **Cluster** | Nodes, Namespaces, ServiceAccounts, Events |
 | **Other Kubernetes APIs** | CertificateSigningRequests; Workloads, PodGroups, CompositePodGroups, PodCertificateRequests, ClusterTrustBundles (only when served by the cluster) |
-| **GitOps (FluxCD)** | GitRepository, OCIRepository, HelmRepository, Kustomization, HelmRelease, Alert |
+| **GitOps (FluxCD)** | GitRepository, OCIRepository, HelmRepository, ExternalArtifact, ArtifactGenerator, Kustomization, HelmRelease, Alert |
 | **GitOps (Flux Operator)** | FluxInstance, FluxReport, ResourceSet, ResourceSetInputProvider |
 | **GitOps (ArgoCD)** | Application, ApplicationSet, AppProject |
 | **Argo Rollouts** | Rollout |

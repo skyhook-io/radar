@@ -222,6 +222,25 @@ func TestLogToolCallRecordsErrorResultsWithoutLeakingContent(t *testing.T) {
 	}
 }
 
+func TestLogToolCallRecordsServerSideErrorCause(t *testing.T) {
+	var logs bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	text := &mcp.TextContent{Text: "operator summary"}
+	cause := errors.New("original GitOps refusal")
+	result := &mcp.CallToolResult{Content: []mcp.Content{text}}
+	result.SetError(cause)
+	call := logToolCall("manage_gitops", func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, any, error) {
+		return result, nil, nil
+	})
+	res, _, err := call(t.Context(), nil, struct{}{})
+	if err != nil || !res.IsError || len(res.Content) != 1 || res.Content[0] != text || !strings.Contains(logs.String(), cause.Error()) {
+		t.Fatalf("result=%v err=%v logs=%s", res, err, logs.String())
+	}
+}
+
 func TestSensitiveToolArgumentsAndErrorsAreNotLogged(t *testing.T) {
 	for _, name := range []string{"manage_helm", "curl_service", "exec_pod"} {
 		t.Run(name, func(t *testing.T) {

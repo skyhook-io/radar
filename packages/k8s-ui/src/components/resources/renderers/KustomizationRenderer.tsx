@@ -1,5 +1,6 @@
-import { Layers, FolderTree, GitBranch } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, ProblemAlerts, ResourceLink } from '../../ui/drawer-components'
+import { Layers, FolderTree } from 'lucide-react'
+import { FluxHealthCheckExprs } from './FluxHealthCheckExprs'
+import { Section, PropertyList, Property, ConditionsSection, ProblemAlerts } from '../../ui/drawer-components'
 import { GitOpsStatusBadge, ManagedResourcesList, SyncCountdown } from '../../gitops'
 import { fluxConditionsToGitOpsStatus, parseFluxInventory, type FluxCondition } from '../../../types/gitops'
 import { TimeValue } from '../../ui/ScheduleValue'
@@ -11,7 +12,7 @@ interface KustomizationRendererProps {
   onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
 }
 
-export function KustomizationRenderer({ data, onNavigate }: KustomizationRendererProps) {
+export function KustomizationRenderer({ data }: KustomizationRendererProps) {
   const status = data.status || {}
   const spec = data.spec || {}
   const conditions = (status.conditions || []) as FluxCondition[]
@@ -60,9 +61,6 @@ export function KustomizationRenderer({ data, onNavigate }: KustomizationRendere
       message: `Revision mismatch: attempted ${status.lastAttemptedRevision} but applied ${status.lastAppliedRevision} — the latest reconciliation failed.`,
     })
   }
-
-  // Dependencies
-  const dependsOn: Array<{ name: string; namespace?: string }> = spec.dependsOn || []
 
   // Source reference
   const sourceRef = spec.sourceRef || {}
@@ -118,23 +116,6 @@ export function KustomizationRenderer({ data, onNavigate }: KustomizationRendere
         </PropertyList>
       </Section>
 
-      {/* Dependencies */}
-      {dependsOn.length > 0 && (
-        <Section title={`Dependencies (${dependsOn.length})`} icon={GitBranch}>
-          <div className="flex flex-wrap gap-1">
-            {dependsOn.map((dep, idx) => (
-              <ResourceLink
-                key={idx}
-                name={dep.name}
-                kind="kustomizations"
-                namespace={dep.namespace || data.metadata?.namespace || ''}
-                onNavigate={onNavigate}
-              />
-            ))}
-          </div>
-        </Section>
-      )}
-
       {/* Health checks */}
       {spec.healthChecks && spec.healthChecks.length > 0 && (
         <Section title={`Health Checks (${spec.healthChecks.length})`} defaultExpanded={false}>
@@ -156,6 +137,8 @@ export function KustomizationRenderer({ data, onNavigate }: KustomizationRendere
           </div>
         </Section>
       )}
+
+      <FluxHealthCheckExprs exprs={spec.healthCheckExprs} />
 
       {/* Managed Resources (Inventory) */}
       {managedResources.length > 0 && (

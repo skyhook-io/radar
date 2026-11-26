@@ -36,6 +36,7 @@
   }
   @container metrics (min-width: 1200px) {
     .metrics-chart-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .metrics-chart-pair { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .metrics-chart-wide { grid-column: auto; }
   }
   .investigation-assessment {

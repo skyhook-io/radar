@@ -55,7 +55,9 @@ func admissionPolicyRule(role rbacv1.ClusterRole) *rbacv1.PolicyRule {
 	for i := range role.Rules {
 		rule := &role.Rules[i]
 		if slices.Contains(rule.Resources, "validatingadmissionpolicies") ||
-			slices.Contains(rule.Resources, "validatingadmissionpolicybindings") {
+			slices.Contains(rule.Resources, "validatingadmissionpolicybindings") ||
+			slices.Contains(rule.Resources, "mutatingadmissionpolicies") ||
+			slices.Contains(rule.Resources, "mutatingadmissionpolicybindings") {
 			return rule
 		}
 	}
@@ -76,7 +78,7 @@ func TestAdmissionPolicyRBACGate(t *testing.T) {
 			t.Fatalf("%s: admission policy rule is missing", overrides)
 		}
 		if !slices.Equal(rule.APIGroups, []string{"admissionregistration.k8s.io"}) ||
-			!slices.Equal(rule.Resources, []string{"validatingadmissionpolicies", "validatingadmissionpolicybindings"}) ||
+			!slices.Equal(rule.Resources, []string{"validatingadmissionpolicies", "validatingadmissionpolicybindings", "mutatingadmissionpolicies", "mutatingadmissionpolicybindings"}) ||
 			!slices.Equal(rule.Verbs, []string{"get", "list", "watch"}) {
 			t.Errorf("%s: admission policy rule = %+v", overrides, *rule)
 		}

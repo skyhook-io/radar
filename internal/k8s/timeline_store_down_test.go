@@ -18,8 +18,6 @@ func TestTimelineStoreDownCountsLostChangesOnly(t *testing.T) {
 	state := newConnectionCache()
 	timeline.ResetStore()
 	t.Cleanup(timeline.ResetStore)
-	timeline.ResetMetricsForContextSwitch()
-	t.Cleanup(timeline.ResetMetricsForContextSwitch)
 
 	dropped := func(reason string) int64 {
 		return timeline.GetMetrics().GetSnapshot().Counters.Dropped[reason]
@@ -56,7 +54,7 @@ func TestTimelineStoreDownCountsLostChangesOnly(t *testing.T) {
 	state.recordToTimelineStore(timeline.CaptureStore(), "ctx", "Pod", "shop", "new", "u3", "add", nil, pod("new", time.Second), nil, false)
 	state.recordToTimelineStore(timeline.CaptureStore(), "ctx", "Pod", "shop", "listed", "u1", "update", pod("listed", time.Hour), running, nil, false)
 	state.recordToTimelineStore(timeline.CaptureStore(), "ctx", "Pod", "shop", "listed", "u1", "delete", pod("listed", time.Hour), nil, nil, false)
-	state.recordK8sEventToTimeline(timeline.GetStore(), "ctx", k8sEventPod("new", "Started"))
+	state.recordK8sEventToTimeline(timeline.CaptureStore(), "ctx", k8sEventPod("new", "Started"))
 	if got := storeDown(); got != 4 {
 		t.Fatalf("store_unavailable=%d, want 4 (new add, update, delete, K8s event)", got)
 	}
@@ -78,8 +76,6 @@ func TestTimelineStoreFailureCountsLostKubernetesEvents(t *testing.T) {
 	}
 	timeline.ResetStore()
 	t.Cleanup(timeline.ResetStore)
-	timeline.ResetMetricsForContextSwitch()
-	t.Cleanup(timeline.ResetMetricsForContextSwitch)
 
 	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypePostgres, DSN: dsn}); err != nil {
 		t.Fatalf("InitStore: %v", err)
@@ -93,7 +89,7 @@ func TestTimelineStoreFailureCountsLostKubernetesEvents(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	state.recordK8sEventToTimeline(timeline.GetStore(), "ctx", k8sEventPod("web", "Started"))
+	state.recordK8sEventToTimeline(timeline.CaptureStore(), "ctx", k8sEventPod("web", "Started"))
 	if got := timeline.GetMetrics().GetSnapshot().Counters.Dropped[timeline.DropReasonStoreFailed]; got != 1 {
 		t.Fatalf("store_failed=%d after a failed K8s Event write, want 1", got)
 	}

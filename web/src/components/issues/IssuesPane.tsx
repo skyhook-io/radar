@@ -28,6 +28,7 @@ import { IssueDiagnoseButton } from "../diagnose/LocalDiagnoseAction";
 import { recordUsageEvent } from "../../api/usage-data";
 import { uncheckedSourceLines, uncheckedSubjectWhy } from "./uncheckedSources";
 import { UncheckedSourceHelp } from "./UncheckedSourceHelp";
+import { useIssueExpansion, useIssueRowNotes } from "./useIssueExpansion";
 
 // A capacity-relevant issue links to its Karpenter diagnosis. Karpenter is
 // always single-cluster (unlike Argo hub-and-spoke), so the issue and the
@@ -201,6 +202,11 @@ export function IssuesPane({
   const subjectHidden =
     !!subject?.namespace && namespaces.length > 0 && !namespaces.includes(subject.namespace);
   const related = useSubjectIssues(subject, !subjectHidden);
+  const expansion = useIssueExpansion(() => {
+    if (subject) void related.refetch();
+    else void refetch();
+  });
+  const rowNotes = useIssueRowNotes();
   const subjectState = subject
     ? issueSubjectState(subject, namespaces, related)
     : null;
@@ -424,6 +430,11 @@ export function IssuesPane({
           issues={shown}
           anyData={subject ? !!related.data : !!data}
           onResourceClick={onResourceClick}
+          onOpenIssueChange={expansion.onOpenIssueChange}
+          expandedIssue={expansion.expandedIssue}
+          timelineLinks={expansion.timelineLinks}
+          rowChanges={rowNotes.rowChanges}
+          onVisibleIssuesChange={rowNotes.onVisibleIssuesChange}
           renderActions={({ issue }) => {
             const capacityHref = capacityHrefForIssue(issue, hasKarpenter);
             return (

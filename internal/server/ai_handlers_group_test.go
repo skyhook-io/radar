@@ -26,11 +26,6 @@ import (
 // Knative Service receives the core Service's spec + IP + selector
 // instead. This pins the fix and would regress if the typed cache is
 // consulted before the group qualifier.
-//
-// Same bug class as T12's group-blind root lookup, but on the single-
-// resource GET path; ResourceContext relationship walks already disambig
-// by group (see pkg/topology/managedby_test.go), so a regression here is
-// the last remaining hot spot for kind/plural collisions on the GET API.
 func TestAIGetResource_GroupRoutesToDynamic(t *testing.T) {
 	// Seed a Knative Service named "nginx" in "default" — same name+ns as
 	// the core Service registered in TestMain. Without ?group routing, the

@@ -16,6 +16,32 @@ organization owner can open Integrations from an empty Metrics tab when a runnin
 Kubernetes UID. The connected Radar agent checks workload access and cluster
 identity for each chart read. When both sources are connected, Datadog workload totals appear alongside Prometheus traffic, resource, network and storage charts. Request and limit lines stay on the current-Pod charts where their units and scope match.
 
+### Google Kubernetes Engine system metrics
+
+On GKE, enabling system metrics in Cloud Monitoring provides historical CPU,
+non-evictable memory, Pod network rates, container restarts, node ephemeral
+storage use and current PVC use. Radar can query these through an existing
+Managed Service for Prometheus frontend or directly through Google's hosted
+Prometheus API. Both paths work without managed Prometheus collection,
+node-exporter or kube-state-metrics. Google's sampling and ingestion delay can
+leave the last few minutes of a chart empty.
+[Connect Radar to the hosted API or a frontend](configuration.md#gke-system-metric-connections).
+
+Every query selects the project, control-plane location and GKE cluster name.
+Workload charts use current controller-owned Pods and omit the lookback after
+each Pod's creation so reused names cannot include a previous replica's data.
+Network and CPU rates have a five-minute lookback. Restart counts use the per-container counter increase over a
+one-hour window. For a new Pod, the native cumulative count covers its time alive after the first one-minute sample lookback. The PVC gauge uses the claim name and namespace and takes the
+maximum across mounts of the same volume.
+
+HTTP request metrics, CPU throttling, workload disk I/O, deleted replica history
+and rightsizing still need their existing sources. A discovered frontend serves
+the curated charts only. When a conventional store is also present, Radar keeps
+its measured resource panels and HTTP instrumentation. Missing CPU and memory
+panels, including the current-Pod comparisons, can use GKE measurements.
+While conventional Pod identity is being checked, the Metrics tab keeps its quick retry. When identity cannot be checked, independently verified native panels retain the conventional diagnostic. Conventional errors and incomplete populated panels keep their diagnostics. See [Metrics connections](configuration.md#local-integration-connections)
+and [Google's frontend setup](https://cloud.google.com/stackdriver/docs/managed-prometheus/query-api-ui).
+
 ### Datadog-backed rightsizing in Radar Hub
 
 After an organization owner enables rightsizing for a verified cluster, the

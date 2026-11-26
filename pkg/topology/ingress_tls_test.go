@@ -31,11 +31,11 @@ func TestIngressTLSSecretEdgesRespectNamespaceAndVisibility(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("TLS edges: %+v", graph.Edges)
 	}
-	rel := GetRelationships("Ingress", "a", "entry", graph, provider, nil)
+	rel := graphRelationships("Ingress", "a", "entry", graph, provider, nil)
 	if rel == nil || len(rel.ConfigRefs) != 1 || rel.ConfigRefs[0].Name != "tls" || rel.ConfigRefs[0].Namespace != "a" {
 		t.Fatalf("Ingress refs: %+v", rel)
 	}
-	rel = GetRelationships("Secret", "a", "tls", graph, provider, nil)
+	rel = graphRelationships("Secret", "a", "tls", graph, provider, nil)
 	if rel == nil || len(rel.Consumers) != 1 || rel.Consumers[0].Kind != "Ingress" || rel.Consumers[0].Group != "networking.k8s.io" {
 		t.Fatalf("reverse refs: %+v", rel)
 	}
