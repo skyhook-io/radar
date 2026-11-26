@@ -513,7 +513,11 @@ Fixtures cover healthy + drifted + broken-sync + broken-path + manual-sync + sus
 
 Reading status only needs the default ClusterRole's read access on `argoproj.io` / `*.toolkit.fluxcd.io` (enabled by default in the Helm chart's `rbac.crdGroups.argo` / `.flux`).
 
-Triggering Sync / Reconcile / Suspend / Rollback needs `get` and `patch` on the parent CRDs. The chart enables the right verbs when `rbac.helm: true` is set, or you can scope it more tightly via `rbac.additionalRules`. Argo CD's own RBAC is not consulted; see [How Radar performs Argo actions](#how-radar-performs-argo-actions).
+Kubernetes RBAC controls [GitOps actions](#action-permissions). Standard
+Radar Cloud Owners receive the [managed Argo CD Application grant](../deploy/helm/radar/README.md#cloud-owner-permissions).
+Flux uses the caller's Kubernetes roles. For a shared Radar install with
+authentication disabled, actions use Radar's ServiceAccount. Configure that
+account's grants with `rbac.additionalRules`.
 
 The lifecycle controller-health probe (Home dashboard `GitOps Controllers` card, finalizer-owner attribution in lifecycle Issues) reads pods in `argocd` and `flux-system`. Operators with no access there still get the chip and the basic Issue; the controller-status enrichment is omitted gracefully.
 

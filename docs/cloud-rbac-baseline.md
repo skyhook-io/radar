@@ -99,7 +99,7 @@ Karpenter wildcard. The old Karpenter/Cilium/Prometheus rules do not follow `all
 the new baseline does, for its named tuples only. Namespaced PrometheusRules and
 CiliumNetworkPolicies are intentionally also in the new namespaced role, so they
 do not depend on enabling cluster infrastructure reads. Turning off the new
-add-on does not revoke those old grants. Member/owner write permissions are unchanged.
+add-on does not revoke those old grants. See [Managed Owner permissions](#managed-owner-permissions) for the write grants.
 
 Enterprise customers who want only their own group bindings can set
 `cloud.defaultRbac.create=false`. The Hub can still forward IdP groups as
@@ -110,19 +110,14 @@ sharing are separate concerns; this chart change does not redefine them.
 
 ## Managed Owner permissions
 
-Each chart-approved capability gets an exact role bound to a dedicated
-`radar:owner-access:<capability>` group. Hub attaches the enabled groups to
-eligible Owners on their authenticated requests. Radar admits only the
-groups its installation approved. Grants cover entire resources, and the
-Kubernetes apiserver evaluates all of the caller's roles.
+The chart binds each approved grant to a dedicated
+`radar:owner-access:<grant>` group. Hub forwards the active groups for an
+eligible Owner on direct cluster requests, including MCP. The agent accepts only
+groups its Helm release approves. Kubernetes enforces the resulting resource
+permissions alongside the caller’s other bindings.
 
-Standard approvals cover Argo CD Applications, CloudNativePG administration,
-and Velero backup runs and schedules. All managed Velero grants require
-unscoped built-in Owner roles. Velero
-backup data and deletion require individual cluster approval and activation
-in Hub. The [chart guide](../deploy/helm/radar/README.md#cloud-owner-permissions)
-covers scope and the configuration. A customer-managed role or vendor
-aggregate can grant the same access independently.
+Use the [chart guide](../deploy/helm/radar/README.md#cloud-owner-permissions)
+for the defaults, scope, opt-outs and upgrade order.
 
 ## Rollout and verification
 
