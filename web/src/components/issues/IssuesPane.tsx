@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useApplications, useIssues, useSubjectIssues, type SubjectIssuesResponse } from "../../api/client";
 import {
   useAPIResources,
@@ -453,6 +453,11 @@ export function IssuesPane({
         <IssuesView
           issues={shown}
           appForIssue={appForIssue}
+          renderAppLink={(key, label) => {
+            const params = new URLSearchParams({ app: key });
+            if (namespaces.length) params.set("namespaces", namespaces.join(","));
+            return <Link to={{ pathname: "/applications", search: params.toString() }}>{label}</Link>;
+          }}
           linkedIssueId={linkedIssueId}
           onManualIssueToggle={clearLinkedIssue}
           anyData={subject ? !!related.data : !!data}

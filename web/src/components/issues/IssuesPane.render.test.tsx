@@ -4,11 +4,12 @@ import { createRoot } from 'react-dom/client'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderToString } from 'react-dom/server'
 import { createMemoryRouter, MemoryRouter, RouterProvider } from 'react-router-dom'
+import type { IssueAppInventoryRow } from '@skyhook-io/k8s-ui/components/issues'
 import type { IssuesResponse, SubjectIssuesResponse } from '../../api/client'
 import { IssuesPane } from './IssuesPane'
 
 const state = vi.hoisted(() => ({
-  applications: vi.fn(() => ({ data: undefined })),
+  applications: vi.fn<() => { data?: { applications: IssueAppInventoryRow[] } }>(() => ({})),
   fleet: { data: undefined as IssuesResponse | undefined, isLoading: false, error: null as Error | null, dataUpdatedAt: 0, refetch: vi.fn() },
   subject: { data: undefined as SubjectIssuesResponse | undefined, isLoading: false, error: null as Error | null, dataUpdatedAt: 0, refetch: vi.fn() },
 }))
@@ -46,6 +47,22 @@ describe('Issues page query ownership', () => {
     expect(state.applications).toHaveBeenLastCalledWith(['db'], { enabled: true })
     render(subjectUrl, ['db'])
     expect(state.applications).toHaveBeenLastCalledWith(['db'], { enabled: false })
+  })
+
+  it('links the panel to its exact application within the selected namespaces', () => {
+    const key = 'helm/db/checkout+api'
+    const workload = { kind: 'Deployment', name: 'checkout-api', namespace: 'db', group: 'apps' }
+    state.applications.mockReturnValueOnce({ data: { applications: [{ key, name: 'checkout', workloads: [workload] }] } })
+    const first = { ...issue, ...workload, grouping_scope: 'workload' }
+    state.fleet.data = { issues: [first, { ...first, id: 'other' }] }
+
+    const container = document.createElement('div')
+    container.innerHTML = render('/issues?issue=other', ['db', 'test'])
+    const link = container.querySelector<HTMLAnchorElement>('h2 a')!
+    expect(link.textContent).toBe('Open checkout application')
+    const url = new URL(link.href)
+    expect(url.pathname).toBe('/applications')
+    expect(Object.fromEntries(url.searchParams)).toEqual({ app: key, namespaces: 'db,test' })
   })
 
   it('replaces a link when triaging and reveals the next linked issue through an active filter', async () => {

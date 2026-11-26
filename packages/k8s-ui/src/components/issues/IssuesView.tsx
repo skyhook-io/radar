@@ -1,4 +1,4 @@
-import { AppIssuePanelContext, AppIssueRows, useAppIssueGroups } from './AppIssueList';
+import { AppIssuePanelContext, AppIssueRows, useAppIssueGroups, type AppIssueLinkRenderer } from './AppIssueList';
 import type { AppRow } from '../../utils/applications';
 import { IssueGuidance, issueGuidanceSummary } from './IssueGuidance'
 import { summarizeSchedulerMessage } from '../resources/resource-utils'
@@ -62,6 +62,8 @@ export interface IssuesViewProps {
   issues: Issue[];
   /** Optional application ownership for the cluster-wide queue. */
   appForIssue?: (issue: Issue) => Pick<AppRow, 'key' | 'name'> | undefined;
+  /** Application detail navigation supplied by the host router. */
+  renderAppLink?: AppIssueLinkRenderer<Issue>;
   /** A single-cluster URL's issue ID. Open both its disclosure and its detail. */
   linkedIssueId?: string;
   /** Dismiss the URL selection when the reader chooses a row or closes its group. */
@@ -105,7 +107,7 @@ export interface IssuesViewProps {
 // The queue list. Filtering/faceting is the host page's job (FleetPageShell on
 // the hub, a thin wrapper in OSS) — this renders the rows + the healthy /
 // no-data terminal states only.
-export function IssuesView({ issues, appForIssue, linkedIssueId, onManualIssueToggle, anyData, resourceHref, onResourceClick, clusterLabel, emptyAction, renderActions, onOpenIssueChange, expandedIssue, rowChanges, onVisibleIssuesChange, timelineLinks }: IssuesViewProps) {
+export function IssuesView({ issues, appForIssue, renderAppLink, linkedIssueId, onManualIssueToggle, anyData, resourceHref, onResourceClick, clusterLabel, emptyAction, renderActions, onOpenIssueChange, expandedIssue, rowChanges, onVisibleIssuesChange, timelineLinks }: IssuesViewProps) {
   // Single-open accordion: opening a row collapses the previous one, so the
   // queue stays scannable and you never lose your place to a wall of expansions.
   const [openId, setOpenId] = useState<string | null>(null);
@@ -155,7 +157,7 @@ export function IssuesView({ issues, appForIssue, linkedIssueId, onManualIssueTo
   }
 
   return (
-    <AppIssueRows layout={layout} listRef={listRef} issueKey={issueRowKey}
+    <AppIssueRows layout={layout} renderAppLink={renderAppLink} listRef={listRef} issueKey={issueRowKey}
       onCollapse={(appKey, hidden) => {
         if (hidden.some(issue => issueRowKey(issue) === openId)) setOpenId(null);
         if (linkedApp === appKey) onManualIssueToggle?.();

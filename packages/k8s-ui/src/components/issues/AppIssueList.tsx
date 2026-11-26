@@ -1,5 +1,5 @@
 import { createContext, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
-import { Boxes, ChevronDown, ChevronUp } from 'lucide-react';
+import { ArrowRight, Boxes, ChevronDown, ChevronUp } from 'lucide-react';
 import { disclosurePanelId } from '../ui/Collapse';
 import type { AppRow } from '../../utils/applications';
 import { ISSUE_SEVERITY_TEXT_CLASS, issueTitle } from './severity';
@@ -7,11 +7,14 @@ import { ISSUE_SEVERITY_TEXT_CLASS, issueTitle } from './severity';
 export const AppIssuePanelContext = createContext(false);
 
 type IssueApp = Pick<AppRow, 'key' | 'name'>;
+export type AppIssueLinkRenderer<T> = (appKey: string, label: ReactNode, leadIssue: T) => ReactNode;
 type AppIssueListProps<T> = {
   /** Already filtered and sorted in triage order. */
   issues: readonly T[];
   issueKey: (issue: T) => string;
   appForIssue?: (issue: T) => IssueApp | undefined;
+  /** Wrap the supplied app name and arrow in the host's detail link, or return null when unavailable. */
+  renderAppLink?: AppIssueLinkRenderer<T>;
   /** The URL selection. A pinned issue can be outside the list and still reveal its app. */
   linkedIssueKey?: string;
   linkedAppKey?: string;
@@ -81,8 +84,9 @@ export function useAppIssueGroups<T>({ issues, issueKey, appForIssue, linkedIssu
 
 type Layout<T> = ReturnType<typeof useAppIssueGroups<T>>;
 
-export function AppIssueRows<T extends DisplayIssue>({ layout, issueKey, renderIssue, listRef, onCollapse }: {
+export function AppIssueRows<T extends DisplayIssue>({ layout, issueKey, renderIssue, renderAppLink, listRef, onCollapse }: {
   layout: Layout<T>;
+  renderAppLink?: AppIssueLinkRenderer<T>;
   issueKey: (issue: T) => string;
   renderIssue: (issue: T) => ReactNode;
   listRef?: Ref<HTMLOListElement>;
@@ -105,11 +109,17 @@ export function AppIssueRows<T extends DisplayIssue>({ layout, issueKey, renderI
     const panel = !!app && issues.length > 1;
     const headerId = panel ? disclosurePanelId('app-heading-' + id, app.key) : undefined;
     if (panel) {
+      const link = renderAppLink?.(app.key, (
+        <span title={`Open ${app.name} application`} className="inline-flex min-h-6 max-w-full items-center gap-1">
+          <span className="min-w-0 break-words"><span className="sr-only">Open </span>{app.name}<span className="sr-only"> application</span></span>
+          <ArrowRight aria-hidden className="h-3 w-3 shrink-0 text-theme-text-secondary" />
+        </span>
+      ), issues[0]);
       rows.push(
         <li key={`header:${app.key}`} role="presentation"
           className="flex min-w-0 items-center gap-2 rounded-t-xl border border-theme-border bg-theme-elevated px-4 py-2">
           <Boxes aria-hidden className="h-4 w-4 shrink-0 text-theme-text-secondary" />
-          <h2 id={headerId} className="min-w-0 break-words text-sm font-semibold text-theme-text-primary">{app.name}</h2>
+          <h2 id={headerId} className="min-w-0 break-words text-sm font-semibold text-theme-text-primary [&_a]:rounded-sm [&_a:hover]:underline [&_a:focus-visible]:outline">{link ?? app.name}</h2>
           <span className="shrink-0 text-xs text-theme-text-secondary">· {issues.length} issues</span>
         </li>
       );
@@ -153,5 +163,5 @@ export function AppIssueRows<T extends DisplayIssue>({ layout, issueKey, renderI
 /** Keep related issues together and disclose overflow only for longer app panels. */
 export function AppIssueList<T extends DisplayIssue>(props: AppIssueListProps<T>) {
   const layout = useAppIssueGroups(props);
-  return <AppIssueRows layout={layout} issueKey={props.issueKey} renderIssue={props.renderIssue} />;
+  return <AppIssueRows layout={layout} issueKey={props.issueKey} renderAppLink={props.renderAppLink} renderIssue={props.renderIssue} />;
 }
