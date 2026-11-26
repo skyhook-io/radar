@@ -246,6 +246,15 @@ type deploymentServiceImpact struct {
 	token                    string
 }
 
+type droppedDeploymentServices struct {
+	Count int      `json:"count"`
+	Names []string `json:"names"`
+}
+
+func (d *droppedDeploymentServices) Error() string {
+	return "the Deployment rollout would remove its Pods from these Service selectors: " + strings.Join(d.Names, ", ") + ". Review those Services before changing this label"
+}
+
 // Match both template label sets against live Service selectors. An approved
 // label operation may add backend Pods, but cannot silently drain a Service.
 func previewDeploymentServices(ctx context.Context, client dynamic.Interface, obj *unstructured.Unstructured, key, value, token string) (*deploymentServiceImpact, error) {
@@ -292,7 +301,7 @@ func previewDeploymentServices(ctx context.Context, client dynamic.Interface, ob
 	}
 	if len(removed) > 0 {
 		sort.Strings(removed)
-		return nil, fmt.Errorf("%w: the Deployment rollout would remove its Pods from the following Service selectors: %s. Review those Services before changing this label", errRoutingUnsupported, strings.Join(removed[:min(len(removed), 10)], ", "))
+		return nil, &droppedDeploymentServices{Count: len(removed), Names: removed[:min(len(removed), 10)]}
 	}
 	sort.Strings(impact.NewServiceSelectors)
 	sort.Strings(impact.ExistingServiceSelectors)
@@ -304,7 +313,12 @@ func previewDeploymentServices(ctx context.Context, client dynamic.Interface, ob
 }
 
 func (s *Server) writeRoutingError(w http.ResponseWriter, err error) {
+	var dropped *droppedDeploymentServices
 	switch {
+	case errors.As(err, &dropped):
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		s.writeJSON(w, map[string]any{"error": dropped.Error(), "error_code": "routing_deployment_would_drop_services", "affectedServices": dropped})
 	case errors.Is(err, errRoutingSelectorMismatch):
 		s.writeErrorCode(w, http.StatusBadRequest, "routing_invalid_label", err.Error())
 	case errors.Is(err, errRoutingUnsupported):

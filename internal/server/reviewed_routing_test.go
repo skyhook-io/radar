@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -222,11 +223,22 @@ func TestReviewedRoutingProtectsServiceDuringDeploymentRollout(t *testing.T) {
 	}
 	svc := routingService()
 	_ = unstructured.SetNestedStringMap(svc.Object, map[string]string{"app": "api", "track": "stable"}, "spec", "selector")
-	router, dyn := reviewedRestartRouter(t, obj, svc)
+	objects := []runtime.Object{obj, svc}
+	for i := 11; i >= 1; i-- {
+		extra := svc.DeepCopy()
+		extra.SetName(fmt.Sprintf("web-%02d", i))
+		objects = append(objects, extra)
+	}
+	router, dyn := reviewedRestartRouter(t, objects...)
 	q := map[string]any{"action": "setPodTemplateLabel", "labelKey": "track", "labelValue": "canary"}
 	code, out := requestWorkloadAction(t, router, "Deployment", "preview", q)
-	if code != 409 || out["error_code"] != "routing_action_not_applicable" || !strings.Contains(out["error"].(string), "web") || writes(dyn) != 0 {
+	if code != 409 || out["error_code"] != "routing_deployment_would_drop_services" || !strings.Contains(out["error"].(string), "web") || writes(dyn) != 0 {
 		t.Fatal(code, out)
+	}
+	affected := out["affectedServices"].(map[string]any)
+	names := affected["names"].([]any)
+	if affected["count"] != float64(12) || len(names) != 10 || names[0] != "web" || names[9] != "web-09" {
+		t.Fatal(affected)
 	}
 	obj.Object["spec"].(map[string]any)["paused"] = true
 	if err := dyn.Tracker().Update(deploymentsGVR, obj, "prod"); err != nil {
