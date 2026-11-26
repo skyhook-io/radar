@@ -4733,6 +4733,8 @@ export function useRightsizingScan(namespaces: string[], context = "") {
     if (inaccessible) {
       previous.current = null;
       queryClient.setQueryData(cache.queryKey, null);
+    } else if (current === null) {
+      previous.current = null;
     } else if (current && current.coverage.workloadsEvaluated > 0) {
       previous.current = { scope, result: current };
     }

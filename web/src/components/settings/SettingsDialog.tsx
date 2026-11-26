@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useQueryClient } from '@tanstack/react-query'
+import { invalidateIntegrationQueries } from './integrationQueries'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
 import { apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, mcpEndpointUrl } from '../../api/config'
@@ -179,15 +180,15 @@ export function SettingsDialog({
     } : value)
     void queryClient.resetQueries({ queryKey: [previousIntegrationSettingsKey] })
   }, [queryClient])
-  const connectionsChanged = useCallback((profiles: IntegrationProfiles) => {
+  const connectionsChanged = useCallback((profiles: IntegrationProfiles, changed: IntegrationKind[] = []) => {
     setConnectionsChangedAt(Date.now())
     setConfigData(value => value ? { ...value, integrationProfiles: profiles } : value)
     void queryClient.resetQueries({ queryKey: [previousIntegrationSettingsKey] })
-    void queryClient.invalidateQueries({ predicate: query => typeof query.queryKey[0] === 'string' && /^(prometheus|opencost|gitops|argo)/.test(query.queryKey[0]) })
+    if (changed.length) void invalidateIntegrationQueries(queryClient, changed)
   }, [queryClient])
   const openObserveChanged = useCallback(() => {
     setConnectionsChangedAt(Date.now())
-    void queryClient.invalidateQueries({ predicate: query => typeof query.queryKey[0] === 'string' && /^(prometheus|opencost)/.test(query.queryKey[0]) })
+    void invalidateIntegrationQueries(queryClient, ['metrics'])
   }, [queryClient])
 
   const [configData, setConfigData] = useState<ConfigResponse | null>(null)
@@ -208,7 +209,21 @@ export function SettingsDialog({
   const argoStatusQuery = useArgoStatus(
     open && section === 'argocd'
   )
-  const { data: argoSectionStatus, refetch: refetchArgoSectionStatus } = argoStatusQuery
+  const { data: argoSectionStatus } = argoStatusQuery
+  const { data: prometheusStatus } = usePrometheusStatus(open && !!configData?.integrationProfiles)
+  const source = prometheusStatus?.source
+  const sourceKey = prometheusStatus && JSON.stringify([
+    source?.kind, source?.via, source?.pending, source?.matchedBy, source?.unavailable,
+    source?.clusterLabel?.name, source?.clusterLabel?.value, source?.dialect,
+  ])
+  const previousSourceKey = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    const previous = previousSourceKey.current
+    previousSourceKey.current = open ? sourceKey : undefined
+    if (open && previous !== undefined && sourceKey !== undefined && previous !== sourceKey) {
+      void invalidateIntegrationQueries(queryClient, ['metrics'], { includeStatus: false })
+    }
+  }, [open, sourceKey, queryClient])
 
   // Local AI preferences save independently of the owner-gated server settings.
   const diag = useDiagnose()
@@ -424,10 +439,7 @@ export function SettingsDialog({
         ...prev,
         file: { ...prev.file, opencostCurrency: saved.opencostCurrency },
       } : prev)
-      void queryClient.invalidateQueries({
-        predicate: (query) =>
-          typeof query.queryKey[0] === 'string' && query.queryKey[0].startsWith('opencost-'),
-      })
+      void invalidateIntegrationQueries(queryClient, ['cost'])
     } finally {
       costCurrencySavingRef.current = false
       setCostCurrencySaving(false)
@@ -787,6 +799,7 @@ export function SettingsDialog({
                 urlFromFlag={configData?.prometheusUrlFromFlag === true}
                 onChange={(v) => updateConfigField('prometheusUrl', v || undefined)}
                 onApplied={(url) => {
+                  void invalidateIntegrationQueries(queryClient, ['metrics'])
                   setEditedConfig((prev) => ({ ...prev, prometheusUrl: url || undefined }))
                   setConfigData((prev) =>
                     prev ? {
@@ -838,9 +851,7 @@ export function SettingsDialog({
                     file: { ...prev.file, costSource: source, kubecostUrl: url || undefined, kubecostClusterId: clusterId || undefined },
                     kubecostApiKeySet: apiKeySet,
                   } : prev)
-                  void queryClient.invalidateQueries({
-                    predicate: (query) => typeof query.queryKey[0] === 'string' && query.queryKey[0].startsWith('opencost-'),
-                  })
+                  void invalidateIntegrationQueries(queryClient, ['cost'])
                 }}
               />
             </SectionPane>
@@ -880,13 +891,7 @@ export function SettingsDialog({
                         }
                       : prev
                   )
-                  void refetchArgoSectionStatus()
-                  // The GitOps detail page the user came from doesn't poll
-                  // when idle; without this the notice that sent them here
-                  // would still be up when they get back.
-                  void queryClient.invalidateQueries({
-                    predicate: (query) => typeof query.queryKey[0] === 'string' && query.queryKey[0].startsWith('gitops-'),
-                  })
+                  void invalidateIntegrationQueries(queryClient, ['argocd'])
                 }}
               />}
             </SectionPane>

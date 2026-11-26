@@ -1,0 +1,33 @@
+import type { QueryClient } from '@tanstack/react-query'
+import type { IntegrationKind } from './LocalConnectionSettings'
+
+const metricsKeys = new Set([
+  'workload-metrics', 'substrate-health', 'dashboard', 'diagnostics',
+  'traffic-sources', 'traffic-flows', 'traffic-source-active', 'traffic-connection',
+])
+const cnpgMetricsKeys = ['history', 'fleet-metrics', 'storage', 'disk']
+const argoKeys = new Set([
+  'argocd-status', 'gitops-tree', 'gitops-insights', 'argo-resource-diff',
+  'argo-sync-diff', 'argo-revision-metadata',
+])
+
+export function invalidateIntegrationQueries(
+  client: QueryClient,
+  kinds: IntegrationKind[],
+  { includeStatus = true } = {},
+): Promise<void> {
+  const metrics = kinds.includes('metrics')
+  const cost = metrics || kinds.includes('cost')
+  const argo = kinds.includes('argocd')
+  return client.invalidateQueries({
+    predicate: ({ queryKey: [root, section] }) => {
+      if (typeof root !== 'string') return false
+      if (cost && root.startsWith('opencost-')) return true
+      if (argo && argoKeys.has(root)) return true
+      if (!metrics) return false
+      if (root === 'prometheus-status') return includeStatus
+      return root.startsWith('prometheus-') || metricsKeys.has(root) ||
+        (root === 'cnpg' && typeof section === 'string' && cnpgMetricsKeys.includes(section))
+    },
+  })
+}
