@@ -9,6 +9,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/k8s"
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
+	"helm.sh/helm/v3/pkg/release"
 	authv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -16,6 +18,71 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 )
+
+func TestGetReleaseUsesRequestConnection(t *testing.T) {
+	t.Cleanup(k8s.SnapshotTestConnection())
+	Initialize()
+	t.Cleanup(ResetTestClient)
+	install := func(name string, revision int) *atomic.Int32 {
+		t.Helper()
+		var requests atomic.Int32
+		rel := helmTestRelease("payments", "team-a", revision, release.StatusDeployed, name)
+		secret := helmReleaseSecret(t, "team-a", rel, true)
+		api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/version":
+				writeTestJSON(t, w, map[string]string{"gitVersion": "v1.34.0"})
+			case "/api/v1/namespaces/team-a/secrets":
+				writeTestJSON(t, w, corev1.SecretList{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "SecretList"}, Items: []corev1.Secret{*secret}})
+			default:
+				t.Errorf("unexpected request on %s: %s", name, r.URL)
+				http.NotFound(w, r)
+			}
+		}))
+		t.Cleanup(api.Close)
+		cfg := &rest.Config{Host: api.URL}
+		if _, err := k8s.InstallTestServingConnection(name, cfg, nil, fake.NewSimpleClientset().Discovery()); err != nil {
+			t.Fatal(err)
+		}
+		return &requests
+	}
+	install("cluster-a", 1)
+	admission, err := k8s.CaptureServingConnection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := admission.Bind(t.Context())
+	bRequests := install("cluster-b", 2)
+	client := GetClient(t.Context())
+	for _, scenario := range []struct {
+		name string
+		user *pkgauth.User
+	}{
+		{name: "GetRelease"},
+		{name: "GetReleaseAsUser", user: &pkgauth.User{Username: "alice"}},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			var detail *HelmReleaseDetail
+			var err error
+			if scenario.user == nil {
+				detail, err = client.GetRelease(ctx, "team-a", "payments", nil)
+			} else {
+				detail, err = client.GetReleaseAsUser(ctx, "team-a", "payments", scenario.user, nil)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if detail.Revision != 1 || detail.Description != "cluster-a" {
+				t.Fatalf("got release revision %d from %s, want revision 1 from cluster-a", detail.Revision, detail.Description)
+			}
+		})
+	}
+	if n := bRequests.Load(); n != 0 {
+		t.Errorf("got %d requests to cluster-b, want none", n)
+	}
+}
 
 func TestInventoryStaysOnRequestConnection(t *testing.T) {
 	for _, bound := range []bool{true, false} {

@@ -233,7 +233,11 @@ func (c *Client) getActionConfigForUser(namespace string, user *pkgauth.User) (*
 	if cfg == nil {
 		return nil, fmt.Errorf("helm: no resolved rest.Config available")
 	}
-	return initActionConfig(newRESTConfigGetter(cfg, namespace, user), namespace, user)
+	getter := newRESTConfigGetter(cfg, namespace, user)
+	if user == nil && c.restConfig == nil {
+		getter.connection = c.conn
+	}
+	return initActionConfig(getter, namespace, user)
 }
 
 func (c *Client) actionConfigForWrite(ctx context.Context, namespace string) (*action.Configuration, error) {
@@ -569,6 +573,7 @@ func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmRelea
 	if snapshot == nil {
 		return nil, nil
 	}
+	access = statusAccessWithDiscovery(access, k8s.ConnectionFrom(ctx).Discovery())
 	result := make([]HelmRelease, 0, len(snapshot.latest))
 	for _, rel := range snapshot.latest {
 		if err := ctx.Err(); err != nil {
@@ -587,8 +592,8 @@ func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmRelea
 		analysis := analyzeReleaseHistory(contextName, effectiveStorage, rel.Name, rel.Version, snapshot.histories[historyKey], helmhistory.Options{MaxOperations: releaseListMaxOperations})
 		hr.LastOperation = analysis.LastOperation
 		hr.Operations = analysis.Operations
-		hr.ManagedByFlux, hr.ManagedByFluxHelmRelease = scopedFluxOwnership(k8s.ConnectionFrom(ctx).Discovery(), rel.Name, effectiveStorage, fluxMap, access)
-		hr.Controller, hr.ManagedByK3s = scopedReleaseController(k8s.ConnectionFrom(ctx).Discovery(), hr.ManagedByFlux, hr.ManagedByFluxHelmRelease, k3sMap[effectiveStorage+"/"+rel.Name], access)
+		hr.ManagedByFlux, hr.ManagedByFluxHelmRelease = scopedFluxOwnership(rel.Name, effectiveStorage, fluxMap, access)
+		hr.Controller, hr.ManagedByK3s = scopedReleaseController(hr.ManagedByFlux, hr.ManagedByFluxHelmRelease, k3sMap[effectiveStorage+"/"+rel.Name], access)
 		result = append(result, hr)
 	}
 	return result, nil
@@ -597,6 +602,7 @@ func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmRelea
 // GetReleaseAsUser is GetRelease with K8s impersonation.
 // When username is empty, falls back to the ServiceAccount identity.
 func (c *Client) GetReleaseAsUser(ctx context.Context, namespace, name string, user *pkgauth.User, access StatusAccess) (*HelmReleaseDetail, error) {
+	c, ctx = c.capture(ctx)
 	if user == nil {
 		return c.GetRelease(ctx, namespace, name, access)
 	}
@@ -611,6 +617,7 @@ func (c *Client) GetReleaseAsUser(ctx context.Context, namespace, name string, u
 // GetRelease returns details for a specific release. Its resources carry live
 // status only where access allows; see StatusAccess.
 func (c *Client) GetRelease(ctx context.Context, namespace, name string, access StatusAccess) (*HelmReleaseDetail, error) {
+	c, ctx = c.capture(ctx)
 	contextName := c.conn.ContextName()
 	actionConfig, err := c.getActionConfig(namespace)
 	if err != nil {
@@ -670,9 +677,10 @@ func getReleaseWith(ctx context.Context, conn *k8s.Connection, actionConfig *act
 	// Extract dependencies
 	dependencies := extractDependencies(rel)
 
-	managedByFlux, fluxReference := scopedFluxOwnership(conn.Discovery(), rel.Name, effectiveStorage, fluxHelmReleaseMap(ctx, conn), access)
+	controllerAccess := statusAccessWithDiscovery(access, conn.Discovery())
+	managedByFlux, fluxReference := scopedFluxOwnership(rel.Name, effectiveStorage, fluxHelmReleaseMap(ctx, conn), controllerAccess)
 	k3s := k3sHelmChartMap(ctx, conn)[effectiveStorage+"/"+rel.Name]
-	controller, managedByK3s := scopedReleaseController(conn.Discovery(), managedByFlux, fluxReference, k3s, access)
+	controller, managedByK3s := scopedReleaseController(managedByFlux, fluxReference, k3s, controllerAccess)
 
 	detail := &HelmReleaseDetail{
 		Name:                     rel.Name,
@@ -1510,7 +1518,7 @@ func fluxHelmReleaseKeys(hrs []*unstructured.Unstructured) map[string]string {
 // controller reference from a namespace the caller cannot read. Nil access
 // is used by internal history/write checks: ownership still blocks direct
 // MCP Helm changes, while no controller identity is returned.
-func scopedFluxOwnership(discovery *k8s.ResourceDiscovery, name, storageNamespace string, fluxMap map[string]string, access StatusAccess) (bool, string) {
+func scopedFluxOwnership(name, storageNamespace string, fluxMap map[string]string, access StatusAccess) (bool, string) {
 	reference := applyFluxOwnership(name, storageNamespace, fluxMap)
 	if reference == "" {
 		return false, ""
@@ -1519,7 +1527,7 @@ func scopedFluxOwnership(discovery *k8s.ResourceDiscovery, name, storageNamespac
 	if noStatusAccess(access) || !valid {
 		return true, ""
 	}
-	if allowed, _ := access.statusDecision(discovery, "HelmRelease", "helm.toolkit.fluxcd.io", namespace); !allowed {
+	if allowed, _ := access.statusDecision("HelmRelease", "helm.toolkit.fluxcd.io", namespace); !allowed {
 		return true, ""
 	}
 	return true, reference
@@ -1529,7 +1537,7 @@ func scopedFluxOwnership(discovery *k8s.ResourceDiscovery, name, storageNamespac
 // controller: no controller identity from a namespace the caller cannot read,
 // while managedByK3s keeps the k3s ownership fact. Flux ownership with its
 // identity withheld still wins over a k3s HelmChart.
-func scopedReleaseController(discovery *k8s.ResourceDiscovery, managedByFlux bool, fluxReference string, k3s k3sOwner, access StatusAccess) (controller *ReleaseController, managedByK3s bool) {
+func scopedReleaseController(managedByFlux bool, fluxReference string, k3s k3sOwner, access StatusAccess) (controller *ReleaseController, managedByK3s bool) {
 	if managedByFlux {
 		if fluxReference == "" {
 			return nil, false
@@ -1543,7 +1551,7 @@ func scopedReleaseController(discovery *k8s.ResourceDiscovery, managedByFlux boo
 	if noStatusAccess(access) {
 		return nil, true
 	}
-	if allowed, _ := access.statusDecision(discovery, k3sHelmChartKind, k3sHelmGroup, namespace); !allowed {
+	if allowed, _ := access.statusDecision(k3sHelmChartKind, k3sHelmGroup, namespace); !allowed {
 		return nil, true
 	}
 	return releaseController("", k3s), true
@@ -2083,13 +2091,14 @@ func enrichResourcesWithStatus(conn *k8s.Connection, resources []OwnedResource, 
 	if cache == nil {
 		return
 	}
+	access = statusAccessWithDiscovery(access, conn.Discovery())
 
 	for i := range resources {
 		group, ok := builtInGroup(resources[i])
 		if !ok {
 			continue
 		}
-		lookup, reason := access.statusDecision(conn.Discovery(), resources[i].Kind, group, resources[i].Namespace)
+		lookup, reason := access.statusDecision(resources[i].Kind, group, resources[i].Namespace)
 		if !lookup {
 			resources[i].StatusUnread = reason
 			continue
@@ -2723,7 +2732,7 @@ func (c *Client) upgradeWith(actionConfig *action.Configuration, name, targetVer
 	if err := releaseSourceUnchanged(actionConfig, rel); err != nil {
 		return err
 	}
-	_, err = upgradeAction.Run(name, targetChart, rel.Config)
+	_, err = runUpgradeWithCachedDiscovery(actionConfig, upgradeAction, name, targetChart, rel.Config)
 	if err != nil {
 		return fmt.Errorf("upgrade failed: %w", err)
 	}
@@ -2823,7 +2832,7 @@ func (c *Client) runValuesUpgrade(actionConfig *action.Configuration, name, targ
 		return nil, nil, err
 	}
 	started = true
-	next, err := upgradeAction.Run(name, targetChart, newValues)
+	next, err := runUpgradeWithCachedDiscovery(actionConfig, upgradeAction, name, targetChart, newValues)
 	if err != nil {
 		return nil, nil, fmt.Errorf("upgrade failed: %w", err)
 	}
@@ -3345,7 +3354,7 @@ func (c *Client) previewValuesChangeWith(actionConfig *action.Configuration, nam
 	upgradeAction.ResetValues = true // Use only the provided values, don't merge
 
 	// Run the dry-run upgrade
-	newRel, err := upgradeAction.Run(name, previewChart, newValues)
+	newRel, err := runUpgradeWithCachedDiscovery(actionConfig, upgradeAction, name, previewChart, newValues)
 	if err != nil {
 		return nil, fmt.Errorf("failed to preview values change: %w", err)
 	}
@@ -3398,7 +3407,7 @@ func (c *Client) applyValuesWith(actionConfig *action.Configuration, name string
 	if err := releaseSourceUnchanged(actionConfig, rel); err != nil {
 		return err
 	}
-	_, err = upgradeAction.Run(name, applyChart, newValues)
+	_, err = runUpgradeWithCachedDiscovery(actionConfig, upgradeAction, name, applyChart, newValues)
 	if err != nil {
 		return fmt.Errorf("failed to apply values: %w", err)
 	}

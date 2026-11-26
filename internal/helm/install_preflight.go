@@ -217,7 +217,13 @@ func runInstallOrUpgrade(actionConfig *action.Configuration, req *InstallRequest
 		// action.Upgrade has no CreateNamespace; reaching this branch implies a
 		// prior release record exists, so the namespace was created earlier. If
 		// it has been deleted manually since, the user must recreate it.
-		return upgrade.Run(req.ReleaseName, ch, req.Values)
+		return runUpgradeWithCachedDiscovery(actionConfig, upgrade, req.ReleaseName, ch, req.Values)
+	}
+	// Helm must discover the APIs again after installing a chart's CRDs.
+	if len(ch.CRDObjects()) == 0 {
+		if err := loadCachedCapabilities(actionConfig); err != nil {
+			return nil, err
+		}
 	}
 	install := action.NewInstall(actionConfig)
 	install.ReleaseName = req.ReleaseName

@@ -19,7 +19,7 @@ type StatusAccess interface {
 	// statusDecision says whether to look the object up. When it shouldn't be,
 	// reason says why the caller can't see it, or is empty when the object is
 	// left as it is without a lookup.
-	statusDecision(discovery *k8s.ResourceDiscovery, kind, group, namespace string) (lookup bool, reason readreason.Code)
+	statusDecision(kind, group, namespace string) (lookup bool, reason readreason.Code)
 	// resolvedFor returns the access with the checks these objects need made
 	// up front, so each kind is checked once across its namespaces rather than
 	// once per object. Its decisions don't change.
@@ -30,7 +30,7 @@ type StatusAccess interface {
 // --namespace-scope pin, an object outside the pinned namespace is left
 // without a lookup and without a marker: Radar doesn't watch that namespace,
 // so there is nothing to withhold.
-func (s *ObjectScope) statusDecision(discovery *k8s.ResourceDiscovery, kind, group, namespace string) (bool, readreason.Code) {
+func (s *ObjectScope) statusDecision(kind, group, namespace string) (bool, readreason.Code) {
 	if s.outsidePin(namespace) {
 		return false, ""
 	}
@@ -64,10 +64,24 @@ func (s *ObjectScope) resolvedFor(resources []OwnedResource) StatusAccess {
 type NamespaceStatusScope struct {
 	Namespaces []string
 	Checked    bool
+	discovery  *k8s.ResourceDiscovery
 }
 
-func (s NamespaceStatusScope) statusDecision(discovery *k8s.ResourceDiscovery, kind, group, namespace string) (bool, readreason.Code) {
-	if clusterScoped, _, _ := discovery.ClassifyKindScope(kind, group); clusterScoped {
+func statusAccessWithDiscovery(access StatusAccess, discovery *k8s.ResourceDiscovery) StatusAccess {
+	switch scope := access.(type) {
+	case NamespaceStatusScope:
+		scope.discovery = discovery
+		return scope
+	case *NamespaceStatusScope:
+		copy := *scope
+		copy.discovery = discovery
+		return copy
+	}
+	return access
+}
+
+func (s NamespaceStatusScope) statusDecision(kind, group, namespace string) (bool, readreason.Code) {
+	if clusterScoped, _, _ := s.discovery.ClassifyKindScope(kind, group); clusterScoped {
 		return false, ""
 	}
 	if _, resource := k8s.ExactNamespaceAccessResource(kind, group); resource != "" {
@@ -101,7 +115,7 @@ func (s NamespaceStatusScope) CacheKey() string {
 // caller under its gates, so every one may be looked up.
 type scannedObjects struct{}
 
-func (scannedObjects) statusDecision(*k8s.ResourceDiscovery, string, string, string) (bool, readreason.Code) {
+func (scannedObjects) statusDecision(string, string, string) (bool, readreason.Code) {
 	return true, ""
 }
 

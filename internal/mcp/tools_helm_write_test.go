@@ -219,6 +219,8 @@ func TestManageHelmRefusesBusyReleaseAndChangedPreviewStatus(t *testing.T) {
 }
 
 func TestManageHelmUninstallConfirmationAfterPreflight(t *testing.T) {
+	// Allocate the shared context's Done channel outside the synctest bubbles.
+	k8s.OperationContext().Done()
 	for _, scenario := range []string{"expired", "cancelled"} {
 		t.Run(scenario, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {

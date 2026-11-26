@@ -26,6 +26,7 @@ type Connection struct {
 	cache                                    atomic.Pointer[connectionCache]
 	dynamicCache                             atomic.Pointer[connectionDynamicCache]
 	discovery                                atomic.Pointer[ResourceDiscovery]
+	restDiscovery                            connectionRESTDiscovery
 	metricsMu                                sync.Mutex
 	metricsHistory                           atomic.Pointer[MetricsHistoryStore]
 	metricsClosed                            bool
