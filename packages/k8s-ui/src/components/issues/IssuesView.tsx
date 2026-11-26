@@ -126,11 +126,7 @@ export function IssuesView({ issues, appForIssue, linkedIssueId, onManualIssueTo
   const layout = useAppIssueGroups({ issues: sorted, issueKey: issueRowKey, appForIssue, linkedIssueKey: linkedKey }, openId);
   const displayed = layout.groups.flatMap(({ app, lead, more }) => app && layout.isOpen(app.key) ? [lead, ...more] : [lead]);
   useOpenIssueNotice(displayed, openId, issueRowKey, onOpenIssueChange);
-  // A formerly standalone row can move into an expanded group's nested list
-  // without changing its rank. Rebind the observer to its new DOM element.
-  const groupStructure = JSON.stringify(layout.groups.map(({ app, lead, more }) =>
-    [app?.key, issueRowKey(lead), ...(app && layout.isOpen(app.key) ? more.map(issueRowKey) : [])]));
-  const listRef = useVisibleIssues(displayed, onVisibleIssuesChange, groupStructure);
+  const listRef = useVisibleIssues(displayed, onVisibleIssuesChange, '[data-app-issue-row]');
   const linkedApp = linked ? appForIssue?.(linked)?.key : undefined;
   const scrolled = useRef<{ key?: string; app?: string }>({});
   useEffect(() => {
@@ -192,7 +188,7 @@ export function IssuesView({ issues, appForIssue, linkedIssueId, onManualIssueTo
 /** Reports which rows of an <ol> of issue rows are on screen (each row element
  *  corresponds to rows[index]), in list order, whenever that set changes. Rows a
  *  little below the fold count, so a short scroll finds them ready. */
-export function useVisibleIssues(rows: Issue[], onVisibleIssuesChange?: (issues: Issue[]) => void, groupStructure?: string) {
+export function useVisibleIssues(rows: Issue[], onVisibleIssuesChange?: (issues: Issue[]) => void, rowSelector?: string) {
   const listRef = useRef<HTMLOListElement>(null);
   const notify = useRef(onVisibleIssuesChange);
   notify.current = onVisibleIssuesChange;
@@ -216,7 +212,7 @@ export function useVisibleIssues(rows: Issue[], onVisibleIssuesChange?: (issues:
       report(rowsRef.current);
       return;
     }
-    const children = Array.from(groupStructure !== undefined ? list.querySelectorAll('[data-app-issue-row]') : list.children);
+    const children = Array.from(rowSelector ? list.querySelectorAll(rowSelector) : list.children);
     const onScreen = new Set<Element>();
     const observer = new IntersectionObserver((entries) => {
       for (const entry of entries) {
@@ -227,7 +223,7 @@ export function useVisibleIssues(rows: Issue[], onVisibleIssuesChange?: (issues:
     }, { rootMargin: '0px 0px 400px 0px' });
     children.forEach((child) => observer.observe(child));
     return () => observer.disconnect();
-  }, [enabled, rowsKey, groupStructure]);
+  }, [enabled, rowsKey, rowSelector]);
   useEffect(() => () => notify.current?.([]), []);
   return listRef;
 }

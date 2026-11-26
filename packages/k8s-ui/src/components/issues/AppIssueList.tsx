@@ -47,11 +47,11 @@ export function useAppIssueGroups<T>({ issues, issueKey, appForIssue, linkedIssu
   const [previousActiveGroup, setPreviousActiveGroup] = useState(activeGroup);
   if (previousActiveGroup !== activeGroup) {
     setPreviousActiveGroup(activeGroup);
-    if (activeGroup && !expanded.has(activeGroup)) setExpanded(new Set(expanded).add(activeGroup));
+    if (activeGroup && !expanded.has(activeGroup)) setExpanded(previous => new Set(previous).add(activeGroup));
   }
   if (previousLink.linkedIssueKey !== linkedIssueKey || (linkedGroup && previousLink.linkedGroup !== linkedGroup)) {
     setPreviousLink({ linkedIssueKey, linkedGroup });
-    if (linkedGroup && !expanded.has(linkedGroup)) setExpanded(new Set(expanded).add(linkedGroup));
+    if (linkedGroup && !expanded.has(linkedGroup)) setExpanded(previous => new Set(previous).add(linkedGroup));
   }
   const isOpen = (key: string) => expanded.has(key);
   const toggle = (key: string) => {
@@ -75,38 +75,40 @@ export function AppIssueRows<T extends { severity: string }>({ layout, issueKey,
   onCollapse?: (appKey: string, hidden: readonly T[]) => void;
 }) {
   const id = useId();
-  const row = (issue: T) => <li key={issueKey(issue)} data-app-issue-row={issueKey(issue)}>{renderIssue(issue)}</li>;
-  return (
-    <ol ref={listRef} className="flex flex-col gap-1.5">
-      {layout.groups.map(({ app, lead, more }) => {
-        const groupKey = app ? `app:${app.key}` : `issue:${issueKey(lead)}`;
-        const open = !!app && layout.isOpen(app.key);
-        const panel = app && disclosurePanelId(id, app.key);
-        const critical = more.filter(issue => issue.severity === 'critical').length;
-        return (
-          <li key={groupKey}>
-            <div data-app-issue-row={issueKey(lead)}>{renderIssue(lead)}</div>
-            {app && more.length > 0 && (
-              <>
-                <button type="button" aria-expanded={open} aria-controls={panel} onClick={() => {
-                  if (open) onCollapse?.(app.key, more);
-                  layout.toggle(app.key);
-                }}
-                  className="mt-1 inline-flex max-w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary">
-                  <CollapseChevron open={open} className="h-3.5 w-3.5" />
-                  <span className="break-words">{open ? 'Show fewer issues' : `${more.length} more ${more.length === 1 ? 'issue' : 'issues'}`} for <strong className="font-medium">{app.name}</strong></span>
-                  {!open && critical > 0 && <span className="shrink-0 text-theme-text-primary">· {critical} critical</span>}
-                </button>
-                <ol id={panel} hidden={!open} className={open ? 'mt-1 flex flex-col gap-1.5 border-l border-theme-border pl-3' : undefined}>
-                  {open && more.map(row)}
-                </ol>
-              </>
-            )}
-          </li>
-        );
-      })}
-    </ol>
-  );
+  // All issue rows share one key space, so an open row keeps its DOM and focus
+  // when the first inventory arrives or a new higher-ranked issue leads its app.
+  const row = (issue: T, nested = false) => {
+    const key = issueKey(issue);
+    return (
+      <li key={`issue:${key}`} id={disclosurePanelId(id, key)} data-app-issue-row={key}
+        className={nested ? 'border-l border-theme-border pl-3' : undefined}>
+        {renderIssue(issue)}
+      </li>
+    );
+  };
+  const rows = layout.groups.flatMap(({ app, lead, more }) => {
+    const items = [row(lead)];
+    if (!app || !more.length) return items;
+    const open = layout.isOpen(app.key);
+    const critical = more.filter(issue => issue.severity === 'critical').length;
+    const controls = open ? more.map(issue => disclosurePanelId(id, issueKey(issue))).join(' ') : undefined;
+    items.push(
+      <li key={`disclosure:${app.key}`} role="presentation" className="-mt-0.5">
+        <button type="button" aria-expanded={open} aria-controls={controls} onClick={() => {
+          if (open) onCollapse?.(app.key, more);
+          layout.toggle(app.key);
+        }}
+          className="inline-flex max-w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary">
+          <CollapseChevron open={open} className="h-3.5 w-3.5" />
+          <span className="break-words">{open ? 'Show fewer issues' : `${more.length} more ${more.length === 1 ? 'issue' : 'issues'}`} for <strong className="font-medium">{app.name}</strong></span>
+          {!open && critical > 0 && <span className="shrink-0 text-theme-text-primary">· {critical} critical</span>}
+        </button>
+      </li>
+    );
+    if (open) items.push(...more.map(issue => row(issue, true)));
+    return items;
+  });
+  return <ol ref={listRef} className="flex flex-col gap-1.5">{rows}</ol>;
 }
 
 /** Fold an app's other issues under its highest-ranked row. Unattributed issues stay independent. */

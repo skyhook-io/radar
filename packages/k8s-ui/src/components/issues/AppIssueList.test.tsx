@@ -91,3 +91,15 @@ it('keeps keyboard focus on the disclosure when a new issue leads the group', as
   await render(undefined, true, issues.slice(1));
   expect(document.activeElement).toBe(toggle());
 });
+
+it('keeps the same issue summary focused while application membership and rank change', async () => {
+  const { render, host } = await mount();
+  await render(undefined, false);
+  const summary = host.querySelector<HTMLButtonElement>('[data-app-issue-row=":api"] [aria-expanded]')!;
+  await act(async () => summary.click());
+  summary.focus();
+  await render();
+  expect(document.activeElement).toBe(summary);
+  await render(undefined, true, [issue('newer', 'critical', '2026-10-01'), ...issues]);
+  expect(document.activeElement).toBe(summary);
+});
