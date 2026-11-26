@@ -226,6 +226,8 @@ export interface FeatureCapabilities {
   workloadRestartPreconditions?: boolean
   /** POST workload actions/preview and actions/execute support reviewed scalar changes. */
   reviewedWorkloadActions?: boolean
+  /** Reviewed Deployment pod-template labels and Service selectors with routing impact. */
+  reviewedRoutingActions?: boolean
   gitopsWriteEvidence?: boolean
   agentSigninCheck?: boolean
   serviceEndpointSlices?: boolean

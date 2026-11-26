@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -46,6 +48,8 @@ func (v *optionalWorkloadVersion) UnmarshalJSON(data []byte) error {
 type workloadActionInput struct {
 	Action                  string                  `json:"action"`
 	Replicas                *int32                  `json:"replicas,omitempty"`
+	LabelKey                string                  `json:"labelKey,omitempty"`
+	LabelValue              *string                 `json:"labelValue,omitempty"`
 	UID                     string                  `json:"uid,omitempty"`
 	ReviewToken             string                  `json:"reviewToken,omitempty"`
 	ExpectedResourceVersion optionalWorkloadVersion `json:"expectedResourceVersion,omitempty"`
@@ -54,18 +58,20 @@ type workloadActionInput struct {
 }
 
 type workloadActionView struct {
-	Action          string `json:"action"`
-	Kind            string `json:"kind"`
-	Namespace       string `json:"namespace"`
-	Name            string `json:"name"`
-	UID             string `json:"uid"`
-	ResourceVersion string `json:"resourceVersion"`
-	Generation      int64  `json:"generation,omitempty"`
-	ReviewToken     string `json:"reviewToken"`
-	Field           string `json:"field"`
-	Before          any    `json:"before"`
-	After           any    `json:"after"`
-	Effect          string `json:"effect"`
+	Action                  string                   `json:"action"`
+	Kind                    string                   `json:"kind"`
+	Namespace               string                   `json:"namespace"`
+	Name                    string                   `json:"name"`
+	UID                     string                   `json:"uid"`
+	ResourceVersion         string                   `json:"resourceVersion"`
+	Generation              int64                    `json:"generation,omitempty"`
+	ReviewToken             string                   `json:"reviewToken"`
+	Field                   string                   `json:"field"`
+	Before                  any                      `json:"before"`
+	After                   any                      `json:"after"`
+	Effect                  string                   `json:"effect"`
+	RoutingImpact           *serviceRoutingImpact    `json:"routingImpact,omitempty"`
+	DeploymentServiceImpact *deploymentServiceImpact `json:"deploymentServiceImpact,omitempty"`
 }
 
 // workloadActionField represents a closed set of actions. No resource, patch
@@ -99,10 +105,28 @@ func resolveWorkloadAction(kind string, in workloadActionInput, execute bool, no
 	if in.Action != "scale" && in.Replicas != nil {
 		return field, errors.New("replicas is only valid for scale")
 	}
+	if in.Action != "setPodTemplateLabel" && in.Action != "setServiceSelectorLabel" && (in.LabelKey != "" || in.LabelValue != nil) {
+		return field, errors.New("labelKey and labelValue are only valid for label changes")
+	}
 	if in.Action != "restart" && in.RestartAt != "" {
 		return field, errors.New("restartAt is only valid for restart")
 	}
 	switch {
+	case in.Action == "setPodTemplateLabel" && field.kind == "Deployment", in.Action == "setServiceSelectorLabel" && field.kind == "Service":
+		if len(validation.IsQualifiedName(in.LabelKey)) != 0 || in.LabelValue == nil || len(validation.IsValidLabelValue(*in.LabelValue)) != 0 {
+			return field, errors.New("the action requires a valid Kubernetes labelKey and labelValue")
+		}
+		if field.kind == "Deployment" {
+			if in.LabelKey == "pod-template-hash" {
+				return field, errors.New("pod-template-hash is assigned by the Deployment controller")
+			}
+			field.path = []string{"spec", "template", "metadata", "labels", in.LabelKey}
+			field.effect = "Changing the Pod template starts a Deployment rollout. Wait for the new Pods to become Ready before changing a Service selector."
+		} else {
+			field.path = []string{"spec", "selector", in.LabelKey}
+			field.effect = "The EndpointSlice controller reconciles Service backends to the new selector. Check published endpoints after the change."
+		}
+		field.after = *in.LabelValue
 	case in.Action == "scale" && (field.kind == "Deployment" || field.kind == "StatefulSet" || field.kind == "Rollout"):
 		if in.Replicas == nil || *in.Replicas < 0 || *in.Replicas > 10000 {
 			return field, errors.New("scale requires replicas between 0 and 10000")
@@ -214,6 +238,9 @@ func (f workloadActionField) review(obj *unstructured.Unstructured, action, conn
 	}
 	sum := sha256.Sum256(digest)
 	field := strings.Join(f.path, ".")
+	if action == "setPodTemplateLabel" || action == "setServiceSelectorLabel" {
+		field = strings.Join(f.path[:len(f.path)-1], ".") + "[" + strconv.Quote(f.path[len(f.path)-1]) + "]"
+	}
 	if action == "restart" && f.kind != "Rollout" {
 		field = `spec.template.metadata.annotations["kubectl.kubernetes.io/restartedAt"]`
 	}
@@ -226,17 +253,25 @@ func (f workloadActionField) review(obj *unstructured.Unstructured, action, conn
 }
 
 func (s *Server) handleWorkloadActionPreview(w http.ResponseWriter, r *http.Request) {
-	s.workloadAction(w, r, false)
+	s.workloadAction(w, r, chi.URLParam(r, "kind"), false)
 }
 
 func (s *Server) handleWorkloadActionExecute(w http.ResponseWriter, r *http.Request) {
-	s.workloadAction(w, r, true)
+	s.workloadAction(w, r, chi.URLParam(r, "kind"), true)
+}
+
+func (s *Server) handleServiceActionPreview(w http.ResponseWriter, r *http.Request) {
+	s.workloadAction(w, r, "Service", false)
+}
+
+func (s *Server) handleServiceActionExecute(w http.ResponseWriter, r *http.Request) {
+	s.workloadAction(w, r, "Service", true)
 }
 
 // Both endpoints use the captured connection and caller's live Kubernetes
 // identity. Preview issues only GET. Execute applies one reviewed field using
 // the UID and current resourceVersion at the API server, with no blind retry.
-func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, execute bool) {
+func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, kind string, execute bool) {
 	ns, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
 	if len(validation.IsDNS1123Label(ns)) != 0 || len(validation.IsDNS1123Subdomain(name)) != 0 {
 		s.writeError(w, http.StatusBadRequest, "a valid namespace and resource name are required")
@@ -262,7 +297,7 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, execute 
 		s.writeError(w, http.StatusBadRequest, "invalid workload action: "+errors.Join(append(fieldErrors, err)...).Error())
 		return
 	}
-	field, err := resolveWorkloadAction(chi.URLParam(r, "kind"), in, execute, time.Now())
+	field, err := resolveWorkloadAction(kind, in, execute, time.Now())
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -273,6 +308,10 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, execute 
 			s.writeErrorCode(w, http.StatusForbidden, "workload_action_user_required", "this reviewed change requires an authenticated Kubernetes user")
 			return
 		}
+	}
+	if field.kind == "Service" && chi.URLParam(r, "kind") != "" {
+		s.writeError(w, http.StatusBadRequest, "use the Service action endpoint for a Service selector change")
+		return
 	}
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
@@ -307,9 +346,39 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, execute 
 		s.writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	if execute && (view.UID != in.UID || view.ReviewToken != in.ReviewToken || (in.ExpectedResourceVersion != "" && string(in.ExpectedResourceVersion) != view.ResourceVersion)) {
-		if view.UID == in.UID && view.Before == view.After {
-			s.writeErrorCode(w, http.StatusConflict, "workload_action_unchanged", "the reviewed value is already present; no new write was sent. Check the live workload for its outcome")
+	if execute && view.UID == in.UID && view.Before == view.After {
+		s.writeErrorCode(w, http.StatusConflict, "workload_action_unchanged", "the reviewed value is already present; no new write was sent. Check the live resource for its outcome")
+		return
+	}
+	if execute && (view.UID != in.UID || (in.ExpectedResourceVersion != "" && string(in.ExpectedResourceVersion) != view.ResourceVersion)) {
+		s.writeErrorCode(w, http.StatusConflict, errCodeWorkloadChanged, "the target identity or exact version has changed. Inspect the live resource before considering another change")
+		return
+	}
+	if in.Action == "setServiceSelectorLabel" && view.Before != view.After {
+		impact, err := previewServiceRouting(r.Context(), client, obj, in.LabelKey, *in.LabelValue)
+		if err != nil {
+			s.writeRoutingError(w, err)
+			return
+		}
+		if impact.ProposedReadyPods.Count == 0 {
+			s.writeErrorCode(w, http.StatusConflict, "routing_no_ready_pods", "the proposed selector currently matches zero Ready Pods; wait for the intended Pods to become Ready or change the selector")
+			return
+		}
+		view.RoutingImpact = impact
+		view.ReviewToken = impact.bindReview(view.ReviewToken)
+	}
+	if in.Action == "setPodTemplateLabel" && view.Before != view.After {
+		impact, err := previewDeploymentServices(r.Context(), client, obj, in.LabelKey, *in.LabelValue, view.ReviewToken)
+		if err != nil {
+			s.writeRoutingError(w, err)
+			return
+		}
+		view.DeploymentServiceImpact = impact
+		view.ReviewToken = impact.token
+	}
+	if execute && view.ReviewToken != in.ReviewToken {
+		if view.RoutingImpact != nil || view.DeploymentServiceImpact != nil {
+			s.writeErrorCode(w, http.StatusConflict, "routing_review_changed", "the reviewed target, selector or backing Pods changed. Preview again to inspect the current routing impact")
 		} else {
 			s.writeErrorCode(w, http.StatusConflict, errCodeWorkloadChanged, "the target or proposed change differs from the reviewed action; inspect the live workload before considering another change")
 		}
@@ -338,6 +407,7 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, execute 
 			}
 		}
 	}
+
 	if !execute {
 		s.writeJSON(w, view)
 		return
@@ -362,6 +432,20 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, execute 
 		}
 		s.writeErrorCode(w, http.StatusConflict, "workload_action_not_stored", message)
 		return
+	}
+	if in.Action == "setServiceSelectorLabel" || in.Action == "setPodTemplateLabel" {
+		parentPath := field.path[:len(field.path)-1]
+		expected, _, readErr := unstructured.NestedStringMap(obj.Object, parentPath...)
+		if expected == nil {
+			expected = map[string]string{}
+		}
+		expected[in.LabelKey] = *in.LabelValue
+		actualLabels, _, storedErr := unstructured.NestedStringMap(stored.Object, parentPath...)
+		if readErr != nil || storedErr != nil || !maps.Equal(expected, actualLabels) {
+			audit.Outcome = "reviewed-value-not-confirmed"
+			s.writeErrorCode(w, http.StatusConflict, "workload_action_not_stored", "Kubernetes returned additional changes to the reviewed labels. Inspect the full live selector or Pod template before taking further action")
+			return
+		}
 	}
 	storedGeneration := max(stored.GetGeneration(), 0)
 	if (field.gvr.Group == "apps" || field.gvr.Group == "batch") && view.Generation > 0 && storedGeneration <= view.Generation {

@@ -874,6 +874,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// the caller names (bindWrite in connection_binding.go).
 			r.Post("/workloads/{kind}/{namespace}/{name}/actions/preview", s.bindWrite(s.handleWorkloadActionPreview))
 			r.Post("/workloads/{kind}/{namespace}/{name}/actions/execute", s.bindWrite(s.handleWorkloadActionExecute))
+			r.Post("/services/{namespace}/{name}/actions/preview", s.bindWrite(s.handleServiceActionPreview))
+			r.Post("/services/{namespace}/{name}/actions/execute", s.bindWrite(s.handleServiceActionExecute))
 			r.Post("/workloads/{kind}/{namespace}/{name}/restart", s.bindWrite(s.handleRestartWorkload))
 			r.Post("/workloads/{kind}/{namespace}/{name}/pause", s.bindWrite(s.handlePauseDeployment))
 			r.Post("/workloads/{kind}/{namespace}/{name}/resume", s.bindWrite(s.handleResumeDeployment))
@@ -1613,6 +1615,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		ResourceDeletePreconditions:  true,
 		WorkloadRestartPreconditions: true,
 		ReviewedWorkloadActions:      true,
+		ReviewedRoutingActions:       true,
 		VeleroRunVolumes:             true,
 		VeleroRunArtifacts:           true,
 		ServiceEndpointSlices:        true,

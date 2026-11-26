@@ -826,3 +826,56 @@ or changes the target. When available, `generation` accompanies the resource
 version in each response. Preview reports the observed generation; execute
 reports the stored generation. For native workload specs a successful change
 must advance an existing positive generation.
+
+### Reviewing a change to Service routing
+
+With `features.reviewedRoutingActions`, the existing Deployment workload action
+route accepts `{"action":"setPodTemplateLabel","labelKey":"track","labelValue":"stable"}`.
+The change updates one key under `spec.template.metadata.labels` and triggers a
+new Deployment rollout. Radar checks the full Deployment selector. Wait for the
+new Pods to become Ready before changing a Service that should select them.
+
+Use `POST /api/services/{namespace}/{name}/actions/preview` with
+`{"action":"setServiceSelectorLabel","labelKey":"track","labelValue":"stable"}`
+to review a single selector key on a Service that already selects Pods.
+Execute through the corresponding `/actions/execute` endpoint with the same
+arguments, the reviewed `uid` and `reviewToken`, and optional exact-version
+precondition. Other selector keys remain in place. An explicit empty string
+is a Kubernetes label value. Each action changes one resource independently.
+
+Service preview and execution report `routingImpact` with three counts and up
+to ten sorted Pod names per count. `publishedReadyPods` counts distinct Pod
+targets already published as Ready in EndpointSlices, excluding terminating
+entries. `publishedOtherEndpointEntries` counts other slice entries and can
+include multiple addresses for one target. `currentReadyPods` and
+`proposedReadyPods` count label-matching, Running, nonterminating Pods with
+an IP and a True Ready condition. Radar lists Pods and EndpointSlices with the
+requester's Kubernetes permissions. A denied or incomplete list, or a proposal
+that currently selects zero Ready Pods, stops execution. Radar also requires
+each named target port and protocol to resolve on at least one selected Ready
+Pod. If membership or readiness changes between preview and execution, obtain
+a new preview, even when the Service itself has the same resourceVersion.
+
+The projection describes current Pod selection. EndpointSlice publication is
+asynchronous. Changes to Pods and EndpointSlices can still race a Service
+patch after the final read. Named target port coverage can vary across Pods and
+`publishNotReadyAddresses` can publish unready Pods. `namedTargetPorts` and
+`publishNotReadyAddresses` identify these cases. Approvers should inspect the
+live EndpointSlices and service signals after execution to verify delivery.
+
+Deployment label review lists `deploymentServiceImpact.existingServiceSelectors`
+and `newServiceSelectors`. These are Services whose selectors match the live
+or proposed Pod template. Radar refuses a rollout that would remove these
+Pods from a currently matching Service, and rechecks the Service list at
+execution. The 409 `routing_deployment_would_drop_services` response includes
+`affectedServices.count` and up to ten alphabetically sorted Service names in
+`affectedServices.names`. Admission-injected Pod labels, NetworkPolicies and disruption
+budgets can affect the rollout independently of these template projections.
+
+For Service changes, `addedReadyPods` and `removedReadyPods` compare the
+current and proposed matching cohorts by UID. Counts cover the full compared
+sets even when the listed names are sampled. The `routingImpact` on a receipt
+is the last **pre-write** observation. After execution, fetch
+`routingImpact.verifyEndpointSlices` to see what Kubernetes has published.
+Radar refuses incomplete evidence above 500 matching objects per list or 64
+ports on one Service.
