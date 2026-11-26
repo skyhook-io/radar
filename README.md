@@ -177,7 +177,7 @@ Quick install writes to `/usr/local/bin` unless `INSTALL_DIR` says otherwise. Th
 
 #### Desktop App
 
-Native desktop app — no terminal needed.
+Native desktop app — no terminal needed. On macOS, Radar (desktop and CLI) needs macOS 13 Ventura or later.
 
 **Homebrew (macOS):**
 ```bash

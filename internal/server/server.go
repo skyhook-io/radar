@@ -5,6 +5,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -581,7 +582,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/heap", pprof.Handler("heap").ServeHTTP)
 			r.Get("/mutex", pprof.Handler("mutex").ServeHTTP)
 			r.Get("/threadcreate", pprof.Handler("threadcreate").ServeHTTP)
-			r.Get("/goroutineleak", pprof.Handler("goroutineleak").ServeHTTP) // requires GOEXPERIMENT=goroutineleakprofile at build time
+			r.Get("/goroutineleak", pprof.Handler("goroutineleak").ServeHTTP)
 		})
 	}
 
@@ -5224,11 +5225,37 @@ func normalizeNilSlice(data any) any {
 	return data
 }
 
+// Four slots bound idle retention to 64 MiB. A full pod list can grow the
+// buffer to 16 MiB even though the encoded response is about half that size.
+const jsonResponseRetainedCap = 16 << 20
+
+var jsonResponseBuffers = make(chan *bytes.Buffer, 4)
+
 func (s *Server) writeJSON(w http.ResponseWriter, data any) {
 	w.Header().Set("Content-Type", "application/json")
-	data = normalizeNilSlice(data)
-	if err := json.NewEncoder(w).Encode(data); err != nil {
-		// Can't change HTTP status at this point, but log for debugging
+
+	var buf *bytes.Buffer
+	select {
+	case buf = <-jsonResponseBuffers:
+		buf.Reset()
+	default:
+		buf = new(bytes.Buffer)
+	}
+	defer func() {
+		if buf.Cap() <= jsonResponseRetainedCap {
+			select {
+			case jsonResponseBuffers <- buf:
+			default:
+			}
+		}
+	}()
+
+	if err := jsonv2.MarshalWrite(buf, normalizeNilSlice(data), json.DefaultOptionsV1()); err != nil {
+		log.Printf("Failed to encode JSON response: %v", err)
+		return
+	}
+	buf.WriteByte('\n')
+	if _, err := w.Write(buf.Bytes()); err != nil {
 		log.Printf("Failed to encode JSON response: %v", err)
 	}
 }
