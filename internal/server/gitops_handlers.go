@@ -19,6 +19,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -216,7 +217,8 @@ func (s *Server) resolveGitOpsTree(r *http.Request, req *gitopsRequest) (*gitops
 // set the connection up for this, and the page should say it isn't
 // delivering rather than silently show Radar's read.
 func (s *Server) argoAPIHealth(ctx context.Context, appNamespace, appName string) (*argoapi.ApplicationHealth, error) {
-	health, err := argocd.ApplicationHealthCached(ctx, argoapi.ApplicationQuery{AppNamespace: appNamespace, AppName: appName})
+	manager := connectionruntime.SetFor(k8s.BoundOrCurrent(ctx)).ArgoCD
+	health, err := manager.ApplicationHealthCached(ctx, argoapi.ApplicationQuery{AppNamespace: appNamespace, AppName: appName})
 	if err == nil {
 		return health, nil
 	}
@@ -231,12 +233,12 @@ func (s *Server) argoAPIHealth(ctx context.Context, appNamespace, appName string
 	}
 	if errors.Is(err, argocd.ErrConnecting) {
 		pending := &argoHealthPending{}
-		if argocd.IsConfigured() {
-			pending.notice = argoAPIHealthFailure(err, argocd.TokenSet())
+		if manager.IsConfigured() {
+			pending.notice = argoAPIHealthFailure(err, manager.TokenSet())
 		}
 		return nil, pending
 	}
-	if !argocd.IsConfigured() {
+	if !manager.IsConfigured() {
 		return nil, nil
 	}
 	// A read that got no answer (possibly served from the failure cache) will
@@ -245,9 +247,9 @@ func (s *Server) argoAPIHealth(ctx context.Context, appNamespace, appName string
 	if argocd.ReadMayRecover(err) {
 		// Say why it failed, and have the page ask again so it recovers
 		// when the retry connects.
-		return nil, &argoHealthPending{notice: argoAPIHealthFailure(err, argocd.TokenSet()), retrying: true}
+		return nil, &argoHealthPending{notice: argoAPIHealthFailure(err, manager.TokenSet()), retrying: true}
 	}
-	return nil, errors.New(argoAPIHealthFailure(err, argocd.TokenSet()))
+	return nil, errors.New(argoAPIHealthFailure(err, manager.TokenSet()))
 }
 
 // argoHealthPending: Radar is connecting to argocd-server in the background,
@@ -466,10 +468,11 @@ func (s *Server) handleGitOpsInsights(w http.ResponseWriter, r *http.Request) {
 // offer Connect vs. check Settings. Cost: one managed-resources round-trip per
 // viewed app per 15s cache window, whose result the per-row diffs then reuse.
 func setArgoCapabilities(ctx context.Context, namespace, name string, root *unstructured.Unstructured, caps *gitopsinsights.Capabilities) {
-	caps.ArgoConfigured = argocd.IsConfigured()
+	manager := connectionruntime.SetFor(k8s.BoundOrCurrent(ctx)).ArgoCD
+	caps.ArgoConfigured = manager.IsConfigured()
 	diffReady := false
-	if _, connected := argocd.Get(); connected {
-		if _, err := argocd.ManagedResourcesCached(ctx, argoapi.ManagedResourcesQuery{
+	if _, connected := manager.Get(); connected {
+		if _, err := manager.ManagedResourcesCached(ctx, argoapi.ManagedResourcesQuery{
 			AppNamespace: namespace,
 			AppName:      name,
 		}); err == nil {
@@ -488,8 +491,8 @@ func setArgoCapabilities(ctx context.Context, namespace, name string, root *unst
 	// started a re-check the page should wait out. Retrying is process-wide
 	// (another app's failed read sets it too), so only a page whose own diff
 	// isn't ready is asked to poll for it.
-	caps.ArgoConnecting = argocd.Connecting()
-	caps.ArgoRetrying = caps.ArgoConfigured && !diffReady && argocd.Retrying()
+	caps.ArgoConnecting = manager.Connecting()
+	caps.ArgoRetrying = caps.ArgoConfigured && !diffReady && manager.Retrying()
 }
 
 // managedScanKinds is the set of K8s kinds /api/gitops/managed-resources

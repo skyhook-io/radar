@@ -19,12 +19,12 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/timeline"
-	"github.com/skyhook-io/radar/internal/traffic"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/netpol"
@@ -1242,7 +1242,7 @@ func (s *Server) getDashboardRecentChanges(ctx context.Context, namespaces []str
 }
 
 func (s *Server) getDashboardTrafficSummary() *DashboardTrafficSummary {
-	manager := traffic.GetManager()
+	manager := connectionruntime.SetFor(k8s.Current()).Traffic
 	if manager == nil {
 		return nil
 	}

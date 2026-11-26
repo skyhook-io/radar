@@ -114,8 +114,8 @@ const (
 // handleRightsizing returns rightsizing recommendations for a workload's containers.
 // Only Deployment / StatefulSet / DaemonSet supported — per-pod rightsizing
 // is wrong granularity (recs are per-container-template).
-func handleRightsizing(w http.ResponseWriter, r *http.Request) {
-	if _, connectionErr := ClientForOperation(); connectionErr != nil {
+func (h Routes) handleRightsizing(w http.ResponseWriter, r *http.Request) {
+	if _, connectionErr := h.Capture(r.Context()); connectionErr != nil {
 		writeError(w, http.StatusServiceUnavailable, connectionErr.Error())
 		return
 	}
@@ -917,8 +917,8 @@ type PVCUsageResponse struct {
 // handlePVCUsage returns current usage for a PVC, computed from
 // kubelet_volume_stats_{used,capacity}_bytes. Missing measurements do not
 // establish whether the driver reports volume stats or kubelet is scraped.
-func handlePVCUsage(w http.ResponseWriter, r *http.Request) {
-	client, connectionErr := ClientForOperation()
+func (h Routes) handlePVCUsage(w http.ResponseWriter, r *http.Request) {
+	client, connectionErr := h.Capture(r.Context())
 	if connectionErr != nil {
 		writeError(w, http.StatusServiceUnavailable, connectionErr.Error())
 		return

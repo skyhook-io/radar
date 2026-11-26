@@ -22,20 +22,24 @@ import (
 )
 
 // RegisterRoutes registers Prometheus metric routes on the given router.
-func RegisterRoutes(r chi.Router) {
-	r.Get("/prometheus/status", handleStatus)
-	r.Post("/prometheus/connect", handleConnect)
-	r.Get("/prometheus/resources/{kind}/{namespace}/{name}", handleResourceMetrics)
-	r.Get("/prometheus/resources/{kind}/{name}", handleClusterScopedResourceMetrics)
-	r.Get("/prometheus/namespace/{namespace}", handleNamespaceMetrics)
-	r.Get("/prometheus/cluster", handleClusterMetrics)
-	r.Get("/prometheus/query", handleRawQuery)
-	r.Get("/prometheus/hpa/{namespace}/{name}", handleHPAMetrics)
-	r.Get("/prometheus/pvc/{namespace}/{name}", handlePVCUsage)
-	r.Get("/prometheus/rightsizing/{kind}/{namespace}/{name}", handleRightsizing)
-	r.Get("/prometheus/workload/{kind}/{namespace}/{name}", handleWorkloadMetrics)
-	r.Get("/prometheus/substrate/workerpools/{namespace}/{name}", handleSubstrateWorkerPool)
-	r.Get("/prometheus/substrate/nodes/{name}", handleSubstrateNode)
+type Routes struct {
+	Capture func(context.Context) (*Client, error)
+}
+
+func (h Routes) RegisterRoutes(r chi.Router) {
+	r.Get("/prometheus/status", h.handleStatus)
+	r.Post("/prometheus/connect", h.handleConnect)
+	r.Get("/prometheus/resources/{kind}/{namespace}/{name}", h.handleResourceMetrics)
+	r.Get("/prometheus/resources/{kind}/{name}", h.handleClusterScopedResourceMetrics)
+	r.Get("/prometheus/namespace/{namespace}", h.handleNamespaceMetrics)
+	r.Get("/prometheus/cluster", h.handleClusterMetrics)
+	r.Get("/prometheus/query", h.handleRawQuery)
+	r.Get("/prometheus/hpa/{namespace}/{name}", h.handleHPAMetrics)
+	r.Get("/prometheus/pvc/{namespace}/{name}", h.handlePVCUsage)
+	r.Get("/prometheus/rightsizing/{kind}/{namespace}/{name}", h.handleRightsizing)
+	r.Get("/prometheus/workload/{kind}/{namespace}/{name}", h.handleWorkloadMetrics)
+	r.Get("/prometheus/substrate/workerpools/{namespace}/{name}", h.handleSubstrateWorkerPool)
+	r.Get("/prometheus/substrate/nodes/{name}", h.handleSubstrateNode)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
@@ -66,9 +70,9 @@ type statusResponse struct {
 }
 
 // handleStatus returns the current Prometheus connection status.
-func handleStatus(w http.ResponseWriter, r *http.Request) {
+func (h Routes) handleStatus(w http.ResponseWriter, r *http.Request) {
 	var out statusResponse
-	if client, connectionErr := ClientForOperation(); connectionErr != nil {
+	if client, connectionErr := h.Capture(r.Context()); connectionErr != nil {
 		out.Status = prom.Status{Available: false, Error: connectionErr.Error()}
 	} else {
 		out.Status = client.GetStatus()
@@ -91,8 +95,8 @@ const hubMetricsSourceCheckWait = 12 * time.Second
 // process startup via --prometheus-url, never per-request. Accepting a URL
 // here would let any caller redirect Prometheus queries to an arbitrary
 // host (SSRF) since radar binds to 0.0.0.0 by default.
-func handleConnect(w http.ResponseWriter, r *http.Request) {
-	client, connectionErr := ClientForOperation()
+func (h Routes) handleConnect(w http.ResponseWriter, r *http.Request) {
+	client, connectionErr := h.Capture(r.Context())
 	if connectionErr != nil {
 		writeError(w, http.StatusServiceUnavailable, connectionErr.Error())
 		return
@@ -274,8 +278,8 @@ func writeChartError(w http.ResponseWriter, err error) {
 
 // handleResourceMetrics returns Prometheus metrics for a specific resource.
 // Query params: category (cpu|memory|network_rx|network_tx|filesystem, default: cpu), range (10m|30m|1h|...|14d, default: 1h)
-func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
-	client, connectionErr := ClientForOperation()
+func (h Routes) handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
+	client, connectionErr := h.Capture(r.Context())
 	if connectionErr != nil {
 		writeError(w, http.StatusServiceUnavailable, connectionErr.Error())
 		return
@@ -526,8 +530,8 @@ func (d chartDeps) readConventionalChart(ctx context.Context, kind, namespace, n
 }
 
 // handleClusterScopedResourceMetrics handles metrics for cluster-scoped resources (e.g. Node).
-func handleClusterScopedResourceMetrics(w http.ResponseWriter, r *http.Request) {
-	client, connectionErr := ClientForOperation()
+func (h Routes) handleClusterScopedResourceMetrics(w http.ResponseWriter, r *http.Request) {
+	client, connectionErr := h.Capture(r.Context())
 	if connectionErr != nil {
 		writeError(w, http.StatusServiceUnavailable, connectionErr.Error())
 		return
@@ -588,8 +592,8 @@ type NamespaceMetricsResponse struct {
 }
 
 // handleNamespaceMetrics returns aggregate metrics for a namespace.
-func handleNamespaceMetrics(w http.ResponseWriter, r *http.Request) {
-	client, connectionErr := ClientForOperation()
+func (h Routes) handleNamespaceMetrics(w http.ResponseWriter, r *http.Request) {
+	client, connectionErr := h.Capture(r.Context())
 	if connectionErr != nil {
 		writeError(w, http.StatusServiceUnavailable, connectionErr.Error())
 		return
@@ -632,8 +636,8 @@ type ClusterMetricsResponse struct {
 }
 
 // handleClusterMetrics returns aggregate metrics for the entire cluster.
-func handleClusterMetrics(w http.ResponseWriter, r *http.Request) {
-	client, connectionErr := ClientForOperation()
+func (h Routes) handleClusterMetrics(w http.ResponseWriter, r *http.Request) {
+	client, connectionErr := h.Capture(r.Context())
 	if connectionErr != nil {
 		writeError(w, http.StatusServiceUnavailable, connectionErr.Error())
 		return
@@ -680,8 +684,8 @@ type RawQueryResponse struct {
 
 // handleRawQuery proxies a raw PromQL query to Prometheus.
 // Query params: query (PromQL), range (time range), type (instant|range)
-func handleRawQuery(w http.ResponseWriter, r *http.Request) {
-	client, connectionErr := ClientForOperation()
+func (h Routes) handleRawQuery(w http.ResponseWriter, r *http.Request) {
+	client, connectionErr := h.Capture(r.Context())
 	if connectionErr != nil {
 		writeError(w, http.StatusServiceUnavailable, connectionErr.Error())
 		return
@@ -776,8 +780,8 @@ type HPAMetricsResponse struct {
 // HPA. Curated so a caller who can read the HPA gets its chart without the
 // cluster-wide grant raw PromQL requires.
 // Query params: range (10m|30m|1h|...|14d, default: 1h)
-func handleHPAMetrics(w http.ResponseWriter, r *http.Request) {
-	client, connectionErr := ClientForOperation()
+func (h Routes) handleHPAMetrics(w http.ResponseWriter, r *http.Request) {
+	client, connectionErr := h.Capture(r.Context())
 	if connectionErr != nil {
 		writeError(w, http.StatusServiceUnavailable, connectionErr.Error())
 		return

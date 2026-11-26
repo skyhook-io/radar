@@ -67,7 +67,7 @@ func (c *Client) ListIssueReleasesAcrossNamespaces(ctx context.Context, namespac
 	if err != nil {
 		return nil, err
 	}
-	return listIssueReleasesWithClients(ctx, client, labelsClient, contextName, namespaces)
+	return c.memo().listIssueReleasesWithClients(ctx, client, labelsClient, contextName, namespaces)
 }
 
 // IssueReadDenied reports whether a failed ListIssueReleasesAcrossNamespaces
@@ -243,13 +243,13 @@ func issueReadFailureClass(err error) string {
 // Only a caller denial skips a namespace here. Any other failure is recorded
 // against its namespace, and the rest are still read, so one failing namespace
 // can't hide the issues of the others.
-func listIssueReleasesWithClients(ctx context.Context, client kubernetes.Interface, labelsClient metadata.Interface, contextName string, namespaces []string) ([]HelmRelease, error) {
-	return listReleaseRows(ctx, contextName, namespaces, false, nil, true, ReleaseReadDeniedForCaller, func(ctx context.Context, namespace string) (*helmReleaseStorageSnapshot, error) {
+func (m *UninstallMemo) listIssueReleasesWithClients(ctx context.Context, client kubernetes.Interface, labelsClient metadata.Interface, contextName string, namespaces []string) ([]HelmRelease, error) {
+	return m.listReleaseRows(ctx, contextName, namespaces, false, nil, true, ReleaseReadDeniedForCaller, func(ctx context.Context, namespace string) (*helmReleaseStorageSnapshot, error) {
 		snapshot, skipped, err := helmIssueStorageSnapshot(ctx, client, labelsClient, namespace)
 		if err != nil {
 			return nil, err
 		}
-		forgetUninstallStarts(contextName, skipped)
+		m.forgetUninstallStarts(contextName, skipped)
 		return snapshot, nil
 	})
 }
@@ -360,7 +360,7 @@ func helmIssueStorageSnapshot(ctx context.Context, client kubernetes.Interface, 
 // forgetUninstallStarts does for skipped releases what analyzeReleaseHistory
 // does for a release whose newest revision is not uninstalling: it clears the
 // release's uninstall start.
-func forgetUninstallStarts(contextName string, skipped []storedRelease) {
+func (m *UninstallMemo) forgetUninstallStarts(contextName string, skipped []storedRelease) {
 	if len(skipped) == 0 || contextName != k8s.GetContextName() {
 		return
 	}
@@ -371,6 +371,6 @@ func forgetUninstallStarts(contextName string, skipped []storedRelease) {
 			continue
 		}
 		key := uninstallStartKey{context: contextName, storageNamespace: rel.namespace, name: rel.name}
-		uninstallStarts.observe(key, helmhistory.Revision{Revision: rel.revision, Status: rel.status}, now)
+		m.observe(key, helmhistory.Revision{Revision: rel.revision, Status: rel.status}, now)
 	}
 }

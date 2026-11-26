@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"log"
 	"math"
 	"strings"
@@ -203,7 +204,7 @@ func diagnoseMetricsForScope(budgetCtx context.Context, avail prometheus.Availab
 		out.Error = boundDiagnoseMetricsError(fmt.Sprintf("prometheus unreachable: %v", avail.Err))
 		return out
 	}
-	client, connectionErr := prometheus.ClientForOperation()
+	client, connectionErr := connectionruntime.CaptureMetrics(budgetCtx)
 	if connectionErr != nil {
 		out.Error = boundDiagnoseMetricsError(connectionErr.Error())
 		return out

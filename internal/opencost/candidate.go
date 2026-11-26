@@ -8,17 +8,22 @@ import (
 )
 
 type kubecostTarget struct {
+	cache       *k8s.ResourceCache
 	forwards    *portforward.Manager
 	contextName string
 	inCluster   bool
 }
 
 func captureKubecostTarget() kubecostTarget {
-	conn := k8s.Current()
+	return kubecostTargetFor(k8s.Current(), k8s.IsInCluster())
+}
+
+func kubecostTargetFor(conn *k8s.Connection, inCluster bool) kubecostTarget {
 	return kubecostTarget{
+		cache:       conn.ResourceCache(),
 		forwards:    conn.PortForwards(),
 		contextName: conn.ContextName(),
-		inCluster:   k8s.IsInCluster(),
+		inCluster:   inCluster,
 	}
 }
 
@@ -26,14 +31,18 @@ func captureKubecostTarget() kubecostTarget {
 // configuration lock. The returned probe uses only the captured client and
 // config, so a context switch cannot redirect it.
 func PrepareCandidate(config ManagerConfig) (func(context.Context) error, error) {
+	return PrepareCandidateFor(k8s.Current(), k8s.IsInCluster(), config)
+}
+
+func PrepareCandidateFor(conn *k8s.Connection, inCluster bool, config ManagerConfig) (func(context.Context) error, error) {
 	if config.Source == SourcePrometheus || config.Source == SourceAuto && !hasExplicitKubecostConfig(config) {
 		return nil, nil
 	}
-	target := captureKubecostTarget()
+	target := kubecostTargetFor(conn, inCluster)
 	if err := validateKubecostConfigContext(config, target.contextName); err != nil {
 		return nil, err
 	}
-	clusterID, err := resolveKubecostClusterID(config.ClusterID)
+	clusterID, err := resolveKubecostClusterIDFrom(target.cache, config.ClusterID)
 	if err != nil {
 		return nil, err
 	}
@@ -43,7 +52,7 @@ func PrepareCandidate(config ManagerConfig) (func(context.Context) error, error)
 			return err
 		}, nil
 	}
-	aggregator, err := discoverKubecostAggregator()
+	aggregator, err := discoverKubecostAggregatorFrom(target.cache)
 	if err != nil {
 		return nil, err
 	}

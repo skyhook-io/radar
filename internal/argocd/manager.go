@@ -257,6 +257,18 @@ func NewManager() *Manager {
 	}
 }
 
+func NewConnectionManager(conn *k8s.Connection, inCluster bool, binding string) *Manager {
+	return &Manager{
+		clusterClients: func() probeCluster { return probeCluster{conn.ClientInterface(), conn.PortForwards()} },
+		inCluster:      func() bool { return inCluster },
+		contextName:    conn.ContextName,
+		contextBinding: func(context.Context) string { return binding },
+		loadConfig:     config.Load,
+	}
+}
+
+func CurrentManager() *Manager { return defaultManager }
+
 var defaultManager = NewManager()
 
 // SetConfig applies new connection settings on the default manager.

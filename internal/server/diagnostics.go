@@ -9,12 +9,11 @@ import (
 	"sort"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/desktopenv"
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/k8s"
-	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/timeline"
-	"github.com/skyhook-io/radar/internal/traffic"
 	"github.com/skyhook-io/radar/internal/version"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/perfstats"
@@ -244,7 +243,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	var metricsStore *k8s.MetricsHistoryStore
 	var cache *k8s.ResourceCache
 	var dynCache *k8s.DynamicResourceCache
-	var trafficManager *traffic.Manager
+	var integrations connectionruntime.Set
 	var status k8s.ConnectionStatus
 	stable := k8s.CaptureClusterReads(func() {
 		operation = k8s.OperationContext()
@@ -253,7 +252,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		status = k8s.GetConnectionStatus()
 		if status.State == k8s.StateConnected {
 			dynCache = k8s.GetDynamicResourceCache()
-			trafficManager = traffic.GetManager()
+			integrations = connectionruntime.SetFor(k8s.Current())
 		}
 	})
 
@@ -441,7 +440,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 
 	// Prometheus
 	collectClusterSection("prometheus", func() {
-		client := prometheuspkg.GetClient()
+		client := integrations.Metrics
 		if client == nil {
 			return
 		}
@@ -459,10 +458,10 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 
 	// Traffic — only read cached state, never trigger network I/O
 	collectClusterSection("traffic", func() {
-		if trafficManager == nil {
+		if integrations.Traffic == nil {
 			return
 		}
-		name, ok := trafficManager.ActiveSourceNameIfIdle()
+		name, ok := integrations.Traffic.ActiveSourceNameIfIdle()
 		if !ok {
 			clusterErrors = append(clusterErrors, "Traffic source details are temporarily busy.")
 			return

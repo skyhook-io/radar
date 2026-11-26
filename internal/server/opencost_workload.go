@@ -2,13 +2,13 @@ package server
 
 import (
 	"fmt"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"log"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/k8s"
 	internalopencost "github.com/skyhook-io/radar/internal/opencost"
-	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	pkgopencost "github.com/skyhook-io/radar/pkg/opencost"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
@@ -67,7 +67,7 @@ func (s *Server) handleOpenCostWorkload(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	client, connectionErr := prometheuspkg.ClientForOperation()
+	client, connectionErr := connectionruntime.CaptureMetrics(r.Context())
 	if connectionErr != nil {
 		resp.Available = false
 		resp.Reason = internalopencost.ConnectionFailureReason(connectionErr)
@@ -127,7 +127,7 @@ func (s *Server) handleOpenCostWorkloadTrend(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	client, connectionErr := prometheuspkg.ClientForOperation()
+	client, connectionErr := connectionruntime.CaptureMetrics(r.Context())
 	if connectionErr != nil {
 		resp.Available = false
 		resp.Reason = internalopencost.ConnectionFailureReason(connectionErr)

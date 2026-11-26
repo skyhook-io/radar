@@ -912,7 +912,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/prometheus/rightsizing/scan", s.handleRightsizingScan)
 			r.Get("/prometheus/rightsizing/scan/{scanId}", s.handleRightsizingScan)
 			r.Delete("/prometheus/rightsizing/scan/{scanId}", s.handleRightsizingScan)
-			prometheuspkg.RegisterRoutes(r)
+			prometheuspkg.Routes{Capture: connectionruntime.CaptureMetrics}.RegisterRoutes(r)
 			r.Get("/metrics/datadog/agent", s.handleDatadogAgentPresence)
 			r.Get("/metrics/openobserve/collector", s.handleOpenObserveCollectorPresence)
 			r.Get("/agent/metrics-cluster-identity", s.handleMetricsClusterIdentity)

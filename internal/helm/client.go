@@ -78,6 +78,7 @@ type Client struct {
 	*repositorySettings
 	conn       *k8s.Connection
 	restConfig *rest.Config
+	uninstall  *UninstallMemo
 }
 
 type repositorySettings struct {
@@ -142,7 +143,7 @@ func Initialize() {
 	clientOnce.Do(func() {
 		ensureHelmWritablePaths()
 		settings := cli.New()
-		globalClient = &Client{repositorySettings: &repositorySettings{settings: settings}}
+		globalClient = &Client{repositorySettings: &repositorySettings{settings: settings}, uninstall: uninstallStarts}
 		log.Printf("Helm client initialized (cache=%s, config=%s, data=%s)",
 			settings.RepositoryCache, settings.RepositoryConfig, settings.PluginsDirectory)
 	})
@@ -159,6 +160,7 @@ func InitializeWithRESTConfig(restCfg *rest.Config) error {
 		globalClient = &Client{
 			repositorySettings: &repositorySettings{settings: cli.New()},
 			restConfig:         restCfg,
+			uninstall:          NewUninstallMemo(),
 		}
 	})
 	return nil
@@ -183,7 +185,14 @@ func GetClient(ctx context.Context) *Client {
 }
 
 func (c *Client) forConnection(conn *k8s.Connection) *Client {
-	return &Client{repositorySettings: c.repositorySettings, conn: conn}
+	return &Client{repositorySettings: c.repositorySettings, conn: conn, uninstall: c.uninstall}
+}
+
+func (c *Client) memo() *UninstallMemo {
+	if c.uninstall != nil {
+		return c.uninstall
+	}
+	return uninstallStarts
 }
 
 func (c *Client) capture(ctx context.Context) (*Client, context.Context) {
@@ -318,7 +327,7 @@ func (c *Client) ListReleasesAcrossNamespaces(ctx context.Context, namespaces []
 	if err != nil {
 		return nil, err
 	}
-	return listReleasesAcrossNamespacesWithClient(ctx, client, contextName, namespaces, true, access)
+	return c.memo().listReleasesAcrossNamespacesWithClient(ctx, client, contextName, namespaces, true, access)
 }
 
 // ListReleasesRecordingAccess is ListReleasesAcrossNamespaces that also says
@@ -335,13 +344,13 @@ func (c *Client) ListReleasesRecordingAccess(ctx context.Context, namespaces []s
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	return listReleasesRecordingAccess(ctx, client, c.conn.ContextName(), namespaces, access)
+	return c.memo().listReleasesRecordingAccess(ctx, client, c.conn.ContextName(), namespaces, access)
 }
 
 // contextName is the cluster context the read started on; a release history
 // analysed after a switch away from it records no uninstall start.
-func listReleasesAcrossNamespacesWithClient(ctx context.Context, client kubernetes.Interface, contextName string, namespaces []string, includeResourceHealth bool, access StatusAccess) ([]HelmRelease, error) {
-	rows, err := listReleaseRows(ctx, contextName, namespaces, includeResourceHealth, access, false, ReleaseReadDeniedForCaller, func(ctx context.Context, namespace string) (*helmReleaseStorageSnapshot, error) {
+func (m *UninstallMemo) listReleasesAcrossNamespacesWithClient(ctx context.Context, client kubernetes.Interface, contextName string, namespaces []string, includeResourceHealth bool, access StatusAccess) ([]HelmRelease, error) {
+	rows, err := m.listReleaseRows(ctx, contextName, namespaces, includeResourceHealth, access, false, ReleaseReadDeniedForCaller, func(ctx context.Context, namespace string) (*helmReleaseStorageSnapshot, error) {
 		return helmReleaseStorageSnapshotWithClient(ctx, client, namespace)
 	})
 	if err != nil {
@@ -373,7 +382,7 @@ func (e *PartialReadError) Unwrap() error { return e.Err }
 // failure fails the whole read, unless keepGoing is set: then the remaining
 // namespaces are still read, and when at least one namespace was read the
 // rows come back with a *PartialReadError naming the namespaces that failed.
-func listReleaseRows(ctx context.Context, contextName string, namespaces []string, includeResourceHealth bool, access StatusAccess, keepGoing bool, denied func(error) bool, read func(context.Context, string) (*helmReleaseStorageSnapshot, error)) ([]HelmRelease, error) {
+func (m *UninstallMemo) listReleaseRows(ctx context.Context, contextName string, namespaces []string, includeResourceHealth bool, access StatusAccess, keepGoing bool, denied func(error) bool, read func(context.Context, string) (*helmReleaseStorageSnapshot, error)) ([]HelmRelease, error) {
 	scopes := namespaces
 	if scopes == nil {
 		scopes = []string{""}
@@ -403,7 +412,7 @@ func listReleaseRows(ctx context.Context, contextName string, namespaces []strin
 		snapshot, err := read(ctx, ns)
 		if err == nil {
 			var rows []HelmRelease
-			rows, err = helmReleaseRowsFromStorageSnapshot(ctx, snapshot, fluxMap, k3sMap, contextName, access)
+			rows, err = m.helmReleaseRowsFromStorageSnapshot(ctx, snapshot, fluxMap, k3sMap, contextName, access)
 			if err == nil {
 				authorized = true
 				all = append(all, rows...)
@@ -565,10 +574,10 @@ func (c *Client) listReleasesWith(ctx context.Context, actionConfig *action.Conf
 	if err != nil {
 		return nil, err
 	}
-	return listReleasesAcrossNamespacesWithClient(ctx, client, contextName, []string{namespace}, true, access)
+	return c.memo().listReleasesAcrossNamespacesWithClient(ctx, client, contextName, []string{namespace}, true, access)
 }
 
-func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmReleaseStorageSnapshot, fluxMap map[string]string, k3sMap map[string]k3sOwner, contextName string, access StatusAccess) ([]HelmRelease, error) {
+func (m *UninstallMemo) helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmReleaseStorageSnapshot, fluxMap map[string]string, k3sMap map[string]k3sOwner, contextName string, access StatusAccess) ([]HelmRelease, error) {
 	if snapshot == nil {
 		return nil, nil
 	}
@@ -587,7 +596,7 @@ func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmRelea
 			effectiveStorage = rel.Namespace
 		}
 		historyKey := releaseHistoryKey(rel)
-		analysis := analyzeReleaseHistory(contextName, effectiveStorage, rel.Name, rel.Version, snapshot.histories[historyKey], helmhistory.Options{MaxOperations: releaseListMaxOperations})
+		analysis := m.analyzeReleaseHistory(contextName, effectiveStorage, rel.Name, rel.Version, snapshot.histories[historyKey], helmhistory.Options{MaxOperations: releaseListMaxOperations})
 		hr.LastOperation = analysis.LastOperation
 		hr.Operations = analysis.Operations
 		hr.ManagedByFlux, hr.ManagedByFluxHelmRelease = scopedFluxOwnership(k8s.ConnectionFrom(ctx).Discovery(), rel.Name, effectiveStorage, fluxMap, access)
@@ -609,7 +618,7 @@ func (c *Client) GetReleaseAsUser(ctx context.Context, namespace, name string, u
 	if err != nil {
 		return nil, err
 	}
-	return getReleaseWith(ctx, c.conn, actionConfig, contextName, namespace, name, access)
+	return c.memo().getReleaseWith(ctx, c.conn, actionConfig, contextName, namespace, name, access)
 }
 
 // GetRelease returns details for a specific release. Its resources carry live
@@ -621,10 +630,10 @@ func (c *Client) GetRelease(ctx context.Context, namespace, name string, access 
 	if err != nil {
 		return nil, err
 	}
-	return getReleaseWith(ctx, c.conn, actionConfig, contextName, namespace, name, access)
+	return c.memo().getReleaseWith(ctx, c.conn, actionConfig, contextName, namespace, name, access)
 }
 
-func getReleaseWith(ctx context.Context, conn *k8s.Connection, actionConfig *action.Configuration, contextName, namespace, name string, access StatusAccess) (*HelmReleaseDetail, error) {
+func (m *UninstallMemo) getReleaseWith(ctx context.Context, conn *k8s.Connection, actionConfig *action.Configuration, contextName, namespace, name string, access StatusAccess) (*HelmReleaseDetail, error) {
 	// Get the latest release
 	getAction := action.NewGet(actionConfig)
 	rel, err := getAction.Run(name)
@@ -660,7 +669,7 @@ func getReleaseWith(ctx context.Context, conn *k8s.Connection, actionConfig *act
 	if effectiveStorage == "" {
 		effectiveStorage = rel.Namespace
 	}
-	analysis := analyzeReleaseHistory(contextName, effectiveStorage, rel.Name, rel.Version, revisions, helmhistory.Options{})
+	analysis := m.analyzeReleaseHistory(contextName, effectiveStorage, rel.Name, rel.Version, revisions, helmhistory.Options{})
 
 	resources := parseManifestResources(conn, rel.Manifest, rel.Namespace)
 	health, issue, summary := readReleaseStatus(conn, resources, access)

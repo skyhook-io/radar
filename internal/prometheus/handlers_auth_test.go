@@ -1,6 +1,7 @@
 package prometheus
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -139,7 +140,7 @@ func seedScopeCache(t *testing.T) {
 
 func metricsRouter() http.Handler {
 	r := chi.NewRouter()
-	RegisterRoutes(r)
+	Routes{Capture: func(context.Context) (*Client, error) { return ClientForOperation() }}.RegisterRoutes(r)
 	return r
 }
 

@@ -2,13 +2,13 @@ package server
 
 import (
 	"encoding/json"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"log"
 	"net/http"
 	"sort"
 	"strings"
 
 	internalopencost "github.com/skyhook-io/radar/internal/opencost"
-	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	pkgopencost "github.com/skyhook-io/radar/pkg/opencost"
 )
 
@@ -69,7 +69,7 @@ func (s *Server) handleOpenCostApplication(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	client, connectionErr := prometheuspkg.ClientForOperation()
+	client, connectionErr := connectionruntime.CaptureMetrics(r.Context())
 	if connectionErr != nil {
 		resp := pkgopencost.UnavailableApplicationCostResponse(inputs, unavailable, unsupported, internalopencost.ConnectionFailureReason(connectionErr))
 		resp.Currency = s.resolvedOpenCostCurrency()
@@ -132,7 +132,7 @@ func (s *Server) handleOpenCostApplicationTrend(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	client, connectionErr := prometheuspkg.ClientForOperation()
+	client, connectionErr := connectionruntime.CaptureMetrics(r.Context())
 	if connectionErr != nil {
 		resp := pkgopencost.ComputeApplicationCostTrendFromProm(r.Context(), nil, pkgopencost.ApplicationTrendOptions{
 			Range:       req.Range,

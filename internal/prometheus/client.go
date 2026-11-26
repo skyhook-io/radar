@@ -177,16 +177,20 @@ func Initialize(client kubernetes.Interface, config *rest.Config, contextName st
 	clientMu.Lock()
 	defer clientMu.Unlock()
 
-	globalClient = &Client{
+	globalClient = NewClient(client, config, contextName, forwards, k8s.IsInCluster())
+	globalClient.adoptRelayLocked()
+}
+
+func NewClient(client kubernetes.Interface, config *rest.Config, contextName string, forwards *portforward.Manager, inCluster bool) *Client {
+	return &Client{
 		forwards:      forwards,
 		k8sClient:     client,
 		k8sConfig:     config,
 		contextName:   contextName,
-		inCluster:     k8s.IsInCluster(),
+		inCluster:     inCluster,
 		httpClient:    &http.Client{Timeout: 10 * time.Second},
 		mcpHTTPClient: newMCPHTTPClient(),
 	}
-	globalClient.adoptRelayLocked()
 }
 
 // newMCPHTTPClient builds the HTTP client backing the MCP-only prom.Client.

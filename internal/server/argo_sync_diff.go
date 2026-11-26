@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/skyhook-io/radar/internal/argocd"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/argoapi"
 	"github.com/skyhook-io/radar/pkg/gitops"
@@ -63,7 +63,8 @@ func (s *Server) handleArgoSyncDiff(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, 409, "These revisions cannot be rendered with their recorded source settings on this cluster.")
 		return
 	}
-	client, ok := argocd.Get()
+	manager := connectionruntime.SetFor(conn).ArgoCD
+	client, ok := manager.Get()
 	if !ok {
 		s.writeError(w, 503, "Connect the Argo CD API to compare rendered resources.")
 		return
@@ -99,7 +100,7 @@ func (s *Server) handleArgoSyncDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stillMatches := matches()
-	if current, ok := argocd.Get(); !stillMatches || !ok || current != client || k8s.Current() != conn || k8s.GetResourceCache() != cache {
+	if current, ok := manager.Get(); !stillMatches || !ok || current != client || k8s.Current() != conn || k8s.GetResourceCache() != cache {
 		s.writeError(w, 409, "The Application or connection changed during comparison. Reopen this sync to retry.")
 		return
 	}

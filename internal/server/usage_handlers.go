@@ -20,10 +20,10 @@ import (
 	"github.com/skyhook-io/radar/internal/ai"
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/opencost"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
-	"github.com/skyhook-io/radar/internal/traffic"
 	"github.com/skyhook-io/radar/internal/usagedata"
 	"github.com/skyhook-io/radar/internal/version"
 	"github.com/skyhook-io/radar/pkg/packages"
@@ -270,7 +270,7 @@ func anyAgentSetUp(agents []ai.AgentInfo, consentGiven func(surface string) bool
 var lastUsageTrafficSource atomic.Value
 
 func usageTrafficSource() string {
-	m := traffic.GetManager()
+	m := connectionruntime.SetFor(k8s.Current()).Traffic
 	if m == nil {
 		return "none"
 	}

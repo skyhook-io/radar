@@ -53,7 +53,7 @@ type workloadMetricScope struct {
 	Reason string `json:"reason,omitempty"`
 }
 
-func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
+func (h Routes) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 	if !k8s.IsConnected() {
 		writeError(w, http.StatusServiceUnavailable, "Not connected to cluster")
 		return
@@ -73,7 +73,7 @@ func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Unsupported request source; use beyla or istio, or omit source for automatic selection.")
 		return
 	}
-	client, connectionErr := ClientForOperation()
+	client, connectionErr := h.Capture(r.Context())
 	if connectionErr != nil {
 		writeError(w, http.StatusServiceUnavailable, connectionErr.Error())
 		return

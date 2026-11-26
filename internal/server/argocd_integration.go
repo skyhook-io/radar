@@ -12,7 +12,9 @@ import (
 	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/connections"
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/portforward"
 	"github.com/skyhook-io/radar/pkg/prom"
 	"github.com/skyhook-io/radar/pkg/urlutil"
@@ -26,6 +28,7 @@ import (
 // reconnect when disconnected, so opening Overview after a restart helps the
 // integration come back.
 func (s *Server) handleArgoCDStatus(w http.ResponseWriter, r *http.Request) {
+	manager := connectionruntime.SetFor(k8s.BoundOrCurrent(r.Context())).ArgoCD
 	resp := struct {
 		Configured bool `json:"configured"`
 		Connected  bool `json:"connected"`
@@ -37,7 +40,7 @@ func (s *Server) handleArgoCDStatus(w http.ResponseWriter, r *http.Request) {
 		Address   string `json:"address,omitempty"`
 		Reason    string `json:"reason,omitempty"`
 	}{
-		Configured: argocd.IsConfigured(),
+		Configured: manager.IsConfigured(),
 	}
 	if err := connections.Refresh(config.IntegrationArgoCD); err != nil {
 		resp.Reason = prom.RedactURLs(err.Error())
@@ -48,24 +51,24 @@ func (s *Server) handleArgoCDStatus(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, resp)
 		return
 	}
-	_, resp.Connected = argocd.Get()
-	resp.Configured = argocd.IsConfigured()
+	_, resp.Connected = manager.Get()
+	resp.Configured = manager.IsConfigured()
 	if resp.Connected {
-		resp.Address = argocd.Address()
-		resp.Anonymous = argocd.AnonymousReadAllowed()
-		if err := argocd.LastReadError(); err != nil && resp.Configured {
-			resp.Reason = "Radar's last read from Argo CD failed: " + argoAPIHealthFailure(err, argocd.TokenSet()) + "."
+		resp.Address = manager.Address()
+		resp.Anonymous = manager.AnonymousReadAllowed()
+		if err := manager.LastReadError(); err != nil && resp.Configured {
+			resp.Reason = "Radar's last read from Argo CD failed: " + argoAPIHealthFailure(err, manager.TokenSet()) + "."
 		}
 	} else {
 		// While a reconnect runs, the last failure still says why it is needed.
-		resp.Connecting = argocd.Connecting()
-		if argocd.TokenBindingUpgradeRequired() {
+		resp.Connecting = manager.Connecting()
+		if manager.TokenBindingUpgradeRequired() {
 			resp.Reason = "Re-enter the Argo CD token in Settings to bind it to this kubeconfig source."
 			if s.configManagement() == "operator" {
 				resp.Reason = "The saved Argo CD token is not bound to this kubeconfig source. Ask the operator to provision the token through startup configuration."
 			}
-		} else if err := argocd.LastProbeError(); err != nil && (resp.Configured || errors.Is(err, portforward.ErrAutoDisabled)) {
-			resp.Reason = "Radar couldn't connect to Argo CD: " + argoAPIHealthFailure(err, argocd.TokenSet()) + "."
+		} else if err := manager.LastProbeError(); err != nil && (resp.Configured || errors.Is(err, portforward.ErrAutoDisabled)) {
+			resp.Reason = "Radar couldn't connect to Argo CD: " + argoAPIHealthFailure(err, manager.TokenSet()) + "."
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")

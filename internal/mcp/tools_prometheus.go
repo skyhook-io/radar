@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"log"
 	"math"
 	"regexp"
@@ -755,7 +756,7 @@ func adjustStep(window time.Duration, stepStr string, maxPoints int) (time.Durat
 }
 
 func connectProm(ctx context.Context) (*prom.Client, error) {
-	client, connectionErr := prometheus.ClientForOperation()
+	client, connectionErr := connectionruntime.CaptureMetrics(ctx)
 	if connectionErr != nil {
 		return nil, connectionErr
 	}

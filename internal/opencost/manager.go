@@ -110,6 +110,8 @@ const (
 )
 
 type Manager struct {
+	target         func() kubecostTarget
+	metrics        func() (*prometheuspkg.Client, error)
 	mu             sync.RWMutex
 	selectMu       sync.Mutex
 	config         ManagerConfig
@@ -127,7 +129,27 @@ type Manager struct {
 	envError       string
 }
 
-var defaultManager = &Manager{config: ManagerConfig{Source: SourceAuto}}
+var defaultManager = &Manager{
+	config:  ManagerConfig{Source: SourceAuto},
+	target:  captureKubecostTarget,
+	metrics: prometheuspkg.ClientForOperation,
+}
+
+func CurrentManager() *Manager { return defaultManager }
+
+func NewManager(conn *k8s.Connection, inCluster bool, client *prometheuspkg.Client) *Manager {
+	target := kubecostTargetFor(conn, inCluster)
+	return &Manager{
+		config: ManagerConfig{Source: SourceAuto},
+		target: func() kubecostTarget { return target },
+		metrics: func() (*prometheuspkg.Client, error) {
+			if client == nil {
+				return nil, prometheuspkg.ErrPrometheusUnavailable
+			}
+			return client, nil
+		},
+	}
+}
 
 func ValidateSource(value string) (Source, error) {
 	source := Source(strings.ToLower(strings.TrimSpace(value)))
@@ -353,7 +375,11 @@ func (m *Manager) Selected(ctx context.Context) (Connection, error) {
 	provisionalKubecost := false
 	if config.Source == SourceAuto {
 		detectCtx, cancel := context.WithTimeout(ctx, prometheusCostDetectionTimeout)
-		prometheusState := detectPrometheusCostState(detectCtx)
+		metrics := m.metrics
+		if metrics == nil {
+			metrics = prometheuspkg.ClientForOperation
+		}
+		prometheusState := detectPrometheusCostStateWith(detectCtx, metrics)
 		detectionErr := detectCtx.Err()
 		cancel()
 		if err := ctx.Err(); err != nil {
@@ -542,7 +568,11 @@ func (m *Manager) autoRetryDueLocked(now time.Time) bool {
 }
 
 func detectPrometheusCostState(ctx context.Context) prometheusCostState {
-	client, connectionErr := prometheuspkg.ClientForOperation()
+	return detectPrometheusCostStateWith(ctx, prometheuspkg.ClientForOperation)
+}
+
+func detectPrometheusCostStateWith(ctx context.Context, metrics func() (*prometheuspkg.Client, error)) prometheusCostState {
+	client, connectionErr := metrics()
 	if connectionErr != nil {
 		if errors.Is(connectionErr, prometheuspkg.ErrPrometheusUnavailable) {
 			return prometheusCostAbsent
@@ -581,12 +611,16 @@ func (m *Manager) connectKubecost(ctx context.Context, config ManagerConfig) (Co
 	// Validate against the captured target, not the live context: a switch
 	// after validation would otherwise forward this context's API key to the
 	// next cluster's Kubecost.
-	target := captureKubecostTarget()
+	targetForOperation := m.target
+	if targetForOperation == nil {
+		targetForOperation = captureKubecostTarget
+	}
+	target := targetForOperation()
 	if err := validateKubecostConfigContext(config, target.contextName); err != nil {
 		return Connection{}, err
 	}
 	if config.URL != "" {
-		clusterID, err := resolveKubecostClusterID(config.ClusterID)
+		clusterID, err := resolveKubecostClusterIDFrom(target.cache, config.ClusterID)
 		if err != nil {
 			return Connection{}, err
 		}
@@ -600,11 +634,11 @@ func (m *Manager) connectKubecost(ctx context.Context, config ManagerConfig) (Co
 		}, nil
 	}
 
-	aggregator, err := discoverKubecostAggregator()
+	aggregator, err := discoverKubecostAggregatorFrom(target.cache)
 	if err != nil {
 		return Connection{}, fmt.Errorf("%w: %w", ErrKubecostUnavailable, err)
 	}
-	clusterID, err := resolveKubecostClusterID(config.ClusterID)
+	clusterID, err := resolveKubecostClusterIDFrom(target.cache, config.ClusterID)
 	if err != nil {
 		return Connection{}, err
 	}
@@ -716,10 +750,14 @@ func validateKubecostConfigContext(config ManagerConfig, currentContext string) 
 }
 
 func resolveKubecostClusterID(configured string) (string, error) {
+	return resolveKubecostClusterIDFrom(k8s.GetResourceCache(), configured)
+}
+
+func resolveKubecostClusterIDFrom(cache *k8s.ResourceCache, configured string) (string, error) {
 	if configured != "" {
 		return configured, nil
 	}
-	clusterID, err := detectKubecostClusterID()
+	clusterID, err := detectKubecostClusterIDFrom(cache)
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", ErrKubecostClusterID, err)
 	}
@@ -835,7 +873,10 @@ func kubecostClusterFilter(clusterID string) string {
 }
 
 func discoverKubecostAggregator() (*kubecostAggregator, error) {
-	cache := k8s.GetResourceCache()
+	return discoverKubecostAggregatorFrom(k8s.GetResourceCache())
+}
+
+func discoverKubecostAggregatorFrom(cache *k8s.ResourceCache) (*kubecostAggregator, error) {
 	if cache == nil || cache.Services() == nil || cache.StatefulSets() == nil {
 		return nil, fmt.Errorf("%w: requires access to Services and StatefulSets; configure the Aggregator URL manually", ErrKubecostDiscovery)
 	}
@@ -900,7 +941,10 @@ func activeKubecostAggregator(statefulSet *appsv1.StatefulSet) bool {
 }
 
 func detectKubecostClusterID() (string, error) {
-	cache := k8s.GetResourceCache()
+	return detectKubecostClusterIDFrom(k8s.GetResourceCache())
+}
+
+func detectKubecostClusterIDFrom(cache *k8s.ResourceCache) (string, error) {
 	if cache == nil || (cache.Deployments() == nil && cache.StatefulSets() == nil) {
 		return "", fmt.Errorf("Kubecost cluster ID could not be detected; configure it manually")
 	}

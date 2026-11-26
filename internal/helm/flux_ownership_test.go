@@ -60,7 +60,7 @@ func TestFluxManagerNamespaceScope(t *testing.T) {
 		{"admin", adminCaller(), true}, {"restricted", teamACaller(), false}, {"unchecked", NamespaceStatusScope{}, false}, {"internal", nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			rows, err := helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot, ownership, nil, "", tc.scope)
+			rows, err := uninstallStarts.helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot, ownership, nil, "", tc.scope)
 			if err != nil || len(rows) != 1 {
 				t.Fatalf("rows=%d err=%v", len(rows), err)
 			}
@@ -115,7 +115,7 @@ func TestFluxManagerListNamespaceScope(t *testing.T) {
 				name = tc.name + "/health-on"
 			}
 			t.Run(name, func(t *testing.T) {
-				rows, err := listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), client, "", []string{"team-a"}, health, tc.scope)
+				rows, err := uninstallStarts.listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), client, "", []string{"team-a"}, health, tc.scope)
 				if err != nil || len(rows) != 1 {
 					t.Fatalf("rows=%d err=%v", len(rows), err)
 				}

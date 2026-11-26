@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"log"
 	"math"
 	"sort"
@@ -16,7 +17,6 @@ import (
 	"github.com/skyhook-io/radar/internal/capacity"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/opencost"
-	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	pkgopencost "github.com/skyhook-io/radar/pkg/opencost"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -997,7 +997,7 @@ func changePercent(points int, start, end float64) *float64 {
 // PromForMCP, not Prom: the shared Prom() client carries a 10s socket backstop
 // sized for REST callers, which a 7d trend query on a large cluster outruns.
 func promCostClient(ctx context.Context) (opencost.PromCost, string) {
-	client, connectionErr := prometheuspkg.ClientForOperation()
+	client, connectionErr := connectionruntime.CaptureMetrics(ctx)
 	if connectionErr != nil {
 		return opencost.PromCost{}, opencost.ConnectionFailureReason(connectionErr)
 	}

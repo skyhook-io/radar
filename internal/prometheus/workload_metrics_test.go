@@ -177,7 +177,7 @@ func TestWorkloadWithoutConfigurationRequiresReadyCache(t *testing.T) {
 	Initialize(nil, nil, "setup-test", nil)
 	SetAuthGate(nil)
 	router := chi.NewRouter()
-	RegisterRoutes(router)
+	Routes{Capture: func(context.Context) (*Client, error) { return ClientForOperation() }}.RegisterRoutes(router)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/prometheus/workload/Deployment/shop/api", nil))
 	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "cluster cache not ready") {
@@ -226,7 +226,7 @@ func TestWorkloadMetricsGateBeforeCacheOrPrometheus(t *testing.T) {
 			return resource != denied
 		})
 		router := chi.NewRouter()
-		RegisterRoutes(router)
+		Routes{Capture: func(context.Context) (*Client, error) { return ClientForOperation() }}.RegisterRoutes(router)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/prometheus/workload/Deployment/shop/api", nil))
 		if w.Code != http.StatusForbidden {
@@ -244,7 +244,7 @@ func TestWorkloadMetricsInvalidSourceExplainsChoices(t *testing.T) {
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 	SetAuthGate(nil)
 	router := chi.NewRouter()
-	RegisterRoutes(router)
+	Routes{Capture: func(context.Context) (*Client, error) { return ClientForOperation() }}.RegisterRoutes(router)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/prometheus/workload/Deployment/shop/api?source=unknown", nil))
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "use beyla or istio") {
@@ -257,7 +257,7 @@ func TestWorkloadMetricsDisconnected(t *testing.T) {
 	t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected})
 	router := chi.NewRouter()
-	RegisterRoutes(router)
+	Routes{Capture: func(context.Context) (*Client, error) { return ClientForOperation() }}.RegisterRoutes(router)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/prometheus/workload/Deployment/shop/api", nil))
 	if w.Code != http.StatusServiceUnavailable {

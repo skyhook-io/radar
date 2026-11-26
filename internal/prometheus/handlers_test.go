@@ -40,7 +40,7 @@ func TestHandleConnectOptionalReturnsUnavailableStatus(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/prometheus/connect?optional=true", nil)
 	rec := httptest.NewRecorder()
-	handleConnect(rec, req)
+	Routes{Capture: func(context.Context) (*Client, error) { return ClientForOperation() }}.handleConnect(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
@@ -145,7 +145,7 @@ func TestHandleStatusReportsOpenObservePath(t *testing.T) {
 	for _, path := range []string{"", "hub", "local"} {
 		SetOpenObservePath(func() string { return path })
 		rec := httptest.NewRecorder()
-		handleStatus(rec, httptest.NewRequest(http.MethodGet, "/prometheus/status", nil))
+		Routes{Capture: func(context.Context) (*Client, error) { return ClientForOperation() }}.handleStatus(rec, httptest.NewRequest(http.MethodGet, "/prometheus/status", nil))
 		var body map[string]any
 		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 			t.Fatal(err)
@@ -174,14 +174,14 @@ func TestHandleConnectAsksHubFirst(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	handleConnect(rec, httptest.NewRequest(http.MethodPost, "/prometheus/connect?optional=true", nil))
+	Routes{Capture: func(context.Context) (*Client, error) { return ClientForOperation() }}.handleConnect(rec, httptest.NewRequest(http.MethodPost, "/prometheus/connect?optional=true", nil))
 	if checks != 0 {
 		t.Fatalf("automatic connect asked Hub %d times", checks)
 	}
 
 	promHits.Store(0)
 	rec = httptest.NewRecorder()
-	handleConnect(rec, httptest.NewRequest(http.MethodPost, "/prometheus/connect", nil))
+	Routes{Capture: func(context.Context) (*Client, error) { return ClientForOperation() }}.handleConnect(rec, httptest.NewRequest(http.MethodPost, "/prometheus/connect", nil))
 	var status prom.Status
 	if err := json.NewDecoder(rec.Body).Decode(&status); err != nil {
 		t.Fatal(err)

@@ -651,7 +651,7 @@ func clientScopeResolver(client *Client) substrateScopeResolver {
 
 // handleSubstrateWorkerPool returns the curated Substrate charts and the
 // capacity verdict for one WorkerPool, gated on reading that WorkerPool.
-func handleSubstrateWorkerPool(w http.ResponseWriter, r *http.Request) {
+func (h Routes) handleSubstrateWorkerPool(w http.ResponseWriter, r *http.Request) {
 	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
 	if !canRead(r, "ate.dev", "workerpools", namespace, "get") {
 		writeError(w, http.StatusForbidden, "Substrate metrics for a WorkerPool require permission to get it.")
@@ -685,7 +685,7 @@ func collectSubstratePool(ctx context.Context, q seriesQuerier, resolve substrat
 
 // handleSubstrateNode returns atelet's curated charts and the snapshot
 // verdict for one Node, gated on reading Nodes like the Node resource charts.
-func handleSubstrateNode(w http.ResponseWriter, r *http.Request) {
+func (h Routes) handleSubstrateNode(w http.ResponseWriter, r *http.Request) {
 	node := chi.URLParam(r, "name")
 	if !canRead(r, "", "nodes", "", "get") {
 		writeError(w, http.StatusForbidden, "Substrate metrics for a Node require permission to get Nodes.")

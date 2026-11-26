@@ -139,27 +139,27 @@ func Initialize(client kubernetes.Interface) error {
 // from the same connection. A nil manager disables automatic tunnels for traffic.
 func InitializeWithPortForwards(client kubernetes.Interface, forwards *portforward.Manager, contextName string) {
 	initOnce.Do(func() {
-		manager = &Manager{
-			k8sClient:   client,
-			sources:     make(map[string]TrafficSource),
-			contextName: contextName,
-		}
-		// Register available sources
-		hubble := NewHubbleSource(client)
-		hubble.forwards = forwards
-		manager.sources["hubble"] = hubble
-		caretta := NewCarettaSource(client)
-		caretta.forwards = forwards
-		metricsURL, metricsHeaders := metricsConfig()
-		if metricsURL != "" {
-			caretta.metricsURL = metricsURL
-		}
-		caretta.headers = metricsHeaders
-		caretta.managedMetrics = true
-		manager.sources["caretta"] = caretta
-		manager.sources["istio"] = NewIstioSource(client)
-		manager.sources["beyla"] = NewBeylaSource(client)
+		url, headers := metricsConfig()
+		manager = NewManager(client, forwards, contextName, url, headers)
 	})
+}
+
+func NewManager(client kubernetes.Interface, forwards *portforward.Manager, contextName, metricsURL string, metricsHeaders map[string]string) *Manager {
+	hubble := NewHubbleSource(client)
+	hubble.forwards = forwards
+	caretta := NewCarettaSource(client)
+	caretta.forwards = forwards
+	caretta.metricsURL = metricsURL
+	caretta.headers = metricsHeaders
+	caretta.managedMetrics = true
+	return &Manager{
+		k8sClient:   client,
+		contextName: contextName,
+		sources: map[string]TrafficSource{
+			"hubble": hubble, "caretta": caretta,
+			"istio": NewIstioSource(client), "beyla": NewBeylaSource(client),
+		},
+	}
 }
 
 // GetManager returns the global traffic manager

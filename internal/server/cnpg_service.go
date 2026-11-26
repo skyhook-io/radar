@@ -12,6 +12,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	cnpgsvc "github.com/skyhook-io/radar/internal/cnpg"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -67,7 +68,7 @@ func (s *Server) cnpgReader(r *http.Request) *cnpgReadAdapter {
 		connected = k8s.IsConnected()
 		identity, clusterContext = cnpgRuntimeIdentity(r), k8s.TimelineClusterContext(conn.ContextName())
 		forced, target = k8s.ForceNamespaceScope, k8s.GetNamespaceScopeTarget()
-		promClient = prometheuspkg.GetClient()
+		promClient = connectionruntime.SetFor(conn).Metrics
 		adapter.dynamic, adapter.actionContext = conn.Dynamic(), clusterContext
 		adapter.config = conn.ConfigCopy()
 		adapter.Clients.Typed = conn.ClientInterface()

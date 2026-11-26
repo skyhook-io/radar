@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/traffic"
@@ -98,7 +99,7 @@ const recentSourcesMaxAge = 2 * time.Minute
 func (s *Server) handleGetTrafficSources(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	manager := traffic.GetManager()
+	manager := connectionruntime.SetFor(k8s.BoundOrCurrent(r.Context())).Traffic
 	if manager == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Traffic manager not initialized")
 		return
@@ -128,7 +129,7 @@ func (s *Server) handleGetTrafficSources(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleGetTrafficFlows(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	manager := traffic.GetManager()
+	manager := connectionruntime.SetFor(k8s.BoundOrCurrent(r.Context())).Traffic
 	if manager == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Traffic manager not initialized")
 		return
@@ -381,7 +382,7 @@ func (s *Server) handleGetTrafficRecords(w http.ResponseWriter, r *http.Request)
 	}
 	opts.Match = &match
 
-	manager := traffic.GetManager()
+	manager := connectionruntime.SetFor(k8s.BoundOrCurrent(r.Context())).Traffic
 	if manager == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Traffic manager not initialized")
 		return
@@ -414,7 +415,7 @@ func trafficRecordsPayload(response *traffic.FlowsResponse, flows []traffic.Flow
 func (s *Server) handleTrafficFlowsStream(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	manager := traffic.GetManager()
+	manager := connectionruntime.SetFor(k8s.BoundOrCurrent(r.Context())).Traffic
 	if manager == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Traffic manager not initialized")
 		return
@@ -510,7 +511,7 @@ func (s *Server) handleTrafficFlowsStream(w http.ResponseWriter, r *http.Request
 // handleSetTrafficSource sets the active traffic source
 // POST /api/traffic/source
 func (s *Server) handleSetTrafficSource(w http.ResponseWriter, r *http.Request) {
-	manager := traffic.GetManager()
+	manager := connectionruntime.SetFor(k8s.BoundOrCurrent(r.Context())).Traffic
 	if manager == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Traffic manager not initialized")
 		return
@@ -543,7 +544,7 @@ func (s *Server) handleSetTrafficSource(w http.ResponseWriter, r *http.Request) 
 // handleGetActiveTrafficSource returns the currently active traffic source
 // GET /api/traffic/source
 func (s *Server) handleGetActiveTrafficSource(w http.ResponseWriter, r *http.Request) {
-	manager := traffic.GetManager()
+	manager := connectionruntime.SetFor(k8s.BoundOrCurrent(r.Context())).Traffic
 	if manager == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Traffic manager not initialized")
 		return
@@ -562,7 +563,7 @@ func (s *Server) handleGetActiveTrafficSource(w http.ResponseWriter, r *http.Req
 func (s *Server) handleTrafficConnect(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	manager := traffic.GetManager()
+	manager := connectionruntime.SetFor(k8s.BoundOrCurrent(r.Context())).Traffic
 	if manager == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Traffic manager not initialized")
 		return
@@ -581,7 +582,7 @@ func (s *Server) handleTrafficConnect(w http.ResponseWriter, r *http.Request) {
 // handleTrafficConnectionStatus returns current connection status
 // GET /api/traffic/connection
 func (s *Server) handleTrafficConnectionStatus(w http.ResponseWriter, r *http.Request) {
-	manager := traffic.GetManager()
+	manager := connectionruntime.SetFor(k8s.BoundOrCurrent(r.Context())).Traffic
 	if manager == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Traffic manager not initialized")
 		return

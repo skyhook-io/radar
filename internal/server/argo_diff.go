@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/skyhook-io/radar/internal/argocd"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/argoapi"
@@ -148,7 +149,8 @@ func (s *Server) handleArgoResourceDiff(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if !argocd.IsConfigured() && !argocd.AnonymousReadAllowed() {
+	manager := connectionruntime.SetFor(k8s.BoundOrCurrent(r.Context())).ArgoCD
+	if !manager.IsConfigured() && !manager.AnonymousReadAllowed() {
 		s.writeError(w, http.StatusServiceUnavailable, "Argo CD integration is not connected")
 		return
 	}
@@ -157,7 +159,7 @@ func (s *Server) handleArgoResourceDiff(w http.ResponseWriter, r *http.Request) 
 	// cache; per-resource filters would bypass the cache. Before the first
 	// connection of a configured integration lands it answers ErrConnecting
 	// instead of waiting for it. We filter in-process.
-	items, err := argocd.ManagedResourcesCached(r.Context(), argoapi.ManagedResourcesQuery{
+	items, err := manager.ManagedResourcesCached(r.Context(), argoapi.ManagedResourcesQuery{
 		AppName:      appName,
 		AppNamespace: appNamespace,
 	})
@@ -639,12 +641,13 @@ func (s *Server) handleArgoRevisionMetadata(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if !argocd.IsConfigured() && !argocd.AnonymousReadAllowed() {
+	manager := connectionruntime.SetFor(k8s.BoundOrCurrent(r.Context())).ArgoCD
+	if !manager.IsConfigured() && !manager.AnonymousReadAllowed() {
 		s.writeError(w, http.StatusServiceUnavailable, "Argo CD integration is not connected")
 		return
 	}
 
-	meta, err := argocd.RevisionMetadataCached(r.Context(), argoapi.RevisionMetadataQuery{
+	meta, err := manager.RevisionMetadataCached(r.Context(), argoapi.RevisionMetadataQuery{
 		AppName:      appName,
 		AppNamespace: appNamespace,
 		Project:      r.URL.Query().Get("project"),
