@@ -153,18 +153,17 @@ func (s *Server) sharedListenerHostAllowed(r *http.Request) bool {
 // transport-authenticated Cloud tunnel have separate boundaries.
 func (s *Server) protectUnauthenticatedHost(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.listenAddress == "" || s.authConfig.Enabled() || cloud.IsAuthenticatedTunnelRequest(r.Context()) {
-			next.ServeHTTP(w, r)
-			return
-		}
-		if !s.sharedListener() {
+		switch s.hostCheck(r) {
+		case hostCheckLoopbackOnly:
 			if !requestHostIsLoopback(r) {
 				s.writeError(w, http.StatusForbidden, "loopback-only Radar requires a loopback request Host; enable authentication for a reverse proxy, or explicitly use --listen-address=0.0.0.0 only on a trusted network")
 				return
 			}
-		} else if !s.sharedListenerHostAllowed(r) {
-			s.writeError(w, http.StatusForbidden, fmt.Sprintf("Radar without authentication answers only localhost, IP addresses, Kubernetes Service names and hosts in --allowed-hosts; add %q to --allowed-hosts (Helm: allowedHosts) or enable authentication", requestHostname(r)))
-			return
+		case hostCheckSharedAllowlist:
+			if !s.sharedListenerHostAllowed(r) {
+				s.writeError(w, http.StatusForbidden, fmt.Sprintf("Radar without authentication answers only localhost, IP addresses, Kubernetes Service names and hosts in --allowed-hosts; add %q to --allowed-hosts (Helm: allowedHosts) or enable authentication", requestHostname(r)))
+				return
+			}
 		}
 		next.ServeHTTP(w, r)
 	})

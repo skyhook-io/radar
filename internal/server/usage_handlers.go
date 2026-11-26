@@ -18,7 +18,6 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/skyhook-io/radar/internal/ai"
-	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/opencost"
@@ -161,15 +160,6 @@ func markClusterNotConnected(w http.ResponseWriter) {
 		}
 		w = u.Unwrap()
 	}
-}
-
-// usageShared reports whether several people use this Radar: in-cluster,
-// behind sign-in, or on a listener others can reach. Its configuration then
-// decides for everyone, and nobody is asked.
-func (s *Server) usageShared() bool {
-	return deploymentMode() != k8s.DeploymentModeLocal ||
-		s.configManagement() != "local" ||
-		!cloud.IsLoopbackHostname(s.listenAddress)
 }
 
 // clusterSample describes the connected cluster by shape only. The key is the

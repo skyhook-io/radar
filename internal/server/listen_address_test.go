@@ -219,8 +219,8 @@ func TestShouldWarnUnauthenticatedListener(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := shouldWarnUnauthenticatedListener(tt.listenAddress, tt.authEnabled); got != tt.want {
-				t.Fatalf("shouldWarnUnauthenticatedListener(%q, %v) = %v, want %v", tt.listenAddress, tt.authEnabled, got, tt.want)
+			if got := unauthenticatedListenerWarning(tt.listenAddress, tt.authEnabled, false); got != tt.want {
+				t.Fatalf("unauthenticatedListenerWarning(%q, %v, false) = %v, want %v", tt.listenAddress, tt.authEnabled, got, tt.want)
 			}
 		})
 	}

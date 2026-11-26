@@ -2,34 +2,14 @@ package server
 
 import (
 	"net/http"
-	"os"
 	"sort"
 
 	"github.com/skyhook-io/radar/internal/argocd"
-	"github.com/skyhook-io/radar/internal/auth"
-	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/config"
-	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/opencost"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
-	"github.com/skyhook-io/radar/internal/settings"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
-
-func (s *Server) configManagement() string {
-	return ConfigurationManagement(s.authConfig, s.cloudConnectCfg.CloudTunnelConfigured, s.listenAddress)
-}
-
-func ConfigurationManagement(authConfig auth.Config, cloudTunnel bool, listenAddress string) string {
-	if cloudMode() || cloudTunnel {
-		return "cloud"
-	}
-	// A shared Pod can use kubeconfig; a loopback CLI in a dev workspace is still local.
-	if authConfig.Enabled() || k8s.GetKubeconfigSummary().Mode == "in-cluster" || (os.Getenv("KUBERNETES_SERVICE_HOST") != "" && !cloud.IsLoopbackHostname(listenAddress)) || settings.OperatorConfigured() {
-		return "operator"
-	}
-	return "local"
-}
 
 func (s *Server) requireConfigEditable(w http.ResponseWriter, r *http.Request) bool {
 	if s.configManagement() != "operator" {

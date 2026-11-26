@@ -104,7 +104,7 @@ func formatStartupLogSummary(summary startupLogSummary, color bool) []string {
 		lines = append(lines, row("Mode", "local"))
 	}
 
-	loopback := cloud.IsLoopbackHostname(summary.listenAddress)
+	loopback := exposureOf(summary.listenAddress) == listenerLoopback
 	if loopback {
 		lines = append(lines,
 			row("URL", "http://"+clientAddress(summary.listenAddress, summary.port)+startupURLPath(summary.basePath)),
@@ -153,7 +153,7 @@ func formatStartupLogSummary(summary startupLogSummary, color bool) []string {
 	if loopback && summary.showRemoteAccessHint {
 		lines = append(lines, row("Remote", "use --listen-address=0.0.0.0 with authentication and network controls"))
 	}
-	if shouldWarnUnauthenticatedListener(summary.listenAddress, authMode != "" && authMode != "none") && !summary.cloudMode {
+	if unauthenticatedListenerWarning(summary.listenAddress, authMode != "" && authMode != "none", summary.cloudMode) {
 		lines = append(lines, paint(startupANSIAmberBold, "WARNING: Remote clients can access Radar without authentication."))
 	}
 	if authMode == "proxy" && !summary.cloudMode {
