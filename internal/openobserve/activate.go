@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"net/url"
 	"reflect"
 	"slices"
@@ -415,14 +416,68 @@ func connKey(conn oo.Connection) string {
 	return hex.EncodeToString(sum[:8])
 }
 
+// SameActivation compares the settings used by this target. Until its UID is
+// known, any stored match could be the target's. A nil activator has no UID yet.
+func (a *Activator) SameActivation(t Target, before, after *config.OpenObserveConfig) bool {
+	if before == after {
+		return true
+	}
+	var uid string
+	if a != nil {
+		a.mu.Lock()
+		uid = a.uids[t.Fingerprint]
+		a.mu.Unlock()
+	}
+	return sameActivation(before, after, uid, t.Context)
+}
+
+func sameActivation(before, after *config.OpenObserveConfig, uid, contextName string) bool {
+	var left, right config.OpenObserveConfig
+	if before != nil {
+		left = *before
+	}
+	if after != nil {
+		right = *after
+	}
+	if uid != "" {
+		l, leftMatch := left.Matches[uid]
+		r, rightMatch := right.Matches[uid]
+		if !leftMatch || !rightMatch {
+			return leftMatch == rightMatch
+		}
+		if activationMatch(l) != activationMatch(r) {
+			return false
+		}
+	} else {
+		if len(left.Matches) == 0 || len(right.Matches) == 0 {
+			return len(left.Matches) == len(right.Matches)
+		}
+		if savedFromContext(left, contextName) != savedFromContext(right, contextName) ||
+			!maps.EqualFunc(left.Matches, right.Matches, func(l, r config.OpenObserveMatch) bool {
+				return activationMatch(l) == activationMatch(r)
+			}) {
+			return false
+		}
+	}
+	left.Matches, right.Matches = nil, nil
+	// ClusterLabel guides setup suggestions. Activation uses the saved match.
+	left.ClusterLabel, right.ClusterLabel = "", ""
+	return reflect.DeepEqual(left, right)
+}
+
+func activationMatch(m config.OpenObserveMatch) config.OpenObserveMatch {
+	if m.By != config.OpenObserveMatchByName {
+		// Cached ID labels and values are Radar's own record.
+		m.Label, m.Value = "", ""
+	}
+	m.ConfirmedAt, m.Context = "", ""
+	return m
+}
+
 // cacheKey includes the stored match so a name confirmed with the CLI
 // applies on the next activation instead of after the cache expires.
 func cacheKey(uid, conn string, cfg config.OpenObserveConfig) string {
-	m := cfg.Matches[uid]
-	if m.By != config.OpenObserveMatchByName {
-		// Cached ID matches are Radar's own record and change no decision.
-		m = config.OpenObserveMatch{}
-	}
+	m := activationMatch(cfg.Matches[uid])
 	return strings.Join([]string{uid, conn, m.Label, m.Value}, "|")
 }
 
@@ -439,11 +494,11 @@ func optionsKey(o oo.RewriteOptions) string {
 // creates an entry: a match removed meanwhile stays removed.
 func saveIDMatch(checked config.OpenObserveConfig, uid string, m config.OpenObserveMatch) {
 	if _, err := config.Update(func(c *config.Config) {
-		if c.OpenObserve == nil || !reflect.DeepEqual(*c.OpenObserve, checked) {
+		if c.OpenObserve == nil || !sameActivation(c.OpenObserve, &checked, uid, "") {
 			return
 		}
-		existing, ok := c.OpenObserve.Matches[uid]
-		if !ok || existing.By != config.OpenObserveMatchByID {
+		existing := c.OpenObserve.Matches[uid]
+		if existing.By != config.OpenObserveMatchByID || existing != checked.Matches[uid] {
 			return
 		}
 		m.Context = existing.Context

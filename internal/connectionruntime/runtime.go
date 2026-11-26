@@ -138,7 +138,7 @@ func (r *Runtime) prepare(edit *Edit, settings Settings, rebuild []config.Integr
 		return
 	}
 	edit.after = edit.before
-	if len(rebuild) != 0 || edit.before == nil || !sameSettings(settings, edit.before.settings) {
+	if len(rebuild) != 0 || edit.before == nil || !sameSettings(settings, edit.before.settings, edit.before.observe) {
 		edit.after = build(edit.conn, settings, edit.before, rebuild)
 	}
 }
@@ -185,7 +185,7 @@ func (e Edit) finish() {
 	}
 }
 
-func (r *Runtime) RefreshProfiles() {
+func (r *Runtime) RefreshProfiles(rebuild ...config.Integration) {
 	id := k8s.ServingConnectionID()
 	if r.Resolver == nil || id == "" {
 		return
@@ -197,12 +197,11 @@ func (r *Runtime) RefreshProfiles() {
 		return
 	}
 	settings := r.profiles(conn, target, r.Resolver.ResolveAll(target, false))
-	if sameSettings(settings, before.settings) {
-		return
-	}
 	edit := Edit{runtime: r, conn: conn, before: before, id: id}
-	r.prepare(&edit, settings, nil)
-	_ = edit.Commit(func() error { return nil })
+	r.prepare(&edit, settings, rebuild)
+	if edit.after != before {
+		_ = edit.Commit(func() error { return nil })
+	}
 }
 
 func (r *Runtime) PrepareShared(conn *k8s.Connection, base *Settings, update func(*Settings), rebuild ...config.Integration) Edit {
@@ -221,7 +220,7 @@ func (r *Runtime) PrepareShared(conn *k8s.Connection, base *Settings, update fun
 		settings.scopeCleared = r.scopeConfigured
 	}
 	r.prepare(&edit, settings, rebuild)
-	if !sameSettings(next, *base) {
+	if !sameSettings(next, *base, nil) {
 		edit.next = &next
 	}
 	edit.base = base
@@ -243,15 +242,17 @@ func errorText(err error) string {
 	return ""
 }
 
-func sameSettings(a, b Settings) bool {
+func sameSettings(a, b Settings, observe *openobserve.Activator) bool {
 	if a.relay != b.relay || errorText(a.MetricsError) != errorText(b.MetricsError) ||
-		errorText(a.ArgoError) != errorText(b.ArgoError) || errorText(a.CostError) != errorText(b.CostError) {
+		errorText(a.ArgoError) != errorText(b.ArgoError) || errorText(a.CostError) != errorText(b.CostError) ||
+		!observe.SameActivation(a.observeTarget, b.observeConfig, a.observeConfig) {
 		return false
 	}
 	a.relay, b.relay = nil, nil
 	a.MetricsError, b.MetricsError = nil, nil
 	a.ArgoError, b.ArgoError = nil, nil
 	a.CostError, b.CostError = nil, nil
+	a.observeConfig, b.observeConfig = nil, nil
 	return reflect.DeepEqual(a, b)
 }
 

@@ -100,6 +100,31 @@ func entryFor(url string, uids ...string) *config.OpenObserveConfig {
 	return cfg
 }
 
+func TestSaveIDMatchKeepsUnrelatedEditAndRefusesStaleMatch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	checked := entryFor("https://metrics.example", uidB)
+	checked.Matches[uidB] = config.OpenObserveMatch{By: config.OpenObserveMatchByID, Context: "dev"}
+	current := checked.Clone()
+	other := config.OpenObserveMatch{By: config.OpenObserveMatchByName, Label: "cluster", Value: "other"}
+	current.Matches[uidC] = other
+	if err := config.Save(config.Config{OpenObserve: &current}); err != nil {
+		t.Fatal(err)
+	}
+
+	recorded := config.OpenObserveMatch{By: config.OpenObserveMatchByID, Label: oo.IDLabel, Value: uidB}
+	saveIDMatch(*checked, uidB, recorded)
+	recorded.Context = "dev"
+	saved := config.Load().OpenObserve.Matches
+	if saved[uidB] != recorded || saved[uidC] != other {
+		t.Fatalf("unexpected matches after recording the ID: %+v", saved)
+	}
+
+	saveIDMatch(*checked, uidB, config.OpenObserveMatch{By: config.OpenObserveMatchByID, Label: "k8s_cluster_uid", Value: uidB})
+	if got := config.Load().OpenObserve.Matches[uidB]; got != recorded {
+		t.Fatalf("the stale activation overwrote the newer record: %+v", got)
+	}
+}
+
 func TestIDMatchRoutesEveryQueryIncludingFreeFormThroughTheForcedFilter(t *testing.T) {
 	client := prometheus.NewClient(fake.NewClientset(), nil, "test", nil, false, nil)
 	t.Cleanup(func() { _ = client.Close() })

@@ -76,7 +76,7 @@ type openObserveClusterState struct {
 }
 
 func (s *Server) openObserveLocal() bool {
-	return s.configManagement() == "local" && !k8s.IsInCluster() && s.integrationRuntime != nil
+	return s.configManagement() == "local" && !k8s.IsInCluster() && s.integrationRuntime != nil && s.integrationRuntime.Resolver != nil
 }
 
 // hubOffersOpenObserve is cloud.HubOffersOpenObserve; a variable for tests.
@@ -286,7 +286,7 @@ func (s *Server) handleOpenObserveSetup(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if result.Outcome == openobserve.SetupSaved {
-		s.integrationRuntime.RefreshProfiles()
+		s.integrationRuntime.RefreshProfiles(config.IntegrationMetrics)
 	}
 	s.writeJSON(w, result)
 }

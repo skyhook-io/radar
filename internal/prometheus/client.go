@@ -301,9 +301,16 @@ func (c *Client) Close() error {
 	if c == nil {
 		return nil
 	}
+	c.mu.Lock()
+	c.retired = true
 	if c.cancel != nil {
 		c.cancel()
 	}
+	c.cancelWorkloadAttributionsLocked()
+	if c.discoveryCancel != nil {
+		c.discoveryCancel()
+	}
+	c.mu.Unlock()
 	c.handles.Close()
 	if c.scans != nil {
 		c.scans.Invalidate()
@@ -311,13 +318,6 @@ func (c *Client) Close() error {
 	if c.unsubscribe != nil {
 		c.unsubscribe()
 	}
-	c.mu.Lock()
-	c.retired = true
-	c.cancelWorkloadAttributionsLocked()
-	if c.discoveryCancel != nil {
-		c.discoveryCancel()
-	}
-	c.mu.Unlock()
 	return nil
 }
 

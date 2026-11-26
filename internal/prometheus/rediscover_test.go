@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/portforward"
+	"github.com/skyhook-io/radar/internal/portforward/forwardtest"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -421,6 +422,38 @@ func TestOnForwardLost(t *testing.T) {
 	waitIdle(t, c)
 	if len(got) != 1 || !strings.Contains(got[0], "port-forward http://localhost:4000 lost") {
 		t.Fatalf("want one rediscovery naming the lost forward, got %v", got)
+	}
+}
+
+func TestCloseDoesNotRediscoverDeliberatelyStoppedForward(t *testing.T) {
+	cfg := forwardtest.Server(t, forwardtest.ServeTunnel)
+	kube := kubernetes.NewForConfigOrDie(cfg)
+	manager := portforward.NewManager(kube, cfg, "test")
+	t.Cleanup(manager.Close)
+	c := NewClient(kube, cfg, "test", manager, false, nil)
+	forward, err := manager.Start(t.Context(), portforward.OwnerPrometheus, "ns", "svc", 9090)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.handles.Track(forward); err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	c.markConnectedLocked(forward.Address(), "", "test", c.discoveryGen, forward)
+	c.discoveryCancel = func() {
+		if !c.retired || !forward.Alive() {
+			t.Error("discovery must be canceled after retirement and before stopping the forward")
+		}
+	}
+	c.mu.Unlock()
+	if err := c.Close(); err != nil || forward.Alive() {
+		t.Fatalf("Close() = %v, forward alive = %v", err, forward.Alive())
+	}
+	c.onForwardLost(forward)
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.forward != forward {
+		t.Fatal("the lost-forward handler ran for a deliberately stopped forward")
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/connectionruntime"
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
@@ -25,6 +26,23 @@ func setupPrometheusIntegrationTest(t *testing.T, liveHeaders map[string]string)
 	t.Setenv("HOME", dir)
 	t.Setenv("USERPROFILE", dir)
 	return serverWithTestIntegrations(t, connectionruntime.Settings{Metrics: prom.Connection{Headers: liveHeaders}})
+}
+
+func TestApplyPrometheusURLWithoutConfiguredRuntime(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Cleanup(k8s.SetTestLocalMode())
+	t.Cleanup(k8s.SetTestIntegrations(&connectionruntime.Set{}))
+	if err := config.Save(config.Config{PrometheusURL: "https://metrics.example"}); err != nil {
+		t.Fatal(err)
+	}
+	s := New(Config{ListenAddress: "127.0.0.1"})
+	t.Cleanup(s.Stop)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "http://127.0.0.1/api/integrations/prometheus", strings.NewReader(`{"prometheusUrl":""}`))
+	s.Handler().ServeHTTP(w, r)
+	if w.Code != http.StatusOK || config.Load().PrometheusURL != "" {
+		t.Fatalf("PUT = %d %s, saved URL = %q", w.Code, w.Body.String(), config.Load().PrometheusURL)
+	}
 }
 
 func TestApplyPrometheusURL_ManagedHeaders(t *testing.T) {

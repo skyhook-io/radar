@@ -26,7 +26,7 @@ type Set struct {
 	Currency         *opencost.CurrencyResolver
 	Helm             *helm.UninstallMemo
 	settings         Settings
-	observe          func()
+	observe          *openobserve.Activator
 	unavailableScans *prometheus.RightsizingScanManager
 }
 
@@ -106,7 +106,8 @@ func build(conn *k8s.Connection, settings Settings, previous *Set, rebuild []con
 	inCluster := k8s.IsInCluster()
 	newMetrics := previous.Traffic == nil || slices.Contains(rebuild, config.IntegrationMetrics) || !reflect.DeepEqual(settings.Metrics, old.Metrics) ||
 		errorText(settings.metricsError()) != errorText(old.metricsError()) || !sameRelayBackend(settings.relay, old.relay) ||
-		!reflect.DeepEqual(settings.Scope, old.Scope) || settings.scopeCleared != old.scopeCleared || !reflect.DeepEqual(settings.observeConfig, old.observeConfig)
+		!reflect.DeepEqual(settings.Scope, old.Scope) || settings.scopeCleared != old.scopeCleared ||
+		!previous.observe.SameActivation(settings.observeTarget, old.observeConfig, settings.observeConfig)
 	if newMetrics {
 		s.Metrics, s.observe, s.unavailableScans = nil, nil, nil
 		if err := settings.metricsError(); err != nil {
@@ -123,8 +124,7 @@ func build(conn *k8s.Connection, settings Settings, previous *Set, rebuild []con
 			if settings.relay != nil {
 				_ = s.Metrics.EnableRelay(*settings.relay)
 			} else if settings.observeConfig != nil && settings.observeTarget.Client != nil {
-				activator := openobserve.NewConnectionActivator(s.Metrics, s.Metrics.Lifetime())
-				s.observe = func() { activator.ApplyConfig(settings.observeTarget, settings.observeConfig) }
+				s.observe = openobserve.NewConnectionActivator(s.Metrics, s.Metrics.Lifetime())
 			}
 		}
 		s.Traffic = traffic.NewConnectionManager(conn, s.Metrics, settings.BeylaSelector)
@@ -173,7 +173,7 @@ func (s *Set) start(previous *Set) {
 	if previous == nil || previous.Metrics != s.Metrics {
 		s.Metrics.Prewarm()
 		if s.observe != nil {
-			go s.observe()
+			go s.observe.ApplyConfig(s.settings.observeTarget, s.settings.observeConfig)
 		}
 	}
 	if s.ArgoCD != nil && (previous == nil || previous.ArgoCD != s.ArgoCD) {

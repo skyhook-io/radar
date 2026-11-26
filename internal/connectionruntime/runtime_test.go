@@ -15,6 +15,7 @@ import (
 	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/opencost"
+	"github.com/skyhook-io/radar/internal/openobserve/oofake"
 	"github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/traffic"
 	"github.com/skyhook-io/radar/pkg/prom"
@@ -296,6 +297,117 @@ func TestOfflineBuildReadsSavedOpenObserveInput(t *testing.T) {
 	}
 	if set.ArgoCD == nil || set.Metrics == nil {
 		t.Fatal("offline OpenObserve setup interfered with other integrations")
+	}
+}
+
+func TestRefreshProfilesKeepsMembersAfterOpenObserveRecordsIDMatch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Cleanup(k8s.SnapshotTestConnection())
+	t.Cleanup(k8s.SetTestLocalMode())
+	t.Cleanup(k8s.SetTestProfileSource("/test/kubeconfig", "local", "user"))
+	const uid = "7b930c6c-dcbb-4d1f-9afd-67ea890873d7"
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/namespaces/kube-system", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"kind":"Namespace","apiVersion":"v1","metadata":{"name":"kube-system","uid":"`+uid+`"}}`)
+	})
+	kube := httptest.NewServer(mux)
+	t.Cleanup(kube.Close)
+	installTestBuild(t, &rest.Config{Host: kube.URL})
+	backend := oofake.Start(t, &oofake.Server{IDs: map[string]string{uid: "local"}})
+	if err := config.Save(config.Config{OpenObserve: &config.OpenObserveConfig{
+		BaseURL: backend.URL, Org: "default", User: "test", Token: "test-token",
+		Matches: map[string]config.OpenObserveMatch{uid: {By: config.OpenObserveMatchByID, Context: "local"}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	target, err := k8s.CurrentProfileTarget()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := New(connections.NewResolver(config.NewProfileStore(), target, nil), Settings{})
+	initial := admitRuntime(t, runtime)
+	t.Cleanup(k8s.RetireServingConnection)
+	deadline := time.Now().Add(10 * time.Second)
+	for !initial.Metrics.RelayActive() {
+		if time.Now().After(deadline) {
+			t.Fatalf("OpenObserve did not activate: %+v", initial.Metrics.GetStatus())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if match := config.Load().OpenObserve.Matches[uid]; match.Label != "radar_cluster_uid" || match.Value != uid {
+		t.Fatalf("activation did not record its ID match: %+v", match)
+	}
+
+	conn := k8s.Current()
+	before := ownedSetFor(conn)
+	runtime.RefreshProfiles()
+	if ownedSetFor(conn) != before {
+		t.Fatal("the recorded ID match changed the integration set")
+	}
+	if _, err := config.Update(func(c *config.Config) {
+		c.OpenObserve.Matches["other"] = config.OpenObserveMatch{By: config.OpenObserveMatchByName, Label: "cluster", Value: "other"}
+		c.OpenObserve.ClusterLabel = "cluster_name"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime.RefreshProfiles()
+	if ownedSetFor(conn) != before {
+		t.Fatal("another cluster's match changed the integration set")
+	}
+	runtime.RefreshProfiles(config.IntegrationArgoCD)
+	if got := SetFor(conn); got.ArgoCD == initial.ArgoCD || got.Metrics != initial.Metrics || got.Traffic != initial.Traffic ||
+		got.Cost != initial.Cost || got.Currency != initial.Currency {
+		t.Fatal("an Argo CD rebuild did not preserve the active metrics and dependent members")
+	}
+
+	if _, err := config.Update(func(c *config.Config) {
+		delete(c.OpenObserve.Matches, uid)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime.RefreshProfiles()
+	if got := SetFor(conn); got.Metrics == initial.Metrics || !initial.Metrics.Closed() {
+		t.Fatal("removing this cluster's match did not replace its Metrics member")
+	}
+}
+
+func TestSwitchDoesNotCarryManualMetricsConfigurationToAnotherCluster(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Cleanup(k8s.SnapshotTestConnection())
+	t.Cleanup(k8s.SetTestLocalMode())
+	t.Cleanup(k8s.SetTestProfileSource("/test/kubeconfig", "first", "user"))
+	k8s.SetTestConfig(&rest.Config{Host: "http://127.0.0.1:1"})
+	t.Cleanup(k8s.RetireServingConnection)
+	target, err := k8s.CurrentProfileTarget()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := connections.NewResolver(config.NewProfileStore(), target, nil)
+	runtime := New(resolver, Settings{})
+	url := "http://127.0.0.1:1/metrics"
+	selected := resolver.Resolve(target, config.IntegrationMetrics, false)
+	pending, err := resolver.Prepare(target, connections.Update{
+		Target: target, Revision: selected.View.Revision, Kind: config.IntegrationMetrics, Action: "save", URL: &url,
+		Headers: []prom.HeaderOperation{{Key: "Authorization", Action: "set", Value: "Bearer test-token"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resolver.Commit(t.Context(), pending); err != nil {
+		t.Fatal(err)
+	}
+	first := admitRuntime(t, runtime)
+	if got, headers := first.Metrics.CurrentConfig(); got != url || headers["Authorization"] != "Bearer test-token" {
+		t.Fatal("first admission did not read its saved metrics profile")
+	}
+	k8s.RetireServingConnection()
+	t.Cleanup(k8s.SetTestProfileSource("/test/kubeconfig", "second", "user"))
+	k8s.SetTestConfig(&rest.Config{Host: "http://127.0.0.1:2"})
+	second := admitRuntime(t, runtime)
+	t.Cleanup(k8s.RetireServingConnection)
+	if got, headers := second.Metrics.CurrentConfig(); !first.Metrics.Closed() || got != "" || len(headers) != 0 {
+		t.Fatal("switch failed to retire the first Metrics member or isolate its manual settings")
 	}
 }
 

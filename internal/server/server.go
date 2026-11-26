@@ -264,6 +264,9 @@ func New(cfg Config) *Server {
 	if cfg.CloudConnect.HubAppURL == "" {
 		cfg.CloudConnect.HubAppURL = "https://app.radarhq.io"
 	}
+	if cfg.IntegrationRuntime == nil {
+		cfg.IntegrationRuntime = connectionruntime.New(nil, connectionruntime.Settings{})
+	}
 	s := &Server{
 		router:                  chi.NewRouter(),
 		broadcaster:             NewSSEBroadcaster(),
