@@ -791,7 +791,7 @@ a client can preview and execute a specific change using the following endpoints
 1. Send `POST /api/workloads/Deployment/shop/checkout/actions/preview` with
    `{"action":"scale","replicas":5}`. Radar reads the live resource with the
    caller's identity. It returns the target, field, before and after values,
-   UID, resource version, and a review token. A missing replicas field is
+   the expected controller effect, UID, resource version, and a review token. A missing replicas field is
    reported as null. Preview describes the requested change; admission and
    write permission are evaluated when it executes.
 2. Show the proposal to the reviewer. When relevant, consult
@@ -805,8 +805,11 @@ a client can preview and execute a specific change using the following endpoints
    proposal requires a fresh preview. The caller needs Kubernetes patch access.
 4. A successful response identifies the field and value Kubernetes returned.
    Read rollout progress and relevant service signals to determine recovery.
-   A timeout or lost response leaves the write outcome unknown. Read the
-   target before taking further action.
+   A timeout or lost response leaves the write outcome unknown. Radar returns
+   `workload_action_unconfirmed` when Kubernetes did not confirm the write.
+   Read the target before taking further action. If the reviewed value is
+   already present, execute returns `workload_action_unchanged` without
+   issuing a second write.
 
 The review token binds the proposal to material resource state. It carries no
 permissions and is not a record of a person's approval. A client that manages

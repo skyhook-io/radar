@@ -59,15 +59,17 @@ type workloadActionView struct {
 	Field           string `json:"field"`
 	Before          any    `json:"before"`
 	After           any    `json:"after"`
+	Effect          string `json:"effect"`
 }
 
 // workloadActionField represents a closed set of actions. No resource, patch
 // path, or arbitrary arguments are accepted from the client.
 type workloadActionField struct {
-	gvr   schema.GroupVersionResource
-	kind  string
-	path  []string
-	after any
+	gvr    schema.GroupVersionResource
+	kind   string
+	path   []string
+	after  any
+	effect string
 }
 
 func resolveWorkloadAction(kind string, in workloadActionInput, execute bool, now time.Time) (workloadActionField, error) {
@@ -101,12 +103,24 @@ func resolveWorkloadAction(kind string, in workloadActionInput, execute bool, no
 		}
 		field.path = []string{"spec", "replicas"}
 		field.after = int64(*in.Replicas)
+		field.effect = "The workload controller reconciles the requested replica count."
+		if *in.Replicas == 0 {
+			field.effect = "The workload controller scales this workload to zero Pods."
+		}
 	case (in.Action == "pause" || in.Action == "resume") && field.kind == "Deployment":
 		field.path = []string{"spec", "paused"}
 		field.after = in.Action == "pause"
+		field.effect = "The Deployment controller resumes processing pending rollout changes."
+		if in.Action == "pause" {
+			field.effect = "New Deployment rollout changes wait until the Deployment is resumed. Existing Pods keep running."
+		}
 	case (in.Action == "suspend" || in.Action == "resume") && field.kind == "CronJob":
 		field.path = []string{"spec", "suspend"}
 		field.after = in.Action == "suspend"
+		field.effect = "Scheduled Jobs can run again. Kubernetes may start missed Jobs according to the CronJob deadline."
+		if in.Action == "suspend" {
+			field.effect = "The CronJob stops scheduling new Jobs. Jobs already running continue."
+		}
 	case in.Action == "restart" && (field.kind == "Deployment" || field.kind == "StatefulSet" || field.kind == "DaemonSet" || field.kind == "Rollout"):
 		layout := time.RFC3339Nano
 		field.path = []string{"spec", "template", "metadata", "annotations", "kubectl.kubernetes.io/restartedAt"}
@@ -123,6 +137,10 @@ func resolveWorkloadAction(kind string, in workloadActionInput, execute bool, no
 			marker = in.RestartAt
 		}
 		field.after = marker
+		field.effect = "The workload controller rolls Pods using its configured update strategy."
+		if field.kind == "Rollout" {
+			field.effect = "Argo Rollouts replaces Pods created before the reviewed restart time."
+		}
 	default:
 		return field, fmt.Errorf("action %q is not supported on %q", in.Action, kind)
 	}
@@ -170,9 +188,8 @@ func (f workloadActionField) review(obj *unstructured.Unstructured, action, conn
 	if err != nil {
 		return workloadActionView{}, err
 	}
-	owners := obj.GetManagedFields()
-	materialOwners := owners[:0]
-	for _, owner := range owners {
+	var materialOwners []metav1.ManagedFieldsEntry
+	for _, owner := range obj.GetManagedFields() {
 		if owner.Subresource == "status" {
 			continue
 		}
@@ -195,7 +212,7 @@ func (f workloadActionField) review(obj *unstructured.Unstructured, action, conn
 	return workloadActionView{
 		Action: action, Kind: f.kind, Namespace: obj.GetNamespace(), Name: obj.GetName(),
 		UID: string(obj.GetUID()), ResourceVersion: obj.GetResourceVersion(),
-		ReviewToken: hex.EncodeToString(sum[:]), Field: field, Before: before, After: f.after,
+		ReviewToken: hex.EncodeToString(sum[:]), Field: field, Before: before, After: f.after, Effect: f.effect,
 	}, nil
 }
 
@@ -251,7 +268,7 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, execute 
 	}
 	obj, err := client.Resource(field.gvr).Namespace(ns).Get(r.Context(), name, metav1.GetOptions{})
 	if err != nil {
-		s.writeWorkloadActionError(w, err)
+		s.writeWorkloadActionError(w, err, false)
 		return
 	}
 	if obj.GetUID() == "" || obj.GetResourceVersion() == "" || obj.GetName() != name || obj.GetNamespace() != ns || obj.GetKind() != field.kind {
@@ -274,12 +291,20 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, execute 
 		return
 	}
 	if execute && (view.UID != in.UID || view.ReviewToken != in.ReviewToken || (in.ExpectedResourceVersion != "" && string(in.ExpectedResourceVersion) != view.ResourceVersion)) {
-		s.writeErrorCode(w, http.StatusConflict, errCodeWorkloadChanged, "the target or proposed change differs from the reviewed action; request a fresh preview")
+		if view.UID == in.UID && view.Before == view.After {
+			s.writeErrorCode(w, http.StatusConflict, "workload_action_unchanged", "the reviewed value is already present; no new write was sent. Check the live workload for its outcome")
+		} else {
+			s.writeErrorCode(w, http.StatusConflict, errCodeWorkloadChanged, "the target or proposed change differs from the reviewed action; inspect the live workload before considering another change")
+		}
 		return
 	}
 	if in.Action == "restart" {
 		if err := k8score.CheckReviewedRestart(obj); err != nil {
-			s.writeErrorCode(w, http.StatusConflict, errCodeRestartNotApplicable, err.Error())
+			code := errCodeRestartNotApplicable
+			if errors.Is(err, k8score.ErrRestartPaused) {
+				code = errCodeWorkloadPaused
+			}
+			s.writeErrorCode(w, http.StatusConflict, code, err.Error())
 			return
 		}
 	}
@@ -307,7 +332,7 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, execute 
 	}
 	stored, err := integration.ApplyVersionedMergePatch(r.Context(), client, field.gvr, obj, patch)
 	if err != nil {
-		s.writeWorkloadActionError(w, err)
+		s.writeWorkloadActionError(w, err, true)
 		return
 	}
 	actual, err := field.value(stored)
@@ -319,16 +344,18 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, execute 
 	s.writeJSON(w, view)
 }
 
-func (s *Server) writeWorkloadActionError(w http.ResponseWriter, err error) {
+func (s *Server) writeWorkloadActionError(w http.ResponseWriter, err error, attemptedWrite bool) {
 	var status apierrors.APIStatus
 	switch {
 	case apierrors.IsNotFound(err):
 		s.writeErrorCode(w, http.StatusNotFound, errCodeWorkloadNotFound, "the workload was not found")
 	case apierrors.IsConflict(err):
 		s.writeErrorCode(w, http.StatusConflict, errCodeWorkloadChanged, "Kubernetes rejected the change as conflicting; refresh the preview")
-	case errors.As(err, &status) && status.Status().Code >= 400 && status.Status().Code < 600:
+	case errors.As(err, &status) && status.Status().Code >= 400 && status.Status().Code < 500 && status.Status().Code != http.StatusRequestTimeout:
 		s.writeError(w, int(status.Status().Code), err.Error())
+	case attemptedWrite:
+		s.writeErrorCode(w, http.StatusBadGateway, "workload_action_unconfirmed", "Kubernetes did not confirm whether it applied the change. Inspect the live workload before taking further action: "+err.Error())
 	default:
-		s.writeError(w, http.StatusBadGateway, "Kubernetes did not return a confirmed result: "+err.Error())
+		s.writeError(w, http.StatusBadGateway, "the live workload could not be read: "+err.Error())
 	}
 }

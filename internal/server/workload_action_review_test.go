@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -130,7 +131,9 @@ func TestWorkloadActionReviewDrift(t *testing.T) {
 	}{
 		{"status churn", func(o *unstructured.Unstructured, _ map[string]any) {
 			o.Object["status"] = map[string]any{"readyReplicas": int64(1)}
+			o.SetManagedFields([]metav1.ManagedFieldsEntry{{Manager: "deployment-controller", Subresource: "status"}})
 		}, 200},
+		{"intervening generation", func(o *unstructured.Unstructured, _ map[string]any) { o.SetGeneration(o.GetGeneration() + 1) }, 409},
 		{"replaced", func(o *unstructured.Unstructured, _ map[string]any) { o.SetUID("replacement") }, 409},
 		{"replicas changed", func(o *unstructured.Unstructured, _ map[string]any) {
 			o.Object["spec"].(map[string]any)["replicas"] = int64(8)
@@ -188,6 +191,12 @@ func TestWorkloadActionStoreResult(t *testing.T) {
 			return nil, apierrors.NewConflict(deploymentsGVR.GroupResource(), "web", nil)
 		}},
 		{"admission removed true", 409, "workload_action_not_stored", func(obj *unstructured.Unstructured) (runtime.Object, error) { return obj, nil }},
+		{"API server error", 502, "workload_action_unconfirmed", func(*unstructured.Unstructured) (runtime.Object, error) {
+			return nil, apierrors.NewInternalError(errors.New("upstream connection closed"))
+		}},
+		{"timeout", 502, "workload_action_unconfirmed", func(*unstructured.Unstructured) (runtime.Object, error) {
+			return nil, apierrors.NewTimeoutError("request expired", 0)
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			obj := reviewedDeployment()
@@ -263,7 +272,7 @@ func TestWorkloadActionGuards(t *testing.T) {
 		mutate               func(*unstructured.Unstructured)
 	}{
 		{"Deployment", "resume", "workload_action_unchanged", func(*unstructured.Unstructured) {}},
-		{"Deployment", "restart", errCodeRestartNotApplicable, func(o *unstructured.Unstructured) { o.Object["spec"].(map[string]any)["paused"] = true }},
+		{"Deployment", "restart", errCodeWorkloadPaused, func(o *unstructured.Unstructured) { o.Object["spec"].(map[string]any)["paused"] = true }},
 		{"DaemonSet", "restart", errCodeRestartNotApplicable, func(o *unstructured.Unstructured) {
 			o.Object["spec"].(map[string]any)["updateStrategy"] = map[string]any{"type": "OnDelete"}
 		}},
@@ -321,5 +330,23 @@ func TestWorkloadActionStrictVersion(t *testing.T) {
 		if code != 400 || writes(dyn) != 1 {
 			t.Fatal(code, out, dyn.Actions())
 		}
+	}
+}
+
+func TestWorkloadActionRestartAlreadyStored(t *testing.T) {
+	obj := reviewedDeployment()
+	router, dyn := reviewedRestartRouter(t, obj)
+	code, review := requestWorkloadAction(t, router, "Deployment", "preview", map[string]any{"action": "restart"})
+	if code != 200 {
+		t.Fatal(code, review)
+	}
+	body := map[string]any{"action": "restart", "restartAt": review["after"], "uid": review["uid"], "reviewToken": review["reviewToken"], "expectedResourceVersion": review["resourceVersion"]}
+	code, receipt := requestWorkloadAction(t, router, "Deployment", "execute", body)
+	if code != 200 {
+		t.Fatal(code, receipt)
+	}
+	code, out := requestWorkloadAction(t, router, "Deployment", "execute", body)
+	if code != 409 || out["error_code"] != "workload_action_unchanged" || writes(dyn) != 1 {
+		t.Fatal(code, out, dyn.Actions())
 	}
 }
