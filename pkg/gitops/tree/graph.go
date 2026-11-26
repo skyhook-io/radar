@@ -161,7 +161,7 @@ func enrichNodeFromObject(node Node, obj *unstructured.Unstructured) Node {
 			node.Data["lastReconciledAt"] = parsed.UTC().Format(time.RFC3339Nano)
 		}
 	}
-	if strings.HasSuffix(apiGroup(obj), ".toolkit.fluxcd.io") {
+	if group := apiGroup(obj); strings.HasSuffix(group, ".toolkit.fluxcd.io") || group == "source.extensions.fluxcd.io" {
 		recordFluxReady(node, obj)
 	}
 	return enrichFluxSource(node, obj)
@@ -411,6 +411,31 @@ func classifyGitOpsKind(obj *unstructured.Unstructured) (tool, kind string) {
 }
 
 func enrichFluxSource(node Node, obj *unstructured.Unstructured) Node {
+	if node.Tool == ToolFluxCD && apiGroup(obj) == "source.extensions.fluxcd.io" && obj.GetKind() == "ArtifactGenerator" {
+		// A generator composes artifacts but holds none itself.
+		node.Sync = ""
+		state := gitops.FluxStatus(obj)
+		node.Health = state.Health
+		if gitops.ArtifactGeneratorPaused(obj) {
+			node.Health = "Suspended"
+			node.Data["paused"] = true
+		}
+		node.HealthSource = HealthSourceController
+		node.TopologyStatus = healthToTopology(node.Health)
+		node.Info = nil
+		// source-watcher 2.3 also lists the Namespaces it manages; entries from
+		// earlier versions carry no kind. No inventory leaves the count unknown.
+		if inventory, ok, _ := unstructured.NestedSlice(obj.Object, "status", "inventory"); ok {
+			count := 0
+			for _, raw := range inventory {
+				if e, ok := raw.(map[string]any); ok && (e["kind"] == nil || e["kind"] == "" || e["kind"] == "ExternalArtifact") {
+					count++
+				}
+			}
+			node.Data["generatedCount"] = count
+		}
+		return node
+	}
 	if node.Tool != ToolFluxCD || apiGroup(obj) != "source.toolkit.fluxcd.io" {
 		return node
 	}

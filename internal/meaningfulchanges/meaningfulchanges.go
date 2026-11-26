@@ -243,6 +243,20 @@ type Query struct {
 	Kinds      []string
 	Name       string
 	Since      time.Duration
+	// From and To fix the window instead of Since. From, when set, is the
+	// window's start; To, when set, bounds the store read at its end, so a
+	// window anchored in the past does not slide forward with the clock.
+	From time.Time
+	To   time.Time
+	// SplitAt, when inside the window, reads the part of the window up to it
+	// and the part after it separately, each with its own fetch bound, so a
+	// run of rows on one side can't push the other side's out of the read.
+	// The candidates are combined before recreate pairs are coalesced.
+	SplitAt time.Time
+	// Select, when set, replaces the significance ranking and the Limit cut:
+	// it picks the rows to return from every qualifying row and says whether
+	// it left any out.
+	Select     func([]issuesapi.RecentChange) ([]issuesapi.RecentChange, bool)
 	Limit      int
 	FieldLimit int
 	// Allow, when set, drops changes the caller may not read before ranking
@@ -260,6 +274,8 @@ type Query struct {
 	// so rows outside them can't take its places. A read whose own groups
 	// don't overlap Groups is skipped.
 	Groups []string
+	// EventIDs sets each row's EventID to the timeline event it was read from.
+	EventIDs bool
 
 	// start is the window's lower bound, fixed once per answer so every
 	// candidate query reads the same window.
@@ -335,14 +351,14 @@ func Recent(ctx context.Context, q Query) (RecentResult, error) {
 	var events []timeline.TimelineEvent
 	saturated := false
 	for _, kinds := range updateKinds {
-		got, full, err := queryCandidates(ctx, store, q, kinds, updateEventTypes, bound)
+		got, full, err := readCandidates(ctx, store, q, kinds, updateEventTypes, bound)
 		if err != nil {
 			return RecentResult{}, err
 		}
 		events = append(events, got...)
 		saturated = saturated || full
 	}
-	got, full, err := queryCandidates(ctx, store, q, lifecycleKinds, lifecycleEventTypes, bound)
+	got, full, err := readCandidates(ctx, store, q, lifecycleKinds, lifecycleEventTypes, bound)
 	if err != nil {
 		return RecentResult{}, err
 	}
@@ -385,14 +401,16 @@ func namespacesCreatedAfter(namespaces []string, t time.Time) bool {
 }
 
 // HistoryCoverageFor returns coverage as a response carries it: nil when the
-// history covers the window. CompleteSince is store-wide, so it can date
-// events the caller may not read; it is kept only for callers who can read
-// every namespace.
+// history covers the window. When events were evicted, CompleteSince dates
+// the newest deleted event store-wide, which can be one in a namespace the
+// caller may not read, so it is then kept only for callers who can read every
+// namespace. A boundary from a late start alone is when Radar began watching,
+// which says nothing about other namespaces, so every caller gets it.
 func HistoryCoverageFor(coverage issuesapi.HistoryCoverage, readsAllNamespaces bool) *issuesapi.HistoryCoverage {
 	if !coverage.Incomplete {
 		return nil
 	}
-	if !readsAllNamespaces {
+	if !readsAllNamespaces && slices.Contains(coverage.Reasons, issuesapi.HistoryEventsEvicted) {
 		coverage.CompleteSince = time.Time{}
 	}
 	return &coverage
@@ -489,11 +507,39 @@ func RecentForWorkloadAndConfigMapsAuthorizedDetailed(
 	includeSource func(kind, name string) bool,
 	viewer Viewer,
 ) (result RecentResult, coverageLimited bool, err error) {
+	return RecentForWorkloadSources(ctx, obj, kind, namespace, name,
+		Query{Since: since, Limit: limit, FieldLimit: fieldLimit, Viewer: viewer}, includeSource)
+}
+
+// RecentForWorkloadSources is RecentForWorkloadAndConfigMapsAuthorizedDetailed
+// with the window, limits, viewer and row filter taken from q. q's namespaces,
+// kinds and name are replaced by the workload and its sources.
+func RecentForWorkloadSources(
+	ctx context.Context,
+	obj any,
+	kind, namespace, name string,
+	q Query,
+	includeSource func(kind, name string) bool,
+) (result RecentResult, coverageLimited bool, err error) {
+	return RecentForWorkloadSourceRefs(ctx, DirectConfigReferences(obj), kind, namespace, name, q, includeSource)
+}
+
+// RecentForWorkloadSourceRefs is RecentForWorkloadSources over references the
+// caller already resolved, so the sources read are exactly the ones it
+// checked: the workload's template is not read again.
+func RecentForWorkloadSourceRefs(
+	ctx context.Context,
+	refs []configrefs.Ref,
+	kind, namespace, name string,
+	q Query,
+	includeSource func(kind, name string) bool,
+) (result RecentResult, coverageLimited bool, err error) {
 	store := timeline.GetStore()
 	if store == nil {
 		return RecentResult{}, false, timeline.StoreMissingError()
 	}
-	q := normalizeQuery(Query{Namespaces: []string{namespace}, Since: since, Limit: limit, FieldLimit: fieldLimit, Viewer: viewer})
+	q.Namespaces, q.Kinds, q.Name = []string{namespace}, nil, ""
+	q = normalizeQuery(q)
 	var events []timeline.TimelineEvent
 	fetch := func(resourceKind, resourceName string) error {
 		canonicalResourceKind := canonicalKind(resourceKind)
@@ -506,7 +552,7 @@ func RecentForWorkloadAndConfigMapsAuthorizedDetailed(
 		sourceQuery.Name = resourceName
 		sourceQuery.TrackedOnly = true
 		for _, eventTypes := range [][]timeline.EventType{updateEventTypes, lifecycleEventTypes} {
-			got, saturated, err := queryCandidates(ctx, store, sourceQuery, sourceQuery.Kinds, eventTypes, NamedFetchBound)
+			got, saturated, err := readCandidates(ctx, store, sourceQuery, sourceQuery.Kinds, eventTypes, NamedFetchBound)
 			if err != nil {
 				return err
 			}
@@ -521,7 +567,7 @@ func RecentForWorkloadAndConfigMapsAuthorizedDetailed(
 			return RecentResult{}, coverageLimited, err
 		}
 	}
-	for _, ref := range DirectConfigReferences(obj) {
+	for _, ref := range refs {
 		if err := fetch(ref.Kind, ref.Name); err != nil {
 			return RecentResult{}, coverageLimited, err
 		}
@@ -638,6 +684,9 @@ func normalizeQuery(q Query) Query {
 		q.Kinds[i] = canonicalKind(kind)
 	}
 	if q.start.IsZero() {
+		q.start = q.From
+	}
+	if q.start.IsZero() {
 		q.start = time.Now().Add(-q.Since)
 	}
 	return q
@@ -656,6 +705,26 @@ var (
 // out even then: they are derived copies whose churn would crowd the rows
 // asked for. A Node's owner (Karpenter's NodeClaim) manages the machine, and
 // the Node's taints and labels are its own configuration.
+// readCandidates is queryCandidates over q's window, read in two parts when
+// q.SplitAt falls inside it. Saturation of either part is reported.
+func readCandidates(ctx context.Context, store timeline.EventStore, q Query, kinds []string, eventTypes []timeline.EventType, bound int) ([]timeline.TimelineEvent, bool, error) {
+	if q.SplitAt.IsZero() || !q.SplitAt.After(q.start) || (!q.To.IsZero() && !q.SplitAt.Before(q.To)) {
+		return queryCandidates(ctx, store, q, kinds, eventTypes, bound)
+	}
+	before, after := q, q
+	before.To = q.SplitAt
+	after.start = q.SplitAt.Add(time.Nanosecond)
+	early, earlyFull, err := queryCandidates(ctx, store, before, kinds, eventTypes, bound)
+	if err != nil {
+		return nil, false, err
+	}
+	late, lateFull, err := queryCandidates(ctx, store, after, kinds, eventTypes, bound)
+	if err != nil {
+		return nil, false, err
+	}
+	return append(late, early...), earlyFull || lateFull, nil
+}
+
 func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, kinds []string, eventTypes []timeline.EventType, bound int) ([]timeline.TimelineEvent, bool, error) {
 	queryKinds := compactKinds(kinds)
 	includeCustom := !q.TrackedOnly && (len(q.Kinds) > 0 || q.Name != "")
@@ -677,6 +746,7 @@ func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, ki
 		// Groups are matched against the recorded apiVersion.
 		RequireAPIVersion: len(q.Groups) > 0,
 		Since:             q.start,
+		Until:             q.To,
 		Sources:           []timeline.EventSource{timeline.SourceInformer},
 		EventTypes:        eventTypes,
 		// Changes are root-cause evidence for the CURRENT cluster — the
@@ -820,6 +890,9 @@ func rankedChanges(ctx context.Context, events []timeline.TimelineEvent, q Query
 		if change.ChangeCategory == "" {
 			continue
 		}
+		if q.EventIDs {
+			change.EventID = e.ID
+		}
 		if q.Allow != nil && !q.Allow(change) {
 			continue
 		}
@@ -839,6 +912,12 @@ func rankedChanges(ctx context.Context, events []timeline.TimelineEvent, q Query
 	annotateRunningPreviousValue(ctx, out, pods, q.Viewer)
 	if len(q.Kinds) == 0 && q.Name == "" {
 		out = collapseSecretUpdates(out)
+	}
+	if q.Select != nil {
+		for i := range out {
+			classifyApplicationConfigurationChange(&out[i])
+		}
+		return q.Select(out)
 	}
 	capped := len(out) > q.Limit
 	RankAndCap(&out, q.Limit)
@@ -1780,6 +1859,32 @@ func rolloutWorkloadRefPodSpec(rollout *unstructured.Unstructured) (corev1.PodSp
 		}
 	}
 	return corev1.PodSpec{}, false
+}
+
+// RolloutTemplateSource names the object whose pod template
+// DirectConfigReferences reads for a Rollout that takes its template from
+// spec.workloadRef rather than its own spec.template: the target Deployment
+// or ReplicaSet. ok is false for any other object, including a Rollout with
+// its own template or an unsupported reference.
+func RolloutTemplateSource(obj any) (group, kind string, ok bool) {
+	rollout, isUnstructured := obj.(*unstructured.Unstructured)
+	if !isUnstructured || rollout.GetKind() != "Rollout" || resourceid.GroupFromAPIVersion(rollout.GetAPIVersion()) != "argoproj.io" {
+		return "", "", false
+	}
+	if _, found, err := unstructured.NestedMap(rollout.Object, "spec", "template", "spec"); err == nil && found {
+		return "", "", false
+	}
+	target, err := rollouts.ResolveTemplateTarget(rollout)
+	if err != nil || target.GVR == rollouts.GVR {
+		return "", "", false
+	}
+	switch target.GVR.Resource {
+	case "deployments":
+		return target.GVR.Group, "Deployment", true
+	case "replicasets":
+		return target.GVR.Group, "ReplicaSet", true
+	}
+	return "", "", false
 }
 
 // ConfigReferencesKnown reports whether obj's pod template could be read, so

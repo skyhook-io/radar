@@ -579,22 +579,24 @@ type Relationships struct {
 
 // CertificateInfo holds parsed X.509 certificate metadata for a single certificate.
 type CertificateInfo struct {
-	Subject      string   `json:"subject"`
-	SANs         []string `json:"sans,omitempty"`
-	Issuer       string   `json:"issuer"`
-	SelfSigned   bool     `json:"selfSigned,omitempty"`
-	KeyType      string   `json:"keyType"`
-	SerialNumber string   `json:"serialNumber"`
-	NotBefore    string   `json:"notBefore"`
-	NotAfter     string   `json:"notAfter"`
-	DaysLeft     int      `json:"daysLeft"`
-	Expired      bool     `json:"expired,omitempty"`
+	Subject       string   `json:"subject"`
+	Organizations []string `json:"organizations,omitempty"`
+	SANs          []string `json:"sans,omitempty"`
+	Issuer        string   `json:"issuer"`
+	SelfSigned    bool     `json:"selfSigned,omitempty"`
+	KeyType       string   `json:"keyType"`
+	SerialNumber  string   `json:"serialNumber"`
+	NotBefore     string   `json:"notBefore"`
+	NotAfter      string   `json:"notAfter"`
+	DaysLeft      int      `json:"daysLeft"`
+	Expired       bool     `json:"expired,omitempty"`
 }
 
-// SecretCertificateInfo holds parsed certificate data for a TLS secret.
-// Certificates are in PEM order (leaf-first: index 0 is the server cert, subsequent entries are intermediates/root).
+// SecretCertificateInfo preserves the TLS Secret's tls.crt chain in Certificates.
+// AdditionalKeys holds chains found elsewhere, including all keys of other Secret types.
 type SecretCertificateInfo struct {
-	Certificates []CertificateInfo `json:"certificates"`
+	Certificates   []CertificateInfo            `json:"certificates"`
+	AdditionalKeys map[string][]CertificateInfo `json:"additionalKeys,omitempty"`
 }
 
 // CascadeDeletePreview reports deletion evidence. Basis ownerReferences marks

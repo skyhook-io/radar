@@ -286,6 +286,9 @@ export interface InvestigationHelmRelease {
   statusUnreadCount?: number;
   managedByFlux?: boolean;
   managedByFluxHelmRelease?: string;
+  /** k3s/RKE2 ownership, kept when the HelmChart is withheld. */
+  managedByK3s?: boolean;
+  controller?: InvestigationHelmController;
   lastOperation?: InvestigationHelmOperation;
   resources: InvestigationHelmOwnedResource[];
   /** Newest first; the tool returns the release's stored revisions. */
@@ -644,4 +647,13 @@ export interface InvestigationRootCauseEvidenceLink {
 export interface InvestigationRootCauseEvidenceResolution {
   status: "linked" | "missing" | "invalid";
   links: InvestigationRootCauseEvidenceLink[];
+}
+
+export interface InvestigationHelmController {
+  tool: string;
+  kind: string;
+  namespace: string;
+  name: string;
+  /** "Kind namespace/name" of the object values are changed in, when one exists. */
+  values?: string;
 }

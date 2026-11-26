@@ -46,7 +46,7 @@ func TestVitals_HappyPath(t *testing.T) {
 
 func TestVitals_NodeRBACDeniedSurfacesRestricted(t *testing.T) {
 	if testServerSrv.permCache == nil {
-		testServerSrv.permCache = pkgauth.NewPermissionCache()
+		testServerSrv.permCache = pkgauth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)
 	}
 	const username = "vitals-node-denied"
 	perms := &pkgauth.UserPermissions{}
@@ -97,7 +97,7 @@ func TestVitals_DeploymentsOnlyUserGetsNoPodData(t *testing.T) {
 		}
 	})
 	if testServerSrv.permCache == nil {
-		testServerSrv.permCache = pkgauth.NewPermissionCache()
+		testServerSrv.permCache = pkgauth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)
 	}
 	const username = "vitals-deploys-only"
 	perms := &pkgauth.UserPermissions{}
@@ -135,7 +135,7 @@ func TestVitals_DeploymentsOnlyUserGetsNoPodData(t *testing.T) {
 
 func TestVitals_MixedNamespacePodAccessMarksPartial(t *testing.T) {
 	if testServerSrv.permCache == nil {
-		testServerSrv.permCache = pkgauth.NewPermissionCache()
+		testServerSrv.permCache = pkgauth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)
 	}
 	const username = "vitals-mixed-ns"
 	perms := &pkgauth.UserPermissions{}

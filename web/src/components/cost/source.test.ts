@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { COST_SOURCE_OPTIONS, costSourcePreferenceLabel, costConfigurationAction, isCostConfigurable, costDataThroughLabel, costFreshnessLabel, costIntegrationUnavailableMessage, costRateLabels, costSourceLabel, isCostDiscoveryPending } from './source'
+import { COST_SOURCE_OPTIONS, costSourcePreferenceLabel, costConfigurationAction, isCostConfigurable, costDataThroughLabel, costFreshnessLabel, costIntegrationUnavailableMessage, costRateLabels, costSourceLabel, costWithheldScope, isCostDiscoveryPending } from './source'
 
 describe('cost source presentation', () => {
   it('routes missing sources to one applicable previous connection', () => {
@@ -72,4 +72,19 @@ it('gives connection guidance without claiming an unreachable source ran a query
   const embedded = costIntegrationUnavailableMessage('query_error', false)
   expect(embedded).toContain('Ask your operator')
   expect(embedded).not.toContain('Settings')
+})
+
+describe('costWithheldScope', () => {
+  const several = { state: 'several_clusters' as const, note: 'several' }
+  it('returns the scope only for costs withheld by cluster scope', () => {
+    expect(costWithheldScope({ available: false, reason: 'cluster_scope', clusterScope: several })).toBe(several)
+    expect(costWithheldScope({ available: false, reason: 'cluster_scope' })).toBeUndefined()
+    expect(costWithheldScope({ available: false, reason: 'query_error', clusterScope: several })).toBeUndefined()
+    expect(costWithheldScope({ available: true, clusterScope: several })).toBeUndefined()
+    expect(costWithheldScope(undefined)).toBeUndefined()
+  })
+  it('explains withheld and partial costs', () => {
+    expect(costIntegrationUnavailableMessage('cluster_scope')).toContain('several clusters')
+    expect(costIntegrationUnavailableMessage('partial_data')).toContain('partially')
+  })
 })

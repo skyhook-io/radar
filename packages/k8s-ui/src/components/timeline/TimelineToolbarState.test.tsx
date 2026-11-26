@@ -184,3 +184,23 @@ describe('TimelineList routine activity toggle', () => {
     expect(html).toContain('<button type="button" aria-label="About routine activity"')
   })
 })
+
+describe('filtered-empty timeline surfaces', () => {
+  it('offers clearing filters once in the list', () => {
+    const html = renderToString(<TimelineList events={EVENTS} isLoading={false} search="no-such-resource" initialTimeRange="all" />)
+    expect(html.match(/No activity found/g)).toHaveLength(1)
+    expect(html).toContain('no-such-resource')
+    expect(html.match(/Clear filters/g)).toHaveLength(1)
+    expect(html).not.toContain('No events yet')
+    expect(html).not.toContain('Activity will appear')
+  })
+
+  it('offers clearing filters once in the swimlane', () => {
+    const html = renderToString(<TimelineSwimlanes events={EVENTS} search="no-such-resource" />)
+    expect(html.match(/No matching events/g)).toHaveLength(1)
+    expect(html).toContain('no-such-resource')
+    expect(html.match(/Clear filters/g)).toHaveLength(1)
+    expect(html).not.toContain('No activity found')
+    expect(html).not.toContain('No events yet')
+  })
+})

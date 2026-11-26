@@ -369,6 +369,12 @@ type RecentChange struct {
 	RunningPreviousValue *RunningPreviousValue `json:"running_previous_value,omitempty"`
 	UpdatesInWindow      int                   `json:"updates_in_window,omitempty"`
 	FirstUpdateAt        string                `json:"first_update_at,omitempty"`
+	// EventID is the ID of the timeline event this row was read from, set
+	// only where a caller asks for it (the per-resource issues endpoint's
+	// correlation). A row with several updates folded into it carries its
+	// newest event's ID. Absent on rows that come from no timeline event,
+	// such as native Helm release records.
+	EventID string `json:"event_id,omitempty"`
 }
 
 // RunningPreviousValue describes Pods that likely retain an earlier env value.
@@ -684,12 +690,76 @@ type Issue struct {
 	// or when the candidate fetch saturated and may have missed changes;
 	// absence must never be read as "no changes".
 	NoRecentChanges *NoRecentChangesMarker `json:"no_recent_changes,omitempty"`
-	// CorrelatedChangesIncomplete is set when CorrelatedChanges is non-empty
-	// but the subject's change history in the window was larger than Radar's
-	// fetch bound, so older changes were not read. The listed changes are
-	// leads, not the subject's full history.
+	// CorrelatedChangesIncomplete is set when the change history in the
+	// window was larger than Radar's fetch bound, so older changes were not
+	// read. The listed changes are leads, not the full history. The MCP
+	// issues tool sets it only with a non-empty CorrelatedChanges; an issue
+	// correlated on request (?correlate=) also carries it with no changes,
+	// where it means the empty list is not complete.
 	CorrelatedChangesIncomplete bool `json:"correlated_changes_incomplete,omitempty"`
+	// CorrelatedChangesMoreNotShown is set when the window held more
+	// changes this caller may see than CorrelatedChanges lists.
+	CorrelatedChangesMoreNotShown bool `json:"correlated_changes_more_not_shown,omitempty"`
+	// Correlation describes the window and completeness of the correlated
+	// changes. An issue correlated on request (the per-resource issues
+	// endpoint's correlate parameter) carries all of it. The MCP issues tool
+	// sets only Unknown and History, and only when it withholds
+	// no_recent_changes although the subject's own reads found nothing: a
+	// source couldn't be resolved or isn't collected, a kind was watched only
+	// since after the window began, or the admission policy side is unknown.
+	Correlation *ChangeCorrelation `json:"correlation,omitempty"`
 }
+
+// ChangeCorrelation is the scope of one issue's change correlation.
+type ChangeCorrelation struct {
+	// WindowFrom and WindowTo bound the changes read: an hour before the
+	// issue was first seen, whether or not its onset is known, until the
+	// read; the 24 hours before the read when the issue has no first-seen
+	// time. Always set on an issue correlated on request; the MCP issues tool
+	// leaves them out.
+	WindowFrom time.Time `json:"window_from,omitzero"`
+	WindowTo   time.Time `json:"window_to,omitzero"`
+	// ObservedSince is when this Radar process started recording changes.
+	ObservedSince time.Time `json:"observed_since,omitzero"`
+	// Unknown says why an empty CorrelatedChanges is not "nothing changed".
+	// Listed changes are still real when it is set.
+	Unknown *CorrelationUnknown `json:"unknown,omitempty"`
+	// History is set when Radar's held history does not cover the window.
+	History *HistoryCoverage `json:"history,omitempty"`
+}
+
+// CorrelationUnknown is the reason Radar can't say nothing changed, and the
+// kinds it concerns. Whether it is set depends only on the caller's
+// permissions and Radar's own collection, never on whether a change the
+// caller can't see exists.
+type CorrelationUnknown struct {
+	Reason CorrelationUnknownReason `json:"reason"`
+	Kinds  []UncheckedKind          `json:"kinds,omitempty"`
+}
+
+// CorrelationUnknownReason is a readreason code, or one of the two reasons
+// specific to change correlation. Wire contract: clients branch on the values.
+type CorrelationUnknownReason string
+
+const (
+	CorrelationUnknownUserForbidden         = CorrelationUnknownReason(readreason.UserForbidden)
+	CorrelationUnknownPermissionCheckFailed = CorrelationUnknownReason(readreason.UserPermissionCheckFailed)
+	CorrelationUnknownKindNotCollected      = CorrelationUnknownReason(readreason.RadarKindNotCollected)
+	CorrelationUnknownNamespaceNotCollected = CorrelationUnknownReason(readreason.RadarNamespaceNotCollected)
+	CorrelationUnknownKindSyncPending       = CorrelationUnknownReason(readreason.KindSyncPending)
+	CorrelationUnknownReadError             = CorrelationUnknownReason(readreason.ReadError)
+	// CorrelationUnknownSourcesUnresolved: Radar can't tell which objects the
+	// answer depends on. Either it couldn't read the workload's pod template,
+	// so it doesn't know which ConfigMaps and Secrets it uses (kinds names the
+	// workload), or it can't identify the policy that rejected an admission
+	// request: no cached webhook configuration declares the webhook (kinds
+	// names both configuration kinds), the named ResourceQuota is gone (kinds
+	// names ResourceQuota), or the message names no policy (no kinds).
+	CorrelationUnknownSourcesUnresolved CorrelationUnknownReason = "sources_unresolved"
+	// CorrelationUnknownHistoryIncomplete: the window starts before the
+	// history Radar holds; ChangeCorrelation.History says why.
+	CorrelationUnknownHistoryIncomplete CorrelationUnknownReason = "history_incomplete"
+)
 
 // HistoryGapReason names why Radar's recorded change history does not cover a
 // requested window. Wire contract: clients branch on the values.
@@ -708,8 +778,8 @@ const (
 // history Radar holds, so an empty or short answer does not establish that
 // nothing changed. Present only when Incomplete. CompleteSince is the
 // retained-history boundary, including a later dependent-kind watch when
-// applicable. It can include store-wide activity, so it is sent only to
-// callers who can read the whole cluster.
+// applicable. When events were evicted it dates store-wide activity, so it
+// is then sent only to callers who can read the whole cluster.
 type HistoryCoverage struct {
 	Incomplete    bool               `json:"incomplete"`
 	CompleteSince time.Time          `json:"complete_since,omitzero"`
@@ -721,7 +791,19 @@ type HistoryCoverage struct {
 // window.
 type NoRecentChangesMarker struct {
 	WindowSeconds int `json:"window_seconds"`
+	// Scope narrows what was checked. On an issue correlated on request
+	// (?correlate=), absent means the subject and its referenced ConfigMaps
+	// and Secrets were checked, and for an admission rejection the rejecting
+	// policy too; NoRecentChangesScopeAdmissionPolicy means only the policy
+	// that rejected the admission request was checked, since the subject's
+	// own kind (a Job, a bare ReplicaSet) isn't tracked. The MCP issues tool
+	// never sets Scope.
+	Scope string `json:"scope,omitempty"`
 }
+
+// NoRecentChangesScopeAdmissionPolicy is NoRecentChangesMarker.Scope for a
+// claim about the rejecting admission policy alone.
+const NoRecentChangesScopeAdmissionPolicy = "admission_policy"
 
 type Response struct {
 	Issues              []Issue         `json:"issues"`

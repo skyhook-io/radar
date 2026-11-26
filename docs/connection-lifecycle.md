@@ -6,10 +6,12 @@ How Radar names the cluster connection it serves, and how a write is bound to th
 
 A bound write from a Radar tab runs against the connection the tab is on, or is refused before any Kubernetes work. In particular, a tab still showing cluster A after another tab switched Radar to B can't restart or scale B's same-named workload.
 
-Bound writes are the routes wrapped with `bindWrite` in `internal/server/server.go`; `TestBoundWriteRoutesRefuseStaleConnection` walks every one. They are the workload, CronJob, resource (apply, update, delete), node, GitOps, Velero, CloudNativePG, Helm and CAPI connect actions, plus exec, file upload, debug containers and debug pods, port-forward start and the reachability probe test. Beyond the header check:
+Bound writes are the routes wrapped with `bindWrite` in `internal/server/server.go`; `TestBoundWriteRoutesRefuseStaleConnection` walks every one. They are the workload, CronJob, Argo Workflow, resource (apply, update, delete), node, GitOps, Velero, CloudNativePG, Helm and CAPI connect actions, plus exec, file upload, debug containers and debug pods, port-forward start and the reachability probe test. Beyond the header check:
 - **Drain** keeps running on the connection it was admitted to, even if Radar switches meanwhile. Exec and port-forward sessions end when Radar switches.
 - **Code that only has a context** (MCP tools, reachability) gets its clients from `k8s.ClientFromContext` / `DynamicClientFromContext`, which return the bound connection's clients when the request was admitted with one.
 - **CloudNativePG** captures its clients and caches in one step and checks there that the connection is still the bound one (`k8s.StillBound`).
+- **Helm** install, upgrade (including source upgrades and values edits), rollback, uninstall and source association, streaming variants included, use the REST config captured at admission. The permission preflight checks that the admitted connection is still serving, because it reads shared capabilities; after that, Helm stays on the admitted cluster even if Radar switches while a repository downloads.
+- **CAPI connect** takes its client snapshot, then checks that the admitted connection is still serving: a switch before the check is refused, and one after it can't change the snapshot.
 - **Velero** checks the Velero server's state in the shared cache, which a switch completing mid-request could replace; the write itself stays on the admitted connection.
 - **Diagnose** (the in-product agent) is fenced by its runs: every switch marks all runs stale (`RunManager.OnContextSwitch`), and a stale run takes no further turns, so an investigation of one cluster can't continue, or apply a fix, on another.
 
@@ -61,14 +63,14 @@ sequenceDiagram
   end
 ```
 
-Switching back to A admits `K7QXM2RDTA-3`, never `-1` again. After a restart the nonce changes (say `P4WNB7ZHQE-1`), so an ID from the previous process also gets 409. All of the state above is process-wide: each step resets a shared singleton rather than dropping one connection's object.
+Switching back to A admits `K7QXM2RDTA-3`, never `-1` again. After a restart the nonce changes (say `P4WNB7ZHQE-1`), so an ID from the previous process also gets 409. The client bundle, REST config and API discovery belong to one connection. A subsystem rebuild on the same clients installs a fresh connection with its own discovery slot.
 
 Code: `internal/k8s/connection_state.go` (admission, retirement, publication), `internal/k8s/connection_binding.go` (capture).
 
 ## Binding
 
 **Server** (`internal/server/connection_binding.go`):
-- A bound write captures the serving connection's ID, clients and discovery in one step, under the lock every client install and teardown takes. The handler runs on that capture, so a switch that lands mid-request can't redirect it.
+- A bound write takes a pointer to the serving connection under the context-operation gate. It reads the ID, clients and discovery from that connection throughout the request, including discovery that finishes after admission.
 - The request header `X-Radar-Connection` names the connection the caller is on. A different ID gets **409 `context_changed`**. No serving connection, or a context operation holding the lock, gets **503 `cluster_unavailable`** (retryable). No header: admitted against the current connection (API and MCP callers, older UIs). Both refusals say nothing was changed.
 
 **Browser** (`web/src/api/connectionBinding.ts`):
@@ -85,7 +87,6 @@ Also accepted:
 - **A write arriving during shutdown** still runs on the connection the tab is on; admissions are closed first so nothing new is admitted.
 - **Reads aren't bound.** A stale tab can display data from the new cluster before it resets; it can't write with it, since it still sends the old ID.
 - **A context repointed to another cluster in the kubeconfig, then Retry,** keeps the same context name, so views refetch rather than reset; writes name the new connection from then on.
-- **Writes that build clients after admission.** Helm builds its action clients, and CAPI connect reads the management cluster, from the serving connection rather than the captured one. Both re-check that the admitted connection is still serving right before that point (`stillAdmitted` in the helm handlers, `k8s.StillBound` in CAPI connect; repository association re-checks after its download), so only the moment between that check and the client build remains.
 - **A host QueryClient that retries mutations** (Radar's own doesn't) could resend a refused restart after the tab adopted the new ID.
 
 ## Scenario checklist
@@ -109,6 +110,8 @@ Run these on major changes to connection, switching or binding code. **Live** sc
 | L8 | ID from a previous Radar process | 409 | ✓ | |
 | L9 | Same context name repointed to another cluster, then Retry | New ID; old ID 409; new ID writes to the new cluster | ✓ | |
 | L10 | Stop during warm-up | Nothing serving; writes 503 | ✓ | |
+| C1 | Work started on one connection (API discovery, a permission probe, a typed-cache build) finishes after a switch or rescope | Kept on its own connection, never served for the new one; `/api/capabilities` leaves `resources` unset rather than report it | | `TestLateDiscoveryStaysOnItsConnection`, `TestResetAllSubsystemsIsolatesInFlightPermissionProbe`, `TestNamespaceRescopeRetiresInFlightProbe`, `TestResetResourceCache_InvalidatesInFlightConstruction`, `TestCapabilitiesOmitsProbeResultAfterConnectionReplaced` |
+| A1 | Credentials stop working while serving, then work again | 503 while demoted; serving again under a new ID; a write admitted before the demotion is refused | | `TestRuntimeAuthRecoveryReconnectsWhenCredentialsReturn`, `TestReadmissionKeepsTheSameConnection`, `TestAdmissionKeepsTheIDItWasCapturedUnder` |
 | U1 | Browser: a tab with SSE and status frozen restarts from a stale drawer after another tab switched | Refused, message says nothing changed, no write on either cluster; the tab resets to the new cluster on its next status poll; the switching tab's restart writes the new cluster only | `connection-lifecycle-ui-check.mjs` | |
 | I1 | In-cluster Radar | No ID published, a named connection ignored | | `TestInClusterRadarBindsNoConnections` |
 | B1 | Statuses naming IDs, then one with none (mid-switch); another API base | Sends the latest ID; keeps it through the gap; each base its own | | `connectionBinding.test.tsx` |

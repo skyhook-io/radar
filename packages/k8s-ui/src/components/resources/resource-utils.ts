@@ -4,13 +4,14 @@ import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getVolumeSnapshotColumnValue } from './resource-utils-volumesnapshot'
 import { getMetalLBColumnValue } from './resource-utils-metallb'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
+import { getK3sHelmChartColumnValue } from './resource-utils-k3s'
 import { getUpgradePlanColumnValue } from './resource-utils-upgrade-plan'
 import { FLUX_OPERATOR_GROUP, getFluxOperatorColumnValue, getFluxOperatorStatus } from './resource-utils-flux-operator'
 // Utility functions for resource display in tables
 
 import { getNodeLifecycle } from '../../utils/node-lifecycle'
 import { effectivePolicyTypeNames } from '../../utils/network-policy'
-import { formatCPUString, formatMemoryString, formatBytes, formatCompactAge } from '../../utils/format'
+import { formatCPUString, formatMemoryString, formatBytes, formatCompactAge, splitCamelCase } from '../../utils/format'
 import { pluralize } from '../../utils/pluralize'
 import type { WorkloadPodInfo } from '../../types/core'
 import { getArgoRolloutStepNumber, getObservedGeneration, getWorkloadRolloutActivity, isArgoRolloutResource, isRolloutActivityVisible, rolloutActivityBadge, type WorkloadRolloutActivity } from '../../utils/workload-rollout'
@@ -19,7 +20,7 @@ import { getArgoRolloutStepNumber, getObservedGeneration, getWorkloadRolloutActi
 import { getCertificateStatus, getCertificateRequestStatus, getClusterIssuerStatus, getClusterIssuerType, getOrderState, getChallengeState, getChallengeType } from './resource-utils-certmanager'
 import { getNodePoolStatus, getNodeClaimStatus } from './resource-utils-karpenter'
 import { getScaledObjectStatus, getScaledJobStatus } from './resource-utils-keda'
-import { getGitRepositoryStatus, getOCIRepositoryStatus, getHelmRepositoryStatus, getHelmRepositoryType, getKustomizationStatus, getFluxHelmReleaseStatus, getFluxAlertStatus } from './resource-utils-flux'
+import { getGitRepositoryStatus, getOCIRepositoryStatus, getHelmRepositoryStatus, getHelmRepositoryType, getKustomizationStatus, getFluxHelmReleaseStatus, getFluxAlertStatus, getExternalArtifactStatus, getArtifactGeneratorStatus } from './resource-utils-flux'
 import { getArgoApplicationStatus, getArgoApplicationSetStatus, getArgoApplicationSync, getArgoApplicationHealth, getArgoApplicationProject } from './resource-utils-argo'
 import { getVulnerabilityReportImage as _getVulnerabilityReportImage } from './resource-utils-trivy'
 import { getKyvernoPolicyRuleTypes as _getKyvernoPolicyRuleTypes, getPolicyReportStatus as _getPolicyReportStatus, getKyvernoPolicyStatus as _getKyvernoPolicyStatus } from './resource-utils-kyverno'
@@ -863,17 +864,33 @@ export function getDefaultContainerName(pod: any): string | undefined {
   return containers[0]?.name
 }
 
+interface EphemeralContainerRef { name: string; image: string; targetContainerName?: string }
+
+export function getRunningEphemeralContainers(pod: {
+  spec?: { ephemeralContainers?: EphemeralContainerRef[] }
+  status?: { ephemeralContainerStatuses?: { name: string; state?: { running?: { startedAt?: string } } }[] }
+}): (EphemeralContainerRef & { startedAt?: string })[] {
+  return [...(pod.spec?.ephemeralContainers ?? [])].reverse().flatMap(container => {
+    const running = pod.status?.ephemeralContainerStatuses?.find(status => status.name === container.name)?.state?.running
+    return running ? [{ ...container, startedAt: running.startedAt }] : []
+  })
+}
+
 /**
  * The containers a terminal can target: the regular containers, then native
  * sidecars (init containers with restartPolicy: Always, Kubernetes 1.29+),
  * which keep running for the pod's lifetime like regular containers.
  */
-export function getExecContainerNames(pod: any): string[] {
+export function getExecContainerNames(pod: any, options?: { runningOnly: boolean }): string[] {
   const regular = (pod?.spec?.containers || []).map((c: any) => c.name)
   const sidecars = (pod?.spec?.initContainers || [])
     .filter((c: any) => c.restartPolicy === 'Always')
     .map((c: any) => c.name)
-  return [...regular, ...sidecars].filter(Boolean)
+  const names: string[] = [...regular, ...sidecars].filter(Boolean)
+  if (!options?.runningOnly) return names
+  const statuses = [...(pod?.status?.containerStatuses ?? []), ...(pod?.status?.initContainerStatuses ?? [])]
+  const running = new Set(statuses.filter(status => status.state?.running).map(status => status.name))
+  return names.filter(name => running.has(name))
 }
 
 /** Init container names in run order, native sidecars included. */
@@ -1612,7 +1629,7 @@ export function getNodeConditions(node: any): { problems: string[]; healthy: boo
     // Other conditions are problems when True
     if (lifecycle.problems.includes(cond.type) && cond.status === 'True') {
       // Format: "DiskPressure" -> "Disk Pressure"
-      const formatted = cond.type.replace(/([A-Z])/g, ' $1').trim()
+      const formatted = splitCamelCase(cond.type)
       problems.push(formatted)
     }
   }
@@ -1952,6 +1969,16 @@ export {
 // ============================================================================
 export {
   getFluxResourceStatus,
+  getExternalArtifactStatus,
+  getExternalArtifactRevision,
+  getExternalArtifactGenerator,
+  getExternalArtifactProducer,
+  getArtifactGeneratorStatus,
+  getArtifactGeneratorSources,
+  getArtifactGeneratorCount,
+  getArtifactGeneratorArtifacts,
+  isArtifactGeneratorPaused,
+  shortArtifactRevision,
   getGitRepositoryStatus,
   getOCIRepositoryStatus,
   getHelmRepositoryStatus,
@@ -2601,6 +2628,8 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
   if (otelValue !== undefined) return otelValue
   const flaggerValue = getFlaggerColumnValue(resource, column)
   if (flaggerValue !== undefined) return flaggerValue
+  const k3sValue = getK3sHelmChartColumnValue(resource, column)
+  if (k3sValue !== undefined) return k3sValue
   const agentRuntimeValue = getAgentRuntimeColumnValue(resource, column)
   if (agentRuntimeValue !== undefined) return agentRuntimeValue
   const planValue = getUpgradePlanColumnValue(resource, column)
@@ -2657,6 +2686,8 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'applications') return getArgoApplicationStatus(resource).text
       if (kindLower === 'applicationsets') return getArgoApplicationSetStatus(resource).text
       if (kindLower === 'gitrepositories') return getGitRepositoryStatus(resource).text
+      if (kindLower === 'externalartifacts' && _isApiGroup(resource.apiVersion, 'source.toolkit.fluxcd.io')) return getExternalArtifactStatus(resource).text
+      if (kindLower === 'artifactgenerators' && _isApiGroup(resource.apiVersion, 'source.extensions.fluxcd.io')) return getArtifactGeneratorStatus(resource).text
       if (kindLower === 'ocirepositories') return getOCIRepositoryStatus(resource).text
       if (kindLower === 'helmrepositories') return getHelmRepositoryStatus(resource).text
       if (kindLower === 'kustomizations') return getKustomizationStatus(resource).text
@@ -2799,6 +2830,11 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       return getStorageClassExpansion(resource)
     case 'automount':
       return getServiceAccountAutomount(resource)
+    case 'mutationCount':
+      return _isApiGroup(resource.apiVersion, 'admissionregistration.k8s.io') && Array.isArray(resource.spec?.mutations) ? String(resource.spec.mutations.length) : ''
+    case 'reinvocationPolicy':
+    case 'policyName':
+      return _isApiGroup(resource.apiVersion, 'admissionregistration.k8s.io') ? resource.spec?.[column] ?? '' : ''
     case 'policyTypes':
       return getNetworkPolicyTypes(resource)
     case 'types':

@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { expect, it, vi } from 'vitest'
 import { Mono, SectionTable } from './layout'
+import { ROW_HOVER } from './table'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -54,4 +55,23 @@ it('opens a row from the keyboard the way a click does, and leaves keys on contr
   expect(onInspect).toHaveBeenCalledTimes(1)
   act(() => root.unmount())
   host.remove()
+})
+
+it('applies the row hover style only to rows that open a resource', () => {
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  act(() => root.render(
+    <SectionTable
+      columns={[{ header: 'Name', cell: (name) => name }]}
+      rows={['inspectable', 'static']}
+      rowKey={(name) => name}
+      rowResource={(name) => name === 'inspectable' ? { kind: 'Pod', namespace: 'default', name } : null}
+      onInspect={vi.fn()}
+      empty="none"
+    />,
+  ))
+  const [inspectable, staticRow] = host.querySelectorAll('tbody tr')
+  expect(inspectable.className).toContain(ROW_HOVER)
+  expect(staticRow.className).not.toContain(ROW_HOVER)
+  act(() => root.unmount())
 })

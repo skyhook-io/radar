@@ -28,7 +28,7 @@ import (
 // --namespace-scope clamp still bounds the request, and no namespace the
 // caller did not name is ever reported as denied.
 func (s *Server) handleVeleroWorkspace(w http.ResponseWriter, r *http.Request) {
-	if !s.requireConnected(w) {
+	if !s.requireConnected(w) || s.writeIfDiscoveryPending(w) {
 		return
 	}
 	reader, ok := s.veleroReader(r)
@@ -52,6 +52,9 @@ func (s *Server) handleVeleroScheduleActivity(w http.ResponseWriter, r *http.Req
 	}
 	if namespace == "" || name == "" {
 		s.writeError(w, http.StatusBadRequest, "schedule namespace and name are required")
+		return
+	}
+	if s.writeIfDiscoveryPending(w) {
 		return
 	}
 	reader, ok := s.veleroReader(r)
@@ -99,6 +102,9 @@ func (s *Server) handleVeleroRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	namespace := r.URL.Query().Get("namespace")
 	if namespace != "" && s.refuseOutsideVeleroPin(w, namespace) {
+		return
+	}
+	if s.writeIfDiscoveryPending(w) {
 		return
 	}
 	reader, ok := s.veleroReader(r)

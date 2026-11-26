@@ -149,10 +149,10 @@ func TestClusterScopedForNamespaceBudgetsAndAuthorizesBeforeCapping(t *testing.T
 
 	// A change the timeline failed to store leaves the window incomplete too.
 	t.Cleanup(timeline.GetMetrics().Reset)
-	timeline.RecordDrop("ValidatingWebhookConfiguration", "", "lost", timeline.DropReasonStoreFailed, "update", k8s.ActiveClusterContext())
+	timeline.CaptureStore().RecordDrop("ValidatingWebhookConfiguration", "", "lost", timeline.DropReasonStoreFailed, "update", k8s.ActiveClusterContext())
 	// Routine drops past the debugging ring's size must not hide it.
 	for n := 0; n < 150; n++ {
-		timeline.RecordDrop("ConfigMap", "other", fmt.Sprintf("cm-%d", n), "no_diff", "update", k8s.ActiveClusterContext())
+		timeline.CaptureStore().RecordDrop("ConfigMap", "other", fmt.Sprintf("cm-%d", n), "no_diff", "update", k8s.ActiveClusterContext())
 	}
 	if failed := ClusterScopedForNamespace(context.Background(), "shop", shop, time.Hour, nil, false); !strings.Contains(failed.Incomplete, "Radar failed to record a ValidatingWebhookConfiguration change at") {
 		t.Fatalf("failed recording not disclosed: %+v", failed.Incomplete)
@@ -189,7 +189,7 @@ func TestClusterScopedForNamespaceBudgetsAndAuthorizesBeforeCapping(t *testing.T
 	if strings.Contains(quiet.Incomplete, "only since") || len(quiet.Changes) != 5 {
 		t.Fatalf("startup-only note kept on the quiet view: %+v", quiet.Incomplete)
 	}
-	timeline.RecordDrop("MutatingWebhookConfiguration", "", "lost", timeline.DropReasonStoreFailed, "update", k8s.ActiveClusterContext())
+	timeline.CaptureStore().RecordDrop("MutatingWebhookConfiguration", "", "lost", timeline.DropReasonStoreFailed, "update", k8s.ActiveClusterContext())
 	both := ClusterScopedForNamespace(context.Background(), "shop", shop, time.Hour, nil, true)
 	if !strings.Contains(both.Incomplete, "Radar has recorded changes only since") || !strings.Contains(both.Incomplete, "failed to record a MutatingWebhookConfiguration change") {
 		t.Fatalf("startup note dropped beside another gap: %+v", both.Incomplete)

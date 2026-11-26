@@ -13,6 +13,7 @@ import (
 	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/opencost"
+	"github.com/skyhook-io/radar/internal/openobserve"
 	"github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/traffic"
 	"github.com/skyhook-io/radar/pkg/prom"
@@ -112,18 +113,26 @@ func (r *Runtime) activate(target k8s.ProfileTarget, selected map[config.Integra
 		switch kind {
 		case config.IntegrationMetrics:
 			if s.Err != nil {
+				openobserve.Default.Clear()
 				metricsChanged = prometheus.GetClient() != nil
 				prometheus.Retire()
 				traffic.SetMetricsConfig("", nil)
 			} else {
 				if prometheus.GetClient() == nil {
-					prometheus.Initialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
+					conn := k8s.Current()
+					prometheus.Initialize(conn.ClientInterface(), conn.Config(), conn.ContextName())
 				}
+				// Precedence: the shared OpenObserve connection for a cluster
+				// matched to it, then a URL set by hand for this context (saved
+				// or --prometheus-url), then discovery. The OpenObserve relay
+				// layers over the configured client, so the hand-set URL stays
+				// configured and serves again once the match is removed.
 				url, headers := prometheus.CurrentConfig()
 				metricsChanged = url != strings.TrimRight(s.Settings.Prometheus.URL, "/") || !maps.Equal(headers, s.Settings.Prometheus.Headers)
 				if metricsChanged {
 					prometheus.Configure(s.Settings.Prometheus.URL, s.Settings.Prometheus.Headers)
 				}
+				openobserve.Default.Apply(openObserveTarget(target))
 				traffic.SetMetricsConfig(s.Settings.Prometheus.URL, s.Settings.Prometheus.Headers)
 			}
 			opencost.Reset()
@@ -153,6 +162,28 @@ func (r *Runtime) activate(target k8s.ProfileTarget, selected map[config.Integra
 			}
 		}()
 	}
+}
+
+func openObserveTarget(target k8s.ProfileTarget) openobserve.Target {
+	return openobserve.Target{Context: target.Context, Fingerprint: target.Fingerprint, Client: k8s.Current().ClientInterface()}
+}
+
+// RefreshOpenObserve applies the saved OpenObserve connection again for the
+// active context after it or one of its matches changed. It does nothing
+// while the context's metrics are off or failed to resolve. While Kubernetes
+// is unreachable it forgets the active metrics selection instead, so the
+// Apply on reconnect activates metrics again with the change.
+func (r *Runtime) RefreshOpenObserve() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if k8s.GetConnectionStatus().State != k8s.StateConnected {
+		delete(r.active, config.IntegrationMetrics)
+		return
+	}
+	if s, ok := r.active[config.IntegrationMetrics]; !ok || s.Err != nil {
+		return
+	}
+	openobserve.Default.Refresh(openObserveTarget(r.target))
 }
 
 func CostConfig(s connections.Selection, target k8s.ProfileTarget) opencost.ManagerConfig {

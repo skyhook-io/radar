@@ -26,6 +26,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
 	internalopencost "github.com/skyhook-io/radar/internal/opencost"
+	"github.com/skyhook-io/radar/internal/openobserve"
 	"github.com/skyhook-io/radar/internal/portforward"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/server"
@@ -101,8 +102,9 @@ type AppConfig struct {
 	Version                     string
 	MCPReadOnly                 bool
 	MCPEnabled                  bool
-	MCPExecTools                bool   // register exec_pod (--mcp-exec-tools)
-	MCPHTTPTools                bool   // register curl_service (--mcp-http-tools)
+	MCPExecTools                bool // register exec_pod (--mcp-exec-tools)
+	MCPHTTPTools                bool // register curl_service (--mcp-http-tools)
+	MCPOAuthEnabled             bool
 	AIHistory                   bool   // persist AI investigations across restarts
 	AIHistoryDBPath             string // "" = ~/.radar/ai-runs.db
 	AuthConfig                  auth.Config
@@ -342,12 +344,7 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 
 	RegisterLastContextMemory(cfg)
 
-	k8s.RegisterTimelineFuncs(func() {
-		// Reset the store AND the per-cluster event-pipeline metrics: RecentDrops
-		// name resources from the previous cluster and must not survive the switch.
-		timeline.ResetStore()
-		timeline.ResetMetricsForContextSwitch()
-	}, func() error {
+	k8s.RegisterTimelineFuncs(timeline.ResetStore, func() error {
 		if err := timeline.ReinitStore(timelineStoreCfg); err != nil {
 			log.Printf("Warning: timeline init failed, continuing degraded: %v", err)
 		}
@@ -355,7 +352,8 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 	})
 
 	// Initialize Prometheus metrics client (must come before SetManualURL)
-	prometheuspkg.Initialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
+	conn := k8s.Current()
+	prometheuspkg.Initialize(conn.ClientInterface(), conn.Config(), conn.ContextName())
 	prometheuspkg.RegisterRediscoverySignals()
 
 	if cfg.PrometheusURL != "" {
@@ -409,7 +407,8 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 				traffic.SetMetricsConfig(selection.Settings.Prometheus.URL, selection.Settings.Prometheus.Headers)
 			}
 		}
-		return traffic.ReinitializeWithConfig(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
+		conn := k8s.Current()
+		return traffic.ReinitializeWithConfig(conn.ClientInterface(), conn.Config(), conn.ContextName())
 	})
 
 	// Shared installations: Reinitialize carries the current manual URL + headers
@@ -430,17 +429,27 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 			if cfg.LocalConnections.HasLaunchOverride(config.IntegrationMetrics) && selection.View.State != "launch" {
 				log.Printf("[prometheus] --prometheus-url applies only to the context Radar was launched on; %q uses its own metrics settings", k8s.SanitizeForLog(k8s.GetContextName()))
 			}
-			prometheuspkg.Reinitialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
+			conn := k8s.Current()
+			prometheuspkg.Reinitialize(conn.ClientInterface(), conn.Config(), conn.ContextName())
 			url, headers := prometheuspkg.CurrentConfig()
 			if url != strings.TrimRight(selection.Settings.Prometheus.URL, "/") || !maps.Equal(headers, selection.Settings.Prometheus.Headers) {
 				prometheuspkg.Configure(selection.Settings.Prometheus.URL, selection.Settings.Prometheus.Headers)
 			}
 			return nil
 		}
-		prometheuspkg.Reinitialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
+		conn := k8s.Current()
+		prometheuspkg.Reinitialize(conn.ClientInterface(), conn.Config(), conn.ContextName())
 		return nil
 	})
 	k8s.RegisterCostResetFunc(internalopencost.Reset)
+	// The automatic cost source was chosen against the metrics backend; an
+	// OpenObserve relay starting, changing or ending makes it choose again,
+	// as a metrics settings change does.
+	prometheuspkg.OnRelayChange(func() {
+		internalopencost.Reset()
+		internalopencost.InvalidateCurrency()
+	})
+	openobserve.Default.LogIfIgnored()
 	if cfg.LocalConnections != nil {
 		cfg.LocalRuntime = connectionruntime.New(cfg.LocalConnections, k8s.RestartTrafficSubsystem)
 		argocd.SetConfig("", "", false, true)
@@ -603,7 +612,8 @@ func CreateServer(cfg AppConfig) *server.Server {
 			HasPrometheusURL:     cfg.PrometheusURL != "",
 			HasPrometheusHeaders: len(cfg.PrometheusHeaders) > 0,
 		},
-		AuthConfig: cfg.AuthConfig,
+		AuthConfig:      cfg.AuthConfig,
+		MCPOAuthEnabled: cfg.MCPOAuthEnabled,
 		CloudConnect: server.CloudConnectConfig{
 			HubAPIURL:             cfg.HubAPIURL,
 			HubAppURL:             cfg.HubAppURL,

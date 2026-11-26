@@ -67,6 +67,7 @@ type manageCronJobInput struct {
 	Action    string `json:"action" jsonschema:"action to perform: trigger, suspend, or resume"`
 	Namespace string `json:"namespace" jsonschema:"cronjob namespace"`
 	Name      string `json:"name" jsonschema:"cronjob name"`
+	JobName   string `json:"job_name,omitempty" jsonschema:"trigger only: the new Job's name; omit to generate one"`
 }
 
 type getWorkloadLogsInput struct {
@@ -119,7 +120,7 @@ func handleManageWorkload(ctx context.Context, req *mcp.CallToolRequest, input m
 	switch strings.ToLower(input.Action) {
 	case "restart":
 		warnings := schedulingBlockerWarnings(ctx, kind, input.Namespace, input.Name)
-		if err := k8s.RestartWorkloadWithClient(ctx, kind, input.Namespace, input.Name, dynClient); err != nil {
+		if _, err := k8s.RestartWorkloadWithClient(ctx, kind, input.Namespace, input.Name, dynClient); err != nil {
 			return nil, nil, restartFailure(err)
 		}
 		resp := map[string]any{
@@ -269,9 +270,14 @@ func handleManageCronJob(ctx context.Context, req *mcp.CallToolRequest, input ma
 		return nil, nil, errNotConnected()
 	}
 
-	switch strings.ToLower(input.Action) {
+	action := strings.ToLower(input.Action)
+	if input.JobName != "" && action != "trigger" {
+		return nil, nil, fmt.Errorf("job_name applies only to action=trigger, not %q", input.Action)
+	}
+
+	switch action {
 	case "trigger":
-		job, err := k8s.TriggerCronJobWithClient(ctx, input.Namespace, input.Name, dynClient)
+		job, err := k8s.TriggerCronJobWithClient(ctx, input.Namespace, input.Name, input.JobName, dynClient)
 		if err != nil {
 			return nil, nil, fmt.Errorf("trigger failed: %w", err)
 		}

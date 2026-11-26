@@ -79,6 +79,10 @@ func main() {
 	if len(os.Args) >= 2 && os.Args[1] == "cloud" {
 		runCloudSubcommand()
 	}
+	// `radar openobserve <sub>` manages local Radar's shared OpenObserve connection.
+	if len(os.Args) >= 2 && os.Args[1] == "openobserve" {
+		runOpenObserveSubcommand()
+	}
 
 	// Load persistent config (~/.radar/config.json) for flag defaults.
 	// CLI flags override config file values.
@@ -124,7 +128,7 @@ func main() {
 	aiHistory := flag.Bool("ai-history", fileCfg.AIHistoryOr(true), "Persist AI investigations (transcripts + conclusions) to ~/.radar/ai-runs.db so they survive restarts")
 	// Traffic/metrics options
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
-	workloadSingleCluster := flag.Bool("prometheus-single-cluster", false, "Optional workload/PVC metrics scope override: assert that the backend contains only this Kubernetes cluster. Replaces automatic matching; not saved, and cleared when the cluster, backend or credentials change. Does not scope rightsizing, node/HPA or legacy network/storage metrics.")
+	workloadSingleCluster := flag.Bool("prometheus-single-cluster", false, "Optional workload/PVC metrics scope override: assert that the backend contains only this Kubernetes cluster. Replaces automatic matching; not saved, and cleared when the cluster, backend or credentials change. Also applies to rightsizing, the node/HPA and other metrics charts, and OpenCost costs from the store.")
 	workloadClusterLabels := map[string]string{}
 	flag.Func("prometheus-cluster-label", "Optional workload/PVC metrics scope override, also used for the Caretta/Beyla/Istio traffic map on a metrics store you configured: exact label=value identifying this cluster, e.g. cluster=production (repeatable, ANDed). Alternative to --prometheus-single-cluster, with the same lifetime and scope; leave both unset for automatic matching.", func(raw string) error {
 		key, value, ok := strings.Cut(raw, "=")
@@ -154,6 +158,7 @@ func main() {
 	mcpFlags := config.RegisterMCPFlags(flag.CommandLine, fileCfg)
 	mcpCatalogStdio := flag.Bool("mcp-catalog-stdio", false, "Start only the MCP catalog over stdio for registry/inspector introspection; skips Kubernetes initialization")
 	mcpCatalogOnly := flag.Bool("mcp-catalog-only", false, "Start only the MCP endpoint for registry/inspector catalog introspection; skips Kubernetes initialization")
+	mcpOAuth := flag.Bool("mcp-oauth", false, "Enable OAuth for remote MCP clients (OIDC mode, single replica only)")
 	// Auth flags
 	authMode := flag.String("auth-mode", "none", "Authentication mode: none, proxy, or oidc")
 	authSecret := flag.String("auth-secret", "", "HMAC secret key for session cookies (auto-generated if empty)")
@@ -411,6 +416,9 @@ func main() {
 		*kubeconfig, *kubeconfigDir, kubeconfigFlagSet, kubeconfigDirsFlagSet,
 	)
 	mcpEnabled := mcpMode.Enabled
+	if *mcpOAuth && (!mcpEnabled || *authMode != "oidc" || *cloudURL != "" || cloud.Mode() || *mcpCatalogOnly || *mcpCatalogStdio) {
+		log.Fatal("--mcp-oauth requires OIDC authentication and MCP enabled in a standalone deployment")
+	}
 	if *mcpCatalogOnly || *mcpCatalogStdio {
 		mcpEnabled = true
 	}
@@ -479,6 +487,7 @@ func main() {
 		MCPReadOnly:                 mcpMode.ReadOnly,
 		MCPExecTools:                mcpFlags.ExecToolsEnabled(),
 		MCPHTTPTools:                mcpFlags.HTTPToolsEnabled(),
+		MCPOAuthEnabled:             *mcpOAuth,
 		AIHistory:                   *aiHistory,
 		AIHistoryDBPath:             fileCfg.AIHistoryDBPath,
 		Version:                     version,
@@ -647,6 +656,7 @@ func main() {
 				// only the image, leaving an older pod template in place.
 				SelfUpgradeAvailable: func() bool { return canSelfUpgrade(rootCtx, k8s.GetClient(), namespace, deploymentName) },
 				Handler:              srv.Handler(),
+				OnMetricsSource:      app.ApplyHubMetricsSource,
 			}
 			var runErr error
 			if cloudStart.mode == cloudEnrollMode {

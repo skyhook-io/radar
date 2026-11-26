@@ -3,20 +3,19 @@ package k8s
 import "testing"
 
 func TestInvalidateCapabilitiesCacheClearsUserCaches(t *testing.T) {
-	InvalidateCapabilitiesCache()
-	t.Cleanup(InvalidateCapabilitiesCache)
+	conn := &Connection{}
 
 	const username = "alice"
 	namespaceKey := userNamespaceCapabilitiesCacheKey(username, nil, "default")
-	userCapabilitiesCache.Store(username, &userCapEntry{})
-	userNamespaceCapabilitiesCache.Store(namespaceKey, &userNSCapEntry{})
+	conn.permissions().userCapabilitiesCache.Store(username, &userCapEntry{})
+	conn.permissions().userNamespaceCapabilitiesCache.Store(namespaceKey, &userNSCapEntry{})
 
-	InvalidateCapabilitiesCache()
+	conn.ResetPermissions()
 
-	if _, ok := userCapabilitiesCache.Load(username); ok {
+	if _, ok := conn.permissions().userCapabilitiesCache.Load(username); ok {
 		t.Error("user capabilities cache was not cleared")
 	}
-	if _, ok := userNamespaceCapabilitiesCache.Load(namespaceKey); ok {
+	if _, ok := conn.permissions().userNamespaceCapabilitiesCache.Load(namespaceKey); ok {
 		t.Error("user namespace capabilities cache was not cleared")
 	}
 }

@@ -2,6 +2,7 @@
 
 import type { StatusBadge } from './resource-utils'
 import { healthColors } from './resource-utils'
+import { isApiGroup } from './resource-utils-cnpg'
 import type { FluxCondition } from '../../types/gitops'
 import { getFluxDeployedRelease, getFluxHelmChartVersion } from '../../utils/flux-history'
 
@@ -195,4 +196,67 @@ export function getFluxAlertProvider(alert: any): string {
 
 export function getFluxAlertEventCount(alert: any): number {
   return alert.spec?.eventSources?.length || 0
+}
+
+// ============================================================================
+// ExternalArtifact (source.toolkit.fluxcd.io) and ArtifactGenerator
+// (source.extensions.fluxcd.io): artifacts a generator composes from sources.
+// ============================================================================
+
+export const getExternalArtifactStatus = getFluxResourceStatus
+
+// source-watcher pauses a generator with an annotation rather than
+// spec.suspend, and keeps its last Ready condition while paused.
+export function isArtifactGeneratorPaused(ag: any): boolean {
+  return String(ag?.metadata?.annotations?.['source.extensions.fluxcd.io/reconcile'] ?? '').toLowerCase() === 'disabled'
+}
+
+export function getArtifactGeneratorStatus(ag: any): StatusBadge {
+  if (isArtifactGeneratorPaused(ag)) return { text: 'Suspended', color: healthColors.degraded, level: 'degraded' }
+  return getFluxResourceStatus(ag)
+}
+
+export function getExternalArtifactRevision(ea: any): string {
+  return ea.status?.artifact?.revision || ''
+}
+
+export function getExternalArtifactGenerator(ea: any): string {
+  const ref = ea.spec?.sourceRef
+  if (ref?.kind !== 'ArtifactGenerator') return ''
+  if (ref.apiVersion && !isApiGroup(ref.apiVersion, 'source.extensions.fluxcd.io')) return ''
+  return ref.name || ''
+}
+
+// Another controller can produce an ExternalArtifact; it names itself in
+// spec.sourceRef, which is what the CRD's own Source column shows.
+export function getExternalArtifactProducer(ea: any): string {
+  const ref = ea.spec?.sourceRef
+  return ref?.kind && ref?.name ? `${ref.kind}/${ref.name}` : ''
+}
+
+// Digest revisions ("latest@sha256:…") read as the tag and 12 hex chars.
+export function shortArtifactRevision(revision: string): string {
+  const at = revision.indexOf('@sha256:')
+  return at >= 0 ? `${revision.slice(0, at)}@${revision.slice(at + 8, at + 20)}` : revision
+}
+
+export function getArtifactGeneratorSources(ag: any): string {
+  const sources: any[] = ag.spec?.sources || []
+  return sources
+    .filter((s) => s?.kind && s?.name)
+    .map((s) => `${s.alias ? `${s.alias}→` : ''}${s.kind}/${s.name}`)
+    .join(', ')
+}
+
+// The generated ExternalArtifacts in the inventory, or undefined when Radar
+// can't read one. source-watcher 2.3 also records the Namespaces it manages
+// there; entries from earlier versions carry no kind.
+export function getArtifactGeneratorArtifacts(ag: any): any[] | undefined {
+  const inventory = ag.status?.inventory
+  if (!Array.isArray(inventory)) return undefined
+  return inventory.filter((e) => e && (!e.kind || e.kind === 'ExternalArtifact'))
+}
+
+export function getArtifactGeneratorCount(ag: any): number | undefined {
+  return getArtifactGeneratorArtifacts(ag)?.length
 }

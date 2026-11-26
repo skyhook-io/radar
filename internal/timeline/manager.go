@@ -144,7 +144,7 @@ func NewDegradedMemoryStore(maxSize int, reason string) *pkgtimeline.MemoryStore
 
 var (
 	globalStoreInitMu sync.Mutex
-	globalStore       EventStore
+	globalStore       = newStoreBinding()
 	globalStoreOnce   sync.Once
 	globalStoreMu     sync.Mutex
 	globalConfig      StoreConfig
@@ -323,23 +323,56 @@ func HistoryEvictedThrough() time.Time {
 	return time.Time{}
 }
 
-// GetStore returns the global event store instance.
-func GetStore() EventStore {
+// StoreBinding belongs to one timeline initialization. PostgreSQL can become
+// available after the informers start, so they capture the binding and resolve
+// its store for each change. ResetStore leaves old bindings with their store and metrics.
+type StoreBinding struct {
+	retired                         atomic.Bool
+	store                           EventStore
+	metrics                         *EventMetrics
+	deletedWhileUnavailable         map[string]struct{}
+	deletedWhileUnavailableOverflow bool
+}
+
+func newStoreBinding() *StoreBinding {
+	return &StoreBinding{metrics: newEventMetrics()}
+}
+
+func CaptureStore() *StoreBinding {
 	globalStoreMu.Lock()
 	defer globalStoreMu.Unlock()
 	return globalStore
 }
 
-// setGlobalStore assigns the global store under the same lock GetStore/ResetStore
-// use. The InitStore write and concurrent GetStore reads (informer callbacks on
-// other goroutines) would otherwise race on the bare global.
+func (b *StoreBinding) Retired() bool {
+	return b.retired.Load()
+}
+
+func (b *StoreBinding) Store() EventStore {
+	globalStoreMu.Lock()
+	defer globalStoreMu.Unlock()
+	return b.store
+}
+
+// GetStore returns the global event store instance.
+func GetStore() EventStore {
+	globalStoreMu.Lock()
+	defer globalStoreMu.Unlock()
+	return globalStore.store
+}
+
 func setGlobalStore(s EventStore) {
 	globalStoreMu.Lock()
-	globalStore = s
+	globalStore.store = s
 	globalStoreMu.Unlock()
 }
 
-// ResetStore stops and clears the event store.
+// SetStoreForTest lets a test wrap the current store to control when an operation runs.
+func SetStoreForTest(s EventStore) {
+	setGlobalStore(s)
+}
+
+// ResetStore stops and clears the event store and replaces its metrics.
 // This must be called before reinitializing when switching contexts.
 func ResetStore() {
 	globalStoreInitMu.Lock()
@@ -348,8 +381,9 @@ func ResetStore() {
 	stopPostgresReconnect()
 
 	globalStoreMu.Lock()
-	store := globalStore
-	globalStore = nil
+	globalStore.retired.Store(true)
+	store := globalStore.store
+	globalStore = newStoreBinding()
 	observationStartNanos.Store(0)
 	globalStoreOnce = sync.Once{}
 	globalStoreErr = nil

@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,7 +11,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes"
 	kubernetesfake "k8s.io/client-go/kubernetes/fake"
@@ -181,29 +181,26 @@ func TestBootstrapCutShortRetryKeepsTheFirstResult(t *testing.T) {
 // publishes nothing, so a retry the budget cut short never becomes the
 // process-wide result that capabilities, visibility and CRD scoping read.
 func TestBootstrapPublishesOnlyTheChosenResult(t *testing.T) {
-	InvalidateResourcePermissionsCache()
-	t.Cleanup(InvalidateResourcePermissionsCache)
 	prevClient := SetTestClient(kubernetes.NewForConfigOrDie(&rest.Config{Host: "http://127.0.0.1:1"}))
 	t.Cleanup(func() { SetTestClient(prevClient) })
 	t.Cleanup(SetTestPermissionProbeClient(func() {}))
-	if probe := freshResourcePermissions(context.Background(), false); probe.result == nil || GetCachedPermissionResult() != nil {
+	if probe := Current().freshResourcePermissions(context.Background(), false); probe.result == nil || GetCachedPermissionResult() != nil {
 		t.Fatalf("probing published its result: %+v", GetCachedPermissionResult())
 	}
 
 	rejection := apierrors.NewUnauthorized("token expired mid-probe")
 	partial := &PermissionCheckResult{Perms: &ResourcePermissions{Pods: true}, Scopes: map[string]k8score.ResourceScope{"pods": {Enabled: true, Namespace: "beta"}, "secrets": {}}, ProbeErrors: map[string]error{"secrets": rejection}}
 	guess := &PermissionCheckResult{Perms: &ResourcePermissions{Pods: true, Secrets: true}, Scopes: map[string]k8score.ResourceScope{"pods": {Enabled: true}, "secrets": {Enabled: true}}}
-	resourcePermsMu.RLock()
-	gen := resourcePermsGen
-	resourcePermsMu.RUnlock()
+	conn := Current()
+	state := conn.permissions()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 	chosen, err := bootstrapResourcePermissions(ctx, func(ctx context.Context, retry bool) permissionProbe {
 		if !retry {
-			return permissionProbe{result: partial, hadErrors: true, gen: gen, unpublished: true}
+			return permissionProbe{result: partial, hadErrors: true, conn: conn, state: state, unpublished: true}
 		}
 		<-ctx.Done()
-		return permissionProbe{result: guess, gen: gen, unpublished: true}
+		return permissionProbe{result: guess, conn: conn, state: state, unpublished: true}
 	})
 	if err != nil || chosen.result != partial {
 		t.Fatalf("a cut-short retry replaced the first result: got=%+v err=%v", chosen.result, err)
@@ -223,8 +220,6 @@ func TestBootstrapPublishesOnlyTheChosenResult(t *testing.T) {
 // The startup probe's retry probes again instead of reading back the cached
 // rejection it is retrying.
 func TestFreshResourcePermissionsRetryProbesAgain(t *testing.T) {
-	InvalidateResourcePermissionsCache()
-	t.Cleanup(InvalidateResourcePermissionsCache)
 	prevClient := SetTestClient(kubernetes.NewForConfigOrDie(&rest.Config{Host: "http://127.0.0.1:1"}))
 	t.Cleanup(func() { SetTestClient(prevClient) })
 	lists := 0
@@ -232,10 +227,10 @@ func TestFreshResourcePermissionsRetryProbesAgain(t *testing.T) {
 	cached := &PermissionCheckResult{Perms: &ResourcePermissions{}, Scopes: map[string]k8score.ResourceScope{"pods": {}}, ProbeErrors: map[string]error{"pods": apierrors.NewUnauthorized("expired")}}
 	t.Cleanup(SetTestPermissionResult(cached))
 
-	if got := freshResourcePermissions(context.Background(), false).result; got.ProbeErrors["pods"] == nil || lists != 0 {
+	if got := Current().freshResourcePermissions(context.Background(), false).result; got.ProbeErrors["pods"] == nil || lists != 0 {
 		t.Fatalf("the first probe should read the cached result: %+v lists=%d", got, lists)
 	}
-	got := freshResourcePermissions(context.Background(), true).result
+	got := Current().freshResourcePermissions(context.Background(), true).result
 	if lists == 0 || len(got.ProbeErrors) != 0 || !got.Scopes["pods"].Enabled {
 		t.Fatalf("the retry replayed the cached rejection: errors=%v pods=%+v lists=%d", got.ProbeErrors, got.Scopes["pods"], lists)
 	}
@@ -250,23 +245,16 @@ func bootstrapResult(ctx context.Context, check func(context.Context, bool) *Per
 	return probe.result, err
 }
 
-// A context switch installs the new client before it bumps the generation, so
-// a probe must read the generation before the client. Otherwise a probe can
-// pick the previous cluster's client, read the bumped generation, and publish
-// the previous cluster's access as the new one's.
+// Switching between capturing the connection and reading its client must
+// leave the result on the connection that supplied the client.
 func TestProbeReadsClientAfterGeneration(t *testing.T) {
-	InvalidateResourcePermissionsCache()
-	t.Cleanup(InvalidateResourcePermissionsCache)
 	prevClient := SetTestClient(kubernetes.NewForConfigOrDie(&rest.Config{Host: "http://127.0.0.1:1"}))
 	t.Cleanup(func() { SetTestClient(prevClient) })
-	previousCluster := fakeDyn(t, func(schema.GroupVersionResource, string) bool { return true })
+	t.Cleanup(SetTestPermissionProbeClient(func() {}))
+	conn := Current()
+	t.Cleanup(ReconnectTestClient(conn.Client()))
 
-	probe := probeResourcePermissions(context.Background(), false, func() dynamic.Interface {
-		// The switch lands here: the previous client was already picked, and
-		// the generation moves on.
-		InvalidateResourcePermissionsCache()
-		return previousCluster
-	})
+	probe := conn.probeResourcePermissions(context.Background(), false, conn.Dynamic())
 	if publishResourcePermissions(probe) || GetCachedPermissionResult() != nil {
 		t.Fatalf("the previous cluster's result was published under the new generation: %+v", GetCachedPermissionResult())
 	}
@@ -295,5 +283,25 @@ func TestCancelPermissionProbeWithBlockedCredentialPlugin(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("cache initialization waited for the credential plugin to exit")
+	}
+}
+
+func TestResetAllSubsystemsIsolatesInFlightPermissionProbe(t *testing.T) {
+	t.Cleanup(ResetTestState)
+	client := kubernetes.NewForConfigOrDie(&rest.Config{Host: "http://127.0.0.1:1"})
+	t.Cleanup(ReconnectTestClient(client))
+	reset := sync.OnceFunc(ResetAllSubsystems)
+	t.Cleanup(SetTestPermissionProbeClient(reset))
+	before := Current()
+
+	probed, current := CheckResourcePermissions(t.Context())
+	if current || Current() == before || Current().Client() != client {
+		t.Fatal("reset must install a fresh connection on the same client")
+	}
+	if !probed.Perms.Pods || before.permissions().cachedPermResult != probed {
+		t.Fatal("the completed probe did not land on its original connection")
+	}
+	if got := GetCachedPermissionResult(); got != nil {
+		t.Fatalf("the fresh connection served the earlier probe: %+v", got)
 	}
 }

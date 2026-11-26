@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { compareVersions } from './utils/version'
 
 // Radar's own build aliases @skyhook-io/k8s-ui to its source, so a deep
 // import that the package's `exports` map can't serve still builds here and
@@ -49,6 +50,15 @@ function sourceFiles(dir: string): string[] {
     return /\.(ts|tsx|css)$/.test(name) && !/\.test\.(ts|tsx)$/.test(name) ? [path] : []
   })
 }
+
+test('radar-app requires a k8s-ui peer that types workflowStop and workloadRestartPreconditions', () => {
+  const manifest = JSON.parse(readFileSync(resolve(here, '../package.json'), 'utf8'))
+  const lock = JSON.parse(readFileSync(resolve(here, '../../package-lock.json'), 'utf8'))
+  const range = manifest.peerDependencies['@skyhook-io/k8s-ui']
+  expect(lock.packages.web.peerDependencies['@skyhook-io/k8s-ui']).toBe(range)
+  expect(range).toMatch(/^>=/)
+  expect(compareVersions(range.slice(2), '1.21.7')).toBeGreaterThanOrEqual(0)
+})
 
 describe('@skyhook-io/k8s-ui deep imports', () => {
   const imports = new Set<string>()

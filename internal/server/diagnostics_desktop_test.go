@@ -102,6 +102,7 @@ func TestDiagnosticsDuringConnectionReturnsPartialSnapshot(t *testing.T) {
 }
 
 func TestDiagnosticsClusterUsesOnlyCurrentCacheObservations(t *testing.T) {
+	t.Cleanup(k8s.SwapResourceCacheForTest(nil))
 	var requests atomic.Int32
 	var serveVersion atomic.Bool
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -194,8 +195,8 @@ func TestDiagnosticsConnectionUpdatesDuringCollection(t *testing.T) {
 	previousName := k8s.SetTestContextName("old")
 	t.Cleanup(func() { k8s.SetTestContextName(previousName) })
 	t.Cleanup(k8s.SetTestContextCount(25))
-	timeline.RecordDrop("Pod", "default", "old-pod", "no_diff", "update", k8s.ActiveClusterContext())
-	t.Cleanup(timeline.ResetMetricsForContextSwitch)
+	timeline.CaptureStore().RecordDrop("Pod", "default", "old-pod", "no_diff", "update", k8s.ActiveClusterContext())
+	t.Cleanup(func() { timeline.GetMetrics().Reset() })
 
 	for _, tc := range []struct {
 		name  string
@@ -234,7 +235,7 @@ func TestDiagnosticsConnectionUpdatesDuringCollection(t *testing.T) {
 				t.Fatalf("could not seed cluster observation: %+v, %v", info, err)
 			}
 
-			s := &Server{broadcaster: &SSEBroadcaster{}, permCache: auth.NewPermissionCache(), diagConfig: &DiagConfig{Port: 9280}}
+			s := &Server{broadcaster: &SSEBroadcaster{}, permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection), diagConfig: &DiagConfig{Port: 9280}}
 			s.permCache.Set("viewer", nil, &auth.UserPermissions{AllowedNamespaces: []string{"default"}})
 			rec := httptest.NewRecorder()
 			s.handleDiagnostics(rec, requestWithUser("GET", "/api/diagnostics", &auth.User{Username: "viewer"}))
@@ -274,6 +275,7 @@ func TestDiagnosticsConnectionUpdatesDuringCollection(t *testing.T) {
 // can name the previous context while the current cache serves the new one:
 // the cache's observation must not be reported under that context.
 func TestDiagnosticsOmitsClusterObservedForAnotherContext(t *testing.T) {
+	t.Cleanup(k8s.SwapResourceCacheForTest(nil))
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/version" {
 			w.Header().Set("Content-Type", "application/json")
@@ -347,8 +349,8 @@ func TestDiagnosticsWhileKubeconfigWriterIsBusy(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(restore)
-	timeline.RecordDrop("Pod", "default", "private-pod", "no_diff", "update", k8s.ActiveClusterContext())
-	t.Cleanup(timeline.ResetMetricsForContextSwitch)
+	timeline.CaptureStore().RecordDrop("Pod", "default", "private-pod", "no_diff", "update", k8s.ActiveClusterContext())
+	t.Cleanup(func() { timeline.GetMetrics().Reset() })
 
 	s := &Server{broadcaster: &SSEBroadcaster{}, diagConfig: &DiagConfig{Port: 9280}}
 	rec := httptest.NewRecorder()
@@ -370,7 +372,9 @@ func TestDiagnosticsWhileKubeconfigWriterIsBusy(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &snap); err != nil {
 		t.Fatal(err)
 	}
-	if snap.Kubeconfig != nil || snap.APIDiscovery != nil || snap.EventPipeline == nil || len(snap.EventPipeline.RecentDrops) != 0 || snap.Runtime == nil {
+	// Discovery lives on the connection, read without the kubeconfig lock, so it
+	// is reported even while a kubeconfig writer holds that lock.
+	if snap.Kubeconfig != nil || snap.APIDiscovery == nil || snap.EventPipeline == nil || len(snap.EventPipeline.RecentDrops) != 0 || snap.Runtime == nil {
 		t.Fatalf("incomplete diagnostics while kubeconfig is busy: %+v", snap)
 	}
 }

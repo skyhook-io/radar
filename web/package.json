@@ -43,7 +43,7 @@
     "yaml": "^2.9.1"
   },
   "peerDependencies": {
-    "@skyhook-io/k8s-ui": ">=1.19.1",
+    "@skyhook-io/k8s-ui": ">=1.21.8",
     "@tanstack/react-query": ">=5",
     "@xyflow/react": ">=12.0.0",
     "clsx": ">=2",
@@ -58,12 +58,12 @@
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.64.1",
     "@skyhook-io/k8s-ui": "*",
-    "@tailwindcss/vite": "^4.3.3",
+    "@tailwindcss/vite": "^4.3.5",
     "@tanstack/react-query": "^5.105.0",
     "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^6.1.2",
+    "@vitejs/plugin-react": "^6.3.0",
     "@xyflow/react": "^12.12.0",
     "clsx": "^2.1.1",
     "elkjs": "^0.12.1",
@@ -78,10 +78,10 @@
     "react-dom": "^19.3.0",
     "react-router-dom": "^7.18.5",
     "tailwind-merge": "^3.7.0",
-    "tailwindcss": "^4.3.3",
+    "tailwindcss": "^4.3.5",
     "typescript": "^6.0.2",
-    "typescript-eslint": "^8.72.0",
-    "vite": "^8.3.4"
+    "typescript-eslint": "^8.73.0",
+    "vite": "^8.3.8"
   },
   "sideEffects": [
     "*.css"

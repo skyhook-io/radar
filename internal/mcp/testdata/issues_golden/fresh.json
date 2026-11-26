@@ -1,0 +1,68 @@
+{
+  "issues": [
+    {
+      "severity": "critical",
+      "source": "scheduling",
+      "category": "quota_exceeded",
+      "category_group": "scheduling",
+      "id": "1f764f5895a94fa0",
+      "grouping_scope": "workload",
+      "kind": "Deployment",
+      "group": "apps",
+      "namespace": "fresh",
+      "name": "fresh-api",
+      "reason": "QuotaExceeded",
+      "message": "pod creation blocked: pods \"fresh-api-6d4f-x\" is forbidden: exceeded quota: fresh-quota, requested: pods=1, used: pods=0, limited: pods=0",
+      "first_seen": "1999-12-31T23:50:01Z",
+      "resource_created_at": "1999-12-31T23:49:55Z",
+      "last_seen": "2000-01-01T00:00:00Z",
+      "timing_summary": "ResourceQuota fresh-quota was created at 1999-12-31T23:50:00Z, after Deployment fresh-api was created at 1999-12-31T23:49:55Z: the ResourceQuota changed last.",
+      "correlated_changes": [
+        {
+          "kind": "ResourceQuota",
+          "apiVersion": "v1",
+          "namespace": "fresh",
+          "name": "fresh-quota",
+          "changeType": "add",
+          "summary": "add",
+          "timestamp": "1999-12-31T23:50:00Z",
+          "change_category": "lifecycle",
+          "rank_reason": "the object named by the admission rejection"
+        },
+        {
+          "kind": "Deployment",
+          "apiVersion": "apps/v1",
+          "namespace": "fresh",
+          "name": "fresh-api",
+          "changeType": "add",
+          "summary": "add",
+          "timestamp": "1999-12-31T23:49:55Z",
+          "change_category": "lifecycle",
+          "rank_reason": "resource create/delete for config or desired state"
+        }
+      ]
+    }
+  ],
+  "total": 1,
+  "total_matched": 1,
+  "unchecked_sources": [
+    {
+      "source": "custom_resources",
+      "reason": "kind_sync_pending"
+    },
+    {
+      "source": "kueue",
+      "reason": "kind_sync_pending",
+      "kinds": [
+        {
+          "group": "kueue.x-k8s.io",
+          "kind": "LocalQueue"
+        },
+        {
+          "group": "kueue.x-k8s.io",
+          "kind": "Workload"
+        }
+      ]
+    }
+  ]
+}

@@ -28,6 +28,7 @@ import { radarHealthNote } from '../health-provenance'
 import { servicePortsTooltip, type ServicePortEntry } from '../../topology/K8sResourceNode'
 import { getTopologyIcon } from '../../../utils/resource-icons'
 import { Tooltip } from '../../ui/Tooltip'
+import { TruncatedText } from '../../ui/TruncatedText'
 import { hasGitOpsTreeFilters, matchesGitOpsTreeFilters, treeNodeHealth, type GitOpsTreeFilters } from './tree-helpers'
 import { rankTree, renderedEdge, shortcutEdges, upstreamClosure, upstreamEdges } from './layout'
 
@@ -634,12 +635,15 @@ const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<
             {(node.role === 'group' || gitopsTool) && <ChevronRight className="ml-auto h-3 w-3 shrink-0 text-theme-text-tertiary" />}
           </div>
           {chips.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-1">
+            // One row only: the layout spaces cards by a fixed height, so a
+            // wrapped second row would run into the card below. A chip that
+            // doesn't fit is cut and shows its full text on hover.
+            <div className="mt-2 flex flex-nowrap gap-1 overflow-hidden">
               {chips.slice(0, 4).map(chip => (
                 <span
                   key={`${chip.label}:${chip.value}`}
                   className={clsx(
-                    'max-w-[145px] truncate rounded border px-1.5 py-0.5 text-[10px] leading-3',
+                    'min-w-0 max-w-[145px] shrink rounded border px-1.5 py-0.5 text-[10px] leading-3',
                     chip.tone === 'warning'
                       ? 'border-yellow-500/30 bg-yellow-500/10 text-yellow-700 dark:text-yellow-300'
                       : chip.tone === 'danger'
@@ -647,12 +651,12 @@ const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<
                         : 'border-theme-border bg-theme-elevated/70 text-theme-text-secondary'
                   )}
                 >
-                  {chip.label ? `${chip.label}: ` : ''}{chip.value}
+                  <TruncatedText text={`${chip.label ? `${chip.label}: ` : ''}${chip.value}`} />
                 </span>
               ))}
               {radarNote && (
                 <Tooltip content={radarNote} delay={200}>
-                  <span className="rounded border border-theme-border bg-theme-elevated/70 px-1.5 py-0.5 text-[10px] leading-3 text-theme-text-tertiary">
+                  <span className="shrink-0 whitespace-nowrap rounded border border-theme-border bg-theme-elevated/70 px-1.5 py-0.5 text-[10px] leading-3 text-theme-text-tertiary">
                     Found by Radar
                   </span>
                 </Tooltip>
@@ -702,7 +706,7 @@ function gitopsToolForNode(node: GitOpsTreeNode): 'argocd' | 'fluxcd' | undefine
   return undefined
 }
 
-function buildChips(node: GitOpsTreeNode): Array<{ label?: string; value: string; tone?: 'neutral' | 'warning' | 'danger' }> {
+export function buildChips(node: GitOpsTreeNode): Array<{ label?: string; value: string; tone?: 'neutral' | 'warning' | 'danger' }> {
   const data = node.data ?? {}
   const chips: Array<{ label?: string; value: string; tone?: 'neutral' | 'warning' | 'danger' }> = []
   // Terminating dominates: surface a single Terminating chip and skip the
@@ -725,7 +729,13 @@ function buildChips(node: GitOpsTreeNode): Array<{ label?: string; value: string
   const hook = stringData(data.hook)
   if (hook) chips.push({ value: hook })
   const relationship = stringData(data.relationship)
-  if (relationship) chips.push({ value: relationship })
+  // An ArtifactGenerator names each source by the alias its copy rules use.
+  const alias = stringData(data.alias)
+  const aliases = alias ? alias.split(', ').map((a) => `@${a}`).join(' ') : ''
+  if (relationship) chips.push({ value: aliases ? `${relationship} ${aliases}` : relationship })
+  if (typeof data.generatedCount === 'number') chips.push({ label: 'artifacts', value: String(data.generatedCount) })
+  // The source chain walk stopped here with more upstream; the tree's warning names where to continue.
+  if (data.chainContinues === true) chips.push({ value: 'chain continues…' })
   if (node.sync === 'OutOfSync') chips.push({ value: 'OutOfSync', tone: 'warning' })
   const health = treeNodeHealth(node)
   if (health === 'Degraded' || health === 'Missing') chips.push({ value: health, tone: 'danger' })

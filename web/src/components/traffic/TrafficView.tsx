@@ -13,11 +13,13 @@ import { TrafficSourcePill } from './TrafficSourcePill'
 import { TrafficGraphTooLarge } from './TrafficGraphTooLarge'
 import { TrafficGraphUnavailable } from './TrafficGraphUnavailable'
 import { useQueryClient } from '@tanstack/react-query'
-import { useDock } from '../dock'
+import { useDock, useDockReservedHeight } from '../dock'
 import { AlertBanner, EmptyState, PaneLoader, FreshnessControl } from '@skyhook-io/k8s-ui'
 import { useConnection } from '../../context/ConnectionContext'
+import { useDesktopBlobDownload } from '../../hooks/useDesktopDownload'
 import { Tooltip } from '../ui/Tooltip'
 import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
+import { DURATION_DOCK } from '@skyhook-io/k8s-ui/utils/animation'
 import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, groupAddonFlows, mergeFlowVolume, coverageLabel, type GraphFlow, endpointPair, graphEndpoint, graphEndpointId, mergeRawPairs, mergedEdgePort, selectedEdgeMatcher, selectionRawPairs, selectionMatch, graphSize, GRAPH_DRAW_BUDGET, GRAPH_DRAW_CEILING, parseFocus, focusParam, focusId, focusNeighborhood, touchesFocus, endpointSummaries, namespaceSummaries, verdictChoices, type TrafficFocus, warningRetries, warningBannerTitle, emptyWarningHeadline, rateWindowSeconds } from './trafficFilters'
 
 // Where a warning about which cluster the traffic belongs to points: how the map
@@ -390,6 +392,7 @@ interface TrafficViewProps {
 
 export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   const { connection } = useConnection()
+  const desktopBlobDownload = useDesktopBlobDownload()
   const [wizardState, setWizardState] = useState<TrafficWizardState>('detecting')
   const [timeRange, setTimeRange] = useState<string>('5m')
   const [hideSystem, setHideSystem] = useState(true)
@@ -429,6 +432,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   const [layoutUnavailable, setLayoutUnavailable] = useState(false)
   const dock = useDock()
   const graphPaneRef = useRef<HTMLDivElement>(null)
+  const dockInset = useDockReservedHeight()
 
   const focusValue = searchParams.get('focus')
   const focus = useMemo(() => parseFocus(focusValue), [focusValue])
@@ -1330,7 +1334,17 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
       />
 
       {/* Main content area */}
-      <div ref={graphPaneRef} className="flex-1 relative min-w-0">
+      {/* The dock spans only this pane (see setLeftOffset), so the pane
+          shrinks above it rather than the app-wide DockSpacer shrinking the
+          filter sidebar too. */}
+      <div
+        ref={graphPaneRef}
+        className="flex-1 relative min-w-0"
+        style={{
+          marginBottom: dockInset,
+          transition: dock.isResizing ? 'none' : `margin-bottom ${DURATION_DOCK}ms cubic-bezier(0.4, 0, 0.2, 1)`,
+        }}
+      >
           {/* Floating controls — overlaid on graph like topology view */}
           {(() => {
             const availableSources = sourcesData?.detected.filter(s => s.status === 'available') || []
@@ -1513,6 +1527,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
                     focusedId={focusKey}
                     onLayoutUnavailable={setLayoutUnavailable}
                     windowSeconds={rateWindowSeconds(timeRange)}
+                    onDownloadBlob={desktopBlobDownload}
                   />
                 </>
               )}

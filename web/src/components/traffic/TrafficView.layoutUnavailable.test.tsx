@@ -9,6 +9,7 @@ import type { UseTrafficRecordsOptions } from '../../api/traffic'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
+vi.mock('../../hooks/useDesktopDownload', () => ({ useDesktopBlobDownload: () => undefined }))
 vi.mock('elkjs/lib/elk.bundled.js', () => {
   throw new Error('Failed to fetch dynamically imported module')
 })

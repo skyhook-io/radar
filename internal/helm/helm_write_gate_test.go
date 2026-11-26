@@ -154,7 +154,6 @@ func TestRequireHelmWrite_NamespaceLimitedServiceAccount(t *testing.T) {
 	t.Cleanup(func() {
 		k8s.SetTestClient(prev)
 		k8s.SetRBACNamespaces(nil)
-		k8s.InvalidateCapabilitiesCache()
 	})
 
 	cases := []struct {
@@ -178,7 +177,8 @@ func TestRequireHelmWrite_NamespaceLimitedServiceAccount(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			k8s.SetRBACNamespaces(tc.rbacNamespaces)
-			k8s.InvalidateCapabilitiesCache()
+			k8s.Current().ResetPermissions()
+
 			req := httptest.NewRequest(http.MethodPost, "/api/helm/releases", nil)
 			rec := httptest.NewRecorder()
 			ok := requireHelmWrite(rec, req, tc.namespace)
@@ -189,7 +189,7 @@ func TestRequireHelmWrite_NamespaceLimitedServiceAccount(t *testing.T) {
 	}
 	// A cached grant must not turn a disconnected-cluster failure into a pass.
 	k8s.SetRBACNamespaces([]string{"app"})
-	k8s.InvalidateCapabilitiesCache()
+	k8s.Current().ResetPermissions()
 	if status, err := CheckWritePermission(t.Context(), ""); status != 0 || err != nil {
 		t.Fatalf("seed grant: %d %v", status, err)
 	}

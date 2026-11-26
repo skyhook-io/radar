@@ -1,152 +1,111 @@
 package k8s
 
 import (
-	"sync"
 	"testing"
 	"time"
+
+	"github.com/skyhook-io/radar/pkg/k8score"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
-// snapshotCacheGlobals isolates a test from (and restores) the package-level
-// cache singleton state the generation guards operate on.
-func snapshotCacheGlobals(t *testing.T) {
-	t.Helper()
-	cacheMu.Lock()
-	prevRC, prevSC, prevGen := resourceCache.Load(), syncingCache, cacheGeneration
-	resourceCache.Store(nil)
-	syncingCache = nil
-	cacheMu.Unlock()
-	t.Cleanup(func() {
-		cacheMu.Lock()
-		resourceCache.Store(prevRC)
-		syncingCache, cacheGeneration = prevSC, prevGen
-		cacheMu.Unlock()
-	})
-}
-
-func currentGen() uint64 {
-	cacheMu.Lock()
-	defer cacheMu.Unlock()
-	return cacheGeneration
-}
-
-func bumpGen() {
-	cacheMu.Lock()
-	cacheGeneration++
-	cacheMu.Unlock()
-}
-
-func TestPublishSyncingCache_GenerationGuard(t *testing.T) {
-	snapshotCacheGlobals(t)
+func TestPublishSyncingCache_ClosedConnection(t *testing.T) {
+	withFreshTestConnection(t)
+	conn := Current()
 	w := &ResourceCache{}
-
-	gen := currentGen()
-	publishSyncingCache(w, gen)
+	state := conn.cacheState()
+	state.publishSyncing(w)
 	if GetSyncingResourceCache() != w {
-		t.Fatal("publish with current generation did not install the handle")
+		t.Fatal("publish on the open connection did not install the handle")
 	}
 
-	// A context switch bumps the generation; a stale construction's publish
-	// must be a no-op — otherwise the old cluster's cache resurfaces.
-	bumpGen()
-	cacheMu.Lock()
-	syncingCache = nil
-	cacheMu.Unlock()
-	publishSyncingCache(w, gen)
+	ResetResourceCache()
+	ResetResourceDiscovery()
+	state.publishSyncing(w)
 	if GetSyncingResourceCache() != nil {
-		t.Fatal("stale-generation publish installed an old cluster's handle")
+		t.Fatal("stale publish installed an old cluster's handle")
 	}
 }
 
-func TestPromoteCache_GenerationGuard(t *testing.T) {
-	snapshotCacheGlobals(t)
+func TestPromoteCache_ClosedConnection(t *testing.T) {
+	withFreshTestConnection(t)
+	conn := Current()
 	w := &ResourceCache{}
-
-	gen := currentGen()
-	publishSyncingCache(w, gen)
-	if !promoteCache(w, gen, true) {
-		t.Fatal("promotion with current generation failed")
+	state := conn.cacheState()
+	state.publishSyncing(w)
+	if !state.promote(w, true) {
+		t.Fatal("promotion on the open connection failed")
 	}
 	if GetResourceCache() != w {
-		t.Fatal("promotion did not install the singleton")
+		t.Fatal("promotion did not install the cache")
 	}
 	if GetSyncingResourceCache() != nil {
 		t.Fatal("promotion did not retire the mid-sync handle")
 	}
 
-	// Stale promotion after a switch must refuse (caller stops the core).
-	cacheMu.Lock()
-	resourceCache.Store(nil)
-	cacheMu.Unlock()
-	bumpGen()
-	if promoteCache(w, gen, true) {
-		t.Fatal("stale-generation promotion succeeded")
+	ResetResourceCache()
+	ResetResourceDiscovery()
+	core, err := k8score.NewResourceCache(k8score.CacheConfig{Client: fake.NewClientset()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer core.Stop()
+	if state.promote(&ResourceCache{ResourceCache: core}, true) {
+		t.Fatal("stale promotion succeeded")
+	}
+	select {
+	case <-core.Done():
+	default:
+		t.Fatal("stale promotion left its core running")
 	}
 	if GetResourceCache() != nil {
-		t.Fatal("stale promotion installed the singleton")
+		t.Fatal("stale promotion installed the cache")
 	}
 }
 
-func TestClearSyncingCacheForGen_OnlyOwnGeneration(t *testing.T) {
-	snapshotCacheGlobals(t)
-	old := &ResourceCache{}
-	oldGen := currentGen()
-
-	// A newer construction published its handle; the old generation's
-	// failure cleanup must not clear it.
-	bumpGen()
+func TestClearSyncingCache_OnlyOwnConnection(t *testing.T) {
+	withFreshTestConnection(t)
+	old := Current()
+	ResetResourceCache()
+	ResetResourceDiscovery()
 	fresh := &ResourceCache{}
-	publishSyncingCache(fresh, currentGen())
-
-	clearSyncingCacheForGen(oldGen)
+	Current().cacheState().publishSyncing(fresh)
+	old.cacheState().clearSyncing()
 	if GetSyncingResourceCache() != fresh {
-		t.Fatal("stale-generation clear removed the newer construction's handle")
+		t.Fatal("stale clear removed the newer construction's handle")
 	}
-	_ = old
 }
 
 func TestResetResourceCache_InvalidatesInFlightConstruction(t *testing.T) {
-	snapshotCacheGlobals(t)
+	withFreshTestConnection(t)
+	conn := Current()
 	w := &ResourceCache{}
-	gen := currentGen()
-	publishSyncingCache(w, gen)
-
+	state := conn.cacheState()
+	state.publishSyncing(w)
 	ResetResourceCache()
-
 	if GetSyncingResourceCache() != nil {
 		t.Fatal("reset left the mid-sync handle published")
 	}
-	if promoteCache(w, gen, true) {
-		t.Fatal("reset did not invalidate the in-flight construction's generation")
+	if state.promote(w, true) {
+		t.Fatal("reset did not invalidate the in-flight construction")
 	}
 }
 
-func TestClaimCacheInit_ResetInsideDoKeepsOldGeneration(t *testing.T) {
-	snapshotCacheGlobals(t)
-	cacheMu.Lock()
-	prevOnce := cacheOnce
-	cacheOnce = new(sync.Once)
-	cacheMu.Unlock()
-	t.Cleanup(func() {
-		cacheMu.Lock()
-		cacheOnce = prevOnce
-		cacheMu.Unlock()
-	})
-
-	once, gen := claimCacheInit()
-	w := &ResourceCache{}
+func TestCacheInit_ResetInsideDoKeepsOldConnection(t *testing.T) {
+	withFreshTestConnection(t)
+	conn := Current()
+	state := conn.cacheState()
+	once := &state.once
 	once.Do(func() {
-		// A context switch after the Once was claimed but before the
-		// construction publishes: the construction must stay on its own
-		// generation, so the switch invalidates it.
 		ResetResourceCache()
-		if promoteCache(w, gen, true) {
-			t.Fatal("construction adopted the post-reset generation and promoted")
+		ResetResourceDiscovery()
+		if state.promote(&ResourceCache{}, true) {
+			t.Fatal("construction adopted the post-reset connection and promoted")
 		}
 	})
 
-	nextOnce, nextGen := claimCacheInit()
-	if nextOnce == once || nextGen == gen {
-		t.Fatal("reset did not hand out a fresh Once/generation pair")
+	next := Current().cacheState()
+	if &next.once == once || next == state {
+		t.Fatal("replacement did not have a fresh Once and lifecycle")
 	}
 }
 

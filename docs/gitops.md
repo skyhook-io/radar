@@ -53,7 +53,7 @@ Graph or table sub-modes. The graph starts from the resources the controller rec
 
 You see only the resources you can read. A readable resource under a hidden parent stays visible. Resources on another cluster, from a remote Application or a Flux object with `spec.kubeConfig`, are not expanded. When Radar can't read part of the tree, a **Limited resource view** notice says so.
 
-For Flux, the graph also shows where the root's content comes from. Its sources sit to the left of the root, with arrows pointing into it: the GitRepository, OCIRepository, Bucket or ExternalArtifact a Kustomization reads, the Kustomizations it `dependsOn`, and for a HelmRelease the chart chain. An inline `spec.chart` release draws release ← generated HelmChart (`status.helmChart`) ← the chart's source (HelmRepository, GitRepository or Bucket), so a chart that fails to pull shows as its own red node; `spec.chartRef` draws the referenced HelmChart, OCIRepository or ExternalArtifact. Source cards show what each kind has: the URL, the fetched revision, or for a HelmChart the requested chart and version. Sources are dependencies, not managed resources: they are counted separately and listed under the **Dependency** role. A source the root also manages, like a bootstrap Kustomization's own GitRepository, stays with the managed resources.
+For Flux, the graph also shows where the root's content comes from. Its sources sit to the left of the root, with arrows pointing into it: the GitRepository, OCIRepository, Bucket or ExternalArtifact a Kustomization reads, the Kustomizations it `dependsOn`, and for a HelmRelease the chart chain. An inline `spec.chart` release draws release ← generated HelmChart (`status.helmChart`) ← the chart's source (HelmRepository, GitRepository or Bucket), so a chart that fails to pull shows as its own red node; `spec.chartRef` draws the referenced HelmChart, OCIRepository or ExternalArtifact; an ExternalArtifact made by an ArtifactGenerator (Flux 2.7+, source-watcher) continues to that generator and its sources, labelled with their aliases. A generator fed by another generator's artifact is followed the same way. Only the artifact the root consumes is drawn, never the generator's other artifacts. The walk stops after eight upstream levels (four nested generators), and never revisits an object, so a cycle ends; when it stops with more to follow, the card where it stopped reads **chain continues…** and a notice names the object to open to follow it further. A generator paused with `source.extensions.fluxcd.io/reconcile: disabled` reads as Suspended, not failing, even though it keeps its last Ready condition. Source cards show what each kind has: the URL, the fetched revision, for a HelmChart the requested chart and version, or for an ArtifactGenerator how many ExternalArtifacts its inventory lists (not the Namespaces it manages; no count when Radar can't read an inventory). A generator that isn't Ready, and isn't paused, raises a warning, since the artifacts it generates may then be out of date. The Kustomization and HelmRelease drawers list `spec.healthCheckExprs` (HelmRelease from Flux 2.8) under **Health checks (expressions)**; Flux records no result per expression, so the Ready condition still names what failed. Sources are dependencies, not managed resources: they are counted separately and listed under the **Dependency** role. A source the root also manages, like a bootstrap Kustomization's own GitRepository, stays with the managed resources.
 
 GitOps CRs that are themselves managed (a child Application from an app-of-apps parent, a Kustomization referenced by another Kustomization, ApplicationSet children) render with a small `Argo` or `Flux` tool badge and a `→` chevron — click to open that CR's own GitOps detail page. The child page's breadcrumb shows the lineage `GitOps / parent-ns/parent / child-ns/child`; the parent segment is clickable to navigate back.
 
@@ -180,7 +180,7 @@ How each operation is written:
 
 #### Suspend and resume
 
-- **Suspend** saves the whole `automated` block (`prune`, `selfHeal`, `allowEmpty`, …) in the `radarhq.io/suspended-automated` annotation and removes it. Removal works with any controller. The exception is an Application an ApplicationSet owns. There, an ApplicationSet that manages `prune` or `selfHeal` would put the block back, and Argo CD reads a block without `enabled: false` as auto-sync on. So Radar switches the block off in place with `automated.enabled: false`, keeping the other fields. Auto-sync then stays off only if the ApplicationSet doesn't overwrite `enabled`, which means ignoring `/spec/syncPolicy/automated/enabled` in `ignoreApplicationDifferences` (or a create-only policy): on each update the ApplicationSet replaces the spec with its template and keeps only the fields it ignores. When it doesn't, it writes the template back within about a second, so after an in-place suspend Radar re-reads the Application for up to 2 seconds and, if auto-sync is already back on, says so and names that setting instead of reporting a suspend. Argo CD added the field in 3.1. Radar first asks the API server with a dry run whether it keeps the field, then makes one write. When the dry run is refused for a reason other than permission (an admission webhook that rejects dry runs, for example), Radar can't tell, so it removes the block as on older versions. On older versions the field is pruned, so Radar removes the block and the result says the ApplicationSet may turn auto-sync back on: nothing on those versions can keep it off. A newer CRD in front of an older controller (an upgrade in progress) keeps the field without honouring it. Suspending an Application whose auto-sync is already off changes nothing, so the saved settings can't be overwritten.
+- **Suspend** saves the whole `automated` block (`prune`, `selfHeal`, `allowEmpty`, …) in the `radarhq.io/suspended-automated` annotation and removes it. Removal works with any controller. The exception is an Application an ApplicationSet owns. There, an ApplicationSet that manages `prune` or `selfHeal` would put the block back, and Argo CD reads a block without `enabled: false` as auto-sync on. So Radar switches the block off in place with `automated.enabled: false`, keeping the other fields. Auto-sync then stays off only if the ApplicationSet doesn't overwrite `enabled`, which means ignoring `/spec/syncPolicy/automated/enabled` in `ignoreApplicationDifferences` (or a create-only policy): on each update the ApplicationSet replaces the spec with its template and keeps only the fields it ignores. When it doesn't, it writes the template back within about a second, so after an in-place suspend Radar re-reads the Application for up to 2 seconds and, if auto-sync is already back on, says so and names that setting instead of reporting a suspend. Argo CD added the field in 3.1. Radar dry-runs the proposed suspension, including the saved-settings annotations, to see whether the API server keeps the field. It then makes one write. Radar reports Kubernetes authorization and admission denials. When a webhook doesn't support dry runs, Radar removes the block as on older versions. On older versions the field is pruned, so Radar removes the block and the result says the ApplicationSet may turn auto-sync back on: nothing on those versions can keep it off. A newer CRD in front of an older controller (an upgrade in progress) keeps the field without honouring it. Suspending an Application whose auto-sync is already off changes nothing, so the saved settings can't be overwritten.
 - **Enable** restores the newest settings it finds: a block switched off in place (`automated.enabled: false`, which it keeps minus `enabled`), else the saved block. An Application Radar never suspended gets `prune` and `selfHeal` off, as Argo CD's UI and CLI do: new commits sync automatically, but a live edit alone doesn't trigger a sync. The next sync, from a new commit, still overwrites any live edit to a resource it applies. Turn self-heal on in the Application's `syncPolicy` to have Argo revert live edits as soon as they happen.
 - A parent ApplicationSet or Application may overwrite a child's auto-sync setting; an ApplicationSet may also control when the child syncs. When existing readable relationships name a parent, both **Enable auto-sync** and **Disable auto-sync** tooltips advise reviewing its template/policy or source first. For a known ApplicationSet parent, Enable also warns that pending changes may apply immediately and bypass rollout ordering. Parent ownership alone does not prove RollingSync is active. No additional parent reads are made.
 
@@ -191,6 +191,68 @@ How each operation is written:
 | **Reconcile** | Annotates `reconcile.fluxcd.io/requestedAt` to trigger a single reconcile |
 | **Sync with source** (Kustomization / HelmRelease) | Requests the reconciles `flux reconcile --with-source` makes, upstream first: the source, then the resource. For a HelmRelease the source is its chart (the generated HelmChart of an inline `spec.chart`, named from the current spec, or the HelmChart / OCIRepository named by `spec.chartRef`), and a HelmChart's own source is reconciled before it, so a new chart version in the repository is picked up. A suspended or Terminating object anywhere in that chain fails the request with 409 before anything is written. Unlike the CLI, Radar does not wait for each step to finish. An ExternalArtifact comes from another controller, so only the resource is reconciled. Objects are patched at the API version the cluster serves |
 | **Suspend / Resume** | Toggles `spec.suspend` |
+
+### Action permissions
+
+`GET /api/gitops/capabilities/{kind}/{namespace}/{name}` reviews named API operations at their served API versions as the caller. Every action needs `patch`; actions with lifecycle preflights also need `get`.
+In user-token mode, people are checked with a `SelfSubjectAccessReview` using
+only their own token, preserving the identity the API server authenticates.
+An unavailable client or failed review leaves permissions unknown. A person
+without a token also gets unknown answers. Actions are unavailable to
+tokenless background identities, which can only read. Impersonated requests
+use `SubjectAccessReview` with the same implicit authentication group as the
+Kubernetes impersonated request.
+Refresh only needs `patch`, and its capability check does not read the target.
+Flux checks read the target as the caller to resolve any source reference. Flux
+Sync with source also needs `get` and `patch` on every source it reconciles,
+including each namespace: a HelmRelease using a HelmChart needs both the chart
+and its upstream repository. ExternalArtifact is not read or patched. Capability action keys map selective sync to
+`sync`, hard refresh to `refresh`, resource validation to `validate`, and the Flux
+source chain to `sync-with-source`.
+
+Each action has one of four answer forms:
+
+- `{allowed:true}`: the required, known API operations passed permission checks.
+- `{allowed:false, denied:[…]}`: operations checked and denied, as
+  `{verb, group, resource, namespace, name, kind, source}` tuples. A denied read
+  can prevent discovering later Flux source hops, so this is not guaranteed to
+  list every missing grant. `source:true` marks a Flux source the action also reconciles.
+- `{reason}`: unknown because a check failed or expired; permit an attempt.
+- `{unsupported:true, reason}`: the action cannot run on this object or in this session regardless of role.
+
+Each distinct operation is reviewed once per request. A confirmed Kubernetes authorization denial reading a Flux target denies
+every action on that read and still reports a missing `patch`. Unexpected read
+errors leave permissions unavailable. Sync with source on an object with no source Radar can reconcile
+(for example, a Kustomization without `sourceRef`)
+reports `unsupported` with a reason, and the action itself answers 400.
+Disabled controls explain the denied permission. Controls stay enabled while the first check loads or fails. Failed refetches
+preserve each action's last confirmed permissions or unsupported result for up to two minutes; after
+that, the action becomes unknown and permits an attempt. Only a recent confirmed
+denial or unsupported result disables an action. After a failed first check or
+expiry, the detail page and open row action menu show “Couldn't check your permissions. You can still try.”
+without disabling the unknown actions; initial loading and closed rows show no notice. Compact
+denied actions expose their reason on touch and through an accessible description
+before focus. Lifecycle restrictions still apply; Refresh and
+Terminate remain available during deletion when permitted.
+A connected Radar without the `gitopsActionCapabilities` feature flag retains
+its existing action controls.
+
+### Action errors
+
+GitOps actions run with Radar's configured Kubernetes identity for the request.
+Kubernetes authorization denials return HTTP 403 with `error_code: "rbac_denied"`,
+a readable summary and the exact verb, resource, namespace and object name.
+Recognized admission webhook and policy refusals return HTTP 403 with
+`error_code: "admission_denied"` and a summary naming the object and the policy.
+Both responses retain the original message as `error`. Sync and selective dry-run
+errors appear beside the dialog controls. Notifications identify the original
+request target, and **Error details** exposes the original message for copying.
+
+If Flux Sync with source fails after requesting earlier reconciles, the response
+and UI identify the accepted requests. Controller completion is reported by Flux.
+The MCP `manage_gitops` tool returns the same classified codes. Its `raw_error`
+field preserves the original diagnostic, including permission details added by
+the authorizer. It includes any accepted reconcile requests in its error.
 
 ### Keyboard shortcuts (per-app detail page)
 
@@ -210,6 +272,23 @@ argocd-server API upgrades the Changes tab with the **canonical Git-rendered
 diff**: desired (rendered from Git, with Argo's own normalizations and every
 `ignoreDifferences` rule applied — including jq rules Radar can't evaluate)
 vs live, per managed resource, as a full YAML line diff.
+
+The same connection lets you open a sync in an application's **Deploys** tab
+and compare the Kubernetes resources Argo renders at that Git commit and at
+the previous sync's commit. A Kustomize image override, for example, appears
+as a change to the workload's container image. Expand **Deployment metadata**
+to inspect changes to the `build.run.url`, `deployment-id`, and
+`deployment-timestamp` annotations. Other annotations and labels remain
+with their resource. A change confined to annotations on a pod template can
+still trigger a rollout.
+
+This comparison uses adjacent retained syncs for a single Git source targeting
+the connected cluster. Both history entries must match the Application's
+current rendering options. Changes to the tracked tag or branch are supported
+because Radar requests each commit by SHA. Argo renders the commits on demand using its current
+renderer and dependencies. Use workload **Revisions** to inspect the pod
+templates the controller retained. Without an Argo API connection, the sync
+can still link to the commits and their comparison on supported Git hosts.
 
 Setup (Settings → Argo CD; the API is `PUT /api/integrations/connections` in
 local CLI and Desktop, and `PUT /api/integrations/argocd` in Radar Cloud):

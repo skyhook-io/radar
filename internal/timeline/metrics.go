@@ -24,13 +24,6 @@ type EventMetrics struct {
 	// lastStoreFailure is when each kind last failed to store, kept apart
 	// from the RecentDrops ring so routine drops cannot push it out.
 	lastStoreFailure map[string]time.Time
-
-	// Query counters
-	EventsQueried  int64
-	EventsFiltered int64
-
-	// Start time for uptime
-	startTime time.Time
 }
 
 // DropRecord records a single dropped event for debugging
@@ -40,12 +33,7 @@ type DropRecord struct {
 	Name      string `json:"name"`
 	Reason    string `json:"reason"`
 	Operation string `json:"operation"`
-	// ClusterContext is the kubeconfig context the dropped event belonged to,
-	// captured at informer wiring time (NOT read live at drop time). Informer
-	// shutdown on a context switch is asynchronous, so a straggler callback can
-	// record a drop after the switch — stamping the wiring-time context keeps it
-	// attributed to the cluster it came from, and read paths filter to the active
-	// context so a previous cluster's resource names never surface on the new one.
+	// ClusterContext is captured when the source informer is wired.
 	ClusterContext string    `json:"clusterContext,omitempty"`
 	Time           time.Time `json:"time"`
 }
@@ -69,51 +57,35 @@ const (
 	DropReasonTypeMismatch = "type_mismatch"
 )
 
-var (
-	globalMetrics *EventMetrics
-	metricsOnce   sync.Once
-)
+var startTime = time.Now()
 
-// initMetrics initializes the global metrics instance
-func initMetrics() {
-	metricsOnce.Do(func() {
-		globalMetrics = &EventMetrics{
-			EventsReceived:   make(map[string]int64),
-			EventsDropped:    make(map[string]int64),
-			EventsRecorded:   make(map[string]int64),
-			RecentDrops:      make([]DropRecord, 0, 100),
-			maxRecentDrops:   100,
-			lastStoreFailure: make(map[string]time.Time),
-			startTime:        time.Now(),
-		}
-	})
+func newEventMetrics() *EventMetrics {
+	return &EventMetrics{
+		EventsReceived:   make(map[string]int64),
+		EventsDropped:    make(map[string]int64),
+		EventsRecorded:   make(map[string]int64),
+		RecentDrops:      make([]DropRecord, 0, 100),
+		maxRecentDrops:   100,
+		lastStoreFailure: make(map[string]time.Time),
+	}
 }
 
-// GetMetrics returns the global metrics instance
+// GetMetrics returns the current store binding's metrics.
 func GetMetrics() *EventMetrics {
-	initMetrics()
-	return globalMetrics
+	return CaptureStore().metrics
 }
 
 // IncrementReceived increments the counter for received events by kind
-func IncrementReceived(kind string) {
-	m := GetMetrics()
+func (b *StoreBinding) IncrementReceived(kind string) {
+	m := b.metrics
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.EventsReceived[kind]++
 }
 
-// IncrementDropped increments the counter for dropped events by reason
-func IncrementDropped(reason string) {
-	m := GetMetrics()
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.EventsDropped[reason]++
-}
-
 // IncrementRecorded increments the counter for recorded events by kind
-func IncrementRecorded(kind string) {
-	m := GetMetrics()
+func (b *StoreBinding) IncrementRecorded(kind string) {
+	m := b.metrics
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.EventsRecorded[kind]++
@@ -139,9 +111,8 @@ func GetTotalDropCount() int64 {
 	return total
 }
 
-// RecordDrop records a dropped event with details for debugging
-func RecordDrop(kind, namespace, name, reason, operation, clusterContext string) {
-	m := GetMetrics()
+func (b *StoreBinding) RecordDrop(kind, namespace, name, reason, operation, clusterContext string) {
+	m := b.metrics
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -197,6 +168,7 @@ func (m *EventMetrics) GetSnapshot() MetricsSnapshot {
 	recentDrops := make([]DropRecord, len(m.RecentDrops))
 	copy(recentDrops, m.RecentDrops)
 
+	uptime := time.Since(startTime)
 	return MetricsSnapshot{
 		Counters: MetricsCounters{
 			Received: received,
@@ -204,8 +176,8 @@ func (m *EventMetrics) GetSnapshot() MetricsSnapshot {
 			Recorded: recorded,
 		},
 		RecentDrops: recentDrops,
-		Uptime:      time.Since(m.startTime).String(),
-		UptimeSec:   int64(time.Since(m.startTime).Seconds()),
+		Uptime:      uptime.String(),
+		UptimeSec:   int64(uptime.Seconds()),
 	}
 }
 
@@ -219,17 +191,10 @@ func (m *EventMetrics) Reset() {
 	m.EventsRecorded = make(map[string]int64)
 	m.RecentDrops = make([]DropRecord, 0, m.maxRecentDrops)
 	m.lastStoreFailure = make(map[string]time.Time)
-	m.EventsQueried = 0
-	m.EventsFiltered = 0
-	m.startTime = time.Now()
 }
 
 // DropsForCluster returns only the drop records attributed to clusterContext.
-// Read paths pass the active context so a straggler drop stamped with a
-// previously-connected cluster (recorded in the async informer-shutdown window
-// after a switch) is never shown on the new cluster. Both the stamp and the read
-// filter come from ActiveClusterContext(), so the in-cluster case matches too
-// (both sides use the "in-cluster" sentinel).
+// The stamp and the read filter use the same "in-cluster" sentinel.
 func DropsForCluster(drops []DropRecord, clusterContext string) []DropRecord {
 	out := make([]DropRecord, 0, len(drops))
 	for _, d := range drops {
@@ -238,35 +203,6 @@ func DropsForCluster(drops []DropRecord, clusterContext string) []DropRecord {
 		}
 	}
 	return out
-}
-
-// ResetMetricsForContextSwitch clears per-cluster event-pipeline state when the
-// connected cluster changes. RecentDrops name individual resources (kind /
-// namespace / name), and the counters are per-cluster totals, so both must be
-// dropped on a context switch — otherwise the debug/diagnostics drop surfaces
-// expose a previously-connected cluster's resource names to whoever can read
-// the same kind on the NEW cluster. Process uptime (startTime) is preserved:
-// it reports how long the event pipeline has been running, not a per-cluster
-// session, so it must survive the switch.
-//
-// Best-effort on the counters: unlike RecentDrops (stamped + filtered on read),
-// the counters have no cluster guard, so a straggler informer draining after the
-// switch (async shutdown, up to ~5s) can re-increment them with a few old-cluster
-// ticks after this reset. Accepted: counters carry only kind names, not resource
-// identity, so the exposure is a type label ("Secret") on a debug surface, never
-// a resource name.
-func ResetMetricsForContextSwitch() {
-	m := GetMetrics()
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.EventsReceived = make(map[string]int64)
-	m.EventsDropped = make(map[string]int64)
-	m.EventsRecorded = make(map[string]int64)
-	m.RecentDrops = make([]DropRecord, 0, m.maxRecentDrops)
-	m.lastStoreFailure = make(map[string]time.Time)
-	m.EventsQueried = 0
-	m.EventsFiltered = 0
 }
 
 // MetricsSnapshot is a JSON-serializable snapshot of metrics
@@ -377,10 +313,7 @@ func GetDiagnosis(kind, namespace, name, clusterContext string, allow func(kind,
 		}
 	}
 
-	// Check for drops related to this resource. Scope to the active cluster so a
-	// straggler drop from a previously-connected cluster (recorded in the async
-	// informer-shutdown window after a switch) neither appears in DropHistory nor
-	// influences the recommendations derived from it.
+	// Filter by cluster before deriving recommendations from the drop history.
 	metrics := GetMetrics()
 	metrics.mu.RLock()
 	for _, drop := range metrics.RecentDrops {

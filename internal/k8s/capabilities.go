@@ -114,16 +114,19 @@ func (r *PermissionCheckResult) CredentialRejectedNamespaces(resource string, na
 // Capabilities represents the features available based on RBAC permissions
 type Capabilities struct {
 	ConfigManagement       string                   `json:"configManagement"`
-	Exec                   bool                     `json:"exec"`           // Can create pods/exec (terminal feature)
-	LocalTerminal          bool                     `json:"localTerminal"`  // Local terminal available (not in-cluster, not disabled)
-	LocalShell             string                   `json:"localShell"`     // Shell family where a hand-off command runs: "powershell" on Windows, else "posix"
-	Logs                   bool                     `json:"logs"`           // Can get pods/log (log viewer)
-	PortForward            bool                     `json:"portForward"`    // Can create pods/portforward
-	Secrets                bool                     `json:"secrets"`        // Can list secrets
-	SecretsUpdate          bool                     `json:"secretsUpdate"`  // Can update secrets (inline editing)
-	HelmWrite              bool                     `json:"helmWrite"`      // Helm write ops (detected via secrets/create as sentinel RBAC check)
-	NodeWrite              bool                     `json:"nodeWrite"`      // Can patch nodes (cordon/uncordon/drain)
-	WorkloadWrites         WorkloadWritePermissions `json:"workloadWrites"` // Can patch workload kinds (restart/scale controls)
+	Exec                   bool                     `json:"exec"` // Can create pods/exec (terminal feature)
+	PodExecUID             bool                     `json:"podExecUID,omitempty"`
+	PodDebugImage          string                   `json:"podDebugImage,omitempty"`
+	PodDebug               bool                     `json:"podDebug,omitempty"` // Scoped to the requested namespace.
+	LocalTerminal          bool                     `json:"localTerminal"`      // Local terminal available (not in-cluster, not disabled)
+	LocalShell             string                   `json:"localShell"`         // Shell family where a hand-off command runs: "powershell" on Windows, else "posix"
+	Logs                   bool                     `json:"logs"`               // Can get pods/log (log viewer)
+	PortForward            bool                     `json:"portForward"`        // Can create pods/portforward
+	Secrets                bool                     `json:"secrets"`            // Can list secrets
+	SecretsUpdate          bool                     `json:"secretsUpdate"`      // Can update secrets (inline editing)
+	HelmWrite              bool                     `json:"helmWrite"`          // Helm write ops (detected via secrets/create as sentinel RBAC check)
+	NodeWrite              bool                     `json:"nodeWrite"`          // Can patch nodes (cordon/uncordon/drain)
+	WorkloadWrites         WorkloadWritePermissions `json:"workloadWrites"`     // Permissions for workload actions
 	MCPReadOnly            bool                     `json:"mcpReadOnly"`
 	MCPExecTools           bool                     `json:"mcpExecTools"`
 	MCPHelmTools           bool                     `json:"mcpHelmTools"` // Native Helm MCP tool registered; target Kubernetes permissions still required
@@ -184,6 +187,8 @@ type FeatureCapabilities struct {
 	// GET /api/helm/inventory and /api/helm/inventory/{namespace}/{name}, and
 	// error_code release_read_denied on a Helm release read.
 	HelmInventory        bool `json:"helmInventory"`
+	DatadogRightsizing   bool `json:"datadogRightsizing"`
+	DatadogAgentPresence bool `json:"datadogAgentPresence"`
 	ResourceReadCoverage bool `json:"resourceReadCoverage"`
 	SearchCoverage       bool `json:"searchCoverage"`
 	ApplicationEvidence  bool `json:"applicationEvidence"`
@@ -196,9 +201,15 @@ type FeatureCapabilities struct {
 	SubstrateHealthMetrics bool `json:"substrateHealthMetrics"`
 	ResourceIssues         bool `json:"resourceIssues"`        // GET /api/issues/resource/{kind}/{namespace}/{name}
 	ResourceIssueCoverage  bool `json:"resourceIssueCoverage"` // Resource issues with ?coverage=1
-	PodEnvironment         bool `json:"podEnvironment"`        // GET /api/pods/{namespace}/{name}/environment
-	PolicyResource         bool `json:"policyResource"`        // GET /api/policy/resource/{kind}/{namespace}/{name}
-	WorkloadHistory        bool `json:"workloadHistory"`       // GET /api/workloads/{kind}/{namespace}/{name}/history
+	// Resource issues with ?correlate=<issueID>: that issue's correlated
+	// changes over a window anchored on when it was first seen; and
+	// GET /api/issues/recent-changes, the one change each listed issue row
+	// names.
+	IssueCorrelation bool `json:"issueCorrelation"`
+	PodDebugAccess   bool `json:"podDebugAccess"`
+	PodEnvironment   bool `json:"podEnvironment"`  // GET /api/pods/{namespace}/{name}/environment
+	PolicyResource   bool `json:"policyResource"`  // GET /api/policy/resource/{kind}/{namespace}/{name}
+	WorkloadHistory  bool `json:"workloadHistory"` // GET /api/workloads/{kind}/{namespace}/{name}/history
 	// The workspace and its read/action surfaces, excluding protection setup.
 	CNPGWorkspace       bool `json:"cnpgWorkspace"`
 	CNPGProtectionSetup bool `json:"cnpgProtectionSetup"`
@@ -213,11 +224,15 @@ type FeatureCapabilities struct {
 	VeleroDeleteBackup bool `json:"veleroDeleteBackup"`
 	// DELETE /api/resources/... honours ?uid=&resourceVersion= preconditions
 	ResourceDeletePreconditions bool `json:"resourceDeletePreconditions"`
-	ServiceEndpointSlices       bool `json:"serviceEndpointSlices"` // GET /api/services/{namespace}/{name}/endpointslices
-	TrafficRecords              bool `json:"trafficRecords"`        // GET /api/traffic/flows/records
-	GitOpsWriteEvidence         bool `json:"gitopsWriteEvidence"`   // POST /api/gitops/write-evidence
-	GitOpsOutsideChanges        bool `json:"gitopsOutsideChanges"`  // GET /api/gitops/outside-changes/{kind}/{namespace}/{name}
-	AgentSigninCheck            bool `json:"agentSigninCheck"`      // GET /api/agents/signin
+	// POST /api/workloads/{kind}/{ns}/{name}/restart accepts {uid, resourceVersion};
+	// an older Radar ignores the body and restarts unconditionally.
+	WorkloadRestartPreconditions bool `json:"workloadRestartPreconditions"`
+	ServiceEndpointSlices        bool `json:"serviceEndpointSlices"`    // GET /api/services/{namespace}/{name}/endpointslices
+	TrafficRecords               bool `json:"trafficRecords"`           // GET /api/traffic/flows/records
+	GitOpsWriteEvidence          bool `json:"gitopsWriteEvidence"`      // POST /api/gitops/write-evidence
+	GitOpsActionCapabilities     bool `json:"gitopsActionCapabilities"` // GET /api/gitops/capabilities/{kind}/{namespace}/{name}
+	AgentSigninCheck             bool `json:"agentSigninCheck"`         // GET /api/agents/signin
+	GitOpsOutsideChanges         bool `json:"gitopsOutsideChanges"`     // GET /api/gitops/outside-changes/{kind}/{namespace}/{name}
 	// POST /api/argo/applications/{namespace}/{name}/rollback starts a sync to
 	// the history entry (id 0 included), and .../resume also clears
 	// spec.syncPolicy.automated.enabled: false. An older Radar writes an
@@ -240,6 +255,7 @@ type FeatureCapabilities struct {
 	// GET /api/workloads/rayclusters/{namespace}/{name}/pods?ownerUID=. Radars
 	// from v1.15.0 serve the route without advertising this flag.
 	RayClusterPods bool `json:"rayClusterPods"`
+	ReplicaSetLogs bool `json:"replicaSetLogs"`
 	// Workload Pod info marks native sidecars (containerStatuses[].sidecar);
 	// without this, an absent mark doesn't mean "not a sidecar".
 	PodSidecarMarks bool `json:"podSidecarMarks"`
@@ -248,28 +264,80 @@ type FeatureCapabilities struct {
 	KueueQueueWorkloads     bool `json:"kueueQueueWorkloads"`
 	PodFileUpload           bool `json:"podFileUpload"`           // POST /api/pods/{namespace}/{name}/files/upload
 	Vulnerabilities         bool `json:"vulnerabilities"`         // GET /api/vulnerabilities
+	VulnerabilitiesExport   bool `json:"vulnerabilitiesExport"`   // GET /api/vulnerabilities/export
 	RuntimeAdvisoryChecks   bool `json:"runtimeAdvisoryChecks"`   // GET /api/vulnerabilities/java4shell
 	RuntimeAdvisoryProgress bool `json:"runtimeAdvisoryProgress"` // GET /api/vulnerabilities/java4shell/stream
 	// GET /api/sealedsecrets/controller
 	SealedSecretsController bool `json:"sealedSecretsController"`
+	// POST /api/cronjobs/{namespace}/{name}/trigger accepts {"jobName": ...};
+	// an older Radar ignores the body and names the Job itself.
+	CronJobTriggerJobName bool `json:"cronJobTriggerJobName"`
+	// GET /api/sealedsecrets/cert
+	SealedSecretsCert bool `json:"sealedSecretsCert"`
+	// POST /api/workflows/{namespace}/{name}/stop
+	WorkflowStop bool `json:"workflowStop"`
+	// POST /api/workflowtemplates/{namespace}/{name}/submit
+	WorkflowTemplateSubmit bool `json:"workflowTemplateSubmit"`
+
+	// GET /api/metrics/openobserve/collector.
+	OpenObserveCollectorPresence bool `json:"openobserveCollectorPresence"`
+	// GET/DELETE /api/integrations/openobserve, POST .../setup and DELETE
+	// .../cluster: local Radar's OpenObserve setup in Settings → Metrics.
+	OpenObserveLocalSetup bool `json:"openobserveLocalSetup"`
 }
 
-// WorkloadWritePermissions indicates which workload resources the user can patch.
+// WorkloadWritePermissions records the permissions used by workload actions.
 type WorkloadWritePermissions struct {
 	Deployments  bool `json:"deployments"`
 	DaemonSets   bool `json:"daemonSets"`
 	StatefulSets bool `json:"statefulSets"`
 	Rollouts     bool `json:"rollouts"`
+	Workflows    bool `json:"workflows"` // Argo Workflows: Stop and Terminate patch spec.shutdown
+	// Argo Workflows: create, to submit a WorkflowTemplate.
+	CreateWorkflows bool `json:"createWorkflows"`
+	CronJobs        bool `json:"cronJobs"`   // Suspend and Resume patch spec.suspend
+	CreateJobs      bool `json:"createJobs"` // Trigger creates a Job from the CronJob's template
 }
 
 type WorkloadWriteCapabilityErrors struct {
-	Deployments  bool
-	DaemonSets   bool
-	StatefulSets bool
-	Rollouts     bool
+	Deployments     bool
+	DaemonSets      bool
+	StatefulSets    bool
+	Rollouts        bool
+	Workflows       bool
+	CreateWorkflows bool
+	CronJobs        bool
+	CreateJobs      bool
+}
+
+// workloadWriteChecks lists the workload write permissions in the order their
+// checks are started. Each is checked globally and per namespace, as Radar and as the
+// caller, and merged per namespace by MergeWorkloadWrites.
+var workloadWriteChecks = []struct {
+	group, resource, verb string
+	permission            func(*WorkloadWritePermissions) *bool
+	apiError              func(*WorkloadWriteCapabilityErrors) *bool
+}{
+	{"apps", "deployments", "patch", func(p *WorkloadWritePermissions) *bool { return &p.Deployments }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.Deployments }},
+	{"apps", "daemonsets", "patch", func(p *WorkloadWritePermissions) *bool { return &p.DaemonSets }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.DaemonSets }},
+	{"apps", "statefulsets", "patch", func(p *WorkloadWritePermissions) *bool { return &p.StatefulSets }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.StatefulSets }},
+	{"argoproj.io", "rollouts", "patch", func(p *WorkloadWritePermissions) *bool { return &p.Rollouts }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.Rollouts }},
+	{"argoproj.io", "workflows", "patch", func(p *WorkloadWritePermissions) *bool { return &p.Workflows }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.Workflows }},
+	{"argoproj.io", "workflows", "create", func(p *WorkloadWritePermissions) *bool { return &p.CreateWorkflows }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.CreateWorkflows }},
+	{"batch", "cronjobs", "patch", func(p *WorkloadWritePermissions) *bool { return &p.CronJobs }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.CronJobs }},
+	{"batch", "jobs", "create", func(p *WorkloadWritePermissions) *bool { return &p.CreateJobs }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.CreateJobs }},
+}
+
+// MergeWorkloadWrites folds one namespace's workload write answers into the
+// global ones, field by field, in table order.
+func MergeWorkloadWrites(global *WorkloadWritePermissions, namespaced WorkloadWritePermissions, errs WorkloadWriteCapabilityErrors, merge func(global, namespaced, errored bool) bool) {
+	for _, c := range workloadWriteChecks {
+		*c.permission(global) = merge(*c.permission(global), *c.permission(&namespaced), *c.apiError(&errs))
+	}
 }
 
 type NamespaceCapabilityErrors struct {
+	PodDebug       bool
 	Exec           bool
 	Logs           bool
 	PortForward    bool
@@ -279,6 +347,7 @@ type NamespaceCapabilityErrors struct {
 
 // NamespaceCapabilities holds the effective capabilities for a specific namespace.
 type NamespaceCapabilities struct {
+	PodDebug       bool                      `json:"podDebug"`
 	Exec           bool                      `json:"exec"`
 	Logs           bool                      `json:"logs"`
 	PortForward    bool                      `json:"portForward"`
@@ -325,19 +394,55 @@ type DeploymentInfo struct {
 	Mode DeploymentMode `json:"mode"`
 }
 
-var (
-	cachedCapabilities   *Capabilities
-	capabilitiesMu       sync.RWMutex
-	capabilitiesExpiry   time.Time
-	capabilitiesTTL      = 60 * time.Second
-	capabilitiesErrorTTL = 5 * time.Second // Short TTL when API errors caused fail-closed results
+type permissionState struct {
+	resourcePermsMu     sync.RWMutex
+	cachedPermResult    *PermissionCheckResult
+	resourcePermsExpiry time.Time
 
-	// Per-namespace capability cache for lazy RBAC re-checks.
-	// When global checks (cluster-wide + effective-namespace) deny
-	// exec/logs/portForward, callers can re-check for a specific namespace.
-	nsCapCache map[string]*nsCapEntry
+	capabilitiesMu     sync.RWMutex
+	cachedCapabilities *Capabilities
+	capabilitiesExpiry time.Time
+
+	// Namespace re-checks can grant exec/logs/portForward where both the
+	// cluster-wide and the effective-namespace checks denied them.
 	nsCapMu    sync.RWMutex
+	nsCapCache map[string]*nsCapEntry
 
+	// SAR verdicts, including Helm writes, depend on both username and groups.
+	userCapabilitiesCache          sync.Map // map[string]*userCapEntry
+	userNamespaceCapabilitiesCache sync.Map // map[string]*userNSCapEntry
+	// Each identity's check costs up to two SubjectAccessReviews per capability.
+	userCapabilitiesFlight singleflight.Group
+}
+
+func (c *Connection) permissions() *permissionState {
+	if c == nil {
+		return &permissionState{}
+	}
+	if s := c.perms.Load(); s != nil {
+		return s
+	}
+	c.perms.CompareAndSwap(nil, &permissionState{})
+	return c.perms.Load()
+}
+
+// ResetPermissions retires in-flight checks along with their cache. Each
+// check keeps the state it took before reading its scope.
+func (c *Connection) ResetPermissions() {
+	if c != nil {
+		c.perms.Store(&permissionState{})
+	}
+}
+
+const (
+	capabilitiesTTL       = 60 * time.Second
+	capabilitiesErrorTTL  = 5 * time.Second // Retry fail-closed API errors sooner.
+	userCapabilitiesTTL   = 60 * time.Second
+	resourcePermsTTL      = 60 * time.Second
+	resourcePermsErrorTTL = 5 * time.Second
+)
+
+var (
 	// ForceDisableHelmWrite disables the Helm write preflight and manage_helm registration.
 	// Signed-in global repository/OCI management and Cloud install/upgrade are unaffected.
 	ForceDisableHelmWrite bool
@@ -357,20 +462,20 @@ type nsCapEntry struct {
 // Results are cached for 60 seconds normally, or 5 seconds when API errors
 // caused fail-closed results (to allow rapid retry without long UI disruption).
 func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
-	capabilitiesMu.RLock()
-	if cachedCapabilities != nil && time.Now().Before(capabilitiesExpiry) {
-		caps := *cachedCapabilities
-		capabilitiesMu.RUnlock()
+	conn := BoundOrCurrent(ctx)
+	state := conn.permissions()
+	state.capabilitiesMu.RLock()
+	if state.cachedCapabilities != nil && time.Now().Before(state.capabilitiesExpiry) {
+		caps := *state.cachedCapabilities
+		state.capabilitiesMu.RUnlock()
 		return &caps, nil
 	}
-	capabilitiesMu.RUnlock()
+	state.capabilitiesMu.RUnlock()
 
 	// Compute capabilities WITHOUT holding the write lock.
 	// Multiple concurrent callers may race, but redundant checks are harmless.
-	// Critical: holding the lock during network calls blocks
-	// InvalidateCapabilitiesCache() during context switch.
 
-	if GetClient() == nil {
+	if conn.Client() == nil {
 		// Return all false if client not initialized (fail closed)
 		log.Printf("Warning: K8s client not initialized, returning restricted capabilities")
 		return &Capabilities{HelmWriteUnavailable: true}, nil
@@ -395,7 +500,10 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 	// Check each capability in parallel.
 	// Try cluster-wide first, then namespace-scoped as fallback for namespace-scoped users.
 	// Track API errors to avoid caching transient failures for the full TTL.
-	fallbackNs := capabilityProbeNamespace()
+	inCluster := IsInCluster()
+	localTerminal := !inCluster && !ForceDisableLocalTerminal
+	disableHelmWrite, disableExec := ForceDisableHelmWrite, ForceDisableExec
+	fallbackNs := conn.capabilityProbeNamespace()
 	var hadErrors atomic.Bool
 
 	type capCheck struct {
@@ -415,10 +523,9 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 		{resource: "secrets", verb: "update", result: &caps.SecretsUpdate, namespaceFallback: true},
 		{resource: "secrets", verb: "create", result: &caps.HelmWrite, namespaceFallback: true},
 		{resource: "nodes", verb: "patch", result: &caps.NodeWrite, namespaceFallback: true},
-		{group: "apps", resource: "deployments", verb: "patch", result: &caps.WorkloadWrites.Deployments},
-		{group: "apps", resource: "daemonsets", verb: "patch", result: &caps.WorkloadWrites.DaemonSets},
-		{group: "apps", resource: "statefulsets", verb: "patch", result: &caps.WorkloadWrites.StatefulSets},
-		{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &caps.WorkloadWrites.Rollouts},
+	}
+	for _, w := range workloadWriteChecks {
+		checks = append(checks, capCheck{group: w.group, resource: w.resource, verb: w.verb, result: w.permission(&caps.WorkloadWrites)})
 	}
 
 	var wg sync.WaitGroup
@@ -427,13 +534,13 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 	for _, check := range checks {
 		go func(c capCheck) {
 			defer wg.Done()
-			allowed, apiErr := canI(checkCtx, "", c.group, c.resource, c.verb)
+			allowed, apiErr := conn.canI(checkCtx, "", c.group, c.resource, c.verb)
 			if allowed {
 				*c.result = true
 				return
 			}
 			if fallbackNs != "" && c.namespaceFallback {
-				allowed, nsApiErr := canI(checkCtx, fallbackNs, c.group, c.resource, c.verb)
+				allowed, nsApiErr := conn.canI(checkCtx, fallbackNs, c.group, c.resource, c.verb)
 				if allowed {
 					*c.result = true
 					return
@@ -453,20 +560,20 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 	logTiming("   [caps] CheckCapabilities RBAC checks done (%v)", time.Since(capStart))
 
 	// Local terminal is not RBAC-gated — it depends on runtime mode only
-	caps.LocalTerminal = !IsInCluster() && !ForceDisableLocalTerminal
+	caps.LocalTerminal = localTerminal
 
 	// Port-forward binds a local TCP listener on the radar host; like the local
 	// terminal it's meaningless in-cluster (the listener would be on the radar
 	// pod, not the user's machine), so force it off regardless of RBAC. The HTTP
 	// capabilities handler re-applies this after its namespace merge.
-	if IsInCluster() {
+	if inCluster {
 		caps.PortForward = false
 	}
 
-	if ForceDisableHelmWrite {
+	if disableHelmWrite {
 		caps.HelmWrite = false
 	}
-	if ForceDisableExec {
+	if disableExec {
 		caps.Exec = false
 	}
 
@@ -478,48 +585,35 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 		ttl = capabilitiesErrorTTL
 		log.Printf("Warning: capability checks had API errors, using short cache TTL (%v)", ttl)
 	}
-	capabilitiesMu.Lock()
-	cachedCapabilities = caps
-	capabilitiesExpiry = time.Now().Add(ttl)
-	capabilitiesMu.Unlock()
+	state.capabilitiesMu.Lock()
+	state.cachedCapabilities = caps
+	state.capabilitiesExpiry = time.Now().Add(ttl)
+	state.capabilitiesMu.Unlock()
 
 	return caps, nil
 }
 
 // canI checks if the current user/service account can perform an action.
-// Returns (allowed, apiErr) — wraps k8score.CanI with the singleton client.
-func canI(ctx context.Context, namespace, group, resource, verb string) (allowed bool, apiErr bool) {
+// Returns (allowed, apiErr) — wraps k8score.CanI with the probe's client.
+func (conn *Connection) canI(ctx context.Context, namespace, group, resource, verb string) (allowed bool, apiErr bool) {
 	if ctx.Err() != nil {
 		logTiming("   [caps] canI(%s %s) skipped: context canceled", verb, resource)
 		return false, true
 	}
-	return k8score.CanI(ctx, GetClient(), namespace, group, resource, verb)
+	return k8score.CanI(ctx, conn.Client(), namespace, group, resource, verb)
 }
 
 // GetCachedCapabilities returns the cached capabilities without triggering
 // RBAC checks. Returns nil if no cached result is available.
 func GetCachedCapabilities() *Capabilities {
-	capabilitiesMu.RLock()
-	defer capabilitiesMu.RUnlock()
-	if cachedCapabilities == nil {
+	state := Current().permissions()
+	state.capabilitiesMu.RLock()
+	defer state.capabilitiesMu.RUnlock()
+	if state.cachedCapabilities == nil {
 		return nil
 	}
-	caps := *cachedCapabilities
+	caps := *state.cachedCapabilities
 	return &caps
-}
-
-// InvalidateCapabilitiesCache forces the next CheckCapabilities call to refresh
-func InvalidateCapabilitiesCache() {
-	capabilitiesMu.Lock()
-	cachedCapabilities = nil
-	capabilitiesMu.Unlock()
-
-	// Also clear namespace-scoped cache
-	nsCapMu.Lock()
-	nsCapCache = nil
-	nsCapMu.Unlock()
-
-	InvalidateUserCapabilitiesCache()
 }
 
 // CheckNamespaceCapabilities performs namespace-scoped RBAC checks for
@@ -529,18 +623,20 @@ func CheckNamespaceCapabilities(ctx context.Context, namespace string) (*Namespa
 		return nil, nil
 	}
 
+	conn := BoundOrCurrent(ctx)
+	state := conn.permissions()
 	// Check namespace cache
-	nsCapMu.RLock()
-	if nsCapCache != nil {
-		if entry, ok := nsCapCache[namespace]; ok && time.Now().Before(entry.expiry) {
+	state.nsCapMu.RLock()
+	if state.nsCapCache != nil {
+		if entry, ok := state.nsCapCache[namespace]; ok && time.Now().Before(entry.expiry) {
 			result := entry.caps
-			nsCapMu.RUnlock()
+			state.nsCapMu.RUnlock()
 			return &result, nil
 		}
 	}
-	nsCapMu.RUnlock()
+	state.nsCapMu.RUnlock()
 
-	if GetClient() == nil {
+	if conn.Client() == nil {
 		return nil, nil // No override — caller will use global caps
 	}
 
@@ -559,16 +655,18 @@ func CheckNamespaceCapabilities(ctx context.Context, namespace string) (*Namespa
 
 	var checks []capCheck
 	if !ForceDisableExec {
-		checks = append(checks, capCheck{resource: "pods/exec", verb: "create", result: &result.Exec, apiError: &result.Errors.Exec})
+		checks = append(checks,
+			capCheck{resource: "pods/exec", verb: "create", result: &result.Exec, apiError: &result.Errors.Exec},
+			capCheck{resource: "pods/ephemeralcontainers", verb: "update", result: &result.PodDebug, apiError: &result.Errors.PodDebug},
+		)
 	}
 	checks = append(checks,
 		capCheck{resource: "pods/log", verb: "get", result: &result.Logs, apiError: &result.Errors.Logs},
 		capCheck{resource: "pods/portforward", verb: "create", result: &result.PortForward, apiError: &result.Errors.PortForward},
-		capCheck{group: "apps", resource: "deployments", verb: "patch", result: &result.WorkloadWrites.Deployments, apiError: &result.Errors.WorkloadWrites.Deployments},
-		capCheck{group: "apps", resource: "daemonsets", verb: "patch", result: &result.WorkloadWrites.DaemonSets, apiError: &result.Errors.WorkloadWrites.DaemonSets},
-		capCheck{group: "apps", resource: "statefulsets", verb: "patch", result: &result.WorkloadWrites.StatefulSets, apiError: &result.Errors.WorkloadWrites.StatefulSets},
-		capCheck{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &result.WorkloadWrites.Rollouts, apiError: &result.Errors.WorkloadWrites.Rollouts},
 	)
+	for _, w := range workloadWriteChecks {
+		checks = append(checks, capCheck{group: w.group, resource: w.resource, verb: w.verb, result: w.permission(&result.WorkloadWrites), apiError: w.apiError(&result.Errors.WorkloadWrites)})
+	}
 	if !ForceDisableHelmWrite {
 		checks = append(checks, capCheck{resource: "secrets", verb: "create", result: &result.HelmWrite, apiError: &result.Errors.HelmWrite})
 	}
@@ -579,7 +677,7 @@ func CheckNamespaceCapabilities(ctx context.Context, namespace string) (*Namespa
 	for _, check := range checks {
 		go func(c capCheck) {
 			defer wg.Done()
-			allowed, apiErr := canI(checkCtx, namespace, c.group, c.resource, c.verb)
+			allowed, apiErr := conn.canI(checkCtx, namespace, c.group, c.resource, c.verb)
 			if allowed {
 				*c.result = true
 			}
@@ -598,26 +696,18 @@ func CheckNamespaceCapabilities(ctx context.Context, namespace string) (*Namespa
 		ttl = capabilitiesErrorTTL
 		log.Printf("Warning: namespace %s capability checks had API errors, using short cache TTL (%v)", namespace, ttl)
 	}
-	nsCapMu.Lock()
-	if nsCapCache == nil {
-		nsCapCache = make(map[string]*nsCapEntry)
+	state.nsCapMu.Lock()
+	if state.nsCapCache == nil {
+		state.nsCapCache = make(map[string]*nsCapEntry)
 	}
-	nsCapCache[namespace] = &nsCapEntry{
+	state.nsCapCache[namespace] = &nsCapEntry{
 		caps:   *result,
 		expiry: time.Now().Add(ttl),
 	}
-	nsCapMu.Unlock()
+	state.nsCapMu.Unlock()
 
 	return result, nil
 }
-
-// Per-user capabilities caches, keyed by username + groups: the verdicts come
-// from SubjectAccessReviews run with both, and they decide Helm writes.
-var (
-	userCapabilitiesCache          sync.Map // map[string]*userCapEntry
-	userNamespaceCapabilitiesCache sync.Map // map[string]*userNSCapEntry
-	userCapabilitiesTTL            = 60 * time.Second
-)
 
 type userCapEntry struct {
 	caps      *Capabilities
@@ -627,10 +717,6 @@ type userCapEntry struct {
 	lastGood *Capabilities
 	goodAt   time.Time
 }
-
-// userCapabilitiesFlight runs one check per identity at a time: each costs
-// up to two SubjectAccessReviews per capability.
-var userCapabilitiesFlight singleflight.Group
 
 const lastGoodMaxAge = 2 * time.Minute
 
@@ -650,9 +736,11 @@ func userNamespaceCapabilitiesCacheKey(username string, groups []string, namespa
 // Concurrent callers for one identity share a single check; while the
 // re-check after a failed one runs, callers get the last complete result.
 func CheckCapabilitiesForUser(ctx context.Context, username string, groups []string) (*Capabilities, error) {
+	conn := BoundOrCurrent(ctx)
+	state := conn.permissions()
 	identityKey := pkgauth.IdentityCacheKey(username, groups)
 	var lastGood *Capabilities
-	if entry, ok := userCapabilitiesCache.Load(identityKey); ok {
+	if entry, ok := state.userCapabilitiesCache.Load(identityKey); ok {
 		e := entry.(*userCapEntry)
 		if time.Now().Before(e.expiresAt) {
 			caps := *e.caps
@@ -663,8 +751,9 @@ func CheckCapabilitiesForUser(ctx context.Context, username string, groups []str
 		}
 	}
 
-	ch := userCapabilitiesFlight.DoChan(identityKey, func() (any, error) {
-		return checkCapabilitiesForUser(identityKey, username, groups), nil
+	fallbackNs := conn.capabilityProbeNamespace()
+	ch := state.userCapabilitiesFlight.DoChan(identityKey, func() (any, error) {
+		return state.checkCapabilitiesForUser(conn, fallbackNs, identityKey, username, groups), nil
 	})
 	var shared *Capabilities
 	if lastGood != nil {
@@ -681,8 +770,8 @@ func CheckCapabilitiesForUser(ctx context.Context, username string, groups []str
 	return &caps, nil
 }
 
-func checkCapabilitiesForUser(identityKey, username string, groups []string) *Capabilities {
-	k8sClient := GetClient()
+func (state *permissionState) checkCapabilitiesForUser(conn *Connection, fallbackNs, identityKey, username string, groups []string) *Capabilities {
+	k8sClient := conn.Client()
 	if k8sClient == nil {
 		return &Capabilities{}
 	}
@@ -693,6 +782,8 @@ func checkCapabilitiesForUser(identityKey, username string, groups []string) *Ca
 
 	checkCtx, cancel := NewOperationContext(10 * time.Second)
 	defer cancel()
+
+	disableHelmWrite, disableExec := ForceDisableHelmWrite, ForceDisableExec
 
 	type capCheck struct {
 		group             string
@@ -711,10 +802,9 @@ func checkCapabilitiesForUser(identityKey, username string, groups []string) *Ca
 		{resource: "secrets", verb: "update", result: &caps.SecretsUpdate, namespaceFallback: true},
 		{resource: "secrets", verb: "create", result: &caps.HelmWrite, namespaceFallback: true},
 		{resource: "nodes", verb: "patch", result: &caps.NodeWrite, namespaceFallback: true},
-		{group: "apps", resource: "deployments", verb: "patch", result: &caps.WorkloadWrites.Deployments},
-		{group: "apps", resource: "daemonsets", verb: "patch", result: &caps.WorkloadWrites.DaemonSets},
-		{group: "apps", resource: "statefulsets", verb: "patch", result: &caps.WorkloadWrites.StatefulSets},
-		{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &caps.WorkloadWrites.Rollouts},
+	}
+	for _, w := range workloadWriteChecks {
+		checks = append(checks, capCheck{group: w.group, resource: w.resource, verb: w.verb, result: w.permission(&caps.WorkloadWrites)})
 	}
 
 	var hadErrors atomic.Bool
@@ -730,7 +820,7 @@ func checkCapabilitiesForUser(identityKey, username string, groups []string) *Ca
 				return
 			}
 			// Try namespace-scoped fallback
-			if fallbackNs := capabilityProbeNamespace(); fallbackNs != "" && c.namespaceFallback {
+			if fallbackNs != "" && c.namespaceFallback {
 				allowed, nsAPIErr := canIAs(checkCtx, k8sClient, username, groups, fallbackNs, c.group, c.resource, c.verb)
 				if allowed {
 					*c.result = true
@@ -747,10 +837,10 @@ func checkCapabilitiesForUser(identityKey, username string, groups []string) *Ca
 	wg.Wait()
 	caps.ChecksIncomplete = hadErrors.Load()
 
-	if ForceDisableHelmWrite {
+	if disableHelmWrite {
 		caps.HelmWrite = false
 	}
-	if ForceDisableExec {
+	if disableExec {
 		caps.Exec = false
 	}
 
@@ -761,7 +851,7 @@ func checkCapabilitiesForUser(identityKey, username string, groups []string) *Ca
 	}
 	entry := &userCapEntry{caps: caps, expiresAt: time.Now().Add(ttl)}
 	if caps.ChecksIncomplete {
-		if prev, ok := userCapabilitiesCache.Load(identityKey); ok {
+		if prev, ok := state.userCapabilitiesCache.Load(identityKey); ok {
 			p := prev.(*userCapEntry)
 			if !p.caps.ChecksIncomplete {
 				entry.lastGood, entry.goodAt = p.caps, p.expiresAt.Add(-userCapabilitiesTTL)
@@ -770,7 +860,7 @@ func checkCapabilitiesForUser(identityKey, username string, groups []string) *Ca
 			}
 		}
 	}
-	userCapabilitiesCache.Store(identityKey, entry)
+	state.userCapabilitiesCache.Store(identityKey, entry)
 
 	return caps
 }
@@ -782,8 +872,10 @@ func CheckNamespaceCapabilitiesForUser(ctx context.Context, username string, gro
 		return nil, nil
 	}
 
+	conn := BoundOrCurrent(ctx)
+	state := conn.permissions()
 	cacheKey := userNamespaceCapabilitiesCacheKey(username, groups, namespace)
-	if entry, ok := userNamespaceCapabilitiesCache.Load(cacheKey); ok {
+	if entry, ok := state.userNamespaceCapabilitiesCache.Load(cacheKey); ok {
 		e := entry.(*userNSCapEntry)
 		if time.Now().Before(e.expiresAt) {
 			result := e.caps
@@ -791,7 +883,7 @@ func CheckNamespaceCapabilitiesForUser(ctx context.Context, username string, gro
 		}
 	}
 
-	k8sClient := GetClient()
+	k8sClient := conn.Client()
 	if k8sClient == nil {
 		return nil, nil
 	}
@@ -815,16 +907,18 @@ func CheckNamespaceCapabilitiesForUser(ctx context.Context, username string, gro
 
 	var checks []capCheck
 	if !ForceDisableExec {
-		checks = append(checks, capCheck{resource: "pods/exec", verb: "create", result: &result.Exec, apiError: &result.Errors.Exec})
+		checks = append(checks,
+			capCheck{resource: "pods/exec", verb: "create", result: &result.Exec, apiError: &result.Errors.Exec},
+			capCheck{resource: "pods/ephemeralcontainers", verb: "update", result: &result.PodDebug, apiError: &result.Errors.PodDebug},
+		)
 	}
 	checks = append(checks,
 		capCheck{resource: "pods/log", verb: "get", result: &result.Logs, apiError: &result.Errors.Logs},
 		capCheck{resource: "pods/portforward", verb: "create", result: &result.PortForward, apiError: &result.Errors.PortForward},
-		capCheck{group: "apps", resource: "deployments", verb: "patch", result: &result.WorkloadWrites.Deployments, apiError: &result.Errors.WorkloadWrites.Deployments},
-		capCheck{group: "apps", resource: "daemonsets", verb: "patch", result: &result.WorkloadWrites.DaemonSets, apiError: &result.Errors.WorkloadWrites.DaemonSets},
-		capCheck{group: "apps", resource: "statefulsets", verb: "patch", result: &result.WorkloadWrites.StatefulSets, apiError: &result.Errors.WorkloadWrites.StatefulSets},
-		capCheck{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &result.WorkloadWrites.Rollouts, apiError: &result.Errors.WorkloadWrites.Rollouts},
 	)
+	for _, w := range workloadWriteChecks {
+		checks = append(checks, capCheck{group: w.group, resource: w.resource, verb: w.verb, result: w.permission(&result.WorkloadWrites), apiError: w.apiError(&result.Errors.WorkloadWrites)})
+	}
 	if !ForceDisableHelmWrite {
 		checks = append(checks, capCheck{resource: "secrets", verb: "create", result: &result.HelmWrite, apiError: &result.Errors.HelmWrite})
 	}
@@ -852,7 +946,7 @@ func CheckNamespaceCapabilitiesForUser(ctx context.Context, username string, gro
 		ttl = capabilitiesErrorTTL
 		log.Printf("Warning: namespace %s capability checks for user %s had API errors, using short cache TTL (%v)", SanitizeForLog(namespace), SanitizeForLog(username), ttl)
 	}
-	userNamespaceCapabilitiesCache.Store(cacheKey, &userNSCapEntry{
+	state.userNamespaceCapabilitiesCache.Store(cacheKey, &userNSCapEntry{
 		caps:      *result,
 		expiresAt: time.Now().Add(ttl),
 	})
@@ -898,31 +992,6 @@ func canIAs(ctx context.Context, client *kubernetes.Clientset, username string, 
 
 	return result.Status.Allowed, false
 }
-
-// InvalidateUserCapabilitiesCache clears all per-user capability caches
-func InvalidateUserCapabilitiesCache() {
-	userCapabilitiesCache.Range(func(key, _ any) bool {
-		userCapabilitiesCache.Delete(key)
-		return true
-	})
-	userNamespaceCapabilitiesCache.Range(func(key, _ any) bool {
-		userNamespaceCapabilitiesCache.Delete(key)
-		return true
-	})
-}
-
-var (
-	cachedPermResult    *PermissionCheckResult
-	resourcePermsMu     sync.RWMutex
-	resourcePermsExpiry time.Time
-	// resourcePermsGen bumps on every invalidation. A probe captures it before
-	// it reads the client and publishes only if it is unchanged - the probe
-	// runs outside the lock, so without this a slow probe against the previous
-	// cluster would overwrite the current one's result with a fresh TTL.
-	resourcePermsGen      uint64
-	resourcePermsTTL      = 60 * time.Second
-	resourcePermsErrorTTL = 5 * time.Second // Short TTL when API errors caused fail-closed results
-)
 
 // resourceProbe describes one typed-resource probe target. The probe issues
 // `list?limit=1` against this resource (cluster-wide first, then namespace-scoped
@@ -1123,11 +1192,8 @@ func resolveProbeGVRs(p resourceProbe) []schema.GroupVersionResource {
 // returns per-kind scope plus a uniform projection. Results are cached for
 // 60s (5s on transient errors or rejected credentials).
 //
-// The second return reports whether the result describes the cluster and scope
-// still in effect. It is false when the clients were swapped or the cache was
-// invalidated while the probe was in flight: the result is returned anyway so a
-// caller torn down alongside the probe stays consistent with the client it
-// captured, but it was not published and must not be presented as current.
+// The second return reports whether the probe's connection is still installed.
+// The caller still gets the result from the connection it probed.
 //
 // Per-kind probe behavior:
 //   - Cluster-wide list?limit=1 first.
@@ -1145,100 +1211,80 @@ func resolveProbeGVRs(p resourceProbe) []schema.GroupVersionResource {
 // SelfSubjectAccessReview is one indirection too many — it can disagree with
 // reality on clusters using webhook authorizers (e.g. GKE IAM).
 func CheckResourcePermissions(ctx context.Context) (*PermissionCheckResult, bool) {
-	probe := probeResourcePermissions(ctx, false, GetDynamicClient)
+	return BoundOrCurrent(ctx).CheckResourcePermissions(ctx)
+}
+
+func (c *Connection) CheckResourcePermissions(ctx context.Context) (*PermissionCheckResult, bool) {
+	probe := c.probeResourcePermissions(ctx, false, c.Dynamic())
 	return probe.result, publishResourcePermissions(probe)
 }
 
-// permissionProbe is a resource-access probe's result before it is published
-// as the process-wide permission result. Startup probes, picks one result and
-// publishes only that, so a discarded probe never becomes what every later
-// reader of GetCachedPermissionResult sees.
+// Startup may discard a retry and publish the first result instead.
 type permissionProbe struct {
-	result    *PermissionCheckResult
-	hadErrors bool
-	// gen is the generation the probe started under; publishing checks it.
-	gen uint64
-	// unpublished is false for a result that is already the cache's, or that
-	// describes nothing to publish (no client).
+	conn        *Connection
+	state       *permissionState
+	result      *PermissionCheckResult
+	hadErrors   bool
 	unpublished bool
 }
 
-// probeResourcePermissions probes through the client dynFor returns, without
-// publishing. It serves a fresh cached result unless bypassCache is set.
-// dynFor is called only after the generation is captured. Request handlers pass
-// GetDynamicClient; only the cache's own startup probe spends the informer
-// client's rate limiter, through GetInformerDynamicClient.
-func probeResourcePermissions(ctx context.Context, bypassCache bool, dynFor func() dynamic.Interface) permissionProbe {
-	resourcePermsMu.RLock()
-	if !bypassCache && cachedPermResult != nil && time.Now().Before(resourcePermsExpiry) {
-		result := clonePermissionCheckResult(cachedPermResult)
-		resourcePermsMu.RUnlock()
-		return permissionProbe{result: result}
+func (c *Connection) probeResourcePermissions(ctx context.Context, bypassCache bool, dyn dynamic.Interface) permissionProbe {
+	state := c.permissions()
+	probe := permissionProbe{conn: c, state: state}
+	state.resourcePermsMu.RLock()
+	if !bypassCache && state.cachedPermResult != nil && time.Now().Before(state.resourcePermsExpiry) {
+		probe.result = clonePermissionCheckResult(state.cachedPermResult)
+		state.resourcePermsMu.RUnlock()
+		return probe
 	}
-	// Captured before any probe input is read. The publish check retires this
-	// result if the generation moved since, so a writer that changes an input
-	// must do so BEFORE bumping - bumping first leaves a probe that starts in
-	// between holding the old input under the new generation. The namespace
-	// scope setters follow that order. The --namespace and --namespace-scope
-	// inputs do not bump at all; they are written once at startup, before any
-	// probe exists, and moving them later would need the same treatment.
-	probeGen := resourcePermsGen
-	resourcePermsMu.RUnlock()
-	// After the generation: a context switch installs the new client before it
-	// bumps the generation, so the reverse order can pair the previous
-	// cluster's client with the new generation.
-	dyn := dynFor()
+	state.resourcePermsMu.RUnlock()
 
-	// Compute probes WITHOUT holding the write lock — concurrent callers
-	// may race but redundant probes are harmless. Holding the lock during
-	// network calls would block InvalidateResourcePermissionsCache() during
-	// context switch.
-
-	if GetClient() == nil || dyn == nil {
+	if c.Client() == nil || dyn == nil {
 		log.Printf("Warning: K8s client not initialized, returning no resource permissions")
-		// Current: nothing superseded this, there is simply nothing to probe.
-		return permissionProbe{result: &PermissionCheckResult{Perms: &ResourcePermissions{}, Scopes: map[string]k8score.ResourceScope{}}}
+		probe.result = &PermissionCheckResult{Perms: &ResourcePermissions{}, Scopes: map[string]k8score.ResourceScope{}}
+		return probe
 	}
 
-	forceNamespace := ForceNamespaceScope
-	scopeNamespaces, scopeCandidatesIncomplete := buildScopeCandidates(ctx)
-	if forceNamespace {
-		if target := GetNamespaceScopeTarget(); target != "" {
-			scopeNamespaces = mergeForcedScopeCandidate(target, scopeNamespaces)
+	inputs := c.namespaceListInputs()
+	scopeNamespaces, incomplete := c.buildScopeCandidates(ctx, inputs)
+	if inputs.forceNamespace {
+		if inputs.target != "" {
+			scopeNamespaces = mergeForcedScopeCandidate(inputs.target, scopeNamespaces)
 		} else {
 			log.Printf("Warning: --namespace-scope enabled but no namespace target is configured")
 		}
 	}
 
-	result, hadErrors := probeResourceAccess(ctx, dyn, scopeNamespaces, forceNamespace)
-	result.ScopeCandidatesTruncated = scopeCandidatesIncomplete
-	return permissionProbe{result: result, hadErrors: hadErrors, gen: probeGen, unpublished: true}
+	probe.result, probe.hadErrors = probeResourceAccess(ctx, dyn, scopeNamespaces, inputs.forceNamespace)
+	probe.result.ScopeCandidatesTruncated = incomplete
+	probe.unpublished = true
+	return probe
 }
 
-// publishResourcePermissions makes a probe's result the process-wide one and
-// reports whether it is current. A probe that started before the cluster or
-// namespace scope last changed describes something no longer current: the
-// caller may still use it, since a caller torn down alongside the probe stays
-// self-consistent with the client it captured, but the cache is left to the
-// probe that ran against the current one.
 func publishResourcePermissions(probe permissionProbe) bool {
+	probe.publish()
+	return probe.conn.permissionStateIsCurrent(probe.state)
+}
+
+func (probe permissionProbe) publish() {
 	if !probe.unpublished {
-		return true
+		return
 	}
-	resourcePermsMu.Lock()
-	defer resourcePermsMu.Unlock()
-	if resourcePermsGen != probe.gen {
-		log.Printf("[perms] discarding probe result: the cluster or scope changed while it was in flight (generation %d→%d)", probe.gen, resourcePermsGen)
-		return false
-	}
-	cachedPermResult = probe.result
 	ttl := resourcePermsTTL
 	if probe.hadErrors {
 		ttl = resourcePermsErrorTTL
 		log.Printf("Warning: resource access probes had API errors, using short cache TTL (%v)", ttl)
 	}
-	resourcePermsExpiry = time.Now().Add(ttl)
-	return true
+	state := probe.state
+	state.resourcePermsMu.Lock()
+	state.cachedPermResult = probe.result
+	state.resourcePermsExpiry = time.Now().Add(ttl)
+	state.resourcePermsMu.Unlock()
+}
+
+func (c *Connection) permissionStateIsCurrent(state *permissionState) bool {
+	// A scope change swaps the state, so a probe that read the old scope is superseded.
+	return c == Current() && c.perms.Load() == state
 }
 
 // MaxScopeCandidates was promoted to a package variable in deadlines.go
@@ -1252,17 +1298,10 @@ func publishResourcePermissions(probe permissionProbe) bool {
 // set: either namespace enumeration was non-authoritative or the safety cap
 // omitted candidates. Empty and incomplete is materially different from an
 // authoritative empty set — dynamic-resource denial must remain partial.
-func buildScopeCandidates(ctx context.Context) ([]string, bool) {
-	// GetEffectiveNamespace would return only one (kubeconfig context wins
-	// over --namespace). Reach into both globals so when an operator sets
-	// `--namespace` distinct from the context, both surface as candidates.
-	clientMu.RLock()
-	ctxNs := contextNamespace
-	flagNamespaces := fallbackNamespaceCandidatesLocked()
-	clientMu.RUnlock()
-
-	accessible, authoritative := GetAccessibleNamespaces(ctx)
-	out, dropped := mergeScopeCandidateLists(ctxNs, flagNamespaces, accessible, authoritative)
+func (c *Connection) buildScopeCandidates(ctx context.Context, inputs namespaceListInputs) ([]string, bool) {
+	accessible, source := c.accessibleNamespaces(ctx, inputs)
+	authoritative := source.Complete()
+	out, dropped := mergeScopeCandidateLists(c.contextNamespace, inputs.candidates, accessible, authoritative)
 	if dropped > 0 {
 		// Capped: kinds the user can list only in a dropped namespace stay
 		// marked denied. This must log on the non-authoritative path too —
@@ -1648,24 +1687,19 @@ func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNamesp
 // without corrupting the cache (mirrors the cache-hit path in
 // CheckResourcePermissions).
 func GetCachedPermissionResult() *PermissionCheckResult {
-	resourcePermsMu.RLock()
-	defer resourcePermsMu.RUnlock()
-	return clonePermissionCheckResult(cachedPermResult)
+	return Current().cachedPermissionResult()
 }
 
-// InvalidateResourcePermissionsCache forces the next CheckResourcePermissions call to refresh
-func InvalidateResourcePermissionsCache() {
-	resourcePermsMu.Lock()
-	defer resourcePermsMu.Unlock()
-	invalidateResourcePermissionsCacheLocked()
+// CachedPermissionResult is GetCachedPermissionResult for this connection.
+func (c *Connection) CachedPermissionResult() *PermissionCheckResult {
+	return c.cachedPermissionResult()
 }
 
-// invalidateResourcePermissionsCacheLocked drops the cached result and retires
-// every probe already in flight. Callers must hold resourcePermsMu for writing.
-func invalidateResourcePermissionsCacheLocked() {
-	cachedPermResult = nil
-	resourcePermsExpiry = time.Time{}
-	resourcePermsGen++
+func (c *Connection) cachedPermissionResult() *PermissionCheckResult {
+	state := c.permissions()
+	state.resourcePermsMu.RLock()
+	defer state.resourcePermsMu.RUnlock()
+	return clonePermissionCheckResult(state.cachedPermResult)
 }
 
 func clonePermissionCheckResult(result *PermissionCheckResult) *PermissionCheckResult {

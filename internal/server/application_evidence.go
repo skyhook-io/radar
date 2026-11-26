@@ -39,10 +39,13 @@ type applicationEvidenceAPI struct {
 func newApplicationEvidenceAPI() *applicationEvidenceAPI {
 	return &applicationEvidenceAPI{
 		operationContext: k8s.OperationContext,
-		snapshot:         k8s.GetConfigSnapshot,
-		currentContext:   k8s.ActiveClusterContext,
-		resolve:          collector.ResolveCandidates,
-		collect:          collector.SharedCollector().CollectTarget,
+		snapshot: func() (*rest.Config, string) {
+			conn := k8s.Current()
+			return conn.ConfigCopy(), k8s.TimelineClusterContext(conn.ContextName())
+		},
+		currentContext: k8s.ActiveClusterContext,
+		resolve:        collector.ResolveCandidates,
+		collect:        collector.SharedCollector().CollectTarget,
 	}
 }
 

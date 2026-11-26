@@ -220,11 +220,11 @@ export function formatCPUMillicores(millicores: number): string {
 // Time Formatting
 // =============================================================================
 
-export function formatCompactAge(value?: string): string {
+export function formatCompactAge(value?: string, now = Date.now()): string {
   if (!value) return ''
   const time = Date.parse(value)
   if (!Number.isFinite(time)) return ''
-  const seconds = Math.max(0, Math.floor((Date.now() - time) / 1000))
+  const seconds = Math.max(0, Math.floor((now - time) / 1000))
   if (seconds < 60) return `${seconds}s`
   const minutes = Math.floor(seconds / 60)
   if (minutes < 60) return `${minutes}m`
@@ -346,4 +346,18 @@ export function midTruncate(s: string, max = 24): string {
   const tail = Math.min(10, Math.floor(max / 2) - 1)
   const head = max - tail - 1
   return `${s.slice(0, head)}…${s.slice(-tail)}`
+}
+
+/**
+ * A camelCase or PascalCase name as words, keeping acronym runs whole:
+ * podIPs → "pod IPs", hostIP → "host IP", CSIDriver → "CSI Driver",
+ * containerID → "container ID". Keep plural acronym suffixes and versions
+ * together (APIs, IPv6). A one-letter "s" suffix can also be part of a short
+ * word like "Is", so TLSIsEnabled reads "TLSIs Enabled".
+ */
+export function splitCamelCase(name: string): string {
+  return name
+    .replace(/([\p{Ll}\d])(\p{Lu})/gu, '$1 $2')
+    .replace(/(\p{Lu}+)(\p{Lu}(?!s(?!\p{Ll})|v\d)\p{Ll})/gu, '$1 $2')
+    .trim()
 }

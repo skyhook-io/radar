@@ -32,12 +32,7 @@ func restoreClientGlobals(t *testing.T) {
 		savedUsesExec   = contextUsesExec
 		savedTotal      = totalContextCount
 		savedExecCmds   = execPluginCommands
-		savedClient     = k8sClient
-		savedConfig     = k8sConfig
-		savedDiscovery  = discoveryClient
-		savedDynamic    = dynamicClient
-		savedActive     = activeClients
-		savedGeneration = activeClientGeneration
+		savedConnection = installedConn.Load()
 		savedInit       = initializationStarted
 		savedDirCount   = kubeconfigDirectoryFileCount
 		savedDirPaths   = kubeconfigDirectoryPaths
@@ -65,12 +60,7 @@ func restoreClientGlobals(t *testing.T) {
 		contextUsesExec = savedUsesExec
 		totalContextCount = savedTotal
 		execPluginCommands = savedExecCmds
-		k8sClient = savedClient
-		k8sConfig = savedConfig
-		discoveryClient = savedDiscovery
-		dynamicClient = savedDynamic
-		activeClients = savedActive
-		activeClientGeneration = savedGeneration
+		installedConn.Store(savedConnection)
 		initializationStarted = savedInit
 		kubeconfigDirectoryFileCount = savedDirCount
 		kubeconfigDirectoryPaths = savedDirPaths

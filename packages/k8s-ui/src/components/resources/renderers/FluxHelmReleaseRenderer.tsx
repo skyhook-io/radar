@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
-import { Package, Settings, CheckCircle2, History, FileCode2, GitBranch } from 'lucide-react'
+import { FluxHealthCheckExprs } from './FluxHealthCheckExprs'
+import { Package, Settings, CheckCircle2, History, FileCode2 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, ProblemAlerts, ResourceLink } from '../../ui/drawer-components'
 import { GitOpsStatusBadge, ManagedResourcesList, SyncCountdown } from '../../gitops'
@@ -78,9 +79,6 @@ export function FluxHelmReleaseRenderer({ data, onNavigate, renderValuesReferenc
   const values = spec.values || {}
   const valueKeys = Object.keys(values)
 
-  // Dependencies
-  const dependsOn: Array<{ name: string; namespace?: string }> = spec.dependsOn || []
-
   // Chart reference
   const chartRef = spec.chart?.spec || {}
   const sourceRef = chartRef.sourceRef || {}
@@ -136,23 +134,6 @@ export function FluxHelmReleaseRenderer({ data, onNavigate, renderValuesReferenc
           )}
         </PropertyList>
       </Section>
-
-      {/* Dependencies */}
-      {dependsOn.length > 0 && (
-        <Section title={`Dependencies (${dependsOn.length})`} icon={GitBranch}>
-          <div className="flex flex-wrap gap-1">
-            {dependsOn.map((dep, idx) => (
-              <ResourceLink
-                key={idx}
-                name={dep.name}
-                kind="helmreleases"
-                namespace={dep.namespace || data.metadata?.namespace || ''}
-                onNavigate={onNavigate}
-              />
-            ))}
-          </div>
-        </Section>
-      )}
 
       {/* Values */}
       {(valuesFrom.length > 0 || valueKeys.length > 0) && (
@@ -254,6 +235,8 @@ export function FluxHelmReleaseRenderer({ data, onNavigate, renderValuesReferenc
           </PropertyList>
         </Section>
       )}
+
+      <FluxHealthCheckExprs exprs={spec.healthCheckExprs} />
 
       {/* Current Release */}
       {lastRelease && (

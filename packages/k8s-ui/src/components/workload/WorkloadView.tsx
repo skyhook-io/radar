@@ -1,14 +1,17 @@
 import { dedupeResourceRefs } from '../../utils/resource-refs'
+import { orderById } from '../shared/order-by-id'
+import { pluralize } from '../../utils/pluralize'
 import { isKubeRayClusterIdentity } from '../resources/resource-utils-ray'
 import { PodRow, PodListFrame, PodListToggle, workloadPodDetail } from './PodList'
 export { workloadPodDetail, podStatusLabel, podStatusClass, podDotClass } from './PodList'
-import { useState, useMemo, useEffect, useRef, useCallback, type ComponentType, type ReactNode } from 'react'
+import { useState, useMemo, useEffect, useRef, useCallback, type ComponentType, type ReactElement, type ReactNode } from 'react'
 import { flushSync } from 'react-dom'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { useProgressiveRefresh } from '../../hooks/useProgressiveRefresh'
 import { startViewTransitionSafe } from '../../utils/view-transition'
 import { FetchResult } from '../ui/FetchResult'
 import { PaneLoader } from '../ui/PaneLoader'
+import { EmptyState } from '../ui/EmptyState'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { clsx } from 'clsx'
 import {
@@ -39,6 +42,7 @@ import {
   Pause,
 } from 'lucide-react'
 import { isPausedDeployment } from '../../utils/bulk-workload-actions'
+import { WorkflowShutdownBadge } from '../shared/WorkflowStopDialog'
 import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom, Topology, TopologyNode, HPADiagnosis, WorkloadPodInfo, CertificateSigningRequestDetails } from '../../types'
 import type { GitOpsStatus } from '../../types/gitops'
 import type { ReadGap } from '../../types/read-coverage'
@@ -85,21 +89,54 @@ import {
 import { ServicePortCards, type ServicePortRenderProps } from '../resources/renderers/ServiceRenderer'
 import { isRolloutActivityVisible, rolloutMayAdvanceAutomatically, type WorkloadRolloutActivity } from '../../utils/workload-rollout'
 import { WorkloadRolloutNotice } from './WorkloadRolloutNotice'
-import { isCoreBatchJob } from '../../utils/api-resources'
+import { canonicalResourceGroup, isCoreBatchJob } from '../../utils/api-resources'
 import { formatRelativeAgeTime } from '../../utils/format'
 
-export type WorkloadTabType = 'overview' | 'spec' | 'topology' | 'timeline' | 'logs' | 'metrics' | 'reachability' | 'cost' | 'yaml'
-type TabType = WorkloadTabType
+const WORKLOAD_TABS = ['overview', 'spec', 'topology', 'timeline', 'logs', 'metrics', 'reachability', 'cost', 'yaml'] as const
+/** Built-in workload tab IDs. Hosts with extra tabs use WorkloadDetailTab for selection. */
+export type WorkloadTabType = typeof WORKLOAD_TABS[number]
+/** A built-in tab or a host-supplied tab ID. */
+export type WorkloadDetailTab = WorkloadTabType | (string & {})
+type TabType = WorkloadDetailTab
 
-/** A host-provided tab. `after` places it behind a built-in tab; `replaces` hides that built-in tab. */
+function isBuiltInTab(tab: TabType): tab is WorkloadTabType {
+  return WORKLOAD_TABS.some((id) => id === tab)
+}
+
+// Hosts offering only built-in tabs can retain their narrower callback.
+type BuiltInWorkloadTabSelection = {
+  extraTabs?: undefined
+  /** Next tab on user selection or link repair. Replace repairs the current history entry. */
+  onTabChange?: (tab: WorkloadTabType, options?: { replace?: boolean }) => void
+}
+
+type HostWorkloadTabSelection = {
+  /** Additional expanded-view tabs, including tabs from ApplicationDetail.
+   * Built-in IDs are reserved. The first registration for each host ID wins. */
+  extraTabs?: WorkloadExtraTab[]
+  /** Next tab on user selection or link repair. Replace repairs the current history entry. */
+  onTabChange?: (tab: WorkloadDetailTab, options?: { replace?: boolean }) => void
+}
+
+type WorkloadTabSelection = BuiltInWorkloadTabSelection | HostWorkloadTabSelection
+
+/** A host-provided tab in the expanded workload view. */
 export interface WorkloadExtraTab {
+  /** Nonempty ID outside the built-in tab IDs. The first registration for an ID wins. */
   id: string
   label: string
   icon?: ReactNode
+  /** Place after this built-in tab before applying tabOrder. Tabs after the same anchor
+   * appear in reverse registration order. Append if the anchor is absent. */
   after?: WorkloadTabType
+  /** Hide this built-in tab and take its place when after is omitted.
+   * Links and Overview shortcuts to the built-in tab open this tab. */
   replaces?: WorkloadTabType
   /** Trailing adornment after the label, e.g. a status mark. */
   badge?: ReactNode
+  /** Keep this tab available when the workload read returns 404 (deleted or never existed). */
+  availableWhenDeleted?: boolean
+  /** Render the content when this tab is selected. */
   render: () => ReactNode
 }
 
@@ -122,7 +159,7 @@ export interface ServingResourceDetail {
 // MAIN WORKLOAD VIEW — presentation only, data injected via props
 // ============================================================================
 
-interface WorkloadViewProps {
+type WorkloadViewBaseProps = {
   kind: string
   namespace: string
   name: string
@@ -223,6 +260,8 @@ interface WorkloadViewProps {
   renderServicePortPanel?: (props: ServicePortRenderProps) => ReactNode
   /** Whether the resource is loading */
   isLoading?: boolean
+  /** Whether the resource read is in flight, including a refresh of cached data. */
+  isFetching?: boolean
   /** Fetch error for the resource (preserves status + message so the
    *  drawer body can distinguish 403/404/503 from "no data"). */
   resourceError?: unknown
@@ -287,11 +326,8 @@ interface WorkloadViewProps {
   /** Load cluster schemas for YAML validation and completion. */
   yamlSchemaLoader?: EditableYamlViewProps['schemaLoader']
 
-  // ── Tab state (optional URL sync) ────────────────────────────────────────
-  /** Controlled active tab. If not provided, managed internally. */
-  activeTab?: TabType
-  /** Called when tab changes (for URL sync etc.) */
-  onTabChange?: (tab: TabType, opts?: { replace?: boolean }) => void
+  /** Requested tab ID. Omit for internal selection. Pending host tabs keep this ID while their content is unavailable. */
+  activeTab?: WorkloadDetailTab
 
   // ── GitOps navigation ─────────────────────────────────────────────────────
   /**
@@ -361,8 +397,10 @@ interface WorkloadViewProps {
     /** The resource's operational issues, for a summary that shows them itself. */
     leadContent?: ReactNode
   }) => ReactNode
-  /** Extra tabs for the expanded view (e.g. a domain's own sections). */
-  extraTabs?: WorkloadExtraTab[]
+  /** By default, repair hidden built-in tab links and preserve unknown host IDs.
+   * Pass false while registering replacements to preserve hidden built-in IDs too.
+   * Pass true when registration is complete to also repair unknown host IDs. */
+  extraTabsComplete?: boolean
   /** Expanded view: a line under the title, above the tabs, shown on every tab. */
   subheader?: ReactNode
   /** Expanded view: tab ids in display order; tabs not listed follow in their usual order. */
@@ -418,6 +456,8 @@ interface WorkloadViewProps {
    *  belongs inline when there are no tabs (drawer) but would duplicate the
    *  Diagnose tab when it is. */
   renderOverviewExtra?: (props: { kind: string; namespace: string; name: string; group?: string; context: 'drawer' | 'expanded' }) => ReactNode
+  /** Contextual inspection actions for the expanded workload Timeline. */
+  timelineActions?: ReactNode
   /** Render lightweight overview intro content before the default renderer. */
   renderOverviewIntro?: (props: { kind: string; namespace: string; name: string }) => ReactNode
   /** Render content at the TOP of the overview tab, above the renderer (e.g. live
@@ -455,6 +495,12 @@ interface WorkloadViewProps {
   resolvedEnvFrom?: ResolvedEnvFrom
 }
 
+type WorkloadViewProps = WorkloadViewBaseProps & WorkloadTabSelection
+
+// Give inline callbacks a contextual type for each tab registration shape.
+export function WorkloadView(props: WorkloadViewBaseProps & BuiltInWorkloadTabSelection): ReactElement
+export function WorkloadView(props: WorkloadViewBaseProps & HostWorkloadTabSelection & { extraTabs: WorkloadExtraTab[] | undefined }): ReactElement
+export function WorkloadView(props: WorkloadViewProps): ReactElement
 export function WorkloadView({
   kind: kindProp,
   namespace,
@@ -498,6 +544,7 @@ export function WorkloadView({
   renderServicePortAction,
   renderServicePortPanel,
   isLoading: resourceLoading = false,
+  isFetching: resourceFetching = false,
   resourceError,
   refetch: refetchProp,
   // Timeline
@@ -543,6 +590,7 @@ export function WorkloadView({
   onSelectTopologyMember,
   renderSummary,
   extraTabs,
+  extraTabsComplete,
   tabOrder,
   specTab,
   subheader,
@@ -556,6 +604,7 @@ export function WorkloadView({
   onDuplicate,
   onDownload,
   renderOverviewExtra,
+  timelineActions,
   renderOverviewIntro,
   renderOverviewLead,
   hasOperationalIssues,
@@ -588,10 +637,15 @@ export function WorkloadView({
   // Tab state — controlled or uncontrolled
   const [internalTab, setInternalTab] = useState<TabType>('overview')
   const activeTab = controlledTab ?? internalTab
+  const hasExtraTabs = extraTabs !== undefined
+  const notifyTabChange = useCallback((tab: TabType, options?: { replace?: boolean }) => {
+    if (hasExtraTabs) onTabChange?.(tab, options)
+    else if (isBuiltInTab(tab)) onTabChange?.(tab, options)
+  }, [hasExtraTabs, onTabChange])
   const handleSetTab = useCallback((tab: TabType) => {
     setInternalTab(tab)
-    onTabChange?.(tab)
-  }, [onTabChange])
+    notifyTabChange(tab)
+  }, [notifyTabChange])
 
   // Collapsed mode state (YAML toggle for drawer mode)
   const [showYaml, setShowYaml] = useState(initialTab === 'yaml')
@@ -613,18 +667,29 @@ export function WorkloadView({
   const [initialContainer, setInitialContainer] = useState<string | null>(null)
   // Hosts reuse this view across resources, and a resource can be recreated
   // under the same name: a Pod picked for one must not reach the next, not
-  // even for one render. A UID arriving with the first load is not a change.
-  const selectionIdentity = `${kind}\u0000${namespace}\u0000${name}`
-  // A host can briefly pass the previous resource with the new name.
-  const selectionUID = resource?.metadata?.name === name && (resource?.metadata?.namespace ?? '') === (namespace ?? '') ? resource?.metadata?.uid as string | undefined : undefined
-  const [selectionScope, setSelectionScope] = useState({ identity: selectionIdentity, uid: selectionUID })
-  if (selectionScope.identity !== selectionIdentity || (selectionUID && selectionScope.uid !== selectionUID)) {
-    const recreated = selectionScope.identity === selectionIdentity && selectionScope.uid !== undefined
-    setSelectionScope({ identity: selectionIdentity, uid: selectionUID })
-    if (selectionScope.identity !== selectionIdentity || recreated) {
-      setSelectedPod(null)
-      setInitialContainer(null)
-    }
+  // even for one render. The first read can fill in a missing group or UID.
+  const selectionGroup = canonicalResourceGroup(apiKind, group)
+  const selectionIdentity = `${apiKind}\u0000${namespace}\u0000${name}`
+  // A host can briefly pass the previous object after navigation.
+  const resourceGroup = apiVersionToGroup(resource?.apiVersion)
+  const resourceMatchesSelection = resource?.metadata?.name === name &&
+    (resource.metadata.namespace ?? '') === (namespace ?? '') &&
+    (selectionGroup === undefined || selectionGroup === resourceGroup) &&
+    typeof resource.kind === 'string' &&
+    kindToPluralWithGroup(resource.kind, resourceGroup) === kindToPluralWithGroup(apiKind, selectionGroup ?? resourceGroup)
+  const selectionUID = resourceMatchesSelection ? resource.metadata.uid as string | undefined : undefined
+  const resolvedGroup = selectionGroup ?? (resourceMatchesSelection && resource.apiVersion ? resourceGroup : undefined)
+  const [selectionScope, setSelectionScope] = useState({ identity: selectionIdentity, group: resolvedGroup, uid: selectionUID, generation: 0 })
+  const scopeChanged = selectionScope.identity !== selectionIdentity ||
+    (resolvedGroup !== undefined && selectionScope.group !== undefined && resolvedGroup !== selectionScope.group) ||
+    (selectionUID !== undefined && selectionScope.uid !== undefined && selectionUID !== selectionScope.uid)
+  if (scopeChanged) {
+    setSelectionScope({ identity: selectionIdentity, group: resolvedGroup, uid: selectionUID, generation: selectionScope.generation + 1 })
+    setSelectedPod(null)
+    setInitialContainer(null)
+  } else if ((resolvedGroup !== undefined && selectionScope.group === undefined) ||
+    (selectionUID !== undefined && selectionScope.uid === undefined)) {
+    setSelectionScope({ ...selectionScope, group: resolvedGroup ?? selectionScope.group, uid: selectionUID ?? selectionScope.uid })
   }
   const [copied, setCopied] = useState<string | null>(null)
   const [saveSuccess, setSaveSuccess] = useState(false)
@@ -660,7 +725,6 @@ export function WorkloadView({
       groupByApp: true,
     })
   }, [allEvents, topology, kind, group, namespace, name, historyScoped])
-  const historyNotes = useMemo(() => workloadHistoryNotes(historyCoverage, historyGaps), [historyCoverage, historyGaps])
 
   // Topology tab — the seeded neighborhood around this one workload (its
   // ownership core + attached Services/config/policies), not the whole namespace.
@@ -898,9 +962,10 @@ export function WorkloadView({
     : null
   const rolloutActivity = rolloutDisplay?.activity ?? null
   const crossplaneResource = isManagedResource(resource) || isComposite(resource) || getCrossplanePauseState(resource) === 'acknowledged'
+  const resourceNotFound = isFetchError(resourceError) && resourceError.status === 404
   // A 404 with a cached copy: the object was deleted while this view was
   // open. Everything below that copy describes the past.
-  const resourceGone = Boolean(resource) && isFetchError(resourceError) && resourceError.status === 404
+  const resourceGone = Boolean(resource) && resourceNotFound
   // A held rollout already reads "Rollout paused" in the status chip. With nothing
   // pending the chip shows plain health, so this badge is the only paused signal.
   const statusSaysRolloutPaused = rolloutActivity?.phase === 'paused' && isRolloutActivityVisible(rolloutActivity)
@@ -912,6 +977,8 @@ export function WorkloadView({
       </Badge>
     </Tooltip>
   )
+  // spec.shutdown is intent; the phase stays Running until Argo acts, so say so.
+  const workflowShutdownBadge = !resourceGone && <WorkflowShutdownBadge data={resource} />
   const status = resourceGone
     ? { text: 'Deleted', color: 'status-unknown' }
     : rolloutDisplay?.status ?? getResourceStatus(apiKind, resource)
@@ -927,7 +994,16 @@ export function WorkloadView({
   const renderDiagnoseTabForState = resourceGone ? undefined : renderDiagnoseTab
   // A host's summary, tabs and subheader can hold actions on the live object.
   const renderSummaryForState = resourceGone ? undefined : renderSummary
-  const extraTabsForState = resourceGone ? undefined : extraTabs
+  const offeredExtraTabs = useMemo(() => {
+    if (!extraTabs) return undefined
+    const seen = new Set<string>(WORKLOAD_TABS)
+    return extraTabs.filter(({ id }) => {
+      if (!id || seen.has(id)) return false
+      seen.add(id)
+      return true
+    })
+  }, [extraTabs])
+  const availableExtraTabs = expanded ? offeredExtraTabs?.filter(tab => !resourceNotFound || tab.availableWhenDeleted) : undefined
   // A remount closes any dialog the bar had open: once its actions are gone,
   // a confirm button left on screen would do nothing.
   const actionsBarKey = resourceGone ? 'gone' : 'live'
@@ -977,7 +1053,7 @@ export function WorkloadView({
   const showMetricsTab = isMetricsAvailable ? isMetricsAvailable(kind, resource) : false
   const showCostTab = isCostAvailable ? isCostAvailable(kind, resource) : false
   const normalizedKind = kindToPlural(kind).toLowerCase()
-  const logsWithoutPods = supportsLogsWithoutPods(normalizedKind, kind, group, resource?.apiVersion)
+  const logsWithoutPods = actionsBarProps?.replicaSetLogTab || supportsLogsWithoutPods(normalizedKind, kind, group, resource?.apiVersion)
   const logsTabVisible = Boolean(renderLogsTab) && (allPods.length > 0 || logsWithoutPods)
   const metricsTabVisible = Boolean(showMetricsTab && renderMetricsTab)
   const costTabVisible = Boolean(showCostTab && renderCostTab)
@@ -1011,23 +1087,38 @@ export function WorkloadView({
     { id: 'cost', label: 'Cost', icon: <Coins className="w-4 h-4" />, hidden: !costTabVisible },
     { id: 'yaml', label: 'YAML', icon: <FileText className="w-4 h-4" /> },
   ]
-  const allTabs = orderTabs(mergeExtraTabs(tabs, expanded ? extraTabsForState : undefined), expanded ? tabOrder : undefined)
-  const requestedTabAvailable = allTabs.some((tab) => tab.id === requestedTab && !tab.hidden)
-  const effectiveTab: TabType = requestedTabAvailable ? requestedTab : 'overview'
-  const activeExtraTab = expanded ? extraTabsForState?.find((x) => x.id === effectiveTab) : undefined
+  const allTabs = orderById(mergeExtraTabs(tabs, availableExtraTabs), expanded ? tabOrder : undefined)
+  const tabIsVisible = (id: TabType) => allTabs.some((tab) => tab.id === id && !tab.hidden)
+  const tabTarget = (id: WorkloadTabType) => tabIsVisible(id) ? id : availableExtraTabs?.find((tab) => tab.replaces === id)?.id
+  const requestedTabAvailable = tabIsVisible(requestedTab)
+  const requestedHostTabKnown = offeredExtraTabs?.some(({ id }) => id === requestedTab)
+  const replacementTab = availableExtraTabs?.find((tab) => tab.replaces === requestedTab)?.id
+  const fallbackTab = replacementTab ?? tabTarget('overview') ?? 'overview'
+  const effectiveTab: TabType = requestedTabAvailable ? requestedTab : fallbackTab
+  const activeExtraTab = availableExtraTabs?.find((tab) => tab.id === effectiveTab)
+  const timelineTarget = tabTarget('timeline')
+  const logsTarget = tabTarget('logs')
+  const topologyTarget = tabTarget('topology')
+  const hiddenBuiltInTab = (
+    (requestedTab === 'spec' && !!resource && !resourceLoading && !expandedSummary) ||
+    (requestedTab === 'topology' && topologyTabHidden) ||
+    (requestedTab === 'metrics' && (!renderMetricsTab || (!!resource && !resourceLoading && !showMetricsTab))) ||
+    (requestedTab === 'cost' && (!renderCostTab || (!!resource && !resourceLoading && !showCostTab))) ||
+    (requestedTab === 'logs' && logsFallbackReady)
+  )
+  const unavailableTabConfirmed = isBuiltInTab(requestedTab)
+    ? extraTabsComplete !== false && hiddenBuiltInTab
+    : extraTabsComplete === true && expanded && !resourceLoading && !requestedHostTabKnown
   const shouldCommitFallback =
-    requestedTab !== 'overview' &&
+    active &&
+    requestedTab !== fallbackTab &&
     !requestedTabAvailable &&
-    (
-      (requestedTab === 'spec' && !!resource && !resourceLoading && !expandedSummary) ||
-      (requestedTab === 'topology' && topologyTabHidden) ||
-      (requestedTab === 'metrics' && (!renderMetricsTab || (!!resource && !resourceLoading && !showMetricsTab))) ||
-      (requestedTab === 'cost' && (!renderCostTab || (!!resource && !resourceLoading && !showCostTab))) ||
-      (requestedTab === 'logs' && logsFallbackReady)
-    )
+    !((resourceLoading || resourceFetching) && activeExtraTab && !activeExtraTab.availableWhenDeleted) &&
+    (replacementTab !== undefined || unavailableTabConfirmed)
   useEffect(() => {
-    if (shouldCommitFallback && activeTab !== 'overview') onTabChange?.('overview', { replace: true })
-  }, [activeTab, onTabChange, shouldCommitFallback])
+    if (!shouldCommitFallback) return
+    notifyTabChange(fallbackTab, { replace: true })
+  }, [notifyTabChange, shouldCommitFallback, fallbackTab, requestedTab])
   const expandedOverview = expanded ? renderExpandedOverview?.({
     kind, apiKind, namespace, name, resource,
     leadContent: (hasOverviewLead ?? hasOperationalIssues) && renderOverviewLeadForState
@@ -1055,6 +1146,7 @@ export function WorkloadView({
               )}
               {!resourceGone && crossplaneResource && <CrossplanePauseChip state={getCrossplanePauseState(resource)} />}
               {deploymentPausedBadge}
+              {workflowShutdownBadge}
             </div>
             <div className="flex shrink-0 flex-nowrap items-center justify-end gap-1.5">
               {diagnoseAction}
@@ -1302,6 +1394,7 @@ export function WorkloadView({
             )}
             {!resourceGone && crossplaneResource && <CrossplanePauseChip state={getCrossplanePauseState(resource)} />}
             {deploymentPausedBadge}
+            {workflowShutdownBadge}
             {!resourceGone && statusNote}
           </>
         )
@@ -1421,13 +1514,21 @@ export function WorkloadView({
     >
       <div className="flex h-full min-h-0 flex-col">
         {deletedNotice && <div className="shrink-0 px-4 pt-4">{deletedNotice}</div>}
-        {!resourceGone && effectiveTab !== 'overview' && rolloutActivity && (rolloutActivity.phase !== 'idle' || recentImageSave) && (
+        {resourceMatchesSelection && !resourceGone && effectiveTab !== 'overview' && rolloutActivity && (rolloutActivity.phase !== 'idle' || recentImageSave) && (
           <div className="shrink-0 px-4 pt-4">
             <WorkloadRolloutNotice activity={rolloutActivity} recentImageSave={recentImageSave} />
           </div>
         )}
         <div className="min-h-0 flex-1">
-        {activeExtraTab && <div className="h-full min-h-0 overflow-y-auto">{activeExtraTab.render()}</div>}
+        {/* Keyed by tab: another host tab opens at its top, not at the scroll offset the last one was left at. */}
+        {activeExtraTab && (
+          <div
+            key={JSON.stringify([selectionScope.generation, activeExtraTab.id])}
+            className="h-full min-h-0 overflow-y-auto"
+          >
+            {activeExtraTab.render()}
+          </div>
+        )}
         {effectiveTab === 'overview' && expandedSummary ? (
           <div className="h-full min-h-0 overflow-y-auto">{expandedSummary}</div>
         ) : effectiveTab === 'overview' && expandedOverview ? (
@@ -1460,10 +1561,10 @@ export function WorkloadView({
               copied={copied}
               onSaveSecretValue={canUpdateSecrets && !resourceGone ? handleSaveSecretValue : undefined}
               isSavingSecret={isUpdatingResource}
-              onOpenLogs={handleOpenLogs}
-              onSwitchToTimeline={() => handleSetTab('timeline')}
-              onSwitchToLogs={logsTabVisible ? () => handleSetTab('logs') : undefined}
-              onSwitchToTopology={!topologyTabHidden ? () => handleSetTab('topology') : undefined}
+              onOpenLogs={tabIsVisible('logs') ? handleOpenLogs : undefined}
+              onSwitchToTimeline={timelineTarget ? () => handleSetTab(timelineTarget) : undefined}
+              onSwitchToLogs={logsTarget ? () => handleSetTab(logsTarget) : undefined}
+              onSwitchToTopology={topologyTarget ? () => handleSetTab(topologyTarget) : undefined}
               rendererOverrides={rendererOverridesForState}
               resolvedEnvFrom={resolvedEnvFrom}
               events={overviewEvents}
@@ -1503,24 +1604,33 @@ export function WorkloadView({
           </div>
         )}
         {effectiveTab === 'timeline' && (
-          <EventsTab
-            focusEvent={timelineFocusEvent}
-            events={resourceEvents}
-            isLoading={eventsLoading}
-            truncated={historyTruncated}
-            onLoadOlder={onLoadOlderHistory}
-            loadingOlder={loadingOlderHistory}
-            olderError={olderHistoryError}
-            scoped={historyScoped}
-            incomplete={historyIncomplete}
-            notes={historyNotes}
-            error={historyError}
-            onRetry={onRetryHistory}
-            selectedEventId={selectedEventId}
-            onSelectEvent={setSelectedEventId}
-            topology={topology}
-            onResourceClick={onNavigateToResource}
-          />
+          <div className="flex h-full min-h-0 flex-col">
+            {!resourceGone && timelineActions}
+            <div className="min-h-0 flex-1">
+              <EventsTab
+                focusEvent={timelineFocusEvent}
+                events={resourceEvents}
+                isLoading={eventsLoading}
+                truncated={historyTruncated}
+                onLoadOlder={onLoadOlderHistory}
+                loadingOlder={loadingOlderHistory}
+                olderError={olderHistoryError}
+                scoped={historyScoped}
+                scopeText={isRuntimeWorkloadOverviewKind(apiKind, group) && ['apps', 'batch'].includes(apiVersionToGroup(resource?.apiVersion))
+                  ? `This ${displayKindName(apiKind, resource?.kind)}, its recorded children and attached resources.`
+                  : `Changes to this ${displayKindName(apiKind, resource?.kind)}.`}
+                incomplete={historyIncomplete}
+                historyCoverage={historyCoverage}
+                historyGaps={historyGaps}
+                error={historyError}
+                onRetry={onRetryHistory}
+                selectedEventId={selectedEventId}
+                onSelectEvent={setSelectedEventId}
+                topology={topology}
+                onResourceClick={onNavigateToResource}
+              />
+            </div>
+          </div>
         )}
         {effectiveTab === 'logs' && renderLogsTab && (
           renderLogsTab({
@@ -1821,8 +1931,10 @@ function EventsTab({
   loadingOlder,
   olderError,
   scoped,
+  scopeText,
   incomplete,
-  notes = [],
+  historyCoverage,
+  historyGaps,
   error,
   onRetry,
   selectedEventId,
@@ -1838,9 +1950,10 @@ function EventsTab({
   loadingOlder?: boolean
   olderError?: Error | null
   scoped?: boolean
+  scopeText: string
   incomplete?: boolean
-  /** Coverage and access sentences from workloadHistoryNotes. */
-  notes?: string[]
+  historyCoverage?: WorkloadHistoryCoverage | null
+  historyGaps?: ReadGap[] | null
   error?: Error | null
   onRetry?: () => void
   selectedEventId: string | null
@@ -1971,6 +2084,31 @@ function EventsTab({
     )
   }
 
+  const notes = workloadHistoryNotes(historyCoverage, historyGaps)
+  const historySince = historyCoverage?.complete_since
+  const historyDetails = (
+    <ul className="space-y-1">
+      {incomplete && <li>Some past runs or related resources may be missing.</li>}
+      {notes.map((note, index) => <li key={note} title={index === 0 && historySince ? new Date(historySince).toLocaleString() : undefined}>{note}</li>)}
+      {truncated && (
+        <li>
+          Older history exists.{' '}
+          {olderError && <span className="text-[var(--color-error)]" title={olderError.message}>Couldn't load older events. </span>}
+          {onLoadOlder && (
+            <button
+              type="button"
+              onClick={onLoadOlder}
+              disabled={loadingOlder}
+              className="underline decoration-theme-border underline-offset-2 hover:text-theme-text-primary disabled:opacity-60"
+            >
+              {loadingOlder ? 'Loading…' : olderError ? 'Try again' : 'Load older'}
+            </button>
+          )}
+        </li>
+      )}
+    </ul>
+  )
+
   return (
     <div className="h-full flex flex-col overflow-hidden">
       {focusEvent && !focusFound && (
@@ -1998,84 +2136,93 @@ function EventsTab({
           )}
         </div>
       )}
-      {(scoped || truncated || incomplete || notes.length > 0) && (
-        <div className="shrink-0 flex flex-wrap items-center gap-x-2 gap-y-0.5 border-b border-theme-border bg-theme-base px-4 py-1.5 text-xs text-theme-text-secondary" role="note">
-          {scoped && (
-            <span className="text-theme-text-tertiary">
-              This workload, what it runs, and the Services, Ingresses, config and scalers attached to it.
-            </span>
-          )}
-          {incomplete && <span>Some past runs or related resources may be outside the history Radar can follow.</span>}
-          {notes.map((note) => <span key={note}>{note}</span>)}
-          {truncated && <span>Showing the most recent events. Older history exists.</span>}
-          {truncated && olderError && (
-            <span className="text-[var(--color-error)]" title={olderError.message}>Couldn't load older events.</span>
-          )}
-          {truncated && onLoadOlder && (
-            <button
-              type="button"
-              onClick={onLoadOlder}
-              disabled={loadingOlder}
-              className="underline decoration-theme-border underline-offset-2 hover:text-theme-text-primary disabled:opacity-60"
-            >
-              {loadingOlder ? 'Loading…' : olderError ? 'Try again' : 'Load older'}
-            </button>
-          )}
+      {scoped && (
+        <div className="shrink-0 border-b border-theme-border bg-theme-surface px-4 py-3 text-sm leading-relaxed text-theme-text-secondary" role="note">
+          {scopeText}
         </div>
       )}
-      {/* Swimlane — the shared TimelineSwimlanes widget (kind chips, top axis with
-          ticks + Now line, event clustering), flat + compact for a single subject.
-          Its drawer is suppressed (compact); the list below is the detail surface. */}
-      <div className="shrink-0 border-b border-theme-border">
-        <TimelineSwimlanes
-          events={cleanEvents}
-          grouping="flat"
-          compact
-          topology={topology}
-          onResourceClick={onResourceClick}
-          viewWindow={viewWindow ?? undefined}
-          bounds={bounds ?? undefined}
-          nowMs={now}
-          isLive={userWindow == null}
-          onViewWindowChange={(w) => {
-            const now = Date.now()
-            const MIN = 15 * 60_000
-            let { fromMs, toMs } = w
-            // Floor zoom-in at ~15 min: a tiny empty sub-window strands the user
-            // (the "move the strip above" hint has no strip here).
-            if (toMs - fromMs < MIN) {
-              const c = (fromMs + toMs) / 2
-              fromMs = c - MIN / 2
-              toMs = c + MIN / 2
+      {cleanEvents.length === 0 ? (
+        <div className="min-h-0 flex-1 overflow-auto p-4">
+          <EmptyState
+            icon={Activity}
+            className="max-w-2xl"
+            headline="No recorded activity"
+            body={
+              <div className="space-y-4 text-sm leading-relaxed">
+                <p>{events.length > 0
+                  ? 'The recorded events have no usable timestamps to display.'
+                  : 'No changes were found in the history Radar holds for this resource.'}</p>
+                {(truncated || incomplete || notes.length > 0) && (
+                  <div className="space-y-1 border-t border-theme-border pt-3 text-left text-xs leading-relaxed text-theme-text-tertiary" role="note">
+                    {historyDetails}
+                  </div>
+                )}
+              </div>
             }
-            // Never pan/zoom past now: shift the window back so its right edge is
-            // at most the present (there's nothing in the future to show).
-            if (toMs > now) {
-              const width = toMs - fromMs
-              toMs = now
-              fromMs = now - width
-            }
-            setUserWindow({ fromMs, toMs })
-          }}
-          selectedEventId={selectedEventId}
-          onSelectedEventChange={handleSelect}
-        />
-      </div>
+          />
+        </div>
+      ) : (
+        <>
+          {(truncated || incomplete || notes.length > 0) && (
+            <div className="shrink-0 space-y-2 border-b border-theme-border bg-theme-base px-4 py-3 text-sm leading-relaxed text-theme-text-secondary" role="note">
+              {historyDetails}
+            </div>
+          )}
+          {/* Swimlane — the shared TimelineSwimlanes widget (kind chips, top axis with
+              ticks + Now line, event clustering), flat + compact for a single subject.
+              Its drawer is suppressed (compact); the list below is the detail surface. */}
+          <div className="shrink-0 border-b border-theme-border">
+            <TimelineSwimlanes
+              events={cleanEvents}
+              grouping="flat"
+              compact
+              topology={topology}
+              onResourceClick={onResourceClick}
+              viewWindow={viewWindow ?? undefined}
+              bounds={bounds ?? undefined}
+              nowMs={now}
+              isLive={userWindow == null}
+              onViewWindowChange={(w) => {
+                const now = Date.now()
+                const MIN = 15 * 60_000
+                let { fromMs, toMs } = w
+                // Floor zoom-in at ~15 min: a tiny empty sub-window strands the user
+                // (the "move the strip above" hint has no strip here).
+                if (toMs - fromMs < MIN) {
+                  const c = (fromMs + toMs) / 2
+                  fromMs = c - MIN / 2
+                  toMs = c + MIN / 2
+                }
+                // Never pan/zoom past now: shift the window back so its right edge is
+                // at most the present (there's nothing in the future to show).
+                if (toMs > now) {
+                  const width = toMs - fromMs
+                  toMs = now
+                  fromMs = now - width
+                }
+                setUserWindow({ fromMs, toMs })
+              }}
+              selectedEventId={selectedEventId}
+              onSelectedEventChange={handleSelect}
+            />
+          </div>
 
-      {/* Event list — the shared TimelineList: same event icons/colors as the
-          swimlane, kind badge + resource link, namespace, message, and inline diff,
-          all shown directly. compact drops its toolbar (the swimlane above owns the
-          window). */}
-      <div className="min-h-0 flex-1">
-        <TimelineList
-          compact
-          events={cleanEvents}
-          isLoading={false}
-          onResourceClick={onResourceClick}
-          selectedEventId={selectedEventId}
-          onSelectEvent={handleSelect}
-        />
-      </div>
+          {/* Event list — the shared TimelineList: same event icons/colors as the
+              swimlane, kind badge + resource link, namespace, message, and inline diff,
+              all shown directly. compact drops its toolbar (the swimlane above owns the
+              window). */}
+          <div className="min-h-0 flex-1">
+            <TimelineList
+              compact
+              events={cleanEvents}
+              isLoading={false}
+              onResourceClick={onResourceClick}
+              selectedEventId={selectedEventId}
+              onSelectEvent={handleSelect}
+            />
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -3062,7 +3209,7 @@ function getScalingSummary(
   }
 
   return {
-    label: spec.replicas !== undefined ? `${spec.replicas} replicas` : 'Manual',
+    label: spec.replicas !== undefined ? pluralize(spec.replicas, 'replica') : 'Manual',
     detail: 'replicas from workload spec',
     stats: [
       { label: 'Desired', value: spec.replicas ?? '-' },
@@ -4270,21 +4417,13 @@ function mergeAndRankEvents(events: TimelineEvent[], updates: TimelineEvent[]): 
     })
 }
 
-function orderTabs(tabs: DetailShellTab<TabType>[], order: string[] | undefined): DetailShellTab<TabType>[] {
-  if (!order || order.length === 0) return tabs
-  const rank = (id: string) => {
-    const i = order.indexOf(id)
-    return i < 0 ? order.length : i
-  }
-  return tabs.map((t, i) => ({ t, i })).sort((a, b) => rank(a.t.id) - rank(b.t.id) || a.i - b.i).map((x) => x.t)
-}
 
 function mergeExtraTabs(tabs: DetailShellTab<TabType>[], extra: WorkloadExtraTab[] | undefined): DetailShellTab<TabType>[] {
   if (!extra || extra.length === 0) return tabs
-  const replaced = new Set(extra.map((x) => x.replaces).filter(Boolean))
+  const replaced = new Set<TabType | undefined>(extra.map((x) => x.replaces))
   const out = tabs.map((t) => (replaced.has(t.id) ? { ...t, hidden: true } : t))
   for (const x of extra) {
-    const tab: DetailShellTab<TabType> = { id: x.id as TabType, label: x.label, icon: x.icon, badge: x.badge }
+    const tab: DetailShellTab<TabType> = { id: x.id, label: x.label, icon: x.icon, badge: x.badge }
     const anchor = x.after ?? x.replaces
     const idx = anchor ? out.findIndex((t) => t.id === anchor) : -1
     if (idx >= 0) out.splice(idx + 1, 0, tab)

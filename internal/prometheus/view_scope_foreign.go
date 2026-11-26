@@ -157,7 +157,11 @@ func viewForeignParts(checks []ViewMetric, ours string, span time.Duration) []vi
 		for i, k := range f.Keys {
 			plain[i] = k.Label
 		}
-		spellings := []spelling{{labels: plain}}
+		var inNamespace []viewMatcher
+		if f.Namespace != "" {
+			inNamespace = []viewMatcher{{label: "namespace", op: "=", value: f.Namespace}}
+		}
+		spellings := []spelling{{labels: plain, extra: inNamespace}}
 		if f.NamespaceExported {
 			exported := slices.Clone(plain)
 			for i, l := range exported {
@@ -165,9 +169,13 @@ func viewForeignParts(checks []ViewMetric, ours string, span time.Duration) []vi
 					exported[i] = "exported_namespace"
 				}
 			}
+			exportedIn := viewMatcher{label: "exported_namespace", op: "!=", value: ""}
+			if f.Namespace != "" {
+				exportedIn = viewMatcher{label: "exported_namespace", op: "=", value: f.Namespace}
+			}
 			spellings = []spelling{
-				{labels: exported, extra: []viewMatcher{{label: "exported_namespace", op: "!=", value: ""}}},
-				{labels: plain, extra: []viewMatcher{{label: "exported_namespace", op: "=", value: ""}}},
+				{labels: exported, extra: []viewMatcher{exportedIn}},
+				{labels: plain, extra: append([]viewMatcher{{label: "exported_namespace", op: "=", value: ""}}, inNamespace...)},
 			}
 		}
 		for _, sp := range spellings {

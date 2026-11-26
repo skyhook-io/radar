@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -27,6 +28,7 @@ type PodScope struct {
 
 	// CurrentPods are the controlled pods now, sorted, cut to the caller's
 	// cap; CurrentTotal is the uncapped count.
+	Created      map[string]time.Time
 	CurrentPods  []string
 	CurrentTotal int
 	Selection    prom.PodSelection
@@ -75,11 +77,12 @@ func ResolvePodScope(ctx context.Context, cache *k8s.ResourceCache, kind, namesp
 
 // Callers supply name-sorted Pods so caps select a stable population across readers.
 func PodScopeFromPods(kind, namespace, name string, pods []*corev1.Pod, maxPods int) PodScope {
-	scope := PodScope{Kind: kind, Namespace: namespace, Name: name, CurrentTotal: len(pods)}
+	scope := PodScope{Kind: kind, Namespace: namespace, Name: name, CurrentTotal: len(pods), Created: make(map[string]time.Time, len(pods))}
 	if maxPods > 0 && len(pods) > maxPods {
 		pods = pods[:maxPods]
 	}
 	for _, pod := range pods {
+		scope.Created[pod.Name] = pod.CreationTimestamp.Time
 		scope.CurrentPods = append(scope.CurrentPods, pod.Name)
 		scope.Identities = append(scope.Identities, prom.WorkloadPodIdentity{Name: pod.Name, UID: string(pod.UID)})
 	}

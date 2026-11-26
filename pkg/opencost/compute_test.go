@@ -97,7 +97,7 @@ func TestComputeCostSummary_HappyPath(t *testing.T) {
 		{contains: "container_memory_allocation_bytes", body: vectorBody(map[string]float64{"checkout": 3.0, "payments": 0.5})},
 		{contains: "container_cpu_usage_seconds_total", body: vectorBody(map[string]float64{"checkout": 0.8, "payments": 0.6})},
 		{contains: "container_memory_working_set_bytes", body: vectorBody(map[string]float64{"checkout": 1.2, "payments": 0.25})},
-		{contains: unsizedPersistentVolumeExpr, body: vectorBody(nil)},
+		{contains: unsizedPersistentVolumeExpr(nil), body: vectorBody(nil)},
 		{contains: "pv_hourly_cost", body: vectorBody(map[string]float64{"checkout": 0.05})},
 		{contains: "node_total_hourly_cost", body: scalarBody(8.0)}, // exceeds sum of namespaces, so it wins
 		{contains: "node_gpu_count", body: scalarBody(0)},

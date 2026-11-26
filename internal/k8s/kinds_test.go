@@ -138,8 +138,7 @@ func TestClassifyKindScope_StaticCatalogue(t *testing.T) {
 func TestClassifyKindScope_NoDiscovery(t *testing.T) {
 	// Without discovery, unknown kinds must NOT be classified cluster-scoped
 	// (the gate falls through to namespace-based authorization).
-	resourceDiscovery = nil
-	t.Cleanup(func() { resourceDiscovery = nil })
+	t.Cleanup(setTestDiscovery(nil))
 
 	clusterScoped, _, _ := ClassifyKindScope("madeupcrd", "")
 	if clusterScoped {

@@ -3,10 +3,6 @@ package k8s
 import (
 	"context"
 	"errors"
-
-	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 )
 
 // ErrNoServingConnection means no connection can be admitted against right
@@ -14,73 +10,66 @@ import (
 // admission, or Radar is shutting down.
 var ErrNoServingConnection = errors.New("no cluster connection is serving")
 
-// BoundConnection is one request's capture of the serving connection: the ID
-// it was admitted against and the clients and discovery it uses throughout.
-// A switch that happens mid-request replaces the globals, not this capture,
-// so the request finishes on the connection it was admitted to.
-type BoundConnection struct {
-	ID      string
-	Context string
-	// Config is a copy of the admitted connection's config, safe to modify.
-	Config    *rest.Config
-	Client    *kubernetes.Clientset
-	Dynamic   dynamic.Interface
-	Discovery *ResourceDiscovery
+// Admission is a write's admission: the serving connection and the ID it was
+// serving under, read together. A build admitted again after a retirement is
+// the same connection under a new ID, and a request admitted before is no
+// longer "still bound".
+type Admission struct {
+	conn *Connection
+	id   string
 }
 
-// CaptureBoundConnection takes the serving connection's ID, clients and
-// discovery in one step. A missing client stays nil for the handler to report,
-// as it would without binding. Client installs and the point of no return both run
-// under contextOpMu, which CaptureClusterReads holds shared, so the pieces
-// always belong to the same admitted connection.
-func CaptureBoundConnection() (BoundConnection, error) {
-	var b BoundConnection
+// Connection returns the admitted connection.
+func (a Admission) Connection() *Connection { return a.conn }
+
+// ID returns the connection ID the write was admitted under.
+func (a Admission) ID() string { return a.id }
+
+// Bind binds a request to the admission; ClientFromContext, the Helm write
+// path and kind lookups then use its connection's clients and discovery, not
+// the installed ones.
+func (a Admission) Bind(ctx context.Context) context.Context {
+	return context.WithValue(ctx, connectionKey{}, a)
+}
+
+// CaptureServingConnection returns the serving connection a write is admitted
+// against. Like any capture it is refused while a context operation is queued
+// or running: a switch stops sessions before it retires the serving ID, so
+// admitting in that window would let a new session slip past the stop.
+func CaptureServingConnection() (Admission, error) {
+	var a Admission
 	if !CaptureClusterReads(func() {
-		b.ID = ServingConnectionID()
-		clientMu.RLock()
-		if k8sConfig != nil {
-			b.Config = rest.CopyConfig(k8sConfig)
+		connectionStatusMu.RLock()
+		if serving != nil {
+			a = Admission{conn: serving, id: serving.id}
 		}
-		b.Client, b.Dynamic = k8sClient, dynamicClient
-		clientMu.RUnlock()
-		// Clients and context change only under the operation lock held here.
-		b.Context = ActiveClusterContext()
-		b.Discovery = GetResourceDiscovery()
-	}) || b.ID == "" {
-		return BoundConnection{}, ErrNoServingConnection
+		connectionStatusMu.RUnlock()
+	}) || a.conn == nil {
+		return Admission{}, ErrNoServingConnection
 	}
-	return b, nil
+	return a, nil
 }
 
-type boundConnectionKey struct{}
+type connectionKey struct{}
 
-// WithBoundConnection attaches a capture to a request context.
-func WithBoundConnection(ctx context.Context, b BoundConnection) context.Context {
-	return context.WithValue(ctx, boundConnectionKey{}, b)
+// WithConnection binds a request to c under the ID c holds now, for reads
+// that need one connection throughout. Writes bind their Admission instead.
+func WithConnection(ctx context.Context, c *Connection) context.Context {
+	return Admission{conn: c, id: c.ID()}.Bind(ctx)
 }
 
-// BoundConnectionFrom returns the capture a request was admitted with.
-func BoundConnectionFrom(ctx context.Context) (BoundConnection, bool) {
-	b, ok := ctx.Value(boundConnectionKey{}).(BoundConnection)
-	return b, ok
+// ConnectionFrom returns the connection a request was bound to, or nil.
+func ConnectionFrom(ctx context.Context) *Connection {
+	b, _ := ctx.Value(connectionKey{}).(Admission)
+	return b.conn
 }
 
-// discoveryFor resolves kinds with the request's bound discovery when it has
-// one, so a bound write never pairs its pinned client with a newer cluster's
-// resource mapping.
-func discoveryFor(ctx context.Context) *ResourceDiscovery {
-	if b, ok := BoundConnectionFrom(ctx); ok {
-		return b.Discovery
-	}
-	return GetResourceDiscovery()
-}
-
-// StillBound reports whether a request is still on the connection it was
-// admitted to: true when it carries no binding, or when that connection is
-// still serving. Composite services that capture several globals call it
-// inside their CaptureClusterReads callback, so the whole capture belongs to
-// the bound connection.
+// StillBound reports whether a request's connection is still serving (true for
+// an unbound request). Composite services that also read state not yet on the
+// Connection (the caches) check it inside their CaptureClusterReads callback.
 func StillBound(ctx context.Context) bool {
-	b, ok := BoundConnectionFrom(ctx)
-	return !ok || ServingConnectionID() == b.ID
+	b, ok := ctx.Value(connectionKey{}).(Admission)
+	connectionStatusMu.RLock()
+	defer connectionStatusMu.RUnlock()
+	return !ok || b.conn == nil || (b.conn == serving && b.id == servingIDLocked())
 }

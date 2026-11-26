@@ -24,25 +24,22 @@ import (
 // tools, which only receive ctx). REST handlers should prefer
 // Server.getClientForRequest for consistency.
 //
-// A request admitted against a connection (WithBoundConnection) gets that
+// A request admitted against a connection (WithConnection) gets that
 // connection's client, never a newer connection's.
 func ClientFromContext(ctx context.Context) kubernetes.Interface {
-	if b, ok := BoundConnectionFrom(ctx); ok {
+	if b := ConnectionFrom(ctx); b != nil {
 		if user := pkgauth.UserFromContext(ctx); user != nil {
-			if b.Config == nil {
+			if b.Config() == nil {
 				return nil
 			}
-			client, err := kubernetes.NewForConfig(UserRESTConfig(b.Config, user))
+			client, err := kubernetes.NewForConfig(UserRESTConfig(b.Config(), user))
 			if err != nil {
 				log.Printf("[auth] Impersonation failed for %s: %v", SanitizeForLog(user.Username), err)
 				return nil
 			}
 			return client
 		}
-		if b.Client != nil {
-			return b.Client
-		}
-		return nil
+		return b.ClientInterface()
 	}
 	if user := pkgauth.UserFromContext(ctx); user != nil {
 		client, err := UserClient(user)
@@ -65,19 +62,19 @@ func ClientFromContext(ctx context.Context) kubernetes.Interface {
 // DynamicClientFromContext is the dynamic-client analog of ClientFromContext.
 // Same nil-on-impersonation-failure contract.
 func DynamicClientFromContext(ctx context.Context) dynamic.Interface {
-	if b, ok := BoundConnectionFrom(ctx); ok {
+	if b := ConnectionFrom(ctx); b != nil {
 		if user := pkgauth.UserFromContext(ctx); user != nil {
-			if b.Config == nil {
+			if b.Config() == nil {
 				return nil
 			}
-			client, err := dynamic.NewForConfig(UserRESTConfig(b.Config, user))
+			client, err := dynamic.NewForConfig(UserRESTConfig(b.Config(), user))
 			if err != nil {
 				log.Printf("[auth] Impersonation failed for %s: %v", SanitizeForLog(user.Username), err)
 				return nil
 			}
 			return client
 		}
-		return b.Dynamic
+		return b.Dynamic()
 	}
 	if user := pkgauth.UserFromContext(ctx); user != nil {
 		client, err := UserDynamicClient(user)
@@ -97,6 +94,12 @@ func DynamicClientFromContext(ctx context.Context) dynamic.Interface {
 // ConfigFromContext is the REST-config analog of ClientFromContext.
 // Returns nil on impersonation failure (same fail-closed contract).
 func ConfigFromContext(ctx context.Context) *rest.Config {
+	if c := ConnectionFrom(ctx); c != nil {
+		if user := pkgauth.UserFromContext(ctx); user != nil && c.Config() != nil {
+			return UserRESTConfig(c.Config(), user)
+		}
+		return c.ConfigCopy()
+	}
 	if user := pkgauth.UserFromContext(ctx); user != nil {
 		cfg, err := UserConfig(user)
 		if err != nil {
