@@ -1,6 +1,10 @@
-import { useId, useMemo, useState, type ReactNode, type Ref } from 'react';
-import { CollapseChevron, disclosurePanelId } from '../ui/Collapse';
+import { createContext, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
+import { Boxes, ChevronDown, ChevronUp } from 'lucide-react';
+import { disclosurePanelId } from '../ui/Collapse';
 import type { AppRow } from '../../utils/applications';
+import { ISSUE_SEVERITY_TEXT_CLASS, issueTitle } from './severity';
+
+export const AppIssuePanelContext = createContext(false);
 
 type IssueApp = Pick<AppRow, 'key' | 'name'>;
 type AppIssueListProps<T> = {
@@ -11,36 +15,43 @@ type AppIssueListProps<T> = {
   /** The URL selection. A pinned issue can be outside the list and still reveal its app. */
   linkedIssueKey?: string;
   linkedAppKey?: string;
+  /** Keep a manually opened detail visible if a refresh moves it into overflow. */
+  openDetailKey?: string | null;
   renderIssue: (issue: T) => ReactNode;
 };
 
-type Group<T> = { app?: IssueApp; lead: T; more: T[] };
+type Group<T> = { app?: IssueApp; issues: T[] };
+type DisplayIssue = { severity: string; category: string; reason?: string };
 
 // Also used by IssuesView so viewport enrichment and expanded-row requests only
 // see rows that the disclosure actually renders.
-export function useAppIssueGroups<T>({ issues, issueKey, appForIssue, linkedIssueKey, linkedAppKey }: Omit<AppIssueListProps<T>, 'renderIssue'>, openDetailKey?: string | null) {
-  const groups = useMemo(() => {
+export function useAppIssueGroups<T>({ issues, issueKey, appForIssue, linkedIssueKey, linkedAppKey, openDetailKey }: Omit<AppIssueListProps<T>, 'renderIssue'>) {
+  const ranked = useMemo(() => {
     const ordered: Group<T>[] = [];
     const apps = new Map<string, Group<T>>();
     for (const issue of issues) {
       const app = appForIssue?.(issue);
       const existing = app && apps.get(app.key);
-      if (existing) existing.more.push(issue);
+      if (existing) existing.issues.push(issue);
       else {
-        const group = { app, lead: issue, more: [] };
+        const group = { app, issues: [issue] };
         ordered.push(group);
         if (app) apps.set(app.key, group);
       }
     }
-    return ordered;
+    return ordered.map(group => {
+      // Four fit without a disclosure. For longer groups show three, so
+      // opening a panel always reveals at least two additional issues.
+      const preview = group.issues.length <= 4 ? group.issues : group.issues.slice(0, 3);
+      return { ...group, preview, overflow: group.issues.slice(preview.length) };
+    });
   }, [issues, appForIssue]);
 
-  const linkedGroup = linkedAppKey ?? (linkedIssueKey && groups.find(({ lead, more }) =>
-    issueKey(lead) === linkedIssueKey || more.some(issue => issueKey(issue) === linkedIssueKey))?.app?.key);
-  // If inventory arrives while someone is reading a row, keep it visible
-  // when it becomes a child. Opening a lead row still shows just its detail.
+  const linkedGroup = linkedAppKey ?? (linkedIssueKey && ranked.find(group =>
+    group.issues.some(issue => issueKey(issue) === linkedIssueKey))?.app?.key);
+  // Preserve the detail a reader opened before a refresh moved it into overflow.
   const activeGroup = openDetailKey && openDetailKey !== linkedIssueKey
-    ? groups.find(({ more }) => more.some(issue => issueKey(issue) === openDetailKey))?.app?.key
+    ? ranked.find(group => group.overflow.some(issue => issueKey(issue) === openDetailKey))?.app?.key
     : undefined;
   const [expanded, setExpanded] = useState(() => new Set<string>(linkedGroup ? [linkedGroup] : []));
   const [previousLink, setPreviousLink] = useState({ linkedIssueKey, linkedGroup });
@@ -53,7 +64,10 @@ export function useAppIssueGroups<T>({ issues, issueKey, appForIssue, linkedIssu
     setPreviousLink({ linkedIssueKey, linkedGroup });
     if (linkedGroup && !expanded.has(linkedGroup)) setExpanded(previous => new Set(previous).add(linkedGroup));
   }
-  const isOpen = (key: string) => expanded.has(key);
+  const groups = ranked.map(group => {
+    const open = !!group.app && expanded.has(group.app.key);
+    return { ...group, open, visible: open ? group.issues : group.preview };
+  });
   const toggle = (key: string) => {
     setExpanded(previous => {
       const next = new Set(previous);
@@ -62,12 +76,12 @@ export function useAppIssueGroups<T>({ issues, issueKey, appForIssue, linkedIssu
       return next;
     });
   };
-  return { groups, isOpen, toggle };
+  return { groups, toggle };
 }
 
 type Layout<T> = ReturnType<typeof useAppIssueGroups<T>>;
 
-export function AppIssueRows<T extends { severity: string }>({ layout, issueKey, renderIssue, listRef, onCollapse }: {
+export function AppIssueRows<T extends DisplayIssue>({ layout, issueKey, renderIssue, listRef, onCollapse }: {
   layout: Layout<T>;
   issueKey: (issue: T) => string;
   renderIssue: (issue: T) => ReactNode;
@@ -75,44 +89,69 @@ export function AppIssueRows<T extends { severity: string }>({ layout, issueKey,
   onCollapse?: (appKey: string, hidden: readonly T[]) => void;
 }) {
   const id = useId();
-  // All issue rows share one key space, so an open row keeps its DOM and focus
-  // when the first inventory arrives or a new higher-ranked issue leads its app.
-  const row = (issue: T, nested = false) => {
-    const key = issueKey(issue);
-    return (
-      <li key={`issue:${key}`} id={disclosurePanelId(id, key)} data-app-issue-row={key}
-        className={nested ? 'border-l border-theme-border pl-3' : undefined}>
-        {renderIssue(issue)}
-      </li>
-    );
-  };
-  const rows = layout.groups.flatMap(({ app, lead, more }) => {
-    const items = [row(lead)];
-    if (!app || !more.length) return items;
-    const open = layout.isOpen(app.key);
-    const critical = more.filter(issue => issue.severity === 'critical').length;
-    const controls = open ? more.map(issue => disclosurePanelId(id, issueKey(issue))).join(' ') : undefined;
-    items.push(
-      <li key={`disclosure:${app.key}`} role="presentation" className="-mt-0.5">
-        <button type="button" aria-expanded={open} aria-controls={controls} onClick={() => {
-          if (open) onCollapse?.(app.key, more);
-          layout.toggle(app.key);
-        }}
-          className="inline-flex max-w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary">
-          <CollapseChevron open={open} className="h-3.5 w-3.5" />
-          <span className="break-words">{open ? 'Show fewer issues' : `${more.length} more ${more.length === 1 ? 'issue' : 'issues'}`} for <strong className="font-medium">{app.name}</strong></span>
-          {!open && critical > 0 && <span className="shrink-0 text-theme-text-primary">· {critical} critical</span>}
+  const focusAfterToggle = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (!focusAfterToggle.current) return;
+    const element = document.getElementById(focusAfterToggle.current);
+    focusAfterToggle.current = null;
+    const target = element?.querySelector<HTMLElement>('[aria-expanded]') ?? element;
+    target?.focus({ preventScroll: true });
+    target?.scrollIntoView?.({ block: 'nearest' });
+  });
+  const rows: ReactNode[] = [];
+  // Draw the panel as adjoining list items. Keeping each issue in the same
+  // key space preserves its DOM, keyboard focus and controls across regrouping.
+  for (const { app, issues, visible, overflow, open } of layout.groups) {
+    const panel = !!app && issues.length > 1;
+    const headerId = panel ? disclosurePanelId('app-heading-' + id, app.key) : undefined;
+    if (panel) {
+      rows.push(
+        <li key={`header:${app.key}`} role="presentation"
+          className="flex min-w-0 items-center gap-2 rounded-t-xl border border-theme-border bg-theme-elevated px-4 py-2">
+          <Boxes aria-hidden className="h-4 w-4 shrink-0 text-theme-text-secondary" />
+          <h2 id={headerId} className="min-w-0 break-words text-sm font-semibold text-theme-text-primary">{app.name}</h2>
+          <span className="shrink-0 text-xs text-theme-text-secondary">· {issues.length} issues</span>
+        </li>
+      );
+    }
+    for (const issue of visible) {
+      const key = issueKey(issue);
+      const last = issue === visible[visible.length - 1] && !overflow.length;
+      rows.push(
+        <li key={`issue:${key}`} id={disclosurePanelId(id, key)} data-app-issue-row={key} tabIndex={-1} aria-describedby={headerId}
+          className={panel ? `border-x border-b border-theme-border bg-theme-surface ${last ? 'mb-2 overflow-clip rounded-b-xl' : ''}` : 'mb-2'}>
+          <AppIssuePanelContext.Provider value={panel}>{renderIssue(issue)}</AppIssuePanelContext.Provider>
+        </li>
+      );
+    }
+    if (!app || !overflow.length) continue;
+    const critical = overflow.filter(issue => issue.severity === 'critical');
+    const buttonId = disclosurePanelId('app-disclosure-' + id, app.key);
+    const Chevron = open ? ChevronUp : ChevronDown;
+    rows.push(
+      <li key={`disclosure:${app.key}`} role="presentation"
+        className="mb-2 overflow-clip rounded-b-xl border-x border-b border-theme-border bg-theme-surface">
+        <button type="button" id={buttonId} aria-expanded={open}
+          aria-controls={open ? overflow.map(issue => disclosurePanelId(id, issueKey(issue))).join(' ') : undefined}
+          onClick={() => {
+            focusAfterToggle.current = open ? buttonId : disclosurePanelId(id, issueKey(overflow[0]));
+            if (open) onCollapse?.(app.key, overflow);
+            layout.toggle(app.key);
+          }}
+          className="flex w-full items-center gap-2 px-4 py-2 text-left text-xs font-medium text-theme-text-secondary hover:bg-theme-hover focus-visible:outline focus-visible:-outline-offset-2">
+          <Chevron aria-hidden className="h-3.5 w-3.5 shrink-0" />
+          <span>{open ? 'Show fewer issues' : `Show ${overflow.length} more issues`}<span className="sr-only"> for {app.name}</span>
+            {!open && critical.length > 0 && <span className={ISSUE_SEVERITY_TEXT_CLASS.critical}> · {critical.length} critical{critical.length === 1 && `: ${issueTitle(critical[0])}`}</span>}
+          </span>
         </button>
       </li>
     );
-    if (open) items.push(...more.map(issue => row(issue, true)));
-    return items;
-  });
-  return <ol ref={listRef} className="flex flex-col gap-1.5">{rows}</ol>;
+  }
+  return <ol ref={listRef} className="flex flex-col">{rows}</ol>;
 }
 
-/** Fold an app's other issues under its highest-ranked row. Unattributed issues stay independent. */
-export function AppIssueList<T extends { severity: string }>(props: AppIssueListProps<T>) {
+/** Keep related issues together and disclose overflow only for longer app panels. */
+export function AppIssueList<T extends DisplayIssue>(props: AppIssueListProps<T>) {
   const layout = useAppIssueGroups(props);
   return <AppIssueRows layout={layout} issueKey={props.issueKey} renderIssue={props.renderIssue} />;
 }

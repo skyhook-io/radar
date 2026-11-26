@@ -1924,7 +1924,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         scroll sideways at desktop width instead (see PHONE_READY_VIEWS). */}
     <div
       className={`relative flex bg-theme-base ${navCustomization.embedded ? 'h-full min-h-0' : 'h-screen'}`}
-      style={{ minWidth: (isMobile ? 360 : 800) + (showNavRail ? (navRailEffectivePinned ? 176 : 56) : 0) }}
+      style={{ minWidth: isMobile && mainView === 'issues'
+        ? 0 // Issue rows adapt to the space beside the rail, even on a 360px phone.
+        : (isMobile ? 360 : 800) + (showNavRail ? (navRailEffectivePinned ? 176 : 56) : 0) }}
     >
       {showNavRail && (
         <PrimaryNavRail

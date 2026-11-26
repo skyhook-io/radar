@@ -1,8 +1,8 @@
-import { AppIssueRows, useAppIssueGroups } from './AppIssueList';
+import { AppIssuePanelContext, AppIssueRows, useAppIssueGroups } from './AppIssueList';
 import type { AppRow } from '../../utils/applications';
 import { IssueGuidance, issueGuidanceSummary } from './IssueGuidance'
 import { summarizeSchedulerMessage } from '../resources/resource-utils'
-import { Fragment, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react';
+import { Fragment, useContext, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react';
 import { AlertOctagon, AlertTriangle, ArrowRight, CircleCheck, Clock, Eraser, ExternalLink, History, Layers, Terminal, Workflow } from 'lucide-react';
 import { CardSection, ClusterName, Disclosure, EmptyState, KIND_CHIP_CLASS, TerminalBlock } from '../ui';
 import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse';
@@ -123,8 +123,8 @@ export function IssuesView({ issues, appForIssue, linkedIssueId, onManualIssueTo
     if (resolvedKey) setOpenId(resolvedKey);
   }
   const linkedKey = selection.id === linkedIssueId ? selection.key : undefined;
-  const layout = useAppIssueGroups({ issues: sorted, issueKey: issueRowKey, appForIssue, linkedIssueKey: linkedKey }, openId);
-  const displayed = layout.groups.flatMap(({ app, lead, more }) => app && layout.isOpen(app.key) ? [lead, ...more] : [lead]);
+  const layout = useAppIssueGroups({ issues: sorted, issueKey: issueRowKey, appForIssue, linkedIssueKey: linkedKey, openDetailKey: openId });
+  const displayed = layout.groups.flatMap(group => group.visible);
   useOpenIssueNotice(displayed, openId, issueRowKey, onOpenIssueChange);
   const listRef = useVisibleIssues(displayed, onVisibleIssuesChange, '[data-app-issue-row]');
   const linkedApp = linked ? appForIssue?.(linked)?.key : undefined;
@@ -357,6 +357,7 @@ export function IssueRow({
   timelineLinks,
   ResourceLinkIcon = ExternalLink,
 }: IssueRowProps) {
+  const inAppPanel = useContext(AppIssuePanelContext);
   const issue = open && expandedIssue?.issue ? expandedIssue.issue : listIssue;
   // An answer read for an earlier occurrence of this issue id describes
   // another window, so it isn't shown.
@@ -462,20 +463,21 @@ export function IssueRow({
   return (
     <Container
       className={[
-        'relative isolate rounded-xl border bg-theme-surface transition-[border-color,box-shadow] duration-200',
+        'relative isolate bg-theme-surface',
+        !inAppPanel && 'rounded-xl border transition-[border-color,box-shadow] duration-200',
         // The open card lifts via elevation — heavier shadow + a bright
         // emphasis edge that clearly separates it from sibling cards. Severity
         // stays rationed to the rail, band + pill; separation is depth, not more color.
         // ring-1 widens the edge to 2px without the layout shift a border-2
         // swap would cause on expand.
-        open ? 'border-[var(--border-emphasis)] ring-1 ring-[var(--border-emphasis)] shadow-theme-md' : 'border-theme-border shadow-theme-sm',
+        !inAppPanel && (open ? 'border-[var(--border-emphasis)] ring-1 ring-[var(--border-emphasis)] shadow-theme-md' : 'border-theme-border shadow-theme-sm'),
         dimmed ? 'opacity-60' : '',
         className ?? '',
       ].filter(Boolean).join(' ')}
     >
-      <SeverityRail open={open} className={ISSUE_SEVERITY_RAIL_CLASS[severity]} />
+      {!inAppPanel && <SeverityRail open={open} className={ISSUE_SEVERITY_RAIL_CLASS[severity]} />}
       {/* Clips the header band and body to the rounded corners, inside the border the rail paints over. */}
-      <div className="overflow-hidden rounded-[11px]" style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 70px' }}>
+      <div className={inAppPanel ? 'overflow-hidden' : 'overflow-hidden rounded-[11px]'} style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 70px' }}>
         {/* The whole header is the single toggle target. The leading severity
             icon is the at-a-glance cue; a trailing chevron shows open/closed.
             Deep-links live in the expanded body (a link nested in a button would
