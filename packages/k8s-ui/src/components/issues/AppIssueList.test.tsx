@@ -117,6 +117,24 @@ it('shows small groups in full and gives only related issues a panel heading', a
   }
 });
 
+it('keeps overflow content mounted and inert until the closing animation finishes', async () => {
+  const { render, toggle, displayed } = await mount();
+  await render();
+  const button = toggle()!;
+  const firstOverflow = document.getElementById(button.getAttribute('aria-controls')!.split(' ')[0])!;
+  await act(async () => button.click());
+  const summary = firstOverflow.querySelector('[aria-expanded]')!;
+  expect(summary).toBeTruthy();
+
+  await act(async () => button.click());
+  expect(displayed()).not.toContain(':worker');
+  expect(summary.closest('[inert]')).toBeTruthy();
+  const transition = new Event('transitionend', { bubbles: true });
+  Object.defineProperty(transition, 'propertyName', { value: 'grid-template-rows' });
+  await act(async () => { firstOverflow.firstElementChild!.dispatchEvent(transition); });
+  expect(firstOverflow.contains(summary)).toBe(false);
+});
+
 it('opens a preview row independently and focuses the newly revealed issue on expansion', async () => {
   const { render, toggle, host } = await mount();
   await render();

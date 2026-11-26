@@ -1,6 +1,6 @@
 import { createContext, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
-import { ArrowRight, Boxes, ChevronDown, ChevronUp } from 'lucide-react';
-import { disclosurePanelId } from '../ui/Collapse';
+import { ArrowRight, Boxes } from 'lucide-react';
+import { Collapse, CollapseChevron, disclosurePanelId } from '../ui/Collapse';
 import type { AppRow } from '../../utils/applications';
 import { ISSUE_SEVERITY_TEXT_CLASS, issueTitle } from './severity';
 
@@ -84,6 +84,16 @@ export function useAppIssueGroups<T>({ issues, issueKey, appForIssue, linkedIssu
 
 type Layout<T> = ReturnType<typeof useAppIssueGroups<T>>;
 
+// Defer host row rendering until Collapse mounts the content. A closed panel
+// can have many overflow rows, each with its own triage controls.
+function IssueContent<T>({ panel, issue, renderIssue }: {
+  panel: boolean;
+  issue: T;
+  renderIssue: (issue: T) => ReactNode;
+}) {
+  return <AppIssuePanelContext.Provider value={panel}>{renderIssue(issue)}</AppIssuePanelContext.Provider>;
+}
+
 export function AppIssueRows<T extends DisplayIssue>({ layout, issueKey, renderIssue, renderAppLink, listRef, onCollapse }: {
   layout: Layout<T>;
   renderAppLink?: AppIssueLinkRenderer<T>;
@@ -105,7 +115,7 @@ export function AppIssueRows<T extends DisplayIssue>({ layout, issueKey, renderI
   const rows: ReactNode[] = [];
   // Draw the panel as adjoining list items. Keeping each issue in the same
   // key space preserves its DOM, keyboard focus and controls across regrouping.
-  for (const { app, issues, visible, overflow, open } of layout.groups) {
+  for (const { app, issues, preview, overflow, open } of layout.groups) {
     const panel = !!app && issues.length > 1;
     const headerId = panel ? disclosurePanelId('app-heading-' + id, app.key) : undefined;
     if (panel) {
@@ -124,32 +134,36 @@ export function AppIssueRows<T extends DisplayIssue>({ layout, issueKey, renderI
         </li>
       );
     }
-    for (const issue of visible) {
+    for (const [index, issue] of issues.entries()) {
       const key = issueKey(issue);
-      const last = issue === visible[visible.length - 1] && !overflow.length;
+      const shown = open || index < preview.length;
+      const last = index === issues.length - 1 && !overflow.length;
       rows.push(
-        <li key={`issue:${key}`} id={disclosurePanelId(id, key)} data-app-issue-row={key} tabIndex={-1} aria-describedby={headerId}
-          className={panel ? `border-x border-b border-theme-border bg-theme-surface ${last ? 'mb-2 overflow-clip rounded-b-xl' : ''}` : 'mb-2'}>
-          <AppIssuePanelContext.Provider value={panel}>{renderIssue(issue)}</AppIssuePanelContext.Provider>
+        <li key={`issue:${key}`} id={disclosurePanelId(id, key)} data-app-issue-row={shown ? key : undefined}
+          tabIndex={shown ? -1 : undefined} aria-hidden={!shown || undefined} aria-describedby={headerId}>
+          <Collapse open={shown} unmountOnExit>
+            <div className={panel ? `border-x border-b border-theme-border bg-theme-surface ${last ? 'mb-2 overflow-clip rounded-b-xl' : ''}` : 'mb-2'}>
+              <IssueContent panel={panel} issue={issue} renderIssue={renderIssue} />
+            </div>
+          </Collapse>
         </li>
       );
     }
     if (!app || !overflow.length) continue;
     const critical = overflow.filter(issue => issue.severity === 'critical');
     const buttonId = disclosurePanelId('app-disclosure-' + id, app.key);
-    const Chevron = open ? ChevronUp : ChevronDown;
     rows.push(
       <li key={`disclosure:${app.key}`} role="presentation"
         className="mb-2 overflow-clip rounded-b-xl border-x border-b border-theme-border bg-theme-surface">
         <button type="button" id={buttonId} aria-expanded={open}
-          aria-controls={open ? overflow.map(issue => disclosurePanelId(id, issueKey(issue))).join(' ') : undefined}
+          aria-controls={overflow.map(issue => disclosurePanelId(id, issueKey(issue))).join(' ')}
           onClick={() => {
             focusAfterToggle.current = open ? buttonId : disclosurePanelId(id, issueKey(overflow[0]));
             if (open) onCollapse?.(app.key, overflow);
             layout.toggle(app.key);
           }}
           className="flex w-full items-center gap-2 px-4 py-2 text-left text-xs font-medium text-theme-text-secondary hover:bg-theme-hover focus-visible:outline focus-visible:-outline-offset-2">
-          <Chevron aria-hidden className="h-3.5 w-3.5 shrink-0" />
+          <CollapseChevron open={open} className="h-3.5 w-3.5" />
           <span>{open ? 'Show fewer issues' : `Show ${overflow.length} more issues`}<span className="sr-only"> for {app.name}</span>
             {!open && critical.length > 0 && <span className={ISSUE_SEVERITY_TEXT_CLASS.critical}> · {critical.length} critical{critical.length === 1 && `: ${issueTitle(critical[0])}`}</span>}
           </span>
