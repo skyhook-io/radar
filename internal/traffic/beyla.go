@@ -430,7 +430,9 @@ func (s *BeylaSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 	}
 	flows, presence, err := s.getFlowsInternal(ctx, opts, scopes)
 	if err != nil {
-		log.Printf("[beyla] Error fetching flows: %v", err)
+		if ctx.Err() == nil {
+			log.Printf("[beyla] Error fetching flows: %v", err)
+		}
 		return &FlowsResponse{Source: "beyla", Timestamp: time.Now(), Flows: []Flow{},
 			Warning:     fmt.Sprintf("Failed to query Beyla metrics: %v", err),
 			WarningKind: WarningTransient}, nil

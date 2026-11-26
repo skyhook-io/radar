@@ -328,6 +328,14 @@ func BuildTimelineStoreConfig(cfg AppConfig) (timeline.StoreConfig, error) {
 	}
 }
 
+func validateStartupWorkloadMetricsScope(scope prom.WorkloadMetricsScope) error {
+	if !scope.SingleCluster && len(scope.ClusterLabels) == 0 {
+		return nil
+	}
+	_, err := scope.Matchers()
+	return err
+}
+
 // RegisterCallbacks configures Helm repositories, timeline hooks and the integration builder.
 // Call it before InitializeCluster and pass the returned config to CreateServer.
 func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) AppConfig {
@@ -355,7 +363,7 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 			log.Fatalf("Invalid --prometheus-url: %v", err)
 		}
 	}
-	if _, err := cfg.WorkloadMetricsScope.Matchers(); err != nil {
+	if err := validateStartupWorkloadMetricsScope(cfg.WorkloadMetricsScope); err != nil {
 		log.Fatalf("Invalid workload metrics scope: %v", err)
 	}
 	startup := connectionruntime.Settings{

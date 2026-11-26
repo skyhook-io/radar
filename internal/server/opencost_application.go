@@ -36,7 +36,7 @@ func (s *Server) handleOpenCostApplication(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		resp := pkgopencost.UnavailableApplicationCostResponse(inputs, unavailable, unsupported, internalopencost.ConnectionFailureReason(err))
 		resp.Currency = set.Currency.Resolve()
-		s.writeJSON(w, resp)
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 	if connection.Source == internalopencost.SourceKubecost {
@@ -69,7 +69,7 @@ func (s *Server) handleOpenCostApplication(w http.ResponseWriter, r *http.Reques
 		resp := pkgopencost.BuildApplicationCostResponse(inputs, unavailable, unsupported, namespaceCosts)
 		resp.Currency = currency
 		resp.Source = "kubecost"
-		s.writeJSON(w, resp)
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 
@@ -78,7 +78,7 @@ func (s *Server) handleOpenCostApplication(w http.ResponseWriter, r *http.Reques
 		resp := pkgopencost.UnavailableApplicationCostResponse(inputs, unavailable, unsupported, internalopencost.ConnectionFailureReason(connectionErr))
 		resp.Currency = set.Currency.Resolve()
 		resp.Source = "prometheus"
-		s.writeJSON(w, resp)
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
@@ -86,7 +86,7 @@ func (s *Server) handleOpenCostApplication(w http.ResponseWriter, r *http.Reques
 		resp := pkgopencost.UnavailableApplicationCostResponse(inputs, unavailable, unsupported, internalopencost.ConnectionFailureReason(err))
 		resp.Currency = set.Currency.Resolve()
 		resp.Source = "prometheus"
-		s.writeJSON(w, resp)
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 
@@ -100,7 +100,7 @@ func (s *Server) handleOpenCostApplication(w http.ResponseWriter, r *http.Reques
 	resp.ClusterScope = internalopencost.ApplicationClusterScope(namespaceCosts)
 	resp.Currency = set.Currency.Resolve()
 	resp.Source = "prometheus"
-	s.writeJSON(w, resp)
+	internalopencost.WriteCostResponse(w, set.Cost, resp)
 }
 
 func (s *Server) handleOpenCostApplicationTrend(w http.ResponseWriter, r *http.Request) {
@@ -125,7 +125,7 @@ func (s *Server) handleOpenCostApplicationTrend(w http.ResponseWriter, r *http.R
 			Range: req.Range, Workloads: refs, Unavailable: unavailable, UnavailableReason: internalopencost.ConnectionFailureReason(err),
 		})
 		resp.Currency = set.Currency.Resolve()
-		s.writeJSON(w, resp)
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 	if connection.Source == internalopencost.SourceKubecost {
@@ -134,7 +134,7 @@ func (s *Server) handleOpenCostApplicationTrend(w http.ResponseWriter, r *http.R
 		})
 		resp.Currency = set.Currency.Resolve()
 		resp.Source = "kubecost"
-		s.writeJSON(w, resp)
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 
@@ -148,7 +148,7 @@ func (s *Server) handleOpenCostApplicationTrend(w http.ResponseWriter, r *http.R
 		})
 		resp.Currency = set.Currency.Resolve()
 		resp.Source = "prometheus"
-		s.writeJSON(w, resp)
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
@@ -161,7 +161,7 @@ func (s *Server) handleOpenCostApplicationTrend(w http.ResponseWriter, r *http.R
 		})
 		resp.Currency = set.Currency.Resolve()
 		resp.Source = "prometheus"
-		s.writeJSON(w, resp)
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 
@@ -172,7 +172,7 @@ func (s *Server) handleOpenCostApplicationTrend(w http.ResponseWriter, r *http.R
 	})
 	resp.Currency = set.Currency.Resolve()
 	resp.Source = "prometheus"
-	s.writeJSON(w, resp)
+	internalopencost.WriteCostResponse(w, set.Cost, resp)
 }
 
 func (s *Server) parseOpenCostApplicationRequest(w http.ResponseWriter, r *http.Request, cache *k8s.ResourceCache) (openCostApplicationRequest, []pkgopencost.ApplicationWorkloadCostInput, []pkgopencost.ApplicationWorkloadStatus, []pkgopencost.ApplicationWorkloadRef, bool) {

@@ -11,12 +11,13 @@ import (
 // each need their own grant and report their own coverage.
 func (s *Server) handleCNPGClusterStorage(w http.ResponseWriter, r *http.Request) {
 	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
-	resp, err := s.cnpgReader(r).ClusterStorage(r.Context(), namespace, name)
+	reader := s.cnpgReader(r)
+	resp, err := reader.ClusterStorage(r.Context(), namespace, name)
 	if err != nil {
 		s.writeCNPGCachedReadError(w, err, namespace, name)
 		return
 	}
-	s.writeJSON(w, resp)
+	s.writeCNPGMetricsResponse(w, reader, resp)
 }
 
 // ---------- fleet ----------
@@ -32,5 +33,5 @@ func (s *Server) handleCNPGFleetDisk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	namespaces := s.parseNamespacesForUser(r)
-	s.writeJSON(w, reader.FleetDisk(r.Context(), cache, namespaces))
+	s.writeCNPGMetricsResponse(w, reader, reader.FleetDisk(r.Context(), cache, namespaces))
 }

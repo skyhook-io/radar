@@ -117,14 +117,17 @@ func (h Routes) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 				// The optional reader exhausted our budget. Return the conventional answer.
 				g = nil
 			} else if err != nil {
-				writeChartError(w, r.Context(), err)
+				client.writeChartFailure(w, r.Context(), err)
 				return
 			}
 		}
 		if g != nil && g.fallback {
 			mergeGKEResources(ctx, g, &resp, scope, start, end, step)
 		}
-		if (g != nil && g != client.gkeChartStore()) || client.Closed() || generation != client.DiscoveryGeneration() || epoch != client.BackendEpoch() {
+		if client.writeChartFailure(w, r.Context(), nil) {
+			return
+		}
+		if (g != nil && g != client.gkeChartStore()) || generation != client.DiscoveryGeneration() || epoch != client.BackendEpoch() {
 			writeError(w, http.StatusConflict, "metrics connection changed; retry the request")
 			return
 		}

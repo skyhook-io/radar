@@ -34,7 +34,8 @@ func serverWithTestIntegrations(t *testing.T, startup connectionruntime.Settings
 
 func editTestIntegrations(t *testing.T, s *Server, update func(*connectionruntime.Settings)) {
 	t.Helper()
-	if err := s.integrationRuntime.PrepareShared(k8s.Current(), s.integrationRuntime.Snapshot(), update).Commit(func() error { return nil }); err != nil {
+	edit := s.integrationRuntime.PrepareShared(k8s.Current(), s.integrationRuntime.Snapshot(), update)
+	if err := edit.Commit(func() error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 }

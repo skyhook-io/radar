@@ -47,7 +47,7 @@ func (s *Server) handleOpenCostWorkload(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		resp.Reason = internalopencost.ConnectionFailureReason(err)
 		resp.Currency = set.Currency.Resolve()
-		s.writeJSON(w, resp)
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 	if connection.Source == internalopencost.SourceKubecost {
@@ -59,14 +59,14 @@ func (s *Server) handleOpenCostWorkload(w http.ResponseWriter, r *http.Request) 
 			resp.Reason = internalopencost.ConnectionFailureReason(err)
 			resp.Currency = set.Currency.Resolve()
 			resp.Source = "kubecost"
-			s.writeJSON(w, resp)
+			internalopencost.WriteCostResponse(w, set.Cost, resp)
 			return
 		}
 		result := focusOpenCostWorkload(workloads, kind, namespace, name, desiredReplicas)
 		result.Currency = set.Currency.Resolve()
 		result.Source = "kubecost"
 		result.DataThrough = workloads.DataThrough
-		s.writeJSON(w, result)
+		internalopencost.WriteCostResponse(w, set.Cost, result)
 		return
 	}
 
@@ -76,7 +76,7 @@ func (s *Server) handleOpenCostWorkload(w http.ResponseWriter, r *http.Request) 
 		resp.Reason = internalopencost.ConnectionFailureReason(connectionErr)
 		resp.Currency = set.Currency.Resolve()
 		resp.Source = "prometheus"
-		s.writeJSON(w, resp)
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
@@ -85,7 +85,7 @@ func (s *Server) handleOpenCostWorkload(w http.ResponseWriter, r *http.Request) 
 		resp.Reason = internalopencost.ConnectionFailureReason(err)
 		resp.Currency = set.Currency.Resolve()
 		resp.Source = "prometheus"
-		s.writeJSON(w, resp)
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 
@@ -93,7 +93,7 @@ func (s *Server) handleOpenCostWorkload(w http.ResponseWriter, r *http.Request) 
 	result := focusOpenCostWorkload(workloads, kind, namespace, name, desiredReplicas)
 	result.Currency = set.Currency.Resolve()
 	result.Source = "prometheus"
-	s.writeJSON(w, result)
+	internalopencost.WriteCostResponse(w, set.Cost, result)
 }
 
 func (s *Server) handleOpenCostWorkloadTrend(w http.ResponseWriter, r *http.Request) {
@@ -121,14 +121,14 @@ func (s *Server) handleOpenCostWorkloadTrend(w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		resp.Reason = internalopencost.ConnectionFailureReason(err)
 		resp.Currency = set.Currency.Resolve()
-		s.writeJSON(w, resp)
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 	if connection.Source == internalopencost.SourceKubecost {
 		resp.Reason = pkgopencost.ReasonHistoryUnsupported
 		resp.Currency = set.Currency.Resolve()
 		resp.Source = "kubecost"
-		s.writeJSON(w, resp)
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 
@@ -138,7 +138,7 @@ func (s *Server) handleOpenCostWorkloadTrend(w http.ResponseWriter, r *http.Requ
 		resp.Reason = internalopencost.ConnectionFailureReason(connectionErr)
 		resp.Currency = set.Currency.Resolve()
 		resp.Source = "prometheus"
-		s.writeJSON(w, resp)
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
@@ -147,7 +147,7 @@ func (s *Server) handleOpenCostWorkloadTrend(w http.ResponseWriter, r *http.Requ
 		resp.Reason = internalopencost.ConnectionFailureReason(err)
 		resp.Currency = set.Currency.Resolve()
 		resp.Source = "prometheus"
-		s.writeJSON(w, resp)
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 
@@ -159,7 +159,7 @@ func (s *Server) handleOpenCostWorkloadTrend(w http.ResponseWriter, r *http.Requ
 	})
 	result.Currency = set.Currency.Resolve()
 	result.Source = "prometheus"
-	s.writeJSON(w, result)
+	internalopencost.WriteCostResponse(w, set.Cost, result)
 }
 
 func (s *Server) parseOpenCostWorkloadRequest(w http.ResponseWriter, r *http.Request, cache *k8s.ResourceCache) (kind, namespace, name string, ok bool) {

@@ -409,7 +409,7 @@ func TestRelaySavedScopeDoesNotFollowAnotherContext(t *testing.T) {
 	}
 }
 
-func TestRelaySavedScopeClearedOnReinitializeToAnotherContext(t *testing.T) {
+func TestRelayDisableLeavesScopeUnsetOnClientWithClearedScope(t *testing.T) {
 	c, _, _ := withRelayTestClient(t)
 	launch := prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "ctx-a"}}
 	if err := c.SetWorkloadMetricsScope(launch, ""); err != nil {
@@ -430,7 +430,7 @@ func TestRelaySavedScopeClearedOnReinitializeToAnotherContext(t *testing.T) {
 	}
 }
 
-func TestRelaySavedScopeKeptOnSameContextReinitialize(t *testing.T) {
+func TestRelayDisableRestoresSavedScopeAndBeylaSelector(t *testing.T) {
 	c, _, _ := withRelayTestClient(t)
 	launch := prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "ctx-a"}}
 	if err := c.SetWorkloadMetricsScope(launch, `job="beyla"`); err != nil {

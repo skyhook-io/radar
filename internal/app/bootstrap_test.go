@@ -15,7 +15,18 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/settings"
 	"github.com/skyhook-io/radar/internal/timeline"
+	"github.com/skyhook-io/radar/pkg/prom"
 )
+
+func TestValidateStartupWorkloadMetricsScope(t *testing.T) {
+	if err := validateStartupWorkloadMetricsScope(AppConfig{}.WorkloadMetricsScope); err != nil {
+		t.Fatalf("default startup configuration: %v", err)
+	}
+	invalid := prom.WorkloadMetricsScope{SingleCluster: true, ClusterLabels: map[string]string{"cluster": "dev"}}
+	if err := validateStartupWorkloadMetricsScope(invalid); err == nil {
+		t.Fatal("startup accepted conflicting workload metrics scope flags")
+	}
+}
 
 func TestBuildTimelineStoreConfig(t *testing.T) {
 	t.Run("memory preserves history limit", func(t *testing.T) {

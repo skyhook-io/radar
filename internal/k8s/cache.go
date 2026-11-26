@@ -1775,7 +1775,8 @@ func (c *ResourceCache) getDynamicWithGroup(ctx context.Context, kind string, na
 		}
 	}
 
-	discovery := GetResourceDiscovery()
+	conn := BoundOrCurrent(ctx)
+	discovery := conn.Discovery()
 	if discovery == nil {
 		return nil, fmt.Errorf("%w: resource discovery", ErrDynamicNotReady)
 	}
@@ -1800,7 +1801,7 @@ func (c *ResourceCache) getDynamicWithGroup(ctx context.Context, kind string, na
 		return nil, fmt.Errorf("%w: %s", ErrUnknownDynamicKind, kind)
 	}
 
-	dynamicCache := GetDynamicResourceCache()
+	dynamicCache := conn.DynamicResourceCache()
 	if dynamicCache == nil {
 		return nil, fmt.Errorf("%w: dynamic cache", ErrDynamicNotReady)
 	}

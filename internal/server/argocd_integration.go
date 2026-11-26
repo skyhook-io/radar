@@ -196,7 +196,7 @@ func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request)
 	if err := manager.Probe(ctx); err != nil {
 		edit.Discard()
 		if portforward.IsMemberClosed(ctx, err) {
-			s.writeError(w, http.StatusServiceUnavailable, "Argo CD connection closed. Retry the request")
+			s.writeError(w, http.StatusServiceUnavailable, argoConnectionClosedMessage)
 			return
 		}
 		log.Printf("[argocd] Probe of candidate settings failed: %s", sanitizeForLog(manager.RedactToken(err.Error())))
@@ -210,6 +210,7 @@ func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request)
 		}
 		return
 	}
+	address := manager.Address()
 	if err := edit.Commit(func() error {
 		_, err := config.Update(func(c *config.Config) {
 			c.ArgoCDURL, c.ArgoCDToken, c.ArgoCDInsecureTLS = rawURL, token, body.ArgoCDInsecureTLS
@@ -227,7 +228,7 @@ func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request)
 		TokenSet  bool   `json:"tokenSet"`
 	}{
 		Connected: true,
-		Address:   manager.Address(),
+		Address:   address,
 		TokenSet:  token != "",
 	})
 }

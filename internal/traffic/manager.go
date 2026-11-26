@@ -532,7 +532,11 @@ func (m *Manager) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRespons
 		return nil, fmt.Errorf("no traffic source available")
 	}
 
-	return source.GetFlows(ctx, opts)
+	response, err := source.GetFlows(ctx, opts)
+	if m.lifetime != nil && m.lifetime.Err() != nil {
+		return nil, m.lifetime.Err()
+	}
+	return response, err
 }
 
 // StreamFlows returns a channel of flows from the active source

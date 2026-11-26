@@ -752,7 +752,10 @@ func (h Routes) serveSubstrate(w http.ResponseWriter, r *http.Request, collect s
 	resp := collect(r.Context(), client, clientScopeResolver(client), rangeName, start, end, step)
 	resp.Start, resp.End, resp.StepSeconds = start.Unix(), end.Unix(), int64(step/time.Second)
 	// The charts and their scope checks must all come from one connection.
-	if client.Closed() || generation != client.DiscoveryGeneration() || epoch != client.BackendEpoch() {
+	if client.writeChartFailure(w, r.Context(), nil) {
+		return
+	}
+	if generation != client.DiscoveryGeneration() || epoch != client.BackendEpoch() {
 		writeError(w, http.StatusConflict, "metrics connection changed; retry the request")
 		return
 	}

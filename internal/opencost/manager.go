@@ -335,6 +335,8 @@ func (m *Manager) Reset() {
 	previous.stop()
 }
 
+func (m *Manager) Closed() bool { return m != nil && m.lifetime != nil && m.lifetime.Err() != nil }
+
 func (m *Manager) Close() error {
 	if m == nil {
 		return nil

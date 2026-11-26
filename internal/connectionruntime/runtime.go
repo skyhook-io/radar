@@ -143,7 +143,7 @@ func (r *Runtime) prepare(edit *Edit, settings Settings, rebuild []config.Integr
 	}
 }
 
-func (e Edit) Commit(persist func() error) error {
+func (e *Edit) Commit(persist func() error) error {
 	if err := k8s.TryClusterConfiguration(func() error { return e.commitLocked(persist) }); err != nil {
 		e.Discard()
 		return err
@@ -169,7 +169,8 @@ func (e *Edit) commitLocked(persist func() error) error {
 	if e.before != nil {
 		before = e.before
 	}
-	if e.after != nil && e.after != e.before && !k8s.ReplaceIntegrations(e.conn, before, e.after) {
+	if e.after == e.before && k8s.ServingConnectionID() != e.id ||
+		e.after != e.before && !k8s.ReplaceIntegrations(e.conn, before, e.after) {
 		// Retirement won after persistence. The next admission reads the saved settings.
 		e.Discard()
 		e.before, e.after = nil, nil

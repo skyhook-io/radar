@@ -261,8 +261,8 @@ func TestArgoAPIHealth_SavedSettingsFailureNamesSettings(t *testing.T) {
 		{"not configured", errors.New("cluster disconnected"), ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s := serverWithTestIntegrations(t, connectionruntime.Settings{ArgoError: tc.err})
-			health, err := s.argoAPIHealth(context.Background(), "argocd", "web")
+			serverWithTestIntegrations(t, connectionruntime.Settings{ArgoError: tc.err})
+			health, err := argoAPIHealth(context.Background(), currentTestIntegrations(), "argocd", "web")
 			got := ""
 			if err != nil {
 				got = err.Error()
@@ -272,6 +272,10 @@ func TestArgoAPIHealth_SavedSettingsFailureNamesSettings(t *testing.T) {
 			}
 		})
 	}
+}
+
+func fetchTestArgoAPIHealth(ctx context.Context, namespace, name string) (*argoapi.ApplicationHealth, error) {
+	return argoAPIHealth(ctx, currentTestIntegrations(), namespace, name)
 }
 
 // hungArgoServer accepts requests and never answers until the test ends.
@@ -294,14 +298,14 @@ func hungArgoServer(t *testing.T) *httptest.Server {
 // While Radar connects to argocd-server the page gets an answer at once:
 // the notice says so, and the page is told to ask again.
 func TestArgoAPIHealth_SaysItIsStillConnecting(t *testing.T) {
-	s := setupArgoCDTest(t)
+	setupArgoCDTest(t)
 	srv := hungArgoServer(t)
 	currentTestIntegrations().ArgoCD.SetConfig(srv.URL, "argo-secret", false, true)
 
 	app := overlayApp("Degraded")
 	tree := overlayTree(gitopstree.HealthModeAppTree, false)
 	start := time.Now()
-	if overlayArgoAPIHealth(context.Background(), tree, app, s.argoAPIHealth) {
+	if overlayArgoAPIHealth(context.Background(), tree, app, fetchTestArgoAPIHealth) {
 		t.Fatal("no answer yet must not count as Argo's answer")
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
@@ -332,12 +336,12 @@ func TestOverlayArgoAPIHealth_RetryingShowsTheFailureAndAsksAgain(t *testing.T) 
 // connections first answers "connecting", then, once that connect failed,
 // the failure with the page told to keep asking while Radar retries.
 func TestArgoAPIHealth_RetryingAfterAFailedConnect(t *testing.T) {
-	s := setupArgoCDTest(t)
+	setupArgoCDTest(t)
 	currentTestIntegrations().ArgoCD.SetConfig("http://127.0.0.1:1", "argo-secret", false, true)
 	app := overlayApp("Degraded")
 
 	tree := overlayTree(gitopstree.HealthModeAppTree, false)
-	overlayArgoAPIHealth(context.Background(), tree, app, s.argoAPIHealth)
+	overlayArgoAPIHealth(context.Background(), tree, app, fetchTestArgoAPIHealth)
 	if !tree.HealthAPIPending {
 		t.Fatalf("first load: pending %v, error %q; want pending", tree.HealthAPIPending, tree.HealthAPIError)
 	}
@@ -349,7 +353,7 @@ func TestArgoAPIHealth_RetryingAfterAFailedConnect(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	tree = overlayTree(gitopstree.HealthModeAppTree, false)
-	overlayArgoAPIHealth(context.Background(), tree, app, s.argoAPIHealth)
+	overlayArgoAPIHealth(context.Background(), tree, app, fetchTestArgoAPIHealth)
 	if !tree.HealthAPIRetrying || tree.HealthAPIPending || tree.HealthAPIError != "the server couldn't be reached" {
 		t.Fatalf("after the failure: retrying %v, pending %v, error %q; want retrying with the failure", tree.HealthAPIRetrying, tree.HealthAPIPending, tree.HealthAPIError)
 	}
@@ -375,7 +379,7 @@ func TestOverlayArgoAPIHealth_PendingWithoutConfigurationIsQuiet(t *testing.T) {
 // the shared failure meanwhile, a page served that cached timeout must still
 // be told to ask again, or it would never fetch the recovered health.
 func TestArgoAPIHealth_CachedTimeoutKeepsThePageAsking(t *testing.T) {
-	s := setupArgoCDTest(t)
+	setupArgoCDTest(t)
 	release := make(chan struct{})
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/version", func(w http.ResponseWriter, r *http.Request) {
@@ -404,16 +408,16 @@ func TestArgoAPIHealth_CachedTimeoutKeepsThePageAsking(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	if _, err := s.argoAPIHealth(ctx, "argocd", "slow"); err == nil {
+	if _, err := fetchTestArgoAPIHealth(ctx, "argocd", "slow"); err == nil {
 		t.Fatal("the slow app's read must fail")
 	}
 	// Another app's server answer clears the shared failure flag.
-	_, _ = s.argoAPIHealth(context.Background(), "argocd", "fast")
+	_, _ = fetchTestArgoAPIHealth(context.Background(), "argocd", "fast")
 	if currentTestIntegrations().ArgoCD.Retrying() {
 		t.Fatal("setup: another app's answer should have cleared the shared failure")
 	}
 
-	_, err := s.argoAPIHealth(context.Background(), "argocd", "slow")
+	_, err := fetchTestArgoAPIHealth(context.Background(), "argocd", "slow")
 	var pending *argoHealthPending
 	if !errors.As(err, &pending) || !pending.retrying {
 		t.Fatalf("cached timeout = %v; want the page told to ask again", err)

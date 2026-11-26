@@ -417,13 +417,15 @@ func manifestToYAML(obj map[string]any) string {
 	return string(b)
 }
 
+const argoConnectionClosedMessage = "Argo CD connection closed. Retry the request"
+
 const argoConnectingMessage = "Radar is still connecting to Argo CD. Try again in a few seconds."
 
 // writeArgoDiffError keeps upstream response bodies out of the client error.
 func (s *Server) writeArgoDiffError(w http.ResponseWriter, ctx context.Context, namespace, name string, manager *argocd.Manager, err error) {
 	switch {
 	case portforward.IsMemberClosed(ctx, err):
-		s.writeError(w, http.StatusServiceUnavailable, "Argo CD connection closed. Retry the request")
+		s.writeError(w, http.StatusServiceUnavailable, argoConnectionClosedMessage)
 	case errors.Is(err, argocd.ErrTokenBindingUpgrade):
 		s.writeError(w, http.StatusForbidden, "Re-enter the Argo CD token in Settings to bind it to this kubeconfig source.")
 	case errors.Is(err, argocd.ErrTokenInvalid) || errors.Is(err, argoapi.ErrUnauthorized):
@@ -661,7 +663,7 @@ func (s *Server) handleArgoRevisionMetadata(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		switch {
 		case portforward.IsMemberClosed(r.Context(), err):
-			s.writeError(w, http.StatusServiceUnavailable, "Argo CD connection closed. Retry the request")
+			s.writeError(w, http.StatusServiceUnavailable, argoConnectionClosedMessage)
 		case errors.Is(err, argocd.ErrTokenBindingUpgrade):
 			s.writeError(w, http.StatusForbidden, "Re-enter the Argo CD token in Settings to bind it to this kubeconfig source.")
 		case errors.Is(err, argocd.ErrTokenInvalid) || errors.Is(err, argoapi.ErrUnauthorized):

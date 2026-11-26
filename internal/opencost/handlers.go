@@ -48,30 +48,30 @@ func handleSummaryScoped(w http.ResponseWriter, r *http.Request, scope RouteScop
 	connection, err := manager.Selected(r.Context())
 	currency := resolvedCurrency(resolveCurrency)
 	if err != nil {
-		writeJSON(w, http.StatusOK, pkgopencost.CostSummary{Available: false, Reason: ConnectionFailureReason(err), Currency: currency})
+		WriteCostResponse(w, manager, pkgopencost.CostSummary{Available: false, Reason: ConnectionFailureReason(err), Currency: currency})
 		return
 	}
 	if connection.Source == SourceKubecost {
 		resp, err := pkgopencost.ComputeKubecostSummary(r.Context(), connection.Client, pkgopencost.KubecostCurrentOptions{Currency: currency, ClusterID: connection.ClusterID})
 		if err != nil {
 			log.Printf("[opencost] Kubecost summary failed: %s", k8s.SanitizeForLog(err.Error()))
-			writeJSON(w, http.StatusOK, pkgopencost.CostSummary{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Source: "kubecost"})
+			WriteCostResponse(w, manager, pkgopencost.CostSummary{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Source: "kubecost"})
 			return
 		}
 		if allowedNamespaces != nil {
 			FilterCostSummary(resp, allowedNamespaces)
 		}
-		writeJSON(w, http.StatusOK, resp)
+		WriteCostResponse(w, manager, resp)
 		return
 	}
 	client, connectionErr := manager.MetricsClient()
 	if connectionErr != nil {
-		writeJSON(w, http.StatusOK, pkgopencost.CostSummary{Available: false, Reason: ConnectionFailureReason(connectionErr), Currency: currency, Source: "prometheus"})
+		WriteCostResponse(w, manager, pkgopencost.CostSummary{Available: false, Reason: ConnectionFailureReason(connectionErr), Currency: currency, Source: "prometheus"})
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
 		log.Printf("[opencost] EnsureConnected failed (summary): %v", err)
-		writeJSON(w, http.StatusOK, pkgopencost.CostSummary{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Source: "prometheus"})
+		WriteCostResponse(w, manager, pkgopencost.CostSummary{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Source: "prometheus"})
 		return
 	}
 	resp := NewPromCost(client).Summary(r.Context(), pkgopencost.SummaryOptions{Currency: currency, SkipNodeCost: allowedNamespaces != nil})
@@ -79,7 +79,17 @@ func handleSummaryScoped(w http.ResponseWriter, r *http.Request, scope RouteScop
 	if allowedNamespaces != nil {
 		FilterCostSummary(resp, allowedNamespaces)
 	}
-	writeJSON(w, http.StatusOK, resp)
+	WriteCostResponse(w, manager, resp)
+}
+
+const ConnectionClosedMessage = "Cost connection closed. Retry the request"
+
+func WriteCostResponse(w http.ResponseWriter, manager *Manager, response any) {
+	if manager.Closed() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": ConnectionClosedMessage})
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
@@ -104,35 +114,35 @@ func handleWorkloadsScoped(w http.ResponseWriter, r *http.Request, scope RouteSc
 	connection, err := manager.Selected(r.Context())
 	currency := resolvedCurrency(resolveCurrency)
 	if err != nil {
-		writeJSON(w, http.StatusOK, pkgopencost.WorkloadCostResponse{Namespace: ns, Reason: ConnectionFailureReason(err), Currency: currency})
+		WriteCostResponse(w, manager, pkgopencost.WorkloadCostResponse{Namespace: ns, Reason: ConnectionFailureReason(err), Currency: currency})
 		return
 	}
 	if connection.Source == SourceKubecost {
 		resp, err := pkgopencost.ComputeKubecostWorkloads(r.Context(), connection.Client, ns, pkgopencost.KubecostCurrentOptions{Currency: currency, ClusterID: connection.ClusterID, Owners: manager.BuildPodOwnerLookup(ns)})
 		if err != nil {
 			log.Printf("[opencost] Kubecost workloads failed for namespace %q: %s", k8s.SanitizeForLog(ns), k8s.SanitizeForLog(err.Error()))
-			writeJSON(w, http.StatusOK, pkgopencost.WorkloadCostResponse{Namespace: ns, Reason: ConnectionFailureReason(err), Currency: currency, Source: "kubecost"})
+			WriteCostResponse(w, manager, pkgopencost.WorkloadCostResponse{Namespace: ns, Reason: ConnectionFailureReason(err), Currency: currency, Source: "kubecost"})
 			return
 		}
-		writeJSON(w, http.StatusOK, resp)
+		WriteCostResponse(w, manager, resp)
 		return
 	}
 
 	client, connectionErr := manager.MetricsClient()
 	if connectionErr != nil {
-		writeJSON(w, http.StatusOK, pkgopencost.WorkloadCostResponse{Namespace: ns, Reason: ConnectionFailureReason(connectionErr), Currency: currency, Source: "prometheus"})
+		WriteCostResponse(w, manager, pkgopencost.WorkloadCostResponse{Namespace: ns, Reason: ConnectionFailureReason(connectionErr), Currency: currency, Source: "prometheus"})
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
 		log.Printf("[opencost] EnsureConnected failed (workloads): %v", err)
-		writeJSON(w, http.StatusOK, pkgopencost.WorkloadCostResponse{Namespace: ns, Reason: ConnectionFailureReason(err), Currency: currency, Source: "prometheus"})
+		WriteCostResponse(w, manager, pkgopencost.WorkloadCostResponse{Namespace: ns, Reason: ConnectionFailureReason(err), Currency: currency, Source: "prometheus"})
 		return
 	}
 
 	resp := NewPromCost(client).Workloads(r.Context(), ns, manager.BuildPodOwnerLookup(ns))
 	resp.Currency = currency
 	resp.Source = "prometheus"
-	writeJSON(w, http.StatusOK, resp)
+	WriteCostResponse(w, manager, resp)
 }
 
 // BuildPodOwnerLookup snapshots radar's pod informer for `ns` so
@@ -198,7 +208,7 @@ func handleTrendScoped(w http.ResponseWriter, r *http.Request, scope RouteScope)
 	connection, err := manager.Selected(r.Context())
 	currency := resolvedCurrency(resolveCurrency)
 	if err != nil {
-		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Range: r.URL.Query().Get("range")})
+		WriteCostResponse(w, manager, pkgopencost.CostTrendResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Range: r.URL.Query().Get("range")})
 		return
 	}
 	if connection.Source == SourceKubecost {
@@ -210,20 +220,20 @@ func handleTrendScoped(w http.ResponseWriter, r *http.Request, scope RouteScope)
 		})
 		if err != nil {
 			log.Printf("[opencost] Kubecost trend failed: %s", k8s.SanitizeForLog(err.Error()))
-			writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Source: "kubecost", Range: r.URL.Query().Get("range")})
+			WriteCostResponse(w, manager, pkgopencost.CostTrendResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Source: "kubecost", Range: r.URL.Query().Get("range")})
 			return
 		}
-		writeJSON(w, http.StatusOK, resp)
+		WriteCostResponse(w, manager, resp)
 		return
 	}
 	client, connectionErr := manager.MetricsClient()
 	if connectionErr != nil {
-		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: ConnectionFailureReason(connectionErr), Currency: currency, Source: "prometheus", Range: r.URL.Query().Get("range")})
+		WriteCostResponse(w, manager, pkgopencost.CostTrendResponse{Available: false, Reason: ConnectionFailureReason(connectionErr), Currency: currency, Source: "prometheus", Range: r.URL.Query().Get("range")})
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
 		log.Printf("[opencost] EnsureConnected failed (trend): %v", err)
-		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Source: "prometheus", Range: r.URL.Query().Get("range")})
+		WriteCostResponse(w, manager, pkgopencost.CostTrendResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Source: "prometheus", Range: r.URL.Query().Get("range")})
 		return
 	}
 	resp := NewPromCost(client).Trend(r.Context(), pkgopencost.TrendPromOptions{
@@ -232,7 +242,7 @@ func handleTrendScoped(w http.ResponseWriter, r *http.Request, scope RouteScope)
 	})
 	resp.Currency = currency
 	resp.Source = "prometheus"
-	writeJSON(w, http.StatusOK, resp)
+	WriteCostResponse(w, manager, resp)
 }
 
 func handleNodesScoped(w http.ResponseWriter, r *http.Request, scope RouteScope) {
@@ -244,35 +254,35 @@ func handleNodesScoped(w http.ResponseWriter, r *http.Request, scope RouteScope)
 	connection, err := manager.Selected(r.Context())
 	currency := resolvedCurrency(resolveCurrency)
 	if err != nil {
-		writeJSON(w, http.StatusOK, pkgopencost.NodeCostResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: currency})
+		WriteCostResponse(w, manager, pkgopencost.NodeCostResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: currency})
 		return
 	}
 	if connection.Source == SourceKubecost {
 		resp, err := pkgopencost.ComputeKubecostNodes(r.Context(), connection.Client, pkgopencost.KubecostCurrentOptions{Currency: currency, ClusterID: connection.ClusterID})
 		if err != nil {
 			log.Printf("[opencost] Kubecost nodes failed: %s", k8s.SanitizeForLog(err.Error()))
-			writeJSON(w, http.StatusOK, pkgopencost.NodeCostResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Source: "kubecost"})
+			WriteCostResponse(w, manager, pkgopencost.NodeCostResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Source: "kubecost"})
 			return
 		}
 		manager.attachNodeProviderIDs(resp)
-		writeJSON(w, http.StatusOK, resp)
+		WriteCostResponse(w, manager, resp)
 		return
 	}
 	client, connectionErr := manager.MetricsClient()
 	if connectionErr != nil {
-		writeJSON(w, http.StatusOK, pkgopencost.NodeCostResponse{Available: false, Reason: ConnectionFailureReason(connectionErr), Currency: currency, Source: "prometheus"})
+		WriteCostResponse(w, manager, pkgopencost.NodeCostResponse{Available: false, Reason: ConnectionFailureReason(connectionErr), Currency: currency, Source: "prometheus"})
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
 		log.Printf("[opencost] EnsureConnected failed (nodes): %v", err)
-		writeJSON(w, http.StatusOK, pkgopencost.NodeCostResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Source: "prometheus"})
+		WriteCostResponse(w, manager, pkgopencost.NodeCostResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Source: "prometheus"})
 		return
 	}
 	resp := NewPromCost(client).Nodes(r.Context())
 	resp.Currency = currency
 	resp.Source = "prometheus"
 	manager.attachNodeProviderIDs(resp)
-	writeJSON(w, http.StatusOK, resp)
+	WriteCostResponse(w, manager, resp)
 }
 
 func FilterCostSummary(resp *pkgopencost.CostSummary, allowed []string) {

@@ -310,7 +310,9 @@ func (c *CarettaSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsR
 	}
 	flows, err := c.queryPrometheusForFlows(ctx, endpoint, opts, scope)
 	if err != nil {
-		log.Printf("[caretta] Error querying Prometheus: %v", err)
+		if ctx.Err() == nil {
+			log.Printf("[caretta] Error querying Prometheus: %v", err)
+		}
 		return &FlowsResponse{
 			Source:    "caretta",
 			Timestamp: time.Now(),

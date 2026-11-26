@@ -918,7 +918,9 @@ func (h *HubbleSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRe
 
 	fetched, err := h.fetchFlowsViaGRPC(ctx, opts)
 	if err != nil {
-		log.Printf("[hubble] gRPC error: %v", err)
+		if ctx.Err() == nil {
+			log.Printf("[hubble] gRPC error: %v", err)
+		}
 		return &FlowsResponse{
 			Source:    "hubble",
 			Timestamp: time.Now(),

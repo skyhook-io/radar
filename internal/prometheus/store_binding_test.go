@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/prom"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -174,6 +175,59 @@ func TestRightsizingOnAnUnreachableStoreReportsFailedQueries(t *testing.T) {
 	}
 	if resp.Reason != ReasonRightsizingQueriesFailed || resp.SampleAvailable || resp.ClusterScope != nil {
 		t.Errorf("reason = %q sample = %v clusterScope = %+v, want %q, no sample and no scope", resp.Reason, resp.SampleAvailable, resp.ClusterScope, ReasonRightsizingQueriesFailed)
+	}
+}
+
+func TestMetricsRoutesRetryWhenMemberClosesDuringQuery(t *testing.T) {
+	for _, tc := range []struct{ name, path string }{
+		{"rightsizing", "/prometheus/rightsizing/Deployment/shop/api"},
+		{"pvc", "/prometheus/pvc/shop/data"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cache := initBindingTestCluster(t)
+			client := testClient(t, "binding-test", cache)
+			started := make(chan struct{}, 1)
+			store := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.FormValue("query") == "up" {
+					_, _ = w.Write([]byte(authProbeBody))
+					return
+				}
+				select {
+				case started <- struct{}{}:
+				default:
+				}
+				<-r.Context().Done()
+			}))
+			defer store.Close()
+			defer client.Close()
+			connectBindingTestClient(t, client, store.URL)
+			if err := client.SetWorkloadMetricsScope(prom.WorkloadMetricsScope{SingleCluster: true}, ""); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			handler := metricsRouter(client)
+			done := make(chan *httptest.ResponseRecorder, 1)
+			go func() {
+				rec := httptest.NewRecorder()
+				handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.path, nil).WithContext(ctx))
+				done <- rec
+			}()
+			select {
+			case <-started:
+			case <-ctx.Done():
+				t.Fatal("request did not reach the metrics backend")
+			}
+			_ = client.Close()
+			select {
+			case rec := <-done:
+				if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), ConnectionClosedMessage) {
+					t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+				}
+			case <-ctx.Done():
+				t.Fatal("request remained blocked after close")
+			}
+		})
 	}
 }
 

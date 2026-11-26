@@ -145,6 +145,12 @@ func diagnoseWorkloadMetrics(ctx context.Context, group, resource, namespace, na
 	}
 	set := connectionruntime.Capture(budgetCtx)
 	avail := set.MetricsAvailability(budgetCtx)
+	if set.Metrics != nil && set.Metrics.Closed() {
+		return &diagnoseMetrics{
+			Window: diagnoseMetricsWindow{Start: now.Add(-since).UTC().Format(time.RFC3339), End: now.UTC().Format(time.RFC3339), Step: "0s"},
+			Pods:   len(pods), Series: []diagnoseMetricSeries{}, Error: errMetricsConnectionClosed.Error(),
+		}
+	}
 	if avail.State == prometheus.AvailabilityAbsent {
 		if avail.Err != nil && (errors.Is(avail.Err, context.DeadlineExceeded) || errors.Is(avail.Err, context.Canceled)) {
 			// Discovery did not answer in time. That is not "no Prometheus",
@@ -212,6 +218,10 @@ func diagnoseMetricsForScope(budgetCtx context.Context, client *prometheus.Clien
 	if client != nil {
 		p, conn = client.PromForMCPSnapshot()
 	}
+	if client != nil && client.Closed() {
+		out.Error = errMetricsConnectionClosed.Error()
+		return out
+	}
 	if p == nil {
 		out.Error = "prometheus unreachable: connection was reset"
 		return out
@@ -222,6 +232,10 @@ func diagnoseMetricsForScope(budgetCtx context.Context, client *prometheus.Clien
 	}
 	view, err := prometheus.ResolveChartScope(budgetCtx, prometheus.BoundResolver(client, conn, diagnoseScopeResolverFor(client, client.ResourceCache())),
 		prometheus.PodSetScopeRequest("diagnose_vitals", scope.Selection, diagnoseMetricsCategories, prometheus.ChartScopeSpan(since, prom.CategoryRestarts)))
+	if client.Closed() {
+		out.Error = errMetricsConnectionClosed.Error()
+		return out
+	}
 	if err != nil {
 		out.Error = diagnoseMetricsStopped(budgetCtx)
 		return out
@@ -247,6 +261,10 @@ func diagnoseMetricsForScope(budgetCtx context.Context, client *prometheus.Clien
 		}(i, cat)
 	}
 	wg.Wait()
+	if client.Closed() {
+		out.Error = errMetricsConnectionClosed.Error()
+		return out
+	}
 
 	var failures []string
 	for _, r := range results {

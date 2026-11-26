@@ -319,7 +319,9 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 		}, nil
 	}
 	if err != nil {
-		log.Printf("[istio] Error querying HTTP flows: %v", err)
+		if ctx.Err() == nil {
+			log.Printf("[istio] Error querying HTTP flows: %v", err)
+		}
 		return &FlowsResponse{
 			Source:    "istio",
 			Timestamp: time.Now(),

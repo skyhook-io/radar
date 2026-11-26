@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/connectionruntime"
+	"github.com/skyhook-io/radar/internal/portforward"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -302,6 +303,8 @@ func rightsizingWorkloadScope(ctx context.Context, input getRightsizingInput) (*
 	}
 	if err != nil {
 		switch {
+		case portforward.IsMemberClosed(ctx, err):
+			return nil, nil, errMetricsConnectionClosed
 		case errors.Is(err, prometheuspkg.ErrPrometheusUnavailable):
 			return toJSONResult(rightsizingUnavailable("workload", "prometheus_unavailable"))
 		case errors.Is(err, prometheuspkg.ErrRightsizingKindUnsupported):

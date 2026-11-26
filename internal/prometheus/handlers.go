@@ -125,11 +125,11 @@ func (h Routes) handleConnect(w http.ResponseWriter, r *http.Request) {
 		client.mu.Unlock()
 	}
 	_, _, err := client.connectWithGKE(ctx)
+	if client.Closed() || portforward.IsMemberClosed(ctx, err) {
+		client.writeChartFailure(w, ctx, err)
+		return
+	}
 	if err != nil && client.gkeChartStore() == nil {
-		if portforward.IsMemberClosed(ctx, err) {
-			writeError(w, http.StatusServiceUnavailable, "Metrics connection closed. Retry the request")
-			return
-		}
 		log.Printf("[prometheus] Connection failed: %v", err)
 		if optional {
 			status := client.GetStatus()
@@ -265,10 +265,23 @@ func chartRangeDuration(rangeStr string) time.Duration {
 	return timeRanges[normalizeTimeRange(rangeStr)].duration
 }
 
+const ConnectionClosedMessage = "Metrics connection closed. Retry the request"
+
+func (c *Client) writeChartFailure(w http.ResponseWriter, ctx context.Context, err error) bool {
+	if c.Closed() {
+		err = portforward.ErrClosed
+	}
+	if err == nil {
+		return false
+	}
+	writeChartError(w, ctx, err)
+	return true
+}
+
 // writeChartError reports a closed or changed connection and store query failures.
 func writeChartError(w http.ResponseWriter, ctx context.Context, err error) {
 	if portforward.IsMemberClosed(ctx, err) {
-		writeError(w, http.StatusServiceUnavailable, "Metrics connection closed. Retry the request")
+		writeError(w, http.StatusServiceUnavailable, ConnectionClosedMessage)
 		return
 	}
 	if errors.Is(err, errDiscoverySuperseded) {
@@ -375,8 +388,7 @@ func (h Routes) handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err := resourceChart(r.Context(), productionChartDeps(r.Context(), client), kind, namespace, name, category, rangeStr, scope)
-	if err != nil {
-		writeChartError(w, r.Context(), err)
+	if client.writeChartFailure(w, r.Context(), err) {
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -582,8 +594,7 @@ func (h Routes) handleClusterScopedResourceMetrics(w http.ResponseWriter, r *htt
 	}
 
 	resp, err := resourceChart(r.Context(), productionChartDeps(r.Context(), client), kind, "", name, category, r.URL.Query().Get("range"), nil)
-	if err != nil {
-		writeChartError(w, r.Context(), err)
+	if client.writeChartFailure(w, r.Context(), err) {
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -622,8 +633,7 @@ func (h Routes) handleNamespaceMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err := namespaceChart(r.Context(), productionChartDeps(r.Context(), client), namespace, category, r.URL.Query().Get("range"))
-	if err != nil {
-		writeChartError(w, r.Context(), err)
+	if client.writeChartFailure(w, r.Context(), err) {
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -666,8 +676,7 @@ func (h Routes) handleClusterMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err := clusterChart(r.Context(), productionChartDeps(r.Context(), client), category, r.URL.Query().Get("range"))
-	if err != nil {
-		writeChartError(w, r.Context(), err)
+	if client.writeChartFailure(w, r.Context(), err) {
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -713,7 +722,7 @@ func (h Routes) handleRawQuery(w http.ResponseWriter, r *http.Request) {
 		result, err := client.Query(r.Context(), query)
 		if err != nil {
 			if portforward.IsMemberClosed(r.Context(), err) {
-				writeError(w, http.StatusServiceUnavailable, "Metrics connection closed. Retry the request")
+				writeError(w, http.StatusServiceUnavailable, ConnectionClosedMessage)
 				return
 			}
 			if msg, ok := QueryRefusal(err); ok {
@@ -736,7 +745,7 @@ func (h Routes) handleRawQuery(w http.ResponseWriter, r *http.Request) {
 	result, err := client.QueryRange(r.Context(), query, start, end, step)
 	if err != nil {
 		if portforward.IsMemberClosed(r.Context(), err) {
-			writeError(w, http.StatusServiceUnavailable, "Metrics connection closed. Retry the request")
+			writeError(w, http.StatusServiceUnavailable, ConnectionClosedMessage)
 			return
 		}
 		if msg, ok := QueryRefusal(err); ok {
@@ -810,8 +819,7 @@ func (h Routes) handleHPAMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err := hpaChart(r.Context(), productionChartDeps(r.Context(), client), namespace, name, r.URL.Query().Get("range"))
-	if err != nil {
-		writeChartError(w, r.Context(), err)
+	if client.writeChartFailure(w, r.Context(), err) {
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)

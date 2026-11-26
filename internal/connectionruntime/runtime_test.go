@@ -347,6 +347,9 @@ func TestCommitSucceedsWhenConnectionRetiresDuringPersist(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("save reported failure after persistence: %v", err)
 	}
+	if live := edit.Set(); live.Metrics != nil || live.ArgoCD != nil || live.Cost != nil || live.Traffic != nil || live.Currency != nil || live.Helm != nil {
+		t.Fatal("successful offline save exposed an unpublished member")
+	}
 	if !prepared.Metrics.Closed() {
 		t.Fatal("unpublished metrics member is still open")
 	}

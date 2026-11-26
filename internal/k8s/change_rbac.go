@@ -118,10 +118,14 @@ func ResolveChangeGVR(kind, group string) (gvrGroup, gvrResource string, cluster
 // Unlike ResolveChangeGVR this does not report scope — its callers gate a
 // namespaced ref and a cluster-scoped one through different checks already.
 func LookupResourceGVR(kind, group string) (gvrGroup, resource string) {
+	return GetResourceDiscovery().LookupResourceGVR(kind, group)
+}
+
+func (disc *ResourceDiscovery) LookupResourceGVR(kind, group string) (gvrGroup, resource string) {
 	if kind == "" {
 		return "", ""
 	}
-	if clusterScoped, g, r := ClassifyKindScope(kind, group); clusterScoped {
+	if clusterScoped, g, r := disc.ClassifyKindScope(kind, group); clusterScoped {
 		return g, r
 	}
 	if g, r, ok := ClusterOnlyKindGVR(kind); ok && (group == "" || group == g) {
@@ -130,7 +134,7 @@ func LookupResourceGVR(kind, group string) (gvrGroup, resource string) {
 	if g, r, ok := NamespacedBuiltinGVR(kind); ok && (group == "" || group == g) {
 		return g, r
 	}
-	if disc := GetResourceDiscovery(); disc != nil {
+	if disc != nil {
 		if ar, ok := disc.GetResourceWithGroup(kind, group); ok {
 			return ar.Group, ar.Name
 		}

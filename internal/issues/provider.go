@@ -33,9 +33,7 @@ type coreDNSAccess struct {
 	replicaSets bool
 }
 
-// CacheProvider adapts radar's in-process caches to the Provider
-// interface. Uses the package-level singletons (k8s.GetResourceCache,
-// k8s.GetDynamicResourceCache, k8s.GetResourceDiscovery).
+// CacheProvider adapts one connection's caches to the Provider interface.
 type CacheProvider struct {
 	cache     *k8s.ResourceCache
 	dynamic   *k8s.DynamicResourceCache
@@ -50,14 +48,18 @@ type CacheProvider struct {
 // NewCacheProvider returns a Provider over the live radar caches, or
 // nil if the typed cache isn't ready (cluster connection still pending).
 func NewCacheProvider() *CacheProvider {
-	cache := k8s.GetResourceCache()
+	return NewCacheProviderFor(k8s.Current())
+}
+
+func NewCacheProviderFor(conn *k8s.Connection) *CacheProvider {
+	cache := conn.ResourceCache()
 	if cache == nil {
 		return nil
 	}
 	return &CacheProvider{
 		cache:       cache,
-		dynamic:     k8s.GetDynamicResourceCache(),
-		discovery:   k8s.GetResourceDiscovery(),
+		dynamic:     conn.DynamicResourceCache(),
+		discovery:   conn.Discovery(),
 		detectScope: k8s.NewDetectScope(),
 	}
 }

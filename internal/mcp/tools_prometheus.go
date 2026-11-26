@@ -348,7 +348,10 @@ func handleDiscoverMetrics(ctx context.Context, req *mcp.CallToolRequest, input 
 	// successful discovery into an error. The limit bounds the catalog pulled
 	// on large backends (names beyond it simply degrade to empty type/help).
 	metadata, mdErr := p.Metadata(ctx, promMetadataLimit)
-	if mdErr != nil && !portforward.IsMemberClosed(ctx, mdErr) {
+	if portforward.IsMemberClosed(ctx, mdErr) {
+		return nil, nil, errMetricsConnectionClosed
+	}
+	if mdErr != nil {
 		log.Printf("[mcp] discover_metrics: metadata fetch failed, returning bare names: %v", mdErr)
 	}
 	resp.Metrics = make([]promMetricInfo, 0, len(values))
@@ -372,6 +375,9 @@ func handleDiscoverMetrics(ctx context.Context, req *mcp.CallToolRequest, input 
 		resp.Usage = "some results are counters (type=counter) — they only ever increase, so wrap them in rate(metric[5m]) before querying; gauges can be queried directly"
 	}
 	nearMisses, pattern := discoverPromNearMisses(ctx, p, input.Match, values)
+	if set.Metrics != nil && set.Metrics.Closed() {
+		return nil, nil, errMetricsConnectionClosed
+	}
 	resp.NearMisses = nearMisses
 	if len(resp.NearMisses) > 0 {
 		if resp.Usage != "" {
@@ -772,6 +778,9 @@ func connectProm(ctx context.Context, set connectionruntime.Set) (*prom.Client, 
 		return nil, promNotConnectedError(client, err)
 	}
 	p := client.PromForMCP()
+	if client.Closed() {
+		return nil, errMetricsConnectionClosed
+	}
 	if p == nil {
 		return nil, errors.New("prometheus connection was reset — retry")
 	}

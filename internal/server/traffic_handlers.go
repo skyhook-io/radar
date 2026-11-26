@@ -156,6 +156,13 @@ func (s *Server) handleGetTrafficFlows(w http.ResponseWriter, r *http.Request) {
 
 	response, err := manager.GetFlows(ctx, opts)
 	if err != nil {
+		if r.Context().Err() != nil {
+			return
+		}
+		if portforward.IsMemberClosed(r.Context(), err) {
+			s.writeError(w, http.StatusServiceUnavailable, "Traffic connection closed. Retry the request")
+			return
+		}
 		log.Printf("[traffic] Error getting flows: %v", err)
 		s.writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
@@ -398,6 +405,13 @@ func (s *Server) handleGetTrafficRecords(w http.ResponseWriter, r *http.Request)
 	}
 	response, err := manager.GetFlows(r.Context(), opts)
 	if err != nil {
+		if r.Context().Err() != nil {
+			return
+		}
+		if portforward.IsMemberClosed(r.Context(), err) {
+			s.writeError(w, http.StatusServiceUnavailable, "Traffic connection closed. Retry the request")
+			return
+		}
 		log.Printf("[traffic] Error getting flow records: %v", err)
 		s.writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
