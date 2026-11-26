@@ -76,6 +76,14 @@ function renderDetail(props: Partial<ApplicationDetailProps> = {}) {
 }
 
 describe("ApplicationDetail shell", () => {
+  it("uses the host's provenance badge in place of the cluster grouping tier", () => {
+    const groupedApp = { ...app, tier: 3 }
+    expect(renderDetail({ app: groupedApp })).toContain('>Argo CD</span>')
+    const managed = renderDetail({ app: groupedApp, source: 'skyhook' })
+    expect(managed).toContain('>Skyhook</span>')
+    expect(managed).not.toContain('>Argo CD</span>')
+  })
+
   it("shows rollout activity in the application summary and workload matrix", () => {
     const rolling: AppRow = {
       ...app,

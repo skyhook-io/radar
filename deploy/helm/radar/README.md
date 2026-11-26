@@ -413,6 +413,7 @@ trend charts remain unavailable for Kubecost.
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `replicaCount` | Number of replicas | `1` |
+| `mcp.oauth.enabled` | Enable MCP OAuth for a single-replica standalone OIDC deployment | `false` |
 | `image.repository` | Image repository | `ghcr.io/skyhook-io/radar` |
 | `image.tag` | Image tag | Chart appVersion |
 | `service.type` | Service type | `ClusterIP` |
