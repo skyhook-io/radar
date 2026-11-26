@@ -1787,6 +1787,13 @@ Event destinations retain the reference’s API group, kind, namespace and name.
 | Certificate | `networking.internal.knative.dev/v1alpha1` | — | Yes | — |
 | ServerlessService | `networking.internal.knative.dev/v1alpha1` | — | Yes | — |
 
+## Metrics backend discovery
+
+Prometheus discovery watches Services and Pods through the cache of the
+connection it serves. When you select **Discover** on a Hub-managed agent,
+Radar checks Hub’s metrics-source decision before choosing the client to
+connect. Automatic connects use the agent’s current decision.
+
 ## OpenCost and Kubecost
 
 [OpenCost](https://www.opencost.io/) is a CNCF tool for Kubernetes cost monitoring, exposing cloud provider pricing and workload resource allocation as Prometheus metrics.

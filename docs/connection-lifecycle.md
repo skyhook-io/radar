@@ -22,7 +22,7 @@ External MCP callers name no connection. Each Helm write or preview uses the con
 ## Connection identity
 
 - **Admission.** When Radar starts serving a cluster (startup, a switch, Retry, auth recovery, a namespace rescope) it admits a connection with an ID `<bootNonce>-<n>`. IDs never repeat within a process, and the boot nonce keeps them distinct across restarts.
-- **Retirement.** The point of no return of any destructive path (switch, rescope, rebuild, auth demotion, shutdown) clears the serving ID before tearing anything down. Between retirement and the next admission nothing is serving. Shutdown also closes admissions.
+- **Retirement.** The point of no return of a switch, rescope, rebuild, auth demotion or shutdown clears the serving ID and closes that admission’s Done signal. Traffic flow streams end when that signal closes. Between retirement and the next admission nothing is serving. Shutdown closes admissions and cancels ongoing connection operations.
 - **Not health.** A disconnect without teardown (a failed liveness check, a Helm transport error) keeps the ID: it says which connection was admitted, not whether it is healthy.
 - **Publication.** The ID is published as `connectionId` on `/api/connection`, the Retry result, SSE `connection_state` frames and the SSE initial snapshot.
 
@@ -63,7 +63,7 @@ sequenceDiagram
   end
 ```
 
-Switching back to A admits `K7QXM2RDTA-3`, never `-1` again. After a restart the nonce changes (say `P4WNB7ZHQE-1`), so an ID from the previous process also gets 409. The client bundle, REST config and API discovery belong to one connection. A subsystem rebuild on the same clients installs a fresh connection with its own discovery slot.
+Switching back to A admits `K7QXM2RDTA-3`, never `-1` again. After a restart the nonce changes (say `P4WNB7ZHQE-1`), so an ID from the previous process also gets 409. The client bundle, REST config and API discovery belong to one connection. A subsystem rebuild on the same clients installs a fresh connection with its own discovery slot. The Helm uninstall memo is available as soon as the connection is admitted. Reads already using the retired connection keep their captured memo.
 
 Code: `internal/k8s/connection_state.go` (admission, retirement, publication), `internal/k8s/connection_binding.go` (capture).
 

@@ -635,6 +635,10 @@ choose **Save changes**. **Discard** resets the form without changing saved sett
 Switching A → B → A restores A's settings. A context with no saved settings uses
 discovery. Local CLI and Desktop share `~/.radar/clusters.json`.
 
+Saving asks active views to refetch their integration data. Metrics saves also
+invalidate cost, traffic and charts that depend on the metrics backend,
+including when Settings reports that the saved backend is unreachable.
+
 Local Prometheus discovery can fall back to port-forwarding. If access is denied,
 the error names the missing permission when available, such as `list pods` or
 `create pods/portforward`. Grant it in the Prometheus Service’s namespace, or
