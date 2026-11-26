@@ -36,7 +36,8 @@ vi.mock("../ui/Tooltip", () => ({
 }));
 
 const events = transcript as unknown as DiagnoseStreamEvent[];
-const evidenceRef = events.find((e) => e.step?.evidenceRef)?.step?.evidenceRef!;
+const evidenceRef = events.find((e) => e.step?.evidenceRef)?.step?.evidenceRef;
+if (!evidenceRef) throw new Error("The example transcript needs a cited read");
 const run = {
   ...EXAMPLE_INVESTIGATION_RUN,
   id: "hosted-run",
@@ -48,9 +49,7 @@ let container: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 let stream: SubscribeHandlers;
 let footer: Parameters<RenderInvestigationFindingsFooter>[0];
-const scrollTo = vi.fn(
-  (_options?: ScrollToOptions | number, _y?: number) => {},
-);
+const scrollTo = vi.fn<HTMLElement["scrollTo"]>();
 const renderFooter: RenderInvestigationFindingsFooter = (props) => {
   footer = props;
   return (
