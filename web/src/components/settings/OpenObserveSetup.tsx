@@ -29,7 +29,7 @@ interface Draft {
 
 const draftFrom = (connection: OpenObserveConnection | null): Draft => ({
   baseUrl: connection?.baseUrl ?? '',
-  org: connection?.org ?? 'default',
+  org: connection?.org ?? '',
   user: connection?.user ?? '',
   token: '',
   caCertFile: connection?.caCertFile ?? '',
@@ -229,7 +229,8 @@ export function OpenObserveSetup({
         </div>
         <div className="space-y-1">
           <label htmlFor={`${id}-org`} className="block text-sm font-medium text-theme-text-primary">Organization</label>
-          <Input id={`${id}-org`} value={draft.org} onChange={(e) => update({ org: e.target.value })} spellCheck={false} className={inputClass} />
+          <Input id={`${id}-org`} value={draft.org} onChange={(e) => update({ org: e.target.value })} placeholder="2Zp8kQ1vXcR7mN4tLwYb9HsA3eD" spellCheck={false} className={inputClass} />
+          <p className="text-xs text-theme-text-tertiary">The organization ID from OpenObserve. Leave empty for default.</p>
         </div>
         <div className="space-y-1">
           <label htmlFor={`${id}-user`} className="block text-sm font-medium text-theme-text-primary">User or service account email</label>

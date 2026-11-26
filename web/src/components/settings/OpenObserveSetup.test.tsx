@@ -158,7 +158,9 @@ describe('OpenObserve setup', () => {
     const link = Array.from(container.querySelectorAll('a')).find((a) => a.textContent?.includes('Create a service account in OpenObserve'))!
     expect(link.target).toBe('_blank')
     expect(link.rel).toContain('noopener')
-    expect(field('Organization').value).toBe('default')
+    expect(field('Organization').value).toBe('')
+    expect(field('Organization').placeholder).toBe('2Zp8kQ1vXcR7mN4tLwYb9HsA3eD')
+    type(field('Organization'), 'team')
     type(field('Address'), 'https://oo.example.com')
     type(field('User or service account email'), 'radar@example.com')
     type(field('Token'), 'secret')
@@ -168,7 +170,7 @@ describe('OpenObserve setup', () => {
     replies['GET /integrations/openobserve'] = [{ body: matched() }]
     await click(button('Save changes'))
     expect(posts()[0].body).toEqual({
-      baseUrl: 'https://oo.example.com', org: 'default', user: 'radar@example.com', token: 'secret', caCertFile: '', clusterLabel: '', clusterUid: 'uid-123',
+      baseUrl: 'https://oo.example.com', org: 'team', user: 'radar@example.com', token: 'secret', caCertFile: '', clusterLabel: '', clusterUid: 'uid-123',
     })
     expect(onChanged).toHaveBeenCalled()
     expect(container.textContent).toContain('Data comes from the OpenObserve collector.')

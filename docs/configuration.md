@@ -942,7 +942,7 @@ OpenObserve has its data.
 
 **In Settings.** Open Settings → Metrics and choose **OpenObserve** instead of
 **Prometheus-compatible**. The first time, enter the OpenObserve address, the
-organization (`default` unless you use another), a user or service account
+organization ID (empty means `default`), a user or service account
 email and its token, then click **Save changes**. Advanced holds an extra CA
 certificate file and a cluster label override. Radar saves only when the login
 works and it finds this cluster in OpenObserve:
