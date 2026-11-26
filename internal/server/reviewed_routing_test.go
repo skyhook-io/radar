@@ -76,7 +76,7 @@ func TestReviewedRoutingServiceChange(t *testing.T) {
 		t.Fatal(code, review)
 	}
 	impact := review["routingImpact"].(map[string]any)
-	for k, n := range map[string]float64{"publishedReadyPods": 1, "currentReadyPods": 2, "proposedReadyPods": 1} {
+	for k, n := range map[string]float64{"publishedReadyPods": 1, "currentReadyPods": 2, "proposedReadyPods": 1, "addedReadyPods": 0, "removedReadyPods": 1} {
 		if impact[k].(map[string]any)["count"] != n {
 			t.Fatal(impact)
 		}
@@ -101,7 +101,7 @@ func TestReviewedRoutingServiceChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, out = requestServiceAction(t, router, "execute", body)
-	if code != 409 || out["error_code"] != errCodeWorkloadChanged || writes(dyn) != 0 {
+	if code != 409 || out["error_code"] != "routing_review_changed" || writes(dyn) != 0 {
 		t.Fatal(code, out)
 	}
 	// Incidental Pod status updates preserve the original membership.
@@ -167,7 +167,7 @@ func TestReviewedRoutingReadGuards(t *testing.T) {
 func TestReviewedRoutingDeploymentLabel(t *testing.T) {
 	obj := reviewedDeployment()
 	obj.Object["spec"] = map[string]any{"selector": map[string]any{"matchExpressions": []any{map[string]any{"key": "app", "operator": "In", "values": []any{"api"}}}}, "template": map[string]any{"metadata": map[string]any{"labels": map[string]any{"app": "api"}}}}
-	router, dyn := reviewedRestartRouter(t, obj)
+	router, dyn := reviewedRestartRouter(t, obj, routingService())
 	for _, key := range []string{"pod-template-hash", "bad key", "app"} {
 		code, _ := requestWorkloadAction(t, router, "Deployment", "preview", map[string]any{"action": "setPodTemplateLabel", "labelKey": key, "labelValue": "wrong"})
 		if code < 400 || writes(dyn) != 0 {
@@ -183,6 +183,57 @@ func TestReviewedRoutingDeploymentLabel(t *testing.T) {
 	q["reviewToken"] = view["reviewToken"]
 	code, out := requestWorkloadAction(t, router, "Deployment", "execute", q)
 	if code != 200 || writes(dyn) != 1 {
+		t.Fatal(code, out)
+	}
+}
+
+func TestReviewedRoutingServicePortAndReadinessGuards(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		ready       bool
+		missingPort bool
+		code        string
+	}{
+		{"no ready backends", false, false, "routing_no_ready_pods"},
+		{"declares a port but wrong protocol", true, true, "routing_action_not_applicable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := routingPod("stable", "stable", tc.ready)
+			if tc.missingPort {
+				_ = unstructured.SetNestedSlice(pod.Object, []any{map[string]any{"name": "api", "ports": []any{map[string]any{"name": "http", "protocol": "UDP", "containerPort": int64(8080)}}}}, "spec", "containers")
+			}
+			svc := routingService()
+			_ = unstructured.SetNestedField(svc.Object, true, "spec", "publishNotReadyAddresses")
+			router, dyn := reviewedRestartRouter(t, svc, pod, routingSlice("v4"))
+			body := map[string]any{"action": "setServiceSelectorLabel", "labelKey": "track", "labelValue": "stable"}
+			code, resp := requestServiceAction(t, router, "preview", body)
+			if code != 409 || resp["error_code"] != tc.code || writes(dyn) != 0 {
+				t.Fatal(code, resp)
+			}
+		})
+	}
+}
+
+func TestReviewedRoutingProtectsServiceDuringDeploymentRollout(t *testing.T) {
+	obj := reviewedDeployment()
+	obj.Object["spec"] = map[string]any{
+		"selector": map[string]any{"matchLabels": map[string]any{"app": "api"}},
+		"template": map[string]any{"metadata": map[string]any{"labels": map[string]any{"app": "api", "track": "stable"}}},
+	}
+	svc := routingService()
+	_ = unstructured.SetNestedStringMap(svc.Object, map[string]string{"app": "api", "track": "stable"}, "spec", "selector")
+	router, dyn := reviewedRestartRouter(t, obj, svc)
+	q := map[string]any{"action": "setPodTemplateLabel", "labelKey": "track", "labelValue": "canary"}
+	code, out := requestWorkloadAction(t, router, "Deployment", "preview", q)
+	if code != 409 || out["error_code"] != "routing_action_not_applicable" || !strings.Contains(out["error"].(string), "web") || writes(dyn) != 0 {
+		t.Fatal(code, out)
+	}
+	obj.Object["spec"].(map[string]any)["paused"] = true
+	if err := dyn.Tracker().Update(deploymentsGVR, obj, "prod"); err != nil {
+		t.Fatal(err)
+	}
+	code, out = requestWorkloadAction(t, router, "Deployment", "preview", q)
+	if code != 409 || !strings.Contains(out["error"].(string), "resume") || writes(dyn) != 0 {
 		t.Fatal(code, out)
 	}
 }

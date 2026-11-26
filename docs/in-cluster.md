@@ -862,3 +862,18 @@ patch after the final read. Named target port coverage can vary across Pods and
 `publishNotReadyAddresses` can publish unready Pods. `namedTargetPorts` and
 `publishNotReadyAddresses` identify these cases. Approvers should inspect the
 live EndpointSlices and service signals after execution to verify delivery.
+
+Deployment label review lists `deploymentServiceImpact.existingServiceSelectors`
+and `newServiceSelectors`. These are Services whose selectors match the live
+or proposed Pod template. Radar refuses a rollout that would remove these
+Pods from a currently matching Service, and rechecks the Service list at
+execution. Admission-injected Pod labels, NetworkPolicies and disruption
+budgets can affect the rollout independently of these template projections.
+
+For Service changes, `addedReadyPods` and `removedReadyPods` compare the
+current and proposed matching cohorts by UID. Counts cover the full compared
+sets even when the listed names are sampled. The `routingImpact` on a receipt
+is the last **pre-write** observation. After execution, fetch
+`routingImpact.verifyEndpointSlices` to see what Kubernetes has published.
+Radar refuses incomplete evidence above 500 matching objects per list or 64
+ports on one Service.

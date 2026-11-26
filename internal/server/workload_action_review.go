@@ -57,19 +57,20 @@ type workloadActionInput struct {
 }
 
 type workloadActionView struct {
-	Action          string                `json:"action"`
-	Kind            string                `json:"kind"`
-	Namespace       string                `json:"namespace"`
-	Name            string                `json:"name"`
-	UID             string                `json:"uid"`
-	ResourceVersion string                `json:"resourceVersion"`
-	Generation      int64                 `json:"generation,omitempty"`
-	ReviewToken     string                `json:"reviewToken"`
-	Field           string                `json:"field"`
-	Before          any                   `json:"before"`
-	After           any                   `json:"after"`
-	Effect          string                `json:"effect"`
-	RoutingImpact   *serviceRoutingImpact `json:"routingImpact,omitempty"`
+	Action                  string                   `json:"action"`
+	Kind                    string                   `json:"kind"`
+	Namespace               string                   `json:"namespace"`
+	Name                    string                   `json:"name"`
+	UID                     string                   `json:"uid"`
+	ResourceVersion         string                   `json:"resourceVersion"`
+	Generation              int64                    `json:"generation,omitempty"`
+	ReviewToken             string                   `json:"reviewToken"`
+	Field                   string                   `json:"field"`
+	Before                  any                      `json:"before"`
+	After                   any                      `json:"after"`
+	Effect                  string                   `json:"effect"`
+	RoutingImpact           *serviceRoutingImpact    `json:"routingImpact,omitempty"`
+	DeploymentServiceImpact *deploymentServiceImpact `json:"deploymentServiceImpact,omitempty"`
 }
 
 // workloadActionField represents a closed set of actions. No resource, patch
@@ -357,9 +358,20 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, kind str
 		view.RoutingImpact = impact
 		view.ReviewToken = impact.bindReview(view.ReviewToken)
 	}
+	if in.Action == "setPodTemplateLabel" && view.Before != view.After {
+		impact, err := previewDeploymentServices(r.Context(), client, obj, in.LabelKey, *in.LabelValue, view.ReviewToken)
+		if err != nil {
+			s.writeRoutingError(w, err)
+			return
+		}
+		view.DeploymentServiceImpact = impact
+		view.ReviewToken = impact.token
+	}
 	if execute && (view.UID != in.UID || view.ReviewToken != in.ReviewToken || (in.ExpectedResourceVersion != "" && string(in.ExpectedResourceVersion) != view.ResourceVersion)) {
 		if view.UID == in.UID && view.Before == view.After {
 			s.writeErrorCode(w, http.StatusConflict, "workload_action_unchanged", "the reviewed value is already present; no new write was sent. Check the live workload for its outcome")
+		} else if view.RoutingImpact != nil || view.DeploymentServiceImpact != nil {
+			s.writeErrorCode(w, http.StatusConflict, "routing_review_changed", "the reviewed target, selector or backing Pods changed. Preview again to inspect the current routing impact")
 		} else {
 			s.writeErrorCode(w, http.StatusConflict, errCodeWorkloadChanged, "the target or proposed change differs from the reviewed action; inspect the live workload before considering another change")
 		}
@@ -386,12 +398,6 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, kind str
 				s.writeErrorCode(w, http.StatusConflict, "workload_action_unchanged", "the existing rollout restart cutoff already covers the requested time")
 				return
 			}
-		}
-	}
-	if in.Action == "setPodTemplateLabel" {
-		if err := validateDeploymentTemplateLabel(obj, in.LabelKey, *in.LabelValue); err != nil {
-			s.writeErrorCode(w, http.StatusConflict, "routing_action_not_applicable", err.Error())
-			return
 		}
 	}
 
