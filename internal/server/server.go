@@ -6330,11 +6330,11 @@ func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request
 		effectiveHeaders = currentHeaders
 	}
 	edit := s.integrationRuntime.PrepareShared(conn, base, func(next *connectionruntime.Settings) {
-		next.Metrics = prom.Connection{URL: rawURL, Headers: effectiveHeaders}
+		next.SetMetrics(prom.Connection{URL: rawURL, Headers: effectiveHeaders})
 		if currentURL != rawURL || !maps.Equal(currentHeaders, effectiveHeaders) {
 			next.Scope = prom.WorkloadMetricsScope{}
 		}
-	})
+	}, config.IntegrationMetrics)
 	err := edit.Commit(func() error {
 		_, err := config.Update(func(c *config.Config) {
 			c.PrometheusURL = rawURL

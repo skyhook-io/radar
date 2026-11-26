@@ -24,12 +24,20 @@ type Runtime struct {
 	launchFingerprint string
 }
 
+func (s *Settings) SetMetrics(metrics prom.Connection) {
+	if len(metrics.Headers) == 0 {
+		metrics.Headers = nil
+	}
+	s.Metrics = metrics
+}
+
 func New(resolver *connections.Resolver, startup Settings) *Runtime {
 	r := &Runtime{Resolver: resolver, launchBinding: k8s.Current().ContextBinding(), scopeConfigured: startup.Scope.SingleCluster || len(startup.Scope.ClusterLabels) != 0}
 	if r.scopeConfigured {
 		target, _ := k8s.CurrentProfileTarget()
 		r.launchFingerprint = target.Fingerprint
 	}
+	startup.SetMetrics(startup.Metrics)
 	r.settings.Store(&startup)
 	return r
 }
@@ -82,7 +90,7 @@ func (r *Runtime) profiles(conn *k8s.Connection, target k8s.ProfileTarget, selec
 	settings.observeTarget = openobserve.Target{Context: target.Context, Fingerprint: target.Fingerprint, Client: conn.ClientInterface()}
 	metrics, argo, cost := selected[config.IntegrationMetrics], selected[config.IntegrationArgoCD], selected[config.IntegrationCost]
 	if metrics.Settings.Prometheus != nil {
-		settings.Metrics = *metrics.Settings.Prometheus
+		settings.SetMetrics(*metrics.Settings.Prometheus)
 	}
 	settings.MetricsError, settings.ArgoError, settings.CostError = settingsError(config.IntegrationMetrics, metrics), settingsError(config.IntegrationArgoCD, argo), settingsError(config.IntegrationCost, cost)
 	settings.ArgoCD = *argo.Settings.ArgoCD

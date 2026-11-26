@@ -112,7 +112,7 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 			switch {
 			case request.Action == "reconfirm":
 				rebuild = request.Kinds
-			case pending.Probe && (request.Kind == config.IntegrationArgoCD || request.Kind == config.IntegrationCost):
+			case pending.Probe:
 				rebuild = []config.Integration{request.Kind}
 			}
 			edit = s.integrationRuntime.PrepareProfiles(build, target, pending.Selected, rebuild...)

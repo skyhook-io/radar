@@ -45,6 +45,84 @@ func TestApplyPrometheusURLWithoutConfiguredRuntime(t *testing.T) {
 	}
 }
 
+func TestMetricsResaveReplacesFailedMember(t *testing.T) {
+	for _, mode := range []string{"shared", "local"} {
+		t.Run(mode, func(t *testing.T) {
+			var ready atomic.Bool
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !ready.Load() {
+					http.Error(w, "backend unavailable", http.StatusServiceUnavailable)
+					return
+				}
+				_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+			}))
+			t.Cleanup(backend.Close)
+			var save func() *httptest.ResponseRecorder
+			if mode == "local" {
+				s := setupLocalProfileTest(t)
+				save = func() *httptest.ResponseRecorder {
+					return updateProfile(t, s, s.localPrometheusView(), "save", backend.URL, nil)
+				}
+			} else {
+				s := setupPrometheusIntegrationTest(t, nil)
+				save = func() *httptest.ResponseRecorder {
+					return applyPrometheus(s, `{"prometheusUrl":"`+backend.URL+`"}`)
+				}
+			}
+			var initial, retried struct {
+				Connected bool
+				Error     string
+			}
+			res := save()
+			if err := json.Unmarshal(res.Body.Bytes(), &initial); err != nil {
+				t.Fatal(err)
+			}
+			if res.Code != http.StatusOK || initial.Connected || initial.Error == "" {
+				t.Fatalf("first save returned %d %s, want a failed connection check", res.Code, res.Body.String())
+			}
+			previous := currentTestIntegrations().Metrics
+			if previous == nil {
+				t.Fatal("first save did not install a Metrics member")
+			}
+			ready.Store(true)
+			res = save()
+			if err := json.Unmarshal(res.Body.Bytes(), &retried); err != nil {
+				t.Fatal(err)
+			}
+			if res.Code != http.StatusOK || !retried.Connected || retried.Error != "" {
+				t.Errorf("second save returned %d %s, want a successful connection check", res.Code, res.Body.String())
+			}
+			if current := currentTestIntegrations().Metrics; current == nil || current == previous || !previous.Closed() {
+				t.Error("second save did not replace and close the failed Metrics member")
+			}
+		})
+	}
+}
+
+func TestApplyPrometheusURL_EmptyHeadersPreserveLaunchScope(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+	}))
+	t.Cleanup(backend.Close)
+	s := serverWithTestIntegrations(t, connectionruntime.Settings{
+		Metrics: prom.Connection{URL: backend.URL},
+		Scope:   prom.WorkloadMetricsScope{SingleCluster: true},
+	})
+	if res := applyPrometheus(s, `{"prometheusUrl":"`+backend.URL+`","headers":{}}`); res.Code != http.StatusOK {
+		t.Fatalf("save returned %d %s", res.Code, res.Body.String())
+	}
+	settings := s.integrationRuntime.Settings()
+	if !settings.Scope.SingleCluster {
+		t.Error("unchanged endpoint and empty headers cleared the launch scope")
+	}
+	if settings.Metrics.Headers != nil {
+		t.Error("empty headers were retained in runtime settings")
+	}
+}
+
 func TestApplyPrometheusURL_ManagedHeaders(t *testing.T) {
 	for _, source := range []string{"environment", "flags"} {
 		for _, edit := range []string{`{}`, `{"authorization":"replacement"}`} {
@@ -195,6 +273,14 @@ func TestApplyPrometheusURL_ConcurrentCredentialUpdates(t *testing.T) {
 	}
 	a, b := backend("key-a"), backend("key-b")
 	s := setupPrometheusIntegrationTest(t, nil)
+	checkConfig := func(wantURL, wantKey string) {
+		t.Helper()
+		currentURL, headers := currentTestIntegrations().Metrics.CurrentConfig()
+		saved := config.Load()
+		if currentURL != wantURL || headers["X-API-Key"] != wantKey || saved.PrometheusURL != currentURL || !reflect.DeepEqual(saved.PrometheusHeaders, headers) {
+			t.Fatal("concurrent update mixed live and saved endpoint/credential pairs")
+		}
+	}
 	for range 20 {
 		configureTestMetrics(t, s, b.URL, map[string]string{"X-API-Key": "key-b"})
 		if _, err := config.Update(func(c *config.Config) {
@@ -205,6 +291,7 @@ func TestApplyPrometheusURL_ConcurrentCredentialUpdates(t *testing.T) {
 		}
 		start := make(chan struct{})
 		var wg sync.WaitGroup
+		var retryPayload string
 		for _, update := range []map[string]any{
 			{"prometheusUrl": a.URL, "headers": map[string]string{"X-API-Key": "key-a"}},
 			{"prometheusUrl": b.URL},
@@ -213,6 +300,10 @@ func TestApplyPrometheusURL_ConcurrentCredentialUpdates(t *testing.T) {
 				payload, _ := json.Marshal(update)
 				<-start
 				rec := applyPrometheus(s, string(payload))
+				if rec.Code == http.StatusConflict && update["headers"] != nil {
+					retryPayload = string(payload)
+					return
+				}
 				if rec.Code != http.StatusOK && (update["headers"] != nil || rec.Code != http.StatusBadRequest && rec.Code != http.StatusConflict) {
 					t.Errorf("unexpected apply status %d: %s", rec.Code, rec.Body.String())
 				}
@@ -220,11 +311,13 @@ func TestApplyPrometheusURL_ConcurrentCredentialUpdates(t *testing.T) {
 		}
 		close(start)
 		wg.Wait()
-		currentURL, headers := currentTestIntegrations().Metrics.CurrentConfig()
-		saved := config.Load()
-		if currentURL != a.URL || headers["X-API-Key"] != "key-a" || saved.PrometheusURL != currentURL || !reflect.DeepEqual(saved.PrometheusHeaders, headers) {
-			t.Fatal("concurrent update mixed live and saved endpoint/credential pairs")
+		if retryPayload != "" {
+			checkConfig(b.URL, "key-b")
+			if rec := applyPrometheus(s, retryPayload); rec.Code != http.StatusOK {
+				t.Fatalf("retry returned %d %s", rec.Code, rec.Body.String())
+			}
 		}
+		checkConfig(a.URL, "key-a")
 	}
 }
 
