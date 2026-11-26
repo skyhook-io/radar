@@ -358,8 +358,7 @@ export function substrateKubectlTarget(view: SubstrateConnection | undefined, ac
   if (settings.endpoint && /\.svc(?:\.|:)/i.test(settings.endpoint)) {
     return { guidance: `Use a Substrate client from a machine that can resolve and reach ${settings.endpoint}.` }
   }
-  // The profile target carries the source file path. The context picker’s source is a display label.
-  if (!target.inFileName || !target.source) {
+  if (!target.inFileName || !target.source || !/^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(target.source)) {
     return { guidance: 'Use kubectl ate with a kubeconfig and context for the cluster shown here.' }
   }
   return { context: target.inFileName, kubeconfig: target.source, endpoint: settings.endpoint }

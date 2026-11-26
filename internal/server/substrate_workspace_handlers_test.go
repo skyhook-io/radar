@@ -67,12 +67,14 @@ type fakeControl struct {
 	templateCalls atomic.Int64
 	workerCalls   atomic.Int64
 	ateapi.UnimplementedControlServer
-	atespaces    []string
-	actors       []*ateapi.Actor
-	templates    []*ateapi.ActorTemplate
-	workers      []*ateapi.Worker
-	pointWorkers []*ateapi.Worker
-	egress       map[string]*ateapi.EgressPolicy
+	atespaces      []string
+	actors         []*ateapi.Actor
+	templates      []*ateapi.ActorTemplate
+	workers        []*ateapi.Worker
+	pointWorkers   []*ateapi.Worker
+	getWorkerErr   error
+	getTemplateErr error
+	egress         map[string]*ateapi.EgressPolicy
 }
 
 func principal(ctx context.Context) string {
@@ -141,6 +143,9 @@ func (f *fakeControl) ListWorkers(_ context.Context, req *ateapi.ListWorkersRequ
 
 func (f *fakeControl) GetWorker(_ context.Context, req *ateapi.GetWorkerRequest) (*ateapi.Worker, error) {
 	f.workerCalls.Add(1)
+	if f.getWorkerErr != nil {
+		return nil, f.getWorkerErr
+	}
 	workers := f.workers
 	if f.pointWorkers != nil {
 		workers = f.pointWorkers
@@ -195,6 +200,9 @@ func (f *fakeControl) GetActor(ctx context.Context, req *ateapi.GetActorRequest)
 
 func (f *fakeControl) GetActorTemplate(ctx context.Context, req *ateapi.GetActorTemplateRequest) (*ateapi.ActorTemplate, error) {
 	f.templateCalls.Add(1)
+	if f.getTemplateErr != nil {
+		return nil, f.getTemplateErr
+	}
 	if err := allowed(ctx, req.GetActorTemplate().GetAtespace()); err != nil {
 		return nil, err
 	}
@@ -1055,6 +1063,52 @@ func TestSubstrateActorDetailFromColdSnapshot(t *testing.T) {
 	if detail.Coverage.Actors.State == substrateapi.CoverageFull || detail.Coverage.Workers.State == substrateapi.CoverageFull ||
 		f.atespaceCalls.Load() != before || f.templateCalls.Load() != 1 {
 		t.Errorf("detail must use point reads with honest fleet coverage: %+v", detail.Coverage)
+	}
+}
+
+func TestSubstrateActorDetailPointReadFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		rpc   codes.Code
+		state string
+		code  string
+	}{
+		{"denied", codes.PermissionDenied, substrateapi.CoverageDenied, substrateapi.CodeDenied},
+		{"failed", codes.Internal, substrateapi.CoverageFailed, substrateapi.CodeFailed},
+		{"tier failure", codes.Unauthenticated, substrateapi.CoverageFailed, substrateapi.CodeUnauthenticated},
+		{"gone", codes.NotFound, substrateapi.CoverageFailed, substrateapi.CodeNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := substrateTestServer(t, substrateapi.Kube{})
+			f := defaultFake()
+			f.templates, f.workers = nil, nil
+			f.getWorkerErr = status.Error(tc.rpc, "worker lookup refused")
+			f.getTemplateErr = status.Error(tc.rpc, "template lookup refused")
+			connectFake(t, s, f, fullToken)
+			settledStatus(t, s)
+			var detail substrateActorDetail
+			rec := call(t, s, s.handleSubstrateActor, substrateCall{path: "/a", params: map[string]string{"atespace": "research", "name": "lit-0201"}}, &detail)
+			if rec.Code != http.StatusOK || detail.Worker != nil || detail.Template != nil || detail.Coverage.Actors.State != substrateapi.CoverageFull {
+				t.Fatalf("actor detail using the warm fleet snapshot: %d %+v", rec.Code, detail)
+			}
+			for kind, cov := range map[string]substrateapi.Coverage{
+				"worker": detail.Coverage.Workers, "template": detail.Coverage.Templates,
+			} {
+				if kind == "template" && tc.rpc == codes.NotFound {
+					if cov.State != substrateapi.CoverageFull {
+						t.Errorf("template absence should preserve the warm fleet coverage: %+v", cov)
+					}
+					continue
+				}
+				if cov.Usable() || cov.State != tc.state || cov.Code != tc.code || !strings.Contains(cov.Message, kind+" lookup refused") ||
+					strings.Contains(cov.Message, "fleet list") {
+					t.Errorf("%s coverage: %+v", kind, cov)
+				}
+			}
+			if missing := slices.ContainsFunc(detail.Attention, func(a model.Attention) bool { return a.Rule == model.RuleMissingTemplate }); missing != (tc.rpc == codes.NotFound) {
+				t.Errorf("missing template finding for %s: %+v", tc.rpc, detail.Attention)
+			}
+		})
 	}
 }
 
@@ -2142,14 +2196,14 @@ func TestSubstrateLogByteCapRetriesTheNewestTail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	requests := make(chan int, 3)
+	requests := make(chan int, 4)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tail, _ := strconv.Atoi(r.URL.Query().Get("tailLines"))
 		requests <- tail
 		if r.URL.Query().Get("limitBytes") != strconv.Itoa(substrateLogMaxBytes) {
 			t.Error("missing byte cap")
 		}
-		if tail == substrateLogScanLines {
+		if len(requests) <= 2 {
 			old := "older " + strings.Repeat("x", 1024) + "\n"
 			_, _ = w.Write([]byte(strings.Repeat(old, substrateLogMaxBytes/len(old)+1)[:substrateLogMaxBytes]))
 			return
@@ -2162,10 +2216,65 @@ func TestSubstrateLogByteCapRetriesTheNewestTail(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := (&Server{}).searchSubstratePod(httptest.NewRequest(http.MethodGet, "/logs", nil), client, "agents", "worker", f, 8)
-	if !got.pod.WindowFull || !slices.Equal(lineMessages(got.lines), []string{"latest actor message"}) || len(requests) != 2 {
+	if !got.pod.WindowFull || got.pod.Truncated || !slices.Equal(lineMessages(got.lines), []string{"latest actor message"}) || len(requests) != 3 {
 		t.Fatalf("newest tail after a byte-capped read: %+v, requests %d", got, len(requests))
 	}
-	if first, next := <-requests, <-requests; first != substrateLogScanLines || next >= first || next < 1 {
-		t.Errorf("tail requests: %d then %d", first, next)
+	if first, next, last := <-requests, <-requests, <-requests; first != substrateLogScanLines || next >= first || last >= next || last < 1 {
+		t.Errorf("tail requests: %d, %d, %d", first, next, last)
+	}
+}
+
+func TestSubstrateLogByteCapRetryFailure(t *testing.T) {
+	for _, tc := range []struct {
+		status  int
+		outcome string
+	}{{http.StatusInternalServerError, "failed"}, {http.StatusNotFound, "gone"}} {
+		t.Run(tc.outcome, func(t *testing.T) {
+			var requests atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if requests.Add(1) == 1 {
+					_, _ = w.Write([]byte(strings.Repeat(strings.Repeat("x", 1023)+"\n", substrateLogMaxBytes/1024)))
+					return
+				}
+				http.Error(w, "log retry error", tc.status)
+			}))
+			t.Cleanup(srv.Close)
+			client, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			filter, err := model.NewLogFilter(model.Ref{Atespace: "research", Name: "lit"}, model.LogSourceAll, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := (&Server{}).searchSubstratePod(httptest.NewRequest(http.MethodGet, "/logs", nil), client, "agents", "worker", filter, 8)
+			if got.pod.Outcome != tc.outcome || got.pod.Scanned != 0 || len(got.lines) != 0 || requests.Load() != 2 {
+				t.Errorf("byte-cap retry result = %+v, requests %d", got, requests.Load())
+			}
+		})
+	}
+}
+
+func TestSubstrateLogByteCapReportsTruncatedTail(t *testing.T) {
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		line := `2026-11-17T15:48:11Z {"msg":"Killing a sandbox over its memory limit","ate.atespace":"research","ate.actor.name":"lit","ate.actor.uid":"uid-lit","memoryLimitBytes":1024}` + "\n"
+		lines := strings.Repeat(line, 8) + strings.Repeat(strings.Repeat("x", 1023)+"\n", substrateLogMaxBytes/1024)
+		_, _ = w.Write([]byte(lines[:substrateLogMaxBytes]))
+	}))
+	t.Cleanup(srv.Close)
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	filter, err := model.NewLogFilter(model.Ref{Atespace: "research", Name: "lit"}, model.LogSourceAll, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	filter.UID = "uid-lit"
+	got := (&Server{}).searchSubstratePod(httptest.NewRequest(http.MethodGet, "/logs", nil), client, "agents", "worker", filter, 8)
+	if got.pod.Outcome != "read" || !got.pod.WindowFull || !got.pod.Truncated || len(got.lines) != 8 || len(got.evidence) != 0 || requests.Load() != 3 {
+		t.Errorf("byte-capped tail = %+v, lines %d, evidence %d, requests %d", got.pod, len(got.lines), len(got.evidence), requests.Load())
 	}
 }

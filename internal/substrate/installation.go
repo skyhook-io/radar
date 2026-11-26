@@ -43,7 +43,7 @@ func ParseInstallation(lookup func(string) (string, bool)) InstallationConfig {
 	} {
 		if v, ok := lookup(field.name); ok {
 			*field.dst = v
-			if v == "" {
+			if c.Enabled && v == "" {
 				c.Err = fmt.Errorf("%s must not be empty", field.name)
 			}
 		}
@@ -53,7 +53,10 @@ func ParseInstallation(lookup func(string) (string, bool)) InstallationConfig {
 			c.Settings.Atespaces = append(c.Settings.Atespaces, strings.TrimSpace(a))
 		}
 	}
-	if err := c.Settings.Validate(); err != nil && c.Err == nil {
+	if !c.Enabled || c.Err != nil {
+		return c
+	}
+	if err := c.Settings.Validate(); err != nil {
 		reason := err.Error()
 		if c.Settings.CAFile != "" {
 			reason = strings.ReplaceAll(reason, c.Settings.CAFile, "(RADAR_SUBSTRATE_CA_FILE)")

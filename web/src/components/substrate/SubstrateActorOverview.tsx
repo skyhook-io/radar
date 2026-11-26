@@ -153,12 +153,16 @@ function ActorAbout({ detail, onOpenSubject }: { detail: SubstrateActorDetail; o
 function ActorPlacement({ detail, onOpenSubject }: { detail: SubstrateActorDetail; onOpenSubject?: OpenSubject }) {
   const { actor, row, worker } = detail
   const as = actor.assignment
+  const workerCoverage = detail.coverage.workers
+  const workerReadReason = workerCoverage.state === 'denied'
+    ? workerCoverage.message ?? 'Substrate denied permission to read this worker'
+    : coverageReason(workerCoverage, 'workers')
   const node = row.node ? <SubjectLink subject={{ kind: 'Node', name: row.node }} onOpen={onOpenSubject} withKind={false} /> : undefined
   const pool = as?.pool ? <SubjectLink subject={{ kind: 'WorkerPool', namespace: as.namespace, name: as.pool }} label={as.pool} onOpen={onOpenSubject} withKind={false} /> : undefined
   return (
     <DimensionValue tone={detail.row.workerImpact ? workerImpactTone(detail.row.workerImpact.kind) : worker?.state === 'active' ? 'healthy' : as ? 'unknown' : 'neutral'}
       source={as ? <>Substrate assignment · namespace {as.namespace} · {worker ? `worker ${worker.state}` : 'worker state unknown'}
-        {!worker && coverageReason(detail.coverage.workers, 'workers') && ` · ${coverageReason(detail.coverage.workers, 'workers')}`}
+        {!worker && workerReadReason && ` · ${workerReadReason}`}
         {pool && <> · Pool {pool}</>}{node && <> · Node {node}</>}</>
         : <>No worker assignment in Substrate{node && <> · Last known node {node}</>}</>}>
       {as ? <SubjectLink subject={{ kind: 'Pod', namespace: as.namespace, name: as.pod }} label={as.pod} onOpen={onOpenSubject} withKind={false} />
@@ -268,7 +272,7 @@ function SearchedPods({ data }: { data: SubstrateActorLogs }) {
     <ul aria-label="Worker Pods searched" className="text-xs text-theme-text-tertiary">
       {data.searched.map((p) => (
         <li key={`${p.namespace}/${p.pod}`}>
-          <span className="font-mono">{p.namespace}/{p.pod}</span>: {p.outcome === 'read' ? `read, ${p.matched} matching lines` : p.outcome === 'gone' ? 'gone'
+          <span className="font-mono">{p.namespace}/{p.pod}</span>: {p.outcome === 'read' ? `read, ${p.matched} matching lines${p.truncated ? ' (newest lines cut off)' : ''}` : p.outcome === 'gone' ? 'gone'
             : p.outcome === 'denied' ? p.message ?? `requires get pods/log in ${p.namespace}` : `couldn’t be read${p.message ? `: ${p.message}` : ''}`}
         </li>
       ))}
@@ -287,6 +291,8 @@ export function ActorLogsBody({ actor, logs, compact, killNoticeAbove }: { actor
   if (logs.isLoading) return <p className="text-sm text-theme-text-tertiary">Reading the worker Pod’s log…</p>
   if (logs.error && !data) return <p className="text-sm text-theme-text-tertiary">Radar couldn’t read the log: {logs.error instanceof Error ? logs.error.message : 'unknown error'}.</p>
   if (!data) return <p className="text-sm text-theme-text-tertiary">Worker logs have not been read.</p>
+  const truncated = data.searched.some((pod) => pod.truncated)
+  const truncatedNotice = truncated && <p className="text-xs text-theme-text-tertiary">The byte limit cut off the newest lines in {data.origin === 'worker' ? 'the worker Pod log' : 'one or more worker Pod logs'}.</p>
   const crashedAt = actor.state === 'crashed' ? actor.crash?.time : undefined
   if (data.lines.length > 0) {
     const pods = [...new Set(data.lines.map((l) => `${l.namespace}/${l.pod}`))]
@@ -322,9 +328,9 @@ export function ActorLogsBody({ actor, logs, compact, killNoticeAbove }: { actor
           </p>
         )}
         {data.partial && <p className="text-xs text-theme-text-secondary">Some worker Pod logs on this node could not be searched.</p>}
-        {!compact && data.partial && <SearchedPods data={data} />}
+        {!compact && (data.partial || (truncated && data.origin === 'lastNode')) && <SearchedPods data={data} />}
         <LogLines lines={data.lines} showPod={data.origin === 'lastNode' && pods.length > 1} mark={mark} />
-        {data.windowFull && <p className="text-xs text-theme-text-tertiary">Radar reached its log read limit. More lines may exist outside this window.</p>}
+        {truncatedNotice || (data.windowFull && <p className="text-xs text-theme-text-tertiary">Radar reached its log read limit. More lines may exist outside this window.</p>)}
       </div>
     )
   }
@@ -337,7 +343,7 @@ export function ActorLogsBody({ actor, logs, compact, killNoticeAbove }: { actor
         {!noMatch && crashedAt && <> It crashed <When iso={crashedAt} />.</>}
       </p>
       {noMatch && data.origin === 'lastNode' && <p className="text-xs text-theme-text-secondary">Radar searched worker Pods on {data.node}, the node where the actor last ran. {data.partial && 'Some worker Pod logs there could not be searched.'}</p>}
-      {noMatch && data.windowFull && <p className="text-xs text-theme-text-tertiary">Radar scanned the newest lines. Older lines may exist outside that window.</p>}
+      {truncatedNotice || (noMatch && data.windowFull && <p className="text-xs text-theme-text-tertiary">Radar scanned the newest lines. Older lines may exist outside that window.</p>)}
       {showSearch && <SearchedPods data={data} />}
       {!compact && (!noMatch || data.windowFull || data.origin === 'lastNode') && <LogHandoff actor={actor} />}
     </div>
@@ -370,13 +376,14 @@ export function SubstrateActorOverview({
   const then = actor.kagent ? undefined : plan ? plan.thenCommand : otherRemedy && 'thenCommand' in otherRemedy ? otherRemedy.thenCommand : undefined
   const egress = egressText(detail.egress)
   const matchingLines = logs.data?.lines.length ?? 0
+  const logsTruncated = logs.data?.searched.some((pod) => pod.truncated)
   const logsUnavailable = logs.data && !workerLogsAvailable(logs.data)
   const logValue = logs.isLoading ? 'Reading worker logs…'
     : logsUnavailable ? 'Worker logs unavailable'
     : logs.error ? 'Worker logs couldn’t be read'
     : !logs.data ? 'Worker logs not read'
-    : matchingLines > 0 ? `${matchingLines} recent ${matchingLines === 1 ? 'line' : 'lines'} read${logs.data.partial ? ' from available worker Pods' : ''}`
-    : logs.data.partial ? 'No matches in the worker logs Radar could search'
+    : matchingLines > 0 ? `${matchingLines}${logsTruncated ? '' : ' recent'} ${matchingLines === 1 ? 'line' : 'lines'} read${logs.data.partial ? ' from available worker Pods' : ''}`
+    : logs.data.partial || logsTruncated ? 'No matches in the worker logs Radar could search'
     : 'No matches in the recent log window'
   const restore = { memory: 'with memory', filesystem: 'with saved files', volumes: 'with saved volumes only', cold: 'as a fresh boot', unknown: 'with unreported fidelity' }[row.resumesWith]
   const recoveryText = row.resumeGeneration === undefined ? 'Boots fresh'

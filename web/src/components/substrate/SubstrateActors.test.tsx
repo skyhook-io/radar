@@ -502,6 +502,16 @@ describe('Logs for an actor on no worker', () => {
     expect(await render({ ...empty, reasonCode: 'logsDenied' })).toContain('requires get on pods/log')
   })
 
+  it('explains when the newest lines were cut off in a zero-match search', async () => {
+    const html = await render({
+      ...base, origin: 'worker', windowFull: true, lines: [],
+      searched: [{ namespace: 'agents', pod: 'worker', outcome: 'read', scanned: 100, windowFull: true, truncated: true, matched: 0 }],
+    })
+    expect(html).toContain('No matching log lines')
+    expect(html).toContain('The byte limit cut off the newest lines in the worker Pod log.')
+    expect(html).not.toContain('Radar scanned the newest lines')
+  })
+
   it('never calls an earlier run’s memory-limit kill the reason for the crash in the logs', async () => {
     const html = await render({ ...base, origin: 'lastNode', node: 'node', reasonCode: 'candidates', searched: [], lines: [{ kind: 'worker', namespace: 'agents', pod: 'worker', text: 'old kill', message: 'old kill', time: '2026-11-17T12:00:00Z' }], memoryKill: { time: '2026-11-17T12:00:00Z', namespace: 'agents', pod: 'worker', limitBytes: 1024, current: false } })
     expect(html).not.toContain('that is why it crashed')

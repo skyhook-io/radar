@@ -434,6 +434,7 @@ const CODE_READING: Partial<Record<SubstrateCode, Omit<TierReading, 'detail'> & 
     nextStep: 'Check your Kubernetes credentials. If Kubernetes denied the token request, ask a cluster admin for create on serviceaccounts/token for ate-client in ate-system.',
     command: 'kubectl auth can-i create serviceaccounts/ate-client --subresource=token -n ate-system',
   },
+  userTokenRequired: { title: 'Sign-in token required', tone: 'unhealthy' },
   notInstalled: { title: 'API server not found', tone: 'unknown', nextStep: 'Check that Substrate’s API server runs as Service ate-system/api, or set its endpoint in Settings → Agent Substrate, under Advanced.' },
   tls: { title: 'TLS check failed', tone: 'unhealthy', nextStep: 'Check the CA file and server name in Settings → Agent Substrate, under Advanced, or that the cluster’s trust bundle for Substrate exists.' },
   unreachable: { title: 'API server unreachable', tone: 'unhealthy', nextStep: 'Check that the API server’s Pods are running, then retry; with a custom endpoint, check it is reachable from this machine.' },
@@ -505,10 +506,6 @@ const IN_SETTINGS_STEP: Partial<Record<SubstrateCode, string | undefined>> = {
 export function tierReading(tier: SubstrateAPITier, { inSettings = false }: { inSettings?: boolean } = {}): TierReading {
   if (tier.state === 'connected') return { title: 'Connected', detail: '', tone: 'healthy' }
   if (tier.state === 'connecting') return { title: 'Connecting', detail: 'The connection is saved; Radar is reading Substrate’s API for the first time.', tone: 'unknown' }
-  // The server uses UserTokenRequiredMessage with the existing mintDenied code.
-  if (tier.code === 'mintDenied' && tier.reason === 'Live actions need a user token, which only single sign-on sessions carry; this request has none.') {
-    return { title: 'Sign-in token required', detail: tier.reason, tone: 'unhealthy' }
-  }
   const noForm = tier.code ? tier.identity?.mode === 'sharedAsCaller' && NO_FORM_READING[tier.code] : undefined
   if (noForm) {
     // The plain state is Radar's; the server's own words follow as its reason.
@@ -681,7 +678,7 @@ export function poolReadFailure(error: unknown, namespace: string): string {
   if (code === 'notFound') return 'There is no WorkerPool by this name, and Substrate has no workers for one.'
   if (code === 'incomplete') return `Radar can’t tell whether this pool exists: it read too little of the WorkerPools or of Substrate’s workers${message ? ` (${message})` : ''}.`
   if (code === 'denied' && isForbiddenError(error)) return `Reading this WorkerPool requires get on workerpools.ate.dev in namespace ${namespace}.`
-  if (code === 'mintDenied' || code === 'denied') {
+  if (code === 'mintDenied' || code === 'userTokenRequired' || code === 'denied') {
     const { detail, nextStep } = tierReading({ state: 'failed', code, reason: message })
     return [detail, nextStep].filter(Boolean).join(' ')
   }
@@ -770,7 +767,7 @@ export function splitReading(reading: string): [string, string | undefined] {
  * away, or the connection no longer stands. A page shows the failure, not the
  * last answer it kept; any other refresh failure keeps that answer, marked stale.
  */
-const DEFINITIVE_CODES = new Set<SubstrateCode>(['notFound', 'denied', 'mintDenied', 'unauthenticated', 'notConfigured', 'sharedRadar', 'apiDisabled', 'targetChanged'])
+const DEFINITIVE_CODES = new Set<SubstrateCode>(['notFound', 'denied', 'mintDenied', 'userTokenRequired', 'unauthenticated', 'notConfigured', 'sharedRadar', 'apiDisabled', 'targetChanged'])
 
 export function definitiveFailure(code: SubstrateCode | undefined): boolean {
   return !!code && DEFINITIVE_CODES.has(code)

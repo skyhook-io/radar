@@ -161,8 +161,8 @@ describe('API tier readings', () => {
   })
 
   it('explains a missing user token without suggesting an RBAC grant', () => {
-    const reason = 'Live actions need a user token, which only single sign-on sessions carry; this request has none.'
-    expect(tierReading({ state: 'failed', code: 'mintDenied', reason })).toEqual({
+    const reason = 'Sign in with a session that carries a Kubernetes user token.'
+    expect(tierReading({ state: 'failed', code: 'userTokenRequired', reason })).toEqual({
       title: 'Sign-in token required', detail: reason, tone: 'unhealthy',
     })
   })

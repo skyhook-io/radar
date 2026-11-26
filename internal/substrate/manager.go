@@ -60,7 +60,8 @@ type APITier struct {
 	Reason string `json:"reason,omitempty"`
 	// Code is set with notConfigured (notConfigured), disabled (sharedRadar,
 	// apiDisabled) and failed (targetChanged, contextChanged, notInstalled,
-	// tls, unreachable, unauthenticated, mintDenied, invalidSettings, settingsFile or failed);
+	// tls, unreachable, unauthenticated, mintDenied, userTokenRequired,
+	// invalidSettings, settingsFile or failed);
 	// absent when connected or connecting.
 	Code string `json:"code,omitempty"`
 	// Identity and Endpoint describe the saved or managed connection, when known.
@@ -120,6 +121,8 @@ type Manager struct {
 	genCtx context.Context
 	cancel context.CancelFunc
 	conn   *conn
+	// callerTokenVersion advances when a managed caller installs a token.
+	callerTokenVersion uint64
 	// good is the newest successful read of this generation; failed is the
 	// newest read when it failed after good.
 	good   *cachedRead
@@ -407,6 +410,9 @@ func (m *Manager) startRead(k Kube, s Settings, key string, gen uint64, genCtx c
 	// The generation is part of the key, so a caller after Reset never joins
 	// a retired flight.
 	return m.flight.DoChan(strconv.FormatUint(gen, 10)+"\x00"+key, func() (any, error) {
+		m.mu.Lock()
+		tokenVersion := m.callerTokenVersion
+		m.mu.Unlock()
 		// Detached from any one request, so a caller that goes away does not
 		// cancel the read others wait on; Reset cancels it through genCtx.
 		readCtx, cancel := context.WithTimeout(genCtx, readTimeout+5*time.Second)
@@ -419,7 +425,10 @@ func (m *Manager) startRead(k Kube, s Settings, key string, gen uint64, genCtx c
 		}
 		entry := &cachedRead{gen: gen, key: key, at: m.Now(), snap: snap, err: tierErr}
 		if tierErr != nil {
-			m.failed = entry
+			// A read already in flight can fail after a replacement was installed.
+			if s.Identity != IdentitySharedAsCaller || tierErr.Code != CodeUnauthenticated || tokenVersion == m.callerTokenVersion {
+				m.failed = entry
+			}
 		} else {
 			m.good, m.failed = entry, nil
 		}
@@ -547,6 +556,9 @@ func (m *Manager) AtespaceActors(ctx context.Context, atespace string) ([]model.
 		defer m.mu.Unlock()
 		if m.gen != gen {
 			return kindResult[model.Actor]{tierErr: errRetired}, nil
+		}
+		if r.coverage.Code == CodeCapExceeded && len(r.items) == 0 {
+			return r, nil
 		}
 		m.scopedActorsInFlight -= held
 		held = 0

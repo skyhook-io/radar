@@ -29,6 +29,9 @@ const (
 	// create a token for ate-system/ate-client, or Radar has no identity of
 	// theirs to create it with.
 	CodeMintDenied = "mintDenied"
+	// CodeUserTokenRequired: the request lacks the Kubernetes user token
+	// required in user-token mode.
+	CodeUserTokenRequired = "userTokenRequired"
 	// CodeNotConfigured: no identity has been chosen for this context.
 	CodeNotConfigured = "notConfigured"
 	// CodeTargetChanged: the current Kubernetes target differs from the one the

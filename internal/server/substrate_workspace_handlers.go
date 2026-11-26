@@ -181,7 +181,7 @@ func (s *Server) substrateGate(r *http.Request) (*http.Request, *substrateapi.AP
 		return r, &substrateapi.APITier{State: substrateapi.TierFailed, Code: substrateapi.CodeMintDenied, Reason: "Radar has no signed-in Kubernetes identity for this request, so it cannot create Substrate's token for you."}
 	}
 	if pkgauth.UserTokenMode() && !user.System && user.Token == "" {
-		return r, &substrateapi.APITier{State: substrateapi.TierFailed, Code: substrateapi.CodeMintDenied, Reason: k8s.UserTokenRequiredMessage,
+		return r, &substrateapi.APITier{State: substrateapi.TierFailed, Code: substrateapi.CodeUserTokenRequired, Reason: k8s.UserTokenRequiredMessage,
 			Identity: &substrateapi.Identity{Mode: substrateapi.IdentitySharedAsCaller, Principal: substrateapi.SharedPrincipal}}
 	}
 	if installation.Err != nil {
@@ -220,7 +220,7 @@ func (s *Server) writeSubstrateTier(w http.ResponseWriter, tier substrateapi.API
 	switch tier.Code {
 	case substrateapi.CodeNotConfigured, substrateapi.CodeTargetChanged, substrateapi.CodeSettingsFile, substrateapi.CodeContextChanged:
 		status = http.StatusConflict
-	case substrateapi.CodeSharedRadar, substrateapi.CodeAPIDisabled, substrateapi.CodeMintDenied:
+	case substrateapi.CodeSharedRadar, substrateapi.CodeAPIDisabled, substrateapi.CodeMintDenied, substrateapi.CodeUserTokenRequired:
 		status = http.StatusForbidden
 	}
 	s.writeErrorCode(w, status, tier.Code, tier.Reason)
@@ -1408,6 +1408,17 @@ func (s *Server) readSubstrateTemplate(r *http.Request, ref model.Ref) (raw *ate
 	return
 }
 
+func substratePointFailure(tier *substrateapi.APITier, code, msg string) substrateapi.Coverage {
+	if tier != nil {
+		code, msg = tier.Code, tier.Reason
+	}
+	state := substrateapi.CoverageFailed
+	if code == substrateapi.CodeDenied {
+		state = substrateapi.CoverageDenied
+	}
+	return substrateapi.Coverage{State: state, Code: code, Message: msg}
+}
+
 func (s *Server) handleSubstrateActor(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
@@ -1432,7 +1443,7 @@ func (s *Server) handleSubstrateActor(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	pools, poolsCov, poolsClusterWide := s.substratePools(r)
 	detailCoverage := substrateapi.Coverage{State: substrateapi.CoveragePartial, Code: substrateapi.CodeIncomplete,
-		Message: "The fleet list was not read for this actor detail."}
+		Message: "This actor detail has incomplete fleet coverage."}
 	resp := substrateActorDetail{APITier: tier, Actor: actor, Coverage: substrateDetailCoverage{
 		Actors: detailCoverage, Templates: detailCoverage, Workers: detailCoverage, Pools: poolsCov,
 	}}
@@ -1475,7 +1486,6 @@ func (s *Server) handleSubstrateActor(w http.ResponseWriter, r *http.Request) {
 			assigned = snap.Index().ByWorker[as.Worker]
 		}
 		if worker == nil {
-			resp.Coverage.Workers = detailCoverage
 			workerActorCoverage = detailCoverage
 			in.WorkersComplete = false
 			var rawWorker *ateapi.Worker
@@ -1484,21 +1494,20 @@ func (s *Server) handleSubstrateActor(w http.ResponseWriter, r *http.Request) {
 				rawWorker, err = c.GetWorker(ctx, &ateapi.GetWorkerRequest{Worker: &ateapi.ObjectRef{Name: as.Worker}})
 				return err
 			})
-			if rawWorker != nil && workerTier == nil && workerCode == "" {
+			switch {
+			case workerTier != nil && workerTier.Code == substrateapi.CodeContextChanged:
+				s.writeSubstrateTier(w, *workerTier)
+				return
+			case workerTier != nil || workerCode != "":
+				resp.Coverage.Workers = substratePointFailure(workerTier, workerCode, workerMsg)
+			case rawWorker != nil:
+				resp.Coverage.Workers = detailCoverage
 				wk := substrateapi.WorkerOf(rawWorker)
 				worker = &wk
 				in.Workers = slices.DeleteFunc(slices.Clone(in.Workers), func(w model.Worker) bool { return w.Name == wk.Name })
 				in.Workers = append(in.Workers, wk)
 				in.WorkerPods = substrateWorkerPods(s.podListableWorkers(r, in.Workers))
 				in.WorkersRead = true
-			} else if workerTier != nil {
-				if workerTier.Code == substrateapi.CodeContextChanged {
-					s.writeSubstrateTier(w, *workerTier)
-					return
-				}
-				resp.Coverage.Workers.Message += " " + workerTier.Reason
-			} else if workerMsg != "" {
-				resp.Coverage.Workers.Message += " " + workerMsg
 			}
 		}
 		assigned = slices.DeleteFunc(slices.Clone(assigned), func(a model.Actor) bool { return a.Ref() == actor.Ref() })
@@ -1507,21 +1516,17 @@ func (s *Server) handleSubstrateActor(w http.ResponseWriter, r *http.Request) {
 	t, found := snapshotTemplate(snap, actor.Template)
 	templateMissing := false
 	if !found {
-		resp.Coverage.Templates = detailCoverage
 		rawTemplate, templateTier, templateCode, templateMsg := s.readSubstrateTemplate(r, actor.Template)
 		switch {
-		case templateTier != nil:
-			if templateTier.Code == substrateapi.CodeContextChanged {
-				s.writeSubstrateTier(w, *templateTier)
-				return
-			}
-			resp.Coverage.Templates.Message += " " + templateTier.Reason
+		case templateTier != nil && templateTier.Code == substrateapi.CodeContextChanged:
+			s.writeSubstrateTier(w, *templateTier)
+			return
 		case templateCode == substrateapi.CodeNotFound:
 			templateMissing = true
-			resp.Coverage.Templates.Message += " " + templateMsg
-		case templateCode != "":
-			resp.Coverage.Templates.Message += " " + templateMsg
+		case templateTier != nil || templateCode != "":
+			resp.Coverage.Templates = substratePointFailure(templateTier, templateCode, templateMsg)
 		case rawTemplate != nil:
+			resp.Coverage.Templates = detailCoverage
 			t, found = substrateapi.TemplateOf(rawTemplate), true
 		}
 	}
@@ -1566,6 +1571,7 @@ const (
 	substrateLogScanLines   = 20_000
 	substrateLogMaxLine     = 1 << 20
 	substrateLogMaxBytes    = 8 << 20
+	substrateLogTailRetries = 2
 	substrateLogDefaultTail = 500
 	substrateLogMaxTail     = 5000
 )
@@ -1587,6 +1593,8 @@ type substrateSearchedPod struct {
 	Message    string `json:"message,omitempty"`
 	Scanned    int    `json:"scanned"`
 	WindowFull bool   `json:"windowFull"`
+	// Truncated means the byte limit cut off the newest lines even after retries.
+	Truncated bool `json:"truncated,omitempty"`
 	// Matched counts every selected line in the scan, before keeping the newest tail.
 	Matched int `json:"matched"`
 }
@@ -1618,13 +1626,11 @@ type substrateLogsResponse struct {
 	ReasonCode string `json:"reasonCode,omitempty"`
 	Reason     string `json:"reason,omitempty"`
 	Source     string `json:"source"`
-	// Lines are the actor's newest lines, oldest first, at most tailLines,
-	// each with its Pod.
+	// Lines are the newest matches from the parts read, oldest first, at
+	// most tailLines, each with its Pod.
 	Lines []substrateLogLine `json:"lines"`
-	// Searched are the Pods read. Each read covers its Pod's last
-	// substrateLogScanLines lines; WindowFull there means older lines of
-	// this actor may exist beyond them. MorePods counts Pods on the node
-	// left unsearched.
+	// Searched are the Pods read. Each read requests up to
+	// substrateLogScanLines lines. MorePods counts Pods on the node left unsearched.
 	Searched []substrateSearchedPod `json:"searched"`
 	MorePods int                    `json:"morePods,omitempty"`
 	Partial  bool                   `json:"partial,omitempty"`
@@ -1936,8 +1942,8 @@ type substratePodRead struct {
 	evidence []substrateLogLine
 }
 
-// searchSubstratePod reads one worker Pod's last substrateLogScanLines lines
-// and keeps the newest tail the filter selects.
+// searchSubstratePod requests one worker Pod's last substrateLogScanLines
+// lines and keeps the newest matches from the part it could read.
 func (s *Server) searchSubstratePod(r *http.Request, client kubernetes.Interface, namespace, pod string, filter model.LogFilter, tail int) substratePodRead {
 	out := substratePodRead{pod: substrateSearchedPod{Namespace: namespace, Pod: pod, Outcome: "read"}}
 	limitBytes := int64(substrateLogMaxBytes)
@@ -1950,15 +1956,14 @@ func (s *Server) searchSubstratePod(r *http.Request, client kubernetes.Interface
 		defer stream.Close()
 		return io.ReadAll(io.LimitReader(stream, limitBytes))
 	}
-	body, err := readTail(substrateLogScanLines)
+	scanLines := int64(substrateLogScanLines)
+	body, err := readTail(scanLines)
 	windowFull := len(body) == substrateLogMaxBytes
-	if err == nil && windowFull {
+	for attempt := 0; attempt < substrateLogTailRetries && err == nil && len(body) == substrateLogMaxBytes && scanLines > 1; attempt++ {
 		// Kubelet applies the byte cap walking forwards from the start of
 		// the requested tail. Narrow the tail to recover the newest lines.
-		scanLines := int64(max(1, min(substrateLogScanLines-1, bytes.Count(body, []byte{'\n'})/2)))
-		if newer, retryErr := readTail(scanLines); retryErr == nil {
-			body = newer
-		}
+		scanLines = max(1, min(scanLines/2, int64(bytes.Count(body, []byte{'\n'})/2)))
+		body, err = readTail(scanLines)
 	}
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -1974,7 +1979,8 @@ func (s *Server) searchSubstratePod(r *http.Request, client kubernetes.Interface
 		out.pod.Outcome, out.pod.Message = "failed", err.Error()
 		return out
 	}
-	if len(body) == substrateLogMaxBytes {
+	out.pod.Truncated = len(body) == substrateLogMaxBytes
+	if out.pod.Truncated {
 		// The retry still omitted the end of the stream, which may hold
 		// an execution start or a failed kill that changes attribution.
 		evidence = nil

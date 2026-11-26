@@ -32,6 +32,18 @@ describe('copyable kubectl ate commands', () => {
     expect(html).not.toContain('--endpoint')
   })
 
+  it.each(['CAPI', 'relative/kubeconfig', 'C:relative'])('uses guidance for a non-absolute source (%s)', (source) => {
+    const html = show(connection({ target: { ...target, source }, saved: true, settings: { identity: 'shared' } }))
+    expect(html).toContain('Use kubectl ate with a kubeconfig and context')
+    expect(html).not.toContain('--kubeconfig')
+    expect(html).not.toContain('Copy command')
+  })
+
+  it.each(['C:\\Users\\me\\config', 'D:/kube/config', '\\\\server\\share\\config'])('accepts an absolute Windows source (%s)', (source) => {
+    expect(substrateKubectlTarget(connection({ target: { ...target, source }, saved: true, settings: { identity: 'shared' } }), target.context))
+      .toEqual({ context: target.inFileName, kubeconfig: source })
+  })
+
   it('includes a directly reachable local endpoint with standard cluster trust', () => {
     const html = show(local({ identity: 'tokenFile', tokenFile: '/home/me/ate.token', endpoint: '127.0.0.1:18443' }))
     expect(html).toContain('--endpoint 127.0.0.1:18443')

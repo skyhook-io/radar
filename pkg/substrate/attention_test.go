@@ -580,6 +580,30 @@ func TestWorkerAttentionWithAnIncompleteActorList(t *testing.T) {
 	}
 }
 
+func TestWorkerAttentionExcludesSuspendedActors(t *testing.T) {
+	for state, rule := range map[string]string{WorkerUnavailable: RuleWorkerUnavailable, WorkerDraining: RuleWorkerDraining} {
+		t.Run(state, func(t *testing.T) {
+			w := Worker{Name: "w", Pod: "pod", State: state, UpdateTime: now.Add(-10 * time.Minute)}
+			running := Actor{Name: "running", State: StateRunning, Assignment: &Assignment{Worker: w.Name}}
+			suspended := Actor{Name: "suspended", State: StateSuspended, Assignment: running.Assignment}
+			in := Inputs{Now: now, ActorsRead: true, ActorsComplete: true, WorkersRead: true}
+			row := WorkerAttention(in, w, []Actor{suspended, running})
+			if row == nil || row.Rule != rule || row.Count != 1 || len(row.Sample) != 1 || row.Sample[0].Name != running.Name {
+				t.Fatalf("worker finding = %+v, want only the running actor", row)
+			}
+			hasRule := func(a Actor) bool {
+				return slices.ContainsFunc(ActorDetailAttention(in, a, &w), func(row Attention) bool { return row.Rule == rule })
+			}
+			if !hasRule(running) || hasRule(suspended) {
+				t.Errorf("worker finding must apply to the running actor only")
+			}
+			if w.State == WorkerDraining && WorkerAttention(in, w, []Actor{suspended}) != nil {
+				t.Errorf("a draining worker with only a suspended actor has no affected actors")
+			}
+		})
+	}
+}
+
 func TestPoolFullCheckRequiresCompleteWorkersOrService(t *testing.T) {
 	for _, tc := range []struct {
 		in  Inputs

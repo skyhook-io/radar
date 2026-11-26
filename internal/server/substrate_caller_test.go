@@ -38,6 +38,7 @@ type mintRecorder struct {
 	deny       map[string]bool
 	expires    time.Time
 	firstToken string
+	token      string
 }
 
 func (m *mintRecorder) count() (asked, minted int) {
@@ -64,7 +65,10 @@ func (m *mintRecorder) install(t *testing.T) {
 				return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "serviceaccounts/token"}, "ate-client", nil)
 			}
 			m.mu.Lock()
-			token := fullToken
+			token := m.token
+			if token == "" {
+				token = fullToken
+			}
 			if len(m.mints) == 0 && m.firstToken != "" {
 				token = m.firstToken
 			}
@@ -245,7 +249,7 @@ func TestSubstrateUserTokenRequiredWithWarmProof(t *testing.T) {
 
 	user.Token = ""
 	rec := call(t, s, s.handleSubstrateActors, req, nil)
-	if rec.Code != http.StatusForbidden || substrateErrorCode(t, rec) != substrateapi.CodeMintDenied ||
+	if rec.Code != http.StatusForbidden || substrateErrorCode(t, rec) != substrateapi.CodeUserTokenRequired ||
 		!strings.Contains(rec.Body.String(), k8s.UserTokenRequiredMessage) {
 		t.Errorf("request missing its token: %d %s", rec.Code, rec.Body)
 	}
@@ -289,8 +293,7 @@ func TestSubstrateCallerRemintsAfterRemoteRejection(t *testing.T) {
 			mints.firstToken = "rejected-token"
 			m := s.substrateManager()
 			now := time.Now()
-			var elapsed atomic.Int64
-			m.Now = func() time.Time { return now.Add(time.Duration(elapsed.Load())) }
+			m.Now = func() time.Time { return now }
 			ctx := auth.ContextWithUser(t.Context(), hubUser("alice", "owner"))
 			req, tier := s.substrateGate((&http.Request{}).WithContext(ctx))
 			if tier != nil {
@@ -305,13 +308,38 @@ func TestSubstrateCallerRemintsAfterRemoteRejection(t *testing.T) {
 			if _, minted := mints.count(); minted != 2 {
 				t.Fatalf("next request minted %d total tokens, want 2", minted)
 			}
-			if name == "snapshot" {
-				elapsed.Store(int64(substrateapi.Freshness + time.Second))
-				code = read(m, req.Context())
-			}
 			if code != "" {
 				t.Errorf("request after mint = %q, want success", code)
 			}
 		})
+	}
+}
+
+func TestSubstrateCallerBoundsMintsDuringPersistentRejection(t *testing.T) {
+	s, mints := cloudSubstrate(t)
+	mints.token = "always-rejected"
+	m := s.substrateManager()
+	now := time.Now()
+	var elapsed atomic.Int64
+	m.Now = func() time.Time { return now.Add(time.Duration(elapsed.Load())) }
+	ctx := auth.ContextWithUser(t.Context(), hubUser("alice", "owner"))
+	req, tier := s.substrateGate((&http.Request{}).WithContext(ctx))
+	if tier != nil {
+		t.Fatalf("gate: %+v", tier)
+	}
+	for _, step := range []struct {
+		after     time.Duration
+		wantMints int
+	}{
+		{0, 1}, {35 * time.Second, 2}, {35 * time.Second, 2}, {41 * time.Second, 2},
+		{50 * time.Second, 2}, {64 * time.Second, 2}, {65 * time.Second, 3},
+	} {
+		elapsed.Store(int64(step.after))
+		if _, tier := m.Snapshot(req.Context()); tier.Code != substrateapi.CodeUnauthenticated {
+			t.Fatalf("read at %s = %+v", step.after, tier)
+		}
+		if _, minted := mints.count(); minted != step.wantMints {
+			t.Fatalf("at %s minted %d tokens, want %d", step.after, minted, step.wantMints)
+		}
 	}
 }

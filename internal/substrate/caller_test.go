@@ -213,7 +213,7 @@ func TestCallerTokenLateRejectionKeepsReplacement(t *testing.T) {
 	}
 
 	source := callerSource{m: m, key: callerTokenKey(k)}
-	_ = source.invalidateOnRejection(t.Context(), "", nil, nil, nil, func(ctx context.Context, _ string, _, _ any, _ *grpc.ClientConn, _ ...grpc.CallOption) error {
+	_ = source.recordRejection(t.Context(), "", nil, nil, nil, func(ctx context.Context, _ string, _, _ any, _ *grpc.ClientConn, _ ...grpc.CallOption) error {
 		if token, err := source.token(ctx); err != nil || token != "token-1" {
 			t.Fatalf("token sent = %q, %v", token, err)
 		}
@@ -226,5 +226,8 @@ func TestCallerTokenLateRejectionKeepsReplacement(t *testing.T) {
 
 	if token, err := source.token(t.Context()); err != nil || token != "token-2" {
 		t.Errorf("token after rejection of its predecessor = %q, %v", token, err)
+	}
+	if err := m.ensureCallerToken(t.Context(), k, alice); err != nil || len(requests) != 2 {
+		t.Errorf("late rejection triggered another mint: %d requests, %v", len(requests), err)
 	}
 }

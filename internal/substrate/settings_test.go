@@ -132,8 +132,9 @@ func TestSelectionRetiresGenerationOnExternalEdit(t *testing.T) {
 func TestInstallationEnvironment(t *testing.T) {
 	for name, env := range map[string]map[string]string{
 		"defaults": {}, "disabled": {"RADAR_SUBSTRATE_API": "disabled"},
-		"endpoint": {"RADAR_SUBSTRATE_ENDPOINT": "other.example:8443", "RADAR_SUBSTRATE_SERVER_NAME": "other.example", "RADAR_SUBSTRATE_ATESPACES": "team-a,team-b"},
-		"bad api":  {"RADAR_SUBSTRATE_API": "auto"}, "empty api": {"RADAR_SUBSTRATE_API": ""}, "bad endpoint": {"RADAR_SUBSTRATE_ENDPOINT": "https://api:443"},
+		"disabled with unused settings": {"RADAR_SUBSTRATE_API": "disabled", "RADAR_SUBSTRATE_ENDPOINT": "", "RADAR_SUBSTRATE_SERVER_NAME": "INVALID", "RADAR_SUBSTRATE_CA_FILE": "/nonexistent/ca.pem"},
+		"endpoint":                      {"RADAR_SUBSTRATE_ENDPOINT": "other.example:8443", "RADAR_SUBSTRATE_SERVER_NAME": "other.example", "RADAR_SUBSTRATE_ATESPACES": "team-a,team-b"},
+		"bad api":                       {"RADAR_SUBSTRATE_API": "auto"}, "empty api": {"RADAR_SUBSTRATE_API": ""}, "bad endpoint": {"RADAR_SUBSTRATE_ENDPOINT": "https://api:443"},
 		"port": {"RADAR_SUBSTRATE_ENDPOINT": "api:65536"}, "empty endpoint": {"RADAR_SUBSTRATE_ENDPOINT": ""}, "server name": {"RADAR_SUBSTRATE_SERVER_NAME": "INVALID"},
 		"CA": {"RADAR_SUBSTRATE_CA_FILE": "/nonexistent/ca.pem"}, "relative CA": {"RADAR_SUBSTRATE_CA_FILE": "ca.pem"}, "empty CA": {"RADAR_SUBSTRATE_CA_FILE": ""},
 		"atespace": {"RADAR_SUBSTRATE_ATESPACES": "bad_name"}, "duplicate": {"RADAR_SUBSTRATE_ATESPACES": "team,team"}, "empty entry": {"RADAR_SUBSTRATE_ATESPACES": "team,"},
@@ -141,14 +142,15 @@ func TestInstallationEnvironment(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := ParseInstallation(func(k string) (string, bool) { v, ok := env[k]; return v, ok })
-			valid := name == "defaults" || name == "disabled" || name == "endpoint"
+			disabled := env["RADAR_SUBSTRATE_API"] == "disabled"
+			valid := name == "defaults" || disabled || name == "endpoint"
 			if (c.Err == nil) != valid {
 				t.Fatalf("%+v", c)
 			}
 			if name == "defaults" && (c.Settings.Endpoint != "api.ate-system.svc:443" || c.Trust() != "clusterTrustBundle" || !c.Enabled) {
 				t.Fatalf("defaults: %+v", c)
 			}
-			if name == "disabled" && c.Enabled {
+			if disabled && c.Enabled {
 				t.Fatal("off switch lost")
 			}
 		})

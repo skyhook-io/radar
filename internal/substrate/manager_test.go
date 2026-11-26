@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -41,6 +43,7 @@ type stubControl struct {
 	// unavailable fails ListAtespaces as an unreachable API.
 	unavailable bool
 	listError   error
+	listActors  func(context.Context, *ateapi.ListActorsRequest) (*ateapi.ListActorsResponse, error)
 }
 
 func (c *stubControl) ListAtespaces(ctx context.Context, _ *ateapi.ListAtespacesRequest, _ ...grpc.CallOption) (*ateapi.ListAtespacesResponse, error) {
@@ -84,7 +87,10 @@ func (c *stubControl) allowed(atespace string) error {
 	return nil
 }
 
-func (c *stubControl) ListActors(_ context.Context, r *ateapi.ListActorsRequest, _ ...grpc.CallOption) (*ateapi.ListActorsResponse, error) {
+func (c *stubControl) ListActors(ctx context.Context, r *ateapi.ListActorsRequest, _ ...grpc.CallOption) (*ateapi.ListActorsResponse, error) {
+	if c.listActors != nil {
+		return c.listActors(ctx, r)
+	}
 	if err := c.allowed(r.GetAtespace()); err != nil {
 		return nil, err
 	}
@@ -119,6 +125,92 @@ func stubManager(t *testing.T, kube func() (Kube, error)) (*Manager, Kube, Setti
 }
 
 func fixedKube() (Kube, error) { return Kube{Binding: "ctx-a", Fingerprint: "cluster-a"}, nil }
+
+func TestScopedActorBudgetRaceDoesNotCacheEmptyRead(t *testing.T) {
+	maxActors := MaxActors
+	MaxActors = 1
+	t.Cleanup(func() { MaxActors = maxActors })
+	m, k, settings := stubManager(t, fixedKube)
+	var elapsed atomic.Int64
+	m.Now = func() time.Time { return t0.Add(time.Duration(elapsed.Load())) }
+	entered, release := make(chan struct{}), make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	var waitingReads atomic.Int32
+	m.conn = &conn{key: connKey(k, settings), client: &stubControl{
+		listActors: func(ctx context.Context, req *ateapi.ListActorsRequest) (*ateapi.ListActorsResponse, error) {
+			space := req.GetAtespace()
+			switch space {
+			case "waiting":
+				if waitingReads.Add(1) == 1 {
+					close(entered)
+					select {
+					case <-release:
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
+				}
+			case "winner":
+			default:
+				return &ateapi.ListActorsResponse{}, nil
+			}
+			return &ateapi.ListActorsResponse{Actors: []*ateapi.Actor{{Metadata: &ateapi.ResourceMetadata{Atespace: space, Name: "actor"}}}}, nil
+		},
+	}}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	var cached []string
+	for i := 0; i < MaxScopedReads-1; i++ {
+		space := fmt.Sprintf("cached-%d", i)
+		if _, cov, tier := m.AtespaceActors(ctx, space); tier != nil || cov.State != CoverageFull {
+			t.Fatalf("prime %s: %+v, %+v", space, cov, tier)
+		}
+		cached = append(cached, space)
+	}
+
+	type result struct {
+		count int
+		cov   Coverage
+		tier  *APITier
+	}
+	waiting := make(chan result, 1)
+	go func() {
+		actors, cov, tier := m.AtespaceActors(ctx, "waiting")
+		waiting <- result{len(actors), cov, tier}
+	}()
+	defer func() {
+		unblock()
+		// Retire the read before the test restores the global actor budget.
+		m.Reset()
+	}()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("the waiting read did not enter")
+	}
+	if actors, cov, tier := m.AtespaceActors(ctx, "winner"); tier != nil || cov.State != CoverageFull || len(actors) != 1 {
+		t.Fatalf("win the last budget slot: %d, %+v, %+v", len(actors), cov, tier)
+	}
+	elapsed.Store(int64(time.Second))
+	unblock()
+	select {
+	case got := <-waiting:
+		if got.tier != nil || got.count != 0 || got.cov.Code != CodeCapExceeded || !slices.Equal(got.cov.UnreadAtespaces, []string{"waiting"}) {
+			t.Fatalf("the race loser should report an unread atespace: %+v", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("the waiting read did not finish")
+	}
+	for _, space := range cached {
+		if _, cov, tier := m.AtespaceActors(ctx, space); tier != nil || cov.State != CoverageFull {
+			t.Fatalf("the empty capped read displaced cached %s: %+v, %+v", space, cov, tier)
+		}
+	}
+	elapsed.Store(int64(Freshness))
+	actors, cov, tier := m.AtespaceActors(ctx, "waiting")
+	if tier != nil || cov.State != CoverageFull || len(actors) != 1 || waitingReads.Load() != 2 {
+		t.Errorf("retry after the winner expires: %d, %+v, %+v, %d RPCs", len(actors), cov, tier, waitingReads.Load())
+	}
+}
 
 func TestResetRetiresInFlightRead(t *testing.T) {
 	m, k, s := stubManager(t, fixedKube)

@@ -968,6 +968,9 @@ func workerRows(in Inputs) []Attention {
 
 // WorkerAttention returns the strongest finding for a worker and its assignments.
 func WorkerAttention(in Inputs, w Worker, assigned []Actor) *Attention {
+	if (w.State == WorkerUnavailable || w.State == WorkerDraining) && slices.ContainsFunc(assigned, func(a Actor) bool { return a.State == StateSuspended }) {
+		assigned = slices.DeleteFunc(slices.Clone(assigned), func(a Actor) bool { return a.State == StateSuspended })
+	}
 	var out []Attention
 	subject, related := workerSubjects(w)
 	held := HeldFor(w.UpdateTime, in.Now)
@@ -1596,7 +1599,7 @@ func covers(r Attention, a Actor, now time.Time) bool {
 	case RuleMissingTemplate:
 		return a.Template.Atespace+"/"+a.Template.Name == r.key
 	case RuleWorkerUnavailable, RuleWorkerDraining:
-		return worker != "" && worker == r.key
+		return worker != "" && worker == r.key && a.State != StateSuspended
 	case RuleWorkerRestarting:
 		return worker != "" && worker == r.key && epoch < r.epoch && a.State != StateResuming && a.State != StateSuspended
 	}

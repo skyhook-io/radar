@@ -187,7 +187,7 @@ func dial(ctx context.Context, k Kube, s Settings, caller *callerSource) (*conn,
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(maxRecvMessage)),
 	}
 	if caller != nil {
-		opts = append(opts, grpc.WithUnaryInterceptor(caller.invalidateOnRejection))
+		opts = append(opts, grpc.WithUnaryInterceptor(caller.recordRejection))
 	}
 	cc, err := grpc.NewClient("passthrough:///"+target, opts...)
 	if err != nil {

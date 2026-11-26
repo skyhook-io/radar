@@ -52,6 +52,8 @@ export type SubstrateCode =
   | 'operator_managed'
   /** Radar cannot mint ate-system/ate-client using the Kubernetes credentials for this read (403). */
   | 'mintDenied'
+  /** User-token mode requires a Kubernetes token on this request (403). */
+  | 'userTokenRequired'
   | 'notConfigured'
   /** The current Kubernetes target differs from the reviewed or saved target. */
   | 'targetChanged'
@@ -98,7 +100,7 @@ export interface SubstrateAPITier {
   /**
    * Set with notConfigured, disabled (sharedRadar or apiDisabled), or failed
    * (targetChanged, contextChanged, notInstalled, tls, unreachable,
-   * unauthenticated, mintDenied, invalidSettings, settingsFile or failed).
+   * unauthenticated, mintDenied, userTokenRequired, invalidSettings, settingsFile or failed).
    */
   code?: SubstrateCode
   /** The saved or managed connection’s identity and endpoint, when known. */
@@ -942,6 +944,8 @@ export interface SubstrateSearchedPod {
   scanned: number
   /** The read reached its 20,000-line window or 8 MiB per fetch: older lines may exist. */
   windowFull: boolean
+  /** The byte limit cut off the newest lines even after requesting a shorter tail. */
+  truncated?: boolean
   /** All matches in the scan, before limiting the returned lines to the requested tail. */
   matched: number
 }
@@ -973,7 +977,7 @@ export interface SubstrateActorLogs {
   reasonCode?: 'noWorker' | 'nodeGone' | 'noWorkerPods' | 'workerPodGone' | 'podsDenied' | 'logsDenied' | 'noMatch' | 'candidates' | 'podsNotCollected'
   reason?: string
   source: SubstrateLogSource
-  /** Newest lines, oldest first, each with the Pod and namespace it came from. */
+  /** Newest matches in the parts read, oldest first, each with its Pod and namespace. */
   lines: (SubstrateLogLine & { pod: string; namespace: string })[]
   /** Candidate Pod log outcomes, including unread logs. A last-node search attempts up to 6 streams. */
   searched: SubstrateSearchedPod[]

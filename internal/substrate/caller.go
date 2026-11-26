@@ -46,6 +46,8 @@ const callerMintTimeout = 10 * time.Second
 // caller has asked about for that long gets here.
 const callerTokenGrace = time.Minute
 
+const callerRejectionCooldown = 30 * time.Second
+
 // callerToken is the token minted for IdentitySharedAsCaller, for one cluster
 // capture. Every caller reads as the same principal, so one token serves the
 // reads; but a caller is served only while their own access has minted one
@@ -53,11 +55,13 @@ const callerTokenGrace = time.Minute
 type callerToken struct {
 	// minting serializes mints. mu guards cached tokens and proofs so warm
 	// requests never wait for a mint.
-	minting sync.Mutex
-	mu      sync.Mutex
-	key     string
-	token   string
-	expires time.Time
+	minting         sync.Mutex
+	mu              sync.Mutex
+	key             string
+	token           string
+	expires         time.Time
+	rejected        bool
+	retryRejectedAt time.Time
 	// proofs is when each caller's own client last minted a token, by
 	// Caller.Identity.
 	proofs map[string]time.Time
@@ -70,6 +74,7 @@ const callerProofFor = tokenLifetime - tokenRefreshBefore
 // clearLocked drops the token and every proof; t.mu is held.
 func (t *callerToken) clearLocked(key string) {
 	t.key, t.token, t.expires, t.proofs = key, "", time.Time{}, nil
+	t.rejected, t.retryRejectedAt = false, time.Time{}
 }
 
 func callerTokenKey(k Kube) string {
@@ -85,11 +90,9 @@ func (m *Manager) callerSettings() Settings {
 }
 
 // ensureCallerToken mints a token with the caller's own client unless the
-// caller minted one within callerProofFor and the shared token has more than
-// tokenRefreshBefore left. A successful mint records the caller's proof and
-// replaces the shared token when it expires later; a refused one refuses this
-// caller, whatever the shared token. It runs only on a caller's own request;
-// background reads use the shared token and never mint.
+// caller minted one within callerProofFor, the shared token has more than
+// tokenRefreshBefore left and a rejection does not need a retry. It runs only
+// on a caller's own request; background reads use the shared token and never mint.
 func (m *Manager) ensureCallerToken(ctx context.Context, k Kube, c Caller) *TierError {
 	if c.Client == nil {
 		return &TierError{Code: CodeMintDenied, Message: "Radar could not act as you in Kubernetes, so it cannot create Substrate's token for you."}
@@ -110,6 +113,9 @@ func (m *Manager) ensureCallerToken(ctx context.Context, k Kube, c Caller) *Tier
 	if t.key != key {
 		t.clearLocked(key)
 	}
+	if t.rejectionRetryDue(now) {
+		t.retryRejectedAt = now.Add(callerRejectionCooldown)
+	}
 	t.mu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, callerMintTimeout)
 	defer cancel()
@@ -120,14 +126,21 @@ func (m *Manager) ensureCallerToken(ctx context.Context, k Kube, c Caller) *Tier
 	if err != nil {
 		return mintError(err)
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.key != key {
 		// Reset ran during the mint: this capture is retired.
 		return errRetired
 	}
-	if expires.After(t.expires) {
+	if t.rejected || expires.After(t.expires) {
+		t.rejected = false
 		t.token, t.expires = token, expires
+		m.callerTokenVersion++
+		if failed := m.failed; failed != nil && failed.err.Code == CodeUnauthenticated && failed.key == connKey(k, m.callerSettings()) {
+			m.failed = nil
+		}
 	}
 	if t.proofs == nil {
 		t.proofs = map[string]time.Time{}
@@ -146,7 +159,12 @@ func (t *callerToken) proofFresh(key, identity string, now time.Time) bool {
 	defer t.mu.Unlock()
 	proof, proven := t.proofs[identity]
 	return t.key == key && proven && now.Sub(proof) < callerProofFor &&
-		t.token != "" && t.expires.Sub(now) > tokenRefreshBefore
+		t.token != "" && t.expires.Sub(now) > tokenRefreshBefore && !t.rejectionRetryDue(now)
+}
+
+// rejectionRetryDue is called with t.mu held.
+func (t *callerToken) rejectionRetryDue(now time.Time) bool {
+	return t.rejected && !now.Before(t.retryRejectedAt)
 }
 
 func mintError(err error) *TierError {
@@ -186,9 +204,8 @@ func (s callerSource) token(ctx context.Context) (string, error) {
 	return token, nil
 }
 
-// invalidateOnRejection ties a remote rejection to the token sent on that
-// RPC. A late response must not discard a replacement another caller minted.
-func (s callerSource) invalidateOnRejection(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoke grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+// recordRejection ties a remote rejection to the token sent on that RPC.
+func (s callerSource) recordRejection(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoke grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 	var sent atomic.Pointer[string]
 	err := invoke(context.WithValue(ctx, callerTokenUseKey{}, &sent), method, req, reply, cc, opts...)
 	rejected := sent.Load()
@@ -196,7 +213,7 @@ func (s callerSource) invalidateOnRejection(ctx context.Context, method string, 
 		t := &s.m.callerTok
 		t.mu.Lock()
 		if t.key == s.key && t.token == *rejected {
-			t.token, t.expires = "", time.Time{}
+			t.rejected = true
 		}
 		t.mu.Unlock()
 	}

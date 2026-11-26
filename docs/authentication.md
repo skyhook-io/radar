@@ -154,8 +154,9 @@ Substrate through Radar. Hub owner/member/viewer roles do not gate this read.
 Radar mints as that person, never using its ServiceAccount as a fallback, and
 requires each caller's own successful mint before serving a warm API snapshot.
 A successful proof lasts at most 50 minutes. Missing identity/client or a denied
-mint gets `mintDenied`. The shared `ate-client` identity is usually a global owner
-in Substrate; Radar calls only read RPCs.
+mint gets `mintDenied`. In user-token mode, a non-system request without its
+Kubernetes user token gets `userTokenRequired`. The shared `ate-client` identity
+is usually a global owner in Substrate. Radar calls only read RPCs.
 
 The operator configures the endpoint/trust via `substrate.api` Helm values;
 `substrate.api.enabled=false` disables managed reads with `apiDisabled`. This integration
