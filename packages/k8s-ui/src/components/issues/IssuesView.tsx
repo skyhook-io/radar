@@ -62,6 +62,8 @@ export interface IssuesViewProps {
   issues: Issue[];
   /** Optional application ownership for the cluster-wide queue. */
   appForIssue?: (issue: Issue) => Pick<AppRow, 'key' | 'name'> | undefined;
+  /** A single app's already-scoped issues, shown under an Issues heading. */
+  application?: Pick<AppRow, 'key' | 'name'>;
   /** Application detail navigation supplied by the host router. */
   renderAppLink?: AppIssueLinkRenderer<Issue>;
   /** A single-cluster URL's issue ID. Open both its disclosure and its detail. */
@@ -107,7 +109,7 @@ export interface IssuesViewProps {
 // The queue list. Filtering/faceting is the host page's job (FleetPageShell on
 // the hub, a thin wrapper in OSS) — this renders the rows + the healthy /
 // no-data terminal states only.
-export function IssuesView({ issues, appForIssue, renderAppLink, linkedIssueId, onManualIssueToggle, anyData, resourceHref, onResourceClick, clusterLabel, emptyAction, renderActions, onOpenIssueChange, expandedIssue, rowChanges, onVisibleIssuesChange, timelineLinks }: IssuesViewProps) {
+export function IssuesView({ issues, appForIssue: resolveAppForIssue, application, renderAppLink, linkedIssueId, onManualIssueToggle, anyData, resourceHref, onResourceClick, clusterLabel, emptyAction, renderActions, onOpenIssueChange, expandedIssue, rowChanges, onVisibleIssuesChange, timelineLinks }: IssuesViewProps) {
   // Single-open accordion: opening a row collapses the previous one, so the
   // queue stays scannable and you never lose your place to a wall of expansions.
   const [openId, setOpenId] = useState<string | null>(null);
@@ -125,6 +127,7 @@ export function IssuesView({ issues, appForIssue, renderAppLink, linkedIssueId, 
     if (resolvedKey) setOpenId(resolvedKey);
   }
   const linkedKey = selection.id === linkedIssueId ? selection.key : undefined;
+  const appForIssue = useMemo(() => application ? () => application : resolveAppForIssue, [application, resolveAppForIssue]);
   const layout = useAppIssueGroups({ issues: sorted, issueKey: issueRowKey, appForIssue, linkedIssueKey: linkedKey, openDetailKey: openId });
   const displayed = layout.groups.flatMap(group => group.visible);
   useOpenIssueNotice(displayed, openId, issueRowKey, onOpenIssueChange);
@@ -157,7 +160,7 @@ export function IssuesView({ issues, appForIssue, renderAppLink, linkedIssueId, 
   }
 
   return (
-    <AppIssueRows layout={layout} renderAppLink={renderAppLink} listRef={listRef} issueKey={issueRowKey}
+    <AppIssueRows layout={layout} applicationOverview={!!application} renderAppLink={renderAppLink} listRef={listRef} issueKey={issueRowKey}
       onCollapse={(appKey, hidden) => {
         if (hidden.some(issue => issueRowKey(issue) === openId)) setOpenId(null);
         if (linkedApp === appKey) onManualIssueToggle?.();

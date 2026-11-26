@@ -1,5 +1,5 @@
 import { createContext, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
-import { ArrowRight, Boxes } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Boxes } from 'lucide-react';
 import { Collapse, CollapseChevron, disclosurePanelId } from '../ui/Collapse';
 import type { AppRow } from '../../utils/applications';
 import { ISSUE_SEVERITY_TEXT_CLASS, issueTitle } from './severity';
@@ -94,8 +94,9 @@ function IssueContent<T>({ panel, issue, renderIssue }: {
   return <AppIssuePanelContext.Provider value={panel}>{renderIssue(issue)}</AppIssuePanelContext.Provider>;
 }
 
-export function AppIssueRows<T extends DisplayIssue>({ layout, issueKey, renderIssue, renderAppLink, listRef, onCollapse }: {
+export function AppIssueRows<T extends DisplayIssue>({ layout, issueKey, renderIssue, renderAppLink, applicationOverview = false, listRef, onCollapse }: {
   layout: Layout<T>;
+  applicationOverview?: boolean;
   renderAppLink?: AppIssueLinkRenderer<T>;
   issueKey: (issue: T) => string;
   renderIssue: (issue: T) => ReactNode;
@@ -114,10 +115,11 @@ export function AppIssueRows<T extends DisplayIssue>({ layout, issueKey, renderI
   });
   const rows: ReactNode[] = [];
   for (const { app, issues, preview, overflow, open } of layout.groups) {
-    const panel = !!app && issues.length > 1;
+    const panel = !!app && (applicationOverview || issues.length > 1);
     const headerId = panel ? disclosurePanelId('app-heading-' + id, app.key) : undefined;
     if (panel) {
-      const link = renderAppLink?.(app.key, (
+      const Icon = applicationOverview ? AlertTriangle : Boxes;
+      const link = applicationOverview ? undefined : renderAppLink?.(app.key, (
         <span title={`Open ${app.name} application`} className="inline-flex min-h-6 max-w-full items-center gap-1">
           <span className="min-w-0 break-words"><span className="sr-only">Open </span>{app.name}<span className="sr-only"> application</span></span>
           <ArrowRight aria-hidden className="h-3 w-3 shrink-0 text-theme-text-secondary" />
@@ -126,8 +128,8 @@ export function AppIssueRows<T extends DisplayIssue>({ layout, issueKey, renderI
       rows.push(
         <li key={`header:${app.key}`} role="presentation"
           className="flex min-w-0 items-center gap-2 rounded-t-xl border border-theme-border bg-theme-elevated px-4 py-2">
-          <Boxes aria-hidden className="h-4 w-4 shrink-0 text-theme-text-secondary" />
-          <h2 id={headerId} className="min-w-0 break-words text-sm font-semibold text-theme-text-primary [&_a]:rounded-sm [&_a:hover]:underline [&_a:focus-visible]:outline">{link ?? app.name}</h2>
+          <Icon aria-hidden className="h-4 w-4 shrink-0 text-theme-text-secondary" />
+          <h2 id={headerId} className="min-w-0 break-words text-sm font-semibold text-theme-text-primary [&_a]:rounded-sm [&_a:hover]:underline [&_a:focus-visible]:outline">{applicationOverview ? 'Issues' : (link ?? app.name)}</h2>
           <span className="shrink-0 text-xs text-theme-text-secondary">· {issues.length} issues</span>
         </li>
       );
@@ -167,7 +169,7 @@ export function AppIssueRows<T extends DisplayIssue>({ layout, issueKey, renderI
           }}
           className="flex w-full items-center gap-2 px-4 py-2 text-left text-xs font-medium text-theme-text-secondary hover:bg-theme-hover focus-visible:outline focus-visible:-outline-offset-2">
           <CollapseChevron open={open} className="h-3.5 w-3.5" />
-          <span>{open ? 'Show fewer issues' : `Show ${overflow.length} more issues`}<span className="sr-only"> for {app.name}</span>
+          <span>{open ? 'Show fewer issues' : `Show ${overflow.length} more issues`}{!applicationOverview && <span className="sr-only"> for {app.name}</span>}
             {!open && critical.length > 0 && <span className={ISSUE_SEVERITY_TEXT_CLASS.critical}> · {critical.length} critical{critical.length === 1 && `: ${issueTitle(critical[0])}`}</span>}
           </span>
         </button>
