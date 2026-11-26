@@ -88,7 +88,7 @@ func Apply(ctx context.Context, resource dynamic.ResourceInterface, name string,
 			continue
 		}
 		if err != nil {
-			if isImmutableUID(err) {
+			if IsImmutableUID(err) {
 				return Result{}, ErrChanged
 			}
 			return Result{}, err
@@ -101,7 +101,9 @@ func Apply(ctx context.Context, resource dynamic.ResourceInterface, name string,
 	}
 }
 
-func isImmutableUID(err error) bool {
+// IsImmutableUID reports an API-server rejection of a patch bound to the UID
+// of an object that has since been recreated under the same name.
+func IsImmutableUID(err error) bool {
 	var status apierrors.APIStatus
 	if !apierrors.IsInvalid(err) || !errors.As(err, &status) || status.Status().Details == nil {
 		return false

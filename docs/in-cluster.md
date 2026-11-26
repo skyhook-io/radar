@@ -804,6 +804,8 @@ a client can preview and execute a specific change using the following endpoints
    progress between requests is allowed. A changed target, spec, owner, or
    proposal requires a fresh preview. The caller needs Kubernetes patch access.
 4. A successful response identifies the field and value Kubernetes returned.
+   Its `resourceVersion` identifies the stored object and its `reviewToken`
+   identifies the preview that this request applied.
    Read rollout progress and relevant service signals to determine recovery.
    A timeout or lost response leaves the write outcome unknown. Radar returns
    `workload_action_unconfirmed` when Kubernetes did not confirm the write.

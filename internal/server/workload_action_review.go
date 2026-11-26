@@ -1,12 +1,14 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -18,6 +20,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/rollouts"
+	"github.com/skyhook-io/radar/pkg/workloadrestart"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -131,7 +134,9 @@ func resolveWorkloadAction(kind string, in workloadActionInput, execute bool, no
 		marker := now.UTC().Format(layout)
 		if execute {
 			t, err := time.Parse(layout, in.RestartAt)
-			if err != nil || t.UTC().Format(layout) != in.RestartAt || t.After(now) {
+			// Different Radar replicas can serve preview and execute. Keep a
+			// minute for ordinary clock skew without accepting scheduled restarts.
+			if err != nil || t.UTC().Format(layout) != in.RestartAt || t.After(now.Add(time.Minute)) {
 				return field, errors.New("restartAt must be the UTC restart marker returned by preview")
 			}
 			marker = in.RestartAt
@@ -155,21 +160,21 @@ func (f workloadActionField) value(obj *unstructured.Unstructured) (any, error) 
 	switch f.after.(type) {
 	case bool:
 		// apps/v1 omits paused:false; CronJobs also default to running.
-		if !found {
+		if !found || v == nil {
 			return false, nil
 		}
 		if value, ok := v.(bool); ok {
 			return value, nil
 		}
 	case int64:
-		if !found {
+		if !found || v == nil {
 			return nil, nil
 		}
 		if value, ok := v.(int64); ok {
 			return value, nil
 		}
 	case string:
-		if !found {
+		if !found || v == nil {
 			return nil, nil
 		}
 		if value, ok := v.(string); ok {
@@ -263,8 +268,9 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, execute 
 		s.writeErrorCode(w, http.StatusServiceUnavailable, errCodeClusterUnavailable, "cluster client unavailable")
 		return
 	}
+	audit := auth.AuditActionDetails{Action: in.Action, Kind: field.kind, Group: field.gvr.Group, Namespace: ns, Name: name, SelectedUID: in.UID, Source: "reviewed-action", Outcome: "no-write"}
 	if execute {
-		auth.AuditLog(r, ns, name)
+		defer func() { auth.AuditLogAction(r, audit) }()
 	}
 	obj, err := client.Resource(field.gvr).Namespace(ns).Get(r.Context(), name, metav1.GetOptions{})
 	if err != nil {
@@ -327,35 +333,48 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, execute 
 	}
 	patch := map[string]any{"metadata": map[string]any{"uid": view.UID}}
 	if err := unstructured.SetNestedField(patch, field.after, field.path...); err != nil {
+		log.Printf("[workload-action] Failed to prepare reviewed patch for %s/%s: %v", ns, name, err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	stored, err := integration.ApplyVersionedMergePatch(r.Context(), client, field.gvr, obj, patch)
 	if err != nil {
-		s.writeWorkloadActionError(w, err, true)
+		audit.Outcome = s.writeWorkloadActionError(w, err, true)
 		return
 	}
 	actual, err := field.value(stored)
 	if err != nil || actual != view.After || stored.GetUID() != obj.GetUID() {
-		s.writeErrorCode(w, http.StatusConflict, "workload_action_not_stored", "Kubernetes accepted the request but did not return the reviewed value; check the live resource")
+		audit.Outcome = "reviewed-value-not-confirmed"
+		message := "Kubernetes accepted the request but did not return the reviewed value; check the live resource"
+		if err == nil && stored.GetUID() == obj.GetUID() {
+			message = fmt.Sprintf("Kubernetes accepted the request but returned %s = %v at resourceVersion %s. Inspect the live resource", view.Field, actual, stored.GetResourceVersion())
+		}
+		s.writeErrorCode(w, http.StatusConflict, "workload_action_not_stored", message)
 		return
 	}
+	audit.Outcome = "stored"
 	view.ResourceVersion = stored.GetResourceVersion()
 	s.writeJSON(w, view)
 }
 
-func (s *Server) writeWorkloadActionError(w http.ResponseWriter, err error, attemptedWrite bool) {
+func (s *Server) writeWorkloadActionError(w http.ResponseWriter, err error, attemptedWrite bool) string {
 	var status apierrors.APIStatus
 	switch {
 	case apierrors.IsNotFound(err):
 		s.writeErrorCode(w, http.StatusNotFound, errCodeWorkloadNotFound, "the workload was not found")
-	case apierrors.IsConflict(err):
+	case apierrors.IsConflict(err) || workloadrestart.IsImmutableUID(err):
 		s.writeErrorCode(w, http.StatusConflict, errCodeWorkloadChanged, "Kubernetes rejected the change as conflicting; refresh the preview")
 	case errors.As(err, &status) && status.Status().Code >= 400 && status.Status().Code < 500 && status.Status().Code != http.StatusRequestTimeout:
 		s.writeError(w, int(status.Status().Code), err.Error())
 	case attemptedWrite:
-		s.writeErrorCode(w, http.StatusBadGateway, "workload_action_unconfirmed", "Kubernetes did not confirm whether it applied the change. Inspect the live workload before taking further action: "+err.Error())
+		code := http.StatusBadGateway
+		if errors.Is(err, context.DeadlineExceeded) || apierrors.IsTimeout(err) || apierrors.IsServerTimeout(err) {
+			code = http.StatusGatewayTimeout
+		}
+		s.writeErrorCode(w, code, "workload_action_unconfirmed", "Kubernetes did not confirm whether it applied the change. Inspect the live workload before taking further action: "+err.Error())
+		return "unconfirmed"
 	default:
 		s.writeError(w, http.StatusBadGateway, "the live workload could not be read: "+err.Error())
 	}
+	return "rejected"
 }

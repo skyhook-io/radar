@@ -16,6 +16,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/rest"
 	clienttesting "k8s.io/client-go/testing"
 )
@@ -190,11 +192,14 @@ func TestWorkloadActionStoreResult(t *testing.T) {
 		{"atomic conflict", 409, errCodeWorkloadChanged, func(*unstructured.Unstructured) (runtime.Object, error) {
 			return nil, apierrors.NewConflict(deploymentsGVR.GroupResource(), "web", nil)
 		}},
+		{"recreated during write", 409, errCodeWorkloadChanged, func(*unstructured.Unstructured) (runtime.Object, error) {
+			return nil, apierrors.NewInvalid(schema.GroupKind{Group: "apps", Kind: "Deployment"}, "web", field.ErrorList{field.Invalid(field.NewPath("metadata", "uid"), "uid-1", "field is immutable")})
+		}},
 		{"admission removed true", 409, "workload_action_not_stored", func(obj *unstructured.Unstructured) (runtime.Object, error) { return obj, nil }},
 		{"API server error", 502, "workload_action_unconfirmed", func(*unstructured.Unstructured) (runtime.Object, error) {
 			return nil, apierrors.NewInternalError(errors.New("upstream connection closed"))
 		}},
-		{"timeout", 502, "workload_action_unconfirmed", func(*unstructured.Unstructured) (runtime.Object, error) {
+		{"timeout", 504, "workload_action_unconfirmed", func(*unstructured.Unstructured) (runtime.Object, error) {
 			return nil, apierrors.NewTimeoutError("request expired", 0)
 		}},
 	} {
@@ -348,5 +353,18 @@ func TestWorkloadActionRestartAlreadyStored(t *testing.T) {
 	code, out := requestWorkloadAction(t, router, "Deployment", "execute", body)
 	if code != 409 || out["error_code"] != "workload_action_unchanged" || writes(dyn) != 1 {
 		t.Fatal(code, out, dyn.Actions())
+	}
+}
+
+func TestWorkloadActionRestartClockSkew(t *testing.T) {
+	now := time.Now().UTC()
+	in := workloadActionInput{Action: "restart", UID: "uid-1", ReviewToken: strings.Repeat("ab", 32)}
+	in.RestartAt = now.Add(time.Second).Format(time.RFC3339Nano)
+	if _, err := resolveWorkloadAction("Deployment", in, true, now); err != nil {
+		t.Fatal(err)
+	}
+	in.RestartAt = now.Add(time.Hour).Format(time.RFC3339Nano)
+	if _, err := resolveWorkloadAction("Deployment", in, true, now); err == nil {
+		t.Fatal("accepted a scheduled restart")
 	}
 }
