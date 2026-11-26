@@ -46,7 +46,7 @@ export function NetworkPolicyRulesView({ summary, staged = false }: { summary: N
   )
 }
 
-function StagedNote() {
+export function StagedNote() {
   return (
     <div className="flex items-center gap-2 text-[11px] text-theme-text-tertiary">
       <Badge severity="warning" size="sm">Staged preview</Badge>
@@ -86,7 +86,7 @@ function DirectionRules({ direction, summary, staged }: { direction: Direction; 
   )
 }
 
-function PortChips({ ports }: { ports: string[] }) {
+export function PortChips({ ports }: { ports: string[] }) {
   if (ports.length === 0) {
     return <span className="rounded border border-dashed border-theme-border px-1.5 text-[10px] text-theme-text-tertiary">any port</span>
   }
@@ -99,7 +99,7 @@ function PortChips({ ports }: { ports: string[] }) {
   )
 }
 
-function DenyLine({ children }: { children: ReactNode }) {
+export function DenyLine({ children }: { children: ReactNode }) {
   return (
     <div className="flex items-center gap-1.5 rounded-md border border-red-500/30 bg-red-500/8 px-2.5 py-1.5 text-xs text-theme-text-secondary">
       <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-red-500" />
