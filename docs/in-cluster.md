@@ -851,10 +851,14 @@ include multiple addresses for one target. `currentReadyPods` and
 `proposedReadyPods` count label-matching, Running, nonterminating Pods with
 an IP and a True Ready condition. Radar lists Pods and EndpointSlices with the
 requester's Kubernetes permissions. A denied or incomplete list, or a proposal
-that currently selects zero Ready Pods, stops execution.
+that currently selects zero Ready Pods, stops execution. Radar also requires
+each named target port and protocol to resolve on at least one selected Ready
+Pod. If membership or readiness changes between preview and execution, obtain
+a new preview, even when the Service itself has the same resourceVersion.
 
 The projection describes current Pod selection. EndpointSlice publication is
-asynchronous. Named target ports must resolve on the selected Pods and
+asynchronous. Changes to Pods and EndpointSlices can still race a Service
+patch after the final read. Named target port coverage can vary across Pods and
 `publishNotReadyAddresses` can publish unready Pods. `namedTargetPorts` and
 `publishNotReadyAddresses` identify these cases. Approvers should inspect the
 live EndpointSlices and service signals after execution to verify delivery.

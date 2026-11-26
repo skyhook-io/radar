@@ -344,6 +344,19 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, kind str
 		s.writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	if in.Action == "setServiceSelectorLabel" && view.Before != view.After {
+		impact, err := previewServiceRouting(r.Context(), client, obj, in.LabelKey, *in.LabelValue)
+		if err != nil {
+			s.writeRoutingError(w, err)
+			return
+		}
+		if impact.ProposedReadyPods.Count == 0 {
+			s.writeErrorCode(w, http.StatusConflict, "routing_no_ready_pods", "the proposed selector currently matches zero Ready Pods; wait for the intended Pods to become Ready or change the selector")
+			return
+		}
+		view.RoutingImpact = impact
+		view.ReviewToken = impact.bindReview(view.ReviewToken)
+	}
 	if execute && (view.UID != in.UID || view.ReviewToken != in.ReviewToken || (in.ExpectedResourceVersion != "" && string(in.ExpectedResourceVersion) != view.ResourceVersion)) {
 		if view.UID == in.UID && view.Before == view.After {
 			s.writeErrorCode(w, http.StatusConflict, "workload_action_unchanged", "the reviewed value is already present; no new write was sent. Check the live workload for its outcome")
@@ -381,18 +394,7 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, kind str
 			return
 		}
 	}
-	if in.Action == "setServiceSelectorLabel" {
-		impact, err := previewServiceRouting(r.Context(), client, obj, in.LabelKey, *in.LabelValue)
-		if err != nil {
-			s.writeRoutingError(w, err)
-			return
-		}
-		if impact.ProposedReadyPods.Count == 0 {
-			s.writeErrorCode(w, http.StatusConflict, "routing_no_ready_pods", "the proposed selector currently matches zero Ready Pods; wait for the intended Pods to become Ready or change the selector")
-			return
-		}
-		view.RoutingImpact = impact
-	}
+
 	if !execute {
 		s.writeJSON(w, view)
 		return

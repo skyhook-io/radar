@@ -454,7 +454,7 @@ func distinctApplicationsPerPort(svc *corev1.Service, workloads []*backendWorklo
 			if sp != nil && sp.TargetPort.Type == intstr.String && sp.TargetPort.StrVal != "" {
 				pods = nil
 				for _, pod := range w.receiving {
-					if declaresNamedPort(pod, sp.TargetPort.StrVal, portProtocol(sp.Protocol)) {
+					if PodDeclaresNamedPort(pod, sp.TargetPort.StrVal, sp.Protocol) {
 						pods = append(pods, pod)
 					}
 				}
@@ -689,7 +689,7 @@ func resolvesAnyServicePort(svc *corev1.Service, pods []*corev1.Pod) bool {
 			return true
 		}
 		for _, pod := range pods {
-			if declaresNamedPort(pod, sp.TargetPort.StrVal, portProtocol(sp.Protocol)) {
+			if PodDeclaresNamedPort(pod, sp.TargetPort.StrVal, sp.Protocol) {
 				return true
 			}
 		}
@@ -697,7 +697,9 @@ func resolvesAnyServicePort(svc *corev1.Service, pods []*corev1.Pod) bool {
 	return false
 }
 
-func declaresNamedPort(pod *corev1.Pod, name string, proto corev1.Protocol) bool {
+// PodDeclaresNamedPort reports whether a Service targetPort can resolve on an app or native sidecar container.
+func PodDeclaresNamedPort(pod *corev1.Pod, name string, proto corev1.Protocol) bool {
+	proto = portProtocol(proto)
 	matches := func(c *corev1.Container) bool {
 		for _, cp := range c.Ports {
 			if cp.Name == name && portProtocol(cp.Protocol) == proto {

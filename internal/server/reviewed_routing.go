@@ -2,12 +2,17 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"slices"
 	"sort"
+	"strings"
 
+	"github.com/skyhook-io/radar/internal/k8s"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -23,9 +28,19 @@ import (
 // which Ready Pods match the old and new selectors. Endpoints can lag behind
 // Pod readiness, and numeric equality does not mean every port has a backend.
 type routingPodSample struct {
-	Count int      `json:"count"`
-	Names []string `json:"names"`
+	Count   int      `json:"count"`
+	Names   []string `json:"names"`
+	members []string
 }
+
+// Only material Pod membership and readiness enter the token. Pod and
+// EndpointSlice resourceVersions can advance without changing the reviewed impact.
+func (i *serviceRoutingImpact) bindReview(token string) string {
+	payload, _ := json.Marshal([][]string{{token}, i.CurrentReadyPods.members, i.ProposedReadyPods.members, i.PublishedReadyPods.members})
+	digest := sha256.Sum256(payload)
+	return hex.EncodeToString(digest[:])
+}
+
 type serviceRoutingImpact struct {
 	PublishedReadyPods            routingPodSample `json:"publishedReadyPods"`
 	PublishedOtherEndpointEntries int              `json:"publishedOtherEndpointEntries"`
@@ -87,13 +102,13 @@ func previewServiceRouting(ctx context.Context, client dynamic.Interface, obj *u
 		}
 	}
 	ns := svc.Namespace
-	old, err := routingReadyPods(ctx, client, ns, svc.Spec.Selector)
+	old, err := routingReadyPods(ctx, client, ns, svc.Spec.Selector, nil)
 	if err != nil {
 		return nil, err
 	}
 	impact.CurrentReadyPods = old
 	svc.Spec.Selector[key] = value
-	proposed, err := routingReadyPods(ctx, client, ns, svc.Spec.Selector)
+	proposed, err := routingReadyPods(ctx, client, ns, svc.Spec.Selector, svc.Spec.Ports)
 	if err != nil {
 		return nil, err
 	}
@@ -103,6 +118,7 @@ func previewServiceRouting(ctx context.Context, client dynamic.Interface, obj *u
 		return nil, err
 	}
 	ready := map[string]string{}
+	var published []string
 	for i := range list.Items {
 		var es discoveryv1.EndpointSlice
 		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(list.Items[i].Object, &es); err != nil {
@@ -110,7 +126,15 @@ func previewServiceRouting(ctx context.Context, client dynamic.Interface, obj *u
 		}
 		for _, endpoint := range es.Endpoints {
 			ref := endpoint.TargetRef
-			if ref == nil || ref.Kind != "Pod" || (ref.Namespace != "" && ref.Namespace != ns) || ref.Name == "" || (endpoint.Conditions.Ready != nil && !*endpoint.Conditions.Ready) || (endpoint.Conditions.Terminating != nil && *endpoint.Conditions.Terminating) {
+			isReady := (endpoint.Conditions.Ready == nil || *endpoint.Conditions.Ready) && (endpoint.Conditions.Terminating == nil || !*endpoint.Conditions.Terminating)
+			target := ""
+			if ref != nil {
+				target = fmt.Sprintf("%s/%s/%s/%s", ref.Kind, ref.Namespace, ref.Name, ref.UID)
+			}
+			addresses := slices.Clone(endpoint.Addresses)
+			sort.Strings(addresses)
+			published = append(published, fmt.Sprintf("%s:%t:%s", target, isReady, strings.Join(addresses, ",")))
+			if ref == nil || ref.Kind != "Pod" || (ref.Namespace != "" && ref.Namespace != ns) || ref.Name == "" || !isReady {
 				impact.PublishedOtherEndpointEntries++
 				continue
 			}
@@ -121,29 +145,46 @@ func previewServiceRouting(ctx context.Context, client dynamic.Interface, obj *u
 			ready[identity] = ref.Name
 		}
 	}
-	impact.PublishedReadyPods = sampleRoutingPods(ready)
+	impact.PublishedReadyPods = sampleRoutingPods(ready, published)
 	return impact, nil
 }
 
-func routingReadyPods(ctx context.Context, client dynamic.Interface, namespace string, selector labels.Set) (routingPodSample, error) {
+func routingReadyPods(ctx context.Context, client dynamic.Interface, namespace string, selector labels.Set, ports []corev1.ServicePort) (routingPodSample, error) {
 	list, err := listRoutingEvidence(ctx, client, corev1.SchemeGroupVersion.WithResource("pods"), namespace, selector)
 	if err != nil {
 		return routingPodSample{}, err
 	}
 	ready := map[string]string{}
+	var members []string
+	resolved := make([]bool, len(ports))
 	for i := range list.Items {
 		var pod corev1.Pod
 		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(list.Items[i].Object, &pod); err != nil {
 			return routingPodSample{}, err
 		}
-		if pod.DeletionTimestamp != nil || pod.Status.Phase != corev1.PodRunning || pod.Status.PodIP == "" {
+		if pod.UID == "" {
+			return routingPodSample{}, fmt.Errorf("%w: Pod %s has no UID", errRoutingIncomplete, pod.Name)
+		}
+		isReady := pod.DeletionTimestamp == nil && pod.Status.Phase == corev1.PodRunning && pod.Status.PodIP != "" && slices.ContainsFunc(pod.Status.Conditions, func(c corev1.PodCondition) bool { return c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue })
+		members = append(members, fmt.Sprintf("%s/%s:%t:%s", pod.Name, pod.UID, isReady, pod.Status.PodIP))
+		if !isReady {
 			continue
 		}
-		if slices.ContainsFunc(pod.Status.Conditions, func(c corev1.PodCondition) bool { return c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue }) {
-			ready[pod.Name] = pod.Name
+		ready[string(pod.UID)] = pod.Name
+		for j, port := range ports {
+			if !resolved[j] && port.TargetPort.StrVal != "" && k8s.PodDeclaresNamedPort(&pod, port.TargetPort.StrVal, port.Protocol) {
+				resolved[j] = true
+			}
 		}
 	}
-	return sampleRoutingPods(ready), nil
+	if len(ready) > 0 {
+		for j, port := range ports {
+			if port.TargetPort.StrVal != "" && !resolved[j] {
+				return routingPodSample{}, fmt.Errorf("%w: no proposed Ready Pod declares named target port %q for protocol %s", errRoutingUnsupported, port.TargetPort.StrVal, port.Protocol)
+			}
+		}
+	}
+	return sampleRoutingPods(ready, members), nil
 }
 
 func listRoutingEvidence(ctx context.Context, client dynamic.Interface, gvr schema.GroupVersionResource, ns string, selector labels.Set) (*unstructured.UnstructuredList, error) {
@@ -161,13 +202,14 @@ func listRoutingEvidence(ctx context.Context, client dynamic.Interface, gvr sche
 	return list, nil
 }
 
-func sampleRoutingPods(pods map[string]string) routingPodSample {
+func sampleRoutingPods(pods map[string]string, members []string) routingPodSample {
 	names := make([]string, 0, len(pods))
 	for _, name := range pods {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	return routingPodSample{Count: len(names), Names: names[:min(len(names), 10)]}
+	sort.Strings(members)
+	return routingPodSample{Count: len(names), Names: names[:min(len(names), 10)], members: members}
 }
 
 func (s *Server) writeRoutingError(w http.ResponseWriter, err error) {

@@ -16,7 +16,14 @@ import (
 )
 
 func routingService() *unstructured.Unstructured {
-	return &unstructured.Unstructured{Object: map[string]any{"apiVersion": "v1", "kind": "Service", "metadata": map[string]any{"namespace": "prod", "name": "web", "uid": "svc-uid", "resourceVersion": "7"}, "spec": map[string]any{"selector": map[string]any{"app": "api"}, "ports": []any{map[string]any{"name": "http", "protocol": "TCP", "port": int64(80), "targetPort": "http"}}}}}
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1", "kind": "Service",
+		"metadata": map[string]any{"namespace": "prod", "name": "web", "uid": "svc-uid", "resourceVersion": "7"},
+		"spec": map[string]any{
+			"selector": map[string]any{"app": "api"},
+			"ports":    []any{map[string]any{"name": "http", "protocol": "TCP", "port": int64(80), "targetPort": "http"}},
+		},
+	}}
 }
 
 func routingPod(name, track string, ready bool) *unstructured.Unstructured {
@@ -24,11 +31,23 @@ func routingPod(name, track string, ready bool) *unstructured.Unstructured {
 	if ready {
 		condition = "True"
 	}
-	return &unstructured.Unstructured{Object: map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": map[string]any{"namespace": "prod", "name": name, "uid": name + "-uid", "labels": map[string]any{"app": "api", "track": track}}, "status": map[string]any{"phase": "Running", "podIP": "10.0.0.10", "conditions": []any{map[string]any{"type": "Ready", "status": condition}}}}}
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1", "kind": "Pod",
+		"metadata": map[string]any{"namespace": "prod", "name": name, "uid": name + "-uid", "labels": map[string]any{"app": "api", "track": track}},
+		"spec":     map[string]any{"containers": []any{map[string]any{"name": "server", "ports": []any{map[string]any{"name": "http", "containerPort": int64(8080), "protocol": "TCP"}}}}},
+		"status":   map[string]any{"phase": "Running", "podIP": "10.0.0.10", "conditions": []any{map[string]any{"type": "Ready", "status": condition}}},
+	}}
 }
 
 func routingSlice(name string) *unstructured.Unstructured {
-	return &unstructured.Unstructured{Object: map[string]any{"apiVersion": "discovery.k8s.io/v1", "kind": "EndpointSlice", "metadata": map[string]any{"name": name, "namespace": "prod", "labels": map[string]any{endpointSliceServiceLabel: "web"}}, "endpoints": []any{map[string]any{"targetRef": map[string]any{"kind": "Pod", "namespace": "prod", "name": "stable", "uid": "stable-uid"}}, map[string]any{"addresses": []any{"10.0.0.12"}, "conditions": map[string]any{"ready": false}}}}}
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "discovery.k8s.io/v1", "kind": "EndpointSlice",
+		"metadata": map[string]any{"name": name, "namespace": "prod", "labels": map[string]any{endpointSliceServiceLabel: "web"}},
+		"endpoints": []any{
+			map[string]any{"targetRef": map[string]any{"kind": "Pod", "namespace": "prod", "name": "stable", "uid": "stable-uid"}},
+			map[string]any{"addresses": []any{"10.0.0.12"}, "conditions": map[string]any{"ready": false}},
+		},
+	}}
 }
 
 func requestServiceAction(t *testing.T, router http.Handler, route string, q map[string]any) (int, map[string]any) {
@@ -76,6 +95,17 @@ func TestReviewedRoutingServiceChange(t *testing.T) {
 	if code != 409 || out["error_code"] != "routing_no_ready_pods" || writes(dyn) != 0 {
 		t.Fatal(code, out, dyn.Actions())
 	}
+	replacement := stable.DeepCopy()
+	replacement.SetUID("recreated")
+	if err := dyn.Tracker().Update(pods, replacement, "prod"); err != nil {
+		t.Fatal(err)
+	}
+	code, out = requestServiceAction(t, router, "execute", body)
+	if code != 409 || out["error_code"] != errCodeWorkloadChanged || writes(dyn) != 0 {
+		t.Fatal(code, out)
+	}
+	// Incidental Pod status updates preserve the original membership.
+	stable.SetResourceVersion("29")
 	if err := dyn.Tracker().Update(pods, stable, "prod"); err != nil {
 		t.Fatal(err)
 	}
