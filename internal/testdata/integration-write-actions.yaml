@@ -333,7 +333,7 @@ entries:
     resources: ["backups"]
     verbs: ["get", "create"]
     scope: Namespaced
-    reason: "Create the requested Backup. GET checks a proposed name or resolves a create whose outcome is uncertain."
+    reason: "Create the requested Backup. On-demand backup checks the proposed name with GET. Both paths read the Backup if a create times out with an uncertain outcome."
     source: "internal/cnpg/actions.go (cnpgValidateBackupName, cnpgCreateBackup)"
     actions:
       - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=backup"
@@ -371,7 +371,7 @@ entries:
     resources: ["scheduledbackups"]
     verbs: ["get"]
     scope: Namespaced
-    reason: "Read the schedule for its own actions. On-demand Backup name validation also reads a schedule if the proposed name has a scheduled-run form."
+    reason: "The default on-demand Backup name has a scheduled-run form. Names in that form require a ScheduledBackup GET for collision detection, and denial stops the backup. Schedule actions read their target schedule."
     source: "internal/cnpg/actions.go; internal/cnpg/schedule_repair.go"
     actions:
       - "POST /api/cnpg/scheduledbackups/{namespace}/{name}/actions/{action} action=suspend"
