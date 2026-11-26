@@ -228,6 +228,7 @@ type FeatureCapabilities struct {
 	// an older Radar ignores the body and restarts unconditionally.
 	WorkloadRestartPreconditions bool `json:"workloadRestartPreconditions"`
 	ReviewedWorkloadActions      bool `json:"reviewedWorkloadActions"`  // POST /api/workloads/{kind}/{ns}/{name}/actions/{preview|execute}
+	ReviewedRoutingActions       bool `json:"reviewedRoutingActions"`   // Reviewed Deployment template label and Service selector changes.
 	ServiceEndpointSlices        bool `json:"serviceEndpointSlices"`    // GET /api/services/{namespace}/{name}/endpointslices
 	TrafficRecords               bool `json:"trafficRecords"`           // GET /api/traffic/flows/records
 	GitOpsWriteEvidence          bool `json:"gitopsWriteEvidence"`      // POST /api/gitops/write-evidence
