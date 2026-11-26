@@ -128,7 +128,11 @@ const inClusterTokenBinding = "kcb1_incluster"
 // Manager holds the Argo CD connection state. Use NewManager (or the
 // package-level functions backed by the default instance).
 type Manager struct {
-	mu sync.Mutex
+	mu       sync.Mutex
+	lifetime context.Context
+	cancel   context.CancelFunc
+	closed   bool
+	handles  *portforward.Handles
 
 	// probeSlot holds one token while a probe runs, so probes never overlap.
 	// A channel rather than a mutex: a caller waiting for it can give up
@@ -258,7 +262,11 @@ func NewManager() *Manager {
 }
 
 func NewConnectionManager(conn *k8s.Connection, inCluster bool, binding string) *Manager {
+	lifetime, cancel := context.WithCancel(context.Background())
 	return &Manager{
+		lifetime:       lifetime,
+		cancel:         cancel,
+		handles:        &portforward.Handles{},
 		clusterClients: func() probeCluster { return probeCluster{conn.ClientInterface(), conn.PortForwards()} },
 		inCluster:      func() bool { return inCluster },
 		contextName:    conn.ContextName,
@@ -727,6 +735,24 @@ func (m *Manager) Reset() {
 	m.bumpAndReset()
 }
 
+func (m *Manager) Close() error {
+	if m == nil {
+		return nil
+	}
+	if m.cancel != nil {
+		m.cancel()
+		m.handles.Close()
+	}
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return nil
+	}
+	m.closed = true
+	m.bumpAndReset()
+	return nil
+}
+
 func (m *Manager) dropConnectionLocked() activeForward {
 	m.baseURL = ""
 	m.client = nil
@@ -852,6 +878,9 @@ func (m *Manager) probingLocked() bool {
 // ApplicationHealthCached), and so does a re-check, which only runs once a
 // client exists. Caller must hold m.mu.
 func (m *Manager) startBackgroundProbeLocked(allowUnconfigured bool) {
+	if m.closed {
+		return
+	}
 	m.ensureSeededLocked()
 	if !allowUnconfigured && m.manualURL == "" && m.token == "" {
 		return
@@ -880,7 +909,7 @@ func (m *Manager) runBackgroundProbe(run *backgroundProbe) {
 		return
 	}
 	m.mu.Lock()
-	if m.background != run {
+	if m.closed || m.background != run {
 		// Another probe of newer settings replaced this one during the reload.
 		m.mu.Unlock()
 		return
@@ -1017,6 +1046,8 @@ func (m *Manager) Address() string {
 // session/userinfo. Errors wrap ErrUnreachable or ErrTokenInvalid so callers
 // can map them to distinct messages.
 func (m *Manager) Probe(ctx context.Context) error {
+	ctx, cancel := portforward.WithLifetime(ctx, m.lifetime)
+	defer cancel()
 	if err := m.refreshSettings(); err != nil {
 		return err
 	}
@@ -1241,7 +1272,7 @@ func (m *Manager) probeHoldingSlot(ctx context.Context) error {
 		unused = newForward
 	}
 	if newConnection {
-		m.client = newClient(url, snap.token, snap.insecureTLS)
+		m.client = m.newClient(url, snap.token, snap.insecureTLS)
 		m.clientAnonymous = snap.token == ""
 		m.lastReadErr = nil
 	}
@@ -1919,6 +1950,48 @@ func newClient(url, token string, insecureTLS bool) *argoapi.Client {
 		Token:                 token,
 		InsecureSkipTLSVerify: insecureTLS || token == "",
 	})
+}
+
+func (m *Manager) newClient(url, token string, insecureTLS bool) *argoapi.Client {
+	if m.lifetime == nil {
+		return newClient(url, token, insecureTLS)
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if transport.TLSClientConfig == nil {
+		transport.TLSClientConfig = &tls.Config{}
+	}
+	transport.TLSClientConfig.InsecureSkipVerify = insecureTLS || token == ""
+	return argoapi.New(argoapi.Options{
+		BaseURL:    url,
+		Token:      token,
+		HTTPClient: &http.Client{Timeout: 15 * time.Second, Transport: memberTransport{transport, m.lifetime}},
+	})
+}
+
+type memberTransport struct {
+	http.RoundTripper
+	lifetime context.Context
+}
+
+func (t memberTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	ctx, release := portforward.WithLifetime(r.Context(), t.lifetime)
+	response, err := t.RoundTripper.RoundTrip(r.WithContext(ctx))
+	if err != nil {
+		release()
+		return nil, err
+	}
+	response.Body = memberResponse{response.Body, release}
+	return response, nil
+}
+
+type memberResponse struct {
+	io.ReadCloser
+	release context.CancelFunc
+}
+
+func (r memberResponse) Close() error {
+	defer r.release()
+	return r.ReadCloser.Close()
 }
 
 // ensureSeededLocked adopts the persisted config on first use, so settings

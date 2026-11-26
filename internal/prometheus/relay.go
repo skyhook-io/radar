@@ -349,10 +349,14 @@ func (t memberTransport) Do(ctx context.Context, method, path string, params url
 }
 
 func (c *Client) bindTransport(t prom.Transport) prom.Transport {
-	if c.lifetime == nil {
+	return BindTransport(c.lifetime, t)
+}
+
+func BindTransport(lifetime context.Context, t prom.Transport) prom.Transport {
+	if lifetime == nil {
 		return t
 	}
-	return memberTransport{Transport: t, lifetime: c.lifetime}
+	return memberTransport{Transport: t, lifetime: lifetime}
 }
 
 // status returns the relay's source with its latest health.

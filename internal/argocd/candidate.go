@@ -15,7 +15,7 @@ func PrepareCandidateFor(conn *k8s.Connection, inCluster bool, binding string, c
 	m := NewConnectionManager(conn, inCluster, binding)
 	m.SetConfig(connection.URL, connection.Token, connection.InsecureTLS, true)
 	return func(ctx context.Context) error {
-		defer m.Reset()
+		defer m.Close()
 		return m.Probe(ctx)
 	}
 }

@@ -110,6 +110,9 @@ const (
 )
 
 type Manager struct {
+	lifetime       context.Context
+	cancel         context.CancelFunc
+	handles        *portforward.Handles
 	target         func() kubecostTarget
 	metrics        func() (*prometheuspkg.Client, error)
 	mu             sync.RWMutex
@@ -139,9 +142,15 @@ func CurrentManager() *Manager { return defaultManager }
 
 func NewManager(conn *k8s.Connection, inCluster bool, client *prometheuspkg.Client) *Manager {
 	target := kubecostTargetFor(conn, inCluster)
+	lifetime, cancel := context.WithCancel(context.Background())
+	handles := &portforward.Handles{}
+	target.lifetime, target.handles = lifetime, handles
 	return &Manager{
-		config: ManagerConfig{Source: SourceAuto},
-		target: func() kubecostTarget { return target },
+		lifetime: lifetime,
+		cancel:   cancel,
+		handles:  handles,
+		config:   ManagerConfig{Source: SourceAuto},
+		target:   func() kubecostTarget { return target },
 		metrics: func() (*prometheuspkg.Client, error) {
 			if client == nil {
 				return nil, prometheuspkg.ErrPrometheusUnavailable
@@ -333,9 +342,26 @@ func (m *Manager) Reset() {
 	previous.stop()
 }
 
+func (m *Manager) Close() error {
+	if m == nil {
+		return nil
+	}
+	if m.cancel != nil {
+		m.cancel()
+		m.handles.Close()
+	}
+	m.Reset()
+	return nil
+}
+
 func Selected(ctx context.Context) (Connection, error) { return defaultManager.Selected(ctx) }
 
 func (m *Manager) Selected(ctx context.Context) (Connection, error) {
+	ctx, cancel := portforward.WithLifetime(ctx, m.lifetime)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return Connection{}, err
+	}
 	if m == defaultManager {
 		if err := connections.Refresh(localconfig.IntegrationCost); err != nil {
 			return Connection{}, err
@@ -355,6 +381,9 @@ func (m *Manager) Selected(ctx context.Context) (Connection, error) {
 
 	m.selectMu.Lock()
 	defer m.selectMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return Connection{}, err
+	}
 	m.mu.RLock()
 	if m.envError != "" {
 		err := m.envError
@@ -624,7 +653,7 @@ func (m *Manager) connectKubecost(ctx context.Context, config ManagerConfig) (Co
 		if err != nil {
 			return Connection{}, err
 		}
-		client, address, err := probeKubecostURL(ctx, config.URL, config.APIKey, clusterID)
+		client, address, err := probeKubecostURLWithModelFallback(ctx, config.URL, config.APIKey, clusterID, true, target.lifetime)
 		if err != nil {
 			return Connection{}, err
 		}
@@ -687,7 +716,7 @@ func connectKubecostAggregatorEndpoints(apiKey string, endpoints []kubecostAggre
 func connectDiscoveredKubecostEndpoint(ctx context.Context, apiKey, clusterID string, service *corev1.Service, endpoint kubecostAggregatorEndpoint, owner portforward.Owner, target kubecostTarget) (Connection, error) {
 	if target.inCluster {
 		directURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", service.Name, service.Namespace, endpoint.servicePort)
-		client, address, err := probeDiscoveredKubecostURL(ctx, directURL, apiKey, clusterID)
+		client, address, err := probeKubecostURLWithModelFallback(ctx, directURL, apiKey, clusterID, false, target.lifetime)
 		if err != nil {
 			return Connection{}, err
 		}
@@ -697,7 +726,12 @@ func connectDiscoveredKubecostEndpoint(ctx context.Context, apiKey, clusterID st
 	if err != nil {
 		return Connection{}, fmt.Errorf("%w: port-forward failed: %w", ErrKubecostUnavailable, err)
 	}
-	client, address, err := probeDiscoveredKubecostURL(ctx, forward.Address(), apiKey, clusterID)
+	if target.handles != nil {
+		if err := target.handles.Track(forward); err != nil {
+			return Connection{}, err
+		}
+	}
+	client, address, err := probeKubecostURLWithModelFallback(ctx, forward.Address(), apiKey, clusterID, false, target.lifetime)
 	if target.forwards.Closed() {
 		return Connection{}, portforward.ErrClosed
 	}
@@ -765,14 +799,14 @@ func resolveKubecostClusterIDFrom(cache *k8s.ResourceCache, configured string) (
 }
 
 func probeKubecostURL(ctx context.Context, rawURL, apiKey, clusterID string) (*pkgopencost.KubecostClient, string, error) {
-	return probeKubecostURLWithModelFallback(ctx, rawURL, apiKey, clusterID, true)
+	return probeKubecostURLWithModelFallback(ctx, rawURL, apiKey, clusterID, true, nil)
 }
 
 func probeDiscoveredKubecostURL(ctx context.Context, rawURL, apiKey, clusterID string) (*pkgopencost.KubecostClient, string, error) {
-	return probeKubecostURLWithModelFallback(ctx, rawURL, apiKey, clusterID, false)
+	return probeKubecostURLWithModelFallback(ctx, rawURL, apiKey, clusterID, false, nil)
 }
 
-func probeKubecostURLWithModelFallback(ctx context.Context, rawURL, apiKey, clusterID string, tryModel bool) (*pkgopencost.KubecostClient, string, error) {
+func probeKubecostURLWithModelFallback(ctx context.Context, rawURL, apiKey, clusterID string, tryModel bool, lifetime context.Context) (*pkgopencost.KubecostClient, string, error) {
 	if err := ValidateKubecostURL(rawURL); err != nil {
 		return nil, "", err
 	}
@@ -797,7 +831,7 @@ func probeKubecostURLWithModelFallback(ctx context.Context, rawURL, apiKey, clus
 		if err == nil {
 			if kubecostProbeHasClusterData(resp, clusterID) {
 				transport = newKubecostHTTPTransport(origin, basePath, apiKey, kubecostQueryHTTPTimeout)
-				return pkgopencost.NewKubecostClient(transport), transport.Address(), nil
+				return pkgopencost.NewKubecostClient(prometheuspkg.BindTransport(lifetime, transport)), transport.Address(), nil
 			}
 			noData = true
 			continue

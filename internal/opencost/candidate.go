@@ -8,6 +8,8 @@ import (
 )
 
 type kubecostTarget struct {
+	lifetime    context.Context
+	handles     *portforward.Handles
 	cache       *k8s.ResourceCache
 	forwards    *portforward.Manager
 	contextName string
