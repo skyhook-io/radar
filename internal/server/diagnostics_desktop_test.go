@@ -67,8 +67,8 @@ func TestDiagnosticsIncludesDesktopSectionForDesktopApp(t *testing.T) {
 
 func TestDiagnosticsRedactsLocalKubeconfigError(t *testing.T) {
 	previous := k8s.GetConnectionStatus()
-	t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(previous) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{
 		State:     k8s.StateDisconnected,
 		Error:     `failed to build kubeconfig from "/Users/alice/.kube/config": yaml: line 3`,
 		ErrorType: "config",
@@ -85,8 +85,8 @@ func TestDiagnosticsRedactsLocalKubeconfigError(t *testing.T) {
 
 func TestDiagnosticsDuringConnectionReturnsPartialSnapshot(t *testing.T) {
 	previous := k8s.GetConnectionStatus()
-	t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(previous) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{
 		State:       k8s.StateConnecting,
 		ProgressMsg: "Loading workloads...",
 	})
@@ -98,6 +98,14 @@ func TestDiagnosticsDuringConnectionReturnsPartialSnapshot(t *testing.T) {
 	}
 	if connection.ProgressMessage != "Loading workloads..." || body["runtime"] == nil || body["cluster"] != nil {
 		t.Fatalf("progress = %q, runtime present = %t, cluster present = %t", connection.ProgressMessage, body["runtime"] != nil, body["cluster"] != nil)
+	}
+}
+
+func TestDiagnosticsKeepPrometheusOnStableDisconnect(t *testing.T) {
+	setupPrometheusIntegrationTest(t, nil)
+	t.Cleanup(k8s.SetTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected}))
+	if body := diagnosticsBody(t); body["prometheus"] == nil {
+		t.Fatal("a stable disconnect hid the Prometheus diagnostics")
 	}
 }
 
@@ -125,7 +133,7 @@ func TestDiagnosticsClusterUsesOnlyCurrentCacheObservations(t *testing.T) {
 		k8s.ResetResourceCache()
 		k8s.InvalidateServerVersionCache()
 		k8s.InvalidatePlatformCache()
-		k8s.SetConnectionStatus(previousStatus)
+		k8s.PublishTestConnectionStatus(previousStatus)
 	})
 	initCache := func() {
 		t.Helper()
@@ -134,7 +142,7 @@ func TestDiagnosticsClusterUsesOnlyCurrentCacheObservations(t *testing.T) {
 		}
 	}
 	initCache()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 
 	if body := diagnosticsBody(t); body["cluster"] != nil || requests.Load() != 0 {
 		t.Fatalf("cold diagnostics cluster = %s, API requests = %d", body["cluster"], requests.Load())
@@ -191,7 +199,7 @@ func TestDiagnosticsConnectionUpdatesDuringCollection(t *testing.T) {
 		t.Cleanup(k8s.ResetResourceCache)
 	}
 	previousStatus := k8s.GetConnectionStatus()
-	t.Cleanup(func() { k8s.SetConnectionStatus(previousStatus) })
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(previousStatus) })
 	previousName := k8s.SetTestContextName("old")
 	t.Cleanup(func() { k8s.SetTestContextName(previousName) })
 	t.Cleanup(k8s.SetTestContextCount(25))
@@ -208,7 +216,7 @@ func TestDiagnosticsConnectionUpdatesDuringCollection(t *testing.T) {
 		{"connection lost", k8s.StateConnected, k8s.ConnectionStatus{State: k8s.StateDisconnected, Context: "old", Error: "connection lost"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			k8s.SetConnectionStatus(k8s.ConnectionStatus{State: tc.start, Context: "old"})
+			k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: tc.start, Context: "old"})
 			switched := tc.next.Context != "old"
 			var reviewed atomic.Bool
 			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -222,7 +230,7 @@ func TestDiagnosticsConnectionUpdatesDuringCollection(t *testing.T) {
 					if switched {
 						k8s.CancelOngoingOperations()
 					}
-					k8s.SetConnectionStatus(tc.next)
+					k8s.PublishTestConnectionStatus(tc.next)
 				}
 				http.Error(w, "unavailable", http.StatusForbidden)
 			}))
@@ -294,18 +302,18 @@ func TestDiagnosticsOmitsClusterObservedForAnotherContext(t *testing.T) {
 		k8s.SetTestContextName(previousName)
 		k8s.ResetResourceCache()
 		k8s.InvalidateServerVersionCache()
-		k8s.SetConnectionStatus(previousStatus)
+		k8s.PublishTestConnectionStatus(previousStatus)
 	})
 	if err := k8s.InitTestResourceCache(fake.NewSimpleClientset()); err != nil {
 		t.Fatal(err)
 	}
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "new"})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "new"})
 	if info, err := k8s.GetClusterInfo(context.Background()); err != nil || info.KubernetesVersion == "" {
 		t.Fatalf("could not seed cluster observation: %+v, %v", info, err)
 	}
 	_, seededAt := k8s.GetResourceCache().LastClusterInfo()
 
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected, Context: "old", Error: "cluster unreachable"})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected, Context: "old", Error: "cluster unreachable"})
 	body := diagnosticsBody(t)
 	var errs []string
 	_ = json.Unmarshal(body["errors"], &errs)
@@ -313,7 +321,7 @@ func TestDiagnosticsOmitsClusterObservedForAnotherContext(t *testing.T) {
 		t.Fatalf("cluster = %s, errors = %v", body["cluster"], errs)
 	}
 
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected, Context: "new", Error: "cluster unreachable"})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected, Context: "new", Error: "cluster unreachable"})
 	// A cluster-info read during the outage succeeds on the cached version and
 	// informer data; it must not make the observation look fresh.
 	time.Sleep(10 * time.Millisecond)
@@ -342,8 +350,8 @@ func TestDiagnosticsKeepsKubeconfigDuringSwitch(t *testing.T) {
 
 func TestDiagnosticsWhileKubeconfigWriterIsBusy(t *testing.T) {
 	previous := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: k8s.GetContextName()})
-	t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: k8s.GetContextName()})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(previous) })
 	restore, err := k8s.SetTestResourceDiscovery(fake.NewSimpleClientset().Discovery())
 	if err != nil {
 		t.Fatal(err)
@@ -395,8 +403,8 @@ func TestDiagnosticsDuringTrafficSourceDetection(t *testing.T) {
 	}))
 	t.Cleanup(api.Close)
 	previous := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(previous) })
 	if err := traffic.Initialize(kubernetes.NewForConfigOrDie(&rest.Config{Host: api.URL})); err != nil {
 		t.Fatal(err)
 	}

@@ -108,10 +108,10 @@ func TestReadmissionKeepsTheConnectionsDynamicCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(ResetDynamicResourceCache)
-	SetConnectionStatus(ConnectionStatus{State: StateConnected})
+	PublishTestConnectionStatus(ConnectionStatus{State: StateConnected})
 	first, built := ServingConnectionID(), GetDynamicResourceCache()
 	RetireServingConnection()
-	SetConnectionStatus(ConnectionStatus{State: StateConnected})
+	PublishTestConnectionStatus(ConnectionStatus{State: StateConnected})
 	if second := ServingConnectionID(); second == "" || second == first {
 		t.Fatalf("re-admission IDs %q then %q, want a new one", first, second)
 	}

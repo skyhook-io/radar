@@ -124,7 +124,7 @@ func setupFakeCacheForDiagnoseTests(t *testing.T) {
 		k8s.ResetTestState()
 		getPermCache().Invalidate()
 	})
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
 }
 
 func TestNormalizeDiagnoseKind(t *testing.T) {
@@ -326,7 +326,7 @@ func TestDiagnoseWorkloadWarnsAboutClippedRelationships(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetTestState)
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
 	resources := []k8s.APIResource{
 		{Group: "apps", Version: "v1", Name: "deployments", Kind: "Deployment", Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}},
 		{Version: "v1", Name: "services", Kind: "Service", Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}},
@@ -375,7 +375,7 @@ func TestHandleDiagnose_AttachesPodDNSSignalButRBACGatesCoreDNSFinding(t *testin
 		t.Fatalf("InitTestResourceCache: %v", err)
 	}
 	t.Cleanup(func() { getPermCache().Invalidate() })
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
 	ctx := withClusterAdmin(t, "admin")
 	grantDiagnoseRead(t, "admin")
 

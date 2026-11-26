@@ -122,6 +122,7 @@ type ResourceChange = k8score.ResourceChange
 // informer logic and adds Radar-specific extensions (dynamic cache, resource
 // status, pod workload lookup, timeline integration).
 type ResourceCache struct {
+	observers resourceObservers
 	*k8score.ResourceCache
 	lastClusterInfo     atomic.Pointer[clusterInfoObservation]
 	apiDiscoveryPending atomic.Bool
@@ -477,7 +478,6 @@ func (conn *Connection) initResourceCache(ctx context.Context) error {
 			OnTransform:     secretWriteTimes.capture,
 			IsNoisyResource: isNoisyResource,
 		}
-		conn.configureTypedCallbacks(&cfg, observedChangeHandler(client, secretWriteTimes.observeChange, cronJobScheduleObservations.observeChange))
 
 		wrapped := &ResourceCache{
 			permissionResult:            clonePermissionCheckResult(permResult),
@@ -487,6 +487,7 @@ func (conn *Connection) initResourceCache(ctx context.Context) error {
 			secretWriteTimes:            secretWriteTimes,
 			generation:                  clusterBuildSequence.Add(1),
 		}
+		conn.configureTypedCallbacks(&cfg, observedChangeHandler(client, secretWriteTimes.observeChange, cronJobScheduleObservations.observeChange, wrapped.notifyObservedChanges))
 		// OnInformersStarted runs synchronously inside NewResourceCache, so
 		// wrapped.ResourceCache is visible-before-publication under the lifecycle lock.
 		var stopOnCancel func() bool

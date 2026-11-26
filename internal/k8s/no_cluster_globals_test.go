@@ -17,13 +17,16 @@ import (
 )
 
 func TestNoClusterGlobals(t *testing.T) {
-	for _, dir := range []string{".", "../portforward"} {
+	for _, dir := range []string{".", "../portforward", "../helm"} {
 		t.Run(filepath.Base(dir), func(t *testing.T) { checkClusterGlobals(t, dir) })
 	}
 }
 
 func checkClusterGlobals(t *testing.T, dir string) {
 	denied := []string{
+		"github.com/skyhook-io/radar/internal/helm.UninstallMemo", "*github.com/skyhook-io/radar/internal/helm.UninstallMemo",
+		"github.com/skyhook-io/radar/internal/portforward.Handles", "*github.com/skyhook-io/radar/internal/portforward.Handles",
+		"resourceObservers", "*resourceObservers",
 		"github.com/skyhook-io/radar/internal/portforward.Manager", "*github.com/skyhook-io/radar/internal/portforward.Manager",
 		"map[*github.com/skyhook-io/radar/internal/portforward.Handle]struct{}", "*github.com/skyhook-io/radar/internal/portforward.Handle",
 		"*k8s.io/client-go/kubernetes.Clientset", "k8s.io/client-go/kubernetes.Interface",
@@ -76,6 +79,14 @@ func checkClusterGlobals(t *testing.T, dir string) {
 	}
 	if pkg.Name == "k8s" {
 		checkConnectionMethodGetters(t, fset, files, checked, info)
+	}
+	if pkg.Name == "helm" {
+		for ident, obj := range info.Uses {
+			if obj.Pkg() != nil && obj.Pkg().Path() == "github.com/skyhook-io/radar/internal/k8s" &&
+				slices.Contains([]string{"GetResourceCache", "GetDynamicResourceCache"}, obj.Name()) {
+				t.Errorf("%s: %s must come from Helm's captured connection", fset.Position(ident.Pos()), ident.Name)
+			}
+		}
 	}
 	for _, name := range checked.Scope().Names() {
 		v, ok := checked.Scope().Lookup(name).(*types.Var)

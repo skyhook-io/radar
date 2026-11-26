@@ -58,8 +58,8 @@ func TestChartSourceRoutesAndWriteAuthorization(t *testing.T) {
 	prev := k8s.SetTestClient(client)
 	t.Cleanup(func() { k8s.SetTestClient(prev) })
 	prevStatus := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(prevStatus) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(prevStatus) })
 
 	for _, tc := range []struct {
 		method string

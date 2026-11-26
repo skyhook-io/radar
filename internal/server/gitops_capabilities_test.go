@@ -268,8 +268,8 @@ func TestHandleGitOpsCapabilitiesReviewsCaller(t *testing.T) {
 			previousClient := k8s.SetTestClient(client)
 			defer k8s.SetTestClient(previousClient)
 			previousConnection := k8s.GetConnectionStatus()
-			k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-			defer k8s.SetConnectionStatus(previousConnection)
+			k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+			defer k8s.PublishTestConnectionStatus(previousConnection)
 			router := chi.NewRouter()
 			router.Get("/gitops/capabilities/{kind}/{namespace}/{name}", (&Server{}).handleGitOpsCapabilities)
 			user := &auth.User{Username: "alice", Groups: []string{"radar:viewer"}, System: tc.system}

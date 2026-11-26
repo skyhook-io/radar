@@ -92,14 +92,14 @@ func TestManageHelmRefusesK3sManagedRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	oldClient, oldConfig, oldStatus := k8s.SetTestClient(client), k8s.SetTestConfig(cfg), k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 	defer func() {
 		k8s.SetTestClient(oldClient)
 		k8s.SetTestConfig(oldConfig)
-		k8s.SetConnectionStatus(oldStatus)
+		k8s.PublishTestConnectionStatus(oldStatus)
 	}()
 	helm.ResetTestClient()
-	helm.Initialize()
+	helm.Initialize(nil)
 	t.Cleanup(helm.ResetTestClient)
 
 	ctx := auth.ContextWithUser(t.Context(), &auth.User{Username: "helm-mcp-k3s"})

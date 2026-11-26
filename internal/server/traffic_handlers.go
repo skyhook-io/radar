@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -413,9 +414,16 @@ func trafficRecordsPayload(response *traffic.FlowsResponse, flows []traffic.Flow
 // handleTrafficFlowsStream provides SSE stream of traffic flows
 // GET /api/traffic/flows/stream
 func (s *Server) handleTrafficFlowsStream(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	admission, err := k8s.CaptureServingConnection()
+	if err != nil {
+		s.writeError(w, http.StatusServiceUnavailable, "No cluster connection is serving")
+		return
+	}
+	ctx, cancel := context.WithCancel(admission.Bind(r.Context()))
+	defer cancel()
+	r = r.WithContext(ctx)
 
-	manager := connectionruntime.SetFor(k8s.BoundOrCurrent(r.Context())).Traffic
+	manager := connectionruntime.SetFor(admission.Connection()).Traffic
 	if manager == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Traffic manager not initialized")
 		return
@@ -471,6 +479,8 @@ func (s *Server) handleTrafficFlowsStream(w http.ResponseWriter, r *http.Request
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-admission.Done():
 			return
 
 		case flow, ok := <-flowCh:

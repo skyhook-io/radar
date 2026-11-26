@@ -169,6 +169,7 @@ func TestHandleConnectAsksHubFirst(t *testing.T) {
 	var checks int
 	checkHubMetricsSource = func(context.Context) bool {
 		checks++
+		Reinitialize(nil, nil, "hub-agent", nil)
 		_ = EnableRelay(testRelayConfig(&fakeRelayTransport{}, nil))
 		return true
 	}
@@ -186,7 +187,7 @@ func TestHandleConnectAsksHubFirst(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&status); err != nil {
 		t.Fatal(err)
 	}
-	if checks != 1 || rec.Code != http.StatusOK || status.Source == nil || status.Source.Via != "hub" {
+	if checks != 1 || rec.Code != http.StatusOK || status.Source == nil || status.Source.Via != "hub" || status.ContextName != "hub-agent" {
 		t.Fatalf("checks=%d code=%d status=%+v", checks, rec.Code, status)
 	}
 	if n := promHits.Load(); n != 0 {

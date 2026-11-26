@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"context"
 	"fmt"
 	"maps"
 	"time"
@@ -47,6 +48,7 @@ func swapTestConnectionLocked(next *Connection) {
 	connectionStatusMu.Lock()
 	if serving != nil && serving == prev && next != nil {
 		next.id = prev.id
+		next.done = prev.done
 		serving = next
 	}
 	connectionStatusMu.Unlock()
@@ -208,6 +210,11 @@ func initTestResourceCache(client kubernetes.Interface, scopes map[string]k8scor
 
 	secretWriteTimes := newSecretDataManagerWriteIndex()
 	cronJobScheduleObservations := newCronJobScheduleObservationTracker()
+	cache := &ResourceCache{
+		secretsEnabled:              true,
+		cronJobScheduleObservations: cronJobScheduleObservations,
+		secretWriteTimes:            secretWriteTimes,
+	}
 	cfg := k8score.CacheConfig{
 		Client:        client,
 		ResourceTypes: enabled,
@@ -218,7 +225,7 @@ func initTestResourceCache(client kubernetes.Interface, scopes map[string]k8scor
 		OnTransform: func(obj any) {
 			secretWriteTimes.capture(obj)
 		},
-		OnObservedChange: observedChangeHandler(client, secretWriteTimes.observeChange, cronJobScheduleObservations.observeChange),
+		OnObservedChange: observedChangeHandler(client, secretWriteTimes.observeChange, cronJobScheduleObservations.observeChange, cache.notifyObservedChanges),
 		Clock:            testWatchClock,
 	}
 
@@ -227,12 +234,7 @@ func initTestResourceCache(client kubernetes.Interface, scopes map[string]k8scor
 		return err
 	}
 
-	cache := &ResourceCache{
-		ResourceCache:               core,
-		secretsEnabled:              true,
-		cronJobScheduleObservations: cronJobScheduleObservations,
-		secretWriteTimes:            secretWriteTimes,
-	}
+	cache.ResourceCache = core
 	if err := state.installTestCache(cache, true); err != nil {
 		return err
 	}
@@ -545,6 +547,20 @@ func SetTestInformerClient(request *kubernetes.Clientset, informer kubernetes.In
 	return func() { restoreTestConnection(prev) }
 }
 
+func PublishTestConnectionStatus(status ConnectionStatus) {
+	if status.State == StateConnected && ServingConnectionID() == "" {
+		clientMu.Lock()
+		if Current() == nil {
+			installedConn.Store(&Connection{})
+		}
+		build := Current()
+		clientMu.Unlock()
+		admit(context.Background(), build, status, nil)
+		return
+	}
+	SetConnectionStatus(status)
+}
+
 // ReconnectTestClient installs c as a new connection under the current context
 // name, as a reconnect does: a connection that was serving is retired and the
 // new one admitted with a new ID. Returns a func that restores the previous state.
@@ -565,7 +581,7 @@ func ReconnectTestClient(c *kubernetes.Clientset) func() {
 	if wasServing {
 		status := GetConnectionStatus()
 		status.State = StateConnected
-		SetConnectionStatus(status)
+		PublishTestConnectionStatus(status)
 	}
 	return restore
 }
@@ -916,7 +932,7 @@ func InstallTestServingConnection(name string, cfg *rest.Config, dyn dynamic.Int
 	if _, err := SetTestResourceDiscovery(disc); err != nil {
 		return "", err
 	}
-	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: name})
+	PublishTestConnectionStatus(ConnectionStatus{State: StateConnected, Context: name})
 	return ServingConnectionID(), nil
 }
 

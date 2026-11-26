@@ -126,8 +126,8 @@ func previewServer(t *testing.T, respond func(t *testing.T, req execRequest, opt
 	t.Helper()
 
 	prevConn := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(prevConn) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(prevConn) })
 
 	apiserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

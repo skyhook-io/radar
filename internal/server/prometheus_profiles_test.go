@@ -23,8 +23,8 @@ func setupLocalProfileTest(t *testing.T) *Server {
 	s := setupPrometheusIntegrationTest(t, nil)
 	t.Cleanup(k8s.SetTestLocalMode())
 	connection := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(connection) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(connection) })
 	t.Cleanup(k8s.SetTestProfileSource("/fixture/team", "dev", "developer"))
 	old := k8s.SetTestConfig(&rest.Config{Host: "https://kubernetes"})
 	t.Cleanup(func() { k8s.SetTestConfig(old) })
@@ -170,10 +170,45 @@ func TestLocalProfileChangedTargetCanReplaceWithoutAdoption(t *testing.T) {
 func TestLocalProfileReadWhileDisconnectedDoesNotActivate(t *testing.T) {
 	s := setupLocalProfileTest(t)
 	prometheuspkg.Retire()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected})
 	view := s.localPrometheusView()
 	if view.State != "auto" || prometheuspkg.GetClient() != nil {
 		t.Fatalf("offline read activated metrics: %+v", view)
+	}
+}
+
+func TestOfflineMetricsSaveProbesAnIsolatedClientAndServesAfterAdmission(t *testing.T) {
+	s := setupLocalProfileTest(t)
+	t.Cleanup(k8s.SnapshotTestConnection())
+	k8s.RetireServingConnection()
+	prometheuspkg.Retire()
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "offline-credential" {
+			t.Errorf("request credential = %q", got)
+		}
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+	}))
+	defer backend.Close()
+	headers := map[string]string{"Authorization": "offline-credential"}
+	response := updateProfile(t, s, s.localPrometheusView(), "save", backend.URL, &headers)
+	var saved localConnectionResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusOK || !saved.Checked || !saved.Connected {
+		t.Fatalf("offline save returned %d %s", response.Code, response.Body.String())
+	}
+	if k8s.ServingConnectionID() != "" || prometheuspkg.GetClient() != nil {
+		t.Fatal("offline save published a running client")
+	}
+
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	client, err := connectionruntime.CaptureMetrics(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if addr, _, err := client.EnsureConnected(t.Context()); err != nil || addr != backend.URL {
+		t.Fatalf("first connection used %q, err=%v", addr, err)
 	}
 }
 

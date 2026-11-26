@@ -172,8 +172,8 @@ func TestMetricCoveragePreservesStaleness(t *testing.T) {
 
 func TestWorkloadWithoutConfigurationRequiresReadyCache(t *testing.T) {
 	previous := k8s.GetConnectionStatus()
-	t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(previous) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 	Initialize(nil, nil, "setup-test", nil)
 	SetAuthGate(nil)
 	router := chi.NewRouter()
@@ -215,8 +215,8 @@ func TestWorkloadCollectionKeepsObserversSeparate(t *testing.T) {
 
 func TestWorkloadMetricsGateBeforeCacheOrPrometheus(t *testing.T) {
 	previous := k8s.GetConnectionStatus()
-	t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(previous) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 	t.Cleanup(func() { SetAuthGate(nil) })
 	for _, denied := range []string{"deployments", "pods"} {
 		SetAuthGate(func(_ *http.Request, _, resource, namespace, verb string) bool {
@@ -240,8 +240,8 @@ func TestWorkloadMetricsGateBeforeCacheOrPrometheus(t *testing.T) {
 
 func TestWorkloadMetricsInvalidSourceExplainsChoices(t *testing.T) {
 	previous := k8s.GetConnectionStatus()
-	t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(previous) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 	SetAuthGate(nil)
 	router := chi.NewRouter()
 	Routes{Capture: func(context.Context) (*Client, error) { return ClientForOperation() }}.RegisterRoutes(router)
@@ -254,8 +254,8 @@ func TestWorkloadMetricsInvalidSourceExplainsChoices(t *testing.T) {
 
 func TestWorkloadMetricsDisconnected(t *testing.T) {
 	previous := k8s.GetConnectionStatus()
-	t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(previous) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected})
 	router := chi.NewRouter()
 	Routes{Capture: func(context.Context) (*Client, error) { return ClientForOperation() }}.RegisterRoutes(router)
 	w := httptest.NewRecorder()

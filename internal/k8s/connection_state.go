@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"errors"
+	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -69,18 +70,20 @@ func servingIDLocked() string {
 	return serving.id
 }
 
-// admissionCandidate returns the installed connection, installing an empty
-// one if none exists yet. A connection admitted again after a retirement with
-// no rebuild in between is the same build, so it keeps its clients and caches
-// and only gets a new ID. Lock-free: connectionStatusMu is held, and installs
-// take clientMu.
-func admissionCandidate() *Connection {
-	for {
-		if c := installedConn.Load(); c != nil {
-			return c
-		}
-		installedConn.CompareAndSwap(nil, &Connection{})
+func retireServingLocked() io.Closer {
+	if serving == nil {
+		return nil
 	}
+	conn := serving
+	serving = nil
+	if conn.done != nil {
+		close(conn.done)
+		conn.done = nil
+	}
+	if slot := conn.integrations.Swap(nil); slot != nil {
+		return slot.set
+	}
+	return nil
 }
 
 // RetireServingConnection is the point of no return: called before any
@@ -92,7 +95,7 @@ func RetireServingConnection() {
 		connectionStatusMu.Unlock()
 		return
 	}
-	serving = nil
+	set := retireServingLocked()
 	status := connectionStatus
 	if status.State == StateConnected {
 		status.State = StateConnecting
@@ -100,6 +103,9 @@ func RetireServingConnection() {
 	status.ConnectionID = ""
 	connectionStatus = status
 	connectionStatusMu.Unlock()
+	if set != nil {
+		_ = set.Close()
+	}
 	notifyConnectionChange(status)
 }
 
@@ -146,7 +152,66 @@ func GetConnectionStatus() ConnectionStatus {
 	return connectionStatus
 }
 
-// SetConnectionStatus updates the connection status and notifies callbacks
+// RegisterIntegrationBuilder is called at process setup before any admission
+// can run. The builder prepares the integration set without remote probes.
+func RegisterIntegrationBuilder(build func(context.Context, *Connection) (io.Closer, func())) {
+	buildIntegrations = build
+}
+
+var buildIntegrations func(context.Context, *Connection) (io.Closer, func())
+
+// AdmitStartup uses the same gate as a settings commit. The startup build can
+// warm its caches while a user is editing offline settings.
+func AdmitStartup(operation context.Context, conn *Connection, status ConnectionStatus) bool {
+	contextOpMu.Lock()
+	defer contextOpMu.Unlock()
+	return Admit(operation, conn, status)
+}
+
+// Admit publishes the exact build initialized for this operation. The caller
+// holds the context operation gate.
+func Admit(operation context.Context, conn *Connection, status ConnectionStatus) bool {
+	return admit(operation, conn, status, buildIntegrations)
+}
+
+func admit(operation context.Context, conn *Connection, status ConnectionStatus, build func(context.Context, *Connection) (io.Closer, func())) bool {
+	if conn == nil || operation.Err() != nil {
+		return false
+	}
+	var set io.Closer
+	var start func()
+	if build != nil {
+		set, start = build(operation, conn)
+	}
+
+	clientMu.RLock()
+	connectionStatusMu.Lock()
+	if admissionsClosed || serving != nil || Current() != conn || operation.Err() != nil {
+		connectionStatusMu.Unlock()
+		clientMu.RUnlock()
+		if set != nil {
+			_ = set.Close()
+		}
+		return false
+	}
+	conn.integrations.Store(&integrationSlot{set: set})
+	connectionAdmissions++
+	conn.id = bootNonce + "-" + strconv.FormatUint(connectionAdmissions, 10)
+	conn.done = make(chan struct{})
+	serving = conn
+	status, changed := updateConnectionStatusLocked(status)
+	connectionStatusMu.Unlock()
+	clientMu.RUnlock()
+	if changed {
+		connectionStatusChanged(status)
+	}
+	if start != nil {
+		start()
+	}
+	return true
+}
+
+// SetConnectionStatus updates health and progress for the installed build.
 func SetConnectionStatus(status ConnectionStatus) {
 	SetConnectionStatusIfCurrent(context.Background(), status)
 }
@@ -155,49 +220,44 @@ func SetConnectionStatus(status ConnectionStatus) {
 // overwriting a status published after its operation was cancelled.
 func SetConnectionStatusIfCurrent(operation context.Context, status ConnectionStatus) bool {
 	connectionStatusMu.Lock()
-	if operation.Err() != nil {
+	if operation.Err() != nil || status.State == StateConnected && serving == nil {
 		connectionStatusMu.Unlock()
 		return false
 	}
-	status.DisconnectedAt = outageStart(connectionStatus, status, time.Now())
-	if status.State == StateConnected && serving == nil {
-		if admissionsClosed {
-			connectionStatusMu.Unlock()
-			return false
-		}
-		connectionAdmissions++
-		serving = admissionCandidate()
-		serving.id = bootNonce + "-" + strconv.FormatUint(connectionAdmissions, 10)
+	status, changed := updateConnectionStatusLocked(status)
+	connectionStatusMu.Unlock()
+	if changed {
+		connectionStatusChanged(status)
 	}
+	return true
+}
+
+func updateConnectionStatusLocked(status ConnectionStatus) (ConnectionStatus, bool) {
+	status.DisconnectedAt = outageStart(connectionStatus, status, time.Now())
 	status.ConnectionID = servingIDLocked()
 	if connectionStatus == status {
-		connectionStatusMu.Unlock()
-		return true
+		return status, false
 	}
 	connectionStatus = status
 
-	// Publish-side recovery ownership: every route into an auth-shaped
-	// disconnect (bootstrap with expired credentials, failed retry, failed
-	// context switch) must leave a reconnect loop running — the browser no
-	// longer auto-retries auth failures. Owed survives later non-auth
-	// republications (a hung-plugin retry classifies "timeout") and is only
-	// settled by a successful connect or an explicit switch stop.
+	// Owed survives a failed recovery probe with a different classification.
 	switch {
 	case status.State == StateConnected || status.ErrorType == switchStoppedErrorType:
 		runtimeAuthRecoveryOwed.Store(false)
 	case status.State == StateDisconnected && isAuthClassification(status.ErrorType):
 		runtimeAuthRecoveryOwed.Store(true)
 	}
-	connectionStatusMu.Unlock()
+	return status, true
+}
+
+func connectionStatusChanged(status ConnectionStatus) {
 	if status.State == StateConnected {
 		resetInconclusiveStreak()
 	}
 	if status.State == StateDisconnected && runtimeAuthRecoveryOwed.Load() {
 		startRuntimeAuthRecovery()
 	}
-
 	notifyConnectionChange(status)
-	return true
 }
 
 func notifyConnectionChange(status ConnectionStatus) {

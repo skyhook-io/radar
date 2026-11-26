@@ -37,8 +37,8 @@ func pauseTestDeployment(paused bool) *unstructured.Unstructured {
 func setupPauseTest(t *testing.T, objs ...runtime.Object) (*dynamicfake.FakeDynamicClient, http.Handler) {
 	t.Helper()
 	previousStatus := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(previousStatus) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(previousStatus) })
 
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
 		runtime.NewScheme(),
@@ -230,7 +230,7 @@ func TestPauseAndResumeRequireAConnection(t *testing.T) {
 		for _, action := range []string{"pause", "resume"} {
 			t.Run(tc.name+"/"+action, func(t *testing.T) {
 				dyn, router := setupPauseTest(t, pauseTestDeployment(false))
-				k8s.SetConnectionStatus(k8s.ConnectionStatus{State: tc.state})
+				k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: tc.state})
 
 				w := httptest.NewRecorder()
 				router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/workloads/deployments/prod/web/"+action, nil))

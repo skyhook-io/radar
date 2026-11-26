@@ -32,7 +32,7 @@ func TestProgressiveGatingContract(t *testing.T) {
 
 	prevStatus := k8s.GetConnectionStatus()
 	t.Cleanup(func() {
-		k8s.SetConnectionStatus(prevStatus)
+		k8s.PublishTestConnectionStatus(prevStatus)
 		k8s.ResetResourceCache()
 		if err := k8s.InitTestResourceCache(testFakeClient); err != nil {
 			t.Fatalf("restore package fixture cache: %v", err)
@@ -46,7 +46,7 @@ func TestProgressiveGatingContract(t *testing.T) {
 		map[string]time.Duration{"pods": 1500 * time.Millisecond}); err != nil {
 		t.Fatalf("InitTestPromotedSyncingCache: %v", err)
 	}
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnecting, Context: "contract-test"})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnecting, Context: "contract-test"})
 
 	// 1. Still-syncing typed kind: retryable, machine-readable pending.
 	assertGateResponse(t, "/api/resources/pods", http.StatusServiceUnavailable, "kind_sync_pending")

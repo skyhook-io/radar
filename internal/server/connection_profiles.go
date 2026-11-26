@@ -106,11 +106,25 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 		if !pending.Probe {
 			return nil
 		}
+		build := k8s.Current()
+		offline := k8s.ServingConnectionID() == ""
 		switch request.Kind {
 		case config.IntegrationArgoCD:
-			probe = argocd.PrepareCandidate(*pending.Candidate.Settings.ArgoCD)
+			candidate := *pending.Candidate.Settings.ArgoCD
+			if candidate.URL != "" || !offline {
+				if offline {
+					build = nil
+				}
+				probe = argocd.PrepareCandidateFor(build, false, k8s.ClusterSafetyBinding(r.Context()), candidate)
+			}
 		case config.IntegrationCost:
-			probe, err = opencost.PrepareCandidate(connectionruntime.CostConfig(connections.Selection{Bundle: pending.Candidate}, target))
+			candidate := connectionruntime.CostConfig(connections.Selection{Bundle: pending.Candidate}, target)
+			if candidate.URL != "" || !offline {
+				if offline {
+					build = nil
+				}
+				probe, err = opencost.PrepareCandidateFor(build, false, candidate)
+			}
 		}
 		return err
 	}
@@ -162,6 +176,7 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 	}
 	var selection connections.Selection
 	var probeClient *prometheuspkg.Client
+	var isolatedProbe bool
 	commit := func() error {
 		target, targetErr := k8s.CurrentProfileTarget()
 		if !metadata && (targetErr != nil || !target.Same(pending.Target)) {
@@ -173,8 +188,14 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 		if !metadata {
 			s.localRuntime.Apply(target, false)
 			selection = s.localConnections.Resolve(target, request.Kind, false)
-			if pending.Probe && request.Kind == config.IntegrationMetrics {
-				probeClient = prometheuspkg.GetClient()
+			if pending.Probe && request.Kind == config.IntegrationMetrics && selection.Err == nil {
+				if k8s.ServingConnectionID() != "" {
+					probeClient = connectionruntime.SetFor(k8s.Current()).Metrics
+				} else if settings := selection.Settings.Prometheus; settings != nil && settings.URL != "" {
+					probeClient = prometheuspkg.NewClient(nil, nil, target.Context, nil, false, nil)
+					probeClient.Configure(settings.URL, settings.Headers)
+					isolatedProbe = true
+				}
 			}
 		}
 		return nil
@@ -187,6 +208,9 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		s.connectionError(w, err)
 		return
+	}
+	if isolatedProbe {
+		defer probeClient.Close()
 	}
 	if !metadata {
 		// A save can change Argo CD settings whatever its kind (a reconfirm
@@ -209,7 +233,7 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 			log.Printf("[connections] Saved metrics connection check failed: %s", sanitizeForLog(prom.RedactURLs(err.Error())))
 			response.Error = "Saved, but the metrics backend could not be reached. Check its URL, authentication, network access and TLS configuration."
 		}
-		if prometheuspkg.GetClient() != probeClient || s.localRuntime.CheckCurrent(selection.View.Target, selection) != nil {
+		if (!isolatedProbe && connectionruntime.SetFor(k8s.Current()).Metrics != probeClient) || s.localRuntime.CheckCurrent(selection.View.Target, selection) != nil {
 			response.Connected = false
 			response.Error = "Settings changed during the connection check; reload Settings for the current connection"
 		}

@@ -90,7 +90,7 @@ func TestReleaseListHealthCoversOnlyWhatEachCallerCanRead(t *testing.T) {
 	client := fake.NewSimpleClientset(helmReleaseSecret(t, "team-a", crossNamespaceRelease(), false))
 	list := func(scope *ObjectScope) HelmRelease {
 		t.Helper()
-		rows, err := uninstallStarts.listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), client, "", []string{"team-a"}, true, scope)
+		rows, err := NewUninstallMemo().listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), client, []string{"team-a"}, true, scope)
 		if err != nil || len(rows) != 1 {
 			t.Fatalf("rows = %+v, %v", rows, err)
 		}
@@ -121,7 +121,7 @@ func TestReleaseDetailWithholdsStatusOfObjectsTheCallerCantRead(t *testing.T) {
 	}
 	detail := func(scope *ObjectScope) (*HelmReleaseDetail, map[string]OwnedResource) {
 		t.Helper()
-		d, err := uninstallStarts.getReleaseWith(context.Background(), k8s.Current(), cfg, "", "team-a", "payments", scope)
+		d, err := NewUninstallMemo().getReleaseWith(context.Background(), k8s.Current(), cfg, "team-a", "payments", scope)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -216,7 +216,7 @@ func TestReleaseListKeepsHealthAlignedAcrossNamespaces(t *testing.T) {
 	unhealthy.Manifest = "apiVersion: v1\nkind: Pod\nmetadata:\n  name: payments-worker\n  namespace: shared\n"
 	client := fake.NewSimpleClientset(helmReleaseSecret(t, "team-a", healthy, false), helmReleaseSecret(t, "shared", unhealthy, false))
 	for _, namespaces := range [][]string{{"team-a", "shared"}, {"shared", "team-a"}} {
-		rows, err := uninstallStarts.listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), client, "", namespaces, true, adminCaller())
+		rows, err := NewUninstallMemo().listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), client, namespaces, true, adminCaller())
 		if err != nil || len(rows) != 2 {
 			t.Fatalf("rows=%d err=%v", len(rows), err)
 		}
@@ -377,7 +377,7 @@ metadata:
 			},
 		}}
 	}
-	rows, err := uninstallStarts.listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), client, "", []string{"team-a"}, true, devA())
+	rows, err := NewUninstallMemo().listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), client, []string{"team-a"}, true, devA())
 	if err != nil || len(rows) != 12 {
 		t.Fatalf("rows = %d, %v", len(rows), err)
 	}
@@ -387,7 +387,7 @@ metadata:
 	}
 
 	for name, scope := range map[string]func() *ObjectScope{"dev-a": devA, "admin": adminCaller} {
-		rows, err := uninstallStarts.listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), client, "", []string{"team-a"}, true, scope())
+		rows, err := NewUninstallMemo().listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), client, []string{"team-a"}, true, scope())
 		if err != nil {
 			t.Fatal(err)
 		}

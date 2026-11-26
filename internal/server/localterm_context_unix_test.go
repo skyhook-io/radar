@@ -148,8 +148,8 @@ func TestLocalTerminalContextGuardBeforeShell(t *testing.T) {
 	})
 
 	oldStatus := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected, Context: "staging", ErrorType: "auth"})
-	t.Cleanup(func() { k8s.SetConnectionStatus(oldStatus) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected, Context: "staging", ErrorType: "auth"})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(oldStatus) })
 	conn, resp, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(httpServer.URL, "http")+"/api/local-terminal?expectedContext=staging", nil)
 	if conn != nil {
 		conn.Close()
@@ -160,7 +160,7 @@ func TestLocalTerminalContextGuardBeforeShell(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected, Context: k8s.GetContextName(), ErrorType: "config"})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected, Context: k8s.GetContextName(), ErrorType: "config"})
 	conn, _, err = websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(httpServer.URL, "http")+"/api/local-terminal?expectedContext=production%40secondary", nil)
 	if err != nil {
 		t.Fatal(err)

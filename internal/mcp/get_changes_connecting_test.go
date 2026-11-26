@@ -34,7 +34,7 @@ func TestGetChangesRefusesUntilConnected(t *testing.T) {
 		{k8s.ConnectionStatus{State: k8s.StateConnecting}, "cluster_connecting: Cluster is still connecting, please retry shortly"},
 		{k8s.ConnectionStatus{State: k8s.StateDisconnected, Error: "dial tcp: i/o timeout"}, "cluster_disconnected: not connected to cluster: dial tcp: i/o timeout. " + restoreConnection},
 	} {
-		k8s.SetConnectionStatus(tc.status)
+		k8s.PublishTestConnectionStatus(tc.status)
 		result, _, err := handleGetChanges(context.Background(), nil, getChangesInput{})
 		if err == nil || err.Error() != tc.want {
 			t.Fatalf("%s: result=%v err=%v, want error %q", tc.status.State, result, err, tc.want)
@@ -53,7 +53,7 @@ func TestGetChangesRefusesUntilConnected(t *testing.T) {
 func TestHelmToolsWhileConnecting(t *testing.T) {
 	helm.ResetTestClient()
 	prev := k8s.GetConnectionStatus()
-	t.Cleanup(func() { k8s.SetConnectionStatus(prev) })
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(prev) })
 
 	for _, tc := range []struct {
 		state k8s.ConnectionState
@@ -62,7 +62,7 @@ func TestHelmToolsWhileConnecting(t *testing.T) {
 		{k8s.StateConnecting, "cluster_connecting: Cluster is still connecting, please retry shortly"},
 		{k8s.StateConnected, "helm is not available (no releases found or helm not installed)"},
 	} {
-		k8s.SetConnectionStatus(k8s.ConnectionStatus{State: tc.state})
+		k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: tc.state})
 		if _, _, err := handleListHelmReleases(context.Background(), nil, listHelmReleasesInput{}); err == nil || err.Error() != tc.want {
 			t.Errorf("list_helm_releases while %s: err = %v, want %q", tc.state, err, tc.want)
 		}

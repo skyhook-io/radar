@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"slices"
 	"sync"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -20,9 +21,7 @@ import (
 //     a worker of your own.
 //   - source is the request clientset (GetClient()) of the connection the
 //     reporting cache belongs to, not the informer clientset the cache lists
-//     through. Informer shutdown on a context switch is asynchronous, so a
-//     late callback can belong to a cache that has since been replaced; an
-//     observer holding GetClient() compares against source to ignore it.
+//     through. Observers are attached to the cache that reports the event.
 //   - It sees typed resources only, and not core Events, which take the
 //     cache's separate OnEventChange path. The dynamic (CRD) cache does not
 //     feed these observers.
@@ -32,39 +31,38 @@ import (
 // buffer is dropped.
 type ResourceObserver func(source kubernetes.Interface, change ResourceChange, obj, oldObj any)
 
-var (
-	resourceObserversMu sync.RWMutex
-	resourceObservers   []ResourceObserver
-)
-
-// OnResourceObserved registers an observer for the lifetime of the process;
-// it follows every cache built after a context switch or rescope.
-func OnResourceObserved(fn ResourceObserver) {
-	resourceObserversMu.Lock()
-	defer resourceObserversMu.Unlock()
-	resourceObservers = append(resourceObservers, fn)
+type resourceObservers struct {
+	mu          sync.RWMutex
+	subscribers []*ResourceObserver
 }
 
-func notifyResourceObservers(source kubernetes.Interface, change ResourceChange, obj, oldObj any) {
-	resourceObserversMu.RLock()
-	observers := resourceObservers
-	resourceObserversMu.RUnlock()
-	for _, fn := range observers {
-		fn(source, change, obj, oldObj)
+func (c *ResourceCache) SubscribeObservedChanges(fn ResourceObserver) func() {
+	c.observers.mu.Lock()
+	c.observers.subscribers = append(slices.Clone(c.observers.subscribers), &fn)
+	c.observers.mu.Unlock()
+	return func() {
+		c.observers.mu.Lock()
+		c.observers.subscribers = slices.DeleteFunc(slices.Clone(c.observers.subscribers), func(subscriber *ResourceObserver) bool {
+			return subscriber == &fn
+		})
+		c.observers.mu.Unlock()
 	}
 }
 
-// observedChangeHandler builds a cache's OnObservedChange. cacheObservers
-// keep that one cache's own state and are bound to it here, not looked up at
-// delivery: a late event from a replaced cache must land in the replaced
-// cache's state, never in its successor's. They run first, in order, then
-// every process-wide observer.
-func observedChangeHandler(source kubernetes.Interface, cacheObservers ...ResourceObserver) func(change ResourceChange, obj, oldObj any) {
+func (c *ResourceCache) notifyObservedChanges(source kubernetes.Interface, change ResourceChange, obj, oldObj any) {
+	c.observers.mu.RLock()
+	subscribers := c.observers.subscribers
+	c.observers.mu.RUnlock()
+	for _, fn := range subscribers {
+		(*fn)(source, change, obj, oldObj)
+	}
+}
+
+func observedChangeHandler(source kubernetes.Interface, observers ...ResourceObserver) func(change ResourceChange, obj, oldObj any) {
 	return func(change ResourceChange, obj, oldObj any) {
-		for _, fn := range cacheObservers {
+		for _, fn := range observers {
 			fn(source, change, obj, oldObj)
 		}
-		notifyResourceObservers(source, change, obj, oldObj)
 	}
 }
 

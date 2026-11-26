@@ -21,7 +21,7 @@ import (
 
 func TestGetReleaseUsesRequestConnection(t *testing.T) {
 	t.Cleanup(k8s.SnapshotTestConnection())
-	Initialize()
+	Initialize(nil)
 	t.Cleanup(ResetTestClient)
 	install := func(name string, revision int) *atomic.Int32 {
 		t.Helper()
@@ -124,7 +124,7 @@ func TestInventoryStaysOnRequestConnection(t *testing.T) {
 			install(a.URL)
 			useCrossNamespaceCache(t)
 			t.Cleanup(k8s.SnapshotTestConnection())
-			Initialize()
+			Initialize(nil)
 			t.Cleanup(ResetTestClient)
 			request := httptest.NewRequest(http.MethodGet, "/helm/inventory", nil)
 			if bound {

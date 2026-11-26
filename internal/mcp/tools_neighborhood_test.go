@@ -452,7 +452,7 @@ func setupSecretRefCacheMCP(t *testing.T) {
 	if err := k8s.InitTestResourceCache(fakeClient); err != nil {
 		t.Fatalf("InitTestResourceCache: %v", err)
 	}
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
 	t.Cleanup(func() {
 		k8s.ResetTestState()
 		getPermCache().Invalidate()
@@ -546,7 +546,7 @@ func TestNeighborhoodMCP_RoleRootNeedsItsOwnPermissionWithoutDiscovery(t *testin
 	if err := k8s.InitTestResourceCache(client); err != nil {
 		t.Fatal(err)
 	}
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
 	t.Cleanup(func() {
 		k8s.ResetTestState()
 		getPermCache().Invalidate()
@@ -691,7 +691,7 @@ func TestNeighborhoodMCP_UncollectedRootAnswersWithItsReadCode(t *testing.T) {
 	), map[string]k8score.ResourceScope{k8score.Pods: {Enabled: true}, k8score.Namespaces: {Enabled: true}}); err != nil {
 		t.Fatal(err)
 	}
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
 	t.Cleanup(func() {
 		k8s.ResetTestState()
 		getPermCache().Invalidate()
@@ -732,7 +732,7 @@ func TestNeighborhoodMCP_RootKindDeniedToRadarSaysSo(t *testing.T) {
 	)); err != nil {
 		t.Fatal(err)
 	}
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
 	t.Cleanup(func() {
 		k8s.ResetTestState()
 		getPermCache().Invalidate()
@@ -784,7 +784,7 @@ func TestNeighborhoodMCP_UnwatchedCustomRootStartsItsWatch(t *testing.T) {
 	if err := k8s.InitTestResourceCache(fake.NewClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}})); err != nil {
 		t.Fatal(err)
 	}
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
 	t.Cleanup(func() {
 		k8s.ResetTestState()
 		getPermCache().Invalidate()

@@ -63,7 +63,7 @@ func TestHelmIssueStreamDoesNotLogCallerLeavingAsFailure(t *testing.T) {
 	helm.ResetTestClient()
 	previousConfig := k8s.SetTestConfig(config)
 	t.Cleanup(func() { k8s.SetTestConfig(previousConfig) })
-	helm.Initialize()
+	helm.Initialize(nil)
 	t.Cleanup(func() {
 		helm.ResetTestClient()
 		k8s.SetTestClient(previousClient)

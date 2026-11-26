@@ -53,7 +53,7 @@ func TestOutageStartNotSetWhileFirstConnecting(t *testing.T) {
 func TestRuntimeAuthLossStartsTheOutage(t *testing.T) {
 	ResetTestState()
 	t.Cleanup(ResetTestState)
-	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "prod"})
+	PublishTestConnectionStatus(ConnectionStatus{State: StateConnected, Context: "prod"})
 
 	before := time.Now().UTC().Add(-time.Second)
 	if !transitionConnectedToRuntimeAuthFailure("auth-rejected") {
@@ -68,7 +68,7 @@ func TestRuntimeAuthLossStartsTheOutage(t *testing.T) {
 		t.Fatalf("disconnectedAt = %s, want about now", started)
 	}
 
-	SetConnectionStatus(ConnectionStatus{State: StateDisconnected, Context: "prod", ErrorType: "auth-rejected", Error: "still rejected"})
+	PublishTestConnectionStatus(ConnectionStatus{State: StateDisconnected, Context: "prod", ErrorType: "auth-rejected", Error: "still rejected"})
 	if got := GetConnectionStatus().DisconnectedAt; got != status.DisconnectedAt {
 		t.Fatalf("recovery report moved the outage start from %q to %q", status.DisconnectedAt, got)
 	}

@@ -43,7 +43,7 @@ func TestGetResourceNodeCertificateContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	timeline.SetObservationStartForTest(now.Add(-24 * time.Hour))
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
 	ctx := withClusterAdmin(t, "node-certificate-reader")
 	grantClusterRead(t, "node-certificate-reader", "/nodes")
 	for _, scenario := range scenarios {

@@ -51,8 +51,8 @@ func TestRayClusterPodsRequestContract(t *testing.T) {
 	}
 	t.Cleanup(k8s.ResetTestDynamicState)
 	old := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(old) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(old) })
 	s := &Server{}
 	router := chi.NewRouter()
 	router.Get("/api/workloads/{kind}/{namespace}/{name}/pods", s.handleWorkloadPods)

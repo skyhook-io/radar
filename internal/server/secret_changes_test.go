@@ -35,8 +35,8 @@ func TestIssuesSecretPreviousValueRequiresPodRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	prev := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: prev.Context})
-	t.Cleanup(func() { k8s.SetConnectionStatus(prev) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: prev.Context})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(prev) })
 	timeline.ResetStore()
 	t.Cleanup(func() {
 		timeline.ResetStore()

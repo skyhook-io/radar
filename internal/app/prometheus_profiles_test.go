@@ -197,7 +197,7 @@ func TestFirstConnectionActivatesSavedIntegrations(t *testing.T) {
 	if argocd.IsConfigured() {
 		t.Fatal("saved Argo CD settings activated before connecting")
 	}
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "dev"})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "dev"})
 	if !argocd.IsConfigured() {
 		t.Fatal("saved Argo CD settings were not activated on the first connection")
 	}

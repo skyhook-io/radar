@@ -71,7 +71,7 @@ func TestAgentMCPListBoundsSlowOwnershipAuthorization(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(k8s.ResetTestState)
-			k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "budget"})
+			k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "budget"})
 			if err := k8s.InitTestDynamicResourceCache(
 				dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"}, dynamicObjects...),
 				[]k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "Widget", Name: gvr.Resource, Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}}},
@@ -169,7 +169,7 @@ func TestAgentOwnershipMCPListAndGetPreferController(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetTestState)
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "ownership-test"})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "ownership-test"})
 	verbs := metav1.Verbs{"get", "list", "watch", "delete"}
 	fd := &fakediscovery.FakeDiscovery{Fake: &k8stesting.Fake{}}
 	fd.Resources = []*metav1.APIResourceList{

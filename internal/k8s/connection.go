@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"io"
 	"sync"
 	"sync/atomic"
 
@@ -33,10 +34,26 @@ type Connection struct {
 	metricsMu                                sync.Mutex
 	metricsHistory                           atomic.Pointer[MetricsHistoryStore]
 	metricsClosed                            bool
+	integrations                             atomic.Pointer[integrationSlot]
 	// id is the ID of the connection's latest admission, written under
 	// connectionStatusMu. Each admission gets a new one, so an ID from before
 	// a retirement is refused even if the same build is admitted again.
-	id string
+	id   string
+	done chan struct{}
+}
+
+type integrationSlot struct {
+	set io.Closer
+}
+
+func (c *Connection) Integrations() io.Closer {
+	if c == nil {
+		return nil
+	}
+	if slot := c.integrations.Load(); slot != nil {
+		return slot.set
+	}
+	return nil
 }
 
 // Current returns the installed connection, or nil before the first install.

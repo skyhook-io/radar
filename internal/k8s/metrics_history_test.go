@@ -106,10 +106,10 @@ func TestReadmissionKeepsMetricsHistory(t *testing.T) {
 		defer c.closeMetricsHistory()
 		synctest.Wait()
 		store := GetMetricsHistory()
-		SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
+		PublishTestConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
 		first := ServingConnectionID()
 		RetireServingConnection()
-		SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
+		PublishTestConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
 		InitMetricsHistory()
 
 		if id := ServingConnectionID(); id == "" || id == first {

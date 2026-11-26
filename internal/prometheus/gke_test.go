@@ -448,8 +448,8 @@ func TestGKEConfiguredWorkloadWithUnverifiedConventionalIdentity(t *testing.T) {
 	Initialize(c.k8sClient, c.k8sConfig, "fixture", nil)
 	t.Cleanup(func() { SetAuthGate(nil); Reset(); Initialize(nil, nil, "", nil) })
 	previous := k8s.GetConnectionStatus()
-	t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(previous) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "nginx", UID: "nginx-uid"}}
 	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "nginx-abc", UID: "nginx-abc-uid", OwnerReferences: []metav1.OwnerReference{scopeOwner("Deployment", "nginx")}}}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "nginx-abc-111", UID: "pod-uid", CreationTimestamp: metav1.NewTime(time.Now().Add(-2 * time.Hour)), OwnerReferences: []metav1.OwnerReference{scopeOwner("ReplicaSet", "nginx-abc")}}}
@@ -674,7 +674,7 @@ func TestGKEFrontendPodReadyInvalidatesSupplementWithConventionalConnection(t *t
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetResourceCache)
-	c := &Client{k8sClient: cs, baseURL: "http://ordinary", gkeChecked: time.Now()}
+	c := &Client{k8sClient: cs, cache: k8s.GetResourceCache(), baseURL: "http://ordinary", gkeChecked: time.Now()}
 	pod := readyPod(svc.Namespace, "frontend-0", map[string]string{"app": "unrelated"}, true)
 	c.observeResourceChange(cs, "add", pod, nil)
 	if c.gkeChecked.IsZero() {

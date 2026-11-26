@@ -38,7 +38,7 @@ func TestBatchDiagnoseReturnsCanonicalAdmissionIssuesAndLimits(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { k8s.ResetTestState(); getPermCache().Invalidate() })
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
 	gvr := schema.GroupVersionResource{Group: "kueue.x-k8s.io", Version: "v1beta2", Resource: "workloads"}
 	w := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "kueue.x-k8s.io/v1beta2", "kind": "Workload",
@@ -163,7 +163,7 @@ func TestBatchDiagnoseJobListsWhatItsTemplateUses(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { k8s.ResetTestState(); getPermCache().Invalidate() })
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
 	var resources []k8s.APIResource
 	for _, r := range []struct{ group, kind, name string }{{"", "Service", "services"}, {"batch", "Job", "jobs"}, {"", "Pod", "pods"}, {"", "ConfigMap", "configmaps"}, {"", "Secret", "secrets"}, {"", "ServiceAccount", "serviceaccounts"}} {
 		resources = append(resources, k8s.APIResource{Group: r.group, Version: "v1", Kind: r.kind, Name: r.name, Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}})

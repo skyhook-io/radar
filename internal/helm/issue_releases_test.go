@@ -176,11 +176,11 @@ func TestIssueReleasesMatchAFullRead(t *testing.T) {
 	}
 	for scopeName, namespaces := range scopes {
 		t.Run(scopeName, func(t *testing.T) {
-			oldRows, err := uninstallStarts.listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), full, "", namespaces, false, nil)
+			oldRows, err := NewUninstallMemo().listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), full, namespaces, false, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			newRows, err := uninstallStarts.listIssueReleasesWithClients(context.Background(), fake.NewSimpleClientset(secretsToObjects(secrets)...), metadataClientFor(t, secrets), "", namespaces)
+			newRows, err := NewUninstallMemo().listIssueReleasesWithClients(context.Background(), fake.NewSimpleClientset(secretsToObjects(secrets)...), metadataClientFor(t, secrets), namespaces)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -216,11 +216,11 @@ func TestIssueReleasesFallBackToAFullReadWithoutHelmLabels(t *testing.T) {
 	unlabelled := helmReleaseSecret(t, "apps", helmTestRelease("legacy", "apps", 1, release.StatusFailed, "Release \"legacy\" failed: timed out"), true)
 	secrets = append(secrets, unlabelled)
 
-	oldRows, err := uninstallStarts.listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), fake.NewSimpleClientset(secretsToObjects(secrets)...), "", nil, false, nil)
+	oldRows, err := NewUninstallMemo().listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), fake.NewSimpleClientset(secretsToObjects(secrets)...), nil, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	newRows, err := uninstallStarts.listIssueReleasesWithClients(context.Background(), fake.NewSimpleClientset(secretsToObjects(secrets)...), metadataClientFor(t, secrets), "", nil)
+	newRows, err := NewUninstallMemo().listIssueReleasesWithClients(context.Background(), fake.NewSimpleClientset(secretsToObjects(secrets)...), metadataClientFor(t, secrets), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,7 +372,7 @@ func TestIssueReleasesSkipOnlyDeniedNamespaces(t *testing.T) {
 				return false, nil, nil
 			})
 			ctx := context.Background()
-			releases, err := uninstallStarts.listIssueReleasesWithClients(ctx, fake.NewSimpleClientset(secretsToObjects(secrets)...), labels, "", []string{"open", "blocked"})
+			releases, err := NewUninstallMemo().listIssueReleasesWithClients(ctx, fake.NewSimpleClientset(secretsToObjects(secrets)...), labels, []string{"open", "blocked"})
 			if len(releases) != 1 || releases[0].Name != "shop" {
 				t.Fatalf("releases = %v, want the failed release read from the open namespace (err: %v)", releases, err)
 			}
@@ -416,7 +416,7 @@ func TestIssueReleasesFailWholeWhenNoNamespaceWasRead(t *testing.T) {
 		return true, nil, apierrors.NewUnauthorized("Unauthorized")
 	})
 	ctx := context.Background()
-	releases, err := uninstallStarts.listIssueReleasesWithClients(ctx, fake.NewSimpleClientset(), labels, "", []string{"a", "b"})
+	releases, err := NewUninstallMemo().listIssueReleasesWithClients(ctx, fake.NewSimpleClientset(), labels, []string{"a", "b"})
 	if releases != nil {
 		t.Fatalf("releases = %v, want none", releases)
 	}

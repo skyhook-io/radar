@@ -96,25 +96,23 @@ const hubMetricsSourceCheckWait = 12 * time.Second
 // here would let any caller redirect Prometheus queries to an arbitrary
 // host (SSRF) since radar binds to 0.0.0.0 by default.
 func (h Routes) handleConnect(w http.ResponseWriter, r *http.Request) {
-	client, connectionErr := h.Capture(r.Context())
+	ctx := r.Context()
+	optional := r.URL.Query().Get("optional") == "true"
+	var checked bool
+	if !optional {
+		// A user asking for discovery first gets Radar Hub's current choice.
+		checkCtx, cancel := context.WithTimeout(ctx, hubMetricsSourceCheckWait)
+		checked = checkHubMetricsSource(checkCtx)
+		cancel()
+	}
+	client, connectionErr := h.Capture(ctx)
 	if connectionErr != nil {
 		writeError(w, http.StatusServiceUnavailable, connectionErr.Error())
 		return
 	}
-
-	ctx := r.Context()
-	optional := r.URL.Query().Get("optional") == "true"
-	if !optional {
-		// A user asking for discovery first gets Radar Hub's current choice:
-		// an OpenObserve source selected since the agent last asked serves
-		// right away. Automatic connects never ask Hub.
-		checkCtx, cancel := context.WithTimeout(ctx, hubMetricsSourceCheckWait)
-		checked := checkHubMetricsSource(checkCtx)
-		cancel()
-		if checked && RelayActive() {
-			writeJSON(w, http.StatusOK, client.GetStatus())
-			return
-		}
+	if checked && client.relayActive() {
+		writeJSON(w, http.StatusOK, client.GetStatus())
+		return
 	}
 	if optional {
 		ctx = withSuppressedDiscoveryDiagnostics(ctx)

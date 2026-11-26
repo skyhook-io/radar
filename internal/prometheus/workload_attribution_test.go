@@ -85,18 +85,20 @@ func TestAttributionWaitsForDiscoveryBeforeProbeDeadline(t *testing.T) {
 		_, _ = w.Write(attributionEvidence(rows, ""))
 	}))
 	defer server.Close()
+	c := &Client{manualURL: server.URL, httpClient: server.Client()}
+	c.discoveryOnce.Do(func() { c.discoveryGate = make(chan struct{}, 1) })
 	select {
-	case discoveryGate <- struct{}{}:
+	case c.discoveryGate <- struct{}{}:
 	default:
 		t.Fatal("discovery gate busy")
 	}
 	held := true
 	defer func() {
 		if held {
-			<-discoveryGate
+			<-c.discoveryGate
 		}
 	}()
-	c := &Client{manualURL: server.URL, httpClient: server.Client()}
+
 	defer func() { c.mu.Lock(); c.retired = true; c.cancelWorkloadAttributionsLocked(); c.mu.Unlock() }()
 	scope := PodScope{Namespace: "shop", Kind: "Deployment", Name: "api", Identities: []prom.WorkloadPodIdentity{{Name: "api-0", UID: "030a7597-c1fc-48b0-9bb4-683489285358"}}}
 	c.automaticWorkloadAttributions(scope)
@@ -109,7 +111,7 @@ func TestAttributionWaitsForDiscoveryBeforeProbeDeadline(t *testing.T) {
 	if _, state := c.automaticWorkloadAttributions(scope); state != "detecting" {
 		t.Fatalf("discovery became probe error: %s", state)
 	}
-	<-discoveryGate
+	<-c.discoveryGate
 	held = false
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {

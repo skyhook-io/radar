@@ -86,14 +86,14 @@ func TestHelmReleaseRowsStampK3sOwnership(t *testing.T) {
 		}
 	}
 	k3s := map[string]k3sOwner{"kube-system/traefik": {chart: "kube-system/traefik", config: "kube-system/traefik"}}
-	rows, err := uninstallStarts.helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot(), nil, k3s, "", adminCaller())
+	rows, err := NewUninstallMemo().helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot(), nil, k3s, adminCaller())
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("rows = %+v, err %v", rows, err)
 	}
 	if c := rows[0].Controller; c == nil || c.Tool != "k3s" || c.Ref() != "kube-system/traefik" || c.ValuesRef == nil || c.ValuesRef.Exists == nil || !*c.ValuesRef.Exists {
 		t.Fatalf("row = %+v", rows[0].Controller)
 	}
-	rows, _ = uninstallStarts.helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot(), map[string]string{"kube-system/traefik": "flux-system/traefik"}, k3s, "", adminCaller())
+	rows, _ = NewUninstallMemo().helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot(), map[string]string{"kube-system/traefik": "flux-system/traefik"}, k3s, adminCaller())
 	if c := rows[0].Controller; rows[0].ManagedByFluxHelmRelease != "flux-system/traefik" || c == nil || c.Tool != "flux" || c.Kind != "HelmRelease" || c.Ref() != "flux-system/traefik" {
 		t.Fatalf("Flux wins, row = %+v", rows[0].Controller)
 	}
@@ -102,7 +102,7 @@ func TestHelmReleaseRowsStampK3sOwnership(t *testing.T) {
 	// It still learns that k3s owns it, so writes stay refused.
 	private := map[string]k3sOwner{"kube-system/traefik": {chart: "private-charts/traefik", config: "private-charts/traefik", addon: "private-addon"}}
 	for _, access := range []StatusAccess{teamACaller(), nil} {
-		rows, _ = uninstallStarts.helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot(), nil, private, "", access)
+		rows, _ = NewUninstallMemo().helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot(), nil, private, access)
 		if rows[0].Controller != nil || !rows[0].ManagedByK3s {
 			t.Fatalf("unreadable HelmChart: controller = %+v, managedByK3s = %v", rows[0].Controller, rows[0].ManagedByK3s)
 		}
@@ -110,12 +110,12 @@ func TestHelmReleaseRowsStampK3sOwnership(t *testing.T) {
 			t.Fatalf("hidden HelmChart leaked: %s", raw)
 		}
 	}
-	rows, _ = uninstallStarts.helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot(), nil, k3s, "", adminCaller())
+	rows, _ = NewUninstallMemo().helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot(), nil, k3s, adminCaller())
 	if !rows[0].ManagedByK3s {
 		t.Fatal("readable HelmChart lost managedByK3s")
 	}
 	// Flux ownership with its HelmRelease withheld still wins over the HelmChart.
-	rows, _ = uninstallStarts.helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot(), map[string]string{"kube-system/traefik": "flux-system/traefik"}, k3s, "", teamACaller())
+	rows, _ = NewUninstallMemo().helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot(), map[string]string{"kube-system/traefik": "flux-system/traefik"}, k3s, teamACaller())
 	if !rows[0].ManagedByFlux || rows[0].Controller != nil || rows[0].ManagedByK3s {
 		t.Fatalf("hidden Flux owner, row = %+v", rows[0])
 	}

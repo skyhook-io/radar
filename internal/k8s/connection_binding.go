@@ -17,6 +17,7 @@ var ErrNoServingConnection = errors.New("no cluster connection is serving")
 type Admission struct {
 	conn *Connection
 	id   string
+	done <-chan struct{}
 }
 
 // Connection returns the admitted connection.
@@ -24,6 +25,8 @@ func (a Admission) Connection() *Connection { return a.conn }
 
 // ID returns the connection ID the write was admitted under.
 func (a Admission) ID() string { return a.id }
+
+func (a Admission) Done() <-chan struct{} { return a.done }
 
 // Bind binds a request to the admission; ClientFromContext, the Helm write
 // path and kind lookups then use its connection's clients and discovery, not
@@ -41,7 +44,7 @@ func CaptureServingConnection() (Admission, error) {
 	if !CaptureClusterReads(func() {
 		connectionStatusMu.RLock()
 		if serving != nil {
-			a = Admission{conn: serving, id: serving.id}
+			a = Admission{conn: serving, id: serving.id, done: serving.done}
 		}
 		connectionStatusMu.RUnlock()
 	}) || a.conn == nil {
@@ -55,7 +58,12 @@ type connectionKey struct{}
 // WithConnection binds a request to c under the ID c holds now, for reads
 // that need one connection throughout. Writes bind their Admission instead.
 func WithConnection(ctx context.Context, c *Connection) context.Context {
-	return Admission{conn: c, id: c.ID()}.Bind(ctx)
+	if c == nil {
+		return Admission{}.Bind(ctx)
+	}
+	connectionStatusMu.RLock()
+	defer connectionStatusMu.RUnlock()
+	return Admission{conn: c, id: c.id, done: c.done}.Bind(ctx)
 }
 
 // CaptureConnection keeps an existing admission or captures the installed connection once for a read.

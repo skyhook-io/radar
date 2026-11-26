@@ -55,8 +55,8 @@ func fakeNamespaceAPIServer(t *testing.T, listStatus, sarStatus int, namespaces 
 	prevClient := k8s.SetTestClient(client)
 	t.Cleanup(func() { k8s.SetTestClient(prevClient) })
 	prevConn := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(prevConn) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(prevConn) })
 }
 
 func TestGetAccessibleNamespacesWithSource(t *testing.T) {

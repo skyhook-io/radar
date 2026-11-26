@@ -53,14 +53,14 @@ func TestInformerCallbacksAfterCacheClose(t *testing.T) {
 		}
 	}
 
-	SetConnectionStatus(ConnectionStatus{State: StateConnected})
+	PublishTestConnectionStatus(ConnectionStatus{State: StateConnected})
 	firstID := ServingConnectionID()
 	RetireServingConnection()
-	SetConnectionStatus(ConnectionStatus{State: StateConnected})
+	PublishTestConnectionStatus(ConnectionStatus{State: StateConnected})
 	if firstID == "" || ServingConnectionID() == firstID || Current() != conn {
 		t.Fatal("expected the same cache build under a new admission")
 	}
-	SetConnectionStatus(ConnectionStatus{State: StateConnecting})
+	PublishTestConnectionStatus(ConnectionStatus{State: StateConnecting})
 	fireTyped()
 	fireDynamic()
 	events, err := timeline.QueryEvents(t.Context(), timeline.QueryOptions{IncludeManaged: true, IncludeK8sEvents: true})
@@ -95,7 +95,7 @@ func TestInformerCallbacksAfterCacheClose(t *testing.T) {
 		t.Fatal("expected a replacement connection with the same context name")
 	}
 	initMemoryTimeline(t)
-	SetConnectionStatus(ConnectionStatus{State: StateConnecting, ProgressMsg: "replacement"})
+	PublishTestConnectionStatus(ConnectionStatus{State: StateConnecting, ProgressMsg: "replacement"})
 	fireTyped()
 	fireDynamic()
 	events, err = timeline.QueryEvents(t.Context(), timeline.QueryOptions{IncludeManaged: true, IncludeK8sEvents: true})

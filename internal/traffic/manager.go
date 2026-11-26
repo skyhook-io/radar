@@ -20,6 +20,10 @@ import (
 
 // Manager handles traffic source detection and management
 type Manager struct {
+	lifetime     context.Context
+	cancel       context.CancelFunc
+	handles      *portforward.Handles
+	closeOnce    sync.Once
 	k8sClient    kubernetes.Interface
 	sources      map[string]TrafficSource
 	activeSource TrafficSource
@@ -145,14 +149,19 @@ func InitializeWithPortForwards(client kubernetes.Interface, forwards *portforwa
 }
 
 func NewManager(client kubernetes.Interface, forwards *portforward.Manager, contextName, metricsURL string, metricsHeaders map[string]string) *Manager {
+	lifetime, cancel := context.WithCancel(context.Background())
+	handles := &portforward.Handles{}
 	hubble := NewHubbleSource(client)
-	hubble.forwards = forwards
+	hubble.forwards, hubble.handles, hubble.lifetime = forwards, handles, lifetime
 	caretta := NewCarettaSource(client)
-	caretta.forwards = forwards
+	caretta.forwards, caretta.handles = forwards, handles
 	caretta.metricsURL = metricsURL
 	caretta.headers = metricsHeaders
 	caretta.managedMetrics = true
 	return &Manager{
+		lifetime:    lifetime,
+		cancel:      cancel,
+		handles:     handles,
 		k8sClient:   client,
 		contextName: contextName,
 		sources: map[string]TrafficSource{
@@ -169,6 +178,12 @@ func GetManager() *Manager {
 
 // DetectSources checks all registered traffic sources and returns detection results
 func (m *Manager) DetectSources(ctx context.Context) (*SourcesResponse, error) {
+	ctx, release := portforward.WithLifetime(ctx, m.lifetime)
+	defer release()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.detectSourcesLocked(ctx)
@@ -180,6 +195,12 @@ func (m *Manager) DetectSources(ctx context.Context) (*SourcesResponse, error) {
 // lock, which flow reads wait on. Concurrent callers share one detection, the
 // later ones finding the first one's result.
 func (m *Manager) RecentSources(ctx context.Context, maxAge time.Duration) (*SourcesResponse, error) {
+	ctx, release := portforward.WithLifetime(ctx, m.lifetime)
+	defer release()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.lastSources != nil && time.Since(m.lastDetectedAt) < maxAge && m.lastConfigGen == currentMetricsConfigGen() {
@@ -576,6 +597,12 @@ func (m *Manager) generateRecommendation(info *ClusterInfo, detected []SourceSta
 
 // GetFlows retrieves flows from the active source
 func (m *Manager) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsResponse, error) {
+	ctx, release := portforward.WithLifetime(ctx, m.lifetime)
+	defer release()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	m.mu.RLock()
 	source := m.activeSource
 	m.mu.RUnlock()
@@ -597,7 +624,33 @@ func (m *Manager) StreamFlows(ctx context.Context, opts FlowOptions) (<-chan Flo
 		return nil, fmt.Errorf("no traffic source available")
 	}
 
-	return source.StreamFlows(ctx, opts)
+	ctx, release := portforward.WithLifetime(ctx, m.lifetime)
+	flows, err := source.StreamFlows(ctx, opts)
+	if err != nil {
+		release()
+		return nil, err
+	}
+	stream := make(chan Flow)
+	go func() {
+		defer close(stream)
+		defer release()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case flow, ok := <-flows:
+				if !ok {
+					return
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case stream <- flow:
+				}
+			}
+		}
+	}()
+	return stream, nil
 }
 
 // reconcileActiveSource keeps the active source in step with what detection just
@@ -663,19 +716,21 @@ func (m *Manager) GetActiveSourceName() string {
 
 // Close cleans up all traffic sources
 func (m *Manager) Close() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	var errs []error
-	for name, source := range m.sources {
-		if err := source.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", name, err))
+	m.closeOnce.Do(func() {
+		if m.cancel != nil {
+			m.cancel()
 		}
-	}
-
-	if len(errs) > 0 {
-		return fmt.Errorf("errors closing sources: %v", errs)
-	}
+		if m.handles != nil {
+			m.handles.Close()
+		}
+		for name, source := range m.sources {
+			go func() {
+				if err := source.Close(); err != nil {
+					log.Printf("[traffic] Closing %s: %v", name, err)
+				}
+			}()
+		}
+	})
 	return nil
 }
 
@@ -702,6 +757,12 @@ func ReinitializeWithPortForwards(client kubernetes.Interface, forwards *portfor
 // Connect establishes connection to the active traffic source
 // This may start a port-forward if running locally and needed
 func (m *Manager) Connect(ctx context.Context) (*portforward.ConnectionInfo, error) {
+	ctx, release := portforward.WithLifetime(ctx, m.lifetime)
+	defer release()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	m.mu.Lock()
 	source := m.activeSource
 	contextName := m.contextName

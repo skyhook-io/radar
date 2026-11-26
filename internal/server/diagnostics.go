@@ -250,9 +250,11 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		metricsStore = k8s.GetMetricsHistory()
 		cache = k8s.GetResourceCache()
 		status = k8s.GetConnectionStatus()
+		integrations = connectionruntime.SetFor(k8s.Current())
 		if status.State == k8s.StateConnected {
 			dynCache = k8s.GetDynamicResourceCache()
-			integrations = connectionruntime.SetFor(k8s.Current())
+		} else {
+			integrations.Traffic = nil
 		}
 	})
 

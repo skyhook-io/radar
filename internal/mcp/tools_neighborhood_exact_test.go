@@ -45,7 +45,7 @@ func setupExactKindNeighborhood(t *testing.T) {
 	if err := k8s.InitTestResourceCache(client); err != nil {
 		t.Fatal(err)
 	}
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
 	k8s.ResetTestDynamicState()
 	t.Cleanup(func() {
 		k8s.ResetTestDynamicState()

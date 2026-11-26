@@ -15,7 +15,7 @@ import (
 
 func TestMarkDisconnectedIfClusterUnreachable(t *testing.T) {
 	ResetTestState()
-	SetConnectionStatus(ConnectionStatus{
+	PublishTestConnectionStatus(ConnectionStatus{
 		State:       StateConnected,
 		Context:     "kind-demo",
 		ClusterName: "demo",
@@ -69,7 +69,7 @@ func TestMarkDisconnectedIfClusterUnreachable(t *testing.T) {
 
 func TestMarkDisconnectedIfClusterUnreachableIgnoresRecoveredCluster(t *testing.T) {
 	ResetTestState()
-	SetConnectionStatus(ConnectionStatus{
+	PublishTestConnectionStatus(ConnectionStatus{
 		State:       StateConnected,
 		Context:     "kind-demo",
 		ClusterName: "demo",
@@ -93,7 +93,7 @@ func TestMarkDisconnectedIfClusterUnreachableIgnoresRecoveredCluster(t *testing.
 
 func TestMarkDisconnectedIfClusterUnreachableHandlesRawHelmTransportError(t *testing.T) {
 	ResetTestState()
-	SetConnectionStatus(ConnectionStatus{
+	PublishTestConnectionStatus(ConnectionStatus{
 		State:       StateConnected,
 		Context:     "kind-demo",
 		ClusterName: "demo",
@@ -123,7 +123,7 @@ func TestMarkDisconnectedIfClusterUnreachableHandlesRawHelmTransportError(t *tes
 
 func TestMarkDisconnectedIfClusterUnreachablePreservesTimeoutClassification(t *testing.T) {
 	ResetTestState()
-	SetConnectionStatus(ConnectionStatus{
+	PublishTestConnectionStatus(ConnectionStatus{
 		State:       StateConnected,
 		Context:     "kind-demo",
 		ClusterName: "demo",
@@ -150,7 +150,7 @@ func TestMarkDisconnectedIfClusterUnreachablePreservesTimeoutClassification(t *t
 
 func TestMarkDisconnectedIfClusterUnreachableIgnoresNonClusterNetworkErrors(t *testing.T) {
 	ResetTestState()
-	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "kind-demo"})
+	PublishTestConnectionStatus(ConnectionStatus{State: StateConnected, Context: "kind-demo"})
 
 	if MarkDisconnectedIfClusterUnreachable(`failed to update chart repository: Get "https://charts.example.test/index.yaml": dial tcp: no such host`) {
 		t.Fatal("MarkDisconnectedIfClusterUnreachable returned true for chart repository network error")
@@ -485,7 +485,7 @@ func TestClassifyErrorNil(t *testing.T) {
 func TestLateConnectionPublicationsPreserveStoppedSwitch(t *testing.T) {
 	ResetTestState()
 	t.Cleanup(ResetTestState)
-	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "previous"})
+	PublishTestConnectionStatus(ConnectionStatus{State: StateConnected, Context: "previous"})
 	startup := OperationContext()
 	started, release := make(chan struct{}), make(chan struct{})
 	clusterLivenessProbe = func(context.Context) error {
@@ -499,7 +499,7 @@ func TestLateConnectionPublicationsPreserveStoppedSwitch(t *testing.T) {
 	}()
 	<-started
 	CancelOngoingOperations()
-	SetConnectionStatus(ConnectionStatus{State: StateDisconnected, Context: "target", ErrorType: switchStoppedErrorType})
+	PublishTestConnectionStatus(ConnectionStatus{State: StateDisconnected, Context: "target", ErrorType: switchStoppedErrorType})
 	close(release)
 	if <-done || SetConnectionStatusIfCurrent(startup, ConnectionStatus{State: StateConnected, Context: "previous"}) || GetConnectionStatus().ErrorType != switchStoppedErrorType {
 		t.Fatal("old liveness or startup result overwrote a stopped switch")

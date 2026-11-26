@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/portforward"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
@@ -316,6 +317,10 @@ func relayIdentity(st *relayState) string {
 // mode reaches every query path: charts, MCP, the cluster-scope probes and
 // rightsizing scans. Caller holds c.mu (read or write).
 func (c *Client) newTransportLocked(addr, basePath string, httpClient *http.Client, maxResponseBytes int64) prom.Transport {
+	return c.bindTransport(c.rawTransportLocked(addr, basePath, httpClient, maxResponseBytes))
+}
+
+func (c *Client) rawTransportLocked(addr, basePath string, httpClient *http.Client, maxResponseBytes int64) prom.Transport {
 	if c.relay != nil {
 		var timeout time.Duration
 		if httpClient != nil {
@@ -327,6 +332,27 @@ func (c *Client) newTransportLocked(addr, basePath string, httpClient *http.Clie
 	tr.Headers = copyHeaders(c.headers)
 	tr.MaxResponseBytes = maxResponseBytes
 	return tr
+}
+
+type memberTransport struct {
+	prom.Transport
+	lifetime context.Context
+}
+
+func (t memberTransport) Do(ctx context.Context, method, path string, params url.Values) ([]byte, error) {
+	ctx, release := portforward.WithLifetime(ctx, t.lifetime)
+	defer release()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return t.Transport.Do(ctx, method, path, params)
+}
+
+func (c *Client) bindTransport(t prom.Transport) prom.Transport {
+	if c.lifetime == nil {
+		return t
+	}
+	return memberTransport{Transport: t, lifetime: c.lifetime}
 }
 
 // status returns the relay's source with its latest health.

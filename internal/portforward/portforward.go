@@ -160,18 +160,6 @@ func (m *Manager) Close() {
 	}
 }
 
-// The subscriber follows the global integration; the handle identifies the
-// lost tunnel even if its local port has since been reassigned.
-var onForwardLost atomic.Pointer[func(*Handle)]
-
-func SetOnForwardLost(fn func(*Handle)) {
-	if fn == nil {
-		onForwardLost.Store(nil)
-	} else {
-		onForwardLost.Store(&fn)
-	}
-}
-
 // Start opens a separate tunnel on every call and returns its owning handle.
 // ctx bounds Pod lookup and tunnel establishment. Canceling ctx after Start
 // returns leaves the tunnel running. targetPort is the port on the selected Pod.
@@ -246,9 +234,6 @@ func (m *Manager) establish(ctx context.Context, h *Handle, targetPort int) (*Ha
 		ended <- err
 		if lost {
 			log.Printf("[portforward] Lost: %s -> %s/%s (owner=%s): %v", h.Address(), ns, svc, h.owner, err)
-			if hook := onForwardLost.Load(); hook != nil {
-				(*hook)(h)
-			}
 		}
 	}()
 	select {

@@ -405,7 +405,7 @@ func TestMain(m *testing.M) {
 	}
 
 	// Mark cluster as connected so requireConnected guards pass
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{
 		State:   k8s.StateConnected,
 		Context: "fake-test",
 	})
@@ -577,10 +577,10 @@ func TestSmokeDashboardCRDs(t *testing.T) {
 
 func TestSmokeDashboardHelmRequiresConnection(t *testing.T) {
 	// Temporarily set disconnected
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{
 		State: k8s.StateDisconnected,
 	})
-	defer k8s.SetConnectionStatus(k8s.ConnectionStatus{
+	defer k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{
 		State:   k8s.StateConnected,
 		Context: "fake-test",
 	})
@@ -1079,7 +1079,7 @@ func TestConnectionRetryInClusterProbesBeforeTeardown(t *testing.T) {
 	previousContext := k8s.SetTestContextName("in-cluster")
 	t.Cleanup(func() { k8s.SetTestContextName(previousContext) })
 	previousStatus := k8s.GetConnectionStatus()
-	t.Cleanup(func() { k8s.SetConnectionStatus(previousStatus) })
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(previousStatus) })
 	stopped := false
 	k8s.SetSessionStopper(func() { stopped = true })
 	t.Cleanup(func() { k8s.SetSessionStopper(nil) })
@@ -2138,8 +2138,8 @@ func TestSmokeRequireConnected(t *testing.T) {
 	}
 
 	// Temporarily disconnect
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected})
-	defer k8s.SetConnectionStatus(k8s.ConnectionStatus{
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected})
+	defer k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{
 		State:   k8s.StateConnected,
 		Context: "fake-test",
 	})

@@ -194,8 +194,8 @@ func TestGitOpsDestinationGVRUsesExactGroup(t *testing.T) {
 
 func TestGitOpsDestinationRejectsForeignGroupBeforeClientLookup(t *testing.T) {
 	previous := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(previous) })
 
 	for _, identity := range []struct{ kind, group string }{
 		{"applications", "app.k8s.io"},

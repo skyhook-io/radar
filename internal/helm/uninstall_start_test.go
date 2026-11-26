@@ -15,20 +15,16 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
-func freshUninstallStarts(t *testing.T) {
-	t.Helper()
-	previous := uninstallStarts
-	uninstallStarts = NewUninstallMemo()
-	t.Cleanup(func() { uninstallStarts = previous })
-}
-
-func uninstallRowFromStorage(t *testing.T, rel *release.Release) HelmRelease {
+func uninstallRowFromStorage(t *testing.T, memo *UninstallMemo, rel *release.Release) HelmRelease {
 	t.Helper()
 	snapshot, err := helmReleaseStorageSnapshotWithClient(context.Background(), fake.NewSimpleClientset(helmReleaseSecret(t, "helm-storage", rel, true)), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := helmReleaseRowsForTest(t, snapshot)
+	rows, err := memo.helmReleaseRowsFromStorageSnapshot(t.Context(), snapshot, nil, nil, scannedObjects{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(rows) != 1 {
 		t.Fatalf("rows = %#v", rows)
 	}
@@ -36,21 +32,21 @@ func uninstallRowFromStorage(t *testing.T, rel *release.Release) HelmRelease {
 }
 
 func TestUninstallStuckClockSurvivesFailedRetry(t *testing.T) {
-	freshUninstallStarts(t)
+	memo := NewUninstallMemo()
 	now := time.Now().Truncate(time.Second)
 	firstAttempt := now.Add(-25 * time.Minute)
 	rel := helmTestRelease("deleting", "demo", 2, release.StatusUninstalling, "Deletion in progress")
 	rel.Info.LastDeployed = helmtime.Time{Time: now.Add(-48 * time.Hour)}
 	rel.Info.Deleted = helmtime.Time{Time: firstAttempt}
 
-	first := uninstallRowFromStorage(t, rel)
+	first := uninstallRowFromStorage(t, memo, rel)
 	if first.LastOperation == nil || !first.LastOperation.Updated.Equal(firstAttempt) {
 		t.Fatalf("first observation = %#v, want stuck since %v", first.LastOperation, firstAttempt)
 	}
 
 	// A retry that fails on the same hook rewrites Info.Deleted to its own start.
 	rel.Info.Deleted = helmtime.Time{Time: now.Add(-time.Minute)}
-	retried := uninstallRowFromStorage(t, rel)
+	retried := uninstallRowFromStorage(t, memo, rel)
 	op := retried.LastOperation
 	if op == nil {
 		t.Fatal("failed retry hid the stuck uninstall")
@@ -61,7 +57,7 @@ func TestUninstallStuckClockSurvivesFailedRetry(t *testing.T) {
 }
 
 func TestUninstallStuckClockSurvivesFailedRetryInDetail(t *testing.T) {
-	freshUninstallStarts(t)
+	memo := NewUninstallMemo()
 	now := time.Now().Truncate(time.Second)
 	firstAttempt := now.Add(-25 * time.Minute)
 	cfg := memoryActionConfig(t)
@@ -79,7 +75,7 @@ func TestUninstallStuckClockSurvivesFailedRetryInDetail(t *testing.T) {
 	if err := cfg.Releases.Create(rel); err != nil {
 		t.Fatal(err)
 	}
-	if detail, err := uninstallStarts.getReleaseWith(context.Background(), k8s.Current(), cfg, "", "default", "deleting", scannedObjects{}); err != nil || detail.LastOperation == nil {
+	if detail, err := memo.getReleaseWith(context.Background(), k8s.Current(), cfg, "default", "deleting", scannedObjects{}); err != nil || detail.LastOperation == nil {
 		t.Fatalf("first detail = %#v, %v", detail, err)
 	}
 
@@ -87,7 +83,7 @@ func TestUninstallStuckClockSurvivesFailedRetryInDetail(t *testing.T) {
 	if err := cfg.Releases.Update(rel); err != nil {
 		t.Fatal(err)
 	}
-	detail, err := uninstallStarts.getReleaseWith(context.Background(), k8s.Current(), cfg, "", "default", "deleting", scannedObjects{})
+	detail, err := memo.getReleaseWith(context.Background(), k8s.Current(), cfg, "default", "deleting", scannedObjects{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,34 +95,31 @@ func TestUninstallStuckClockSurvivesFailedRetryInDetail(t *testing.T) {
 	}
 }
 
-func TestUninstallStartIgnoresReadsThatStraddleAContextSwitch(t *testing.T) {
-	freshUninstallStarts(t)
+func TestLateUninstallObservationOnlyChangesItsCapturedMemo(t *testing.T) {
+	old, current := NewUninstallMemo(), NewUninstallMemo()
 	now := time.Now().Truncate(time.Second)
 	firstAttempt := now.Add(-25 * time.Minute)
 	deployed := now.Add(-48 * time.Hour)
-	previous := uninstallStartKey{context: "previous-context", storageNamespace: "helm-storage", name: "deleting"}
-	uninstallStarts.observe(previous, helmhistory.Revision{Revision: 2, Status: "uninstalling", Updated: deployed, Deleted: firstAttempt}, now)
-	if op := uninstallStarts.analyzeReleaseHistory("", "helm-storage", "deleting", 2, []HelmRevision{{Revision: 2, Status: "uninstalling", Updated: deployed, Deleted: firstAttempt}}, helmhistory.Options{}).LastOperation; op == nil {
-		t.Fatal("current-context observation did not report the stuck uninstall")
+	key := uninstallStartKey{storageNamespace: "helm-storage", name: "deleting"}
+	revision := helmhistory.Revision{Revision: 2, Status: "uninstalling", Updated: deployed, Deleted: firstAttempt}
+	old.observe(key, revision, now)
+	if op := current.analyzeReleaseHistory("helm-storage", "deleting", 2, []HelmRevision{{Revision: 2, Status: "uninstalling", Updated: deployed, Deleted: firstAttempt}}, helmhistory.Options{}).LastOperation; op == nil {
+		t.Fatal("current observation did not report the stuck uninstall")
 	}
 
-	// The read started under the previous context but ran after the switch, so
-	// its same-named release may belong to the current cluster.
-	straddling := []HelmRevision{{Revision: 2, Status: "deployed", Updated: deployed}}
-	uninstallStarts.analyzeReleaseHistory("previous-context", "helm-storage", "deleting", 2, straddling, helmhistory.Options{})
-
-	current := uninstallStartKey{storageNamespace: "helm-storage", name: "deleting"}
-	for _, key := range []uninstallStartKey{previous, current} {
-		if entry, ok := uninstallStarts.entries[key]; !ok || !entry.started.Equal(firstAttempt) {
-			t.Fatalf("anchor for %+v = %#v, %v; want it untouched at %v", key, entry, ok, firstAttempt)
-		}
+	old.analyzeReleaseHistory("helm-storage", "deleting", 2, []HelmRevision{{Revision: 2, Status: "deployed", Updated: deployed}}, helmhistory.Options{})
+	if len(old.entries) != 0 {
+		t.Fatal("a deployed release should clear its own uninstall anchor")
+	}
+	if entry, ok := current.entries[key]; !ok || !entry.started.Equal(firstAttempt) {
+		t.Fatalf("current anchor = %#v, %v; want it untouched at %v", entry, ok, firstAttempt)
 	}
 }
 
 func TestUninstallStartMemo(t *testing.T) {
 	now := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
 	deployed := now.Add(-48 * time.Hour)
-	key := uninstallStartKey{context: "prod", storageNamespace: "helm-storage", name: "deleting"}
+	key := uninstallStartKey{storageNamespace: "helm-storage", name: "deleting"}
 	uninstalling := func(revision int, deployed, deleted time.Time) helmhistory.Revision {
 		return helmhistory.Revision{Revision: revision, Status: "uninstalling", Updated: deployed, Deleted: deleted}
 	}
@@ -164,10 +157,13 @@ func TestUninstallStartMemo(t *testing.T) {
 	t.Run("other releases and contexts keep their own clocks", func(t *testing.T) {
 		m := NewUninstallMemo()
 		m.observe(key, uninstalling(2, deployed, first), now.Add(-20*time.Minute))
+		staging := NewUninstallMemo()
+		if got := staging.observe(key, uninstalling(2, deployed, retry), now); !got.Equal(retry) {
+			t.Fatalf("staging: got %v, want %v", got, retry)
+		}
 		for _, other := range []uninstallStartKey{
-			{context: "staging", storageNamespace: key.storageNamespace, name: key.name},
-			{context: key.context, storageNamespace: "other", name: key.name},
-			{context: key.context, storageNamespace: key.storageNamespace, name: "other"},
+			{storageNamespace: "other", name: key.name},
+			{storageNamespace: key.storageNamespace, name: "other"},
 		} {
 			if got := m.observe(other, uninstalling(2, deployed, retry), now); !got.Equal(retry) {
 				t.Fatalf("%+v: got %v, want %v", other, got, retry)
@@ -188,7 +184,7 @@ func TestUninstallStartMemo(t *testing.T) {
 		m := NewUninstallMemo()
 		m.observe(key, uninstalling(2, deployed, first), now)
 		later := now.Add(uninstallStartRetain + time.Hour)
-		m.observe(uninstallStartKey{context: "prod", storageNamespace: "helm-storage", name: "other"}, helmhistory.Revision{Revision: 1, Status: "deployed"}, later)
+		m.observe(uninstallStartKey{storageNamespace: "helm-storage", name: "other"}, helmhistory.Revision{Revision: 1, Status: "deployed"}, later)
 		if _, ok := m.entries[key]; ok || len(m.entries) != 0 {
 			t.Fatalf("entries = %#v, want the stale anchor dropped", m.entries)
 		}

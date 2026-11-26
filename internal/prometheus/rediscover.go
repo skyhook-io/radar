@@ -281,38 +281,25 @@ func (c *Client) onForwardLost(lost *portforward.Handle) {
 	c.requestRediscovery(address, "port-forward "+address+" lost")
 }
 
-// RegisterRediscoverySignals subscribes the process-wide client to the cluster
-// signals above. Call once at startup; the subscriptions follow whichever
-// client and resource cache are current when a signal fires.
-func RegisterRediscoverySignals() {
-	k8s.OnResourceObserved(observeResourceChange)
-	portforward.SetOnForwardLost(func(lost *portforward.Handle) {
-		if c := GetClient(); c != nil {
-			c.onForwardLost(lost)
-		}
-	})
-}
-
-// observeResourceChange receives the resource cache's change stream and turns
+// observeCacheChange receives the resource cache's change stream and turns
 // Prometheus-relevant changes into background rediscovery signals. It runs on
 // informer goroutines, so it returns early for everything but Services and
 // Pods and does no I/O.
-func observeResourceChange(source kubernetes.Interface, change k8s.ResourceChange, obj, oldObj any) {
+func (c *Client) observeCacheChange(source kubernetes.Interface, change k8s.ResourceChange, obj, oldObj any) {
 	if change.Kind != "Service" && change.Kind != "Pod" {
 		return
 	}
 	if change.Operation != "add" && change.Operation != "update" && !(change.Kind == "Service" && change.Operation == "delete") {
 		return
 	}
-	if change.Operation == "add" && !k8s.InitialSyncComplete() {
-		// The initial listing: Prewarm's discovery covers what already exists.
-		// Adds after it are objects Radar had not seen, whatever their age —
-		// a relist after a watch outage included.
-		return
-	}
-	c := GetClient()
-	if c == nil {
-		return
+	if change.Operation == "add" {
+		kind := k8score.Services
+		if change.Kind == "Pod" {
+			kind = k8score.Pods
+		}
+		if !c.cache.IsKindReady(kind) {
+			return
+		}
 	}
 	c.observeResourceChange(source, change.Operation, obj, oldObj)
 }
@@ -530,8 +517,8 @@ func (c *Client) newConnectedPromClientLocked(httpClient *http.Client) *prom.Cli
 // cachedServiceLister returns the informer cache's Service lister when that
 // cache was built from this client's cluster connection, else nil.
 func (c *Client) cachedServiceLister() listerscorev1.ServiceLister {
-	cache := k8s.GetResourceCache()
-	if cache == nil || cache.Client() != k8s.InformerClientFor(c.k8sClient) {
+	cache := c.cache
+	if cache == nil {
 		return nil
 	}
 	return cache.Services()
@@ -543,8 +530,8 @@ func (c *Client) cachedServiceLister() listerscorev1.ServiceLister {
 // has finished syncing them — a namespace-scoped or partial view would
 // silently drop candidates.
 func (c *Client) cachedServices() ([]*corev1.Service, bool) {
-	cache := k8s.GetResourceCache()
-	if cache == nil || cache.Client() != k8s.InformerClientFor(c.k8sClient) {
+	cache := c.cache
+	if cache == nil {
 		return nil, false
 	}
 	if !cache.IsKindClusterWide(string(k8score.Services)) || !cache.IsKindReady(string(k8score.Services)) {

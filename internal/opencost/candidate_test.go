@@ -133,7 +133,7 @@ func TestFailedKubecostProbeAfterSwitchKeepsReplacementForward(t *testing.T) {
 	}
 	bConn := probeB()
 	k8s.RetireServingConnection()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "b"})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "b"})
 	if !bConn.lease.alive() || k8s.Current().PortForwards() != b.forwards {
 		t.Fatal("readmission discarded B's live tunnel")
 	}

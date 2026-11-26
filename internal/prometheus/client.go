@@ -29,6 +29,11 @@ import (
 // with a pkg/prom.Client that performs the actual HTTP calls once an
 // endpoint has been discovered.
 type Client struct {
+	lifetime      context.Context
+	cancel        context.CancelFunc
+	handles       portforward.Handles
+	discoveryOnce sync.Once
+	discoveryGate chan struct{}
 	gkeSF         singleflight.Group
 	gkeServices   *serviceInventory
 	gke           *gkeMetrics
@@ -110,6 +115,9 @@ type Client struct {
 	// gate and drive the shared port-forward for the retired context.
 	retired bool
 
+	cache       *k8s.ResourceCache
+	unsubscribe func()
+
 	// K8s clients for discovery
 	forwards    *portforward.Manager
 	forward     *portforward.Handle
@@ -157,10 +165,6 @@ var (
 	clientMu     sync.RWMutex
 )
 
-// A reinitialization on the same connection can overlap a detached discovery.
-// Serialize these probes, allowing a superseded run to abandon the wait.
-var discoveryGate = make(chan struct{}, 1)
-
 type suppressDiscoveryDiagnosticsKey struct{}
 
 func withSuppressedDiscoveryDiagnostics(ctx context.Context) context.Context {
@@ -177,12 +181,16 @@ func Initialize(client kubernetes.Interface, config *rest.Config, contextName st
 	clientMu.Lock()
 	defer clientMu.Unlock()
 
-	globalClient = NewClient(client, config, contextName, forwards, k8s.IsInCluster())
+	globalClient = NewClient(client, config, contextName, forwards, k8s.IsInCluster(), k8s.GetResourceCache())
 	globalClient.adoptRelayLocked()
 }
 
-func NewClient(client kubernetes.Interface, config *rest.Config, contextName string, forwards *portforward.Manager, inCluster bool) *Client {
-	return &Client{
+func NewClient(client kubernetes.Interface, config *rest.Config, contextName string, forwards *portforward.Manager, inCluster bool, cache *k8s.ResourceCache) *Client {
+	lifetime, cancel := context.WithCancel(context.Background())
+	c := &Client{
+		cache:         cache,
+		lifetime:      lifetime,
+		cancel:        cancel,
 		forwards:      forwards,
 		k8sClient:     client,
 		k8sConfig:     config,
@@ -191,6 +199,10 @@ func NewClient(client kubernetes.Interface, config *rest.Config, contextName str
 		httpClient:    &http.Client{Timeout: 10 * time.Second},
 		mcpHTTPClient: newMCPHTTPClient(),
 	}
+	if cache != nil {
+		c.unsubscribe = cache.SubscribeObservedChanges(c.observeCacheChange)
+	}
+	return c
 }
 
 // newMCPHTTPClient builds the HTTP client backing the MCP-only prom.Client.
@@ -296,6 +308,12 @@ func ConnectionSource() string {
 	return "none"
 }
 
+func (c *Client) Configure(rawURL string, headers map[string]string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.configureLocked(rawURL, headers)
+}
+
 // configureLocked is the single writer for manualURL + headers. manualURL is
 // read under c.mu (discover, Reinitialize), so the write takes c.mu; callers
 // hold clientMu (read) across the whole write so a concurrent Reinitialize
@@ -388,9 +406,32 @@ func Prewarm() {
 
 // connectInBackground runs EnsureConnected the way Prewarm does and logs the
 // outcome under label.
+func (c *Client) Close() error {
+	if c == nil {
+		return nil
+	}
+	if c.cancel != nil {
+		c.cancel()
+	}
+	c.handles.Close()
+	if c.unsubscribe != nil {
+		c.unsubscribe()
+	}
+	c.mu.Lock()
+	c.retired = true
+	c.cancelWorkloadAttributionsLocked()
+	if c.discoveryCancel != nil {
+		c.discoveryCancel()
+	}
+	c.mu.Unlock()
+	return nil
+}
+
 func (c *Client) connectInBackground(label string) error {
 	start := time.Now()
-	ctx, cancel := context.WithTimeout(withSuppressedDiscoveryDiagnostics(context.Background()), discoveryTimeout+5*time.Second)
+	ctx, release := portforward.WithLifetime(context.Background(), c.lifetime)
+	defer release()
+	ctx, cancel := context.WithTimeout(withSuppressedDiscoveryDiagnostics(ctx), discoveryTimeout+5*time.Second)
 	defer cancel()
 	addr, _, err := c.connectWithGKE(ctx)
 	switch {
@@ -442,6 +483,7 @@ func Retire() {
 			globalClient.discoveryCancel()
 		}
 		globalClient.mu.Unlock()
+		_ = globalClient.Close()
 		globalClient = nil
 	}
 	if activeRelay != nil {
@@ -496,21 +538,14 @@ func Reinitialize(client kubernetes.Interface, config *rest.Config, contextName 
 		oldCancel() // stop the outgoing client's detached discovery, if any
 	}
 
-	globalClient = &Client{
-		forwards:             forwards,
-		k8sClient:            client,
-		k8sConfig:            config,
-		contextName:          contextName,
-		inCluster:            k8s.IsInCluster(),
-		manualURL:            manualURL,
-		headers:              headers,
-		workloadScope:        workloadScope,
-		connectedIdentity:    connectedIdentity,
-		workloadScopeEverSet: workloadScopeEverSet,
-		beylaJobSelector:     beylaJobSelector,
-		httpClient:           &http.Client{Timeout: 10 * time.Second},
-		mcpHTTPClient:        newMCPHTTPClient(),
+	next := NewClient(client, config, contextName, forwards, k8s.IsInCluster(), k8s.GetResourceCache())
+	next.manualURL, next.headers = manualURL, headers
+	next.workloadScope, next.workloadScopeEverSet = workloadScope, workloadScopeEverSet
+	next.connectedIdentity, next.beylaJobSelector = connectedIdentity, beylaJobSelector
+	if globalClient != nil {
+		_ = globalClient.Close()
 	}
+	globalClient = next
 	globalClient.adoptRelayLocked()
 }
 
@@ -591,6 +626,8 @@ func (c *Client) HasManualURL() bool {
 // EnsureConnected attempts to discover and connect to Prometheus if not
 // already connected. Returns the base URL and base path, or an error.
 func (c *Client) EnsureConnected(ctx context.Context) (string, string, error) {
+	ctx, release := portforward.WithLifetime(ctx, c.lifetime)
+	defer release()
 	if c == GetClient() {
 		if err := connections.Refresh(config.IntegrationMetrics); err != nil {
 			return "", "", err
@@ -701,7 +738,9 @@ func (c *Client) discoverShared(ctx context.Context) (string, string, error) {
 		}
 
 		ch := c.discoverySF.DoChan(key, func() (any, error) {
-			dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discoveryTimeout)
+			dctx, release := portforward.WithLifetime(context.WithoutCancel(ctx), c.lifetime)
+			defer release()
+			dctx, cancel := context.WithTimeout(dctx, discoveryTimeout)
 			defer cancel()
 
 			// Publish the cancel so Reset/Reinitialize can abort this detached run.
@@ -745,11 +784,11 @@ func (c *Client) discoverShared(ctx context.Context) (string, string, error) {
 				c.mu.Unlock()
 			}()
 
-			// Serialize across the process, but abandon the wait if this run is
-			// cancelled (superseded) so it can't wedge a newer discovery.
+			c.discoveryOnce.Do(func() { c.discoveryGate = make(chan struct{}, 1) })
+			gate := c.discoveryGate
 			select {
-			case discoveryGate <- struct{}{}:
-				defer func() { <-discoveryGate }()
+			case gate <- struct{}{}:
+				defer func() { <-gate }()
 			case <-dctx.Done():
 				flightErr = dctx.Err()
 				return nil, flightErr

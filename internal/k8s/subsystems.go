@@ -21,11 +21,14 @@ import (
 // The progress callback receives human-readable status messages suitable for
 // display in the UI (e.g. via SSE connection status updates).
 func InitAllSubsystems(ctx context.Context, progress func(string)) error {
-	return initAllSubsystems(ctx, progress, 0, nil)
+	return Current().InitSubsystems(ctx, progress)
 }
 
-func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait time.Duration, tracker *ContextSwitchTracker) error {
-	conn := Current()
+func (conn *Connection) InitSubsystems(ctx context.Context, progress func(string)) error {
+	return conn.initAllSubsystems(ctx, progress, 0, nil)
+}
+
+func (conn *Connection) initAllSubsystems(ctx context.Context, progress func(string), discoveryWait time.Duration, tracker *ContextSwitchTracker) error {
 	subsystemStart := time.Now()
 
 	// 1. Timeline — before caches so events during warmup are captured

@@ -40,8 +40,8 @@ func TestWriteJSONResourceSchemasMatchesStock(t *testing.T) {
 	}))
 	t.Cleanup(api.Close)
 	oldStatus := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(oldStatus) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(oldStatus) })
 	oldConfig := k8s.SetTestConfig(&rest.Config{Host: api.URL})
 	t.Cleanup(func() { k8s.SetTestConfig(oldConfig) })
 

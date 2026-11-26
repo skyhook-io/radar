@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -81,21 +80,6 @@ func TestResourceCacheIsBuiltFromInformerClients(t *testing.T) {
 	}))
 	clientMu.Unlock()
 
-	// Observers live for the process, so stop recording when the test ends.
-	sources := make(chan kubernetes.Interface, 1)
-	var recording atomic.Bool
-	recording.Store(true)
-	defer recording.Store(false)
-	OnResourceObserved(func(source kubernetes.Interface, _ ResourceChange, _, _ any) {
-		if !recording.Load() {
-			return
-		}
-		select {
-		case sources <- source:
-		default:
-		}
-	})
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := InitResourceCache(ctx); err != nil {
@@ -107,16 +91,23 @@ func TestResourceCacheIsBuiltFromInformerClients(t *testing.T) {
 	if got := InformerClientFor(requestClient); got != kubernetes.Interface(informerClient) {
 		t.Errorf("InformerClientFor(request client) = %T, want the informer client", got)
 	}
-	// Observers compare source with GetClient() (Prometheus does), so the
-	// cache must report the request client even though it lists through the
-	// informer client.
+	sources := make(chan kubernetes.Interface, 1)
+	t.Cleanup(GetResourceCache().SubscribeObservedChanges(func(source kubernetes.Interface, _ ResourceChange, _, _ any) {
+		select {
+		case sources <- source:
+		default:
+		}
+	}))
+	if _, err := informerClient.CoreV1().Pods("default").Create(ctx, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "observed", Namespace: "default"}}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
 	select {
 	case got := <-sources:
 		if got != kubernetes.Interface(requestClient) {
 			t.Errorf("observer source = %T, want the request client", got)
 		}
 	case <-ctx.Done():
-		t.Fatal("no resource observer callback during the initial sync")
+		t.Fatal("no resource observer callback after the Pod was added")
 	}
 }
 

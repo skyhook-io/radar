@@ -26,8 +26,8 @@ func nodeDebugTestRouter(t *testing.T, handler http.HandlerFunc) http.Handler {
 	}
 	previousClient := k8s.SetTestClient(client)
 	previousStatus := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetTestClient(previousClient); k8s.SetConnectionStatus(previousStatus) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.SetTestClient(previousClient); k8s.PublishTestConnectionStatus(previousStatus) })
 	s := &Server{}
 	router := chi.NewRouter()
 	router.Post("/nodes/{name}/debug", s.handleNodeDebug)

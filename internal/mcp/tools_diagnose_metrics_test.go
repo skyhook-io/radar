@@ -140,7 +140,7 @@ func setupFakeCacheWithPodFleet(t *testing.T, n int) {
 		k8s.ResetTestState()
 		getPermCache().Invalidate()
 	})
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
 }
 
 func diagnoseMetricsResult(t *testing.T, ctx context.Context, input diagnoseInput) (map[string]json.RawMessage, *diagnoseMetrics) {

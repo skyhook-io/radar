@@ -340,7 +340,8 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 	if err != nil {
 		log.Fatalf("Invalid startup configuration: %v", err)
 	}
-	helm.Initialize()
+	helm.Initialize(connectionruntime.HelmMemoFor)
+	k8s.RegisterIntegrationBuilder(connectionruntime.Build)
 
 	RegisterLastContextMemory(cfg)
 
@@ -354,7 +355,6 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 	// Initialize Prometheus metrics client (must come before SetManualURL)
 	conn := k8s.Current()
 	prometheuspkg.Initialize(conn.ClientInterface(), conn.Config(), conn.ContextName(), conn.PortForwards())
-	prometheuspkg.RegisterRediscoverySignals()
 
 	if cfg.PrometheusURL != "" {
 		if err := validateStartupPrometheusURL(cfg.PrometheusURL); err != nil {
@@ -683,6 +683,7 @@ func InitializeCluster() {
 	// Cancel any in-flight API calls from previous attempts (e.g., browser
 	// polling /api/capabilities with RBAC checks through a broken exec plugin).
 	operation, _ := k8s.CancelOngoingOperations()
+	build := k8s.Current()
 
 	clusterStart := time.Now()
 
@@ -724,7 +725,7 @@ func InitializeCluster() {
 
 	subsystemErr := make(chan error, 1)
 	go func() {
-		subsystemErr <- k8s.InitAllSubsystems(ctx, func(msg string) {
+		subsystemErr <- build.InitSubsystems(ctx, func(msg string) {
 			if connected.Load() {
 				k8s.SetConnectionStatusIfCurrent(operation, k8s.ConnectionStatus{
 					State:       k8s.StateConnecting,
@@ -781,10 +782,10 @@ func InitializeCluster() {
 	}
 	k8s.LogTiming(" Total cluster init: %v", time.Since(clusterStart))
 
-	if !k8s.SetConnectionStatusIfCurrent(operation, k8s.ConnectionStatus{
+	if !k8s.AdmitStartup(operation, build, k8s.ConnectionStatus{
 		State:       k8s.StateConnected,
-		Context:     k8s.GetContextName(),
-		ClusterName: k8s.GetClusterName(),
+		Context:     build.ContextName(),
+		ClusterName: build.ClusterName(),
 	}) {
 		return
 	}
@@ -856,6 +857,7 @@ func Shutdown(srv *server.Server) {
 	RemoveMCPPortFile()
 	// Closed first, so nothing stopped below can admit a connection.
 	k8s.CloseConnectionAdmissions()
+	k8s.CancelOngoingOperations()
 	srv.Stop()
 	k8s.ResetAllSubsystems()
 }

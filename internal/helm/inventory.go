@@ -89,7 +89,7 @@ func (c *Client) ReadInventory(ctx context.Context, req InventoryRequest) (*Rele
 		if req.Scope != nil {
 			access = req.Scope
 		}
-		inventory.Releases, read, denied, err = c.memo().listReleasesRecordingAccess(ctx, client, c.conn.ContextName(), req.StorageNamespaces, access)
+		inventory.Releases, read, denied, err = c.memo().listReleasesRecordingAccess(ctx, client, req.StorageNamespaces, access)
 		if err != nil {
 			return nil, err
 		}
@@ -178,8 +178,8 @@ func RequestedNamespaces(named []string, pin *string) []string {
 // listReleasesRecordingAccess is listReleasesAcrossNamespacesWithClient that
 // also says which scopes were read and which the caller was denied. A complete
 // denial is a result here, not an error.
-func (m *UninstallMemo) listReleasesRecordingAccess(ctx context.Context, client kubernetes.Interface, contextName string, namespaces []string, access StatusAccess) (rows []HelmRelease, read, denied []string, err error) {
-	rows, err = m.listReleaseRows(ctx, contextName, namespaces, true, access, false, ReleaseReadDeniedForCaller, func(ctx context.Context, namespace string) (*helmReleaseStorageSnapshot, error) {
+func (m *UninstallMemo) listReleasesRecordingAccess(ctx context.Context, client kubernetes.Interface, namespaces []string, access StatusAccess) (rows []HelmRelease, read, denied []string, err error) {
+	rows, err = m.listReleaseRows(ctx, namespaces, true, access, false, ReleaseReadDeniedForCaller, func(ctx context.Context, namespace string) (*helmReleaseStorageSnapshot, error) {
 		snapshot, readErr := helmReleaseStorageSnapshotWithClient(ctx, client, namespace)
 		switch {
 		case readErr == nil:

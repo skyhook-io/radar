@@ -50,8 +50,8 @@ func (l *observedLog) snapshot() []observedCall {
 }
 
 // TestObservedChangeHandlerDeliversEveryChange pins the observer contract
-// the cache's own consumers rely on: every observer, cache-bound or
-// process-wide, sees initial-sync adds and updates the noisy filter keeps
+// the cache's own consumers rely on: every observer, built-in or
+// subscribed, sees initial-sync adds and updates the noisy filter keeps
 // off the changes channel, cache-bound observers run first, and the secret
 // index and CronJob tracker still record what they observe.
 func TestObservedChangeHandlerDeliversEveryChange(t *testing.T) {
@@ -63,7 +63,8 @@ func TestObservedChangeHandlerDeliversEveryChange(t *testing.T) {
 	client := fake.NewClientset(secret, cronJob)
 
 	var log observedLog
-	OnResourceObserved(log.observer("global", client))
+	cache := &ResourceCache{}
+	t.Cleanup(cache.SubscribeObservedChanges(log.observer("subscriber", client)))
 	secretWriteTimes := newSecretDataManagerWriteIndex()
 	cronTracker := newCronJobScheduleObservationTracker()
 
@@ -76,6 +77,7 @@ func TestObservedChangeHandlerDeliversEveryChange(t *testing.T) {
 			secretWriteTimes.observeChange,
 			cronTracker.observeChange,
 			log.observer("cache", client),
+			cache.notifyObservedChanges,
 		),
 		// Every update is noisy and initial adds are suppressed from OnChange:
 		// the observers must still see both.
@@ -95,9 +97,9 @@ func TestObservedChangeHandlerDeliversEveryChange(t *testing.T) {
 	}
 
 	want := []observedCall{
-		{"cache", "Secret", "add"}, {"global", "Secret", "add"},
-		{"cache", "CronJob", "add"}, {"global", "CronJob", "add"},
-		{"cache", "Secret", "update"}, {"global", "Secret", "update"},
+		{"cache", "Secret", "add"}, {"subscriber", "Secret", "add"},
+		{"cache", "CronJob", "add"}, {"subscriber", "CronJob", "add"},
+		{"cache", "Secret", "update"}, {"subscriber", "Secret", "update"},
 	}
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -112,14 +114,14 @@ func TestObservedChangeHandlerDeliversEveryChange(t *testing.T) {
 			t.Fatalf("missing %+v; observed %+v", c, calls)
 		}
 	}
-	// Each change reaches the cache-bound observer before the process-wide
+	// Each change reaches the cache-bound observer before the subscribed
 	// one. Informers deliver concurrently, so compare counts per change kind
 	// rather than adjacency.
 	seen := map[observedCall]int{}
 	for _, c := range calls {
 		seen[c]++
-		if c.who == "global" && seen[observedCall{"cache", c.kind, c.op}] < seen[c] {
-			t.Fatalf("process-wide observer ran before the cache's own for %+v: %+v", c, calls)
+		if c.who == "subscriber" && seen[observedCall{"cache", c.kind, c.op}] < seen[c] {
+			t.Fatalf("subscriber ran before the cache's own for %+v: %+v", c, calls)
 		}
 	}
 

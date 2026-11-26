@@ -22,6 +22,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -142,10 +143,11 @@ func main() {
 		}
 	}
 
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{
-		State:   k8s.StateConnected,
-		Context: "fake-test",
-	})
+	if !k8s.AdmitStartup(context.Background(), k8s.Current(), k8s.ConnectionStatus{
+		State: k8s.StateConnected, Context: "fake-test",
+	}) {
+		log.Fatal("Could not admit the test connection")
+	}
 
 	if err := timeline.InitStore(timeline.DefaultStoreConfig()); err != nil {
 		log.Fatalf("InitStore: %v", err)

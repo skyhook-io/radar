@@ -22,7 +22,7 @@ import (
 func TestRequireHelmWriteAllowsRepositoryManagementWhileDisconnected(t *testing.T) {
 	t.Cleanup(k8s.SnapshotTestConnection())
 	k8s.RetireServingConnection()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "a"})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "a"})
 	admitted, err := k8s.CaptureServingConnection()
 	if err != nil {
 		t.Fatal(err)
@@ -30,7 +30,7 @@ func TestRequireHelmWriteAllowsRepositoryManagementWhileDisconnected(t *testing.
 	ctx := pkgauth.ContextWithUser(admitted.Bind(t.Context()), &pkgauth.User{Username: "alice"})
 	r := httptest.NewRequest(http.MethodPost, "/", nil).WithContext(ctx)
 	k8s.RetireServingConnection()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected})
 
 	rec := httptest.NewRecorder()
 	if !requireHelmWrite(rec, r, "") {
@@ -42,7 +42,7 @@ func TestRequireHelmWriteAllowsRepositoryManagementWhileDisconnected(t *testing.
 func TestStillAdmittedRefusesAWriteAfterTheConnectionChanged(t *testing.T) {
 	t.Cleanup(k8s.SnapshotTestConnection())
 	k8s.RetireServingConnection()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "a"})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "a"})
 	admitted, err := k8s.CaptureServingConnection()
 	if err != nil {
 		t.Fatal(err)
@@ -54,7 +54,7 @@ func TestStillAdmittedRefusesAWriteAfterTheConnectionChanged(t *testing.T) {
 		t.Fatalf("refused on the admitted connection: %d %s", rec.Code, rec.Body)
 	}
 	k8s.RetireServingConnection()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "b"})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "b"})
 	rec = httptest.NewRecorder()
 	if stillAdmitted(rec, r) || rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "context_changed") {
 		t.Fatalf("after a switch: %d %s", rec.Code, rec.Body)

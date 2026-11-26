@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -425,8 +424,6 @@ func TestOnForwardLost(t *testing.T) {
 	}
 }
 
-var registerSignalsOnce sync.Once
-
 // TestRediscoverySignalsThroughResourceCache drives the signals end to end:
 // objects written to the cluster reach the informer cache, its observer and
 // the worker, and discovery enumerates from that cache. The Service is older
@@ -442,17 +439,8 @@ func TestRediscoverySignalsThroughResourceCache(t *testing.T) {
 		t.Fatalf("InitScopedTestResourceCache: %v", err)
 	}
 	t.Cleanup(k8s.ResetTestState)
-	registerSignalsOnce.Do(RegisterRediscoverySignals)
-	c := &Client{k8sClient: cs, httpClient: &http.Client{Timeout: 2 * time.Second}}
-	clientMu.Lock()
-	saved := globalClient
-	globalClient = c
-	clientMu.Unlock()
-	t.Cleanup(func() {
-		clientMu.Lock()
-		globalClient = saved
-		clientMu.Unlock()
-	})
+	c := NewClient(cs, nil, "test", nil, false, k8s.GetResourceCache())
+	t.Cleanup(func() { _ = c.Close() })
 
 	ctx := context.Background()
 	svc := promService("monitoring", "prometheus")
@@ -501,11 +489,11 @@ func TestCachedServicesDeclinesPartialView(t *testing.T) {
 	}
 	t.Cleanup(k8s.ResetTestState)
 
-	if _, ok := (&Client{k8sClient: cs}).cachedServices(); ok {
+	if _, ok := (&Client{k8sClient: cs, cache: k8s.GetResourceCache()}).cachedServices(); ok {
 		t.Fatal("namespace-scoped Service cache must not stand in for the cluster")
 	}
 	if _, ok := (&Client{k8sClient: fake.NewClientset()}).cachedServices(); ok {
-		t.Fatal("a cache built from another cluster connection must not be used")
+		t.Fatal("a client with no captured cache must not use another connection’s cache")
 	}
 }
 
@@ -524,7 +512,7 @@ func TestCachedServicesUsesCacheBuiltFromInformerClient(t *testing.T) {
 	}
 	t.Cleanup(k8s.ResetTestState)
 
-	c := &Client{k8sClient: request}
+	c := &Client{k8sClient: request, cache: k8s.GetResourceCache()}
 	if c.cachedServiceLister() == nil {
 		t.Error("cachedServiceLister() = nil for a cache built from this connection's informer client")
 	}
