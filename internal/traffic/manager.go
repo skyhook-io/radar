@@ -133,7 +133,13 @@ func (m *Manager) detectSourcesLocked(ctx context.Context) (*SourcesResponse, er
 	epoch := m.metrics.BackendEpoch()
 	// Detect cluster info first
 	clusterInfo, err := m.detectClusterInfo(ctx)
+	if canceled := ctx.Err(); canceled != nil {
+		return nil, canceled
+	}
 	if err != nil {
+		if portforward.IsMemberClosed(ctx, err) {
+			return nil, err
+		}
 		log.Printf("[traffic] Warning: failed to detect cluster info: %v", err)
 		clusterInfo = &ClusterInfo{Platform: "generic"}
 	}
@@ -156,8 +162,11 @@ func (m *Manager) detectSourcesLocked(ctx context.Context) (*SourcesResponse, er
 			continue
 		}
 		result, err := source.Detect(ctx)
-		if err != nil && ctx.Err() != nil {
-			break // the request ended; nothing below is kept
+		if canceled := ctx.Err(); canceled != nil {
+			return nil, canceled
+		}
+		if portforward.IsMemberClosed(ctx, err) {
+			return nil, err
 		}
 		if err != nil {
 			log.Printf("[traffic] Error detecting %s: %v", name, err)
@@ -678,19 +687,17 @@ func (m *Manager) Connect(ctx context.Context) (*portforward.ConnectionInfo, err
 		}, nil
 	}
 
-	switch s := source.(type) {
-	case *CarettaSource:
-		return s.Connect(ctx, contextName)
-	case *HubbleSource:
-		return s.Connect(ctx, contextName)
-	case *IstioSource:
-		return s.Connect(ctx, contextName)
-	case *BeylaSource:
-		return s.Connect(ctx, contextName)
-	default:
-		// For sources without Connect support, just report connected.
+	connector, ok := source.(interface {
+		Connect(context.Context, string) (*portforward.ConnectionInfo, error)
+	})
+	if !ok {
 		return &portforward.ConnectionInfo{Connected: true}, nil
 	}
+	info, err := connector.Connect(ctx, contextName)
+	if m.lifetime != nil && m.lifetime.Err() != nil {
+		return nil, portforward.ErrClosed
+	}
+	return info, err
 }
 
 // ConnectionReporter is implemented by sources that can report their own live

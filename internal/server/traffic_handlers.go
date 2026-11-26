@@ -13,6 +13,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/portforward"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/traffic"
 )
@@ -117,6 +118,10 @@ func (s *Server) handleGetTrafficSources(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		if ctx.Err() != nil {
 			return // the client left
+		}
+		if portforward.IsMemberClosed(ctx, err) {
+			s.writeError(w, http.StatusServiceUnavailable, "Traffic connection closed. Retry the request")
+			return
 		}
 		log.Printf("[traffic] Error detecting sources: %v", err)
 		s.writeError(w, http.StatusInternalServerError, "Failed to detect traffic sources")
@@ -590,6 +595,13 @@ func (s *Server) handleTrafficConnect(w http.ResponseWriter, r *http.Request) {
 
 	connInfo, err := manager.Connect(ctx)
 	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		if portforward.IsMemberClosed(ctx, err) {
+			s.writeError(w, http.StatusServiceUnavailable, "Traffic connection closed. Retry the request")
+			return
+		}
 		log.Printf("[traffic] Error connecting: %v", err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return

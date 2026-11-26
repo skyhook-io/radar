@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 
 	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/config"
@@ -95,7 +96,7 @@ func (s Set) RightsizingScans() *prometheus.RightsizingScanManager {
 	return s.unavailableScans
 }
 
-func build(conn *k8s.Connection, settings Settings, previous *Set) *Set {
+func build(conn *k8s.Connection, settings Settings, previous *Set, rebuild []config.Integration) *Set {
 	if previous == nil {
 		previous = &Set{Helm: helm.NewUninstallMemo()}
 	}
@@ -103,7 +104,7 @@ func build(conn *k8s.Connection, settings Settings, previous *Set) *Set {
 	s.settings = settings
 	old := previous.settings
 	inCluster := k8s.IsInCluster()
-	newMetrics := previous.Traffic == nil || !reflect.DeepEqual(settings.Metrics, old.Metrics) ||
+	newMetrics := previous.Traffic == nil || slices.Contains(rebuild, config.IntegrationMetrics) || !reflect.DeepEqual(settings.Metrics, old.Metrics) ||
 		errorText(settings.metricsError()) != errorText(old.metricsError()) || !sameRelayBackend(settings.relay, old.relay) ||
 		!reflect.DeepEqual(settings.Scope, old.Scope) || settings.scopeCleared != old.scopeCleared || !reflect.DeepEqual(settings.observeConfig, old.observeConfig)
 	if newMetrics {
@@ -128,7 +129,7 @@ func build(conn *k8s.Connection, settings Settings, previous *Set) *Set {
 		}
 		s.Traffic = traffic.NewConnectionManager(conn, s.Metrics, settings.BeylaSelector)
 	}
-	if previous.ArgoCD == nil || settings.ArgoCD != old.ArgoCD ||
+	if previous.ArgoCD == nil || slices.Contains(rebuild, config.IntegrationArgoCD) || settings.ArgoCD != old.ArgoCD ||
 		settings.ArgoTokenBinding != old.ArgoTokenBinding || settings.ArgoTokenContext != old.ArgoTokenContext ||
 		errorText(settings.ArgoError) != errorText(old.ArgoError) || settings.ArgoEnv != old.ArgoEnv {
 		s.ArgoCD = argocd.NewConnectionManager(conn, inCluster, conn.ContextBinding())
@@ -141,7 +142,7 @@ func build(conn *k8s.Connection, settings Settings, previous *Set) *Set {
 			s.ArgoCD.RestoreConfig(settings.ArgoCD.URL, settings.ArgoCD.Token, settings.ArgoCD.InsecureTLS, settings.ArgoTokenContext, settings.ArgoTokenBinding)
 		}
 	}
-	if newMetrics || previous.Cost == nil || settings.Cost != old.Cost ||
+	if newMetrics || previous.Cost == nil || slices.Contains(rebuild, config.IntegrationCost) || settings.Cost != old.Cost ||
 		errorText(settings.CostError) != errorText(old.CostError) || settings.CostEnv != old.CostEnv {
 		s.Cost = opencost.NewManager(conn, inCluster, s.Metrics, settings.metricsError())
 		if err := s.Cost.ConfigureResolved(settings.Cost, settings.CostEnv, settings.CostError); err != nil {

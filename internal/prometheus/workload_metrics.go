@@ -117,7 +117,7 @@ func (h Routes) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 				// The optional reader exhausted our budget. Return the conventional answer.
 				g = nil
 			} else if err != nil {
-				writeChartError(w, err)
+				writeChartError(w, r.Context(), err)
 				return
 			}
 		}

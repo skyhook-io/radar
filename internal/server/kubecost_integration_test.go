@@ -7,12 +7,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/connectionruntime"
+	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/k8s"
 	internalopencost "github.com/skyhook-io/radar/internal/opencost"
+	pkgopencost "github.com/skyhook-io/radar/pkg/opencost"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
@@ -22,6 +25,90 @@ func setupKubecostIntegrationTest(t *testing.T) *Server {
 	t.Setenv("HOME", dir)
 	t.Setenv("USERPROFILE", dir)
 	return serverWithTestIntegrations(t, connectionruntime.Settings{})
+}
+
+func TestSaveSameKubecostConfigReplacesMemberInBackoff(t *testing.T) {
+	for _, mode := range []string{"shared", "local profile"} {
+		t.Run(mode, func(t *testing.T) {
+			var ready atomic.Bool
+			var calls atomic.Int32
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				if !ready.Load() {
+					w.WriteHeader(http.StatusBadGateway)
+					return
+				}
+				_, _ = w.Write([]byte(`{"code":200,"data":[{"prod-a":{"properties":{"cluster":"prod-a"}}}]}`))
+			}))
+			defer backend.Close()
+			clusterID := "prod-a"
+			var s *Server
+			var save func() *httptest.ResponseRecorder
+			if mode == "shared" {
+				s = setupKubecostIntegrationTest(t)
+				editTestIntegrations(t, s, func(settings *connectionruntime.Settings) {
+					settings.Cost = internalopencost.ManagerConfig{Source: internalopencost.SourceKubecost, URL: backend.URL, ClusterID: clusterID, ClusterIDContext: k8s.Current().ContextName()}
+				})
+				save = func() *httptest.ResponseRecorder {
+					rec := httptest.NewRecorder()
+					body := fmt.Sprintf(`{"source":"kubecost","url":%q,"clusterId":%q}`, backend.URL, clusterID)
+					s.handleApplyCostSource(rec, httptest.NewRequest(http.MethodPut, "/api/integrations/cost", strings.NewReader(body)))
+					return rec
+				}
+			} else {
+				s = setupLocalProfileTest(t)
+				target, err := k8s.CurrentProfileTarget()
+				if err != nil {
+					t.Fatal(err)
+				}
+				kind := config.IntegrationCost
+				req := connections.Update{Target: target, Kind: kind, Action: "save", URL: &backend.URL, ClusterID: &clusterID, Revision: s.localConnections.Resolve(target, kind, false).View.Revision}
+				pending, err := s.localConnections.Prepare(target, req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := s.localConnections.Commit(t.Context(), pending); err != nil {
+					t.Fatal(err)
+				}
+				s.integrationRuntime.RefreshProfiles()
+				save = func() *httptest.ResponseRecorder {
+					rec := httptest.NewRecorder()
+					req.Revision = s.localConnections.Resolve(target, kind, false).View.Revision
+					body, err := json.Marshal(req)
+					if err != nil {
+						t.Fatal(err)
+					}
+					s.handleUpdateLocalConnection(rec, httptest.NewRequest(http.MethodPut, "/api/integrations/connections", strings.NewReader(string(body))))
+					return rec
+				}
+			}
+
+			before := currentTestIntegrations()
+			if _, err := before.Cost.Selected(t.Context()); err == nil || calls.Load() == 0 {
+				t.Fatalf("expected a failed backend probe: %v, calls=%d", err, calls.Load())
+			}
+			ready.Store(true)
+			previousCalls := calls.Load()
+			if _, err := before.Cost.Selected(t.Context()); err == nil || calls.Load() != previousCalls {
+				t.Fatalf("expected the live member to be in backoff: %v", err)
+			}
+			if rec := save(); rec.Code != http.StatusOK {
+				t.Fatalf("save: %d %s", rec.Code, rec.Body.String())
+			}
+			after := currentTestIntegrations()
+			if after.Cost == before.Cost || after.Metrics != before.Metrics || after.ArgoCD != before.ArgoCD || after.Traffic != before.Traffic {
+				t.Fatal("save should replace only the cost member")
+			}
+			conn, err := after.Cost.Selected(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			previousCalls = calls.Load()
+			if _, err := conn.Client.GetAllocation(t.Context(), pkgopencost.KubecostAllocationOptions{}); err != nil || calls.Load() <= previousCalls {
+				t.Fatalf("next read did not reach Kubecost: %v", err)
+			}
+		})
+	}
 }
 
 func TestApplyCostSourceRejectsCredentialBearingURL(t *testing.T) {

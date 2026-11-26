@@ -2,6 +2,7 @@ package portforward
 
 import (
 	"context"
+	"errors"
 	"sync"
 )
 
@@ -59,4 +60,8 @@ func WithLifetime(ctx, lifetime context.Context) (context.Context, context.Cance
 		stop()
 		cancel()
 	}
+}
+
+func IsMemberClosed(ctx context.Context, err error) bool {
+	return ctx.Err() == nil && (errors.Is(err, context.Canceled) || errors.Is(err, ErrClosed))
 }

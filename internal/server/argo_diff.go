@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/portforward"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/argoapi"
 	"github.com/skyhook-io/radar/pkg/gitops"
@@ -166,7 +168,7 @@ func (s *Server) handleArgoResourceDiff(w http.ResponseWriter, r *http.Request) 
 		AppNamespace: appNamespace,
 	})
 	if err != nil {
-		s.writeArgoDiffError(w, appNamespace, appName, manager, err)
+		s.writeArgoDiffError(w, r.Context(), appNamespace, appName, manager, err)
 		return
 	}
 
@@ -417,12 +419,11 @@ func manifestToYAML(obj map[string]any) string {
 
 const argoConnectingMessage = "Radar is still connecting to Argo CD. Try again in a few seconds."
 
-// writeArgoDiffError maps managed-resources fetch failures to HTTP status
-// codes. Token problems (either the manager's auth verification or an
-// upstream 401/403) are 403 with a re-auth hint; unreachable is 503;
-// everything else is a logged 500.
-func (s *Server) writeArgoDiffError(w http.ResponseWriter, namespace, name string, manager *argocd.Manager, err error) {
+// writeArgoDiffError keeps upstream response bodies out of the client error.
+func (s *Server) writeArgoDiffError(w http.ResponseWriter, ctx context.Context, namespace, name string, manager *argocd.Manager, err error) {
 	switch {
+	case portforward.IsMemberClosed(ctx, err):
+		s.writeError(w, http.StatusServiceUnavailable, "Argo CD connection closed. Retry the request")
 	case errors.Is(err, argocd.ErrTokenBindingUpgrade):
 		s.writeError(w, http.StatusForbidden, "Re-enter the Argo CD token in Settings to bind it to this kubeconfig source.")
 	case errors.Is(err, argocd.ErrTokenInvalid) || errors.Is(err, argoapi.ErrUnauthorized):
@@ -659,6 +660,8 @@ func (s *Server) handleArgoRevisionMetadata(w http.ResponseWriter, r *http.Reque
 	})
 	if err != nil {
 		switch {
+		case portforward.IsMemberClosed(r.Context(), err):
+			s.writeError(w, http.StatusServiceUnavailable, "Argo CD connection closed. Retry the request")
 		case errors.Is(err, argocd.ErrTokenBindingUpgrade):
 			s.writeError(w, http.StatusForbidden, "Re-enter the Argo CD token in Settings to bind it to this kubeconfig source.")
 		case errors.Is(err, argocd.ErrTokenInvalid) || errors.Is(err, argoapi.ErrUnauthorized):

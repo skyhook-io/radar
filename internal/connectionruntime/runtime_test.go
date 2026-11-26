@@ -322,6 +322,72 @@ func TestRejectedEditClosesOnlyNewMembers(t *testing.T) {
 	}
 }
 
+func TestCommitSucceedsWhenConnectionRetiresDuringPersist(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Cleanup(k8s.SnapshotTestConnection())
+	k8s.SetTestConfig(&rest.Config{Host: "http://127.0.0.1:1"})
+	runtime := New(nil, Settings{})
+	before := admitRuntime(t, runtime)
+	t.Cleanup(k8s.RetireServingConnection)
+
+	const metricsURL = "http://127.0.0.1:1/metrics"
+	const argoURL = "http://127.0.0.1:1/argo"
+	edit := runtime.PrepareShared(k8s.Current(), runtime.Snapshot(), func(settings *Settings) {
+		settings.Metrics.URL = metricsURL
+		settings.ArgoCD.URL = argoURL
+	})
+	prepared := edit.Set()
+	if prepared.Metrics == before.Metrics || prepared.ArgoCD == before.ArgoCD || prepared.Cost == before.Cost || prepared.Traffic == before.Traffic {
+		t.Fatal("expected a replacement for each changed member")
+	}
+	if err := edit.Commit(func() error {
+		_, err := config.Update(func(c *config.Config) { c.PrometheusURL, c.ArgoCDURL = metricsURL, argoURL })
+		k8s.RetireServingConnection()
+		return err
+	}); err != nil {
+		t.Fatalf("save reported failure after persistence: %v", err)
+	}
+	if !prepared.Metrics.Closed() {
+		t.Fatal("unpublished metrics member is still open")
+	}
+	if err := prepared.ArgoCD.Probe(t.Context()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("unpublished Argo CD member is still open: %v", err)
+	}
+	if _, err := prepared.Cost.Selected(t.Context()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("unpublished cost member is still open: %v", err)
+	}
+	if _, err := prepared.Traffic.Connect(t.Context()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("unpublished traffic member is still open: %v", err)
+	}
+	next := admitRuntime(t, runtime)
+	gotURL, _ := next.Metrics.CurrentConfig()
+	saved := config.Load()
+	if saved.PrometheusURL != metricsURL || saved.ArgoCDURL != argoURL || gotURL != saved.PrometheusURL || next.settings.ArgoCD.URL != saved.ArgoCDURL {
+		t.Fatalf("next admission used Metrics %q and Argo CD %q, saved URLs are %q and %q", gotURL, next.settings.ArgoCD.URL, saved.PrometheusURL, saved.ArgoCDURL)
+	}
+	if next.Metrics == prepared.Metrics || next.Metrics.Closed() || next.ArgoCD == prepared.ArgoCD || next.Cost == prepared.Cost || next.Traffic == prepared.Traffic {
+		t.Fatal("next admission reused a discarded member")
+	}
+}
+
+func TestOfflineMetricsSaveKeepsScopeClearedNotice(t *testing.T) {
+	t.Cleanup(k8s.SnapshotTestConnection())
+	k8s.RetireServingConnection()
+	k8s.SetTestConfig(&rest.Config{Host: "http://127.0.0.1:1"})
+	runtime := New(nil, Settings{Scope: prom.WorkloadMetricsScope{SingleCluster: true}})
+	edit := runtime.PrepareShared(k8s.Current(), runtime.Snapshot(), func(settings *Settings) {
+		settings.Metrics.URL = "http://127.0.0.1:1/metrics"
+	})
+	if err := edit.Commit(func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	next := admitRuntime(t, runtime)
+	t.Cleanup(k8s.RetireServingConnection)
+	if !next.settings.scopeCleared || next.settings.Scope.SingleCluster {
+		t.Fatal("next admission lost the scope-cleared notice")
+	}
+}
+
 func TestRescopeAndRollbackReplaceTheIntegrationSet(t *testing.T) {
 	t.Cleanup(k8s.SnapshotTestConnection())
 	t.Cleanup(k8s.SetTestLocalMode())

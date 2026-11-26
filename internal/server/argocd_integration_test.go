@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -111,6 +112,51 @@ func putArgoCD(t *testing.T, s *Server, body string) *httptest.ResponseRecorder 
 	w := httptest.NewRecorder()
 	s.handleApplyArgoCDConfig(w, req)
 	return w
+}
+
+func TestApplySameArgoCDConfigReplacesMemberInBackoff(t *testing.T) {
+	s := setupArgoCDTest(t)
+	var ready atomic.Bool
+	var reads atomic.Int32
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !ready.Load() {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		if r.URL.Path == "/api/version" {
+			_, _ = w.Write([]byte(`{"Version":"v3.0.0"}`))
+			return
+		}
+		reads.Add(1)
+		_, _ = w.Write([]byte(`{"items":[]}`))
+	}))
+	defer backend.Close()
+	editTestIntegrations(t, s, func(settings *connectionruntime.Settings) { settings.ArgoCD.URL = backend.URL })
+	previous := currentTestIntegrations()
+	query := argoapi.ManagedResourcesQuery{AppNamespace: "argocd", AppName: "demo"}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		_, err := previous.ArgoCD.ManagedResourcesCached(t.Context(), query)
+		if err != nil && strings.Contains(err.Error(), "retry throttled") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("live member did not enter backoff: %v", err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	ready.Store(true)
+	w := putArgoCD(t, s, `{"argoCdUrl":"`+backend.URL+`"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("save: %d %s", w.Code, w.Body.String())
+	}
+	after := currentTestIntegrations()
+	if after.ArgoCD == previous.ArgoCD || after.Metrics != previous.Metrics || after.Cost != previous.Cost || after.Traffic != previous.Traffic {
+		t.Fatal("save should replace only the Argo CD member")
+	}
+	if _, err := after.ArgoCD.ManagedResourcesCached(t.Context(), query); err != nil || reads.Load() != 1 {
+		t.Fatalf("next read did not reach Argo CD: %v, reads=%d", err, reads.Load())
+	}
 }
 
 func TestApplyArgoCDConfig_ReplaceToken(t *testing.T) {

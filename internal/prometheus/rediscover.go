@@ -125,21 +125,35 @@ func (c *Client) requestRediscovery(verifyAddr, reason string) {
 // rediscoveryLoop drains the queue and exits when it is empty. Only one runs
 // per Client at a time.
 func (c *Client) rediscoveryLoop(wake chan struct{}) {
+	var done <-chan struct{}
+	if c.lifetime != nil {
+		done = c.lifetime.Done()
+	}
+	r := &c.rediscovery
 	delay := rediscoveryDebounce
 	followUp := 0
 	signal := "" // the reason that started the current follow-up budget
+worker:
 	for {
+		timer := time.NewTimer(delay)
 		select {
-		case <-time.After(delay):
+		case <-done:
+			timer.Stop()
+			break worker
+		case <-timer.C:
 		case <-wake:
+			timer.Stop()
 			// A new signal: it gets its own debounce and a fresh budget
 			// rather than the remainder of an older signal's follow-up wait.
 			followUp = 0
-			time.Sleep(rediscoveryDebounce)
+			if !waitRediscoveryDelay(done, rediscoveryDebounce) {
+				break worker
+			}
 		}
-		c.waitForDiscoveryIdle()
+		if !c.waitForDiscoveryIdle(done) {
+			break
+		}
 
-		r := &c.rediscovery
 		r.mu.Lock()
 		if !r.pending {
 			r.running = false
@@ -174,13 +188,28 @@ func (c *Client) rediscoveryLoop(wake chan struct{}) {
 		}
 		r.mu.Unlock()
 	}
+	r.mu.Lock()
+	r.running = false
+	r.pending = false
+	r.mu.Unlock()
+}
+
+func waitRediscoveryDelay(done <-chan struct{}, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 // waitForDiscoveryIdle waits until no discovery run is in flight and any
 // recent failure has aged past failedDiscoveryCacheTTL, rechecking after each
 // wait because another caller may start a run or record a failure meanwhile.
 // Every run ends within discoveryTimeout, so the wait is bounded.
-func (c *Client) waitForDiscoveryIdle() {
+func (c *Client) waitForDiscoveryIdle(lifetimeDone <-chan struct{}) bool {
 	for {
 		c.mu.RLock()
 		done := c.flightDone
@@ -188,20 +217,26 @@ func (c *Client) waitForDiscoveryIdle() {
 		failed := c.lastDiscoverErr != nil
 		retired := c.retired
 		c.mu.RUnlock()
-		if retired {
-			return
+		if retired || c.Closed() {
+			return false
 		}
 		if done != nil {
-			<-done
+			select {
+			case <-lifetimeDone:
+				return false
+			case <-done:
+			}
 			continue
 		}
 		if failed && !failedAt.IsZero() {
 			if wait := time.Until(failedAt.Add(failedDiscoveryCacheTTL)); wait > 0 {
-				time.Sleep(wait)
+				if !waitRediscoveryDelay(lifetimeDone, wait) {
+					return false
+				}
 				continue
 			}
 		}
-		return
+		return true
 	}
 }
 

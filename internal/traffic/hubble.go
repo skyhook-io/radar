@@ -401,7 +401,7 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 		}, nil
 	}
 	if h.forwards.Closed() {
-		return &portforward.ConnectionInfo{Error: portforward.ErrClosed.Error()}, nil
+		return nil, portforward.ErrClosed
 	}
 
 	namespace := h.relayNamespace
@@ -504,6 +504,9 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 		}
 	}
 	if err != nil {
+		if portforward.IsMemberClosed(ctx, err) {
+			return nil, err
+		}
 		if info := retryDirectAfterSkip(); info != nil {
 			return info, nil
 		}

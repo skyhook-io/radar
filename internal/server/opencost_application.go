@@ -141,9 +141,10 @@ func (s *Server) handleOpenCostApplicationTrend(w http.ResponseWriter, r *http.R
 	client, connectionErr := set.MetricsClient()
 	if connectionErr != nil {
 		resp := pkgopencost.ComputeApplicationCostTrendFromProm(r.Context(), nil, pkgopencost.ApplicationTrendOptions{
-			Range:       req.Range,
-			Workloads:   refs,
-			Unavailable: unavailable,
+			Range:             req.Range,
+			Workloads:         refs,
+			Unavailable:       unavailable,
+			UnavailableReason: internalopencost.ConnectionFailureReason(connectionErr),
 		})
 		resp.Currency = set.Currency.Resolve()
 		resp.Source = "prometheus"

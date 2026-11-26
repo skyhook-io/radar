@@ -185,6 +185,39 @@ func TestConcurrentRefreshDoesNotFailReaders(t *testing.T) {
 	wg.Wait()
 }
 
+func TestRefreshProfilesKeepsMembersForUnchangedFile(t *testing.T) {
+	s := setupLocalProfileTest(t)
+	target, err := k8s.CurrentProfileTarget()
+	if err != nil {
+		t.Fatal(err)
+	}
+	kind := config.IntegrationMetrics
+	url := "http://127.0.0.1:1/metrics"
+	req := connections.Update{Target: target, Kind: kind, Action: "save", URL: &url, Revision: s.localConnections.Resolve(target, kind, false).View.Revision}
+	pending, err := s.localConnections.Prepare(target, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.localConnections.Commit(t.Context(), pending); err != nil {
+		t.Fatal(err)
+	}
+	s.integrationRuntime.RefreshProfiles()
+	before := currentTestIntegrations()
+	if before.Metrics == nil || before.ArgoCD == nil || before.Cost == nil || before.Traffic == nil {
+		t.Fatal("expected all four integration members")
+	}
+	if got, _ := before.Metrics.CurrentConfig(); got != url {
+		t.Fatalf("refresh used metrics URL %q, want %q", got, url)
+	}
+	for i := range 5 {
+		s.integrationRuntime.RefreshProfiles()
+		after := currentTestIntegrations()
+		if after.Metrics != before.Metrics || after.ArgoCD != before.ArgoCD || after.Cost != before.Cost || after.Traffic != before.Traffic {
+			t.Fatalf("refresh %d replaced a live member with unchanged settings", i+1)
+		}
+	}
+}
+
 func TestArgoCandidateDoesNotBlockReadersAndCannotCommitAfterSwitch(t *testing.T) {
 	s := setupLocalProfileTest(t)
 	target, _ := k8s.CurrentProfileTarget()

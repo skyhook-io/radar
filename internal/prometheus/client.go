@@ -375,7 +375,7 @@ func (c *Client) GetStatus() prom.Status {
 	}
 
 	if c.relay != nil {
-		src := c.relay.status()
+		src := c.relay.status(c.lifetime)
 		// An unavailable relay source reports not connected, so status
 		// never says "Connected" while every chart fails; Address and
 		// Source still say which backend it is and why.
@@ -441,7 +441,7 @@ func (c *Client) EnsureConnected(ctx context.Context) (string, string, error) {
 	c.mu.RLock()
 	if c.retired {
 		c.mu.RUnlock()
-		return "", "", errDiscoverySuperseded
+		return "", "", portforward.ErrClosed
 	}
 	base, forward := c.baseURL, c.forward
 	bp := c.basePath
@@ -636,21 +636,18 @@ func (c *Client) discoverShared(ctx context.Context) (string, string, error) {
 		case <-ctx.Done():
 			return "", "", ctx.Err()
 		case res := <-ch:
-			// A retired client (replaced by Reinitialize) can never make progress,
-			// so it must return the error rather than retry — retrying would spin
-			// forever since retirement is permanent and gen never advances.
-			c.mu.RLock()
-			retired := c.retired
-			c.mu.RUnlock()
+			if c.Closed() {
+				return "", "", portforward.ErrClosed
+			}
 
 			if res.Err != nil {
 				// A supersession — a config change cancelled the detached flight —
 				// is not the caller's failure. While the caller's own context is
-				// live (and this client isn't retired), retry under the new
+				// live, retry under the new
 				// generation. context.Canceled here comes only from the flight's
 				// detached context (Reset/Reinitialize), never the caller's; a
 				// genuine hang surfaces as DeadlineExceeded and is returned.
-				if ctx.Err() == nil && !retired && (errors.Is(res.Err, errDiscoverySuperseded) || errors.Is(res.Err, context.Canceled)) {
+				if ctx.Err() == nil && (errors.Is(res.Err, errDiscoverySuperseded) || errors.Is(res.Err, context.Canceled)) {
 					continue
 				}
 				return "", "", res.Err
@@ -665,10 +662,13 @@ func (c *Client) discoverShared(ctx context.Context) (string, string, error) {
 			live := c.connectionLiveLocked(r, gen)
 			c.mu.Unlock()
 			if !live {
-				if ctx.Err() == nil && !retired {
+				if err := ctx.Err(); err != nil {
+					return "", "", err
+				}
+				if !c.Closed() {
 					continue
 				}
-				return "", "", errDiscoverySuperseded
+				return "", "", portforward.ErrClosed
 			}
 			return r.addr, r.basePath, nil
 		}

@@ -72,7 +72,7 @@ func (r *Runtime) Build(_ context.Context, conn *k8s.Connection) (io.Closer, fun
 	if settings.scopeCleared {
 		r.ClearLaunchScope()
 	}
-	s := build(conn, settings, nil)
+	s := build(conn, settings, nil, nil)
 	return s, func() { s.start(nil) }
 }
 
@@ -122,9 +122,9 @@ func (e Edit) Discard() {
 	e.after.closeDisplaced(e.before)
 }
 
-func (r *Runtime) PrepareProfiles(conn *k8s.Connection, target k8s.ProfileTarget, selected map[config.Integration]connections.Selection) Edit {
+func (r *Runtime) PrepareProfiles(conn *k8s.Connection, target k8s.ProfileTarget, selected map[config.Integration]connections.Selection, rebuild ...config.Integration) Edit {
 	edit := r.captureEdit(conn)
-	r.prepare(&edit, r.profiles(conn, target, selected))
+	r.prepare(&edit, r.profiles(conn, target, selected), rebuild)
 	return edit
 }
 
@@ -132,14 +132,14 @@ func (r *Runtime) captureEdit(conn *k8s.Connection) Edit {
 	return Edit{runtime: r, conn: conn, before: ownedSetFor(conn), id: k8s.ServingConnectionID()}
 }
 
-func (r *Runtime) prepare(edit *Edit, settings Settings) {
+func (r *Runtime) prepare(edit *Edit, settings Settings, rebuild []config.Integration) {
+	edit.clearScope = settings.scopeCleared
 	if edit.id == "" {
 		return
 	}
-	edit.clearScope = settings.scopeCleared
 	edit.after = edit.before
-	if edit.before == nil || !sameSettings(settings, edit.before.settings) {
-		edit.after = build(edit.conn, settings, edit.before)
+	if len(rebuild) != 0 || edit.before == nil || !sameSettings(settings, edit.before.settings) {
+		edit.after = build(edit.conn, settings, edit.before, rebuild)
 	}
 }
 
@@ -152,7 +152,7 @@ func (e Edit) Commit(persist func() error) error {
 	return nil
 }
 
-func (e Edit) commitLocked(persist func() error) error {
+func (e *Edit) commitLocked(persist func() error) error {
 	if (e.base != nil && e.runtime.Snapshot() != e.base) || k8s.Current() != e.conn || k8s.ServingConnectionID() != e.id || ownedSetFor(e.conn) != e.before {
 		return k8s.ErrContextConfigurationBusy
 	}
@@ -170,7 +170,9 @@ func (e Edit) commitLocked(persist func() error) error {
 		before = e.before
 	}
 	if e.after != nil && e.after != e.before && !k8s.ReplaceIntegrations(e.conn, before, e.after) {
-		return k8s.ErrContextConfigurationBusy
+		// Retirement won after persistence. The next admission reads the saved settings.
+		e.Discard()
+		e.before, e.after = nil, nil
 	}
 	return nil
 }
@@ -198,11 +200,11 @@ func (r *Runtime) RefreshProfiles() {
 		return
 	}
 	edit := Edit{runtime: r, conn: conn, before: before, id: id}
-	r.prepare(&edit, settings)
+	r.prepare(&edit, settings, nil)
 	_ = edit.Commit(func() error { return nil })
 }
 
-func (r *Runtime) PrepareShared(conn *k8s.Connection, base *Settings, update func(*Settings)) Edit {
+func (r *Runtime) PrepareShared(conn *k8s.Connection, base *Settings, update func(*Settings), rebuild ...config.Integration) Edit {
 	edit := r.captureEdit(conn)
 	next := *base
 	update(&next)
@@ -217,7 +219,7 @@ func (r *Runtime) PrepareShared(conn *k8s.Connection, base *Settings, update fun
 		settings.Scope = prom.WorkloadMetricsScope{}
 		settings.scopeCleared = r.scopeConfigured
 	}
-	r.prepare(&edit, settings)
+	r.prepare(&edit, settings, rebuild)
 	if !sameSettings(next, *base) {
 		edit.next = &next
 	}

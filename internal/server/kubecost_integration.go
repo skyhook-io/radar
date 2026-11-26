@@ -14,6 +14,7 @@ import (
 	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/k8s"
 	internalopencost "github.com/skyhook-io/radar/internal/opencost"
+	"github.com/skyhook-io/radar/internal/portforward"
 	"github.com/skyhook-io/radar/pkg/urlutil"
 )
 
@@ -98,9 +99,9 @@ func (s *Server) handleApplyCostSource(w http.ResponseWriter, r *http.Request) {
 		ClusterID:        clusterID,
 		ClusterIDContext: clusterIDContext,
 	}
-	edit := s.integrationRuntime.PrepareShared(conn, base, func(next *connectionruntime.Settings) { next.Cost = candidate })
+	edit := s.integrationRuntime.PrepareShared(conn, base, func(next *connectionruntime.Settings) { next.Cost = candidate }, config.IntegrationCost)
 	manager := edit.Set().Cost
-	if manager == nil || manager == connectionruntime.SetFor(conn).Cost {
+	if manager == nil {
 		metrics, metricsErr := connectionruntime.SetFor(conn).MetricsClient()
 		manager = internalopencost.NewManager(conn, k8s.IsInCluster(), metrics, metricsErr)
 		defer manager.Close()
@@ -125,6 +126,10 @@ func (s *Server) handleApplyCostSource(w http.ResponseWriter, r *http.Request) {
 	}
 	if connectErr != nil {
 		edit.Discard()
+		if portforward.IsMemberClosed(ctx, connectErr) {
+			s.writeError(w, http.StatusServiceUnavailable, "Cost connection closed. Retry the request")
+			return
+		}
 		log.Printf("[opencost] Kubecost configuration probe failed: %s", sanitizeForLog(connectErr.Error()))
 		s.writeError(w, http.StatusBadRequest, kubecostConnectionGuidance(connectErr, apiKey != ""))
 		return

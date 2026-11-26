@@ -184,9 +184,9 @@ func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request)
 	edit := s.integrationRuntime.PrepareShared(conn, base, func(next *connectionruntime.Settings) {
 		next.ArgoCD = argo
 		next.ArgoTokenContext, next.ArgoTokenBinding = tokenContext, tokenBinding
-	})
+	}, config.IntegrationArgoCD)
 	manager := edit.Set().ArgoCD
-	if manager == nil || manager == connectionruntime.SetFor(conn).ArgoCD {
+	if manager == nil {
 		manager = argocd.NewConnectionManager(conn, k8s.IsInCluster(), conn.ContextBinding())
 		manager.RestoreConfig(rawURL, token, body.ArgoCDInsecureTLS, tokenContext, tokenBinding)
 		defer manager.Close()
@@ -195,6 +195,10 @@ func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request)
 	defer cancel()
 	if err := manager.Probe(ctx); err != nil {
 		edit.Discard()
+		if portforward.IsMemberClosed(ctx, err) {
+			s.writeError(w, http.StatusServiceUnavailable, "Argo CD connection closed. Retry the request")
+			return
+		}
 		log.Printf("[argocd] Probe of candidate settings failed: %s", sanitizeForLog(manager.RedactToken(err.Error())))
 		switch {
 		case errors.Is(err, argocd.ErrTokenBindingUpgrade):

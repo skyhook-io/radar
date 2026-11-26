@@ -284,7 +284,7 @@ func BindTransport(lifetime context.Context, t prom.Transport) prom.Transport {
 }
 
 // status returns the relay's source with its latest health.
-func (st *relayState) status() prom.MetricsSource {
+func (st *relayState) status(lifetime context.Context) prom.MetricsSource {
 	st.mu.Lock()
 	src := st.source
 	st.mu.Unlock()
@@ -297,7 +297,7 @@ func (st *relayState) status() prom.MetricsSource {
 		src.Unavailable, src.Error = st.cfg.Health()
 	}
 	if src.Unavailable {
-		st.probeHealth()
+		st.probeHealth(lifetime)
 	}
 	return src
 }
@@ -306,7 +306,7 @@ func (st *relayState) status() prom.MetricsSource {
 // at most once per relayHealthProbeInterval. Health clears only when a query
 // succeeds, and the UI stops querying while status says unavailable, so
 // without this probe the state would never clear.
-func (st *relayState) probeHealth() {
+func (st *relayState) probeHealth(lifetime context.Context) {
 	now := time.Now()
 	st.mu.Lock()
 	if !st.lastProbe.IsZero() && now.Sub(st.lastProbe) < relayHealthProbeInterval {
@@ -316,7 +316,9 @@ func (st *relayState) probeHealth() {
 	st.lastProbe = now
 	st.mu.Unlock()
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), relayHealthProbeTimeout)
+		ctx, release := portforward.WithLifetime(context.Background(), lifetime)
+		defer release()
+		ctx, cancel := context.WithTimeout(ctx, relayHealthProbeTimeout)
 		defer cancel()
 		t := st.cfg.NewTransport(relayHealthProbeTimeout, 0)
 		// The OpenObserve transports scope vector(1) to the cluster; the

@@ -580,3 +580,31 @@ func TestRediscovery_NewSignalInterruptsFollowUpWait(t *testing.T) {
 	}
 	waitIdle(t, c)
 }
+
+func TestCloseStopsRediscoveryFollowUpWait(t *testing.T) {
+	runs := stubRediscovery(t, func(string) error { return errPrometheusUnreachable })
+	rediscoveryFollowUps = []time.Duration{time.Minute}
+	c := NewClient(nil, nil, "test", nil, false, nil)
+	t.Cleanup(func() { _ = c.Close() })
+	c.requestRediscovery("", "service created")
+	select {
+	case <-runs:
+	case <-time.After(time.Second):
+		t.Fatal("rediscovery did not run")
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		c.rediscovery.mu.Lock()
+		waiting := c.rediscovery.pending && c.rediscovery.running
+		c.rediscovery.mu.Unlock()
+		if waiting {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("rediscovery did not queue a follow-up")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	_ = c.Close()
+	waitIdle(t, c)
+}

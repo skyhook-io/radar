@@ -108,7 +108,14 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 			return err
 		}
 		if !metadata {
-			edit = s.integrationRuntime.PrepareProfiles(build, target, pending.Selected)
+			var rebuild []config.Integration
+			switch {
+			case request.Action == "reconfirm":
+				rebuild = request.Kinds
+			case pending.Probe && (request.Kind == config.IntegrationArgoCD || request.Kind == config.IntegrationCost):
+				rebuild = []config.Integration{request.Kind}
+			}
+			edit = s.integrationRuntime.PrepareProfiles(build, target, pending.Selected, rebuild...)
 		}
 		if !pending.Probe {
 			return nil

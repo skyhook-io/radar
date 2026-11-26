@@ -939,7 +939,7 @@ func (h Routes) handlePVCUsage(w http.ResponseWriter, r *http.Request) {
 		var err error
 		g, err = stores.supplement(r.Context())
 		if err != nil {
-			writeChartError(w, err)
+			writeChartError(w, r.Context(), err)
 			return
 		}
 	}

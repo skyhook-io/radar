@@ -11,12 +11,60 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/connectionruntime"
+	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/k8s"
 	internalopencost "github.com/skyhook-io/radar/internal/opencost"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	pkgopencost "github.com/skyhook-io/radar/pkg/opencost"
 )
+
+func TestCostRoutesClassifyMetricsConnectionFailure(t *testing.T) {
+	for _, tc := range []struct {
+		reason string
+		err    error
+	}{
+		{pkgopencost.ReasonMetricsSettings, &connections.SettingsError{Kind: config.IntegrationMetrics, Err: config.ErrProfileInvalid}},
+		{pkgopencost.ReasonDeploymentConfig, &connections.SettingsError{Kind: config.IntegrationMetrics, Launch: true, Err: config.ErrProfileInvalid}},
+		{pkgopencost.ReasonNoPrometheus, prometheuspkg.ErrPrometheusUnavailable},
+	} {
+		t.Run(tc.reason, func(t *testing.T) {
+			s := serverWithTestIntegrations(t, connectionruntime.Settings{
+				MetricsError: tc.err,
+				Cost:         internalopencost.ManagerConfig{Source: internalopencost.SourcePrometheus},
+			})
+			router := chi.NewRouter()
+			internalopencost.RegisterRoutes(router, s.openCostRouteScope())
+			router.Post("/opencost/application/trend", s.handleOpenCostApplicationTrend)
+
+			for _, route := range []struct {
+				method, path, body string
+			}{
+				{http.MethodGet, "/opencost/summary", ""},
+				{http.MethodGet, "/opencost/workloads?namespace=default", ""},
+				{http.MethodGet, "/opencost/trend?range=24h", ""},
+				{http.MethodGet, "/opencost/nodes", ""},
+				{http.MethodPost, "/opencost/application/trend", `{"range":"24h","workloads":[{"kind":"Deployment","namespace":"default","name":"nginx"}]}`},
+			} {
+				t.Run(route.path, func(t *testing.T) {
+					response := httptest.NewRecorder()
+					router.ServeHTTP(response, httptest.NewRequest(route.method, route.path, strings.NewReader(route.body)))
+					var result struct {
+						Available bool   `json:"available"`
+						Reason    string `json:"reason"`
+					}
+					if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+						t.Fatal(err)
+					}
+					if response.Code != http.StatusOK || result.Available || result.Reason != tc.reason {
+						t.Fatalf("status=%d body=%s, want unavailable with reason %q", response.Code, response.Body.String(), tc.reason)
+					}
+				})
+			}
+		})
+	}
+}
 
 func TestOpenCostDetailResponsesIncludeCurrencyWhenUnavailable(t *testing.T) {
 	s := serverWithTestIntegrations(t, connectionruntime.Settings{Currency: "GBP"})
