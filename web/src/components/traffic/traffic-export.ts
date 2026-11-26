@@ -1,7 +1,8 @@
 import { CircleQuestionMark, Database, Globe, Puzzle, Server } from 'lucide-react'
 import { getTopologyIcon } from '@skyhook-io/k8s-ui'
 import type { GraphBoxRow, GraphNodeMapper } from '@skyhook-io/k8s-ui/utils/graph-model'
-import { formatVolume, isExternalKind, MAX_VISIBLE_PORTS } from './trafficFilters'
+import { formatVolume, isExternalKind, MAX_VISIBLE_PORTS, portLabel } from './trafficFilters'
+import type { TrafficPortSource } from '../../types'
 
 // Hex values of the Tailwind 500 shades the traffic nodes use for these categories.
 const CATEGORY_COLORS: Record<string, string> = {
@@ -37,11 +38,13 @@ function trafficRows(data: Record<string, unknown>, hot: boolean): GraphBoxRow[]
     if (typeof p !== 'object' || p === null || !('port' in p)) return []
     const port = num(p.port)
     const connections = ('connections' in p ? num(p.connections) : undefined) ?? 0
-    return port ? [{ port, connections }] : []
+    const source = 'portSource' in p && (p.portSource === 'service' || p.portSource === 'serviceMultiple') ? p.portSource as TrafficPortSource : undefined
+    const label = portLabel(port ?? 0, source)
+    return label ? [{ label, connections }] : []
   })
   if (ports.length > 0) {
-    const rows: GraphBoxRow[] = ports.slice(0, MAX_VISIBLE_PORTS).map(({ port, connections }) => ({
-      text: `:${port}`,
+    const rows: GraphBoxRow[] = ports.slice(0, MAX_VISIBLE_PORTS).map(({ label, connections }) => ({
+      text: `:${label}`,
       code: true,
       hot,
       // No figure for a port with no measured traffic, as on the card.

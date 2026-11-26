@@ -43,6 +43,12 @@ an inference from Beyla's code.
 `Default: false` in the attribute registry, so configuration A emits neither. A
 consumer grouping by them gets empty strings, which is how a port becomes `0` and
 how UDP becomes TCP. Configuration B is the only one where they appear.
+In configuration A Radar fills a port-0 edge whose direction is known: with the
+HTTP `server_port` when the destination serves HTTP on one port (observed, shown
+unmarked), otherwise from the destination's Services (a Service's own port, or
+the target port of the Services selecting a workload's pods), marked "from
+Service", or "multiple (from Service)" when they declare several. A marked port
+is declared, not observed.
 
 **`direction` is exported by default, and every conversation is reported twice.**
 Values are `request`, `response` and `unknown`. The response series has source and
