@@ -165,6 +165,20 @@ func (p *CacheProvider) UnlistableKinds() []k8score.APIResource {
 	return out
 }
 
+// ShortNamedKinds returns the discovered APIs that declare kubectl short names.
+func (p *CacheProvider) ShortNamedKinds() []k8score.APIResource {
+	if p.discovery == nil {
+		return nil
+	}
+	var out []k8score.APIResource
+	for _, ar := range p.discovery.Catalog().Resources {
+		if len(ar.ShortNames) > 0 {
+			out = append(out, ar)
+		}
+	}
+	return out
+}
+
 func (p *CacheProvider) PlanTyped(kind string, namespaces []string) readplan.Plan {
 	return readplan.Typed(p.cache, p.permissions, k8s.CanonicalBuiltinKind(kind), namespaces, isClusterScopedKind(kind))
 }
