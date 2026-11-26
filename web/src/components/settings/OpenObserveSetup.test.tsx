@@ -285,7 +285,7 @@ describe('OpenObserve setup', () => {
     expect(calls.some((c) => c.method === 'DELETE')).toBe(false)
     const dialog = document.body.textContent!
     expect(dialog).toContain('Remove the saved OpenObserve connection?')
-    expect(dialog).toContain('These clusters go back to their own Prometheus: kind-oo-b, kind-oo-c. Nothing is deleted in OpenObserve or Kubernetes.')
+    expect(dialog).toContain('These clusters go back to their Prometheus settings: kind-oo-b, kind-oo-c. Nothing is deleted in OpenObserve or Kubernetes.')
     reply('DELETE /integrations/openobserve', { body: unmatched })
     await click(button('Remove connection'))
     expect(calls.at(-1)).toMatchObject({ method: 'DELETE', path: '/integrations/openobserve' })

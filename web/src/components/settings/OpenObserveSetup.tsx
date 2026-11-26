@@ -308,7 +308,7 @@ export function OpenObserveSetup({
         onConfirm={removeAll}
         title="Remove the saved OpenObserve connection?"
         message={`${contexts.length
-          ? `These clusters go back to their own Prometheus: ${contexts.join(', ')}.`
+          ? `These clusters go back to their Prometheus settings: ${contexts.join(', ')}.`
           : 'No cluster reads from it yet.'} Nothing is deleted in OpenObserve or Kubernetes.`}
         confirmLabel="Remove connection"
         showWarning={false}
