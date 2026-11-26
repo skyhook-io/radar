@@ -1399,8 +1399,12 @@ func readMCPResource(ctx context.Context, input getResourceInput, tier resourcec
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to read resource metadata: %w", err)
 		}
-		if includes["identity"] && objectMeta.GetUID() != "" && objectMeta.GetResourceVersion() != "" {
-			result["identity"] = map[string]string{"uid": string(objectMeta.GetUID()), "resourceVersion": objectMeta.GetResourceVersion()}
+		if includes["identity"] {
+			if objectMeta.GetUID() == "" || objectMeta.GetResourceVersion() == "" {
+				result["identityError"] = "This observation has no complete UID and resourceVersion pair. It cannot guard a change."
+			} else {
+				result["identity"] = map[string]string{"uid": string(objectMeta.GetUID()), "resourceVersion": objectMeta.GetResourceVersion()}
+			}
 		}
 		attachResourceExtras(ctx, cache, result, includes, canonicalKind, canonicalGroup, namespace, name, objectMeta.GetUID(), types.UID(objectMeta.GetAnnotations()[corev1.MirrorPodAnnotationKey]))
 		// The drain plan, metrics and revisions resolve the cluster client when

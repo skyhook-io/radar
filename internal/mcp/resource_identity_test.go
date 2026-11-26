@@ -53,14 +53,18 @@ func TestGetResourceObservedIdentity(t *testing.T) {
 		}
 		body := extractText(t, result)
 		var row struct {
-			Identity     *struct{ UID, ResourceVersion string }
-			IncludeError string
+			Identity      *struct{ UID, ResourceVersion string }
+			IncludeError  string
+			IdentityError string
 		}
 		if err := json.Unmarshal([]byte(body), &row); err != nil {
 			t.Fatal(err)
 		}
 		if row.IncludeError != "" || strings.Contains(body, secretValue) || strings.Contains(body, "cHJpdmF0ZS1leGFtcGxlLXNlY3JldA==") {
 			t.Fatalf("%s returned unexpected content: %s", tc.kind, body)
+		}
+		if (row.IdentityError != "") != (tc.name == "unversioned") {
+			t.Fatalf("expected an explanation only for the unversioned observation: %s", body)
 		}
 		if tc.uid == "" {
 			if row.Identity != nil || strings.Contains(body, `"resourceVersion"`) {
