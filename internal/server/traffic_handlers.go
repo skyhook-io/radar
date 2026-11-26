@@ -246,16 +246,21 @@ func trafficFlowOptions(r *http.Request, namespaces []string) (traffic.FlowOptio
 // source; and a source that cannot apply the exclusions has them applied here.
 func (s *Server) visibleFlows(r *http.Request, flows []traffic.Flow, namespaces []string, opts traffic.FlowOptions) []traffic.Flow {
 	allowed := namespaceLookup(namespaces)
+	readable := s.readableNamespaces(r)
 	kept := make([]traffic.Flow, 0, len(flows))
 	for _, f := range flows {
-		if flowVisibleForNamespaces(f, allowed) && !opts.Excludes(f) && opts.Match.Matches(f) {
+		if !flowVisibleForNamespaces(f, allowed) || opts.Excludes(f) {
+			continue
+		}
+		// Withheld before matching: a selection names the port the caller was
+		// shown, and matching the original would also reveal it.
+		withholdServicePort(&f, readable)
+		if opts.Match.Matches(f) {
 			kept = append(kept, f)
 		}
 	}
-	readable := s.readableNamespaces(r)
 	for i := range kept {
 		kept[i].PolicyVerdict = s.redactPolicyRefs(r, kept[i].PolicyVerdict)
-		withholdServicePort(&kept[i], readable)
 	}
 	return kept
 }

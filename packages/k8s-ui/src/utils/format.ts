@@ -347,3 +347,17 @@ export function midTruncate(s: string, max = 24): string {
   const head = max - tail - 1
   return `${s.slice(0, head)}…${s.slice(-tail)}`
 }
+
+/**
+ * A camelCase or PascalCase name as words, keeping acronym runs whole:
+ * podIPs → "pod IPs", hostIP → "host IP", CSIDriver → "CSI Driver",
+ * containerID → "container ID". Keep plural acronym suffixes and versions
+ * together (APIs, IPv6). A one-letter "s" suffix can also be part of a short
+ * word like "Is", so TLSIsEnabled reads "TLSIs Enabled".
+ */
+export function splitCamelCase(name: string): string {
+  return name
+    .replace(/([\p{Ll}\d])(\p{Lu})/gu, '$1 $2')
+    .replace(/(\p{Lu}+)(\p{Lu}(?!s(?!\p{Ll})|v\d)\p{Ll})/gu, '$1 $2')
+    .trim()
+}

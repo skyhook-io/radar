@@ -311,8 +311,8 @@ func updateRepositoryTestClient(t *testing.T, entry *repo.Entry) *Client {
 	if err := repositories.WriteFile(repositoryConfig, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return &Client{settings: &cli.EnvSettings{
+	return &Client{repositorySettings: &repositorySettings{settings: &cli.EnvSettings{
 		RepositoryConfig: repositoryConfig,
 		RepositoryCache:  filepath.Join(dir, "repository-cache"),
-	}}
+	}}}
 }

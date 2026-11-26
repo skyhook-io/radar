@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/skyhook-io/radar/internal/k8s"
+
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 
@@ -59,10 +61,10 @@ func (c *Client) UpgradeForMCPAsUser(req MCPUpgradeRequest, user *pkgauth.User) 
 	if err != nil {
 		return nil, err
 	}
-	return mcpUpgradeResult(before, after, req.DryRun)
+	return mcpUpgradeResult(c.conn, before, after, req.DryRun)
 }
 
-func mcpUpgradeResult(before, after *release.Release, dryRun bool) (*MCPUpgradeResult, error) {
+func mcpUpgradeResult(conn *k8s.Connection, before, after *release.Release, dryRun bool) (*MCPUpgradeResult, error) {
 	var err error
 	out := &MCPUpgradeResult{ChartVersion: after.Chart.Metadata.Version, Revision: after.Version, BaselineRevision: before.Version}
 	if !dryRun {
@@ -73,8 +75,8 @@ func mcpUpgradeResult(before, after *release.Release, dryRun bool) (*MCPUpgradeR
 		return nil, fmt.Errorf("summarize preview values: %w", err)
 	}
 	out.ValuesDiff = aicontext.RedactSecrets(out.ValuesDiff)
-	left, leftErrors := parseManifestResourceObjects(before.Manifest, before.Namespace)
-	right, rightErrors := parseManifestResourceObjects(after.Manifest, after.Namespace)
+	left, leftErrors := parseManifestResourceObjects(conn, before.Manifest, before.Namespace)
+	right, rightErrors := parseManifestResourceObjects(conn, after.Manifest, after.Namespace)
 	// Helm matches live resources without API version: changing the served
 	// version of the same group/kind/name updates it rather than deleting it.
 	identity := func(r renderedResource) string {

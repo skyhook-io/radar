@@ -1,0 +1,18 @@
+{{- range $capability, $rules := include "radar.ownerAccessGrants" . | fromJson }}
+{{- $name := printf "%s-owner-access-%s" (include "radar.fullname" $) $capability }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "radar.labels" $ | nindent 4 }}
+rules:
+  {{- toYaml $rules | nindent 2 }}
+{{- include "radar.binding" (dict
+  "root" $
+  "name" $name
+  "roleRef" $name
+  "groups" (list (printf "radar:owner-access:%s" $capability))
+) }}
+{{- end }}

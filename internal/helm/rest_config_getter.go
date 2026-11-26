@@ -16,24 +16,8 @@ import (
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
-// restConfigGetter implements genericclioptions.RESTClientGetter by
-// reusing a *rest.Config Radar already resolved at boot, instead of
-// asking Helm to re-resolve from kubeconfig.
-//
-// Used whenever no single kubeconfig file path is available to hand
-// Helm. Two cases trigger this:
-//
-//  1. In-cluster (Hub mode, OSS Helm-chart deploy): no ~/.kube/config in
-//     the pod. Helm's default ConfigFlags would fall through to
-//     localhost:8080.
-//  2. Multi-source kubeconfig on a laptop (--kubeconfig-dir or a
-//     KUBECONFIG env var with multiple paths): Radar uses isolated
-//     per-file loading, so there isn't one path Helm can re-parse —
-//     it would silently pick a different file from its own precedence.
-//
-// In both cases we hand Helm the exact rest.Config Radar's K8s client
-// is already using, so Helm can't drift to a different cluster or
-// fabricate a localhost target.
+// Reopening kubeconfig here could retarget a Helm action after its connection
+// was captured. Discovery and mapping use the same config as release storage.
 type restConfigGetter struct {
 	config    *rest.Config
 	namespace string

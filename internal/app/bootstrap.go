@@ -102,8 +102,9 @@ type AppConfig struct {
 	Version                     string
 	MCPReadOnly                 bool
 	MCPEnabled                  bool
-	MCPExecTools                bool   // register exec_pod (--mcp-exec-tools)
-	MCPHTTPTools                bool   // register curl_service (--mcp-http-tools)
+	MCPExecTools                bool // register exec_pod (--mcp-exec-tools)
+	MCPHTTPTools                bool // register curl_service (--mcp-http-tools)
+	MCPOAuthEnabled             bool
 	AIHistory                   bool   // persist AI investigations across restarts
 	AIHistoryDBPath             string // "" = ~/.radar/ai-runs.db
 	AuthConfig                  auth.Config
@@ -329,7 +330,7 @@ func BuildTimelineStoreConfig(cfg AppConfig) (timeline.StoreConfig, error) {
 	}
 }
 
-// RegisterCallbacks registers Helm, timeline, traffic, and Prometheus reset/reinit
+// RegisterCallbacks initializes Helm repository settings and registers timeline, traffic, and Prometheus reset/reinit
 // functions used for both initial cluster initialization and context switching,
 // and prepares local per-context integration settings. Must be called before
 // InitializeCluster; callers pass the returned config to CreateServer.
@@ -339,7 +340,7 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 	if err != nil {
 		log.Fatalf("Invalid startup configuration: %v", err)
 	}
-	k8s.RegisterHelmFuncs(helm.ResetClient, helm.ReinitClient)
+	helm.Initialize()
 
 	RegisterLastContextMemory(cfg)
 
@@ -352,7 +353,7 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 
 	// Initialize Prometheus metrics client (must come before SetManualURL)
 	conn := k8s.Current()
-	prometheuspkg.Initialize(conn.ClientInterface(), conn.Config(), conn.ContextName())
+	prometheuspkg.Initialize(conn.ClientInterface(), conn.Config(), conn.ContextName(), conn.PortForwards())
 	prometheuspkg.RegisterRediscoverySignals()
 
 	if cfg.PrometheusURL != "" {
@@ -407,7 +408,8 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 			}
 		}
 		conn := k8s.Current()
-		return traffic.ReinitializeWithConfig(conn.ClientInterface(), conn.Config(), conn.ContextName())
+		traffic.ReinitializeWithPortForwards(conn.ClientInterface(), conn.PortForwards(), conn.ContextName())
+		return nil
 	})
 
 	// Shared installations: Reinitialize carries the current manual URL + headers
@@ -429,7 +431,7 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 				log.Printf("[prometheus] --prometheus-url applies only to the context Radar was launched on; %q uses its own metrics settings", k8s.SanitizeForLog(k8s.GetContextName()))
 			}
 			conn := k8s.Current()
-			prometheuspkg.Reinitialize(conn.ClientInterface(), conn.Config(), conn.ContextName())
+			prometheuspkg.Reinitialize(conn.ClientInterface(), conn.Config(), conn.ContextName(), conn.PortForwards())
 			url, headers := prometheuspkg.CurrentConfig()
 			if url != strings.TrimRight(selection.Settings.Prometheus.URL, "/") || !maps.Equal(headers, selection.Settings.Prometheus.Headers) {
 				prometheuspkg.Configure(selection.Settings.Prometheus.URL, selection.Settings.Prometheus.Headers)
@@ -437,7 +439,7 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 			return nil
 		}
 		conn := k8s.Current()
-		prometheuspkg.Reinitialize(conn.ClientInterface(), conn.Config(), conn.ContextName())
+		prometheuspkg.Reinitialize(conn.ClientInterface(), conn.Config(), conn.ContextName(), conn.PortForwards())
 		return nil
 	})
 	k8s.RegisterCostResetFunc(internalopencost.Reset)
@@ -611,7 +613,8 @@ func CreateServer(cfg AppConfig) *server.Server {
 			HasPrometheusURL:     cfg.PrometheusURL != "",
 			HasPrometheusHeaders: len(cfg.PrometheusHeaders) > 0,
 		},
-		AuthConfig: cfg.AuthConfig,
+		AuthConfig:      cfg.AuthConfig,
+		MCPOAuthEnabled: cfg.MCPOAuthEnabled,
 		CloudConnect: server.CloudConnectConfig{
 			HubAPIURL:             cfg.HubAPIURL,
 			HubAppURL:             cfg.HubAppURL,

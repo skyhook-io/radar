@@ -316,6 +316,52 @@ Radar binary (including Radar Cloud self-upgrade) does not update RBAC. Missing 
 on an older `--reuse-values` installation default to enabled; set explicit false
 before upgrading if the added visibility is unwanted.
 
+### Cloud Owner permissions
+
+Helm approves the grants available on each cluster. Organization Owners turn
+those grants on or off in **Settings → Access**. Changes apply on the next
+request without a Helm upgrade. Turning a grant off leaves access from other
+Kubernetes role bindings in place.
+
+| Grant | Active by default | What it allows |
+|---|---|---|
+| Argo CD (`argocd`) | On | Refresh, sync and edit Argo CD Applications |
+| CloudNativePG (`cnpg`) | On for built-in Owners | Administer existing clusters, backups, schedules and poolers. Creating a cluster for a restore requires separate permission |
+| Velero backups and schedules (`velero`) | On for cluster-wide built-in Owners | Start backups and manage schedules |
+| Velero backup data (`velero-download`) | Off | Read logs and full backup contents, which can include Secrets |
+| Velero backup deletion (`velero-delete`) | Off | Request permanent deletion of stored backup data |
+
+**Approve or remove a grant.** Set
+`cloud.defaultRbac.integrationWrite.<grant>.owner` to `true` or `false` and
+apply the chart. For Velero data access and deletion, also turn on the grant
+in **Settings → Access**. If Access says **Requires cluster setup**, check
+that chart-managed Owner RBAC and the matching collection
+(`rbac.crdGroups.argo`, `rbac.crdGroups.cloudnativePg` or
+`rbac.crdGroups.velero`) are enabled. `rbac.crdGroups.all=true` also enables them.
+
+**Check the scope.** Argo CD defaults on for chart-managed Owner roles,
+including custom roles. CloudNativePG defaults on for the built-in `admin` and
+`cluster-admin` Owner roles. For a custom Owner role, approve CloudNativePG with
+`cloud.defaultRbac.integrationWrite.cnpg.owner=true`. `rbac.namespaces` limits
+the objects these grants can change. The grants apply to whole Kubernetes objects,
+including writes through the resource editor and direct MCP. Argo CD deploys
+with its controller’s credentials and can reach other namespaces or clusters. See
+[how Argo CD actions are authorized](../../../docs/gitops.md#how-radar-performs-argo-actions).
+
+All managed Velero grants require leaving `rbac.namespaces` unset and using
+the built-in `admin` or `cluster-admin` Owner role. Velero can act across namespaces.
+Supply your own bindings for scoped or custom Velero access. Set
+`cloud.defaultRbac.create=false` to manage all tier bindings yourself. In
+Kubernetes user-token mode, access comes from the caller’s own Kubernetes
+permissions. Hub forwards managed grants only on direct Owner cluster requests,
+including MCP. See the [exact grant rules](files/integration-write-baseline.yaml).
+
+**Upgrading.** Older values that omit these settings inherit the table defaults,
+including with `--reuse-values`. Set unwanted grants to `false` before applying
+the chart. For self-managed deployments, upgrade Hub to a version with
+**Settings → Access** first. Upgrading the chart before Hub interrupts the
+chart-managed Argo CD grant until Hub can send its dedicated group.
+
 ### Radar Cloud background services (`radar:system`)
 
 Radar Cloud's alerts worker and timeline puller read as `radar:system`.
@@ -327,9 +373,8 @@ Helm stores releases as Secrets. The grant includes no writes.
 
 ### Radar Cloud automatic Diagnose (`radar:ai:reader`)
 
-Manual Diagnose turns read as the person who started them. Radar Cloud forwards
-that person's identity and groups; `radar:ai:reader` is not involved. MCP clients
-also read with the user's own permissions.
+Manual Diagnose turns use the person’s Kubernetes identity and usual groups.
+The managed Owner groups are reserved for direct Owner cluster requests.
 
 Automatic (alert-triggered) Diagnose runs use username `radar:ai:<org>` and
 group `radar:ai:reader` only, a permanent read-only background diagnostic reader.
@@ -413,6 +458,7 @@ trend charts remain unavailable for Kubecost.
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `replicaCount` | Number of replicas | `1` |
+| `mcp.oauth.enabled` | Enable MCP OAuth for a single-replica standalone OIDC deployment | `false` |
 | `image.repository` | Image repository | `ghcr.io/skyhook-io/radar` |
 | `image.tag` | Image tag | Chart appVersion |
 | `service.type` | Service type | `ClusterIP` |

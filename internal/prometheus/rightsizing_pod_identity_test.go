@@ -101,8 +101,8 @@ func TestCurrentPodRightsizingDetailAndScanAgreeOnDaemonSetCohort(t *testing.T) 
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetTestState)
-	Initialize(nil, nil, "rightsizing-detail")
-	t.Cleanup(func() { Reset(); Initialize(nil, nil, "") })
+	Initialize(nil, nil, "rightsizing-detail", nil)
+	t.Cleanup(func() { Reset(); Initialize(nil, nil, "", nil) })
 	store, queries := bindingTestStore(t)
 	connectBindingTestClient(t, store.URL)
 	resolver := resolveRightsizingScope

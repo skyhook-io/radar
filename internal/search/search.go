@@ -170,6 +170,9 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 	if opts.Limit > MaxLimit {
 		opts.Limit = MaxLimit
 	}
+	if sp, ok := p.(shortNamedKindProvider); ok && len(q.KindFilter) > 0 {
+		q.shortNames = indexShortNames(sp.ShortNamedKinds())
+	}
 
 	warmCtx, cancelWarm := context.WithTimeout(ctx, 2*time.Second)
 	defer cancelWarm()
@@ -178,7 +181,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 	covered := map[string]bool{}
 	markKnown := func(kind, group, plural string) {
 		for _, requested := range q.KindFilter {
-			if kindMatches(kind, group, plural, []string{requested}) {
+			if q.kindMatches(kind, group, plural, []string{requested}) {
 				covered[requested] = true
 			}
 		}
@@ -714,7 +717,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 				// review, exists: it is just not something search can read.
 				found := false
 				for _, ar := range unlistable {
-					if kindMatches(ar.Kind, ar.Group, ar.Name, []string{requested}) {
+					if q.kindMatches(ar.Kind, ar.Group, ar.Name, []string{requested}) {
 						cov.kind(ar.Kind, ar.Group, readreason.KindNotWatchable)
 						found = true
 					}
@@ -835,7 +838,7 @@ func classifyDynamicScope(p Provider, gvr schema.GroupVersionResource, kind stri
 
 func shouldScanTyped(kind, group, resource string, q Query) bool {
 	if len(q.KindFilter) > 0 {
-		return kindMatches(kind, group, resource, q.KindFilter)
+		return q.kindMatches(kind, group, resource, q.KindFilter)
 	}
 	// Default skip-list: events are high-volume diagnostic data, not
 	// resources users find by name. Honored only when no explicit kind
@@ -845,7 +848,7 @@ func shouldScanTyped(kind, group, resource string, q Query) bool {
 
 func shouldScanCRD(kind, group, resource string, q Query) bool {
 	if len(q.KindFilter) > 0 {
-		return kindMatches(kind, group, resource, q.KindFilter)
+		return q.kindMatches(kind, group, resource, q.KindFilter)
 	}
 	return !strings.EqualFold(kind, "Event") || !k8score.IsBuiltInAPIGroup(group)
 }

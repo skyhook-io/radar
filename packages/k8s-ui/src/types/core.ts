@@ -63,6 +63,10 @@ export interface WorkloadWritePermissions {
   workflows?: boolean
   /** Can create Argo Workflows (submit a WorkflowTemplate). Absent from an older Radar; treat absence as not allowed. */
   createWorkflows?: boolean
+  /** Can patch CronJobs (Suspend, Resume). Absent from an older Radar, which showed the actions to everyone. */
+  cronJobs?: boolean
+  /** Can create Jobs (Trigger a CronJob). Absent from an older Radar, which showed the action to everyone. */
+  createJobs?: boolean
 }
 
 export type WorkloadContainerType = 'container' | 'initContainer'
@@ -136,7 +140,7 @@ export interface Capabilities {
   secretsUpdate: boolean  // Update secrets (inline editing)
   helmWrite: boolean      // Helm write operations (install, upgrade, rollback, uninstall, apply values)
   nodeWrite: boolean      // Node write operations (cordon, uncordon, drain)
-  workloadWrites?: WorkloadWritePermissions // Workload patch permissions (restart/scale controls)
+  workloadWrites?: WorkloadWritePermissions
   mcpExecTools?: boolean // Full MCP registration; does not grant the caller exec permission
   mcpHelmTools?: boolean // Native Helm MCP tool registered; target Kubernetes permissions still required
   mcpHttpTools?: boolean // Effective in-cluster HTTP registration; services/proxy permission is still required
@@ -242,6 +246,7 @@ export interface FeatureCapabilities {
   runtimeAdvisoryChecks?: boolean
   runtimeAdvisoryProgress?: boolean
   sealedSecretsController?: boolean // GET /api/sealedsecrets/controller
+  traefikRoutes?: boolean // GET /api/traefik/routes
   cronJobTriggerJobName?: boolean
   sealedSecretsCert?: boolean // GET /api/sealedsecrets/cert
   workflowStop?: boolean // POST /api/workflows/{namespace}/{name}/stop
@@ -1075,6 +1080,8 @@ export interface APIResource {
   definitionName?: string
   featured?: boolean
   verbs: string[]
+  /** kubectl short names from API discovery (e.g. "pdb"). Absent on older Radar. */
+  shortNames?: string[]
   observation?: DynamicResourceObservation
 }
 

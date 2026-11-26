@@ -10,6 +10,7 @@ import { getInferenceServiceStatus, isInferenceServiceStopRequested } from '../r
 import { getCrossplanePauseState, getCrossplaneIndependentStatus, getCrossplaneConditionTone } from '../resource-utils-crossplane'
 import { CrossplanePauseNotice } from './CrossplanePauseContext'
 import type { HealthLevel } from '../resource-utils'
+import { splitCamelCase } from '../../../utils/format'
 
 interface GenericRendererProps {
   data: any
@@ -220,10 +221,7 @@ function isComplexObject(value: any): boolean {
 }
 
 function formatFieldName(name: string): string {
-  return name
-    .replace(/([A-Z])/g, ' $1')
-    .replace(/^./, str => str.toUpperCase())
-    .trim()
+  return splitCamelCase(name).replace(/^./, str => str.toUpperCase())
 }
 
 function formatValue(value: any): string {

@@ -68,6 +68,7 @@ type InventoryRequest struct {
 // permissions gap. A caller who can read all the storage it asked about costs
 // no object read.
 func (c *Client) ReadInventory(ctx context.Context, req InventoryRequest) (*ReleaseInventory, error) {
+	c, ctx = c.capture(ctx)
 	inventory := &ReleaseInventory{Releases: []HelmRelease{}, Observed: []ObservedRelease{}}
 	if req.Scope != nil && req.Scope.Requested != nil && len(req.Scope.Requested) == 0 {
 		return inventory, nil
@@ -88,7 +89,7 @@ func (c *Client) ReadInventory(ctx context.Context, req InventoryRequest) (*Rele
 		if req.Scope != nil {
 			access = req.Scope
 		}
-		inventory.Releases, read, denied, err = listReleasesRecordingAccess(ctx, client, k8s.GetContextName(), req.StorageNamespaces, access)
+		inventory.Releases, read, denied, err = listReleasesRecordingAccess(ctx, client, c.conn.ContextName(), req.StorageNamespaces, access)
 		if err != nil {
 			return nil, err
 		}
@@ -96,7 +97,7 @@ func (c *Client) ReadInventory(ctx context.Context, req InventoryRequest) (*Rele
 			return inventory, nil
 		}
 	}
-	inventory.StorageDenied = unreadStorage(req, read, denied)
+	inventory.StorageDenied = unreadStorage(c.conn, req, read, denied)
 	if inventory.StorageDenied == nil {
 		return inventory, nil
 	}
@@ -109,8 +110,7 @@ func (c *Client) ReadInventory(ctx context.Context, req InventoryRequest) (*Rele
 	}
 	inventory.ObjectCoverage = &scan.coverage
 	inventory.Observed = observedOutsideStorage(scan, read, req.Scope.Requested, inventory.Releases)
-	// Health reads the current cache, so this has to come after it. It also
-	// keeps a storage read from one cluster from pairing with objects of another.
+	// Keep the same conflict response as the observed detail when a scan outlives its caches.
 	if !req.Scope.Provider.Current() {
 		return nil, ErrConnectionChanged
 	}
@@ -202,7 +202,7 @@ func listReleasesRecordingAccess(ctx context.Context, client kubernetes.Interfac
 // didn't read, or nil if there is none. The storage scope can be narrower than
 // the request: it leaves out namespaces where the caller may not list Secrets,
 // so the storage read never reports those as denied.
-func unreadStorage(req InventoryRequest, read, denied []string) *resourceapi.NameSet {
+func unreadStorage(conn *k8s.Connection, req InventoryRequest, read, denied []string) *resourceapi.NameSet {
 	if len(read) == 0 && (len(denied) == 0 || slices.Contains(denied, "")) {
 		return resourceapi.AllNames()
 	}
@@ -219,7 +219,7 @@ func unreadStorage(req InventoryRequest, read, denied []string) *resourceapi.Nam
 		if req.User == nil || req.Scope == nil {
 			return namesOrNil(UnreadStorageNamespaces(req.StorageSkipped, denied))
 		}
-		wanted = k8s.AllNamespaceNames()
+		wanted = conn.AllNamespaceNames()
 		if len(wanted) == 0 {
 			return resourceapi.UnknownNames()
 		}
@@ -292,7 +292,7 @@ func observedOutsideStorage(scan *stampScan, read, requested []string, releases 
 		if known[key] || storageWasRead(key, scan.flux, read) || (requested != nil && !slices.Contains(requested, row.Namespace)) {
 			continue
 		}
-		addObservedHealth(&row, objects, partial)
+		addObservedHealth(scan.conn, &row, objects, partial)
 		rows = append(rows, row)
 	}
 	sort.Slice(rows, func(i, j int) bool {

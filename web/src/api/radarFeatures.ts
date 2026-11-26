@@ -58,6 +58,7 @@ export const RADAR_FEATURES = {
   substrateHealthMetrics: { label: 'Agent Substrate charts', flag: 'substrateHealthMetrics', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
   cnpgWorkspace: { label: 'CloudNativePG views', flag: 'cnpgWorkspace', flagShippedWithEndpoint: true },
   sealedSecretsController: { label: 'Sealed Secrets controller status', flag: 'sealedSecretsController', flagShippedWithEndpoint: true },
+  traefikRoutes: { label: 'Traefik routes', flag: 'traefikRoutes', flagShippedWithEndpoint: true },
   sealedSecretsCert: { label: 'Sealed Secrets sealing certificate', flag: 'sealedSecretsCert', flagShippedWithEndpoint: true },
   workflowStop: { label: 'Argo Workflow stop actions', flag: 'workflowStop', flagShippedWithEndpoint: true },
   workflowTemplateSubmit: { label: 'Argo WorkflowTemplate submissions', flag: 'workflowTemplateSubmit', flagShippedWithEndpoint: true },

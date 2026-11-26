@@ -1,3 +1,18 @@
+{{- $mcpOAuth := dig "oauth" "enabled" false (.Values.mcp | default dict) }}
+{{- if $mcpOAuth }}
+{{- if not .Values.mcp.enabled }}
+{{- fail "mcp.oauth.enabled requires mcp.enabled=true" }}
+{{- end }}
+{{- if .Values.cloud.enabled }}
+{{- fail "mcp.oauth.enabled is not supported with cloud.enabled=true" }}
+{{- end }}
+{{- if ne .Values.auth.mode "oidc" }}
+{{- fail "mcp.oauth.enabled requires auth.mode=oidc" }}
+{{- end }}
+{{- if ne (int .Values.replicaCount) 1 }}
+{{- fail "mcp.oauth.enabled requires replicaCount=1: OAuth clients and tokens are stored in memory and are not shared across pods" }}
+{{- end }}
+{{- end }}
 {{- if and .Values.persistence.enabled (eq .Values.timeline.storage "sqlite") (gt (int .Values.replicaCount) 1) }}
 {{- fail "replicaCount must be 1 when persistence.enabled=true and timeline.storage=sqlite: a single PVC cannot be safely shared across pods (RWO volumes won't attach to a second pod, RWX volumes risk SQLite corruption)" }}
 {{- end }}
@@ -70,7 +85,10 @@
 {{- end }}
 {{- end }}
 {{- if and $basePath .Values.cloud.enabled }}
-{{- fail "basePath is not supported with cloud.enabled=true: Radar Cloud owns the URL path, and the binary refuses the combination at startup — unset one of them" }}
+{{- /* Radar Cloud reaches Radar at the root path, and the binary refuses a
+       prefix in Cloud mode. Installs that set basePath by default (NKP's
+       catalog) can't unset it, only override it, so name the override. */}}
+{{- fail (printf "basePath %q is not supported with cloud.enabled=true. To connect this Radar to Radar Cloud, set basePath: \"\" (an empty string), or turn Radar Cloud off with cloud.enabled: false." $basePath) }}
 {{- end }}
 {{- /* URLs registered at the IdP have to carry the prefix: Radar's OIDC routes
        move under it, and an unprefixed URI is not routed here, so login fails
@@ -100,7 +118,7 @@ spec:
   {{- /* Enrollment: the Hub keeps one connection per cluster. In a rolling
          update the new pod would wait until the old one is gone and the Hub
          sees its connection drop. */}}
-  {{- if or $enroll (and .Values.persistence.enabled (eq .Values.timeline.storage "sqlite")) }}
+  {{- if or $mcpOAuth $enroll (and .Values.persistence.enabled (eq .Values.timeline.storage "sqlite")) }}
   strategy:
     type: Recreate
   {{- end }}
@@ -217,6 +235,9 @@ spec:
             {{- end }}
             {{- if not .Values.mcp.enabled }}
             - --no-mcp
+            {{- end }}
+            {{- if $mcpOAuth }}
+            - --mcp-oauth
             {{- end }}
             {{- if .Values.debug.image }}
             - --debug-image={{ .Values.debug.image }}
@@ -393,6 +414,8 @@ spec:
             # startup-config fields that don't apply under hosted Radar Cloud.
             - name: RADAR_CLOUD_MODE
               value: "true"
+            - name: RADAR_CLOUD_OWNER_ACCESS
+              value: {{ include "radar.ownerAccessGrants" . | fromJson | keys | sortAlpha | join "," | quote }}
             {{- if include "radar.userTokenMode" . | eq "true" }}
             - name: RADAR_AUTH_K8S_CREDENTIALS
               value: "user-token"

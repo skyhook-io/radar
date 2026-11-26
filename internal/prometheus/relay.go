@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/skyhook-io/radar/internal/portforward"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
@@ -101,12 +100,8 @@ func enableRelay(cfg RelayConfig) bool {
 	activeRelay = st
 	if c := globalClient; c != nil {
 		c.mu.Lock()
-		previous := c.baseURL
 		c.applyRelayLocked(st)
 		c.mu.Unlock()
-		if previous != "" {
-			portforward.StopIfAddress(portforward.OwnerPrometheus, previous)
-		}
 	}
 	log.Printf("[prometheus] Metrics now served through %s", cfg.Address)
 	return true

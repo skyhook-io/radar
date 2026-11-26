@@ -117,6 +117,18 @@ export interface AppRelationships {
   networkPolicyRefs?: ResourceRef[]
 }
 
+/** Exact ref list and its corresponding count or display-name list in the application inventory. */
+export const appRelationshipFields = [
+  ['serviceRefs', 'services'],
+  ['ingressRefs', 'ingresses'],
+  ['routeRefs', 'routes'],
+  ['configRefs', 'configs'],
+  ['scalerRefs', 'scalers'],
+  ['storageRefs', 'storage'],
+  ['pdbRefs', 'pdbs'],
+  ['networkPolicyRefs', 'networkPolicies'],
+] as const;
+
 export interface AppEvent {
   type: string;
   reason: string;
@@ -513,27 +525,46 @@ export function compareVersions(
 
 /** Coarse provenance bucket for the Source facet. Stable ids — display labels
  *  live in SOURCE_META (the house meta-map pattern), so they can be re-worded
- *  without breaking facet state or future URL serialization. */
-export type AppSource = "argocd" | "flux" | "helm" | "label" | "ungrouped";
+ *  without breaking facet state or URL serialization. */
+export type AppSource = "argocd" | "flux" | "helm" | "label" | "ungrouped" | "skyhook";
 
 export const SOURCE_ORDER: AppSource[] = [
   "argocd",
   "flux",
   "helm",
+  "skyhook",
   "label",
   "ungrouped",
 ];
 
-export const SOURCE_META: Record<AppSource, { label: string }> = {
+interface SourceMeta {
+  label: string;
+  /** Set only for sources assigned by a host. Their label overrides grouping evidence
+   *  in the badge, including on folded rows whose members all share that source. */
+  hostManaged?: boolean;
+}
+
+const sourceMeta = {
   argocd: { label: "Argo CD" },
   flux: { label: "Flux" },
   helm: { label: "Helm" },
   label: { label: "Label" },
   ungrouped: { label: "Ungrouped" },
-};
+  skyhook: { label: "Skyhook", hostManaged: true },
+} satisfies Record<AppSource, SourceMeta>;
+
+export const SOURCE_META: Record<AppSource, SourceMeta> = sourceMeta;
+
+export type HostManagedSource = {
+  [S in AppSource]: (typeof sourceMeta)[S] extends { hostManaged: true } ? S : never;
+}[AppSource];
+
+export function isHostManagedSource(source: AppSource): source is HostManagedSource {
+  return SOURCE_META[source].hostManaged === true;
+}
 
 interface TierMeta {
-  source: AppSource;
+  source: Exclude<AppSource, HostManagedSource>;
   /** Tooltip phrase pieces: "Grouped by {lead} `{code(name)}` {trail}". */
   lead: string;
   code: (name: string) => string;
@@ -567,7 +598,8 @@ const TIER_META: Record<number, TierMeta> = {
   9: { source: "label", lead: "the", code: () => "app", trail: "label" },
 };
 
-export function sourceOf(tier: number | undefined): AppSource {
+/** Maps grouping tiers only. Hosts set entry.source explicitly for host-managed sources. */
+export function sourceOf(tier: number | undefined): TierMeta["source"] {
   if (!tier) return "ungrouped";
   return TIER_META[tier]?.source ?? "label";
 }
@@ -704,23 +736,9 @@ export function buildAppMembershipIndex(rows: AppRow[]): AppMembershipIndex {
         }
       }
     }
-    if (row.relationships) {
-      const explicitRefs = [
-        row.relationships.serviceRefs,
-        row.relationships.ingressRefs,
-        row.relationships.routeRefs,
-        row.relationships.configRefs,
-        row.relationships.scalerRefs,
-        row.relationships.storageRefs,
-        row.relationships.pdbRefs,
-        row.relationships.networkPolicyRefs,
-      ];
-      for (const refs of explicitRefs) {
-        for (const ref of refs ?? []) {
-          if (ref.kind && ref.name)
-            setFirst(byResource, laneId(ref.kind, ref.group, ref.namespace, ref.name), membership);
-        }
-      }
+    for (const ref of appRelationshipFields.flatMap(([refs]) => row.relationships?.[refs] ?? [])) {
+      if (ref.kind && ref.name)
+        setFirst(byResource, laneId(ref.kind, ref.group, ref.namespace, ref.name), membership);
     }
     if (row.sourceRef?.kind && row.sourceRef.name) {
       setFirst(
