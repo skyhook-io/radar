@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net/http"
 	"strconv"
 	"strings"
@@ -345,6 +346,14 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, kind str
 		s.writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	if execute && view.UID == in.UID && view.Before == view.After {
+		s.writeErrorCode(w, http.StatusConflict, "workload_action_unchanged", "the reviewed value is already present; no new write was sent. Check the live resource for its outcome")
+		return
+	}
+	if execute && (view.UID != in.UID || (in.ExpectedResourceVersion != "" && string(in.ExpectedResourceVersion) != view.ResourceVersion)) {
+		s.writeErrorCode(w, http.StatusConflict, errCodeWorkloadChanged, "the target identity or exact version has changed. Inspect the live resource before considering another change")
+		return
+	}
 	if in.Action == "setServiceSelectorLabel" && view.Before != view.After {
 		impact, err := previewServiceRouting(r.Context(), client, obj, in.LabelKey, *in.LabelValue)
 		if err != nil {
@@ -367,10 +376,8 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, kind str
 		view.DeploymentServiceImpact = impact
 		view.ReviewToken = impact.token
 	}
-	if execute && (view.UID != in.UID || view.ReviewToken != in.ReviewToken || (in.ExpectedResourceVersion != "" && string(in.ExpectedResourceVersion) != view.ResourceVersion)) {
-		if view.UID == in.UID && view.Before == view.After {
-			s.writeErrorCode(w, http.StatusConflict, "workload_action_unchanged", "the reviewed value is already present; no new write was sent. Check the live workload for its outcome")
-		} else if view.RoutingImpact != nil || view.DeploymentServiceImpact != nil {
+	if execute && view.ReviewToken != in.ReviewToken {
+		if view.RoutingImpact != nil || view.DeploymentServiceImpact != nil {
 			s.writeErrorCode(w, http.StatusConflict, "routing_review_changed", "the reviewed target, selector or backing Pods changed. Preview again to inspect the current routing impact")
 		} else {
 			s.writeErrorCode(w, http.StatusConflict, errCodeWorkloadChanged, "the target or proposed change differs from the reviewed action; inspect the live workload before considering another change")
@@ -425,6 +432,20 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, kind str
 		}
 		s.writeErrorCode(w, http.StatusConflict, "workload_action_not_stored", message)
 		return
+	}
+	if in.Action == "setServiceSelectorLabel" || in.Action == "setPodTemplateLabel" {
+		parentPath := field.path[:len(field.path)-1]
+		expected, _, readErr := unstructured.NestedStringMap(obj.Object, parentPath...)
+		if expected == nil {
+			expected = map[string]string{}
+		}
+		expected[in.LabelKey] = *in.LabelValue
+		actualLabels, _, storedErr := unstructured.NestedStringMap(stored.Object, parentPath...)
+		if readErr != nil || storedErr != nil || !maps.Equal(expected, actualLabels) {
+			audit.Outcome = "reviewed-value-not-confirmed"
+			s.writeErrorCode(w, http.StatusConflict, "workload_action_not_stored", "Kubernetes returned additional changes to the reviewed labels. Inspect the full live selector or Pod template before taking further action")
+			return
+		}
 	}
 	storedGeneration := max(stored.GetGeneration(), 0)
 	if (field.gvr.Group == "apps" || field.gvr.Group == "batch") && view.Generation > 0 && storedGeneration <= view.Generation {

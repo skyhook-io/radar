@@ -237,3 +237,62 @@ func TestReviewedRoutingProtectsServiceDuringDeploymentRollout(t *testing.T) {
 		t.Fatal(code, out)
 	}
 }
+
+func TestReviewedRoutingTargetIsCheckedBeforeEvidence(t *testing.T) {
+	router, dyn := reviewedRestartRouter(t, routingService(), routingPod("stable", "stable", true), routingSlice("v4"))
+	q := map[string]any{"action": "setServiceSelectorLabel", "labelKey": "track", "labelValue": "stable"}
+	code, review := requestServiceAction(t, router, "preview", q)
+	if code != 200 {
+		t.Fatal(code, review)
+	}
+	q["uid"] = review["uid"]
+	q["reviewToken"] = review["reviewToken"]
+	q["expectedResourceVersion"] = "changed"
+	dyn.ClearActions()
+	code, out := requestServiceAction(t, router, "execute", q)
+	if code != 409 || out["error_code"] != errCodeWorkloadChanged || len(dyn.Actions()) != 1 || dyn.Actions()[0].GetVerb() != "get" {
+		t.Fatal(code, out, dyn.Actions())
+	}
+}
+
+func TestReviewedRoutingPublicationDriftAndSelectorAdmission(t *testing.T) {
+	for _, tc := range []string{"published EndpointSlice changed", "non-proposed current Pod replaced", "admission rewrites other selectors"} {
+		t.Run(tc, func(t *testing.T) {
+			svc := routingService()
+			rs := routingSlice("v4")
+			canary := routingPod("canary", "canary", true)
+			router, dyn := reviewedRestartRouter(t, svc, routingPod("stable", "stable", true), canary, rs)
+			q := map[string]any{"action": "setServiceSelectorLabel", "labelKey": "track", "labelValue": "stable"}
+			code, review := requestServiceAction(t, router, "preview", q)
+			if code != 200 {
+				t.Fatal(code, review)
+			}
+			q["uid"] = review["uid"]
+			q["reviewToken"] = review["reviewToken"]
+			reason := "routing_review_changed"
+			switch tc {
+			case "published EndpointSlice changed":
+				rs.Object["endpoints"] = []any{}
+				if err := dyn.Tracker().Update(testEndpointSliceGVR, rs, "prod"); err != nil {
+					t.Fatal(err)
+				}
+			case "non-proposed current Pod replaced":
+				canary.SetUID("replacement")
+				if err := dyn.Tracker().Update(schema.GroupVersionResource{Version: "v1", Resource: "pods"}, canary, "prod"); err != nil {
+					t.Fatal(err)
+				}
+			default:
+				reason = "workload_action_not_stored"
+				dyn.PrependReactor("patch", "services", func(clienttesting.Action) (bool, runtime.Object, error) {
+					stored := svc.DeepCopy()
+					_ = unstructured.SetNestedStringMap(stored.Object, map[string]string{"track": "stable", "app": "another"}, "spec", "selector")
+					return true, stored, nil
+				})
+			}
+			code, out := requestServiceAction(t, router, "execute", q)
+			if code != 409 || out["error_code"] != reason {
+				t.Fatal(code, out)
+			}
+		})
+	}
+}

@@ -194,7 +194,11 @@ func routingReadyPods(ctx context.Context, client dynamic.Interface, namespace s
 	if len(ready) > 0 {
 		for j, port := range ports {
 			if port.TargetPort.StrVal != "" && !resolved[j] {
-				return routingPodSample{}, fmt.Errorf("%w: no proposed Ready Pod declares named target port %q for protocol %s", errRoutingUnsupported, port.TargetPort.StrVal, port.Protocol)
+				protocol := port.Protocol
+				if protocol == "" {
+					protocol = corev1.ProtocolTCP
+				}
+				return routingPodSample{}, fmt.Errorf("%w: no proposed Ready Pod declares named target port %q for protocol %s", errRoutingUnsupported, port.TargetPort.StrVal, protocol)
 			}
 		}
 	}
