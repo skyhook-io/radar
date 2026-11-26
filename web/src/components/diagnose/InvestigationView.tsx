@@ -1589,11 +1589,25 @@ export function InvestigationView({
       ).links;
       if (!link) return undefined;
       const source = link.source;
-      return evidenceStepIdsByTurn.get(source.turnIndex)?.has(source.stepId)
+      // A grouped Findings card opens its latest read. Older citations should
+      // open their own saved payload, including when both reads look alike.
+      const currentCard = projection.groups.some(
+        (group) =>
+          group.id === link.originalGroupId &&
+          visibleEvidenceGroupIds.has(group.id) &&
+          group.latest.source.id === source.id,
+      );
+      return currentCard
         ? () => viewEvidenceSource(source.id)
         : () => viewActivitySource(source.id);
     },
-    [projection, turns.length, evidenceStepIdsByTurn, viewEvidenceSource, viewActivitySource],
+    [
+      projection,
+      turns.length,
+      visibleEvidenceGroupIds,
+      viewEvidenceSource,
+      viewActivitySource,
+    ],
   );
 
   const verificationRunning = turns.some(

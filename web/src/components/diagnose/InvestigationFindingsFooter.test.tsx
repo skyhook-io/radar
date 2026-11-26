@@ -204,6 +204,61 @@ it("keeps a proposal bound to its earlier read and withholds ambiguous reference
   expect(footer.evidenceLink(evidenceRef)).toBeUndefined();
 });
 
+it("opens the original Kubernetes read after a second read updates its Findings card", async () => {
+  const findings = render();
+  const activity = container.querySelector<HTMLElement>(
+    "[data-investigation-activity-scroll]",
+  )!;
+  activity.scrollTo = vi.fn();
+  const newerRef = "ev_sampleinvestigationaaaaaaa_seconddeploymentreadbaaaaa";
+  function read(id: string, ref: string, version: string): DiagnoseStreamEvent {
+    return {
+      type: "step",
+      step: {
+        id,
+        tool: "get_resource",
+        status: "done",
+        isError: false,
+        radarEvidence: true,
+        evidenceRef: ref,
+        result: JSON.stringify({
+          apiVersion: "apps/v1",
+          kind: "Deployment",
+          metadata: {
+            name: run.name,
+            namespace: run.namespace,
+            resourceVersion: version,
+          },
+          status: { readyReplicas: 2, replicas: 3 },
+        }),
+      },
+    };
+  }
+  replay([
+    { type: "turn" },
+    read("initial-read", evidenceRef, "before-change"),
+    { type: "done" },
+    { type: "turn", question: "Check the current workload", verify: true },
+    read("verified-read", newerRef, "after-change"),
+    { type: "done" },
+  ]);
+  act(() => footer.evidenceLink(evidenceRef)!());
+  await vi.waitFor(() => {
+    expect(document.activeElement?.id).toBe(
+      "investigation-activity-turn-0-step-initial-read",
+    );
+    expect(document.activeElement?.textContent).toContain("before-change");
+    expect(document.activeElement?.textContent).not.toContain("after-change");
+  });
+  act(() => footer.evidenceLink(newerRef)!());
+  await vi.waitFor(() => {
+    expect(findings.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement?.hasAttribute("data-evidence-card")).toBe(
+      true,
+    );
+  });
+});
+
 it("keeps read-only proposals in Findings without exposing a follow-up action", () => {
   const findings = render(false);
   replay();
@@ -224,7 +279,8 @@ it("lets an assigned reader see the private proposal and its evidence through a 
   expect(footer.askQuestion).toBeUndefined();
   // The server's run summary still says running after the terminal event.
   act(() => {
-    for (const [i, event] of events.slice(1).entries()) stream.onEvent(event, i + 2);
+    for (const [i, event] of events.slice(1).entries())
+      stream.onEvent(event, i + 2);
   });
   expect(findings.querySelector("[aria-label='Proposed change']")).toBeTruthy();
   expect(footer.evidenceLink(evidenceRef)).toEqual(expect.any(Function));
