@@ -95,6 +95,8 @@ export function MetricsBackendSwitch({
 
   const statusRow = status ? <div className="flex flex-wrap items-center gap-x-3 gap-y-1">{status}</div> : null
   const matched = !!data?.cluster.match
+  // The status describes where metrics come from now, whichever view is open.
+  const active: Backend = matched ? 'openobserve' : 'prometheus'
 
   return (
     <div className="space-y-4">
@@ -134,16 +136,19 @@ export function MetricsBackendSwitch({
           </div>
         )}
         {locked
-          ? choice === 'prometheus' && statusRow
-          : prometheus({ status: choice === 'prometheus' ? status : undefined, onDirtyChange: promDirtyChange, onBusyChange: promBusyChange })}
+          ? active === 'prometheus' && statusRow
+          : prometheus({ status: active === 'prometheus' ? status : undefined, onDirtyChange: promDirtyChange, onBusyChange: promBusyChange })}
       </div>
       <div className={clsx(choice !== 'openobserve' && 'hidden')} inert={choice !== 'openobserve' || undefined}>
         {data ? (
           <OpenObserveSetup
             state={data}
             locked={locked}
-            status={choice === 'openobserve' ? status : undefined}
-            onStateChange={setData}
+            status={active === 'openobserve' ? status : undefined}
+            onStateChange={(next) => {
+              setData(next)
+              if (!next.connection) setChoice('prometheus')
+            }}
             onChanged={onChanged}
             onDirtyChange={setOoDirty}
             onBusyChange={setOoBusy}

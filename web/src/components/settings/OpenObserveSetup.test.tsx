@@ -288,6 +288,22 @@ describe('OpenObserve setup', () => {
     await click(button('Remove connection'))
     expect(calls.at(-1)).toMatchObject({ method: 'DELETE', path: '/integrations/openobserve' })
     expect(field('Address').value).toBe('')
+    expect(radio('Prometheus-compatible').getAttribute('aria-checked')).toBe('true')
+    expect(container.querySelector('[data-testid="prometheus-form"]')?.textContent).toContain('Status block')
+  })
+
+  it('shows the live status only with the source metrics come from', async () => {
+    await mount(unmatched)
+    await click(radio('OpenObserve'))
+    expect(container.querySelector('fieldset[aria-label="OpenObserve connection settings"]')?.textContent).not.toContain('Status block')
+    expect(container.querySelector('[data-testid="prometheus-form"]')?.textContent).toContain('Status block')
+    act(() => root.unmount())
+    root = createRoot(container)
+    replies = {}
+    await mount(matched())
+    await click(radio('Prometheus-compatible'))
+    expect(container.querySelector('[data-testid="prometheus-form"]')?.textContent).not.toContain('Status block')
+    expect(container.querySelector('fieldset[aria-label="OpenObserve connection settings"]')?.textContent).toContain('Status block')
   })
 
   it('shows an environment token read-only and never sends a token for it', async () => {
