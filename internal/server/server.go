@@ -1616,6 +1616,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		WorkloadRestartPreconditions: true,
 		ReviewedWorkloadActions:      true,
 		ReviewedRoutingActions:       true,
+		ReviewedContainerResources:   true,
 		VeleroRunVolumes:             true,
 		VeleroRunArtifacts:           true,
 		ServiceEndpointSlices:        true,

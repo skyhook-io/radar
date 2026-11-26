@@ -144,6 +144,12 @@ func MergePatchAtVersion(ctx context.Context, dyn dynamic.Interface, gvr schema.
 // ApplyVersionedMergePatch applies the resourceVersion precondition and returns
 // the object Kubernetes stored, including any admission changes.
 func ApplyVersionedMergePatch(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersionResource, obj *unstructured.Unstructured, body map[string]any, subresources ...string) (*unstructured.Unstructured, error) {
+	return ApplyVersionedPatch(ctx, dyn, gvr, obj, types.MergePatchType, body, subresources...)
+}
+
+// ApplyVersionedPatch pins a merge or strategic merge patch to the exact
+// Kubernetes version read by the reviewer and returns the admitted object.
+func ApplyVersionedPatch(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersionResource, obj *unstructured.Unstructured, patchType types.PatchType, body map[string]any, subresources ...string) (*unstructured.Unstructured, error) {
 	meta, _ := body["metadata"].(map[string]any)
 	if meta == nil {
 		meta = map[string]any{}
@@ -154,7 +160,7 @@ func ApplyVersionedMergePatch(ctx context.Context, dyn dynamic.Interface, gvr sc
 	if err != nil {
 		return nil, err
 	}
-	return dyn.Resource(gvr).Namespace(obj.GetNamespace()).Patch(ctx, obj.GetName(), types.MergePatchType, data, metav1.PatchOptions{}, subresources...)
+	return dyn.Resource(gvr).Namespace(obj.GetNamespace()).Patch(ctx, obj.GetName(), patchType, data, metav1.PatchOptions{}, subresources...)
 }
 
 // GrantText words an optional grant, "" when there is none.

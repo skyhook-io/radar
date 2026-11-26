@@ -228,6 +228,7 @@ export interface FeatureCapabilities {
   reviewedWorkloadActions?: boolean
   /** Reviewed Deployment pod-template labels and Service selectors with routing impact. */
   reviewedRoutingActions?: boolean
+  reviewedContainerResources?: boolean
   gitopsWriteEvidence?: boolean
   agentSigninCheck?: boolean
   serviceEndpointSlices?: boolean

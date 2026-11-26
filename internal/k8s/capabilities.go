@@ -227,13 +227,14 @@ type FeatureCapabilities struct {
 	// POST /api/workloads/{kind}/{ns}/{name}/restart accepts {uid, resourceVersion};
 	// an older Radar ignores the body and restarts unconditionally.
 	WorkloadRestartPreconditions bool `json:"workloadRestartPreconditions"`
-	ReviewedWorkloadActions      bool `json:"reviewedWorkloadActions"`  // POST /api/workloads/{kind}/{ns}/{name}/actions/{preview|execute}
-	ReviewedRoutingActions       bool `json:"reviewedRoutingActions"`   // Reviewed Deployment template label and Service selector changes.
-	ServiceEndpointSlices        bool `json:"serviceEndpointSlices"`    // GET /api/services/{namespace}/{name}/endpointslices
-	TrafficRecords               bool `json:"trafficRecords"`           // GET /api/traffic/flows/records
-	GitOpsWriteEvidence          bool `json:"gitopsWriteEvidence"`      // POST /api/gitops/write-evidence
-	GitOpsActionCapabilities     bool `json:"gitopsActionCapabilities"` // GET /api/gitops/capabilities/{kind}/{namespace}/{name}
-	AgentSigninCheck             bool `json:"agentSigninCheck"`         // GET /api/agents/signin
+	ReviewedWorkloadActions      bool `json:"reviewedWorkloadActions"`    // POST /api/workloads/{kind}/{ns}/{name}/actions/{preview|execute}
+	ReviewedRoutingActions       bool `json:"reviewedRoutingActions"`     // Reviewed Deployment template label and Service selector changes.
+	ReviewedContainerResources   bool `json:"reviewedContainerResources"` // Reviewed Deployment container CPU and memory changes.
+	ServiceEndpointSlices        bool `json:"serviceEndpointSlices"`      // GET /api/services/{namespace}/{name}/endpointslices
+	TrafficRecords               bool `json:"trafficRecords"`             // GET /api/traffic/flows/records
+	GitOpsWriteEvidence          bool `json:"gitopsWriteEvidence"`        // POST /api/gitops/write-evidence
+	GitOpsActionCapabilities     bool `json:"gitopsActionCapabilities"`   // GET /api/gitops/capabilities/{kind}/{namespace}/{name}
+	AgentSigninCheck             bool `json:"agentSigninCheck"`           // GET /api/agents/signin
 	// POST /api/argo/applications/{namespace}/{name}/rollback starts a sync to
 	// the history entry (id 0 included), and .../resume also clears
 	// spec.syncPolicy.automated.enabled: false. An older Radar writes an
