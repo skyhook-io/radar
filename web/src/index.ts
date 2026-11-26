@@ -31,6 +31,7 @@ export type {
 export type {
   RenderDiagnoseAction,
   RenderInvestigationRunActions,
+  RenderInvestigationFindingsFooter,
   RenderInvestigationRefusalAction,
   DiagnoseConsentCopy,
 } from './context/DiagnoseCustomization';

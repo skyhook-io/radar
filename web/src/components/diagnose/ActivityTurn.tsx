@@ -316,11 +316,13 @@ export function TurnView({
           <div className="flex items-center gap-2 rounded-md border border-theme-border/60 bg-theme-base/40 px-2.5 py-2 text-xs text-theme-text-secondary">
             <RefreshCw className="h-3.5 w-3.5 shrink-0 text-accent" />
             <span className="font-medium text-theme-text-primary">
-              Automatic verification
+              Workload verification
             </span>
-            <span className="text-theme-text-tertiary">
-              Re-checking after apply
-            </span>
+            {turn.status === "running" && (
+              <span className="text-theme-text-tertiary">
+                Checking the current workload
+              </span>
+            )}
           </div>
         ) : (
           <QuestionBubble text={turn.question} actor={turn.actor} />

@@ -21,6 +21,21 @@ export type RenderInvestigationRunActions = (props: {
   onRunUpdated: (run: RunSummary) => void;
 }) => ReactNode;
 
+/** Content after a run's assessment, evidence, and next steps. To open a
+ * linked item, call revealInFindings once when that exact element is mounted.
+ * Give the element a tabIndex of -1 so keyboard focus follows the link. */
+export type RenderInvestigationFindingsFooter = (props: {
+  run: RunSummary;
+  revealInFindings: (element: HTMLElement) => void;
+  /** Reveals a unique recorded read in Findings or its original Activity entry.
+   * Missing or ambiguous evidence has no link. */
+  evidenceLink: (evidenceRef: string) => (() => void) | undefined;
+  /** Returns to the current assessment, when the transcript contains one. */
+  viewAssessment?: () => void;
+  /** Opens Activity and focuses its editable follow-up input, when available. */
+  askQuestion?: () => void;
+}) => ReactNode;
+
 /** Host action beside a refused start or follow-up, e.g. Radar Cloud's
  * "Upgrade" when an organization has used its investigations. Called only for
  * refusals that carry a code, reason or action; return null to show none. */
@@ -73,6 +88,7 @@ export type DiagnoseConsentCopy = {
 export interface DiagnoseCustomization {
   renderAction: RenderDiagnoseAction | undefined;
   renderRunActions?: RenderInvestigationRunActions;
+  renderFindingsFooter?: RenderInvestigationFindingsFooter;
   renderRefusalAction?: RenderInvestigationRefusalAction;
   consentCopy: DiagnoseConsentCopy | undefined;
   // undefined = default (CustomEvent → Radar's own Settings dialog);
@@ -93,6 +109,7 @@ export function DiagnoseCustomizationProvider({
   value,
   consentCopy,
   renderRunActions,
+  renderFindingsFooter,
   renderRefusalAction,
   onOpenSettings,
   children,
@@ -100,6 +117,7 @@ export function DiagnoseCustomizationProvider({
   value: RenderDiagnoseAction | undefined;
   consentCopy?: DiagnoseConsentCopy;
   renderRunActions?: RenderInvestigationRunActions;
+  renderFindingsFooter?: RenderInvestigationFindingsFooter;
   renderRefusalAction?: RenderInvestigationRefusalAction;
   /** Where "AI settings" affordances lead. Omit for Radar's own Settings
    *  dialog; pass `null` to hide them. */
@@ -107,8 +125,8 @@ export function DiagnoseCustomizationProvider({
   children: ReactNode;
 }) {
   const ctx = useMemo(
-    () => ({ renderAction: value, consentCopy, onOpenSettings, renderRunActions, renderRefusalAction }),
-    [value, consentCopy, onOpenSettings, renderRunActions, renderRefusalAction],
+    () => ({ renderAction: value, consentCopy, onOpenSettings, renderRunActions, renderFindingsFooter, renderRefusalAction }),
+    [value, consentCopy, onOpenSettings, renderRunActions, renderFindingsFooter, renderRefusalAction],
   );
   return (
     <DiagnoseCustomizationContext.Provider value={ctx}>

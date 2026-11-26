@@ -147,7 +147,7 @@ type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'cnpg' | 'v
 // Views that have been laid out for phone width (640px and below). The rest
 // keep their desktop width on a phone and scroll sideways; add a view here in
 // the PR that gives it a phone layout.
-const PHONE_READY_VIEWS: ReadonlySet<ExtendedMainView> = new Set<ExtendedMainView>(['issues', 'resources', 'helm', 'home', 'topology', 'capacity'])
+const PHONE_READY_VIEWS: ReadonlySet<ExtendedMainView> = new Set<ExtendedMainView>(['issues', 'resources', 'helm', 'home', 'topology', 'capacity', 'investigations'])
 
 // Extract view from URL path
 function getViewFromPath(pathname: string): ExtendedMainView {
@@ -381,6 +381,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     dismissForNavigation: dismissDiagnoseForNavigation,
     contentGutter,
     maximized: diagnoseMaximized,
+    fullWidthForced: diagnoseFillsViewport,
   } = useDiagnoseLayout()
   // Hand off to a host-owned URL. The host's `onHostNavigate` (Radar Cloud's
   // cross-tree swap) navigates same-document so the chrome morphs instead of
@@ -715,6 +716,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // Views with a deliberate phone layout. On a phone every other view keeps
   // its desktop width and scrolls sideways rather than squeezing.
   const phoneScroll = isMobile && !PHONE_READY_VIEWS.has(mainView)
+  // Investigations own their responsive panes. A narrow embedded window can
+  // have a fine pointer (or a tablet keyboard); the host width is the boundary.
+  const investigationFillsHost = embedded && (
+    mainView === 'investigations' || (diagnoseOpen && (diagnoseMaximized || diagnoseFillsViewport))
+  )
 
   // On a history Pop (back/forward) the URL is authoritative. The URL-write
   // effect, running with not-yet-synced state, would otherwise write the stale
@@ -1923,7 +1929,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         scroll sideways at desktop width instead (see PHONE_READY_VIEWS). */}
     <div
       className={`relative flex bg-theme-base ${navCustomization.embedded ? 'h-full min-h-0' : 'h-screen'}`}
-      style={{ minWidth: (isMobile ? 360 : 800) + (showNavRail ? (navRailEffectivePinned ? 176 : 56) : 0) }}
+      style={{ minWidth: investigationFillsHost ? 0 : (isMobile ? 360 : 800) + (showNavRail ? (navRailEffectivePinned ? 176 : 56) : 0) }}
     >
       {showNavRail && (
         <PrimaryNavRail

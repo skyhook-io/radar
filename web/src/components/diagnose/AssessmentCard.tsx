@@ -1288,8 +1288,7 @@ function DiagnosisResult({
           {!actionNotice && !recValid && (
             <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-snug text-theme-text-tertiary">
               <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0" />
-              No one-click fix is available. Review these steps and apply them
-              manually, or ask the agent to continue.
+              Review these steps before changing the workload.
             </p>
           )}
         </div>

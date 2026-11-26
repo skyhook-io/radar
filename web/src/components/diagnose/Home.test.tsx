@@ -77,6 +77,12 @@ describe("RecentList", () => {
     );
   });
 
+  it("identifies an invited private run without implying organization-wide access", () => {
+    const html = visible(render([run({ ownedByMe: false, visibility: "private" })]));
+    expect(html).toContain("Shared with you for review");
+    expect(html).not.toContain("Organization");
+  });
+
   it("keeps the whole row as one button and labels individual identity fields without native tooltips", () => {
     const html = render([run()]);
     expect(html.match(/<button\b/g)).toHaveLength(1);

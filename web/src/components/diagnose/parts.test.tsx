@@ -1516,15 +1516,23 @@ describe("TurnView tool outcome truth", () => {
     expect(html).not.toContain("animate-result-in");
   });
 
-  it("frames automatic verification as system activity, not user chat", () => {
+  it("describes a workload verification without assuming who started it", () => {
     const verification = turn(false);
     verification.question = "internal verification prompt";
     verification.verify = true;
 
     const html = renderToStaticMarkup(<TurnView turn={verification} />);
-    expect(html).toContain("Automatic verification");
-    expect(html).toContain("Re-checking after apply");
+    expect(html).toContain("Workload verification");
+    expect(html).toContain("Checking the current workload");
     expect(html).not.toContain("internal verification prompt");
+
+    for (const status of ["done", "error"] as const) {
+      const settled = renderToStaticMarkup(
+        <TurnView turn={{ ...verification, status }} />,
+      );
+      expect(settled).toContain("Workload verification");
+      expect(settled).not.toContain("Checking the current workload");
+    }
   });
 
   it("renders an unknown apply prominently and offers current-state verification", () => {

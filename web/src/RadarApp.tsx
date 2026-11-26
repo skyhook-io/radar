@@ -51,6 +51,7 @@ import { DiagnoseCustomizationProvider } from "./context/DiagnoseCustomization";
 import type {
   RenderDiagnoseAction,
   RenderInvestigationRunActions,
+  RenderInvestigationFindingsFooter,
   RenderInvestigationRefusalAction,
   DiagnoseConsentCopy,
 } from "./context/DiagnoseCustomization";
@@ -135,6 +136,8 @@ export interface RadarAppProps {
   renderDiagnoseAction?: RenderDiagnoseAction;
   /** Host-owned controls for the focused investigation; absent in standalone Radar. */
   renderInvestigationRunActions?: RenderInvestigationRunActions;
+  /** Host content at the end of the current investigation's Findings pane. */
+  renderInvestigationFindingsFooter?: RenderInvestigationFindingsFooter;
   /** Host action beside a refused investigation start or follow-up, e.g. Radar
    *  Cloud's "Upgrade" when the organization has used its investigations.
    *  Absent in standalone Radar, whose backend sends no refusal details. */
@@ -243,6 +246,7 @@ export function RadarApp({
   documentTitleSuffix,
   renderDiagnoseAction,
   renderInvestigationRunActions,
+  renderInvestigationFindingsFooter,
   renderInvestigationRefusalAction,
   diagnoseConsent,
   initialPath,
@@ -285,6 +289,7 @@ export function RadarApp({
                       value={renderDiagnoseAction ?? defaultDiagnoseAction}
                       consentCopy={diagnoseConsent}
                       renderRunActions={renderInvestigationRunActions}
+                      renderFindingsFooter={renderInvestigationFindingsFooter}
                       renderRefusalAction={renderInvestigationRefusalAction}
                     >
                       <DiagnoseProvider
