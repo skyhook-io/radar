@@ -109,7 +109,7 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
       'Vulnerabilities sort by exposure, and an empty filtered list says how many matches are in other namespaces',
       'The kind filter and command palette match kubectl short names',
       'Remote MCP clients can sign in with OAuth on Radar instances that use OIDC (opt-in)',
-      'The desktop app now requires macOS 13 or later',
+      'Radar on macOS now requires macOS 13 or later, including the desktop app',
     ],
   },
   {
