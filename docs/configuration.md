@@ -943,7 +943,7 @@ OpenObserve has its data.
 **In Settings.** Open Settings → Metrics and choose **OpenObserve** instead of
 **Prometheus-compatible**. The first time, enter the OpenObserve address, the
 organization (`default` unless you use another), a user or service account
-email and its token, then click **Test and save**. Advanced holds an extra CA
+email and its token, then click **Save changes**. Advanced holds an extra CA
 certificate file and a cluster label override. Radar saves only when the login
 works and it finds this cluster in OpenObserve:
 
@@ -954,11 +954,11 @@ works and it finds this cluster in OpenObserve:
   OpenObserve has, and shows how to add the ID label (below).
 
 For the next cluster, switch to it and choose OpenObserve again: Radar offers
-the saved connection, so one click tests and saves it for that cluster. Changes
-to the connection apply to every cluster that uses it. Leaving the token empty
+the saved connection filled in, so **Use for this cluster** tests and saves it
+for that cluster. Changes to the connection apply to every cluster that uses it. Leaving the token empty
 while the address, organization and user stay the same keeps the saved token.
 **Use Prometheus for this cluster** turns OpenObserve off for the current
-cluster only; **Remove saved OpenObserve connection** removes the connection
+cluster only; **Remove OpenObserve connection** removes the connection
 and every cluster's match. Saving and removing work only while Radar listens
 on this machine alone, not on a shared `--listen-address`.
 

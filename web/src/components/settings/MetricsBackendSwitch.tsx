@@ -43,9 +43,7 @@ export function MetricsBackendSwitch({
   const [promBusy, setPromBusy] = useState(false)
   const [ooDirty, setOoDirty] = useState(false)
   const [ooBusy, setOoBusy] = useState(false)
-  const [releasing, setReleasing] = useState(false)
-  const [releaseError, setReleaseError] = useState('')
-  const busy = promBusy || ooBusy || releasing
+  const busy = promBusy || ooBusy
   const choice: Backend | null = picked ?? (loadError ? 'prometheus' : null)
 
   useEffect(() => {
@@ -69,15 +67,15 @@ export function MetricsBackendSwitch({
 
   // The Prometheus form restores focus in the same commit it reports idle, so
   // the dialog must hear it then: a parent still marked busy keeps the pane inert.
-  const reported = useRef({ promDirty: false, ooDirty: false, promBusy: false, ooBusy: false, releasing: false })
-  reported.current = { promDirty, ooDirty, promBusy, ooBusy, releasing }
+  const reported = useRef({ promDirty: false, ooDirty: false, promBusy: false, ooBusy: false })
+  reported.current = { promDirty, ooDirty, promBusy, ooBusy }
   const promDirtyChange = useCallback((dirty: boolean) => {
     setPromDirty(dirty)
     onDirtyChange?.(dirty || reported.current.ooDirty)
   }, [onDirtyChange])
   const promBusyChange = useCallback((next: boolean) => {
     setPromBusy(next)
-    onBusyChange?.(next || reported.current.ooBusy || reported.current.releasing)
+    onBusyChange?.(next || reported.current.ooBusy)
   }, [onBusyChange])
 
   const releaseCluster = useCallback(async () => {
@@ -86,18 +84,6 @@ export function MetricsBackendSwitch({
     setChoice('prometheus')
     onChanged()
   }, [data?.cluster.uid, onChanged])
-
-  const releaseFromPrometheusView = async () => {
-    setReleasing(true)
-    setReleaseError('')
-    try {
-      await releaseCluster()
-    } catch (error) {
-      setReleaseError(error instanceof Error ? error.message : String(error))
-    } finally {
-      setReleasing(false)
-    }
-  }
 
   const statusRow = status ? <div className="flex flex-wrap items-center gap-x-3 gap-y-1">{status}</div> : null
   const matched = !!data?.cluster.match
@@ -131,13 +117,7 @@ export function MetricsBackendSwitch({
       {!choice && <p role="status" className="text-xs text-theme-text-tertiary">Checking the metrics backend…</p>}
       <div className={clsx('space-y-4', choice !== 'prometheus' && 'hidden')} inert={choice !== 'prometheus' || undefined}>
         {matched && !locked && (
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-            <span className="text-warning-text">This cluster still reads from OpenObserve.</span>
-            <button type="button" disabled={busy} onClick={() => void releaseFromPrometheusView()} className="font-medium text-accent-text hover:underline">
-              {releasing ? 'Switching…' : 'Use Prometheus for this cluster'}
-            </button>
-            {releaseError && <span role="alert" className="basis-full text-semantic-error">{releaseError}</span>}
-          </div>
+          <p className="text-xs text-warning-text">This cluster still reads from OpenObserve. To switch, choose OpenObserve above and use Prometheus for this cluster.</p>
         )}
         {locked
           ? choice === 'prometheus' && statusRow

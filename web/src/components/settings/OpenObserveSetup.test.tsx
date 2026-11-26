@@ -108,17 +108,12 @@ describe('Metrics backend choice', () => {
     expect(container.querySelector('[data-testid="prometheus-form"]')?.closest('.hidden')).toBeNull()
   })
 
-  it('switches views without saving, and offers to release a matched cluster from the Prometheus view', async () => {
-    const onChanged = vi.fn()
-    await mount(matched(), { onChanged })
+  it('switches views without saving, and points a matched cluster to the OpenObserve view to switch', async () => {
+    await mount(matched())
     await click(radio('Prometheus-compatible'))
     expect(calls.filter((c) => c.method !== 'GET')).toHaveLength(0)
-    expect(container.textContent).toContain('This cluster still reads from OpenObserve.')
-    reply('DELETE /integrations/openobserve/cluster?clusterUid=uid-123', { body: { connection: connection(), cluster: { uid: 'uid-123' } } })
-    await click(button('Use Prometheus for this cluster'))
-    expect(calls.at(-1)).toMatchObject({ method: 'DELETE', path: '/integrations/openobserve/cluster?clusterUid=uid-123' })
-    expect(onChanged).toHaveBeenCalled()
-    expect(container.textContent).not.toContain('This cluster still reads from OpenObserve.')
+    expect(container.textContent).toContain('This cluster still reads from OpenObserve. To switch, choose OpenObserve above')
+    expect(button('Use Prometheus for this cluster')).toBeUndefined()
   })
 
   it('falls back to Prometheus on a failed load, then follows the cluster match once Retry succeeds', async () => {
@@ -164,7 +159,7 @@ describe('OpenObserve setup', () => {
     expect(onDirtyChange).toHaveBeenLastCalledWith(true)
     reply('POST /integrations/openobserve/setup', { body: { outcome: 'saved', clusterUid: 'uid-123', notes: { collector: true, missing: ['cpu', 'hpa'] } } })
     replies['GET /integrations/openobserve'] = [{ body: matched() }]
-    await click(button('Test and save'))
+    await click(button('Save changes'))
     expect(posts()[0].body).toEqual({
       baseUrl: 'https://oo.example.com', org: 'default', user: 'radar@example.com', token: 'secret', caCertFile: '', clusterLabel: '', clusterUid: 'uid-123',
     })
@@ -186,7 +181,7 @@ describe('OpenObserve setup', () => {
       { body: { outcome: 'confirm', reason: 'Found only by name.', suggestion: { label: 'k8s_cluster', value: 'prod' }, clusterUid: 'uid-123' } },
       { body: { outcome: 'saved', clusterUid: 'uid-123', notes: {} } })
     replies['GET /integrations/openobserve'] = [{ body: matched() }]
-    await click(button('Test and save'))
+    await click(button('Save changes'))
     expect(container.textContent).toContain('Found only by name.')
     await click(button("Confirm 'prod' and save"))
     expect(posts()).toHaveLength(2)
@@ -204,14 +199,14 @@ describe('OpenObserve setup', () => {
       outcome: 'not_found', reason: 'No metrics for this cluster.', clusterUid: 'uid-123',
       clusterNames: [{ label: 'k8s_cluster', value: 'staging' }, { label: 'k8s_cluster', value: 'dev' }],
     } })
-    await click(button('Test and save'))
+    await click(button('Save changes'))
     const text = container.textContent!
     expect(text).toContain('No metrics for this cluster.')
     expect(text).toContain('OpenObserve has metrics for: k8s_cluster=staging, k8s_cluster=dev.')
     expect(text).toContain('If OpenObserve names clusters with another label, set it under Advanced.')
     expect(text).toContain('radar_cluster_uid=uid-123')
     expect(text).not.toContain('Matched by')
-    expect(button('Test and save')).toBeTruthy()
+    expect(button('Save changes')).toBeTruthy()
     expect(field('Token').value).toBe('secret')
     expect(onChanged).not.toHaveBeenCalled()
     expect(calls.map((c) => c.method)).toEqual(['GET', 'POST'])
@@ -227,7 +222,7 @@ describe('OpenObserve setup', () => {
       outcome: 'not_found', clusterUid: 'uid-123', clusterNames: [],
       reason: '3 sampled Pods from namespace demo are in OpenObserve, but carry none of the cluster labels cluster.',
     } })
-    await click(button('Test and save'))
+    await click(button('Save changes'))
     const text = container.textContent!
     expect(text).toContain('carry none of the cluster labels')
     expect(text).not.toContain('OpenObserve has no cluster metrics yet.')
@@ -241,7 +236,7 @@ describe('OpenObserve setup', () => {
     type(field('User or service account email'), 'radar@example.com')
     type(field('Token'), 'secret')
     reply('POST /integrations/openobserve/setup', { body: { outcome: 'not_found', clusterUid: 'uid-123', clusterNames: [] } })
-    await click(button('Test and save'))
+    await click(button('Save changes'))
     expect(container.textContent).toContain('OpenObserve has no cluster metrics yet.')
   })
 
@@ -250,7 +245,7 @@ describe('OpenObserve setup', () => {
     await click(radio('OpenObserve'))
     type(field('Address'), 'https://oo.example.com')
     reply('POST /integrations/openobserve/setup', { status: 400, body: { error: 'Login failed: 401 Unauthorized' } })
-    await click(button('Test and save'))
+    await click(button('Save changes'))
     expect(container.querySelector('[role="alert"]')?.textContent).toBe('Login failed: 401 Unauthorized')
     expect(field('Address').value).toBe('https://oo.example.com')
   })
@@ -268,10 +263,10 @@ describe('OpenObserve setup', () => {
   it('offers the saved connection to an unmatched cluster', async () => {
     await mount({ connection: connection(), cluster: { uid: 'uid-123' } })
     await click(radio('OpenObserve'))
-    expect(container.textContent).toContain('Use the saved OpenObserve connection (https://oo.example.com, user radar@example.com)')
+    expect(field('Address').value).toBe('https://oo.example.com')
     reply('POST /integrations/openobserve/setup', { body: { outcome: 'saved', notes: {} } })
     replies['GET /integrations/openobserve'] = [{ body: matched() }]
-    await click(button('Test and save'))
+    await click(button('Use for this cluster'))
     expect(posts()[0].body).toEqual({ useSaved: true, clusterUid: 'uid-123' })
   })
 
@@ -285,13 +280,13 @@ describe('OpenObserve setup', () => {
 
   it('asks before removing the saved connection, listing the clusters that use it', async () => {
     await mount(matched({ clusters: [{ context: 'kind-oo-b', by: 'id' }, { context: 'kind-oo-c', by: 'name' }] }))
-    await click(button('Remove saved OpenObserve connection'))
+    await click(button('Remove OpenObserve connection'))
     expect(calls.some((c) => c.method === 'DELETE')).toBe(false)
     const dialog = document.body.textContent!
     expect(dialog).toContain('Remove the saved OpenObserve connection?')
-    expect(dialog).toContain('These clusters go back to their own Prometheus: kind-oo-b, kind-oo-c.')
+    expect(dialog).toContain('These clusters go back to their own Prometheus: kind-oo-b, kind-oo-c. Nothing is deleted in OpenObserve or Kubernetes.')
     reply('DELETE /integrations/openobserve', { body: unmatched })
-    await click(button('Remove'))
+    await click(button('Remove connection'))
     expect(calls.at(-1)).toMatchObject({ method: 'DELETE', path: '/integrations/openobserve' })
     expect(field('Address').value).toBe('')
   })
@@ -299,28 +294,26 @@ describe('OpenObserve setup', () => {
   it('shows an environment token read-only and never sends a token for it', async () => {
     await mount({ connection: connection({ tokenSource: 'env', tokenEnv: 'RADAR_OO_TOKEN' }), cluster: { uid: 'uid-123' } })
     await click(radio('OpenObserve'))
-    await click(button('Edit connection'))
     expect(container.textContent).toContain('Token from $RADAR_OO_TOKEN')
     expect(container.querySelector('input[type="password"]')).toBeNull()
-    expect(field('Address').value).toBe('https://oo.example.com')
+    type(field('Organization'), 'team')
     reply('POST /integrations/openobserve/setup', { body: { outcome: 'saved', notes: {} } })
     replies['GET /integrations/openobserve'] = [{ body: matched({ tokenSource: 'env', tokenEnv: 'RADAR_OO_TOKEN' }) }]
-    await click(button('Test and save'))
+    await click(button('Save changes'))
     expect(posts()[0].body).not.toHaveProperty('token')
-    expect(posts()[0].body).toMatchObject({ baseUrl: 'https://oo.example.com', user: 'radar@example.com' })
+    expect(posts()[0].body).toMatchObject({ baseUrl: 'https://oo.example.com', org: 'team', user: 'radar@example.com' })
   })
 
   it('asks for a new token when an environment-token connection points at another user', async () => {
     await mount({ connection: connection({ tokenSource: 'env', tokenEnv: 'RADAR_OO_TOKEN' }), cluster: { uid: 'uid-123' } })
     await click(radio('OpenObserve'))
-    await click(button('Edit connection'))
     type(field('User or service account email'), 'other@example.com')
     expect(container.textContent).not.toContain('Token from $RADAR_OO_TOKEN')
     expect(container.textContent).toContain('A new address, organization or user needs its own token.')
     type(field('Token'), 'new-secret')
     reply('POST /integrations/openobserve/setup', { body: { outcome: 'saved', notes: {} } })
     replies['GET /integrations/openobserve'] = [{ body: matched() }]
-    await click(button('Test and save'))
+    await click(button('Save changes'))
     expect(posts()[0].body).toMatchObject({ user: 'other@example.com', token: 'new-secret', clusterUid: 'uid-123' })
   })
 
@@ -329,15 +322,31 @@ describe('OpenObserve setup', () => {
     await click(radio('OpenObserve'))
     reply('POST /integrations/openobserve/setup', { body: { outcome: 'saved', notes: {} } })
     replies['GET /integrations/openobserve'] = [{ status: 500, body: { error: 'boom' } }]
-    await click(button('Test and save'))
+    await click(button('Use for this cluster'))
     expect(container.textContent).toContain("Saved, but Radar couldn't reload this page.")
     expect(container.textContent).not.toContain('boom')
   })
 
   it('keeps a saved token when editing without typing one', async () => {
     await mount(matched())
-    await click(button('Edit connection'))
     expect(field('Token').placeholder).toBe('Saved — leave empty to keep')
     expect(field('Token').value).toBe('')
+  })
+  it('shows a saved connection filled in, saving only after a change, and discards back to it', async () => {
+    const onDirtyChange = vi.fn()
+    await mount(matched(), { onDirtyChange })
+    expect(field('Address').value).toBe('https://oo.example.com')
+    expect(field('User or service account email').value).toBe('radar@example.com')
+    expect(button('Edit connection')).toBeUndefined()
+    expect(button('Save changes')!.disabled).toBe(true)
+    expect(button('Discard')).toBeUndefined()
+    type(field('Address'), 'https://oo2.example.com')
+    expect(button('Save changes')!.disabled).toBe(false)
+    expect(container.textContent).toContain('Unsaved changes')
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true)
+    await click(button('Discard'))
+    expect(field('Address').value).toBe('https://oo.example.com')
+    expect(button('Save changes')!.disabled).toBe(true)
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false)
   })
 })
