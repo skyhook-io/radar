@@ -142,7 +142,7 @@ type BeylaSource struct {
 	metrics   *metricsInputs
 	k8sClient kubernetes.Interface
 	queryFn   promQueryFunc
-	// servicePorts reads a destination's Service ports; nil reads Radar's cache.
+	// servicePorts reads a destination's Service ports; nil reads the member's cache.
 	servicePorts servicePortLookup
 
 	// mu guards the fields Detect resolves and the pollers read. Manager releases
@@ -758,7 +758,12 @@ func (s *BeylaSource) getFlowsInternal(ctx context.Context, opts FlowOptions, sc
 		}
 		lookup := s.servicePorts
 		if lookup == nil {
-			lookup = cachedServicePorts
+			lookup = func(namespace, workload, kind, protocol string) ([]int, bool) {
+				if s.metrics == nil {
+					return nil, false
+				}
+				return cachedServicePorts(s.metrics.cache, namespace, workload, kind, protocol)
+			}
 		}
 		presence.portsFilled = inferServicePorts(edges, l7Flows, presence.transport, lookup)
 	}
