@@ -879,3 +879,44 @@ is the last **pre-write** observation. After execution, fetch
 `routingImpact.verifyEndpointSlices` to see what Kubernetes has published.
 Radar refuses incomplete evidence above 500 matching objects per list or 64
 ports on one Service.
+
+### Reviewing CPU or memory for a Deployment container
+
+When `features.reviewedContainerResources` is true, use the Deployment
+preview and execute routes above with a regular container name and one
+resource dimension. For example, to raise the memory limit for checkout's
+`api` container, preview this body.
+
+```json
+{"action":"setContainerResources","container":"api","resource":"memory","limit":"512Mi"}
+```
+
+A template with a 128Mi request and 256Mi limit returns
+`before: {"request":"128Mi","limit":"256Mi"}` and
+`after: {"request":"128Mi","limit":"512Mi"}`. Submit both `request` and
+`limit` to change them together. A missing live setting appears as `null`.
+Omit a setting to preserve it. If the template has no request, include an
+explicit request when setting a limit since Pod admission can default it.
+
+CPU supports cores and `m` down to one millicore. Memory supports whole bytes
+and Kubernetes decimal or binary units such as `500M` and `512Mi`. Supply
+positive plain decimal strings with at most nine fractional digits and no
+exponents. Radar normalizes equivalent values for review.
+A paused Deployment, conflicting Pod-level budget for this dimension or a
+request above the resulting limit requires a revised proposal.
+
+On approval, Radar patches the named container and confirms the returned
+Deployment spec. Pod admission, scheduling and the rollout are separate.
+Check new Pod readiness and events. An HPA using CPU or memory utilization
+can react to a request change, and a VPA or GitOps controller can override
+the settings. The review reads the Deployment and does not evaluate namespace
+quotas or admission policies.
+
+
+| Refusal code | Operator action |
+|---|---|
+| `resource_container_missing` | Read the current names of regular containers and select one. |
+| `resource_request_required` | Choose an explicit request when proposing the new limit. |
+| `resource_request_exceeds_limit` | Set both values in the same proposal or retain a compatible bound. |
+| `resource_pod_budget` | Inspect the Pod-level budget for this dimension. |
+| `resource_quantity_unsupported` | Inspect the existing value. The reviewed API requires exact millicores and bytes. |

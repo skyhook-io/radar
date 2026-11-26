@@ -235,11 +235,7 @@ func (f workloadActionField) value(obj *unstructured.Unstructured) (any, error) 
 // the human decision. Exclude observed status so a rollout progressing during
 // review does not itself invalidate the intended write. Keep the spec and its
 // ownership: a target can be adopted between preview and execution.
-func (f workloadActionField) review(obj *unstructured.Unstructured, action, connectionID string) (workloadActionView, error) {
-	before, err := f.value(obj)
-	if err != nil {
-		return workloadActionView{}, err
-	}
+func (f workloadActionField) reviewToken(obj *unstructured.Unstructured, action, connectionID string) (string, error) {
 	var materialOwners []metav1.ManagedFieldsEntry
 	for _, owner := range obj.GetManagedFields() {
 		if owner.Subresource == "status" {
@@ -253,6 +249,22 @@ func (f workloadActionField) review(obj *unstructured.Unstructured, action, conn
 		obj.GetGeneration(), obj.Object["spec"], obj.GetLabels(), obj.GetAnnotations(),
 		obj.GetOwnerReferences(), materialOwners, action, f.path, f.after,
 	}
+	if f.resources != nil {
+		material = append(material, f.resources)
+	}
+	digest, err := json.Marshal(material)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(digest)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func (f workloadActionField) review(obj *unstructured.Unstructured, action, token string) (workloadActionView, error) {
+	before, err := f.value(obj)
+	if err != nil {
+		return workloadActionView{}, err
+	}
 	var container, dimension string
 	if f.resources != nil {
 		container, dimension = f.resources.Container, f.resources.Resource
@@ -260,13 +272,7 @@ func (f workloadActionField) review(obj *unstructured.Unstructured, action, conn
 		if err != nil {
 			return workloadActionView{}, err
 		}
-		material = append(material, f.resources)
 	}
-	digest, err := json.Marshal(material)
-	if err != nil {
-		return workloadActionView{}, err
-	}
-	sum := sha256.Sum256(digest)
 	field := strings.Join(f.path, ".")
 	if f.resources != nil {
 		field = f.resources.field()
@@ -281,7 +287,7 @@ func (f workloadActionField) review(obj *unstructured.Unstructured, action, conn
 		Container: container, Resource: dimension, Action: action, Kind: f.kind, Namespace: obj.GetNamespace(), Name: obj.GetName(),
 		UID: string(obj.GetUID()), ResourceVersion: obj.GetResourceVersion(),
 		Generation:  max(obj.GetGeneration(), 0),
-		ReviewToken: hex.EncodeToString(sum[:]), Field: field, Before: before, After: f.after, Effect: f.effect,
+		ReviewToken: token, Field: field, Before: before, After: f.after, Effect: f.effect,
 	}, nil
 }
 
@@ -353,6 +359,10 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, kind str
 	}
 	audit := auth.AuditActionDetails{Action: in.Action, Kind: field.kind, Group: field.gvr.Group, Namespace: ns, Name: name, SelectedUID: in.UID, Source: "reviewed-action", Outcome: "no-write"}
 	if execute {
+		if field.resources != nil {
+			audit.Container = field.resources.Container
+			audit.ResourceDimension = field.resources.Resource
+		}
 		defer func() { auth.AuditLogAction(r, audit) }()
 	}
 	obj, err := client.Resource(field.gvr).Namespace(ns).Get(r.Context(), name, metav1.GetOptions{})
@@ -374,7 +384,18 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, kind str
 	if connectionIdentityPublished() {
 		connectionID = k8s.ConnectionFrom(r.Context()).ID()
 	}
-	view, err := field.review(obj, in.Action, connectionID)
+	token, err := field.reviewToken(obj, in.Action, connectionID)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	// A changed resource plan must report a stale review before interpreting
+	// the replacement spec, including when someone already set one desired key.
+	if execute && field.resources != nil && (string(obj.GetUID()) != in.UID || (in.ExpectedResourceVersion != "" && string(in.ExpectedResourceVersion) != obj.GetResourceVersion()) || in.ReviewToken != token) {
+		s.writeErrorCode(w, http.StatusConflict, errCodeWorkloadChanged, "the Deployment, its version or the proposed resource settings changed. Read the current container settings and replica count before reviewing again")
+		return
+	}
+	view, err := field.review(obj, in.Action, token)
 	if err != nil {
 		var refusal *integration.ActionError
 		if errors.As(err, &refusal) {
@@ -508,6 +529,9 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, kind str
 	audit.Outcome = "stored"
 	view.Generation = storedGeneration
 	view.ResourceVersion = stored.GetResourceVersion()
+	if field.resources != nil {
+		view.Effect = "Kubernetes stored the reviewed Deployment template. Read the rollout and replacement Pods to verify scheduling, readiness and the original symptom."
+	}
 	s.writeJSON(w, view)
 }
 

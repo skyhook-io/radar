@@ -7,6 +7,7 @@ import (
 	"math"
 	"math/big"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -35,6 +36,17 @@ func (v workloadResourceValue) MarshalJSON() ([]byte, error) {
 type containerResourcePair struct {
 	Request workloadResourceValue `json:"request"`
 	Limit   workloadResourceValue `json:"limit"`
+}
+
+func (p containerResourcePair) String() string {
+	request, limit := string(p.Request), string(p.Limit)
+	if request == "" {
+		request = "unset"
+	}
+	if limit == "" {
+		limit = "unset"
+	}
+	return "request=" + request + ", limit=" + limit
 }
 
 var desiredQuantityRE = regexp.MustCompile(`^([0-9]+(?:\.[0-9]{1,9})?|\.[0-9]{1,9})([a-zA-Z]*)$`)
@@ -81,7 +93,10 @@ func desiredResourceValue(raw workloadResourceValue, dimension string) (workload
 
 func canonicalResourceValue(n int64, dimension string) workloadResourceValue {
 	if dimension == "cpu" {
-		return workloadResourceValue(resource.NewMilliQuantity(n, resource.DecimalSI).String())
+		if n%1000 == 0 {
+			return workloadResourceValue(strconv.FormatInt(n/1000, 10))
+		}
+		return workloadResourceValue(strconv.FormatInt(n, 10) + "m")
 	}
 	decimal := resource.NewQuantity(n, resource.DecimalSI).String()
 	binary := resource.NewQuantity(n, resource.BinarySI).String()

@@ -12,6 +12,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
@@ -20,7 +21,7 @@ import (
 
 func TestReviewedResourceQuantities(t *testing.T) {
 	for _, tc := range []struct{ dimension, supplied, want string }{
-		{"cpu", "1000m", "1"}, {"cpu", ".5", "500m"}, {"cpu", "1000", "1k"},
+		{"cpu", "1000m", "1"}, {"cpu", ".5", "500m"}, {"cpu", "1000", "1000"},
 		{"memory", "1024Mi", "1Gi"}, {"memory", "1073741824", "1Gi"}, {"memory", "1.25Gi", "1280Mi"},
 		{"memory", "2G", "2G"}, {"memory", "1.5Ki", "1536"}, {"memory", "0.000000001G", "1"},
 		{"cpu", "100.1m", ""}, {"memory", "1.5", ""}, {"memory", "400m", ""},
@@ -140,7 +141,7 @@ func TestReviewedContainerResourcesRoute(t *testing.T) {
 				t.Fatal("extra field in patch", string(patch))
 			}
 			code, replay := requestWorkloadAction(t, router, "Deployment", "execute", in)
-			if code != 409 || replay["error_code"] != "workload_action_unchanged" || writes(dyn) != 1 {
+			if code != 409 || replay["error_code"] != errCodeWorkloadChanged || writes(dyn) != 1 {
 				t.Fatal(code, replay, dyn.Actions())
 			}
 		})
@@ -211,5 +212,165 @@ func TestReviewedResourceBindingAndAdmission(t *testing.T) {
 	code, v = requestWorkloadAction(t, router, "Deployment", "execute", in)
 	if code != 409 || v["error_code"] != "workload_action_not_stored" || writes(dyn) != 1 {
 		t.Fatal(code, v, dyn.Actions())
+	}
+}
+
+func TestReviewedResourceSchedulingEffects(t *testing.T) {
+	for _, tc := range []struct {
+		name, strategy string
+		replicas       int64
+		request        string
+		want           []string
+	}{
+		{"raise", "RollingUpdate", 3, "500m", []string{"750m more CPU", "lowers measured utilization"}},
+		{"lower", "RollingUpdate", 4, "100m", []string{"600m less CPU", "raises measured utilization"}},
+		{"scaled down", "", 0, "500m", []string{"zero replicas", "Future Pods"}},
+		{"recreate", "Recreate", 1, "500m", []string{"service interruption"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			obj := reviewedResourceDeployment()
+			_ = unstructured.SetNestedField(obj.Object, tc.replicas, "spec", "replicas")
+			_ = unstructured.SetNestedField(obj.Object, tc.strategy, "spec", "strategy", "type")
+			router, dyn := resourceActionRouter(t, obj, nil)
+			code, view := requestWorkloadAction(t, router, "Deployment", "preview", map[string]any{"action": "setContainerResources", "container": "api", "resource": "cpu", "request": tc.request})
+			if code != 200 || writes(dyn) != 0 {
+				t.Fatal(code, view)
+			}
+			for _, needle := range tc.want {
+				if !strings.Contains(view["effect"].(string), needle) {
+					t.Errorf("%q missing from %s", needle, view["effect"])
+				}
+			}
+		})
+	}
+}
+
+func TestReviewedResourceAdmissionReceipt(t *testing.T) {
+	for _, tc := range []struct {
+		name, code string
+		status     int
+		admit      func(*unstructured.Unstructured, map[string]any)
+	}{
+		{"quantity alias", "", 200, func(_ *unstructured.Unstructured, c map[string]any) {
+			_ = unstructured.SetNestedField(c, "536870912", "resources", "limits", "memory")
+		}},
+		{"different admitted limit", "workload_action_not_stored", 409, func(_ *unstructured.Unstructured, c map[string]any) {
+			_ = unstructured.SetNestedField(c, "384Mi", "resources", "limits", "memory")
+		}},
+		{"version missing", "workload_action_unconfirmed", 502, func(o *unstructured.Unstructured, _ map[string]any) { o.SetResourceVersion("") }},
+		{"version unchanged", "workload_action_unconfirmed", 502, func(o *unstructured.Unstructured, _ map[string]any) { o.SetResourceVersion("7") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			obj := reviewedResourceDeployment()
+			target := containerResourceChange{Container: "api", Resource: "memory"}
+			router, dyn := resourceActionRouter(t, obj, func(stored *unstructured.Unstructured) {
+				c, err := target.container(stored)
+				if err != nil {
+					t.Fatal(err)
+				}
+				tc.admit(stored, c)
+			})
+			input := map[string]any{"action": "setContainerResources", "container": "api", "resource": "memory", "limit": "512Mi"}
+			code, v := requestWorkloadAction(t, router, "Deployment", "preview", input)
+			if code != 200 {
+				t.Fatal(code, v)
+			}
+			input["uid"], input["reviewToken"], input["expectedResourceVersion"] = v["uid"], v["reviewToken"], v["resourceVersion"]
+			code, v = requestWorkloadAction(t, router, "Deployment", "execute", input)
+			if code != tc.status || tc.code != "" && v["error_code"] != tc.code || writes(dyn) != 1 {
+				t.Fatal(code, v, dyn.Actions())
+			}
+			if tc.name == "different admitted limit" && !strings.Contains(v["error"].(string), "request=128Mi, limit=384Mi") {
+				t.Fatal(v)
+			}
+			if code == 200 {
+				if !strings.Contains(v["effect"].(string), "stored the reviewed Deployment template") {
+					t.Fatal(v)
+				}
+				stored, err := dyn.Tracker().Get(schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}, "prod", "web")
+				if err != nil {
+					t.Fatal(err)
+				}
+				c, err := target.container(obj)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_ = unstructured.SetNestedField(c, "536870912", "resources", "limits", "memory")
+				if !reflect.DeepEqual(obj.Object["spec"], stored.(*unstructured.Unstructured).Object["spec"]) {
+					t.Fatal("stored spec differs from exactly one intended edit")
+				}
+			}
+		})
+	}
+}
+
+func TestReviewedResourceDriftPrecedesPlanning(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*unstructured.Unstructured)
+		strict bool
+	}{
+		{"replacement with no container", func(o *unstructured.Unstructured) {
+			o.SetUID("replacement")
+			_ = unstructured.SetNestedSlice(o.Object, []any{}, "spec", "template", "spec", "containers")
+		}, false},
+		{"paused after review", func(o *unstructured.Unstructured) { _ = unstructured.SetNestedField(o.Object, true, "spec", "paused") }, false},
+		{"Pod budget added", func(o *unstructured.Unstructured) {
+			_ = unstructured.SetNestedField(o.Object, "2Gi", "spec", "template", "spec", "resources", "limits", "memory")
+		}, false},
+		{"retained request drifted and limit already applied", func(o *unstructured.Unstructured) {
+			target := containerResourceChange{Container: "api"}
+			c, _ := target.container(o)
+			_ = unstructured.SetNestedField(c, "256Mi", "resources", "requests", "memory")
+			_ = unstructured.SetNestedField(c, "512Mi", "resources", "limits", "memory")
+		}, false},
+		{"only status version changed", func(o *unstructured.Unstructured) { o.SetResourceVersion("8") }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			obj := reviewedResourceDeployment()
+			router, dyn := resourceActionRouter(t, obj, nil)
+			in := map[string]any{"action": "setContainerResources", "container": "api", "resource": "memory", "limit": "512Mi"}
+			code, p := requestWorkloadAction(t, router, "Deployment", "preview", in)
+			if code != 200 {
+				t.Fatal(code, p)
+			}
+			in["uid"], in["reviewToken"] = p["uid"], p["reviewToken"]
+			if tc.strict {
+				in["expectedResourceVersion"] = p["resourceVersion"]
+			}
+			changed := obj.DeepCopy()
+			tc.mutate(changed)
+			if err := dyn.Tracker().Update(schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}, changed, "prod"); err != nil {
+				t.Fatal(err)
+			}
+			code, v := requestWorkloadAction(t, router, "Deployment", "execute", in)
+			if code != 409 || v["error_code"] != errCodeWorkloadChanged || writes(dyn) != 0 {
+				t.Fatal(code, v, dyn.Actions())
+			}
+		})
+	}
+}
+
+func TestReviewedResourceInheritedRequest(t *testing.T) {
+	obj := reviewedResourceDeployment()
+	_ = unstructured.SetNestedField(obj.Object, int64(1), "spec", "replicas")
+	_ = unstructured.SetNestedField(obj.Object, "Recreate", "spec", "strategy", "type")
+	cn := strings.Repeat("p", 63)
+	target := containerResourceChange{Container: "proxy"}
+	c, err := target.container(obj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c["name"] = cn
+	_ = unstructured.SetNestedField(c, "9223372036854775807", "resources", "limits", "memory")
+	router, dyn := resourceActionRouter(t, obj, nil)
+	in := map[string]any{"action": "setContainerResources", "container": cn, "resource": "memory", "request": "32Mi", "limit": "2Gi"}
+	code, p := requestWorkloadAction(t, router, "Deployment", "preview", in)
+	if code != 200 || writes(dyn) != 0 {
+		t.Fatal(code, p)
+	}
+	text := p["effect"].(string)
+	if len(text) > 1024 || !strings.Contains(text, "inherited") || !strings.Contains(text, "raises measured utilization") || !strings.Contains(text, "Guaranteed QoS") {
+		t.Fatal(text)
 	}
 }

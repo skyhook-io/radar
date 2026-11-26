@@ -2,6 +2,8 @@ package server
 
 import (
 	"errors"
+	"fmt"
+	"math"
 	"net/http"
 	"reflect"
 	"strconv"
@@ -124,28 +126,58 @@ func (c containerResourceChange) plan(obj *unstructured.Unstructured, before con
 	} else if strategy == "Recreate" {
 		effect = "The Recreate rollout stops existing Pods before starting replacements. Expect a service interruption."
 	}
+	label := c.Resource
+	if c.Resource == "cpu" {
+		label = "CPU"
+	}
 	if after.Request != before.Request {
-		effect += " The new request can change Pod scheduling and node capacity requirements."
-		if before.Request != "" && before.Request != "0" {
-			old, next := resource.MustParse(string(before.Request)), resource.MustParse(string(after.Request))
-			direction := "lowers"
-			if next.Cmp(old) < 0 {
-				direction = "raises"
-			}
-			effect += " At the same usage, this " + direction + " measured utilization for an HPA using this " + c.Resource + " request."
-		} else {
-			effect += " Setting the request can change utilization-based HPA decisions."
-		}
+		effect += c.requestEffect(before, after, label, replicas)
 	}
 	if after.Limit != before.Limit {
 		if c.Resource == "cpu" {
-			effect += " Kubernetes throttles a container that reaches its CPU limit."
+			effect += " A container that reaches its CPU limit is throttled."
 		} else {
-			effect += " A container that exceeds its memory limit can be OOM-killed."
+			effect += " Compare actual memory usage with the new limit. Exceeding it can OOM-kill the container."
 		}
 	}
-	effect += " Pod admission policies can change or reject new Pods. Check rollout readiness and events after applying."
+	if before.Limit != "" && (before.Request == before.Limit || before.Request == "") && after.Request != after.Limit {
+		effect += " If current Pods have Guaranteed QoS, splitting request and limit can make replacements Burstable."
+	}
+	if known && replicas == 0 {
+		effect += " Check admission and readiness when the Deployment scales up."
+	} else {
+		effect += " Pod admission can change or reject replacements. Check rollout readiness and events."
+	}
 	return after, effect, nil
+}
+
+func (c containerResourceChange) requestEffect(before, after containerResourcePair, label string, replicas int64) string {
+	effect := " The request can change scheduling and node capacity requirements."
+	previous := before.Request
+	if previous == "" && before.Limit != "" {
+		previous = before.Limit
+		effect += fmt.Sprintf(" Where admission inherited the prior %s limit as the request, the previous effective request was %s.", label, previous)
+	}
+	if previous == "" || previous == "0" {
+		return effect + " Setting the request can change utilization-based HPA decisions."
+	}
+	old, next := resource.MustParse(string(previous)), resource.MustParse(string(after.Request))
+	scale := resource.Scale(0)
+	if c.Resource == "cpu" {
+		scale = resource.Milli
+	}
+	delta := next.ScaledValue(scale) - old.ScaledValue(scale)
+	if delta == 0 {
+		return effect + " The explicit request equals the inherited value."
+	}
+	amount, utilization := "more", "lowers"
+	if delta < 0 {
+		delta, amount, utilization = -delta, "less", "raises"
+	}
+	if replicas > 0 && delta <= math.MaxInt64/replicas {
+		effect += fmt.Sprintf(" Across %d desired replicas, %s requests %s %s %s before surge or admission changes.", replicas, c.Container, canonicalResourceValue(delta*replicas, c.Resource), amount, label)
+	}
+	return effect + " At the same usage, this " + utilization + " measured utilization for an HPA using this " + label + " request."
 }
 
 // Strategic merge on a native Deployment merges containers by name. An RFC
