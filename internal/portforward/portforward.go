@@ -18,7 +18,7 @@ import (
 	pfpkg "github.com/skyhook-io/radar/pkg/portforward"
 )
 
-// Owner identifies the subsystem that owns a metrics forward.
+// Owner labels the subsystem in tunnel diagnostics.
 type Owner = string
 
 const (
@@ -68,7 +68,7 @@ type Manager struct {
 	client      kubernetes.Interface
 	config      *rest.Config
 	contextName string
-	forwards    map[*forward]struct{}
+	forwards    map[*Handle]struct{}
 	lifetime    context.Context
 	cancel      context.CancelFunc
 	run         func(context.Context, kubernetes.Interface, *rest.Config, string, string, int, int, chan struct{}, chan struct{}) error
@@ -76,68 +76,40 @@ type Manager struct {
 
 func NewManager(client kubernetes.Interface, config *rest.Config, contextName string) *Manager {
 	lifetime, cancel := context.WithCancel(context.Background())
-	return &Manager{lifetime: lifetime, cancel: cancel, client: client, config: config, contextName: contextName, forwards: make(map[*forward]struct{}), run: pfpkg.RunPortForward}
+	return &Manager{lifetime: lifetime, cancel: cancel, client: client, config: config, contextName: contextName, forwards: make(map[*Handle]struct{}), run: pfpkg.RunPortForward}
 }
 
-type forward struct {
-	manager    *Manager
-	owner      Owner
-	info       ConnectionInfo
-	targetPort int
-	dedicated  bool
-	owners     int
-	// established wakes callers sharing an in-flight Start for the same target.
-	established chan struct{}
-	active      bool
-	stopCh      chan struct{}
-}
-
-func (f *forward) matches(namespace, service string, port int) bool {
-	return f.info.Namespace == namespace && f.info.ServiceName == service && f.targetPort == port
-}
-
-// Handle identifies one tunnel. Each successful start acquires a
-// reference that the caller releases with Stop.
+// Handle owns one tunnel, which the caller releases with Stop.
 type Handle struct {
-	f        *forward
-	released bool // guarded by the manager
-}
-
-func (h *Handle) SameForward(other *Handle) bool {
-	return h != nil && other != nil && (h == other || h.f != nil && h.f == other.f)
+	manager *Manager
+	owner   Owner
+	info    ConnectionInfo
+	active  bool // guarded by the manager
+	stopCh  chan struct{}
 }
 
 func (h *Handle) Address() string {
-	if h == nil || h.f == nil {
+	if h == nil {
 		return ""
 	}
-	return h.f.info.Address
-}
-
-// Replace releases the old handle when adopting another.
-func (h *Handle) Replace(next *Handle) *Handle {
-	if h == next {
-		return h
-	}
-	h.Stop()
-	return next
+	return h.info.Address
 }
 
 func (h *Handle) Alive() bool {
-	if h == nil || h.f == nil {
+	if h == nil || h.manager == nil {
 		return false
 	}
-	m := h.f.manager
+	m := h.manager
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return !h.released && h.f.active
+	return h.active
 }
 
 func (h *Handle) Info() *ConnectionInfo {
 	if !h.Alive() {
 		return &ConnectionInfo{}
 	}
-	info := h.f.info
+	info := h.info
 	return &info
 }
 
@@ -149,35 +121,30 @@ var closedDone = func() <-chan struct{} {
 
 // Done closes when the tunnel is removed, including deliberate connection teardown.
 func (h *Handle) Done() <-chan struct{} {
-	if h == nil || h.f == nil {
+	if h == nil || h.stopCh == nil {
 		return closedDone
 	}
-	return h.f.stopCh
+	return h.stopCh
 }
 
 func (h *Handle) Stop() bool {
-	if h == nil || h.f == nil {
+	if h == nil || h.manager == nil {
 		return false
 	}
-	f := h.f
-	m := f.manager
+	m := h.manager
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if h.released || !f.active {
+	if !h.active {
 		return false
 	}
-	h.released = true
-	f.owners--
-	if f.owners == 0 {
-		m.removeLocked(f)
-	}
+	m.removeLocked(h)
 	return true
 }
 
-func (m *Manager) removeLocked(f *forward) {
-	delete(m.forwards, f)
-	f.active = false
-	close(f.stopCh)
+func (m *Manager) removeLocked(h *Handle) {
+	delete(m.forwards, h)
+	h.active = false
+	close(h.stopCh)
 }
 
 func (m *Manager) Closed() bool {
@@ -191,8 +158,8 @@ func (m *Manager) Close() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.cancel()
-	for f := range m.forwards {
-		m.removeLocked(f)
+	for h := range m.forwards {
+		m.removeLocked(h)
 	}
 }
 
@@ -209,84 +176,49 @@ func SetOnForwardLost(fn func(*Handle)) {
 }
 
 func (m *Manager) Start(owner Owner, ctx context.Context, namespace, service string, targetPort int) (*Handle, error) {
-	return m.start(owner, ctx, namespace, service, targetPort, true)
-}
-
-// StartDedicated opens a separate tunnel so a slow connection can keep serving
-// while its replacement is probed and authenticated.
-func (m *Manager) StartDedicated(owner Owner, ctx context.Context, namespace, service string, targetPort int) (*Handle, error) {
-	return m.start(owner, ctx, namespace, service, targetPort, false)
-}
-
-func (m *Manager) start(owner Owner, ctx context.Context, namespace, service string, targetPort int, reuse bool) (*Handle, error) {
 	if AutoDisabled() {
 		return nil, ErrAutoDisabled
 	}
 	if m == nil {
 		return nil, fmt.Errorf("K8s client not initialized")
 	}
-	for {
-		m.mu.Lock()
-		if m.Closed() {
-			m.mu.Unlock()
-			return nil, ErrClosed
-		}
-		if err := ctx.Err(); err != nil {
-			m.mu.Unlock()
-			return nil, err
-		}
-		if !reuse {
-			break
-		}
-		var pending *forward
-		for f := range m.forwards {
-			if !f.dedicated && f.owner == owner && f.matches(namespace, service, targetPort) {
-				if f.active {
-					f.owners++
-					m.mu.Unlock()
-					return &Handle{f: f}, nil
-				}
-				pending = f
-				break
-			}
-		}
-		if pending == nil {
-			break
-		}
+	m.mu.Lock()
+	if m.Closed() {
 		m.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-pending.stopCh:
-		case <-pending.established:
-		}
+		return nil, ErrClosed
+	}
+	if err := ctx.Err(); err != nil {
+		m.mu.Unlock()
+		return nil, err
 	}
 	if m.client == nil || m.config == nil {
 		m.mu.Unlock()
 		return nil, fmt.Errorf("K8s client not initialized")
 	}
-	f := &forward{manager: m, owner: owner, targetPort: targetPort, owners: 1, dedicated: !reuse,
-		info:        ConnectionInfo{Namespace: namespace, ServiceName: service, ContextName: m.contextName},
-		established: make(chan struct{}), stopCh: make(chan struct{})}
-	m.forwards[f] = struct{}{}
+	h := &Handle{
+		manager: m,
+		owner:   owner,
+		info:    ConnectionInfo{Namespace: namespace, ServiceName: service, ContextName: m.contextName},
+		stopCh:  make(chan struct{}),
+	}
+	m.forwards[h] = struct{}{}
 	m.mu.Unlock()
-	defer close(f.established)
-	handle, err := m.establish(ctx, f)
+	handle, err := m.establish(ctx, h, targetPort)
 	if err != nil && m.Closed() {
 		return nil, ErrClosed
 	}
 	return handle, err
 }
 
-func (m *Manager) establish(ctx context.Context, f *forward) (*Handle, error) {
+func (m *Manager) establish(ctx context.Context, h *Handle, targetPort int) (*Handle, error) {
 	defer func() {
 		m.mu.Lock()
 		defer m.mu.Unlock()
-		if _, present := m.forwards[f]; present && !f.active {
-			m.removeLocked(f)
+		if _, present := m.forwards[h]; present && !h.active {
+			m.removeLocked(h)
 		}
 	}()
-	ns, svc := f.info.Namespace, f.info.ServiceName
+	ns, svc := h.info.Namespace, h.info.ServiceName
 	lookup, cancel := context.WithCancel(ctx)
 	detach := context.AfterFunc(m.lifetime, cancel)
 	pod, err := pfpkg.FindPodForService(lookup, m.client, ns, svc)
@@ -303,18 +235,18 @@ func (m *Manager) establish(ctx context.Context, f *forward) (*Handle, error) {
 	ready := make(chan struct{})
 	ended := make(chan error, 1)
 	go func() {
-		err := m.run(m.lifetime, m.client, m.config, ns, pod, port, f.targetPort, f.stopCh, ready)
+		err := m.run(m.lifetime, m.client, m.config, ns, pod, port, targetPort, h.stopCh, ready)
 		m.mu.Lock()
-		lost := f.active
-		if _, present := m.forwards[f]; present {
-			m.removeLocked(f)
+		lost := h.active
+		if _, present := m.forwards[h]; present {
+			m.removeLocked(h)
 		}
 		m.mu.Unlock()
 		ended <- err
 		if lost {
-			log.Printf("[portforward] Lost: %s -> %s/%s (owner=%s): %v", f.info.Address, ns, svc, f.owner, err)
+			log.Printf("[portforward] Lost: %s -> %s/%s (owner=%s): %v", h.Address(), ns, svc, h.owner, err)
 			if hook := onForwardLost.Load(); hook != nil {
-				(*hook)(&Handle{f: f})
+				(*hook)(h)
 			}
 		}
 	}()
@@ -322,16 +254,16 @@ func (m *Manager) establish(ctx context.Context, f *forward) (*Handle, error) {
 	case <-ready:
 		m.mu.Lock()
 		defer m.mu.Unlock()
-		if _, present := m.forwards[f]; !present {
+		if _, present := m.forwards[h]; !present {
 			return nil, fmt.Errorf("port-forward closed during establishment")
 		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		f.info.LocalPort, f.info.Address, f.info.Connected = port, fmt.Sprintf("http://localhost:%d", port), true
-		f.active = true
-		log.Printf("[portforward] Ready: %s -> %s/%s:%d (owner=%s, context: %s)", f.info.Address, ns, svc, f.targetPort, f.owner, f.info.ContextName)
-		return &Handle{f: f}, nil
+		h.info.LocalPort, h.info.Address, h.info.Connected = port, fmt.Sprintf("http://localhost:%d", port), true
+		h.active = true
+		log.Printf("[portforward] Ready: %s -> %s/%s:%d (owner=%s, context: %s)", h.Address(), ns, svc, targetPort, h.owner, h.info.ContextName)
+		return h, nil
 	case err := <-ended:
 		return nil, fmt.Errorf("port-forward failed: %w", err)
 	case <-m.lifetime.Done():

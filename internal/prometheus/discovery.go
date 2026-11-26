@@ -629,7 +629,8 @@ func (c *Client) markConnectedLocked(addr, basePath, identity string, gen uint64
 		c.workloadScope = nil
 		c.cancelWorkloadAttributionsLocked()
 	}
-	c.forward = c.forward.Replace(forward)
+	c.forward.Stop()
+	c.forward = forward
 	c.connectedIdentity = identity
 	c.baseURL = addr
 	c.basePath = basePath

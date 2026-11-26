@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,11 +25,11 @@ import (
 )
 
 func publishedForward(m *Manager, owner, namespace, service string, port int) *Handle {
-	f := &forward{manager: m, owner: owner, owners: 1, active: true, stopCh: make(chan struct{}),
+	h := &Handle{manager: m, owner: owner, active: true, stopCh: make(chan struct{}),
 		info: ConnectionInfo{Connected: true, Address: fmt.Sprintf("http://localhost:%d", port), LocalPort: port,
 			Namespace: namespace, ServiceName: service, ContextName: m.contextName}}
-	m.forwards[f] = struct{}{}
-	return &Handle{f: f}
+	m.forwards[h] = struct{}{}
+	return h
 }
 
 func prometheusManager() *Manager {
@@ -121,16 +122,6 @@ func TestStaleHandleDoesNotStopReplacement(t *testing.T) {
 	}
 }
 
-func TestForwardReuseIncludesTargetPort(t *testing.T) {
-	forward := &forward{info: ConnectionInfo{Namespace: "kubecost", ServiceName: "kubecost-aggregator", ContextName: "ctxA"}, targetPort: 9004}
-	if !forward.matches("kubecost", "kubecost-aggregator", 9004) {
-		t.Fatal("matching target was not reusable")
-	}
-	if forward.matches("kubecost", "kubecost-aggregator", 9008) {
-		t.Fatal("forward to 9004 was reused for a 9008 request")
-	}
-}
-
 // TestForwardLostNotifiesOnlyUnexpectedExit pins the lost-forward signal: a
 // forward whose run ends on its own (the pod went away) is reported with the
 // address it served; one ended by Stop is not.
@@ -147,8 +138,8 @@ func TestForwardLostNotifiesOnlyUnexpectedExit(t *testing.T) {
 			return errors.New("lost connection to pod")
 		}
 	}
-	lost := make(chan string, 2)
-	SetOnForwardLost(func(h *Handle) { lost <- h.f.owner + " " + h.Address() })
+	lost := make(chan *Handle, 2)
+	SetOnForwardLost(func(h *Handle) { lost <- h })
 
 	start := func() *Handle {
 		t.Helper()
@@ -162,7 +153,7 @@ func TestForwardLostNotifiesOnlyUnexpectedExit(t *testing.T) {
 	start().Stop()
 	select {
 	case got := <-lost:
-		t.Fatalf("Stop reported a lost forward: %s", got)
+		t.Fatalf("Stop reported a lost forward: %s", got.Address())
 	case <-time.After(100 * time.Millisecond):
 	}
 
@@ -170,8 +161,8 @@ func TestForwardLostNotifiesOnlyUnexpectedExit(t *testing.T) {
 	close(podGone)
 	select {
 	case got := <-lost:
-		if want := OwnerPrometheus + " " + info.Address(); got != want {
-			t.Fatalf("lost = %q, want %q", got, want)
+		if got != info || got.owner != OwnerPrometheus || got.Address() != info.Address() {
+			t.Fatalf("lost handle = %p (%s %s), want %p (%s %s)", got, got.owner, got.Address(), info, OwnerPrometheus, info.Address())
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("forward that ended on its own was not reported")
@@ -221,51 +212,74 @@ func TestStartRefusesWhenAutoDisabled(t *testing.T) {
 	}
 }
 
-func TestSameOwnerHandlesReleaseTunnelIndependently(t *testing.T) {
+func TestSameTargetStartsWhileFirstIsPending(t *testing.T) {
 	m := prometheusManager()
 	t.Cleanup(m.Close)
+	firstStarted, readyFirst := make(chan struct{}), make(chan struct{})
+	var runs atomic.Int32
 	m.run = func(_ context.Context, _ kubernetes.Interface, _ *rest.Config, _, _ string, _, _ int, stop, ready chan struct{}) error {
+		if runs.Add(1) == 1 {
+			close(firstStarted)
+			select {
+			case <-readyFirst:
+			case <-stop:
+				return nil
+			}
+		}
 		close(ready)
 		<-stop
 		return nil
 	}
-	start := func() *Handle {
-		t.Helper()
+	type startResult struct {
+		handle *Handle
+		err    error
+	}
+	firstResult := make(chan startResult, 1)
+	go func() {
 		h, err := m.Start(OwnerPrometheus, t.Context(), "monitoring", "prometheus", 9090)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return h
+		firstResult <- startResult{h, err}
+	}()
+	select {
+	case <-firstStarted:
+	case got := <-firstResult:
+		t.Fatalf("first Start did not reach its runner: %v", got.err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("first Start did not reach its runner")
 	}
-	first, second := start(), start()
-	if !first.SameForward(second) {
-		t.Fatal("identical starts did not reuse the tunnel")
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	second, err := m.Start(OwnerPrometheus, ctx, "monitoring", "prometheus", 9090)
+	if err != nil || runs.Load() != 2 {
+		t.Fatalf("second Start failed to establish independently while first was pending: %v (runners: %d)", err, runs.Load())
 	}
-	if next := second.Replace(second); next != second || !next.Alive() {
-		t.Fatal("adopting the same handle released it")
+	close(readyFirst)
+	got := <-firstResult
+	if got.err != nil || !got.handle.Alive() {
+		t.Fatalf("first Start failed after its runner was released: %v", got.err)
 	}
+	first := got.handle
 	first.Stop()
 	if first.Stop() || !second.Info().Connected {
-		t.Fatal("one release closed a tunnel still held by the same owner")
+		t.Fatal("first handle could stop a tunnel again, or stopped the other tunnel")
 	}
-	if next := second.Replace(nil); next != nil || second.Info().Connected {
-		t.Fatal("replacing a handle did not release it")
+	if !second.Stop() || second.Info().Connected {
+		t.Fatal("second handle did not stop its tunnel")
 	}
 	select {
 	case <-first.Done():
 	default:
-		t.Fatal("tunnel survived its last holder")
+		t.Fatal("first tunnel survived Stop")
 	}
 }
 
-func TestSameOwnerTunnelServesUntilLastStop(t *testing.T) {
-	serverDone := make(chan struct{})
+func TestSameTargetStartsIndependentTunnels(t *testing.T) {
+	serverDone := make(chan struct{}, 2)
 	cfg := forwardtest.Server(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "use SPDY", http.StatusBadRequest)
 			return
 		}
-		defer close(serverDone)
+		defer func() { serverDone <- struct{}{} }()
 		if _, err := httpstream.Handshake(r, w, []string{"portforward.k8s.io"}); err != nil {
 			return
 		}
@@ -293,13 +307,23 @@ func TestSameOwnerTunnelServesUntilLastStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !second.SameForward(owner) {
-		t.Fatal("second Start did not reuse the same owner's tunnel")
+	if second.Info().LocalPort == owner.Info().LocalPort {
+		t.Fatal("second Start reused the first tunnel's local port")
 	}
 	defer second.Stop()
 	owner.Stop()
 	if !second.Alive() {
 		t.Fatal("second handle died when the first handle stopped")
+	}
+	select {
+	case <-owner.Done():
+	default:
+		t.Fatal("first tunnel survived Stop")
+	}
+	select {
+	case <-serverDone:
+	case <-time.After(time.Second):
+		t.Fatal("stopping the first tunnel did not close its server connection")
 	}
 	address := net.JoinHostPort("127.0.0.1", strconv.Itoa(second.Info().LocalPort))
 	client, err := net.DialTimeout("tcp4", address, time.Second)
@@ -313,17 +337,17 @@ func TestSameOwnerTunnelServesUntilLastStop(t *testing.T) {
 		t.Fatalf("read forwarded data = %q, %v", got, err)
 	}
 	if !second.Stop() {
-		t.Fatal("second handle did not release its reference")
+		t.Fatal("second handle did not stop its tunnel")
 	}
 	select {
-	case <-owner.Done():
+	case <-second.Done():
 	default:
-		t.Fatal("tunnel survived its last holder")
+		t.Fatal("second tunnel survived Stop")
 	}
 	select {
 	case <-serverDone:
 	case <-time.After(time.Second):
-		t.Fatal("last release did not close the forwarded connection")
+		t.Fatal("stopping the second tunnel did not close its server connection")
 	}
 }
 

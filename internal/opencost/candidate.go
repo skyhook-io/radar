@@ -11,7 +11,6 @@ type kubecostTarget struct {
 	forwards    *portforward.Manager
 	contextName string
 	inCluster   bool
-	dedicated   bool
 }
 
 func captureKubecostTarget() kubecostTarget {
@@ -48,7 +47,6 @@ func PrepareCandidate(config ManagerConfig) (func(context.Context) error, error)
 	if err != nil {
 		return nil, err
 	}
-	target.dedicated = true
 	return func(ctx context.Context) error {
 		const owner = "cost-candidate"
 		connection, err := connectDiscoveredKubecost(ctx, config, clusterID, aggregator, owner, target)

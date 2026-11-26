@@ -407,13 +407,16 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 		namespace = "kube-system" // fallback
 	}
 
-	// If already connected to the same context, verify connection is still valid
 	if h.grpcConn != nil && h.currentContext == contextName {
-		// Test the connection
-		if (!h.viaPortForward || h.forward.Alive()) && h.testConnection(ctx) {
-			return h.connectionInfoLocked(namespace, contextName), nil
+		if !h.viaPortForward || h.forward.Alive() {
+			valid := h.testConnection(ctx)
+			if err := ctx.Err(); err != nil {
+				return &portforward.ConnectionInfo{Error: err.Error(), ContextName: contextName}, nil
+			}
+			if valid {
+				return h.connectionInfoLocked(namespace, contextName), nil
+			}
 		}
-		// Connection lost, clean up
 		h.closeConnectionLocked()
 	}
 
@@ -473,8 +476,7 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 	// The cached verdict that skipped the direct lane may itself be stale (a
 	// probe that raced relay startup); once the fallback is dead too, paying
 	// the pre-check inline is free — try the lane for real before reporting
-	// failure. Covers every fallback failure, including a reused forward that
-	// turns out to be broken.
+	// failure, including a tunnel that opens but cannot reach Relay.
 	retryDirectAfterSkip := func() *portforward.ConnectionInfo {
 		if !skippedDirect || ctx.Err() != nil || h.forwards.Closed() {
 			return nil

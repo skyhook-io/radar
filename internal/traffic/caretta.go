@@ -659,7 +659,8 @@ func (c *CarettaSource) clearBindingLocked() {
 // bindLocked records the backend the source will query from now on.
 // Caller must hold lock.
 func (c *CarettaSource) bindLocked(addr string, info *metricsServiceInfo, forward *portforward.Handle) {
-	c.forward = c.forward.Replace(forward)
+	c.forward.Stop()
+	c.forward = forward
 	c.prometheusAddr = addr
 	c.backendWarning = ""
 	if info != nil {

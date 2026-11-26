@@ -700,16 +700,17 @@ func TestDiscoveryHandoffRejectsHandleAtReusedAddress(t *testing.T) {
 	}
 	released, current := open(), open()
 	released.Stop()
-	if released.Address() != current.Address() || released.Alive() || !current.Alive() {
-		t.Fatal("expected a released and a live handle at the same address")
+	if released.Alive() || !current.Alive() {
+		t.Fatal("expected a released and a live handle")
 	}
 
-	c := &Client{baseURL: current.Address(), forward: current}
+	// Model local port reassignment without depending on the OS to reassign it.
+	c := &Client{baseURL: released.Address(), forward: current}
 	stale := discoveredEndpoint{addr: released.Address(), forward: released}
 	if c.connectionLiveLocked(stale, 0) || c.forward != current || !current.Alive() {
 		t.Fatal("stale result accepted or current forward disturbed")
 	}
-	if !c.connectionLiveLocked(discoveredEndpoint{addr: current.Address(), forward: current}, 0) {
+	if !c.connectionLiveLocked(discoveredEndpoint{addr: c.baseURL, forward: current}, 0) {
 		t.Fatal("current handle rejected")
 	}
 }

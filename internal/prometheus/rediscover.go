@@ -267,7 +267,7 @@ func (c *Client) noteQueryFailure(addr string, err error) {
 // a dead local port, and rediscover in the background.
 func (c *Client) onForwardLost(lost *portforward.Handle) {
 	c.mu.Lock()
-	if c.retired || !c.forward.SameForward(lost) {
+	if c.retired || lost == nil || c.forward != lost {
 		c.mu.Unlock()
 		return
 	}

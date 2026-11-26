@@ -334,7 +334,7 @@ func TestCarettaFlowReadRetriesFailedReconnect(t *testing.T) {
 
 	restarting.Store(false)
 	response, err = c.GetFlows(t.Context(), FlowOptions{})
-	if err != nil || len(response.Flows) != 1 || !c.forward.Alive() || c.forward.SameForward(lost) || !c.reconnectAfter.IsZero() || c.reconnectDelay != 0 {
+	if err != nil || len(response.Flows) != 1 || !c.forward.Alive() || c.forward == lost || !c.reconnectAfter.IsZero() || c.reconnectDelay != 0 {
 		t.Fatalf("later flow read did not restore the tunnel: response=%+v err=%v", response, err)
 	}
 }

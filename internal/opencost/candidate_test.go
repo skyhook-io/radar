@@ -17,6 +17,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/portforward"
 	"github.com/skyhook-io/radar/internal/portforward/forwardtest"
+	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -148,20 +149,16 @@ func TestFailedKubecostProbeAfterSwitchKeepsReplacementForward(t *testing.T) {
 	if !bConn.lease.alive() {
 		t.Fatal("A's failed probe stopped B's forward")
 	}
-	stillServing := probeB()
-	if stillServing.Address != bConn.Address {
-		t.Fatal("B had to reopen its tunnel after A failed")
+	if _, _, err := probeDiscoveredKubecostURL(t.Context(), bConn.Address, "", bConn.ClusterID); err != nil {
+		t.Fatalf("B's original tunnel stopped serving after A failed: %v", err)
 	}
-	stillServing.lease.stop()
 	k8s.ResetAllSubsystems()
 	if bConn.lease.alive() {
 		t.Fatal("connection teardown left B's tunnel open")
 	}
 }
 
-func TestKubecostCandidateTunnelIsDedicated(t *testing.T) {
-	t.Cleanup(k8s.SnapshotTestConnection())
-	t.Cleanup(k8s.SetTestLocalMode())
+func TestKubecostCandidateTunnelIsIndependent(t *testing.T) {
 	probing, release := make(chan struct{}), make(chan struct{})
 	resume := sync.OnceFunc(func() { close(release) })
 	defer resume()
@@ -178,6 +175,84 @@ func TestKubecostCandidateTunnelIsDedicated(t *testing.T) {
 		}
 		forwardtest.ServeTunnel(w, r)
 	})
+	forwards := installLocalKubecostTestConnection(t, cfg)
+	probe, err := PrepareCandidate(ManagerConfig{Source: SourceKubecost, ClusterID: "test", ClusterIDContext: "ctx"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := make(chan error, 1)
+	go func() { result <- probe(t.Context()) }()
+	select {
+	case <-probing:
+	case err := <-result:
+		t.Fatalf("candidate never reached its forwarded probe: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("candidate did not reach its forwarded probe")
+	}
+	regular, err := forwards.Start("cost-candidate", t.Context(), "ns", "svc", 9004)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer regular.Stop()
+	if upgrades.Load() != 2 {
+		t.Error("regular Start reused the Kubecost candidate's tunnel")
+	}
+	resume()
+	if err := <-result; err != nil {
+		t.Fatalf("candidate probe failed: %v", err)
+	}
+}
+
+func TestKubecostReselectionReplacesRejectedTunnel(t *testing.T) {
+	const allocation = `{"code":200,"data":[{"test":{"properties":{"cluster":"test"},"totalCost":1}}]}`
+	var upgrades atomic.Int32
+	var rejectFirst atomic.Bool
+	first := kubecostTestTunnel(func() string {
+		if rejectFirst.Load() {
+			return `{"code":200,"data":[{}]}`
+		}
+		return allocation
+	})
+	replacement := kubecostTestTunnel(func() string { return allocation })
+	cfg := forwardtest.Server(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && upgrades.Add(1) == 1 {
+			first(w, r)
+			return
+		}
+		replacement(w, r)
+	})
+	installLocalKubecostTestConnection(t, cfg)
+	prometheuspkg.Initialize(fake.NewSimpleClientset(), cfg, "ctx", nil)
+	t.Cleanup(prometheuspkg.Retire)
+
+	m := &Manager{config: ManagerConfig{Source: SourceAuto, ClusterID: "test", ClusterIDContext: "ctx"}}
+	t.Cleanup(m.Reset)
+	old, err := m.connectKubecost(t.Context(), m.config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.commitProvisionalSelection(m.generation, old); err != nil {
+		t.Fatal(err)
+	}
+	m.retryAt = time.Now().Add(-time.Second)
+	rejectFirst.Store(true)
+	if _, _, err := probeDiscoveredKubecostURL(t.Context(), old.Address, "", old.ClusterID); !errors.Is(err, ErrKubecostNoData) || !old.lease.alive() {
+		t.Fatalf("expected a rejected probe over the still-open tunnel, got %v", err)
+	}
+	next, err := m.Selected(t.Context())
+	if err != nil || next.Source != SourceKubecost {
+		t.Fatalf("Kubecost re-selection failed: %v (tunnels opened: %d)", err, upgrades.Load())
+	}
+	if upgrades.Load() != 2 || next.Address == old.Address || !next.lease.alive() || old.lease.alive() {
+		t.Fatalf("re-selection did not replace the rejected tunnel: old=%s new=%s tunnels opened=%d", old.Address, next.Address, upgrades.Load())
+	}
+}
+
+func installLocalKubecostTestConnection(t *testing.T, cfg *rest.Config) *portforward.Manager {
+	t.Helper()
+	t.Cleanup(k8s.SnapshotTestConnection())
+	t.Cleanup(k8s.SetTestLocalMode())
 	if _, err := k8s.InstallTestServingConnection("ctx", cfg, nil, fake.NewSimpleClientset().Discovery()); err != nil {
 		t.Fatal(err)
 	}
@@ -201,35 +276,10 @@ func TestKubecostCandidateTunnelIsDedicated(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	defer k8s.ResetResourceCache()
+	t.Cleanup(k8s.ResetResourceCache)
 	forwards := k8s.Current().PortForwards()
-	defer forwards.Close()
-	probe, err := PrepareCandidate(ManagerConfig{Source: SourceKubecost, ClusterID: "test", ClusterIDContext: "ctx"})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	result := make(chan error, 1)
-	go func() { result <- probe(t.Context()) }()
-	select {
-	case <-probing:
-	case err := <-result:
-		t.Fatalf("candidate never reached its forwarded probe: %v", err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("candidate did not reach its forwarded probe")
-	}
-	regular, err := forwards.Start("cost-candidate", t.Context(), "ns", "svc", 9004)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer regular.Stop()
-	if upgrades.Load() != 2 {
-		t.Error("regular Start reused the Kubecost candidate's dedicated tunnel")
-	}
-	resume()
-	if err := <-result; err != nil {
-		t.Fatalf("candidate probe failed: %v", err)
-	}
+	t.Cleanup(forwards.Close)
+	return forwards
 }
 
 func kubecostTestTunnel(answer func() string) http.HandlerFunc {

@@ -106,7 +106,7 @@ func TestArgoForwardFollowsConnectionLifecycle(t *testing.T) {
 					t.Fatal(err)
 				}
 				if regular.Info().LocalPort == got.forward.Info().LocalPort {
-					t.Error("regular Start reused Argo CD's dedicated tunnel")
+					t.Error("regular Start reused the Argo CD tunnel")
 				}
 				regular.Stop()
 				if !got.forward.Alive() {
