@@ -6,7 +6,6 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/kubernetes"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
@@ -28,21 +27,18 @@ var Positions = NewReader()
 func RequestFor(ctx context.Context, workload *unstructured.Unstructured) (Request, string) {
 	user := pkgauth.UserFromContext(ctx)
 	req := Request{Workload: workload, Identity: IdentityOf(user)}
-	var binding string
+	conn := k8s.Current()
+	binding := conn.ContextBinding()
 	if user != nil {
-		client, b, err := k8s.UserClientSafetySnapshot(user)
+		client, b, err := conn.UserClientSafetySnapshot(user)
 		binding = b
 		if err == nil && client != nil {
 			req.Client = client
 		}
 	} else {
-		client, b := k8s.GetClientSafetySnapshot()
-		binding = b
-		if client != nil {
-			req.Client = kubernetes.Interface(client)
-		}
+		req.Client = conn.ClientInterface()
 	}
-	if discovery := k8s.GetResourceDiscovery(); discovery != nil && discovery.ResourceDiscovery != nil {
+	if discovery := conn.Discovery(); discovery != nil && discovery.ResourceDiscovery != nil {
 		req.Discovery = discovery.ResourceDiscovery
 	}
 	if !pkgauth.UserTokenMode() {
@@ -55,8 +51,7 @@ func RequestFor(ctx context.Context, workload *unstructured.Unstructured) (Reque
 }
 
 func CurrentBinding() string {
-	_, binding := k8s.GetClientSafetySnapshot()
-	return binding
+	return k8s.Current().ContextBinding()
 }
 
 // Attach adds Kueue's reported position to the Kueue observation of a

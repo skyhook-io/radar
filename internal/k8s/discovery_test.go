@@ -1,7 +1,11 @@
 package k8s
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	goruntime "runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,6 +17,7 @@ import (
 	"k8s.io/client-go/discovery"
 	fakediscovery "k8s.io/client-go/discovery/fake"
 	fakeclientset "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 	clienttesting "k8s.io/client-go/testing"
 )
 
@@ -103,25 +108,7 @@ func TestGetGVRWithGroup_DisambiguatesSameKind(t *testing.T) {
 // attempt consumed the one initialization, the next call would report success
 // with discovery still nil — a subsystem that never came up, reported as up.
 func TestInitResourceDiscoveryStaysRetryableAfterAMissingClient(t *testing.T) {
-	clientMu.Lock()
-	savedClient := discoveryClient
-	discoveryClient = nil
-	clientMu.Unlock()
-	discoveryMu.Lock()
-	savedDiscovery := resourceDiscovery
-	savedBinding := resourceDiscoveryClient
-	resourceDiscovery = nil
-	resourceDiscoveryClient = nil
-	discoveryMu.Unlock()
-	t.Cleanup(func() {
-		clientMu.Lock()
-		discoveryClient = savedClient
-		clientMu.Unlock()
-		discoveryMu.Lock()
-		resourceDiscovery = savedDiscovery
-		resourceDiscoveryClient = savedBinding
-		discoveryMu.Unlock()
-	})
+	withFreshTestConnection(t)
 
 	if err := InitResourceDiscovery(); err == nil {
 		t.Fatal("expected an error when no discovery client exists")
@@ -147,10 +134,7 @@ func TestInitResourceDiscoveryStaysRetryableAfterAMissingClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("building discovery against a fake client: %v", err)
 	}
-	discoveryMu.Lock()
-	resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: core}
-	resourceDiscoveryClient = GetDiscoveryClient()
-	discoveryMu.Unlock()
+	Current().publishDiscovery(core)
 
 	if err := InitResourceDiscovery(); err != nil {
 		t.Errorf("init must succeed once a client exists, got %v", err)
@@ -174,139 +158,91 @@ func buildFakeDiscoveryCore(t *testing.T) *k8score.ResourceDiscovery {
 	return core
 }
 
-func withCleanDiscoveryGlobals(t *testing.T) {
+func withFreshTestConnection(t *testing.T) {
 	t.Helper()
-	clientMu.Lock()
-	savedClient := discoveryClient
-	clientMu.Unlock()
-	discoveryMu.Lock()
-	savedDiscovery := resourceDiscovery
-	savedBinding := resourceDiscoveryClient
-	savedEpoch := discoveryEpoch
-	resourceDiscovery = nil
-	resourceDiscoveryClient = nil
-	discoveryMu.Unlock()
-	t.Cleanup(func() {
-		clientMu.Lock()
-		discoveryClient = savedClient
-		clientMu.Unlock()
-		discoveryMu.Lock()
-		resourceDiscovery = savedDiscovery
-		resourceDiscoveryClient = savedBinding
-		discoveryEpoch = savedEpoch
-		discoveryMu.Unlock()
-	})
+	prev := Current()
+	restoreTestConnection(&Connection{})
+	t.Cleanup(func() { restoreTestConnection(prev) })
 }
 
-// A context switch resets discovery BEFORE it swaps the client, so an init
-// that snapshots in that gap pairs the current epoch with the previous
-// cluster's client. The epoch alone cannot catch that; the publish step must
-// notice the client swap and discard the build.
 func TestPublishDiscardsABuildWhoseClientWasSwappedOut(t *testing.T) {
-	withCleanDiscoveryGlobals(t)
+	withFreshTestConnection(t)
 	previousClusterClient := &discovery.DiscoveryClient{}
 	newClusterClient := &discovery.DiscoveryClient{}
 
-	clientMu.Lock()
-	discoveryClient = previousClusterClient
-	clientMu.Unlock()
-	discoveryMu.Lock()
-	epoch := discoveryEpoch
-	discoveryMu.Unlock()
+	restoreTestConnection(&Connection{clients: &sharedKubernetesClients{discovery: previousClusterClient}})
+	started := Current()
 
-	// The context switch's step 2: the client swaps with no epoch bump.
-	clientMu.Lock()
-	discoveryClient = newClusterClient
-	clientMu.Unlock()
+	// Install the second cluster before the first finishes discovery.
+	restoreTestConnection(&Connection{clients: &sharedKubernetesClients{discovery: newClusterClient}})
 
-	publishResourceDiscovery(buildFakeDiscoveryCore(t), epoch, previousClusterClient)
+	started.publishDiscovery(buildFakeDiscoveryCore(t))
 	if GetResourceDiscovery() != nil {
 		t.Fatal("a build from a swapped-out client must not be published — it describes the previous cluster")
 	}
 
 	// Control: the same call with a current snapshot installs, so the discard
 	// above was the guard firing, not a vacuously broken publish.
-	publishResourceDiscovery(buildFakeDiscoveryCore(t), epoch, newClusterClient)
+	Current().publishDiscovery(buildFakeDiscoveryCore(t))
 	if GetResourceDiscovery() == nil {
 		t.Fatal("a build whose snapshot is still current must be published")
 	}
 }
 
 func TestPublishDiscardsABuildFromBeforeAReset(t *testing.T) {
-	withCleanDiscoveryGlobals(t)
+	withFreshTestConnection(t)
 	client := &discovery.DiscoveryClient{}
-	clientMu.Lock()
-	discoveryClient = client
-	clientMu.Unlock()
-	discoveryMu.Lock()
-	epoch := discoveryEpoch
-	discoveryMu.Unlock()
+	restoreTestConnection(&Connection{clients: &sharedKubernetesClients{discovery: client}})
+	started := Current()
 
 	ResetResourceDiscovery()
 
-	publishResourceDiscovery(buildFakeDiscoveryCore(t), epoch, client)
+	started.publishDiscovery(buildFakeDiscoveryCore(t))
 	if GetResourceDiscovery() != nil {
 		t.Fatal("a build from before a reset must not be published")
 	}
 }
 
 func TestPublishDoesNotClobberAnAlreadyPublishedSingleton(t *testing.T) {
-	withCleanDiscoveryGlobals(t)
+	withFreshTestConnection(t)
 	client := &discovery.DiscoveryClient{}
-	clientMu.Lock()
-	discoveryClient = client
-	clientMu.Unlock()
-	discoveryMu.Lock()
-	epoch := discoveryEpoch
-	discoveryMu.Unlock()
+	restoreTestConnection(&Connection{clients: &sharedKubernetesClients{discovery: client}})
+	started := Current()
 
-	publishResourceDiscovery(buildFakeDiscoveryCore(t), epoch, client)
+	started.publishDiscovery(buildFakeDiscoveryCore(t))
 	first := GetResourceDiscovery()
 	if first == nil {
 		t.Fatal("first publish should install")
 	}
-	publishResourceDiscovery(buildFakeDiscoveryCore(t), epoch, client)
+	started.publishDiscovery(buildFakeDiscoveryCore(t))
 	if GetResourceDiscovery() != first {
 		t.Fatal("a second concurrent build must not replace the one already published")
 	}
 }
 
-// The gap between a context switch's reset and its client swap has two
-// orderings. If the swap lands before the stale build publishes, the pointer
-// check in publishResourceDiscovery discards it. This test pins the other one:
-// the stale build snapshots AND publishes entirely inside the gap, where the
-// old client is still the active one and no publish-time check can tell it
-// from a legitimate build. The binding recorded at publish is the defense —
-// the moment the swap lands, the singleton stops being served, and the new
-// cluster's build replaces it.
+// A discovery published between reset and client install belongs to the old clients.
 func TestSingletonPublishedInTheResetSwapGapDiesWithTheSwap(t *testing.T) {
-	withCleanDiscoveryGlobals(t)
+	withFreshTestConnection(t)
 	previousClusterClient := &discovery.DiscoveryClient{}
 	newClusterClient := &discovery.DiscoveryClient{}
 
-	clientMu.Lock()
-	discoveryClient = previousClusterClient
-	clientMu.Unlock()
+	restoreTestConnection(&Connection{clients: &sharedKubernetesClients{discovery: previousClusterClient}})
 	ResetResourceDiscovery()
-	discoveryMu.Lock()
-	epoch := discoveryEpoch
-	discoveryMu.Unlock()
+	started := Current()
 
 	stale := buildFakeDiscoveryCore(t)
-	publishResourceDiscovery(stale, epoch, previousClusterClient)
+	started.publishDiscovery(stale)
 	if GetResourceDiscovery() == nil {
 		t.Fatal("sanity: inside the gap the stale publish is indistinguishable from a valid one and must install")
 	}
 
-	clientMu.Lock()
-	discoveryClient = newClusterClient
-	clientMu.Unlock()
+	restoreTestConnection(&Connection{clients: &sharedKubernetesClients{discovery: newClusterClient}})
 
 	if GetResourceDiscovery() != nil {
 		t.Fatal("a singleton built against a swapped-out client must not be served")
 	}
 
-	publishResourceDiscovery(buildFakeDiscoveryCore(t), epoch, newClusterClient)
+	Current().publishDiscovery(buildFakeDiscoveryCore(t))
 	got := GetResourceDiscovery()
 	if got == nil {
 		t.Fatal("the new cluster's build must replace the stale singleton")
@@ -320,7 +256,7 @@ func TestSingletonPublishedInTheResetSwapGapDiesWithTheSwap(t *testing.T) {
 // is served at version, with a short TTL so it expires quickly.
 func fluxDiscovery(t *testing.T, version string) (*fakediscovery.FakeDiscovery, *ResourceDiscovery) {
 	t.Helper()
-	withCleanDiscoveryGlobals(t)
+	withFreshTestConnection(t)
 	fakeDisc := fakeclientset.NewSimpleClientset().Discovery().(*fakediscovery.FakeDiscovery)
 	fakeDisc.Resources = servedOCIRepository(version)
 	core, err := k8score.NewResourceDiscovery(fakeDisc, k8score.WithDiscoveryCacheTTL(time.Millisecond))
@@ -328,9 +264,7 @@ func fluxDiscovery(t *testing.T, version string) (*fakediscovery.FakeDiscovery, 
 		t.Fatalf("NewResourceDiscovery: %v", err)
 	}
 	d := &ResourceDiscovery{ResourceDiscovery: core}
-	discoveryMu.Lock()
-	resourceDiscovery = d
-	discoveryMu.Unlock()
+	setTestDiscovery(d)
 	return fakeDisc, d
 }
 
@@ -459,5 +393,77 @@ func TestLookupRefreshingOnMiss(t *testing.T) {
 	}
 	if _, ok := (*ResourceDiscovery)(nil).LookupRefreshingOnMiss(widgets); ok {
 		t.Fatal("nil discovery resolved a kind")
+	}
+}
+
+func TestLateDiscoveryStaysOnItsConnection(t *testing.T) {
+	for _, transition := range []string{"rescope", "client swap"} {
+		t.Run(transition, func(t *testing.T) {
+			t.Cleanup(SnapshotTestConnection())
+			started, release := make(chan struct{}), make(chan struct{})
+			signal := sync.OnceFunc(func() { close(started) })
+			unblock := sync.OnceFunc(func() { close(release) })
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				signal()
+				<-release
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == "/api" {
+					_, _ = w.Write([]byte(`{"kind":"APIVersions","apiVersion":"v1","versions":[]}`))
+					return
+				}
+				_, _ = w.Write([]byte(`{"kind":"APIGroupList","apiVersion":"v1","groups":[]}`))
+			}))
+			t.Cleanup(srv.Close)
+			t.Cleanup(unblock)
+
+			config := &rest.Config{Host: srv.URL}
+			a := &Connection{config: config, clients: &sharedKubernetesClients{discovery: discovery.NewDiscoveryClientForConfigOrDie(config), generation: 1}}
+			restoreTestConnection(a)
+			done := make(chan error, 1)
+			go func() { done <- InitResourceDiscovery() }()
+			select {
+			case <-started:
+			case <-time.After(5 * time.Second):
+				t.Fatal("discovery never reached the API server")
+			}
+			if transition == "rescope" {
+				ResetAllSubsystems()
+				b := Current()
+				if b == a || b.clients != a.clients || b.Config() != a.Config() || b.ID() != "" {
+					t.Fatal("rescope must install a new candidate with the original clients and config")
+				}
+			} else {
+				restoreTestConnection(&Connection{clients: &sharedKubernetesClients{discovery: discovery.NewDiscoveryClientForConfigOrDie(config), generation: 2}})
+			}
+			unblock()
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			if a.Discovery() == nil || GetResourceDiscovery() != nil {
+				t.Fatal("late discovery must fill only the original connection")
+			}
+		})
+	}
+}
+
+// A bound write resolves served versions on the connection it was admitted
+// to, even after a switch installed a cluster serving another version.
+func TestServedGVRForUsesTheBoundConnection(t *testing.T) {
+	withFreshTestConnection(t)
+	serving := func(version string) *Connection {
+		core := buildFakeDiscoveryCore(t)
+		core.AddAPIResource(APIResource{Group: "kustomize.toolkit.fluxcd.io", Version: version, Kind: "Kustomization", Name: "kustomizations", Namespaced: true, Verbs: []string{"get", "patch"}})
+		c := &Connection{}
+		c.publishDiscovery(core)
+		return c
+	}
+	admitted, installed := serving("v1beta2"), serving("v1")
+	restoreTestConnection(installed)
+
+	if gvr, ok := ServedGVRFor(WithConnection(context.Background(), admitted))("kustomize.toolkit.fluxcd.io", "Kustomization"); !ok || gvr.Version != "v1beta2" {
+		t.Fatalf("bound request resolved %v (ok %v), want the admitted connection's v1beta2", gvr, ok)
+	}
+	if gvr, ok := ServedGVRFor(context.Background())("kustomize.toolkit.fluxcd.io", "Kustomization"); !ok || gvr.Version != "v1" {
+		t.Fatalf("unbound request resolved %v (ok %v), want the installed connection's v1", gvr, ok)
 	}
 }

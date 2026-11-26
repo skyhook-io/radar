@@ -131,8 +131,8 @@ rbac:
   # plane visibility.
   viewWebhooks: false
 
-  # Allow reading native ValidatingAdmissionPolicy and
-  # ValidatingAdmissionPolicyBinding resources so the resource browser can show
+  # Allow reading native validating and mutating admission policies and
+  # bindings so the resource browser can show
   # their declared rules and binding relationships. Auto-enabled when auth is on
   # (auth.mode != none) or in cloud mode, where every read is re-checked against
   # the requesting user's own permissions. For no-auth installs this stays
@@ -208,7 +208,7 @@ rbac:
     inferenceGateway: true  # inference.networking.k8s.io, inference.networking.x-k8s.io, llm-d.ai (Inference Gateway + llm-d routing APIs)
     externalDns: true       # externaldns.k8s.io
     externalSecrets: true   # external-secrets.io
-    flux: true              # *.toolkit.fluxcd.io
+    flux: true              # *.toolkit.fluxcd.io, source.extensions.fluxcd.io
     fluxOperator: true      # fluxcd.controlplane.io (FluxInstance, FluxReport, ResourceSet, ResourceSetInputProvider)
     gatewayApi: true        # gateway.networking.k8s.io
     gcpMonitoring: true     # monitoring.googleapis.com
@@ -239,6 +239,7 @@ rbac:
     nvidia: true            # nvidia.com (GPU Operator: ClusterPolicy, NVIDIADriver)
     openshift: true         # observability.openshift.io
     flagger: false         # Opt in to get/list/watch flagger.app Canaries and MetricTemplates. No default collection expansion.
+    k3sHelm: false         # Opt in to get/list/watch helm.cattle.io HelmCharts and HelmChartConfigs (k3s/RKE2). Values can hold credentials.
     systemUpgrade: false   # Opt in to get/list/watch upgrade.cattle.io Plans (system-upgrade-controller). Plans can carry env values.
     opentelemetry: true     # opentelemetry.io
     prometheus: true        # monitoring.coreos.com
@@ -623,6 +624,16 @@ cloud:
     # while owner=false this renders nothing, but it stays latent — re-enabling
     # owner later activates it. See templates/cloud-rbac-node-ops.yaml.
     nodeOps: false
+    # Grant Cloud Owners get/patch on Argo CD Applications. The grant defaults
+    # on and follows rbac.namespaces. Set argocd.owner=false to disable it.
+    # Application patch delegates the Argo CD controller's deployment authority.
+    # See the chart README for upgrade and opt-out guidance.
+    # Requires cloud.enabled, rbac.create, defaultRbac.create, owner=true, and
+    # either rbac.crdGroups.argo or rbac.crdGroups.all.
+    # Grants callers access; does not change Radar's collector ServiceAccount.
+    integrationWrite:
+      argocd:
+        owner: true
   # Create the default read grant for radar:system: Radar Cloud's alerts worker
   # and timeline puller. Includes view via a chart-owned aggregated role, the
   # cluster-read and integration-read add-ons, and cluster-wide Secret read
@@ -660,8 +671,14 @@ mcp:
   execTools: false
   # Independent Service HTTP opt-in. Requires services/proxy; does not enable exec.
   httpTools: false
-  # Set to false to disable the MCP server (useful when deployed behind authentication)
+  # Set to false to disable the MCP server.
   enabled: true
+  oauth:
+    # Browser-based MCP authorization for standalone OIDC deployments.
+    # Requires auth.mode=oidc, an HTTPS auth.oidc.redirectURL, and replicaCount=1.
+    # Uses Recreate rollouts: client registrations and tokens are held in memory,
+    # so clients must re-register and authorize again after a pod restart.
+    enabled: false
 
 # OpenCost/Kubecost display configuration
 cost:
@@ -698,7 +715,7 @@ traffic:
   prometheusUrl: ""
   # Optional workload/PVC metrics scope override, not a feature enable switch.
   # Leave both unset for automatic matching; set at most one mode.
-  # Does not scope rightsizing, node/HPA or legacy network/storage queries.
+  # Also scopes rightsizing, node/HPA charts and OpenCost costs from the store.
   # prometheusClusterLabels also scopes the Caretta, Beyla and Istio traffic map
   # when prometheusUrl is set.
   prometheusSingleCluster: false

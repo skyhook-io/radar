@@ -171,15 +171,16 @@ func RunChecks(input *CheckInput) *ScanResults {
 	findings = append(findings, checkCNPGClusterPosture(tr, input)...)
 	findings = append(findings, checkStorage(tr, input, time.Now())...)
 
-	// --- Per-resource opt-outs (radarhq.io/ignore-checks) ---
+	// --- Per-resource and per-namespace opt-outs (radarhq.io/ignore-checks) ---
 	// One central seam instead of a per-check concern: every check emits
 	// normally, then a subject's annotation withdraws its own findings and its
 	// own evaluated tally before results are built.
-	findings, ignored := applyIgnoreAnnotations(findings, tr, buildIgnoreIndex(input))
+	findings, ignored := applyIgnoreAnnotations(findings, tr, buildIgnoreIndex(input), buildNamespaceIgnore(input))
 
 	results := buildResults(findings, tr, missingInputs)
 	results.IgnoreChecksAnnotation = IgnoreChecksAnnotation
 	results.AnnotationIgnoredByNamespace = ignored
+	results.NamespaceIgnoreChecks = input != nil && input.Namespaces != nil
 	return results
 }
 

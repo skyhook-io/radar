@@ -28,7 +28,7 @@ func projectionOwnedAnswer(t *testing.T, s *projectionSession, obj runtime.Objec
 		t.Fatal("capture failed")
 	}
 	ov := ownership.NewView(captured, access)
-	rel, _ := RelationsAnswer(captured, access, access, ov, projectionRef(obj), obj, nil, nil)
+	rel, _ := answerWithCoverage(captured, access, access, ov, projectionRef(obj), obj, nil, nil)
 	m, _ := apimeta.Accessor(obj)
 	ApplyOwnership(rel, ov, ownership.Observe(projectionRef(obj), m))
 	return rel
@@ -151,7 +151,7 @@ func TestRelationsAnswerSealedSecretConsumers(t *testing.T) {
 			for _, obj := range []runtime.Object{sealed, d} {
 				captured, _ := relations.CaptureSubject(s, projectionRef(obj), obj)
 				ov := ownership.NewView(captured, access)
-				rel, cov := RelationsAnswer(captured, access, traverse, ov, projectionRef(obj), obj, nil, nil)
+				rel, cov := answerWithCoverage(captured, access, traverse, ov, projectionRef(obj), obj, nil, nil)
 				m, _ := apimeta.Accessor(obj)
 				ApplyOwnership(rel, ov, ownership.Observe(projectionRef(obj), m))
 				if obj == sealed {
@@ -321,7 +321,7 @@ func TestRelationsAnswerSkipsHelmOriginsAnInventorySupersedes(t *testing.T) {
 	if !ok {
 		t.Fatal("capture failed")
 	}
-	_, coverage := RelationsAnswer(captured, a, a, ownership.NewView(captured, a), projectionRef(release), release, nil, nil)
+	_, coverage := answerWithCoverage(captured, a, a, ownership.NewView(captured, a), projectionRef(release), release, nil, nil)
 	if n := s.indexed[resourceid.GroupKind{Group: "apps", Kind: "Deployment"}]; n != 0 {
 		t.Fatalf("a release whose inventory names its members searched Deployments %d times", n)
 	}

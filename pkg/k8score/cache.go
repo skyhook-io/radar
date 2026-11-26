@@ -59,9 +59,13 @@ type ResourceCache struct {
 	// empty list must ask this rather than read the flag. Also backs
 	// KindReadiness and GetSyncSnapshot for the same reason.
 	informerHasSynced []func() bool
-	informerMu        sync.RWMutex
-	promotedKinds     []string // set when SyncTimeout fires; empty on normal sync
-	syncStartTime     time.Time
+	// informerCaughtUpAt is when each informer was first seen with its
+	// initial list in the cache and its change handlers done with it, keyed
+	// like informerStatuses.
+	informerCaughtUpAt map[string]time.Time
+	informerMu         sync.RWMutex
+	promotedKinds      []string // set when SyncTimeout fires; empty on normal sync
+	syncStartTime      time.Time
 
 	// backgroundKeys marks kinds that sync independently with no deadline
 	// (Events). They share deferredSynced tracking but must never classify
@@ -504,6 +508,9 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 		deferred bool
 		synced   cache.InformerSynced
 		run      func(stopCh <-chan struct{})
+		// handlersSynced is true once the initial list is in the cache and
+		// the change handlers have processed it.
+		handlersSynced func() bool
 	}
 	var allEntries []informerEntry
 
@@ -518,16 +525,18 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 		return s.setup(factory)
 	}
 
-	wireInformer := func(inf cache.SharedIndexInformer, s informerSetup, idx int) error {
+	wireInformer := func(inf cache.SharedIndexInformer, s informerSetup, idx int, handlersSynced *[]func() bool) error {
+		var reg cache.ResourceEventHandlerRegistration
 		var err error
 		if s.isEvent {
-			err = rc.addEventHandlers(inf, changes)
+			reg, err = rc.addEventHandlers(inf, changes)
 		} else {
-			err = rc.addChangeHandlers(inf, s.kind, changes)
+			reg, err = rc.addChangeHandlers(inf, s.kind, changes)
 		}
 		if err != nil {
 			return fmt.Errorf("failed to register %s event handler: %w", s.kind, err)
 		}
+		*handlersSynced = append(*handlersSynced, reg.HasSynced)
 		if !s.isEvent {
 			if err := inf.AddIndexers(ownerUIDIndexers); err != nil {
 				return fmt.Errorf("failed to index %s by owner: %w", s.kind, err)
@@ -567,6 +576,7 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 
 		var synced cache.InformerSynced
 		var run func(stopCh <-chan struct{})
+		var handlersSynced []func() bool
 
 		if !s.isClusterScoped && len(scopeNamespaces) > 1 {
 			informersForKind := make([]cache.SharedIndexInformer, 0, len(scopeNamespaces))
@@ -574,7 +584,7 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 			for _, namespace := range scopeNamespaces {
 				factory := nsFactories[namespace]
 				inf := buildInformer(s, factory, namespace)
-				if err := wireInformer(inf, s, idx); err != nil {
+				if err := wireInformer(inf, s, idx, &handlersSynced); err != nil {
 					close(stopCh)
 					return nil, err
 				}
@@ -609,7 +619,7 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 				// (the factory's informer for this kind is never started).
 				rc.pagedInformers[s.key] = inf
 			}
-			if err := wireInformer(inf, s, idx); err != nil {
+			if err := wireInformer(inf, s, idx, &handlersSynced); err != nil {
 				close(stopCh)
 				return nil, err
 			}
@@ -632,7 +642,19 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 		}
 
 		isDeferred := deferredTypes[s.key]
-		entry := informerEntry{kind: s.kind, key: s.key, deferred: isDeferred, synced: synced, run: run}
+		informerSynced := synced
+		handlersCaughtUp := func() bool {
+			if !informerSynced() {
+				return false
+			}
+			for _, fn := range handlersSynced {
+				if !fn() {
+					return false
+				}
+			}
+			return true
+		}
+		entry := informerEntry{kind: s.kind, key: s.key, deferred: isDeferred, synced: synced, run: run, handlersSynced: handlersCaughtUp}
 		allEntries = append(allEntries, entry)
 
 		if isDeferred && s.isEvent {
@@ -725,6 +747,18 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 			rc.informerStatuses[idx].Synced = true
 			rc.informerStatuses[idx].SyncedAt = time.Now().Format(time.RFC3339)
 			rc.informerMu.Unlock()
+			// The change history is complete from the first moment both the
+			// initial list and the handlers' pass over it are done. An edit
+			// before then can surface only as initial state, with no diff.
+			for !entry.handlersSynced() {
+				select {
+				case <-stopCh:
+					return
+				default:
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			rc.markInformerCaughtUp(entry.key)
 		}()
 	}
 
@@ -1257,8 +1291,8 @@ func buildInformerSetups() []informerSetup {
 }
 
 // addChangeHandlers registers event handlers for non-Event resource changes.
-func (rc *ResourceCache) addChangeHandlers(inf cache.SharedIndexInformer, kind string, ch chan<- ResourceChange) error {
-	_, err := inf.AddEventHandler(cache.ResourceEventHandlerFuncs{
+func (rc *ResourceCache) addChangeHandlers(inf cache.SharedIndexInformer, kind string, ch chan<- ResourceChange) (cache.ResourceEventHandlerRegistration, error) {
+	return inf.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj any) {
 			rc.enqueueChange(ch, kind, obj, nil, OpAdd)
 		},
@@ -1269,13 +1303,12 @@ func (rc *ResourceCache) addChangeHandlers(inf cache.SharedIndexInformer, kind s
 			rc.enqueueChange(ch, kind, obj, nil, OpDelete)
 		},
 	})
-	return err
 }
 
 // addEventHandlers registers special handlers for K8s Events.
 // Events use a separate path: no noisy filtering, no diff computation.
-func (rc *ResourceCache) addEventHandlers(inf cache.SharedIndexInformer, ch chan<- ResourceChange) error {
-	_, err := inf.AddEventHandler(cache.ResourceEventHandlerFuncs{
+func (rc *ResourceCache) addEventHandlers(inf cache.SharedIndexInformer, ch chan<- ResourceChange) (cache.ResourceEventHandlerRegistration, error) {
+	return inf.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj any) {
 			rc.enqueueEvent(ch, obj, OpAdd)
 		},
@@ -1286,7 +1319,6 @@ func (rc *ResourceCache) addEventHandlers(inf cache.SharedIndexInformer, ch chan
 			rc.enqueueEvent(ch, obj, OpDelete)
 		},
 	})
-	return err
 }
 
 // enqueueChange handles non-Event resource change notifications.
@@ -1506,6 +1538,15 @@ func (rc *ResourceCache) Stop() {
 	})
 }
 
+// Done returns a channel closed when the cache is stopped, so work tied to
+// this cache's lifetime can let go of it once it is retired.
+func (rc *ResourceCache) Done() <-chan struct{} {
+	if rc == nil {
+		return nil
+	}
+	return rc.stopCh
+}
+
 // Client returns the clientset the cache's informers were built from. An
 // embedder that lists through a separate informer clientset must map its
 // request clientset to that informer clientset before comparing, or the
@@ -1681,6 +1722,51 @@ func (rc *ResourceCache) DeferredDone() <-chan struct{} {
 	rc.deferredMu.RLock()
 	defer rc.deferredMu.RUnlock()
 	return rc.deferredDone
+}
+
+func (rc *ResourceCache) markInformerCaughtUp(key string) {
+	rc.informerMu.Lock()
+	defer rc.informerMu.Unlock()
+	if rc.informerCaughtUpAt == nil {
+		rc.informerCaughtUpAt = map[string]time.Time{}
+	}
+	now := time.Now
+	if rc.config.Clock != nil {
+		now = rc.config.Clock
+	}
+	rc.informerCaughtUpAt[key] = now()
+}
+
+// InformerWatchedSince returns when this cache first saw the informer for
+// key with its initial list in the store and every change handler of its own
+// done processing that list. From then on the informer hands each change to
+// those handlers as an update or delete rather than as initial state; an edit
+// before it may surface only as the object's initial state, with no diff.
+// It says nothing about delivery beyond the handlers: the changes channel and
+// callbacks downstream can still drop a change under load. deferred reports
+// an informer started only after the critical ones synced. ok is false when
+// the kind isn't watched or hasn't reached that point yet.
+func (rc *ResourceCache) InformerWatchedSince(key string) (since time.Time, deferred, ok bool) {
+	if rc == nil {
+		return time.Time{}, false, false
+	}
+	synced, known := rc.InformerSynced(key)
+	if !known || !synced {
+		return time.Time{}, false, false
+	}
+	rc.informerMu.RLock()
+	defer rc.informerMu.RUnlock()
+	since, started := rc.informerCaughtUpAt[key]
+	if !started {
+		return time.Time{}, false, false
+	}
+	for _, status := range rc.informerStatuses {
+		if status.Key == key {
+			deferred = status.Deferred
+			break
+		}
+	}
+	return since, deferred, true
 }
 
 // InformerSynced reports one informer's initial-sync state. `known` is false

@@ -24,6 +24,7 @@ import (
 
 func TestGitOpsWriteEvidenceDiscoveryUnavailable(t *testing.T) {
 	seedCNPGWorkspace(t, cnpgWorkspaceTestKinds)
+	t.Cleanup(k8s.SnapshotTestConnection())
 	k8s.ResetResourceDiscovery()
 	r := httptest.NewRequest(http.MethodPost, "/api/gitops/write-evidence", strings.NewReader(`{"kind":"Deployment","group":"apps","namespace":"prod","name":"api","paths":["spec.replicas"]}`))
 	w := httptest.NewRecorder()

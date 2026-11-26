@@ -1,0 +1,195 @@
+// @vitest-environment jsdom
+//
+// Hosts can add an action next to an app and move selected apps to the top.
+import { act, type ReactNode } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { KeyboardShortcutProvider } from '../../hooks/useKeyboardShortcuts'
+import { buildSingleAppEntry, type AppEntry, type AppRow } from '../../utils/applications'
+import { ApplicationsView } from './ApplicationsView'
+
+Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+
+const app = (name: string, identityKey?: string) => buildSingleAppEntry({
+  key: `shop/${name}`,
+  name,
+  namespace: 'shop',
+  health: 'healthy',
+  workloads: [{ kind: 'Deployment', namespace: 'shop', name, workload_class: 'service', health: 'healthy', ready: 1, desired: 1, restarts: 0 }],
+  identity: identityKey ? { key: identityKey, env: name, confidence: 'high', evidence: 'declared source path' } : undefined,
+})
+
+let root: Root | undefined
+function show(entries: AppEntry[], props: Partial<Parameters<typeof ApplicationsView>[0]> = {}) {
+  const onSelect = vi.fn()
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  root = createRoot(host)
+  act(() => root!.render(
+    <KeyboardShortcutProvider>
+      <ApplicationsView entries={entries} variant="single" onSelect={onSelect} {...props} />
+    </KeyboardShortcutProvider>,
+  ))
+  return { host, onSelect }
+}
+const star = (onPress: (name: string) => void = () => {}) => (entry: { row: AppRow }, group?: { row: AppRow }[]): ReactNode => (
+  <button type="button" data-testid="star" data-members={group?.length ?? 0} onClick={() => onPress(entry.row.name)}>
+    star
+  </button>
+)
+const rowOf = (host: Element, name: string) => [...host.querySelectorAll<HTMLTableRowElement>('tbody tr')].find((tr) => tr.textContent?.includes(name))!
+
+beforeEach(() => {
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} unobserve() {} })
+  vi.stubGlobal('matchMedia', (query: string) => ({ matches: false, media: query, addEventListener: () => {}, removeEventListener: () => {} }))
+  Element.prototype.scrollIntoView = () => {}
+})
+afterEach(() => {
+  act(() => root?.unmount())
+  document.body.innerHTML = ''
+  vi.unstubAllGlobals()
+})
+
+describe('ApplicationsView renderRowLeading', () => {
+  it('renders before the name of each row', () => {
+    const { host } = show([app('checkout')], { renderRowLeading: star() })
+    const row = rowOf(host, 'checkout')
+    const button = row.querySelector('[data-testid="star"]')!
+    const name = [...row.querySelectorAll('span')].find((span) => span.textContent === 'checkout')!
+    expect(button.compareDocumentPosition(name) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('passes a folded group its first member and all of them', () => {
+    const { host } = show([app('checkout-dev', 'checkout'), app('checkout-prod', 'checkout')], { renderRowLeading: star() })
+    const button = host.querySelector('tbody [data-testid="star"]')!
+    expect(button.getAttribute('data-members')).toBe('2')
+  })
+
+  it("doesn't open the app when the slot is clicked", () => {
+    const pressed = vi.fn()
+    const { host, onSelect } = show([app('checkout')], { renderRowLeading: star(pressed) })
+    act(() => rowOf(host, 'checkout').querySelector<HTMLElement>('[data-testid="star"]')!.click())
+    expect(pressed).toHaveBeenCalledWith('checkout')
+    expect(onSelect).not.toHaveBeenCalled()
+    act(() => rowOf(host, 'checkout').click())
+    expect(onSelect).toHaveBeenCalledWith('shop/checkout')
+  })
+
+  it('leaves Enter to whatever has focus in the slot', () => {
+    const { host, onSelect } = show([app('checkout')], { renderRowLeading: star() })
+    const press = (target: Element) => {
+      const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+      act(() => { target.dispatchEvent(enter) })
+      return enter
+    }
+    act(() => { document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', bubbles: true })) })
+    const enter = press(rowOf(host, 'checkout').querySelector('[data-testid="star"]')!)
+    expect(onSelect).not.toHaveBeenCalled()
+    expect(enter.defaultPrevented).toBe(false)
+    press(document.body)
+    expect(onSelect).toHaveBeenCalledWith('shop/checkout')
+  })
+
+  it('keeps a key the control used from the table, and lets other keys through', () => {
+    const menu = () => (
+      <button type="button" data-testid="menu" onKeyDown={(event) => { if (event.key === 'ArrowDown') event.preventDefault() }}>
+        menu
+      </button>
+    )
+    const { host } = show([app('checkout'), app('orders')], { renderRowLeading: menu })
+    const highlighted = () => host.querySelectorAll('tbody tr.selection').length
+    const press = (key: string) => act(() => {
+      host.querySelector('[data-testid="menu"]')!.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+    })
+    press('ArrowDown')
+    expect(highlighted()).toBe(0)
+    press('j')
+    expect(highlighted()).toBe(1)
+  })
+
+  it('moves focus off the control when a key moves the highlight, so Enter opens that row', () => {
+    const pressed = vi.fn()
+    const { host, onSelect } = show([app('checkout'), app('orders')], { renderRowLeading: star(pressed) })
+    const control = rowOf(host, 'checkout').querySelector('[data-testid="star"]') as HTMLElement
+    act(() => control.focus())
+    act(() => { control.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', bubbles: true, cancelable: true })) })
+    expect(document.activeElement).not.toBe(control)
+    // A real Enter goes to whatever has focus.
+    const focused = (document.activeElement ?? document.body) as HTMLElement
+    act(() => { focused.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })) })
+    expect(onSelect).toHaveBeenCalledWith('shop/checkout')
+    expect(pressed).not.toHaveBeenCalled()
+  })
+
+  it('leaves no gap when the host has nothing for a row', () => {
+    const { host } = show([app('checkout')], { renderRowLeading: () => null })
+    const withSlot = rowOf(host, 'checkout').innerHTML
+    act(() => root?.unmount())
+    document.body.innerHTML = ''
+    const { host: plain } = show([app('checkout')])
+    expect(withSlot).toBe(rowOf(plain, 'checkout').innerHTML)
+  })
+})
+
+describe('ApplicationsView provenance', () => {
+  it('badges a folded family only when every member is managed, and each expanded member by its own source', () => {
+    const { host } = show([
+      { ...app('billing-dev', 'billing'), source: 'skyhook' },
+      { ...app('billing-prod', 'billing'), source: 'skyhook' },
+      { ...app('checkout-dev', 'checkout'), source: 'skyhook' },
+      app('checkout-prod', 'checkout'),
+      app('orders-dev', 'orders'),
+      app('orders-prod', 'orders'),
+    ])
+    expect(host.querySelectorAll('tbody tr[aria-expanded="false"]')).toHaveLength(3)
+    expect(rowOf(host, 'billing').cells[0].textContent).toContain('Skyhook')
+    expect(rowOf(host, 'orders').cells[0].textContent).not.toMatch(/Skyhook|ungrouped/i)
+    const mixed = rowOf(host, 'checkout')
+    expect(mixed.cells[0].textContent).not.toMatch(/Skyhook|ungrouped/i)
+    act(() => mixed.click())
+    const instances = [...host.querySelectorAll<HTMLTableRowElement>('tbody tr:not([aria-expanded])')]
+    expect(instances).toHaveLength(2)
+    expect(instances.find((row) => row.textContent?.includes('checkout-dev'))?.cells[0].textContent).toContain('Skyhook')
+    expect(instances.find((row) => row.textContent?.includes('checkout-prod'))?.cells[0].textContent).toContain('ungrouped')
+  })
+})
+
+describe('ApplicationsView pinned section', () => {
+  const pinnedSection = { title: 'Following', predicate: (entry: { row: AppRow }) => entry.row.name.startsWith('z') }
+
+  it('puts a matching family and all its children before other rows, in keyboard order', () => {
+    const { host, onSelect } = show([app('alpha'), app('stage', 'shop'), app('zulu', 'shop')], { pinnedSection })
+    const rowLabels = () => [...host.querySelectorAll('tbody tr')].map((row) => row.textContent)
+    expect(rowLabels()).toEqual(['Following', expect.stringContaining('shop'), 'Other applications', expect.stringContaining('alpha')])
+    act(() => (host.querySelector('tr[aria-expanded]') as HTMLElement).click())
+    expect(rowLabels()).toEqual([
+      'Following', expect.stringContaining('shop'), expect.stringContaining('stage'), expect.stringContaining('zulu'),
+      'Other applications', expect.stringContaining('alpha'),
+    ])
+    const press = (key: string) => act(() => {
+      document.body.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }))
+    })
+    press('j')
+    press('j')
+    press('Enter')
+    expect(onSelect).toHaveBeenCalledWith('shop/stage')
+  })
+
+  it('keeps the active column sort within each section', () => {
+    const { host } = show([app('alpha'), app('zulu'), app('zebra'), app('beta')], { pinnedSection })
+    const nameSort = [...host.querySelectorAll('thead button')].find((button) => button.textContent?.includes('Application')) as HTMLElement
+    act(() => nameSort.click())
+    act(() => nameSort.click())
+    const rows = [...host.querySelectorAll('tbody tr')].map((row) => row.textContent)
+    expect(rows).toEqual([
+      'Following', expect.stringContaining('zulu'), expect.stringContaining('zebra'),
+      'Other applications', expect.stringContaining('beta'), expect.stringContaining('alpha'),
+    ])
+  })
+
+  it('omits empty sections', () => {
+    const { host } = show([app('alpha')], { pinnedSection })
+    expect(host.querySelectorAll('tbody tr')).toHaveLength(1)
+    expect(host.querySelector('tbody')?.textContent).toContain('alpha')
+  })
+})

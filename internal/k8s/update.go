@@ -10,6 +10,7 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/workloadrestart"
 )
 
 // Re-export types from pkg/k8score for backward compatibility.
@@ -24,13 +25,14 @@ type WorkloadImageUpdate = k8score.WorkloadImageUpdate
 type SetWorkloadImagesResult = k8score.SetWorkloadImagesResult
 
 func getWorkloadManager() *k8score.WorkloadManager {
+	conn := Current()
 	var disc *k8score.ResourceDiscovery
-	if d := GetResourceDiscovery(); d != nil {
+	if d := conn.Discovery(); d != nil {
 		disc = d.ResourceDiscovery
 	} else {
 		log.Printf("[k8s] Warning: resource discovery not initialized; workload operations will fail until cluster is ready")
 	}
-	return k8score.NewWorkloadManager(GetDynamicClient(), disc)
+	return k8score.NewWorkloadManager(conn.Dynamic(), disc)
 }
 
 func getWorkloadManagerWithClient(ctx context.Context, client dynamic.Interface) *k8score.WorkloadManager {
@@ -38,7 +40,11 @@ func getWorkloadManagerWithClient(ctx context.Context, client dynamic.Interface)
 		return getWorkloadManager()
 	}
 	var disc *k8score.ResourceDiscovery
-	if d := discoveryFor(ctx); d != nil {
+	conn := ConnectionFrom(ctx)
+	if conn == nil {
+		conn = Current()
+	}
+	if d := conn.Discovery(); d != nil {
 		disc = d.ResourceDiscovery
 	} else {
 		log.Printf("[k8s] Warning: resource discovery not initialized; workload operations will fail until cluster is ready")
@@ -102,9 +108,10 @@ func TriggerCronJob(ctx context.Context, namespace, name string) (*unstructured.
 	return getWorkloadManager().TriggerCronJob(ctx, namespace, name)
 }
 
-// TriggerCronJobWithClient creates a Job from a CronJob using the provided client.
-func TriggerCronJobWithClient(ctx context.Context, namespace, name string, client dynamic.Interface) (*unstructured.Unstructured, error) {
-	return getWorkloadManagerWithClient(ctx, client).TriggerCronJob(ctx, namespace, name)
+// TriggerCronJobWithClient creates a Job from a CronJob using the provided
+// client. An empty jobName lets the API server generate one.
+func TriggerCronJobWithClient(ctx context.Context, namespace, name, jobName string, client dynamic.Interface) (*unstructured.Unstructured, error) {
+	return getWorkloadManagerWithClient(ctx, client).TriggerCronJobNamed(ctx, namespace, name, jobName)
 }
 
 // SetCronJobSuspend sets the suspend field on a CronJob.
@@ -123,8 +130,8 @@ func RestartWorkload(ctx context.Context, kind, namespace, name string) error {
 }
 
 // RestartWorkloadWithClient performs a rolling restart using the provided client.
-func RestartWorkloadWithClient(ctx context.Context, kind, namespace, name string, client dynamic.Interface) error {
-	return getWorkloadManagerWithClient(ctx, client).RestartWorkload(ctx, kind, namespace, name)
+func RestartWorkloadWithClient(ctx context.Context, kind, namespace, name string, client dynamic.Interface) (workloadrestart.Result, error) {
+	return getWorkloadManagerWithClient(ctx, client).RestartWorkloadWithResult(ctx, kind, namespace, name)
 }
 
 // SetDeploymentPausedWithClient sets spec.paused on a Deployment using the provided client.

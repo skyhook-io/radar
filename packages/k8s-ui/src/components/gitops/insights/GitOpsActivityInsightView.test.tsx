@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest'
+// @vitest-environment jsdom
+import { act } from 'react'
+import { createRoot } from 'react-dom/client'
+import { describe, expect, it, vi } from 'vitest'
 import { renderToString } from 'react-dom/server'
 import type { GitOpsInsight } from '../../../types'
 import type { RadarUpgradeRequirement } from '../../../types/fetch-error'
@@ -10,7 +13,7 @@ function render(insight: GitOpsInsight, rollbackUpgrade?: RadarUpgradeRequiremen
 
 function rollbackButtons(insight: GitOpsInsight, rollbackUpgrade?: RadarUpgradeRequirement | null): { disabled: boolean }[] {
   const html = render(insight, rollbackUpgrade)
-  return [...html.matchAll(/<button([^>]*)>Rollback<\/button>/g)].map((m) => ({ disabled: /\sdisabled=""/.test(m[1]) }))
+  return [...html.matchAll(/<button([^>]*)>Rollback<\/button>/g)].map((m) => ({ disabled: /\saria-disabled="true"/.test(m[1]) }))
 }
 
 function insight(autoSyncMode: string): GitOpsInsight {
@@ -52,4 +55,32 @@ describe('GitOpsActivityInsightView rollback', () => {
       expect(render(insight('Manual'), null)).not.toContain('Argo CD rollbacks need')
     })
   })
+})
+
+// Without patch access the user can't disable auto-sync either, so the role
+// reason comes before the auto-sync advice.
+it('names a role denial ahead of the auto-sync advice on Rollback', async () => {
+  vi.useFakeTimers()
+  const element = document.createElement('div')
+  document.body.appendChild(element)
+  const root = createRoot(element)
+  const role = "Kubernetes denied permission to patch Argo CD Applications in argocd."
+  const onRollback = vi.fn()
+  await act(async () => { root.render(<GitOpsActivityInsightView insight={insight('Auto · prune')} onRollback={onRollback} rollbackDisabledReason={role} />) })
+  const button = [...element.querySelectorAll('button')].find((b) => b.textContent === 'Rollback')!
+  expect(button.disabled).toBe(false)
+  expect(button.getAttribute('aria-disabled')).toBe('true')
+  expect(document.getElementById(button.getAttribute('aria-describedby')!)?.textContent).toBe(role)
+  expect(element.textContent).not.toContain('Each revision can be rolled back to.')
+  await act(async () => {
+    button.focus()
+    button.click()
+    vi.advanceTimersByTime(1000)
+  })
+  expect(document.activeElement).toBe(button)
+  expect(document.body.querySelector('[role="tooltip"]')?.textContent).toBe(role)
+  expect(onRollback).not.toHaveBeenCalled()
+  await act(async () => root.unmount())
+  element.remove()
+  vi.useRealTimers()
 })

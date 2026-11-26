@@ -61,6 +61,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
       { arg: 'group', desc: 'API group when the kind is ambiguous (e.g. serving.knative.dev for Knative Service vs core Service)' },
       { arg: 'include', desc: 'events, metrics, changes, issues, drain-plan (Node pod/PDB estimate), revisions (rollback targets for Deployment/StatefulSet/DaemonSet/Rollout)' },
       { arg: 'context', desc: 'resourceContext tier: basic (default) or none' },
+      { arg: 'relationship', desc: 'one relationship field a partial-preview warning named (e.g. dependents), returned with up to 200 entries' },
     ],
   },
   {
@@ -417,6 +418,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
       { arg: 'action', required: true, desc: 'trigger, suspend, or resume' },
       { arg: 'namespace', required: true, desc: 'cronjob namespace' },
       { arg: 'name', required: true, desc: 'cronjob name' },
+      { arg: 'job_name', desc: 'trigger only: name for the new Job; omit to generate one' },
     ],
   },
   {

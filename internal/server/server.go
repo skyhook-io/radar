@@ -18,7 +18,6 @@ import (
 	"reflect"
 	"regexp"
 	"runtime"
-	"runtime/debug"
 	"slices"
 	"sort"
 	"strconv"
@@ -78,7 +77,6 @@ import (
 	"github.com/skyhook-io/radar/pkg/rbac"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
-	"github.com/skyhook-io/radar/pkg/rollouts"
 	topology "github.com/skyhook-io/radar/pkg/topology"
 	"github.com/skyhook-io/radar/pkg/urlutil"
 )
@@ -123,6 +121,7 @@ type Server struct {
 	authConfig              auth.Config
 	permCache               *auth.PermissionCache
 	oidcHandler             *auth.OIDCHandler
+	mcpOAuth                *auth.MCPOAuthServer
 	saveFileFunc            func(defaultFilename string, data []byte) (string, error)
 	saveFileStreamFunc      func(defaultFilename string, r io.Reader) (string, error)
 	// newExecutor builds the exec client for pod file transfers. Nil in
@@ -199,7 +198,7 @@ type Server struct {
 	outsideChangesFlight  singleflight.Group
 
 	// accessReviews collapses identical access reviews in flight at once.
-	accessReviews singleflight.Group
+	accessReviews pkgauth.AccessReviews
 
 	// aiMu guards aiDiagnoser and aiRuns: refreshAIEngine turns the engine on
 	// when an agent CLI is installed while Radar runs. Read them through
@@ -249,7 +248,8 @@ type Config struct {
 	OpenCostCurrency        string      // ISO 4217 code labeling values returned by OpenCost endpoints
 	OpenCostManaged         bool        // true when an explicit CLI/Helm flag owns the running value
 	AuthConfig              auth.Config // Authentication configuration
-	AIHistoryDB             string      // AI run-history SQLite path ("" = memory-only runs)
+	MCPOAuthEnabled         bool
+	AIHistoryDB             string // AI run-history SQLite path ("" = memory-only runs)
 	CloudConnect            CloudConnectConfig
 }
 
@@ -377,12 +377,7 @@ func New(cfg Config) *Server {
 
 	// Initialize auth components when auth is enabled
 	if s.authConfig.Enabled() {
-		// Stamp cache entries with the current K8s context so an in-flight
-		// request mid-context-switch can't use the previous cluster's
-		// AllowedNamespaces / canI results to authorize the new cluster's
-		// reads. Without the stamp, the window between PerformContextSwitch
-		// step 2 (client swap) and the post-switch invalidation is exploitable.
-		s.permCache = auth.NewPermissionCache().WithContextName(k8s.GetContextName)
+		s.permCache = auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)
 
 		if s.authConfig.Mode == "oidc" {
 			// Validate required OIDC fields before attempting provider discovery
@@ -415,6 +410,24 @@ func New(cfg Config) *Server {
 
 	}
 
+	if cfg.MCPOAuthEnabled {
+		if s.authConfig.Mode != "oidc" || cloudMode() || cfg.CloudConnect.CloudTunnelConfigured || (s.mcpHandler == nil && s.mcpReadOnlyHandler == nil) {
+			log.Fatal("[auth] MCP OAuth requires OIDC authentication and MCP enabled in a standalone deployment")
+		}
+		var resources []string
+		if s.mcpHandler != nil {
+			resources = append(resources, "/mcp")
+		}
+		if s.mcpReadOnlyHandler != nil {
+			resources = append(resources, "/mcp-readonly")
+		}
+		s.mcpOAuth, err = auth.NewMCPOAuthServer(s.authConfig, basePath, resources)
+		if err != nil {
+			log.Fatalf("[auth] MCP OAuth initialization failed: %v", err)
+		}
+		s.oidcHandler.SetMCPOAuthServer(s.mcpOAuth)
+	}
+
 	// Set up static file system
 	if !cfg.DevMode && cfg.StaticRoot != "" {
 		subFS, err := fs.Sub(cfg.StaticFS, cfg.StaticRoot)
@@ -429,6 +442,9 @@ func New(cfg Config) *Server {
 
 func (s *Server) setupRoutes() {
 	if s.basePath != "" {
+		if s.mcpOAuth != nil {
+			s.mountMCPOAuthMetadata(s.router, s.basePath)
+		}
 		appRouter := chi.NewRouter()
 		s.setupAppRoutes(appRouter)
 		s.router.Get("/", func(w http.ResponseWriter, r *http.Request) {
@@ -516,10 +532,18 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 
 	// Auth middleware (when auth is enabled)
 	if s.authConfig.Enabled() {
-		r.Use(auth.Authenticate(s.authConfig))
+		r.Use(s.authenticate)
 	}
 
 	// Auth routes
+	if s.mcpOAuth != nil {
+		s.mountMCPOAuthMetadata(r, "")
+		r.Get("/auth/mcp/authorize", s.mcpOAuth.HandleAuthorize)
+		r.Post("/auth/mcp/authorize", s.mcpOAuth.HandleAuthorize)
+		r.Post("/auth/mcp/register", s.mcpOAuth.HandleRegister)
+		r.Post("/auth/mcp/token", s.mcpOAuth.HandleToken)
+		r.Post("/auth/mcp/revoke", s.mcpOAuth.HandleRevoke)
+	}
 	if s.oidcHandler != nil {
 		r.Get("/auth/login", s.oidcHandler.HandleLogin)
 		r.Get("/auth/callback", s.oidcHandler.HandleCallback)
@@ -639,6 +663,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Post("/cloud/install/dismiss", s.handleCloudInstallDismiss)
 			r.Get("/cloud/connect/self", s.handleCloudConnectSelf)
 			r.Get("/topology", s.handleTopology)
+			r.Get("/gitops/capabilities/{kind}/{namespace}/{name}", s.handleGitOpsCapabilities)
 			r.Get("/gitops/tree/{kind}/{namespace}/{name}", s.handleGitOpsTree)
 			r.Get("/gitops/destination/{kind}/{namespace}/{name}", s.handleGitOpsDestination)
 			r.Get("/gitops/insights/{kind}/{namespace}/{name}", s.handleGitOpsInsights)
@@ -724,6 +749,9 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Delete("/resources/{kind}/{namespace}/{name}", s.bindWrite(s.handleDeleteResource))
 			r.Get("/secrets/certificate-expiry", s.handleSecretCertExpiry)
 			r.Get("/sealedsecrets/controller", s.handleSealedSecretsController)
+			// The serving controller's public sealing certificate, from its fixed
+			// /v1/cert.pem; gated on get services/proxy for that Service and port name.
+			r.Get("/sealedsecrets/cert", s.handleSealedSecretsCert)
 			r.Get("/certificates", s.handleCertificates)
 
 			// Cluster audit
@@ -740,6 +768,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/upgrade-readiness", s.handleUpgradeReadiness)
 			// Scanner findings rolled up to the images that run now.
 			r.Get("/vulnerabilities", s.handleVulnerabilities)
+			r.Get("/vulnerabilities/export", s.handleVulnerabilitiesExport)
 			r.Get("/vulnerabilities/java4shell", s.handleJava4Shell)
 
 			// Network path trace - path-shaped diagnosis for Service /
@@ -779,6 +808,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// fan-out for cross-cluster issues.
 			r.Get("/issues", s.handleIssues)
 			r.Get("/issues/resource/{kind}/{namespace}/{name}", s.handleResourceIssues)
+			r.Get("/issues/recent-changes", s.handleIssueRecentChanges)
 			r.Get("/settings/audit", s.handleGetAuditSettings)
 			r.Put("/settings/audit", s.handlePutAuditSettings)
 			r.Get("/events", s.handleEvents)
@@ -796,6 +826,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/services/{namespace}/{name}/endpointslices", s.handleServiceEndpointSlices)
 
 			// Pod debug (ephemeral container)
+			r.Get("/pods/{namespace}/{name}/debug-access", s.bindWrite(s.handlePodDebugAccess))
 			r.Post("/pods/{namespace}/{name}/debug", s.execWrite(s.handleCreateDebugContainer))
 
 			// Node debug (privileged debug pod)
@@ -839,6 +870,9 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Post("/cronjobs/{namespace}/{name}/suspend", s.bindWrite(s.handleSuspendCronJob))
 			r.Post("/cronjobs/{namespace}/{name}/resume", s.bindWrite(s.handleResumeCronJob))
 
+			r.Post("/workflows/{namespace}/{name}/stop", s.bindWrite(s.handleWorkflowStop))
+			r.Post("/workflowtemplates/{namespace}/{name}/submit", s.bindWrite(s.handleWorkflowTemplateSubmit))
+
 			// Workload restart, scale, rollback. Writes are bound to the connection
 			// the caller names (bindWrite in connection_binding.go).
 			r.Post("/workloads/{kind}/{namespace}/{name}/restart", s.bindWrite(s.handleRestartWorkload))
@@ -869,10 +903,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			helmHandlers.ObjectScope = s.helmObjectScope
 			helmHandlers.ResolveStorageNamespaces = s.resolveHelmStorageScope
 			helmHandlers.BindWrite = s.bindWrite
-			helmHandlers.AdmitWrite = func(w http.ResponseWriter, r *http.Request) (func() bool, bool) {
-				bound, ok := s.admitWrite(w, r)
-				return func() bool { return k8s.ServingConnectionID() == bound.ID }, ok
-			}
+			helmHandlers.AdmitWrite = s.admitWrite
 			helmHandlers.RegisterRoutes(r)
 
 			// Image inspection routes
@@ -883,11 +914,20 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// own Prometheus access, so each route authorizes the caller
 			// through this gate before querying — see prometheusAuthGate.
 			prometheuspkg.SetAuthGate(s.prometheusAuthGate)
+			prometheuspkg.SetOpenObservePath(s.openObservePath)
 			r.Post("/prometheus/rightsizing/scan", s.handleRightsizingScan)
 			r.Get("/prometheus/rightsizing/scan", s.handleRightsizingScan)
 			r.Get("/prometheus/rightsizing/scan/{scanId}", s.handleRightsizingScan)
 			r.Delete("/prometheus/rightsizing/scan/{scanId}", s.handleRightsizingScan)
 			prometheuspkg.RegisterRoutes(r)
+			r.Get("/metrics/datadog/agent", s.handleDatadogAgentPresence)
+			r.Get("/metrics/openobserve/collector", s.handleOpenObserveCollectorPresence)
+			r.Get("/agent/metrics-cluster-identity", s.handleMetricsClusterIdentity)
+			r.Get("/agent/metrics-pod-sample", s.handleMetricsPodSample)
+			r.Post("/agent/metrics-source/refresh", s.handleMetricsSourceRefresh)
+			r.Get("/agent/workload-rightsizing-inventory", s.handleWorkloadRightsizingInventory)
+			r.Get("/agent/workload-rightsizing-scope/{kind}/{namespace}/{name}", s.handleWorkloadRightsizingScope)
+			r.Get("/agent/workload-metrics-scope/{kind}/{namespace}/{name}", s.handleWorkloadMetricsScope)
 
 			// OpenCost routes
 			r.Post("/opencost/application", s.handleOpenCostApplication)
@@ -918,6 +958,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Post("/argo/applications/{namespace}/{name}/suspend", s.bindWrite(s.handleArgoSuspend))
 			r.Post("/argo/applications/{namespace}/{name}/resume", s.bindWrite(s.handleArgoResume))
 			r.Get("/argo/applications/{namespace}/{name}/resource-diff", s.handleArgoResourceDiff)
+			r.Get("/argo/applications/{namespace}/{name}/sync-diff", s.handleArgoSyncDiff)
 			r.Get("/argo/applications/{namespace}/{name}/revision-metadata", s.handleArgoRevisionMetadata)
 
 			// AI resource preview (minified output for MCP/debugging).
@@ -999,6 +1040,10 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/integrations/argocd/status", s.handleArgoCDStatus)
 			r.Get("/integrations/connections", s.handleLocalConnections)
 			r.Put("/integrations/connections", s.handleUpdateLocalConnection)
+			r.Get("/integrations/openobserve", s.handleOpenObserveSetupView)
+			r.Delete("/integrations/openobserve", s.handleOpenObserveRemoveAll)
+			r.Post("/integrations/openobserve/setup", s.handleOpenObserveSetup)
+			r.Delete("/integrations/openobserve/cluster", s.handleOpenObserveRemoveCluster)
 
 			// Desktop routes
 			r.Post("/desktop/open-url", s.handleDesktopOpenURL)
@@ -1065,8 +1110,10 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	// claude-code parses as a broken OAuth flow and aborts MCP registration.
 	// Radar's MCP server is unauthenticated when run locally; signal that
 	// cleanly with a 404 so clients proceed without an auth handshake.
-	r.Get("/.well-known/oauth-protected-resource", http.NotFound)
-	r.Get("/.well-known/oauth-authorization-server", http.NotFound)
+	if s.mcpOAuth == nil {
+		r.Get("/.well-known/oauth-protected-resource", http.NotFound)
+		r.Get("/.well-known/oauth-authorization-server", http.NotFound)
+	}
 
 	// Static files (frontend) - index.html fallback for client-side routes.
 	if s.staticFS != nil {
@@ -1537,55 +1584,77 @@ func (s *Server) handleClusterInfo(w http.ResponseWriter, r *http.Request) {
 // an older binary simply lacks it.
 func advertisedFeatures() k8s.FeatureCapabilities {
 	return k8s.FeatureCapabilities{
-		ApplicationEvidence:         true,
-		SealedSecretsController:     true,
-		ResourceReadCoverage:        true,
-		SearchCoverage:              true,
-		SearchEventContent:          true,
-		YAMLReview:                  true,
-		YAMLSchemas:                 true,
-		WorkloadImages:              true,
-		DeploymentPause:             true,
-		SubstrateHealthMetrics:      true,
-		ResourceIssues:              true,
-		ResourceIssueCoverage:       true,
-		PodEnvironment:              true,
-		PolicyResource:              true,
-		WorkloadHistory:             true,
-		CNPGWorkspace:               true,
-		CNPGProtectionSetup:         true,
-		VeleroWorkspace:             true,
-		VeleroBackupNow:             true,
-		VeleroSchedulePause:         true,
-		VeleroRuns:                  true,
-		VeleroDeleteBackup:          true,
-		ResourceDeletePreconditions: true,
-		VeleroRunVolumes:            true,
-		VeleroRunArtifacts:          true,
-		ServiceEndpointSlices:       true,
-		TrafficRecords:              true,
-		GitOpsWriteEvidence:         true,
-		GitOpsOutsideChanges:        true,
-		GitOpsFieldWriters:          true,
-		ArgoRollbackSync:            true,
-		ArgoSyncInheritance:         true,
-		ArgoEnableSelfHealOff:       true,
-		AgentSigninCheck:            true,
-		HelmSourceIdentity:          true,
-		HelmInventory:               true,
-		ClusterScopedPlaceholder:    true,
-		KueuePendingPosition:        true,
-		RayClusterPods:              true,
-		PodSidecarMarks:             true,
-		KueueQueueWorkloads:         true,
-		PodFileUpload:               true,
-		Vulnerabilities:             true,
-		RuntimeAdvisoryChecks:       true,
-		RuntimeAdvisoryProgress:     true,
+		ApplicationEvidence:          true,
+		DatadogAgentPresence:         true,
+		DatadogRightsizing:           true,
+		SealedSecretsController:      true,
+		SealedSecretsCert:            true,
+		ResourceReadCoverage:         true,
+		SearchCoverage:               true,
+		SearchEventContent:           true,
+		YAMLReview:                   true,
+		YAMLSchemas:                  true,
+		WorkloadImages:               true,
+		DeploymentPause:              true,
+		SubstrateHealthMetrics:       true,
+		ResourceIssues:               true,
+		ResourceIssueCoverage:        true,
+		IssueCorrelation:             true,
+		PodDebugAccess:               true,
+		PodEnvironment:               true,
+		PolicyResource:               true,
+		WorkloadHistory:              true,
+		CNPGWorkspace:                true,
+		CNPGProtectionSetup:          true,
+		VeleroWorkspace:              true,
+		VeleroBackupNow:              true,
+		VeleroSchedulePause:          true,
+		VeleroRuns:                   true,
+		VeleroDeleteBackup:           true,
+		ResourceDeletePreconditions:  true,
+		WorkloadRestartPreconditions: true,
+		VeleroRunVolumes:             true,
+		VeleroRunArtifacts:           true,
+		ServiceEndpointSlices:        true,
+		TrafficRecords:               true,
+		GitOpsWriteEvidence:          true,
+		GitOpsActionCapabilities:     true,
+		ArgoRollbackSync:             true,
+		ArgoSyncInheritance:          true,
+		ArgoEnableSelfHealOff:        true,
+		AgentSigninCheck:             true,
+		HelmSourceIdentity:           true,
+		HelmInventory:                true,
+		ClusterScopedPlaceholder:     true,
+		KueuePendingPosition:         true,
+		RayClusterPods:               true,
+		ReplicaSetLogs:               true,
+		PodSidecarMarks:              true,
+		KueueQueueWorkloads:          true,
+		PodFileUpload:                true,
+		Vulnerabilities:              true,
+		VulnerabilitiesExport:        true,
+		RuntimeAdvisoryChecks:        true,
+		RuntimeAdvisoryProgress:      true,
+		CronJobTriggerJobName:        true,
+		WorkflowStop:                 true,
+		WorkflowTemplateSubmit:       true,
+
+		OpenObserveCollectorPresence: true,
+		OpenObserveLocalSetup:        true,
+		GitOpsOutsideChanges:         true,
+		GitOpsFieldWriters:           true,
 	}
 }
 
 func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
+	// Every check below reads one connection, so a switch mid-request can't
+	// combine one cluster's grants with another's visibility.
+	conn := k8s.ConnectionFrom(r.Context())
+	if conn == nil {
+		conn = k8s.Current()
+		r = r.WithContext(k8s.WithConnection(r.Context(), conn))
+	}
 	var caps *k8s.Capabilities
 	var err error
 
@@ -1639,6 +1708,9 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[capabilities] namespace-scoped check for %q failed: %v", ns, err)
 		} else if nsCaps != nil {
 			mergeNamespaceCapabilities(caps, nsCaps)
+			if caps.PodDebug {
+				caps.PodDebugImage = s.resolveDebugImage("")
+			}
 			if nsCaps.Errors != (k8s.NamespaceCapabilityErrors{}) {
 				caps.ChecksIncomplete = true
 			}
@@ -1669,33 +1741,30 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	// caps.Resources (resources field omitted from JSON) is the documented
 	// "no probe data yet" signal; the frontend has separate connection
 	// state to distinguish loading from RBAC restrictions.
-	if result := k8s.GetCachedPermissionResult(); result != nil {
-		caps.Resources = result.Perms
-		caps.Visibility = k8s.BuildVisibilitySummary(result, r.URL.Query().Get("namespace"))
-	} else if k8s.GetResourceCache() != nil {
-		result, isCurrent := k8s.CheckResourcePermissions(r.Context())
-		// Prefer what the cache holds; fall back to the probe's own result only
-		// when it describes the cluster still in effect. A probe superseded by a
-		// context switch describes the cluster it probed, not the one being
-		// rendered, and rendering it would report the previous cluster's
-		// permissions - leaving resources unset is the "no probe data yet"
-		// signal documented above.
-		if cached := k8s.GetCachedPermissionResult(); cached != nil {
-			result, isCurrent = cached, true
-		}
-		if result != nil && isCurrent {
-			caps.Resources = result.Perms
-			caps.Visibility = k8s.BuildVisibilitySummary(result, r.URL.Query().Get("namespace"))
+	result := conn.CachedPermissionResult()
+	if result == nil && conn.ResourceCache() != nil {
+		// A probe superseded by a switch or rescope describes what it probed,
+		// not what is being rendered: leave resources unset instead.
+		if probed, current := conn.CheckResourcePermissions(r.Context()); current {
+			result = conn.CachedPermissionResult()
+			// Only the no-client response is intentionally served without caching.
+			if result == nil && (conn.Client() == nil || conn.Dynamic() == nil) {
+				result = probed
+			}
 		}
 	}
+	if result != nil {
+		caps.Resources = result.Perms
+		caps.Visibility = k8s.BuildVisibilitySummary(result, r.URL.Query().Get("namespace"))
+	}
 
-	caps.Karpenter = s.karpenterCapability(r)
+	caps.Karpenter = s.karpenterCapability(r, conn)
 
 	// Report the PolicyReport index state so the frontend can say WHY a policy
 	// view is empty. Omitted when Kyverno isn't installed at all — there is
 	// nothing for the operator to act on, and a "not installed" note on every
 	// non-Kyverno cluster would be noise.
-	if prStatus := k8s.GetPolicyReportStatus(); prStatus.Status != k8s.KyvernoStatusNotInstalled {
+	if prStatus := conn.PolicyReportStatus(); prStatus.Status != k8s.KyvernoStatusNotInstalled {
 		caps.PolicyReports = &prStatus
 	}
 
@@ -1703,14 +1772,13 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 }
 
 func mergeNamespaceCapabilities(caps *k8s.Capabilities, nsCaps *k8s.NamespaceCapabilities) {
+	caps.PodExecUID = nsCaps.Exec && !nsCaps.Errors.Exec
+	caps.PodDebug = !cloudMode() && nsCaps.Exec && nsCaps.PodDebug
 	caps.Exec = mergeNamespaceCapability(caps.Exec, nsCaps.Exec, nsCaps.Errors.Exec)
 	caps.Logs = mergeNamespaceCapability(caps.Logs, nsCaps.Logs, nsCaps.Errors.Logs)
 	caps.PortForward = mergeNamespaceCapability(caps.PortForward, nsCaps.PortForward, nsCaps.Errors.PortForward)
 	caps.HelmWrite = mergeNamespaceCapability(caps.HelmWrite, nsCaps.HelmWrite, nsCaps.Errors.HelmWrite)
-	caps.WorkloadWrites.Deployments = mergeNamespaceCapability(caps.WorkloadWrites.Deployments, nsCaps.WorkloadWrites.Deployments, nsCaps.Errors.WorkloadWrites.Deployments)
-	caps.WorkloadWrites.DaemonSets = mergeNamespaceCapability(caps.WorkloadWrites.DaemonSets, nsCaps.WorkloadWrites.DaemonSets, nsCaps.Errors.WorkloadWrites.DaemonSets)
-	caps.WorkloadWrites.StatefulSets = mergeNamespaceCapability(caps.WorkloadWrites.StatefulSets, nsCaps.WorkloadWrites.StatefulSets, nsCaps.Errors.WorkloadWrites.StatefulSets)
-	caps.WorkloadWrites.Rollouts = mergeNamespaceCapability(caps.WorkloadWrites.Rollouts, nsCaps.WorkloadWrites.Rollouts, nsCaps.Errors.WorkloadWrites.Rollouts)
+	k8s.MergeWorkloadWrites(&caps.WorkloadWrites, nsCaps.WorkloadWrites, nsCaps.Errors.WorkloadWrites, mergeNamespaceCapability)
 }
 
 func mergeNamespaceCapability(global, namespaced, checkErrored bool) bool {
@@ -1949,53 +2017,19 @@ func (s *Server) canReadUserDecision(ctx context.Context, user *auth.User, group
 		return true, true
 	}
 	perms := s.permCache.Get(user.Username, user.Groups)
-	if perms != nil {
-		if v, ok := perms.CanI(verb, group, resource, namespace); ok {
-			return v, true
-		}
-	}
-	type verdict struct{ allowed, authoritative bool }
 	// Keyed by connection generation, not context name: a reconnect under the
 	// same name can reach a different cluster, and the review must run on the
 	// client its key names.
-	client, generation := k8s.GetClientWithGeneration()
-	key := pkgauth.IdentityCacheKey(user.Username, user.Groups) + strings.Join([]string{strconv.FormatUint(generation, 10), verb, group, resource, namespace}, "\x00")
-	review := s.accessReviews.DoChan(key, func() (v any, err error) {
-		// The review runs on its own goroutine, where a panic would end the
-		// process instead of failing one request.
-		defer func() {
-			if r := recover(); r != nil {
-				log.Printf("[auth] access review panicked: %v\n%s", r, debug.Stack())
-				v, err = verdict{}, nil
-			}
-		}()
-		// Callers that didn't start the review share it, so it runs on its own
-		// clock rather than the first caller's: a SubjectAccessReview is a POST,
-		// which the client's request deadlines leave unbounded.
-		reviewCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), accessReviewTimeout)
+	conn := k8s.Current()
+	client, generation := conn.Client(), conn.ClientGeneration()
+	question := pkgauth.AccessReviewQuestion{Verb: verb, Group: group, Resource: resource, Namespace: namespace}
+	return s.accessReviews.Decide(ctx, user, perms, strconv.FormatUint(generation, 10), question, func(ctx context.Context) (bool, bool) {
+		// A SubjectAccessReview is a POST, which the client's request deadlines
+		// leave unbounded.
+		ctx, cancel := context.WithTimeout(ctx, accessReviewTimeout)
 		defer cancel()
-		allowed, authoritative := canReadUserSARWith(reviewCtx, client, user, group, resource, namespace, verb)
-		// Cache only a real apiserver verdict. A transient failure (no client, SAR
-		// error, timeout) fails closed for this call but must NOT be memoized, or a
-		// momentary blip would deny the tuple for the whole cache TTL.
-		if authoritative && perms != nil {
-			perms.SetCanI(verb, group, resource, namespace, allowed)
-		}
-		return verdict{allowed, authoritative}, nil
+		return canReadUserSARWith(ctx, client, user, group, resource, namespace, verb)
 	})
-	select {
-	case r := <-review:
-		v := r.Val.(verdict)
-		// A caller that joined another's review keeps the answer in its own
-		// permissions too; after a cache expiry they can be different entries.
-		if v.authoritative && perms != nil {
-			perms.SetCanI(verb, group, resource, namespace, v.allowed)
-		}
-		return v.allowed, v.authoritative
-	case <-ctx.Done():
-		// This caller gave up; the review carries on for the others.
-		return false, false
-	}
 }
 
 // canReadUserSAR runs a single fresh SubjectAccessReview for (group, resource,
@@ -2008,7 +2042,7 @@ func (s *Server) canReadUserDecision(ctx context.Context, user *auth.User, group
 // canReadUser wraps this behind the shared cache. The SSE change authorizer
 // calls it directly instead: reusing the shared cache there would let a decision
 // already up to the cache TTL old be re-cached under the SSE memo's own TTL,
-// stacking staleness — and the shared entry's context stamping wouldn't help,
+// stacking staleness — and the shared entry's connection stamping wouldn't help,
 // because the SSE memo, not the shared cache, is what a long-lived stream reads.
 // A fresh SAR keeps the SSE staleness bounded to that memo's TTL alone.
 func (s *Server) canReadUserSAR(ctx context.Context, user *auth.User, group, resource, namespace, verb string) (allowed bool, authoritative bool) {
@@ -2341,8 +2375,16 @@ func filterDynamicObservationNamespaces(observation k8score.DynamicResourceObser
 	return observation
 }
 
+func (s *Server) writeIfDiscoveryPending(w http.ResponseWriter) bool {
+	if !k8s.GetResourceCache().CustomResourcesPending() {
+		return false
+	}
+	s.writeErrorCode(w, http.StatusServiceUnavailable, string(readreason.KindSyncPending), "Kubernetes API discovery is still running")
+	return true
+}
+
 func (s *Server) handleAPIResources(w http.ResponseWriter, r *http.Request) {
-	if !s.requireConnected(w) {
+	if !s.requireConnected(w) || s.writeIfDiscoveryPending(w) {
 		return
 	}
 	discovery := k8s.GetResourceDiscovery()
@@ -2354,6 +2396,13 @@ func (s *Server) handleAPIResources(w http.ResponseWriter, r *http.Request) {
 	resources, err := discovery.GetAPIResources()
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// Every cluster serves built-in kinds, so an empty catalog after a failed
+	// refresh means discovery hasn't answered yet, not that nothing exists.
+	if len(resources) == 0 && discovery.LastRefreshFailed() {
+		discovery.RetryFailedRefresh()
+		s.writeErrorCode(w, http.StatusServiceUnavailable, string(readreason.KindSyncPending), "Kubernetes API discovery hasn't answered yet")
 		return
 	}
 
@@ -3421,14 +3470,8 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		HPADiagnosis:    hpaDiagnosisFor(resource),
 	}
 
-	// Enrich TLS secrets with parsed certificate info
-	if secret, ok := resource.(*corev1.Secret); ok && secret.Type == corev1.SecretTypeTLS {
-		if certPEM, exists := secret.Data["tls.crt"]; exists && len(certPEM) > 0 {
-			certs := topology.ParsePEMCertificates(certPEM)
-			if len(certs) > 0 {
-				response.CertificateInfo = &SecretCertificateInfo{Certificates: certs}
-			}
-		}
+	if secret, ok := resource.(*corev1.Secret); ok {
+		response.CertificateInfo = topology.ParseSecretCertificates(secret)
 	}
 
 	if readCache() != cache {
@@ -3629,9 +3672,10 @@ func metricsUnavailableDiagnosis(ctx context.Context, includeAPIServiceCondition
 		return ""
 	}
 
-	contextName := k8s.GetContextName()
+	conn := k8s.Current()
+	contextName := conn.ContextName()
 	metricsVersion := ""
-	if discovery := k8s.GetResourceDiscovery(); discovery != nil {
+	if discovery := conn.Discovery(); discovery != nil {
 		if gvr, ok := discovery.GetGVRWithGroup("nodes", k8score.MetricsAPIGroup); ok {
 			metricsVersion = gvr.Version
 		}
@@ -4731,381 +4775,6 @@ func (s *Server) handleCascadeDeletePreview(w http.ResponseWriter, r *http.Reque
 	s.writeJSON(w, preview)
 }
 
-// handleTriggerCronJob creates a Job from a CronJob
-func (s *Server) handleTriggerCronJob(w http.ResponseWriter, r *http.Request) {
-	namespace := chi.URLParam(r, "namespace")
-	name := chi.URLParam(r, "name")
-
-	auth.AuditLog(r, namespace, name)
-	client := s.getDynamicClientForRequest(r)
-	if client == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
-		return
-	}
-	result, err := k8s.TriggerCronJobWithClient(r.Context(), namespace, name, client)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			s.writeError(w, http.StatusNotFound, err.Error())
-			return
-		}
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	s.writeJSON(w, map[string]any{
-		"message": "Job created successfully",
-		"jobName": result.GetName(),
-	})
-}
-
-// handleSuspendCronJob suspends a CronJob
-func (s *Server) handleSuspendCronJob(w http.ResponseWriter, r *http.Request) {
-	namespace := chi.URLParam(r, "namespace")
-	name := chi.URLParam(r, "name")
-
-	auth.AuditLog(r, namespace, name)
-	client := s.getDynamicClientForRequest(r)
-	if client == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
-		return
-	}
-	err := k8s.SetCronJobSuspendWithClient(r.Context(), namespace, name, true, client)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			s.writeError(w, http.StatusNotFound, err.Error())
-			return
-		}
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	s.writeJSON(w, map[string]string{"message": "CronJob suspended"})
-}
-
-// handleResumeCronJob resumes a suspended CronJob
-func (s *Server) handleResumeCronJob(w http.ResponseWriter, r *http.Request) {
-	namespace := chi.URLParam(r, "namespace")
-	name := chi.URLParam(r, "name")
-
-	auth.AuditLog(r, namespace, name)
-	client := s.getDynamicClientForRequest(r)
-	if client == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
-		return
-	}
-	err := k8s.SetCronJobSuspendWithClient(r.Context(), namespace, name, false, client)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			s.writeError(w, http.StatusNotFound, err.Error())
-			return
-		}
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	s.writeJSON(w, map[string]string{"message": "CronJob resumed"})
-}
-
-// handleRestartWorkload performs a rolling restart on a Deployment, StatefulSet, or DaemonSet
-func (s *Server) handleRestartWorkload(w http.ResponseWriter, r *http.Request) {
-	kind := chi.URLParam(r, "kind")
-	namespace := chi.URLParam(r, "namespace")
-	name := chi.URLParam(r, "name")
-
-	// Validate that this is a restartable workload type
-	validKinds := map[string]bool{
-		"deployments":  true,
-		"statefulsets": true,
-		"daemonsets":   true,
-		"rollouts":     true,
-	}
-	normalizedKind := k8score.NormalizeWorkloadKind(strings.ToLower(kind))
-	if !validKinds[normalizedKind] {
-		s.writeError(w, http.StatusBadRequest, "only Deployments, StatefulSets, DaemonSets, and Rollouts can be restarted")
-		return
-	}
-
-	auth.AuditLog(r, namespace, name)
-	client := s.getDynamicClientForRequest(r)
-	if client == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
-		return
-	}
-	err := k8s.RestartWorkloadWithClient(r.Context(), kind, namespace, name, client)
-	if err != nil {
-		// Restart reaches a terminating Rollout through get(), so it carries the
-		// same sentinels rollback does.
-		if normalizedKind == "rollouts" {
-			s.writeRolloutError(w, err, "restart", namespace, name)
-			return
-		}
-		if errors.Is(err, k8score.ErrRestartPaused) {
-			s.writeErrorCode(w, http.StatusConflict, errCodeWorkloadPaused, err.Error())
-			return
-		}
-		if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
-			s.writeError(w, http.StatusNotFound, err.Error())
-			return
-		}
-		if apierrors.IsForbidden(err) {
-			s.writeError(w, http.StatusForbidden, err.Error())
-			return
-		}
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	s.writeJSON(w, map[string]string{"message": "Workload restart initiated"})
-}
-
-// handlePauseDeployment holds a Deployment's pod template changes without rolling them out.
-func (s *Server) handlePauseDeployment(w http.ResponseWriter, r *http.Request) {
-	s.setDeploymentPaused(w, r, true)
-}
-
-// handleResumeDeployment lets a paused Deployment roll out its pod template again.
-func (s *Server) handleResumeDeployment(w http.ResponseWriter, r *http.Request) {
-	s.setDeploymentPaused(w, r, false)
-}
-
-// setDeploymentPaused patches as the caller, so Kubernetes RBAC decides, and it
-// returns 403 when the caller can't patch the Deployment. Without authentication
-// it acts with Radar's own identity, and requireSameOrigin keeps a page on another
-// site from reaching it.
-func (s *Server) setDeploymentPaused(w http.ResponseWriter, r *http.Request, paused bool) {
-	if !s.requireConnected(w) {
-		return
-	}
-
-	kind := chi.URLParam(r, "kind")
-	namespace := chi.URLParam(r, "namespace")
-	name := chi.URLParam(r, "name")
-
-	if k8score.NormalizeWorkloadKind(strings.ToLower(kind)) != "deployments" {
-		s.writeError(w, http.StatusBadRequest, "only Deployments can be paused or resumed")
-		return
-	}
-
-	auth.AuditLog(r, namespace, name)
-	client := s.getDynamicClientForRequest(r)
-	if client == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
-		return
-	}
-	if err := k8s.SetDeploymentPausedWithClient(r.Context(), namespace, name, paused, client); err != nil {
-		switch {
-		case apierrors.IsNotFound(err):
-			s.writeError(w, http.StatusNotFound, err.Error())
-		case apierrors.IsForbidden(err):
-			s.writeError(w, http.StatusForbidden, err.Error())
-		default:
-			log.Printf("[workload] Failed to set paused=%t on Deployment %s/%s: %v", paused, namespace, name, err)
-			s.writeError(w, http.StatusInternalServerError, err.Error())
-		}
-		return
-	}
-
-	message := "Deployment resumed"
-	if paused {
-		message = "Deployment paused"
-	}
-	s.writeJSON(w, map[string]string{"message": message})
-}
-
-// handleScaleWorkload scales a Deployment or StatefulSet to a new replica count
-func (s *Server) handleScaleWorkload(w http.ResponseWriter, r *http.Request) {
-	kind := chi.URLParam(r, "kind")
-	namespace := chi.URLParam(r, "namespace")
-	name := chi.URLParam(r, "name")
-
-	// Parse request body
-	var req struct {
-		Replicas int32 `json:"replicas"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	// Validate replica count
-	if req.Replicas < 0 {
-		s.writeError(w, http.StatusBadRequest, "replicas cannot be negative")
-		return
-	}
-	if req.Replicas > 10000 {
-		s.writeError(w, http.StatusBadRequest, "replicas cannot exceed 10000")
-		return
-	}
-
-	auth.AuditLog(r, namespace, name)
-	client := s.getDynamicClientForRequest(r)
-	if client == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
-		return
-	}
-	err := k8s.ScaleWorkloadWithClient(r.Context(), kind, namespace, name, req.Replicas, client)
-	if err != nil {
-		if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
-			s.writeError(w, http.StatusNotFound, err.Error())
-			return
-		}
-		if apierrors.IsForbidden(err) {
-			s.writeError(w, http.StatusForbidden, err.Error())
-			return
-		}
-		if strings.Contains(err.Error(), "not supported") {
-			s.writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		log.Printf("[scale] Failed to scale %s/%s: %v", namespace, name, err)
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	s.writeJSON(w, map[string]any{
-		"message":  "Workload scaled",
-		"replicas": req.Replicas,
-	})
-}
-
-var rollbackableWorkloadKinds = map[string]bool{
-	"deployments":  true,
-	"statefulsets": true,
-	"daemonsets":   true,
-	"rollouts":     true,
-}
-
-// handleWorkloadRevisions returns the revision history for a Deployment, StatefulSet, DaemonSet, or Rollout
-func (s *Server) handleWorkloadRevisions(w http.ResponseWriter, r *http.Request) {
-	if !s.requireConnected(w) {
-		return
-	}
-
-	kind := chi.URLParam(r, "kind")
-	namespace := chi.URLParam(r, "namespace")
-	name := chi.URLParam(r, "name")
-
-	// Validate that this is a rollbackable workload type
-	if !rollbackableWorkloadKinds[k8score.NormalizeWorkloadKind(strings.ToLower(kind))] {
-		s.writeError(w, http.StatusBadRequest, "revision history only available for Deployments, StatefulSets, DaemonSets, and Rollouts")
-		return
-	}
-
-	client := s.getDynamicClientForRequest(r)
-	if client == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "dynamic client not available")
-		return
-	}
-
-	revisions, err := k8s.ListWorkloadRevisionsWithClient(r.Context(), kind, namespace, name, client)
-	if err != nil {
-		if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
-			s.writeError(w, http.StatusNotFound, err.Error())
-			return
-		}
-		if apierrors.IsForbidden(err) {
-			s.writeError(w, http.StatusForbidden, err.Error())
-			return
-		}
-		log.Printf("[revisions] Failed to list revisions for %s %s/%s: %v", kind, namespace, name, err)
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	s.writeJSON(w, revisions)
-}
-
-// handleRollbackWorkload rolls back a Deployment, StatefulSet, or DaemonSet to a previous revision
-func (s *Server) handleRollbackWorkload(w http.ResponseWriter, r *http.Request) {
-	if !s.requireConnected(w) {
-		return
-	}
-
-	kind := chi.URLParam(r, "kind")
-	namespace := chi.URLParam(r, "namespace")
-	name := chi.URLParam(r, "name")
-
-	// Parse request body
-	var req struct {
-		Revision int64 `json:"revision"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	// Validate revision
-	if req.Revision <= 0 {
-		s.writeError(w, http.StatusBadRequest, "revision must be a positive integer")
-		return
-	}
-
-	// Validate that this is a rollbackable workload type
-	normalizedKind := k8score.NormalizeWorkloadKind(strings.ToLower(kind))
-	if !rollbackableWorkloadKinds[normalizedKind] {
-		s.writeError(w, http.StatusBadRequest, "rollback only available for Deployments, StatefulSets, DaemonSets, and Rollouts")
-		return
-	}
-
-	auth.AuditLog(r, namespace, name)
-	client := s.getDynamicClientForRequest(r)
-	if client == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
-		return
-	}
-	err := k8s.RollbackWorkloadWithClient(r.Context(), kind, namespace, name, req.Revision, client)
-	if err != nil {
-		// Rollouts carry sentinel errors (unchanged template, unsupported
-		// workloadRef, terminating) that the substring checks below can't map.
-		if normalizedKind == "rollouts" {
-			s.writeRolloutError(w, err, "rollback", namespace, name)
-			return
-		}
-		status := workloadRollbackErrorStatus(err)
-		if status == http.StatusInternalServerError {
-			log.Printf("[rollback] Failed to rollback %s %s/%s to revision %d: %v", kind, namespace, name, req.Revision, err)
-		}
-		s.writeWorkloadRollbackError(w, status, err)
-		return
-	}
-
-	s.writeJSON(w, map[string]string{
-		"message": fmt.Sprintf("Rollback to revision %d initiated", req.Revision),
-	})
-}
-
-// errCodeWorkloadPaused lets the UI point at its own Resume control instead of
-// showing the server's text, which is written for API and agent callers.
-const errCodeWorkloadPaused = "workload_paused"
-
-func (s *Server) writeWorkloadRollbackError(w http.ResponseWriter, status int, err error) {
-	if errors.Is(err, k8score.ErrWorkloadPaused) {
-		s.writeErrorCode(w, status, errCodeWorkloadPaused, err.Error())
-		return
-	}
-	s.writeError(w, status, err.Error())
-}
-
-// workloadRollbackErrorStatus maps a Deployment/StatefulSet/DaemonSet rollback
-// error to its HTTP status. 409 covers the refusals the caller can act on: the
-// workload changed mid-rollback, already runs the revision, or is paused.
-func workloadRollbackErrorStatus(err error) int {
-	switch {
-	case apierrors.IsNotFound(err), errors.Is(err, k8score.ErrResourceNotFound):
-		return http.StatusNotFound
-	case apierrors.IsForbidden(err):
-		return http.StatusForbidden
-	case apierrors.IsConflict(err), errors.Is(err, rollouts.ErrTemplateUnchanged), errors.Is(err, k8score.ErrWorkloadPaused):
-		return http.StatusConflict
-	case strings.Contains(err.Error(), "not found"):
-		return http.StatusNotFound
-	case strings.Contains(err.Error(), "not supported"):
-		return http.StatusBadRequest
-	default:
-		return http.StatusInternalServerError
-	}
-}
-
 // Session management handlers
 
 // SessionCounts returns counts of active sessions
@@ -5473,6 +5142,16 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 		s.writeError(w, http.StatusInternalServerError, "failed to parse kubeconfig: "+err.Error())
 		return
 	}
+	// Whoever can write this Secret controls the kubeconfig, but the client
+	// runs here with the operator's credentials, so it must not run commands
+	// or read local files.
+	if reasons := k8s.UntrustedKubeconfigReasons(newConfig); len(reasons) > 0 {
+		log.Printf("[capi] Refused kubeconfig from secret %s/%s: %s", ns, secretName, strings.Join(reasons, "; "))
+		s.writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(
+			"Not connected: the kubeconfig in Secret %s/%s would run a command or read a file on this computer (%s). Radar doesn't use those settings from a kubeconfig stored in the cluster. If you trust it, download it, check it and add it to your own kubeconfig.",
+			ns, secretName, strings.Join(reasons, "; ")))
+		return
+	}
 
 	// Determine the context name to use from the workload kubeconfig
 	contextName := newConfig.CurrentContext
@@ -5576,7 +5255,11 @@ func (s *Server) writeSwitchPreflightError(w http.ResponseWriter, prefix string,
 }
 
 func (s *Server) writeError(w http.ResponseWriter, status int, message string) {
-	body := map[string]string{"error": message}
+	s.writeErrorFields(w, status, message, map[string]string{})
+}
+
+func (s *Server) writeErrorFields(w http.ResponseWriter, status int, message string, body map[string]string) {
+	body["error"] = message
 	if k8s.IsUserTokenRequired(message) {
 		status = http.StatusForbidden
 		body["reason"] = pkgauth.UserTokenRequiredReason
@@ -5804,8 +5487,8 @@ func (s *Server) getDynamicClientForRequest(r *http.Request) dynamic.Interface {
 }
 
 func (s *Server) getDynamicClientSnapshotForRequest(r *http.Request) (dynamic.Interface, string) {
-	if bound, ok := k8s.BoundConnectionFrom(r.Context()); ok {
-		return k8s.DynamicClientFromContext(r.Context()), bound.Context
+	if bound := k8s.ConnectionFrom(r.Context()); bound != nil {
+		return k8s.DynamicClientFromContext(r.Context()), k8s.TimelineClusterContext(bound.ContextName())
 	}
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		client, contextName, err := k8s.UserDynamicClientSnapshot(user)
@@ -5815,7 +5498,8 @@ func (s *Server) getDynamicClientSnapshotForRequest(r *http.Request) (dynamic.In
 		}
 		return client, contextName
 	}
-	return k8s.GetDynamicClientSnapshot()
+	conn := k8s.Current()
+	return conn.Dynamic(), k8s.TimelineClusterContext(conn.ContextName())
 }
 
 // getConfigForRequest returns an impersonated REST config when auth is enabled,
@@ -5827,11 +5511,11 @@ func (s *Server) getConfigForRequest(r *http.Request) *rest.Config {
 }
 
 func (s *Server) getConfigSnapshotForRequest(r *http.Request) (*rest.Config, string) {
-	if bound, ok := k8s.BoundConnectionFrom(r.Context()); ok {
-		if user := auth.UserFromContext(r.Context()); user != nil && bound.Config != nil {
-			return k8s.UserRESTConfig(bound.Config, user), bound.Context
+	if bound := k8s.ConnectionFrom(r.Context()); bound != nil {
+		if user := auth.UserFromContext(r.Context()); user != nil && bound.Config() != nil {
+			return k8s.UserRESTConfig(bound.Config(), user), k8s.TimelineClusterContext(bound.ContextName())
 		}
-		return bound.Config, bound.Context
+		return bound.ConfigCopy(), k8s.TimelineClusterContext(bound.ContextName())
 	}
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		cfg, contextName, err := k8s.UserConfigSnapshot(user)
@@ -5841,14 +5525,15 @@ func (s *Server) getConfigSnapshotForRequest(r *http.Request) (*rest.Config, str
 		}
 		return cfg, contextName
 	}
-	return k8s.GetConfigSnapshot()
+	conn := k8s.Current()
+	return conn.ConfigCopy(), k8s.TimelineClusterContext(conn.ContextName())
 }
 
 // getClientForRequest returns an impersonated typed client when auth is enabled,
 // or the shared client when auth is disabled. Returns nil if impersonation fails
 // (never falls back to the ServiceAccount client). Callers must handle nil.
 func (s *Server) getClientForRequest(r *http.Request) kubernetes.Interface {
-	if _, ok := k8s.BoundConnectionFrom(r.Context()); ok {
+	if k8s.ConnectionFrom(r.Context()) != nil {
 		return k8s.ClientFromContext(r.Context())
 	}
 	if user := auth.UserFromContext(r.Context()); user != nil {
@@ -5871,18 +5556,19 @@ func (s *Server) getClientForRequest(r *http.Request) kubernetes.Interface {
 
 func (s *Server) getClientSafetySnapshotForRequest(r *http.Request) (kubernetes.Interface, string) {
 	if user := auth.UserFromContext(r.Context()); user != nil {
-		client, binding, err := k8s.UserClientSafetySnapshot(user)
+		client, binding, err := k8s.Current().UserClientSafetySnapshot(user)
 		if err != nil {
 			log.Printf("[auth] Impersonation failed for %s: %v", k8s.SanitizeForLog(user.Username), err)
 			return nil, binding
 		}
 		return client, binding
 	}
-	client, binding := k8s.GetClientSafetySnapshot()
-	if client == nil {
-		return nil, binding
-	}
-	return client, binding
+	conn := k8s.Current()
+	return conn.ClientInterface(), conn.ContextBinding()
+}
+
+func currentPermissionConnection() string {
+	return strconv.FormatUint(k8s.Current().ClientGeneration(), 10)
 }
 
 // getUserNamespaces returns namespace filtering for the current user.
@@ -5909,46 +5595,56 @@ func (s *Server) getUserNamespacesWithStatus(r *http.Request, requested []string
 	if perms == nil {
 		log.Printf("[auth] No cached permissions for %s — discovering namespaces", user.Username)
 		// Discover namespaces synchronously on first request
-		client := k8s.GetClient()
+		conn := k8s.Current()
+		client, generation := conn.Client(), conn.ClientGeneration()
 		if client == nil {
 			log.Printf("[auth] K8s client not available for namespace discovery (user=%s) — denying access", k8s.SanitizeForLog(user.Username))
 			return []string{}, true // fail-closed: cannot verify permissions
 		}
-
-		// Get all namespace names from cache
-		var allNamespaces []string
-		if cache := k8s.GetResourceCache(); cache != nil {
-			if nsLister := cache.Namespaces(); nsLister != nil {
-				nsList, _ := nsLister.List(labels.Everything())
-				for _, ns := range nsList {
-					allNamespaces = append(allNamespaces, ns.Name)
-				}
-			}
-		}
-		// Fallback for namespace-scoped SAs: when the cluster-wide namespace
-		// informer is unavailable (SA lacks list-namespaces RBAC), the lister
-		// is empty and DiscoverNamespaces' per-namespace SAR loop has nothing
-		// to iterate — every non-admin user gets [] even when they have RBAC
-		// on the SA's bound namespace. Seed candidates from the kubeconfig
-		// context / --namespace fallback so those users get surfaced.
-		if len(allNamespaces) == 0 {
-			if accessible, _ := k8s.GetAccessibleNamespaces(r.Context()); len(accessible) > 0 {
-				allNamespaces = accessible
-			}
-		}
-
-		allowed, err := auth.DiscoverNamespaces(r.Context(), client, user.Username, user.Groups, allNamespaces)
-		if err != nil {
-			log.Printf("[auth] Failed to discover namespaces for %s: %v — denying access (fail-closed)", k8s.SanitizeForLog(user.Username), err)
+		var ok bool
+		perms, ok = s.permCache.Resolve(r.Context(), user.Username, user.Groups, strconv.FormatUint(generation, 10), func(ctx context.Context) *auth.UserPermissions {
+			return discoverUserPermissions(ctx, client, user)
+		})
+		if !ok {
 			return []string{}, true // fail-closed: no access on discovery error
 		}
-
-		log.Printf("[auth] DiscoverNamespaces result for %s: allowed=%v (nil=all, []=none)", user.Username, allowed)
-		perms = &auth.UserPermissions{AllowedNamespaces: allowed}
-		s.permCache.Set(user.Username, user.Groups, perms)
 	}
 
 	return auth.FilterNamespacesForUser(requested, user, perms), false
+}
+
+// discoverUserPermissions computes the user's namespace access on client, or
+// returns nil when discovery fails.
+func discoverUserPermissions(ctx context.Context, client *kubernetes.Clientset, user *auth.User) *auth.UserPermissions {
+	var allNamespaces []string
+	if cache := k8s.GetResourceCache(); cache != nil {
+		if nsLister := cache.Namespaces(); nsLister != nil {
+			nsList, _ := nsLister.List(labels.Everything())
+			for _, ns := range nsList {
+				allNamespaces = append(allNamespaces, ns.Name)
+			}
+		}
+	}
+	// Fallback for namespace-scoped SAs: when the cluster-wide namespace
+	// informer is unavailable (SA lacks list-namespaces RBAC), the lister
+	// is empty and DiscoverNamespaces' per-namespace SAR loop has nothing
+	// to iterate — every non-admin user gets [] even when they have RBAC
+	// on the SA's bound namespace. Seed candidates from the kubeconfig
+	// context / --namespace fallback so those users get surfaced.
+	if len(allNamespaces) == 0 {
+		if accessible, _ := k8s.GetAccessibleNamespaces(ctx); len(accessible) > 0 {
+			allNamespaces = accessible
+		}
+	}
+
+	allowed, err := auth.DiscoverNamespaces(ctx, client, user.Username, user.Groups, allNamespaces)
+	if err != nil {
+		log.Printf("[auth] Failed to discover namespaces for %s: %v — denying access (fail-closed)", k8s.SanitizeForLog(user.Username), err)
+		return nil
+	}
+
+	log.Printf("[auth] DiscoverNamespaces result for %s: allowed=%v (nil=all, []=none)", user.Username, allowed)
+	return &auth.UserPermissions{AllowedNamespaces: allowed}
 }
 
 // handleSSE wraps the SSEBroadcaster's HandleSSE with per-user namespace filtering.
@@ -6013,9 +5709,6 @@ const (
 	// sseChangeAuthSARTimeout caps a single authorization SAR issued from the
 	// broadcast goroutine, so one hung apiserver call can't stall broadcasts.
 	sseChangeAuthSARTimeout = 5 * time.Second
-	// accessReviewTimeout caps a review shared by the callers asking the same
-	// question at once; each caller still stops waiting when its own request ends.
-	accessReviewTimeout = 10 * time.Second
 	// sseChangeAuthNegativeTTL caps how long a transient SAR failure (apiserver
 	// unreachable, error, or timeout) is remembered as a fail-closed deny. Short
 	// so a momentary blip clears within seconds, but non-zero so a degraded
@@ -6028,6 +5721,10 @@ const (
 	// legitimately large live working set may exceed it.
 	sseChangeAuthMemoCap = 8192
 )
+
+// accessReviewTimeout caps a review shared by the callers asking the same
+// question at once; each caller still stops waiting when its own request ends.
+var accessReviewTimeout = 10 * time.Second
 
 // newSSEChangeAuthorizer returns the per-kind authorizer for one SSE client's
 // change frames, backed by a connection-lived memo.
@@ -6045,7 +5742,7 @@ const (
 // which leaves SSE connections open (they receive a context_changed frame, not
 // a disconnect) — can't authorize new-cluster frames with the previous
 // cluster's decisions; post-switch keys miss and re-run against the new
-// apiserver, mirroring the shared cache's own context stamping. nil user
+// apiserver, mirroring the shared cache's own connection stamping. nil user
 // (auth off) is a passthrough.
 func (s *Server) newSSEChangeAuthorizer(ctx context.Context, user *auth.User) func(group, resource, namespace, verb string) bool {
 	if user == nil || s.permCache == nil {
@@ -6304,6 +6001,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	tokenSet := file.ArgoCDToken != ""
 	file.ArgoCDToken = ""
+	redactOpenObserveToken(&file)
 	// When the integration is environment-managed, the on-disk URL/TLS are ignored;
 	// surface the effective env values (and the token-set signal) so the read-only
 	// Settings card shows the real endpoint rather than stale disk config. When env
@@ -6356,6 +6054,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		effective.PrometheusHeaders = nil
 		effective.KubecostAPIKey = ""
 		effective.ArgoCDToken = ""
+		redactOpenObserveToken(&effective)
 		resp.Effective = effective
 	}
 	resp.Effective.PrometheusURL = currentURL
@@ -6432,6 +6131,7 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 			kubecostAPIKeyContext    string
 			kubecostClusterID        string
 			kubecostClusterIDContext string
+			openObserve              *config.OpenObserveConfig
 		}{
 			promHeaders:              c.PrometheusHeaders,
 			promHeadersEnv:           c.PrometheusHeadersFromEnv,
@@ -6447,6 +6147,9 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 			kubecostAPIKeyContext:    c.KubecostAPIKeyContext,
 			kubecostClusterID:        c.KubecostClusterID,
 			kubecostClusterIDContext: c.KubecostClusterIDContext,
+			// Owned by `radar openobserve`; the Settings dialog doesn't edit
+			// it, and GET blanks its token.
+			openObserve: c.OpenObserve,
 		}
 		*c = updated
 		c.PrometheusHeaders = preserved.promHeaders
@@ -6463,6 +6166,7 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		c.KubecostAPIKeyContext = preserved.kubecostAPIKeyContext
 		c.KubecostClusterID = preserved.kubecostClusterID
 		c.KubecostClusterIDContext = preserved.kubecostClusterIDContext
+		c.OpenObserve = preserved.openObserve
 	})
 	if err != nil {
 		log.Printf("[config] Failed to save config: %v", err)
@@ -6475,7 +6179,20 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	result.PrometheusHeaders = nil
 	result.ArgoCDToken = ""
 	result.KubecostAPIKey = ""
+	redactOpenObserveToken(&result)
 	s.writeJSON(w, result)
+}
+
+// redactOpenObserveToken blanks the saved OpenObserve token in a config about
+// to be served, on a copy so the loaded config is left alone. TokenEnv names
+// a variable, not a secret, and stays.
+func redactOpenObserveToken(c *config.Config) {
+	if c.OpenObserve == nil {
+		return
+	}
+	oc := c.OpenObserve.Clone()
+	oc.Token = ""
+	c.OpenObserve = &oc
 }
 
 // handleApplyPrometheusURL re-points the running Prometheus client at a new URL

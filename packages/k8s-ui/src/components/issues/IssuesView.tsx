@@ -1,7 +1,7 @@
 import { IssueGuidance, issueGuidanceSummary } from './IssueGuidance'
 import { summarizeSchedulerMessage } from '../resources/resource-utils'
-import { Fragment, useMemo, useState, type ComponentType, type ReactNode } from 'react';
-import { AlertOctagon, AlertTriangle, ArrowRight, CircleCheck, Clock, Eraser, ExternalLink, Layers, Terminal, Workflow } from 'lucide-react';
+import { Fragment, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react';
+import { AlertOctagon, AlertTriangle, ArrowRight, CircleCheck, Clock, Eraser, ExternalLink, History, Layers, Terminal, Workflow } from 'lucide-react';
 import { CardSection, ClusterName, Disclosure, EmptyState, KIND_CHIP_CLASS, TerminalBlock } from '../ui';
 import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse';
 import { Tooltip } from '../ui/Tooltip';
@@ -23,15 +23,20 @@ import {
 import {
   compareIssues,
   issueMessageParts,
+  issueOccurrence,
   memberRef,
   subjectRef,
   type Issue,
   type IssueAffected,
   type IssueConditionalCleanup,
   type IssueResourceRef,
+  type IssueRowChange,
   type IssueSeverity,
 } from './types';
 import { SEVERITY_RAIL_HEADER_INSET_CLASS, SeverityRail } from '../ui/SeverityRail';
+import { ResourceLine } from './ResourceLine';
+import { IssueRecentChanges, changeAgo, recentChangesReplaceChangeContext, type IssueExpansion, type IssueTimelineLinks } from './IssueRecentChanges';
+import { rowChangeVerb } from './change-verb';
 
 // Leading severity glyph — the at-a-glance severity cue on every row: critical =
 // octagon (stop), warning = triangle.
@@ -71,12 +76,28 @@ export interface IssuesViewProps {
   /** Per-row trailing action, rendered after the severity badge — e.g. the
    *  "Investigate with AI" button in OSS. Omit to render no per-row action. */
   renderActions?: (ctx: IssueRowSlotContext) => ReactNode;
+  /** Told which row is open (list copy) or that none is, so the host can fetch
+   *  for that one issue. Fires when the open row changes or leaves the list. */
+  onOpenIssueChange?: (issue: Issue | null) => void;
+  /** The host's fresher data for the open row (see IssueExpansion). Called only
+   *  for the open row; return undefined to render it as the list has it. */
+  expandedIssue?: (issue: Issue) => IssueExpansion | undefined;
+  /** The one change each row names, keyed by issueRowKey. A row shows its
+   *  entry only when the entry's occurrence matches the row's issue. Omit to
+   *  render rows without it. */
+  rowChanges?: ReadonlyMap<string, IssueRowChange>;
+  /** Told which rows are on screen, in list order, whenever that set changes,
+   *  so the host can fetch rowChanges for them. Without IntersectionObserver
+   *  every row counts as on screen. */
+  onVisibleIssuesChange?: (issues: Issue[]) => void;
+  /** How a change in an open row's Recent changes opens its timeline event. */
+  timelineLinks?: IssueTimelineLinks;
 }
 
 // The queue list. Filtering/faceting is the host page's job (FleetPageShell on
 // the hub, a thin wrapper in OSS) — this renders the rows + the healthy /
 // no-data terminal states only.
-export function IssuesView({ issues, anyData, resourceHref, onResourceClick, clusterLabel, emptyAction, renderActions }: IssuesViewProps) {
+export function IssuesView({ issues, anyData, resourceHref, onResourceClick, clusterLabel, emptyAction, renderActions, onOpenIssueChange, expandedIssue, rowChanges, onVisibleIssuesChange, timelineLinks }: IssuesViewProps) {
   // Single-open accordion: opening a row collapses the previous one, so the
   // queue stays scannable and you never lose your place to a wall of expansions.
   const [openId, setOpenId] = useState<string | null>(null);
@@ -84,6 +105,8 @@ export function IssuesView({ issues, anyData, resourceHref, onResourceClick, clu
   // Stable order keyed on severity → observed age → identity (see compareIssues), so
   // the queue doesn't reshuffle under the host's auto-refresh.
   const sorted = useMemo(() => [...issues].sort(compareIssues), [issues]);
+  useOpenIssueNotice(sorted, openId, issueRowKey, onOpenIssueChange);
+  const listRef = useVisibleIssues(sorted, onVisibleIssuesChange);
 
   if (sorted.length === 0) {
     return anyData ? (
@@ -100,27 +123,102 @@ export function IssuesView({ issues, anyData, resourceHref, onResourceClick, clu
   }
 
   return (
-    <ol className="flex flex-col gap-1.5">
+    <ol ref={listRef} className="flex flex-col gap-1.5">
       {sorted.map((issue) => {
         // Stable identity for the React key + open-accordion state, so a row
         // survives auto-refresh in place. cluster_id scopes the id across the
         // fleet (the hub renders issues from many clusters in one list).
-        const rowKey = `${issue.cluster_id ?? ''}:${issue.id}`;
+        const rowKey = issueRowKey(issue);
+        const open = openId === rowKey;
         return (
           <IssueRow
             key={rowKey}
             issue={issue}
+            expandedIssue={open ? expandedIssue?.(issue) : undefined}
             clusterLabel={clusterLabel}
-            open={openId === rowKey}
+            open={open}
             onToggle={() => setOpenId((cur) => (cur === rowKey ? null : rowKey))}
             resourceHref={resourceHref}
             onResourceClick={onResourceClick}
             renderActions={renderActions}
+            rowChange={rowChanges?.get(rowKey)}
+            timelineLinks={timelineLinks}
           />
         );
       })}
     </ol>
   );
+}
+
+/** Reports which rows of an <ol> of issue rows are on screen (each child is
+ *  the row for rows[index]), in list order, whenever that set changes. Rows a
+ *  little below the fold count, so a short scroll finds them ready. */
+export function useVisibleIssues(rows: Issue[], onVisibleIssuesChange?: (issues: Issue[]) => void) {
+  const listRef = useRef<HTMLOListElement>(null);
+  const notify = useRef(onVisibleIssuesChange);
+  notify.current = onVisibleIssuesChange;
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+  const enabled = Boolean(onVisibleIssuesChange);
+  const rowsKey = rows.map((issue) => `${issueRowKey(issue)}#${issueOccurrence(issue)}`).join(',');
+  useEffect(() => {
+    const list = listRef.current;
+    if (!enabled) return;
+    // Null, not '', so an empty list is reported too: the host must stop
+    // fetching for the rows that left.
+    let reported: string | null = null;
+    const report = (visible: Issue[]) => {
+      const key = visible.map((issue) => `${issueRowKey(issue)}#${issueOccurrence(issue)}`).join(',');
+      if (key === reported) return;
+      reported = key;
+      notify.current?.(visible);
+    };
+    if (!list || typeof IntersectionObserver === 'undefined') {
+      report(rowsRef.current);
+      return;
+    }
+    const children = Array.from(list.children);
+    const onScreen = new Set<Element>();
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) onScreen.add(entry.target);
+        else onScreen.delete(entry.target);
+      }
+      report(rowsRef.current.filter((_, index) => children[index] && onScreen.has(children[index])));
+    }, { rootMargin: '0px 0px 400px 0px' });
+    children.forEach((child) => observer.observe(child));
+    return () => observer.disconnect();
+  }, [enabled, rowsKey]);
+  useEffect(() => () => notify.current?.([]), []);
+  return listRef;
+}
+
+/** Stable row identity: cluster_id scopes the id across a fleet. */
+export function issueRowKey(issue: Issue): string {
+  return `${issue.cluster_id ?? ''}:${issue.id}`;
+}
+
+/** Tells the host which issue is open. Keyed on row identity and occurrence,
+ *  not the object: a list refresh hands over new objects for the same open
+ *  row, while a new occurrence under the same id must reach the host. */
+export function useOpenIssueNotice(
+  rows: Issue[],
+  openKey: string | null,
+  rowKey: (issue: Issue) => string,
+  onOpenIssueChange?: (issue: Issue | null) => void,
+) {
+  const open = openKey === null ? null : rows.find((issue) => rowKey(issue) === openKey) ?? null;
+  const openRef = useRef(open);
+  openRef.current = open;
+  const notify = useRef(onOpenIssueChange);
+  notify.current = onOpenIssueChange;
+  const noticeKey = open ? `${rowKey(open)}#${issueOccurrence(open)}` : null;
+  useEffect(() => {
+    notify.current?.(openRef.current);
+    // Covers the list unmounting with a row open (a filter that empties it,
+    // a host swapping views), so the host stops fetching for that row.
+    return () => notify.current?.(null);
+  }, [noticeKey]);
 }
 
 export interface IssueRowSlotContext {
@@ -190,11 +288,21 @@ export interface IssueRowProps {
    *  inherits the stack's dividers and rhythm, so the host section needs no
    *  chrome of its own. */
   renderDetailSection?: (ctx: IssueRowSlotContext) => ReactNode;
+  /** The host's fresher copy of this issue and its recent changes, used while
+   *  the row is open: header timing, diagnosis, context and the Recent changes
+   *  section all read from it. Omit to render exactly from `issue`. */
+  expandedIssue?: IssueExpansion;
+  /** The one change the collapsed row names (from the host's batched lookup).
+   *  Shown only when its occurrence matches `issue`. */
+  rowChange?: IssueRowChange;
+  /** How a change in Recent changes opens its timeline event. */
+  timelineLinks?: IssueTimelineLinks;
   ResourceLinkIcon?: ComponentType<{ className?: string }>;
 }
 
 export function IssueRow({
-  issue,
+  issue: listIssue,
+  expandedIssue,
   clusterLabel,
   open,
   onToggle,
@@ -210,8 +318,14 @@ export function IssueRow({
   renderActions,
   diagnosisSource,
   renderDetailSection,
+  rowChange,
+  timelineLinks,
   ResourceLinkIcon = ExternalLink,
 }: IssueRowProps) {
+  const issue = open && expandedIssue?.issue ? expandedIssue.issue : listIssue;
+  // An answer read for an earlier occurrence of this issue id describes
+  // another window, so it isn't shown.
+  const rowNote = rowChange && issueOccurrence(rowChange) === issueOccurrence(listIssue) ? rowChange.change : undefined;
   const cluster = clusterLabel?.(issue);
   const affected = affectedSummary(issue.affected);
   const { headline } = issueMessageParts(issue);
@@ -284,6 +398,17 @@ export function IssueRow({
   }
   if (affected) {
     resourceLine.push(<span className="shrink-0 tabular-nums">{hideSubject ? `Affects ${affected}` : affected}</span>);
+  }
+  if (rowNote) {
+    const object = rowNote.namespace && rowNote.namespace !== issue.namespace ? `${rowNote.namespace} / ${rowNote.name}` : rowNote.name;
+    resourceLine.push(
+      <Tooltip content={`${rowNote.kind} ${object}, ${new Date(rowNote.timestamp).toLocaleString()}`} delay={200} wrapperClassName="min-w-0">
+        <span className="flex min-w-0 items-center gap-1" data-row-change>
+          <History className="h-3 w-3 shrink-0" aria-hidden />
+          <span className="truncate">{rowChangeVerb(rowNote)} {changeAgo(rowNote)}</span>
+        </span>
+      </Tooltip>,
+    );
   }
   if (issue.incident_parent) {
     const parent = issue.incident_parent;
@@ -405,7 +530,14 @@ export function IssueRow({
               text keeps enough contrast. */}
           <div className="border-t border-theme-border bg-theme-surface py-4 pl-6 pr-4">
             <div className="flex flex-col divide-y divide-theme-border/70 [&>*]:py-4 [&>*:first-child]:pt-0 [&>*:last-child]:pb-0">
-              <Diagnosis issue={issue} source={diagnosisSource} />
+              <Diagnosis
+                issue={issue}
+                source={diagnosisSource}
+                hideChangeContext={recentChangesReplaceChangeContext(issue, expandedIssue)}
+                recentChanges={expandedIssue ? (
+                  <IssueRecentChanges issue={issue} expansion={expandedIssue} resourceHref={resourceHref} onResourceClick={onResourceClick} {...timelineLinks} />
+                ) : null}
+              />
               {issue.incident_parent ? (
                 <section className="flex flex-col gap-1">
                   <h4 className="text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
@@ -434,7 +566,8 @@ export function IssueRow({
   );
 }
 
-// Diagnosis: WHAT'S WRONG (amber) → NEXT STEP (emerald) → RAW ERROR (monochrome
+// Diagnosis: WHAT'S WRONG (amber) → RECENT CHANGES (when the host supplies
+// them) → NEXT STEP (emerald) → RAW ERROR (monochrome
 // terminal block). Status/timing facts share one muted meta line under the
 // diagnosis so the body reads as three beats rather than a stack of one-liners.
 //
@@ -442,7 +575,19 @@ export function IssueRow({
 // IssueDiagnosisSource). It is a swap of WORDS ONLY: the meta line, the raw
 // error, the reason-code eyebrow and the tones are computed here either way, so
 // an overridden card loses none of the facts an un-overridden one shows.
-function Diagnosis({ issue, source }: { issue: Issue; source?: IssueDiagnosisSource }) {
+function Diagnosis({
+  issue,
+  source,
+  recentChanges,
+  hideChangeContext,
+}: {
+  issue: Issue;
+  source?: IssueDiagnosisSource;
+  /** The Recent changes section, placed right under What's wrong. */
+  recentChanges?: ReactNode;
+  /** Leaves change_context out of the meta line: Recent changes states it. */
+  hideChangeContext?: boolean;
+}) {
   const crash =
     issue.restart_count || issue.last_terminated_reason
       ? [
@@ -510,7 +655,7 @@ function Diagnosis({ issue, source }: { issue: Issue; source?: IssueDiagnosisSou
   if (issue.first_seen) {
     if (issue.last_seen && (timing?.kind !== 'creation' || partialOnset)) meta.push(`last seen ${formatRelativeAgeTime(issue.last_seen)}`);
   }
-  if (issue.change_context) meta.push(changeContextText(issue.change_context));
+  if (issue.change_context && !hideChangeContext) meta.push(changeContextText(issue.change_context));
 
   // A host's prose, when it has better. Each section falls back independently:
   // supplying a cause and no next step leaves the detector's own action standing,
@@ -572,6 +717,8 @@ function Diagnosis({ issue, source }: { issue: Issue; source?: IssueDiagnosisSou
             a substitute for them. */}
         {meta.length > 0 ? <p className="text-xs leading-relaxed text-theme-text-tertiary tabular-nums">{meta.join(' · ')}</p> : null}
       </CardSection>
+
+      {recentChanges}
 
       {hasNextStep ? (
         <CardSection
@@ -770,73 +917,6 @@ function AffectedResources({
         </CardSection>
       )}
     </section>
-  );
-}
-
-function ResourceLine({
-  label,
-  refForLink,
-  count,
-  resourceHref,
-  onResourceClick,
-  ResourceLinkIcon,
-  compact,
-}: {
-  label?: string;
-  refForLink: IssueResourceRef;
-  count?: number;
-  resourceHref?: (ref: IssueResourceRef) => string;
-  onResourceClick?: (ref: IssueResourceRef) => void;
-  ResourceLinkIcon: ComponentType<{ className?: string }>;
-  // Footer variant (the Subject row): renders the kind as a grey mono chip and
-  // a slightly bolder name, distinguishing the subject from the affected-members
-  // list below it.
-  compact?: boolean;
-}) {
-  const r = refForLink;
-  const linkable = !!(onResourceClick || resourceHref);
-  const body = (
-    <>
-      {label ? <span className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-theme-text-tertiary">{label}</span> : null}
-      {/* Footer (compact): the kind is a grey mono chip; member rows keep plain mono. */}
-      {compact ? (
-        <span className={KIND_CHIP_CLASS}>{r.kind}</span>
-      ) : (
-        <span className="shrink-0 font-mono text-[11px] uppercase tracking-wide text-theme-text-tertiary">{r.kind}</span>
-      )}
-      <span className={`min-w-0 truncate text-sm ${linkable ? `${compact ? 'font-semibold' : 'font-medium'} text-[var(--color-radar-accent,var(--accent))]` : 'font-medium text-theme-text-primary'}`}>
-        {r.namespace ? `${r.namespace} / ` : ''}
-        {r.name}
-      </span>
-      {count && count > 1 ? (
-        <Tooltip content={`${count} affected resources grouped under this issue`} delay={200}>
-          <span className="shrink-0 text-[10px] text-theme-text-tertiary tabular-nums">{count} affected</span>
-        </Tooltip>
-      ) : null}
-      {linkable && <ResourceLinkIcon className="h-3 w-3 shrink-0 text-theme-text-tertiary opacity-0 transition-opacity group-hover/r:opacity-100" />}
-    </>
-  );
-  // compact = Subject row; default = the affected-members list. Both get the
-  // padded, rounded hover hit-box so the Subject reads as clickable like the
-  // members below it. items-baseline so the label + kind chip sit on the same
-  // baseline as the larger resource name.
-  const cls = compact
-    ? 'group/r flex w-full items-baseline gap-2 rounded-md px-2 py-1 text-left transition-colors hover:bg-theme-hover/60'
-    : 'group/r flex w-full items-baseline gap-2 rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-theme-hover/60';
-  return (
-    <li>
-      {onResourceClick ? (
-        <button type="button" onClick={() => onResourceClick(r)} className={cls}>
-          {body}
-        </button>
-      ) : resourceHref ? (
-        <a href={resourceHref(r)} className={cls}>
-          {body}
-        </a>
-      ) : (
-        <span className={compact ? 'flex items-baseline gap-2 rounded-md px-2 py-1' : 'flex items-baseline gap-2 rounded-md px-2 py-1 text-sm'}>{body}</span>
-      )}
-    </li>
   );
 }
 

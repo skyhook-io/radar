@@ -2,12 +2,13 @@ package resourcecontext
 
 import (
 	"context"
+	"slices"
 
 	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/ownership"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
@@ -16,35 +17,25 @@ type cachedDynamicReader interface {
 	Observation(schema.GroupVersionResource) k8score.DynamicResourceObservation
 }
 
-func addWebhookContext(ctx context.Context, obj runtime.Object, opts Options, rc *ResourceContext, omitted *omittedTracker) {
-	if webhook, ok := obj.(*unstructured.Unstructured); ok {
-		refs := configrefs.AdmissionWebhookServices(webhook)
-		if len(refs) > 0 {
-			dependencies := append([]ContextRef{}, rc.Dependencies...)
-			for _, ref := range refs {
-				dependencies = append(dependencies, ContextRef{Kind: "Service", Namespace: ref.Service.Namespace, Name: ref.Service.Name})
-			}
-			rc.Dependencies = filterBoundedRefs(ctx, opts.AccessChecker, dependencies, "dependencies", omitted)
-		}
-	}
-	ident, ok := identityOf(obj)
-	if !ok || ident.Kind != "Service" || ident.Group != "" {
-		return
-	}
+func appendWebhookConsumers(ctx context.Context, dependents []ContextRef, ident resourceIdentity, opts Options, omitted *omittedTracker) []ContextRef {
 	if opts.DynamicProv == nil {
 		omitted.add("dependents", OmittedCacheCold)
-		return
+		return dependents
 	}
 	lookup, supported := opts.DynamicProv.(cachedDynamicReader)
 	if !supported {
 		omitted.add("dependents", OmittedUnavailable)
-		return
+		return dependents
 	}
-	dependents := append([]ContextRef{}, rc.Dependents...)
 	for _, kind := range []string{"MutatingWebhookConfiguration", "ValidatingWebhookConfiguration"} {
 		source := ContextRef{Group: "admissionregistration.k8s.io", Kind: kind}
-		if !checkRef(ctx, opts.AccessChecker, &source) {
+		switch decideRef(ctx, opts.AccessChecker, &source) {
+		case ownership.Allowed:
+		case ownership.Denied:
 			omitted.add("dependents", OmittedRBACDenied)
+			continue
+		default:
+			omitted.add("dependents", OmittedUnavailable)
 			continue
 		}
 		gvr, ok := opts.DynamicProv.GetGVRWithGroup(kind, source.Group)
@@ -82,5 +73,6 @@ func addWebhookContext(ctx context.Context, obj runtime.Object, opts Options, rc
 			}
 		}
 	}
-	rc.Dependents = filterBoundedRefs(ctx, opts.AccessChecker, dependents, "dependents", omitted)
+	slices.SortFunc(dependents, compareRefIdentity)
+	return dependents
 }

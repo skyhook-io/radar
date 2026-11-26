@@ -198,8 +198,9 @@ func TestRelationshipFamilyInventoryHasBothDirections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 74 {
-		t.Fatalf("inventory has %d families; want 73", len(rows)-1)
+	const wantFamilies = 74
+	if len(rows)-1 != wantFamilies {
+		t.Fatalf("inventory has %d families; want %d", len(rows)-1, wantFamilies)
 	}
 	producers := map[string]bool{}
 	for _, f := range relations.Families("") {
@@ -254,7 +255,7 @@ func TestRelationshipFamilyInventoryHasBothDirections(t *testing.T) {
 			}
 		}
 	}
-	for i := 1; i <= 73; i++ {
+	for i := 1; i <= wantFamilies; i++ {
 		if !seen[fmt.Sprintf("F%02d", i)] {
 			t.Errorf("missing inventory family F%02d", i)
 		}

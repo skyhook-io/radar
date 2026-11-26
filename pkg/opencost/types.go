@@ -25,6 +25,12 @@ const (
 	ReasonCostSettings                = "cost_settings_error"    // this context's saved cost settings need review
 	ReasonHistoryUnsupported          = "history_unsupported"
 	ReasonInsufficientHistory         = "insufficient_history"
+	// ReasonClusterScope: the metrics store holds several clusters and these
+	// costs could not be kept to this one; ClusterScope says why.
+	ReasonClusterScope = "cluster_scope"
+	// ReasonPartialData: the metrics store answered a cost query partially
+	// or with a warning, so totals could be missing series.
+	ReasonPartialData = "partial_data"
 )
 
 // HourlyCost bases. On the Prometheus path the cluster total is raised to the
@@ -65,6 +71,13 @@ type CostSummary struct {
 	ClusterEfficiency  float64         `json:"clusterEfficiency,omitempty"` // 0-100
 	NamespaceScope     []string        `json:"namespaceScope,omitempty"`
 	Namespaces         []NamespaceCost `json:"namespaces,omitempty"`
+	// ClusterScope is how a metrics-store answer was kept to this cluster;
+	// absent from Kubecost answers and from older Radar.
+	ClusterScope *ClusterScope `json:"clusterScope,omitempty"`
+	// EfficiencyUnavailable says efficiency and idle could not be measured
+	// (UsageClusterScope says why), not that they are zero.
+	EfficiencyUnavailable bool          `json:"efficiencyUnavailable,omitempty"`
+	UsageClusterScope     *ClusterScope `json:"usageClusterScope,omitempty"`
 }
 
 // NamespaceCost holds per-row cost breakdown. The name reflects the
@@ -99,6 +112,13 @@ type WorkloadCostResponse struct {
 	Currency    string         `json:"currency"`
 	Namespace   string         `json:"namespace"`
 	Workloads   []WorkloadCost `json:"workloads"`
+	// ClusterScope is how a metrics-store answer was kept to this cluster;
+	// absent from Kubecost answers and from older Radar.
+	ClusterScope *ClusterScope `json:"clusterScope,omitempty"`
+	// EfficiencyUnavailable says efficiency and idle could not be measured
+	// (UsageClusterScope says why), not that they are zero.
+	EfficiencyUnavailable bool          `json:"efficiencyUnavailable,omitempty"`
+	UsageClusterScope     *ClusterScope `json:"usageClusterScope,omitempty"`
 }
 
 type WorkloadCostDetailResponse struct {
@@ -112,6 +132,13 @@ type WorkloadCostDetailResponse struct {
 	Kind        string        `json:"kind"`
 	Name        string        `json:"name"`
 	Current     *WorkloadCost `json:"current,omitempty"`
+	// ClusterScope is how a metrics-store answer was kept to this cluster;
+	// absent from Kubecost answers and from older Radar.
+	ClusterScope *ClusterScope `json:"clusterScope,omitempty"`
+	// EfficiencyUnavailable says efficiency and idle could not be measured
+	// (UsageClusterScope says why), not that they are zero.
+	EfficiencyUnavailable bool          `json:"efficiencyUnavailable,omitempty"`
+	UsageClusterScope     *ClusterScope `json:"usageClusterScope,omitempty"`
 }
 
 // WorkloadCost holds per-workload cost breakdown within a namespace.
@@ -147,6 +174,9 @@ type CostTrendResponse struct {
 	// is more than the series when the top-N cap folded the rest into "other".
 	// Without it a capped answer cannot be told from a whole-cluster one.
 	NamespaceCount int `json:"namespaceCount,omitempty"`
+	// ClusterScope is how a metrics-store answer was kept to this cluster;
+	// absent from Kubecost answers and from older Radar.
+	ClusterScope *ClusterScope `json:"clusterScope,omitempty"`
 }
 
 type WorkloadCostTrendResponse struct {
@@ -160,6 +190,9 @@ type WorkloadCostTrendResponse struct {
 	Range           string          `json:"range"`
 	WindowTotalCost float64         `json:"windowTotalCost,omitempty"`
 	DataPoints      []CostDataPoint `json:"dataPoints,omitempty"`
+	// ClusterScope is how a metrics-store answer was kept to this cluster;
+	// absent from Kubecost answers and from older Radar.
+	ClusterScope *ClusterScope `json:"clusterScope,omitempty"`
 }
 
 type ApplicationWorkloadRef struct {
@@ -218,6 +251,9 @@ type ApplicationCostResponse struct {
 	Totals      ApplicationCostTotals     `json:"totals"`
 	Coverage    ApplicationCostCoverage   `json:"coverage"`
 	Workloads   []ApplicationWorkloadCost `json:"workloads,omitempty"`
+	// ClusterScope is how a metrics-store answer was kept to this cluster;
+	// absent from Kubecost answers and from older Radar.
+	ClusterScope *ClusterScope `json:"clusterScope,omitempty"`
 }
 
 type ApplicationCostTrendSeries struct {
@@ -237,6 +273,9 @@ type ApplicationCostTrendResponse struct {
 	DataPoints      []CostDataPoint              `json:"dataPoints,omitempty"`
 	Series          []ApplicationCostTrendSeries `json:"series,omitempty"`
 	Coverage        ApplicationCostCoverage      `json:"coverage"`
+	// ClusterScope is how a metrics-store answer was kept to this cluster;
+	// absent from Kubecost answers and from older Radar.
+	ClusterScope *ClusterScope `json:"clusterScope,omitempty"`
 }
 
 // CostTrendSeries holds cost data points for a single namespace.
@@ -264,6 +303,9 @@ type NodeCostResponse struct {
 	DataThrough string     `json:"dataThrough,omitempty"`
 	Currency    string     `json:"currency"`
 	Nodes       []NodeCost `json:"nodes,omitempty"`
+	// ClusterScope is how a metrics-store answer was kept to this cluster;
+	// absent from Kubecost answers and from older Radar.
+	ClusterScope *ClusterScope `json:"clusterScope,omitempty"`
 }
 
 // NodeCost holds per-node cost breakdown.

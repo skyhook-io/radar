@@ -11,6 +11,8 @@
 // radar/pkg/audit.ResourceKey — so Issues and Checks share deep-links rather
 // than forking a second convention.
 
+import type { WorkloadHistoryCoverage } from '../../utils/workload-history-notes';
+
 /** Operational severity for live issues — distinct from the Checks 4-tier
  *  posture ladder on purpose (operational urgency vs compliance risk are
  *  separate axes). Matches radar's issues.Severity. */
@@ -160,6 +162,21 @@ export interface IssueRecentChange {
   running_previous_value?: IssueRunningPreviousValue;
   updates_in_window?: number;
   first_update_at?: string;
+  /** The timeline event this change was read from; the Timeline opens it with
+   *  ?event=<id>. Set only by the per-resource issues endpoint's correlation
+   *  and the batched row lookup. Absent on rows read from no single event,
+   *  such as native Helm release records. */
+  event_id?: string;
+}
+
+/** The one change a collapsed issue row names, from the batched row lookup
+ *  (GET /api/issues/recent-changes). first_seen and resource_created_at are
+ *  the occurrence it was read for: a row shows it only when they match its
+ *  own issue's (issueOccurrence), since an issue's id survives recurrence. */
+export interface IssueRowChange {
+  first_seen?: string;
+  resource_created_at?: string;
+  change: IssueRecentChange;
 }
 
 /** One finalizer removal: a JSON Patch that tests the object UID and the
@@ -186,6 +203,14 @@ export interface IssueConditionalCleanup {
  *  window_seconds so a change just outside it can't be misread as absent. */
 export interface IssueNoRecentChanges {
   window_seconds: number;
+  /** With ?correlate=: absent means the subject and its referenced
+   *  ConfigMaps and Secrets were checked, and for an admission issue the
+   *  rejecting policy too; 'admission_policy' means only the policy that
+   *  rejected the admission request was checked, since the subject's own kind
+   *  (a Job, a bare ReplicaSet) isn't tracked. The MCP issues tool never sets
+   *  scope, and its marker can rest on the subject's side alone, including
+   *  when the admission policy's evidence was unavailable. */
+  scope?: 'admission_policy';
 }
 
 /**
@@ -310,17 +335,80 @@ export interface Issue {
   timing_summary?: string;
 
   /** Recent non-status changes (spec/config and lifecycle) on this issue's
-   *  subject (and, for workload subjects, its referenced ConfigMaps) —
-   *  deterministic evidence, not a causal claim. Populated only on
-   *  single-namespace MCP issue responses; never set on /api/issues today. */
+   *  subject (and, for workload subjects, its referenced ConfigMaps and
+   *  Secrets): deterministic evidence, not a causal claim. Set by the MCP
+   *  issues tool, and on the one issue a per-resource issues request names
+   *  with ?correlate=; never on /api/issues. */
   correlated_changes?: IssueRecentChange[];
   /** Explicit "no tracked changes in the window" evidence. An issue with
    *  NEITHER correlation field was not checked — absence must not be read as
-   *  "no changes". MCP-only, like correlated_changes. */
+   *  "no changes". Set where correlated_changes is. */
   no_recent_changes?: IssueNoRecentChanges;
-  /** The subject's change history in the window was larger than Radar reads,
-   *  so correlated_changes are leads, not its full history. MCP-only. */
+  /** The change history in the window was larger than Radar reads, so older
+   *  changes weren't read: correlated_changes are leads, not the full history.
+   *  With ?correlate= it can be set with no correlated_changes, meaning the
+   *  empty list is not complete; the MCP tool sets it only with changes. */
   correlated_changes_incomplete?: boolean;
+  /** The window held more changes the caller may see than correlated_changes
+   *  lists. Set only with ?correlate=. */
+  correlated_changes_more_not_shown?: boolean;
+  /** The correlation's window and why an empty answer is not "nothing
+   *  changed". Set only with ?correlate=; absent on an older Radar. */
+  correlation?: IssueChangeCorrelation;
+}
+
+/** Why Radar can't say nothing changed: a read-reason code, or one of the two
+ *  reasons specific to change correlation. */
+export type IssueCorrelationUnknownReason =
+  | 'user_forbidden'
+  | 'user_permission_check_failed'
+  | 'radar_kind_not_collected'
+  | 'radar_namespace_not_collected'
+  | 'kind_sync_pending'
+  | 'read_error'
+  | 'sources_unresolved'
+  | 'history_incomplete';
+
+export interface IssueCorrelationUnknown {
+  reason: IssueCorrelationUnknownReason;
+  /** The kinds the reason concerns. Absent for history_incomplete, and for
+   *  sources_unresolved on an admission issue whose message names no policy.
+   *  sources_unresolved names the workload kind (its pod template couldn't
+   *  be read), both webhook configuration kinds (none declares the webhook)
+   *  or ResourceQuota (the named quota is gone). */
+  kinds?: { group?: string; kind: string }[];
+}
+
+/** Scope of one issue's change correlation (?correlate=). */
+export interface IssueChangeCorrelation {
+  /** RFC 3339. An hour before first_seen, whether or not the onset is
+   *  known, until the read; the 24 hours before the read when the issue has
+   *  no first_seen. */
+  window_from: string;
+  window_to: string;
+  /** When this Radar process started recording changes. */
+  observed_since?: string;
+  /** Set when an empty correlated_changes is not "nothing changed". Listed
+   *  changes are still real when it is set. */
+  unknown?: IssueCorrelationUnknown;
+  /** Set when Radar's held history does not cover the window. */
+  history?: WorkloadHistoryCoverage;
+}
+
+/** Which occurrence of an issue this is. An issue's id survives resolution and
+ *  recurrence, so the id alone can't tell a new occurrence from the old one;
+ *  when first_seen is missing, the subject's creation time still tells a
+ *  recreated object apart. */
+export function issueOccurrence(issue: Pick<Issue, 'first_seen' | 'resource_created_at'>): string {
+  return `${instant(issue.first_seen)}|${instant(issue.resource_created_at)}`;
+}
+
+// The same moment can arrive written in different time zones, so compare the
+// instant, not the text.
+function instant(timestamp: string | undefined): string {
+  if (!timestamp) return '';
+  const ms = Date.parse(timestamp);
+  return Number.isFinite(ms) ? String(ms) : timestamp;
 }
 
 /** subjectRef builds a deep-linkable ref for an issue's subject — the row's

@@ -13,7 +13,8 @@ import (
 	"github.com/skyhook-io/radar/internal/timeline"
 )
 
-func TestComputeDiff_ConditionPostgresRoundTrip(t *testing.T) {
+func testPostgresDSN(t *testing.T) string {
+	t.Helper()
 	baseDSN := os.Getenv("RADAR_TEST_POSTGRES_DSN")
 	if baseDSN == "" {
 		t.Skip("RADAR_TEST_POSTGRES_DSN is not set")
@@ -27,7 +28,7 @@ func TestComputeDiff_ConditionPostgresRoundTrip(t *testing.T) {
 			t.Errorf("close PostgreSQL test database: %v", err)
 		}
 	})
-	schema := fmt.Sprintf("radar_condition_test_%d", time.Now().UnixNano())
+	schema := fmt.Sprintf("radar_k8s_test_%d", time.Now().UnixNano())
 	if _, err := admin.ExecContext(t.Context(), "CREATE SCHEMA "+schema); err != nil {
 		t.Fatalf("create PostgreSQL test schema: %v", err)
 	}
@@ -43,7 +44,11 @@ func TestComputeDiff_ConditionPostgresRoundTrip(t *testing.T) {
 	query := parsed.Query()
 	query.Set("search_path", schema)
 	parsed.RawQuery = query.Encode()
-	store, err := timeline.NewPostgresStore(parsed.String())
+	return parsed.String()
+}
+
+func TestComputeDiff_ConditionPostgresRoundTrip(t *testing.T) {
+	store, err := timeline.NewPostgresStore(testPostgresDSN(t))
 	if err != nil {
 		t.Fatalf("NewPostgresStore: %v", err)
 	}

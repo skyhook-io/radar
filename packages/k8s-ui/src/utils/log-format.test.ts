@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { highlightJson, tokenizeJson, unescapeJsonStrings } from './log-format'
+import { formatLogTimestamp, highlightJson, tokenizeJson, unescapeJsonStrings, type TimestampFormat } from './log-format'
+
+it('uses the default local clock for an unknown format from a JavaScript caller', () => {
+  const ts = '2026-11-01T05:30:00Z'
+  expect(formatLogTimestamp(ts, 'unknown' as TimestampFormat)).toBe(formatLogTimestamp(ts))
+})
 
 describe('unescapeJsonStrings', () => {
   it('expands whitespace inside strings while leaving escapes outside them untouched', () => {

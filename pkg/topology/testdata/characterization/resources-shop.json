@@ -1837,6 +1837,16 @@
       }
     },
     {
+      "root": "kustomize.toolkit.fluxcd.io|Kustomization|flux-system|infra",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Kustomization", "namespace": "flux-system", "name": "infra", "group": "kustomize.toolkit.fluxcd.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
       "root": "kustomize.toolkit.fluxcd.io|Kustomization|flux-system|platform",
       "relationships": null,
       "managedBy": null,
@@ -1995,6 +2005,26 @@
           {"kind": "Revision", "namespace": "shop", "name": "hello-00001", "group": "serving.knative.dev"},
           {"kind": "Route", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"}
         ]
+      }
+    },
+    {
+      "root": "source.extensions.fluxcd.io|ArtifactGenerator|flux-system|bundle",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "ArtifactGenerator", "namespace": "flux-system", "name": "bundle", "group": "source.extensions.fluxcd.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "source.toolkit.fluxcd.io|ExternalArtifact|flux-system|bundle-app",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "ExternalArtifact", "namespace": "flux-system", "name": "bundle-app", "group": "source.toolkit.fluxcd.io"},
+        "rootResolved": false,
+        "dependents": []
       }
     },
     {

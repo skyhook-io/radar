@@ -81,8 +81,8 @@ func handleOperatorDiagnose(ctx context.Context, input diagnoseInput, kind, reso
 	}
 	issueSummary, related, _ := computeMCPIssueContext(ctx, cache, input.Group, kind, input.Namespace, input.Name, true)
 	children := k8s.OperatorChildrenForObject(u, func(c *ownership.Catalog) ownership.Access { return ownershipAccess(ctx, c) })
-	rc := buildMCPResourceContextWithOperatorChildren(ctx, u, kind, input.Namespace, input.Name, resourcecontext.TierDiagnostic, k8s.FindStaleSecretEnvChecksForObject(ctx, cache, u), issueSummary, children)
-	resp := operatorDiagnoseResponse{Resource: minified, ResourceContext: rc, RelatedIssues: related, Warnings: objectWarnings(u, rc)}
+	rc := buildMCPResourceContextWithOperatorChildren(ctx, u, kind, input.Namespace, input.Name, resourcecontext.TierDiagnostic, k8s.FindStaleSecretEnvChecksForObject(ctx, cache, u), issueSummary, children, "")
+	resp := operatorDiagnoseResponse{Resource: minified, ResourceContext: rc, RelatedIssues: related, Warnings: resourceContextWarnings(u, rc, "")}
 	events, total, excluded, eventErr := fetchEventsForResource(cache, kind, input.Group, input.Namespace, input.Name, u.GetUID(), "", nil, 10)
 	resp.Events, resp.EventsTotalGroups = events, total
 	if eventErr != nil {

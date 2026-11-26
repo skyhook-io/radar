@@ -1,6 +1,9 @@
 import { useEffect, useMemo } from 'react'
 import { LineChart, Lock } from 'lucide-react'
 import { AlertBanner } from '@skyhook-io/k8s-ui'
+import { PARTIAL_DATA_NOTE } from '@skyhook-io/k8s-ui/components/charts'
+import { ClusterScopeNote } from '@skyhook-io/k8s-ui/components/ui/ClusterScopeNote'
+import { isClusterScopeWithheld } from '@skyhook-io/k8s-ui/types/cluster-scope'
 import { usePrometheusHPAMetrics, usePrometheusStatus, useAutoPromConnect, isForbiddenError, type PrometheusSeries } from '../../api/client'
 
 /**
@@ -65,7 +68,34 @@ export function HPACharts({ data }: { data: any }) {
     )
   }
 
-  if (!replicasPoints) return null
+  // A withheld chart says why instead of hiding, which would read as "no history".
+  if (isClusterScopeWithheld(metrics?.clusterScope)) {
+    return (
+      <section className="mt-4 rounded-lg border border-theme-border bg-theme-surface/30 p-3">
+        <div className="flex items-center gap-2 mb-2 text-sm font-medium text-theme-text-secondary">
+          <LineChart className="w-4 h-4 text-theme-text-tertiary" />
+          Activity (last 1h)
+        </div>
+        <ClusterScopeNote scope={metrics?.clusterScope} />
+      </section>
+    )
+  }
+
+  if (!replicasPoints) {
+    // A partial answer with no samples is not "no history": the part of the
+    // store that didn't answer may hold all of it.
+    if (!metrics?.partial) return null
+    return (
+      <section className="mt-4 rounded-lg border border-theme-border bg-theme-surface/30 p-3">
+        <div className="flex items-center gap-2 mb-2 text-sm font-medium text-theme-text-secondary">
+          <LineChart className="w-4 h-4 text-theme-text-tertiary" />
+          Activity (last 1h)
+        </div>
+        <p className="text-xs text-theme-text-secondary">No replica history in a partial answer</p>
+        <p className="mt-1 text-xs text-theme-text-tertiary">{PARTIAL_DATA_NOTE}</p>
+      </section>
+    )
+  }
 
   return (
     <section className="mt-4 rounded-lg border border-theme-border bg-theme-surface/30 p-3">
@@ -85,6 +115,9 @@ export function HPACharts({ data }: { data: any }) {
         ]}
         formatY={(v) => v.toFixed(0)}
       />
+      {metrics?.partial && (
+        <p className="mt-1.5 text-xs text-theme-text-tertiary">{PARTIAL_DATA_NOTE}</p>
+      )}
     </section>
   )
 }

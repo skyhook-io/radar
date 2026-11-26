@@ -14,8 +14,6 @@ import (
 // resource lists, and restores the previous one afterwards.
 func discoveryWith(t *testing.T, lists ...*metav1.APIResourceList) {
 	t.Helper()
-	prev := resourceDiscovery
-	t.Cleanup(func() { resourceDiscovery = prev })
 
 	fakeDisc := fakeclientset.NewSimpleClientset().Discovery().(*fakediscovery.FakeDiscovery)
 	fakeDisc.Resources = lists
@@ -23,7 +21,7 @@ func discoveryWith(t *testing.T, lists ...*metav1.APIResourceList) {
 	if err != nil {
 		t.Fatalf("NewResourceDiscovery: %v", err)
 	}
-	resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: core}
+	t.Cleanup(setTestDiscovery(&ResourceDiscovery{ResourceDiscovery: core}))
 }
 
 func kyvernoModernList() *metav1.APIResourceList {
@@ -51,7 +49,7 @@ func coreOnlyList() *metav1.APIResourceList {
 // non-Kyverno cluster, forever, which is the exact noise the silent
 // not-installed path exists to prevent.
 func TestGetPolicyReportStatus_UndecidedWithoutKyvernoStaysSilent(t *testing.T) {
-	ResetPolicyReportIndex()
+	withFreshTestConnection(t)
 	discoveryWith(t, coreOnlyList())
 
 	status := GetPolicyReportStatus()
@@ -69,10 +67,8 @@ func TestGetPolicyReportStatus_UndecidedWithoutKyvernoStaysSilent(t *testing.T) 
 // emptiness this codebase treats as a bug. The reason code separates it from
 // genuine absence, and only genuine absence is silent.
 func TestGetPolicyReportStatus_UndecidedWithoutDiscoveryIsNotSilent(t *testing.T) {
-	ResetPolicyReportIndex()
-	prev := resourceDiscovery
-	resourceDiscovery = nil
-	t.Cleanup(func() { resourceDiscovery = prev })
+	withFreshTestConnection(t)
+	t.Cleanup(setTestDiscovery(nil))
 
 	status := GetPolicyReportStatus()
 	if status.ReasonCode != ReasonNoDiscovery {
@@ -98,7 +94,7 @@ func TestGetPolicyReportStatus_GenuineAbsenceStaysSilent(t *testing.T) {
 // The genuinely transient case must still report cold, or a Kyverno cluster
 // mid-warmup would look like it has no violations.
 func TestGetPolicyReportStatus_UndecidedWithKyvernoReportsCold(t *testing.T) {
-	ResetPolicyReportIndex()
+	withFreshTestConnection(t)
 	discoveryWith(t, kyvernoModernList())
 
 	status := GetPolicyReportStatus()

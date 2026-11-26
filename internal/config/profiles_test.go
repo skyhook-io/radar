@@ -152,7 +152,7 @@ func TestProfileStoreBusyLock(t *testing.T) {
 	defer lock.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	_, err := s.Update(ctx, profileRevision(nil), func(*ClusterProfiles) error { t.Fatal("writer ran without the lock"); return nil })
+	_, err := s.Update(ctx, contentRevision(nil), func(*ClusterProfiles) error { t.Fatal("writer ran without the lock"); return nil })
 	if !errors.Is(err, ErrProfileBusy) {
 		t.Fatalf("contended lock: %v", err)
 	}

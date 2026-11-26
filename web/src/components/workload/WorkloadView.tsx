@@ -1,3 +1,5 @@
+import { podDebugAccessKey } from '../../api/podDebug'
+import { supportsWorkloadRevisions, WorkloadRevisionsButton } from './WorkloadRevisionsButton'
 import { RelatedFindingsSection } from './RelatedFindingsSection'
 import { decorateResourceDiagnose, resourceDetailRedirect, resourceDetailSlots, resourceIssueDetail, resourceLogs, resourceRendererOverrides } from '../../integrations/resourceHosts'
 import { ApplicationEvidenceAction } from '../application-evidence/ApplicationEvidenceAction'
@@ -12,7 +14,7 @@ import {
   EditableYamlView,
   FetchResult,
   Section,
-  type WorkloadTabType,
+  type WorkloadDetailTab,
   type WorkloadExtraTab,
   type GitOpsOwnerRef,
   type HelmOwnerRef,
@@ -27,6 +29,10 @@ import {
   isRolloutKind,
   canSetWorkloadImages,
   canPauseDeployment,
+  canSubmitWorkflowTemplate,
+  type WorkflowTemplateSubmission,
+  canSuspendCronJob,
+  canTriggerCronJob,
   isCoreBatchJob,
   type SetImageOwnership,
   SET_IMAGE_WRITES,
@@ -68,6 +74,7 @@ import {
   useTriggerCronJob,
   useSuspendCronJob,
   useResumeCronJob,
+  useSubmitWorkflowTemplate,
   useRestartWorkload,
   usePauseDeployment,
   useResumeDeployment,
@@ -85,6 +92,7 @@ import {
   useFluxSuspend,
   useFluxResume,
   useArgoSync,
+  useGitOpsActionCapabilities,
   useArgoRefresh,
   useArgoSuspend,
   useArgoResume,
@@ -102,22 +110,28 @@ import {
   fetchYamlSchemas,
   useGitOpsFieldWriters,
 } from '../../api/client'
-import { PrometheusCharts, isPrometheusSupported } from '../resource/PrometheusCharts'
+import { TIME_RANGES, PrometheusCharts, isPrometheusSupported } from '../resource/PrometheusCharts'
+import { RightsizingStrip } from '../resource/RightsizingStrip'
 import { PrometheusChartsGrid } from '../resource/PrometheusChartsGrid'
+import { DatadogSetupHint, DatadogWorkloadCharts, useDatadogWorkloadCharts, WorkloadCostRightsizing } from '../resource/DatadogWorkloadCharts'
+import { PodDebugAction, usePodDetailAccess, type PodDebugTarget } from '../resources/PodDebugAction'
+import { useNavCustomization } from '../../context/NavCustomization'
 import { RestartEventLane } from '../resource/RestartChart'
-import { RightsizingPanel } from '../resource/RightsizingStrip'
 import { WorkloadCostTab } from '../cost/WorkloadCostTab'
 import { isOpenCostWorkloadKind } from '../cost/kinds'
 import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
 import { useTrafficAvailable } from '../../api/traffic'
+import { useIssueExpansion, useIssueRowNotes } from '../issues/useIssueExpansion'
 import { isNotFoundError, useResourceAudit, useResourceIssues, useSubjectIssues, useRadarFeature, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
 import { AuditAlerts, getRadarUpgradeRequirement, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows, getDefaultLogContainerName, getLogContainerNames, getInitContainerNames } from '@skyhook-io/k8s-ui'
+import { WorkloadLogsTab } from '../dock/WorkloadLogsTab'
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
 import { ScheduledWorkloadLogsViewer } from '../logs/ScheduledWorkloadLogsViewer'
 import { LogsViewer } from '../logs/LogsViewer'
 import { MultiPodLogsTab } from '../logs/MultiPodLogsTab'
 import { RayClusterLogsTab } from '../logs/RayClusterLogsTab'
 import { isKubeRayCluster } from '../logs/rayClusterPods'
+import { useWorkflowStopAction } from '../../hooks/useWorkflowStopAction'
 import { BatchExecutionFullscreen } from '../execution/BatchExecutionView'
 import { workloadRunTimelineEvents } from '../execution/batch-timeline'
 import {
@@ -150,11 +164,11 @@ import { recordUsageEvent } from '../../api/usage-data'
 import { issueResourceOpener } from './issueResourceOpener'
 import { isVeleroBackupKind } from '../velero/routes'
 
-type TabType = WorkloadTabType
+type TabType = WorkloadDetailTab
 
 // The usage-report view a tab counts under. Timeline holds the resource's
 // events (it replaced the Events tab), so it counts as panel:events.
-const PANEL_USAGE_VIEWS: Partial<Record<TabType, string>> = {
+const PANEL_USAGE_VIEWS: Readonly<Partial<Record<TabType, string>>> = {
   logs: 'panel:logs',
   yaml: 'panel:yaml',
   metrics: 'panel:metrics',
@@ -331,6 +345,7 @@ function useActionsBarProps(
   group: string | undefined,
   cascadeEnabled: boolean,
   nodeUID: string,
+  pod?: PodDebugTarget,
 ) {
   const [deletePreviewOpen, setDeletePreviewOpen] = useState(false)
   const { showCopied } = useToast()
@@ -339,7 +354,9 @@ function useActionsBarProps(
   const openLogs = useOpenLogs()
   const openWorkloadLogs = useOpenWorkloadLogs()
   const openNodeTerminal = useOpenNodeTerminal()
-  const { canExec, canViewLogs, canPortForward, workloadWrites, workloadWritesPending } = useNamespacedCapabilities(namespace)
+  const nsCaps = useNamespacedCapabilities(namespace)
+  const { canViewLogs, canPortForward, workloadWrites, workloadWritesPending } = nsCaps
+  const { canExec, debugImage, unverifiedReview, debugDenial, reviewStatus } = usePodDetailAccess(pod, nsCaps)
   const queryClient = useQueryClient()
   // Live forward when local+RBAC; otherwise (in-cluster/Cloud) still surface the
   // copy-paste kubectl command. The button picks live vs. copy by deployment mode.
@@ -358,10 +375,12 @@ function useActionsBarProps(
   const triggerCronJobMutation = useTriggerCronJob()
   const suspendCronJobMutation = useSuspendCronJob()
   const resumeCronJobMutation = useResumeCronJob()
+  const workflowStop = useWorkflowStopAction(kind, group, namespace)
+  const submitWorkflowTemplateMutation = useSubmitWorkflowTemplate()
 
   const isRolloutShape = isRolloutKind(kind)
   const isRollout = isRolloutShape && group === 'argoproj.io'
-  const isRollbackKind = ['deployments', 'statefulsets', 'daemonsets'].includes(kind.toLowerCase()) || isRollout
+  const isRollbackKind = supportsWorkloadRevisions(kind, group)
   const { data: rolloutCapabilities, isPending: rolloutCapabilitiesPending } = useRolloutCapabilities(namespace, name, isRollout)
   // Restart and Rollback are the generic workload buttons, so a Rollout has to
   // withhold the callback the way promote-full does. Permissive until the probe
@@ -372,9 +391,14 @@ function useActionsBarProps(
   const canSetImages = isRolloutShape
     ? imageUpdatesSupported && isRollout && !rolloutCapabilitiesPending && rolloutCapabilities?.setImage === true
     : !workloadWritesPending && canSetWorkloadImages({ name: kind, group }, workloadWrites, imageUpdatesSupported)
+  const { support: replicaSetLogSupport } = useRadarFeature('replicaSetLogs')
+  const isAppsReplicaSet = kind === 'replicasets' && group === 'apps'
   const { support: deploymentPauseSupport } = useRadarFeature('deploymentPause')
   const canPauseDeployments = !workloadWritesPending &&
     canPauseDeployment({ name: kind, group }, workloadWrites, deploymentPauseSupport === 'supported')
+  const cronJobPermissionsReady = kind === 'cronjobs' && group === 'batch' && !workloadWritesPending
+  const allowCronJobTrigger = cronJobPermissionsReady && canTriggerCronJob(workloadWrites)
+  const allowCronJobSuspend = cronJobPermissionsReady && canSuspendCronJob(workloadWrites)
   const loadImages = useCallback(
     (params: { kind: string; namespace: string; name: string }) =>
       queryClient.fetchQuery({
@@ -395,12 +419,18 @@ function useActionsBarProps(
   const fluxSuspendMutation = useFluxSuspend()
   const fluxResumeMutation = useFluxResume()
 
+  const { disabledReasons: gitOpsActionDisabledReasons } = useGitOpsActionCapabilities(kind, group, namespace, name)
   const argoSyncMutation = useArgoSync()
   const argoRefreshMutation = useArgoRefresh()
   const argoSuspendMutation = useArgoSuspend()
   const argoResumeMutation = useArgoResume()
   const { upgrade: argoResumeUpgrade, blockedReason: argoResumeBlockedReason } = useRadarFeature('argoAutoSyncEnable')
   const { support: argoInheritanceSupport } = useRadarFeature('argoSyncInheritance')
+  const { support: cronJobJobNameSupport } = useRadarFeature('cronJobTriggerJobName')
+  const { support: workflowTemplateSubmitSupport, upgrade: workflowTemplateSubmitUpgrade } = useRadarFeature('workflowTemplateSubmit')
+  const isArgoWorkflowTemplate = kind === 'workflowtemplates' && group === 'argoproj.io'
+  const canSubmitTemplates = !workloadWritesPending &&
+    canSubmitWorkflowTemplate({ name: kind, group }, workloadWrites, workflowTemplateSubmitSupport === 'supported')
 
   const {
     data: cascadePreview,
@@ -428,8 +458,11 @@ function useActionsBarProps(
     canViewLogs,
     canPortForward: showPortForward,
     onOpenTerminal: openTerminal,
+    podDebugAction: pod && <PodDebugAction key={pod.metadata.uid} pod={pod} defaultImage={debugImage} unverifiedReview={unverifiedReview} debugDenial={debugDenial} reviewStatus={reviewStatus} />,
     onOpenLogs: openLogs,
     onOpenWorkloadLogs: openWorkloadLogs,
+    replicaSetLogs: isAppsReplicaSet && replicaSetLogSupport === 'supported',
+    replicaSetLogTab: isAppsReplicaSet && replicaSetLogSupport !== 'unsupported',
     onOpenNodeTerminal: openNodeTerminal,
     onCopyCommand: (text: string, message: string, event: React.MouseEvent) =>
       showCopied(text, message, event),
@@ -498,15 +531,24 @@ function useActionsBarProps(
       ? (params: { namespace: string; name: string }) =>
           rolloutDialogPromote.mutateAsync({ action: 'promote-full', ...params })
       : undefined,
-    onTriggerCronJob: (params: Parameters<typeof triggerCronJobMutation.mutate>[0]) =>
-      triggerCronJobMutation.mutate(params),
+    // mutateAsync, not mutate: the Job name dialog stays open when this rejects.
+    onTriggerCronJob: allowCronJobTrigger ? triggerCronJobMutation.mutateAsync : undefined,
     isTriggeringCronJob: triggerCronJobMutation.isPending,
-    onSuspendCronJob: (params: Parameters<typeof suspendCronJobMutation.mutate>[0]) =>
-      suspendCronJobMutation.mutate(params),
+    cronJobTriggerDialog: cronJobJobNameSupport === 'supported',
+    onSuspendCronJob: allowCronJobSuspend ? suspendCronJobMutation.mutate : undefined,
     isSuspendingCronJob: suspendCronJobMutation.isPending,
-    onResumeCronJob: (params: Parameters<typeof resumeCronJobMutation.mutate>[0]) =>
-      resumeCronJobMutation.mutate(params),
+    onResumeCronJob: allowCronJobSuspend ? resumeCronJobMutation.mutate : undefined,
     isResumingCronJob: resumeCronJobMutation.isPending,
+    // mutateAsync, not mutate: the submit dialog stays open when this rejects.
+    onSubmitWorkflowTemplate: canSubmitTemplates
+      ? (submission: WorkflowTemplateSubmission) => submitWorkflowTemplateMutation.mutateAsync(submission)
+      : undefined,
+    isSubmittingWorkflowTemplate: submitWorkflowTemplateMutation.isPending,
+    // Only a Radar known to lack the endpoint gets the upgrade note; a failed
+    // capabilities probe is not evidence of an old Radar.
+    workflowTemplateSubmitUpgrade: isArgoWorkflowTemplate && workflowTemplateSubmitSupport === 'unsupported' ? workflowTemplateSubmitUpgrade : null,
+    gitOpsActionDisabledReasons,
+    ...workflowStop,
     onFluxReconcile: (params: Parameters<typeof fluxReconcileMutation.mutate>[0]) =>
       fluxReconcileMutation.mutate(params),
     isFluxReconciling: fluxReconcileMutation.isPending,
@@ -593,7 +635,7 @@ export function WorkloadView({
   // for expand-on-hover and crossfades.
   const handleTabChange = useCallback(
     (tab: TabType, opts?: { replace?: boolean }) => {
-      const panel = PANEL_USAGE_VIEWS[tab]
+      const panel = Object.hasOwn(PANEL_USAGE_VIEWS, tab) ? PANEL_USAGE_VIEWS[tab] : undefined
       if (panel && tab !== migratedTab) recordUsageEvent({ type: 'view', name: panel })
       const params = new URLSearchParams(searchParams)
       if (tab === 'overview') {
@@ -628,9 +670,12 @@ export function WorkloadView({
   const {
     data: resourceResponse,
     isLoading: resourceLoading,
+    isFetching: resourceFetching,
     error: resourceError,
     refetch: refetchResource,
-  } = useResourceWithRelationships<any>(apiKind, namespace, name, rest.group)
+  } = useResourceWithRelationships<any>(apiKind, namespace, name, rest.group, {
+    pollPendingOwnership: rest.active !== false,
+  })
   const resource = resourceResponse?.resource
   const relationships = resourceResponse?.relationships
   const managerAnswer = relationships?.ownership?.manager
@@ -689,6 +734,10 @@ export function WorkloadView({
     await Promise.all([
       refetchResource(),
       onRefresh?.(),
+      ...(apiKind === 'pods' && !effectiveGroup && resource?.metadata?.uid ? [
+        queryClient.invalidateQueries({queryKey: ['capabilities', namespace], exact: true}),
+        queryClient.invalidateQueries({queryKey: podDebugAccessKey(namespace, name, resource.metadata.uid)}),
+      ] : []),
       ...(apiKind === 'rayjobs' && effectiveGroup === 'ray.io' ? [
         queryClient.refetchQueries({ queryKey: ['resource', 'jobs', namespace, name, 'batch'], type: 'active' }),
         ...(resource?.spec?.clusterSelector?.['ray.io/cluster'] ? [queryClient.refetchQueries({ queryKey: ['resource', 'rayclusters', namespace, resource.spec.clusterSelector['ray.io/cluster'], 'ray.io'], type: 'active' })] : []),
@@ -702,7 +751,7 @@ export function WorkloadView({
         ...(apiKind === 'rayclusters' ? { type: 'active' as const } : {}),
       }),
     ])
-  }, [apiKind, effectiveGroup, name, namespace, queryClient, refetchResource, resource?.spec?.clusterSelector, onRefresh])
+  }, [apiKind, effectiveGroup, name, namespace, queryClient, refetchResource, resource?.metadata?.uid, resource?.spec?.clusterSelector, onRefresh])
   const podWorkloadOwner = useMemo(
     () => podWorkloadOwnerFromRelationships(apiKind, namespace, relationships, resource),
     [apiKind, namespace, relationships, resource],
@@ -896,6 +945,7 @@ export function WorkloadView({
     effectiveGroup,
     !resourceLoading && Boolean(resource),
     apiKind === 'nodes' && !effectiveGroup ? resource?.metadata?.uid ?? '' : '',
+    apiKind === 'pods' && resource?.apiVersion === 'v1' && resource?.kind === 'Pod' ? resource : undefined,
   )
   const desktopDownload = useDesktopDownload()
 
@@ -916,6 +966,11 @@ export function WorkloadView({
     rest.active !== false && !useReportCoverage && !isNotFoundError(resourceError), issueObservation)
   const subjectIssues = useSubjectIssues(useReportCoverage ? { kind: isCoreNode ? 'Node' : 'CronJob', group: isCoreNode ? '' : 'batch', namespace, name, uid: resource?.metadata?.uid } : null, useReportCoverage && Boolean(resource))
   const liveIssues = useReportCoverage ? subjectIssues.data?.issues : ordinaryIssues.data
+  const issueExpansion = useIssueExpansion(() => {
+    if (useReportCoverage) void subjectIssues.refetch()
+    else void ordinaryIssues.refetch()
+  })
+  const issueRowNotes = useIssueRowNotes()
   const issuesPending = useReportCoverage ? subjectIssues.isPending : ordinaryIssues.isPending
   const schedulingEvidence = isCronJob && subjectIssues.data?.scheduling_report?.uid === resource?.metadata?.uid ? subjectIssues.data?.scheduling_report : undefined
   const certificateEvidence = isCoreNode && subjectIssues.data?.node_certificate_report?.uid === resource?.metadata?.uid ? subjectIssues.data?.node_certificate_report : undefined
@@ -1154,12 +1209,38 @@ export function WorkloadView({
     imageOwnerVerified,
     imageSelection,
   ])
+  // A submitted run opens as a Workflow, as Argo's UI does: its full page from
+  // the full page (the same run view, with the Workflow's own actions), and the
+  // resource drawer from the drawer.
+  const viewIdentity = `${apiKind}/${namespace}/${name}`
+  const currentViewIdentity = useRef(viewIdentity)
+  currentViewIdentity.current = viewIdentity
+  useEffect(() => () => { currentViewIdentity.current = '' }, [])
+  const navigateToResource = rest.onNavigateToResource
+  const submitWorkflowTemplate = baseActionsBarProps.onSubmitWorkflowTemplate
+  const submitAndOpenRun = useMemo(
+    () => submitWorkflowTemplate
+      ? async (submission: WorkflowTemplateSubmission) => {
+          const submittedFrom = currentViewIdentity.current
+          const run = await submitWorkflowTemplate(submission)
+          // The user moved on while the request ran: don't pull them back.
+          if (currentViewIdentity.current === submittedFrom) {
+            const target = { kind: 'workflows', namespace: run.namespace, name: run.name, group: 'argoproj.io' }
+            if (expanded) navigateRouter(buildWorkloadPath(target))
+            else navigateToResource?.(target)
+          }
+          return run
+        }
+      : undefined,
+    [expanded, navigateRouter, navigateToResource, submitWorkflowTemplate],
+  )
   const actionsBarProps = useMemo(
     () => ({
       ...baseActionsBarProps,
       onLoadImages: baseActionsBarProps.onLoadImages
         ? loadImagesWithTargetOwnership
         : undefined,
+      onSubmitWorkflowTemplate: submitAndOpenRun,
       onCompareTo,
       onCompareAcrossClusters,
       imageOwnership,
@@ -1167,6 +1248,7 @@ export function WorkloadView({
     [
       baseActionsBarProps,
       loadImagesWithTargetOwnership,
+      submitAndOpenRun,
       imageOwnership,
       onCompareTo,
       onCompareAcrossClusters,
@@ -1274,6 +1356,7 @@ export function WorkloadView({
         renderServicePortAction={renderServicePortAction}
         renderServicePortPanel={renderServicePortPanel}
         isLoading={resourceLoading}
+        isFetching={resourceFetching}
         resourceError={resourceError}
         refetch={refetchResourceAndRuns}
         // Timeline
@@ -1309,11 +1392,13 @@ export function WorkloadView({
         yamlSchemaLoader={features?.yamlSchemas ? fetchYamlSchemas : undefined}
         // Tab state (URL-synced)
         activeTab={migratedTab}
+        extraTabsComplete={migratedTab === 'deploys' ? true : undefined}
         onTabChange={handleTabChange}
         // Render props
         renderLogsTab={(props) => (
           <LogsTabContent
             {...props}
+            replicaSetLogs={baseActionsBarProps.replicaSetLogs || (baseActionsBarProps.replicaSetLogTab && props.pods.length === 0)}
             resourceLoading={resourceLoading}
             resourceError={resourceError}
             group={effectiveGroup}
@@ -1369,7 +1454,7 @@ export function WorkloadView({
         )}
         renderCostTab={({ kind, namespace: ns, name: n }) => (
           <div className="space-y-4">
-            <RightsizingPanel kind={kind} namespace={ns} name={n} />
+            <WorkloadCostRightsizing kind={kind} namespace={ns} name={n} />
             <WorkloadCostTab kind={kind} namespace={ns} name={n} />
           </div>
         )}
@@ -1412,6 +1497,12 @@ export function WorkloadView({
               </div>
             )
             : undefined}
+        timelineActions={(supportsWorkloadRevisions(apiKind, effectiveGroup) || rest.extraTabs?.some(tab => tab.id === 'deploys')) && (
+          <div className="flex flex-wrap items-center gap-3 border-b border-theme-border px-4 py-2">
+            <WorkloadRevisionsButton kind={apiKind} group={effectiveGroup} namespace={namespace} name={name} />
+            {rest.extraTabs?.some(tab => tab.id === 'deploys') && <button type="button" className="text-xs text-accent-text hover:underline" onClick={() => handleTabChange('deploys')}>View application deploys</button>}
+          </div>
+        )}
         renderOverviewExtra={({ kind: k, namespace: ns, name: n, group: g, context }) => {
           // Network entry kinds (Service/Ingress/Route/Gateway) ARE the diagnosis
           // target: DiagnoseInlineSection renders in the drawer, no hint. Workload
@@ -1427,6 +1518,7 @@ export function WorkloadView({
           ) : null
           return (
           <>
+            <WorkloadRevisionsButton kind={k} group={g} namespace={ns} name={n} />
             {diagnoseInline}
             <ApplicationEvidenceAction kind={k} namespace={ns} name={n} group={g} uid={resource?.metadata?.uid ?? ''} />
             {diagnoseHint}
@@ -1455,6 +1547,11 @@ export function WorkloadView({
             compact={!expanded}
             subjectResource={{ kind: apiKind, namespace, name, group: identityGroup }}
             onResourceClick={openIssueResource}
+            onOpenIssueChange={issueExpansion.onOpenIssueChange}
+            expandedIssue={issueExpansion.expandedIssue}
+            timelineLinks={issueExpansion.timelineLinks}
+            rowChanges={issueRowNotes.rowChanges}
+            onVisibleIssuesChange={issueRowNotes.onVisibleIssuesChange}
           />
           </div>
         )}
@@ -1611,6 +1708,7 @@ const SCHEDULED_LOG_KINDS = new Set([
 ])
 
 function LogsTabContent({
+  replicaSetLogs,
   kind,
   apiKind,
   group,
@@ -1628,6 +1726,7 @@ function LogsTabContent({
   resourceLoading,
   resourceError,
 }: {
+  replicaSetLogs: boolean
   kind: string
   apiKind: string
   group?: string
@@ -1679,7 +1778,8 @@ function LogsTabContent({
     )
   }
 
-  // Workload kinds with stable pod selectors use the aggregated workload logs viewer
+  if (replicaSetLogs) return <WorkloadLogsTab namespace={namespace} workloadKind={apiKind} workloadName={name} />
+
   if (WORKLOAD_LOG_KINDS.has(kind) && (kind !== 'Job' || isCoreBatchJob(apiKind, group))) {
     return (
       <div className="h-full">
@@ -1706,7 +1806,7 @@ function LogsTabContent({
     )
   }
 
-  // Other kinds with associated pods (Jobs, CronJobs, ReplicaSets, etc.) — pod selector + LogsViewer
+  // Other resources with associated Pods offer their individual logs.
   return (
     <MultiPodLogsTab
       pods={pods}
@@ -2274,7 +2374,7 @@ function DiagnoseInlineSection({ kind, namespace, name, group, onOpenReachabilit
 // Drawer mode: single chart + category tabs (compact for ~500px width).
 // Full-screen mode: multi-chart grid so CPU + Memory + Network can be
 // compared side-by-side without tab switching.
-function MetricsTabContent({
+export function MetricsTabContent({
   kind,
   namespace,
   name,
@@ -2290,20 +2390,47 @@ function MetricsTabContent({
   /** False when content follows, so the tab scrolls everything as one. */
   fill?: boolean
 }) {
-  if (expanded) {
-    if (!fill) return <PrometheusChartsGrid kind={kind} namespace={namespace} name={name} resource={resource} fill={false} />
+  const [params] = useSearchParams()
+  const range = TIME_RANGES.find((option) => option.value === params.get('metricsRange'))?.value ?? '1h'
+  const workload = { kind, namespace, name }
+  const { embedded = false } = useNavCustomization()
+  const { charts, rightsizing, checking, configured, setup } = useDatadogWorkloadCharts(workload, range, embedded)
+  if (configured) {
+    const workloadTotals = (
+      <DatadogWorkloadCharts charts={charts.data?.configured ? charts.data.charts : undefined}
+        loading={charts.isLoading} error={charts.error} onRetry={() => void charts.refetch()} />
+    )
+    if (rightsizing) return (
+      <div className={fill ? 'h-full overflow-auto' : undefined}>
+        <PrometheusChartsGrid {...workload} resource={resource} workloadTotals={workloadTotals} fill={false} showRightsizing={false} />
+        <div className="px-4 pb-4">{rightsizing}</div>
+      </div>
+    )
+    return <PrometheusChartsGrid {...workload} resource={resource} workloadTotals={workloadTotals} fill={fill} />
+  }
+  if (checking) return <p role="status" className="p-4 text-sm text-theme-text-secondary">Loading workload metrics…</p>
+
+  const setupHint = setup && <DatadogSetupHint owner={setup === 'owner'} />
+  if (rightsizing || !expanded) {
     return (
-      <div className="flex flex-col h-full">
-        <div className="flex-1 min-h-0">
-          <PrometheusChartsGrid kind={kind} namespace={namespace} name={name} resource={resource} />
-        </div>
+      <div className={fill ? 'h-full overflow-auto' : undefined}>
+        {setupHint}
+        {expanded
+          ? <PrometheusChartsGrid {...workload} resource={resource} fill={false} showRightsizing={false} />
+          : <DrawerMetricsContent {...workload} resource={resource} />}
+        <div className="px-4 pb-4">{rightsizing ?? <RightsizingStrip {...workload} />}</div>
       </div>
     )
   }
-
-  // Drawer fallback: single chart with tabs + restart lane below. The chart's
-  // time-range selector is mirrored to the restart lane so they stay aligned.
-  return <DrawerMetricsContent kind={kind} namespace={namespace} name={name} resource={resource} />
+  if (!fill) return <PrometheusChartsGrid {...workload} resource={resource} fill={false} />
+  return (
+    <div className="flex flex-col h-full">
+      {setupHint}
+      <div className="flex-1 min-h-0">
+        <PrometheusChartsGrid {...workload} resource={resource} />
+      </div>
+    </div>
+  )
 }
 
 function DrawerMetricsContent({

@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -36,11 +37,9 @@ import (
 )
 
 var (
-	k8sClient                    *kubernetes.Clientset
-	k8sConfig                    *rest.Config
-	discoveryClient              *discovery.DiscoveryClient
-	dynamicClient                dynamic.Interface
-	activeClients                *sharedKubernetesClients
+	// installedConn is the connection whose clients are installed, also while
+	// it is still being built. Written under clientMu; read lock-free.
+	installedConn                atomic.Pointer[Connection]
 	initOnce                     sync.Once
 	initErr                      error
 	kubeconfigPath               string
@@ -192,6 +191,13 @@ func doInit(opts InitOptions) error {
 	// paths, registry, or clients.
 	clientMu.Lock()
 	defer clientMu.Unlock()
+	// A start that fails before its clients exist still names the context it
+	// resolved, as a dropped connection does, for readers that key settings by it.
+	defer func() {
+		if installedConn.Load() == nil {
+			installedConn.Store(installedConnectionLocked(nil, nil))
+		}
+	}()
 	initializationStarted = true
 
 	sources, err := resolveKubeconfigSources(opts, os.Getenv("KUBECONFIG"), homedir.HomeDir())
@@ -362,12 +368,7 @@ func doInit(opts InitOptions) error {
 		return err
 	}
 
-	k8sConfig = config
-	k8sClient = clients.clientset
-	discoveryClient = clients.discovery
-	dynamicClient = clients.dynamic
-	activeClients = clients
-	activeClientGeneration = clients.generation
+	installedConn.Store(installedConnectionLocked(config, clients))
 
 	return nil
 }
@@ -756,150 +757,35 @@ func isValidKubeconfig(path string) bool {
 
 // GetClient returns the K8s clientset
 func GetClient() *kubernetes.Clientset {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	return k8sClient
+	return Current().Client()
 }
 
-// GetClientInterface returns the clientset as kubernetes.Interface, or an
-// untyped nil when no client exists. Callers that store the result in an
-// interface must use this rather than GetClient(): a nil *Clientset wrapped in
-// an interface is non-nil, so "client == nil" guards downstream never fire and
-// the first API call panics.
-func GetClientInterface() kubernetes.Interface {
-	c := GetClient()
-	if c == nil {
-		return nil
-	}
-	return c
-}
+// GetClientInterface returns an untyped nil when no client exists, so callers
+// can safely test a kubernetes.Interface for nil.
+func GetClientInterface() kubernetes.Interface { return Current().ClientInterface() }
 
-// GetClientWithGeneration returns the clientset together with the generation
-// of the connection it belongs to. A reconnect under the same context name can
-// reach a different cluster; the generation still changes.
-func GetClientWithGeneration() (*kubernetes.Clientset, uint64) {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	return k8sClient, activeClientGeneration
-}
+// GetConfig returns the shared REST config. Do not mutate it.
+func GetConfig() *rest.Config { return Current().Config() }
 
-func GetClientSafetySnapshot() (*kubernetes.Clientset, string) {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	return k8sClient, contextBinding
-}
+func GetDiscoveryClient() *discovery.DiscoveryClient { return Current().DiscoveryClient() }
 
-// GetConfig returns the K8s rest config
-func GetConfig() *rest.Config {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	return k8sConfig
-}
+func GetDynamicClient() dynamic.Interface { return Current().Dynamic() }
 
-func GetConfigSnapshot() (*rest.Config, string) {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	if k8sConfig == nil {
-		return nil, TimelineClusterContext(contextName)
-	}
-	return rest.CopyConfig(k8sConfig), TimelineClusterContext(contextName)
-}
+func GetInformerClient() kubernetes.Interface { return Current().InformerClient() }
 
-// GetClusterClientSnapshot reads the active client, config, context name and
-// in-cluster mode together, so a concurrent context switch cannot pair one
-// cluster's API endpoint with another cluster's credentials.
-func GetClusterClientSnapshot() (kubernetes.Interface, *rest.Config, string, bool) {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	var client kubernetes.Interface
-	if k8sClient != nil {
-		client = k8sClient
-	}
-	return client, k8sConfig, contextName, isInClusterLocked()
-}
-
-// GetDiscoveryClient returns the K8s discovery client for API resource discovery
-func GetDiscoveryClient() *discovery.DiscoveryClient {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	return discoveryClient
-}
-
-// GetDynamicClient returns the K8s dynamic client for CRD access
-func GetDynamicClient() dynamic.Interface {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	return dynamicClient
-}
-
-// GetInformerClient returns the clientset the informer cache lists and watches
-// through. It shares GetClient()'s http.Client (transport, auth observer,
-// request deadlines) but has its own client-side rate limiter, so informer
-// LIST/WATCH traffic never delays request handlers. Falls back to GetClient()
-// when the active client set has no informer client, e.g. a test that installed
-// only the request client.
-func GetInformerClient() kubernetes.Interface {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	return informerClientForLocked(k8sClient)
-}
-
-// getCacheClients reads the request and informer clientsets in one critical
-// section, so a context switch between two reads cannot pair one cluster's
-// observer source with another cluster's informers.
-func getCacheClients() (*kubernetes.Clientset, kubernetes.Interface) {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	return k8sClient, informerClientForLocked(k8sClient)
-}
-
-// InformerClientFor maps a request clientset to the informer clientset of the
-// same client set, so a holder of GetClient() can tell whether the resource
-// cache (whose Client() is the informer client) describes its connection.
 func InformerClientFor(client kubernetes.Interface) kubernetes.Interface {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	if c, ok := client.(*kubernetes.Clientset); ok {
-		return informerClientForLocked(c)
+	if typed, ok := client.(*kubernetes.Clientset); ok {
+		if typed == nil {
+			return nil
+		}
+		if c := Current(); c.Client() == typed {
+			return c.InformerClient()
+		}
 	}
 	return client
 }
 
-func informerClientForLocked(client *kubernetes.Clientset) kubernetes.Interface {
-	if client == nil {
-		return nil
-	}
-	// Matching on the request client keeps an informer client from another
-	// client set (a previous cluster) from ever being handed out.
-	if activeClients != nil && activeClients.clientset == client && activeClients.informerClientset != nil {
-		return activeClients.informerClientset
-	}
-	return client
-}
-
-// GetInformerDynamicClient is GetInformerClient for the dynamic informer cache
-// and the startup list probes, falling back to GetDynamicClient().
-func GetInformerDynamicClient() dynamic.Interface {
-	_, informer := getDynamicCacheClients()
-	return informer
-}
-
-// getDynamicCacheClients reads the request and informer dynamic clients in one
-// critical section, for the same reason as getCacheClients.
-func getDynamicCacheClients() (request, informer dynamic.Interface) {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	if dynamicClient != nil && activeClients != nil && activeClients.dynamic == dynamicClient && activeClients.informerDynamic != nil {
-		return dynamicClient, activeClients.informerDynamic
-	}
-	return dynamicClient, dynamicClient
-}
-
-func GetDynamicClientSnapshot() (dynamic.Interface, string) {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	return dynamicClient, TimelineClusterContext(contextName)
-}
+func GetInformerDynamicClient() dynamic.Interface { return Current().InformerDynamicClient() }
 
 // GetKubeconfigPath returns the path to the kubeconfig file used
 func GetKubeconfigPath() string {
@@ -1456,19 +1342,12 @@ func fallbackNamespaceCandidatesLocked() []string {
 func SetNamespaceScopeOverride(ns string) {
 	clientMu.Lock()
 	namespaceScopeOverride = ns
+	Current().ResetPermissions()
 	clientMu.Unlock()
-	// After the write, and outside clientMu: the permissions cache retires a
-	// probe by comparing the generation it captured before reading its inputs,
-	// so retiring first would leave a probe holding the old scope under the new
-	// generation.
-	InvalidateResourcePermissionsCache()
 }
 
 func ClearNamespaceScopeOverride() {
-	clientMu.Lock()
-	namespaceScopeOverride = ""
-	clientMu.Unlock()
-	InvalidateResourcePermissionsCache()
+	SetNamespaceScopeOverride("")
 }
 
 func SetNamespaceScopePreferenceResolver(resolver func(contextName string) (string, bool)) {
@@ -1496,16 +1375,20 @@ func RestoreNamespaceScopePreference(contextName string) {
 func GetNamespaceScopeTarget() string {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
+	return namespaceScopeTargetLocked(contextName, contextNamespace)
+}
+
+func namespaceScopeTargetLocked(name, namespace string) string {
 	if namespaceScopeOverride != "" {
 		return namespaceScopeOverride
 	}
 	// --namespace is an *initial* filter, so it only pins the scope while we're on
 	// the context it was set for. After a cross-cluster switch the new context's own
 	// namespace takes over — the stale startup value must not follow across clusters.
-	if fallbackNamespace != "" && contextName == fallbackNamespaceContext {
+	if fallbackNamespace != "" && name == fallbackNamespaceContext {
 		return fallbackNamespace
 	}
-	return contextNamespace
+	return namespace
 }
 
 // ProspectiveNamespaceScopeTarget resolves what GetNamespaceScopeTarget would
@@ -1555,12 +1438,12 @@ func GetEffectiveNamespace() string {
 // capabilityProbeNamespace is where a capability check that is denied
 // cluster-wide is retried: the effective namespace, or for an install limited
 // by --rbac-namespaces, the first listed namespace.
-func capabilityProbeNamespace() string {
+func (c *Connection) capabilityProbeNamespace() string {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
 	switch {
-	case contextNamespace != "":
-		return contextNamespace
+	case c != nil && c.contextNamespace != "":
+		return c.contextNamespace
 	case fallbackNamespace != "":
 		return fallbackNamespace
 	case len(rbacNamespaces) > 0:
@@ -1625,7 +1508,32 @@ func (s NamespaceListSource) Complete() bool {
 // GetAccessibleNamespacesWithSource is GetAccessibleNamespaces plus the reason
 // the list is or isn't complete.
 func GetAccessibleNamespacesWithSource(ctx context.Context) ([]string, NamespaceListSource) {
-	client := GetClient()
+	c := BoundOrCurrent(ctx)
+	return c.accessibleNamespaces(ctx, c.namespaceListInputs())
+}
+
+type namespaceListInputs struct {
+	candidates, granted []string
+	forceNamespace      bool
+	target              string
+}
+
+func (c *Connection) namespaceListInputs() namespaceListInputs {
+	if c == nil {
+		return namespaceListInputs{}
+	}
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	return namespaceListInputs{
+		candidates:     fallbackNamespaceCandidatesLocked(),
+		granted:        slices.Clone(rbacNamespaces),
+		forceNamespace: ForceNamespaceScope,
+		target:         namespaceScopeTargetLocked(c.contextName, c.contextNamespace),
+	}
+}
+
+func (c *Connection) accessibleNamespaces(ctx context.Context, inputs namespaceListInputs) ([]string, NamespaceListSource) {
+	client := c.Client()
 	if client == nil {
 		return nil, NamespaceListFailed
 	}
@@ -1648,46 +1556,31 @@ func GetAccessibleNamespacesWithSource(ctx context.Context) ([]string, Namespace
 		// After a context switch the LIST can time out behind informer and
 		// discovery traffic on the shared client; the synced cluster-wide
 		// namespace informer holds the same list.
-		// Only while the client that failed is still current: a LIST that
-		// outlived a context switch must not borrow the new cluster's cache.
-		if names, ok := cachedNamespaceNames(); ok && GetClient() == client {
+		// A LIST that outlived a context switch still falls back to its seeds.
+		if names, ok := cachedNamespaceNames(c.ResourceCache()); ok && Current() == c {
 			log.Printf("[k8s] GetAccessibleNamespaces: listing namespaces failed: %v (using the synced namespace cache)", err)
 			return names, NamespaceListCache
 		}
 		source = NamespaceListFailed
 		log.Printf("[k8s] GetAccessibleNamespaces: non-auth error listing namespaces: %v (falling back to best-effort short list)", err)
 	}
-	if source == NamespaceListSeeded {
-		clientMu.RLock()
-		granted := slices.Clone(rbacNamespaces)
-		clientMu.RUnlock()
-		if len(granted) > 0 {
-			sort.Strings(granted)
-			return granted, NamespaceListRBAC
-		}
+	if source == NamespaceListSeeded && len(inputs.granted) > 0 {
+		sort.Strings(inputs.granted)
+		return inputs.granted, NamespaceListRBAC
 	}
 
-	// Cluster-wide list denied (or transient). Best-effort fallback so
-	// the picker isn't empty for a namespace-scoped user.
-	seen := map[string]bool{}
-	var fallback []string
-	clientMu.RLock()
-	candidates := append([]string{contextNamespace}, fallbackNamespaceCandidatesLocked()...)
-	for _, ns := range candidates {
-		if ns != "" && !seen[ns] {
-			seen[ns] = true
-			fallback = append(fallback, ns)
-		}
+	// Keep the picker usable when the namespace LIST cannot answer.
+	fallback := slices.Clone(inputs.candidates)
+	if c.contextNamespace != "" && !slices.Contains(fallback, c.contextNamespace) {
+		fallback = append(fallback, c.contextNamespace)
 	}
-	clientMu.RUnlock()
 	sort.Strings(fallback)
 	return fallback, source
 }
 
 // cachedNamespaceNames lists namespaces from the informer cache when it is
 // synced and cluster-wide, so it holds what a successful LIST would return.
-func cachedNamespaceNames() ([]string, bool) {
-	rc := GetResourceCache()
+func cachedNamespaceNames(rc *ResourceCache) ([]string, bool) {
 	if rc == nil || rc.Namespaces() == nil || !rc.IsKindReady(k8score.Namespaces) || !rc.IsKindClusterWide(k8score.Namespaces) {
 		return nil, false
 	}
@@ -2168,12 +2061,6 @@ func installPreparedContext(p *preparedContext) {
 
 	clientMu.Lock()
 	newContextBinding := sourceSafetyBindingLocked(p.sourceFile, p.inFileName)
-	k8sConfig = p.config
-	k8sClient = p.clients.clientset
-	discoveryClient = p.clients.discovery
-	dynamicClient = p.clients.dynamic
-	activeClients = p.clients
-	activeClientGeneration = p.clients.generation
 	contextName = p.name
 	contextBinding = newContextBinding
 	activeSourceFile = p.sourceFile
@@ -2181,6 +2068,7 @@ func installPreparedContext(p *preparedContext) {
 	activeSourceConfig = p.rawConfig.DeepCopy()
 	clusterName = p.kubeContext.Cluster
 	contextNamespace = p.kubeContext.Namespace
+	installedConn.Store(installedConnectionLocked(p.config, p.clients))
 	contextUsesExec = p.usesExec
 	totalContextCount = totalContexts
 	execPluginCommands = execCmds
@@ -2238,6 +2126,9 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName, safetyBinding str
 	newConfig, err := clientcmd.Load(kubeconfigData)
 	if err != nil {
 		return "", "", false, fmt.Errorf("failed to parse kubeconfig: %w", err)
+	}
+	if reasons := UntrustedKubeconfigReasons(newConfig); len(reasons) > 0 {
+		return "", "", false, fmt.Errorf("kubeconfig would run a command or read a file on this computer: %s", strings.Join(reasons, "; "))
 	}
 	if _, ok := newConfig.Contexts[contextName]; !ok {
 		return "", "", false, fmt.Errorf("context %q not found in provided kubeconfig", contextName)

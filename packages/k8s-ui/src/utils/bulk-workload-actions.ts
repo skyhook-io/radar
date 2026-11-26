@@ -46,6 +46,33 @@ export function canPauseDeployment(
   return supported && kind?.name.toLowerCase() === 'deployments' && canPatchWorkloadKind(kind, writes)
 }
 
+// Stop and Terminate patch spec.shutdown on an Argo Workflow. A Radar older
+// than the stop endpoint sends no workflows permission, which reads as denied.
+export function canStopWorkflow(
+  kind: BulkWorkloadKindInfo | null | undefined,
+  writes: WorkloadWritePermissions | undefined,
+  supported: boolean,
+): boolean {
+  return supported && kind?.name.toLowerCase() === 'workflows' && kind.group === 'argoproj.io' && writes?.workflows === true
+}
+
+export function canSubmitWorkflowTemplate(
+  kind: BulkWorkloadKindInfo | null | undefined,
+  writes: WorkloadWritePermissions | undefined,
+  supported: boolean,
+): boolean {
+  return supported && kind?.name.toLowerCase() === 'workflowtemplates' && kind.group === 'argoproj.io' && writes?.createWorkflows === true
+}
+
+// Older Radars support both CronJob actions but omit their permission fields.
+export function canTriggerCronJob(writes: WorkloadWritePermissions | undefined): boolean {
+  return writes?.createJobs !== false
+}
+
+export function canSuspendCronJob(writes: WorkloadWritePermissions | undefined): boolean {
+  return writes?.cronJobs !== false
+}
+
 export function isPausedDeployment(
   resource: { apiVersion?: string; kind?: string; spec?: { paused?: unknown } } | null | undefined,
 ): boolean {

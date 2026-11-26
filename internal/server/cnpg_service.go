@@ -62,16 +62,15 @@ func (s *Server) cnpgReader(r *http.Request) *cnpgReadAdapter {
 			return
 		}
 		operation = k8s.OperationContext()
-		cache, discovery, dynamicCache = k8s.GetResourceCache(), k8s.GetResourceDiscovery(), k8s.GetDynamicResourceCache()
+		conn := k8s.Current()
+		cache, discovery, dynamicCache = k8s.GetResourceCache(), conn.Discovery(), k8s.GetDynamicResourceCache()
 		connected = k8s.IsConnected()
-		identity, clusterContext = cnpgRuntimeIdentity(r), k8s.ActiveClusterContext()
+		identity, clusterContext = cnpgRuntimeIdentity(r), k8s.TimelineClusterContext(conn.ContextName())
 		forced, target = k8s.ForceNamespaceScope, k8s.GetNamespaceScopeTarget()
 		promClient = prometheuspkg.GetClient()
-		adapter.dynamic, adapter.actionContext = k8s.GetDynamicClientSnapshot()
-		adapter.config, _ = k8s.GetConfigSnapshot()
-		if client := k8s.GetClient(); client != nil {
-			adapter.Clients.Typed = client
-		}
+		adapter.dynamic, adapter.actionContext = conn.Dynamic(), clusterContext
+		adapter.config = conn.ConfigCopy()
+		adapter.Clients.Typed = conn.ClientInterface()
 		adapter.Clients.ClusterDone = operation.Done()
 	}) && stillBound
 	if user := auth.UserFromContext(r.Context()); user != nil {
