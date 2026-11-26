@@ -102,22 +102,23 @@ func TestCarettaAppliesHeaders(t *testing.T) {
 	}
 }
 
-func TestCarettaReleasedBorrowedForward(t *testing.T) {
+func TestCarettaReleasedForward(t *testing.T) {
 	cfg := forwardtest.Server(t, forwardtest.ServeTunnel)
-	manager := portforward.NewManager(kubernetes.NewForConfigOrDie(cfg), cfg)
+	manager := portforward.NewManager(kubernetes.NewForConfigOrDie(cfg), cfg, "ctx")
 	defer manager.Close()
 	for _, path := range []string{"flows", "raw"} {
 		t.Run(path, func(t *testing.T) {
-			owner, err := manager.Start(portforward.OwnerPrometheus, t.Context(), "ns", "svc", 9090, "ctx")
+			owner, err := manager.Start(portforward.OwnerPrometheus, t.Context(), "ns", "svc", 9090)
 			if err != nil {
 				t.Fatal(err)
 			}
 			cluster := fake.NewSimpleClientset()
 			c := NewCarettaSource(cluster)
 			c.forwards, c.currentContext, c.isConnected = manager, "ctx", true
-			c.forward = manager.GetAddressForService(portforward.OwnerTraffic, "ctx", "ns", "svc")
+			c.forward = manager.Share(portforward.OwnerTraffic, "ns", "svc", 9090)
 			c.prometheusAddr = c.forward.Address()
 			address := fmt.Sprintf("127.0.0.1:%d", owner.Info().LocalPort)
+			c.forward.Stop()
 			owner.Stop()
 
 			var listener net.Listener
@@ -153,6 +154,52 @@ func TestCarettaReleasedBorrowedForward(t *testing.T) {
 	}
 }
 
+func TestCarettaReleasesRejectedPeerForward(t *testing.T) {
+	for _, path := range []string{"discovery", "connect"} {
+		t.Run(path, func(t *testing.T) {
+			cfg := forwardtest.Server(t, forwardtest.ServeTunnel)
+			m := portforward.NewManager(kubernetes.NewForConfigOrDie(cfg), cfg, "ctx")
+			defer m.Close()
+			owner, err := m.Start(portforward.OwnerPrometheus, t.Context(), "ns", "svc", 8428)
+			if err != nil {
+				t.Fatal(err)
+			}
+			metrics := promStub(t, promBackend{})
+			c := sourceWithServices(t, "ns", carettaStoreSvc("ns", "svc"))
+			c.forwards, c.currentContext = m, "ctx"
+			defer c.Close()
+			var probed atomic.Bool
+			c.httpClient.Transport = &http.Transport{DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+				if "http://"+address == owner.Address() {
+					probed.Store(true)
+				}
+				return (&net.Dialer{}).DialContext(ctx, network, metrics.Listener.Addr().String())
+			}}
+			defer c.httpClient.CloseIdleConnections()
+			switch path {
+			case "discovery":
+				c.mu.Lock()
+				c.discoverPrometheusLocked(t.Context())
+				c.mu.Unlock()
+			case "connect":
+				info, err := c.Connect(t.Context(), "ctx")
+				if err != nil || info.Connected {
+					t.Fatalf("Connect accepted metrics without Caretta data: %+v, %v", info, err)
+				}
+			}
+			if !probed.Load() || c.forward != nil {
+				t.Fatal("Caretta did not probe and reject the peer's tunnel")
+			}
+			owner.Stop()
+			select {
+			case <-owner.Done():
+			default:
+				t.Fatal("Caretta leaked a reference to the rejected tunnel")
+			}
+		})
+	}
+}
+
 func TestCarettaFlowReadRetriesFailedReconnect(t *testing.T) {
 	var restarting, abortRead atomic.Bool
 	readCtx, cancelRead := context.WithCancel(t.Context())
@@ -169,7 +216,7 @@ func TestCarettaFlowReadRetriesFailedReconnect(t *testing.T) {
 		}
 		forwardtest.ServeTunnel(w, r)
 	})
-	manager := portforward.NewManager(kubernetes.NewForConfigOrDie(cfg), cfg)
+	manager := portforward.NewManager(kubernetes.NewForConfigOrDie(cfg), cfg, "ctx")
 	defer manager.Close()
 
 	metrics := promStub(t, promBackend{links: true})
@@ -227,9 +274,9 @@ func TestCarettaCancelledRevalidationKeepsBinding(t *testing.T) {
 	for _, query := range []string{"up", "count(caretta_links_observed)"} {
 		t.Run(query, func(t *testing.T) {
 			cfg := forwardtest.Server(t, forwardtest.ServeTunnel)
-			manager := portforward.NewManager(kubernetes.NewForConfigOrDie(cfg), cfg)
+			manager := portforward.NewManager(kubernetes.NewForConfigOrDie(cfg), cfg, "ctx")
 			defer manager.Close()
-			forward, err := manager.Start(portforward.OwnerTraffic, t.Context(), "ns", "svc", 9090, "ctx")
+			forward, err := manager.Start(portforward.OwnerTraffic, t.Context(), "ns", "svc", 9090)
 			if err != nil {
 				t.Fatal(err)
 			}

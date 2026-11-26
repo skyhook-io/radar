@@ -494,7 +494,7 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 		err = portforward.ErrAutoDisabled
 	} else {
 		log.Printf("[hubble] Starting port-forward to %s/%s:%d", namespace, hubbleRelayService, h.relayPort)
-		forward, err = h.forwards.Start(portforward.OwnerTraffic, ctx, namespace, hubbleRelayService, h.relayPort, contextName)
+		forward, err = h.forwards.Start(portforward.OwnerTraffic, ctx, namespace, hubbleRelayService, h.relayPort)
 	}
 	if err != nil {
 		if info := retryDirectAfterSkip(); info != nil {

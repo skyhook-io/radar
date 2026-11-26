@@ -133,7 +133,9 @@ func TestFailedKubecostProbeAfterSwitchKeepsReplacementForward(t *testing.T) {
 	if err := <-result; !errors.Is(err, ErrKubecostNoData) {
 		t.Fatalf("A returned %v, want the released probe’s empty allocation", err)
 	}
-	if a.forwards.IsConnectedForContext("a") || !bConn.lease.alive() {
+	remaining := a.forwards.Share(portforward.OwnerCost, "cost", "aggregator", 9004)
+	remaining.Stop()
+	if remaining != nil || !bConn.lease.alive() {
 		t.Fatal("failed probe did not stop exactly A's forward")
 	}
 	stillServing := probeB()
@@ -198,7 +200,8 @@ func TestKubecostCandidateTunnelIsDedicated(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("candidate did not reach its forwarded probe")
 	}
-	if peer := forwards.GetAddressForService(portforward.OwnerPrometheus, "ctx", "ns", "svc"); peer != nil {
+	if peer := forwards.Share(portforward.OwnerPrometheus, "ns", "svc", 9004); peer != nil {
+		peer.Stop()
 		t.Errorf("candidate probe exposed its tunnel to peer lookup at %s", peer.Address())
 	}
 	resume()

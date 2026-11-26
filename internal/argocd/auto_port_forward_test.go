@@ -75,30 +75,39 @@ func TestArgoForwardFollowsConnectionLifecycle(t *testing.T) {
 			snap := m.snapshotLocked()
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			done := make(chan error, 1)
+			type result struct {
+				forward activeForward
+				err     error
+			}
+			done := make(chan result, 1)
 			go func() {
 				fwd, err := m.startPortForward(ctx, snap, "ns", "svc", 8080)
 				if fwd != nil {
 					t.Cleanup(func() { fwd.Stop() })
 				}
-				done <- err
+				done <- result{fwd, err}
 			}()
 			select {
 			case <-arrived:
-			case err := <-done:
-				t.Fatalf("upgrade never arrived: %v", err)
+			case got := <-done:
+				t.Fatalf("upgrade never arrived: %v", got.err)
 			}
 			if !pending {
-				if err := <-done; err != nil {
-					t.Fatal(err)
+				got := <-done
+				if got.err != nil {
+					t.Fatal(got.err)
 				}
 				k8s.RetireServingConnection()
 				k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "ctx"})
-				if got := k8s.Current().PortForwards().GetAddressForService(portforward.OwnerPrometheus, "ctx", "ns", "svc"); got != nil {
-					t.Fatal("metrics discovery could borrow the Argo CD tunnel")
+				if shared := k8s.Current().PortForwards().Share(portforward.OwnerPrometheus, "ns", "svc", 8080); shared != nil {
+					shared.Stop()
+					t.Fatal("metrics discovery could share the Argo CD tunnel")
 				}
-				if !k8s.Current().PortForwards().IsConnectedForContext("ctx") {
+				if !got.forward.Alive() {
 					t.Fatal("readmission did not preserve the live Argo CD handle")
+				}
+				if contextName := got.forward.Info().ContextName; contextName != "ctx" {
+					t.Fatalf("forward context = %q, want ctx", contextName)
 				}
 				select {
 				case <-ended:
@@ -113,7 +122,7 @@ func TestArgoForwardFollowsConnectionLifecycle(t *testing.T) {
 				t.Fatal("rescope left the upgrade open")
 			}
 			if pending {
-				if err := <-done; err == nil {
+				if got := <-done; got.err == nil {
 					t.Fatal("retired dial succeeded")
 				}
 			}
@@ -124,7 +133,7 @@ func TestArgoForwardFollowsConnectionLifecycle(t *testing.T) {
 func TestDiscoveryOnRescopedConnectionIsSuperseded(t *testing.T) {
 	m := newTestManager(config.Config{})
 	m.inCluster = func() bool { return false }
-	manager := portforward.NewManager(nil, nil)
+	manager := portforward.NewManager(nil, nil, "ctx")
 	manager.Close()
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "svc", Labels: map[string]string{"app.kubernetes.io/name": "argocd-server"}}, Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}}}
 	_, _, err := m.discover(t.Context(), probeSnapshot{probeCluster: probeCluster{k8sClient: fake.NewSimpleClientset(svc), forwards: manager}})

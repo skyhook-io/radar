@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -583,7 +584,7 @@ func TestDiscoverCandidateFailuresAreNotAbsent(t *testing.T) {
 					return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "", errors.New(`cannot list resource "pods"`))
 				})
 			}
-			c := &Client{forwards: portforward.NewManager(cs, &rest.Config{}), k8sClient: cs, contextName: "test", httpClient: &http.Client{Transport: transport}}
+			c := &Client{forwards: portforward.NewManager(cs, &rest.Config{}, "test"), k8sClient: cs, contextName: "test", httpClient: &http.Client{Transport: transport}}
 			_, err := c.discover(context.Background(), 0)
 			if err == nil || !errors.Is(err, errPrometheusUnreachable) || errors.Is(err, ErrPrometheusNotFound) {
 				t.Fatalf("failure classification: %v", err)
@@ -668,7 +669,7 @@ func TestClosedForwardManagerDoesNotCacheDiscoveryFailure(t *testing.T) {
 	}
 	tr := &http.Transport{Proxy: http.ProxyURL(proxy)}
 	t.Cleanup(tr.CloseIdleConnections)
-	c := &Client{k8sClient: cs, httpClient: &http.Client{Transport: tr}, forwards: portforward.NewManager(cs, &rest.Config{})}
+	c := &Client{k8sClient: cs, httpClient: &http.Client{Transport: tr}, forwards: portforward.NewManager(cs, &rest.Config{}, "test")}
 	c.forwards.Close()
 	_, _, err = c.EnsureConnected(t.Context())
 	if !errors.Is(err, portforward.ErrClosed) || c.recentDiscoveryError(time.Now()) != nil || c.GetStatus().Error != "" {
@@ -688,11 +689,11 @@ func TestDiscoveryGateDiscardsReleasedForward(t *testing.T) {
 
 func TestDiscoveryHandoffRejectsHandleAtReusedAddress(t *testing.T) {
 	cfg := forwardtest.Server(t, forwardtest.ServeTunnel)
-	m := portforward.NewManager(kubernetes.NewForConfigOrDie(cfg), cfg)
+	m := portforward.NewManager(kubernetes.NewForConfigOrDie(cfg), cfg, "ctx")
 	defer m.Close()
 	open := func() *portforward.Handle {
 		t.Helper()
-		h, err := m.Start(portforward.OwnerPrometheus, t.Context(), "ns", "svc", 9090, "ctx")
+		h, err := m.Start(portforward.OwnerPrometheus, t.Context(), "ns", "svc", 9090)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -711,5 +712,56 @@ func TestDiscoveryHandoffRejectsHandleAtReusedAddress(t *testing.T) {
 	}
 	if !c.connectionLiveLocked(discoveredEndpoint{addr: current.Address(), forward: current}, 0) {
 		t.Fatal("current handle rejected")
+	}
+}
+
+func TestDiscoveryOwnsOnlyAcceptedPeerForward(t *testing.T) {
+	for _, accept := range []bool{true, false} {
+		t.Run(fmt.Sprintf("accept=%t", accept), func(t *testing.T) {
+			cfg := forwardtest.Server(t, forwardtest.ServeTunnel)
+			m := portforward.NewManager(kubernetes.NewForConfigOrDie(cfg), cfg, "ctx")
+			defer m.Close()
+			owner, err := m.Start(portforward.OwnerTraffic, t.Context(), "ns", "svc", 9090)
+			if err != nil {
+				t.Fatal(err)
+			}
+			backend := healthyServer(t, 0)
+			svc := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "svc", Labels: map[string]string{"app": "prometheus"}},
+				Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "http", Port: 9090}}},
+			}
+			var probed atomic.Bool
+			tr := &http.Transport{DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+				if "http://"+address == owner.Address() {
+					probed.Store(true)
+					if accept {
+						return (&net.Dialer{}).DialContext(ctx, network, backend.Listener.Addr().String())
+					}
+				}
+				return nil, errors.New("unreachable")
+			}}
+			defer tr.CloseIdleConnections()
+			c := &Client{forwards: m, k8sClient: fake.NewSimpleClientset(svc), httpClient: &http.Client{Transport: tr}}
+			endpoint, err := c.discover(t.Context(), 0)
+			if !probed.Load() {
+				t.Fatal("discovery did not probe the peer's tunnel")
+			}
+			owner.Stop()
+			if accept {
+				if err != nil || !endpoint.forward.SameForward(owner) || !endpoint.forward.Alive() {
+					t.Fatalf("accepted peer tunnel did not survive owner stop: endpoint=%q, error=%v", endpoint.addr, err)
+				}
+				c.mu.Lock()
+				c.dropConnectionLocked()
+				c.mu.Unlock()
+			} else if err == nil || c.forward != nil {
+				t.Fatalf("discovery accepted an unreachable peer: %v", err)
+			}
+			select {
+			case <-owner.Done():
+			default:
+				t.Fatal("discovery leaked a reference to the peer's tunnel")
+			}
+		})
 	}
 }

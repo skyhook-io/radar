@@ -248,7 +248,7 @@ func NewManager() *Manager {
 	return &Manager{
 		clusterClients: func() probeCluster {
 			conn := k8s.Current()
-			return probeCluster{conn.ClientInterface(), conn.PortForwards(), conn.ContextName()}
+			return probeCluster{conn.ClientInterface(), conn.PortForwards()}
 		},
 		inCluster:      k8s.IsInCluster,
 		contextName:    k8s.GetContextName,
@@ -1271,9 +1271,8 @@ func (snap probeSnapshot) forwardExitError() error {
 }
 
 type probeCluster struct {
-	k8sClient   kubernetes.Interface
-	forwards    *portforward.Manager
-	contextName string
+	k8sClient kubernetes.Interface
+	forwards  *portforward.Manager
 }
 
 func (m *Manager) snapshotLocked() probeSnapshot {

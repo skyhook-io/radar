@@ -887,7 +887,7 @@ func TestCostDetectionCandidateFailuresRemainUnreachable(t *testing.T) {
 					return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "", errors.New(`cannot list resource "pods"`))
 				})
 			}
-			prometheuspkg.Initialize(cs, &rest.Config{}, "test", portforward.NewManager(cs, &rest.Config{}))
+			prometheuspkg.Initialize(cs, &rest.Config{}, "test", portforward.NewManager(cs, &rest.Config{}, "test"))
 			defer func() {
 				prometheuspkg.Reset()
 				prometheuspkg.Initialize(nil, nil, "", nil)

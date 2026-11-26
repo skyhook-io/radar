@@ -64,18 +64,19 @@ type ConnectionInfo struct {
 
 // Manager owns all automatic tunnels created with one connection's clients.
 type Manager struct {
-	mu       sync.Mutex
-	client   kubernetes.Interface
-	config   *rest.Config
-	forwards map[*forward]struct{}
-	lifetime context.Context
-	cancel   context.CancelFunc
-	run      func(context.Context, kubernetes.Interface, *rest.Config, string, string, int, int, chan struct{}, chan struct{}) error
+	mu          sync.Mutex
+	client      kubernetes.Interface
+	config      *rest.Config
+	contextName string
+	forwards    map[*forward]struct{}
+	lifetime    context.Context
+	cancel      context.CancelFunc
+	run         func(context.Context, kubernetes.Interface, *rest.Config, string, string, int, int, chan struct{}, chan struct{}) error
 }
 
-func NewManager(client kubernetes.Interface, config *rest.Config) *Manager {
+func NewManager(client kubernetes.Interface, config *rest.Config, contextName string) *Manager {
 	lifetime, cancel := context.WithCancel(context.Background())
-	return &Manager{lifetime: lifetime, cancel: cancel, client: client, config: config, forwards: make(map[*forward]struct{}), run: pfpkg.RunPortForward}
+	return &Manager{lifetime: lifetime, cancel: cancel, client: client, config: config, contextName: contextName, forwards: make(map[*forward]struct{}), run: pfpkg.RunPortForward}
 }
 
 type forward struct {
@@ -91,15 +92,14 @@ type forward struct {
 	stopCh      chan struct{}
 }
 
-func (f *forward) matches(namespace, service string, port int, contextName string) bool {
-	return f.info.Namespace == namespace && f.info.ServiceName == service && f.targetPort == port && f.info.ContextName == contextName
+func (f *forward) matches(namespace, service string, port int) bool {
+	return f.info.Namespace == namespace && f.info.ServiceName == service && f.targetPort == port
 }
 
-// Handle identifies one tunnel. Each owning Start releases its own reference.
-// Service lookups borrow the tunnel without prolonging its lifetime.
+// Handle identifies one tunnel. Each successful Start or Share acquires a
+// reference that the caller releases with Stop.
 type Handle struct {
 	f        *forward
-	borrowed bool
 	released bool // guarded by the manager
 }
 
@@ -114,10 +114,9 @@ func (h *Handle) Address() string {
 	return h.f.info.Address
 }
 
-// Replace releases the old handle when adopting another. Rediscovering the
-// same tunnel through a service lookup must keep an existing owning handle.
+// Replace releases the old handle when adopting another.
 func (h *Handle) Replace(next *Handle) *Handle {
-	if h == next || (next != nil && next.borrowed && h.SameForward(next)) {
+	if h == next {
 		return h
 	}
 	h.Stop()
@@ -142,13 +141,22 @@ func (h *Handle) Info() *ConnectionInfo {
 	return &info
 }
 
+var closedDone = func() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}()
+
 // Done closes when the tunnel is removed, including deliberate connection teardown.
 func (h *Handle) Done() <-chan struct{} {
+	if h == nil || h.f == nil {
+		return closedDone
+	}
 	return h.f.stopCh
 }
 
 func (h *Handle) Stop() bool {
-	if h == nil || h.f == nil || h.borrowed {
+	if h == nil || h.f == nil {
 		return false
 	}
 	f := h.f
@@ -200,17 +208,17 @@ func SetOnForwardLost(fn func(*Handle)) {
 	}
 }
 
-func (m *Manager) Start(owner Owner, ctx context.Context, namespace, service string, targetPort int, contextName string) (*Handle, error) {
-	return m.start(owner, ctx, namespace, service, targetPort, contextName, true)
+func (m *Manager) Start(owner Owner, ctx context.Context, namespace, service string, targetPort int) (*Handle, error) {
+	return m.start(owner, ctx, namespace, service, targetPort, true)
 }
 
 // StartDedicated opens a separate tunnel so a slow connection can keep serving
-// while its replacement is probed and authenticated. Service lookups never borrow it.
-func (m *Manager) StartDedicated(owner Owner, ctx context.Context, namespace, service string, targetPort int, contextName string) (*Handle, error) {
-	return m.start(owner, ctx, namespace, service, targetPort, contextName, false)
+// while its replacement is probed and authenticated.
+func (m *Manager) StartDedicated(owner Owner, ctx context.Context, namespace, service string, targetPort int) (*Handle, error) {
+	return m.start(owner, ctx, namespace, service, targetPort, false)
 }
 
-func (m *Manager) start(owner Owner, ctx context.Context, namespace, service string, targetPort int, contextName string, reuse bool) (*Handle, error) {
+func (m *Manager) start(owner Owner, ctx context.Context, namespace, service string, targetPort int, reuse bool) (*Handle, error) {
 	if AutoDisabled() {
 		return nil, ErrAutoDisabled
 	}
@@ -232,7 +240,7 @@ func (m *Manager) start(owner Owner, ctx context.Context, namespace, service str
 		}
 		var pending *forward
 		for f := range m.forwards {
-			if !f.dedicated && f.owner == owner && f.matches(namespace, service, targetPort, contextName) {
+			if !f.dedicated && f.owner == owner && f.matches(namespace, service, targetPort) {
 				if f.active {
 					f.owners++
 					m.mu.Unlock()
@@ -258,7 +266,7 @@ func (m *Manager) start(owner Owner, ctx context.Context, namespace, service str
 		return nil, fmt.Errorf("K8s client not initialized")
 	}
 	f := &forward{manager: m, owner: owner, targetPort: targetPort, owners: 1, dedicated: !reuse,
-		info:        ConnectionInfo{Namespace: namespace, ServiceName: service, ContextName: contextName},
+		info:        ConnectionInfo{Namespace: namespace, ServiceName: service, ContextName: m.contextName},
 		established: make(chan struct{}), stopCh: make(chan struct{})}
 	m.forwards[f] = struct{}{}
 	m.mu.Unlock()
@@ -306,7 +314,7 @@ func (m *Manager) establish(ctx context.Context, f *forward) (*Handle, error) {
 		if lost {
 			log.Printf("[portforward] Lost: %s -> %s/%s (owner=%s): %v", f.info.Address, ns, svc, f.owner, err)
 			if hook := onForwardLost.Load(); hook != nil {
-				(*hook)(&Handle{f: f, borrowed: true})
+				(*hook)(&Handle{f: f})
 			}
 		}
 	}()
@@ -335,9 +343,9 @@ func (m *Manager) establish(ctx context.Context, f *forward) (*Handle, error) {
 	}
 }
 
-// GetAddressForService prefers the caller's own tunnel. Only the requested
-// Service can supply the backend's metrics, even if a peer also speaks PromQL.
-func (m *Manager) GetAddressForService(prefer Owner, contextName, namespace, service string) *Handle {
+// Share acquires a reference to an established, non-dedicated tunnel for the
+// target, preferring one started by the caller's owner.
+func (m *Manager) Share(prefer Owner, namespace, service string, targetPort int) *Handle {
 	if m == nil {
 		return nil
 	}
@@ -345,7 +353,7 @@ func (m *Manager) GetAddressForService(prefer Owner, contextName, namespace, ser
 	defer m.mu.Unlock()
 	var match *forward
 	for f := range m.forwards {
-		if f.active && !f.dedicated && f.info.ContextName == contextName && f.info.Namespace == namespace && f.info.ServiceName == service {
+		if f.active && !f.dedicated && f.matches(namespace, service, targetPort) {
 			match = f
 			if f.owner == prefer {
 				break
@@ -355,27 +363,6 @@ func (m *Manager) GetAddressForService(prefer Owner, contextName, namespace, ser
 	if match == nil {
 		return nil
 	}
-	return &Handle{f: match, borrowed: true}
-}
-
-func (m *Manager) IsActiveAddress(address string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for f := range m.forwards {
-		if f.active && f.info.Address == address {
-			return true
-		}
-	}
-	return false
-}
-
-func (m *Manager) IsConnectedForContext(contextName string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for f := range m.forwards {
-		if f.active && f.info.ContextName == contextName {
-			return true
-		}
-	}
-	return false
+	match.owners++
+	return &Handle{f: match}
 }

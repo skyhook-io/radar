@@ -663,7 +663,7 @@ func connectDiscoveredKubecostEndpoint(ctx context.Context, apiKey, clusterID st
 	if target.dedicated {
 		start = target.forwards.StartDedicated
 	}
-	forward, err := start(owner, ctx, service.Namespace, service.Name, endpoint.targetPort, target.contextName)
+	forward, err := start(owner, ctx, service.Namespace, service.Name, endpoint.targetPort)
 	if err != nil {
 		return Connection{}, fmt.Errorf("%w: port-forward failed: %w", ErrKubecostUnavailable, err)
 	}

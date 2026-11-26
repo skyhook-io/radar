@@ -183,7 +183,7 @@ func TestHubbleClosedForwardManagerSkipsDirectDial(t *testing.T) {
 			defer listener.Close()
 			port := listener.Addr().(*net.TCPAddr).Port
 			client := fake.NewSimpleClientset(relayService(port, intstr.FromInt(4245)))
-			manager := portforward.NewManager(client, &rest.Config{})
+			manager := portforward.NewManager(client, &rest.Config{}, "ctx")
 			defer manager.Close()
 			if closeDuringStart {
 				client.PrependReactor("get", "services", func(ktesting.Action) (bool, runtime.Object, error) {

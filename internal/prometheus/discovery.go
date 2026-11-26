@@ -137,7 +137,6 @@ func (c *Client) discover(ctx context.Context, gen uint64) (discoveredEndpoint, 
 	// Layer 1: Manual URL override
 	c.mu.RLock()
 	manualURL := c.manualURL
-	contextName := c.contextName
 	k8sClient := c.k8sClient
 	relay := c.relay
 	c.mu.RUnlock()
@@ -318,13 +317,7 @@ func (c *Client) discover(ctx context.Context, gen uint64) (discoveredEndpoint, 
 		}
 		c.setDiscoveryServiceFromCandidate(cand)
 
-		// Reuse an existing managed forward (this owner's own, or a peer's such as
-		// the traffic source) only when it already targets THIS candidate. Matching
-		// on (namespace, service) avoids adopting a forward bound to a different
-		// backend — the reason resource metrics could otherwise land on caretta-vm
-		// via a blind cross-owner shortcut. Reuse follows the same per-candidate
-		// order as the port-forward attempts below.
-		if handle := c.forwards.GetAddressForService(portforward.OwnerPrometheus, contextName, cand.Namespace, cand.Name); handle != nil {
+		if handle := c.forwards.Share(portforward.OwnerPrometheus, cand.Namespace, cand.Name, cand.TargetPort); handle != nil {
 			pfAddr := handle.Address()
 			connected, err := c.probeForward(ctx, handle, cand, startGen)
 			if err != nil {
@@ -345,7 +338,7 @@ func (c *Client) discover(ctx context.Context, gen uint64) (discoveredEndpoint, 
 		log.Printf("[prometheus] port-forward → %s/%s:%d (source=%s, score=%d)...",
 			cand.Namespace, cand.Name, cand.TargetPort, cand.Source, cand.Score)
 
-		handle, pfErr := c.forwards.Start(portforward.OwnerPrometheus, ctx, cand.Namespace, cand.Name, cand.TargetPort, contextName)
+		handle, pfErr := c.forwards.Start(portforward.OwnerPrometheus, ctx, cand.Namespace, cand.Name, cand.TargetPort)
 		if pfErr != nil {
 			if errors.Is(pfErr, portforward.ErrClosed) {
 				return discoveredEndpoint{}, pfErr
@@ -369,7 +362,6 @@ func (c *Client) discover(ctx context.Context, gen uint64) (discoveredEndpoint, 
 		addr := handle.Address()
 		connected, err := c.probeForward(ctx, handle, cand, startGen)
 		if err != nil {
-			handle.Stop()
 			return discoveredEndpoint{}, err
 		}
 		if connected != nil {
@@ -378,7 +370,6 @@ func (c *Client) discover(ctx context.Context, gen uint64) (discoveredEndpoint, 
 			return discoveredEndpoint{addr, cand.BasePath, connected}, nil
 		}
 
-		handle.Stop()
 		// A failed probe on a cancelled context is supersession, not a dead
 		// Prometheus — don't slander the endpoint in errorlog.
 		if err := ctx.Err(); err != nil {
@@ -609,7 +600,12 @@ func (c *Client) setDiscoveryServiceFromCandidate(cand prom.Candidate) {
 
 // Check liveness with the publication lock held: a loss callback may already
 // have run while the probe was completing.
-func (c *Client) probeForward(ctx context.Context, forward *portforward.Handle, cand prom.Candidate, gen uint64) (*portforward.Handle, error) {
+func (c *Client) probeForward(ctx context.Context, forward *portforward.Handle, cand prom.Candidate, gen uint64) (adopted *portforward.Handle, err error) {
+	defer func() {
+		if adopted == nil {
+			forward.Stop()
+		}
+	}()
 	if !forward.Alive() {
 		return nil, nil
 	}

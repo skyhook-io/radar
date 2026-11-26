@@ -200,6 +200,6 @@ func (c *Connection) PortForwards() *portforward.Manager {
 	if c == nil {
 		return nil
 	}
-	c.forwardOnce.Do(func() { c.forwards = portforward.NewManager(c.ClientInterface(), c.Config()) })
+	c.forwardOnce.Do(func() { c.forwards = portforward.NewManager(c.ClientInterface(), c.Config(), c.ContextName()) })
 	return c.forwards
 }

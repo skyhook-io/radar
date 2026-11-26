@@ -427,10 +427,10 @@ func (c *CarettaSource) discoverPrometheusLocked(ctx context.Context) {
 			// running managed forward is reachable. Reuse one only if it targets the
 			// SAME service we just discovered. A generic reachability probe can't tell
 			// caretta-vm apart from the cluster's general Prometheus (both answer
-			// /api/v1/query), so match on (namespace, service) — otherwise we'd adopt
+			// /api/v1/query), so match the Service and target port — otherwise we'd adopt
 			// the general-metrics forward and query it for caretta_links_observed,
 			// which returns 0 flows silently. Starting a new forward is Connect()'s job.
-			if handle := c.forwards.GetAddressForService(portforward.OwnerTraffic, c.currentContext, info.namespace, info.name); handle != nil {
+			if handle := c.forwards.Share(portforward.OwnerTraffic, info.namespace, info.name, info.targetPort); handle != nil {
 				pfAddr := handle.Address()
 				switch c.acceptForwardLocked(ctx, info, handle) {
 				case backendAccepted:
@@ -440,6 +440,7 @@ func (c *CarettaSource) discoverPrometheusLocked(ctx context.Context) {
 				case backendNoCarettaData:
 					wrongData = true
 				}
+				handle.Stop()
 			}
 		}
 
@@ -958,7 +959,6 @@ func (c *CarettaSource) Close() error {
 }
 
 // Connect establishes connection to metrics service, starting port-forward if needed
-// contextName is the current K8s context name, used to validate port-forward belongs to right cluster
 func (c *CarettaSource) Connect(ctx context.Context, contextName string) (*portforward.ConnectionInfo, error) {
 	if c.managedMetrics {
 		if err := connections.Refresh(config.IntegrationMetrics); err != nil {
@@ -1104,26 +1104,16 @@ func (c *CarettaSource) tryConnectLocked(ctx context.Context, contextName string
 		// guaranteed multi-second dead-wait per candidate — so skip it and go
 		// straight to a port-forward.
 
-		// Check if there's already a valid managed port-forward for this context that
-		// targets the SAME service we discovered. Matching on (namespace, service)
-		// stops the traffic source from adopting the general-metrics forward (owner=
-		// prometheus, e.g. prometheus-operated:9090): it answers the generic probe but
-		// holds no caretta_links_observed, so flows would come back empty. On no match
-		// we fall through and start the dedicated forward below.
-		if handle := c.forwards.GetAddressForService(portforward.OwnerTraffic, contextName, info.namespace, info.name); handle != nil {
+		if handle := c.forwards.Share(portforward.OwnerTraffic, info.namespace, info.name, info.targetPort); handle != nil {
 			pfAddr := handle.Address()
-			switch c.acceptForwardLocked(ctx, info, handle) {
-			case backendAccepted:
+			verdict := c.acceptForwardLocked(ctx, info, handle)
+			if verdict == backendAccepted {
 				log.Printf("[caretta] Using existing port-forward at %s", pfAddr)
 				c.bindLocked(pfAddr, info, handle)
-				return &portforward.ConnectionInfo{
-					Connected:   true,
-					Address:     pfAddr,
-					Namespace:   info.namespace,
-					ServiceName: info.name,
-					ContextName: contextName,
-				}
-			case backendNoCarettaData:
+				return handle.Info()
+			}
+			handle.Stop()
+			if verdict == backendNoCarettaData {
 				noData = append(noData, target)
 				continue
 			}
@@ -1137,7 +1127,7 @@ func (c *CarettaSource) tryConnectLocked(ctx context.Context, contextName string
 
 		// Start a new managed port-forward
 		log.Printf("[caretta] Starting port-forward to %s/%s:%d (targetPort=%d)", info.namespace, info.name, info.port, info.targetPort)
-		forward, err := c.forwards.Start(portforward.OwnerTraffic, ctx, info.namespace, info.name, info.targetPort, contextName)
+		forward, err := c.forwards.Start(portforward.OwnerTraffic, ctx, info.namespace, info.name, info.targetPort)
 		if err != nil {
 			lastErr = fmt.Sprintf("Failed to start port-forward to %s/%s: %v", info.namespace, info.name, err)
 			log.Printf("[caretta] %s", lastErr)
