@@ -52,6 +52,9 @@ func IsRadarVocabularyGroup(group string) bool {
 	return false
 }
 
+// OwnerAccessGroupPrefix is reserved for trusted Radar Cloud grants.
+const OwnerAccessGroupPrefix = "radar:owner-access:"
+
 // ForwardedIdentityAllowed decides whether an identity may be impersonated. It
 // enforces:
 //
@@ -71,7 +74,7 @@ func ForwardedIdentityAllowed(username string, groups []string, cloudMode bool) 
 		// system:authenticated is the one reserved group a proxy may assert:
 		// every signed-in user has it, and the API server adds it to every
 		// impersonated user anyway.
-		if IsReservedPrincipal(g) && g != "system:authenticated" {
+		if (!cloudMode && strings.HasPrefix(g, OwnerAccessGroupPrefix)) || (IsReservedPrincipal(g) && g != "system:authenticated") {
 			return false
 		}
 	}

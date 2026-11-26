@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { formatCompactAge, formatCPUString, formatMemoryString, formatRelativeAgeTime, parseCPUToNanocores, parseMemoryToBytes, parseQuantity, parseQuantityToNumber } from './format'
+import { formatCompactAge, formatCPUString, splitCamelCase, formatMemoryString, formatRelativeAgeTime, parseCPUToNanocores, parseMemoryToBytes, parseQuantity, parseQuantityToNumber } from './format'
 
 describe('formatCPUString', () => {
   it('renders exact zero as zero, not a fabricated near-zero', () => {
@@ -203,5 +203,53 @@ describe('parseQuantity', () => {
   it.each(['', 'abcMi', '.', '1.2.3', '5Xi', null, undefined])('cannot read %s', (input) => {
     expect(parseQuantity(input)).toBeNull()
     expect(parseQuantityToNumber(input)).toBe(0)
+  })
+})
+
+describe('splitCamelCase', () => {
+  it.each([
+    ['AToB', 'A To B'],
+    ['HTTPToHTTPS', 'HTTP To HTTPS'],
+    ['TLSInUse', 'TLS In Use'],
+    ['PLEGOnDemandRelist', 'PLEG On Demand Relist'],
+    ['noVBMIByInstanceType', 'no VBMI By Instance Type'],
+    ['CPUToRAM', 'CPU To RAM'],
+    ['VPCId', 'VPC Id'],
+    ['podIPs', 'pod IPs'],
+    ['APIs', 'APIs'],
+    ['APIsReady', 'APIs Ready'],
+    ['PVCsReady', 'PVCs Ready'],
+    ['IPv6', 'IPv6'],
+    ['IPv6Address', 'IPv6 Address'],
+    ['assignedIPv4', 'assigned IPv4'],
+    ['ETCD', 'ETCD'],
+    ['ETCDBackup', 'ETCD Backup'],
+    ['PIDPressure', 'PID Pressure'],
+    ['CSIDriver', 'CSI Driver'],
+    ['myASN', 'my ASN'],
+    ['OAuthClient', 'O Auth Client'],
+    ['K8sCluster', 'K8s Cluster'],
+    ['x509Cert', 'x509 Cert'],
+    ['v1beta1', 'v1beta1'],
+    ['préFix', 'pré Fix'],
+    ['A', 'A'],
+    ['XAxis', 'X Axis'],
+    ['ID', 'ID'],
+    ['URLs', 'URLs'],
+    ['TLSIsEnabled', 'TLSIs Enabled'],
+    ['hostIP', 'host IP'],
+    ['hostIPs', 'host IPs'],
+    ['podIP', 'pod IP'],
+    ['containerID', 'container ID'],
+    ['imageID', 'image ID'],
+    ['podCIDRs', 'pod CIDRs'],
+    ['DNSReady', 'DNS Ready'],
+    ['HTTPRoute', 'HTTP Route'],
+    ['observedGeneration', 'observed Generation'],
+    ['DiskPressure', 'Disk Pressure'],
+    ['PersistentVolumeClaim', 'Persistent Volume Claim'],
+    ['ipv4Address', 'ipv4 Address'],
+  ])('%s → %s', (input, out) => {
+    expect(splitCamelCase(input)).toBe(out)
   })
 })

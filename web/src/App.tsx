@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react'
 import { flushSync } from 'react-dom'
-import { isRightsizingScanPath } from './utils/page-links'
+import { isRightsizingScanPath, useClearLinkedIssue } from './utils/page-links'
 import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
 import { englishPlural } from '@skyhook-io/k8s-ui/utils/pluralize'
 import { useQueryClient } from '@tanstack/react-query'
@@ -367,6 +367,7 @@ interface AppProps {
 function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterLoadStateChange }: AppProps) {
   useLayoutEffect(() => () => resetNavigationMap(), [])
   const navigate = useNavigate()
+  const clearLinkedIssue = useClearLinkedIssue()
   const location = useLocation()
   const navigationType = useNavigationType()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -1923,7 +1924,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         scroll sideways at desktop width instead (see PHONE_READY_VIEWS). */}
     <div
       className={`relative flex bg-theme-base ${navCustomization.embedded ? 'h-full min-h-0' : 'h-screen'}`}
-      style={{ minWidth: (isMobile ? 360 : 800) + (showNavRail ? (navRailEffectivePinned ? 176 : 56) : 0) }}
+      style={{ minWidth: isMobile && mainView === 'issues'
+        ? 0 // Issue rows adapt to the space beside the rail, even on a 360px phone.
+        : (isMobile ? 360 : 800) + (showNavRail ? (navRailEffectivePinned ? 176 : 56) : 0) }}
     >
       {showNavRail && (
         <PrimaryNavRail
@@ -1964,6 +1967,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
                 variant="segment"
                 disabled={namespaceFilter.disabled}
                 disabledTooltip={namespaceFilter.tooltip}
+                onApply={mainView === 'issues' ? clearLinkedIssue : undefined}
               />
             </ScopePill>
             {/* Connection status — a fixed-size dot (state in the tooltip), an
@@ -2037,7 +2041,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
               navigate({ pathname: `/resources/${kind}`, search: params.toString() })
             }}
             onSwitchContext={commandSwitch.requestSwitch}
-            onSetNamespaces={(ns) => { setNamespaces(ns); setActiveNamespace.mutate({ namespaces: ns }) }}
+            onSetNamespaces={(ns) => {
+              if (mainView === 'issues') clearLinkedIssue()
+              setNamespaces(ns)
+              setActiveNamespace.mutate({ namespaces: ns })
+            }}
             onToggleTheme={toggleTheme}
             onShowDiagnostics={() => setShowDiagnostics(true)}
             onShowWhatsNew={whatsNewStatus.available ? openWhatsNew : undefined}
@@ -2221,6 +2229,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             topology={topology}
             fallbackClusterLoadState={showHomeClusterLoadFallback ? clusterLoadState : undefined}
             onNavigateToView={setMainView}
+            onNavigateToIssue={takeover.issues ? undefined : (id) => setMainView('issues', { issue: id })}
             onNavigateToHelmRelease={navCustomization.embedded ? undefined : navigateToHelmRelease}
             onNavigateToManagerPath={navCustomization.embedded || takeover.gitops ? undefined : navigateToPath}
             // Upgrade impact lives under /checks, which a Cloud host takes

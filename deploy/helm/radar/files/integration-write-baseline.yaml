@@ -1,0 +1,66 @@
+# Extra Kubernetes permissions created by the chart for Radar Cloud Owners.
+# Each capability has a separate owner switch. Rules apply to the full object.
+capabilities:
+  argocd:
+    # Used when cloud.defaultRbac.integrationWrite.argocd.owner is absent (e.g. --reuse-values).
+    default: true
+  velero:
+    default: true
+  cnpg:
+    # The default applies to built-in Owner roles. Custom roles can opt in.
+    default: true
+  velero-download:
+    default: false
+  velero-delete:
+    default: false
+entries:
+  - group: "argoproj.io"
+    resources: ["applications"]
+    verbs: ["get", "patch"]
+    collection: "argo"
+    capability: argocd
+  - group: "velero.io"
+    resources: ["downloadrequests"]
+    verbs: ["create", "get", "delete"]
+    collection: "velero"
+    capability: velero-download
+  - group: "velero.io"
+    resources: ["schedules"]
+    verbs: ["get", "patch"]
+    collection: "velero"
+    capability: velero
+  - group: "velero.io"
+    resources: ["backups"]
+    verbs: ["get", "create"]
+    collection: "velero"
+    capability: velero
+  - group: "velero.io"
+    resources: ["deletebackuprequests"]
+    verbs: ["list", "create"]
+    collection: "velero"
+    capability: velero-delete
+  - group: "postgresql.cnpg.io"
+    resources: ["clusters"]
+    verbs: ["get", "patch"]
+    collection: "cloudnativePg"
+    capability: cnpg
+  - group: "postgresql.cnpg.io"
+    resources: ["clusters/status"]
+    verbs: ["patch"]
+    collection: "cloudnativePg"
+    capability: cnpg
+  - group: "postgresql.cnpg.io"
+    resources: ["backups"]
+    verbs: ["get", "list", "create"]
+    collection: "cloudnativePg"
+    capability: cnpg
+  - group: "postgresql.cnpg.io"
+    resources: ["scheduledbackups"]
+    verbs: ["get", "patch"]
+    collection: "cloudnativePg"
+    capability: cnpg
+  - group: "postgresql.cnpg.io"
+    resources: ["poolers"]
+    verbs: ["get", "patch"]
+    collection: "cloudnativePg"
+    capability: cnpg

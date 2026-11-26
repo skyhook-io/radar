@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/helmhistory"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 
@@ -175,7 +176,7 @@ func TestIssueReleasesMatchAFullRead(t *testing.T) {
 	}
 	for scopeName, namespaces := range scopes {
 		t.Run(scopeName, func(t *testing.T) {
-			oldRows, err := listReleasesAcrossNamespacesWithClient(context.Background(), full, "", namespaces, false, nil)
+			oldRows, err := listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), full, "", namespaces, false, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -215,7 +216,7 @@ func TestIssueReleasesFallBackToAFullReadWithoutHelmLabels(t *testing.T) {
 	unlabelled := helmReleaseSecret(t, "apps", helmTestRelease("legacy", "apps", 1, release.StatusFailed, "Release \"legacy\" failed: timed out"), true)
 	secrets = append(secrets, unlabelled)
 
-	oldRows, err := listReleasesAcrossNamespacesWithClient(context.Background(), fake.NewSimpleClientset(secretsToObjects(secrets)...), "", nil, false, nil)
+	oldRows, err := listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), fake.NewSimpleClientset(secretsToObjects(secrets)...), "", nil, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

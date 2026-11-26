@@ -1342,7 +1342,10 @@ func fallbackNamespaceCandidatesLocked() []string {
 func SetNamespaceScopeOverride(ns string) {
 	clientMu.Lock()
 	namespaceScopeOverride = ns
-	Current().ResetPermissions()
+	if conn := Current(); conn != nil {
+		conn.scopeOverride = ns
+		conn.ResetPermissions()
+	}
 	clientMu.Unlock()
 }
 
@@ -1375,12 +1378,24 @@ func RestoreNamespaceScopePreference(contextName string) {
 func GetNamespaceScopeTarget() string {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
-	return namespaceScopeTargetLocked(contextName, contextNamespace)
+	return namespaceScopeTargetLocked(namespaceScopeOverride, contextName, contextNamespace)
 }
 
-func namespaceScopeTargetLocked(name, namespace string) string {
-	if namespaceScopeOverride != "" {
-		return namespaceScopeOverride
+// NamespaceScopeTarget returns the connection's namespace for --namespace-scope.
+// A nil receiver uses the process-wide override, then the startup fallback
+// if it was set for an empty context name.
+func (c *Connection) NamespaceScopeTarget() string {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	if c == nil {
+		return namespaceScopeTargetLocked(namespaceScopeOverride, "", "")
+	}
+	return namespaceScopeTargetLocked(c.scopeOverride, c.contextName, c.contextNamespace)
+}
+
+func namespaceScopeTargetLocked(override, name, namespace string) string {
+	if override != "" {
+		return override
 	}
 	// --namespace is an *initial* filter, so it only pins the scope while we're on
 	// the context it was set for. After a cross-cluster switch the new context's own
@@ -1528,7 +1543,7 @@ func (c *Connection) namespaceListInputs() namespaceListInputs {
 		candidates:     fallbackNamespaceCandidatesLocked(),
 		granted:        slices.Clone(rbacNamespaces),
 		forceNamespace: ForceNamespaceScope,
-		target:         namespaceScopeTargetLocked(c.contextName, c.contextNamespace),
+		target:         namespaceScopeTargetLocked(c.scopeOverride, c.contextName, c.contextNamespace),
 	}
 }
 

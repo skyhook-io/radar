@@ -63,7 +63,7 @@ func (c *Client) upgradeRequest(ctx context.Context, namespace, name, version, r
 }
 
 func (h *Handlers) handleSourceVersions(w http.ResponseWriter, r *http.Request) {
-	c := GetClient()
+	c := GetClient(r.Context())
 	if c == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return

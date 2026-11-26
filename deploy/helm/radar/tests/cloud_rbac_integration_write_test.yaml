@@ -1,0 +1,195 @@
+suite: Radar Cloud Owner access
+templates:
+  - cloud-rbac-integration-write.yaml
+set:
+  cloud.enabled: true
+  cloud.token: dummy
+  cloud.url: wss://cloud.example
+  cloud.clusterName: test
+tests:
+  - it: grants the standard capabilities to separate dedicated groups
+    asserts:
+      - hasDocuments:
+          count: 6
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [argoproj.io]
+              resources: [applications]
+              verbs: [get, patch]
+        documentIndex: 0
+      - equal:
+          path: subjects
+          value:
+            - kind: Group
+              name: radar:owner-access:argocd
+              apiGroup: rbac.authorization.k8s.io
+        documentIndex: 1
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [postgresql.cnpg.io]
+              resources: [clusters]
+              verbs: [get, patch]
+            - apiGroups: [postgresql.cnpg.io]
+              resources: [clusters/status]
+              verbs: [patch]
+            - apiGroups: [postgresql.cnpg.io]
+              resources: [backups]
+              verbs: [get, list, create]
+            - apiGroups: [postgresql.cnpg.io]
+              resources: [scheduledbackups]
+              verbs: [get, patch]
+            - apiGroups: [postgresql.cnpg.io]
+              resources: [poolers]
+              verbs: [get, patch]
+        documentIndex: 2
+      - equal:
+          path: subjects[0].name
+          value: radar:owner-access:cnpg
+        documentIndex: 3
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [velero.io]
+              resources: [schedules]
+              verbs: [get, patch]
+            - apiGroups: [velero.io]
+              resources: [backups]
+              verbs: [get, create]
+        documentIndex: 4
+      - equal:
+          path: subjects[0].name
+          value: radar:owner-access:velero
+        documentIndex: 5
+  - it: provisions backup-data access and deletion only with separate approvals
+    set:
+      cloud.defaultRbac.integrationWrite.velero-download.owner: true
+      cloud.defaultRbac.integrationWrite.velero-delete.owner: true
+    asserts:
+      - hasDocuments:
+          count: 10
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [velero.io]
+              resources: [deletebackuprequests]
+              verbs: [list, create]
+        documentIndex: 6
+      - equal:
+          path: subjects[0].name
+          value: radar:owner-access:velero-delete
+        documentIndex: 7
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [velero.io]
+              resources: [downloadrequests]
+              verbs: [create, get, delete]
+        documentIndex: 8
+      - equal:
+          path: subjects[0].name
+          value: radar:owner-access:velero-download
+        documentIndex: 9
+  - it: download approval does not provision deletion
+    set:
+      cloud.defaultRbac.integrationWrite.velero-download.owner: true
+    asserts:
+      - hasDocuments:
+          count: 8
+      - equal:
+          path: subjects[0].name
+          value: radar:owner-access:velero-download
+        documentIndex: 7
+  - it: namespace scoping uses RoleBindings and omits all Velero grants
+    set:
+      rbac.namespaces: [apps, databases]
+      cloud.defaultRbac.integrationWrite.velero-download.owner: true
+      cloud.defaultRbac.integrationWrite.velero-delete.owner: true
+    asserts:
+      - hasDocuments:
+          count: 6
+      - isKind:
+          of: RoleBinding
+        documentIndex: 1
+      - equal:
+          path: metadata.namespace
+          value: apps
+        documentIndex: 1
+      - isKind:
+          of: RoleBinding
+        documentIndex: 2
+      - equal:
+          path: metadata.namespace
+          value: databases
+        documentIndex: 2
+      - equal:
+          path: subjects[0].name
+          value: radar:owner-access:cnpg
+        documentIndex: 4
+  - it: custom owner roles get Argo CD by default and omit all Velero grants
+    set:
+      cloud.defaultRbac.ownerClusterRole: custom-operator
+      cloud.defaultRbac.integrationWrite.velero-download.owner: true
+      cloud.defaultRbac.integrationWrite.velero-delete.owner: true
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: subjects[0].name
+          value: radar:owner-access:argocd
+        documentIndex: 1
+  - it: each approval can be disabled explicitly
+    set:
+      cloud.defaultRbac.integrationWrite.argocd.owner: false
+    asserts:
+      - hasDocuments:
+          count: 4
+      - equal:
+          path: subjects[0].name
+          value: radar:owner-access:cnpg
+        documentIndex: 1
+  - it: an omitted map uses cluster approval defaults
+    set:
+      cloud.defaultRbac.integrationWrite: null
+    asserts:
+      - hasDocuments:
+          count: 6
+  - it: respects customer-managed Kubernetes roles
+    set:
+      cloud.defaultRbac.create: false
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: omits grants when the owner tier is disabled
+    set:
+      cloud.defaultRbac.owner: false
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: omits grants outside Radar Cloud
+    set:
+      cloud.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: omits grants when chart RBAC is disabled
+    set:
+      rbac.create: false
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: honors collection controls
+    set:
+      rbac.crdGroups.argo: false
+      rbac.crdGroups.cloudnativePg: false
+      rbac.crdGroups.velero: false
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: rejects unsupported grant IDs
+    set:
+      cloud.defaultRbac.integrationWrite.flux.owner: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "integrationWrite"

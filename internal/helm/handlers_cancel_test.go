@@ -74,12 +74,12 @@ func TestHelmListAndUpgradeCheckRecordOnlyRealFailures(t *testing.T) {
 	// cluster disconnected; keep that out of later tests.
 	previousStatus := k8s.GetConnectionStatus()
 	t.Cleanup(func() { k8s.SetConnectionStatus(previousStatus) })
-	ResetClient()
-	if err := InitializeWithRESTConfig(config); err != nil {
-		t.Fatal(err)
-	}
+	ResetTestClient()
+	previousConfig := k8s.SetTestConfig(config)
+	t.Cleanup(func() { k8s.SetTestConfig(previousConfig) })
+	Initialize()
 	t.Cleanup(func() {
-		ResetClient()
+		ResetTestClient()
 		k8s.SetTestClient(previousClient)
 	})
 

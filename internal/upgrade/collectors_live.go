@@ -65,7 +65,8 @@ func sameNamespaceScope(a, b []string) bool {
 }
 
 func collectUpgradeHelmManifests(ctx context.Context, namespaces []string) ([]upgradereadiness.ManifestResource, []string, int) {
-	client := helm.GetClient()
+	ctx = k8s.CaptureConnection(ctx)
+	client := helm.GetClient(ctx)
 	if client == nil {
 		return nil, nil, 0
 	}

@@ -109,6 +109,9 @@ func checkClusterGlobals(t *testing.T, dir string) {
 		cacheName := strings.Contains(lowerName, "capabilit") || strings.Contains(lowerName, "perm")
 		policyState := strings.Contains(lowerName, "kyverno") || strings.Contains(lowerName, "policyreport") || strings.Contains(lowerName, "warmup")
 		policyCounter := policyState && (strings.HasSuffix(lowerName, "gen") || strings.HasSuffix(lowerName, "generation"))
+		if name == "helmResetFunc" || name == "helmReinitFunc" {
+			t.Errorf("%s: Helm operations use the request connection and need no switch callback", name)
+		}
 		if forwardMap || policyCounter || strings.Contains(lowerName, "cachegeneration") || strings.Contains(lowerName, "cacheonce") || slices.Contains(denied, typeName) || wrapped || (cacheName && cacheType) {
 			t.Errorf("%s: %s has type %s: cluster state belongs on *Connection", fset.Position(v.Pos()), name, typeName)
 		}
