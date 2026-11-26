@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react'
-import { Activity, BellOff, Bot, Boxes, Braces, Database, GitBranch, GitCompareArrows, HardDrive, Hourglass, Layers, MessageCircleQuestionMark, Network, RefreshCcw, Scale, ScanSearch, ScrollText, Search, ShieldAlert, SlidersHorizontal, Undo2, Zap } from 'lucide-react'
+import { Activity, BellOff, Bot, Boxes, Braces, Bug, ChartLine, Database, Download, GitBranch, GitCompareArrows, HardDrive, History, Hourglass, Layers, MessageCircleQuestionMark, Network, RefreshCcw, Scale, ScanSearch, ScrollText, Search, ShieldAlert, SlidersHorizontal, Undo2, Workflow, Zap } from 'lucide-react'
 import { compareVersions } from '../../utils/version'
 
 export interface ReleaseHighlight {
@@ -48,6 +48,70 @@ export const CHANGELOG_URL = 'https://radarhq.io/changelog'
 // major release must have its own entry: scripts/check-whats-new.sh refuses to
 // release one without it.
 export const RELEASE_NOTES: ReleaseNotes[] = [
+  {
+    version: 'v1.22.0',
+    highlights: [
+      {
+        id: 'issues-recent-changes',
+        icon: GitCompareArrows,
+        title: 'See what changed before an issue started',
+        description: 'Issues show recent changes to the affected resource and group related issues into one panel per application.',
+        leadDescription: 'Issue rows and expanded issues show the recent changes to the affected resource, so you can see what happened just before it broke. Related issues are grouped into one panel per application, and a linked issue opens its application panel.',
+        importance: 7,
+        path: '/issues',
+        cta: 'Open Issues',
+      },
+      {
+        id: 'pod-debug-container',
+        icon: Bug,
+        title: 'Debug a Pod from its details',
+        description: 'Start a debug container from Pod details. Terminals keep your input and reopen running debug containers.',
+        importance: 7,
+      },
+      {
+        id: 'argo-workflows-actions',
+        icon: Workflow,
+        title: 'Stop Argo Workflows and submit templates',
+        description: 'Stop or terminate a running Argo Workflow, or submit a WorkflowTemplate, from its page in Radar.',
+        importance: 7,
+      },
+      {
+        id: 'app-deploys-timeline',
+        icon: History,
+        title: 'App deploys and workload revisions',
+        description: 'Applications show recorded deploys and workload revisions on one shared Timeline.',
+        importance: 7,
+        path: '/applications',
+        cta: 'Open Applications',
+      },
+      {
+        id: 'more-metrics-sources',
+        icon: ChartLine,
+        title: 'OpenObserve and GKE metrics',
+        description: 'Use OpenObserve as a metrics source, and see GKE system metrics from Cloud Monitoring in resource and workload charts.',
+        importance: 6,
+      },
+      {
+        id: 'graph-and-csv-export',
+        icon: Download,
+        title: 'Export graphs and vulnerabilities',
+        description: 'Export Topology and Live Traffic as SVG, draw.io or an image, and download Vulnerabilities as CSV.',
+        importance: 5,
+        path: '/topology',
+        cta: 'Open Topology',
+      },
+    ],
+    improvements: [
+      'New views for MetalLB, Longhorn volumes, k3s HelmCharts, native mutating admission policies and Flux ArtifactGenerators',
+      'GitOps actions explain missing permissions before you run them and say why a failed Argo CD or Flux action failed',
+      'Copy a Secret value without revealing it, and open combined logs straight from a ReplicaSet',
+      'Name the Job when triggering a CronJob, and Restart refuses when it would not restart the workload you reviewed',
+      'Vulnerabilities sort by exposure, and an empty filtered list says how many matches are in other namespaces',
+      'The kind filter and command palette match kubectl short names',
+      'Remote MCP clients can sign in with OAuth on Radar instances that use OIDC (opt-in)',
+      'The desktop app now requires macOS 13 or later',
+    ],
+  },
   {
     version: 'v1.21.0',
     highlights: [
