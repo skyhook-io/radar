@@ -39,8 +39,9 @@ func (s *Server) handleArgoSyncDiff(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 	defer cancel()
+	ctx = k8s.CaptureConnection(ctx)
 	r = r.WithContext(ctx)
-	conn := k8s.BoundOrCurrent(ctx)
+	conn := k8s.ConnectionFrom(ctx)
 	cache, discovery := conn.ResourceCache(), conn.Discovery()
 	if cache == nil || discovery == nil {
 		s.writeError(w, 503, "Kubernetes discovery is unavailable.")
@@ -100,7 +101,7 @@ func (s *Server) handleArgoSyncDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stillMatches := matches()
-	if current, ok := manager.Get(); !stillMatches || !ok || current != client || k8s.Current() != conn || k8s.GetResourceCache() != cache {
+	if current, ok := manager.Get(); !stillMatches || !ok || current != client || !k8s.StillBound(ctx) || conn.ResourceCache() != cache || connectionruntime.SetFor(conn).ArgoCD != manager {
 		s.writeError(w, 409, "The Application or connection changed during comparison. Reopen this sync to retry.")
 		return
 	}

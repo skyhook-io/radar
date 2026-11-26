@@ -17,7 +17,7 @@ import (
 )
 
 func TestNoClusterGlobals(t *testing.T) {
-	for _, dir := range []string{".", "../portforward", "../helm"} {
+	for _, dir := range []string{".", "../portforward", "../helm", "../prometheus"} {
 		t.Run(filepath.Base(dir), func(t *testing.T) { checkClusterGlobals(t, dir) })
 	}
 }
@@ -76,6 +76,18 @@ func checkClusterGlobals(t *testing.T, dir string) {
 	checked, err := conf.Check("github.com/skyhook-io/radar/internal/"+pkg.Name, fset, files, info)
 	if err != nil {
 		t.Fatal(err)
+	}
+	removed := map[string][]string{
+		"helm":        {"uninstallStarts"},
+		"k8s":         {"resourceObserversMu", "resourceObservers", "OnResourceObserved", "notifyResourceObservers"},
+		"portforward": {"onForwardLost", "SetOnForwardLost"},
+		"prometheus":  {"discoveryGate", "RegisterRediscoverySignals"},
+	}
+	for _, name := range removed[pkg.Name] {
+		switch obj := checked.Scope().Lookup(name).(type) {
+		case *types.Var, *types.Func:
+			t.Errorf("%s: %s belongs to its owning connection or member", fset.Position(obj.Pos()), name)
+		}
 	}
 	if pkg.Name == "k8s" {
 		checkConnectionMethodGetters(t, fset, files, checked, info)

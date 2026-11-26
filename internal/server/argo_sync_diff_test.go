@@ -162,7 +162,7 @@ func TestArgoSyncDiffIdentityAndReadScope(t *testing.T) {
 	}
 	t.Cleanup(k8s.ResetTestDynamicState)
 
-	var wrongApp, changeDuringRender atomic.Bool
+	var wrongApp, changeDuringRender, readmitDuringRender atomic.Bool
 	var identityReads, renderReads atomic.Int32
 	argo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -187,6 +187,11 @@ func TestArgoSyncDiffIdentityAndReadScope(t *testing.T) {
 			want := previous
 			if read == 2 {
 				want = selected
+				if readmitDuringRender.Load() {
+					status := k8s.GetConnectionStatus()
+					k8s.RetireServingConnection()
+					k8s.PublishTestConnectionStatus(status)
+				}
 			}
 			if sha != want {
 				t.Errorf("render revision=%s want %s", sha, want)
@@ -230,6 +235,11 @@ func TestArgoSyncDiffIdentityAndReadScope(t *testing.T) {
 	changeDuringRender.Store(true)
 	if w := request(query); w.Code != 409 || strings.Contains(w.Body.String(), "site") {
 		t.Fatalf("changed identity: %d %s", w.Code, w.Body)
+	}
+	changeDuringRender.Store(false)
+	readmitDuringRender.Store(true)
+	if w := request(query); w.Code != 409 || strings.Contains(w.Body.String(), "site") {
+		t.Fatalf("changed admission: %d %s", w.Code, w.Body)
 	}
 }
 
