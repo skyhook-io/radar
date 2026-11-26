@@ -699,7 +699,7 @@ export function InvestigationEvidencePane({
                 ? `${placedCount} shown above`
                 : collecting
                   ? `${capturedTotal} collected so far`
-                  : "None shown above",
+                  : "Recorded during this investigation",
               resultsSummary,
             ]
               .filter(Boolean)

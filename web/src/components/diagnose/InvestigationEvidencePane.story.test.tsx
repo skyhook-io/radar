@@ -190,7 +190,7 @@ describe("InvestigationEvidencePane under a story", () => {
     );
     expect(html).toContain('data-story-lost-support="nocard"');
     expect(html).toContain("Result in Activity");
-    expect(html).toContain("None shown above");
+    expect(html).toContain("Recorded during this investigation");
     expect(html).toMatch(
       /aria-expanded="true"[^>]*aria-controls="investigation-captured-results"/,
     );
