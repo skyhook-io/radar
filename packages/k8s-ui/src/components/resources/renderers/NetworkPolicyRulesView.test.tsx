@@ -64,6 +64,13 @@ describe('NetworkPolicyRulesView', () => {
     expect(html).not.toContain('Allowed inbound')
   })
 
+  it('paints panels with theme backgrounds', () => {
+    const html = rules({ podSelector: {} }) + appliesTo(largePolicySpec) + rules(largePolicySpec)
+    expect(html).not.toMatch(/bg-(red|indigo)-500\/8/)
+    expect(html).not.toContain('bg-indigo-500')
+    expect(html).toContain('bg-theme-elevated')
+  })
+
   it('marks a staged policy', () => {
     expect(rules(largePolicySpec, true)).toContain('Staged preview')
   })

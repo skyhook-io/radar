@@ -94,7 +94,10 @@ function selectedNames(selector: any): string[] | null {
   }
   if (sets.length === 0) return null
   // Selector requirements are ANDed, so the names are the intersection.
-  return sets.reduce((acc, set) => acc.filter((name) => set.includes(name)))
+  return sets.reduce((acc, set) => {
+    const allowed = new Set(set)
+    return acc.filter((name) => allowed.has(name))
+  })
 }
 
 const item = (label: string, detail?: string): PolicyGroupItem => ({ label, detail, members: [label] })
@@ -114,6 +117,7 @@ function groupPeers(peers: unknown, peerKey: 'from' | 'to', namespace?: string):
   const plainCidrs: string[] = []
   const exceptItems: PolicyGroupItem[] = []
   const rawCidrs: string[] = []
+  const seenExcept = new Set<string>()
 
   for (const peer of peers) {
     const hasPod = peer?.podSelector != null
@@ -122,9 +126,11 @@ function groupPeers(peers: unknown, peerKey: 'from' | 'to', namespace?: string):
       const cidr = typeof peer.ipBlock.cidr === 'string' && peer.ipBlock.cidr ? peer.ipBlock.cidr : '?'
       const except = Array.isArray(peer.ipBlock.except) ? peer.ipBlock.except.map(String) : []
       if (except.length > 0) {
-        exceptItems.push(item(cidr, `except ${except.join(', ')}`))
         // The except list travels with the CIDR into filter and copy, or the range reads broader than it is.
-        rawCidrs.push(`${cidr} except ${except.join(', ')}`)
+        const value = `${cidr} except ${except.join(', ')}`
+        if (!seenExcept.has(value)) exceptItems.push(item(cidr, `except ${except.join(', ')}`))
+        seenExcept.add(value)
+        rawCidrs.push(value)
       } else {
         plainCidrs.push(cidr)
         rawCidrs.push(cidr)
@@ -222,31 +228,35 @@ export function collapseCidrRuns(cidrs: string[]): PolicyGroupItem[] {
     if (p) parsed.push(p)
     else rest.push(text)
   }
-  parsed.sort((a, b) => a.value - b.value || a.prefix - b.prefix)
+  // Runs are found per prefix length, so a /25 sorting between two /24s does not break their run.
+  const byPrefix = new Map<number, ParsedCidr[]>()
+  for (const p of parsed) byPrefix.set(p.prefix, [...(byPrefix.get(p.prefix) ?? []), p])
 
-  const items: PolicyGroupItem[] = []
-  let i = 0
-  while (i < parsed.length) {
-    const k = i + 1 < parsed.length ? stepOctet(parsed[i], parsed[i + 1]) : -1
-    let end = i
-    if (k !== -1) {
-      while (end + 1 < parsed.length && stepOctet(parsed[end], parsed[end + 1]) === k) end++
-    }
-    const length = end - i + 1
-    if (length >= MIN_RUN) {
-      const first = parsed[i]
-      const octets = first.octets.map(String)
-      octets[k] = `${first.octets[k]}–${parsed[end].octets[k]}`
-      items.push({
-        label: `${octets.join('.')}/${first.prefix}`,
-        detail: `× ${length}`,
-        members: parsed.slice(i, end + 1).map((p) => p.text),
-      })
-      i = end + 1
-    } else {
-      items.push(item(parsed[i].text))
-      i++
+  const items: { first: ParsedCidr; item: PolicyGroupItem }[] = []
+  for (const list of byPrefix.values()) {
+    list.sort((a, b) => a.value - b.value)
+    let i = 0
+    while (i < list.length) {
+      const k = i + 1 < list.length ? stepOctet(list[i], list[i + 1]) : -1
+      let end = i
+      if (k !== -1) {
+        while (end + 1 < list.length && stepOctet(list[end], list[end + 1]) === k) end++
+      }
+      const length = end - i + 1
+      if (length >= MIN_RUN) {
+        const octets = list[i].octets.map(String)
+        octets[k] = `${list[i].octets[k]}–${list[end].octets[k]}`
+        items.push({
+          first: list[i],
+          item: { label: `${octets.join('.')}/${list[i].prefix}`, detail: `× ${length}`, members: list.slice(i, end + 1).map((p) => p.text) },
+        })
+        i = end + 1
+      } else {
+        items.push({ first: list[i], item: item(list[i].text) })
+        i++
+      }
     }
   }
-  return [...items, ...rest.map((text) => item(text))]
+  items.sort((a, b) => a.first.value - b.first.value || a.first.prefix - b.first.prefix)
+  return [...items.map((x) => x.item), ...rest.map((text) => item(text))]
 }

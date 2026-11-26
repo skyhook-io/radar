@@ -1,5 +1,5 @@
-// Shaped like a real policy whose Policy Flow was unreadable: four ingress
-// rules, one of them with 261 ipBlock peers.
+// A large policy for grouping, CIDR folding and long lists: four ingress rules,
+// one with 261 ipBlock peers and one with 14 namespaces.
 export const nameIn = (...values: string[]) => ({
   matchExpressions: [{ key: 'kubernetes.io/metadata.name', operator: 'In', values }],
 })
