@@ -140,6 +140,27 @@ describe('summarizeNetworkPolicy', () => {
     expect(g[0].items[0].label).toContain('kubernetes.io/metadata.name=a')
   })
 
+  it('shows a duplicated except block once', () => {
+    const peer = { ipBlock: { cidr: '10.0.0.0/8', except: ['10.1.0.0/16'] } }
+    const g = onlyGroup({ ingress: [{ from: [peer, peer] }] })[0]
+    expect(g.items).toHaveLength(1)
+    expect(g.raw).toEqual(['10.0.0.0/8 except 10.1.0.0/16'])
+  })
+
+  it('intersects large name lists quickly', () => {
+    const names = Array.from({ length: 60000 }, (_, i) => `ns-${i}`)
+    const selector = {
+      matchExpressions: [
+        { key: 'kubernetes.io/metadata.name', operator: 'In', values: names },
+        { key: 'kubernetes.io/metadata.name', operator: 'In', values: [...names].reverse() },
+      ],
+    }
+    const started = performance.now()
+    const g = onlyGroup({ ingress: [{ from: [{ namespaceSelector: selector }] }] })[0]
+    expect(performance.now() - started).toBeLessThan(500)
+    expect(g.raw).toHaveLength(60000)
+  })
+
   it('orders groups inside a rule', () => {
     const g = onlyGroup({
       ingress: [{
@@ -188,6 +209,13 @@ describe('collapseCidrRuns', () => {
   it('splits a run at a gap', () => {
     const labels = collapseCidrRuns(['10.0.0.1/32', '10.0.0.2/32', '10.0.0.4/32', '10.0.0.5/32', '10.0.0.6/32']).map((i) => i.label)
     expect(labels).toEqual(['10.0.0.1/32', '10.0.0.2/32', '10.0.0.4–6/32'])
+  })
+
+  it('finds a run even when a range of another prefix length sorts inside it', () => {
+    expect(collapseCidrRuns(['10.0.0.0/24', '10.0.1.0/24', '10.0.1.128/25', '10.0.2.0/24']).map((i) => i.label)).toEqual([
+      '10.0.0–2.0/24',
+      '10.0.1.128/25',
+    ])
   })
 
   it('does not run across prefix lengths', () => {

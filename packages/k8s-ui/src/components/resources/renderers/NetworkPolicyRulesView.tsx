@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { Badge } from '../../ui/Badge'
+import { StatusDot } from '../../ui/status-tone'
 import { NetworkPolicyGroupList } from './NetworkPolicyGroupList'
 import type { NetworkPolicySummary, PolicyDirectionSummary } from '../../../utils/network-policy-summary'
 
@@ -17,7 +18,6 @@ export function NetworkPolicyAppliesTo({ summary }: { summary: NetworkPolicySumm
       <div className="text-xs text-theme-text-tertiary">Applies to</div>
       <div className="flex flex-wrap items-center gap-1.5 min-w-0">
         <span className="inline-flex max-w-full items-center gap-1.5 rounded border border-theme-border bg-theme-elevated px-2 py-0.5 text-xs text-theme-text-primary">
-          <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-indigo-500" />
           <span className="min-w-0 [overflow-wrap:anywhere]">{summary.target}</span>
         </span>
       </div>
@@ -101,8 +101,8 @@ export function PortChips({ ports }: { ports: string[] }) {
 
 export function DenyLine({ children }: { children: ReactNode }) {
   return (
-    <div className="flex items-center gap-1.5 rounded-md border border-red-500/30 bg-red-500/8 px-2.5 py-1.5 text-xs text-theme-text-secondary">
-      <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-red-500" />
+    <div className="flex items-center gap-1.5 rounded-md border border-red-500/30 bg-theme-elevated px-2.5 py-1.5 text-xs text-theme-text-secondary">
+      <StatusDot tone="unhealthy" className="shrink-0" />
       {children}
     </div>
   )
