@@ -682,6 +682,9 @@ export interface DashboardNetworkPolicyCoverage {
   coveredWorkloads: number;
   coveredWorkloadsIfStaged?: number;
   totalWorkloads: number;
+  // Workloads left out of totalWorkloads.
+  ignoredNamespaceWorkloads?: number;
+  hostNetworkWorkloads?: number;
 }
 
 export interface DashboardGitOpsControllers {

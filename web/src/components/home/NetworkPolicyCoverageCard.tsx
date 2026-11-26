@@ -27,7 +27,16 @@ export function NetworkPolicyCoverageCard({ data, onNavigate }: NetworkPolicyCov
   // projection without any staged policies.
   const stagedDeltaPercentage = hasStagedPolicies ? Math.abs(percentageIfStaged - percentage) : 0
   const hasPolicies = data.totalPolicies > 0
-  const accentColor = !hasPolicies
+  const ignoredNamespaceWorkloads = data.ignoredNamespaceWorkloads ?? 0
+  const hostNetworkWorkloads = data.hostNetworkWorkloads ?? 0
+  const notCounted = ignoredNamespaceWorkloads + hostNetworkWorkloads
+  const notCountedReasons = [
+    ignoredNamespaceWorkloads > 0 && `${ignoredNamespaceWorkloads} in namespaces ignored in Checks settings.`,
+    hostNetworkWorkloads > 0 && `${hostNetworkWorkloads} on the host network, where network policies may not apply.`,
+  ].filter(Boolean).join(' ')
+  // With nothing to count, 0% would read as a coverage failure.
+  const hasWorkloads = data.totalWorkloads > 0
+  const accentColor = !hasPolicies || !hasWorkloads
     ? 'text-theme-text-tertiary'
     : percentage >= 75
       ? 'text-green-500'
@@ -58,6 +67,11 @@ export function NetworkPolicyCoverageCard({ data, onNavigate }: NetworkPolicyCov
             <div className="flex flex-col items-center justify-center text-center gap-2">
               <ShieldCheck className="w-8 h-8 text-theme-text-tertiary/40" />
               <span className="text-xs text-theme-text-tertiary">No network policies configured</span>
+            </div>
+          ) : !hasWorkloads ? (
+            <div className="flex flex-col items-center justify-center text-center gap-2">
+              <ShieldCheck className="w-8 h-8 text-theme-text-tertiary/40" />
+              <span className="text-xs text-theme-text-tertiary">No workloads counted</span>
             </div>
           ) : (
             <>
@@ -118,7 +132,17 @@ export function NetworkPolicyCoverageCard({ data, onNavigate }: NetworkPolicyCov
           )}
         </div>
 
-        <div className="px-4 py-1.5 border-t border-theme-border/50 flex items-center justify-end">
+        <div className={clsx(
+          'px-4 py-1.5 border-t border-theme-border/50 flex items-center',
+          notCounted > 0 ? 'justify-between' : 'justify-end',
+        )}>
+          {notCounted > 0 && (
+            <Tooltip content={`Workloads not counted: ${notCountedReasons}`}>
+              <span className="text-[10px] text-theme-text-tertiary">
+                {notCounted} not counted
+              </span>
+            </Tooltip>
+          )}
           <span className={clsx(
             'flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider transition-colors',
             accentColor,
