@@ -1525,6 +1525,14 @@ describe("TurnView tool outcome truth", () => {
     expect(html).toContain("Workload verification");
     expect(html).toContain("Checking the current workload");
     expect(html).not.toContain("internal verification prompt");
+
+    for (const status of ["done", "error"] as const) {
+      const settled = renderToStaticMarkup(
+        <TurnView turn={{ ...verification, status }} />,
+      );
+      expect(settled).toContain("Workload verification");
+      expect(settled).not.toContain("Checking the current workload");
+    }
   });
 
   it("renders an unknown apply prominently and offers current-state verification", () => {

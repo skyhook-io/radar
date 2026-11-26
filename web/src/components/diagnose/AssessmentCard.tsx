@@ -1288,7 +1288,7 @@ function DiagnosisResult({
           {!actionNotice && !recValid && (
             <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-snug text-theme-text-tertiary">
               <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0" />
-              Review these steps before applying them manually.
+              Review these steps before changing the workload.
             </p>
           )}
         </div>

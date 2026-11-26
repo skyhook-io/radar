@@ -318,9 +318,11 @@ export function TurnView({
             <span className="font-medium text-theme-text-primary">
               Workload verification
             </span>
-            <span className="text-theme-text-tertiary">
-              Checking the current workload
-            </span>
+            {turn.status === "running" && (
+              <span className="text-theme-text-tertiary">
+                Checking the current workload
+              </span>
+            )}
           </div>
         ) : (
           <QuestionBubble text={turn.question} actor={turn.actor} />
