@@ -911,8 +911,7 @@ func InstallTestServingConnection(name string, cfg *rest.Config, dyn dynamic.Int
 	RetireServingConnection()
 	clientMu.Lock()
 	contextName = name
-	rawDiscovery, _ := disc.(*discovery.DiscoveryClient)
-	installedConn.Store(installedConnectionLocked(cfg, &sharedKubernetesClients{dynamic: dyn, discovery: rawDiscovery}))
+	installedConn.Store(installedConnectionLocked(cfg, &sharedKubernetesClients{dynamic: dyn}))
 	clientMu.Unlock()
 	if _, err := SetTestResourceDiscovery(disc); err != nil {
 		return "", err

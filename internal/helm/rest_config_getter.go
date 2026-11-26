@@ -4,29 +4,24 @@ import (
 	"fmt"
 	"sync"
 
-	"helm.sh/helm/v3/pkg/action"
-	"helm.sh/helm/v3/pkg/chart"
-	"helm.sh/helm/v3/pkg/chartutil"
-	"helm.sh/helm/v3/pkg/release"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
 	"k8s.io/client-go/tools/clientcmd"
-	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
 // Reopening kubeconfig here could retarget a Helm action after its connection
 // was captured. Discovery and mapping use the same config as release storage.
 type restConfigGetter struct {
-	config     *rest.Config
-	namespace  string
-	user       *pkgauth.User
-	connection *k8s.Connection
+	config    *rest.Config
+	namespace string
+	user      *pkgauth.User
 
 	mu        sync.Mutex
 	discovery discovery.CachedDiscoveryInterface
@@ -59,9 +54,6 @@ func (g *restConfigGetter) ToRESTConfig() (*rest.Config, error) {
 }
 
 func (g *restConfigGetter) ToDiscoveryClient() (discovery.CachedDiscoveryInterface, error) {
-	if dc, _ := g.connection.CachedRESTDiscovery(); dc != nil {
-		return dc, nil
-	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.discovery != nil {
@@ -84,9 +76,6 @@ func (g *restConfigGetter) ToDiscoveryClient() (discovery.CachedDiscoveryInterfa
 }
 
 func (g *restConfigGetter) ToRESTMapper() (meta.RESTMapper, error) {
-	if _, mapper := g.connection.CachedRESTDiscovery(); mapper != nil {
-		return mapper, nil
-	}
 	// ToDiscoveryClient does its own locking; calling it under g.mu would
 	// deadlock since sync.Mutex is non-reentrant. Take the discovery
 	// client first (idempotent), then lock for the mapper cache.
@@ -115,40 +104,4 @@ func (g *restConfigGetter) ToRawKubeConfigLoader() clientcmd.ClientConfig {
 			Context: clientcmdapi.Context{Namespace: g.namespace},
 		},
 	)
-}
-
-func runUpgradeWithCachedDiscovery(cfg *action.Configuration, upgrade *action.Upgrade, name string, ch *chart.Chart, values map[string]any) (*release.Release, error) {
-	if err := loadCachedCapabilities(cfg); err != nil {
-		return nil, err
-	}
-	return upgrade.Run(name, ch, values)
-}
-
-// Helm otherwise invalidates the discovery cache every time it loads chart capabilities.
-func loadCachedCapabilities(cfg *action.Configuration) error {
-	getter, ok := cfg.RESTClientGetter.(*restConfigGetter)
-	if !ok || cfg.Capabilities != nil {
-		return nil
-	}
-	dc, _ := getter.connection.CachedRESTDiscovery()
-	if dc == nil {
-		return nil
-	}
-	version, err := dc.ServerVersion()
-	if err != nil {
-		return fmt.Errorf("could not get server version from Kubernetes: %w", err)
-	}
-	apiVersions, err := action.GetVersionSet(dc)
-	if err != nil {
-		if !discovery.IsGroupDiscoveryFailedError(err) {
-			return err
-		}
-		cfg.Log("WARNING: The Kubernetes server has an orphaned API service. Server reports: %s", err)
-	}
-	cfg.Capabilities = &chartutil.Capabilities{
-		APIVersions: apiVersions,
-		KubeVersion: chartutil.KubeVersion{Version: version.GitVersion, Major: version.Major, Minor: version.Minor},
-		HelmVersion: chartutil.DefaultCapabilities.HelmVersion,
-	}
-	return nil
 }

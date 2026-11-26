@@ -257,7 +257,7 @@ func (c *Client) sourceUpgradeWith(cfg *action.Configuration, name, version stri
 		upgrade.DryRunOption = "client"
 	}
 	progress("upgrading", "Applying the selected chart and settings...", "")
-	result, err := runUpgradeWithCachedDiscovery(cfg, upgrade, name, ch, values)
+	result, err := upgrade.Run(name, ch, values)
 	if err != nil {
 		return nil, err
 	}

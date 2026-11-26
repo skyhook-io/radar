@@ -1,22 +1,12 @@
 package helm
 
 import (
-	"fmt"
-	"io"
-	"net/http"
-	"net/http/httptest"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 
-	"helm.sh/helm/v3/pkg/action"
-	kubefake "helm.sh/helm/v3/pkg/kube/fake"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/rest"
 )
 
@@ -142,112 +132,6 @@ func TestActionConfigUsesCapturedRESTConfig(t *testing.T) {
 	if _, err := (&Client{}).getActionConfig("default"); err == nil {
 		t.Fatal("expected missing config error")
 	}
-}
-
-func TestConnectionHelmDiscovery(t *testing.T) {
-	t.Cleanup(k8s.SnapshotTestConnection())
-	const group = "example.com"
-	var walks atomic.Int32
-	var crdInstalled atomic.Bool
-	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/version":
-			fmt.Fprint(w, `{"major":"1","minor":"34","gitVersion":"v1.34.0"}`)
-		case "/api":
-			walks.Add(1)
-			fmt.Fprint(w, `{"kind":"APIVersions","versions":["v1"]}`)
-		case "/apis":
-			groups := metav1.APIGroupList{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "APIGroupList"}}
-			if crdInstalled.Load() {
-				version := metav1.GroupVersionForDiscovery{GroupVersion: group + "/v1", Version: "v1"}
-				groups.Groups = []metav1.APIGroup{{Name: group, Versions: []metav1.GroupVersionForDiscovery{version}, PreferredVersion: version}}
-			}
-			writeTestJSON(t, w, groups)
-		case "/api/v1":
-			fmt.Fprint(w, `{"kind":"APIResourceList","apiVersion":"v1","groupVersion":"v1","resources":[{"name":"configmaps","kind":"ConfigMap","namespaced":true}]}`)
-		case "/apis/" + group + "/v1":
-			writeTestJSON(t, w, metav1.APIResourceList{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "APIResourceList"}, GroupVersion: group + "/v1", APIResources: []metav1.APIResource{{Name: "widgets", Kind: "Widget", Namespaced: true}}})
-		default:
-			t.Errorf("unexpected discovery request %s", r.URL)
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(api.Close)
-	config := &rest.Config{Host: api.URL, QPS: 50, Burst: 100}
-	install := func() *Client {
-		t.Helper()
-		if _, err := k8s.InstallTestServingConnection("test", config, nil, discovery.NewDiscoveryClientForConfigOrDie(config)); err != nil {
-			t.Fatal(err)
-		}
-		return &Client{conn: k8s.Current()}
-	}
-	client := install()
-	actionConfig := func(t *testing.T, client *Client, namespace string, user *pkgauth.User) *action.Configuration {
-		t.Helper()
-		cfg, err := client.getActionConfigForUser(namespace, user)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return cfg
-	}
-	first := actionConfig(t, client, "default", nil)
-	second := actionConfig(t, client, "other", nil)
-	t.Run("sharing", func(t *testing.T) {
-		getter := func(cfg *action.Configuration) discovery.CachedDiscoveryInterface {
-			t.Helper()
-			dc, err := cfg.RESTClientGetter.ToDiscoveryClient()
-			if err != nil {
-				t.Fatal(err)
-			}
-			return dc
-		}
-		dc := getter(first)
-		if dc != getter(second) {
-			t.Error("two Helm actions on one connection did not share discovery")
-		}
-		if dc == getter(actionConfig(t, install(), "default", nil)) {
-			t.Error("a replacement connection reused discovery")
-		}
-		t.Cleanup(func() { pkgauth.SetCredentialMode(pkgauth.CredentialsImpersonate) })
-		for _, mode := range []pkgauth.CredentialMode{pkgauth.CredentialsImpersonate, pkgauth.CredentialsUserToken} {
-			pkgauth.SetCredentialMode(mode)
-			if dc == getter(actionConfig(t, client, "default", &pkgauth.User{Username: "alice", Token: "alice-token"})) {
-				t.Errorf("caller in %v mode reused Radar's discovery", mode)
-			}
-		}
-	})
-	t.Run("warm render", func(t *testing.T) {
-		before := walks.Load()
-		releases := memoryActionConfig(t).Releases
-		for _, scenario := range []struct {
-			config *action.Configuration
-			mode   installMode
-		}{{first, installFresh}, {second, installUpgrade}} {
-			cfg := scenario.config
-			cfg.Releases, cfg.KubeClient = releases, &kubefake.PrintingKubeClient{Out: io.Discard}
-			if _, err := runInstallOrUpgrade(cfg, &InstallRequest{ReleaseName: "demo", Namespace: "default"}, sourceTestChart("render"), scenario.mode); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if got := walks.Load() - before; got != 1 {
-			t.Errorf("two Helm actions walked discovery %d times, want one", got)
-		}
-	})
-	t.Run("new CRD", func(t *testing.T) {
-		mapper, err := second.RESTClientGetter.ToRESTMapper()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := mapper.RESTMapping(schema.GroupKind{Kind: "ConfigMap"}, "v1"); err != nil {
-			t.Fatal(err)
-		}
-		crdInstalled.Store(true)
-		mapping, err := mapper.RESTMapping(schema.GroupKind{Group: group, Kind: "Widget"}, "v1")
-		if err != nil || mapping.Resource.Resource != "widgets" {
-			t.Fatalf("mapping for new CRD = %v, %v, want widgets", mapping, err)
-		}
-	})
 }
 
 func TestRESTConfigGetter_ToRESTConfig_UserTokenMode(t *testing.T) {
