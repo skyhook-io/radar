@@ -187,54 +187,47 @@ func TestDetectProblems_HPACannotScaleIncludesDiagnosis(t *testing.T) {
 }
 
 func TestDetectProblems_ConfigSignals(t *testing.T) {
-	t.Run("coredns service nxdomain override", func(t *testing.T) {
-		defer ResetTestState()
-
-		client := fake.NewClientset(&corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{Name: "coredns", Namespace: "kube-system", CreationTimestamp: metav1.NewTime(time.Now().Add(-10 * time.Minute))},
-			Data: map[string]string{
-				"Corefile": `template IN A product-catalog.astronomy-shop.svc.cluster.local {
-  rcode NXDOMAIN
+	// A Corefile is configuration, not a live problem: no rule in it becomes an
+	// Issue at any scope, including rules that do break a Service's name.
+	for name, corefile := range map[string]string{
+		"template answering NXDOMAIN for a service name": `.:53 {
+    template IN A product-catalog.astronomy-shop.svc.cluster.local {
+        rcode NXDOMAIN
+    }
+    kubernetes cluster.local
 }`,
-			},
-		})
-		if err := InitTestResourceCache(client); err != nil {
-			t.Fatalf("InitTestResourceCache: %v", err)
-		}
+		"rewrite of a service name": `.:53 {
+    rewrite name product-catalog.astronomy-shop.svc.cluster.local blackhole.svc.cluster.local
+    kubernetes cluster.local
+}`,
+		"rewrite of an outside name to a service": `.:53 {
+    rewrite name regex .*\.nodes\.vcluster\.com kubernetes.default.svc.cluster.local
+    kubernetes cluster.local
+}`,
+	} {
+		t.Run("corefile is never an issue: "+name, func(t *testing.T) {
+			defer ResetTestState()
 
-		for _, p := range DetectProblems(GetResourceCache(), "astronomy-shop") {
-			if p.Reason == "CoreDNS NXDOMAIN override" {
-				t.Fatalf("namespace-scoped DetectProblems leaked CoreDNS issue: %+v", p)
+			client := fake.NewClientset(&corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{Name: "coredns", Namespace: "kube-system", CreationTimestamp: metav1.NewTime(time.Now().Add(-10 * time.Minute))},
+				Data:       map[string]string{"Corefile": corefile},
+			})
+			if err := InitTestResourceCache(client); err != nil {
+				t.Fatalf("InitTestResourceCache: %v", err)
 			}
-		}
-
-		p := waitForProblem(t, "", "CoreDNS NXDOMAIN override")
-		if p.Kind != "ConfigMap" || p.Namespace != "kube-system" || p.Name != "coredns" {
-			t.Fatalf("CoreDNS problem subject = %s/%s/%s, want ConfigMap/kube-system/coredns: %+v", p.Kind, p.Namespace, p.Name, p)
-		}
-		if p.Severity != "warning" {
-			t.Fatalf("CoreDNS severity = %q, want warning", p.Severity)
-		}
-	})
-
-	t.Run("coredns service rewrite", func(t *testing.T) {
-		defer ResetTestState()
-
-		client := fake.NewClientset(&corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{Name: "coredns", Namespace: "kube-system", CreationTimestamp: metav1.NewTime(time.Now().Add(-10 * time.Minute))},
-			Data: map[string]string{
-				"Corefile": `rewrite name product-catalog.astronomy-shop.svc.cluster.local blackhole.svc.cluster.local`,
-			},
+			cache := GetResourceCache()
+			for _, namespace := range []string{"", "astronomy-shop", "kube-system"} {
+				for _, p := range DetectProblems(cache, namespace) {
+					if p.Kind == "ConfigMap" && p.Name == "coredns" {
+						t.Fatalf("DetectProblems(%q) reported the Corefile: %+v", namespace, p)
+					}
+				}
+			}
+			if rules, _ := CoreDNSRuleExcerpts(cache); len(rules) != 1 {
+				t.Fatalf("CoreDNSRuleExcerpts = %+v, want the one rule as an excerpt", rules)
+			}
 		})
-		if err := InitTestResourceCache(client); err != nil {
-			t.Fatalf("InitTestResourceCache: %v", err)
-		}
-
-		p := waitForProblem(t, "", "CoreDNS service DNS rewrite")
-		if p.Kind != "ConfigMap" || p.Namespace != "kube-system" || p.Name != "coredns" {
-			t.Fatalf("CoreDNS rewrite problem subject = %s/%s/%s, want ConfigMap/kube-system/coredns: %+v", p.Kind, p.Namespace, p.Name, p)
-		}
-	})
+	}
 
 	t.Run("env service port mismatch is context when workload is healthy", func(t *testing.T) {
 		defer ResetTestState()

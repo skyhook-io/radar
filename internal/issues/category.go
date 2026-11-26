@@ -249,8 +249,6 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		return issuesapi.CategoryGitOpsStale
 	}
 	switch in.Reason {
-	case "CoreDNS NXDOMAIN override", "CoreDNS service DNS rewrite":
-		return issuesapi.CategoryDNSFailure
 	case "DuplicateEnvVar", "StaleSecretEnv":
 		return issuesapi.CategoryInvalidConfiguration
 	case k8s.NetworkPolicyDenyAllIngressReason:

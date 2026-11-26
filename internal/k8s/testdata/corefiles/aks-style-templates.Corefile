@@ -1,0 +1,28 @@
+.:53 {
+    errors
+    ready
+    health {
+      lameduck 5s
+    }
+    kubernetes cluster.local in-addr.arpa ip6.arpa {
+      pods insecure
+      fallthrough in-addr.arpa ip6.arpa
+      ttl 30
+    }
+    prometheus :9153
+    forward . /etc/resolv.conf
+    cache 30
+    loop
+    reload
+    loadbalance
+    import custom/*.override
+    template ANY ANY internal.cloudapp.net {
+      match "^(?:[^.]+\.){4,}internal\.cloudapp\.net\.$"
+      rcode NXDOMAIN
+      fallthrough
+    }
+    template ANY ANY reddog.microsoft.com {
+      rcode NXDOMAIN
+    }
+}
+import custom/*.server

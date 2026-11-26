@@ -1990,7 +1990,7 @@ func TestClusterDNSContextRequiresTriggerSignal(t *testing.T) {
 	provider := &CacheProvider{cache: k8s.GetResourceCache()}
 
 	if got := provider.ClusterContextForIssues([]string{"prod"}, nil); got != nil {
-		t.Fatalf("static suspicious CoreDNS config should not produce cluster context without symptoms/change evidence: %+v", got)
+		t.Fatalf("stored CoreDNS rules should not produce cluster context without symptoms/change evidence: %+v", got)
 	}
 }
 
@@ -2018,15 +2018,54 @@ func TestClusterDNSContextScansAllNamespacesForSymptoms(t *testing.T) {
 	provider := &CacheProvider{cache: k8s.GetResourceCache()}
 
 	got := provider.ClusterContextForIssues(nil, nil)
-	if got == nil || got.DNS == nil || len(got.DNS.Signals) == 0 {
+	if got == nil || got.DNSConfig == nil || len(got.DNSConfig.Signals) == 0 {
 		t.Fatalf("cluster DNS context = %+v, want namespace DNS symptom signal", got)
 	}
-	if !strings.Contains(strings.Join(got.DNS.Signals, " "), "namespace prod") {
-		t.Fatalf("cluster DNS signals = %+v, want prod namespace symptom", got.DNS.Signals)
+	if !strings.Contains(strings.Join(got.DNSConfig.Signals, " "), "namespace prod") {
+		t.Fatalf("cluster DNS signals = %+v, want prod namespace symptom", got.DNSConfig.Signals)
+	}
+	if len(got.DNSConfig.Rules) != 1 {
+		t.Fatalf("rules = %+v, want the one stored rule", got.DNSConfig.Rules)
+	}
+	f := got.DNSConfig.Rules[0]
+	if f.Kind != "ConfigMap" || f.Namespace != "kube-system" || f.Name != "coredns" || f.Key != "Corefile" || f.Line != 2 {
+		t.Fatalf("finding source = %+v, want ConfigMap kube-system/coredns Corefile line 2", f)
+	}
+	if !strings.Contains(f.Text, "template ANY svc.cluster.local") || !strings.Contains(f.Text, "rcode NXDOMAIN") {
+		t.Fatalf("finding text = %q, want the stored rule copied", f.Text)
 	}
 }
 
-func TestClusterDNSContextFiresOnSuspiciousCoreDNSAndRecentRollout(t *testing.T) {
+// A Corefile with no rewrite or template rule gives the reader nothing to
+// compare a failing name with, so no DNS context is attached even when DNS
+// symptoms exist.
+func TestClusterDNSContextNeedsAStoredRule(t *testing.T) {
+	defer k8s.ResetTestState()
+
+	client := fake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "prod"}},
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "coredns", Namespace: "kube-system"},
+			Data:       map[string]string{"Corefile": ".:53 {\n  kubernetes cluster.local\n  forward . /etc/resolv.conf\n}\n"},
+		},
+		&corev1.Event{
+			ObjectMeta: metav1.ObjectMeta{Name: "dns-failure", Namespace: "prod"},
+			Type:       corev1.EventTypeWarning,
+			Reason:     "Failed",
+			Message:    "lookup checkout.prod.svc.cluster.local: no such host",
+		},
+	)
+	if err := k8s.InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	provider := &CacheProvider{cache: k8s.GetResourceCache()}
+
+	if got := provider.ClusterContextForIssues(nil, nil); got != nil {
+		t.Fatalf("cluster DNS context = %+v, want none without a stored rule", got.DNSConfig)
+	}
+}
+
+func TestClusterDNSContextFiresOnStoredRuleAndRecentRollout(t *testing.T) {
 	defer k8s.ResetTestState()
 
 	trueVal := true
@@ -2085,15 +2124,19 @@ func TestClusterDNSContextFiresOnSuspiciousCoreDNSAndRecentRollout(t *testing.T)
 	provider := &CacheProvider{cache: k8s.GetResourceCache()}
 
 	got := provider.ClusterContextForIssues([]string{"prod"}, nil)
-	if got == nil || got.DNS == nil || len(got.DNS.Findings) != 1 || len(got.DNS.Signals) == 0 {
+	if got == nil || got.DNSConfig == nil || len(got.DNSConfig.Rules) != 1 || len(got.DNSConfig.Signals) == 0 {
 		t.Fatalf("cluster DNS context = %+v, want DNS finding with rollout signal", got)
 	}
-	if !strings.Contains(got.DNS.Signals[0], "CoreDNS Deployment") || !strings.Contains(got.DNS.Hint, "CoreDNS NXDOMAIN override") {
-		t.Fatalf("cluster DNS context = %+v, want directive CoreDNS rollout hint", got.DNS)
+	if !strings.Contains(got.DNSConfig.Signals[0], "CoreDNS Deployment") || !strings.Contains(got.DNSConfig.Rules[0].Text, "rcode NXDOMAIN") {
+		t.Fatalf("cluster DNS context = %+v, want the rollout signal and the stored rule", got.DNSConfig)
+	}
+	// The context reports what is stored. It passes no verdict on it.
+	if strings.Contains(strings.ToLower(got.DNSConfig.Hint), "suspicious") || !strings.Contains(got.DNSConfig.Hint, "CoreDNS ConfigMap has rewrite or template rules") {
+		t.Fatalf("hint = %q, want a neutral pointer to the config", got.DNSConfig.Hint)
 	}
 
 	// A caller that can't read kube-system CoreDNS sources must not learn its
-	// suspicious state via the cluster-context side channel.
+	// config via the cluster-context side channel.
 	if denied := provider.ClusterContextForIssues([]string{"prod"}, func(string, string) bool { return false }); denied != nil {
 		t.Fatalf("cluster DNS context must be suppressed when caller can't read CoreDNS: %+v", denied)
 	}

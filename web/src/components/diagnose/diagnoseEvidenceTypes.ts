@@ -142,16 +142,54 @@ export interface DiagnosisChangeContext {
   evidence?: string;
 }
 
+// A rewrite or template rule copied from a stored CoreDNS Corefile. It is what
+// the ConfigMap says, with no verdict.
+export interface DiagnosisCoreDNSRule {
+  kind: string;
+  namespace: string;
+  name: string;
+  key: string;
+  line: number;
+  text: string;
+  truncated?: boolean;
+}
+
+// What Radar sent before `coreDNSRules`: a verdict on a CoreDNS ConfigMap.
+// Radar Hub shows clusters on that older Radar with this same UI.
+export interface DiagnosisLegacyCoreDNSFinding {
+  kind: string;
+  namespace: string;
+  name: string;
+  severity?: string;
+  reason?: string;
+  message?: string;
+}
+
 export interface DiagnosisDNSContext {
   signals?: string[];
-  coreDNSFindings?: Array<{
-    kind: string;
-    namespace: string;
-    name: string;
-    severity: string;
-    reason: string;
-    message?: string;
-  }>;
+  coreDNSRules?: DiagnosisCoreDNSRule[];
+  // Stored rules left out of coreDNSRules by the server's cap.
+  omittedCoreDNSRules?: number;
+  coreDNSFindings?: DiagnosisLegacyCoreDNSFinding[];
+}
+
+// The configuration facts Radar sends as DNS signals. Each names a resource, so
+// its text is never searched for failure words: a workload can be called
+// "errors-api".
+const DNS_CONFIGURATION_SIGNAL =
+  / uses dnsPolicy=| sets dnsConfig\.|^CoreDNS Deployment |^Radar observed ConfigMap /;
+
+// Whether a DNS signal reports a failed lookup, as opposed to a configuration
+// fact such as a pod's dnsPolicy or a CoreDNS rollout.
+export function dnsSignalReportsFailure(signal: string): boolean {
+  return (
+    !DNS_CONFIGURATION_SIGNAL.test(signal) &&
+    /\b(errors?|failed|failures?|timeouts?|nxdomain|servfail)\b/i.test(signal)
+  );
+}
+
+export function coreDNSRulesSummary(count: number): string {
+  return `${count} CoreDNS rule${count === 1 ? "" : "s"}`;
 }
 
 export type DiagnosisEvidenceTone =

@@ -1116,6 +1116,67 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     expect(html).not.toMatch(/<button[^>]*>shop\/api\.example\.test<\/button>/);
   });
 
+  it("shows a stored CoreDNS rule as copied text with its source and no severity", () => {
+    const rule =
+      "rewrite name regex .*\\.nodes\\.vcluster\\.com kubernetes.default.svc.cluster.local";
+    const html = render(
+      project(
+        tool("diagnose-dns-rules", "diagnose", {
+          resource: {
+            apiVersion: "apps/v1",
+            kind: "Deployment",
+            metadata: { namespace: "shop", name: "api" },
+          },
+          resourceContext: { tier: "basic" },
+          pods: 0,
+          events: [],
+          dnsContext: {
+            signals: ["pod logs contain DNS resolution failures"],
+            coreDNSRules: [
+              {
+                kind: "ConfigMap",
+                namespace: "kube-system",
+                name: "coredns",
+                key: "Corefile",
+                line: 5,
+                text: rule,
+                truncated: true,
+              },
+            ],
+            // What a cluster on an older Radar still sends.
+            coreDNSFindings: [
+              {
+                kind: "ConfigMap",
+                namespace: "kube-system",
+                name: "coredns-custom",
+                severity: "warning",
+                reason: "CoreDNS service DNS rewrite",
+                message: "CoreDNS Corefile contains a rule.",
+              },
+            ],
+            omittedCoreDNSRules: 3,
+          },
+        }),
+      ),
+      false,
+      undefined,
+      undefined,
+      () => {},
+    );
+
+    expect(html).toContain("rules in the CoreDNS config");
+    expect(html).toContain("rewrite name regex");
+    expect(html).toContain("Corefile, line 5");
+    expect(html).toContain("Open the ConfigMap for the whole rule");
+    expect(html).toContain("3 more rules are not shown");
+    expect(html).toMatch(/<button[^>]*>kube-system\/coredns<\/button>/);
+    expect(html).toMatch(/<button[^>]*>kube-system\/coredns-custom<\/button>/);
+    expect(html).toContain(
+      "CoreDNS service DNS rewrite: CoreDNS Corefile contains a rule.",
+    );
+    expect(html).not.toMatch(/>warning</);
+  });
+
   it("waits for disclosure motion only when reduced motion is not requested", () => {
     expect(investigationDisclosureSettleDelay(false)).toBe(
       INVESTIGATION_DISCLOSURE_SETTLE_MS,

@@ -28,9 +28,6 @@ var (
 
 func detectConfigProblems(cache *ResourceCache, namespace string, now time.Time) []Detection {
 	var out []Detection
-	if namespace == "" {
-		out = append(out, detectSuspiciousCoreDNS(cache, now)...)
-	}
 	out = append(out, detectEnvServiceRefs(cache, namespace, now)...)
 	out = append(out, detectDuplicateEnvVars(cache, namespace, now)...)
 	out = append(out, detectStaleSecretEnv(cache, namespace, now)...)
@@ -205,69 +202,6 @@ func regularContainerCompletionSplit(statuses []corev1.ContainerStatus, now time
 		return "", nil, time.Time{}, false
 	}
 	return best.exitedContainer, best.runningContainers, best.startedAt, true
-}
-
-// DetectSuspiciousCoreDNS returns conservative CoreDNS Corefile findings for
-// callers that are already in a DNS diagnostic context. General namespaced
-// issue sweeps keep this out of their main list to avoid repeating one
-// cluster-scoped finding for every namespace.
-func DetectSuspiciousCoreDNS(cache *ResourceCache, now time.Time) []Detection {
-	return detectSuspiciousCoreDNS(cache, now)
-}
-
-func detectSuspiciousCoreDNS(cache *ResourceCache, now time.Time) []Detection {
-	if cache == nil || cache.ConfigMaps() == nil {
-		return nil
-	}
-	cms, err := cache.ConfigMaps().ConfigMaps("kube-system").List(labels.Everything())
-	if err != nil {
-		logConfigListError("ConfigMap", "kube-system", err)
-		return nil
-	}
-	var out []Detection
-	for _, cm := range cms {
-		if cm == nil || !strings.Contains(strings.ToLower(cm.Name), "coredns") {
-			continue
-		}
-		corefile := cm.Data["Corefile"]
-		if corefile == "" {
-			continue
-		}
-		reason, ok := suspiciousCoreDNSReason(corefile)
-		if !ok {
-			continue
-		}
-		age := ageSeconds(now, cm.CreationTimestamp.Time)
-		out = append(out, Detection{
-			Kind:              "ConfigMap",
-			Namespace:         cm.Namespace,
-			Name:              cm.Name,
-			Severity:          "warning",
-			Reason:            reason,
-			Message:           "CoreDNS Corefile contains a rule that can override Kubernetes service DNS responses.",
-			Age:               timeutil.FormatAgeShort(time.Duration(age) * time.Second),
-			AgeSeconds:        age,
-			ResourceCreatedAt: cm.CreationTimestamp.Time,
-			OnsetUnknown:      true,
-			Fingerprint:       "coredns:service-dns-override",
-		})
-	}
-	return out
-}
-
-func suspiciousCoreDNSReason(corefile string) (string, bool) {
-	low := strings.ToLower(corefile)
-	touchesServiceDNS := strings.Contains(low, "svc.cluster.local") || strings.Contains(low, ".svc")
-	if !touchesServiceDNS {
-		return "", false
-	}
-	if strings.Contains(low, "template") && strings.Contains(low, "nxdomain") {
-		return "CoreDNS NXDOMAIN override", true
-	}
-	if strings.Contains(low, "rewrite") {
-		return "CoreDNS service DNS rewrite", true
-	}
-	return "", false
 }
 
 type envServiceRef struct {

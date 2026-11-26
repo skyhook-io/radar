@@ -9,6 +9,8 @@ import {
   type DiagnosisResourceRef,
   type DiagnosisStartupBlocker,
   diagnosisSeverityTone,
+  dnsSignalReportsFailure,
+  coreDNSRulesSummary,
 } from "../../diagnoseEvidenceTypes";
 import { metricsWindowLabel } from "./prometheus";
 import {
@@ -836,17 +838,13 @@ export function adaptDiagnose(
   const dns = record(value.dnsContext);
   if (dns) {
     const signals = stringArray(dns.signals) ?? [];
-    const findings = Array.isArray(dns.coreDNSFindings)
-      ? dns.coreDNSFindings
-      : [];
+    const findings = [dns.coreDNSRules, dns.coreDNSFindings].flatMap((list) =>
+      Array.isArray(list) ? list : [],
+    );
     if (signals.length > 0 || findings.length > 0) {
-      const adverse =
-        findings.length > 0 ||
-        signals.some((signal) =>
-          /\b(error|failed|failures?|timeouts?|nxdomain|servfail)\b/i.test(
-            signal,
-          ),
-        );
+      // Stored CoreDNS rules are configuration. Only a reported failure
+      // makes this card adverse.
+      const adverse = signals.some(dnsSignalReportsFailure);
       builder.observe(`dns:${scopeFromArgs(source)}`, "dns", source, {
         tier: evidenceTierForRelevance(
           adverse ? "supporting" : "context",
@@ -855,9 +853,7 @@ export function adaptDiagnose(
         relevance: relatedRelevance,
         tone: adverse ? "warning" : "info",
         title: adverse ? "DNS failure signals" : "DNS configuration",
-        summary:
-          signals[0] ||
-          `${findings.length} CoreDNS finding${findings.length === 1 ? "" : "s"}`,
+        summary: signals[0] || coreDNSRulesSummary(findings.length),
         data: { type: "dns", dns: dns as unknown as DiagnosisDNSContext },
       });
     }

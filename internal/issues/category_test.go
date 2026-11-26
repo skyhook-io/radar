@@ -27,8 +27,6 @@ func TestClassify(t *testing.T) {
 		{"volume mount", classifyInput{Source: SourceScheduling, Kind: "Pod", Reason: "VolumeMount"}, issuesapi.CategoryVolumeMountFailed},
 		{"terminating pod", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "Terminating stuck"}, issuesapi.CategoryTerminationStuck},
 		{"terminating namespace", classifyInput{Source: SourceProblem, Kind: "Namespace", Reason: "Namespace terminating stuck"}, issuesapi.CategoryTerminationStuck},
-		{"coredns nxdomain override", classifyInput{Source: SourceProblem, Kind: "ConfigMap", Reason: "CoreDNS NXDOMAIN override"}, issuesapi.CategoryDNSFailure},
-		{"coredns service rewrite", classifyInput{Source: SourceProblem, Kind: "ConfigMap", Reason: "CoreDNS service DNS rewrite"}, issuesapi.CategoryDNSFailure},
 		{"env missing service", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "Missing referenced Service"}, issuesapi.CategoryMissingConfigRef},
 		{"env service port mismatch", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "Service port mismatch"}, issuesapi.CategoryMissingConfigRef},
 		{"networkpolicy denies all ingress", classifyInput{Source: SourceProblem, Kind: "NetworkPolicy", APIGroup: "networking.k8s.io", Reason: k8s.NetworkPolicyDenyAllIngressReason}, issuesapi.CategoryNetworkPolicyDenied},

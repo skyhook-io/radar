@@ -9,7 +9,160 @@ import {
   warningEvent,
 } from "../evidenceFixtures";
 
+const storedRule = {
+  kind: "ConfigMap",
+  namespace: "kube-system",
+  name: "coredns",
+  key: "Corefile",
+  line: 5,
+  text: "rewrite name regex .*\\.nodes\\.vcluster\\.com kubernetes.default.svc.cluster.local",
+};
+
+// What Radar sent before stored rules: a verdict on the ConfigMap.
+const legacyFinding = {
+  kind: "ConfigMap",
+  namespace: "kube-system",
+  name: "coredns",
+  severity: "warning",
+  reason: "CoreDNS service DNS rewrite",
+};
+
 describe("semantic diagnose evidence projection", () => {
+  // The exact strings the server emits (internal/mcp/tools_diagnose.go,
+  // internal/issues/provider.go), and the "errors" wording older Radar used. A
+  // stored CoreDNS rule is configuration; only these make DNS evidence adverse.
+  it.each([
+    "pod logs contain DNS resolution failures",
+    "warning events contain DNS resolution failures",
+    "pod logs contain DNS resolution errors",
+    "warning events contain DNS resolution errors",
+  ])("treats %j as a DNS failure with or without stored rules", (signal) => {
+    for (const coreDNSRules of [undefined, [storedRule]]) {
+      const result = project([
+        tool("dns-failure", "diagnose", {
+          resource: deployment,
+          resourceContext: { tier: "basic" },
+          pods: 0,
+          events: [],
+          dnsContext: { signals: [signal], coreDNSRules },
+        }),
+      ]);
+      expect(groupsOf(result.groups, "dns")[0].latest).toMatchObject({
+        tone: "warning",
+        title: "DNS failure signals",
+      });
+    }
+  });
+
+  it("keeps stored CoreDNS rules neutral when no lookup failed", () => {
+    const result = project([
+      tool("dns-config", "diagnose", {
+        resource: deployment,
+        resourceContext: { tier: "basic" },
+        pods: 0,
+        events: [],
+        dnsContext: {
+          signals: ["api uses dnsPolicy=None"],
+          coreDNSRules: [storedRule],
+        },
+      }),
+    ]);
+    expect(groupsOf(result.groups, "dns")[0].latest).toMatchObject({
+      tier: "context",
+      tone: "info",
+      title: "DNS configuration",
+    });
+  });
+
+  // The server's configuration signals, with resource names that contain
+  // failure words (internal/mcp/tools_diagnose.go, internal/issues/provider.go).
+  it.each([
+    "errors-api uses dnsPolicy=None",
+    "servfail-exporter sets dnsConfig.nameservers",
+    "failed-jobs sets dnsConfig.searches",
+    "CoreDNS Deployment kube-system/coredns-errors rolled 2m ago (generation=3, 2 owned ReplicaSets, newest=coredns-errors-abc)",
+    "Radar observed ConfigMap kube-system/coredns-failures update 4m ago",
+  ])("reads %j as configuration, whatever the resource is called", (signal) => {
+    const result = project([
+      tool("dns-config-name", "diagnose", {
+        resource: deployment,
+        resourceContext: { tier: "basic" },
+        pods: 0,
+        events: [],
+        dnsContext: { signals: [signal], coreDNSRules: [storedRule] },
+      }),
+    ]);
+    expect(groupsOf(result.groups, "dns")[0].latest).toMatchObject({
+      tone: "info",
+      title: "DNS configuration",
+    });
+  });
+
+  it("still reads the issues DNS context an older Radar sends", () => {
+    const result = project([
+      tool("issues-dns-legacy", "issues", {
+        issues: [],
+        total: 0,
+        total_matched: 0,
+        cluster_context: {
+          dns: {
+            signals: ["CoreDNS Deployment kube-system/coredns rolled 2m ago"],
+            findings: [legacyFinding],
+          },
+        },
+      }),
+    ]);
+    expect(groupsOf(result.groups, "dns")[0].latest).toMatchObject({
+      tone: "info",
+      data: { type: "dns", dns: { coreDNSFindings: [legacyFinding] } },
+    });
+  });
+
+  it("does not let an older Radar's CoreDNS verdict make the card adverse", () => {
+    const result = project([
+      tool("dns-legacy", "diagnose", {
+        resource: deployment,
+        resourceContext: { tier: "basic" },
+        pods: 0,
+        events: [],
+        dnsContext: { coreDNSFindings: [legacyFinding] },
+      }),
+    ]);
+    expect(groupsOf(result.groups, "dns")[0].latest).toMatchObject({
+      tone: "info",
+      title: "DNS configuration",
+    });
+  });
+
+  it("warns on cluster DNS context only when a lookup failure was seen", () => {
+    const tones = [
+      "Warning events in namespace shop contain DNS resolution failures",
+      "CoreDNS Deployment kube-system/coredns rolled out 2m ago",
+    ].map((signal) => {
+      const result = project([
+        tool("issues-dns", "issues", {
+          issues: [],
+          total: 0,
+          total_matched: 0,
+          cluster_context: {
+            dns_config: {
+              signals: [signal],
+              rules: [storedRule],
+              omitted_rules: 2,
+            },
+          },
+        }),
+      ]);
+      const latest = groupsOf(result.groups, "dns")[0].latest;
+      expect(latest.data).toMatchObject({
+        type: "dns",
+        dns: { coreDNSRules: [storedRule], omittedCoreDNSRules: 2 },
+      });
+      return latest.tone;
+    });
+    expect(tones).toEqual(["warning", "info"]);
+  });
+
   it("promotes only classified smoking guns and audits every partiality signal", () => {
     const result = project([
       tool("diagnose-1", "diagnose", {
