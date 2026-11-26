@@ -242,7 +242,7 @@ func TestReadmissionKeepsPortForwardManager(t *testing.T) {
 	if Current().PortForwards() == manager {
 		t.Fatal("rebuild reused the closed forward manager")
 	}
-	if _, err := manager.Start("cost", context.Background(), "ns", "svc", 80); err != portforward.ErrClosed {
+	if _, err := manager.Start(context.Background(), "cost", "ns", "svc", 80); err != portforward.ErrClosed {
 		t.Fatalf("start after teardown: %v", err)
 	}
 }
@@ -253,7 +253,7 @@ func TestDisplacingUnadmittedConnectionClosesItsForwardManager(t *testing.T) {
 	ResetResourceDiscovery()
 	inBetween := Current().PortForwards()
 	dropClusterClients()
-	if _, err := inBetween.Start("cost", t.Context(), "ns", "svc", 80); err != portforward.ErrClosed {
+	if _, err := inBetween.Start(t.Context(), "cost", "ns", "svc", 80); err != portforward.ErrClosed {
 		t.Fatalf("displaced manager can still start: %v", err)
 	}
 }

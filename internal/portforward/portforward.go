@@ -1,6 +1,4 @@
-// Package portforward provides shared metrics port-forwarding infrastructure.
-// It is used by both the traffic package (for Caretta/Hubble) and the prometheus
-// package (for resource metrics), breaking what would otherwise be an import cycle.
+// Package portforward manages automatic tunnels for a cluster connection.
 package portforward
 
 import (
@@ -51,7 +49,7 @@ func SetAutoDisabled(disabled bool) { autoDisabled.Store(disabled) }
 // AutoDisabled reports whether automatic port-forwarding is turned off.
 func AutoDisabled() bool { return autoDisabled.Load() }
 
-// ConnectionInfo contains info about the metrics connection
+// ConnectionInfo reports status and endpoint details for direct connections and automatic tunnels.
 type ConnectionInfo struct {
 	Connected   bool   `json:"connected"`
 	LocalPort   int    `json:"localPort,omitempty"`
@@ -127,18 +125,17 @@ func (h *Handle) Done() <-chan struct{} {
 	return h.stopCh
 }
 
-func (h *Handle) Stop() bool {
+func (h *Handle) Stop() {
 	if h == nil || h.manager == nil {
-		return false
+		return
 	}
 	m := h.manager
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !h.active {
-		return false
+		return
 	}
 	m.removeLocked(h)
-	return true
 }
 
 func (m *Manager) removeLocked(h *Handle) {
@@ -175,7 +172,11 @@ func SetOnForwardLost(fn func(*Handle)) {
 	}
 }
 
-func (m *Manager) Start(owner Owner, ctx context.Context, namespace, service string, targetPort int) (*Handle, error) {
+// Start opens a separate tunnel on every call and returns its owning handle.
+// ctx bounds Pod lookup and tunnel establishment. Canceling ctx after Start
+// returns leaves the tunnel running. targetPort is the port on the selected Pod.
+// The caller stops the handle, and closing the manager stops every tunnel it opened.
+func (m *Manager) Start(ctx context.Context, owner Owner, namespace, service string, targetPort int) (*Handle, error) {
 	if AutoDisabled() {
 		return nil, ErrAutoDisabled
 	}

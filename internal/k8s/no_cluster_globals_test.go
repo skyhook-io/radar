@@ -25,7 +25,7 @@ func TestNoClusterGlobals(t *testing.T) {
 func checkClusterGlobals(t *testing.T, dir string) {
 	denied := []string{
 		"github.com/skyhook-io/radar/internal/portforward.Manager", "*github.com/skyhook-io/radar/internal/portforward.Manager",
-		"map[*github.com/skyhook-io/radar/internal/portforward.forward]struct{}",
+		"map[*github.com/skyhook-io/radar/internal/portforward.Handle]struct{}", "*github.com/skyhook-io/radar/internal/portforward.Handle",
 		"*k8s.io/client-go/kubernetes.Clientset", "k8s.io/client-go/kubernetes.Interface",
 		"*k8s.io/client-go/rest.Config", "k8s.io/client-go/dynamic.Interface",
 		"*k8s.io/client-go/discovery.DiscoveryClient", "k8s.io/client-go/discovery.DiscoveryInterface",

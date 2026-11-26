@@ -101,7 +101,7 @@ func TestArgoForwardFollowsConnectionLifecycle(t *testing.T) {
 				}
 				k8s.RetireServingConnection()
 				k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "ctx"})
-				regular, err := k8s.Current().PortForwards().Start(portforward.OwnerArgoCD, ctx, "ns", "svc", 8080)
+				regular, err := k8s.Current().PortForwards().Start(ctx, portforward.OwnerArgoCD, "ns", "svc", 8080)
 				if err != nil {
 					t.Fatal(err)
 				}

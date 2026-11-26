@@ -81,7 +81,7 @@ func TestCloseDuringEstablishmentStopsUnpublishedForward(t *testing.T) {
 	}
 	result := make(chan error, 1)
 	go func() {
-		_, err := m.Start(OwnerPrometheus, t.Context(), "monitoring", "prometheus", 9090)
+		_, err := m.Start(t.Context(), OwnerPrometheus, "monitoring", "prometheus", 9090)
 		result <- err
 	}()
 	select {
@@ -98,7 +98,7 @@ func TestCloseDuringEstablishmentStopsUnpublishedForward(t *testing.T) {
 	if len(m.forwards) != 0 {
 		t.Fatal("forward remained published")
 	}
-	if _, err := m.Start(OwnerPrometheus, t.Context(), "monitoring", "prometheus", 9090); err == nil {
+	if _, err := m.Start(t.Context(), OwnerPrometheus, "monitoring", "prometheus", 9090); err == nil {
 		t.Fatal("closed manager accepted Start")
 	}
 }
@@ -108,17 +108,21 @@ func TestStaleHandleDoesNotStopReplacement(t *testing.T) {
 	stale := publishedForward(m, OwnerCost, "ns", "svc", 2222)
 	stale.Stop()
 	replacement := publishedForward(m, OwnerCost, "ns", "svc", 2222)
-	if stale.Stop() {
-		t.Fatal("stale address unexpectedly stopped the current forward")
+	stale.Stop()
+	if stale.Alive() {
+		t.Fatal("stale handle became live after a second Stop")
 	}
 	if !replacement.Info().Connected {
 		t.Fatal("stale cleanup stopped the replacement forward")
 	}
-	if !replacement.Stop() {
-		t.Fatal("current address did not stop its forward")
-	}
+	replacement.Stop()
 	if replacement.Info().Connected {
-		t.Fatal("current forward remains connected after address-scoped stop")
+		t.Fatal("replacement forward remains connected after Stop")
+	}
+	select {
+	case <-replacement.Done():
+	default:
+		t.Fatal("replacement tunnel survived Stop")
 	}
 }
 
@@ -143,7 +147,7 @@ func TestForwardLostNotifiesOnlyUnexpectedExit(t *testing.T) {
 
 	start := func() *Handle {
 		t.Helper()
-		info, err := m.Start(OwnerPrometheus, context.Background(), "monitoring", "prometheus", 9090)
+		info, err := m.Start(context.Background(), OwnerPrometheus, "monitoring", "prometheus", 9090)
 		if err != nil {
 			t.Fatalf("Start: %v", err)
 		}
@@ -203,7 +207,7 @@ func TestStartRefusesWhenAutoDisabled(t *testing.T) {
 	client := fake.NewClientset()
 
 	m := NewManager(client, &rest.Config{Host: "https://example.invalid"}, "ctxA")
-	info, err := m.Start(OwnerCost, context.Background(), "monitoring", "prometheus", 9090)
+	info, err := m.Start(context.Background(), OwnerCost, "monitoring", "prometheus", 9090)
 	if !errors.Is(err, ErrAutoDisabled) || info != nil {
 		t.Fatalf("Start = %v, %v; want nil, ErrAutoDisabled", info, err)
 	}
@@ -236,7 +240,7 @@ func TestSameTargetStartsWhileFirstIsPending(t *testing.T) {
 	}
 	firstResult := make(chan startResult, 1)
 	go func() {
-		h, err := m.Start(OwnerPrometheus, t.Context(), "monitoring", "prometheus", 9090)
+		h, err := m.Start(t.Context(), OwnerPrometheus, "monitoring", "prometheus", 9090)
 		firstResult <- startResult{h, err}
 	}()
 	select {
@@ -248,7 +252,7 @@ func TestSameTargetStartsWhileFirstIsPending(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
-	second, err := m.Start(OwnerPrometheus, ctx, "monitoring", "prometheus", 9090)
+	second, err := m.Start(ctx, OwnerPrometheus, "monitoring", "prometheus", 9090)
 	if err != nil || runs.Load() != 2 {
 		t.Fatalf("second Start failed to establish independently while first was pending: %v (runners: %d)", err, runs.Load())
 	}
@@ -259,10 +263,12 @@ func TestSameTargetStartsWhileFirstIsPending(t *testing.T) {
 	}
 	first := got.handle
 	first.Stop()
-	if first.Stop() || !second.Info().Connected {
-		t.Fatal("first handle could stop a tunnel again, or stopped the other tunnel")
+	first.Stop()
+	if first.Alive() || !second.Info().Connected {
+		t.Fatal("first handle is still live or stopped the other tunnel")
 	}
-	if !second.Stop() || second.Info().Connected {
+	second.Stop()
+	if second.Alive() || second.Info().Connected {
 		t.Fatal("second handle did not stop its tunnel")
 	}
 	select {
@@ -299,11 +305,11 @@ func TestSameTargetStartsIndependentTunnels(t *testing.T) {
 	})
 	m := NewManager(kubernetes.NewForConfigOrDie(cfg), cfg, "ctx")
 	defer m.Close()
-	owner, err := m.Start(OwnerTraffic, t.Context(), "ns", "svc", 9090)
+	owner, err := m.Start(t.Context(), OwnerTraffic, "ns", "svc", 9090)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := m.Start(OwnerTraffic, t.Context(), "ns", "svc", 9090)
+	second, err := m.Start(t.Context(), OwnerTraffic, "ns", "svc", 9090)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,7 +342,11 @@ func TestSameTargetStartsIndependentTunnels(t *testing.T) {
 	if _, err := io.ReadFull(client, got[:]); err != nil || string(got[:]) != "serving" {
 		t.Fatalf("read forwarded data = %q, %v", got, err)
 	}
-	if !second.Stop() {
+	if !second.Alive() {
+		t.Fatal("second tunnel died before Stop")
+	}
+	second.Stop()
+	if second.Alive() {
 		t.Fatal("second handle did not stop its tunnel")
 	}
 	select {
@@ -381,7 +391,7 @@ func TestStalledUpgradeEndsWithAttempt(t *testing.T) {
 			defer cancel()
 			result := make(chan error, 1)
 			go func() {
-				_, err := m.Start(OwnerTraffic, ctx, "ns", "svc", 8080)
+				_, err := m.Start(ctx, OwnerTraffic, "ns", "svc", 8080)
 				result <- err
 			}()
 			select {

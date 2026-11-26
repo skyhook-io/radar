@@ -408,7 +408,8 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 			}
 		}
 		conn := k8s.Current()
-		return traffic.ReinitializeWithConfig(conn.ClientInterface(), conn.PortForwards(), conn.ContextName())
+		traffic.ReinitializeWithPortForwards(conn.ClientInterface(), conn.PortForwards(), conn.ContextName())
+		return nil
 	})
 
 	// Shared installations: Reinitialize carries the current manual URL + headers

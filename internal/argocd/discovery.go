@@ -201,7 +201,7 @@ func (m *Manager) discover(ctx context.Context, snap probeSnapshot) (string, act
 
 type activeForward interface {
 	Info() *portforward.ConnectionInfo
-	Stop() bool
+	Stop()
 	Alive() bool
 }
 
@@ -216,7 +216,7 @@ func (m *Manager) watchForwardExit(fwd activeForward, done <-chan struct{}) {
 }
 
 func (m *Manager) startPortForward(ctx context.Context, snap probeSnapshot, namespace, service string, targetPort int) (activeForward, error) {
-	handle, err := snap.forwards.Start(portforward.OwnerArgoCD, ctx, namespace, service, targetPort)
+	handle, err := snap.forwards.Start(ctx, portforward.OwnerArgoCD, namespace, service, targetPort)
 	if err != nil {
 		return nil, err
 	}

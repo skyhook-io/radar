@@ -114,7 +114,7 @@ func TestCarettaReleasedForward(t *testing.T) {
 	defer manager.Close()
 	for _, path := range []string{"flows", "raw"} {
 		t.Run(path, func(t *testing.T) {
-			forward, err := manager.Start(portforward.OwnerTraffic, t.Context(), "ns", "svc", 9090)
+			forward, err := manager.Start(t.Context(), portforward.OwnerTraffic, "ns", "svc", 9090)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -345,7 +345,7 @@ func TestCarettaCancelledRevalidationKeepsBinding(t *testing.T) {
 			cfg := forwardtest.Server(t, forwardtest.ServeTunnel)
 			manager := portforward.NewManager(kubernetes.NewForConfigOrDie(cfg), cfg, "ctx")
 			defer manager.Close()
-			forward, err := manager.Start(portforward.OwnerTraffic, t.Context(), "ns", "svc", 9090)
+			forward, err := manager.Start(t.Context(), portforward.OwnerTraffic, "ns", "svc", 9090)
 			if err != nil {
 				t.Fatal(err)
 			}

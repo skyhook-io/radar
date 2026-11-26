@@ -38,7 +38,6 @@ type Manager struct {
 var (
 	manager  *Manager
 	initOnce sync.Once
-	initErr  error
 
 	// metricsConfigMu guards the configured-metrics globals below. Originally
 	// these were written only at startup (no concurrent readers), but the live
@@ -132,11 +131,13 @@ func metricsConfig() (string, map[string]string) {
 
 // Initialize sets up the traffic manager with the given K8s client
 func Initialize(client kubernetes.Interface) error {
-	return InitializeWithConfig(client, nil, "")
+	InitializeWithPortForwards(client, nil, "")
+	return nil
 }
 
-// InitializeWithConfig sets up the traffic manager with K8s client, config, and context name
-func InitializeWithConfig(client kubernetes.Interface, forwards *portforward.Manager, contextName string) error {
+// InitializeWithPortForwards takes the client, tunnel manager, and context name
+// from the same connection. A nil manager disables automatic tunnels for traffic.
+func InitializeWithPortForwards(client kubernetes.Interface, forwards *portforward.Manager, contextName string) {
 	initOnce.Do(func() {
 		manager = &Manager{
 			k8sClient:   client,
@@ -159,7 +160,6 @@ func InitializeWithConfig(client kubernetes.Interface, forwards *portforward.Man
 		manager.sources["istio"] = NewIstioSource(client)
 		manager.sources["beyla"] = NewBeylaSource(client)
 	})
-	return initErr
 }
 
 // GetManager returns the global traffic manager
@@ -694,10 +694,9 @@ func Reinitialize(client kubernetes.Interface) error {
 	return Initialize(client)
 }
 
-// ReinitializeWithConfig reinitializes with full config after context switch
-func ReinitializeWithConfig(client kubernetes.Interface, forwards *portforward.Manager, contextName string) error {
+func ReinitializeWithPortForwards(client kubernetes.Interface, forwards *portforward.Manager, contextName string) {
 	Reset()
-	return InitializeWithConfig(client, forwards, contextName)
+	InitializeWithPortForwards(client, forwards, contextName)
 }
 
 // Connect establishes connection to the active traffic source

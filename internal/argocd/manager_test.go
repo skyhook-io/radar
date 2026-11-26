@@ -1034,4 +1034,4 @@ func (f *testForward) Alive() bool { return !f.exited }
 func (f *testForward) Info() *portforward.ConnectionInfo {
 	return &portforward.ConnectionInfo{LocalPort: f.localPort}
 }
-func (f *testForward) Stop() bool { f.cancel(); return true }
+func (f *testForward) Stop() { f.cancel() }

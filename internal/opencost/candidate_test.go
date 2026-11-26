@@ -190,7 +190,7 @@ func TestKubecostCandidateTunnelIsIndependent(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("candidate did not reach its forwarded probe")
 	}
-	regular, err := forwards.Start("cost-candidate", t.Context(), "ns", "svc", 9004)
+	regular, err := forwards.Start(t.Context(), "cost-candidate", "ns", "svc", 9004)
 	if err != nil {
 		t.Fatal(err)
 	}

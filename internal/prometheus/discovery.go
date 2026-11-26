@@ -309,7 +309,7 @@ func (c *Client) discover(ctx context.Context, gen uint64) (discoveredEndpoint, 
 		log.Printf("[prometheus] port-forward → %s/%s:%d (source=%s, score=%d)...",
 			cand.Namespace, cand.Name, cand.TargetPort, cand.Source, cand.Score)
 
-		handle, pfErr := c.forwards.Start(portforward.OwnerPrometheus, ctx, cand.Namespace, cand.Name, cand.TargetPort)
+		handle, pfErr := c.forwards.Start(ctx, portforward.OwnerPrometheus, cand.Namespace, cand.Name, cand.TargetPort)
 		if pfErr != nil {
 			if errors.Is(pfErr, portforward.ErrClosed) {
 				return discoveredEndpoint{}, pfErr

@@ -692,7 +692,7 @@ func TestDiscoveryHandoffRejectsHandleAtReusedAddress(t *testing.T) {
 	defer m.Close()
 	open := func() *portforward.Handle {
 		t.Helper()
-		h, err := m.Start(portforward.OwnerPrometheus, t.Context(), "ns", "svc", 9090)
+		h, err := m.Start(t.Context(), portforward.OwnerPrometheus, "ns", "svc", 9090)
 		if err != nil {
 			t.Fatal(err)
 		}

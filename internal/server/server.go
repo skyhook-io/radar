@@ -348,9 +348,6 @@ func New(cfg Config) *Server {
 	// for mcpPermCache.
 	k8s.OnContextSwitch(func(_ string) {
 		s.finalizePostContextSwitch()
-		// Alongside the subsystem resets in PerformContextSwitch (prometheus,
-		// traffic, helm): the Argo CD connection references the previous
-		// cluster's endpoint/port-forward.
 		argocd.Reset()
 		vulnerabilities.ResetParseCache()
 	})
@@ -360,11 +357,8 @@ func New(cfg Config) *Server {
 		if runs := s.aiRunManager(); runs != nil {
 			runs.OnContextSwitch()
 		}
-		// Runtime auth-loss demotion fires ONLY this callback (quiesce in
-		// place, no switch follows), and Argo CD's private port-forward lives
-		// outside the session manager — without this it survives the
-		// demotion's teardown indefinitely. Reset is idempotent, so the
-		// second call from OnContextSwitch on a real switch is harmless.
+		// Auth-loss demotion only fires the before-switch callbacks. Clear
+		// Argo CD's cached client and invalidate pending probes here as well.
 		argocd.Reset()
 	})
 

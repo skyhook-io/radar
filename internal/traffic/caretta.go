@@ -1077,7 +1077,7 @@ func (c *CarettaSource) tryConnectLocked(ctx context.Context, contextName string
 
 		// Start a new managed port-forward
 		log.Printf("[caretta] Starting port-forward to %s/%s:%d (targetPort=%d)", info.namespace, info.name, info.port, info.targetPort)
-		forward, err := c.forwards.Start(portforward.OwnerTraffic, ctx, info.namespace, info.name, info.targetPort)
+		forward, err := c.forwards.Start(ctx, portforward.OwnerTraffic, info.namespace, info.name, info.targetPort)
 		if err != nil {
 			lastErr = fmt.Sprintf("Failed to start port-forward to %s/%s: %v", info.namespace, info.name, err)
 			log.Printf("[caretta] %s", lastErr)

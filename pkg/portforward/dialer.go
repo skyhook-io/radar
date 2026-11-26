@@ -37,8 +37,9 @@ func (dial upgradeDial) Dial(protocols ...string) (httpstream.Connection, string
 	return dial(protocols...)
 }
 
-// NewDialerWithContext binds both upgrade requests to the tunnel lifetime. The
-// client-go dialers construct their own requests with background contexts.
+// NewDialerWithContext uses ctx to cancel WebSocket and SPDY upgrade attempts,
+// including dialing, proxy CONNECT, TLS handshakes, and waiting for the server
+// to switch protocols. The caller owns and closes the upgraded connection.
 func NewDialerWithContext(ctx context.Context, cfg *rest.Config, target *url.URL) (httpstream.Dialer, error) {
 	tlsConfig, err := rest.TLSConfigFor(cfg)
 	if err != nil {
