@@ -174,7 +174,7 @@ func TestWorkloadWithoutConfigurationRequiresReadyCache(t *testing.T) {
 	previous := k8s.GetConnectionStatus()
 	t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	Initialize(nil, nil, "setup-test")
+	Initialize(nil, nil, "setup-test", nil)
 	SetAuthGate(nil)
 	router := chi.NewRouter()
 	RegisterRoutes(router)
@@ -274,10 +274,10 @@ func TestWorkloadScopeDoesNotFollowConnectionChanges(t *testing.T) {
 		{"headers", func() { SetHeaders(map[string]string{"X-Scope-OrgID": "other"}) }},
 		{"configure URL", func() { Configure("http://different:9090", nil) }},
 		{"configure headers", func() { Configure("", map[string]string{"X-Scope-OrgID": "other"}) }},
-		{"context", func() { Reinitialize(nil, nil, "other") }},
+		{"context", func() { Reinitialize(nil, nil, "other", nil) }},
 	} {
 		t.Run(change.name, func(t *testing.T) {
-			Initialize(nil, nil, "original")
+			Initialize(nil, nil, "original", nil)
 			if err := SetWorkloadMetricsScope(prom.WorkloadMetricsScope{SingleCluster: true}, ""); err != nil {
 				t.Fatal(err)
 			}
@@ -295,13 +295,13 @@ func TestWorkloadScopeDoesNotFollowConnectionChanges(t *testing.T) {
 
 func TestWorkloadScopeSurvivesUnchangedStartupAndSettings(t *testing.T) {
 	config := &rest.Config{Host: "https://cluster-a"}
-	Initialize(nil, config, "original")
+	Initialize(nil, config, "original", nil)
 	SetManualURL("http://metrics:9090")
 	SetHeaders(map[string]string{"X-Scope-OrgID": "tenant-a"})
 	if err := SetWorkloadMetricsScope(prom.WorkloadMetricsScope{SingleCluster: true}, ""); err != nil {
 		t.Fatal(err)
 	}
-	Reinitialize(nil, rest.CopyConfig(config), "original")
+	Reinitialize(nil, rest.CopyConfig(config), "original", nil)
 	SetManualURL("http://metrics:9090/")
 	SetHeaders(map[string]string{"X-Scope-OrgID": "tenant-a"})
 	if _, _, ok := GetClient().workloadMetricsConfig(); !ok {
@@ -311,7 +311,7 @@ func TestWorkloadScopeSurvivesUnchangedStartupAndSettings(t *testing.T) {
 	if _, _, ok := GetClient().workloadMetricsConfig(); !ok {
 		t.Fatal("unchanged atomic configuration discarded scope")
 	}
-	Reinitialize(nil, &rest.Config{Host: "https://cluster-b"}, "original")
+	Reinitialize(nil, &rest.Config{Host: "https://cluster-b"}, "original", nil)
 	if _, _, ok := GetClient().workloadMetricsConfig(); ok {
 		t.Fatal("same display name carried scope to another cluster")
 	}

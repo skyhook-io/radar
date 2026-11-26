@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/skyhook-io/radar/internal/portforward"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 
 	"k8s.io/client-go/kubernetes/fake"
@@ -255,5 +256,45 @@ func TestReadmissionKeepsTheSameConnection(t *testing.T) {
 	built.publishDiscovery(buildFakeDiscoveryCore(t))
 	if GetResourceDiscovery() == nil {
 		t.Fatal("discovery that finished after the re-admission isn't served")
+	}
+}
+
+func TestReadmissionKeepsPortForwardManager(t *testing.T) {
+	t.Cleanup(SnapshotTestConnection())
+	installedConn.Store(&Connection{})
+	clearTestConnectionIdentity()
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
+	manager := Current().PortForwards()
+	RetireServingConnection()
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
+	if manager == nil || Current().PortForwards() != manager {
+		t.Fatal("readmission replaced the forward manager")
+	}
+	contextSwitchMu.Lock()
+	previousReset := trafficResetFunc
+	trafficResetFunc = func() {
+		if !manager.Closed() {
+			t.Error("traffic reset ran before pending forwards were stopped")
+		}
+	}
+	contextSwitchMu.Unlock()
+	t.Cleanup(func() { contextSwitchMu.Lock(); trafficResetFunc = previousReset; contextSwitchMu.Unlock() })
+	ResetAllSubsystems()
+	if Current().PortForwards() == manager {
+		t.Fatal("rebuild reused the closed forward manager")
+	}
+	if _, err := manager.Start(context.Background(), "cost", "ns", "svc", 80); err != portforward.ErrClosed {
+		t.Fatalf("start after teardown: %v", err)
+	}
+}
+
+func TestDisplacingUnadmittedConnectionClosesItsForwardManager(t *testing.T) {
+	t.Cleanup(SnapshotTestConnection())
+	installedConn.Store(&Connection{})
+	ResetResourceDiscovery()
+	inBetween := Current().PortForwards()
+	dropClusterClients()
+	if _, err := inBetween.Start(t.Context(), "cost", "ns", "svc", 80); err != portforward.ErrClosed {
+		t.Fatalf("displaced manager can still start: %v", err)
 	}
 }

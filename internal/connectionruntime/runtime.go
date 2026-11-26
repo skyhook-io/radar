@@ -120,7 +120,7 @@ func (r *Runtime) activate(target k8s.ProfileTarget, selected map[config.Integra
 			} else {
 				if prometheus.GetClient() == nil {
 					conn := k8s.Current()
-					prometheus.Initialize(conn.ClientInterface(), conn.Config(), conn.ContextName())
+					prometheus.Initialize(conn.ClientInterface(), conn.Config(), conn.ContextName(), conn.PortForwards())
 				}
 				// Precedence: the shared OpenObserve connection for a cluster
 				// matched to it, then a URL set by hand for this context (saved

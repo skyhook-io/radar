@@ -6,13 +6,13 @@ import "testing"
 // context must not start from the previous cluster's manual endpoint or
 // headers; it gets only what its own settings configure.
 func TestRetireDropsManualConfigurationBeforeReinitialize(t *testing.T) {
-	Initialize(nil, nil, "before")
-	t.Cleanup(func() { Initialize(nil, nil, "") })
+	Initialize(nil, nil, "before", nil)
+	t.Cleanup(func() { Initialize(nil, nil, "", nil) })
 
 	Configure("http://127.0.0.1:9", map[string]string{"Authorization": "Bearer test-token"})
 
 	Retire()
-	Reinitialize(nil, nil, "after")
+	Reinitialize(nil, nil, "after", nil)
 
 	gotURL, gotHeaders := CurrentConfig()
 	if gotURL != "" || len(gotHeaders) != 0 {

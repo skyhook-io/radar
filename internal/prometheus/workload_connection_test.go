@@ -65,12 +65,12 @@ func TestWorkloadBackendIdentity(t *testing.T) {
 func TestWorkloadBackendIdentitySurvivesReinitialize(t *testing.T) {
 	for _, identity := range []string{"A", "B"} {
 		t.Run(identity, func(t *testing.T) {
-			Initialize(nil, nil, "original")
+			Initialize(nil, nil, "original", nil)
 			if err := SetWorkloadMetricsScope(prom.WorkloadMetricsScope{SingleCluster: true}, ""); err != nil {
 				t.Fatal(err)
 			}
 			GetClient().markConnected("http://first", "", "A", 0)
-			Reinitialize(nil, nil, "original")
+			Reinitialize(nil, nil, "original", nil)
 			c := GetClient()
 			c.markConnected("http://second", "", identity, 0)
 			if _, _, configured := c.workloadMetricsConfig(); configured != (identity == "A") {
