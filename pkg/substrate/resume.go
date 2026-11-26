@@ -77,34 +77,31 @@ func RecoverySource(a Actor) *Snapshot {
 	return src
 }
 
-// TemplateUIDs maps each template to its current UID. A nil map, or a
-// missing entry, means the template was not read.
-type TemplateUIDs map[Ref]string
-
-// ResumeContext is what a resume reading compares a snapshot with: the
-// templates' current UIDs and, when workers were read, the runtimes the
-// active workers of each class can restore under.
+// ResumeContext holds the current templates and the complete active worker
+// inventory used to check a snapshot's runtime against eligible workers.
 type ResumeContext struct {
-	UIDs TemplateUIDs
-	// runtimes is nil when workers were not read.
-	runtimes map[string][]Runtime
+	templates map[Ref]Template
+	workers   map[string][]Worker
 }
 
-// NewResumeContext indexes the active workers' runtimes by class.
-// workersComplete false means Radar does not know every runtime the fleet
-// runs, so it cannot say none is compatible.
-func NewResumeContext(uids TemplateUIDs, workers []Worker, workersComplete bool) ResumeContext {
-	rc := ResumeContext{UIDs: uids}
-	if !workersComplete {
-		return rc
+func NewResumeContext(templates []Template, workers []Worker, workersComplete bool) ResumeContext {
+	rc := ResumeContext{templates: make(map[Ref]Template, len(templates))}
+	for _, t := range templates {
+		rc.templates[t.Ref()] = t
 	}
-	rc.runtimes = map[string][]Runtime{}
-	for _, w := range workers {
-		if w.State != WorkerActive {
-			continue
-		}
-		for _, rt := range w.Runtimes {
-			rc.runtimes[rt.Class] = append(rc.runtimes[rt.Class], rt)
+	if workersComplete {
+		rc.workers = map[string][]Worker{}
+		for _, w := range workers {
+			if w.State != WorkerActive {
+				continue
+			}
+			classes := map[string]bool{}
+			for _, rt := range w.Runtimes {
+				if !classes[rt.Class] {
+					rc.workers[rt.Class] = append(rc.workers[rt.Class], w)
+					classes[rt.Class] = true
+				}
+			}
 		}
 	}
 	return rc
@@ -124,12 +121,12 @@ func resumeOf(a Actor, s *Snapshot, rc ResumeContext, assignment *Assignment) Re
 	if s == nil {
 		return Resume{With: ResumeCold}
 	}
+	template, templateRead := rc.templates[a.Template]
 	if s.ActorTemplateUID != "" {
-		uid, ok := rc.UIDs[a.Template]
-		if !ok {
+		if !templateRead {
 			return Resume{With: ResumeUnknown}
 		}
-		if uid != s.ActorTemplateUID {
+		if template.UID != s.ActorTemplateUID {
 			return Resume{With: ResumeVolumes}
 		}
 	}
@@ -153,14 +150,20 @@ func resumeOf(a Actor, s *Snapshot, rc ResumeContext, assignment *Assignment) Re
 		}
 		return Resume{With: ResumeFilesystem, Condition: ConditionRuntimeMismatch}
 	}
-	if rc.runtimes != nil {
-		class := rc.runtimes[s.Runtime.Class]
-		for _, rt := range class {
-			if RuntimeCompatible(*s.Runtime, rt) {
+	// A node-pinned actor first tries compatible placement there and can
+	// detach before falling back. Selectors alone cannot settle that case.
+	if templateRead && a.AssignedNode == "" {
+		eligible := false
+		for _, w := range rc.workers[s.Runtime.Class] {
+			if !SelectorMatches(template.WorkerSelector, w.Labels) || !SelectorMatches(a.WorkerSelector, w.Labels) {
+				continue
+			}
+			eligible = true
+			if slices.ContainsFunc(w.Runtimes, func(rt Runtime) bool { return RuntimeCompatible(*s.Runtime, rt) }) {
 				return Resume{With: ResumeMemory, Condition: ConditionCompatibleRuntime}
 			}
 		}
-		if len(class) > 0 {
+		if eligible {
 			return Resume{With: ResumeFilesystem, Condition: ConditionRuntimeMismatch}
 		}
 	}
@@ -263,8 +266,9 @@ func Revertable(a Actor) bool {
 	case StateCrashed, StateRunning:
 		return true
 	case StateSuspended:
-		n := NewestSnapshot(a)
-		return n != nil && n.Locality != ""
+		return slices.ContainsFunc(a.Snapshots, func(s Snapshot) bool {
+			return s.Generation == a.LastAssignedGeneration && s.Locality != ""
+		})
 	}
 	return false
 }
@@ -276,6 +280,7 @@ func RecoveryOf(a Actor, rc ResumeContext) *Recovery {
 		return nil
 	}
 	src := RecoverySource(a)
+	a.AssignedNode = ""
 	r := &Recovery{Resume: resumeOf(a, src, rc, nil), Discarded: []Discarded{}}
 	var floor int32
 	if src != nil {

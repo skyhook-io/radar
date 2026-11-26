@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest'
 import { useQuery } from '@tanstack/react-query'
-import { useSubstrateActor, useSubstrateActors, useSubstrateStatus } from './substrateWorkspace'
+import { useSubstrateActor, useSubstrateActorLogs, useSubstrateActors, useSubstrateStatus } from './substrateWorkspace'
 
 vi.mock('@tanstack/react-query', () => ({ useQuery: vi.fn(() => ({})), useMutation: vi.fn(), useQueryClient: vi.fn() }))
 const feature = vi.hoisted(() => ({ support: 'unsupported', gatedKey: ['radar-feature-unsupported'] }))
@@ -50,4 +50,15 @@ it('keeps no previous answer for a detail, only for another page of the same act
   expect(keep(previous, { queryKey: ['substrate', '/other', 'cluster-a', ...page1.queryKey.slice(3)] })).toBeUndefined()
   expect(keep(previous, { queryKey: a.queryKey })).toBeUndefined()
   expect(keep(previous, undefined)).toBeUndefined()
+})
+
+it('reads a new log window after a crash and leaves last-node polling off', () => {
+  const actor = { atespace: 'research', name: 'a' }
+  useSubstrateActorLogs({ ...actor, state: 'running', assignment: { worker: 'w', namespace: 'agents', pool: 'pool', pod: 'pod', node: 'node' } }, { tailLines: 8 })
+  const running = lastQuery()
+  useSubstrateActorLogs({ ...actor, state: 'crashed', crash: { time: '2026-11-26T00:00:00Z' } }, { tailLines: 8, pollMs: false })
+  const crashed = lastQuery()
+  expect(running.refetchInterval).toBe(15_000)
+  expect(crashed.queryKey).not.toEqual(running.queryKey)
+  expect(crashed.refetchInterval).toBe(false)
 })

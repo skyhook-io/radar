@@ -72,7 +72,7 @@ func TestMemoryResumeNeedsACompatibleRuntime(t *testing.T) {
 		{"resuming on a compatible runtime is unconditional", Actor{State: StateResuming, Snapshots: memory, Assignment: &Assignment{Runtime: &rtSuper}}, nil, false, Resume{ResumeMemory, ""}},
 	}
 	for _, tc := range tests {
-		if got := ResumeOf(tc.actor, NewResumeContext(nil, tc.workers, tc.read)); got != tc.want {
+		if got := ResumeOf(tc.actor, NewResumeContext([]Template{{}}, tc.workers, tc.read)); got != tc.want {
 			t.Errorf("%s: %+v, want %+v", tc.name, got, tc.want)
 		}
 	}
@@ -122,7 +122,7 @@ func TestDrainingIsInformationalUntilThePodDeadline(t *testing.T) {
 	w := worker("d", "p", WorkerDraining, 8, 1)
 	w.UpdateTime = ago(20 * time.Minute)
 	actors := []Actor{{Atespace: "a", Name: "x", State: StateRunning, Assignment: &Assignment{Worker: "d"}}}
-	base := Inputs{Actors: actors, ActorsRead: true, Workers: []Worker{w}, WorkersRead: true, Now: now}
+	base := Inputs{Actors: actors, ActorsRead: true, ActorsComplete: true, Workers: []Worker{w}, WorkersRead: true, Now: now}
 
 	in := base
 	in.WorkerPods = WorkerPods{"agents/d-pod": {Ready: true, HasIP: true, Deadline: now.Add(40 * time.Minute)}}
@@ -208,8 +208,12 @@ func TestServiceVerdictsAddRowsWhereDefinite(t *testing.T) {
 	in.Service = &Service{Why: "collecting", Collecting: true}
 	for _, c := range Checks(in) {
 		prom := c.Rule == "poolService" || c.Rule == RuleNodeUploadsOverdue
-		if c.Collecting != prom || (prom && (c.Ran || c.Why != "collecting")) {
-			t.Errorf("only the Prometheus checks wait on its first answer: %+v", c)
+		wantWhy := "collecting"
+		if c.Rule == RulePoolFull {
+			prom, wantWhy = true, "the worker list is incomplete and collecting"
+		}
+		if c.Collecting != prom || (prom && (c.Ran || c.Why != wantWhy)) {
+			t.Errorf("checks depending on Prometheus wait for its first answer: %+v", c)
 		}
 	}
 	if s := SummarizeService(in.Service); s.Read || !s.Collecting {
@@ -343,5 +347,26 @@ func TestNextStepsAreShort(t *testing.T) {
 		if n := len(strings.Fields(step.text)); n > 25 {
 			t.Errorf("%s: %d words: %s", state, n, step.text)
 		}
+	}
+}
+
+func TestResumeFiltersBothWorkerSelectors(t *testing.T) {
+	rt := Runtime{Class: "gvisor", Schema: "compatible"}
+	tmpl := Template{Atespace: "research", Name: "agent", WorkerSelector: map[string]string{"pool": "blue"}}
+	a := Actor{Template: tmpl.Ref(), WorkerSelector: map[string]string{"tier": "batch"}, Snapshots: []Snapshot{{Fidelity: FidelityMemory, Durable: DurableCompleted, Runtime: &rt}}}
+	workers := []Worker{
+		{State: WorkerActive, Labels: map[string]string{"pool": "green", "tier": "batch"}, Runtimes: []Runtime{rt}},
+		{State: WorkerActive, Labels: map[string]string{"pool": "blue", "tier": "interactive"}, Runtimes: []Runtime{rt}},
+		{State: WorkerActive, Labels: map[string]string{"pool": "blue", "tier": "batch"}, Runtimes: []Runtime{{Class: "gvisor", Schema: "mismatch"}}},
+	}
+	if got := ResumeOf(a, NewResumeContext([]Template{tmpl}, workers, true)); got.With != ResumeFilesystem || got.Condition != ConditionRuntimeMismatch {
+		t.Errorf("only the worker matching both selectors is eligible: %+v", got)
+	}
+	if got := ResumeOf(a, NewResumeContext([]Template{tmpl}, workers[:2], true)); got.Condition != ConditionCompatibleRuntime {
+		t.Errorf("no eligible worker is not a known filesystem downgrade: %+v", got)
+	}
+	a.AssignedNode = "pinned-node"
+	if got := ResumeOf(a, NewResumeContext([]Template{tmpl}, workers, true)); got.Condition != ConditionCompatibleRuntime {
+		t.Errorf("current selectors do not establish a downgrade for a pinned actor: %+v", got)
 	}
 }

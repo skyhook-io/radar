@@ -41,15 +41,16 @@ const (
 	logReservedPrefix = "ate."
 	// memoryKillMessage is ateworker's record of a memory-limit kill, with
 	// the limit and the usage that crossed it.
-	memoryKillMessage = "Killing a sandbox over its memory limit"
-	logMemoryLimitKey = "memoryLimitBytes"
-	logMemoryUsageKey = "ate.stats.memory.usage"
+	memoryKillMessage              = "Killing a sandbox over its memory limit"
+	memoryKillFailedMessage        = "Failed to kill a sandbox over its memory limit"
+	microVMMemoryKillMessage       = "Killing a microVM over its memory limit"
+	microVMMemoryKillFailedMessage = "Failed to kill a microVM over its memory limit"
+	logMemoryLimitKey              = "memoryLimitBytes"
+	logMemoryUsageKey              = "ate.stats.memory.usage"
 	// sandboxContainer is runsc's ID for the gVisor sandbox itself, whose
 	// output is not the actor's own unless asked for by name.
 	sandboxContainer = "_sandbox"
 )
-
-var containerKeyQuoted = `"` + logContainerNameKey + `"`
 
 var logLabelKeys = []string{"logging.googleapis.com/labels", "labels"}
 
@@ -141,6 +142,7 @@ type LogLine struct {
 	// memory-limit kill: the limit and the usage that crossed it.
 	MemoryLimitBytes *int64 `json:"memoryLimitBytes,omitempty"`
 	MemoryUsageBytes *int64 `json:"memoryUsageBytes,omitempty"`
+	MemoryKillFailed bool   `json:"-"`
 }
 
 // SplitKubeletTimestamp splits the RFC 3339 timestamp the kubelet prefixes
@@ -160,17 +162,26 @@ func SplitKubeletTimestamp(line string) (time.Time, string, bool) {
 // FilterLine returns the line if the filter selects it. kubeletTime is the
 // kubelet's stamp for the line, zero when there was none.
 func FilterLine(line string, f LogFilter, kubeletTime time.Time) (LogLine, bool) {
-	// Under lifecycle nearly every line is a container's; skip them before
-	// decoding. An actor cannot forge the key: Substrate strips reserved keys
-	// from an actor's own labels.
-	if f.Source == LogSourceLifecycle && strings.Contains(line, containerKeyQuoted) {
-		return LogLine{}, false
+	out, selected, _ := filterLine(line, f, kubeletTime, false)
+	return out, selected
+}
+
+// FilterLineWithEvidence classifies one line once, for display and for
+// memory-kill attribution regardless of the selected display source.
+func FilterLineWithEvidence(line string, f LogFilter, kubeletTime time.Time) (out LogLine, selected, evidence bool) {
+	return filterLine(line, f, kubeletTime, true)
+}
+
+func filterLine(line string, f LogFilter, kubeletTime time.Time, collectEvidence bool) (out LogLine, selected, evidence bool) {
+	// Substrate emits the DNS-style actor name or UID as plain JSON text.
+	if !strings.Contains(line, f.Target.Name) && (f.UID == "" || !strings.Contains(line, f.UID)) {
+		return LogLine{}, false, false
 	}
 	var m map[string]any
 	dec := json.NewDecoder(strings.NewReader(line))
 	dec.UseNumber()
 	if err := dec.Decode(&m); err != nil {
-		return LogLine{}, false
+		return LogLine{}, false, false
 	}
 
 	var emitter Ref
@@ -188,23 +199,31 @@ func FilterLine(line string, f LogFilter, kubeletTime time.Time) (LogLine, bool)
 		}
 	}
 	kind := LogKindContainer
+	msg, _ := m["msg"].(string)
+	killing := msg == memoryKillMessage || msg == microVMMemoryKillMessage
+	killFailed := msg == memoryKillFailedMessage || msg == microVMMemoryKillFailedMessage
 	switch {
 	case emitter.Name != "":
-		if f.Source == LogSourceWorker || !f.matches(emitter, container) {
-			return LogLine{}, false
-		}
+		selected = f.Source != LogSourceWorker && f.matches(emitter, container)
 		if container == "" {
 			kind = LogKindLifecycle
+			message, ok := m["message"].(string)
+			if !ok {
+				message = msg
+			}
+			evidence = collectEvidence && emitter == f.Target && IsActorExecutionStart(message)
 		}
-	case (f.Source == LogSourceAll || f.Source == LogSourceWorker) && f.Container == "" && f.workerLine(m):
+	case f.workerLine(m):
 		kind = LogKindWorker
+		selected = (f.Source == LogSourceAll || f.Source == LogSourceWorker) && f.Container == ""
+		evidence = collectEvidence && (killing || killFailed)
 		for _, key := range workerIdentityKeys {
 			delete(m, key)
 		}
-	default:
-		return LogLine{}, false
 	}
-
+	if !selected && !evidence {
+		return LogLine{}, false, false
+	}
 	// Strip the whole reserved prefix, not the known keys, so an actor cannot
 	// have an ate.* label of its own shown as platform attribution.
 	for _, key := range logLabelKeys {
@@ -222,9 +241,10 @@ func FilterLine(line string, f LogFilter, kubeletTime time.Time) (LogLine, bool)
 		}
 	}
 
-	out := LogLine{Kind: kind, Container: container, Time: kubeletTime}
+	out = LogLine{Kind: kind, Container: container, Time: kubeletTime}
 	if kind == LogKindWorker {
-		if msg, _ := m["msg"].(string); msg == memoryKillMessage {
+		out.MemoryKillFailed = killFailed
+		if killing {
 			out.MemoryLimitBytes, out.MemoryUsageBytes = jsonInt(m[logMemoryLimitKey]), jsonInt(m[logMemoryUsageKey])
 		}
 	}
@@ -250,11 +270,15 @@ func FilterLine(line string, f LogFilter, kubeletTime time.Time) (LogLine, bool)
 		}
 	}
 
+	if !selected {
+		return out, false, evidence
+	}
+
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(m); err != nil {
-		return LogLine{}, false
+		return LogLine{}, false, false
 	}
 	encoded := strings.TrimSpace(buf.String())
 	if hasTime {
@@ -267,7 +291,16 @@ func FilterLine(line string, f LogFilter, kubeletTime time.Time) (LogLine, bool)
 		}
 	}
 	out.Text = encoded
-	return out, true
+	return out, true, evidence
+}
+
+// IsActorExecutionStart reports a lifecycle record that starts a new execution.
+func IsActorExecutionStart(message string) bool {
+	switch message {
+	case "Actor starting", "Actor started", "Actor restoring", "Actor restored":
+		return true
+	}
+	return false
 }
 
 func jsonInt(v any) *int64 {

@@ -64,12 +64,15 @@ const (
 // the "secret" atespace.
 type fakeControl struct {
 	atespaceCalls atomic.Int64
+	templateCalls atomic.Int64
+	workerCalls   atomic.Int64
 	ateapi.UnimplementedControlServer
-	atespaces []string
-	actors    []*ateapi.Actor
-	templates []*ateapi.ActorTemplate
-	workers   []*ateapi.Worker
-	egress    map[string]*ateapi.EgressPolicy
+	atespaces    []string
+	actors       []*ateapi.Actor
+	templates    []*ateapi.ActorTemplate
+	workers      []*ateapi.Worker
+	pointWorkers []*ateapi.Worker
+	egress       map[string]*ateapi.EgressPolicy
 }
 
 func principal(ctx context.Context) string {
@@ -136,6 +139,20 @@ func (f *fakeControl) ListWorkers(_ context.Context, req *ateapi.ListWorkersRequ
 	return &ateapi.ListWorkersResponse{Workers: page, NextPageToken: next}, nil
 }
 
+func (f *fakeControl) GetWorker(_ context.Context, req *ateapi.GetWorkerRequest) (*ateapi.Worker, error) {
+	f.workerCalls.Add(1)
+	workers := f.workers
+	if f.pointWorkers != nil {
+		workers = f.pointWorkers
+	}
+	for _, w := range workers {
+		if w.GetMetadata().GetName() == req.GetWorker().GetName() {
+			return w, nil
+		}
+	}
+	return nil, status.Error(codes.NotFound, "worker not found")
+}
+
 func (f *fakeControl) ListActorTemplates(ctx context.Context, req *ateapi.ListActorTemplatesRequest) (*ateapi.ListActorTemplatesResponse, error) {
 	if err := allowed(ctx, req.GetAtespace()); err != nil {
 		return nil, err
@@ -177,6 +194,7 @@ func (f *fakeControl) GetActor(ctx context.Context, req *ateapi.GetActorRequest)
 }
 
 func (f *fakeControl) GetActorTemplate(ctx context.Context, req *ateapi.GetActorTemplateRequest) (*ateapi.ActorTemplate, error) {
+	f.templateCalls.Add(1)
 	if err := allowed(ctx, req.GetActorTemplate().GetAtespace()); err != nil {
 		return nil, err
 	}
@@ -562,6 +580,11 @@ func TestSubstrateConnected(t *testing.T) {
 		t.Errorf("unknown state = %d", rec.Code)
 	}
 
+	call(t, s, s.handleSubstrateActors, substrateCall{path: "/api/substrate/actors?attention=1"}, &actors)
+	if want := ws.Summary.Actors.AttentionCount; actors.AttentionCount == nil || *actors.AttentionCount != want || len(actors.Rows) != want {
+		t.Errorf("overview and actor list attention counts differ: %d versus %+v", want, actors)
+	}
+
 	var detail substrateActorDetail
 	call(t, s, s.handleSubstrateActor, substrateCall{path: "/api/substrate/actors/research/lit-0201", params: map[string]string{"atespace": "research", "name": "lit-0201"}}, &detail)
 	if detail.Egress.State != "set" || detail.Egress.Rules != 2 || !slices.Equal(detail.Egress.Destinations, []string{"api.openai.com", "*.zendesk.com"}) {
@@ -602,6 +625,17 @@ func TestSubstrateConnected(t *testing.T) {
 	}
 	if adk := byName["adk"]; adk.Golden.State != model.GoldenFailed || adk.Golden.Error != "WarmupFailed: exited 137" {
 		t.Errorf("adk = %+v", adk)
+	}
+
+	templateAttention := 0
+	for _, row := range templates.Templates {
+		if row.Golden.State == model.GoldenFailed || row.MatchingPoolsComplete && len(row.MatchingPools) == 0 ||
+			row.AttentionCount != nil && *row.AttentionCount > 0 {
+			templateAttention++
+		}
+	}
+	if templateAttention != ws.Summary.Templates.AttentionCount {
+		t.Errorf("overview and template list attention counts differ: %d versus %d", ws.Summary.Templates.AttentionCount, templateAttention)
 	}
 
 	var pool substratePoolResponse
@@ -850,6 +884,9 @@ func podLogsClient(t *testing.T, logs map[string]string) *kubernetes.Clientset {
 				if r.URL.Query().Get("container") != "" {
 					t.Errorf("the worker Pod log is read without a container, as kubectl ate does")
 				}
+				if got := r.URL.Query().Get("limitBytes"); got != strconv.Itoa(substrateLogMaxBytes) {
+					t.Errorf("the Pod log request limitBytes = %q", got)
+				}
 				w.Write([]byte(body))
 				return
 			}
@@ -998,21 +1035,22 @@ func TestSubstrateScopedIdentity(t *testing.T) {
 	}
 }
 
-func TestSubstrateDetailAttentionBeyondSample(t *testing.T) {
+func TestSubstrateActorDetailFromColdSnapshot(t *testing.T) {
 	s := substrateTestServer(t, substrateapi.Kube{})
 	f := defaultFake()
-	for i := range 25 {
-		a := fakeActor("research", fmt.Sprintf("crash-%02d", i), "lang", ateapi.ActorState_ACTOR_STATE_CRASHED, time.Now().Add(-time.Duration(i)*time.Second))
-		f.actors = append(f.actors, a)
-	}
+	f.actors[1].Status.Crash.Message = "killed for exceeding its memory limit"
 	connectFake(t, s, f, fullToken)
+	before := f.atespaceCalls.Load()
 	var detail substrateActorDetail
-	call(t, s, s.handleSubstrateActor, substrateCall{path: "/api/substrate/actors/research/lit-0193", params: map[string]string{"atespace": "research", "name": "lit-0193"}}, &detail)
-	if len(detail.Attention) != 1 || detail.Attention[0].Rule != model.RuleCrashedActors || slices.Contains(detail.Attention[0].Sample, model.Ref{Atespace: "research", Name: "lit-0193"}) {
-		t.Errorf("a crashed actor outside the sample still gets its row: %+v", detail.Attention)
+	rec := call(t, s, s.handleSubstrateActor, substrateCall{path: "/api/substrate/actors/research/lit-0193", params: map[string]string{"atespace": "research", "name": "lit-0193"}}, &detail)
+	if rec.Code != http.StatusOK || detail.APITier.State != substrateapi.TierConnected || detail.Template == nil ||
+		detail.Row.Cause != model.CauseMemoryLimit || len(detail.Attention) != 1 || detail.Attention[0].Rule != model.RuleCrashedActors ||
+		!strings.Contains(detail.Attention[0].Command, "--template") {
+		t.Fatalf("a cold read supplies the actor's own evidence and recovery: %d %+v", rec.Code, detail)
 	}
-	if detail.Coverage.Actors.State != substrateapi.CoverageFull {
-		t.Errorf("detail carries its source coverage: %+v", detail.Coverage)
+	if detail.Coverage.Actors.State == substrateapi.CoverageFull || detail.Coverage.Workers.State == substrateapi.CoverageFull ||
+		f.atespaceCalls.Load() != before || f.templateCalls.Load() != 1 {
+		t.Errorf("detail must use point reads with honest fleet coverage: %+v", detail.Coverage)
 	}
 }
 
@@ -1021,11 +1059,12 @@ func TestSubstrateTemplateBeyondCap(t *testing.T) {
 	substrateapi.MaxListItems = 2
 	t.Cleanup(func() { substrateapi.MaxListItems = prev })
 	s := substrateTestServer(t, substrateapi.Kube{})
-	connectFake(t, s, defaultFake(), fullToken)
+	f := defaultFake()
+	connectFake(t, s, f, fullToken)
 	// The fake lists lang, adk, classified; the cap keeps the first two.
 	var resp substrateTemplateResponse
 	rec := call(t, s, s.handleSubstrateTemplate, substrateCall{path: "/api/substrate/templates/secret/classified", params: map[string]string{"atespace": "secret", "name": "classified"}}, &resp)
-	if rec.Code != http.StatusOK || resp.Template.Name != "classified" {
+	if rec.Code != http.StatusOK || resp.Template.Name != "classified" || resp.Spec == nil || f.templateCalls.Load() != 1 {
 		t.Fatalf("a template beyond the cap = %d %s", rec.Code, rec.Body)
 	}
 	if resp.Coverage.Templates.Code != substrateapi.CodeCapExceeded {
@@ -1049,10 +1088,10 @@ func TestSubstrateKnownEmptyVersusUnknown(t *testing.T) {
 		}
 		return m
 	}
-	if got, ok := fields(substrateWorkerRowOf(model.Worker{Name: "empty"}, nil, true, nil))["actors"]; !ok || len(got.([]any)) != 0 {
+	if got, ok := fields(substrateWorkerRowOf(model.Worker{Name: "empty"}, nil, substrateapi.Coverage{State: substrateapi.CoverageFull}, nil))["actors"]; !ok || len(got.([]any)) != 0 {
 		t.Errorf("actors read and none assigned must encode as [], got %v (present %v)", got, ok)
 	}
-	if _, ok := fields(substrateWorkerRowOf(model.Worker{Name: "w"}, nil, false, nil))["actors"]; ok {
+	if _, ok := fields(substrateWorkerRowOf(model.Worker{Name: "w"}, nil, substrateapi.Coverage{}, nil))["actors"]; ok {
 		t.Error("actors not read must be absent")
 	}
 	if got, ok := fields(substratePoolResponse{Templates: []model.Ref{}})["templates"]; !ok || len(got.([]any)) != 0 {
@@ -1317,7 +1356,7 @@ func TestSubstrateActorLogsFromLastNode(t *testing.T) {
 		if resp.Origin != substrateLogOriginLastNode || resp.ReasonCode != "candidates" || resp.Node != "node-1" || len(resp.Searched) != 2 {
 			t.Fatalf("resp = %+v", resp)
 		}
-		if got := lineMessages(resp.Lines); !slices.Equal(got, []string{"OOM soon", "container agent exited: OOMKilled"}) || resp.Lines[0].Pod != "agent-pool-old" {
+		if got := lineMessages(resp.Lines); !slices.Equal(got, []string{"OOM soon", "container agent exited: OOMKilled"}) || resp.Lines[0].Pod != "agent-pool-old" || resp.Lines[0].Namespace != "agents" {
 			t.Errorf("lines = %+v", resp.Lines)
 		}
 		if resp.Searched[0].Matched != 2 || resp.Searched[1].Matched != 0 {
@@ -1330,6 +1369,19 @@ func TestSubstrateActorLogsFromLastNode(t *testing.T) {
 		resp := read()
 		if resp.ReasonCode != "noMatch" || len(resp.Lines) != 0 || len(resp.Searched) != 1 || resp.Searched[0].Pod != "agent-pool-other" {
 			t.Errorf("resp = %+v", resp)
+		}
+	})
+	t.Run("unread streams do not count as searches", func(t *testing.T) {
+		setPods(workerPod("agents", "gone", "node-1"), workerPod("other", "readable", "node-1"))
+		useLogs(map[string]string{"other/readable": actorLine("research", "other-actor", "agent", "not mine")})
+		resp := read()
+		if resp.ReasonCode != "noMatch" || !resp.Partial || !strings.Contains(resp.Reason, "None of the 1 worker Pod") || resp.Searched[0].Outcome != "gone" {
+			t.Errorf("partial no match: %+v", resp)
+		}
+		useLogs(nil)
+		rec := call(t, s, s.handleSubstrateActorLogs, substrateCall{path: "/logs", params: map[string]string{"atespace": "research", "name": "lit-0193"}}, nil)
+		if rec.Code != http.StatusBadGateway || substrateErrorCode(t, rec) != substrateapi.CodeLogsUnavailable {
+			t.Errorf("no readable streams: %d %s", rec.Code, rec.Body)
 		}
 	})
 	nodeGone := func(gone bool) {
@@ -1422,7 +1474,8 @@ func TestSubstrateActorDetailWorkerImpact(t *testing.T) {
 	connectFake(t, s, f, fullToken)
 	var detail substrateActorDetail
 	call(t, s, s.handleSubstrateActor, substrateCall{path: "/a", params: map[string]string{"atespace": "research", "name": "lit-0201"}}, &detail)
-	if detail.WorkerImpact == nil || detail.WorkerImpact.Kind != model.ImpactUnavailable || !strings.Contains(detail.WorkerImpact.Reading, "still records this actor as running") {
+	if detail.WorkerImpact == nil || detail.WorkerImpact.Kind != model.ImpactUnavailable || !strings.Contains(detail.WorkerImpact.Reading, "still records this actor as running") ||
+		detail.Row.WorkerImpact == nil || detail.Worker == nil || f.workerCalls.Load() != 1 || detail.Coverage.Workers.State == substrateapi.CoverageFull {
 		t.Errorf("worker impact = %+v", detail.WorkerImpact)
 	}
 }
@@ -1716,6 +1769,12 @@ func TestSubstratePoolDetailAbsence(t *testing.T) {
 	if rec := read("gpu-pool"); rec.Code != http.StatusOK {
 		t.Errorf("a pool the list missed but a get finds = %d %s", rec.Code, rec.Body)
 	}
+	listMissed.SetName("agent-pool")
+	get(listMissed, nil)
+	if rec := call(t, s, s.handleSubstratePool, substrateCall{path: "/x", params: map[string]string{"namespace": "agents", "name": "agent-pool"}}, &pool); rec.Code != http.StatusOK ||
+		pool.Pool.Kubernetes == nil || pool.Pool.Kubernetes.Desired == nil || *pool.Pool.Kubernetes.Desired != 2 || len(pool.Workers) != 1 {
+		t.Errorf("direct GET enriches a worker-backed row: %d %s", rec.Code, rec.Body)
+	}
 	get(nil, apierrors.NewNotFound(schema.GroupResource{Group: "ate.dev", Resource: "workerpools"}, "nope"))
 	if rec := read("nope"); rec.Code != http.StatusNotFound {
 		t.Errorf("proven absent (get NotFound, every worker read) = %d", rec.Code)
@@ -1733,10 +1792,10 @@ func TestSubstrateWorkerHeldForAbsentWithoutUpdateTime(t *testing.T) {
 		_ = json.Unmarshal(b, &m)
 		return m
 	}
-	if _, ok := fields(substrateWorkerRowOf(model.Worker{Name: "w"}, nil, false, nil))["heldForSeconds"]; ok {
+	if _, ok := fields(substrateWorkerRowOf(model.Worker{Name: "w"}, nil, substrateapi.Coverage{}, nil))["heldForSeconds"]; ok {
 		t.Error("no update time: how long the state held is unknown, not 0")
 	}
-	if got := fields(substrateWorkerRowOf(model.Worker{Name: "w", UpdateTime: time.Now().Add(-time.Minute)}, nil, false, nil))["heldForSeconds"]; got == nil {
+	if got := fields(substrateWorkerRowOf(model.Worker{Name: "w", UpdateTime: time.Now().Add(-time.Minute)}, nil, substrateapi.Coverage{}, nil))["heldForSeconds"]; got == nil {
 		t.Error("with an update time, heldForSeconds is set")
 	}
 }
@@ -1767,7 +1826,9 @@ func TestSubstrateMemoryKillIsTiedToTheCurrentCrash(t *testing.T) {
 	event := func(msg string, at time.Time) substrateLogLine {
 		return substrateLogLine{LogLine: model.LogLine{Kind: model.LogKindLifecycle, Time: at, Message: msg}, Pod: "p"}
 	}
-	crashed := model.Actor{Atespace: "research", Name: "lit", State: model.StateCrashed, Crash: &model.Crash{Message: "worker deleted", Time: crashAt}}
+	crashed := model.Actor{Atespace: "research", Name: "lit", State: model.StateCrashed, Crash: &model.Crash{Message: "killed for exceeding its memory limit", Time: crashAt}}
+	workerDeleted := crashed
+	workerDeleted.Crash = &model.Crash{Message: "worker deleted", Time: crashAt}
 	running := model.Actor{Atespace: "research", Name: "lit", State: model.StateRunning}
 	tests := []struct {
 		name    string
@@ -1776,7 +1837,8 @@ func TestSubstrateMemoryKillIsTiedToTheCurrentCrash(t *testing.T) {
 		current bool
 	}{
 		{"seconds before the crash", crashed, []substrateLogLine{kill(crashAt.Add(-5 * time.Second))}, true},
-		{"a day before a worker-deletion crash", crashed, []substrateLogLine{kill(crashAt.Add(-24 * time.Hour))}, false},
+		{"seconds before a worker-deletion crash", workerDeleted, []substrateLogLine{kill(crashAt.Add(-5 * time.Second))}, false},
+		{"a day before a memory-limit crash", crashed, []substrateLogLine{kill(crashAt.Add(-24 * time.Hour))}, false},
 		{"a restore came between", crashed, []substrateLogLine{kill(crashAt.Add(-2 * time.Minute)), event("Actor restored", crashAt.Add(-time.Minute))}, false},
 		{"a checkpoint does not start an execution", crashed, []substrateLogLine{kill(crashAt.Add(-2 * time.Minute)), event("Actor checkpointing", crashAt.Add(-time.Minute))}, true},
 		{"after the crash", crashed, []substrateLogLine{kill(crashAt.Add(time.Minute))}, false},
@@ -1825,7 +1887,7 @@ func TestSubstrateActorLogsWorkerRecords(t *testing.T) {
 	if got := lineMessages(worker.Lines); !slices.Equal(got, []string{"Killing a sandbox over its memory limit", "Sandbox died"}) || worker.Lines[0].Kind != model.LogKindWorker {
 		t.Errorf("worker lines = %+v", worker.Lines)
 	}
-	if k := worker.MemoryKill; k == nil || k.LimitBytes != 2147483648 || k.Pod != "agent-pool-abc" || k.UsageBytes == nil {
+	if k := worker.MemoryKill; k == nil || k.LimitBytes != 2147483648 || k.Pod != "agent-pool-abc" || k.Namespace != "agents" || k.UsageBytes == nil {
 		t.Errorf("memory kill = %+v", worker.MemoryKill)
 	}
 	if all := read("all"); len(all.Lines) != 3 || all.MemoryKill == nil {
@@ -1837,20 +1899,19 @@ func TestSubstrateActorLogsWorkerRecords(t *testing.T) {
 	}
 }
 
-// A kill, then a restart, then an unrelated crash: the restart rules the kill
-// out, and the Worker view, which drops lifecycle lines, says the same.
+// A failed kill rules out its attempt even when the filtered log hides worker records.
 func TestSubstrateMemoryKillVerdictIgnoresTheLogFilter(t *testing.T) {
 	s := substrateTestServer(t, substrateapi.Kube{})
 	f := defaultFake()
 	f.actors[0].Metadata.Uid = "uid-0201"
 	f.actors[0].Status.State = ateapi.ActorState_ACTOR_STATE_CRASHED
 	crash := time.Date(2026, 11, 17, 15, 52, 0, 0, time.UTC)
-	f.actors[0].Status.Crash = &ateapi.ActorCrash{Message: "exit status 1", CrashTime: timestamppb.New(crash)}
+	f.actors[0].Status.Crash = &ateapi.ActorCrash{Message: "killed for exceeding its memory limit", CrashTime: timestamppb.New(crash)}
 	connectFake(t, s, f, fullToken)
 	labels := `"labels":{"ate.atespace":"research","ate.actor.name":"lit-0201"`
 	log := strings.Join([]string{
 		`2026-11-17T15:48:11Z {"time":"2026-11-17T15:48:11Z","level":"WARN","msg":"Killing a sandbox over its memory limit","ate.atespace":"research","ate.actor.name":"lit-0201","ate.actor.uid":"uid-0201","memoryLimitBytes":2147483648}`,
-		`2026-11-17T15:49:00Z {"message":"Actor restored",` + labels + `}}`,
+		`2026-11-17T15:48:12Z {"msg":"Failed to kill a sandbox over its memory limit","ate.actor.uid":"uid-0201"}`,
 		`2026-11-17T15:51:59Z {"message":"panic: unrelated",` + labels + `,"ate.actor.container.name":"agent"}}`,
 	}, "\n")
 	prev := k8s.SetTestClient(podLogClient(t, "agents", "agent-pool-abc", log))
@@ -1986,5 +2047,85 @@ func TestSubstrateKagentSandboxActorPage(t *testing.T) {
 	i := slices.IndexFunc(detail.Attention, func(a model.Attention) bool { return a.Rule == model.RuleCrashedActors })
 	if i < 0 || detail.Attention[i].Command != "" || !strings.Contains(detail.Attention[i].NextStep, "SandboxService") || strings.Contains(detail.Attention[i].NextStep, "RevertSession") {
 		t.Errorf("crash step = %+v", detail.Attention)
+	}
+}
+
+func TestSubstrateScopedReadsShareAnActorBudget(t *testing.T) {
+	prev := substrateapi.MaxActors
+	substrateapi.MaxActors = 2
+	t.Cleanup(func() { substrateapi.MaxActors = prev })
+	s := substrateTestServer(t, substrateapi.Kube{})
+	connectFake(t, s, defaultFake(), fullToken)
+	ctx := context.Background()
+	first, cov, err := s.substrate.AtespaceActors(ctx, "research")
+	if err != nil || len(first) != 2 || cov.Code != substrateapi.CodeCapExceeded {
+		t.Fatalf("first scoped read: %d, %+v, %+v", len(first), cov, err)
+	}
+	second, cov, err := s.substrate.AtespaceActors(ctx, "support")
+	if err != nil || len(second) != 0 || cov.State != substrateapi.CoveragePartial || cov.Code != substrateapi.CodeCapExceeded ||
+		cov.Count != nil || !slices.Equal(cov.UnreadAtespaces, []string{"support"}) {
+		t.Errorf("budget exhaustion must leave the next atespace unread: %d, %+v, %+v", len(second), cov, err)
+	}
+	now := time.Now().Add(2 * substrateapi.Freshness)
+	s.substrate.Now = func() time.Time { return now }
+	afterExpiry, cov, err := s.substrate.AtespaceActors(ctx, "support")
+	if err != nil || len(afterExpiry) != 1 || cov.State != substrateapi.CoverageFull {
+		t.Errorf("expired reads must release their budget: %d, %+v, %+v", len(afterExpiry), cov, err)
+	}
+	remaining, cov, err := s.substrate.AtespaceActors(ctx, "research")
+	if err != nil || len(remaining) != 1 || cov.Cap != 1 || cov.Code != substrateapi.CodeCapExceeded ||
+		!strings.Contains(cov.Message, "shared atespace actor budget") {
+		t.Errorf("a scoped reader takes the remaining shared capacity: %d, %+v, %+v", len(remaining), cov, err)
+	}
+}
+
+func TestSubstrateActorDetailRefreshesStaleWorker(t *testing.T) {
+	s := substrateTestServer(t, substrateapi.Kube{})
+	f := defaultFake()
+	f.pointWorkers = defaultFake().workers
+	f.pointWorkers[0].Status.State = ateapi.WorkerState_WORKER_STATE_UNAVAILABLE
+	f.pointWorkers[0].Status.RegisteredEpoch = 1
+	s.substrate.Now = func() time.Time { return time.Now().Add(-2 * substrateapi.Freshness) }
+	connectFake(t, s, f, fullToken)
+	settledStatus(t, s)
+	var detail substrateActorDetail
+	rec := call(t, s, s.handleSubstrateActor, substrateCall{path: "/a", params: map[string]string{"atespace": "research", "name": "lit-0201"}}, &detail)
+	if rec.Code != http.StatusOK || f.workerCalls.Load() != 1 || detail.Worker == nil || detail.Worker.WorkerState == nil ||
+		(detail.Worker.WorkerState.Assigned != nil || detail.Worker.WorkerState.Lost != nil) || detail.WorkerImpact == nil || detail.WorkerImpact.Kind != model.ImpactRestarted {
+		t.Errorf("stale worker facts need a point read with qualified assignment counts: %d %+v", rec.Code, detail)
+	}
+}
+
+func TestSubstrateLogByteCapRetriesTheNewestTail(t *testing.T) {
+	target := model.Ref{Atespace: "research", Name: "lit"}
+	f, err := model.NewLogFilter(target, model.LogSourceAll, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := make(chan int, 3)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tail, _ := strconv.Atoi(r.URL.Query().Get("tailLines"))
+		requests <- tail
+		if r.URL.Query().Get("limitBytes") != strconv.Itoa(substrateLogMaxBytes) {
+			t.Error("missing byte cap")
+		}
+		if tail == substrateLogScanLines {
+			old := "older " + strings.Repeat("x", 1024) + "\n"
+			_, _ = w.Write([]byte(strings.Repeat(old, substrateLogMaxBytes/len(old)+1)[:substrateLogMaxBytes]))
+			return
+		}
+		_, _ = w.Write([]byte(actorLine(target.Atespace, target.Name, "app", "latest actor message") + "\n"))
+	}))
+	t.Cleanup(srv.Close)
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := (&Server{}).searchSubstratePod(httptest.NewRequest(http.MethodGet, "/logs", nil), client, "agents", "worker", f, 8)
+	if !got.pod.WindowFull || !slices.Equal(lineMessages(got.lines), []string{"latest actor message"}) || len(requests) != 2 {
+		t.Fatalf("newest tail after a byte-capped read: %+v, requests %d", got, len(requests))
+	}
+	if first, next := <-requests, <-requests; first != substrateLogScanLines || next >= first || next < 1 {
+		t.Errorf("tail requests: %d then %d", first, next)
 	}
 }

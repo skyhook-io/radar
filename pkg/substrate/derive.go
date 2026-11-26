@@ -2,6 +2,8 @@ package substrate
 
 import (
 	"maps"
+	"math"
+	"math/bits"
 	"slices"
 	"strings"
 	"time"
@@ -207,22 +209,14 @@ func HasFreeSlot(w Worker) bool {
 	return used < w.Capacity.Actors
 }
 
-// HasRoomFor reports whether worker w may take one more actor of template t,
-// as far as Radar can tell: a free actor slot (HasFreeSlot), and unbooked CPU
-// and memory (capacity less allocated) at least the template's limits. A limit
-// the template leaves at 0 does not constrain. Substrate's placement also
-// books the per-actor memory overhead of the worker's runtime, which Radar
-// does not read, and checks the actor's own selector, its snapshot and the
-// runtime. So true means the actor may fit; false is certain, since each of
-// those only narrows where it fits.
+// HasRoomFor reports whether worker w has a free actor slot and enough CPU
+// and memory for a fresh actor, including the default runtime's overhead.
 func HasRoomFor(w Worker, t Template) bool {
-	cpu, memory := lacks(w, t)
+	cpu, memory, _ := lacks(w, t)
 	return HasFreeSlot(w) && !cpu && !memory
 }
 
-// lacks reports which of t's limits exceed w's unbooked CPU and memory. A
-// capacity Substrate does not report is zero of every dimension.
-func lacks(w Worker, t Template) (cpu, memory bool) {
+func lacks(w Worker, t Template) (cpu, memory bool, booking int64) {
 	var capacity, allocated Resources
 	if w.Capacity != nil {
 		capacity = *w.Capacity
@@ -230,9 +224,20 @@ func lacks(w Worker, t Template) (cpu, memory bool) {
 	if w.Allocated != nil {
 		allocated = *w.Allocated
 	}
-	cpu = t.CPUMillicores > 0 && t.CPUMillicores > capacity.CPUMillicores-allocated.CPUMillicores
-	memory = t.MemoryBytes > 0 && t.MemoryBytes > capacity.MemoryBytes-allocated.MemoryBytes
-	return cpu, memory
+	cpu = t.CPUMillicores > capacity.CPUMillicores-allocated.CPUMillicores
+	// Substrate scales proportional overhead by bytes per GiB, rounding down.
+	hi, lo := bits.Mul64(uint64(t.MemoryBytes), uint64(w.DefaultMemoryOverheadPerGiB))
+	scaled := hi<<34 | lo>>30
+	if hi>>30 != 0 || scaled > math.MaxInt64 || t.MemoryBytes > math.MaxInt64-w.DefaultMemoryOverhead ||
+		int64(scaled) > math.MaxInt64-w.DefaultMemoryOverhead-t.MemoryBytes {
+		return cpu, true, math.MaxInt64
+	}
+	booking = t.MemoryBytes + w.DefaultMemoryOverhead + int64(scaled)
+	if t.CPUMillicores == 0 && booking == 0 {
+		return false, false, 0
+	}
+	memory = booking > capacity.MemoryBytes-allocated.MemoryBytes
+	return cpu, memory, booking
 }
 
 // What a pool's workers lack for an actor of any template that can run on it
@@ -260,37 +265,35 @@ type room struct {
 // roomOf judges whether any active worker with a free slot may take an actor
 // of any of the templates. With no such template, nothing is judged.
 func roomOf(workers []Worker, templates []Template) room {
-	r := room{templates: len(templates)}
-	if len(templates) == 0 {
-		return r
-	}
+	r := room{}
 	r.ask.CPUMillicores, r.ask.MemoryBytes = -1, -1
+	var cpu, memory bool
 	for _, t := range templates {
-		r.ask.CPUMillicores = leastAsk(r.ask.CPUMillicores, t.CPUMillicores)
-		r.ask.MemoryBytes = leastAsk(r.ask.MemoryBytes, t.MemoryBytes)
-	}
-	var cpu, memory, judged bool
-	for _, w := range workers {
-		if w.State != WorkerActive || !HasFreeSlot(w) {
-			continue
-		}
-		judged = true
-		alloc := Resources{}
-		if w.Allocated != nil {
-			alloc = *w.Allocated
-		}
-		r.unbooked.CPUMillicores = max(r.unbooked.CPUMillicores, w.Capacity.CPUMillicores-alloc.CPUMillicores)
-		r.unbooked.MemoryBytes = max(r.unbooked.MemoryBytes, w.Capacity.MemoryBytes-alloc.MemoryBytes)
-		for _, t := range templates {
-			if HasRoomFor(w, t) {
-				return room{templates: len(templates)}
+		matched := false
+		for _, w := range workers {
+			if w.State != WorkerActive || !HasFreeSlot(w) || !SelectorMatches(t.WorkerSelector, w.Labels) {
+				continue
 			}
-			c, m := lacks(w, t)
+			matched = true
+			c, m, booked := lacks(w, t)
+			if !c && !m {
+				return room{}
+			}
 			cpu, memory = cpu || c, memory || m
+			r.ask.CPUMillicores = leastAsk(r.ask.CPUMillicores, t.CPUMillicores)
+			r.ask.MemoryBytes = leastAsk(r.ask.MemoryBytes, booked)
+			alloc := Resources{}
+			if w.Allocated != nil {
+				alloc = *w.Allocated
+			}
+			r.unbooked.CPUMillicores = max(r.unbooked.CPUMillicores, w.Capacity.CPUMillicores-alloc.CPUMillicores)
+			r.unbooked.MemoryBytes = max(r.unbooked.MemoryBytes, w.Capacity.MemoryBytes-alloc.MemoryBytes)
+		}
+		if matched {
+			r.templates++
 		}
 	}
 	switch {
-	case !judged:
 	case cpu && memory:
 		r.lacking = LackingCPUAndMemory
 	case cpu:
@@ -484,22 +487,12 @@ func JoinPools(in Inputs) []PoolRow {
 			byPool[w.PoolRef().Key()] = append(byPool[w.PoolRef().Key()], w)
 		}
 	}
-	labels := map[string]map[string]string{}
-	for _, p := range KnownPools(pools, workers) {
-		labels[p.Ref.Key()] = p.Labels
-	}
 	out := make([]PoolRow, 0, len(rows))
 	for key, r := range rows {
 		r.SandboxClasses = slices.Sorted(maps.Keys(classes[key]))
 		r.Capacity = poolCapacity(*r)
 		if r.Capacity == CapacityFree && r.Placement != nil && r.Placement.Complete && in.TemplatesComplete {
-			var runs []Template
-			for _, t := range in.Templates {
-				if SelectorMatches(t.WorkerSelector, labels[key]) {
-					runs = append(runs, t)
-				}
-			}
-			r.room = roomOf(byPool[key], runs)
+			r.room = roomOf(byPool[key], in.Templates)
 			if r.room.lacking != "" {
 				r.Capacity, r.Lacking = CapacityNoRoom, r.room.lacking
 			}

@@ -66,6 +66,7 @@ describe('Agent Substrate overview, connected', () => {
     expect(html).not.toContain('aria-label="Actors by state"')
     expect(html.indexOf('Needs attention')).toBeLessThan(html.indexOf('At a glance'))
     const attention = html.slice(html.indexOf('Needs attention'))
+    expect(attention).toContain('Findings can group several actors.')
     // The fixture's order is the server's ranking: crash, pool, golden snapshot. No category regrouping.
     const crash = attention.indexOf('14 actors are crashed')
     const pool = attention.indexOf('is short of workers')

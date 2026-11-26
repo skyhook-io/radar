@@ -351,7 +351,7 @@ describe('the timing that ties a memory-limit kill to the crash', () => {
     expect(killLineLabel({ current: true, time: '2026-11-17T15:46:03Z' }, crash)).toBe('memory-limit kill · 2m before this crash')
     // An earlier run's kill is never tied to this crash, whatever its timing.
     expect(killTie({ current: false, time: '2026-11-17T15:46:03Z' }, crash)).toBeUndefined()
-    expect(killLineLabel({ current: false, time: '2026-11-17T15:46:03Z' }, crash)).toBe('memory-limit kill · earlier run')
+    expect(killLineLabel({ current: false, time: '2026-11-17T15:46:03Z' }, crash)).toBe('memory-limit kill attempt')
     // Without both times there is no evidence to state, so the label claims no tie.
     expect(killTie({ current: true }, crash)).toBeUndefined()
     expect(killLineLabel({ current: true }, undefined)).toBe('memory-limit kill')

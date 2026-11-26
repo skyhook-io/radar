@@ -21,8 +21,6 @@ type Index struct {
 	// ByAtespace counts actors by state; every atespace with an actor has
 	// an entry.
 	ByAtespace map[string]*model.StateCounts
-	// TemplateUIDs is nil unless templates were read.
-	TemplateUIDs model.TemplateUIDs
 }
 
 // Index returns the snapshot's projections, built on first use.
@@ -69,11 +67,6 @@ func buildIndex(s *Snapshot) *Index {
 		}
 		return strings.Compare(refKey(a.Atespace, a.Name), refKey(b.Atespace, b.Name))
 	})
-	if s.Coverage.Templates.Usable() {
-		ix.TemplateUIDs = make(model.TemplateUIDs, len(s.Templates))
-		for _, t := range s.Templates {
-			ix.TemplateUIDs[t.Ref()] = t.UID
-		}
-	}
+
 	return ix
 }

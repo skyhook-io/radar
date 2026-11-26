@@ -126,7 +126,10 @@ type Manager struct {
 	failed *cachedRead
 	flight singleflight.Group
 	// scoped caches per-atespace actor reads, by generation, key and atespace.
-	scoped map[string]*scopedRead
+	scoped               map[string]*scopedRead
+	scopedActorsInFlight int
+	scopedActorsCached   int
+	scopedReaders        int
 }
 
 type cachedRead struct {
@@ -167,6 +170,7 @@ func (m *Manager) Reset() {
 	// port-forward that this close would stop.
 	m.conn.close()
 	m.conn, m.good, m.failed, m.scoped = nil, nil, nil, nil
+	m.scopedActorsCached = 0
 	m.callerTok.mu.Lock()
 	m.callerTok.clearLocked("")
 	m.callerTok.mu.Unlock()
@@ -315,16 +319,22 @@ func (m *Manager) dropIf(c *conn) {
 // gets that read's own result. The snapshot is nil unless the tier is
 // connected.
 func (m *Manager) Snapshot(ctx context.Context) (*Snapshot, APITier) {
-	return m.snapshot(ctx, true)
+	return m.snapshot(ctx, true, true)
 }
 
 // Peek is Snapshot that never waits: with nothing usable it starts the read
 // and answers connecting. Status uses it, so it never waits on an actor walk.
 func (m *Manager) Peek(ctx context.Context) (*Snapshot, APITier) {
-	return m.snapshot(ctx, false)
+	return m.snapshot(ctx, false, true)
 }
 
-func (m *Manager) snapshot(ctx context.Context, wait bool) (*Snapshot, APITier) {
+// CachedSnapshot returns a usable snapshot if one already exists. Detail reads
+// can enrich point lookups with it without scheduling a fleet walk.
+func (m *Manager) CachedSnapshot(ctx context.Context) (*Snapshot, APITier) {
+	return m.snapshot(ctx, false, false)
+}
+
+func (m *Manager) snapshot(ctx context.Context, wait, refresh bool) (*Snapshot, APITier) {
 	k, s, tier, gen, genCtx := m.settings(ctx)
 	if s == nil {
 		return nil, *tier
@@ -349,14 +359,20 @@ func (m *Manager) snapshot(ctx context.Context, wait bool) (*Snapshot, APITier) 
 		return good.snap, withRead(*tier, good.snap, nil)
 	}
 	recentFailure := failed != nil && now.Sub(failed.at) < Freshness
-	result := m.startRead(k, *s, key, gen, genCtx, recentFailure)
+	var result <-chan singleflight.Result
+	if refresh {
+		result = m.startRead(k, *s, key, gen, genCtx, recentFailure)
+	}
 	if good != nil && now.Sub(good.at) < MaxStale {
 		served := withRead(*tier, good.snap, nil)
-		served.Refreshing = true
+		served.Refreshing = refresh
 		if failed != nil {
 			served.LastError = &ReadError{Code: failed.err.Code, Message: failed.err.Message, At: failed.at}
 		}
 		return good.snap, served
+	}
+	if !refresh {
+		return nil, *tier
 	}
 	if recentFailure {
 		return nil, withRead(*tier, nil, failed.err)
@@ -470,6 +486,47 @@ func (m *Manager) AtespaceActors(ctx context.Context, atespace string) ([]model.
 	}
 	m.mu.Unlock()
 	ch := m.flight.DoChan("atespace\x00"+cacheKey, func() (any, error) {
+		m.mu.Lock()
+		if m.gen != gen {
+			m.mu.Unlock()
+			return kindResult[model.Actor]{tierErr: errRetired}, nil
+		}
+		if e := m.scoped[cacheKey]; e != nil && m.Now().Sub(e.at) < Freshness {
+			m.mu.Unlock()
+			return e.result, nil
+		}
+		for key, entry := range m.scoped {
+			if m.Now().Sub(entry.at) >= Freshness {
+				delete(m.scoped, key)
+				m.scopedActorsCached -= len(entry.result.items)
+			}
+		}
+		if m.scopedReaders >= MaxScopedReads || m.scopedActorsInFlight+m.scopedActorsCached >= MaxActors {
+			m.mu.Unlock()
+			return kindResult[model.Actor]{coverage: Coverage{State: CoveragePartial, Code: CodeCapExceeded,
+				Message:         "Radar's shared atespace read budget is in use. Try again after those reads expire.",
+				UnreadAtespaces: []string{atespace}}}, nil
+		}
+		// Bound the temporary page buffers as well as the retained actors.
+		m.scopedReaders++
+		m.mu.Unlock()
+		held := 0
+		defer func() {
+			m.mu.Lock()
+			m.scopedReaders--
+			m.scopedActorsInFlight -= held
+			m.mu.Unlock()
+		}()
+		reserve := func() bool {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			if m.gen != gen || m.scopedActorsInFlight+m.scopedActorsCached >= MaxActors {
+				return false
+			}
+			m.scopedActorsInFlight++
+			held++
+			return true
+		}
 		readCtx, cancel := context.WithTimeout(genCtx, readTimeout+5*time.Second)
 		defer cancel()
 		c, err := m.client(readCtx, k, *s, gen)
@@ -477,7 +534,7 @@ func (m *Manager) AtespaceActors(ctx context.Context, atespace string) ([]model.
 			code, msg := classify(err, nil)
 			return kindResult[model.Actor]{tierErr: &TierError{Code: code, Message: msg}}, nil
 		}
-		r := readAtespaceActors(readCtx, c, atespace)
+		r := readAtespaceActors(readCtx, c, atespace, reserve)
 		model.MarkKagentSessions(r.items, k.KagentServed)
 		if !m.current(gen) || !m.stillCaptured(k) {
 			return kindResult[model.Actor]{tierErr: errRetired}, nil
@@ -488,21 +545,26 @@ func (m *Manager) AtespaceActors(ctx context.Context, atespace string) ([]model.
 		}
 		m.mu.Lock()
 		defer m.mu.Unlock()
-		if m.gen == gen {
-			if m.scoped == nil {
-				m.scoped = map[string]*scopedRead{}
-			}
-			if len(m.scoped) >= MaxScopedReads {
-				var oldest string
-				for k, e := range m.scoped {
-					if oldest == "" || e.at.Before(m.scoped[oldest].at) {
-						oldest = k
-					}
-				}
-				delete(m.scoped, oldest)
-			}
-			m.scoped[cacheKey] = &scopedRead{at: m.Now(), result: r}
+		if m.gen != gen {
+			return kindResult[model.Actor]{tierErr: errRetired}, nil
 		}
+		m.scopedActorsInFlight -= held
+		held = 0
+		if m.scoped == nil {
+			m.scoped = map[string]*scopedRead{}
+		}
+		if len(m.scoped) >= MaxScopedReads {
+			var oldest string
+			for k, e := range m.scoped {
+				if oldest == "" || e.at.Before(m.scoped[oldest].at) {
+					oldest = k
+				}
+			}
+			m.scopedActorsCached -= len(m.scoped[oldest].result.items)
+			delete(m.scoped, oldest)
+		}
+		m.scoped[cacheKey] = &scopedRead{at: m.Now(), result: r}
+		m.scopedActorsCached += len(r.items)
 		return r, nil
 	})
 	select {

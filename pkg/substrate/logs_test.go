@@ -174,3 +174,24 @@ func TestWorkerLinesByActorUID(t *testing.T) {
 		t.Error("without the actor's UID a record that names only a UID cannot be attributed")
 	}
 }
+
+func TestMicroVMMemoryKillEvidence(t *testing.T) {
+	f, err := NewLogFilter(Ref{Atespace: "research", Name: "worker"}, LogSourceContainers, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.UID = "actor-uid"
+	for _, tc := range []struct {
+		message string
+		failed  bool
+	}{
+		{"Killing a microVM over its memory limit", false},
+		{"Failed to kill a microVM over its memory limit", true},
+	} {
+		line := `{"msg":"` + tc.message + `","ate.actor.uid":"actor-uid","memoryLimitBytes":1024}`
+		got, selected, evidence := FilterLineWithEvidence(line, f, time.Time{})
+		if selected || !evidence || got.MemoryKillFailed != tc.failed || (got.MemoryLimitBytes != nil) == tc.failed {
+			t.Errorf("%s: %+v, selected %v, evidence %v", tc.message, got, selected, evidence)
+		}
+	}
+}

@@ -192,7 +192,7 @@ func TestNeedsAttentionWorkers(t *testing.T) {
 	}
 	rows := NeedsAttention(Inputs{
 		Workers: []Worker{unavailable, recentUnavailable, draining, drainedEmpty, restarting}, WorkersRead: true,
-		Actors: actors, ActorsRead: true, Now: now,
+		Actors: actors, ActorsRead: true, ActorsComplete: true, Now: now,
 	})
 	u := find(t, rows, "workerUnavailable:u")
 	// At risk, not lost: an alert. The title counts the actors, so the
@@ -563,5 +563,38 @@ func TestWorkerAttentionUsesStrongestFindingOnce(t *testing.T) {
 	in.Workers[0] = w
 	if rows := workerRows(in); len(rows) != 1 || rows[0].ID != row.ID {
 		t.Fatalf("worker emitted multiple findings, or disagreed with detail: %+v", rows)
+	}
+}
+
+func TestWorkerAttentionWithAnIncompleteActorList(t *testing.T) {
+	w := Worker{Name: "w", Pod: "pod", State: WorkerActive, RegisteredEpoch: 2, ObservedEpoch: 1, UpdateTime: now}
+	in := Inputs{ActorsRead: true, Now: now}
+	if row := WorkerAttention(in, w, nil); row == nil || !strings.Contains(row.Reading, "Actor coverage is incomplete") || strings.Contains(row.Reading, "No actor still assigned") {
+		t.Errorf("restarting with unknown assignments: %+v", row)
+	}
+	if reading := WorkerReadingOf(w, nil, false, nil); reading.Lost != nil || reading.Assigned != nil || !strings.Contains(reading.Reading, "unknown") {
+		t.Errorf("uncertain worker counts: %+v", reading)
+	}
+	w.State, w.ObservedEpoch, w.UpdateTime = WorkerDraining, 2, now.Add(-2*DefaultDrainGrace)
+	if row := WorkerAttention(in, w, nil); row == nil || row.Rule != RuleWorkerDraining || !strings.Contains(row.Reading, "total still assigned is unknown") {
+		t.Errorf("drain with unknown assignments: %+v", row)
+	}
+}
+
+func TestPoolFullCheckRequiresCompleteWorkersOrService(t *testing.T) {
+	for _, tc := range []struct {
+		in  Inputs
+		ran bool
+	}{
+		{Inputs{PoolsUsable: true}, false},
+		{Inputs{WorkersRead: true}, false},
+		{Inputs{WorkersRead: true, WorkersComplete: true}, true},
+		{Inputs{Service: &Service{Read: true}}, true},
+	} {
+		for _, c := range Checks(tc.in) {
+			if c.Rule == RulePoolFull && c.Ran != tc.ran {
+				t.Errorf("poolFull for %+v: %+v, want Ran %v", tc.in, c, tc.ran)
+			}
+		}
 	}
 }

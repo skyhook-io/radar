@@ -97,15 +97,16 @@ func snapshotOf(s *ateapi.Snapshot) model.Snapshot {
 func ActorOf(a *ateapi.Actor) model.Actor {
 	st := a.GetStatus()
 	out := model.Actor{
-		Atespace:       a.GetMetadata().GetAtespace(),
-		Name:           a.GetMetadata().GetName(),
-		UID:            a.GetMetadata().GetUid(),
-		Template:       ref(a.GetActorTemplate()),
-		State:          actorState(st.GetState()),
-		AssignedNode:   st.GetAssignedNode(),
-		WorkerSelector: maps.Clone(a.GetWorkerSelector().GetMatchLabels()),
-		CreateTime:     ts(a.GetMetadata().GetCreateTime()),
-		UpdateTime:     ts(a.GetMetadata().GetUpdateTime()),
+		Atespace:               a.GetMetadata().GetAtespace(),
+		Name:                   a.GetMetadata().GetName(),
+		UID:                    a.GetMetadata().GetUid(),
+		Template:               ref(a.GetActorTemplate()),
+		State:                  actorState(st.GetState()),
+		AssignedNode:           st.GetAssignedNode(),
+		LastAssignedGeneration: st.GetLastAssignedGeneration(),
+		WorkerSelector:         maps.Clone(a.GetWorkerSelector().GetMatchLabels()),
+		CreateTime:             ts(a.GetMetadata().GetCreateTime()),
+		UpdateTime:             ts(a.GetMetadata().GetUpdateTime()),
 	}
 	if t := a.GetSourceTag(); t != nil && t.GetName() != "" {
 		r := ref(t)
@@ -182,7 +183,7 @@ func resources(r *ateapi.WorkerResources) *model.Resources {
 	return &model.Resources{CPUMillicores: r.GetCpuMillicores(), MemoryBytes: r.GetMemoryBytes(), Actors: r.GetActors()}
 }
 
-func workerOf(w *ateapi.Worker) model.Worker {
+func WorkerOf(w *ateapi.Worker) model.Worker {
 	st := w.GetStatus()
 	out := model.Worker{
 		Name:            w.GetMetadata().GetName(),
@@ -198,6 +199,11 @@ func workerOf(w *ateapi.Worker) model.Worker {
 		RegisteredEpoch: st.GetRegisteredEpoch(),
 		ObservedEpoch:   st.GetObservedEpoch(),
 		UpdateTime:      ts(w.GetMetadata().GetUpdateTime()),
+	}
+	if classes := st.GetSandboxClasses(); len(classes) > 0 {
+		overhead := classes[0].GetDefaultRuntime().GetActorOverhead()
+		out.DefaultMemoryOverhead = overhead.GetMemoryBytes()
+		out.DefaultMemoryOverheadPerGiB = overhead.GetMemoryBytesPerGib()
 	}
 	for _, c := range st.GetSandboxClasses() {
 		out.SandboxClasses = append(out.SandboxClasses, c.GetSandboxClass())

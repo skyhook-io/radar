@@ -114,6 +114,9 @@ type collector[T any] struct {
 	ident  func(T) string
 	newer  func(a, b T) bool
 	capped bool
+	// Scoped reads reserve only the distinct items they retain.
+	reserve   func() bool
+	sharedCap bool
 }
 
 func newCollector[T any](limit int, ident func(T) string, newer func(a, b T) bool) *collector[T] {
@@ -135,6 +138,10 @@ func (c *collector[T]) add(batch []T) bool {
 		if len(c.items) >= c.limit {
 			c.capped = true
 			continue
+		}
+		if c.reserve != nil && !c.reserve() {
+			c.capped, c.sharedCap = true, true
+			return true
 		}
 		c.at[id] = len(c.items)
 		c.items = append(c.items, item)
@@ -323,8 +330,8 @@ func newerTemplate(a, b model.Template) bool {
 	return a.CreateTime.After(b.CreateTime)
 }
 
-func newActors() *collector[model.Actor] {
-	return newCollector(MaxActors, func(a model.Actor) string { return refKey(a.Atespace, a.Name) }, newerActor)
+func newActorCollector(limit int) *collector[model.Actor] {
+	return newCollector(limit, func(a model.Actor) string { return refKey(a.Atespace, a.Name) }, newerActor)
 }
 
 func newTemplates() *collector[model.Template] {
@@ -409,7 +416,7 @@ func readSnapshot(parent context.Context, c *conn, now time.Time, scope []string
 			}
 			out := make([]model.Worker, 0, len(resp.GetWorkers()))
 			for _, w := range resp.GetWorkers() {
-				out = append(out, workerOf(w))
+				out = append(out, WorkerOf(w))
 			}
 			return out, resp.GetNextPageToken(), nil
 		})
@@ -435,7 +442,7 @@ func readSnapshot(parent context.Context, c *conn, now time.Time, scope []string
 	}()
 	go func() {
 		defer wg.Done()
-		actors = readKind(ctx, c, newActors, names, complete, listActorsPage(c))
+		actors = readKind(ctx, c, func() *collector[model.Actor] { return newActorCollector(MaxActors) }, names, complete, listActorsPage(c))
 	}()
 	wg.Wait()
 	for _, e := range []*TierError{workers.tierErr, templates.tierErr, actors.tierErr} {
@@ -463,16 +470,26 @@ func readSnapshot(parent context.Context, c *conn, now time.Time, scope []string
 
 // readAtespaceActors reads one atespace's actors under the actor budget, for
 // a query the shared snapshot cannot answer in full.
-func readAtespaceActors(parent context.Context, c *conn, atespace string) kindResult[model.Actor] {
+func readAtespaceActors(parent context.Context, c *conn, atespace string, reserve func() bool) kindResult[model.Actor] {
 	ctx, cancel := context.WithTimeout(parent, readTimeout)
 	defer cancel()
-	col := newActors()
+	col := newActorCollector(MaxActors)
+	col.reserve = reserve
 	if err := listInto(ctx, col, func(ctx context.Context, token string) ([]model.Actor, string, error) {
 		return listActorsPage(c)(ctx, atespace, token)
 	}); err != nil {
 		return failed[model.Actor](err, c.creds)
 	}
 	r := done(col)
+	if col.sharedCap {
+		r.coverage.Cap = len(r.items)
+		r.coverage.Message = "Radar reached the shared atespace actor budget during this read."
+		if len(r.items) == 0 {
+			r.coverage.Count = nil
+			r.coverage.UnreadAtespaces = []string{atespace}
+			return r
+		}
+	}
 	r.coverage.ReadAtespaces = []string{atespace}
 	return r
 }

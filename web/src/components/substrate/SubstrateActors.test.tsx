@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
   actorsError: null as unknown,
   lastQuery: undefined as SubstrateActorsQuery | undefined,
   logs: undefined as SubstrateActorLogs | undefined,
+  logOptions: undefined as { tailLines?: number; pollMs?: number | false } | undefined,
 }))
 
 vi.mock('../../api/client', async (importOriginal) => ({
@@ -25,7 +26,10 @@ vi.mock('../../api/substrateWorkspace', async (importOriginal) => ({
     return { data: state.actors, error: state.actorsError, isLoading: false }
   },
   useSubstrateTemplates: () => ({ data: undefined }),
-  useSubstrateActorLogs: () => ({ data: state.logs, isLoading: false, error: null }),
+  useSubstrateActorLogs: (_: unknown, options: typeof state.logOptions) => {
+    state.logOptions = options
+    return { data: state.logs, isLoading: false, error: null }
+  },
   useSubstrateConnection: () => ({ data: connection(), isError: false }),
   useUpdateSubstrateConnection: () => ({ mutate: vi.fn(), isPending: false }),
 }))
@@ -288,7 +292,7 @@ describe('Actor overview', () => {
     const before = state.logs
     // The server ties a kill to the crash by timing: it came at most 10m before it, with no restart between.
     const killedAt = new Date(Date.parse(actorDetail().actor.crash!.time!) - 2 * 60_000).toISOString()
-    state.logs = { actor: { atespace: 'research', name: 'lit-review-0193' }, state: 'crashed', origin: 'lastNode', node: 'ip-10-0-4-57', reasonCode: 'candidates', source: 'all', searched: [], scanned: 900, windowFull: false, lines: [{ kind: 'worker', time: killedAt, message: 'Killing a sandbox over its memory limit', text: 'x', pod: 'agent-pool-worker-1', memoryLimitBytes: 2147483648, memoryUsageBytes: 2147483648 }], memoryKill: { time: killedAt, pod: 'agent-pool-worker-1', limitBytes: 2147483648, usageBytes: 2147483648, current: true, nextStep: 'Raise the template’s memory limit (recreate it), then revert the actor.', command: 'kubectl ate revert actor lit-review-0193 -a research' } }
+    state.logs = { actor: { atespace: 'research', name: 'lit-review-0193' }, state: 'crashed', origin: 'lastNode', node: 'ip-10-0-4-57', reasonCode: 'candidates', source: 'all', searched: [], scanned: 900, windowFull: false, lines: [{ kind: 'worker', time: killedAt, message: 'Killing a sandbox over its memory limit', text: 'x', namespace: 'agents', pod: 'agent-pool-worker-1', memoryLimitBytes: 2147483648, memoryUsageBytes: 2147483648 }], memoryKill: { time: killedAt, namespace: 'agents', pod: 'agent-pool-worker-1', limitBytes: 2147483648, usageBytes: 2147483648, current: true, nextStep: 'Raise the template’s memory limit (recreate it), then revert the actor.', command: 'kubectl ate revert actor lit-review-0193 -a research' } }
     try {
     const html = plain(text(renderToStaticMarkup(<MemoryRouter><SubstrateActorOverview detail={actorDetail()} onOpenSubject={() => {}} /></MemoryRouter>)))
     // The cause carries its evidence, not a bare claim: how long before the crash the worker killed it.
@@ -301,8 +305,8 @@ describe('Actor overview', () => {
     expect(html).toContain('memory-limit kill · 2m before this crash')
     // Where the cause was read is provenance: under Details, not in the visible line.
     expect(html).toContain('Read from the worker’s log')
-    expect(html).toContain('in agent-pool-worker-1.')
-    expect(html.indexOf('in agent-pool-worker-1.')).toBeGreaterThan(html.indexOf('Details'))
+    expect(html).toContain('in agents/agent-pool-worker-1.')
+    expect(html.indexOf('in agents/agent-pool-worker-1.')).toBeGreaterThan(html.indexOf('Details'))
     // The cause found picks the step: the remedy, not "find the cause".
     expect(html).toContain('Next step: Raise the template’s memory limit (recreate it), then revert the actor.')
     expect(html).not.toContain('Find the cause')
@@ -322,7 +326,7 @@ describe('Actor overview', () => {
     // The tour's s05 drawer: crashed over its 2Gi limit, gen 6 a stored memory snapshot stamped with its template.
     // The step is CrashedMemoryActorStep's for that snapshot (pkg/substrate TestMemoryStepFollowsTheRecoverySnapshot).
     const step = "Move this actor to a template with more memory, then revert it. The move drops its snapshot's memory and files: it restarts from volumes."
-    state.logs = { actor: { atespace: 'research', name: 'lit-review-0193' }, state: 'crashed', origin: 'lastNode', node: 'ip-10-0-17-21', reasonCode: 'candidates', source: 'all', searched: [], scanned: 900, windowFull: false, lines: [], memoryKill: { time: minutesAgo(22), pod: 'agent-pool-worker-1', limitBytes: 2147483648, usageBytes: 2147483648, current: true, nextStep: step, command: 'kubectl ate update actor lit-review-0193 -a research --template <new-template>' } }
+    state.logs = { actor: { atespace: 'research', name: 'lit-review-0193' }, state: 'crashed', origin: 'lastNode', node: 'ip-10-0-17-21', reasonCode: 'candidates', source: 'all', searched: [], scanned: 900, windowFull: false, lines: [], memoryKill: { time: minutesAgo(22), namespace: 'agents', pod: 'agent-pool-worker-1', limitBytes: 2147483648, usageBytes: 2147483648, current: true, nextStep: step, command: 'kubectl ate update actor lit-review-0193 -a research --template <new-template>' } }
     const gen6 = { generation: 6, fidelity: 'memory' as const, owner: 'actor' as const, durable: 'completed' as const, sandboxClass: 'gvisor' }
     const d = actorDetail({
       actor: { ...actorDetail().actor, snapshots: [gen6] },
@@ -348,7 +352,7 @@ describe('Actor overview', () => {
     const step = "Move this actor to a template with more memory, then revert it. The move drops its snapshot's memory and files: it restarts from volumes."
     const move = 'kubectl ate update actor lit-review-0193 -a research --template <new-template>'
     const revert = 'kubectl ate revert actor lit-review-0193 -a research'
-    state.logs = { actor: { atespace: 'research', name: 'lit-review-0193' }, state: 'crashed', origin: 'lastNode', node: 'ip-10-0-17-21', reasonCode: 'candidates', source: 'all', searched: [], scanned: 900, windowFull: false, lines: [], memoryKill: { time: minutesAgo(22), pod: 'agent-pool-worker-1', limitBytes: 2147483648, current: true, nextStep: step, command: move, thenCommand: revert } }
+    state.logs = { actor: { atespace: 'research', name: 'lit-review-0193' }, state: 'crashed', origin: 'lastNode', node: 'ip-10-0-17-21', reasonCode: 'candidates', source: 'all', searched: [], scanned: 900, windowFull: false, lines: [], memoryKill: { time: minutesAgo(22), namespace: 'agents', pod: 'agent-pool-worker-1', limitBytes: 2147483648, current: true, nextStep: step, command: move, thenCommand: revert } }
     try {
       const raw = text(renderToStaticMarkup(<MemoryRouter><SubstrateActorOverview detail={actorDetail()} onOpenSubject={() => {}} /></MemoryRouter>))
       const html = plain(raw).replace(/<[^>]+>/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
@@ -362,14 +366,26 @@ describe('Actor overview', () => {
     }
   })
 
+  it('opens a last-node preview without polling and qualifies partial searches', () => {
+    const before = state.logs
+    try {
+      state.logs = { actor: { atespace: 'research', name: 'lit-review-0193' }, state: 'crashed', origin: 'lastNode', node: 'worker-node', reasonCode: 'noMatch', partial: true, source: 'all', lines: [], searched: [], scanned: 1, windowFull: false }
+      const html = text(renderToStaticMarkup(<MemoryRouter><SubstrateActorOverview detail={actorDetail()} /></MemoryRouter>))
+      expect(state.logOptions).toEqual({ tailLines: 8, pollMs: false })
+      expect(html).toContain('No matches in the worker logs Radar could search')
+    } finally {
+      state.logs = before
+    }
+  })
+
   it('does not call an earlier run’s memory-limit kill the cause of this crash', () => {
     const before = state.logs
     try {
-      state.logs = { actor: { atespace: 'research', name: 'lit-review-0193' }, state: 'crashed', origin: 'lastNode', node: 'ip-10-0-4-57', reasonCode: 'candidates', source: 'all', searched: [], scanned: 900, windowFull: false, lines: [{ kind: 'worker', time: '2026-11-17T15:48:03Z', message: 'Killing a sandbox over its memory limit', text: 'x', pod: 'agent-pool-worker-1' }], memoryKill: { time: '2026-11-17T15:48:03Z', pod: 'agent-pool-worker-1', limitBytes: 2147483648, current: false } }
+      state.logs = { actor: { atespace: 'research', name: 'lit-review-0193' }, state: 'crashed', origin: 'lastNode', node: 'ip-10-0-4-57', reasonCode: 'candidates', source: 'all', searched: [], scanned: 900, windowFull: false, lines: [{ kind: 'worker', time: '2026-11-17T15:48:03Z', message: 'Killing a sandbox over its memory limit', text: 'x', namespace: 'agents', pod: 'agent-pool-worker-1' }], memoryKill: { time: '2026-11-17T15:48:03Z', namespace: 'agents', pod: 'agent-pool-worker-1', limitBytes: 2147483648, current: false } }
       const html = plain(text(renderToStaticMarkup(<MemoryRouter><SubstrateActorOverview detail={actorDetail()} onOpenSubject={() => {}} /></MemoryRouter>)))
       expect(html).not.toContain('Cause, from its worker’s log')
-      expect(html).toContain('Earlier run: a memory-limit kill was recorded')
-      expect(html).toContain('Radar can’t tie it to this crash')
+      expect(html).toContain('A memory-limit kill attempt was recorded')
+      expect(html).toContain('Substrate reported')
       expect(html).not.toContain('Raise the template’s memory limit')
     } finally {
       state.logs = before
@@ -409,7 +425,7 @@ describe('Actor overview', () => {
   })
 
   it('shows a running actor’s last log lines', () => {
-    state.logs = { actor: { atespace: 'research', name: 'a' }, state: 'running', origin: 'worker', source: 'all', scanned: 100, windowFull: false, searched: [], lines: [{ kind: 'container', time: '2026-11-17T15:48:03Z', container: 'agent', message: 'embedding batch 7/9', text: 'x', pod: 'agent-pool-7f9c-xk2' }] }
+    state.logs = { actor: { atespace: 'research', name: 'a' }, state: 'running', origin: 'worker', source: 'all', scanned: 100, windowFull: false, searched: [], lines: [{ kind: 'container', time: '2026-11-17T15:48:03Z', container: 'agent', message: 'embedding batch 7/9', text: 'x', namespace: 'agents', pod: 'agent-pool-7f9c-xk2' }] }
     const d = actorDetail({ actor: { ...actorDetail().actor, state: 'running', crash: undefined, assignment: { worker: 'w', namespace: 'agent-ns', pool: 'agent-pool', pod: 'agent-pool-7f9c-xk2', node: 'ip-10-0-4-57' } }, attention: [] })
     const html = text(renderToStaticMarkup(<MemoryRouter><SubstrateActorOverview detail={d} /></MemoryRouter>))
     expect(html).toContain('embedding batch 7/9')
@@ -465,25 +481,25 @@ describe('Logs for an actor on no worker', () => {
   })
 
   it('never calls an earlier run’s memory-limit kill the reason for the crash in the logs', async () => {
-    const html = await render({ ...base, origin: 'lastNode', node: 'node', reasonCode: 'candidates', searched: [], lines: [{ kind: 'worker', pod: 'worker', text: 'old kill', message: 'old kill', time: '2026-11-17T12:00:00Z' }], memoryKill: { time: '2026-11-17T12:00:00Z', pod: 'worker', limitBytes: 1024, current: false } })
+    const html = await render({ ...base, origin: 'lastNode', node: 'node', reasonCode: 'candidates', searched: [], lines: [{ kind: 'worker', namespace: 'agents', pod: 'worker', text: 'old kill', message: 'old kill', time: '2026-11-17T12:00:00Z' }], memoryKill: { time: '2026-11-17T12:00:00Z', namespace: 'agents', pod: 'worker', limitBytes: 1024, current: false } })
     expect(html).not.toContain('that is why it crashed')
-    expect(html).toContain('Earlier run: a memory-limit kill was recorded')
-    expect(html).toContain('Radar can’t tie it to this crash.')
+    expect(html).toContain('A memory-limit kill attempt was recorded')
+    expect(html).toContain('Substrate’s crash cause is reported separately.')
   })
 
   it('labels lines found on the node it last ran on as candidates, naming the Pod and the crash time', async () => {
-    const html = await render({ ...base, origin: 'lastNode', node: 'ip-10-0-4-57', reasonCode: 'candidates', searched: [], lines: [{ kind: 'container', time: '2026-11-17T15:48:03Z', container: 'agent', message: 'OOM', text: 'x', pod: 'agent-pool-worker-2' }] })
+    const html = await render({ ...base, origin: 'lastNode', node: 'ip-10-0-4-57', reasonCode: 'candidates', searched: [], lines: [{ kind: 'container', time: '2026-11-17T15:48:03Z', container: 'agent', message: 'OOM', text: 'x', namespace: 'agents', pod: 'agent-pool-worker-2' }] })
     // One provenance line names the source and why these are only candidates.
-    expect(html).toContain('Candidates from agent-pool-worker-2 on ip-10-0-4-57, the node it last ran on, before it crashed ')
+    expect(html).toContain('Candidates from agents/agent-pool-worker-2 on ip-10-0-4-57, the node it last ran on, before it crashed ')
     expect(html).toContain('Substrate doesn’t record which Pod it ran in.')
     expect(html.match(/the node it last ran on/g)).toHaveLength(1)
   })
 
   it('marks the kill line of this crash in place, with its timing as the evidence and a way to jump to it', async () => {
     const at = (ms: number) => new Date(Date.parse(crashed.crash!.time!) + ms).toISOString()
-    const kill = { kind: 'worker' as const, time: at(-1000), message: 'Killing a sandbox over its memory limit', text: 'x', pod: 'agent-pool-worker-1', memoryLimitBytes: 2147483648 }
-    const lines = [{ kind: 'container' as const, time: at(-60_000), container: 'agent', message: 'working', text: 'x', pod: 'agent-pool-worker-1' }, kill, { kind: 'worker' as const, time: at(0), message: 'Sandbox died', text: 'x', pod: 'agent-pool-worker-1' }]
-    const html = await render({ ...base, origin: 'lastNode', node: 'n', reasonCode: 'candidates', searched: [], lines, memoryKill: { time: kill.time, pod: kill.pod, limitBytes: kill.memoryLimitBytes, current: true } })
+    const kill = { kind: 'worker' as const, time: at(-1000), message: 'Killing a sandbox over its memory limit', text: 'x', namespace: 'agents', pod: 'agent-pool-worker-1', memoryLimitBytes: 2147483648 }
+    const lines = [{ kind: 'container' as const, time: at(-60_000), container: 'agent', message: 'working', text: 'x', namespace: 'agents', pod: 'agent-pool-worker-1' }, kill, { kind: 'worker' as const, time: at(0), message: 'Sandbox died', text: 'x', namespace: 'agents', pod: 'agent-pool-worker-1' }]
+    const html = await render({ ...base, origin: 'lastNode', node: 'n', reasonCode: 'candidates', searched: [], lines, memoryKill: { time: kill.time, pod: kill.pod, namespace: kill.namespace, limitBytes: kill.memoryLimitBytes, current: true } })
     expect(html).toMatch(/data-marked="current"[^>]*>(?:(?!<\/div>).)*Killing a sandbox over its memory limit(?:(?!<\/div>).)*memory-limit kill · 1s before this crash/)
     expect(html.match(/data-marked=/g)).toHaveLength(1)
     expect(html).toContain('Jump to line')
@@ -496,10 +512,10 @@ describe('Logs for an actor on no worker', () => {
   })
 
   it('labels an earlier run’s kill line as one, without the error rail', async () => {
-    const kill = { kind: 'worker' as const, time: '2026-11-17T12:00:00Z', message: 'Killing a sandbox over its memory limit', text: 'x', pod: 'w', memoryLimitBytes: 1024 }
-    const html = await render({ ...base, origin: 'lastNode', node: 'n', reasonCode: 'candidates', searched: [], lines: [kill], memoryKill: { time: kill.time, pod: 'w', limitBytes: 1024, current: false } })
+    const kill = { kind: 'worker' as const, time: '2026-11-17T12:00:00Z', message: 'Killing a sandbox over its memory limit', text: 'x', namespace: 'agents', pod: 'w', memoryLimitBytes: 1024 }
+    const html = await render({ ...base, origin: 'lastNode', node: 'n', reasonCode: 'candidates', searched: [], lines: [kill], memoryKill: { time: kill.time, pod: 'w', namespace: kill.namespace, limitBytes: 1024, current: false } })
     expect(html).toContain('data-marked="earlier"')
-    expect(html).toContain('memory-limit kill · earlier run')
+    expect(html).toContain('memory-limit kill attempt')
     expect(html).not.toContain('memory-limit kill · this crash')
     expect(html).not.toMatch(/absolute -left-2/)
   })
@@ -517,7 +533,7 @@ describe('Logs for an actor on no worker', () => {
     expect(html).not.toContain('the cause of this crash')
     expect(text(renderToStaticMarkup(<HiddenKillNotice kill={{ current: true }} onShowAll={() => {}} />))).toContain('a memory-limit kill, tied to this crash.')
     expect(html).toContain('Show all sources')
-    expect(text(renderToStaticMarkup(<HiddenKillNotice kill={{ current: false }} onShowAll={() => {}} />))).toContain('from an earlier run')
+    expect(text(renderToStaticMarkup(<HiddenKillNotice kill={{ current: false }} onShowAll={() => {}} />))).toContain('attempt whose tie to the crash is unconfirmed')
   })
 
   it('says a worker Pod that is gone in product words, never the raw API error', async () => {
@@ -555,7 +571,7 @@ describe('A running actor on a bad worker', () => {
     const d = actorDetail({ actor: { ...actorDetail().actor, state: 'running', crash: undefined, assignment: { worker: 'w', namespace: 'agents', pool: 'agent-pool', pod: 'agent-pool-worker-0', node: 'n' } }, attention: [], workerImpact: { kind: 'unavailable', reading: 'Substrate still records it running, but its worker Pod is not Ready.', nextStep: 'x', command: 'y' } })
     const before = state.logs
     try {
-      const line = (secondsAgo: number) => ({ kind: 'container' as const, time: new Date(Date.now() - secondsAgo * 1000).toISOString(), container: 'agent', message: 'Tool call', text: 'x', pod: 'agent-pool-worker-0' })
+      const line = (secondsAgo: number) => ({ kind: 'container' as const, time: new Date(Date.now() - secondsAgo * 1000).toISOString(), container: 'agent', message: 'Tool call', text: 'x', namespace: 'agents', pod: 'agent-pool-worker-0' })
       const logs = { actor: { atespace: 'research', name: 'a' }, state: 'running' as const, origin: 'worker' as const, source: 'all' as const, scanned: 10, windowFull: false, searched: [] }
       const render = () => plain(text(renderToStaticMarkup(<MemoryRouter><SubstrateActorOverview detail={d} /></MemoryRouter>)))
 

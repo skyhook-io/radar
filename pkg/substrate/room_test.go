@@ -35,12 +35,11 @@ func TestHasRoomFor(t *testing.T) {
 		want bool
 	}{
 		{"the live case: 930m unbooked, the template asks 1 CPU", liveWorker(), agentTemplate, false},
-		// Placement may still refuse it over the runtime's memory overhead,
-		// which Radar does not read: room is "may fit".
 		{"an exact fit is room", exact, agentTemplate, true},
 		{"memory short", memoryShort, agentTemplate, false},
 		{"a template with no limits needs only a slot", liveWorker(), Template{}, true},
-		{"an unlimited dimension does not constrain, even overbooked", overbooked, Template{MemoryBytes: 1 << 30}, true},
+		{"a sized booking does not fit overbooked CPU headroom", overbooked, Template{MemoryBytes: 1 << 30}, false},
+		{"a zero-sized booking only needs a slot even if CPU is overbooked", overbooked, Template{}, true},
 		{"no free slot is no room", slotsFull, Template{}, false},
 		{"no reported capacity is no room", Worker{State: WorkerActive}, Template{}, false},
 	}
@@ -144,7 +143,7 @@ func TestNeedsAttentionPoolNoRoom(t *testing.T) {
 	if r.Title != "agents / pool has no CPU left for another actor" {
 		t.Errorf("title = %q", r.Title)
 	}
-	want := "None of its active workers with a free actor slot has the CPU left for an actor of the template that can run on it, so new and resuming actors wait for a worker. The most CPU unbooked on such a worker is 930m CPU; the template asks 1 CPU."
+	want := "None of its active workers with a free actor slot has the CPU left to start a fresh actor of the template that can run on it. The most CPU unbooked on such a worker is 930m CPU; the worker would book at least 1 CPU."
 	if r.Reading != want {
 		t.Errorf("reading = %q\nwant      %q", r.Reading, want)
 	}
@@ -164,7 +163,7 @@ func TestNeedsAttentionPoolNoRoom(t *testing.T) {
 	}
 	in.Workers[0].Capacity = &Resources{CPUMillicores: 8000, MemoryBytes: 2 << 30, Actors: 1000}
 	r = find(t, NeedsAttention(in), "poolNoRoom:agents/pool")
-	if !strings.Contains(r.Reading, "The most memory unbooked on such a worker is 960Mi; the template asks 1Gi.") || !strings.Contains(r.NextStep, "config.runtimeDefaults.memory (and .cpu)") || len(strings.Fields(r.NextStep)) > 25 {
+	if !strings.Contains(r.Reading, "The most memory unbooked on such a worker is 960Mi; the worker would book at least 1Gi.") || !strings.Contains(r.NextStep, "config.runtimeDefaults.memory (and .cpu)") || len(strings.Fields(r.NextStep)) > 25 {
 		t.Errorf("memory row = %q / %q", r.Reading, r.NextStep)
 	}
 	// A standalone sandbox's template is not an Agent's: the generic step.
@@ -196,5 +195,24 @@ func TestNeedsAttentionPoolNoRoom(t *testing.T) {
 	in.WorkersComplete, in.TemplatesComplete = true, false
 	if c := check(in); c.Ran || c.Why != "the template list is incomplete" {
 		t.Errorf("incomplete templates: check = %+v", c)
+	}
+}
+
+func TestPoolRoomUsesLiveWorkerLabelsAndRuntimeOverhead(t *testing.T) {
+	w := Worker{Namespace: "agents", Pool: "pool", State: WorkerActive, Labels: map[string]string{"class": "live"},
+		Capacity: &Resources{Actors: 5, MemoryBytes: 1<<30 + 20<<20}, DefaultMemoryOverhead: 10 << 20, DefaultMemoryOverheadPerGiB: 20 << 20}
+	in := Inputs{Pools: []Pool{{Namespace: "agents", Name: "pool", Labels: map[string]string{"class": "stale"}}},
+		Workers: []Worker{w}, WorkersRead: true, WorkersComplete: true, TemplatesComplete: true,
+		Templates: []Template{
+			{Name: "agent", MemoryBytes: 1 << 30, WorkerSelector: map[string]string{"class": "live"}},
+			{Name: "tiny-elsewhere", WorkerSelector: map[string]string{"class": "stale"}},
+		}}
+	if p := JoinPools(in)[0]; p.Capacity != CapacityNoRoom || p.Lacking != LackingMemory || p.room.ask.MemoryBytes != 1<<30+30<<20 {
+		t.Errorf("only the live selector matches, and the worker books fixed plus proportional overhead: %+v", p)
+	}
+	in.Workers[0].Capacity.MemoryBytes = 1
+	in.Templates[0].MemoryBytes = 0
+	if p := JoinPools(in)[0]; p.Capacity != CapacityNoRoom || p.room.ask.MemoryBytes != 10<<20 {
+		t.Errorf("a zero-limit template still books fixed overhead: %+v", p)
 	}
 }

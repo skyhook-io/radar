@@ -265,11 +265,11 @@ func TestTemplateRows(t *testing.T) {
 func TestResumeSource(t *testing.T) {
 	tpl := Ref{"a", "t"}
 	tests := []struct {
-		name  string
-		snaps []Snapshot
-		uids  TemplateUIDs
-		want  string
-		gen   int32
+		name      string
+		snaps     []Snapshot
+		templates []Template
+		want      string
+		gen       int32
 	}{
 		{"in-progress generation is not the source", []Snapshot{
 			{Generation: 1, Fidelity: FidelityVolumes, Durable: DurableCompleted},
@@ -277,13 +277,13 @@ func TestResumeSource(t *testing.T) {
 		}, nil, ResumeVolumes, 1},
 		{"local files make a source before upload", []Snapshot{{Generation: 3, Fidelity: FidelityMemory, Durable: DurablePending, Locality: "n"}}, nil, ResumeMemory, 3},
 		{"nothing usable boots cold", []Snapshot{{Generation: 2, Fidelity: FidelityMemory, Durable: DurablePending}}, nil, ResumeCold, 0},
-		{"same template keeps memory", []Snapshot{{Generation: 4, Fidelity: FidelityMemory, Durable: DurableCompleted, ActorTemplateUID: "uid-1"}}, TemplateUIDs{tpl: "uid-1"}, ResumeMemory, 4},
-		{"replaced template restores volumes", []Snapshot{{Generation: 4, Fidelity: FidelityMemory, Durable: DurableCompleted, ActorTemplateUID: "uid-1"}}, TemplateUIDs{tpl: "uid-2"}, ResumeVolumes, 4},
+		{"same template keeps memory", []Snapshot{{Generation: 4, Fidelity: FidelityMemory, Durable: DurableCompleted, ActorTemplateUID: "uid-1"}}, []Template{{Atespace: tpl.Atespace, Name: tpl.Name, UID: "uid-1"}}, ResumeMemory, 4},
+		{"replaced template restores volumes", []Snapshot{{Generation: 4, Fidelity: FidelityMemory, Durable: DurableCompleted, ActorTemplateUID: "uid-1"}}, []Template{{Atespace: tpl.Atespace, Name: tpl.Name, UID: "uid-2"}}, ResumeVolumes, 4},
 		{"template not read is unknown", []Snapshot{{Generation: 4, Fidelity: FidelityMemory, Durable: DurableCompleted, ActorTemplateUID: "uid-1"}}, nil, ResumeUnknown, 4},
 	}
 	for _, tc := range tests {
 		a := Actor{Template: tpl, State: StateSuspending, Snapshots: tc.snaps}
-		row := RowOf(a, now, NewResumeContext(tc.uids, nil, false))
+		row := RowOf(a, now, NewResumeContext(tc.templates, nil, false))
 		if row.With != tc.want || row.ResumeGeneration != tc.gen {
 			t.Errorf("%s: resumesWith %s from gen %d, want %s from gen %d", tc.name, row.With, row.ResumeGeneration, tc.want, tc.gen)
 		}

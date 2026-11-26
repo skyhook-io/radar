@@ -395,6 +395,8 @@ export function coverageUnread(cov: SubstrateCoverage | undefined): boolean {
 export function coverageReason(cov: SubstrateCoverage | undefined, noun: string): string {
   if (!cov) return `${noun} were not read`
   if (cov.state === 'partial') {
+    if (cov.code === 'incomplete' && cov.message) return cov.message
+    if (cov.code === 'capExceeded' && cov.cap === undefined && cov.count === undefined && cov.message) return cov.message
     if (cov.code === 'capExceeded') return `Radar read the first ${cov.cap ?? cov.count ?? 'few'} ${noun} and stopped there`
     if (cov.code === 'scoped') return `Substrate would not list atespaces, so Radar read only ${cov.readAtespaces?.length ? cov.readAtespaces.join(', ') : 'the atespaces set in the connection'}; others are unknown`
     if (cov.unreadAtespaces?.length) return `Radar ran out of time before reading ${cov.unreadAtespaces.length === 1 ? 'atespace' : 'atespaces'} ${cov.unreadAtespaces.join(', ')}`
@@ -710,15 +712,19 @@ export function memoryKillText(kill: { limitBytes: number; usageBytes?: number }
  * tied to the present crash and both times are known.
  */
 export function killTie(kill: { time?: string; current: boolean }, crashTime: string | undefined): string | undefined {
-  if (!kill.current || !kill.time || !crashTime) return undefined
+  return kill.current ? killTiming(kill, crashTime) : undefined
+}
+
+export function killTiming(kill: { time?: string }, crashTime: string | undefined): string | undefined {
+  if (!kill.time || !crashTime) return undefined
   const gap = Date.parse(crashTime) - Date.parse(kill.time)
   if (!Number.isFinite(gap) || gap < 0) return undefined
   return `${formatDuration(gap)} before this crash`
 }
 
-/** A kill line's label in the log: its tie to the crash by timing, or that it is an earlier run's. */
+/** A kill line's label in the log, qualified by whether Radar can tie it to the crash. */
 export function killLineLabel(kill: { time?: string; current: boolean }, crashTime: string | undefined): string {
-  if (!kill.current) return 'memory-limit kill · earlier run'
+  if (!kill.current) return 'memory-limit kill attempt'
   const tie = killTie(kill, crashTime)
   return tie ? `memory-limit kill · ${tie}` : 'memory-limit kill'
 }

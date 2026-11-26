@@ -2,6 +2,7 @@ package substrate
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -163,7 +164,7 @@ type WorkerImpact struct {
 // WorkerImpactKind is WorkerImpactOf's kind alone, cheap enough to sort a
 // whole actor list by; "" when the worker means nothing for a.
 func WorkerImpactKind(a Actor, w Worker) string {
-	if a.Assignment == nil || a.Assignment.Worker != w.Name {
+	if a.Assignment == nil || a.Assignment.Worker != w.Name || a.State == StateSuspended {
 		return ""
 	}
 	// A resuming actor is restored again by its resume when the process it
@@ -186,20 +187,7 @@ func WorkerImpactKind(a Actor, w Worker) string {
 func WorkerImpactOf(a Actor, w Worker, pods WorkerPods) *WorkerImpact {
 	switch WorkerImpactKind(a, w) {
 	case ImpactRestarted:
-		step, command := "Revert it to its newest stored generation now; Substrate marks it crashed when it reconciles the worker anyway.", forActor(revertCommand, a)
-		// Substrate refuses a revert while a delete runs, and one is already
-		// running for a reverting actor.
-		switch a.State {
-		case StateDeleting:
-			step, command = "Nothing to recover: the delete in progress removes it.", ""
-		case StateReverting:
-			step, command = "Nothing to do: the revert in progress returns it to its newest stored generation.", ""
-		default:
-			if isKagent(a) {
-				sessions, sandboxes := kagentCounts([]Actor{a})
-				step, command = kagentStep(sessions, sandboxes, true), ""
-			}
-		}
+		step, command := restartedActorStep(a)
 		return &WorkerImpact{Kind: ImpactRestarted,
 			NextStep: step,
 			Command:  command,
@@ -208,9 +196,27 @@ func WorkerImpactOf(a Actor, w Worker, pods WorkerPods) *WorkerImpact {
 				w.RegisteredEpoch, a.Assignment.Epoch, a.State)}
 	case ImpactDraining:
 		pod, _ := pods.Of(w)
-		return &WorkerImpact{Kind: ImpactDraining, Deadline: pod.Deadline,
-			NextStep: "Suspend it before its worker Pod is gone to keep its state.", Command: forActor(suspendCommand, a),
-			Reading: "Its worker Pod is terminating. When the Pod is gone, Substrate marks every actor still assigned to it crashed, this one included; suspend it before then to keep its state."}
+		step, command := "Wait for the actor's current phase to finish before acting on it.", ""
+		switch a.State {
+		case StateRunning, StateSuspending:
+			step, command = "Suspend it before its worker Pod is gone to keep its state.", forActor(suspendCommand, a)
+			switch {
+			case isKagentSandbox(a):
+				step, command = "Suspend the sandbox through kagent's SandboxService before its worker Pod is gone.", ""
+			case isKagent(a):
+				step, command = "Let kagent manage the chat session. If Substrate later marks it crashed, recover it through kagent.", ""
+			}
+		case StateResuming:
+			step = "Wait for the resume to finish before suspending it."
+		case StateReverting:
+			step = "Wait for the revert to finish."
+		case StateDeleting:
+			step = "Wait for the delete to finish."
+		case StateCrashed:
+			step = "Wait for Substrate to clear the assignment as it reconciles the worker."
+		}
+		return &WorkerImpact{Kind: ImpactDraining, Deadline: pod.Deadline, NextStep: step, Command: command,
+			Reading: "Its worker Pod is terminating. When the Pod is gone, Substrate marks every actor still assigned to it crashed, this one included."}
 	case ImpactUnavailable:
 		state := pods.PodStateOf(w)
 		step := workerUnavailableStep[state]
@@ -218,6 +224,62 @@ func WorkerImpactOf(a Actor, w Worker, pods WorkerPods) *WorkerImpact {
 			Reading: unavailableCause(state) + " It places no new actors there and still records this actor as " + a.State + ". If the Pod is deleted, Substrate marks it crashed."}
 	}
 	return nil
+}
+
+func restartedActorStep(a Actor) (step, command string) {
+	switch a.State {
+	case StateDeleting:
+		return "Wait for the delete in progress to finish.", ""
+	case StateReverting:
+		return "Wait for the revert in progress to return it to its newest stored generation.", ""
+	}
+	if isKagent(a) {
+		sessions, sandboxes := kagentCounts([]Actor{a})
+		return kagentStep(sessions, sandboxes, a.State != StateCrashed), ""
+	}
+	if Revertable(a) {
+		return "Revert it to its newest stored generation now; Substrate marks it crashed when it reconciles the worker anyway.", forActor(revertCommand, a)
+	}
+	return "Wait for Substrate to reconcile the worker and mark the actor crashed, then revert it.", ""
+}
+
+func lostActorsStep(lost []Actor) (step, command string) {
+	if len(lost) == 1 {
+		step, command = restartedActorStep(lost[0])
+		if command != "" {
+			command = revertCommand
+		}
+		return step, command
+	}
+	var eligible int
+	var needsWait bool
+	var managed []Actor
+	for _, a := range lost {
+		switch {
+		case a.State == StateDeleting || a.State == StateReverting:
+			needsWait = true
+		case isKagent(a):
+			managed = append(managed, a)
+		case Revertable(a):
+			eligible++
+		default:
+			needsWait = true
+		}
+	}
+	if eligible == len(lost) {
+		return "Revert each to its newest stored generation now; Substrate marks them crashed when it reconciles the worker anyway.", revertCommand
+	}
+	var steps []string
+	if eligible > 0 {
+		steps = append(steps, "Revert running or crashed actors to their newest stored generation.")
+	}
+	if needsWait {
+		steps = append(steps, "Wait for Substrate to reconcile the worker and let any deletes or reverts underway finish.")
+	}
+	if sessions, sandboxes := kagentCounts(managed); sessions+sandboxes > 0 {
+		steps = append(steps, kagentStep(sessions, sandboxes, true))
+	}
+	return strings.Join(steps, " "), ""
 }
 
 // WorkerReconciling is a worker reading for an active worker whose
@@ -232,16 +294,15 @@ type WorkerReading struct {
 	Kind string `json:"kind"`
 	// Assigned counts the actors still assigned to it, and Lost those that
 	// ran under an earlier process of it and so lost their sandboxes
-	// (LostActors). Both are absent when actors were not read.
+	// (LostActors). Both are absent unless the actor read was complete.
 	Assigned *int   `json:"assigned,omitempty"`
 	Lost     *int   `json:"lost,omitempty"`
 	Reading  string `json:"reading"`
 }
 
 // WorkerReadingOf reads w for its row; nil for an active worker whose
-// registration Substrate has observed. assigned is its actors, used only
-// when actorsRead.
-func WorkerReadingOf(w Worker, assigned []Actor, actorsRead bool, pods WorkerPods) *WorkerReading {
+// registration Substrate has observed. assigned is its actors, which may cover only part of the fleet.
+func WorkerReadingOf(w Worker, assigned []Actor, actorsComplete bool, pods WorkerPods) *WorkerReading {
 	r := &WorkerReading{}
 	switch {
 	case w.State == WorkerDraining:
@@ -254,10 +315,14 @@ func WorkerReadingOf(w Worker, assigned []Actor, actorsRead bool, pods WorkerPod
 	default:
 		return nil
 	}
-	if !actorsRead {
+	n, lost := len(assigned), len(LostActors(w, assigned))
+	if !actorsComplete {
+		r.Reading += " The actor read is incomplete, so the assigned and lost totals are unknown."
+		if lost > 0 {
+			r.Reading += fmt.Sprintf(" Radar found %s that lost a sandbox.", plural(lost, "actor", "actors"))
+		}
 		return r
 	}
-	n, lost := len(assigned), len(LostActors(w, assigned))
 	r.Assigned, r.Lost = &n, &lost
 	switch {
 	case lost > 0:

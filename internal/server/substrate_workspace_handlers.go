@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -701,6 +702,7 @@ func (s *Server) substrateInputs(r *http.Request, snap *substrateapi.Snapshot, p
 	in := model.Inputs{Pools: pools, PoolsUsable: poolsUsable(poolsCov), PoolsComplete: poolsComplete(poolsCov, poolsClusterWide), Now: now}
 	if snap != nil {
 		in.Actors, in.ActorsRead = snap.Actors, snap.Coverage.Actors.Usable()
+		in.ActorsComplete = snap.Coverage.Actors.State == substrateapi.CoverageFull
 		in.Templates, in.TemplatesRead = snap.Templates, snap.Coverage.Templates.Usable()
 		in.TemplatesComplete = snap.Coverage.Templates.State == substrateapi.CoverageFull
 		in.Workers, in.WorkersRead = snap.Workers, snap.Coverage.Workers.Usable()
@@ -811,15 +813,6 @@ func (s *Server) substrateNodeReady(r *http.Request) map[string]bool {
 		}
 	}
 	return ready
-}
-
-// templateUIDs maps each template read to its UID; nil when none were read.
-// The map is the snapshot's own: callers must not change it.
-func templateUIDs(snap *substrateapi.Snapshot) model.TemplateUIDs {
-	if snap == nil {
-		return nil
-	}
-	return snap.Index().TemplateUIDs
 }
 
 // substrateSummary is the status line. Each part is absent when what it
@@ -1221,7 +1214,7 @@ func (s *Server) handleSubstrateActors(w http.ResponseWriter, r *http.Request) {
 	sortActors(matched, sortBy, now, workers)
 	total := len(matched)
 	resp.Total, resp.Counts, resp.AttentionCount = &total, &counts, &attentionCount
-	rc := model.NewResumeContext(templateUIDs(snap), snap.Workers, snap.Coverage.Workers.State == substrateapi.CoverageFull)
+	rc := model.NewResumeContext(snap.Templates, snap.Workers, snap.Coverage.Workers.State == substrateapi.CoverageFull)
 	pods := substrateWorkerPods(s.podListableWorkers(r, snap.Workers))
 	for _, a := range matched[min(offset, total):min(offset+limit, total)] {
 		row := model.RowOf(a, now, rc)
@@ -1339,8 +1332,7 @@ type substrateActorDetail struct {
 	// Actor is read fresh from Substrate, not from the shared snapshot.
 	Actor model.Actor    `json:"actor"`
 	Row   model.ActorRow `json:"row"`
-	// Template is absent when the template list was not read or does not
-	// hold it.
+	// Template is absent when neither the cache nor the point read supplied it.
 	Template *model.TemplateRow `json:"template,omitempty"`
 	// Worker is the assigned worker's Substrate state; absent when the
 	// actor has no worker or workers were not read.
@@ -1375,7 +1367,7 @@ type substrateDetailCoverage struct {
 	Pools     integration.KindCoverage `json:"pools"`
 }
 
-func (s *Server) readSubstrateActor(w http.ResponseWriter, r *http.Request, target model.Ref) (*ateapi.Actor, substrateapi.APITier, bool) {
+func (s *Server) readSubstrateActor(w http.ResponseWriter, r *http.Request, target model.Ref) (*ateapi.Actor, bool) {
 	var actor *ateapi.Actor
 	tierErr, code, msg := s.substrateManager().Call(r.Context(), func(ctx context.Context, c ateapi.ControlClient) error {
 		var err error
@@ -1384,66 +1376,74 @@ func (s *Server) readSubstrateActor(w http.ResponseWriter, r *http.Request, targ
 	})
 	if tierErr != nil {
 		s.writeSubstrateTier(w, *tierErr)
-		return nil, substrateapi.APITier{}, false
+		return nil, false
 	}
 	switch code {
 	case "":
 	case substrateapi.CodeNotFound:
 		s.writeErrorCode(w, http.StatusNotFound, code, "Substrate has no actor "+target.Atespace+"/"+target.Name)
-		return nil, substrateapi.APITier{}, false
+		return nil, false
 	case substrateapi.CodeDenied:
 		s.writeErrorCode(w, http.StatusForbidden, code, msg)
-		return nil, substrateapi.APITier{}, false
+		return nil, false
 	default:
 		s.writeErrorCode(w, http.StatusBadGateway, code, msg)
-		return nil, substrateapi.APITier{}, false
+		return nil, false
 	}
-	return actor, substrateapi.APITier{State: substrateapi.TierConnected}, true
+	return actor, true
 }
 
-// substrateTemplate finds a template in the snapshot or, when the snapshot's
-// template list is incomplete, asks Substrate for it. found is false on a
-// confirmed miss; code and msg carry a failed fetch.
-func (s *Server) substrateTemplate(r *http.Request, snap *substrateapi.Snapshot, ref model.Ref) (t model.Template, found bool, tier *substrateapi.APITier, code, msg string) {
-	if snap.Coverage.Templates.Usable() {
+func snapshotTemplate(snap *substrateapi.Snapshot, ref model.Ref) (model.Template, bool) {
+	if snap != nil && snap.Coverage.Templates.Usable() {
 		for _, t := range snap.Templates {
 			if t.Ref() == ref {
-				return t, true, nil, "", ""
+				return t, true
 			}
 		}
-		if snap.Coverage.Templates.State == substrateapi.CoverageFull {
-			return model.Template{}, false, nil, substrateapi.CodeNotFound, ""
-		}
 	}
+	return model.Template{}, false
+}
+
+func (s *Server) readSubstrateTemplate(r *http.Request, ref model.Ref) (raw *ateapi.ActorTemplate, tier *substrateapi.APITier, code, msg string) {
 	tier, code, msg = s.substrateManager().Call(r.Context(), func(ctx context.Context, c ateapi.ControlClient) error {
-		got, err := c.GetActorTemplate(ctx, &ateapi.GetActorTemplateRequest{ActorTemplate: &ateapi.ObjectRef{Atespace: ref.Atespace, Name: ref.Name}})
-		if err == nil {
-			t = substrateapi.TemplateOf(got)
-		}
+		var err error
+		raw, err = c.GetActorTemplate(ctx, &ateapi.GetActorTemplateRequest{ActorTemplate: &ateapi.ObjectRef{Atespace: ref.Atespace, Name: ref.Name}})
 		return err
 	})
-	return t, tier == nil && code == "", tier, code, msg
+	return
 }
 
 func (s *Server) handleSubstrateActor(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
-	snap, tier, r, ok := s.substrateSnapshot(w, r)
-	if !ok {
+	r, denied := s.substrateGate(r)
+	if denied != nil {
+		s.writeSubstrateTier(w, *denied)
 		return
 	}
 	target := model.Ref{Atespace: chi.URLParam(r, "atespace"), Name: chi.URLParam(r, "name")}
-	raw, _, ok := s.readSubstrateActor(w, r, target)
+	raw, ok := s.readSubstrateActor(w, r, target)
 	if !ok {
 		return
 	}
+	snap, tier := s.substrateManager().CachedSnapshot(r.Context())
+	if tier.Code != "" {
+		s.writeSubstrateTier(w, tier)
+		return
+	}
+	tier.State = substrateapi.TierConnected
 	actor := freshSubstrateActor(raw)
 	now := time.Now()
 	pools, poolsCov, poolsClusterWide := s.substratePools(r)
-	resp := substrateActorDetail{APITier: tier, Actor: actor, Attention: []model.Attention{}, Coverage: substrateDetailCoverage{
-		Actors: snap.Coverage.Actors, Templates: snap.Coverage.Templates, Workers: snap.Coverage.Workers, Pools: poolsCov,
+	detailCoverage := substrateapi.Coverage{State: substrateapi.CoveragePartial, Code: substrateapi.CodeIncomplete,
+		Message: "The fleet list was not read for this actor detail."}
+	resp := substrateActorDetail{APITier: tier, Actor: actor, Coverage: substrateDetailCoverage{
+		Actors: detailCoverage, Templates: detailCoverage, Workers: detailCoverage, Pools: poolsCov,
 	}}
+	if snap != nil {
+		resp.Coverage.Actors, resp.Coverage.Templates, resp.Coverage.Workers = snap.Coverage.Actors, snap.Coverage.Templates, snap.Coverage.Workers
+	}
 
 	tierErr, code, msg := s.substrateManager().Call(r.Context(), func(ctx context.Context, c ateapi.ControlClient) error {
 		policy, err := c.GetActorEgressPolicy(ctx, &ateapi.GetActorEgressPolicyRequest{Actor: &ateapi.ObjectRef{Atespace: target.Atespace, Name: target.Name}, Name: "default"})
@@ -1456,6 +1456,9 @@ func (s *Server) handleSubstrateActor(w http.ResponseWriter, r *http.Request) {
 		return err
 	})
 	switch {
+	case tierErr != nil && tierErr.Code == substrateapi.CodeContextChanged:
+		s.writeSubstrateTier(w, *tierErr)
+		return
 	case tierErr != nil:
 		resp.Egress = substrateapi.EgressSummary{State: "failed", Message: tierErr.Reason}
 	case code == substrateapi.CodeDenied:
@@ -1466,24 +1469,82 @@ func (s *Server) handleSubstrateActor(w http.ResponseWriter, r *http.Request) {
 
 	in := s.substrateInputs(r, snap, pools, poolsCov, poolsClusterWide, now)
 	in.NodeReady = s.substrateNodeReady(r)
-	poolRows := model.JoinPools(in)
-	uids := templateUIDs(snap)
-	if t, found, _, _, _ := s.substrateTemplate(r, snap, actor.Template); found {
-		row := model.TemplateRows([]model.Template{t}, in.Actors, in.ActorsRead, model.KnownPools(pools, in.Workers), in.PoolsUsable || in.WorkersRead, in.PoolsComplete, poolRows)[0]
+	var worker *model.Worker
+	var assigned []model.Actor
+	workerActorCoverage := resp.Coverage.Actors
+	if as := actor.Assignment; as != nil && as.Worker != "" {
+		if snap != nil {
+			if wk, ok := snap.Index().Workers[as.Worker]; ok && now.Sub(snap.ReadAt) < substrateapi.Freshness {
+				worker = &wk
+			}
+			assigned = snap.Index().ByWorker[as.Worker]
+		}
+		if worker == nil {
+			resp.Coverage.Workers = detailCoverage
+			workerActorCoverage = detailCoverage
+			in.WorkersComplete = false
+			var rawWorker *ateapi.Worker
+			workerTier, workerCode, workerMsg := s.substrateManager().Call(r.Context(), func(ctx context.Context, c ateapi.ControlClient) error {
+				var err error
+				rawWorker, err = c.GetWorker(ctx, &ateapi.GetWorkerRequest{Worker: &ateapi.ObjectRef{Name: as.Worker}})
+				return err
+			})
+			if rawWorker != nil && workerTier == nil && workerCode == "" {
+				wk := substrateapi.WorkerOf(rawWorker)
+				worker = &wk
+				in.Workers = slices.DeleteFunc(slices.Clone(in.Workers), func(w model.Worker) bool { return w.Name == wk.Name })
+				in.Workers = append(in.Workers, wk)
+				in.WorkerPods = substrateWorkerPods(s.podListableWorkers(r, in.Workers))
+				in.WorkersRead = true
+			} else if workerTier != nil {
+				if workerTier.Code == substrateapi.CodeContextChanged {
+					s.writeSubstrateTier(w, *workerTier)
+					return
+				}
+				resp.Coverage.Workers.Message += " " + workerTier.Reason
+			} else if workerMsg != "" {
+				resp.Coverage.Workers.Message += " " + workerMsg
+			}
+		}
+		assigned = slices.DeleteFunc(slices.Clone(assigned), func(a model.Actor) bool { return a.Ref() == actor.Ref() })
+		assigned = append(assigned, actor)
+	}
+	t, found := snapshotTemplate(snap, actor.Template)
+	templateMissing := false
+	if !found {
+		resp.Coverage.Templates = detailCoverage
+		rawTemplate, templateTier, templateCode, templateMsg := s.readSubstrateTemplate(r, actor.Template)
+		switch {
+		case templateTier != nil:
+			if templateTier.Code == substrateapi.CodeContextChanged {
+				s.writeSubstrateTier(w, *templateTier)
+				return
+			}
+			resp.Coverage.Templates.Message += " " + templateTier.Reason
+		case templateCode == substrateapi.CodeNotFound:
+			templateMissing = true
+			resp.Coverage.Templates.Message += " " + templateMsg
+		case templateCode != "":
+			resp.Coverage.Templates.Message += " " + templateMsg
+		case rawTemplate != nil:
+			t, found = substrateapi.TemplateOf(rawTemplate), true
+		}
+	}
+	var templates []model.Template
+	if found {
+		templates = []model.Template{t}
+		known := model.KnownPools(pools, in.Workers)
+		poolRows := model.JoinPools(model.Inputs{Pools: pools, Workers: in.Workers, WorkersRead: in.WorkersRead})
+		row := model.TemplateRows(templates, in.Actors, in.ActorsRead, known, in.PoolsUsable || in.WorkersRead, in.PoolsComplete, poolRows)[0]
 		resp.Template = &row
 		if in.PoolsUsable || in.WorkersRead {
 			resp.MatchingPoolsComplete = in.PoolsComplete
-			if m := model.ActorMatchingPools(actor, t, model.KnownPools(pools, in.Workers)); len(m) > 0 || in.PoolsComplete {
+			if m := model.ActorMatchingPools(actor, t, known); len(m) > 0 || in.PoolsComplete {
 				resp.MatchingPools = m
 			}
 		}
-		uids = maps.Clone(uids)
-		if uids == nil {
-			uids = model.TemplateUIDs{}
-		}
-		uids[t.Ref()] = t.UID
 	}
-	rc := model.NewResumeContext(uids, in.Workers, in.WorkersComplete)
+	rc := model.NewResumeContext(templates, in.Workers, in.WorkersComplete)
 	resp.Row = model.RowOf(actor, now, rc)
 	resp.Recovery = model.RecoveryOf(actor, rc)
 	resp.Related = []model.Subject{{Kind: "ActorTemplate", Atespace: actor.Template.Atespace, Name: actor.Template.Name}}
@@ -1491,27 +1552,26 @@ func (s *Server) handleSubstrateActor(w http.ResponseWriter, r *http.Request) {
 		resp.Related = append(resp.Related,
 			model.Subject{Kind: "WorkerPool", Namespace: as.Namespace, Name: as.Pool},
 			model.Subject{Kind: "Pod", Namespace: as.Namespace, Name: as.Pod})
-		if in.WorkersRead {
-			for _, wk := range snap.Workers {
-				if wk.Name == as.Worker {
-					row := substrateWorkerRowOf(wk, snap.Index().ByWorker[wk.Name], in.ActorsRead, in.WorkerPods)
-					row.Actors = nil
-					resp.Worker = &row
-					resp.WorkerImpact = model.WorkerImpactOf(actor, wk, in.WorkerPods)
-				}
-			}
+		if worker != nil {
+			row := substrateWorkerRowOf(*worker, assigned, workerActorCoverage, in.WorkerPods)
+			row.Actors = nil
+			resp.Worker = &row
+			resp.WorkerImpact = model.WorkerImpactOf(actor, *worker, in.WorkerPods)
+			resp.Row.WorkerImpact = resp.WorkerImpact
 		}
 	}
 	if node := model.ActorNode(actor); node != "" {
 		resp.Related = append(resp.Related, model.Subject{Kind: "Node", Name: node})
 	}
-	resp.Attention = model.ActorAttention(model.NeedsAttention(in), actor, in.Templates, now)
+	in.Templates, in.TemplatesRead, in.TemplatesComplete = templates, found, templateMissing
+	resp.Attention = model.ActorDetailAttention(in, actor, worker)
 	s.writeJSON(w, resp)
 }
 
 const (
 	substrateLogScanLines   = 20_000
 	substrateLogMaxLine     = 1 << 20
+	substrateLogMaxBytes    = 8 << 20
 	substrateLogDefaultTail = 500
 	substrateLogMaxTail     = 5000
 )
@@ -1519,7 +1579,8 @@ const (
 // substrateLogLine is one selected line and the Pod it came from.
 type substrateLogLine struct {
 	model.LogLine
-	Pod string `json:"pod"`
+	Pod       string `json:"pod"`
+	Namespace string `json:"namespace"`
 }
 
 // substrateSearchedPod is one worker Pod whose log was searched.
@@ -1571,6 +1632,7 @@ type substrateLogsResponse struct {
 	// left unsearched.
 	Searched []substrateSearchedPod `json:"searched"`
 	MorePods int                    `json:"morePods,omitempty"`
+	Partial  bool                   `json:"partial,omitempty"`
 	// Scanned and WindowFull total the reads, as before.
 	Scanned    int  `json:"scanned"`
 	WindowFull bool `json:"windowFull"`
@@ -1584,14 +1646,14 @@ type substrateLogsResponse struct {
 type substrateMemoryKill struct {
 	Time       time.Time `json:"time,omitzero"`
 	Pod        string    `json:"pod"`
+	Namespace  string    `json:"namespace"`
 	LimitBytes int64     `json:"limitBytes"`
 	// UsageBytes is the usage that crossed the limit; absent when the record
 	// does not carry it.
 	UsageBytes *int64 `json:"usageBytes,omitempty"`
-	// Current: the kill is tied to the actor's present crash. It came at
-	// most substrateKillCrashWindow before the crash, and no start or restore
-	// of the actor among the lines read came between them. Otherwise it is
-	// an earlier execution's, a record and not the cause.
+	// Current ties the kill to a recorded memory-limit crash. The log must
+	// precede the crash within the attribution window with no intervening
+	// execution start or later failed kill in the lines read.
 	Current bool `json:"current"`
 	// NextStep, Command and ThenCommand are the remedy, the actor page's
 	// crash step: move the actor to a new template, then revert it. Absent
@@ -1606,10 +1668,6 @@ type substrateMemoryKill struct {
 // kill, retrying for up to five minutes.
 const substrateKillCrashWindow = 10 * time.Minute
 
-// substrateExecutionStarts are the lifecycle events that begin a new
-// execution of the actor on a worker.
-var substrateExecutionStarts = map[string]bool{"Actor starting": true, "Actor started": true, "Actor restoring": true, "Actor restored": true}
-
 // memoryKillOf finds the newest memory-limit kill of actor among lines, in
 // time order, and whether it caused the actor's present crash.
 func memoryKillOf(actor model.Actor, lines []substrateLogLine) *substrateMemoryKill {
@@ -1618,11 +1676,11 @@ func memoryKillOf(actor model.Actor, lines []substrateLogLine) *substrateMemoryK
 		if l.Kind != model.LogKindWorker || l.MemoryLimitBytes == nil {
 			continue
 		}
-		kill := &substrateMemoryKill{Time: l.Time, Pod: l.Pod, LimitBytes: *l.MemoryLimitBytes, UsageBytes: l.MemoryUsageBytes}
-		kill.Current = actor.State == model.StateCrashed && actor.Crash != nil && !actor.Crash.Time.IsZero() && !l.Time.IsZero() &&
+		kill := &substrateMemoryKill{Time: l.Time, Pod: l.Pod, Namespace: l.Namespace, LimitBytes: *l.MemoryLimitBytes, UsageBytes: l.MemoryUsageBytes}
+		kill.Current = model.IsMemoryLimitCrash(actor) && !actor.Crash.Time.IsZero() && !l.Time.IsZero() &&
 			!l.Time.After(actor.Crash.Time) && actor.Crash.Time.Sub(l.Time) <= substrateKillCrashWindow &&
 			!slices.ContainsFunc(lines[i+1:], func(later substrateLogLine) bool {
-				return later.Kind == model.LogKindLifecycle && substrateExecutionStarts[later.Message] && !later.Time.After(actor.Crash.Time)
+				return later.MemoryKillFailed || later.Kind == model.LogKindLifecycle && model.IsActorExecutionStart(later.Message) && !later.Time.After(actor.Crash.Time)
 			})
 		if kill.Current && actor.Kagent != nil {
 			kill.NextStep = model.KagentActorStep(actor, true)
@@ -1709,7 +1767,7 @@ func (s *Server) handleSubstrateActorLogs(w http.ResponseWriter, r *http.Request
 		return
 	}
 	tail := boundedInt(q.Get("tailLines"), substrateLogDefaultTail, 1, substrateLogMaxTail)
-	raw, _, ok := s.readSubstrateActor(w, r, target)
+	raw, ok := s.readSubstrateActor(w, r, target)
 	if !ok {
 		return
 	}
@@ -1828,9 +1886,12 @@ func (s *Server) handleSubstrateActorLogs(w http.ResponseWriter, r *http.Request
 	var all, evidence []substrateLogLine
 	readable := 0
 	for _, p := range readablePods {
-		readable++
 		read := s.searchSubstratePod(r, client, p.Namespace, p.Name, filter, tail)
 		resp.Searched = append(resp.Searched, read.pod)
+		if read.pod.Outcome != "read" {
+			continue
+		}
+		readable++
 		resp.Scanned += read.pod.Scanned
 		resp.WindowFull = resp.WindowFull || read.pod.WindowFull
 		all = append(all, read.lines...)
@@ -1845,6 +1906,9 @@ func (s *Server) handleSubstrateActorLogs(w http.ResponseWriter, r *http.Request
 	slices.SortStableFunc(evidence, byTime)
 	resp.MemoryKill = memoryKillOf(actor, evidence)
 	switch {
+	case readable == 0 && len(readablePods) > 0:
+		s.writeErrorCode(w, http.StatusBadGateway, substrateapi.CodeLogsUnavailable, "Radar could not read any worker Pod log on node "+node+".")
+		return
 	case readable == 0:
 		resp.ReasonCode = "logsDenied"
 		resp.Reason = "This actor has no worker now. Radar found worker Pods on node " + node + ", where it was last, but reading them requires get on pods/log in their namespaces."
@@ -1854,6 +1918,10 @@ func (s *Server) handleSubstrateActorLogs(w http.ResponseWriter, r *http.Request
 	default:
 		resp.ReasonCode = "candidates"
 		resp.Reason = "This actor has no worker now. These lines come from worker Pods on node " + node + ", where it was last; Substrate does not record which Pod it ran in, so each line names the Pod it was found in."
+	}
+	resp.Partial = readable > 0 && (!complete || len(pods) < len(onNode) || readable < len(pods))
+	if resp.Partial {
+		resp.Reason += fmt.Sprintf(" Radar read %s; other worker Pod logs on the node were unavailable or left unsearched.", plural(readable, "worker Pod log", "worker Pod logs"))
 	}
 	s.writeJSON(w, resp)
 }
@@ -1877,9 +1945,26 @@ type substratePodRead struct {
 // and keeps the newest tail the filter selects.
 func (s *Server) searchSubstratePod(r *http.Request, client kubernetes.Interface, namespace, pod string, filter model.LogFilter, tail int) substratePodRead {
 	out := substratePodRead{pod: substrateSearchedPod{Namespace: namespace, Pod: pod, Outcome: "read"}}
-	scanLines := int64(substrateLogScanLines)
-	// No container, as kubectl ate reads it: the Pod's default container.
-	stream, err := k8score.GetContainerLogs(r.Context(), client, namespace, pod, "", k8score.LogOptions{TailLines: &scanLines, Timestamps: true})
+	limitBytes := int64(substrateLogMaxBytes)
+	readTail := func(scanLines int64) ([]byte, error) {
+		// No container, as kubectl ate reads it: the Pod's default container.
+		stream, err := k8score.GetContainerLogs(r.Context(), client, namespace, pod, "", k8score.LogOptions{TailLines: &scanLines, LimitBytes: &limitBytes, Timestamps: true})
+		if err != nil {
+			return nil, err
+		}
+		defer stream.Close()
+		return io.ReadAll(io.LimitReader(stream, limitBytes))
+	}
+	body, err := readTail(substrateLogScanLines)
+	windowFull := len(body) == substrateLogMaxBytes
+	if err == nil && windowFull {
+		// Kubelet applies the byte cap walking forwards from the start of
+		// the requested tail. Narrow the tail to recover the newest lines.
+		scanLines := int64(max(1, min(substrateLogScanLines-1, bytes.Count(body, []byte{'\n'})/2)))
+		if newer, retryErr := readTail(scanLines); retryErr == nil {
+			body = newer
+		}
+	}
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			out.pod.Outcome = "gone"
@@ -1889,18 +1974,22 @@ func (s *Server) searchSubstratePod(r *http.Request, client kubernetes.Interface
 		out.pod.Outcome, out.pod.Message = "failed", err.Error()
 		return out
 	}
-	defer stream.Close()
-	lines, evidence, scanned, err := filterSubstrateLog(stream, filter, tail)
+	lines, evidence, scanned, err := filterSubstrateLog(bytes.NewReader(body), filter, tail)
 	if err != nil {
 		out.pod.Outcome, out.pod.Message = "failed", err.Error()
 		return out
 	}
-	out.pod.Scanned, out.pod.WindowFull, out.pod.Matched = scanned, scanned >= substrateLogScanLines, len(lines)
+	if len(body) == substrateLogMaxBytes {
+		// The retry still omitted the end of the stream, which may hold
+		// an execution start or a failed kill that changes attribution.
+		evidence = nil
+	}
+	out.pod.Scanned, out.pod.WindowFull, out.pod.Matched = scanned, scanned >= substrateLogScanLines || windowFull, len(lines)
 	for _, l := range lines {
-		out.lines = append(out.lines, substrateLogLine{LogLine: l, Pod: pod})
+		out.lines = append(out.lines, substrateLogLine{LogLine: l, Pod: pod, Namespace: namespace})
 	}
 	for _, l := range evidence {
-		out.evidence = append(out.evidence, substrateLogLine{LogLine: l, Pod: pod})
+		out.evidence = append(out.evidence, substrateLogLine{LogLine: l, Pod: pod, Namespace: namespace})
 	}
 	return out
 }
@@ -1912,9 +2001,8 @@ func (s *Server) searchSubstratePod(r *http.Request, client kubernetes.Interface
 func filterSubstrateLog(r io.Reader, filter model.LogFilter, tail int) (ring, evidence []model.LogLine, scanned int, err error) {
 	reader := bufio.NewReaderSize(r, substrateLogMaxLine)
 	ring = make([]model.LogLine, 0, tail)
-	everySource := filter
-	everySource.Source, everySource.Container = model.LogSourceAll, ""
 	skipping := false
+	next := 0
 	for {
 		chunk, err := reader.ReadSlice('\n')
 		if errors.Is(err, bufio.ErrBufferFull) {
@@ -1924,33 +2012,32 @@ func filterSubstrateLog(r io.Reader, filter model.LogFilter, tail int) (ring, ev
 		if len(chunk) > 0 && !skipping {
 			scanned++
 			stamp, line, _ := model.SplitKubeletTimestamp(strings.TrimRight(string(chunk), "\r\n"))
-			if got, ok := model.FilterLine(line, filter, stamp); ok {
+			got, selected, isEvidence := model.FilterLineWithEvidence(line, filter, stamp)
+			if selected {
 				if len(ring) == tail {
-					ring = append(ring[1:], got)
+					ring[next] = got
+					next = (next + 1) % tail
 				} else {
 					ring = append(ring, got)
 				}
 			}
-			if ev, ok := model.FilterLine(line, everySource, stamp); ok && killEvidence(ev) {
-				evidence = append(evidence, ev)
+			if isEvidence {
+				evidence = append(evidence, got)
 			}
 		} else if len(chunk) > 0 {
 			scanned++
 		}
 		skipping = false
 		if err == io.EOF {
+			if next != 0 {
+				ring = slices.Concat(ring[next:], ring[:next])
+			}
 			return ring, evidence, scanned, nil
 		}
 		if err != nil {
 			return nil, nil, scanned, err
 		}
 	}
-}
-
-// killEvidence: a memory-limit kill, or the start of an execution that rules
-// an earlier kill out as the present crash's cause.
-func killEvidence(l model.LogLine) bool {
-	return l.Kind == model.LogKindWorker && l.MemoryLimitBytes != nil || l.Kind == model.LogKindLifecycle && substrateExecutionStarts[l.Message]
 }
 
 // substrateWorkerRow is one worker with Radar's readings beside Substrate's.
@@ -1993,8 +2080,8 @@ type substrateAssignedActor struct {
 }
 
 // substrateWorkerRowOf reads one worker; assigned is its actors from the
-// snapshot's index, used only when actorsRead.
-func substrateWorkerRowOf(wk model.Worker, assigned []model.Actor, actorsRead bool, pods model.WorkerPods) substrateWorkerRow {
+// snapshot's index, used only when actor coverage is usable.
+func substrateWorkerRowOf(wk model.Worker, assigned []model.Actor, actors substrateapi.Coverage, pods model.WorkerPods) substrateWorkerRow {
 	row := substrateWorkerRow{Worker: wk, HasFreeSlot: model.HasFreeSlot(wk)}
 	if !wk.UpdateTime.IsZero() {
 		held := int64(model.HeldFor(wk.UpdateTime, time.Now()).Seconds())
@@ -2004,11 +2091,12 @@ func substrateWorkerRowOf(wk model.Worker, assigned []model.Actor, actorsRead bo
 		row.PodReady = &pod.Ready
 		row.PodTerminating = !pod.Deadline.IsZero()
 	}
-	row.WorkerState = model.WorkerReadingOf(wk, assigned, actorsRead, pods)
-	if finding := model.WorkerAttention(model.Inputs{Now: time.Now(), ActorsRead: actorsRead, WorkerPods: pods}, wk, assigned); finding != nil {
+	actorsComplete := actors.State == substrateapi.CoverageFull
+	row.WorkerState = model.WorkerReadingOf(wk, assigned, actorsComplete, pods)
+	if finding := model.WorkerAttention(model.Inputs{Now: time.Now(), ActorsRead: actors.Usable(), ActorsComplete: actorsComplete, WorkerPods: pods}, wk, assigned); finding != nil {
 		row.AttentionSeverity = finding.Severity
 	}
-	if actorsRead {
+	if actors.Usable() {
 		row.Actors = make([]substrateAssignedActor, 0, len(assigned))
 		for _, a := range assigned {
 			row.Actors = append(row.Actors, substrateAssignedActor{Atespace: a.Atespace, Name: a.Name, State: a.State, Template: a.Template, UpdateTime: a.UpdateTime, WorkerImpact: model.WorkerImpactOf(a, wk, pods)})
@@ -2069,7 +2157,7 @@ func (s *Server) handleSubstrateWorkers(w http.ResponseWriter, r *http.Request) 
 		case model.WorkerUnavailable:
 			resp.Counts.Unavailable++
 		}
-		resp.Workers = append(resp.Workers, substrateWorkerRowOf(wk, snap.Index().ByWorker[wk.Name], snap.Coverage.Actors.Usable(), pods))
+		resp.Workers = append(resp.Workers, substrateWorkerRowOf(wk, snap.Index().ByWorker[wk.Name], snap.Coverage.Actors, pods))
 	}
 	slices.SortFunc(resp.Workers, func(a, b substrateWorkerRow) int {
 		return strings.Compare(a.Namespace+"/"+a.Pool+"/"+a.Pod, b.Namespace+"/"+b.Pool+"/"+b.Pod)
@@ -2158,35 +2246,36 @@ func (s *Server) handleSubstrateTemplate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	target := model.Ref{Atespace: chi.URLParam(r, "atespace"), Name: chi.URLParam(r, "name")}
-	t, found, tierErr, code, msg := s.substrateTemplate(r, snap, target)
-	switch {
-	case tierErr != nil:
-		s.writeSubstrateTier(w, *tierErr)
-		return
-	case code == substrateapi.CodeNotFound:
-		s.writeErrorCode(w, http.StatusNotFound, code, "Substrate has no actor template "+target.Atespace+"/"+target.Name)
-		return
-	case code == substrateapi.CodeDenied:
-		s.writeErrorCode(w, http.StatusForbidden, code, msg)
-		return
-	case !found:
-		s.writeErrorCode(w, http.StatusBadGateway, code, msg)
+	t, found := snapshotTemplate(snap, target)
+	if !found && snap.Coverage.Templates.State == substrateapi.CoverageFull {
+		s.writeErrorCode(w, http.StatusNotFound, substrateapi.CodeNotFound, "Substrate has no actor template "+target.Atespace+"/"+target.Name)
 		return
 	}
+	raw, readTier, code, msg := s.readSubstrateTemplate(r, target)
 	resp := substrateTemplateResponse{APITier: tier}
-	specTier, specCode, specMsg := s.substrateManager().Call(r.Context(), func(ctx context.Context, c ateapi.ControlClient) error {
-		raw, err := c.GetActorTemplate(ctx, &ateapi.GetActorTemplateRequest{ActorTemplate: &ateapi.ObjectRef{Atespace: target.Atespace, Name: target.Name}})
-		if err == nil {
-			spec := substrateapi.TemplateSpecOf(raw)
-			resp.Spec = &spec
-		}
-		return err
-	})
 	switch {
-	case specTier != nil:
-		resp.SpecUnavailable = specTier.Reason
-	case specCode != "":
-		resp.SpecUnavailable = specMsg
+	case !found && readTier != nil:
+		s.writeSubstrateTier(w, *readTier)
+		return
+	case !found && code == substrateapi.CodeNotFound:
+		s.writeErrorCode(w, http.StatusNotFound, code, "Substrate has no actor template "+target.Atespace+"/"+target.Name)
+		return
+	case !found && code == substrateapi.CodeDenied:
+		s.writeErrorCode(w, http.StatusForbidden, code, msg)
+		return
+	case !found && code != "":
+		s.writeErrorCode(w, http.StatusBadGateway, code, msg)
+		return
+	case readTier != nil:
+		resp.SpecUnavailable = readTier.Reason
+	case code != "":
+		resp.SpecUnavailable = msg
+	default:
+		spec := substrateapi.TemplateSpecOf(raw)
+		resp.Spec = &spec
+		if !found {
+			t = substrateapi.TemplateOf(raw)
+		}
 	}
 	var rows []model.TemplateRow
 	rows, resp.Coverage.Pools = s.substrateTemplateRows(r, snap, []model.Template{t})
@@ -2240,7 +2329,7 @@ func (s *Server) handleSubstratePool(w http.ResponseWriter, r *http.Request) {
 			row = &p
 		}
 	}
-	if row == nil {
+	if row == nil || row.Kubernetes == nil {
 		// The list may not hold it (a namespace not collected, a watch still
 		// syncing, list denied while get is allowed): ask for it directly
 		// before saying it does not exist.
@@ -2255,6 +2344,11 @@ func (s *Server) handleSubstratePool(w http.ResponseWriter, r *http.Request) {
 				if p.Ref() == ref {
 					row = &p
 				}
+			}
+		case row != nil:
+			// The Substrate worker registry still supplies the pool row.
+			if err != nil && poolsCov.State == integration.KindCoverageFull {
+				poolsCov.State = integration.KindCoverageError
 			}
 		case err != nil:
 			s.writeErrorCode(w, http.StatusServiceUnavailable, substrateapi.CodeIncomplete, "Radar could not read WorkerPool "+ref.Key()+": "+err.Error())
@@ -2283,7 +2377,7 @@ func (s *Server) handleSubstratePool(w http.ResponseWriter, r *http.Request) {
 	if in.WorkersRead {
 		for _, wk := range snap.Workers {
 			if wk.PoolRef() == ref {
-				resp.Workers = append(resp.Workers, substrateWorkerRowOf(wk, snap.Index().ByWorker[wk.Name], in.ActorsRead, in.WorkerPods))
+				resp.Workers = append(resp.Workers, substrateWorkerRowOf(wk, snap.Index().ByWorker[wk.Name], snap.Coverage.Actors, in.WorkerPods))
 			}
 		}
 		slices.SortFunc(resp.Workers, func(a, b substrateWorkerRow) int { return strings.Compare(a.Pod, b.Pod) })

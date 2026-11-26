@@ -56,7 +56,7 @@ function needing(data: SubstrateWorkspace): SubstrateAttention[] {
 export function substrateAttentionCount(data: SubstrateWorkspace): SubstrateAttentionCount {
   const areas: AttentionArea[] = ['actors', 'templates', 'workers', 'pools']
   const unread = areas.map((a) => areaRead(data, a)).find((r) => !r.read)
-  return countOf(needing(data).length, unread ?? { read: true }, (n) => `${n} attention ${n === 1 ? 'item' : 'items'}`)
+  return countOf(needing(data).length, unread ?? { read: true }, (n) => `${n} ${n === 1 ? 'finding needs' : 'findings need'} attention in Overview`)
 }
 
 const subjectKey = (s: SubstrateAttention['subject']) => `${s.kind}/${s.namespace ?? s.atespace ?? ''}/${s.name ?? s.filter?.template ?? ''}`

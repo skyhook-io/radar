@@ -169,3 +169,68 @@ func TestWorkerReadingOf(t *testing.T) {
 		t.Errorf("unavailable = %+v", r)
 	}
 }
+
+func TestWorkerRemediesUseAcceptedActorPhases(t *testing.T) {
+	w := Worker{Name: "w", State: WorkerDraining, RegisteredEpoch: 2}
+	for _, tc := range []struct {
+		state                      string
+		local, reverted, suspended bool
+	}{
+		{StateRunning, false, true, true},
+		{StateCrashed, false, true, false},
+		{StateSuspended, true, false, false},
+		{StateSuspended, false, false, false},
+		{StateSuspending, false, false, true},
+		{StateResuming, false, false, false},
+		{StateDeleting, false, false, false},
+		{StateReverting, false, false, false},
+	} {
+		a := Actor{Name: "actor", Atespace: "a", State: tc.state, Assignment: &Assignment{Worker: w.Name, Epoch: 2}}
+		if tc.local {
+			a.LastAssignedGeneration = 1
+			a.Snapshots = []Snapshot{{Generation: 1, Locality: "node"}}
+		}
+		if impact := WorkerImpactOf(a, w, nil); tc.state != StateSuspended && (impact == nil || (impact.Command != "") != tc.suspended) {
+			t.Errorf("draining %s: %+v", tc.state, impact)
+		}
+		a.Assignment.Epoch--
+		if tc.state == StateSuspended {
+			if WorkerImpactOf(a, w, nil) != nil || len(LostActors(w, []Actor{a})) != 0 || Revertable(a) != tc.local {
+				t.Errorf("a suspended actor keeps its snapshot during reconciliation: %+v", a)
+			}
+			continue
+		}
+		if tc.state != StateResuming {
+			if impact := WorkerImpactOf(a, w, nil); impact == nil || (impact.Command != "") != tc.reverted {
+				t.Errorf("restarted %s: %+v", tc.state, impact)
+			}
+			if _, cmd := lostActorsStep([]Actor{a}); (cmd != "") != tc.reverted {
+				t.Errorf("fleet %s: %q", tc.state, cmd)
+			}
+		}
+	}
+	if Revertable(Actor{State: StateSuspended, LastAssignedGeneration: 2, Snapshots: []Snapshot{{Generation: 1, Locality: "node"}}}) {
+		t.Error("a local copy of an earlier generation does not make the actor revertable")
+	}
+	running := Actor{State: StateRunning}
+	suspending := Actor{State: StateSuspending}
+	if step, cmd := lostActorsStep([]Actor{running, suspending}); cmd != "" || !strings.Contains(step, "Wait for Substrate") {
+		t.Errorf("mixed phases: %q %q", step, cmd)
+	}
+}
+
+func TestWorkerRemediesForKagentUseTheAppropriateOwner(t *testing.T) {
+	w := Worker{Name: "w", State: WorkerDraining, RegisteredEpoch: 1}
+	chat := Actor{Name: "chat", State: StateRunning, Assignment: &Assignment{Worker: w.Name, Epoch: 1}, Kagent: &KagentSession{SessionID: "1"}}
+	sandbox := chat
+	sandbox.Name, sandbox.Kagent = "sandbox", &KagentSession{SessionID: "2", Sandbox: true}
+	if r := WorkerImpactOf(chat, w, nil); r.Command != "" || strings.Contains(r.NextStep, "Suspend") || !strings.Contains(r.NextStep, "Let kagent manage the chat") {
+		t.Errorf("draining kagent chat: %+v", r)
+	}
+	if r := WorkerImpactOf(sandbox, w, nil); r.Command != "" || !strings.Contains(r.NextStep, "SandboxService") {
+		t.Errorf("draining kagent sandbox: %+v", r)
+	}
+	if step, command := lostActorsStep([]Actor{chat, chat}); command != "" || strings.Contains(step, "deletes or reverts") || !strings.Contains(step, "kagent") {
+		t.Errorf("only kagent sessions were lost: %q, %q", step, command)
+	}
+}

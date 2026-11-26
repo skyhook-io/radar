@@ -806,9 +806,9 @@ export interface SubstrateWorkerRow {
  */
 export interface SubstrateWorkerReading {
   kind: 'draining' | 'unavailable' | 'reconciling'
-  /** Actors still assigned; absent when actors were not read. */
+  /** Actors still assigned; absent unless the actor read is complete. */
   assigned?: number
-  /** Assigned actors that ran under an earlier process and lost their sandboxes; absent when actors were not read. */
+  /** Assigned actors that ran under an earlier process and lost their sandboxes; absent unless the actor read is complete. */
   lost?: number
   reading: string
 }
@@ -921,7 +921,7 @@ export interface SubstrateWorkerImpact {
   deadline?: string
   /**
    * One action for this actor, and the command that runs it with the actor's and worker Pod's names filled in.
-   * unavailable: the worker row's step for its podState; draining: suspend it; restarted: revert it.
+   * Unavailable uses the worker’s Pod state. Draining and restarted use the actor’s phase.
    */
   nextStep: string
   command: string
@@ -935,7 +935,7 @@ export interface SubstrateSearchedPod {
   outcome: 'read' | 'denied' | 'gone' | 'failed'
   message?: string
   scanned: number
-  /** The read reached its last-20k-lines window: older lines may exist. */
+  /** The read reached its 20,000-line window or 8 MiB per fetch: older lines may exist. */
   windowFull: boolean
   matched: number
 }
@@ -960,36 +960,39 @@ export interface SubstrateActorLogs {
    * Pod on that node now (the one it ran in is gone). workerPodGone: its
    * assigned worker's Pod no longer exists. podsDenied: cannot list worker
    * Pods. logsDenied: cannot get their logs.
-   * noMatch: Pods searched, none holds its lines. candidates: lines found on
+   * noMatch: At least one Pod log was read, and none read holds its lines. candidates: lines found on
    * the last node. podsNotCollected: Radar doesn't hold Pods in every
    * namespace, so the node can't be searched.
    */
   reasonCode?: 'noWorker' | 'nodeGone' | 'noWorkerPods' | 'workerPodGone' | 'podsDenied' | 'logsDenied' | 'noMatch' | 'candidates' | 'podsNotCollected'
   reason?: string
   source: SubstrateLogSource
-  /** Newest lines, oldest first, each with the Pod it came from. */
-  lines: (SubstrateLogLine & { pod: string })[]
-  /** The Pods read; up to 6 on a last-node search. */
+  /** Newest lines, oldest first, each with the Pod and namespace it came from. */
+  lines: (SubstrateLogLine & { pod: string; namespace: string })[]
+  /** Candidate Pod log outcomes, including unread logs. A last-node search attempts up to 6 streams. */
   searched: SubstrateSearchedPod[]
   /** Worker Pods on the node left unsearched. */
   morePods?: number
+  /** A last-node search where some Pod logs could not be searched. */
+  partial?: boolean
   scanned: number
   /** Some read reached its window: older lines of this actor may exist beyond it. */
   windowFull: boolean
   /**
    * The newest worker record among the lines of the worker killing this
    * actor's sandbox over its memory limit; absent when no line read says so.
-   * With a crash, it is the crash's cause: "killed over its memory limit of 2 GiB".
+   * It is causal only when Substrate also recorded a memory-limit crash.
    */
   memoryKill?: {
     time?: string
     pod: string
+    namespace: string
     limitBytes: number
     usageBytes?: number
     /**
      * The kill is tied to the actor's present crash: at most 10 minutes before it, with no start
-     * or restore of the actor between them in the lines read. When false it is an earlier
-     * execution's: say "a memory-limit kill was recorded at …", not that it caused this crash.
+     * or restore between them, and no subsequent failed-kill record. When false, the log
+     * is evidence of a kill attempt with no confirmed tie to the current crash.
      */
     current: boolean
     /** The remedy, the crash step: command moves the actor to a new template, thenCommand reverts it. Absent unless current. */
@@ -1173,8 +1176,8 @@ export function useSubstrateActor(ref: SubstrateRef | null) {
 }
 
 export function useSubstrateActorLogs(
-  ref: SubstrateRef | null,
-  options: { source?: SubstrateLogSource; container?: string; tailLines?: number } = {},
+  ref: Pick<SubstrateActor, 'atespace' | 'name' | 'state' | 'assignment' | 'crash'> | null,
+  options: { source?: SubstrateLogSource; container?: string; tailLines?: number } & SubstratePollOptions = {},
 ) {
   const params = new URLSearchParams()
   if (options.source) params.set('source', options.source)
@@ -1182,9 +1185,10 @@ export function useSubstrateActorLogs(
   if (options.tailLines) params.set('tailLines', String(options.tailLines))
   const qs = params.toString()
   return useSubstrateQuery<SubstrateActorLogs>(
-    ['actor-logs', ref?.atespace, ref?.name, qs],
+    ['actor-logs', ref?.atespace, ref?.name, qs, ref?.state, ref?.assignment?.worker, ref?.crash?.time],
     `/substrate/actors/${enc(ref?.atespace ?? '')}/${enc(ref?.name ?? '')}/logs${qs ? `?${qs}` : ''}`,
     !!ref,
+    options.pollMs ?? POLL_MS,
   )
 }
 

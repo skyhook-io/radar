@@ -12,7 +12,7 @@ import {
   type SubstrateRef,
 } from '../../api/substrateWorkspace'
 import { type OpenSubject, SubjectLink } from './SubstrateAttentionList'
-import { ACTOR_STATE_LABEL, kagentRecoverStep, DISCARD_WHY, definitiveFailure, killLineLabel, killTie, memoryKillText, attentionTone, bytesText, coverageReason, cpuText, fidelityLabel, refText, resumeConditionSentence, resumeSentence, revertCommand, localTime, relativeTime, servingEvidence, splitReading, withoutRepeats, workerImpactTone } from './readings'
+import { ACTOR_STATE_LABEL, kagentRecoverStep, DISCARD_WHY, definitiveFailure, killLineLabel, killTie, killTiming, memoryKillText, attentionTone, bytesText, coverageReason, cpuText, fidelityLabel, refText, resumeConditionSentence, resumeSentence, revertCommand, localTime, relativeTime, servingEvidence, splitReading, withoutRepeats, workerImpactTone } from './readings'
 import { CommandChip, Unread, When } from './shared'
 import { RefreshFailedNotice } from '../workspace/layout'
 
@@ -37,15 +37,15 @@ function actorProblem(detail: SubstrateActorDetail, logs?: SubstrateActorLogs): 
   const additional = detail.attention.filter((a) => !WORKER_RULES.has(a.rule) && a.rule !== 'crashedActors' && !(actor.state === 'crashed' && a.rule === 'goldenSnapshotFailed'))
   if (actor.state === 'crashed') {
     const kill = logs?.memoryKill
-    const tie = kill && killTie(kill, actor.crash?.time)
+    const tie = kill && killTiming(kill, actor.crash?.time)
     const at = actor.crash?.time ?? actor.updateTime
     const message = actor.crash?.message
     return { additional, problem: {
       ...base, id: 'crash', category: 'crash', tone: 'unhealthy',
       title: at ? `Actor crashed ${relativeTime(at)}` : 'Actor crashed',
       detail: kill?.current ? `Cause, from its worker’s log: ${memoryKillText(kill)}${tie ? `, ${tie}` : ''}.` : message ? `Substrate’s message: ${splitReading(message)[0]}` : 'Substrate recorded no crash message.',
-      rawDetail: kill?.current ? [`Read from the worker’s log in ${kill.pod}. Radar ties it to this crash by timing: the record names this actor${tie ? `, came ${tie},` : ''} and the lines read show no restart between them.`, message].filter(Boolean).join(' ')
-        : [message && splitReading(message)[1], kill && `Earlier run: a memory-limit kill was recorded in ${kill.pod}. Radar can’t tie it to this crash.`].filter(Boolean).join(' ') || undefined,
+      rawDetail: kill?.current ? [`Read from the worker’s log in ${kill.namespace}/${kill.pod}. Radar ties it to this crash by timing: the record names this actor${tie ? `, came ${tie},` : ''} and the lines read show no restart between them.`, message].filter(Boolean).join(' ')
+        : [message && splitReading(message)[1], kill && `A memory-limit kill attempt was recorded in ${kill.namespace}/${kill.pod}${tie ? ` ${tie}` : ''}. Substrate reported ${message ? splitReading(message)[0] : 'no crash cause'}.`].filter(Boolean).join(' ') || undefined,
       rawDetailLabel: 'Details',
       origin: kill?.current ? { label: 'Worker Pod logs' } : origin,
       nextStep: crashPlan(detail, kill)?.text ?? 'Investigate the crash cause before trying to recover the actor.',
@@ -62,13 +62,13 @@ function actorProblem(detail: SubstrateActorDetail, logs?: SubstrateActorLogs): 
         : evidence ? '; Radar found no output from it in the worker’s log, so it may not be serving.' : '.'),
         workerImpact.deadline && `The Pod is due to be gone ${relativeTime(workerImpact.deadline)}.`].filter(Boolean).join(' '),
       rawDetail: rest, rawDetailLabel: 'Details',
-      nextStep: actor.kagent ? kagentRecoverStep(actor.kagent) : workerImpact.nextStep,
+      nextStep: workerImpact.nextStep,
     } }
   }
   const [first, ...rest] = additional
   if (!first) return undefined
   const { title, message } = actorAttentionText(first, detail)
-  const nextStep = actor.kagent ? kagentRecoverStep(actor.kagent) : first.nextStep
+  const nextStep = first.nextStep
   const distinct = withoutRepeats(message, nextStep)
   const [lead, rawDetail] = distinct ? splitReading(distinct) : []
   return { additional: rest, problem: {
@@ -178,7 +178,7 @@ export interface MarkedLine {
   id: string
 }
 
-export function LogLines({ lines, showPod, mark }: { lines: (SubstrateLogLine & { pod?: string })[]; showPod?: boolean; mark?: MarkedLine }) {
+export function LogLines({ lines, showPod, mark }: { lines: (SubstrateLogLine & { pod?: string; namespace?: string })[]; showPod?: boolean; mark?: MarkedLine }) {
   // Opens at the newest line and follows new ones, unless the reader has scrolled up to read.
   const ref = useRef<HTMLPreElement>(null)
   const following = useRef(true)
@@ -198,7 +198,7 @@ export function LogLines({ lines, showPod, mark }: { lines: (SubstrateLogLine & 
           <div key={i} id={marked?.id} className={clsx('whitespace-pre-wrap break-words', marked && 'relative')} data-marked={marked ? (marked.current ? 'current' : 'earlier') : undefined}>
             {marked?.current && <span aria-hidden className={clsx('absolute -left-2 bottom-0.5 top-0.5 w-0.5 rounded-sm', toneFillClass('unhealthy'))} />}
             {l.time && <span className="text-theme-text-tertiary">{new Date(l.time).toLocaleTimeString()} </span>}
-            {showPod && l.pod && <span className="text-theme-text-tertiary">{l.pod} </span>}
+            {showPod && l.pod && <span className="text-theme-text-tertiary">{l.namespace}/{l.pod} </span>}
             <span className="text-theme-text-tertiary">{l.kind === 'container' ? l.container ?? 'container' : l.kind} </span>
             {l.message ?? l.text}
             {marked && <span className={clsx('ml-2 font-sans text-[11px] font-medium', marked.current ? toneTextClass('unhealthy') : 'text-theme-text-tertiary')}>{marked.label}</span>}
@@ -210,10 +210,10 @@ export function LogLines({ lines, showPod, mark }: { lines: (SubstrateLogLine & 
 }
 
 /** The loaded line that is the worker's memory-limit kill record, newest first; -1 when the lines read don't hold it. */
-export function memoryKillLine(lines: (SubstrateLogLine & { pod?: string })[], kill: NonNullable<SubstrateActorLogs['memoryKill']>): number {
+export function memoryKillLine(lines: (SubstrateLogLine & { pod?: string; namespace?: string })[], kill: NonNullable<SubstrateActorLogs['memoryKill']>): number {
   for (let i = lines.length - 1; i >= 0; i--) {
     const l = lines[i]
-    if (l.kind === 'worker' && l.memoryLimitBytes !== undefined && l.pod === kill.pod && (!kill.time || l.time === kill.time)) return i
+    if (l.kind === 'worker' && l.memoryLimitBytes !== undefined && l.pod === kill.pod && l.namespace === kill.namespace && (!kill.time || l.time === kill.time)) return i
   }
   return -1
 }
@@ -290,7 +290,7 @@ export function ActorLogsBody({ actor, logs, compact, killNoticeAbove }: { actor
   if (!data) return <p className="text-sm text-theme-text-tertiary">Worker logs have not been read.</p>
   const crashedAt = actor.state === 'crashed' ? actor.crash?.time : undefined
   if (data.lines.length > 0) {
-    const pods = [...new Set(data.lines.map((l) => l.pod))]
+    const pods = [...new Set(data.lines.map((l) => `${l.namespace}/${l.pod}`))]
     const kill = data.memoryKill
     const at = kill ? memoryKillLine(data.lines, kill) : -1
     // Only a kill tied to this crash is its cause; an earlier run's is labelled as one.
@@ -318,12 +318,14 @@ export function ActorLogsBody({ actor, logs, compact, killNoticeAbove }: { actor
           <p className="text-sm text-theme-text-secondary">
             {kill.current
               ? <>{at >= 0 ? 'Marked below: the worker’s memory-limit kill' : 'The worker’s log records a memory-limit kill'}{tie ? `, ${tie}` : ''}.</>
-              : <>Earlier run: a memory-limit kill was recorded{kill.time && <> <When iso={kill.time} /></>} in {kill.pod}: {memoryKillText(kill)}.{actor.state === 'crashed' ? ' Radar can’t tie it to this crash.' : ''}</>}
+              : <>A memory-limit kill attempt was recorded{kill.time && <> <When iso={kill.time} /></>} in {kill.namespace}/{kill.pod}.{actor.state === 'crashed' ? ' Substrate’s crash cause is reported separately.' : ''}</>}
             {jump}
           </p>
         )}
+        {data.partial && <p className="text-xs text-theme-text-secondary">Some worker Pod logs on this node could not be searched.</p>}
+        {!compact && data.partial && <SearchedPods data={data} />}
         <LogLines lines={data.lines} showPod={data.origin === 'lastNode' && pods.length > 1} mark={mark} />
-        {data.windowFull && <p className="text-xs text-theme-text-tertiary">Radar read the newest lines of each Pod’s log; older lines of this actor may exist beyond them.</p>}
+        {data.windowFull && <p className="text-xs text-theme-text-tertiary">Radar reached its log read limit. More lines may exist outside this window.</p>}
       </div>
     )
   }
@@ -335,7 +337,7 @@ export function ActorLogsBody({ actor, logs, compact, killNoticeAbove }: { actor
       <p className="text-sm text-theme-text-secondary">{noMatch ? 'No matching log lines.' : logGap(data, actor)}
         {!noMatch && crashedAt && <> It crashed <When iso={crashedAt} />.</>}
       </p>
-      {noMatch && data.origin === 'lastNode' && <p className="text-xs text-theme-text-secondary">Radar searched worker Pods on {data.node}, the node where the actor last ran.</p>}
+      {noMatch && data.origin === 'lastNode' && <p className="text-xs text-theme-text-secondary">Radar searched worker Pods on {data.node}, the node where the actor last ran. {data.partial && 'Some worker Pod logs there could not be searched.'}</p>}
       {noMatch && data.windowFull && <p className="text-xs text-theme-text-tertiary">Radar scanned the newest lines. Older lines may exist outside that window.</p>}
       {showSearch && <SearchedPods data={data} />}
       {!compact && (!noMatch || data.windowFull || data.origin === 'lastNode') && <LogHandoff actor={actor} />}
@@ -361,7 +363,7 @@ export function SubstrateActorOverview({
   actions?: ReactNode
 }) {
   const { actor, row, recovery } = detail
-  const logs = useSubstrateActorLogs(actor, { tailLines: 8 })
+  const logs = useSubstrateActorLogs(actor, { tailLines: 8, pollMs: actor.assignment?.pod && actor.assignment.namespace ? undefined : false })
   const assessment = actorProblem(detail, logs.data)
   const plan = actor.state === 'crashed' ? crashPlan(detail, logs.data?.memoryKill) : undefined
   const otherRemedy = detail.workerImpact ?? detail.attention.find((a) => a.id === assessment?.problem.id)
@@ -374,7 +376,8 @@ export function SubstrateActorOverview({
     : logsUnavailable ? 'Worker logs unavailable'
     : logs.error ? 'Worker logs couldn’t be read'
     : !logs.data ? 'Worker logs not read'
-    : matchingLines > 0 ? `${matchingLines} recent ${matchingLines === 1 ? 'line' : 'lines'} read`
+    : matchingLines > 0 ? `${matchingLines} recent ${matchingLines === 1 ? 'line' : 'lines'} read${logs.data.partial ? ' from available worker Pods' : ''}`
+    : logs.data.partial ? 'No matches in the worker logs Radar could search'
     : 'No matches in the recent log window'
   const restore = { memory: 'with memory', filesystem: 'with saved files', volumes: 'with saved volumes only', cold: 'as a fresh boot', unknown: 'with unreported fidelity' }[row.resumesWith]
   const recoveryText = row.resumeGeneration === undefined ? 'Boots fresh'

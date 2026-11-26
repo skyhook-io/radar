@@ -190,7 +190,7 @@ export function HiddenKillNotice({ kill, crashTime, onShowAll }: { kill: Pick<No
   const tie = killTie(kill, crashTime)
   return (
     <p className="text-xs text-theme-text-secondary">
-      This view hides the worker’s record of a memory-limit kill{kill.current ? `, ${tie ?? 'tied to this crash'}` : ' from an earlier run'}.{' '}
+      This view hides the worker’s record of a memory-limit kill{kill.current ? `, ${tie ?? 'tied to this crash'}` : ' attempt whose tie to the crash is unconfirmed'}.{' '}
       <button type="button" onClick={onShowAll} className="font-medium text-accent-text hover:underline">Show all sources</button>
     </p>
   )

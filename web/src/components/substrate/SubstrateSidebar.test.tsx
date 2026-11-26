@@ -39,6 +39,7 @@ describe('Agent Substrate in the sidebar', () => {
     const w = sidebar()!
     expect(w.label).toBe(SUBSTRATE_SIDEBAR_LABEL)
     expect(w.count).toBe(3)
+    expect(w.countTitle).toContain("3 findings need attention in Overview")
     expect(w.destinations.map((d) => d.label)).toEqual(['Overview', 'Actors', 'Templates', 'Workers', 'Pools'])
     // The badge counts actors needing attention, as the Actors screen shows them: the fixture's 14 crashed.
     expect(w.destinations.find((d) => d.id === 'actors')).toMatchObject({ active: true, count: 14 })

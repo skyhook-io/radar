@@ -160,12 +160,13 @@ type UploadNode struct {
 // Inputs is what the rules read. A false *Read means the list is unknown, and
 // rules that need it are skipped rather than reading it as empty.
 type Inputs struct {
-	Actors        []Actor
-	ActorsRead    bool
-	Templates     []Template
-	TemplatesRead bool
-	Workers       []Worker
-	WorkersRead   bool
+	Actors         []Actor
+	ActorsRead     bool
+	ActorsComplete bool
+	Templates      []Template
+	TemplatesRead  bool
+	Workers        []Worker
+	WorkersRead    bool
 	// WorkersComplete: every worker was read, which a rule needs before it
 	// says a pool is short or has no free slot.
 	WorkersComplete bool
@@ -283,6 +284,11 @@ func NeedsAttention(in Inputs) []Attention {
 	if serviceRead(in) {
 		out = append(out, nodeUploadRows(in)...)
 	}
+	sortAttention(out)
+	return out
+}
+
+func sortAttention(out []Attention) {
 	slices.SortStableFunc(out, func(a, b Attention) int {
 		if c := cmp.Compare(severityRank[a.Severity], severityRank[b.Severity]); c != 0 {
 			return c
@@ -295,7 +301,34 @@ func NeedsAttention(in Inputs) []Attention {
 		}
 		return strings.Compare(a.ID, b.ID)
 	})
-	return out
+}
+
+// ActorDetailAttention evaluates the fresh actor independently of fleet findings.
+func ActorDetailAttention(in Inputs, a Actor, worker *Worker) []Attention {
+	in.Actors = []Actor{a}
+	in.ActorsRead, in.ActorsComplete = true, false
+	rows := crashedActors(in)
+	rows = append(rows, stuckTransitions(in)...)
+	rows = append(rows, uploadsOverdue(in)...)
+	if in.TemplatesComplete {
+		rows = append(rows, missingTemplates(in)...)
+	}
+	rows = append(rows, goldenFailed(in)...)
+	if in.TemplatesRead && in.PoolsComplete {
+		rows = append(rows, noMatchingPool(in)...)
+	}
+	if worker != nil {
+		// A stronger finding for a different worker, or another actor on this
+		// worker, must not decide what this actor's detail reports.
+		if row := WorkerAttention(in, *worker, in.Actors); row != nil {
+			if impact := WorkerImpactOf(a, *worker, in.WorkerPods); impact != nil {
+				row.NextStep, row.Command = impact.NextStep, impact.Command
+			}
+			rows = append(rows, *row)
+		}
+	}
+	sortAttention(rows)
+	return ActorAttention(rows, a, in.Templates, in.Now)
 }
 
 func plural(n int, one, many string) string {
@@ -937,6 +970,9 @@ func WorkerAttention(in Inputs, w Worker, assigned []Actor) *Attention {
 		rowRelated := related
 		if len(assigned) > 0 {
 			title = fmt.Sprintf("%s still assigned to %s, unavailable for at least %s", plural(len(assigned), "actor is", "actors are"), w.Pod, timeutil.FormatAgeShort(held))
+			if !in.ActorsComplete {
+				title = "At least " + title
+			}
 			rowRelated = append([]Subject{workerActors(w, ImpactUnavailable)}, related...)
 		}
 		step := workerUnavailableStep[podState]
@@ -947,7 +983,7 @@ func WorkerAttention(in Inputs, w Worker, assigned []Actor) *Attention {
 			NextStep: step.text, Command: step.command(w),
 			Subject: subject, Related: rowRelated, Count: max(len(assigned), 1), Since: w.UpdateTime, Sample: sample(assigned),
 		})
-	case w.State == WorkerDraining && len(assigned) > 0:
+	case w.State == WorkerDraining && (len(assigned) > 0 || !in.ActorsComplete):
 		out = append(out, drainingRow(in, w, held, assigned, subject, related))
 	}
 	if w.RegisteredEpoch > w.ObservedEpoch {
@@ -960,8 +996,8 @@ func WorkerAttention(in Inputs, w Worker, assigned []Actor) *Attention {
 			Command:  apiServerLogs,
 			Subject:  subject, Related: related, Count: 1, Since: w.UpdateTime,
 		}
-		if !in.ActorsRead {
-			row.Reading = fmt.Sprintf("Actors were not read, so Radar cannot say which ran under the worker's earlier process. Substrate has not yet reconciled its registration (registered epoch %d, observed %d).", w.RegisteredEpoch, w.ObservedEpoch)
+		if !in.ActorsComplete {
+			row.Reading = fmt.Sprintf("Actor coverage is incomplete, so Radar cannot rule out actors that ran under the worker's earlier process. Substrate has not yet reconciled its registration (registered epoch %d, observed %d).", w.RegisteredEpoch, w.ObservedEpoch)
 		}
 		// The actors' sandboxes are already gone; Substrate only records it.
 		if len(lost) > 0 {
@@ -975,29 +1011,11 @@ func WorkerAttention(in Inputs, w Worker, assigned []Actor) *Attention {
 			}
 			row.Reading = fmt.Sprintf("%s %s under an earlier process of the worker, replaced at epoch %d; Substrate has observed epoch %d.",
 				lead, plural(len(lost), "actor ran", "actors ran"), w.RegisteredEpoch, w.ObservedEpoch)
-			row.NextStep = "Revert each to its newest stored generation now; Substrate marks them crashed when it reconciles the worker anyway."
-			row.Command = revertCommand
-			// Substrate refuses a revert while a delete runs, and a reverting
-			// actor already has one running.
-			if !slices.ContainsFunc(lost, func(a Actor) bool { return a.State != StateDeleting && a.State != StateReverting }) {
-				row.NextStep, row.Command = "Nothing to recover: Substrate is already deleting or reverting them.", ""
-				if len(lost) == 1 {
-					row.NextStep = "Nothing to recover: Substrate is already deleting or reverting it."
-				}
-			} else if slices.ContainsFunc(lost, func(a Actor) bool { return a.State == StateDeleting || a.State == StateReverting }) {
-				row.NextStep = "Revert each that isn't already deleting or reverting to its newest stored generation now; Substrate marks them crashed when it reconciles the worker anyway."
+			if !in.ActorsComplete {
+				row.Title = "At least " + row.Title
+				row.Reading += " Other assigned actors may be outside the read."
 			}
-			// kagent recovers its own sessions; of the actors left to
-			// recover, name kagent for its sessions.
-			recoverable := slices.DeleteFunc(slices.Clone(lost), func(a Actor) bool { return a.State == StateDeleting || a.State == StateReverting })
-			if sessions, sandboxes := kagentCounts(recoverable); row.Command != "" && sessions+sandboxes > 0 {
-				if sessions+sandboxes == len(recoverable) {
-					row.NextStep, row.Command = kagentStep(sessions, sandboxes, true), ""
-				} else {
-					row.NextStep += kagentAsideOf(sessions, sandboxes)
-					row.Command = ""
-				}
-			}
+			row.NextStep, row.Command = lostActorsStep(lost)
 			row.Subject = workerActors(w, ImpactRestarted)
 			row.Related = append([]Subject{subject}, related...)
 			row.Count, row.Sample = len(lost), sample(lost)
@@ -1170,11 +1188,11 @@ var lackingWords = map[string]string{LackingCPU: "CPU", LackingMemory: "memory",
 // it places nothing new and loses nothing: a warning.
 func noRoomRow(in Inputs, r PoolRow, name string, subject Subject) *Attention {
 	what := lackingWords[r.Lacking]
-	templates, asks := "the template that can run on it", "the template asks"
+	templates, asks := "the template that can run on it", "the worker would book at least"
 	if r.room.templates > 1 {
-		templates, asks = fmt.Sprintf("any of the %d templates that can run on it", r.room.templates), "the least any of them asks"
+		templates, asks = fmt.Sprintf("any of the %d templates that can run on it", r.room.templates), "the smallest booking is"
 	}
-	reading := fmt.Sprintf("None of its active workers with a free actor slot has the %s left for an actor of %s, so new and resuming actors wait for a worker.", what, templates)
+	reading := fmt.Sprintf("None of its active workers with a free actor slot has the %s left to start a fresh actor of %s.", what, templates)
 	if r.Lacking != LackingMemory && r.room.ask.CPUMillicores > r.room.unbooked.CPUMillicores {
 		reading += fmt.Sprintf(" The most CPU unbooked on such a worker is %s; %s %s.", cpuText(r.room.unbooked.CPUMillicores), asks, cpuText(r.room.ask.CPUMillicores))
 	}
@@ -1422,6 +1440,20 @@ func drainingRow(in Inputs, w Worker, held time.Duration, assigned []Actor, subj
 		row.Reading = passed + how
 		row.NextStep = "Check the worker Pod: whether it is still terminating, and the worker's log for applications that did not stop."
 	}
+	if !in.ActorsComplete {
+		row.Title = fmt.Sprintf("Worker %s is draining", w.Pod)
+		if row.Severity == SeverityWarning {
+			row.Title = fmt.Sprintf("Worker %s is past its Pod's termination deadline", w.Pod)
+		}
+		row.Reading = strings.TrimSuffix(row.Reading, how) + " Draining stops new placements. The actor read is incomplete, so the total still assigned is unknown."
+		if len(assigned) > 0 {
+			row.Reading += fmt.Sprintf(" Radar read %s still assigned.", plural(len(assigned), "actor", "actors"))
+		}
+		row.Count = max(len(assigned), 1)
+	}
+	if row.Severity == SeverityInfo {
+		row.NextStep = "Check the phases of assigned actors. Running actors can be suspended to keep their state before the Pod is gone."
+	}
 	return row
 }
 
@@ -1486,7 +1518,7 @@ func Checks(in Inputs) []Check {
 		need(RuleWorkerDraining, "Draining workers", workers),
 		need(RuleWorkerRestarting, "Worker registrations not yet reconciled", workers),
 		need(RulePoolShort, "Pools short of workers", pools),
-		need(RulePoolFull, "Pools with no free actor slots", pools),
+		need(RulePoolFull, "Pools with no free actor slots", req{ok: in.WorkersComplete || svc.ok, why: "the worker list is incomplete and " + svc.why, collecting: svc.collecting}),
 		need(RulePoolNoRoom, "Pools whose free slots lack the CPU or memory for an actor", workers, workersAll, templatesAll),
 		need("poolService", "Substrate's pool capacity verdicts (Prometheus)", svc),
 		need(RuleNodeUploadsOverdue, "Overdue snapshot uploads per node (Prometheus)", svc, nodes),
@@ -1551,7 +1583,7 @@ func covers(r Attention, a Actor, now time.Time) bool {
 	case RuleWorkerUnavailable, RuleWorkerDraining:
 		return worker != "" && worker == r.key
 	case RuleWorkerRestarting:
-		return worker != "" && worker == r.key && epoch < r.epoch && a.State != StateResuming
+		return worker != "" && worker == r.key && epoch < r.epoch && a.State != StateResuming && a.State != StateSuspended
 	}
 	return false
 }

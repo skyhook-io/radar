@@ -523,6 +523,7 @@ export function SubstrateOverview({ data, status, onOpenSubject }: SubstrateOver
         <SubstrateCoverageNotice coverage={data.coverage} kinds={['actors', 'templates', 'workers', 'atespaces']} />
         <SubstrateRefreshFailure tier={tier} notice />
         <WorkspaceCard title="Needs attention">
+          {data.needsAttention.length > 0 && <p className="text-xs text-theme-text-tertiary">Findings can group several actors. Each inventory counts individual objects in its Needs attention filter.</p>}
           {data.needsAttention.length > 0 && <SubstrateAttentionList rows={data.needsAttention} onOpen={onOpenSubject} />}
           <ChecksSummary data={data} empty={data.needsAttention.length === 0} />
         </WorkspaceCard>

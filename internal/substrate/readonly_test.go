@@ -17,7 +17,7 @@ import (
 // here is a write as that owner: adding one must be a deliberate change to
 // this list.
 var readRPCs = []string{
-	"GetActor", "GetActorEgressPolicy", "GetActorTemplate",
+	"GetActor", "GetActorEgressPolicy", "GetActorTemplate", "GetWorker",
 	"ListActorTemplates", "ListActors", "ListAtespaces", "ListWorkers",
 }
 

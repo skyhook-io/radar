@@ -138,6 +138,9 @@ type Actor struct {
 	Crash        *Crash      `json:"crash,omitempty"`
 	// Snapshots omitted: the actor has none.
 	Snapshots []Snapshot `json:"snapshots,omitempty"`
+	// LastAssignedGeneration is Substrate's revert precondition for a
+	// suspended actor and may identify a generation missing from Snapshots.
+	LastAssignedGeneration int32 `json:"-"`
 	// WorkerSelector narrows the template's; omitted adds nothing to it.
 	WorkerSelector map[string]string `json:"workerSelector,omitempty"`
 	CreateTime     time.Time         `json:"createTime,omitzero"`
@@ -266,6 +269,9 @@ type Worker struct {
 	// Runtimes are the runtimes the worker can restore snapshots under: each
 	// class's default runtime, then its restorable ones.
 	Runtimes []Runtime `json:"-"`
+	// Cold-boot placement books the worker's default runtime overhead.
+	DefaultMemoryOverhead       int64 `json:"-"`
+	DefaultMemoryOverheadPerGiB int64 `json:"-"`
 	// UpdateTime is Substrate's last change to the worker; the current state
 	// has held at least since then.
 	UpdateTime time.Time `json:"updateTime,omitzero"`
