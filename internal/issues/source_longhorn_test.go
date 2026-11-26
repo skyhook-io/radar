@@ -8,6 +8,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/skyhook-io/radar/pkg/longhorn"
+
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
@@ -88,5 +90,30 @@ func TestLonghornNodeIsNotACoreNode(t *testing.T) {
 	}
 	if got := affectedOf([]Ref{{Kind: "Node", Name: "worker-1"}, {Group: "longhorn.io", Kind: "Node", Namespace: "longhorn-system", Name: "worker-1"}}); got.Nodes != 1 {
 		t.Errorf("affected nodes = %d, want 1 (the core Node only)", got.Nodes)
+	}
+}
+
+// Longhorn mirrors the Kubernetes node into its own Node's Ready condition;
+// those reasons are the core Node's Issue already, Longhorn's own are not.
+func TestLonghornNodeSuppressesMirroredNodeConditions(t *testing.T) {
+	node := func(reason string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "longhorn.io/v1beta2", "kind": "Node",
+			"metadata": map[string]any{"name": "worker-1", "namespace": "longhorn-system"},
+			"status":   map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "False", "reason": reason}}},
+		}}
+	}
+	for _, reason := range []string{"KubernetesNodeNotReady", "KubernetesNodeGone", "KubernetesNodePressure"} {
+		if !longhornSuppressesGenericConditions(longhorn.Group, "Node", node(reason)) {
+			t.Errorf("%s repeats the core Node's Issue and must be suppressed", reason)
+		}
+	}
+	for _, reason := range []string{"ManagerPodDown", "ManagerPodMissing", "NoMountPropagationSupport"} {
+		if longhornSuppressesGenericConditions(longhorn.Group, "Node", node(reason)) {
+			t.Errorf("%s is Longhorn's own failure and must stay", reason)
+		}
+	}
+	if longhornSuppressesGenericConditions("", "Node", node("KubernetesNodeNotReady")) {
+		t.Error("a core Node is never suppressed here")
 	}
 }

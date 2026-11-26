@@ -206,7 +206,7 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 			// silent ON PURPOSE — because the object is mid-operation and its
 			// False Ready is expected — has to say so explicitly, or the noise
 			// it just suppressed comes straight back through the generic path.
-			if cnpgSuppressesGenericConditions(gvr.Group, kind, u) || agentSandboxSuppressesGenericConditions(gvr.Group, kind, u) {
+			if cnpgSuppressesGenericConditions(gvr.Group, kind, u) || agentSandboxSuppressesGenericConditions(gvr.Group, kind, u) || longhornSuppressesGenericConditions(gvr.Group, kind, u) {
 				continue
 			}
 			condTypes := conditions.DefaultFalseConditionTypes

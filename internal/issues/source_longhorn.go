@@ -1,6 +1,7 @@
 package issues
 
 import (
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -38,4 +39,23 @@ func detectLonghornVolumeIssues(gvr schema.GroupVersionResource, kind string, it
 		}
 	}
 	return out
+}
+
+// longhornSuppressesGenericConditions: Longhorn copies the Kubernetes node's
+// state into its own Node's Ready condition (reasons KubernetesNode*). The
+// core Node already has that Issue; Longhorn's own reasons (its manager pod
+// down, no mount propagation) are kept.
+func longhornSuppressesGenericConditions(group, kind string, u *unstructured.Unstructured) bool {
+	if group != longhorn.Group || kind != "Node" {
+		return false
+	}
+	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	for _, c := range conds {
+		m, _ := c.(map[string]any)
+		if m["type"] == "Ready" && m["status"] == "False" {
+			reason, _ := m["reason"].(string)
+			return strings.HasPrefix(reason, "KubernetesNode")
+		}
+	}
+	return false
 }

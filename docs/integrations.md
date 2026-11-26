@@ -31,7 +31,7 @@ Cluster-scoped drawers retain refresh-on-reopen/focus instead of automatic polli
 
 **Status badge (drawer header):** Healthy, Degraded (amber), Faulted (red), Detached (neutral), Unknown. The Volumes table keeps the CRD's printer columns (State, Robustness, Scheduled, Size, Node), so robustness reads there as Longhorn writes it.
 
-**Kind collisions:** Longhorn serves `nodes` and `volumes` plurals. Only the core `Node` gets the Node drawer, status, Debug Shell, cordon, uncordon and drain; a Longhorn `Node` renders generically. In Issues, a Longhorn Node's condition is an operator condition, never a node problem: it does not get the node grouping scope or count as an affected node. A `volumes` plural from any other group renders generically too.
+**Kind collisions:** Longhorn serves `nodes` and `volumes` plurals. Only the core `Node` gets the Node drawer, status, Debug Shell, cordon, uncordon and drain; a Longhorn `Node` renders generically. In Issues, a Longhorn Node's condition is an operator condition, never a node problem: it does not get the node grouping scope or count as an affected node. Longhorn copies the Kubernetes node's state into its own Node's `Ready` condition (reasons `KubernetesNodeNotReady`, `KubernetesNodeGone`, `KubernetesNodePressure`); those raise no Issue, because the core Node already has one. Longhorn's own reasons, such as `ManagerPodDown`, do. A `volumes` plural from any other group renders generically too.
 
 ### Issues
 
