@@ -3,6 +3,8 @@ package search
 import (
 	"strings"
 	"testing"
+
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 func cand() candidate {
@@ -165,6 +167,27 @@ func TestKindMatches_Variants(t *testing.T) {
 		got := kindMatches(tc.kind, tc.group, tc.resource, []string{tc.filter})
 		if got != tc.want {
 			t.Errorf("kindMatches(%q, %q, %q, %q) = %v, want %v", tc.kind, tc.group, tc.resource, tc.filter, got, tc.want)
+		}
+	}
+}
+
+func TestQueryKindMatches_DiscoveredShortNames(t *testing.T) {
+	q := Query{shortNames: indexShortNames([]k8score.APIResource{
+		{Group: "autoscaling.k8s.io", Kind: "VerticalPodAutoscaler", ShortNames: []string{"VPA"}},
+	})}
+	cases := []struct {
+		kind, group, filter string
+		want                bool
+	}{
+		{"VerticalPodAutoscaler", "autoscaling.k8s.io", "vpa", true},
+		{"VerticalPodAutoscaler", "autoscaling.k8s.io", "VPA", true},
+		{"VerticalPodAutoscaler", "other.io", "vpa", false}, // a short name names its own group's kind only
+		{"Pod", "", "vpa", false},
+		{"Pod", "", "pod", true}, // existing matching is unchanged
+	}
+	for _, tc := range cases {
+		if got := q.kindMatches(tc.kind, tc.group, "", []string{tc.filter}); got != tc.want {
+			t.Errorf("kindMatches(%q, %q, %q) = %v, want %v", tc.kind, tc.group, tc.filter, got, tc.want)
 		}
 	}
 }

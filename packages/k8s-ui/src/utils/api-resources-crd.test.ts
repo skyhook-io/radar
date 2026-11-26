@@ -9,3 +9,7 @@ it('places discovered definitions in Cluster without a fallback row', () => {
   expect(resourceSearchAliases(crd)).toEqual(['crd', 'crds'])
   expect(resourceSearchAliases({ group: 'other.io', kind: crd.kind })).toEqual([])
 })
+it('adds discovered kubectl short names as lowercase aliases', () => {
+  expect(resourceSearchAliases({ group: 'policy', kind: 'PodDisruptionBudget', shortNames: ['PDB'] })).toEqual(['pdb'])
+  expect(resourceSearchAliases({ ...crd, shortNames: ['xcrd'] })).toEqual(['crd', 'crds', 'xcrd'])
+})
