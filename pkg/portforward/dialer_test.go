@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -105,6 +106,71 @@ func TestCancelWebSocketProxyHandshake(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("stalled CONNECT survived cancellation")
 	}
+}
+
+func TestCancelSuccessfulWebSocketHandshake(t *testing.T) {
+	upgrader := websocket.Upgrader{Subprotocols: []string{"SPDY/3.1+portforward.k8s.io"}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		_, _, _ = conn.ReadMessage()
+	}))
+	defer server.Close()
+	target, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	cfg := &rest.Config{Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+		conn, err := (&net.Dialer{}).DialContext(ctx, network, address)
+		if err != nil {
+			return nil, err
+		}
+		return &cancelOnDeadlineReset{Conn: conn, cancel: cancel, closed: make(chan struct{})}, nil
+	}}
+	dialer, err := NewDialerWithContext(ctx, cfg, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, protocol, err := dialer.Dial("portforward.k8s.io")
+	if conn != nil {
+		defer conn.Close()
+	}
+	if conn != nil || protocol != "" || !errors.Is(err, context.Canceled) {
+		t.Fatalf("Dial returned connection=%t, protocol=%q, err=%v, want no connection and context.Canceled", conn != nil, protocol, err)
+	}
+}
+
+type cancelOnDeadlineReset struct {
+	net.Conn
+	cancel context.CancelFunc
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (c *cancelOnDeadlineReset) SetDeadline(deadline time.Time) error {
+	err := c.Conn.SetDeadline(deadline)
+	// Gorilla clears the deadline after accepting the handshake, just before returning success.
+	if err == nil && deadline.IsZero() {
+		c.cancel()
+		select {
+		case <-c.closed:
+		case <-time.After(time.Second):
+			return errors.New("cancellation did not close the handshake socket")
+		}
+	}
+	return err
+}
+
+func (c *cancelOnDeadlineReset) Close() error {
+	err := c.Conn.Close()
+	c.once.Do(func() { close(c.closed) })
+	return err
 }
 
 func TestCancelSPDYFallbackClosesHandshakeSocket(t *testing.T) {

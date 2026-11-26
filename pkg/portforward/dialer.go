@@ -112,8 +112,10 @@ func (a upgradeAttempt) websocket(protocols ...string) (httpstream.Connection, s
 			return conn, err
 		}
 		conn, resp, err := dialer.DialContext(req.Context(), u.String(), req.Header)
-		if detach != nil {
-			detach()
+		if detach != nil && !detach() && err == nil {
+			conn.Close()
+			resp.Body.Close()
+			return nil, req.Context().Err()
 		}
 		if err != nil {
 			if resp != nil {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -52,8 +53,9 @@ func TestArgoForwardFollowsConnectionLifecycle(t *testing.T) {
 	for _, pending := range []bool{false, true} {
 		t.Run(fmt.Sprintf("pending=%v", pending), func(t *testing.T) {
 			arrived, ended, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			var first atomic.Bool
 			cfg := forwardtest.Server(t, func(w http.ResponseWriter, r *http.Request) {
-				if r.Method == "POST" || pending {
+				if (r.Method == http.MethodPost || pending) && first.CompareAndSwap(false, true) {
 					close(arrived)
 					defer close(ended)
 				}
@@ -99,10 +101,14 @@ func TestArgoForwardFollowsConnectionLifecycle(t *testing.T) {
 				}
 				k8s.RetireServingConnection()
 				k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "ctx"})
-				if shared := k8s.Current().PortForwards().Share(portforward.OwnerPrometheus, "ns", "svc", 8080); shared != nil {
-					shared.Stop()
-					t.Fatal("metrics discovery could share the Argo CD tunnel")
+				regular, err := k8s.Current().PortForwards().Start(portforward.OwnerArgoCD, ctx, "ns", "svc", 8080)
+				if err != nil {
+					t.Fatal(err)
 				}
+				if regular.Info().LocalPort == got.forward.Info().LocalPort {
+					t.Error("regular Start reused Argo CD's dedicated tunnel")
+				}
+				regular.Stop()
 				if !got.forward.Alive() {
 					t.Fatal("readmission did not preserve the live Argo CD handle")
 				}

@@ -394,6 +394,12 @@ func (c *CarettaSource) discoverPrometheusLocked(ctx context.Context) {
 		return
 	}
 
+	if !c.inCluster {
+		log.Printf("[caretta] No Caretta-backed metrics service reachable locally. Call Connect() for port-forward.")
+		c.backendWarning = noBackendWarning(nil, nil)
+		return
+	}
+
 	// Layer 2+3: Well-known locations, then dynamic discovery
 	candidates := c.discoverServiceLocked(ctx)
 	if len(candidates) == 0 {
@@ -404,62 +410,20 @@ func (c *CarettaSource) discoverPrometheusLocked(ctx context.Context) {
 
 	var noData, unreachable []string
 	for _, info := range candidates {
-		wrongData := false
-
-		if c.inCluster {
-			// In-cluster: the Service address resolves and answers in single-digit
-			// ms. Probe it directly — a managed forward isn't expected here (no
-			// pods/portforward RBAC), so a cluster-address probe is the only path,
-			// and one that can't be reached is a real diagnosis (not the local
-			// "Connect() will port-forward" case), so record it.
-			switch c.acceptBackendLocked(ctx, info, info.clusterAddr+info.basePath) {
-			case backendAccepted:
-				log.Printf("[caretta] Found metrics service at %s (basePath=%q)", info.clusterAddr, info.basePath)
-				c.bindLocked(info.clusterAddr, info, nil)
-				return
-			case backendNoCarettaData:
-				wrongData = true
-			case backendUnreachable:
-				unreachable = append(unreachable, fmt.Sprintf("%s/%s", info.namespace, info.name))
-			}
-		} else {
-			// Local: a cluster address can't resolve from here, so only an already
-			// running managed forward is reachable. Reuse one only if it targets the
-			// SAME service we just discovered. A generic reachability probe can't tell
-			// caretta-vm apart from the cluster's general Prometheus (both answer
-			// /api/v1/query), so match the Service and target port — otherwise we'd adopt
-			// the general-metrics forward and query it for caretta_links_observed,
-			// which returns 0 flows silently. Starting a new forward is Connect()'s job.
-			if handle := c.forwards.Share(portforward.OwnerTraffic, info.namespace, info.name, info.targetPort); handle != nil {
-				pfAddr := handle.Address()
-				switch c.acceptForwardLocked(ctx, info, handle) {
-				case backendAccepted:
-					log.Printf("[caretta] Using managed port-forward at %s for %s/%s", pfAddr, info.namespace, info.name)
-					c.bindLocked(pfAddr, info, handle)
-					return
-				case backendNoCarettaData:
-					wrongData = true
-				}
-				handle.Stop()
-			}
-		}
-
-		if wrongData {
+		switch c.acceptBackendLocked(ctx, info, info.clusterAddr+info.basePath) {
+		case backendAccepted:
+			log.Printf("[caretta] Found metrics service at %s (basePath=%q)", info.clusterAddr, info.basePath)
+			c.bindLocked(info.clusterAddr, info, nil)
+			return
+		case backendNoCarettaData:
 			noData = append(noData, fmt.Sprintf("%s/%s", info.namespace, info.name))
+		case backendUnreachable:
+			unreachable = append(unreachable, fmt.Sprintf("%s/%s", info.namespace, info.name))
 		}
 	}
 
-	// Nothing bound. In-cluster, a candidate that couldn't be reached is a real
-	// diagnosis, so name it. Local, a cluster address unreachable here is the
-	// normal case — Connect() port-forwards to the candidates — so nothing is
-	// recorded as unreachable and the warning falls back to the generic message.
-	if c.inCluster {
-		log.Printf("[caretta] No Caretta-backed metrics service reachable in-cluster.")
-	} else {
-		log.Printf("[caretta] No Caretta-backed metrics service reachable locally. Call Connect() for port-forward.")
-	}
+	log.Printf("[caretta] No Caretta-backed metrics service reachable in-cluster.")
 	c.backendWarning = noBackendWarning(noData, unreachable)
-	return
 }
 
 // discoverServiceLocked returns candidate metrics backends in Caretta priority
@@ -1103,21 +1067,6 @@ func (c *CarettaSource) tryConnectLocked(ctx context.Context, contextName string
 		// Local: a cluster address can't resolve from here, and probing it costs a
 		// guaranteed multi-second dead-wait per candidate — so skip it and go
 		// straight to a port-forward.
-
-		if handle := c.forwards.Share(portforward.OwnerTraffic, info.namespace, info.name, info.targetPort); handle != nil {
-			pfAddr := handle.Address()
-			verdict := c.acceptForwardLocked(ctx, info, handle)
-			if verdict == backendAccepted {
-				log.Printf("[caretta] Using existing port-forward at %s", pfAddr)
-				c.bindLocked(pfAddr, info, handle)
-				return handle.Info()
-			}
-			handle.Stop()
-			if verdict == backendNoCarettaData {
-				noData = append(noData, target)
-				continue
-			}
-		}
 
 		if portforward.AutoDisabled() {
 			lastErr = "Automatic port-forwarding is turned off, so Radar can't reach Caretta's metrics store from this machine. Set a metrics URL for this cluster in Settings → Metrics."

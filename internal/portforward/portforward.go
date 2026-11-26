@@ -96,7 +96,7 @@ func (f *forward) matches(namespace, service string, port int) bool {
 	return f.info.Namespace == namespace && f.info.ServiceName == service && f.targetPort == port
 }
 
-// Handle identifies one tunnel. Each successful Start or Share acquires a
+// Handle identifies one tunnel. Each successful start acquires a
 // reference that the caller releases with Stop.
 type Handle struct {
 	f        *forward
@@ -341,28 +341,4 @@ func (m *Manager) establish(ctx context.Context, f *forward) (*Handle, error) {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-}
-
-// Share acquires a reference to an established, non-dedicated tunnel for the
-// target, preferring one started by the caller's owner.
-func (m *Manager) Share(prefer Owner, namespace, service string, targetPort int) *Handle {
-	if m == nil {
-		return nil
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var match *forward
-	for f := range m.forwards {
-		if f.active && !f.dedicated && f.matches(namespace, service, targetPort) {
-			match = f
-			if f.owner == prefer {
-				break
-			}
-		}
-	}
-	if match == nil {
-		return nil
-	}
-	match.owners++
-	return &Handle{f: match}
 }

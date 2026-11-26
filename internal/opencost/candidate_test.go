@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -73,7 +74,7 @@ func TestFailedKubecostProbeAfterSwitchKeepsReplacementForward(t *testing.T) {
 
 	service := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "aggregator", Namespace: "cost"}}
 	endpoint := kubecostAggregatorEndpoint{targetPort: 9004, servicePort: 9004}
-	install := func(name string, answer func() string) kubecostTarget {
+	install := func(name string, answer func() string) (kubecostTarget, <-chan struct{}) {
 		t.Helper()
 		mux := http.NewServeMux()
 		mux.HandleFunc("GET /api/v1/namespaces/cost/services/aggregator", func(w http.ResponseWriter, r *http.Request) {
@@ -84,7 +85,13 @@ func TestFailedKubecostProbeAfterSwitchKeepsReplacementForward(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			io.WriteString(w, `{"kind":"PodList","apiVersion":"v1","items":[{"metadata":{"name":"aggregator-0"},"status":{"phase":"Running"}}]}`)
 		})
-		mux.HandleFunc("POST /api/v1/namespaces/cost/pods/aggregator-0/portforward", kubecostTestTunnel(answer))
+		ended := make(chan struct{})
+		signalEnd := sync.OnceFunc(func() { close(ended) })
+		tunnel := kubecostTestTunnel(answer)
+		mux.HandleFunc("POST /api/v1/namespaces/cost/pods/aggregator-0/portforward", func(w http.ResponseWriter, r *http.Request) {
+			defer signalEnd()
+			tunnel(w, r)
+		})
 		api := httptest.NewServer(mux)
 		t.Cleanup(api.Close)
 		cfg := &rest.Config{Host: api.URL}
@@ -94,10 +101,10 @@ func TestFailedKubecostProbeAfterSwitchKeepsReplacementForward(t *testing.T) {
 		k8s.SetTestClient(kubernetes.NewForConfigOrDie(cfg))
 		target := captureKubecostTarget()
 		t.Cleanup(target.forwards.Close)
-		return target
+		return target, ended
 	}
 
-	a := install("a", func() string {
+	a, aEnded := install("a", func() string {
 		close(probing)
 		<-release
 		return `{"code":200,"data":[{}]}`
@@ -114,7 +121,7 @@ func TestFailedKubecostProbeAfterSwitchKeepsReplacementForward(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("A did not reach its forwarded probe")
 	}
-	b := install("b", func() string { return `{"code":200,"data":[{"b":{"properties":{"cluster":"b"},"totalCost":1}}]}` })
+	b, _ := install("b", func() string { return `{"code":200,"data":[{"b":{"properties":{"cluster":"b"},"totalCost":1}}]}` })
 	probeB := func() Connection {
 		t.Helper()
 		c, err := connectDiscoveredKubecostEndpoint(t.Context(), "", "b", service, endpoint, portforward.OwnerCost, b)
@@ -133,10 +140,13 @@ func TestFailedKubecostProbeAfterSwitchKeepsReplacementForward(t *testing.T) {
 	if err := <-result; !errors.Is(err, ErrKubecostNoData) {
 		t.Fatalf("A returned %v, want the released probe’s empty allocation", err)
 	}
-	remaining := a.forwards.Share(portforward.OwnerCost, "cost", "aggregator", 9004)
-	remaining.Stop()
-	if remaining != nil || !bConn.lease.alive() {
-		t.Fatal("failed probe did not stop exactly A's forward")
+	select {
+	case <-aEnded:
+	case <-time.After(time.Second):
+		t.Fatal("A's forward stayed open after its probe failed")
+	}
+	if !bConn.lease.alive() {
+		t.Fatal("A's failed probe stopped B's forward")
 	}
 	stillServing := probeB()
 	if stillServing.Address != bConn.Address {
@@ -155,11 +165,19 @@ func TestKubecostCandidateTunnelIsDedicated(t *testing.T) {
 	probing, release := make(chan struct{}), make(chan struct{})
 	resume := sync.OnceFunc(func() { close(release) })
 	defer resume()
-	cfg := forwardtest.Server(t, kubecostTestTunnel(func() string {
+	candidateTunnel := kubecostTestTunnel(func() string {
 		close(probing)
 		<-release
 		return `{"code":200,"data":[{"test":{"properties":{"cluster":"test"},"totalCost":1}}]}`
-	}))
+	})
+	var upgrades atomic.Int32
+	cfg := forwardtest.Server(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && upgrades.Add(1) == 1 {
+			candidateTunnel(w, r)
+			return
+		}
+		forwardtest.ServeTunnel(w, r)
+	})
 	if _, err := k8s.InstallTestServingConnection("ctx", cfg, nil, fake.NewSimpleClientset().Discovery()); err != nil {
 		t.Fatal(err)
 	}
@@ -200,9 +218,13 @@ func TestKubecostCandidateTunnelIsDedicated(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("candidate did not reach its forwarded probe")
 	}
-	if peer := forwards.Share(portforward.OwnerPrometheus, "ns", "svc", 9004); peer != nil {
-		peer.Stop()
-		t.Errorf("candidate probe exposed its tunnel to peer lookup at %s", peer.Address())
+	regular, err := forwards.Start("cost-candidate", t.Context(), "ns", "svc", 9004)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer regular.Stop()
+	if upgrades.Load() != 2 {
+		t.Error("regular Start reused the Kubecost candidate's dedicated tunnel")
 	}
 	resume()
 	if err := <-result; err != nil {

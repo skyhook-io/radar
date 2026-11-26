@@ -115,9 +115,8 @@ func (c *Client) discoveryServices(ctx context.Context, gen uint64) ([]*corev1.S
 
 // discover finds and connects to Prometheus using a multi-layer approach:
 //  1. Manual URL override (--prometheus-url)
-//  2. Existing traffic system port-forward
-//  3. Well-known service locations (via pkg/prom.Discover)
-//  4. Dynamic cluster-wide discovery with scoring (via pkg/prom.Discover)
+//  2. Well-known service locations (via pkg/prom.Discover)
+//  3. Dynamic cluster-wide discovery with scoring (via pkg/prom.Discover)
 //
 // Well-known + dynamic candidate enumeration lives in pkg/prom.Discover so
 // it can be shared by any consumer of the package. This function owns
@@ -186,20 +185,11 @@ func (c *Client) discover(ctx context.Context, gen uint64) (discoveredEndpoint, 
 		return discoveredEndpoint{}, errors.New(message)
 	}
 
-	// Reuse of an existing managed port-forward happens later, per candidate, in
-	// the port-forward fallback loop below — not here as a blind cross-owner
-	// shortcut. A generic probe can't tell the traffic source's caretta-vm
-	// (traffic-specific, may lack workload metrics) apart from a general
-	// Prometheus, so adopting whatever forward is up before enumeration would let
-	// resource metrics bind to caretta-vm and silently lose workload data. Reusing
-	// only a forward that targets a discovered candidate ties reuse to the same
-	// candidate ranking the port-forward attempts already follow.
-
 	if k8sClient == nil {
 		return discoveredEndpoint{}, fmt.Errorf("no Kubernetes client available for discovery")
 	}
 
-	// Layers 3 + 4: Enumerate candidates via the shared pkg/prom discovery
+	// Layers 2 + 3: Enumerate candidates via the shared pkg/prom discovery
 	// logic. Well-known first, then dynamic fallbacks.
 	enumStart := time.Now()
 	services, complete := c.discoveryServices(ctx, gen)
@@ -304,8 +294,7 @@ func (c *Client) discover(ctx context.Context, gen uint64) (discoveredEndpoint, 
 
 	// Fallback: try port-forwarding candidates in priority order. This is the
 	// primary path off-cluster (where Service DNS can't resolve from the user's
-	// machine). Serial by necessity — port-forwarding mutates the owner's shared
-	// forward state.
+	// machine).
 	var lastErr error
 	var denied []string
 	for _, cand := range candidates {
@@ -316,24 +305,6 @@ func (c *Client) discover(ctx context.Context, gen uint64) (discoveredEndpoint, 
 			return discoveredEndpoint{}, err
 		}
 		c.setDiscoveryServiceFromCandidate(cand)
-
-		if handle := c.forwards.Share(portforward.OwnerPrometheus, cand.Namespace, cand.Name, cand.TargetPort); handle != nil {
-			pfAddr := handle.Address()
-			connected, err := c.probeForward(ctx, handle, cand, startGen)
-			if err != nil {
-				return discoveredEndpoint{}, err
-			}
-			if connected != nil {
-				log.Printf("[prometheus] reusing managed port-forward %s for %s/%s (%s)",
-					pfAddr, cand.Namespace, cand.Name, took(start))
-				return discoveredEndpoint{pfAddr, cand.BasePath, connected}, nil
-			}
-			// Cancellation supersedes the run before it opens another tunnel.
-			if err := ctx.Err(); err != nil {
-				logDiscoveryEnded(start, err)
-				return discoveredEndpoint{}, err
-			}
-		}
 
 		log.Printf("[prometheus] port-forward → %s/%s:%d (source=%s, score=%d)...",
 			cand.Namespace, cand.Name, cand.TargetPort, cand.Source, cand.Score)

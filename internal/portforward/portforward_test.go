@@ -40,8 +40,8 @@ func prometheusManager() *Manager {
 }
 
 // TestOwnerScoping verifies that each owner's forward is independent: stopping
-// one owner never tears down another's, and status/reuse lookups are scoped
-// correctly. This is the invariant that stops prometheus discovery and the
+// one owner never tears down another's, and status is scoped correctly.
+// This is the invariant that stops prometheus discovery and the
 // traffic subsystem from clobbering each other's metrics tunnel.
 func TestOwnerScoping(t *testing.T) {
 	m := NewManager(nil, nil, "ctxA")
@@ -65,53 +65,6 @@ func TestOwnerScoping(t *testing.T) {
 	if !traffic.Info().Connected {
 		t.Fatal("traffic forward was torn down by prometheus Stop (cross-owner clobber)")
 	}
-
-	peer := m.Share(OwnerPrometheus, "caretta", "caretta-vm", 0)
-	if peer.Address() == "" || !peer.SameForward(traffic) || !peer.Stop() || !traffic.Info().Connected {
-		t.Fatal("sharing or releasing a peer's tunnel disturbed its owner")
-	}
-	other := NewManager(nil, nil, "ctxB")
-	defer other.Close()
-	if got := other.Share(OwnerPrometheus, "caretta", "caretta-vm", 0); got != nil {
-		t.Fatalf("a second connection shared the first connection's tunnel: %s", got.Address())
-	}
-}
-
-func TestShareIsServiceAware(t *testing.T) {
-	m := NewManager(nil, nil, "ctxA")
-	defer m.Close()
-
-	// Only the general-metrics forward is up (owner=prometheus → prometheus-operated).
-	publishedForward(m, OwnerPrometheus, "monitoring", "prometheus-operated", 15329)
-
-	// A Caretta lookup for its own backend must reject the mismatched service
-	// rather than adopt the general Prometheus forward that happens to be live.
-	if got := m.Share(OwnerTraffic, "caretta", "caretta-vm", 0).Address(); got != "" {
-		t.Fatalf("target-aware lookup adopted the wrong forward: got %q, want empty", got)
-	}
-	// Conversely, resource metrics may reuse the prometheus-operated forward by
-	// exact match — that is the legitimate cross/own-owner reuse.
-	metrics := m.Share(OwnerPrometheus, "monitoring", "prometheus-operated", 0)
-	if got := metrics.Address(); got != "http://localhost:15329" {
-		t.Fatalf("matching own forward: got %q, want :15329", got)
-	}
-	metrics.Stop()
-
-	// Once Caretta's own forward exists, it is reused by exact match.
-	traffic := publishedForward(m, OwnerTraffic, "caretta", "caretta-vm", 22222)
-	own := m.Share(OwnerTraffic, "caretta", "caretta-vm", 0)
-	if got := own.Address(); got != "http://localhost:22222" {
-		t.Fatalf("own matching forward: got %q, want :22222", got)
-	}
-	own.Stop()
-	// A peer forward that DOES target the requested service is still reusable.
-	traffic.Stop()
-	publishedForward(m, OwnerPrometheus, "caretta", "caretta-vm", 33333)
-	peer := m.Share(OwnerTraffic, "caretta", "caretta-vm", 0)
-	if got := peer.Address(); got != "http://localhost:33333" {
-		t.Fatalf("matching peer forward: got %q, want :33333", got)
-	}
-	peer.Stop()
 }
 
 func TestCloseDuringEstablishmentStopsUnpublishedForward(t *testing.T) {
@@ -141,7 +94,7 @@ func TestCloseDuringEstablishmentStopsUnpublishedForward(t *testing.T) {
 		t.Fatal("closed manager published a forward")
 	}
 	<-stopped
-	if m.Share(OwnerPrometheus, "monitoring", "prometheus", 9090) != nil {
+	if len(m.forwards) != 0 {
 		t.Fatal("forward remained published")
 	}
 	if _, err := m.Start(OwnerPrometheus, t.Context(), "monitoring", "prometheus", 9090); err == nil {
@@ -268,7 +221,7 @@ func TestStartRefusesWhenAutoDisabled(t *testing.T) {
 	}
 }
 
-func TestOwningHandlesReleaseSharedTunnelIndependently(t *testing.T) {
+func TestSameOwnerHandlesReleaseTunnelIndependently(t *testing.T) {
 	m := prometheusManager()
 	t.Cleanup(m.Close)
 	m.run = func(_ context.Context, _ kubernetes.Interface, _ *rest.Config, _, _ string, _, _ int, stop, ready chan struct{}) error {
@@ -288,21 +241,24 @@ func TestOwningHandlesReleaseSharedTunnelIndependently(t *testing.T) {
 	if !first.SameForward(second) {
 		t.Fatal("identical starts did not reuse the tunnel")
 	}
-	shared := m.Share(OwnerTraffic, "monitoring", "prometheus", 9090)
-	if next := second.Replace(shared); next != shared || second.Alive() || !next.SameForward(first) {
-		t.Fatal("replacement did not transfer ownership to the shared handle")
+	if next := second.Replace(second); next != second || !next.Alive() {
+		t.Fatal("adopting the same handle released it")
 	}
 	first.Stop()
-	if first.Stop() || !shared.Info().Connected {
-		t.Fatal("one release closed a shared tunnel")
+	if first.Stop() || !second.Info().Connected {
+		t.Fatal("one release closed a tunnel still held by the same owner")
 	}
-	shared.Stop()
-	if shared.Info().Connected {
-		t.Fatal("released handle is still connected")
+	if next := second.Replace(nil); next != nil || second.Info().Connected {
+		t.Fatal("replacing a handle did not release it")
+	}
+	select {
+	case <-first.Done():
+	default:
+		t.Fatal("tunnel survived its last holder")
 	}
 }
 
-func TestShareKeepsTunnelServingUntilLastStop(t *testing.T) {
+func TestSameOwnerTunnelServesUntilLastStop(t *testing.T) {
 	serverDone := make(chan struct{})
 	cfg := forwardtest.Server(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -333,16 +289,22 @@ func TestShareKeepsTunnelServingUntilLastStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	shared := m.Share(OwnerPrometheus, "ns", "svc", 9090)
-	defer shared.Stop()
-	owner.Stop()
-	if !shared.Alive() {
-		t.Fatal("shared handle died when the original owner stopped")
+	second, err := m.Start(OwnerTraffic, t.Context(), "ns", "svc", 9090)
+	if err != nil {
+		t.Fatal(err)
 	}
-	address := net.JoinHostPort("127.0.0.1", strconv.Itoa(shared.Info().LocalPort))
+	if !second.SameForward(owner) {
+		t.Fatal("second Start did not reuse the same owner's tunnel")
+	}
+	defer second.Stop()
+	owner.Stop()
+	if !second.Alive() {
+		t.Fatal("second handle died when the first handle stopped")
+	}
+	address := net.JoinHostPort("127.0.0.1", strconv.Itoa(second.Info().LocalPort))
 	client, err := net.DialTimeout("tcp4", address, time.Second)
 	if err != nil {
-		t.Fatalf("dial shared tunnel: %v", err)
+		t.Fatalf("dial tunnel: %v", err)
 	}
 	defer client.Close()
 	client.SetReadDeadline(time.Now().Add(time.Second))
@@ -350,8 +312,8 @@ func TestShareKeepsTunnelServingUntilLastStop(t *testing.T) {
 	if _, err := io.ReadFull(client, got[:]); err != nil || string(got[:]) != "serving" {
 		t.Fatalf("read forwarded data = %q, %v", got, err)
 	}
-	if !shared.Stop() {
-		t.Fatal("shared handle did not release its reference")
+	if !second.Stop() {
+		t.Fatal("second handle did not release its reference")
 	}
 	select {
 	case <-owner.Done():
@@ -362,22 +324,6 @@ func TestShareKeepsTunnelServingUntilLastStop(t *testing.T) {
 	case <-serverDone:
 	case <-time.After(time.Second):
 		t.Fatal("last release did not close the forwarded connection")
-	}
-}
-
-func TestShareRequiresExactPort(t *testing.T) {
-	m := prometheusManager()
-	defer m.Close()
-	m.run = func(_ context.Context, _ kubernetes.Interface, _ *rest.Config, _, _ string, _, _ int, stop, ready chan struct{}) error {
-		close(ready)
-		<-stop
-		return nil
-	}
-	if _, err := m.Start(OwnerTraffic, t.Context(), "monitoring", "prometheus", 9090); err != nil {
-		t.Fatal(err)
-	}
-	if got := m.Share(OwnerPrometheus, "monitoring", "prometheus", 9091); got != nil {
-		t.Fatalf("Share adopted a tunnel for the wrong target port: %s", got.Address())
 	}
 }
 
