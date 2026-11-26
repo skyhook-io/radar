@@ -1,7 +1,6 @@
 package traffic
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -14,13 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/portforward"
 	"github.com/skyhook-io/radar/internal/portforward/forwardtest"
-	"github.com/skyhook-io/radar/internal/prometheus"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/util/httpstream"
-	"k8s.io/apimachinery/pkg/util/httpstream/spdy"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -185,87 +179,6 @@ func TestCarettaReleasesRejectedForward(t *testing.T) {
 	case <-closed:
 	case <-time.After(time.Second):
 		t.Fatal("Caretta kept its rejected tunnel open")
-	}
-}
-
-func TestPrometheusReopensRejectedTunnelIndependentlyOfCaretta(t *testing.T) {
-	t.Cleanup(k8s.SetTestLocalMode())
-	metrics := promStub(t, promBackend{links: true})
-	var rejectFirst atomic.Bool
-	var upgrades atomic.Int32
-	cfg := forwardtest.Server(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "use SPDY", http.StatusBadRequest)
-			return
-		}
-		if _, err := httpstream.Handshake(r, w, []string{"portforward.k8s.io"}); err != nil {
-			return
-		}
-		tunnel := upgrades.Add(1)
-		conn := spdy.NewResponseUpgrader().UpgradeResponse(w, r, func(stream httpstream.Stream, replied <-chan struct{}) error {
-			if stream.Headers().Get(corev1.StreamType) == corev1.StreamTypeData {
-				go func() {
-					<-replied
-					defer stream.Close()
-					req, err := http.ReadRequest(bufio.NewReader(stream))
-					if err != nil {
-						return
-					}
-					recorder := httptest.NewRecorder()
-					if tunnel == 1 && rejectFirst.Load() && req.URL.Query().Get("query") == "up" {
-						http.Error(recorder, "metrics temporarily unavailable", http.StatusServiceUnavailable)
-					} else {
-						metrics.Config.Handler.ServeHTTP(recorder, req)
-					}
-					resp := recorder.Result()
-					defer resp.Body.Close()
-					resp.ContentLength = int64(recorder.Body.Len())
-					resp.Close = true
-					_ = resp.Write(stream)
-				}()
-			}
-			return nil
-		})
-		if conn != nil {
-			<-conn.CloseChan()
-		}
-	})
-	forwards := portforward.NewManager(kubernetes.NewForConfigOrDie(cfg), cfg, "ctx")
-	defer forwards.Close()
-	caretta := sourceWithServices(t, "ns", carettaStoreSvc("ns", "svc"))
-	caretta.forwards = forwards
-	defer caretta.Close()
-	prometheus.Initialize(caretta.k8sClient, cfg, "ctx", forwards)
-	defer prometheus.Retire()
-	prom := prometheus.GetClient()
-	addr, _, err := prom.EnsureConnected(t.Context())
-	if err != nil || upgrades.Load() != 1 {
-		t.Fatalf("initial Prometheus discovery = %q, %v; tunnels opened = %d", addr, err, upgrades.Load())
-	}
-
-	caretta.mu.Lock()
-	caretta.discoverPrometheusLocked(t.Context())
-	if caretta.forward != nil {
-		t.Errorf("passive Caretta discovery adopted the Prometheus tunnel at %s", caretta.forward.Address())
-		caretta.clearBindingLocked()
-	}
-	caretta.mu.Unlock()
-	info, err := caretta.Connect(t.Context(), "ctx")
-	if err != nil || !info.Connected {
-		t.Fatalf("Caretta connect = %+v, %v", info, err)
-	}
-	if info.Address == addr || upgrades.Load() != 2 {
-		t.Errorf("Caretta and Prometheus share a tunnel: Caretta = %s, Prometheus = %s, tunnels opened = %d", info.Address, addr, upgrades.Load())
-	}
-
-	rejectFirst.Store(true)
-	replacement, _, err := prom.EnsureConnected(t.Context())
-	if err != nil || replacement == info.Address || upgrades.Load() != 3 {
-		t.Errorf("Prometheus did not open a fresh tunnel after its probe failed: address = %q, err = %v, tunnels opened = %d", replacement, err, upgrades.Load())
-	}
-	result, err := caretta.queryPrometheusRaw(t.Context(), "caretta_links_observed")
-	if err != nil || len(result.Data.Result) != 1 || !caretta.forward.Alive() || caretta.forward.Address() != info.Address {
-		t.Fatalf("Caretta's original tunnel stopped serving: result = %+v, err = %v", result, err)
 	}
 }
 

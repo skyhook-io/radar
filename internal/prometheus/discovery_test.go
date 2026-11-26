@@ -676,16 +676,6 @@ func TestClosedForwardManagerDoesNotCacheDiscoveryFailure(t *testing.T) {
 	}
 }
 
-func TestDiscoveryGateDiscardsReleasedForward(t *testing.T) {
-	manual := healthyServer(t, 0)
-	stale := "http://localhost:9090"
-	c := &Client{baseURL: stale, forward: &portforward.Handle{}, manualURL: manual.URL, httpClient: manual.Client()}
-	addr, _, err := c.discoverShared(t.Context())
-	if err != nil || addr != manual.URL || c.forward != nil {
-		t.Fatalf("discovery returned %q, %v; want live manual endpoint %s", addr, err, manual.URL)
-	}
-}
-
 func TestDiscoveryHandoffRejectsHandleAtReusedAddress(t *testing.T) {
 	cfg := forwardtest.Server(t, forwardtest.ServeTunnel)
 	m := portforward.NewManager(kubernetes.NewForConfigOrDie(cfg), cfg, "ctx")

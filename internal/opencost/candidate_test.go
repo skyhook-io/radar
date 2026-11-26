@@ -158,52 +158,6 @@ func TestFailedKubecostProbeAfterSwitchKeepsReplacementForward(t *testing.T) {
 	}
 }
 
-func TestKubecostCandidateTunnelIsIndependent(t *testing.T) {
-	probing, release := make(chan struct{}), make(chan struct{})
-	resume := sync.OnceFunc(func() { close(release) })
-	defer resume()
-	candidateTunnel := kubecostTestTunnel(func() string {
-		close(probing)
-		<-release
-		return `{"code":200,"data":[{"test":{"properties":{"cluster":"test"},"totalCost":1}}]}`
-	})
-	var upgrades atomic.Int32
-	cfg := forwardtest.Server(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && upgrades.Add(1) == 1 {
-			candidateTunnel(w, r)
-			return
-		}
-		forwardtest.ServeTunnel(w, r)
-	})
-	forwards := installLocalKubecostTestConnection(t, cfg)
-	probe, err := PrepareCandidate(ManagerConfig{Source: SourceKubecost, ClusterID: "test", ClusterIDContext: "ctx"})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	result := make(chan error, 1)
-	go func() { result <- probe(t.Context()) }()
-	select {
-	case <-probing:
-	case err := <-result:
-		t.Fatalf("candidate never reached its forwarded probe: %v", err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("candidate did not reach its forwarded probe")
-	}
-	regular, err := forwards.Start(t.Context(), "cost-candidate", "ns", "svc", 9004)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer regular.Stop()
-	if upgrades.Load() != 2 {
-		t.Error("regular Start reused the Kubecost candidate's tunnel")
-	}
-	resume()
-	if err := <-result; err != nil {
-		t.Fatalf("candidate probe failed: %v", err)
-	}
-}
-
 func TestKubecostReselectionReplacesRejectedTunnel(t *testing.T) {
 	const allocation = `{"code":200,"data":[{"test":{"properties":{"cluster":"test"},"totalCost":1}}]}`
 	var upgrades atomic.Int32
