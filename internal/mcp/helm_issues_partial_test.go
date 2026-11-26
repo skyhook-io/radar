@@ -73,7 +73,7 @@ func TestIssuesToolSaysWhichNamespacesHelmWasNotCheckedIn(t *testing.T) {
 	perms.SetCanI("list", "", "secrets", "team-a", true)
 	perms.SetCanI("list", "", "secrets", "team-b", false)
 	getPermCache().Set("mixed", nil, perms)
-	k8s.ReadPermissionCache(k8s.CaptureConnection(t.Context()), getPermCache()).Set("mixed", nil, perms)
+	k8s.PermissionCacheFor(k8s.CaptureConnection(t.Context()), getPermCache()).Set("mixed", nil, perms)
 	t.Cleanup(getPermCache().Invalidate)
 
 	ctx := pkgauth.ContextWithUser(context.Background(), &pkgauth.User{Username: "mixed"})

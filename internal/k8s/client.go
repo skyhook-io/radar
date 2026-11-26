@@ -1381,6 +1381,9 @@ func GetNamespaceScopeTarget() string {
 	return namespaceScopeTargetLocked(namespaceScopeOverride, contextName, contextNamespace)
 }
 
+// NamespaceScopeTarget returns the connection's namespace for --namespace-scope.
+// A nil receiver uses the process-wide override, then the startup fallback
+// if it was set for an empty context name.
 func (c *Connection) NamespaceScopeTarget() string {
 	clientMu.RLock()
 	defer clientMu.RUnlock()

@@ -92,7 +92,7 @@ func TestIssuesSayWhichNamespacesHelmWasNotCheckedIn(t *testing.T) {
 	perms.SetCanI("list", "", "secrets", "team-a", true)
 	perms.SetCanI("list", "", "secrets", "team-b", false)
 	env.srv.permCache.Set("mixed", nil, perms)
-	k8s.ReadPermissionCache(k8s.CaptureConnection(t.Context()), env.srv.permCache).Set("mixed", nil, perms)
+	k8s.PermissionCacheFor(k8s.CaptureConnection(t.Context()), env.srv.permCache).Set("mixed", nil, perms)
 
 	want := []map[string]any{{"source": "helm", "reason": "caller_access_denied", "namespaces": []any{"team-b"}}}
 	for _, path := range []string{"/api/issues", "/api/issues?namespaces=team-a,team-b"} {
@@ -133,7 +133,7 @@ func TestDashboardHelmNamesNamespacesItCouldNotRead(t *testing.T) {
 	perms.SetCanI("list", "", "secrets", "team-a", true)
 	perms.SetCanI("list", "", "secrets", "team-b", false)
 	env.srv.permCache.Set("mixed", nil, perms)
-	k8s.ReadPermissionCache(k8s.CaptureConnection(t.Context()), env.srv.permCache).Set("mixed", nil, perms)
+	k8s.PermissionCacheFor(k8s.CaptureConnection(t.Context()), env.srv.permCache).Set("mixed", nil, perms)
 
 	for _, path := range []string{"/api/dashboard/helm", "/api/dashboard/helm?namespaces=team-a,team-b"} {
 		t.Run(path, func(t *testing.T) {
@@ -170,7 +170,7 @@ func TestHelmUnansweredChecksAreNotReportedAsDenials(t *testing.T) {
 	perms := &auth.UserPermissions{AllowedNamespaces: nil}
 	perms.SetCanI("list", "", "secrets", "", false)
 	env.srv.permCache.Set("unanswered", nil, perms)
-	k8s.ReadPermissionCache(k8s.CaptureConnection(t.Context()), env.srv.permCache).Set("unanswered", nil, perms)
+	k8s.PermissionCacheFor(k8s.CaptureConnection(t.Context()), env.srv.permCache).Set("unanswered", nil, perms)
 
 	resp := env.authGet(t, "/api/dashboard/helm", "unanswered", "")
 	var summary DashboardHelmSummary

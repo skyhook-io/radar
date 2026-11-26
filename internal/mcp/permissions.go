@@ -158,7 +158,7 @@ func resolveUserPermsDecision(ctx context.Context) (*pkgauth.User, *pkgauth.User
 	if user == nil {
 		return nil, nil, true
 	}
-	cache := k8s.ReadPermissionCache(ctx, getPermCache())
+	cache := k8s.PermissionCacheFor(ctx, getPermCache())
 	if perms := cache.Get(user.Username, user.Groups); perms != nil {
 		return user, perms, true
 	}

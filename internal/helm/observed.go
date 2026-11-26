@@ -116,6 +116,9 @@ type ObservedReleaseDetail struct {
 // ObjectScope is a caller's view of the cached objects, built by each surface
 // from its own per-user checks.
 type ObjectScope struct {
+	// Pin is nil when --namespace-scope is off. A pointer to "" excludes all
+	// namespaces. A namespace value limits namespaced reads to that namespace.
+	// Cluster-scoped objects remain eligible for status lookup.
 	Pin      *string
 	Provider objectProvider
 	Access   search.ScanAccess

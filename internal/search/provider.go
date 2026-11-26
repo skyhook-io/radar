@@ -37,6 +37,8 @@ func NewCacheProvider() *CacheProvider {
 	return NewCacheProviderFor(k8s.Current())
 }
 
+// NewCacheProviderFor captures the connection's caches. It returns nil for a
+// nil connection or one without a typed resource cache.
 func NewCacheProviderFor(conn *k8s.Connection) *CacheProvider {
 	cache := conn.ResourceCache()
 	if cache == nil {

@@ -164,7 +164,10 @@ func InitializeWithRESTConfig(restCfg *rest.Config) error {
 	return nil
 }
 
-// GetClient captures the request's connection while sharing the process's repository settings and index.
+// GetClient captures the request's connection while sharing the process's
+// repository settings and index. It returns the global client directly if it
+// was initialized with an explicit REST config. It returns nil before
+// initialization or if the connection has neither a REST config nor a client.
 func GetClient(ctx context.Context) *Client {
 	if globalClient == nil {
 		return nil

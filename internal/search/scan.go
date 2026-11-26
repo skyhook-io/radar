@@ -26,6 +26,8 @@ type ScannedObject struct {
 // ScanAccess is the caller's access for a Scan, with the meanings of the
 // Options fields of the same names. Build it as for a Search.
 type ScanAccess struct {
+	// Discovery classifies cluster-scoped kinds for PermitsObject and Resolve.
+	// When nil, only kinds in the static catalog are recognized as cluster-scoped.
 	Discovery            *k8s.ResourceDiscovery
 	Selection            readscope.Selection
 	NamespaceCheckFailed bool

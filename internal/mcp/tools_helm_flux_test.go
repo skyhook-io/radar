@@ -102,7 +102,7 @@ func TestManageHelmRefusesFluxManagedRelease(t *testing.T) {
 		{"admin", nil, true},
 	} {
 		ctx := withTestUserPerms(t, "helm-mcp-flux-"+caller.name, nil, caller.namespaces)
-		k8s.ReadPermissionCache(k8s.CaptureConnection(ctx), getPermCache()).Set("helm-mcp-flux-"+caller.name, nil, &pkgauth.UserPermissions{AllowedNamespaces: caller.namespaces})
+		k8s.PermissionCacheFor(k8s.CaptureConnection(ctx), getPermCache()).Set("helm-mcp-flux-"+caller.name, nil, &pkgauth.UserPermissions{AllowedNamespaces: caller.namespaces})
 		for _, in := range []manageHelmInput{
 			{Action: "upgrade", Namespace: "team-a", Name: "demo", Values: map[string]any{"replicas": 2}},
 			{Action: "upgrade", Namespace: "team-a", Name: "demo", Values: map[string]any{"replicas": 2}, DryRun: true},

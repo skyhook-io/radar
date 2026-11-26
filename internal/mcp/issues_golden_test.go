@@ -140,7 +140,7 @@ func goldenAdmin(t *testing.T) context.Context {
 		}
 	}
 	getPermCache().Set("golden-admin", nil, perms)
-	k8s.ReadPermissionCache(k8s.CaptureConnection(context.Background()), getPermCache()).Set("golden-admin", nil, perms)
+	k8s.PermissionCacheFor(k8s.CaptureConnection(context.Background()), getPermCache()).Set("golden-admin", nil, perms)
 	return pkgauth.ContextWithUser(context.Background(), &pkgauth.User{Username: "golden-admin"})
 }
 
@@ -168,7 +168,7 @@ func goldenRestricted(t *testing.T) context.Context {
 		}
 	}
 	getPermCache().Set("golden-restricted", nil, perms)
-	k8s.ReadPermissionCache(k8s.CaptureConnection(context.Background()), getPermCache()).Set("golden-restricted", nil, perms)
+	k8s.PermissionCacheFor(k8s.CaptureConnection(context.Background()), getPermCache()).Set("golden-restricted", nil, perms)
 	return pkgauth.ContextWithUser(context.Background(), &pkgauth.User{Username: "golden-restricted"})
 }
 

@@ -89,8 +89,8 @@ func TestListHelmReleasesObservedRowsFollowEachCallersAccess(t *testing.T) {
 	}
 	alice.SetCanI("list", "rbac.authorization.k8s.io", "roles", "team-b", true)
 	bob.SetCanI("list", "rbac.authorization.k8s.io", "roles", "team-b", false)
-	k8s.ReadPermissionCache(k8s.CaptureConnection(t.Context()), getPermCache()).Set("alice", nil, alice)
-	k8s.ReadPermissionCache(k8s.CaptureConnection(t.Context()), getPermCache()).Set("bob", nil, bob)
+	k8s.PermissionCacheFor(k8s.CaptureConnection(t.Context()), getPermCache()).Set("alice", nil, alice)
+	k8s.PermissionCacheFor(k8s.CaptureConnection(t.Context()), getPermCache()).Set("bob", nil, bob)
 	t.Cleanup(getPermCache().Invalidate)
 
 	read := func(user string) map[string]int {

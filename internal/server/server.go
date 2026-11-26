@@ -1982,7 +1982,7 @@ func (s *Server) canReadDecision(r *http.Request, group, resource, namespace, ve
 	if user == nil || s.permCache == nil {
 		return true, true
 	}
-	if k8s.ReadPermissionCache(r.Context(), s.permCache).Get(user.Username, user.Groups) == nil {
+	if k8s.PermissionCacheFor(r.Context(), s.permCache).Get(user.Username, user.Groups) == nil {
 		// Trigger namespace discovery so SAR cache has a parent UserPermissions
 		// entry. parseNamespacesForUser is the canonical path that populates
 		// this; if it hasn't run yet, canReadUser falls through to a fresh SAR.
@@ -2011,7 +2011,7 @@ func (s *Server) canReadUserDecision(ctx context.Context, user *auth.User, group
 	if user == nil || s.permCache == nil {
 		return true, true
 	}
-	perms := k8s.ReadPermissionCache(ctx, s.permCache).Get(user.Username, user.Groups)
+	perms := k8s.PermissionCacheFor(ctx, s.permCache).Get(user.Username, user.Groups)
 	// Keyed by connection generation, not context name: a reconnect under the
 	// same name can reach a different cluster, and the review must run on the
 	// client its key names.
@@ -5583,7 +5583,7 @@ func (s *Server) getUserNamespacesWithStatus(r *http.Request, requested []string
 		return requested, false
 	}
 
-	perms := k8s.ReadPermissionCache(r.Context(), s.permCache).Get(user.Username, user.Groups)
+	perms := k8s.PermissionCacheFor(r.Context(), s.permCache).Get(user.Username, user.Groups)
 	if perms != nil {
 		log.Printf("[auth] Using cached permissions for %s: allowed=%v", user.Username, perms.AllowedNamespaces == nil)
 	}
@@ -5597,7 +5597,7 @@ func (s *Server) getUserNamespacesWithStatus(r *http.Request, requested []string
 			return []string{}, true // fail-closed: cannot verify permissions
 		}
 		var ok bool
-		perms, ok = k8s.ReadPermissionCache(r.Context(), s.permCache).Resolve(r.Context(), user.Username, user.Groups, strconv.FormatUint(generation, 10), func(ctx context.Context) *auth.UserPermissions {
+		perms, ok = k8s.PermissionCacheFor(r.Context(), s.permCache).Resolve(r.Context(), user.Username, user.Groups, strconv.FormatUint(generation, 10), func(ctx context.Context) *auth.UserPermissions {
 			return discoverUserPermissions(ctx, client, user)
 		})
 		if !ok {

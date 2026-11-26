@@ -102,8 +102,8 @@ metadata:
 	admin.SetCanI("list", "", "secrets", "", true)
 	getPermCache().Set("dev-a", nil, devA)
 	getPermCache().Set("admin", nil, admin)
-	k8s.ReadPermissionCache(k8s.CaptureConnection(t.Context()), getPermCache()).Set("dev-a", nil, devA)
-	k8s.ReadPermissionCache(k8s.CaptureConnection(t.Context()), getPermCache()).Set("admin", nil, admin)
+	k8s.PermissionCacheFor(k8s.CaptureConnection(t.Context()), getPermCache()).Set("dev-a", nil, devA)
+	k8s.PermissionCacheFor(k8s.CaptureConnection(t.Context()), getPermCache()).Set("admin", nil, admin)
 	t.Cleanup(getPermCache().Invalidate)
 
 	call := func(t *testing.T, user string, run func(context.Context) (string, error)) string {

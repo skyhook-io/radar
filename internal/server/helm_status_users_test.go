@@ -71,9 +71,9 @@ metadata:
 	devA.SetCanI("list", "", "secrets", "", false)
 	admin.SetCanI("list", "", "secrets", "", true)
 
-	k8s.ReadPermissionCache(k8s.CaptureConnection(t.Context()), env.srv.permCache).Set("dev-a", nil, devA)
+	k8s.PermissionCacheFor(k8s.CaptureConnection(t.Context()), env.srv.permCache).Set("dev-a", nil, devA)
 
-	k8s.ReadPermissionCache(k8s.CaptureConnection(t.Context()), env.srv.permCache).Set("admin", nil, admin)
+	k8s.PermissionCacheFor(k8s.CaptureConnection(t.Context()), env.srv.permCache).Set("admin", nil, admin)
 
 	get := func(t *testing.T, path, user string) string {
 		t.Helper()
