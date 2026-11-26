@@ -85,6 +85,13 @@ describe("canContinueInOwnAgent", () => {
     ).toBe(true);
   });
 
+  it("keeps the investigator's private agent session out of an assigned reader's controls", () => {
+    expect(canContinueInOwnAgent({
+      ...settled,
+      run: run({ visibility: "private", ownedByMe: false, status: "running" }),
+    })).toBe(false);
+  });
+
   it("stays hidden on a run that is gone", () => {
     expect(canContinueInOwnAgent({ ...settled, gone: true })).toBe(false);
   });

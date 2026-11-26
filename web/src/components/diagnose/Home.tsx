@@ -21,6 +21,7 @@ import {
 } from "./target";
 import { Tooltip } from "../ui/Tooltip";
 import { QuestionComposer } from "./QuestionComposer";
+import { isPrivateRunReviewer } from "./investigationState";
 import { plainVerdictText } from "./verdictText";
 import { ExampleInvestigationLink } from "./ExampleInvestigationLink";
 
@@ -252,13 +253,19 @@ export function RecentList({
     groups.add(groupQualifiesLaneId(r.group) ? r.group : "");
     groupsByKind.set(kind, groups);
   }
+  const reviewRuns = runs.filter(isPrivateRunReviewer);
   const organizationRuns = runs.filter(
-    (r) => r.trigger === "background" || r.ownedByMe === false,
+    (r) =>
+      !isPrivateRunReviewer(r) &&
+      (r.trigger === "background" || r.ownedByMe === false),
   );
-  const yourRuns = runs.filter((r) => !organizationRuns.includes(r));
-  const collections = organizationRuns.length
+  const yourRuns = runs.filter(
+    (r) => r.trigger !== "background" && r.ownedByMe !== false,
+  );
+  const collections = reviewRuns.length || organizationRuns.length
     ? [
         { label: "Your investigations", runs: yourRuns },
+        { label: "Shared with you for review", runs: reviewRuns },
         { label: "Organization", runs: organizationRuns },
       ].filter((collection) => collection.runs.length > 0)
     : [{ label: "", runs }];

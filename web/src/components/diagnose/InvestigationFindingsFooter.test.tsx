@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   subscribeRun,
   type DiagnoseStreamEvent,
+  type RunSummary,
   type SubscribeHandlers,
 } from "../../api/diagnose";
 import {
@@ -22,7 +23,10 @@ vi.mock("../../api/diagnose", async (original) => ({
   subscribeRun: vi.fn(),
 }));
 vi.mock("./DiagnoseContext", () => ({
-  useDiagnose: () => ({ refreshRuns: vi.fn(), agents: [] }),
+  useDiagnose: () => ({
+    refreshRuns: vi.fn(),
+    agents: [{ name: "claude", hosted: true, assessmentExplanations: true }],
+  }),
 }));
 vi.mock("../../context/ThemeContext", () => ({
   useTheme: () => ({ theme: "light" }),
@@ -83,7 +87,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function render(canContinue = true) {
+function render(canContinue = true, summary: Partial<RunSummary> = {}) {
   act(() =>
     root.render(
       <QueryClientProvider client={new QueryClient()}>
@@ -93,7 +97,7 @@ function render(canContinue = true) {
             renderFindingsFooter={renderFooter}
           >
             <InvestigationView
-              run={{ ...run, canContinue }}
+              run={{ ...run, canContinue, ...summary }}
               agentLabel="Hosted"
               maximized={false}
             />
@@ -116,6 +120,16 @@ function replay(saved: DiagnoseStreamEvent[] = events) {
     stream.onEvent({ type: "replay_complete" });
   });
 }
+
+it("waits for the replay boundary before exposing a landing target", () => {
+  const findings = render();
+  for (const [i, event] of events.entries()) {
+    act(() => stream.onEvent(event, i + 1));
+    expect(findings.querySelector("[aria-label='Proposed change']")).toBeNull();
+  }
+  act(() => stream.onEvent({ type: "replay_complete" }));
+  expect(findings.querySelector("[aria-label='Proposed change']")).toBeTruthy();
+});
 
 it("lands on the resolved card in Findings and returns to the actual assessment and composer", () => {
   const findings = render();
@@ -195,6 +209,29 @@ it("keeps read-only proposals in Findings without exposing a follow-up action", 
   const findings = render(false);
   replay();
   expect(findings.textContent).toContain("Review change");
+  expect(footer.askQuestion).toBeUndefined();
+});
+
+it("lets an assigned reader see the private proposal and its evidence through a running turn and replay", () => {
+  const explanation = "Only the investigator can ask follow-up questions.";
+  const findings = render(false, {
+    visibility: "private",
+    status: "running",
+    ownedByMe: false,
+    continueBlockedReason: explanation,
+  });
+  replay([{ type: "turn" }]);
+  expect(container.textContent).not.toContain("Stop agent");
+  expect(footer.askQuestion).toBeUndefined();
+  // The server's run summary still says running after the terminal event.
+  act(() => {
+    for (const [i, event] of events.slice(1).entries()) stream.onEvent(event, i + 2);
+  });
+  expect(findings.querySelector("[aria-label='Proposed change']")).toBeTruthy();
+  expect(footer.evidenceLink(evidenceRef)).toEqual(expect.any(Function));
+  expect(container.textContent).toContain(explanation);
+  expect(container.querySelector("textarea")).toBeNull();
+  expect(findings.textContent).not.toContain("Explain simply");
   expect(footer.askQuestion).toBeUndefined();
 });
 

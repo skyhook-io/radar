@@ -780,6 +780,12 @@ export function investigationPaneCenteredScrollTop({
   return Math.max(0, Math.min(centered, contentHeight - viewportHeight));
 }
 
+/** A hosted private run opened through a proposal assignment. The reviewer
+ * may decide that proposal, but cannot operate the investigator's session. */
+export function isPrivateRunReviewer(run: RunSummary): boolean {
+  return run.visibility === "private" && run.ownedByMe === false;
+}
+
 export function canStopInvestigation(
   run: RunSummary,
   busy: boolean,
@@ -791,6 +797,7 @@ export function canStopInvestigation(
   const transcriptTerminal =
     latestTurnStatus === "done" || latestTurnStatus === "error";
   return (
+    !isPrivateRunReviewer(run) &&
     run.trigger !== "background" &&
     run.status !== "stale" &&
     run.status !== "stopping" &&
@@ -817,6 +824,7 @@ export function canContinueInOwnAgent(input: {
   const transcriptTerminal =
     latestTurnStatus === "done" || latestTurnStatus === "error";
   return (
+    !isPrivateRunReviewer(run) &&
     input.streamReady &&
     !input.busy &&
     !input.requestPending &&
@@ -841,6 +849,7 @@ export function canContinueInvestigation(
     transcriptTerminal;
   return (
     !gone &&
+    !isPrivateRunReviewer(run) &&
     run.status !== "stale" &&
     run.status !== "stopping" &&
     (run.canContinue !== false || summaryIsLaggingTerminalTranscript)
