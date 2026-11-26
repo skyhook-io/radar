@@ -115,7 +115,8 @@ const (
 // Only Deployment / StatefulSet / DaemonSet supported — per-pod rightsizing
 // is wrong granularity (recs are per-container-template).
 func (h Routes) handleRightsizing(w http.ResponseWriter, r *http.Request) {
-	if _, connectionErr := h.Capture(r.Context()); connectionErr != nil {
+	client, connectionErr := h.Capture(r.Context())
+	if connectionErr != nil {
 		writeError(w, http.StatusServiceUnavailable, connectionErr.Error())
 		return
 	}
@@ -137,7 +138,7 @@ func (h Routes) handleRightsizing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := RightsizingForWorkload(r.Context(), kind, namespace, name)
+	resp, err := client.RightsizingForWorkload(r.Context(), kind, namespace, name)
 	if err != nil {
 		switch {
 		case errors.Is(err, errCacheNotReady):
@@ -162,16 +163,12 @@ func (h Routes) handleRightsizing(w http.ResponseWriter, r *http.Request) {
 // RightsizingForWorkload is the shared entry point behind the REST handler and
 // the get_rightsizing MCP tool. It performs no per-user RBAC check: callers own
 // that gate, because the cache is populated under Radar's ServiceAccount.
-func RightsizingForWorkload(ctx context.Context, kind, namespace, name string) (RightsizingResponse, error) {
-	client, connectionErr := ClientForOperation()
-	if connectionErr != nil {
-		return RightsizingResponse{}, connectionErr
-	}
+func (client *Client) RightsizingForWorkload(ctx context.Context, kind, namespace, name string) (RightsizingResponse, error) {
 	if !IsRightsizingKind(kind) {
 		return RightsizingResponse{}, ErrRightsizingKindUnsupported
 	}
 
-	workload, err := loadRightsizingWorkload(ctx, kind, namespace, name)
+	workload, err := loadRightsizingWorkload(ctx, client.cache, kind, namespace, name)
 	if err != nil {
 		return RightsizingResponse{}, err
 	}
@@ -189,7 +186,7 @@ func RightsizingForWorkload(ctx context.Context, kind, namespace, name string) (
 	defer cancel()
 	// The queries run on one store handle and the check must describe that
 	// handle's backend.
-	cache := k8s.GetResourceCache()
+	cache := client.cache
 	store, err := client.bindStore(queryCtx)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -333,8 +330,7 @@ func workloadPodsOnceWarm(ctx context.Context, cache *k8s.ResourceCache, kind, n
 	}
 }
 
-func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) (rightsizingWorkload, error) {
-	cache := k8s.GetResourceCache()
+func loadRightsizingWorkload(ctx context.Context, cache *k8s.ResourceCache, kind, namespace, name string) (rightsizingWorkload, error) {
 	if cache == nil {
 		return rightsizingWorkload{}, errCacheNotReady
 	}
@@ -962,7 +958,7 @@ func (h Routes) handlePVCUsage(w http.ResponseWriter, r *http.Request) {
 
 func standardPVCUsage(ctx context.Context, client *Client, namespace, name string) PVCUsageResponse {
 	resp := PVCUsageResponse{Namespace: namespace, Name: name, Status: PVCUsageQueryFailed}
-	matchers, _, err := client.resolveScope(ctx, namespace, pvcScopeProbe(namespace, []string{name}, 0), nil, k8s.GetResourceCache())
+	matchers, _, err := client.resolveScope(ctx, namespace, pvcScopeProbe(namespace, []string{name}, 0), nil, client.cache)
 	if failed, bad := pvcScopeFailure(err); bad {
 		if failed.Status == PVCUsageQueryFailed {
 			errorlog.Record("prometheus", "warning", "pvc usage scope check failed for %s/%s: %v", namespace, name, err)

@@ -17,7 +17,7 @@ import (
 )
 
 func TestNoClusterGlobals(t *testing.T) {
-	for _, dir := range []string{".", "../portforward", "../helm", "../prometheus"} {
+	for _, dir := range []string{".", "../portforward", "../helm", "../prometheus", "../argocd", "../opencost", "../traffic", "../openobserve", "../connections", "../connectionruntime", "../server"} {
 		t.Run(filepath.Base(dir), func(t *testing.T) { checkClusterGlobals(t, dir) })
 	}
 }
@@ -79,9 +79,24 @@ func checkClusterGlobals(t *testing.T, dir string) {
 	}
 	removed := map[string][]string{
 		"helm":        {"uninstallStarts"},
-		"k8s":         {"resourceObserversMu", "resourceObservers", "OnResourceObserved", "notifyResourceObservers"},
+		"k8s":         {"RestartTrafficSubsystem", "RegisterTrafficFuncs", "RegisterPrometheusFuncs", "RegisterCostResetFunc", "trafficResetFunc", "trafficReinitFunc", "prometheusResetFunc", "prometheusReinitFunc", "costResetFunc", "resourceObserversMu", "resourceObservers", "OnResourceObserved", "notifyResourceObservers"},
 		"portforward": {"onForwardLost", "SetOnForwardLost"},
-		"prometheus":  {"discoveryGate", "RegisterRediscoverySignals"},
+		"prometheus": {"discoveryGate", "RegisterRediscoverySignals", "observeResourceChange", "globalClient", "GetClient", "ClientForOperation", "clientMu",
+			"activeRelay", "relayHooks", "relayHooksMu", "notifyRelayChange", "OnRelayChange", "EnableRelay", "DisableRelay", "RelayActive", "OperatorScopeDuringRelay",
+			"scanManager", "RightsizingScans", "note", "noteMu", "SetSourceNote", "ConnectionSource", "Reinitialize", "Initialize", "Reset", "Retire",
+			"Configure", "SetManualURL", "SetHeaders", "HasHeaders", "CurrentHeaders", "CurrentConfig", "SetWorkloadMetricsScope", "Availability", "Prewarm"},
+		"argocd": {"defaultManager", "CurrentManager", "ReadMayRecover", "ManagedResourcesCached", "ApplicationHealthCached", "RevisionMetadataCached", "RepositoriesCached",
+			"SetConfig", "RestoreConfig", "SeedFromEnvVars", "SeedFromEnv", "SeedFromEnvFailed", "IsEnvManaged", "EnvManagedConfig", "EnvManagedError",
+			"IsConfigured", "AnonymousReadAllowed", "TokenSet", "LastProbeError", "TokenContext", "TokenBinding", "TokenBindingUpgradeRequired",
+			"Reset", "Get", "Probe", "Prewarm", "Connecting", "Retrying", "LastReadError", "Address", "RedactToken"},
+		"opencost": {"defaultManager", "CurrentManager", "processCurrencyResolver", "PublishCurrencyResolver", "ResolveCurrency", "InvalidateCurrency", "Selected",
+			"ConfigSnapshot", "Reset", "Configure", "ConfigureStartup", "DisableLocal", "IsEnvManaged", "EnvManagedError", "SelectedSourceSnapshot"},
+		"traffic": {"manager", "initOnce", "metricsConfigMu", "metricsConfigGen", "configuredMetricsURL", "configuredMetricsHeaders", "configuredBeylaJobSelector",
+			"SetMetricsConfig", "SetMetricsURL", "SetMetricsHeaders", "SetBeylaJobSelector", "BeylaJobSelector", "GetManager", "Initialize",
+			"InitializeWithPortForwards", "ReinitializeWithPortForwards", "Reset"},
+		"openobserve": {"Default"},
+		"connections": {"RegisterRefresh", "Refresh", "refreshMu", "refreshOperation"},
+		"server":      {"lastUsageTrafficSource"},
 	}
 	for _, name := range removed[pkg.Name] {
 		switch obj := checked.Scope().Lookup(name).(type) {
@@ -89,14 +104,29 @@ func checkClusterGlobals(t *testing.T, dir string) {
 			t.Errorf("%s: %s belongs to its owning connection or member", fset.Position(obj.Pos()), name)
 		}
 	}
+	if pkg.Name == "connectionruntime" {
+		runtime := checked.Scope().Lookup("Runtime").Type()
+		for _, method := range []string{"Apply", "ActivateSwitch", "Refresh"} {
+			if obj, _, _ := types.LookupFieldOrMethod(runtime, true, checked, method); obj != nil {
+				t.Errorf("%s: %s must run through the checked edit and admission paths", fset.Position(obj.Pos()), method)
+			}
+		}
+	}
+	if pkg.Name == "server" {
+		server := checked.Scope().Lookup("Server").Type()
+		if obj, _, _ := types.LookupFieldOrMethod(server, true, checked, "openCostCurrency"); obj != nil {
+			t.Errorf("%s: currency belongs to the integration set", fset.Position(obj.Pos()))
+		}
+		return
+	}
 	if pkg.Name == "k8s" {
 		checkConnectionMethodGetters(t, fset, files, checked, info)
 	}
-	if pkg.Name == "helm" {
+	if slices.Contains([]string{"helm", "prometheus", "argocd", "opencost", "traffic"}, pkg.Name) {
 		for ident, obj := range info.Uses {
 			if obj.Pkg() != nil && obj.Pkg().Path() == "github.com/skyhook-io/radar/internal/k8s" &&
 				slices.Contains([]string{"GetResourceCache", "GetDynamicResourceCache"}, obj.Name()) {
-				t.Errorf("%s: %s must come from Helm's captured connection", fset.Position(ident.Pos()), ident.Name)
+				t.Errorf("%s: %s must come from the captured connection", fset.Position(ident.Pos()), ident.Name)
 			}
 		}
 	}

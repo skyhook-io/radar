@@ -3,14 +3,15 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/pkg/argoapi"
 )
 
@@ -62,8 +63,8 @@ func TestArgoCDStatus(t *testing.T) {
 	}
 
 	srv := fakeArgoCDServer(t)
-	argocd.SetConfig(srv.URL, "good-token", false, true)
-	if err := argocd.Probe(context.Background()); err != nil {
+	currentTestIntegrations().ArgoCD.SetConfig(srv.URL, "good-token", false, true)
+	if err := currentTestIntegrations().ArgoCD.Probe(context.Background()); err != nil {
 		t.Fatalf("probe: %v", err)
 	}
 
@@ -78,7 +79,7 @@ func TestArgoCDStatus(t *testing.T) {
 
 func TestArgoCDStatusExplainsNameOnlyTokenBinding(t *testing.T) {
 	s := setupArgoCDTest(t)
-	argocd.RestoreConfig("", "legacy-token", false, "prod", "")
+	currentTestIntegrations().ArgoCD.RestoreConfig("", "legacy-token", false, "prod", "")
 	rec := httptest.NewRecorder()
 	s.handleArgoCDStatus(rec, httptest.NewRequest(http.MethodGet, "/api/integrations/argocd/status", nil))
 
@@ -101,8 +102,7 @@ func setupArgoCDTest(t *testing.T) *Server {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("USERPROFILE", dir)
-	t.Cleanup(func() { argocd.SetConfig("", "", false, true) })
-	return &Server{}
+	return serverWithTestIntegrations(t, connectionruntime.Settings{})
 }
 
 func putArgoCD(t *testing.T, s *Server, body string) *httptest.ResponseRecorder {
@@ -287,7 +287,10 @@ func TestApplyArgoCDConfig_RejectsCredentialBearingURL(t *testing.T) {
 // change can't silently no-op against the declarative source of truth.
 func TestApplyArgoCDConfig_RefusedWhenEnvManaged(t *testing.T) {
 	s := setupArgoCDTest(t)
-	argocd.SeedFromEnv("https://argocd.example.com", "env-token", false)
+	editTestIntegrations(t, s, func(cfg *connectionruntime.Settings) {
+		cfg.ArgoEnv = true
+		cfg.ArgoCD = argoapi.Connection{URL: "https://argocd.example.com", Token: "env-token", InsecureTLS: false}
+	})
 
 	w := putArgoCD(t, s, `{"argoCdUrl": "https://other.example.com", "argoCdToken": "new-token"}`)
 	if w.Code != http.StatusConflict {
@@ -308,7 +311,10 @@ func TestGetConfigReflectsEnvManaged(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	argocd.SeedFromEnv("https://env.example.com", "env-token", true)
+	editTestIntegrations(t, s, func(cfg *connectionruntime.Settings) {
+		cfg.ArgoEnv = true
+		cfg.ArgoCD = argoapi.Connection{URL: "https://env.example.com", Token: "env-token", InsecureTLS: true}
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	w := httptest.NewRecorder()
@@ -355,7 +361,10 @@ func TestGetConfigSurfacesEnvError(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	argocd.SeedFromEnvFailed("invalid RADAR_ARGOCD_URL: must include a host")
+	editTestIntegrations(t, s, func(cfg *connectionruntime.Settings) {
+		cfg.ArgoEnv = true
+		cfg.ArgoError = errors.New("invalid RADAR_ARGOCD_URL: must include a host")
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	w := httptest.NewRecorder()
@@ -390,7 +399,7 @@ func TestGetConfigSurfacesEnvError(t *testing.T) {
 // declarative (broken) config; the operator must fix the deployment.
 func TestApplyArgoCDConfig_RefusedWhenEnvErrored(t *testing.T) {
 	s := setupArgoCDTest(t)
-	argocd.SeedFromEnvFailed("some reason")
+	editTestIntegrations(t, s, func(cfg *connectionruntime.Settings) { cfg.ArgoEnv = true; cfg.ArgoError = errors.New("some reason") })
 
 	w := putArgoCD(t, s, `{"argoCdUrl": "https://other.example.com", "argoCdToken": "new-token"}`)
 	if w.Code != http.StatusConflict {
@@ -539,7 +548,7 @@ func TestArgoCDStatus_AnonymousReadIsConnectedOnlyOnceItWorks(t *testing.T) {
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	argocd.SetConfig(srv.URL, "", false, false)
+	currentTestIntegrations().ArgoCD.SetConfig(srv.URL, "", false, false)
 
 	var out struct {
 		Connected bool `json:"connected"`
@@ -553,10 +562,10 @@ func TestArgoCDStatus_AnonymousReadIsConnectedOnlyOnceItWorks(t *testing.T) {
 		}
 	}
 	q := argoapi.ApplicationQuery{AppName: "billing", AppNamespace: "argocd"}
-	if err := argocd.Probe(context.Background()); err != nil {
+	if err := currentTestIntegrations().ArgoCD.Probe(context.Background()); err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	if _, err := argocd.ApplicationHealthCached(context.Background(), q); err == nil {
+	if _, err := currentTestIntegrations().ArgoCD.ApplicationHealthCached(context.Background(), q); err == nil {
 		t.Fatal("refused read must fail")
 	}
 	getStatus()
@@ -564,11 +573,11 @@ func TestArgoCDStatus_AnonymousReadIsConnectedOnlyOnceItWorks(t *testing.T) {
 		t.Fatalf("refused anonymous read: status = %+v, want not connected", out)
 	}
 	allow = true
-	argocd.Reset()
-	if err := argocd.Probe(context.Background()); err != nil {
+	currentTestIntegrations().ArgoCD.Reset()
+	if err := currentTestIntegrations().ArgoCD.Probe(context.Background()); err != nil {
 		t.Fatalf("reconnect: %v", err)
 	}
-	if _, err := argocd.ApplicationHealthCached(context.Background(), q); err != nil {
+	if _, err := currentTestIntegrations().ArgoCD.ApplicationHealthCached(context.Background(), q); err != nil {
 		t.Fatalf("allowed read: %v", err)
 	}
 	getStatus()
@@ -581,8 +590,8 @@ func TestArgoCDStatus_AnonymousReadIsConnectedOnlyOnceItWorks(t *testing.T) {
 // doesn't deliver; the status must say what went wrong, in plain words.
 func TestArgoCDStatus_ReportsWhyAConfiguredServerIsNotReachable(t *testing.T) {
 	s := setupArgoCDTest(t)
-	argocd.SetConfig("http://127.0.0.1:1", "tok", false, true)
-	_ = argocd.Probe(context.Background())
+	currentTestIntegrations().ArgoCD.SetConfig("http://127.0.0.1:1", "tok", false, true)
+	_ = currentTestIntegrations().ArgoCD.Probe(context.Background())
 	rec := httptest.NewRecorder()
 	s.handleArgoCDStatus(rec, httptest.NewRequest(http.MethodGet, "/api/integrations/argocd/status", nil))
 	var out struct {
@@ -603,7 +612,7 @@ func TestArgoCDStatus_ReportsWhyAConfiguredServerIsNotReachable(t *testing.T) {
 func TestArgoCDStatus_ReportsConnecting(t *testing.T) {
 	s := setupArgoCDTest(t)
 	srv := hungArgoServer(t)
-	argocd.SetConfig(srv.URL, "argo-secret", false, true)
+	currentTestIntegrations().ArgoCD.SetConfig(srv.URL, "argo-secret", false, true)
 
 	var out struct {
 		Connected  bool `json:"connected"`
@@ -639,17 +648,17 @@ func TestArgoCDStatus_ReportsAFailedReadWhileConnected(t *testing.T) {
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(func() {
-		argocd.SetConfig("", "", false, true) // stop the re-check before the server goes
+		currentTestIntegrations().ArgoCD.SetConfig("", "", false, true) // stop the re-check before the server goes
 		close(release)
 		srv.Close()
 	})
-	argocd.SetConfig(srv.URL, "argo-secret", false, true)
-	if err := argocd.Probe(context.Background()); err != nil {
+	currentTestIntegrations().ArgoCD.SetConfig(srv.URL, "argo-secret", false, true)
+	if err := currentTestIntegrations().ArgoCD.Probe(context.Background()); err != nil {
 		t.Fatalf("connect: %v", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	if _, err := argocd.ManagedResourcesCached(ctx, argoapi.ManagedResourcesQuery{AppName: "billing", AppNamespace: "argocd"}); err == nil {
+	if _, err := currentTestIntegrations().ArgoCD.ManagedResourcesCached(ctx, argoapi.ManagedResourcesQuery{AppName: "billing", AppNamespace: "argocd"}); err == nil {
 		t.Fatal("read must fail")
 	}
 
@@ -680,7 +689,7 @@ func TestApplyArgoCDConfig_FailedSaveReconnectsThePreviousSettings(t *testing.T)
 	}
 	// Address reads state only; it starts nothing.
 	deadline := time.Now().Add(5 * time.Second)
-	for argocd.Address() != srv.URL {
+	for currentTestIntegrations().ArgoCD.Address() != srv.URL {
 		if time.Now().After(deadline) {
 			t.Fatal("the previous settings weren't connected again before any read asked")
 		}

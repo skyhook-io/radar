@@ -34,7 +34,7 @@ func TestCloseCancelsExportedKubecostClient(t *testing.T) {
 	defer newBackend.Close()
 	managerFor := func(url string) *Manager {
 		t.Helper()
-		m := NewManager(nil, false, nil)
+		m := NewManager(nil, false, nil, nil)
 		t.Cleanup(func() { _ = m.Close() })
 		if err := m.Configure(ManagerConfig{Source: SourceKubecost, URL: url, ClusterID: "test"}); err != nil {
 			t.Fatal(err)

@@ -16,7 +16,6 @@ import (
 	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/opencost"
-	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/pkg/prom"
 	"k8s.io/client-go/rest"
 )
@@ -35,10 +34,8 @@ func setupLocalProfileTest(t *testing.T) *Server {
 		t.Fatal(err)
 	}
 	s.localConnections = connections.NewResolver(config.NewProfileStore(), target, nil)
-	s.localRuntime = connectionruntime.New(s.localConnections, nil)
-	connections.RegisterRefresh(s.localRuntime.Refresh)
-	t.Cleanup(func() { connections.RegisterRefresh(nil) })
-	t.Cleanup(prometheuspkg.Retire)
+	s.integrationRuntime = connectionruntime.New(s.localConnections, connectionruntime.Settings{})
+	admitTestIntegrations(t, s.integrationRuntime)
 	return s
 }
 
@@ -69,7 +66,7 @@ func updateProfile(t *testing.T, s *Server, view connections.ProfileView, action
 
 func (s *Server) localPrometheusView() connections.ProfileView {
 	target, _ := k8s.CurrentProfileTarget()
-	return s.localRuntime.Apply(target, true)[config.IntegrationMetrics].View
+	return s.localConnections.ResolveAll(target, true)[config.IntegrationMetrics].View
 }
 
 func TestLocalProfileSaveConflictAndCredentialProtection(t *testing.T) {
@@ -118,7 +115,7 @@ func TestLocalProfileLegacyAdoptionAndCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	view := s.localPrometheusView()
-	if view.Legacy == nil || len(prometheuspkg.CurrentHeaders()) != 0 {
+	if view.Legacy == nil || len(testMetricsHeaders()) != 0 {
 		t.Fatal("legacy credentials activated without adoption")
 	}
 	res := updateProfile(t, s, view, "adopt", backend.URL+"/edited", nil)
@@ -133,8 +130,9 @@ func TestLocalProfileLegacyAdoptionAndCompletion(t *testing.T) {
 	}
 	restore := k8s.SetTestProfileSource("/fixture/team", "second", "developer")
 	defer restore()
+	admitTestIntegrations(t, s.integrationRuntime)
 	view = s.localPrometheusView()
-	if view.Legacy != nil || len(prometheuspkg.CurrentHeaders()) != 0 {
+	if view.Legacy != nil || len(testMetricsHeaders()) != 0 {
 		t.Fatal("second context repeated import offer or inherited credentials")
 	}
 	if res := updateProfile(t, s, view, "dismiss_previous_notice", "unfinished-url", nil); res.Code != 200 {
@@ -171,10 +169,10 @@ func TestLocalProfileChangedTargetCanReplaceWithoutAdoption(t *testing.T) {
 
 func TestLocalProfileReadWhileDisconnectedDoesNotActivate(t *testing.T) {
 	s := setupLocalProfileTest(t)
-	prometheuspkg.Retire()
+	k8s.RetireServingConnection()
 	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected})
 	view := s.localPrometheusView()
-	if view.State != "auto" || prometheuspkg.GetClient() != nil {
+	if view.State != "auto" || currentTestIntegrations().Metrics != nil {
 		t.Fatalf("offline read activated metrics: %+v", view)
 	}
 }
@@ -183,7 +181,6 @@ func TestOfflineMetricsSaveProbesAnIsolatedClientAndServesAfterAdmission(t *test
 	s := setupLocalProfileTest(t)
 	t.Cleanup(k8s.SnapshotTestConnection())
 	k8s.RetireServingConnection()
-	prometheuspkg.Retire()
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "offline-credential" {
 			t.Errorf("request credential = %q", got)
@@ -200,11 +197,11 @@ func TestOfflineMetricsSaveProbesAnIsolatedClientAndServesAfterAdmission(t *test
 	if response.Code != http.StatusOK || !saved.Checked || !saved.Connected {
 		t.Fatalf("offline save returned %d %s", response.Code, response.Body.String())
 	}
-	if k8s.ServingConnectionID() != "" || prometheuspkg.GetClient() != nil {
+	if k8s.ServingConnectionID() != "" || currentTestIntegrations().Metrics != nil {
 		t.Fatal("offline save published a running client")
 	}
 
-	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	admitTestIntegrations(t, s.integrationRuntime)
 	client, err := connectionruntime.CaptureMetrics(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -237,8 +234,6 @@ func TestLocalProfileEnvironmentOriginGuidance(t *testing.T) {
 
 func TestOfflineKubecostSaveWithoutClusterIDDefersProbe(t *testing.T) {
 	s := setupLocalProfileTest(t)
-	previous := opencost.ConfigSnapshot()
-	t.Cleanup(func() { _ = opencost.Configure(previous) })
 	k8s.RetireServingConnection()
 	view := getLocalConnections(t, s).Profiles[config.IntegrationCost]
 	url := "https://kubecost.example.com"
@@ -261,8 +256,8 @@ func TestOfflineKubecostSaveWithoutClusterIDDefersProbe(t *testing.T) {
 	if got := saved.Profiles[config.IntegrationCost]; got.URL != url || got.State != "saved" {
 		t.Fatalf("saved cost settings = %+v", got)
 	}
-	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	if _, err := opencost.Selected(t.Context()); !errors.Is(err, opencost.ErrKubecostClusterID) {
+	admitTestIntegrations(t, s.integrationRuntime)
+	if _, err := currentTestIntegrations().Cost.Selected(t.Context()); !errors.Is(err, opencost.ErrKubecostClusterID) {
 		t.Fatalf("first cost operation returned %v, want missing cluster ID", err)
 	}
 }

@@ -38,23 +38,6 @@ type AvailabilityState struct {
 	Err     error
 }
 
-// Availability probes the process-wide Prometheus client under ctx, which
-// bounds how long the call may block. It starts no work beyond what
-// EnsureConnected already does: a discovery that outlives ctx keeps running
-// detached under its own timeout so the next caller benefits from it.
-func Availability(ctx context.Context) AvailabilityState {
-	c, err := ClientForOperation()
-	if err != nil {
-		state := AvailabilityConfiguredFailed
-		if errors.Is(err, ErrPrometheusUnavailable) {
-			return AvailabilityState{State: AvailabilityAbsent}
-		}
-		return AvailabilityState{State: state, Err: err}
-	}
-	return c.Availability(ctx)
-}
-
-// Availability is the per-client form of the package-level Availability.
 func (c *Client) Availability(ctx context.Context) AvailabilityState {
 	c.mu.RLock()
 	knownURL := c.baseURL

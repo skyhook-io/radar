@@ -11,6 +11,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/pprof"
@@ -61,7 +62,6 @@ import (
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/settings"
 	"github.com/skyhook-io/radar/internal/timeline"
-	"github.com/skyhook-io/radar/internal/traffic"
 	"github.com/skyhook-io/radar/internal/updater"
 	"github.com/skyhook-io/radar/internal/upgrade"
 	"github.com/skyhook-io/radar/internal/usagedata"
@@ -112,11 +112,9 @@ type Server struct {
 	diagConfig              *DiagConfig
 	effectiveConfig         *config.Config // running config for GET /api/config
 	stopUsageData           context.CancelFunc
-	openCostCurrency        *opencost.CurrencyResolver
 	currencyManaged         bool
-	prometheusConfigMu      sync.Mutex
 	localConnections        *connections.Resolver
-	localRuntime            *connectionruntime.Runtime
+	integrationRuntime      *connectionruntime.Runtime
 	promURLFlag             bool
 	promHeaderFlags         bool
 	authConfig              auth.Config
@@ -244,7 +242,7 @@ type Config struct {
 	PrometheusURLFlag       bool
 	PrometheusHeaderFlags   bool
 	LocalConnections        *connections.Resolver
-	LocalRuntime            *connectionruntime.Runtime
+	IntegrationRuntime      *connectionruntime.Runtime
 	OpenCostCurrency        string      // ISO 4217 code labeling values returned by OpenCost endpoints
 	OpenCostManaged         bool        // true when an explicit CLI/Helm flag owns the running value
 	AuthConfig              auth.Config // Authentication configuration
@@ -289,8 +287,7 @@ func New(cfg Config) *Server {
 		promURLFlag:             cfg.PrometheusURLFlag,
 		promHeaderFlags:         cfg.PrometheusHeaderFlags,
 		localConnections:        cfg.LocalConnections,
-		localRuntime:            cfg.LocalRuntime,
-		openCostCurrency:        opencost.NewCurrencyResolver(cfg.OpenCostCurrency),
+		integrationRuntime:      cfg.IntegrationRuntime,
 		currencyManaged:         cfg.OpenCostManaged,
 		authConfig:              cfg.AuthConfig,
 		cloudConnectCfg:         cfg.CloudConnect,
@@ -331,7 +328,6 @@ func New(cfg Config) *Server {
 	if s.allowAnyHost && !cfg.AuthConfig.Enabled() && !cloud.IsLoopbackHostname(cfg.ListenAddress) {
 		log.Printf("WARNING: --allowed-hosts=* turns off Host validation; any web page that rebinds its hostname to this address can use Radar")
 	}
-	opencost.PublishCurrencyResolver(s.openCostCurrency)
 	s.cloudInstall = newCloudInstallManager(cfg.CloudConnect)
 	s.applicationEvidence = newApplicationEvidenceAPI()
 	s.cloudInstall.sharedListener = s.sharedListener
@@ -349,7 +345,6 @@ func New(cfg Config) *Server {
 	// for mcpPermCache.
 	k8s.OnContextSwitch(func(_ string) {
 		s.finalizePostContextSwitch()
-		argocd.Reset()
 		vulnerabilities.ResetParseCache()
 	})
 	// Cancel + stale AI investigations BEFORE the client repoints at the new
@@ -358,9 +353,6 @@ func New(cfg Config) *Server {
 		if runs := s.aiRunManager(); runs != nil {
 			runs.OnContextSwitch()
 		}
-		// Auth-loss demotion only fires the before-switch callbacks. Clear
-		// Argo CD's cached client and invalidate pending probes here as well.
-		argocd.Reset()
 	})
 
 	// Let the destructive cache operations (context switch, namespace rescope)
@@ -583,6 +575,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	// API routes
 	r.Route("/api", func(r chi.Router) {
 		r.Use(s.requireSameOrigin)
+		r.Use(s.refreshIntegrationProfiles)
 		// Streaming endpoints (SSE/WebSocket) - no timeout
 		r.Get("/events/stream", s.handleSSE)
 		r.Get("/pods/{namespace}/{name}/logs/stream", s.handlePodLogsStream)
@@ -927,7 +920,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Post("/opencost/application/trend", s.handleOpenCostApplicationTrend)
 			r.Get("/opencost/workload/{kind}/{namespace}/{name}", s.handleOpenCostWorkload)
 			r.Get("/opencost/workload/{kind}/{namespace}/{name}/trend", s.handleOpenCostWorkloadTrend)
-			opencost.RegisterRoutes(r, s.resolvedOpenCostCurrency, s.openCostRouteScope())
+			opencost.RegisterRoutes(r, s.openCostRouteScope())
 
 			// FluxCD routes
 			r.Post("/flux/{kind}/{namespace}/{name}/reconcile", s.bindWrite(s.handleFluxReconcile))
@@ -1078,22 +1071,22 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 
 	// MCP server (Model Context Protocol for AI tools)
 	if s.mcpHandler != nil {
-		r.Mount("/mcp", s.mcpHandler)
+		r.Mount("/mcp", s.refreshIntegrationProfiles(s.mcpHandler))
 	} else {
 		r.Mount("/mcp", http.NotFoundHandler())
 	}
 	if s.mcpReadOnlyHandler != nil {
-		r.Mount("/mcp-readonly", s.mcpReadOnlyHandler)
+		r.Mount("/mcp-readonly", s.refreshIntegrationProfiles(s.mcpReadOnlyHandler))
 	} else {
 		r.Mount("/mcp-readonly", http.NotFoundHandler())
 	}
 	if s.mcpApplyHandler != nil {
-		r.Mount("/mcp-apply", s.mcpApplyHandler)
+		r.Mount("/mcp-apply", s.refreshIntegrationProfiles(s.mcpApplyHandler))
 	} else {
 		r.Mount("/mcp-apply", http.NotFoundHandler())
 	}
 	if s.mcpInvestigationHandler != nil {
-		r.Mount("/mcp-investigation", s.mcpInvestigationHandler)
+		r.Mount("/mcp-investigation", s.refreshIntegrationProfiles(s.mcpInvestigationHandler))
 	} else {
 		r.Mount("/mcp-investigation", http.NotFoundHandler())
 	}
@@ -1119,6 +1112,10 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 
 func (s *Server) openCostRouteScope() opencost.RouteScope {
 	return opencost.RouteScope{
+		Capture: func(r *http.Request) (*opencost.Manager, func() string) {
+			set := connectionruntime.Capture(r.Context())
+			return set.Cost, set.Currency.Resolve
+		},
 		AllowedNamespaces: func(req *http.Request, requested []string) []string {
 			if requested != nil {
 				if k8s.ForceNamespaceScope {
@@ -1486,7 +1483,6 @@ func (s *Server) Handler() http.Handler {
 // Stop gracefully stops the server and releases the listening port.
 func (s *Server) Stop() {
 	s.contextSwitch.Stop()
-	prometheuspkg.RightsizingScans().Invalidate()
 	StopAllLocalTermSessions()
 	if runs := s.aiRunManager(); runs != nil {
 		runs.Shutdown() // cancel investigations so agent children don't outlive us
@@ -5998,7 +5994,8 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		normalizedCurrency = ""
 	}
 	file.OpenCostCurrency = normalizedCurrency
-	currentURL, currentHeaders := prometheuspkg.CurrentConfig()
+	integrationSettings := s.integrationRuntime.Settings()
+	currentURL, currentHeaders := integrationSettings.Metrics.URL, integrationSettings.Metrics.Headers
 	headerKeys := make([]string, 0, len(currentHeaders))
 	for k := range currentHeaders {
 		headerKeys = append(headerKeys, k)
@@ -6007,10 +6004,10 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	file.PrometheusHeaders = nil
 	kubecostAPIKeySet := file.KubecostAPIKey != ""
 	file.KubecostAPIKey = ""
-	kubecostEnvManaged := opencost.IsEnvManaged()
-	kubecostEnvError := opencost.EnvManagedError()
+	kubecostEnvManaged := integrationSettings.CostEnv
+	kubecostEnvError := integrationErrorText(integrationSettings.CostError)
 	if kubecostEnvManaged {
-		effectiveCost := opencost.ConfigSnapshot()
+		effectiveCost := integrationSettings.Cost
 		file.CostSource = string(effectiveCost.Source)
 		file.KubecostURL = effectiveCost.URL
 		file.KubecostClusterID = effectiveCost.ClusterID
@@ -6031,16 +6028,16 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	// no token, so the card shows an error state rather than a phantom "configured".
 	envManaged := false
 	envError := ""
-	if envURL, envInsecure, ok := argocd.EnvManagedConfig(); ok {
+	if integrationSettings.ArgoEnv {
 		envManaged = true
 		// Env-managed ignores the on-disk config entirely — present the effective env
 		// values (all empty in the errored state, so neither a stale disk URL nor a
 		// stale disk token-set signal leaks). Only a successfully-seeded env token
 		// counts as set.
-		file.ArgoCDURL = envURL
-		file.ArgoCDInsecureTLS = envInsecure
+		file.ArgoCDURL = integrationSettings.ArgoCD.URL
+		file.ArgoCDInsecureTLS = integrationSettings.ArgoCD.InsecureTLS
 		tokenSet = false
-		if envError = argocd.EnvManagedError(); envError == "" {
+		if envError = integrationErrorText(integrationSettings.ArgoError); envError == "" {
 			tokenSet = true
 		}
 	}
@@ -6067,7 +6064,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.effectiveConfig != nil {
 		effective := *s.effectiveConfig
-		effectiveCost := opencost.ConfigSnapshot()
+		effectiveCost := integrationSettings.Cost
 		effective.CostSource = string(effectiveCost.Source)
 		effective.KubecostURL = effectiveCost.URL
 		effective.KubecostClusterID = effectiveCost.ClusterID
@@ -6132,71 +6129,85 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	updated.OpenCostCurrency = normalizedCurrency
-	result, err := config.Update(func(c *config.Config) {
-		// Integration connection fields are owned exclusively by the live
-		// /api/integrations/* endpoints, not this startup-config PUT. Preserve
-		// ALL of them so a full-config save (which is a full replacement) can
-		// never disturb a live integration — even if it races an in-flight
-		// Apply/Connect or echoes back the redacted token as empty.
-		preserved := struct {
-			promHeaders              map[string]string
-			promHeadersEnv           map[string]string
-			promURL                  string
-			argoURL                  string
-			argoToken                string
-			argoInsecure             bool
-			argoTokenContext         string
-			argoTokenBinding         string
-			costSource               string
-			kubecostURL              string
-			kubecostAPIKey           string
-			kubecostAPIKeyContext    string
-			kubecostClusterID        string
-			kubecostClusterIDContext string
-			openObserve              *config.OpenObserveConfig
-		}{
-			promHeaders:              c.PrometheusHeaders,
-			promHeadersEnv:           c.PrometheusHeadersFromEnv,
-			promURL:                  c.PrometheusURL,
-			argoURL:                  c.ArgoCDURL,
-			argoToken:                c.ArgoCDToken,
-			argoInsecure:             c.ArgoCDInsecureTLS,
-			argoTokenContext:         c.ArgoCDTokenContext,
-			argoTokenBinding:         c.ArgoCDTokenBinding,
-			costSource:               c.CostSource,
-			kubecostURL:              c.KubecostURL,
-			kubecostAPIKey:           c.KubecostAPIKey,
-			kubecostAPIKeyContext:    c.KubecostAPIKeyContext,
-			kubecostClusterID:        c.KubecostClusterID,
-			kubecostClusterIDContext: c.KubecostClusterIDContext,
-			// Owned by `radar openobserve`; the Settings dialog doesn't edit
-			// it, and GET blanks its token.
-			openObserve: c.OpenObserve,
-		}
-		*c = updated
-		c.PrometheusHeaders = preserved.promHeaders
-		c.PrometheusHeadersFromEnv = preserved.promHeadersEnv
-		c.PrometheusURL = preserved.promURL
-		c.ArgoCDURL = preserved.argoURL
-		c.ArgoCDToken = preserved.argoToken
-		c.ArgoCDInsecureTLS = preserved.argoInsecure
-		c.ArgoCDTokenContext = preserved.argoTokenContext
-		c.ArgoCDTokenBinding = preserved.argoTokenBinding
-		c.CostSource = preserved.costSource
-		c.KubecostURL = preserved.kubecostURL
-		c.KubecostAPIKey = preserved.kubecostAPIKey
-		c.KubecostAPIKeyContext = preserved.kubecostAPIKeyContext
-		c.KubecostClusterID = preserved.kubecostClusterID
-		c.KubecostClusterIDContext = preserved.kubecostClusterIDContext
-		c.OpenObserve = preserved.openObserve
-	})
+	var result config.Config
+	persist := func() error {
+		var err error
+		result, err = config.Update(func(c *config.Config) {
+			// Integration connection fields are owned exclusively by the live
+			// /api/integrations/* endpoints, not this startup-config PUT. Preserve
+			// ALL of them so a full-config save (which is a full replacement) can
+			// never disturb a live integration — even if it races an in-flight
+			// Apply/Connect or echoes back the redacted token as empty.
+			preserved := struct {
+				promHeaders              map[string]string
+				promHeadersEnv           map[string]string
+				promURL                  string
+				argoURL                  string
+				argoToken                string
+				argoInsecure             bool
+				argoTokenContext         string
+				argoTokenBinding         string
+				costSource               string
+				kubecostURL              string
+				kubecostAPIKey           string
+				kubecostAPIKeyContext    string
+				kubecostClusterID        string
+				kubecostClusterIDContext string
+				openObserve              *config.OpenObserveConfig
+			}{
+				promHeaders:              c.PrometheusHeaders,
+				promHeadersEnv:           c.PrometheusHeadersFromEnv,
+				promURL:                  c.PrometheusURL,
+				argoURL:                  c.ArgoCDURL,
+				argoToken:                c.ArgoCDToken,
+				argoInsecure:             c.ArgoCDInsecureTLS,
+				argoTokenContext:         c.ArgoCDTokenContext,
+				argoTokenBinding:         c.ArgoCDTokenBinding,
+				costSource:               c.CostSource,
+				kubecostURL:              c.KubecostURL,
+				kubecostAPIKey:           c.KubecostAPIKey,
+				kubecostAPIKeyContext:    c.KubecostAPIKeyContext,
+				kubecostClusterID:        c.KubecostClusterID,
+				kubecostClusterIDContext: c.KubecostClusterIDContext,
+				// Owned by `radar openobserve`; the Settings dialog doesn't edit
+				// it, and GET blanks its token.
+				openObserve: c.OpenObserve,
+			}
+			*c = updated
+			c.PrometheusHeaders = preserved.promHeaders
+			c.PrometheusHeadersFromEnv = preserved.promHeadersEnv
+			c.PrometheusURL = preserved.promURL
+			c.ArgoCDURL = preserved.argoURL
+			c.ArgoCDToken = preserved.argoToken
+			c.ArgoCDInsecureTLS = preserved.argoInsecure
+			c.ArgoCDTokenContext = preserved.argoTokenContext
+			c.ArgoCDTokenBinding = preserved.argoTokenBinding
+			c.CostSource = preserved.costSource
+			c.KubecostURL = preserved.kubecostURL
+			c.KubecostAPIKey = preserved.kubecostAPIKey
+			c.KubecostAPIKeyContext = preserved.kubecostAPIKeyContext
+			c.KubecostClusterID = preserved.kubecostClusterID
+			c.KubecostClusterIDContext = preserved.kubecostClusterIDContext
+			c.OpenObserve = preserved.openObserve
+		})
+		return err
+	}
+	if s.currencyManaged {
+		err = persist()
+	} else {
+		edit := s.integrationRuntime.PrepareShared(k8s.Current(), s.integrationRuntime.Snapshot(), func(next *connectionruntime.Settings) {
+			next.Currency = normalizedCurrency
+		})
+		err = edit.Commit(persist)
+	}
+	if errors.Is(err, k8s.ErrContextConfigurationBusy) {
+		s.connectionError(w, err)
+		return
+	}
 	if err != nil {
 		log.Printf("[config] Failed to save config: %v", err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
-	}
-	if s.openCostCurrency != nil && !s.currencyManaged {
-		s.openCostCurrency.SetOverride(result.OpenCostCurrency)
 	}
 	result.PrometheusHeaders = nil
 	result.ArgoCDToken = ""
@@ -6217,14 +6228,6 @@ func redactOpenObserveToken(c *config.Config) {
 	c.OpenObserve = &oc
 }
 
-// handleApplyPrometheusURL re-points the running Prometheus client at a new URL
-// immediately and persists it. The Prometheus URL is one of the few settings
-// that doesn't need a restart: the metrics path reads it from a mutable global
-// per query, so re-pointing it live is safe and saves operators a restart loop
-// when tuning discovery. Reset() drops the cached connection so the next probe
-// rediscovers against the new URL rather than reusing the old endpoint. The
-// response carries the live reachability result so the UI can confirm the URL
-// actually works. An empty URL reverts to auto-discovery.
 func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConfigEditable(w, r) {
 		return
@@ -6269,11 +6272,9 @@ func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	// Serialize the credential check, persistence and live application. Otherwise
-	// a URL-only edit can reuse credentials replaced by another request mid-save.
-	s.prometheusConfigMu.Lock()
-	defer s.prometheusConfigMu.Unlock()
-	currentURL, currentHeaders := prometheuspkg.CurrentConfig()
+	conn := k8s.Current()
+	base := s.integrationRuntime.Snapshot()
+	currentURL, currentHeaders := base.Metrics.URL, base.Metrics.Headers
 	previous := config.Load()
 	if body.Headers != nil && (s.promHeaderFlags || len(previous.PrometheusHeadersFromEnv) > 0) {
 		s.writeError(w, http.StatusConflict, "Prometheus headers are configured outside Settings. Update their startup flags, environment references or Helm values, then restart Radar; no changes were saved.")
@@ -6321,37 +6322,28 @@ func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	// Persist first: a failed disk write must not leave the running client
-	// pointed somewhere the on-disk config disagrees with.
-	if _, err := config.Update(func(c *config.Config) {
-		c.PrometheusURL = rawURL
-		if body.Headers != nil {
-			c.PrometheusHeaders = headers
-		}
-	}); err != nil {
-		log.Printf("[config] Failed to persist Prometheus URL: %v", err)
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	// Apply URL and headers to the running client in one step, dropping the
-	// cached connection with them, so no request can probe the previous
-	// endpoint with the new credentials.
 	effectiveHeaders := headers
 	if body.Headers == nil {
 		effectiveHeaders = currentHeaders
 	}
-	prometheuspkg.Configure(rawURL, effectiveHeaders)
-	// A live traffic source copies URL and headers at construction and reads
-	// them lock-free afterwards, so the only way rotated or cleared
-	// credentials stop being used is to rebuild it — the same teardown a
-	// context switch performs.
-	traffic.SetMetricsConfig(rawURL, effectiveHeaders)
-	if err := k8s.RestartTrafficSubsystem(); err != nil {
-		log.Printf("[traffic] Failed to reinitialize after Prometheus config change: %v", err)
-	}
-	if s.openCostCurrency != nil {
-		s.openCostCurrency.Invalidate()
+	edit := s.integrationRuntime.PrepareShared(conn, base, func(next *connectionruntime.Settings) {
+		next.Metrics = prom.Connection{URL: rawURL, Headers: effectiveHeaders}
+		if currentURL != rawURL || !maps.Equal(currentHeaders, effectiveHeaders) {
+			next.Scope = prom.WorkloadMetricsScope{}
+		}
+	})
+	err := edit.Commit(func() error {
+		_, err := config.Update(func(c *config.Config) {
+			c.PrometheusURL = rawURL
+			if body.Headers != nil {
+				c.PrometheusHeaders = headers
+			}
+		})
+		return err
+	})
+	if err != nil {
+		s.connectionError(w, err)
+		return
 	}
 
 	resp := struct {
@@ -6359,7 +6351,13 @@ func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request
 		Address   string `json:"address,omitempty"`
 		Error     string `json:"error,omitempty"`
 	}{}
-	if client := prometheuspkg.GetClient(); client != nil {
+	client := edit.Set().Metrics
+	if client == nil && rawURL != "" {
+		client = prometheuspkg.NewClient(nil, nil, conn.ContextName(), nil, false, nil)
+		client.Configure(rawURL, effectiveHeaders)
+		defer client.Close()
+	}
+	if client != nil {
 		ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
 		defer cancel()
 		addr, _, err := client.EnsureConnected(ctx)

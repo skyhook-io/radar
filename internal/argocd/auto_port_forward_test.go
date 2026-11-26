@@ -73,7 +73,9 @@ func TestArgoForwardFollowsConnectionLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			k8s.SetTestClient(kubernetes.NewForConfigOrDie(cfg))
-			m := NewManager()
+			conn := k8s.Current()
+			m := NewConnectionManager(conn, k8s.IsInCluster(), conn.ContextBinding())
+			t.Cleanup(func() { _ = m.Close() })
 			snap := m.snapshotLocked()
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()

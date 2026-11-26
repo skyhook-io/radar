@@ -13,7 +13,7 @@ import (
 
 func scanTestManager(t *testing.T, run scanRunner) *RightsizingScanManager {
 	t.Helper()
-	m := newRightsizingScanManager()
+	m := (&Client{}).newRightsizingScanManager()
 	m.prepare = func() (scanRunner, func() bool) { return run, func() bool { return true } }
 	t.Cleanup(m.Invalidate)
 	return m

@@ -217,11 +217,12 @@ func (s *Server) resolveGitOpsTree(r *http.Request, req *gitopsRequest) (*gitops
 // set the connection up for this, and the page should say it isn't
 // delivering rather than silently show Radar's read.
 func (s *Server) argoAPIHealth(ctx context.Context, appNamespace, appName string) (*argoapi.ApplicationHealth, error) {
-	manager := connectionruntime.SetFor(k8s.BoundOrCurrent(ctx)).ArgoCD
-	health, err := manager.ApplicationHealthCached(ctx, argoapi.ApplicationQuery{AppNamespace: appNamespace, AppName: appName})
-	if err == nil {
-		return health, nil
+	set := connectionruntime.Capture(ctx)
+	manager := set.ArgoCD
+	if manager == nil {
+		return nil, nil
 	}
+	err := set.ArgoSettingsError()
 	// A settings failure leaves the manager unconfigured, so without this the
 	// page would silently fall back to Radar's read instead of saying why.
 	var settingsErr *connections.SettingsError
@@ -230,6 +231,10 @@ func (s *Server) argoAPIHealth(ctx context.Context, appNamespace, appName string
 			return nil, errors.New("its startup configuration for this launch is invalid; check Radar's logs")
 		}
 		return nil, errors.New("this cluster's saved integration settings need review in Settings")
+	}
+	health, err := manager.ApplicationHealthCached(ctx, argoapi.ApplicationQuery{AppNamespace: appNamespace, AppName: appName})
+	if err == nil {
+		return health, nil
 	}
 	if errors.Is(err, argocd.ErrConnecting) {
 		pending := &argoHealthPending{}
@@ -244,7 +249,7 @@ func (s *Server) argoAPIHealth(ctx context.Context, appNamespace, appName string
 	// A read that got no answer (possibly served from the failure cache) will
 	// be retried even if another read has since cleared the shared failure
 	// flag, so this page asks again too.
-	if argocd.ReadMayRecover(err) {
+	if manager.ReadMayRecover(err) {
 		// Say why it failed, and have the page ask again so it recovers
 		// when the retry connects.
 		return nil, &argoHealthPending{notice: argoAPIHealthFailure(err, manager.TokenSet()), retrying: true}
@@ -446,11 +451,12 @@ func (s *Server) handleGitOpsInsights(w http.ResponseWriter, r *http.Request) {
 	insight.Warnings = appendWarnings(insight.Warnings, tree.Warnings...)
 	insight = s.filterGitOpsInsightForUser(r, req, insight, tree)
 	if insight.Summary.Tool == "argocd" {
-		setArgoCapabilities(r.Context(), req.Namespace, req.Name, root, &insight.Capabilities)
+		manager := connectionruntime.Capture(r.Context()).ArgoCD
+		setArgoCapabilities(r.Context(), manager, req.Namespace, req.Name, root, &insight.Capabilities)
 		if insight.Capabilities.ArgoConfigured {
 			// Best-effort: surface a broken Git repo connection (a top hidden cause
 			// of stuck syncs) as an Issue. Never fails insights if the Argo call errors.
-			s.enrichArgoRepoHealth(root, &insight)
+			s.enrichArgoRepoHealth(manager, root, &insight)
 		}
 	}
 	s.writeJSON(w, insight)
@@ -467,8 +473,10 @@ func (s *Server) handleGitOpsInsights(w http.ResponseWriter, r *http.Request) {
 // rendered as N dead-ends. ArgoConfigured is surfaced separately so the UI can
 // offer Connect vs. check Settings. Cost: one managed-resources round-trip per
 // viewed app per 15s cache window, whose result the per-row diffs then reuse.
-func setArgoCapabilities(ctx context.Context, namespace, name string, root *unstructured.Unstructured, caps *gitopsinsights.Capabilities) {
-	manager := connectionruntime.SetFor(k8s.BoundOrCurrent(ctx)).ArgoCD
+func setArgoCapabilities(ctx context.Context, manager *argocd.Manager, namespace, name string, root *unstructured.Unstructured, caps *gitopsinsights.Capabilities) {
+	if manager == nil {
+		return
+	}
 	caps.ArgoConfigured = manager.IsConfigured()
 	diffReady := false
 	if _, connected := manager.Get(); connected {

@@ -89,7 +89,7 @@ func (p PromCost) resolver() prometheuspkg.ChartScopeResolver {
 	if override != nil {
 		return override
 	}
-	return prometheuspkg.ResolverFor(p.Client, k8s.GetResourceCache())
+	return prometheuspkg.ResolverFor(p.Client, p.Client.ResourceCache())
 }
 
 // costSubject is what one endpoint's check is narrowed to and anchored on.
@@ -223,7 +223,7 @@ func (p PromCost) resolveCostScopeOnce(ctx context.Context, view string, costs, 
 // cost, so its check leaves those metrics out too.
 func (p PromCost) Summary(ctx context.Context, opts pkgopencost.SummaryOptions) *pkgopencost.CostSummary {
 	costs, usage := pkgopencost.SummaryMetrics(opts.SkipNodeCost)
-	scope, reason := p.resolveCostScope(ctx, "cost_summary", costs, usage, clusterCostSubject(k8s.GetResourceCache()), costCurrentSpan)
+	scope, reason := p.resolveCostScope(ctx, "cost_summary", costs, usage, clusterCostSubject(p.Client.ResourceCache()), costCurrentSpan)
 	if reason != "" {
 		currency := opts.Currency
 		if currency == "" {
@@ -238,7 +238,7 @@ func (p PromCost) Summary(ctx context.Context, opts pkgopencost.SummaryOptions) 
 // Workloads is one namespace's workload costs.
 func (p PromCost) Workloads(ctx context.Context, namespace string, owners pkgopencost.PodOwnerLookup) *pkgopencost.WorkloadCostResponse {
 	costs, usage := pkgopencost.WorkloadsMetrics()
-	scope, reason := p.resolveCostScope(ctx, "cost_workloads", costs, usage, namespaceCostSubject(k8s.GetResourceCache(), namespace), costCurrentSpan)
+	scope, reason := p.resolveCostScope(ctx, "cost_workloads", costs, usage, namespaceCostSubject(p.Client.ResourceCache(), namespace), costCurrentSpan)
 	if reason != "" {
 		return &pkgopencost.WorkloadCostResponse{Namespace: namespace, Available: false, Reason: reason, ClusterScope: scope.ClusterScope}
 	}
@@ -247,7 +247,7 @@ func (p PromCost) Workloads(ctx context.Context, namespace string, owners pkgope
 
 // Nodes is the per-node cost breakdown.
 func (p PromCost) Nodes(ctx context.Context) *pkgopencost.NodeCostResponse {
-	scope, reason := p.resolveCostScope(ctx, "cost_nodes", pkgopencost.NodeMetrics(), nil, costSubject{nodes: prometheuspkg.NodeAnchors(k8s.GetResourceCache())}, costImplicitLookback)
+	scope, reason := p.resolveCostScope(ctx, "cost_nodes", pkgopencost.NodeMetrics(), nil, costSubject{nodes: prometheuspkg.NodeAnchors(p.Client.ResourceCache())}, costImplicitLookback)
 	if reason != "" {
 		return &pkgopencost.NodeCostResponse{Available: false, Reason: reason, ClusterScope: scope.ClusterScope}
 	}
@@ -260,7 +260,7 @@ func trendSpan(rangeStr string) time.Duration {
 
 // Trend is the per-namespace cost trend.
 func (p PromCost) Trend(ctx context.Context, opts pkgopencost.TrendPromOptions) *pkgopencost.CostTrendResponse {
-	cache := k8s.GetResourceCache()
+	cache := p.Client.ResourceCache()
 	anchorNamespace, pods := prometheuspkg.ClusterPodAnchors(cache)
 	subject := costSubject{anchorNamespace: anchorNamespace, pods: pods, nodes: prometheuspkg.NodeAnchors(cache)}
 	scope, reason := p.resolveCostScope(ctx, "cost_trend", pkgopencost.TrendMetrics(), nil, subject, trendSpan(opts.Range))
@@ -274,7 +274,7 @@ func (p PromCost) Trend(ctx context.Context, opts pkgopencost.TrendPromOptions) 
 // WorkloadTrend is one workload's cost trend.
 func (p PromCost) WorkloadTrend(ctx context.Context, opts pkgopencost.WorkloadTrendOptions) *pkgopencost.WorkloadCostTrendResponse {
 	scope, reason := p.resolveCostScope(ctx, "cost_workload_trend", pkgopencost.WorkloadTrendMetrics(opts.Kind), nil,
-		namespaceCostSubject(k8s.GetResourceCache(), opts.Namespace), trendSpan(opts.Range))
+		namespaceCostSubject(p.Client.ResourceCache(), opts.Namespace), trendSpan(opts.Range))
 	if reason != "" {
 		kind, _ := pkgopencost.CanonicalWorkloadKind(opts.Kind)
 		return &pkgopencost.WorkloadCostTrendResponse{Namespace: opts.Namespace, Kind: kind, Name: opts.Name, Range: opts.Range, Reason: reason, ClusterScope: scope.ClusterScope}
@@ -290,7 +290,7 @@ func (p PromCost) ApplicationTrend(ctx context.Context, opts pkgopencost.Applica
 	for _, ref := range opts.Workloads {
 		byNamespace[ref.Namespace] = append(byNamespace[ref.Namespace], ref)
 	}
-	cache := k8s.GetResourceCache()
+	cache := p.Client.ResourceCache()
 	span := trendSpan(opts.Range)
 	opts.ScopeFor = func(namespace string) (pkgopencost.StoreScope, string) {
 		return p.resolveCostScope(ctx, "cost_application_trend", pkgopencost.ApplicationTrendMetrics(byNamespace[namespace]), nil,

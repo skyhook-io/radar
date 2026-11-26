@@ -12,7 +12,8 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
-	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
+	"github.com/skyhook-io/radar/pkg/prom"
 )
 
 // setupPrometheusIntegrationTest isolates the on-disk config and installs a
@@ -23,10 +24,7 @@ func setupPrometheusIntegrationTest(t *testing.T, liveHeaders map[string]string)
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("USERPROFILE", dir)
-	prometheuspkg.Initialize(nil, nil, "test", nil)
-	prometheuspkg.SetHeaders(liveHeaders)
-	t.Cleanup(func() { prometheuspkg.Initialize(nil, nil, "", nil) })
-	return &Server{}
+	return serverWithTestIntegrations(t, connectionruntime.Settings{Metrics: prom.Connection{Headers: liveHeaders}})
 }
 
 func TestApplyPrometheusURL_ManagedHeaders(t *testing.T) {
@@ -35,7 +33,7 @@ func TestApplyPrometheusURL_ManagedHeaders(t *testing.T) {
 			t.Run(source+edit, func(t *testing.T) {
 				headers := map[string]string{"Authorization": "Bearer original"}
 				s := setupPrometheusIntegrationTest(t, headers)
-				prometheuspkg.Configure("https://original.example", headers)
+				configureTestMetrics(t, s, "https://original.example", headers)
 				s.promHeaderFlags = source == "flags"
 				if _, err := config.Update(func(c *config.Config) {
 					c.PrometheusURL = "https://original.example"
@@ -50,7 +48,7 @@ func TestApplyPrometheusURL_ManagedHeaders(t *testing.T) {
 				if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "no changes were saved") {
 					t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 				}
-				if !reflect.DeepEqual(before, config.Load()) || !reflect.DeepEqual(headers, prometheuspkg.CurrentHeaders()) {
+				if !reflect.DeepEqual(before, config.Load()) || !reflect.DeepEqual(headers, testMetricsHeaders()) {
 					t.Fatal("managed credential edit changed live or saved configuration")
 				}
 			})
@@ -67,7 +65,7 @@ func TestApplyPrometheusURL_InvalidHeaders(t *testing.T) {
 		before := config.Load()
 		payload, _ := json.Marshal(map[string]any{"prometheusUrl": "https://original.example", "headers": headers})
 		rec := applyPrometheus(s, string(payload))
-		if rec.Code != http.StatusBadRequest || !reflect.DeepEqual(before, config.Load()) || len(prometheuspkg.CurrentHeaders()) != 0 {
+		if rec.Code != http.StatusBadRequest || !reflect.DeepEqual(before, config.Load()) || len(testMetricsHeaders()) != 0 {
 			t.Fatalf("invalid header edit not refused safely: %d %s", rec.Code, rec.Body.String())
 		}
 	}
@@ -89,7 +87,7 @@ func TestGetConfigPrometheusLiveState(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			prometheuspkg.Configure("https://live.example/path", map[string]string{"Authorization": "live-secret"})
+			configureTestMetrics(t, s, "https://live.example/path", map[string]string{"Authorization": "live-secret"})
 			w := httptest.NewRecorder()
 			s.handleGetConfig(w, httptest.NewRequest(http.MethodGet, "/api/config", nil))
 			var got configResponse
@@ -123,7 +121,7 @@ func TestApplyPrometheusURL_StartupFlags(t *testing.T) {
 			}
 			s.promURLFlag = true
 			s.effectiveConfig = &config.Config{PrometheusURL: originalURL}
-			prometheuspkg.Configure(originalURL, headers)
+			configureTestMetrics(t, s, originalURL, headers)
 			if _, err := config.Update(func(c *config.Config) { c.PrometheusURL = originalURL }); err != nil {
 				t.Fatal(err)
 			}
@@ -135,9 +133,9 @@ func TestApplyPrometheusURL_StartupFlags(t *testing.T) {
 				body["headers"] = map[string]string{}
 			case "cleared-live":
 				// A same-origin edit may already have cleared or rotated live headers.
-				prometheuspkg.Configure(originalURL, nil)
+				configureTestMetrics(t, s, originalURL, nil)
 			case "url-flag-only":
-				prometheuspkg.Configure(originalURL, nil)
+				configureTestMetrics(t, s, originalURL, nil)
 				body["headers"] = map[string]string{"X-API-Key": "new-server-key"}
 			case "missing-startup-config":
 				s.effectiveConfig = nil
@@ -146,7 +144,7 @@ func TestApplyPrometheusURL_StartupFlags(t *testing.T) {
 				body["prometheusUrl"] = ""
 			}
 			before := config.Load()
-			beforeURL, beforeHeaders := prometheuspkg.CurrentConfig()
+			beforeURL, beforeHeaders := currentTestIntegrations().Metrics.CurrentConfig()
 			payload, _ := json.Marshal(body)
 			rec := applyPrometheus(s, string(payload))
 			if scenario == "same-origin" {
@@ -158,7 +156,7 @@ func TestApplyPrometheusURL_StartupFlags(t *testing.T) {
 			if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "startup flags") {
 				t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 			}
-			currentURL, currentHeaders := prometheuspkg.CurrentConfig()
+			currentURL, currentHeaders := currentTestIntegrations().Metrics.CurrentConfig()
 			if requests.Load() != 0 || !reflect.DeepEqual(config.Load(), before) || currentURL != beforeURL || !reflect.DeepEqual(currentHeaders, beforeHeaders) {
 				t.Fatal("rejected update probed or changed live/saved configuration")
 			}
@@ -180,7 +178,7 @@ func TestApplyPrometheusURL_ConcurrentCredentialUpdates(t *testing.T) {
 	a, b := backend("key-a"), backend("key-b")
 	s := setupPrometheusIntegrationTest(t, nil)
 	for range 20 {
-		prometheuspkg.Configure(b.URL, map[string]string{"X-API-Key": "key-b"})
+		configureTestMetrics(t, s, b.URL, map[string]string{"X-API-Key": "key-b"})
 		if _, err := config.Update(func(c *config.Config) {
 			c.PrometheusURL = b.URL
 			c.PrometheusHeaders = map[string]string{"X-API-Key": "key-b"}
@@ -197,14 +195,14 @@ func TestApplyPrometheusURL_ConcurrentCredentialUpdates(t *testing.T) {
 				payload, _ := json.Marshal(update)
 				<-start
 				rec := applyPrometheus(s, string(payload))
-				if rec.Code != http.StatusOK && (update["headers"] != nil || rec.Code != http.StatusBadRequest) {
+				if rec.Code != http.StatusOK && (update["headers"] != nil || rec.Code != http.StatusBadRequest && rec.Code != http.StatusConflict) {
 					t.Errorf("unexpected apply status %d: %s", rec.Code, rec.Body.String())
 				}
 			})
 		}
 		close(start)
 		wg.Wait()
-		currentURL, headers := prometheuspkg.CurrentConfig()
+		currentURL, headers := currentTestIntegrations().Metrics.CurrentConfig()
 		saved := config.Load()
 		if currentURL != a.URL || headers["X-API-Key"] != "key-a" || saved.PrometheusURL != currentURL || !reflect.DeepEqual(saved.PrometheusHeaders, headers) {
 			t.Fatal("concurrent update mixed live and saved endpoint/credential pairs")
@@ -223,7 +221,7 @@ func TestApplyPrometheusURL_CredentialDestination(t *testing.T) {
 			t.Cleanup(target.Close)
 			headers := map[string]string{"Authorization": "Bearer original", "X-Scope-OrgID": "tenant-original", "X-API-Key": "key-original"}
 			s := setupPrometheusIntegrationTest(t, headers)
-			prometheuspkg.Configure("https://original.example", headers)
+			configureTestMetrics(t, s, "https://original.example", headers)
 			if _, err := config.Update(func(c *config.Config) {
 				c.PrometheusURL = "https://original.example"
 				c.PrometheusHeaders = headers
@@ -252,7 +250,7 @@ func TestApplyPrometheusURL_CredentialDestination(t *testing.T) {
 			if requests.Load() != 0 {
 				t.Fatal("rejected destination received a request")
 			}
-			currentURL, currentHeaders := prometheuspkg.CurrentConfig()
+			currentURL, currentHeaders := currentTestIntegrations().Metrics.CurrentConfig()
 			if currentURL != "https://original.example" || !reflect.DeepEqual(currentHeaders, headers) || !reflect.DeepEqual(config.Load(), before) {
 				t.Fatal("rejected update changed live or saved configuration")
 			}
@@ -266,8 +264,10 @@ func TestApplyPrometheusURL_HeaderUpdates(t *testing.T) {
 			var requests atomic.Int32
 			var gotHeader atomic.Value
 			target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				requests.Add(1)
-				gotHeader.Store(r.Header.Get("X-API-Key"))
+				if !strings.HasPrefix(r.URL.Path, "/old-path/") {
+					requests.Add(1)
+					gotHeader.Store(r.Header.Get("X-API-Key"))
+				}
 				_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
 			}))
 			t.Cleanup(target.Close)
@@ -281,7 +281,7 @@ func TestApplyPrometheusURL_HeaderUpdates(t *testing.T) {
 				s.promURLFlag = true
 				s.effectiveConfig = &config.Config{PrometheusURL: originalURL}
 			}
-			prometheuspkg.Configure(originalURL, headers)
+			configureTestMetrics(t, s, originalURL, headers)
 			if _, err := config.Update(func(c *config.Config) {
 				c.PrometheusURL = originalURL
 				if scenario == "flag-url-file-headers" || scenario == "unbound-file-headers" {
@@ -295,7 +295,7 @@ func TestApplyPrometheusURL_HeaderUpdates(t *testing.T) {
 				t.Fatal(err)
 			}
 			if scenario == "disk-only" {
-				prometheuspkg.Configure(originalURL, nil)
+				configureTestMetrics(t, s, originalURL, nil)
 			}
 			body := map[string]any{"prometheusUrl": target.URL}
 			wantHeader := "old-key"
@@ -327,7 +327,7 @@ func TestApplyPrometheusURL_HeaderUpdates(t *testing.T) {
 			if requests.Load() == 0 || gotHeader.Load() != wantHeader {
 				t.Fatalf("probe header = %v, want %q", gotHeader.Load(), wantHeader)
 			}
-			if config.Load().PrometheusHeaders["X-API-Key"] != wantHeader || prometheuspkg.CurrentHeaders()["X-API-Key"] != wantHeader {
+			if config.Load().PrometheusHeaders["X-API-Key"] != wantHeader || testMetricsHeaders()["X-API-Key"] != wantHeader {
 				t.Fatal("saved and running headers do not match the explicit update")
 			}
 		})
@@ -342,7 +342,7 @@ func TestApplyPrometheusURL_RejectsInvalidBaseURL(t *testing.T) {
 		t.Run(value, func(t *testing.T) {
 			headers := map[string]string{"Authorization": "Bearer original"}
 			s := setupPrometheusIntegrationTest(t, headers)
-			prometheuspkg.Configure("https://original.example", headers)
+			configureTestMetrics(t, s, "https://original.example", headers)
 			if _, err := config.Update(func(c *config.Config) {
 				c.PrometheusURL = "https://original.example"
 				c.PrometheusHeaders = headers
@@ -357,7 +357,7 @@ func TestApplyPrometheusURL_RejectsInvalidBaseURL(t *testing.T) {
 			if rec := applyPrometheus(s, string(body)); rec.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 			}
-			currentURL, currentHeaders := prometheuspkg.CurrentConfig()
+			currentURL, currentHeaders := currentTestIntegrations().Metrics.CurrentConfig()
 			if !reflect.DeepEqual(before, config.Load()) || currentURL != before.PrometheusURL || !reflect.DeepEqual(currentHeaders, headers) {
 				t.Fatal("invalid URL changed saved or running credentials")
 			}

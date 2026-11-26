@@ -242,7 +242,7 @@ func (d chartDeps) unconnected(ctx context.Context) error {
 // productionChartDeps runs a chart's queries on one store handle, and its
 // check only on the connection that handle was taken from.
 func productionChartDeps(ctx context.Context, client *Client) chartDeps {
-	cache := k8s.GetResourceCache()
+	cache := client.cache
 	stores := client.chartStores(ctx)
 	return chartDeps{gke: stores.native, supplement: stores.supplement, q: stores.standard, resolve: BoundResolver(client, stores.standard.conn, chartResolverFor(client, cache)), cache: cache, connectErr: stores.standard.err}
 }
@@ -330,7 +330,7 @@ func (h Routes) handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 	// resolved by ownership, never guessed from the workload's name.
 	var scope *PodScope
 	if !strings.EqualFold(kind, "Pod") && !strings.EqualFold(kind, "Node") {
-		cache := k8s.GetResourceCache()
+		cache := client.cache
 		if cache == nil {
 			writeError(w, http.StatusServiceUnavailable, "cluster cache not ready")
 			return
@@ -520,7 +520,7 @@ func (d chartDeps) readConventionalChart(ctx context.Context, kind, namespace, n
 	resp.Result, resp.Partial = a.Result, a.Partial
 	if kind != "Cluster" && kind != "Namespace" && len(a.Result.Series) == 0 {
 		resp.Query = a.Query
-		resp.Hint = detectCRIDockerHint(kind, namespace, name)
+		resp.Hint = detectCRIDockerHint(d.cache, kind, namespace, name)
 		log.Printf("[prometheus] Empty result for %s, query: %q", subject, a.Query)
 		errorlog.Record("prometheus", "warning", "empty result for %s: %q", subject, a.Query)
 	}
@@ -841,13 +841,12 @@ const criDockerHint = "This pod's node uses the Docker container runtime (cri-do
 // node using cri-docker, which is known to cause missing cAdvisor labels.
 // For Pods it checks the specific node; for workloads it checks all nodes
 // running pods that match the workload name prefix.
-func detectCRIDockerHint(kind, namespace, name string) string {
+func detectCRIDockerHint(cache *k8s.ResourceCache, kind, namespace, name string) string {
 	// Node metrics use node-exporter, not cAdvisor — cri-docker is irrelevant.
 	if strings.EqualFold(kind, "Node") {
 		return ""
 	}
 
-	cache := k8s.GetResourceCache()
 	if cache == nil || cache.Nodes() == nil {
 		return ""
 	}

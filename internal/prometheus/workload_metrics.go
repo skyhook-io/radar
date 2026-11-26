@@ -79,9 +79,9 @@ func (h Routes) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	generation := client.DiscoveryGeneration()
-	epoch := client.backendEpoch()
+	epoch := client.BackendEpoch()
 	config, job, configured := client.workloadMetricsConfig()
-	cache := k8s.GetResourceCache()
+	cache := client.cache
 	if cache == nil {
 		writeError(w, http.StatusServiceUnavailable, "cluster cache not ready")
 		return
@@ -124,7 +124,7 @@ func (h Routes) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 		if g != nil && g.fallback {
 			mergeGKEResources(ctx, g, &resp, scope, start, end, step)
 		}
-		if (g != nil && g != client.gkeChartStore()) || client != GetClient() || generation != client.DiscoveryGeneration() || epoch != client.backendEpoch() {
+		if (g != nil && g != client.gkeChartStore()) || client.Closed() || generation != client.DiscoveryGeneration() || epoch != client.BackendEpoch() {
 			writeError(w, http.StatusConflict, "metrics connection changed; retry the request")
 			return
 		}

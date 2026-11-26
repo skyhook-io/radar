@@ -37,11 +37,9 @@ func TestAttributionChurnRetainsOnlyUnchangedPairs(t *testing.T) {
 }
 
 func TestConnectionChangeClearsAttributionTimers(t *testing.T) {
-	Initialize(nil, nil, "test", nil)
-	defer Reset()
-	for _, change := range []func(){func() { SetManualURL("http://changed:9090") }, func() { SetHeaders(map[string]string{"X-Scope-OrgID": "changed"}) }, Reset} {
+	c := testClient(t, "test", nil)
+	for _, change := range []func(){func() { c.Configure("http://changed:9090", nil) }, func() { c.Configure("http://changed:9090", map[string]string{"X-Scope-OrgID": "changed"}) }, func() { _ = c.Close() }} {
 		ctx, cancel := context.WithCancel(context.Background())
-		c := GetClient()
 		c.mu.Lock()
 		c.workloadAttributionEntries = map[string]*workloadAttributionEntry{"recent": {started: time.Now(), cancel: cancel}}
 		c.mu.Unlock()

@@ -10,9 +10,9 @@ import (
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/k8s"
 	internalopencost "github.com/skyhook-io/radar/internal/opencost"
-	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
@@ -21,12 +21,7 @@ func setupKubecostIntegrationTest(t *testing.T) *Server {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("USERPROFILE", dir)
-	original := internalopencost.ConfigSnapshot()
-	t.Cleanup(func() { _ = internalopencost.Configure(original) })
-	if err := internalopencost.Configure(internalopencost.ManagerConfig{Source: internalopencost.SourceAuto}); err != nil {
-		t.Fatal(err)
-	}
-	return &Server{}
+	return serverWithTestIntegrations(t, connectionruntime.Settings{})
 }
 
 func TestApplyCostSourceRejectsCredentialBearingURL(t *testing.T) {
@@ -55,9 +50,7 @@ func TestApplyAutomaticSourceRejectsNoSourceAndRestoresPreviousConfig(t *testing
 		Source: internalopencost.SourcePrometheus,
 		URL:    "https://previous.example.com/model",
 	}
-	if err := internalopencost.Configure(previousManager); err != nil {
-		t.Fatal(err)
-	}
+	editTestIntegrations(t, s, func(settings *connectionruntime.Settings) { settings.Cost = previousManager })
 
 	promServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -67,13 +60,8 @@ func TestApplyAutomaticSourceRejectsNoSourceAndRestoresPreviousConfig(t *testing
 		}
 		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
 	}))
-	prometheuspkg.Initialize(nil, nil, "test", nil)
-	prometheuspkg.SetManualURL(promServer.URL)
-	t.Cleanup(func() {
-		promServer.Close()
-		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "", nil)
-	})
+	configureTestMetrics(t, s, promServer.URL, nil)
+	t.Cleanup(promServer.Close)
 
 	rec := httptest.NewRecorder()
 	s.handleApplyCostSource(rec, httptest.NewRequest(http.MethodPut, "/api/integrations/cost", strings.NewReader(`{"source":"auto"}`)))
@@ -83,7 +71,7 @@ func TestApplyAutomaticSourceRejectsNoSourceAndRestoresPreviousConfig(t *testing
 	if saved := config.Load(); saved.CostSource != "prometheus" || saved.KubecostURL != "https://previous.example.com/model" {
 		t.Fatalf("failed candidate changed persisted config: %#v", saved)
 	}
-	if restored := internalopencost.ConfigSnapshot(); restored.Source != previousManager.Source || restored.URL != previousManager.URL {
+	if restored := currentTestIntegrations().Cost.ConfigSnapshot(); restored.Source != previousManager.Source || restored.URL != previousManager.URL {
 		t.Fatalf("manager config = %#v, want %#v", restored, previousManager)
 	}
 }
@@ -94,9 +82,9 @@ func TestKubecostEnvironmentConfigIsReadOnlyAndRedacted(t *testing.T) {
 	t.Setenv("RADAR_KUBECOST_URL", "https://cost.example.com/model")
 	t.Setenv("RADAR_KUBECOST_CLUSTER_ID", "prod-a")
 	t.Setenv("RADAR_KUBECOST_API_KEY", "env-secret")
-	if err := internalopencost.ConfigureStartup(internalopencost.ManagerConfig{Source: internalopencost.SourceAuto}); err != nil {
-		t.Fatal(err)
-	}
+	editTestIntegrations(t, s, func(settings *connectionruntime.Settings) {
+		settings.Cost, settings.CostEnv, settings.CostError = internalopencost.EnvironmentConfiguration()
+	})
 
 	put := httptest.NewRecorder()
 	s.handleApplyCostSource(put, httptest.NewRequest(http.MethodPut, "/api/integrations/cost", strings.NewReader(`{"source":"auto"}`)))
@@ -125,11 +113,11 @@ func TestKubecostEnvironmentConfigIsReadOnlyAndRedacted(t *testing.T) {
 func TestGetConfigUsesLiveKubecostConfigWithoutMutatingEffectiveConfig(t *testing.T) {
 	s := setupKubecostIntegrationTest(t)
 	s.effectiveConfig = &config.Config{CostSource: "auto", KubecostURL: "https://stale.example.com/model", KubecostAPIKey: "stale"}
-	if err := internalopencost.Configure(internalopencost.ManagerConfig{
-		Source: internalopencost.SourceKubecost, URL: "https://live.example.com/model", APIKey: "live-secret", ClusterID: "prod-a",
-	}); err != nil {
-		t.Fatal(err)
-	}
+	editTestIntegrations(t, s, func(settings *connectionruntime.Settings) {
+		settings.Cost = internalopencost.ManagerConfig{
+			Source: internalopencost.SourceKubecost, URL: "https://live.example.com/model", APIKey: "live-secret", ClusterID: "prod-a",
+		}
+	})
 
 	get := httptest.NewRecorder()
 	s.handleGetConfig(get, httptest.NewRequest(http.MethodGet, "/api/config", nil))

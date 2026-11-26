@@ -10,7 +10,6 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/cloud"
-	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 const (
@@ -69,41 +68,36 @@ type RightsizingScanManager struct {
 	prepare    func() (scanRunner, func() bool)
 }
 
-var scanManager = sync.OnceValue(func() *RightsizingScanManager {
-	m := newRightsizingScanManager()
-	k8s.OnBeforeContextSwitch(func(string) { m.Invalidate() })
-	k8s.OnContextSwitch(func(string) { m.Invalidate() })
-	k8s.OnNamespaceRescope(func(string) { m.Invalidate() })
-	return m
-})
+func (client *Client) newRightsizingScanManager() *RightsizingScanManager {
+	return newRightsizingScanManager(func() (scanRunner, func() bool) {
+		cache := client.cache
+		generation, epoch := client.DiscoveryGeneration(), client.BackendEpoch()
+		return func(ctx context.Context, scope RightsizingScanScope, publish func(RightsizingScanResponse)) RightsizingScanResponse {
+				return runRightsizingScan(ctx, scope, client, cache, publish)
+			}, func() bool {
+				return !client.Closed() && client.DiscoveryGeneration() == generation && client.BackendEpoch() == epoch
+			}
+	})
+}
 
-func RightsizingScans() *RightsizingScanManager { return scanManager() }
+func NewUnavailableRightsizingScans(reason error) *RightsizingScanManager {
+	return newRightsizingScanManager(func() (scanRunner, func() bool) {
+		return func(_ context.Context, scope RightsizingScanScope, _ func(RightsizingScanResponse)) RightsizingScanResponse {
+			result := newRightsizingScanResponse(time.Now().UTC(), scope)
+			result.Reason = reason.Error()
+			return result
+		}, func() bool { return true }
+	})
+}
 
-func newRightsizingScanManager() *RightsizingScanManager {
+func newRightsizingScanManager(prepare func() (scanRunner, func() bool)) *RightsizingScanManager {
 	return &RightsizingScanManager{
 		jobs: map[string]*rightsizingScanJob{}, duration: rightsizingScanDuration, retention: rightsizingScanRetention,
-		prepare: func() (scanRunner, func() bool) {
-			client, connectionErr := ClientForOperation()
-			cache := k8s.GetResourceCache()
-			var generation, epoch uint64
-			if client != nil {
-				generation, epoch = client.DiscoveryGeneration(), client.backendEpoch()
-			}
-			valid := func() bool {
-				return GetClient() == client && k8s.GetResourceCache() == cache &&
-					(client == nil || client.DiscoveryGeneration() == generation && client.backendEpoch() == epoch)
-			}
-			return func(ctx context.Context, scope RightsizingScanScope, publish func(RightsizingScanResponse)) RightsizingScanResponse {
-				if connectionErr != nil {
-					result := newRightsizingScanResponse(time.Now().UTC(), scope)
-					result.Reason = connectionErr.Error()
-					return result
-				}
-				return runRightsizingScan(ctx, scope, client, cache, publish)
-			}, valid
-		},
+		prepare: prepare,
 	}
 }
+
+func (client *Client) RightsizingScans() *RightsizingScanManager { return client.scans }
 
 func (m *RightsizingScanManager) Generation() uint64 {
 	m.mu.Lock()

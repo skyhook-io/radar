@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/skyhook-io/radar/internal/cloud"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
@@ -13,11 +14,9 @@ import (
 // cluster. OpenObserve routes the metrics client through Hub's relay, which
 // enforces the cluster matchers; the first matcher is kept for display.
 // Prometheus restores the configured URL or discovery exactly as it was before.
-func ApplyHubMetricsSource(d cloud.MetricsSourceDecision) {
+func ApplyHubMetricsSource(runtime *connectionruntime.Runtime, d cloud.MetricsSourceDecision) {
 	if d.Response.Source != cloud.MetricsSourceOpenObserve {
-		if prometheuspkg.DisableRelay() {
-			prometheuspkg.Prewarm()
-		}
+		runtime.SetRelay(nil)
 		return
 	}
 	source := prom.MetricsSource{
@@ -33,7 +32,7 @@ func ApplyHubMetricsSource(d cloud.MetricsSourceDecision) {
 		m := d.Response.Matchers[0]
 		source.ClusterLabel = &prom.MetricsSourceLabel{Name: m.Name, Value: m.Value}
 	}
-	err := prometheuspkg.EnableRelay(prometheuspkg.RelayConfig{
+	err := runtime.SetRelay(&prometheuspkg.RelayConfig{
 		Key:          d.Key,
 		Endpoint:     d.Endpoint,
 		Address:      cloud.MetricsRelayAddress,

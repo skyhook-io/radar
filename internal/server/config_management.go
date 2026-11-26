@@ -10,8 +10,6 @@ import (
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/internal/opencost"
-	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/settings"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
@@ -41,13 +39,14 @@ func (s *Server) requireConfigEditable(w http.ResponseWriter, r *http.Request) b
 }
 
 func (s *Server) handleGetOperatorConfig(w http.ResponseWriter, r *http.Request) {
-	url, headers := prometheuspkg.CurrentConfig()
+	configured := s.integrationRuntime.Settings()
+	url, headers := configured.Metrics.URL, configured.Metrics.Headers
 	keys := make([]string, 0, len(headers))
 	for key := range headers {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	cost := opencost.ConfigSnapshot()
+	cost := configured.Cost
 	effective := config.Config{
 		PrometheusURL:     prom.SafeAddress(url),
 		CostSource:        string(cost.Source),
@@ -66,10 +65,10 @@ func (s *Server) handleGetOperatorConfig(w http.ResponseWriter, r *http.Request)
 		effective.HistoryLimit = s.effectiveConfig.HistoryLimit
 		effective.OpenCostCurrency = s.effectiveConfig.OpenCostCurrency
 	}
-	argoURL, insecure, envManaged := argocd.EnvManagedConfig()
+	envManaged := configured.ArgoEnv
 	if envManaged {
-		effective.ArgoCDURL = argoURL
-		effective.ArgoCDInsecureTLS = insecure
+		effective.ArgoCDURL = configured.ArgoCD.URL
+		effective.ArgoCDInsecureTLS = configured.ArgoCD.InsecureTLS
 	} else {
 		file := config.Load()
 		if argocd.ValidateServerURL(file.ArgoCDURL) == nil {
@@ -78,7 +77,7 @@ func (s *Server) handleGetOperatorConfig(w http.ResponseWriter, r *http.Request)
 		effective.ArgoCDInsecureTLS = file.ArgoCDInsecureTLS
 	}
 	argoError := ""
-	if argocd.EnvManagedError() != "" {
+	if configured.ArgoError != nil {
 		argoError = "Argo CD startup configuration is invalid. Ask the operator to check Radar's logs."
 	}
 	s.writeJSON(w, configResponse{
@@ -91,10 +90,17 @@ func (s *Server) handleGetOperatorConfig(w http.ResponseWriter, r *http.Request)
 		PrometheusHeadersManaged: true,
 		PrometheusURLFromFlag:    s.promURLFlag,
 		KubecostAPIKeySet:        cost.APIKey != "",
-		KubecostEnvManaged:       opencost.IsEnvManaged(),
-		KubecostEnvError:         opencost.EnvManagedError(),
-		ArgoCDTokenSet:           argocd.TokenSet(),
+		KubecostEnvManaged:       configured.CostEnv,
+		KubecostEnvError:         integrationErrorText(configured.CostError),
+		ArgoCDTokenSet:           configured.ArgoCD.Token != "",
 		ArgoCDEnvManaged:         envManaged,
 		ArgoCDEnvError:           argoError,
 	})
+}
+
+func integrationErrorText(err error) string {
+	if err != nil {
+		return err.Error()
+	}
+	return ""
 }

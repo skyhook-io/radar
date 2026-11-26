@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"io"
 	"maps"
 	"time"
 
@@ -46,6 +47,9 @@ func swapTestConnectionLocked(next *Connection) {
 	prev := installedConn.Load()
 	installedConn.Store(next)
 	connectionStatusMu.Lock()
+	if prev != nil && next != nil && next.integrations.Load() == nil {
+		next.integrations.Store(prev.integrations.Load())
+	}
 	if serving != nil && serving == prev && next != nil {
 		next.id = prev.id
 		next.done = prev.done
@@ -547,6 +551,34 @@ func SetTestInformerClient(request *kubernetes.Clientset, informer kubernetes.In
 	return func() { restoreTestConnection(prev) }
 }
 
+func SetTestIntegrations(set io.Closer) func() {
+	clientMu.Lock()
+	conn := Current()
+	if conn == nil {
+		conn = &Connection{}
+		installedConn.Store(conn)
+	}
+	replacement := &integrationSlot{set: set}
+	slot := conn.integrations.Swap(replacement)
+	clientMu.Unlock()
+	return func() {
+		conn.integrations.CompareAndSwap(replacement, slot)
+		if current := Current(); current != nil {
+			current.integrations.CompareAndSwap(replacement, slot)
+		}
+		if set != nil {
+			_ = set.Close()
+		}
+	}
+}
+
+func AdmitTestIntegrations(build func(context.Context, *Connection) (io.Closer, func())) bool {
+	contextOpMu.Lock()
+	defer contextOpMu.Unlock()
+	conn := Current()
+	return admit(context.Background(), conn, ConnectionStatus{State: StateConnected, Context: conn.ContextName()}, build)
+}
+
 func PublishTestConnectionStatus(status ConnectionStatus) {
 	if status.State == StateConnected && ServingConnectionID() == "" {
 		clientMu.Lock()
@@ -946,6 +978,10 @@ func SnapshotTestConnection() func() {
 	status, admitted, closed := connectionStatus, serving, admissionsClosed
 	// The ID by value: re-admitting the same connection changes it in place.
 	admittedID := servingIDLocked()
+	var done chan struct{}
+	if admitted != nil {
+		done = admitted.done
+	}
 	previous, name := installedConn.Load(), contextName
 	connectionStatusMu.RUnlock()
 	clientMu.RUnlock()
@@ -955,6 +991,12 @@ func SnapshotTestConnection() func() {
 		connectionStatus, serving, admissionsClosed = status, admitted, closed
 		if admitted != nil {
 			admitted.id = admittedID
+			select {
+			case <-done:
+				done = make(chan struct{})
+			default:
+			}
+			admitted.done = done
 		}
 		installedConn.Store(previous)
 		contextName = name

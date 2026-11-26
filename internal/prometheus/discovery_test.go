@@ -410,23 +410,15 @@ func TestConnectionLive(t *testing.T) {
 // TestReset_CancelsInFlightDiscovery verifies that Reset aborts a detached
 // in-flight discovery, so a superseded run (e.g. an old context's pre-warm after
 // a context switch) stops instead of holding the process discovery gate.
-func TestReset_CancelsInFlightDiscovery(t *testing.T) {
-	clientMu.Lock()
-	saved := globalClient
-	clientMu.Unlock()
-	t.Cleanup(func() { clientMu.Lock(); globalClient = saved; clientMu.Unlock() })
-
+func TestCloseCancelsInFlightDiscovery(t *testing.T) {
 	canceled := make(chan struct{})
-	clientMu.Lock()
-	globalClient = &Client{discoveryCancel: func() { close(canceled) }}
-	clientMu.Unlock()
-
-	Reset()
+	client := &Client{discoveryCancel: func() { close(canceled) }}
+	_ = client.Close()
 
 	select {
 	case <-canceled:
 	case <-time.After(time.Second):
-		t.Fatal("Reset did not cancel the in-flight discovery")
+		t.Fatal("Close did not cancel the in-flight discovery")
 	}
 }
 

@@ -32,10 +32,6 @@ func kubecostTargetFor(conn *k8s.Connection, inCluster bool) kubecostTarget {
 // PrepareCandidate captures discovery and transport before releasing the cluster
 // configuration lock. The returned probe uses only the captured client and
 // config, so a context switch cannot redirect it.
-func PrepareCandidate(config ManagerConfig) (func(context.Context) error, error) {
-	return PrepareCandidateFor(k8s.Current(), k8s.IsInCluster(), config)
-}
-
 func PrepareCandidateFor(conn *k8s.Connection, inCluster bool, config ManagerConfig) (func(context.Context) error, error) {
 	if config.Source == SourcePrometheus || config.Source == SourceAuto && !hasExplicitKubecostConfig(config) {
 		return nil, nil

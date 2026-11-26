@@ -225,6 +225,10 @@ func (p *Resolver) ResolveAll(target k8s.ProfileTarget, details bool) map[config
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	file, revision, err := p.read()
+	return p.resolveAll(file, revision, err, target, details)
+}
+
+func (p *Resolver) resolveAll(file config.ClusterProfiles, revision string, err error, target k8s.ProfileTarget, details bool) map[config.Integration]Selection {
 	selected := make(map[config.Integration]Selection, len(config.IntegrationKinds))
 	for _, kind := range config.IntegrationKinds {
 		selected[kind] = p.resolve(file, revision, err, target, kind, details)
@@ -317,13 +321,6 @@ func settingsWithDefaults(kind config.Integration, s config.IntegrationSettings)
 		}
 	}
 	return s
-}
-
-func (p *Resolver) IsCurrent(selection Selection) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	_, revision, err := p.read()
-	return err == nil && revision == selection.fileRevision
 }
 
 func Legacy(kind config.Integration) (Bundle, string) {

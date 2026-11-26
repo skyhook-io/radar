@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/k8s"
 	internalopencost "github.com/skyhook-io/radar/internal/opencost"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
@@ -18,7 +19,7 @@ import (
 )
 
 func TestOpenCostDetailResponsesIncludeCurrencyWhenUnavailable(t *testing.T) {
-	s := &Server{openCostCurrency: internalopencost.NewCurrencyResolver("GBP")}
+	s := serverWithTestIntegrations(t, connectionruntime.Settings{Currency: "GBP"})
 	tests := []struct {
 		name   string
 		method string
@@ -90,12 +91,6 @@ func TestOpenCostConnectionFailureReason(t *testing.T) {
 }
 
 func TestOpenCostApplicationUsesLatestKubecostDataThrough(t *testing.T) {
-	originalConfig := internalopencost.ConfigSnapshot()
-	t.Cleanup(func() {
-		if err := internalopencost.Configure(originalConfig); err != nil {
-			t.Errorf("restore OpenCost config: %v", err)
-		}
-	})
 	previousContext := k8s.SetTestContextName("fake-test")
 	t.Cleanup(func() { k8s.SetTestContextName(previousContext) })
 
@@ -115,7 +110,9 @@ func TestOpenCostApplicationUsesLatestKubecostDataThrough(t *testing.T) {
 		}
 	}))
 	t.Cleanup(kubecost.Close)
-	if err := internalopencost.Configure(internalopencost.ManagerConfig{
+	cost := internalopencost.NewManager(k8s.Current(), false, nil, nil)
+	t.Cleanup(k8s.SetTestIntegrations(&connectionruntime.Set{Cost: cost}))
+	if err := cost.Configure(internalopencost.ManagerConfig{
 		Source: internalopencost.SourceKubecost, URL: kubecost.URL, ClusterID: "cluster-a", ClusterIDContext: "fake-test",
 	}); err != nil {
 		t.Fatal(err)

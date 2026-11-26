@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"log"
 	"math"
 	"regexp"
@@ -13,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/prometheus/common/model"
@@ -138,12 +139,8 @@ const openObserveMetricNamesNote = "listing metric names isn't available for met
 
 // metricsFromOpenObserve reports whether metrics are being served from
 // OpenObserve (local or through Radar Hub) right now.
-func metricsFromOpenObserve() bool {
-	if !prometheus.RelayActive() {
-		return false
-	}
-	c := prometheus.GetClient()
-	if c == nil {
+func metricsFromOpenObserve(c *prometheus.Client) bool {
+	if !c.RelayActive() {
 		return false
 	}
 	st := c.GetStatus()
@@ -180,7 +177,8 @@ func handleQueryPrometheus(ctx context.Context, req *mcp.CallToolRequest, input 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	p, connErr := connectProm(ctx)
+	set := connectionruntime.Capture(ctx)
+	p, connErr := connectProm(ctx, set)
 	if connErr != nil {
 		return nil, nil, connErr
 	}
@@ -240,7 +238,7 @@ func handleQueryPrometheus(ctx context.Context, req *mcp.CallToolRequest, input 
 	if len(result.Series) == 0 {
 		resp.Note = partialNote + "query returned no data — verify metric and label names with discover_metrics"
 		prefix := promMetricFamilyPrefix(input.Query)
-		if prefix != "" && !metricsFromOpenObserve() {
+		if prefix != "" && !metricsFromOpenObserve(set.Metrics) {
 			discoveryCtx, discoveryCancel := context.WithTimeout(ctx, promSuggestionTimeout)
 			values, truncated, discoveryErr := discoverPromLabelValues(
 				discoveryCtx,
@@ -294,14 +292,15 @@ func handleDiscoverMetrics(ctx context.Context, req *mcp.CallToolRequest, input 
 		limit = promDiscoverMaxLimit
 	}
 
-	if (input.Label == "" || input.Label == "__name__") && metricsFromOpenObserve() {
+	set := connectionruntime.Capture(ctx)
+	if (input.Label == "" || input.Label == "__name__") && metricsFromOpenObserve(set.Metrics) {
 		return toJSONResult(discoverMetricsResponse{Match: input.Match, Note: openObserveMetricNamesNote})
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, promQueryTimeout)
 	defer cancel()
 
-	p, connErr := connectProm(ctx)
+	p, connErr := connectProm(ctx, set)
 	if connErr != nil {
 		return nil, nil, connErr
 	}
@@ -576,7 +575,7 @@ func handleGetPrometheusRules(ctx context.Context, req *mcp.CallToolRequest, inp
 	ctx, cancel := context.WithTimeout(ctx, promQueryTimeout)
 	defer cancel()
 
-	p, connErr := connectProm(ctx)
+	p, connErr := connectProm(ctx, connectionruntime.Capture(ctx))
 	if connErr != nil {
 		return nil, nil, connErr
 	}
@@ -755,8 +754,8 @@ func adjustStep(window time.Duration, stepStr string, maxPoints int) (time.Durat
 	return time.Duration(math.Ceil(step.Seconds())) * time.Second, nil
 }
 
-func connectProm(ctx context.Context) (*prom.Client, error) {
-	client, connectionErr := connectionruntime.CaptureMetrics(ctx)
+func connectProm(ctx context.Context, set connectionruntime.Set) (*prom.Client, error) {
+	client, connectionErr := set.MetricsClient()
 	if connectionErr != nil {
 		return nil, connectionErr
 	}

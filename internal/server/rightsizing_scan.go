@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/connectionruntime"
+
 	"github.com/go-chi/chi/v5"
 
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
@@ -21,10 +23,23 @@ func (s *Server) handleRightsizingScan(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), rightsizingScanTimeout)
 	defer cancel()
 	r = r.WithContext(ctx)
-	manager := prometheuspkg.RightsizingScans()
-	generation := manager.Generation()
+	set := connectionruntime.Capture(ctx)
 	id := chi.URLParam(r, "scanId")
 	var namespaces []string
+	if id == "" {
+		namespaces = s.parseNamespacesForUser(r)
+		if readscope.NoNamespaceAccess(namespaces) && hasExplicitNamespaceFilter(r) {
+			s.writeError(w, http.StatusForbidden, "no access to the requested namespace(s)")
+			return
+		}
+	}
+	manager := set.RightsizingScans()
+	if manager == nil {
+		_, err := set.MetricsClient()
+		s.writeRightsizingScanError(w, err)
+		return
+	}
+	generation := manager.Generation()
 	if id != "" {
 		original, err := manager.Namespaces(ctx, id, generation)
 		if err != nil {
@@ -32,12 +47,10 @@ func (s *Server) handleRightsizingScan(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		namespaces = s.getUserNamespaces(r, original)
-	} else {
-		namespaces = s.parseNamespacesForUser(r)
-	}
-	if readscope.NoNamespaceAccess(namespaces) && (id != "" || hasExplicitNamespaceFilter(r)) {
-		s.writeError(w, http.StatusForbidden, "no access to the requested namespace(s)")
-		return
+		if readscope.NoNamespaceAccess(namespaces) {
+			s.writeError(w, http.StatusForbidden, "no access to the requested namespace(s)")
+			return
+		}
 	}
 	request := prometheuspkg.RightsizingScanRequest{
 		Generation: generation, Namespaces: namespaces, Scope: s.resolveRightsizingScanScope(r, namespaces),
@@ -45,6 +58,10 @@ func (s *Server) handleRightsizingScan(w http.ResponseWriter, r *http.Request) {
 	}
 	if request.Cancel {
 		request.Wait = 5 * time.Second
+	}
+	if (set.Metrics != nil && set.Metrics.Closed()) || manager.Generation() != generation {
+		s.writeRightsizingScanError(w, prometheuspkg.ErrRightsizingScanScopeChanged)
+		return
 	}
 	result, err := manager.Resolve(ctx, request)
 	if err != nil {

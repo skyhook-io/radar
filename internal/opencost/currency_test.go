@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	pkgopencost "github.com/skyhook-io/radar/pkg/opencost"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -450,31 +449,29 @@ func TestCurrencyResolverDoesNotRetainDetectionWhenActiveConfigBecomesAmbiguous(
 }
 
 func TestClusterCurrencyDetectionAllowed(t *testing.T) {
-	prometheuspkg.Initialize(nil, nil, "", nil)
-	originalCostConfig := ConfigSnapshot()
-	t.Cleanup(func() {
-		prometheuspkg.SetManualURL("")
-		_ = Configure(originalCostConfig)
-	})
+	client := testMetrics(t, "")
+	cost := NewManager(nil, false, client, nil)
+	t.Cleanup(func() { _ = cost.Close() })
+	resolver := NewConnectionCurrencyResolver("", nil, cost, client)
 
-	if !clusterCurrencyDetectionAllowed() {
+	if !resolver.clusterDetectionAllowed() {
 		t.Fatal("cluster currency detection disabled without a manual Prometheus URL")
 	}
-	prometheuspkg.SetManualURL("https://prometheus.example.com")
-	if clusterCurrencyDetectionAllowed() {
+	client.Configure("https://prometheus.example.com", nil)
+	if resolver.clusterDetectionAllowed() {
 		t.Fatal("cluster currency detection enabled with a manual Prometheus URL")
 	}
-	if err := Configure(ManagerConfig{Source: SourceKubecost}); err != nil {
+	if err := cost.Configure(ManagerConfig{Source: SourceKubecost}); err != nil {
 		t.Fatal(err)
 	}
-	if !clusterCurrencyDetectionAllowed() {
+	if !resolver.clusterDetectionAllowed() {
 		t.Fatal("Kubecost source should use currency evidence from the connected cluster")
 	}
-	if err := Configure(ManagerConfig{Source: SourceAuto}); err != nil {
+	if err := cost.Configure(ManagerConfig{Source: SourceAuto}); err != nil {
 		t.Fatal(err)
 	}
-	prometheuspkg.SetManualURL("")
-	if !clusterCurrencyDetectionAllowed() {
+	client.Configure("", nil)
+	if !resolver.clusterDetectionAllowed() {
 		t.Fatal("cluster currency detection did not resume after clearing the manual Prometheus URL")
 	}
 }

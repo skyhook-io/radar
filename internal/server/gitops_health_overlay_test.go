@@ -15,6 +15,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/pkg/argoapi"
 	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
@@ -250,10 +251,6 @@ func TestArgoAPIHealthFailure_SpeaksToTheUser(t *testing.T) {
 }
 
 func TestArgoAPIHealth_SavedSettingsFailureNamesSettings(t *testing.T) {
-	t.Cleanup(func() { connections.RegisterRefresh(nil) })
-	t.Cleanup(func() { argocd.SetConfig("", "", false, true) })
-	argocd.SetConfig("", "", false, true)
-	s := &Server{}
 	for _, tc := range []struct {
 		name string
 		err  error
@@ -264,7 +261,7 @@ func TestArgoAPIHealth_SavedSettingsFailureNamesSettings(t *testing.T) {
 		{"not configured", errors.New("cluster disconnected"), ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			connections.RegisterRefresh(func(config.Integration) error { return tc.err })
+			s := serverWithTestIntegrations(t, connectionruntime.Settings{ArgoError: tc.err})
 			health, err := s.argoAPIHealth(context.Background(), "argocd", "web")
 			got := ""
 			if err != nil {
@@ -287,7 +284,7 @@ func hungArgoServer(t *testing.T) *httptest.Server {
 		}
 	}))
 	t.Cleanup(func() {
-		argocd.SetConfig("", "", false, true) // stop any probe before the server goes
+		currentTestIntegrations().ArgoCD.SetConfig("", "", false, true) // stop any probe before the server goes
 		close(release)
 		srv.Close()
 	})
@@ -299,7 +296,7 @@ func hungArgoServer(t *testing.T) *httptest.Server {
 func TestArgoAPIHealth_SaysItIsStillConnecting(t *testing.T) {
 	s := setupArgoCDTest(t)
 	srv := hungArgoServer(t)
-	argocd.SetConfig(srv.URL, "argo-secret", false, true)
+	currentTestIntegrations().ArgoCD.SetConfig(srv.URL, "argo-secret", false, true)
 
 	app := overlayApp("Degraded")
 	tree := overlayTree(gitopstree.HealthModeAppTree, false)
@@ -336,7 +333,7 @@ func TestOverlayArgoAPIHealth_RetryingShowsTheFailureAndAsksAgain(t *testing.T) 
 // the failure with the page told to keep asking while Radar retries.
 func TestArgoAPIHealth_RetryingAfterAFailedConnect(t *testing.T) {
 	s := setupArgoCDTest(t)
-	argocd.SetConfig("http://127.0.0.1:1", "argo-secret", false, true)
+	currentTestIntegrations().ArgoCD.SetConfig("http://127.0.0.1:1", "argo-secret", false, true)
 	app := overlayApp("Degraded")
 
 	tree := overlayTree(gitopstree.HealthModeAppTree, false)
@@ -345,7 +342,7 @@ func TestArgoAPIHealth_RetryingAfterAFailedConnect(t *testing.T) {
 		t.Fatalf("first load: pending %v, error %q; want pending", tree.HealthAPIPending, tree.HealthAPIError)
 	}
 	deadline := time.Now().Add(10 * time.Second)
-	for argocd.LastProbeError() == nil {
+	for currentTestIntegrations().ArgoCD.LastProbeError() == nil {
 		if time.Now().After(deadline) {
 			t.Fatal("the background connect never failed")
 		}
@@ -399,7 +396,7 @@ func TestArgoAPIHealth_CachedTimeoutKeepsThePageAsking(t *testing.T) {
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(func() {
-		argocd.SetConfig("", "", false, true)
+		currentTestIntegrations().ArgoCD.SetConfig("", "", false, true)
 		close(release)
 		srv.Close()
 	})
@@ -412,7 +409,7 @@ func TestArgoAPIHealth_CachedTimeoutKeepsThePageAsking(t *testing.T) {
 	}
 	// Another app's server answer clears the shared failure flag.
 	_, _ = s.argoAPIHealth(context.Background(), "argocd", "fast")
-	if argocd.Retrying() {
+	if currentTestIntegrations().ArgoCD.Retrying() {
 		t.Fatal("setup: another app's answer should have cleared the shared failure")
 	}
 

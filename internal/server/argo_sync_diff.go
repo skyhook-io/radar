@@ -65,10 +65,20 @@ func (s *Server) handleArgoSyncDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	manager := connectionruntime.SetFor(conn).ArgoCD
+	if manager == nil {
+		s.writeError(w, 503, "Connect the Argo CD API to compare rendered resources.")
+		return
+	}
 	client, ok := manager.Get()
 	if !ok {
 		s.writeError(w, 503, "Connect the Argo CD API to compare rendered resources.")
 		return
+	}
+	admissionCurrent := func() bool {
+		return k8s.StillBound(ctx) && conn.ResourceCache() == cache && connectionruntime.SetFor(conn).ArgoCD == manager
+	}
+	changed := func() {
+		s.writeError(w, 409, "The Application or connection changed during comparison. Reopen this sync to retry.")
 	}
 	project, _, _ := unstructured.NestedString(app.Object, "spec", "project")
 	query := argoapi.ApplicationQuery{AppName: name, AppNamespace: ns, Project: project}
@@ -77,16 +87,28 @@ func (s *Server) handleArgoSyncDiff(w http.ResponseWriter, r *http.Request) {
 		return err == nil && uid == string(app.GetUID()) && generation == app.GetGeneration()
 	}
 	if !matches() {
+		if !admissionCurrent() {
+			changed()
+			return
+		}
 		s.writeError(w, 409, "The connected Argo CD server could not confirm this Application and its source settings.")
 		return
 	}
 	before, err := client.RevisionManifests(ctx, query, previous)
 	if err != nil {
+		if !admissionCurrent() {
+			changed()
+			return
+		}
 		s.writeError(w, 502, "Argo CD could not render the previous Git revision.")
 		return
 	}
 	after, err := client.RevisionManifests(ctx, query, revision)
 	if err != nil {
+		if !admissionCurrent() {
+			changed()
+			return
+		}
 		s.writeError(w, 502, "Argo CD could not render the selected Git revision.")
 		return
 	}
@@ -101,8 +123,8 @@ func (s *Server) handleArgoSyncDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stillMatches := matches()
-	if current, ok := manager.Get(); !stillMatches || !ok || current != client || !k8s.StillBound(ctx) || conn.ResourceCache() != cache || connectionruntime.SetFor(conn).ArgoCD != manager {
-		s.writeError(w, 409, "The Application or connection changed during comparison. Reopen this sync to retry.")
+	if current, ok := manager.Get(); !stillMatches || !ok || current != client || !admissionCurrent() {
+		changed()
 		return
 	}
 	s.writeJSON(w, diff)

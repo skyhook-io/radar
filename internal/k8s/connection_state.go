@@ -158,6 +158,19 @@ func RegisterIntegrationBuilder(build func(context.Context, *Connection) (io.Clo
 	buildIntegrations = build
 }
 
+// ReplaceIntegrations publishes a prepared replacement for the serving build.
+// Settings writers hold the context operation gate. Retirement also takes
+// connectionStatusMu, since shutdown does not wait for that gate.
+func ReplaceIntegrations(conn *Connection, before, after io.Closer) bool {
+	connectionStatusMu.Lock()
+	defer connectionStatusMu.Unlock()
+	if admissionsClosed || conn == nil || serving != conn || conn.Integrations() != before {
+		return false
+	}
+	conn.integrations.Store(&integrationSlot{set: after})
+	return true
+}
+
 var buildIntegrations func(context.Context, *Connection) (io.Closer, func())
 
 // AdmitStartup uses the same gate as a settings commit. The startup build can

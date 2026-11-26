@@ -33,6 +33,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/cloud"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -404,18 +405,17 @@ func TestMain(m *testing.M) {
 		panic("InitTestResourceCache: " + err.Error())
 	}
 
-	// Mark cluster as connected so requireConnected guards pass
-	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{
-		State:   k8s.StateConnected,
-		Context: "fake-test",
-	})
+	integrationRuntime := connectionruntime.New(nil, connectionruntime.Settings{})
+	if !k8s.AdmitTestIntegrations(integrationRuntime.Build) {
+		panic("admit smoke test integrations")
+	}
 
 	// Initialize the timeline store so /api/changes endpoints work
 	if err := timeline.InitStore(timeline.DefaultStoreConfig()); err != nil {
 		panic("InitStore: " + err.Error())
 	}
 
-	srv := New(Config{DevMode: true})
+	srv := New(Config{DevMode: true, IntegrationRuntime: integrationRuntime})
 	testServerSrv = srv
 	testServer = httptest.NewServer(srv.Handler())
 

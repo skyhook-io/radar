@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/timeline"
@@ -357,11 +358,7 @@ func TestHandleDiagnoseMetricsOmittedWhenPrometheusAbsent(t *testing.T) {
 	setupFakeCacheForDiagnoseTests(t)
 	timeline.ResetStore()
 	t.Cleanup(timeline.ResetStore)
-	prometheus.Initialize(nil, nil, "test-ctx", nil)
-	t.Cleanup(func() {
-		prometheus.Reset()
-		prometheus.Initialize(nil, nil, "", nil)
-	})
+	installTestMetrics(t, "")
 	ctx := withClusterAdmin(t, "admin")
 	grantDiagnoseRead(t, "admin")
 
@@ -378,12 +375,7 @@ func TestHandleDiagnoseMetricsReportsUnreachablePrometheus(t *testing.T) {
 	setupFakeCacheForDiagnoseTests(t)
 	timeline.ResetStore()
 	t.Cleanup(timeline.ResetStore)
-	prometheus.Initialize(nil, nil, "test-ctx", nil)
-	prometheus.SetManualURL("http://127.0.0.1:1")
-	t.Cleanup(func() {
-		prometheus.Reset()
-		prometheus.Initialize(nil, nil, "", nil)
-	})
+	installTestMetrics(t, "http://127.0.0.1:1")
 	ctx := withClusterAdmin(t, "admin")
 	grantDiagnoseRead(t, "admin")
 
@@ -982,7 +974,7 @@ func TestHandleDiagnoseMetricsScopedQueries(t *testing.T) {
 			f := setupFakeProm(t)
 			f.rangeBodyFunc = metricsMatrixForRequest("1")
 			if tc.configure {
-				if err := prometheus.SetWorkloadMetricsScope(prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "a"}}, ""); err != nil {
+				if err := connectionruntime.SetFor(k8s.Current()).Metrics.SetWorkloadMetricsScope(prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "a"}}, ""); err != nil {
 					t.Fatal(err)
 				}
 				f.queryBodyFunc = func(params url.Values) string {
@@ -1039,7 +1031,7 @@ func TestHandleDiagnoseMetricsCheckOnAMovedConnectionWithholds(t *testing.T) {
 				return func(_ context.Context, req prometheus.ViewScopeRequest) (prometheus.ViewScope, error) {
 					checks++
 					if moved {
-						prometheus.SetManualURL(srvB.URL)
+						connectionruntime.SetFor(k8s.Current()).Metrics.Configure(srvB.URL, nil)
 					}
 					filters := map[string]string{}
 					for _, m := range req.Metrics {

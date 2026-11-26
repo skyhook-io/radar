@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 
+	"github.com/skyhook-io/radar/internal/connectionruntime"
+
 	"github.com/skyhook-io/radar/internal/ai"
 	"github.com/skyhook-io/radar/internal/k8s"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
@@ -72,7 +74,7 @@ func (s *Server) refreshAIEngine(ctx context.Context) {
 	}
 	runs := ai.NewRunManager(d, s.ActualAddr, s.basePath, k8s.GetContextName, store)
 	runs.MetricsAvailability = func(ctx context.Context) ai.MetricsAvailability {
-		state := prometheuspkg.Availability(ctx)
+		state := connectionruntime.Capture(ctx).MetricsAvailability(ctx)
 		return ai.MetricsAvailability{
 			Connected: state.State == prometheuspkg.AvailabilityConnected,
 			Address:   state.Address,

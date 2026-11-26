@@ -480,7 +480,7 @@ func TestChartRoutesWithheldAnswer200(t *testing.T) {
 		b.WriteString(`]}}`)
 		return b.String()
 	}
-	h := metricsRouter()
+	h := metricsRouter(f.client)
 	for _, path := range []string{
 		"/prometheus/cluster?category=cpu",
 		"/prometheus/namespace/alpha?category=memory",

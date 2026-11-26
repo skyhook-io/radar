@@ -44,6 +44,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/loadtest"
 	"github.com/skyhook-io/radar/internal/mcp"
@@ -143,6 +144,8 @@ func main() {
 		}
 	}
 
+	runtime := connectionruntime.New(nil, connectionruntime.Settings{})
+	k8s.RegisterIntegrationBuilder(runtime.Build)
 	if !k8s.AdmitStartup(context.Background(), k8s.Current(), k8s.ConnectionStatus{
 		State: k8s.StateConnected, Context: "fake-test",
 	}) {
@@ -158,12 +161,13 @@ func main() {
 	effectiveCfg := &config.Config{Port: *port}
 
 	srv := server.New(server.Config{
-		Port:            *port,
-		ListenAddress:   server.DefaultListenAddress,
-		StaticFS:        static.FS,
-		StaticRoot:      "dist",
-		EffectiveConfig: effectiveCfg,
-		MCPHandler:      mcp.NewReadOnlyHandler(),
+		Port:               *port,
+		ListenAddress:      server.DefaultListenAddress,
+		StaticFS:           static.FS,
+		StaticRoot:         "dist",
+		EffectiveConfig:    effectiveCfg,
+		IntegrationRuntime: runtime,
+		MCPHandler:         mcp.NewReadOnlyHandler(),
 	})
 
 	ready := make(chan struct{})
@@ -195,6 +199,7 @@ func main() {
 	if adminSrv != nil {
 		_ = adminSrv.Close()
 	}
+	k8s.CloseConnectionAdmissions()
 	srv.Stop()
 	timeline.ResetStore()
 	k8s.ResetTestState()

@@ -64,13 +64,17 @@ func (s *istioStore) sent() []string {
 	return append([]string(nil), s.queries...)
 }
 
-func scopedIstio(store *istioStore) *IstioSource { return newTestIstio(store.query) }
+func scopedIstio(inputs *metricsInputs, store *istioStore) *IstioSource {
+	source := newTestIstio(store.query)
+	source.metrics = inputs
+	return source
+}
 
 func TestIstioQueriesCarryClusterMatchers(t *testing.T) {
-	useConfiguredStore(t)
-	stubScope(t, clusterA)
+	inputs := &metricsInputs{url: "http://metrics.example", spansClusters: noOtherTrafficCluster}
+	stubScope(t, inputs, clusterA)
 	store := &istioStore{http: map[string]bool{"a": true, "b": true}, tcp: map[string]bool{"a": true, "b": true}}
-	resp, err := scopedIstio(store).GetFlows(t.Context(), FlowOptions{Namespace: "shop"})
+	resp, err := scopedIstio(inputs, store).GetFlows(t.Context(), FlowOptions{Namespace: "shop"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,9 +96,10 @@ func TestIstioQueriesCarryClusterMatchers(t *testing.T) {
 
 // A store Radar discovered in the cluster holds this cluster's metrics.
 func TestIstioNotFilteredWithoutConfiguredURL(t *testing.T) {
-	calls := stubScope(t, clusterA)
+	inputs := &metricsInputs{url: "", spansClusters: noOtherTrafficCluster}
+	calls := stubScope(t, inputs, clusterA)
 	store := &istioStore{http: map[string]bool{"": true}}
-	resp, err := scopedIstio(store).GetFlows(t.Context(), FlowOptions{})
+	resp, err := scopedIstio(inputs, store).GetFlows(t.Context(), FlowOptions{})
 	if err != nil || len(resp.Flows) == 0 {
 		t.Fatalf("GetFlows: %v %+v", err, resp)
 	}
@@ -111,10 +116,10 @@ func TestIstioNotFilteredWithoutConfiguredURL(t *testing.T) {
 // TCP series scraped without the cluster label must not empty the HTTP flows,
 // and the map says why the TCP traffic is missing.
 func TestIstioFamiliesScopedSeparately(t *testing.T) {
-	useConfiguredStore(t)
-	stubScope(t, clusterA)
+	inputs := &metricsInputs{url: "http://metrics.example", spansClusters: noOtherTrafficCluster}
+	stubScope(t, inputs, clusterA)
 	store := &istioStore{http: map[string]bool{"a": true, "b": true}, tcp: map[string]bool{"": true}}
-	resp, err := scopedIstio(store).GetFlows(t.Context(), FlowOptions{})
+	resp, err := scopedIstio(inputs, store).GetFlows(t.Context(), FlowOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,12 +136,12 @@ func TestIstioFamiliesScopedSeparately(t *testing.T) {
 }
 
 func TestIstioScopeFollowsCurrentCluster(t *testing.T) {
-	useConfiguredStore(t)
+	inputs := &metricsInputs{url: "http://metrics.example", spansClusters: noOtherTrafficCluster}
 	current := "a"
-	stubScope(t, func(string) (string, promclient.SeriesIsolation, error) {
+	stubScope(t, inputs, func(string) (string, promclient.SeriesIsolation, error) {
 		return `cluster="` + current + `"`, promclient.SeriesIsolation{Mode: promclient.SeriesIsolationVerified, Labels: map[string]string{"cluster": current}}, nil
 	})
-	src := scopedIstio(&istioStore{http: map[string]bool{"a": true, "b": true}})
+	src := scopedIstio(inputs, &istioStore{http: map[string]bool{"a": true, "b": true}})
 	for _, cluster := range []string{"a", "b", "a"} {
 		current = cluster
 		resp, err := src.GetFlows(t.Context(), FlowOptions{})
@@ -150,8 +155,8 @@ func TestIstioScopeFollowsCurrentCluster(t *testing.T) {
 }
 
 func TestIstioEmptyMapClusterWarnings(t *testing.T) {
-	useConfiguredStore(t)
-	stubScope(t, clusterA)
+	inputs := &metricsInputs{url: "http://metrics.example", spansClusters: noOtherTrafficCluster}
+	stubScope(t, inputs, clusterA)
 	for _, tc := range []struct {
 		name      string
 		http, tcp map[string]bool
@@ -163,7 +168,7 @@ func TestIstioEmptyMapClusterWarnings(t *testing.T) {
 		{"store has no traffic", nil, nil, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			resp, err := scopedIstio(&istioStore{http: tc.http, tcp: tc.tcp}).GetFlows(t.Context(), FlowOptions{})
+			resp, err := scopedIstio(inputs, &istioStore{http: tc.http, tcp: tc.tcp}).GetFlows(t.Context(), FlowOptions{})
 			if err != nil || len(resp.Flows) != 0 {
 				t.Fatalf("GetFlows: %v %+v", err, resp)
 			}
@@ -183,11 +188,11 @@ func TestIstioEmptyMapClusterWarnings(t *testing.T) {
 // The traffic carries two cluster names and nothing proves which is this one:
 // the flows draw with the note. A TCP read that failed stays retried under it.
 func TestIstioMixedClustersNote(t *testing.T) {
-	useConfiguredStore(t)
-	stubScope(t, func(string) (string, promclient.SeriesIsolation, error) {
+	inputs := &metricsInputs{url: "http://metrics.example", spansClusters: noOtherTrafficCluster}
+	stubScope(t, inputs, func(string) (string, promclient.SeriesIsolation, error) {
 		return "", promclient.SeriesIsolation{}, promclient.ErrScopeAmbiguous
 	})
-	resp, err := scopedIstio(&istioStore{http: map[string]bool{"a": true, "b": true}}).GetFlows(t.Context(), FlowOptions{})
+	resp, err := scopedIstio(inputs, &istioStore{http: map[string]bool{"a": true, "b": true}}).GetFlows(t.Context(), FlowOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +203,7 @@ func TestIstioMixedClustersNote(t *testing.T) {
 		t.Errorf("warning = %q (%s), want the mixed-clusters note", resp.Warning, resp.WarningKind)
 	}
 
-	failed, err := scopedIstio(&istioStore{http: map[string]bool{"a": true}, failTCP: true}).GetFlows(t.Context(), FlowOptions{})
+	failed, err := scopedIstio(inputs, &istioStore{http: map[string]bool{"a": true}, failTCP: true}).GetFlows(t.Context(), FlowOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,13 +213,13 @@ func TestIstioMixedClustersNote(t *testing.T) {
 }
 
 func TestIstioScopeCheckFailure(t *testing.T) {
-	useConfiguredStore(t)
+	inputs := &metricsInputs{url: "http://metrics.example", spansClusters: noOtherTrafficCluster}
 	t.Run("HTTP", func(t *testing.T) {
-		stubScope(t, func(string) (string, promclient.SeriesIsolation, error) {
+		stubScope(t, inputs, func(string) (string, promclient.SeriesIsolation, error) {
 			return "", promclient.SeriesIsolation{}, errors.New("query timed out")
 		})
 		store := &istioStore{http: map[string]bool{"a": true, "b": true}}
-		resp, err := scopedIstio(store).GetFlows(t.Context(), FlowOptions{})
+		resp, err := scopedIstio(inputs, store).GetFlows(t.Context(), FlowOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -223,14 +228,14 @@ func TestIstioScopeCheckFailure(t *testing.T) {
 		}
 	})
 	t.Run("TCP", func(t *testing.T) {
-		stubScope(t, func(metric string) (string, promclient.SeriesIsolation, error) {
+		stubScope(t, inputs, func(metric string) (string, promclient.SeriesIsolation, error) {
 			if metric == istioTCPMetric {
 				return "", promclient.SeriesIsolation{}, errors.New("query timed out")
 			}
 			return clusterA(metric)
 		})
 		store := &istioStore{http: map[string]bool{"a": true}, tcp: map[string]bool{"a": true, "b": true}}
-		resp, err := scopedIstio(store).GetFlows(t.Context(), FlowOptions{})
+		resp, err := scopedIstio(inputs, store).GetFlows(t.Context(), FlowOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -251,14 +256,14 @@ func TestIstioScopeCheckFailure(t *testing.T) {
 // The TCP family gets its own proof: HTTP's labels say nothing about how the
 // TCP series are labeled.
 func TestIstioTCPCheckedOnItsOwn(t *testing.T) {
-	useConfiguredStore(t)
-	stubScope(t, func(metric string) (string, promclient.SeriesIsolation, error) {
+	inputs := &metricsInputs{url: "http://metrics.example", spansClusters: noOtherTrafficCluster}
+	stubScope(t, inputs, func(metric string) (string, promclient.SeriesIsolation, error) {
 		if metric == istioTCPMetric {
 			return `cluster="b"`, promclient.SeriesIsolation{Mode: promclient.SeriesIsolationVerified, Labels: map[string]string{"cluster": "b"}}, nil
 		}
 		return clusterA(metric)
 	})
-	resp, err := scopedIstio(&istioStore{http: map[string]bool{"a": true}, tcp: map[string]bool{"a": true, "b": true}}).GetFlows(t.Context(), FlowOptions{})
+	resp, err := scopedIstio(inputs, &istioStore{http: map[string]bool{"a": true}, tcp: map[string]bool{"a": true, "b": true}}).GetFlows(t.Context(), FlowOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,14 +275,14 @@ func TestIstioTCPCheckedOnItsOwn(t *testing.T) {
 // The note about missing TCP edges keeps its kind under the mixed-clusters
 // note, or a viewer's filters would drop both.
 func TestIstioMissingFamilyNoteSurvivesMixedNote(t *testing.T) {
-	useConfiguredStore(t)
-	stubScope(t, func(metric string) (string, promclient.SeriesIsolation, error) {
+	inputs := &metricsInputs{url: "http://metrics.example", spansClusters: noOtherTrafficCluster}
+	stubScope(t, inputs, func(metric string) (string, promclient.SeriesIsolation, error) {
 		if metric == istioTCPMetric {
 			return clusterA(metric)
 		}
 		return "", promclient.SeriesIsolation{}, promclient.ErrScopeAmbiguous
 	})
-	resp, err := scopedIstio(&istioStore{http: map[string]bool{"a": true, "b": true}, tcp: map[string]bool{"": true}}).GetFlows(t.Context(), FlowOptions{})
+	resp, err := scopedIstio(inputs, &istioStore{http: map[string]bool{"a": true, "b": true}, tcp: map[string]bool{"": true}}).GetFlows(t.Context(), FlowOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,9 +297,9 @@ func TestIstioMissingFamilyNoteSurvivesMixedNote(t *testing.T) {
 // A failed TCP query must not hide why the HTTP traffic is missing: the map is
 // empty for both reasons, and the retry stays.
 func TestIstioMismatchSurvivesFailedTCPQuery(t *testing.T) {
-	useConfiguredStore(t)
-	stubScope(t, clusterA)
-	resp, err := scopedIstio(&istioStore{http: map[string]bool{"b": true}, failTCP: true}).GetFlows(t.Context(), FlowOptions{})
+	inputs := &metricsInputs{url: "http://metrics.example", spansClusters: noOtherTrafficCluster}
+	stubScope(t, inputs, clusterA)
+	resp, err := scopedIstio(inputs, &istioStore{http: map[string]bool{"b": true}, failTCP: true}).GetFlows(t.Context(), FlowOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

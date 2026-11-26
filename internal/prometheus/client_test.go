@@ -249,11 +249,6 @@ func TestEnsureConnectedDoesNotClearCachedConnectionOnCanceledProbe(t *testing.T
 }
 
 func TestConnectionSource(t *testing.T) {
-	clientMu.Lock()
-	saved := globalClient
-	clientMu.Unlock()
-	t.Cleanup(func() { clientMu.Lock(); globalClient = saved; clientMu.Unlock() })
-
 	for _, tc := range []struct {
 		client *Client
 		want   string
@@ -264,10 +259,7 @@ func TestConnectionSource(t *testing.T) {
 		{&Client{manualURL: "https://prometheus.example.com"}, "manual"},
 		{&Client{manualURL: "https://prometheus.example.com", baseURL: "https://prometheus.example.com"}, "manual"},
 	} {
-		clientMu.Lock()
-		globalClient = tc.client
-		clientMu.Unlock()
-		if got := ConnectionSource(); got != tc.want {
+		if got := tc.client.ConnectionSource(); got != tc.want {
 			t.Errorf("ConnectionSource() = %q, want %q", got, tc.want)
 		}
 	}

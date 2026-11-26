@@ -369,15 +369,6 @@ func TestReadmissionKeepsPortForwardManager(t *testing.T) {
 	if manager == nil || Current().PortForwards() != manager {
 		t.Fatal("readmission replaced the forward manager")
 	}
-	contextSwitchMu.Lock()
-	previousReset := trafficResetFunc
-	trafficResetFunc = func() {
-		if !manager.Closed() {
-			t.Error("traffic reset ran before pending forwards were stopped")
-		}
-	}
-	contextSwitchMu.Unlock()
-	t.Cleanup(func() { contextSwitchMu.Lock(); trafficResetFunc = previousReset; contextSwitchMu.Unlock() })
 	ResetAllSubsystems()
 	if Current().PortForwards() == manager {
 		t.Fatal("rebuild reused the closed forward manager")

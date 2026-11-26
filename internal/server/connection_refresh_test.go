@@ -12,12 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/internal/opencost"
-	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/pkg/prom"
 	"k8s.io/client-go/rest"
 )
@@ -53,7 +50,7 @@ func TestIntegrationOperationsRefreshExternalChangesWithoutSettings(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.localRuntime.Apply(target, false)
+	s.integrationRuntime.RefreshProfiles()
 	other := connections.NewResolver(s.localConnections.Store, target, nil)
 	for _, kind := range config.IntegrationKinds {
 		req := connections.Update{Target: target, Revision: other.Resolve(target, kind, false).View.Revision, Kind: kind, Action: "save", URL: &backend.URL}
@@ -74,17 +71,22 @@ func TestIntegrationOperationsRefreshExternalChangesWithoutSettings(t *testing.T
 			t.Fatal(err)
 		}
 	}
-	client, err := prometheuspkg.ClientForOperation()
+	refresh := s.refreshIntegrationProfiles(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	enter := func() {
+		refresh.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/prometheus/status", nil))
+	}
+	enter()
+	client, err := captureTestMetrics()
 	if err != nil {
 		t.Fatal("metrics operation did not refresh")
 	}
 	if _, err := client.Query(context.Background(), "up"); err != nil {
 		t.Fatal(err)
 	}
-	if err := argocd.Probe(context.Background()); err != nil {
+	if err := currentTestIntegrations().ArgoCD.Probe(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := opencost.Selected(context.Background()); err != nil {
+	if _, err := currentTestIntegrations().Cost.Selected(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	valid, err := os.ReadFile(s.localConnections.Store.Path)
@@ -94,32 +96,34 @@ func TestIntegrationOperationsRefreshExternalChangesWithoutSettings(t *testing.T
 	if err := os.WriteFile(s.localConnections.Store.Path, []byte(`{"version":`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := prometheuspkg.ClientForOperation(); err == nil {
+	enter()
+	if _, err := captureTestMetrics(); err == nil {
 		t.Fatal("invalid file retained metrics client")
 	}
-	if err := argocd.Probe(context.Background()); err == nil {
+	if err := currentTestIntegrations().ArgoCD.Probe(context.Background()); err == nil {
 		t.Fatal("invalid file retained Argo client")
 	}
-	if _, err := opencost.Selected(context.Background()); err == nil {
+	if _, err := currentTestIntegrations().Cost.Selected(context.Background()); err == nil {
 		t.Fatal("invalid file retained cost client")
 	}
 	if err := os.WriteFile(s.localConnections.Store.Path, valid, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := prometheuspkg.ClientForOperation(); err != nil {
+	enter()
+	if _, err := captureTestMetrics(); err != nil {
 		t.Fatal("repair did not reactivate metrics")
 	}
-	if err := argocd.Probe(context.Background()); err != nil {
+	if err := currentTestIntegrations().ArgoCD.Probe(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := opencost.Selected(context.Background()); err != nil {
+	if _, err := currentTestIntegrations().Cost.Selected(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestLocalArgoTargetChangeStaysEditableAndReportsStatus(t *testing.T) {
 	s := setupLocalProfileTest(t)
-	t.Cleanup(func() { argocd.SetConfig("", "", false, true) })
+
 	target, _ := k8s.CurrentProfileTarget()
 	url := "https://argo.example"
 	pending, err := s.localConnections.Prepare(target, connections.Update{Target: target, Revision: s.localConnections.Resolve(target, config.IntegrationArgoCD, false).View.Revision, Kind: config.IntegrationArgoCD, Action: "save", URL: &url, Secret: &connections.SecretEdit{Action: "set", Value: "saved-test-token"}})
@@ -132,7 +136,7 @@ func TestLocalArgoTargetChangeStaysEditableAndReportsStatus(t *testing.T) {
 	old := k8s.SetTestConfig(&rest.Config{Host: "https://changed-cluster"})
 	defer k8s.SetTestConfig(old)
 	status := httptest.NewRecorder()
-	s.handleArgoCDStatus(status, httptest.NewRequest(http.MethodGet, "/api/integrations/argocd/status", nil))
+	s.refreshIntegrationProfiles(http.HandlerFunc(s.handleArgoCDStatus)).ServeHTTP(status, httptest.NewRequest(http.MethodGet, "/api/integrations/argocd/status", nil))
 	var state struct {
 		Configured bool   `json:"configured"`
 		Connected  bool   `json:"connected"`
@@ -165,13 +169,13 @@ func TestLocalArgoTargetChangeStaysEditableAndReportsStatus(t *testing.T) {
 
 func TestConcurrentRefreshDoesNotFailReaders(t *testing.T) {
 	s := setupLocalProfileTest(t)
-	target, _ := k8s.CurrentProfileTarget()
-	s.localRuntime.Apply(target, false)
+	s.integrationRuntime.RefreshProfiles()
 	var wg sync.WaitGroup
 	for range 80 {
 		wg.Go(func() {
 			for range 5 {
-				if err := connections.Refresh(config.IntegrationMetrics); err != nil {
+				s.integrationRuntime.RefreshProfiles()
+				if _, err := captureTestMetrics(); err != nil {
 					t.Errorf("parallel refresh: %v", err)
 					return
 				}
@@ -184,7 +188,7 @@ func TestConcurrentRefreshDoesNotFailReaders(t *testing.T) {
 func TestArgoCandidateDoesNotBlockReadersAndCannotCommitAfterSwitch(t *testing.T) {
 	s := setupLocalProfileTest(t)
 	target, _ := k8s.CurrentProfileTarget()
-	s.localRuntime.Apply(target, false)
+	s.integrationRuntime.RefreshProfiles()
 	started, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -214,7 +218,8 @@ func TestArgoCandidateDoesNotBlockReadersAndCannotCommitAfterSwitch(t *testing.T
 		t.Fatal("probe did not start")
 	}
 	for range 10 {
-		if err := connections.Refresh(config.IntegrationMetrics); err != nil {
+		s.integrationRuntime.RefreshProfiles()
+		if _, err := captureTestMetrics(); err != nil {
 			t.Fatalf("candidate blocked metrics: %v", err)
 		}
 	}
@@ -246,7 +251,7 @@ func TestManageConnectionsWithoutActiveCluster(t *testing.T) {
 	previous := k8s.SetTestConfig(nil)
 	defer k8s.SetTestConfig(previous)
 	response := httptest.NewRecorder()
-	s.handleLocalConnections(response, httptest.NewRequest(http.MethodGet, "/api/integrations/connections", nil))
+	s.refreshIntegrationProfiles(http.HandlerFunc(s.handleLocalConnections)).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/integrations/connections", nil))
 	if response.Code != 200 {
 		t.Fatalf("offline catalog: %s", response.Body.String())
 	}
@@ -269,7 +274,7 @@ func TestManageConnectionsWithoutActiveCluster(t *testing.T) {
 func getLocalConnections(t *testing.T, s *Server) localConnectionResponse {
 	t.Helper()
 	response := httptest.NewRecorder()
-	s.handleLocalConnections(response, httptest.NewRequest(http.MethodGet, "/api/integrations/connections", nil))
+	s.refreshIntegrationProfiles(http.HandlerFunc(s.handleLocalConnections)).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/integrations/connections", nil))
 	var body localConnectionResponse
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || response.Code != http.StatusOK {
 		t.Fatalf("read connections: %d %s", response.Code, response.Body.String())
@@ -279,7 +284,7 @@ func getLocalConnections(t *testing.T, s *Server) localConnectionResponse {
 
 func TestRejectedArgoCandidateLeavesSavedConnectionUnchanged(t *testing.T) {
 	s := setupLocalProfileTest(t)
-	t.Cleanup(func() { argocd.SetConfig("", "", false, true) })
+
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/version":
@@ -324,7 +329,7 @@ func TestRejectedArgoCandidateLeavesSavedConnectionUnchanged(t *testing.T) {
 	if got := getLocalConnections(t, s).Profiles[config.IntegrationArgoCD]; got.Revision != view.Revision || !got.SecretSet {
 		t.Fatalf("saved connection changed after rejected candidate: %+v", got)
 	}
-	if err := argocd.Probe(context.Background()); err != nil {
+	if err := currentTestIntegrations().ArgoCD.Probe(context.Background()); err != nil {
 		t.Fatalf("previous Argo CD connection stopped working: %v", err)
 	}
 }
@@ -333,7 +338,7 @@ func TestRejectedArgoCandidateLeavesSavedConnectionUnchanged(t *testing.T) {
 // the connection ready instead of answering "connecting".
 func TestSavedArgoConnectionConnectsBeforeAnyRead(t *testing.T) {
 	s := setupLocalProfileTest(t)
-	t.Cleanup(func() { argocd.SetConfig("", "", false, true) })
+
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/version":
@@ -346,7 +351,7 @@ func TestSavedArgoConnectionConnectsBeforeAnyRead(t *testing.T) {
 	}))
 	defer backend.Close()
 	target, _ := k8s.CurrentProfileTarget()
-	s.localRuntime.Apply(target, false)
+	s.integrationRuntime.RefreshProfiles()
 	view := s.localConnections.Resolve(target, config.IntegrationArgoCD, true).View
 	data, _ := json.Marshal(connections.Update{Target: target, Revision: view.Revision, Kind: config.IntegrationArgoCD, Action: "save", URL: &backend.URL, Secret: &connections.SecretEdit{Action: "set", Value: "saved-token"}})
 	response := httptest.NewRecorder()
@@ -356,7 +361,7 @@ func TestSavedArgoConnectionConnectsBeforeAnyRead(t *testing.T) {
 	}
 	// Address reads state only; it starts nothing.
 	deadline := time.Now().Add(5 * time.Second)
-	for argocd.Address() != backend.URL {
+	for currentTestIntegrations().ArgoCD.Address() != backend.URL {
 		if time.Now().After(deadline) {
 			t.Fatal("the saved settings weren't connected before any read asked")
 		}
@@ -379,9 +384,7 @@ func TestSavedConnectionRejectsOversizedRequest(t *testing.T) {
 
 func TestContextSwitchKeepsSavedCredentialsWithTheirContext(t *testing.T) {
 	s := setupLocalProfileTest(t)
-	t.Cleanup(func() { argocd.SetConfig("", "", false, true) })
-	originalCost := opencost.ConfigSnapshot()
-	t.Cleanup(func() { _ = opencost.Configure(originalCost) })
+
 	var credentialed atomic.Int32
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		argoToken := r.Header.Get("Authorization") == "Bearer argo-token-a"
@@ -428,29 +431,29 @@ func TestContextSwitchKeepsSavedCredentialsWithTheirContext(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	s.localRuntime.Apply(targetA, false)
+	s.integrationRuntime.RefreshProfiles()
 	use := func() (argoErr, costErr error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		argoErr = argocd.Probe(ctx)
-		_, costErr = opencost.Selected(ctx)
+		argoErr = currentTestIntegrations().ArgoCD.Probe(ctx)
+		_, costErr = currentTestIntegrations().Cost.Selected(ctx)
 		return argoErr, costErr
 	}
-	if argoErr, costErr := use(); argoErr != nil || costErr != nil || !argocd.IsConfigured() || credentialed.Load() == 0 {
+	if argoErr, costErr := use(); argoErr != nil || costErr != nil || !currentTestIntegrations().ArgoCD.IsConfigured() || credentialed.Load() == 0 {
 		t.Fatalf("context A did not use its saved connections: argo %v, cost %v", argoErr, costErr)
 	}
 
 	restore := k8s.SetTestProfileSource("/fixture/team", "other", "developer")
 	defer restore()
-	targetB, err := k8s.CurrentProfileTarget()
+	_, err = k8s.CurrentProfileTarget()
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.localRuntime.ActivateSwitch(targetB)
+	admitTestIntegrations(t, s.integrationRuntime)
 	credentialed.Store(0)
 	use()
-	if argocd.IsConfigured() || opencost.ConfigSnapshot().APIKey != "" || credentialed.Load() != 0 {
-		t.Fatalf("context B inherited context A's credentials: argo configured %v, requests carrying A's secrets %d", argocd.IsConfigured(), credentialed.Load())
+	if currentTestIntegrations().ArgoCD.IsConfigured() || currentTestIntegrations().Cost.ConfigSnapshot().APIKey != "" || credentialed.Load() != 0 {
+		t.Fatalf("context B inherited context A's credentials: argo configured %v, requests carrying A's secrets %d", currentTestIntegrations().ArgoCD.IsConfigured(), credentialed.Load())
 	}
 	b := getLocalConnections(t, s).Profiles
 	if b[config.IntegrationArgoCD].SecretSet || b[config.IntegrationCost].SecretSet || b[config.IntegrationArgoCD].URL != "" {
@@ -462,8 +465,8 @@ func TestContextSwitchKeepsSavedCredentialsWithTheirContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.localRuntime.ActivateSwitch(targetA)
-	if argoErr, costErr := use(); argoErr != nil || costErr != nil || !argocd.IsConfigured() || credentialed.Load() == 0 {
+	admitTestIntegrations(t, s.integrationRuntime)
+	if argoErr, costErr := use(); argoErr != nil || costErr != nil || !currentTestIntegrations().ArgoCD.IsConfigured() || credentialed.Load() == 0 {
 		t.Fatalf("returning to context A did not restore its connections: argo %v, cost %v", argoErr, costErr)
 	}
 }

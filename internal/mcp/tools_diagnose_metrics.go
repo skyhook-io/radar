@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"log"
 	"math"
 	"strings"
@@ -13,9 +12,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/skyhook-io/radar/internal/connectionruntime"
+
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
@@ -143,7 +143,8 @@ func diagnoseWorkloadMetrics(ctx context.Context, group, resource, namespace, na
 	if !canReadInNamespace(budgetCtx, group, resource, namespace, "get") {
 		return nil
 	}
-	avail := prometheus.Availability(budgetCtx)
+	set := connectionruntime.Capture(budgetCtx)
+	avail := set.MetricsAvailability(budgetCtx)
 	if avail.State == prometheus.AvailabilityAbsent {
 		if avail.Err != nil && (errors.Is(avail.Err, context.DeadlineExceeded) || errors.Is(avail.Err, context.Canceled)) {
 			// Discovery did not answer in time. That is not "no Prometheus",
@@ -175,14 +176,14 @@ func diagnoseWorkloadMetrics(ctx context.Context, group, resource, namespace, na
 		// population, so there is nothing to chart and nothing to say about it.
 		return nil
 	}
-	return diagnoseMetricsForScope(budgetCtx, avail, scope, since, now)
+	return diagnoseMetricsForScope(budgetCtx, set.Metrics, avail, scope, since, now)
 }
 
 // diagnoseScopeResolverFor builds the vitals' check on the client's current
 // connection; tests replace it to move the connection around the check.
 var diagnoseScopeResolverFor = prometheus.ResolverFor
 
-func diagnoseMetricsForScope(budgetCtx context.Context, avail prometheus.AvailabilityState, scope prometheus.PodScope, since time.Duration, now time.Time) *diagnoseMetrics {
+func diagnoseMetricsForScope(budgetCtx context.Context, client *prometheus.Client, avail prometheus.AvailabilityState, scope prometheus.PodScope, since time.Duration, now time.Time) *diagnoseMetrics {
 	namespace := scope.Namespace
 	start := now.Add(-since)
 	out := &diagnoseMetrics{
@@ -204,11 +205,6 @@ func diagnoseMetricsForScope(budgetCtx context.Context, avail prometheus.Availab
 		out.Error = boundDiagnoseMetricsError(fmt.Sprintf("prometheus unreachable: %v", avail.Err))
 		return out
 	}
-	client, connectionErr := connectionruntime.CaptureMetrics(budgetCtx)
-	if connectionErr != nil {
-		out.Error = boundDiagnoseMetricsError(connectionErr.Error())
-		return out
-	}
 	// The queries run on p and the check must describe p's backend, so both
 	// are bound to the connection p was taken from.
 	var p *prom.Client
@@ -224,7 +220,7 @@ func diagnoseMetricsForScope(budgetCtx context.Context, avail prometheus.Availab
 		out.Error = "metrics omitted: no pods could be attributed to the workload"
 		return out
 	}
-	view, err := prometheus.ResolveChartScope(budgetCtx, prometheus.BoundResolver(client, conn, diagnoseScopeResolverFor(client, k8s.GetResourceCache())),
+	view, err := prometheus.ResolveChartScope(budgetCtx, prometheus.BoundResolver(client, conn, diagnoseScopeResolverFor(client, client.ResourceCache())),
 		prometheus.PodSetScopeRequest("diagnose_vitals", scope.Selection, diagnoseMetricsCategories, prometheus.ChartScopeSpan(since, prom.CategoryRestarts)))
 	if err != nil {
 		out.Error = diagnoseMetricsStopped(budgetCtx)

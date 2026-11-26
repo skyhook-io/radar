@@ -714,6 +714,8 @@ TLS references resolve local Secret names and delegated `namespace/name` names c
 
 ---
 
+Integration members for Metrics, Argo CD, cost, and traffic are available from the first request after Radar connects to Kubernetes. Discovery can continue in the background. Saving settings cancels work on the replaced members and refreshes affected views. See [Connection lifecycle](connection-lifecycle.md#connection-identity).
+
 ## Prometheus Operator
 
 [Prometheus Operator](https://prometheus-operator.dev/) simplifies Prometheus setup on Kubernetes, providing CRDs for defining monitoring targets, alerting rules, and scrape configurations declaratively.

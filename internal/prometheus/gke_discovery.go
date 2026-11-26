@@ -380,6 +380,10 @@ func (c *Client) relayActive() bool {
 	return c.relay != nil
 }
 
+func (c *Client) RelayActive() bool {
+	return c != nil && c.relayActive()
+}
+
 func (c *Client) gkeChartStore() *gkeMetrics {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

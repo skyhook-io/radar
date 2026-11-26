@@ -19,14 +19,12 @@ import (
 	fakeclientset "k8s.io/client-go/kubernetes/fake"
 )
 
-func TestCostRoutesClassifyMetricsRefreshFailure(t *testing.T) {
-	originalConfig := ConfigSnapshot()
-	t.Cleanup(func() { _ = Configure(originalConfig) })
-	t.Cleanup(func() { connections.RegisterRefresh(nil) })
-	if err := Configure(ManagerConfig{Source: SourcePrometheus}); err != nil {
+func TestCostRoutesClassifyMetricsSettingsFailure(t *testing.T) {
+	manager := &Manager{}
+	if err := manager.Configure(ManagerConfig{Source: SourcePrometheus}); err != nil {
 		t.Fatal(err)
 	}
-	for name, handler := range map[string]func(http.ResponseWriter, *http.Request, func() string, RouteScope){
+	for name, handler := range map[string]func(http.ResponseWriter, *http.Request, RouteScope){
 		"summary":   handleSummaryScoped,
 		"workloads": handleWorkloadsScoped,
 		"trend":     handleTrendScoped,
@@ -44,14 +42,9 @@ func TestCostRoutesClassifyMetricsRefreshFailure(t *testing.T) {
 			{"disconnected", errors.New("cluster disconnected"), pkgopencost.ReasonQueryError},
 		} {
 			t.Run(name+"/"+tc.name, func(t *testing.T) {
-				connections.RegisterRefresh(func(kind config.Integration) error {
-					if kind == config.IntegrationMetrics {
-						return fmt.Errorf("refresh: %w", tc.err)
-					}
-					return nil
-				})
+				manager.metrics = func() (*prometheuspkg.Client, error) { return nil, fmt.Errorf("settings: %w", tc.err) }
 				w := httptest.NewRecorder()
-				handler(w, httptest.NewRequest(http.MethodGet, "/opencost/"+name+"?namespace=default", nil), nil, RouteScope{})
+				handler(w, httptest.NewRequest(http.MethodGet, "/opencost/"+name+"?namespace=default", nil), testRouteScope(manager, nil))
 				var result struct {
 					Reason string `json:"reason"`
 				}
@@ -70,7 +63,7 @@ func TestUnavailableResponsesIncludeCurrency(t *testing.T) {
 	tests := []struct {
 		name    string
 		target  string
-		handler func(http.ResponseWriter, *http.Request, func() string, RouteScope)
+		handler func(http.ResponseWriter, *http.Request, RouteScope)
 	}{
 		{name: "summary", target: "/opencost/summary", handler: handleSummaryScoped},
 		{name: "workloads", target: "/opencost/workloads?namespace=default", handler: handleWorkloadsScoped},
@@ -81,7 +74,7 @@ func TestUnavailableResponsesIncludeCurrency(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, tt.target, nil)
 			w := httptest.NewRecorder()
-			tt.handler(w, req, func() string { return "GBP" }, RouteScope{})
+			tt.handler(w, req, testRouteScope(nil, func() string { return "GBP" }))
 
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
@@ -105,7 +98,8 @@ func TestBuildPodOwnerLookupTreatsEmptyNamespaceAsConclusive(t *testing.T) {
 	}
 	t.Cleanup(k8s.ResetResourceCache)
 
-	lookup := BuildPodOwnerLookup("empty")
+	manager := &Manager{cache: k8s.GetResourceCache()}
+	lookup := manager.BuildPodOwnerLookup("empty")
 	if lookup == nil {
 		t.Fatal("empty pod list returned an inconclusive nil lookup")
 	}
@@ -115,13 +109,11 @@ func TestBuildPodOwnerLookupTreatsEmptyNamespaceAsConclusive(t *testing.T) {
 }
 
 func TestCostRoutesResolveCurrencyAfterSourceSelection(t *testing.T) {
-	originalConfig := ConfigSnapshot()
-	t.Cleanup(func() { _ = Configure(originalConfig) })
 
 	tests := []struct {
 		name    string
 		target  string
-		handler func(http.ResponseWriter, *http.Request, func() string, RouteScope)
+		handler func(http.ResponseWriter, *http.Request, RouteScope)
 	}{
 		{name: "summary", target: "/opencost/summary", handler: handleSummaryScoped},
 		{name: "workloads", target: "/opencost/workloads?namespace=default", handler: handleWorkloadsScoped},
@@ -130,16 +122,17 @@ func TestCostRoutesResolveCurrencyAfterSourceSelection(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := Configure(ManagerConfig{Source: SourcePrometheus}); err != nil {
+			manager := &Manager{}
+			if err := manager.Configure(ManagerConfig{Source: SourcePrometheus}); err != nil {
 				t.Fatal(err)
 			}
 			w := httptest.NewRecorder()
-			tt.handler(w, httptest.NewRequest(http.MethodGet, tt.target, nil), func() string {
-				if selected := SelectedSourceSnapshot(); selected != SourcePrometheus {
+			tt.handler(w, httptest.NewRequest(http.MethodGet, tt.target, nil), testRouteScope(manager, func() string {
+				if selected := manager.SelectedSourceSnapshot(); selected != SourcePrometheus {
 					t.Fatalf("currency resolved before source selection: selected = %q", selected)
 				}
 				return "GBP"
-			}, RouteScope{})
+			}))
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
 			}
@@ -149,30 +142,31 @@ func TestCostRoutesResolveCurrencyAfterSourceSelection(t *testing.T) {
 
 func TestCostRouteScopeRejectsUnreadableNamespaceAndNodes(t *testing.T) {
 	scope := RouteScope{
+		Capture:           testRouteScope(nil, func() string { return "GBP" }).Capture,
 		AllowedNamespaces: func(_ *http.Request, _ []string) []string { return []string{} },
 		CanReadNodes:      func(_ *http.Request) bool { return false },
 	}
 	workloads := httptest.NewRecorder()
-	handleWorkloadsScoped(workloads, httptest.NewRequest(http.MethodGet, "/opencost/workloads?namespace=private", nil), nil, scope)
+	handleWorkloadsScoped(workloads, httptest.NewRequest(http.MethodGet, "/opencost/workloads?namespace=private", nil), scope)
 	if workloads.Code != http.StatusForbidden {
 		t.Fatalf("workloads status = %d, want 403", workloads.Code)
 	}
 	nodes := httptest.NewRecorder()
-	handleNodesScoped(nodes, httptest.NewRequest(http.MethodGet, "/opencost/nodes", nil), nil, scope)
+	handleNodesScoped(nodes, httptest.NewRequest(http.MethodGet, "/opencost/nodes", nil), scope)
 	if nodes.Code != http.StatusForbidden {
 		t.Fatalf("nodes status = %d, want 403", nodes.Code)
 	}
 	for _, route := range []struct {
 		name   string
 		target string
-		call   func(http.ResponseWriter, *http.Request, func() string, RouteScope)
+		call   func(http.ResponseWriter, *http.Request, RouteScope)
 	}{
 		{name: "summary", target: "/opencost/summary", call: handleSummaryScoped},
 		{name: "trend", target: "/opencost/trend?range=24h", call: handleTrendScoped},
 	} {
 		t.Run(route.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
-			route.call(recorder, httptest.NewRequest(http.MethodGet, route.target, nil), func() string { return "GBP" }, scope)
+			route.call(recorder, httptest.NewRequest(http.MethodGet, route.target, nil), scope)
 			if recorder.Code != http.StatusOK {
 				t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
 			}
@@ -192,6 +186,7 @@ func TestCostRouteScopeRejectsUnreadableNamespaceAndNodes(t *testing.T) {
 
 func TestWorkloadCostAuthorizesSingularNamespaceDirectly(t *testing.T) {
 	scope := RouteScope{
+		Capture: testRouteScope(nil, func() string { return "GBP" }).Capture,
 		AllowedNamespaces: func(_ *http.Request, requested []string) []string {
 			if len(requested) == 1 && requested[0] == "my-team" {
 				return requested
@@ -203,7 +198,6 @@ func TestWorkloadCostAuthorizesSingularNamespaceDirectly(t *testing.T) {
 	handleWorkloadsScoped(
 		recorder,
 		httptest.NewRequest(http.MethodGet, "/opencost/workloads?namespace=finance-prod&namespaces=my-team", nil),
-		nil,
 		scope,
 	)
 	if recorder.Code != http.StatusForbidden {
@@ -341,16 +335,13 @@ func TestFilterCostSummaryPreservesSourceEmptyReason(t *testing.T) {
 }
 
 func TestConnectionSelectionFailuresDoNotClaimKubecostSource(t *testing.T) {
-	originalConfig := ConfigSnapshot()
-	t.Cleanup(func() { _ = Configure(originalConfig) })
-	defaultManager.mu.Lock()
-	defaultManager.selectionErr = errors.New("cost source selection was superseded")
-	defaultManager.retryAt = time.Now().Add(time.Minute)
-	defaultManager.selected = ""
-	defaultManager.mu.Unlock()
+	manager := &Manager{}
+	manager.selectionErr = errors.New("cost source selection was superseded")
+	manager.retryAt = time.Now().Add(time.Minute)
+	manager.selected = ""
 
 	recorder := httptest.NewRecorder()
-	handleSummaryScoped(recorder, httptest.NewRequest(http.MethodGet, "/opencost/summary", nil), nil, RouteScope{})
+	handleSummaryScoped(recorder, httptest.NewRequest(http.MethodGet, "/opencost/summary", nil), testRouteScope(manager, nil))
 	var body struct {
 		Source string `json:"source"`
 		Reason string `json:"reason"`
@@ -436,18 +427,17 @@ func TestConnectedResponsesIncludeCurrency(t *testing.T) {
 		}
 		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"` + resultType + `","result":[]}}`))
 	}))
-	prometheuspkg.Initialize(nil, nil, "test", nil)
-	prometheuspkg.SetManualURL(srv.URL)
+	client := testMetrics(t, srv.URL)
+	manager := &Manager{metrics: testMetricsSource(client), config: ManagerConfig{Source: SourcePrometheus}}
 	t.Cleanup(func() {
 		srv.Close()
-		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "", nil)
+
 	})
 
 	tests := []struct {
 		name    string
 		target  string
-		handler func(http.ResponseWriter, *http.Request, func() string, RouteScope)
+		handler func(http.ResponseWriter, *http.Request, RouteScope)
 	}{
 		{name: "summary", target: "/opencost/summary", handler: handleSummaryScoped},
 		{name: "workloads", target: "/opencost/workloads?namespace=default", handler: handleWorkloadsScoped},
@@ -457,7 +447,7 @@ func TestConnectedResponsesIncludeCurrency(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			tt.handler(w, httptest.NewRequest(http.MethodGet, tt.target, nil), func() string { return "GBP" }, RouteScope{})
+			tt.handler(w, httptest.NewRequest(http.MethodGet, tt.target, nil), testRouteScope(manager, func() string { return "GBP" }))
 
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())

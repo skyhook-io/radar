@@ -12,8 +12,6 @@ import (
 	"sync"
 	"time"
 
-	localconfig "github.com/skyhook-io/radar/internal/config"
-	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/portforward"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
@@ -114,6 +112,7 @@ type Manager struct {
 	cancel         context.CancelFunc
 	handles        *portforward.Handles
 	target         func() kubecostTarget
+	cache          *k8s.ResourceCache
 	metrics        func() (*prometheuspkg.Client, error)
 	mu             sync.RWMutex
 	selectMu       sync.Mutex
@@ -128,19 +127,12 @@ type Manager struct {
 	selectionErr   error
 	lease          *connectionLease
 	generation     uint64
+	metricsEpoch   uint64
 	envManaged     bool
-	envError       string
+	configErr      error
 }
 
-var defaultManager = &Manager{
-	config:  ManagerConfig{Source: SourceAuto},
-	target:  captureKubecostTarget,
-	metrics: prometheuspkg.ClientForOperation,
-}
-
-func CurrentManager() *Manager { return defaultManager }
-
-func NewManager(conn *k8s.Connection, inCluster bool, client *prometheuspkg.Client) *Manager {
+func NewManager(conn *k8s.Connection, inCluster bool, client *prometheuspkg.Client, metricsError error) *Manager {
 	target := kubecostTargetFor(conn, inCluster)
 	lifetime, cancel := context.WithCancel(context.Background())
 	handles := &portforward.Handles{}
@@ -151,7 +143,11 @@ func NewManager(conn *k8s.Connection, inCluster bool, client *prometheuspkg.Clie
 		handles:  handles,
 		config:   ManagerConfig{Source: SourceAuto},
 		target:   func() kubecostTarget { return target },
+		cache:    target.cache,
 		metrics: func() (*prometheuspkg.Client, error) {
+			if metricsError != nil {
+				return nil, metricsError
+			}
 			if client == nil {
 				return nil, prometheuspkg.ErrPrometheusUnavailable
 			}
@@ -175,38 +171,34 @@ func ValidateSource(value string) (Source, error) {
 
 func ValidateKubecostURL(raw string) error { return pkgopencost.ValidateKubecostURL(raw) }
 
-func Configure(config ManagerConfig) error {
-	return defaultManager.Configure(config)
-}
-
-func DisableLocal(reason string) {
-	_ = defaultManager.configure(ManagerConfig{Source: SourceAuto}, false, reason)
-}
-
 func EnvironmentConfiguration() (ManagerConfig, bool, error) {
 	return resolveEnvironmentConfig(ManagerConfig{Source: SourceAuto}, os.Getenv)
 }
 
 func (m *Manager) Configure(config ManagerConfig) error {
-	return m.configure(config, false, "")
+	return m.configure(config, false, nil)
 }
 
-func ConfigureStartup(config ManagerConfig) error {
-	return defaultManager.configureStartup(config, os.Getenv)
+func (m *Manager) ConfigureResolved(config ManagerConfig, envManaged bool, err error) error {
+	return m.configure(config, envManaged, err)
+}
+
+func ResolveEnvironmentConfig(base ManagerConfig) (ManagerConfig, bool, error) {
+	return resolveEnvironmentConfig(base, os.Getenv)
 }
 
 func (m *Manager) configureStartup(config ManagerConfig, getenv func(string) string) error {
 	resolved, managed, envErr := resolveEnvironmentConfig(config, getenv)
 	if envErr != nil {
-		if configureErr := m.configure(config, managed, envErr.Error()); configureErr != nil {
+		if configureErr := m.configure(config, managed, envErr); configureErr != nil {
 			return configureErr
 		}
 		return envErr
 	}
-	return m.configure(resolved, managed, "")
+	return m.configure(resolved, managed, nil)
 }
 
-func (m *Manager) configure(config ManagerConfig, envManaged bool, envError string) error {
+func (m *Manager) configure(config ManagerConfig, envManaged bool, configErr error) error {
 	source, err := ValidateSource(string(config.Source))
 	if err != nil {
 		return err
@@ -233,7 +225,7 @@ func (m *Manager) configure(config ManagerConfig, envManaged bool, envError stri
 	m.lease = nil
 	m.generation++
 	m.envManaged = envManaged
-	m.envError = envError
+	m.configErr = configErr
 	m.mu.Unlock()
 	previous.stop()
 	return nil
@@ -291,15 +283,14 @@ func resolveEnvironmentConfig(base ManagerConfig, getenv func(string) string) (M
 	return base, true, nil
 }
 
-func ConfigSnapshot() ManagerConfig { return defaultManager.ConfigSnapshot() }
-
 func (m *Manager) ConfigSnapshot() ManagerConfig {
+	if m == nil {
+		return ManagerConfig{Source: SourceAuto}
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.config
 }
-
-func IsEnvManaged() bool { return defaultManager.IsEnvManaged() }
 
 func (m *Manager) IsEnvManaged() bool {
 	m.mu.RLock()
@@ -307,15 +298,14 @@ func (m *Manager) IsEnvManaged() bool {
 	return m.envManaged
 }
 
-func EnvManagedError() string { return defaultManager.EnvManagedError() }
-
 func (m *Manager) EnvManagedError() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.envError
+	if m.configErr != nil {
+		return m.configErr.Error()
+	}
+	return ""
 }
-
-func SelectedSourceSnapshot() Source { return defaultManager.SelectedSourceSnapshot() }
 
 func (m *Manager) SelectedSourceSnapshot() Source {
 	m.mu.RLock()
@@ -323,10 +313,7 @@ func (m *Manager) SelectedSourceSnapshot() Source {
 	return m.selected
 }
 
-func Reset() { defaultManager.Reset() }
-
-func (m *Manager) Reset() {
-	m.mu.Lock()
+func (m *Manager) resetLocked() *connectionLease {
 	m.selected = ""
 	m.client = nil
 	m.address = ""
@@ -338,6 +325,12 @@ func (m *Manager) Reset() {
 	previous := m.lease
 	m.lease = nil
 	m.generation++
+	return previous
+}
+
+func (m *Manager) Reset() {
+	m.mu.Lock()
+	previous := m.resetLocked()
 	m.mu.Unlock()
 	previous.stop()
 }
@@ -354,24 +347,41 @@ func (m *Manager) Close() error {
 	return nil
 }
 
-func Selected(ctx context.Context) (Connection, error) { return defaultManager.Selected(ctx) }
+func (m *Manager) MetricsClient() (*prometheuspkg.Client, error) {
+	if m == nil || m.metrics == nil {
+		return nil, prometheuspkg.ErrPrometheusUnavailable
+	}
+	return m.metrics()
+}
 
 func (m *Manager) Selected(ctx context.Context) (Connection, error) {
+	if m == nil {
+		return Connection{}, ErrNoCostSource
+	}
 	ctx, cancel := portforward.WithLifetime(ctx, m.lifetime)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
 		return Connection{}, err
 	}
-	if m == defaultManager {
-		if err := connections.Refresh(localconfig.IntegrationCost); err != nil {
-			return Connection{}, err
-		}
+	// A local OpenObserve match can settle after this member has started serving.
+	client, _ := m.MetricsClient()
+	epoch := client.BackendEpoch()
+	m.mu.Lock()
+	var previous *connectionLease
+	if m.config.Source == SourceAuto && epoch != m.metricsEpoch {
+		previous = m.resetLocked()
+		m.metricsEpoch = epoch
 	}
+	m.mu.Unlock()
+	previous.stop()
 	m.mu.RLock()
-	if m.envError != "" {
-		err := m.envError
+	if err := m.configErr; err != nil {
+		managed := m.envManaged
 		m.mu.RUnlock()
-		return Connection{}, fmt.Errorf("%w: %s", ErrCostSourceEnvConfig, err)
+		if managed {
+			err = fmt.Errorf("%w: %w", ErrCostSourceEnvConfig, err)
+		}
+		return Connection{}, err
 	}
 	if connection, err, ok := m.cachedSelectionLocked(time.Now()); ok {
 		m.mu.RUnlock()
@@ -385,10 +395,13 @@ func (m *Manager) Selected(ctx context.Context) (Connection, error) {
 		return Connection{}, err
 	}
 	m.mu.RLock()
-	if m.envError != "" {
-		err := m.envError
+	if err := m.configErr; err != nil {
+		managed := m.envManaged
 		m.mu.RUnlock()
-		return Connection{}, fmt.Errorf("%w: %s", ErrCostSourceEnvConfig, err)
+		if managed {
+			err = fmt.Errorf("%w: %w", ErrCostSourceEnvConfig, err)
+		}
+		return Connection{}, err
 	}
 	if connection, err, ok := m.cachedSelectionLocked(time.Now()); ok {
 		m.mu.RUnlock()
@@ -404,11 +417,7 @@ func (m *Manager) Selected(ctx context.Context) (Connection, error) {
 	provisionalKubecost := false
 	if config.Source == SourceAuto {
 		detectCtx, cancel := context.WithTimeout(ctx, prometheusCostDetectionTimeout)
-		metrics := m.metrics
-		if metrics == nil {
-			metrics = prometheuspkg.ClientForOperation
-		}
-		prometheusState := detectPrometheusCostStateWith(detectCtx, metrics)
+		prometheusState := detectPrometheusCostStateWith(detectCtx, m.MetricsClient)
 		detectionErr := detectCtx.Err()
 		cancel()
 		if err := ctx.Err(); err != nil {
@@ -461,23 +470,6 @@ func shouldAttemptKubecost(prometheusState prometheusCostState, detectionErr err
 
 func hasExplicitKubecostConfig(config ManagerConfig) bool {
 	return config.URL != "" || config.APIKey != "" || config.ClusterID != ""
-}
-
-func ProbeKubecost(ctx context.Context, config ManagerConfig) (Connection, error) {
-	source, err := ValidateSource(string(config.Source))
-	if err != nil {
-		return Connection{}, err
-	}
-	config.Source = source
-	config.URL = strings.TrimRight(strings.TrimSpace(config.URL), "/")
-	config.ClusterID = strings.TrimSpace(config.ClusterID)
-	if err := ValidateKubecostURL(config.URL); err != nil {
-		return Connection{}, err
-	}
-	if config.URL == "" {
-		return Connection{}, fmt.Errorf("Kubecost probe requires an Aggregator URL")
-	}
-	return defaultManager.connectKubecost(ctx, config)
 }
 
 func (m *Manager) commitSelection(generation uint64, connection Connection) (Connection, error) {
@@ -594,10 +586,6 @@ func (m *Manager) cachedSelectionLocked(now time.Time) (Connection, error, bool)
 
 func (m *Manager) autoRetryDueLocked(now time.Time) bool {
 	return m.config.Source == SourceAuto && m.selected != "" && !m.retryAt.IsZero() && !now.Before(m.retryAt)
-}
-
-func detectPrometheusCostState(ctx context.Context) prometheusCostState {
-	return detectPrometheusCostStateWith(ctx, prometheuspkg.ClientForOperation)
 }
 
 func detectPrometheusCostStateWith(ctx context.Context, metrics func() (*prometheuspkg.Client, error)) prometheusCostState {
@@ -783,10 +771,6 @@ func validateKubecostConfigContext(config ManagerConfig, currentContext string) 
 	return nil
 }
 
-func resolveKubecostClusterID(configured string) (string, error) {
-	return resolveKubecostClusterIDFrom(k8s.GetResourceCache(), configured)
-}
-
 func resolveKubecostClusterIDFrom(cache *k8s.ResourceCache, configured string) (string, error) {
 	if configured != "" {
 		return configured, nil
@@ -906,10 +890,6 @@ func kubecostClusterFilter(clusterID string) string {
 	return `cluster:"` + escaped + `"`
 }
 
-func discoverKubecostAggregator() (*kubecostAggregator, error) {
-	return discoverKubecostAggregatorFrom(k8s.GetResourceCache())
-}
-
 func discoverKubecostAggregatorFrom(cache *k8s.ResourceCache) (*kubecostAggregator, error) {
 	if cache == nil || cache.Services() == nil || cache.StatefulSets() == nil {
 		return nil, fmt.Errorf("%w: requires access to Services and StatefulSets; configure the Aggregator URL manually", ErrKubecostDiscovery)
@@ -972,10 +952,6 @@ func aggregatorServiceEndpoints(service *corev1.Service, containers []corev1.Con
 
 func activeKubecostAggregator(statefulSet *appsv1.StatefulSet) bool {
 	return statefulSet != nil && statefulSet.Status.ReadyReplicas > 0 && (statefulSet.Labels["app.kubernetes.io/name"] == "aggregator" || statefulSet.Labels["app"] == "aggregator")
-}
-
-func detectKubecostClusterID() (string, error) {
-	return detectKubecostClusterIDFrom(k8s.GetResourceCache())
 }
 
 func detectKubecostClusterIDFrom(cache *k8s.ResourceCache) (string, error) {

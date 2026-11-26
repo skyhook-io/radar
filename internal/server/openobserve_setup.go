@@ -76,7 +76,7 @@ type openObserveClusterState struct {
 }
 
 func (s *Server) openObserveLocal() bool {
-	return s.configManagement() == "local" && !k8s.IsInCluster() && s.localRuntime != nil
+	return s.configManagement() == "local" && !k8s.IsInCluster() && s.integrationRuntime != nil
 }
 
 // hubOffersOpenObserve is cloud.HubOffersOpenObserve; a variable for tests.
@@ -201,15 +201,13 @@ func openObserveTargetError(err error) error {
 	return errors.New("Radar couldn't tell which cluster is current: " + prom.RedactURLs(err.Error()))
 }
 
-// openObserveClusterUID reads t's kube-system UID through the activator,
-// which remembers it per cluster. t comes from currentOpenObserveTarget.
 func (s *Server) openObserveClusterUID(ctx context.Context, t openobserve.Target) (string, error) {
 	if t.Client == nil {
 		return "", errors.New("Radar isn't connected to this cluster yet.")
 	}
 	ctx, cancel := context.WithTimeout(ctx, openObserveUIDTimeout)
 	defer cancel()
-	uid, err := openobserve.Default.ClusterUID(ctx, t)
+	uid, err := openobserve.ReadClusterUID(ctx, t.Client)
 	if err != nil {
 		return "", errors.New("Radar couldn't read this cluster's ID: " + prom.RedactURLs(err.Error()))
 	}
@@ -288,7 +286,7 @@ func (s *Server) handleOpenObserveSetup(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if result.Outcome == openobserve.SetupSaved {
-		s.localRuntime.RefreshOpenObserve()
+		s.integrationRuntime.RefreshProfiles()
 	}
 	s.writeJSON(w, result)
 }
@@ -327,7 +325,7 @@ func (s *Server) handleOpenObserveRemoveCluster(w http.ResponseWriter, r *http.R
 		s.connectionError(w, err)
 		return
 	}
-	s.localRuntime.RefreshOpenObserve()
+	s.integrationRuntime.RefreshProfiles()
 	s.writeJSON(w, s.openObserveView(r.Context()))
 }
 
@@ -343,6 +341,6 @@ func (s *Server) handleOpenObserveRemoveAll(w http.ResponseWriter, r *http.Reque
 		s.connectionError(w, err)
 		return
 	}
-	s.localRuntime.RefreshOpenObserve()
+	s.integrationRuntime.RefreshProfiles()
 	s.writeJSON(w, s.openObserveView(r.Context()))
 }

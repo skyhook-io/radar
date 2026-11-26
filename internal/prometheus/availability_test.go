@@ -16,23 +16,6 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 )
 
-func TestAvailabilityAbsentWithoutClient(t *testing.T) {
-	clientMu.Lock()
-	prev := globalClient
-	globalClient = nil
-	clientMu.Unlock()
-	t.Cleanup(func() {
-		clientMu.Lock()
-		globalClient = prev
-		clientMu.Unlock()
-	})
-
-	got := Availability(context.Background())
-	if got.State != AvailabilityAbsent || got.Err != nil || got.Address != "" {
-		t.Fatalf("Availability() = %+v, want absent with no error", got)
-	}
-}
-
 func TestAvailabilityConnectedViaManualURL(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

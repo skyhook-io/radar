@@ -4,148 +4,43 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"maps"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/skyhook-io/radar/internal/errorlog"
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/portforward"
+	"github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 // Manager handles traffic source detection and management
 type Manager struct {
-	lifetime     context.Context
-	cancel       context.CancelFunc
-	handles      *portforward.Handles
-	closeOnce    sync.Once
-	k8sClient    kubernetes.Interface
-	sources      map[string]TrafficSource
-	activeSource TrafficSource
-	clusterInfo  *ClusterInfo
-	contextName  string // current K8s context name
-	mu           sync.RWMutex
+	lifetime       context.Context
+	cancel         context.CancelFunc
+	handles        *portforward.Handles
+	closeOnce      sync.Once
+	k8sClient      kubernetes.Interface
+	sources        map[string]TrafficSource
+	activeSource   TrafficSource
+	sourceSnapshot atomic.Value
+	clusterInfo    *ClusterInfo
+	contextName    string // current K8s context name
+	mu             sync.RWMutex
 
 	// The last detection, for callers that only ask whether traffic is
 	// available. A context switch builds a new Manager, so it never outlives
 	// the cluster it describes.
-	lastSources    *SourcesResponse
-	lastDetectedAt time.Time
-	lastConfigGen  uint64
-}
-
-var (
-	manager  *Manager
-	initOnce sync.Once
-
-	// metricsConfigMu guards the configured-metrics globals below. Originally
-	// these were written only at startup (no concurrent readers), but the live
-	// "apply Prometheus URL" path now writes them at runtime while a concurrent
-	// context-switch rebuild reads them in initOnce.Do — so the access needs a
-	// lock, matching the mutex-guarded prometheus client.
-	metricsConfigMu sync.RWMutex
-	// configuredMetricsURL is the user-provided --prometheus-url flag value.
-	// Stored at package level so it persists across context-switch resets.
-	configuredMetricsURL string
-	// configuredMetricsHeaders are sent with every Prometheus query — required
-	// for auth-protected backends. Also persists across context switches.
-	configuredMetricsHeaders map[string]string
-	// configuredBeylaJobSelector overrides the default `job` label matcher used
-	// to scope Beyla's Prometheus queries; empty means use the built-in default.
-	configuredBeylaJobSelector string
-	// metricsConfigGen counts changes to the settings above. Metrics-based
-	// sources (Caretta, Beyla) detect through them, so a remembered detection
-	// made under other settings is stale.
-	metricsConfigGen uint64
-)
-
-// SetMetricsURL sets a manual Prometheus/VictoriaMetrics URL, bypassing auto-discovery.
-func SetMetricsURL(url string) {
-	metricsConfigMu.Lock()
-	defer metricsConfigMu.Unlock()
-	configuredMetricsURL = url
-	metricsConfigGen++
-}
-
-// SetMetricsHeaders sets HTTP headers attached to every Prometheus query.
-// Used for auth-protected backends (Bearer tokens, X-Scope-OrgID, etc.).
-func SetMetricsHeaders(h map[string]string) {
-	metricsConfigMu.Lock()
-	defer metricsConfigMu.Unlock()
-	configuredMetricsHeaders = copyMetricsHeaders(h)
-	metricsConfigGen++
-}
-
-// SetMetricsConfig applies URL and headers together. A source built between
-// two separate writes would pair the new URL with the old credentials (or the
-// reverse), so a live change must publish both in one step.
-func SetMetricsConfig(url string, h map[string]string) {
-	metricsConfigMu.Lock()
-	defer metricsConfigMu.Unlock()
-	configuredMetricsURL = url
-	configuredMetricsHeaders = copyMetricsHeaders(h)
-	metricsConfigGen++
-}
-
-func copyMetricsHeaders(h map[string]string) map[string]string {
-	if len(h) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(h))
-	maps.Copy(out, h)
-	return out
-}
-
-// SetBeylaJobSelector overrides the `job` label matcher fragment (e.g.
-// `job=~".*beyla.*"`) Beyla queries use to scope which Prometheus series they
-// read — for a cluster where Alloy or Beyla runs under a non-default job
-// name. Pass "" to restore the default.
-func SetBeylaJobSelector(selector string) {
-	metricsConfigMu.Lock()
-	defer metricsConfigMu.Unlock()
-	configuredBeylaJobSelector = selector
-	metricsConfigGen++
-}
-
-func currentMetricsConfigGen() uint64 {
-	metricsConfigMu.RLock()
-	defer metricsConfigMu.RUnlock()
-	return metricsConfigGen
-}
-
-// BeylaJobSelector returns the configured Beyla job-label matcher fragment,
-// or "" if unset.
-func BeylaJobSelector() string {
-	metricsConfigMu.RLock()
-	defer metricsConfigMu.RUnlock()
-	return configuredBeylaJobSelector
-}
-
-// metricsConfig returns the configured URL + headers under the read lock.
-func metricsConfig() (string, map[string]string) {
-	metricsConfigMu.RLock()
-	defer metricsConfigMu.RUnlock()
-	return configuredMetricsURL, configuredMetricsHeaders
-}
-
-// Initialize sets up the traffic manager with the given K8s client
-func Initialize(client kubernetes.Interface) error {
-	InitializeWithPortForwards(client, nil, "")
-	return nil
-}
-
-// InitializeWithPortForwards takes the client, tunnel manager, and context name
-// from the same connection. A nil manager disables automatic tunnels for traffic.
-func InitializeWithPortForwards(client kubernetes.Interface, forwards *portforward.Manager, contextName string) {
-	initOnce.Do(func() {
-		url, headers := metricsConfig()
-		manager = NewManager(client, forwards, contextName, url, headers)
-	})
+	lastSources      *SourcesResponse
+	lastDetectedAt   time.Time
+	metrics          *prometheus.Client
+	lastMetricsEpoch uint64
 }
 
 func NewManager(client kubernetes.Interface, forwards *portforward.Manager, contextName, metricsURL string, metricsHeaders map[string]string) *Manager {
@@ -157,7 +52,6 @@ func NewManager(client kubernetes.Interface, forwards *portforward.Manager, cont
 	caretta.forwards, caretta.handles = forwards, handles
 	caretta.metricsURL = metricsURL
 	caretta.headers = metricsHeaders
-	caretta.managedMetrics = true
 	return &Manager{
 		lifetime:    lifetime,
 		cancel:      cancel,
@@ -171,9 +65,28 @@ func NewManager(client kubernetes.Interface, forwards *portforward.Manager, cont
 	}
 }
 
-// GetManager returns the global traffic manager
-func GetManager() *Manager {
-	return manager
+func NewConnectionManager(conn *k8s.Connection, client *prometheus.Client, selector string) *Manager {
+	url, headers := client.CurrentConfig()
+	m := NewManager(conn.ClientInterface(), conn.PortForwards(), conn.ContextName(), url, headers)
+	m.metrics = client
+	inputs := &metricsInputs{client: client, cache: conn.ResourceCache(), url: url, job: selector}
+	if client != nil {
+		inputs.resolve = func(ctx context.Context, metric, selector string, window time.Duration) (string, prometheus.SeriesIsolation, error) {
+			return client.ResolveTrafficScope(ctx, metric, selector, window, inputs.cache)
+		}
+		inputs.spansClusters = client.TrafficSpansClusters
+		inputs.operatorScope = client.OperatorScopeDuringRelay
+		inputs.relayActive = client.RelayActive
+	}
+	caretta := m.sources["caretta"].(*CarettaSource)
+	caretta.metrics = inputs
+	beyla := m.sources["beyla"].(*BeylaSource)
+	beyla.metrics = inputs
+	istio := m.sources["istio"].(*IstioSource)
+	istio.metrics = inputs
+	istio.waypointsFn = func() map[istioWorkload]bool { return istioWaypoints(inputs.cache) }
+	istio.ambientNamespaceFn = func() []string { return ambientNamespaces(inputs.cache) }
+	return m
 }
 
 // DetectSources checks all registered traffic sources and returns detection results
@@ -203,7 +116,7 @@ func (m *Manager) RecentSources(ctx context.Context, maxAge time.Duration) (*Sou
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.lastSources != nil && time.Since(m.lastDetectedAt) < maxAge && m.lastConfigGen == currentMetricsConfigGen() {
+	if m.lastSources != nil && time.Since(m.lastDetectedAt) < maxAge && m.lastMetricsEpoch == m.metrics.BackendEpoch() {
 		response := *m.lastSources
 		response.Detected = slices.Clone(m.lastSources.Detected)
 		response.NotDetected = slices.Clone(m.lastSources.NotDetected)
@@ -217,8 +130,7 @@ func (m *Manager) RecentSources(ctx context.Context, maxAge time.Duration) (*Sou
 }
 
 func (m *Manager) detectSourcesLocked(ctx context.Context) (*SourcesResponse, error) {
-	configGen := currentMetricsConfigGen()
-
+	epoch := m.metrics.BackendEpoch()
 	// Detect cluster info first
 	clusterInfo, err := m.detectClusterInfo(ctx)
 	if err != nil {
@@ -311,7 +223,7 @@ func (m *Manager) detectSourcesLocked(ctx context.Context) (*SourcesResponse, er
 	remembered.NotDetected = slices.Clone(response.NotDetected)
 	m.lastSources = &remembered
 	m.lastDetectedAt = time.Now()
-	m.lastConfigGen = configGen
+	m.lastMetricsEpoch = epoch
 
 	return response, nil
 }
@@ -669,9 +581,11 @@ func (m *Manager) reconcileActiveSource(available []TrafficSource) {
 		}
 		log.Printf("[traffic] Active source %s is no longer available", m.activeSource.Name())
 		m.activeSource = nil
+		m.sourceSnapshot.Store("")
 	}
 	if len(available) > 0 {
 		m.activeSource = available[0]
+		m.sourceSnapshot.Store(m.activeSource.Name())
 	}
 }
 
@@ -686,7 +600,16 @@ func (m *Manager) SetActiveSource(name string) error {
 	}
 
 	m.activeSource = source
+	m.sourceSnapshot.Store(source.Name())
 	return nil
+}
+
+func (m *Manager) SourceSnapshot() string {
+	if m == nil {
+		return ""
+	}
+	name, _ := m.sourceSnapshot.Load().(string)
+	return name
 }
 
 // ActiveSourceNameIfIdle is GetActiveSourceName without waiting. Detection
@@ -732,26 +655,6 @@ func (m *Manager) Close() error {
 		}
 	})
 	return nil
-}
-
-// Reset cleans up for context switching
-func Reset() {
-	if manager != nil {
-		manager.Close()
-	}
-	manager = nil
-	initOnce = sync.Once{}
-}
-
-// Reinitialize reinitializes after context switch
-func Reinitialize(client kubernetes.Interface) error {
-	Reset()
-	return Initialize(client)
-}
-
-func ReinitializeWithPortForwards(client kubernetes.Interface, forwards *portforward.Manager, contextName string) {
-	Reset()
-	InitializeWithPortForwards(client, forwards, contextName)
 }
 
 // Connect establishes connection to the active traffic source

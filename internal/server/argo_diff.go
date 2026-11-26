@@ -77,6 +77,9 @@ func (s *Server) handleArgoResourceDiff(w http.ResponseWriter, r *http.Request) 
 	if !s.requireConnected(w) {
 		return
 	}
+	r = r.WithContext(k8s.CaptureConnection(r.Context()))
+	conn := k8s.ConnectionFrom(r.Context())
+	manager := connectionruntime.SetFor(conn).ArgoCD
 	appNamespace := normalizeNamespaceParam(chi.URLParam(r, "namespace"))
 	appName := chi.URLParam(r, "name")
 
@@ -113,7 +116,8 @@ func (s *Server) handleArgoResourceDiff(w http.ResponseWriter, r *http.Request) 
 	// uses — namespace access plus per-kind SARs for cluster-scoped kinds and
 	// Secrets. A user who can see the Application but lacks `get` on the target
 	// (a Secret they can't read) is denied here, still before any Argo call.
-	if failure := s.preflightResourceGet(r, normalizeKind(kind), resourceNamespace, resourceName, group); failure != nil {
+	cache := conn.ResourceCache()
+	if failure := s.preflightResourceGetFrom(r, cache, normalizeKind(kind), resourceNamespace, resourceName, group); failure != nil {
 		s.writeReadFailure(w, kind, failure, nil)
 		return
 	}
@@ -126,7 +130,6 @@ func (s *Server) handleArgoResourceDiff(w http.ResponseWriter, r *http.Request) 
 	// destination AND an Application we can't read to confirm one (its object lives
 	// in the watched argocd namespace, so a real app is readable; an unreadable one
 	// is treated as unauthorizable rather than served ungated).
-	cache := k8s.GetResourceCache()
 	if cache == nil {
 		// A context switch can clear the cache while IsConnected() (and so
 		// requireConnected) still reports true; guard like the other cache-reading
@@ -149,8 +152,7 @@ func (s *Server) handleArgoResourceDiff(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	manager := connectionruntime.SetFor(k8s.BoundOrCurrent(r.Context())).ArgoCD
-	if !manager.IsConfigured() && !manager.AnonymousReadAllowed() {
+	if manager == nil || (!manager.IsConfigured() && !manager.AnonymousReadAllowed()) {
 		s.writeError(w, http.StatusServiceUnavailable, "Argo CD integration is not connected")
 		return
 	}
@@ -164,7 +166,7 @@ func (s *Server) handleArgoResourceDiff(w http.ResponseWriter, r *http.Request) 
 		AppNamespace: appNamespace,
 	})
 	if err != nil {
-		s.writeArgoDiffError(w, appNamespace, appName, err)
+		s.writeArgoDiffError(w, appNamespace, appName, manager, err)
 		return
 	}
 
@@ -419,7 +421,7 @@ const argoConnectingMessage = "Radar is still connecting to Argo CD. Try again i
 // codes. Token problems (either the manager's auth verification or an
 // upstream 401/403) are 403 with a re-auth hint; unreachable is 503;
 // everything else is a logged 500.
-func (s *Server) writeArgoDiffError(w http.ResponseWriter, namespace, name string, err error) {
+func (s *Server) writeArgoDiffError(w http.ResponseWriter, namespace, name string, manager *argocd.Manager, err error) {
 	switch {
 	case errors.Is(err, argocd.ErrTokenBindingUpgrade):
 		s.writeError(w, http.StatusForbidden, "Re-enter the Argo CD token in Settings to bind it to this kubeconfig source.")
@@ -433,7 +435,7 @@ func (s *Server) writeArgoDiffError(w http.ResponseWriter, namespace, name strin
 		// The upstream error can wrap Argo's raw response body (proxy headers,
 		// a render error containing Secret data). Keep it in the server log
 		// only; the client gets a generic message.
-		log.Printf("[argo] resource-diff for %s/%s failed: %s", sanitizeForLog(namespace), sanitizeForLog(name), sanitizeForLog(argocd.RedactToken(err.Error())))
+		log.Printf("[argo] resource-diff for %s/%s failed: %s", sanitizeForLog(namespace), sanitizeForLog(name), sanitizeForLog(manager.RedactToken(err.Error())))
 		s.writeError(w, http.StatusBadGateway, "Failed to fetch the diff from the Argo CD API server.")
 	}
 }
@@ -445,12 +447,12 @@ func (s *Server) writeArgoDiffError(w http.ResponseWriter, namespace, name strin
 // asserted healthy) so we only ever surface a failure Argo actually reports.
 // Argo's raw connection error is carried in RawMessage for diagnosis (same
 // audience already sees the repo URL + repo errors on the Application itself).
-func (s *Server) enrichArgoRepoHealth(root *unstructured.Unstructured, insight *gitopsinsights.Insight) {
+func (s *Server) enrichArgoRepoHealth(manager *argocd.Manager, root *unstructured.Unstructured, insight *gitopsinsights.Insight) {
 	urls := appRepoURLs(root)
 	if len(urls) == 0 {
 		return
 	}
-	repos := argocd.RepositoriesCached()
+	repos := manager.RepositoriesCached()
 	if len(repos) == 0 {
 		return
 	}
@@ -622,6 +624,8 @@ func (s *Server) handleArgoRevisionMetadata(w http.ResponseWriter, r *http.Reque
 	if !s.requireConnected(w) {
 		return
 	}
+	r = r.WithContext(k8s.CaptureConnection(r.Context()))
+	manager := connectionruntime.Capture(r.Context()).ArgoCD
 	appNamespace := normalizeNamespaceParam(chi.URLParam(r, "namespace"))
 	appName := chi.URLParam(r, "name")
 	revision := r.URL.Query().Get("revision")
@@ -641,8 +645,7 @@ func (s *Server) handleArgoRevisionMetadata(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	manager := connectionruntime.SetFor(k8s.BoundOrCurrent(r.Context())).ArgoCD
-	if !manager.IsConfigured() && !manager.AnonymousReadAllowed() {
+	if manager == nil || (!manager.IsConfigured() && !manager.AnonymousReadAllowed()) {
 		s.writeError(w, http.StatusServiceUnavailable, "Argo CD integration is not connected")
 		return
 	}
@@ -667,7 +670,7 @@ func (s *Server) handleArgoRevisionMetadata(w http.ResponseWriter, r *http.Reque
 		case errors.Is(err, argoapi.ErrNotFound):
 			s.writeError(w, http.StatusNotFound, "Argo CD has no metadata for this revision.")
 		default:
-			log.Printf("[argo] revision-metadata for %s/%s failed: %s", sanitizeForLog(appNamespace), sanitizeForLog(appName), sanitizeForLog(argocd.RedactToken(err.Error())))
+			log.Printf("[argo] revision-metadata for %s/%s failed: %s", sanitizeForLog(appNamespace), sanitizeForLog(appName), sanitizeForLog(manager.RedactToken(err.Error())))
 			s.writeError(w, http.StatusBadGateway, "Failed to fetch revision metadata from the Argo CD API server.")
 		}
 		return

@@ -18,7 +18,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 
-	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/argoapi"
@@ -97,12 +96,12 @@ func startFakeArgoServer(t *testing.T, managedFn managedResourcesFunc) (*httptes
 }
 
 // connectArgo points the global Argo manager at url and probes it so
-// argocd.Get() returns connected. Cleanup resets the manager.
+// currentTestIntegrations().ArgoCD.Get() returns connected. Cleanup resets the manager.
 func connectArgo(t *testing.T, url string) {
 	t.Helper()
-	argocd.SetConfig(url, "good-token", false, true)
-	t.Cleanup(func() { argocd.SetConfig("", "", false, true) })
-	if err := argocd.Probe(context.Background()); err != nil {
+	manager := installTestArgo(t)
+	manager.SetConfig(url, "good-token", false, true)
+	if err := manager.Probe(context.Background()); err != nil {
 		t.Fatalf("probe fake Argo: %v", err)
 	}
 }
@@ -452,9 +451,7 @@ func TestArgoResourceDiff_NotInManagedSet(t *testing.T) {
 
 func TestArgoResourceDiff_NotConnected(t *testing.T) {
 	seedInClusterArgoApp(t, "argocd", "guestbook")
-	// Ensure the manager is unconfigured/disconnected: Get() returns false.
-	argocd.SetConfig("", "", false, true)
-	t.Cleanup(func() { argocd.SetConfig("", "", false, true) })
+	t.Cleanup(k8s.SetTestIntegrations(nil))
 
 	req := newDiffRequest("argocd", "guestbook", "kind=Deployment&resourceNamespace=default&resourceName=guestbook-ui")
 	w := httptest.NewRecorder()
@@ -578,8 +575,7 @@ func TestArgoRevisionMetadata_EmptyNamespace(t *testing.T) {
 }
 
 func TestArgoRevisionMetadata_NotConnected(t *testing.T) {
-	argocd.SetConfig("", "", false, true)
-	t.Cleanup(func() { argocd.SetConfig("", "", false, true) })
+	t.Cleanup(k8s.SetTestIntegrations(nil))
 
 	req := newRevMetaRequest("argocd", "guestbook", "revision=abc")
 	w := httptest.NewRecorder()
@@ -614,7 +610,7 @@ func argoAppRoot(sources ...string) *unstructured.Unstructured {
 func waitRepoCache(t *testing.T) {
 	t.Helper()
 	for i := 0; i < 200; i++ {
-		if len(argocd.RepositoriesCached()) > 0 {
+		if len(currentTestIntegrations().ArgoCD.RepositoriesCached()) > 0 {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -630,7 +626,7 @@ func TestEnrichArgoRepoHealth_FailedRepo(t *testing.T) {
 	insight := &gitopsinsights.Insight{}
 	// Root sources ".../broken" (no .git); the repo list stores ".../broken.git"
 	// — the match must survive the .git normalization.
-	(&Server{}).enrichArgoRepoHealth(argoAppRoot("https://github.com/org/broken"), insight)
+	(&Server{}).enrichArgoRepoHealth(currentTestIntegrations().ArgoCD, argoAppRoot("https://github.com/org/broken"), insight)
 
 	if len(insight.Issues) != 1 {
 		t.Fatalf("issues = %d, want 1: %+v", len(insight.Issues), insight.Issues)
@@ -661,7 +657,7 @@ func TestEnrichArgoRepoHealth_MergesIntoComparisonError(t *testing.T) {
 		Reason:   "ComparisonError",
 		Message:  "Failed to load target state: failed to generate manifest for source 1 of 1",
 	}}}
-	(&Server{}).enrichArgoRepoHealth(argoAppRoot("https://github.com/org/broken"), insight)
+	(&Server{}).enrichArgoRepoHealth(currentTestIntegrations().ArgoCD, argoAppRoot("https://github.com/org/broken"), insight)
 
 	if len(insight.Issues) != 1 {
 		t.Fatalf("issues = %d, want 1 (merged, not stacked): %+v", len(insight.Issues), insight.Issues)
@@ -684,7 +680,7 @@ func TestEnrichArgoRepoHealth_HealthyRepoNoIssue(t *testing.T) {
 	waitRepoCache(t)
 
 	insight := &gitopsinsights.Insight{}
-	(&Server{}).enrichArgoRepoHealth(argoAppRoot("https://github.com/org/healthy"), insight)
+	(&Server{}).enrichArgoRepoHealth(currentTestIntegrations().ArgoCD, argoAppRoot("https://github.com/org/healthy"), insight)
 	if len(insight.Issues) != 0 {
 		t.Fatalf("healthy repo must not add an issue: %+v", insight.Issues)
 	}
@@ -696,7 +692,7 @@ func TestEnrichArgoRepoHealth_UnknownRepoNoIssue(t *testing.T) {
 	waitRepoCache(t)
 
 	insight := &gitopsinsights.Insight{}
-	(&Server{}).enrichArgoRepoHealth(argoAppRoot("https://github.com/org/not-tracked"), insight)
+	(&Server{}).enrichArgoRepoHealth(currentTestIntegrations().ArgoCD, argoAppRoot("https://github.com/org/not-tracked"), insight)
 	if len(insight.Issues) != 0 {
 		t.Fatalf("unknown repo must be treated as unknown, not unhealthy: %+v", insight.Issues)
 	}
@@ -708,18 +704,17 @@ func TestEnrichArgoRepoHealth_MultiSource(t *testing.T) {
 	waitRepoCache(t)
 
 	insight := &gitopsinsights.Insight{}
-	(&Server{}).enrichArgoRepoHealth(argoAppRoot("https://github.com/org/healthy", "https://github.com/org/broken"), insight)
+	(&Server{}).enrichArgoRepoHealth(currentTestIntegrations().ArgoCD, argoAppRoot("https://github.com/org/healthy", "https://github.com/org/broken"), insight)
 	if len(insight.Issues) != 1 {
 		t.Fatalf("issues = %d, want 1 (only the broken source): %+v", len(insight.Issues), insight.Issues)
 	}
 }
 
 func TestEnrichArgoRepoHealth_NotConnectedNoIssue(t *testing.T) {
-	argocd.SetConfig("", "", false, true)
-	t.Cleanup(func() { argocd.SetConfig("", "", false, true) })
+	installTestArgo(t)
 
 	insight := &gitopsinsights.Insight{}
-	(&Server{}).enrichArgoRepoHealth(argoAppRoot("https://github.com/org/broken"), insight)
+	(&Server{}).enrichArgoRepoHealth(currentTestIntegrations().ArgoCD, argoAppRoot("https://github.com/org/broken"), insight)
 	if len(insight.Issues) != 0 {
 		t.Fatalf("disconnected Argo must not add an issue (best-effort): %+v", insight.Issues)
 	}

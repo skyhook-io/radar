@@ -60,17 +60,7 @@ func TestCostInterfaceThroughMCP(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]any{"status": "success", "data": map[string]any{"resultType": "matrix", "result": series}})
 	}))
 	defer source.Close()
-	original := opencost.ConfigSnapshot()
-	if err := opencost.Configure(opencost.ManagerConfig{Source: opencost.SourcePrometheus}); err != nil {
-		t.Fatal(err)
-	}
-	prometheuspkg.Initialize(nil, nil, "test", nil)
-	prometheuspkg.SetManualURL(source.URL)
-	t.Cleanup(func() {
-		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "", nil)
-		_ = opencost.Configure(original)
-	})
+	installTestCostMetrics(t, source.URL)
 	t.Cleanup(opencost.SetScopeResolverForTesting(unlabeledCostScope))
 	session := connectTestServer(t)
 	var summaries []any
@@ -300,17 +290,7 @@ func TestGetCostCarriesTheClusterScopeReason(t *testing.T) {
 		fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"namespace":"app"},"value":[1700000000,"2"]}]}}`)
 	}))
 	defer source.Close()
-	original := opencost.ConfigSnapshot()
-	if err := opencost.Configure(opencost.ManagerConfig{Source: opencost.SourcePrometheus}); err != nil {
-		t.Fatal(err)
-	}
-	prometheuspkg.Initialize(nil, nil, "test", nil)
-	prometheuspkg.SetManualURL(source.URL)
-	t.Cleanup(func() {
-		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "", nil)
-		_ = opencost.Configure(original)
-	})
+	installTestCostMetrics(t, source.URL)
 	session := connectTestServer(t)
 	call := func(view string) map[string]any {
 		t.Helper()

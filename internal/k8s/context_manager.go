@@ -43,20 +43,7 @@ type TimelineResetFunc func()
 // Returns error if reinitialization fails
 type TimelineReinitFunc func() error
 
-// TrafficResetFunc is called to reset the traffic manager
-type TrafficResetFunc func()
-
-// TrafficReinitFunc is called to reinitialize the traffic manager
 // Returns error if reinitialization fails
-type TrafficReinitFunc func() error
-
-// PrometheusResetFunc is called to reset the Prometheus metrics client
-type PrometheusResetFunc func()
-
-// PrometheusReinitFunc is called to reinitialize the Prometheus metrics client
-type PrometheusReinitFunc func() error
-
-type CostResetFunc func()
 
 var (
 	beforeContextSwitchCallbacks   []ContextSwitchCallback
@@ -66,11 +53,6 @@ var (
 	contextSwitchMu                sync.RWMutex
 	timelineResetFunc              TimelineResetFunc
 	timelineReinitFunc             TimelineReinitFunc
-	trafficResetFunc               TrafficResetFunc
-	trafficReinitFunc              TrafficReinitFunc
-	prometheusResetFunc            PrometheusResetFunc
-	prometheusReinitFunc           PrometheusReinitFunc
-	costResetFunc                  CostResetFunc
 	// sessionStopFunc terminates active port-forward / exec sessions. Invoked at
 	// the point of no return — immediately before the cache is torn down — so a
 	// pre-teardown failure (connectivity test, scope-target validation) doesn't
@@ -249,55 +231,6 @@ func RegisterTimelineFuncs(reset TimelineResetFunc, reinit TimelineReinitFunc) {
 	defer contextSwitchMu.Unlock()
 	timelineResetFunc = reset
 	timelineReinitFunc = reinit
-}
-
-// RegisterTrafficFuncs registers the traffic manager reset/reinit functions
-// This breaks the import cycle by allowing main to register traffic functions
-func RegisterTrafficFuncs(reset TrafficResetFunc, reinit TrafficReinitFunc) {
-	contextSwitchMu.Lock()
-	defer contextSwitchMu.Unlock()
-	trafficResetFunc = reset
-	trafficReinitFunc = reinit
-}
-
-// RestartTrafficSubsystem tears down and rebuilds the traffic manager for the
-// current cluster, the way a context switch does, serialized with any switch
-// or rescope in flight so the two can't interleave on the manager singleton.
-// A live configuration change that the traffic sources copied at construction
-// (the metrics URL and headers) reaches them only this way. No-op while
-// disconnected: the next connect builds the manager from current config.
-func RestartTrafficSubsystem() error {
-	contextSwitchMu.RLock()
-	resetFn, reinitFn := trafficResetFunc, trafficReinitFunc
-	contextSwitchMu.RUnlock()
-	if resetFn == nil || reinitFn == nil {
-		return nil
-	}
-	activeContextOperations.Add(1)
-	contextOpMu.Lock()
-	defer func() {
-		activeContextOperations.Add(-1)
-		contextOpMu.Unlock()
-	}()
-	if GetClient() == nil {
-		return nil
-	}
-	resetFn()
-	return reinitFn()
-}
-
-// RegisterPrometheusFuncs registers the Prometheus client reset/reinit functions.
-func RegisterPrometheusFuncs(reset PrometheusResetFunc, reinit PrometheusReinitFunc) {
-	contextSwitchMu.Lock()
-	defer contextSwitchMu.Unlock()
-	prometheusResetFunc = reset
-	prometheusReinitFunc = reinit
-}
-
-func RegisterCostResetFunc(reset CostResetFunc) {
-	contextSwitchMu.Lock()
-	defer contextSwitchMu.Unlock()
-	costResetFunc = reset
 }
 
 // TestClusterConnection tests connectivity to the current cluster.

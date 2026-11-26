@@ -489,8 +489,8 @@ func TestInClusterEnvSeedUsesDeterministicBindingWithoutClusterLookup(t *testing
 	}
 
 	m.SeedFromEnv("", "secret-token", false)
-	if m.tokenBinding != inClusterTokenBinding {
-		t.Fatalf("tokenBinding = %q, want %q", m.tokenBinding, inClusterTokenBinding)
+	if m.tokenBinding != InClusterTokenBinding {
+		t.Fatalf("tokenBinding = %q, want %q", m.tokenBinding, InClusterTokenBinding)
 	}
 	if resolverCalls != 0 {
 		t.Fatalf("source binding resolver called %d time(s), want none in-cluster", resolverCalls)

@@ -40,11 +40,6 @@ func TestCNPGReadsKeepCapturedMetricsClient(t *testing.T) {
 		manualURL: upstream.URL, httpClient: upstream.Client(),
 		workloadScope: &prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "east"}},
 	}
-	clientMu.Lock()
-	previous := globalClient
-	globalClient = &Client{workloadScope: &prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "west"}}}
-	clientMu.Unlock()
-	t.Cleanup(func() { clientMu.Lock(); globalClient = previous; clientMu.Unlock() })
 
 	ctx := context.Background()
 	matchers, iso, err := client.ResolveCNPGScope(ctx, "pg", CNPGInstanceSelector("pg", "pg"), nil, time.Minute)

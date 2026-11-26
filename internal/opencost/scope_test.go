@@ -506,27 +506,22 @@ func TestAutoSelectionKeepsAWithheldStore(t *testing.T) {
 			`{"metric":{"namespace":"shop","cluster":"a"},"value":[1700000000,"1"]},` +
 			`{"metric":{"namespace":"shop","cluster":"b"},"value":[1700000000,"2"]}]}}`))
 	}))
-	prometheuspkg.Initialize(nil, nil, "test", nil)
-	prometheuspkg.SetManualURL(promServer.URL)
+	client := testMetrics(t, promServer.URL)
 	t.Cleanup(func() {
 		promServer.Close()
-		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "", nil)
+
 	})
 	useFakeResolver(t, modeWithheld)
 
-	if state := detectPrometheusCostState(context.Background()); state != prometheusCostAvailable {
+	if state := detectPrometheusCostStateWith(context.Background(), testMetricsSource(client)); state != prometheusCostAvailable {
 		t.Fatalf("probe state = %v, want available", state)
 	}
-	m := &Manager{config: ManagerConfig{Source: SourceAuto}}
+	m := &Manager{config: ManagerConfig{Source: SourceAuto}, metrics: testMetricsSource(client)}
 	connection, err := m.Selected(context.Background())
 	if err != nil || connection.Source != SourcePrometheus {
 		t.Fatalf("selected %+v, %v; want the metrics store", connection, err)
 	}
-	client, err := prometheuspkg.ClientForOperation()
-	if err != nil {
-		t.Fatal(err)
-	}
+
 	resp := NewPromCost(client).Summary(context.Background(), pkgopencost.SummaryOptions{})
 	if resp.Available || resp.Reason != pkgopencost.ReasonClusterScope || resp.ClusterScope == nil {
 		t.Fatalf("summary = %+v", resp)
@@ -569,23 +564,16 @@ func TestCostScopeCheckOnAMovedConnectionIsAQueryError(t *testing.T) {
 	t.Cleanup(k8s.ResetTestState)
 	storeA, queriesA := recordingStore(t)
 	storeB, _ := recordingStore(t)
+	client := testMetrics(t, "")
 	connectTo := func(url string) *prometheuspkg.Client {
 		t.Helper()
-		prometheuspkg.SetManualURL(url)
-		client, err := prometheuspkg.ClientForOperation()
-		if err != nil {
-			t.Fatal(err)
-		}
+		client.Configure(url, nil)
+
 		if _, _, err := client.EnsureConnected(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 		return client
 	}
-	prometheuspkg.Initialize(nil, nil, "test", nil)
-	t.Cleanup(func() {
-		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "", nil)
-	})
 
 	for _, tc := range []struct {
 		name string
@@ -647,16 +635,8 @@ func TestCostScopeCheckOnTheSameConnectionAnswers(t *testing.T) {
 	}
 	t.Cleanup(k8s.ResetTestState)
 	store, queries := recordingStore(t)
-	prometheuspkg.Initialize(nil, nil, "test", nil)
-	prometheuspkg.SetManualURL(store.URL)
-	t.Cleanup(func() {
-		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "", nil)
-	})
-	client, err := prometheuspkg.ClientForOperation()
-	if err != nil {
-		t.Fatal(err)
-	}
+	client := testMetrics(t, store.URL)
+
 	if _, _, err := client.EnsureConnected(context.Background()); err != nil {
 		t.Fatal(err)
 	}

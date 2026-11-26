@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -130,7 +131,8 @@ func (s *Server) handleGetTrafficSources(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleGetTrafficFlows(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	manager := connectionruntime.SetFor(k8s.BoundOrCurrent(r.Context())).Traffic
+	conn := k8s.BoundOrCurrent(r.Context())
+	manager := connectionruntime.SetFor(conn).Traffic
 	if manager == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Traffic manager not initialized")
 		return
@@ -154,7 +156,7 @@ func (s *Server) handleGetTrafficFlows(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	flows := resolveFlowWorkloads(k8s.GetResourceCache(), response.Flows)
+	flows := resolveFlowWorkloads(conn.ResourceCache(), response.Flows)
 	byPod := r.URL.Query().Get("groupBy") == "pod"
 	s.writeJSON(w, trafficFlowsPayload(response, s.visibleFlows(r, flows, namespaces, opts), byPod))
 }
@@ -383,7 +385,8 @@ func (s *Server) handleGetTrafficRecords(w http.ResponseWriter, r *http.Request)
 	}
 	opts.Match = &match
 
-	manager := connectionruntime.SetFor(k8s.BoundOrCurrent(r.Context())).Traffic
+	conn := k8s.BoundOrCurrent(r.Context())
+	manager := connectionruntime.SetFor(conn).Traffic
 	if manager == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Traffic manager not initialized")
 		return
@@ -394,7 +397,7 @@ func (s *Server) handleGetTrafficRecords(w http.ResponseWriter, r *http.Request)
 		s.writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
-	flows := s.visibleFlows(r, resolveFlowWorkloads(k8s.GetResourceCache(), response.Flows), namespaces, opts)
+	flows := s.visibleFlows(r, resolveFlowWorkloads(conn.ResourceCache(), response.Flows), namespaces, opts)
 	s.writeJSON(w, trafficRecordsPayload(response, flows))
 }
 
@@ -460,17 +463,26 @@ func (s *Server) handleTrafficFlowsStream(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
+	if _, ok := w.(http.Flusher); !ok {
 		s.writeError(w, http.StatusInternalServerError, "Streaming not supported")
 		return
 	}
+	controller := http.NewResponseController(w)
+	send := func(frame string) error {
+		if err := controller.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+			return err
+		}
+		defer controller.SetWriteDeadline(time.Time{})
+		if _, err := w.Write([]byte(frame)); err != nil {
+			return err
+		}
+		return controller.Flush()
+	}
 
 	// Send initial connection event
-	if _, err := w.Write([]byte("event: connected\ndata: {}\n\n")); err != nil {
+	if err := send("event: connected\ndata: {}\n\n"); err != nil {
 		return
 	}
-	flusher.Flush()
 
 	// Heartbeat ticker
 	heartbeat := time.NewTicker(15 * time.Second)
@@ -497,23 +509,20 @@ func (s *Server) handleTrafficFlowsStream(w http.ResponseWriter, r *http.Request
 			if err != nil {
 				log.Printf("[traffic] Error marshaling flow: %v", err)
 				// Notify client of the error
-				if _, writeErr := w.Write([]byte("event: error\ndata: {\"error\":\"Failed to serialize flow data\"}\n\n")); writeErr != nil {
+				if err := send("event: error\ndata: {\"error\":\"Failed to serialize flow data\"}\n\n"); err != nil {
 					return
 				}
-				flusher.Flush()
 				continue
 			}
 
-			if _, err := w.Write([]byte("event: flow\ndata: " + string(data) + "\n\n")); err != nil {
+			if err := send("event: flow\ndata: " + string(data) + "\n\n"); err != nil {
 				return
 			}
-			flusher.Flush()
 
 		case <-heartbeat.C:
-			if _, err := w.Write([]byte("event: heartbeat\ndata: {}\n\n")); err != nil {
+			if err := send("event: heartbeat\ndata: {}\n\n"); err != nil {
 				return
 			}
-			flusher.Flush()
 		}
 	}
 }

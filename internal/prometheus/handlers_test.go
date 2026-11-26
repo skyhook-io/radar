@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/errorlog"
@@ -23,24 +22,12 @@ func TestHandleConnectOptionalReturnsUnavailableStatus(t *testing.T) {
 		http.Error(w, "not prometheus", http.StatusInternalServerError)
 	}))
 	defer srv.Close()
-
-	clientMu.Lock()
-	previous := globalClient
-	globalClient = &Client{
-		manualURL:   srv.URL,
-		contextName: "test-context",
-		httpClient:  &http.Client{Timeout: 5 * time.Second},
-	}
-	clientMu.Unlock()
-	t.Cleanup(func() {
-		clientMu.Lock()
-		globalClient = previous
-		clientMu.Unlock()
-	})
+	client := testClient(t, "test-context", nil)
+	client.Configure(srv.URL, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/prometheus/connect?optional=true", nil)
 	rec := httptest.NewRecorder()
-	Routes{Capture: func(context.Context) (*Client, error) { return ClientForOperation() }}.handleConnect(rec, req)
+	testRoutes(client).handleConnect(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
@@ -145,7 +132,7 @@ func TestHandleStatusReportsOpenObservePath(t *testing.T) {
 	for _, path := range []string{"", "hub", "local"} {
 		SetOpenObservePath(func() string { return path })
 		rec := httptest.NewRecorder()
-		Routes{Capture: func(context.Context) (*Client, error) { return ClientForOperation() }}.handleStatus(rec, httptest.NewRequest(http.MethodGet, "/prometheus/status", nil))
+		testRoutes(nil).handleStatus(rec, httptest.NewRequest(http.MethodGet, "/prometheus/status", nil))
 		var body map[string]any
 		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 			t.Fatal(err)
@@ -163,26 +150,27 @@ func TestHandleStatusReportsOpenObservePath(t *testing.T) {
 // A user's Discover asks Hub first; when Hub now selects OpenObserve the relay
 // answers and Prometheus is never searched. Automatic connects never ask Hub.
 func TestHandleConnectAsksHubFirst(t *testing.T) {
-	promHits, promURL := withRelayTestClient(t)
-	SetManualURL(promURL)
+	client, promHits, promURL := withRelayTestClient(t)
+	client.Configure(promURL, nil)
+	routes := Routes{Capture: func(context.Context) (*Client, error) { return client, nil }}
 	t.Cleanup(func() { checkHubMetricsSource = cloud.CheckMetricsSourceNow })
 	var checks int
 	checkHubMetricsSource = func(context.Context) bool {
 		checks++
-		Reinitialize(nil, nil, "hub-agent", nil)
-		_ = EnableRelay(testRelayConfig(&fakeRelayTransport{}, nil))
+		client = testClient(t, "hub-agent", nil)
+		_ = client.EnableRelay(testRelayConfig(&fakeRelayTransport{}, nil))
 		return true
 	}
 
 	rec := httptest.NewRecorder()
-	Routes{Capture: func(context.Context) (*Client, error) { return ClientForOperation() }}.handleConnect(rec, httptest.NewRequest(http.MethodPost, "/prometheus/connect?optional=true", nil))
+	routes.handleConnect(rec, httptest.NewRequest(http.MethodPost, "/prometheus/connect?optional=true", nil))
 	if checks != 0 {
 		t.Fatalf("automatic connect asked Hub %d times", checks)
 	}
 
 	promHits.Store(0)
 	rec = httptest.NewRecorder()
-	Routes{Capture: func(context.Context) (*Client, error) { return ClientForOperation() }}.handleConnect(rec, httptest.NewRequest(http.MethodPost, "/prometheus/connect", nil))
+	routes.handleConnect(rec, httptest.NewRequest(http.MethodPost, "/prometheus/connect", nil))
 	var status prom.Status
 	if err := json.NewDecoder(rec.Body).Decode(&status); err != nil {
 		t.Fatal(err)

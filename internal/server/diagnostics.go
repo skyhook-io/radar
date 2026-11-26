@@ -585,7 +585,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		if s.diagConfig != nil {
 			current := *s.diagConfig
 			current.OpenCostCurrency = ""
-			collectClusterSection("OpenCost currency", func() { current.OpenCostCurrency = s.resolvedOpenCostCurrency() })
+			collectClusterSection("OpenCost currency", func() { current.OpenCostCurrency = integrations.Currency.Resolve() })
 			current.Pprof = s.pprofEnabled()
 			snap.Config = &current
 		}

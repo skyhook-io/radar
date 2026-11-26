@@ -18,7 +18,6 @@ func TestCloseCancelsCarettaConnectWithoutWaitingForSourceLock(t *testing.T) {
 
 	manager := NewManager(nil, nil, "a", server.URL, nil)
 	source := manager.sources["caretta"].(*CarettaSource)
-	source.managedMetrics = false
 	manager.activeSource = source
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()

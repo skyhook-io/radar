@@ -36,14 +36,14 @@ func TestRawQueryRefusalIsTheCallersError(t *testing.T) {
 		{"backend failure", (&fakeRelayTransport{err: &prom.HTTPError{StatusCode: http.StatusInternalServerError}}).build, "up", http.StatusBadGateway, "Prometheus query failed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			withRelayTestClient(t)
+			client, _, _ := withRelayTestClient(t)
 			cfg := testRelayConfig(&fakeRelayTransport{}, nil)
 			cfg.NewTransport = tc.transport
-			if err := EnableRelay(cfg); err != nil {
+			if err := client.EnableRelay(cfg); err != nil {
 				t.Fatal(err)
 			}
 			for _, typ := range []string{"instant", "range"} {
-				rec := getMetrics(t, metricsRouter(), "/prometheus/query?type="+typ+"&query="+url.QueryEscape(tc.query))
+				rec := getMetrics(t, metricsRouter(client), "/prometheus/query?type="+typ+"&query="+url.QueryEscape(tc.query))
 				var body struct {
 					Error string `json:"error"`
 				}

@@ -8,11 +8,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/settings"
 	"github.com/skyhook-io/radar/pkg/argoapi"
 	"github.com/skyhook-io/radar/pkg/prom"
@@ -143,7 +142,7 @@ func TestUnusableProfileDoesNotPreventStartupWithScope(t *testing.T) {
 			}
 		}
 		RegisterCallbacks(AppConfig{WorkloadMetricsScope: prom.WorkloadMetricsScope{SingleCluster: true}}, timeline.StoreConfig{})
-		if prometheus.GetClient() != nil {
+		if connectionruntime.SetFor(k8s.Current()).Metrics != nil {
 			t.Fatal("unusable profile activated metrics")
 		}
 		return
@@ -193,12 +192,15 @@ func TestFirstConnectionActivatesSavedIntegrations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	RegisterCallbacks(AppConfig{WorkloadMetricsScope: prom.WorkloadMetricsScope{SingleCluster: true}}, timeline.StoreConfig{})
-	if argocd.IsConfigured() {
+	cfg := RegisterCallbacks(AppConfig{WorkloadMetricsScope: prom.WorkloadMetricsScope{SingleCluster: true}}, timeline.StoreConfig{})
+	if connectionruntime.SetFor(k8s.Current()).ArgoCD != nil {
 		t.Fatal("saved Argo CD settings activated before connecting")
 	}
-	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "dev"})
-	if !argocd.IsConfigured() {
+	if !k8s.AdmitTestIntegrations(cfg.IntegrationRuntime.Build) {
+		t.Fatal("admission refused")
+	}
+	t.Cleanup(k8s.RetireServingConnection)
+	if !connectionruntime.SetFor(k8s.Current()).ArgoCD.IsConfigured() {
 		t.Fatal("saved Argo CD settings were not activated on the first connection")
 	}
 }

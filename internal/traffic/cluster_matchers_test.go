@@ -18,37 +18,27 @@ import (
 )
 
 // stubScope stands in for the shared cluster proof and counts its calls.
-func stubScope(t *testing.T, fn func(metric string) (string, promclient.SeriesIsolation, error)) *int {
+func stubScope(t *testing.T, inputs *metricsInputs, fn func(metric string) (string, promclient.SeriesIsolation, error)) *int {
 	t.Helper()
 	calls := 0
 	var mu sync.Mutex
-	prev := resolveTrafficScope
-	resolveTrafficScope = func(_ context.Context, metric, _ string, _ time.Duration) (string, promclient.SeriesIsolation, error) {
+	inputs.resolve = func(_ context.Context, metric, _ string, _ time.Duration) (string, promclient.SeriesIsolation, error) {
 		mu.Lock()
 		calls++
 		mu.Unlock()
 		return fn(metric)
 	}
-	t.Cleanup(func() { resolveTrafficScope = prev })
 	return &calls
 }
 
 // stubSpans stands in for the count of cluster names in the traffic.
-func stubSpans(t *testing.T, spans bool, err error) {
+func stubSpans(t *testing.T, inputs *metricsInputs, spans bool, err error) {
 	t.Helper()
-	prev := trafficSpansClusters
-	trafficSpansClusters = func(context.Context, string, string, time.Duration) (bool, error) { return spans, err }
-	t.Cleanup(func() { trafficSpansClusters = prev })
+	inputs.spansClusters = func(context.Context, string, string, time.Duration) (bool, error) { return spans, err }
 }
 
 func clusterA(string) (string, promclient.SeriesIsolation, error) {
 	return `cluster="a"`, promclient.SeriesIsolation{Mode: promclient.SeriesIsolationVerified, Labels: map[string]string{"cluster": "a"}}, nil
-}
-
-func useConfiguredStore(t *testing.T) {
-	t.Helper()
-	SetMetricsConfig("http://metrics.example", nil)
-	t.Cleanup(func() { SetMetricsConfig("", nil) })
 }
 
 // recordingProm answers every query with one Caretta-shaped sample and keeps the
@@ -88,9 +78,10 @@ func carettaProm(t *testing.T, answer func(query string) []map[string]string) (*
 	}
 }
 
-func connectedCaretta(addr, metricsURL string) *CarettaSource {
+func connectedCaretta(inputs *metricsInputs, addr, metricsURL string) *CarettaSource {
 	return &CarettaSource{
 		httpClient:      &http.Client{Timeout: 2 * time.Second},
+		metrics:         inputs,
 		prometheusAddr:  addr,
 		metricsURL:      metricsURL,
 		isConnected:     true,
@@ -101,9 +92,10 @@ func connectedCaretta(addr, metricsURL string) *CarettaSource {
 // A store the operator configured may hold several clusters; each Caretta query
 // has to keep to this cluster's series or the graph merges clusters.
 func TestCarettaQueriesCarryClusterMatchers(t *testing.T) {
-	stubScope(t, clusterA)
+	inputs := &metricsInputs{url: "", spansClusters: noOtherTrafficCluster}
+	stubScope(t, inputs, clusterA)
 	srv, sent := recordingProm(t)
-	c := connectedCaretta(srv.URL, srv.URL)
+	c := connectedCaretta(inputs, srv.URL, srv.URL)
 	for _, opts := range []FlowOptions{{}, {Namespace: "shop"}} {
 		resp, err := c.GetFlows(t.Context(), opts)
 		if err != nil || len(resp.Flows) == 0 {
@@ -125,12 +117,12 @@ func TestCarettaQueriesCarryClusterMatchers(t *testing.T) {
 // for OpenObserve, not for the store Caretta reads directly: the map reads it
 // unfiltered and says it may include other clusters' traffic.
 func TestCarettaWarnsWhileARelayServesMetrics(t *testing.T) {
-	prev := metricsRelayActive
-	metricsRelayActive = func() bool { return true }
-	t.Cleanup(func() { metricsRelayActive = prev })
-	calls := stubScope(t, clusterA)
+	inputs := &metricsInputs{url: "", spansClusters: noOtherTrafficCluster}
+	inputs.operatorScope = func() (prom.WorkloadMetricsScope, bool) { return prom.WorkloadMetricsScope{}, false }
+	inputs.relayActive = func() bool { return true }
+	calls := stubScope(t, inputs, clusterA)
 	srv, sent := recordingProm(t)
-	c := connectedCaretta(srv.URL, srv.URL)
+	c := connectedCaretta(inputs, srv.URL, srv.URL)
 	resp, err := c.GetFlows(t.Context(), FlowOptions{})
 	if err != nil || len(resp.Flows) != 1 {
 		t.Fatalf("GetFlows: %v %+v", err, resp)
@@ -149,15 +141,15 @@ func TestCarettaWarnsWhileARelayServesMetrics(t *testing.T) {
 // The cluster labels an operator configured for the store Caretta reads still
 // filter the map while an OpenObserve relay serves the charts.
 func TestCarettaKeepsTheOperatorScopeWhileARelayServesMetrics(t *testing.T) {
-	prevActive, prevScope := metricsRelayActive, operatorScopeDuringRelay
-	metricsRelayActive = func() bool { return true }
-	operatorScopeDuringRelay = func() (prom.WorkloadMetricsScope, bool) {
+	inputs := &metricsInputs{url: "", spansClusters: noOtherTrafficCluster}
+	inputs.operatorScope = func() (prom.WorkloadMetricsScope, bool) { return prom.WorkloadMetricsScope{}, false }
+	inputs.relayActive = func() bool { return true }
+	inputs.operatorScope = func() (prom.WorkloadMetricsScope, bool) {
 		return prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "prod"}}, true
 	}
-	t.Cleanup(func() { metricsRelayActive, operatorScopeDuringRelay = prevActive, prevScope })
-	calls := stubScope(t, clusterA)
+	calls := stubScope(t, inputs, clusterA)
 	srv, sent := recordingProm(t)
-	c := connectedCaretta(srv.URL, srv.URL)
+	c := connectedCaretta(inputs, srv.URL, srv.URL)
 	resp, err := c.GetFlows(t.Context(), FlowOptions{})
 	if err != nil || len(resp.Flows) != 1 {
 		t.Fatalf("GetFlows: %v %+v", err, resp)
@@ -176,10 +168,10 @@ func TestCarettaKeepsTheOperatorScopeWhileARelayServesMetrics(t *testing.T) {
 // Without a configured URL Caretta reads its own caretta-vm, which holds only
 // this cluster and carries no cluster label: filtering it would empty the map.
 func TestCarettaOwnStoreIsNotFiltered(t *testing.T) {
-	useConfiguredStore(t)
-	calls := stubScope(t, clusterA)
+	inputs := &metricsInputs{url: "http://metrics.example", spansClusters: noOtherTrafficCluster}
+	calls := stubScope(t, inputs, clusterA)
 	srv, sent := recordingProm(t)
-	c := connectedCaretta(srv.URL, "")
+	c := connectedCaretta(inputs, srv.URL, "")
 	c.boundIsCarettaStore = true
 	resp, err := c.GetFlows(t.Context(), FlowOptions{})
 	if err != nil || len(resp.Flows) != 1 {
@@ -197,9 +189,10 @@ func TestCarettaOwnStoreIsNotFiltered(t *testing.T) {
 // cluster label that matches nothing must not turn into "holds no Caretta
 // metrics": the empty-map warning explains that case.
 func TestCarettaPresenceCheckIsUnfiltered(t *testing.T) {
-	stubScope(t, clusterA)
+	inputs := &metricsInputs{url: "", spansClusters: noOtherTrafficCluster}
+	stubScope(t, inputs, clusterA)
 	srv, sent := recordingProm(t)
-	c := connectedCaretta(srv.URL, srv.URL)
+	c := connectedCaretta(inputs, srv.URL, srv.URL)
 	c.mu.Lock()
 	present := c.carettaMetricsPresentLocked(t.Context(), srv.URL)
 	c.mu.Unlock()
@@ -266,8 +259,8 @@ func (b *beylaStore) sent() []string {
 	return append([]string(nil), b.queries...)
 }
 
-func newScopedBeyla(store *beylaStore) *BeylaSource {
-	src := &BeylaSource{k8sClient: fake.NewSimpleClientset()}
+func newScopedBeyla(inputs *metricsInputs, store *beylaStore) *BeylaSource {
+	src := &BeylaSource{metrics: inputs, k8sClient: fake.NewSimpleClientset()}
 	src.queryFn = store.query
 	return src
 }
@@ -282,10 +275,10 @@ func flowNames(flows []Flow) map[string]bool {
 }
 
 func TestBeylaQueriesCarryClusterMatchers(t *testing.T) {
-	useConfiguredStore(t)
-	stubScope(t, clusterA)
+	inputs := &metricsInputs{url: "http://metrics.example", spansClusters: noOtherTrafficCluster}
+	stubScope(t, inputs, clusterA)
 	store := &beylaStore{l4: map[string]bool{"a": true, "b": true}, l7: map[string]bool{"a": true, "b": true}}
-	resp, err := newScopedBeyla(store).GetFlows(t.Context(), FlowOptions{Namespace: "api"})
+	resp, err := newScopedBeyla(inputs, store).GetFlows(t.Context(), FlowOptions{Namespace: "api"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,9 +295,10 @@ func TestBeylaQueriesCarryClusterMatchers(t *testing.T) {
 
 // A store Radar discovered in the cluster holds this cluster's metrics.
 func TestBeylaNotFilteredWithoutConfiguredURL(t *testing.T) {
-	calls := stubScope(t, clusterA)
+	inputs := &metricsInputs{url: "", spansClusters: noOtherTrafficCluster}
+	calls := stubScope(t, inputs, clusterA)
 	store := &beylaStore{l4: map[string]bool{"": true}}
-	resp, err := newScopedBeyla(store).GetFlows(t.Context(), FlowOptions{})
+	resp, err := newScopedBeyla(inputs, store).GetFlows(t.Context(), FlowOptions{})
 	if err != nil || len(resp.Flows) == 0 {
 		t.Fatalf("GetFlows: %v %+v", err, resp)
 	}
@@ -321,15 +315,15 @@ func TestBeylaNotFilteredWithoutConfiguredURL(t *testing.T) {
 // Each family is checked on its own: HTTP series scraped without the cluster
 // label must not empty the network flows.
 func TestBeylaFamiliesScopedSeparately(t *testing.T) {
-	useConfiguredStore(t)
-	stubScope(t, func(metric string) (string, promclient.SeriesIsolation, error) {
+	inputs := &metricsInputs{url: "http://metrics.example", spansClusters: noOtherTrafficCluster}
+	stubScope(t, inputs, func(metric string) (string, promclient.SeriesIsolation, error) {
 		if metric == beylaL7Metric {
 			return "", promclient.SeriesIsolation{Labels: map[string]string{"cluster": "a"}}, promclient.ErrScopeMismatch
 		}
 		return clusterA(metric)
 	})
 	store := &beylaStore{l4: map[string]bool{"a": true, "b": true}, l7: map[string]bool{"": true}}
-	resp, err := newScopedBeyla(store).GetFlows(t.Context(), FlowOptions{})
+	resp, err := newScopedBeyla(inputs, store).GetFlows(t.Context(), FlowOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,13 +338,13 @@ func TestBeylaFamiliesScopedSeparately(t *testing.T) {
 // A context switch re-proves the cluster: the next request must use the new
 // cluster's labels, not ones remembered from the last.
 func TestBeylaScopeFollowsCurrentCluster(t *testing.T) {
-	useConfiguredStore(t)
+	inputs := &metricsInputs{url: "http://metrics.example", spansClusters: noOtherTrafficCluster}
 	current := "a"
-	stubScope(t, func(string) (string, promclient.SeriesIsolation, error) {
+	stubScope(t, inputs, func(string) (string, promclient.SeriesIsolation, error) {
 		return `cluster="` + current + `"`, promclient.SeriesIsolation{Mode: promclient.SeriesIsolationVerified, Labels: map[string]string{"cluster": current}}, nil
 	})
 	store := &beylaStore{l4: map[string]bool{"a": true, "b": true}}
-	src := newScopedBeyla(store)
+	src := newScopedBeyla(inputs, store)
 	for _, cluster := range []string{"a", "b", "a"} {
 		current = cluster
 		resp, err := src.GetFlows(t.Context(), FlowOptions{})
@@ -365,8 +359,8 @@ func TestBeylaScopeFollowsCurrentCluster(t *testing.T) {
 }
 
 func TestEmptyMapClusterWarnings(t *testing.T) {
-	useConfiguredStore(t)
-	stubScope(t, clusterA)
+	inputs := &metricsInputs{url: "http://metrics.example", spansClusters: noOtherTrafficCluster}
+	stubScope(t, inputs, clusterA)
 	for _, tc := range []struct {
 		name     string
 		clusters map[string]bool
@@ -377,7 +371,7 @@ func TestEmptyMapClusterWarnings(t *testing.T) {
 		{"store has no traffic", map[string]bool{}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			resp, err := newScopedBeyla(&beylaStore{l4: tc.clusters}).GetFlows(t.Context(), FlowOptions{})
+			resp, err := newScopedBeyla(inputs, &beylaStore{l4: tc.clusters}).GetFlows(t.Context(), FlowOptions{})
 			if err != nil || len(resp.Flows) != 0 {
 				t.Fatalf("GetFlows: %v %+v", err, resp)
 			}
@@ -395,7 +389,8 @@ func TestEmptyMapClusterWarnings(t *testing.T) {
 }
 
 func TestCarettaEmptyMapClusterWarning(t *testing.T) {
-	stubScope(t, clusterA)
+	inputs := &metricsInputs{url: "", spansClusters: noOtherTrafficCluster}
+	stubScope(t, inputs, clusterA)
 	srv, _ := carettaProm(t, func(q string) []map[string]string {
 		if strings.Contains(q, `cluster="a"`) {
 			return nil
@@ -405,7 +400,7 @@ func TestCarettaEmptyMapClusterWarning(t *testing.T) {
 		}
 		return []map[string]string{{"client_name": "x", "server_name": "y", "cluster": "b"}}
 	})
-	resp, err := connectedCaretta(srv.URL, srv.URL).GetFlows(t.Context(), FlowOptions{})
+	resp, err := connectedCaretta(inputs, srv.URL, srv.URL).GetFlows(t.Context(), FlowOptions{})
 	if err != nil || len(resp.Flows) != 0 {
 		t.Fatalf("GetFlows: %v %+v", err, resp)
 	}
@@ -418,7 +413,7 @@ func TestCarettaEmptyMapClusterWarning(t *testing.T) {
 // says the map may mix clusters only when the traffic carries two or more
 // cluster names.
 func TestMixedClustersNote(t *testing.T) {
-	useConfiguredStore(t)
+	inputs := &metricsInputs{url: "http://metrics.example", spansClusters: noOtherTrafficCluster}
 	unverified := promclient.SeriesIsolation{Mode: promclient.SeriesIsolationUnverified}
 	mismatch := func(string) (string, promclient.SeriesIsolation, error) {
 		return "", unverified, promclient.ErrScopeMismatch
@@ -450,9 +445,9 @@ func TestMixedClustersNote(t *testing.T) {
 		}, clusters: map[string]bool{"": true}, note: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			stubScope(t, tc.resolve)
-			stubSpans(t, tc.spans, tc.spansErr)
-			resp, err := newScopedBeyla(&beylaStore{l4: tc.clusters}).GetFlows(t.Context(), FlowOptions{})
+			stubScope(t, inputs, tc.resolve)
+			stubSpans(t, inputs, tc.spans, tc.spansErr)
+			resp, err := newScopedBeyla(inputs, &beylaStore{l4: tc.clusters}).GetFlows(t.Context(), FlowOptions{})
 			if err != nil || len(resp.Flows) != len(tc.clusters) {
 				t.Fatalf("GetFlows: %v, %d flows", err, len(resp.Flows))
 			}
@@ -467,13 +462,14 @@ func TestMixedClustersNote(t *testing.T) {
 // Caretta on a configured store whose traffic carries two cluster names draws
 // it with the note.
 func TestCarettaMixedClustersNote(t *testing.T) {
-	stubScope(t, func(string) (string, promclient.SeriesIsolation, error) {
+	inputs := &metricsInputs{url: "", spansClusters: noOtherTrafficCluster}
+	stubScope(t, inputs, func(string) (string, promclient.SeriesIsolation, error) {
 		return "", promclient.SeriesIsolation{}, promclient.ErrScopeAmbiguous
 	})
 	srv, _ := carettaProm(t, func(string) []map[string]string {
 		return []map[string]string{{"client_name": "x", "server_name": "y", "cluster": "a"}}
 	})
-	resp, err := connectedCaretta(srv.URL, srv.URL).GetFlows(t.Context(), FlowOptions{})
+	resp, err := connectedCaretta(inputs, srv.URL, srv.URL).GetFlows(t.Context(), FlowOptions{})
 	if err != nil || len(resp.Flows) == 0 {
 		t.Fatalf("GetFlows: %v %+v", err, resp)
 	}
@@ -504,12 +500,12 @@ func TestMixedClustersNoteJoinsPartialWarning(t *testing.T) {
 // Failing to check which cluster the series belong to must not fall back to
 // drawing the whole store.
 func TestScopeCheckFailureShowsNoTraffic(t *testing.T) {
-	useConfiguredStore(t)
-	stubScope(t, func(string) (string, promclient.SeriesIsolation, error) {
+	inputs := &metricsInputs{url: "http://metrics.example", spansClusters: noOtherTrafficCluster}
+	stubScope(t, inputs, func(string) (string, promclient.SeriesIsolation, error) {
 		return "", promclient.SeriesIsolation{}, errors.New("query timed out")
 	})
 	store := &beylaStore{l4: map[string]bool{"a": true, "b": true}}
-	resp, err := newScopedBeyla(store).GetFlows(t.Context(), FlowOptions{})
+	resp, err := newScopedBeyla(inputs, store).GetFlows(t.Context(), FlowOptions{})
 	if err != nil || len(resp.Flows) != 0 || resp.WarningKind != WarningTransient || !resp.WarningClusterScope {
 		t.Fatalf("GetFlows: %v %+v", err, resp)
 	}
@@ -521,10 +517,10 @@ func TestScopeCheckFailureShowsNoTraffic(t *testing.T) {
 // Detection decides whether Beyla is in the store at all, so it reads every
 // series under the job selector.
 func TestBeylaDetectIsUnfiltered(t *testing.T) {
-	useConfiguredStore(t)
-	calls := stubScope(t, clusterA)
+	inputs := &metricsInputs{url: "http://metrics.example", spansClusters: noOtherTrafficCluster}
+	calls := stubScope(t, inputs, clusterA)
 	store := &beylaStore{l4: map[string]bool{"b": true}}
-	result, err := newScopedBeyla(store).Detect(t.Context())
+	result, err := newScopedBeyla(inputs, store).Detect(t.Context())
 	if err != nil || !result.Available {
 		t.Fatalf("Detect: %v %+v", err, result)
 	}
@@ -547,11 +543,11 @@ func TestNoClusterWarningWhenThisClusterHasSeries(t *testing.T) {
 // identity (two scrape pipelines, one adding cluster_name): dropping them would
 // draw other clusters' traffic.
 func TestAmbiguityKeepsProvenLabels(t *testing.T) {
-	useConfiguredStore(t)
-	stubScope(t, func(string) (string, promclient.SeriesIsolation, error) {
+	inputs := &metricsInputs{url: "http://metrics.example", spansClusters: noOtherTrafficCluster}
+	stubScope(t, inputs, func(string) (string, promclient.SeriesIsolation, error) {
 		return "", promclient.SeriesIsolation{Mode: promclient.SeriesIsolationVerified, Labels: map[string]string{"cluster": "a"}}, promclient.ErrScopeAmbiguous
 	})
-	resp, err := newScopedBeyla(&beylaStore{l4: map[string]bool{"a": true, "b": true}}).GetFlows(t.Context(), FlowOptions{})
+	resp, err := newScopedBeyla(inputs, &beylaStore{l4: map[string]bool{"a": true, "b": true}}).GetFlows(t.Context(), FlowOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -567,15 +563,15 @@ func TestAmbiguityKeepsProvenLabels(t *testing.T) {
 // HTTP series Radar couldn't scope are left out and named, without taking the
 // network flows with them.
 func TestHTTPScopeFailureKeepsNetworkFlows(t *testing.T) {
-	useConfiguredStore(t)
-	stubScope(t, func(metric string) (string, promclient.SeriesIsolation, error) {
+	inputs := &metricsInputs{url: "http://metrics.example", spansClusters: noOtherTrafficCluster}
+	stubScope(t, inputs, func(metric string) (string, promclient.SeriesIsolation, error) {
 		if metric == beylaL7Metric {
 			return "", promclient.SeriesIsolation{}, errors.New("query timed out")
 		}
 		return clusterA(metric)
 	})
 	store := &beylaStore{l4: map[string]bool{"a": true}, l7: map[string]bool{"a": true}}
-	resp, err := newScopedBeyla(store).GetFlows(t.Context(), FlowOptions{})
+	resp, err := newScopedBeyla(inputs, store).GetFlows(t.Context(), FlowOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -590,4 +586,8 @@ func TestHTTPScopeFailureKeepsNetworkFlows(t *testing.T) {
 			t.Errorf("queried HTTP series without a cluster scope: %s", q)
 		}
 	}
+}
+
+func noOtherTrafficCluster(context.Context, string, string, time.Duration) (bool, error) {
+	return false, nil
 }

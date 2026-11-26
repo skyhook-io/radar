@@ -167,13 +167,8 @@ func setupFakeProm(t *testing.T) *fakeProm {
 	t.Helper()
 	f := &fakeProm{}
 	srv := httptest.NewServer(f)
-	prometheus.Initialize(nil, nil, "test-ctx", nil)
-	prometheus.SetManualURL(srv.URL)
-	t.Cleanup(func() {
-		srv.Close()
-		prometheus.Reset()
-		prometheus.Initialize(nil, nil, "", nil)
-	})
+	installTestMetrics(t, srv.URL)
+	t.Cleanup(srv.Close)
 	return f
 }
 
@@ -592,12 +587,7 @@ func TestHandleQueryPrometheus_PromQLErrorIncludesBody(t *testing.T) {
 }
 
 func TestHandleQueryPrometheus_NotConnected(t *testing.T) {
-	prometheus.Initialize(nil, nil, "test-ctx", nil)
-	prometheus.SetManualURL("http://127.0.0.1:1")
-	t.Cleanup(func() {
-		prometheus.Reset()
-		prometheus.Initialize(nil, nil, "", nil)
-	})
+	installTestMetrics(t, "http://127.0.0.1:1")
 
 	_, _, err := handleQueryPrometheus(context.Background(), nil, queryPrometheusInput{Query: "test_metric"})
 	if err == nil {

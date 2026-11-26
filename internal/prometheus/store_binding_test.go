@@ -49,13 +49,9 @@ func bindingTestStore(t *testing.T) (*httptest.Server, func() []string) {
 }
 
 // connectBindingTestClient points the global client at url and connects it.
-func connectBindingTestClient(t *testing.T, url string) *Client {
+func connectBindingTestClient(t *testing.T, client *Client, url string) *Client {
 	t.Helper()
-	SetManualURL(url)
-	client, err := ClientForOperation()
-	if err != nil {
-		t.Fatal(err)
-	}
+	client.Configure(url, nil)
 	if _, _, err := client.EnsureConnected(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -85,11 +81,6 @@ func initBindingTestCluster(t *testing.T) *k8s.ResourceCache {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	Initialize(nil, nil, "binding-test", nil)
-	t.Cleanup(func() {
-		Reset()
-		Initialize(nil, nil, "", nil)
-	})
 	return cache
 }
 
@@ -116,13 +107,14 @@ func replaceRightsizingScopeResolver(t *testing.T, during func()) *int {
 // connection moves from store A to store B during the check, B's approval of
 // unfiltered queries must not send them to A, nor mix in B's answers.
 func TestRightsizingCheckOnAMovedConnectionWithholds(t *testing.T) {
-	initBindingTestCluster(t)
+	cache := initBindingTestCluster(t)
+	client := testClient(t, "binding-test", cache)
 	storeA, queriesA := bindingTestStore(t)
 	storeB, queriesB := bindingTestStore(t)
-	connectBindingTestClient(t, storeA.URL)
-	checks := replaceRightsizingScopeResolver(t, func() { connectBindingTestClient(t, storeB.URL) })
+	connectBindingTestClient(t, client, storeA.URL)
+	checks := replaceRightsizingScopeResolver(t, func() { connectBindingTestClient(t, client, storeB.URL) })
 
-	resp, err := RightsizingForWorkload(context.Background(), "Deployment", "shop", "api")
+	resp, err := client.RightsizingForWorkload(context.Background(), "Deployment", "shop", "api")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,12 +137,13 @@ func TestRightsizingCheckOnAMovedConnectionWithholds(t *testing.T) {
 
 // Unmoved, the queries run on the store the check approved.
 func TestRightsizingCheckOnTheSameConnectionQueriesItsStore(t *testing.T) {
-	initBindingTestCluster(t)
+	cache := initBindingTestCluster(t)
+	client := testClient(t, "binding-test", cache)
 	store, queries := bindingTestStore(t)
-	connectBindingTestClient(t, store.URL)
+	connectBindingTestClient(t, client, store.URL)
 	replaceRightsizingScopeResolver(t, func() {})
 
-	resp, err := RightsizingForWorkload(context.Background(), "Deployment", "shop", "api")
+	resp, err := client.RightsizingForWorkload(context.Background(), "Deployment", "shop", "api")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,13 +158,14 @@ func TestRightsizingCheckOnTheSameConnectionQueriesItsStore(t *testing.T) {
 // A store that can't be reached is a failed query, not a cluster scope that
 // couldn't be checked: no check runs and the reason says the queries failed.
 func TestRightsizingOnAnUnreachableStoreReportsFailedQueries(t *testing.T) {
-	initBindingTestCluster(t)
+	cache := initBindingTestCluster(t)
+	client := testClient(t, "binding-test", cache)
 	store, _ := bindingTestStore(t)
-	connectBindingTestClient(t, store.URL)
+	connectBindingTestClient(t, client, store.URL)
 	store.Close()
 	checks := replaceRightsizingScopeResolver(t, func() {})
 
-	resp, err := RightsizingForWorkload(context.Background(), "Deployment", "shop", "api")
+	resp, err := client.RightsizingForWorkload(context.Background(), "Deployment", "shop", "api")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,9 +178,10 @@ func TestRightsizingOnAnUnreachableStoreReportsFailedQueries(t *testing.T) {
 }
 
 func TestBindStoreAfterAFailedConnectFailsItsQueries(t *testing.T) {
-	initBindingTestCluster(t)
+	cache := initBindingTestCluster(t)
+	client := testClient(t, "binding-test", cache)
 	store, queries := bindingTestStore(t)
-	client := connectBindingTestClient(t, store.URL)
+	connectBindingTestClient(t, client, store.URL)
 	wantErr := errors.New("connect failed")
 	bound := boundStore{err: wantErr}
 	if _, err := bound.Query(context.Background(), "up"); !errors.Is(err, wantErr) {
@@ -216,12 +211,13 @@ func TestRightsizingScanCheckOnAMovedConnectionWithholds(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			cache := initBindingTestCluster(t)
+			client := testClient(t, "binding-test", cache)
 			storeA, queriesA := bindingTestStore(t)
 			storeB, queriesB := bindingTestStore(t)
-			client := connectBindingTestClient(t, storeA.URL)
+			connectBindingTestClient(t, client, storeA.URL)
 			replaceRightsizingScopeResolver(t, func() {
 				if moved {
-					connectBindingTestClient(t, storeB.URL)
+					connectBindingTestClient(t, client, storeB.URL)
 				}
 			})
 

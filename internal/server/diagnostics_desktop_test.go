@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/desktopenv"
 	"github.com/skyhook-io/radar/internal/k8s"
-	internalopencost "github.com/skyhook-io/radar/internal/opencost"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/traffic"
 	"github.com/skyhook-io/radar/internal/version"
@@ -24,10 +24,8 @@ import (
 
 func TestDiagnosticsReportsRunningOpenCostCurrency(t *testing.T) {
 	rec := httptest.NewRecorder()
-	s := &Server{
-		diagConfig:       &DiagConfig{OpenCostCurrency: "USD"},
-		openCostCurrency: internalopencost.NewCurrencyResolver("GBP"),
-	}
+	s := serverWithTestIntegrations(t, connectionruntime.Settings{Currency: "GBP"})
+	s.diagConfig = &DiagConfig{OpenCostCurrency: "USD"}
 	s.handleDiagnostics(rec, httptest.NewRequest(http.MethodGet, "/api/diagnostics", nil))
 
 	var snapshot DiagnosticsSnapshot
@@ -405,15 +403,13 @@ func TestDiagnosticsDuringTrafficSourceDetection(t *testing.T) {
 	previous := k8s.GetConnectionStatus()
 	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 	t.Cleanup(func() { k8s.PublishTestConnectionStatus(previous) })
-	if err := traffic.Initialize(kubernetes.NewForConfigOrDie(&rest.Config{Host: api.URL})); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(traffic.Reset)
+	manager := traffic.NewManager(kubernetes.NewForConfigOrDie(&rest.Config{Host: api.URL}), nil, "test", "", nil)
+	t.Cleanup(k8s.SetTestIntegrations(&connectionruntime.Set{Traffic: manager}))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = traffic.GetManager().DetectSources(ctx)
+		_, _ = manager.DetectSources(ctx)
 	}()
 	t.Cleanup(func() { cancel(); close(release); <-done })
 	select {

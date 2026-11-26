@@ -69,9 +69,8 @@ func TestRecentSources_ReusesADetectionUntilItIsStale(t *testing.T) {
 
 	// Metrics settings decide what Caretta and Beyla find, so changing them
 	// makes the remembered answer stale however recent it is.
-	SetBeylaJobSelector(`job=~".*beyla.*"`)
-	t.Cleanup(func() { SetBeylaJobSelector("") })
-	if _, err := m.RecentSources(ctx, time.Minute); err != nil {
+	replacement := &Manager{k8sClient: m.k8sClient, sources: m.sources}
+	if _, err := replacement.RecentSources(ctx, time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	if source.detections != 4 {
