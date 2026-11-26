@@ -440,38 +440,37 @@ assert_not_contains 'name: radar-cloud-viewer-cluster-read$'    "no tier binding
 echo
 
 render "the stock Cloud owner gets Argo CD actions by default" $CLOUD
-assert_contains 'name: radar-integration-write$'                     "write role rendered"
-assert_contains 'name: radar-cloud-owner-integration-write$'         "owner-only write binding rendered"
-assert_not_contains 'name: radar-cloud-member-integration-write$'    "no member write binding"
+assert_contains 'name: radar-owner-access-argocd$'                     "write role rendered"
+assert_contains 'name: radar:owner-access:argocd$'         "owner-only write binding rendered"
 echo
 
 render "explicit false disables the Cloud owner write grant on upgrade" $CLOUD --is-upgrade --set cloud.defaultRbac.integrationWrite.argocd.owner=false
-assert_not_contains 'name: radar-integration-write$'                 "no write role"
-assert_not_contains 'name: radar-cloud-owner-integration-write$'     "no owner write binding"
+assert_not_contains 'name: radar-owner-access-argocd$'                 "no write role"
+assert_not_contains 'name: radar:owner-access:argocd$'     "no owner write binding"
 echo
 
 render "legacy values (integrationWrite absent) follow the default: on" $CLOUD --is-upgrade --set cloud.defaultRbac.integrationWrite=null
-assert_contains 'name: radar-integration-write$'                     "absent map inherits the grant"
+assert_contains 'name: radar-owner-access-argocd$'                     "absent map inherits the grant"
 echo
 
 render "malformed integrationWrite map cannot fall back to the grant" $CLOUD --set-string cloud.defaultRbac.integrationWrite=false --skip-schema-validation
-assert_not_contains 'name: radar-integration-write$'                 "invalid integrationWrite map stays off"
+assert_not_contains 'name: radar-owner-access-argocd$'                 "invalid integrationWrite map stays off"
 echo
 
 render "malformed argocd map cannot fall back to the grant" $CLOUD --set-string cloud.defaultRbac.integrationWrite.argocd=false --skip-schema-validation
-assert_not_contains 'name: radar-integration-write$'                 "invalid argocd map stays off"
+assert_not_contains 'name: radar-owner-access-argocd$'                 "invalid argocd map stays off"
 echo
 
 render "string false must not enable integration writes" $CLOUD --set-string cloud.defaultRbac.integrationWrite.argocd.owner=false --skip-schema-validation
-assert_not_contains 'name: radar-integration-write$'                 "string-false write grant stays off"
+assert_not_contains 'name: radar-owner-access-argocd$'                 "string-false write grant stays off"
 echo
 
 render "string false must not enable the owner tier write binding" $CLOUD --set cloud.defaultRbac.integrationWrite.argocd.owner=true --set-string cloud.defaultRbac.owner=false --skip-schema-validation
-assert_not_contains 'name: radar-integration-write$'                 "disabled owner tier has no write grant"
+assert_not_contains 'name: radar-owner-access-argocd$'                 "disabled owner tier has no write grant"
 echo
 
 render "string false must not enable integration write collections" $CLOUD --set cloud.defaultRbac.integrationWrite.argocd.owner=true --set rbac.crdGroups.argo=false --set-string rbac.crdGroups.all=false --skip-schema-validation
-assert_not_contains 'name: radar-integration-write$'                 "disabled collections have no write grant"
+assert_not_contains 'name: radar-owner-access-argocd$'                 "disabled collections have no write grant"
 echo
 
 if [[ $FAIL -eq 0 ]]; then

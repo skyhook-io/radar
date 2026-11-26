@@ -113,6 +113,7 @@ func (r *PermissionCheckResult) CredentialRejectedNamespaces(resource string, na
 
 // Capabilities represents the features available based on RBAC permissions
 type Capabilities struct {
+	OwnerAccess            *[]string                `json:"ownerAccess,omitempty"`
 	ConfigManagement       string                   `json:"configManagement"`
 	Exec                   bool                     `json:"exec"` // Can create pods/exec (terminal feature)
 	PodExecUID             bool                     `json:"podExecUID,omitempty"`

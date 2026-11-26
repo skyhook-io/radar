@@ -3,6 +3,7 @@ package k8s
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -111,7 +112,11 @@ func TestIntegrationWriteBaselinePolicy(t *testing.T) {
 	for name, capability := range policy.Capabilities {
 		declared = append(declared, name)
 		switches, _ := writeValues[name].(map[string]interface{})
-		if got, ok := switches["owner"].(bool); !ok || got != *capability.Default || len(switches) != 1 {
+		if name == "cnpg" {
+			if len(switches) != 0 {
+				t.Errorf("values.yaml integrationWrite.cnpg must leave owner unset for the role-dependent default, got %v", switches)
+			}
+		} else if got, ok := switches["owner"].(bool); !ok || got != *capability.Default || len(switches) != 1 {
 			t.Errorf("values.yaml integrationWrite.%s = %v, want only owner: %t", name, switches, *capability.Default)
 		}
 		node, _ := schemaCapabilities[name].(map[string]interface{})
@@ -148,7 +153,7 @@ func assertIntegrationWriteGrant(t *testing.T, policy integrationWritePolicy, do
 		t.Fatalf("rendered %d documents, want role + owner binding", len(docs))
 	}
 	role, binding := docs[0], docs[1]
-	if role.Kind != "ClusterRole" || role.Name != "radar-integration-write" || !reflect.DeepEqual(role.Rules, want) {
+	if role.Kind != "ClusterRole" || role.Name != "radar-owner-access-argocd" || !reflect.DeepEqual(role.Rules, want) {
 		t.Errorf("unexpected write role: %+v", role)
 	}
 	if !reflect.DeepEqual(want, []rbacv1.PolicyRule{{APIGroups: []string{"argoproj.io"}, Resources: []string{"applications"}, Verbs: []string{"get", "patch"}}}) {
@@ -160,11 +165,10 @@ func assertIntegrationWriteGrant(t *testing.T, policy integrationWritePolicy, do
 		}
 	}
 	wantSubjects := []rbacv1.Subject{
-		{Kind: "Group", Name: "radar:owner", APIGroup: rbacv1.GroupName},
-		{Kind: "Group", Name: "cloud:owner", APIGroup: rbacv1.GroupName},
+		{Kind: "Group", Name: "radar:owner-access:argocd", APIGroup: rbacv1.GroupName},
 	}
-	if binding.Kind != "ClusterRoleBinding" || binding.Name != "radar-cloud-owner-integration-write" ||
-		binding.RoleRef != (rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "radar-integration-write"}) ||
+	if binding.Kind != "ClusterRoleBinding" || binding.Name != "radar-owner-access-argocd" ||
+		binding.RoleRef != (rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "radar-owner-access-argocd"}) ||
 		!reflect.DeepEqual(binding.Subjects, wantSubjects) {
 		t.Errorf("unexpected write binding: %+v", binding)
 	}
@@ -206,7 +210,13 @@ func TestIntegrationWriteOwnerSwitch(t *testing.T) {
 		{name: "member and viewer tiers off", overrides: "cloud.defaultRbac.member=false,cloud.defaultRbac.viewer=false,cloud.defaultRbac.integrationWrite.argocd.owner=true", granted: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			docs := renderIntegrationWriteChart(t, tc.overrides, tc.editDefaults)
+			all := renderIntegrationWriteChart(t, tc.overrides, tc.editDefaults)
+			var docs []integrationRBACDocument
+			for _, doc := range all {
+				if doc.Name == "radar-owner-access-argocd" {
+					docs = append(docs, doc)
+				}
+			}
 			if !tc.granted {
 				if len(docs) != 0 {
 					t.Fatalf("expected no write add-on, rendered %+v", docs)
@@ -218,10 +228,58 @@ func TestIntegrationWriteOwnerSwitch(t *testing.T) {
 	}
 }
 
+func TestIntegrationWriteCNPGOwnerApproval(t *testing.T) {
+	const customOwner = "cloud.defaultRbac.ownerClusterRole=custom-operator"
+	const approveCNPG = "cloud.defaultRbac.integrationWrite.cnpg.owner=true"
+	dropMap := func(rbac map[string]interface{}) { delete(rbac, "integrationWrite") }
+	for _, tc := range []struct {
+		name, overrides string
+		editDefaults    func(map[string]interface{})
+		wantGrants      string
+	}{
+		{name: "stock admin", wantGrants: "argocd,cnpg,velero"},
+		{name: "cluster-admin", overrides: "cloud.defaultRbac.ownerClusterRole=cluster-admin", wantGrants: "argocd,cnpg,velero"},
+		{name: "stock admin scoped to namespaces", overrides: "rbac.namespaces={databases}", wantGrants: "argocd,cnpg"},
+		{name: "stock admin explicit opt-out", overrides: "cloud.defaultRbac.integrationWrite.cnpg.owner=false", wantGrants: "argocd,velero"},
+		{name: "custom role", overrides: customOwner, wantGrants: "argocd"},
+		{name: "custom role explicit opt-in", overrides: customOwner + "," + approveCNPG, wantGrants: "argocd,cnpg"},
+		{name: "old stock values missing map", editDefaults: dropMap, wantGrants: "argocd,cnpg,velero"},
+		{name: "old custom values missing map", editDefaults: dropMap, overrides: customOwner, wantGrants: "argocd"},
+		{name: "old custom values explicit opt-in", editDefaults: dropMap, overrides: customOwner + "," + approveCNPG, wantGrants: "argocd,cnpg"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rendered := renderCloudChart(t, tc.overrides, tc.editDefaults)
+			wantCNPG := slices.Contains(strings.Split(tc.wantGrants, ","), "cnpg")
+			var hasCNPG bool
+			for _, doc := range decodeRBACDocuments(t, rendered["radar/templates/cloud-rbac-integration-write.yaml"]) {
+				for _, subject := range doc.Subjects {
+					if subject.Kind == "Group" && subject.Name == "radar:owner-access:cnpg" {
+						hasCNPG = true
+					}
+				}
+			}
+			if hasCNPG != wantCNPG {
+				t.Errorf("CNPG group binding = %t, want %t", hasCNPG, wantCNPG)
+			}
+			wantEnv := "- name: RADAR_CLOUD_OWNER_ACCESS\n              value: " + fmt.Sprintf("%q", tc.wantGrants)
+			if !strings.Contains(rendered["radar/templates/deployment.yaml"], wantEnv) {
+				t.Errorf("deployment does not advertise %q", tc.wantGrants)
+			}
+		})
+	}
+}
+
 func TestIntegrationWriteDoesNotChangeExistingManifests(t *testing.T) {
 	on := renderCloudChart(t, "rbac.helm=true,cloud.defaultRbac.integrationWrite.argocd.owner=true", nil)
 	off := renderCloudChart(t, "rbac.helm=true,cloud.defaultRbac.integrationWrite.argocd.owner=false", nil)
 	for name, rendered := range on {
+		if name == "radar/templates/deployment.yaml" {
+			advertised := `value: "argocd,cnpg,velero"`
+			if strings.Count(rendered, advertised) != 1 {
+				t.Fatal("deployment must advertise all three approved default grants")
+			}
+			rendered = strings.Replace(rendered, advertised, `value: "cnpg,velero"`, 1)
+		}
 		if name != "radar/templates/cloud-rbac-integration-write.yaml" && !bytes.Equal([]byte(rendered), []byte(off[name])) {
 			t.Errorf("integration write add-on changed existing manifest %s", name)
 		}
