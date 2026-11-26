@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/skyhook-io/radar/internal/substrate/ateapi"
+	"go.ate.dev/substrate/api/ateapi/v1"
 )
 
 // A crashed actor whose worker Pod is still running has its last lines in

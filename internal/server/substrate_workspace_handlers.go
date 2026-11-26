@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -27,7 +28,6 @@ import (
 	"github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/readscope"
 	substrateapi "github.com/skyhook-io/radar/internal/substrate"
-	"github.com/skyhook-io/radar/internal/substrate/ateapi"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"

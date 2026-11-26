@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -28,7 +29,6 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/skyhook-io/radar/internal/portforward"
-	"github.com/skyhook-io/radar/internal/substrate/ateapi"
 	pfpkg "github.com/skyhook-io/radar/pkg/portforward"
 )
 

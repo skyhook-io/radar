@@ -40,6 +40,7 @@ require (
 	github.com/prometheus/common v0.74.0
 	github.com/skyhook-io/radar/pkg v0.0.0
 	github.com/wailsapp/wails/v2 v2.17.1
+	go.ate.dev/substrate v1.0.1
 	golang.org/x/net v0.63.0
 	golang.org/x/oauth2 v0.38.0
 	golang.org/x/sync v0.25.0
@@ -98,8 +99,7 @@ require (
 	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/chai2010/gettext-go v1.0.3 // indirect
-	github.com/clipperhouse/stringish v0.1.1 // indirect
-	github.com/clipperhouse/uax29/v2 v2.4.0 // indirect
+	github.com/clipperhouse/uax29/v2 v2.6.0 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/cyphar/filepath-securejoin v0.7.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
@@ -119,18 +119,18 @@ require (
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/go-openapi/jsonpointer v1.0.0 // indirect
 	github.com/go-openapi/jsonreference v1.0.0 // indirect
-	github.com/go-openapi/swag v0.27.1 // indirect
-	github.com/go-openapi/swag/cmdutils v0.27.1 // indirect
-	github.com/go-openapi/swag/conv v0.27.1 // indirect
-	github.com/go-openapi/swag/fileutils v0.27.1 // indirect
-	github.com/go-openapi/swag/jsonutils v0.27.1 // indirect
-	github.com/go-openapi/swag/loading v0.27.1 // indirect
-	github.com/go-openapi/swag/mangling v0.27.1 // indirect
-	github.com/go-openapi/swag/netutils v0.27.1 // indirect
-	github.com/go-openapi/swag/pools v0.27.1 // indirect
-	github.com/go-openapi/swag/stringutils v0.27.1 // indirect
-	github.com/go-openapi/swag/typeutils v0.27.1 // indirect
-	github.com/go-openapi/swag/yamlutils v0.27.1 // indirect
+	github.com/go-openapi/swag v0.28.0 // indirect
+	github.com/go-openapi/swag/cmdutils v0.28.0 // indirect
+	github.com/go-openapi/swag/conv v0.28.0 // indirect
+	github.com/go-openapi/swag/fileutils v0.28.0 // indirect
+	github.com/go-openapi/swag/jsonutils v0.28.0 // indirect
+	github.com/go-openapi/swag/loading v0.28.0 // indirect
+	github.com/go-openapi/swag/mangling v0.28.0 // indirect
+	github.com/go-openapi/swag/netutils v0.28.0 // indirect
+	github.com/go-openapi/swag/pools v0.28.0 // indirect
+	github.com/go-openapi/swag/stringutils v0.28.0 // indirect
+	github.com/go-openapi/swag/typeutils v0.28.0 // indirect
+	github.com/go-openapi/swag/yamlutils v0.28.0 // indirect
 	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/gnostic-models v0.7.1 // indirect
@@ -207,7 +207,7 @@ require (
 	go.yaml.in/yaml/v2 v2.4.5 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/crypto v0.59.0 // indirect
-	golang.org/x/exp v0.0.0-20260611194520-c48552f49976 // indirect
+	golang.org/x/exp v0.0.0-20260718201538-764159d718ef // indirect
 	golang.org/x/xerrors v0.0.0-20231012003039-104605ab7028 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260817212433-ac3dfec99bb1 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260817212433-ac3dfec99bb1 // indirect

@@ -9,12 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
-
-	"github.com/skyhook-io/radar/internal/substrate/ateapi"
 )
 
 var t0 = time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)

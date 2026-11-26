@@ -4,9 +4,9 @@ import (
 	"maps"
 	"time"
 
-	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
+	"go.ate.dev/substrate/api/ateapi/v1"
 
-	"github.com/skyhook-io/radar/internal/substrate/ateapi"
+	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 )
 
 // TemplateSpec is a template's definition as the template page shows it,

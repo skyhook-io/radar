@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/skyhook-io/radar/internal/substrate/ateapi"
+	"go.ate.dev/substrate/api/ateapi/v1"
 )
 
 // Crashed actors whose newest generation a revert discards.

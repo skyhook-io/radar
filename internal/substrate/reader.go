@@ -7,7 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/skyhook-io/radar/internal/substrate/ateapi"
+	"go.ate.dev/substrate/api/ateapi/v1"
+
 	model "github.com/skyhook-io/radar/pkg/substrate"
 )
 

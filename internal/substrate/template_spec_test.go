@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/skyhook-io/radar/internal/substrate/ateapi"
+	"go.ate.dev/substrate/api/ateapi/v1"
 )
 
 func TestTemplateSpecRedactsSecrets(t *testing.T) {

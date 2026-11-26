@@ -35,11 +35,11 @@ stay valid. Delete the directory to start over with a new CA and new tokens.
 
 | | Real | Fake |
 |---|---|---|
-| Wire protocol | `substrate.ateapi.v1.Control` from Radar's vendored `internal/substrate/ateapi`, gRPC over TLS 1.3, `authorization: Bearer` | — |
+| Wire protocol | `substrate.ateapi.v1.Control` from `go.ate.dev/substrate/api/ateapi/v1`, gRPC over TLS 1.3, `authorization: Bearer` | — |
 | Server | — | `fakeapi/`, read RPCs only: ListActors, GetActor, ListActorTemplates, GetActorTemplate, ListWorkers, GetWorker, ListWorkerActorAssignments, ListAtespaces, GetAtespace, GetActorEgressPolicy, ListTags, GetTag. Every other RPC returns `Unimplemented`. gRPC reflection is on (authenticated), so `grpcurl` works. |
 | Authorization | The two grants a person can hold in upstream's `model.fga` (global viewer; viewer of named atespaces) and ate-api-server's error wording (`permission denied: principal "user:…" lacks "can_list_actors" on "global:root"`) | The principals' names and which atespaces the second one holds |
 | Data | Field meanings per `ateapi.proto`; crash texts, lifecycle messages and the golden-snapshot error format are Substrate's own strings | Every value. Deterministic: the same build always serves the same actors |
-| CRDs `workerpools`, `sandboxconfigs`, `csidriverconfigs` (`ate.dev`) | Copied unchanged into `crds/` from Substrate `manifests/ate-install/generated` at commit `d283af4e` (the commit `internal/substrate/ateapi` is vendored from). `up` installs any that are missing. | — |
+| CRDs `workerpools`, `sandboxconfigs`, `csidriverconfigs` (`ate.dev`) | Copied unchanged into `crds/` from Substrate `manifests/ate-install/generated` at commit `d283af4e`. `up` installs any that are missing. | — |
 | WorkerPools `agent-pool`, `healthy-pool`, `batch-pool`, `microvm-pool`; SandboxConfigs `gvisor-default`, `microvm` | Kubernetes objects | Their `status` is written by `up` to agree with the fake Workers; no Substrate controller runs |
 | Worker Pods | Real Pods (busybox) named and labelled like worker Pods (`ate.dev/worker-pool=<pool>`) | Their stdout is a script that prints Substrate-shaped log lines |
 | Worker ↔ Pod binding | `Worker.metadata.name` and `worker_pod_uid` are the Pod's real UID, `node_name`/`ips` the Pod's real node and IP (read at API start) | When a Pod is missing or not scheduled, the Worker keeps its UID but gets a made-up node and IP |

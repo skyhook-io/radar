@@ -9,9 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
-
-	"github.com/skyhook-io/radar/internal/substrate/ateapi"
 )
 
 // fixtureNamespace is where the WorkerPools and worker Pods live (--namespace).

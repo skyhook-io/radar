@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -45,7 +46,6 @@ import (
 	"github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
 	substrateapi "github.com/skyhook-io/radar/internal/substrate"
-	"github.com/skyhook-io/radar/internal/substrate/ateapi"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	model "github.com/skyhook-io/radar/pkg/substrate"
 )

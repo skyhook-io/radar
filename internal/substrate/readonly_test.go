@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/skyhook-io/radar/internal/substrate/ateapi"
+	"go.ate.dev/substrate/api/ateapi/v1"
 )
 
 // readRPCs are the only Substrate API methods Radar may call. Radar reads
@@ -21,8 +21,7 @@ var readRPCs = []string{
 	"ListActorTemplates", "ListActors", "ListAtespaces", "ListWorkers",
 }
 
-// Every non-test file that imports the generated client, in this package and
-// the server, calls only readRPCs on it.
+// Scanned files in this package and internal/server use only ControlClient and call only readRPCs on it.
 func TestRadarCallsOnlyReadRPCs(t *testing.T) {
 	control := reflect.TypeFor[ateapi.ControlClient]()
 	var forbidden []string
@@ -37,6 +36,7 @@ func TestRadarCallsOnlyReadRPCs(t *testing.T) {
 	// An RPC takes a context; a protobuf getter of the same name (a
 	// message's GetWorker()) takes nothing.
 	call := regexp.MustCompile(`\.(` + strings.Join(forbidden, "|") + `)\([^)]`)
+	constructor := regexp.MustCompile(`\bateapi\.New([[:word:]]+)Client\s*\(`)
 	files, _ := filepath.Glob("*.go")
 	server, _ := filepath.Glob("../server/*.go")
 	scanned := 0
@@ -44,15 +44,21 @@ func TestRadarCallsOnlyReadRPCs(t *testing.T) {
 		if strings.HasSuffix(f, "_test.go") {
 			continue
 		}
-		src, err := os.ReadFile(f)
+		data, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(src), `"github.com/skyhook-io/radar/internal/substrate/ateapi"`) && filepath.Dir(f) != "." {
+		src := string(data)
+		if !strings.Contains(src, `"go.ate.dev/substrate/api/ateapi/v1"`) && filepath.Dir(f) != "." {
 			continue
 		}
 		scanned++
-		for _, m := range call.FindAllStringSubmatch(string(src), -1) {
+		for _, m := range constructor.FindAllStringSubmatch(src, -1) {
+			if m[1] != "Control" {
+				t.Errorf("%s calls ateapi.New%sClient, but Radar may only construct a ControlClient", f, m[1])
+			}
+		}
+		for _, m := range call.FindAllStringSubmatch(src, -1) {
 			t.Errorf("%s calls %s, which is not a read RPC Radar may make", f, m[1])
 		}
 	}

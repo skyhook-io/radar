@@ -12,12 +12,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
-
-	"github.com/skyhook-io/radar/internal/substrate/ateapi"
 )
 
 // ScopedAtespaces are the atespaces the atespace-only persona may read.

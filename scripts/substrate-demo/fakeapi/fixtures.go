@@ -9,9 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"sigs.k8s.io/yaml"
-
-	"github.com/skyhook-io/radar/internal/substrate/ateapi"
 )
 
 const (

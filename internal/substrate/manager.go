@@ -9,11 +9,11 @@ import (
 	"sync"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/portforward"
-	"github.com/skyhook-io/radar/internal/substrate/ateapi"
 	model "github.com/skyhook-io/radar/pkg/substrate"
 )
 

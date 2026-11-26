@@ -7,7 +7,12 @@ Reading never writes. Radar does not create, suspend, resume or delete actors.
 ## Code boundaries
 
 - `pkg/substrate` is the read model and every derivation: actor rows, resume source, pool joins and capacity, template rows, eligible pools, log filtering and the needs-attention rules. It is pure (no gRPC, no `internal/` imports), so Radar Hub can reuse it. Its types are also the wire shapes of `/api/substrate/*`. What an omitted field means depends on the field: an omitted object or measurement is unknown, never zero; an omitted list or map on something Substrate returned is empty (no snapshots; a selector that matches every pool); an omitted boolean is false; and a list a response builds from reads is `[]` when read and empty, absent when not read.
-- `internal/substrate` is the client: the connection settings store, the dial (port-forward or endpoint, TLS, tokens), one snapshot read shared by every request, conversion from Substrate's API types, and error codes. `internal/substrate/ateapi` is Substrate's generated v1 API, vendored.
+- `internal/substrate` is the client: the connection settings store, the dial (port-forward or endpoint, TLS, tokens), one snapshot read shared by every request, conversion from Substrate's API types, and error codes. It imports Substrate's published v1 API from `go.ate.dev/substrate/api/ateapi/v1`.
+
+  **Updating the Substrate API**
+
+  The API package lives in Substrate's server module, so `go get go.ate.dev/substrate@<version>` resolves the whole module's requirements. Check `git diff go.mod` after the bump and reject it if any other direct dependency changes version or if the bump introduces a new major version into `go.mod`. Then run `go test ./internal/substrate/... ./scripts/substrate-demo/fakeapi` and `go test ./internal/server -run Substrate`.
+
 - `internal/server/substrate_workspace_handlers.go` serves the routes and decides who may read what ([API](#api)).
 - `web/src/api/substrateWorkspace.ts` holds fetching and wire types; `web/src/components/substrate/` the screens. `host.tsx` composes the WorkerPool kind into Radar's generic views; `workspaceRoute.ts` the route metadata.
 

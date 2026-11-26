@@ -7,10 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-
-	"github.com/skyhook-io/radar/internal/substrate/ateapi"
 )
 
 func startTest(t *testing.T) (*State, string) {
