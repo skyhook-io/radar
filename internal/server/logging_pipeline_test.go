@@ -19,7 +19,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/logging"
 )
 
-func runningPod(ns, name string, labels map[string]string) *corev1.Pod {
+func loggingRunningPod(ns, name string, labels map[string]string) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, Labels: labels},
 		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
@@ -84,13 +84,13 @@ func readPipeline(t *testing.T, resp *http.Response) (logPipelineResponse, strin
 }
 
 func pipelinePods() []runtime.Object {
-	pending := runningPod("team", "starting", map[string]string{"logs": "on"})
+	pending := loggingRunningPod("team", "starting", map[string]string{"logs": "on"})
 	pending.Status.Phase = corev1.PodPending
 	return []runtime.Object{
-		runningPod("team", "a1", map[string]string{"logs": "on"}),
-		runningPod("team", "a2", map[string]string{"logs": "on"}),
-		runningPod("team", "b1", nil),
-		runningPod("ops", "o1", map[string]string{"logs": "on"}),
+		loggingRunningPod("team", "a1", map[string]string{"logs": "on"}),
+		loggingRunningPod("team", "a2", map[string]string{"logs": "on"}),
+		loggingRunningPod("team", "b1", nil),
+		loggingRunningPod("ops", "o1", map[string]string{"logs": "on"}),
 		pending,
 	}
 }
@@ -199,7 +199,7 @@ func TestLoggingPipelinePodCountsFollowCallerNamespaces(t *testing.T) {
 func TestLoggingPipelineCapsUnrouted(t *testing.T) {
 	var pods []runtime.Object
 	for i := 0; i < 501; i++ {
-		pods = append(pods, runningPod("team", fmt.Sprintf("p%03d", i), nil))
+		pods = append(pods, loggingRunningPod("team", fmt.Sprintf("p%03d", i), nil))
 	}
 	seedPipelineFixture(t, pods...)
 	got, _ := readPipeline(t, mustGet(t, testServer.URL+"/api/logging/pipeline"))
@@ -279,7 +279,7 @@ func mustGet(t *testing.T, url string) *http.Response {
 // An unread Flow only hides its own namespace's pods: those can't be called
 // unrouted, while pods elsewhere still are.
 func TestLoggingPipelineUnreadFlowsHideOnlyTheirNamespace(t *testing.T) {
-	seedPipelineFixture(t, append(pipelinePods(), runningPod("ops", "o2", nil))...)
+	seedPipelineFixture(t, append(pipelinePods(), loggingRunningPod("ops", "o2", nil))...)
 	env := newAuthTestServer(t)
 	env.srv.permCache.Set("dave", nil, allowPipeline([]string{"team", "ops"}, "flows@ops"))
 	got, _ := readPipeline(t, env.authGet(t, "/api/logging/pipeline", "dave", ""))
