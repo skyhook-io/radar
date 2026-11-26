@@ -1,0 +1,37 @@
+suite: basePath with Radar Cloud
+templates:
+  - deployment.yaml
+release:
+  name: radar
+  namespace: radar
+tests:
+  # NKP's catalog sets basePath: /radar as a default that settings can only
+  # override, so the message names the override rather than "unset".
+  - it: names the override when basePath is set with Radar Cloud
+    set:
+      basePath: /radar
+      cloud:
+        enabled: true
+        hubURL: https://hub.example.com
+        enrollment:
+          key: rhe_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcd
+    asserts:
+      - failedTemplate:
+          errorMessage: 'basePath "/radar" is not supported with cloud.enabled=true. To connect this Radar to Radar Cloud, set basePath: "" (an empty string), or turn Radar Cloud off with cloud.enabled: false.'
+
+  - it: renders with Radar Cloud when basePath is overridden with an empty string
+    set:
+      basePath: ""
+      cloud:
+        enabled: true
+        hubURL: https://hub.example.com
+        enrollment:
+          key: rhe_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcd
+    asserts:
+      - notFailedTemplate: {}
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --base-path=/radar
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --cloud-enrollment-key-file=/etc/radar/cloud-enrollment/key

@@ -24,6 +24,8 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 let root: Root
 let client: QueryClient
 let lane: 'driver' | 'wizard'
+let deploymentMode: 'local' | 'in-cluster'
+let selfBody: Record<string, unknown>
 let discovery: { connected: { namespace: string; deployment: string; clusterUrl: string }[] }
 let discoveryStatus: number
 let flowState: 'idle' | 'awaiting_approval'
@@ -36,6 +38,8 @@ const requests: string[] = []
 beforeEach(() => {
   connection.state = 'connecting'
   lane = 'driver'
+  deploymentMode = 'local'
+  selfBody = { ownership: 'unknown' }
   discovery = { connected: [] }
   discoveryStatus = 200
   flowState = 'idle'
@@ -51,12 +55,13 @@ beforeEach(() => {
     const url = new URL(input, 'http://localhost')
     requests.push(url.pathname + url.search)
     const bodies: Record<string, unknown> = {
-      '/api/capabilities': { cloudConnect: { lane, appUrl: 'https://cloud.example', apiUrl: 'https://cloud.example' }, deployment: { mode: 'local' } },
+      '/api/capabilities': { cloudConnect: { lane, appUrl: 'https://cloud.example', apiUrl: 'https://cloud.example' }, deployment: { mode: deploymentMode } },
       '/api/cluster-info': { context: 'test-cluster' },
       '/api/cloud/install/status': statusBody ?? { state: flowState },
       '/api/cloud/install/discover': discoveryStatus === 200 ? discovery : { error: 'Discovery failed' },
       '/api/cloud/install/prepare': { error: 'Not connected to cluster' },
       '/api/connect/info': {},
+      '/api/cloud/connect/self': selfBody,
     }
     if (!(url.pathname in bodies)) throw new Error(`Unexpected request: ${input}`)
     if (url.pathname.endsWith('/prepare') && prepareReply) return prepareReply.promise
@@ -176,6 +181,39 @@ describe('Cloud dialog connection availability', () => {
     expect(document.querySelector('a[href*="wizard-signup-button"]')?.textContent).toBe('Try Cloud free')
     expect(document.body.textContent).not.toContain('Continue in Radar Cloud')
     expect(requests).not.toContain('/api/cloud/install/discover')
+  })
+
+  it('shows the NKP steps on NKP even when Radar cannot tell how it was installed', async () => {
+    lane = 'wizard'
+    deploymentMode = 'in-cluster'
+    connection.state = 'connected'
+    const nkpUrl = 'https://cloud.example/install?clusters=many&platform=nkp&utm_content=wizard-install-link-nkp-install'
+    selfBody = { ownership: 'unknown', platform: 'nkp', wizardUrl: nkpUrl }
+    await openDialog()
+    await until(() => expect(document.body.textContent).toContain('NKP manages this Radar'))
+    const link = Array.from(document.querySelectorAll('a')).find(element => element.textContent === 'Connect your NKP workspace')!
+    expect(link.href).toBe(nkpUrl)
+  })
+
+  it('sends an NKP-managed install to the NKP steps without asking for a repository change', async () => {
+    lane = 'wizard'
+    deploymentMode = 'in-cluster'
+    connection.state = 'connected'
+    const nkpUrl = 'https://cloud.example/install?clusters=many&platform=nkp&utm_content=wizard-install-link-nkp-install'
+    selfBody = {
+      ownership: 'gitops',
+      namespace: 'ws',
+      release: 'ws-radar',
+      controller: 'HelmRelease ws/radar',
+      platform: 'nkp',
+      wizardUrl: nkpUrl,
+    }
+    await openDialog()
+    await until(() => expect(document.body.textContent).toContain('NKP manages this Radar'))
+    expect(document.body.textContent).toContain("paste into the Radar app's configuration in NKP")
+    expect(document.body.textContent).not.toContain('values change in your repository')
+    const link = Array.from(document.querySelectorAll('a')).find(element => element.textContent === 'Connect your NKP workspace')!
+    expect(link.href).toBe(nkpUrl)
   })
 
   it('keeps an active server-owned install visible even while disconnected', async () => {
