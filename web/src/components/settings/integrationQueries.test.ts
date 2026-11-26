@@ -54,4 +54,35 @@ describe('invalidateIntegrationQueries', () => {
     expect(client.getQueryState(['prometheus-cluster'])?.isInvalidated).toBe(true)
     client.clear()
   })
+
+  it('replaces an in-flight first fetch when settings are saved', async () => {
+    const client = new QueryClient()
+    const queryKey = ['prometheus-cluster']
+    let resolvePrevious!: (data: string) => void
+    const previous = new Promise<string>(resolve => { resolvePrevious = resolve })
+    let oldSignal: AbortSignal | undefined
+    const queryFn = vi.fn()
+      .mockImplementationOnce(({ signal }) => {
+        oldSignal = signal
+        return previous
+      })
+      .mockResolvedValueOnce('updated')
+    const observer = new QueryObserver(client, { queryKey, queryFn })
+    const unsubscribe = observer.subscribe(() => {})
+    try {
+      expect(client.getQueryData(queryKey)).toBeUndefined()
+      expect(observer.getCurrentResult().isFetching).toBe(true)
+
+      await invalidateIntegrationQueries(client, ['metrics'])
+      resolvePrevious('previous')
+      await previous
+
+      expect(oldSignal?.aborted).toBe(true)
+      expect(queryFn).toHaveBeenCalledTimes(2)
+      expect(observer.getCurrentResult().data).toBe('updated')
+    } finally {
+      unsubscribe()
+      client.clear()
+    }
+  })
 })

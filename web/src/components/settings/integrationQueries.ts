@@ -1,4 +1,4 @@
-import type { QueryClient } from '@tanstack/react-query'
+import type { QueryClient, QueryFilters } from '@tanstack/react-query'
 import type { IntegrationKind } from './LocalConnectionSettings'
 
 const metricsKeys = new Set([
@@ -11,7 +11,7 @@ const argoKeys = new Set([
   'argo-sync-diff', 'argo-revision-metadata',
 ])
 
-export function invalidateIntegrationQueries(
+export async function invalidateIntegrationQueries(
   client: QueryClient,
   kinds: IntegrationKind[],
   { includeStatus = true } = {},
@@ -19,7 +19,7 @@ export function invalidateIntegrationQueries(
   const metrics = kinds.includes('metrics')
   const cost = metrics || kinds.includes('cost')
   const argo = kinds.includes('argocd')
-  return client.invalidateQueries({
+  const filters: QueryFilters = {
     predicate: ({ queryKey: [root, section] }) => {
       if (typeof root !== 'string') return false
       if (cost && root.startsWith('opencost-')) return true
@@ -29,5 +29,7 @@ export function invalidateIntegrationQueries(
       return root.startsWith('prometheus-') || metricsKeys.has(root) ||
         (root === 'cnpg' && typeof section === 'string' && cnpgMetricsKeys.includes(section))
     },
-  })
+  }
+  await client.cancelQueries(filters)
+  await client.invalidateQueries(filters)
 }
