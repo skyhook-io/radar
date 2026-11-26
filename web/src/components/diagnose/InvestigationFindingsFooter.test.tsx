@@ -49,7 +49,7 @@ let container: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 let stream: SubscribeHandlers;
 let footer: Parameters<RenderInvestigationFindingsFooter>[0];
-const scrollTo = vi.fn<HTMLElement["scrollTo"]>();
+const scrollTo = vi.fn();
 const renderFooter: RenderInvestigationFindingsFooter = (props) => {
   footer = props;
   return (
