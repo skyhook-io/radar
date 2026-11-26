@@ -61,7 +61,7 @@ function UsedBy({ usedBy, group, onNavigate }: { usedBy: TraefikMiddlewareUsers 
           ))}
         </ul>
       )}
-      <div className="mt-1 text-xs text-theme-text-tertiary">Routes that reach it through chain Middlewares or a provider-qualified name (name@provider) aren't counted.</div>
+      <div className="mt-1 text-xs text-theme-text-tertiary">Routes that reach it through chain Middlewares, a provider-qualified name (name@provider) or an entry point's Middlewares aren't counted. A legacy traefik.containo.us route counts toward a traefik.io Middleware of the same name.</div>
     </Section>
   )
 }

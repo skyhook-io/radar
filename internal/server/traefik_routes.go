@@ -479,7 +479,8 @@ var (
 // ?namespace=&name=[&group=] returns one IngressRoute's rows (?namespace
 // names the route; only ?namespaces narrows the read), with usedBy for its
 // middlewares counted over every route the caller can see; ?middleware=ns/name
-// the rows that use a Middleware (at most 200 routes). Only the routes a mode
+// the rows that use a Middleware (at most 200 routes, without pod counts or
+// certificates, which its drawer doesn't show). Only the routes a mode
 // returns get full rows; the plain list stops at traefikRouteRowLimit rows.
 // On a shared listener without auth it reads as Radar's identity; a
 // cross-site request is refused by requireSameOrigin.
@@ -590,6 +591,9 @@ func (s *Server) handleTraefikRoutes(w http.ResponseWriter, r *http.Request) {
 				(routeGroup == "" || resourceid.GroupFromAPIVersion(u.GetAPIVersion()) == routeGroup)
 		}
 	case middleware != "":
+		// The Middleware drawer lists only who uses it: no pod scans or
+		// certificate reads for its rows.
+		in.Pods, in.Cert = nil, nil
 		// Selection stops at the cap so routes past it aren't enriched.
 		selected := 0
 		in.Select = func(u *unstructured.Unstructured) bool {

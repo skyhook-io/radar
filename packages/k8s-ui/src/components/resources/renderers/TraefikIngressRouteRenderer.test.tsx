@@ -29,6 +29,10 @@ describe('TraefikIngressRouteRenderer request path', () => {
     expect(html).toContain('used by 212 routes')
     expect(html).not.toContain('0 of 0')
   })
+  it('says Middlewares an entry point adds are not shown', () => {
+    expect(render([facts()])).toContain('Middlewares an entry point adds in Traefik')
+  })
+
   it('names the missing member of a chain Middleware that exists, without marking the chain missing', () => {
     const html = render([facts({ middlewares: [{ namespace: 'shop', name: 'secure-chain', exists: true, missingTarget: 'Middleware "shop/gone-auth"' }] })])
     expect(html).toContain('references missing Middleware &quot;shop/gone-auth&quot;')

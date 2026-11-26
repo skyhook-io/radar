@@ -114,6 +114,8 @@ export function TraefikRequestPath({ facts, middlewareUse, middlewareUsePartial,
             {tls.severity ? <Badge severity={tls.severity} size="sm">{tls.text}</Badge> : tls.text}
           </div>
         )}
+        {/* Radar doesn't read Traefik's static configuration. */}
+        {facts.length > 0 && <div className="text-xs text-theme-text-tertiary">Middlewares an entry point adds in Traefik's static configuration aren't shown.</div>}
       </div>
     </Section>
   )

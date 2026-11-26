@@ -22,6 +22,7 @@ describe('TraefikMiddlewareRenderer used by', () => {
   })
   it('says chains and provider references are not counted', () => {
     expect(render({ routes: [], truncated: false, partial: false })).toContain('chain Middlewares')
+    expect(render({ routes: [], truncated: false, partial: false })).toContain('legacy traefik.containo.us route counts toward a traefik.io Middleware')
   })
   it('links a route under its own API group', () => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })

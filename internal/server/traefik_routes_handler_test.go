@@ -152,6 +152,21 @@ func TestTraefikRoutesSingleRouteAndMiddlewareModes(t *testing.T) {
 	if len(used.Routes) != 1 || used.Routes[0].Ref.Name != "ui" {
 		t.Fatalf("middleware mode = %+v", used.Routes)
 	}
+	// The Middleware drawer lists only who uses it, so its rows skip the pod
+	// scans and certificate reads the route drawer needs.
+	if one.Routes[0].Services[0].ReadyPods == nil {
+		t.Fatalf("fixture: the route drawer should count ui's pods: %+v", one.Routes[0].Services[0])
+	}
+	if svc := used.Routes[0].Services[0]; svc.ReadyPods != nil || svc.TotalPods != nil {
+		t.Errorf("middleware mode scanned pods: %+v", svc)
+	}
+	// The route drawer reads ui-tls (notFound in this fixture); unread stays notLoaded.
+	if one.Routes[0].TLS.Certificate == "notLoaded" {
+		t.Fatalf("fixture: the route drawer should read ui's certificate: %+v", one.Routes[0].TLS)
+	}
+	if tls := used.Routes[0].TLS; tls.Certificate != "notLoaded" || tls.NotAfter != nil {
+		t.Errorf("middleware mode read the certificate: %+v", tls)
+	}
 	resp, _ = get("?namespace=shop&name=ui&middleware=shop/redirect")
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
