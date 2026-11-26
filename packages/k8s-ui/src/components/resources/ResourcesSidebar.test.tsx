@@ -283,6 +283,7 @@ describe('sidebarDestinationsMatching', () => {
     expect(sidebarDestinationsMatching('Velero', [], views, 'backups', 'Backups')).toHaveLength(5)
     const locations = [{ id: 'locations', label: 'Locations', kind: { name: 'backupstoragelocations', kind: 'BackupStorageLocation', group: 'velero.io' }, onSelect: () => {} }]
     expect(sidebarDestinationsMatching('Velero', [], locations, 'storagelocation')).toHaveLength(1)
+    expect(sidebarDestinationsMatching('Velero', [{ group: 'velero.io', kind: 'BackupStorageLocation', name: 'backupstoragelocations', shortNames: ['bsl'] }], locations, 'bsl')).toHaveLength(1)
   })
 })
 

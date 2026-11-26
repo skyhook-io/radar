@@ -144,7 +144,7 @@ const CORE_RESOURCE_TYPES = [
  */
 export function sidebarDestinationsMatching(
   categoryName: string,
-  resources: Pick<APIResource, 'group'>[],
+  resources: (Pick<APIResource, 'group'> & Partial<Pick<APIResource, 'kind' | 'name' | 'shortNames'>>)[],
   destinations: SidebarCategoryDestination[],
   term: string,
   label?: string,
@@ -152,11 +152,16 @@ export function sidebarDestinationsMatching(
   const normalized = term.trim().toLowerCase()
   if (!normalized) return destinations
   if (categoryName.toLowerCase().includes(normalized) || label?.toLowerCase().includes(normalized) || resources.some((r) => r.group.toLowerCase().includes(normalized))) return destinations
-  // A destination is also found by the kind it lists ("BackupStorageLocation" finds Storage locations).
-  return destinations.filter((d) => [d.label, d.kind?.kind, d.kind?.name].some((s) => s?.toLowerCase().includes(normalized)))
+  // A destination is also found by the kind it lists ("BackupStorageLocation" or "bsl" finds Storage locations).
+  return destinations.filter((d) => {
+    if ([d.label, d.kind?.kind, d.kind?.name].some((s) => s?.toLowerCase().includes(normalized))) return true
+    if (!d.kind) return false
+    const resource = resources.find((r) => r.name === d.kind!.name && r.group === d.kind!.group)
+    return resourceSearchAliases({ group: d.kind.group, kind: d.kind.kind, shortNames: resource?.shortNames }).some((alias) => alias.includes(normalized))
+  })
 }
 
-export function resourceMatchesSidebarFilter(resource: Pick<APIResource, 'kind' | 'name' | 'group'>, term: string): boolean {
+export function resourceMatchesSidebarFilter(resource: Pick<APIResource, 'kind' | 'name' | 'group'> & Partial<Pick<APIResource, 'shortNames'>>, term: string): boolean {
   const normalized = term.trim().toLowerCase()
   if (!normalized) return true
   return resource.kind.toLowerCase().includes(normalized) ||
