@@ -184,7 +184,7 @@ export interface CloudConnectCapability {
 
 export interface FeatureCapabilities {
   gitopsActionCapabilities?: boolean
-  ownerAccessReview?: boolean
+  ownerAccessGrantReview?: boolean
  helmSourceIdentity?: boolean
   helmInventory?: boolean
   datadogRightsizing?: boolean

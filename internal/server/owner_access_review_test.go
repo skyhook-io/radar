@@ -75,13 +75,15 @@ func TestOwnerAccessReviewReportsEffectInEachScope(t *testing.T) {
 	client.PrependReactor("create", "subjectaccessreviews", func(action clienttesting.Action) (bool, runtime.Object, error) {
 		review := action.(clienttesting.CreateAction).GetObject().(*authv1.SubjectAccessReview)
 		attrs := review.Spec.ResourceAttributes
-		if review.Spec.User != "owner" || attrs.Group != "argoproj.io" || attrs.Resource != "applications" ||
-			!slices.Contains(review.Spec.Groups, "system:authenticated") || !slices.Contains(review.Spec.Groups, "radar:owner") {
+		grantOnly := review.Spec.User == "" && slices.Equal(review.Spec.Groups, []string{argoGroup})
+		ownAccount := review.Spec.User == "owner" && slices.Contains(review.Spec.Groups, "system:authenticated") &&
+			slices.Contains(review.Spec.Groups, "radar:owner")
+		if (!grantOnly && !ownAccount) || attrs.Group != "argoproj.io" || attrs.Resource != "applications" {
 			return true, nil, errors.New("unexpected identity or resource")
 		}
 		switch attrs.Namespace {
 		case "custom-role":
-			review.Status.Allowed = true
+			review.Status.Allowed = ownAccount
 		case "works":
 			review.Status.Allowed = slices.Contains(review.Spec.Groups, argoGroup)
 		case "missing":
@@ -93,13 +95,16 @@ func TestOwnerAccessReviewReportsEffectInEachScope(t *testing.T) {
 	})
 
 	owner := &auth.User{Username: "owner", Groups: []string{"radar:owner", argoGroup}}
-	result := reviewOwnerAccess(context.Background(), client, owner, []string{"argocd", "cnpg", "velero", "unrecognized"}, []string{"custom-role", "missing", "unknown", "works"}, &metav1.APIGroupList{
+	approved := []string{"argocd", "cnpg", "velero", "unrecognized"}
+	namespaces := []string{"custom-role", "missing", "unknown", "works"}
+	groupList := &metav1.APIGroupList{
 		Groups: []metav1.APIGroup{{Name: "argoproj.io"}, {Name: "velero.io"}},
-	})
+	}
+	result := reviewOwnerAccess(context.Background(), client, nil, approved, namespaces, groupList)
 	if !result.NamespaceScoped || result.ScopeCount != 4 || result.CheckedScopeCount != 4 {
 		t.Fatalf("scope = %+v", result)
 	}
-	if got, want := result.Grants["argocd"], (ownerAccessReviewResult{Added: 1, Already: 1, Incomplete: 1, Unknown: 1}); got != want {
+	if got, want := result.Grants["argocd"], (ownerAccessReviewResult{Verified: 1, Incomplete: 2, Unknown: 1}); got != want {
 		t.Errorf("Argo grant = %+v, want %+v", got, want)
 	}
 	if got := result.Grants["cnpg"]; !got.APINotServed {
@@ -110,6 +115,13 @@ func TestOwnerAccessReviewReportsEffectInEachScope(t *testing.T) {
 	}
 	if got, want := result.Grants["unrecognized"], (ownerAccessReviewResult{Unknown: 4}); got != want {
 		t.Errorf("unrecognized grant = %+v, want %+v", got, want)
+	}
+	personal := reviewOwnerAccess(context.Background(), client, owner, approved, namespaces, groupList)
+	if got, want := personal.Account["argocd"], (ownerAccountAccessReview{Added: 1, Already: 1, Incomplete: 1, Unknown: 1}); got != want {
+		t.Errorf("personal Argo access = %+v, want %+v", got, want)
+	}
+	if result.Account != nil || personal.Grants != nil {
+		t.Fatal("grant and personal checks must remain separate")
 	}
 }
 
@@ -126,9 +138,8 @@ func TestOwnerAccessReviewBoundsNamespaceSample(t *testing.T) {
 		review.Status.Allowed = true
 		return true, review, nil
 	})
-	owner := &auth.User{Username: "owner", Groups: []string{"radar:owner"}}
-	result := reviewOwnerAccess(context.Background(), client, owner, []string{"argocd"}, namespaces, nil)
-	if result.ScopeCount != 10 || result.CheckedScopeCount != 8 || result.Grants["argocd"] != (ownerAccessReviewResult{Already: 8}) {
+	result := reviewOwnerAccess(context.Background(), client, nil, []string{"argocd"}, namespaces, nil)
+	if result.ScopeCount != 10 || result.CheckedScopeCount != 8 || result.Grants["argocd"] != (ownerAccessReviewResult{Verified: 8}) {
 		t.Fatalf("expected eight verified scopes out of ten configured: %+v", result)
 	}
 }

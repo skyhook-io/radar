@@ -112,9 +112,15 @@ func (r *PermissionCheckResult) CredentialRejectedNamespaces(resource string, na
 	return out
 }
 
+type OwnerAccessSetup struct {
+	Mode    string            `json:"mode"`
+	Blocked map[string]string `json:"blocked,omitempty"`
+}
+
 // Capabilities represents the features available based on RBAC permissions
 type Capabilities struct {
 	OwnerAccess            *[]string                `json:"ownerAccess,omitempty"`
+	OwnerAccessSetup       *OwnerAccessSetup        `json:"ownerAccessSetup,omitempty"`
 	ConfigManagement       string                   `json:"configManagement"`
 	Exec                   bool                     `json:"exec"` // Can create pods/exec (terminal feature)
 	PodExecUID             bool                     `json:"podExecUID,omitempty"`
@@ -232,7 +238,7 @@ type FeatureCapabilities struct {
 	ServiceEndpointSlices        bool `json:"serviceEndpointSlices"`    // GET /api/services/{namespace}/{name}/endpointslices
 	TrafficRecords               bool `json:"trafficRecords"`           // GET /api/traffic/flows/records
 	GitOpsWriteEvidence          bool `json:"gitopsWriteEvidence"`      // POST /api/gitops/write-evidence
-	OwnerAccessReview            bool `json:"ownerAccessReview"`        // GET /api/cloud/owner-access/review
+	OwnerAccessGrantReview       bool `json:"ownerAccessGrantReview"`   // GET /api/cloud/owner-access/review
 	GitOpsActionCapabilities     bool `json:"gitopsActionCapabilities"` // GET /api/gitops/capabilities/{kind}/{namespace}/{name}
 	AgentSigninCheck             bool `json:"agentSigninCheck"`         // GET /api/agents/signin
 	// POST /api/argo/applications/{namespace}/{name}/rollback starts a sync to

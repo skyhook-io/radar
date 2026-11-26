@@ -1618,7 +1618,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		TrafficRecords:               true,
 		GitOpsWriteEvidence:          true,
 		GitOpsActionCapabilities:     true,
-		OwnerAccessReview:            true,
+		OwnerAccessGrantReview:       true,
 		ArgoRollbackSync:             true,
 		ArgoSyncInheritance:          true,
 		ArgoEnableSelfHealOff:        true,
@@ -1679,6 +1679,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	if cloudMode() && !pkgauth.UserTokenMode() && cloud.OwnerAccessConfigured() {
 		approved := cloud.OwnerAccess()
 		caps.OwnerAccess = &approved
+		caps.OwnerAccessSetup = readOwnerAccessSetup()
 	}
 	caps.CloudConnect = s.cloudConnectCapability()
 	caps.Features = advertisedFeatures()

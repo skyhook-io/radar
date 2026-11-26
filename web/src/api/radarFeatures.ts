@@ -32,7 +32,7 @@ export interface RadarFeatureSpec {
 export const RADAR_FEATURES = {
   datadogRightsizing: { label: 'Datadog-backed rightsizing', flag: 'datadogRightsizing', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
   datadogAgentPresence: { label: 'Datadog Agent setup hints', flag: 'datadogAgentPresence', flagShippedWithEndpoint: true },
-  ownerAccessReview: { label: 'Cloud Owner permission checks', flag: 'ownerAccessReview', flagShippedWithEndpoint: true },
+  ownerAccessGrantReview: { label: 'Cloud Owner permission checks', flag: 'ownerAccessGrantReview', flagShippedWithEndpoint: true },
   gitopsActionCapabilities: { label: 'GitOps action permission checks', flag: 'gitopsActionCapabilities', flagShippedWithEndpoint: true },
   openobserveCollectorPresence: { label: 'OpenObserve collector setup hints', flag: 'openobserveCollectorPresence', flagShippedWithEndpoint: true },
   openobserveLocalSetup: { label: 'OpenObserve connections in Settings', flag: 'openobserveLocalSetup', flagShippedWithEndpoint: true },

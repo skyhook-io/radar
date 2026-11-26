@@ -411,8 +411,11 @@ spec:
             # startup-config fields that don't apply under hosted Radar Cloud.
             - name: RADAR_CLOUD_MODE
               value: "true"
+            {{- $ownerAccess := include "radar.ownerAccessPolicy" . | fromJson }}
             - name: RADAR_CLOUD_OWNER_ACCESS
-              value: {{ include "radar.ownerAccessGrants" . | fromJson | keys | sortAlpha | join "," | quote }}
+              value: {{ $ownerAccess.grants | keys | sortAlpha | join "," | quote }}
+            - name: RADAR_CLOUD_OWNER_ACCESS_SETUP
+              value: {{ $ownerAccess.setup | toJson | quote }}
             {{- if include "radar.userTokenMode" . | eq "true" }}
             - name: RADAR_AUTH_K8S_CREDENTIALS
               value: "user-token"

@@ -279,9 +279,42 @@ func TestIntegrationWriteDoesNotChangeExistingManifests(t *testing.T) {
 				t.Fatal("deployment must advertise all three approved default grants")
 			}
 			rendered = strings.Replace(rendered, advertised, `value: "cnpg,velero"`, 1)
+			const onSetup = `{"blocked":{"velero-delete":"helm","velero-download":"helm"},"mode":"standard"}`
+			const offSetup = `{"blocked":{"argocd":"helm","velero-delete":"helm","velero-download":"helm"},"mode":"standard"}`
+			if !strings.Contains(rendered, fmt.Sprintf("%q", onSetup)) {
+				t.Fatal("deployment must advertise standard Owner setup")
+			}
+			rendered = strings.Replace(rendered, fmt.Sprintf("%q", onSetup), fmt.Sprintf("%q", offSetup), 1)
 		}
 		if name != "radar/templates/cloud-rbac-integration-write.yaml" && !bytes.Equal([]byte(rendered), []byte(off[name])) {
 			t.Errorf("integration write add-on changed existing manifest %s", name)
 		}
+	}
+}
+
+func TestIntegrationWriteInstallGuidance(t *testing.T) {
+	for _, tc := range []struct {
+		name, overrides, mode string
+		blocked               map[string]string
+	}{
+		{name: "custom Kubernetes RBAC", overrides: "cloud.defaultRbac.create=false", mode: "kubernetes", blocked: map[string]string{}},
+		{name: "Owner role disabled", overrides: "cloud.defaultRbac.owner=false", mode: "owner-disabled", blocked: map[string]string{}},
+		{name: "custom Owner base role", overrides: "cloud.defaultRbac.ownerClusterRole=platform-owner",
+			mode: "custom-owner", blocked: map[string]string{"cnpg": "helm", "velero": "velero-scope", "velero-download": "velero-scope", "velero-delete": "velero-scope"}},
+		{name: "Argo collection disabled", overrides: "rbac.crdGroups.argo=false",
+			mode: "standard", blocked: map[string]string{"argocd": "collection", "velero-delete": "helm", "velero-download": "helm"}},
+		{name: "scoped Velero", overrides: "rbac.namespaces={databases}",
+			mode: "standard", blocked: map[string]string{"velero": "velero-scope", "velero-download": "velero-scope", "velero-delete": "velero-scope"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setup, err := json.Marshal(map[string]interface{}{"mode": tc.mode, "blocked": tc.blocked})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "- name: RADAR_CLOUD_OWNER_ACCESS_SETUP\n              value: " + fmt.Sprintf("%q", setup)
+			if got := renderCloudChart(t, tc.overrides, nil)["radar/templates/deployment.yaml"]; !strings.Contains(got, want) {
+				t.Errorf("deployment did not advertise setup %s", setup)
+			}
+		})
 	}
 }

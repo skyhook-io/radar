@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"os"
 	"slices"
 	"time"
 
@@ -18,6 +20,19 @@ import (
 )
 
 const ownerAccessReviewScopeLimit = 8
+
+func readOwnerAccessSetup() *k8s.OwnerAccessSetup {
+	var setup k8s.OwnerAccessSetup
+	if err := json.Unmarshal([]byte(os.Getenv("RADAR_CLOUD_OWNER_ACCESS_SETUP")), &setup); err != nil {
+		return nil
+	}
+	switch setup.Mode {
+	case "standard", "custom-owner", "kubernetes", "owner-disabled":
+		return &setup
+	default:
+		return nil
+	}
+}
 
 type ownerGrantPermission struct {
 	resource    string
@@ -57,21 +72,29 @@ var ownerAccessReviewPermissions = map[string]ownerGrantPermissions{
 type ownerAccessReviewResult struct {
 	APINotServed      bool `json:"apiNotServed,omitempty"`
 	CannotImpersonate bool `json:"cannotImpersonate,omitempty"`
-	Added             int  `json:"added"`
-	Already           int  `json:"already"`
+	Verified          int  `json:"verified"`
 	Incomplete        int  `json:"incomplete"`
 	Unknown           int  `json:"unknown"`
 }
 
-type ownerAccessReviewResponse struct {
-	NamespaceScoped   bool                               `json:"namespaceScoped"`
-	CheckedScopeCount int                                `json:"checkedScopeCount"`
-	ScopeCount        int                                `json:"scopeCount"`
-	Grants            map[string]ownerAccessReviewResult `json:"grants"`
+type ownerAccountAccessReview struct {
+	Added      int `json:"added"`
+	Already    int `json:"already"`
+	Incomplete int `json:"incomplete"`
+	Unknown    int `json:"unknown"`
 }
 
-// The review is advisory and only compares the signed-in Cloud Owner with and
-// without one approved grant. Callers cannot choose a subject or a verb.
+type ownerAccessReviewResponse struct {
+	NamespaceScoped   bool                                `json:"namespaceScoped"`
+	CheckedScopeCount int                                 `json:"checkedScopeCount"`
+	ScopeCount        int                                 `json:"scopeCount"`
+	Grants            map[string]ownerAccessReviewResult  `json:"grants,omitempty"`
+	Account           map[string]ownerAccountAccessReview `json:"account,omitempty"`
+}
+
+// The default review checks the grant group alone, so an Owner's independent
+// bindings cannot hide a missing managed grant. The optional account review
+// compares only the signed-in Owner. Neither accepts arbitrary subjects or verbs.
 func (s *Server) handleOwnerAccessReview(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromContext(r.Context())
 	if !cloudMode() || pkgauth.UserTokenMode() || !cloud.OwnerAccessConfigured() {
@@ -116,7 +139,11 @@ func (s *Server) handleOwnerAccessReview(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	result := reviewOwnerAccess(ctx, client, user, cloud.OwnerAccess(), namespaces, groups)
+	var account *auth.User
+	if r.URL.Query().Get("account") == "true" {
+		account = user
+	}
+	result := reviewOwnerAccess(ctx, client, account, cloud.OwnerAccess(), namespaces, groups)
 	w.Header().Set("Cache-Control", "no-store")
 	s.writeJSON(w, result)
 }
@@ -124,7 +151,11 @@ func (s *Server) handleOwnerAccessReview(w http.ResponseWriter, r *http.Request)
 func reviewOwnerAccess(ctx context.Context, client kubernetes.Interface, user *auth.User, approved, namespaces []string, apiGroups *metav1.APIGroupList) ownerAccessReviewResponse {
 	result := ownerAccessReviewResponse{
 		NamespaceScoped: len(namespaces) != 0,
-		Grants:          make(map[string]ownerAccessReviewResult, len(approved)),
+	}
+	if user == nil {
+		result.Grants = make(map[string]ownerAccessReviewResult, len(approved))
+	} else {
+		result.Account = make(map[string]ownerAccountAccessReview, len(approved))
 	}
 	scopes := []string{""}
 	if result.NamespaceScoped {
@@ -173,35 +204,57 @@ func reviewOwnerAccess(ctx context.Context, client kubernetes.Interface, user *a
 			continue
 		}
 
-		without := slices.DeleteFunc(slices.Clone(user.Groups), func(value string) bool {
-			return value == group
-		})
-		if !slices.Contains(without, "system:authenticated") {
-			without = append(without, "system:authenticated")
+		username, with := "", []string{group}
+		var without []string
+		if user != nil {
+			username = user.Username
+			without = slices.DeleteFunc(slices.Clone(user.Groups), func(value string) bool {
+				return value == group
+			})
+			if !slices.Contains(without, "system:authenticated") {
+				without = append(without, "system:authenticated")
+			}
+			with = append(slices.Clone(without), group)
 		}
-		with := append(slices.Clone(without), group)
 		entry.votes = make([]ownerAccessVerdict, len(scopes))
 		for index, namespace := range scopes {
 			checks.Go(func() error {
-				entry.votes[index] = reviewOwnerGrant(ctx, client, user.Username, with, without, namespace, grant)
+				entry.votes[index] = reviewOwnerGrant(ctx, client, username, with, without, namespace, grant)
 				return nil
 			})
 		}
 	}
 	_ = checks.Wait()
 	for id, entry := range pending {
-		if !entry.result.APINotServed && !entry.result.CannotImpersonate {
+		if user != nil {
+			if entry.result.APINotServed || entry.result.CannotImpersonate {
+				continue
+			}
+			personal := ownerAccountAccessReview{Unknown: entry.result.Unknown}
 			for _, vote := range entry.votes {
 				switch vote {
 				case ownerAccessAdds:
-					entry.result.Added++
+					personal.Added++
 				case ownerAccessAlready:
-					entry.result.Already++
+					personal.Already++
 				case ownerAccessIncomplete:
-					entry.result.Incomplete++
+					personal.Incomplete++
 				case ownerAccessUnknown:
-					entry.result.Unknown++
+					personal.Unknown++
 				}
+			}
+			result.Account[id] = personal
+			continue
+		}
+
+		for _, vote := range entry.votes {
+			switch vote {
+			case ownerAccessVerified:
+				entry.result.Verified++
+			case ownerAccessIncomplete:
+				entry.result.Incomplete++
+			case ownerAccessUnknown:
+				entry.result.Unknown++
 			}
 		}
 		result.Grants[id] = entry.result
@@ -214,12 +267,16 @@ type ownerAccessVerdict int
 const (
 	ownerAccessUnknown ownerAccessVerdict = iota
 	ownerAccessIncomplete
+	ownerAccessVerified
 	ownerAccessAlready
 	ownerAccessAdds
 )
 
 func reviewOwnerGrant(ctx context.Context, client kubernetes.Interface, username string, with, without []string, namespace string, grant ownerGrantPermissions) ownerAccessVerdict {
-	verdict := ownerAccessAlready
+	verdict := ownerAccessVerified
+	if without != nil {
+		verdict = ownerAccessAlready
+	}
 	for _, permission := range grant.permissions {
 		for _, verb := range permission.verbs {
 			attrs := authv1.ResourceAttributes{
@@ -236,7 +293,7 @@ func reviewOwnerGrant(ctx context.Context, client kubernetes.Interface, username
 			if !enabled.Allowed {
 				return ownerAccessIncomplete
 			}
-			if verdict == ownerAccessAdds {
+			if without == nil || verdict == ownerAccessAdds {
 				continue
 			}
 			baseline, err := pkgauth.ReviewSubjectAccess(ctx, client, username, without, attrs)
