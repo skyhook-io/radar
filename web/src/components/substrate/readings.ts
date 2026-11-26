@@ -278,17 +278,6 @@ export function memoryRebuildStep(crashed: number): string {
     : 'Recreate the template with a higher memory limit, move the crashed actors to it, then revert them. The move may keep only their snapshots’ volumes.'
 }
 
-/** The recovery step for a kagent session's actor, which kagent recovers itself (pkg/substrate kagentActorStep). */
-export const KAGENT_RECOVER_STEP = 'This actor is a kagent session. Recover it through kagent (its RevertSession API, or Recover on the chat where offered) or delete the chat there. Moved to another template with kubectl ate, it can’t be recovered.'
-
-/** The step for a standalone kagent sandbox's actor, which has no chat to recover (pkg/substrate kagentSandboxStep). */
-export const KAGENT_SANDBOX_STEP = 'This actor runs a kagent sandbox. kagent manages it: delete the sandbox through kagent (its SandboxService) and create a new one; don’t move or revert it with kubectl ate.'
-
-/** kagent's step for an actor it runs: a sandbox's, else a session's. */
-export function kagentRecoverStep(kagent: { sandbox?: boolean }): string {
-  return kagent.sandbox ? KAGENT_SANDBOX_STEP : KAGENT_RECOVER_STEP
-}
-
 /** `kubectl ate revert actor`, which returns a crashed actor to suspended at its newest stored snapshot. */
 export function revertCommand(ref: SubstrateRef): string {
   return `kubectl ate revert actor ${ref.name} -a ${ref.atespace}`
@@ -669,8 +658,6 @@ function poolCapacityReading(p: Pick<SubstratePoolRow, 'capacity' | 'lacking' | 
     case undefined:
       return { label: 'Unknown', severity: 'neutral', meaning: 'Neither Kubernetes nor Substrate was read well enough to say.', kubernetes }
   }
-  // A verdict from a newer Radar than this page knows.
-  return { label: 'Unknown', severity: 'neutral', meaning: `Radar reports a capacity reading this page doesn’t know (${p.capacity}).`, kubernetes }
 }
 
 /** What a pool's free slots lack, in words: "CPU", "memory", "CPU or memory". */
@@ -783,7 +770,7 @@ export function splitReading(reading: string): [string, string | undefined] {
  * away, or the connection no longer stands. A page shows the failure, not the
  * last answer it kept; any other refresh failure keeps that answer, marked stale.
  */
-const DEFINITIVE_CODES = new Set<SubstrateCode>(['notFound', 'denied', 'mintDenied', 'unauthenticated', 'notConfigured', 'sharedRadar', 'targetChanged'])
+const DEFINITIVE_CODES = new Set<SubstrateCode>(['notFound', 'denied', 'mintDenied', 'unauthenticated', 'notConfigured', 'sharedRadar', 'apiDisabled', 'targetChanged'])
 
 export function definitiveFailure(code: SubstrateCode | undefined): boolean {
   return !!code && DEFINITIVE_CODES.has(code)
@@ -858,8 +845,8 @@ export function withoutReasonCode(message: string): string {
 }
 
 /** Ready worker Pods: Radar's own count when it holds the Pods, else the WorkerPool's status. */
-export function poolReadyPods(k: Pick<SubstrateK8sPool, 'ready' | 'pods'>): number {
-  return k.pods?.ready ?? k.ready
+export function poolReadyPods(k: Pick<SubstrateK8sPool, 'reportedReady' | 'pods'>): number | undefined {
+  return k.pods?.ready ?? k.reportedReady
 }
 
 // Radar's stuck rule (pkg/substrate StuckAfter): a transition held longer than this is stuck.

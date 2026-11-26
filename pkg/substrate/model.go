@@ -131,11 +131,12 @@ type Actor struct {
 	Template Ref    `json:"template"`
 	// SourceTag is the tag the actor was seeded from; absent when it started
 	// from its template.
-	SourceTag    *Ref        `json:"sourceTag,omitempty"`
-	State        string      `json:"state"`
-	Assignment   *Assignment `json:"assignment,omitempty"`
-	AssignedNode string      `json:"assignedNode,omitempty"`
-	Crash        *Crash      `json:"crash,omitempty"`
+	SourceTag  *Ref        `json:"sourceTag,omitempty"`
+	State      string      `json:"state"`
+	Assignment *Assignment `json:"assignment,omitempty"`
+	// AssignedNode is the last node Substrate recorded, even after Assignment is cleared.
+	AssignedNode string `json:"assignedNode,omitempty"`
+	Crash        *Crash `json:"crash,omitempty"`
 	// Snapshots omitted: the actor has none.
 	Snapshots []Snapshot `json:"snapshots,omitempty"`
 	// LastAssignedGeneration is Substrate's revert precondition for a
@@ -147,7 +148,7 @@ type Actor struct {
 	// UpdateTime is Substrate's last change to the actor. The current state
 	// has held at least since then.
 	UpdateTime time.Time `json:"updateTime,omitzero"`
-	// Kagent is set when kagent runs this actor: a chat session or a standalone sandbox; see KagentSession.
+	// Kagent records a possible kagent chat session or sandbox inferred from names.
 	Kagent *KagentSession `json:"kagent,omitempty"`
 }
 
@@ -178,8 +179,9 @@ type Template struct {
 	PreferredFidelity string `json:"preferredFidelity"`
 	// StorageLocation is the template's snapshot location; absent means the
 	// API server's default.
-	StorageLocation string   `json:"storageLocation,omitempty"`
-	Containers      []string `json:"containers,omitempty"`
+	StorageLocation string `json:"storageLocation,omitempty"`
+	// Containers lists container names. Full container definitions are read separately.
+	Containers []string `json:"containers,omitempty"`
 	// The Golden* fields are read through GoldenOf.
 	GoldenDisabled bool      `json:"-"`
 	GoldenTag      *Ref      `json:"-"`
@@ -236,6 +238,7 @@ const (
 	WorkerActive      = "active"
 	WorkerDraining    = "draining"
 	WorkerUnavailable = "unavailable"
+	WorkerUnknown     = "unknown"
 )
 
 // Resources is an amount of each dimension Substrate places by. Substrate
@@ -292,14 +295,9 @@ type Pool struct {
 	Labels    map[string]string `json:"-"`
 	// Desired is spec.replicas; absent when unset.
 	Desired *int64 `json:"desired,omitempty"`
-	// Ready is status.readyReplicas, the worker Pods Kubernetes calls ready.
-	// It can lag the Pods; Pods is what Radar's cache holds now.
-	Ready int64 `json:"ready"`
-	// ReportedReady preserves whether the controller actually wrote readyReplicas.
+	// ReportedReady is status.readyReplicas, absent when the controller has
+	// not reported it. It can lag the Pod count in Radar's cache.
 	ReportedReady *int64 `json:"reportedReady,omitempty"`
-	// ReadinessUnreported means status omitted readyReplicas. A collected Pod
-	// count still answers readiness independently.
-	ReadinessUnreported bool `json:"-"`
 	// Pods counts the pool's worker Pods in Radar's cache; absent when the
 	// caller cannot list Pods in the namespace or the cache does not list
 	// them.
@@ -326,10 +324,14 @@ type PoolPods struct {
 }
 
 // ReadyWorkers is how many of the pool's worker Pods are ready: counted from
-// the Pods when Radar holds them, else the WorkerPool's own status.
-func (p Pool) ReadyWorkers() int64 {
+// the Pods when Radar holds them, else the WorkerPool's own status. The
+// boolean reports whether either source supplied a count.
+func (p Pool) ReadyWorkers() (int64, bool) {
 	if p.Pods != nil {
-		return int64(p.Pods.Ready)
+		return int64(p.Pods.Ready), true
 	}
-	return p.Ready
+	if p.ReportedReady != nil {
+		return *p.ReportedReady, true
+	}
+	return 0, false
 }

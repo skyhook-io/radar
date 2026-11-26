@@ -21,13 +21,32 @@ tests:
           path: spec.template.spec.volumes
           content: {name: substrate-ca}
           any: true
-  - it: operator can disable API access for everyone
+  - it: operator can disable API access with a blank endpoint and a leftover CA
     set:
       substrate.api.enabled: false
+      substrate.api.endpoint: ""
+      substrate.api.caConfigMap.name: unused-substrate-ca
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env
           content: {name: RADAR_SUBSTRATE_API, value: disabled}
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: RADAR_SUBSTRATE_CA_FILE}
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: substrate-ca}
+          any: true
+      - notContains:
+          path: spec.template.spec.volumes
+          content: {name: substrate-ca}
+          any: true
+  - it: requires a nonblank endpoint while API access is enabled
+    set:
+      substrate.api.endpoint: ""
+    asserts:
+      - failedTemplate: {}
   - it: mounts the selected public CA key read-only and joins fallback atespaces
     set:
       substrate.api.endpoint: api.example.com:8443

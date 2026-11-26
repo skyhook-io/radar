@@ -50,6 +50,9 @@ it('keeps no previous answer for a detail, only for another page of the same act
   expect(keep(previous, { queryKey: ['substrate', '/other', 'cluster-a', ...page1.queryKey.slice(3)] })).toBeUndefined()
   expect(keep(previous, { queryKey: a.queryKey })).toBeUndefined()
   expect(keep(previous, undefined)).toBeUndefined()
+  feature.gatedKey = ['radar-feature-unsupported']
+  useSubstrateActors({ state: 'crashed', offset: 50, limit: 50 })
+  expect((lastQuery().placeholderData as Placeholder)(previous, { queryKey: page2.queryKey })).toBeUndefined()
 })
 
 it('reads a new log window after a crash and leaves last-node polling off', () => {

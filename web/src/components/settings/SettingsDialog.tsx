@@ -352,9 +352,10 @@ export function SettingsDialog({
   const { support: substrateSupport } = useRadarFeature('substrateWorkspace')
   const substrateHere = substrateDiscovered(apiResources)
   const substrateSupported = substrateSupport !== 'unsupported'
-  // Asked only where Substrate isn't served, for a saved connection that still needs disconnecting.
-  const substrateLeftover = useSubstrateConnection(open && apiResources !== undefined && !substrateHere && substrateSupported)
-  const substrateSaved = substrateLeftover.data?.view === 'local' && substrateLeftover.data.saved
+  const canReadSavedSubstrate = capabilities.substrateLocalConnection === true
+  // A leftover saved connection can be disconnected even after Substrate is removed.
+  const substrateLeftover = useSubstrateConnection(open && apiResources !== undefined && !substrateHere && substrateSupported && canReadSavedSubstrate)
+  const substrateSaved = canReadSavedSubstrate && substrateLeftover.data?.view === 'local' && substrateLeftover.data.saved
   // Kept until the dialog closes or the cluster changes, so Disconnect doesn't pull the section away mid-use.
   const [substrateSavedOn, setSubstrateSavedOn] = useState<string | undefined>()
   useEffect(() => {
@@ -367,7 +368,8 @@ export function SettingsDialog({
     saved: substrateSaved || (substrateSavedOn !== undefined && substrateSavedOn === settingsCluster?.context),
     dirty: substrateDirty,
   })
-  const substrateKnown = apiResources !== undefined && (substrateHere || !substrateSupported || substrateLeftover.isFetched)
+  const substrateKnown = apiResources !== undefined && (substrateHere || !substrateSupported ||
+    capabilities.substrateLocalConnection === false || substrateLeftover.isFetched)
   // A cluster without Substrate has no section to stay on.
   useEffect(() => {
     if (open && section === 'substrate' && substrateKnown && !showSubstrate && sectionAllowed('overview')) setSection('overview')
@@ -942,7 +944,7 @@ export function SettingsDialog({
               caption={configData?.management === 'local' ? localIntegrationCaption : undefined}
               live
             >
-              <SubstrateSettings key={`${discardGeneration}:${reloadVersion}`} active={open && section === 'substrate'} onDirtyChange={setSubstrateDirty} onBusyChange={setSubstrateBusy} />
+              <SubstrateSettings key={`${discardGeneration}:${reloadVersion}`} active={open && section === 'substrate' && showSubstrate && (substrateHere || canReadSavedSubstrate)} onDirtyChange={setSubstrateDirty} onBusyChange={setSubstrateBusy} />
             </SectionPane>
 
             {/* AI investigations — self-saving, usable by everyone. Same heading block

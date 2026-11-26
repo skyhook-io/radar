@@ -121,6 +121,9 @@ func TestLostKagentSessionRecoversInKagent(t *testing.T) {
 		t.Fatalf("impact = %+v", impact)
 	}
 	noKubectlAte(t, "worker impact", impact.NextStep, impact.Command, "")
+	if !strings.Contains(impact.NextStep, "looks like a kagent session") || !strings.Contains(impact.NextStep, "marks it crashed") {
+		t.Errorf("the recovery step must qualify ownership and wait for a recorded crash: %s", impact.NextStep)
+	}
 
 	restarting := worker("r", "p", WorkerActive, 8, 1)
 	restarting.RegisteredEpoch, restarting.ObservedEpoch = 5, 4

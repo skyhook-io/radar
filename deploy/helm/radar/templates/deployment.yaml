@@ -362,7 +362,7 @@ spec:
               value: {{ .Values.substrate.api.serverName | quote }}
             - name: RADAR_SUBSTRATE_ATESPACES
               value: {{ join "," .Values.substrate.api.atespaces | quote }}
-            {{- if .Values.substrate.api.caConfigMap.name }}
+            {{- if and .Values.substrate.api.enabled .Values.substrate.api.caConfigMap.name }}
             - name: RADAR_SUBSTRATE_CA_FILE
               value: /etc/radar/substrate-ca/ca.crt
             {{- end }}
@@ -534,7 +534,7 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
-            {{- if .Values.substrate.api.caConfigMap.name }}
+            {{- if and .Values.substrate.api.enabled .Values.substrate.api.caConfigMap.name }}
             - name: substrate-ca
               mountPath: /etc/radar/substrate-ca
               readOnly: true
@@ -566,7 +566,7 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
       volumes:
-        {{- if .Values.substrate.api.caConfigMap.name }}
+        {{- if and .Values.substrate.api.enabled .Values.substrate.api.caConfigMap.name }}
         - name: substrate-ca
           configMap:
             name: {{ .Values.substrate.api.caConfigMap.name | quote }}

@@ -236,10 +236,10 @@ func TestNeedsAttentionWorkers(t *testing.T) {
 
 func TestNeedsAttentionPools(t *testing.T) {
 	pools := []Pool{
-		{Namespace: "ns", Name: "short", Desired: i64(2), Ready: 2},
-		{Namespace: "ns", Name: "empty", Desired: i64(2), Ready: 0},
-		{Namespace: "ns", Name: "full", Desired: i64(1), Ready: 1},
-		{Namespace: "ns", Name: "free", Desired: i64(1), Ready: 1},
+		{Namespace: "ns", Name: "short", Desired: i64(2), ReportedReady: i64(2)},
+		{Namespace: "ns", Name: "empty", Desired: i64(2), ReportedReady: i64(0)},
+		{Namespace: "ns", Name: "full", Desired: i64(1), ReportedReady: i64(1)},
+		{Namespace: "ns", Name: "free", Desired: i64(1), ReportedReady: i64(1)},
 	}
 	workers := []Worker{
 		worker("s1", "short", WorkerActive, 8, 1), worker("s2", "short", WorkerUnavailable, 8, 0),
@@ -351,7 +351,7 @@ func TestNeedsAttentionRankWithinSeverity(t *testing.T) {
 	}
 	unavailable := worker("u", "p", WorkerUnavailable, 8, 0)
 	unavailable.UpdateTime = ago(time.Hour)
-	pools := []Pool{{Namespace: "agents", Name: "p", Labels: map[string]string{"class": "gvisor"}, Desired: i64(2), Ready: 2}}
+	pools := []Pool{{Namespace: "agents", Name: "p", Labels: map[string]string{"class": "gvisor"}, Desired: i64(2), ReportedReady: i64(2)}}
 	rows := NeedsAttention(Inputs{
 		Actors: actors, ActorsRead: true, Templates: templates, TemplatesRead: true,
 		Workers: []Worker{unavailable}, WorkersRead: true, WorkersComplete: true, Pools: pools, PoolsUsable: true, PoolsComplete: true,
@@ -411,10 +411,10 @@ func TestNewPoolShortIsNotCritical(t *testing.T) {
 		pool Pool
 		want string
 	}{
-		{"pending pool", Pool{Namespace: "agents", Name: "p", Desired: &desired, Health: "degraded", HealthReason: "Pending"}, SeverityWarning},
-		{"scaling pool", Pool{Namespace: "agents", Name: "p", Desired: &desired, HealthReason: "Scaling", CreateTime: ago(time.Hour)}, SeverityWarning},
-		{"young pool", Pool{Namespace: "agents", Name: "p", Desired: &desired, HealthReason: "Provisioning stalled", CreateTime: ago(time.Minute)}, SeverityWarning},
-		{"settled pool with none", Pool{Namespace: "agents", Name: "p", Desired: &desired, HealthReason: "Provisioning stalled", CreateTime: ago(time.Hour)}, SeverityCritical},
+		{"pending pool", Pool{Namespace: "agents", Name: "p", Desired: &desired, ReportedReady: i64(0), Health: "degraded", HealthReason: "Pending"}, SeverityWarning},
+		{"scaling pool", Pool{Namespace: "agents", Name: "p", Desired: &desired, ReportedReady: i64(0), HealthReason: "Scaling", CreateTime: ago(time.Hour)}, SeverityWarning},
+		{"young pool", Pool{Namespace: "agents", Name: "p", Desired: &desired, ReportedReady: i64(0), HealthReason: "Provisioning stalled", CreateTime: ago(time.Minute)}, SeverityWarning},
+		{"settled pool with none", Pool{Namespace: "agents", Name: "p", Desired: &desired, ReportedReady: i64(0), HealthReason: "Provisioning stalled", CreateTime: ago(time.Hour)}, SeverityCritical},
 	} {
 		r := find(t, NeedsAttention(Inputs{Pools: []Pool{tc.pool}, PoolsUsable: true, PoolsComplete: true, Now: now}), "poolShort:agents/p")
 		if r.Severity != tc.want || r.Count != 1 {
@@ -468,7 +468,7 @@ func rankedBefore(rows []Attention, first, second string) bool {
 // The pool's readiness is counted from the Pods Radar holds; the
 // WorkerPool's status, which can lag, is cited only where it disagrees.
 func TestPoolShortCountsPods(t *testing.T) {
-	pools := []Pool{{Namespace: "ns", Name: "p", Desired: i64(5), Ready: 3, Pods: &PoolPods{Created: 4, Ready: 2, Terminating: 1}}}
+	pools := []Pool{{Namespace: "ns", Name: "p", Desired: i64(5), ReportedReady: i64(3), Pods: &PoolPods{Created: 4, Ready: 2, Terminating: 1}}}
 	r := find(t, NeedsAttention(Inputs{Pools: pools, PoolsUsable: true, PoolsComplete: true, Now: now}), "poolShort:ns/p")
 	want := "2 of 5 desired workers are ready. Kubernetes has created 4 of 5 worker Pods. Radar holds 2 ready worker Pods; the WorkerPool's status says 3."
 	if !strings.HasPrefix(r.Reading, want) {
@@ -526,7 +526,6 @@ func TestPoolFindingUsesControllerDiagnosis(t *testing.T) {
 	broken := Pool{
 		Namespace: "ns", Name: "broken", Desired: i64(3), Health: "unhealthy",
 		HealthReason: "SandboxConfigNotFound", HealthDetail: "SandboxConfig gvisor-v2 was not found.",
-		ReadinessUnreported: true,
 	}
 	in := Inputs{Pools: []Pool{broken}, PoolsUsable: true, Now: now}
 	pools := JoinPools(in)

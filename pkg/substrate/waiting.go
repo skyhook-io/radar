@@ -28,7 +28,7 @@ const (
 // Waiting is where a transitional actor waits.
 type Waiting struct {
 	On string `json:"on"`
-	// Worker is the worker the step runs on; absent for revert and delete.
+	// Worker is set for a recorded restore or checkpoint placement.
 	Worker *WorkerPodRef `json:"worker,omitempty"`
 	Node   string        `json:"node,omitempty"`
 	// Reading says it in a sentence.
@@ -158,7 +158,7 @@ type WorkerImpact struct {
 	// NextStep is one action for this actor, and Command runs it, with the
 	// actor's and the worker Pod's names filled in.
 	NextStep string `json:"nextStep"`
-	Command  string `json:"command"`
+	Command  string `json:"command,omitempty"`
 }
 
 // WorkerImpactKind is WorkerImpactOf's kind alone, cheap enough to sort a
@@ -202,9 +202,9 @@ func WorkerImpactOf(a Actor, w Worker, pods WorkerPods) *WorkerImpact {
 			step, command = "Suspend it before its worker Pod is gone to keep its state.", forActor(suspendCommand, a)
 			switch {
 			case isKagentSandbox(a):
-				step, command = "Suspend the sandbox through kagent's SandboxService before its worker Pod is gone.", ""
+				step, command = "This actor looks like a kagent sandbox. Suspend it through kagent's SandboxService before its worker Pod is gone.", ""
 			case isKagent(a):
-				step, command = "Let kagent manage the chat session. If Substrate later marks it crashed, recover it through kagent.", ""
+				step, command = "This actor looks like a kagent session. Let kagent manage the chat. If Substrate later marks it crashed, recover it through kagent.", ""
 			}
 		case StateResuming:
 			step = "Wait for the resume to finish before suspending it."
@@ -300,8 +300,8 @@ type WorkerReading struct {
 	Reading  string `json:"reading"`
 }
 
-// WorkerReadingOf reads w for its row; nil for an active worker whose
-// registration Substrate has observed. assigned is its actors, which may cover only part of the fleet.
+// WorkerReadingOf describes an unavailable, draining, or unreconciled worker.
+// assigned is the observed assignment list. Exact counts require actorsComplete. assigned is its actors, which may cover only part of the fleet.
 func WorkerReadingOf(w Worker, assigned []Actor, actorsComplete bool, pods WorkerPods) *WorkerReading {
 	r := &WorkerReading{}
 	switch {

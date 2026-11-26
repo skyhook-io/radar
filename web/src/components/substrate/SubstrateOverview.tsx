@@ -137,7 +137,7 @@ export function overviewFacts(data: SubstrateWorkspace): Fact[] {
 
   const pools = summary.pools
   if (pools) {
-    const noRoom = pools.noRoom ?? 0
+    const noRoom = pools.noRoom
     const poolNotes = [pools.short > 0 && `${pools.short} short of workers`, pools.full > 0 && `${pools.full} full`, noRoom > 0 && `${noRoom} with no room for an actor`].filter(Boolean)
     facts.push({
       label: 'Worker pools',
@@ -163,8 +163,8 @@ export function overviewFacts(data: SubstrateWorkspace): Fact[] {
   } else {
     // Without the API, the worker Pods Kubernetes calls ready stand in, said as Pods.
     const k8s = data.pools.map((p) => p.kubernetes).filter((p): p is NonNullable<SubstratePoolRow['kubernetes']> => !!p)
-    const readable = k8s.filter((p) => p.pods || p.reportedReady !== undefined)
-    const ready = readable.reduce((n, p) => n + poolReadyPods(p), 0)
+    const readable = k8s.map(poolReadyPods).filter((ready) => ready !== undefined)
+    const ready = readable.reduce((n, count) => n + count, 0)
     const podsPartial = poolsPartial || readable.length < k8s.length
     const desired = k8s.every((p) => p.desired !== undefined) ? k8s.reduce((n, p) => n + (p.desired ?? 0), 0) : undefined
     facts.push({

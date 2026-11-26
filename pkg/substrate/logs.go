@@ -59,8 +59,8 @@ var logLabelKeys = []string{"logging.googleapis.com/labels", "labels"}
 // the ate.* labels are from a container line's.
 var workerIdentityKeys = []string{logAtespaceKey, logActorNameKey, logActorUIDKey, "ate.template.atespace", "ate.template.name", logPlainUIDKey}
 
-// LogFilter selects one actor's lines from its worker Pod's log, exactly as
-// kubectl ate logs actor does.
+// LogFilter selects the actor's labelled output and lifecycle events, plus
+// worker records when the selected source includes them.
 type LogFilter struct {
 	Target    Ref
 	Source    string
@@ -70,8 +70,8 @@ type LogFilter struct {
 	UID string
 }
 
-// NewLogFilter validates source and container; lifecycle events come from no
-// container, so the two cannot be combined.
+// NewLogFilter validates source and container. Lifecycle and worker records
+// cannot be selected by container.
 func NewLogFilter(target Ref, source, container string) (LogFilter, error) {
 	if source == "" {
 		source = LogSourceAll
@@ -130,7 +130,7 @@ type LogLine struct {
 	// Time is the record's own time field when it has one, else the
 	// kubelet's timestamp; absent when neither parses.
 	Time time.Time `json:"time,omitzero"`
-	// Container is the emitting container; absent for a lifecycle event.
+	// Container is the emitting container, absent on lifecycle and worker records.
 	Container string `json:"container,omitempty"`
 	Severity  string `json:"severity,omitempty"`
 	// Message is the record's message or msg field, when it is a string.

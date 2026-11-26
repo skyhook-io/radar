@@ -226,7 +226,7 @@ func (s *Server) writeSubstrateTier(w http.ResponseWriter, tier substrateapi.API
 	s.writeErrorCode(w, status, tier.Code, tier.Reason)
 }
 
-var workerPoolKind = integration.WorkspaceKind{Key: "workerpools", Group: "ate.dev", Kind: "WorkerPool", Resource: "workerpools"}
+var workerPoolKind = integration.WorkspaceKind{Key: "workerpools", Group: "ate.dev", Kind: model.SubjectWorkerPool, Resource: "workerpools"}
 
 // substratePools reads WorkerPools as the caller, through the workspace
 // coverage machinery: a watch still syncing, a namespace Radar does not
@@ -356,9 +356,7 @@ func poolOf(u *unstructured.Unstructured, now time.Time) model.Pool {
 		p.Desired = &desired
 	}
 	if ready, ok, _ := unstructured.NestedInt64(u.Object, "status", "readyReplicas"); ok {
-		p.Ready, p.ReportedReady = ready, &ready
-	} else {
-		p.ReadinessUnreported = true
+		p.ReportedReady = &ready
 	}
 	v := health.SubstrateWorkerPool(u, now)
 	p.Health, p.HealthReason = string(v.Level), v.Reason
@@ -386,8 +384,8 @@ type substrateAPIService struct {
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
 	Port      int    `json:"port"`
-	// Found is whether Radar's cache holds the Service; absent when the
-	// caller cannot read Services there.
+	// Found reports whether the Service is in Radar's cache. Absent when the
+	// Service cache is unavailable or the caller lacks get services there.
 	Found *bool `json:"found,omitempty"`
 }
 
@@ -401,8 +399,8 @@ type substrateStatusResponse struct {
 	Coverage struct {
 		Pools integration.KindCoverage `json:"pools"`
 	} `json:"coverage"`
-	// CanConfigure: this Radar may read Substrate's API, so the connection
-	// settings can be changed here.
+	// CanConfigure reports whether this is a private local Radar whose saved
+	// connection can be edited.
 	CanConfigure bool `json:"canConfigure"`
 }
 
@@ -1082,8 +1080,9 @@ type substrateActorsResponse struct {
 	// all of it), and actor (a direct read of the exact name searched, when
 	// that atespace read is itself capped).
 	Sources []string `json:"sources"`
-	// Total and Counts are absent when actors could not be read. Counts are
-	// per state, after every filter but state and before paging.
+	// Counts and AttentionCount precede the state and attention filters.
+	// Total follows every filter and precedes paging. All three are absent
+	// when actors could not be read.
 	AttentionCount *int               `json:"attentionCount,omitempty"`
 	Total          *int               `json:"total,omitempty"`
 	Counts         *model.StateCounts `json:"counts,omitempty"`
@@ -1242,8 +1241,8 @@ func onNode(a model.Actor, node, has string) bool {
 // sortActors orders actors, which arrive newest change first. attention:
 // crashed; then those whose worker is unavailable or restarted under them,
 // which may not be served or have lost their sandbox; then stuck in a
-// transition past StuckAfter; then the rest, each newest first. name: by
-// atespace and name. updated (the default) keeps them.
+// transition past StuckAfter; then the rest. Stuck actors are longest-waiting
+// first. The other groups retain newest-change order.
 func actorAttentionRank(a model.Actor, now time.Time, workers map[string]model.Worker) int {
 	if a.State == model.StateCrashed {
 		return 0
@@ -1336,12 +1335,8 @@ type substrateActorDetail struct {
 	Template *model.TemplateRow `json:"template,omitempty"`
 	// Worker is the assigned worker's Substrate state; absent when the
 	// actor has no worker or workers were not read.
-	Worker *substrateWorkerRow `json:"worker,omitempty"`
-	// WorkerImpact is what the worker's state means for this actor:
-	// unavailable, draining or restarted; absent when the worker is active
-	// and its process has not restarted under the actor.
-	WorkerImpact *model.WorkerImpact        `json:"workerImpact,omitempty"`
-	Egress       substrateapi.EgressSummary `json:"egress"`
+	Worker *substrateWorkerRow        `json:"worker,omitempty"`
+	Egress substrateapi.EgressSummary `json:"egress"`
 	// Related links: template, pool, worker Pod, node.
 	Related []model.Subject `json:"related"`
 	// Attention is the needs-attention rows that cover this actor, judged
@@ -1547,21 +1542,20 @@ func (s *Server) handleSubstrateActor(w http.ResponseWriter, r *http.Request) {
 	rc := model.NewResumeContext(templates, in.Workers, in.WorkersComplete)
 	resp.Row = model.RowOf(actor, now, rc)
 	resp.Recovery = model.RecoveryOf(actor, rc)
-	resp.Related = []model.Subject{{Kind: "ActorTemplate", Atespace: actor.Template.Atespace, Name: actor.Template.Name}}
+	resp.Related = []model.Subject{{Kind: model.SubjectActorTemplate, Atespace: actor.Template.Atespace, Name: actor.Template.Name}}
 	if as := actor.Assignment; as != nil {
 		resp.Related = append(resp.Related,
-			model.Subject{Kind: "WorkerPool", Namespace: as.Namespace, Name: as.Pool},
-			model.Subject{Kind: "Pod", Namespace: as.Namespace, Name: as.Pod})
+			model.Subject{Kind: model.SubjectWorkerPool, Namespace: as.Namespace, Name: as.Pool},
+			model.Subject{Kind: model.SubjectPod, Namespace: as.Namespace, Name: as.Pod})
 		if worker != nil {
 			row := substrateWorkerRowOf(*worker, assigned, workerActorCoverage, in.WorkerPods)
 			row.Actors = nil
 			resp.Worker = &row
-			resp.WorkerImpact = model.WorkerImpactOf(actor, *worker, in.WorkerPods)
-			resp.Row.WorkerImpact = resp.WorkerImpact
+			resp.Row.WorkerImpact = model.WorkerImpactOf(actor, *worker, in.WorkerPods)
 		}
 	}
 	if node := model.ActorNode(actor); node != "" {
-		resp.Related = append(resp.Related, model.Subject{Kind: "Node", Name: node})
+		resp.Related = append(resp.Related, model.Subject{Kind: model.SubjectNode, Name: node})
 	}
 	in.Templates, in.TemplatesRead, in.TemplatesComplete = templates, found, templateMissing
 	resp.Attention = model.ActorDetailAttention(in, actor, worker)
@@ -1593,7 +1587,8 @@ type substrateSearchedPod struct {
 	Message    string `json:"message,omitempty"`
 	Scanned    int    `json:"scanned"`
 	WindowFull bool   `json:"windowFull"`
-	Matched    int    `json:"matched"`
+	// Matched counts every selected line in the scan, before keeping the newest tail.
+	Matched int `json:"matched"`
 }
 
 // Origins of an actor's log lines.
@@ -1974,7 +1969,7 @@ func (s *Server) searchSubstratePod(r *http.Request, client kubernetes.Interface
 		out.pod.Outcome, out.pod.Message = "failed", err.Error()
 		return out
 	}
-	lines, evidence, scanned, err := filterSubstrateLog(bytes.NewReader(body), filter, tail)
+	lines, evidence, scanned, matched, err := filterSubstrateLog(bytes.NewReader(body), filter, tail)
 	if err != nil {
 		out.pod.Outcome, out.pod.Message = "failed", err.Error()
 		return out
@@ -1984,7 +1979,7 @@ func (s *Server) searchSubstratePod(r *http.Request, client kubernetes.Interface
 		// an execution start or a failed kill that changes attribution.
 		evidence = nil
 	}
-	out.pod.Scanned, out.pod.WindowFull, out.pod.Matched = scanned, scanned >= substrateLogScanLines || windowFull, len(lines)
+	out.pod.Scanned, out.pod.WindowFull, out.pod.Matched = scanned, scanned >= substrateLogScanLines || windowFull, matched
 	for _, l := range lines {
 		out.lines = append(out.lines, substrateLogLine{LogLine: l, Pod: pod, Namespace: namespace})
 	}
@@ -1998,7 +1993,7 @@ func (s *Server) searchSubstratePod(r *http.Request, client kubernetes.Interface
 // from every source, the actor's memory-limit kills and execution starts
 // (memoryKillOf's evidence). A line longer than the buffer is skipped whole,
 // so one oversized record cannot end the scan before the newer lines behind it.
-func filterSubstrateLog(r io.Reader, filter model.LogFilter, tail int) (ring, evidence []model.LogLine, scanned int, err error) {
+func filterSubstrateLog(r io.Reader, filter model.LogFilter, tail int) (ring, evidence []model.LogLine, scanned, matched int, err error) {
 	reader := bufio.NewReaderSize(r, substrateLogMaxLine)
 	ring = make([]model.LogLine, 0, tail)
 	skipping := false
@@ -2014,6 +2009,7 @@ func filterSubstrateLog(r io.Reader, filter model.LogFilter, tail int) (ring, ev
 			stamp, line, _ := model.SplitKubeletTimestamp(strings.TrimRight(string(chunk), "\r\n"))
 			got, selected, isEvidence := model.FilterLineWithEvidence(line, filter, stamp)
 			if selected {
+				matched++
 				if len(ring) == tail {
 					ring[next] = got
 					next = (next + 1) % tail
@@ -2032,10 +2028,10 @@ func filterSubstrateLog(r io.Reader, filter model.LogFilter, tail int) (ring, ev
 			if next != 0 {
 				ring = slices.Concat(ring[next:], ring[:next])
 			}
-			return ring, evidence, scanned, nil
+			return ring, evidence, scanned, matched, nil
 		}
 		if err != nil {
-			return nil, nil, scanned, err
+			return nil, nil, scanned, matched, err
 		}
 	}
 }
@@ -2053,16 +2049,16 @@ type substrateWorkerRow struct {
 	// PodReady is the worker Pod's Ready condition in Radar's cache; absent
 	// when the Pod is not cached.
 	PodReady *bool `json:"podReady,omitempty"`
-	// PodTerminating: the cached Pod is being deleted. A Deployment's ready
-	// count leaves a terminating Pod out even while its Ready condition holds.
+	// PodTerminating reports a deletion deadline on the cached Pod. When
+	// PodReady is absent, the Pod's deletion state is also unknown.
 	PodTerminating bool `json:"podTerminating,omitempty"`
 	// WorkerState is what its state means for its actors (WorkerReadingOf);
 	// absent for an active worker whose registration Substrate has observed.
 	WorkerState *model.WorkerReading `json:"workerState,omitempty"`
 	// AttentionSeverity is the strongest finding for this worker, including an in-budget drain (info).
 	AttentionSeverity string `json:"attentionSeverity,omitempty"`
-	// Actors are the actors assigned to it: absent when actors were not
-	// read, [] when it has none.
+	// Actors are the assignments observed in the actor read, which may be
+	// partial. Absent when unread or intentionally omitted on actor detail.
 	Actors []substrateAssignedActor `json:"actors,omitzero"`
 }
 

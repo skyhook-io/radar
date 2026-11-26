@@ -51,7 +51,7 @@ func TestHasRoomFor(t *testing.T) {
 }
 
 func TestJoinPoolsNoRoom(t *testing.T) {
-	pools := []Pool{{Namespace: "agents", Name: "pool", Desired: i64(1), Ready: 1, Labels: map[string]string{"class": "gvisor"}}}
+	pools := []Pool{{Namespace: "agents", Name: "pool", Desired: i64(1), ReportedReady: i64(1), Labels: map[string]string{"class": "gvisor"}}}
 	live := Inputs{Pools: pools, Workers: []Worker{liveWorker()}, WorkersRead: true, WorkersComplete: true, Templates: []Template{agentTemplate}, TemplatesRead: true, TemplatesComplete: true}
 	only := func(in Inputs) PoolRow {
 		t.Helper()
@@ -123,14 +123,14 @@ func TestJoinPoolsNoRoom(t *testing.T) {
 		t.Errorf("no free slot: %q, want full", r.Capacity)
 	}
 	short := live
-	short.Pools = []Pool{{Namespace: "agents", Name: "pool", Desired: i64(2), Ready: 1, Labels: pools[0].Labels}}
+	short.Pools = []Pool{{Namespace: "agents", Name: "pool", Desired: i64(2), ReportedReady: i64(1), Labels: pools[0].Labels}}
 	if r := only(short); r.Capacity != CapacityShort {
 		t.Errorf("short of workers: %q, want short", r.Capacity)
 	}
 }
 
 func TestNeedsAttentionPoolNoRoom(t *testing.T) {
-	pools := []Pool{{Namespace: "agents", Name: "pool", Desired: i64(1), Ready: 1}}
+	pools := []Pool{{Namespace: "agents", Name: "pool", Desired: i64(1), ReportedReady: i64(1)}}
 	in := Inputs{
 		Pools: pools, PoolsUsable: true, PoolsComplete: true, Workers: []Worker{liveWorker()}, WorkersRead: true, WorkersComplete: true,
 		Templates: []Template{agentTemplate}, TemplatesRead: true, TemplatesComplete: true, Now: now,
@@ -158,7 +158,7 @@ func TestNeedsAttentionPoolNoRoom(t *testing.T) {
 	// from its defaults: the step lowers those, not the templates.
 	in.Actors, in.ActorsRead = []Actor{{Atespace: "kagent", Name: "session-1", Template: agentTemplate.Ref(), State: StateSuspended, Kagent: &KagentSession{SessionID: "1"}}}, true
 	r = find(t, NeedsAttention(in), "poolNoRoom:agents/pool")
-	if r.NextStep != "Add workers to the pool, or lower kagent's config.runtimeDefaults.cpu (and .memory), which sets every agent's limits." {
+	if r.NextStep != "Add workers, or for actors that look like kagent sessions, check kagent's config.runtimeDefaults.cpu (and .memory) before lowering limits." {
 		t.Errorf("kagent step = %q", r.NextStep)
 	}
 	in.Workers[0].Capacity = &Resources{CPUMillicores: 8000, MemoryBytes: 2 << 30, Actors: 1000}

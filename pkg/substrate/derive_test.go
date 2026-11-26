@@ -170,10 +170,10 @@ func TestHasFreeSlot(t *testing.T) {
 
 func TestJoinPools(t *testing.T) {
 	pools := []Pool{
-		{Namespace: "agents", Name: "short", Desired: i64(3), Ready: 3},
-		{Namespace: "agents", Name: "full", Desired: i64(1), Ready: 1, SandboxClasses: []string{"gvisor"}},
-		{Namespace: "agents", Name: "free", Desired: i64(1), Ready: 1},
-		{Namespace: "agents", Name: "k8s-short", Desired: i64(2), Ready: 1},
+		{Namespace: "agents", Name: "short", Desired: i64(3), ReportedReady: i64(3)},
+		{Namespace: "agents", Name: "full", Desired: i64(1), ReportedReady: i64(1), SandboxClasses: []string{"gvisor"}},
+		{Namespace: "agents", Name: "free", Desired: i64(1), ReportedReady: i64(1)},
+		{Namespace: "agents", Name: "k8s-short", Desired: i64(2), ReportedReady: i64(1)},
 	}
 	workers := []Worker{
 		worker("s1", "short", WorkerActive, 8, 1), worker("s2", "short", WorkerUnavailable, 8, 0),

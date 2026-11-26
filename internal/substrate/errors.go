@@ -14,13 +14,13 @@ import (
 const (
 	// CodeSharedRadar: a shared Radar without sign-in (a non-loopback
 	// listener, or in-cluster with auth off). It cannot tell who is asking,
-	// so it does not read Substrate's API for anyone.
+	// so it refuses API reads and private-local connection edits.
 	CodeSharedRadar = "sharedRadar"
 	// CodeAPIDisabled: the operator turned Substrate's API off for this
 	// installation (RADAR_SUBSTRATE_API=disabled).
 	CodeAPIDisabled = "apiDisabled"
-	// CodeConflict: the saved connection file changed since the caller read
-	// it (another Radar process, or the Desktop app, saved meanwhile).
+	// CodeConflict: the saved connection revision changed, or another process
+	// is updating the file.
 	CodeConflict = "conflict"
 	// CodeConfirmDestination: a save keeps the saved credential but sends it
 	// to a changed endpoint, CA or server name, and the caller has not agreed.
@@ -31,8 +31,8 @@ const (
 	CodeMintDenied = "mintDenied"
 	// CodeNotConfigured: no identity has been chosen for this context.
 	CodeNotConfigured = "notConfigured"
-	// CodeTargetChanged: the context now points at another cluster than the
-	// one the settings were saved for.
+	// CodeTargetChanged: the current Kubernetes target differs from the one the
+	// caller reviewed or the one the settings were saved for.
 	CodeTargetChanged = "targetChanged"
 	// CodeNotInstalled: Service ate-system/api does not exist.
 	CodeNotInstalled    = "notInstalled"
@@ -45,11 +45,12 @@ const (
 	// CodeScoped: Substrate would not list atespaces, so Radar read only the
 	// atespaces named in its settings; the rest are unknown.
 	CodeScoped = "scoped"
-	// CodeContextChanged: the cluster connection or the settings changed
-	// while the read ran, so its result was discarded. Safe to retry.
+	// CodeContextChanged: the Kubernetes context is changing, or a connection
+	// change or settings update invalidated the operation. Safe to retry.
 	CodeContextChanged = "contextChanged"
 	CodeFailed         = "failed"
-	// CodeInvalidSettings: the submitted connection settings are invalid.
+	// CodeInvalidSettings: invalid connection input or installation settings,
+	// including a token file that could not supply a token.
 	CodeInvalidSettings = "invalidSettings"
 	// CodeSettingsFile: Radar could not read or write ~/.radar/substrate.json.
 	CodeSettingsFile = "settingsFile"

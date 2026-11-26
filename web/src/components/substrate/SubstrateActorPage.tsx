@@ -331,7 +331,7 @@ export function SubstrateActorPage({ actor, onOpenSubject }: { actor: SubstrateR
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
       {breadcrumb}
       <h1 className="min-w-0 truncate font-mono text-lg font-semibold text-theme-text-primary">{actor.name}</h1>
-      {detail && <ActorStateBadge state={detail.actor.state} impact={detail.workerImpact} updateTime={detail.actor.updateTime} />}
+      {detail && <ActorStateBadge state={detail.actor.state} impact={detail.row.workerImpact} updateTime={detail.actor.updateTime} />}
       <span className="text-sm text-theme-text-secondary"><Term term="atespace">Atespace</Term>: <span className="font-mono">{actor.atespace}</span></span>
     </div>
   )

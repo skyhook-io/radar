@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react'
+import { useCallback } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import type { WorkspaceScreenProps } from '../../integrations/workspaceRoute'
 import { useAPIResources } from '../../api/apiResources'
@@ -9,7 +9,6 @@ import { currentPageLabel } from '../../utils/page-links'
 import { refToSelectedResource } from '../../utils/navigation'
 import { encodeDrawerTrail } from '../../utils/drawer-trail'
 import type { SelectedResource } from '../../types'
-import { useCNPGKubectlContext } from '../cnpg/useCNPGKubectlContext'
 import { useCNPGSidebarWorkspace } from '../cnpg/useCNPGSidebarWorkspace'
 import { useVeleroSidebarWorkspace } from '../velero/useVeleroSidebarWorkspace'
 import { WorkspaceFrame } from '../workspace/WorkspaceFrame'
@@ -34,7 +33,7 @@ import { SubstrateOverview } from './SubstrateOverview'
 import { SubstratePoolPage } from './SubstratePoolPage'
 import { SubstrateTemplatePage, SubstrateTemplatesScreen } from './SubstrateTemplates'
 import { SubstrateWorkersScreen } from './SubstrateWorkers'
-import { DEFAULT_INSTALLATION_ENDPOINT, KubectlTargetContext, SubstrateScreenGate, type KubectlTarget } from './shared'
+import { KubectlTargetContext, substrateKubectlTarget, SubstrateScreenGate } from './shared'
 import { substrateDiscovered, useSubstrateSidebarWorkspace } from './useSubstrateSidebarWorkspace'
 
 /**
@@ -89,20 +88,10 @@ export function SubstrateView({ namespaces, selectedResource, onOpenResource, on
   const sidebarWorkspace = useMergedSidebarWorkspaces(cnpgSidebar, veleroSidebar, substrateSidebar)
   const selectedKind = route.pool ? SUBSTRATE_WORKERPOOL_KIND : null
   const { inspect } = useWorkspaceDrawer({ selectedResource, onOpenResource, onCloseResource })
-  // On a local Radar, the file and name the context has there, and a saved
-  // direct endpoint (the default is the port-forward kubectl ate makes itself).
-  const kubectlContext = useCNPGKubectlContext()
   const connectionView = useSubstrateConnection(discovered)
-  const local = connectionView.data?.view === 'local' ? connectionView.data : undefined
-  const managed = connectionView.data?.view === 'managed' ? connectionView.data.managed : undefined
-  const kubeconfigFile = local?.target.source?.startsWith('/') ? local.target.source : undefined
-  const endpoint = local
-    ? (local.saved && !local.targetChanged ? local.settings?.endpoint || undefined : undefined)
-    : managed?.endpoint && managed.endpoint !== DEFAULT_INSTALLATION_ENDPOINT ? managed.endpoint : undefined
-  const kubectlTarget = useMemo<KubectlTarget>(
-    () => ({ context: kubectlContext ? (local?.target.inFileName || kubectlContext.name) : null, kubeconfig: kubeconfigFile, endpoint }),
-    [kubectlContext, local?.target.inFileName, kubeconfigFile, endpoint],
-  )
+  const kubectlTarget = connectionView.isError
+    ? { guidance: 'Use a client configured for the Substrate instance on this cluster.' }
+    : substrateKubectlTarget(connectionView.data, connection.context)
 
   const openActor = decodeActorParam(params.get(ACTOR_DRAWER_PARAM))
   const setActorDrawer = useCallback(

@@ -2,7 +2,7 @@ package substrate
 
 import "regexp"
 
-// KagentSession marks an actor kagent runs. kagent names the actor of each
+// KagentSession marks an actor whose naming matches kagent. kagent names the actor of each
 // chat session, and of each standalone sandbox, session-<UUID>, and runs its
 // lifecycle itself: it checks the actor's UID and template before every
 // operation, and treats an actor moved to another template as lost. So no
@@ -10,7 +10,7 @@ import "regexp"
 // through kagent.
 //
 // It is set only on a cluster that serves kagent's API, from the names alone:
-// they say kagent's naming, not which Agent the actor belongs to.
+// they suggest a kagent session without establishing ownership.
 type KagentSession struct {
 	SessionID string `json:"sessionId"`
 	// Sandbox: the actor runs a standalone kagent sandbox (its template is
@@ -24,9 +24,8 @@ var (
 	kagentSandboxTemplate = regexp.MustCompile(`^sandbox-[0-9a-f]{40}$`)
 )
 
-// KagentSessionOf is what kagent runs in an actor of this name and template
-// name: a chat session, or a standalone sandbox when the template is one
-// kagent makes for sandboxes. nil for any other actor name.
+// KagentSessionOf infers a chat session or sandbox from the actor and
+// template names. It returns nil for names outside the session pattern.
 func KagentSessionOf(name, template string) *KagentSession {
 	m := kagentSessionName.FindStringSubmatch(name)
 	if m == nil {
@@ -54,18 +53,18 @@ func MarkKagentSessions(actors []Actor, kagentServed bool) {
 // and delete") always works. A standalone sandbox has neither: kagent's
 // SandboxService creates, suspends, resumes and deletes it.
 const (
-	kagentCrashedStep = "These actors are kagent sessions. Recover each through kagent (its RevertSession API, or Recover on the chat where offered) or delete the chat there, never with kubectl ate."
+	kagentCrashedStep = "These actors look like kagent sessions. Recover each through kagent (its RevertSession API, or Recover on the chat where offered) or delete the chat there, never with kubectl ate."
 	// kagentAside follows a generic step when only some actors are kagent's.
-	kagentAside       = " Recover the kagent sessions among them through kagent instead (RevertSession, or delete the chat)."
-	kagentActorStep   = "This actor is a kagent session. Recover it through kagent (its RevertSession API, or Recover on the chat where offered) or delete the chat there. Moved to another template with kubectl ate, it can't be recovered."
-	kagentMemoryStep  = "This actor is a kagent session, killed for exceeding its memory limit. Recover it through kagent (RevertSession, or Recover on the chat where offered) or delete the chat; it keeps its template, so it may be killed again. kagent sets every agent's memory in its Helm value config.runtimeDefaults.memory: raise it for new sessions. Never move it to another template with kubectl ate: kagent then can't recover it."
-	kagentLostStep    = "This actor is a kagent session. Once Substrate reconciles the worker and marks it crashed, recover it through kagent (RevertSession, or Recover on the chat where offered), or delete the chat there."
-	kagentLostAllStep = "These actors are kagent sessions. Once Substrate reconciles the worker and marks them crashed, recover each through kagent (RevertSession, or Recover on the chat where offered), or delete the chat there."
+	kagentAside       = " Recover actors that look like kagent sessions through kagent instead (RevertSession, or delete the chat)."
+	kagentActorStep   = "This actor looks like a kagent session. Recover it through kagent (its RevertSession API, or Recover on the chat where offered) or delete the chat there. Moved to another template with kubectl ate, it can't be recovered."
+	kagentMemoryStep  = "This actor looks like a kagent session and was killed for exceeding its memory limit. Recover it through kagent (RevertSession, or Recover on the chat where offered) or delete the chat; it keeps its template, so it may be killed again. kagent sets every agent's memory in its Helm value config.runtimeDefaults.memory: raise it for new sessions. Never move it to another template with kubectl ate: kagent then can't recover it."
+	kagentLostStep    = "This actor looks like a kagent session. Once Substrate reconciles the worker and marks it crashed, recover it through kagent (RevertSession, or Recover on the chat where offered), or delete the chat there."
+	kagentLostAllStep = "Once Substrate reconciles the worker and marks them crashed, recover the actors that look like kagent sessions through kagent (RevertSession, or Recover on the chat where offered), or delete the chat there."
 
-	kagentSandboxStep   = "This actor runs a kagent sandbox. kagent manages it: delete the sandbox through kagent (its SandboxService) and create a new one; don't move or revert it with kubectl ate."
-	kagentSandboxesStep = "These actors run kagent sandboxes. kagent manages them: delete each sandbox through kagent (its SandboxService) and create a new one; don't move or revert them with kubectl ate."
-	kagentSandboxAside  = " Delete the kagent sandboxes among them through kagent (its SandboxService) and create new ones instead."
-	kagentBothStep      = "These actors are kagent sessions and sandboxes, which kagent manages. Recover each session through kagent (RevertSession, or Recover on the chat where offered) or delete its chat; delete each sandbox through kagent's SandboxService and create a new one. Never use kubectl ate on them."
+	kagentSandboxStep   = "This actor looks like a kagent sandbox. If so, delete the sandbox through kagent (its SandboxService) and create a new one; don't move or revert it with kubectl ate."
+	kagentSandboxesStep = "These actors look like kagent sandboxes. If so, delete each sandbox through kagent (its SandboxService) and create a new one; don't move or revert them with kubectl ate."
+	kagentSandboxAside  = " Delete actors that look like kagent sandboxes through kagent (its SandboxService) and create new ones instead."
+	kagentBothStep      = "These actors look like kagent sessions and sandboxes. Recover each session through kagent (RevertSession, or Recover on the chat where offered) or delete its chat; delete each sandbox through kagent's SandboxService and create a new one. Never use kubectl ate on them."
 )
 
 func isKagent(a Actor) bool { return a.Kagent != nil }
@@ -89,6 +88,8 @@ func kagentCounts(actors []Actor) (sessions, sandboxes int) {
 // worker restarted under them and Substrate has not yet marked them crashed.
 func kagentStep(sessions, sandboxes int, lost bool) string {
 	switch {
+	case lost && sessions > 0 && sandboxes > 0:
+		return kagentLostAllStep + kagentSandboxAside
 	case sessions > 0 && sandboxes > 0:
 		return kagentBothStep
 	case sandboxes == 1:

@@ -173,7 +173,7 @@ func workerState(s ateapi.WorkerState) string {
 	case ateapi.WorkerState_WORKER_STATE_UNAVAILABLE:
 		return model.WorkerUnavailable
 	}
-	return model.StateUnknown
+	return model.WorkerUnknown
 }
 
 func resources(r *ateapi.WorkerResources) *model.Resources {

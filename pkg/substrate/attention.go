@@ -62,6 +62,17 @@ const (
 	attentionSampleLimit = 20
 )
 
+// Subject kinds name the workspace objects and filtered actor lists a finding links to.
+const (
+	SubjectActor         = "Actor"
+	SubjectActorTemplate = "ActorTemplate"
+	SubjectWorker        = "Worker"
+	SubjectWorkerPool    = "WorkerPool"
+	SubjectNode          = "Node"
+	SubjectPod           = "Pod"
+	SubjectActors        = "Actors"
+)
+
 // Subject is what a row or link points at. Kind is Actor, ActorTemplate,
 // Worker, WorkerPool, Node, Pod, or Actors (a filtered actor list, with
 // Filter holding the /actors query parameters).
@@ -118,7 +129,7 @@ type Attention struct {
 	// Since is the newest change among them, for ordering; it is a lower
 	// bound on how long the condition has held.
 	Since time.Time `json:"since,omitzero"`
-	// Groups breaks the count down, largest first (crashes by template).
+	// Groups breaks the count down by subject, such as crashes by template.
 	Groups []Tally `json:"groups,omitempty"`
 	// Messages are the most common Substrate messages, largest first.
 	Messages []Tally `json:"messages,omitempty"`
@@ -157,18 +168,19 @@ type UploadNode struct {
 	Oldest time.Time `json:"oldest,omitzero"`
 }
 
-// Inputs is what the rules read. A false *Read means the list is unknown, and
-// rules that need it are skipped rather than reading it as empty.
+// Inputs holds the rules' evidence. Read/Usable allows partial results.
+// Complete permits conclusions that require the whole list.
 type Inputs struct {
-	Actors         []Actor
-	ActorsRead     bool
+	Actors     []Actor
+	ActorsRead bool
+	// ActorsComplete permits exact assignment counts and fleet-wide absence claims.
 	ActorsComplete bool
 	Templates      []Template
 	TemplatesRead  bool
 	Workers        []Worker
 	WorkersRead    bool
-	// WorkersComplete: every worker was read, which a rule needs before it
-	// says a pool is short or has no free slot.
+	// WorkersComplete allows the worker registry to establish a pool shortfall
+	// or absence of free slots.
 	WorkersComplete bool
 	Pools           []Pool
 	// TemplatesComplete: every template was read, none denied, so a template
@@ -194,17 +206,17 @@ type Inputs struct {
 // Prometheus. Pools and Nodes hold only subjects Radar asked about.
 type Service struct {
 	// Read: Prometheus was connected and queried. Why says why not.
-	Read bool   `json:"read"`
-	Why  string `json:"why,omitempty"`
+	Read bool
+	Why  string
 	// Collecting: not read only because Radar's first collection from a
 	// connected Prometheus has not answered yet; a later read has it.
-	Collecting bool `json:"collecting,omitempty"`
+	Collecting bool
 	// ReadAt is when the answer was collected; it may be up to a minute old.
-	ReadAt time.Time `json:"readAt,omitzero"`
+	ReadAt time.Time
 	// Window is the range the resume and crash facts cover, such as 1h.
-	Window string                 `json:"window,omitempty"`
-	Pools  map[string]PoolService `json:"pools,omitempty"`
-	Nodes  map[string]NodeService `json:"nodes,omitempty"`
+	Window string
+	Pools  map[string]PoolService
+	Nodes  map[string]NodeService
 }
 
 // Pool service verdicts, the pool verdicts of Radar's Substrate metrics.
@@ -236,15 +248,15 @@ type PoolService struct {
 
 // NodeService is one node's snapshot upload verdict.
 type NodeService struct {
-	Verdict string `json:"verdict"`
-	Reason  string `json:"reason,omitempty"`
+	Verdict string
+	Reason  string
 	// OverdueUploads is atelet's count of uploads past their deadline, by
 	// band (1m_to_5m, 5m_to_15m, over_15m).
-	OverdueUploads *float64           `json:"overdueUploads,omitempty"`
-	Bands          map[string]float64 `json:"bands,omitempty"`
+	OverdueUploads *float64
+	Bands          map[string]float64
 	// OldestUnsavedSeconds is the oldest actor state on the node not yet in
 	// durable storage, whatever the actor's state.
-	OldestUnsavedSeconds *float64 `json:"oldestUnsavedSeconds,omitempty"`
+	OldestUnsavedSeconds *float64
 }
 
 // ruleRank orders rows of one severity: what already broke actors first,
@@ -413,7 +425,7 @@ func crashedActors(in Inputs) []Attention {
 		crashed = append(crashed, a)
 		key := a.Template.Atespace + "/" + a.Template.Name
 		byTemplate[key]++
-		templateSubjects[key] = &Subject{Kind: "ActorTemplate", Atespace: a.Template.Atespace, Name: a.Template.Name}
+		templateSubjects[key] = &Subject{Kind: SubjectActorTemplate, Atespace: a.Template.Atespace, Name: a.Template.Name}
 		msg := ""
 		if a.Crash != nil {
 			msg = a.Crash.Message
@@ -486,7 +498,7 @@ func crashedActors(in Inputs) []Attention {
 		ID: RuleCrashedActors, Rule: RuleCrashedActors, Severity: SeverityCritical,
 		Title: title, Reading: reading,
 		NextStep: nextStep, Command: command, ThenCommand: then,
-		Subject: Subject{Kind: "Actors", Filter: map[string]string{"state": StateCrashed}},
+		Subject: Subject{Kind: SubjectActors, Filter: map[string]string{"state": StateCrashed}},
 		Count:   len(crashed), Since: crashTime(latest),
 		Groups: groups, Messages: tallies(messages, nil, 3), Sample: sample(crashed),
 	}}
@@ -617,7 +629,7 @@ func stuckWhere(state string, actors []Actor) ([]Tally, string) {
 		}
 		key := w.Worker.Namespace + "/" + w.Worker.Pod
 		counts[key]++
-		subjects[key] = &Subject{Kind: "Worker", Namespace: w.Worker.Namespace, Name: w.Worker.Pod}
+		subjects[key] = &Subject{Kind: SubjectWorker, Namespace: w.Worker.Namespace, Name: w.Worker.Pod}
 	}
 	if len(counts) == 0 && unrecorded == 0 {
 		return nil, ""
@@ -686,7 +698,7 @@ func stuckTransitions(in Inputs) []Attention {
 			Title:    fmt.Sprintf("%s %s for more than %s", plural(len(actors), "actor has been", "actors have been"), state, timeutil.FormatAgeShort(StuckAfter)),
 			Reading:  fmt.Sprintf("%sThe longest, %s, has been %s for at least %s.", where, refName(oldest.Ref()), state, timeutil.FormatAgeShort(HeldFor(oldest.UpdateTime, in.Now))),
 			NextStep: stuckNextStep[state], Command: stuckCommand[state],
-			Subject: Subject{Kind: "Actors", Filter: map[string]string{"state": state}},
+			Subject: Subject{Kind: SubjectActors, Filter: map[string]string{"state": state}},
 			Count:   len(actors), Since: actors[0].UpdateTime, Sample: sample(actors), Groups: groups,
 		})
 	}
@@ -785,7 +797,7 @@ func uploadsOverdue(in Inputs) []Attention {
 		Title:    title,
 		Reading:  reading,
 		NextStep: "Keep these nodes until the uploads finish, and check that each node's atelet can reach object storage.",
-		Subject:  Subject{Kind: "Actors", Filter: map[string]string{"state": StateSuspended}},
+		Subject:  Subject{Kind: SubjectActors, Filter: map[string]string{"state": StateSuspended}},
 		Count:    len(actors), Since: actors[0].UpdateTime, Nodes: nodes, Sample: sample(actors),
 	}}
 }
@@ -824,7 +836,7 @@ func goldenFailed(in Inputs) []Attention {
 			Title:    fmt.Sprintf("%s has no golden snapshot, so new actors not seeded from a tag start from a cold boot", refName(t.Ref())),
 			Reading:  reading,
 			NextStep: step,
-			Subject:  Subject{Kind: "ActorTemplate", Atespace: t.Atespace, Name: t.Name},
+			Subject:  Subject{Kind: SubjectActorTemplate, Atespace: t.Atespace, Name: t.Name},
 			Count:    1, Since: t.UpdateTime,
 		})
 	}
@@ -891,7 +903,7 @@ func noMatchingPool(in Inputs) []Attention {
 			Title:    fmt.Sprintf("No pool matches the selector of %s", refName(t.Ref())),
 			Reading:  reading,
 			NextStep: "Label a pool to match the template's worker selector, or recreate the template with a selector a pool matches.",
-			Subject:  Subject{Kind: "ActorTemplate", Atespace: t.Atespace, Name: t.Name},
+			Subject:  Subject{Kind: SubjectActorTemplate, Atespace: t.Atespace, Name: t.Name},
 			Count:    1, Since: t.UpdateTime,
 		})
 	}
@@ -915,7 +927,7 @@ func actorsByWorker(actors []Actor) map[string][]Actor {
 
 // workerActors links to the actors on w that its state affects that way.
 func workerActors(w Worker, impact string) Subject {
-	return Subject{Kind: "Actors", Filter: map[string]string{"pool": w.PoolRef().Key(), "worker": w.Pod, "impact": impact}}
+	return Subject{Kind: SubjectActors, Filter: map[string]string{"pool": w.PoolRef().Key(), "worker": w.Pod, "impact": impact}}
 }
 
 // LostActors are the actors assigned to w that ran under an earlier process
@@ -931,11 +943,11 @@ func LostActors(w Worker, assigned []Actor) []Actor {
 }
 
 func workerSubjects(w Worker) (Subject, []Subject) {
-	related := []Subject{{Kind: "Pod", Namespace: w.Namespace, Name: w.Pod}, {Kind: "WorkerPool", Namespace: w.Namespace, Name: w.Pool}}
+	related := []Subject{{Kind: SubjectPod, Namespace: w.Namespace, Name: w.Pod}, {Kind: SubjectWorkerPool, Namespace: w.Namespace, Name: w.Pool}}
 	if w.Node != "" {
-		related = append(related, Subject{Kind: "Node", Name: w.Node})
+		related = append(related, Subject{Kind: SubjectNode, Name: w.Node})
 	}
-	return Subject{Kind: "Worker", Namespace: w.Namespace, Name: w.Pod}, related
+	return Subject{Kind: SubjectWorker, Namespace: w.Namespace, Name: w.Pod}, related
 }
 
 // Rules 5 and 6: workers unavailable or draining too long, and workers whose
@@ -1097,7 +1109,7 @@ func poolRows(in Inputs) []Attention {
 
 // PoolAttention is the finding for one pool, shared by fleet and detail reads.
 func PoolAttention(in Inputs, r PoolRow) *Attention {
-	subject := Subject{Kind: "WorkerPool", Namespace: r.Namespace, Name: r.Name}
+	subject := Subject{Kind: SubjectWorkerPool, Namespace: r.Namespace, Name: r.Name}
 	name := r.Namespace + " / " + r.Name
 	var ps PoolService
 	var hasSvc bool
@@ -1108,7 +1120,7 @@ func PoolAttention(in Inputs, r PoolRow) *Attention {
 	switch r.Capacity {
 	case CapacityShort:
 		desired := *r.Kubernetes.Desired
-		taking := r.Kubernetes.ReadyWorkers()
+		taking, _ := r.Kubernetes.ReadyWorkers()
 		source := "ready"
 		if r.Placement != nil && r.Placement.Complete {
 			taking = int64(r.Placement.Workers.Active)
@@ -1120,8 +1132,8 @@ func PoolAttention(in Inputs, r PoolRow) *Attention {
 			if int64(pods.Created) < desired {
 				reading += fmt.Sprintf(" Kubernetes has created %d of %d worker Pods.", pods.Created, desired)
 			}
-			if !r.Kubernetes.ReadinessUnreported && int64(pods.Ready) != r.Kubernetes.Ready {
-				reading += fmt.Sprintf(" Radar holds %d ready worker Pods; the WorkerPool's status says %d.", pods.Ready, r.Kubernetes.Ready)
+			if reported := r.Kubernetes.ReportedReady; reported != nil && int64(pods.Ready) != *reported {
+				reading += fmt.Sprintf(" Radar holds %d ready worker Pods; the WorkerPool's status says %d.", pods.Ready, *reported)
 			}
 		}
 		reading += " New and resuming actors may wait or fail to start."
@@ -1205,7 +1217,7 @@ func noRoomRow(in Inputs, r PoolRow, name string, subject Subject) *Attention {
 	// them there is the change that sticks.
 	if in.ActorsRead && kagentSessionsRunOn(in, subject) {
 		values := map[string]string{LackingCPU: "config.runtimeDefaults.cpu (and .memory)", LackingMemory: "config.runtimeDefaults.memory (and .cpu)", LackingCPUAndMemory: "config.runtimeDefaults.cpu and .memory"}[r.Lacking]
-		step = fmt.Sprintf("Add workers to the pool, or lower kagent's %s, which sets every agent's limits.", values)
+		step = fmt.Sprintf("Add workers, or for actors that look like kagent sessions, check kagent's %s before lowering limits.", values)
 	}
 	return &Attention{
 		ID: RulePoolNoRoom + ":" + r.Ref().Key(), Rule: RulePoolNoRoom, Severity: SeverityWarning,
@@ -1362,7 +1374,7 @@ func nodeUploadRows(in Inputs) []Attention {
 			Title:    "Snapshot uploads are overdue on " + node,
 			Reading:  reading,
 			NextStep: "Keep the node until its uploads finish, and check that its atelet can reach object storage: open the node's Substrate charts.",
-			Subject:  Subject{Kind: "Node", Name: node}, Count: n,
+			Subject:  Subject{Kind: SubjectNode, Name: node}, Count: n,
 		})
 	}
 	return out
@@ -1392,7 +1404,7 @@ func missingTemplates(in Inputs) []Attention {
 			Title:    fmt.Sprintf("%s %s, which Substrate does not have", plural(len(actors), "actor uses template", "actors use template"), refName(ref)),
 			Reading:  "Substrate refuses to resume an actor whose template is gone (FailedPrecondition) without changing its state, so these stay as they are. Deleting a template does not delete its actors.",
 			NextStep: "Recreate the template under the same atespace and name, or delete the actors.",
-			Subject:  Subject{Kind: "Actors", Filter: map[string]string{"template": ref.Atespace + "/" + ref.Name}},
+			Subject:  Subject{Kind: SubjectActors, Filter: map[string]string{"template": ref.Atespace + "/" + ref.Name}},
 			Count:    len(actors), Since: actors[0].UpdateTime, Sample: sample(actors),
 		})
 	}
@@ -1459,6 +1471,7 @@ func drainingRow(in Inputs, w Worker, held time.Duration, assigned []Actor, subj
 
 // Check is one needs-attention rule and whether it ran on this read.
 type Check struct {
+	// Rule is an attention rule or CheckPoolService.
 	Rule  string `json:"rule"`
 	Label string `json:"label"`
 	Ran   bool   `json:"ran"`
@@ -1477,6 +1490,9 @@ var NotAssessed = []string{
 	"Request routing and egress",
 	"Worker log collection",
 }
+
+// CheckPoolService tracks whether pool capacity verdicts were read from Prometheus.
+const CheckPoolService = "poolService"
 
 // Checks lists the rules and whether each ran on these inputs, so an empty
 // NeedsAttention can say which checks found nothing.
@@ -1520,16 +1536,15 @@ func Checks(in Inputs) []Check {
 		need(RulePoolShort, "Pools short of workers", pools),
 		need(RulePoolFull, "Pools with no free actor slots", req{ok: in.WorkersComplete || svc.ok, why: "the worker list is incomplete and " + svc.why, collecting: svc.collecting}),
 		need(RulePoolNoRoom, "Pools whose free slots lack the CPU or memory for an actor", workers, workersAll, templatesAll),
-		need("poolService", "Substrate's pool capacity verdicts (Prometheus)", svc),
+		need(CheckPoolService, "Substrate's pool capacity verdicts (Prometheus)", svc),
 		need(RuleNodeUploadsOverdue, "Overdue snapshot uploads per node (Prometheus)", svc, nodes),
 	}
 }
 
 // ActorAttention returns the rows that cover actor a, judged by each rule's
 // own predicate on a, which may be fresher than the read the rows came from.
-// Fleet-level rows about pools name no actor and are not returned; a golden
-// snapshot's row is returned only to the actor that failed to build it, in
-// place of the crash row.
+// It specializes steps for that actor. A failed golden build supplies the
+// template's finding in place of the builder's crash row.
 func ActorAttention(rows []Attention, a Actor, templates []Template, now time.Time) []Attention {
 	out := []Attention{}
 	builds := failedGoldenBuilder(a, templates)
@@ -1588,7 +1603,8 @@ func covers(r Attention, a Actor, now time.Time) bool {
 	return false
 }
 
-// ServiceSummary is the workspace's one-line reading of Service.
+// ServiceSummary is the workspace's one-line reading of Service. When Read is
+// false, the zero-valued counters carry no observations.
 type ServiceSummary struct {
 	Read bool   `json:"read"`
 	Why  string `json:"why,omitempty"`
@@ -1601,7 +1617,8 @@ type ServiceSummary struct {
 	Crashes *float64 `json:"crashes,omitempty"`
 	// SlowestResume is the pool with the highest resume p95.
 	SlowestResume *PoolFact `json:"slowestResume,omitempty"`
-	// MostFailedResumes is the pool with the highest failed-resume share.
+	// MostFailedResumes is the pool with the highest positive failed-resume share.
+	// Absent when no pool reported a positive share.
 	MostFailedResumes *PoolFact `json:"mostFailedResumes,omitempty"`
 	// PoolsUnknown counts pools Prometheus gave no verdict for.
 	PoolsUnknown int `json:"poolsUnknown"`

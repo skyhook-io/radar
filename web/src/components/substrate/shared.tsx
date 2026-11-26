@@ -17,6 +17,7 @@ import {
 } from '@skyhook-io/k8s-ui'
 import type {
   SubstrateAPITier,
+  SubstrateConnection,
   SubstratePoolRef,
   SubstrateWorkspace,
   SubstrateActorState,
@@ -330,43 +331,50 @@ export function When({ iso, hint, prefix, held }: { iso: string; hint?: string; 
   )
 }
 
-/**
- * Where a copied command must point to change the actor on screen: the
- * context's name and the kubeconfig file it is named in (another file may
- * hold a same-named context), on a local Radar; context is null where Radar
- * can't know the reader's (in-cluster, Hub). And the endpoint Radar reads
- * Substrate at, in every mode, when it isn't the ate-system/api Service
- * kubectl ate port-forwards to by itself. Without a provider, commands are
- * shown as written.
- */
-export interface KubectlTarget {
-  context: string | null
-  kubeconfig?: string
-  endpoint?: string
-}
+type KubectlTarget =
+  | { context: string; kubeconfig: string; endpoint?: string }
+  | { guidance: string }
 
 export const KubectlTargetContext = createContext<KubectlTarget | undefined>(undefined)
 
-const CHANGES_STATE = /^kubectl ate (revert|update|resume|suspend|delete) /
+export function substrateKubectlTarget(view: SubstrateConnection | undefined, activeContext: string): KubectlTarget | undefined {
+  if (!view) return undefined
+  if (view.view === 'managed') {
+    const { endpoint, trust, serverName } = view.managed
+    if (endpoint && (endpoint !== 'api.ate-system.svc:443' || trust === 'caFile' || serverName !== 'api.ate-system.svc')) {
+      return { guidance: `Use a Substrate client configured for ${endpoint} from a machine that can reach it, with the installation’s TLS settings.` }
+    }
+    return { guidance: 'Use kubectl ate with a kubeconfig for this cluster. It port-forwards to the ate-system/api Service.' }
+  }
 
-/**
- * A kubectl ate command that changes an actor, aimed at the Substrate on
- * screen: the reader's shell may point at another, where a same-named actor
- * would be changed instead. Where the context is unknown, a <context> to fill
- * in.
- */
-export function withKubectlTarget(command: string, target: KubectlTarget | undefined): string {
-  if (!target || !CHANGES_STATE.test(command) || /\s--(context|kubeconfig|endpoint)[\s=]/.test(command)) return command
+  const { target, settings } = view
+  if (target.context !== activeContext) return undefined
+  if (!settings || view.targetChanged) {
+    return { guidance: 'Use a client configured for the Substrate instance on this cluster. Check the connection target in Settings → Agent Substrate.' }
+  }
+  if (settings.caFile || settings.serverName) {
+    return { guidance: `Use a Substrate client configured for ${settings.endpoint} with the CA and server name from Settings → Agent Substrate.` }
+  }
+  if (settings.endpoint && /\.svc(?:\.|:)/i.test(settings.endpoint)) {
+    return { guidance: `Use a Substrate client from a machine that can resolve and reach ${settings.endpoint}.` }
+  }
+  // The profile target carries the source file path. The context picker’s source is a display label.
+  if (!target.inFileName || !target.source) {
+    return { guidance: 'Use kubectl ate with a kubeconfig and context for the cluster shown here.' }
+  }
+  return { context: target.inFileName, kubeconfig: target.source, endpoint: settings.endpoint }
+}
+
+const KUBECTL_ATE = /^kubectl ate /
+
+function withKubectlTarget(command: string, target: Extract<KubectlTarget, { context: string }>): string {
   const flags = [
-    ...(target.context && target.kubeconfig ? [`--kubeconfig ${shellWord(target.kubeconfig)}`] : []),
-    `--context ${target.context ? shellWord(target.context) : '<context>'}`,
+    `--kubeconfig ${shellWord(target.kubeconfig)}`,
+    `--context ${shellWord(target.context)}`,
     ...(target.endpoint ? [`--endpoint ${shellWord(target.endpoint)}`] : []),
   ]
   return `${command} ${flags.join(' ')}`
 }
-
-/** The endpoint an installation reads Substrate at unless its operator sets another (substrate.api.endpoint). */
-export const DEFAULT_INSTALLATION_ENDPOINT = 'api.ate-system.svc:443'
 
 /**
  * A shell command a next step names, as a code chip with a copy button, on a
@@ -375,7 +383,13 @@ export const DEFAULT_INSTALLATION_ENDPOINT = 'api.ate-system.svc:443'
  * <placeholders> is a template to fill in, and says so after it.
  */
 export function CommandChip({ command: written }: { command: string }) {
-  const command = withKubectlTarget(written, useContext(KubectlTargetContext))
+  const target = useContext(KubectlTargetContext)
+  const isAte = KUBECTL_ATE.test(written)
+  if (isAte && !target) return null
+  if (isAte && target && 'guidance' in target) {
+    return <p className="mt-1 text-xs text-theme-text-secondary">{target.guidance}</p>
+  }
+  const command = isAte && target && 'context' in target ? withKubectlTarget(written, target) : written
   const holes = [...new Set(command.match(/<[^<>\s]+>/g) ?? [])]
   return (
     <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5" data-command-line>

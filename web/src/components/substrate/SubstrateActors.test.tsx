@@ -1,11 +1,18 @@
 import { renderToStaticMarkup } from 'react-dom/server'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter as Router, type MemoryRouterProps } from 'react-router-dom'
+import { KubectlTargetContext } from './shared'
 import { describe, expect, it, vi } from 'vitest'
 import type { SubstrateActorLogs, SubstrateActors, SubstrateActorsQuery } from '../../api/substrateWorkspace'
 import { ApiError } from '../../api/client'
 import { ActorsTable, SubstrateActorsScreen, stateCellReading } from './SubstrateActors'
 import { SubstrateActorOverview } from './SubstrateActorOverview'
 import { actorDetail, actorRow, actors, connection, counts, apiDisabledTier, minutesAgo, poolShortRow, notConnectedWorkspace, status, workspace } from './substrate.fixtures'
+
+function MemoryRouter({ children, ...props }: MemoryRouterProps) {
+  return <Router {...props}><KubectlTargetContext.Provider value={{ context: 'kind-demo', kubeconfig: '/home/user/.kube/demo' }}>{children}</KubectlTargetContext.Provider></Router>
+}
+
+const targetFlags = ' --kubeconfig /home/user/.kube/demo --context kind-demo'
 
 const state = vi.hoisted(() => ({
   actors: undefined as SubstrateActors | undefined,
@@ -266,19 +273,34 @@ describe('Actor overview', () => {
 
   it('sends a kagent session to kagent for recovery, with no kubectl ate command', () => {
     const d = actorDetail()
-    const detail = { ...d, actor: { ...d.actor, kagent: { sessionId: '01a1faa2-b3e3-7dd3-ae2d-3114122d4291' } }, attention: [] }
+    const step = 'This actor looks like a kagent session. Recover it through kagent (its RevertSession API, or Recover on the chat where offered).'
+    const detail = { ...d, actor: { ...d.actor, kagent: { sessionId: '01a1faa2-b3e3-7dd3-ae2d-3114122d4291' } }, attention: [{ ...d.attention[0], nextStep: step, command: undefined }] }
     const html = plain(text(renderToStaticMarkup(<MemoryRouter><SubstrateActorOverview detail={detail} onOpenSubject={() => {}} /></MemoryRouter>)))
-    expect(html).toContain('This actor is a kagent session. Recover it through kagent (its RevertSession API')
+    expect(html).toContain(step)
     expect(html).not.toContain('kubectl ate revert')
   })
 
   it('sends a standalone kagent sandbox to kagent’s SandboxService, never to a chat it doesn’t have', () => {
     const d = actorDetail()
-    const detail = { ...d, actor: { ...d.actor, kagent: { sessionId: '01a1faa2-b3e3-7dd3-ae2d-3114122d4291', sandbox: true } }, attention: [] }
+    const step = 'This actor looks like a kagent sandbox. If so, delete the sandbox through kagent (its SandboxService).'
+    const detail = { ...d, actor: { ...d.actor, kagent: { sessionId: '01a1faa2-b3e3-7dd3-ae2d-3114122d4291', sandbox: true } }, attention: [{ ...d.attention[0], nextStep: step, command: undefined }] }
     const html = plain(text(renderToStaticMarkup(<MemoryRouter><SubstrateActorOverview detail={detail} onOpenSubject={() => {}} /></MemoryRouter>)))
-    expect(html).toContain('This actor runs a kagent sandbox. kagent manages it: delete the sandbox through kagent (its SandboxService)')
+    expect(html).toContain(step)
     expect(html).not.toContain('RevertSession')
     expect(html).not.toContain('kubectl ate revert')
+  })
+
+  it('shows the server’s wait step for a possible kagent session on a restarted worker', () => {
+    const d = actorDetail()
+    const step = 'Once Substrate reconciles the worker and marks it crashed, recover it through kagent.'
+    const detail = actorDetail({
+      actor: { ...d.actor, state: 'running', crash: undefined, kagent: { sessionId: '01a1faa2-b3e3-7dd3-ae2d-3114122d4291' } },
+      row: actorRow({ state: 'running', workerImpact: { kind: 'restarted', reading: 'The worker restarted.', nextStep: step } }),
+      attention: [],
+    })
+    const html = plain(text(renderToStaticMarkup(<MemoryRouter><SubstrateActorOverview detail={detail} onOpenSubject={() => {}} /></MemoryRouter>)))
+    expect(html).toContain(step)
+    expect(html).not.toContain('Copy command')
   })
 
   it('says how the revert target resumes only where At a glance doesn’t already say it', () => {
@@ -552,7 +574,7 @@ describe('Logs for an actor on no worker', () => {
 
 describe('A running actor on a bad worker', () => {
   it('gives the worker banner the worker row’s next step and command', () => {
-    const d = actorDetail({ actor: { ...actorDetail().actor, state: 'running', crash: undefined }, attention: [], workerImpact: { kind: 'unavailable', reading: 'Its Pod is not Ready.', nextStep: 'Find why the worker Pod is not Ready.', command: 'kubectl describe pod agent-pool-worker-0 -n radar-substrate-demo' } })
+    const d = actorDetail({ actor: { ...actorDetail().actor, state: 'running', crash: undefined }, attention: [], row: actorRow({ workerImpact: { kind: 'unavailable', reading: 'Its Pod is not Ready.', nextStep: 'Find why the worker Pod is not Ready.', command: 'kubectl describe pod agent-pool-worker-0 -n radar-substrate-demo' } }) })
     const raw = renderToStaticMarkup(<MemoryRouter><SubstrateActorOverview detail={d} /></MemoryRouter>)
     const html = plain(text(raw))
     expect(html).toContain('Next step: Find why the worker Pod is not Ready.')
@@ -568,7 +590,7 @@ describe('A running actor on a bad worker', () => {
   })
 
   it('qualifies its state chip and says what the worker means for it first', () => {
-    const d = actorDetail({ actor: { ...actorDetail().actor, state: 'running', crash: undefined, assignment: { worker: 'w', namespace: 'agents', pool: 'agent-pool', pod: 'agent-pool-worker-0', node: 'n' } }, attention: [], workerImpact: { kind: 'unavailable', reading: 'Substrate still records it running, but its worker Pod is not Ready.', nextStep: 'x', command: 'y' } })
+    const d = actorDetail({ actor: { ...actorDetail().actor, state: 'running', crash: undefined, assignment: { worker: 'w', namespace: 'agents', pool: 'agent-pool', pod: 'agent-pool-worker-0', node: 'n' } }, attention: [], row: actorRow({ workerImpact: { kind: 'unavailable', reading: 'Substrate still records it running, but its worker Pod is not Ready.', nextStep: 'x', command: 'y' } }) })
     const before = state.logs
     try {
       const line = (secondsAgo: number) => ({ kind: 'container' as const, time: new Date(Date.now() - secondsAgo * 1000).toISOString(), container: 'agent', message: 'Tool call', text: 'x', namespace: 'agents', pod: 'agent-pool-worker-0' })
@@ -597,7 +619,7 @@ describe('A running actor on a bad worker', () => {
 describe('A worker banner’s visible part', () => {
   it('shows the cause and the next step, and folds the mechanics under Details', () => {
     const reading = 'Its worker Pod is not Ready. It places no new actors there and still records this actor as running. If the Pod is deleted, Substrate marks it crashed.'
-    const d = actorDetail({ actor: { ...actorDetail().actor, state: 'running', crash: undefined }, attention: [], workerImpact: { kind: 'unavailable', reading, nextStep: 'Find why the worker Pod is not Ready.', command: 'kubectl describe pod w' } })
+    const d = actorDetail({ actor: { ...actorDetail().actor, state: 'running', crash: undefined }, attention: [], row: actorRow({ workerImpact: { kind: 'unavailable', reading, nextStep: 'Find why the worker Pod is not Ready.', command: 'kubectl describe pod w' } }) })
     const html = plain(text(renderToStaticMarkup(<MemoryRouter><SubstrateActorOverview detail={d} /></MemoryRouter>)))
     const details = html.indexOf('Details')
     expect(html.indexOf('Its worker Pod is not Ready. Recorded as running')).toBeGreaterThan(-1)
@@ -667,7 +689,7 @@ describe('Needs attention rows', () => {
   it('puts a row’s command on its own line under the step, never inside the sentence', async () => {
     const { SubstrateAttentionList } = await import('./SubstrateAttentionList')
     const raw = renderToStaticMarkup(<MemoryRouter><SubstrateAttentionList rows={[{ ...poolShortRow, nextStep: 'Revert each.', command: 'kubectl ate revert actor <name> -a <atespace>' }]} onOpen={() => {}} /></MemoryRouter>)
-    expect(raw).toMatch(/Revert each\.<div [^>]*data-command-line[^>]*><span[^>]*><code class="[^"]*">kubectl ate revert actor &lt;name&gt; -a &lt;atespace&gt;<\/code>/)
+    expect(raw).toMatch(/Revert each\.<div [^>]*data-command-line[^>]*><span[^>]*><code class="[^"]*">kubectl ate revert actor &lt;name&gt; -a &lt;atespace&gt; --kubeconfig [^<]+<\/code>/)
     // The fill-in hint follows the chip, inside the same line.
     expect(raw).toMatch(/<\/code>.*?<\/span><span[^>]*>fill in &lt;name&gt;, &lt;atespace&gt;<\/span><\/div>/)
   })
@@ -729,7 +751,7 @@ describe('Needs attention rows', () => {
     // Every crash a memory-limit kill: the row's own step.
     const all = { ...poolShortRow, rule: 'crashedActors' as const, count: 3, nextStep: step, command: move, thenCommand: revert, groups: [{ subject: { kind: 'ActorTemplate' as const, atespace: 'a', name: 'one' }, count: 3, ...memory }] }
     let raw = renderToStaticMarkup(<MemoryRouter><SubstrateAttentionList rows={[all]} /></MemoryRouter>)
-    expect(commands(raw)).toEqual([move, revert])
+    expect(commands(raw)).toEqual([move + targetFlags, revert + targetFlags])
     expect(raw.match(/data-command-line/g)).toHaveLength(2)
     // What the move drops is in the step itself, ahead of both commands.
     expect(words(raw).indexOf('may restore only its volumes')).toBeLessThan(words(raw).indexOf('kubectl ate update'))
@@ -739,7 +761,7 @@ describe('Needs attention rows', () => {
       { subject: { kind: 'ActorTemplate' as const, atespace: 'b', name: 'mixed' }, count: 1 },
     ] }
     raw = renderToStaticMarkup(<MemoryRouter><SubstrateAttentionList rows={[split]} onOpen={() => {}} /></MemoryRouter>)
-    expect(commands(raw)).toEqual([move, revert])
+    expect(commands(raw)).toEqual([move + targetFlags, revert + targetFlags])
   })
 
   it('reads a link’s worker-impact filter and lets it be cleared', () => {

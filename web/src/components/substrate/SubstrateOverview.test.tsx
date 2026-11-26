@@ -265,7 +265,7 @@ describe('Agent Substrate status line beside the inventory', () => {
     // Prometheus was read but counted no crashes and no overdue node, while the API lists 15 crashed and 24 unstored.
     const facts = serviceFacts({
       service: { read: true, slowestResume: { pool: { namespace: 'n', name: 'agent-pool' }, value: 4.8 }, poolsUnknown: 2, nodesOverdue: 0, nodesUnknown: 0 },
-      summary: { pools: { total: 1, short: 0, full: 0 }, actors: { total: 100, crashed: 15, attentionCount: 24 } },
+      summary: { pools: { total: 1, short: 0, full: 0, noRoom: 0 }, actors: { total: 100, crashed: 15, attentionCount: 24 } },
       needsAttention: [upload],
     })
     const crashes = facts.find((f) => String(f.label).startsWith('Crashes'))!
@@ -342,7 +342,7 @@ describe('Agent Substrate status line beside the inventory', () => {
 
   it('folds an unmeasured Prometheus into one unknown fact', async () => {
     const { serviceFacts } = await import('./SubstrateOverview')
-    const facts = serviceFacts({ service: { read: true, poolsUnknown: 3, nodesOverdue: 0, nodesUnknown: 2 }, summary: { pools: { total: 3, short: 0, full: 0 } }, needsAttention: [] })
+    const facts = serviceFacts({ service: { read: true, poolsUnknown: 3, nodesOverdue: 0, nodesUnknown: 2 }, summary: { pools: { total: 3, short: 0, full: 0, noRoom: 0 } }, needsAttention: [] })
     expect(facts).toHaveLength(1)
     expect(facts[0]).toMatchObject({ label: 'Delivery (1h)', tone: 'unknown' })
   })

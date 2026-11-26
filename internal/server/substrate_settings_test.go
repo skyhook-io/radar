@@ -21,6 +21,32 @@ import (
 	"k8s.io/client-go/rest"
 )
 
+func TestSubstrateLocalConnectionCapability(t *testing.T) {
+	t.Cleanup(k8s.SetTestLocalMode())
+	previous := k8s.SetTestClient(nil)
+	t.Cleanup(func() { k8s.SetTestClient(previous) })
+
+	for _, tc := range []struct {
+		name, address, authMode string
+		want                    bool
+	}{
+		{name: "private local", address: "127.0.0.1", want: true},
+		{name: "shared listener", address: "0.0.0.0"},
+		{name: "authenticated", address: "127.0.0.1", authMode: "proxy"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Server{listenAddress: tc.address, authConfig: auth.Config{Mode: tc.authMode}}
+			var caps struct {
+				SubstrateLocalConnection *bool `json:"substrateLocalConnection"`
+			}
+			rec := call(t, s, s.handleCapabilities, substrateCall{path: "/api/capabilities"}, &caps)
+			if rec.Code != http.StatusOK || caps.SubstrateLocalConnection == nil || *caps.SubstrateLocalConnection != tc.want {
+				t.Errorf("local connection capability = %d %s, want %t", rec.Code, rec.Body, tc.want)
+			}
+		})
+	}
+}
+
 func TestSubstrateGateMatrix(t *testing.T) {
 	for _, tc := range []struct {
 		name, mode, role, code           string

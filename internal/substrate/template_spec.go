@@ -53,7 +53,7 @@ type VolumeMountTo struct {
 }
 
 // VolumeSpec is one template volume and its kind: durableDir, external,
-// systemInfo or image.
+// systemInfo, image or unknown.
 type VolumeSpec struct {
 	Name string `json:"name"`
 	Kind string `json:"kind"`
@@ -94,8 +94,8 @@ func TemplateSpecOf(t *ateapi.ActorTemplate) TemplateSpec {
 		for _, e := range c.GetEnv() {
 			env := EnvSpec{Name: e.GetName()}
 			switch {
-			case aicontext.IsSensitiveEnvName(e.GetName()):
-				env.Value, env.Redacted = redacted, e.GetValue() != ""
+			case e.GetValue() != "" && aicontext.IsSensitiveEnvName(e.GetName()):
+				env.Value, env.Redacted = redacted, true
 			default:
 				env.Value = aicontext.RedactSecrets(e.GetValue())
 				env.Redacted = env.Value != e.GetValue()
@@ -118,6 +118,8 @@ func TemplateSpecOf(t *ateapi.ActorTemplate) TemplateSpec {
 			vs.Kind = "systemInfo"
 		case v.GetImage() != nil:
 			vs.Kind, vs.Image = "image", v.GetImage().GetReference()
+		default:
+			vs.Kind = "unknown"
 		}
 		spec.Volumes = append(spec.Volumes, vs)
 	}

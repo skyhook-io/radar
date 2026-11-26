@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { describe, expect, it, vi } from 'vitest'
 import type { SubstrateActorDetail, SubstrateActorLogs, SubstrateRef, SubstrateTemplate } from '../../api/substrateWorkspace'
 import { ApiError } from '../../api/client'
+import { KubectlTargetContext } from './shared'
 import { decodeDrawerTrail } from '../../utils/drawer-trail'
 import { actorDetail, counts, workspace } from './substrate.fixtures'
 
@@ -50,7 +51,7 @@ const { actorDrawerParams, resourceDrawerParams } = await import('./SubstrateVie
 
 const text = (html: string) => html.replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/<\/?span[^>]*>/g, '')
 const render = (node: React.ReactNode, route: string) =>
-  text(renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={[route]}>{node}</MemoryRouter></QueryClientProvider>))
+  text(renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={[route]}><KubectlTargetContext.Provider value={{ context: 'cluster-B', kubeconfig: '/home/user/.kube/demo' }}>{node}</KubectlTargetContext.Provider></MemoryRouter></QueryClientProvider>))
 
 const ready = workspace().pools[0]
 function template(name: string): SubstrateTemplate {
@@ -394,10 +395,12 @@ describe('An in-cluster Radar or Radar Hub whose operator turned the API off', (
   })
 
   it('reads a template page refused because the API is off as that, with what to ask for', () => {
-    state.template = { data: undefined, error: apiError(403, 'apiDisabled'), isLoading: false, isRefetchError: false, dataUpdatedAt: 0 }
+    state.template = failed(template('stale-template'), apiError(403, 'apiDisabled'))
     const html = render(<SubstrateTemplatePage template={{ atespace: 'team', name: 'x' }} onOpenSubject={() => {}} />, '/substrate/templates/team/x?ctx=cluster-B')
     expect(html).toContain('Turned off for this Radar')
     expect(html).toContain('substrate.api.enabled')
+    expect(html).not.toContain('At a glance')
+    expect(html).not.toContain('stale-template')
   })
 })
 

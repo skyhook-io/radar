@@ -56,7 +56,7 @@ function worker(i: number, overrides: Partial<SubstrateWorkerRow> = {}): Substra
 function pool(workers: SubstrateWorkerRow[], desired = workers.length): SubstratePool {
   return {
     apiTier: connectedTier,
-    pool: { namespace: 'agents', name: 'agent-pool', kubernetes: { namespace: 'agents', name: 'agent-pool', desired, ready: workers.length, health: 'healthy', healthReason: '' } },
+    pool: { namespace: 'agents', name: 'agent-pool', kubernetes: { namespace: 'agents', name: 'agent-pool', desired, reportedReady: workers.length, health: 'healthy', healthReason: '' } },
     workers,
     templates: [{ atespace: 'research', name: 'lg' }],
     coverage: { workers: { state: 'full' }, actors: { state: 'full' }, templates: { state: 'full' }, pools: { state: 'full' } },
@@ -129,7 +129,7 @@ describe('WorkerPool placement', () => {
 })
 
 describe('WorkerPool Overview', () => {
-  function overview(data: SubstratePool, ready = data.pool.kubernetes?.ready, framed = true) {
+  function overview(data: SubstratePool, ready = data.pool.kubernetes?.reportedReady, framed = true) {
     state.pool = data
     const resource = { spec: { replicas: data.pool.kubernetes?.desired }, status: { readyReplicas: ready } }
     return text(renderToStaticMarkup(<MemoryRouter><SubstratePoolSummary namespace="agents" name="agent-pool" resource={resource} context={framed ? 'expanded' : 'drawer'} /></MemoryRouter>))
@@ -238,7 +238,7 @@ describe('Workers by pool', () => {
 
   it('names registered of desired workers on the pool header, and keeps a lost count out of the state chip', async () => {
     const { WorkersTable, poolWorkersText } = await import('./SubstrateWorkers')
-    const row = { placement: { workers: { total: 4, active: 2, draining: 1, unavailable: 1 }, slots: { used: 6, total: 8 }, cpuMillicores: { used: 1, total: 2 }, memoryBytes: { used: 1, total: 2 }, complete: true }, kubernetes: { namespace: 'agents', name: 'agent-pool', desired: 5, ready: 3, health: 'degraded', healthReason: '' } }
+    const row = { placement: { workers: { total: 4, active: 2, draining: 1, unavailable: 1 }, slots: { used: 6, total: 8 }, cpuMillicores: { used: 1, total: 2 }, memoryBytes: { used: 1, total: 2 }, complete: true }, kubernetes: { namespace: 'agents', name: 'agent-pool', desired: 5, reportedReady: 3, health: 'degraded', healthReason: '' } }
     expect(poolWorkersText(row, [])).toBe('4 of 5 desired workers registered, 2 active')
     expect(poolWorkersText({ ...row, placement: { ...row.placement, complete: false } }, [])).toBe('at least 4 of 5 desired workers registered, at least 2 active')
     const reconciling = worker(0, { workerState: { kind: 'reconciling', assigned: 13, lost: 3, reading: 'Restarted.' } })

@@ -53,8 +53,8 @@ func ActorReason(a Actor, now time.Time) string {
 	return ""
 }
 
-// ActorNode is the node an actor is on or was last on: its worker's node,
-// the node holding its local snapshot, or its newest snapshot's locality.
+// ActorNode prefers the current worker's node, then the last assigned node,
+// then the newest snapshot's locality.
 func ActorNode(a Actor) string {
 	if a.Assignment != nil && a.Assignment.Node != "" {
 		return a.Assignment.Node
@@ -73,7 +73,7 @@ type ActorRow struct {
 	Atespace string `json:"atespace"`
 	Name     string `json:"name"`
 	State    string `json:"state"`
-	// Reason is ActorReason; absent when there is nothing to add.
+	// Reason is the crash message, transition age, or pending-upload reading from ActorReason.
 	Reason string `json:"reason,omitempty"`
 	// Cause names a crash's cause where Substrate's message says it
 	// (CauseMemoryLimit), so a table can show a short label and keep Reason
@@ -211,6 +211,7 @@ func HasFreeSlot(w Worker) bool {
 
 // HasRoomFor reports whether worker w has a free actor slot and enough CPU
 // and memory for a fresh actor, including the default runtime's overhead.
+// Callers check worker state and selectors separately.
 func HasRoomFor(w Worker, t Template) bool {
 	cpu, memory, _ := lacks(w, t)
 	return HasFreeSlot(w) && !cpu && !memory
@@ -341,6 +342,7 @@ type Usage struct {
 // Placement totals over a set of workers. Slots counts the actor slots of
 // active workers.
 type Placement struct {
+	// Workers includes every state. Resource and slot totals use active workers.
 	Workers WorkerCounts `json:"workers"`
 	Slots   Usage        `json:"slots"`
 	CPU     Usage        `json:"cpuMillicores"`
@@ -374,7 +376,7 @@ func (p *Placement) add(w Worker) {
 	}
 }
 
-// PlacementOf totals the given workers.
+// PlacementOf totals the given workers and leaves Complete unset for the caller to qualify.
 func PlacementOf(workers []Worker) Placement {
 	var p Placement
 	for _, w := range workers {
@@ -431,8 +433,8 @@ func (r PoolRow) Ref() PoolRef { return PoolRef{Namespace: r.Namespace, Name: r.
 // namespace and name. WorkersRead and ActorsRead say whether those lists were
 // read well enough to count; a nil slice read means Substrate has none.
 // WorkersComplete says the worker list holds every worker, without which a
-// pool's placement proves a free slot but never a shortfall, that no slot is
-// free, or that no actor fits. A pool with free slots is noRoom only when the
+// pool's placement can show a free slot. WorkerPool Pod counts or reported
+// readiness can still establish a shortfall when placement is incomplete. A pool with free slots is noRoom only when the
 // templates were read in full (TemplatesComplete) and some of them can run on
 // it: an unread template might fit.
 func JoinPools(in Inputs) []PoolRow {
@@ -530,8 +532,10 @@ func poolCapacity(r PoolRow) string {
 		}
 		return CapacityFree
 	}
-	if r.Kubernetes != nil && desired >= 0 && (r.Kubernetes.Pods != nil || !r.Kubernetes.ReadinessUnreported) && r.Kubernetes.ReadyWorkers() < desired {
-		return CapacityShort
+	if r.Kubernetes != nil && desired >= 0 {
+		if ready, known := r.Kubernetes.ReadyWorkers(); known && ready < desired {
+			return CapacityShort
+		}
 	}
 	return ""
 }
@@ -552,6 +556,7 @@ func NewStateCounts() StateCounts {
 	return c
 }
 
+// Add counts an actor. Initialize the counts with NewStateCounts first.
 func (c *StateCounts) Add(state string) {
 	c.Total++
 	c.ByState[state]++
@@ -588,8 +593,9 @@ type TemplateRow struct {
 	MemoryBytes           int64             `json:"memoryBytes,omitempty"`
 	PreferredFidelity     string            `json:"preferredFidelity"`
 	StorageLocation       string            `json:"storageLocation,omitempty"`
-	Containers            []string          `json:"containers,omitempty"`
-	UpdateTime            time.Time         `json:"updateTime,omitzero"`
+	// Containers lists names. TemplateSpec provides the full definitions.
+	Containers []string  `json:"containers,omitempty"`
+	UpdateTime time.Time `json:"updateTime,omitzero"`
 }
 
 // TemplateRows reads templates with their actors and matching pools.

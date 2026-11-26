@@ -167,6 +167,7 @@ type Saved struct {
 }
 
 type storeFile struct {
+	// The decoder accepts only v1 and rejects unknown fields. New formats need an explicit reader.
 	Version int `json:"version"`
 	// Contexts is keyed by the context's binding (k8s.ProfileTarget.Binding),
 	// the same key the integration-connections store uses.

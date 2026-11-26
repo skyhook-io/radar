@@ -101,8 +101,8 @@ export function SubstrateSettings({ active, onDirtyChange, onBusyChange }: {
   useEffect(() => setConnecting(tier?.state === 'connecting'), [tier?.state])
   const refetch = connection.refetch
   useEffect(() => {
-    if (latest?.view === 'managed' && tier && (tier.state !== latest.access.state || tier.code !== latest.access.code)) void refetch()
-  }, [tier, latest, refetch])
+    if (active && latest?.view === 'managed' && tier && (tier.state !== latest.access.state || tier.code !== latest.access.code)) void refetch()
+  }, [active, tier, latest, refetch])
 
   if (connection.upgrade || status.upgrade) {
     return <p className="text-sm text-theme-text-secondary">{connection.blockedReason ?? status.blockedReason ?? 'Agent Substrate settings need a newer Radar on this cluster.'}</p>
@@ -518,9 +518,7 @@ function TokenSetup() {
             <li>in the global access policy, to see workers and every atespace;</li>
             <li>or in one atespace’s policy, to see its actors and templates only. Workers then stay unread: only a global viewer may list them.</li>
           </ul>
-          There is no single grant command. The owner edits the policy and writes it back:
-          <CommandChip command="kubectl ate get access-policy --global -o yaml > policy.yaml" />
-          <CommandChip command="kubectl ate update access-policy --global -f policy.yaml" />
+          Have the owner use their credentials to read and update the access policy on the Substrate instance you’re configuring. Use the configured endpoint and trust settings, or the ate-system/api Service on this cluster for a port-forwarded connection.
           See <a href={AUTHZ_DOC} target="_blank" rel="noreferrer" className="text-accent-text hover:underline">Managing access</a> in Substrate’s authorization guide.
         </li>
       </ol>

@@ -30,7 +30,7 @@ const (
 	// TierConnected: the snapshot served was read; it may be stale while a
 	// refresh runs or after one failed (APITier.Refreshing, LastError).
 	TierConnected = "connected"
-	// TierConnecting: settings are saved and the first read is running.
+	// TierConnecting: the first read is running for the saved or managed connection.
 	TierConnecting = "connecting"
 	// TierNotConfigured: no identity is saved for this context.
 	TierNotConfigured = "notConfigured"
@@ -38,7 +38,7 @@ const (
 	// request: it has no sign-in (sharedRadar), or the operator disabled it
 	// (apiDisabled).
 	TierDisabled = "disabled"
-	// TierFailed: settings exist but no usable snapshot could be read.
+	// TierFailed: the connection could not be established or no usable snapshot could be read.
 	TierFailed = "failed"
 )
 
@@ -60,10 +60,10 @@ type APITier struct {
 	Reason string `json:"reason,omitempty"`
 	// Code is set with notConfigured (notConfigured), disabled (sharedRadar,
 	// apiDisabled) and failed (targetChanged, contextChanged, notInstalled,
-	// tls, unreachable, unauthenticated, mintDenied, settingsFile or failed);
+	// tls, unreachable, unauthenticated, mintDenied, invalidSettings, settingsFile or failed);
 	// absent when connected or connecting.
 	Code string `json:"code,omitempty"`
-	// Identity and Endpoint are set once settings are saved.
+	// Identity and Endpoint describe the saved or managed connection, when known.
 	Identity *Identity `json:"identity,omitempty"`
 	Endpoint string    `json:"endpoint,omitempty"`
 	// ReadStartedAt and ReadAt bound the read that produced the snapshot

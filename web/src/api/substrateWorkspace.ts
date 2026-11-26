@@ -16,9 +16,10 @@ import { httpStatusMessage, readErrorBody } from './httpErrors'
 // - a list a response builds from reads (rows, assigned actors, atespaces,
 //   freeSlots): [] when read and empty, absent when not read.
 //
-// The API tier (actors, templates, workers) is served only by a local Radar on
-// a private listener; everywhere else apiTier is disabled with code
-// sharedRadar, and the API-tier endpoints answer 403 with that code.
+// A private local Radar reads the API tier (actors, templates, workers) with
+// the context's saved identity. Managed installations read as ate-client
+// using each signed-in caller's Kubernetes access to mint the token, when
+// the operator enables API access.
 
 export type SubstrateActorState =
   | 'running'
@@ -32,12 +33,12 @@ export type SubstrateActorState =
 
 /**
  * connected: a snapshot was read (it may be stale: see refreshing/lastError).
- * connecting: settings are saved and the first read is still running; status
- * never waits for it. notConfigured: no identity saved for this context.
+ * connecting: the first read is running for the saved or managed connection.
+ * notConfigured: no identity saved for this local context.
  * disabled: this Radar does not read Substrate's API for this request (code
  * sharedRadar: a shared Radar without sign-in; apiDisabled: turned off by the
- * operator). failed: settings exist, or the caller's token could not be minted
- * (mintDenied), but no usable snapshot was read.
+ * operator). failed: the connection could not be established or no usable
+ * snapshot could be read.
  */
 export type SubstrateTierState = 'connected' | 'connecting' | 'notConfigured' | 'disabled' | 'failed'
 
@@ -47,9 +48,12 @@ export type SubstrateCode =
   | 'sharedRadar'
   /** The operator turned Substrate's API off for this Radar (Helm substrate.api.enabled: false) (403). */
   | 'apiDisabled'
+  /** The installation's connection settings are operator-managed (PUT /connection, 403). */
+  | 'operator_managed'
   /** Radar cannot mint ate-system/ate-client using the Kubernetes credentials for this read (403). */
   | 'mintDenied'
   | 'notConfigured'
+  /** The current Kubernetes target differs from the reviewed or saved target. */
   | 'targetChanged'
   | 'notInstalled'
   | 'tls'
@@ -64,11 +68,11 @@ export type SubstrateCode =
   | 'contextChanged'
   /** A read failed, including a snapshot read with no usable kind and at least one failed kind. */
   | 'failed'
-  /** The submitted connection settings are invalid (PUT /connection, 400). */
+  /** Invalid connection input, invalid installation settings, or an unavailable token file. */
   | 'invalidSettings'
   /** Radar could not read or write ~/.radar/substrate.json. */
   | 'settingsFile'
-  /** The saved connection changed since it was shown (PUT /connection, 409). */
+  /** The saved revision changed, or the file is being updated (PUT /connection, 409). */
   | 'conflict'
   /** The save keeps the saved credential but sends it to a new endpoint, CA or server name (PUT /connection, 409). */
   | 'confirmDestination'
@@ -92,12 +96,12 @@ export interface SubstrateAPITier {
   /** Why, in a sentence; absent when connected. */
   reason?: string
   /**
-   * With notConfigured (notConfigured), disabled (sharedRadar) and failed
+   * Set with notConfigured, disabled (sharedRadar or apiDisabled), or failed
    * (targetChanged, contextChanged, notInstalled, tls, unreachable,
-   * unauthenticated, mintDenied, settingsFile, failed); absent when connected or connecting.
+   * unauthenticated, mintDenied, invalidSettings, settingsFile or failed).
    */
   code?: SubstrateCode
-  /** Set once settings are saved. */
+  /** The saved or managed connection’s identity and endpoint, when known. */
   identity?: SubstrateIdentity
   endpoint?: string
   /**
@@ -151,9 +155,11 @@ export interface SubstrateSnapshotCoverage {
  */
 export interface SubstratePoolsCoverage {
   state: 'full' | 'partial' | 'denied' | 'uncached' | 'notInstalled' | 'syncing' | 'error'
+  /** In-scope namespaces the caller cannot list. */
   deniedNamespaces?: string[]
+  /** In-scope namespaces the caller can list and Radar has not collected. */
   uncachedNamespaces?: string[]
-  /** Set on partial: the namespaces read. */
+  /** On a partial read, the namespaces Radar read. */
   allowedNamespaces?: string[]
 }
 
@@ -199,6 +205,7 @@ export interface SubstrateActor {
   state: SubstrateActorState
   /** Absent whenever the actor has no worker (suspended, crashed). */
   assignment?: SubstrateAssignment
+  /** The last node Substrate recorded, even after it clears assignment. */
   assignedNode?: string
   crash?: { message?: string; time?: string }
   snapshots?: SubstrateSnapshot[]
@@ -207,9 +214,8 @@ export interface SubstrateActor {
   /** Substrate's last change; the current state has held at least since then. */
   updateTime?: string
   /**
-   * Set when kagent runs this actor's session (a cluster serving kagent's API, an actor named
-   * session-<uuid>). kagent recovers it from the session's chat; moving it to another template
-   * with kubectl ate makes kagent treat the session as lost.
+   * Possible kagent session: the actor name follows session-<uuid> on a cluster
+   * serving kagent's API. Radar infers this from naming alone.
    */
   kagent?: {
     sessionId: string
@@ -231,9 +237,9 @@ export interface SubstrateActorRow {
   atespace: string
   name: string
   state: SubstrateActorState
-  /** Crash message, "Resuming for 6m", "Upload pending for 12m"; absent when nothing to add. */
+  /** Crash message, transition age, or pending upload with time since last update. */
   reason?: string
-  /** A crash's cause, where Substrate's message names it; absent otherwise, and from a Radar that predates it. */
+  /** A crash's cause, where Substrate's message names it; absent otherwise. */
   cause?: 'memoryLimit'
   template: SubstrateRef
   /** Absent when the actor has no worker. */
@@ -322,8 +328,7 @@ export interface SubstrateK8sPool {
   name: string
   /** spec.replicas; absent when unset. */
   desired?: number
-  /** status.readyReplicas: Kubernetes' own claim, which can lag the Pods. Prefer pods.ready when present. */
-  ready: number
+  /** status.readyReplicas when reported by the controller. Prefer pods.ready when present. */
   reportedReady?: number
   /** The pool's worker Pods in Radar's cache; absent when the caller can't list Pods there or the cache doesn't hold them. */
   pods?: SubstratePoolPods
@@ -355,9 +360,8 @@ export interface SubstratePoolRow {
    * but no active worker has the CPU or memory for an actor of any template
    * that can run on the pool (judged only on complete worker and template
    * lists). free: a slot is free; whether an actor fits is judged only then.
-   * A newer Radar may send a verdict this UI does not know.
    */
-  capacity?: SubstratePoolCapacity | (string & {})
+  capacity?: SubstratePoolCapacity
   /** With capacity noRoom: what the free slots lack. */
   lacking?: SubstrateLacking
   /** Substrate's own measurements from Prometheus; absent when not read for this pool. */
@@ -369,8 +373,6 @@ export type SubstrateServiceVerdict =
   | 'noFreeActorSlots'
   | 'freeActorSlots'
   | 'noSchedulableWorkers'
-  | 'uploadsOverdue'
-  | 'noUploadsOverdue'
   | 'unknown'
 
 /** One pool's Prometheus verdict and facts. An absent fact is unknown; reason says why when the verdict is unknown. */
@@ -401,8 +403,9 @@ export interface SubstrateServiceSummary {
   crashes?: number
   /** value in seconds (resume p95). */
   slowestResume?: { pool: SubstratePoolRef; value: number }
-  /** value in percent of resumes. */
+  /** Highest positive failed-resume percentage. Absent when no pool reported a positive share. */
   mostFailedResumes?: { pool: SubstratePoolRef; value: number }
+  /** These counters carry no observations when read is false. */
   poolsUnknown: number
   nodesOverdue: number
   nodesUnknown: number
@@ -459,6 +462,7 @@ export interface SubstrateTemplateRow {
   preferredFidelity: 'memory' | 'rootfs' | 'volumes'
   /** Absent: the API server's default location. */
   storageLocation?: string
+  /** Container names. The detail spec carries full container definitions. */
   containers?: string[]
   updateTime?: string
 }
@@ -562,13 +566,13 @@ export interface SubstrateStatus {
     namespace: string
     name: string
     port: number
-    /** Absent when the caller cannot read Services there. */
+    /** Whether Radar cached the Service. Absent when the Service cache is unavailable or the caller lacks get services. */
     found?: boolean
   }
   apiTier: SubstrateAPITier
   /** The caller's WorkerPool read, under the same name as on every Substrate response. */
   coverage: { pools: SubstratePoolsCoverage }
-  /** This Radar may read Substrate's API, so the connection can be set here. */
+  /** Whether this private local Radar allows editing its saved connection. */
   canConfigure: boolean
 }
 
@@ -636,7 +640,7 @@ export interface SubstrateLocalConnection extends SubstrateConnectionBase {
   saved: boolean
   /** Saved for another cluster than this context points at now, so not used. */
   targetChanged?: boolean
-  settings?: SubstrateSettings | null
+  settings: SubstrateSettings | null
 }
 
 /** In-cluster and Radar Hub: the installation's settings, read-only. */
@@ -673,8 +677,8 @@ export interface SubstrateWorkspace {
   coverage: Partial<SubstrateSnapshotCoverage> & { pools: SubstratePoolsCoverage }
   /** Each part is absent when what it counts was not read. */
   summary: {
-    /** Absent unless WorkerPools or workers were read; a partial pool list counts what was read. noRoom is absent from an older Radar. */
-    pools?: { total: number; short: number; full: number; noRoom?: number }
+    /** Absent unless WorkerPools or workers were read; a partial pool list counts what was read. */
+    pools?: { total: number; short: number; full: number; noRoom: number }
     workers?: SubstrateWorkerCounts
     slots?: SubstrateUsage
     /** Free actor slots per pool, largest first; [] when workers were read and none is free. lacking: the pool's free slots fit no actor of its templates. */
@@ -720,9 +724,10 @@ export interface SubstrateActorsQuery {
   /** worker Pod name or Substrate worker name */
   worker?: string
   /**
-   * updated (default): newest change first. attention: crashed, then stuck in
-   * a transition over 5 min, then the rest, each newest first. name: by
-   * atespace and name. Paging applies after the sort.
+   * updated (default): newest change first. attention: crashed, then assigned
+   * to unavailable or restarted workers, then stuck transitions, then the rest.
+   * Stuck transitions are longest-waiting first. The other groups are newest
+   * first. name: by atespace and name. Paging applies after the sort.
    */
   sort?: 'updated' | 'attention' | 'name'
   /** With nodeHas: running = the actor's worker is on node; localSnapshot = its newest snapshot is not durably stored and its files are on node. */
@@ -750,10 +755,11 @@ export interface SubstrateActors {
    * capped).
    */
   sources: ('snapshot' | 'atespace' | 'actor')[]
-  /** Absent when actors could not be read. */
+  /** After all filters, before paging. Absent when actors could not be read. */
   total?: number
-  /** Per state, after every filter but state, before paging. */
+  /** Per state, before applying state, attention or paging. */
   counts?: SubstrateStateCounts
+  /** Actors matching the attention filter, counted before state, attention or paging. */
   attentionCount?: number
   rows: SubstrateActorRow[]
   limit: number
@@ -790,13 +796,13 @@ export interface SubstrateWorkerRow {
   heldForSeconds?: number
   /** The worker Pod's Ready condition; absent when the Pod is not cached. */
   podReady?: boolean
-  /** The cached Pod is being deleted. A Deployment's ready count (the pool's ready workers) leaves it out even while podReady holds. */
+  /** The cached Pod has a deletion deadline. Unknown when podReady is absent. */
   podTerminating?: boolean
   /** What its state means for its actors; absent for an active worker whose registration Substrate has observed. */
   workerState?: SubstrateWorkerReading
   /** Strongest worker finding, including an in-budget drain (info). */
   attentionSeverity?: SubstrateAttention['severity']
-  /** Absent when actors were not read; [] when none is assigned. */
+  /** Observed assignments, possibly partial. Absent when unread or omitted on actor detail. */
   actors?: SubstrateAssignedActor[]
 }
 
@@ -832,8 +838,6 @@ export interface SubstrateActorDetail {
   template?: SubstrateTemplateRow
   /** The assigned worker; absent when the actor has none or workers were not read. */
   worker?: SubstrateWorkerRow
-  /** What that worker's state means for this actor; absent when the worker is active and has not restarted under it. */
-  workerImpact?: SubstrateWorkerImpact
   egress: SubstrateEgress
   related: SubstrateSubject[]
   /** Needs-attention rows that cover this actor, judged on the fresh read. */
@@ -864,8 +868,8 @@ export interface SubstrateRecovery {
 /**
  * containers and lifecycle are kubectl ate logs actor's --source. worker is
  * the worker process's own records about this actor ("Killing a sandbox over
- * its memory limit", "Sandbox died"), matched by the actor's UID; kubectl ate
- * does not show them. all is every one of them.
+ * its memory limit", "Sandbox died"), matched by UID or by atespace and name
+ * for records without a UID. all selects all sources, restricted by any container filter.
  */
 export type SubstrateLogSource = 'all' | 'containers' | 'lifecycle' | 'worker'
 
@@ -895,6 +899,7 @@ export interface SubstrateLogLine {
  */
 export interface SubstrateWaiting {
   on: 'restore' | 'checkpoint' | 'revert' | 'delete' | 'unrecorded'
+  /** The worker for a recorded restore or checkpoint. */
   worker?: SubstrateWorkerPodRef
   node?: string
   reading: string
@@ -924,7 +929,7 @@ export interface SubstrateWorkerImpact {
    * Unavailable uses the worker’s Pod state. Draining and restarted use the actor’s phase.
    */
   nextStep: string
-  command: string
+  command?: string
 }
 
 /** A worker Pod whose log was searched. */
@@ -937,6 +942,7 @@ export interface SubstrateSearchedPod {
   scanned: number
   /** The read reached its 20,000-line window or 8 MiB per fetch: older lines may exist. */
   windowFull: boolean
+  /** All matches in the scan, before limiting the returned lines to the requested tail. */
   matched: number
 }
 
@@ -1017,9 +1023,9 @@ export interface SubstrateTemplates {
 
 /**
  * A template's definition, read fresh, for display only. Secret-shaped values
- * are redacted as Radar's AI context redacts them: an env value under a
- * sensitive name entirely (redacted true, value [REDACTED]); any other value,
- * command or argument by its secret patterns.
+ * are redacted using Radar's AI context rules. A nonempty value under a
+ * sensitive env name is replaced entirely. Other values, commands and
+ * arguments are redacted by pattern. redacted is true when an env value was replaced.
  */
 export interface SubstrateTemplateSpec {
   containers: {
@@ -1032,7 +1038,7 @@ export interface SubstrateTemplateSpec {
     /** HTTP path Substrate probes after a resume. */
     wakeupProbe?: string
   }[]
-  volumes: { name: string; kind: 'durableDir' | 'external' | 'systemInfo' | 'image'; image?: string }[]
+  volumes: { name: string; kind: 'durableDir' | 'external' | 'systemInfo' | 'image' | 'unknown'; image?: string }[]
   workerSelector?: Record<string, string>
   cpuMillicores?: number
   memoryBytes?: number
@@ -1120,8 +1126,8 @@ function useSubstrateQuery<T>(
 }
 
 /**
- * Two actor-list keys are the same list, paged differently: same API base, cluster context and
- * filters; only offset or limit differ. Keys are ['substrate', base, context, 'actors', filters, page, ...].
+ * Keep rows between pages of the same actor list only while the API base,
+ * context, filters and feature gate still match.
  */
 export function sameSubstrateActorList(previous: QueryKey, next: QueryKey): boolean {
   return (
@@ -1130,7 +1136,9 @@ export function sameSubstrateActorList(previous: QueryKey, next: QueryKey): bool
     previous[2] === next[2] &&
     previous[3] === 'actors' &&
     next[3] === 'actors' &&
-    previous[4] === next[4]
+    previous[4] === next[4] &&
+    previous.length === next.length &&
+    previous.slice(6).every((part, i) => part === next[i + 6])
   )
 }
 

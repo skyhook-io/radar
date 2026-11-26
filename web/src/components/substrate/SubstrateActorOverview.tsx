@@ -12,7 +12,7 @@ import {
   type SubstrateRef,
 } from '../../api/substrateWorkspace'
 import { type OpenSubject, SubjectLink } from './SubstrateAttentionList'
-import { ACTOR_STATE_LABEL, kagentRecoverStep, DISCARD_WHY, definitiveFailure, killLineLabel, killTie, killTiming, memoryKillText, attentionTone, bytesText, coverageReason, cpuText, fidelityLabel, refText, resumeConditionSentence, resumeSentence, revertCommand, localTime, relativeTime, servingEvidence, splitReading, withoutRepeats, workerImpactTone } from './readings'
+import { ACTOR_STATE_LABEL, DISCARD_WHY, definitiveFailure, killLineLabel, killTie, killTiming, memoryKillText, attentionTone, bytesText, coverageReason, cpuText, fidelityLabel, refText, resumeConditionSentence, resumeSentence, revertCommand, localTime, relativeTime, servingEvidence, splitReading, withoutRepeats, workerImpactTone } from './readings'
 import { CommandChip, Unread, When } from './shared'
 import { RefreshFailedNotice } from '../workspace/layout'
 
@@ -20,17 +20,16 @@ const WORKER_RULES = new Set<SubstrateAttention['rule']>(['workerUnavailable', '
 
 function crashPlan(detail: SubstrateActorDetail, kill?: SubstrateActorLogs['memoryKill']) {
   const { actor, recovery } = detail
-  if (actor.kagent) return { text: kagentRecoverStep(actor.kagent) }
   const golden = detail.attention.find((a) => a.rule === 'goldenSnapshotFailed')
   if (golden) return { text: `This actor built ${refText(actor.template)}’s golden snapshot. ${golden.nextStep}` }
   const crash = detail.attention.find((a) => a.rule === 'crashedActors')
   const remedy = kill?.current && kill.nextStep ? kill : crash
   if (remedy) return { text: remedy.nextStep, command: remedy.command, thenCommand: 'thenCommand' in remedy ? remedy.thenCommand : undefined }
-  return recovery ? { text: 'Fix the crash cause, then revert the actor.', command: revertCommand(actor) } : undefined
+  return recovery && !actor.kagent ? { text: 'Fix the crash cause, then revert the actor.', command: revertCommand(actor) } : undefined
 }
 
 function actorProblem(detail: SubstrateActorDetail, logs?: SubstrateActorLogs): { problem: WorkspaceProblem; additional: SubstrateAttention[] } | undefined {
-  const { actor, workerImpact } = detail
+  const { actor, row: { workerImpact } } = detail
   const subject = { kind: 'Actor', group: '', namespace: actor.atespace, name: actor.name }
   const origin = { label: 'Substrate API' }
   const base = { source: 'reading' as const, subject, origin }
@@ -157,7 +156,7 @@ function ActorPlacement({ detail, onOpenSubject }: { detail: SubstrateActorDetai
   const node = row.node ? <SubjectLink subject={{ kind: 'Node', name: row.node }} onOpen={onOpenSubject} withKind={false} /> : undefined
   const pool = as?.pool ? <SubjectLink subject={{ kind: 'WorkerPool', namespace: as.namespace, name: as.pool }} label={as.pool} onOpen={onOpenSubject} withKind={false} /> : undefined
   return (
-    <DimensionValue tone={detail.workerImpact ? workerImpactTone(detail.workerImpact.kind) : worker?.state === 'active' ? 'healthy' : as ? 'unknown' : 'neutral'}
+    <DimensionValue tone={detail.row.workerImpact ? workerImpactTone(detail.row.workerImpact.kind) : worker?.state === 'active' ? 'healthy' : as ? 'unknown' : 'neutral'}
       source={as ? <>Substrate assignment · namespace {as.namespace} · {worker ? `worker ${worker.state}` : 'worker state unknown'}
         {!worker && coverageReason(detail.coverage.workers, 'workers') && ` · ${coverageReason(detail.coverage.workers, 'workers')}`}
         {pool && <> · Pool {pool}</>}{node && <> · Node {node}</>}</>
@@ -366,7 +365,7 @@ export function SubstrateActorOverview({
   const logs = useSubstrateActorLogs(actor, { tailLines: 8, pollMs: actor.assignment?.pod && actor.assignment.namespace ? undefined : false })
   const assessment = actorProblem(detail, logs.data)
   const plan = actor.state === 'crashed' ? crashPlan(detail, logs.data?.memoryKill) : undefined
-  const otherRemedy = detail.workerImpact ?? detail.attention.find((a) => a.id === assessment?.problem.id)
+  const otherRemedy = detail.row.workerImpact ?? detail.attention.find((a) => a.id === assessment?.problem.id)
   const command = actor.kagent ? undefined : plan ? plan.command : otherRemedy?.command
   const then = actor.kagent ? undefined : plan ? plan.thenCommand : otherRemedy && 'thenCommand' in otherRemedy ? otherRemedy.thenCommand : undefined
   const egress = egressText(detail.egress)
@@ -409,8 +408,8 @@ export function SubstrateActorOverview({
         <FactGrid>
           <FactRow label="Recovery">
             <DimensionValue tone={row.resumesWith === 'unknown' ? 'unknown' : 'neutral'}
-              source={actor.kagent ? 'Recovery is managed by kagent' : <>Current template · {resumeSentence(row)}</>} linkLabel="Snapshots" onOpen={onShowSnapshots}>
-              {actor.kagent ? 'Recover through kagent' : recoveryText}
+              source={actor.kagent ? 'Inferred from the actor name' : <>Current template · {resumeSentence(row)}</>} linkLabel="Snapshots" onOpen={onShowSnapshots}>
+              {actor.kagent ? (actor.kagent.sandbox ? 'Looks like a kagent sandbox' : 'Looks like a kagent session') : recoveryText}
             </DimensionValue>
             {(command || (recovery && !actor.kagent && !golden)) && (
               <div className="mt-2">

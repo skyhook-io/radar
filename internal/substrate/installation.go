@@ -33,6 +33,8 @@ func ParseInstallation(lookup func(string) (string, bool)) InstallationConfig {
 			c.Err = fmt.Errorf("RADAR_SUBSTRATE_API must be enabled or disabled")
 		}
 	}
+	// RADAR_SUBSTRATE_SERVER_NAME controls the name verified on the TLS
+	// certificate. RADAR_SUBSTRATE_ENDPOINT supplies the dial address.
 	for _, field := range []struct {
 		name string
 		dst  *string

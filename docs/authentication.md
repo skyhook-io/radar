@@ -159,9 +159,9 @@ in Substrate; Radar calls only read RPCs.
 
 The operator configures the endpoint/trust via `substrate.api` Helm values;
 `substrate.api.enabled=false` disables managed reads with `apiDisabled`. This integration
-adds no new token-mint permission. A team needs an explicit Role granting `create`
-on `serviceaccounts/token` for `resourceNames: [ate-client]` in `ate-system`, bound
-to the intended people. See [Substrate](substrate.md#connecting-to-substrates-api).
+adds no new token-mint permission. For people without an existing grant, an
+operator can bind a Role granting `create` on `serviceaccounts/token` for
+`resourceNames: [ate-client]` in `ate-system`. See [Substrate](substrate.md#connecting-to-substrates-api).
 Settings is read-only on shared installations; private local users configure it
 in **Settings → Agent Substrate**.
 

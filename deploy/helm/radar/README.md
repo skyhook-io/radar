@@ -904,17 +904,19 @@ no shared/Cloud settings writes or operator token Secrets.
 | Value | Default | Meaning |
 |---|---|---|
 | `substrate.api.enabled` | `true` | `false` disables managed API reads for everyone (`apiDisabled`) |
-| `substrate.api.endpoint` | `api.ate-system.svc:443` | Direct host:port dial |
+| `substrate.api.endpoint` | `api.ate-system.svc:443` | Direct host:port dial. May be blank when API access is disabled |
 | `substrate.api.serverName` | `api.ate-system.svc` | TLS server name |
 | `substrate.api.atespaces` | `[]` | Up to 64 unique DNS-1123 labels, used only when listing is denied; does not restrict the identity's access |
-| `substrate.api.caConfigMap.name` | `""` | Public PEM CA ConfigMap, mounted read-only; unset uses Substrate's live ClusterTrustBundle |
+| `substrate.api.caConfigMap.name` | `""` | Public PEM CA ConfigMap, mounted read-only when API access is enabled. Unset uses Substrate's live ClusterTrustBundle |
 | `substrate.api.caConfigMap.key` | `ca.crt` | ConfigMap key containing the PEM certificates |
 
 The values map to `RADAR_SUBSTRATE_API` (`enabled`/`disabled`),
 `RADAR_SUBSTRATE_ENDPOINT`, `RADAR_SUBSTRATE_SERVER_NAME`,
 `RADAR_SUBSTRATE_ATESPACES` (comma list) and, when mounted,
-`RADAR_SUBSTRATE_CA_FILE=/etc/radar/substrate-ca/ca.crt`. Invalid explicit settings
-remain failed with `invalidSettings`, rather than silently falling back.
+`RADAR_SUBSTRATE_CA_FILE=/etc/radar/substrate-ca/ca.crt`. An eligible caller sees `invalidSettings` for invalid installation settings.
+The gate reports `apiDisabled` when the operator turns reads off, or
+`sharedRadar` when a shared installation has no sign-in, before it checks the
+installation's endpoint and trust settings.
 
 
 Kubernetes's built-in `edit` role includes `create serviceaccounts/token`, and

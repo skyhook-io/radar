@@ -1711,6 +1711,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.Features = advertisedFeatures()
 	// handlePodFileUpload refuses in Radar Cloud; hide the control to match.
 	caps.Features.PodFileUpload = !cloudMode()
+	caps.SubstrateLocalConnection = s.substrateLocal()
 	caps.AuthEnabled = s.authConfig.Enabled()
 	caps.ConfigManagement = s.configManagement()
 	status, _ := s.localTerminalUnavailable(r)

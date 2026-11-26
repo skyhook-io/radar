@@ -163,9 +163,9 @@ func TestServiceVerdictsAddRowsWhereDefinite(t *testing.T) {
 	five := 5.0
 	overdue := 3.0
 	pools := []Pool{
-		{Namespace: "ns", Name: "short", Desired: i64(5), Ready: 2},
-		{Namespace: "ns", Name: "quiet", Desired: i64(1), Ready: 1},
-		{Namespace: "ns", Name: "fine", Desired: i64(1), Ready: 1},
+		{Namespace: "ns", Name: "short", Desired: i64(5), ReportedReady: i64(2)},
+		{Namespace: "ns", Name: "quiet", Desired: i64(1), ReportedReady: i64(1)},
+		{Namespace: "ns", Name: "fine", Desired: i64(1), ReportedReady: i64(1)},
 	}
 	svc := &Service{Read: true, Window: "1h",
 		Pools: map[string]PoolService{

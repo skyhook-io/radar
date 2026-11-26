@@ -38,7 +38,7 @@ vi.mock('@skyhook-io/k8s-ui', () => ({
 
 let root: Root
 let host: HTMLDivElement
-const draw = () => act(async () => root.render(<SubstrateSettings active onDirtyChange={state.dirty} onBusyChange={() => {}} />))
+const draw = (active = true) => act(async () => root.render(<SubstrateSettings active={active} onDirtyChange={state.dirty} onBusyChange={() => {}} />))
 const input = (placeholder: string) => host.querySelector<HTMLInputElement>(`input[placeholder="${placeholder}"]`)!
 async function type(placeholder: string, value: string) {
   const el = input(placeholder)
@@ -195,14 +195,16 @@ describe('the local Substrate connection form', () => {
 })
 
 describe('the managed Substrate summary', () => {
-  it('refreshes when this person’s access moves, so atespaces and denials stay current', async () => {
+  it('refreshes changed access only while the managed settings are active', async () => {
     state.view = {
       view: 'managed', sharedPrincipal: 'system:serviceaccount:ate-system:ate-client', access: { state: 'connecting' },
       managed: { enabled: true, readsAs: 'eachUser', endpoint: 'api.ate-system.svc:443', serverName: 'api.ate-system.svc', trust: 'clusterTrustBundle', helm: { api: 'substrate.api.enabled', endpoint: '', serverName: '', ca: '', atespaces: '' } },
     }
     state.status = status({ state: 'connected' })
+    await draw(false)
+    expect(state.refetch).not.toHaveBeenCalled()
     await draw()
-    expect(state.refetch).toHaveBeenCalled()
+    expect(state.refetch).toHaveBeenCalledOnce()
     expect(host.textContent).toContain('Connected')
   })
 })

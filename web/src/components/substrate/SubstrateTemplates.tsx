@@ -180,7 +180,7 @@ function TemplateSpec({ spec, unavailable, template }: { spec?: SubstrateTemplat
             </FactRow>
             {spec.goldenEgressRules !== undefined && <FactRow label="Warm-up egress">{spec.goldenEgressRules} {spec.goldenEgressRules === 1 ? 'rule' : 'rules'} while the golden actor warms up</FactRow>}
             <FactRow label="Volumes">
-              {spec.volumes.length ? spec.volumes.map((v) => `${v.name} (${v.kind}${v.image ? ` ${v.image}` : ''})`).join(', ') : <span className="text-theme-text-secondary">none</span>}
+              {spec.volumes.length ? spec.volumes.map((v) => `${v.name} (${v.kind === 'unknown' ? 'unknown type' : v.kind}${v.image ? ` ${v.image}` : ''})`).join(', ') : <span className="text-theme-text-secondary">none</span>}
             </FactRow>
           </FactGrid>
           <div className="space-y-2">

@@ -260,7 +260,8 @@ type Recovery struct {
 	Discarded []Discarded `json:"discarded"`
 }
 
-// Revertable is Substrate's isRevertable.
+// Revertable reports Substrate's precondition for starting a revert. A revert
+// already in progress can continue without satisfying this predicate.
 func Revertable(a Actor) bool {
 	switch a.State {
 	case StateCrashed, StateRunning:

@@ -942,8 +942,12 @@ func TestSubstrateActorLogs(t *testing.T) {
 	if got := lineMessages(lifecycle.Lines); !slices.Equal(got, []string{"restored snapshot gen 3"}) || lifecycle.Lines[0].Container != "" {
 		t.Errorf("lifecycle = %+v", lifecycle.Lines)
 	}
-	if got := read("?tailLines=1").Lines; len(got) != 1 || got[0].Message != "restored snapshot gen 3" {
+	tail := read("?tailLines=1")
+	if got := tail.Lines; len(got) != 1 || got[0].Message != "restored snapshot gen 3" {
 		t.Errorf("tail keeps the newest lines: %+v", got)
+	}
+	if len(tail.Searched) != 1 || tail.Searched[0].Matched != 2 {
+		t.Errorf("matched counts the full scan: %+v", tail.Searched)
 	}
 	rec := call(t, s, s.handleSubstrateActorLogs, substrateCall{path: "/logs?source=lifecycle&container=agent", params: map[string]string{"atespace": "research", "name": "lit-0201"}}, nil)
 	if rec.Code != http.StatusBadRequest {
@@ -980,11 +984,11 @@ func TestSubstrateLogScanSkipsOversizedLines(t *testing.T) {
 	huge := `{"message":"` + strings.Repeat("x", 3<<20) + `"}`
 	body := strings.Join([]string{line("before"), huge, line("after")}, "\n") + "\n"
 	filter, _ := model.NewLogFilter(model.Ref{Atespace: "research", Name: "lit-0201"}, "", "")
-	lines, _, scanned, err := filterSubstrateLog(strings.NewReader(body), filter, 10)
+	lines, _, scanned, matched, err := filterSubstrateLog(strings.NewReader(body), filter, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := messages(lines); !slices.Equal(got, []string{"before", "after"}) || scanned != 3 {
+	if got := messages(lines); !slices.Equal(got, []string{"before", "after"}) || scanned != 3 || matched != 2 {
 		t.Errorf("lines %v scanned %d: an oversized line is skipped, not the end of the scan", got, scanned)
 	}
 }
@@ -1473,10 +1477,17 @@ func TestSubstrateActorDetailWorkerImpact(t *testing.T) {
 	f.workers[0].Status.State = ateapi.WorkerState_WORKER_STATE_UNAVAILABLE
 	connectFake(t, s, f, fullToken)
 	var detail substrateActorDetail
-	call(t, s, s.handleSubstrateActor, substrateCall{path: "/a", params: map[string]string{"atespace": "research", "name": "lit-0201"}}, &detail)
-	if detail.WorkerImpact == nil || detail.WorkerImpact.Kind != model.ImpactUnavailable || !strings.Contains(detail.WorkerImpact.Reading, "still records this actor as running") ||
-		detail.Row.WorkerImpact == nil || detail.Worker == nil || f.workerCalls.Load() != 1 || detail.Coverage.Workers.State == substrateapi.CoverageFull {
-		t.Errorf("worker impact = %+v", detail.WorkerImpact)
+	rec := call(t, s, s.handleSubstrateActor, substrateCall{path: "/a", params: map[string]string{"atespace": "research", "name": "lit-0201"}}, &detail)
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := body["workerImpact"]; ok {
+		t.Errorf("worker impact must appear only on the row: %s", rec.Body)
+	}
+	if detail.Row.WorkerImpact == nil || detail.Row.WorkerImpact.Kind != model.ImpactUnavailable || !strings.Contains(detail.Row.WorkerImpact.Reading, "still records this actor as running") ||
+		detail.Worker == nil || f.workerCalls.Load() != 1 || detail.Coverage.Workers.State == substrateapi.CoverageFull {
+		t.Errorf("worker impact = %+v", detail.Row.WorkerImpact)
 	}
 }
 
@@ -1542,8 +1553,8 @@ func TestSubstrateRowsCarryWorkerImpact(t *testing.T) {
 
 	var detail substrateActorDetail
 	call(t, s, s.handleSubstrateActor, substrateCall{path: "/a", params: map[string]string{"atespace": "research", "name": "lit-0201"}}, &detail)
-	if detail.WorkerImpact == nil || detail.WorkerImpact.Reading != list.Rows[slices.Index(order, "lit-0201")].WorkerImpact.Reading {
-		t.Errorf("the actor page and the list must read the same: %+v", detail.WorkerImpact)
+	if detail.Row.WorkerImpact == nil || detail.Row.WorkerImpact.Reading != list.Rows[slices.Index(order, "lit-0201")].WorkerImpact.Reading {
+		t.Errorf("the actor page and the list must read the same: %+v", detail.Row.WorkerImpact)
 	}
 	if detail.Worker == nil || detail.Worker.PodReady == nil || !*detail.Worker.PodReady {
 		t.Errorf("worker row = %+v", detail.Worker)
@@ -1589,6 +1600,32 @@ func TestSubstrateRestartedWorkerNamesItsLostActors(t *testing.T) {
 
 // A pool's readiness counts the worker Pods the caller can list, not the
 // WorkerPool's own status.
+func TestSubstratePoolReportedReadinessOnWire(t *testing.T) {
+	u := &unstructured.Unstructured{Object: map[string]any{"metadata": map[string]any{"name": "pool"}}}
+	for _, reported := range []bool{false, true} {
+		if reported {
+			if err := unstructured.SetNestedField(u.Object, int64(0), "status", "readyReplicas"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		pool := poolOf(u, time.Now())
+		raw, err := json.Marshal(pool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			t.Fatal(err)
+		}
+		if _, has := fields["ready"]; has {
+			t.Errorf("unexpected ready field: %s", raw)
+		}
+		if got, has := fields["reportedReady"]; has != reported || (has && string(got) != "0") {
+			t.Errorf("reported %t: %s", reported, raw)
+		}
+	}
+}
+
 func TestSubstratePoolCountsWorkerPods(t *testing.T) {
 	s := substrateTestServer(t, substrateapi.Kube{})
 	prev := substrateNamespaceWorkerPods
@@ -1611,9 +1648,12 @@ func TestSubstratePoolCountsWorkerPods(t *testing.T) {
 		return []*corev1.Pod{ready("w-0", true, false), ready("w-1", false, false), ready("w-2", true, true), other}, true
 	}
 	t.Cleanup(func() { substrateNamespaceWorkerPods = prev })
-	pools := []model.Pool{{Namespace: "agents", Name: "agent-pool", Ready: 3}, {Namespace: "agents", Name: "empty-pool"}}
+	pools := []model.Pool{{Namespace: "agents", Name: "agent-pool", ReportedReady: new(int64(3))}, {Namespace: "agents", Name: "empty-pool"}}
 	s.withPoolPods(httptest.NewRequest(http.MethodGet, "/", nil), pools)
-	if got := pools[0].Pods; got == nil || *got != (model.PoolPods{Created: 2, Ready: 1, Terminating: 1}) || pools[0].ReadyWorkers() != 1 {
+	if ready, known := pools[0].ReadyWorkers(); !known || ready != 1 {
+		t.Errorf("agent-pool readiness = %d, known %t", ready, known)
+	}
+	if got := pools[0].Pods; got == nil || *got != (model.PoolPods{Created: 2, Ready: 1, Terminating: 1}) {
 		t.Errorf("agent-pool pods = %+v", got)
 	}
 	if got := pools[1].Pods; got == nil || *got != (model.PoolPods{}) {
@@ -1621,15 +1661,15 @@ func TestSubstratePoolCountsWorkerPods(t *testing.T) {
 	}
 	// The lister answers nil for a namespace with no worker Pods left.
 	substrateNamespaceWorkerPods = func(string) ([]*corev1.Pod, bool) { return nil, true }
-	gone := []model.Pool{{Namespace: "agents", Name: "agent-pool", Ready: 3}}
+	gone := []model.Pool{{Namespace: "agents", Name: "agent-pool", ReportedReady: new(int64(3))}}
 	s.withPoolPods(httptest.NewRequest(http.MethodGet, "/", nil), gone)
-	if gone[0].Pods == nil || *gone[0].Pods != (model.PoolPods{}) || gone[0].ReadyWorkers() != 0 {
+	if ready, known := gone[0].ReadyWorkers(); !known || ready != 0 || gone[0].Pods == nil || *gone[0].Pods != (model.PoolPods{}) {
 		t.Errorf("a read namespace with no worker Pods counts 0: %+v", gone[0])
 	}
 	substrateNamespaceWorkerPods = func(string) ([]*corev1.Pod, bool) { return nil, false }
-	unread := []model.Pool{{Namespace: "agents", Name: "agent-pool", Ready: 3}}
+	unread := []model.Pool{{Namespace: "agents", Name: "agent-pool", ReportedReady: new(int64(3))}}
 	s.withPoolPods(httptest.NewRequest(http.MethodGet, "/", nil), unread)
-	if unread[0].Pods != nil || unread[0].ReadyWorkers() != 3 {
+	if ready, known := unread[0].ReadyWorkers(); !known || ready != 3 || unread[0].Pods != nil {
 		t.Errorf("Pods not read: the status stands, and the count is absent: %+v", unread[0])
 	}
 }
@@ -2091,7 +2131,7 @@ func TestSubstrateActorDetailRefreshesStaleWorker(t *testing.T) {
 	var detail substrateActorDetail
 	rec := call(t, s, s.handleSubstrateActor, substrateCall{path: "/a", params: map[string]string{"atespace": "research", "name": "lit-0201"}}, &detail)
 	if rec.Code != http.StatusOK || f.workerCalls.Load() != 1 || detail.Worker == nil || detail.Worker.WorkerState == nil ||
-		(detail.Worker.WorkerState.Assigned != nil || detail.Worker.WorkerState.Lost != nil) || detail.WorkerImpact == nil || detail.WorkerImpact.Kind != model.ImpactRestarted {
+		(detail.Worker.WorkerState.Assigned != nil || detail.Worker.WorkerState.Lost != nil) || detail.Row.WorkerImpact == nil || detail.Row.WorkerImpact.Kind != model.ImpactRestarted {
 		t.Errorf("stale worker facts need a point read with qualified assignment counts: %d %+v", rec.Code, detail)
 	}
 }

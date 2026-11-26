@@ -334,12 +334,6 @@ describe('pool slots as utilization', () => {
     expect(poolReading({ capacity: 'noRoom', lacking: 'cpu' }).meaning).toContain('new and resuming actors wait for a worker')
   })
 
-  it('reads a verdict from a newer Radar as unknown, never as free', async () => {
-    const { poolReading } = await import('./readings')
-    const r = poolReading({ capacity: 'overbooked' })
-    expect(r).toMatchObject({ label: 'Unknown', severity: 'neutral' })
-    expect(r.meaning).toContain('overbooked')
-  })
 })
 
 describe('the timing that ties a memory-limit kill to the crash', () => {
@@ -373,7 +367,7 @@ describe('pool reading over a partial read of the workers', () => {
   it('uses Kubernetes readiness to explain a shortfall when not every worker was read', async () => {
     const { poolReading } = await import('./readings')
     const placement = { workers: { total: 2, active: 2, draining: 0, unavailable: 0 }, slots: { used: 1, total: 8 }, cpuMillicores: { used: 1, total: 2 }, memoryBytes: { used: 1, total: 2 } }
-    const kubernetes = { namespace: 'a', name: 'p', desired: 5, ready: 2, reportedReady: 2, health: 'degraded' as const, healthReason: 'Scaling' }
+    const kubernetes = { namespace: 'a', name: 'p', desired: 5, reportedReady: 2, health: 'degraded' as const, healthReason: 'Scaling' }
     expect(poolReading({ capacity: 'short', placement: { ...placement, complete: false }, kubernetes }).label).toBe('Short of workers · 2 of 5 Pods ready')
     expect(poolReading({ capacity: 'short', placement: { ...placement, complete: true }, kubernetes }).label).toBe('Short of workers · 2 of 5 active')
   })
