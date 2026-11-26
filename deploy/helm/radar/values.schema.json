@@ -24,7 +24,7 @@
     "replicaCount": {
       "type": "integer",
       "minimum": 1,
-      "description": "Number of Radar pod replicas. Note: backchannel logout requires single replica."
+      "description": "Number of Radar pod replicas. Note: backchannel logout and MCP OAuth require a single replica."
     },
     "image": {
       "type": "object",
@@ -64,7 +64,7 @@
         "namespaces": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" }, "description": "Limit Radar's ServiceAccount and the Radar Cloud bindings to these namespaces. Leave unset for cluster-wide access." },
         "helm": { "type": "boolean", "description": "Allow Helm write operations. Grants broad permissions." },
         "secrets": { "type": "boolean", "description": "Allow reading Secret contents. Also granted by rbac.helm, by auth (auth.mode != none), and in cloud mode, where reads are re-checked per user." },
-        "viewAdmissionPolicies": { "type": "boolean", "description": "Allow reading native ValidatingAdmissionPolicy and ValidatingAdmissionPolicyBinding resources. Auto-enabled under auth or cloud mode." },
+        "viewAdmissionPolicies": { "type": "boolean", "description": "Allow reading native validating and mutating admission policies and bindings. Auto-enabled under auth or cloud mode." },
         "podExec": { "type": "boolean", "description": "Allow pod exec (terminal feature)." },
         "podLogs": { "type": "boolean" },
         "portForward": { "type": "boolean" },
@@ -359,7 +359,20 @@
                 "owner": { "type": "boolean" }
               }
             },
-            "nodeOps": { "type": "boolean" }
+            "nodeOps": { "type": "boolean" },
+            "integrationWrite": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "argocd": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "owner": { "type": "boolean" }
+                  }
+                }
+              }
+            }
           }
         },
         "systemRbac": { "type": "boolean" },
@@ -397,7 +410,14 @@
       "properties": {
         "enabled": { "type": "boolean" },
         "execTools": { "type": "boolean" },
-        "httpTools": { "type": "boolean" }
+        "httpTools": { "type": "boolean" },
+        "oauth": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "description": "Enable MCP OAuth for a single-replica standalone OIDC deployment." }
+          }
+        }
       }
     },
     "cost": {

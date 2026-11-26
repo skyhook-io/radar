@@ -1060,6 +1060,8 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
       topology={stableTopology}
       appScopeLoading={focusedAppLoading}
       onOpenDiagnostics={onOpenDiagnostics}
+      selectedEventId={selectedEventId}
+      onSelectEvent={setSelectedEventId}
     />
   )
 }

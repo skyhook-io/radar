@@ -49,7 +49,9 @@ func TestTypedKindOwnsGroup(t *testing.T) {
 		{"mutatingwebhookconfigurations", "admissionregistration.k8s.io", false},
 		{"validatingwebhookconfigurations", "admissionregistration.k8s.io", false},
 		{"validatingadmissionpolicies", "admissionregistration.k8s.io", false},
+		{"mutatingadmissionpolicies", "admissionregistration.k8s.io", false},
 		{"validatingadmissionpolicybindings", "admissionregistration.k8s.io", false},
+		{"mutatingadmissionpolicybindings", "admissionregistration.k8s.io", false},
 		{"volumeattachments", "storage.k8s.io", false},
 		{"apiservices", "apiregistration.k8s.io", false},
 		{"customresourcedefinitions", "apiextensions.k8s.io", false},
@@ -117,6 +119,8 @@ func TestBuiltinGVR(t *testing.T) {
 		{"validatingadmissionpolicy", "admissionregistration.k8s.io", schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingadmissionpolicies"}, true},
 		{"validatingadmissionpolicybindings", "admissionregistration.k8s.io", schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingadmissionpolicybindings"}, true},
 		{"volumeattachments", "storage.k8s.io", schema.GroupVersionResource{Group: "storage.k8s.io", Version: "v1", Resource: "volumeattachments"}, true},
+		{"mutatingadmissionpolicies", "admissionregistration.k8s.io", schema.GroupVersionResource{}, false},
+		{"mutatingadmissionpolicybindings", "admissionregistration.k8s.io", schema.GroupVersionResource{}, false},
 		{"apiservices", "apiregistration.k8s.io", schema.GroupVersionResource{}, false},
 		{"customresourcedefinitions", "apiextensions.k8s.io", schema.GroupVersionResource{}, false},
 		{"services", "serving.knative.dev", schema.GroupVersionResource{}, false}, // CRD collision

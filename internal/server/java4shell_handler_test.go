@@ -170,7 +170,7 @@ func TestJava4ShellRegistryAccessFollowsImageInspection(t *testing.T) {
 	allowed := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "allowed"}, Type: corev1.SecretTypeDockerConfigJson}
 	forbidden := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "forbidden"}, Type: corev1.SecretTypeDockerConfigJson}
 	useTestResourceCache(t, fake.NewClientset(pod, allowed, forbidden))
-	s := &Server{authConfig: auth.Config{Mode: "proxy"}, permCache: auth.NewPermissionCache(), listenAddress: "0.0.0.0"}
+	s := &Server{authConfig: auth.Config{Mode: "proxy"}, permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection), listenAddress: "0.0.0.0"}
 	for _, tc := range []struct {
 		name              string
 		getPod, getSecret bool
@@ -246,7 +246,7 @@ func TestJava4ShellCustomWorkloadUsesExactAccess(t *testing.T) {
 			APIVersion: gvr.GroupVersion().String(), Kind: "JavaWorkload", Name: "worker", Controller: new(true),
 		}},
 	}}
-	s := &Server{permCache: auth.NewPermissionCache()}
+	s := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	for _, tc := range []struct {
 		user    string
 		allowed bool

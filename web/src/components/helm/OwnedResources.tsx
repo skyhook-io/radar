@@ -414,6 +414,7 @@ function PodQuickActions({ namespace, podName, isRunning }: PodQuickActionsProps
       const containers = data.resource?.spec?.containers || []
       if (containers.length > 0) {
         openTerminal({
+          podUID: data.resource?.metadata?.uid,
           namespace,
           podName,
           containerName: containers[0].name,

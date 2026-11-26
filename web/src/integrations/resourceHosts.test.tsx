@@ -55,7 +55,7 @@ describe('application resource hosts', () => {
       'RolloutRenderer', 'KyvernoPolicyCoverage', 'KyvernoPolicyQueued', 'CNPGObjectStoreRenderer',
       'VeleroBSLRenderer', 'VeleroBackupRenderer', 'VeleroRestoreRenderer', 'CNPGClusterRenderer',
       'CNPGDatabaseRenderer', 'CNPGPublicationRenderer', 'CNPGSubscriptionRenderer', 'CNPGImageCatalogRenderer',
-      'FluxHelmReleaseRenderer', 'OpenTelemetryCollectorRenderer', 'ValidatingAdmissionPolicyRenderer', 'ValidatingAdmissionPolicyBindingRenderer', 'SecretProviderClassRenderer', 'UpgradePlanRenderer', 'SealedSecretRenderer', 'K3sHelmChartRenderer', 'LoggingFlowHostRenderer',
+      'FluxHelmReleaseRenderer', 'OpenTelemetryCollectorRenderer', 'ValidatingAdmissionPolicyRenderer', 'ValidatingAdmissionPolicyBindingRenderer', 'MutatingAdmissionPolicyRenderer', 'MutatingAdmissionPolicyBindingRenderer', 'SecretProviderClassRenderer', 'UpgradePlanRenderer', 'SealedSecretRenderer', 'K3sHelmChartRenderer', 'LoggingFlowHostRenderer'
     ].sort())
     const inherited = [{ id: 'local', label: 'Local', render: () => null }]
     expect(resourceDetailSlots({ kind: 'Pod', group: '', namespace: 'db', name: 'pg-1' }, inherited).extraTabs).toEqual(inherited)
@@ -74,7 +74,7 @@ describe('application resource hosts', () => {
     const path = resourceDetailRedirect({ ...cluster, kind: 'clusters' }, search)!
     const url = new URL(path, 'http://radar.test')
     expect(url.pathname).toBe('/cnpg/clusters/db/pg')
-    expect(Object.fromEntries(url.searchParams)).toEqual({ ctx: 'kind-demo', tab: 'activity', drawer: 'pods:pg-1', 'ai-run': 'run' })
+    expect(Object.fromEntries(url.searchParams)).toEqual({ ctx: 'kind-demo', tab: 'events', drawer: 'pods:pg-1', 'ai-run': 'run' })
     expect(search.get('tab')).toBe('events')
     expect(search.get('apiGroup')).toBe('postgresql.cnpg.io')
   })

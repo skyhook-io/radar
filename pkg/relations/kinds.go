@@ -25,7 +25,7 @@ func Kinds() []resourceid.GroupKind {
 	for _, f := range []*Family{
 		ConfigReferences, Autoscalers, KEDAAuthentication, IngressBackends,
 		RolloutServices, CertificateSecrets, GatewayParents, GatewayBackends,
-		GatewayClasses, CertManagerIssuers, FluxSources, NodeClasses, ClusterClasses,
+		GatewayClasses, CertManagerIssuers, FluxSources, FluxDependsOn, NodeClasses, ClusterClasses,
 		KnativeEventDestinations, KnativeTriggerBrokers, KnativeRouteRevisions,
 		IstioGateways, IstioServiceHosts(""), ArgoWorkflowTemplates,
 		TraefikBackends, TraefikRouteConfig, TraefikSecrets, ContourBackends,

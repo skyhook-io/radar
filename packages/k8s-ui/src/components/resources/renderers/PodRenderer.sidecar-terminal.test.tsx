@@ -2,6 +2,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ResourceActionsBar } from '../../shared/ResourceActionsBar'
 import { PodRenderer } from './PodRenderer'
 import { getExecContainerNames } from '../resource-utils'
 
@@ -10,7 +11,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 const running = { running: { startedAt: '2026-10-16T10:00:00Z' } }
 
 const pod = {
-  metadata: { name: 'app-with-sidecar', namespace: 'shop' },
+  metadata: { name: 'app-with-sidecar', namespace: 'shop', uid: 'current-pod' },
   spec: {
     initContainers: [
       { name: 'migrate', image: 'busybox' },
@@ -71,6 +72,7 @@ describe('PodRenderer native sidecar terminal', () => {
     expect(onOpenTerminal).toHaveBeenCalledWith({
       namespace: 'shop',
       podName: 'app-with-sidecar',
+      podUID: 'current-pod',
       containerName: 'log-shipper',
       containers: ['app', 'log-shipper', 'stopped-sidecar'],
     })
@@ -197,4 +199,11 @@ describe('getExecContainerNames', () => {
   it('handles a pod without init containers', () => {
     expect(getExecContainerNames({ spec: { containers: [{ name: 'app' }] } })).toEqual(['app'])
   })
+})
+
+it('opens the header terminal on the same Pod UID as the container action', () => {
+  const open = vi.fn()
+  act(() => root.render(<ResourceActionsBar resource={{kind:'pods',name:'app-with-sidecar',namespace:'shop'}} data={{...pod, apiVersion:'v1',kind:'Pod'}} canExec onOpenTerminal={open}/>))
+  act(() => [...container.querySelectorAll('button')].find(b=>b.textContent==='Terminal')!.click())
+  expect(open).toHaveBeenCalledWith(expect.objectContaining({podUID:'current-pod', podName:'app-with-sidecar', containerName:'app'}))
 })

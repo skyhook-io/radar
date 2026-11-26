@@ -149,6 +149,7 @@ export interface AppHistorySummary {
 }
 
 export interface AppHistoryAnchor {
+  git?: { repoURL: string; path?: string; previousRevision?: string; historyID?: string };
   type: "gitops" | "helm" | string;
   title: string;
   status?: string;
@@ -512,27 +513,46 @@ export function compareVersions(
 
 /** Coarse provenance bucket for the Source facet. Stable ids — display labels
  *  live in SOURCE_META (the house meta-map pattern), so they can be re-worded
- *  without breaking facet state or future URL serialization. */
-export type AppSource = "argocd" | "flux" | "helm" | "label" | "ungrouped";
+ *  without breaking facet state or URL serialization. */
+export type AppSource = "argocd" | "flux" | "helm" | "label" | "ungrouped" | "skyhook";
 
 export const SOURCE_ORDER: AppSource[] = [
   "argocd",
   "flux",
   "helm",
+  "skyhook",
   "label",
   "ungrouped",
 ];
 
-export const SOURCE_META: Record<AppSource, { label: string }> = {
+interface SourceMeta {
+  label: string;
+  /** Set only for sources assigned by a host. Their label overrides grouping evidence
+   *  in the badge, including on folded rows whose members all share that source. */
+  hostManaged?: boolean;
+}
+
+const sourceMeta = {
   argocd: { label: "Argo CD" },
   flux: { label: "Flux" },
   helm: { label: "Helm" },
   label: { label: "Label" },
   ungrouped: { label: "Ungrouped" },
-};
+  skyhook: { label: "Skyhook", hostManaged: true },
+} satisfies Record<AppSource, SourceMeta>;
+
+export const SOURCE_META: Record<AppSource, SourceMeta> = sourceMeta;
+
+export type HostManagedSource = {
+  [S in AppSource]: (typeof sourceMeta)[S] extends { hostManaged: true } ? S : never;
+}[AppSource];
+
+export function isHostManagedSource(source: AppSource): source is HostManagedSource {
+  return SOURCE_META[source].hostManaged === true;
+}
 
 interface TierMeta {
-  source: AppSource;
+  source: Exclude<AppSource, HostManagedSource>;
   /** Tooltip phrase pieces: "Grouped by {lead} `{code(name)}` {trail}". */
   lead: string;
   code: (name: string) => string;
@@ -566,7 +586,8 @@ const TIER_META: Record<number, TierMeta> = {
   9: { source: "label", lead: "the", code: () => "app", trail: "label" },
 };
 
-export function sourceOf(tier: number | undefined): AppSource {
+/** Maps grouping tiers only. Hosts set entry.source explicitly for host-managed sources. */
+export function sourceOf(tier: number | undefined): TierMeta["source"] {
   if (!tier) return "ungrouped";
   return TIER_META[tier]?.source ?? "label";
 }
@@ -1710,6 +1731,13 @@ export interface AppEntryBase {
   /** ready/desired as a fraction for sorting; -1 when nothing is desired. */
   readyRatio: number;
   source: AppSource;
+}
+
+/** A status the host knows better than the workloads say, e.g. how a job's last run went. */
+export interface AppHostStatus {
+  health: AppHealth;
+  /** Defaults to the standard label for this health. */
+  label?: string;
 }
 
 export interface SingleAppEntry extends AppEntryBase {

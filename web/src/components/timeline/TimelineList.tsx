@@ -39,7 +39,9 @@ const byNewest = (a: TimelineEvent, b: TimelineEvent) => new Date(b.timestamp).g
 // and routine child activity, each newest first under its own `limit`. Separate
 // budgets keep the promises the toggle makes: a burst of owner rows can't crowd
 // out child problems, and showing routine activity only ever adds rows.
-export function splitRoutineActivity(allRows: TimelineEvent[], limit: number) {
+// `keepId` is the event a link opened (?event=): it always stays, past the cap
+// and with routine activity hidden, so the link lands on it.
+export function splitRoutineActivity(allRows: TimelineEvent[], limit: number, keepId?: string | null) {
   const owners: TimelineEvent[] = []
   const childProblems: TimelineEvent[] = []
   const routine: TimelineEvent[] = []
@@ -47,8 +49,15 @@ export function splitRoutineActivity(allRows: TimelineEvent[], limit: number) {
     const bucket = !isManagedTimelineEvent(e) ? owners : isTimelineProblem(e) ? childProblems : routine
     bucket.push(e)
   }
-  const base = [...owners.slice(0, limit), ...childProblems.slice(0, limit)].sort(byNewest)
+  const base = [...owners.slice(0, limit), ...childProblems.slice(0, limit)]
   const shownRoutine = routine.slice(0, limit)
+  const kept = keepId ? allRows.find((e) => e.id === keepId) : undefined
+  if (kept && !base.includes(kept)) base.push(kept)
+  base.sort(byNewest)
+  if (kept) {
+    const at = shownRoutine.indexOf(kept)
+    if (at >= 0) shownRoutine.splice(at, 1)
+  }
   return {
     withoutRoutine: base,
     withRoutine: [...base, ...shownRoutine].sort(byNewest),
@@ -95,9 +104,12 @@ interface TimelineListProps {
   topology?: Topology
   appScopeLoading?: boolean
   onOpenDiagnostics?: () => void
+  // The selected event (the URL's ?event=): marked and scrolled into view.
+  selectedEventId?: string | null
+  onSelectEvent?: (id: string | null) => void
 }
 
-export function TimelineList({ namespaces, onViewChange, currentView, onResourceClick, initialFilter, initialTimeRange, showDeleted, onShowDeletedChange, showRoutine, onShowRoutineChange, search, onSearchChange, activityFilter, onActivityFilterChange, kindFilter, onKindFilterChange, selectionWindow, onVisibleWindowChange, scrollToMs, focusedAppIndex, appScoped = false, topology, appScopeLoading = false, onOpenDiagnostics }: TimelineListProps) {
+export function TimelineList({ namespaces, onViewChange, currentView, onResourceClick, initialFilter, initialTimeRange, showDeleted, onShowDeletedChange, showRoutine, onShowRoutineChange, search, onSearchChange, activityFilter, onActivityFilterChange, kindFilter, onKindFilterChange, selectionWindow, onVisibleWindowChange, scrollToMs, focusedAppIndex, appScoped = false, topology, appScopeLoading = false, onOpenDiagnostics, selectedEventId, onSelectEvent }: TimelineListProps) {
   const hasLimitedAccess = useHasLimitedAccess()
   const timelineSource = useTimelineSource()
   const [queryParams, setQueryParams] = useState<{ timeRange: TimeRange; kinds: string[] }>({
@@ -127,8 +139,8 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
   })
   const loadError = useStickyError(error, fetchedEvents != null)
   const split = useMemo(
-    () => (splitRows && fetchedEvents ? splitRoutineActivity(fetchedEvents, fetchLimit) : undefined),
-    [splitRows, fetchedEvents, fetchLimit],
+    () => (splitRows && fetchedEvents ? splitRoutineActivity(fetchedEvents, fetchLimit, selectedEventId) : undefined),
+    [splitRows, fetchedEvents, fetchLimit, selectedEventId],
   )
   const events = useMemo(() => {
     const unscoped = split ? (showRoutine ? split.withRoutine : split.withoutRoutine) : fetchedEvents ?? []
@@ -204,6 +216,8 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
           onKindFilterChange={onKindFilterChange}
           onVisibleWindowChange={onVisibleWindowChange}
           scrollToMs={scrollToMs}
+          selectedEventId={selectedEventId}
+          onSelectEvent={onSelectEvent}
           truncatedAt={fetchLimit}
           isTruncated={sourceTruncated}
           truncationMessage={appScoped && sourceTruncated

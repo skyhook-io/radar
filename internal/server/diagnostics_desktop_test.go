@@ -195,8 +195,8 @@ func TestDiagnosticsConnectionUpdatesDuringCollection(t *testing.T) {
 	previousName := k8s.SetTestContextName("old")
 	t.Cleanup(func() { k8s.SetTestContextName(previousName) })
 	t.Cleanup(k8s.SetTestContextCount(25))
-	timeline.RecordDrop("Pod", "default", "old-pod", "no_diff", "update", k8s.ActiveClusterContext())
-	t.Cleanup(timeline.ResetMetricsForContextSwitch)
+	timeline.CaptureStore().RecordDrop("Pod", "default", "old-pod", "no_diff", "update", k8s.ActiveClusterContext())
+	t.Cleanup(func() { timeline.GetMetrics().Reset() })
 
 	for _, tc := range []struct {
 		name  string
@@ -235,7 +235,7 @@ func TestDiagnosticsConnectionUpdatesDuringCollection(t *testing.T) {
 				t.Fatalf("could not seed cluster observation: %+v, %v", info, err)
 			}
 
-			s := &Server{broadcaster: &SSEBroadcaster{}, permCache: auth.NewPermissionCache(), diagConfig: &DiagConfig{Port: 9280}}
+			s := &Server{broadcaster: &SSEBroadcaster{}, permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection), diagConfig: &DiagConfig{Port: 9280}}
 			s.permCache.Set("viewer", nil, &auth.UserPermissions{AllowedNamespaces: []string{"default"}})
 			rec := httptest.NewRecorder()
 			s.handleDiagnostics(rec, requestWithUser("GET", "/api/diagnostics", &auth.User{Username: "viewer"}))
@@ -349,8 +349,8 @@ func TestDiagnosticsWhileKubeconfigWriterIsBusy(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(restore)
-	timeline.RecordDrop("Pod", "default", "private-pod", "no_diff", "update", k8s.ActiveClusterContext())
-	t.Cleanup(timeline.ResetMetricsForContextSwitch)
+	timeline.CaptureStore().RecordDrop("Pod", "default", "private-pod", "no_diff", "update", k8s.ActiveClusterContext())
+	t.Cleanup(func() { timeline.GetMetrics().Reset() })
 
 	s := &Server{broadcaster: &SSEBroadcaster{}, diagConfig: &DiagConfig{Port: 9280}}
 	rec := httptest.NewRecorder()

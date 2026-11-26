@@ -8,13 +8,13 @@ import { Tooltip } from '../ui/Tooltip'
 import { Input } from '../ui/Input'
 import { showApiError, showApiSuccess } from '../ui/Toast'
 import {
-  formatLogTimestamp,
   highlightSearchMatches,
   stripAnsi,
   ansiToHtml,
   type TimestampFormat,
   TIMESTAMP_FORMAT_LABELS,
 } from '../../utils/log-format'
+import { createLogTimestampFormatter } from './log-timestamp'
 import { getLogPalette, getLogLevelColor, type LogPalette } from './log-palette'
 import { associateContinuations, groupContinuations, type LogGroup } from '../../utils/log-level'
 import { copyText } from '../../utils/clipboard'
@@ -132,6 +132,9 @@ const STRUCTURED_MODE_DESCRIPTIONS: Record<StructuredMode, string> = {
 }
 
 const EMPTY_STATE_CLASS = 'flex-1 flex flex-col items-center justify-center gap-2 px-4 text-center'
+
+const isLocalFormat = (format: TimestampFormat) => format === 'time-local' || format === 'iso-local'
+const localTimeZone = (): string | undefined => Intl.DateTimeFormat().resolvedOptions().timeZone || undefined
 
 const TIMESTAMP_FORMAT_SHORT_LABELS: Record<TimestampFormat, string> = {
   'time-local': 'Local time',
@@ -272,6 +275,21 @@ export function LogCore({
   })
   const [showTsMenu, setShowTsMenu] = useState(false)
   const tsMenu = useAnimatedUnmount(showTsMenu, overlayExitMs('menu'))
+  const [timeZone, setTimeZone] = useState(localTimeZone)
+  const refreshTimeZone = useCallback(() => setTimeZone(localTimeZone()), [])
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') refreshTimeZone()
+    }
+    window.addEventListener('focus', refreshTimeZone)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      window.removeEventListener('focus', refreshTimeZone)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [refreshTimeZone])
+  const formatTimestamp = useMemo(() => createLogTimestampFormatter(tsFormat, timeZone), [tsFormat, timeZone])
+  const zoneSuffix = isLocalFormat(tsFormat) && timeZone ? ` · ${timeZone}` : ''
   const [showStructuredMenu, setShowStructuredMenu] = useState(false)
   const structuredMenu = useAnimatedUnmount(showStructuredMenu, overlayExitMs('menu'))
   const [structuredMode, setStructuredMode] = useState<StructuredMode>(() => {
@@ -424,17 +442,66 @@ export function LogCore({
     if (exportHasGap) showApiSuccess('Some logs were unavailable', gapNotice)
   }, [closeExportMenu, onDownload, exportEntries, exportOptions, exportHasGap])
 
-  // Same close-on-outside-click for the timestamp format menu.
   const tsMenuRef = useRef<HTMLDivElement>(null)
+  const tsTriggerRef = useRef<HTMLButtonElement>(null)
+  const focusRadioOnOpen = useRef(false)
+  const focusSelectedFormat = () => tsMenuRef.current?.querySelector<HTMLButtonElement>('[role="radio"][aria-checked="true"]')?.focus()
+  useLayoutEffect(() => {
+    if (showTsMenu && tsMenu.shouldRender && focusRadioOnOpen.current) {
+      focusRadioOnOpen.current = false
+      focusSelectedFormat()
+    }
+  }, [showTsMenu, tsMenu.shouldRender])
+  const closeTsMenu = useCallback(() => {
+    setShowTsMenu(false)
+    tsTriggerRef.current?.focus()
+  }, [])
+  const viewerRef = useRef<HTMLDivElement>(null)
+  const toolbarRef = useRef<HTMLDivElement>(null)
+  const [tsMenuBounds, setTsMenuBounds] = useState<{ maxHeight: number; maxWidth: number }>()
+  useLayoutEffect(() => {
+    const viewer = viewerRef.current
+    const toolbar = toolbarRef.current
+    const anchor = tsMenuRef.current
+    if (!showTsMenu || !viewer || !toolbar || !anchor) return
+    const fit = () => {
+      const bounds = viewer.getBoundingClientRect()
+      const trigger = anchor.getBoundingClientRect()
+      setTsMenuBounds({
+        maxHeight: Math.max(0, Math.min(bounds.bottom, window.innerHeight) - trigger.bottom - 8),
+        maxWidth: Math.max(0, trigger.right - Math.max(0, bounds.left) - 4),
+      })
+    }
+    fit()
+    const observer = new ResizeObserver(fit)
+    observer.observe(viewer)
+    observer.observe(toolbar)
+    window.addEventListener('resize', fit)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', fit)
+    }
+  }, [showTsMenu])
+
   useEffect(() => {
     if (!showTsMenu) return
     const handleClick = (e: MouseEvent) => {
       if (tsMenuRef.current?.contains(e.target as Node)) return
       setShowTsMenu(false)
     }
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.stopImmediatePropagation()
+      e.preventDefault()
+      closeTsMenu()
+    }
     window.addEventListener('click', handleClick)
-    return () => window.removeEventListener('click', handleClick)
-  }, [showTsMenu])
+    window.addEventListener('keydown', handleKey, true)
+    return () => {
+      window.removeEventListener('click', handleClick)
+      window.removeEventListener('keydown', handleKey, true)
+    }
+  }, [showTsMenu, closeTsMenu])
 
   const structuredMenuRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -516,7 +583,6 @@ export function LogCore({
     // Auto-show timestamps when user picks a format — otherwise the change isn't visible.
     setShowTimestamps(true)
     try { localStorage.setItem('radar-logs-timestamps', 'true') } catch {}
-    setShowTsMenu(false)
   }, [])
 
   const toggleAnsi = useCallback(() => {
@@ -656,11 +722,12 @@ export function LogCore({
 
   return (
     <div
+      ref={viewerRef}
       className={`flex flex-col h-full ${palette.containerBg}`}
       style={{ colorScheme: isDark ? 'dark' : 'light', fontFamily: "'SF Mono', 'Cascadia Code', 'Fira Code', Menlo, Consolas, 'DejaVu Sans Mono', monospace" }}
     >
       {/* Toolbar */}
-      <div className={`flex flex-wrap items-center gap-2 px-3 py-2 border-b ${palette.border} ${palette.toolbarBg}`}>
+      <div ref={toolbarRef} className={`flex flex-wrap items-center gap-2 px-3 py-2 border-b ${palette.border} ${palette.toolbarBg}`}>
         {toolbarExtraNode}
 
         {/* Stream / Stop toggle — only shown when streaming is supported */}
@@ -791,14 +858,45 @@ export function LogCore({
               <Clock className="w-4 h-4" />
             </button>
           </Tooltip>
-          <div className="relative" ref={tsMenuRef}>
-            <Tooltip content={`Timestamp format: ${TIMESTAMP_FORMAT_LABELS[tsFormat]}`} delay={TIP_DELAY} position="bottom">
+          <div
+            className="relative"
+            ref={tsMenuRef}
+            onBlur={event => {
+              if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) setShowTsMenu(false)
+            }}
+          >
+            <Tooltip
+              content={`Timestamp format: ${TIMESTAMP_FORMAT_LABELS[tsFormat]}${zoneSuffix}`}
+              delay={TIP_DELAY}
+              position="bottom"
+              disabled={showTsMenu}
+              preserveWrapperWhenDisabled
+            >
               <button
-                onClick={() => setShowTsMenu(prev => !prev)}
+                ref={tsTriggerRef}
+                onMouseEnter={refreshTimeZone}
+                onFocus={refreshTimeZone}
+                onKeyDown={event => {
+                  const arrow = event.key === 'ArrowDown' || event.key === 'ArrowUp'
+                  if (!arrow && (showTsMenu || (event.key !== 'Enter' && event.key !== ' '))) return
+                  event.preventDefault()
+                  if (showTsMenu) {
+                    focusSelectedFormat()
+                  } else {
+                    refreshTimeZone()
+                    focusRadioOnOpen.current = true
+                    setShowTsMenu(true)
+                  }
+                }}
+                onClick={() => {
+                  if (!showTsMenu) refreshTimeZone()
+                  setShowTsMenu(!showTsMenu)
+                }}
                 className={`px-2 py-1.5 rounded-r text-[10px] font-medium transition-colors whitespace-nowrap ${
                   showTimestamps ? palette.toolbarActive : iconBtnInactiveTertiary
                 }`}
-                aria-label="Pick timestamp format"
+                aria-label={`Pick timestamp format: ${TIMESTAMP_FORMAT_SHORT_LABELS[tsFormat]}${zoneSuffix}`}
+                aria-expanded={showTsMenu}
               >
                 <span className="inline-flex items-center gap-1">
                   <span>{TIMESTAMP_FORMAT_SHORT_LABELS[tsFormat]}</span>
@@ -808,25 +906,52 @@ export function LogCore({
             </Tooltip>
             {tsMenu.shouldRender && (
               <div
+                role="radiogroup"
+                aria-label="Timestamp format"
                 inert={!showTsMenu}
-                className={`absolute top-full right-0 mt-1 w-44 origin-top-right ${palette.menuBg} border ${palette.border} rounded-lg shadow-lg z-50 ${TRANSITION_MENU} ${
+                className={`absolute top-full right-0 mt-1 w-44 origin-top-right overflow-y-auto overscroll-contain ${palette.menuBg} border ${palette.border} rounded-lg shadow-lg z-50 ${TRANSITION_MENU} ${
                   tsMenu.isOpen ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 -translate-y-1 scale-[0.97]'
                 } ${showTsMenu ? '' : 'pointer-events-none'}`}
-                style={overlayTransitionStyle(tsMenu.isOpen, 'menu')}
+                style={{ ...overlayTransitionStyle(tsMenu.isOpen, 'menu'), ...tsMenuBounds }}
               >
                 <div className={`px-3 py-1.5 text-[10px] uppercase tracking-wide ${palette.textTertiary} border-b ${palette.border}`}>
                   Timestamp format
                 </div>
-                {TIMESTAMP_FORMAT_ORDER.map(fmt => (
+                {TIMESTAMP_FORMAT_ORDER.map((fmt, index) => (
                   <button
                     key={fmt}
-                    onClick={() => pickTsFormat(fmt)}
-                    className={`w-full text-left px-3 py-1.5 text-xs ${palette.hoverBg} flex items-center justify-between ${
+                    tabIndex={tsFormat === fmt ? 0 : -1}
+                    onClick={() => {
+                      pickTsFormat(fmt)
+                      closeTsMenu()
+                    }}
+                    onKeyDown={event => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        pickTsFormat(fmt)
+                        closeTsMenu()
+                        return
+                      }
+                      const forward = event.key === 'ArrowDown' || event.key === 'ArrowRight'
+                      if (!forward && event.key !== 'ArrowUp' && event.key !== 'ArrowLeft') return
+                      event.preventDefault()
+                      const count = TIMESTAMP_FORMAT_ORDER.length
+                      const next = (index + (forward ? 1 : -1) + count) % count
+                      pickTsFormat(TIMESTAMP_FORMAT_ORDER[next])
+                      tsMenuRef.current?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[next].focus()
+                    }}
+                    aria-label={isLocalFormat(fmt) && timeZone ? `${TIMESTAMP_FORMAT_LABELS[fmt]}, ${timeZone}` : undefined}
+                    role="radio"
+                    aria-checked={tsFormat === fmt}
+                    className={`w-full text-left px-3 py-1.5 text-xs ${palette.hoverBg} flex items-center justify-between gap-2 ${
                       tsFormat === fmt ? palette.textPrimary : palette.textSecondary
                     }`}
                   >
-                    <span>{TIMESTAMP_FORMAT_LABELS[fmt]}</span>
-                    {tsFormat === fmt && <span className={`text-[10px] ${palette.textAccent}`}>✓</span>}
+                    <span className="min-w-0">
+                      {TIMESTAMP_FORMAT_LABELS[fmt]}
+                      {isLocalFormat(fmt) && timeZone && <span className={`block break-words text-[10px] ${palette.textSecondary}`}>{timeZone}</span>}
+                    </span>
+                    {tsFormat === fmt && <span aria-hidden className={`shrink-0 text-[10px] ${palette.textAccent}`}>✓</span>}
                   </button>
                 ))}
               </div>
@@ -1179,7 +1304,7 @@ export function LogCore({
                 showContainerName={showContainerName}
                 containerLabelWidth={containerLabelWidth}
                 showTimestamp={showTimestamps}
-                tsFormat={tsFormat}
+                formatTimestamp={formatTimestamp}
                 ansiEnabled={ansiEnabled}
                 isCurrentMatch={group.head.id === currentHighlightId}
                 wordWrap={wordWrap}
@@ -1286,7 +1411,7 @@ interface LogLineProps {
   showContainerName?: boolean
   containerLabelWidth?: number
   showTimestamp: boolean
-  tsFormat: TimestampFormat
+  formatTimestamp: (ts: string) => string
   ansiEnabled: boolean
   isCurrentMatch: boolean
   wordWrap: boolean
@@ -1309,7 +1434,7 @@ function LogLine({
   showContainerName = false,
   containerLabelWidth,
   showTimestamp,
-  tsFormat,
+  formatTimestamp,
   ansiEnabled,
   isCurrentMatch,
   wordWrap,
@@ -1376,7 +1501,7 @@ function LogLine({
           className={`${palette.textTertiary} select-none pr-2 whitespace-nowrap`}
           title={entry.timestamp}
         >
-          {formatLogTimestamp(entry.timestamp, tsFormat)}
+          {formatTimestamp(entry.timestamp)}
         </span>
       )}
       {showPodName && entry.pod && (
@@ -1429,7 +1554,7 @@ interface LogGroupItemProps {
   showContainerName?: boolean
   containerLabelWidth?: number
   showTimestamp: boolean
-  tsFormat: TimestampFormat
+  formatTimestamp: (ts: string) => string
   ansiEnabled: boolean
   isCurrentMatch: boolean
   wordWrap: boolean

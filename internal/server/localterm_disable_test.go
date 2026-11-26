@@ -344,7 +344,7 @@ func TestDisableExecDeniesExecGrant(t *testing.T) {
 	t.Cleanup(func() { k8s.ForceDisableExec = previousForceDisableExec })
 	k8s.ForceDisableExec = true
 
-	s := &Server{permCache: auth.NewPermissionCache()}
+	s := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"team"}}
 	perms.SetCanI("create", "", "pods/exec", "team", true)
 	s.permCache.Set("alice", nil, perms)

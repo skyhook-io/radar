@@ -1,12 +1,14 @@
 package prometheus
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/pkg/prom"
 	corev1 "k8s.io/api/core/v1"
@@ -135,5 +137,59 @@ func nodeWithRuntime(name, runtimeVersion string) *corev1.Node {
 				ContainerRuntimeVersion: runtimeVersion,
 			},
 		},
+	}
+}
+
+func TestHandleStatusReportsOpenObservePath(t *testing.T) {
+	t.Cleanup(func() { openObservePath.Store(nil) })
+	for _, path := range []string{"", "hub", "local"} {
+		SetOpenObservePath(func() string { return path })
+		rec := httptest.NewRecorder()
+		handleStatus(rec, httptest.NewRequest(http.MethodGet, "/prometheus/status", nil))
+		var body map[string]any
+		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		got, present := body["openobserve"]
+		if path == "" && present || path != "" && got != path {
+			t.Fatalf("path %q: openobserve = %v (present %v)", path, got, present)
+		}
+		if _, ok := body["available"]; !ok {
+			t.Fatalf("status fields missing: %v", body)
+		}
+	}
+}
+
+// A user's Discover asks Hub first; when Hub now selects OpenObserve the relay
+// answers and Prometheus is never searched. Automatic connects never ask Hub.
+func TestHandleConnectAsksHubFirst(t *testing.T) {
+	promHits, promURL := withRelayTestClient(t)
+	SetManualURL(promURL)
+	t.Cleanup(func() { checkHubMetricsSource = cloud.CheckMetricsSourceNow })
+	var checks int
+	checkHubMetricsSource = func(context.Context) bool {
+		checks++
+		_ = EnableRelay(testRelayConfig(&fakeRelayTransport{}, nil))
+		return true
+	}
+
+	rec := httptest.NewRecorder()
+	handleConnect(rec, httptest.NewRequest(http.MethodPost, "/prometheus/connect?optional=true", nil))
+	if checks != 0 {
+		t.Fatalf("automatic connect asked Hub %d times", checks)
+	}
+
+	promHits.Store(0)
+	rec = httptest.NewRecorder()
+	handleConnect(rec, httptest.NewRequest(http.MethodPost, "/prometheus/connect", nil))
+	var status prom.Status
+	if err := json.NewDecoder(rec.Body).Decode(&status); err != nil {
+		t.Fatal(err)
+	}
+	if checks != 1 || rec.Code != http.StatusOK || status.Source == nil || status.Source.Via != "hub" {
+		t.Fatalf("checks=%d code=%d status=%+v", checks, rec.Code, status)
+	}
+	if n := promHits.Load(); n != 0 {
+		t.Fatalf("Prometheus probed %d times after Hub selected OpenObserve", n)
 	}
 }

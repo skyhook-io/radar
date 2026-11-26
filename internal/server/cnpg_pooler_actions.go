@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -36,12 +37,14 @@ func (s *Server) handleCNPGPoolerCapabilities(w http.ResponseWriter, r *http.Req
 	s.writeJSON(w, resp)
 }
 
+var poolerActions = []string{"pause", "resume"}
+
 func (s *Server) handleCNPGPoolerAction(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnectedForAction(w) {
 		return
 	}
 	namespace, name, action := chi.URLParam(r, "namespace"), chi.URLParam(r, "name"), chi.URLParam(r, "action")
-	if action != "pause" && action != "resume" {
+	if !slices.Contains(poolerActions, action) {
 		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown Pooler action %q: must be pause or resume", action))
 		return
 	}

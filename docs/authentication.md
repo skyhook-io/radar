@@ -381,6 +381,14 @@ auth:
 
 When using `caCert` in Kubernetes, mount the CA certificate into the pod via a ConfigMap or Secret volume.
 
+### MCP clients with OIDC
+
+Enable `--mcp-oauth` (Helm: `mcp.oauth.enabled: true`) to let compatible remote MCP clients authenticate through Radar's existing OIDC browser login. Radar acts as the MCP authorization server: it supports discovery, public client registration, authorization code flow with mandatory S256 PKCE, explicit browser consent, and access/refresh tokens bound to the requested MCP endpoint. The identity provider's tokens remain inside Radar; MCP clients receive separate Radar credentials and use the same per-user Kubernetes RBAC boundary.
+
+This option requires standalone OIDC mode, MCP enabled, exactly one replica, and an HTTPS `auth.oidc.redirectURL` whose path is `{basePath}/auth/callback`. It is unavailable in proxy, unauthenticated or Radar Cloud modes. Existing browser-session authentication continues to work.
+
+MCP access tokens last 10 minutes; refresh tokens rotate with an absolute 24-hour grant limit. OAuth state is held in memory, so pod restarts require client re-registration and authorization even when `auth.existingSecret` preserves browser sessions. The chart uses `Recreate` rollouts when this option is enabled. See [Remote MCP authentication](mcp.md#remote-authentication-with-oidc) for deployment, client setup, discovery checks and ingress requirements.
+
 ### Radar Cloud mode
 
 If you see `RADAR_CLOUD_MODE` or `cloud.*` values in the chart, they control a specialized deployment mode used by [Radar Cloud](https://radarhq.io) — a hosted SaaS that lets a single Cloud frontend manage many in-cluster Radar instances over an outbound tunnel. You don't need to use it to run Radar standalone; leave `cloud.enabled: false` (the default).
@@ -390,6 +398,7 @@ Under cloud-mode (`RADAR_CLOUD_MODE=true`, set automatically by the chart when `
 - Forces `--auth-mode=proxy` with pinned `X-Forwarded-User` / `X-Forwarded-Groups` headers. Radar accepts those headers only on requests marked in-process by its authenticated Cloud tunnel; the ordinary pod TCP listener cannot assert Cloud identity.
 - Ships three default ClusterRoleBindings mapping Cloud's `radar:owner` / `radar:member` / `radar:viewer` groups to the standard K8s `admin` / `edit` / `view` ClusterRoles. Configurable via `cloud.defaultRbac.*` in `values.yaml`.
 - Adds a **cluster-read add-on** (`cloud.defaultRbac.clusterScopedRead.{viewer,member,owner}`, each default on) granting `get/list/watch` on infrastructure the built-in `view`/`edit`/`admin` roles exclude — Nodes, PersistentVolumes, StorageClasses, IngressClasses, PriorityClasses, RuntimeClasses, Leases (namespaced; the spec is only a holder and renew times — `edit`/`admin` already include them, so only viewers and the view-based system and AI grants gain), ClusterTrustBundles, CRDs, admission webhook configurations, and ValidatingAdmissionPolicies and their bindings — plus list-only Upgrade impact evidence for CSIDrivers, CSIStorageCapacities, legacy PodSecurityPolicies, and API flow-control configuration. When the matching collection is enabled, it also grants APIServices, PrometheusRules, Karpenter kinds, and node metrics. It does not grant Secrets, RBAC objects, API-server metrics, or kubelet proxy access. It's an independent axis per tier: set a tier `false` to make it namespaced-only (e.g. `clusterScopedRead.viewer: false`). Owner node cordon/drain is a separate cluster-scoped *write*, off by default (`cloud.defaultRbac.nodeOps`).
+- The owner-only Argo CD Applications grant defaults on for chart-managed Cloud owners. Application `patch` delegates the Argo CD controller’s deployment authority. To opt out, set `cloud.defaultRbac.integrationWrite.argocd.owner=false` and apply the chart. The grant follows `rbac.namespaces` when configured. See the [chart README](../deploy/helm/radar/README.md#cloud-owner-access-to-argo-cd).
 - Creates the default read grant for `radar:system`, Radar Cloud's alerts worker and timeline puller: a chart-owned role aggregated to match `view`, the cluster-read and integration-read add-ons, and cluster-wide Secret read. Helm release alerts and Secret changes in the timeline need Secret read; Helm stores releases as Secrets. No writes. Controlled by `cloud.systemRbac` (default `true`).
 - Creates the default read grant for alert-triggered AI investigations, recorded in Kubernetes audit logs as `radar:ai:<org>`: `radar:ai:reader` receives permissions based on `view` plus the cluster-read and integration-read add-ons. Stock `view` excludes Secrets, but includes pod logs and ConfigMaps; roles labelled `aggregate-to-view` widen this grant too. Controlled by `cloud.aiRbac` (default `true`). Requests a person starts or follows up on use that person's identity and groups, including follow-ups on alert-triggered investigations. MCP clients also use the user's permissions.
 - Treats `cloud.aiRbac` and `cloud.systemRbac` as controls for the chart's default grants, independent of `cloud.defaultRbac`. False or absent (including after a plain `--reuse-values` upgrade from an older chart) creates no default grant and leaves customer-created bindings untouched. These settings do not disable background jobs or automatic analysis; they control their default Kubernetes access.
@@ -420,6 +429,11 @@ Set `auth.kubernetesCredentials: user-token` (flag `--auth-k8s-credentials=user-
 - **With the user's token** (`X-Forwarded-Kubernetes-Token`): Radar asks the API server who the token belongs to (SelfSubjectReview) and makes every live call — writes, logs, exec, Helm — with that token alone, so the API server applies your own RBAC and audit logs show the real user. The forwarded username must match the token's username, or the request is refused.
 - **Without a token, as a person** (for example cross-cluster views): Radar serves its cache, filtered by that person's permissions, and refuses every live call with a 403 (`reason: user_token_required`).
 - **Without a token, as `radar:system:*` (group `radar:system`) or `radar:ai:<org>` (group `radar:ai:reader`)**: Radar reads with its ServiceAccount, after a SubjectAccessReview of every request against that identity's bindings (`cloud.systemRbac`, `cloud.aiRbac`).
+
+GitOps action capability checks use a `SelfSubjectAccessReview` through the
+person's token client. The API server supplies the identity and groups. Without
+a token, capability answers stay unknown for people. Background identities
+without a token can only read and receive an unavailable action result.
 
 **Requirements:**
 

@@ -13,6 +13,7 @@ import (
 	"github.com/skyhook-io/radar/internal/logsafe"
 	"github.com/skyhook-io/radar/pkg/conditions"
 	"github.com/skyhook-io/radar/pkg/configrefs"
+	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/logging"
@@ -716,6 +717,9 @@ func isTransientCRDCondition(u *unstructured.Unstructured, reason string) bool {
 		}
 	}
 	if suspend, ok, _ := unstructured.NestedBool(u.Object, "spec", "suspend"); ok && suspend {
+		return true
+	}
+	if gitops.ArtifactGeneratorPaused(u) {
 		return true
 	}
 	// observedGeneration lags generation → controller hasn't caught up yet.

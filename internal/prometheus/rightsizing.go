@@ -932,18 +932,46 @@ func handlePVCUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	stores := client.chartStores(r.Context())
+	g := stores.native
+	var resp PVCUsageResponse
+	if g == nil || g.fallback {
+		resp = standardPVCUsage(r.Context(), client, namespace, name)
+	}
+	missing := resp.Status == "no_series" || resp.Status == PVCUsageAmbiguous || resp.Status == PVCUsageScopeMismatch
+	if stores.supplement != nil && missing {
+		var err error
+		g, err = stores.supplement(r.Context())
+		if err != nil {
+			writeChartError(w, err)
+			return
+		}
+	}
+	if g != nil && (!g.fallback || missing) {
+		native := g.pvc(r.Context(), namespace, name)
+		if !g.fallback || native.HasData {
+			resp = native
+		}
+		if g != client.gkeChartStore() {
+			writeError(w, http.StatusConflict, "metrics connection changed; retry the request")
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func standardPVCUsage(ctx context.Context, client *Client, namespace, name string) PVCUsageResponse {
 	resp := PVCUsageResponse{Namespace: namespace, Name: name, Status: PVCUsageQueryFailed}
-	matchers, _, err := client.resolveScope(r.Context(), namespace, pvcScopeProbe(namespace, []string{name}, 0), nil, k8s.GetResourceCache())
+	matchers, _, err := client.resolveScope(ctx, namespace, pvcScopeProbe(namespace, []string{name}, 0), nil, k8s.GetResourceCache())
 	if failed, bad := pvcScopeFailure(err); bad {
 		if failed.Status == PVCUsageQueryFailed {
 			errorlog.Record("prometheus", "warning", "pvc usage scope check failed for %s/%s: %v", namespace, name, err)
 		}
 		resp.Status = failed.Status
-		writeJSON(w, http.StatusOK, resp)
-		return
+		return resp
 	}
 
-	batch := queryPVCUsage(r.Context(), client, namespace, []string{name}, matchers)
+	batch := queryPVCUsage(ctx, client, namespace, []string{name}, matchers)
 	if batch.Status != PVCUsageAvailable {
 		errorlog.Record("prometheus", "warning", "pvc usage query failed for %s/%s: %s", namespace, name, batch.Error)
 		resp.Status = batch.Status
@@ -958,7 +986,7 @@ func handlePVCUsage(w http.ResponseWriter, r *http.Request) {
 	} else {
 		resp.Status = "no_series"
 	}
-	writeJSON(w, http.StatusOK, resp)
+	return resp
 }
 
 func firstValue(res *prom.QueryResult) *float64 {

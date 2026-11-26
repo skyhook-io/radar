@@ -316,7 +316,11 @@ func (c *Client) ResolveViewScope(ctx context.Context, req ViewScopeRequest, cac
 		for _, m := range req.Metrics {
 			filters[m.Name] = ""
 		}
-		return ViewScope{State: ViewScopeSingleClusterAsserted, Filters: filters, Note: viewScopeSingleNote}, nil
+		note := viewScopeSingleNote
+		if oo := c.relaySourceScopeNote(); oo != "" {
+			note = oo + "."
+		}
+		return ViewScope{State: ViewScopeSingleClusterAsserted, Filters: filters, Note: note}, nil
 	}
 	now := time.Now()
 	at, live := req.At, false

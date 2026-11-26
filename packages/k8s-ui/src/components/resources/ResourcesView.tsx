@@ -58,7 +58,7 @@ import { ResourceBar } from '../ui/ResourceBar'
 import type { SelectedResource, APIResource } from '../../types'
 import { isForbiddenError } from '../../types/fetch-error'
 import type { NavigateToResource } from '../../utils/navigation'
-import { categorizeResources, CORE_RESOURCES, findAPIResourceForRoute, isCoreBatchJob } from '../../utils/api-resources'
+import { categorizeResources, CORE_RESOURCES, findAPIResourceForRoute, supportsWorkloadLogAction } from '../../utils/api-resources'
 import { copyText } from '../../utils/clipboard'
 import {
   getPodStatus,
@@ -195,7 +195,8 @@ import type { Issue } from '../issues/types'
 import { issueTitle } from '../issues/severity'
 import { SEVERITY_TEXT_CLASS } from '../checks/severity'
 // CRD-specific cell components (extracted)
-import { GitRepositoryCell, OCIRepositoryCell, HelmRepositoryCell, KustomizationCell, FluxHelmReleaseCell, FluxAlertCell } from './renderers/flux-cells'
+import { GitRepositoryCell, OCIRepositoryCell, HelmRepositoryCell, KustomizationCell, FluxHelmReleaseCell, FluxAlertCell, ExternalArtifactCell, ArtifactGeneratorCell } from './renderers/flux-cells'
+import { getArtifactGeneratorCount } from './resource-utils-flux'
 import { ArgoApplicationCell, ArgoApplicationSetCell, ArgoAppProjectCell } from './renderers/argo-cells'
 import { VulnerabilityReportCell, ConfigAuditReportCell, ExposedSecretReportCell, RbacAssessmentReportCell, ClusterComplianceReportCell, SbomReportCell } from './renderers/trivy-cells'
 import { CertificateCell, CertificateRequestCell, ClusterIssuerCell, IssuerCell, OrderCell, ChallengeCell } from './renderers/certmanager-cells'
@@ -415,7 +416,7 @@ function phonePinnedLeft(compareMode: boolean | undefined, showCheckbox: boolean
 // Built-in sortable keys. Hoisted so getColumnMinWidth can reserve room for the
 // sort icon without the header render and the width math drifting apart.
 const BUILTIN_SORTABLE_COLUMN_KEYS = new Set([
-  'connectCluster', 'connectorClass', 'connectorTasks',
+  'connectCluster', 'connectorClass', 'connectorTasks', 'artifacts',
   'kafkaVersion', 'kafkaWarnings', 'kafkaPools', 'kafkaListeners', 'poolKafka', 'poolRoles', 'poolReplicas',
   'snapshotSource', 'restoreSize', 'snapshotClass', 'snapshotContent', 'snapshotTaken', 'snapshotRef', 'snapshotDriver', 'deletionPolicy', 'defaultClass',
   'poolAddresses', 'poolAssigned', 'poolAutoAssign', 'poolAvoidBuggyIPs', 'advertisedPools', 'advertisedNodes', 'l2Interfaces', 'bgpPeers', 'bgpCommunities',
@@ -1926,6 +1927,17 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'handler', label: 'Handler', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
+  mutatingadmissionpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'mutationCount', label: 'Mutations', width: 'w-28' },
+    { key: 'reinvocationPolicy', label: 'Reinvocation', width: 'w-36' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  mutatingadmissionpolicybindings: [
+    { key: 'name', label: 'Name' },
+    { key: 'policyName', label: 'Policy', width: 'w-48', sizing: 'grow', growWeight: 1 },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
   mutatingwebhookconfigurations: [
     { key: 'name', label: 'Name' },
     { key: 'webhooks', label: 'Webhooks', width: 'w-28' },
@@ -1963,6 +1975,23 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   // ============================================================================
   // FLUXCD GITOPS RESOURCES
   // ============================================================================
+  externalartifacts: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'producer', label: 'Produced by', width: 'w-48', tooltip: 'What produces this artifact: its ArtifactGenerator, or the kind and name its spec.sourceRef names' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'revision', label: 'Revision', width: 'w-48', tooltip: 'Artifact revision (tag and digest)' },
+    { key: 'size', label: 'Size', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  artifactgenerators: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'sources', label: 'Sources', width: 'w-64', tooltip: 'alias→source the generator copies from' },
+    { key: 'artifacts', label: 'Artifacts', width: 'w-24', tooltip: 'ExternalArtifacts it generates' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
   fluxinstances: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
@@ -3320,6 +3349,8 @@ const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   knativeroutes: ['serving.knative.dev'],
   knativeservices: ['serving.knative.dev'],
   gitrepositories: ['source.toolkit.fluxcd.io'],
+  externalartifacts: ['source.toolkit.fluxcd.io'],
+  artifactgenerators: ['source.extensions.fluxcd.io'],
   fluxinstances: ['fluxcd.controlplane.io'],
   fluxreports: ['fluxcd.controlplane.io'],
   resourcesets: ['fluxcd.controlplane.io'],
@@ -3348,6 +3379,8 @@ const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   volumesnapshotlocations: ['velero.io'],
   clusterpolicyreports: ['wgpolicyk8s.io'],
   policyreports: ['wgpolicyk8s.io'],
+  mutatingadmissionpolicies: ['admissionregistration.k8s.io'],
+  mutatingadmissionpolicybindings: ['admissionregistration.k8s.io'],
   deviceconfigs: ['amd.com'],
   nimcaches: ['apps.nvidia.com'],
   nimpipelines: ['apps.nvidia.com'],
@@ -3812,6 +3845,7 @@ interface ResourcesViewProps {
   /** URL prefix for this view (default: '/resources'). Must match the route path. */
   basePath?: string
   // Dock actions
+  replicaSetLogs?: boolean
   onOpenLogs?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string; initContainers?: string[] }) => void
   onOpenWorkloadLogs?: (params: { namespace: string; workloadKind: string; workloadName: string }) => void
   // Callback when selected kind changes — used by parent to fetch data for the selected kind
@@ -3915,6 +3949,8 @@ interface ResourcesViewProps {
    * promise resolves (a rejection keeps it).
    */
   onApplyNamespacesToAllSections?: (namespaces: string[]) => Promise<unknown> | void
+  /** Host-rendered note in the empty state about what the namespace filter hides. Replaces the "Searching in" line. */
+  emptyScopeHint?: React.ReactNode
   // Bulk operations
   onBulkDelete?: (items: BulkResourceItem[], options?: { force?: boolean; onSuccess?: () => void }) => void
   isBulkDeleting?: boolean
@@ -4113,6 +4149,7 @@ export function ResourcesView({
   basePath = '/resources',
   onOpenLogs,
   onOpenWorkloadLogs,
+  replicaSetLogs,
   onSelectedKindChange,
   hideSidebar = false,
   sidebarCategoryWorkspaces,
@@ -4129,6 +4166,7 @@ export function ResourcesView({
   rememberedKindSearch,
   onKindFiltersChange,
   onApplyNamespacesToAllSections,
+  emptyScopeHint,
   onBulkDelete,
   isBulkDeleting = false,
   onBulkRestart,
@@ -4863,6 +4901,7 @@ export function ResourcesView({
   // Open logs for pod / workload resources — provided via props
   const openLogs = onOpenLogs
   const openWorkloadLogs = onOpenWorkloadLogs
+  const selectedKindHasWorkloadLogs = supportsWorkloadLogAction(selectedKind.name.toLowerCase(), selectedKind.group, replicaSetLogs)
 
   // Helper: get resource at highlighted index
   const getHighlightedResource = useCallback(() => {
@@ -5007,13 +5046,12 @@ export function ResourcesView({
           if (containers.length > 0) {
             openLogs?.({ namespace: ns, podName: name, containers, containerName: getDefaultLogContainerName(res), initContainers: getInitContainerNames(res) })
           }
-        } else if (['deployments', 'statefulsets', 'daemonsets', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(kindLower) || isCoreBatchJob(kindLower, selectedKind.group)) {
-          openWorkloadLogs?.({ namespace: ns, workloadKind: selectedKind.kind, workloadName: name })
+        } else if (selectedKindHasWorkloadLogs) {
+          openWorkloadLogs?.({ namespace: ns, workloadKind: selectedKind.name, workloadName: name })
         }
       },
       enabled: highlightedIndex >= 0 && !compareMode && (
-        ['pods', 'deployments', 'statefulsets', 'daemonsets', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(selectedKind.name.toLowerCase()) ||
-        isCoreBatchJob(selectedKind.name, selectedKind.group)
+        selectedKind.name.toLowerCase() === 'pods' || selectedKindHasWorkloadLogs
       ),
     },
     {
@@ -5938,6 +5976,8 @@ export function ResourcesView({
         if (kindLower === 'nodes') return getNodeGpuCount(resource)
         return 0
       }
+      case 'artifacts':
+        return kindLower === 'artifactgenerators' ? (getArtifactGeneratorCount(resource) ?? -1) : ''
       default:
         return ''
     }
@@ -6765,6 +6805,7 @@ export function ResourcesView({
     (showInactiveReplicaSets ? 1 : 0) +
     (!!onClearNamespaces && namespaces.length > 0 ? 1 : 0)
   const hasAnyFilter = activeFilterCount > 0
+  const hasNonNamespaceFilter = activeFilterCount - (!!onClearNamespaces && namespaces.length > 0 ? 1 : 0) > 0
   const filtersRestored = !!kindFiltersSearch && kindFiltersSearch === restoredKindSearch
 
 
@@ -7476,7 +7517,7 @@ export function ResourcesView({
                     : 'Searched names, namespaces and report findings (CVE, package, check ID, image).'}
                 </p>
               )}
-              {namespaces.length > 0 && <p className="text-sm mt-1 text-theme-text-disabled">Searching in {namespaces.length === 1 ? `namespace: ${namespaces[0]}` : `${namespaces.length} namespaces`}</p>}
+              {emptyScopeHint ?? (namespaces.length > 0 && <p className="text-sm mt-1 text-theme-text-disabled">Searching in {namespaces.length === 1 ? `namespace: ${namespaces[0]}` : `${namespaces.length} namespaces`}</p>)}
               <ActiveFilterBar
                 columnFilters={columnFilters}
                 columnFilterExcludes={columnFilterExcludes}
@@ -7488,7 +7529,7 @@ export function ResourcesView({
                 restored={filtersRestored}
                 className="mt-3"
               />
-              {hasAnyFilter && (
+              {hasAnyFilter && (!emptyScopeHint || hasNonNamespaceFilter) && (
                 <button
                   type="button"
                   onClick={clearAllFilters}
@@ -8453,6 +8494,10 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       return <PriorityClassCell resource={resource} column={column} />
     case 'runtimeclasses':
       return <RuntimeClassCell resource={resource} column={column} />
+    case 'mutatingadmissionpolicies':
+    case 'mutatingadmissionpolicybindings':
+      if (!isApiGroup(resource.apiVersion, 'admissionregistration.k8s.io')) return <GenericCell resource={resource} column={column} />
+      return <span className="text-sm text-theme-text-secondary">{getCellFilterValue(resource, column, kind) || '—'}</span>
     case 'mutatingwebhookconfigurations':
     case 'validatingwebhookconfigurations':
       return <WebhookConfigCell resource={resource} column={column} />
@@ -8462,6 +8507,12 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
     case 'events':
       return <EventCell resource={resource} column={column} />
     // FluxCD GitOps resources
+    case 'externalartifacts':
+      if (!isApiGroup(resource.apiVersion, 'source.toolkit.fluxcd.io')) return <GenericCell resource={resource} column={column} />
+      return <ExternalArtifactCell resource={resource} column={column} />
+    case 'artifactgenerators':
+      if (!isApiGroup(resource.apiVersion, 'source.extensions.fluxcd.io')) return <GenericCell resource={resource} column={column} />
+      return <ArtifactGeneratorCell resource={resource} column={column} />
     case 'gitrepositories':
       return <GitRepositoryCell resource={resource} column={column} />
     case 'ocirepositories':

@@ -30,7 +30,7 @@ func TestImageRoutesPodAuthorization(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
 	previousClient := k8s.SetTestClient(nil)
 	t.Cleanup(func() { k8s.SetTestClient(previousClient) })
-	s := &Server{authConfig: auth.Config{Mode: "proxy"}, permCache: auth.NewPermissionCache()}
+	s := &Server{authConfig: auth.Config{Mode: "proxy"}, permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	s.authConfig.Defaults()
 	router := chi.NewRouter()
 	s.setupAppRoutes(router)
@@ -102,7 +102,7 @@ func TestImageRoutesPullSecretPermissions(t *testing.T) {
 			reviews := fakeSARServer(t, func(a authv1.ResourceAttributes) bool {
 				return tc.secretGet && a.Resource == "secrets" && a.Name == "allowed-secret"
 			})
-			s := &Server{authConfig: auth.Config{Mode: "proxy"}, permCache: auth.NewPermissionCache()}
+			s := &Server{authConfig: auth.Config{Mode: "proxy"}, permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 			s.authConfig.Defaults()
 			perms := &auth.UserPermissions{AllowedNamespaces: []string{"team"}}
 			perms.SetCanI("get", "", "pods", "team", true)
@@ -183,7 +183,7 @@ func TestImageRoutesAnonymousSkipsSecretReviews(t *testing.T) {
 		t.Fatal(err)
 	}
 	reviews := fakeSARServer(t, func(authv1.ResourceAttributes) bool { return false })
-	s := &Server{authConfig: auth.Config{Mode: "proxy"}, permCache: auth.NewPermissionCache()}
+	s := &Server{authConfig: auth.Config{Mode: "proxy"}, permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	s.authConfig.Defaults()
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"team"}}
 	perms.SetCanI("get", "", "pods", "team", true)
@@ -236,7 +236,7 @@ func TestImageRoutesNonAuthoritativeSecretChecksNotCached(t *testing.T) {
 			}
 			previousClient := k8s.SetTestClient(client)
 			t.Cleanup(func() { k8s.SetTestClient(previousClient) })
-			s := &Server{authConfig: auth.Config{Mode: "proxy"}, permCache: auth.NewPermissionCache()}
+			s := &Server{authConfig: auth.Config{Mode: "proxy"}, permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 			s.authConfig.Defaults()
 			perms := &auth.UserPermissions{AllowedNamespaces: []string{"team"}}
 			perms.SetCanI("get", "", "pods", "team", true)
