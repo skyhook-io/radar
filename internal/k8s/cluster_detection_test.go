@@ -288,7 +288,7 @@ func TestInvalidatePlatformCacheRetiresInflightNKPRead(t *testing.T) {
 	unblock := func() { once.Do(func() { close(release) }) }
 	defer unblock()
 	finished := make(chan bool, 1)
-	go func() { finished <- isNKP(context.Background()) }()
+	go func() { finished <- IsNKP(context.Background()) }()
 	<-entered
 	invalidated := make(chan struct{})
 	go func() { InvalidatePlatformCache(); close(invalidated) }()
@@ -298,7 +298,7 @@ func TestInvalidatePlatformCacheRetiresInflightNKPRead(t *testing.T) {
 		t.Fatal("platform invalidation waited for a Kubernetes read")
 	}
 	unblock()
-	if <-finished || isNKP(context.Background()) || reads.Load() != 2 {
+	if <-finished || IsNKP(context.Background()) || reads.Load() != 2 {
 		t.Fatal("stale namespace lookup survived invalidation")
 	}
 }

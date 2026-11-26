@@ -2616,6 +2616,9 @@ export interface CloudConnectSelf {
     namespace?: string
     name: string
   }
+  // 'nkp' when Nutanix NKP manages this install: wizardUrl then opens Radar
+  // Cloud's NKP steps. Older Radar omits it.
+  platform?: 'nkp'
   wizardUrl?: string
 }
 
