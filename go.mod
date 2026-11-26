@@ -1,6 +1,10 @@
 module github.com/skyhook-io/radar
 
-go 1.26.6
+go 1.27.4
+
+// Keep verifying cluster certificates with the platform verifier on macOS and
+// Windows even when SSL_CERT_FILE or SSL_CERT_DIR is set, as Go 1.26 did.
+godebug x509sslcertoverrideplatform=0
 
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
