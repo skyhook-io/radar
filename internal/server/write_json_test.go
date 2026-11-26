@@ -3,9 +3,11 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +20,18 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 )
+
+type pointerJSONMarshaler int
+
+func (*pointerJSONMarshaler) MarshalJSON() ([]byte, error) {
+	return []byte(`"json method"`), nil
+}
+
+type pointerTextMarshaler int
+
+func (*pointerTextMarshaler) MarshalText() ([]byte, error) {
+	return []byte("text method"), nil
+}
 
 func TestWriteJSONMatchesStock(t *testing.T) {
 	pod := &corev1.Pod{
@@ -39,6 +53,10 @@ func TestWriteJSONMatchesStock(t *testing.T) {
 	schema.Description = "<OpenAPI>"
 	schema.Default = "string"
 	schema.Extensions = spec.Extensions{"x-z": true, "x-a": "a"}
+	marshalers := struct {
+		JSON pointerJSONMarshaler
+		Text pointerTextMarshaler
+	}{JSON: 1, Text: 2}
 
 	tests := []struct {
 		name  string
@@ -49,14 +67,15 @@ func TestWriteJSONMatchesStock(t *testing.T) {
 			"apiVersion": "example.io/v1", "kind": "Widget",
 			"spec": map[string]any{"z": []any{int64(1), false, nil}, "a": "<>&"},
 		}}},
-		{"nil", nil},
-		{"nil slice", []string(nil)},
 		{"empty slice", []string{}},
 		{"nil map", map[string]string(nil)},
 		{"empty map", map[string]string{}},
 		{"html and UTF-8", map[string]string{"z": "<>&\u2028\u2029", "a\xff": "\xff\uFFFD"}},
 		{"invalid UTF-8 probe port", intstr.FromString("<>&\xff")},
 		{"kube-openapi marshaler", *schema},
+		{"addressable marshaler fields", &marshalers},
+		{"non-addressable marshaler fields", marshalers},
+		{"netip address", netip.MustParseAddr("2001:db8::1")},
 	}
 
 	for _, tt := range tests {
@@ -71,10 +90,29 @@ func TestWriteJSONMatchesStock(t *testing.T) {
 	}
 }
 
+func TestWriteJSONNilSlice(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		value any
+	}{
+		{"nil", nil},
+		{"typed nil slice", []string(nil)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			(&Server{}).writeJSON(rec, tt.value)
+			const want = "[]\n"
+			if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/json" || rec.Body.String() != want {
+				t.Fatalf("response = %d %v %q, want 200 application/json %q", rec.Code, rec.Header(), rec.Body, want)
+			}
+		})
+	}
+}
+
 func stockJSONResponse(t *testing.T, value any) []byte {
 	t.Helper()
 	var want bytes.Buffer
-	if err := json.NewEncoder(&want).Encode(normalizeNilSlice(value)); err != nil {
+	if err := json.NewEncoder(&want).Encode(value); err != nil {
 		t.Fatal(err)
 	}
 	return want.Bytes()
@@ -87,10 +125,55 @@ func TestWriteJSONEncodeError(t *testing.T) {
 		t.Fatalf("stock encode error = %v, wrote %d bytes", err, stock.Len())
 	}
 	rec := httptest.NewRecorder()
-	rec.WriteHeader(http.StatusAccepted)
 	(&Server{}).writeJSON(rec, value)
-	if rec.Code != http.StatusAccepted || rec.Header().Get("Content-Type") != "application/json" || rec.Body.Len() != 0 {
-		t.Fatalf("encode error response = %d %v, %d body bytes", rec.Code, rec.Header(), rec.Body.Len())
+	result := rec.Result()
+	defer result.Body.Close()
+	body, err := io.ReadAll(result.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.StatusCode != http.StatusOK || result.Header.Get("Content-Type") != "application/json" || len(body) != 0 {
+		t.Fatalf("encode error response = %d %v, %d body bytes", result.StatusCode, result.Header, len(body))
+	}
+}
+
+type writeJSONFailingWriter struct {
+	*httptest.ResponseRecorder
+	writes            int
+	writeHeaders      int
+	pooledDuringWrite int
+}
+
+func (w *writeJSONFailingWriter) WriteHeader(int) {
+	w.writeHeaders++
+}
+
+func (w *writeJSONFailingWriter) Write([]byte) (int, error) {
+	w.writes++
+	w.pooledDuringWrite = len(jsonResponseBuffers)
+	return 0, io.ErrShortWrite
+}
+
+func TestWriteJSONWriteError(t *testing.T) {
+	drainJSONResponseBuffers()
+	buf := new(bytes.Buffer)
+	jsonResponseBuffers <- buf
+
+	w := &writeJSONFailingWriter{ResponseRecorder: httptest.NewRecorder()}
+	(&Server{}).writeJSON(w, []string{"value"})
+	if w.writes != 1 || w.writeHeaders != 0 {
+		t.Errorf("got %d Write calls and %d WriteHeader calls, want 1 Write and 0 WriteHeader", w.writes, w.writeHeaders)
+	}
+	if w.pooledDuringWrite != 0 {
+		t.Errorf("pool had %d buffers during Write, want 0", w.pooledDuringWrite)
+	}
+	select {
+	case got := <-jsonResponseBuffers:
+		if got != buf {
+			t.Error("writeJSON returned a different buffer to the pool")
+		}
+	default:
+		t.Error("writeJSON did not return its buffer to the pool")
 	}
 }
 
@@ -132,14 +215,24 @@ func (w *writeJSONSink) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+func drainJSONResponseBuffers() []*bytes.Buffer {
+	var buffers []*bytes.Buffer
+	for {
+		select {
+		case buf := <-jsonResponseBuffers:
+			buffers = append(buffers, buf)
+		default:
+			return buffers
+		}
+	}
+}
+
 func TestWriteJSONRetainedMemory(t *testing.T) {
 	const slots, retainedCap = 4, 16 << 20
 	if cap(jsonResponseBuffers) != slots {
 		t.Fatalf("pool holds up to %d buffers, want %d", cap(jsonResponseBuffers), slots)
 	}
-	for range len(jsonResponseBuffers) {
-		<-jsonResponseBuffers
-	}
+	drainJSONResponseBuffers()
 	var server Server
 	sink := &writeJSONSink{header: make(http.Header)}
 	server.writeJSON(sink, strings.Repeat("x", retainedCap))
@@ -158,12 +251,13 @@ func TestWriteJSONRetainedMemory(t *testing.T) {
 	}
 	close(start)
 	wg.Wait()
-	retained := len(jsonResponseBuffers)
+	buffers := drainJSONResponseBuffers()
+	retained := len(buffers)
 	if retained == 0 || retained > slots {
 		t.Fatalf("pool retained %d buffers after concurrent responses", retained)
 	}
-	for range retained {
-		if capacity := (<-jsonResponseBuffers).Cap(); capacity > retainedCap {
+	for _, buf := range buffers {
+		if capacity := buf.Cap(); capacity > retainedCap {
 			t.Errorf("pool retained a %d-byte buffer, want at most %d", capacity, retainedCap)
 		}
 	}

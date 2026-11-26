@@ -499,7 +499,7 @@ jobs:
             desc "Kubernetes visibility — topology, traffic, and Helm management"
             homepage "https://github.com/skyhook-io/radar"
 
-            depends_on macos: ">= :ventura"
+            depends_on macos: :ventura
 
             app "Radar.app"
 
