@@ -818,3 +818,11 @@ permissions and is not a record of a person's approval. A client that manages
 approvals must retain the decision, its reviewer, the target cluster, and the
 exact proposal it dispatches. A cluster without this feature needs an updated
 Radar to execute a reviewed proposal.
+
+A hosted client sets `requireUserIdentity: true` on preview and execute to
+require an authenticated Kubernetes user. Radar refuses local credentials,
+background service identities, and unverified identity headers before it reads
+or changes the target. When available, `generation` accompanies the resource
+version in each response. Preview reports the observed generation; execute
+reports the stored generation. For native workload specs a successful change
+must advance an existing positive generation.

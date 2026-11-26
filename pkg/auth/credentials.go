@@ -21,6 +21,12 @@ const (
 	CredentialsUserToken CredentialMode = "user-token"
 )
 
+// IsBackgroundUsername identifies reserved Radar principals independently of
+// their groups. IsSystemIdentity checks the narrower allowlist for using them.
+func IsBackgroundUsername(username string) bool {
+	return strings.HasPrefix(username, systemUserPrefix) || strings.HasPrefix(username, aiUserPrefix)
+}
+
 // UserTokenHeader carries the user's Kubernetes bearer token from the
 // trusted upstream to Radar in user-token mode.
 const UserTokenHeader = "X-Forwarded-Kubernetes-Token"

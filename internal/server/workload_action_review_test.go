@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -221,7 +222,9 @@ func TestWorkloadActionStoreResult(t *testing.T) {
 
 func TestWorkloadActionCallerIdentity(t *testing.T) {
 	obj := reviewedDeployment()
-	router, dyn := reviewedRestartRouter(t, obj)
+	_, dyn := reviewedRestartRouter(t, obj)
+	router := chi.NewRouter()
+	(&Server{listenAddress: "0.0.0.0", authConfig: auth.Config{Mode: "proxy", Secret: "test-secret"}}).setupAppRoutes(router)
 	var calls []string
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/apis/apps/v1/namespaces/prod/deployments/web" {
@@ -252,14 +255,22 @@ func TestWorkloadActionCallerIdentity(t *testing.T) {
 	}
 	as := func(user string) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			router.ServeHTTP(w, r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: user, Groups: []string{"operators"}})))
+			r.Header.Set("X-Forwarded-User", user)
+			r.Header.Set("X-Forwarded-Groups", "operators")
+			router.ServeHTTP(w, r)
 		})
 	}
-	status, view := requestWorkloadAction(t, as("proposer"), "Deployment", "preview", `{"action":"pause"}`)
+	for _, background := range []string{"radar:ai:org", "radar:system:alerts:org"} {
+		code, out := requestWorkloadAction(t, as(background), "Deployment", "preview", `{"action":"pause","requireUserIdentity":true}`)
+		if code != 403 || out["error_code"] != "workload_action_user_required" || len(calls) != 0 {
+			t.Fatal(code, out, calls)
+		}
+	}
+	status, view := requestWorkloadAction(t, as("proposer"), "Deployment", "preview", `{"action":"pause","requireUserIdentity":true}`)
 	if status != 200 {
 		t.Fatalf("preview: %d %v", status, view)
 	}
-	body := map[string]any{"action": "pause", "uid": view["uid"], "reviewToken": view["reviewToken"]}
+	body := map[string]any{"action": "pause", "uid": view["uid"], "reviewToken": view["reviewToken"], "requireUserIdentity": true}
 	if code, out := requestWorkloadAction(t, as("proposer"), "Deployment", "execute", body); code != 403 {
 		t.Fatalf("%d %v", code, out)
 	}
@@ -366,5 +377,51 @@ func TestWorkloadActionRestartClockSkew(t *testing.T) {
 	in.RestartAt = now.Add(time.Hour).Format(time.RFC3339Nano)
 	if _, err := resolveWorkloadAction("Deployment", in, true, now); err == nil {
 		t.Fatal("accepted a scheduled restart")
+	}
+}
+
+func TestWorkloadActionRequiresActualUser(t *testing.T) {
+	router, dyn := reviewedRestartRouter(t, reviewedDeployment())
+	headerOnly := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Header.Set("X-Forwarded-User", "alice")
+		router.ServeHTTP(w, r)
+	})
+	body := map[string]any{"action": "pause", "requireUserIdentity": true}
+	for _, route := range []string{"preview", "execute"} {
+		if route == "execute" {
+			body["uid"] = "uid-1"
+			body["reviewToken"] = strings.Repeat("ab", 32)
+		}
+		code, out := requestWorkloadAction(t, headerOnly, "Deployment", route, body)
+		if code != http.StatusForbidden || out["error_code"] != "workload_action_user_required" || len(dyn.Actions()) != 0 {
+			t.Fatal(code, out, dyn.Actions())
+		}
+	}
+}
+
+func TestWorkloadActionStoredGeneration(t *testing.T) {
+	for _, storedGeneration := range []int64{2, 3} {
+		obj := reviewedDeployment()
+		obj.SetGeneration(2)
+		router, dyn := reviewedRestartRouter(t, obj)
+		code, review := requestWorkloadAction(t, router, "Deployment", "preview", map[string]any{"action": "pause"})
+		if code != 200 || review["generation"] != float64(2) {
+			t.Fatal(code, review)
+		}
+		dyn.PrependReactor("patch", "deployments", func(clienttesting.Action) (bool, runtime.Object, error) {
+			stored := obj.DeepCopy()
+			stored.SetGeneration(storedGeneration)
+			stored.SetResourceVersion("8")
+			_ = unstructured.SetNestedField(stored.Object, true, "spec", "paused")
+			return true, stored, nil
+		})
+		code, out := requestWorkloadAction(t, router, "Deployment", "execute", map[string]any{"action": "pause", "uid": review["uid"], "reviewToken": review["reviewToken"], "expectedResourceVersion": review["resourceVersion"]})
+		if storedGeneration == 2 {
+			if code != 502 || out["error_code"] != "workload_action_unconfirmed" {
+				t.Fatal(code, out)
+			}
+		} else if code != 200 || out["generation"] != float64(3) || out["resourceVersion"] != "8" {
+			t.Fatal(code, out)
+		}
 	}
 }

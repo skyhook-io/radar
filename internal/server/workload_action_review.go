@@ -17,6 +17,7 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/rollouts"
@@ -49,6 +50,7 @@ type workloadActionInput struct {
 	ReviewToken             string                  `json:"reviewToken,omitempty"`
 	ExpectedResourceVersion optionalWorkloadVersion `json:"expectedResourceVersion,omitempty"`
 	RestartAt               string                  `json:"restartAt,omitempty"`
+	RequireUserIdentity     bool                    `json:"requireUserIdentity,omitempty"`
 }
 
 type workloadActionView struct {
@@ -58,6 +60,7 @@ type workloadActionView struct {
 	Name            string `json:"name"`
 	UID             string `json:"uid"`
 	ResourceVersion string `json:"resourceVersion"`
+	Generation      int64  `json:"generation,omitempty"`
 	ReviewToken     string `json:"reviewToken"`
 	Field           string `json:"field"`
 	Before          any    `json:"before"`
@@ -217,6 +220,7 @@ func (f workloadActionField) review(obj *unstructured.Unstructured, action, conn
 	return workloadActionView{
 		Action: action, Kind: f.kind, Namespace: obj.GetNamespace(), Name: obj.GetName(),
 		UID: string(obj.GetUID()), ResourceVersion: obj.GetResourceVersion(),
+		Generation:  max(obj.GetGeneration(), 0),
 		ReviewToken: hex.EncodeToString(sum[:]), Field: field, Before: before, After: f.after, Effect: f.effect,
 	}, nil
 }
@@ -262,6 +266,13 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, execute 
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if in.RequireUserIdentity {
+		user := auth.UserFromContext(r.Context())
+		if !s.authConfig.Enabled() || user == nil || strings.TrimSpace(user.Username) == "" || user.System || pkgauth.IsReservedPrincipal(user.Username) || pkgauth.IsBackgroundUsername(user.Username) || (pkgauth.UserTokenMode() && user.Token == "") {
+			s.writeErrorCode(w, http.StatusForbidden, "workload_action_user_required", "this reviewed change requires an authenticated Kubernetes user")
+			return
+		}
 	}
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
@@ -352,7 +363,14 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, execute 
 		s.writeErrorCode(w, http.StatusConflict, "workload_action_not_stored", message)
 		return
 	}
+	storedGeneration := max(stored.GetGeneration(), 0)
+	if (field.gvr.Group == "apps" || field.gvr.Group == "batch") && view.Generation > 0 && storedGeneration <= view.Generation {
+		audit.Outcome = "unconfirmed"
+		s.writeErrorCode(w, http.StatusBadGateway, "workload_action_unconfirmed", "Kubernetes returned the requested value without an advancing workload generation. Inspect the live workload before taking further action")
+		return
+	}
 	audit.Outcome = "stored"
+	view.Generation = storedGeneration
 	view.ResourceVersion = stored.GetResourceVersion()
 	s.writeJSON(w, view)
 }
