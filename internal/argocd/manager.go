@@ -1956,11 +1956,15 @@ func (m *Manager) newClient(url, token string, insecureTLS bool) *argoapi.Client
 	if m.lifetime == nil {
 		return newClient(url, token, insecureTLS)
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	if transport.TLSClientConfig == nil {
-		transport.TLSClientConfig = &tls.Config{}
+	transport := http.DefaultTransport
+	if insecureTLS || token == "" {
+		pool := http.DefaultTransport.(*http.Transport).Clone()
+		if pool.TLSClientConfig == nil {
+			pool.TLSClientConfig = &tls.Config{}
+		}
+		pool.TLSClientConfig.InsecureSkipVerify = true
+		transport = pool
 	}
-	transport.TLSClientConfig.InsecureSkipVerify = insecureTLS || token == ""
 	return argoapi.New(argoapi.Options{
 		BaseURL:    url,
 		Token:      token,

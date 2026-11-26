@@ -237,6 +237,8 @@ func TestLocalProfileEnvironmentOriginGuidance(t *testing.T) {
 
 func TestOfflineKubecostSaveWithoutClusterIDDefersProbe(t *testing.T) {
 	s := setupLocalProfileTest(t)
+	previous := opencost.ConfigSnapshot()
+	t.Cleanup(func() { _ = opencost.Configure(previous) })
 	k8s.RetireServingConnection()
 	view := getLocalConnections(t, s).Profiles[config.IntegrationCost]
 	url := "https://kubecost.example.com"
@@ -259,8 +261,6 @@ func TestOfflineKubecostSaveWithoutClusterIDDefersProbe(t *testing.T) {
 	if got := saved.Profiles[config.IntegrationCost]; got.URL != url || got.State != "saved" {
 		t.Fatalf("saved cost settings = %+v", got)
 	}
-	previous := opencost.ConfigSnapshot()
-	t.Cleanup(func() { _ = opencost.Configure(previous) })
 	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 	if _, err := opencost.Selected(t.Context()); !errors.Is(err, opencost.ErrKubecostClusterID) {
 		t.Fatalf("first cost operation returned %v, want missing cluster ID", err)

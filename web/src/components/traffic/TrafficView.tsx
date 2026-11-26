@@ -12,7 +12,7 @@ import { TrafficFocusSearch } from './TrafficFocusSearch'
 import { TrafficSourcePill } from './TrafficSourcePill'
 import { TrafficGraphTooLarge } from './TrafficGraphTooLarge'
 import { TrafficGraphUnavailable } from './TrafficGraphUnavailable'
-import { useQueryClient } from '@tanstack/react-query'
+import { isCancelledError, useQueryClient } from '@tanstack/react-query'
 import { useDock, useDockReservedHeight } from '../dock'
 import { AlertBanner, EmptyState, PaneLoader, FreshnessControl } from '@skyhook-io/k8s-ui'
 import { useConnection } from '../../context/ConnectionContext'
@@ -1243,7 +1243,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
         }),
         (error: Error) => {
           setIsConnecting(false)
-          setConnectionError(error.message)
+          if (!isCancelledError(error)) setConnectionError(error.message)
         },
       )
     }
