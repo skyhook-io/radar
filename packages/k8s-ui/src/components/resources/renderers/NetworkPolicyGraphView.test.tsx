@@ -130,6 +130,40 @@ describe('NetworkPolicyGraphView', () => {
     expect(panel.style.gridTemplateRows).toBe('0fr')
   })
 
+  it('keeps the same group open when an earlier rule is removed', async () => {
+    await mount(largePolicySpec)
+    await act(async () => (nodes('ingress')[2] as HTMLElement).click())
+    const withoutFirst = { ...largePolicySpec, ingress: largePolicySpec.ingress.slice(1) }
+    await act(async () => root!.render(<NetworkPolicyGraphView summary={summarizeNetworkPolicy(withoutFirst, 'payments')} />))
+    const detail = element.querySelector('[data-graph-detail]')!
+    expect(detail.parentElement!.parentElement!.style.gridTemplateRows).toBe('1fr')
+    expect(detail.textContent).toContain('261 IP ranges')
+    expect(detail.textContent).toContain('Rule 2')
+  })
+
+  it('does not reopen the panel when a removed rule comes back', async () => {
+    await mount(largePolicySpec)
+    await act(async () => (nodes('ingress')[2] as HTMLElement).click())
+    const fewer = { ...largePolicySpec, ingress: largePolicySpec.ingress.slice(0, 2) }
+    await act(async () => root!.render(<NetworkPolicyGraphView summary={summarizeNetworkPolicy(fewer, 'payments')} />))
+    await act(async () => root!.render(<NetworkPolicyGraphView summary={summarizeNetworkPolicy(largePolicySpec, 'payments')} />))
+    const panel = element.querySelector('[data-graph-detail]')!.parentElement!.parentElement!
+    expect(panel.style.gridTemplateRows).toBe('0fr')
+  })
+
+  it('gives every node of a rule its ports', async () => {
+    await mount({
+      ingress: [{ from: [{ namespaceSelector: nameIn('a') }, { ipBlock: { cidr: '10.0.0.0/8' } }], ports: [{ port: 8080 }] }],
+    })
+    for (const node of nodes('ingress')) expect(node.querySelector('[data-node-ports]')!.textContent).toContain('TCP/8080')
+  })
+
+  it('paints the target and deny nodes with theme backgrounds', async () => {
+    await mount({ podSelector: {} })
+    expect(element.querySelector('[data-graph-target]')!.classList.contains('bg-theme-elevated')).toBe(true)
+    expect(element.innerHTML).not.toMatch(/bg-(red|indigo)-500\/8/)
+  })
+
   it('dashes edges of a staged policy', async () => {
     await mount(largePolicySpec)
     expect(element.querySelector('path[data-edge="ingress"][stroke-dasharray]')).toBeNull()

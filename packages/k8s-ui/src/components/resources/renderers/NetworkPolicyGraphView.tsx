@@ -2,6 +2,7 @@ import { useState, type CSSProperties } from 'react'
 import { clsx } from 'clsx'
 import { ArrowDown } from 'lucide-react'
 import { Collapse, useDisclosure } from '../../ui/Collapse'
+import { StatusDot } from '../../ui/status-tone'
 import { NetworkPolicyGroupList } from './NetworkPolicyGroupList'
 import { PortChips, StagedNote } from './NetworkPolicyRulesView'
 import { NETWORK_POLICY_PEER_DOTS } from './network-policy-peer-styles'
@@ -19,7 +20,7 @@ const FLOW: Record<Direction, string> = { ingress: 'inbound', egress: 'outbound'
 const EDGE_COLOR: Record<Direction, string> = { ingress: 'text-blue-500/70', egress: 'text-purple-500/70' }
 
 type GraphNode =
-  | { key: string; type: 'group'; rule: number; firstOfRule: boolean; ports: string[]; group: PolicyGroup }
+  | { key: string; fp: string; type: 'group'; rule: number; firstOfRule: boolean; ports: string[]; group: PolicyGroup }
   | { key: string; type: 'deny' }
   | { key: string; type: 'open' }
 
@@ -27,27 +28,38 @@ function directionNodes(dir: Direction, summary: PolicyDirectionSummary): GraphN
   if (!summary.restricted) return [{ key: `${dir}-open`, type: 'open' }]
   if (summary.denyAll) return [{ key: `${dir}-deny`, type: 'deny' }]
   return summary.rules.flatMap((rule) =>
-    rule.groups.map((group, i) => ({ key: `${dir}-${rule.index}-${i}`, type: 'group' as const, rule: rule.index, firstOfRule: i === 0, ports: rule.ports, group })),
+    rule.groups.map((group, i) => ({
+      key: `${dir}-${rule.index}-${i}`,
+      // Selection follows content, not position: a live update can renumber the rules.
+      fp: [dir, group.kind, group.title, rule.ports.join(','), ...group.raw].join('\n'),
+      type: 'group' as const,
+      rule: rule.index,
+      firstOfRule: i === 0,
+      ports: rule.ports,
+      group,
+    })),
   )
 }
 
 export function NetworkPolicyGraphView({ summary, staged = false }: { summary: NetworkPolicySummary; staged?: boolean }) {
   const ingress = directionNodes('ingress', summary.ingress)
   const egress = directionNodes('egress', summary.egress)
-  const [selectedKey, setSelectedKey] = useState<string | null>(null)
+  const [selectedFp, setSelectedFp] = useState<string | null>(null)
   // Kept after close so the panel still has content during its exit transition.
-  const [shownKey, setShownKey] = useState<string | null>(null)
-  const shown = [...ingress, ...egress].find((n) => n.key === shownKey)
-  // A live update can remove the selected rule; the panel then closes instead of showing an empty box.
-  const open = selectedKey !== null && shown?.key === selectedKey
+  const [shownFp, setShownFp] = useState<string | null>(null)
+  const groups = [...ingress, ...egress].flatMap((n) => (n.type === 'group' ? [n] : []))
+  const shown = groups.find((n) => n.fp === shownFp)
+  // A live update removed the selected group: close, and stay closed if it comes back.
+  if (selectedFp !== null && !groups.some((n) => n.fp === selectedFp)) setSelectedFp(null)
+  const open = selectedFp !== null && shown?.fp === selectedFp
   const { panelId } = useDisclosure(open)
 
-  const toggle = (key: string) => {
-    if (selectedKey === key) {
-      setSelectedKey(null)
+  const toggle = (fp: string) => {
+    if (selectedFp === fp) {
+      setSelectedFp(null)
     } else {
-      setSelectedKey(key)
-      setShownKey(key)
+      setSelectedFp(fp)
+      setShownFp(fp)
     }
   }
   const rows = Math.max(ingress.length, egress.length, 2)
@@ -61,10 +73,10 @@ export function NetworkPolicyGraphView({ summary, staged = false }: { summary: N
         className="flex flex-col gap-2 @2xl:grid @2xl:items-center @2xl:gap-0"
         style={{ gridTemplateColumns: GRID_COLUMNS, '--node-h': `${NODE_HEIGHT}px` } as CSSProperties}
       >
-        <NodeColumn dir="ingress" nodes={ingress} selectedKey={selectedKey} onToggle={toggle} panelId={panelId} />
+        <NodeColumn dir="ingress" nodes={ingress} selectedFp={selectedFp} onToggle={toggle} panelId={panelId} />
         <Edges dir="ingress" nodes={ingress} height={height} staged={staged} />
         <DownArrow />
-        <div data-graph-target className="rounded-lg border border-indigo-500/40 bg-indigo-500/8 px-3 py-2.5 text-center min-w-0">
+        <div data-graph-target className="rounded-lg border border-indigo-500/40 bg-theme-elevated px-3 py-2.5 text-center min-w-0">
           <div className="text-[10px] uppercase tracking-wider text-theme-text-tertiary">Selected pods</div>
           <div className="mt-0.5 text-xs font-medium text-theme-text-primary break-words">{summary.target}</div>
           {(['ingress', 'egress'] as const)
@@ -75,11 +87,11 @@ export function NetworkPolicyGraphView({ summary, staged = false }: { summary: N
         </div>
         <DownArrow />
         <Edges dir="egress" nodes={egress} height={height} staged={staged} />
-        <NodeColumn dir="egress" nodes={egress} selectedKey={selectedKey} onToggle={toggle} panelId={panelId} />
+        <NodeColumn dir="egress" nodes={egress} selectedFp={selectedFp} onToggle={toggle} panelId={panelId} />
       </div>
       <Collapse open={open} id={panelId}>
         <div data-graph-detail className="rounded-md border border-theme-border bg-theme-elevated/50 px-2.5 py-2 space-y-2">
-          {shown?.type === 'group' && (
+          {shown && (
             <>
               <div className="flex items-start justify-between gap-2">
                 <span className="text-[10px] uppercase tracking-wider text-theme-text-tertiary">{`Rule ${shown.rule}`}</span>
@@ -97,14 +109,14 @@ export function NetworkPolicyGraphView({ summary, staged = false }: { summary: N
 function NodeColumn({
   dir,
   nodes,
-  selectedKey,
+  selectedFp,
   onToggle,
   panelId,
 }: {
   dir: Direction
   nodes: GraphNode[]
-  selectedKey: string | null
-  onToggle: (key: string) => void
+  selectedFp: string | null
+  onToggle: (fp: string) => void
   panelId: string
 }) {
   return (
@@ -120,13 +132,13 @@ function NodeColumn({
         }
         if (node.type === 'deny') {
           return (
-            <div key={node.key} data-graph-node={dir} className="@2xl:h-[var(--node-h)] rounded-md border border-red-500/30 bg-red-500/8 px-2.5 py-1.5 flex items-center gap-1.5 text-xs text-theme-text-secondary">
-              <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-red-500" />
+            <div key={node.key} data-graph-node={dir} className="@2xl:h-[var(--node-h)] rounded-md border border-red-500/30 bg-theme-elevated px-2.5 py-1.5 flex items-center gap-1.5 text-xs text-theme-text-secondary">
+              <StatusDot tone="unhealthy" className="shrink-0" />
               {`All ${FLOW[dir]} denied`}
             </div>
           )
         }
-        const selected = selectedKey === node.key
+        const selected = selectedFp === node.fp
         const samples = node.group.items.slice(0, 2)
         return (
           <button
@@ -135,7 +147,7 @@ function NodeColumn({
             data-graph-node={dir}
             aria-pressed={selected}
             aria-controls={panelId}
-            onClick={() => onToggle(node.key)}
+            onClick={() => onToggle(node.fp)}
             className={clsx(
               '@2xl:h-[var(--node-h)] min-w-0 overflow-hidden rounded-md border px-2.5 py-1.5 text-left transition-colors hover:bg-theme-hover',
               selected ? 'border-theme-text-tertiary bg-theme-hover' : 'border-theme-border bg-theme-elevated/50',
@@ -154,12 +166,10 @@ function NodeColumn({
                 {node.group.items.length > 2 && <span>{` +${node.group.items.length - 2}`}</span>}
               </div>
             )}
-            {node.firstOfRule && (
-              // Wide mode draws the ports on the edge, which is aria-hidden; keep them readable here.
-              <div data-node-ports className="mt-1 @2xl:sr-only">
-                <PortChips ports={node.ports} />
-              </div>
-            )}
+            {/* Wide mode draws the ports on the edge, which is aria-hidden; keep them readable here. */}
+            <div data-node-ports className="mt-1 @2xl:sr-only">
+              <PortChips ports={node.ports} />
+            </div>
           </button>
         )
       })}
