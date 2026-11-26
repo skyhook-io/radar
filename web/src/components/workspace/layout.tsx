@@ -126,6 +126,7 @@ export function SectionTable<T>({
   inspected,
   empty,
   minWidth = 760,
+  framed = true,
   footer,
 }: {
   /** Left out where the page heading already names the table. */
@@ -139,15 +140,18 @@ export function SectionTable<T>({
   inspected?: SelectedResource | null
   empty: ReactNode
   minWidth?: number
+  framed?: boolean
   footer?: ReactNode
 }) {
   return (
     <section>
-      <div className="mb-2 flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
-        {title && <h2 className="text-sm font-semibold text-theme-text-primary">{title}</h2>}
-        {subtitle && <span className="text-xs text-theme-text-tertiary">{subtitle}</span>}
-      </div>
-      <div className="overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm">
+      {(title || subtitle) && (
+        <div className="mb-2 flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+          {title && <h2 className="text-sm font-semibold text-theme-text-primary">{title}</h2>}
+          {subtitle && <span className="text-xs text-theme-text-tertiary">{subtitle}</span>}
+        </div>
+      )}
+      <div className={clsx(framed && 'overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm')}>
         {rows.length === 0 ? (
           <div className="px-4 py-5 text-sm text-theme-text-tertiary">{empty}</div>
         ) : (

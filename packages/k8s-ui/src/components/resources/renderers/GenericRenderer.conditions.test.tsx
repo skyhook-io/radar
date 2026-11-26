@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
+import { SummaryOwnsDiagnosisContext } from '../../ui/drawer-components'
 import { GenericRenderer, genericConditionTone } from './GenericRenderer'
 
 const resource = { apiVersion: 'serving.kserve.io/v1beta1', kind: 'InferenceService', metadata: { name: 'fraud-score' } }
@@ -47,6 +48,32 @@ describe('genericConditionTone', () => {
     expect(genericConditionTone(resource, stoppedReady)).toBe('fail')
     const unrequested = { ...resource, status: { conditions: [cond('Stopped', 'True')] } }
     expect(genericConditionTone(unrequested, stoppedReady)).toBe('fail')
+  })
+
+  it('reads an Agent Sandbox’s Suspended as its lifecycle state, a refused suspension as a problem', () => {
+    const sandbox = { apiVersion: 'agents.x-k8s.io/v1beta1', kind: 'Sandbox', metadata: { name: 'agent' } }
+    expect(genericConditionTone(sandbox, { type: 'Suspended', status: 'False', reason: 'NotSuspended' })).toBe('neutral')
+    expect(genericConditionTone(sandbox, { type: 'Suspended', status: 'True', reason: 'Suspended' })).toBe('neutral')
+    expect(genericConditionTone(sandbox, { type: 'Suspended', status: 'False', reason: 'PodNotOwned' })).toBe('warning')
+    expect(genericConditionTone(sandbox, { type: 'Suspended', status: 'Unknown' })).toBe('unknown')
+    const claim = { apiVersion: 'extensions.agents.x-k8s.io/v1beta1', kind: 'SandboxClaim', metadata: { name: 'c' } }
+    const readyTone = (resource: typeof sandbox, reason: string, otherConditions: object[] = []) => {
+      const ready = { ...cond('Ready', 'False'), reason }
+      return genericConditionTone({ ...resource, status: { conditions: [ready, ...otherConditions] } }, ready)
+    }
+    expect(readyTone(sandbox, 'PodFailed')).toBe('fail')
+    expect(readyTone(sandbox, 'SandboxExpired')).toBe('neutral')
+    expect(readyTone(sandbox, 'PodSucceeded')).toBe('neutral')
+    expect(readyTone(sandbox, 'SandboxSuspended', [{ ...cond('Suspended', 'True'), reason: 'PodTerminated' }])).toBe('neutral')
+    expect(readyTone(sandbox, 'SandboxSuspended', [{ ...cond('Suspended', 'False'), reason: 'PodNotOwned' }])).toBe('warning')
+    expect(readyTone(claim, 'ClaimExpired')).toBe('neutral')
+    expect(readyTone(claim, 'SandboxSuspended')).toBe('neutral')
+    expect(readyTone(claim, 'WarmPoolNotFound')).toBe('warning')
+    expect(readyTone(claim, 'TemplateNotFound')).toBe('warning')
+    // Only Agent Sandbox's Sandbox: the same condition elsewhere keeps the generic reading.
+    expect(genericConditionTone({ ...sandbox, apiVersion: 'example.com/v1' }, cond('Suspended', 'False'))).toBe('unclear')
+    expect(genericConditionTone({ ...sandbox, kind: 'SandboxClaim', apiVersion: 'extensions.agents.x-k8s.io/v1beta1' }, cond('Suspended', 'False'))).toBe('unclear')
+    expect(genericConditionTone({ ...sandbox, apiVersion: 'example.com/v1' }, { type: 'Ready', status: 'False', reason: 'SandboxExpired' })).toBe('fail')
   })
 
   it('reads Stopped as a state only on KServe resources', () => {
@@ -125,6 +152,18 @@ describe('GenericRenderer conditions', () => {
     expect(chipClass(html, 'PredictorReady', 'False')).toContain('status-red')
   })
 
+  it("renders a running Sandbox's Suspended=False as neutral, neither red nor green", () => {
+    const sandbox = { apiVersion: 'agents.x-k8s.io/v1beta1', kind: 'Sandbox', metadata: { name: 'agent' } }
+    const html = render([cond('Ready', 'True'), { type: 'Suspended', status: 'False', reason: 'NotSuspended' }], sandbox)
+    const chip = chipClass(html, 'Suspended', 'False')
+    expect(chip).not.toContain('status-red')
+    expect(chip).not.toContain('status-green')
+    const at = html.indexOf('>Suspended<')
+    const icon = html.slice(html.lastIndexOf('<span class="w-5 h-5', at), at)
+    expect(icon).toContain('text-theme-text-tertiary')
+    expect(icon).not.toContain('text-green-400')
+  })
+
   it("doesn't color an Unknown status as a failure", () => {
     expect(chipClass(render([cond('Ready', 'Unknown')]), 'Ready', 'Unknown')).not.toContain('status-red')
   })
@@ -133,5 +172,14 @@ describe('GenericRenderer conditions', () => {
     const html = render([cond('PredictorReady', 'False'), cond('Ready', 'False')])
     expect(chipClass(html, 'Ready', 'False')).toContain('status-red')
     expect(chipClass(html, 'PredictorReady', 'False')).toContain('status-red')
+  })
+
+  it('omits the duplicate status banner when a composed Overview owns diagnosis', () => {
+    const sandbox = { apiVersion: 'agents.x-k8s.io/v1beta1', kind: 'Sandbox', metadata: { name: 'agent' }, status: { conditions: [{ type: 'Ready', status: 'False', reason: 'PodFailed', message: 'Pod failed' }] } }
+    const standalone = renderToString(<GenericRenderer data={sandbox} />)
+    const underSummary = renderToString(<SummaryOwnsDiagnosisContext.Provider value={true}><GenericRenderer data={sandbox} /></SummaryOwnsDiagnosisContext.Provider>)
+    expect(standalone).toContain('>PodFailed<')
+    expect(underSummary).not.toContain('bg-red-50 ')
+    expect(underSummary).toContain('Conditions (1)')
   })
 })

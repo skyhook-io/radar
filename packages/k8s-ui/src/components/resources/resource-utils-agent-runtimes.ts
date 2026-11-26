@@ -37,14 +37,19 @@ function findCondition(conditions: unknown, type: string): any | undefined {
 const SUSPENSION_BLOCKED = 'Suspension blocked'
 
 // The Pod the controller looks for; mirrors pkg/health sandboxPodName.
-function sandboxPodName(resource: any): string {
+export function sandboxPodName(resource: any): string {
   const annotated = resource?.metadata?.annotations?.['agents.x-k8s.io/pod-name']
   return typeof annotated === 'string' && annotated ? annotated : resource?.metadata?.name ?? ''
 }
 
+// Mirrors pkg/health PodOwnersCommand.
+export function podOwnersCommand(namespace: string, name: string): string {
+  return `kubectl get pod ${name}${namespace ? ` -n ${namespace}` : ''} -o jsonpath='{.metadata.ownerReferences}'`
+}
+
 // Mirrors pkg/health suspensionRefusedMessage.
-function suspensionRefusedMessage(name: string, controllerMessage: unknown): string {
-  const next = `The conflicting Pod is "${name}". Remove it, or recreate the Sandbox under another name, to allow suspension.`
+function suspensionRefusedMessage(namespace: string, name: string, controllerMessage: unknown): string {
+  const next = `The conflicting Pod is "${name}". Check who owns it (${podOwnersCommand(namespace, name)}) before removing it, or recreate the Sandbox under another name.`
   return typeof controllerMessage === 'string' && controllerMessage
     ? `${controllerMessage.replace(/\.$/, '')}. ${next}`
     : next
@@ -191,8 +196,8 @@ export function getWorkerPoolSandboxConfig(resource: any): string {
 // ============================================================================
 
 // Mirrors pkg/health ReadAgentSandbox, which the Issues and AI summaries use;
-// pkg/health/testdata/agent_sandbox.json pins both. The UI adds one shade the
-// Go levels lack: `alert` for a retried controller error or an unschedulable Pod.
+// pkg/health/testdata/agent_sandbox.json pins both. The UI differs from the Go
+// levels for an unschedulable Pod until the workspace supplies its severity.
 
 // Ready=False reasons that describe a state someone chose and the controller
 // completed: an expiry, a Pod that ran to completion, a claim whose lifetime
@@ -231,7 +236,7 @@ function sandboxReadyStatus(resource: any, isClaim: boolean): StatusBadge {
     // does not own.
     const suspended = findCondition(conditions, 'Suspended')
     if (isClaim || suspended?.status === 'True') return badge('Suspended', 'neutral')
-    if (suspended?.status === 'False' && suspended?.reason === 'PodNotOwned') return badge(SUSPENSION_BLOCKED, 'alert')
+    if (suspended?.status === 'False' && suspended?.reason === 'PodNotOwned') return badge(SUSPENSION_BLOCKED, 'degraded')
     return badge('Suspending', 'degraded')
   }
   if (SANDBOX_SETTLED_REASONS[reason]) return badge(SANDBOX_SETTLED_REASONS[reason], 'neutral')
@@ -248,7 +253,10 @@ function sandboxReadyStatus(resource: any, isClaim: boolean): StatusBadge {
   }
   if (SANDBOX_PROGRESS_REASONS[reason]) return badge(SANDBOX_PROGRESS_REASONS[reason], 'degraded')
   // The controller retries these; a persistent one still deserves attention.
-  if (reason === 'ReconcilerError') return badge(reason, 'alert')
+  if (reason === 'ReconcilerError') return badge(reason, 'degraded')
+  // A claim whose warm pool or template is missing binds once the reference is
+  // fixed, so it reads as a warning, as its Issue and the workspace's row do.
+  if (isClaim && (reason === 'WarmPoolNotFound' || reason === 'TemplateNotFound')) return badge(reason, 'degraded')
   return badge(reason || 'Not Ready', 'unhealthy')
 }
 
@@ -281,9 +289,48 @@ export function getSandboxClaimSandbox(resource: any): string {
   return resource?.status?.sandbox?.name || '-'
 }
 
+// Mirrors pkg/agentsandbox registryDNSFailure and imagePullNextStep;
+// pkg/agentsandbox/testdata/image_pull_next_steps.json pins both. The server
+// reads the controller's message, which names only the waiting reason; a
+// drawer that read the Pod has the pull error itself.
+const REGISTRY_DNS_FAILURE = /no such host|server misbehaving|\blookup \S+ on \S+/i
+export const REGISTRY_DNS_NEXT_STEP = 'Check the registry hostname in the Pod template’s image, and that the nodes’ DNS resolves it'
+const IMAGE_PULL_REASONS = new Set(['ImagePullBackOff', 'ErrImagePull'])
+
+/** The next step an image pull failure's message gives evidence for, or undefined when it names no cause Radar recognizes. */
+export function imagePullNextStep(reason: unknown, message: unknown): string | undefined {
+  return typeof reason === 'string' && IMAGE_PULL_REASONS.has(reason) && typeof message === 'string' && REGISTRY_DNS_FAILURE.test(message)
+    ? REGISTRY_DNS_NEXT_STEP
+    : undefined
+}
+
+/**
+ * The next step a Sandbox's Pod gives evidence for, where the reading is an
+ * image pull failure: one every container that can't pull its image agrees on.
+ * Undefined otherwise (another reading, no such container, errors that differ
+ * or name no cause), and the server's step stands.
+ */
+export function sandboxPodImagePullNextStep(reason: unknown, pod: any): string | undefined {
+  if (typeof reason !== 'string' || !IMAGE_PULL_REASONS.has(reason)) return undefined
+  const statuses = [pod?.status?.initContainerStatuses, pod?.status?.containerStatuses].flatMap((s) => (Array.isArray(s) ? s : []))
+  const pulls = statuses.map((s: any) => s?.state?.waiting).filter((w: any) => IMAGE_PULL_REASONS.has(w?.reason))
+  if (pulls.length === 0) return undefined
+  const steps = pulls.map((w: any) => imagePullNextStep(w.reason, w.message))
+  return steps.every((s) => s !== undefined && s === steps[0]) ? steps[0] : undefined
+}
+
 // ============================================================================
 // AGENT SANDBOX — SandboxWarmPool
 // ============================================================================
+
+function sandboxWarmPoolReady(resource: any): number | undefined {
+  return count(resource?.status?.readyReplicas)
+    ?? ((count(resource?.status?.observedGeneration) ?? 0) > 0 ? 0 : undefined)
+}
+
+export function getSandboxWarmPoolReadyOfDesired(resource: any): string {
+  return `${sandboxWarmPoolReady(resource) ?? '?'}/${count(resource?.spec?.replicas) ?? '?'}`
+}
 
 export function getSandboxWarmPoolStatus(resource: any): StatusBadge {
   if (resource?.metadata?.deletionTimestamp) return badge('Terminating', 'degraded')
@@ -294,9 +341,10 @@ export function getSandboxWarmPoolStatus(resource: any): StatusBadge {
   if (generation !== undefined && observed !== undefined && observed < generation) {
     return badge('Progressing', 'degraded')
   }
+  const ready = sandboxWarmPoolReady(resource)
+  if (ready === undefined) return badge('Readiness not reported', 'unknown')
   const desired = count(resource?.spec?.replicas)
   if (desired === 0) return (count(status.replicas) ?? 0) > 0 ? badge('Scaling down', 'degraded') : badge('Scaled to zero', 'neutral')
-  const ready = count(status.readyReplicas) ?? 0
   if (desired === undefined) return ready > 0 ? badge('Ready', 'healthy') : badge('Pending', 'degraded')
   return ready >= desired ? badge('Ready', 'healthy') : badge('Warming', 'degraded')
 }
@@ -332,7 +380,7 @@ export function getAgentRuntimeStatus(resource: any): (StatusBadge & { message?:
     // Ready keeps its ordinary suspension message when the suspension is refused.
     // The badge decides: an edit or a deletion outranks a refused suspension.
     message = status.text === SUSPENSION_BLOCKED
-      ? suspensionRefusedMessage(sandboxPodName(resource), findCondition(resource?.status?.conditions, 'Suspended')?.message)
+      ? suspensionRefusedMessage(resource?.metadata?.namespace ?? '', sandboxPodName(resource), findCondition(resource?.status?.conditions, 'Suspended')?.message)
       : findCondition(resource?.status?.conditions, 'Ready')?.message
   } else if (kind === 'SandboxClaim' && isAgentSandboxExtensionResource(resource)) {
     status = getSandboxClaimStatus(resource)
@@ -372,7 +420,7 @@ export function getAgentRuntimeColumnValue(resource: any, column: string): strin
     }
   } else if (kind === 'SandboxWarmPool' && isAgentSandboxExtensionResource(resource)) {
     switch (column) {
-      case 'warmReady': return getReadyOfDesired(resource)
+      case 'warmReady': return getSandboxWarmPoolReadyOfDesired(resource)
       case 'template': return getSandboxWarmPoolTemplate(resource)
     }
   }

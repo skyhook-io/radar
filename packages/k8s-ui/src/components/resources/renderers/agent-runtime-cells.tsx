@@ -6,6 +6,7 @@ import { Tooltip } from '../../ui/Tooltip'
 import {
   formatSandboxExpiry,
   getReadyOfDesired,
+  getSandboxWarmPoolReadyOfDesired,
   getSandboxClaimSandbox,
   getSandboxClaimStatus,
   getSandboxClaimWarmPool,
@@ -79,7 +80,7 @@ export function SandboxClaimCell({ resource, column }: { resource: any; column: 
 export function SandboxWarmPoolCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'status': return <StatusCell status={getSandboxWarmPoolStatus(resource)} />
-    case 'warmReady': return <TextCell value={getReadyOfDesired(resource)} />
+    case 'warmReady': return <TextCell value={getSandboxWarmPoolReadyOfDesired(resource)} />
     case 'template': return <TextCell value={getSandboxWarmPoolTemplate(resource)} />
     default: return <Empty />
   }

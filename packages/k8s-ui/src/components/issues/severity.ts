@@ -190,6 +190,8 @@ const REASON_TITLE: Record<string, string> = {
   KueueResourceUnavailable: 'Queue offers no quota for a requested resource',
   KueueNamespaceNotEligible: "Queue doesn't admit this namespace",
   KueueInvalidWorkload: "Kueue can't admit the run's spec",
+  AgentSandboxTemplateNotFound: 'Warm pool template not found',
+  AgentSandboxNotReported: 'Controller has not reported on it',
 };
 
 /** The title a reason has wherever it is shown, when its category's label would name the wrong operation. */

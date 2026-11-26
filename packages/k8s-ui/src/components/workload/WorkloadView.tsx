@@ -67,7 +67,7 @@ import { ResourceRendererDispatch, getResourceStatus, diagnoseHealthHint, type D
 import type { ScalerDiagnosis } from '../resources/renderers/WorkloadRenderer'
 import { DetailShell, type DetailShellTab } from '../shared/DetailShell'
 import { gitOpsOwnerKindLabel, HelmManagedByChip, ManagedByChip, type HelmOwnerRef } from '../shared/ManagedByChip'
-import { AlertBanner, getKindColorOutline, displayKindName, OperationalIssuesShownContext, ResourceRefBadge } from '../ui/drawer-components'
+import { AlertBanner, getKindColorOutline, displayKindName, OperationalIssuesShownContext, ResourceRefBadge, SummaryOwnsDiagnosisContext } from '../ui/drawer-components'
 import { Badge, type BadgeSeverity } from '../ui/Badge'
 import { Tooltip } from '../ui/Tooltip'
 import { midTruncate } from '../../utils/format'
@@ -1220,11 +1220,51 @@ export function WorkloadView({
           </div>
 
           {/* Actions bar */}
-          <ResourceActionsBar key={actionsBarKey} resource={selectedResource} data={resource} onClose={onClose} showYaml={showYaml} onToggleYaml={() => switchView(!showYaml)} {...actionsBarPropsForState} leadingActions={headerActions} />
+          <ResourceActionsBar
+            key={actionsBarKey}
+            resource={selectedResource}
+            data={resource}
+            onClose={onClose}
+            showYaml={showYaml}
+            onToggleYaml={drawerSummary ? undefined : () => switchView(!showYaml)}
+            {...actionsBarPropsForState}
+            leadingActions={headerActions}
+          />
         </div>
 
         {/* Success animation overlay */}
         {saveSuccess && <SaveSuccessAnimation />}
+
+        {drawerSummary && resource && (
+          <div className="shrink-0 border-b border-theme-border-subtle px-4 py-2.5" role="tablist" aria-label="Detail view">
+            <div className="inline-flex rounded-lg bg-theme-elevated p-0.5 text-xs">
+              {([['overview', 'Overview'], ['spec', 'Spec & status'], ['yaml', 'YAML']] as const).map(([id, label]) => {
+                const on = id === 'yaml' ? showYaml : !showYaml && (id === 'spec' ? drawerSpec : !drawerSpec)
+                return (
+                  <button
+                    key={id}
+                    role="tab"
+                    aria-selected={on}
+                    onClick={() => {
+                      if (id === 'yaml') {
+                        if (!showYaml) switchView(true)
+                      } else {
+                        setDrawerSpec(id === 'spec')
+                        if (showYaml) switchView(false)
+                      }
+                    }}
+                    className={clsx(
+                      'rounded-md px-2.5 py-1 font-medium transition-colors',
+                      on ? 'bg-theme-surface text-theme-text-primary shadow-theme-sm' : 'text-theme-text-secondary hover:text-theme-text-primary',
+                    )}
+                  >
+                    {label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Content — viewTransitionName scopes View Transitions API cross-fade to this element.
             `relative` is the backstop for absolutely-positioned descendants (Tailwind's
@@ -1260,34 +1300,11 @@ export function WorkloadView({
             />
           ) : (
             <OperationalIssuesShownContext.Provider value={!!hasOperationalIssues || !!operationalIssuesPending}>
-              {drawerSummary && (
-                <div className="px-4 pt-3" role="tablist" aria-label="Detail view">
-                  <div className="inline-flex rounded-lg bg-theme-elevated p-0.5 text-xs">
-                    {([['overview', 'Overview'], ['spec', 'Spec & status']] as const).map(([id, label]) => {
-                      const on = id === 'spec' ? drawerSpec : !drawerSpec
-                      return (
-                        <button
-                          key={id}
-                          role="tab"
-                          aria-selected={on}
-                          onClick={() => setDrawerSpec(id === 'spec')}
-                          className={clsx(
-                            'rounded-md px-2.5 py-1 font-medium transition-colors',
-                            on ? 'bg-theme-surface text-theme-text-primary shadow-theme-sm' : 'text-theme-text-secondary hover:text-theme-text-primary',
-                          )}
-                        >
-                          {label}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
               {drawerSummary && !drawerSpec ? (
                 drawerSummary
               ) : (
-              <>
-              {renderOverviewLeadForState && (hasOverviewLead ?? hasOperationalIssues) && (
+              <SummaryOwnsDiagnosisContext.Provider value={Boolean(drawerSummary)}>
+              {!drawerSummary && renderOverviewLeadForState && (hasOverviewLead ?? hasOperationalIssues) && (
                 <div className="px-4 pt-4">
                   {renderOverviewLeadForState({ kind, namespace, name })}
                 </div>
@@ -1319,7 +1336,7 @@ export function WorkloadView({
                 updatesError={resourceFocusedUpdatesError}
                 mainFooter={renderOverviewExtraForState && renderOverviewExtraForState({ kind, namespace, name, group, context: 'drawer' })}
               />
-              </>
+              </SummaryOwnsDiagnosisContext.Provider>
               )}
             </OperationalIssuesShownContext.Provider>
           )}
@@ -1538,6 +1555,7 @@ export function WorkloadView({
         ) : effectiveTab === 'spec' && specTab?.render && !resourceGone ? (
           <div className="h-full min-h-0 overflow-y-auto">{specTab.render()}</div>
         ) : (effectiveTab === 'overview' || effectiveTab === 'spec') && (
+            <SummaryOwnsDiagnosisContext.Provider value={effectiveTab === 'spec' && Boolean(expandedSummary)}>
             <InfoTab
               active={active}
               resource={resource}
@@ -1575,16 +1593,20 @@ export function WorkloadView({
               extraContent={renderOverviewExtraForState && renderOverviewExtraForState({ kind, namespace, name, group, context: 'expanded' })}
               introContent={overviewIntro}
               leadContent={
-                // A host's spec lead replaces the operational issues there: its Overview already leads with them.
+                // A host's spec lead replaces the operational issues there; when a composed Overview
+                // already owns diagnosis, Spec & status omits the generic operational issues strip.
                 effectiveTab === 'spec' && specTab?.lead
                   ? specTab.lead
-                  : (hasOverviewLead ?? hasOperationalIssues) && renderOverviewLeadForState
-                    ? renderOverviewLeadForState({ kind, namespace, name })
-                    : undefined
+                  : effectiveTab === 'spec' && expandedSummary
+                    ? undefined
+                    : (hasOverviewLead ?? hasOperationalIssues) && renderOverviewLeadForState
+                      ? renderOverviewLeadForState({ kind, namespace, name })
+                      : undefined
               }
               onEvaluateCapacity={onEvaluateCapacity}
               recentImageSave={recentImageSave}
             />
+            </SummaryOwnsDiagnosisContext.Provider>
         )}
         {effectiveTab === 'topology' && (
           <div className="relative h-full min-h-0 w-full">

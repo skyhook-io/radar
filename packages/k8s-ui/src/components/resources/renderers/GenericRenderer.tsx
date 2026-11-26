@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { Info, CheckCircle, XCircle, AlertCircle, FileCode, AlertTriangle, Layers, Minus } from 'lucide-react'
 import { clsx } from 'clsx'
-import { AlertBanner, Section, PropertyList, Property, isInvertedPolarityCondition } from '../../ui/drawer-components'
+import { AlertBanner, Section, PropertyList, Property, isInvertedPolarityCondition, useSummaryOwnsDiagnosis } from '../../ui/drawer-components'
 import { Collapse, CollapseChevron, useDisclosure } from '../../ui/Collapse'
 import { getGenericResourceStatus } from '../generic-status'
-import { getAgentRuntimeStatus } from '../resource-utils-agent-runtimes'
+import { getAgentRuntimeStatus, isAgentSandboxExtensionResource, isAgentSandboxResource } from '../resource-utils-agent-runtimes'
 import { isApiGroup } from '../resource-utils-cnpg'
 import { getInferenceServiceStatus, isInferenceServiceStopRequested } from '../resource-utils-kserve'
 import { getCrossplanePauseState, getCrossplaneIndependentStatus, getCrossplaneConditionTone } from '../resource-utils-crossplane'
@@ -22,8 +22,9 @@ export function GenericRenderer({ data }: GenericRendererProps) {
   const conditions = status.conditions
 
   // Determine health status from conditions or status fields
+  const summaryOwnsDiagnosis = useSummaryOwnsDiagnosis()
   const acknowledgedPause = getCrossplanePauseState(data) === 'acknowledged'
-  const healthStatus = getHealthStatus(data)
+  const healthStatus = summaryOwnsDiagnosis ? null : getHealthStatus(data)
 
   // Extract important fields from spec and status
   const statusFields = getImportantFields(status, 'status')
@@ -36,6 +37,9 @@ export function GenericRenderer({ data }: GenericRendererProps) {
   // Check if resource has meaningful content
   const hasStatusContent = Object.keys(statusFields).length > 0 || (conditions && conditions.length > 0)
   const hasSpecContent = Object.keys(specFields).length > 0 || nestedSpecObjects.length > 0
+  const conditionSection = Array.isArray(conditions) && conditions.length > 0
+    ? <GenericConditionsSection conditions={conditions} resource={data} folded={summaryOwnsDiagnosis} />
+    : null
 
   return (
     <>
@@ -76,10 +80,7 @@ export function GenericRenderer({ data }: GenericRendererProps) {
         </Section>
       )}
 
-      {/* Conditions (common in CRDs) */}
-      {conditions && Array.isArray(conditions) && conditions.length > 0 && (
-        <GenericConditionsSection conditions={conditions} resource={data} />
-      )}
+      {!summaryOwnsDiagnosis && conditionSection}
 
       {/* Nested Status Objects */}
       {nestedStatusObjects.length > 0 && (
@@ -113,6 +114,7 @@ export function GenericRenderer({ data }: GenericRendererProps) {
           </div>
         </Section>
       )}
+      {summaryOwnsDiagnosis && conditionSection}
     </>
   )
 }
@@ -346,6 +348,19 @@ export function genericConditionTone(resource: any, cond: any): GenericCondition
   if (isKServeStopState(resource, cond)) return 'neutral'
   if (resource?.kind === 'ApplicationSet' && isApiGroup(resource?.apiVersion, 'argoproj.io')
     && cond.type === 'RolloutProgressing') return 'neutral'
+  // A Sandbox's Suspended says which lifecycle state it is in, not whether it
+  // is healthy. Only a suspension the controller refuses is a problem.
+  const isSandbox = resource?.kind === 'Sandbox' && isAgentSandboxResource(resource)
+  const isSandboxClaim = resource?.kind === 'SandboxClaim' && isAgentSandboxExtensionResource(resource)
+  if (isSandbox && cond.type === 'Suspended') {
+    return cond.status === 'False' && cond.reason === 'PodNotOwned' ? 'warning' : 'neutral'
+  }
+  if ((isSandbox || isSandboxClaim) && cond.type === 'Ready' && cond.status === 'False') {
+    const level = getAgentRuntimeStatus(resource)?.level
+    if (level === 'neutral') return 'neutral'
+    if (level === 'degraded' || level === 'alert') return 'warning'
+    if (level === 'unknown') return 'unknown'
+  }
   const isTrue = cond.status === 'True'
   if (WARNING_CONDITION_TYPES.has(cond.type)) return isTrue ? 'warning' : 'ok'
   if (isInvertedPolarityCondition(cond.type)) return isTrue ? 'fail' : 'ok'
@@ -355,7 +370,7 @@ export function genericConditionTone(resource: any, cond: any): GenericCondition
 
 const isProblemTone = (tone: GenericConditionTone) => tone === 'fail' || tone === 'warning' || tone === 'unclear'
 
-function GenericConditionsSection({ conditions, resource }: { conditions: any[]; resource: any }) {
+function GenericConditionsSection({ conditions, resource, folded }: { conditions: any[]; resource: any; folded: boolean }) {
   // Sort conditions: problematic first, then alphabetically
   const sortedConditions = [...conditions].sort((a, b) => {
     const aProblematic = isProblemTone(genericConditionTone(resource, a))
@@ -368,7 +383,7 @@ function GenericConditionsSection({ conditions, resource }: { conditions: any[];
   const hasProblems = sortedConditions.some(c => isProblemTone(genericConditionTone(resource, c)))
 
   return (
-    <Section title={`Conditions (${conditions.length})`} defaultExpanded={hasProblems || conditions.length <= 5}>
+    <Section title={`Conditions (${conditions.length})`} defaultExpanded={!folded && (hasProblems || conditions.length <= 5)}>
       <div className="space-y-2">
         {sortedConditions.map((cond: any, index: number) => {
           const tone = genericConditionTone(resource, cond)

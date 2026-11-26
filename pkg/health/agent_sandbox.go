@@ -167,7 +167,7 @@ func ReadAgentSandbox(u *unstructured.Unstructured) AgentSandboxReadiness {
 		// the Sandbox does not own it, and waits. Nothing is being torn down, so this
 		// is not a suspension in progress.
 		if suspended.status == "False" && suspended.reason == "PodNotOwned" {
-			return AgentSandboxReadiness{Verdict: Verdict{Level: LevelDegraded, Reason: "Suspension blocked", Message: suspensionRefusedMessage(sandboxPodName(u), suspended.message)}, SuspensionRefused: true}
+			return AgentSandboxReadiness{Verdict: Verdict{Level: LevelDegraded, Reason: "Suspension blocked", Message: suspensionRefusedMessage(u.GetNamespace(), sandboxPodName(u), suspended.message)}, SuspensionRefused: true}
 		}
 		// Both conditions can stay False through a suspension, keeping
 		// transition times from before it began, so none marks its start. A Pod
@@ -200,11 +200,19 @@ func ReadAgentSandbox(u *unstructured.Unstructured) AgentSandboxReadiness {
 	if reason == "ReconcilerError" {
 		return AgentSandboxReadiness{Verdict: Verdict{Level: LevelDegraded, Reason: reason}, Mirrored: isClaim && !sandboxClaimOwnReasons[reason]}
 	}
+	// A claim whose warm pool or template is missing binds once the reference
+	// is fixed: a warning, as in its Issue and the workspace. Mirrored in k8s-ui.
+	if isClaim && (reason == "WarmPoolNotFound" || reason == "TemplateNotFound") {
+		return AgentSandboxReadiness{Verdict: Verdict{Level: LevelDegraded, Reason: reason}}
+	}
 	if reason == "" {
 		reason = "Not Ready"
 	}
 	return AgentSandboxReadiness{Verdict: Verdict{Level: LevelUnhealthy, Reason: reason}, Mirrored: isClaim && !sandboxClaimOwnReasons[ready.reason]}
 }
+
+// AgentSandboxPodName is the Pod the controller tracks for a Sandbox.
+func AgentSandboxPodName(u *unstructured.Unstructured) string { return sandboxPodName(u) }
 
 // sandboxPodName is the Pod the controller looks for: the name a pod-name
 // annotation records (Sandboxes adopted from older warm pools carry one),
@@ -216,10 +224,22 @@ func sandboxPodName(u *unstructured.Unstructured) string {
 	return u.GetName()
 }
 
+// PodOwnersCommand prints a Pod's owner references: who else may need the Pod
+// a Sandbox doesn't own, before anyone removes it.
+func PodOwnersCommand(namespace, name string) string {
+	ns := ""
+	if namespace != "" {
+		ns = " -n " + namespace
+	}
+	return fmt.Sprintf("kubectl get pod %s%s -o jsonpath='{.metadata.ownerReferences}'", name, ns)
+}
+
 // suspensionRefusedMessage explains a refused suspension: the controller's own
-// words, then what unblocks it. Mirrored in k8s-ui's resource-utils-agent-runtimes.ts.
-func suspensionRefusedMessage(name, controllerMessage string) string {
-	next := fmt.Sprintf("The conflicting Pod is %q. Remove it, or recreate the Sandbox under another name, to allow suspension.", name)
+// words, then what unblocks it. The Pod may belong to something else, so the
+// step is to check its owner before removing it. Mirrored in k8s-ui's
+// resource-utils-agent-runtimes.ts.
+func suspensionRefusedMessage(namespace, name, controllerMessage string) string {
+	next := fmt.Sprintf("The conflicting Pod is %q. Check who owns it (%s) before removing it, or recreate the Sandbox under another name.", name, PodOwnersCommand(namespace, name))
 	if controllerMessage == "" {
 		return next
 	}

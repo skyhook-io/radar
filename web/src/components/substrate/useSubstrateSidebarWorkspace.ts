@@ -5,11 +5,12 @@ import type { APIResource } from '../../types'
 import { useRadarFeature } from '../../api/client'
 import { useSubstrateWorkspace } from '../../api/substrateWorkspace'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
+import { AGENTS_SIDEBAR_CATEGORY } from '../workspace/sidebar'
 import { substrateAttentionCount, substrateScreenCounts } from './attention'
-import { SUBSTRATE_CATEGORY, SUBSTRATE_GROUP, SUBSTRATE_POOLS_PATH, SUBSTRATE_SCREENS, SUBSTRATE_WORKERPOOL_KIND, type SubstrateScreen } from './routes'
+import { SUBSTRATE_GROUP, SUBSTRATE_POOLS_PATH, SUBSTRATE_SCREENS, SUBSTRATE_WORKERPOOL_KIND, type SubstrateScreen } from './routes'
 
-/** The job Substrate does, its name in the sidebar's Integrations; "Agent Substrate" sits beneath it. */
-export const SUBSTRATE_SIDEBAR_LABEL = 'Agent actors'
+/** Substrate's heading among the Agents row's destinations, when another runtime shares the row. */
+export const SUBSTRATE_SIDEBAR_SECTION = 'Substrate'
 
 /** How often the sidebar's badge alone refreshes the workspace read. */
 export const SIDEBAR_POLL_MS = 60_000
@@ -19,9 +20,9 @@ export function substrateDiscovered(apiResources: APIResource[] | undefined): bo
 }
 
 /**
- * Agent Substrate in the sidebar's Integrations: one row with what needs
- * attention across it, opening to the Overview, Actors, Templates, Workers
- * and Radar's WorkerPool table, each with what needs attention there.
+ * Agent Substrate in the sidebar's Integrations, as its part of the Agents
+ * row: what needs attention across it, and the Overview, Actors, Templates,
+ * Workers and Radar's WorkerPool table, each with what needs attention there.
  * SandboxConfig and CSIDriverConfig stay under Other kinds. Undefined when
  * Substrate is not discovered, or the connected Radar is known to predate the
  * views. The namespace filter does not apply.
@@ -48,6 +49,7 @@ export function useSubstrateSidebarWorkspace({
       return {
         id,
         label: SUBSTRATE_SCREENS[id].label,
+        section: SUBSTRATE_SIDEBAR_SECTION,
         active: active === id,
         count: c?.count,
         countLowerBound: c?.lowerBound,
@@ -57,20 +59,21 @@ export function useSubstrateSidebarWorkspace({
     }
     const pools = counts?.screens.pools
     return {
-      [SUBSTRATE_CATEGORY]: {
-        label: SUBSTRATE_SIDEBAR_LABEL,
+      [AGENTS_SIDEBAR_CATEGORY]: {
+        tools: 'Agent Substrate',
         icon: Bot,
         count: counts?.total.count,
         countLowerBound: counts?.total.lowerBound,
         countTitle: counts?.total.title,
         destinations: [
-          { id: 'overview', label: SUBSTRATE_SCREENS.overview.label, active: active === 'overview', onSelect: () => navigate(SUBSTRATE_SCREENS.overview.path) },
+          { id: 'substrate-overview', label: SUBSTRATE_SCREENS.overview.label, section: SUBSTRATE_SIDEBAR_SECTION, active: active === 'overview', onSelect: () => navigate(SUBSTRATE_SCREENS.overview.path) },
           screen('actors'),
           screen('templates'),
           screen('workers'),
           {
             id: 'pools',
             label: 'Pools',
+            section: SUBSTRATE_SIDEBAR_SECTION,
             kind: SUBSTRATE_WORKERPOOL_KIND,
             count: pools?.count,
             countLowerBound: pools?.lowerBound,

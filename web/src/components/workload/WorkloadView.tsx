@@ -1319,6 +1319,7 @@ export function WorkloadView({
     [servingRefs, servingQueries],
   )
 
+  const detailSlots = resourceDetailSlots({ kind: apiKind, group: identityGroup, namespace, name }, rest.extraTabs)
   return (
     <>
       <BaseWorkloadView
@@ -1402,7 +1403,8 @@ export function WorkloadView({
             viewNamespaces={viewNamespaces}
           />
         )}
-        {...resourceDetailSlots({ kind: apiKind, group: identityGroup, namespace, name }, rest.extraTabs)}
+        {...detailSlots}
+        breadcrumb={rest.breadcrumb ?? detailSlots.breadcrumb}
         onSelectTopologyMember={batchExecution && batchKind === 'JobSet' ? handleSelectTopologyMember : undefined}
         renderExpandedOverview={({ kind: k, apiKind, namespace: ns, name: n, resource: res, leadContent }) =>
           supportsBatchExecution(k, apiKind, effectiveGroup, res?.apiVersion) &&

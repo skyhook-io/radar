@@ -304,7 +304,12 @@ unknown, partial and denied values first: every piece here exists to keep them.
   `api-resources.ts`), or a top-level page when the subject is cluster-wide.
   A category workspace is listed under **Integrations**: give it a `label`
   naming the job it does (the category name, the tool, shows beneath), an
-  `icon`, and a `count` for its row that counts each problem once. A
+  `icon`, and a `count` for its row that counts each problem once. Tools
+  doing one job share a category and so one row: Agent Substrate and Agent
+  Sandbox both return a workspace for "Agents", naming themselves in `tools`
+  and their destinations' `section`; `useMergedSidebarWorkspaces`
+  (`web/src/components/workspace/sidebar.ts`) lists both tools beneath, their
+  destinations under a heading each, and adds up their counts. A
   destination that is a kind's list names that `kind`, so the kind is
   highlighted and pinned through it and not listed again under Other kinds.
   Say whether the namespace filter applies, and why.

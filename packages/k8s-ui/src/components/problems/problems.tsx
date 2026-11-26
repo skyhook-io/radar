@@ -111,6 +111,8 @@ export function ProblemMeta({
   const openIssue = useContext(OpenIssueContext)
   const origin = problemOriginLabel(problem)
   const aboutChild = !subjectIsSelf && problem.subject.kind !== rootKind
+  const showIssueLink = openIssue && problem.source === 'issue'
+  if (hideOrigin && !aboutChild && !showIssueLink && !children) return null
   return (
     <div className={clsx(className, 'flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-theme-text-tertiary')}>
       {aboutChild && (
@@ -140,7 +142,7 @@ export function ProblemMeta({
           <span>{origin.label}</span>
         </Tooltip>
       )}
-      {openIssue && problem.source === 'issue' && (
+      {showIssueLink && (
         <button type="button" onClick={() => openIssue(problem)} className="whitespace-nowrap text-accent-text hover:underline">
           See in Issues →
         </button>
@@ -157,6 +159,7 @@ export function WorkspaceProblemCallout({
   onNavigate,
   action,
   subjectIsSelf,
+  hideOrigin,
 }: {
   problem: WorkspaceProblem
   rootKind: string
@@ -165,6 +168,7 @@ export function WorkspaceProblemCallout({
   action?: ReactNode
   /** The callout sits on the subject's own page, so linking to it would loop. */
   subjectIsSelf?: boolean
+  hideOrigin?: boolean
 }) {
   const severity = healthToSeverity(problem.tone)
   const variant = severity === 'neutral' ? 'unknown' : severity
@@ -178,9 +182,8 @@ export function WorkspaceProblemCallout({
         </div>
       )}
       {problem.rawDetail && <FoldSection title={problem.rawDetailLabel ?? "Original evidence"} summary="" attention={false}><div className="break-words text-xs text-theme-text-secondary">{problem.rawDetail}</div></FoldSection>}
-      <ProblemMeta problem={problem} rootKind={rootKind} onNavigate={onNavigate} subjectIsSelf={subjectIsSelf}>
-        {action}
-        {more}
+      <ProblemMeta problem={problem} rootKind={rootKind} onNavigate={onNavigate} subjectIsSelf={subjectIsSelf} hideOrigin={hideOrigin}>
+        {action || more ? <>{action}{more}</> : undefined}
       </ProblemMeta>
     </AlertBanner>
   )
@@ -190,8 +193,10 @@ export function WorkspaceProblemCallout({
  * The problems a callout does not show, as a compact list with the callout's
  * tone, title and source. `subjectFirst` names each row's subject under its
  * title, before the detail, for a list whose rows are about many objects.
+ * `showNextStep` adds each row's next step under its detail, as a callout
+ * shows it, for a list that is where the reader acts (a Needs attention list).
  */
-export function ProblemList({ problems, rootKind, onNavigate, hideOrigin, subjectFirst }: { problems: WorkspaceProblem[]; rootKind: string; onNavigate?: NavigateToRef; hideOrigin?: boolean; subjectFirst?: boolean }) {
+export function ProblemList({ problems, rootKind, onNavigate, hideOrigin, subjectFirst, showNextStep }: { problems: WorkspaceProblem[]; rootKind: string; onNavigate?: NavigateToRef; hideOrigin?: boolean; subjectFirst?: boolean; showNextStep?: boolean }) {
   return (
     <ul className="space-y-2">
       {problems.map((p) => {
@@ -202,6 +207,12 @@ export function ProblemList({ problems, rootKind, onNavigate, hideOrigin, subjec
             {subjectFirst && meta}
             {p.detail && <div className="text-xs text-theme-text-secondary break-words">{p.detail}</div>}
             {p.related && <RelatedRefs related={p.related} onNavigate={onNavigate} className="text-theme-text-secondary" />}
+            {showNextStep && p.nextStep && (
+              <div className="mt-0.5 break-words text-xs text-theme-text-primary">
+                <span className="font-medium">Next step: </span>
+                {p.nextStep}
+              </div>
+            )}
             {p.rawDetail && <FoldSection title={p.rawDetailLabel ?? "Original evidence"} summary="" attention={false}><div className="break-words text-xs text-theme-text-secondary">{p.rawDetail}</div></FoldSection>}
             {!subjectFirst && meta}
           </li>

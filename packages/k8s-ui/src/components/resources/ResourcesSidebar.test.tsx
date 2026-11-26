@@ -220,6 +220,26 @@ describe('ResourcesSidebar category workspaces', () => {
     }
   })
 
+  it('shows the tools present beneath a row named by its category, and heads each tool’s destinations only when there are two', () => {
+    const workerPool: APIResource = { group: 'ate.dev', version: 'v1alpha1', kind: 'WorkerPool', name: 'workerpools', namespaced: true, isCrd: true, verbs: ['list'] }
+    const destination = (id: string, label: string, section: string) => ({ id, label, section, onSelect: () => {} })
+    const render = (workspace: Parameters<typeof ResourcesSidebar>[0]['categoryWorkspaces']) =>
+      renderToString(<ResourcesSidebar selectedKind={null} onSelectedKindChange={() => {}} apiResources={[workerPool]} categoryWorkspaces={workspace} />).replace(/<!-- -->/g, '')
+    const both = render({
+      Agents: {
+        tools: 'Agent Substrate · Agent Sandbox',
+        destinations: [destination('substrate-overview', 'Overview', 'Substrate'), destination('actors', 'Actors', 'Substrate'), destination('sandbox-overview', 'Overview', 'Sandbox')],
+      },
+    })
+    expect(both).toMatch(/>Agents<\/span><span[^>]*>Agent Substrate · Agent Sandbox</)
+    expect(both).toMatch(/uppercase[^"]*">Substrate<\/div>(?:(?!uppercase).)*Actors(?:(?!uppercase).)*uppercase[^"]*">Sandbox<\/div>/)
+    const one = render({ Agents: { tools: 'Agent Substrate', destinations: [destination('substrate-overview', 'Overview', 'Substrate'), destination('actors', 'Actors', 'Substrate')] } })
+    expect(one).toMatch(/>Agents<\/span><span[^>]*>Agent Substrate</)
+    expect(one).not.toContain('>Substrate</div>')
+    // Without `tools` or `label`, nothing sits beneath the category name.
+    expect(render({ Agents: { destinations: [destination('o', 'Overview', 'Substrate')] } })).toMatch(/>Agents<\/span><\/span>/)
+  })
+
   it('labels API groups when the other kinds of an integration span several', () => {
     const html = renderToString(
       <ResourcesSidebar
@@ -283,6 +303,14 @@ describe('sidebarDestinationsMatching', () => {
     expect(sidebarDestinationsMatching('Velero', [], views, 'backups', 'Backups')).toHaveLength(5)
     const locations = [{ id: 'locations', label: 'Locations', kind: { name: 'backupstoragelocations', kind: 'BackupStorageLocation', group: 'velero.io' }, onSelect: () => {} }]
     expect(sidebarDestinationsMatching('Velero', [], locations, 'storagelocation')).toHaveLength(1)
+  })
+  it('finds a tool’s destinations by its section in a row several tools share', () => {
+    const shared = [
+      { id: 'substrate-overview', label: 'Overview', section: 'Substrate', onSelect: () => {} },
+      { id: 'actors', label: 'Actors', section: 'Substrate', onSelect: () => {} },
+      { id: 'sandbox-overview', label: 'Overview', section: 'Sandbox', onSelect: () => {} },
+    ]
+    expect(sidebarDestinationsMatching('Agents', [{ group: 'ate.dev' }], shared, 'substrate').map((d) => d.id)).toEqual(['substrate-overview', 'actors'])
   })
 })
 

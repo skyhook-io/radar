@@ -19,6 +19,7 @@
       "./src/components/resources/*.ts",
       "./src/components/resources/*.tsx"
     ],
+    "./components/resources/ResourcesView": "./src/components/resources/ResourcesView.tsx",
     "./components/resources/KueueAdmissionSection": "./src/components/resources/KueueAdmissionSection.tsx",
     "./components/kueue/AdmissionPath": "./src/components/kueue/AdmissionPath.tsx",
     "./components/kueue/QueueEvidence": "./src/components/kueue/QueueEvidence.tsx",

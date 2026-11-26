@@ -6,7 +6,7 @@ import type { SelectedResource } from '../types'
 import { kindToPluralWithGroup } from '../utils/navigation'
 
 export type HostResource = Pick<SelectedResource, 'kind' | 'group' | 'namespace' | 'name'>
-export type DetailSlots = Pick<ComponentProps<typeof WorkloadView>, 'renderSummary' | 'renderHeaderActions' | 'extraTabs' | 'renderStatusBadge'>
+export type DetailSlots = Pick<ComponentProps<typeof WorkloadView>, 'renderSummary' | 'renderHeaderActions' | 'extraTabs' | 'renderStatusBadge' | 'breadcrumb'>
 export type HostFeatures = Partial<Record<RadarFeature, RadarFeatureSupport>>
 export type KindListMode = 'table' | 'wait' | 'view'
 export interface HostKind { name: string; kind: string; group: string }
@@ -88,6 +88,7 @@ export function composeDetailSlots(contributions: readonly { id: string; slots: 
   const summaries = contributions.filter(host => host.slots?.renderSummary)
   if (summaries.length > 1) throw new Error(`Resource host summary ownership conflict: ${summaries.map(host => host.id).join(', ')}`)
   const summary = summaries[0]?.slots?.renderSummary
+  const breadcrumb = summaries[0]?.slots?.breadcrumb
   const badges = contributions.filter(host => host.slots?.renderStatusBadge)
   if (badges.length > 1) throw new Error(`Resource host status badge ownership conflict: ${badges.map(host => host.id).join(', ')}`)
   const badge = badges[0]?.slots?.renderStatusBadge
@@ -99,7 +100,7 @@ export function composeDetailSlots(contributions: readonly { id: string; slots: 
     tabIds.add(tab.id)
   }
   return {
-    ...(summary ? { renderSummary: summary } : {}),
+    ...(summary ? { renderSummary: summary, ...(breadcrumb ? { breadcrumb } : {}) } : {}),
     ...(badge ? { renderStatusBadge: badge } : {}),
     ...(actions.length ? { renderHeaderActions: (props: Parameters<NonNullable<DetailSlots['renderHeaderActions']>>[0]) => actions.map(host => createElement(Fragment, { key: host.id }, host.slots!.renderHeaderActions!(props))) } : {}),
     ...(tabs.length ? { extraTabs: tabs } : {}),
