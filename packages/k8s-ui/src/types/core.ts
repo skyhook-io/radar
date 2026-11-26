@@ -230,6 +230,8 @@ export interface FeatureCapabilities {
   reviewedRoutingActions?: boolean
   /** Reviewed CPU or memory changes for one named Deployment container. */
   reviewedContainerResources?: boolean
+  /** Exact reviewed operation RBAC check under the current Kubernetes identity. */
+  reviewedActionAccess?: boolean
   gitopsWriteEvidence?: boolean
   agentSigninCheck?: boolean
   serviceEndpointSlices?: boolean

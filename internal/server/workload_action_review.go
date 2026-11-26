@@ -11,6 +11,7 @@ import (
 	"log"
 	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -92,7 +93,17 @@ type workloadActionField struct {
 	effect    string
 }
 
-func resolveWorkloadAction(kind string, in workloadActionInput, execute bool, now time.Time) (workloadActionField, error) {
+// Shared by the reviewer access check, preview and execution.
+var reviewedActionsByKind = map[string][]string{
+	"Deployment":  {"scale", "restart", "pause", "resume", "setPodTemplateLabel", "setContainerResources"},
+	"StatefulSet": {"scale", "restart"},
+	"DaemonSet":   {"restart"},
+	"Rollout":     {"scale", "restart"},
+	"CronJob":     {"suspend", "resume"},
+	"Service":     {"setServiceSelectorLabel"},
+}
+
+func reviewedActionTarget(kind, action string) (workloadActionField, error) {
 	var field workloadActionField
 	b, ok := resourceid.BuiltinForName(kind)
 	if ok {
@@ -101,6 +112,17 @@ func resolveWorkloadAction(kind string, in workloadActionInput, execute bool, no
 	} else if k8score.NormalizeWorkloadKind(strings.ToLower(kind)) == "rollouts" {
 		field.gvr = rollouts.GVR
 		field.kind = "Rollout"
+	}
+	if slices.Contains(reviewedActionsByKind[field.kind], action) {
+		return field, nil
+	}
+	return field, fmt.Errorf("action %q is not supported on %q", action, kind)
+}
+
+func resolveWorkloadAction(kind string, in workloadActionInput, execute bool, now time.Time) (workloadActionField, error) {
+	field, err := reviewedActionTarget(kind, in.Action)
+	if err != nil {
+		return field, err
 	}
 	if execute {
 		digest, err := hex.DecodeString(in.ReviewToken)
@@ -123,13 +145,13 @@ func resolveWorkloadAction(kind string, in workloadActionInput, execute bool, no
 		return field, errors.New("container, resource, request and limit are only valid for setContainerResources")
 	}
 	switch {
-	case in.Action == "setContainerResources" && field.kind == "Deployment":
+	case in.Action == "setContainerResources":
 		change, err := resolveContainerResources(in)
 		if err != nil {
 			return field, err
 		}
 		field.resources = change
-	case in.Action == "setPodTemplateLabel" && field.kind == "Deployment", in.Action == "setServiceSelectorLabel" && field.kind == "Service":
+	case in.Action == "setPodTemplateLabel", in.Action == "setServiceSelectorLabel":
 		if len(validation.IsQualifiedName(in.LabelKey)) != 0 || in.LabelValue == nil || len(validation.IsValidLabelValue(*in.LabelValue)) != 0 {
 			return field, errors.New("the action requires a valid Kubernetes labelKey and labelValue")
 		}
@@ -144,7 +166,7 @@ func resolveWorkloadAction(kind string, in workloadActionInput, execute bool, no
 			field.effect = "The EndpointSlice controller reconciles Service backends to the new selector. Check published endpoints after the change."
 		}
 		field.after = *in.LabelValue
-	case in.Action == "scale" && (field.kind == "Deployment" || field.kind == "StatefulSet" || field.kind == "Rollout"):
+	case in.Action == "scale":
 		if in.Replicas == nil || *in.Replicas < 0 || *in.Replicas > 10000 {
 			return field, errors.New("scale requires replicas between 0 and 10000")
 		}
@@ -168,7 +190,7 @@ func resolveWorkloadAction(kind string, in workloadActionInput, execute bool, no
 		if in.Action == "suspend" {
 			field.effect = "The CronJob stops scheduling new Jobs. Jobs already running continue."
 		}
-	case in.Action == "restart" && (field.kind == "Deployment" || field.kind == "StatefulSet" || field.kind == "DaemonSet" || field.kind == "Rollout"):
+	case in.Action == "restart":
 		layout := time.RFC3339Nano
 		field.path = []string{"spec", "template", "metadata", "annotations", "kubectl.kubernetes.io/restartedAt"}
 		if field.kind == "Rollout" {
@@ -307,19 +329,20 @@ func (s *Server) handleServiceActionExecute(w http.ResponseWriter, r *http.Reque
 	s.workloadAction(w, r, "Service", true)
 }
 
-// Both endpoints use the captured connection and caller's live Kubernetes
-// identity. Preview issues only GET. Execute applies one reviewed field using
-// the UID and current resourceVersion at the API server, with no blind retry.
-func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, kind string, execute bool) {
+func (s *Server) workloadActionScope(w http.ResponseWriter, r *http.Request) (string, string, bool) {
 	ns, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
 	if len(validation.IsDNS1123Label(ns)) != 0 || len(validation.IsDNS1123Subdomain(name)) != 0 {
 		s.writeError(w, http.StatusBadRequest, "a valid namespace and resource name are required")
-		return
+		return "", "", false
 	}
 	if failure := outsideNamespacePin(ns); failure != nil {
 		s.writeErrorCode(w, readStatusFor(failure.code), string(failure.code), failure.message)
-		return
+		return "", "", false
 	}
+	return ns, name, true
+}
+
+func (s *Server) readWorkloadActionInput(w http.ResponseWriter, r *http.Request, in any) bool {
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 2048))
 	if err != nil {
 		var large *http.MaxBytesError
@@ -328,12 +351,35 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, kind str
 		} else {
 			s.writeError(w, http.StatusBadRequest, "could not read request body")
 		}
+		return false
+	}
+	fieldErrors, err := kjson.UnmarshalStrict(data, in)
+	if err != nil || len(fieldErrors) > 0 {
+		s.writeError(w, http.StatusBadRequest, "invalid workload action: "+errors.Join(append(fieldErrors, err)...).Error())
+		return false
+	}
+	return true
+}
+
+func (s *Server) requireWorkloadActionUser(w http.ResponseWriter, r *http.Request) bool {
+	user := auth.UserFromContext(r.Context())
+	if !s.authConfig.Enabled() || user == nil || strings.TrimSpace(user.Username) == "" || user.System || pkgauth.IsReservedPrincipal(user.Username) || pkgauth.IsBackgroundUsername(user.Username) || (pkgauth.UserTokenMode() && user.Token == "") {
+		s.writeErrorCode(w, http.StatusForbidden, "workload_action_user_required", "this reviewed change requires an authenticated Kubernetes user")
+		return false
+	}
+	return true
+}
+
+// Both endpoints use the captured connection and caller's live Kubernetes
+// identity. Preview issues only GET. Execute applies one reviewed field using
+// the UID and current resourceVersion at the API server, with no blind retry.
+func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, kind string, execute bool) {
+	ns, name, ok := s.workloadActionScope(w, r)
+	if !ok {
 		return
 	}
 	var in workloadActionInput
-	fieldErrors, err := kjson.UnmarshalStrict(data, &in)
-	if err != nil || len(fieldErrors) > 0 {
-		s.writeError(w, http.StatusBadRequest, "invalid workload action: "+errors.Join(append(fieldErrors, err)...).Error())
+	if !s.readWorkloadActionInput(w, r, &in) {
 		return
 	}
 	field, err := resolveWorkloadAction(kind, in, execute, time.Now())
@@ -341,12 +387,8 @@ func (s *Server) workloadAction(w http.ResponseWriter, r *http.Request, kind str
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if in.RequireUserIdentity {
-		user := auth.UserFromContext(r.Context())
-		if !s.authConfig.Enabled() || user == nil || strings.TrimSpace(user.Username) == "" || user.System || pkgauth.IsReservedPrincipal(user.Username) || pkgauth.IsBackgroundUsername(user.Username) || (pkgauth.UserTokenMode() && user.Token == "") {
-			s.writeErrorCode(w, http.StatusForbidden, "workload_action_user_required", "this reviewed change requires an authenticated Kubernetes user")
-			return
-		}
+	if in.RequireUserIdentity && !s.requireWorkloadActionUser(w, r) {
+		return
 	}
 	if field.kind == "Service" && chi.URLParam(r, "kind") != "" {
 		s.writeError(w, http.StatusBadRequest, "use the Service action endpoint for a Service selector change")

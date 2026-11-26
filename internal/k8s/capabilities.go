@@ -230,6 +230,7 @@ type FeatureCapabilities struct {
 	ReviewedWorkloadActions      bool `json:"reviewedWorkloadActions"`    // POST /api/workloads/{kind}/{ns}/{name}/actions/{preview|execute}
 	ReviewedRoutingActions       bool `json:"reviewedRoutingActions"`     // Reviewed Deployment template label and Service selector changes.
 	ReviewedContainerResources   bool `json:"reviewedContainerResources"` // Reviewed Deployment container CPU and memory changes.
+	ReviewedActionAccess         bool `json:"reviewedActionAccess"`       // POST .../actions/access checks a named operation under the authenticated user.
 	ServiceEndpointSlices        bool `json:"serviceEndpointSlices"`      // GET /api/services/{namespace}/{name}/endpointslices
 	TrafficRecords               bool `json:"trafficRecords"`             // GET /api/traffic/flows/records
 	GitOpsWriteEvidence          bool `json:"gitopsWriteEvidence"`        // POST /api/gitops/write-evidence
