@@ -1,6 +1,12 @@
 package configrefs
 
-import "testing"
+import (
+	"testing"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/skyhook-io/radar/pkg/resourceid"
+)
 
 func TestKnativeReferenceAlternatives(t *testing.T) {
 	for _, tc := range []struct {
@@ -26,5 +32,29 @@ func TestTriggerBrokerLookupIgnoresKReferenceTypeFields(t *testing.T) {
 	}
 	if _, valid := KnativeTriggerBrokerReference(map[string]any{"name": "broker"}); valid {
 		t.Fatal("reconciler does not default missing brokerRef namespace")
+	}
+}
+
+func TestKnativeTriggerBrokerPrecedence(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		spec map[string]any
+		want resourceid.Ref
+		path string
+	}{
+		{"absent", map[string]any{}, resourceid.NewRef(KnativeEventingGroup, "Broker", "app", "local"), "spec.broker"},
+		{"valid", map[string]any{"brokerRef": map[string]any{"namespace": "events", "name": "remote"}}, resourceid.NewRef(KnativeEventingGroup, "Broker", "events", "remote"), "spec.brokerRef"},
+		{"null", map[string]any{"brokerRef": nil}, resourceid.Ref{}, ""},
+		{"scalar", map[string]any{"brokerRef": "invalid"}, resourceid.Ref{}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.spec["broker"] = "local"
+			trigger := &unstructured.Unstructured{Object: map[string]any{"spec": tc.spec}}
+			trigger.SetNamespace("app")
+			got, ok := KnativeTriggerBroker(trigger)
+			if ok != (tc.path != "") || got.Ref != tc.want || got.Path != tc.path {
+				t.Errorf("KnativeTriggerBroker = (%+v, %v), want %v via %q", got, ok, tc.want, tc.path)
+			}
+		})
 	}
 }

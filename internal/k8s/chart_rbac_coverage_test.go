@@ -55,7 +55,9 @@ func admissionPolicyRule(role rbacv1.ClusterRole) *rbacv1.PolicyRule {
 	for i := range role.Rules {
 		rule := &role.Rules[i]
 		if slices.Contains(rule.Resources, "validatingadmissionpolicies") ||
-			slices.Contains(rule.Resources, "validatingadmissionpolicybindings") {
+			slices.Contains(rule.Resources, "validatingadmissionpolicybindings") ||
+			slices.Contains(rule.Resources, "mutatingadmissionpolicies") ||
+			slices.Contains(rule.Resources, "mutatingadmissionpolicybindings") {
 			return rule
 		}
 	}
@@ -76,7 +78,7 @@ func TestAdmissionPolicyRBACGate(t *testing.T) {
 			t.Fatalf("%s: admission policy rule is missing", overrides)
 		}
 		if !slices.Equal(rule.APIGroups, []string{"admissionregistration.k8s.io"}) ||
-			!slices.Equal(rule.Resources, []string{"validatingadmissionpolicies", "validatingadmissionpolicybindings"}) ||
+			!slices.Equal(rule.Resources, []string{"validatingadmissionpolicies", "validatingadmissionpolicybindings", "mutatingadmissionpolicies", "mutatingadmissionpolicybindings"}) ||
 			!slices.Equal(rule.Verbs, []string{"get", "list", "watch"}) {
 			t.Errorf("%s: admission policy rule = %+v", overrides, *rule)
 		}
@@ -168,8 +170,9 @@ func TestChartGrantsEveryWatchedCRDGroup(t *testing.T) {
 // not valid YAML), skipping comments and {{ }} directives so groups named in prose
 // don't count, and reading both inline (apiGroups: ["a","b"]) and block-style
 // (apiGroups:\n  - "a") rules. Conditional per-group rules are counted as available
-// collection grants; most default to true. Flagger and system-upgrade-controller
-// (upgrade.cattle.io) are explicitly documented opt-ins, with default-off/opt-in
+// collection grants; most default to true. Flagger, the k3s Helm controller
+// (helm.cattle.io) and system-upgrade-controller (upgrade.cattle.io) are
+// explicitly documented opt-ins, with default-off/opt-in
 // chart regression tests. This guard checks that
 // each catalog group has a focused grant path, not that every path is enabled; the wildcard "*" is excluded on purpose.
 func chartGrantedAPIGroups(t *testing.T) map[string]bool {

@@ -92,7 +92,7 @@ export function FacetButton({
 
 // Convenience wrapper: a FacetSection of multi-select FacetButtons driven by a
 // Set. Auto-hides zero-count options (quieter than a hard slice cap) unless
-// hideZero is turned off.
+// selected or hideZero is turned off.
 export function Facet<T extends string>({
   title,
   icon,
@@ -110,7 +110,7 @@ export function Facet<T extends string>({
   onToggle: (v: T) => void
   hideZero?: boolean
 }) {
-  const visible = hideZero ? options.filter((o) => o.count > 0) : options
+  const visible = hideZero ? options.filter((o) => o.count > 0 || selected.has(o.value)) : options
   if (visible.length === 0) return null
   return (
     <FacetSection icon={icon} title={title} info={info}>

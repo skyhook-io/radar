@@ -177,12 +177,21 @@ describe('ValidatingAdmissionPolicy renderers', () => {
     expect(html).toMatch(/<pre class="[^"]*whitespace-pre-wrap[^"]*">undefined field/)
   })
 
+  it.each([['v1alpha1', 'Deny (default)'], ['v1beta1', 'Not specified'], ['v1', 'Not specified']])('shows only the parameter action defaulted in %s', (version, value) => {
+    const html = renderToStaticMarkup(<ValidatingAdmissionPolicyBindingRenderer data={{
+      apiVersion: `admissionregistration.k8s.io/${version}`,
+      spec: { policyName: 'require-owner', paramRef: { name: 'strict' } },
+    }} />)
+    expect(html).toContain(value)
+  })
+
   it('explains an unset parameter namespace instead of reading it as missing', () => {
     const html = renderToStaticMarkup(<ValidatingAdmissionPolicyBindingRenderer data={{
       apiVersion: policy.apiVersion,
       metadata: { name: 'require-owner-prod' },
-      spec: { policyName: 'require-owner', validationActions: ['Deny'], paramRef: { name: 'strict' } },
+      spec: { policyName: 'require-owner', validationActions: ['Deny'], paramRef: { name: 'strict', parameterNotFoundAction: 'Deny' } },
     }} onNavigate={() => {}} />)
+    expect(html).toContain('This binding adds no filters')
     expect(html).toContain('evaluated object’s namespace')
     expect(html).not.toContain('Not specified')
   })

@@ -1,0 +1,137 @@
+// @vitest-environment jsdom
+import { act } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { fetchJSON } from './client'
+import { podDebugAccessKey, usePodDebugAccess } from './podDebug'
+
+vi.mock('./client', () => ({ fetchJSON: vi.fn(), useRadarFeature: () => ({ support: 'supported' }) }))
+
+Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+let root: Root, client: QueryClient, host: HTMLDivElement
+
+function Access({ image }: { image?: string }) {
+  const { query, unverifiedImage } = usePodDebugAccess('demo', 'checkout', 'uid-1', !image, false, image)
+  return <span data-unverified-image={unverifiedImage}>{query.data?.state}</span>
+}
+function render(image?: string) {
+  return act(() => root.render(<QueryClientProvider client={client}><Access image={image}/></QueryClientProvider>))
+}
+beforeEach(() => {
+  vi.mocked(fetchJSON).mockReset()
+  client = new QueryClient()
+  host = document.createElement('div')
+  root = createRoot(host)
+})
+afterEach(() => {
+  act(() => root.unmount())
+  client.clear()
+})
+
+it.each(['denied', 'unavailable', 'check_failed'])('rechecks previously %s named access when a namespace grant appears', async state => {
+  vi.mocked(fetchJSON).mockResolvedValueOnce({ state }).mockResolvedValueOnce({ state: 'allowed', exec: true, image: 'tools' })
+  render()
+  await vi.waitFor(() => expect(host.textContent).toBe(state))
+  render('tools')
+  await vi.waitFor(() => expect(host.textContent).toBe('allowed'))
+  expect(fetchJSON).toHaveBeenCalledTimes(2)
+})
+
+it('refreshes an unsuccessful HTTP check when a namespace grant appears', async () => {
+  vi.mocked(fetchJSON).mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ state: 'allowed', exec: true, image: 'tools' })
+  render()
+  const key = [...podDebugAccessKey('demo', 'checkout', 'uid-1'), false]
+  await vi.waitFor(() => expect(client.getQueryState(key)?.status).toBe('error'))
+  render('tools')
+  await vi.waitFor(() => expect(host.textContent).toBe('allowed'))
+  expect(fetchJSON).toHaveBeenCalledTimes(2)
+})
+
+it('still refreshes an unresolved named check after the namespace grant is visible', async () => {
+  const failed = { state: 'check_failed', exec: true }
+  vi.mocked(fetchJSON).mockResolvedValueOnce(failed).mockResolvedValueOnce(failed).mockResolvedValueOnce({ state: 'allowed', exec: true, image: 'tools' })
+  render()
+  await vi.waitFor(() => expect(host.textContent).toBe('check_failed'))
+  render('tools')
+  await vi.waitFor(() => expect(fetchJSON).toHaveBeenCalledTimes(2))
+  await act(async () => { await client.invalidateQueries({ queryKey: podDebugAccessKey('demo', 'checkout', 'uid-1') }) })
+  await vi.waitFor(() => expect(host.textContent).toBe('allowed'))
+})
+
+it('clears only the refusal that preceded a successful retry', async () => {
+  vi.mocked(fetchJSON).mockResolvedValue({ state: 'unknown', exec: true, image: 'tools' })
+  let completeFirstAttempt: (() => void) | undefined
+  function Review() {
+    const { unverifiedReview } = usePodDebugAccess('demo', 'checkout', 'uid-1', true)
+    return <>
+      <button id="start" onClick={() => { completeFirstAttempt = unverifiedReview?.clearRefusal }}/>
+      <button id="later" onClick={() => unverifiedReview?.rememberRefusal('A newer refusal')}/>
+      <button id="refuse" onClick={() => unverifiedReview?.rememberRefusal('Image denied')}/>
+      <button id="succeed" onClick={() => unverifiedReview?.clearRefusal()}/>
+      <output>{unverifiedReview?.refused?.message ?? (unverifiedReview ? 'No previous refusal' : '')}</output>
+    </>
+  }
+  act(() => root.render(<QueryClientProvider client={client}><Review/></QueryClientProvider>))
+  await vi.waitFor(() => expect(host.textContent).toBe('No previous refusal'))
+  act(() => host.querySelector<HTMLButtonElement>('#refuse')!.click())
+  await vi.waitFor(() => expect(host.textContent).toBe('Image denied'))
+  act(() => host.querySelector<HTMLButtonElement>('#start')!.click())
+  act(() => host.querySelector<HTMLButtonElement>('#later')!.click())
+  await vi.waitFor(() => expect(host.textContent).toBe('A newer refusal'))
+  act(() => completeFirstAttempt!())
+  expect(host.textContent).toBe('A newer refusal')
+  act(() => host.querySelector<HTMLButtonElement>('#succeed')!.click())
+  await vi.waitFor(() => expect(host.textContent).toBe('No previous refusal'))
+})
+
+it('keeps a confirmed named denial when the refreshed review still denies access', async () => {
+  vi.mocked(fetchJSON).mockResolvedValue({ state: 'denied', exec: true })
+  render()
+  await vi.waitFor(() => expect(host.textContent).toBe('denied'))
+  render('tools')
+  await vi.waitFor(() => expect(fetchJSON).toHaveBeenCalledTimes(2))
+  render('tools')
+  expect(host.textContent).toBe('denied')
+  expect(fetchJSON).toHaveBeenCalledTimes(2)
+})
+
+it('requires no named check when nothing contradicts the namespace grant on this Pod', () => {
+  client.setQueryData([...podDebugAccessKey('demo', 'checkout', 'old-uid'), false], { state: 'denied' })
+  render('tools')
+  expect(fetchJSON).not.toHaveBeenCalled()
+})
+
+it.each([
+  [{ state: 'unknown', exec: true, image: 'operator-default' }, 'operator-default'],
+  [{ state: 'unknown', exec: true }, undefined],
+  [{ state: 'unknown', image: 'operator-default' }, undefined],
+  [{ state: 'denied', exec: true, image: 'ignored' }, undefined],
+] as const)('requires both named exec and an effective image before offering an unverified attempt', async (access, expected) => {
+  vi.mocked(fetchJSON).mockResolvedValue(access)
+  render()
+  await vi.waitFor(() => expect(host.textContent).toBe(access.state))
+  expect(host.querySelector('span')?.dataset.unverifiedImage).toBe(expected)
+})
+
+it('retains the actual write refusal until named RBAC settles, and requires a deliberate recheck before another review', async () => {
+  const undecided = { state: 'unknown', exec: true, image: 'tools' }
+  vi.mocked(fetchJSON).mockResolvedValue(undecided)
+  function Review() {
+    const { query, unverifiedReview, recheckAccess } = usePodDebugAccess('demo', 'checkout', 'uid-1', true)
+    return <><output>{query.data?.state} {query.data?.refusedAttempt?.message}</output>
+      <button id="refuse" onClick={() => unverifiedReview?.rememberRefusal('Image policy refused the Pod update')}/>
+      <button id="check" onClick={() => void recheckAccess()}/>
+      <span>{unverifiedReview && (!unverifiedReview.refused || unverifiedReview.refused.rechecked) ? 'review available' : 'no review'}</span></>
+  }
+  act(() => root.render(<QueryClientProvider client={client}><Review/></QueryClientProvider>))
+  await vi.waitFor(() => expect(host.textContent).toContain('review available'))
+  act(() => host.querySelector<HTMLButtonElement>('#refuse')!.click())
+  await vi.waitFor(() => expect(fetchJSON).toHaveBeenCalledTimes(2))
+  await vi.waitFor(() => expect(host.textContent).toContain('Image policy refused the Pod updateno review'))
+  act(() => host.querySelector<HTMLButtonElement>('#check')!.click())
+  await vi.waitFor(() => expect(host.textContent).toContain('Image policy refused the Pod updatereview available'))
+  vi.mocked(fetchJSON).mockResolvedValue({ state: 'denied', exec: true })
+  act(() => host.querySelector<HTMLButtonElement>('#check')!.click())
+  await vi.waitFor(() => expect(host.textContent).toBe('denied Image policy refused the Pod updateno review'))
+})

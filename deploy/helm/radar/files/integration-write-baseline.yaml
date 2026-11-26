@@ -1,0 +1,12 @@
+# Extra Kubernetes permissions created by the chart for Radar Cloud Owners.
+# Each capability has a separate owner switch. Rules apply to the full object.
+capabilities:
+  argocd:
+    # Used when cloud.defaultRbac.integrationWrite.argocd.owner is absent (e.g. --reuse-values).
+    default: true
+entries:
+  - group: "argoproj.io"
+    resources: ["applications"]
+    verbs: ["get", "patch"]
+    collection: "argo"
+    capability: argocd

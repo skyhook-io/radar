@@ -22,7 +22,7 @@ export type ActionConfirmResult =
 export interface ActionConfirmDialogProps {
   open: boolean
   onClose: () => void
-  onConfirm: () => void
+  onConfirm: (() => void) | undefined
   onBack?: () => void
   backLabel?: string
   /** Imperative title: "Switch over pg-orders?" */
@@ -221,9 +221,9 @@ export function ActionConfirmDialog({
           disabled={isLoading}
           className="rounded-lg px-4 py-2 text-sm font-medium text-theme-text-secondary transition-colors hover:bg-theme-elevated hover:text-theme-text-primary disabled:opacity-50"
         >
-          Cancel
+          {onConfirm ? 'Cancel' : 'Close'}
         </button>
-        <button
+        {onConfirm && <button
           type="button"
           onClick={onConfirm}
           disabled={!canConfirm}
@@ -239,7 +239,7 @@ export function ActionConfirmDialog({
             </svg>
           )}
           {confirmLabel}
-        </button>
+        </button>}
       </div>
     </DialogPortal>
   )

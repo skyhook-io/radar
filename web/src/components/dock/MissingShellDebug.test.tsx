@@ -1,0 +1,193 @@
+// @vitest-environment jsdom
+import { act } from 'react'
+import { createRoot } from 'react-dom/client'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { usePodDetailAccess } from '../resources/PodDebugAction'
+import { observeConnectionStatus, resetConnectionBindingForTest } from '../../api/connectionBinding'
+import { MissingShellDebug } from './MissingShellDebug'
+
+const f = vi.hoisted(() => ({
+  pod: {} as any, installation: {} as Record<string, unknown>, checkError: undefined as Error | undefined, namedExec: false, embedded: false, support: 'supported', access: 'denied', image: undefined as string | undefined,
+  recheck: vi.fn(), open: vi.fn(), probe: vi.fn(),
+}))
+vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({connection:{context:'fixture-cluster'}}) }))
+vi.mock('../../context/NavCustomization', () => ({ useNavCustomization: () => ({ embedded: f.embedded }) }))
+vi.mock('../../contexts/CapabilitiesContext', () => ({ useCapabilitiesContext: () => f.installation, useNamespacedCapabilities: () => ({ podDebugImage: f.image }) }))
+vi.mock('../../api/client', async original => ({ ...await original<typeof import('../../api/client')>(), useResource: () => ({ data: f.pod }) }))
+vi.mock('../../api/podDebug', () => ({ usePodDebugAccess: (...args: unknown[]) => {
+  f.probe(...args)
+  return {support: f.support, recheckAccess: f.recheck, unverifiedReview: !args[4] && f.access === 'unknown' && f.namedExec && !f.checkError ? {} : undefined, unverifiedImage: !args[4] && f.access === 'unknown' && f.namedExec && !f.checkError ? 'operator-tools' : undefined, query: { error: f.checkError, data: {state: f.access, image: 'toolbox', exec: f.namedExec}, refetch: f.recheck }}
+} }))
+vi.mock('@skyhook-io/k8s-ui', async original => ({ ...await original<typeof import('@skyhook-io/k8s-ui')>(), useOpenTerminal: () => f.open }))
+vi.mock('../resources/PodDebugAction', async original => ({ ...await original<typeof import('../resources/PodDebugAction')>(),
+  PodDebugAction: ({ failedContainer, unverifiedReview, hideLauncher }: { failedContainer: string; unverifiedReview?: object; hideLauncher?: boolean }) => hideLauncher ? null : <button>{unverifiedReview ? 'Review attempt for' : 'Start for'} {failedContainer}</button> }))
+
+Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+let host: HTMLDivElement, root: ReturnType<typeof createRoot>
+const render = () => act(() => root.render(<MissingShellDebug namespace="payments" name="checkout" uid="uid-1" target="app" base="/api"/>))
+const button = (label: string) => [...host.querySelectorAll('button')].find(b => b.textContent === label)
+beforeEach(() => {
+  vi.clearAllMocks()
+  resetConnectionBindingForTest()
+  Object.assign(f, { installation: {}, checkError: undefined, embedded: false, namedExec: false, support: 'supported', access: 'denied', image: undefined,
+    pod: { apiVersion: 'v1', kind: 'Pod', metadata: {uid:'uid-1', namespace:'payments', name:'checkout'},
+      spec: {containers:[{name:'app'}]}, status:{phase:'Running',containerStatuses:[{name:'app', state:{running:{}}}] } } })
+  host = document.createElement('div')
+  root = createRoot(host)
+})
+afterEach(() => act(() => root.unmount()))
+
+it('offers only running debuggers targeting the failed container, with no access probe', () => {
+  const names = ['already-running','second','wrong-target','stopped']
+  f.pod.spec.ephemeralContainers = names.map(name => ({ name, image:'toolbox', targetContainerName:name === 'wrong-target' ? 'other' : 'app' }))
+  f.pod.status.ephemeralContainerStatuses = names.map(name => ({ name, state:name === 'stopped' ? {terminated:{}} : {running:{}} }))
+  render()
+  const select = host.querySelector('select')!
+  expect([...select.options].map(o=>o.value)).toEqual(names.slice(0,2).reverse())
+  act(() => { select.value='second'; select.dispatchEvent(new Event('change',{bubbles:true})) })
+  act(() => button('Open debug terminal')!.click())
+  expect(f.open).toHaveBeenCalledWith(expect.objectContaining({containerName:'second',debugSession:expect.objectContaining({podUID:'uid-1'})}))
+  expect(f.probe.mock.lastCall?.[3]).toBe(false)
+  expect(button('Start for app')).toBeUndefined()
+})
+
+it('shows the exact missing permission and rechecks an updated grant', () => {
+  render()
+  expect(host.textContent).toContain('Ask your cluster admin for access to update pods/ephemeralcontainers for Pod payments/checkout.')
+  expect([...host.querySelectorAll('code.inline-code')].map(code => code.textContent)).toEqual(['update pods/ephemeralcontainers', 'payments/checkout'])
+  act(() => button('Recheck access')!.click())
+  expect(f.recheck).toHaveBeenCalledOnce()
+  f.access='allowed'; render()
+  expect(button('Start for app')).toBeDefined()
+})
+it('offers a recheck when Kubernetes returns no decision', () => {
+  f.access='unknown'; render()
+  expect(host.textContent).toContain('Kubernetes couldn’t confirm permission to update pods/ephemeralcontainers for Pod payments/checkout.')
+  expect(host.textContent).not.toContain('Ask your cluster admin for access')
+  expect(button('Recheck access')).toBeDefined()
+})
+it('distinguishes a failed request from an inconclusive cluster answer', () => {
+  f.access = 'unknown'
+  render()
+  expect(host.textContent).toContain('Kubernetes couldn’t confirm permission to update pods/ephemeralcontainers for Pod payments/checkout.')
+  f.checkError = new Error('request timed out')
+  render()
+  expect(host.textContent).toContain('Radar couldn’t check permission to update pods/ephemeralcontainers for Pod payments/checkout.')
+  expect(host.textContent).not.toContain('Ask your cluster admin for access')
+})
+
+it.each(['embedded', 'replaced', 'windows', 'stopped', 'old', 'disabled'])('suppresses the grant request on %s', mode => {
+  if(mode==='embedded')f.embedded=true
+  if(mode==='replaced')f.pod.metadata.uid='replacement'
+  if(mode==='windows')f.pod.spec.os={name:'windows'}
+  if(mode==='stopped')f.pod.status.containerStatuses[0].state={terminated:{}}
+  if(mode==='old')f.support='unsupported'
+  if(mode==='disabled')f.access='unavailable'
+  render()
+  expect(host.textContent).not.toContain('Ask your cluster admin for access')
+  expect(button('Start for app')).toBeUndefined()
+})
+
+it('uses a positive namespace grant when named access is unknown, but honors an exact denial', () => {
+  f.image = 'operator-debug'; f.access = 'unknown'
+  render()
+  expect(button('Start for app')).toBeDefined()
+  expect(f.probe.mock.lastCall?.[3]).toBe(false)
+  f.access = 'denied'; render()
+  expect(host.textContent).toContain('Ask your cluster admin for access')
+})
+
+it('updates a previously open recovery screen when the connection changes', () => {
+  render()
+  act(() => observeConnectionStatus({connectionId:'new-cluster'}))
+  expect(host.textContent).toContain('Open the Pod on the current cluster')
+  expect(host.textContent).not.toContain('Ask your cluster admin for access')
+})
+
+it('supplies named-only exec to the Pod header and existing terminals independently of update', () => {
+  function Consumer() {
+    const access = usePodDetailAccess(f.pod, {canExec:false, canOpenEphemeralTerminal:false})
+    return <>{access.canExec && 'Terminal '}{access.canOpenEphemeralTerminal && 'Reopen '}{access.debugImage && 'Debug'}</>
+  }
+  f.namedExec = true; f.access = 'denied'
+  act(() => root.render(<Consumer/>))
+  expect(host.textContent).toBe('Terminal Reopen ')
+  f.access = 'allowed'
+  act(() => root.render(<Consumer/>))
+  expect(host.textContent).toBe('Terminal Reopen Debug')
+  f.embedded = true
+  act(() => root.render(<Consumer/>))
+  expect(host.textContent).toBe('Terminal Reopen ')
+  expect(f.probe.mock.lastCall?.[4]).toBe(true)
+})
+
+it('names Radar’s ServiceAccount for a shared installation without authentication', () => {
+  f.installation = { deployment: { mode: 'in-cluster' } }
+  render()
+  expect(host.textContent).toContain('Ask your cluster admin to grant Radar’s ServiceAccount access to update pods/ephemeralcontainers for Pod payments/checkout.')
+})
+
+it('explains how to start a debugger outside a hosted session without issuing a named check', () => {
+  f.embedded = true
+  render()
+  expect(host.textContent).toContain('standalone Radar')
+  expect(f.probe.mock.lastCall?.[3]).toBe(false)
+})
+
+it.each(['unknown', 'unavailable'])('rechecks hosted exec access to a running debugger when %s', state => {
+  f.embedded = true
+  f.access = state
+  f.pod.spec.ephemeralContainers = [{ name: 'debugger', image: 'tools', targetContainerName: 'app' }]
+  f.pod.status.ephemeralContainerStatuses = [{ name: 'debugger', state: { running: {} } }]
+  render()
+  expect(f.probe.mock.lastCall?.slice(3, 5)).toEqual([true, true])
+  expect(host.textContent).not.toContain('Ask your cluster admin for access')
+  act(() => button('Recheck access')!.click())
+  expect(f.recheck).toHaveBeenCalledOnce()
+  f.namedExec = true
+  render()
+  expect(button('Open debug terminal')).toBeDefined()
+})
+
+it('offers confirmation only while the named response verifies exec, on a writable Radar', () => {
+  f.namedExec = true
+  f.access = 'unknown'
+  render()
+  expect(button('Review attempt for app')).toBeDefined()
+  f.checkError = new Error('transport failure')
+  render()
+  expect(button('Review attempt for app')).toBeUndefined()
+  f.checkError = undefined
+  f.access = 'denied'
+  render()
+  expect(button('Review attempt for app')).toBeUndefined()
+  f.access = 'unknown'
+  f.embedded = true
+  render()
+  expect(button('Review attempt for app')).toBeUndefined()
+})
+it('keeps unrelated containers out of the shell recovery actions', () => {
+  f.pod.spec.containers.push({ name: 'worker' })
+  f.pod.status.containerStatuses.push({ name: 'worker', state: { running: {} } })
+  f.pod.spec.ephemeralContainers = [{ name: 'network-tools', image: 'tools' }]
+  f.pod.status.ephemeralContainerStatuses = [{ name: 'network-tools', state: { running: {} } }]
+  render()
+  expect(host.textContent).not.toContain('worker')
+  expect(host.textContent).not.toContain('network-tools')
+  expect(button('Open debug terminal')).toBeUndefined()
+})
+it('keeps verified named exec when the separate update review failed, with no write preview', async () => {
+  f.access = 'check_failed'
+  f.namedExec = true
+  render()
+  expect(host.textContent).toContain('Kubernetes couldn’t complete the check')
+  expect(button('Recheck access')).toBeDefined()
+  expect(button('Review debug container')).toBeUndefined()
+  expect(host.textContent).not.toContain('Ask your cluster admin for access')
+  function Details() {
+    const access = usePodDetailAccess(f.pod, { canExec: false, canOpenEphemeralTerminal: false })
+    return <output>{String(access.canExec)} {access.debugImage ?? 'no preview'}</output>
+  }
+  act(() => root.render(<Details/>))
+  expect(host.textContent).toBe('true no preview')
+})

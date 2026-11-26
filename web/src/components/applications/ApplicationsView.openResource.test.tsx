@@ -1,18 +1,19 @@
 // @vitest-environment jsdom
 import { act, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
-import { MemoryRouter, useLocation } from 'react-router-dom'
+import { MemoryRouter, useLocation, useNavigationType } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { ToastProvider, type AppRow, type AppWorkload, type SelectedResource } from '@skyhook-io/k8s-ui'
+import { ToastProvider, workloadKey, type AppHistory, type AppRow, type AppWorkload, type SelectedResource } from '@skyhook-io/k8s-ui'
 import { ApplicationsView } from './ApplicationsView'
 
 let apps: AppRow[] = []
-const idle = { data: undefined, isLoading: false, isError: false, error: null }
+const idle = { data: undefined, isLoading: false, isFetching: false, isPending: false, isSuccess: false, isError: false, error: null }
+let history: Omit<typeof idle, 'data'> & { data?: AppHistory }
 
 vi.mock('../../api/client', () => ({
   useApplications: () => ({ ...idle, data: { applications: apps }, isSuccess: true, dataUpdatedAt: 0, refetch: () => {} }),
-  useApplicationHistory: () => idle,
+  useApplicationHistory: () => history,
   useGitOpsTree: () => idle,
   useHelmRelease: () => idle,
   useIssues: () => idle,
@@ -46,18 +47,20 @@ let root: ReturnType<typeof createRoot>
 let container: HTMLDivElement
 let client: QueryClient
 let location = ''
+let navigationType: ReturnType<typeof useNavigationType>
 
-function recordLocation(next: string) {
-  location = next
-}
-
-function LocationProbe({ onChange }: { onChange: (location: string) => void }) {
+function LocationProbe() {
   const loc = useLocation()
-  useEffect(() => onChange(`${loc.pathname}${loc.search}`), [loc, onChange])
+  const action = useNavigationType()
+  useEffect(() => {
+    location = `${loc.pathname}${loc.search}`
+    navigationType = action
+  }, [loc, action])
   return null
 }
 
 beforeEach(() => {
+  history = idle
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }))
   container = document.createElement('div')
   document.body.appendChild(container)
@@ -80,7 +83,7 @@ async function renderAt(url: string, onOpenResource = vi.fn()) {
         <ToastProvider>
           <MemoryRouter initialEntries={[url]}>
             <ApplicationsView namespaces={[]} onOpenResource={onOpenResource} />
-            <LocationProbe onChange={recordLocation} />
+            <LocationProbe />
           </MemoryRouter>
         </ToastProvider>
       </QueryClientProvider>,
@@ -115,4 +118,127 @@ it('keeps the API group, namespace filter and open investigation when opening an
   expect(url.searchParams.get('apiGroup')).toBe('networking.k8s.io')
   expect(url.searchParams.get('namespaces')).toBe('shop')
   expect(url.searchParams.get('ai-run')).toBe('run-1')
+})
+
+it.each(['initial fetch', 'background refresh'])('keeps a single-workload Deploys link during %s', async (phase) => {
+  apps = [app('shop/Deployment/web', ['web'])]
+  const initial = phase === 'initial fetch'
+  history = { ...idle, isFetching: true, isLoading: initial, isPending: initial, isSuccess: !initial, data: initial ? undefined : { appKey: apps[0].key } }
+  const url = '/applications?app=shop%2FDeployment%2Fweb&view=deploys&namespaces=shop'
+  await renderAt(url)
+  expect(new URLSearchParams(location.split('?')[1]).get('view')).toBe('deploys')
+  expect(container.querySelector('[data-testid="workload-view"]')).toBeNull()
+
+  history = { ...idle, isSuccess: true, data: { appKey: apps[0].key, sourceRef: { type: 'helm', kind: 'HelmRelease', namespace: 'shop', name: 'web' } } }
+  await renderAt(url)
+  const params = new URLSearchParams(location.split('?')[1])
+  expect(params.get('view')).toBeNull()
+  expect(params.get('tab')).toBe('deploys')
+  expect(params.get('workload')).toBe(workloadKey(deployment('web')))
+  expect(params.get('namespaces')).toBe('shop')
+  expect(container.querySelector('[data-testid="workload-view"]')).not.toBeNull()
+})
+
+it('keeps app Deploys after clearing a stale workload, and drops Deploys from a valid child workload', async () => {
+  apps = [{ ...app('shop/web', ['web', 'worker']), sourceRef: { type: 'helm', kind: 'HelmRelease', namespace: 'shop', name: 'web' } }]
+  await renderAt('/applications?app=shop%2Fweb&view=&tab=deploys&workload=stale')
+  let params = new URLSearchParams(location.split('?')[1])
+  expect(params.get('workload')).toBeNull()
+  expect(params.get('tab')).toBeNull()
+  expect(params.get('view')).toBe('deploys')
+  expect(container.textContent).toContain('Recorded deliveries')
+
+  await act(async () => root.unmount())
+  root = createRoot(container)
+  const child = workloadKey(deployment('worker'))
+  await renderAt(`/applications?app=shop%2Fweb&view=deploys&workload=${encodeURIComponent(child)}`)
+  params = new URLSearchParams(location.split('?')[1])
+  expect(params.get('workload')).toBe(child)
+  expect(params.get('view')).toBeNull()
+  expect(container.textContent).not.toContain('Recorded deliveries')
+})
+
+it('replaces a tab-only Deploys link with the app view once the source is known', async () => {
+  apps = [app('shop/web', ['web', 'worker'])]
+  const url = '/applications?app=shop%2Fweb&tab=deploys&namespaces=shop'
+  history = { ...idle, isFetching: true, isPending: true, isLoading: true }
+  await renderAt(url)
+  expect(location).toBe(url)
+  expect(container.querySelector('[role="tab"][aria-selected="true"]')).toBeNull()
+
+  history = { ...idle, isSuccess: true, data: {
+    appKey: apps[0].key,
+    sourceRef: { type: 'helm', kind: 'HelmRelease', namespace: 'shop', name: 'web' },
+  } }
+  await renderAt(url)
+  const params = new URLSearchParams(location.split('?')[1])
+  expect(params.get('view')).toBe('deploys')
+  expect(params.has('tab')).toBe(false)
+  expect(params.get('namespaces')).toBe('shop')
+  expect(navigationType).toBe('REPLACE')
+  expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Deploys')
+  expect(container.textContent).toContain('Recorded deliveries')
+})
+
+it.each([false, true])('resolves a group-less Deploys workload link (ambiguous: %s)', async (ambiguous) => {
+  const rollout = { ...deployment('api'), kind: 'Rollout', group: 'argoproj.io' }
+  apps = [{
+    ...app('shop/web', []),
+    workloads: [rollout, ambiguous ? { ...rollout, group: 'example.io' } : deployment('worker')],
+    sourceRef: { type: 'helm', kind: 'HelmRelease', namespace: 'shop', name: 'web' },
+  }]
+  const child = 'Rollout/shop/api'
+  await renderAt(`/applications?app=shop%2Fweb&tab=deploys&workload=${encodeURIComponent(child)}`)
+  const params = new URLSearchParams(location.split('?')[1])
+  expect(params.has('tab')).toBe(false)
+  expect(params.get('workload')).toBe(ambiguous ? null : child)
+  expect(params.get('view')).toBe(ambiguous ? 'deploys' : null)
+  expect(container.querySelector('[data-testid="workload-view"]')?.getAttribute('data-name')).toBe(ambiguous ? undefined : 'api')
+})
+
+it('keeps Deploys on a failed history refresh until a successful response rules out a source', async () => {
+  apps = [app('shop/web', ['web', 'worker'])]
+  const data: AppHistory = {
+    appKey: 'shop/web',
+    sourceRef: { type: 'helm', kind: 'HelmRelease', namespace: 'shop', name: 'web' },
+    anchors: [{ type: 'helm', title: 'Release promoted', revision: '3', timestamp: '2026-11-23T12:00:00Z' }],
+  }
+  const url = '/applications?app=shop%2Fweb&view=deploys'
+  history = { ...idle, isSuccess: true, data }
+  await renderAt(url)
+  expect(container.textContent).toContain('Release promoted')
+
+  history = { ...idle, isError: true, data }
+  await renderAt(url)
+  expect(new URLSearchParams(location.split('?')[1]).get('view')).toBe('deploys')
+  expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Deploys')
+  expect(container.textContent).toContain('Delivery records could not be refreshed')
+  expect(container.textContent).not.toContain('Release promoted')
+
+  history = { ...idle, isSuccess: true, data: { appKey: data.appKey } }
+  await renderAt(url)
+  expect(new URLSearchParams(location.split('?')[1]).has('view')).toBe(false)
+  expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Overview')
+})
+
+it('keeps Deploys and explains a partial source lookup until a complete response rules out a source', async () => {
+  apps = [app('shop/web', ['web', 'worker'])]
+  const appKey = apps[0].key
+  const url = '/applications?app=shop%2Fweb&view=deploys'
+  const reason = "Deployment-source history is unavailable because you don't have access to this app's deployment source."
+  history = { ...idle, isSuccess: true, data: {
+    appKey,
+    partialSources: [reason],
+    anchors: [{ type: 'helm', title: 'Release promoted', revision: '3', timestamp: '2026-11-23T12:00:00Z' }],
+  } }
+  await renderAt(url)
+  expect(location).toBe(url)
+  expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Deploys')
+  expect(container.textContent).toContain(reason)
+  expect(container.textContent).not.toContain('Release promoted')
+
+  history = { ...idle, isSuccess: true, data: { appKey } }
+  await renderAt(url)
+  expect(new URLSearchParams(location.split('?')[1]).has('view')).toBe(false)
+  expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Overview')
 })

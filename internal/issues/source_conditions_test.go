@@ -311,6 +311,26 @@ func TestIsTransientCRDConditionArgoRolloutPause(t *testing.T) {
 	}
 }
 
+func TestIsTransientCRDConditionPausedArtifactGenerator(t *testing.T) {
+	gen := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "source.extensions.fluxcd.io/v1beta1",
+		"kind":       "ArtifactGenerator",
+		"metadata":   map[string]any{"annotations": map[string]any{"source.extensions.fluxcd.io/reconcile": "Disabled"}},
+	}}
+	if !isTransientCRDCondition(gen, "BuildFailed") {
+		t.Fatal("a paused ArtifactGenerator's stale Ready=False must not become an issue")
+	}
+	gen.SetAnnotations(nil)
+	if isTransientCRDCondition(gen, "BuildFailed") {
+		t.Fatal("a failing ArtifactGenerator must remain an issue")
+	}
+	gen.SetAPIVersion("example.com/v1")
+	gen.SetAnnotations(map[string]string{"source.extensions.fluxcd.io/reconcile": "disabled"})
+	if isTransientCRDCondition(gen, "BuildFailed") {
+		t.Fatal("a foreign ArtifactGenerator must not read source-watcher's annotation")
+	}
+}
+
 // TestNewConditionIssue_IssueTimingSinceGuard pins the missing-timestamp guard: a condition
 // with no lastTransitionTime must not produce an issue_timing. Without the guard,
 // lastSeen=now makes failingFor≈0 and any old resource looks like it was

@@ -134,13 +134,13 @@ export function AppIdentityTooltip({
   fleet,
 }: {
   identityKey?: string
-  members: { name: string; env: string; confidence: string; evidence: string }[]
+  members: { name: string; env: string; confidence?: string; evidence: string }[]
   source?: string
   portable?: boolean
   fleet?: boolean
 }) {
   const evidences = Array.from(new Set(members.map((m) => m.evidence).filter(Boolean)))
-  const heuristicOnly = members.every((m) => m.confidence !== 'high')
+  const heuristicOnly = members.some((m) => m.confidence === 'medium') && !members.some((m) => m.confidence === 'high')
   // The wire `portable` flag is authoritative; fall back to deriving it from the
   // source when an older host doesn't pass it.
   const folds = portable ?? isDeclaredAppSource(source)

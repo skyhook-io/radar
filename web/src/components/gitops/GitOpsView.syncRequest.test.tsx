@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, useNavigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { normalizeArgoApplication } from '@skyhook-io/k8s-ui'
 import type { ArgoActionHandlers, GitOpsInsight, GitOpsInsightRef, GitOpsRow, GitOpsRowAction } from '@skyhook-io/k8s-ui'
 import { GitOpsView } from './GitOpsView'
+import { isShownInline } from '../../api/httpErrors'
+import { observeConnectionStatus, resetConnectionBindingForTest } from '../../api/connectionBinding'
 
 // The requests the Sync dialog builds, sent by the real useArgoSync and
 // useArgoResourceValidation: only a Radar advertising argoSyncInheritance is
@@ -29,23 +31,26 @@ vi.mock('@skyhook-io/k8s-ui', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@skyhook-io/k8s-ui')>()
   return {
     ...actual,
-    useToast: () => ({ showError: vi.fn(), showSuccess: vi.fn(), showToast: vi.fn() }),
+    useToast: () => ({ showError: toast.error, showSuccess: vi.fn(), showToast: vi.fn() }),
     GitOpsTableView: (props: { rows: GitOpsRow[]; onRowAction: (row: GitOpsRow, action: GitOpsRowAction) => void }) => (
       <button type="button" onClick={() => props.onRowAction(props.rows[0], 'sync')}>Open sync</button>
     ),
-    GitOpsDetailLayout: (props: { argo?: ArgoActionHandlers; renderTabBody: (ctx: { tab: 'changes'; fullscreen: boolean }) => React.ReactNode; children?: React.ReactNode }) => (
-      <div data-resume-settings={JSON.stringify(props.argo?.resumeSettings ?? null)}>
+    GitOpsDetailLayout: (props: { argo?: ArgoActionHandlers; onRemediate?: (remediation: { kind: 'create-namespace'; target: string }) => void; renderTabBody: (ctx: { tab: 'changes'; fullscreen: boolean }) => React.ReactNode; children?: React.ReactNode }) => {
+      const navigate = useNavigate()
+      return <div data-resume-settings={JSON.stringify(props.argo?.resumeSettings ?? null)}>
         <button type="button" onClick={() => props.argo?.onSyncRequested()}>Open sync</button>
+        <button type="button" onClick={() => navigate('/gitops/detail/applications/argocd/other?apiGroup=argoproj.io')}>Open other Application</button>
+        <button type="button" onClick={() => props.onRemediate?.({kind: 'create-namespace', target: 'sandbox'})}>Create namespace and retry</button>
         {props.renderTabBody({ tab: 'changes', fullscreen: false })}
         {props.children}
       </div>
-    ),
+    },
     GitOpsChangesView: (props: { onSyncResource?: (ref: GitOpsInsightRef) => void }) => (
       <button type="button" onClick={() => props.onSyncResource?.(deployment)}>Open resource sync</button>
     ),
   }
 })
-const toast = vi.hoisted(() => ({ success: vi.fn() }))
+const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }))
 vi.mock('../ui/Toast', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../ui/Toast')>()),
   showApiSuccess: toast.success,
@@ -59,7 +64,7 @@ vi.mock('../../api/client', async (importOriginal) => {
     useGitOpsTree: () => ({ data: undefined, isLoading: false, error: null }),
     useGitOpsInsights: () => ({ data: insight, isLoading: false, error: null }),
     useArgoRollback: idle, useArgoRefresh: idle, useArgoTerminate: idle,
-    useArgoSuspend: idle, useArgoResume: idle, useApplyResource: idle,
+    useArgoSuspend: idle, useArgoResume: idle,
     useFluxReconcile: idle, useFluxSyncWithSource: idle, useFluxSuspend: idle, useFluxResume: idle,
   }
 })
@@ -79,13 +84,28 @@ let client: QueryClient
 let host: HTMLDivElement
 let root: ReturnType<typeof createRoot>
 let requests: Array<{ path: string; body: Record<string, unknown> }>
+let syncDenial: { error: string; error_code: string; summary: string } | undefined
+let pendingSyncResponse: Promise<Response> | undefined
+let pendingNamespaceResponse: Promise<Response> | undefined
 
 beforeEach(async () => {
   requests = []
+  syncDenial = undefined
+  pendingSyncResponse = undefined
+  pendingNamespaceResponse = undefined
+  toast.error.mockClear()
   vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
     if (init?.method === 'POST') {
+      if (path.includes('/resources/apply')) {
+        requests.push({ path, body: {} })
+        return pendingNamespaceResponse ?? Promise.resolve(Response.json([]))
+      }
       requests.push({ path, body: JSON.parse(String(init.body)) })
+      if (path.endsWith('/sync') && pendingSyncResponse) return pendingSyncResponse
+      if (path.endsWith('/sync') && syncDenial) {
+        return Promise.resolve(Response.json(syncDenial, { status: 403 }))
+      }
       const answer = path.endsWith('/validate-resource') ? { outcome: 'succeeded', message: 'ok' } : { message: 'Sync initiated' }
       return Promise.resolve(new Response(JSON.stringify(answer), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     }
@@ -102,6 +122,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await act(async () => root.unmount())
   client.clear()
+  resetConnectionBindingForTest()
   host.remove()
   document.body.innerHTML = ''
   app.spec.source = {}
@@ -366,4 +387,71 @@ it.each([
   await advertise(features)
   const settings = document.querySelector('[data-resume-settings]')!.getAttribute('data-resume-settings')!
   expect(JSON.parse(settings)).toEqual(expected)
+})
+
+it.each([
+  '/gitops',
+  '/gitops/detail/applications/argocd/guestbook?apiGroup=argoproj.io',
+])('keeps the failed sync and its original denial in the dialog from %s', async (path) => {
+  syncDenial = {
+    error: 'admission webhook "change-window" denied the request: frozen',
+    error_code: 'admission_denied',
+    summary: 'Rejected by admission webhook change-window: frozen',
+  }
+  await renderView(path)
+  await click(button('Open sync'))
+  await click(toggle('Prune'))
+  await click(button('Sync now'))
+  expect(toggle('Prune').checked).toBe(true)
+  expect(document.querySelector('[role="dialog"] [role="alert"]')?.textContent).toContain(syncDenial.summary)
+  expect(isShownInline(client.getMutationCache().getAll().at(-1)?.state.error)).toBe(true)
+  await click(button('Error details'))
+  expect(document.querySelector('[role="dialog"] pre')?.textContent).toBe(syncDenial.error)
+  await click(button('Cancel'))
+  await click(button('Open sync'))
+  expect(document.querySelector('[role="dialog"] [role="alert"]')).toBeNull()
+})
+
+it('closes a failed sync when the detail page changes Applications', async () => {
+  syncDenial = { error: 'denied', error_code: 'admission_denied', summary: 'Change window is closed' }
+  await click(button('Open sync'))
+  await click(button('Sync now'))
+  expect(document.querySelector('[role="dialog"] [role="alert"]')?.textContent).toContain(syncDenial.summary)
+  await click(button('Open other Application'))
+  const dialog = document.querySelector('[role="dialog"]')
+  expect(!dialog || dialog.closest('[inert]')).toBeTruthy()
+  await click(button('Open sync'))
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('argocd/other')
+  expect(document.querySelector('[role="dialog"] [role="alert"]')).toBeNull()
+})
+
+it('keeps global error reporting for a rejection after leaving the originating Application', async () => {
+  let respond!: (response: Response) => void
+  pendingSyncResponse = new Promise(resolve => { respond = resolve })
+  await click(button('Open sync'))
+  await click(button('Sync now'))
+  await click(button('Open other Application'))
+  await act(async () => respond(Response.json({
+    error: 'denied', error_code: 'admission_denied', summary: 'Change window is closed',
+  }, { status: 403 })))
+  await settle()
+  const mutation = client.getMutationCache().getAll().at(-1)
+  expect(mutation?.state.status).toBe('error')
+  expect(mutation?.options.meta?.errorMessage).toBe('Failed to trigger sync')
+  expect(isShownInline(mutation?.state.error)).toBe(false)
+})
+
+it('skips automatic Sync if the connection changes after namespace creation starts', async () => {
+  let applied!: (response: Response) => void
+  pendingNamespaceResponse = new Promise<Response>(resolve => { applied = resolve })
+  observeConnectionStatus({ connectionId: 'first-connection' })
+  await click(button('Create namespace and retry'))
+  expect(requests.map(({ path }) => path)).toEqual([expect.stringContaining('/resources/apply')])
+
+  observeConnectionStatus({ connectionId: 'next-connection' })
+  await act(async () => applied(Response.json([])))
+  await settle()
+
+  expect(requests).toHaveLength(1)
+  expect(toast.error).toHaveBeenCalledWith('Created namespace sandbox, but sync failed', expect.stringContaining('cluster connection changed'))
 })

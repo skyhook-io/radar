@@ -176,6 +176,23 @@ Issues reports missing declared Flagger targets, analysis MetricTemplates and pr
 Absence is reported only from an already watched, synced inventory covering the referenced namespace. Unwatched, unsynced or unreadable dependencies produce no missing-reference finding; the scan starts no watches and makes no provider requests. Secret checks use metadata existence, never values. Findings depending on another namespace or Secret inventory are withheld unless the caller may read that evidence. Generated primary workloads and Services are not declared prerequisites.
 
 
+## k3s Helm controller
+
+k3s and RKE2 install add-ons (Traefik, CoreDNS and whatever the admin adds) through their Helm controller: a `HelmChart` renders into a `helm-install-<name>` Job that installs a normal Helm release, and a `HelmChartConfig` of the same name and namespace overrides its values.
+
+**Helm view.** The release's `controller` names the HelmChart (tool `k3s`) and the HelmChartConfig, so it carries a `k3s` badge, and its drawer says it is managed by k3s and names the `HelmChart` and the `HelmChartConfig` (or says to create one), with links to each. An upgrade or rollback from Radar is overwritten the next time helm-controller runs the install Job (when the HelmChart or its HelmChartConfig changes), so the upgrade-available hint and "Choose chart source" are hidden; MCP `manage_helm` refuses writes to it (an uninstall is pointed at deleting the HelmChart or, for one k3s applies from a server manifest (`objectset.rio.cattle.io/owner-gvk` is a `k3s.cattle.io` Addon), at the servers' `--disable <name>` flag, since k3s re-applies a deleted one). Flux wins if a Flux `HelmRelease` also matches, and two HelmCharts installing the same release credit neither. Issues still report a failed k3s release, and its Helm revisions stay in recent changes, since k3s keeps no change history of its own.
+
+**Detail views.** The `HelmChart` drawer shows what helm-controller reports (`JobCreated` / `Failed`), the chart (a chart served by k3s itself reads "Bundled with k3s", and one carried only in `spec.chartContent`, as RKE2 packages its add-ons, reads "Inline chart archive"), the target namespace and release with a link to it in the Helm view, the install Job, and who manages the object. The `HelmChartConfig` drawer links its `HelmChart`. **Values stay out of the views**: `spec.valuesContent`, the structured `spec.values` and `spec.set` can carry credentials, so drawers, table cells and the resource bodies sent to AI (`get_resource`, `list_resources`, search result bodies, the AI resource API) show only a line count, the number of top-level `values` keys and the `set` keys (an inline `spec.chartContent` archive and the applied-object copies in the `objectset.rio.cattle.io/applied` and last-applied annotations are omitted from those bodies too). Not filtered yet, as for any custom resource: search match snippets quote the matched value text, an MCP dry-run patch preview shows old and new values, change history shows numeric values, and the `set` values appear in the install Job's arguments. The YAML tab shows the object as stored to whoever can read it.
+
+`HelmChart` shares its kind and plural with Flux's `source.toolkit.fluxcd.io` HelmChart; every view is gated on the `helm.cattle.io` group, and a Flux HelmChart keeps its generic drawer and printer columns.
+
+**In-cluster.** The chart toggle `rbac.crdGroups.k3sHelm` is **off by default** (read-baseline decision `withhold`, because the values can carry credentials). Local runs use your own kubeconfig and are unaffected.
+
+| Resource | Group | Topology | Detail View | AI Summary |
+|----------|-------|----------|-------------|------------|
+| HelmChart | `helm.cattle.io/v1` | — | Yes | Values omitted from resource bodies |
+| HelmChartConfig | `helm.cattle.io/v1` | — | Yes | Values omitted from resource bodies |
+
 ## System Upgrade Controller
 
 Rancher, k3s and RKE2 upgrade nodes with [system-upgrade-controller](https://github.com/rancher/system-upgrade-controller): a `Plan` (`upgrade.cattle.io/v1`) selects Nodes with `spec.nodeSelector` and runs one upgrade Job per Node, `spec.concurrency` at a time.
@@ -666,7 +683,7 @@ TLS references resolve local Secret names and delegated `namespace/name` names c
 
 **Dashboard:** Certificate health card showing healthy/warning/critical/expired certificate counts across all namespaces.
 
-**TLS Secret Parsing:** Click any TLS Secret to see the X.509 certificate details — subject, issuer, validity dates, SANs — parsed directly from the secret data.
+**Secret certificates.** Open a Secret to inspect PEM certificates under any data key. The drawer names the key, preserves certificate order within each bundle, and shows the subject, organization, issuer, DNS and IP alternative names, serial number, key type and validity dates. The dashboard's Secret expiry counts use the serving certificate in a TLS Secret's `tls.crt`.
 
 <p align="center">
   <img src="screenshots/integrations/certmanager-certificate-detail.png" alt="Certificate Detail" width="800">
@@ -869,6 +886,12 @@ Severity and has-a-fix filters apply to every view. A finding Trivy left unrated
 
 The section reads `GET /api/sealedsecrets/controller?sealedSecretNamespace=<SealedSecret namespace>` (without it, kubeseal's defaults pick the controller). Each part has its own gate, and a denied part is a state in a 200, never a 403 for the whole answer: the controller needs `get deployments` in its namespace, the keys need `list secrets` there, and the totals cover the SealedSecrets the caller can list. Keys come from Radar's Secret cache and only the public `tls.crt` is read: key names and certificate dates are returned, never `tls.key`, the certificate, labels or annotations. When Radar does not collect Secrets in that namespace, is still loading them (the section refreshes until they arrive) or failed to load them, the section says so instead of showing none; likewise for the controller while Deployments are loading or failed to load, or when Radar watches Deployments in some namespaces only and the controller is not among them. Only the key's first certificate counts. A key whose certificate does not parse is listed without dates and never marked as the one sealing new secrets. On a Radar without the endpoint (Radar Hub against an older cluster) the section is absent, including when that Radar answers before its capabilities have loaded.
 
+**Sealing certificate.** `GET /api/sealedsecrets/cert?sealedSecretNamespace=<namespace>` returns `{certPem, certFingerprint, controller: {namespace, name}}`. Send the namespace of the Secret that will be sealed. Radar requires one controller whose scope covers that namespace, with a complete Deployment cache. Omit the query to use the controller view’s default selection. It prefers the standard kube-system controller, then a unique kube-system candidate, then a single cluster-wide candidate. The reply contains one current PEM certificate with an RSA public key. Its fingerprint is lowercase hex SHA-256 of the certificate’s DER. Responses containing the certificate use `Cache-Control: no-store`.
+
+Radar reads only `/v1/cert.pem` on the Service named like the controller Deployment. It uses the `http` port or the only TCP port. The Service must select pods. In-cluster Radar connects directly. Other modes use the API server’s services proxy. With auth on, the caller needs `get services/proxy` on the same `http:<service>:<port-name>` resource that kubeseal uses. A human caller in user-token mode must supply their Kubernetes token. Fetches time out after five seconds, carry a 64 KiB limit and follow no redirects.
+
+The `sealedSecretsCert` capability signals endpoint support. A 404 from a supported agent distinguishes `notInstalled`, `notFound` and `serviceNotFound`. Overlapping or unknown controller scope yields 409 `ambiguous` or `unknown`. Invalid namespaces yield 400. A refused permission yields 403. In user-token mode a missing person’s token yields 403 with `reason: user_token_required`. A switched connection yields 409 `connection_changed`. A namespace outside collection yields 409 `radar_namespace_not_collected`. Pending, timed-out or disabled collection is reported with its standard Radar read error code. A bad upstream response yields 502 `upstream`.
+
 ### Supported CRDs
 
 | CRD | Group | Topology | Detail View | AI Summary |
@@ -888,7 +911,9 @@ See the main [README](../README.md#gitops) for the user-facing overview. This se
 | GitRepository | `source.toolkit.fluxcd.io/v1` | Yes | Yes | — |
 | OCIRepository | `source.toolkit.fluxcd.io/v1beta2` | Yes | Yes | — |
 | HelmRepository | `source.toolkit.fluxcd.io/v1` | Yes | Yes | — |
-| Bucket / HelmChart / ExternalArtifact | `source.toolkit.fluxcd.io` | When referenced | Generic | — |
+| Bucket / HelmChart | `source.toolkit.fluxcd.io` | When referenced | Generic | — |
+| ExternalArtifact | `source.toolkit.fluxcd.io/v1` | When referenced | Yes | — |
+| ArtifactGenerator | `source.extensions.fluxcd.io/v1beta1` (source-watcher) | When referenced | Yes | — |
 | Kustomization | `kustomize.toolkit.fluxcd.io/v1` | Yes | Yes | Yes |
 | HelmRelease | `helm.toolkit.fluxcd.io/v2` | Yes | Yes | Yes |
 | Alert | `notification.toolkit.fluxcd.io/v1beta3` | — | Yes | — |
@@ -900,6 +925,16 @@ observed Flux sources in both directions within Radar's namespace scope.
 Kustomizations use `spec.sourceRef`; HelmReleases use `spec.chart.spec.sourceRef`
 or `spec.chartRef`. Inline releases also link the generated HelmChart named by
 `status.helmChart`; an observed HelmChart links its source in its own namespace.
+An ExternalArtifact links the ArtifactGenerator named by its `spec.sourceRef`, and a
+generator links the GitRepository / OCIRepository / Bucket / HelmChart /
+ExternalArtifact in its `spec.sources` (with their aliases). Its artifact count
+reads the ExternalArtifacts in `status.inventory`, not the Namespaces
+source-watcher 2.3 also records there, and shows `-` when Radar can't read an
+inventory. These upstream hops follow only objects already reached
+from a root, at most eight levels, so a release that consumes one of a
+generator's artifacts never pulls in the generator's other artifacts. A
+generator paused with `source.extensions.fluxcd.io/reconcile: disabled` is
+Suspended, not failing, in every surface (tree, topology, table, drawer, Issues).
 `spec.dependsOn` links a Kustomization or HelmRelease to the objects of the same
 kind it waits for (an entry without a namespace means its own namespace).
 These are dependencies, not owners: topology draws each source upstream, with
@@ -995,6 +1030,35 @@ are redacted in its column and drawer; the YAML view and MCP show the object as 
 | Workflow | `argoproj.io/v1alpha1` | — | Yes | — |
 | WorkflowTemplate | `argoproj.io/v1alpha1` | — | Yes | — |
 | CronWorkflow | `argoproj.io/v1alpha1` | — | Generic | — |
+
+**Stop a Workflow** with `POST /api/workflows/{namespace}/{name}/stop` (capability `workflowStop`). Send a JSON object with the reviewed Workflow's `metadata.uid` as `uid` and an explicit `strategy` of `Stop` or `Terminate`. An in-place `argo retry` preserves the Workflow UID, so callers that must stop only the execution they reviewed should also send its reviewed `resourceVersion`. Missing either required field or supplying an unknown strategy returns 400. The body limit is 1 KiB.
+
+Argo reconciles `spec.shutdown` asynchronously. Stop allows exit handlers to run. Terminate skips them and can escalate an existing Stop. Older Argo controllers (for example, v3.5) may leave shutdown pending while the Workflow is globally suspended, so watch `status.phase` for completion. Radar checks the Workflow in this order.
+
+1. A different UID means the name now identifies another run. Radar returns 409 `workflow_replaced`.
+2. A finished run returns 409 `workflow_finished`.
+3. If the stored shutdown already satisfies the request, Radar returns 200 with that `shutdown` and `changed: false`. A stored Terminate satisfies either strategy.
+4. If a patch is still needed and the caller supplied a stale version, Radar returns 409 `workflow_changed`.
+
+Radar patches at the version it just read. With a caller-supplied version, a patch conflict returns 409 `workflow_changed` immediately. Otherwise Radar reads the Workflow again and repeats all four checks. If all four patch attempts conflict, it returns 409 `workflow_changed`.
+
+After Kubernetes accepts the patch, Radar returns 200 with the stored `shutdown`, including a strategy rewritten by admission or an empty string if admission removed it. `changed` is true only if the stored strategy differs from the value Radar read for that patch. A patch rejected by Kubernetes as invalid returns 422.
+
+Kubernetes checks the caller's `get` permission on the Workflow for the read and `patch` for a write. On a shared listener without authentication, anyone who can reach Radar can stop Workflows its Kubernetes identity can read and patch. The stock chart's Argo permissions are read-only. Same-origin and [connection binding](connection-lifecycle.md) checks apply.
+
+In the UI, a Workflow's detail page, and the run view of a CronWorkflow, WorkflowTemplate or ClusterWorkflowTemplate for its selected child Workflow, offer **Stop…** while the run has not finished (phase other than Succeeded, Failed or Error). The dialog explains both strategies and defaults to Stop. While a Stop is in progress, the button becomes **Terminate…**, and once a Terminate is stored, it disappears. Until the run finishes, the page header (or the selected run's header in a run view) shows **Stopping** or **Terminating**, because `spec.shutdown` records the request and the phase stays Running until Argo acts. An unconfirmed dialog closes when the run finishes, is terminated, starts deleting, or restarts under the same UID (`argo retry`, recognised by a new `status.startedAt`). The button appears only when the connected Radar advertises `workflowStop` and `capabilities.workloadWrites.workflows` (a `patch argoproj.io/workflows` access check in the Workflow's namespace) is true. On an older Radar, it renders disabled with an upgrade note. The UI sends the Workflow's UID and never its `resourceVersion`, because Argo's status updates change the version continually. Pinning the version would refuse almost every Stop on a running Workflow.
+
+**Submit a WorkflowTemplate** with `POST /api/workflowtemplates/{namespace}/{name}/submit` (capability `workflowTemplateSubmit`). The WorkflowTemplate page shows it as **Submit…** when the caller may create Workflows in the namespace (`workloadWrites.createWorkflows`). After a submit, Radar opens the new Workflow's page, as Argo's UI does. Radar creates a Workflow whose `spec.workflowTemplateRef` names the template, as `argo submit --from workflowtemplate/<name>` does, and answers 200 with its `namespace`, `name` and `uid`. Every body field is optional, and an empty body is accepted; the body limit is 256 KiB.
+
+- `parameters`, an object of name to string value, is checked against what the template declares: its `spec.arguments.parameters`, and the inputs of its entrypoint template, which Argo fills from a Workflow's arguments by name. A parameter needs a value from the request unless the template gives it one (`value`, an input's `default`, or a `valueFrom.configMapKeyRef`; other `valueFrom` sources have nothing to read for a submitted run). As in Argo's validation, an argument with an `enum` needs a literal `value`. A value must be one of the parameter's `enum` when it has one, including the enum of the entrypoint input an argument of the same name feeds. A `null` value is refused, and so is a name the template doesn't declare: Argo would accept it and ignore it, so Radar treats it as a typo. All of these return 400 `invalid_parameters`, naming each problem. Radar sends only the values in the request, in the template's order; Argo fills in the rest from the template.
+- A template without `spec.entrypoint` returns 400 `workflow_template_no_entrypoint`: a Workflow that references it can't start. Choosing an entrypoint is not supported.
+- `name` names the Workflow (at most 63 characters, a DNS subdomain). `generateName` sets the prefix instead (at most 58 characters). They can't be combined, and without either Radar uses `<template>-`, with the template name cut to fit. An explicit `name` that already exists returns 409 `workflow_name_taken`.
+
+When Submit fails without a definite answer from the server (a network error, timeout, or 5xx), the dialog locks resubmission with a warning to check the runs below and refreshes the template's run list. A definite refusal (400, 403, 404, 409) keeps the form open with the error.
+
+The Workflow carries Argo's `workflows.argoproj.io/workflow-template` label, as Argo's CLI and UI set it, and the template's `workflows.argoproj.io/controller-instanceid` label when it has one, so a controller started with an instance ID picks the run up. Radar copies no other labels and has no instance ID of its own: where the controller runs with one, label the template with it, or the run is created and never picked up. Argo runs the Workflow's pods with the service account the template sets, or Argo's configured default, never the caller's.
+
+The template read and the create both run as the caller: `get workflowtemplates` and `create workflows` in the namespace. A namespace outside the `--namespace-scope` pin is refused with 403 before any Kubernetes call. On a shared listener without authentication, anyone who can reach Radar can start runs of templates its Kubernetes identity can read, if that identity may create Workflows. The stock chart's Argo permissions are read-only, so this needs a grant beyond the chart. Same-origin and connection binding checks apply. ClusterWorkflowTemplates are not supported yet.
 
 ---
 
@@ -1418,7 +1482,7 @@ A cluster asking for a major the catalog does not list reports "incomplete or in
 
 All five are posture findings (warning, default severity Medium, not badge-worthy) that state what the Cluster declares to CNPG. A dump job or storage snapshots outside CNPG are invisible to them, so none says a database has no backups. One cause gives one finding: a Cluster with no destination gets `cnpgNoBackupDestination` only, and neither the WAL rule nor the schedule rule evaluates it.
 
-The schedule rule is deliberately narrow: the absence of a ScheduledBackup does not prove a cluster is unprotected (on-demand Backups and external schedulers exist), so the finding asserts only that no schedule is *declared*. All three `spec.method` values — `barmanObjectStore`, `volumeSnapshot` and `plugin` — count as a declared schedule. Suspended schedules count as present, since suspension is deliberate operator intent. It does not run at all unless a synced cluster-wide ScheduledBackup informer backs the inventory, because absence would otherwise be unprovable. The other four read only the Cluster object and need no other inventory. All five obey `radarhq.io/ignore-checks` on the Cluster.
+The schedule rule is deliberately narrow: the absence of a ScheduledBackup does not prove a cluster is unprotected (on-demand Backups and external schedulers exist), so the finding asserts only that no schedule is *declared*. All three `spec.method` values — `barmanObjectStore`, `volumeSnapshot` and `plugin` — count as a declared schedule. Suspended schedules count as present, since suspension is deliberate operator intent. It does not run at all unless a synced cluster-wide ScheduledBackup informer backs the inventory, because absence would otherwise be unprovable. The other four read only the Cluster object and need no other inventory. All five obey `radarhq.io/ignore-checks` on the Cluster or its Namespace.
 
 ### Supported CRDs
 

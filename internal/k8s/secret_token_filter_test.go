@@ -94,8 +94,6 @@ func TestRecordToTimelineStore_ServiceAccountTokenUpdateDrop(t *testing.T) {
 				t.Run(shape+"/"+storeState+"/"+name, func(t *testing.T) {
 					timeline.ResetStore()
 					t.Cleanup(timeline.ResetStore)
-					timeline.ResetMetricsForContextSwitch()
-					t.Cleanup(timeline.ResetMetricsForContextSwitch)
 					if storeState == "available" {
 						if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 10}); err != nil {
 							t.Fatalf("InitStore: %v", err)

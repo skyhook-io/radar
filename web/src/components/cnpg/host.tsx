@@ -34,8 +34,6 @@ export const cnpgHost = {
     if (!plural) return null
     const params = new URLSearchParams(search)
     params.delete('apiGroup')
-    const tab = params.get('tab')
-    if (plural === 'clusters' && (tab === 'timeline' || tab === 'events')) params.set('tab', 'activity')
     const base = cnpgDetailPath({ plural, namespace: resource.namespace, name: resource.name })
     const qs = params.toString()
     return qs ? `${base}?${qs}` : base

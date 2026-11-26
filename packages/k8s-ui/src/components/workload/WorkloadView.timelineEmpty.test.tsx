@@ -12,7 +12,7 @@ const props: ComponentProps<typeof WorkloadView> = {
   onBack: () => {}, activeTab: 'timeline', historyScoped: true, allEvents: [],
 }
 
-function render(overrides: Partial<typeof props> = {}) {
+function render(overrides: Partial<Omit<typeof props, 'extraTabs' | 'onTabChange'>> = {}) {
   const host = document.createElement('div')
   host.innerHTML = renderToStaticMarkup(<WorkloadView {...props} {...overrides} />)
   return host
