@@ -147,6 +147,15 @@ entries:
       - "POST /api/workloads/{kind}/{namespace}/{name}/rollback kind=rollouts"
       - "POST /api/workloads/{kind}/{namespace}/{name}/images kind=rollouts"
       - "MCP manage_workload kind=rollout action=rollback"
+  - group: "apps"
+    resources: ["replicasets"]
+    verbs: ["list"]
+    scope: Namespaced
+    reason: "Rollback lists ReplicaSets in the Rollout namespace to resolve the target revision, including for workloadRef Rollouts."
+    source: "pkg/rollouts/revisions.go (Undo)"
+    actions:
+      - "POST /api/workloads/{kind}/{namespace}/{name}/rollback kind=rollouts"
+      - "MCP manage_workload kind=rollout action=rollback"
   - group: ""
     resources: ["podtemplates"]
     verbs: ["get", "patch"]
@@ -170,22 +179,76 @@ entries:
       - "POST /api/velero/{kind}/{namespace}/{name}/volumes"
   - group: "velero.io"
     resources: ["schedules"]
-    verbs: ["get", "patch"]
+    verbs: ["get"]
     scope: Namespaced
-    reason: "Starting a scheduled backup reads the schedule. Pause and resume patch the schedule."
+    reason: "Read the schedule and bind the write to its reviewed version."
     source: "internal/server/velero_schedule_pause.go; internal/server/velero_backup_now.go"
     actions:
       - "POST /api/velero/schedules/{namespace}/{name}/backup"
       - "POST /api/velero/schedules/{namespace}/{name}/pause"
       - "POST /api/velero/schedules/{namespace}/{name}/resume"
   - group: "velero.io"
+    resources: ["schedules"]
+    verbs: ["patch"]
+    scope: Namespaced
+    reason: "Pause and resume update the schedule."
+    source: "internal/server/velero_schedule_pause.go"
+    actions:
+      - "POST /api/velero/schedules/{namespace}/{name}/pause"
+      - "POST /api/velero/schedules/{namespace}/{name}/resume"
+  - group: "velero.io"
     resources: ["backups"]
-    verbs: ["get", "create"]
+    verbs: ["get"]
+    scope: Namespaced
+    reason: "Read the target Backup for artifacts and before a new deletion request. Back up now can read a named Backup to resolve a repeated submission."
+    source: "internal/server/velero_backup_now.go; internal/server/velero_results.go; internal/server/velero_delete.go"
+    actions:
+      - "POST /api/velero/schedules/{namespace}/{name}/backup"
+      - "POST /api/velero/{kind}/{namespace}/{name}/messages"
+      - "POST /api/velero/{kind}/{namespace}/{name}/contents"
+      - "POST /api/velero/{kind}/{namespace}/{name}/log"
+      - "POST /api/velero/{kind}/{namespace}/{name}/volumes"
+      - "POST /api/velero/backups/{namespace}/{name}/delete"
+  - group: "velero.io"
+    resources: ["backups"]
+    verbs: ["create"]
     scope: Namespaced
     reason: "Starting a backup from a schedule creates a Backup object."
     source: "internal/server/velero_backup_now.go"
     actions:
       - "POST /api/velero/schedules/{namespace}/{name}/backup"
+  - group: "velero.io"
+    resources: ["restores"]
+    verbs: ["get"]
+    scope: Namespaced
+    reason: "Read the target Restore when these artifact endpoints are called for a restore."
+    source: "internal/server/velero_results.go (openVeleroRun)"
+    actions:
+      - "POST /api/velero/{kind}/{namespace}/{name}/messages"
+      - "POST /api/velero/{kind}/{namespace}/{name}/contents"
+      - "POST /api/velero/{kind}/{namespace}/{name}/log"
+      - "POST /api/velero/{kind}/{namespace}/{name}/volumes"
+  - group: "velero.io"
+    resources: ["backupstoragelocations"]
+    verbs: ["get"]
+    scope: Namespaced
+    reason: "Best effort when the Backup names a location. A readable location lets Radar check location policy before submitting the deletion request."
+    source: "internal/server/velero_delete.go"
+    actions:
+      - "POST /api/velero/backups/{namespace}/{name}/delete"
+  - group: "apps"
+    resources: ["deployments"]
+    verbs: ["list"]
+    scope: Namespaced
+    reason: "Optional server checks use the Velero Deployment in the run or schedule namespace when the caller can list it."
+    source: "internal/server/velero_workspace.go (veleroDeployments); internal/server/velero_backup_now.go; internal/server/velero_delete.go; internal/server/velero_results.go"
+    actions:
+      - "POST /api/velero/schedules/{namespace}/{name}/backup"
+      - "POST /api/velero/{kind}/{namespace}/{name}/messages"
+      - "POST /api/velero/{kind}/{namespace}/{name}/contents"
+      - "POST /api/velero/{kind}/{namespace}/{name}/log"
+      - "POST /api/velero/{kind}/{namespace}/{name}/volumes"
+      - "POST /api/velero/backups/{namespace}/{name}/delete"
   - group: "velero.io"
     resources: ["deletebackuprequests"]
     verbs: ["list", "create"]
@@ -196,10 +259,10 @@ entries:
       - "POST /api/velero/backups/{namespace}/{name}/delete"
   - group: "postgresql.cnpg.io"
     resources: ["clusters"]
-    verbs: ["get", "patch"]
+    verbs: ["get"]
     scope: Namespaced
-    reason: "CloudNativePG administration and restore validation operate on an existing Cluster."
-    source: "internal/cnpg/actions.go; internal/cnpg/actions_maintenance.go; internal/cnpg/protection.go; internal/cnpg/recovery.go"
+    reason: "Read the target Cluster for administration and validation. Run and repairMethod also require the Cluster named by the schedule. Other schedule actions use that read for context."
+    source: "internal/cnpg/actions.go; internal/cnpg/actions_maintenance.go; internal/cnpg/protection.go; internal/cnpg/recovery.go; internal/cnpg/schedule_repair.go"
     actions:
       - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=backup"
       - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=switchover"
@@ -217,6 +280,46 @@ entries:
       - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=unsetMaintenance"
       - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=configureArchiving"
       - "POST /api/cnpg/clusters/{namespace}/{name}/restore-validation"
+      - "POST /api/cnpg/scheduledbackups/{namespace}/{name}/actions/{action} action=suspend"
+      - "POST /api/cnpg/scheduledbackups/{namespace}/{name}/actions/{action} action=resume"
+      - "POST /api/cnpg/scheduledbackups/{namespace}/{name}/actions/{action} action=run"
+      - "POST /api/cnpg/scheduledbackups/{namespace}/{name}/actions/{action} action=setSchedule"
+      - "POST /api/cnpg/scheduledbackups/{namespace}/{name}/actions/{action} action=repairMethod"
+  - group: "postgresql.cnpg.io"
+    resources: ["clusters"]
+    verbs: ["patch"]
+    scope: Namespaced
+    reason: "Change the Cluster spec or annotations, including restore validation and lifting the instance fence after destruction."
+    source: "internal/cnpg/actions.go; internal/cnpg/actions_maintenance.go; internal/cnpg/protection.go; internal/cnpg/recovery.go; internal/cnpg/destroy.go"
+    actions:
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=restart"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=reload"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=fence"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=unfence"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=hibernate"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=rehydrate"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=destroyInstance"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=setMaintenance"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=unsetMaintenance"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=configureArchiving"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/restore-validation"
+  - group: "postgresql.cnpg.io"
+    resources: ["clusters"]
+    verbs: ["list"]
+    scope: Namespaced
+    reason: "Archive collision checks first list across namespaces, then try the Cluster namespace on denial. If both lists are forbidden, configuration can continue with an incomplete-inventory warning."
+    source: "internal/cnpg/protection.go (checkArchiveIdentity)"
+    actions:
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=configureArchiving"
+  - group: "barmancloud.cnpg.io"
+    resources: ["objectstores"]
+    verbs: ["get"]
+    scope: Namespaced
+    reason: "Read the selected or scheduled archive store. Archiving also reads a configured recovery-source store and checks other visible archive users when their stores are readable."
+    source: "internal/cnpg/protection.go; internal/cnpg/schedule_repair.go"
+    actions:
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=configureArchiving"
+      - "POST /api/cnpg/scheduledbackups/{namespace}/{name}/actions/{action} action=repairMethod"
   - group: "postgresql.cnpg.io"
     resources: ["clusters/status"]
     verbs: ["patch"]
@@ -228,23 +331,64 @@ entries:
       - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=restartInstance"
   - group: "postgresql.cnpg.io"
     resources: ["backups"]
-    verbs: ["get", "list", "create"]
+    verbs: ["get", "create"]
     scope: Namespaced
-    reason: "On-demand backups create Backup objects."
-    source: "internal/cnpg/actions.go"
+    reason: "Create the requested Backup. GET checks a proposed name or resolves a create whose outcome is uncertain."
+    source: "internal/cnpg/actions.go (cnpgValidateBackupName, cnpgCreateBackup)"
     actions:
       - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=backup"
       - "POST /api/cnpg/scheduledbackups/{namespace}/{name}/actions/{action} action=run"
   - group: "postgresql.cnpg.io"
-    resources: ["scheduledbackups"]
-    verbs: ["get", "patch"]
+    resources: ["backups"]
+    verbs: ["get"]
     scope: Namespaced
-    reason: "ScheduledBackup actions read and patch the schedule."
-    source: "internal/cnpg/actions.go; internal/cnpg/protection.go"
+    reason: "When recovery names a Backup, archive isolation checks read that Backup to compare archive identities."
+    source: "internal/cnpg/protection.go (checkArchiveIdentity)"
+    actions:
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=configureArchiving"
+  - group: "postgresql.cnpg.io"
+    resources: ["backups"]
+    verbs: ["list"]
+    scope: Namespaced
+    reason: "The shared Cluster action runner checks for cold snapshots. When snapshots are configured, a denied list leaves the safety check unresolved and can block unfencing."
+    source: "internal/cnpg/actions.go (RunCNPGClusterAction, cnpgRunningColdSnapshot)"
+    actions:
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=backup"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=switchover"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=restart"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=restartInstance"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=reload"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=fence"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=unfence"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=hibernate"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=rehydrate"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=cancelBackend"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=terminateBackend"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=destroyInstance"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=setMaintenance"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=unsetMaintenance"
+  - group: "postgresql.cnpg.io"
+    resources: ["scheduledbackups"]
+    verbs: ["get"]
+    scope: Namespaced
+    reason: "Read the schedule for its own actions. On-demand Backup name validation also reads a schedule if the proposed name has a scheduled-run form."
+    source: "internal/cnpg/actions.go; internal/cnpg/schedule_repair.go"
     actions:
       - "POST /api/cnpg/scheduledbackups/{namespace}/{name}/actions/{action} action=suspend"
       - "POST /api/cnpg/scheduledbackups/{namespace}/{name}/actions/{action} action=resume"
       - "POST /api/cnpg/scheduledbackups/{namespace}/{name}/actions/{action} action=run"
+      - "POST /api/cnpg/scheduledbackups/{namespace}/{name}/actions/{action} action=setSchedule"
+      - "POST /api/cnpg/scheduledbackups/{namespace}/{name}/actions/{action} action=repairMethod"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=backup"
+  - group: "postgresql.cnpg.io"
+    resources: ["scheduledbackups"]
+    verbs: ["patch"]
+    scope: Namespaced
+    reason: "Edit the schedule spec when suspending, resuming, changing timing, or repairing its backup method."
+    source: "internal/cnpg/actions.go; internal/cnpg/schedule_repair.go"
+    actions:
+      - "POST /api/cnpg/scheduledbackups/{namespace}/{name}/actions/{action} action=suspend"
+      - "POST /api/cnpg/scheduledbackups/{namespace}/{name}/actions/{action} action=resume"
       - "POST /api/cnpg/scheduledbackups/{namespace}/{name}/actions/{action} action=setSchedule"
       - "POST /api/cnpg/scheduledbackups/{namespace}/{name}/actions/{action} action=repairMethod"
   - group: "postgresql.cnpg.io"
