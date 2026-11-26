@@ -18,7 +18,7 @@ const storedRule = {
   text: "rewrite name regex .*\\.nodes\\.vcluster\\.com kubernetes.default.svc.cluster.local",
 };
 
-// What Radar sent before stored rules: a verdict on the ConfigMap.
+// The `coreDNSFindings` shape: a verdict on the ConfigMap.
 const legacyFinding = {
   kind: "ConfigMap",
   namespace: "kube-system",
@@ -29,7 +29,7 @@ const legacyFinding = {
 
 describe("semantic diagnose evidence projection", () => {
   // The exact strings the server emits (internal/mcp/tools_diagnose.go,
-  // internal/issues/provider.go), and the "errors" wording older Radar used. A
+  // internal/issues/provider.go), and the "errors" wording some versions use. A
   // stored CoreDNS rule is configuration; only these make DNS evidence adverse.
   it.each([
     "pod logs contain DNS resolution failures",
@@ -98,7 +98,7 @@ describe("semantic diagnose evidence projection", () => {
     });
   });
 
-  it("still reads the issues DNS context an older Radar sends", () => {
+  it("reads the issues DNS context sent under the dns key", () => {
     const result = project([
       tool("issues-dns-legacy", "issues", {
         issues: [],
@@ -118,7 +118,7 @@ describe("semantic diagnose evidence projection", () => {
     });
   });
 
-  it("does not let an older Radar's CoreDNS verdict make the card adverse", () => {
+  it("does not let a CoreDNS verdict make the card adverse", () => {
     const result = project([
       tool("dns-legacy", "diagnose", {
         resource: deployment,

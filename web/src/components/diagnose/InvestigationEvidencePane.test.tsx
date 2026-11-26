@@ -1143,7 +1143,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
                 truncated: true,
               },
             ],
-            // What a cluster on an older Radar still sends.
+            // The verdict shape some Radar versions send.
             coreDNSFindings: [
               {
                 kind: "ConfigMap",

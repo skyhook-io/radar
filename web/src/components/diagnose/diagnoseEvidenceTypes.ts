@@ -154,8 +154,9 @@ export interface DiagnosisCoreDNSRule {
   truncated?: boolean;
 }
 
-// What Radar sent before `coreDNSRules`: a verdict on a CoreDNS ConfigMap.
-// Radar Hub shows clusters on that older Radar with this same UI.
+// A verdict on a CoreDNS ConfigMap, in the `coreDNSFindings` shape. Some Radar
+// versions send it in place of `coreDNSRules`, and Radar Hub shows their
+// clusters with this UI.
 export interface DiagnosisLegacyCoreDNSFinding {
   kind: string;
   namespace: string;

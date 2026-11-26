@@ -19,6 +19,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
 
@@ -415,7 +416,7 @@ func TestHandleDiagnose_AttachesPodDNSSignalAndRBACGatesCoreDNSRules(t *testing.
 	if err := json.Unmarshal([]byte(body), &parsed); err != nil || len(parsed.DNSContext.CoreDNSRules) != 1 {
 		t.Fatalf("decode dnsContext: %v: %s", err, body)
 	}
-	// The old field name is gone, so a UI built for it renders nothing here.
+	// Rules travel as coreDNSRules only. coreDNSFindings is a different shape.
 	if strings.Contains(body, `"coreDNSFindings"`) {
 		t.Fatalf("response must not use the old coreDNSFindings field: %s", body)
 	}
@@ -469,6 +470,30 @@ func TestHandleDiagnose_CoreDNSRulesNeedKubeSystemInAllowedNamespaces(t *testing
 		if strings.Contains(body, leak) {
 			t.Fatalf("kube-system config reached a caller without kube-system access, found %q: %s", leak, body)
 		}
+	}
+}
+
+// The signal list is capped. A workload and its pods can fill it with their DNS
+// settings alone, so an observed failure must not be the part that is dropped.
+func TestDiagnoseDNSSignalsKeepFailuresWhenSettingsFillTheCap(t *testing.T) {
+	spec := corev1.PodSpec{
+		DNSPolicy: corev1.DNSNone,
+		DNSConfig: &corev1.PodDNSConfig{
+			Nameservers: []string{"8.8.8.8"},
+			Searches:    []string{"example.com"},
+			Options:     []corev1.PodDNSConfigOption{{Name: "ndots"}},
+		},
+	}
+	pods := []*corev1.Pod{
+		{ObjectMeta: metav1.ObjectMeta{Name: "api-1"}, Spec: spec},
+		{ObjectMeta: metav1.ObjectMeta{Name: "api-2"}, Spec: spec},
+		{ObjectMeta: metav1.ObjectMeta{Name: "api-3"}, Spec: spec},
+	}
+	logs := []podLogEntry{{Logs: aicontext.FilteredLogs{Lines: []string{"dial tcp: lookup payments.shop.svc.cluster.local: no such host"}}}}
+
+	signals := diagnoseDNSSignals(pods[0], pods, logs, nil, nil)
+	if len(signals) == 0 || signals[0] != "pod logs contain DNS resolution failures" {
+		t.Fatalf("signals = %q, want the observed failure first", signals)
 	}
 }
 

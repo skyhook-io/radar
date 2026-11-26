@@ -414,9 +414,8 @@ type CreatedObjects struct {
 	Objects     []string          `json:"objects"`
 }
 
-// ClusterContext carries DNSConfig where older Radar sent "dns": a list of
-// CoreDNS findings with a severity, which UIs of that time always drew as a
-// warning. The new key keeps those UIs from drawing configuration as one.
+// ClusterContext is cluster-wide context attached to an issues response.
+// DNSConfig holds the CoreDNS rules and the DNS signals that make them relevant.
 type ClusterContext struct {
 	DNSConfig *ClusterDNSContext `json:"dns_config,omitempty"`
 }

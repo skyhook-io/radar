@@ -71,8 +71,8 @@ export function DNSBody({ data }: { data: EvidenceDataOf<"dns"> }) {
           shown.
         </p>
       )}
-      {/* A cluster on an older Radar sends a verdict on the ConfigMap. It is
-          shown as that Radar's text, without the severity it came with. */}
+      {/* A `coreDNSFindings` entry is a verdict on the ConfigMap. Its reason
+          and message are shown as text, without its severity. */}
       {(data.dns.coreDNSFindings ?? []).map((finding, index) => (
         <div
           key={`legacy-${finding.namespace}-${finding.name}-${index}`}

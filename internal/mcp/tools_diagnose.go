@@ -208,9 +208,9 @@ type startupBlocker struct {
 	Action   string `json:"action,omitempty"`
 }
 
-// diagnoseDNSContext carries CoreDNSRules where older Radar sent
-// "coreDNSFindings" with a severity and a verdict. The new name keeps a UI
-// built for the old field from rendering rows it cannot read.
+// diagnoseDNSContext is what diagnose knows about DNS for a workload: the
+// signals observed on it, and the rewrite and template rules in the cluster's
+// CoreDNS ConfigMaps.
 type diagnoseDNSContext struct {
 	Signals      []string          `json:"signals,omitempty"`
 	CoreDNSRules []diagnoseDNSRule `json:"coreDNSRules,omitempty"`
@@ -730,9 +730,8 @@ func dnsContextForDiagnose(ctx context.Context, cache *k8s.ResourceCache, obj an
 	return out
 }
 
-// The failure signals say "failures": every Radar UI, including ones older than
-// the CoreDNS rule excerpts, reads that word as a failed lookup and colours the
-// DNS evidence accordingly.
+// The failure signals say "failures", the word Radar's UI reads as a failed
+// lookup when it colours the DNS evidence.
 func diagnoseDNSSignals(obj any, pods []*corev1.Pod, current, previous []podLogEntry, events []aicontext.DeduplicatedEvent) []string {
 	seen := map[string]bool{}
 	var signals []string
@@ -743,14 +742,8 @@ func diagnoseDNSSignals(obj any, pods []*corev1.Pod, current, previous []podLogE
 		seen[s] = true
 		signals = append(signals, s)
 	}
-	for _, s := range dnsConfigSignalsForObject(obj) {
-		add(s)
-	}
-	for _, p := range pods {
-		for _, s := range dnsConfigSignalsForPodSpec(p.Name, p.Spec) {
-			add(s)
-		}
-	}
+	// Failures go first: the list is capped, and the DNS settings of a
+	// workload and its pods can fill it on their own.
 	if logEntriesContainDNSSymptoms(current) || logEntriesContainDNSSymptoms(previous) {
 		add("pod logs contain DNS resolution failures")
 	}
@@ -758,6 +751,14 @@ func diagnoseDNSSignals(obj any, pods []*corev1.Pod, current, previous []podLogE
 		if textContainsDNSSymptom(e.Reason + " " + e.Message) {
 			add("warning events contain DNS resolution failures")
 			break
+		}
+	}
+	for _, s := range dnsConfigSignalsForObject(obj) {
+		add(s)
+	}
+	for _, p := range pods {
+		for _, s := range dnsConfigSignalsForPodSpec(p.Name, p.Spec) {
+			add(s)
 		}
 	}
 	return signals

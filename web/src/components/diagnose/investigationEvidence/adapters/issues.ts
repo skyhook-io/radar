@@ -115,8 +115,8 @@ export function adaptIssues(
     invalidPayload(builder, source, "Issue-related changes");
   }
   addClusterScopedChanges(builder, source, value.cluster_scoped_changes);
-  // `dns_config` is the current key. Older Radar sends `dns`, holding
-  // `findings` with a verdict on the ConfigMap.
+  // `dns_config` holds `rules`. A response may carry `dns` instead, whose
+  // `findings` are verdicts on a CoreDNS ConfigMap.
   const clusterContext = record(value.cluster_context);
   const clusterDNS =
     record(clusterContext?.dns_config) ?? record(clusterContext?.dns);
